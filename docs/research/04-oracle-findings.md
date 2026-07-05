@@ -62,21 +62,50 @@
 - `translate(t)` adds to the point (the rotate-about-center corpus idiom
   works as written).
 
-## Known remaining differences (recorded, not yet matched)
+## Known remaining differences (characterized via sweeps, deliberately not matched)
 
-- **Transcendental internals** (sin/cos/tan, exp/log, atan/atan2, asin/acos,
-  sqrt rounding): PB uses its own approximations with characteristic error
-  curves — e.g. sin(PI) = 0.00616 (suggests a ~1024-step quantization),
-  sin(π/2) overshoots to 1.0000153, atan(100) is off by +0.002, asin(0.5) by
-  +0.0025, sqrt shows a sporadic +1..+3 ulp positive bias, exp is
-  near-float-exact. Ours are deterministic and generally *more* accurate;
-  differences are ≤ ~0.006 — invisible in LED output but not bit-exact.
-  Plan: dedicated sweep probes (export a 32-element array of f(x) per upload,
-  fit the algorithm) if/when bit-exactness matters.
-- **prng sequence**: algorithm unknown; prngSeed returns the previous raw
-  state (initial state observed: raw -402413388 after fresh boot pattern).
-  Needs a seed→sequence sweep to reverse. `random()` is true-random (not
-  comparable).
+Sweep probes (`tools/oracle/sweep.mjs`, data in `tools/oracle/sweeps/*.json`,
+captured 2026-07-05 from fw 3.67) sampled each builtin over dense input grids
+with exact-raw inputs (`x = h + l1*(256*eps) + l0*eps` with `eps = 1 >> 16`
+keeps every literal a small int and the value bit-exact). Findings, all
+errors in raw 16.16 units unless noted:
+
+- **sin/cos (and wave/tan, which share it)**: table-based, accurate to ±1 raw
+  over the whole domain *except* a seam around π. Extracting the implied
+  phase error δ per sample shows δ ramping in quarter-slot plateaus from 0 at
+  x ≈ 2.5 to exactly **−1.000 table slots (2π/1024) at π**, snapping to
+  +1.000 just past π and decaying back to 0 by x ≈ 3.7 — the signature of an
+  off-by-one in the LUT mirror-fold branch of a 1024-entry (or 256×4) sine
+  table. Max value error 407 raw (0.0062) at the seam; sin(π/2) plateaus 1
+  raw high (65537). Bug-for-bug replication would mean reproducing their
+  off-by-one exactly; our polynomial sin is within ±2 raw of true sin
+  everywhere, so we differ from PB only inside their seam. **Keeping ours.**
+- **sqrt**: 86% of samples match exact `floor(sqrt(x))` (which is what ours
+  computes); the rest sit +1..+4 above, consistent with a Newton refinement
+  from a float seed that sometimes lands high. Max diff 4 raw.
+- **log/log2/exp/pow**: log and log2 are within ±4 raw of true everywhere
+  (small systematic bias, never matching floor/round exactly — table+interp
+  internals). exp/pow are relative-precision accurate (~4e-5 relative, so
+  large raw diffs at large outputs are noise in the last few significand
+  bits). Not exactly fittable without reproducing their table.
+- **atan/asin/acos**: distinct low-order polynomial approximations with
+  smooth error curves up to 666 raw (atan, 0.01) / ~0.0025 (asin). Ours use
+  different (more accurate) polynomials. At |x| = 1 exactly, PB asin/acos
+  return the true ±π/2 / 0 endpoints; ours agree.
+- **prng (timeboxed, unresolved)**: `prngSeed(s)` returns the *previous* raw
+  32-bit state and seeding is a raw passthrough, so the state chain is
+  observable. Sequences are deterministic per seed and stable across reloads.
+  `prng(max)` output = `mod(state, max)` for small maxima (large maxima are
+  polluted by PB's division quirks); CRT over coprime small moduli
+  (97/89/83/79/73) recovers full hidden states exactly (seed 42 → state
+  0x2c7056a4 after one step). The state *transition*, however, is not
+  xorshift (not affine over GF(2)), not an LCG mod 2^32 or mod 2^32−k; the
+  best affine fit leaves structured residuals suggesting float-internal
+  arithmetic or a multi-step generator. **Decision: keep xorshift32** —
+  structurally equivalent (deterministic, seedable, uniform), sequences
+  differ. Documented divergence; patterns that need *reproducible* sequences
+  across PB and Luxel are the only casualty. `random()` is true-random on
+  both (not comparable).
 - **Builtin arity is compile-checked on PB** (`square(x)` with one arg is a
   compile error: "found 1 expected 2"). We default missing args to 0 —
   deliberate leniency (everything that compiles on PB compiles here);

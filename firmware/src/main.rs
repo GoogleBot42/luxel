@@ -23,37 +23,22 @@ use esp_println::println;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 
+mod leds;
+use leds::Protocol;
+
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// ---- board configuration (bare C3 devkit defaults) ----
-// PINOUT: SK9822/APA102 CLOCK → GPIO6, DATA → GPIO7. On the Athom LS4P (C3
-// generation) there is no clock terminal; WS281x-over-RMT lands next.
+// ---- board configuration ----
+// Bare C3 devkit + SK9822: CLOCK → GPIO6, DATA → GPIO7.
+// Athom LS4P (C3 gen) + WS281x: set PROTOCOL = Ws2812; its output terminal
+// is GPIO21 (route MOSI there by changing the pin below); no clock needed.
+const PROTOCOL: Protocol = Protocol::Sk9822;
 const PIXEL_COUNT: u32 = 300;
-/// Global brightness 0–31 (APA102 5-bit current limiter). Keep modest on
-/// USB power — 300 px at full white would brown out a devkit.
+/// Global brightness 0–31 (APA102 5-bit current limiter; ignored for
+/// WS2812). Keep modest on USB power.
 const APA_BRIGHTNESS: u8 = 4;
-const SPI_MHZ: u32 = 8;
 
 const PATTERN: &str = include_str!("../../examples/rainbow.js");
-
-/// SK9822/APA102 frame: 4×0x00 start, per-LED (0xE0|global, B, G, R),
-/// 4×0x00 SK9822 reset, then ≥ pixels/2 extra clock edges (zero bytes are
-/// safe for both chip families).
-fn frame_len(pixels: usize) -> usize {
-    4 + pixels * 4 + 4 + pixels.div_ceil(16)
-}
-
-fn encode_apa102(rgb: &[[u8; 3]], out: &mut [u8]) {
-    let mut i = 4; // leading zeros already there
-    for px in rgb {
-        out[i] = 0xE0 | (APA_BRIGHTNESS & 0x1F);
-        out[i + 1] = px[2]; // B
-        out[i + 2] = px[1]; // G
-        out[i + 3] = px[0]; // R
-        i += 4;
-    }
-    // trailing reset + end clocks stay zero
-}
 
 #[main]
 fn main() -> ! {
@@ -61,12 +46,16 @@ fn main() -> ! {
     let p = esp_hal::init(config);
     esp_alloc::heap_allocator!(size: 200 * 1024);
 
-    println!("luxel-fw: boot ({} px SK9822, SPI {} MHz)", PIXEL_COUNT, SPI_MHZ);
+    println!(
+        "luxel-fw: boot ({} px, {} Hz SPI)",
+        PIXEL_COUNT,
+        PROTOCOL.spi_hz()
+    );
 
     let mut spi = Spi::new(
         p.SPI2,
         SpiConfig::default()
-            .with_frequency(Rate::from_mhz(SPI_MHZ))
+            .with_frequency(Rate::from_hz(PROTOCOL.spi_hz()))
             .with_mode(Mode::_0),
     )
     .expect("spi init")
@@ -86,7 +75,7 @@ fn main() -> ! {
         println!("pattern init error: line {}:{}: {}", e.line, e.col, e.message);
     }
 
-    let mut buf = alloc::vec![0u8; frame_len(PIXEL_COUNT as usize)];
+    let mut buf = alloc::vec![0u8; PROTOCOL.buf_len(PIXEL_COUNT as usize)];
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
@@ -99,7 +88,7 @@ fn main() -> ! {
         let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
 
         let px = engine.frame(delta);
-        encode_apa102(px, &mut buf);
+        PROTOCOL.encode(px, APA_BRIGHTNESS, &mut buf);
         if let Err(e) = spi.write(&buf) {
             println!("spi write error: {:?}", e);
         }
