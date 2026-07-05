@@ -71,6 +71,43 @@ try {
   check("banner clears after fix", (await page.$(".banner.error")) === null);
   await page.screenshot({ path: `${shotDir}/e2e-2-typing.png` });
 
+  // 2.5 debugger: gutter breakpoint on the hsv line pauses per pixel
+  const lineRect = await page.$$eval(".cm-line", (els) => {
+    const r = els[2].getBoundingClientRect(); // line 3 = hsv(...)
+    return { x: r.x, y: r.y, h: r.height };
+  });
+  const gutterRect = await page.$eval(".cm-bp-gutter", (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, w: r.width };
+  });
+  await page.mouse.click(gutterRect.x + gutterRect.w / 2, lineRect.y + lineRect.h / 2);
+  await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 3000 }).catch(() => null);
+  const paused = await page.$('.debugger[data-paused="true"]');
+  check("breakpoint pauses execution", paused !== null);
+  const status = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
+  check("paused at hsv line, pixel 0", status.includes("line 3") && status.includes("pixel 0"), status.trim());
+  const stackTxt = await page.$eval(".stack", (el) => el.textContent ?? "").catch(() => "");
+  check("stack shows render + index local", stackTxt.includes("render") && stackTxt.includes("index"), "");
+  check("current line highlighted", (await page.$(".cm-debug-line")) !== null);
+  await page.screenshot({ path: `${shotDir}/e2e-debugger.png` });
+
+  // step lands on the next pixel's first line
+  await page.click(".db-over");
+  await sleep(150);
+  const status2 = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
+  check("step flows to next pixel", status2.includes("pixel 1"), status2.trim());
+  // continue hits the breakpoint again on pixel 2
+  await page.click(".db-continue");
+  await sleep(150);
+  const status3 = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
+  check("continue re-arms breakpoint", status3.includes("pixel 2"), status3.trim());
+
+  // clean up: remove breakpoint, disable debug, rendering resumes
+  await page.mouse.click(gutterRect.x + gutterRect.w / 2, lineRect.y + lineRect.h / 2);
+  await page.click(".debug-toggle");
+  await sleep(400);
+  check("debug off resumes rendering", (await page.$(".debugger")) === null);
+
   // 3. Blink Fade: slider + number entry + readout reactivity
   await page.select("header select", "Blink Fade");
   await sleep(600);

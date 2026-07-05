@@ -14,7 +14,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::ast::*;
-use crate::diag::{Diagnostic, Span};
+use crate::diag::{line_col, Diagnostic, Span};
 use crate::fixed::Fx;
 use crate::parse::parse_program;
 use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Insn, Program, Value};
@@ -24,7 +24,7 @@ const MAX_LOCALS: usize = 256;
 
 pub fn compile(src: &str) -> Result<Program, Diagnostic> {
     let ast = parse_program(src)?;
-    let mut c = Compiler::new();
+    let mut c = Compiler::new(src);
     c.collect(&ast)?;
     c.emit_program(&ast)?;
     Ok(Program {
@@ -78,7 +78,8 @@ fn predefined() -> Vec<GlobalDef> {
     ]
 }
 
-struct Compiler {
+struct Compiler<'s> {
+    src: &'s str,
     globals: Vec<GlobalDef>,
     fns: Vec<FnDef>,
     /// Top-level named functions: (name, fn index, exported).
@@ -96,16 +97,12 @@ enum Place {
     Builtin(u16),
 }
 
-impl Compiler {
-    fn new() -> Compiler {
+impl<'s> Compiler<'s> {
+    fn new(src: &'s str) -> Compiler<'s> {
         Compiler {
+            src,
             globals: predefined(),
-            fns: alloc::vec![FnDef {
-                name: "<init>".to_string(),
-                params: 0,
-                locals: 0,
-                code: Vec::new(),
-            }],
+            fns: alloc::vec![FnDef::placeholder("<init>".to_string())],
             named_fns: Vec::new(),
             exported_fns: Vec::new(),
             demoted: Vec::new(),
@@ -150,12 +147,7 @@ impl Compiler {
         register_fns(self, top);
         // reserve placeholder defs so indices are stable during emission
         for (name, _, _) in self.named_fns.clone() {
-            self.fns.push(FnDef {
-                name,
-                params: 0,
-                locals: 0,
-                code: Vec::new(),
-            });
+            self.fns.push(FnDef::placeholder(name));
         }
         // top level: every var / assignment is a global (even inside blocks)
         let empty: Vec<String> = Vec::new();
@@ -358,9 +350,9 @@ impl Compiler {
                 .map(|&(_, i, _)| i)
                 .expect("demoted implies registered");
             let g = self.ensure_global(&name, false, Span::default())?;
-            ctx.code.push(Insn::Const(Value::Fun(idx)));
-            ctx.code.push(Insn::StoreG(g));
-            ctx.code.push(Insn::Pop);
+            ctx.push(Insn::Const(Value::Fun(idx)));
+            ctx.push(Insn::StoreG(g));
+            ctx.push(Insn::Pop);
         }
         for s in top {
             if matches!(s.kind, StmtKind::Func { .. }) {
@@ -368,7 +360,7 @@ impl Compiler {
             }
             self.emit_stmt(&mut ctx, s)?;
         }
-        ctx.code.push(Insn::RetNull);
+        ctx.push(Insn::RetNull);
         self.fns[0].code = ctx.code;
         Ok(())
     }
@@ -391,13 +383,8 @@ impl Compiler {
         for s in body {
             self.emit_stmt(&mut ctx, s)?;
         }
-        ctx.code.push(Insn::RetNull);
-        Ok(FnDef {
-            name,
-            params: params.len() as u8,
-            locals: ctx.locals.len() as u8,
-            code: ctx.code,
-        })
+        ctx.push(Insn::RetNull);
+        Ok(ctx.finish(name, params.len() as u8))
     }
 
     fn emit_lambda(
@@ -409,24 +396,15 @@ impl Compiler {
         let idx = self.fns.len() as u16;
         let name = format!("<lambda#{idx}>");
         // reserve slot first (nested lambdas may allocate more)
-        self.fns.push(FnDef {
-            name: name.clone(),
-            params: 0,
-            locals: 0,
-            code: Vec::new(),
-        });
+        self.fns.push(FnDef::placeholder(name.clone()));
         let def = match body {
             LambdaBody::Expr(e) => {
                 let locals = function_scope(params, &[]);
                 let mut ctx = FnCtx::new(locals, false);
+                ctx.set_pos(line_col(self.src, e.span.start));
                 self.emit_expr(&mut ctx, e)?;
-                ctx.code.push(Insn::Ret);
-                FnDef {
-                    name,
-                    params: params.len() as u8,
-                    locals: ctx.locals.len() as u8,
-                    code: ctx.code,
-                }
+                ctx.push(Insn::Ret);
+                ctx.finish(name.clone(), params.len() as u8)
             }
             LambdaBody::Block(stmts) => {
                 let locals = function_scope(params, stmts);
@@ -440,13 +418,8 @@ impl Compiler {
                 for s in stmts {
                     self.emit_stmt(&mut ctx, s)?;
                 }
-                ctx.code.push(Insn::RetNull);
-                FnDef {
-                    name,
-                    params: params.len() as u8,
-                    locals: ctx.locals.len() as u8,
-                    code: ctx.code,
-                }
+                ctx.push(Insn::RetNull);
+                ctx.finish(name, params.len() as u8)
             }
         };
         self.fns[idx as usize] = def;
@@ -475,6 +448,7 @@ impl Compiler {
     }
 
     fn emit_stmt(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
+        ctx.set_pos(line_col(self.src, s.span.start));
         match &s.kind {
             StmtKind::Empty => Ok(()),
             // nested named functions were already bound at function entry
@@ -484,14 +458,14 @@ impl Compiler {
                     if let Some(init) = &d.init {
                         self.emit_expr(ctx, init)?;
                         self.emit_store(ctx, &d.name, d.span)?;
-                        ctx.code.push(Insn::Pop);
+                        ctx.push(Insn::Pop);
                     }
                 }
                 Ok(())
             }
             StmtKind::Expr(e) => {
                 self.emit_expr(ctx, e)?;
-                ctx.code.push(Insn::Pop);
+                ctx.push(Insn::Pop);
                 Ok(())
             }
             StmtKind::If { cond, then, els } => {
@@ -514,7 +488,7 @@ impl Compiler {
                 let jf = ctx.emit_placeholder();
                 ctx.loops.push(LoopFrame::default());
                 self.emit_stmt(ctx, body)?;
-                ctx.code.push(Insn::Jmp(start));
+                ctx.push(Insn::Jmp(start));
                 let frame = ctx.loops.pop().unwrap();
                 let end = ctx.here();
                 ctx.patch(jf, Insn::JmpIfFalse(end));
@@ -548,9 +522,9 @@ impl Compiler {
                 let cont = ctx.here();
                 if let Some(u) = update {
                     self.emit_expr(ctx, u)?;
-                    ctx.code.push(Insn::Pop);
+                    ctx.push(Insn::Pop);
                 }
-                ctx.code.push(Insn::Jmp(start));
+                ctx.push(Insn::Jmp(start));
                 let end = ctx.here();
                 if let Some(jf) = jf {
                     ctx.patch(jf, Insn::JmpIfFalse(end));
@@ -573,9 +547,9 @@ impl Compiler {
                 match v {
                     Some(e) => {
                         self.emit_expr(ctx, e)?;
-                        ctx.code.push(Insn::Ret);
+                        ctx.push(Insn::Ret);
                     }
-                    None => ctx.code.push(Insn::RetNull),
+                    None => ctx.push(Insn::RetNull),
                 }
                 Ok(())
             }
@@ -611,8 +585,8 @@ impl Compiler {
     /// Emit a store to a named variable (value on stack; leaves it there).
     fn emit_store(&mut self, ctx: &mut FnCtx, name: &str, span: Span) -> Result<(), Diagnostic> {
         match self.resolve(ctx, name, span)? {
-            Place::Local(i) => ctx.code.push(Insn::StoreL(i)),
-            Place::Global(i) => ctx.code.push(Insn::StoreG(i)),
+            Place::Local(i) => ctx.push(Insn::StoreL(i)),
+            Place::Global(i) => ctx.push(Insn::StoreG(i)),
             Place::Func(_) | Place::Builtin(_) => {
                 return Err(Diagnostic::new(span, format!("cannot assign to `{name}`")))
             }
@@ -623,15 +597,15 @@ impl Compiler {
     fn emit_expr(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
         match &e.kind {
             ExprKind::Num(v) => {
-                ctx.code.push(Insn::Const(Value::Num(*v)));
+                ctx.push(Insn::Const(Value::Num(*v)));
                 Ok(())
             }
             ExprKind::Ident(name) => {
                 match self.resolve(ctx, name, e.span)? {
-                    Place::Local(i) => ctx.code.push(Insn::LoadL(i)),
-                    Place::Global(i) => ctx.code.push(Insn::LoadG(i)),
-                    Place::Func(i) => ctx.code.push(Insn::Const(Value::Fun(i))),
-                    Place::Builtin(b) => ctx.code.push(Insn::Const(Value::Builtin(b))),
+                    Place::Local(i) => ctx.push(Insn::LoadL(i)),
+                    Place::Global(i) => ctx.push(Insn::LoadG(i)),
+                    Place::Func(i) => ctx.push(Insn::Const(Value::Fun(i))),
+                    Place::Builtin(b) => ctx.push(Insn::Const(Value::Builtin(b))),
                 }
                 Ok(())
             }
@@ -645,16 +619,16 @@ impl Compiler {
                 for el in elems {
                     self.emit_expr(ctx, el)?;
                 }
-                ctx.code.push(Insn::NewArray(elems.len() as u16));
+                ctx.push(Insn::NewArray(elems.len() as u16));
                 Ok(())
             }
             ExprKind::Unary { op, expr } => {
                 self.emit_expr(ctx, expr)?;
                 match op {
-                    UnOp::Neg => ctx.code.push(Insn::Neg),
+                    UnOp::Neg => ctx.push(Insn::Neg),
                     UnOp::Pos => {} // numeric identity
-                    UnOp::Not => ctx.code.push(Insn::Not),
-                    UnOp::BitNot => ctx.code.push(Insn::BitNot),
+                    UnOp::Not => ctx.push(Insn::Not),
+                    UnOp::BitNot => ctx.push(Insn::BitNot),
                 }
                 Ok(())
             }
@@ -662,7 +636,7 @@ impl Compiler {
                 BinOp::And => {
                     self.emit_expr(ctx, lhs)?;
                     let j = ctx.emit_placeholder();
-                    ctx.code.push(Insn::Pop);
+                    ctx.push(Insn::Pop);
                     self.emit_expr(ctx, rhs)?;
                     ctx.patch(j, Insn::JmpIfFalsePeek(ctx.here()));
                     Ok(())
@@ -670,7 +644,7 @@ impl Compiler {
                 BinOp::Or => {
                     self.emit_expr(ctx, lhs)?;
                     let j = ctx.emit_placeholder();
-                    ctx.code.push(Insn::Pop);
+                    ctx.push(Insn::Pop);
                     self.emit_expr(ctx, rhs)?;
                     ctx.patch(j, Insn::JmpIfTruePeek(ctx.here()));
                     Ok(())
@@ -678,7 +652,7 @@ impl Compiler {
                 _ => {
                     self.emit_expr(ctx, lhs)?;
                     self.emit_expr(ctx, rhs)?;
-                    ctx.code.push(bin_insn(*op));
+                    ctx.push(bin_insn(*op));
                     Ok(())
                 }
             },
@@ -687,7 +661,7 @@ impl Compiler {
                     if let Some(op) = op {
                         self.emit_expr(ctx, target)?;
                         self.emit_expr(ctx, value)?;
-                        ctx.code.push(bin_insn(*op));
+                        ctx.push(bin_insn(*op));
                     } else {
                         self.emit_expr(ctx, value)?;
                     }
@@ -697,14 +671,14 @@ impl Compiler {
                     self.emit_expr(ctx, obj)?;
                     self.emit_expr(ctx, index)?;
                     if let Some(op) = op {
-                        ctx.code.push(Insn::Dup2);
-                        ctx.code.push(Insn::LoadIdx);
+                        ctx.push(Insn::Dup2);
+                        ctx.push(Insn::LoadIdx);
                         self.emit_expr(ctx, value)?;
-                        ctx.code.push(bin_insn(*op));
+                        ctx.push(bin_insn(*op));
                     } else {
                         self.emit_expr(ctx, value)?;
                     }
-                    ctx.code.push(Insn::StoreIdx);
+                    ctx.push(Insn::StoreIdx);
                     Ok(())
                 }
                 _ => Err(Diagnostic::new(
@@ -726,18 +700,18 @@ impl Compiler {
                 match &target.kind {
                     ExprKind::Ident(name) => {
                         self.emit_expr(ctx, target)?;
-                        ctx.code.push(one.clone());
-                        ctx.code.push(fwd);
+                        ctx.push(one);
+                        ctx.push(fwd);
                         self.emit_store(ctx, name, target.span)?;
                     }
                     ExprKind::Index { obj, index } => {
                         self.emit_expr(ctx, obj)?;
                         self.emit_expr(ctx, index)?;
-                        ctx.code.push(Insn::Dup2);
-                        ctx.code.push(Insn::LoadIdx);
-                        ctx.code.push(one.clone());
-                        ctx.code.push(fwd);
-                        ctx.code.push(Insn::StoreIdx);
+                        ctx.push(Insn::Dup2);
+                        ctx.push(Insn::LoadIdx);
+                        ctx.push(one);
+                        ctx.push(fwd);
+                        ctx.push(Insn::StoreIdx);
                     }
                     _ => {
                         return Err(Diagnostic::new(
@@ -749,8 +723,8 @@ impl Compiler {
                 if !prefix {
                     // stack holds the NEW value; recover the old one (exact
                     // inverse under wrapping arithmetic)
-                    ctx.code.push(one);
-                    ctx.code.push(inv);
+                    ctx.push(one);
+                    ctx.push(inv);
                 }
                 Ok(())
             }
@@ -781,7 +755,7 @@ impl Compiler {
                     for a in args {
                         self.emit_expr(ctx, a)?;
                     }
-                    ctx.code.push(Insn::CallBuiltin { b, argc: argc + 1 });
+                    ctx.push(Insn::CallBuiltin { b, argc: argc + 1 });
                     return Ok(());
                 }
                 // direct call of a named function or builtin
@@ -791,14 +765,14 @@ impl Compiler {
                             for a in args {
                                 self.emit_expr(ctx, a)?;
                             }
-                            ctx.code.push(Insn::CallFn { fn_idx, argc });
+                            ctx.push(Insn::CallFn { fn_idx, argc });
                             return Ok(());
                         }
                         Place::Builtin(b) => {
                             for a in args {
                                 self.emit_expr(ctx, a)?;
                             }
-                            ctx.code.push(Insn::CallBuiltin { b, argc });
+                            ctx.push(Insn::CallBuiltin { b, argc });
                             return Ok(());
                         }
                         _ => {} // fall through to value call
@@ -808,19 +782,19 @@ impl Compiler {
                 for a in args {
                     self.emit_expr(ctx, a)?;
                 }
-                ctx.code.push(Insn::CallValue { argc });
+                ctx.push(Insn::CallValue { argc });
                 Ok(())
             }
             ExprKind::Index { obj, index } => {
                 self.emit_expr(ctx, obj)?;
                 self.emit_expr(ctx, index)?;
-                ctx.code.push(Insn::LoadIdx);
+                ctx.push(Insn::LoadIdx);
                 Ok(())
             }
             ExprKind::Member { obj, name } => {
                 if name == "length" {
                     self.emit_expr(ctx, obj)?;
-                    ctx.code.push(Insn::ArrLen);
+                    ctx.push(Insn::ArrLen);
                     Ok(())
                 } else {
                     Err(Diagnostic::new(
@@ -831,7 +805,7 @@ impl Compiler {
             }
             ExprKind::Lambda { params, body } => {
                 let idx = self.emit_lambda(params, body, e.span)?;
-                ctx.code.push(Insn::Const(Value::Fun(idx)));
+                ctx.push(Insn::Const(Value::Fun(idx)));
                 Ok(())
             }
         }
@@ -863,6 +837,9 @@ fn bin_insn(op: BinOp) -> Insn {
 struct FnCtx {
     locals: Vec<String>,
     code: Vec<Insn>,
+    /// (line, col) per emitted instruction — statement granularity.
+    pos: Vec<(u32, u32)>,
+    cur_pos: (u32, u32),
     loops: Vec<LoopFrame>,
     #[allow(dead_code)]
     is_top: bool,
@@ -879,9 +856,20 @@ impl FnCtx {
         FnCtx {
             locals,
             code: Vec::new(),
+            pos: Vec::new(),
+            cur_pos: (0, 0),
             loops: Vec::new(),
             is_top,
         }
+    }
+
+    fn set_pos(&mut self, pos: (u32, u32)) {
+        self.cur_pos = pos;
+    }
+
+    fn push(&mut self, insn: Insn) {
+        self.code.push(insn);
+        self.pos.push(self.cur_pos);
     }
 
     fn here(&self) -> u32 {
@@ -889,12 +877,23 @@ impl FnCtx {
     }
 
     fn emit_placeholder(&mut self) -> usize {
-        self.code.push(Insn::Jmp(u32::MAX));
+        self.push(Insn::Jmp(u32::MAX));
         self.code.len() - 1
     }
 
     fn patch(&mut self, at: usize, insn: Insn) {
         self.code[at] = insn;
+    }
+
+    fn finish(self, name: String, params: u8) -> FnDef {
+        FnDef {
+            name,
+            params,
+            locals: self.locals.len() as u8,
+            code: self.code,
+            pos: self.pos,
+            local_names: self.locals,
+        }
     }
 }
 

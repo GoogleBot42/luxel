@@ -6,7 +6,15 @@
   import VarWatcher from "./components/VarWatcher.svelte";
   import { EXAMPLES, type Example } from "./lib/examples";
   import { parseControlHints, type ControlHint } from "./lib/hints";
-  import { Engine, Luxel, type Control, type Diagnostic, type RuntimeError } from "./lib/luxel";
+  import {
+    Engine,
+    Luxel,
+    type Control,
+    type DebugSnapshot,
+    type Diagnostic,
+    type RuntimeError,
+    type StepKind,
+  } from "./lib/luxel";
 
   let luxel: Luxel | undefined;
   let engine: Engine | undefined;
@@ -28,6 +36,9 @@
   let targetFps = 60;
   let running = true;
   let loadFailure = "";
+  let debugMode = false;
+  let breakpoints: number[] = [];
+  let dbg: DebugSnapshot = { paused: false };
 
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let raf = 0;
@@ -48,6 +59,12 @@
       engine.setWallClock(Date.now() / 1000);
       hints = parseControlHints(source);
       controls = engine.controls();
+      if (debugMode) {
+        engine.debugEnable(true);
+        engine.setBreakpoints(breakpoints);
+      }
+      dbg = { paused: false };
+      editor?.setCurrentLine(null);
       // seed //# defaults, then reapply saved control values (PB persists
       // control state per pattern)
       for (const c of controls) {
@@ -120,6 +137,56 @@
     engine?.setControl(e.detail.name, e.detail.values);
   }
 
+  // ---- debugger ----
+
+  function onBreakpoints(e: CustomEvent<number[]>): void {
+    breakpoints = e.detail;
+    if (breakpoints.length > 0 && !debugMode) {
+      toggleDebug(); // placing a breakpoint arms the debugger
+    } else if (debugMode) {
+      engine?.setBreakpoints(breakpoints);
+    }
+  }
+
+  function toggleDebug(): void {
+    debugMode = !debugMode;
+    if (!engine) return;
+    engine.debugEnable(debugMode);
+    if (debugMode) {
+      engine.setBreakpoints(breakpoints);
+    } else {
+      dbg = { paused: false };
+      editor?.setCurrentLine(null);
+    }
+  }
+
+  function onPausedRefresh(): void {
+    if (!engine) return;
+    dbg = engine.debugState();
+    editor?.setCurrentLine(dbg.line ?? null);
+    preview?.draw(engine.pixels());
+  }
+
+  function step(kind: StepKind): void {
+    if (!engine || !dbg.paused) return;
+    const still = engine.debugStep(kind);
+    if (still) {
+      onPausedRefresh();
+    } else {
+      dbg = { paused: false };
+      editor?.setCurrentLine(null);
+      preview?.draw(engine.pixels());
+    }
+  }
+
+  function requestBreak(): void {
+    engine?.debugPause(); // takes effect at the next executed instruction
+  }
+
+  function fmtRaw(raw: number): string {
+    return (raw / 65536).toFixed(4).replace(/\.?0+$/, "") || "0";
+  }
+
   function jumpToError(): void {
     if (compileError) editor.jumpTo(compileError.line, compileError.col);
   }
@@ -129,11 +196,16 @@
   function loop(t: number): void {
     raf = requestAnimationFrame(loop);
     if (!engine || !running) return;
+    if (dbg.paused) return; // suspended at a debug stop — step buttons drive
     const minInterval = targetFps > 0 ? 1000 / targetFps - 1 : 0;
     if (lastT !== 0 && t - lastT < minInterval) return;
     const dt = lastT === 0 ? 1000 / (targetFps || 60) : Math.min(t - lastT, 200);
     lastT = t;
     const px = engine.frame(dt);
+    if (engine.debugPaused()) {
+      onPausedRefresh();
+      return;
+    }
     preview?.draw(px);
     fps = fps * 0.9 + (1000 / Math.max(dt, 1)) * 0.1;
     const err = engine.takeError();
@@ -226,6 +298,9 @@
       <button on:click={togglePause} title={running ? "pause" : "resume"}>
         {running ? "pause" : "play"}
       </button>
+      <button class="debug-toggle" class:active={debugMode} on:click={toggleDebug}>
+        debug
+      </button>
     </span>
 
     <span class="spacer"></span>
@@ -234,7 +309,12 @@
 
   <main>
     <section class="left">
-      <Editor bind:this={editor} value={source} on:change={onSourceChange} />
+      <Editor
+        bind:this={editor}
+        value={source}
+        on:change={onSourceChange}
+        on:breakpoints={onBreakpoints}
+      />
     </section>
     <section class="right">
       {#if loadFailure}
@@ -249,6 +329,55 @@
         <div class="banner warn">
           runtime: {runtimeError.message}
           <button class="dismiss" on:click={() => (runtimeError = null)}>×</button>
+        </div>
+      {/if}
+
+      {#if debugMode}
+        <div class="debugger" data-paused={dbg.paused}>
+          <div class="debug-bar">
+            {#if dbg.paused}
+              <button class="db-continue" on:click={() => step("continue")}>▶ continue</button>
+              <button class="db-over" on:click={() => step("over")}>step</button>
+              <button class="db-into" on:click={() => step("into")}>into</button>
+              <button class="db-out" on:click={() => step("out")}>out</button>
+            {:else}
+              <button class="db-break" on:click={requestBreak}>break</button>
+              <span class="dim">running — click the gutter to set breakpoints</span>
+            {/if}
+          </div>
+          {#if dbg.paused}
+            <div class="debug-status mono">
+              paused at line {dbg.line}{dbg.pixel !== null && dbg.pixel !== undefined
+                ? ` · pixel ${dbg.pixel}`
+                : ""}
+            </div>
+            {#if dbg.stack && dbg.stack.length > 0}
+              <div class="stack">
+                {#each dbg.stack as f, i (i)}
+                  <div class="stack-frame mono">
+                    <span class="fn-name">{f.name}</span>
+                    <span class="dim">line {f.line}</span>
+                  </div>
+                  {#if i === 0}
+                    <table class="locals">
+                      <tbody>
+                        {#each f.locals as l (l.name)}
+                          <tr>
+                            <td class="name mono">{l.name}</td>
+                            <td class="value mono">
+                              {#if l.raw !== undefined}{fmtRaw(l.raw)}
+                              {:else if l.array !== undefined}array[{l.array}]
+                              {:else}fn#{l.fn}{/if}
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          {/if}
         </div>
       {/if}
 
@@ -382,5 +511,69 @@
   .hint {
     font-size: 12px;
     margin: 2px 0;
+  }
+
+  .debug-toggle.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .debugger {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--bg-inset);
+  }
+
+  .debug-bar {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 12px;
+  }
+
+  .debug-status {
+    color: var(--accent);
+    font-size: 12px;
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .stack-frame {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .fn-name {
+    color: var(--text);
+  }
+
+  .locals {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin: 2px 0 6px 12px;
+  }
+
+  .locals td {
+    padding: 1px 6px;
+  }
+
+  .locals .name {
+    color: var(--text-dim);
+    width: 40%;
+  }
+
+  .locals .value {
+    color: var(--accent);
   }
 </style>

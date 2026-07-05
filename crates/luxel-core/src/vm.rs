@@ -26,7 +26,7 @@ use crate::fmath;
 
 // ---- program ----
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Insn {
     Const(Value),
     LoadG(u16),
@@ -109,6 +109,28 @@ pub struct FnDef {
     /// Total local slots including params.
     pub locals: u8,
     pub code: Vec<Insn>,
+    /// Debug info: 1-based (line, col) per instruction; (0, 0) = unknown.
+    pub pos: Vec<(u32, u32)>,
+    /// Debug info: name per local slot (params first).
+    pub local_names: Vec<String>,
+}
+
+impl FnDef {
+    pub fn placeholder(name: String) -> FnDef {
+        FnDef {
+            name,
+            params: 0,
+            locals: 0,
+            code: Vec::new(),
+            pos: Vec::new(),
+            local_names: Vec::new(),
+        }
+    }
+
+    /// (line, col) of an instruction, if known.
+    pub fn pos_at(&self, pc: u32) -> (u32, u32) {
+        self.pos.get(pc as usize).copied().unwrap_or((0, 0))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -339,9 +361,56 @@ pub struct VmError {
     pub message: String,
     pub fn_idx: u16,
     pub pc: u32,
+    /// 1-based source location; (0, 0) if unknown.
+    pub line: u32,
+    pub col: u32,
 }
 
-const MAX_DEPTH: u32 = 48;
+/// A suspended (or active) pattern-function activation. `pc` points at the
+/// next instruction to execute.
+#[derive(Debug, Clone, Copy)]
+pub struct Frame {
+    pub fn_idx: u16,
+    pub pc: u32,
+    pub locals_base: u32,
+    pub stack_base: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    Continue,
+    Over,
+    Into,
+    Out,
+}
+
+#[derive(Debug, Default)]
+pub struct DebugState {
+    /// Resolved breakpoints as (fn_idx, pc).
+    pub breakpoints: Vec<(u16, u32)>,
+    step: Option<StepPlan>,
+    pub pause_requested: bool,
+    /// Skip checks once right after resuming so the paused instruction does
+    /// not immediately re-trigger.
+    skip_once: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StepPlan {
+    kind: StepKind,
+    depth: usize,
+    fn_idx: u16,
+    line: u32,
+}
+
+/// Result of a debuggable run: finished, or suspended awaiting resume().
+#[derive(Debug)]
+pub enum Outcome {
+    Done(Value),
+    Paused,
+}
+
+const MAX_DEPTH: usize = 48;
 const MAX_STACK: usize = 1024;
 const MAX_ARGS: usize = 16;
 pub const DEFAULT_ARRAY_BUDGET: usize = 10_240;
@@ -354,7 +423,9 @@ pub struct Vm {
     pub array_budget: usize,
     stack: Vec<Value>,
     locals: Vec<Value>,
-    depth: u32,
+    frames: Vec<Frame>,
+    /// Debugger state; None disables all checks (the fast path).
+    pub dbg: Option<DebugState>,
     fuel: u32,
     /// Milliseconds since pattern start; the engine advances this.
     pub time_ms: u64,
@@ -400,7 +471,8 @@ impl Vm {
             array_budget: DEFAULT_ARRAY_BUDGET,
             stack: Vec::new(),
             locals: Vec::new(),
-            depth: 0,
+            frames: Vec::new(),
+            dbg: None,
             fuel: FUEL,
             time_ms: 0,
             transform: IDENTITY,
@@ -422,54 +494,211 @@ impl Vm {
         self.arrays.get(id as usize).map(|a| a.as_slice())
     }
 
-    /// Call a function by index (host entry point — refuels and clears the
-    /// stack, so a prior aborted call can't poison this one).
-    pub fn call(&mut self, prog: &Program, fn_idx: u16, args: &[Value]) -> Result<Value, VmError> {
-        self.fuel = FUEL;
-        self.stack.clear();
-        self.locals.clear();
-        self.depth = 0;
-        self.call_fn(prog, fn_idx, args)
+    /// Read-only view of the (possibly suspended) call stack.
+    pub fn frames(&self) -> &[Frame] {
+        &self.frames
     }
 
-    fn call_fn(&mut self, prog: &Program, fn_idx: u16, args: &[Value]) -> Result<Value, VmError> {
-        let err = |m: &str, pc: usize| VmError {
-            message: m.into(),
-            fn_idx,
-            pc: pc as u32,
-        };
-        if self.depth >= MAX_DEPTH {
-            return Err(err("call depth exceeded", 0));
+    /// Locals of a frame (for the debugger).
+    pub fn frame_locals(&self, f: &Frame, count: usize) -> &[Value] {
+        let b = f.locals_base as usize;
+        &self.locals[b..(b + count).min(self.locals.len())]
+    }
+
+    /// Drop any suspended run (paused debug session being abandoned).
+    pub fn clear_run(&mut self) {
+        self.frames.clear();
+        self.stack.clear();
+        self.locals.clear();
+    }
+
+    fn err_at(&self, prog: &Program, message: String) -> VmError {
+        match self.frames.last() {
+            Some(f) => {
+                // pc has advanced past the faulting instruction
+                let pc = f.pc.saturating_sub(1);
+                let (line, col) = prog.fns[f.fn_idx as usize].pos_at(pc);
+                VmError {
+                    message,
+                    fn_idx: f.fn_idx,
+                    pc,
+                    line,
+                    col,
+                }
+            }
+            None => VmError {
+                message,
+                fn_idx: u16::MAX,
+                pc: u32::MAX,
+                line: 0,
+                col: 0,
+            },
         }
-        self.depth += 1;
+    }
+
+    fn push_frame(&mut self, prog: &Program, fn_idx: u16, args: &[Value]) -> Result<(), VmError> {
+        if self.frames.len() >= MAX_DEPTH {
+            return Err(self.err_at(prog, "call depth exceeded".into()));
+        }
         let f = &prog.fns[fn_idx as usize];
-        let base = self.locals.len();
+        let locals_base = self.locals.len() as u32;
         let params = f.params as usize;
         for i in 0..f.locals as usize {
-            let v = if i < params {
+            self.locals.push(if i < params {
                 args.get(i).copied().unwrap_or_default()
             } else {
                 Value::default()
-            };
-            self.locals.push(v);
+            });
         }
-        let result = self.exec(prog, fn_idx, base);
-        self.locals.truncate(base);
-        self.depth -= 1;
-        result
+        self.frames.push(Frame {
+            fn_idx,
+            pc: 0,
+            locals_base,
+            stack_base: self.stack.len() as u32,
+        });
+        Ok(())
     }
 
-    fn exec(&mut self, prog: &Program, fn_idx: u16, lbase: usize) -> Result<Value, VmError> {
-        let code = &prog.fns[fn_idx as usize].code;
-        let mut pc = 0usize;
+    fn pop_frame(&mut self) {
+        if let Some(f) = self.frames.pop() {
+            self.locals.truncate(f.locals_base as usize);
+            self.stack.truncate(f.stack_base as usize);
+        }
+    }
 
+    /// Host entry: run a function to completion. Runs on top of whatever is
+    /// suspended below (init, control invocations, oracle helpers), so a
+    /// paused debug session is never clobbered. Debug pausing does not apply.
+    pub fn call(&mut self, prog: &Program, fn_idx: u16, args: &[Value]) -> Result<Value, VmError> {
+        self.fuel = FUEL;
+        if self.frames.is_empty() {
+            self.stack.clear();
+            self.locals.clear();
+        }
+        self.run_on_top(prog, fn_idx, args)
+    }
+
+    fn run_on_top(
+        &mut self,
+        prog: &Program,
+        fn_idx: u16,
+        args: &[Value],
+    ) -> Result<Value, VmError> {
+        let base = self.frames.len();
+        self.push_frame(prog, fn_idx, args)?;
+        let result = self.run(prog, base, false);
+        match result {
+            Ok(Outcome::Done(v)) => Ok(v),
+            Ok(Outcome::Paused) => unreachable!("pausing is disabled for nested runs"),
+            Err(e) => {
+                while self.frames.len() > base {
+                    self.pop_frame();
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Start a debuggable top-level run (the engine's per-frame callbacks).
+    pub fn start(
+        &mut self,
+        prog: &Program,
+        fn_idx: u16,
+        args: &[Value],
+        debug: bool,
+    ) -> Result<Outcome, VmError> {
+        self.fuel = FUEL;
+        self.clear_run();
+        self.push_frame(prog, fn_idx, args)?;
+        self.run_unwinding(prog, debug)
+    }
+
+    /// Resume a paused run, optionally with a stepping plan.
+    pub fn resume(&mut self, prog: &Program, step: StepKind) -> Result<Outcome, VmError> {
+        self.fuel = FUEL;
+        let plan = match (step, self.frames.last()) {
+            (StepKind::Continue, _) | (_, None) => None,
+            (kind, Some(f)) => Some(StepPlan {
+                kind,
+                depth: self.frames.len(),
+                fn_idx: f.fn_idx,
+                line: prog.fns[f.fn_idx as usize].pos_at(f.pc).0,
+            }),
+        };
+        if let Some(d) = self.dbg.as_mut() {
+            d.step = plan;
+            d.skip_once = true;
+        }
+        self.run_unwinding(prog, true)
+    }
+
+    fn run_unwinding(&mut self, prog: &Program, debug: bool) -> Result<Outcome, VmError> {
+        match self.run(prog, 0, debug) {
+            Err(e) => {
+                self.clear_run();
+                Err(e)
+            }
+            ok => ok,
+        }
+    }
+
+    /// Should the debugger pause before executing (fi, pc)?
+    fn debug_stop(&mut self, prog: &Program, fi: u16, pc: u32) -> bool {
+        let depth = self.frames.len();
+        let Some(d) = self.dbg.as_mut() else {
+            return false;
+        };
+        if d.pause_requested {
+            d.pause_requested = false;
+            d.step = None;
+            return true;
+        }
+        if d.skip_once {
+            d.skip_once = false;
+            return false;
+        }
+        if d.breakpoints.contains(&(fi, pc)) {
+            d.step = None;
+            return true;
+        }
+        if let Some(p) = d.step {
+            let line = prog.fns[fi as usize].pos_at(pc).0;
+            let stop = match p.kind {
+                StepKind::Continue => false,
+                StepKind::Over => {
+                    depth < p.depth
+                        || (depth == p.depth && line != 0 && (line != p.line || fi != p.fn_idx))
+                }
+                StepKind::Into => {
+                    line != 0 && (line != p.line || fi != p.fn_idx || depth != p.depth)
+                }
+                StepKind::Out => depth < p.depth,
+            };
+            if stop {
+                d.step = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn pop_args(&mut self, argc: usize) -> ([Value; MAX_ARGS], usize) {
+        let mut args = [Value::default(); MAX_ARGS];
+        let n = argc.min(MAX_ARGS);
+        for i in (0..n).rev() {
+            args[i] = self.stack.pop().unwrap_or_default();
+        }
+        (args, n)
+    }
+
+    /// The interpreter loop over the explicit frame stack. Returns when the
+    /// stack unwinds back to `base` frames (Done) or a debug stop fires
+    /// (Paused — only when `debug`). Frames/locals/stack stay intact while
+    /// paused so the debugger can inspect and resume.
+    fn run(&mut self, prog: &Program, base: usize, debug: bool) -> Result<Outcome, VmError> {
         macro_rules! fail {
             ($msg:expr) => {
-                return Err(VmError {
-                    message: $msg.into(),
-                    fn_idx,
-                    pc: pc as u32,
-                })
+                return Err(self.err_at(prog, $msg.into()))
             };
         }
         macro_rules! push {
@@ -502,16 +731,30 @@ impl Vm {
                 push!(Value::Num(if a $op b { Fx::ONE } else { Fx::ZERO }));
             }};
         }
+        macro_rules! set_pc {
+            ($t:expr) => {
+                self.frames.last_mut().expect("frame").pc = $t
+            };
+        }
 
         loop {
+            let (fi, pc, lbase) = {
+                let f = self.frames.last().expect("frame");
+                (f.fn_idx, f.pc, f.locals_base as usize)
+            };
+            if debug && self.debug_stop(prog, fi, pc) {
+                return Ok(Outcome::Paused);
+            }
+            let insn = match prog.fns[fi as usize].code.get(pc as usize) {
+                Some(&i) => i,
+                None => Insn::RetNull, // fell off the end
+            };
+            set_pc!(pc + 1);
             if self.fuel == 0 {
                 fail!("execution limit exceeded (infinite loop?)");
             }
             self.fuel -= 1;
-            let Some(insn) = code.get(pc) else {
-                return Ok(Value::default()); // fell off the end
-            };
-            match *insn {
+            match insn {
                 Insn::Const(v) => push!(v),
                 Insn::LoadG(i) => push!(self.globals[i as usize]),
                 Insn::StoreG(i) => {
@@ -637,33 +880,27 @@ impl Vm {
                     let a = pop!();
                     push!(Value::Num(if value_eq(a, b) { Fx::ZERO } else { Fx::ONE }));
                 }
-                Insn::Jmp(t) => {
-                    pc = t as usize;
-                    continue;
-                }
+                Insn::Jmp(t) => set_pc!(t),
                 Insn::JmpIfFalse(t) => {
                     if !pop!().truthy() {
-                        pc = t as usize;
-                        continue;
+                        set_pc!(t);
                     }
                 }
                 Insn::JmpIfTruePeek(t) => {
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     if v.truthy() {
-                        pc = t as usize;
-                        continue;
+                        set_pc!(t);
                     }
                 }
                 Insn::JmpIfFalsePeek(t) => {
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     if !v.truthy() {
-                        pc = t as usize;
-                        continue;
+                        set_pc!(t);
                     }
                 }
                 Insn::CallFn { fn_idx: f, argc } => {
-                    let v = self.dispatch_call(prog, Value::Fun(f), argc as usize)?;
-                    push!(v);
+                    let (args, n) = self.pop_args(argc as usize);
+                    self.push_frame(prog, f, &args[..n])?;
                 }
                 Insn::CallBuiltin { b, argc } => {
                     match self.call_builtin(prog, b, argc as usize) {
@@ -671,8 +908,7 @@ impl Vm {
                         Err(mut e) => {
                             // attribute to this site if the builtin didn't
                             if e.pc == u32::MAX {
-                                e.fn_idx = fn_idx;
-                                e.pc = pc as u32;
+                                e = self.err_at(prog, core::mem::take(&mut e.message));
                             }
                             return Err(e);
                         }
@@ -685,41 +921,36 @@ impl Vm {
                         fail!("stack underflow (compiler bug)");
                     }
                     let callee = self.stack.remove(n - argc - 1);
-                    let v = self.dispatch_call(prog, callee, argc)?;
+                    match callee {
+                        Value::Fun(f) => {
+                            let (args, n) = self.pop_args(argc);
+                            self.push_frame(prog, f, &args[..n])?;
+                        }
+                        Value::Builtin(b) => match self.call_builtin(prog, b, argc) {
+                            Ok(v) => push!(v),
+                            Err(mut e) => {
+                                if e.pc == u32::MAX {
+                                    e = self.err_at(prog, core::mem::take(&mut e.message));
+                                }
+                                return Err(e);
+                            }
+                        },
+                        _ => fail!("call of a non-function value"),
+                    }
+                }
+                Insn::Ret | Insn::RetNull => {
+                    let v = if matches!(insn, Insn::Ret) {
+                        pop!()
+                    } else {
+                        Value::default()
+                    };
+                    self.pop_frame();
+                    if self.frames.len() == base {
+                        return Ok(Outcome::Done(v));
+                    }
                     push!(v);
                 }
-                Insn::Ret => return Ok(pop!()),
-                Insn::RetNull => return Ok(Value::default()),
             }
-            pc += 1;
-        }
-    }
-
-    /// Pop `argc` args and invoke a function/builtin value.
-    fn dispatch_call(
-        &mut self,
-        prog: &Program,
-        callee: Value,
-        argc: usize,
-    ) -> Result<Value, VmError> {
-        let mut args = [Value::default(); MAX_ARGS];
-        let argc = argc.min(MAX_ARGS);
-        for i in (0..argc).rev() {
-            args[i] = self.stack.pop().unwrap_or_default();
-        }
-        match callee {
-            Value::Fun(f) => self.call_fn(prog, f, &args[..argc]),
-            Value::Builtin(b) => {
-                for a in &args[..argc] {
-                    self.stack.push(*a);
-                }
-                self.call_builtin(prog, b, argc)
-            }
-            _ => Err(VmError {
-                message: "call of a non-function value".into(),
-                fn_idx: u16::MAX,
-                pc: u32::MAX,
-            }),
         }
     }
 
@@ -761,6 +992,8 @@ impl Vm {
             message,
             fn_idx: u16::MAX,
             pc: u32::MAX,
+            line: 0,
+            col: 0,
         };
         let def = &BUILTINS[id as usize];
         let builtin = match def.kind {
@@ -1291,7 +1524,9 @@ impl Vm {
         last.1
     }
 
-    /// Call a function value with explicit args (used by array HOFs).
+    /// Call a function value with explicit args (used by array HOFs and
+    /// mapPixels). Runs to completion — debug pausing never fires inside a
+    /// builtin callback (documented v1 limitation).
     fn dispatch_direct(
         &mut self,
         prog: &Program,
@@ -1299,7 +1534,7 @@ impl Vm {
         args: &[Value],
     ) -> Result<Value, VmError> {
         match callee {
-            Value::Fun(f) => self.call_fn(prog, f, args),
+            Value::Fun(f) => self.run_on_top(prog, f, args),
             Value::Builtin(b) => {
                 for v in args {
                     self.stack.push(*v);
@@ -1310,6 +1545,8 @@ impl Vm {
                 message: "callback is not a function".into(),
                 fn_idx: u16::MAX,
                 pc: u32::MAX,
+                line: 0,
+                col: 0,
             }),
         }
     }

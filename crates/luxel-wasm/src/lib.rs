@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use luxel_core::diag::line_col;
 use luxel_core::engine::{ControlKind, Engine};
 use luxel_core::fixed::Fx;
-use luxel_core::vm::Value;
+use luxel_core::vm::{StepKind, Value};
 
 static ENGINES: Mutex<Vec<Option<EngineSlot>>> = Mutex::new(Vec::new());
 static RESPONSE: Mutex<String> = Mutex::new(String::new());
@@ -160,13 +160,13 @@ pub extern "C" fn lx_frame(h: i32, delta_raw: i32) -> *const u8 {
 pub extern "C" fn lx_take_error(h: i32) -> i32 {
     with_engine(h, |s| match s.engine.take_error() {
         Some(e) => {
-            // fn/pc → source line is future work (needs a source map);
-            // report the message and function index for now
             set_response(format!(
-                "{{\"message\":\"{}\",\"fn\":{},\"pc\":{}}}",
+                "{{\"message\":\"{}\",\"fn\":{},\"pc\":{},\"line\":{},\"col\":{}}}",
                 json_escape(&e.message),
                 e.fn_idx,
-                e.pc
+                e.pc,
+                e.line,
+                e.col
             ));
             let _ = &s.src;
             1
@@ -299,4 +299,121 @@ pub extern "C" fn lx_set_map_grid(h: i32, w: u32, grid_h: u32) {
 #[no_mangle]
 pub extern "C" fn lx_set_wall_clock(h: i32, unix_seconds: f64) {
     with_engine(h, |s| s.engine.set_wall_clock(unix_seconds as i64));
+}
+
+/// Refresh the RGB copy of the engine's current pixel buffer (for redrawing
+/// partially-rendered frames while paused) and return its pointer.
+#[no_mangle]
+pub extern "C" fn lx_pixels(h: i32) -> *const u8 {
+    with_engine(h, |s| {
+        s.pixels.clear();
+        for px in s.engine.pixels() {
+            s.pixels.extend_from_slice(px);
+        }
+        s.pixels.as_ptr()
+    })
+    .unwrap_or(std::ptr::null())
+}
+
+// ---- debugger ----
+
+#[no_mangle]
+pub extern "C" fn lx_debug_enable(h: i32, on: i32) {
+    with_engine(h, |s| s.engine.debug_set_enabled(on != 0));
+}
+
+/// Replace the breakpoint set (1-based source lines). Writes the resolved
+/// lines to the response buffer as a JSON array.
+///
+/// # Safety
+/// `ptr`/`len` must describe `len` u32 line numbers in linear memory.
+#[no_mangle]
+pub unsafe extern "C" fn lx_debug_set_breakpoints(h: i32, ptr: *const u32, len: usize) {
+    // lx_alloc gives align-1 buffers; read the u32s unaligned
+    let lines: Vec<u32> = (0..len).map(|i| ptr.add(i).read_unaligned()).collect();
+    with_engine(h, |s| {
+        let resolved = s.engine.debug_set_breakpoints(&lines);
+        let items: Vec<String> = resolved.iter().map(|l| l.to_string()).collect();
+        set_response(format!("[{}]", items.join(",")));
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn lx_debug_pause(h: i32) {
+    with_engine(h, |s| s.engine.debug_pause());
+}
+
+#[no_mangle]
+pub extern "C" fn lx_debug_paused(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.debug_paused() as i32).unwrap_or(0)
+}
+
+/// Resume with a step plan: 0=continue, 1=over, 2=into, 3=out.
+/// Returns 1 if still paused afterwards.
+#[no_mangle]
+pub extern "C" fn lx_debug_step(h: i32, kind: u32) -> i32 {
+    let kind = match kind {
+        1 => StepKind::Over,
+        2 => StepKind::Into,
+        3 => StepKind::Out,
+        _ => StepKind::Continue,
+    };
+    with_engine(h, |s| s.engine.debug_step(kind) as i32).unwrap_or(0)
+}
+
+/// Debug snapshot as JSON:
+/// {"paused":bool, "line":n, "col":n, "pixel":n|null,
+///  "stack":[{"name":…, "line":n, "col":n,
+///            "locals":[{"name":…, "raw":n} | {"name":…, "array":len} |
+///                      {"name":…, "fn":idx}]}]}
+#[no_mangle]
+pub extern "C" fn lx_debug_state(h: i32) -> i32 {
+    with_engine(h, |s| {
+        if !s.engine.debug_paused() {
+            set_response("{\"paused\":false}".to_string());
+            return 1;
+        }
+        let (line, col, pixel) = s.engine.debug_location().unwrap_or((0, 0, None));
+        let mut out = format!(
+            "{{\"paused\":true,\"line\":{line},\"col\":{col},\"pixel\":{},\"stack\":[",
+            pixel.map(|p| p.to_string()).unwrap_or("null".to_string())
+        );
+        for (i, f) in s.engine.debug_stack().iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!(
+                "{{\"name\":\"{}\",\"line\":{},\"col\":{},\"locals\":[",
+                json_escape(&f.name),
+                f.line,
+                f.col
+            ));
+            for (j, (name, value)) in f.locals.iter().enumerate() {
+                if j > 0 {
+                    out.push(',');
+                }
+                let name = json_escape(name);
+                match value {
+                    Value::Num(v) => {
+                        out.push_str(&format!("{{\"name\":\"{name}\",\"raw\":{}}}", v.raw()))
+                    }
+                    Value::Arr(id) => {
+                        let len = s.engine.array_len(*id);
+                        out.push_str(&format!("{{\"name\":\"{name}\",\"array\":{len}}}"));
+                    }
+                    Value::Fun(idx) => {
+                        out.push_str(&format!("{{\"name\":\"{name}\",\"fn\":{idx}}}"))
+                    }
+                    Value::Builtin(idx) => {
+                        out.push_str(&format!("{{\"name\":\"{name}\",\"fn\":{idx}}}"))
+                    }
+                }
+            }
+            out.push_str("]}");
+        }
+        out.push_str("]}");
+        set_response(out);
+        1
+    })
+    .unwrap_or(0)
 }

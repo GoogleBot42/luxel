@@ -152,8 +152,8 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
     }
     if let Some(e) = engine.take_error() {
         eprintln!(
-            "warning: runtime error: {} (fn {}, pc {})",
-            e.message, e.fn_idx, e.pc
+            "warning: runtime error: line {}:{}: {}",
+            e.line, e.col, e.message
         );
     }
     let names: Vec<String> = engine.exported_vars().map(String::from).collect();
@@ -315,8 +315,8 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
     };
     if let Some(e) = engine.take_error() {
         eprintln!(
-            "warning: runtime error during init: {} (fn {}, pc {})",
-            e.message, e.fn_idx, e.pc
+            "warning: runtime error during init: line {}:{}: {}",
+            e.line, e.col, e.message
         );
     }
     if let Some((w, h)) = o.grid {
@@ -371,8 +371,8 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
     );
     if let Some(e) = first_err {
         eprintln!(
-            "warning: runtime error: {} (fn {}, pc {})",
-            e.message, e.fn_idx, e.pc
+            "warning: runtime error: line {}:{}: {}",
+            e.line, e.col, e.message
         );
     }
 

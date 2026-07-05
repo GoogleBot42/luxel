@@ -15,13 +15,31 @@ use alloc::vec::Vec;
 use crate::compile::compile;
 use crate::diag::Diagnostic;
 use crate::fixed::Fx;
-use crate::vm::{MapData, Program, Value, Vm, VmError};
+use crate::vm::{DebugState, MapData, Outcome, Program, StepKind, Value, Vm, VmError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RenderKind {
     R1(u16),
     R2(u16),
     R3(u16),
+}
+
+/// Where a debug-paused frame pipeline is suspended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunStage {
+    Before,
+    Pixel(u32),
+}
+
+/// One entry of the paused call stack, for debugger UIs.
+#[derive(Clone, Debug)]
+pub struct DebugFrame {
+    pub name: String,
+    pub fn_idx: u16,
+    pub pc: u32,
+    pub line: u32,
+    pub col: u32,
+    pub locals: Vec<(String, Value)>,
 }
 
 /// A UI control exported by the pattern (`export function sliderSpeed(v)`).
@@ -69,6 +87,10 @@ pub struct Engine {
     /// Pattern-local time in ms, 16-frac for sub-ms delta accumulation.
     time_acc: u64,
     pub last_error: Option<VmError>,
+    debug_enabled: bool,
+    /// Some(stage) while the pipeline is suspended at a debug stop.
+    run_stage: Option<RunStage>,
+    cur_delta: Fx,
 }
 
 impl Engine {
@@ -134,7 +156,118 @@ impl Engine {
             controls,
             time_acc: 0,
             last_error,
+            debug_enabled: false,
+            run_stage: None,
+            cur_delta: Fx::ZERO,
         })
+    }
+
+    // ---- debugger ----
+
+    /// Enable/disable debugging. Disabling abandons any paused run.
+    pub fn debug_set_enabled(&mut self, on: bool) {
+        if on == self.debug_enabled {
+            return;
+        }
+        self.debug_enabled = on;
+        if on {
+            self.vm.dbg = Some(DebugState::default());
+        } else {
+            self.vm.dbg = None;
+            self.vm.clear_run();
+            self.run_stage = None;
+        }
+    }
+
+    /// Set breakpoints by 1-based source line; returns the lines that
+    /// resolved to code (for gutter feedback). Replaces the previous set.
+    pub fn debug_set_breakpoints(&mut self, lines: &[u32]) -> Vec<u32> {
+        let mut pcs = Vec::new();
+        let mut resolved = Vec::new();
+        for &line in lines {
+            let mut hit = false;
+            for (fi, f) in self.prog.fns.iter().enumerate() {
+                if let Some(pc) = f.pos.iter().position(|&(l, _)| l == line) {
+                    pcs.push((fi as u16, pc as u32));
+                    hit = true;
+                }
+            }
+            if hit && !resolved.contains(&line) {
+                resolved.push(line);
+            }
+        }
+        if let Some(d) = self.vm.dbg.as_mut() {
+            d.breakpoints = pcs;
+        }
+        resolved
+    }
+
+    /// Request a pause at the next instruction of the next/current frame.
+    pub fn debug_pause(&mut self) {
+        if let Some(d) = self.vm.dbg.as_mut() {
+            d.pause_requested = true;
+        }
+    }
+
+    pub fn debug_paused(&self) -> bool {
+        self.run_stage.is_some()
+    }
+
+    /// Resume a paused run with the given stepping behavior. Execution flows
+    /// across callback boundaries: stepping past the end of render(i) lands
+    /// at the top of render(i+1). Returns whether still paused.
+    pub fn debug_step(&mut self, kind: StepKind) -> bool {
+        if self.run_stage.is_some() {
+            self.drive(Some(kind));
+        }
+        self.run_stage.is_some()
+    }
+
+    /// (line, col, pixel-index-if-in-render) of the paused position.
+    pub fn debug_location(&self) -> Option<(u32, u32, Option<u32>)> {
+        self.run_stage?;
+        let f = self.vm.frames().last()?;
+        let (line, col) = self.prog.fns[f.fn_idx as usize].pos_at(f.pc);
+        let pixel = match self.run_stage {
+            Some(RunStage::Pixel(i)) => Some(i),
+            _ => None,
+        };
+        Some((line, col, pixel))
+    }
+
+    /// The paused call stack, innermost frame first, with named locals.
+    pub fn debug_stack(&self) -> Vec<DebugFrame> {
+        let frames = self.vm.frames();
+        frames
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(i, f)| {
+                let def = &self.prog.fns[f.fn_idx as usize];
+                // the top frame's pc is next-to-execute; parents' point past
+                // their call instruction
+                let pc = if i == frames.len() - 1 {
+                    f.pc
+                } else {
+                    f.pc.saturating_sub(1)
+                };
+                let (line, col) = def.pos_at(pc);
+                let locals = def
+                    .local_names
+                    .iter()
+                    .cloned()
+                    .zip(self.vm.frame_locals(f, def.locals as usize).iter().copied())
+                    .collect();
+                DebugFrame {
+                    name: def.name.clone(),
+                    fn_idx: f.fn_idx,
+                    pc,
+                    line,
+                    col,
+                    locals,
+                }
+            })
+            .collect()
     }
 
     pub fn pixel_count(&self) -> u32 {
@@ -232,6 +365,11 @@ impl Engine {
             .map(|g| g.name.as_str())
     }
 
+    /// Length of a VM array by id (debugger display).
+    pub fn array_len(&self, id: u32) -> usize {
+        self.vm.array(id).map(|a| a.len()).unwrap_or(0)
+    }
+
     /// Read an element of an exported array variable.
     pub fn var_array(&self, name: &str) -> Option<&[Value]> {
         match self.var(name)? {
@@ -242,58 +380,113 @@ impl Engine {
 
     /// Advance time by `delta_ms` and render one frame.
     pub fn frame(&mut self, delta_ms: Fx) -> &[[u8; 3]] {
+        if self.run_stage.is_some() {
+            // paused at a debug stop mid-frame: time frozen, pixels as-is
+            return &self.pixels;
+        }
         if delta_ms.raw() > 0 {
             self.time_acc += delta_ms.raw() as u64;
         }
         self.vm.time_ms = self.time_acc >> 16;
+        self.cur_delta = delta_ms;
+        self.run_stage = Some(RunStage::Before);
+        self.drive(None);
+        &self.pixels
+    }
 
-        if let Some(b) = self.before {
-            if let Err(e) = self.vm.call(&self.prog, b, &[Value::Num(delta_ms)]) {
-                self.last_error = Some(e);
-            }
-        }
-
-        let Some(render) = self.render else {
-            self.pixels.iter_mut().for_each(|p| *p = [0; 3]);
-            return &self.pixels;
-        };
-        let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
-        for i in 0..self.pixel_count {
-            let p = self.vm.pixel_coords(i, [mid; 3]);
-            // transforms apply to 2D/3D coordinates (TODO(oracle): 1D x?)
-            let p = match render {
-                RenderKind::R1(_) => p,
-                _ => self.vm.apply_transform(p),
-            };
-            let all = [
-                Value::Num(Fx::from_int(i as i32)),
-                Value::Num(p[0]),
-                Value::Num(p[1]),
-                Value::Num(p[2]),
-            ];
-            let (fn_idx, argc) = match render {
-                RenderKind::R1(f) => (f, 2),
-                RenderKind::R2(f) => (f, 3),
-                RenderKind::R3(f) => (f, 4),
-            };
-            self.vm.pixel = [Fx::ZERO; 3];
-            self.vm.pixel_written = false;
-            match self.vm.call(&self.prog, fn_idx, &all[..argc]) {
-                Ok(_) => {
-                    let [r, g, b] = self.vm.pixel;
-                    self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+    /// Advance the (resumable) frame pipeline until it finishes the frame or
+    /// suspends at a debug stop. `resume` continues a paused VM run with the
+    /// given step plan; None starts the next stage fresh.
+    fn drive(&mut self, mut resume: Option<StepKind>) {
+        loop {
+            let Some(stage) = self.run_stage else { return };
+            let outcome = if let Some(k) = resume.take() {
+                self.vm.resume(&self.prog, k)
+            } else {
+                match stage {
+                    RunStage::Before => match self.before {
+                        Some(b) => self.vm.start(
+                            &self.prog,
+                            b,
+                            &[Value::Num(self.cur_delta)],
+                            self.debug_enabled,
+                        ),
+                        None => Ok(Outcome::Done(Value::default())),
+                    },
+                    RunStage::Pixel(i) => {
+                        let Some(render) = self.render else {
+                            self.pixels.iter_mut().for_each(|p| *p = [0; 3]);
+                            self.run_stage = None;
+                            return;
+                        };
+                        self.vm.pixel = [Fx::ZERO; 3];
+                        self.vm.pixel_written = false;
+                        let (fn_idx, args, argc) = self.render_args(render, i);
+                        self.vm
+                            .start(&self.prog, fn_idx, &args[..argc], self.debug_enabled)
+                    }
                 }
+            };
+            match outcome {
                 Err(e) => {
                     // record once, blank the rest of the frame, move on
                     self.last_error = Some(e);
-                    for p in i as usize..self.pixel_count as usize {
-                        self.pixels[p] = [0; 3];
+                    if let Some(RunStage::Pixel(i)) = self.run_stage {
+                        for p in i as usize..self.pixel_count as usize {
+                            self.pixels[p] = [0; 3];
+                        }
                     }
-                    break;
+                    self.run_stage = None;
+                    return;
                 }
+                Ok(Outcome::Paused) => return,
+                Ok(Outcome::Done(_)) => match stage {
+                    RunStage::Before => {
+                        if self.render.is_none() {
+                            self.pixels.iter_mut().for_each(|p| *p = [0; 3]);
+                            self.run_stage = None;
+                            return;
+                        }
+                        if self.pixel_count == 0 {
+                            self.run_stage = None;
+                            return;
+                        }
+                        self.run_stage = Some(RunStage::Pixel(0));
+                    }
+                    RunStage::Pixel(i) => {
+                        let [r, g, b] = self.vm.pixel;
+                        self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+                        if i + 1 < self.pixel_count {
+                            self.run_stage = Some(RunStage::Pixel(i + 1));
+                        } else {
+                            self.run_stage = None;
+                            return;
+                        }
+                    }
+                },
             }
         }
-        &self.pixels
+    }
+
+    fn render_args(&self, render: RenderKind, i: u32) -> (u16, [Value; 4], usize) {
+        let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
+        let p = self.vm.pixel_coords(i, [mid; 3]);
+        // transforms apply to 2D/3D coordinates (TODO(oracle): 1D x?)
+        let p = match render {
+            RenderKind::R1(_) => p,
+            _ => self.vm.apply_transform(p),
+        };
+        let args = [
+            Value::Num(Fx::from_int(i as i32)),
+            Value::Num(p[0]),
+            Value::Num(p[1]),
+            Value::Num(p[2]),
+        ];
+        match render {
+            RenderKind::R1(f) => (f, args, 2),
+            RenderKind::R2(f) => (f, args, 3),
+            RenderKind::R3(f) => (f, args, 4),
+        }
     }
 
     pub fn pixels(&self) -> &[[u8; 3]] {

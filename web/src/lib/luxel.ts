@@ -30,6 +30,31 @@ export interface Control {
   name: string;
 }
 
+export interface DebugLocal {
+  name: string;
+  raw?: number;
+  array?: number;
+  fn?: number;
+}
+
+export interface DebugStackFrame {
+  name: string;
+  line: number;
+  col: number;
+  locals: DebugLocal[];
+}
+
+export interface DebugSnapshot {
+  paused: boolean;
+  line?: number;
+  col?: number;
+  pixel?: number | null;
+  stack?: DebugStackFrame[];
+}
+
+export type StepKind = "continue" | "over" | "into" | "out";
+const STEP_CODE: Record<StepKind, number> = { continue: 0, over: 1, into: 2, out: 3 };
+
 interface Exports {
   memory: WebAssembly.Memory;
   lx_alloc(len: number): number;
@@ -54,6 +79,13 @@ interface Exports {
   lx_set_var(h: number, namePtr: number, nameLen: number, raw: number): number;
   lx_set_map_grid(h: number, w: number, gridH: number): void;
   lx_set_wall_clock(h: number, unixSeconds: number): void;
+  lx_pixels(h: number): number;
+  lx_debug_enable(h: number, on: number): void;
+  lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
+  lx_debug_pause(h: number): void;
+  lx_debug_paused(h: number): number;
+  lx_debug_step(h: number, kind: number): number;
+  lx_debug_state(h: number): number;
 }
 
 const RAW = 65536;
@@ -144,6 +176,44 @@ export class Engine {
 
   setMapGrid(w: number, h: number): void {
     this.e.lx_set_map_grid(this.h, w, h);
+  }
+
+  /** Current pixel buffer without rendering (partial frames while paused). */
+  pixels(): Uint8Array {
+    const ptr = this.e.lx_pixels(this.h);
+    return new Uint8Array(this.e.memory.buffer.slice(ptr, ptr + this.pixelCount * 3));
+  }
+
+  debugEnable(on: boolean): void {
+    this.e.lx_debug_enable(this.h, on ? 1 : 0);
+  }
+
+  /** Replace breakpoints (1-based lines); returns the resolved lines. */
+  setBreakpoints(lines: number[]): number[] {
+    const ptr = this.e.lx_alloc(Math.max(lines.length * 4, 1));
+    const view = new DataView(this.e.memory.buffer);
+    lines.forEach((l, i) => view.setUint32(ptr + i * 4, l, true));
+    this.e.lx_debug_set_breakpoints(this.h, ptr, lines.length);
+    this.e.lx_dealloc(ptr, Math.max(lines.length * 4, 1));
+    return JSON.parse(this.lx.response()) as number[];
+  }
+
+  debugPause(): void {
+    this.e.lx_debug_pause(this.h);
+  }
+
+  debugPaused(): boolean {
+    return this.e.lx_debug_paused(this.h) === 1;
+  }
+
+  /** Resume with a step plan; returns whether still paused. */
+  debugStep(kind: StepKind): boolean {
+    return this.e.lx_debug_step(this.h, STEP_CODE[kind]) === 1;
+  }
+
+  debugState(): DebugSnapshot {
+    this.e.lx_debug_state(this.h);
+    return JSON.parse(this.lx.response()) as DebugSnapshot;
   }
 
   setWallClock(unixSeconds: number): void {
