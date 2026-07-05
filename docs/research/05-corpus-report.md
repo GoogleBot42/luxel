@@ -12,14 +12,16 @@
 |---|---|---|
 | compiles | 291/293 | **99.3%** |
 | …of which the 2 failures are *deliberate* interlock lines ("REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND") that fail on PB too | — | effectively **100%** |
-| compiles + smoke-runs clean (3 frames, 100 px, 10×10 map, wall clock) | **288** | **98.3%** |
+| compiles + smoke-runs clean (3 frames, 10×10 map + 16×16 retry, wall clock) | **291** | **99.3%** |
 | runtime stop on a not-yet-implemented builtin | 0 | 0% |
-| real runtime errors | 3 | 1.0% |
+| real runtime errors | 0 | 0% |
 
-The 3 runtime errors hardcode other rig shapes (Snake 2D and Perlin/Simplex
-Noise 2D assume `width = 16` ⇒ 256-pixel matrices) and would OOB on real PB
-at this pixel count too. M0's ≥90%-compiles exit criterion is met with a
-large margin.
+Three patterns (Snake 2D, Perlin/Simplex Noise 2D, Nano Orbital) hardcode
+16×16 rigs and OOB at other sizes (on real PB too); the checker retries
+runtime failures on a 16×16 grid, where all three pass. **Every valid
+community pattern compiles and runs.** The only two failures are the
+deliberate consent-interlock lines in the Music Sequencer patterns, which
+fail on PB by design. M0's ≥90% exit criterion is exceeded at 100%.
 
 ## What the corpus taught us (all fixed)
 

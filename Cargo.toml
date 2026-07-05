@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/luxel-core", "crates/luxel-cli"]
+members = ["crates/luxel-core", "crates/luxel-cli", "crates/luxel-wasm"]
 
 [workspace.package]
 edition = "2021"

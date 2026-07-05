@@ -1,0 +1,25 @@
+{
+  "name": "luxel-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "wasm": "cd .. && cargo build --release --target wasm32-unknown-unknown -p luxel-wasm && cp target/wasm32-unknown-unknown/release/luxel_wasm.wasm web/public/luxel.wasm",
+    "dev": "npm run wasm && vite",
+    "build": "npm run wasm && svelte-check --tsconfig ./tsconfig.json && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
+    "svelte": "^4.2.19",
+    "svelte-check": "^3.8.6",
+    "tslib": "^2.7.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8"
+  },
+  "dependencies": {
+    "@codemirror/lang-javascript": "^6.2.2",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "codemirror": "^6.0.1"
+  }
+}

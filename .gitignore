@@ -4,3 +4,5 @@ node_modules/
 *.ppm
 .direnv/
 /corpus/
+web/dist/
+web/public/luxel.wasm

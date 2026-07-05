@@ -1,0 +1,12 @@
+[package]
+name = "luxel-wasm"
+version = "0.1.0"
+description = "wasm32 bindings for the Luxel engine (hand-rolled C ABI, no wasm-bindgen)"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+luxel-core = { path = "../luxel-core" }

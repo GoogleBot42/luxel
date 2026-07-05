@@ -35,15 +35,31 @@ fn main() -> ExitCode {
         "run" if args.len() >= 2 => run_cmd(&args[1], &args[2..], false),
         "bench" if args.len() >= 2 => run_cmd(&args[1], &args[2..], true),
         "vars" if args.len() >= 2 => vars_cmd(&args[1], &args[2..]),
-        "check" if args.len() == 2 => check_cmd(&args[1]),
+        "check" if args.len() >= 2 => check_cmd(&args[1], &args[2..]),
         _ => usage(),
     }
 }
 
 /// Compile + smoke-run a pattern (.js source or .epe export) and report one
 /// JSON line: {"file", "stage": "ok"|"epe"|"compile"|"init"|"frame", "error"?}.
-/// The corpus report tooling drives this.
-fn check_cmd(path: &str) -> ExitCode {
+/// The corpus report tooling drives this. Optional: --grid WxH (default
+/// 10x10; sets pixel count to W·H and installs a 2D grid map).
+fn check_cmd(path: &str, rest: &[String]) -> ExitCode {
+    let (w, h) = match rest {
+        [flag, v] if flag == "--grid" => match v.split_once('x') {
+            Some((a, b)) => match (num(a), num(b)) {
+                (Ok(a), Ok(b)) => (a.max(1), b.max(1)),
+                _ => return usage(),
+            },
+            None => return usage(),
+        },
+        [] => (10, 10),
+        _ => return usage(),
+    };
+    check_at(path, w, h)
+}
+
+fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
     let report = |stage: &str, error: Option<String>| {
         let mut obj = serde_json::json!({ "file": path, "stage": stage });
         if let Some(e) = error {
@@ -71,9 +87,10 @@ fn check_cmd(path: &str) -> ExitCode {
     } else {
         raw.clone()
     };
-    // 100 pixels: divisible sizes matter — patterns doing pixelCount/10 etc.
-    // genuinely OOB (on PB too) at awkward counts
-    let mut engine = match Engine::new(&src, 100, 1) {
+    // grid sizes matter — patterns hardcoding rig shapes (width = 16) or
+    // doing pixelCount/10 are genuinely OOB (on PB too) at other counts
+    let pixels = w * h;
+    let mut engine = match Engine::new(&src, pixels, 1) {
         Ok(e) => e,
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);
@@ -83,9 +100,15 @@ fn check_cmd(path: &str) -> ExitCode {
     if let Some(e) = engine.take_error() {
         return report("init", Some(e.message));
     }
-    // a 10×10 grid map so render2D patterns exercise real coordinates
-    let coords: Vec<[Fx; 3]> = (0..100)
-        .map(|i| [Fx::from_int(i % 10), Fx::from_int(i / 10), Fx::ZERO])
+    // a W×H grid map so render2D patterns exercise real coordinates
+    let coords: Vec<[Fx; 3]> = (0..pixels)
+        .map(|i| {
+            [
+                Fx::from_int((i % w) as i32),
+                Fx::from_int((i / w) as i32),
+                Fx::ZERO,
+            ]
+        })
         .collect();
     engine.set_map(2, &coords);
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {

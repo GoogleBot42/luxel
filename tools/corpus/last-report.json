@@ -394,9 +394,8 @@
   }
  },
  {
-  "error": "array index out of bounds",
   "file": "corpus/7YfuKn9oeMv6GuRx6.epe",
-  "stage": "frame",
+  "stage": "ok16",
   "id": "7YfuKn9oeMv6GuRx6",
   "name": "Nano Orbital",
   "uses": {
@@ -1648,9 +1647,8 @@
   }
  },
  {
-  "error": "array index out of bounds",
   "file": "corpus/RtREWXYigJ2RPQNqw.epe",
-  "stage": "frame",
+  "stage": "ok16",
   "id": "RtREWXYigJ2RPQNqw",
   "name": "Perlin/Simplex Noise 2D",
   "uses": {
@@ -3700,9 +3698,8 @@
   }
  },
  {
-  "error": "array index out of bounds",
   "file": "corpus/wy96bdmQBtFu8vxev.epe",
-  "stage": "frame",
+  "stage": "ok16",
   "id": "wy96bdmQBtFu8vxev",
   "name": "Snake 2D",
   "uses": {

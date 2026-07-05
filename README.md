@@ -20,12 +20,21 @@ documented bytecode VM that other languages can target too.
 - **Web IDE:** Svelte + TypeScript + CodeMirror 6, served from device flash; no cloud,
   no app — everything works on a device in AP mode.
 
-Status: **M0 in progress** — the language core. Working today: `luxel-core`
-(no_std compiler + stack VM + frame engine: 16.16 fixed-point semantics,
-waveform/math/array/color builtins, controls, export vars — conformance-tested
-with golden pixel-exact frames, deterministic across native and wasm32) and a
-CLI: `luxel parse`, `luxel run` (renders a PPM frame-strip), `luxel bench`.
-Try it: `nix develop -c cargo run -p luxel-cli -- run examples/blinkfade.js`.
+Status: **M0 complete, M1 underway.**
+
+- `luxel-core` — no_std compiler + VM + frame engine implementing the full
+  documented builtin surface (waveforms, math, arrays, color, transforms,
+  perlin, palettes, clock, pixel maps). Semantics differentially tested
+  against real Pixel Blaze hardware (137/165 probes bit-exact; the rest are
+  their undocumented approximation internals). **All 291 valid community
+  patterns compile and run.**
+- `luxel` CLI — `run` (PPM frame-strip, `--map-grid WxH`), `bench`, `parse`,
+  `check`, `vars`. Try: `nix develop -c cargo run -p luxel-cli -- run examples/blinkfade.js`
+- **Browser playground** (`web/`) — the same engine compiled to wasm
+  (bit-identical output, proven by golden tests through the FFI) behind a
+  Svelte + TypeScript IDE: CodeMirror editor with live recompile, strip
+  waterfall + 2D grid previews, auto-generated controls, var watcher.
+  Run: `cd web && npm install && npm run dev`
 See [docs/PLAN.md](docs/PLAN.md) for architecture, requirements, and milestones,
 and [docs/research/](docs/research/) for the research behind it.
 

@@ -32,16 +32,29 @@ const files = fs.readdirSync(DIR).filter((f) => f.endsWith(".epe")).sort();
 const index = JSON.parse(fs.readFileSync(path.join(DIR, "index.json"), "utf8"));
 const nameOf = Object.fromEntries(index.map((i) => [i.id, i.name]));
 
+const check = (p, ...extra) => {
+  try {
+    return execFileSync(LUXEL, ["check", p, ...extra], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    return e.stdout || `{"file":"${p}","stage":"crash","error":${JSON.stringify(String(e.message))}}`;
+  }
+};
+
 const results = [];
 for (const f of files) {
   const p = path.join(DIR, f);
-  let out;
-  try {
-    out = execFileSync(LUXEL, ["check", p], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  } catch (e) {
-    out = e.stdout || `{"file":"${p}","stage":"crash","error":${JSON.stringify(String(e.message))}}`;
+  let r = JSON.parse(check(p).trim().split("\n").pop());
+  // rig-shape rescue: patterns hardcoding 16×16 matrices fail at 10×10 —
+  // retry runtime failures on a 256-pixel 16×16 grid
+  if (r.stage === "init" || r.stage === "frame") {
+    const retry = JSON.parse(check(p, "--grid", "16x16").trim().split("\n").pop());
+    if (retry.stage === "ok") {
+      r = { ...retry, stage: "ok16" };
+    }
   }
-  const r = JSON.parse(out.trim().split("\n").pop());
   const src = JSON.parse(fs.readFileSync(p, "utf8")).sources.main;
   r.id = f.replace(".epe", "");
   r.name = nameOf[r.id] ?? r.id;
@@ -55,7 +68,7 @@ for (const f of files) {
 }
 
 const by = (stage) => results.filter((r) => r.stage === stage);
-const ok = by("ok");
+const ok = [...by("ok"), ...by("ok16")];
 const compileErrs = by("compile");
 const runtimeErrs = [...by("init"), ...by("frame")];
 const todoErrs = runtimeErrs.filter((r) => r.error?.includes("not implemented"));
@@ -72,7 +85,7 @@ const bucket = (errs, norm) => {
 };
 
 console.log(`corpus: ${results.length} patterns`);
-console.log(`  compiles + smoke-runs clean : ${ok.length} (${((100 * ok.length) / results.length).toFixed(1)}%)`);
+console.log(`  compiles + smoke-runs clean : ${ok.length} (${((100 * ok.length) / results.length).toFixed(1)}%)${by("ok16").length ? ` — ${by("ok16").length} needed a 16×16 rig` : ""}`);
 console.log(`  compile errors              : ${compileErrs.length}`);
 console.log(`  runtime: unimplemented      : ${todoErrs.length}`);
 console.log(`  runtime: real errors        : ${realRuntimeErrs.length}`);
