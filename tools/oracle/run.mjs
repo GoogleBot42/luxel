@@ -111,6 +111,12 @@ async function main() {
       const luxSide = luxelVars(src);
       if (!pbSide.ok || !luxSide.ok) {
         console.log(`batch ${i / BATCH}: pb=${pbSide.error ?? "ok"} luxel=${luxSide.error ?? "ok"}`);
+        if (pbSide.ok) {
+          for (const v of batch) {
+            const val = pbSide.vars[`o_${v.name}`];
+            if (val !== undefined) console.log(`  pb-only ${v.name} = ${toRaw(val)} (${val})`);
+          }
+        }
         for (const v of batch) results.push({ name: v.name, batchError: true, match: false });
         continue;
       }

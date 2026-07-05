@@ -56,7 +56,8 @@ pub enum Tok {
 
     // `.015`-style literals are idiomatic (e.g. `time(.015)`), hence the
     // leading-dot alternative; plain `.` still lexes as Dot for members.
-    #[regex(r"[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+|0[xX][0-9a-fA-F]+|0[bB][01]+")]
+    // JS-style exponents (`1e4`, `2.5e-3`) appear in the corpus.
+    #[regex(r"[0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)?|\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+(?:[eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F]+|0[bB][01]+")]
     Number,
 
     // Punctuation
@@ -126,8 +127,11 @@ pub enum Tok {
     Shl,
     #[token(">>")]
     Shr,
+    // strict equality folds to plain equality — one value domain
+    #[token("===")]
     #[token("==")]
     EqEq,
+    #[token("!==")]
     #[token("!=")]
     NotEq,
     #[token("<=")]
@@ -222,6 +226,7 @@ mod tests {
     #[test]
     fn numbers() {
         assert_eq!(toks("1 3.5 .015 5. 0x1F 0b101"), [Tok::Number; 6]);
+        assert_eq!(toks("1e4 2.5e-3 1E+2 .5e2"), [Tok::Number; 4]);
         // `.015` is a number but `a.length` is Ident Dot Ident
         assert_eq!(toks("a.length"), [Tok::Ident, Tok::Dot, Tok::Ident]);
         assert_eq!(

@@ -1,0 +1,3986 @@
+[
+ {
+  "file": "corpus/28J9KEWXqR62JJeyK.epe",
+  "stage": "ok",
+  "id": "28J9KEWXqR62JJeyK",
+  "name": "Shimmer Crossfade 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/2g6JZPLpq8XPFeP2s.epe",
+  "stage": "init",
+  "id": "2g6JZPLpq8XPFeP2s",
+  "name": "tree setup pattern",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate3D",
+    "rotateZ"
+   ],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/2n93mJRCoquZQddnB.epe",
+  "stage": "ok",
+  "id": "2n93mJRCoquZQddnB",
+  "name": "ChristmasPewPew",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/2riJoFnGwt5TmWSet.epe",
+  "stage": "ok",
+  "id": "2riJoFnGwt5TmWSet",
+  "name": "policeLights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/2rrBGNEDKi9xM3Gwb.epe",
+  "stage": "ok",
+  "id": "2rrBGNEDKi9xM3Gwb",
+  "name": "Rainbow v2",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/3BLyowkuhmGXkQdRr.epe",
+  "stage": "frame",
+  "id": "3BLyowkuhmGXkQdRr",
+  "name": "Carrie's Holiday Star 2D",
+  "uses": {
+   "todo": [
+    "perlin",
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `perlin` is not implemented yet",
+  "file": "corpus/3RHd7JN2E9Se8nSB8.epe",
+  "stage": "frame",
+  "id": "3RHd7JN2E9Se8nSB8",
+  "name": "Rainstorm",
+  "uses": {
+   "todo": [
+    "perlin",
+    "resetTransform",
+    "translate",
+    "scale",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/3iTX69rZvzx39SA5r.epe",
+  "stage": "ok",
+  "id": "3iTX69rZvzx39SA5r",
+  "name": "Holiday_Diagonal_Stripes",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/3phupq8mRMWuvACxw.epe",
+  "stage": "ok",
+  "id": "3phupq8mRMWuvACxw",
+  "name": "2D Wandering Fireball",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/4NSkQiZFaDbwGwgsT.epe",
+  "stage": "ok",
+  "id": "4NSkQiZFaDbwGwgsT",
+  "name": "2D Spiral Twirls",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/4ioyjcWvw3Mtvi6km.epe",
+  "stage": "init",
+  "id": "4ioyjcWvw3Mtvi6km",
+  "name": "Sun rays through trees",
+  "uses": {
+   "todo": [
+    "perlinTurbulence",
+    "setPerlinWrap",
+    "resetTransform",
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/4mCHB4BL4xPCENk5J.epe",
+  "stage": "ok",
+  "id": "4mCHB4BL4xPCENk5J",
+  "name": "Flash Posterize + Music Sequencer framework",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "frequencyData",
+    "energyAverage",
+    "maxFrequency",
+    "maxFrequencyMagnitude",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/53DZNdW54zdpBkAW3.epe",
+  "stage": "ok",
+  "id": "53DZNdW54zdpBkAW3",
+  "name": "Crosstown Traffic 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/5PeeJNhpnTDsgvCpT.epe",
+  "stage": "ok",
+  "id": "5PeeJNhpnTDsgvCpT",
+  "name": "Matrix 2 tone pulse",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `clockWeekday` is not implemented yet",
+  "file": "corpus/5b3a4tQBuAKfRfgbk.epe",
+  "stage": "frame",
+  "id": "5b3a4tQBuAKfRfgbk",
+  "name": "Glittering Jewels",
+  "uses": {
+   "todo": [
+    "clockWeekday"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/5bCF8ukXsFQfTBQgK.epe",
+  "stage": "ok",
+  "id": "5bCF8ukXsFQfTBQgK",
+  "name": "FireFlies",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlin` is not implemented yet",
+  "file": "corpus/5d3WQKjDJtPwJnyqr.epe",
+  "stage": "frame",
+  "id": "5d3WQKjDJtPwJnyqr",
+  "name": "Sunrise Alarm Clock",
+  "uses": {
+   "todo": [
+    "perlin",
+    "scale",
+    "clockHour",
+    "clockMinute",
+    "clockSecond",
+    "clockWeekday"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/5ogsMbJSD55kDP9mF.epe",
+  "stage": "ok",
+  "id": "5ogsMbJSD55kDP9mF",
+  "name": "fast pulse 3d",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/5rpavhGiY4BgXaZ8o.epe",
+  "stage": "frame",
+  "id": "5rpavhGiY4BgXaZ8o",
+  "name": "GlowFlow (3D coord transform API port)",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate3D",
+    "rotateX",
+    "rotateY",
+    "rotateZ"
+   ],
+   "render2D": false,
+   "render3D": true,
+   "sensors": [
+    "energyAverage",
+    "accelerometer",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/5yKXqHANJYmuhpgXb.epe",
+  "stage": "ok",
+  "id": "5yKXqHANJYmuhpgXb",
+  "name": "index walk",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/6BMLrB7TJjFnEojKG.epe",
+  "stage": "ok",
+  "id": "6BMLrB7TJjFnEojKG",
+  "name": "firework rocket sparks",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/6Y2XsvEn2Qn62hjJT.epe",
+  "stage": "ok",
+  "id": "6Y2XsvEn2Qn62hjJT",
+  "name": "DBZBattleFinal",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/6aQStYh4ATmw7473d.epe",
+  "stage": "ok",
+  "id": "6aQStYh4ATmw7473d",
+  "name": "Polar mapping helper 2D / 3D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/6hMdH2Mo5jTS7ZF4L.epe",
+  "stage": "ok",
+  "id": "6hMdH2Mo5jTS7ZF4L",
+  "name": "Iran - Solidarity",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/7Ju7GPHN7A6STrrxL.epe",
+  "stage": "ok",
+  "id": "7Ju7GPHN7A6STrrxL",
+  "name": "marching rainbow",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/7M63KwCJafiLoMWFQ.epe",
+  "stage": "ok",
+  "id": "7M63KwCJafiLoMWFQ",
+  "name": "Matrix Green Waterfall 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "83:1: unknown identifier `BY_REMOVING_THESE_INVALID_LINES_I_PROMISE_THIS_IS_RUNNING_ON_A_PIXELBLAZE_V3`",
+  "file": "corpus/7MuJmcy4FZbs9jGbB.epe",
+  "stage": "compile",
+  "id": "7MuJmcy4FZbs9jGbB",
+  "name": "Music Sequencer - for V3 ONLY",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "frequencyData",
+    "energyAverage",
+    "maxFrequency",
+    "maxFrequencyMagnitude",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/7XT2JNLkLaXc3erFX.epe",
+  "stage": "ok",
+  "id": "7XT2JNLkLaXc3erFX",
+  "name": "slow color shift",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "array index out of bounds",
+  "file": "corpus/7YfuKn9oeMv6GuRx6.epe",
+  "stage": "frame",
+  "id": "7YfuKn9oeMv6GuRx6",
+  "name": "Nano Orbital",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `setPerlinWrap` is not implemented yet",
+  "file": "corpus/7bqSEZdvPK42pCNyA.epe",
+  "stage": "init",
+  "id": "7bqSEZdvPK42pCNyA",
+  "name": "Dire Spider 2D",
+  "uses": {
+   "todo": [
+    "perlinRidge",
+    "setPerlinWrap",
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/7c4HhXKqqW32BG7Z9.epe",
+  "stage": "ok",
+  "id": "7c4HhXKqqW32BG7Z9",
+  "name": "Sunrise 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `perlin` is not implemented yet",
+  "file": "corpus/7caR9QAmgKTdFtNTF.epe",
+  "stage": "frame",
+  "id": "7caR9QAmgKTdFtNTF",
+  "name": "Halloween Wavy Bands",
+  "uses": {
+   "todo": [
+    "perlin"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/7dj5kyBumrzqADX4E.epe",
+  "stage": "ok",
+  "id": "7dj5kyBumrzqADX4E",
+  "name": "regenbogendrogen",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/7nLicYxSg6nLbZfD4.epe",
+  "stage": "ok",
+  "id": "7nLicYxSg6nLbZfD4",
+  "name": "Sound - Spectrum Analyser",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "error": "builtin `perlin` is not implemented yet",
+  "file": "corpus/88jB89jqQojktXgc4.epe",
+  "stage": "frame",
+  "id": "88jB89jqQojktXgc4",
+  "name": "Bubble Column",
+  "uses": {
+   "todo": [
+    "perlin"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/8SBk2ydut9EBoKHi7.epe",
+  "stage": "ok",
+  "id": "8SBk2ydut9EBoKHi7",
+  "name": "multimap simpledemo",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/8gjB89jqQojktXgc4.epe",
+  "stage": "ok",
+  "id": "8gjB89jqQojktXgc4",
+  "name": "sparks",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/8jFuGXr68mpJsRkvg.epe",
+  "stage": "ok",
+  "id": "8jFuGXr68mpJsRkvg",
+  "name": "Easing Library v1.01",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/92wsuZDBB8juyRDFZ.epe",
+  "stage": "ok",
+  "id": "92wsuZDBB8juyRDFZ",
+  "name": "Breakout 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `clockSecond` is not implemented yet",
+  "file": "corpus/95QZQGENL4fYwtBHy.epe",
+  "stage": "init",
+  "id": "95QZQGENL4fYwtBHy",
+  "name": "RGBclock 2D",
+  "uses": {
+   "todo": [
+    "clockHour",
+    "clockMinute",
+    "clockSecond"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/9JMfKDQh58XeXFweR.epe",
+  "stage": "ok",
+  "id": "9JMfKDQh58XeXFweR",
+  "name": "Newfire",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/9LN8AR5TjKJGfLfa3.epe",
+  "stage": "ok",
+  "id": "9LN8AR5TjKJGfLfa3",
+  "name": "b_lightning_flashes",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/9LtYRa82vwe8H3K5R.epe",
+  "stage": "ok",
+  "id": "9LtYRa82vwe8H3K5R",
+  "name": "Spring Colors",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/9RaWKrtdaqsTMN8to.epe",
+  "stage": "init",
+  "id": "9RaWKrtdaqsTMN8to",
+  "name": "Blue Holiday Candle 2D",
+  "uses": {
+   "todo": [
+    "translate",
+    "scale"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/9YNBonyhXfyFjpYzJ.epe",
+  "stage": "ok",
+  "id": "9YNBonyhXfyFjpYzJ",
+  "name": "rainbow fonts",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/AJxfoqDaC9avSPTH9.epe",
+  "stage": "ok",
+  "id": "AJxfoqDaC9avSPTH9",
+  "name": "neutronorbit",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/AvayCBDKbhHvM3RJG.epe",
+  "stage": "ok",
+  "id": "AvayCBDKbhHvM3RJG",
+  "name": "lightning ZAP!",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/BLoNqhSoqdumsvibM.epe",
+  "stage": "ok",
+  "id": "BLoNqhSoqdumsvibM",
+  "name": "Spinwheel 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Ba7cdYcigxF27EW64.epe",
+  "stage": "ok",
+  "id": "Ba7cdYcigxF27EW64",
+  "name": "sinpulse 3D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Bagy7kMSPPRhQLfG7.epe",
+  "stage": "ok",
+  "id": "Bagy7kMSPPRhQLfG7",
+  "name": "Perlin/Simplex Noise 1D",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "error": "builtin `setPalette` is not implemented yet",
+  "file": "corpus/BpYvATFvRH8LbBFv3.epe",
+  "stage": "init",
+  "id": "BpYvATFvRH8LbBFv3",
+  "name": "Eye of Sauron with movement",
+  "uses": {
+   "todo": [
+    "perlinRidge",
+    "setPerlinWrap",
+    "resetTransform",
+    "translate",
+    "scale",
+    "setPalette",
+    "paint"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/BxgkrQTHPkhcM6a24.epe",
+  "stage": "ok",
+  "id": "BxgkrQTHPkhcM6a24",
+  "name": "KITT (w/ color picker)",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `setPalette` is not implemented yet",
+  "file": "corpus/C7BgpG7f4zHx92hs6.epe",
+  "stage": "init",
+  "id": "C7BgpG7f4zHx92hs6",
+  "name": "perlin fire wind",
+  "uses": {
+   "todo": [
+    "perlin",
+    "perlinFbm",
+    "perlinRidge",
+    "perlinTurbulence",
+    "resetTransform",
+    "translate",
+    "scale",
+    "setPalette",
+    "paint"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/CFkpPy9cxyAQjtzuN.epe",
+  "stage": "ok",
+  "id": "CFkpPy9cxyAQjtzuN",
+  "name": "All Lasers Fire",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/D2xuondCcLLi2jvMr.epe",
+  "stage": "ok",
+  "id": "D2xuondCcLLi2jvMr",
+  "name": "spin cycle",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/DAQPGJGEsCyjhwiCp.epe",
+  "stage": "ok",
+  "id": "DAQPGJGEsCyjhwiCp",
+  "name": "Nyan Lights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/DCSAhmhRewGYKo2Ci.epe",
+  "stage": "ok",
+  "id": "DCSAhmhRewGYKo2Ci",
+  "name": "Swirlpool 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/DPuWouS2HrqSZ5uXj.epe",
+  "stage": "ok",
+  "id": "DPuWouS2HrqSZ5uXj",
+  "name": "fire - red",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Df9Hy2gufFnaB48uq.epe",
+  "stage": "ok",
+  "id": "Df9Hy2gufFnaB48uq",
+  "name": "SOUND - lavablob",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "frequencyData",
+    "energyAverage"
+   ]
+  }
+ },
+ {
+  "file": "corpus/Dtyz7dXictnHp8yAf.epe",
+  "stage": "ok",
+  "id": "Dtyz7dXictnHp8yAf",
+  "name": "RGB-XYZ 3D Octants",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/EHxr7dBx5LtioSQbD.epe",
+  "stage": "ok",
+  "id": "EHxr7dBx5LtioSQbD",
+  "name": "Solid Rainbow",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/EWLQn3iqPKzqHBtRt.epe",
+  "stage": "ok",
+  "id": "EWLQn3iqPKzqHBtRt",
+  "name": "StarGen polar 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Eb5ieNq4Zit92SoQb.epe",
+  "stage": "ok",
+  "id": "Eb5ieNq4Zit92SoQb",
+  "name": "Complements 3D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Ebr4WzbHRTaTibx2j.epe",
+  "stage": "ok",
+  "id": "Ebr4WzbHRTaTibx2j",
+  "name": "TwoColorHSVMix",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/EhA8fr9WHBPTf92rZ.epe",
+  "stage": "ok",
+  "id": "EhA8fr9WHBPTf92rZ",
+  "name": "Bouncer3D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `clockHour` is not implemented yet",
+  "file": "corpus/FA9RGndR2ckrJmE8r.epe",
+  "stage": "frame",
+  "id": "FA9RGndR2ckrJmE8r",
+  "name": "Utility: Scheduled Percent-On Demo",
+  "uses": {
+   "todo": [
+    "clockHour",
+    "clockMinute",
+    "clockSecond"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/FBki9iXodqFM26SfH.epe",
+  "stage": "ok",
+  "id": "FBki9iXodqFM26SfH",
+  "name": "sparkfire",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/FRobn9vAtgoAqNCBo.epe",
+  "stage": "frame",
+  "id": "FRobn9vAtgoAqNCBo",
+  "name": "sound - spectrokalidamandala",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate3D",
+    "scale3D"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/Fa7KYLvXbYi48hEMR.epe",
+  "stage": "ok",
+  "id": "Fa7KYLvXbYi48hEMR",
+  "name": "RGBW Mapping Tester - HSV Version",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/FaJD9BrFGvxoSQ2Rg.epe",
+  "stage": "ok",
+  "id": "FaJD9BrFGvxoSQ2Rg",
+  "name": "sparks center",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/FgC4c8TcEaQFYjHof.epe",
+  "stage": "ok",
+  "id": "FgC4c8TcEaQFYjHof",
+  "name": "RGB-XYZ 3D Sweep",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": true,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/FrKXKh3QmKNwHxBFT.epe",
+  "stage": "init",
+  "id": "FrKXKh3QmKNwHxBFT",
+  "name": "Orv - Christmas Tree",
+  "uses": {
+   "todo": [
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/Fvhhj7uo6xaDciS46.epe",
+  "stage": "ok",
+  "id": "Fvhhj7uo6xaDciS46",
+  "name": "spotlights / rotation 3D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/FxwNyX6zQZAusmaKc.epe",
+  "stage": "ok",
+  "id": "FxwNyX6zQZAusmaKc",
+  "name": "Rainbow rocket sparks",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/FyTq6qcpz7SbRLjHY.epe",
+  "stage": "ok",
+  "id": "FyTq6qcpz7SbRLjHY",
+  "name": "1D Aurora Borealis",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `pinMode` is not implemented yet",
+  "file": "corpus/GCwuPigteHfPT4nAT.epe",
+  "stage": "init",
+  "id": "GCwuPigteHfPT4nAT",
+  "name": "Sunrise",
+  "uses": {
+   "todo": [
+    "pinMode",
+    "digitalRead"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/GdWk2t6vCEYwW8aLv.epe",
+  "stage": "ok",
+  "id": "GdWk2t6vCEYwW8aLv",
+  "name": "6 Green Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/GhHsivqRwd88Wvhfy.epe",
+  "stage": "ok",
+  "id": "GhHsivqRwd88Wvhfy",
+  "name": "wanderedges",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/H4eSpKjY97LtyPFFJ.epe",
+  "stage": "ok",
+  "id": "H4eSpKjY97LtyPFFJ",
+  "name": "Performance test framework",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/H8DJAngXe4TA9k4p6.epe",
+  "stage": "ok",
+  "id": "H8DJAngXe4TA9k4p6",
+  "name": "Gradient blue  purple pink",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/HEn3sPAtZez2JRJcM.epe",
+  "stage": "ok",
+  "id": "HEn3sPAtZez2JRJcM",
+  "name": "firework dust",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/HMHMSME9qxS4CzbMv.epe",
+  "stage": "ok",
+  "id": "HMHMSME9qxS4CzbMv",
+  "name": "Example: time and animation",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/HmcfJWiJTtXFYhrsF.epe",
+  "stage": "ok",
+  "id": "HmcfJWiJTtXFYhrsF",
+  "name": "Twinkling Classic Xmas Strands",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/HrdcZhjotup8rx7L8.epe",
+  "stage": "ok",
+  "id": "HrdcZhjotup8rx7L8",
+  "name": "Example: color hues",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "75:1: unknown identifier `REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING`",
+  "file": "corpus/J9ooRXsnxuLDYvgDi.epe",
+  "stage": "compile",
+  "id": "J9ooRXsnxuLDYvgDi",
+  "name": "Music Sequencer for v2",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "frequencyData",
+    "energyAverage",
+    "maxFrequency",
+    "maxFrequencyMagnitude",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/JQd3rFSF9waCn843M.epe",
+  "stage": "ok",
+  "id": "JQd3rFSF9waCn843M",
+  "name": "Bouncy Boxes",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/JbvEwtvph5WWdvbM5.epe",
+  "stage": "ok",
+  "id": "JbvEwtvph5WWdvbM5",
+  "name": "Twinkle",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/JhAQ36GnEHxzEFcCb.epe",
+  "stage": "ok",
+  "id": "JhAQ36GnEHxzEFcCb",
+  "name": "Rainbow Smiley",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/JrF3tFojCMTpmAp3q.epe",
+  "stage": "ok",
+  "id": "JrF3tFojCMTpmAp3q",
+  "name": "Christmas RG Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Ksyp3sf2v4L8HRZZq.epe",
+  "stage": "ok",
+  "id": "Ksyp3sf2v4L8HRZZq",
+  "name": "Three Red Pixels (mathy)",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Ktjben4j36Wqxnk8N.epe",
+  "stage": "ok",
+  "id": "Ktjben4j36Wqxnk8N",
+  "name": "green ripple reflections",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/L8gw7T2xnNrELb3m5.epe",
+  "stage": "ok",
+  "id": "L8gw7T2xnNrELb3m5",
+  "name": "1 White Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `clockSecond` is not implemented yet",
+  "file": "corpus/LKxjLSFNKYE2YWzQg.epe",
+  "stage": "init",
+  "id": "LKxjLSFNKYE2YWzQg",
+  "name": "2d Clock with Hand Color Pickers",
+  "uses": {
+   "todo": [
+    "clockHour",
+    "clockMinute",
+    "clockSecond"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/LLTDH3C9FCoGf9tM2.epe",
+  "stage": "ok",
+  "id": "LLTDH3C9FCoGf9tM2",
+  "name": "2D sinc(theta)/theta",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/LR4KPE7qNStxaFMaA.epe",
+  "stage": "ok",
+  "id": "LR4KPE7qNStxaFMaA",
+  "name": "glitch bands",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/M82AkZabqsnH7rc7J.epe",
+  "stage": "ok",
+  "id": "M82AkZabqsnH7rc7J",
+  "name": "Custom Sequences",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/MNA8SCYvtgLmMa7zc.epe",
+  "stage": "ok",
+  "id": "MNA8SCYvtgLmMa7zc",
+  "name": "sound - Starburst 2",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "energyAverage"
+   ]
+  }
+ },
+ {
+  "file": "corpus/MRbBTYfptRQ2zesqv.epe",
+  "stage": "ok",
+  "id": "MRbBTYfptRQ2zesqv",
+  "name": "Real World Lights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/MXwTvKYeRnv5cS5oL.epe",
+  "stage": "ok",
+  "id": "MXwTvKYeRnv5cS5oL",
+  "name": "Chasing Rainbows & HSLuv",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/MbWh4ZKPiJtPNyjxL.epe",
+  "stage": "ok",
+  "id": "MbWh4ZKPiJtPNyjxL",
+  "name": "color bands (buffered)",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Mbd5ms4DRX7wLCP8b.epe",
+  "stage": "ok",
+  "id": "Mbd5ms4DRX7wLCP8b",
+  "name": "_Fairies",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/MfbKaxpjBR7B6x73k.epe",
+  "stage": "ok",
+  "id": "MfbKaxpjBR7B6x73k",
+  "name": "Christmas Candy Cane",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/NTu3cbwyHP27AFvtv.epe",
+  "stage": "ok",
+  "id": "NTu3cbwyHP27AFvtv",
+  "name": "matrix 2D pulse edit",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/NaTA5tfncXjkJDn4u.epe",
+  "stage": "ok",
+  "id": "NaTA5tfncXjkJDn4u",
+  "name": "mapped vertical line 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/NfQfmfQb8eG5zrYCt.epe",
+  "stage": "ok",
+  "id": "NfQfmfQb8eG5zrYCt",
+  "name": "Continuous Cellular Automata",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Nx7xbstETbKJ9X8TQ.epe",
+  "stage": "ok",
+  "id": "Nx7xbstETbKJ9X8TQ",
+  "name": "heatshivers",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/P3sWiAgjzRh3Djnjf.epe",
+  "stage": "ok",
+  "id": "P3sWiAgjzRh3Djnjf",
+  "name": "Sierpinski Rainbow 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/PZgrLCEZcrup57cuB.epe",
+  "stage": "ok",
+  "id": "PZgrLCEZcrup57cuB",
+  "name": "Blinky Eyes 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/Pdvxh3xzAtvmanwLf.epe",
+  "stage": "frame",
+  "id": "Pdvxh3xzAtvmanwLf",
+  "name": "Crawling Spider 2D",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/PhaWecgEjTT5yC2T9.epe",
+  "stage": "ok",
+  "id": "PhaWecgEjTT5yC2T9",
+  "name": "Time Flies 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/PtdJSnDyxy9nWejeM.epe",
+  "stage": "ok",
+  "id": "PtdJSnDyxy9nWejeM",
+  "name": "Color Pick Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Q5WqRki8CanTF3n9s.epe",
+  "stage": "ok",
+  "id": "Q5WqRki8CanTF3n9s",
+  "name": "color fade pulse",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/QhsaiD6Kbq2LnZ54p.epe",
+  "stage": "ok",
+  "id": "QhsaiD6Kbq2LnZ54p",
+  "name": "Sound Reactive Color Fade",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `clockSecond` is not implemented yet",
+  "file": "corpus/Qn8EawSjEHBTmQAuK.epe",
+  "stage": "frame",
+  "id": "Qn8EawSjEHBTmQAuK",
+  "name": "pixelClock",
+  "uses": {
+   "todo": [
+    "clockHour",
+    "clockMinute",
+    "clockSecond"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/QqZqNsLmk2CAvheRR.epe",
+  "stage": "ok",
+  "id": "QqZqNsLmk2CAvheRR",
+  "name": "block reflections",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/R6HanC4zso3YcNRJj.epe",
+  "stage": "ok",
+  "id": "R6HanC4zso3YcNRJj",
+  "name": "scrolls",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/RFQ83888m35aJfJMZ.epe",
+  "stage": "ok",
+  "id": "RFQ83888m35aJfJMZ",
+  "name": "sound - rays",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "energyAverage",
+    "maxFrequency",
+    "maxFrequencyMagnitude"
+   ]
+  }
+ },
+ {
+  "file": "corpus/RGZGNin9LF6e9ByDB.epe",
+  "stage": "ok",
+  "id": "RGZGNin9LF6e9ByDB",
+  "name": "Static Christmas Lights - 4 Colors",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlinRidge` is not implemented yet",
+  "file": "corpus/RHFKxARdW4Aeq4X3r.epe",
+  "stage": "frame",
+  "id": "RHFKxARdW4Aeq4X3r",
+  "name": "zoom kaleidoscope",
+  "uses": {
+   "todo": [
+    "perlin",
+    "perlinRidge",
+    "resetTransform",
+    "translate",
+    "scale",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/RKuhMbPBfavML737t.epe",
+  "stage": "ok",
+  "id": "RKuhMbPBfavML737t",
+  "name": "Voronoi Mix 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/RQp3pFEYDuRvwanPk.epe",
+  "stage": "ok",
+  "id": "RQp3pFEYDuRvwanPk",
+  "name": "Raindrops 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/RXTXgjsj2usgsHApe.epe",
+  "stage": "ok",
+  "id": "RXTXgjsj2usgsHApe",
+  "name": "cube fire 3D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "frequencyData",
+    "energyAverage"
+   ]
+  }
+ },
+ {
+  "file": "corpus/RfPnGJiJuqeruAFXx.epe",
+  "stage": "ok",
+  "id": "RfPnGJiJuqeruAFXx",
+  "name": "Frogger 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "array index out of bounds",
+  "file": "corpus/RtREWXYigJ2RPQNqw.epe",
+  "stage": "frame",
+  "id": "RtREWXYigJ2RPQNqw",
+  "name": "Perlin/Simplex Noise 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "file": "corpus/S2GRkFEY8WdqeH5kd.epe",
+  "stage": "ok",
+  "id": "S2GRkFEY8WdqeH5kd",
+  "name": "1-USFLAG_BLINK",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/S6u3qPhozw43c7Af9.epe",
+  "stage": "init",
+  "id": "S6u3qPhozw43c7Af9",
+  "name": "Lightning clouds",
+  "uses": {
+   "todo": [
+    "perlinTurbulence",
+    "translate",
+    "scale"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/SCwdLkm9BfNxFncaq.epe",
+  "stage": "frame",
+  "id": "SCwdLkm9BfNxFncaq",
+  "name": "Blue Holiday Star 2D",
+  "uses": {
+   "todo": [
+    "perlin",
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/SDRQ9sJxxWQjCHgu6.epe",
+  "stage": "ok",
+  "id": "SDRQ9sJxxWQjCHgu6",
+  "name": "millipede",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/SFawM7bofPWtYy8jy.epe",
+  "stage": "ok",
+  "id": "SFawM7bofPWtYy8jy",
+  "name": "Bessel Chaos",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/T4CqCKQs3TahbCapL.epe",
+  "stage": "ok",
+  "id": "T4CqCKQs3TahbCapL",
+  "name": "colourful fireflies",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/TJGzDkMzjJEaR5KD9.epe",
+  "stage": "ok",
+  "id": "TJGzDkMzjJEaR5KD9",
+  "name": "DAFTPUNK",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/TMdwmrwodDf6ad9XY.epe",
+  "stage": "init",
+  "id": "TMdwmrwodDf6ad9XY",
+  "name": "radiant pulse 3",
+  "uses": {
+   "todo": [
+    "translate"
+   ],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/TQMWygxoH8bnpZMWf.epe",
+  "stage": "ok",
+  "id": "TQMWygxoH8bnpZMWf",
+  "name": "sound - spectro kalidastrip",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "file": "corpus/TWpdYdkQyqTLoZyaK.epe",
+  "stage": "ok",
+  "id": "TWpdYdkQyqTLoZyaK",
+  "name": "twinkly stars",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/TbuZ4tqfYNB2zDbwK.epe",
+  "stage": "ok",
+  "id": "TbuZ4tqfYNB2zDbwK",
+  "name": "RGBW Mapping Tester",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlinRidge` is not implemented yet",
+  "file": "corpus/TnnAcAX9a5Xze4YqF.epe",
+  "stage": "frame",
+  "id": "TnnAcAX9a5Xze4YqF",
+  "name": "Coral Plasma",
+  "uses": {
+   "todo": [
+    "perlinRidge",
+    "resetTransform",
+    "translate3D",
+    "scale3D",
+    "rotateX",
+    "rotateY",
+    "rotateZ"
+   ],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/W54s33wayfPttiiEr.epe",
+  "stage": "ok",
+  "id": "W54s33wayfPttiiEr",
+  "name": "MidpointDisplacement1D",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/W9XaXuW9LFhNY7Bju.epe",
+  "stage": "init",
+  "id": "W9XaXuW9LFhNY7Bju",
+  "name": "Tunnel of Squares 2D",
+  "uses": {
+   "todo": [
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/WAz3Qc8JWw8rW3P8u.epe",
+  "stage": "ok",
+  "id": "WAz3Qc8JWw8rW3P8u",
+  "name": "White Rainbows",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/WCJNmCNAMuQb6yvAA.epe",
+  "stage": "ok",
+  "id": "WCJNmCNAMuQb6yvAA",
+  "name": "Animated Asterisks 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/WFPiYhECcWdrBng6z.epe",
+  "stage": "ok",
+  "id": "WFPiYhECcWdrBng6z",
+  "name": "Infinity Flower 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/WM5MrfsWzjGP2rYbH.epe",
+  "stage": "ok",
+  "id": "WM5MrfsWzjGP2rYbH",
+  "name": "portal",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/WPPz4MX96ZyfRwXWd.epe",
+  "stage": "ok",
+  "id": "WPPz4MX96ZyfRwXWd",
+  "name": "sound - spectromatrix render2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "file": "corpus/Wcph3ddusCjpjwWkB.epe",
+  "stage": "ok",
+  "id": "Wcph3ddusCjpjwWkB",
+  "name": "rainbow fonts 2",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/WqPXx7uBwDsYwwJmx.epe",
+  "stage": "ok",
+  "id": "WqPXx7uBwDsYwwJmx",
+  "name": "Autumn Colors",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/X4S9zmtj3YaTuGixJ.epe",
+  "stage": "frame",
+  "id": "X4S9zmtj3YaTuGixJ",
+  "name": "spiral twirls star 2D",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "scale",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/X7BZzv8EbcxHHKZ3m.epe",
+  "stage": "ok",
+  "id": "X7BZzv8EbcxHHKZ3m",
+  "name": "Utility: Palettes",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/XBMGWi4Af5GvkLH4n.epe",
+  "stage": "ok",
+  "id": "XBMGWi4Af5GvkLH4n",
+  "name": "7 Yelllow Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/XSK4WeAxNKutchHro.epe",
+  "stage": "ok",
+  "id": "XSK4WeAxNKutchHro",
+  "name": "2 Colors",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Xp2eZ6cxX9hQTJ6op.epe",
+  "stage": "ok",
+  "id": "Xp2eZ6cxX9hQTJ6op",
+  "name": "2 Purple Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/Y7fwpHpoHkfaf4NdT.epe",
+  "stage": "ok",
+  "id": "Y7fwpHpoHkfaf4NdT",
+  "name": "blink fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/YNWSzjo7urZx5JQGB.epe",
+  "stage": "ok",
+  "id": "YNWSzjo7urZx5JQGB",
+  "name": "Synchronized Random Numbers",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/YNbYB5x6h6BTAPexk.epe",
+  "stage": "frame",
+  "id": "YNbYB5x6h6BTAPexk",
+  "name": "80s kid show",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/YaiTChR3s8oARvGQ9.epe",
+  "stage": "ok",
+  "id": "YaiTChR3s8oARvGQ9",
+  "name": "matrix rain",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/YezrqhTE26wNmBRJy.epe",
+  "stage": "ok",
+  "id": "YezrqhTE26wNmBRJy",
+  "name": "Light Organ -- sensor board",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "energyAverage",
+    "maxFrequencyMagnitude",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/Z5EW5hegBqqfFCXhr.epe",
+  "stage": "ok",
+  "id": "Z5EW5hegBqqfFCXhr",
+  "name": "fractal flower",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/ZLA9jgkdWzMvjc3ya.epe",
+  "stage": "ok",
+  "id": "ZLA9jgkdWzMvjc3ya",
+  "name": "UtilityColorTemp",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/ZRe9SSgZwo8neirBD.epe",
+  "stage": "ok",
+  "id": "ZRe9SSgZwo8neirBD",
+  "name": "ChristmasStretch",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/aHtDo3qMYoKHwuqMt.epe",
+  "stage": "ok",
+  "id": "aHtDo3qMYoKHwuqMt",
+  "name": "bouncing balls - hsv",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/aaaaaaaaaaaaaaaaa.epe",
+  "stage": "ok",
+  "id": "aaaaaaaaaaaaaaaaa",
+  "name": "rainbow",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/aabwwBMMCEHQ8yLij.epe",
+  "stage": "ok",
+  "id": "aabwwBMMCEHQ8yLij",
+  "name": "color twinkles",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/awPktwxHMZH5WYfd3.epe",
+  "stage": "ok",
+  "id": "awPktwxHMZH5WYfd3",
+  "name": "quiet blinkfade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/b5AiMeg6knYbyHEuZ.epe",
+  "stage": "ok",
+  "id": "b5AiMeg6knYbyHEuZ",
+  "name": "aurorashivers",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/b6QB2wwGTmxrDJMBd.epe",
+  "stage": "init",
+  "id": "b6QB2wwGTmxrDJMBd",
+  "name": "Line Dancer 2D",
+  "uses": {
+   "todo": [
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/b8SpTe9QJtgXscdZK.epe",
+  "stage": "ok",
+  "id": "b8SpTe9QJtgXscdZK",
+  "name": "Golden Tix",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/bCopiZS6v878jERyS.epe",
+  "stage": "ok",
+  "id": "bCopiZS6v878jERyS",
+  "name": "tixy",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/bEdTMdnYZvoHonkmm.epe",
+  "stage": "init",
+  "id": "bEdTMdnYZvoHonkmm",
+  "name": "Perlin Kaleidoscope 2D",
+  "uses": {
+   "todo": [
+    "perlinFbm",
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlin` is not implemented yet",
+  "file": "corpus/bG3g3fjrxqxPtqi9d.epe",
+  "stage": "frame",
+  "id": "bG3g3fjrxqxPtqi9d",
+  "name": "Wavy Bands",
+  "uses": {
+   "todo": [
+    "perlin"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/bGouHYhqSp5pnBhr2.epe",
+  "stage": "frame",
+  "id": "bGouHYhqSp5pnBhr2",
+  "name": "Traffic",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "scale"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/bPNT39LCkskbosCH7.epe",
+  "stage": "ok",
+  "id": "bPNT39LCkskbosCH7",
+  "name": "xorcery 2D/3D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/bQLnSWhcA4PNjuLtK.epe",
+  "stage": "frame",
+  "id": "bQLnSWhcA4PNjuLtK",
+  "name": "RYB colors",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/btqgH98DPPhBRGd78.epe",
+  "stage": "ok",
+  "id": "btqgH98DPPhBRGd78",
+  "name": "bustle",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/c4r72Djj8BfndgpBo.epe",
+  "stage": "ok",
+  "id": "c4r72Djj8BfndgpBo",
+  "name": "Red-Green XY 2D Sweep",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/c9zzTbPSHHPzcQy4H.epe",
+  "stage": "ok",
+  "id": "c9zzTbPSHHPzcQy4H",
+  "name": "Sound & Music Spectrum Visualizer",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `pinMode` is not implemented yet",
+  "file": "corpus/cGFZd6F5W8m7jqYT4.epe",
+  "stage": "init",
+  "id": "cGFZd6F5W8m7jqYT4",
+  "name": "Example - Button w/ debounce",
+  "uses": {
+   "todo": [
+    "pinMode",
+    "digitalRead"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/dBynuWSboDHGQFiwv.epe",
+  "stage": "ok",
+  "id": "dBynuWSboDHGQFiwv",
+  "name": "Utility: Perceptual hue",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/dC9GZCCeCRErJrp3i.epe",
+  "stage": "ok",
+  "id": "dC9GZCCeCRErJrp3i",
+  "name": "slowflies",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/dE8XEG3wdfu9CeHyR.epe",
+  "stage": "ok",
+  "id": "dE8XEG3wdfu9CeHyR",
+  "name": "Scanner",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/dPtrN7Qk2bC3LSa7L.epe",
+  "stage": "ok",
+  "id": "dPtrN7Qk2bC3LSa7L",
+  "name": "Angry Xmass 3D",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/dSW5GmKuNqBLiXB6L.epe",
+  "stage": "ok",
+  "id": "dSW5GmKuNqBLiXB6L",
+  "name": "Three Red Pixels (array)",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/dYx8hx5965T6smBq8.epe",
+  "stage": "ok",
+  "id": "dYx8hx5965T6smBq8",
+  "name": "Emoji Animation #2",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/dd32bgunSTTqNRzvQ.epe",
+  "stage": "frame",
+  "id": "dd32bgunSTTqNRzvQ",
+  "name": "Upward waves 3D using accelerometer",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate3D",
+    "rotateX",
+    "rotateY",
+    "rotateZ"
+   ],
+   "render2D": false,
+   "render3D": true,
+   "sensors": [
+    "accelerometer",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/duZeHjkKSnHXF5Tp8.epe",
+  "stage": "ok",
+  "id": "duZeHjkKSnHXF5Tp8",
+  "name": "fire - blue",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/dueoKmMJLRwQb6ZN3.epe",
+  "stage": "init",
+  "id": "dueoKmMJLRwQb6ZN3",
+  "name": "Coronal Mass Ejection",
+  "uses": {
+   "todo": [
+    "perlinTurbulence",
+    "setPerlinWrap",
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/dvm3pc4JxfBqXyzhy.epe",
+  "stage": "ok",
+  "id": "dvm3pc4JxfBqXyzhy",
+  "name": "Map - Concentric",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/eAwwugh6A5jTRC7zp.epe",
+  "stage": "ok",
+  "id": "eAwwugh6A5jTRC7zp",
+  "name": "Icicleblaze",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/eCZZDTeyo8dukuWrw.epe",
+  "stage": "ok",
+  "id": "eCZZDTeyo8dukuWrw",
+  "name": "Cyclic Cellular Automata 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/eYrAmto2qZbDJ8zuG.epe",
+  "stage": "ok",
+  "id": "eYrAmto2qZbDJ8zuG",
+  "name": "Christmas string lights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/f33kvC94M7yLBDtvc.epe",
+  "stage": "ok",
+  "id": "f33kvC94M7yLBDtvc",
+  "name": "The Grinch",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/f7jrdyj6MKHjGQsNZ.epe",
+  "stage": "ok",
+  "id": "f7jrdyj6MKHjGQsNZ",
+  "name": "matrix 2D honeycomb",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/fPTCaBDjpCMX7uq4a.epe",
+  "stage": "ok",
+  "id": "fPTCaBDjpCMX7uq4a",
+  "name": "amoeba",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/gAd5nfxi7QMD26yk8.epe",
+  "stage": "ok",
+  "id": "gAd5nfxi7QMD26yk8",
+  "name": "8 Red Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlinRidge` is not implemented yet",
+  "file": "corpus/gHXWPveywRt8Eo2fF.epe",
+  "stage": "frame",
+  "id": "gHXWPveywRt8Eo2fF",
+  "name": "perlin fire wind tunnel",
+  "uses": {
+   "todo": [
+    "perlin",
+    "perlinFbm",
+    "perlinRidge",
+    "perlinTurbulence",
+    "resetTransform",
+    "translate",
+    "scale"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `nodeId` is not implemented yet",
+  "file": "corpus/gKCGaREm8cD8gfCuY.epe",
+  "stage": "init",
+  "id": "gKCGaREm8cD8gfCuY",
+  "name": "SkyPirate's Centered Spectrum",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "mapPixels",
+    "nodeId"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "file": "corpus/ghv6KpRCcSGQ6YcFy.epe",
+  "stage": "ok",
+  "id": "ghv6KpRCcSGQ6YcFy",
+  "name": "4th",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/gmGKD4SeqvNqWg3nT.epe",
+  "stage": "ok",
+  "id": "gmGKD4SeqvNqWg3nT",
+  "name": "firework nova",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/gyf6DBnqCp2v83LDi.epe",
+  "stage": "ok",
+  "id": "gyf6DBnqCp2v83LDi",
+  "name": "Cellular Automata 1D",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/hRKrNtdnFHfEpLAyp.epe",
+  "stage": "ok",
+  "id": "hRKrNtdnFHfEpLAyp",
+  "name": "Pew-Pew-Pew!",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/hxBrWSZMjftfaTaoW.epe",
+  "stage": "ok",
+  "id": "hxBrWSZMjftfaTaoW",
+  "name": "Austin FC",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/iQwYYKEYjnx4yFPZ5.epe",
+  "stage": "ok",
+  "id": "iQwYYKEYjnx4yFPZ5",
+  "name": "Doom Fire (v2.0) 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/iYDPEfGzNLkCiHdnG.epe",
+  "stage": "ok",
+  "id": "iYDPEfGzNLkCiHdnG",
+  "name": "opposites",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/imomNYcvmaCGqSrdy.epe",
+  "stage": "ok",
+  "id": "imomNYcvmaCGqSrdy",
+  "name": "Christmas Lights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/isSk3S3hPJnT4drmj.epe",
+  "stage": "ok",
+  "id": "isSk3S3hPJnT4drmj",
+  "name": "Mapping Helper Single and 10x",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/jGD8D4fYSJuhyfThm.epe",
+  "stage": "ok",
+  "id": "jGD8D4fYSJuhyfThm",
+  "name": "Meteor Shower",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/jbnv2oKd3XainEAqT.epe",
+  "stage": "ok",
+  "id": "jbnv2oKd3XainEAqT",
+  "name": "3 color rotation",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/jgwzRXPmfyPz8jYJa.epe",
+  "stage": "ok",
+  "id": "jgwzRXPmfyPz8jYJa",
+  "name": "Stacker",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `setPalette` is not implemented yet",
+  "file": "corpus/jp7dq47XpcYq2JztT.epe",
+  "stage": "init",
+  "id": "jp7dq47XpcYq2JztT",
+  "name": "Fast Palette Blending",
+  "uses": {
+   "todo": [
+    "setPalette",
+    "paint"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/k6H5xvKpbuChrEcLo.epe",
+  "stage": "ok",
+  "id": "k6H5xvKpbuChrEcLo",
+  "name": "Bouncing Balls 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "accelerometer"
+   ]
+  }
+ },
+ {
+  "file": "corpus/kLnxBack5F9En5ZR4.epe",
+  "stage": "ok",
+  "id": "kLnxBack5F9En5ZR4",
+  "name": "2D Bouncing Additive Primaries",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/kRX9qpS55KLiyziWH.epe",
+  "stage": "ok",
+  "id": "kRX9qpS55KLiyziWH",
+  "name": "Cylon",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `clockHour` is not implemented yet",
+  "file": "corpus/kRdHmgPMZBDSoh2zT.epe",
+  "stage": "frame",
+  "id": "kRdHmgPMZBDSoh2zT",
+  "name": "NaturalLightSync",
+  "uses": {
+   "todo": [
+    "clockHour",
+    "clockMinute",
+    "clockSecond"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/kSHy8gxWDjfHTL3Wt.epe",
+  "stage": "ok",
+  "id": "kSHy8gxWDjfHTL3Wt",
+  "name": "rainbow pinwheel",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/kjKedaEku25Napvnv.epe",
+  "stage": "ok",
+  "id": "kjKedaEku25Napvnv",
+  "name": "wanderers",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/mJf7XLtvd8RvfTjpX.epe",
+  "stage": "ok",
+  "id": "mJf7XLtvd8RvfTjpX",
+  "name": "ChristmasLights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/mNoCeFheC4DPqPdGe.epe",
+  "stage": "ok",
+  "id": "mNoCeFheC4DPqPdGe",
+  "name": "sound - spectromatrix agc",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "error": "builtin `pinMode` is not implemented yet",
+  "file": "corpus/mPfzL6z2mf9nACtsM.epe",
+  "stage": "init",
+  "id": "mPfzL6z2mf9nACtsM",
+  "name": "Light Organ - 2.0",
+  "uses": {
+   "todo": [
+    "pinMode",
+    "analogRead"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "energyAverage",
+    "maxFrequencyMagnitude",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/mRZyfhf2YgGYP54wq.epe",
+  "stage": "ok",
+  "id": "mRZyfhf2YgGYP54wq",
+  "name": "twinkle",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "file": "corpus/mYLx94kRyXN3hGtkq.epe",
+  "stage": "ok",
+  "id": "mYLx94kRyXN3hGtkq",
+  "name": "Sunset",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/mdfqFWvQz54YqdzQG.epe",
+  "stage": "ok",
+  "id": "mdfqFWvQz54YqdzQG",
+  "name": "Audio Volume Meter",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData"
+   ]
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/mq6zDHQaoDd3wqf72.epe",
+  "stage": "init",
+  "id": "mq6zDHQaoDd3wqf72",
+  "name": "Coronal Mass Ejection 2D sliders",
+  "uses": {
+   "todo": [
+    "perlinTurbulence",
+    "setPerlinWrap",
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/ms7LJhzhWFgDTcc2J.epe",
+  "stage": "ok",
+  "id": "ms7LJhzhWFgDTcc2J",
+  "name": "XmasFlies",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/nMZ7wMnmveDbFnsdc.epe",
+  "stage": "ok",
+  "id": "nMZ7wMnmveDbFnsdc",
+  "name": "SaberDeploy Tutorial",
+  "uses": {
+   "todo": [
+    "digitalRead"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/nRYA2Bxvuje4HAWsa.epe",
+  "stage": "ok",
+  "id": "nRYA2Bxvuje4HAWsa",
+  "name": "angle and radius from coordinates",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/npb7eQGfzNcXbQ37g.epe",
+  "stage": "ok",
+  "id": "npb7eQGfzNcXbQ37g",
+  "name": "sound - rays Frequency-BPM Reactive 1",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "maxFrequency",
+    "maxFrequencyMagnitude",
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `setPalette` is not implemented yet",
+  "file": "corpus/nqTQrm9MMG5Ge3WSg.epe",
+  "stage": "init",
+  "id": "nqTQrm9MMG5Ge3WSg",
+  "name": "Perlin fire",
+  "uses": {
+   "todo": [
+    "perlin",
+    "perlinFbm",
+    "perlinRidge",
+    "perlinTurbulence",
+    "resetTransform",
+    "translate",
+    "scale",
+    "setPalette",
+    "paint"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlinRidge` is not implemented yet",
+  "file": "corpus/oH4GhmMnYuhJKTY2u.epe",
+  "stage": "frame",
+  "id": "oH4GhmMnYuhJKTY2u",
+  "name": "distance function kaleidoscope 2",
+  "uses": {
+   "todo": [
+    "perlin",
+    "perlinRidge",
+    "resetTransform",
+    "translate",
+    "scale",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/ojKd3TwkYk6C9JLob.epe",
+  "stage": "ok",
+  "id": "ojKd3TwkYk6C9JLob",
+  "name": "Crossfading",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/p49GpaZRpfGHPNGuX.epe",
+  "stage": "ok",
+  "id": "p49GpaZRpfGHPNGuX",
+  "name": "color twinkle bounce",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/p8gaewjSwJsXt68Ky.epe",
+  "stage": "ok",
+  "id": "p8gaewjSwJsXt68Ky",
+  "name": "Pride Progress",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/pHgJjpwd2XwzHrzqm.epe",
+  "stage": "ok",
+  "id": "pHgJjpwd2XwzHrzqm",
+  "name": "Doom Fire",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `nodeId` is not implemented yet",
+  "file": "corpus/pMMer2SYzSjZyi6mZ.epe",
+  "stage": "frame",
+  "id": "pMMer2SYzSjZyi6mZ",
+  "name": "Lightbulb - Crank Hue to Complete",
+  "uses": {
+   "todo": [
+    "pinMode",
+    "digitalRead",
+    "nodeId"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/q8bkTDQcSskYMPWcK.epe",
+  "stage": "ok",
+  "id": "q8bkTDQcSskYMPWcK",
+  "name": "fast pulse",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/q8oKvkD7R57DBkGKj.epe",
+  "stage": "init",
+  "id": "q8oKvkD7R57DBkGKj",
+  "name": "Scary Pumpkin",
+  "uses": {
+   "todo": [
+    "perlinFbm",
+    "translate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/qEKGgN4vJeESmjZsN.epe",
+  "stage": "ok",
+  "id": "qEKGgN4vJeESmjZsN",
+  "name": "sound - blinkfade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "energyAverage",
+    "maxFrequency"
+   ]
+  }
+ },
+ {
+  "error": "builtin `translate` is not implemented yet",
+  "file": "corpus/qQbHfjbMeCXZCx7Cg.epe",
+  "stage": "init",
+  "id": "qQbHfjbMeCXZCx7Cg",
+  "name": "Stairmaster 2D",
+  "uses": {
+   "todo": [
+    "translate",
+    "scale"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/qkJxZBYN2w2zQh5eR.epe",
+  "stage": "ok",
+  "id": "qkJxZBYN2w2zQh5eR",
+  "name": "marching rainbow (buffered)",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/qqRRJY3MeyMZdgmGy.epe",
+  "stage": "ok",
+  "id": "qqRRJY3MeyMZdgmGy",
+  "name": "Metaballs of Fire 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/qxWPfHcPe9fgQzqbL.epe",
+  "stage": "ok",
+  "id": "qxWPfHcPe9fgQzqbL",
+  "name": "Wichmann–Hill PRNG",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/qzpL3CLaMP3cqae2R.epe",
+  "stage": "ok",
+  "id": "qzpL3CLaMP3cqae2R",
+  "name": "Single Color Picker - wide or spot",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `setPalette` is not implemented yet",
+  "file": "corpus/rYGzPKSFYTpESDKzu.epe",
+  "stage": "init",
+  "id": "rYGzPKSFYTpESDKzu",
+  "name": "Eye of Sauron",
+  "uses": {
+   "todo": [
+    "perlinRidge",
+    "setPerlinWrap",
+    "resetTransform",
+    "translate",
+    "scale",
+    "setPalette",
+    "paint"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/rhMjHAeDazr6A9GNX.epe",
+  "stage": "ok",
+  "id": "rhMjHAeDazr6A9GNX",
+  "name": "Easing Library v1.0",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/rw9wspkrLrPEkR7dX.epe",
+  "stage": "frame",
+  "id": "rw9wspkrLrPEkR7dX",
+  "name": "Lissajous curve tracer",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "scale"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/s9BZe6XgizFXt2EfE.epe",
+  "stage": "ok",
+  "id": "s9BZe6XgizFXt2EfE",
+  "name": "millipede 1d/2d controls",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/s9Wjw8rmLrQYubFpW.epe",
+  "stage": "ok",
+  "id": "s9Wjw8rmLrQYubFpW",
+  "name": "5 Teal Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/sCyaMqsmsrdM9JbJi.epe",
+  "stage": "ok",
+  "id": "sCyaMqsmsrdM9JbJi",
+  "name": "Example: modes and waveforms",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/sEnLA7DKfxKPdZS48.epe",
+  "stage": "ok",
+  "id": "sEnLA7DKfxKPdZS48",
+  "name": "Christmas Lights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/ssi9FdRrLyh2LiHfH.epe",
+  "stage": "ok",
+  "id": "ssi9FdRrLyh2LiHfH",
+  "name": "heart",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/t92mezvhbR55x8Xvj.epe",
+  "stage": "ok",
+  "id": "t92mezvhbR55x8Xvj",
+  "name": "sinus",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/tDydtqqnzaRZYKjLx.epe",
+  "stage": "ok",
+  "id": "tDydtqqnzaRZYKjLx",
+  "name": "Oasis",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `pinMode` is not implemented yet",
+  "file": "corpus/tMc8n9TTToG2pweJz.epe",
+  "stage": "init",
+  "id": "tMc8n9TTToG2pweJz",
+  "name": "2D Fireworks Fade",
+  "uses": {
+   "todo": [
+    "pinMode",
+    "digitalWrite",
+    "clockHour"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlin` is not implemented yet",
+  "file": "corpus/tjRYAHpNQgyp8Bfck.epe",
+  "stage": "frame",
+  "id": "tjRYAHpNQgyp8Bfck",
+  "name": "Butterfly 2D",
+  "uses": {
+   "todo": [
+    "perlin",
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/tno34uLKqLtBjuNRD.epe",
+  "stage": "ok",
+  "id": "tno34uLKqLtBjuNRD",
+  "name": "A Peak Integrator",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "frequencyData",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/to7TLGBX7qspLpHzz.epe",
+  "stage": "ok",
+  "id": "to7TLGBX7qspLpHzz",
+  "name": "RGB Test Pattern",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/u4KXyCHxo3Rga9Ns5.epe",
+  "stage": "ok",
+  "id": "u4KXyCHxo3Rga9Ns5",
+  "name": "Halloween color twinkles",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/u9eAo7YHQ4iYqZhQH.epe",
+  "stage": "ok",
+  "id": "u9eAo7YHQ4iYqZhQH",
+  "name": "3 Violet Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/uDifoaigT7KzmgYWE.epe",
+  "stage": "ok",
+  "id": "uDifoaigT7KzmgYWE",
+  "name": "Bouncing RGB Balls - 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/uqcF3zfyxBXz42Zmn.epe",
+  "stage": "frame",
+  "id": "uqcF3zfyxBXz42Zmn",
+  "name": "Geometry Morphing Demo 2D",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/v6ndPCnzTtKL3SkLD.epe",
+  "stage": "ok",
+  "id": "v6ndPCnzTtKL3SkLD",
+  "name": "Rocket by Tony Hampton",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/vPpuaSCSFeCLpgNbd.epe",
+  "stage": "ok",
+  "id": "vPpuaSCSFeCLpgNbd",
+  "name": "novas",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `perlinFbm` is not implemented yet",
+  "file": "corpus/vXGvYT7tqJCsCKfiD.epe",
+  "stage": "frame",
+  "id": "vXGvYT7tqJCsCKfiD",
+  "name": "sound - spectroblots - pow fade",
+  "uses": {
+   "todo": [
+    "perlinFbm",
+    "resetTransform",
+    "translate3D",
+    "scale3D",
+    "nodeId"
+   ],
+   "render2D": true,
+   "render3D": true,
+   "sensors": [
+    "frequencyData",
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/vXjyvKJm3x3oAztXv.epe",
+  "stage": "ok",
+  "id": "vXjyvKJm3x3oAztXv",
+  "name": "snake",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `mapPixels` is not implemented yet",
+  "file": "corpus/vYzzPfsKSJHPFgE7Q.epe",
+  "stage": "frame",
+  "id": "vYzzPfsKSJHPFgE7Q",
+  "name": "Slime mold palette",
+  "uses": {
+   "todo": [
+    "mapPixels",
+    "setPalette",
+    "paint"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/va5hZpMQ2ni3BNJ7b.epe",
+  "stage": "ok",
+  "id": "va5hZpMQ2ni3BNJ7b",
+  "name": "Edgeburst",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/vbSQZCm7rbHWa4uNv.epe",
+  "stage": "ok",
+  "id": "vbSQZCm7rbHWa4uNv",
+  "name": "bouncing balls - rgb",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/vkpGsR88dcJmXfevp.epe",
+  "stage": "ok",
+  "id": "vkpGsR88dcJmXfevp",
+  "name": "An Intro to Pixelblaze Code",
+  "uses": {
+   "todo": [
+    "scale"
+   ],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/vm9GxbDsrmnxedBKJ.epe",
+  "stage": "ok",
+  "id": "vm9GxbDsrmnxedBKJ",
+  "name": "chill confetti",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/vmCXgwbox8nCBqQig.epe",
+  "stage": "ok",
+  "id": "vmCXgwbox8nCBqQig",
+  "name": "color bands",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/vqP8NKjgXe8YSm8jP.epe",
+  "stage": "ok",
+  "id": "vqP8NKjgXe8YSm8jP",
+  "name": "Color Blend",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/vrijJKhMQdpCaCCtM.epe",
+  "stage": "ok",
+  "id": "vrijJKhMQdpCaCCtM",
+  "name": "static random colors",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/vyX4CCoTqJrZoBGh5.epe",
+  "stage": "ok",
+  "id": "vyX4CCoTqJrZoBGh5",
+  "name": "dimbypixel",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/w2BcxzPJYEmuwoimz.epe",
+  "stage": "ok",
+  "id": "w2BcxzPJYEmuwoimz",
+  "name": "Ice Floes 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/wDn9FrZh8zZfKweL4.epe",
+  "stage": "ok",
+  "id": "wDn9FrZh8zZfKweL4",
+  "name": "rainbow melt",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/wJBXRv3ExxS5wPsdq.epe",
+  "stage": "ok",
+  "id": "wJBXRv3ExxS5wPsdq",
+  "name": "Unstable Orbits",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/wixQKX4HfCFzT85Bu.epe",
+  "stage": "ok",
+  "id": "wixQKX4HfCFzT85Bu",
+  "name": "Example: Smooth Speed Slider",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/wqyWAxFkD3RHBndoJ.epe",
+  "stage": "ok",
+  "id": "wqyWAxFkD3RHBndoJ",
+  "name": "fireblobs",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/wvCvKzC3y24NsDvWP.epe",
+  "stage": "ok",
+  "id": "wvCvKzC3y24NsDvWP",
+  "name": "Rainbow Comet",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "array index out of bounds",
+  "file": "corpus/wy96bdmQBtFu8vxev.epe",
+  "stage": "frame",
+  "id": "wy96bdmQBtFu8vxev",
+  "name": "Snake 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/xMcPGtXHZfPJHHTGS.epe",
+  "stage": "ok",
+  "id": "xMcPGtXHZfPJHHTGS",
+  "name": "4 Blue Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/xaek4MS4DtuTJxSWq.epe",
+  "stage": "ok",
+  "id": "xaek4MS4DtuTJxSWq",
+  "name": "ChristmasLights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/xhGuirrqE6LBLaD5o.epe",
+  "stage": "ok",
+  "id": "xhGuirrqE6LBLaD5o",
+  "name": "2D canvas example",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/xhyAAKfFDzaywiqDc.epe",
+  "stage": "ok",
+  "id": "xhyAAKfFDzaywiqDc",
+  "name": "KITT",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/y6HuinPz2cQzFykDG.epe",
+  "stage": "frame",
+  "id": "y6HuinPz2cQzFykDG",
+  "name": "Accelerometer level example",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "translate",
+    "rotate"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "accelerometer"
+   ]
+  }
+ },
+ {
+  "file": "corpus/yFsA3Dm2cZMoBWsAs.epe",
+  "stage": "ok",
+  "id": "yFsA3Dm2cZMoBWsAs",
+  "name": "9 Pink Fade",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/yfyrMr8XribsGinBf.epe",
+  "stage": "ok",
+  "id": "yfyrMr8XribsGinBf",
+  "name": "Multisegment Demo",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "error": "builtin `resetTransform` is not implemented yet",
+  "file": "corpus/ymFxCE3QLKB9hcxLb.epe",
+  "stage": "frame",
+  "id": "ymFxCE3QLKB9hcxLb",
+  "name": "M5Stack Hex panels",
+  "uses": {
+   "todo": [
+    "resetTransform",
+    "rotate",
+    "translate3D"
+   ],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/ypByS8HkerBZD74J8.epe",
+  "stage": "ok",
+  "id": "ypByS8HkerBZD74J8",
+  "name": "Rainbow Flag",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "error": "builtin `pinMode` is not implemented yet",
+  "file": "corpus/yvWNCFdYT82BFFxom.epe",
+  "stage": "init",
+  "id": "yvWNCFdYT82BFFxom",
+  "name": "Rock sparks",
+  "uses": {
+   "todo": [
+    "translate",
+    "pinMode",
+    "digitalWrite",
+    "clockHour"
+   ],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/yyd4PrwLsai8u83Dc.epe",
+  "stage": "ok",
+  "id": "yyd4PrwLsai8u83Dc",
+  "name": "Automap",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/zHpFFNks32veypm69.epe",
+  "stage": "ok",
+  "id": "zHpFFNks32veypm69",
+  "name": "3D Rotation / Spotlights",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": true,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/zX935L9nsMdpug27m.epe",
+  "stage": "ok",
+  "id": "zX935L9nsMdpug27m",
+  "name": "Thunderstorm",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/zg2nzjth5jF3JmnPu.epe",
+  "stage": "ok",
+  "id": "zg2nzjth5jF3JmnPu",
+  "name": "coolaura",
+  "uses": {
+   "todo": [],
+   "render2D": false,
+   "render3D": false,
+   "sensors": []
+  }
+ },
+ {
+  "file": "corpus/zsKxPZHLmNkpjqWvL.epe",
+  "stage": "ok",
+  "id": "zsKxPZHLmNkpjqWvL",
+  "name": "scrolling text marquee 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": [
+    "light"
+   ]
+  }
+ },
+ {
+  "file": "corpus/zt7EPKbLDtvowhLcT.epe",
+  "stage": "ok",
+  "id": "zt7EPKbLDtvowhLcT",
+  "name": "Mandelbrot 2D",
+  "uses": {
+   "todo": [],
+   "render2D": true,
+   "render3D": false,
+   "sensors": []
+  }
+ }
+]

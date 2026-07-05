@@ -442,10 +442,13 @@ impl Vm {
                     self.locals[lbase + i as usize] = v;
                     push!(v);
                 }
-                // Index semantics oracle-confirmed on fw 3.67: reads truncate
-                // a fractional index but any out-of-range access (negative,
-                // ≥ length, and for WRITES even an in-bounds fractional
-                // index) is a runtime error that aborts execution.
+                // Index semantics oracle-confirmed on fw 3.67: fractional
+                // indices truncate (reads and variable-index writes — stock
+                // patterns like sparks depend on it); anything out of range
+                // (negative or ≥ length) is a runtime error that aborts
+                // execution. Known divergence: PB aborts on a fractional
+                // *literal* index write (`a[1.5] = 9`), a compiler-path
+                // quirk we deliberately don't copy — we truncate uniformly.
                 Insn::LoadIdx => {
                     let idx = pop!().num();
                     let arr = pop!();
@@ -468,7 +471,7 @@ impl Vm {
                     let Value::Arr(a) = arr else {
                         fail!("indexing a non-array value")
                     };
-                    if idx.raw() < 0 || idx.frac() != Fx::ZERO {
+                    if idx.raw() < 0 {
                         fail!("array index out of bounds");
                     }
                     let i = idx.to_int_trunc() as usize;

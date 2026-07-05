@@ -45,6 +45,11 @@ fn predefined() -> Vec<GlobalDef> {
         export: false,
         init: Fx::from_f64_lit(v),
     };
+    let gi = |name: &str, v: i32| GlobalDef {
+        name: name.to_string(),
+        export: false,
+        init: Fx::from_int(v),
+    };
     alloc::vec![
         g("pixelCount", 0.0),
         g("E", consts::E),
@@ -58,6 +63,18 @@ fn predefined() -> Vec<GlobalDef> {
         g("LOG10E", consts::LOG10_E),
         g("SQRT1_2", consts::FRAC_1_SQRT_2),
         g("SQRT2", consts::SQRT_2),
+        // JS-isms the PB compiler accepts; both behave as 0. TODO(oracle).
+        gi("null", 0),
+        gi("undefined", 0),
+        // GPIO constants, oracle-probed from fw 3.67
+        gi("LOW", 0),
+        gi("HIGH", 1),
+        gi("INPUT", 1),
+        gi("OUTPUT", 2),
+        gi("INPUT_PULLUP", 5),
+        gi("INPUT_PULLDOWN", 9),
+        gi("OUTPUT_OPEN_DRAIN", 18),
+        gi("ANALOG", 192),
     ]
 }
 
@@ -67,6 +84,9 @@ struct Compiler {
     /// Top-level named functions: (name, fn index, exported).
     named_fns: Vec<(String, u16, bool)>,
     exported_fns: Vec<(String, u16)>,
+    /// Function names the pattern assigns to — demoted to plain global
+    /// variables holding a function value (JS-style mutable bindings).
+    demoted: Vec<String>,
 }
 
 enum Place {
@@ -88,6 +108,7 @@ impl Compiler {
             }],
             named_fns: Vec::new(),
             exported_fns: Vec::new(),
+            demoted: Vec::new(),
         }
     }
 
@@ -122,19 +143,11 @@ impl Compiler {
     // ---- pass 1: collect functions and globals ----
 
     fn collect(&mut self, top: &[Stmt]) -> Result<(), Diagnostic> {
-        // register named functions first so calls resolve in any order
-        for s in top {
-            if let StmtKind::Func { export, name, .. } = &s.kind {
-                if self.named_fns.iter().any(|(n, _, _)| n == name) {
-                    return Err(Diagnostic::new(
-                        s.span,
-                        format!("duplicate function `{name}`"),
-                    ));
-                }
-                let idx = (self.fns.len() + self.named_fns.len()) as u16;
-                self.named_fns.push((name.clone(), idx, *export));
-            }
-        }
+        // Register named functions first so calls resolve in any order.
+        // PB flattens ALL function declarations to global scope regardless of
+        // nesting (corpus patterns call functions declared inside other
+        // functions), and duplicates are allowed — the last definition wins.
+        register_fns(self, top);
         // reserve placeholder defs so indices are stable during emission
         for (name, _, _) in self.named_fns.clone() {
             self.fns.push(FnDef {
@@ -172,10 +185,12 @@ impl Compiler {
 
     fn scan_stmt(&mut self, s: &Stmt, locals: &[String], top: bool) -> Result<(), Diagnostic> {
         match &s.kind {
-            StmtKind::Func { .. } => Err(Diagnostic::new(
-                s.span,
-                "nested named functions are not supported; use a lambda".to_string(),
-            )),
+            // nested named function: its own scope, like a lambda (the name
+            // becomes a hoisted local of the enclosing function)
+            StmtKind::Func { params, body, .. } => {
+                let scope = function_scope(params, body);
+                self.scan_stmts(body, &scope, false)
+            }
             StmtKind::Var { export, decls } => {
                 for d in decls {
                     if top {
@@ -279,17 +294,18 @@ impl Compiler {
         match &target.kind {
             ExprKind::Ident(name) => {
                 let is_local = locals.iter().any(|l| l == name);
-                let is_fn = self.named_fns.iter().any(|(n, _, _)| n == name);
-                if is_fn {
-                    return Err(Diagnostic::new(
-                        target.span,
-                        format!("cannot assign to function `{name}`"),
-                    ));
+                if is_local {
+                    return Ok(());
                 }
-                if !is_local {
-                    // implicit assignment creates a global
-                    self.ensure_global(name, false, target.span)?;
+                // assigning to a function name demotes it to a plain global
+                // variable initialized with the function value (JS-style)
+                if self.named_fns.iter().any(|(n, _, _)| n == name)
+                    && !self.demoted.iter().any(|n| n == name)
+                {
+                    self.demoted.push(name.clone());
                 }
+                // implicit assignment creates a global
+                self.ensure_global(name, false, target.span)?;
                 Ok(())
             }
             ExprKind::Index { obj, index } => {
@@ -303,8 +319,49 @@ impl Compiler {
     // ---- pass 2: emission ----
 
     fn emit_program(&mut self, top: &[Stmt]) -> Result<(), Diagnostic> {
-        // top-level init (fn 0)
+        // All function declarations (any nesting depth) compile into their
+        // registered global slots; duplicates emit in walk order, last wins.
+        let mut decls: Vec<&Stmt> = Vec::new();
+        walk_fns(top, &mut |s| decls.push(s));
+        for s in decls {
+            let StmtKind::Func {
+                export,
+                name,
+                params,
+                body,
+            } = &s.kind
+            else {
+                unreachable!()
+            };
+            let idx = self
+                .named_fns
+                .iter()
+                .find(|(n, _, _)| n == name)
+                .map(|&(_, i, _)| i)
+                .expect("registered in collect");
+            let def = self.emit_function(name.clone(), params, body, s.span)?;
+            self.fns[idx as usize] = def;
+            if *export && !self.exported_fns.iter().any(|(n, _)| n == name) {
+                self.exported_fns.push((name.clone(), idx));
+            }
+        }
+
+        // top-level init (fn 0). Demoted functions (ones the pattern assigns
+        // to, making them plain variables) get their global slots initialized
+        // first.
         let mut ctx = FnCtx::new(Vec::new(), true);
+        for name in self.demoted.clone() {
+            let idx = self
+                .named_fns
+                .iter()
+                .find(|(n, _, _)| *n == name)
+                .map(|&(_, i, _)| i)
+                .expect("demoted implies registered");
+            let g = self.ensure_global(&name, false, Span::default())?;
+            ctx.code.push(Insn::Const(Value::Fun(idx)));
+            ctx.code.push(Insn::StoreG(g));
+            ctx.code.push(Insn::Pop);
+        }
         for s in top {
             if matches!(s.kind, StmtKind::Func { .. }) {
                 continue;
@@ -313,30 +370,6 @@ impl Compiler {
         }
         ctx.code.push(Insn::RetNull);
         self.fns[0].code = ctx.code;
-
-        // named functions
-        for (i, s) in top.iter().enumerate() {
-            let _ = i;
-            if let StmtKind::Func {
-                export,
-                name,
-                params,
-                body,
-            } = &s.kind
-            {
-                let idx = self
-                    .named_fns
-                    .iter()
-                    .find(|(n, _, _)| n == name)
-                    .map(|&(_, i, _)| i)
-                    .expect("registered in collect");
-                let def = self.emit_function(name.clone(), params, body, s.span)?;
-                self.fns[idx as usize] = def;
-                if *export {
-                    self.exported_fns.push((name.clone(), idx));
-                }
-            }
-        }
         Ok(())
     }
 
@@ -424,8 +457,10 @@ impl Compiler {
         if let Some(i) = ctx.locals.iter().position(|l| l == name) {
             return Ok(Place::Local(i as u8));
         }
-        if let Some(&(_, idx, _)) = self.named_fns.iter().find(|(n, _, _)| n == name) {
-            return Ok(Place::Func(idx));
+        if !self.demoted.iter().any(|n| n == name) {
+            if let Some(&(_, idx, _)) = self.named_fns.iter().find(|(n, _, _)| n == name) {
+                return Ok(Place::Func(idx));
+            }
         }
         if let Some(i) = self.global_idx(name) {
             return Ok(Place::Global(i));
@@ -442,10 +477,8 @@ impl Compiler {
     fn emit_stmt(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
         match &s.kind {
             StmtKind::Empty => Ok(()),
-            StmtKind::Func { .. } => Err(Diagnostic::new(
-                s.span,
-                "nested named functions are not supported; use a lambda".to_string(),
-            )),
+            // nested named functions were already bound at function entry
+            StmtKind::Func { .. } => Ok(()),
             StmtKind::Var { decls, .. } => {
                 for d in decls {
                     if let Some(init) = &d.init {
@@ -865,6 +898,51 @@ impl FnCtx {
     }
 }
 
+/// Walk every statement (including inside function bodies — PB flattens all
+/// declarations to global scope) and visit each `function` declaration.
+fn walk_fns<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
+    for s in stmts {
+        match &s.kind {
+            StmtKind::Func { body, .. } => {
+                f(s);
+                walk_fns(body, f);
+            }
+            StmtKind::If { then, els, .. } => {
+                walk_fns(core::slice::from_ref(then), f);
+                if let Some(e) = els {
+                    walk_fns(core::slice::from_ref(e), f);
+                }
+            }
+            StmtKind::While { body, .. } => walk_fns(core::slice::from_ref(body), f),
+            StmtKind::For { init, body, .. } => {
+                if let Some(i) = init {
+                    walk_fns(core::slice::from_ref(i), f);
+                }
+                walk_fns(core::slice::from_ref(body), f);
+            }
+            StmtKind::Block(b) => walk_fns(b, f),
+            _ => {}
+        }
+    }
+}
+
+fn register_fns(c: &mut Compiler, top: &[Stmt]) {
+    let mut found: Vec<(String, bool)> = Vec::new();
+    walk_fns(top, &mut |s| {
+        if let StmtKind::Func { export, name, .. } = &s.kind {
+            if let Some(e) = found.iter_mut().find(|(n, _)| n == name) {
+                e.1 |= *export;
+            } else {
+                found.push((name.clone(), *export));
+            }
+        }
+    });
+    for (name, export) in found {
+        let idx = (c.fns.len() + c.named_fns.len()) as u16;
+        c.named_fns.push((name, idx, export));
+    }
+}
+
 /// A function's local slots: params first, then every hoisted `var` in the
 /// body (JS var hoisting — blocks and loops don't scope, lambdas do).
 fn function_scope(params: &[String], body: &[Stmt]) -> Vec<String> {
@@ -883,6 +961,8 @@ fn hoist(stmts: &[Stmt], out: &mut Vec<String>) {
                     }
                 }
             }
+            // note: nested function declarations do NOT hoist as locals —
+            // PB flattens them to global scope (register_fns handles them)
             StmtKind::If { then, els, .. } => {
                 hoist(core::slice::from_ref(then), out);
                 if let Some(e) = els {

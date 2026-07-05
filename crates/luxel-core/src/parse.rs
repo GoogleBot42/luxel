@@ -662,6 +662,32 @@ impl<'s> Parser<'s> {
                     span: start.to(self.prev_span),
                 })
             }
+            // function expression: `f = function (a) { … }` (a name after
+            // `function` is allowed and ignored — no closures, no self-ref)
+            Some(Tok::Function) => {
+                self.bump();
+                if self.at(Tok::Ident) {
+                    self.bump();
+                }
+                self.expect(Tok::LParen, "`(`")?;
+                let mut params = Vec::new();
+                while !self.at(Tok::RParen) {
+                    let (p, _) = self.ident_name("parameter name")?;
+                    params.push(p);
+                    if !self.eat(Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Tok::RParen, "`)`")?;
+                let body = self.block_body()?;
+                Ok(Expr {
+                    kind: ExprKind::Lambda {
+                        params,
+                        body: LambdaBody::Block(body),
+                    },
+                    span: start.to(self.prev_span),
+                })
+            }
             _ => Err(self.err_here("expected an expression".into())),
         }
     }

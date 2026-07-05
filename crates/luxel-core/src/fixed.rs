@@ -195,42 +195,17 @@ impl Fx {
             return Some(Fx::from_int(acc as i32));
         }
 
-        let (int_str, frac_str) = match s.split_once('.') {
-            Some((i, f)) => (i, f),
-            None => (s, ""),
-        };
-        if int_str.is_empty() && frac_str.is_empty() {
+        // Decimal, possibly with an exponent (`1e4`, `2.5e-3`). PB's compiler
+        // is JavaScript, so literals go through correctly-rounded f64 parsing
+        // and then 16.15 quantization — core's f64 FromStr matches that
+        // exactly and deterministically.
+        if s.is_empty() || s == "." || s.starts_with(['+', '-']) {
             return None;
         }
-        let mut int_acc: u32 = 0;
-        for c in int_str.bytes() {
-            if !c.is_ascii_digit() {
-                return None;
-            }
-            int_acc = int_acc.wrapping_mul(10).wrapping_add((c - b'0') as u32);
+        match s.parse::<f64>() {
+            Ok(v) if v.is_finite() => Some(Fx::from_f64_lit(v)),
+            _ => None,
         }
-        // Fraction: numerator/10^n truncated to 1/65536. Nine digits is
-        // already beyond representable precision.
-        let mut num: u64 = 0;
-        let mut den: u64 = 1;
-        for c in frac_str.bytes() {
-            if !c.is_ascii_digit() {
-                return None;
-            }
-            if den < 1_000_000_000 {
-                num = num * 10 + (c - b'0') as u64;
-                den *= 10;
-            }
-        }
-        let frac_raw = if den > 1 {
-            ((num << FRAC_BITS) / den) as i32
-        } else {
-            0
-        };
-        // 16.15 literal: clear the LSB (no-op for integer literals)
-        Some(Fx(
-            Fx::from_int(int_acc as i32).0.wrapping_add(frac_raw) & !1
-        ))
     }
 }
 
@@ -483,6 +458,11 @@ mod tests {
         );
         // the epsilon literal's raw LSB is dropped — oracle: lit_epsilon
         assert_eq!(Fx::parse_literal("0.0000152587890625"), Some(Fx::ZERO));
+        // scientific notation (JS-style literals)
+        assert_eq!(Fx::parse_literal("1e2"), Some(Fx::from_int(100)));
+        assert_eq!(Fx::parse_literal("2.5e-3"), Some(Fx::from_raw(162))); // trunc(163.84)&!1
+        assert_eq!(Fx::parse_literal("1E+1"), Some(Fx::from_int(10)));
+        assert_eq!(Fx::parse_literal("1e-9"), Some(Fx::ZERO));
         // constants quantize as literals — oracle: cPI is 205886, not 205887
         assert_eq!(Fx::from_f64_lit(core::f64::consts::PI).raw(), 205_886);
         assert_eq!(Fx::from_f64_lit(core::f64::consts::SQRT_2).raw(), 92_680);

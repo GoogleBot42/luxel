@@ -35,8 +35,61 @@ fn main() -> ExitCode {
         "run" if args.len() >= 2 => run_cmd(&args[1], &args[2..], false),
         "bench" if args.len() >= 2 => run_cmd(&args[1], &args[2..], true),
         "vars" if args.len() >= 2 => vars_cmd(&args[1], &args[2..]),
+        "check" if args.len() == 2 => check_cmd(&args[1]),
         _ => usage(),
     }
+}
+
+/// Compile + smoke-run a pattern (.js source or .epe export) and report one
+/// JSON line: {"file", "stage": "ok"|"epe"|"compile"|"init"|"frame", "error"?}.
+/// The corpus report tooling drives this.
+fn check_cmd(path: &str) -> ExitCode {
+    let report = |stage: &str, error: Option<String>| {
+        let mut obj = serde_json::json!({ "file": path, "stage": stage });
+        if let Some(e) = error {
+            obj["error"] = serde_json::Value::String(e);
+        }
+        println!("{obj}");
+        if stage == "ok" {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        }
+    };
+    let raw = match read(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    let src = if path.ends_with(".epe") {
+        match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(v) => match v["sources"]["main"].as_str() {
+                Some(s) => s.to_string(),
+                None => return report("epe", Some("no sources.main in .epe".into())),
+            },
+            Err(e) => return report("epe", Some(format!("bad .epe JSON: {e}"))),
+        }
+    } else {
+        raw.clone()
+    };
+    // 100 pixels: divisible sizes matter — patterns doing pixelCount/10 etc.
+    // genuinely OOB (on PB too) at awkward counts
+    let mut engine = match Engine::new(&src, 100, 1) {
+        Ok(e) => e,
+        Err(d) => {
+            let (line, col) = line_col(&src, d.span.start);
+            return report("compile", Some(format!("{line}:{col}: {}", d.message)));
+        }
+    };
+    if let Some(e) = engine.take_error() {
+        return report("init", Some(e.message));
+    }
+    for _ in 0..3 {
+        engine.frame(Fx::from_f64(16.7));
+        if let Some(e) = engine.take_error() {
+            return report("frame", Some(e.message));
+        }
+    }
+    report("ok", None)
 }
 
 /// Run a pattern's init (plus one frame) and dump exported vars as JSON with

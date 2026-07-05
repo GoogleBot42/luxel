@@ -260,14 +260,14 @@ fn prng_is_seeded_and_deterministic() {
 
 #[test]
 fn array_bounds_are_runtime_errors() {
-    // oracle-confirmed: any out-of-range access aborts execution — OOB reads
-    // and writes, negative indices, and fractional WRITE indices too
+    // oracle-confirmed: out-of-range access aborts execution — OOB reads
+    // and writes and negative indices
     for src in [
         "a = [1]\nout = a[5]",
         "a = [1]\na[5] = 9",
         "a = [1, 2]\nout = a[-1]",
-        "a = [1, 2]\na[0.5] = 9",
         "a = [1, 2]\ni = -0.5\nout = a[i]",
+        "a = [1, 2]\ni = -1\na[i] = 9",
     ] {
         let e = Engine::new(src, 10, 1).unwrap();
         let err = e
@@ -279,6 +279,90 @@ fn array_bounds_are_runtime_errors() {
             err.message
         );
     }
+    // …but in-bounds fractional writes truncate (oracle: variable-index
+    // probes + the stock `sparks` pattern depends on it)
+    assert_eq!(
+        eval_prog("a = [10, 20, 30]\ni = 1.5\na[i] = 9\nexport var out = a[1]"),
+        Fx::from_int(9)
+    );
+    assert_eq!(
+        eval_prog("a = [10, 20, 30]\ni = 1.5\na[i] += 9\nexport var out = a[1]"),
+        Fx::from_int(29)
+    );
+}
+
+#[test]
+fn corpus_syntax_extensions() {
+    // function expressions
+    assert_eq!(
+        eval_prog("f = function (a) { return a * 3 }\nexport var out = f(7)"),
+        Fx::from_int(21)
+    );
+    // nested named functions hoist within their enclosing function
+    assert_eq!(
+        eval_prog(
+            "function outer(x) {\n\
+               var r = inner(x)\n\
+               function inner(v) { return v + 1 }\n\
+               return r\n\
+             }\n\
+             export var out = outer(4)"
+        ),
+        Fx::from_int(5)
+    );
+    // duplicate top-level functions: last definition wins
+    assert_eq!(
+        eval_prog("function f() { return 1 }\nfunction f() { return 2 }\nexport var out = f()"),
+        Fx::from_int(2)
+    );
+    // nested declarations flatten to global scope (PB behavior — corpus
+    // patterns call helpers declared inside other functions)
+    assert_eq!(
+        eval_prog(
+            "function a() {\n\
+               function helper(x) { return x * 2 }\n\
+               return 0\n\
+             }\n\
+             function b() { return helper(21) }\n\
+             export var out = b()"
+        ),
+        Fx::from_int(42)
+    );
+    // assigning to a function name demotes it to a variable (JS-style)
+    let e = engine(
+        "function f() { return 1 }\n\
+         export var before = f()\n\
+         f = 5\n\
+         export var out = f",
+    );
+    assert_eq!(e.var("before"), Some(Value::Num(Fx::ONE)));
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::from_int(5))));
+    // scientific-notation literals
+    assert_eq!(eval("1e2"), Fx::from_int(100));
+    assert_eq!(eval("1.5e2 + 5e-1"), Fx::from_f64(150.5));
+    // strict equality folds to plain equality; null/undefined are 0
+    assert_eq!(eval("(1 === 1) + (1 !== 2) * 10"), Fx::from_int(11));
+    assert_eq!(eval("null == 0"), Fx::ONE);
+    assert_eq!(eval("undefined"), Fx::ZERO);
+    // GPIO constants exist (oracle-probed values)
+    assert_eq!(eval("OUTPUT"), Fx::from_int(2));
+    assert_eq!(eval("INPUT_PULLDOWN"), Fx::from_int(9));
+    assert_eq!(eval("ANALOG"), Fx::from_int(192));
+    assert_eq!(eval("HIGH + LOW"), Fx::ONE);
+}
+
+#[test]
+fn sensor_vars_are_stubbed() {
+    let e = engine(
+        "export var frequencyData\nexport var accelerometer\n\
+         export var out = frequencyData.length * 100 + accelerometer.length",
+    );
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::from_int(3203))));
+    // the detection idiom writes work
+    let e = engine(
+        "export var frequencyData\nfrequencyData[0] = -1\nexport var out = frequencyData[0]",
+    );
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::from_int(-1))));
 }
 
 #[test]
@@ -299,7 +383,6 @@ fn runtime_errors_are_recorded_not_fatal() {
 fn compile_errors() {
     assert!(Engine::new("out = undefinedThing", 10, 1).is_err());
     assert!(Engine::new("export var out = notAFunction(1)", 10, 1).is_err());
-    assert!(Engine::new("function f() { function g() {} }", 10, 1).is_err());
     assert!(Engine::new("break", 10, 1).is_err());
 }
 

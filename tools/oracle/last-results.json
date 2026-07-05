@@ -1,7 +1,7 @@
 {
   "ip": "192.168.0.140",
   "fw": "3.67",
-  "when": "2026-07-05T10:20:29.950Z",
+  "when": "2026-07-05T10:46:25.668Z",
   "results": [
     {
       "name": "div0",
@@ -765,21 +765,141 @@
       "match": true
     },
     {
-      "name": "postinc",
+      "name": "sent_fwvar",
       "pb": 0,
       "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_fwcomp",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_owvar",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_owvarc",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_nwvar",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "jnull",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "jstrict",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen74",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen05",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen76",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen70",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alenrd",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gLOW",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gHIGH",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gINPUT",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gOUTPUT",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gINPUT_PULLUP",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gINPUT_PULLDOWN",
+      "pb": 589824,
+      "luxel": 589824,
+      "match": true
+    },
+    {
+      "name": "gOUTPUT_OPEN_DRAIN",
+      "pb": 1179648,
+      "luxel": 1179648,
+      "match": true
+    },
+    {
+      "name": "gANALOG",
+      "pb": 12582912,
+      "luxel": 12582912,
+      "match": true
+    },
+    {
+      "name": "postinc",
+      "pb": 3670016,
+      "luxel": 3670016,
       "match": true
     },
     {
       "name": "preinc",
-      "pb": 0,
-      "luxel": 0,
+      "pb": 4325376,
+      "luxel": 4325376,
       "match": true
     },
     {
       "name": "postdec",
-      "pb": 0,
-      "luxel": 0,
+      "pb": 3538944,
+      "luxel": 3538944,
       "match": true
     },
     {

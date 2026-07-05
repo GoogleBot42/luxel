@@ -79,6 +79,24 @@ impl Engine {
         let mut vm = Vm::new(&prog, seed);
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
+        // Sensor-board bindings: until a peripheral provides them (M5),
+        // exported sensor arrays are stubbed with zeros so sound/motion
+        // patterns run dark instead of erroring. Scalars are already 0.
+        // The pattern's own init may overwrite these.
+        for (name, len) in [
+            ("frequencyData", 32),
+            ("accelerometer", 3),
+            ("analogInputs", 5),
+        ] {
+            if let Some(i) = prog.global_index(name) {
+                if prog.globals[i as usize].export {
+                    if let Ok(v) = vm.alloc_array(alloc::vec![Value::default(); len]) {
+                        vm.globals[i as usize] = v;
+                    }
+                }
+            }
+        }
+
         let mut last_error = None;
         if let Err(e) = vm.call(&prog, 0, &[]) {
             last_error = Some(e);
