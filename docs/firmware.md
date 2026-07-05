@@ -16,7 +16,7 @@ release artifacts, patched by autoPatchelfHook; the devshell exports
 `XTENSA_RUST_HOME` and puts `xtensa-esp32-elf-gcc` on PATH
 (x86_64-linux only for now — add per-system artifact hashes to extend).
 
-Build:
+Build (devshell, incremental — day-to-day development):
 
 ```sh
 # ESP32-C3 (default)
@@ -25,6 +25,22 @@ cd firmware && cargo build --release            # or `cargo run --release` to fl
 # classic ESP32 (Xtensa)
 BOARD=board-pixelblaze-v3 ./build-esp32.sh      # or `… ./build-esp32.sh flash`
 ```
+
+Build (nix package, hermetic — reproducible images):
+
+```sh
+nix build .#luxel-fw-pixelblaze-v3     # also: luxel-fw-c3-devkit, luxel-fw-athom-music
+ls result/                              # luxel-fw.elf + luxel-fw.bin
+espflash write-bin 0 result/luxel-fw.bin   # full-flash image (bootloader+partitions+app)
+```
+
+The packaged image bakes no WiFi credentials (offline render-only) —
+override with `.override { ssid = "net"; pass = "secret"; }` if needed.
+Two lockfiles feed the hermetic build: `firmware/Cargo.lock` (our deps) and
+`firmware/rust-std.Cargo.lock` (the std workspace's deps, needed by
+-Zbuild-std; re-copy from
+`$XTENSA_RUST_HOME/lib/rustlib/src/rust/library/Cargo.lock` on toolchain
+bumps).
 
 WiFi credentials bake in at build time until NVS provisioning lands (M3):
 `LUXEL_SSID=net LUXEL_PASS=secret cargo build …`. Without them (or with
