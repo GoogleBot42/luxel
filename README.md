@@ -1,26 +1,30 @@
-# Pixler
+# Pixler (working title)
 
-A fully open-source, live-codable LED controller — write LED patterns in a JS-like
-scripting language in a web IDE and watch them run instantly on real hardware.
+A fully open-source, live-codable LED controller — write LED patterns in a scripting
+language in a web IDE and watch them run instantly on real hardware.
 
-Pixler reimplements the ideas of the (closed-source) Pixel Blaze firmware, clean-room,
-from the vendor's publicly documented pattern language and protocols:
+Inspired by the (closed-source) Pixel Blaze and source-compatible with its pattern
+language, but deliberately **not** a drop-in clone: Pixler is a better-integrated take on
+the same idea — Home Assistant/MQTT integration, multi-device sync, open APIs, and a
+documented bytecode VM that other languages can target too.
 
-- **Pattern-language source compatibility** with Pixel Blaze — the 200+ community
-  patterns (`.epe`) should just work.
-- **One portable core** (`libpixler`, C11, 16.16 fixed point): the same compiler + VM runs
-  on the ESP32 firmware, in the browser via WASM (instant hardware-free preview), and
-  natively in CI (conformance tests, fuzzing).
-- **Open peripheral compatibility**: Pixel Blaze's MIT-licensed sensor board and output
-  expander protocols are adopted verbatim.
-- **No cloud, no app** — everything works on a device in AP mode.
+- **Pattern-source compatibility** with the Pixel Blaze language — the 200+ community
+  patterns (`.epe`) should just work. Built clean-room from public documentation only.
+- **One portable core** (Rust, `no_std`, 16.16 fixed point): the same compiler + VM runs
+  in the ESP32 firmware (esp-hal + embassy), in the browser via WASM (instant
+  hardware-free preview), and natively in CI (conformance tests, fuzzing).
+- **Integration-first:** MQTT + Home Assistant discovery, DDP/E1.31 input, and
+  Pixler-to-Pixler sync — instead of PB-protocol emulation.
+- **Generic peripherals:** a capability-based peripheral framework; Pixel Blaze's open
+  sensor-board and output-expander protocols are supported as drivers, not as lock-in.
+- **Web IDE:** Svelte + TypeScript + CodeMirror 6, served from device flash; no cloud,
+  no app — everything works on a device in AP mode.
 
-Status: **planning**. See [docs/PLAN.md](docs/PLAN.md) for the full plan (architecture,
-requirements, milestones) and [docs/research/](docs/research/) for the research it's
-built on.
+Status: **planning**. See [docs/PLAN.md](docs/PLAN.md) for architecture, requirements,
+and milestones, and [docs/research/](docs/research/) for the research behind it.
 
-Licensing (planned): core library, IDE, and CLI under Apache-2.0; device firmware under
+Licensing (planned): core, IDE, and CLI under Apache-2.0; device firmware under
 GPL-3.0-or-later.
 
-*Pixel Blaze is a trademark of its owner; Pixler is an independent project compatible
-with the Pixel Blaze pattern language.*
+*Pixel Blaze is a trademark of its owner; this is an independent project compatible with
+the Pixel Blaze pattern language.*
