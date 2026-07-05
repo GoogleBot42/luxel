@@ -45,17 +45,21 @@ function luxelVars(source) {
   }
 }
 
-async function pbVars(pb, compile, source) {
+async function pbVars(pb, compile, source, expectKeys = null) {
   const compiled = compile(source);
   if (!compiled.ok) return { ok: false, error: compiled.error };
   await pb.setCode(packBytecode(compiled));
   // vars snapshot happens after a rendered frame; give it a moment
+  const arrived = (vars) =>
+    expectKeys
+      ? expectKeys.some((k) => vars[k] !== undefined)
+      : Object.keys(vars).some((k) => k.startsWith("o_"));
   for (let attempt = 0; attempt < 6; attempt++) {
     await sleep(250);
     const vars = await pb.getVars();
-    if (Object.keys(vars).some((k) => k.startsWith("o_"))) return { ok: true, vars };
+    if (arrived(vars)) return { ok: true, vars };
   }
-  return { ok: false, error: "no o_* vars appeared" };
+  return { ok: false, error: "expected vars never appeared" };
 }
 
 function compare(name, pbVal, luxVal, results) {
@@ -128,7 +132,7 @@ async function main() {
     for (const sp of SPECIALS) {
       if (sp.skip || (filter && !sp.title.includes(filter))) continue;
       console.log(`--- ${sp.title}`);
-      const pbSide = await pbVars(pb, compile, sp.source);
+      const pbSide = await pbVars(pb, compile, sp.source, sp.keys);
       const luxSide = luxelVars(sp.source);
       for (const k of sp.keys) {
         compare(

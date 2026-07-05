@@ -49,6 +49,19 @@
     mix/smoothstep/bezier (exact), triangle/square/wave at representable
     points, missing-args-are-0 / extra-args-dropped.
 
+## Transform semantics (hardware-confirmed 2026-07-05, bit-exact)
+
+- **Ops apply to points in call order** (pre-multiply composition):
+  `translate(0.25,0); scale(2,2)` → x' = 2(x+0.25); reversed order →
+  x' = 2x+0.25. Probe `transform-order` matched our implementation exactly.
+- **Transforms accumulate across frames** — no per-cycle auto-reset; only
+  `resetTransform()` clears (probe `transform-accumulation`, bit-exact
+  including the 16.15-literal step sizes).
+- **rotate(+θ) is counterclockwise** (device map baseline (0, 0.5) →
+  rotate(π/2) → (−0.5, 0), matching our matrix).
+- `translate(t)` adds to the point (the rotate-about-center corpus idiom
+  works as written).
+
 ## Known remaining differences (recorded, not yet matched)
 
 - **Transcendental internals** (sin/cos/tan, exp/log, atan/atan2, asin/acos,

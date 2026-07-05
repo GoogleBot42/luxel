@@ -123,7 +123,10 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    engine.frame(Fx::ZERO);
+    // three zero-delta frames so multi-frame oracle probes settle
+    for _ in 0..3 {
+        engine.frame(Fx::ZERO);
+    }
     if let Some(e) = engine.take_error() {
         eprintln!(
             "warning: runtime error: {} (fn {}, pc {})",

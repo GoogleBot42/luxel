@@ -1,7 +1,7 @@
 {
   "ip": "192.168.0.140",
   "fw": "3.67",
-  "when": "2026-07-05T10:46:25.668Z",
+  "when": "2026-07-05T15:29:24.327Z",
   "results": [
     {
       "name": "div0",
@@ -931,6 +931,66 @@
       "pb": 5046077,
       "luxel": 5757743,
       "match": false
+    },
+    {
+      "name": "transform-accumulation.x0",
+      "pb": 6552,
+      "luxel": 6552,
+      "match": true
+    },
+    {
+      "name": "transform-accumulation.x1",
+      "pb": 13104,
+      "luxel": 13104,
+      "match": true
+    },
+    {
+      "name": "transform-accumulation.x2",
+      "pb": 19656,
+      "luxel": 19656,
+      "match": true
+    },
+    {
+      "name": "transform-order.base",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "transform-order.ta",
+      "pb": 32768,
+      "luxel": 32768,
+      "match": true
+    },
+    {
+      "name": "transform-order.tb",
+      "pb": 16384,
+      "luxel": 16384,
+      "match": true
+    },
+    {
+      "name": "transform-rotate.bx",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "transform-rotate.by",
+      "pb": 32768,
+      "luxel": 0,
+      "match": false
+    },
+    {
+      "name": "transform-rotate.rx",
+      "pb": -32768,
+      "luxel": 0,
+      "match": false
+    },
+    {
+      "name": "transform-rotate.ry",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
     }
   ]
 }
