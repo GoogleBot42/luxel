@@ -34,8 +34,16 @@ ls result/                              # luxel-fw.elf + luxel-fw.bin
 espflash write-bin 0 result/luxel-fw.bin   # full-flash image (bootloader+partitions+app)
 ```
 
-The packaged image bakes no WiFi credentials (offline render-only) —
-override with `.override { ssid = "net"; pass = "secret"; }` if needed.
+A pure build bakes no WiFi credentials (offline render-only image). To
+bake them, pass via environment with an impure eval:
+
+```sh
+LUXEL_SSID='net' LUXEL_PASS='secret' nix build .#luxel-fw-pixelblaze-v3 --impure
+```
+
+(A git-untracked creds file wouldn't work: flakes only see tracked files.)
+Cred-baked images contain the password in plaintext (image + world-readable
+nix store) — don't build them on shared machines or share the .bin.
 Two lockfiles feed the hermetic build: `firmware/Cargo.lock` (our deps) and
 `firmware/rust-std.Cargo.lock` (the std workspace's deps, needed by
 -Zbuild-std; re-copy from

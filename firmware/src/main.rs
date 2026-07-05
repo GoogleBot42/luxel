@@ -78,6 +78,12 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
+    // Classic ESP32 has less contiguous DRAM than the C3 once the WiFi
+    // blob's statics are linked in — 160 KB here overflows the region by
+    // ~17 KB (linker: "cannot move location counter backwards").
+    #[cfg(feature = "esp32")]
+    esp_alloc::heap_allocator!(size: 120 * 1024);
+    #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 
     let timg0 = TimerGroup::new(p.TIMG0);

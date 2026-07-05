@@ -75,12 +75,23 @@
       # nix build .#luxel-fw-pixelblaze-v3 → result/luxel-fw.elf (flash with
       # espflash) + result/luxel-fw.bin (merged full-flash image: bootloader
       # + partition table + app; `espflash write-bin 0 luxel-fw.bin`).
-      # WiFi credentials are compile-time; the packaged image is built
-      # without them (offline render-only) unless overridden:
-      #   nix build --impure --expr '(builtins.getFlake (toString ./.)).packages.x86_64-linux.luxel-fw-pixelblaze-v3.override { ssid = "net"; pass = "secret"; }'
+      # WiFi credentials are compile-time. A pure build bakes none (offline
+      # render-only image). To bake credentials, pass them from the
+      # environment with an impure eval:
+      #   LUXEL_SSID=net LUXEL_PASS=secret nix build .#luxel-fw-pixelblaze-v3 --impure
+      # (or use .override { ssid; pass; }). The credentials end up in the
+      # image and in the world-readable nix store — don't build cred-baked
+      # images on shared machines or share the resulting .bin.
+      envOr = name: let v = builtins.getEnv name; in if v == "" then null else v;
       mkFirmware = pkgs:
         lib.makeOverridable
-          ({ board, chip, target, buildStd ? false, ssid ? null, pass ? null }:
+          ({ board
+           , chip
+           , target
+           , buildStd ? false
+           , ssid ? envOr "LUXEL_SSID"
+           , pass ? envOr "LUXEL_PASS"
+           }:
             let
               xtensaRust = mkXtensaRust pkgs;
               xtensaGcc = mkXtensaGcc pkgs;
