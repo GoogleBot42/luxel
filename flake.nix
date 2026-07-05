@@ -46,8 +46,10 @@
           buildInputs = [ pkgs.zlib pkgs.stdenv.cc.cc.lib ];
           installPhase = ''
             runHook preInstall
-            ./rust-*-x86_64-unknown-linux-gnu/install.sh --destdir=$out --prefix="" --disable-ldconfig
-            ./rust-src-*/install.sh --destdir=$out --prefix="" --disable-ldconfig
+            # explicit bash: the scripts' /usr/bin/env shebang doesn't exist
+            # inside the build sandbox
+            bash ./rust-*-x86_64-unknown-linux-gnu/install.sh --destdir=$out --prefix="" --disable-ldconfig
+            bash ./rust-src-*/install.sh --destdir=$out --prefix="" --disable-ldconfig
             runHook postInstall
           '';
           dontStrip = true;
