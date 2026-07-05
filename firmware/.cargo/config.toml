@@ -1,9 +1,20 @@
 [build]
+# Default: ESP32-C3 devkit (feature esp32c3). For the classic-ESP32 build
+# (feature esp32, Xtensa) use ./build-esp32.sh — it selects the target and
+# toolchain explicitly.
 target = "riscv32imc-unknown-none-elf"
 
-[target.riscv32imc-unknown-none-elf]
+[target.'cfg(target_arch = "riscv32")']
 runner = "espflash flash --monitor"
 rustflags = ["-C", "link-arg=-Tlinkall.x", "-C", "force-frame-pointers"]
+
+[target.'cfg(target_arch = "xtensa")']
+runner = "espflash flash --monitor"
+rustflags = [
+  # GNU LD from espup's xtensa-esp-elf toolchain
+  "-C", "link-arg=-Wl,-Tlinkall.x",
+  "-C", "link-arg=-nostartfiles",
+]
 
 [env]
 ESP_LOG = "info"

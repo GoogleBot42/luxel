@@ -32,6 +32,14 @@
               # wasm32: browser playground; riscv32imc: ESP32-C3 firmware
               targets = [ "wasm32-unknown-unknown" "riscv32imc-unknown-none-elf" ];
             })
+            # Classic ESP32 (Xtensa — e.g. the Athom music-reactive WLED
+            # controller) needs Espressif's rustc fork. One-time setup:
+            #   espup install --targets esp32
+            # then build with:
+            #   cd firmware && rustup run esp cargo build --release \
+            #     --no-default-features --features esp32 --target xtensa-esp32-none-elf
+            pkgs.espup
+            pkgs.rustup
             # ESP32 flashing/monitoring over USB
             pkgs.espflash
             # Web IDE toolchain (M1)

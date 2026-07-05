@@ -45,9 +45,14 @@ use shared::{set_pixels, set_vmerr, CODE_QUEUE, FPS};
 esp_bootloader_esp_idf::esp_app_desc!();
 
 // ---- board configuration ----
-// Bare C3 devkit + SK9822: CLOCK → GPIO6, DATA → GPIO7.
-// Athom LS4P (C3 gen) + WS281x: set PROTOCOL = Ws2812; its output terminal
-// is GPIO21 (route MOSI there by changing the pin below); no clock needed.
+// esp32c3 (default feature): bare C3 devkit — CLOCK → GPIO6, DATA → GPIO7,
+//   no relay. For the Athom LS4P (C3 gen, WS281x on GPIO21, no clock): set
+//   PROTOCOL = Ws2812 and route MOSI to GPIO21.
+// esp32 feature: Athom WLED ESP32 music-reactive controller — channel 1 is
+//   DATA1 = GPIO18, CLK1 = GPIO5; channel 2 (DATA2 = GPIO17, CLK2 = GPIO16)
+//   is not driven yet. A 16A relay on GPIO2 switches the strip VCC
+//   terminals and MUST be driven high or the strip stays dark. Button
+//   GPIO0, IR GPIO25, PDM mic I2S SD = GPIO32 / WS = GPIO15 (unused).
 const PROTOCOL: Protocol = Protocol::Sk9822;
 pub const PIXEL_COUNT: u32 = 300;
 /// Global brightness 0–31 (APA102 5-bit current limiter; ignored for
@@ -85,15 +90,25 @@ async fn main(spawner: Spawner) -> ! {
         PROTOCOL.spi_hz()
     );
 
+    // Strip power relay: on before anything renders (see board notes above).
+    #[cfg(feature = "esp32")]
+    let _relay = esp_hal::gpio::Output::new(
+        p.GPIO2,
+        esp_hal::gpio::Level::High,
+        esp_hal::gpio::OutputConfig::default(),
+    );
+
     let spi = Spi::new(
         p.SPI2,
         SpiConfig::default()
             .with_frequency(Rate::from_hz(PROTOCOL.spi_hz()))
             .with_mode(Mode::_0),
     )
-    .expect("spi init")
-    .with_sck(p.GPIO6)
-    .with_mosi(p.GPIO7);
+    .expect("spi init");
+    #[cfg(feature = "esp32c3")]
+    let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
+    #[cfg(feature = "esp32")]
+    let spi = spi.with_sck(p.GPIO5).with_mosi(p.GPIO18);
 
     spawner.spawn(render_task(spi).unwrap());
 

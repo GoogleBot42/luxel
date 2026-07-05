@@ -127,6 +127,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpufeatures"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -643,6 +652,7 @@ dependencies = [
  "esp-println",
  "heapless 0.9.3",
  "riscv",
+ "semihosting",
  "xtensa-lx",
 ]
 
@@ -723,6 +733,8 @@ dependencies = [
  "rand_core 0.6.4",
  "rand_core 0.9.5",
  "riscv",
+ "sha1",
+ "sha2",
  "strum",
  "ufmt-write",
  "xtensa-lx",
@@ -762,7 +774,9 @@ dependencies = [
  "esp-hal",
  "esp-metadata-generated",
  "esp-sync",
+ "esp-wifi-sys-esp32",
  "esp-wifi-sys-esp32c3",
+ "esp32",
  "esp32c3",
 ]
 
@@ -805,7 +819,9 @@ dependencies = [
  "esp-radio-rtos-driver",
  "esp-rom-sys",
  "esp-sync",
+ "esp-wifi-sys-esp32",
  "esp-wifi-sys-esp32c3",
+ "esp32",
  "esp32c3",
  "heapless 0.9.3",
  "instability",
@@ -813,6 +829,7 @@ dependencies = [
  "num-traits",
  "portable-atomic",
  "portable_atomic_enum",
+ "xtensa-lx-rt",
 ]
 
 [[package]]
@@ -846,6 +863,7 @@ dependencies = [
  "cfg-if",
  "document-features",
  "esp-metadata-generated",
+ "esp32",
  "esp32c3",
 ]
 
@@ -889,6 +907,12 @@ dependencies = [
  "riscv",
  "xtensa-lx",
 ]
+
+[[package]]
+name = "esp-wifi-sys-esp32"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2556f38f5292d9735d4e156e276815fc001c9a0a2be0544a575c5fb867129d24"
 
 [[package]]
 name = "esp-wifi-sys-esp32c3"
@@ -1586,6 +1610,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
+name = "semihosting"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8e4abf97879f4e80db69a9fba7bd64998e9bdad25f58ef045a778e191172fd4"
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1632,6 +1662,28 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]

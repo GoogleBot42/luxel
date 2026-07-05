@@ -7,17 +7,17 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [dependencies]
-esp-hal = { version = "1.1.1", features = ["esp32c3", "unstable"] }
+esp-hal = { version = "1.1.1", features = ["unstable"] }
 esp-alloc = "0.10"
-esp-println = { version = "0.17", features = ["esp32c3"] }
-esp-backtrace = { version = "0.19", features = ["esp32c3", "panic-handler", "println"] }
-esp-bootloader-esp-idf = { version = "0.5", features = ["esp32c3"] }
+esp-println = "0.17"
+esp-backtrace = { version = "0.19", features = ["panic-handler", "println"] }
+esp-bootloader-esp-idf = "0.5"
 critical-section = "1"
 luxel-core = { path = "../crates/luxel-core" }
 
 # networking (WiFi station + async TCP + HTTP server)
-esp-rtos = { version = "0.3", features = ["esp32c3", "esp-radio", "embassy"] }
-esp-radio = { version = "1.0.0-beta.0", features = ["esp32c3", "wifi", "unstable"] }
+esp-rtos = { version = "0.3", features = ["esp-radio", "embassy"] }
+esp-radio = { version = "1.0.0-beta.0", features = ["wifi", "unstable"] }
 embassy-executor = "0.10"
 embassy-net = { version = "0.9", features = ["dhcpv4", "medium-ethernet", "tcp", "dns"] }
 embassy-time = "0.5"
@@ -25,6 +25,28 @@ embassy-sync = "0.8"
 embassy-futures = "0.1"
 static_cell = "2.1"
 picoserve = { version = "0.18", default-features = false, features = ["embassy", "alloc"] }
+
+[features]
+# Bare ESP32-C3 devkit (RISC-V, mainline Rust). Default.
+default = ["esp32c3"]
+esp32c3 = [
+  "esp-hal/esp32c3",
+  "esp-println/esp32c3",
+  "esp-backtrace/esp32c3",
+  "esp-bootloader-esp-idf/esp32c3",
+  "esp-rtos/esp32c3",
+  "esp-radio/esp32c3",
+]
+# Classic ESP32 (Xtensa — Athom music-reactive WLED controller and other
+# WROOM boards). Needs espup's rustc fork; see build-esp32.sh.
+esp32 = [
+  "esp-hal/esp32",
+  "esp-println/esp32",
+  "esp-backtrace/esp32",
+  "esp-bootloader-esp-idf/esp32",
+  "esp-rtos/esp32",
+  "esp-radio/esp32",
+]
 
 [profile.release]
 opt-level = 3
