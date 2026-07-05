@@ -117,7 +117,9 @@ pub unsafe extern "C" fn lx_new(
         Err(d) => {
             let (line, col) = line_col(src, d.span.start);
             set_response(format!(
-                "{{\"line\":{line},\"col\":{col},\"message\":\"{}\"}}",
+                "{{\"line\":{line},\"col\":{col},\"start\":{},\"end\":{},\"message\":\"{}\"}}",
+                d.span.start,
+                d.span.end,
                 json_escape(&d.message)
             ));
             -1
@@ -392,26 +394,48 @@ pub extern "C" fn lx_debug_state(h: i32) -> i32 {
                 if j > 0 {
                     out.push(',');
                 }
-                let name = json_escape(name);
-                match value {
-                    Value::Num(v) => {
-                        out.push_str(&format!("{{\"name\":\"{name}\",\"raw\":{}}}", v.raw()))
-                    }
-                    Value::Arr(id) => {
-                        let len = s.engine.array_len(*id);
-                        out.push_str(&format!("{{\"name\":\"{name}\",\"array\":{len}}}"));
-                    }
-                    Value::Fun(idx) => {
-                        out.push_str(&format!("{{\"name\":\"{name}\",\"fn\":{idx}}}"))
-                    }
-                    Value::Builtin(idx) => {
-                        out.push_str(&format!("{{\"name\":\"{name}\",\"fn\":{idx}}}"))
-                    }
-                }
+                out.push_str(&named_value_json(&s.engine, name, *value));
             }
             out.push_str("]}");
         }
+        out.push_str("],\"globals\":[");
+        for (i, (name, value)) in s.engine.debug_globals().iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&named_value_json(&s.engine, name, *value));
+        }
         out.push_str("]}");
+        set_response(out);
+        1
+    })
+    .unwrap_or(0)
+}
+
+fn named_value_json(engine: &Engine, name: &str, value: Value) -> String {
+    let name = json_escape(name);
+    match value {
+        Value::Num(v) => format!("{{\"name\":\"{name}\",\"raw\":{}}}", v.raw()),
+        Value::Arr(id) => format!("{{\"name\":\"{name}\",\"array\":{}}}", engine.array_len(id)),
+        Value::Fun(idx) | Value::Builtin(idx) => {
+            format!("{{\"name\":\"{name}\",\"fn\":{idx}}}")
+        }
+    }
+}
+
+/// All user-defined globals with current values, as a JSON array (hover
+/// inspection while running; the paused snapshot embeds the same data).
+#[no_mangle]
+pub extern "C" fn lx_globals(h: i32) -> i32 {
+    with_engine(h, |s| {
+        let mut out = String::from("[");
+        for (i, (name, value)) in s.engine.debug_globals().iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&named_value_json(&s.engine, name, *value));
+        }
+        out.push(']');
         set_response(out);
         1
     })

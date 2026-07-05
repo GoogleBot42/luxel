@@ -187,6 +187,45 @@
     return (raw / 65536).toFixed(4).replace(/\.?0+$/, "") || "0";
   }
 
+  function fmtLocal(l: { raw?: number; array?: number; fn?: number }): string {
+    if (l.raw !== undefined) return fmtRaw(l.raw);
+    if (l.array !== undefined) return `array[${l.array}]`;
+    return `fn#${l.fn}`;
+  }
+
+  /** Hover inspection: paused → locals (shadowing globals) then globals;
+   *  running → live globals. */
+  function hoverValue(name: string): string | null {
+    if (!engine) return null;
+    if (dbg.paused) {
+      const local = dbg.stack?.[0]?.locals.find((l) => l.name === name);
+      if (local) return fmtLocal(local);
+      const g = dbg.globals?.find((g) => g.name === name);
+      return g ? fmtLocal(g) : null;
+    }
+    const g = engine.globals().find((g) => g.name === name);
+    return g ? fmtLocal(g) : null;
+  }
+
+  /** Diagnostic spans are UTF-8 byte offsets; CodeMirror wants char offsets. */
+  function byteToChar(text: string, byte: number): number {
+    const bytes = new TextEncoder().encode(text);
+    return new TextDecoder().decode(bytes.subarray(0, Math.min(byte, bytes.length))).length;
+  }
+
+  // keep the squiggle in sync with the compile status
+  $: if (editor) {
+    if (compileError && compileError.start !== undefined && compileError.end !== undefined) {
+      editor.setErrorRange({
+        from: byteToChar(source, compileError.start),
+        to: byteToChar(source, compileError.end),
+        message: compileError.message,
+      });
+    } else {
+      editor.setErrorRange(null);
+    }
+  }
+
   function jumpToError(): void {
     if (compileError) editor.jumpTo(compileError.line, compileError.col);
   }
@@ -312,6 +351,7 @@
       <Editor
         bind:this={editor}
         value={source}
+        {hoverValue}
         on:change={onSourceChange}
         on:breakpoints={onBreakpoints}
       />
@@ -352,7 +392,7 @@
                 : ""}
             </div>
             {#if dbg.stack && dbg.stack.length > 0}
-              <div class="stack">
+              <div class="stack" data-role="stack">
                 {#each dbg.stack as f, i (i)}
                   <div class="stack-frame mono">
                     <span class="fn-name">{f.name}</span>
@@ -376,6 +416,19 @@
                   {/if}
                 {/each}
               </div>
+            {/if}
+            {#if dbg.globals && dbg.globals.length > 0}
+              <div class="scope-title dim">globals</div>
+              <table class="locals" data-role="globals">
+                <tbody>
+                  {#each dbg.globals as g (g.name)}
+                    <tr>
+                      <td class="name mono">{g.name}</td>
+                      <td class="value mono">{fmtLocal(g)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
             {/if}
           {/if}
         </div>
@@ -575,5 +628,12 @@
 
   .locals .value {
     color: var(--accent);
+  }
+
+  .scope-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 4px;
   }
 </style>

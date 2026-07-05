@@ -65,6 +65,7 @@ try {
   await page.waitForSelector(".banner.error", { timeout: 3000 }).catch(() => null);
   const banner = await page.$(".banner.error");
   check("compile error banner appears", banner !== null);
+  check("error squiggle rendered", (await page.$(".cm-lintRange-error")) !== null);
   // fix it again by removing what we typed
   for (let i = 0; i < 5; i++) await page.keyboard.press("Backspace");
   await sleep(400);
@@ -91,6 +92,34 @@ try {
   check("current line highlighted", (await page.$(".cm-debug-line")) !== null);
   await page.screenshot({ path: `${shotDir}/e2e-debugger.png` });
 
+  // hover an identifier → value tooltip
+  const wordRect = await page.evaluate(() => {
+    for (const lineEl of document.querySelectorAll(".cm-line")) {
+      const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const i = node.textContent.indexOf("index");
+        if (i >= 0) {
+          const r = document.createRange();
+          r.setStart(node, i);
+          r.setEnd(node, i + 5);
+          const b = r.getBoundingClientRect();
+          return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+        }
+      }
+    }
+    return null;
+  });
+  check("found hover target", wordRect !== null);
+  if (wordRect) {
+    await page.mouse.move(wordRect.x, wordRect.y);
+    await sleep(500);
+    const tip = await page.$eval(".cm-hover-value", (el) => el.textContent ?? "").catch(() => "");
+    check("hover shows variable value", tip.includes("index = 0"), tip);
+    await page.mouse.move(5, 5); // dismiss
+    await sleep(200);
+  }
+
   // step lands on the next pixel's first line
   await page.click(".db-over");
   await sleep(150);
@@ -102,8 +131,28 @@ try {
   const status3 = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
   check("continue re-arms breakpoint", status3.includes("pixel 2"), status3.trim());
 
-  // clean up: remove breakpoint, disable debug, rendering resumes
-  await page.mouse.click(gutterRect.x + gutterRect.w / 2, lineRect.y + lineRect.h / 2);
+  // KITT: implicit globals (v, leds, pos) appear in the globals pane —
+  // the exact scenario from review feedback
+  await page.select("header select", "KITT");
+  await sleep(700);
+  const kittLine = await page.$$eval(".cm-line", (els) => {
+    const el = els[11]; // line 12: rgb(...) — right after v = leds[index]
+    const r = el.getBoundingClientRect();
+    return { y: r.y, h: r.height };
+  });
+  await page.mouse.click(gutterRect.x + gutterRect.w / 2, kittLine.y + kittLine.h / 2);
+  await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 3000 }).catch(() => null);
+  const kittGlobals = await page
+    .$eval('[data-role="globals"]', (el) => el.textContent ?? "")
+    .catch(() => "");
+  check(
+    "globals pane shows implicit globals (v, leds, pos)",
+    kittGlobals.includes("v") && kittGlobals.includes("leds") && kittGlobals.includes("pos"),
+    kittGlobals.slice(0, 60),
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-debugger-globals.png` });
+
+  // clean up: disable debug (example switch already cleared old breakpoints)
   await page.click(".debug-toggle");
   await sleep(400);
   check("debug off resumes rendering", (await page.$(".debugger")) === null);

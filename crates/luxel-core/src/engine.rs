@@ -365,6 +365,19 @@ impl Engine {
             .map(|g| g.name.as_str())
     }
 
+    /// All user-defined globals with current values (debugger scope pane —
+    /// implicit assignments create globals, so this is where most pattern
+    /// state lives). Predefined constants are filtered out.
+    pub fn debug_globals(&self) -> Vec<(String, Value)> {
+        self.prog
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| !g.predefined)
+            .map(|(i, g)| (g.name.clone(), self.vm.globals[i]))
+            .collect()
+    }
+
     /// Length of a VM array by id (debugger display).
     pub fn array_len(&self, id: u32) -> usize {
         self.vm.array(id).map(|a| a.len()).unwrap_or(0)

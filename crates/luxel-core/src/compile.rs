@@ -44,11 +44,13 @@ fn predefined() -> Vec<GlobalDef> {
         name: name.to_string(),
         export: false,
         init: Fx::from_f64_lit(v),
+        predefined: true,
     };
     let gi = |name: &str, v: i32| GlobalDef {
         name: name.to_string(),
         export: false,
         init: Fx::from_int(v),
+        predefined: true,
     };
     alloc::vec![
         g("pixelCount", 0.0),
@@ -133,6 +135,7 @@ impl<'s> Compiler<'s> {
             name: name.to_string(),
             export,
             init: Fx::ZERO,
+            predefined: false,
         });
         Ok((self.globals.len() - 1) as u16)
     }

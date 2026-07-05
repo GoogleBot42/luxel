@@ -138,6 +138,9 @@ pub struct GlobalDef {
     pub name: String,
     pub export: bool,
     pub init: Fx,
+    /// Engine-provided constant (PI, pixelCount, GPIO names, …) — hidden
+    /// from the debugger's globals pane.
+    pub predefined: bool,
 }
 
 #[derive(Debug, Clone)]

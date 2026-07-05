@@ -5,6 +5,9 @@
 export interface Diagnostic {
   line: number;
   col: number;
+  /** Byte offsets into the UTF-8 source (squiggle range). */
+  start?: number;
+  end?: number;
   message: string;
 }
 
@@ -50,6 +53,7 @@ export interface DebugSnapshot {
   col?: number;
   pixel?: number | null;
   stack?: DebugStackFrame[];
+  globals?: DebugLocal[];
 }
 
 export type StepKind = "continue" | "over" | "into" | "out";
@@ -86,6 +90,7 @@ interface Exports {
   lx_debug_paused(h: number): number;
   lx_debug_step(h: number, kind: number): number;
   lx_debug_state(h: number): number;
+  lx_globals(h: number): number;
 }
 
 const RAW = 65536;
@@ -214,6 +219,12 @@ export class Engine {
   debugState(): DebugSnapshot {
     this.e.lx_debug_state(this.h);
     return JSON.parse(this.lx.response()) as DebugSnapshot;
+  }
+
+  /** All user-defined globals with current values. */
+  globals(): DebugLocal[] {
+    this.e.lx_globals(this.h);
+    return JSON.parse(this.lx.response()) as DebugLocal[];
   }
 
   setWallClock(unixSeconds: number): void {

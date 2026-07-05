@@ -1,12 +1,21 @@
 <script lang="ts">
   import { javascript } from "@codemirror/lang-javascript";
+  import { setDiagnostics } from "@codemirror/lint";
   import { RangeSet, StateEffect, StateField } from "@codemirror/state";
   import { oneDark } from "@codemirror/theme-one-dark";
-  import { Decoration, GutterMarker, gutter, type DecorationSet } from "@codemirror/view";
+  import {
+    Decoration,
+    GutterMarker,
+    gutter,
+    hoverTooltip,
+    type DecorationSet,
+  } from "@codemirror/view";
   import { EditorView, basicSetup } from "codemirror";
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
 
   export let value: string;
+  /** Resolve an identifier to a display value for hover inspection. */
+  export let hoverValue: ((name: string) => string | null) | undefined = undefined;
 
   const dispatch = createEventDispatcher<{ change: string; breakpoints: number[] }>();
   let host: HTMLDivElement;
@@ -20,6 +29,7 @@
   // ---- breakpoint gutter ----
 
   const toggleBp = StateEffect.define<number>(); // line-start pos
+  const clearBps = StateEffect.define<null>();
   class BpMarker extends GutterMarker {
     override toDOM(): Node {
       const el = document.createElement("span");
@@ -34,6 +44,9 @@
     update(set, tr) {
       set = set.map(tr.changes);
       for (const e of tr.effects) {
+        if (e.is(clearBps)) {
+          set = RangeSet.empty;
+        }
         if (e.is(toggleBp)) {
           let existing = false;
           set.between(e.value, e.value, () => {
@@ -67,6 +80,30 @@
     return lines;
   }
 
+  // ---- hover value inspection ----
+
+  const hoverExt = hoverTooltip(
+    (v, pos) => {
+      const word = v.state.wordAt(pos);
+      if (!word) return null;
+      const name = v.state.doc.sliceString(word.from, word.to);
+      if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
+      const val = hoverValue?.(name);
+      if (val === null || val === undefined) return null;
+      return {
+        pos: word.from,
+        end: word.to,
+        create: () => {
+          const dom = document.createElement("div");
+          dom.className = "cm-hover-value";
+          dom.textContent = `${name} = ${val}`;
+          return { dom };
+        },
+      };
+    },
+    { hoverTime: 200 },
+  );
+
   // ---- current-debug-line highlight ----
 
   const setDebugLine = StateEffect.define<number | null>();
@@ -98,6 +135,7 @@
         bpGutter,
         bpField,
         debugLineField,
+        hoverExt,
         basicSetup,
         javascript(),
         oneDark,
@@ -107,6 +145,16 @@
           ".cm-bp-gutter": { width: "14px", cursor: "pointer" },
           ".cm-bp-dot": { color: "#e05555" },
           ".cm-debug-line": { backgroundColor: "rgba(232, 163, 61, 0.18)" },
+          ".cm-hover-value": {
+            padding: "3px 8px",
+            fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+            fontSize: "12px",
+          },
+          ".cm-lintRange-error": {
+            backgroundImage: "none",
+            textDecoration: "underline wavy #e05555 1px",
+            textUnderlineOffset: "3px",
+          },
         }),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
@@ -114,7 +162,9 @@
           }
           if (
             u.docChanged ||
-            u.transactions.some((tr) => tr.effects.some((e) => e.is(toggleBp)))
+            u.transactions.some((tr) =>
+              tr.effects.some((e) => e.is(toggleBp) || e.is(clearBps)),
+            )
           ) {
             dispatch("breakpoints", breakpointLines(u.view));
           }
@@ -129,7 +179,12 @@
   $: if (view && value !== lastReceived) {
     lastReceived = value;
     if (value !== view.state.doc.toString()) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+      // a wholesale external swap (example load) also drops breakpoints —
+      // they belong to the old program
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: value },
+        effects: clearBps.of(null),
+      });
     }
   }
 
@@ -139,6 +194,24 @@
     const pos = Math.min(l.from + Math.max(col - 1, 0), l.to);
     view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
     view.focus();
+  }
+
+  /** Show a compile-error squiggle over [from, to) (char offsets); null clears. */
+  export function setErrorRange(range: { from: number; to: number; message: string } | null): void {
+    if (!view) return;
+    const len = view.state.doc.length;
+    const diags =
+      range === null
+        ? []
+        : [
+            {
+              from: Math.min(range.from, len),
+              to: Math.min(Math.max(range.to, range.from + 1), len),
+              severity: "error" as const,
+              message: range.message,
+            },
+          ];
+    view.dispatch(setDiagnostics(view.state, diags));
   }
 
   /** Highlight (and reveal) the paused line; null clears. */

@@ -172,3 +172,36 @@ fn stepping_is_deterministic_with_rendering() {
     while b.debug_step(StepKind::Over) {}
     assert_eq!(b.pixels(), &free[..]);
 }
+
+#[test]
+fn globals_pane_and_shadowing() {
+    // `v` without var is an implicit global (the KITT case); local `x`
+    // shadows the global `x`
+    let src = "\
+x = 100
+export function render(index) {
+  var x = 7
+  v = index + x
+  hsv(0, 0, 0)
+}
+";
+    let mut e = Engine::new(src, 4, 1).unwrap();
+    e.debug_set_enabled(true);
+    assert_eq!(e.debug_set_breakpoints(&[5]), vec![5]); // hsv line, after v =
+    e.frame(Fx::ZERO);
+    assert!(e.debug_paused());
+    // frame locals show the shadowing local x = 7
+    let stack = e.debug_stack();
+    let lx = stack[0].locals.iter().find(|(n, _)| n == "x").unwrap();
+    assert_eq!(lx.1, Value::Num(Fx::from_int(7)));
+    // globals pane: v = index(0) + local x(7); global x untouched at 100 —
+    // shadowing wrote the local, not the global
+    let globals = e.debug_globals();
+    let find = |n: &str| globals.iter().find(|(g, _)| g == n).map(|(_, v)| *v);
+    assert_eq!(find("v"), Some(Value::Num(Fx::from_int(7))));
+    assert_eq!(find("x"), Some(Value::Num(Fx::from_int(100))));
+    // predefined constants stay out of the pane
+    assert_eq!(find("PI"), None);
+    assert_eq!(find("pixelCount"), None);
+    assert_eq!(find("INPUT"), None);
+}
