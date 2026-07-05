@@ -1,4 +1,4 @@
-# Pixler — Plan (v2)
+# Luxel — Plan (v2)
 
 A FOSS live-codable LED controller: write LED patterns in a scripting language in a web
 IDE, see them running instantly on real hardware. Inspired by Pixel Blaze (closed
@@ -12,7 +12,7 @@ PB-protocol drop-in compatibility) is preserved in git history (`8181d61`).
 ## 1. Vision & positioning
 
 **One sentence:** WLED-class approachability, Pixel Blaze-class expressiveness, fully
-open, designed to integrate — with home automation, with other Pixler devices, with
+open, designed to integrate — with home automation, with other Luxel devices, with
 whatever comes next.
 
 The gap is confirmed real (research doc 03): WLED deliberately refuses user scripting;
@@ -33,10 +33,10 @@ coordinate model.
   pixelblaze-client shim, no PB websocket emulation on the roadmap. We define our own
   clean API. (Nothing prevents a community-contributed compat shim later; the internal
   surfaces should not preclude it, but we spend zero design budget on it.)
-- **Peripheral compatibility is optional, generic, and late.** Pixler defines its own
+- **Peripheral compatibility is optional, generic, and late.** Luxel defines its own
   peripheral abstraction (§2.5); PB's open sensor-board and output-expander protocols
   become just two drivers behind it — nice to have because the hardware exists and the
-  specs are MIT, but Pixler is not locked to PB hardware in either direction. Peripherals
+  specs are MIT, but Luxel is not locked to PB hardware in either direction. Peripherals
   land in M5, after the core is solid. Until then (and whenever a peripheral is absent),
   patterns referencing peripheral bindings get **defined stub values (zeros) plus an
   editor/API warning** ("this pattern uses `frequencyData`; no audio source installed").
@@ -52,11 +52,11 @@ coordinate model.
   pattern vars as entities). This one protocol also covers Node-RED, openHAB, etc.
   ZeroMQ and similar are better served by a small host-side MQTT bridge than by linking
   them into firmware; keep the firmware surface MQTT + HTTP/WS + UDP.
-- **Pixler-to-Pixler:** discovery, shared timebase, and leader/follower sync (pattern
+- **Luxel-to-Luxel:** discovery, shared timebase, and leader/follower sync (pattern
   launch, brightness, live-edit broadcast, `nodeId()`-style per-device divergence) over
   our own simple UDP/JSON protocols.
 - **Show-tool citizenship:** DDP / E1.31 (sACN) *input* mode so xLights/FPP/LedFx can
-  drive a Pixler as a dumb fixture.
+  drive a Luxel as a dumb fixture.
 - **Everything scriptable:** the full device API is plain JSON over WS/HTTP — no cloud,
   no app, works in AP mode.
 
@@ -88,7 +88,7 @@ The defining move stands: **one portable core, three hosts** — now in Rust.
         └──────────────────┘
 ```
 
-### 2.1 Core crate (`pixler-core`)
+### 2.1 Core crate (`luxel-core`)
 
 - **Language:** Rust, `#![no_std]` + `alloc`, zero-`unsafe` goal outside the dispatch
   loop. Builds for Xtensa/RISC-V (device), `wasm32-unknown-unknown` (IDE), and native
@@ -130,7 +130,7 @@ The defining move stands: **one portable core, three hosts** — now in Rust.
 
 - **Basis: `esp-hal`** (Espressif's official no_std Rust HAL, 1.x stable) + **embassy**
   async executor + `esp-wifi`/`smoltcp` networking; HTTP/WS via `picoserve`
-  (embassy-native); mDNS (`pixler.local`); storage on `littlefs2` or
+  (embassy-native); mDNS (`luxel.local`); storage on `littlefs2` or
   `sequential-storage` over `esp-storage`; MQTT via a no_std client (`rust-mqtt`/
   `minimq` — evaluate in M4).
 - **Targets in order:** ESP32-S3, ESP32 classic, ESP32-C3 (fixed-point VM keeps C3
@@ -205,7 +205,7 @@ The defining move stands: **one portable core, three hosts** — now in Rust.
    var watch, mapper, controls, TS/Svelte.
 5. First-run WiFi onboarding, no app/cloud; fully functional in AP mode.
 6. `.epe` import/export; device backup/restore; OTA.
-7. MQTT + HA discovery; DDP/E1.31 input; multi-Pixler sync.
+7. MQTT + HA discovery; DDP/E1.31 input; multi-Luxel sync.
 
 ### Non-functional
 - **Performance:** ≥30 FPS at 1,000 WS2812 px on ESP32-S3 with a blinkfade-class
@@ -226,7 +226,7 @@ The defining move stands: **one portable core, three hosts** — now in Rust.
   the language/bytecode ecosystem should be adoptable by anyone, including other
   firmwares and commercial tools.
 - **Firmware crate: GPL-3.0-or-later** — the project exists because a closed firmware
-  bothered us; vendors shipping Pixler-based products must share improvements. GPL
+  bothered us; vendors shipping Luxel-based products must share improvements. GPL
   firmware linking Apache/MIT Rust crates is clean; esp-hal/embassy are MIT/Apache.
 - Trademark hygiene: "Pixel Blaze" is ElectroMage's mark — "compatible with the Pixel
   Blaze pattern language" in prose only, never in project or crate names.
@@ -234,7 +234,7 @@ The defining move stands: **one portable core, three hosts** — now in Rust.
 ## 5. Milestones
 
 **M0 — Language core (pure software).**
-Workspace + `pixler-core`: logos lexer, Pratt parser, bytecode emitter, VM, full builtin
+Workspace + `luxel-core`: logos lexer, Pratt parser, bytecode emitter, VM, full builtin
 set (peripheral builtins stubbed); native CLI (`run pattern.js --pixels 150 --frames 300
 → PPM/JSON`); conformance + fuzz harness; stack-vs-register bake-off; **differential
 harness against the real PB in the house** (websocket-driven, black-box).
@@ -258,11 +258,11 @@ restore; OTA.
 *Exit: a PB user migrates a real 2D-mapped project without touching pattern code.*
 
 **M4 — Integrations.**
-MQTT + HA discovery; DDP/E1.31 input; Pixler-to-Pixler discovery, timebase sync,
+MQTT + HA discovery; DDP/E1.31 input; Luxel-to-Luxel discovery, timebase sync,
 leader/follower groups (pattern launch, brightness, live-edit broadcast, `nodeId()`);
 SNTP + timezone clock functions.
 *Exit: device auto-appears in Home Assistant; two devices render one synced pattern;
-xLights drives a Pixler over DDP.*
+xLights drives a Luxel over DDP.*
 
 **M5 — Peripherals.**
 Peripheral framework (§2.5); PB sensor board driver (SB1.0) as first audio/IMU provider;
@@ -291,13 +291,11 @@ site; RP2350-based expander firmware.
 
 ## 7. Open questions
 
-1. **Name.** Requirements: not derivative of "Pixel Blaze", searchable, available.
-   Checked candidates: **Tindra** (Swedish "to twinkle" — clean in the software/LED
-   namespace; recommended), **Luxel** ("a pixel of light" — evocative, minor collisions:
-   Valve lightmap term, a GitHub username), ~~Lampyre~~ (taken, OSINT tool). "Pixler"
-   remains the working title until decided.
+1. ~~Name.~~ **Decided: Luxel** ("a pixel of light" — a lightmapping term of art; only
+   minor namespace collisions). Crates: `luxel-core`, `luxel-cli`; CLI binary: `luxel`.
+   The git repo directory is still `pixler` and can be renamed whenever convenient.
 2. Stack vs register bytecode — settle by M0 benchmark.
-3. Extension surface: strict PB parity for v1 frontend, with Pixler-only builtins gated
+3. Extension surface: strict PB parity for v1 frontend, with Luxel-only builtins gated
    behind a pattern pragma? (Leaning yes — keeps `.epe` round-tripping honest.)
 4. Preview transport: raw RGB frames first (3 KB/frame @ 1K px is fine on LAN);
    delta-encode only if it shows up in profiles.

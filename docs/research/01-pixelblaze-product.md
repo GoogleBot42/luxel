@@ -1,6 +1,6 @@
 # Research: Pixel Blaze product & firmware feature inventory
 
-> Raw research (July 2026) informing the Pixler plan. Maker: Ben Hencke ("wizard"),
+> Raw research (July 2026) informing the Luxel plan. Maker: Ben Hencke ("wizard"),
 > Hencke Technologies / ElectroMage. Sites: electromage.com, forum.electromage.com,
 > patterns.electromage.com. Firmware is closed source; language, protocols, and file
 > formats are publicly documented (see sources at bottom).

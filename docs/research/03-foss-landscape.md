@@ -1,6 +1,6 @@
 # Research: FOSS LED controller landscape (July 2026)
 
-> Raw research positioning Pixler. Question: does anything FOSS combine (a) on-device
+> Raw research positioning Luxel. Question: does anything FOSS combine (a) on-device
 > pattern VM, (b) JS-like language, (c) live web IDE, (d) pixel-mapping coordinate model?
 > Answer: **no** — the niche is open.
 

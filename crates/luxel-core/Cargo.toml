@@ -1,0 +1,9 @@
+[package]
+name = "luxel-core"
+version = "0.1.0"
+description = "Portable compiler + 16.16 fixed-point VM for the Luxel pattern language (Pixel Blaze pattern-language compatible)"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+logos = { version = "0.15", default-features = false, features = ["export_derive"] }

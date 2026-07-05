@@ -171,7 +171,7 @@ Frame-buffered shape (blink fade): allocate `array(pixelCount)` at top level, de
 8. Render-fn selection priority + `render(index, x)` second parameter on current firmware.
 9. Arrays never freed; literals self-allocate; `.length` is a property.
 10. The compiler is browser JS shipped in the device's own web bundle (extractable per
-    firmware version) — but Pixler should have its own clean-room compiler.
+    firmware version) — but Luxel should have its own clean-room compiler.
 
 ## 5. Existing FOSS partial implementations (reference/inspiration only — check licenses)
 

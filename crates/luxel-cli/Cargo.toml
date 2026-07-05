@@ -1,0 +1,13 @@
+[package]
+name = "luxel-cli"
+version = "0.1.0"
+description = "Native CLI for the Luxel pattern language: parse (and soon run) patterns on the desktop"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "luxel"
+path = "src/main.rs"
+
+[dependencies]
+luxel-core = { path = "../luxel-core" }
