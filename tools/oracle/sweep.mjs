@@ -24,7 +24,7 @@ function gridRaw(from, to, n) {
   return Array.from({ length: n }, (_, i) => Math.round(a + ((b - a) * i) / (n - 1)));
 }
 
-const SWEEPS = {
+export const SWEEPS = {
   // fn of one variable: expr uses `x`
   sin: { expr: "sin(x)", inputs: [...gridRaw(0, 6.5, 400), ...gridRaw(1.5697, 1.5719, 120), ...gridRaw(3.1405, 3.1427, 120), ...gridRaw(-7, 0, 150), ...gridRaw(90, 110, 100)] },
   atan: { expr: "atan(x)", inputs: [...gridRaw(-1, 1, 300), ...gridRaw(1, 30, 150), ...gridRaw(-30, -1, 80), ...gridRaw(30, 3000, 80)] },
@@ -61,7 +61,7 @@ function sweepSource(exprTemplate, inputRaws) {
   return null; // built inline below
 }
 
-function buildBatchSource(expr, raws) {
+export function buildBatchSource(expr, raws) {
   let src = "eps = 1 >> 16\n";
   src += `export var ys = array(${raws.length})\n`;
   src += `export var n = ${raws.length}\n`;
@@ -172,10 +172,14 @@ async function main() {
   }
 }
 
-main().then(
-  () => process.exit(0),
-  (e) => {
-    console.error("fatal:", e.message ?? e);
-    process.exit(1);
-  },
-);
+// Only probe the device when run directly — compare-sweeps.mjs imports the
+// sweep definitions without touching the PB.
+if (import.meta.url === (await import("node:url")).pathToFileURL(process.argv[1]).href) {
+  main().then(
+    () => process.exit(0),
+    (e) => {
+      console.error("fatal:", e.message ?? e);
+      process.exit(1);
+    },
+  );
+}

@@ -89,9 +89,21 @@ errors in raw 16.16 units unless noted:
   large raw diffs at large outputs are noise in the last few significand
   bits). Not exactly fittable without reproducing their table.
 - **atan/asin/acos**: distinct low-order polynomial approximations with
-  smooth error curves up to 666 raw (atan, 0.01) / ~0.0025 (asin). Ours use
-  different (more accurate) polynomials. At |x| = 1 exactly, PB asin/acos
-  return the true ±π/2 / 0 endpoints; ours agree.
+  smooth error curves up to 666 raw (atan, 0.01) / ~0.0025 (asin). Ours are
+  within ±1 raw of true atan across the sweep. **PB endpoint bug**: at
+  exactly |x| = 1, PB asin returns 0 (not ±π/2) and acos returns π/2 for
+  *both* ±1 (not π / 0) — the classic `atan(x/sqrt(1−x²))` construction
+  hitting PB's divide-by-zero→0 rule. Ours returns the true endpoints;
+  deliberate divergence.
+- **luxel vs PB, same inputs** (`tools/oracle/compare-sweeps.mjs` reruns
+  every sweep pattern through luxel-cli and diffs raws): sqrt 86% exact /
+  100% ±3; log2 100% ±4; log 100% ±7; sin/wave exact-to-±2 outside PB's
+  table seam; atan/asin/acos differ by exactly PB's polynomial error curve
+  (ours ±1 raw of true); exp/pow relative ~7e-5 vs PB's ~4e-5 (both
+  invisible); tan diverges only at the pole where both approximations blow
+  up. Every remaining difference is attributable to PB-side approximation
+  error or the endpoint/seam bugs above — our implementations are equal or
+  closer to true math on every function measured.
 - **prng (timeboxed, unresolved)**: `prngSeed(s)` returns the *previous* raw
   32-bit state and seeding is a raw passthrough, so the state chain is
   observable. Sequences are deterministic per seed and stable across reloads.
