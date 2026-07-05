@@ -1,0 +1,23 @@
+# Luxel firmware — ESP32-C3 first (RISC-V, mainline Rust). Standalone
+# workspace: it builds for a different target than the host crates.
+[package]
+name = "luxel-fw"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+esp-hal = { version = "1.1.1", features = ["esp32c3", "unstable"] }
+esp-alloc = "0.10"
+esp-println = { version = "0.17", features = ["esp32c3"] }
+esp-backtrace = { version = "0.19", features = ["esp32c3", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { version = "0.5", features = ["esp32c3"] }
+critical-section = "1"
+luxel-core = { path = "../crates/luxel-core" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[workspace]

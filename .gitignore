@@ -6,3 +6,4 @@ node_modules/
 /corpus/
 web/dist/
 web/public/luxel.wasm
+firmware/target/

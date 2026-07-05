@@ -29,8 +29,11 @@
             # ESP32-C3 (riscv32imc-unknown-none-elf) can be added here as a plain target.
             (pkgs.rust-bin.stable.latest.default.override {
               extensions = [ "rust-src" "rust-analyzer" "clippy" ];
-              targets = [ "wasm32-unknown-unknown" ];
+              # wasm32: browser playground; riscv32imc: ESP32-C3 firmware
+              targets = [ "wasm32-unknown-unknown" "riscv32imc-unknown-none-elf" ];
             })
+            # ESP32 flashing/monitoring over USB
+            pkgs.espflash
             # Web IDE toolchain (M1)
             pkgs.nodejs_22
             # browser for driving/verifying the web IDE (puppeteer-core over CDP)
