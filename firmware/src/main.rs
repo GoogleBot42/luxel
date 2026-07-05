@@ -121,7 +121,13 @@ async fn main(spawner: Spawner) -> ! {
 
     spawner.spawn(render_task(spi).unwrap());
 
-    let (Some(ssid), Some(password)) = (SSID, PASSWORD) else {
+    // Treat empty strings like unset — `LUXEL_SSID='' …` shouldn't try to
+    // join a network named "".
+    let creds = match (SSID, PASSWORD) {
+        (Some(s), Some(p)) if !s.is_empty() => Some((s, p)),
+        _ => None,
+    };
+    let Some((ssid, password)) = creds else {
         println!("no wifi credentials (LUXEL_SSID/LUXEL_PASS unset); offline mode");
         loop {
             Timer::after(Duration::from_secs(3600)).await;

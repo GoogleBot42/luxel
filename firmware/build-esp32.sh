@@ -17,6 +17,17 @@ if [ "${1:-}" = "flash" ]; then CMD=run; fi
 # build-std needs). NixOS note: espup's prebuilt binaries must be patchelf'd
 # once after `espup install` — see docs/firmware.md.
 TC="$HOME/.rustup/toolchains/esp"
+if [ ! -x "$TC/bin/cargo" ]; then
+  echo "Xtensa toolchain not found at $TC." >&2
+  echo "One-time setup (from the devshell):" >&2
+  echo "  espup install --targets esp32" >&2
+  echo "  ./patch-esp-toolchain.sh        # NixOS only" >&2
+  exit 1
+fi
+if ! "$TC/bin/rustc" -vV >/dev/null 2>&1; then
+  echo "Xtensa rustc exists but cannot execute — on NixOS run ./patch-esp-toolchain.sh" >&2
+  exit 1
+fi
 export RUSTC="$TC/bin/rustc"
 export RUSTDOC="$TC/bin/rustdoc"
 
