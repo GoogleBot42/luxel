@@ -117,19 +117,25 @@ fn hypot_raw(vs: &[Fx]) -> Fx {
 }
 
 /// 2^x. Integer part is an exact shift (wrapping past the top like all
-/// arithmetic); fraction via series on f·ln2.
+/// arithmetic); fraction via series on f·ln2, evaluated in 32-frac so the
+/// 16-frac mantissa comes out correctly rounded (the sweep comparison put
+/// the old 16-frac evaluation at ~7e-5 relative error, dominated by
+/// truncation in the series terms).
 pub fn exp2(x: Fx) -> Fx {
     let n = x.to_int_floor();
-    let f = (x - Fx::from_int(n)).raw() as i64; // [0, 1)
-                                                // 2^f = e^(f ln2), y = f·ln2 ≤ 0.6932
-    let y = fmul(f, LN2_RAW);
-    let y2 = fmul(y, y);
-    let y3 = fmul(y2, y);
-    let y4 = fmul(y3, y);
-    let y5 = fmul(y4, y);
-    let y6 = fmul(y5, y);
-    let m = 65_536 + y + y2 / 2 + y3 / 6 + y4 / 24 + y5 / 120 + y6 / 720;
-    let m = m as i32; // [1, 2) in 16-frac
+    let f = (x - Fx::from_int(n)).raw() as i64; // [0, 1) as 16-frac
+    const LN2_32: i64 = 2_977_044_472; // round(ln2 · 2^32)
+    let y = (f * LN2_32) >> 16; // 32-frac, ≤ ln2
+    let mul32 = |a: i64, b: i64| ((a as i128 * b as i128) >> 32) as i64;
+    let y2 = mul32(y, y);
+    let y3 = mul32(y2, y);
+    let y4 = mul32(y3, y);
+    let y5 = mul32(y4, y);
+    let y6 = mul32(y5, y);
+    let y7 = mul32(y6, y);
+    let m32 =
+        (1i64 << 32) + y + y2 / 2 + y3 / 6 + y4 / 24 + y5 / 120 + y6 / 720 + y7 / 5040;
+    let m = ((m32 + (1 << 15)) >> 16) as i32; // round to 16-frac, [1, 2]
     if n >= 0 {
         Fx::from_raw(m.wrapping_shl(n as u32 & 31))
     } else {
