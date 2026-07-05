@@ -53,8 +53,20 @@ ESP-WROOM-32 (Xtensa, 4 MB flash), AP2112K 3.3 V regulator, micro-USB is
 ### Flashing + restore procedure (serial, fully recoverable)
 
 The expansion header carries everything esptool needs. Wire a 3.3 V
-USB-UART adapter: GND→GND, TX→RX0, RX→TX0. Enter the ROM bootloader by
-holding IO0 to GND while pulsing EN low (or applying power). Then:
+USB-UART adapter: GND→GND, adapter TX→RX0, adapter RX→TX0. Power the
+board from its own micro-USB (don't connect the adapter's power pin).
+
+**Entering the ROM bootloader** ("hold IO0"): jumper IO0→GND on the
+header, then reset the chip while the jumper is in place — briefly touch
+EN→GND, or unplug/replug USB power. The pin is only sampled at reset;
+once the bootloader is running the jumper can come off (it stays in the
+bootloader until the next reset). This same entry step precedes *every*
+esptool/espflash command below — the tools hard-reset the chip when they
+finish, and without DTR/RTS wired to EN/IO0 they can't re-enter the
+bootloader themselves. Leaving the IO0 jumper in for the whole session
+also works; just remove it before the final reset so the firmware boots.
+
+Then:
 
 ```sh
 # 1. one-time backup of the ENTIRE stock flash (bootloader + partitions +
