@@ -5,8 +5,16 @@
 | board feature | chip | arch | toolchain | notes |
 |---|---|---|---|---|
 | `board-c3-devkit` (default) | ESP32-C3 | RISC-V | mainline Rust (in the flake) | bare C3 devkits; SPI CLK GPIO6 / DATA GPIO7 |
-| `board-pixelblaze-v3` | ESP32 (WROOM-32) | Xtensa | espup rustc fork | Pixelblaze v3 Standard — the preferred real-hardware target |
-| `board-athom-music` | ESP32 (WROOM-32E) | Xtensa | espup rustc fork | Athom music-reactive WLED controller (OTA-only, riskier) |
+| `board-pixelblaze-v3` | ESP32 (WROOM-32) | Xtensa | Espressif rustc fork (in the flake) | Pixelblaze v3 Standard — the preferred real-hardware target |
+| `board-athom-music` | ESP32 (WROOM-32E) | Xtensa | Espressif rustc fork (in the flake) | Athom music-reactive WLED controller (OTA-only, riskier) |
+
+Both toolchains come from `nix develop` — no imperative setup. The Xtensa
+one (Espressif's rustc fork + xtensa GNU linker, needed because mainline
+Rust has no Xtensa backend) is packaged in the flake as fixed-output
+derivations of the official esp-rs/rust-build and espressif/crosstool-NG
+release artifacts, patched by autoPatchelfHook; the devshell exports
+`XTENSA_RUST_HOME` and puts `xtensa-esp32-elf-gcc` on PATH
+(x86_64-linux only for now — add per-system artifact hashes to extend).
 
 Build:
 
@@ -15,22 +23,12 @@ Build:
 cd firmware && cargo build --release            # or `cargo run --release` to flash
 
 # classic ESP32 (Xtensa)
-espup install --targets esp32                   # once
-./patch-esp-toolchain.sh                        # once, NixOS only (see below)
 BOARD=board-pixelblaze-v3 ./build-esp32.sh      # or `… ./build-esp32.sh flash`
 ```
 
 WiFi credentials bake in at build time until NVS provisioning lands (M3):
-`LUXEL_SSID=net LUXEL_PASS=secret cargo build …`. Without them the firmware
-runs offline (render-only).
-
-### NixOS note
-
-espup installs prebuilt binaries that expect `/lib64/ld-linux` and system
-libs; on NixOS they fail with "No such file or directory" despite existing.
-`patch-esp-toolchain.sh` patchelf's the interpreter and rpath on the whole
-toolchain (rustc/cargo, rust-lld, and the xtensa-esp-elf GNU linker). Rerun
-it after any `espup update`.
+`LUXEL_SSID=net LUXEL_PASS=secret cargo build …`. Without them (or with
+empty values) the firmware runs offline (render-only).
 
 ## Board: Pixelblaze v3 Standard (preferred dev target)
 
