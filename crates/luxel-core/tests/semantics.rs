@@ -218,11 +218,10 @@ fn arrays() {
         eval_prog("a = [1, 2]\nexport var out = a.reduce((acc, v) => acc + v, 10)"),
         Fx::from_int(13)
     );
-    // out-of-bounds: read 0, write ignored (TODO(oracle))
-    assert_eq!(eval_prog("a = [1]\nexport var out = a[5]"), Fx::ZERO);
+    // fractional in-bounds reads truncate (oracle: a[1.5] → a[1])
     assert_eq!(
-        eval_prog("a = [1]\na[5] = 9\nexport var out = a[0]"),
-        Fx::ONE
+        eval_prog("a = [10, 20, 30]\nexport var out = a[1.5]"),
+        Fx::from_int(20)
     );
     // nested arrays
     assert_eq!(
@@ -257,6 +256,29 @@ fn prng_is_seeded_and_deterministic() {
     let b = eval_prog("prngSeed(42)\nexport var out = prng(100)");
     assert_eq!(a, b);
     assert!(a >= Fx::ZERO && a < Fx::from_int(100));
+}
+
+#[test]
+fn array_bounds_are_runtime_errors() {
+    // oracle-confirmed: any out-of-range access aborts execution — OOB reads
+    // and writes, negative indices, and fractional WRITE indices too
+    for src in [
+        "a = [1]\nout = a[5]",
+        "a = [1]\na[5] = 9",
+        "a = [1, 2]\nout = a[-1]",
+        "a = [1, 2]\na[0.5] = 9",
+        "a = [1, 2]\ni = -0.5\nout = a[i]",
+    ] {
+        let e = Engine::new(src, 10, 1).unwrap();
+        let err = e
+            .last_error
+            .unwrap_or_else(|| panic!("expected error for {src:?}"));
+        assert!(
+            err.message.contains("out of bounds"),
+            "{src:?}: {}",
+            err.message
+        );
+    }
 }
 
 #[test]

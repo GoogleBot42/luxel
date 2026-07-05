@@ -45,7 +45,8 @@ pub fn sin_turns(t: Fx) -> Fx {
     let z5 = fmul(z3, z2);
     let z7 = fmul(z5, z2);
     let z9 = fmul(z7, z2);
-    let s = z - z3 / 6 + z5 / 120 - z7 / 5040 + z9 / 362_880;
+    // truncating fmuls can overshoot ±1.0 by an ulp or two near the peak
+    let s = (z - z3 / 6 + z5 / 120 - z7 / 5040 + z9 / 362_880).min(65_536);
     Fx::from_raw(if neg { -s } else { s } as i32)
 }
 
@@ -68,12 +69,11 @@ pub fn tan(x: Fx) -> Fx {
     sin(x) / cos(x)
 }
 
-/// Floor square root; sqrt of a negative is 0. TODO(oracle).
+/// Floor square root, sign-preserving: `sqrt(-4) == -2`. Oracle-confirmed
+/// on fw 3.67 (this is PB's documented "square root returns negative" quirk).
 pub fn sqrt(x: Fx) -> Fx {
-    if x.raw() <= 0 {
-        return Fx::ZERO;
-    }
-    Fx::from_raw(isqrt64((x.raw() as u64) << 16) as i32)
+    let mag = isqrt64((x.raw().unsigned_abs() as u64) << 16) as i32;
+    Fx::from_raw(if x.raw() < 0 { -mag } else { mag })
 }
 
 fn isqrt64(n: u64) -> u32 {
@@ -96,8 +96,9 @@ fn isqrt64(n: u64) -> u32 {
     c as u32
 }
 
-/// hypot computed with i64 intermediates so x²+y² does not wrap even when a
-/// square alone would. TODO(oracle): PB may wrap here; verify.
+/// hypot: squares summed at full precision, then the SUM wraps into the
+/// 16.16 domain before the (sign-preserving) sqrt. Oracle-confirmed:
+/// `hypot(200, 200) == 120.266…` on real hardware (80000 wraps to 14464).
 pub fn hypot(x: Fx, y: Fx) -> Fx {
     hypot_raw(&[x, y])
 }
@@ -107,12 +108,12 @@ pub fn hypot3(x: Fx, y: Fx, z: Fx) -> Fx {
 }
 
 fn hypot_raw(vs: &[Fx]) -> Fx {
-    let mut sum: u64 = 0;
+    let mut sum: i64 = 0;
     for v in vs {
-        let r = v.raw().unsigned_abs() as u64;
-        sum = sum.saturating_add((r * r) >> 16);
+        let r = v.raw() as i64;
+        sum = sum.wrapping_add((r * r) >> 16);
     }
-    Fx::from_raw(isqrt64(sum << 16) as i32)
+    sqrt(Fx::from_raw(sum as i32))
 }
 
 /// 2^x. Integer part is an exact shift (wrapping past the top like all
@@ -177,14 +178,23 @@ pub fn exp(x: Fx) -> Fx {
     exp2(Fx::from_raw(fmul(x.raw() as i64, LOG2E_RAW) as i32))
 }
 
-/// pow(base, exp) = 2^(exp·log2 base). base ≤ 0 yields 0 (except exp == 0
-/// which is 1). TODO(oracle): negative bases with integer exponents.
+/// pow(base, exp) = 2^(exp·log2 base). Oracle-confirmed: pow(x, 0) == 1
+/// (including 0^0), and negative bases work with integer exponents with the
+/// usual sign rule (pow(-2, 3) == -8). Negative base with a fractional
+/// exponent yields 0. TODO(oracle): confirm the fractional-exponent case.
 pub fn pow(base: Fx, e: Fx) -> Fx {
     if e == Fx::ZERO {
         return Fx::ONE;
     }
-    if base.raw() <= 0 {
+    if base.raw() == 0 {
         return Fx::ZERO;
+    }
+    if base.raw() < 0 {
+        if e.frac() != Fx::ZERO {
+            return Fx::ZERO;
+        }
+        let mag = exp2(e * log2(-base));
+        return if e.to_int_trunc() & 1 == 1 { -mag } else { mag };
     }
     exp2(e * log2(base))
 }
@@ -301,15 +311,18 @@ mod tests {
     fn sqrt_and_hypot() {
         assert_eq!(sqrt(Fx::from_int(4)), Fx::from_int(2));
         assert_close(sqrt(Fx::from_int(2)), core::f64::consts::SQRT_2, 1e-4);
-        assert_eq!(sqrt(Fx::from_int(-4)), Fx::ZERO);
+        assert_eq!(sqrt(Fx::from_int(-4)), Fx::from_int(-2)); // sign-preserving (oracle)
         assert_close(hypot(Fx::from_int(3), Fx::from_int(4)), 5.0, 1e-3);
         assert_close(
             hypot3(Fx::from_int(1), Fx::from_int(2), Fx::from_int(2)),
             3.0,
             1e-3,
         );
-        // i64 intermediates: components whose squares would wrap still work
-        assert_close(hypot(Fx::from_int(200), Fx::from_int(0)), 200.0, 1e-2);
+        // the sum of squares wraps into the 16.16 domain (oracle: hypotbig
+        // reads ≈120.266 on hardware, not 282.84). Exact raw differs by
+        // +3 ulps on PB — its sqrt has a small positive bias; reversing that
+        // algorithm is pending the sweep probes.
+        assert_eq!(hypot(Fx::from_int(200), Fx::from_int(200)).raw(), 7_881_776);
     }
 
     #[test]
@@ -324,8 +337,12 @@ mod tests {
         assert_close(exp(Fx::ONE), core::f64::consts::E, 5e-3);
         assert_close(pow(Fx::from_int(2), Fx::from_int(10)), 1024.0, 0.5);
         assert_close(pow(Fx::from_int(9), Fx::from_f64(0.5)), 3.0, 5e-3);
-        assert_eq!(pow(Fx::from_int(-2), Fx::from_int(2)), Fx::ZERO); // TODO(oracle)
+        // negative bases: sign rule for integer exponents (oracle)
+        assert_close(pow(Fx::from_int(-2), Fx::from_int(2)), 4.0, 1e-2);
+        assert_close(pow(Fx::from_int(-2), Fx::from_int(3)), -8.0, 3e-2);
+        assert_eq!(pow(Fx::from_int(-2), Fx::from_f64(2.5)), Fx::ZERO);
         assert_eq!(pow(Fx::from_int(5), Fx::ZERO), Fx::ONE);
+        assert_eq!(pow(Fx::ZERO, Fx::ZERO), Fx::ONE); // oracle: pow_0_0
     }
 
     #[test]

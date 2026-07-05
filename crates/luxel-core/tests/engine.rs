@@ -41,15 +41,15 @@ fn time_advances_with_delta() {
                export function beforeRender(delta) { out = time(.1) }\n\
                export function render(i) { rgb(0, 0, 0) }";
     let mut e = Engine::new(src, 1, 1).unwrap();
-    // interval .1 → period = raw(.1) = 6554 ms
-    e.frame(Fx::from_int(3277)); // half the period
+    // interval .1 → 16.15 literal raw 6552 → period 6552 ms
+    e.frame(Fx::from_int(3276)); // half the period
     let Some(Value::Num(t)) = e.var("out") else {
         panic!()
     };
-    assert_eq!(t.raw(), ((3277u64 << 16) / 6554) as i32); // exact, deterministic
+    assert_eq!(t.raw(), ((3276u64 << 16) / 6552) as i32); // exact, deterministic
     assert!((t.to_f64() - 0.5).abs() < 0.001);
     // wraps after a full period
-    e.frame(Fx::from_int(3277));
+    e.frame(Fx::from_int(3276));
     let Some(Value::Num(t)) = e.var("out") else {
         panic!()
     };

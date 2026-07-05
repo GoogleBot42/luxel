@@ -12,9 +12,11 @@
 //! - `floor(-5.1) == -6`, `ceil(-5.9) == -5`, but `frac(-5.5) == -0.5` and
 //!   `trunc(-5.9) == -5` (toward zero).
 //!
-//! Deliberate deviation from Pixel Blaze: PB bytecode literals are 31-bit
-//! (16.15) because their VM steals the LSB as an instruction flag. Luxel
-//! literals carry full 32-bit precision.
+//! Literals are 31-bit (16.15): the raw value is truncated toward zero and
+//! its least-significant fraction bit cleared, because the PB VM steals that
+//! bit as an instruction flag. Confirmed against real hardware (fw 3.67,
+//! oracle vectors lit_epsilon/multrunc/tri6 and the constants table) — we
+//! match exactly so that patterns tuned on PB render identically.
 
 use core::fmt;
 use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Rem, Shl, Shr, Sub};
@@ -98,17 +100,11 @@ impl Fx {
         Fx(self.0.wrapping_rem(ONE_RAW))
     }
 
-    /// Round half away from zero.
-    /// TODO(oracle): PB docs don't pin down `round(±x.5)`; verify on hardware.
+    /// Round half toward +∞: `floor(x + 0.5)`. Oracle-confirmed on fw 3.67:
+    /// `round(-2.5) == -2`, `round(-0.5) == 0`.
     #[inline]
     pub const fn round(self) -> Fx {
-        let half = ONE_RAW / 2;
-        if self.0 >= 0 {
-            Fx(self.0.wrapping_add(half) & !FRAC_MASK)
-        } else {
-            // mirror of the positive case so round(-0.5) == -1
-            Fx(self.0.wrapping_sub(half).wrapping_add(FRAC_MASK) & !FRAC_MASK)
-        }
+        Fx(self.0.wrapping_add(ONE_RAW / 2) & !FRAC_MASK)
     }
 
     #[inline]
@@ -163,12 +159,20 @@ impl Fx {
         self.max(lo).min(hi)
     }
 
+    /// Quantize a host float exactly the way pattern literals are quantized:
+    /// truncate toward zero, clear the LSB (16.15). Used for the predefined
+    /// constants, which PB encodes as literals (oracle: PI is 205886 raw,
+    /// not the correctly-rounded 205887).
+    pub fn from_f64_lit(v: f64) -> Fx {
+        Fx(((v * 65536.0) as i64 as i32) & !1)
+    }
+
     /// Parse a numeric literal: decimal (`3`, `3.5`, `.015`, `5.`), hex
     /// (`0xFDB9`), or binary (`0b101`). No sign — unary minus is an operator.
     /// Integer parts wrap into range like all other arithmetic (hex literals
     /// above 0x7FFF are the documented idiom for composing raw words).
-    /// Fraction rounds to nearest 1/65536 (full precision — see module docs
-    /// for the deliberate deviation from PB's 31-bit literals).
+    /// The fraction truncates and the raw LSB is cleared — 16.15 literals,
+    /// exactly like PB (see module docs).
     pub fn parse_literal(s: &str) -> Option<Fx> {
         if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
             if hex.is_empty() {
@@ -205,7 +209,7 @@ impl Fx {
             }
             int_acc = int_acc.wrapping_mul(10).wrapping_add((c - b'0') as u32);
         }
-        // Fraction: numerator/10^n rounded to nearest 1/65536. Nine digits is
+        // Fraction: numerator/10^n truncated to 1/65536. Nine digits is
         // already beyond representable precision.
         let mut num: u64 = 0;
         let mut den: u64 = 1;
@@ -219,11 +223,14 @@ impl Fx {
             }
         }
         let frac_raw = if den > 1 {
-            (((num << FRAC_BITS) + den / 2) / den) as i32
+            ((num << FRAC_BITS) / den) as i32
         } else {
             0
         };
-        Some(Fx(Fx::from_int(int_acc as i32).0.wrapping_add(frac_raw)))
+        // 16.15 literal: clear the LSB (no-op for integer literals)
+        Some(Fx(
+            Fx::from_int(int_acc as i32).0.wrapping_add(frac_raw) & !1
+        ))
     }
 }
 
@@ -414,8 +421,11 @@ mod tests {
         assert_eq!(fx(5.1).floor(), fx(5.0));
         assert_eq!(fx(5.1).ceil(), fx(6.0));
         assert_eq!(fx(5.5).frac(), fx(0.5));
+        // round is floor(x + 0.5) — oracle-confirmed
         assert_eq!(fx(2.5).round(), fx(3.0));
-        assert_eq!(fx(-2.5).round(), fx(-3.0));
+        assert_eq!(fx(-2.5).round(), fx(-2.0));
+        assert_eq!(fx(0.5).round(), fx(1.0));
+        assert_eq!(fx(-0.5).round(), fx(0.0));
     }
 
     #[test]
@@ -455,7 +465,10 @@ mod tests {
     fn literals() {
         assert_eq!(Fx::parse_literal("1"), Some(Fx::ONE));
         assert_eq!(Fx::parse_literal("3.5"), Some(fx(3.5)));
-        assert_eq!(Fx::parse_literal(".015"), Some(Fx::from_raw(983))); // round(0.015*65536)=983
+        // 16.15 literal: trunc(0.015·65536)=983, LSB cleared → 982
+        assert_eq!(Fx::parse_literal(".015"), Some(Fx::from_raw(982)));
+        assert_eq!(Fx::parse_literal("0.7"), Some(Fx::from_raw(45874))); // oracle: multrunc
+        assert_eq!(Fx::parse_literal("0.00005"), Some(Fx::from_raw(2))); // oracle: multrunc
         assert_eq!(Fx::parse_literal("5."), Some(Fx::from_int(5)));
         assert_eq!(Fx::parse_literal("0x10"), Some(Fx::from_int(16)));
         assert_eq!(Fx::parse_literal("0b101"), Some(Fx::from_int(5)));
@@ -468,8 +481,11 @@ mod tests {
             Fx::parse_literal("0xFDB9").unwrap().to_f64(),
             64953.0 - 65536.0
         );
-        // full precision: 1/65536 survives (PB's 31-bit literals would drop it)
-        assert_eq!(Fx::parse_literal("0.0000152587890625"), Some(Fx::EPSILON));
+        // the epsilon literal's raw LSB is dropped — oracle: lit_epsilon
+        assert_eq!(Fx::parse_literal("0.0000152587890625"), Some(Fx::ZERO));
+        // constants quantize as literals — oracle: cPI is 205886, not 205887
+        assert_eq!(Fx::from_f64_lit(core::f64::consts::PI).raw(), 205_886);
+        assert_eq!(Fx::from_f64_lit(core::f64::consts::SQRT_2).raw(), 92_680);
         assert_eq!(Fx::parse_literal(""), None);
         assert_eq!(Fx::parse_literal("."), None);
         assert_eq!(Fx::parse_literal("1x"), None);

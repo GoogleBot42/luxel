@@ -442,33 +442,39 @@ impl Vm {
                     self.locals[lbase + i as usize] = v;
                     push!(v);
                 }
+                // Index semantics oracle-confirmed on fw 3.67: reads truncate
+                // a fractional index but any out-of-range access (negative,
+                // ≥ length, and for WRITES even an in-bounds fractional
+                // index) is a runtime error that aborts execution.
                 Insn::LoadIdx => {
-                    let idx = pop!().num().to_int_trunc(); // TODO(oracle): trunc vs floor
+                    let idx = pop!().num();
                     let arr = pop!();
                     let Value::Arr(a) = arr else {
                         fail!("indexing a non-array value")
                     };
-                    let v = if idx >= 0 {
-                        self.arrays[a as usize]
-                            .get(idx as usize)
-                            .copied()
-                            .unwrap_or_default() // TODO(oracle): OOB read = 0
-                    } else {
-                        Value::default()
-                    };
-                    push!(v);
+                    if idx.raw() < 0 {
+                        fail!("array index out of bounds");
+                    }
+                    let i = idx.to_int_trunc() as usize;
+                    match self.arrays[a as usize].get(i) {
+                        Some(v) => push!(*v),
+                        None => fail!("array index out of bounds"),
+                    }
                 }
                 Insn::StoreIdx => {
                     let val = pop!();
-                    let idx = pop!().num().to_int_trunc();
+                    let idx = pop!().num();
                     let arr = pop!();
                     let Value::Arr(a) = arr else {
                         fail!("indexing a non-array value")
                     };
-                    if idx >= 0 {
-                        if let Some(slot) = self.arrays[a as usize].get_mut(idx as usize) {
-                            *slot = val; // TODO(oracle): OOB write ignored
-                        }
+                    if idx.raw() < 0 || idx.frac() != Fx::ZERO {
+                        fail!("array index out of bounds");
+                    }
+                    let i = idx.to_int_trunc() as usize;
+                    match self.arrays[a as usize].get_mut(i) {
+                        Some(slot) => *slot = val,
+                        None => fail!("array index out of bounds"),
                     }
                     push!(val);
                 }

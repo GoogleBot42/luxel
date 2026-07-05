@@ -34,8 +34,65 @@ fn main() -> ExitCode {
         "parse" if args.len() == 2 => parse_cmd(&args[1]),
         "run" if args.len() >= 2 => run_cmd(&args[1], &args[2..], false),
         "bench" if args.len() >= 2 => run_cmd(&args[1], &args[2..], true),
+        "vars" if args.len() >= 2 => vars_cmd(&args[1], &args[2..]),
         _ => usage(),
     }
+}
+
+/// Run a pattern's init (plus one frame) and dump exported vars as JSON with
+/// raw 16.16 values — the local half of the differential-oracle harness.
+fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
+    let src = match read(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    let pixels = match rest {
+        [flag, n] if flag == "--pixels" => match num(n) {
+            Ok(v) => v,
+            Err(c) => return c,
+        },
+        [] => 60,
+        _ => return usage(),
+    };
+    let mut engine = match Engine::new(&src, pixels, 1) {
+        Ok(e) => e,
+        Err(d) => {
+            let (line, col) = line_col(&src, d.span.start);
+            eprintln!("{path}:{line}:{col}: error: {}", d.message);
+            return ExitCode::FAILURE;
+        }
+    };
+    engine.frame(Fx::ZERO);
+    if let Some(e) = engine.take_error() {
+        eprintln!(
+            "warning: runtime error: {} (fn {}, pc {})",
+            e.message, e.fn_idx, e.pc
+        );
+    }
+    let names: Vec<String> = engine.exported_vars().map(String::from).collect();
+    let mut out = String::from("{");
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("\"{name}\":"));
+        match engine.var(name) {
+            Some(luxel_core::vm::Value::Num(v)) => out.push_str(&v.raw().to_string()),
+            Some(luxel_core::vm::Value::Arr(_)) => {
+                let vals: Vec<String> = engine
+                    .var_array(name)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|v| v.num().raw().to_string())
+                    .collect();
+                out.push_str(&format!("[{}]", vals.join(",")));
+            }
+            _ => out.push_str("null"),
+        }
+    }
+    out.push('}');
+    println!("{out}");
+    ExitCode::SUCCESS
 }
 
 fn usage() -> ExitCode {

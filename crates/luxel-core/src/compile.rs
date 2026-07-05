@@ -36,13 +36,14 @@ pub fn compile(src: &str) -> Result<Program, Diagnostic> {
 }
 
 /// Predefined constants (name, value). `pixelCount` is global 0, written by
-/// the engine before init runs.
+/// the engine before init runs. Constants use literal quantization (16.15,
+/// truncated) — oracle-confirmed: PI reads back as raw 205886 on hardware.
 fn predefined() -> Vec<GlobalDef> {
     use core::f64::consts;
     let g = |name: &str, v: f64| GlobalDef {
         name: name.to_string(),
         export: false,
-        init: Fx::from_f64(v),
+        init: Fx::from_f64_lit(v),
     };
     alloc::vec![
         g("pixelCount", 0.0),
