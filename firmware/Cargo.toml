@@ -15,6 +15,17 @@ esp-bootloader-esp-idf = { version = "0.5", features = ["esp32c3"] }
 critical-section = "1"
 luxel-core = { path = "../crates/luxel-core" }
 
+# networking (WiFi station + async TCP + HTTP server)
+esp-rtos = { version = "0.3", features = ["esp32c3", "esp-radio", "embassy"] }
+esp-radio = { version = "1.0.0-beta.0", features = ["esp32c3", "wifi", "unstable"] }
+embassy-executor = "0.10"
+embassy-net = { version = "0.9", features = ["dhcpv4", "medium-ethernet", "tcp", "dns"] }
+embassy-time = "0.5"
+embassy-sync = "0.8"
+embassy-futures = "0.1"
+static_cell = "2.1"
+picoserve = { version = "0.18", default-features = false, features = ["embassy", "alloc"] }
+
 [profile.release]
 opt-level = 3
 lto = "fat"

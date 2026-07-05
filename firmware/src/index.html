@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luxel</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #14151a; color: #e6e6ea; font: 14px/1.5 system-ui, sans-serif;
+         display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: baseline; gap: 1rem; padding: .6rem 1rem; background: #1d1f27; }
+  header h1 { font-size: 1rem; margin: 0; letter-spacing: .08em; }
+  header .status { color: #8b8fa3; font-variant-numeric: tabular-nums; }
+  header .vmerr { color: #ff7b72; }
+  main { flex: 1; display: flex; flex-direction: column; padding: .8rem 1rem; gap: .6rem; min-height: 0; }
+  textarea { flex: 1; resize: none; background: #0f1014; color: #e6e6ea; border: 1px solid #2a2d39;
+             border-radius: 6px; padding: .7rem; font: 13px/1.5 ui-monospace, monospace; tab-size: 2; }
+  textarea:focus { outline: none; border-color: #4a72ff; }
+  .bar { display: flex; align-items: center; gap: .8rem; }
+  button { background: #4a72ff; color: #fff; border: 0; border-radius: 6px; padding: .45rem 1.1rem;
+           font: inherit; cursor: pointer; }
+  button:hover { background: #6285ff; }
+  #result { white-space: pre-wrap; font-family: ui-monospace, monospace; }
+  #result.err { color: #ff7b72; }
+  #result.ok { color: #7ee787; }
+  .hint { color: #565a6e; margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LUXEL</h1>
+  <span class="status" id="status">–</span>
+  <span class="vmerr" id="vmerr"></span>
+</header>
+<main>
+  <textarea id="src" spellcheck="false" placeholder="// Paste a pattern and hit Run (Ctrl+Enter)
+export function beforeRender(delta) { t1 = time(.05) }
+export function render(index) { hsv(t1 + index / pixelCount, 1, 1) }"></textarea>
+  <div class="bar">
+    <button id="run">Run</button>
+    <span id="result"></span>
+    <span class="hint">full playground UI coming soon — this is the minimal live-code page</span>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+async function run() {
+  const src = $("src").value;
+  $("result").textContent = "compiling…";
+  $("result").className = "";
+  try {
+    const res = await fetch("/api/code", { method: "POST", body: src });
+    const r = await res.json();
+    if (r.ok) {
+      $("result").textContent = "running ✓";
+      $("result").className = "ok";
+    } else {
+      $("result").textContent = `line ${r.line}:${r.col}: ${r.error}`;
+      $("result").className = "err";
+    }
+  } catch (e) {
+    $("result").textContent = String(e);
+    $("result").className = "err";
+  }
+}
+
+$("run").addEventListener("click", run);
+$("src").addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const t = e.target, s = t.selectionStart;
+    t.setRangeText("  ", s, t.selectionEnd, "end");
+  }
+});
+
+setInterval(async () => {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    $("status").textContent = `${s.fps} fps · ${s.pixels} px`;
+    $("vmerr").textContent = s.vmerr ?? "";
+  } catch { $("status").textContent = "offline"; }
+}, 1000);
+</script>
+</body>
+</html>
