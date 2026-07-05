@@ -9,3 +9,6 @@ web/public/luxel.wasm
 firmware/target/
 web/e2e-serve.png
 signal-*.png
+# proprietary flash dumps (restore backups) — never redistribute
+pb-v3-stock.bin
+*-stock.bin
