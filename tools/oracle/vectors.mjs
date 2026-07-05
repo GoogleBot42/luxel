@@ -195,4 +195,65 @@ export function render(index) { hsv(0, 0, 0) }
     title: "hsv-pixel-write", // engine-level, needs previewFrame — placeholder for later
     skip: true,
   },
+  {
+    // Do transforms accumulate across frames, or reset per render cycle?
+    // Equal x1−x0 and x2−x1 steps → accumulation; x0==x1==x2 → auto-reset.
+    title: "transform-accumulation",
+    source: `export var x0 = -99
+export var x1 = -99
+export var x2 = -99
+export var pass = 0
+export function beforeRender(delta) {
+  pass = pass + 1
+  translate(0.1, 0)
+  if (pass == 1) mapPixels((i, x, y, z) => { if (i == 0) x0 = x })
+  if (pass == 2) mapPixels((i, x, y, z) => { if (i == 0) x1 = x })
+  if (pass == 3) mapPixels((i, x, y, z) => { if (i == 0) x2 = x })
+}
+export function render(index) { hsv(0, 0, 0) }
+`,
+    keys: ["x0", "x1", "x2"],
+  },
+  {
+    // Composition order and sign: translate-then-scale vs scale-then-translate,
+    // plus the untransformed baseline x of pixel 0.
+    title: "transform-order",
+    source: `export var base = -99
+export var ta = -99
+export var tb = -99
+export function beforeRender(delta) {
+  resetTransform()
+  mapPixels((i, x, y, z) => { if (i == 0) base = x })
+  resetTransform()
+  translate(0.25, 0)
+  scale(2, 2)
+  mapPixels((i, x, y, z) => { if (i == 0) ta = x })
+  resetTransform()
+  scale(2, 2)
+  translate(0.25, 0)
+  mapPixels((i, x, y, z) => { if (i == 0) tb = x })
+}
+export function render(index) { hsv(0, 0, 0) }
+`,
+    keys: ["base", "ta", "tb"],
+  },
+  {
+    // rotate() convention: rotate(PI/2) applied to the baseline (x,y) of
+    // pixel 0 — reveals direction and that rotate is about Z.
+    title: "transform-rotate",
+    source: `export var bx = -99
+export var by = -99
+export var rx = -99
+export var ry = -99
+export function beforeRender(delta) {
+  resetTransform()
+  mapPixels((i, x, y, z) => { if (i == 0) { bx = x\n by = y } })
+  resetTransform()
+  rotate(PI / 2)
+  mapPixels((i, x, y, z) => { if (i == 0) { rx = x\n ry = y } })
+}
+export function render(index) { hsv(0, 0, 0) }
+`,
+    keys: ["bx", "by", "rx", "ry"],
+  },
 ];

@@ -6,17 +6,20 @@
 > Checker: `luxel check` (compile + init + 3 frames at 100 px), aggregated by
 > `tools/corpus/report.mjs` → `tools/corpus/last-report.json`.
 
-## Result (2026-07-05, after fixes)
+## Result (2026-07-05, after fixes + transforms/perlin/palettes/clock/map)
 
 | metric | count | share |
 |---|---|---|
 | compiles | 291/293 | **99.3%** |
 | …of which the 2 failures are *deliberate* interlock lines ("REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND") that fail on PB too | — | effectively **100%** |
-| compiles + smoke-runs clean | 230 | 78.5% |
-| runtime stop on a not-yet-implemented builtin | 58 | 19.8% |
+| compiles + smoke-runs clean (3 frames, 100 px, 10×10 map, wall clock) | **288** | **98.3%** |
+| runtime stop on a not-yet-implemented builtin | 0 | 0% |
 | real runtime errors | 3 | 1.0% |
 
-M0's ≥90%-compiles exit criterion is met with a large margin.
+The 3 runtime errors hardcode other rig shapes (Snake 2D and Perlin/Simplex
+Noise 2D assume `width = 16` ⇒ 256-pixel matrices) and would OOB on real PB
+at this pixel count too. M0's ≥90%-compiles exit criterion is met with a
+large margin.
 
 ## What the corpus taught us (all fixed)
 

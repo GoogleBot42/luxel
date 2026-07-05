@@ -21,5 +21,6 @@ pub mod engine;
 pub mod fixed;
 pub mod fmath;
 pub mod lex;
+pub mod noise;
 pub mod parse;
 pub mod vm;

@@ -352,6 +352,128 @@ fn corpus_syntax_extensions() {
 }
 
 #[test]
+fn transforms_apply_in_call_order() {
+    // translate applied to the point first, then rotate — the corpus
+    // rotate-about-center idiom. No map: pixel 1 of 4 has x = 0.25.
+    let mut e = Engine::new(
+        "export var tx = -1\nexport var ty = -1\n\
+         export function beforeRender(delta) {\n\
+           resetTransform()\n\
+           translate(-0.5, -0.5)\n\
+           rotate(PI / 2)\n\
+           mapPixels((i, x, y, z) => { if (i == 1) { tx = x\n ty = y } })\n\
+         }\n\
+         export function render(index) { hsv(0, 0, 0) }",
+        4,
+        1,
+    )
+    .unwrap();
+    e.frame(Fx::ZERO);
+    // p = (0.25, 0) → translate → (-0.25, -0.5) → rotate 90° CCW → (0.5, -0.25)
+    let Some(Value::Num(tx)) = e.var("tx") else {
+        panic!()
+    };
+    let Some(Value::Num(ty)) = e.var("ty") else {
+        panic!()
+    };
+    assert!((tx.to_f64() - 0.5).abs() < 0.01, "tx = {tx}");
+    assert!((ty.to_f64() + 0.25).abs() < 0.01, "ty = {ty}");
+}
+
+#[test]
+fn transform_stack_caps_at_31() {
+    let e = Engine::new("for (i = 0; i < 40; i++) translate(0.01, 0)", 4, 1).unwrap();
+    assert!(e.last_error.unwrap().message.contains("stacked transforms"));
+}
+
+#[test]
+fn palettes_interpolate() {
+    let mut e = engine(
+        "setPalette([0, 1, 0, 0, 1, 0, 0, 1])\n\
+         export function render(index) { paint(0.5) }",
+    );
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [128, 0, 128]); // halfway red→blue
+    let mut e = engine(
+        "setPalette([0, 1, 0, 0, 1, 0, 0, 1])\n\
+         export function render(index) { paint(0, 0.5) }",
+    );
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [128, 0, 0]); // brightness scales
+}
+
+#[test]
+fn clock_builtins() {
+    let src = "export var out\n\
+               export function beforeRender(delta) {\n\
+                 out = clockYear() * 100 + clockMonth()\n\
+                 wd = clockWeekday()\n\
+                 hms = clockHour() * 10000 + clockMinute() * 100 + clockSecond()\n\
+               }\n\
+               export var wd\nexport var hms\n\
+               export function render(index) { }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    // 86400·31 + 3661 = 1970-02-01 01:01:01, a Sunday
+    e.set_wall_clock(86_400 * 31 + 3661);
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::from_int(197002))));
+    assert_eq!(e.var("wd"), Some(Value::Num(Fx::ONE))); // Sunday = 1
+    assert_eq!(e.var("hms"), Some(Value::Num(Fx::from_int(10101))));
+    // without a clock source everything is 0
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::ZERO)));
+}
+
+#[test]
+fn map_and_introspection() {
+    let src = "export var dims\nexport var h2\n\
+               export function beforeRender(delta) { dims = pixelMapDimensions()\n h2 = has2DMap() }\n\
+               export function render2D(index, x, y) { rgb(x, y, 0) }";
+    let mut e = Engine::new(src, 4, 1).unwrap();
+    // 2×2 grid map
+    let coords = [
+        [Fx::ZERO, Fx::ZERO, Fx::ZERO],
+        [Fx::ONE, Fx::ZERO, Fx::ZERO],
+        [Fx::ZERO, Fx::ONE, Fx::ZERO],
+        [Fx::ONE, Fx::ONE, Fx::ZERO],
+    ];
+    e.set_map(2, &coords);
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [0, 0, 0]);
+    assert_eq!(px[1], [255, 0, 0]); // x ≈ 0.99998 → 255
+    assert_eq!(px[2], [0, 255, 0]);
+    assert_eq!(px[3], [255, 255, 0]);
+    assert_eq!(e.var("dims"), Some(Value::Num(Fx::from_int(2))));
+    assert_eq!(e.var("h2"), Some(Value::Num(Fx::ONE)));
+}
+
+#[test]
+fn perlin_family_runs_deterministically() {
+    let a = eval("perlin(1.3, 2.7, 0.5, 42)");
+    let b = eval("perlin(1.3, 2.7, 0.5, 42)");
+    assert_eq!(a, b);
+    assert!(a.to_f64().abs() < 1.5);
+    let f = eval("perlinFbm(1.3, 2.7, 0, 2, 0.5, 3)");
+    assert!(f.to_f64().abs() < 2.0);
+    assert!(eval("perlinRidge(1.3, 2.7, 0, 2, 0.5, 1, 3)").to_f64() >= 0.0);
+    assert!(eval("perlinTurbulence(1.3, 2.7, 0, 2, 0.5, 3)").to_f64() >= 0.0);
+    // setPerlinWrap changes the field
+    let w = eval_prog("setPerlinWrap(4, 4, 4)\nexport var out = perlin(5.3, 0.5, 0.5, 0)");
+    let u = eval_prog("export var out = perlin(5.3, 0.5, 0.5, 0)");
+    assert_ne!(w, u);
+}
+
+#[test]
+fn gpio_and_sequencer_stubs_are_silent() {
+    let e = engine(
+        "pinMode(26, OUTPUT)\ndigitalWrite(26, HIGH)\n\
+         export var out = digitalRead(26) + analogRead(33) + touchRead(4) + nodeId() + sequencerGetMode()",
+    );
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::ZERO)));
+}
+
+#[test]
 fn sensor_vars_are_stubbed() {
     let e = engine(
         "export var frequencyData\nexport var accelerometer\n\
@@ -370,10 +492,6 @@ fn runtime_errors_are_recorded_not_fatal() {
     // calling a number
     let e = Engine::new("f = 3\nout = f()", 10, 1).unwrap();
     assert!(e.last_error.is_some());
-    // unimplemented documented builtin compiles but errors at runtime
-    let e = Engine::new("export var out = perlin(1, 2, 3, 4)", 10, 1).unwrap();
-    let err = e.last_error.expect("expected runtime error");
-    assert!(err.message.contains("perlin"), "{}", err.message);
     // infinite loop trips the fuel guard instead of hanging
     let e = Engine::new("while (1) { }", 10, 1).unwrap();
     assert!(e.last_error.unwrap().message.contains("execution limit"));

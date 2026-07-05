@@ -95,7 +95,7 @@ for (const r of realRuntimeErrs) {
 // static usage counts across the whole corpus (what to build next)
 const todoUse = new Map();
 for (const r of results) for (const b of r.uses.todo) todoUse.set(b, (todoUse.get(b) ?? 0) + 1);
-console.log(`\nTodo-builtin usage across corpus (patterns referencing):`);
+console.log(`\nUsage of recently-implemented builtins across corpus (patterns referencing):`);
 for (const [b, n] of [...todoUse.entries()].sort((a, b) => b[1] - a[1])) {
   console.log(`  ${String(n).padStart(3)}× ${b}`);
 }

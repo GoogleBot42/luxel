@@ -205,6 +205,49 @@ pub enum Builtin {
     ArrayReplaceAt,
     ArraySort,
     ArraySortBy,
+    // transforms & map
+    ResetTransform,
+    Transform,
+    Translate,
+    Scale,
+    Rotate,
+    Translate3D,
+    Scale3D,
+    RotateX,
+    RotateY,
+    RotateZ,
+    PixelMapDimensions,
+    Has2DMap,
+    Has3DMap,
+    MapPixels,
+    // noise & palettes
+    Perlin,
+    PerlinFbm,
+    PerlinRidge,
+    PerlinTurbulence,
+    SetPerlinWrap,
+    SetPalette,
+    Paint,
+    // clock
+    ClockYear,
+    ClockMonth,
+    ClockDay,
+    ClockHour,
+    ClockMinute,
+    ClockSecond,
+    ClockWeekday,
+    // GPIO / sequencer / sync stubs (no-ops until real peripherals, M4/M5)
+    PinMode,
+    DigitalWrite,
+    DigitalRead,
+    AnalogRead,
+    TouchRead,
+    SequencerNext,
+    SequencerGetMode,
+    PlaylistGetPosition,
+    PlaylistSetPosition,
+    PlaylistGetLength,
+    NodeId,
 }
 
 pub struct BuiltinDef {
@@ -246,18 +289,24 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("arrayMapTo", ArrayMapTo), b!("arrayReduce", ArrayReduce),
     b!("arrayReplace", ArrayReplace), b!("arrayReplaceAt", ArrayReplaceAt),
     b!("arraySort", ArraySort), b!("arraySortBy", ArraySortBy),
-    // Documented, not yet implemented (M3+: transforms/maps/palettes/perlin;
-    // M4: clock/sequencer/sync; M5: GPIO). Compile fine, error at runtime.
-    b!("perlin"), b!("perlinFbm"), b!("perlinRidge"), b!("perlinTurbulence"),
-    b!("setPerlinWrap"), b!("resetTransform"), b!("transform"), b!("translate"),
-    b!("scale"), b!("rotate"), b!("translate3D"), b!("scale3D"), b!("rotateX"),
-    b!("rotateY"), b!("rotateZ"), b!("pixelMapDimensions"), b!("has2DMap"),
-    b!("has3DMap"), b!("mapPixels"), b!("setPalette"), b!("paint"),
-    b!("pinMode"), b!("digitalWrite"), b!("digitalRead"), b!("analogRead"),
-    b!("touchRead"), b!("clockYear"), b!("clockMonth"), b!("clockDay"),
-    b!("clockHour"), b!("clockMinute"), b!("clockSecond"), b!("clockWeekday"),
-    b!("sequencerNext"), b!("sequencerGetMode"), b!("playlistGetPosition"),
-    b!("playlistSetPosition"), b!("playlistGetLength"), b!("nodeId"),
+    b!("perlin", Perlin), b!("perlinFbm", PerlinFbm), b!("perlinRidge", PerlinRidge),
+    b!("perlinTurbulence", PerlinTurbulence), b!("setPerlinWrap", SetPerlinWrap),
+    b!("resetTransform", ResetTransform), b!("transform", Transform),
+    b!("translate", Translate), b!("scale", Scale), b!("rotate", Rotate),
+    b!("translate3D", Translate3D), b!("scale3D", Scale3D), b!("rotateX", RotateX),
+    b!("rotateY", RotateY), b!("rotateZ", RotateZ),
+    b!("pixelMapDimensions", PixelMapDimensions), b!("has2DMap", Has2DMap),
+    b!("has3DMap", Has3DMap), b!("mapPixels", MapPixels),
+    b!("setPalette", SetPalette), b!("paint", Paint),
+    b!("pinMode", PinMode), b!("digitalWrite", DigitalWrite),
+    b!("digitalRead", DigitalRead), b!("analogRead", AnalogRead),
+    b!("touchRead", TouchRead), b!("clockYear", ClockYear), b!("clockMonth", ClockMonth),
+    b!("clockDay", ClockDay), b!("clockHour", ClockHour), b!("clockMinute", ClockMinute),
+    b!("clockSecond", ClockSecond), b!("clockWeekday", ClockWeekday),
+    b!("sequencerNext", SequencerNext), b!("sequencerGetMode", SequencerGetMode),
+    b!("playlistGetPosition", PlaylistGetPosition),
+    b!("playlistSetPosition", PlaylistSetPosition),
+    b!("playlistGetLength", PlaylistGetLength), b!("nodeId", NodeId),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -314,7 +363,33 @@ pub struct Vm {
     /// Set by hsv()/rgb() — the engine reads this after each render call.
     pub pixel: [Fx; 3],
     pub pixel_written: bool,
+    /// Current coordinate transform (pre-multiplied ops; points transform in
+    /// call order — the corpus `translate(-.5,-.5); rotate(θ)` idiom).
+    pub transform: [[Fx; 4]; 4],
+    pub transform_active: bool,
+    transform_ops: u32,
+    /// Installed pixel map (engine-set): dims (1/2/3) + normalized coords.
+    pub map: Option<MapData>,
+    /// Engine-set; used by mapPixels and the no-map 1D fallback.
+    pub pixel_count: u32,
+    palette: Vec<(Fx, [Fx; 3])>,
+    perlin_wrap: [i32; 3],
+    /// Wall-clock unix seconds (timezone-adjusted by the host); None → the
+    /// clock builtins return 0. TODO(oracle): PB's no-time behavior.
+    pub wall_unix: Option<i64>,
 }
+
+#[derive(Debug, Clone)]
+pub struct MapData {
+    pub dims: u8,
+    pub coords: Vec<[Fx; 3]>,
+}
+
+pub const IDENTITY: [[Fx; 4]; 4] = {
+    let o = Fx::ONE;
+    let z = Fx::ZERO;
+    [[o, z, z, z], [z, o, z, z], [z, z, o, z], [z, z, z, o]]
+};
 
 impl Vm {
     pub fn new(prog: &Program, seed: u64) -> Vm {
@@ -328,6 +403,14 @@ impl Vm {
             depth: 0,
             fuel: FUEL,
             time_ms: 0,
+            transform: IDENTITY,
+            transform_active: false,
+            transform_ops: 0,
+            map: None,
+            pixel_count: 0,
+            palette: Vec::new(),
+            perlin_wrap: [256; 3],
+            wall_unix: None,
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             pixel: [Fx::ZERO; 3],
@@ -940,7 +1023,272 @@ impl Vm {
                     None => Ok(a(0)),
                 }
             }
+            // ---- coordinate transforms (see field docs for conventions) ----
+            ResetTransform => {
+                self.transform = IDENTITY;
+                self.transform_active = false;
+                self.transform_ops = 0;
+                Ok(Value::default())
+            }
+            Transform => {
+                let mut m = IDENTITY;
+                for (r, row) in m.iter_mut().enumerate() {
+                    for (c, cell) in row.iter_mut().enumerate() {
+                        *cell = n(r * 4 + c);
+                    }
+                }
+                self.push_op(m).map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            Translate => {
+                let mut m = IDENTITY;
+                m[0][3] = n(0);
+                m[1][3] = n(1);
+                self.push_op(m).map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            Translate3D => {
+                let mut m = IDENTITY;
+                m[0][3] = n(0);
+                m[1][3] = n(1);
+                m[2][3] = n(2);
+                self.push_op(m).map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            Scale => {
+                let mut m = IDENTITY;
+                m[0][0] = n(0);
+                m[1][1] = n(1);
+                self.push_op(m).map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            Scale3D => {
+                let mut m = IDENTITY;
+                m[0][0] = n(0);
+                m[1][1] = n(1);
+                m[2][2] = n(2);
+                self.push_op(m).map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            Rotate | RotateZ => {
+                self.push_op(rotation(2, n(0)))
+                    .map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            RotateX => {
+                self.push_op(rotation(0, n(0)))
+                    .map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            RotateY => {
+                self.push_op(rotation(1, n(0)))
+                    .map_err(|e| no_site(e.into()))?;
+                Ok(Value::default())
+            }
+            // ---- map introspection ----
+            PixelMapDimensions => num(Fx::from_int(
+                self.map.as_ref().map(|m| m.dims as i32).unwrap_or(0),
+            )),
+            Has2DMap => num(if self.map.as_ref().map(|m| m.dims) == Some(2) {
+                Fx::ONE
+            } else {
+                Fx::ZERO
+            }),
+            Has3DMap => num(if self.map.as_ref().map(|m| m.dims) == Some(3) {
+                Fx::ONE
+            } else {
+                Fx::ZERO
+            }),
+            MapPixels => {
+                let f = a(0);
+                for i in 0..self.pixel_count {
+                    let p = self.pixel_coords(i, [Fx::ZERO; 3]);
+                    let p = self.apply_transform(p);
+                    self.dispatch_direct(
+                        prog,
+                        f,
+                        &[
+                            Value::Num(Fx::from_int(i as i32)),
+                            Value::Num(p[0]),
+                            Value::Num(p[1]),
+                            Value::Num(p[2]),
+                        ],
+                    )?;
+                }
+                Ok(Value::default())
+            }
+            // ---- noise ----
+            Perlin => num(crate::noise::perlin(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                self.perlin_wrap,
+            )),
+            PerlinFbm => num(crate::noise::fbm(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                n(4),
+                n(5),
+                self.perlin_wrap,
+            )),
+            PerlinRidge => num(crate::noise::ridge(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                n(4),
+                n(5),
+                n(6),
+                self.perlin_wrap,
+            )),
+            PerlinTurbulence => num(crate::noise::turbulence(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                n(4),
+                n(5),
+                self.perlin_wrap,
+            )),
+            SetPerlinWrap => {
+                for (i, w) in self.perlin_wrap.iter_mut().enumerate() {
+                    *w = n(i).to_int_trunc().clamp(2, 256);
+                }
+                Ok(Value::default())
+            }
+            // ---- palettes ----
+            SetPalette => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("setPalette needs an array".into()));
+                };
+                let data = &self.arrays[arr as usize];
+                let mut pal = Vec::new();
+                let mut i = 0;
+                while i + 3 < data.len() {
+                    pal.push((
+                        data[i].num(),
+                        [data[i + 1].num(), data[i + 2].num(), data[i + 3].num()],
+                    ));
+                    i += 4;
+                }
+                self.palette = pal;
+                Ok(Value::default())
+            }
+            Paint => {
+                let v = n(0).mod_floor(Fx::ONE);
+                let b = if argc >= 2 { n(1) } else { Fx::ONE };
+                let rgb = self.palette_lookup(v);
+                let b = b.clamp(Fx::ZERO, Fx::ONE);
+                self.pixel = [rgb[0] * b, rgb[1] * b, rgb[2] * b];
+                self.pixel_written = true;
+                Ok(Value::default())
+            }
+            // ---- clock (host-provided wall time) ----
+            ClockYear | ClockMonth | ClockDay | ClockHour | ClockMinute | ClockSecond
+            | ClockWeekday => {
+                let Some(unix) = self.wall_unix else {
+                    return num(Fx::ZERO); // TODO(oracle): PB with no time source
+                };
+                let c = civil_from_unix(unix);
+                num(Fx::from_int(match builtin {
+                    ClockYear => c.year,
+                    ClockMonth => c.month,
+                    ClockDay => c.day,
+                    ClockHour => c.hour,
+                    ClockMinute => c.minute,
+                    ClockSecond => c.second,
+                    _ => c.weekday_sun1,
+                }))
+            }
+            // ---- GPIO / sequencer / sync stubs: silent no-ops until real
+            // peripherals exist (M4/M5); inputs read 0 ----
+            PinMode | DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),
+            DigitalRead | AnalogRead | TouchRead | SequencerGetMode | PlaylistGetPosition
+            | PlaylistGetLength | NodeId => num(Fx::ZERO),
         }
+    }
+
+    /// Pre-multiply an op onto the current transform: points transform in
+    /// call order (`translate(-.5,-.5); rotate(θ)` rotates about the center,
+    /// per the universal corpus idiom). Capped at 31 stacked ops like PB.
+    /// TODO(oracle): verify order/sign/cap by probe when the device is back.
+    fn push_op(&mut self, op: [[Fx; 4]; 4]) -> Result<(), &'static str> {
+        if self.transform_ops >= 31 {
+            return Err("too many stacked transforms (max 31)");
+        }
+        self.transform_ops += 1;
+        self.transform_active = true;
+        self.transform = mat_mul(&op, &self.transform);
+        Ok(())
+    }
+
+    /// Coordinates for pixel `i`: the installed map, else the 1D fallback
+    /// (x = i/pixelCount, remaining axes from `fill`).
+    pub fn pixel_coords(&self, i: u32, fill: [Fx; 3]) -> [Fx; 3] {
+        match &self.map {
+            Some(m) => {
+                let c = m.coords.get(i as usize).copied().unwrap_or([Fx::ZERO; 3]);
+                match m.dims {
+                    1 => [c[0], fill[1], fill[2]],
+                    2 => [c[0], c[1], fill[2]],
+                    _ => c,
+                }
+            }
+            None => {
+                let x =
+                    Fx::from_raw((((i as i64) << 16) / (self.pixel_count.max(1) as i64)) as i32);
+                [x, fill[1], fill[2]]
+            }
+        }
+    }
+
+    /// Apply the current transform to a point (affine 4×4, w ignored).
+    pub fn apply_transform(&self, p: [Fx; 3]) -> [Fx; 3] {
+        if !self.transform_active {
+            return p;
+        }
+        let m = &self.transform;
+        let mut out = [Fx::ZERO; 3];
+        for (r, o) in out.iter_mut().enumerate() {
+            *o = m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3];
+        }
+        out
+    }
+
+    fn palette_lookup(&self, v: Fx) -> [Fx; 3] {
+        // no palette installed → grayscale ramp. TODO(oracle).
+        if self.palette.is_empty() {
+            return [v, v, v];
+        }
+        let first = self.palette[0];
+        let last = self.palette[self.palette.len() - 1];
+        if v <= first.0 {
+            return first.1;
+        }
+        if v >= last.0 {
+            return last.1; // clamp at the ends. TODO(oracle): wrap?
+        }
+        for w in self.palette.windows(2) {
+            let (p0, c0) = w[0];
+            let (p1, c1) = w[1];
+            if v <= p1 {
+                let span = p1 - p0;
+                let t = if span == Fx::ZERO {
+                    Fx::ZERO
+                } else {
+                    (v - p0) / span
+                };
+                let mut out = [Fx::ZERO; 3];
+                for (i, o) in out.iter_mut().enumerate() {
+                    *o = c0[i] + (c1[i] - c0[i]) * t;
+                }
+                return out;
+            }
+        }
+        last.1
     }
 
     /// Call a function value with explicit args (used by array HOFs).
@@ -974,6 +1322,86 @@ fn value_eq(a: Value, b: Value) -> bool {
         (Value::Fun(x), Value::Fun(y)) => x == y,
         (Value::Builtin(x), Value::Builtin(y)) => x == y,
         _ => false,
+    }
+}
+
+fn mat_mul(a: &[[Fx; 4]; 4], b: &[[Fx; 4]; 4]) -> [[Fx; 4]; 4] {
+    let mut out = [[Fx::ZERO; 4]; 4];
+    for r in 0..4 {
+        for c in 0..4 {
+            let mut acc = Fx::ZERO;
+            for (k, bk) in b.iter().enumerate() {
+                acc = acc + a[r][k] * bk[c];
+            }
+            out[r][c] = acc;
+        }
+    }
+    out
+}
+
+/// Rotation about axis 0=X, 1=Y, 2=Z, counterclockwise for +angle (radians).
+/// TODO(oracle): direction convention unverified.
+fn rotation(axis: usize, angle: Fx) -> [[Fx; 4]; 4] {
+    let c = fmath::cos(angle);
+    let s = fmath::sin(angle);
+    let mut m = IDENTITY;
+    match axis {
+        0 => {
+            m[1][1] = c;
+            m[1][2] = -s;
+            m[2][1] = s;
+            m[2][2] = c;
+        }
+        1 => {
+            m[0][0] = c;
+            m[0][2] = s;
+            m[2][0] = -s;
+            m[2][2] = c;
+        }
+        _ => {
+            m[0][0] = c;
+            m[0][1] = -s;
+            m[1][0] = s;
+            m[1][1] = c;
+        }
+    }
+    m
+}
+
+struct Civil {
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: i32,
+    /// Sunday = 1 … Saturday = 7 (PB convention).
+    weekday_sun1: i32,
+}
+
+/// Unix seconds → civil date/time (Howard Hinnant's algorithm, integer-only).
+/// The host pre-applies any timezone offset.
+fn civil_from_unix(secs: i64) -> Civil {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as i32;
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as i32;
+    let year = (if month <= 2 { y + 1 } else { y }) as i32;
+    Civil {
+        year,
+        month,
+        day,
+        hour: (rem / 3600) as i32,
+        minute: (rem % 3600 / 60) as i32,
+        second: (rem % 60) as i32,
+        weekday_sun1: ((days + 4).rem_euclid(7) + 1) as i32,
     }
 }
 

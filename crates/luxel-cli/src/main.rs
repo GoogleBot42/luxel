@@ -83,6 +83,14 @@ fn check_cmd(path: &str) -> ExitCode {
     if let Some(e) = engine.take_error() {
         return report("init", Some(e.message));
     }
+    // a 10×10 grid map so render2D patterns exercise real coordinates
+    let coords: Vec<[Fx; 3]> = (0..100)
+        .map(|i| [Fx::from_int(i % 10), Fx::from_int(i / 10), Fx::ZERO])
+        .collect();
+    engine.set_map(2, &coords);
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        engine.set_wall_clock(now.as_secs() as i64);
+    }
     for _ in 0..3 {
         engine.frame(Fx::from_f64(16.7));
         if let Some(e) = engine.take_error() {
@@ -187,6 +195,8 @@ struct Opts {
     out: String,
     seed: u64,
     controls: Vec<(String, Vec<Fx>)>,
+    /// 2D grid map dimensions (cols, rows); overrides --pixels.
+    grid: Option<(u32, u32)>,
 }
 
 fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
@@ -197,6 +207,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
         out: if bench { "-".into() } else { "out.ppm".into() },
         seed: 1,
         controls: Vec::new(),
+        grid: None,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -212,6 +223,14 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
             "--fps" => o.fps = num(&val()?)?.max(1),
             "--out" => o.out = val()?,
             "--seed" => o.seed = num(&val()?)? as u64,
+            "--map-grid" => {
+                let v = val()?;
+                let Some((w, h)) = v.split_once('x') else {
+                    eprintln!("error: --map-grid expects WxH (e.g. 16x16)");
+                    return Err(ExitCode::from(2));
+                };
+                o.grid = Some((num(w)?.max(1), num(h)?.max(1)));
+            }
             "--control" => {
                 let v = val()?;
                 let Some((name, vals)) = v.split_once('=') else {
@@ -251,10 +270,14 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
         Ok(s) => s,
         Err(c) => return c,
     };
-    let o = match parse_opts(rest, bench) {
+    let mut o = match parse_opts(rest, bench) {
         Ok(o) => o,
         Err(c) => return c,
     };
+    if let Some((w, h)) = o.grid {
+        o.pixels = w * h;
+    }
+    let o = o;
 
     let mut engine = match Engine::new(&src, o.pixels, o.seed) {
         Ok(e) => e,
@@ -269,6 +292,22 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
             "warning: runtime error during init: {} (fn {}, pc {})",
             e.message, e.fn_idx, e.pc
         );
+    }
+    if let Some((w, h)) = o.grid {
+        let coords: Vec<[Fx; 3]> = (0..o.pixels)
+            .map(|i| {
+                [
+                    Fx::from_int((i % w) as i32),
+                    Fx::from_int((i / w) as i32),
+                    Fx::ZERO,
+                ]
+            })
+            .collect();
+        engine.set_map(2, &coords);
+        let _ = h;
+    }
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        engine.set_wall_clock(now.as_secs() as i64); // UTC; no tz handling yet
     }
     for (name, vals) in &o.controls {
         if engine.set_control(name, vals).is_none() && engine.last_error.is_none() {

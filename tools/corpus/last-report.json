@@ -12,9 +12,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/2g6JZPLpq8XPFeP2s.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "2g6JZPLpq8XPFeP2s",
   "name": "tree setup pattern",
   "uses": {
@@ -65,9 +64,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/3BLyowkuhmGXkQdRr.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "3BLyowkuhmGXkQdRr",
   "name": "Carrie's Holiday Star 2D",
   "uses": {
@@ -85,9 +83,8 @@
   }
  },
  {
-  "error": "builtin `perlin` is not implemented yet",
   "file": "corpus/3RHd7JN2E9Se8nSB8.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "3RHd7JN2E9Se8nSB8",
   "name": "Rainstorm",
   "uses": {
@@ -140,9 +137,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/4ioyjcWvw3Mtvi6km.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "4ioyjcWvw3Mtvi6km",
   "name": "Sun rays through trees",
   "uses": {
@@ -200,9 +196,8 @@
   }
  },
  {
-  "error": "builtin `clockWeekday` is not implemented yet",
   "file": "corpus/5b3a4tQBuAKfRfgbk.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "5b3a4tQBuAKfRfgbk",
   "name": "Glittering Jewels",
   "uses": {
@@ -227,9 +222,8 @@
   }
  },
  {
-  "error": "builtin `perlin` is not implemented yet",
   "file": "corpus/5d3WQKjDJtPwJnyqr.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "5d3WQKjDJtPwJnyqr",
   "name": "Sunrise Alarm Clock",
   "uses": {
@@ -261,9 +255,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/5rpavhGiY4BgXaZ8o.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "5rpavhGiY4BgXaZ8o",
   "name": "GlowFlow (3D coord transform API port)",
   "uses": {
@@ -414,9 +407,8 @@
   }
  },
  {
-  "error": "builtin `setPerlinWrap` is not implemented yet",
   "file": "corpus/7bqSEZdvPK42pCNyA.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "7bqSEZdvPK42pCNyA",
   "name": "Dire Spider 2D",
   "uses": {
@@ -447,9 +439,8 @@
   }
  },
  {
-  "error": "builtin `perlin` is not implemented yet",
   "file": "corpus/7caR9QAmgKTdFtNTF.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "7caR9QAmgKTdFtNTF",
   "name": "Halloween Wavy Bands",
   "uses": {
@@ -488,9 +479,8 @@
   }
  },
  {
-  "error": "builtin `perlin` is not implemented yet",
   "file": "corpus/88jB89jqQojktXgc4.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "88jB89jqQojktXgc4",
   "name": "Bubble Column",
   "uses": {
@@ -553,9 +543,8 @@
   }
  },
  {
-  "error": "builtin `clockSecond` is not implemented yet",
   "file": "corpus/95QZQGENL4fYwtBHy.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "95QZQGENL4fYwtBHy",
   "name": "RGBclock 2D",
   "uses": {
@@ -608,9 +597,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/9RaWKrtdaqsTMN8to.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "9RaWKrtdaqsTMN8to",
   "name": "Blue Holiday Candle 2D",
   "uses": {
@@ -700,9 +688,8 @@
   }
  },
  {
-  "error": "builtin `setPalette` is not implemented yet",
   "file": "corpus/BpYvATFvRH8LbBFv3.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "BpYvATFvRH8LbBFv3",
   "name": "Eye of Sauron with movement",
   "uses": {
@@ -733,9 +720,8 @@
   }
  },
  {
-  "error": "builtin `setPalette` is not implemented yet",
   "file": "corpus/C7BgpG7f4zHx92hs6.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "C7BgpG7f4zHx92hs6",
   "name": "perlin fire wind",
   "uses": {
@@ -903,9 +889,8 @@
   }
  },
  {
-  "error": "builtin `clockHour` is not implemented yet",
   "file": "corpus/FA9RGndR2ckrJmE8r.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "FA9RGndR2ckrJmE8r",
   "name": "Utility: Scheduled Percent-On Demo",
   "uses": {
@@ -934,9 +919,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/FRobn9vAtgoAqNCBo.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "FRobn9vAtgoAqNCBo",
   "name": "sound - spectrokalidamandala",
   "uses": {
@@ -992,9 +976,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/FrKXKh3QmKNwHxBFT.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "FrKXKh3QmKNwHxBFT",
   "name": "Orv - Christmas Tree",
   "uses": {
@@ -1045,9 +1028,8 @@
   }
  },
  {
-  "error": "builtin `pinMode` is not implemented yet",
   "file": "corpus/GCwuPigteHfPT4nAT.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "GCwuPigteHfPT4nAT",
   "name": "Sunrise",
   "uses": {
@@ -1260,9 +1242,8 @@
   }
  },
  {
-  "error": "builtin `clockSecond` is not implemented yet",
   "file": "corpus/LKxjLSFNKYE2YWzQg.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "LKxjLSFNKYE2YWzQg",
   "name": "2d Clock with Hand Color Pickers",
   "uses": {
@@ -1462,9 +1443,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/Pdvxh3xzAtvmanwLf.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "Pdvxh3xzAtvmanwLf",
   "name": "Crawling Spider 2D",
   "uses": {
@@ -1530,9 +1510,8 @@
   }
  },
  {
-  "error": "builtin `clockSecond` is not implemented yet",
   "file": "corpus/Qn8EawSjEHBTmQAuK.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "Qn8EawSjEHBTmQAuK",
   "name": "pixelClock",
   "uses": {
@@ -1599,9 +1578,8 @@
   }
  },
  {
-  "error": "builtin `perlinRidge` is not implemented yet",
   "file": "corpus/RHFKxARdW4Aeq4X3r.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "RHFKxARdW4Aeq4X3r",
   "name": "zoom kaleidoscope",
   "uses": {
@@ -1697,9 +1675,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/S6u3qPhozw43c7Af9.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "S6u3qPhozw43c7Af9",
   "name": "Lightning clouds",
   "uses": {
@@ -1714,9 +1691,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/SCwdLkm9BfNxFncaq.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "SCwdLkm9BfNxFncaq",
   "name": "Blue Holiday Star 2D",
   "uses": {
@@ -1782,9 +1758,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/TMdwmrwodDf6ad9XY.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "TMdwmrwodDf6ad9XY",
   "name": "radiant pulse 3",
   "uses": {
@@ -1837,9 +1812,8 @@
   }
  },
  {
-  "error": "builtin `perlinRidge` is not implemented yet",
   "file": "corpus/TnnAcAX9a5Xze4YqF.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "TnnAcAX9a5Xze4YqF",
   "name": "Coral Plasma",
   "uses": {
@@ -1870,9 +1844,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/W9XaXuW9LFhNY7Bju.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "W9XaXuW9LFhNY7Bju",
   "name": "Tunnel of Squares 2D",
   "uses": {
@@ -1971,9 +1944,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/X4S9zmtj3YaTuGixJ.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "X4S9zmtj3YaTuGixJ",
   "name": "spiral twirls star 2D",
   "uses": {
@@ -2061,9 +2033,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/YNbYB5x6h6BTAPexk.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "YNbYB5x6h6BTAPexk",
   "name": "80s kid show",
   "uses": {
@@ -2203,9 +2174,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/b6QB2wwGTmxrDJMBd.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "b6QB2wwGTmxrDJMBd",
   "name": "Line Dancer 2D",
   "uses": {
@@ -2242,9 +2212,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/bEdTMdnYZvoHonkmm.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "bEdTMdnYZvoHonkmm",
   "name": "Perlin Kaleidoscope 2D",
   "uses": {
@@ -2258,9 +2227,8 @@
   }
  },
  {
-  "error": "builtin `perlin` is not implemented yet",
   "file": "corpus/bG3g3fjrxqxPtqi9d.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "bG3g3fjrxqxPtqi9d",
   "name": "Wavy Bands",
   "uses": {
@@ -2273,9 +2241,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/bGouHYhqSp5pnBhr2.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "bGouHYhqSp5pnBhr2",
   "name": "Traffic",
   "uses": {
@@ -2302,9 +2269,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/bQLnSWhcA4PNjuLtK.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "bQLnSWhcA4PNjuLtK",
   "name": "RYB colors",
   "uses": {
@@ -2358,9 +2324,8 @@
   }
  },
  {
-  "error": "builtin `pinMode` is not implemented yet",
   "file": "corpus/cGFZd6F5W8m7jqYT4.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "cGFZd6F5W8m7jqYT4",
   "name": "Example - Button w/ debounce",
   "uses": {
@@ -2446,9 +2411,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/dd32bgunSTTqNRzvQ.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "dd32bgunSTTqNRzvQ",
   "name": "Upward waves 3D using accelerometer",
   "uses": {
@@ -2480,9 +2444,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/dueoKmMJLRwQb6ZN3.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "dueoKmMJLRwQb6ZN3",
   "name": "Coronal Mass Ejection",
   "uses": {
@@ -2593,9 +2556,8 @@
   }
  },
  {
-  "error": "builtin `perlinRidge` is not implemented yet",
   "file": "corpus/gHXWPveywRt8Eo2fF.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "gHXWPveywRt8Eo2fF",
   "name": "perlin fire wind tunnel",
   "uses": {
@@ -2614,9 +2576,8 @@
   }
  },
  {
-  "error": "builtin `nodeId` is not implemented yet",
   "file": "corpus/gKCGaREm8cD8gfCuY.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "gKCGaREm8cD8gfCuY",
   "name": "SkyPirate's Centered Spectrum",
   "uses": {
@@ -2780,9 +2741,8 @@
   }
  },
  {
-  "error": "builtin `setPalette` is not implemented yet",
   "file": "corpus/jp7dq47XpcYq2JztT.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "jp7dq47XpcYq2JztT",
   "name": "Fast Palette Blending",
   "uses": {
@@ -2834,9 +2794,8 @@
   }
  },
  {
-  "error": "builtin `clockHour` is not implemented yet",
   "file": "corpus/kRdHmgPMZBDSoh2zT.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "kRdHmgPMZBDSoh2zT",
   "name": "NaturalLightSync",
   "uses": {
@@ -2901,9 +2860,8 @@
   }
  },
  {
-  "error": "builtin `pinMode` is not implemented yet",
   "file": "corpus/mPfzL6z2mf9nACtsM.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "mPfzL6z2mf9nACtsM",
   "name": "Light Organ - 2.0",
   "uses": {
@@ -2964,9 +2922,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/mq6zDHQaoDd3wqf72.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "mq6zDHQaoDd3wqf72",
   "name": "Coronal Mass Ejection 2D sliders",
   "uses": {
@@ -3038,9 +2995,8 @@
   }
  },
  {
-  "error": "builtin `setPalette` is not implemented yet",
   "file": "corpus/nqTQrm9MMG5Ge3WSg.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "nqTQrm9MMG5Ge3WSg",
   "name": "Perlin fire",
   "uses": {
@@ -3061,9 +3017,8 @@
   }
  },
  {
-  "error": "builtin `perlinRidge` is not implemented yet",
   "file": "corpus/oH4GhmMnYuhJKTY2u.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "oH4GhmMnYuhJKTY2u",
   "name": "distance function kaleidoscope 2",
   "uses": {
@@ -3129,9 +3084,8 @@
   }
  },
  {
-  "error": "builtin `nodeId` is not implemented yet",
   "file": "corpus/pMMer2SYzSjZyi6mZ.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "pMMer2SYzSjZyi6mZ",
   "name": "Lightbulb - Crank Hue to Complete",
   "uses": {
@@ -3160,9 +3114,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/q8oKvkD7R57DBkGKj.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "q8oKvkD7R57DBkGKj",
   "name": "Scary Pumpkin",
   "uses": {
@@ -3191,9 +3144,8 @@
   }
  },
  {
-  "error": "builtin `translate` is not implemented yet",
   "file": "corpus/qQbHfjbMeCXZCx7Cg.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "qQbHfjbMeCXZCx7Cg",
   "name": "Stairmaster 2D",
   "uses": {
@@ -3255,9 +3207,8 @@
   }
  },
  {
-  "error": "builtin `setPalette` is not implemented yet",
   "file": "corpus/rYGzPKSFYTpESDKzu.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "rYGzPKSFYTpESDKzu",
   "name": "Eye of Sauron",
   "uses": {
@@ -3288,9 +3239,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/rw9wspkrLrPEkR7dX.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "rw9wspkrLrPEkR7dX",
   "name": "Lissajous curve tracer",
   "uses": {
@@ -3391,9 +3341,8 @@
   }
  },
  {
-  "error": "builtin `pinMode` is not implemented yet",
   "file": "corpus/tMc8n9TTToG2pweJz.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "tMc8n9TTToG2pweJz",
   "name": "2D Fireworks Fade",
   "uses": {
@@ -3408,9 +3357,8 @@
   }
  },
  {
-  "error": "builtin `perlin` is not implemented yet",
   "file": "corpus/tjRYAHpNQgyp8Bfck.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "tjRYAHpNQgyp8Bfck",
   "name": "Butterfly 2D",
   "uses": {
@@ -3489,9 +3437,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/uqcF3zfyxBXz42Zmn.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "uqcF3zfyxBXz42Zmn",
   "name": "Geometry Morphing Demo 2D",
   "uses": {
@@ -3532,9 +3479,8 @@
   }
  },
  {
-  "error": "builtin `perlinFbm` is not implemented yet",
   "file": "corpus/vXGvYT7tqJCsCKfiD.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "vXGvYT7tqJCsCKfiD",
   "name": "sound - spectroblots - pow fade",
   "uses": {
@@ -3566,9 +3512,8 @@
   }
  },
  {
-  "error": "builtin `mapPixels` is not implemented yet",
   "file": "corpus/vYzzPfsKSJHPFgE7Q.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "vYzzPfsKSJHPFgE7Q",
   "name": "Slime mold palette",
   "uses": {
@@ -3816,9 +3761,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/y6HuinPz2cQzFykDG.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "y6HuinPz2cQzFykDG",
   "name": "Accelerometer level example",
   "uses": {
@@ -3861,9 +3805,8 @@
   }
  },
  {
-  "error": "builtin `resetTransform` is not implemented yet",
   "file": "corpus/ymFxCE3QLKB9hcxLb.epe",
-  "stage": "frame",
+  "stage": "ok",
   "id": "ymFxCE3QLKB9hcxLb",
   "name": "M5Stack Hex panels",
   "uses": {
@@ -3890,9 +3833,8 @@
   }
  },
  {
-  "error": "builtin `pinMode` is not implemented yet",
   "file": "corpus/yvWNCFdYT82BFFxom.epe",
-  "stage": "init",
+  "stage": "ok",
   "id": "yvWNCFdYT82BFFxom",
   "name": "Rock sparks",
   "uses": {

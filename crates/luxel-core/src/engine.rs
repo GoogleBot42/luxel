@@ -4,9 +4,10 @@
 //! Runtime errors never stop the engine — the first error of a frame is
 //! recorded (PB's `vmerr` model) and rendering continues on the next frame.
 //!
-//! Maps aren't implemented yet (M3): the engine always has 1D geometry, so
-//! render selection priority is `render` → `render3D` → `render2D`, with
-//! missing coordinates filled with mid-space (0.5). TODO(oracle).
+//! Pixel maps install via [`Engine::set_map`] (host-normalized to world
+//! units 0..1 exclusive); render selection follows the documented priority
+//! per map dimensionality, missing coordinates fill with mid-space (0.5),
+//! and the transform stack applies to 2D/3D coordinates. TODO(oracle).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -14,7 +15,7 @@ use alloc::vec::Vec;
 use crate::compile::compile;
 use crate::diag::Diagnostic;
 use crate::fixed::Fx;
-use crate::vm::{Program, Value, Vm, VmError};
+use crate::vm::{MapData, Program, Value, Vm, VmError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RenderKind {
@@ -102,13 +103,9 @@ impl Engine {
             last_error = Some(e);
         }
 
+        vm.pixel_count = pixel_count;
         let before = prog.exported_fn("beforeRender");
-        // 1D geometry: render → render3D → render2D
-        let render = prog
-            .exported_fn("render")
-            .map(RenderKind::R1)
-            .or_else(|| prog.exported_fn("render3D").map(RenderKind::R3))
-            .or_else(|| prog.exported_fn("render2D").map(RenderKind::R2));
+        let render = pick_render(&prog, 0);
 
         let mut controls = Vec::new();
         for (name, idx) in &prog.exported_fns {
@@ -142,6 +139,40 @@ impl Engine {
 
     pub fn pixel_count(&self) -> u32 {
         self.pixel_count
+    }
+
+    /// Install a pixel map: one coordinate tuple per pixel, any units.
+    /// Coordinates normalize per-axis into world units 0..1 (exclusive —
+    /// quantized to u16/65536 like PB's map binary). Render selection
+    /// re-picks by map dimensionality.
+    pub fn set_map(&mut self, dims: u8, raw: &[[Fx; 3]]) {
+        let n = (self.pixel_count as usize).min(raw.len());
+        let mut coords = alloc::vec![[Fx::ZERO; 3]; n];
+        for axis in 0..(dims as usize).min(3) {
+            let mut min = i64::MAX;
+            let mut max = i64::MIN;
+            for c in raw[..n].iter() {
+                min = min.min(c[axis].raw() as i64);
+                max = max.max(c[axis].raw() as i64);
+            }
+            let span = max - min;
+            for (i, c) in raw[..n].iter().enumerate() {
+                let v = if span == 0 {
+                    0
+                } else {
+                    ((c[axis].raw() as i64 - min) * 65_535 + span / 2) / span
+                };
+                coords[i][axis] = Fx::from_raw(v as i32);
+            }
+        }
+        self.vm.map = Some(MapData { dims, coords });
+        self.render = pick_render(&self.prog, dims);
+    }
+
+    /// Provide wall-clock time (unix seconds, timezone already applied) for
+    /// the clock builtins.
+    pub fn set_wall_clock(&mut self, unix_seconds: i64) {
+        self.vm.wall_unix = Some(unix_seconds);
     }
 
     pub fn controls(&self) -> &[Control] {
@@ -226,10 +257,20 @@ impl Engine {
             self.pixels.iter_mut().for_each(|p| *p = [0; 3]);
             return &self.pixels;
         };
-        let mid = Value::Num(Fx::from_raw(1 << 15)); // 0.5, mid-space fill
+        let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
         for i in 0..self.pixel_count {
-            let x = Fx::from_raw((((i as i64) << 16) / self.pixel_count.max(1) as i64) as i32);
-            let all = [Value::Num(Fx::from_int(i as i32)), Value::Num(x), mid, mid];
+            let p = self.vm.pixel_coords(i, [mid; 3]);
+            // transforms apply to 2D/3D coordinates (TODO(oracle): 1D x?)
+            let p = match render {
+                RenderKind::R1(_) => p,
+                _ => self.vm.apply_transform(p),
+            };
+            let all = [
+                Value::Num(Fx::from_int(i as i32)),
+                Value::Num(p[0]),
+                Value::Num(p[1]),
+                Value::Num(p[2]),
+            ];
             let (fn_idx, argc) = match render {
                 RenderKind::R1(f) => (f, 2),
                 RenderKind::R2(f) => (f, 3),
@@ -269,4 +310,18 @@ impl Engine {
 /// (and HDR paths) may differ.
 fn quantize(v: Fx) -> u8 {
     ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255 + 32_768) >> 16) as u8
+}
+
+/// Render-function selection priority by map dimensionality (documented PB
+/// behavior): no/1D map → render, render3D, render2D; 2D map → render2D,
+/// render3D, render; 3D map → render3D, render2D, render.
+fn pick_render(prog: &Program, dims: u8) -> Option<RenderKind> {
+    let r1 = || prog.exported_fn("render").map(RenderKind::R1);
+    let r2 = || prog.exported_fn("render2D").map(RenderKind::R2);
+    let r3 = || prog.exported_fn("render3D").map(RenderKind::R3);
+    match dims {
+        2 => r2().or_else(r3).or_else(r1),
+        3 => r3().or_else(r2).or_else(r1),
+        _ => r1().or_else(r3).or_else(r2),
+    }
 }
