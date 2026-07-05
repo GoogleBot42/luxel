@@ -244,7 +244,15 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             fps_mark = Instant::now();
         }
 
-        embassy_futures::yield_now().await;
+        // Pace to ~120 fps: an uncapped render loop starves the network
+        // tasks (choppy preview, timed-out polls) for frame rate nobody can
+        // see. Slow patterns just yield.
+        let spent = Instant::now() - last;
+        if spent.as_micros() < 8_000 {
+            Timer::after(Duration::from_micros(8_000 - spent.as_micros())).await;
+        } else {
+            embassy_futures::yield_now().await;
+        }
     }
 }
 

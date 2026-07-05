@@ -93,7 +93,10 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
 
 pub const WEB_TASK_POOL_SIZE: usize = 2;
 
-static CONFIG: picoserve::Config = picoserve::Config::const_default();
+// keep_connection_alive: without it every preview poll (15/s) pays a full
+// TCP open/close on a chip with a 2-connection pool — the browser reuses
+// one connection instead.
+static CONFIG: picoserve::Config = picoserve::Config::const_default().keep_connection_alive();
 
 #[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
 pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {

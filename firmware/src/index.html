@@ -81,12 +81,17 @@ $("src").addEventListener("keydown", (e) => {
   }
 });
 
+let statusMisses = 0;
 setInterval(async () => {
   try {
     const s = await (await fetch("/api/status")).json();
+    statusMisses = 0;
     $("status").textContent = `${s.fps} fps · ${s.pixels} px`;
     $("vmerr").textContent = s.vmerr ?? "";
-  } catch { $("status").textContent = "offline"; }
+  } catch {
+    // tolerate isolated timeouts (busy device) before declaring offline
+    if (++statusMisses >= 3) $("status").textContent = "offline";
+  }
 }, 1000);
 
 // ---- pixel preview (strip + waterfall) ----
@@ -94,7 +99,7 @@ const strip = $("strip"), wf = $("waterfall");
 const sctx = strip.getContext("2d"), wctx = wf.getContext("2d");
 let previewBusy = false;
 setInterval(async () => {
-  if (previewBusy) return;
+  if (previewBusy) return;   // never stack requests on a slow device
   previewBusy = true;
   try {
     const buf = new Uint8Array(await (await fetch("/api/pixels")).arrayBuffer());
