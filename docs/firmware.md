@@ -48,7 +48,7 @@ ESP-WROOM-32 (Xtensa, 4 MB flash), AP2112K 3.3 V regulator, micro-USB is
 | LED CLOCK | 18 (VSPI SCK) | same shifter — APA102/SK9822 native, WS281x uses DATA only |
 | status LED | 12 | Luxel lights it at boot; strapping pin, output-only use |
 | button | 32 | unused so far |
-| expansion header | GND, EN, 3V3, RX0, TX0, IO0, IO25, IO26 | sensor board / serial |
+| expansion header | GND, RST, 3v3, RX, TX, IO0, IO25, IO26 | sensor board / serial; labels silkscreened at 45° beside each pin, on the edge opposite the screw terminals ("RST" = the ESP32 EN/reset pin) |
 
 ### Flashing + restore procedure (serial, fully recoverable)
 
@@ -58,7 +58,8 @@ board from its own micro-USB (don't connect the adapter's power pin).
 
 **Entering the ROM bootloader** ("hold IO0"): jumper IO0→GND on the
 header, then reset the chip while the jumper is in place — briefly touch
-EN→GND, or unplug/replug USB power. The pin is only sampled at reset;
+RST→GND (the board's silkscreen says RST; the schematic calls it EN), or
+unplug/replug USB power. The pin is only sampled at reset;
 once the bootloader is running the jumper can come off (it stays in the
 bootloader until the next reset). This same entry step precedes *every*
 esptool/espflash command below — the tools hard-reset the chip when they
