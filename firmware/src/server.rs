@@ -17,7 +17,7 @@ use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use picoserve::routing::{get, get_service, post};
 
-use crate::shared::{get_vmerr, CODE_QUEUE, FPS};
+use crate::shared::{get_pixels, get_vmerr, CODE_QUEUE, FPS};
 use crate::PIXEL_COUNT;
 
 const INDEX_HTML: &str = include_str!("index.html");
@@ -37,6 +37,14 @@ fn json_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// Last rendered frame as raw RGB bytes (3 per pixel) for the preview.
+async fn api_pixels() -> impl picoserve::response::IntoResponse {
+    (
+        ("Content-Type", "application/octet-stream"),
+        get_pixels(),
+    )
 }
 
 async fn api_status() -> String {
@@ -79,6 +87,7 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
             get_service(picoserve::response::File::html(INDEX_HTML)),
         )
         .route("/api/status", get(api_status))
+        .route("/api/pixels", get(api_pixels))
         .route("/api/code", post(api_code))
 }
 

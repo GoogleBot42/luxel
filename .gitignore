@@ -7,3 +7,4 @@ node_modules/
 web/dist/
 web/public/luxel.wasm
 firmware/target/
+web/e2e-serve.png

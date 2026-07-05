@@ -13,6 +13,9 @@
   header .status { color: #8b8fa3; font-variant-numeric: tabular-nums; }
   header .vmerr { color: #ff7b72; }
   main { flex: 1; display: flex; flex-direction: column; padding: .8rem 1rem; gap: .6rem; min-height: 0; }
+  canvas { display: block; width: 100%; image-rendering: pixelated; border-radius: 4px; background: #000; }
+  #strip { height: 14px; }
+  #waterfall { height: 90px; }
   textarea { flex: 1; resize: none; background: #0f1014; color: #e6e6ea; border: 1px solid #2a2d39;
              border-radius: 6px; padding: .7rem; font: 13px/1.5 ui-monospace, monospace; tab-size: 2; }
   textarea:focus { outline: none; border-color: #4a72ff; }
@@ -33,6 +36,8 @@
   <span class="vmerr" id="vmerr"></span>
 </header>
 <main>
+  <canvas id="strip" width="1" height="1"></canvas>
+  <canvas id="waterfall" width="1" height="90"></canvas>
   <textarea id="src" spellcheck="false" placeholder="// Paste a pattern and hit Run (Ctrl+Enter)
 export function beforeRender(delta) { t1 = time(.05) }
 export function render(index) { hsv(t1 + index / pixelCount, 1, 1) }"></textarea>
@@ -83,6 +88,32 @@ setInterval(async () => {
     $("vmerr").textContent = s.vmerr ?? "";
   } catch { $("status").textContent = "offline"; }
 }, 1000);
+
+// ---- pixel preview (strip + waterfall) ----
+const strip = $("strip"), wf = $("waterfall");
+const sctx = strip.getContext("2d"), wctx = wf.getContext("2d");
+let previewBusy = false;
+setInterval(async () => {
+  if (previewBusy) return;
+  previewBusy = true;
+  try {
+    const buf = new Uint8Array(await (await fetch("/api/pixels")).arrayBuffer());
+    const n = Math.floor(buf.length / 3);
+    if (n === 0) return;
+    if (strip.width !== n) { strip.width = n; strip.height = 1; wf.width = n; }
+    const row = sctx.createImageData(n, 1);
+    for (let i = 0; i < n; i++) {
+      row.data[i * 4] = buf[i * 3];
+      row.data[i * 4 + 1] = buf[i * 3 + 1];
+      row.data[i * 4 + 2] = buf[i * 3 + 2];
+      row.data[i * 4 + 3] = 255;
+    }
+    sctx.putImageData(row, 0, 0);
+    wctx.drawImage(wf, 0, 0, n, wf.height - 1, 0, 1, n, wf.height - 1);
+    wctx.putImageData(row, 0, 0);
+  } catch { /* offline; status line already says so */ }
+  finally { previewBusy = false; }
+}, 66);
 </script>
 </body>
 </html>

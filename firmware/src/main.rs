@@ -40,7 +40,7 @@ mod server;
 mod shared;
 
 use leds::Protocol;
-use shared::{set_vmerr, CODE_QUEUE, FPS};
+use shared::{set_pixels, set_vmerr, CODE_QUEUE, FPS};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -185,6 +185,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
 
             let px = eng.frame(delta);
+            set_pixels(px);
             PROTOCOL.encode(px, APA_BRIGHTNESS, &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);

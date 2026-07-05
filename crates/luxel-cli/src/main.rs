@@ -20,6 +20,8 @@ use std::io::Write;
 use std::process::ExitCode;
 use std::time::Instant;
 
+mod serve;
+
 use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
@@ -36,6 +38,7 @@ fn main() -> ExitCode {
         "bench" if args.len() >= 2 => run_cmd(&args[1], &args[2..], true),
         "vars" if args.len() >= 2 => vars_cmd(&args[1], &args[2..]),
         "check" if args.len() >= 2 => check_cmd(&args[1], &args[2..]),
+        "serve" => serve::serve_cmd(&args[1..]),
         _ => usage(),
     }
 }
@@ -182,9 +185,9 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn usage() -> ExitCode {
+pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel serve [--pixels N] [--port P]"
     );
     ExitCode::from(2)
 }

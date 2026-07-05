@@ -21,6 +21,25 @@ pub static FPS: AtomicU32 = AtomicU32::new(0);
 pub static LAST_VMERR: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<String>>> =
     BlockingMutex::new(RefCell::new(None));
 
+/// Snapshot of the last rendered frame (RGB bytes, 3 per pixel) for the
+/// browser preview (`GET /api/pixels`).
+pub static PIXELS: BlockingMutex<CriticalSectionRawMutex, RefCell<alloc::vec::Vec<u8>>> =
+    BlockingMutex::new(RefCell::new(alloc::vec::Vec::new()));
+
+pub fn set_pixels(rgb: &[[u8; 3]]) {
+    PIXELS.lock(|c| {
+        let mut v = c.borrow_mut();
+        v.clear();
+        for px in rgb {
+            v.extend_from_slice(px);
+        }
+    });
+}
+
+pub fn get_pixels() -> alloc::vec::Vec<u8> {
+    PIXELS.lock(|c| c.borrow().clone())
+}
+
 pub fn set_vmerr(msg: Option<String>) {
     LAST_VMERR.lock(|c| *c.borrow_mut() = msg);
 }
