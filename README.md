@@ -21,8 +21,11 @@ documented bytecode VM that other languages can target too.
   no app — everything works on a device in AP mode.
 
 Status: **M0 in progress** — the language core. Working today: `luxel-core`
-(no_std lexer/parser + 16.16 fixed-point type with the documented PB semantics,
-conformance-tested) and a `luxel parse` CLI. Dev environment via `nix develop`.
+(no_std compiler + stack VM + frame engine: 16.16 fixed-point semantics,
+waveform/math/array/color builtins, controls, export vars — conformance-tested
+with golden pixel-exact frames, deterministic across native and wasm32) and a
+CLI: `luxel parse`, `luxel run` (renders a PPM frame-strip), `luxel bench`.
+Try it: `nix develop -c cargo run -p luxel-cli -- run examples/blinkfade.js`.
 See [docs/PLAN.md](docs/PLAN.md) for architecture, requirements, and milestones,
 and [docs/research/](docs/research/) for the research behind it.
 

@@ -1,0 +1,902 @@
+//! AST → bytecode compiler.
+//!
+//! Scoping rules (matching the documented PB semantics):
+//! - `var` is function-scoped and hoisted (JS `var` rules); `var` at top
+//!   level declares a global.
+//! - Assignment to an undeclared name creates a global — even from inside a
+//!   function or lambda. A collection pre-pass finds every such name so
+//!   forward references across functions resolve.
+//! - No closures: a lambda sees only its own params/locals and globals.
+//! - `pixelCount` and the math constants are predefined globals.
+
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use crate::ast::*;
+use crate::diag::{Diagnostic, Span};
+use crate::fixed::Fx;
+use crate::parse::parse_program;
+use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Insn, Program, Value};
+
+const MAX_GLOBALS: usize = 256;
+const MAX_LOCALS: usize = 256;
+
+pub fn compile(src: &str) -> Result<Program, Diagnostic> {
+    let ast = parse_program(src)?;
+    let mut c = Compiler::new();
+    c.collect(&ast)?;
+    c.emit_program(&ast)?;
+    Ok(Program {
+        fns: c.fns,
+        globals: c.globals,
+        exported_fns: c.exported_fns,
+        pixel_count_g: 0,
+    })
+}
+
+/// Predefined constants (name, value). `pixelCount` is global 0, written by
+/// the engine before init runs.
+fn predefined() -> Vec<GlobalDef> {
+    use core::f64::consts;
+    let g = |name: &str, v: f64| GlobalDef {
+        name: name.to_string(),
+        export: false,
+        init: Fx::from_f64(v),
+    };
+    alloc::vec![
+        g("pixelCount", 0.0),
+        g("E", consts::E),
+        g("PI", consts::PI),
+        g("PI2", consts::TAU),
+        g("PI3_4", consts::PI * 0.75),
+        g("PISQ", consts::PI * consts::PI),
+        g("LN2", consts::LN_2),
+        g("LN10", consts::LN_10),
+        g("LOG2E", consts::LOG2_E),
+        g("LOG10E", consts::LOG10_E),
+        g("SQRT1_2", consts::FRAC_1_SQRT_2),
+        g("SQRT2", consts::SQRT_2),
+    ]
+}
+
+struct Compiler {
+    globals: Vec<GlobalDef>,
+    fns: Vec<FnDef>,
+    /// Top-level named functions: (name, fn index, exported).
+    named_fns: Vec<(String, u16, bool)>,
+    exported_fns: Vec<(String, u16)>,
+}
+
+enum Place {
+    Local(u8),
+    Global(u16),
+    Func(u16),
+    Builtin(u16),
+}
+
+impl Compiler {
+    fn new() -> Compiler {
+        Compiler {
+            globals: predefined(),
+            fns: alloc::vec![FnDef {
+                name: "<init>".to_string(),
+                params: 0,
+                locals: 0,
+                code: Vec::new(),
+            }],
+            named_fns: Vec::new(),
+            exported_fns: Vec::new(),
+        }
+    }
+
+    fn global_idx(&self, name: &str) -> Option<u16> {
+        self.globals
+            .iter()
+            .position(|g| g.name == name)
+            .map(|i| i as u16)
+    }
+
+    fn ensure_global(&mut self, name: &str, export: bool, span: Span) -> Result<u16, Diagnostic> {
+        if let Some(i) = self.global_idx(name) {
+            if export {
+                self.globals[i as usize].export = true;
+            }
+            return Ok(i);
+        }
+        if self.globals.len() >= MAX_GLOBALS {
+            return Err(Diagnostic::new(
+                span,
+                format!("too many globals (max {MAX_GLOBALS})"),
+            ));
+        }
+        self.globals.push(GlobalDef {
+            name: name.to_string(),
+            export,
+            init: Fx::ZERO,
+        });
+        Ok((self.globals.len() - 1) as u16)
+    }
+
+    // ---- pass 1: collect functions and globals ----
+
+    fn collect(&mut self, top: &[Stmt]) -> Result<(), Diagnostic> {
+        // register named functions first so calls resolve in any order
+        for s in top {
+            if let StmtKind::Func { export, name, .. } = &s.kind {
+                if self.named_fns.iter().any(|(n, _, _)| n == name) {
+                    return Err(Diagnostic::new(
+                        s.span,
+                        format!("duplicate function `{name}`"),
+                    ));
+                }
+                let idx = (self.fns.len() + self.named_fns.len()) as u16;
+                self.named_fns.push((name.clone(), idx, *export));
+            }
+        }
+        // reserve placeholder defs so indices are stable during emission
+        for (name, _, _) in self.named_fns.clone() {
+            self.fns.push(FnDef {
+                name,
+                params: 0,
+                locals: 0,
+                code: Vec::new(),
+            });
+        }
+        // top level: every var / assignment is a global (even inside blocks)
+        let empty: Vec<String> = Vec::new();
+        for s in top {
+            match &s.kind {
+                StmtKind::Func { params, body, .. } => {
+                    let locals = function_scope(params, body);
+                    self.scan_stmts(body, &locals, false)?;
+                }
+                _ => self.scan_stmt(s, &empty, true)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_stmts(
+        &mut self,
+        stmts: &[Stmt],
+        locals: &[String],
+        top: bool,
+    ) -> Result<(), Diagnostic> {
+        for s in stmts {
+            self.scan_stmt(s, locals, top)?;
+        }
+        Ok(())
+    }
+
+    fn scan_stmt(&mut self, s: &Stmt, locals: &[String], top: bool) -> Result<(), Diagnostic> {
+        match &s.kind {
+            StmtKind::Func { .. } => Err(Diagnostic::new(
+                s.span,
+                "nested named functions are not supported; use a lambda".to_string(),
+            )),
+            StmtKind::Var { export, decls } => {
+                for d in decls {
+                    if top {
+                        self.ensure_global(&d.name, *export, d.span)?;
+                    }
+                    if let Some(init) = &d.init {
+                        self.scan_expr(init, locals)?;
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::Expr(e) => self.scan_expr(e, locals),
+            StmtKind::If { cond, then, els } => {
+                self.scan_expr(cond, locals)?;
+                self.scan_stmt(then, locals, top)?;
+                if let Some(e) = els {
+                    self.scan_stmt(e, locals, top)?;
+                }
+                Ok(())
+            }
+            StmtKind::While { cond, body } => {
+                self.scan_expr(cond, locals)?;
+                self.scan_stmt(body, locals, top)
+            }
+            StmtKind::For {
+                init,
+                cond,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    self.scan_stmt(i, locals, top)?;
+                }
+                if let Some(c) = cond {
+                    self.scan_expr(c, locals)?;
+                }
+                if let Some(u) = update {
+                    self.scan_expr(u, locals)?;
+                }
+                self.scan_stmt(body, locals, top)
+            }
+            StmtKind::Block(b) => self.scan_stmts(b, locals, top),
+            StmtKind::Return(Some(e)) => self.scan_expr(e, locals),
+            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Empty => {
+                Ok(())
+            }
+        }
+    }
+
+    fn scan_expr(&mut self, e: &Expr, locals: &[String]) -> Result<(), Diagnostic> {
+        match &e.kind {
+            ExprKind::Num(_) => Ok(()),
+            ExprKind::Ident(_) => Ok(()), // reads checked during emission
+            ExprKind::ArrayLit(elems) => {
+                for el in elems {
+                    self.scan_expr(el, locals)?;
+                }
+                Ok(())
+            }
+            ExprKind::Unary { expr, .. } => self.scan_expr(expr, locals),
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.scan_expr(lhs, locals)?;
+                self.scan_expr(rhs, locals)
+            }
+            ExprKind::Assign { target, value, .. } => {
+                self.scan_assign_target(target, locals)?;
+                self.scan_expr(value, locals)
+            }
+            ExprKind::IncDec { target, .. } => self.scan_assign_target(target, locals),
+            ExprKind::Ternary { cond, then, els } => {
+                self.scan_expr(cond, locals)?;
+                self.scan_expr(then, locals)?;
+                self.scan_expr(els, locals)
+            }
+            ExprKind::Call { callee, args } => {
+                self.scan_expr(callee, locals)?;
+                for a in args {
+                    self.scan_expr(a, locals)?;
+                }
+                Ok(())
+            }
+            ExprKind::Index { obj, index } => {
+                self.scan_expr(obj, locals)?;
+                self.scan_expr(index, locals)
+            }
+            ExprKind::Member { obj, .. } => self.scan_expr(obj, locals),
+            ExprKind::Lambda { params, body } => match body {
+                LambdaBody::Expr(e) => {
+                    let scope = function_scope(params, &[]);
+                    self.scan_expr(e, &scope)
+                }
+                LambdaBody::Block(stmts) => {
+                    let scope = function_scope(params, stmts);
+                    self.scan_stmts(stmts, &scope, false)
+                }
+            },
+        }
+    }
+
+    fn scan_assign_target(&mut self, target: &Expr, locals: &[String]) -> Result<(), Diagnostic> {
+        match &target.kind {
+            ExprKind::Ident(name) => {
+                let is_local = locals.iter().any(|l| l == name);
+                let is_fn = self.named_fns.iter().any(|(n, _, _)| n == name);
+                if is_fn {
+                    return Err(Diagnostic::new(
+                        target.span,
+                        format!("cannot assign to function `{name}`"),
+                    ));
+                }
+                if !is_local {
+                    // implicit assignment creates a global
+                    self.ensure_global(name, false, target.span)?;
+                }
+                Ok(())
+            }
+            ExprKind::Index { obj, index } => {
+                self.scan_expr(obj, locals)?;
+                self.scan_expr(index, locals)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    // ---- pass 2: emission ----
+
+    fn emit_program(&mut self, top: &[Stmt]) -> Result<(), Diagnostic> {
+        // top-level init (fn 0)
+        let mut ctx = FnCtx::new(Vec::new(), true);
+        for s in top {
+            if matches!(s.kind, StmtKind::Func { .. }) {
+                continue;
+            }
+            self.emit_stmt(&mut ctx, s)?;
+        }
+        ctx.code.push(Insn::RetNull);
+        self.fns[0].code = ctx.code;
+
+        // named functions
+        for (i, s) in top.iter().enumerate() {
+            let _ = i;
+            if let StmtKind::Func {
+                export,
+                name,
+                params,
+                body,
+            } = &s.kind
+            {
+                let idx = self
+                    .named_fns
+                    .iter()
+                    .find(|(n, _, _)| n == name)
+                    .map(|&(_, i, _)| i)
+                    .expect("registered in collect");
+                let def = self.emit_function(name.clone(), params, body, s.span)?;
+                self.fns[idx as usize] = def;
+                if *export {
+                    self.exported_fns.push((name.clone(), idx));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_function(
+        &mut self,
+        name: String,
+        params: &[String],
+        body: &[Stmt],
+        span: Span,
+    ) -> Result<FnDef, Diagnostic> {
+        let locals = function_scope(params, body);
+        if locals.len() > MAX_LOCALS {
+            return Err(Diagnostic::new(
+                span,
+                format!("too many locals in `{name}` (max {MAX_LOCALS})"),
+            ));
+        }
+        let mut ctx = FnCtx::new(locals, false);
+        for s in body {
+            self.emit_stmt(&mut ctx, s)?;
+        }
+        ctx.code.push(Insn::RetNull);
+        Ok(FnDef {
+            name,
+            params: params.len() as u8,
+            locals: ctx.locals.len() as u8,
+            code: ctx.code,
+        })
+    }
+
+    fn emit_lambda(
+        &mut self,
+        params: &[String],
+        body: &LambdaBody,
+        span: Span,
+    ) -> Result<u16, Diagnostic> {
+        let idx = self.fns.len() as u16;
+        let name = format!("<lambda#{idx}>");
+        // reserve slot first (nested lambdas may allocate more)
+        self.fns.push(FnDef {
+            name: name.clone(),
+            params: 0,
+            locals: 0,
+            code: Vec::new(),
+        });
+        let def = match body {
+            LambdaBody::Expr(e) => {
+                let locals = function_scope(params, &[]);
+                let mut ctx = FnCtx::new(locals, false);
+                self.emit_expr(&mut ctx, e)?;
+                ctx.code.push(Insn::Ret);
+                FnDef {
+                    name,
+                    params: params.len() as u8,
+                    locals: ctx.locals.len() as u8,
+                    code: ctx.code,
+                }
+            }
+            LambdaBody::Block(stmts) => {
+                let locals = function_scope(params, stmts);
+                if locals.len() > MAX_LOCALS {
+                    return Err(Diagnostic::new(
+                        span,
+                        "too many locals in lambda".to_string(),
+                    ));
+                }
+                let mut ctx = FnCtx::new(locals, false);
+                for s in stmts {
+                    self.emit_stmt(&mut ctx, s)?;
+                }
+                ctx.code.push(Insn::RetNull);
+                FnDef {
+                    name,
+                    params: params.len() as u8,
+                    locals: ctx.locals.len() as u8,
+                    code: ctx.code,
+                }
+            }
+        };
+        self.fns[idx as usize] = def;
+        Ok(idx)
+    }
+
+    fn resolve(&self, ctx: &FnCtx, name: &str, span: Span) -> Result<Place, Diagnostic> {
+        if let Some(i) = ctx.locals.iter().position(|l| l == name) {
+            return Ok(Place::Local(i as u8));
+        }
+        if let Some(&(_, idx, _)) = self.named_fns.iter().find(|(n, _, _)| n == name) {
+            return Ok(Place::Func(idx));
+        }
+        if let Some(i) = self.global_idx(name) {
+            return Ok(Place::Global(i));
+        }
+        if let Some(b) = lookup_builtin(name) {
+            return Ok(Place::Builtin(b));
+        }
+        Err(Diagnostic::new(
+            span,
+            format!("unknown identifier `{name}`"),
+        ))
+    }
+
+    fn emit_stmt(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
+        match &s.kind {
+            StmtKind::Empty => Ok(()),
+            StmtKind::Func { .. } => Err(Diagnostic::new(
+                s.span,
+                "nested named functions are not supported; use a lambda".to_string(),
+            )),
+            StmtKind::Var { decls, .. } => {
+                for d in decls {
+                    if let Some(init) = &d.init {
+                        self.emit_expr(ctx, init)?;
+                        self.emit_store(ctx, &d.name, d.span)?;
+                        ctx.code.push(Insn::Pop);
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::Expr(e) => {
+                self.emit_expr(ctx, e)?;
+                ctx.code.push(Insn::Pop);
+                Ok(())
+            }
+            StmtKind::If { cond, then, els } => {
+                self.emit_expr(ctx, cond)?;
+                let jf = ctx.emit_placeholder();
+                self.emit_stmt(ctx, then)?;
+                if let Some(els) = els {
+                    let jend = ctx.emit_placeholder();
+                    ctx.patch(jf, Insn::JmpIfFalse(ctx.here()));
+                    self.emit_stmt(ctx, els)?;
+                    ctx.patch(jend, Insn::Jmp(ctx.here()));
+                } else {
+                    ctx.patch(jf, Insn::JmpIfFalse(ctx.here()));
+                }
+                Ok(())
+            }
+            StmtKind::While { cond, body } => {
+                let start = ctx.here();
+                self.emit_expr(ctx, cond)?;
+                let jf = ctx.emit_placeholder();
+                ctx.loops.push(LoopFrame::default());
+                self.emit_stmt(ctx, body)?;
+                ctx.code.push(Insn::Jmp(start));
+                let frame = ctx.loops.pop().unwrap();
+                let end = ctx.here();
+                ctx.patch(jf, Insn::JmpIfFalse(end));
+                for b in frame.breaks {
+                    ctx.patch(b, Insn::Jmp(end));
+                }
+                for c in frame.continues {
+                    ctx.patch(c, Insn::Jmp(start));
+                }
+                Ok(())
+            }
+            StmtKind::For {
+                init,
+                cond,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    self.emit_stmt(ctx, i)?;
+                }
+                let start = ctx.here();
+                let jf = if let Some(c) = cond {
+                    self.emit_expr(ctx, c)?;
+                    Some(ctx.emit_placeholder())
+                } else {
+                    None
+                };
+                ctx.loops.push(LoopFrame::default());
+                self.emit_stmt(ctx, body)?;
+                let frame = ctx.loops.pop().unwrap();
+                let cont = ctx.here();
+                if let Some(u) = update {
+                    self.emit_expr(ctx, u)?;
+                    ctx.code.push(Insn::Pop);
+                }
+                ctx.code.push(Insn::Jmp(start));
+                let end = ctx.here();
+                if let Some(jf) = jf {
+                    ctx.patch(jf, Insn::JmpIfFalse(end));
+                }
+                for b in frame.breaks {
+                    ctx.patch(b, Insn::Jmp(end));
+                }
+                for c in frame.continues {
+                    ctx.patch(c, Insn::Jmp(cont));
+                }
+                Ok(())
+            }
+            StmtKind::Block(body) => {
+                for s in body {
+                    self.emit_stmt(ctx, s)?;
+                }
+                Ok(())
+            }
+            StmtKind::Return(v) => {
+                match v {
+                    Some(e) => {
+                        self.emit_expr(ctx, e)?;
+                        ctx.code.push(Insn::Ret);
+                    }
+                    None => ctx.code.push(Insn::RetNull),
+                }
+                Ok(())
+            }
+            StmtKind::Break => {
+                let p = ctx.emit_placeholder();
+                match ctx.loops.last_mut() {
+                    Some(f) => {
+                        f.breaks.push(p);
+                        Ok(())
+                    }
+                    None => Err(Diagnostic::new(
+                        s.span,
+                        "`break` outside a loop".to_string(),
+                    )),
+                }
+            }
+            StmtKind::Continue => {
+                let p = ctx.emit_placeholder();
+                match ctx.loops.last_mut() {
+                    Some(f) => {
+                        f.continues.push(p);
+                        Ok(())
+                    }
+                    None => Err(Diagnostic::new(
+                        s.span,
+                        "`continue` outside a loop".to_string(),
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Emit a store to a named variable (value on stack; leaves it there).
+    fn emit_store(&mut self, ctx: &mut FnCtx, name: &str, span: Span) -> Result<(), Diagnostic> {
+        match self.resolve(ctx, name, span)? {
+            Place::Local(i) => ctx.code.push(Insn::StoreL(i)),
+            Place::Global(i) => ctx.code.push(Insn::StoreG(i)),
+            Place::Func(_) | Place::Builtin(_) => {
+                return Err(Diagnostic::new(span, format!("cannot assign to `{name}`")))
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_expr(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
+        match &e.kind {
+            ExprKind::Num(v) => {
+                ctx.code.push(Insn::Const(Value::Num(*v)));
+                Ok(())
+            }
+            ExprKind::Ident(name) => {
+                match self.resolve(ctx, name, e.span)? {
+                    Place::Local(i) => ctx.code.push(Insn::LoadL(i)),
+                    Place::Global(i) => ctx.code.push(Insn::LoadG(i)),
+                    Place::Func(i) => ctx.code.push(Insn::Const(Value::Fun(i))),
+                    Place::Builtin(b) => ctx.code.push(Insn::Const(Value::Builtin(b))),
+                }
+                Ok(())
+            }
+            ExprKind::ArrayLit(elems) => {
+                if elems.len() > u16::MAX as usize {
+                    return Err(Diagnostic::new(
+                        e.span,
+                        "array literal too large".to_string(),
+                    ));
+                }
+                for el in elems {
+                    self.emit_expr(ctx, el)?;
+                }
+                ctx.code.push(Insn::NewArray(elems.len() as u16));
+                Ok(())
+            }
+            ExprKind::Unary { op, expr } => {
+                self.emit_expr(ctx, expr)?;
+                match op {
+                    UnOp::Neg => ctx.code.push(Insn::Neg),
+                    UnOp::Pos => {} // numeric identity
+                    UnOp::Not => ctx.code.push(Insn::Not),
+                    UnOp::BitNot => ctx.code.push(Insn::BitNot),
+                }
+                Ok(())
+            }
+            ExprKind::Binary { op, lhs, rhs } => match op {
+                BinOp::And => {
+                    self.emit_expr(ctx, lhs)?;
+                    let j = ctx.emit_placeholder();
+                    ctx.code.push(Insn::Pop);
+                    self.emit_expr(ctx, rhs)?;
+                    ctx.patch(j, Insn::JmpIfFalsePeek(ctx.here()));
+                    Ok(())
+                }
+                BinOp::Or => {
+                    self.emit_expr(ctx, lhs)?;
+                    let j = ctx.emit_placeholder();
+                    ctx.code.push(Insn::Pop);
+                    self.emit_expr(ctx, rhs)?;
+                    ctx.patch(j, Insn::JmpIfTruePeek(ctx.here()));
+                    Ok(())
+                }
+                _ => {
+                    self.emit_expr(ctx, lhs)?;
+                    self.emit_expr(ctx, rhs)?;
+                    ctx.code.push(bin_insn(*op));
+                    Ok(())
+                }
+            },
+            ExprKind::Assign { op, target, value } => match &target.kind {
+                ExprKind::Ident(name) => {
+                    if let Some(op) = op {
+                        self.emit_expr(ctx, target)?;
+                        self.emit_expr(ctx, value)?;
+                        ctx.code.push(bin_insn(*op));
+                    } else {
+                        self.emit_expr(ctx, value)?;
+                    }
+                    self.emit_store(ctx, name, target.span)
+                }
+                ExprKind::Index { obj, index } => {
+                    self.emit_expr(ctx, obj)?;
+                    self.emit_expr(ctx, index)?;
+                    if let Some(op) = op {
+                        ctx.code.push(Insn::Dup2);
+                        ctx.code.push(Insn::LoadIdx);
+                        self.emit_expr(ctx, value)?;
+                        ctx.code.push(bin_insn(*op));
+                    } else {
+                        self.emit_expr(ctx, value)?;
+                    }
+                    ctx.code.push(Insn::StoreIdx);
+                    Ok(())
+                }
+                _ => Err(Diagnostic::new(
+                    target.span,
+                    "invalid assignment target".to_string(),
+                )),
+            },
+            ExprKind::IncDec {
+                inc,
+                prefix,
+                target,
+            } => {
+                let one = Insn::Const(Value::Num(Fx::ONE));
+                let (fwd, inv) = if *inc {
+                    (Insn::Add, Insn::Sub)
+                } else {
+                    (Insn::Sub, Insn::Add)
+                };
+                match &target.kind {
+                    ExprKind::Ident(name) => {
+                        self.emit_expr(ctx, target)?;
+                        ctx.code.push(one.clone());
+                        ctx.code.push(fwd);
+                        self.emit_store(ctx, name, target.span)?;
+                    }
+                    ExprKind::Index { obj, index } => {
+                        self.emit_expr(ctx, obj)?;
+                        self.emit_expr(ctx, index)?;
+                        ctx.code.push(Insn::Dup2);
+                        ctx.code.push(Insn::LoadIdx);
+                        ctx.code.push(one.clone());
+                        ctx.code.push(fwd);
+                        ctx.code.push(Insn::StoreIdx);
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            target.span,
+                            "invalid increment target".to_string(),
+                        ))
+                    }
+                }
+                if !prefix {
+                    // stack holds the NEW value; recover the old one (exact
+                    // inverse under wrapping arithmetic)
+                    ctx.code.push(one);
+                    ctx.code.push(inv);
+                }
+                Ok(())
+            }
+            ExprKind::Ternary { cond, then, els } => {
+                self.emit_expr(ctx, cond)?;
+                let jf = ctx.emit_placeholder();
+                self.emit_expr(ctx, then)?;
+                let jend = ctx.emit_placeholder();
+                ctx.patch(jf, Insn::JmpIfFalse(ctx.here()));
+                self.emit_expr(ctx, els)?;
+                ctx.patch(jend, Insn::Jmp(ctx.here()));
+                Ok(())
+            }
+            ExprKind::Call { callee, args } => {
+                if args.len() > 15 {
+                    return Err(Diagnostic::new(e.span, "too many arguments".to_string()));
+                }
+                let argc = args.len() as u8;
+                // method form: a.mutate(f) → arrayMutate(a, f)
+                if let ExprKind::Member { obj, name } = &callee.kind {
+                    let Some(b) = lookup_method(name) else {
+                        return Err(Diagnostic::new(
+                            callee.span,
+                            format!("unknown method `.{name}()`"),
+                        ));
+                    };
+                    self.emit_expr(ctx, obj)?;
+                    for a in args {
+                        self.emit_expr(ctx, a)?;
+                    }
+                    ctx.code.push(Insn::CallBuiltin { b, argc: argc + 1 });
+                    return Ok(());
+                }
+                // direct call of a named function or builtin
+                if let ExprKind::Ident(name) = &callee.kind {
+                    match self.resolve(ctx, name, callee.span)? {
+                        Place::Func(fn_idx) => {
+                            for a in args {
+                                self.emit_expr(ctx, a)?;
+                            }
+                            ctx.code.push(Insn::CallFn { fn_idx, argc });
+                            return Ok(());
+                        }
+                        Place::Builtin(b) => {
+                            for a in args {
+                                self.emit_expr(ctx, a)?;
+                            }
+                            ctx.code.push(Insn::CallBuiltin { b, argc });
+                            return Ok(());
+                        }
+                        _ => {} // fall through to value call
+                    }
+                }
+                self.emit_expr(ctx, callee)?;
+                for a in args {
+                    self.emit_expr(ctx, a)?;
+                }
+                ctx.code.push(Insn::CallValue { argc });
+                Ok(())
+            }
+            ExprKind::Index { obj, index } => {
+                self.emit_expr(ctx, obj)?;
+                self.emit_expr(ctx, index)?;
+                ctx.code.push(Insn::LoadIdx);
+                Ok(())
+            }
+            ExprKind::Member { obj, name } => {
+                if name == "length" {
+                    self.emit_expr(ctx, obj)?;
+                    ctx.code.push(Insn::ArrLen);
+                    Ok(())
+                } else {
+                    Err(Diagnostic::new(
+                        e.span,
+                        format!("unknown property `.{name}`"),
+                    ))
+                }
+            }
+            ExprKind::Lambda { params, body } => {
+                let idx = self.emit_lambda(params, body, e.span)?;
+                ctx.code.push(Insn::Const(Value::Fun(idx)));
+                Ok(())
+            }
+        }
+    }
+}
+
+fn bin_insn(op: BinOp) -> Insn {
+    match op {
+        BinOp::Add => Insn::Add,
+        BinOp::Sub => Insn::Sub,
+        BinOp::Mul => Insn::Mul,
+        BinOp::Div => Insn::Div,
+        BinOp::Rem => Insn::Rem,
+        BinOp::Shl => Insn::Shl,
+        BinOp::Shr => Insn::Shr,
+        BinOp::BitAnd => Insn::BitAnd,
+        BinOp::BitOr => Insn::BitOr,
+        BinOp::BitXor => Insn::BitXor,
+        BinOp::Lt => Insn::Lt,
+        BinOp::Le => Insn::Le,
+        BinOp::Gt => Insn::Gt,
+        BinOp::Ge => Insn::Ge,
+        BinOp::Eq => Insn::Eq,
+        BinOp::Ne => Insn::Ne,
+        BinOp::And | BinOp::Or => unreachable!("short-circuit ops emitted separately"),
+    }
+}
+
+struct FnCtx {
+    locals: Vec<String>,
+    code: Vec<Insn>,
+    loops: Vec<LoopFrame>,
+    #[allow(dead_code)]
+    is_top: bool,
+}
+
+#[derive(Default)]
+struct LoopFrame {
+    breaks: Vec<usize>,
+    continues: Vec<usize>,
+}
+
+impl FnCtx {
+    fn new(locals: Vec<String>, is_top: bool) -> FnCtx {
+        FnCtx {
+            locals,
+            code: Vec::new(),
+            loops: Vec::new(),
+            is_top,
+        }
+    }
+
+    fn here(&self) -> u32 {
+        self.code.len() as u32
+    }
+
+    fn emit_placeholder(&mut self) -> usize {
+        self.code.push(Insn::Jmp(u32::MAX));
+        self.code.len() - 1
+    }
+
+    fn patch(&mut self, at: usize, insn: Insn) {
+        self.code[at] = insn;
+    }
+}
+
+/// A function's local slots: params first, then every hoisted `var` in the
+/// body (JS var hoisting — blocks and loops don't scope, lambdas do).
+fn function_scope(params: &[String], body: &[Stmt]) -> Vec<String> {
+    let mut locals: Vec<String> = params.to_vec();
+    hoist(body, &mut locals);
+    locals
+}
+
+fn hoist(stmts: &[Stmt], out: &mut Vec<String>) {
+    for s in stmts {
+        match &s.kind {
+            StmtKind::Var { decls, .. } => {
+                for d in decls {
+                    if !out.iter().any(|n| n == &d.name) {
+                        out.push(d.name.clone());
+                    }
+                }
+            }
+            StmtKind::If { then, els, .. } => {
+                hoist(core::slice::from_ref(then), out);
+                if let Some(e) = els {
+                    hoist(core::slice::from_ref(e), out);
+                }
+            }
+            StmtKind::While { body, .. } => hoist(core::slice::from_ref(body), out),
+            StmtKind::For { init, body, .. } => {
+                if let Some(i) = init {
+                    hoist(core::slice::from_ref(i), out);
+                }
+                hoist(core::slice::from_ref(body), out);
+            }
+            StmtKind::Block(b) => hoist(b, out),
+            _ => {}
+        }
+    }
+}

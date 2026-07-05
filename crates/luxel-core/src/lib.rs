@@ -15,7 +15,11 @@
 extern crate alloc;
 
 pub mod ast;
+pub mod compile;
 pub mod diag;
+pub mod engine;
 pub mod fixed;
+pub mod fmath;
 pub mod lex;
 pub mod parse;
+pub mod vm;

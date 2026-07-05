@@ -1,0 +1,346 @@
+//! Deterministic fixed-point transcendentals for the Luxel VM.
+//!
+//! Everything here is integer-only (i64 intermediates on 16-frac raws), so
+//! results are bit-identical on ESP32, wasm32, and native — that determinism
+//! is a project requirement. Accuracy targets LED work (errors well under
+//! one 8-bit color step), not scientific computing.
+//!
+//! Pixel Blaze's exact algorithms for these functions are not public, so all
+//! of these are TODO(oracle): differential-test against real hardware and
+//! adjust where patterns could visibly care.
+
+use crate::fixed::Fx;
+
+// Raw 16.16 constants (value * 65536, rounded).
+const PI_RAW: i64 = 205_887; // π
+const PI2_RAW: i64 = 411_775; // 2π
+const HALF_PI_RAW: i64 = 102_944; // π/2
+const LOG2E_RAW: i64 = 94_548; // 1/ln 2
+const LN2_RAW: i64 = 45_426; // ln 2
+
+/// 16-frac multiply on i64 raws (truncating like the VM's `*`).
+#[inline]
+fn fmul(a: i64, b: i64) -> i64 {
+    (a * b) >> 16
+}
+
+/// sin of a phase in *turns* (1.0 = full cycle). The waveform functions are
+/// specified in turns, so this is the core primitive; radian `sin` reduces
+/// into it.
+pub fn sin_turns(t: Fx) -> Fx {
+    // wrap to [0, 1)
+    let t = t.mod_floor(Fx::ONE).raw() as i64;
+    // fold to a quarter wave
+    let (t, neg) = if t >= 32_768 {
+        (t - 32_768, true)
+    } else {
+        (t, false)
+    };
+    let t = if t >= 16_384 { 32_768 - t } else { t };
+    // z = t·2π ∈ [0, π/2]
+    let z = fmul(t, PI2_RAW);
+    // Taylor: z - z³/6 + z⁵/120 - z⁷/5040 + z⁹/362880 (error < 3e-6 on [0,π/2])
+    let z2 = fmul(z, z);
+    let z3 = fmul(z2, z);
+    let z5 = fmul(z3, z2);
+    let z7 = fmul(z5, z2);
+    let z9 = fmul(z7, z2);
+    let s = z - z3 / 6 + z5 / 120 - z7 / 5040 + z9 / 362_880;
+    Fx::from_raw(if neg { -s } else { s } as i32)
+}
+
+/// sin(x), x in radians.
+pub fn sin(x: Fx) -> Fx {
+    // reduce mod 2π first (better precision than multiplying large x by 1/2π)
+    let r = x.mod_floor(Fx::from_raw(PI2_RAW as i32)).raw() as i64;
+    // to turns: r / 2π
+    let turns = ((r << 16) / PI2_RAW) as i32;
+    sin_turns(Fx::from_raw(turns))
+}
+
+/// cos(x), x in radians.
+pub fn cos(x: Fx) -> Fx {
+    sin(x + Fx::from_raw(HALF_PI_RAW as i32))
+}
+
+/// tan(x) = sin/cos; where cos is 0 the VM's x/0 = 0 rule applies.
+pub fn tan(x: Fx) -> Fx {
+    sin(x) / cos(x)
+}
+
+/// Floor square root; sqrt of a negative is 0. TODO(oracle).
+pub fn sqrt(x: Fx) -> Fx {
+    if x.raw() <= 0 {
+        return Fx::ZERO;
+    }
+    Fx::from_raw(isqrt64((x.raw() as u64) << 16) as i32)
+}
+
+fn isqrt64(n: u64) -> u32 {
+    // classic bitwise integer square root
+    let mut x = n;
+    let mut c: u64 = 0;
+    let mut d: u64 = 1 << 62;
+    while d > n {
+        d >>= 2;
+    }
+    while d != 0 {
+        if x >= c + d {
+            x -= c + d;
+            c = (c >> 1) + d;
+        } else {
+            c >>= 1;
+        }
+        d >>= 2;
+    }
+    c as u32
+}
+
+/// hypot computed with i64 intermediates so x²+y² does not wrap even when a
+/// square alone would. TODO(oracle): PB may wrap here; verify.
+pub fn hypot(x: Fx, y: Fx) -> Fx {
+    hypot_raw(&[x, y])
+}
+
+pub fn hypot3(x: Fx, y: Fx, z: Fx) -> Fx {
+    hypot_raw(&[x, y, z])
+}
+
+fn hypot_raw(vs: &[Fx]) -> Fx {
+    let mut sum: u64 = 0;
+    for v in vs {
+        let r = v.raw().unsigned_abs() as u64;
+        sum = sum.saturating_add((r * r) >> 16);
+    }
+    Fx::from_raw(isqrt64(sum << 16) as i32)
+}
+
+/// 2^x. Integer part is an exact shift (wrapping past the top like all
+/// arithmetic); fraction via series on f·ln2.
+pub fn exp2(x: Fx) -> Fx {
+    let n = x.to_int_floor();
+    let f = (x - Fx::from_int(n)).raw() as i64; // [0, 1)
+                                                // 2^f = e^(f ln2), y = f·ln2 ≤ 0.6932
+    let y = fmul(f, LN2_RAW);
+    let y2 = fmul(y, y);
+    let y3 = fmul(y2, y);
+    let y4 = fmul(y3, y);
+    let y5 = fmul(y4, y);
+    let y6 = fmul(y5, y);
+    let m = 65_536 + y + y2 / 2 + y3 / 6 + y4 / 24 + y5 / 120 + y6 / 720;
+    let m = m as i32; // [1, 2) in 16-frac
+    if n >= 0 {
+        Fx::from_raw(m.wrapping_shl(n as u32 & 31))
+    } else {
+        let s = (-n) as u32;
+        Fx::from_raw(if s >= 32 { 0 } else { m >> s })
+    }
+}
+
+/// log2(x); x ≤ 0 yields the most-negative value. TODO(oracle).
+pub fn log2(x: Fx) -> Fx {
+    if x.raw() <= 0 {
+        return Fx::MIN;
+    }
+    let raw = x.raw() as u64;
+    let msb = 63 - raw.leading_zeros() as i32;
+    let int_part = msb - 16;
+    // normalize mantissa to [1, 2) as 16-frac
+    let mut m = if msb > 16 {
+        raw >> (msb - 16)
+    } else {
+        raw << (16 - msb)
+    };
+    // 16 fraction bits by repeated squaring
+    let mut frac: i32 = 0;
+    for _ in 0..16 {
+        frac <<= 1;
+        m = (m * m) >> 16;
+        if m >= 2 << 16 {
+            frac |= 1;
+            m >>= 1;
+        }
+    }
+    Fx::from_raw((int_part << 16).wrapping_add(frac))
+}
+
+/// Natural log via log2.
+pub fn ln(x: Fx) -> Fx {
+    if x.raw() <= 0 {
+        return Fx::MIN;
+    }
+    Fx::from_raw(fmul(log2(x).raw() as i64, LN2_RAW) as i32)
+}
+
+/// e^x.
+pub fn exp(x: Fx) -> Fx {
+    exp2(Fx::from_raw(fmul(x.raw() as i64, LOG2E_RAW) as i32))
+}
+
+/// pow(base, exp) = 2^(exp·log2 base). base ≤ 0 yields 0 (except exp == 0
+/// which is 1). TODO(oracle): negative bases with integer exponents.
+pub fn pow(base: Fx, e: Fx) -> Fx {
+    if e == Fx::ZERO {
+        return Fx::ONE;
+    }
+    if base.raw() <= 0 {
+        return Fx::ZERO;
+    }
+    exp2(e * log2(base))
+}
+
+/// atan(x) via odd minimax polynomial (error ≈ 1e-4 rad).
+pub fn atan(x: Fx) -> Fx {
+    let raw = x.raw() as i64;
+    if raw.abs() <= 65_536 {
+        atan_unit(raw)
+    } else {
+        // atan(x) = sign·π/2 − atan(1/x)
+        let recip = (1i64 << 32) / raw; // 16-frac 1/x, |x|>1 so |recip|≤1
+        let base = atan_unit(recip);
+        let half = if raw > 0 { HALF_PI_RAW } else { -HALF_PI_RAW };
+        Fx::from_raw((half - base.raw() as i64) as i32)
+    }
+}
+
+/// atan on |z| ≤ 1 (raw 16-frac in, Fx out).
+fn atan_unit(z: i64) -> Fx {
+    // Hastings: atan(z) ≈ z(A + B z² + C z⁴ + D z⁶ + E z⁸), err ≈ 1e-4 rad
+    const A: i64 = 65_527; // 0.9998660
+    const B: i64 = -21_647; // -0.3302995
+    const C: i64 = 11_807; // 0.1801410
+    const D: i64 = -5_580; // -0.0851330
+    const E: i64 = 1_366; // 0.0208351
+    let z2 = fmul(z, z);
+    let p = A + fmul(z2, B + fmul(z2, C + fmul(z2, D + fmul(z2, E))));
+    Fx::from_raw(fmul(z, p) as i32)
+}
+
+/// atan2(y, x) with the usual quadrant conventions; atan2(0, 0) = 0.
+pub fn atan2(y: Fx, x: Fx) -> Fx {
+    let (yr, xr) = (y.raw() as i64, x.raw() as i64);
+    if xr == 0 && yr == 0 {
+        return Fx::ZERO;
+    }
+    if xr == 0 {
+        return Fx::from_raw(if yr > 0 { HALF_PI_RAW } else { -HALF_PI_RAW } as i32);
+    }
+    if yr == 0 {
+        return Fx::from_raw(if xr > 0 { 0 } else { PI_RAW } as i32);
+    }
+    // pick the ratio with |·| ≤ 1 to stay in the polynomial's sweet spot
+    let a = if yr.abs() <= xr.abs() {
+        let base = atan_unit((yr << 16) / xr);
+        if xr > 0 {
+            base.raw() as i64
+        } else if yr > 0 {
+            base.raw() as i64 + PI_RAW
+        } else {
+            base.raw() as i64 - PI_RAW
+        }
+    } else {
+        let base = atan_unit((xr << 16) / yr);
+        if yr > 0 {
+            HALF_PI_RAW - base.raw() as i64
+        } else {
+            -HALF_PI_RAW - base.raw() as i64
+        }
+    };
+    Fx::from_raw(a as i32)
+}
+
+/// asin(x), inputs clamped to [-1, 1].
+pub fn asin(x: Fx) -> Fx {
+    let x = x.clamp(-Fx::ONE, Fx::ONE);
+    // asin(x) = atan2(x, sqrt(1 − x²)); 1−x² in i64 to dodge the x² wrap
+    let xr = x.raw() as i64;
+    let one_minus = (1i64 << 32) - xr * xr; // 32-frac
+    let root = isqrt64(one_minus as u64) as i32; // back to 16-frac
+    atan2(x, Fx::from_raw(root))
+}
+
+/// acos(x) = π/2 − asin(x).
+pub fn acos(x: Fx) -> Fx {
+    Fx::from_raw(HALF_PI_RAW as i32) - asin(x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_close(actual: Fx, expected: f64, tol: f64) {
+        let a = actual.to_f64();
+        assert!(
+            (a - expected).abs() < tol,
+            "expected ≈{expected}, got {a} (tol {tol})"
+        );
+    }
+
+    #[test]
+    fn sin_cos_basics() {
+        assert_eq!(sin(Fx::ZERO), Fx::ZERO);
+        assert_close(sin(Fx::from_f64(core::f64::consts::FRAC_PI_2)), 1.0, 3e-4);
+        assert_close(sin(Fx::from_f64(core::f64::consts::PI)), 0.0, 3e-4);
+        assert_close(sin(Fx::from_f64(1.0)), 0.8414709848, 3e-4);
+        assert_close(sin(Fx::from_f64(-1.0)), -0.8414709848, 3e-4);
+        assert_close(cos(Fx::ZERO), 1.0, 3e-4);
+        assert_close(cos(Fx::from_f64(1.0)), 0.5403023059, 3e-4);
+    }
+
+    #[test]
+    fn sin_turns_quadrants() {
+        assert_eq!(sin_turns(Fx::ZERO), Fx::ZERO);
+        assert_close(sin_turns(Fx::from_f64(0.25)), 1.0, 3e-4);
+        assert_close(sin_turns(Fx::from_f64(0.5)), 0.0, 3e-4);
+        assert_close(sin_turns(Fx::from_f64(0.75)), -1.0, 3e-4);
+        // negative phases wrap backward
+        assert_close(sin_turns(Fx::from_f64(-0.25)), -1.0, 3e-4);
+    }
+
+    #[test]
+    fn sqrt_and_hypot() {
+        assert_eq!(sqrt(Fx::from_int(4)), Fx::from_int(2));
+        assert_close(sqrt(Fx::from_int(2)), core::f64::consts::SQRT_2, 1e-4);
+        assert_eq!(sqrt(Fx::from_int(-4)), Fx::ZERO);
+        assert_close(hypot(Fx::from_int(3), Fx::from_int(4)), 5.0, 1e-3);
+        assert_close(
+            hypot3(Fx::from_int(1), Fx::from_int(2), Fx::from_int(2)),
+            3.0,
+            1e-3,
+        );
+        // i64 intermediates: components whose squares would wrap still work
+        assert_close(hypot(Fx::from_int(200), Fx::from_int(0)), 200.0, 1e-2);
+    }
+
+    #[test]
+    fn exp_log_pow() {
+        assert_close(exp2(Fx::from_int(3)), 8.0, 1e-3);
+        assert_close(exp2(Fx::from_f64(0.5)), core::f64::consts::SQRT_2, 1e-3);
+        assert_close(exp2(Fx::from_int(-2)), 0.25, 1e-3);
+        assert_close(log2(Fx::from_int(8)), 3.0, 1e-3);
+        assert_close(log2(Fx::from_f64(0.5)), -1.0, 1e-3);
+        assert_eq!(log2(Fx::ZERO), Fx::MIN);
+        assert_close(ln(Fx::from_f64(core::f64::consts::E)), 1.0, 2e-3);
+        assert_close(exp(Fx::ONE), core::f64::consts::E, 5e-3);
+        assert_close(pow(Fx::from_int(2), Fx::from_int(10)), 1024.0, 0.5);
+        assert_close(pow(Fx::from_int(9), Fx::from_f64(0.5)), 3.0, 5e-3);
+        assert_eq!(pow(Fx::from_int(-2), Fx::from_int(2)), Fx::ZERO); // TODO(oracle)
+        assert_eq!(pow(Fx::from_int(5), Fx::ZERO), Fx::ONE);
+    }
+
+    #[test]
+    fn arctangents() {
+        assert_close(atan(Fx::ONE), core::f64::consts::FRAC_PI_4, 2e-3);
+        assert_close(atan(Fx::from_int(100)), 1.5607966, 2e-3);
+        assert_close(atan(Fx::from_int(-1)), -core::f64::consts::FRAC_PI_4, 2e-3);
+        assert_close(atan2(Fx::ONE, Fx::ONE), core::f64::consts::FRAC_PI_4, 2e-3);
+        use core::f64::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_6, PI};
+        assert_close(atan2(Fx::ONE, -Fx::ONE), 3.0 * PI / 4.0, 3e-3);
+        assert_close(atan2(-Fx::ONE, -Fx::ONE), -3.0 * PI / 4.0, 3e-3);
+        assert_close(atan2(Fx::ONE, Fx::ZERO), FRAC_PI_2, 2e-3);
+        assert_eq!(atan2(Fx::ZERO, Fx::ZERO), Fx::ZERO);
+        assert_close(asin(Fx::ONE), FRAC_PI_2, 5e-3);
+        assert_close(asin(Fx::from_f64(0.5)), FRAC_PI_6, 5e-3);
+        assert_close(acos(Fx::from_f64(0.5)), FRAC_PI_3, 5e-3);
+    }
+}
