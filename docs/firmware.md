@@ -1,11 +1,12 @@
 # Firmware targets & bring-up
 
-## Supported chips
+## Supported boards
 
-| feature (Cargo)  | chip | arch | toolchain | boards |
+| board feature | chip | arch | toolchain | notes |
 |---|---|---|---|---|
-| `esp32c3` (default) | ESP32-C3 | RISC-V | mainline Rust (in the flake) | bare C3 devkits; Athom LS4P post-2026 |
-| `esp32` | ESP32 (WROOM) | Xtensa | espup rustc fork | Athom music-reactive WLED controller, generic WROOM |
+| `board-c3-devkit` (default) | ESP32-C3 | RISC-V | mainline Rust (in the flake) | bare C3 devkits; SPI CLK GPIO6 / DATA GPIO7 |
+| `board-pixelblaze-v3` | ESP32 (WROOM-32) | Xtensa | espup rustc fork | Pixelblaze v3 Standard — the preferred real-hardware target |
+| `board-athom-music` | ESP32 (WROOM-32E) | Xtensa | espup rustc fork | Athom music-reactive WLED controller (OTA-only, riskier) |
 
 Build:
 
@@ -16,7 +17,7 @@ cd firmware && cargo build --release            # or `cargo run --release` to fl
 # classic ESP32 (Xtensa)
 espup install --targets esp32                   # once
 ./patch-esp-toolchain.sh                        # once, NixOS only (see below)
-./build-esp32.sh                                # or `./build-esp32.sh flash`
+BOARD=board-pixelblaze-v3 ./build-esp32.sh      # or `… ./build-esp32.sh flash`
 ```
 
 WiFi credentials bake in at build time until NVS provisioning lands (M3):
@@ -30,6 +31,47 @@ libs; on NixOS they fail with "No such file or directory" despite existing.
 `patch-esp-toolchain.sh` patchelf's the interpreter and rpath on the whole
 toolchain (rustc/cargo, rust-lld, and the xtensa-esp-elf GNU linker). Rerun
 it after any `espup update`.
+
+## Board: Pixelblaze v3 Standard (preferred dev target)
+
+Jeremy has two identical v3s: one stays the untouched compatibility oracle,
+the other becomes the Luxel dev unit. All pins below are from the official
+schematic published in <https://github.com/simap/pixelblaze>
+(V3/hardware/PB32_3.x.pdf) — public docs, no firmware reversing.
+
+ESP-WROOM-32 (Xtensa, 4 MB flash), AP2112K 3.3 V regulator, micro-USB is
+**power-only** (D+/D− unconnected in the schematic).
+
+| function | GPIO | notes |
+|---|---|---|
+| LED DATA | 23 (VSPI MOSI) | through onboard 3.3→5 V level shifter + 100 Ω |
+| LED CLOCK | 18 (VSPI SCK) | same shifter — APA102/SK9822 native, WS281x uses DATA only |
+| status LED | 12 | Luxel lights it at boot; strapping pin, output-only use |
+| button | 32 | unused so far |
+| expansion header | GND, EN, 3V3, RX0, TX0, IO0, IO25, IO26 | sensor board / serial |
+
+### Flashing + restore procedure (serial, fully recoverable)
+
+The expansion header carries everything esptool needs. Wire a 3.3 V
+USB-UART adapter: GND→GND, TX→RX0, RX→TX0. Enter the ROM bootloader by
+holding IO0 to GND while pulsing EN low (or applying power). Then:
+
+```sh
+# 1. one-time backup of the ENTIRE stock flash (bootloader + partitions +
+#    app + settings). This is the restore path — Electromage's downloadable
+#    update files only apply through a *running* Pixelblaze updater, so
+#    they cannot resurrect a device we've overwritten.
+espflash read-flash 0 0x400000 pb-v3-stock.bin    # or esptool read_flash
+
+# 2. flash Luxel
+cd firmware && BOARD=board-pixelblaze-v3 ./build-esp32.sh flash
+
+# 3. restore stock whenever wanted
+espflash write-bin 0 pb-v3-stock.bin              # or esptool write_flash 0
+```
+
+Keep `pb-v3-stock.bin` somewhere safe (it contains the device's WiFi
+config and saved patterns — don't commit it).
 
 ## Board: Athom WLED ESP32 music-reactive controller (Jeremy's unit)
 
