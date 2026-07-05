@@ -46,8 +46,9 @@ export function render(index) {
     name: "Spinning Plasma 2D",
     layout: { kind: "grid", w: 16, h: 16 },
     source: `// 2D showcase: perlin noise sampled through a rotating transform.
-export var zoom = 0.35
-export function sliderZoom(v) { zoom = 0.1 + v }
+// The //# comment bounds the slider (Luxel extension; PB ignores it).
+export var zoom = 0.45
+export function sliderZoom(v) { zoom = v } //# min=0.1 max=1.5 step=0.01 default=0.45
 
 export function beforeRender(delta) {
   t1 = time(.05)

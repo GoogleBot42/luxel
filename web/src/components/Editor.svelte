@@ -9,7 +9,11 @@
   const dispatch = createEventDispatcher<{ change: string }>();
   let host: HTMLDivElement;
   let view: EditorView | undefined;
-  let internal = false;
+  // Track the prop stream: only a *change* in the incoming `value` may
+  // rewrite the document. Comparing value against the doc is not safe —
+  // Svelte flushes this component before the parent echoes our edits back,
+  // and the stale prop would revert every keystroke (bug found in e2e).
+  let lastReceived = value;
 
   onMount(() => {
     view = new EditorView({
@@ -25,9 +29,7 @@
         }),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
-            internal = true;
             dispatch("change", u.state.doc.toString());
-            internal = false;
           }
         }),
       ],
@@ -37,8 +39,11 @@
   onDestroy(() => view?.destroy());
 
   // external value swaps (example selection) replace the document
-  $: if (view && !internal && value !== view.state.doc.toString()) {
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+  $: if (view && value !== lastReceived) {
+    lastReceived = value;
+    if (value !== view.state.doc.toString()) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    }
   }
 
   export function jumpTo(line: number, col: number): void {

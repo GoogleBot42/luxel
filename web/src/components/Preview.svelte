@@ -5,6 +5,17 @@
   let waterfall: HTMLCanvasElement;
   let grid: HTMLCanvasElement;
 
+  /** Blank everything (pattern reset / recompile). */
+  export function clear(): void {
+    for (const c of [strip, waterfall, grid]) {
+      const ctx = c?.getContext("2d");
+      if (c && ctx) {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, c.width, c.height);
+      }
+    }
+  }
+
   /** Draw one frame of RGB bytes. */
   export function draw(px: Uint8Array): void {
     if (layout.kind === "strip") {

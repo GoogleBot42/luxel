@@ -1,0 +1,142 @@
+// Drive the built playground in real chromium (nix dev shell) via
+// puppeteer-core: verify typing, live recompile, control readouts, //#
+// hints, layout editing, and take screenshots for human review.
+//
+// Usage (from web/): npm run build && node tools/e2e.mjs [screenshot-dir]
+
+import { execSync, spawn } from "node:child_process";
+import puppeteer from "puppeteer-core";
+
+const CHROMIUM =
+  process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
+
+const shotDir = process.argv[2] ?? "/tmp";
+const PORT = 4179;
+
+const server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
+  stdio: "ignore",
+});
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+await sleep(1500);
+
+const browser = await puppeteer.launch({
+  executablePath: CHROMIUM,
+  headless: true,
+  args: ["--no-sandbox", "--disable-gpu", "--window-size=1400,900"],
+});
+
+const fails = [];
+const check = (name, cond, detail = "") => {
+  console.log(`${cond ? " ok " : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`);
+  if (!cond) fails.push(name);
+};
+
+try {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1400, height: 900 });
+  const pageErrors = [];
+  page.on("pageerror", (e) => pageErrors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") pageErrors.push(m.text());
+  });
+
+  await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle0" });
+  await page.waitForSelector(".cm-content");
+  await sleep(800); // wasm load + first frames
+
+  // 1. rendering: fps counter alive, waterfall canvas non-black
+  const fpsText = await page.$eval("header .mono", (el) => el.textContent ?? "");
+  check("engine renders (fps > 0)", parseInt(fpsText) > 10, fpsText.trim());
+  const lit = await page.$eval(".waterfall", (c) => {
+    const d = c.getContext("2d").getImageData(0, 0, c.width, 3).data;
+    return d.some((v, i) => i % 4 !== 3 && v > 0);
+  });
+  check("waterfall shows pixels", lit);
+  await page.screenshot({ path: `${shotDir}/e2e-1-rainbow.png` });
+
+  // 2. typing works (THE bug): click editor, type garbage, expect the text
+  //    to land and a compile-error banner to appear while pixels keep going
+  await page.click(".cm-content");
+  await page.keyboard.press("End");
+  await page.keyboard.type(" zzz(");
+  await sleep(120);
+  const doc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
+  check("editor accepts typing", doc.includes("zzz("));
+  await page.waitForSelector(".banner.error", { timeout: 3000 }).catch(() => null);
+  const banner = await page.$(".banner.error");
+  check("compile error banner appears", banner !== null);
+  // fix it again by removing what we typed
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Backspace");
+  await sleep(400);
+  check("banner clears after fix", (await page.$(".banner.error")) === null);
+  await page.screenshot({ path: `${shotDir}/e2e-2-typing.png` });
+
+  // 3. Blink Fade: slider + number entry + readout reactivity
+  await page.select("header select", "Blink Fade");
+  await sleep(600);
+  await page.waitForSelector('input[type="range"]');
+  const before = await page.$eval(".control .num", (el) => el.value);
+  await page.$eval('input[type="range"]', (el) => {
+    el.value = "0.9";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(200);
+  const after = await page.$eval(".control .num", (el) => el.value);
+  check("slider moves the numeric readout", before !== after && Number(after) === 0.9, `${before} → ${after}`);
+  // manual number entry drives the engine too
+  await page.$eval(".control .num", (el) => {
+    el.value = "0.25";
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(200);
+  const rangeNow = await page.$eval('input[type="range"]', (el) => el.value);
+  check("number entry moves the slider", Number(rangeNow) === 0.25, rangeNow);
+
+  // 4. hints: Spinning Plasma slider bounded by //# min/max
+  await page.select("header select", "Spinning Plasma 2D");
+  await sleep(700);
+  const [mn, mx, val] = await page.$eval('input[type="range"]', (el) => [el.min, el.max, el.value]);
+  check("//# hint bounds the slider", mn === "0.1" && mx === "1.5", `min=${mn} max=${mx}`);
+  check("//# default applied", Number(val) === 0.45, val);
+  const gridLit = await page.$eval(".grid", (c) => {
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    return d.some((v, i) => i % 4 !== 3 && v > 0);
+  });
+  check("2D grid preview renders", gridLit);
+  await page.screenshot({ path: `${shotDir}/e2e-3-plasma.png` });
+
+  // 5. layout editing: bump grid to 24×24 and keep rendering
+  await page.$eval("header .group .num", (el) => {
+    el.value = "24";
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(500);
+  const gridW = await page.$eval(".grid", (c) => c.width);
+  check("layout edit resizes the render", gridW === 24, String(gridW));
+
+  // 6. pause stops the fps counter from advancing frames
+  await page.click("header button[title]");
+  await sleep(300);
+  const litBefore = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
+  await sleep(400);
+  const litAfter = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
+  check("pause freezes the preview", litBefore === litAfter);
+  await page.click("header button[title]");
+
+  // 7. vars watcher shows exported values
+  const varText = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
+  check("var watcher lists zoom", varText.includes("zoom"));
+
+  await page.screenshot({ path: `${shotDir}/e2e-4-final.png` });
+
+  check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
+} finally {
+  await browser.close();
+  server.kill();
+}
+
+if (fails.length > 0) {
+  console.error(`\n${fails.length} FAILURES: ${fails.join(", ")}`);
+  process.exit(1);
+}
+console.log("\ne2e: all checks pass");

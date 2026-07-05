@@ -7,4 +7,12 @@ export default defineConfig({
   base: "./",
   plugins: [svelte()],
   build: { target: "es2022" },
+  resolve: {
+    // duplicate @codemirror/state instances silently break editing —
+    // classic CM6-under-Vite failure; force a single copy
+    dedupe: ["@codemirror/state", "@codemirror/view"],
+  },
+  optimizeDeps: {
+    include: ["@codemirror/state", "@codemirror/view"],
+  },
 });

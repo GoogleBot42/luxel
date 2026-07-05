@@ -5,6 +5,7 @@
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { EXAMPLES, type Example } from "./lib/examples";
+  import { parseControlHints, type ControlHint } from "./lib/hints";
   import { Engine, Luxel, type Control, type Diagnostic, type RuntimeError } from "./lib/luxel";
 
   let luxel: Luxel | undefined;
@@ -19,10 +20,13 @@
   let compileError: Diagnostic | null = null;
   let runtimeError: RuntimeError | null = null;
   let controls: Control[] = [];
-  const controlValues = new Map<string, number[]>();
+  let hints: Map<string, ControlHint> = new Map();
+  let controlValues: Record<string, number[]> = {};
   let readouts = new Map<string, number>();
   let vars: Record<string, number | number[]> = {};
   let fps = 0;
+  let targetFps = 60;
+  let running = true;
   let loadFailure = "";
 
   let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -42,14 +46,20 @@
       runtimeError = null;
       if (layout.kind === "grid") engine.setMapGrid(layout.w, layout.h);
       engine.setWallClock(Date.now() / 1000);
+      hints = parseControlHints(source);
       controls = engine.controls();
-      // reapply saved control values (PB persists control state per pattern)
+      // seed //# defaults, then reapply saved control values (PB persists
+      // control state per pattern)
       for (const c of controls) {
-        const saved = controlValues.get(c.name);
-        if (saved && c.kind !== "showNumber" && c.kind !== "gauge" && c.kind !== "trigger") {
-          engine.setControl(c.name, saved);
+        if (c.kind === "showNumber" || c.kind === "gauge" || c.kind === "trigger") continue;
+        const d = hints.get(c.name)?.default;
+        if (!(c.name in controlValues) && d !== undefined) {
+          controlValues = { ...controlValues, [c.name]: [d] };
         }
+        const saved = controlValues[c.name];
+        if (saved) engine.setControl(c.name, saved);
       }
+      preview?.clear(); // fresh program → fresh history
     } else {
       compileError = result; // keep the old engine running while typing
     }
@@ -65,32 +75,67 @@
     const ex = EXAMPLES.find((x) => x.name === name);
     if (!ex) return;
     exampleName = ex.name;
-    layout = ex.layout;
+    layout = structuredClone(ex.layout);
     source = ex.source;
-    controlValues.clear();
+    controlValues = {};
     void tick().then(recompile);
-  }
-
-  function onControlSet(e: CustomEvent<{ name: string; values: number[] }>): void {
-    engine?.setControl(e.detail.name, e.detail.values);
   }
 
   function onExampleChange(e: Event): void {
     loadExample((e.target as HTMLSelectElement).value);
   }
 
+  // ---- layout editing ----
+
+  function setLayoutKind(e: Event): void {
+    const kind = (e.target as HTMLSelectElement).value;
+    if (kind === "strip" && layout.kind !== "strip") {
+      layout = { kind: "strip", pixels: pixelCount() };
+    } else if (kind === "grid" && layout.kind !== "grid") {
+      const side = Math.max(2, Math.round(Math.sqrt(pixelCount())));
+      layout = { kind: "grid", w: side, h: side };
+    }
+    recompile();
+  }
+
+  function setLayoutNum(field: "pixels" | "w" | "h", e: Event): void {
+    const v = Math.max(1, Math.min(4096, Number((e.target as HTMLInputElement).value) || 1));
+    if (layout.kind === "strip" && field === "pixels") layout = { ...layout, pixels: v };
+    if (layout.kind === "grid" && (field === "w" || field === "h")) {
+      layout = { ...layout, [field]: v };
+    }
+    recompile();
+  }
+
+  function onFpsChange(e: Event): void {
+    targetFps = Number((e.target as HTMLSelectElement).value);
+  }
+
+  function togglePause(): void {
+    running = !running;
+    lastT = 0; // don't integrate the paused time into delta
+  }
+
+  function onControlSet(e: CustomEvent<{ name: string; values: number[] }>): void {
+    engine?.setControl(e.detail.name, e.detail.values);
+  }
+
   function jumpToError(): void {
     if (compileError) editor.jumpTo(compileError.line, compileError.col);
   }
 
+  // ---- render loop ----
+
   function loop(t: number): void {
     raf = requestAnimationFrame(loop);
-    if (!engine) return;
-    const dt = lastT === 0 ? 16.7 : Math.min(t - lastT, 100);
+    if (!engine || !running) return;
+    const minInterval = targetFps > 0 ? 1000 / targetFps - 1 : 0;
+    if (lastT !== 0 && t - lastT < minInterval) return;
+    const dt = lastT === 0 ? 1000 / (targetFps || 60) : Math.min(t - lastT, 200);
     lastT = t;
     const px = engine.frame(dt);
     preview?.draw(px);
-    fps = fps * 0.95 + (1000 / Math.max(dt, 1)) * 0.05;
+    fps = fps * 0.9 + (1000 / Math.max(dt, 1)) * 0.1;
     const err = engine.takeError();
     if (err) runtimeError = err;
     if (t - lastPoll > 250) {
@@ -133,9 +178,56 @@
         <option value={ex.name}>{ex.name}</option>
       {/each}
     </select>
-    <span class="dim layout-label">
-      {layout.kind === "strip" ? `${layout.pixels} px strip` : `${layout.w}×${layout.h} grid`}
+
+    <span class="group">
+      <select value={layout.kind} on:change={setLayoutKind}>
+        <option value="strip">strip</option>
+        <option value="grid">grid</option>
+      </select>
+      {#if layout.kind === "strip"}
+        <input
+          class="num"
+          type="number"
+          min="1"
+          max="4096"
+          value={layout.pixels}
+          on:change={(e) => setLayoutNum("pixels", e)}
+        />
+        <span class="dim">px</span>
+      {:else}
+        <input
+          class="num"
+          type="number"
+          min="1"
+          max="256"
+          value={layout.w}
+          on:change={(e) => setLayoutNum("w", e)}
+        />
+        <span class="dim">×</span>
+        <input
+          class="num"
+          type="number"
+          min="1"
+          max="256"
+          value={layout.h}
+          on:change={(e) => setLayoutNum("h", e)}
+        />
+      {/if}
     </span>
+
+    <span class="group">
+      <select value={targetFps} on:change={onFpsChange}>
+        <option value={0}>max fps</option>
+        <option value={60}>60 fps</option>
+        <option value={30}>30 fps</option>
+        <option value={15}>15 fps</option>
+        <option value={5}>5 fps</option>
+      </select>
+      <button on:click={togglePause} title={running ? "pause" : "resume"}>
+        {running ? "pause" : "play"}
+      </button>
+    </span>
+
     <span class="spacer"></span>
     <span class="mono dim">{fps.toFixed(0)} fps</span>
   </header>
@@ -163,10 +255,11 @@
       <Preview bind:this={preview} {layout} />
 
       <h2>Controls</h2>
-      <Controls {controls} values={controlValues} {readouts} on:set={onControlSet} />
+      <Controls {controls} bind:values={controlValues} {readouts} {hints} on:set={onControlSet} />
       {#if controls.length === 0}
         <p class="dim hint">
-          export <code>function sliderName(v)</code> to add controls
+          export <code>function sliderName(v)</code> to add controls — bound them with
+          <code>//# min=0 max=5 step=0.5 default=2</code>
         </p>
       {/if}
 
@@ -193,6 +286,7 @@
     padding: 8px 14px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-panel);
+    flex-wrap: wrap;
   }
 
   .wordmark {
@@ -203,6 +297,18 @@
 
   .dim {
     color: var(--text-dim);
+  }
+
+  .group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .num {
+    width: 64px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
   }
 
   .spacer {
@@ -276,9 +382,5 @@
   .hint {
     font-size: 12px;
     margin: 2px 0;
-  }
-
-  .layout-label {
-    font-size: 12px;
   }
 </style>
