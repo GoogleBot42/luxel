@@ -85,7 +85,7 @@ try {
   // the playground deliberately delays the ws dial (~1.6 s grace after
   // connect) — wait for the badge rather than racing a fixed sleep
   const wsBadge = await page
-    .waitForFunction(() => document.body.innerText.includes("ws push"), { timeout: 10000 })
+    .waitForFunction(() => document.body.innerText.includes("streaming"), { timeout: 10000 })
     .then(() => true)
     .catch(() => false);
   check("preview: websocket push active", wsBadge);

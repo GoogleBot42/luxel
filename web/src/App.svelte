@@ -104,6 +104,15 @@
   let statusMisses = 0;
   let wsGraceUntil = 0; // suppress HTTP polls while the handshake runs
 
+  const DEVICE_URL_KEY = "luxel:deviceUrl";
+  /** Base of the last successful connection ("" = served-from-device), kept
+   *  so reconnect works without re-typing the URL. */
+  let lastBase: string | null = null;
+
+  /** "device" once a session is up, "playground" otherwise — drives which
+   *  affordances the header shows (share vs. device console). */
+  $: mode = device ? "device" : "playground";
+
   function openDeviceSocket(): void {
     if (!device) return;
     // The device serves 2 connections and the server reaps idle keep-alive
@@ -149,13 +158,30 @@
         ? layout.w * layout.h
         : layout.coords.length;
 
-  async function connectDevice(): Promise<void> {
+  /** Connect from the UI: reuse the last known base when the field is empty
+   *  (e.g. reconnecting after a served-from-device session), else use the
+   *  typed URL. */
+  function connectFromUi(): void {
+    if (deviceUrl.trim() === "" && lastBase !== null) void connectDevice(lastBase);
+    else void connectDevice();
+  }
+
+  async function connectDevice(baseOverride?: string): Promise<void> {
     deviceError = "";
-    const base = deviceUrl.trim().replace(/\/+$/, "");
+    const base = (baseOverride ?? deviceUrl).trim().replace(/\/+$/, "");
     const session = new DeviceSession(base);
     try {
       const st = await session.status();
       device = session;
+      lastBase = base; // remember it so reconnect needs no re-typing
+      if (base !== "") {
+        deviceUrl = base;
+        try {
+          localStorage.setItem(DEVICE_URL_KEY, base);
+        } catch {
+          /* private mode — non-fatal */
+        }
+      }
       if (debugMode) toggleDebug();
       layout = { kind: "strip", pixels: st.pixels };
       source = await session.pattern();
@@ -616,6 +642,9 @@ function (pixelCount) {
 
   function onBreakpoints(e: CustomEvent<number[]>): void {
     breakpoints = e.detail;
+    // The device has no stepping debugger — breakpoints must not arm debug
+    // mode while connected (it would show a UI that can't actually break).
+    if (device) return;
     if (breakpoints.length > 0 && !debugMode) {
       toggleDebug(); // placing a breakpoint arms the debugger
     } else if (debugMode) {
@@ -797,6 +826,14 @@ function (pixelCount) {
       loadFailure = `failed to load luxel.wasm: ${String(e)}`;
       return;
     }
+    // pre-fill the device URL from the last successful connection so manual
+    // reconnect needs no re-typing
+    try {
+      deviceUrl = localStorage.getItem(DEVICE_URL_KEY) ?? "";
+    } catch {
+      /* private mode — non-fatal */
+    }
+
     // a share link's pattern beats the default example — and suppresses
     // device auto-connect (the link's intent is "look at this pattern").
     // Otherwise restore the autosaved working copy: never lose edits.
@@ -829,8 +866,7 @@ function (pixelCount) {
       if (r.ok && isJson) {
         const st = (await r.json()) as { pixels?: unknown };
         if (typeof st.pixels === "number") {
-          deviceUrl = "";
-          await connectDevice();
+          await connectDevice(""); // served-from-device → same origin
         }
       }
     } catch {
@@ -845,9 +881,11 @@ function (pixelCount) {
   });
 </script>
 
-<div class="shell" role="application" on:drop={onDrop} on:dragover|preventDefault>
+<div class="shell" data-mode={mode} role="application" on:drop={onDrop} on:dragover|preventDefault>
   <header>
-    <span class="wordmark">luxel <span class="dim">playground</span></span>
+    <span class="wordmark">
+      luxel <span class="dim">{device ? (device.base ? device.base : "device") : "playground"}</span>
+    </span>
     <select value={selectValue} on:change={onExampleChange}>
       {#if selectValue === ""}
         <option value="">{patternName || "imported"}</option>
@@ -902,13 +940,15 @@ function (pixelCount) {
         bind:this={fileInput}
         on:change={onImportPick}
       />
-      <button
-        data-role="share"
-        title="copy a link that carries this pattern in the URL"
-        on:click={() => void sharePattern()}
-      >
-        share
-      </button>
+      {#if !device}
+        <button
+          data-role="share"
+          title="copy a link that carries this pattern in the URL"
+          on:click={() => void sharePattern()}
+        >
+          share
+        </button>
+      {/if}
       <button
         data-role="save"
         title="save the current pattern to this browser's library"
@@ -1001,17 +1041,27 @@ function (pixelCount) {
         <input
           class="device-url"
           type="text"
-          placeholder="device url (http://…)"
+          placeholder={lastBase ? lastBase || "reconnect device" : "device url (http://…)"}
           bind:value={deviceUrl}
-          on:keydown={(e) => e.key === "Enter" && connectDevice()}
+          on:keydown={(e) => e.key === "Enter" && connectFromUi()}
         />
-        <button on:click={connectDevice} disabled={deviceUrl.trim() === ""}>connect</button>
+        <button
+          on:click={connectFromUi}
+          disabled={deviceUrl.trim() === "" && lastBase === null}
+          title={deviceUrl.trim() === "" && lastBase !== null
+            ? `reconnect to ${lastBase || "the device"}`
+            : "connect to a device"}
+        >
+          connect
+        </button>
       {/if}
     </span>
 
     <span class="spacer"></span>
     {#if device}
-      <span class="mono dim">{wsLive ? "ws push" : `${pollMs.toFixed(0)}ms poll`}</span>
+      <span class="mono dim" title={wsLive ? "live pixel stream over websocket" : "polling over HTTP"}>
+        {wsLive ? "streaming" : `polling · ${pollMs.toFixed(0)} ms`}
+      </span>
     {/if}
     <span class="mono dim">{fps.toFixed(0)} fps</span>
   </header>

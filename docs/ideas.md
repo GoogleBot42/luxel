@@ -99,6 +99,11 @@ and the autocomplete/docs pipeline, and can't break existing code.
 
 ## Playground / DX
 
+> Web-UI structural redesign (two modes: device console vs. playground;
+> tabs; settings page; header declutter) is tracked in
+> [docs/webui.md](webui.md). Items below are feature-level.
+
+
 - **Hover docs from the builtin table** [S] ★★ — DONE (builtins +
   predefined globals show sig + doc on hover; e2e-covered).
 - **Pattern browser with animated previews** [M] ★★★ — DONE (192 live
@@ -110,8 +115,10 @@ and the autocomplete/docs pipeline, and can't break existing code.
   fragment; share button copies, load restores; e2e-covered).
 - **Multi-pane: map editor + preview** [L] ★★ — mapper v1 DONE (PB-style
   JS map function → normalized map installed in the engine, scatter
-  preview, render2D auto-selected). Still open: visual drag-editing,
-  Fill/Contain toggles, device map upload, map in share links.
+  preview, render2D auto-selected). Still open: mapper as a first-class
+  **editor tab** (CodeMirror, debuggable), **3D projection preview**, visual
+  drag-editing, Fill/Contain toggles, device map upload, map in share links.
+  Web-UI redesign tracking these lives in [docs/webui.md](webui.md).
 
 ## Top picks if forced to choose 5
 

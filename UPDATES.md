@@ -1,5 +1,36 @@
 # Update log
 
+## 2026-07-06 evening — web UI feedback sorted + Phase-1 fixes ✅
+
+You gave a big batch of web-UI feedback. First, **sorted into the docs so
+nothing is forgotten**: the full redesign backlog now lives in
+[docs/webui.md](docs/webui.md) (two modes: device console vs. playground;
+tabs; settings page; header declutter — each item tagged with effort and
+firmware-dependency), cross-referenced from ideas.md. Notable finding: a real
+settings page needs new firmware (brightness/pixel-count/config endpoints,
+MQTT) — only `/api/wifi` exists today.
+
+Then **Phase 1** (web-only, no reflash — both e2e suites green in chromium):
+
+- **Not a "playground" on a device.** The wordmark now shows the device
+  (name/URL) in device mode, "playground" only when standalone. A `data-mode`
+  hook is in place for the Phase-2 restructure.
+- **Reconnect remembers the device.** Disconnect → connect no longer needs the
+  URL re-typed; the last successful base is remembered (and persisted to
+  localStorage), reused automatically.
+- **"ws push" → "streaming"** (and "polling · N ms" for the HTTP fallback) —
+  the old jargon meant nothing to users.
+- **Debugger no longer lies on a live device.** A gutter breakpoint used to arm
+  debug mode even when connected (the button was disabled but the gutter path
+  bypassed it); it's now fully gated off in device mode.
+- **Share hidden in device mode** — it only makes sense for the hosted
+  playground.
+- **Pattern-browser spinners** while a tile's preview is still computing.
+
+The heavier items (tab restructure + header overflow menu, firmware settings
+endpoints, connect-on-load race, mapper-as-editor-tab, 3D preview, playlists)
+are phased in docs/webui.md as Phases 2–4.
+
 ## 2026-07-06 late — chunked patterns: larger than one flash page (v0.1.10) ✅
 
 You asked for chunking so patterns aren't capped at one 4 KB flash page.

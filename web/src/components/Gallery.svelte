@@ -29,6 +29,7 @@
     engine?: Engine;
     canvas?: HTMLCanvasElement;
     dead: boolean;
+    ready: boolean; // has drawn at least one frame (spinner off)
     last: number; // last stepped (ms)
     seen: number; // last visible (ms)
     visible: boolean;
@@ -54,6 +55,7 @@
       t.visible = e.isIntersecting;
       if (t.visible) t.seen = performance.now();
     }
+    tiles = tiles; // reflect visibility so spinners only run for in-view tiles
   });
 
   function register(node: HTMLElement, i: number): { destroy: () => void } {
@@ -122,6 +124,10 @@
       t.last = now;
       draw(t, t.engine.frame(dt));
       t.engine.takeError(); // tolerate runtime errors; many patterns recover
+      if (!t.ready) {
+        t.ready = true;
+        tiles = tiles; // first frame drawn → drop the spinner
+      }
       steps++;
     }
     const live = tiles.filter((t) => t.engine);
@@ -142,6 +148,7 @@
       kind: e.layout.kind === "grid" ? ("grid" as const) : ("strip" as const),
       source: e.source,
       dead: false,
+      ready: false,
       last: 0,
       seen: 0,
       visible: false,
@@ -159,6 +166,7 @@
             kind: p.kind === "grid" ? ("grid" as const) : ("strip" as const),
             source: p.source,
             dead: false,
+            ready: false,
             last: 0,
             seen: 0,
             visible: false,
@@ -197,11 +205,16 @@
         use:register={i}
         on:click={() => !t.dead && dispatch("pick", { name: t.name, kind: t.kind, source: t.source })}
       >
-        {#if t.kind === "grid"}
-          <canvas width="96" height="96"></canvas>
-        {:else}
-          <canvas width="128" height="18"></canvas>
-        {/if}
+        <span class="thumb" class:strip={t.kind !== "grid"}>
+          {#if t.kind === "grid"}
+            <canvas width="96" height="96"></canvas>
+          {:else}
+            <canvas width="128" height="18"></canvas>
+          {/if}
+          {#if t.visible && !t.ready && !t.dead}
+            <span class="spinner" aria-label="loading" title="computing preview…"></span>
+          {/if}
+        </span>
         <span class="tname">{t.name}</span>
       </button>
     {/each}
@@ -273,11 +286,41 @@
     cursor: default;
   }
 
+  .thumb {
+    position: relative;
+    display: inline-flex;
+    max-width: 100%;
+  }
+
+  .thumb.strip {
+    width: 100%;
+    justify-content: center;
+  }
+
   .tile canvas {
     image-rendering: pixelated;
     border-radius: 3px;
     background: #000;
     max-width: 100%;
+  }
+
+  .spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: tile-spin 0.7s linear infinite;
+  }
+
+  @keyframes tile-spin {
+    to {
+      transform: rotate(1turn);
+    }
   }
 
   .tname {
