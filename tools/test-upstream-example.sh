@@ -23,6 +23,17 @@ cp -r "$SRC" "$DST"
 chmod -R u+w "$DST"
 
 cd "$DST/examples/wifi/embassy_dhcp"
+
+# MODE=server replaces the client loop with a bare embassy-net TCP server
+# (tools/upstream-server-test/main.rs) — still 100% upstream crates; this
+# reproduces the serve-side TX burst that crashes Luxel on esp32.
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+if [ "${MODE:-client}" = "server" ]; then
+  cp "$REPO/tools/upstream-server-test/main.rs" src/main.rs
+  grep -q '^embedded-io-async' Cargo.toml || \
+    sed -i '/^\[dependencies\]/a embedded-io-async = "0.7"' Cargo.toml
+fi
+
 export RUSTC="$XTENSA_RUST_HOME/bin/rustc"
 export RUSTDOC="$XTENSA_RUST_HOME/bin/rustdoc"
 SSID="${LUXEL_SSID:?set LUXEL_SSID}" PASSWORD="${LUXEL_PASS:?set LUXEL_PASS}" \
