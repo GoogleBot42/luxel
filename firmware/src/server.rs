@@ -387,7 +387,7 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
 }
 
 // 3: one slot can be pinned by the preview websocket
-pub const WEB_TASK_POOL_SIZE: usize = 3;
+pub const WEB_TASK_POOL_SIZE: usize = 2;
 
 // keep_connection_alive: without it every preview poll (15/s) pays a full
 // TCP open/close on a chip with a 2-connection pool — the browser reuses
@@ -413,7 +413,7 @@ pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
     // the task future (statically allocated per pool slot) stays small.
     let mut tcp_rx_buffer = alloc::vec![0u8; 4096];
     let mut tcp_tx_buffer = alloc::vec![0u8; 4096];
-    let mut http_buffer = alloc::vec![0u8; 24 * 1024];
+    let mut http_buffer = alloc::vec![0u8; 16 * 1024];
 
     let app = make_app();
     picoserve::Server::new(&app, &CONFIG, &mut http_buffer)

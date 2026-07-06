@@ -52,6 +52,18 @@ use shared::{
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+/// After esp-backtrace prints a panic, reboot instead of halting forever —
+/// an unattended device must never require a hands-on power cycle (learned
+/// the hard way: a heap-exhaustion panic bricked the PB overnight until
+/// morning). A crash loop still surfaces on serial and in DHCP activity.
+#[unsafe(no_mangle)]
+extern "Rust" fn custom_halt() -> ! {
+    println!("panic: rebooting in 3s");
+    let d = esp_hal::delay::Delay::new();
+    d.delay_millis(3000);
+    esp_hal::system::software_reset()
+}
+
 /// Signalled by the OTA handler once the success response is on the wire.
 pub static REBOOT: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
