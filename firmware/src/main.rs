@@ -150,7 +150,14 @@ async fn main(spawner: Spawner) -> ! {
 
     ota::init(esp_storage::FlashStorage::new(p.FLASH));
     spawner.spawn(reboot_task().unwrap());
-    spawner.spawn(render_task(spi).unwrap());
+    // Bisect knob: LUXEL_QUIET=1 at build time skips the render task
+    // entirely (no SPI, no engine, no snapshot publishing) to isolate
+    // whether it interacts with the esp32 radio crashes.
+    if option_env!("LUXEL_QUIET").is_none() {
+        spawner.spawn(render_task(spi).unwrap());
+    } else {
+        println!("LUXEL_QUIET: render task disabled");
+    }
 
     // Treat empty strings like unset — `LUXEL_SSID='' …` shouldn't try to
     // join a network named "".
