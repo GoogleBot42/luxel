@@ -1,5 +1,19 @@
 # Update log
 
+## 2026-07-06 ~09:40 — v0.1.4 flashed (thanks!) — OTA fully verified, remote work unblocked
+
+After your serial flash, hardware-verified the fix end to end:
+- The 190 KB JS + 87 KB wasm (the files that used to stall/crash) served
+  repeatedly, cleanly, ~1.5 s / 0.8 s each. Zero panics.
+- Full OTA round-trip: factory → ota_0 (904 KB, ok) → then a second OTA
+  **while a loop hammered asset + status requests** → ota_1, ok. The
+  worst-case combined load that used to be instant death now just works.
+- Serial log: zero new panics since the flash.
+
+Device: ota_1, v0.1.4, ~120 fps, heap_free ~72 KB. The A/B loop is
+proven again and I can push everything else tonight over OTA. Carrying on
+with M3 + the ideas backlog; log entries below as they land.
+
 ## 2026-07-06 ~09:00 — OTA crash ROOT CAUSE found + fixed (v0.1.4) — this supersedes the 08:15 note
 
 You were right that something was fundamentally wrong. The serial log had
