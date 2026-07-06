@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
   import Controls from "./components/Controls.svelte";
+  import Debugger from "./components/Debugger.svelte";
   import Editor from "./components/Editor.svelte";
   import Gallery from "./components/Gallery.svelte";
   import Preview from "./components/Preview.svelte";
@@ -133,6 +134,8 @@
       : layout.kind === "grid"
         ? layout.w * layout.h
         : layout.coords.length;
+  // the map sub-tab is playground-only (device map upload comes later)
+  $: if (device && subTab === "map") subTab = "pattern";
 
   function openDeviceSocket(): void {
     if (!device) return;
@@ -441,44 +444,176 @@
     setTimeout(() => (saveNote = ""), 2000);
   }
 
-  // ---- mapper (PB-style JS map function → installed 2D/3D map) ----
+  // ---- mapper (a Luxel *map program*: plot() one point per pixel) ----
+  // The map is a real Luxel program running on the VM, so it's edited in the
+  // same CodeMirror as patterns and debuggable the same way (breakpoints /
+  // stepping). It runs on its own engine (mapEngine); the collected
+  // coordinates install into the pattern engine as a 2D/3D map.
 
-  let mapperSrc = `// Return one [x, y] (or [x, y, z]) per pixel — any units,
-// they normalize automatically. This one is a ring:
-function (pixelCount) {
-  var map = []
-  for (var i = 0; i < pixelCount; i++) {
-    var a = i / pixelCount * Math.PI * 2
-    map.push([Math.cos(a), Math.sin(a)])
-  }
-  return map
+  /** Which document the left editor shows: the pattern or the map program. */
+  let subTab: "pattern" | "map" = "pattern";
+  /** Lazy-mount the map editor on first visit (keeps a single CodeMirror in
+   *  the DOM until the map tab is opened). */
+  let mapMounted = false;
+  $: if (subTab === "map") mapMounted = true;
+
+  let mapSrc = `// Map program — runs once per pixel on the Luxel VM, so it's
+// debuggable: set a gutter breakpoint and step through it.
+// plot() one point per pixel (units are arbitrary; they normalize).
+// This lays the strip out as a ring:
+export function render(index) {
+  a = index / pixelCount * PI2
+  plot(cos(a), sin(a))
 }`;
-  let mapperError = "";
+  let mapEditor: Editor;
+  let mapEngine: Engine | undefined;
+  let mapCompileError: Diagnostic | null = null;
+  let mapError = ""; // runtime error from the last map run
+  let mapDebugMode = false;
+  let mapBreakpoints: number[] = [];
+  let mapDbg: DebugSnapshot = { paused: false };
+  let mapDebounce: ReturnType<typeof setTimeout> | undefined;
 
-  function applyMapper(): void {
-    mapperError = "";
-    try {
-      const fn = new Function(`"use strict"; return (${mapperSrc});`)() as unknown;
-      if (typeof fn !== "function") throw new Error("mapper must be a function expression");
-      const res = (fn as (n: number) => unknown)(pixelCount());
-      if (!Array.isArray(res) || res.length === 0) {
-        throw new Error("mapper must return a non-empty array of [x, y] points");
+  /** Compile the map program into its own engine. On success runs it (unless
+   *  we're debugging — then the user drives it with Run). */
+  function recompileMap(autoRun = true): void {
+    if (!luxel) return;
+    const result = luxel.compileMap(mapSrc, pixelCount());
+    if (result instanceof Engine) {
+      mapEngine?.free();
+      mapEngine = result;
+      mapCompileError = null;
+      if (mapDebugMode) {
+        mapEngine.debugEnable(true);
+        applyMapBreakpoints();
+        mapDbg = { paused: false };
+        mapEditor?.setCurrentLine(null);
+        if (autoRun) return; // don't auto-run under the debugger; user hits Run
       }
-      if (res.length > 4096) throw new Error("too many pixels (max 4096)");
-      const coords = res.map((p, i) => {
-        if (
-          !Array.isArray(p) ||
-          p.length < 2 ||
-          p.some((v) => typeof v !== "number" || !Number.isFinite(v))
-        ) {
-          throw new Error(`entry ${i} is not [x, y] or [x, y, z]`);
-        }
-        return p as number[];
+      if (autoRun) runMapNow();
+    } else {
+      mapCompileError = result; // keep the last good map installed
+    }
+  }
+
+  /** Run (or resume) the map program; install coords when it finishes, or
+   *  surface the debugger when it pauses at a breakpoint. */
+  function runMapNow(): void {
+    if (!mapEngine) return;
+    mapError = "";
+    const { paused, coords, dims } = mapEngine.runMap();
+    if (paused) {
+      mapDbg = mapEngine.debugState();
+      mapEditor?.setCurrentLine(mapDbg.line ?? null);
+      return;
+    }
+    const err = mapEngine.takeError();
+    if (err) {
+      mapError = err.message;
+      return;
+    }
+    installMap(coords, dims);
+  }
+
+  function installMap(coords: number[][], _dims: number): void {
+    if (coords.length === 0) return;
+    layout = { kind: "map", coords };
+    recompile();
+  }
+
+  function onMapSourceChange(e: CustomEvent<string>): void {
+    mapSrc = e.detail;
+    clearTimeout(mapDebounce);
+    // once a map is installed, live-apply edits; before that (or while
+    // debugging) just recompile so errors/breakpoints track without hijacking
+    // the layout — the user applies the first time with "run map".
+    const autoRun = layout.kind === "map" && !mapDebugMode;
+    mapDebounce = setTimeout(() => recompileMap(autoRun), 200);
+  }
+
+  function applyMapBreakpoints(): void {
+    if (!mapEngine) return;
+    const resolved = [...new Set(mapEngine.setBreakpoints(mapBreakpoints))].sort((a, b) => a - b);
+    const current = [...new Set(mapBreakpoints)].sort((a, b) => a - b);
+    if (JSON.stringify(resolved) !== JSON.stringify(current)) {
+      mapBreakpoints = resolved;
+      mapEditor?.setBreakpointLines(resolved);
+    }
+  }
+
+  function onMapBreakpoints(e: CustomEvent<number[]>): void {
+    mapBreakpoints = e.detail;
+    if (mapBreakpoints.length > 0 && !mapDebugMode) {
+      toggleMapDebug(); // placing a breakpoint arms the map debugger
+    } else if (mapDebugMode) {
+      applyMapBreakpoints();
+    }
+  }
+
+  function toggleMapDebug(): void {
+    mapDebugMode = !mapDebugMode;
+    if (!mapEngine) recompileMap(false);
+    if (!mapEngine) return;
+    mapEngine.debugEnable(mapDebugMode);
+    if (mapDebugMode) {
+      applyMapBreakpoints();
+    } else {
+      mapDbg = { paused: false };
+      mapEditor?.setCurrentLine(null);
+      runMapNow(); // resume live install once debugging is off
+    }
+  }
+
+  function mapStep(kind: StepKind): void {
+    if (!mapEngine || !mapDbg.paused) return;
+    const still = mapEngine.debugStep(kind);
+    if (still) {
+      mapDbg = mapEngine.debugState();
+      mapEditor?.setCurrentLine(mapDbg.line ?? null);
+    } else {
+      mapDbg = { paused: false };
+      mapEditor?.setCurrentLine(null);
+      const err = mapEngine.takeError();
+      if (err) {
+        mapError = err.message;
+        return;
+      }
+      installMap(mapEngine.mapResult().coords, mapEngine.mapResult().dims); // run finished
+    }
+  }
+
+  function mapRequestBreak(): void {
+    mapEngine?.debugPause();
+  }
+
+  /** Hover inspection for the map editor (its own engine's scope). */
+  function mapHoverValue(name: string): string | null {
+    if (!mapEngine) return null;
+    if (mapDbg.paused) {
+      const local = mapDbg.stack?.[0]?.locals.find((l) => l.name === name);
+      if (local) return fmtLocal(local);
+      const g = mapDbg.globals?.find((g) => g.name === name);
+      return g ? fmtLocal(g) : null;
+    }
+    const g = mapEngine.globals().find((g) => g.name === name);
+    return g ? fmtLocal(g) : null;
+  }
+
+  function backToStrip(): void {
+    layout = { kind: "strip", pixels: pixelCount() };
+    recompile();
+  }
+
+  // keep the map editor's squiggle in sync with its compile status
+  $: if (mapEditor) {
+    if (mapCompileError && mapCompileError.start !== undefined && mapCompileError.end !== undefined) {
+      mapEditor.setErrorRange({
+        from: byteToChar(mapSrc, mapCompileError.start),
+        to: byteToChar(mapSrc, mapCompileError.end),
+        message: mapCompileError.message,
       });
-      layout = { kind: "map", coords };
-      recompile();
-    } catch (e) {
-      mapperError = e instanceof Error ? e.message : String(e);
+    } else {
+      mapEditor.setErrorRange(null);
     }
   }
 
@@ -897,7 +1032,9 @@ function (pixelCount) {
   onDestroy(() => {
     cancelAnimationFrame(raf);
     clearTimeout(debounce);
+    clearTimeout(mapDebounce);
     engine?.free();
+    mapEngine?.free();
   });
 </script>
 
@@ -1076,18 +1213,67 @@ function (pixelCount) {
         </span>
       </div>
 
+      {#if !device}
+        <div class="subtabs" data-role="editor-subtabs">
+          <button
+            data-role="subtab-pattern"
+            class="subtab"
+            class:active={subTab === "pattern"}
+            on:click={() => (subTab = "pattern")}
+          >
+            pattern
+          </button>
+          <button
+            data-role="subtab-map"
+            class="subtab"
+            class:active={subTab === "map"}
+            on:click={() => {
+              subTab = "map";
+              if (!mapEngine) recompileMap(!mapDebugMode);
+            }}
+          >
+            map{#if layout.kind === "map"}<span class="dot" title="a map is installed">●</span>{/if}
+          </button>
+        </div>
+      {/if}
+
       <div class="editor-host">
-        <Editor
-          bind:this={editor}
-          value={source}
-          {hoverValue}
-          on:change={onSourceChange}
-          on:breakpoints={onBreakpoints}
-        />
+        <div class="editor-slot" hidden={subTab !== "pattern"}>
+          <Editor
+            bind:this={editor}
+            value={source}
+            {hoverValue}
+            on:change={onSourceChange}
+            on:breakpoints={onBreakpoints}
+          />
+        </div>
+        {#if !device && mapMounted}
+          <div class="editor-slot" data-role="map-editor" hidden={subTab !== "map"}>
+            <Editor
+              bind:this={mapEditor}
+              value={mapSrc}
+              hoverValue={mapHoverValue}
+              on:change={onMapSourceChange}
+              on:breakpoints={onMapBreakpoints}
+            />
+          </div>
+        {/if}
       </div>
 
       <div class="playback">
-        {#if !device}
+        {#if !device && subTab === "map"}
+          <button data-role="map-run" title="run the map program and install it" on:click={runMapNow}>
+            run map
+          </button>
+          {#if layout.kind === "map"}
+            <button data-role="map-back" title="drop the map, back to a strip" on:click={backToStrip}>
+              back to strip
+            </button>
+            <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
+          {/if}
+          {#if mapError}<span class="mapper-error" data-role="map-error">{mapError}</span>{/if}
+          <span class="sep"></span>
+        {:else if !device}
           <select value={layout.kind} on:change={setLayoutKind}>
             <option value="strip">strip</option>
             <option value="grid">grid</option>
@@ -1141,7 +1327,17 @@ function (pixelCount) {
         <button data-role="pause" on:click={togglePause} title={running ? "pause" : "resume"}>
           {running ? "pause" : "play"}
         </button>
-        {#if !device}
+        {#if !device && subTab === "map"}
+          <button
+            class="debug-toggle"
+            class:active={mapDebugMode}
+            data-role="map-debug"
+            title="toggle the map debugger"
+            on:click={toggleMapDebug}
+          >
+            debug
+          </button>
+        {:else if !device}
           <button
             class="debug-toggle"
             class:active={debugMode}
@@ -1166,78 +1362,37 @@ function (pixelCount) {
           <button class="dismiss" on:click={() => (importError = "")}>×</button>
         </div>
       {/if}
-      {#if compileError}
+      {#if compileError && subTab === "pattern"}
         <button class="banner error as-button" on:click={jumpToError}>
           line {compileError.line}:{compileError.col} — {compileError.message}
         </button>
       {/if}
-      {#if runtimeError && !compileError}
+      {#if mapCompileError && subTab === "map"}
+        <button
+          class="banner error as-button"
+          data-role="map-compile-error"
+          on:click={() =>
+            mapCompileError && mapEditor?.jumpTo(mapCompileError.line, mapCompileError.col)}
+        >
+          map line {mapCompileError.line}:{mapCompileError.col} — {mapCompileError.message}
+        </button>
+      {/if}
+      {#if runtimeError && !compileError && subTab === "pattern"}
         <div class="banner warn">
           runtime: {runtimeError.message}
           <button class="dismiss" on:click={() => (runtimeError = null)}>×</button>
         </div>
       {/if}
 
-      {#if debugMode && !device}
-        <div class="debugger" data-paused={dbg.paused}>
-          <div class="debug-bar">
-            {#if dbg.paused}
-              <button class="db-continue" on:click={() => step("continue")}>▶ continue</button>
-              <button class="db-over" on:click={() => step("over")}>step</button>
-              <button class="db-into" on:click={() => step("into")}>into</button>
-              <button class="db-out" on:click={() => step("out")}>out</button>
-            {:else}
-              <button class="db-break" on:click={requestBreak}>break</button>
-              <span class="dim">running — click the gutter to set breakpoints</span>
-            {/if}
-          </div>
-          {#if dbg.paused}
-            <div class="debug-status mono">
-              paused at line {dbg.line}{dbg.pixel !== null && dbg.pixel !== undefined
-                ? ` · pixel ${dbg.pixel}`
-                : ""}
-            </div>
-            {#if dbg.stack && dbg.stack.length > 0}
-              <div class="stack" data-role="stack">
-                {#each dbg.stack as f, i (i)}
-                  <div class="stack-frame mono">
-                    <span class="fn-name">{f.name}</span>
-                    <span class="dim">line {f.line}</span>
-                  </div>
-                  {#if i === 0}
-                    <table class="locals">
-                      <tbody>
-                        {#each f.locals as l (l.name)}
-                          <tr>
-                            <td class="name mono">{l.name}</td>
-                            <td class="value mono">
-                              {#if l.raw !== undefined}{fmtRaw(l.raw)}
-                              {:else if l.array !== undefined}array[{l.array}]
-                              {:else}fn#{l.fn}{/if}
-                            </td>
-                          </tr>
-                        {/each}
-                      </tbody>
-                    </table>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-            {#if dbg.globals && dbg.globals.length > 0}
-              <div class="scope-title dim">globals</div>
-              <table class="locals" data-role="globals">
-                <tbody>
-                  {#each dbg.globals as g (g.name)}
-                    <tr>
-                      <td class="name mono">{g.name}</td>
-                      <td class="value mono">{fmtLocal(g)}</td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            {/if}
-          {/if}
-        </div>
+      {#if !device && subTab === "map" && mapDebugMode}
+        <Debugger
+          snapshot={mapDbg}
+          runningHint="set a gutter breakpoint, then Run map to step through it"
+          on:step={(e) => mapStep(e.detail)}
+          on:break={mapRequestBreak}
+        />
+      {:else if debugMode && !device && subTab === "pattern"}
+        <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
       {/if}
 
       <Preview bind:this={preview} {layout} />
@@ -1251,46 +1406,20 @@ function (pixelCount) {
         </p>
       {/if}
 
-      <h2>Mapper</h2>
-      <details class="mapper" data-role="mapper" open={layout.kind === "map"}>
-        <summary class="dim">
-          {layout.kind === "map"
-            ? `2D map active (${pixelCount()} px)`
-            : "write a map function → 2D/3D layout"}
-        </summary>
-        <textarea
-          class="mono"
-          rows="9"
-          spellcheck="false"
-          bind:value={mapperSrc}
-          disabled={device !== null}
-        ></textarea>
-        <div class="mapper-actions">
-          <button
-            data-role="mapper-apply"
-            disabled={device !== null}
-            title={device
-              ? "maps apply to the local engine (device map upload comes later)"
-              : "run the map function and install the result"}
-            on:click={applyMapper}
-          >
-            apply map
-          </button>
+      {#if !device}
+        <h2>Map</h2>
+        <p class="dim hint">
           {#if layout.kind === "map"}
-            <button
-              on:click={() => {
-                layout = { kind: "strip", pixels: pixelCount() };
-                recompile();
-              }}
-            >
-              back to strip
-            </button>
+            A {pixelTotal}-point map is installed. Edit it in the
+            <button class="link" data-role="goto-map" on:click={() => (subTab = "map")}>map</button>
+            tab — it's a debuggable Luxel program.
+          {:else}
+            Lay pixels out in 2D/3D from the
+            <button class="link" data-role="goto-map" on:click={() => (subTab = "map")}>map</button>
+            tab. The map is a Luxel program (<code>plot(x, y)</code> per pixel) you can step through.
           {/if}
-          {#if mapperError}
-            <span class="mapper-error" data-role="mapper-error">{mapperError}</span>
-          {/if}
-        </div>
-      </details>
+        </p>
+      {/if}
 
       <h2>Vars</h2>
       <VarWatcher {vars} />
@@ -1538,9 +1667,53 @@ function (pixelCount) {
     background: var(--bg-inset);
   }
 
+  .subtabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+  }
+
+  .subtab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 5px 10px;
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .subtab:hover {
+    color: var(--text);
+  }
+
+  .subtab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .subtab .dot {
+    color: var(--accent);
+    font-size: 8px;
+    vertical-align: middle;
+    margin-left: 4px;
+  }
+
   .editor-host {
+    position: relative;
     flex: 1;
     min-height: 0;
+  }
+
+  .editor-slot {
+    height: 100%;
+  }
+
+  .editor-slot[hidden] {
+    display: none;
   }
 
   .playback {
@@ -1680,30 +1853,9 @@ function (pixelCount) {
     display: none;
   }
 
-  .mapper textarea {
-    width: 100%;
-    margin-top: 6px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-    resize: vertical;
-  }
-
-  .mapper-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 4px;
-    flex-wrap: wrap;
-  }
-
   .mapper-error {
     color: var(--error);
     font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-  }
-
-  .mapper summary {
-    cursor: pointer;
     font-size: 12px;
   }
 
@@ -1716,71 +1868,5 @@ function (pixelCount) {
   .device-badge {
     color: var(--accent);
     font-size: 12px;
-  }
-
-  .debugger {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    background: var(--bg-inset);
-  }
-
-  .debug-bar {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    flex-wrap: wrap;
-    font-size: 12px;
-  }
-
-  .debug-status {
-    color: var(--accent);
-    font-size: 12px;
-  }
-
-  .stack {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .stack-frame {
-    display: flex;
-    gap: 8px;
-    font-size: 12px;
-  }
-
-  .fn-name {
-    color: var(--text);
-  }
-
-  .locals {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-    margin: 2px 0 6px 12px;
-  }
-
-  .locals td {
-    padding: 1px 6px;
-  }
-
-  .locals .name {
-    color: var(--text-dim);
-    width: 40%;
-  }
-
-  .locals .value {
-    color: var(--accent);
-  }
-
-  .scope-title {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-top: 4px;
   }
 </style>

@@ -27,6 +27,7 @@ struct EngineSlot {
     engine: Engine,
     src: String,
     pixels: Vec<u8>, // flattened RGB copy handed to JS
+    map_buf: Vec<i32>, // flattened raw-16.16 [x y z] map coords handed to JS
 }
 
 fn set_response(s: String) {
@@ -100,6 +101,7 @@ pub unsafe extern "C" fn lx_new(
                 engine,
                 src: src.to_string(),
                 pixels: vec![0; pixel_count as usize * 3],
+                map_buf: Vec::new(),
             };
             let mut engines = ENGINES.lock().unwrap();
             let h = engines.iter().position(|e| e.is_none());
@@ -326,6 +328,51 @@ pub extern "C" fn lx_set_map_grid(h: i32, w: u32, grid_h: u32) {
 #[no_mangle]
 pub extern "C" fn lx_set_wall_clock(h: i32, unix_seconds: f64) {
     with_engine(h, |s| s.engine.set_wall_clock(unix_seconds as i64));
+}
+
+// ---- map programs (this engine emits coordinates, not colors) ----
+
+/// Turn this engine into a map-program runner (per-pixel `plot(x, y[, z])`).
+#[no_mangle]
+pub extern "C" fn lx_enable_map_mode(h: i32) {
+    with_engine(h, |s| s.engine.enable_map_mode());
+}
+
+/// Run (or resume) the map program over every pixel, collecting coordinates.
+/// Returns 1 if it suspended at a debug stop (resume with `lx_debug_step`), 0
+/// when finished. Runtime errors surface via `lx_take_error`.
+#[no_mangle]
+pub extern "C" fn lx_run_map(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.run_map() as i32).unwrap_or(0)
+}
+
+/// Dimensionality (2 or 3) of the collected map.
+#[no_mangle]
+pub extern "C" fn lx_map_dims(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.map().0 as i32).unwrap_or(2)
+}
+
+/// Number of collected coordinates.
+#[no_mangle]
+pub extern "C" fn lx_map_count(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.map().1.len() as i32).unwrap_or(0)
+}
+
+/// Pointer to the collected coordinates as tightly packed raw-16.16 [x y z]
+/// triples (count·3 i32s). Valid until the next call.
+#[no_mangle]
+pub extern "C" fn lx_map_coords(h: i32) -> *const i32 {
+    with_engine(h, |s| {
+        let (_, coords) = s.engine.map();
+        s.map_buf.clear();
+        for c in coords {
+            s.map_buf.push(c[0].raw());
+            s.map_buf.push(c[1].raw());
+            s.map_buf.push(c[2].raw());
+        }
+        s.map_buf.as_ptr()
+    })
+    .unwrap_or(std::ptr::null())
 }
 
 /// Refresh the RGB copy of the engine's current pixel buffer (for redrawing

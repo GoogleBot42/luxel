@@ -139,3 +139,71 @@ fn render_error_blanks_frame_and_records() {
     assert!(e.take_error().is_some());
     assert!(e.last_error.is_none()); // taken
 }
+
+// ---- map programs (map mode: per-pixel plot() → coordinate list) ----
+
+#[test]
+fn map_program_collects_2d_coords() {
+    let mut e = Engine::new(
+        "export function render(index) { plot(index, index * 2) }",
+        4,
+        1,
+    )
+    .unwrap();
+    e.enable_map_mode();
+    let paused = e.run_map();
+    assert!(!paused, "no breakpoints → runs to completion");
+    assert!(e.last_error.is_none());
+    let (dims, coords) = e.map();
+    assert_eq!(dims, 2);
+    assert_eq!(coords.len(), 4);
+    for i in 0..4 {
+        assert_eq!(coords[i][0], Fx::from_int(i as i32));
+        assert_eq!(coords[i][1], Fx::from_int(2 * i as i32));
+        assert_eq!(coords[i][2], Fx::ZERO);
+    }
+}
+
+#[test]
+fn map_program_3d_when_plot_has_three_args() {
+    let mut e = Engine::new(
+        "export function render(index) { plot(index, 0, 1) }",
+        3,
+        1,
+    )
+    .unwrap();
+    e.enable_map_mode();
+    e.run_map();
+    let (dims, coords) = e.map();
+    assert_eq!(dims, 3);
+    assert_eq!(coords[2][2], Fx::ONE);
+}
+
+#[test]
+fn map_program_without_render_reports_error() {
+    let mut e = Engine::new("x = 5", 4, 1).unwrap();
+    e.enable_map_mode();
+    let paused = e.run_map();
+    assert!(!paused);
+    assert!(e.take_error().is_some());
+}
+
+#[test]
+fn map_program_is_debuggable() {
+    // a breakpoint in the map program pauses the collection, just like a
+    // pattern — same drive loop, so stepping works unchanged
+    let mut e = Engine::new(
+        "export function render(index) {\n  a = index\n  plot(a, 0)\n}",
+        4,
+        1,
+    )
+    .unwrap();
+    e.enable_map_mode();
+    e.debug_set_enabled(true);
+    e.debug_set_breakpoints(&[3]); // the plot() line
+    let paused = e.run_map();
+    assert!(paused, "breakpoint should pause the map run");
+    let (line, _, pixel) = e.debug_location().expect("a paused location");
+    assert_eq!(line, 3);
+    assert_eq!(pixel, Some(0));
+}

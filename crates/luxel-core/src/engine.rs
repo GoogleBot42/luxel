@@ -95,6 +95,11 @@ pub struct Engine {
     /// changes, so the per-pixel cost is one table lookup, not a pow().
     gamma_lut: Option<alloc::boxed::Box<[u8; 256]>>,
     gamma_lut_for: Fx,
+    /// Map mode: this engine runs a *map program* (per-pixel `plot(x, y[, z])`)
+    /// and collects coordinates instead of colors. Set via `enable_map_mode`.
+    is_map: bool,
+    map_coords: Vec<[Fx; 3]>,
+    map_dims: u8,
 }
 
 impl Engine {
@@ -165,7 +170,53 @@ impl Engine {
             cur_delta: Fx::ZERO,
             gamma_lut: None,
             gamma_lut_for: Fx::ZERO,
+            is_map: false,
+            map_coords: Vec::new(),
+            map_dims: 0,
         })
+    }
+
+    /// Turn this engine into a *map program* runner: [`run_map`] executes its
+    /// per-pixel `render(index)` (which calls `plot(x, y[, z])`) and collects
+    /// one coordinate per pixel. Debugging works exactly as for a pattern —
+    /// the same per-pixel `drive` loop, so breakpoints/stepping just work.
+    pub fn enable_map_mode(&mut self) {
+        self.is_map = true;
+    }
+
+    /// Run the map program over every pixel, collecting coordinates. Returns
+    /// `true` if it suspended at a debug stop (resume with [`debug_step`]);
+    /// `false` when the collection finished. Read the result with [`map`].
+    pub fn run_map(&mut self) -> bool {
+        if self.run_stage.is_some() {
+            return true; // already running/paused — drive it with debug_step
+        }
+        self.map_coords = alloc::vec![[Fx::ZERO; 3]; self.pixel_count as usize];
+        self.map_dims = 0;
+        if self.render.is_none() {
+            self.last_error = Some(VmError {
+                message: String::from(
+                    "map program must export function render(index) and call plot(x, y)",
+                ),
+                fn_idx: u16::MAX,
+                pc: u32::MAX,
+                line: 0,
+                col: 0,
+            });
+            return false;
+        }
+        if self.pixel_count == 0 {
+            return false;
+        }
+        self.run_stage = Some(RunStage::Pixel(0)); // maps need no beforeRender
+        self.drive(None);
+        self.run_stage.is_some()
+    }
+
+    /// The collected map: dimensionality (2 or 3) and one coordinate per pixel
+    /// (pattern units — the consumer's [`set_map`] normalizes them).
+    pub fn map(&self) -> (u8, &[[Fx; 3]]) {
+        (if self.map_dims == 0 { 2 } else { self.map_dims }, &self.map_coords)
     }
 
     // ---- debugger ----
@@ -453,6 +504,9 @@ impl Engine {
                         };
                         self.vm.pixel = [Fx::ZERO; 3];
                         self.vm.pixel_written = false;
+                        self.vm.plot_coord = [Fx::ZERO; 3];
+                        self.vm.plot_dims = 0;
+                        self.vm.plot_written = false;
                         let (fn_idx, args, argc) = self.render_args(render, i);
                         self.vm
                             .start(&self.prog, fn_idx, &args[..argc], self.debug_enabled)
@@ -486,12 +540,20 @@ impl Engine {
                         self.run_stage = Some(RunStage::Pixel(0));
                     }
                     RunStage::Pixel(i) => {
-                        let [r, g, b] = self.vm.pixel;
-                        let mut px = [quantize(r), quantize(g), quantize(b)];
-                        if let Some(lut) = self.gamma_lut() {
-                            px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
+                        if self.is_map {
+                            // map mode: keep the plotted coordinate, not a color
+                            if let Some(slot) = self.map_coords.get_mut(i as usize) {
+                                *slot = self.vm.plot_coord;
+                            }
+                            self.map_dims = self.map_dims.max(self.vm.plot_dims);
+                        } else {
+                            let [r, g, b] = self.vm.pixel;
+                            let mut px = [quantize(r), quantize(g), quantize(b)];
+                            if let Some(lut) = self.gamma_lut() {
+                                px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
+                            }
+                            self.pixels[i as usize] = px;
                         }
-                        self.pixels[i as usize] = px;
                         if i + 1 < self.pixel_count {
                             self.run_stage = Some(RunStage::Pixel(i + 1));
                         } else {

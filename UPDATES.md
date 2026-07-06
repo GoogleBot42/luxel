@@ -1,5 +1,39 @@
 # Update log
 
+## 2026-07-06 night — mapper is a debuggable Luxel program in its own editor tab ✅
+
+Re-read the feedback and fixed the thing I'd under-heard: "the mapping function
+should be a tab on the script editor **and debuggable as well**." Per your call,
+the map is now a **Luxel program** (not JS), which makes it debuggable for free
+by reusing the pattern VM + debugger.
+
+- **New `plot(x, y[, z])` builtin** + engine "map mode": a map program exports
+  `render(index)` and calls `plot()` once per pixel. A second engine runs it
+  through the *same* per-pixel `drive` loop as patterns, but stores the plotted
+  coordinate instead of a color. Collected coords install into the pattern
+  engine as a 2D/3D map.
+- **Editor sub-tab (pattern · map).** The map is edited in the same CodeMirror
+  as patterns — luxel highlighting, completions, hover — not a bare textarea.
+- **Debuggable exactly like a pattern.** Gutter breakpoints, step over/into/out,
+  the call stack, locals, and globals all work on the map program because it's
+  real VM code. (The debugger panel is now a shared `Debugger.svelte`.) A live
+  scatter preview renders the pattern on the computed map.
+- Spans all layers: luxel-core (`plot`, `enable_map_mode`/`run_map`/`map` +
+  4 unit tests), luxel-wasm (`lx_run_map`/`lx_map_*`), luxel.ts
+  (`compileMap`/`runMap`), App.svelte. Playground-only for now (installing a
+  computed map on the device is a later firmware item).
+
+Also, two small fixes you flagged: the page **`<title>` is now just "Luxel"**
+(was "Luxel Playground"), and the **Patterns tab shows a loading state** — the
+built-in examples render immediately and a spinner reads "loading patterns…"
+while the corpus streams in, instead of a bare "0 patterns."
+
+Verified in real chromium: 55 playground checks (incl. map runs, installs,
+scatter renders, **breakpoint pauses the map run at pixel 0**, compile errors,
+back-to-strip) + 19 device-mode checks, all green; 65 Rust tests pass. Pushed to
+the dev device as a hot asset reload (the map tab is playground-only, so it's
+hidden in device mode).
+
 ## 2026-07-06 night — web UI Phase 2: tabs + decluttered header ✅
 
 Phase 2 of the web-UI redesign — a real tabbed app instead of one crowded

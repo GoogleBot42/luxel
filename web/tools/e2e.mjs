@@ -290,9 +290,14 @@ try {
     );
   }
 
-  // 10. pattern browser: overlay opens, tiles animate live, pick loads
+  // 10. pattern browser: tab opens, examples show immediately, corpus streams
+  //     in (the header shows a loading spinner until it lands), tiles animate.
   await page.click('[data-role="tab-patterns"]');
   await page.waitForSelector(".tile", { timeout: 5000 }).catch(() => null);
+  // examples render right away; wait for the corpus to finish loading in
+  await page
+    .waitForFunction(() => document.querySelectorAll(".tile").length > 150, { timeout: 8000 })
+    .catch(() => null);
   const tileCount = await page.$$eval(".tile", (els) => els.length);
   check("gallery shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
   await sleep(2500); // let visible tiles compile + render a few frames
@@ -363,16 +368,22 @@ try {
   check("shared pattern compiles", (await page2.$(".banner.error")) === null);
   await page2.close();
 
-  // 13. mapper: apply the default ring map → scatter preview renders
-  await page.$eval('[data-role="mapper"] summary', (el) => el.click());
-  await page.click('[data-role="mapper-apply"]');
-  await sleep(800);
-  const mapErr = await page.$('[data-role="mapper-error"]');
-  check("mapper applies without error", mapErr === null);
+  // 13. mapper: the map is now a debuggable Luxel program in its own editor
+  //     sub-tab. Switch to it, run the default ring → scatter preview renders.
+  await page.click('[data-role="subtab-map"]');
+  await page.waitForSelector('[data-role="map-editor"] .cm-content', { timeout: 3000 });
+  await sleep(200);
+  const mapDoc = await page.$eval('[data-role="map-editor"] .cm-content', (el) => el.textContent ?? "");
+  check("map editor holds a Luxel map program", mapDoc.includes("plot("), mapDoc.slice(0, 40));
+  await page.click('[data-role="map-run"]');
+  await sleep(700);
+  const mapErr =
+    (await page.$('[data-role="map-error"]')) || (await page.$('[data-role="map-compile-error"]'));
+  check("map runs without error", mapErr === null);
   const mapBadge = await page
     .$eval(String.raw`[data-role="map-badge"]`, (el) => el.textContent ?? "")
     .catch(() => "");
-  check("header shows mapped layout", mapBadge.includes("60 px mapped"), mapBadge);
+  check("map installs (px mapped)", mapBadge.includes("60 px mapped"), mapBadge);
   const mapLit = await page.$eval(".map", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
     let lit = 0;
@@ -381,20 +392,49 @@ try {
   });
   check("map scatter renders lit dots", mapLit > 200, `${mapLit} lit px`);
   await page.screenshot({ path: `${shotDir}/e2e-6-mapper.png` });
-  // bad mapper source surfaces the error, layout stays mapped
-  await page.$eval('[data-role="mapper"] textarea', (el) => {
-    el.value = "function (n) { return 42 }";
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+
+  // 13b. the map program is debuggable exactly like a pattern: a gutter
+  //      breakpoint on the plot() line pauses the per-pixel map run.
+  const mapPlot = await page.$$eval('[data-role="map-editor"] .cm-line', (els) => {
+    const i = els.findIndex((el) => el.textContent?.includes("plot("));
+    if (i < 0) return null;
+    const r = els[i].getBoundingClientRect();
+    return { y: r.y, h: r.height };
   });
-  await page.click('[data-role="mapper-apply"]');
-  await sleep(300);
-  check("broken mapper shows error", (await page.$('[data-role="mapper-error"]')) !== null);
-  // back to strip restores the 1D preview
-  await page.$$eval('[data-role="mapper"] button', (els) => {
-    els.find((b) => b.textContent?.includes("back to strip"))?.click();
-  });
+  check("found map plot() line", mapPlot !== null);
+  if (mapPlot) {
+    const mg = await page.$eval('[data-role="map-editor"] .cm-bp-gutter', (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, w: r.width };
+    });
+    await page.mouse.click(mg.x + mg.w / 2, mapPlot.y + mapPlot.h / 2);
+    await sleep(200);
+    await page.click('[data-role="map-run"]');
+    await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 3000 }).catch(() => null);
+    check("map breakpoint pauses the run", (await page.$('.debugger[data-paused="true"]')) !== null);
+    const mapStatus = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
+    check("map paused at pixel 0", mapStatus.includes("pixel 0"), mapStatus.trim());
+    await page.screenshot({ path: `${shotDir}/e2e-6b-map-debug.png` });
+    await page.click('[data-role="map-debug"]'); // debug off → resume + install
+    await sleep(400);
+  }
+
+  // 13c. a broken map surfaces a compile error (keeps the last good map)
+  await page.click('[data-role="map-editor"] .cm-content');
+  await page.keyboard.down("Control");
+  await page.keyboard.press("a");
+  await page.keyboard.up("Control");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("export function render(index) { plot( }");
   await sleep(500);
+  check("broken map shows compile error", (await page.$('[data-role="map-compile-error"]')) !== null);
+
+  // back to strip restores the 1D preview; return to the pattern sub-tab
+  await page.click('[data-role="map-back"]');
+  await sleep(400);
   check("back to strip restores waterfall", (await page.$(".waterfall")) !== null);
+  await page.click('[data-role="subtab-pattern"]');
+  await sleep(200);
 
   // 14. pattern library: save under a name, reload restores the working
   //     copy (autosave), the saved entry loads from the picker, delete works

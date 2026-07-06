@@ -307,6 +307,8 @@ pub enum Builtin {
     Simplex2,
     Simplex3,
     SetGamma,
+    // Luxel map programs: emit one coordinate per pixel (see engine map mode).
+    Plot,
 }
 
 pub struct BuiltinDef {
@@ -381,6 +383,7 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("rgb2hsv", Rgb2Hsv), b!("hsv2rgb", Hsv2Rgb), b!("mixColors", MixColors),
     b!("simplex2", Simplex2), b!("simplex3", Simplex3),
     b!("setGamma", SetGamma),
+    b!("plot", Plot),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -486,6 +489,12 @@ pub struct Vm {
     /// Set by hsv()/rgb() — the engine reads this after each render call.
     pub pixel: [Fx; 3],
     pub pixel_written: bool,
+    /// Set by plot() in a map program — the engine reads this after each
+    /// per-pixel map call to build the coordinate list. `plot_dims` is 2 or 3
+    /// per the arg count of the last plot() this pixel.
+    pub plot_coord: [Fx; 3],
+    pub plot_dims: u8,
+    pub plot_written: bool,
     /// Current coordinate transform (pre-multiplied ops; points transform in
     /// call order — the corpus `translate(-.5,-.5); rotate(θ)` idiom).
     pub transform: [[Fx; 4]; 4],
@@ -543,6 +552,9 @@ impl Vm {
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             pixel: [Fx::ZERO; 3],
             pixel_written: false,
+            plot_coord: [Fx::ZERO; 3],
+            plot_dims: 0,
+            plot_written: false,
         }
     }
 
@@ -1237,6 +1249,14 @@ impl Vm {
                     n(2).clamp(Fx::ZERO, Fx::ONE),
                 ];
                 self.pixel_written = true;
+                Ok(Value::default())
+            }
+            // plot(x, y) or plot(x, y, z): map programs emit one coordinate
+            // per pixel; the engine (map mode) reads plot_coord after the call.
+            Plot => {
+                self.plot_coord = [n(0), n(1), if argc >= 3 { n(2) } else { Fx::ZERO }];
+                self.plot_dims = if argc >= 3 { 3 } else { 2 };
+                self.plot_written = true;
                 Ok(Value::default())
             }
             Oklch => {

@@ -47,12 +47,19 @@ The app now has top-level tabs shown in both modes (device adds Settings).
 
 ## Editor
 
-### Mapper is a first-class editor tab, and debuggable [M]
-Today the map function lives in a `<details>` in the right rail. It should be a
-**tab on the script editor** (peer of the pattern source), edited in CodeMirror
-(not a bare `<textarea>`), and **debuggable** the same way patterns are — step
-through the map function, inspect it. See ideas.md "Multi-pane: map editor +
-preview".
+### Mapper is a first-class editor tab, and debuggable [M] ✅
+**Done.** The map is now a **Luxel program** (not JS): it exports
+`render(index)` and calls a new `plot(x, y[, z])` builtin once per pixel. It's a
+peer **sub-tab of the script editor** (pattern · map), edited in the same
+CodeMirror (luxel highlighting/completions/hover), and **debuggable exactly like
+a pattern** — gutter breakpoints, step over/into/out, stack + locals + globals —
+because it runs on the same VM (a second engine in "map mode": the per-pixel
+`drive` loop stores the plotted coordinate instead of a color). Collected coords
+install into the pattern engine as a 2D/3D map; a live scatter preview renders.
+Implementation spans luxel-core (`plot` builtin + `Engine::enable_map_mode`/
+`run_map`/`map`), luxel-wasm (`lx_run_map`/`lx_map_*`), luxel.ts
+(`compileMap`/`runMap`), and App.svelte (map sub-tab + shared `Debugger.svelte`).
+Playground-only for now — device map upload is a later firmware item.
 
 ### 3D mapping [L]
 `normalizeMap` currently drops the z coordinate; the mapper already accepts
@@ -128,8 +135,10 @@ the pattern is loading, instead of appearing dead/blank.
 3. **Phase 3 (firmware + settings):** `/api/brightness`, `/api/config`
    (pixel count/protocol); Settings tab wiring WiFi + brightness + pixel count;
    fix the connect-on-load race.
-4. **Phase 4 (bigger features):** mapper-as-editor-tab (CodeMirror) + debuggable;
-   3D preview; Playlist tab + firmware playlist storage; MQTT/HA (M4); AP-mode
-   provisioning.
+4. **Phase 4 (bigger features):** ~~mapper-as-editor-tab (CodeMirror) +
+   debuggable~~ ✅ done (Luxel map program, see above); 3D preview (map already
+   emits `[x,y,z]` — Preview needs a projection); Playlist tab + firmware
+   playlist storage; MQTT/HA (M4); AP-mode provisioning; device map upload
+   (install a computed map on hardware).
 </content>
 </invoke>
