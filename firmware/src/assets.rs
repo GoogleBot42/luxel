@@ -18,7 +18,6 @@ use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
-use embedded_storage::ReadStorage;
 use esp_println::println;
 
 pub const REGION_START: u32 = 0x31_0000;
@@ -103,11 +102,13 @@ pub fn init() {
     TOC.lock(|c| *c.borrow_mut() = entries);
 }
 
-/// Streamed upload of a new archive, mirroring the OTA writer: pre-erase
-/// (sized by Content-Length), plain NOR writes, TOC re-parse on success.
+/// Streamed upload of a new archive. Erases each sector just before writing
+/// it (interleaved with the caller's network reads — see ota.rs for why a
+/// pre-erase burst trips the watchdog); TOC re-parse on commit.
 pub struct AssetWriter {
     written: u32,
     expected: u32,
+    erased_end: u32,
 }
 
 pub async fn begin(expected: u32) -> Result<AssetWriter, &'static str> {
@@ -116,35 +117,37 @@ pub async fn begin(expected: u32) -> Result<AssetWriter, &'static str> {
     }
     // invalidate the TOC while the region is inconsistent
     TOC.lock(|c| c.borrow_mut().clear());
-    const SECTOR: u32 = 4096;
-    let end = REGION_START + expected.div_ceil(SECTOR) * SECTOR;
-    let mut at = REGION_START;
-    while at < end {
-        let ok = crate::ota::with_flash(|f| {
-            embedded_storage::nor_flash::NorFlash::erase(f, at, at + SECTOR).is_ok()
-        })
-        .unwrap_or(false);
-        if !ok {
-            return Err("flash erase failed");
-        }
-        at += SECTOR;
-        embassy_futures::yield_now().await;
-    }
     Ok(AssetWriter {
         written: 0,
         expected,
+        erased_end: 0,
     })
 }
 
 impl AssetWriter {
-    pub fn write(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
+    pub async fn write(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
         if self.written == 0 && !chunk.starts_with(b"LUXA") {
             return Err("not a LUXA archive (pack with web/tools/pack-assets.mjs)");
         }
         if self.written + chunk.len() as u32 > self.expected {
             return Err("archive exceeds declared length");
         }
+        const SECTOR: u32 = 4096;
         let at = REGION_START + self.written;
+        let end = at + chunk.len() as u32;
+        let mut s = self.erased_end.max(at & !(SECTOR - 1));
+        while s < end {
+            let ok = crate::ota::with_flash(|f| {
+                embedded_storage::nor_flash::NorFlash::erase(f, s, s + SECTOR).is_ok()
+            })
+            .unwrap_or(false);
+            if !ok {
+                return Err("flash erase failed");
+            }
+            s += SECTOR;
+            self.erased_end = s;
+            embassy_futures::yield_now().await;
+        }
         let whole = chunk.len() & !3;
         let ok = crate::ota::with_flash(|f| {
             use embedded_storage::nor_flash::NorFlash;

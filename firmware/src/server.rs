@@ -194,20 +194,21 @@ impl picoserve::response::Content for FlashAsset {
     }
 
     async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
-        // 8 KiB chunks: fewer esp-storage flash ops (each briefly stalls the
-        // cache and starves the WiFi/executor on ESP32). yield_now after
-        // every write lets the network drain the TCP tx ring — without it,
-        // multi-chunk responses hang the second write_all.
-        let mut buf = alloc::vec![0u8; 8192];
+        // Each esp-storage flash read briefly disables the cache and starves
+        // WiFi/the executor. yield_now wasn't enough for multi-chunk files
+        // (the second write_all hung): a real Timer::after cedes wall-clock
+        // time so the WiFi task actually runs between flash reads. 4 KiB
+        // chunks keep each cache-off window short.
+        let mut buf = alloc::vec![0u8; 4096];
         let mut at = 0u32;
         while at < self.0.len {
-            let n = (self.0.len - at).min(8192) as usize;
+            let n = (self.0.len - at).min(4096) as usize;
             if !crate::assets::read_chunk(self.0.offset + at, &mut buf[..n]) {
                 break; // flash busy (OTA in flight) — truncated response
             }
             writer.write_all(&buf[..n]).await?;
             at += n as u32;
-            embassy_futures::yield_now().await;
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
         }
         Ok(())
     }
@@ -248,7 +249,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                             Ok(n) => {
                                 fill += n;
                                 if fill == buf.len() {
-                                    if let Err(e) = writer.write(&buf[..fill]) {
+                                    if let Err(e) = writer.write(&buf[..fill]).await {
                                         failed = Some(e);
                                         break;
                                     }
@@ -262,7 +263,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                         }
                     }
                     if failed.is_none() && fill > 0 {
-                        if let Err(e) = writer.write(&buf[..fill]) {
+                        if let Err(e) = writer.write(&buf[..fill]).await {
                             failed = Some(e);
                         }
                     }
@@ -318,12 +319,10 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
             let expected = body.content_length() as u32;
             match crate::ota::begin() {
                 Err(e) => Err(e),
-                Ok(mut writer) => match writer.erase(expected).await {
-                    Err(e) => Err(e),
-                    Ok(()) => {
+                Ok(mut writer) => {
                     let mut reader = body.reader();
-                    // sector-sized chunks into the pre-erased region;
-                    // 4 KiB keeps peak RAM small
+                    // 4 KiB (one sector) chunks: write() erases+writes each,
+                    // interleaved with these network reads (see ota.rs)
                     let mut buf = alloc::vec![0u8; 4096];
                     let mut fill = 0usize;
                     let mut failed: Option<&'static str> = None;
@@ -333,7 +332,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                             Ok(n) => {
                                 fill += n;
                                 if fill == buf.len() {
-                                    if let Err(e) = writer.write(&buf[..fill]) {
+                                    if let Err(e) = writer.write(&buf[..fill]).await {
                                         failed = Some(e);
                                         break;
                                     }
@@ -347,7 +346,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                         }
                     }
                     if failed.is_none() && fill > 0 {
-                        if let Err(e) = writer.write(&buf[..fill]) {
+                        if let Err(e) = writer.write(&buf[..fill]).await {
                             failed = Some(e);
                         }
                     }
@@ -355,8 +354,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                         None => writer.commit(expected),
                         Some(e) => Err(e),
                     }
-                    }
-                },
+                }
             }
         };
 

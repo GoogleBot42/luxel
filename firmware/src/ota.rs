@@ -67,6 +67,8 @@ pub struct OtaWriter {
     partition_offset: u32,
     capacity: u32,
     written: u32,
+    /// absolute flash offset erased so far (erase-on-write bookkeeping)
+    erased_end: u32,
     slot: &'static str,
 }
 
@@ -125,6 +127,7 @@ pub fn begin() -> Result<OtaWriter, &'static str> {
         partition_offset: offset,
         capacity,
         written: 0,
+        erased_end: 0,
         slot,
     })
 }
@@ -142,29 +145,13 @@ impl OtaWriter {
 
     /// Erase the region for an incoming image of `len` bytes, yielding to
     /// the executor between sectors so the network stack keeps breathing.
-    /// Erasing everything upfront lets [Self::write] use plain NOR writes —
-    /// the per-sector read-erase-program cycle otherwise stalls the
-    /// executor ~100 ms per 4 KiB and collapses TCP throughput.
-    pub async fn erase(&mut self, len: u32) -> Result<(), &'static str> {
-        if len == 0 || len > self.capacity {
-            return Err("image larger than OTA slot");
-        }
-        const SECTOR: u32 = 4096;
-        let end = self.partition_offset + len.div_ceil(SECTOR) * SECTOR;
-        let mut at = self.partition_offset;
-        let flash = self.flash.as_mut().expect("live until drop");
-        while at < end {
-            embedded_storage::nor_flash::NorFlash::erase(flash, at, at + SECTOR)
-                .map_err(|_| "flash erase failed")?;
-            at += SECTOR;
-            embassy_futures::yield_now().await;
-        }
-        Ok(())
-    }
-
-    /// Write a chunk into the pre-erased region. Chunks must be multiples
-    /// of 4 bytes except the last (which gets 0xFF-padded).
-    pub fn write(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
+    /// Write a chunk, erasing any sectors it newly touches *just before*
+    /// writing them. Erasing lazily like this (rather than one long
+    /// pre-erase burst) keeps each flash op sandwiched between the caller's
+    /// network reads, so WiFi and the interrupt watchdog stay serviced — a
+    /// tight erase burst tripped the watchdog and reset the device.
+    /// Chunks should be sector-aligned in length except the last.
+    pub async fn write(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
         if self.written == 0 {
             // image header magic AND the esp_app_desc magic word at file
             // offset 0x20 — a lone 0xE9 first byte let garbage through once
@@ -176,8 +163,20 @@ impl OtaWriter {
         if self.written + chunk.len() as u32 > self.capacity {
             return Err("image larger than OTA slot");
         }
-        let flash = self.flash.as_mut().expect("live until drop");
+        const SECTOR: u32 = 4096;
         let at = self.partition_offset + self.written;
+        let end = at + chunk.len() as u32;
+        // erase every sector in [at, end) not yet erased
+        let mut s = self.erased_end.max(at & !(SECTOR - 1));
+        while s < end {
+            let flash = self.flash.as_mut().expect("live until drop");
+            embedded_storage::nor_flash::NorFlash::erase(flash, s, s + SECTOR)
+                .map_err(|_| "flash erase failed")?;
+            s += SECTOR;
+            self.erased_end = s;
+            embassy_futures::yield_now().await;
+        }
+        let flash = self.flash.as_mut().expect("live until drop");
         let whole = chunk.len() & !3;
         if whole > 0 {
             embedded_storage::nor_flash::NorFlash::write(flash, at, &chunk[..whole])
