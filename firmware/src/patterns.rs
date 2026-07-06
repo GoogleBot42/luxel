@@ -167,17 +167,27 @@ macro_rules! with_store {
 
 /// Collect every stored pattern's (id, name) — sources skipped. Used by list,
 /// upsert-by-name, and the boot scan.
+///
+/// `fetch_all_items` yields *raw* items, including superseded versions from
+/// an upsert (a re-`store_item` of the same key appends; the old copy lives
+/// until GC). It does skip removed keys. So we dedup by key here — the
+/// (id, name) mapping is a stable bijection (a new name always mints a new
+/// id; upsert reuses the id), so keeping the first-seen name per key is
+/// correct. `fetch_item` already returns the latest value for reads.
 async fn collect_index(
     af: &mut AsyncFlash<'_>,
     range: Range<u32>,
     buf: &mut [u8],
 ) -> Vec<(u32, String)> {
     let mut cache = NoCache::new();
-    let mut out = Vec::new();
+    let mut out: Vec<(u32, String)> = Vec::new();
     let Ok(mut iter) = map::fetch_all_items::<u32, _, _>(af, range, &mut cache, buf).await else {
         return out;
     };
     while let Ok(Some((key, val))) = iter.next::<u32, &[u8]>(buf).await {
+        if out.iter().any(|(k, _)| *k == key) {
+            continue; // superseded duplicate
+        }
         if let Some((name, _)) = deserialize_value(val) {
             out.push((key, String::from(name)));
         }
