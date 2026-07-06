@@ -88,13 +88,18 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
         use picoserve::io::Read as _;
 
         let result: Result<u32, &'static str> = {
-            let mut reader = request.body_connection.body().reader();
-            let expected = reader.content_length() as u32;
+            // NOTE: picoserve's read_request timeout is one timer for the
+            // WHOLE body (created when the reader is taken), not per read —
+            // take the reader only after the erase phase so slow uploads get
+            // the full budget.
+            let mut body = request.body_connection.body();
+            let expected = body.content_length() as u32;
             match crate::ota::begin() {
                 Err(e) => Err(e),
                 Ok(mut writer) => match writer.erase(expected).await {
                     Err(e) => Err(e),
                     Ok(()) => {
+                    let mut reader = body.reader();
                     // sector-sized chunks into the pre-erased region;
                     // 4 KiB keeps peak RAM small
                     let mut buf = alloc::vec![0u8; 4096];
@@ -323,7 +328,9 @@ static CONFIG: picoserve::Config = picoserve::Config {
     timeouts: picoserve::Timeouts {
         start_read_request: picoserve::time::Duration::from_secs(5),
         persistent_start_read_request: picoserve::time::Duration::from_secs(1),
-        read_request: picoserve::time::Duration::from_secs(20),
+        // one timer for an ENTIRE request body, not per-read — must cover a
+        // full OTA upload on a slow link
+        read_request: picoserve::time::Duration::from_secs(300),
         write: picoserve::time::Duration::from_secs(5),
     },
     connection: picoserve::KeepAlive::KeepAlive,
