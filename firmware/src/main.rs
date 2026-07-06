@@ -341,6 +341,20 @@ async fn reboot_task() -> ! {
 
 #[embassy_executor::task]
 async fn connection_task(mut controller: WifiController<'static>) {
+    // Scan before the first connect: the esp32 blob's power-management
+    // bookkeeping (TBTT/beacon tracking) divides by fields that a cold
+    // connect can leave zeroed — every upstream example scans first.
+    match controller
+        .scan_async(&esp_radio::wifi::scan::ScanConfig::default().with_max(10))
+        .await
+    {
+        Ok(aps) => {
+            for ap in aps.iter() {
+                println!("ap: {:?}", ap);
+            }
+        }
+        Err(e) => println!("scan failed: {:?}", e),
+    }
     loop {
         match controller.connect_async().await {
             Ok(info) => {
