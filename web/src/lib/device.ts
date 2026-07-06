@@ -19,8 +19,33 @@ export class DeviceSession {
   /** `base` is "" when served from the device itself, else "http://host[:port]". */
   constructor(readonly base: string) {}
 
+  private socket: WebSocket | null = null;
+  private pending = new Map<number, (r: unknown) => void>();
+  private nextId = 1;
+
   private url(path: string): string {
     return this.base + path;
+  }
+
+  /** Multiplex a request over the push socket when it's open (the ESP32
+   *  only serves two connections — one socket carries everything), falling
+   *  back to `null` so callers use HTTP. Wire: `"<id> <call>\n<body>"` →
+   *  `{"id":N,"r":…}`. */
+  private wsCall(call: string, body: string): Promise<unknown> | null {
+    const ws = this.socket;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return null;
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error("ws call timeout"));
+      }, 4000);
+      this.pending.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      ws.send(`${id} ${call}\n${body}`);
+    });
   }
 
   async status(): Promise<DeviceStatus> {
@@ -33,6 +58,8 @@ export class DeviceSession {
   }
 
   async run(source: string): Promise<RunResult> {
+    const ws = this.wsCall("code", source);
+    if (ws) return (await ws) as RunResult;
     const res = await fetch(this.url("/api/code"), { method: "POST", body: source });
     return (await res.json()) as RunResult;
   }
@@ -46,15 +73,23 @@ export class DeviceSession {
   }
 
   async setControl(name: string, values: number[]): Promise<void> {
-    const raws = values.map((v) => Math.round(v * RAW)).join(" ");
-    await fetch(this.url("/api/control"), { method: "POST", body: `${name} ${raws}`.trim() });
+    const body = `${name} ${values.map((v) => Math.round(v * RAW)).join(" ")}`.trim();
+    const ws = this.wsCall("control", body);
+    if (ws) {
+      await ws;
+      return;
+    }
+    await fetch(this.url("/api/control"), { method: "POST", body });
   }
 
   async setVar(name: string, value: number): Promise<void> {
-    await fetch(this.url("/api/var"), {
-      method: "POST",
-      body: `${name} ${Math.round(value * RAW)}`,
-    });
+    const body = `${name} ${Math.round(value * RAW)}`;
+    const ws = this.wsCall("var", body);
+    if (ws) {
+      await ws;
+      return;
+    }
+    await fetch(this.url("/api/var"), { method: "POST", body });
   }
 
   async vars(): Promise<Record<string, number | number[]>> {
@@ -87,12 +122,19 @@ export class DeviceSession {
     ws.onmessage = (e) => {
       if (typeof e.data === "string") {
         const msg = JSON.parse(e.data) as {
-          type: string;
+          type?: string;
+          id?: number;
+          r?: unknown;
           status?: DeviceStatus;
           vars?: Record<string, number | number[] | null>;
           readouts?: Record<string, number | null>;
           controls?: Control[];
         };
+        if (msg.id !== undefined) {
+          this.pending.get(msg.id)?.(msg.r);
+          this.pending.delete(msg.id);
+          return;
+        }
         if (msg.type === "status" && msg.status) handlers.onStatus(msg.status);
         if (msg.type === "controls" && msg.controls) handlers.onControls(msg.controls);
         if (msg.type === "vars" && msg.vars) {
@@ -114,8 +156,13 @@ export class DeviceSession {
         handlers.onPixels(new Uint8Array(e.data as ArrayBuffer));
       }
     };
-    ws.onclose = handlers.onClose;
+    ws.onclose = () => {
+      if (this.socket === ws) this.socket = null;
+      this.pending.clear();
+      handlers.onClose();
+    };
     ws.onerror = () => ws.close();
+    this.socket = ws;
     return ws;
   }
 

@@ -72,48 +72,99 @@ async fn api_status() -> ApiResponse {
     json_response(status_json())
 }
 
-/// Pure-push preview socket: binary frames = RGB pixels (~15 Hz), text
-/// frames = typed JSON — {"type":"status",…} 1 Hz, {"type":"vars",…} and
-/// {"type":"readouts",…} 4 Hz. No frames are read: picoserve's next_frame
-/// is not cancel-safe to select against the ticker, and a departed client
-/// simply errors the next send, which ends the task.
+/// Handle one multiplexed request from the socket. Wire format keeps the
+/// device side trivial: text frame `"<id> <call>\n<body>"`, reply
+/// `{"id":<id>,"r":<the same JSON the HTTP route returns>}`. Multiplexing
+/// API calls onto the push socket matters because the chip only serves two
+/// connections — the browser needs just this one.
+async fn handle_ws_call(frame: &str) -> String {
+    let (header, body) = frame.split_once('\n').unwrap_or((frame, ""));
+    let mut it = header.split_whitespace();
+    let (id, call) = match (it.next().and_then(|v| v.parse::<u32>().ok()), it.next()) {
+        (Some(id), Some(call)) => (id, call),
+        _ => return String::from("{\"id\":0,\"r\":{\"ok\":false,\"error\":\"bad frame\"}}"),
+    };
+    let r = match call {
+        "code" => api_code(String::from(body)).await.2,
+        "control" => api_control(String::from(body)).await.2,
+        "var" => api_var(String::from(body)).await.2,
+        "pattern" => format!("{{\"pattern\":\"{}\"}}", json_escape(&get_pattern_src())),
+        _ => String::from("{\"ok\":false,\"error\":\"unknown call\"}"),
+    };
+    format!("{{\"id\":{},\"r\":{}}}", id, r)
+}
+
+/// Full-duplex preview + API socket. Pushes binary pixel frames (~15 Hz)
+/// and typed JSON text frames ({"type":"status"|"controls"|"vars"|
+/// "readouts",…}); receives multiplexed API calls (see [handle_ws_call]).
+/// Receiving uses next_message's signal parameter (a timer) — the
+/// sanctioned way to interleave pushes with reads.
 struct PreviewWs;
 
 impl picoserve::response::ws::WebSocketCallback for PreviewWs {
     async fn run<R: picoserve::io::Read, W: picoserve::io::Write<Error = R::Error>>(
         self,
-        _rx: picoserve::response::ws::SocketRx<R>,
+        mut rx: picoserve::response::ws::SocketRx<R>,
         mut tx: picoserve::response::ws::SocketTx<W>,
     ) -> Result<(), W::Error> {
+        use picoserve::futures::Either;
+        use picoserve::response::ws::Message;
+
+        // pattern sources arrive here in device mode — size for the corpus
+        let mut rxbuf = alloc::vec![0u8; 16 * 1024];
         let mut tick: u32 = 0;
+        let mut next_push = embassy_time::Instant::now();
         loop {
-            embassy_time::Timer::after(embassy_time::Duration::from_millis(66)).await;
-            let px = get_pixels();
-            if !px.is_empty() {
-                tx.send_binary(&px).await?;
-            }
-            if tick % 4 == 0 {
-                let vars = snapshot(&VARS_JSON);
-                tx.send_text(&format!("{{\"type\":\"vars\",\"vars\":{}}}", vars)).await?;
-                let ro = snapshot(&READOUTS_JSON);
-                tx.send_text(&format!("{{\"type\":\"readouts\",\"readouts\":{}}}", ro))
-                    .await?;
-            }
-            if tick % 15 == 0 {
-                tx.send_text(&format!("{{\"type\":\"status\",\"status\":{}}}", status_json()))
-                    .await?;
-                let controls = {
-                    let s = snapshot(&CONTROLS_JSON);
-                    if s == "{}" {
-                        String::from("[]")
-                    } else {
-                        s
+            match rx
+                .next_message(&mut rxbuf, embassy_time::Timer::at(next_push))
+                .await?
+            {
+                Either::First(Ok(Message::Text(t))) => {
+                    let reply = handle_ws_call(t).await;
+                    tx.send_text(&reply).await?;
+                }
+                Either::First(Ok(Message::Ping(d))) => tx.send_pong(d).await?,
+                Either::First(Ok(Message::Close(_))) => return tx.close(None).await,
+                Either::First(Ok(_)) => {}
+                Either::First(Err(_)) => return tx.close((1002u16, "protocol error")).await,
+                Either::Second(()) => {
+                    next_push = embassy_time::Instant::now()
+                        + embassy_time::Duration::from_millis(66);
+                    let px = get_pixels();
+                    if !px.is_empty() {
+                        tx.send_binary(&px).await?;
                     }
-                };
-                tx.send_text(&format!("{{\"type\":\"controls\",\"controls\":{}}}", controls))
-                    .await?;
+                    if tick % 4 == 0 {
+                        let vars = snapshot(&VARS_JSON);
+                        tx.send_text(&format!("{{\"type\":\"vars\",\"vars\":{}}}", vars))
+                            .await?;
+                        let ro = snapshot(&READOUTS_JSON);
+                        tx.send_text(&format!("{{\"type\":\"readouts\",\"readouts\":{}}}", ro))
+                            .await?;
+                    }
+                    if tick % 15 == 0 {
+                        tx.send_text(&format!(
+                            "{{\"type\":\"status\",\"status\":{}}}",
+                            status_json()
+                        ))
+                        .await?;
+                        let controls = {
+                            let s = snapshot(&CONTROLS_JSON);
+                            if s == "{}" {
+                                String::from("[]")
+                            } else {
+                                s
+                            }
+                        };
+                        tx.send_text(&format!(
+                            "{{\"type\":\"controls\",\"controls\":{}}}",
+                            controls
+                        ))
+                        .await?;
+                    }
+                    tick = tick.wrapping_add(1);
+                }
             }
-            tick = tick.wrapping_add(1);
         }
     }
 }
