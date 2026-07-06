@@ -17,6 +17,11 @@
 //!   POST /api/var       body = "name raw" → {"ok":true}
 //!   GET  /api/wifi      {"ssid":"…"|null,"source":"flash"|"builtin"|"none"}
 //!   POST /api/wifi      body = "ssid\npassword" → stores creds in flash + reboots
+//!   GET    /api/patterns              {"patterns":[{"id","name"},…]}
+//!   GET    /api/patterns/<id>         {"id","name","source"}
+//!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
+//!   DELETE /api/patterns/<id>         {"ok":true}
+//!   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | code-error shape
 
 use alloc::format;
 use alloc::string::String;
@@ -236,7 +241,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
         use picoserve::io::Read as _;
 
         let result: Result<u32, &'static str> = {
-            let mut body = request.body_connection.body();
+            let body = request.body_connection.body();
             let expected = body.content_length() as u32;
             match crate::assets::begin(expected).await {
                 Err(e) => Err(e),
@@ -317,7 +322,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
             // WHOLE body (created when the reader is taken), not per read —
             // take the reader only after the erase phase so slow uploads get
             // the full budget.
-            let mut body = request.body_connection.body();
+            let body = request.body_connection.body();
             let expected = body.content_length() as u32;
             match crate::ota::begin() {
                 Err(e) => Err(e),
@@ -422,6 +427,52 @@ async fn api_code(src: String) -> ApiResponse {
             )
         }
     })
+}
+
+/// POST /api/patterns — body "name\nsource". Compile-checks the source
+/// (so the store never holds broken code) then persists via the pattern
+/// library. Returns {"ok":true,"id"} or the same {line,col,error} shape as
+/// /api/code on a compile failure. Mirrors serve.rs `patterns_save`.
+fn api_patterns_save(body: String) -> String {
+    let Some((name, source)) = body.split_once('\n') else {
+        return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}");
+    };
+    if source.is_empty() {
+        return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}");
+    }
+    if let Err(d) = Engine::new(source, PIXEL_COUNT, 1) {
+        let (line, col) = line_col(source, d.span.start);
+        return format!(
+            "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
+            line,
+            col,
+            json_escape(&d.message)
+        );
+    }
+    crate::patterns::save(name, source)
+}
+
+/// POST /api/patterns/<id>/activate — load the stored source and run it
+/// (same swap path as /api/code). 404-shaped error if the id is unknown.
+async fn api_patterns_activate(id: &str) -> String {
+    let Some(source) = crate::patterns::source_of(id) else {
+        return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
+    };
+    match Engine::new(&source, PIXEL_COUNT, 1) {
+        Ok(_) => {
+            MSG_QUEUE.send(Msg::Code(source)).await;
+            String::from("{\"ok\":true}")
+        }
+        Err(d) => {
+            let (line, col) = line_col(&source, d.span.start);
+            format!(
+                "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
+                line,
+                col,
+                json_escape(&d.message)
+            )
+        }
+    }
 }
 
 /// Body: `name raw0 [raw1 raw2]` — whitespace-separated, values raw 16.16.
@@ -540,7 +591,35 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let conn = request.body_connection.finalize().await?;
                     return response.write_to(conn, response_writer).await;
                 }
+                // save a pattern: body "name\nsource", compile-checked here
+                // so the store never holds broken source (mirrors serve.rs).
+                "/api/patterns" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let response = json_response(api_patterns_save(body));
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
+                // POST /api/patterns/<id>/activate — run a stored pattern
+                r if r.starts_with("/api/patterns/") => {
+                    let response = match r["/api/patterns/".len()..].strip_suffix("/activate") {
+                        Some(id) => json_response(api_patterns_activate(id).await),
+                        None => json_response(String::from(
+                            "{\"ok\":false,\"error\":\"bad patterns route\"}",
+                        )),
+                    };
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
                 _ => {}
+            }
+        } else if method.eq_ignore_ascii_case("DELETE") {
+            if let Some(id) = route.strip_prefix("/api/patterns/") {
+                let response = json_response(crate::patterns::delete(id));
+                let conn = request.body_connection.finalize().await?;
+                return response.write_to(conn, response_writer).await;
             }
         } else if method.eq_ignore_ascii_case("OPTIONS") {
             // CORS preflight: a cross-origin DELETE (or any non-simple
@@ -634,6 +713,14 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/controls" => respond!(api_controls().await),
                 "/api/vars" => respond!(api_vars().await),
                 "/api/readouts" => respond!(api_readouts().await),
+                "/api/patterns" => respond!(json_response(crate::patterns::list_json())),
+                // GET /api/patterns/<id> → {"id","name","source"}; missing id
+                // returns 200 + {"ok":false,…} to match the mirror (serve.rs).
+                r if r.starts_with("/api/patterns/") => {
+                    let j = crate::patterns::get_json(&r["/api/patterns/".len()..])
+                        .unwrap_or_else(|| String::from("{\"ok\":false,\"error\":\"no such pattern\"}"));
+                    respond!(json_response(j));
+                }
                 other => {
                     if let Some(e) = crate::assets::lookup(other) {
                         if e.gzip {

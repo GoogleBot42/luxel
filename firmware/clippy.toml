@@ -1,0 +1,17 @@
+# Stack-frame guardrails for the firmware. The main embassy task runs on a
+# ~60 KB stack shared by every future poll, the picoserve response path, and
+# flash I/O — and a WiFi level-6 NMI can land its frame on top at any point.
+# Multi-KB buffers on that stack are how the early builds died (stack-guard
+# panics straight into the WiFi blob's .bss). Keep buffers on the heap.
+#
+# array-size-threshold is in BYTES: 1024 catches any stack array >= 1 KiB
+# (e.g. a stray `[0u8; 4096]` flash staging buffer) while allowing the
+# small fixed headers we do keep on the stack (<= 256 B). Enforced by
+# `#![deny(clippy::large_stack_arrays)]` in src/main.rs — run `cargo clippy`.
+array-size-threshold = 1024
+
+# large_stack_frames (nursery) catches a whole function whose frame exceeds
+# this, i.e. many medium buffers that individually pass the array check.
+# Set generously so async state machines don't false-positive; wired as a
+# warning, not a hard deny, for the same reason.
+stack-size-threshold = 8192

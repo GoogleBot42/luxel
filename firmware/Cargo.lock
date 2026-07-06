@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "luxel-fw"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "critical-section",
  "embassy-executor",
@@ -1297,6 +1297,7 @@ dependencies = [
  "embassy-sync 0.8.0",
  "embassy-time",
  "embedded-storage",
+ "embedded-storage-async",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
@@ -1308,6 +1309,7 @@ dependencies = [
  "heapless 0.9.3",
  "luxel-core",
  "picoserve",
+ "sequential-storage",
  "static_cell",
 ]
 
@@ -1652,6 +1654,15 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+
+[[package]]
+name = "sequential-storage"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "516ed74ad8268ec0d78c574af8fc7e09a9c3a0df63c7692c588a10d7097dea3b"
+dependencies = [
+ "embedded-storage-async",
+]
 
 [[package]]
 name = "serde"

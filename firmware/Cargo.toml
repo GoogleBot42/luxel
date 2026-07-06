@@ -2,7 +2,7 @@
 # workspace: it builds for a different target than the host crates.
 [package]
 name = "luxel-fw"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -15,6 +15,12 @@ esp-bootloader-esp-idf = "0.5"
 critical-section = "1"
 embedded-storage = "0.3"
 esp-storage = { version = "0.9", features = ["embedded-storage"] }
+# Pattern library: an established KV-over-NOR store (wear-leveled,
+# power-loss-safe) instead of a hand-rolled blob (PLAN.md storage model).
+# sequential-storage is async-first; a small local adapter (patterns.rs)
+# bridges esp-storage's blocking FlashStorage to these async NorFlash traits.
+sequential-storage = "4"
+embedded-storage-async = "0.4"
 luxel-core = { path = "../crates/luxel-core" }
 
 # networking (WiFi station + async TCP + HTTP server)

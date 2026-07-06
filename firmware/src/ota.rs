@@ -1,8 +1,10 @@
 //! Over-the-air updates. `POST /api/ota` streams an app image (espflash
 //! save-image output, NOT the merged full-flash image) sector-by-sector into
-//! the inactive OTA slot, activates it, and reboots. The serially-flashed
-//! factory partition is never written — it stays the fallback the bootloader
-//! uses if both OTA slots hold broken images (or after erasing otadata).
+//! the inactive OTA slot, activates it, and reboots. Pure A/B: there is no
+//! factory partition (see partitions.csv) — ota_0/ota_1 alternate, and if
+//! both hold broken images (or otadata is erased) the bootloader falls back
+//! to ota_0, its default when no factory partition exists. Serial flashes
+//! land in ota_0.
 //!
 //! Division of labor with esp-bootloader-esp-idf (reviewed 2026-07-06 after
 //! the "is this reinventing a library wheel?" question): the library does
@@ -75,6 +77,47 @@ pub fn with_flash<T>(f: impl FnOnce(&mut FlashStorage<'static>) -> T) -> Option<
     FLASH.lock(|c| c.borrow_mut().as_mut().map(f))
 }
 
+/// Take the flash driver out for a self-contained multi-op transaction (the
+/// pattern store's sequential-storage calls). Unlike [with_flash], this does
+/// NOT keep the driver behind a critical section for the whole operation —
+/// holding one across sequential-storage's scans + page erases would disable
+/// interrupts far too long. The caller runs its (blocking) flash work with
+/// interrupts enabled, then returns the driver via [give_flash]. Returns None
+/// if an OTA currently owns it. Pair with a Drop guard for panic safety.
+pub fn take_flash() -> Option<FlashStorage<'static>> {
+    FLASH.lock(|c| c.borrow_mut().take())
+}
+
+/// Return a driver taken by [take_flash].
+pub fn give_flash(flash: FlashStorage<'static>) {
+    FLASH.lock(|c| *c.borrow_mut() = Some(flash));
+}
+
+/// Locate a data partition by label → (offset, len). The pattern store
+/// calls this to confirm its `storage` partition actually exists before
+/// touching that flash: a device still carrying the old (factory) table
+/// maps that address to a live app slot, where an erase would be fatal.
+/// Matching by label AND data-type means the check fails safely on the old
+/// table (where 0x210000 is the ota_1 *app* partition).
+pub fn data_partition(label: &str) -> Option<(u32, u32)> {
+    with_flash(|flash| {
+        let mut buffer = alloc::vec![0u8; PARTITION_TABLE_MAX_LEN];
+        let pt = partitions::read_partition_table(flash, &mut buffer).ok()?;
+        // bind to a local so the iterator temporary (which borrows `pt`/
+        // `buffer`) drops before this block's locals — Rust 2024 capture
+        // rules otherwise extend the borrow past `buffer`'s scope.
+        let found = pt
+            .iter()
+            .find(|e| {
+                e.label_as_str() == label
+                    && matches!(e.partition_type(), PartitionType::Data(_))
+            })
+            .map(|e| (e.offset(), e.len()));
+        found
+    })
+    .flatten()
+}
+
 pub struct OtaWriter {
     /// Some until commit/drop; Drop returns the driver to `FLASH`.
     flash: Option<FlashStorage<'static>>,
@@ -102,9 +145,12 @@ pub fn begin() -> Result<OtaWriter, &'static str> {
     let Some(mut flash) = FLASH.lock(|c| c.borrow_mut().take()) else {
         return Err("update already in progress");
     };
-    // heap, not stack: 3 KiB frames + WiFi level-6 NMIs (which run on the
-    // current task stack) overflowed the main task during flash ops
-    let mut buffer = alloc::boxed::Box::new([0u8; PARTITION_TABLE_MAX_LEN]);
+    // Heap, not stack (3 KiB frames + WiFi level-6 NMIs on the current task
+    // stack overflowed the main task during flash ops). into_boxed_slice,
+    // NOT Box::new([..]): the latter builds the array on the stack first
+    // before moving it to the heap — caught by clippy::large_stack_arrays.
+    let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> =
+        alloc::vec![0u8; PARTITION_TABLE_MAX_LEN].into_boxed_slice().try_into().unwrap();
 
     // which slot is next?
     let next = {
@@ -216,7 +262,12 @@ impl OtaWriter {
         let flash = self.flash.as_mut().expect("live until drop");
         // heap, not stack: 3 KiB frames + WiFi level-6 NMIs (which run on the
     // current task stack) overflowed the main task during flash ops
-    let mut buffer = alloc::boxed::Box::new([0u8; PARTITION_TABLE_MAX_LEN]);
+    // into_boxed_slice, NOT Box::new([..]): the latter builds the ~3 KiB
+    // array on the stack before moving it to the heap (caught by
+    // clippy::large_stack_arrays) — exactly the transient stack pressure the
+    // OTA path must avoid. This allocates straight on the heap.
+    let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> =
+        alloc::vec![0u8; PARTITION_TABLE_MAX_LEN].into_boxed_slice().try_into().unwrap();
         let mut ota =
             OtaUpdater::new(flash, &mut *buffer).map_err(|_| "ota reopen failed")?;
         ota.activate_next_partition()

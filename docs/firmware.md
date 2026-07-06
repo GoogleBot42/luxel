@@ -56,12 +56,15 @@ empty values) the firmware runs offline (render-only).
 
 ## OTA updates
 
-The partition table (firmware/partitions.csv) has factory + ota_0 + ota_1
-app slots (1 MB each). The serially-flashed factory image is a permanent
-fallback: OTA writes alternate between ota_0/ota_1 and never touch it. The
-bootloader validates images before jumping, so a corrupt upload falls back
-to the currently working slot; if both OTA slots are ever bad, it boots
-factory. Serial recovery always works regardless.
+The partition table (firmware/partitions.csv) is pure A/B: ota_0 + ota_1
+app slots (1 MB each), no factory partition (this device has no distinct
+golden image — the serial flash is the same build that ships OTA, so
+factory was 1 MB of dead weight). Serial flash lands in ota_0; OTA writes
+alternate ota_0/ota_1. The bootloader validates images before jumping, so a
+corrupt upload falls back to the currently working slot; if both OTA slots
+are ever bad it boots ota_0 (the bootloader's default when no factory
+partition exists). Serial recovery always works regardless. The 1 MB freed
+by dropping factory is the `storage` partition (device pattern library).
 
 ```sh
 # push the current devshell Xtensa build:

@@ -1,5 +1,87 @@
 # Update log
 
+## 2026-07-06 midday — firmware pattern storage (v0.1.6); dropped factory; stack guardrails
+
+Working with you awake. Two design calls you made, both shipped:
+
+**Dropped the factory partition → dedicated `storage` partition.** You have
+no distinct golden image (serial flash = the same build that ships OTA), so
+factory was 1 MB of dead weight. New table (partitions.csv): pure A/B
+(ota_0/ota_1, bootloader falls back to ota_0 when both fail) + `storage`
+(0x210000, 1 MB) slotted ahead of the unmoved assets region. `ota.rs`
+already read the table dynamically, so no logic change. **Applying it needs
+one serial flash** — your normal `build-esp32.sh flash` runner already does
+`--partition-table=partitions.csv --erase-parts otadata`, so it lays down
+the new table, clears otadata (clean boot into ota_0), and preserves
+nvs/assets.
+
+**Firmware pattern library — task #9, the CRUD contract's device half
+(v0.1.6).** New `patterns.rs`, built on **`sequential-storage`** (your call
+over my first hand-rolled blob — it's the PLAN's storage model and matches
+your "established crates" preference). Each pattern is one KV item (key =
+u32 id, value = name+source) in the `storage` partition: a store/remove is
+atomic, so a power loss mid-save loses at most the one in-flight pattern,
+never the library — and it's wear-leveled. Routes match the mirror exactly:
+`GET/POST /api/patterns`, `GET/DELETE /api/patterns/<id>`,
+`POST /api/patterns/<id>/activate` — POST compile-checks before storing.
+
+- **Safety guard:** `patterns::init` resolves the `storage` partition from
+  the *live* table and disables the store (writes refuse, reads empty) if
+  it is absent — so v0.1.6 is safe even on the current (old) table, where
+  0x210000 is the live ota_1 app slot. No corruption; it lights up after
+  your reflash.
+- **Async/blocking bridge:** sequential-storage is async, esp-storage is
+  blocking — a small `AsyncFlash` adapter forwards to the blocking methods,
+  driven by `block_on` (it never truly pends). The flash driver is *leased*
+  out of the OTA module per transaction (Drop-guarded) so its critical-
+  section mutex is never held across the erases.
+- **One caveat (FYI):** sequential-storage items must fit one 4 KB flash
+  page, so a single pattern's source is capped at ~3.5 KB (clear API error
+  above that; larger patterns stay in the browser library). If you want
+  unlimited device-side pattern size later, chunking across keys would lift
+  it — say the word. A serial reflash clears device patterns (they survive
+  OTA updates; `--erase-parts` now includes `storage` for a clean region).
+
+**Stack guardrails (so the original OTA-crash class can't recur):**
+- `#![deny(clippy::large_stack_arrays)]` in the firmware (threshold 1 KB,
+  `firmware/clippy.toml`) — turns a stray `[0u8; 4096]` on the stack into a
+  hard `cargo clippy` error. Caught exactly this while writing patterns.rs.
+- `tools/stack-check.{sh,py}` — builds with `-Z emit-stack-sizes` and fails
+  if any function's frame exceeds a budget. Unlike clippy it sees *library*
+  frames too (esp-storage's `FlashStorage::read` bounce buffer — the actual
+  original culprit). Added `python3` to the flake for it.
+
+Requires one serial flash of v0.1.6 (new table). Then I'll verify pattern
+CRUD, creds, assets, and an OTA round-trip on hardware.
+
+## 2026-07-06 morning — device back on v0.1.5; full checklist verified on hardware ✅
+
+You reflashed v0.1.5 with creds. Device came up on `factory`, joined WiFi
+via **compile-time creds** (no flash record yet), 300 px, 123 fps, no
+vmerr. Then I ran the promised morning checklist end-to-end — all four
+steps passed on real hardware, zero panics:
+
+1. **WiFi creds → flash** — `POST /api/wifi` stored them in the `nvs`
+   partition and rebooted. It came back with
+   `wifi: joining "MOMCorp Intranet" (flash-stored creds)`. **Your
+   partition ask is done and live**: creds now boot from flash, so future
+   OTA images need no baked-in creds. Compile-time creds remain only as a
+   last-resort fallback (a flash-wipe can't lock you out).
+2. **Assets push** — `POST /api/assets` streamed the 431,755-byte LUXA
+   archive (5 files) into flash in ~10 s, hot-reloaded, no reboot. The
+   full playground now serves gzip'd at http://192.168.0.205/.
+3. **New builtins on hardware** — live-coded a `beatSin`+`simplex2`+
+   `setGamma` pattern via `/api/code`; pixels animate, `vmerr:null`. (FPS
+   eases to ~87–99 under per-pixel simplex across 300 px — expected.)
+4. **OTA round-trip** — pushed the 926 KB app image; device switched
+   `factory` → `ota_0`, rebooted, came back clean at 124 fps. This is the
+   exact path that used to crash 100% of the time. Serial log: **no panic
+   since the reflash** (last crash in the log predates tonight's session).
+
+The beatSin/simplex/setGamma demo is left running on the wall. Remaining
+open item: **firmware pattern-library storage** (task #9) — still a
+genuine flash-layout decision; notes below.
+
 ## 2026-07-06 ~01:30 — second overnight batch: simplex, setGamma, **, mapper, pattern library
 
 All committed, tested (106 core tests, 40 e2e checks in real chromium),

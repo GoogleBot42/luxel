@@ -15,6 +15,18 @@
 // the picoserve router's nested type (one layer per route) exceeds the
 // default query depth
 #![recursion_limit = "256"]
+// Stack-frame guardrails (see clippy.toml). The main-task stack is tight
+// and shared with WiFi NMI frames; a multi-KB buffer on it is a crash, not
+// a slowdown. `large_stack_arrays` is a hard error — it would have caught
+// the `[0u8; 4096]` staging buffer that briefly slipped into the pattern
+// store. `large_stack_frames` (nursery) is a warning: it flags fat frames
+// but can false-positive on async state machines.
+// Run via `cargo clippy` on the default esp32c3 build (board-c3-devkit):
+// the code is board-independent, and clippy can't run on the Xtensa build
+// (its forked core + -Zbuild-std trips clippy-driver's intrinsic checks).
+// For library/deep frames the Xtensa lint can't see, use tools/stack-check.
+#![deny(clippy::large_stack_arrays)]
+#![warn(clippy::large_stack_frames)]
 
 extern crate alloc;
 
@@ -42,6 +54,7 @@ mod assets;
 mod config;
 mod leds;
 mod ota;
+mod patterns;
 mod server;
 mod shared;
 
@@ -179,6 +192,7 @@ async fn main(spawner: Spawner) -> ! {
     if option_env!("LUXEL_NO_OTA").is_none() {
         ota::init(esp_storage::FlashStorage::new(p.FLASH));
     assets::init();
+    patterns::init();
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }

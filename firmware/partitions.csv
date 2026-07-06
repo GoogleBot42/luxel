@@ -1,12 +1,16 @@
-# Luxel partition table (4 MB flash): factory app is the serially-flashed
-# permanent fallback; OTA updates alternate between ota_0 and ota_1 and never
-# touch factory. Erasing otadata (or the bootloader failing both OTA slots)
-# falls back to factory. ~960 KB after ota_1 is reserved for future assets.
+# Luxel partition table (4 MB flash). No factory partition: this device has
+# no distinct golden image — the serially-flashed build is the same one that
+# ships over OTA — so factory was 1 MB of dead weight. Instead we run pure
+# A/B: serial flash lands in ota_0, OTA alternates ota_0/ota_1, and if both
+# OTA slots ever fail the bootloader falls back to ota_0 (its default when no
+# factory partition exists). The freed 1 MB becomes `storage`, slotted in
+# ahead of the (unmoved) assets region, for the device pattern library and
+# future device config.
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x4000,
 otadata,  data, ota,     0xd000,   0x2000,
 phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x100000,
-ota_0,    app,  ota_0,   0x110000, 0x100000,
-ota_1,    app,  ota_1,   0x210000, 0x100000,
+ota_0,    app,  ota_0,   0x10000,  0x100000,
+ota_1,    app,  ota_1,   0x110000, 0x100000,
+storage,  data, spiffs,  0x210000, 0x100000,
 assets,   data, spiffs,  0x310000, 0x0F0000,

@@ -211,6 +211,9 @@
               pkgs.nodejs_22
               # browser for driving/verifying the web IDE (puppeteer-core over CDP)
               pkgs.chromium
+              # tools/stack-check.py parses the firmware's .stack_sizes section
+              # (the ESP tooling ecosystem is Python anyway — esptool et al.)
+              pkgs.python3
             ]
             # Classic-ESP32 (Xtensa) firmware toolchain; firmware/build-esp32.sh
             # picks it up via XTENSA_RUST_HOME + the gcc on PATH.
