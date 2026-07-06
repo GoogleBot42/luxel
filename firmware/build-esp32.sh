@@ -8,14 +8,14 @@ cd "$(dirname "$0")"
 
 BOARD="${BOARD:-board-pixelblaze-v3}"
 
-# `log`: dumb serial capture — no chip probing, no reset games, just bytes.
-# Appends to firmware/serial.log (remotely tail-able); panic backtrace
-# addresses decode with tools/decode-backtrace.sh.
+# `log`: attach exactly the way `flash --monitor` does (same espflash
+# monitor engine, default reset handling, ELF symbolication so backtraces
+# are readable), appending to firmware/serial.log for remote reading.
 if [ "${1:-}" = "log" ]; then
-  PORT="${PORT:-/dev/ttyUSB0}"
-  echo "logging $PORT @115200 to $(pwd)/serial.log (Ctrl-C to stop)"
-  stty -F "$PORT" 115200 raw -echo -echoe -echok
-  exec cat "$PORT" | tee -a serial.log
+  ELF=target/xtensa-esp32-none-elf/release/luxel-fw
+  [ -f "$ELF" ] || { echo "no $ELF — build first" >&2; exit 1; }
+  echo "logging to $(pwd)/serial.log (Ctrl-C to stop)"
+  espflash monitor --chip esp32 --elf "$ELF" 2>&1 | tee -a serial.log
 fi
 
 CMD=build
