@@ -1,0 +1,137 @@
+// Builtin reference: names, signatures, and one-line docs for every builtin
+// in luxel-core's VM table (crates/luxel-core/src/vm.rs BUILTINS — keep in
+// sync). Drives editor autocomplete today and the language docs; values are
+// 16.16 fixed point unless noted.
+
+export interface BuiltinDoc {
+  name: string;
+  sig: string;
+  doc: string;
+}
+
+export const BUILTINS: BuiltinDoc[] = [
+  // math
+  { name: "abs", sig: "abs(x)", doc: "Absolute value." },
+  { name: "floor", sig: "floor(x)", doc: "Round down to the nearest integer." },
+  { name: "ceil", sig: "ceil(x)", doc: "Round up to the nearest integer." },
+  { name: "round", sig: "round(x)", doc: "Round to nearest: floor(x + 0.5)." },
+  { name: "trunc", sig: "trunc(x)", doc: "Drop the fractional part (toward zero)." },
+  { name: "frac", sig: "frac(x)", doc: "Fractional part of x." },
+  { name: "clamp", sig: "clamp(x, low, high)", doc: "Constrain x into [low, high]." },
+  { name: "min", sig: "min(a, b)", doc: "Smaller of two values." },
+  { name: "max", sig: "max(a, b)", doc: "Larger of two values." },
+  { name: "mod", sig: "mod(x, y)", doc: "Floored modulo — result has y's sign (unlike %)." },
+  { name: "sqrt", sig: "sqrt(x)", doc: "Square root; sign-preserving (sqrt(-4) = -2)." },
+  { name: "sin", sig: "sin(radians)", doc: "Sine." },
+  { name: "cos", sig: "cos(radians)", doc: "Cosine." },
+  { name: "tan", sig: "tan(radians)", doc: "Tangent." },
+  { name: "asin", sig: "asin(x)", doc: "Arc sine, radians." },
+  { name: "acos", sig: "acos(x)", doc: "Arc cosine, radians." },
+  { name: "atan", sig: "atan(x)", doc: "Arc tangent, radians." },
+  { name: "atan2", sig: "atan2(y, x)", doc: "Angle of (x, y) from the +x axis, radians." },
+  { name: "pow", sig: "pow(base, exp)", doc: "base raised to exp." },
+  { name: "exp", sig: "exp(x)", doc: "e^x." },
+  { name: "log", sig: "log(x)", doc: "Natural logarithm." },
+  { name: "log2", sig: "log2(x)", doc: "Base-2 logarithm." },
+  { name: "hypot", sig: "hypot(a, b)", doc: "sqrt(a² + b²)." },
+  { name: "hypot3", sig: "hypot3(a, b, c)", doc: "sqrt(a² + b² + c²)." },
+  // randomness
+  { name: "random", sig: "random(max)", doc: "True random in [0, max)." },
+  { name: "prng", sig: "prng(max)", doc: "Seedable pseudo-random in [0, max)." },
+  { name: "prngSeed", sig: "prngSeed(seed)", doc: "Seed prng(); returns the previous state." },
+  // waveforms & timing
+  { name: "time", sig: "time(interval)", doc: "Sawtooth 0→1 every interval × 65.536 s." },
+  { name: "wave", sig: "wave(v)", doc: "Sine shaped 0..1: (1 + sin(v·2π)) / 2." },
+  { name: "square", sig: "square(v, duty)", doc: "Square wave 0/1 with given duty cycle." },
+  { name: "triangle", sig: "triangle(v)", doc: "Triangle wave 0..1..0 per unit input." },
+  // interpolation
+  { name: "mix", sig: "mix(a, b, t)", doc: "Linear blend of a and b by t." },
+  { name: "smoothstep", sig: "smoothstep(low, high, x)", doc: "Smooth 0..1 ramp between low and high." },
+  { name: "bezierQuadratic", sig: "bezierQuadratic(t, p0, p1, p2)", doc: "Quadratic Bézier at t." },
+  { name: "bezierCubic", sig: "bezierCubic(t, p0, p1, p2, p3)", doc: "Cubic Bézier at t." },
+  // color output
+  { name: "hsv", sig: "hsv(h, s, v)", doc: "Set the current pixel from hue/saturation/value (h wraps)." },
+  { name: "hsv24", sig: "hsv24(h, s, v)", doc: "hsv() variant (24-bit path on PB; same output here)." },
+  { name: "rgb", sig: "rgb(r, g, b)", doc: "Set the current pixel from red/green/blue 0..1." },
+  // arrays
+  { name: "array", sig: "array(length)", doc: "Create a zero-filled array." },
+  { name: "arrayLength", sig: "arrayLength(arr)", doc: "Number of elements in arr." },
+  { name: "arraySum", sig: "arraySum(arr)", doc: "Sum of all elements." },
+  { name: "arrayForEach", sig: "arrayForEach(arr, fn(v, i))", doc: "Call fn for each element." },
+  { name: "arrayMutate", sig: "arrayMutate(arr, fn(v, i))", doc: "Replace each element with fn's result." },
+  { name: "arrayMapTo", sig: "arrayMapTo(src, dest, fn(v, i))", doc: "Map src through fn into dest." },
+  { name: "arrayReduce", sig: "arrayReduce(arr, fn(acc, v, i), initial)", doc: "Fold the array into one value." },
+  { name: "arrayReplace", sig: "arrayReplace(arr, value)", doc: "Set every element to value." },
+  { name: "arrayReplaceAt", sig: "arrayReplaceAt(arr, index, value)", doc: "Set one element." },
+  { name: "arraySort", sig: "arraySort(arr)", doc: "Sort ascending in place." },
+  { name: "arraySortBy", sig: "arraySortBy(arr, fn(a, b))", doc: "Sort by comparator in place." },
+  // noise
+  { name: "perlin", sig: "perlin(x, y, z, seed)", doc: "Perlin gradient noise ≈ -1..1." },
+  { name: "perlinFbm", sig: "perlinFbm(x, y, z, lacunarity, gain, octaves)", doc: "Fractal Brownian motion over perlin." },
+  { name: "perlinRidge", sig: "perlinRidge(x, y, z, lacunarity, gain, offset, octaves)", doc: "Ridged multifractal noise." },
+  { name: "perlinTurbulence", sig: "perlinTurbulence(x, y, z, lacunarity, gain, octaves)", doc: "Turbulence (abs-valued fbm)." },
+  { name: "setPerlinWrap", sig: "setPerlinWrap(x, y, z)", doc: "Make perlin tile with the given period." },
+  // coordinate transforms (2D/3D mapped renders)
+  { name: "resetTransform", sig: "resetTransform()", doc: "Clear the coordinate transform (it persists across frames)." },
+  { name: "transform", sig: "transform(...16 values)", doc: "Set a full 4×4 transform matrix." },
+  { name: "translate", sig: "translate(x, y)", doc: "Translate 2D map coordinates." },
+  { name: "scale", sig: "scale(x, y)", doc: "Scale 2D map coordinates." },
+  { name: "rotate", sig: "rotate(radians)", doc: "Rotate 2D map coordinates (counter-clockwise)." },
+  { name: "translate3D", sig: "translate3D(x, y, z)", doc: "Translate 3D map coordinates." },
+  { name: "scale3D", sig: "scale3D(x, y, z)", doc: "Scale 3D map coordinates." },
+  { name: "rotateX", sig: "rotateX(radians)", doc: "Rotate 3D coordinates around X." },
+  { name: "rotateY", sig: "rotateY(radians)", doc: "Rotate 3D coordinates around Y." },
+  { name: "rotateZ", sig: "rotateZ(radians)", doc: "Rotate 3D coordinates around Z." },
+  { name: "pixelMapDimensions", sig: "pixelMapDimensions()", doc: "Dimensions of the installed map (0/1/2/3)." },
+  { name: "has2DMap", sig: "has2DMap()", doc: "1 if a 2D pixel map is installed." },
+  { name: "has3DMap", sig: "has3DMap()", doc: "1 if a 3D pixel map is installed." },
+  { name: "mapPixels", sig: "mapPixels(fn(index, x, y, z))", doc: "Iterate all pixels with mapped coordinates." },
+  // palettes
+  { name: "setPalette", sig: "setPalette(arr)", doc: "Install a gradient palette: [pos, r, g, b, …] stops." },
+  { name: "paint", sig: "paint(t, brightness)", doc: "Set the current pixel from the palette at t." },
+  // GPIO (stubs until a board wires them)
+  { name: "pinMode", sig: "pinMode(pin, mode)", doc: "Configure a GPIO pin." },
+  { name: "digitalWrite", sig: "digitalWrite(pin, value)", doc: "Drive a GPIO pin high/low." },
+  { name: "digitalRead", sig: "digitalRead(pin)", doc: "Read a GPIO pin (0/1)." },
+  { name: "analogRead", sig: "analogRead(pin)", doc: "Read an ADC pin 0..1." },
+  { name: "touchRead", sig: "touchRead(pin)", doc: "Read a capacitive touch pin 0..1." },
+  // clock (needs wall time; set via the host)
+  { name: "clockYear", sig: "clockYear()", doc: "Current year." },
+  { name: "clockMonth", sig: "clockMonth()", doc: "Month 1–12." },
+  { name: "clockDay", sig: "clockDay()", doc: "Day of month 1–31." },
+  { name: "clockHour", sig: "clockHour()", doc: "Hour 0–23." },
+  { name: "clockMinute", sig: "clockMinute()", doc: "Minute 0–59." },
+  { name: "clockSecond", sig: "clockSecond()", doc: "Second 0–59." },
+  { name: "clockWeekday", sig: "clockWeekday()", doc: "Weekday 1–7 (1 = Sunday)." },
+  // sequencer / playlist / identity
+  { name: "sequencerNext", sig: "sequencerNext()", doc: "Advance to the next pattern." },
+  { name: "sequencerGetMode", sig: "sequencerGetMode()", doc: "Current sequencer mode." },
+  { name: "playlistGetPosition", sig: "playlistGetPosition()", doc: "Index of the playing playlist entry." },
+  { name: "playlistSetPosition", sig: "playlistSetPosition(index)", doc: "Jump the playlist." },
+  { name: "playlistGetLength", sig: "playlistGetLength()", doc: "Number of playlist entries." },
+  { name: "nodeId", sig: "nodeId()", doc: "This device's id (for multi-device patterns)." },
+];
+
+/** Special globals available to patterns. */
+export const GLOBALS: BuiltinDoc[] = [
+  { name: "pixelCount", sig: "pixelCount", doc: "Number of pixels on the strip/matrix." },
+  { name: "PI", sig: "PI", doc: "π (literal-quantized 16.16)." },
+  { name: "PI2", sig: "PI2", doc: "2π." },
+  { name: "PI3_4", sig: "PI3_4", doc: "3π/4." },
+  { name: "PISQ", sig: "PISQ", doc: "π²." },
+  { name: "E", sig: "E", doc: "Euler's number." },
+  { name: "SQRT2", sig: "SQRT2", doc: "√2." },
+  { name: "SQRT1_2", sig: "SQRT1_2", doc: "1/√2." },
+  { name: "LN2", sig: "LN2", doc: "ln 2." },
+  { name: "LN10", sig: "LN10", doc: "ln 10." },
+  { name: "LOG2E", sig: "LOG2E", doc: "log₂ e." },
+  { name: "LOG10E", sig: "LOG10E", doc: "log₁₀ e." },
+  { name: "LOW", sig: "LOW", doc: "GPIO level 0." },
+  { name: "HIGH", sig: "HIGH", doc: "GPIO level 1." },
+  { name: "INPUT", sig: "INPUT", doc: "pinMode: input." },
+  { name: "OUTPUT", sig: "OUTPUT", doc: "pinMode: output." },
+  { name: "INPUT_PULLUP", sig: "INPUT_PULLUP", doc: "pinMode: input with pull-up." },
+  { name: "INPUT_PULLDOWN", sig: "INPUT_PULLDOWN", doc: "pinMode: input with pull-down." },
+  { name: "OUTPUT_OPEN_DRAIN", sig: "OUTPUT_OPEN_DRAIN", doc: "pinMode: open-drain output." },
+  { name: "ANALOG", sig: "ANALOG", doc: "pinMode: analog." },
+];

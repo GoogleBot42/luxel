@@ -1,5 +1,13 @@
 <script lang="ts">
+  import {
+    autocompletion,
+    completeFromList,
+    type Completion,
+    type CompletionContext,
+    type CompletionResult,
+  } from "@codemirror/autocomplete";
   import { javascript } from "@codemirror/lang-javascript";
+  import { BUILTINS, GLOBALS } from "../lib/builtins";
   import { setDiagnostics } from "@codemirror/lint";
   import { RangeSet, StateEffect, StateField } from "@codemirror/state";
   import { oneDark } from "@codemirror/theme-one-dark";
@@ -110,6 +118,39 @@
     { hoverTime: 200 },
   );
 
+  // ---- autocomplete ----
+
+  const KEYWORDS = ["var", "function", "export", "return", "if", "else", "for", "while", "true", "false", "break", "continue"];
+  const staticCompletions: Completion[] = [
+    ...BUILTINS.map((b) => ({
+      label: b.name,
+      type: "function",
+      detail: b.sig.replace(b.name, ""),
+      info: b.doc,
+      boost: 1,
+    })),
+    ...GLOBALS.map((g) => ({ label: g.name, type: "constant", info: g.doc })),
+    ...KEYWORDS.map((k) => ({ label: k, type: "keyword", boost: -1 })),
+  ];
+  const builtinSource = completeFromList(staticCompletions);
+
+  /** Identifiers already present in the pattern (user globals/locals). */
+  function docWordSource(ctx: CompletionContext): CompletionResult | null {
+    const word = ctx.matchBefore(/[A-Za-z_$][\w$]*/);
+    if (!word || (word.from === word.to && !ctx.explicit)) return null;
+    const seen = new Set<string>();
+    const text = ctx.state.doc.toString();
+    for (const m of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
+      const w = m[0];
+      if (w.length > 1 && m.index !== word.from) seen.add(w);
+    }
+    return {
+      from: word.from,
+      options: [...seen].map((w) => ({ label: w, type: "variable", boost: -2 })),
+      validFor: /^[\w$]*$/,
+    };
+  }
+
   // ---- current-debug-line highlight ----
 
   const setDebugLine = StateEffect.define<number | null>();
@@ -143,6 +184,9 @@
         debugLineField,
         hoverExt,
         basicSetup,
+        // override basicSetup's default completion (JS-scope based) with
+        // luxel builtins + document identifiers
+        autocompletion({ override: [builtinSource, docWordSource] }),
         javascript(),
         oneDark,
         EditorView.theme({
