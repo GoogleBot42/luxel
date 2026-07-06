@@ -138,10 +138,14 @@ fn disable_abandons_paused_run() {
 }
 
 #[test]
-fn breakpoints_on_blank_lines_do_not_resolve() {
+fn breakpoints_on_blank_lines_snap_forward() {
+    // non-executable lines snap forward to the next executable one (so a
+    // gutter dot never silently points at a line that can't stop)
     let mut e = debug_engine();
-    assert_eq!(e.debug_set_breakpoints(&[4, 10]), vec![10]); // line 4 is `}`... resolves only if code
-                                                             // (line 4 holds no statement start; only 10 resolves)
+    let resolved = e.debug_set_breakpoints(&[4, 10]);
+    assert!(resolved.contains(&10));
+    assert!(!resolved.contains(&4)); // line 4 itself holds no statement
+    assert!(resolved.iter().all(|&l| l >= 4));
 }
 
 #[test]
@@ -204,4 +208,37 @@ export function render(index) {
     assert_eq!(find("PI"), None);
     assert_eq!(find("pixelCount"), None);
     assert_eq!(find("INPUT"), None);
+}
+
+#[test]
+fn breakpoint_on_blank_line_snaps_forward() {
+    // line 1 = comment, line 2 = blank, line 3 = code
+    let src = "// comment\n\nexport function render(index) {\n  x = 1\n  hsv(0, 0, 0)\n}\n";
+    let mut e = Engine::new(src, 4, 1).expect("compile");
+    e.debug_set_enabled(true);
+    // line 2 (blank) snaps to line 4 (first body statement)
+    let resolved = e.debug_set_breakpoints(&[2]);
+    assert_eq!(resolved, vec![4]);
+    // a line past all code is dropped
+    let resolved = e.debug_set_breakpoints(&[99]);
+    assert!(resolved.is_empty());
+    // exact lines still resolve to themselves
+    let resolved = e.debug_set_breakpoints(&[5]);
+    assert_eq!(resolved, vec![5]);
+}
+
+#[test]
+fn undeclared_assignment_in_function_is_global() {
+    // Jeremy's `heat` question: assignment without `var` inside a function
+    // creates/uses a global (JS + PB semantics) — the debugger showing it
+    // in the globals pane is correct.
+    let src = "export function render(index) {\n  heat = index\n  hsv(0, 0, 0)\n}\n";
+    let mut e = Engine::new(src, 4, 1).expect("compile");
+    e.frame(Fx::ZERO);
+    let globals = e.debug_globals();
+    assert!(
+        globals.iter().any(|g| g.0 == "heat"),
+        "heat should be a global: {:?}",
+        globals.iter().map(|g| &g.0).collect::<Vec<_>>()
+    );
 }

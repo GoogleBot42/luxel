@@ -30,6 +30,9 @@
 
   const toggleBp = StateEffect.define<number>(); // line-start pos
   const clearBps = StateEffect.define<null>();
+  /// replace the whole set (line-start positions) without firing the
+  /// breakpoints event — used to echo VM-resolved lines back into the gutter
+  const replaceBps = StateEffect.define<number[]>();
   class BpMarker extends GutterMarker {
     override toDOM(): Node {
       const el = document.createElement("span");
@@ -46,6 +49,9 @@
       for (const e of tr.effects) {
         if (e.is(clearBps)) {
           set = RangeSet.empty;
+        }
+        if (e.is(replaceBps)) {
+          set = RangeSet.of(e.value.map((pos) => bpMarker.range(pos)));
         }
         if (e.is(toggleBp)) {
           let existing = false;
@@ -215,6 +221,23 @@
   }
 
   /** Highlight (and reveal) the paused line; null clears. */
+  /** Move the gutter dots to the VM-resolved breakpoint lines (a click on a
+   *  comment/blank line resolves to the next executable one). Does not fire
+   *  the breakpoints event. */
+  export function setBreakpointLines(lines: number[]): void {
+    // microtask: this is reached from inside the updateListener that fired
+    // the breakpoints event, and CM6 forbids dispatch-during-update
+    queueMicrotask(() => {
+      if (!view) return;
+      const doc = view.state.doc;
+      const positions = [...new Set(lines)]
+        .filter((l) => l >= 1 && l <= doc.lines)
+        .map((l) => doc.line(l).from)
+        .sort((a, b) => a - b);
+      view.dispatch({ effects: replaceBps.of(positions) });
+    });
+  }
+
   export function setCurrentLine(line: number | null): void {
     if (!view) return;
     const effects: StateEffect<unknown>[] = [setDebugLine.of(line)];

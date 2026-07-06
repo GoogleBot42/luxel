@@ -131,7 +131,7 @@
       controls = engine.controls();
       if (debugMode) {
         engine.debugEnable(true);
-        engine.setBreakpoints(breakpoints);
+        applyBreakpoints();
       }
       dbg = { paused: false };
       editor?.setCurrentLine(null);
@@ -214,12 +214,25 @@
 
   // ---- debugger ----
 
+  /** Install breakpoints and echo the VM-resolved lines back into the
+   *  gutter — a click on a comment/blank line snaps to the next executable
+   *  line, so the dot always sits where execution will actually stop. */
+  function applyBreakpoints(): void {
+    if (!engine) return;
+    const resolved = [...new Set(engine.setBreakpoints(breakpoints))].sort((a, b) => a - b);
+    const current = [...new Set(breakpoints)].sort((a, b) => a - b);
+    if (JSON.stringify(resolved) !== JSON.stringify(current)) {
+      breakpoints = resolved;
+      editor?.setBreakpointLines(resolved);
+    }
+  }
+
   function onBreakpoints(e: CustomEvent<number[]>): void {
     breakpoints = e.detail;
     if (breakpoints.length > 0 && !debugMode) {
       toggleDebug(); // placing a breakpoint arms the debugger
     } else if (debugMode) {
-      engine?.setBreakpoints(breakpoints);
+      applyBreakpoints();
     }
   }
 
@@ -228,7 +241,7 @@
     if (!engine) return;
     engine.debugEnable(debugMode);
     if (debugMode) {
-      engine.setBreakpoints(breakpoints);
+      applyBreakpoints();
     } else {
       dbg = { paused: false };
       editor?.setCurrentLine(null);

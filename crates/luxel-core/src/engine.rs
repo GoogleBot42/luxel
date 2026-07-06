@@ -181,21 +181,34 @@ impl Engine {
 
     /// Set breakpoints by 1-based source line; returns the lines that
     /// resolved to code (for gutter feedback). Replaces the previous set.
+    /// Install breakpoints by 1-based source line. A line with no
+    /// instructions (blank, comment, brace) snaps forward to the nearest
+    /// executable line; a line past all code is dropped. Returns the
+    /// resolved lines so UIs can move their markers accordingly.
     pub fn debug_set_breakpoints(&mut self, lines: &[u32]) -> Vec<u32> {
         let mut pcs = Vec::new();
         let mut resolved = Vec::new();
         for &line in lines {
-            let mut hit = false;
-            for (fi, f) in self.prog.fns.iter().enumerate() {
-                if let Some(pc) = f.pos.iter().position(|&(l, _)| l == line) {
-                    pcs.push((fi as u16, pc as u32));
-                    hit = true;
+            // nearest executable line >= requested
+            let mut target: Option<u32> = None;
+            for f in &self.prog.fns {
+                for &(l, _) in &f.pos {
+                    if l >= line && l != 0 {
+                        target = Some(target.map_or(l, |t| t.min(l)));
+                    }
                 }
             }
-            if hit && !resolved.contains(&line) {
-                resolved.push(line);
+            let Some(t) = target else { continue };
+            for (fi, f) in self.prog.fns.iter().enumerate() {
+                if let Some(pc) = f.pos.iter().position(|&(l, _)| l == t) {
+                    pcs.push((fi as u16, pc as u32));
+                }
+            }
+            if !resolved.contains(&t) {
+                resolved.push(t);
             }
         }
+        resolved.sort_unstable();
         if let Some(d) = self.vm.dbg.as_mut() {
             d.breakpoints = pcs;
         }
