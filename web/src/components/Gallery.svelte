@@ -45,6 +45,7 @@
 
   let tiles: Tile[] = [];
   let corpusNote = "";
+  let loading = true; // corpus (gallery.json) still streaming in
   let raf = 0;
   let cursor = 0;
 
@@ -153,6 +154,11 @@
       seen: 0,
       visible: false,
     }));
+    // show the built-in examples (and start animating) immediately — the
+    // corpus fetch below can take a beat, and a blank "0 patterns" while it
+    // loads reads as broken
+    tiles = ex;
+    raf = requestAnimationFrame(loop);
     let corpus: Tile[] = [];
     try {
       const r = await fetch(`${import.meta.env.BASE_URL}gallery.json`);
@@ -176,8 +182,8 @@
       /* gallery.json is optional — examples still show */
     }
     if (corpus.length === 0) corpusNote = "community patterns unavailable (no gallery.json)";
-    tiles = [...ex, ...corpus];
-    raf = requestAnimationFrame(loop);
+    tiles = [...ex, ...corpus]; // reuses ex refs, so example engines survive
+    loading = false;
   });
 
   onDestroy(() => {
@@ -190,7 +196,12 @@
 <div class="browser" role="region" aria-label="pattern browser">
   <header>
     <span class="title">patterns</span>
-    <span class="dim">{tiles.length} patterns — click one to open it in the editor</span>
+    {#if loading}
+      <span class="spinner header-spinner" aria-hidden="true"></span>
+      <span class="dim" data-role="gallery-loading">loading patterns…</span>
+    {:else}
+      <span class="dim">{tiles.length} patterns — click one to open it in the editor</span>
+    {/if}
     {#if corpusNote}<span class="dim">· {corpusNote}</span>{/if}
     <span class="spacer"></span>
     <button data-role="gallery-close" on:click={() => dispatch("close")}>back to editor</button>
@@ -313,6 +324,13 @@
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: tile-spin 0.7s linear infinite;
+  }
+
+  .header-spinner {
+    position: static;
+    display: inline-block;
+    margin: 0;
+    vertical-align: middle;
   }
 
   @keyframes tile-spin {
