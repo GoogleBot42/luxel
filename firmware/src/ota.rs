@@ -3,6 +3,20 @@
 //! the inactive OTA slot, activates it, and reboots. The serially-flashed
 //! factory partition is never written — it stays the fallback the bootloader
 //! uses if both OTA slots hold broken images (or after erasing otadata).
+//!
+//! Division of labor with esp-bootloader-esp-idf (reviewed 2026-07-06 after
+//! the "is this reinventing a library wheel?" question): the library does
+//! everything stateful — slot selection (`OtaUpdater::next_partition`),
+//! otadata activation, image state — and only the streaming erase+write
+//! loop is ours, for two reasons. (1) `next_partition()`'s `FlashRegion`
+//! borrows the updater, which borrows flash + a table buffer — holding one
+//! across await points while the driver must remain claimable fights the
+//! borrow checker and our driver-handoff pattern; reopening it per chunk
+//! would re-read the partition table ~200× per upload. (2) The write loop
+//! is where the flash-vs-WiFi timing constraints live (erase-on-write,
+//! yields), which is policy the library rightly doesn't own. The crashes
+//! that prompted the question were the task-stack architecture (see
+//! assets::read_chunk), not this loop.
 
 use core::cell::RefCell;
 
