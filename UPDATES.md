@@ -1,5 +1,40 @@
 # Update log
 
+## 2026-07-06 night — web UI Phase 2: tabs + decluttered header ✅
+
+Phase 2 of the web-UI redesign — a real tabbed app instead of one crowded
+header. Web-only (no firmware / no reflash); pushed to the dev device as a hot
+asset reload, so http://192.168.0.205/ is already running it.
+
+- **Tab bar in both modes.** `Editor · Patterns` in playground; device mode adds
+  `Settings`. Panels stay mounted and hide via CSS, so the render loop, editor
+  state, and gallery tile-engines all survive a tab switch.
+- **Header decluttered** to just wordmark · tabs · status (fps + streaming/
+  polling) · connection. Everything else moved out:
+  - *Editor toolbar* (above the editor): pattern picker + `save`/`delete`,
+    `share` (playground only, prominent), and a `⋯` overflow with import/export.
+  - *Playback bar* (below the editor): layout (strip/grid/px — playground only),
+    fps, pause, debug.
+- **Patterns tab** — the gallery, promoted from a modal overlay to a first-class
+  inline tab. Lazy-mounted on first visit then kept alive; picking a pattern
+  jumps back to the Editor tab.
+- **Settings tab** (device mode) — device address, live pixel-count readout, and
+  status; brightness / pixel-count editing / WiFi are honest **Phase-3
+  placeholders** (labeled as needing firmware — only `/api/wifi` exists today).
+- **Share** hidden in device mode (it's a playground affordance), prominent in
+  playground mode — per the feedback.
+
+Both e2e suites were rewired to the new `data-role` hooks (`pattern-picker`,
+`tab-*`, `overflow`, `map-badge`, `layout-*`, `cfg-pixels`, `pause`, `fps`) and
+are **green in real chromium** — 51 playground checks + 19 device-mode checks
+against the native mirror. Verified the served bundle on hardware: index.html
+(revalidated) points at the new immutable hashed JS/CSS.
+
+Still ahead (docs/webui.md): Phase 3 (firmware `/api/brightness` + `/api/config`,
+wire the Settings fields, fix the connect-on-load race), Phase 4 (mapper as a
+CodeMirror tab + debuggable, 3D preview, Playlist tab + firmware storage,
+MQTT/HA, AP-mode).
+
 ## 2026-07-06 evening — HTTP caching: assets only re-download when changed (v0.1.11) ✅
 
 You asked the device to take advantage of browser caching — no redownload of

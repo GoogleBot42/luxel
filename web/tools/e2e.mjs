@@ -52,7 +52,7 @@ try {
   await sleep(800); // wasm load + first frames
 
   // 1. rendering: fps counter alive, waterfall canvas non-black
-  const fpsText = await page.$eval("header .mono", (el) => el.textContent ?? "");
+  const fpsText = await page.$eval(String.raw`[data-role="fps"]`, (el) => el.textContent ?? "");
   check("engine renders (fps > 0)", parseInt(fpsText) > 10, fpsText.trim());
   const lit = await page.$eval(".waterfall", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, 3).data;
@@ -150,7 +150,7 @@ try {
 
   // KITT: implicit globals (v, leds, pos) appear in the globals pane —
   // the exact scenario from review feedback
-  await page.select("header select", "KITT");
+  await page.select('[data-role="pattern-picker"]', "KITT");
   await sleep(700);
   const kittLine = await page.$$eval(".cm-line", (els) => {
     const el = els[11]; // line 12: rgb(...) — right after v = leds[index]
@@ -175,7 +175,7 @@ try {
   check("debug off resumes rendering", (await page.$(".debugger")) === null);
 
   // 3. Blink Fade: slider + number entry + readout reactivity
-  await page.select("header select", "Blink Fade");
+  await page.select('[data-role="pattern-picker"]', "Blink Fade");
   await sleep(600);
   await page.waitForSelector('input[type="range"]');
   const before = await page.$eval(".control .num", (el) => el.value);
@@ -196,7 +196,7 @@ try {
   check("number entry moves the slider", Number(rangeNow) === 0.25, rangeNow);
 
   // 4. hints: Spinning Plasma slider bounded by //# min/max
-  await page.select("header select", "Spinning Plasma 2D");
+  await page.select('[data-role="pattern-picker"]', "Spinning Plasma 2D");
   await sleep(700);
   const [mn, mx, val] = await page.$eval('input[type="range"]', (el) => [el.min, el.max, el.value]);
   check("//# hint bounds the slider", mn === "0.1" && mx === "1.5", `min=${mn} max=${mx}`);
@@ -209,7 +209,7 @@ try {
   await page.screenshot({ path: `${shotDir}/e2e-3-plasma.png` });
 
   // 5. layout editing: bump grid to 24×24 and keep rendering
-  await page.$eval("header .group .num", (el) => {
+  await page.$eval(String.raw`[data-role="layout-w"]`, (el) => {
     el.value = "24";
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -218,13 +218,13 @@ try {
   check("layout edit resizes the render", gridW === 24, String(gridW));
 
   // 6. pause stops the fps counter from advancing frames
-  await page.click(String.raw`header button[title="pause"], header button[title="resume"]`);
+  await page.click(String.raw`[data-role="pause"]`);
   await sleep(300);
   const litBefore = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
   await sleep(400);
   const litAfter = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
   check("pause freezes the preview", litBefore === litAfter);
-  await page.click(String.raw`header button[title="pause"], header button[title="resume"]`);
+  await page.click(String.raw`[data-role="pause"]`);
 
   // 7. vars watcher shows exported values
   const varText = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
@@ -250,7 +250,7 @@ try {
   const importedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
   check("epe import replaces the source", importedDoc.includes("beforeRender"));
   check("epe import compiles (no banners)", (await page.$(".banner.error")) === null);
-  const pickerLabel = await page.$eval("header select", (el) => el.selectedOptions[0]?.textContent ?? "");
+  const pickerLabel = await page.$eval('[data-role="pattern-picker"]', (el) => el.selectedOptions[0]?.textContent ?? "");
   check("picker shows the imported name", pickerLabel.includes("KITT e2e"), pickerLabel);
 
   // a broken file surfaces the import banner (and doesn't clobber source)
@@ -272,6 +272,8 @@ try {
     downloadPath: dlDir,
     eventsEnabled: true,
   });
+  await page.click('[data-role="overflow"]');
+  await sleep(150);
   await page.click('[data-role="epe-export"]');
   await sleep(800);
   const dl = readdirSync(dlDir).find((f) => f.endsWith(".epe"));
@@ -289,12 +291,12 @@ try {
   }
 
   // 10. pattern browser: overlay opens, tiles animate live, pick loads
-  await page.click('[data-role="browse"]');
-  await page.waitForSelector(".overlay .tile", { timeout: 5000 }).catch(() => null);
-  const tileCount = await page.$$eval(".overlay .tile", (els) => els.length);
+  await page.click('[data-role="tab-patterns"]');
+  await page.waitForSelector(".tile", { timeout: 5000 }).catch(() => null);
+  const tileCount = await page.$$eval(".tile", (els) => els.length);
   check("gallery shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
   await sleep(2500); // let visible tiles compile + render a few frames
-  const litTiles = await page.$$eval(".overlay .tile canvas", (cs) =>
+  const litTiles = await page.$$eval(".tile canvas", (cs) =>
     cs.slice(0, 12).filter((c) => {
       const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
       return d.some((v, i) => i % 4 !== 3 && v > 8);
@@ -302,16 +304,16 @@ try {
   );
   check("gallery tiles animate (≥4 of first 12 lit)", litTiles >= 4, `${litTiles} lit`);
   await page.screenshot({ path: `${shotDir}/e2e-5-gallery.png` });
-  const pickName = await page.$$eval(".overlay .tile", (els) => {
+  const pickName = await page.$$eval(".tile", (els) => {
     const t = els.find((el) => !el.classList.contains("dead") && el.querySelector(".tname"));
     t?.scrollIntoView();
     return t?.querySelector(".tname")?.textContent ?? "";
   });
-  await page.click(".overlay .tile:not(.dead)");
+  await page.click(".tile:not(.dead)");
   await sleep(700);
-  check("gallery pick closes overlay", (await page.$(".overlay")) === null);
+  check("gallery pick returns to editor", (await page.$("main.editor-tab:not([hidden])")) !== null);
   const pickedLabel = await page.$eval(
-    "header select",
+    '[data-role="pattern-picker"]',
     (el) => el.selectedOptions[0]?.textContent ?? "",
   );
   check("gallery pick loads the pattern", pickedLabel.trim() === pickName.trim(), pickedLabel);
@@ -367,9 +369,9 @@ try {
   await sleep(800);
   const mapErr = await page.$('[data-role="mapper-error"]');
   check("mapper applies without error", mapErr === null);
-  const mapBadge = await page.$$eval("header .mono", (els) =>
-    els.map((e) => e.textContent ?? "").find((t) => t.includes("px mapped")) ?? "",
-  );
+  const mapBadge = await page
+    .$eval(String.raw`[data-role="map-badge"]`, (el) => el.textContent ?? "")
+    .catch(() => "");
   check("header shows mapped layout", mapBadge.includes("60 px mapped"), mapBadge);
   const mapLit = await page.$eval(".map", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
@@ -398,7 +400,7 @@ try {
   //     copy (autosave), the saved entry loads from the picker, delete works
   await page.click('[data-role="save"]');
   await sleep(400);
-  const savedOpt = await page.$$eval("header select option", (els) =>
+  const savedOpt = await page.$$eval('[data-role="pattern-picker"] option', (els) =>
     els.some((o) => o.value === "saved:e2e saved"),
   );
   check("save adds a library entry", savedOpt);
@@ -410,20 +412,20 @@ try {
   await page.waitForSelector(".cm-content");
   await sleep(800);
   const restoredLabel = await page.$eval(
-    "header select",
+    '[data-role="pattern-picker"]',
     (el) => el.selectedOptions[0]?.textContent ?? "",
   );
   check("reload restores the working copy", restoredLabel.trim() === "e2e saved", restoredLabel);
   // switch away, then load the saved entry back from the picker
-  await page.select("header select", "Rainbow");
+  await page.select('[data-role="pattern-picker"]', "Rainbow");
   await sleep(400);
-  await page.select("header select", "saved:e2e saved");
+  await page.select('[data-role="pattern-picker"]', "saved:e2e saved");
   await sleep(500);
   const savedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
   check("saved entry loads from the picker", savedDoc.includes("hsv"), savedDoc.slice(0, 30));
   await page.click('[data-role="delete"]');
   await sleep(400);
-  const goneOpt = await page.$$eval("header select option", (els) =>
+  const goneOpt = await page.$$eval('[data-role="pattern-picker"] option', (els) =>
     els.some((o) => o.value === "saved:e2e saved"),
   );
   check("delete removes the library entry", !goneOpt);

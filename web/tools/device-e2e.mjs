@@ -71,7 +71,7 @@ try {
   await page.waitForSelector(".device-badge", { timeout: 5000 });
   check("connect: badge shown", true);
 
-  const px = await page.$eval("header input.num", (el) => el.value);
+  const px = await page.$eval('[data-role="cfg-pixels"]', (el) => el.value);
   check("connect: pixel count from device", px === "120", `got ${px}`);
   // CodeMirror virtualizes: textContent only holds visible lines — check
   // the top of the device's default pattern
@@ -162,7 +162,7 @@ try {
   });
   await page.click('[data-role="save"]');
   await sleep(900);
-  const devOpt = await page.$$eval("header select option", (els) =>
+  const devOpt = await page.$$eval('[data-role="pattern-picker"] option', (els) =>
     els.some((o) => o.value.startsWith("device:") && o.textContent === "device kept"),
   );
   check("library: save-to-device adds an 'on device' entry", devOpt);
@@ -173,13 +173,13 @@ try {
     JSON.stringify(apiList),
   );
   // switch to an example, then load the stored pattern back — it activates
-  await page.select("header select", "Rainbow");
+  await page.select('[data-role="pattern-picker"]', "Rainbow");
   await sleep(900);
   const devValue = await page.$$eval(
-    "header select option",
+    '[data-role="pattern-picker"] option',
     (els) => els.find((o) => o.value.startsWith("device:"))?.value ?? "",
   );
-  await page.select("header select", devValue);
+  await page.select('[data-role="pattern-picker"]', devValue);
   await sleep(1200);
   const activated = await (await fetch(`${DEV}/api/pattern`)).text();
   check("library: selecting a device pattern activates it", activated.includes("0.4"));

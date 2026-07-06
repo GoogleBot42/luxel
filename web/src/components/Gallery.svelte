@@ -187,13 +187,13 @@
   });
 </script>
 
-<div class="overlay" role="dialog" aria-label="pattern browser">
+<div class="browser" role="region" aria-label="pattern browser">
   <header>
-    <span class="title">pattern browser</span>
+    <span class="title">patterns</span>
     <span class="dim">{tiles.length} patterns — click one to open it in the editor</span>
     {#if corpusNote}<span class="dim">· {corpusNote}</span>{/if}
     <span class="spacer"></span>
-    <button data-role="gallery-close" on:click={() => dispatch("close")}>close</button>
+    <button data-role="gallery-close" on:click={() => dispatch("close")}>back to editor</button>
   </header>
   <div class="tiles">
     {#each tiles as t, i (i)}
@@ -222,10 +222,8 @@
 </div>
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
+  .browser {
+    height: 100%;
     background: var(--bg, #14161a);
     display: flex;
     flex-direction: column;

@@ -113,6 +113,27 @@
    *  affordances the header shows (share vs. device console). */
   $: mode = device ? "device" : "playground";
 
+  // ---- top-level tabs ----
+  // Both modes get the tab bar; device mode adds Settings. Panels stay
+  // mounted and hide via CSS so the render loop, editor state, and gallery
+  // engines survive a tab switch.
+  type Tab = "editor" | "patterns" | "settings";
+  let tab: Tab = "editor";
+  /** File-actions overflow menu (import/export). */
+  let menuOpen = false;
+  /** Lazy-mount the gallery on first Patterns visit, then keep it alive so
+   *  its compiled tile engines persist across tab switches. */
+  let galleryMounted = false;
+  $: if (tab === "patterns") galleryMounted = true;
+  /** Total installed pixels — reactive so the Settings readout tracks the
+   *  active layout (device connect sets it from the hardware). */
+  $: pixelTotal =
+    layout.kind === "strip"
+      ? layout.pixels
+      : layout.kind === "grid"
+        ? layout.w * layout.h
+        : layout.coords.length;
+
   function openDeviceSocket(): void {
     if (!device) return;
     // The device serves 2 connections and the server reaps idle keep-alive
@@ -207,6 +228,7 @@
     deviceError = "";
     devicePatterns = [];
     devicePatternId = "";
+    if (tab === "settings") tab = "editor"; // Settings only exists in device mode
     recompile();
   }
 
@@ -460,13 +482,11 @@ function (pixelCount) {
     }
   }
 
-  // ---- pattern browser ----
-
-  let browseOpen = false;
+  // ---- pattern browser (Patterns tab) ----
 
   function onGalleryPick(e: CustomEvent<{ name: string; kind: "strip" | "grid"; source: string }>): void {
     const p = e.detail;
-    browseOpen = false;
+    tab = "editor"; // picking a pattern jumps back to the editor
     patternName = p.name;
     exampleName = "";
     importError = "";
@@ -881,159 +901,63 @@ function (pixelCount) {
   });
 </script>
 
-<div class="shell" data-mode={mode} role="application" on:drop={onDrop} on:dragover|preventDefault>
+<svelte:window on:click={() => (menuOpen = false)} />
+
+<div
+  class="shell"
+  data-mode={mode}
+  data-tab={tab}
+  role="application"
+  on:drop={onDrop}
+  on:dragover|preventDefault
+>
   <header>
     <span class="wordmark">
       luxel <span class="dim">{device ? (device.base ? device.base : "device") : "playground"}</span>
     </span>
-    <select value={selectValue} on:change={onExampleChange}>
-      {#if selectValue === ""}
-        <option value="">{patternName || "imported"}</option>
-      {/if}
-      <optgroup label="examples">
-        {#each EXAMPLES as ex (ex.name)}
-          <option value={ex.name}>{ex.name}</option>
-        {/each}
-      </optgroup>
-      {#if saved.length > 0}
-        <optgroup label="saved">
-          {#each saved as s (s.name)}
-            <option value={"saved:" + s.name}>{s.name}</option>
-          {/each}
-        </optgroup>
-      {/if}
-      {#if device && devicePatterns.length > 0}
-        <optgroup label="on device">
-          {#each devicePatterns as p (p.id)}
-            <option value={"device:" + p.id}>{p.name}</option>
-          {/each}
-        </optgroup>
-      {/if}
-    </select>
 
-    <span class="group">
+    <nav class="tabs" data-role="tabs">
       <button
-        data-role="browse"
-        title="browse all patterns with live previews"
-        on:click={() => (browseOpen = true)}
+        data-role="tab-editor"
+        class="tab"
+        class:active={tab === "editor"}
+        on:click={() => (tab = "editor")}
       >
-        browse
+        Editor
       </button>
       <button
-        data-role="epe-import"
-        title="import a Pixel Blaze .epe (or drop one anywhere on the page)"
-        on:click={() => fileInput.click()}
+        data-role="tab-patterns"
+        class="tab"
+        class:active={tab === "patterns"}
+        on:click={() => (tab = "patterns")}
       >
-        import
+        Patterns
       </button>
-      <button
-        data-role="epe-export"
-        title="download the current pattern as a Pixel Blaze-compatible .epe"
-        on:click={exportEpe}
-      >
-        export
-      </button>
-      <input
-        class="file-input"
-        type="file"
-        accept=".epe,.json,application/json"
-        bind:this={fileInput}
-        on:change={onImportPick}
-      />
-      {#if !device}
+      {#if device}
         <button
-          data-role="share"
-          title="copy a link that carries this pattern in the URL"
-          on:click={() => void sharePattern()}
+          data-role="tab-settings"
+          class="tab"
+          class:active={tab === "settings"}
+          on:click={() => (tab = "settings")}
         >
-          share
+          Settings
         </button>
       {/if}
-      <button
-        data-role="save"
-        title="save the current pattern to this browser's library"
-        on:click={saveToLibrary}
+    </nav>
+
+    <span class="spacer"></span>
+
+    {#if device}
+      <span
+        class="mono dim"
+        title={wsLive ? "live pixel stream over websocket" : "polling over HTTP"}
       >
-        save
-      </button>
-      {#if devicePatternId !== "" || saved.some((s) => s.name === patternName && exampleName === "")}
-        <button
-          data-role="delete"
-          title={devicePatternId ? "remove from the device" : "remove from the library"}
-          on:click={deleteSaved}
-        >
-          delete
-        </button>
-      {/if}
-      {#if shareNote}<span class="dim" data-role="share-note">{shareNote}</span>{/if}
-      {#if saveNote}<span class="dim" data-role="save-note">{saveNote}</span>{/if}
-    </span>
+        {wsLive ? "streaming" : `polling · ${pollMs.toFixed(0)} ms`}
+      </span>
+    {/if}
+    <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
 
-    <span class="group">
-      <select value={layout.kind} on:change={setLayoutKind} disabled={device !== null}>
-        <option value="strip">strip</option>
-        <option value="grid">grid</option>
-        {#if layout.kind === "map"}
-          <option value="map">2D map</option>
-        {/if}
-      </select>
-      {#if layout.kind === "map"}
-        <span class="dim mono">{layout.coords.length} px mapped</span>
-      {:else if layout.kind === "strip"}
-        <input
-          class="num"
-          type="number"
-          min="1"
-          max="4096"
-          value={layout.pixels}
-          disabled={device !== null}
-          on:change={(e) => setLayoutNum("pixels", e)}
-        />
-        <span class="dim">px</span>
-      {:else}
-        <input
-          class="num"
-          type="number"
-          min="1"
-          max="256"
-          value={layout.w}
-          on:change={(e) => setLayoutNum("w", e)}
-        />
-        <span class="dim">×</span>
-        <input
-          class="num"
-          type="number"
-          min="1"
-          max="256"
-          value={layout.h}
-          on:change={(e) => setLayoutNum("h", e)}
-        />
-      {/if}
-    </span>
-
-    <span class="group">
-      <select value={targetFps} on:change={onFpsChange}>
-        <option value={0}>max fps</option>
-        <option value={60}>60 fps</option>
-        <option value={30}>30 fps</option>
-        <option value={15}>15 fps</option>
-        <option value={5}>5 fps</option>
-      </select>
-      <button on:click={togglePause} title={running ? "pause" : "resume"}>
-        {running ? "pause" : "play"}
-      </button>
-      <button
-        class="debug-toggle"
-        class:active={debugMode}
-        disabled={device !== null}
-        title={device ? "debugging runs on the local engine only (for now)" : "toggle debugger"}
-        on:click={toggleDebug}
-      >
-        debug
-      </button>
-    </span>
-
-    <span class="group">
+    <span class="conn">
       {#if device}
         <span class="device-badge mono">device{device.base ? ` ${device.base}` : ""}</span>
         <button on:click={disconnectDevice}>disconnect</button>
@@ -1056,25 +980,178 @@ function (pixelCount) {
         </button>
       {/if}
     </span>
-
-    <span class="spacer"></span>
-    {#if device}
-      <span class="mono dim" title={wsLive ? "live pixel stream over websocket" : "polling over HTTP"}>
-        {wsLive ? "streaming" : `polling · ${pollMs.toFixed(0)} ms`}
-      </span>
-    {/if}
-    <span class="mono dim">{fps.toFixed(0)} fps</span>
   </header>
 
-  <main>
+  <!-- ───────────── Editor tab ───────────── -->
+  <main class="editor-tab" hidden={tab !== "editor"}>
     <section class="left">
-      <Editor
-        bind:this={editor}
-        value={source}
-        {hoverValue}
-        on:change={onSourceChange}
-        on:breakpoints={onBreakpoints}
-      />
+      <div class="toolbar">
+        <select data-role="pattern-picker" value={selectValue} on:change={onExampleChange}>
+          {#if selectValue === ""}
+            <option value="">{patternName || "imported"}</option>
+          {/if}
+          <optgroup label="examples">
+            {#each EXAMPLES as ex (ex.name)}
+              <option value={ex.name}>{ex.name}</option>
+            {/each}
+          </optgroup>
+          {#if saved.length > 0}
+            <optgroup label="saved">
+              {#each saved as s (s.name)}
+                <option value={"saved:" + s.name}>{s.name}</option>
+              {/each}
+            </optgroup>
+          {/if}
+          {#if device && devicePatterns.length > 0}
+            <optgroup label="on device">
+              {#each devicePatterns as p (p.id)}
+                <option value={"device:" + p.id}>{p.name}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
+
+        <span class="spacer"></span>
+
+        {#if saveNote}<span class="dim note" data-role="save-note">{saveNote}</span>{/if}
+        {#if shareNote}<span class="dim note" data-role="share-note">{shareNote}</span>{/if}
+
+        <span class="file-actions">
+          <button
+            data-role="save"
+            title={device
+              ? "save the current pattern on the device"
+              : "save to this browser's library"}
+            on:click={saveToLibrary}
+          >
+            save
+          </button>
+          {#if devicePatternId !== "" || saved.some((s) => s.name === patternName && exampleName === "")}
+            <button
+              data-role="delete"
+              title={devicePatternId ? "remove from the device" : "remove from the library"}
+              on:click={deleteSaved}
+            >
+              delete
+            </button>
+          {/if}
+          {#if !device}
+            <button
+              data-role="share"
+              class="primary"
+              title="copy a link that carries this pattern in the URL"
+              on:click={() => void sharePattern()}
+            >
+              share
+            </button>
+          {/if}
+          <span class="overflow">
+            <button
+              class="more"
+              data-role="overflow"
+              title="more actions"
+              aria-label="more actions"
+              on:click|stopPropagation={() => (menuOpen = !menuOpen)}
+            >
+              ⋯
+            </button>
+            {#if menuOpen}
+              <div class="menu" role="menu">
+                <button data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
+                  import .epe…
+                </button>
+                <button data-role="epe-export" role="menuitem" on:click={exportEpe}>
+                  export .epe
+                </button>
+              </div>
+            {/if}
+          </span>
+          <input
+            class="file-input"
+            type="file"
+            accept=".epe,.json,application/json"
+            bind:this={fileInput}
+            on:change={onImportPick}
+          />
+        </span>
+      </div>
+
+      <div class="editor-host">
+        <Editor
+          bind:this={editor}
+          value={source}
+          {hoverValue}
+          on:change={onSourceChange}
+          on:breakpoints={onBreakpoints}
+        />
+      </div>
+
+      <div class="playback">
+        {#if !device}
+          <select value={layout.kind} on:change={setLayoutKind}>
+            <option value="strip">strip</option>
+            <option value="grid">grid</option>
+            {#if layout.kind === "map"}
+              <option value="map">2D map</option>
+            {/if}
+          </select>
+          {#if layout.kind === "map"}
+            <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
+          {:else if layout.kind === "strip"}
+            <input
+              class="num"
+              data-role="layout-px"
+              type="number"
+              min="1"
+              max="4096"
+              value={layout.pixels}
+              on:change={(e) => setLayoutNum("pixels", e)}
+            />
+            <span class="dim">px</span>
+          {:else}
+            <input
+              class="num"
+              data-role="layout-w"
+              type="number"
+              min="1"
+              max="256"
+              value={layout.w}
+              on:change={(e) => setLayoutNum("w", e)}
+            />
+            <span class="dim">×</span>
+            <input
+              class="num"
+              data-role="layout-h"
+              type="number"
+              min="1"
+              max="256"
+              value={layout.h}
+              on:change={(e) => setLayoutNum("h", e)}
+            />
+          {/if}
+          <span class="sep"></span>
+        {/if}
+        <select value={targetFps} on:change={onFpsChange}>
+          <option value={0}>max fps</option>
+          <option value={60}>60 fps</option>
+          <option value={30}>30 fps</option>
+          <option value={15}>15 fps</option>
+          <option value={5}>5 fps</option>
+        </select>
+        <button data-role="pause" on:click={togglePause} title={running ? "pause" : "resume"}>
+          {running ? "pause" : "play"}
+        </button>
+        {#if !device}
+          <button
+            class="debug-toggle"
+            class:active={debugMode}
+            title="toggle debugger"
+            on:click={toggleDebug}
+          >
+            debug
+          </button>
+        {/if}
+      </div>
     </section>
     <section class="right">
       {#if loadFailure}
@@ -1223,8 +1300,71 @@ function (pixelCount) {
     </section>
   </main>
 
-  {#if browseOpen && luxel}
-    <Gallery {luxel} on:pick={onGalleryPick} on:close={() => (browseOpen = false)} />
+  <!-- ───────────── Patterns tab ───────────── -->
+  <div class="patterns-tab" data-role="patterns-panel" hidden={tab !== "patterns"}>
+    {#if galleryMounted && luxel}
+      <Gallery {luxel} on:pick={onGalleryPick} on:close={() => (tab = "editor")} />
+    {:else}
+      <div class="tab-empty dim">loading patterns…</div>
+    {/if}
+  </div>
+
+  <!-- ───────────── Settings tab (device mode only) ───────────── -->
+  {#if device}
+    <div class="settings-tab" data-role="settings-panel" hidden={tab !== "settings"}>
+      <div class="settings">
+        <h1>Device settings</h1>
+
+        <section class="card">
+          <h2>Device</h2>
+          <div class="field">
+            <span class="flabel">Address</span>
+            <input class="mono grow" value={device.base || "served from device"} disabled />
+          </div>
+          <div class="field">
+            <span class="flabel">Pixels</span>
+            <input class="num" data-role="cfg-pixels" type="number" value={pixelTotal} disabled />
+            <span class="dim">strip — editable once firmware config lands (Phase 3)</span>
+          </div>
+          <div class="field">
+            <span class="flabel">Status</span>
+            <span class="mono dim">
+              {fps.toFixed(0)} fps · {wsLive ? "streaming" : "polling"}{runtimeError
+                ? ` · vmerr: ${runtimeError.message}`
+                : ""}
+            </span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Brightness</h2>
+          <input type="range" min="0" max="31" value="31" disabled />
+          <p class="dim hint">
+            Runtime brightness needs firmware support (today it's a compile-time constant,
+            <code>APA_BRIGHTNESS</code>). Wiring <code>GET/POST&nbsp;/api/brightness</code> is Phase&nbsp;3.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>WiFi</h2>
+          <p class="dim hint">
+            The device stores WiFi credentials (<code>/api/wifi</code>) and reboots to apply them. A
+            form to change them from here — plus AP-mode provisioning — arrives with the settings
+            firmware work.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>Pattern library</h2>
+          <p class="dim hint">
+            {devicePatterns.length} pattern{devicePatterns.length === 1 ? "" : "s"} stored on the
+            device. Browse and load them from the
+            <button class="link" on:click={() => (tab = "patterns")}>Patterns</button> tab; save the
+            editor's current pattern with <em>save</em>.
+          </p>
+        </section>
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -1255,7 +1395,32 @@ function (pixelCount) {
     color: var(--text-dim);
   }
 
-  .group {
+  .tabs {
+    display: flex;
+    gap: 2px;
+  }
+
+  .tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 6px 12px;
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .tab:hover {
+    color: var(--text);
+  }
+
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .conn {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1271,16 +1436,182 @@ function (pixelCount) {
     flex: 1;
   }
 
-  main {
+  .editor-tab {
     display: grid;
     grid-template-columns: minmax(360px, 1fr) minmax(320px, 420px);
     flex: 1;
     min-height: 0;
   }
 
+  /* one panel visible at a time; hidden ones stay mounted (state survives) */
+  .editor-tab[hidden],
+  .patterns-tab[hidden],
+  .settings-tab[hidden] {
+    display: none;
+  }
+
+  .patterns-tab,
+  .settings-tab {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .settings-tab {
+    overflow-y: auto;
+    background: var(--bg-panel);
+  }
+
+  .tab-empty {
+    padding: 24px;
+    font-size: 13px;
+  }
+
   .left {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
     min-height: 0;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+  }
+
+  .toolbar .note {
+    font-size: 12px;
+  }
+
+  .file-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .file-actions .primary {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .overflow {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .more {
+    padding: 2px 8px;
+    line-height: 1;
+  }
+
+  .menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-width: 140px;
+    padding: 4px;
+    gap: 2px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  }
+
+  .menu button {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    text-align: left;
+    padding: 6px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text);
+  }
+
+  .menu button:hover {
+    background: var(--bg-inset);
+  }
+
+  .editor-host {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .playback {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-panel);
+    flex-wrap: wrap;
+  }
+
+  .playback .sep {
+    width: 1px;
+    align-self: stretch;
+    margin: 2px 4px;
+    background: var(--border);
+  }
+
+  /* ---- settings tab ---- */
+  .settings {
+    max-width: 620px;
+    margin: 0 auto;
+    padding: 20px 16px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .settings h1 {
+    font-size: 18px;
+    margin: 4px 0 6px;
+    color: var(--text);
+  }
+
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--bg-inset);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .flabel {
+    width: 72px;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  .grow {
+    flex: 1;
+    min-width: 160px;
+  }
+
+  .link {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    font: inherit;
   }
 
   .right {

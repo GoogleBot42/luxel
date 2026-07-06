@@ -23,23 +23,27 @@ The app has two audiences and must present differently for each:
 Mode is derived from whether a `DeviceSession` is connected. Everything below
 keys off it.
 
-### Header is overcrowded [M]
-Too many options, rarely-used ones too prominent. Fix by (a) collapsing file
-actions (import/export/share/save/delete) into an overflow/⋯ menu, (b) showing
-only mode-relevant controls, (c) moving structural navigation to tabs (below).
+### Header is overcrowded [M] ✅ (Phase 2)
+Too many options, rarely-used ones too prominent. Fixed: the header is now just
+wordmark · tab bar · status (fps/streaming) · connection. File actions moved to
+the editor toolbar (save/delete/share visible, import/export in a ⋯ overflow
+menu); layout/fps/pause/debug moved to a playback bar under the editor.
 
-### Tabbed structure [L]
-The app needs top-level tabs, not one wall of header buttons.
+### Tabbed structure [L] ✅ (Phase 2, minus Playlist)
+The app now has top-level tabs shown in both modes (device adds Settings).
 
-- **Device mode tabs:** Editor · Patterns · Playlist · Settings
-  - *Editor* — code + live preview + controls + vars + mapper (as a sub-tab).
-  - *Patterns* — the on-device library (the current "browse" gallery, promoted
-    from a modal to a first-class tab) + save/load/delete against the device.
+- **Device mode tabs:** Editor · Patterns · Settings _(Playlist deferred — 🔧)_
+  - *Editor* — code + live preview + controls + vars + mapper (still a right-rail
+    `<details>`; promoting it to a CodeMirror sub-tab is Phase 4).
+  - *Patterns* ✅ — the gallery, promoted from a modal overlay to a first-class
+    inline tab (lazy-mounted on first visit, then kept alive so tile engines
+    persist). Picking a pattern jumps back to the Editor tab.
   - *Playlist* 🔧 — choose patterns and play them on a loop. Needs firmware
-    playlist storage + a scheduler (does not exist yet — big).
-  - *Settings* — see below.
-- **Playground mode tabs:** Editor · Patterns (+ Share). No Settings/Playlist
-  (nothing to configure), but Share is meaningful here.
+    playlist storage + a scheduler (does not exist yet — big). Still Phase 4.
+  - *Settings* ✅ (shell) — device info + pixel-count readout now; brightness /
+    pixel-count editing / WiFi form are honest Phase-3 placeholders (see below).
+- **Playground mode tabs:** Editor · Patterns. Share is a prominent toolbar
+  button here (hidden in device mode).
 
 ## Editor
 
@@ -115,9 +119,12 @@ the pattern is loading, instead of appearing dead/blank.
    URL; "ws push" → human label; gate debugger off in device mode; hide Share in
    device mode; gallery spinners. *(No firmware, no reflash — fully verifiable
    in chromium.)*
-2. **Phase 2 (web restructure):** tabs (Editor/Patterns) + header declutter
-   (overflow menu); promote gallery to a Patterns tab; mode-aware header. Update
-   e2e `data-role` hooks.
+2. **Phase 2 (web restructure):** ✅ shipped — tab bar in both modes (Editor ·
+   Patterns [· Settings on device]); header decluttered to wordmark/tabs/status/
+   connection; file actions → editor toolbar + ⋯ overflow; layout/fps/pause/debug
+   → playback bar; gallery promoted from modal to inline Patterns tab; Settings
+   shell (device info + pixel readout, Phase-3 placeholders). Both e2e suites
+   updated to the new `data-role` hooks and green.
 3. **Phase 3 (firmware + settings):** `/api/brightness`, `/api/config`
    (pixel count/protocol); Settings tab wiring WiFi + brightness + pixel count;
    fix the connect-on-load race.
