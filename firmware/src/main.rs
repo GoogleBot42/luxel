@@ -89,6 +89,7 @@ macro_rules! mk_static {
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
+    esp_println::logger::init_logger_from_env();
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
     // The WiFi blob mallocs through this allocator and does NOT null-check;

@@ -9,7 +9,7 @@ license = "GPL-3.0-or-later"
 [dependencies]
 esp-hal = { version = "1.1.1", features = ["unstable"] }
 esp-alloc = "0.10"
-esp-println = "0.17"
+esp-println = { version = "0.17", features = ["log-04"] }
 esp-backtrace = { version = "0.19", features = ["panic-handler", "println"] }
 esp-bootloader-esp-idf = "0.5"
 critical-section = "1"
@@ -18,7 +18,7 @@ esp-storage = "0.9"
 luxel-core = { path = "../crates/luxel-core" }
 
 # networking (WiFi station + async TCP + HTTP server)
-esp-rtos = { version = "0.3", features = ["esp-radio", "embassy"] }
+esp-rtos = { version = "0.3", features = ["esp-radio", "embassy", "log-04"] }
 esp-radio = { version = "1.0.0-beta.0", features = ["wifi", "unstable"] }
 embassy-executor = "0.10"
 embassy-net = { version = "0.9", features = ["dhcpv4", "dhcpv4-hostname", "medium-ethernet", "tcp", "dns"] }

@@ -17,7 +17,10 @@ rustflags = [
 ]
 
 [env]
-ESP_LOG = "info"
+# Bring-up diagnostics: log every RTOS task creation (name, entry fn,
+# stack, core) — needed to identify which task's entry pointer gets
+# corrupted in the esp32 null-call crash.
+ESP_LOG = "info,esp_rtos::task=debug"
 # Bring-up: make stack overflows fail loudly (named panic) instead of
 # corrupting memory. Range-check + HW watchpoint are on by default; this
 # adds the software guard check on RTOS task switches too.
