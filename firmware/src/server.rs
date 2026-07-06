@@ -53,6 +53,29 @@ fn json_response(body: String) -> ApiResponse {
     (CORS, JSON, body)
 }
 
+/// Cache policy for a flash asset. Content-hashed bundle files
+/// (`/assets/index-<hash>.js`) can never change under their URL, so cache
+/// them hard and skip revalidation entirely; everything else (index.html,
+/// luxel.wasm, gallery.json) must revalidate — the ETag then yields 304s.
+fn asset_cache_control(path: &str) -> (&'static str, &'static str) {
+    if path.starts_with("/assets/") {
+        ("Cache-Control", "public, max-age=31536000, immutable")
+    } else {
+        ("Cache-Control", "no-cache")
+    }
+}
+
+/// True if one `If-None-Match` token matches our (quoted) ETag. Tolerates
+/// surrounding whitespace, a `W/` weak-validator prefix, and `*`.
+fn etag_matches(token: &[u8], etag: &[u8]) -> bool {
+    let t = token.trim_ascii();
+    if t.len() == 1 && t[0] == b'*' {
+        return true;
+    }
+    let t = t.strip_prefix(b"W/").map(|w| w.trim_ascii()).unwrap_or(t);
+    t == etag
+}
+
 fn status_json() -> String {
     let fps = FPS.load(Ordering::Relaxed);
     let slot = crate::ota::booted_slot();
@@ -648,6 +671,43 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     return resp.write_to(conn, response_writer).await;
                 }};
             }
+            // Serve a flash asset with a strong ETag + Cache-Control, and a
+            // 304 shortcut when the client's If-None-Match still matches — so
+            // an unchanged asset is never re-downloaded.
+            macro_rules! serve_asset {
+                ($e:expr) => {{
+                    let e = $e;
+                    let cc = asset_cache_control(&e.path);
+                    let matched = !e.etag.is_empty()
+                        && request
+                            .parts
+                            .headers()
+                            .get("If-None-Match")
+                            .is_some_and(|inm| {
+                                inm.split(b',').any(|t| etag_matches(t.as_raw(), e.etag.as_bytes()))
+                            });
+                    if matched {
+                        respond!((
+                            StatusCode::NOT_MODIFIED,
+                            ("ETag", e.etag),
+                            cc,
+                            picoserve::response::NoContent,
+                        ));
+                    }
+                    if e.etag.is_empty() {
+                        // legacy "LUXA" archive without hashes — still cacheable
+                        if e.gzip {
+                            respond!((("Content-Encoding", "gzip"), cc, FlashAsset(e)));
+                        }
+                        respond!((cc, FlashAsset(e)));
+                    }
+                    let etag = ("ETag", e.etag.clone());
+                    if e.gzip {
+                        respond!((("Content-Encoding", "gzip"), etag, cc, FlashAsset(e)));
+                    }
+                    respond!((etag, cc, FlashAsset(e)));
+                }};
+            }
             if route == "/ws" {
                 use picoserve::extract::FromRequest as _;
                 let parts = request.parts;
@@ -682,10 +742,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // at /min for bring-up debugging)
                 "/" => {
                     if let Some(e) = crate::assets::lookup("/index.html") {
-                        if e.gzip {
-                            respond!((("Content-Encoding", "gzip"), FlashAsset(e)));
-                        }
-                        respond!(FlashAsset(e));
+                        serve_asset!(e);
                     }
                     respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML));
                 }
@@ -723,10 +780,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 }
                 other => {
                     if let Some(e) = crate::assets::lookup(other) {
-                        if e.gzip {
-                            respond!((("Content-Encoding", "gzip"), FlashAsset(e)));
-                        }
-                        respond!(FlashAsset(e));
+                        serve_asset!(e);
                     }
                 }
             }

@@ -1,5 +1,29 @@
 # Update log
 
+## 2026-07-06 evening — HTTP caching: assets only re-download when changed (v0.1.11) ✅
+
+You asked the device to take advantage of browser caching — no redownload of
+unchanged assets. Done and verified live on hardware:
+
+- **Content-hashed bundle files** (`/assets/index-<hash>.js`/`.css`) now serve
+  `Cache-Control: public, max-age=31536000, immutable` — the browser reuses
+  them with **zero network** until their hash (and thus URL) changes.
+- **The unhashed files** (`index.html`, `luxel.wasm`, `gallery.json`) serve a
+  **strong ETag** + `Cache-Control: no-cache`, so the browser revalidates with
+  `If-None-Match` and gets a **304 Not Modified** (empty body) when unchanged —
+  a full download only when the content actually changed.
+
+Implementation: the LUXA archive gained a v2 format (`LUX2`) carrying an
+8-byte SHA-256 content hash per file (packed host-side); the firmware serves it
+as the ETag and answers `If-None-Match` with a 304. The firmware still reads
+legacy `LUXA` archives (those assets just revalidate to a 200). No new stack
+cost (stack-check green at 12 KB; clippy clean).
+
+Verified on the device (v0.1.11, OTA'd onto ota_0): every asset returns its own
+correct ETag; a matching `If-None-Match` → `304` with no body; a stale one →
+`200`; `/assets/*` carries `immutable`, the rest `no-cache`. So a second visit
+to http://192.168.0.205/ re-fetches nothing unless a file changed.
+
 ## 2026-07-06 evening — web UI feedback sorted + Phase-1 fixes ✅
 
 You gave a big batch of web-UI feedback. First, **sorted into the docs so
