@@ -288,4 +288,9 @@ let speed = 1            // fine to reassign
 speed = 2
 ```
 
+- **`**` (exponent)** — `x ** 2` = `pow(x, 2)`. Right-associative
+  (`2 ** 3 ** 2` = 512), binds tighter than `*`. One divergence from JS:
+  a unary minus on the left is allowed and binds first (`-x ** 2` means
+  `(-x) ** 2`; JS makes it a syntax error).
+
 More conservative JS conveniences may follow (see the roadmap).

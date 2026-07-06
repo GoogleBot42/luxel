@@ -42,8 +42,8 @@ and the autocomplete/docs pipeline, and can't break existing code.
 ## Language
 
 - **`const`/`let`** [S] ★★★ — DONE.
-- **`**` (exponent) operator** [S] ★ — `x ** 2`; parser + one opcode reuse
-  of `pow`. `compat` (PB has no `**`, so no conflict).
+- **`**` (exponent) operator** [S] ★ — DONE (right-assoc, tighter than
+  `*`; Insn::Pow; unary-lhs divergence from JS documented).
 - **Array literals `[1, 2, 3]`** [M] ★★★ — DONE (lexer/parser/compiler
   `NewArray`; semantics tests pin `[1,2,3].length/.sum()`).
 - **Ternary chains / already have `?:`** — verify and document.

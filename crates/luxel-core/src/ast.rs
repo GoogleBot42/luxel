@@ -90,6 +90,8 @@ pub enum BinOp {
     Mul,
     Div,
     Rem,
+    /// `**` — Luxel extension; right-associative, binds tighter than `*`.
+    Pow,
     Shl,
     Shr,
     BitAnd,

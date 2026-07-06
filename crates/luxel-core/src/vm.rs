@@ -45,6 +45,7 @@ pub enum Insn {
     Mul,
     Div,
     Rem,
+    Pow,
     Neg,
     Not,
     BitNot,
@@ -904,6 +905,11 @@ impl Vm {
                 Insn::Mul => binnum!(*),
                 Insn::Div => binnum!(/),
                 Insn::Rem => binnum!(%),
+                Insn::Pow => {
+                    let b = pop!().num();
+                    let a = pop!().num();
+                    push!(Value::Num(fmath::pow(a, b)));
+                }
                 Insn::Neg => {
                     let v = pop!().num();
                     push!(Value::Num(-v));

@@ -123,6 +123,9 @@ pub enum Tok {
     Plus,
     #[token("-")]
     Minus,
+    /// `**` exponent — Luxel extension (PB has only `pow()`).
+    #[token("**")]
+    StarStar,
     #[token("*")]
     Star,
     #[token("/")]

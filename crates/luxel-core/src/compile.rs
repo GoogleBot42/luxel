@@ -880,6 +880,7 @@ fn bin_insn(op: BinOp) -> Insn {
         BinOp::Mul => Insn::Mul,
         BinOp::Div => Insn::Div,
         BinOp::Rem => Insn::Rem,
+        BinOp::Pow => Insn::Pow,
         BinOp::Shl => Insn::Shl,
         BinOp::Shr => Insn::Shr,
         BinOp::BitAnd => Insn::BitAnd,

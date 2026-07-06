@@ -468,7 +468,11 @@ impl<'s> Parser<'s> {
                 break;
             }
             self.bump();
-            let rhs = self.binary_expr(prec + 1)?; // all binaries left-assoc
+            // `**` is right-associative (2**3**2 = 512, like JS); everything
+            // else left-assoc. Unlike JS we accept a unary lhs: -x ** 2
+            // parses as (-x) ** 2 (the unary parser binds first).
+            let next_min = if op == BinOp::Pow { prec } else { prec + 1 };
+            let rhs = self.binary_expr(next_min)?;
             let span = lhs.span.to(rhs.span);
             lhs = Expr {
                 kind: ExprKind::Binary {
@@ -765,6 +769,7 @@ fn bin_op(tok: Tok) -> Option<(BinOp, u8)> {
         Tok::Star => (BinOp::Mul, 10),
         Tok::Slash => (BinOp::Div, 10),
         Tok::Percent => (BinOp::Rem, 10),
+        Tok::StarStar => (BinOp::Pow, 11),
         _ => return None,
     })
 }

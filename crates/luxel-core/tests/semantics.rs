@@ -750,3 +750,16 @@ fn set_gamma_output_curve() {
     // gamma 1 = off
     assert_eq!(render_val("setGamma(1); rgb(0.5, 0, 0)"), linear);
 }
+
+#[test]
+fn exponent_operator() {
+    assert_eq!(eval("2 ** 10"), fx(1024.0));
+    // right-associative like JS: 2 ** 3 ** 2 = 2 ** 9
+    assert_eq!(eval("2 ** 3 ** 2"), fx(512.0));
+    // binds tighter than *
+    assert_eq!(eval("2 * 3 ** 2"), fx(18.0));
+    // fractional exponents work (sqrt); tolerance for fixed-point pow
+    assert!((eval("9 ** 0.5").to_f64() - 3.0).abs() < 0.01);
+    // unary lhs binds first (documented divergence from JS's SyntaxError)
+    assert_eq!(eval("0 - 2 ** 2"), fx(-4.0)); // (-) after: 0 - (2**2)
+}
