@@ -20,6 +20,15 @@ Sources surveyed (2026-07-06):
   SignalRGB / OpenRGB): wave, visor, starlight, splash-on-keypress,
   typing heatmap, temperature/ambient-driven color.
 
+**Status 2026-07-06:** the entire shortlist (1–12) is implemented in
+`examples/` + the playground gallery, plus stretch items Tetrix, falling
+sand ("Hourglass" reimagined as a pour), TV simulator, Soap, Spirograph,
+and — successfully, in 16.16 fixed point — Gray–Scott reaction–diffusion.
+Skipped deliberately: Popcorn (mechanically a Drip duplicate) and munching
+squares (corpus already has `xorcery 2D/3D`). Builtin wants that fell out
+of the batch are recorded in ideas.md (blur2D, bulk array math, event
+injection).
+
 ## Shortlist — next example batch
 
 Ranked by visual payoff ÷ effort, all feasible with current builtins.

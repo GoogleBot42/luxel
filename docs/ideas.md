@@ -38,6 +38,26 @@ and the autocomplete/docs pipeline, and can't break existing code.
 - **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — stable per-pixel
   randomness (sparkle that doesn't reshuffle each frame) — the corpus
   fakes this with the prng today.
+- **`blur2D(arr, w, h, radius)`** [S/M] ★★★ — the 2D sibling of `blur1D`
+  for the row-major virtual-canvas idiom the 2D examples settled on.
+  Typing Heatmap hand-rolls a 4-neighbor diffusion loop today, Soap and
+  reaction–diffusion would both use it; it's the single hottest loop in
+  every buffer-based 2D pattern. Signature matches how the canvases are
+  already laid out, so it drops straight in.
+- **Bulk array math** [S] ★★ — `arrayAdd(dst, src)`, `arraySub`,
+  `arrayScale(a, k)`, `arrayMix(dst, src, t)` as tight VM loops.
+  Simulation patterns (reaction–diffusion runs 2×256-cell update loops
+  per frame, ~15 VM ops per cell) spend nearly all their time in
+  interpreted per-element loops; bulk ops would make grid sims several
+  times faster on-device. `feedback` already proved the shape works.
+- **Canvas deposit/sample helpers** [M] ★★ — every stateful 2D example
+  repeats `buf[floor(y * 15.99) * gw + floor(x * 15.99)]` for both
+  writes (particle deposits) and reads (render sampling), with manual
+  clamping to avoid OOB frame-aborts. A `canvasSet(buf, w, x, y, v)` /
+  `canvasGet(buf, w, x, y)` pair (or a small canvas object API) would
+  remove the sharpest footgun in 2D-buffer patterns. Bilinear sampling
+  in `canvasGet` would upgrade every canvas pattern's look on larger
+  maps for free.
 
 ## Language
 
@@ -73,6 +93,16 @@ and the autocomplete/docs pipeline, and can't break existing code.
   patterns are reproducible across Luxel devices (for synced installations).
 - **Frame-rate / time-scale controls in-pattern** [S] ★ — expose
   `setFrameRate`, `timeScale` for slow-mo/debug.
+- **External event injection** [M] ★★★ — the entire RGB-keyboard
+  "keypress-reactive" genre (QMK splash/nexus/heatmap, iCUE type
+  lighting) is patterns driven by *events*. Trigger controls emulate one
+  button today; a small engine-side event queue fed over the
+  websocket/HTTP API — `eventCount()`, `readEvent(out)` filling
+  `[type, x, y, value]` — would let keyboards, MQTT/HA, and sensors
+  drive patterns generically. The Typing Heatmap and Crosshair Pulse
+  examples currently synthesize phantom events and are written to swap
+  to real ones when this lands. Pairs naturally with the M4 integration
+  milestone (an MQTT topic → event is one mapping away).
 
 ## Peripherals & audio (M5 territory, high wow-factor)
 
