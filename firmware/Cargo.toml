@@ -7,7 +7,7 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [dependencies]
-esp-hal = { version = "1.1.1", features = ["unstable"] }
+esp-hal = { version = "1.1.0", features = ["unstable"] }
 esp-alloc = "0.10"
 esp-println = { version = "0.17", features = ["log-04"] }
 esp-backtrace = { version = "0.19", features = ["panic-handler", "println"] }
@@ -64,3 +64,19 @@ lto = "fat"
 codegen-units = 1
 
 [workspace]
+
+# Pin the esp-hal stack to git main: esp-radio 1.0.0-beta.0 (crates.io)
+# crashes on classic ESP32 in the PHY calibration path (wifi_track_pll_cap /
+# pm_on_beacon_rx null-ish calls on first TX burst); the fixes landed after
+# the release ("Re-enable phy-disable/enable (ESP32/ESP32-S2)" #5774 and
+# "pair combo-module PHY init with Wi-Fi RX toggle" #5776, both June 2026).
+# All crates must move together — same repo, same rev.
+[patch.crates-io]
+esp-hal = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+esp-radio = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+esp-rtos = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+esp-alloc = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+esp-println = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+esp-backtrace = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+esp-storage = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }

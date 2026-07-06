@@ -119,7 +119,13 @@
               cargoDeps = pkgs.symlinkJoin {
                 name = "cargo-vendor-dir";
                 paths = [
-                  (pkgs.rustPlatform.importCargoLock { lockFile = ./firmware/Cargo.lock; })
+                  (pkgs.rustPlatform.importCargoLock {
+                    lockFile = ./firmware/Cargo.lock;
+                    # the esp-hal stack is pinned to a git rev (see
+                    # firmware/Cargo.toml [patch.crates-io]); locked git deps
+                    # fetch reproducibly without per-crate hashes
+                    allowBuiltinFetchGit = true;
+                  })
                 ] ++ lib.optional buildStd
                   (pkgs.rustPlatform.importCargoLock { lockFile = ./firmware/rust-std.Cargo.lock; });
               };
