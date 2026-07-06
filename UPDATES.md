@@ -1,5 +1,25 @@
 # Update log
 
+## 2026-07-06 afternoon — pattern library verified on hardware (v0.1.7) ✅
+
+You serial-flashed v0.1.6 (new factory-less table). Boot was textbook:
+`Erasing storage (Data(Spiffs))…`, table shows `storage @ 0x210000`,
+`booted from: ota_0`, `patterns: 0 stored`, flash creds + assets both
+survived. Then full pattern CRUD verified on the real device:
+
+- list/save/get/activate/delete all round-trip through flash; activate
+  drives the pixels; missing-delete → "no such pattern".
+- **Found + fixed a bug in testing (v0.1.7):** sequential-storage's
+  `fetch_all_items` returns superseded item versions after an upsert, so
+  the list showed a duplicate id — now deduped by key (`fetch_item` already
+  returns the latest for reads).
+- **Persistence:** OTA'd both slot directions on the factory-less table
+  (ota_0↔ota_1, clean) and confirmed saved patterns survive the reboot —
+  serial `patterns: 2 stored`, NEXT_SEQ correctly reseeded from stored ids.
+
+Left two curated patterns in the device library ("simplex aurora", "beat
+pulse", both using the new builtins) with aurora running. **Task #9 done.**
+
 ## 2026-07-06 midday — firmware pattern storage (v0.1.6); dropped factory; stack guardrails
 
 Working with you awake. Two design calls you made, both shipped:
