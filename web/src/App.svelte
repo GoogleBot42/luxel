@@ -53,7 +53,31 @@
   let devicePreviewBusy = false;
   let lastDevicePreview = 0;
   let lastDeviceStatus = 0;
-  let pollMs = 0; // measured preview request latency
+  let pollMs = 0; // measured preview request latency (HTTP fallback only)
+  let deviceWs: WebSocket | null = null;
+  let wsLive = false; // push socket delivering — HTTP polling stands down
+
+  function openDeviceSocket(): void {
+    if (!device) return;
+    const session = device;
+    deviceWs = session.openSocket({
+      onPixels: (px) => {
+        wsLive = true;
+        if (running && px.length >= pixelCount() * 3) preview?.draw(px);
+      },
+      onStatus: (st) => {
+        fps = st.fps;
+        runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
+      },
+      onVars: (v) => (vars = v),
+      onReadouts: (r) => (readouts = r),
+      onControls: (c) => (controls = c),
+      onClose: () => {
+        wsLive = false;
+        deviceWs = null; // deviceTick's HTTP polling takes back over
+      },
+    });
+  }
 
   const pixelCount = () => (layout.kind === "strip" ? layout.pixels : layout.w * layout.h);
 
@@ -73,6 +97,7 @@
       runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
       fps = st.fps;
       preview?.clear();
+      openDeviceSocket();
     } catch (e) {
       device = null;
       deviceError = `cannot reach device: ${String(e)}`;
@@ -80,6 +105,9 @@
   }
 
   function disconnectDevice(): void {
+    deviceWs?.close();
+    deviceWs = null;
+    wsLive = false;
     device = null;
     deviceError = "";
     recompile();
@@ -326,6 +354,7 @@
 
   async function deviceTick(t: number): Promise<void> {
     if (!device) return;
+    if (wsLive) return; // push socket is delivering everything
     if (t - lastDeviceStatus > 1000) {
       lastDeviceStatus = t;
       try {
@@ -503,7 +532,7 @@
 
     <span class="spacer"></span>
     {#if device}
-      <span class="mono dim">{pollMs.toFixed(0)}ms poll</span>
+      <span class="mono dim">{wsLive ? "ws push" : `${pollMs.toFixed(0)}ms poll`}</span>
     {/if}
     <span class="mono dim">{fps.toFixed(0)} fps</span>
   </header>

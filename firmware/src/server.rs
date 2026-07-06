@@ -46,12 +46,12 @@ fn json_response(body: String) -> ApiResponse {
     (CORS, JSON, body)
 }
 
-async fn api_status() -> ApiResponse {
+fn status_json() -> String {
     let fps = FPS.load(Ordering::Relaxed);
     let slot = crate::ota::booted_slot();
     let version = env!("CARGO_PKG_VERSION");
     let heap = esp_alloc::HEAP.free();
-    json_response(match get_vmerr() {
+    match get_vmerr() {
         Some(e) => format!(
             "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":\"{}\"}}",
             fps,
@@ -65,7 +65,57 @@ async fn api_status() -> ApiResponse {
             "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":null}}",
             fps, PIXEL_COUNT, slot, version, heap
         ),
-    })
+    }
+}
+
+async fn api_status() -> ApiResponse {
+    json_response(status_json())
+}
+
+/// Pure-push preview socket: binary frames = RGB pixels (~15 Hz), text
+/// frames = typed JSON — {"type":"status",…} 1 Hz, {"type":"vars",…} and
+/// {"type":"readouts",…} 4 Hz. No frames are read: picoserve's next_frame
+/// is not cancel-safe to select against the ticker, and a departed client
+/// simply errors the next send, which ends the task.
+struct PreviewWs;
+
+impl picoserve::response::ws::WebSocketCallback for PreviewWs {
+    async fn run<R: picoserve::io::Read, W: picoserve::io::Write<Error = R::Error>>(
+        self,
+        _rx: picoserve::response::ws::SocketRx<R>,
+        mut tx: picoserve::response::ws::SocketTx<W>,
+    ) -> Result<(), W::Error> {
+        let mut tick: u32 = 0;
+        loop {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(66)).await;
+            let px = get_pixels();
+            if !px.is_empty() {
+                tx.send_binary(&px).await?;
+            }
+            if tick % 4 == 0 {
+                let vars = snapshot(&VARS_JSON);
+                tx.send_text(&format!("{{\"type\":\"vars\",\"vars\":{}}}", vars)).await?;
+                let ro = snapshot(&READOUTS_JSON);
+                tx.send_text(&format!("{{\"type\":\"readouts\",\"readouts\":{}}}", ro))
+                    .await?;
+            }
+            if tick % 15 == 0 {
+                tx.send_text(&format!("{{\"type\":\"status\",\"status\":{}}}", status_json()))
+                    .await?;
+                let controls = {
+                    let s = snapshot(&CONTROLS_JSON);
+                    if s == "{}" {
+                        String::from("[]")
+                    } else {
+                        s
+                    }
+                };
+                tx.send_text(&format!("{{\"type\":\"controls\",\"controls\":{}}}", controls))
+                    .await?;
+            }
+            tick = tick.wrapping_add(1);
+        }
+    }
 }
 
 /// Streams an app image into the inactive OTA slot. See src/ota.rs. Reboots
@@ -294,6 +344,25 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     return resp.write_to(conn, response_writer).await;
                 }};
             }
+            if route == "/ws" {
+                use picoserve::extract::FromRequest as _;
+                let parts = request.parts;
+                let upgrade = picoserve::response::ws::WebSocketUpgrade::from_request(
+                    state,
+                    parts,
+                    request.body_connection.body(),
+                )
+                .await;
+                let conn = request.body_connection.finalize().await?;
+                return match upgrade {
+                    Ok(u) => u.on_upgrade(PreviewWs).write_to(conn, response_writer).await,
+                    Err(_) => {
+                        (StatusCode::BAD_REQUEST, "expected a websocket upgrade")
+                            .write_to(conn, response_writer)
+                            .await
+                    }
+                };
+            }
             match route {
                 "/" => respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML)),
                 "/api/status" => respond!(api_status().await),
@@ -317,7 +386,8 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
     picoserve::Router::new().nest_service("", Api)
 }
 
-pub const WEB_TASK_POOL_SIZE: usize = 2;
+// 3: one slot can be pinned by the preview websocket
+pub const WEB_TASK_POOL_SIZE: usize = 3;
 
 // keep_connection_alive: without it every preview poll (15/s) pays a full
 // TCP open/close on a chip with a 2-connection pool — the browser reuses

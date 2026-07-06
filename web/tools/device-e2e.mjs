@@ -83,6 +83,8 @@ try {
   );
 
   await sleep(1200);
+  const wsBadge = await page.evaluate(() => document.body.innerText.includes("ws push"));
+  check("preview: websocket push active", wsBadge);
   const lit = await page.$eval(".waterfall", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, 1).data;
     let n = 0;

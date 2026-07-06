@@ -70,6 +70,55 @@ export class DeviceSession {
     return out;
   }
 
+  /** Open the push socket: binary frames = RGB pixels, text frames = typed
+   *  JSON (status/vars/readouts). Returns the socket; callers own closing
+   *  it. Falls back to HTTP polling if it errors. */
+  openSocket(handlers: {
+    onPixels: (px: Uint8Array) => void;
+    onStatus: (st: DeviceStatus) => void;
+    onVars: (vars: Record<string, number | number[]>) => void;
+    onReadouts: (r: Map<string, number>) => void;
+    onControls: (c: Control[]) => void;
+    onClose: () => void;
+  }): WebSocket {
+    const base = this.base === "" ? window.location.origin : this.base;
+    const ws = new WebSocket(base.replace(/^http/, "ws") + "/ws");
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = (e) => {
+      if (typeof e.data === "string") {
+        const msg = JSON.parse(e.data) as {
+          type: string;
+          status?: DeviceStatus;
+          vars?: Record<string, number | number[] | null>;
+          readouts?: Record<string, number | null>;
+          controls?: Control[];
+        };
+        if (msg.type === "status" && msg.status) handlers.onStatus(msg.status);
+        if (msg.type === "controls" && msg.controls) handlers.onControls(msg.controls);
+        if (msg.type === "vars" && msg.vars) {
+          const out: Record<string, number | number[]> = {};
+          for (const [k, v] of Object.entries(msg.vars)) {
+            if (v === null) continue;
+            out[k] = Array.isArray(v) ? v.map((x) => x / RAW) : v / RAW;
+          }
+          handlers.onVars(out);
+        }
+        if (msg.type === "readouts" && msg.readouts) {
+          const m = new Map<string, number>();
+          for (const [k, v] of Object.entries(msg.readouts)) {
+            if (v !== null) m.set(k, v / RAW);
+          }
+          handlers.onReadouts(m);
+        }
+      } else {
+        handlers.onPixels(new Uint8Array(e.data as ArrayBuffer));
+      }
+    };
+    ws.onclose = handlers.onClose;
+    ws.onerror = () => ws.close();
+    return ws;
+  }
+
   /** Current showNumber/gauge display values. */
   async readouts(): Promise<Map<string, number>> {
     const raw = (await (await fetch(this.url("/api/readouts"))).json()) as Record<

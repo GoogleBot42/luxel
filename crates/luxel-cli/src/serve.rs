@@ -133,6 +133,78 @@ fn push(state: &State, msg: Msg) {
     state.inbox.lock().unwrap().push(msg);
 }
 
+fn status_json(state: &State) -> String {
+    let fps = state.fps.load(Ordering::Relaxed);
+    let vmerr = match state.vmerr.lock().unwrap().as_deref() {
+        Some(e) => format!("\"{}\"", json_escape(e)),
+        None => String::from("null"),
+    };
+    format!(
+        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":0,\"vmerr\":{}}}",
+        fps,
+        state.pixel_count,
+        env!("CARGO_PKG_VERSION"),
+        vmerr
+    )
+}
+
+/// Mirror of the firmware's PreviewWs: binary = pixels ~15 Hz, text = typed
+/// JSON (vars/readouts 4 Hz, status 1 Hz). Push-only; a closed client
+/// errors the next write and ends the thread.
+fn ws_push_loop(stream: Box<dyn tiny_http::ReadWrite + Send>, state: Arc<State>) {
+    let mut ws = tungstenite::WebSocket::from_raw_socket(
+        stream,
+        tungstenite::protocol::Role::Server,
+        None,
+    );
+    let mut tick: u32 = 0;
+    loop {
+        std::thread::sleep(Duration::from_millis(66));
+        let px = state.pixels.lock().unwrap().clone();
+        if !px.is_empty() && ws.send(tungstenite::Message::Binary(px)).is_err() {
+            return;
+        }
+        if tick % 4 == 0 {
+            let vars = state.vars_json.lock().unwrap().clone();
+            let ro = state.readouts_json.lock().unwrap().clone();
+            if ws
+                .send(tungstenite::Message::Text(format!(
+                    "{{\"type\":\"vars\",\"vars\":{}}}",
+                    vars
+                )))
+                .is_err()
+                || ws
+                    .send(tungstenite::Message::Text(format!(
+                        "{{\"type\":\"readouts\",\"readouts\":{}}}",
+                        ro
+                    )))
+                    .is_err()
+            {
+                return;
+            }
+        }
+        if tick % 15 == 0 {
+            let controls = state.controls_json.lock().unwrap().clone();
+            if ws
+                .send(tungstenite::Message::Text(format!(
+                    "{{\"type\":\"status\",\"status\":{}}}",
+                    status_json(&state)
+                )))
+                .is_err()
+                || ws
+                    .send(tungstenite::Message::Text(format!(
+                        "{{\"type\":\"controls\",\"controls\":{}}}",
+                        controls
+                    )))
+                    .is_err()
+            {
+                return;
+            }
+        }
+        tick = tick.wrapping_add(1);
+    }
+}
+
 pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut pixels: u32 = 300;
     let mut port: u16 = 8720;
@@ -187,17 +259,36 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 INDEX_HTML.as_bytes().to_vec(),
             ),
             ("GET", "/api/status") => {
-                let fps = state.fps.load(Ordering::Relaxed);
-                let body = match state.vmerr.lock().unwrap().as_deref() {
-                    Some(e) => format!(
-                        "{{\"fps\":{},\"pixels\":{},\"vmerr\":\"{}\"}}",
-                        fps,
-                        pixels,
-                        json_escape(e)
-                    ),
-                    None => format!("{{\"fps\":{},\"pixels\":{},\"vmerr\":null}}", fps, pixels),
+                respond(req, 200, "application/json", status_json(&state).into_bytes());
+            }
+            ("GET", "/ws") => {
+                let key = req
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("Sec-WebSocket-Key"))
+                    .map(|h| h.value.as_str().to_string());
+                let Some(key) = key else {
+                    respond(req, 400, "text/plain", b"missing Sec-WebSocket-Key".to_vec());
+                    continue;
                 };
-                respond(req, 200, "application/json", body.into_bytes());
+                let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
+                let resp = tiny_http::Response::empty(101)
+                    .with_header(
+                        tiny_http::Header::from_bytes(&b"Upgrade"[..], &b"websocket"[..]).unwrap(),
+                    )
+                    .with_header(
+                        tiny_http::Header::from_bytes(&b"Connection"[..], &b"Upgrade"[..]).unwrap(),
+                    )
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Sec-WebSocket-Accept"[..],
+                            accept.as_bytes(),
+                        )
+                        .unwrap(),
+                    );
+                let stream = req.upgrade("websocket", resp);
+                let st = state.clone();
+                std::thread::spawn(move || ws_push_loop(stream, st));
             }
             ("GET", "/api/pixels") => {
                 let snap = state.pixels.lock().unwrap().clone();

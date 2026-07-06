@@ -83,6 +83,7 @@ $("src").addEventListener("keydown", (e) => {
 
 let statusMisses = 0;
 setInterval(async () => {
+  if (wsLive) return; // status arrives on the socket
   try {
     const s = await (await fetch("/api/status")).json();
     statusMisses = 0;
@@ -95,27 +96,54 @@ setInterval(async () => {
 }, 1000);
 
 // ---- pixel preview (strip + waterfall) ----
+// WebSocket push when available; HTTP polling as fallback.
 const strip = $("strip"), wf = $("waterfall");
 const sctx = strip.getContext("2d"), wctx = wf.getContext("2d");
+let wsLive = false;
+
+function drawFrame(buf) {
+  const n = Math.floor(buf.length / 3);
+  if (n === 0) return;
+  if (strip.width !== n) { strip.width = n; strip.height = 1; wf.width = n; }
+  const row = sctx.createImageData(n, 1);
+  for (let i = 0; i < n; i++) {
+    row.data[i * 4] = buf[i * 3];
+    row.data[i * 4 + 1] = buf[i * 3 + 1];
+    row.data[i * 4 + 2] = buf[i * 3 + 2];
+    row.data[i * 4 + 3] = 255;
+  }
+  sctx.putImageData(row, 0, 0);
+  wctx.drawImage(wf, 0, 0, n, wf.height - 1, 0, 1, n, wf.height - 1);
+  wctx.putImageData(row, 0, 0);
+}
+
+function connectWs() {
+  const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws");
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      const m = JSON.parse(e.data);
+      if (m.type === "status") {
+        $("status").textContent = `${m.status.fps} fps · ${m.status.pixels} px · ws`;
+        $("vmerr").textContent = m.status.vmerr ?? "";
+      }
+    } else {
+      wsLive = true;
+      drawFrame(new Uint8Array(e.data));
+    }
+  };
+  ws.onclose = () => { wsLive = false; setTimeout(connectWs, 3000); };
+  ws.onerror = () => ws.close();
+}
+connectWs();
+
 let previewBusy = false;
 setInterval(async () => {
-  if (previewBusy) return;   // never stack requests on a slow device
+  if (wsLive || previewBusy) return;   // polling is the fallback path only
   previewBusy = true;
   try {
     const buf = new Uint8Array(await (await fetch("/api/pixels")).arrayBuffer());
-    const n = Math.floor(buf.length / 3);
-    if (n === 0) return;
-    if (strip.width !== n) { strip.width = n; strip.height = 1; wf.width = n; }
-    const row = sctx.createImageData(n, 1);
-    for (let i = 0; i < n; i++) {
-      row.data[i * 4] = buf[i * 3];
-      row.data[i * 4 + 1] = buf[i * 3 + 1];
-      row.data[i * 4 + 2] = buf[i * 3 + 2];
-      row.data[i * 4 + 3] = 255;
-    }
-    sctx.putImageData(row, 0, 0);
-    wctx.drawImage(wf, 0, 0, n, wf.height - 1, 0, 1, n, wf.height - 1);
-    wctx.putImageData(row, 0, 0);
+    drawFrame(buf);
   } catch { /* offline; status line already says so */ }
   finally { previewBusy = false; }
 }, 66);
