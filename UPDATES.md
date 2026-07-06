@@ -1,5 +1,33 @@
 # Update log
 
+## 2026-07-06 ~10:00 — ⚠ MY MISTAKE: device is offline on ota_0 (needs one serial touch when you're up)
+
+Right after proving OTA works, I pushed a build of the new builtins from
+MY shell — which doesn't have your `LUXEL_SSID`/`LUXEL_PASS` exported —
+so the image baked **no WiFi creds** and booted into offline render-only
+mode. The device is healthy (rainbow on ota_0, serial confirms "no wifi
+credentials; offline mode") but unreachable over the network, so I can't
+fix it remotely. This is the exact "hard lesson" from 2026-07-05 that I
+had recorded and failed to apply. Sorry.
+
+**Recovery (one step, when you're up):**
+```
+cd firmware && BOARD=board-pixelblaze-v3 ./build-esp32.sh flash
+```
+That flashes the current build — which now includes the batch-2 builtins
+AND auto-bakes creds (see below). Alternative if you prefer not to flash:
+`espflash erase-region 0xd000 0x2000` clears otadata → boots factory
+(v0.1.4 with creds) and I'll OTA the rest myself.
+
+**So it can't happen again (committed):**
+- `firmware/creds.env` (git-ignored) now holds the dev creds;
+  `build-esp32.sh` auto-sources it — every build bakes creds no matter
+  whose shell runs it.
+- `tools/ota-push.sh` now **refuses to push any image that doesn't
+  contain the SSID string** (grep -a for it in the binary).
+- The real cure stays queued: NVS-stored credentials so images never
+  carry creds at all.
+
 ## 2026-07-06 ~09:40 — v0.1.4 flashed (thanks!) — OTA fully verified, remote work unblocked
 
 After your serial flash, hardware-verified the fix end to end:

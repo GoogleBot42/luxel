@@ -19,6 +19,25 @@ if [ -z "$IMAGE" ]; then
   espflash save-image --chip esp32 "$ELF" "$IMAGE"
 fi
 
+# Guard (hard lesson, twice): an image without baked WiFi creds boots
+# offline and is UNREACHABLE for the next OTA — a remote lockout. The SSID
+# is embedded as a plain string, so its absence is detectable. The SSID to
+# expect comes from the env / firmware/creds.env.
+if [ -z "${LUXEL_SSID:-}" ] && [ -f firmware/creds.env ]; then
+  # shellcheck source=/dev/null
+  . firmware/creds.env
+fi
+if [ -n "${LUXEL_SSID:-}" ]; then
+  if ! grep -aqF "$LUXEL_SSID" "$IMAGE"; then
+    echo "REFUSING to push: image does not contain the WiFi SSID — it would boot offline" >&2
+    echo "(rebuild via firmware/build-esp32.sh, which sources firmware/creds.env)" >&2
+    exit 1
+  fi
+else
+  echo "REFUSING to push: LUXEL_SSID unknown (no env, no firmware/creds.env) — cannot verify the image has creds" >&2
+  exit 1
+fi
+
 before=$(curl -sf "http://$HOST/api/status" | tr ',' '\n' | grep '"slot"' || true)
 echo "device: http://$HOST  $before"
 echo "pushing $(stat -c%s "$IMAGE") bytes…"

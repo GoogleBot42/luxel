@@ -8,6 +8,18 @@ cd "$(dirname "$0")"
 
 BOARD="${BOARD:-board-pixelblaze-v3}"
 
+# Dev WiFi creds: auto-source the git-ignored creds.env so every build —
+# whoever runs it — bakes working credentials. An image without creds
+# boots offline and is unreachable for OTA (locked out the device twice
+# now: 2026-07-05 and 2026-07-06). tools/ota-push.sh refuses such images.
+if [ -f creds.env ]; then
+  # shellcheck source=/dev/null
+  . ./creds.env
+fi
+if [ -z "${LUXEL_SSID:-}" ]; then
+  echo "WARNING: LUXEL_SSID unset and no firmware/creds.env — this build will be OFFLINE-ONLY" >&2
+fi
+
 # `log`: attach exactly the way `flash --monitor` does (same espflash
 # monitor engine, default reset handling, ELF symbolication so backtraces
 # are readable), appending to firmware/serial.log for remote reading.
