@@ -22,10 +22,20 @@ and already in the v0.1.5 image + packed assets waiting for the device:
 
 **Morning checklist (after your one serial flash of v0.1.5):** I'll
 detect the device and, automatically: POST /api/wifi (creds → flash,
-lockout-proof forever), push the 431 KB assets archive (new playground +
-gallery, /api/assets, no reboot), live-code a beatSin/simplex pattern to
-verify the new builtins on hardware, and run one OTA round-trip. Nothing
-needed from you beyond the flash command in the note below.
+lockout-proof forever), push the ~432 KB assets archive (new playground +
+gallery + mapper + library UI, /api/assets, no reboot), live-code a
+beatSin/simplex/setGamma pattern to verify the new builtins on hardware,
+and run one OTA round-trip. Nothing needed from you beyond the flash
+command in the note below.
+
+Also shipped since that list (all mirror/playground-verified, waiting on
+the device only for the firmware storage half): **mapper**, **pattern
+library + autosave**, **device pattern CRUD** (save/load/delete patterns
+*on the device* — mirror + playground done, firmware storage queued as
+the one remaining piece), and a real **CORS preflight fix** (cross-origin
+DELETE from the hosted playground to a device by IP). Everything is in
+git; `git log 94e8c52..HEAD` is the full night. Full workspace tests +
+both browser e2e suites are green.
 
 ## 2026-07-06 ~11:30 — overnight progress: builtins batch 2, .epe UI, pattern browser
 
