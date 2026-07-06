@@ -41,8 +41,11 @@ had recorded and failed to apply. Sorry.
 ```
 cd firmware && BOARD=board-pixelblaze-v3 ./build-esp32.sh flash
 ```
-That flashes the current build — which now includes the batch-2 builtins
-AND auto-bakes creds (see below). Alternative if you prefer not to flash:
+That flashes the current build (**v0.1.5**) — which now includes the
+batch-2 builtins, auto-baked creds (see below), AND flash-stored WiFi
+credentials: the moment it's up I'll `POST /api/wifi` once and the creds
+live in the nvs partition forever — after that even a credless image
+joins the network, so tonight's failure mode is structurally dead. Alternative if you prefer not to flash:
 `espflash erase-region 0xd000 0x2000` clears otadata → boots factory
 (v0.1.4 with creds) and I'll OTA the rest myself.
 
