@@ -35,7 +35,13 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
   const pageErrors = [];
-  page.on("dialog", (d) => void d.dismiss()); // clipboard-fallback prompt etc.
+  // dialogs: accept the library save-name prompt and delete confirm;
+  // dismiss anything else (e.g. the clipboard-fallback prompt)
+  page.on("dialog", (d) => {
+    if (d.message().includes("save pattern as")) return void d.accept("e2e saved");
+    if (d.message().includes("delete")) return void d.accept();
+    void d.dismiss();
+  });
   page.on("pageerror", (e) => pageErrors.push(String(e)));
   page.on("console", (m) => {
     if (m.type() === "error") pageErrors.push(m.text());
@@ -387,6 +393,40 @@ try {
   });
   await sleep(500);
   check("back to strip restores waterfall", (await page.$(".waterfall")) !== null);
+
+  // 14. pattern library: save under a name, reload restores the working
+  //     copy (autosave), the saved entry loads from the picker, delete works
+  await page.click('[data-role="save"]');
+  await sleep(400);
+  const savedOpt = await page.$$eval("header select option", (els) =>
+    els.some((o) => o.value === "saved:e2e saved"),
+  );
+  check("save adds a library entry", savedOpt);
+  await sleep(1200); // let the autosave debounce flush
+  // drop the #p= fragment left by the share test — a share hash rightly
+  // outranks the autosave on load, and here we want the autosave path
+  await page.evaluate(() => history.replaceState(null, "", location.pathname));
+  await page.reload({ waitUntil: "networkidle0" });
+  await page.waitForSelector(".cm-content");
+  await sleep(800);
+  const restoredLabel = await page.$eval(
+    "header select",
+    (el) => el.selectedOptions[0]?.textContent ?? "",
+  );
+  check("reload restores the working copy", restoredLabel.trim() === "e2e saved", restoredLabel);
+  // switch away, then load the saved entry back from the picker
+  await page.select("header select", "Rainbow");
+  await sleep(400);
+  await page.select("header select", "saved:e2e saved");
+  await sleep(500);
+  const savedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
+  check("saved entry loads from the picker", savedDoc.includes("hsv"), savedDoc.slice(0, 30));
+  await page.click('[data-role="delete"]');
+  await sleep(400);
+  const goneOpt = await page.$$eval("header select option", (els) =>
+    els.some((o) => o.value === "saved:e2e saved"),
+  );
+  check("delete removes the library entry", !goneOpt);
 
   await page.screenshot({ path: `${shotDir}/e2e-4-final.png` });
 

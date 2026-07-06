@@ -7,6 +7,14 @@
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
   import { EXAMPLES, type Layout } from "./lib/examples";
+  import {
+    deletePattern,
+    listPatterns,
+    loadWorkingCopy,
+    savePattern,
+    saveWorkingCopy,
+    type SavedPattern,
+  } from "./lib/store";
   import { parseControlHints, type ControlHint } from "./lib/hints";
   import {
     Engine,
@@ -272,6 +280,51 @@
     if (f && /\.(epe|json)$/i.test(f.name)) void importEpeFile(f);
   }
 
+  // ---- local pattern library + working-copy autosave ----
+
+  let saved: SavedPattern[] = listPatterns();
+  let saveNote = "";
+  let autosave: ReturnType<typeof setTimeout> | undefined;
+
+  /** Debounced: the working copy survives closed tabs and reloads. */
+  function queueAutosave(): void {
+    clearTimeout(autosave);
+    autosave = setTimeout(() => {
+      saveWorkingCopy({ source, layout, patternName, exampleName });
+    }, 800);
+  }
+  $: if (source || layout) queueAutosave();
+
+  function saveToLibrary(): void {
+    const suggestion = patternName || exampleName || "my pattern";
+    const name = window.prompt("save pattern as:", suggestion)?.trim();
+    if (!name) return;
+    saved = savePattern(name, source);
+    patternName = name;
+    exampleName = "";
+    saveNote = "saved";
+    setTimeout(() => (saveNote = ""), 2000);
+  }
+
+  function loadSaved(name: string): void {
+    const p = saved.find((s) => s.name === name);
+    if (!p) return;
+    patternName = p.name;
+    exampleName = "";
+    importError = "";
+    source = p.source;
+    controlValues = {};
+    void tick().then(recompile);
+  }
+
+  function deleteSaved(): void {
+    if (!patternName || !saved.some((s) => s.name === patternName)) return;
+    if (!window.confirm(`delete "${patternName}" from the library?`)) return;
+    saved = deletePattern(patternName);
+    saveNote = "deleted";
+    setTimeout(() => (saveNote = ""), 2000);
+  }
+
   // ---- mapper (PB-style JS map function → installed 2D/3D map) ----
 
   let mapperSrc = `// Return one [x, y] (or [x, y, z]) per pixel — any units,
@@ -416,8 +469,22 @@ function (pixelCount) {
   }
 
   function onExampleChange(e: Event): void {
-    loadExample((e.target as HTMLSelectElement).value);
+    const v = (e.target as HTMLSelectElement).value;
+    if (v.startsWith("saved:")) {
+      loadSaved(v.slice(6));
+    } else {
+      loadExample(v);
+    }
   }
+
+  /** What the picker shows: an example, a saved pattern, or the ad-hoc
+   *  imported/shared entry. */
+  $: selectValue =
+    exampleName !== ""
+      ? exampleName
+      : saved.some((s) => s.name === patternName)
+        ? "saved:" + patternName
+        : "";
 
   // ---- layout editing ----
 
@@ -657,8 +724,18 @@ function (pixelCount) {
       return;
     }
     // a share link's pattern beats the default example — and suppresses
-    // device auto-connect (the link's intent is "look at this pattern")
+    // device auto-connect (the link's intent is "look at this pattern").
+    // Otherwise restore the autosaved working copy: never lose edits.
     const fromHash = await loadFromHash();
+    if (!fromHash) {
+      const wc = loadWorkingCopy();
+      if (wc) {
+        source = wc.source;
+        layout = wc.layout;
+        patternName = wc.patternName;
+        exampleName = wc.exampleName;
+      }
+    }
     recompile();
     raf = requestAnimationFrame(loop);
     if (fromHash) return;
@@ -697,13 +774,22 @@ function (pixelCount) {
 <div class="shell" role="application" on:drop={onDrop} on:dragover|preventDefault>
   <header>
     <span class="wordmark">luxel <span class="dim">playground</span></span>
-    <select value={exampleName} on:change={onExampleChange}>
-      {#if exampleName === ""}
+    <select value={selectValue} on:change={onExampleChange}>
+      {#if selectValue === ""}
         <option value="">{patternName || "imported"}</option>
       {/if}
-      {#each EXAMPLES as ex (ex.name)}
-        <option value={ex.name}>{ex.name}</option>
-      {/each}
+      <optgroup label="examples">
+        {#each EXAMPLES as ex (ex.name)}
+          <option value={ex.name}>{ex.name}</option>
+        {/each}
+      </optgroup>
+      {#if saved.length > 0}
+        <optgroup label="saved">
+          {#each saved as s (s.name)}
+            <option value={"saved:" + s.name}>{s.name}</option>
+          {/each}
+        </optgroup>
+      {/if}
     </select>
 
     <span class="group">
@@ -742,7 +828,20 @@ function (pixelCount) {
       >
         share
       </button>
+      <button
+        data-role="save"
+        title="save the current pattern to this browser's library"
+        on:click={saveToLibrary}
+      >
+        save
+      </button>
+      {#if saved.some((s) => s.name === patternName && exampleName === "")}
+        <button data-role="delete" title="remove from the library" on:click={deleteSaved}>
+          delete
+        </button>
+      {/if}
       {#if shareNote}<span class="dim" data-role="share-note">{shareNote}</span>{/if}
+      {#if saveNote}<span class="dim" data-role="save-note">{saveNote}</span>{/if}
     </span>
 
     <span class="group">
