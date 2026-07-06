@@ -56,10 +56,23 @@
   let pollMs = 0; // measured preview request latency (HTTP fallback only)
   let deviceWs: WebSocket | null = null;
   let wsLive = false; // push socket delivering — HTTP polling stands down
+  let statusMisses = 0;
+  let wsGraceUntil = 0; // suppress HTTP polls while the handshake runs
 
   function openDeviceSocket(): void {
     if (!device) return;
+    // The device serves 2 connections and the server reaps idle keep-alive
+    // sockets after ~1 s. Quiet the HTTP polls first, wait out the reaper,
+    // THEN dial — otherwise the handshake races our own idle connections.
+    wsGraceUntil = performance.now() + 6000;
     const session = device;
+    setTimeout(() => {
+      if (!device || deviceWs) return;
+      dialDeviceSocket(session);
+    }, 1600);
+  }
+
+  function dialDeviceSocket(session: DeviceSession): void {
     deviceWs = session.openSocket({
       onPixels: (px) => {
         wsLive = true;
@@ -75,6 +88,11 @@
       onClose: () => {
         wsLive = false;
         deviceWs = null; // deviceTick's HTTP polling takes back over
+        // retry: the socket can lose the connection race against asset
+        // loading on the 2-connection device
+        setTimeout(() => {
+          if (device && !deviceWs) openDeviceSocket();
+        }, 3000);
       },
     });
   }
@@ -355,16 +373,19 @@
   async function deviceTick(t: number): Promise<void> {
     if (!device) return;
     if (wsLive) return; // push socket is delivering everything
+    if (performance.now() < wsGraceUntil) return; // ws handshake in flight
     if (t - lastDeviceStatus > 1000) {
       lastDeviceStatus = t;
       try {
         const st = await device.status();
+        statusMisses = 0;
         fps = st.fps;
         runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
         deviceError = "";
         controls = await device.controls(); // tracks pattern swaps
       } catch {
-        deviceError = "device unreachable";
+        // tolerate transient misses — the device serves only 2 connections
+        if (++statusMisses >= 3) deviceError = "device unreachable";
       }
     }
     if (t - lastPoll > 300) {
@@ -437,6 +458,22 @@
     }
     recompile();
     raf = requestAnimationFrame(loop);
+
+    // Served from a device (playground installed in its flash)? Auto-enter
+    // device mode against the same origin. On dev servers /api/status 404s
+    // and we stay local.
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 1500);
+      const r = await fetch("/api/status", { signal: ctl.signal });
+      clearTimeout(t);
+      if (r.ok) {
+        deviceUrl = "";
+        await connectDevice();
+      }
+    } catch {
+      /* not a device */
+    }
   });
 
   onDestroy(() => {

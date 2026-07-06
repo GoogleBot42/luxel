@@ -13,3 +13,5 @@ signal-*.png
 pb-v3-stock.bin
 *-stock.bin
 firmware/serial.log
+web/device-served.png
+web/dist.luxa

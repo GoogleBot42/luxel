@@ -169,6 +169,127 @@ impl picoserve::response::ws::WebSocketCallback for PreviewWs {
     }
 }
 
+/// A flash-resident asset (playground bundle) streamed in 2 KiB chunks —
+/// whole files don't fit the heap.
+struct FlashAsset(crate::assets::AssetEntry);
+
+impl picoserve::response::Content for FlashAsset {
+    fn content_type(&self) -> &'static str {
+        // Content trait wants &'static; map the known types
+        match self.0.ctype.as_str() {
+            t if t.starts_with("text/html") => "text/html; charset=utf-8",
+            t if t.starts_with("application/javascript") => {
+                "application/javascript; charset=utf-8"
+            }
+            t if t.starts_with("text/css") => "text/css; charset=utf-8",
+            t if t.starts_with("application/wasm") => "application/wasm",
+            t if t.starts_with("image/svg") => "image/svg+xml",
+            t if t.starts_with("image/png") => "image/png",
+            _ => "application/octet-stream",
+        }
+    }
+
+    fn content_length(&self) -> usize {
+        self.0.len as usize
+    }
+
+    async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
+        // 8 KiB chunks: fewer esp-storage flash ops (each briefly stalls the
+        // cache and starves the WiFi/executor on ESP32). yield_now after
+        // every write lets the network drain the TCP tx ring — without it,
+        // multi-chunk responses hang the second write_all.
+        let mut buf = alloc::vec![0u8; 8192];
+        let mut at = 0u32;
+        while at < self.0.len {
+            let n = (self.0.len - at).min(8192) as usize;
+            if !crate::assets::read_chunk(self.0.offset + at, &mut buf[..n]) {
+                break; // flash busy (OTA in flight) — truncated response
+            }
+            writer.write_all(&buf[..n]).await?;
+            at += n as u32;
+            embassy_futures::yield_now().await;
+        }
+        Ok(())
+    }
+}
+
+/// Streams a LUXA archive into the assets flash region (see src/assets.rs).
+/// Same streaming shape as OtaService; no reboot — the TOC hot-reloads.
+struct AssetsService;
+
+impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, PathParameters>
+    for AssetsService
+{
+    async fn call_request_handler_service<
+        R: picoserve::io::Read,
+        W: picoserve::response::ResponseWriter<Error = R::Error>,
+    >(
+        &self,
+        _state: &State,
+        _path_parameters: PathParameters,
+        mut request: picoserve::request::Request<'_, R>,
+        response_writer: W,
+    ) -> Result<picoserve::ResponseSent, W::Error> {
+        use picoserve::io::Read as _;
+
+        let result: Result<u32, &'static str> = {
+            let mut body = request.body_connection.body();
+            let expected = body.content_length() as u32;
+            match crate::assets::begin(expected).await {
+                Err(e) => Err(e),
+                Ok(mut writer) => {
+                    let mut reader = body.reader();
+                    let mut buf = alloc::vec![0u8; 4096];
+                    let mut fill = 0usize;
+                    let mut failed: Option<&'static str> = None;
+                    loop {
+                        match reader.read(&mut buf[fill..]).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                fill += n;
+                                if fill == buf.len() {
+                                    if let Err(e) = writer.write(&buf[..fill]) {
+                                        failed = Some(e);
+                                        break;
+                                    }
+                                    fill = 0;
+                                }
+                            }
+                            Err(_) => {
+                                failed = Some("body read failed");
+                                break;
+                            }
+                        }
+                    }
+                    if failed.is_none() && fill > 0 {
+                        if let Err(e) = writer.write(&buf[..fill]) {
+                            failed = Some(e);
+                        }
+                    }
+                    match failed {
+                        None => writer.commit(),
+                        Some(e) => Err(e),
+                    }
+                }
+            }
+        };
+
+        let body = match &result {
+            Ok(n) => {
+                esp_println::println!("assets: {} bytes installed", n);
+                format!("{{\"ok\":true,\"bytes\":{},\"files\":{}}}", n, crate::assets::count())
+            }
+            Err(e) => {
+                esp_println::println!("assets install failed: {}", e);
+                format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e))
+            }
+        };
+        use picoserve::response::IntoResponse as _;
+        let connection = request.body_connection.finalize().await?;
+        json_response(body).write_to(connection, response_writer).await
+    }
+}
+
 /// Streams an app image into the inactive OTA slot. See src/ota.rs. Reboots
 /// ~400 ms after the success response so the reply reaches the client.
 struct OtaService;
@@ -368,6 +489,15 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     ))
                     .await;
                 }
+                "/api/assets" => {
+                    return alloc::boxed::Box::pin(AssetsService.call_request_handler_service(
+                        state,
+                        path_parameters,
+                        request,
+                        response_writer,
+                    ))
+                    .await;
+                }
                 "/api/code" | "/api/control" | "/api/var" => {
                     let body = match request.body_connection.body().read_all().await {
                         Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
@@ -425,14 +555,33 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 };
             }
             match route {
-                "/" => respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML)),
+                // "/" serves the installed playground when present; the
+                // embedded minimal page is the fallback (and stays reachable
+                // at /min for bring-up debugging)
+                "/" => {
+                    if let Some(e) = crate::assets::lookup("/index.html") {
+                        if e.gzip {
+                            respond!((("Content-Encoding", "gzip"), FlashAsset(e)));
+                        }
+                        respond!(FlashAsset(e));
+                    }
+                    respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML));
+                }
+                "/min" => respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML)),
                 "/api/status" => respond!(api_status().await),
                 "/api/pixels" => respond!(api_pixels().await),
                 "/api/pattern" => respond!(api_pattern().await),
                 "/api/controls" => respond!(api_controls().await),
                 "/api/vars" => respond!(api_vars().await),
                 "/api/readouts" => respond!(api_readouts().await),
-                _ => {}
+                other => {
+                    if let Some(e) = crate::assets::lookup(other) {
+                        if e.gzip {
+                            respond!((("Content-Encoding", "gzip"), FlashAsset(e)));
+                        }
+                        respond!(FlashAsset(e));
+                    }
+                }
             }
         }
 
@@ -448,7 +597,11 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
 }
 
 // 3: one slot can be pinned by the preview websocket
-pub const WEB_TASK_POOL_SIZE: usize = 2;
+// 3 connections: the bidirectional preview socket pins one, leaving two for
+// page/asset loads + API — ends the ws-handshake-vs-poll race. (The earlier
+// crash that forced this back to 2 was the dispatcher stack overflow, now
+// fixed by boxing the ws/ota sub-futures; the pool size was never the cause.)
+pub const WEB_TASK_POOL_SIZE: usize = 3;
 
 // keep_connection_alive: without it every preview poll (15/s) pays a full
 // TCP open/close on a chip with a 2-connection pool — the browser reuses

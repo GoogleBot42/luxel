@@ -38,6 +38,7 @@ use esp_radio::wifi::{Config as WifiConfig, ControllerConfig, Interface, WifiCon
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 
+mod assets;
 mod leds;
 mod ota;
 mod server;
@@ -166,6 +167,7 @@ async fn main(spawner: Spawner) -> ! {
     // esp32 radio crashes (serving worked before the OTA commit).
     if option_env!("LUXEL_NO_OTA").is_none() {
         ota::init(esp_storage::FlashStorage::new(p.FLASH));
+    assets::init();
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }

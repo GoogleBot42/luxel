@@ -55,6 +55,12 @@ pub fn booted_slot() -> &'static str {
     BOOTED.lock(|c| *c.borrow())
 }
 
+/// Borrow the flash driver briefly (reads, or writes outside an OTA).
+/// Returns None while an OTA holds the driver.
+pub fn with_flash<T>(f: impl FnOnce(&mut FlashStorage<'static>) -> T) -> Option<T> {
+    FLASH.lock(|c| c.borrow_mut().as_mut().map(f))
+}
+
 pub struct OtaWriter {
     /// Some until commit/drop; Drop returns the driver to `FLASH`.
     flash: Option<FlashStorage<'static>>,
