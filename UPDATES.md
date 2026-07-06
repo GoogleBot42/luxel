@@ -1,5 +1,19 @@
 # Update log
 
+## 2026-07-06 ~07:45 — extension builtins + idea backlog
+
+Acting on your "extend beyond PB" note: wrote `docs/ideas.md` (a ranked
+backlog across builtins / language / engine / audio / integration /
+playground, with your animated-pattern-browser idea and its
+1D-bar-vs-2D-rectangle preview distinction), and shipped the first
+cheap-but-high-value batch of builtins: `map()`, `sign`, `step`,
+`saturate`, `dist`/`dist3`, and the six `easeIn/Out/InOut` `Quad`/`Cubic`
+curves. All pure math, so no PB pattern is affected (new names PB
+doesn't have). They're in the VM, autocomplete, and language docs, with
+tests. My top-5 picks are in ideas.md — `map`+easing+oklch color helpers
+and array literals are the highest authoring-quality-per-effort; I2S
+mic/FFT and MQTT/HA are the headline features when we want them.
+
 ## 2026-07-06 ~07:15 — const/let landed; caught a real playground bug
 
 `const` and `let` now work (your request). `let` == `var` for now
