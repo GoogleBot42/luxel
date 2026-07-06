@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-07-06 ~11:30 — overnight progress: builtins batch 2, .epe UI, pattern browser
+
+All hardware-independent, all committed, all verified locally (tests +
+real chromium):
+
+- **Builtins batch 2** (`6745a38`): `beat`/`beatSin` (tempo without
+  audio), `hash`/`hash2` (stable per-pixel randomness, pinned lowbias32),
+  `blur1D`/`feedback` (the trails/fire idioms as builtins),
+  `dot`/`dot3`/`angleBetween`, and value-returning color —
+  `hsv2rgb`/`rgb2hsv`/`mixColors(..., out)` with mixColors blending in
+  OKLab. 101 core tests green. Also: array literals turned out to already
+  work — ideas.md refreshed.
+- **.epe import/export in the playground** (`463fa54`): import button +
+  drag-drop anywhere + export download (PB-compatible shape). e2e covers
+  a real chromium download round-trip.
+- **Pattern browser** (`0d87f8f`): your gallery idea — 192 live tiles
+  (built-in examples + every corpus pattern that compiles clean), 1D as
+  bars / render2D as 16×16 rectangles exactly per your spec, viewport-
+  lazy so it stays light. Click a tile to open it. It looks genuinely
+  delightful — see e2e-5-gallery.png in the scratchpad shots.
+
+Web bundle: 194 KB gz JS + 491 KB gallery.json (raw; ~150 KB gz over the
+wire, lazy-fetched only when the browser opens — device flash region has
+plenty of room). The new builtins + wasm + gallery need the next assets
+push / firmware flash to reach the device; your morning serial flash
+picks up ALL of it in one go.
+
 ## 2026-07-06 ~10:00 — ⚠ MY MISTAKE: device is offline on ota_0 (needs one serial touch when you're up)
 
 Right after proving OTA works, I pushed a build of the new builtins from

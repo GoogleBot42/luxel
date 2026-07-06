@@ -101,16 +101,11 @@ and the autocomplete/docs pipeline, and can't break existing code.
 - **Hover docs from the builtin table** [S] ★★ — the autocomplete data
   already has signatures + docs; show them on hover (partially there for
   values).
-- **Pattern browser with animated previews** [M] ★★★ — a gallery that
-  renders each pattern live as a small looping thumbnail (compile + run a
-  few seconds of frames per tile, e.g. an OffscreenCanvas driven by the
-  wasm engine, or a tiny worker pool). Note the **1D vs 2D distinction**
-  (Jeremy): a 1D strip pattern previews as a horizontal bar (or its
-  waterfall), while a 2D/render2D pattern must preview as a *rectangle*
-  (its mapped grid) — the thumbnail shape and the renderer chosen
-  (render / render2D / render3D) depend on the pattern's declared layout.
-  3D previews render to a 2D projection or a representative slice. Pulls
-  from the built-in examples and the scraped community corpus.
+- **Pattern browser with animated previews** [M] ★★★ — DONE (192 live
+  tiles: examples + compiles-clean corpus; 1D → bar, render2D → 16×16
+  rectangle per Jeremy's distinction; viewport-lazy with an engine cap).
+  Remaining niceties: render3D projection tiles, search/filter box,
+  waterfall option for 1D.
 - **Shareable pattern URLs** [S] ★ — encode source in the URL for sharing.
 - **Multi-pane: map editor + preview** [L] ★★ — visual 2D/3D map editing.
 
