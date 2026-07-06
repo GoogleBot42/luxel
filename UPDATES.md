@@ -1,5 +1,35 @@
 # Update log
 
+## 2026-07-06 ~08:15 — ⚡ PLEASE FLASH THIS before bed (v0.1.2, task-16 fix)
+
+You asked what I need flashed to unblock M3 remote work. This is it:
+**`67f2111` fixes the OTA-vs-flash hazard** (erase-on-write interleaved
+with network reads instead of a watchdog-tripping pre-erase burst; plus
+a Timer-yielded asset-serving path). Once this is on the device, I can
+OTA everything else remotely — settings, AP provisioning refinements,
+all the ideas.md work — without needing you.
+
+Flash command (creds already baked, so it just connects):
+```
+cd firmware && BOARD=board-pixelblaze-v3 ./build-esp32.sh flash
+```
+(the runner erases otadata → boots the flashed image; leave the monitor
+running as usual). It's v0.1.2 — `/api/status` will show that once up.
+
+Fails safe as always: if the erase-on-write change has any issue, a bad
+OTA just reboots to the current slot; the flashed build itself connects
+and live-codes regardless (compile-time creds unchanged). **AP-mode
+provisioning still needs your phone to verify** (a device with no creds
+leaves WiFi, so I can't reach it) — I'll build it and OTA it, but final
+sign-off is yours when you're up.
+
+Correction to my earlier note: the build you flashed a few messages ago
+was HEAD *without* a task-16 fix (I'd described it but hadn't written it
+yet). THIS commit is the actual fix.
+
+Also shipped tonight while you read this: OKLCH/OKLab perceptual color
+builtins (top visual-quality item from ideas.md).
+
 ## 2026-07-06 ~07:45 — extension builtins + idea backlog
 
 Acting on your "extend beyond PB" note: wrote `docs/ideas.md` (a ranked
