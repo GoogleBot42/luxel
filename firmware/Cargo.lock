@@ -1276,6 +1276,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "heapless 0.9.3",
  "luxel-core",
  "picoserve",
  "static_cell",

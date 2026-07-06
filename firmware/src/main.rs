@@ -161,9 +161,23 @@ async fn main(spawner: Spawner) -> ! {
 
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+
+    // DHCP hostname (option 12): "luxel-" + the low MAC bytes, so the
+    // device shows up recognizably (and uniquely) in router lease tables.
+    let mac_addr = esp_hal::efuse::base_mac_address();
+    let mac = mac_addr.as_bytes();
+    let mut hostname = heapless::String::<32>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut hostname,
+        format_args!("luxel-{:02x}{:02x}{:02x}", mac[3], mac[4], mac[5]),
+    );
+    println!("hostname: {}", hostname);
+    let mut dhcp = embassy_net::DhcpConfig::default();
+    dhcp.hostname = Some(hostname);
+
     let (stack, runner) = embassy_net::new(
         wifi_interface,
-        embassy_net::Config::dhcpv4(Default::default()),
+        embassy_net::Config::dhcpv4(dhcp),
         mk_static!(
             StackResources<{ server::WEB_TASK_POOL_SIZE + 2 }>,
             StackResources::new()
