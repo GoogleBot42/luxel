@@ -7,6 +7,19 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 BOARD="${BOARD:-board-pixelblaze-v3}"
+
+# `log`: attach to serial (no reset games — works with a bare RX/TX adapter)
+# with symbolication from the current ELF so panics decode, appending
+# everything to firmware/serial.log where it can be tailed/read remotely.
+if [ "${1:-}" = "log" ]; then
+  ELF=target/xtensa-esp32-none-elf/release/luxel-fw
+  [ -f "$ELF" ] || { echo "no $ELF — build first" >&2; exit 1; }
+  echo "logging to $(pwd)/serial.log (Ctrl-C to stop)"
+  exec espflash monitor --non-interactive \
+    --before no-reset-no-sync --after no-reset \
+    --elf "$ELF" 2>&1 | tee -a serial.log
+fi
+
 CMD=build
 if [ "${1:-}" = "flash" ]; then CMD=run; fi
 

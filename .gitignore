@@ -12,3 +12,4 @@ signal-*.png
 # proprietary flash dumps (restore backups) — never redistribute
 pb-v3-stock.bin
 *-stock.bin
+firmware/serial.log
