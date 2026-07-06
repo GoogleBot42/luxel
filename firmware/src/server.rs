@@ -542,6 +542,25 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 }
                 _ => {}
             }
+        } else if method.eq_ignore_ascii_case("OPTIONS") {
+            // CORS preflight: a cross-origin DELETE (or any non-simple
+            // request) sends OPTIONS first. Without these headers the
+            // browser blocks the real call — the hosted playground talking
+            // to a device by IP needs this.
+            use picoserve::response::{IntoResponse as _, StatusCode};
+            let conn = request.body_connection.finalize().await?;
+            return (
+                StatusCode::NO_CONTENT,
+                [
+                    ("Access-Control-Allow-Origin", "*"),
+                    ("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
+                    ("Access-Control-Allow-Headers", "Content-Type"),
+                    ("Access-Control-Max-Age", "86400"),
+                ],
+                "",
+            )
+                .write_to(conn, response_writer)
+                .await;
         } else if method.eq_ignore_ascii_case("GET") {
             macro_rules! respond {
                 ($resp:expr) => {{

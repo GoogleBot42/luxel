@@ -82,15 +82,27 @@ try {
     doc.slice(0, 40),
   );
 
-  await sleep(1200);
-  const wsBadge = await page.evaluate(() => document.body.innerText.includes("ws push"));
+  // the playground deliberately delays the ws dial (~1.6 s grace after
+  // connect) — wait for the badge rather than racing a fixed sleep
+  const wsBadge = await page
+    .waitForFunction(() => document.body.innerText.includes("ws push"), { timeout: 10000 })
+    .then(() => true)
+    .catch(() => false);
   check("preview: websocket push active", wsBadge);
-  const lit = await page.$eval(".waterfall", (c) => {
-    const d = c.getContext("2d").getImageData(0, 0, c.width, 1).data;
-    let n = 0;
-    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 0) n++;
-    return n;
-  });
+  const lit = await page
+    .waitForFunction(
+      () => {
+        const c = document.querySelector(".waterfall");
+        if (!c) return 0;
+        const d = c.getContext("2d").getImageData(0, 0, c.width, 1).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 0) n++;
+        return n > 60 ? n : 0;
+      },
+      { timeout: 8000 },
+    )
+    .then((h) => h.jsonValue())
+    .catch(() => 0);
   check("preview streams from device", lit > 60, `lit=${lit}`);
 
   // live-code push: slider-controlled solid color + exported var
@@ -135,6 +147,63 @@ try {
   // device keeps the previous pattern running
   const still = await fetch(`${DEV}/api/pattern`);
   check("errors: device keeps old pattern", (await still.text()).includes("sliderBlue"));
+
+  // ---- device pattern library (CRUD against the mirror) ----
+  // restore a valid pattern in the editor first (the error test left junk)
+  await setEditor(
+    page,
+    "export function render(index) { hsv(index / pixelCount, 1, 0.4) }",
+  );
+  await sleep(900);
+  page.on("dialog", (d) => {
+    if (d.message().includes("save pattern")) return void d.accept("device kept");
+    if (d.message().includes("delete")) return void d.accept();
+    void d.dismiss();
+  });
+  await page.click('[data-role="save"]');
+  await sleep(900);
+  const devOpt = await page.$$eval("header select option", (els) =>
+    els.some((o) => o.value.startsWith("device:") && o.textContent === "device kept"),
+  );
+  check("library: save-to-device adds an 'on device' entry", devOpt);
+  const apiList = await (await fetch(`${DEV}/api/patterns`)).json();
+  check(
+    "library: device API lists it",
+    apiList.patterns?.some((p) => p.name === "device kept"),
+    JSON.stringify(apiList),
+  );
+  // switch to an example, then load the stored pattern back — it activates
+  await page.select("header select", "Rainbow");
+  await sleep(900);
+  const devValue = await page.$$eval(
+    "header select option",
+    (els) => els.find((o) => o.value.startsWith("device:"))?.value ?? "",
+  );
+  await page.select("header select", devValue);
+  await sleep(1200);
+  const activated = await (await fetch(`${DEV}/api/pattern`)).text();
+  check("library: selecting a device pattern activates it", activated.includes("0.4"));
+  const editorNow = await page.$eval(".cm-content", (el) => el.textContent ?? "");
+  check("library: editor shows the stored source", editorNow.includes("0.4"));
+  // delete it from the device
+  const seenReqs = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/patterns") && r.method() === "DELETE") seenReqs.push(r.url());
+  });
+  const delBtn = await page.$('[data-role="delete"]');
+  check("library: delete button present after loading device pattern", delBtn !== null);
+  await delBtn?.click();
+  await sleep(900);
+  check("library: DELETE request was sent", seenReqs.length > 0, seenReqs.join(","));
+  const apiAfter = await (await fetch(`${DEV}/api/patterns`)).json();
+  const note = await page
+    .$eval('[data-role="save-note"]', (el) => el.textContent ?? "")
+    .catch(() => "(no note)");
+  check(
+    "library: delete removes it on the device",
+    (apiAfter.patterns ?? []).length === 0,
+    `note=${note} api=${JSON.stringify(apiAfter)}`,
+  );
 
   // disconnect returns to the local wasm engine
   await page.$$eval("header button", (btns) => {

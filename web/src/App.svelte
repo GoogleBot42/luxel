@@ -59,6 +59,42 @@
   let device: DeviceSession | null = null;
   let deviceUrl = "";
   let deviceError = "";
+  /** The device's stored pattern library (empty on firmware without CRUD). */
+  let devicePatterns: { id: string; name: string }[] = [];
+  /** Set while the editor holds a device-stored pattern. */
+  let devicePatternId = "";
+
+  async function refreshDevicePatterns(): Promise<void> {
+    if (!device) return;
+    try {
+      devicePatterns = await device.patterns();
+    } catch {
+      devicePatterns = []; // older firmware — no /api/patterns yet
+    }
+  }
+
+  async function loadDevicePattern(id: string): Promise<void> {
+    if (!device) return;
+    try {
+      const p = await device.patternSource(id);
+      const r = await device.activatePattern(id);
+      if (!r.ok) {
+        deviceError = `activate failed: ${r.error}`;
+        return;
+      }
+      devicePatternId = id;
+      patternName = p.name;
+      exampleName = "";
+      source = p.source;
+      hints = parseControlHints(source);
+      compileError = null;
+      setTimeout(async () => {
+        if (device) controls = await device.controls();
+      }, 300);
+    } catch (e) {
+      deviceError = `cannot load pattern: ${String(e)}`;
+    }
+  }
   let devicePreviewBusy = false;
   let lastDevicePreview = 0;
   let lastDeviceStatus = 0;
@@ -129,6 +165,7 @@
       runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
       fps = st.fps;
       preview?.clear();
+      await refreshDevicePatterns();
       openDeviceSocket();
     } catch (e) {
       device = null;
@@ -142,6 +179,8 @@
     wsLive = false;
     device = null;
     deviceError = "";
+    devicePatterns = [];
+    devicePatternId = "";
     recompile();
   }
 
@@ -258,6 +297,7 @@
           ? epe.name
           : file.name.replace(/\.(epe|json)$/i, "");
       exampleName = "";
+      devicePatternId = "";
       source = main;
       controlValues = {};
       await tick();
@@ -297,8 +337,25 @@
 
   function saveToLibrary(): void {
     const suggestion = patternName || exampleName || "my pattern";
-    const name = window.prompt("save pattern as:", suggestion)?.trim();
+    const where = device ? "save pattern on the DEVICE as:" : "save pattern as:";
+    const name = window.prompt(where, suggestion)?.trim();
     if (!name) return;
+    if (device) {
+      void (async () => {
+        const r = await device?.savePattern(name, source);
+        if (r?.ok) {
+          patternName = name;
+          exampleName = "";
+          devicePatternId = r.id ?? "";
+          saveNote = "saved to device";
+          await refreshDevicePatterns();
+        } else {
+          saveNote = r && "error" in r ? `save failed: ${r.error}` : "save failed";
+        }
+        setTimeout(() => (saveNote = ""), 3000);
+      })();
+      return;
+    }
     saved = savePattern(name, source);
     patternName = name;
     exampleName = "";
@@ -318,6 +375,17 @@
   }
 
   function deleteSaved(): void {
+    if (device && devicePatternId) {
+      if (!window.confirm(`delete "${patternName}" from the device?`)) return;
+      void (async () => {
+        await device?.deletePattern(devicePatternId);
+        devicePatternId = "";
+        saveNote = "deleted from device";
+        await refreshDevicePatterns();
+        setTimeout(() => (saveNote = ""), 2000);
+      })();
+      return;
+    }
     if (!patternName || !saved.some((s) => s.name === patternName)) return;
     if (!window.confirm(`delete "${patternName}" from the library?`)) return;
     saved = deletePattern(patternName);
@@ -376,6 +444,7 @@ function (pixelCount) {
     patternName = p.name;
     exampleName = "";
     importError = "";
+    devicePatternId = "";
     if (!device) {
       layout = p.kind === "grid" ? { kind: "grid", w: 16, h: 16 } : { kind: "strip", pixels: 60 };
     }
@@ -470,21 +539,26 @@ function (pixelCount) {
 
   function onExampleChange(e: Event): void {
     const v = (e.target as HTMLSelectElement).value;
+    devicePatternId = "";
     if (v.startsWith("saved:")) {
       loadSaved(v.slice(6));
+    } else if (v.startsWith("device:")) {
+      void loadDevicePattern(v.slice(7));
     } else {
       loadExample(v);
     }
   }
 
-  /** What the picker shows: an example, a saved pattern, or the ad-hoc
-   *  imported/shared entry. */
+  /** What the picker shows: an example, a saved/device pattern, or the
+   *  ad-hoc imported/shared entry. */
   $: selectValue =
-    exampleName !== ""
-      ? exampleName
-      : saved.some((s) => s.name === patternName)
-        ? "saved:" + patternName
-        : "";
+    devicePatternId !== ""
+      ? "device:" + devicePatternId
+      : exampleName !== ""
+        ? exampleName
+        : saved.some((s) => s.name === patternName)
+          ? "saved:" + patternName
+          : "";
 
   // ---- layout editing ----
 
@@ -790,6 +864,13 @@ function (pixelCount) {
           {/each}
         </optgroup>
       {/if}
+      {#if device && devicePatterns.length > 0}
+        <optgroup label="on device">
+          {#each devicePatterns as p (p.id)}
+            <option value={"device:" + p.id}>{p.name}</option>
+          {/each}
+        </optgroup>
+      {/if}
     </select>
 
     <span class="group">
@@ -835,8 +916,12 @@ function (pixelCount) {
       >
         save
       </button>
-      {#if saved.some((s) => s.name === patternName && exampleName === "")}
-        <button data-role="delete" title="remove from the library" on:click={deleteSaved}>
+      {#if devicePatternId !== "" || saved.some((s) => s.name === patternName && exampleName === "")}
+        <button
+          data-role="delete"
+          title={devicePatternId ? "remove from the device" : "remove from the library"}
+          on:click={deleteSaved}
+        >
           delete
         </button>
       {/if}

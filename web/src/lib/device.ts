@@ -166,6 +166,43 @@ export class DeviceSession {
     return ws;
   }
 
+  // ---- device pattern library (see serve.rs / server.rs contract) ----
+
+  async patterns(): Promise<{ id: string; name: string }[]> {
+    const r = (await (await fetch(this.url("/api/patterns"))).json()) as {
+      patterns?: { id: string; name: string }[];
+    };
+    return r.patterns ?? [];
+  }
+
+  async patternSource(id: string): Promise<{ id: string; name: string; source: string }> {
+    return (await (await fetch(this.url(`/api/patterns/${id}`))).json()) as {
+      id: string;
+      name: string;
+      source: string;
+    };
+  }
+
+  /** Save (same name overwrites). Body is "name\nsource" — text, so the
+   *  firmware needs no JSON parser. */
+  async savePattern(name: string, source: string): Promise<RunResult & { id?: string }> {
+    const res = await fetch(this.url("/api/patterns"), {
+      method: "POST",
+      body: `${name}\n${source}`,
+    });
+    return (await res.json()) as RunResult & { id?: string };
+  }
+
+  async deletePattern(id: string): Promise<void> {
+    await fetch(this.url(`/api/patterns/${id}`), { method: "DELETE" });
+  }
+
+  /** Compile + run a stored pattern on the device. */
+  async activatePattern(id: string): Promise<RunResult> {
+    const res = await fetch(this.url(`/api/patterns/${id}/activate`), { method: "POST" });
+    return (await res.json()) as RunResult;
+  }
+
   /** Current showNumber/gauge display values. */
   async readouts(): Promise<Map<string, number>> {
     const raw = (await (await fetch(this.url("/api/readouts"))).json()) as Record<

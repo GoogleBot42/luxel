@@ -29,6 +29,22 @@ enum Msg {
     Var(String, Fx),
 }
 
+/// A stored pattern (the device pattern library; firmware keeps these in
+/// flash, the mirror in memory). API contract — keep in lockstep with
+/// firmware/src/server.rs:
+///   GET    /api/patterns              {"patterns":[{"id","name"},…]}
+///   GET    /api/patterns/<id>         {"id","name","source"}
+///   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
+///                                     (same name = overwrite, id stable)
+///   DELETE /api/patterns/<id>         {"ok":true}
+///   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | code-error shape
+#[derive(Clone)]
+struct StoredPattern {
+    id: String,
+    name: String,
+    source: String,
+}
+
 struct State {
     pixel_count: u32,
     inbox: Mutex<Vec<Msg>>,
@@ -39,6 +55,8 @@ struct State {
     controls_json: Mutex<String>,
     vars_json: Mutex<String>,
     readouts_json: Mutex<String>,
+    library: Mutex<Vec<StoredPattern>>,
+    next_id: AtomicU32,
 }
 
 fn push(state: &State, msg: Msg) {
@@ -185,6 +203,61 @@ fn api_control_or_var(state: &State, body: &str, is_var: bool) -> String {
     String::from("{\"ok\":true}")
 }
 
+// ---- pattern library (see the StoredPattern contract above) ----
+
+fn patterns_list_json(state: &State) -> String {
+    let lib = state.library.lock().unwrap();
+    let items: Vec<String> = lib
+        .iter()
+        .map(|p| format!("{{\"id\":\"{}\",\"name\":\"{}\"}}", p.id, json_escape(&p.name)))
+        .collect();
+    format!("{{\"patterns\":[{}]}}", items.join(","))
+}
+
+fn patterns_save(state: &State, body: &str) -> String {
+    let (name, source) = match body.split_once('\n') {
+        Some((n, s)) if !n.trim().is_empty() && !s.is_empty() => (n.trim().to_string(), s),
+        _ => return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}"),
+    };
+    // compile-check before storing — the library never holds broken source
+    if let Err(d) = Engine::new(source, state.pixel_count, 1) {
+        let (line, col) = line_col(source, d.span.start);
+        return format!(
+            "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
+            line,
+            col,
+            json_escape(&d.message)
+        );
+    }
+    let mut lib = state.library.lock().unwrap();
+    if let Some(p) = lib.iter_mut().find(|p| p.name == name) {
+        p.source = source.to_string();
+        return format!("{{\"ok\":true,\"id\":\"{}\"}}", p.id);
+    }
+    let id = format!("{:08x}", state.next_id.fetch_add(1, Ordering::Relaxed) ^ 0x5eed_1e55);
+    lib.push(StoredPattern {
+        id: id.clone(),
+        name,
+        source: source.to_string(),
+    });
+    format!("{{\"ok\":true,\"id\":\"{}\"}}", id)
+}
+
+fn pattern_by_id(state: &State, id: &str) -> Option<StoredPattern> {
+    state.library.lock().unwrap().iter().find(|p| p.id == id).cloned()
+}
+
+fn patterns_delete(state: &State, id: &str) -> String {
+    let mut lib = state.library.lock().unwrap();
+    let before = lib.len();
+    lib.retain(|p| p.id != id);
+    if lib.len() < before {
+        String::from("{\"ok\":true}")
+    } else {
+        String::from("{\"ok\":false,\"error\":\"no such pattern\"}")
+    }
+}
+
 /// One multiplexed ws request: `"<id> <call>\n<body>"` →
 /// `{"id":<id>,"r":<json>}`. Mirrors firmware handle_ws_call.
 fn handle_ws_call(state: &State, frame: &str) -> String {
@@ -269,6 +342,16 @@ fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8])
         body.len()
     );
     let _ = stream.write_all(body);
+}
+
+/// CORS preflight reply: a cross-origin DELETE (and any non-simple method)
+/// sends an OPTIONS first; without these headers the browser blocks the
+/// real request. GET/POST with a text body are "simple" and skip this.
+fn respond_preflight(stream: &mut TcpStream) {
+    let _ = write!(
+        stream,
+        "HTTP/1.1 204 X\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Max-Age: 86400\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
 }
 
 /// Full-duplex ws loop, single thread: a short read timeout doubles as the
@@ -365,6 +448,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
     let mut stream = stream;
 
     match (req.method.as_str(), req.path.as_str()) {
+        ("OPTIONS", _) => respond_preflight(&mut stream),
         ("GET", "/ws") => {
             if let Some(key) = header(&req, "Sec-WebSocket-Key") {
                 let key = key.to_string();
@@ -418,6 +502,39 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             let r = api_control_or_var(&state, &body, true);
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/patterns") => {
+            respond(&mut stream, 200, "application/json", patterns_list_json(&state).as_bytes())
+        }
+        ("POST", "/api/patterns") => {
+            let body = String::from_utf8_lossy(&req.body).into_owned();
+            let r = patterns_save(&state, &body);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        (m, p) if p.starts_with("/api/patterns/") => {
+            let rest = &p["/api/patterns/".len()..];
+            let (id, action) = match rest.split_once('/') {
+                Some((id, act)) => (id, Some(act)),
+                None => (rest, None),
+            };
+            let r = match (m, action) {
+                ("GET", None) => match pattern_by_id(&state, id) {
+                    Some(p) => format!(
+                        "{{\"id\":\"{}\",\"name\":\"{}\",\"source\":\"{}\"}}",
+                        p.id,
+                        json_escape(&p.name),
+                        json_escape(&p.source)
+                    ),
+                    None => String::from("{\"ok\":false,\"error\":\"no such pattern\"}"),
+                },
+                ("DELETE", None) => patterns_delete(&state, id),
+                ("POST", Some("activate")) => match pattern_by_id(&state, id) {
+                    Some(p) => api_code(&state, p.source),
+                    None => String::from("{\"ok\":false,\"error\":\"no such pattern\"}"),
+                },
+                _ => String::from("{\"ok\":false,\"error\":\"bad patterns route\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         _ => respond(&mut stream, 404, "text/plain", b"not found"),
     }
 }
@@ -450,6 +567,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         controls_json: Mutex::new(String::from("[]")),
         vars_json: Mutex::new(String::from("{}")),
         readouts_json: Mutex::new(String::from("{}")),
+        library: Mutex::new(Vec::new()),
+        next_id: AtomicU32::new(0x1a5e_0001),
     });
 
     {
