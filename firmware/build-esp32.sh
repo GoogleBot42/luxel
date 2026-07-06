@@ -8,16 +8,14 @@ cd "$(dirname "$0")"
 
 BOARD="${BOARD:-board-pixelblaze-v3}"
 
-# `log`: attach to serial (no reset games — works with a bare RX/TX adapter)
-# with symbolication from the current ELF so panics decode, appending
-# everything to firmware/serial.log where it can be tailed/read remotely.
+# `log`: dumb serial capture — no chip probing, no reset games, just bytes.
+# Appends to firmware/serial.log (remotely tail-able); panic backtrace
+# addresses decode with tools/decode-backtrace.sh.
 if [ "${1:-}" = "log" ]; then
-  ELF=target/xtensa-esp32-none-elf/release/luxel-fw
-  [ -f "$ELF" ] || { echo "no $ELF — build first" >&2; exit 1; }
-  echo "logging to $(pwd)/serial.log (Ctrl-C to stop)"
-  exec espflash monitor --non-interactive --chip esp32 \
-    --before no-reset-no-sync --after no-reset \
-    --elf "$ELF" 2>&1 | tee -a serial.log
+  PORT="${PORT:-/dev/ttyUSB0}"
+  echo "logging $PORT @115200 to $(pwd)/serial.log (Ctrl-C to stop)"
+  stty -F "$PORT" 115200 raw -echo -echoe -echok
+  exec cat "$PORT" | tee -a serial.log
 fi
 
 CMD=build
