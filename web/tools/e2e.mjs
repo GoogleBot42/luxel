@@ -211,17 +211,75 @@ try {
   check("layout edit resizes the render", gridW === 24, String(gridW));
 
   // 6. pause stops the fps counter from advancing frames
-  await page.click("header button[title]");
+  await page.click(String.raw`header button[title="pause"], header button[title="resume"]`);
   await sleep(300);
   const litBefore = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
   await sleep(400);
   const litAfter = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
   check("pause freezes the preview", litBefore === litAfter);
-  await page.click("header button[title]");
+  await page.click(String.raw`header button[title="pause"], header button[title="resume"]`);
 
   // 7. vars watcher shows exported values
   const varText = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
   check("var watcher lists zoom", varText.includes("zoom"));
+
+  // 8. .epe import: upload a real corpus export → source swaps in and
+  //    compiles (or at worst reports a compile error — not an import error)
+  const { mkdtempSync, writeFileSync, readFileSync, readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const epeDir = mkdtempSync(join(tmpdir(), "luxel-epe-"));
+  const epePath = join(epeDir, "KITT.epe");
+  const epeMain =
+    "leader = 0\nexport function beforeRender(delta) { leader = time(0.05) }\nexport function render(index) { hsv(0, 1, saturate(1 - abs(index / pixelCount - leader) * 4)) }\n";
+  writeFileSync(
+    epePath,
+    JSON.stringify({ name: "KITT e2e", id: "e2eTestPattern0001", sources: { main: epeMain } }),
+  );
+  const fileInput = await page.$('input[type="file"]');
+  check("import file input present", fileInput !== null);
+  await fileInput.uploadFile(epePath);
+  await sleep(700);
+  const importedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
+  check("epe import replaces the source", importedDoc.includes("beforeRender"));
+  check("epe import compiles (no banners)", (await page.$(".banner.error")) === null);
+  const pickerLabel = await page.$eval("header select", (el) => el.selectedOptions[0]?.textContent ?? "");
+  check("picker shows the imported name", pickerLabel.includes("KITT e2e"), pickerLabel);
+
+  // a broken file surfaces the import banner (and doesn't clobber source)
+  const badPath = join(epeDir, "broken.epe");
+  writeFileSync(badPath, "{ not json");
+  await fileInput.uploadFile(badPath);
+  await sleep(400);
+  const importBanner = await page.$('[data-role="import-error"]');
+  check("broken epe shows import error", importBanner !== null);
+  const docAfterBad = await page.$eval(".cm-content", (el) => el.textContent ?? "");
+  check("broken epe keeps the pattern", docAfterBad.includes("beforeRender"));
+  await page.click('[data-role="import-error"] .dismiss');
+
+  // 9. .epe export: download lands and round-trips sources.main
+  const dlDir = mkdtempSync(join(tmpdir(), "luxel-dl-"));
+  const cdp = await page.createCDPSession();
+  await cdp.send("Browser.setDownloadBehavior", {
+    behavior: "allow",
+    downloadPath: dlDir,
+    eventsEnabled: true,
+  });
+  await page.click('[data-role="epe-export"]');
+  await sleep(800);
+  const dl = readdirSync(dlDir).find((f) => f.endsWith(".epe"));
+  check("export downloads an .epe", dl !== undefined, dl ?? "no file");
+  if (dl) {
+    const round = JSON.parse(readFileSync(join(dlDir, dl), "utf8"));
+    check(
+      "export round-trips source + name",
+      round.name === "KITT e2e" &&
+        typeof round.id === "string" &&
+        round.id.length === 17 &&
+        round.sources?.main === epeMain,
+      dl,
+    );
+  }
 
   await page.screenshot({ path: `${shotDir}/e2e-4-final.png` });
 

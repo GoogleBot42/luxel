@@ -93,9 +93,8 @@ and the autocomplete/docs pipeline, and can't break existing code.
 - **Luxel-to-Luxel sync** [L] ★★★ — timebase sync + leader/follower groups
   so multiple controllers render one coherent installation. `nodeId()` is
   already a builtin anticipating this.
-- **Web-based .epe import/export in the playground** [S] ★★★ — we already
-  parse `.epe`; surfacing import/export in the UI is low effort and directly
-  serves the migration story.
+- **Web-based .epe import/export in the playground** [S] ★★★ — DONE
+  (import button + drag-drop anywhere + export download; e2e-covered).
 
 ## Playground / DX
 

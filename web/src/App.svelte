@@ -209,10 +209,79 @@
     const ex = EXAMPLES.find((x) => x.name === name);
     if (!ex) return;
     exampleName = ex.name;
+    patternName = "";
+    importError = "";
     if (!device) layout = structuredClone(ex.layout); // device layout is fixed
     source = ex.source;
     controlValues = {};
     void tick().then(recompile);
+  }
+
+  // ---- .epe import / export (Pixel Blaze pattern interchange) ----
+  // An .epe is JSON: { name, id, sources: { main } } — we recompile from
+  // sources.main, the only portable part (PB byte/blob keys are its own
+  // compiled artifacts).
+
+  let fileInput: HTMLInputElement;
+  let importError = "";
+  /** Name from an imported .epe; used for the export filename. */
+  let patternName = "";
+
+  async function importEpeFile(file: File): Promise<void> {
+    importError = "";
+    try {
+      const epe = JSON.parse(await file.text()) as {
+        name?: unknown;
+        sources?: { main?: unknown };
+      };
+      const main = epe.sources?.main;
+      if (typeof main !== "string" || main.length === 0) {
+        throw new Error("no sources.main — is this a Pixel Blaze .epe export?");
+      }
+      patternName =
+        typeof epe.name === "string" && epe.name !== ""
+          ? epe.name
+          : file.name.replace(/\.(epe|json)$/i, "");
+      exampleName = "";
+      source = main;
+      controlValues = {};
+      await tick();
+      recompile();
+    } catch (e) {
+      importError = `.epe import failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  function onImportPick(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const f = input.files?.[0];
+    if (f) void importEpeFile(f);
+    input.value = ""; // allow re-importing the same file
+  }
+
+  function onDrop(e: DragEvent): void {
+    e.preventDefault();
+    const f = e.dataTransfer?.files?.[0];
+    if (f && /\.(epe|json)$/i.test(f.name)) void importEpeFile(f);
+  }
+
+  /** PB-style 17-char base-58 id, so exports round-trip into PB tooling. */
+  function epeId(): string {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    let id = "";
+    for (let i = 0; i < 17; i++) id += chars[Math.floor(Math.random() * chars.length)];
+    return id;
+  }
+
+  function exportEpe(): void {
+    const name = patternName || exampleName || "luxel pattern";
+    const epe = { name, id: epeId(), sources: { main: source } };
+    const blob = new Blob([JSON.stringify(epe, null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${name.replace(/[^\w\- ]+/g, "_")}.epe`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   function onExampleChange(e: Event): void {
@@ -490,14 +559,41 @@
   });
 </script>
 
-<div class="shell">
+<div class="shell" role="application" on:drop={onDrop} on:dragover|preventDefault>
   <header>
     <span class="wordmark">luxel <span class="dim">playground</span></span>
     <select value={exampleName} on:change={onExampleChange}>
+      {#if exampleName === ""}
+        <option value="">{patternName || "imported"}</option>
+      {/if}
       {#each EXAMPLES as ex (ex.name)}
         <option value={ex.name}>{ex.name}</option>
       {/each}
     </select>
+
+    <span class="group">
+      <button
+        data-role="epe-import"
+        title="import a Pixel Blaze .epe (or drop one anywhere on the page)"
+        on:click={() => fileInput.click()}
+      >
+        import
+      </button>
+      <button
+        data-role="epe-export"
+        title="download the current pattern as a Pixel Blaze-compatible .epe"
+        on:click={exportEpe}
+      >
+        export
+      </button>
+      <input
+        class="file-input"
+        type="file"
+        accept=".epe,.json,application/json"
+        bind:this={fileInput}
+        on:change={onImportPick}
+      />
+    </span>
 
     <span class="group">
       <select value={layout.kind} on:change={setLayoutKind} disabled={device !== null}>
@@ -597,6 +693,12 @@
       {/if}
       {#if deviceError}
         <div class="banner error">{deviceError}</div>
+      {/if}
+      {#if importError}
+        <div class="banner error" data-role="import-error">
+          {importError}
+          <button class="dismiss" on:click={() => (importError = "")}>×</button>
+        </div>
       {/if}
       {#if compileError}
         <button class="banner error as-button" on:click={jumpToError}>
@@ -807,6 +909,10 @@
   .debug-toggle.active {
     border-color: var(--accent);
     color: var(--accent);
+  }
+
+  .file-input {
+    display: none;
   }
 
   .device-url {
