@@ -150,7 +150,14 @@
                 runHook preInstall
                 mkdir -p $out
                 cp target/${target}/release/luxel-fw $out/luxel-fw.elf
-                espflash save-image --chip ${chip} --merge $out/luxel-fw.elf $out/luxel-fw.bin
+                # merged full-flash image (bootloader + OTA partition table +
+                # app in the factory slot): espflash write-bin 0 …
+                espflash save-image --chip ${chip} --merge \
+                  --partition-table partitions.csv \
+                  $out/luxel-fw.elf $out/luxel-fw.bin
+                # app-only image for OTA: curl --data-binary @… /api/ota
+                espflash save-image --chip ${chip} \
+                  $out/luxel-fw.elf $out/luxel-fw-ota.bin
                 runHook postInstall
               '';
 

@@ -54,6 +54,33 @@ WiFi credentials bake in at build time until NVS provisioning lands (M3):
 `LUXEL_SSID=net LUXEL_PASS=secret cargo build …`. Without them (or with
 empty values) the firmware runs offline (render-only).
 
+## OTA updates
+
+The partition table (firmware/partitions.csv) has factory + ota_0 + ota_1
+app slots (1 MB each). The serially-flashed factory image is a permanent
+fallback: OTA writes alternate between ota_0/ota_1 and never touch it. The
+bootloader validates images before jumping, so a corrupt upload falls back
+to the currently working slot; if both OTA slots are ever bad, it boots
+factory. Serial recovery always works regardless.
+
+```sh
+# push the current devshell Xtensa build:
+firmware/build-esp32.sh && tools/ota-push.sh <host>
+# or a nix-built image:
+nix build .#luxel-fw-pixelblaze-v3 && tools/ota-push.sh <host> result/luxel-fw-ota.bin
+```
+
+`POST /api/ota` takes the raw app image (espflash save-image output — the
+package's `luxel-fw-ota.bin`, NOT the merged `luxel-fw.bin`), streams it to
+the inactive slot sector-by-sector (~4 KB peak RAM), activates it, and
+reboots ~400 ms after replying. `/api/status` reports `slot` (which app
+partition is running) and `version` — ota-push.sh uses it to confirm the
+device came back.
+
+Migrating a device that predates the OTA layout requires ONE serial flash
+of the merged image (it rewrites the partition table):
+`espflash write-bin 0 result/luxel-fw.bin` — after that, everything is OTA.
+
 ## Board: Pixelblaze v3 Standard (preferred dev target)
 
 Jeremy has two identical v3s: one stays the untouched compatibility oracle,

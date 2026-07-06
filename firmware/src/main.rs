@@ -39,6 +39,7 @@ use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 
 mod leds;
+mod ota;
 mod server;
 mod shared;
 
@@ -50,6 +51,12 @@ use shared::{
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
+
+/// Signalled by the OTA handler once the success response is on the wire.
+pub static REBOOT: embassy_sync::signal::Signal<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    (),
+> = embassy_sync::signal::Signal::new();
 
 // ---- board configuration (see docs/firmware.md for the full tables) ----
 // board-c3-devkit (default): bare C3 devkit — CLOCK → GPIO6, DATA → GPIO7.
@@ -132,6 +139,8 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "board-pixelblaze-v3")]
     let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
 
+    ota::init(esp_storage::FlashStorage::new(p.FLASH));
+    spawner.spawn(reboot_task().unwrap());
     spawner.spawn(render_task(spi).unwrap());
 
     // Treat empty strings like unset — `LUXEL_SSID='' …` shouldn't try to
@@ -304,6 +313,16 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             embassy_futures::yield_now().await;
         }
     }
+}
+
+/// Waits for the OTA handler's signal, gives the TCP stack a moment to
+/// flush the response, then resets into the freshly activated slot.
+#[embassy_executor::task]
+async fn reboot_task() -> ! {
+    REBOOT.wait().await;
+    println!("rebooting into new firmware…");
+    Timer::after(Duration::from_millis(400)).await;
+    esp_hal::system::software_reset()
 }
 
 #[embassy_executor::task]

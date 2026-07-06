@@ -27,7 +27,7 @@ use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::json_escape;
-use picoserve::routing::{get, get_service, post};
+use picoserve::routing::{get, get_service, post, post_service};
 
 use crate::shared::{
     get_pattern_src, get_pixels, get_vmerr, snapshot, Msg, CONTROLS_JSON, FPS, MSG_QUEUE,
@@ -48,15 +48,105 @@ fn json_response(body: String) -> ApiResponse {
 
 async fn api_status() -> ApiResponse {
     let fps = FPS.load(Ordering::Relaxed);
+    let slot = crate::ota::booted_slot();
+    let version = env!("CARGO_PKG_VERSION");
     json_response(match get_vmerr() {
         Some(e) => format!(
-            "{{\"fps\":{},\"pixels\":{},\"vmerr\":\"{}\"}}",
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"vmerr\":\"{}\"}}",
             fps,
             PIXEL_COUNT,
+            slot,
+            version,
             json_escape(&e)
         ),
-        None => format!("{{\"fps\":{},\"pixels\":{},\"vmerr\":null}}", fps, PIXEL_COUNT),
+        None => format!(
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"vmerr\":null}}",
+            fps, PIXEL_COUNT, slot, version
+        ),
     })
+}
+
+/// Streams an app image into the inactive OTA slot. See src/ota.rs. Reboots
+/// ~400 ms after the success response so the reply reaches the client.
+struct OtaService;
+
+impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, PathParameters>
+    for OtaService
+{
+    async fn call_request_handler_service<
+        R: picoserve::io::Read,
+        W: picoserve::response::ResponseWriter<Error = R::Error>,
+    >(
+        &self,
+        _state: &State,
+        _path_parameters: PathParameters,
+        mut request: picoserve::request::Request<'_, R>,
+        response_writer: W,
+    ) -> Result<picoserve::ResponseSent, W::Error> {
+        use picoserve::io::Read as _;
+
+        let result: Result<u32, &'static str> = {
+            let mut reader = request.body_connection.body().reader();
+            match crate::ota::begin() {
+                Err(e) => Err(e),
+                Ok(mut writer) => {
+                    // sector-sized chunks: FlashStorage handles erase, and
+                    // 4 KiB keeps peak RAM small
+                    let mut buf = alloc::vec![0u8; 4096];
+                    let mut fill = 0usize;
+                    let mut failed: Option<&'static str> = None;
+                    loop {
+                        match reader.read(&mut buf[fill..]).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                fill += n;
+                                if fill == buf.len() {
+                                    if let Err(e) = writer.write(&buf[..fill]) {
+                                        failed = Some(e);
+                                        break;
+                                    }
+                                    fill = 0;
+                                }
+                            }
+                            Err(_) => {
+                                failed = Some("body read failed");
+                                break;
+                            }
+                        }
+                    }
+                    if failed.is_none() && fill > 0 {
+                        if let Err(e) = writer.write(&buf[..fill]) {
+                            failed = Some(e);
+                        }
+                    }
+                    match failed {
+                        None => writer.commit(),
+                        Some(e) => Err(e),
+                    }
+                }
+            }
+        };
+
+        let body = match &result {
+            Ok(n) => {
+                esp_println::println!("ota: {} bytes written, activating + rebooting", n);
+                format!("{{\"ok\":true,\"bytes\":{}}}", n)
+            }
+            Err(e) => {
+                esp_println::println!("ota failed: {}", e);
+                format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e))
+            }
+        };
+        use picoserve::response::IntoResponse as _;
+        let connection = request.body_connection.finalize().await?;
+        let sent = json_response(body)
+            .write_to(connection, response_writer)
+            .await?;
+        if result.is_ok() {
+            crate::REBOOT.signal(());
+        }
+        Ok(sent)
+    }
 }
 
 /// Last rendered frame as raw RGB bytes (3 per pixel) for the preview.
@@ -138,6 +228,7 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
         .route("/api/code", post(api_code))
         .route("/api/control", post(api_control))
         .route("/api/var", post(api_var))
+        .route("/api/ota", post_service(OtaService))
 }
 
 pub const WEB_TASK_POOL_SIZE: usize = 2;
