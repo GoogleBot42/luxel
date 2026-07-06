@@ -1,5 +1,34 @@
 # Update log
 
+## 2026-07-06 late — chunked patterns: larger than one flash page (v0.1.10) ✅
+
+You asked for chunking so patterns aren't capped at one 4 KB flash page.
+Done and hardware-verified:
+
+- A pattern's source now splits across up to 4 chunk items (~3.8 KB each,
+  ~15 KB total — 4x the old limit, and the practical ceiling since the 16 KB
+  HTTP buffer bounds a POST there anyway). Each pattern also has a small meta
+  item (name + chunk count + generation).
+- **Atomic updates via generation flip:** an update writes new chunks to the
+  *other* generation, then rewrites the meta (the single-item commit point) —
+  a power loss before that leaves the old version fully intact. A **RAM
+  index** (built at boot) keeps list/lookup off the flash.
+- **Format-version marker:** boot wipes `storage` if the on-flash layout
+  isn't the current one, so the incompatible pre-chunking items auto-migrate
+  (saw `format 0 != 2, wiping storage` on the upgrade boot).
+
+**Two bugs caught in hardware testing, both fixed:**
+- A GET of a >4 KB pattern OOM'd (`allocation of 21880 bytes failed`): the
+  old `format!(json_escape(..))` path built an ~11 KB intermediate plus a
+  doubling result buffer → a ~22 KB contiguous request that fragmentation
+  couldn't satisfy. Now escapes into one pre-sized string; `read_source`
+  pre-sizes too.
+
+Verified on hardware: byte-exact round-trip of 2-, 3-, and 4-chunk patterns
+(7.7 / 10.8 / 15.1 KB, md5-matched), upsert returns the latest, small +
+large patterns coexist, persistence across reboot. Larger-than-15 KB
+patterns stay in the browser library (source stays there regardless).
+
 ## 2026-07-06 afternoon — pattern library verified on hardware (v0.1.7) ✅
 
 You serial-flashed v0.1.6 (new factory-less table). Boot was textbook:

@@ -5,40 +5,50 @@
 //! # Storage: `sequential-storage` over the `storage` partition
 //!
 //! An established, power-loss-safe, wear-leveled key→value store over NOR
-//! flash (PLAN.md's storage model) rather than a hand-rolled blob. Each
-//! pattern is ONE map item: key = the u32 id, value = `[name_len:u8][name]
-//! [source]`. A store/remove is atomic at the item level, so a power loss
-//! mid-save loses at most the one in-flight pattern, never the library.
-//!
-//! The `storage` partition (0x210000, 1 MB) was freed by dropping factory
+//! flash (PLAN.md's storage model) rather than a hand-rolled blob. The
+//! `storage` partition (0x210000, 1 MB) was freed by dropping factory
 //! (partitions.csv). We resolve it from the *live* partition table at boot
 //! and disable the store if it is absent — so this firmware is safe even on
 //! the old table, where 0x210000 is still the live ota_1 app slot.
 //!
-//! ## One-page item limit
+//! # Chunked patterns (larger than one flash page)
 //!
-//! sequential-storage items must fit a single flash page (erase sector = 4
-//! KiB here → ~4 KB usable), so a single pattern's source is capped near 3.5
-//! KB ([MAX_SOURCE]). That covers the great majority of patterns; larger
-//! ones stay in the browser library. (Chunking across keys could lift this
-//! later if needed.)
+//! A sequential-storage item must fit one flash page (~4 KB), so a pattern's
+//! source is split across up to [MC] chunk items of [CHUNK] bytes. Each
+//! pattern has a small monotonic **seq** (its API id is `seq ^ ID_MASK`,
+//! mirroring serve.rs). Keys, all u32:
+//!   - meta  key = `seq`                      (bit 31 clear)
+//!   - chunk key = `CHUNK_FLAG | seq*2*MC + gen*MC + c`   (bit 31 set)
+//! The meta value is `[gen][count][name_len][name]`; the source lives in
+//! `count` chunk items under the current generation.
 //!
-//! ## Flash access
+//! **Atomic updates via generation flip.** An update writes the new chunks
+//! to the *other* generation, then rewrites the meta (which selects the
+//! generation) — a single item store that is the atomic commit point. A
+//! power loss before the meta write leaves the old generation fully intact
+//! (its chunks were never touched), so the pattern reads as its previous
+//! version. After commit we best-effort remove the old generation's chunks.
 //!
-//! sequential-storage is async; esp-storage's `FlashStorage` is blocking, so
-//! we wrap it in `BlockingAsync` and drive each op to completion with
-//! `block_on` — the adapter never truly pends, so this just blocks the
-//! executor for the (short) duration like any synchronous flash work. We
-//! *take* the driver out of the OTA module for the transaction (never
-//! holding its critical-section mutex across the erases) and return it via a
-//! Drop guard.
+//! A **RAM index** (seq, gen, count, name per pattern) is built at boot so
+//! list/lookup never scan flash; runtime reads/writes address chunks by key
+//! directly.
+//!
+//! # Flash access
+//!
+//! sequential-storage is async; esp-storage's FlashStorage is blocking (see
+//! the AsyncFlash adapter). Each transaction *leases* the driver out of the
+//! OTA module (never holding its critical-section mutex across erases) and
+//! drives the ops with `block_on` (the adapter never truly pends).
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use core::ops::Range;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_futures::block_on;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 use esp_storage::FlashStorage;
 use luxel_core::jsonview::json_escape;
@@ -89,49 +99,87 @@ impl anf::MultiwriteNorFlash for AsyncFlash<'_> {}
 pub const PAT_START: u32 = 0x21_0000;
 pub const PAT_LEN: u32 = 0x10_0000;
 
-/// Flash range sequential-storage actually manages: the first 256 KiB of
-/// the partition. With NoCache each op scans the managed pages, so we don't
-/// hand it the whole 1 MiB (256 pages) — 64 pages comfortably hold 24
-/// max-size patterns plus wear-leveling headroom, and keep scans cheap. The
-/// rest of the partition stays reserved for future growth.
-const STORE_LEN: u32 = 0x4_0000;
+/// Flash range sequential-storage manages (512 KiB / 128 pages of the 1 MiB
+/// partition). Holds a healthy library with GC headroom; the rest is
+/// reserved. Bigger ranges cost more per-op scan under NoCache.
+const STORE_LEN: u32 = 0x8_0000;
 
 /// Resolved flash offset of the `storage` partition, or 0 if absent (old
 /// table) — every op then refuses / reads empty. Set once in [init].
 static REGION: AtomicU32 = AtomicU32::new(0);
-/// Next id sequence; ids are `seq ^ ID_MASK` (mirrors serve.rs so the two
-/// backends mint interchangeable-looking ids). Seeded at boot from stored ids.
+/// Next pattern seq (monotonic). API id = `seq ^ ID_MASK` (mirrors serve.rs).
 static NEXT_SEQ: AtomicU32 = AtomicU32::new(0);
 const ID_MASK: u32 = 0x5eed_1e55;
 
 const MAX_NAME: usize = 64;
-/// Fits one 4 KiB flash page alongside the name + key + item header.
-const MAX_SOURCE: usize = 3584;
+/// Max chunks per pattern, and bytes per chunk (safely under one 4 KiB page
+/// alongside the u32 key + item header). MC=4 caps source at ~15 KB — the
+/// practical ceiling: the 16 KiB HTTP request buffer bounds a POST there
+/// anyway, and a larger GET response would risk OOM on the fragmented heap.
+/// Still ~4x the old single-page limit; covers virtually all patterns.
+const MC: u8 = 4;
+const CHUNK: usize = 3840;
+const MAX_SOURCE: usize = MC as usize * CHUNK; // ~15 KB
 const MAX_PATTERNS: usize = 24;
-/// Scratch buffer size for sequential-storage: ≥ any single item (≤ one page).
+/// Chunk keys carry bit 31; meta keys (= seq) do not, keeping them disjoint.
+const CHUNK_FLAG: u32 = 0x8000_0000;
+/// sequential-storage scratch: ≥ the largest item (one chunk + key + header).
 const BUF: usize = 4096;
 
-fn id_hex(id: u32) -> String {
-    alloc::format!("{:08x}", id)
+/// On-flash layout version. Bumped when the key/value scheme changes; a
+/// mismatch at boot wipes `storage` (incompatible old data — e.g. the
+/// pre-chunking single-item format — would otherwise be misparsed). Stored
+/// under a reserved meta-space key no real seq can reach.
+const FORMAT_VERSION: u32 = 2;
+const FORMAT_KEY: u32 = 0x7FFF_FFFF;
+
+fn meta_key(seq: u32) -> u32 {
+    seq // seq < CHUNK_FLAG always (bounded by save count)
+}
+fn chunk_key(seq: u32, gen: u8, c: u8) -> u32 {
+    CHUNK_FLAG | (seq * (2 * MC as u32) + gen as u32 * MC as u32 + c as u32)
 }
 
-fn parse_id(id: &str) -> Option<u32> {
-    u32::from_str_radix(id, 16).ok()
+fn id_hex(seq: u32) -> String {
+    alloc::format!("{:08x}", seq ^ ID_MASK)
+}
+fn seq_of(id: &str) -> Option<u32> {
+    u32::from_str_radix(id, 16).ok().map(|v| v ^ ID_MASK)
 }
 
-/// value bytes: `[name_len:u8][name][source]`
-fn deserialize_value(bytes: &[u8]) -> Option<(&str, &str)> {
-    let nlen = *bytes.first()? as usize;
-    if bytes.len() < 1 + nlen {
+/// RAM index entry — one per stored pattern. Sources stay in flash.
+#[derive(Clone)]
+struct Entry {
+    seq: u32,
+    gen: u8,
+    count: u8,
+    name: String,
+}
+
+static INDEX: BlockingMutex<CriticalSectionRawMutex, RefCell<Vec<Entry>>> =
+    BlockingMutex::new(RefCell::new(Vec::new()));
+
+/// meta value: `[gen][count][name_len][name]`
+fn deserialize_meta(bytes: &[u8]) -> Option<(u8, u8, String)> {
+    let gen = *bytes.first()? & 1; // clamp to {0,1} so `1 - gen` can't underflow
+    let count = *bytes.get(1)?;
+    let nlen = *bytes.get(2)? as usize;
+    if bytes.len() < 3 + nlen {
         return None;
     }
-    let name = core::str::from_utf8(&bytes[1..1 + nlen]).ok()?;
-    let source = core::str::from_utf8(&bytes[1 + nlen..]).ok()?;
-    Some((name, source))
+    let name = String::from(core::str::from_utf8(&bytes[3..3 + nlen]).ok()?);
+    Some((gen, count, name))
+}
+fn serialize_meta(gen: u8, count: u8, name: &str) -> Vec<u8> {
+    let mut v = Vec::with_capacity(3 + name.len());
+    v.push(gen);
+    v.push(count);
+    v.push(name.len() as u8);
+    v.extend_from_slice(name.as_bytes());
+    v
 }
 
-/// Leases the flash driver out of the OTA module and returns it on drop
-/// (panic/normal), so a taken driver is never lost.
+/// Leases the flash driver out of the OTA module and returns it on drop.
 struct FlashLease(Option<FlashStorage<'static>>);
 impl Drop for FlashLease {
     fn drop(&mut self) {
@@ -141,13 +189,9 @@ impl Drop for FlashLease {
     }
 }
 
-/// Run a sequential-storage transaction: lease flash, wrap it async, hand
-/// the closure the async flash + the partition range + a scratch buffer,
-/// drive it to completion. `None` if an OTA currently owns the flash.
-///
-/// `$body` is an async block (it `.await`s the map ops). It must copy any
-/// borrowed value out to owned data before returning (the buffer is dropped
-/// with the lease).
+/// Lease flash, wrap it async, run a sequential-storage transaction to
+/// completion. `None` if an OTA owns the flash. `$body` is an async block; it
+/// must copy borrowed values out to owned before returning.
 macro_rules! with_store {
     ($start:expr, |$af:ident, $range:ident, $buf:ident| $body:block) => {{
         let mut lease = FlashLease(crate::ota::take_flash());
@@ -157,47 +201,100 @@ macro_rules! with_store {
                 #[allow(unused_mut)]
                 let mut $af = AsyncFlash(flash);
                 let $range: Range<u32> = $start..($start + STORE_LEN);
-                let mut $buf = alloc::vec![0u8; BUF];
-                let $buf = $buf.as_mut_slice();
+                let mut buf_vec = alloc::vec![0u8; BUF];
+                let $buf: &mut [u8] = buf_vec.as_mut_slice();
                 Some(block_on(async move { $body }))
             }
         }
     }};
 }
 
-/// Collect every stored pattern's (id, name) — sources skipped. Used by list,
-/// upsert-by-name, and the boot scan.
-///
-/// `fetch_all_items` yields *raw* items, including superseded versions from
-/// an upsert (a re-`store_item` of the same key appends; the old copy lives
-/// until GC). It does skip removed keys. So we dedup by key here — the
-/// (id, name) mapping is a stable bijection (a new name always mints a new
-/// id; upsert reuses the id), so keeping the first-seen name per key is
-/// correct. `fetch_item` already returns the latest value for reads.
-async fn collect_index(
+// --- flash helpers (run inside a with_store block) ---
+
+async fn read_meta(
     af: &mut AsyncFlash<'_>,
     range: Range<u32>,
     buf: &mut [u8],
-) -> Vec<(u32, String)> {
+    seq: u32,
+) -> Option<(u8, u8, String)> {
     let mut cache = NoCache::new();
-    let mut out: Vec<(u32, String)> = Vec::new();
-    let Ok(mut iter) = map::fetch_all_items::<u32, _, _>(af, range, &mut cache, buf).await else {
-        return out;
-    };
-    while let Ok(Some((key, val))) = iter.next::<u32, &[u8]>(buf).await {
-        if out.iter().any(|(k, _)| *k == key) {
-            continue; // superseded duplicate
-        }
-        if let Some((name, _)) = deserialize_value(val) {
-            out.push((key, String::from(name)));
-        }
+    match map::fetch_item::<u32, &[u8], _>(af, range, &mut cache, buf, &meta_key(seq)).await {
+        Ok(Some(bytes)) => deserialize_meta(bytes),
+        _ => None,
     }
-    out
 }
 
-/// Resolve the `storage` partition and seed the id sequence. Disables the
-/// store (REGION = 0) if the partition is absent — never aims writes at a
-/// live app slot on the old table.
+async fn read_source(
+    af: &mut AsyncFlash<'_>,
+    range: Range<u32>,
+    buf: &mut [u8],
+    seq: u32,
+    gen: u8,
+    count: u8,
+) -> Option<String> {
+    let mut cache = NoCache::new();
+    // pre-size to avoid Vec doubling (a large pattern's peak alloc matters on
+    // a fragmented heap — see get_json).
+    let mut out: Vec<u8> = Vec::with_capacity(count as usize * CHUNK);
+    for c in 0..count {
+        let key = chunk_key(seq, gen, c);
+        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), &mut cache, buf, &key).await {
+            Ok(Some(bytes)) => out.extend_from_slice(bytes),
+            _ => return None,
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Write all chunks under `gen`, then the meta (the atomic commit).
+async fn write_pattern(
+    af: &mut AsyncFlash<'_>,
+    range: Range<u32>,
+    buf: &mut [u8],
+    seq: u32,
+    gen: u8,
+    count: u8,
+    name: &str,
+    source: &str,
+) -> Result<(), ()> {
+    let mut cache = NoCache::new();
+    let bytes = source.as_bytes();
+    for c in 0..count {
+        let s = c as usize * CHUNK;
+        let e = (s + CHUNK).min(bytes.len());
+        let chunk: &[u8] = &bytes[s..e];
+        let key = chunk_key(seq, gen, c);
+        if map::store_item(af, range.clone(), &mut cache, buf, &key, &chunk).await.is_err() {
+            return Err(());
+        }
+    }
+    let meta = serialize_meta(gen, count, name);
+    let mslice: &[u8] = &meta;
+    if map::store_item(af, range.clone(), &mut cache, buf, &meta_key(seq), &mslice).await.is_err() {
+        return Err(());
+    }
+    Ok(())
+}
+
+/// Best-effort removal of `count` chunks under `gen` (post-commit cleanup, or
+/// full delete when paired with meta removal).
+async fn remove_chunks(
+    af: &mut AsyncFlash<'_>,
+    range: Range<u32>,
+    buf: &mut [u8],
+    seq: u32,
+    gen: u8,
+    count: u8,
+) {
+    let mut cache = NoCache::new();
+    for c in 0..count {
+        let key = chunk_key(seq, gen, c);
+        let _ = map::remove_item::<u32, _>(af, range.clone(), &mut cache, buf, &key).await;
+    }
+}
+
+/// Resolve the `storage` partition and build the RAM index. Disables the
+/// store (REGION = 0) if the partition is absent (old table).
 pub fn init() {
     let start = match crate::ota::data_partition("storage") {
         Some((off, len)) if len >= PAT_LEN => off,
@@ -217,73 +314,139 @@ pub fn init() {
     }
     REGION.store(start, Ordering::Relaxed);
 
-    // seed NEXT_SEQ past the highest stored id
-    let index = with_store!(start, |af, range, buf| { collect_index(&mut af, range, buf).await })
-        .unwrap_or_default();
+    let entries = with_store!(start, |af, range, buf| {
+        // Format check: wipe storage if the on-flash layout isn't ours.
+        let mut cache = NoCache::new();
+        let fmt = match map::fetch_item::<u32, &[u8], _>(
+            &mut af, range.clone(), &mut cache, buf, &FORMAT_KEY,
+        )
+        .await
+        {
+            Ok(Some(b)) if b.len() == 4 => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            _ => 0,
+        };
+        if fmt != FORMAT_VERSION {
+            println!("patterns: format {} != {}, wiping storage", fmt, FORMAT_VERSION);
+            let _ = anf::NorFlash::erase(&mut af, range.start, range.end).await;
+            let ver = FORMAT_VERSION.to_le_bytes();
+            let vslice: &[u8] = &ver;
+            let mut c2 = NoCache::new();
+            let _ = map::store_item(&mut af, range.clone(), &mut c2, buf, &FORMAT_KEY, &vslice).await;
+            return Vec::new();
+        }
+
+        // Discover meta seqs by scanning, then read each authoritative meta.
+        let mut seqs: Vec<u32> = Vec::new();
+        let mut cache = NoCache::new();
+        if let Ok(mut iter) =
+            map::fetch_all_items::<u32, _, _>(&mut af, range.clone(), &mut cache, buf).await
+        {
+            while let Ok(Some((key, _))) = iter.next::<u32, &[u8]>(buf).await {
+                if key & CHUNK_FLAG == 0 && key != FORMAT_KEY && !seqs.contains(&key) {
+                    seqs.push(key); // a meta key
+                }
+            }
+        }
+        let mut out: Vec<Entry> = Vec::new();
+        for seq in seqs {
+            if let Some((gen, count, name)) = read_meta(&mut af, range.clone(), buf, seq).await {
+                out.push(Entry { seq, gen, count, name });
+            }
+        }
+        out
+    })
+    .unwrap_or_default();
+
     let mut next = 0u32;
-    for (id, _) in &index {
-        next = next.max((id ^ ID_MASK).wrapping_add(1));
+    for e in &entries {
+        next = next.max(e.seq.wrapping_add(1));
     }
     NEXT_SEQ.store(next, Ordering::Relaxed);
-    println!("patterns: {} stored (storage @ {:#x})", index.len(), start);
+    println!("patterns: {} stored (storage @ {:#x})", entries.len(), start);
+    INDEX.lock(|c| *c.borrow_mut() = entries);
 }
 
-/// `GET /api/patterns` → `{"patterns":[{"id","name"},…]}`
+/// `GET /api/patterns` → `{"patterns":[{"id","name"},…]}` (from RAM index).
 pub fn list_json() -> String {
-    let start = REGION.load(Ordering::Relaxed);
-    let index = if start == 0 {
-        Vec::new()
-    } else {
-        with_store!(start, |af, range, buf| { collect_index(&mut af, range, buf).await })
-            .unwrap_or_default()
-    };
-    let items: Vec<String> = index
-        .iter()
-        .map(|(id, name)| {
-            alloc::format!("{{\"id\":\"{}\",\"name\":\"{}\"}}", id_hex(*id), json_escape(name))
-        })
-        .collect();
+    let items: Vec<String> = INDEX.lock(|c| {
+        c.borrow()
+            .iter()
+            .map(|e| {
+                alloc::format!("{{\"id\":\"{}\",\"name\":\"{}\"}}", id_hex(e.seq), json_escape(&e.name))
+            })
+            .collect()
+    });
     alloc::format!("{{\"patterns\":[{}]}}", items.join(","))
 }
 
-/// Fetch one pattern's (name, source) from flash by id.
-fn fetch(id: u32) -> Option<(String, String)> {
+/// Look up a pattern's (gen, count, name) in the RAM index by id.
+fn lookup(id: &str) -> Option<(u32, u8, u8, String)> {
+    let seq = seq_of(id)?;
+    INDEX.lock(|c| {
+        c.borrow()
+            .iter()
+            .find(|e| e.seq == seq)
+            .map(|e| (e.seq, e.gen, e.count, e.name.clone()))
+    })
+}
+
+/// Escape a string as JSON *into* an existing buffer — no intermediate
+/// allocation (mirrors luxel_core::jsonview::json_escape's rules).
+fn escape_into(out: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&alloc::format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+}
+
+/// `GET /api/patterns/<id>` → `{"id","name","source"}` | None.
+pub fn get_json(id: &str) -> Option<String> {
+    let (seq, gen, count, name) = lookup(id)?;
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return None;
+    }
+    let source = with_store!(start, |af, range, buf| {
+        read_source(&mut af, range, buf, seq, gen, count).await
+    })
+    .flatten()?;
+    // Build the response in ONE pre-sized allocation, escaping in place. A
+    // large pattern's source made the old `format!(json_escape(..))` path —
+    // an ~11 KB intermediate plus a doubling result buffer — request a ~22 KB
+    // contiguous block and OOM on a fragmented heap.
+    let mut out = String::with_capacity(source.len() + source.len() / 8 + name.len() + 48);
+    out.push_str("{\"id\":\"");
+    out.push_str(id);
+    out.push_str("\",\"name\":\"");
+    escape_into(&mut out, &name);
+    out.push_str("\",\"source\":\"");
+    escape_into(&mut out, &source);
+    out.push_str("\"}");
+    Some(out)
+}
+
+/// Read a stored pattern's source (for activation).
+pub fn source_of(id: &str) -> Option<String> {
+    let (seq, gen, count, _) = lookup(id)?;
     let start = REGION.load(Ordering::Relaxed);
     if start == 0 {
         return None;
     }
     with_store!(start, |af, range, buf| {
-        let mut cache = NoCache::new();
-        match map::fetch_item::<u32, &[u8], _>(&mut af, range, &mut cache, buf, &id).await {
-            Ok(Some(bytes)) => {
-                deserialize_value(bytes).map(|(n, s)| (String::from(n), String::from(s)))
-            }
-            _ => None,
-        }
+        read_source(&mut af, range, buf, seq, gen, count).await
     })
     .flatten()
 }
 
-/// `GET /api/patterns/<id>` → `{"id","name","source"}` | None (→ mirror's
-/// 200 + `{"ok":false,…}` is applied by the caller).
-pub fn get_json(id: &str) -> Option<String> {
-    let key = parse_id(id)?;
-    let (name, source) = fetch(key)?;
-    Some(alloc::format!(
-        "{{\"id\":\"{}\",\"name\":\"{}\",\"source\":\"{}\"}}",
-        id,
-        json_escape(&name),
-        json_escape(&source)
-    ))
-}
-
-/// Read a stored pattern's source (for activation).
-pub fn source_of(id: &str) -> Option<String> {
-    fetch(parse_id(id)?).map(|(_, s)| s)
-}
-
 /// `POST /api/patterns` body `"name\nsource"` → `{"ok":true,"id"}`.
-/// Upserts by name (matches the mirror). Caller compile-checks first.
+/// Upserts by name. Caller compile-checks first.
 pub fn save(name: &str, source: &str) -> String {
     let name = name.trim();
     if name.is_empty() || name.len() > MAX_NAME {
@@ -291,7 +454,7 @@ pub fn save(name: &str, source: &str) -> String {
     }
     if source.is_empty() || source.len() > MAX_SOURCE {
         return alloc::format!(
-            "{{\"ok\":false,\"error\":\"source must be 1..={} bytes (larger patterns stay in the browser library)\"}}",
+            "{{\"ok\":false,\"error\":\"source must be 1..={} bytes\"}}",
             MAX_SOURCE
         );
     }
@@ -302,74 +465,87 @@ pub fn save(name: &str, source: &str) -> String {
         );
     }
 
-    let outcome = with_store!(start, |af, range, buf| {
-        // upsert by name: reuse an existing id, else mint one
-        let index = collect_index(&mut af, range.clone(), buf).await;
-        let existing = index.iter().find(|(_, n)| n == name).map(|(id, _)| *id);
-        if existing.is_none() && index.len() >= MAX_PATTERNS {
-            return Err(String::from("library full"));
-        }
-        // No fetch_add: riscv32imc (esp32c3) lacks atomic RMW. This runs
-        // inside block_on with the flash leased (executor blocked, single
-        // owner), so a plain load/store increment has no race.
-        let id = match existing {
-            Some(id) => id,
-            None => {
-                let seq = NEXT_SEQ.load(Ordering::Relaxed);
-                NEXT_SEQ.store(seq.wrapping_add(1), Ordering::Relaxed);
-                seq ^ ID_MASK
-            }
-        };
-
-        let mut val: Vec<u8> = Vec::with_capacity(1 + name.len() + source.len());
-        val.push(name.len() as u8);
-        val.extend_from_slice(name.as_bytes());
-        val.extend_from_slice(source.as_bytes());
-        let vslice: &[u8] = &val;
-
-        let mut cache = NoCache::new();
-        match map::store_item(&mut af, range, &mut cache, buf, &id, &vslice).await {
-            Ok(()) => Ok(id),
-            Err(_) => Err(String::from("flash write failed")),
+    // Decide seq + generation under the index lock.
+    enum Plan {
+        Update { seq: u32, new_gen: u8, old_gen: u8, old_count: u8 },
+        New { seq: u32 },
+        Full,
+    }
+    let plan = INDEX.lock(|c| {
+        let idx = c.borrow();
+        if let Some(e) = idx.iter().find(|e| e.name == name) {
+            Plan::Update { seq: e.seq, new_gen: 1 - e.gen, old_gen: e.gen, old_count: e.count }
+        } else if idx.len() >= MAX_PATTERNS {
+            Plan::Full
+        } else {
+            Plan::New { seq: NEXT_SEQ.load(Ordering::Relaxed) }
         }
     });
+    let (seq, new_gen, old_gen, old_count, is_new) = match plan {
+        Plan::Full => return String::from("{\"ok\":false,\"error\":\"library full\"}"),
+        Plan::New { seq } => (seq, 0u8, 0u8, 0u8, true),
+        Plan::Update { seq, new_gen, old_gen, old_count } => {
+            (seq, new_gen, old_gen, old_count, false)
+        }
+    };
+    let count = source.len().div_ceil(CHUNK) as u8;
 
-    match outcome {
-        None => String::from("{\"ok\":false,\"error\":\"busy (update in progress)\"}"),
-        Some(Ok(id)) => alloc::format!("{{\"ok\":true,\"id\":\"{}\"}}", id_hex(id)),
-        Some(Err(e)) => alloc::format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)),
+    let committed = with_store!(start, |af, range, buf| {
+        if write_pattern(&mut af, range.clone(), buf, seq, new_gen, count, name, source)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        // commit done — old generation is now unreferenced; reclaim it.
+        remove_chunks(&mut af, range, buf, seq, old_gen, old_count).await;
+        true
+    })
+    .unwrap_or(false);
+
+    if !committed {
+        return String::from("{\"ok\":false,\"error\":\"flash write failed\"}");
     }
+
+    INDEX.lock(|c| {
+        let mut idx = c.borrow_mut();
+        if let Some(e) = idx.iter_mut().find(|e| e.seq == seq) {
+            e.gen = new_gen;
+            e.count = count;
+            e.name = String::from(name);
+        } else {
+            idx.push(Entry { seq, gen: new_gen, count, name: String::from(name) });
+        }
+    });
+    if is_new {
+        NEXT_SEQ.store(seq.wrapping_add(1), Ordering::Relaxed);
+    }
+    alloc::format!("{{\"ok\":true,\"id\":\"{}\"}}", id_hex(seq))
 }
 
 /// `DELETE /api/patterns/<id>` → `{"ok":true}` | `{"ok":false,…}`.
 pub fn delete(id: &str) -> String {
-    let Some(key) = parse_id(id) else {
+    let Some((seq, gen, count, _)) = lookup(id) else {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     };
     let start = REGION.load(Ordering::Relaxed);
     if start == 0 {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     }
-
-    let outcome = with_store!(start, |af, range, buf| {
+    let ok = with_store!(start, |af, range, buf| {
         let mut cache = NoCache::new();
-        // distinguish missing (→ "no such pattern") from present, to match
-        // the mirror — remove_item alone succeeds even on an absent key.
-        match map::fetch_item::<u32, &[u8], _>(&mut af, range.clone(), &mut cache, buf, &key).await {
-            Ok(Some(_)) => {}
-            Ok(None) => return Ok(false),
-            Err(_) => return Err(()),
-        }
-        match map::remove_item::<u32, _>(&mut af, range, &mut cache, buf, &key).await {
-            Ok(()) => Ok(true),
-            Err(_) => Err(()),
-        }
-    });
+        let meta_ok =
+            map::remove_item::<u32, _>(&mut af, range.clone(), &mut cache, buf, &meta_key(seq))
+                .await
+                .is_ok();
+        remove_chunks(&mut af, range, buf, seq, gen, count).await;
+        meta_ok
+    })
+    .unwrap_or(false);
 
-    match outcome {
-        None => String::from("{\"ok\":false,\"error\":\"busy (update in progress)\"}"),
-        Some(Ok(true)) => String::from("{\"ok\":true}"),
-        Some(Ok(false)) => String::from("{\"ok\":false,\"error\":\"no such pattern\"}"),
-        Some(Err(())) => String::from("{\"ok\":false,\"error\":\"flash error\"}"),
+    if !ok {
+        return String::from("{\"ok\":false,\"error\":\"flash error\"}");
     }
+    INDEX.lock(|c| c.borrow_mut().retain(|e| e.seq != seq));
+    String::from("{\"ok\":true}")
 }
