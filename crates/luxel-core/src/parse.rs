@@ -145,16 +145,18 @@ impl<'s> Parser<'s> {
                 })
             }
             Some(Tok::LBrace) => self.block_stmt(),
-            Some(Tok::Var) => {
+            Some(Tok::Var | Tok::Let | Tok::Const) => {
                 let s = self.var_stmt(false, start)?;
                 Ok(s)
             }
             Some(Tok::Export) => {
                 self.bump();
                 match self.peek() {
-                    Some(Tok::Var) => self.var_stmt(true, start),
+                    Some(Tok::Var | Tok::Let | Tok::Const) => self.var_stmt(true, start),
                     Some(Tok::Function) => self.func_stmt(true, start),
-                    _ => Err(self.err_here("expected `var` or `function` after `export`".into())),
+                    _ => Err(self.err_here(
+                        "expected `var`, `let`, `const`, or `function` after `export`".into(),
+                    )),
                 }
             }
             Some(Tok::Function) => self.func_stmt(false, start),
@@ -232,23 +234,43 @@ impl<'s> Parser<'s> {
     }
 
     fn var_stmt(&mut self, export: bool, start: Span) -> Result<Stmt, Diagnostic> {
-        let decls = self.var_decls()?;
+        let (kind, decls) = self.var_decls()?;
         self.terminate()?;
         Ok(Stmt {
-            kind: StmtKind::Var { export, decls },
+            kind: StmtKind::Var {
+                export,
+                kind,
+                decls,
+            },
             span: start.to(self.prev_span),
         })
     }
 
-    /// `var a = 1, b` — shared by var statements and for-loop initializers.
-    fn var_decls(&mut self) -> Result<Vec<VarDecl>, Diagnostic> {
-        self.expect(Tok::Var, "`var`")?;
+    /// `var/let/const a = 1, b` — shared by var statements and for-loop
+    /// initializers. `const` requires an initializer.
+    fn var_decls(&mut self) -> Result<(DeclKind, Vec<VarDecl>), Diagnostic> {
+        let kind = match self.peek() {
+            Some(Tok::Let) => DeclKind::Let,
+            Some(Tok::Const) => DeclKind::Const,
+            _ => DeclKind::Var,
+        };
+        // any of var/let/const opens the declaration
+        match self.peek() {
+            Some(Tok::Var | Tok::Let | Tok::Const) => self.bump(),
+            _ => return Err(self.err_here("expected `var`, `let`, or `const`".into())),
+        };
         let mut decls = Vec::new();
         loop {
             let (name, name_span) = self.ident_name("variable name")?;
             let init = if self.eat(Tok::Assign) {
                 Some(self.assign_expr()?)
             } else {
+                if kind == DeclKind::Const {
+                    return Err(Diagnostic::new(
+                        name_span,
+                        format!("`const {name}` must be initialized"),
+                    ));
+                }
                 None
             };
             decls.push(VarDecl {
@@ -260,7 +282,7 @@ impl<'s> Parser<'s> {
                 break;
             }
         }
-        Ok(decls)
+        Ok((kind, decls))
     }
 
     fn func_stmt(&mut self, export: bool, start: Span) -> Result<Stmt, Diagnostic> {
@@ -326,13 +348,14 @@ impl<'s> Parser<'s> {
 
         let init = if self.eat(Tok::Semi) {
             None
-        } else if self.at(Tok::Var) {
+        } else if self.at(Tok::Var) || self.at(Tok::Let) || self.at(Tok::Const) {
             let var_start = self.span_here();
-            let decls = self.var_decls()?;
+            let (kind, decls) = self.var_decls()?;
             self.expect(Tok::Semi, "`;` after for-loop initializer")?;
             Some(Box::new(Stmt {
                 kind: StmtKind::Var {
                     export: false,
+                    kind,
                     decls,
                 },
                 span: var_start.to(self.prev_span),

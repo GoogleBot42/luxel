@@ -9,6 +9,7 @@
 //! - No closures: a lambda sees only its own params/locals and globals.
 //! - `pixelCount` and the math constants are predefined globals.
 
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -90,6 +91,8 @@ struct Compiler<'s> {
     /// Function names the pattern assigns to — demoted to plain global
     /// variables holding a function value (JS-style mutable bindings).
     demoted: Vec<String>,
+    /// Names declared `const` at the top level (reassignment is an error).
+    const_globals: BTreeSet<String>,
 }
 
 enum Place {
@@ -108,6 +111,7 @@ impl<'s> Compiler<'s> {
             named_fns: Vec::new(),
             exported_fns: Vec::new(),
             demoted: Vec::new(),
+            const_globals: BTreeSet::new(),
         }
     }
 
@@ -186,10 +190,17 @@ impl<'s> Compiler<'s> {
                 let scope = function_scope(params, body);
                 self.scan_stmts(body, &scope, false)
             }
-            StmtKind::Var { export, decls } => {
+            StmtKind::Var {
+                export,
+                kind,
+                decls,
+            } => {
                 for d in decls {
                     if top {
                         self.ensure_global(&d.name, *export, d.span)?;
+                        if *kind == DeclKind::Const {
+                            self.const_globals.insert(d.name.clone());
+                        }
                     }
                     if let Some(init) = &d.init {
                         self.scan_expr(init, locals)?;
@@ -456,11 +467,13 @@ impl<'s> Compiler<'s> {
             StmtKind::Empty => Ok(()),
             // nested named functions were already bound at function entry
             StmtKind::Func { .. } => Ok(()),
-            StmtKind::Var { decls, .. } => {
+            StmtKind::Var { decls, kind, .. } => {
                 for d in decls {
                     if let Some(init) = &d.init {
                         self.emit_expr(ctx, init)?;
-                        self.emit_store(ctx, &d.name, d.span)?;
+                        // a declaration's own store is always allowed; it also
+                        // registers const-ness so later assignments error
+                        self.emit_store_decl(ctx, &d.name, d.span, *kind == DeclKind::Const)?;
                         ctx.push(Insn::Pop);
                     }
                 }
@@ -586,10 +599,55 @@ impl<'s> Compiler<'s> {
     }
 
     /// Emit a store to a named variable (value on stack; leaves it there).
+    /// Rejects reassignment of a `const`.
     fn emit_store(&mut self, ctx: &mut FnCtx, name: &str, span: Span) -> Result<(), Diagnostic> {
         match self.resolve(ctx, name, span)? {
-            Place::Local(i) => ctx.push(Insn::StoreL(i)),
-            Place::Global(i) => ctx.push(Insn::StoreG(i)),
+            Place::Local(i) => {
+                if ctx.const_locals.contains(&i) {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("cannot assign to `{name}` — it is declared const"),
+                    ));
+                }
+                ctx.push(Insn::StoreL(i));
+            }
+            Place::Global(i) => {
+                if self.const_globals.contains(name) {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("cannot assign to `{name}` — it is declared const"),
+                    ));
+                }
+                ctx.push(Insn::StoreG(i));
+            }
+            Place::Func(_) | Place::Builtin(_) => {
+                return Err(Diagnostic::new(span, format!("cannot assign to `{name}`")))
+            }
+        }
+        Ok(())
+    }
+
+    /// Emit the store for a declaration's initializer. Bypasses the const
+    /// check (a const's own init is legal) and, for const, records the
+    /// binding so subsequent assignments are rejected.
+    fn emit_store_decl(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        span: Span,
+        is_const: bool,
+    ) -> Result<(), Diagnostic> {
+        match self.resolve(ctx, name, span)? {
+            Place::Local(i) => {
+                ctx.push(Insn::StoreL(i));
+                if is_const {
+                    ctx.const_locals.insert(i);
+                }
+            }
+            Place::Global(i) => {
+                ctx.push(Insn::StoreG(i));
+                // const globals already recorded during scanning
+            }
             Place::Func(_) | Place::Builtin(_) => {
                 return Err(Diagnostic::new(span, format!("cannot assign to `{name}`")))
             }
@@ -844,6 +902,8 @@ struct FnCtx {
     pos: Vec<(u32, u32)>,
     cur_pos: (u32, u32),
     loops: Vec<LoopFrame>,
+    /// Local slots declared `const` in this function.
+    const_locals: BTreeSet<u8>,
     #[allow(dead_code)]
     is_top: bool,
 }
@@ -862,6 +922,7 @@ impl FnCtx {
             pos: Vec::new(),
             cur_pos: (0, 0),
             loops: Vec::new(),
+            const_locals: BTreeSet::new(),
             is_top,
         }
     }

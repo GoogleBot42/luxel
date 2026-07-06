@@ -55,21 +55,31 @@ try {
   await page.screenshot({ path: `${shotDir}/e2e-1-rainbow.png` });
 
   // 2. typing works (THE bug): click editor, type garbage, expect the text
-  //    to land and a compile-error banner to appear while pixels keep going
+  //    to land and a compile-error banner to appear while pixels keep going.
+  //    `~` is an unterminated token (no bracket auto-close, no completion
+  //    popup to interfere with the later fix).
   await page.click(".cm-content");
   await page.keyboard.press("End");
-  await page.keyboard.type(" zzz(");
-  await sleep(120);
+  await page.keyboard.type(" @@@");
+  await sleep(300);
   const doc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("editor accepts typing", doc.includes("zzz("));
+  check("editor accepts typing", doc.includes("@@@"));
   await page.waitForSelector(".banner.error", { timeout: 3000 }).catch(() => null);
   const banner = await page.$(".banner.error");
   check("compile error banner appears", banner !== null);
+  await page.waitForSelector(".cm-lintRange-error", { timeout: 2000 }).catch(() => null);
   check("error squiggle rendered", (await page.$(".cm-lintRange-error")) !== null);
-  // fix it again by removing what we typed
-  for (let i = 0; i < 5; i++) await page.keyboard.press("Backspace");
-  await sleep(400);
-  check("banner clears after fix", (await page.$(".banner.error")) === null);
+  // fix it by undoing the typed garbage — restores the exact original
+  // 3-line rainbow (the debugger test below needs line 3 = hsv). Robust
+  // against auto-closed brackets / completion state.
+  await page.keyboard.press("Escape"); // dismiss any completion popup
+  await page.keyboard.down("Control");
+  await page.keyboard.press("z");
+  await page.keyboard.press("z");
+  await page.keyboard.up("Control");
+  await sleep(500);
+  const fixedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
+  check("banner clears after fix", (await page.$(".banner.error")) === null && !fixedDoc.includes("@@@"));
   await page.screenshot({ path: `${shotDir}/e2e-2-typing.png` });
 
   // 2.5 debugger: gutter breakpoint on the hsv line pauses per pixel

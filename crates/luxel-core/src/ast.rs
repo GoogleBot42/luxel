@@ -114,9 +114,10 @@ pub struct Stmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
-    /// `var a = 1, b` / `export var x`.
+    /// `var a = 1, b` / `export var x` / `let`/`const` (Luxel extensions).
     Var {
         export: bool,
+        kind: DeclKind,
         decls: Vec<VarDecl>,
     },
     /// `function f(a) {…}` / `export function render(index) {…}`.
@@ -147,6 +148,16 @@ pub enum StmtKind {
     Break,
     Continue,
     Empty,
+}
+
+/// How a variable was declared. `Var` and `Let` are semantically identical
+/// today (function-scoped); `Const` additionally forbids reassignment.
+/// `let`/`const` are Luxel extensions — Pixel Blaze only has `var`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclKind {
+    Var,
+    Let,
+    Const,
 }
 
 #[derive(Debug, Clone, PartialEq)]

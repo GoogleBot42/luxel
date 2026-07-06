@@ -460,16 +460,23 @@
     raf = requestAnimationFrame(loop);
 
     // Served from a device (playground installed in its flash)? Auto-enter
-    // device mode against the same origin. On dev servers /api/status 404s
-    // and we stay local.
+    // device mode against the same origin. Must be a genuine device
+    // response — a dev server's SPA fallback returns 200 HTML for
+    // /api/status, so require JSON with the device's shape before
+    // connecting (otherwise we'd strand a "device unreachable" banner on
+    // the local playground).
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 1500);
       const r = await fetch("/api/status", { signal: ctl.signal });
       clearTimeout(t);
-      if (r.ok) {
-        deviceUrl = "";
-        await connectDevice();
+      const isJson = r.headers.get("content-type")?.includes("application/json");
+      if (r.ok && isJson) {
+        const st = (await r.json()) as { pixels?: unknown };
+        if (typeof st.pixels === "number") {
+          deviceUrl = "";
+          await connectDevice();
+        }
       }
     } catch {
       /* not a device */

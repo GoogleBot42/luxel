@@ -213,9 +213,23 @@ differ, it is deliberate:
 - **Builtin arity is not compile-checked** — missing arguments are 0.
 - `//#` control-bound comments are a Luxel extension; PB ignores them.
 
-## Planned Luxel extensions
+## Luxel extensions
 
-Accepted-but-not-yet-implemented ideas live on the roadmap: `const`/`let`
-with block scoping and const-assignment errors, plus other conservative
-JS conveniences. Extensions never break PB-source compatibility: every
-valid PB pattern stays valid.
+These are accepted by Luxel but not by Pixel Blaze. They never break
+PB-source compatibility — every valid PB pattern stays valid.
+
+- **`let`** — declares a variable, currently identical to `var`
+  (function-scoped; true block scoping is a future refinement). Use it
+  wherever you'd write `var`.
+- **`const`** — like `let`, but must have an initializer and cannot be
+  reassigned; a later assignment is a compile error
+  (`cannot assign to \`x\` — it is declared const`). Const-ness is scoped:
+  a local `const` doesn't lock a same-named global.
+
+```js
+const TAU = PI2          // reassigning TAU later is an error
+let speed = 1            // fine to reassign
+speed = 2
+```
+
+More conservative JS conveniences may follow (see the roadmap).

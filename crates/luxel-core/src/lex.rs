@@ -28,6 +28,12 @@ pub enum Tok {
     // Keywords
     #[token("var")]
     Var,
+    // Luxel extensions (not in Pixel Blaze): `let` is function-scoped like
+    // `var` for now; `const` additionally forbids reassignment.
+    #[token("let")]
+    Let,
+    #[token("const")]
+    Const,
     #[token("function")]
     Function,
     #[token("export")]

@@ -120,7 +120,7 @@
 
   // ---- autocomplete ----
 
-  const KEYWORDS = ["var", "function", "export", "return", "if", "else", "for", "while", "true", "false", "break", "continue"];
+  const KEYWORDS = ["var", "let", "const", "function", "export", "return", "if", "else", "for", "while", "true", "false", "break", "continue"];
   const staticCompletions: Completion[] = [
     ...BUILTINS.map((b) => ({
       label: b.name,

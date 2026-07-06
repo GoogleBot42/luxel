@@ -538,3 +538,45 @@ fn controls_enumerate_and_invoke() {
     let shown = e.set_control("showNumberSpeed", &[]).unwrap();
     assert_eq!(shown, fx(0.75));
 }
+
+#[test]
+fn let_behaves_like_var() {
+    // let at top level = global; let in a function = local
+    assert_eq!(eval_prog("export var out\nlet x = 3\nout = x * 2"), fx(6.0));
+    assert_eq!(
+        eval_prog("export var out\nfunction f() { let y = 5\n return y }\nout = f()"),
+        fx(5.0)
+    );
+    // reassigning a let is fine
+    assert_eq!(eval_prog("export var out\nlet z = 1\nz = 9\nout = z"), fx(9.0));
+}
+
+#[test]
+fn const_forbids_reassignment_and_requires_init() {
+    // const reads back its value
+    assert_eq!(eval_prog("export var out\nconst k = 7\nout = k + 1"), fx(8.0));
+    // reassignment is a compile error, at top level...
+    assert!(Engine::new("const k = 1\nk = 2", 10, 1).is_err());
+    // ...inside a function...
+    assert!(
+        Engine::new("function f() { const c = 1\n c = 2\n return c }", 10, 1).is_err()
+    );
+    // ...and via compound assignment
+    assert!(Engine::new("const k = 1\nk += 2", 10, 1).is_err());
+    // const without an initializer is a compile error
+    assert!(Engine::new("const k", 10, 1).is_err());
+    // a local const does not lock a same-named global
+    assert!(
+        Engine::new("const g = 1\nfunction f() { let g = 2\n g = 3\n return g }", 10, 1)
+            .is_ok()
+    );
+}
+
+#[test]
+fn const_let_in_for_loop() {
+    // let in a for-initializer works like var
+    assert_eq!(
+        eval_prog("export var out\nsum = 0\nfor (let i = 0; i < 4; i = i + 1) { sum = sum + i }\nout = sum"),
+        fx(6.0)
+    );
+}
