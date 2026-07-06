@@ -84,12 +84,17 @@ like "streaming" / "live" (and "polling · 40 ms" for the HTTP fallback).
 Disconnect then connect should not require re-typing the URL. Persist the last
 device URL (localStorage) and pre-fill / reuse it.
 
-### Connection is async and handled badly on load [M]
-Connecting to a device on page load is racy: the waterfall skips and keeps
-stale/old data after things stabilize. The connect sequence (status → source →
-controls → ws handshake) needs proper sequencing and a clean "connecting"
-state that clears/holds the preview until the stream is actually live, instead
-of leaking pre-stabilization frames into the waterfall.
+### Connection is async and handled badly on load [M] ✅
+**Done.** Added a connection phase state (`idle → connecting → live`).
+`connectDevice` enters `connecting` and holds the preview blank; a `markLive()`
+helper flips to `live` on the *first real datum from the stream* (ws pixels or
+status, or the HTTP-fallback poll) and clears the preview once at that moment —
+so no pre-stabilization frames (leftover playground content, canvas-resize
+artifacts, HTTP/WS cadence jitter) ever land in the waterfall. A "connecting…"
+pill (header) + overlay (preview) shows the async handshake instead of stale
+frames. Verified in the device-e2e: on connect the waterfall is held blank
+(0 lit) through the handshake, then streams. See `deviceConn`/`markLive` in
+App.svelte.
 
 ## Settings page 🔧 [L]
 
@@ -132,9 +137,9 @@ the pattern is loading, instead of appearing dead/blank.
    → playback bar; gallery promoted from modal to inline Patterns tab; Settings
    shell (device info + pixel readout, Phase-3 placeholders). Both e2e suites
    updated to the new `data-role` hooks and green.
-3. **Phase 3 (firmware + settings):** `/api/brightness`, `/api/config`
-   (pixel count/protocol); Settings tab wiring WiFi + brightness + pixel count;
-   fix the connect-on-load race.
+3. **Phase 3 (firmware + settings):** ~~fix the connect-on-load race~~ ✅ done
+   (web-only, see above); remaining: `/api/brightness`, `/api/config` (pixel
+   count/protocol) + Settings tab wiring WiFi + brightness + pixel count.
 4. **Phase 4 (bigger features):** ~~mapper-as-editor-tab (CodeMirror) +
    debuggable~~ ✅ done (Luxel map program, see above); 3D preview (map already
    emits `[x,y,z]` — Preview needs a projection); Playlist tab + firmware

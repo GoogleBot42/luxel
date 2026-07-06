@@ -71,6 +71,30 @@ try {
   await page.waitForSelector(".device-badge", { timeout: 5000 });
   check("connect: badge shown", true);
 
+  // connect-on-load race (#9): the async handshake is held cleanly — a
+  // "connecting…" state shows and the waterfall is kept blank so no
+  // pre-stream frames (the playground was running before we connected) leak
+  // into it. The ws dial is delayed ~1.6 s, so we're still connecting here.
+  const sawConnecting = await page
+    .waitForFunction(
+      () => document.querySelector('[data-role="conn-state"]')?.textContent?.includes("connecting"),
+      { timeout: 2500 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  check("connect: shows a connecting state", sawConnecting);
+  const blankWhileConnecting = await page.$eval(".waterfall", (c) => {
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let lit = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 0) lit++;
+    return lit;
+  });
+  check(
+    "connect: waterfall held blank while connecting (no stale frames)",
+    blankWhileConnecting === 0,
+    `${blankWhileConnecting} lit`,
+  );
+
   const px = await page.$eval('[data-role="cfg-pixels"]', (el) => el.value);
   check("connect: pixel count from device", px === "120", `got ${px}`);
   // CodeMirror virtualizes: textContent only holds visible lines — check

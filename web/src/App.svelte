@@ -105,6 +105,21 @@
   let statusMisses = 0;
   let wsGraceUntil = 0; // suppress HTTP polls while the handshake runs
 
+  /** Connection phase. `connecting` holds the preview blank so the async
+   *  status→source→controls→stream handshake never leaks pre-stabilization
+   *  frames (old playground content, resize artifacts, HTTP/WS jitter) into
+   *  the waterfall; `live` starts the moment the real stream delivers. */
+  let deviceConn: "idle" | "connecting" | "live" = "idle";
+
+  /** First real datum from the device → go live, wiping anything drawn before
+   *  the stream stabilized. Idempotent. */
+  function markLive(): void {
+    if (deviceConn === "connecting") {
+      deviceConn = "live";
+      preview?.clear();
+    }
+  }
+
   const DEVICE_URL_KEY = "luxel:deviceUrl";
   /** Base of the last successful connection ("" = served-from-device), kept
    *  so reconnect works without re-typing the URL. */
@@ -154,9 +169,13 @@
     deviceWs = session.openSocket({
       onPixels: (px) => {
         wsLive = true;
-        if (running && px.length >= pixelCount() * 3) preview?.draw(px);
+        if (px.length >= pixelCount() * 3) {
+          markLive(); // first good frame → clear the connecting hold
+          if (running) preview?.draw(px);
+        }
       },
       onStatus: (st) => {
+        markLive(); // a status frame confirms the stream even while paused
         fps = st.fps;
         runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
       },
@@ -197,6 +216,7 @@
     try {
       const st = await session.status();
       device = session;
+      deviceConn = "connecting"; // hold the preview blank until the stream is live
       lastBase = base; // remember it so reconnect needs no re-typing
       if (base !== "") {
         deviceUrl = base;
@@ -227,6 +247,7 @@
     deviceWs?.close();
     deviceWs = null;
     wsLive = false;
+    deviceConn = "idle";
     device = null;
     deviceError = "";
     devicePatterns = [];
@@ -904,6 +925,7 @@ export function render(index) {
       try {
         const st = await device.status();
         statusMisses = 0;
+        markLive(); // HTTP fallback is up → leave the connecting hold
         fps = st.fps;
         runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
         deviceError = "";
@@ -930,7 +952,10 @@ export function render(index) {
       try {
         const px = await device.pixels();
         pollMs = pollMs * 0.8 + (performance.now() - t0) * 0.2;
-        if (px.length >= pixelCount() * 3) preview?.draw(px);
+        if (px.length >= pixelCount() * 3) {
+          markLive();
+          preview?.draw(px);
+        }
       } catch {
         /* ditto */
       } finally {
@@ -1085,12 +1110,19 @@ export function render(index) {
     <span class="spacer"></span>
 
     {#if device}
-      <span
-        class="mono dim"
-        title={wsLive ? "live pixel stream over websocket" : "polling over HTTP"}
-      >
-        {wsLive ? "streaming" : `polling · ${pollMs.toFixed(0)} ms`}
-      </span>
+      {#if deviceConn === "connecting"}
+        <span class="mono connecting" data-role="conn-state" title="handshaking with the device">
+          <span class="spinner" aria-hidden="true"></span> connecting…
+        </span>
+      {:else}
+        <span
+          class="mono dim"
+          data-role="conn-state"
+          title={wsLive ? "live pixel stream over websocket" : "polling over HTTP"}
+        >
+          {wsLive ? "streaming" : `polling · ${pollMs.toFixed(0)} ms`}
+        </span>
+      {/if}
     {/if}
     <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
 
@@ -1395,7 +1427,14 @@ export function render(index) {
         <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
       {/if}
 
-      <Preview bind:this={preview} {layout} />
+      <div class="preview-wrap">
+        <Preview bind:this={preview} {layout} />
+        {#if device && deviceConn === "connecting"}
+          <div class="preview-connecting" data-role="preview-connecting">
+            <span class="spinner"></span> connecting to device…
+          </div>
+        {/if}
+      </div>
 
       <h2>Controls</h2>
       <Controls {controls} bind:values={controlValues} {readouts} {hints} on:set={onControlSet} />
@@ -1868,5 +1907,47 @@ export function render(index) {
   .device-badge {
     color: var(--accent);
     font-size: 12px;
+  }
+
+  .connecting {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--warn);
+    font-size: 12px;
+  }
+
+  .preview-wrap {
+    position: relative;
+  }
+
+  .preview-connecting {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg) 70%, transparent);
+    color: var(--text-dim);
+    font-size: 13px;
+    pointer-events: none;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: conn-spin 0.7s linear infinite;
+  }
+
+  @keyframes conn-spin {
+    to {
+      transform: rotate(1turn);
+    }
   }
 </style>

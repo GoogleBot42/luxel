@@ -1,5 +1,26 @@
 # Update log
 
+## 2026-07-06 night — clean device connect-on-load (no more waterfall garbage) ✅
+
+Fixed the connect weirdness you flagged: on load the waterfall skipped and kept
+stale/old data after the connection stabilized, because the async handshake
+(status → source → controls → ws) leaked pre-stabilization frames.
+
+- **Connection phase state** (`idle → connecting → live`). `connectDevice` enters
+  **connecting** and holds the preview blank; a `markLive()` helper flips to
+  **live** the moment the *real* stream delivers its first datum (ws pixels or
+  status, or the HTTP-fallback poll) and clears the preview **once** at that
+  transition. So leftover playground content, canvas-resize artifacts, and
+  HTTP/WS cadence jitter can never end up in the waterfall.
+- **Visible connecting state** — a "connecting…" pill in the header and a
+  spinner overlay on the preview, so the async handshake reads as intentional
+  instead of showing stale frames.
+
+Verified in the device-e2e (against the native mirror): on connect, the
+waterfall is held **blank (0 lit)** all the way through the handshake, then
+streams cleanly — plus the existing 19 device checks and 55 playground checks
+stay green. Pushed to the dev device.
+
 ## 2026-07-06 night — mapper is a debuggable Luxel program in its own editor tab ✅
 
 Re-read the feedback and fixed the thing I'd under-heard: "the mapping function
