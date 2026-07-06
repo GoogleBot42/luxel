@@ -102,6 +102,25 @@
       if (!word) return null;
       const name = v.state.doc.sliceString(word.from, word.to);
       if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
+      // builtin/global? show its signature + doc (the autocomplete data)
+      const builtin = BUILTINS.find((b) => b.name === name) ?? GLOBALS.find((g) => g.name === name);
+      if (builtin) {
+        return {
+          pos: word.from,
+          end: word.to,
+          create: () => {
+            const dom = document.createElement("div");
+            dom.className = "cm-hover-value cm-hover-doc";
+            const sig = document.createElement("div");
+            sig.className = "cm-hover-sig";
+            sig.textContent = builtin.sig;
+            const doc = document.createElement("div");
+            doc.textContent = builtin.doc;
+            dom.append(sig, doc);
+            return { dom };
+          },
+        };
+      }
       const val = hoverValue?.(name);
       if (val === null || val === undefined) return null;
       return {
@@ -200,6 +219,8 @@
             fontFamily: "ui-monospace, Menlo, Consolas, monospace",
             fontSize: "12px",
           },
+          ".cm-hover-doc": { maxWidth: "360px" },
+          ".cm-hover-sig": { color: "#e8a33d", marginBottom: "2px" },
           ".cm-lintRange-error": {
             backgroundImage: "none",
             textDecoration: "underline wavy #e05555 1px",

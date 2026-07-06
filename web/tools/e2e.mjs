@@ -35,6 +35,7 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
   const pageErrors = [];
+  page.on("dialog", (d) => void d.dismiss()); // clipboard-fallback prompt etc.
   page.on("pageerror", (e) => pageErrors.push(String(e)));
   page.on("console", (m) => {
     if (m.type() === "error") pageErrors.push(m.text());
@@ -309,6 +310,50 @@ try {
   );
   check("gallery pick loads the pattern", pickedLabel.trim() === pickName.trim(), pickedLabel);
   check("picked pattern compiles", (await page.$(".banner.error")) === null);
+
+  // 11. builtin hover docs: hovering `hsv` shows its signature + doc
+  const hsvRect = await page.evaluate(() => {
+    for (const lineEl of document.querySelectorAll(".cm-line")) {
+      const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const i = node.textContent.indexOf("hsv");
+        if (i >= 0) {
+          const r = document.createRange();
+          r.setStart(node, i);
+          r.setEnd(node, i + 3);
+          const b = r.getBoundingClientRect();
+          return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+        }
+      }
+    }
+    return null;
+  });
+  check("found hsv hover target", hsvRect !== null);
+  if (hsvRect) {
+    await page.mouse.move(hsvRect.x, hsvRect.y);
+    await sleep(500);
+    const docTip = await page.$eval(".cm-hover-doc", (el) => el.textContent ?? "").catch(() => "");
+    check("hover shows builtin signature + doc", docTip.includes("hsv(h, s, v)") && docTip.includes("pixel"), docTip.slice(0, 50));
+    await page.mouse.move(5, 5);
+    await sleep(200);
+  }
+
+  // 12. shareable URL: share → open the produced URL in a NEW page → the
+  //     pattern rides in and compiles
+  await page.click('[data-role="share"]');
+  await sleep(400);
+  const shareUrl = await page.url();
+  check("share writes a #p= fragment", /#p(s)?=/.test(shareUrl), shareUrl.slice(-30));
+  const page2 = await browser.newPage();
+  await page2.goto(shareUrl, { waitUntil: "networkidle0" });
+  await page2.waitForSelector(".cm-content");
+  await sleep(800);
+  // the current pattern at this point is the gallery-picked Rainbow
+  const sharedDoc = await page2.$eval(".cm-content", (el) => el.textContent ?? "");
+  check("share link restores the pattern", sharedDoc.includes("hsv(time(.1)"), sharedDoc.slice(0, 40));
+  check("shared pattern compiles", (await page2.$(".banner.error")) === null);
+  await page2.close();
 
   await page.screenshot({ path: `${shotDir}/e2e-4-final.png` });
 

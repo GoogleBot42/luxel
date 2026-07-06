@@ -284,6 +284,71 @@
     void tick().then(recompile);
   }
 
+  // ---- shareable pattern URLs ----
+  // The source rides in the fragment (deflate + base64url), so links are
+  // self-contained: no server, works on the static playground and pasted
+  // between people. `#p=` is compressed, `#ps=` the plain fallback.
+
+  let shareNote = "";
+
+  function b64url(bytes: Uint8Array): string {
+    let s = "";
+    for (const v of bytes) s += String.fromCharCode(v);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  function b64urlDecode(s: string): Uint8Array {
+    const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  }
+
+  async function pipe(data: Uint8Array, stream: GenericTransformStream): Promise<Uint8Array> {
+    // our arrays always own their whole buffer, so this cast is sound
+    const blob = new Blob([data.buffer as ArrayBuffer]);
+    const body = new Response(blob.stream().pipeThrough(stream));
+    return new Uint8Array(await body.arrayBuffer());
+  }
+
+  async function sharePattern(): Promise<void> {
+    const bytes = new TextEncoder().encode(source);
+    let frag: string;
+    try {
+      frag = `p=${b64url(await pipe(bytes, new CompressionStream("deflate-raw")))}`;
+    } catch {
+      frag = `ps=${b64url(bytes)}`;
+    }
+    history.replaceState(null, "", `#${frag}`);
+    const url = location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      shareNote = "link copied";
+    } catch {
+      // clipboard needs a secure context — a device over plain http isn't
+      window.prompt("copy this link:", url);
+      shareNote = "link in address bar";
+    }
+    setTimeout(() => (shareNote = ""), 2500);
+  }
+
+  /** Restore a `#p=`/`#ps=` fragment; returns whether one was loaded. */
+  async function loadFromHash(): Promise<boolean> {
+    const m = /^(p|ps)=([A-Za-z0-9_-]+)$/.exec(location.hash.slice(1));
+    const kind = m?.[1];
+    const payload = m?.[2];
+    if (!kind || !payload) return false;
+    try {
+      const data = b64urlDecode(payload);
+      const bytes =
+        kind === "p" ? await pipe(data, new DecompressionStream("deflate-raw")) : data;
+      source = new TextDecoder().decode(bytes);
+      exampleName = "";
+      patternName = "shared pattern";
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** PB-style 17-char base-58 id, so exports round-trip into PB tooling. */
   function epeId(): string {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -544,8 +609,12 @@
       loadFailure = `failed to load luxel.wasm: ${String(e)}`;
       return;
     }
+    // a share link's pattern beats the default example — and suppresses
+    // device auto-connect (the link's intent is "look at this pattern")
+    const fromHash = await loadFromHash();
     recompile();
     raf = requestAnimationFrame(loop);
+    if (fromHash) return;
 
     // Served from a device (playground installed in its flash)? Auto-enter
     // device mode against the same origin. Must be a genuine device
@@ -619,6 +688,14 @@
         bind:this={fileInput}
         on:change={onImportPick}
       />
+      <button
+        data-role="share"
+        title="copy a link that carries this pattern in the URL"
+        on:click={() => void sharePattern()}
+      >
+        share
+      </button>
+      {#if shareNote}<span class="dim" data-role="share-note">{shareNote}</span>{/if}
     </span>
 
     <span class="group">
