@@ -177,6 +177,23 @@ async fn main(spawner: Spawner) -> ! {
     )
     .expect("wifi controller");
 
+    // WORKAROUND (classic ESP32): the PHY blob's wifi_track_pll_cap calls
+    // g_phyFuns[40] (offset 160), which is uninitialized in the current
+    // esp-radio/esp-phy init sequence — every TX-load-induced PLL-cap
+    // correction crashed with a wild jump (verified by disassembly +
+    // matching panic registers A10=98/A11=1). The function is gated on
+    // this byte flag; clearing it disables PLL capacitance tracking
+    // (minor RF robustness cost across temperature swings) until the
+    // upstream init bug is fixed.
+    #[cfg(feature = "esp32")]
+    unsafe {
+        unsafe extern "C" {
+            static mut phy_wifi_pll_track_en: u8;
+        }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(phy_wifi_pll_track_en), 0);
+        println!("workaround: PHY PLL-cap tracking disabled (g_phyFuns[40] uninit)");
+    }
+
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
@@ -359,6 +376,18 @@ async fn connection_task(mut controller: WifiController<'static>) {
         match controller.connect_async().await {
             Ok(info) => {
                 println!("wifi connected: {:?}", info);
+                // PHY re-init on reconnect can re-arm PLL-cap tracking;
+                // keep it off (see workaround comment in main).
+                #[cfg(feature = "esp32")]
+                unsafe {
+                    unsafe extern "C" {
+                        static mut phy_wifi_pll_track_en: u8;
+                    }
+                    core::ptr::write_volatile(
+                        core::ptr::addr_of_mut!(phy_wifi_pll_track_en),
+                        0,
+                    );
+                }
                 let info = controller.wait_for_disconnect_async().await.ok();
                 println!("wifi disconnected: {:?}", info);
             }
