@@ -34,7 +34,16 @@ export RUSTC="$TC/bin/rustc"
 export RUSTDOC="$TC/bin/rustdoc"
 
 echo "board: $BOARD"
-"$TC/bin/cargo" "$CMD" --release \
-  --no-default-features --features "$BOARD" \
-  --target xtensa-esp32-none-elf \
-  -Zbuild-std=core,alloc
+if [ "$CMD" = "run" ]; then
+  # flash + monitor: tee the monitor session (symbolicated by espflash)
+  # into serial.log so it's remotely readable
+  "$TC/bin/cargo" run --release \
+    --no-default-features --features "$BOARD" \
+    --target xtensa-esp32-none-elf \
+    -Zbuild-std=core,alloc 2>&1 | tee -a serial.log
+else
+  "$TC/bin/cargo" build --release \
+    --no-default-features --features "$BOARD" \
+    --target xtensa-esp32-none-elf \
+    -Zbuild-std=core,alloc
+fi
