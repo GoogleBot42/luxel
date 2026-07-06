@@ -12,6 +12,9 @@
 
 #![no_std]
 #![no_main]
+// the picoserve router's nested type (one layer per route) exceeds the
+// default query depth
+#![recursion_limit = "256"]
 
 extern crate alloc;
 
@@ -40,7 +43,11 @@ mod server;
 mod shared;
 
 use leds::Protocol;
-use shared::{set_pixels, set_vmerr, CODE_QUEUE, FPS};
+use luxel_core::jsonview;
+use shared::{
+    publish, set_pattern_src, set_pixels, set_vmerr, Msg, CONTROLS_JSON, FPS, MSG_QUEUE,
+    READOUTS_JSON, VARS_JSON,
+};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -193,23 +200,45 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             None
         }
     };
+    set_pattern_src(PATTERN);
+    if let Some(eng) = engine.as_ref() {
+        publish(&CONTROLS_JSON, jsonview::controls_json(eng));
+    }
 
     let mut buf = alloc::vec![0u8; PROTOCOL.buf_len(PIXEL_COUNT as usize)];
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
+    let mut vars_mark = Instant::now();
 
     loop {
-        if let Ok(src) = CODE_QUEUE.try_receive() {
-            // Compile-checked by the upload handler; failure here would
-            // mean non-determinism, so just log and keep the old pattern.
-            match Engine::new(&src, PIXEL_COUNT, 1) {
-                Ok(e) => {
-                    engine = Some(e);
-                    set_vmerr(None);
-                    last = Instant::now();
+        while let Ok(msg) = MSG_QUEUE.try_receive() {
+            match msg {
+                Msg::Code(src) => {
+                    // Compile-checked by the upload handler; failure here
+                    // would mean non-determinism, so log and keep the old
+                    // pattern.
+                    match Engine::new(&src, PIXEL_COUNT, 1) {
+                        Ok(e) => {
+                            publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                            engine = Some(e);
+                            set_pattern_src(&src);
+                            set_vmerr(None);
+                            last = Instant::now();
+                        }
+                        Err(d) => println!("recompile error (bug?): {}", d.message),
+                    }
                 }
-                Err(d) => println!("recompile error (bug?): {}", d.message),
+                Msg::Control(name, values) => {
+                    if let Some(eng) = engine.as_mut() {
+                        eng.set_control(&name, &values);
+                    }
+                }
+                Msg::Var(name, value) => {
+                    if let Some(eng) = engine.as_mut() {
+                        eng.set_var(&name, value);
+                    }
+                }
             }
         }
 
@@ -242,6 +271,13 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             FPS.store(frames, Ordering::Relaxed);
             frames = 0;
             fps_mark = Instant::now();
+        }
+        if (Instant::now() - vars_mark).as_millis() >= 250 {
+            vars_mark = Instant::now();
+            if let Some(eng) = engine.as_mut() {
+                publish(&VARS_JSON, jsonview::vars_json(eng));
+                publish(&READOUTS_JSON, jsonview::readouts_json(eng));
+            }
         }
 
         // Pace to ~120 fps: an uncapped render loop starves the network

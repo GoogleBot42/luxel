@@ -2,14 +2,8 @@
 //!
 //! Serves the exact same page and API as `firmware/src/server.rs`, backed by
 //! the same engine core, so the browser UI can be developed and end-to-end
-//! tested without hardware:
-//!
-//!   GET  /            live-code page (same embedded index.html)
-//!   GET  /api/status  {"fps":N,"pixels":N,"vmerr":...}
-//!   GET  /api/pixels  raw RGB bytes, 3 per pixel
-//!   POST /api/code    compile-check + hot-swap the running pattern
-//!
-//! Keep the routes and response shapes in lockstep with the firmware.
+//! tested without hardware. See the route table in firmware/src/server.rs —
+//! keep the two in lockstep.
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -19,46 +13,70 @@ use std::time::{Duration, Instant};
 use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
+use luxel_core::jsonview::{self, json_escape};
 
 const INDEX_HTML: &str = include_str!("../../../firmware/src/index.html");
 const DEFAULT_PATTERN: &str = include_str!("../../../examples/rainbow.js");
 
+enum Msg {
+    Code(String),
+    Control(String, Vec<Fx>),
+    Var(String, Fx),
+}
+
 struct State {
     pixel_count: u32,
-    pending_code: Mutex<Option<String>>,
+    inbox: Mutex<Vec<Msg>>,
     pixels: Mutex<Vec<u8>>,
     fps: AtomicU32,
     vmerr: Mutex<Option<String>>,
-}
-
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
+    pattern_src: Mutex<String>,
+    controls_json: Mutex<String>,
+    vars_json: Mutex<String>,
+    readouts_json: Mutex<String>,
 }
 
 fn render_loop(state: Arc<State>) {
     let mut engine = Engine::new(DEFAULT_PATTERN, state.pixel_count, 1).ok();
+    *state.pattern_src.lock().unwrap() = DEFAULT_PATTERN.to_string();
+    if let Some(eng) = engine.as_ref() {
+        *state.controls_json.lock().unwrap() = jsonview::controls_json(eng);
+    }
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
+    let mut vars_mark = Instant::now();
 
     loop {
-        if let Some(src) = state.pending_code.lock().unwrap().take() {
-            if let Ok(e) = Engine::new(&src, state.pixel_count, 1) {
-                engine = Some(e);
-                *state.vmerr.lock().unwrap() = None;
-                last = Instant::now();
+        for msg in state.inbox.lock().unwrap().drain(..) {
+            match msg {
+                Msg::Code(src) => {
+                    if let Ok(e) = Engine::new(&src, state.pixel_count, 1) {
+                        *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
+                        engine = Some(e);
+                        *state.pattern_src.lock().unwrap() = src;
+                        *state.vmerr.lock().unwrap() = None;
+                        last = Instant::now();
+                    }
+                }
+                Msg::Control(name, values) => {
+                    if let Some(eng) = engine.as_mut() {
+                        eng.set_control(&name, &values);
+                    }
+                }
+                Msg::Var(name, value) => {
+                    if let Some(eng) = engine.as_mut() {
+                        eng.set_var(&name, value);
+                    }
+                }
+            }
+        }
+
+        if vars_mark.elapsed() >= Duration::from_millis(250) {
+            vars_mark = Instant::now();
+            if let Some(eng) = engine.as_mut() {
+                *state.vars_json.lock().unwrap() = jsonview::vars_json(eng);
+                *state.readouts_json.lock().unwrap() = jsonview::readouts_json(eng);
             }
         }
 
@@ -102,10 +120,17 @@ fn respond(
 ) {
     let header =
         tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap();
+    let cors =
+        tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
     let resp = tiny_http::Response::from_data(body)
         .with_status_code(status as u16)
-        .with_header(header);
+        .with_header(header)
+        .with_header(cors);
     let _ = req.respond(resp);
+}
+
+fn push(state: &State, msg: Msg) {
+    state.inbox.lock().unwrap().push(msg);
 }
 
 pub fn serve_cmd(rest: &[String]) -> ExitCode {
@@ -128,10 +153,14 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
 
     let state = Arc::new(State {
         pixel_count: pixels,
-        pending_code: Mutex::new(None),
+        inbox: Mutex::new(Vec::new()),
         pixels: Mutex::new(Vec::new()),
         fps: AtomicU32::new(0),
         vmerr: Mutex::new(None),
+        pattern_src: Mutex::new(String::new()),
+        controls_json: Mutex::new(String::from("[]")),
+        vars_json: Mutex::new(String::from("{}")),
+        readouts_json: Mutex::new(String::from("{}")),
     });
 
     {
@@ -174,6 +203,22 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 let snap = state.pixels.lock().unwrap().clone();
                 respond(req, 200, "application/octet-stream", snap);
             }
+            ("GET", "/api/pattern") => {
+                let src = state.pattern_src.lock().unwrap().clone();
+                respond(req, 200, "text/plain; charset=utf-8", src.into_bytes());
+            }
+            ("GET", "/api/controls") => {
+                let s = state.controls_json.lock().unwrap().clone();
+                respond(req, 200, "application/json", s.into_bytes());
+            }
+            ("GET", "/api/vars") => {
+                let s = state.vars_json.lock().unwrap().clone();
+                respond(req, 200, "application/json", s.into_bytes());
+            }
+            ("GET", "/api/readouts") => {
+                let s = state.readouts_json.lock().unwrap().clone();
+                respond(req, 200, "application/json", s.into_bytes());
+            }
             ("POST", "/api/code") => {
                 let mut src = String::new();
                 if req.as_reader().read_to_string(&mut src).is_err() {
@@ -187,7 +232,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 }
                 let body = match Engine::new(&src, pixels, 1) {
                     Ok(_) => {
-                        *state.pending_code.lock().unwrap() = Some(src);
+                        push(&state, Msg::Code(src));
                         String::from("{\"ok\":true}")
                     }
                     Err(d) => {
@@ -201,6 +246,34 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                     }
                 };
                 respond(req, 200, "application/json", body.into_bytes());
+            }
+            ("POST", "/api/control") | ("POST", "/api/var") => {
+                let is_var = url == "/api/var";
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                let mut it = body.split_whitespace();
+                let Some(name) = it.next() else {
+                    respond(
+                        req,
+                        400,
+                        "application/json",
+                        b"{\"ok\":false,\"error\":\"missing name\"}".to_vec(),
+                    );
+                    continue;
+                };
+                let values: Vec<Fx> = it
+                    .filter_map(|v| v.parse::<i32>().ok())
+                    .map(Fx::from_raw)
+                    .collect();
+                if is_var {
+                    push(
+                        &state,
+                        Msg::Var(name.to_string(), values.first().copied().unwrap_or(Fx::ZERO)),
+                    );
+                } else {
+                    push(&state, Msg::Control(name.to_string(), values));
+                }
+                respond(req, 200, "application/json", b"{\"ok\":true}".to_vec());
             }
             _ => respond(req, 404, "text/plain", b"not found".to_vec()),
         }

@@ -4,6 +4,7 @@
   import Editor from "./components/Editor.svelte";
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
+  import { DeviceSession } from "./lib/device";
   import { EXAMPLES, type Example } from "./lib/examples";
   import { parseControlHints, type ControlHint } from "./lib/hints";
   import {
@@ -45,9 +46,78 @@
   let lastT = 0;
   let lastPoll = 0;
 
+  // ---- device mode ----
+  let device: DeviceSession | null = null;
+  let deviceUrl = "";
+  let deviceError = "";
+  let devicePreviewBusy = false;
+  let lastDevicePreview = 0;
+  let lastDeviceStatus = 0;
+  let pollMs = 0; // measured preview request latency
+
   const pixelCount = () => (layout.kind === "strip" ? layout.pixels : layout.w * layout.h);
 
+  async function connectDevice(): Promise<void> {
+    deviceError = "";
+    const base = deviceUrl.trim().replace(/\/+$/, "");
+    const session = new DeviceSession(base);
+    try {
+      const st = await session.status();
+      device = session;
+      if (debugMode) toggleDebug();
+      layout = { kind: "strip", pixels: st.pixels };
+      source = await session.pattern();
+      hints = parseControlHints(source);
+      controls = await session.controls();
+      compileError = null;
+      runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
+      fps = st.fps;
+      preview?.clear();
+    } catch (e) {
+      device = null;
+      deviceError = `cannot reach device: ${String(e)}`;
+    }
+  }
+
+  function disconnectDevice(): void {
+    device = null;
+    deviceError = "";
+    recompile();
+  }
+
+  /** byte offset of (1-based line, col) for squiggles on device errors */
+  function lineColToByte(text: string, line: number, col: number): number {
+    const lines = text.split("\n");
+    let off = 0;
+    for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+      off += new TextEncoder().encode(lines[i]).length + 1;
+    }
+    return off + Math.max(0, col - 1);
+  }
+
+  async function devicePush(): Promise<void> {
+    if (!device) return;
+    const r = await device.run(source);
+    if (r.ok) {
+      compileError = null;
+      runtimeError = null;
+      hints = parseControlHints(source);
+      // the swap happens on the device's next render tick; give the
+      // controls snapshot a moment (the status tick also refreshes them)
+      setTimeout(async () => {
+        if (device) controls = await device.controls();
+      }, 300);
+    } else {
+      const start = lineColToByte(source, r.line, r.col);
+      compileError = { line: r.line, col: r.col, message: r.error, start, end: start + 1 };
+    }
+  }
+
   function recompile(): void {
+    if (device) {
+      void devicePush();
+      return;
+    }
     if (!luxel) return;
     const result = luxel.compile(source, pixelCount());
     if (result instanceof Engine) {
@@ -85,14 +155,15 @@
   function onSourceChange(e: CustomEvent<string>): void {
     source = e.detail;
     clearTimeout(debounce);
-    debounce = setTimeout(recompile, 150);
+    // device pushes go over WiFi — debounce longer than local recompiles
+    debounce = setTimeout(recompile, device ? 500 : 150);
   }
 
   function loadExample(name: string): void {
     const ex = EXAMPLES.find((x) => x.name === name);
     if (!ex) return;
     exampleName = ex.name;
-    layout = structuredClone(ex.layout);
+    if (!device) layout = structuredClone(ex.layout); // device layout is fixed
     source = ex.source;
     controlValues = {};
     void tick().then(recompile);
@@ -134,7 +205,11 @@
   }
 
   function onControlSet(e: CustomEvent<{ name: string; values: number[] }>): void {
-    engine?.setControl(e.detail.name, e.detail.values);
+    if (device) {
+      void device.setControl(e.detail.name, e.detail.values);
+    } else {
+      engine?.setControl(e.detail.name, e.detail.values);
+    }
   }
 
   // ---- debugger ----
@@ -196,6 +271,10 @@
   /** Hover inspection: paused → locals (shadowing globals) then globals;
    *  running → live globals. */
   function hoverValue(name: string): string | null {
+    if (device) {
+      const v = vars[name];
+      return typeof v === "number" ? v.toFixed(4).replace(/\.?0+$/, "") || "0" : null;
+    }
     if (!engine) return null;
     if (dbg.paused) {
       const local = dbg.stack?.[0]?.locals.find((l) => l.name === name);
@@ -232,8 +311,52 @@
 
   // ---- render loop ----
 
+  async function deviceTick(t: number): Promise<void> {
+    if (!device) return;
+    if (t - lastDeviceStatus > 1000) {
+      lastDeviceStatus = t;
+      try {
+        const st = await device.status();
+        fps = st.fps;
+        runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
+        deviceError = "";
+        controls = await device.controls(); // tracks pattern swaps
+      } catch {
+        deviceError = "device unreachable";
+      }
+    }
+    if (t - lastPoll > 300) {
+      lastPoll = t;
+      try {
+        vars = await device.vars();
+        readouts = await device.readouts();
+      } catch {
+        /* transient; status poll reports connectivity */
+      }
+    }
+    const interval = 1000 / Math.min(targetFps || 30, 30);
+    if (!devicePreviewBusy && running && t - lastDevicePreview >= interval) {
+      devicePreviewBusy = true;
+      lastDevicePreview = t;
+      const t0 = performance.now();
+      try {
+        const px = await device.pixels();
+        pollMs = pollMs * 0.8 + (performance.now() - t0) * 0.2;
+        if (px.length >= pixelCount() * 3) preview?.draw(px);
+      } catch {
+        /* ditto */
+      } finally {
+        devicePreviewBusy = false;
+      }
+    }
+  }
+
   function loop(t: number): void {
     raf = requestAnimationFrame(loop);
+    if (device) {
+      void deviceTick(t);
+      return;
+    }
     if (!engine || !running) return;
     if (dbg.paused) return; // suspended at a debug stop — step buttons drive
     const minInterval = targetFps > 0 ? 1000 / targetFps - 1 : 0;
@@ -291,7 +414,7 @@
     </select>
 
     <span class="group">
-      <select value={layout.kind} on:change={setLayoutKind}>
+      <select value={layout.kind} on:change={setLayoutKind} disabled={device !== null}>
         <option value="strip">strip</option>
         <option value="grid">grid</option>
       </select>
@@ -302,6 +425,7 @@
           min="1"
           max="4096"
           value={layout.pixels}
+          disabled={device !== null}
           on:change={(e) => setLayoutNum("pixels", e)}
         />
         <span class="dim">px</span>
@@ -337,12 +461,37 @@
       <button on:click={togglePause} title={running ? "pause" : "resume"}>
         {running ? "pause" : "play"}
       </button>
-      <button class="debug-toggle" class:active={debugMode} on:click={toggleDebug}>
+      <button
+        class="debug-toggle"
+        class:active={debugMode}
+        disabled={device !== null}
+        title={device ? "debugging runs on the local engine only (for now)" : "toggle debugger"}
+        on:click={toggleDebug}
+      >
         debug
       </button>
     </span>
 
+    <span class="group">
+      {#if device}
+        <span class="device-badge mono">device{device.base ? ` ${device.base}` : ""}</span>
+        <button on:click={disconnectDevice}>disconnect</button>
+      {:else}
+        <input
+          class="device-url"
+          type="text"
+          placeholder="device url (http://…)"
+          bind:value={deviceUrl}
+          on:keydown={(e) => e.key === "Enter" && connectDevice()}
+        />
+        <button on:click={connectDevice} disabled={deviceUrl.trim() === ""}>connect</button>
+      {/if}
+    </span>
+
     <span class="spacer"></span>
+    {#if device}
+      <span class="mono dim">{pollMs.toFixed(0)}ms poll</span>
+    {/if}
     <span class="mono dim">{fps.toFixed(0)} fps</span>
   </header>
 
@@ -360,6 +509,9 @@
       {#if loadFailure}
         <div class="banner error">{loadFailure}</div>
       {/if}
+      {#if deviceError}
+        <div class="banner error">{deviceError}</div>
+      {/if}
       {#if compileError}
         <button class="banner error as-button" on:click={jumpToError}>
           line {compileError.line}:{compileError.col} — {compileError.message}
@@ -372,7 +524,7 @@
         </div>
       {/if}
 
-      {#if debugMode}
+      {#if debugMode && !device}
         <div class="debugger" data-paused={dbg.paused}>
           <div class="debug-bar">
             {#if dbg.paused}
@@ -569,6 +721,17 @@
   .debug-toggle.active {
     border-color: var(--accent);
     color: var(--accent);
+  }
+
+  .device-url {
+    width: 180px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  .device-badge {
+    color: var(--accent);
+    font-size: 12px;
   }
 
   .debugger {

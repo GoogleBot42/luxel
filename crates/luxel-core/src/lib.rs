@@ -20,6 +20,7 @@ pub mod diag;
 pub mod engine;
 pub mod fixed;
 pub mod fmath;
+pub mod jsonview;
 pub mod lex;
 pub mod noise;
 pub mod parse;
