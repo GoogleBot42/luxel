@@ -355,6 +355,39 @@ try {
   check("shared pattern compiles", (await page2.$(".banner.error")) === null);
   await page2.close();
 
+  // 13. mapper: apply the default ring map → scatter preview renders
+  await page.$eval('[data-role="mapper"] summary', (el) => el.click());
+  await page.click('[data-role="mapper-apply"]');
+  await sleep(800);
+  const mapErr = await page.$('[data-role="mapper-error"]');
+  check("mapper applies without error", mapErr === null);
+  const mapBadge = await page.$$eval("header .mono", (els) =>
+    els.map((e) => e.textContent ?? "").find((t) => t.includes("px mapped")) ?? "",
+  );
+  check("header shows mapped layout", mapBadge.includes("60 px mapped"), mapBadge);
+  const mapLit = await page.$eval(".map", (c) => {
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let lit = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) lit++;
+    return lit;
+  });
+  check("map scatter renders lit dots", mapLit > 200, `${mapLit} lit px`);
+  await page.screenshot({ path: `${shotDir}/e2e-6-mapper.png` });
+  // bad mapper source surfaces the error, layout stays mapped
+  await page.$eval('[data-role="mapper"] textarea', (el) => {
+    el.value = "function (n) { return 42 }";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.click('[data-role="mapper-apply"]');
+  await sleep(300);
+  check("broken mapper shows error", (await page.$('[data-role="mapper-error"]')) !== null);
+  // back to strip restores the 1D preview
+  await page.$$eval('[data-role="mapper"] button', (els) => {
+    els.find((b) => b.textContent?.includes("back to strip"))?.click();
+  });
+  await sleep(500);
+  check("back to strip restores waterfall", (await page.$(".waterfall")) !== null);
+
   await page.screenshot({ path: `${shotDir}/e2e-4-final.png` });
 
   check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));

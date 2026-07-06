@@ -1,6 +1,13 @@
+/** How pixels are arranged: a strip, a W×H grid, or an arbitrary 2D/3D
+ *  map produced by the mapper (one [x,y(,z)] per pixel, any units). */
+export type Layout =
+  | { kind: "strip"; pixels: number }
+  | { kind: "grid"; w: number; h: number }
+  | { kind: "map"; coords: number[][] };
+
 export interface Example {
   name: string;
-  layout: { kind: "strip"; pixels: number } | { kind: "grid"; w: number; h: number };
+  layout: Layout;
   source: string;
 }
 

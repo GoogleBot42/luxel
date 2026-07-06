@@ -6,7 +6,7 @@
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
-  import { EXAMPLES, type Example } from "./lib/examples";
+  import { EXAMPLES, type Layout } from "./lib/examples";
   import { parseControlHints, type ControlHint } from "./lib/hints";
   import {
     Engine,
@@ -24,7 +24,7 @@
   let preview: Preview;
 
   let source = EXAMPLES[0]?.source ?? "";
-  let layout: Example["layout"] = EXAMPLES[0]?.layout ?? { kind: "strip", pixels: 60 };
+  let layout: Layout = EXAMPLES[0]?.layout ?? { kind: "strip", pixels: 60 };
   let exampleName = EXAMPLES[0]?.name ?? "";
 
   let compileError: Diagnostic | null = null;
@@ -98,7 +98,12 @@
     });
   }
 
-  const pixelCount = () => (layout.kind === "strip" ? layout.pixels : layout.w * layout.h);
+  const pixelCount = () =>
+    layout.kind === "strip"
+      ? layout.pixels
+      : layout.kind === "grid"
+        ? layout.w * layout.h
+        : layout.coords.length;
 
   async function connectDevice(): Promise<void> {
     deviceError = "";
@@ -173,6 +178,7 @@
       compileError = null;
       runtimeError = null;
       if (layout.kind === "grid") engine.setMapGrid(layout.w, layout.h);
+      if (layout.kind === "map") engine.setMap(layout.coords);
       engine.setWallClock(Date.now() / 1000);
       hints = parseControlHints(source);
       controls = engine.controls();
@@ -264,6 +270,47 @@
     e.preventDefault();
     const f = e.dataTransfer?.files?.[0];
     if (f && /\.(epe|json)$/i.test(f.name)) void importEpeFile(f);
+  }
+
+  // ---- mapper (PB-style JS map function → installed 2D/3D map) ----
+
+  let mapperSrc = `// Return one [x, y] (or [x, y, z]) per pixel — any units,
+// they normalize automatically. This one is a ring:
+function (pixelCount) {
+  var map = []
+  for (var i = 0; i < pixelCount; i++) {
+    var a = i / pixelCount * Math.PI * 2
+    map.push([Math.cos(a), Math.sin(a)])
+  }
+  return map
+}`;
+  let mapperError = "";
+
+  function applyMapper(): void {
+    mapperError = "";
+    try {
+      const fn = new Function(`"use strict"; return (${mapperSrc});`)() as unknown;
+      if (typeof fn !== "function") throw new Error("mapper must be a function expression");
+      const res = (fn as (n: number) => unknown)(pixelCount());
+      if (!Array.isArray(res) || res.length === 0) {
+        throw new Error("mapper must return a non-empty array of [x, y] points");
+      }
+      if (res.length > 4096) throw new Error("too many pixels (max 4096)");
+      const coords = res.map((p, i) => {
+        if (
+          !Array.isArray(p) ||
+          p.length < 2 ||
+          p.some((v) => typeof v !== "number" || !Number.isFinite(v))
+        ) {
+          throw new Error(`entry ${i} is not [x, y] or [x, y, z]`);
+        }
+        return p as number[];
+      });
+      layout = { kind: "map", coords };
+      recompile();
+    } catch (e) {
+      mapperError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   // ---- pattern browser ----
@@ -702,8 +749,13 @@
       <select value={layout.kind} on:change={setLayoutKind} disabled={device !== null}>
         <option value="strip">strip</option>
         <option value="grid">grid</option>
+        {#if layout.kind === "map"}
+          <option value="map">2D map</option>
+        {/if}
       </select>
-      {#if layout.kind === "strip"}
+      {#if layout.kind === "map"}
+        <span class="dim mono">{layout.coords.length} px mapped</span>
+      {:else if layout.kind === "strip"}
         <input
           class="num"
           type="number"
@@ -888,6 +940,47 @@
         </p>
       {/if}
 
+      <h2>Mapper</h2>
+      <details class="mapper" data-role="mapper" open={layout.kind === "map"}>
+        <summary class="dim">
+          {layout.kind === "map"
+            ? `2D map active (${pixelCount()} px)`
+            : "write a map function → 2D/3D layout"}
+        </summary>
+        <textarea
+          class="mono"
+          rows="9"
+          spellcheck="false"
+          bind:value={mapperSrc}
+          disabled={device !== null}
+        ></textarea>
+        <div class="mapper-actions">
+          <button
+            data-role="mapper-apply"
+            disabled={device !== null}
+            title={device
+              ? "maps apply to the local engine (device map upload comes later)"
+              : "run the map function and install the result"}
+            on:click={applyMapper}
+          >
+            apply map
+          </button>
+          {#if layout.kind === "map"}
+            <button
+              on:click={() => {
+                layout = { kind: "strip", pixels: pixelCount() };
+                recompile();
+              }}
+            >
+              back to strip
+            </button>
+          {/if}
+          {#if mapperError}
+            <span class="mapper-error" data-role="mapper-error">{mapperError}</span>
+          {/if}
+        </div>
+      </details>
+
       <h2>Vars</h2>
       <VarWatcher {vars} />
       {#if Object.keys(vars).length === 0}
@@ -1020,6 +1113,33 @@
 
   .file-input {
     display: none;
+  }
+
+  .mapper textarea {
+    width: 100%;
+    margin-top: 6px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    resize: vertical;
+  }
+
+  .mapper-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+
+  .mapper-error {
+    color: var(--error);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  .mapper summary {
+    cursor: pointer;
+    font-size: 12px;
   }
 
   .device-url {

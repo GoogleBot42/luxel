@@ -278,6 +278,31 @@ pub unsafe extern "C" fn lx_set_var(h: i32, name_ptr: *const u8, name_len: usize
     with_engine(h, |s| s.engine.set_var(name, Fx::from_raw(raw)) as i32).unwrap_or(0)
 }
 
+/// Install an arbitrary pixel map: `count` coordinate tuples of `dims`
+/// (2 or 3) raw-16.16 values each, tightly packed [x y (z)] per pixel.
+/// The engine normalizes per axis (any units in, world 0..1 out).
+///
+/// # Safety
+/// `ptr` must point to `count * dims` valid i32s.
+#[no_mangle]
+pub unsafe extern "C" fn lx_set_map(h: i32, dims: u32, ptr: *const i32, count: usize) {
+    let dims = dims.clamp(2, 3) as u8;
+    let raw = core::slice::from_raw_parts(ptr, count * dims as usize);
+    with_engine(h, |s| {
+        let coords: Vec<[Fx; 3]> = (0..count)
+            .map(|i| {
+                let at = i * dims as usize;
+                [
+                    Fx::from_raw(raw[at]),
+                    Fx::from_raw(raw[at + 1]),
+                    if dims == 3 { Fx::from_raw(raw[at + 2]) } else { Fx::ZERO },
+                ]
+            })
+            .collect();
+        s.engine.set_map(dims, &coords);
+    });
+}
+
 /// Install a W×H 2D grid map (row-major, matching the strip order).
 #[no_mangle]
 pub extern "C" fn lx_set_map_grid(h: i32, w: u32, grid_h: u32) {

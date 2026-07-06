@@ -108,7 +108,10 @@ and the autocomplete/docs pipeline, and can't break existing code.
   waterfall option for 1D.
 - **Shareable pattern URLs** [S] ★ — DONE (`#p=` deflate+base64url
   fragment; share button copies, load restores; e2e-covered).
-- **Multi-pane: map editor + preview** [L] ★★ — visual 2D/3D map editing.
+- **Multi-pane: map editor + preview** [L] ★★ — mapper v1 DONE (PB-style
+  JS map function → normalized map installed in the engine, scatter
+  preview, render2D auto-selected). Still open: visual drag-editing,
+  Fill/Contain toggles, device map upload, map in share links.
 
 ## Top picks if forced to choose 5
 

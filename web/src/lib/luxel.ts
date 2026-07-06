@@ -82,6 +82,7 @@ interface Exports {
   lx_vars(h: number): number;
   lx_set_var(h: number, namePtr: number, nameLen: number, raw: number): number;
   lx_set_map_grid(h: number, w: number, gridH: number): void;
+  lx_set_map(h: number, dims: number, ptr: number, count: number): void;
   lx_set_wall_clock(h: number, unixSeconds: number): void;
   lx_pixels(h: number): number;
   lx_debug_enable(h: number, on: number): void;
@@ -181,6 +182,23 @@ export class Engine {
 
   setMapGrid(w: number, h: number): void {
     this.e.lx_set_map_grid(this.h, w, h);
+  }
+
+  /** Install an arbitrary pixel map (one [x,y] or [x,y,z] per pixel, any
+   *  units — the engine normalizes per axis). */
+  setMap(coords: number[][]): void {
+    const dims = (coords[0]?.length ?? 2) >= 3 ? 3 : 2;
+    const n = coords.length;
+    const bytes = n * dims * 4;
+    const ptr = this.e.lx_alloc(bytes);
+    const view = new DataView(this.e.memory.buffer);
+    for (let i = 0; i < n; i++) {
+      for (let d = 0; d < dims; d++) {
+        view.setInt32(ptr + (i * dims + d) * 4, Math.round((coords[i]?.[d] ?? 0) * RAW), true);
+      }
+    }
+    this.e.lx_set_map(this.h, dims, ptr, n);
+    this.e.lx_dealloc(ptr, bytes);
   }
 
   /** Current pixel buffer without rendering (partial frames while paused). */
