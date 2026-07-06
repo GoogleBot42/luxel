@@ -27,7 +27,7 @@ use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::json_escape;
-use picoserve::routing::{get, get_service, post, post_service};
+use picoserve::routing::RequestHandlerService as _;
 
 use crate::shared::{
     get_pattern_src, get_pixels, get_vmerr, snapshot, Msg, CONTROLS_JSON, FPS, MSG_QUEUE,
@@ -218,19 +218,94 @@ async fn api_var(body: String) -> ApiResponse {
     json_response(String::from("{\"ok\":true}"))
 }
 
+/// Flat single-level dispatcher. Do NOT go back to chaining `.route()`
+/// calls: picoserve nests one router type per route, and polling that
+/// chain put a multi-KB stack frame on the executor per level — at 11
+/// routes it overflowed the main task's stack straight into the WiFi
+/// blob's .bss (g_phyFuns and pm state at 0x3ffdb1xx), which surfaced as
+/// wild-pointer crashes deep inside radio code. A `match` keeps the poll
+/// frame constant no matter how many routes we add.
+struct Api;
+
+impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathParameters> for Api {
+    async fn call_path_router_service<
+        R: picoserve::io::Read,
+        W: picoserve::response::ResponseWriter<Error = R::Error>,
+    >(
+        &self,
+        state: &State,
+        path_parameters: PathParameters,
+        path: picoserve::request::Path<'_>,
+        mut request: picoserve::request::Request<'_, R>,
+        response_writer: W,
+    ) -> Result<picoserve::ResponseSent, W::Error> {
+        use picoserve::response::{IntoResponse as _, StatusCode};
+
+        let method = request.parts.method();
+        let route = path.encoded();
+
+        if method.eq_ignore_ascii_case("POST") {
+            match route {
+                // streams its own body; delegates entirely
+                "/api/ota" => {
+                    return OtaService
+                        .call_request_handler_service(
+                            state,
+                            path_parameters,
+                            request,
+                            response_writer,
+                        )
+                        .await;
+                }
+                "/api/code" | "/api/control" | "/api/var" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => {
+                            let conn = request.body_connection.finalize().await?;
+                            return (StatusCode::BAD_REQUEST, "body read failed")
+                                .write_to(conn, response_writer)
+                                .await;
+                        }
+                    };
+                    let response = match route {
+                        "/api/code" => api_code(body).await,
+                        "/api/control" => api_control(body).await,
+                        _ => api_var(body).await,
+                    };
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
+                _ => {}
+            }
+        } else if method.eq_ignore_ascii_case("GET") {
+            macro_rules! respond {
+                ($resp:expr) => {{
+                    let resp = $resp;
+                    let conn = request.body_connection.finalize().await?;
+                    return resp.write_to(conn, response_writer).await;
+                }};
+            }
+            match route {
+                "/" => respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML)),
+                "/api/status" => respond!(api_status().await),
+                "/api/pixels" => respond!(api_pixels().await),
+                "/api/pattern" => respond!(api_pattern().await),
+                "/api/controls" => respond!(api_controls().await),
+                "/api/vars" => respond!(api_vars().await),
+                "/api/readouts" => respond!(api_readouts().await),
+                _ => {}
+            }
+        }
+
+        let conn = request.body_connection.finalize().await?;
+        (StatusCode::NOT_FOUND, "not found")
+            .write_to(conn, response_writer)
+            .await
+    }
+}
+
 pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
-    picoserve::Router::new()
-        .route("/", get_service(picoserve::response::File::html(INDEX_HTML)))
-        .route("/api/status", get(api_status))
-        .route("/api/pixels", get(api_pixels))
-        .route("/api/pattern", get(api_pattern))
-        .route("/api/controls", get(api_controls))
-        .route("/api/vars", get(api_vars))
-        .route("/api/readouts", get(api_readouts))
-        .route("/api/code", post(api_code))
-        .route("/api/control", post(api_control))
-        .route("/api/var", post(api_var))
-        .route("/api/ota", post_service(OtaService))
+    picoserve::Router::new().nest_service("", Api)
 }
 
 pub const WEB_TASK_POOL_SIZE: usize = 2;
