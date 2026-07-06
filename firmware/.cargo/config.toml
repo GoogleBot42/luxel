@@ -5,11 +5,11 @@
 target = "riscv32imc-unknown-none-elf"
 
 [target.'cfg(target_arch = "riscv32")']
-runner = "espflash flash --monitor --partition-table=partitions.csv"
+runner = "espflash flash --monitor --partition-table=partitions.csv --erase-parts otadata"
 rustflags = ["-C", "link-arg=-Tlinkall.x", "-C", "force-frame-pointers"]
 
 [target.'cfg(target_arch = "xtensa")']
-runner = "espflash flash --monitor --partition-table=partitions.csv"
+runner = "espflash flash --monitor --partition-table=partitions.csv --erase-parts otadata"
 rustflags = [
   # GNU LD from espup's xtensa-esp-elf toolchain
   "-C", "link-arg=-Wl,-Tlinkall.x",
