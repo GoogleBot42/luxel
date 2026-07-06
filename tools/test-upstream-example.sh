@@ -22,12 +22,14 @@ rm -rf "$DST"
 cp -r "$SRC" "$DST"
 chmod -R u+w "$DST"
 
+# resolve before any cd — $0 is relative to the caller's cwd
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+
 cd "$DST/examples/wifi/embassy_dhcp"
 
 # MODE=server replaces the client loop with a bare embassy-net TCP server
 # (tools/upstream-server-test/main.rs) — still 100% upstream crates; this
 # reproduces the serve-side TX burst that crashes Luxel on esp32.
-REPO=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${MODE:-client}" = "server" ]; then
   cp "$REPO/tools/upstream-server-test/main.rs" src/main.rs
   grep -q '^embedded-io-async' Cargo.toml || \

@@ -148,7 +148,15 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "board-pixelblaze-v3")]
     let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
 
-    ota::init(esp_storage::FlashStorage::new(p.FLASH));
+    // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —
+    // no esp-storage FlashStorage construction, no boot-time partition
+    // table read — to test whether flash-driver setup interacts with the
+    // esp32 radio crashes (serving worked before the OTA commit).
+    if option_env!("LUXEL_NO_OTA").is_none() {
+        ota::init(esp_storage::FlashStorage::new(p.FLASH));
+    } else {
+        println!("LUXEL_NO_OTA: ota disabled");
+    }
     spawner.spawn(reboot_task().unwrap());
     // Bisect knob: LUXEL_QUIET=1 at build time skips the render task
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
