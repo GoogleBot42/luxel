@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-07-06 ~01:30 — second overnight batch: simplex, setGamma, **, mapper, pattern library
+
+All committed, tested (106 core tests, 40 e2e checks in real chromium),
+and already in the v0.1.5 image + packed assets waiting for the device:
+
+- **`simplex2`/`simplex3`** (`f1b7abc`) — fixed-point simplex noise,
+  smoother than perlin, seeded, deterministic.
+- **`setGamma(g)`** (`f95d805`) — output gamma as a cached LUT (zero
+  per-pixel cost); `setGamma(2.2)` makes LED fades perceptually even.
+- **`**` exponent operator** (`16d6f68`) — right-assoc, tighter than `*`.
+- **Mapper (M3)** (`4f157d3`) — write a PB-style JS map function, apply,
+  and the playground installs a real 2D map into the engine (new
+  `lx_set_map` wasm export) with a live scatter preview. The ring-map
+  rainbow screenshot is worth opening: e2e-6-mapper.png.
+- **Pattern library + autosave** (`11d43a9`) — edits survive closed tabs;
+  named saves live in a picker optgroup. This is the prototype UI for
+  device pattern CRUD.
+- Corpus re-run with everything new: **288/293 ok, zero regressions**
+  (user globals correctly shadow new builtin names — checked explicitly).
+
+**Morning checklist (after your one serial flash of v0.1.5):** I'll
+detect the device and, automatically: POST /api/wifi (creds → flash,
+lockout-proof forever), push the 431 KB assets archive (new playground +
+gallery, /api/assets, no reboot), live-code a beatSin/simplex pattern to
+verify the new builtins on hardware, and run one OTA round-trip. Nothing
+needed from you beyond the flash command in the note below.
+
 ## 2026-07-06 ~11:30 — overnight progress: builtins batch 2, .epe UI, pattern browser
 
 All hardware-independent, all committed, all verified locally (tests +
