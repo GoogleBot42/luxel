@@ -161,6 +161,19 @@ where PB compile-errors on arity).
 `dist(x1,y1,x2,y2)`, `dist3(x1,y1,z1,x2,y2,z2)`, and easing curves on 0..1:
 `easeInQuad`/`easeOutQuad`/`easeInOutQuad` and the `…Cubic` trio.
 
+**Luxel extensions — tempo & hashing**: `beat(bpm)` is a 0..1 sawtooth
+beat phase at `bpm` on the engine clock; `beatSin(bpm, lo = 0, hi = 1)`
+oscillates sinusoidally between `lo` and `hi` at `bpm` (FastLED-style —
+music-synced-feeling motion without audio hardware). `hash(x)` and
+`hash2(x, y)` return a deterministic value in [0, 1) from their inputs —
+stable per-pixel randomness (sparkle that doesn't reshuffle each frame:
+`hash(index)` is constant per pixel, `hash2(index, floor(t))` re-rolls
+once per tick). Same input → same output on every device, pinned by test.
+
+**Luxel extensions — vectors**: `dot(x1,y1, x2,y2)`, `dot3(x1,y1,z1,
+x2,y2,z2)`, and `angleBetween(x1,y1, x2,y2)` — the signed angle from
+vector 1 to vector 2 in radians (counter-clockwise positive, like `atan2`).
+
 ### Color
 
 `hsv(h, s, v)` (hue wraps), `hsv24`, `rgb(r, g, b)`; palette:
@@ -171,12 +184,33 @@ OKLCH (lightness 0..1, chroma ~0..0.4, hue in turns like `hsv`), and
 `oklab(l, a, b)` from OKLab. Gradients and fades through these look far
 smoother than HSV — even brightness across hues, no dark band through blue.
 
+**Luxel extensions — value-returning color**: because functions return one
+number, the conversion forms write into a caller-provided array (first
+three slots) and return it — reuse one array so render loops don't grow
+the arena. `hsv2rgb(h, s, v, out)` → `[r, g, b]`; `rgb2hsv(r, g, b, out)`
+→ `[h, s, v]` with hue in turns; `mixColors(r1,g1,b1, r2,g2,b2, t, out)`
+blends two RGB colors **in OKLab** — perceptually even, no muddy midpoints.
+
+```js
+var c = array(3)
+export function render(index) {
+  mixColors(1, 0, 0, 0, 0, 1, index / pixelCount, c)  // red → blue, evenly
+  rgb(c[0], c[1], c[2])
+}
+```
+
 ### Arrays
 
 `array(n)`, `arrayLength`, `arraySum`, `arrayForEach(a, fn)`,
 `arrayMutate(a, fn)`, `arrayMapTo(src, dst, fn)`,
 `arrayReduce(a, fn, init)`, `arrayReplace(a, v)`,
 `arrayReplaceAt(a, i, v)`, `arraySort(a)`, `arraySortBy(a, cmp)`.
+
+**Luxel extensions**: `blur1D(arr, radius)` box-blurs the array in place
+(window `2·radius + 1`, edges clamped) and returns it; `feedback(arr,
+decay)` multiplies every element by `decay` in place — the trails/glow
+decay loop as one call. Both are the ubiquitous hand-rolled patterns
+(KITT's decay, fire's cooling blur) as builtins.
 
 ### Noise
 

@@ -632,3 +632,92 @@ fn oklch_produces_reasonable_colors() {
     let gray = render_rgb("oklab(0.6, 0, 0)");
     assert!((gray[0] - gray[1]).abs() < 0.03 && (gray[1] - gray[2]).abs() < 0.03, "gray = {gray:?}");
 }
+
+#[test]
+fn extension_builtins_batch2() {
+    // dot / dot3
+    assert_eq!(eval("dot(1, 2, 3, 4)"), fx(11.0));
+    assert_eq!(eval("dot3(1, 2, 3, 4, 5, 6)"), fx(32.0));
+    // angleBetween: +x to +y is +90° (π/2 rad), signed
+    assert!((eval("angleBetween(1, 0, 0, 1)").to_f64() - 1.5708).abs() < 1e-2);
+    assert!((eval("angleBetween(0, 1, 1, 0)").to_f64() + 1.5708).abs() < 1e-2);
+    // hash: deterministic, in [0,1), different inputs differ
+    assert_eq!(eval("hash(0.5)"), eval("hash(0.5)"));
+    let h = eval("hash(0.5)").to_f64();
+    assert!((0.0..1.0).contains(&h));
+    assert_ne!(eval("hash(0.5)"), eval("hash(0.25)"));
+    assert_ne!(eval("hash2(1, 2)"), eval("hash2(2, 1)"));
+    // beat at t=0 is phase 0 (engine clock starts at 0 in one eval)
+    assert_eq!(eval("beat(120)"), fx(0.0));
+    // beatSin defaults lo=0, hi=1 → at t=0, sin(0)=0 → midpoint 0.5
+    assert!((eval("beatSin(120)").to_f64() - 0.5).abs() < 1e-3);
+    assert!((eval("beatSin(120, 2, 4)").to_f64() - 3.0).abs() < 1e-2);
+}
+
+#[test]
+fn blur_and_feedback() {
+    // blur1D radius 1: [0,3,0] → [1.5, 1, 1.5] (edges clamp: 2-wide windows)
+    assert_eq!(
+        eval_prog("a = [0, 3, 0]\nblur1D(a, 1)\nexport var out = a[1]"),
+        fx(1.0)
+    );
+    assert_eq!(
+        eval_prog("a = [0, 3, 0]\nblur1D(a, 1)\nexport var out = a[0]"),
+        fx(1.5)
+    );
+    // radius 0 is a no-op; returns the array (chainable)
+    assert_eq!(
+        eval_prog("a = [4, 2]\nexport var out = blur1D(a, 0)[0]"),
+        fx(4.0)
+    );
+    // feedback: multiply-decay in place
+    assert_eq!(
+        eval_prog("a = [2, 4]\nfeedback(a, 0.5)\nexport var out = a[1]"),
+        fx(2.0)
+    );
+}
+
+#[test]
+fn value_returning_color() {
+    // hsv2rgb writes into out and returns it: hue 0 = red
+    assert_eq!(
+        eval_prog("out3 = array(3)\nexport var out = hsv2rgb(0, 1, 1, out3)[0]"),
+        fx(1.0)
+    );
+    assert_eq!(
+        eval_prog("out3 = array(3)\nhsv2rgb(0, 1, 1, out3)\nexport var out = out3[1]"),
+        fx(0.0)
+    );
+    // rgb2hsv: pure green → h = 1/3 turn, s = 1, v = 1
+    let h = eval_prog("o = array(3)\nrgb2hsv(0, 1, 0, o)\nexport var out = o[0]").to_f64();
+    assert!((h - 1.0 / 3.0).abs() < 1e-3, "h = {h}");
+    assert_eq!(
+        eval_prog("o = array(3)\nrgb2hsv(0, 1, 0, o)\nexport var out = o[1]"),
+        fx(1.0)
+    );
+    // hsv round-trip through rgb (orange-ish)
+    let h2 = eval_prog(
+        "rgb = array(3)\nhsv = array(3)\nhsv2rgb(0.1, 0.8, 0.9, rgb)\nrgb2hsv(rgb[0], rgb[1], rgb[2], hsv)\nexport var out = hsv[0]",
+    )
+    .to_f64();
+    assert!((h2 - 0.1).abs() < 0.01, "round-trip hue = {h2}");
+    // mixColors endpoints reproduce the inputs (red → blue in OKLab)
+    let r0 = eval_prog(
+        "o = array(3)\nmixColors(1, 0, 0, 0, 0, 1, 0, o)\nexport var out = o[0]",
+    )
+    .to_f64();
+    assert!(r0 > 0.9, "t=0 red channel = {r0}");
+    let b1 = eval_prog(
+        "o = array(3)\nmixColors(1, 0, 0, 0, 0, 1, 1, o)\nexport var out = o[2]",
+    )
+    .to_f64();
+    assert!(b1 > 0.9, "t=1 blue channel = {b1}");
+    // midpoint stays in gamut-ish range on every channel
+    for ch in 0..3 {
+        let v = eval_prog(&format!(
+            "o = array(3)\nmixColors(1, 0, 0, 0, 0, 1, 0.5, o)\nexport var out = o[{ch}]"
+        ))
+        .to_f64();
+        assert!((-0.05..=1.05).contains(&v), "mid channel {ch} = {v}");
+    }
+}

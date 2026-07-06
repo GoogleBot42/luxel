@@ -43,9 +43,8 @@ and the autocomplete/docs pipeline, and can't break existing code.
 - **`const`/`let`** [S] ★★★ — DONE.
 - **`**` (exponent) operator** [S] ★ — `x ** 2`; parser + one opcode reuse
   of `pow`. `compat` (PB has no `**`, so no conflict).
-- **Array literals `[1, 2, 3]`** [M] ★★★ — today arrays are `array(n)` +
-  assignment; literals are the single most-missed JS convenience. Needs a
-  NewArray-with-inits path.
+- **Array literals `[1, 2, 3]`** [M] ★★★ — DONE (lexer/parser/compiler
+  `NewArray`; semantics tests pin `[1,2,3].length/.sum()`).
 - **Ternary chains / already have `?:`** — verify and document.
 - **`switch`** [M] ★ — occasionally nice; low priority.
 - **Compound member ops on arrays** — `arr[i] += x` already works; audit

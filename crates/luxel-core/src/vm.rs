@@ -289,6 +289,20 @@ pub enum Builtin {
     PlaylistSetPosition,
     PlaylistGetLength,
     NodeId,
+    // Luxel extension builtins, batch 2: tempo helpers, deterministic
+    // hashing, array filters, vector math, value-returning color
+    Beat,
+    BeatSin,
+    Hash,
+    Hash2,
+    Blur1D,
+    Feedback,
+    Dot,
+    Dot3,
+    AngleBetween,
+    Rgb2Hsv,
+    Hsv2Rgb,
+    MixColors,
 }
 
 pub struct BuiltinDef {
@@ -355,6 +369,12 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("playlistGetPosition", PlaylistGetPosition),
     b!("playlistSetPosition", PlaylistSetPosition),
     b!("playlistGetLength", PlaylistGetLength), b!("nodeId", NodeId),
+    // Luxel extensions, batch 2 (appended — table order is the builtin id)
+    b!("beat", Beat), b!("beatSin", BeatSin),
+    b!("hash", Hash), b!("hash2", Hash2),
+    b!("blur1D", Blur1D), b!("feedback", Feedback),
+    b!("dot", Dot), b!("dot3", Dot3), b!("angleBetween", AngleBetween),
+    b!("rgb2hsv", Rgb2Hsv), b!("hsv2rgb", Hsv2Rgb), b!("mixColors", MixColors),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -1533,7 +1553,116 @@ impl Vm {
             PinMode | DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),
             DigitalRead | AnalogRead | TouchRead | SequencerGetMode | PlaylistGetPosition
             | PlaylistGetLength | NodeId => num(Fx::ZERO),
+            // ---- Luxel extensions, batch 2 ----
+            // beat(bpm): sawtooth beat phase 0..1 at `bpm` on the engine
+            // clock — FastLED-style tempo without real audio
+            Beat => num(self.beat_phase(n(0))),
+            // beatSin(bpm, lo = 0, hi = 1): sine oscillation lo..hi at bpm
+            BeatSin => {
+                let lo = if argc >= 2 { n(1) } else { Fx::ZERO };
+                let hi = if argc >= 3 { n(2) } else { Fx::ONE };
+                let s = fmath::sin_turns(self.beat_phase(n(0)));
+                let unit = Fx::from_raw((s.raw() + Fx::ONE.raw()) >> 1);
+                num(lo + (hi - lo) * unit)
+            }
+            // hash(x) / hash2(x, y): deterministic 0..1 from the raw bits —
+            // stable per-pixel randomness (sparkle that doesn't reshuffle
+            // every frame). Same input, same output, on every device.
+            Hash => num(hash_unit(n(0).raw() as u32)),
+            Hash2 => num(hash_unit(
+                (n(0).raw() as u32).wrapping_add(hash32(n(1).raw() as u32)),
+            )),
+            // blur1D(arr, radius): in-place box blur, window 2·radius+1,
+            // edges clamped; returns the array. radius < 1 is a no-op.
+            Blur1D => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("blur1D of a non-array".into()));
+                };
+                let r = n(1).to_int_trunc().max(0) as usize;
+                let idx = arr as usize;
+                let len = self.arrays[idx].len();
+                if r > 0 && len > 0 {
+                    // prefix sums in raw i64 — exact, no overflow at 10K els
+                    let mut pre = alloc::vec::Vec::with_capacity(len + 1);
+                    pre.push(0i64);
+                    for v in &self.arrays[idx] {
+                        pre.push(pre.last().unwrap() + v.num().raw() as i64);
+                    }
+                    for i in 0..len {
+                        let lo = i.saturating_sub(r);
+                        let hi = (i + r).min(len - 1);
+                        let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
+                        self.arrays[idx][i] = Value::Num(Fx::from_raw(avg as i32));
+                    }
+                }
+                Ok(a(0))
+            }
+            // feedback(arr, decay): arr[i] *= decay in place; the trails/
+            // glow decay loop as one call. Returns the array.
+            Feedback => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("feedback of a non-array".into()));
+                };
+                let decay = n(1);
+                for slot in self.arrays[arr as usize].iter_mut() {
+                    *slot = Value::Num(slot.num() * decay);
+                }
+                Ok(a(0))
+            }
+            // dot(x1,y1, x2,y2) / dot3(x1,y1,z1, x2,y2,z2)
+            Dot => num(n(0) * n(2) + n(1) * n(3)),
+            Dot3 => num(n(0) * n(3) + n(1) * n(4) + n(2) * n(5)),
+            // angleBetween(x1,y1, x2,y2): signed angle from v1 to v2 in
+            // radians (positive = counter-clockwise), like atan2
+            AngleBetween => {
+                let cross = n(0) * n(3) - n(1) * n(2);
+                let dotp = n(0) * n(2) + n(1) * n(3);
+                num(fmath::atan2(cross, dotp))
+            }
+            // Value-returning color conversions: write [x,y,z] into the
+            // caller's `out` array (first 3 slots) and return it — callers
+            // reuse one array, so render loops don't grow the arena.
+            Hsv2Rgb => {
+                let rgb = hsv_to_rgb(n(0), n(1), n(2));
+                self.write3(a(3), rgb).map_err(|m| no_site(m.into()))?;
+                Ok(a(3))
+            }
+            Rgb2Hsv => {
+                let hsv = rgb_to_hsv(n(0), n(1), n(2));
+                self.write3(a(3), hsv).map_err(|m| no_site(m.into()))?;
+                Ok(a(3))
+            }
+            // mixColors(r1,g1,b1, r2,g2,b2, t, out): blend two RGB colors in
+            // OKLab — perceptually even, no muddy midpoints
+            MixColors => {
+                let c = crate::color::mix_oklab([n(0), n(1), n(2)], [n(3), n(4), n(5)], n(6));
+                self.write3(a(7), c).map_err(|m| no_site(m.into()))?;
+                Ok(a(7))
+            }
         }
+    }
+
+    /// Fractional beat position at `bpm` on the engine clock (0..1 sawtooth).
+    fn beat_phase(&self, bpm: Fx) -> Fx {
+        // beats = ms·bpm/60000; with bpm in 16.16 the low 16 bits of the
+        // quotient are exactly the fractional beat
+        let phase = (self.time_ms as u128 * bpm.raw().max(0) as u128 / 60_000) & 0xFFFF;
+        Fx::from_raw(phase as i32)
+    }
+
+    /// Write three numbers into the first three slots of `out`.
+    fn write3(&mut self, out: Value, vals: [Fx; 3]) -> Result<(), &'static str> {
+        let Value::Arr(arr) = out else {
+            return Err("`out` must be an array");
+        };
+        let slots = &mut self.arrays[arr as usize];
+        if slots.len() < 3 {
+            return Err("`out` array needs length >= 3");
+        }
+        for (slot, v) in slots.iter_mut().zip(vals) {
+            *slot = Value::Num(v);
+        }
+        Ok(())
     }
 
     /// Pre-multiply an op onto the current transform: points transform in
@@ -1736,6 +1865,46 @@ fn civil_from_unix(secs: i64) -> Civil {
 
 /// HSV → RGB in pure fixed point. Hue wraps (negative wraps backward),
 /// saturation/value clamp to 0..1. TODO(oracle): compare rounding against PB.
+/// lowbias32 (Chris Wellons) — well-mixed 32-bit integer hash, the basis of
+/// the deterministic `hash`/`hash2` builtins. Pinned: changing this changes
+/// pattern output on every device, so treat it as part of the bytecode ABI.
+fn hash32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x21f0_aaad);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0xd35a_2d97);
+    x ^= x >> 15;
+    x
+}
+
+/// Hash to a uniform value in [0, 1).
+fn hash_unit(x: u32) -> Fx {
+    Fx::from_raw((hash32(x) & 0xFFFF) as i32)
+}
+
+/// Inverse of [hsv_to_rgb]: gamma-sRGB → [h, s, v], hue in turns (0..1).
+pub fn rgb_to_hsv(r: Fx, g: Fx, b: Fx) -> [Fx; 3] {
+    let r = r.clamp(Fx::ZERO, Fx::ONE);
+    let g = g.clamp(Fx::ZERO, Fx::ONE);
+    let b = b.clamp(Fx::ZERO, Fx::ONE);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let v = max;
+    let s = if max == Fx::ZERO { Fx::ZERO } else { d / max };
+    let six = Fx::from_int(6);
+    let h6 = if d == Fx::ZERO {
+        Fx::ZERO
+    } else if max == r {
+        ((g - b) / d).mod_floor(six)
+    } else if max == g {
+        (b - r) / d + Fx::from_int(2)
+    } else {
+        (r - g) / d + Fx::from_int(4)
+    };
+    [h6 / six, s, v]
+}
+
 pub fn hsv_to_rgb(h: Fx, s: Fx, v: Fx) -> [Fx; 3] {
     let s = s.clamp(Fx::ZERO, Fx::ONE);
     let v = v.clamp(Fx::ZERO, Fx::ONE);
