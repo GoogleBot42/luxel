@@ -91,6 +91,14 @@ macro_rules! mk_static {
 async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
+    // The WiFi blob mallocs through this allocator and does NOT null-check;
+    // running the heap dry shows up as StoreProhibited crashes inside the
+    // blob (seen on the PB v3 in pm_on_beacon_rx), not as clean OOM panics.
+    // Keep headroom generous and watch /api/status heap_free. The reclaimed
+    // (dram2) region is 98768 bytes on esp32, ~66 KB on the C3.
+    #[cfg(feature = "esp32")]
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 96 * 1024);
+    #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
     // Classic ESP32 has less contiguous DRAM than the C3 once the WiFi
     // blob's statics are linked in — 160 KB here overflows the region by
@@ -201,6 +209,7 @@ async fn main(spawner: Spawner) -> ! {
     if let Some(cfg) = stack.config_v4() {
         println!("ip: http://{}/", cfg.address.address());
     }
+    println!("heap free: {}", esp_alloc::HEAP.free());
 
     for task_id in 0..server::WEB_TASK_POOL_SIZE {
         spawner.spawn(server::web_task(task_id, stack).unwrap());
@@ -208,7 +217,11 @@ async fn main(spawner: Spawner) -> ! {
 
     loop {
         Timer::after(Duration::from_secs(60)).await;
-        println!("fps: {}", FPS.load(Ordering::Relaxed));
+        println!(
+            "fps: {}  heap free: {}",
+            FPS.load(Ordering::Relaxed),
+            esp_alloc::HEAP.free()
+        );
     }
 }
 

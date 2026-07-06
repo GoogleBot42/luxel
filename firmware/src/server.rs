@@ -50,18 +50,20 @@ async fn api_status() -> ApiResponse {
     let fps = FPS.load(Ordering::Relaxed);
     let slot = crate::ota::booted_slot();
     let version = env!("CARGO_PKG_VERSION");
+    let heap = esp_alloc::HEAP.free();
     json_response(match get_vmerr() {
         Some(e) => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"vmerr\":\"{}\"}}",
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":\"{}\"}}",
             fps,
             PIXEL_COUNT,
             slot,
             version,
+            heap,
             json_escape(&e)
         ),
         None => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"vmerr\":null}}",
-            fps, PIXEL_COUNT, slot, version
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":null}}",
+            fps, PIXEL_COUNT, slot, version, heap
         ),
     })
 }
