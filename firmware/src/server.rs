@@ -305,16 +305,17 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
 
         if method.eq_ignore_ascii_case("POST") {
             match route {
-                // streams its own body; delegates entirely
+                // streams its own body; delegates entirely (boxed — large
+                // sub-futures must stay off the dispatcher's poll stack, see
+                // the /ws arm)
                 "/api/ota" => {
-                    return OtaService
-                        .call_request_handler_service(
-                            state,
-                            path_parameters,
-                            request,
-                            response_writer,
-                        )
-                        .await;
+                    return alloc::boxed::Box::pin(OtaService.call_request_handler_service(
+                        state,
+                        path_parameters,
+                        request,
+                        response_writer,
+                    ))
+                    .await;
                 }
                 "/api/code" | "/api/control" | "/api/var" => {
                     let body = match request.body_connection.body().read_all().await {
@@ -355,7 +356,16 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 .await;
                 let conn = request.body_connection.finalize().await?;
                 return match upgrade {
-                    Ok(u) => u.on_upgrade(PreviewWs).write_to(conn, response_writer).await,
+                    // Box::pin: the ws-session state machine is large, and
+                    // inlining it bloated the dispatcher's poll frame enough
+                    // that ANY request overflowed the task stack (second
+                    // stack-guard incident). Heap-allocate it instead.
+                    Ok(u) => {
+                        alloc::boxed::Box::pin(
+                            u.on_upgrade(PreviewWs).write_to(conn, response_writer),
+                        )
+                        .await
+                    }
                     Err(_) => {
                         (StatusCode::BAD_REQUEST, "expected a websocket upgrade")
                             .write_to(conn, response_writer)
