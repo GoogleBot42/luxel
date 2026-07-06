@@ -1233,4 +1233,488 @@ export function render2D(index, x, y) {
 }
 `,
   },
+  {
+    name: "Edgeburst",
+    layout: { kind: "strip", pixels: 60 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Edgeburst" (no source consulted). A rainbow front bursts from
+// the center, sweeps to the ends, and collapses back. One clamped blend
+// of a spatial tent and a time bounce yields position, brightness, and
+// hue all at once.
+export function beforeRender(delta) {
+  t1 = triangle(time(0.09))  // bounce, ~6 s round trip
+}
+
+export function render(index) {
+  tent = triangle(index / pixelCount)
+  e = clamp(tent + t1 * 4 - 2, 0, 1)
+  hsv(e * e - 0.2, 1, triangle(e))
+}
+`,
+  },
+  {
+    name: "Rainbow Melt",
+    layout: { kind: "strip", pixels: 60 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "rainbow melt" (no source consulted). A mirrored rainbow that
+// slowly rotates while brightness churns in fluid waves — made by nesting
+// a sinusoid inside itself, each stage phase-modulated by the clock, over
+// two near-but-not-equal periods so it never seems to repeat.
+export function beforeRender(delta) {
+  t1 = time(0.1)
+  t2 = time(0.13)
+}
+
+export function render(index) {
+  c = 1 - abs(2 * index / pixelCount - 1)  // 1 at center, 0 at ends
+  v = wave(wave(wave(c) + t1) + t1)
+  hsv(c + t2, 1, v * v)
+}
+`,
+  },
+  {
+    name: "Color Twinkles",
+    layout: { kind: "strip", pixels: 60 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "color twinkles" (no source consulted). Stateless, random-free
+// twinkles: two incommensurate spatial sines phase-modulate each other
+// into a noise-like field; a fourth power plus a hard floor carves it
+// into crisp sparks. The same field on a slower clock picks the hues.
+export function beforeRender(delta) {
+  tf = time(0.16) * PI2  // brightness clock, ~10 s
+  ts = time(0.44) * PI2  // color clock, ~29 s
+}
+
+export function render(index) {
+  b = (1 + sin(index * 0.31 + sin(index * 0.171 + tf) * PI2)) * 0.5
+  b = b * b
+  b = b * b  // ^4: crush the midtones, keep sparse peaks
+  if (b < 0.22) b = 0  // hard floor: clean black between twinkles
+  h = sin(index * 0.31 + sin(index * 0.171 + ts) * PI2)
+  hsv(h, 1, b * 0.5)
+}
+`,
+  },
+  {
+    name: "Thunderstorm",
+    layout: { kind: "strip", pixels: 60 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Thunderstorm" (no source consulted), with two improvements the
+// description recommended: the cloud anchors to the strip's end (not a
+// hard-coded index) and timing is delta-based (not frame-counted).
+// Layered overwrites, no blending: rain, ember glints, lightning, and the
+// cloud painted last so flashes appear to come from behind it.
+cloudSize = 8
+lightning = 0
+nextFlash = 2
+edgeT = 0
+gap = 6
+
+export function sliderRainDensity(v) {
+  gap = 2 + floor((1 - v) * pixelCount / 4)
+} //# min=0 max=1 step=0.01 default=0.7
+
+export function beforeRender(delta) {
+  dt = delta * 0.001
+  edgeT += dt
+  if (edgeT > 0.25) {  // the cloud's edge shimmers a few times a second
+    edgeT = 0
+    cloudSize = floor(pixelCount / 9 + random(pixelCount / 14))
+  }
+  nextFlash -= dt
+  if (lightning > 0) lightning -= dt
+  if (nextFlash <= 0) {
+    lightning = 0.12
+    nextFlash = 0.4 + random(6)  // irregular gaps, constant flash length
+  }
+  scan = floor(time(0.09) * pixelCount)  // rain marches away from the cloud
+  cloudV = 0.35 + 0.65 * min(time(0.06) * 1.5, 1)  // swell, then hold
+}
+
+export function render(index) {
+  h = 0.66
+  s = 1
+  v = 0
+  if ((index + scan) % gap == 0) v = 0.8  // deep blue drops
+  if (random(1) < 0.02) {  // stray ember glints
+    h = 0.07
+    v = 1
+  }
+  if (lightning > 0) {  // whole-strip amber flash
+    h = 0.09
+    s = 0.55
+    v = 1
+  }
+  if (index >= pixelCount - cloudSize) {  // white cloud, always on top
+    s = 0
+    v = cloudV
+  }
+  hsv(h, s, v)
+}
+`,
+  },
+  {
+    name: "Glittering Jewels",
+    layout: { kind: "strip", pixels: 60 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Glittering Jewels" (no source consulted). Soft gems bloom at
+// random spots — the glow radius breathes with the bloom, a hot core sits
+// in a wider half-strength halo, and a slow staggered clock fires narrow
+// "glints" confined to each core. Overlaps composite winner-take-all so
+// jewels stay crisp. The invisible tail of each lifetime doubles as a
+// randomized respawn delay.
+maxJewels = 20
+jpos = array(maxJewels)
+jhue = array(maxJewels)
+jphase = array(maxJewels)
+jrate = array(maxJewels)
+jwid = array(maxJewels)
+jvis = array(maxJewels)
+jspark = array(maxJewels)
+
+export var speed = 0.35
+export function sliderSpeed(v) { speed = 0.05 + v * v * 1.5 } //# min=0 max=1 step=0.01 default=0.45
+export var width = 0.09
+export function sliderWidth(v) { width = 0.02 + v * 0.2 } //# min=0 max=1 step=0.01 default=0.35
+sparkle = 0.6
+export function sliderSparkle(v) { sparkle = v } //# min=0 max=1 step=0.01 default=0.6
+count = 6
+export function sliderJewels(v) { count = 1 + floor(v * (maxJewels - 1)) } //# min=1 max=20 step=1 default=6
+rainbow = 0
+export function toggleRainbow(v) { rainbow = v }
+pickH = 0.78
+export function hsvPickerColor(h, s, v) { pickH = h }
+
+function respawn(i) {
+  jpos[i] = random(1)
+  jhue[i] = random(1)
+  jrate[i] = 0.7 + random(0.7)
+  jwid[i] = 0.7 + random(0.6)  // per-jewel width factor
+  jvis[i] = 0.65 + random(0.2) // visible fraction of the lifetime
+  jspark[i] = random(1)
+}
+for (i = 0; i < maxJewels; i++) {
+  respawn(i)
+  jphase[i] = random(1)  // stagger so they never pulse in unison
+}
+
+export function beforeRender(delta) {
+  dt = delta * 0.001
+  for (var i = 0; i < count; i++) {
+    jphase[i] += dt * speed * jrate[i]
+    if (jphase[i] >= 1) {
+      jphase[i] -= 1
+      respawn(i)
+    }
+  }
+  glintT = time(0.1 + sparkle * 0.3)  // stronger sparkle = slower cycle
+}
+
+export function render(index) {
+  x = index / (pixelCount - 1)
+  bv = 0
+  bh = 0
+  for (var i = 0; i < count; i++) {
+    p = jphase[i] / jvis[i]
+    if (p < 1) {
+      bloom = sin(p * PI)
+      r = width * jwid[i] * (0.33 + 0.67 * bloom)
+      d = abs(x - jpos[i])
+      core = saturate(1 - (d * d) / (r * r))
+      rh = r * 1.3
+      g = max(core, saturate(1 - (d * d) / (rh * rh)) * 0.5) * bloom
+      if (g > 0.01) {
+        sp = 0
+        if (sparkle > 0) {
+          sp = pow(max(sin((glintT + jspark[i]) * PI2), 0), 24)
+          sp *= core * core * core * sparkle * 2
+        }
+        b = g * (1 + sp)
+        if (b > bv) {
+          bv = b
+          bh = (rainbow ? jhue[i] : pickH) + sp * 0.04
+        }
+      }
+    }
+  }
+  hsv(bh, 0.85, min(bv, 1))
+}
+`,
+  },
+  {
+    name: "Doom Fire 2D",
+    layout: { kind: "grid", w: 16, h: 16 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Doom Fire (v2.0) 2D" (no source consulted) — itself the PSX
+// Doom fire: pure cellular propagation, no noise fields. Heat rises from
+// a hidden source row, cooled by a random draw that's harshest near the
+// bottom (survivors get carried high). Guard columns skip bounds checks;
+// the sim is double-buffered and runs on its own clock, decoupled from
+// the render rate. Dragon mode makes the whole bed exhale in surges.
+gw = 16
+rows = 16
+sw = gw + 2           // guard column each side
+cells = sw * (rows + 1)  // +1 hidden source row at the bottom
+A = array(cells)
+B = array(cells)
+wind = 0
+stepT = 0
+
+baseH = 0.01
+bright = 1
+export function hsvPickerColor(h, s, v) { baseH = h; bright = v }
+flame = 0.75
+export function sliderFlameHeight(v) { flame = v } //# min=0 max=1 step=0.01 default=0.75
+windAmt = 0.3
+export function sliderWind(v) { windAmt = v } //# min=0 max=1 step=0.01 default=0.3
+stepMs = 40
+export function sliderSpeed(v) { stepMs = 15 + (1 - v) * 120 } //# min=0 max=1 step=0.01 default=0.8
+dragon = 0
+export function toggleDragonBreath(v) { dragon = v }
+
+function step() {
+  tmp = A
+  A = B
+  B = tmp
+  if (random(1) < windAmt * windAmt) wind = floor(random(3)) - 1
+  coolMax = 0.035 + (1 - flame) * (1 - flame) * 0.45
+  for (var y = 0; y < rows; y++) {
+    bend = 1 - abs(y / rows - 0.5) * 2  // wind bites hardest mid-flame
+    cool = coolMax * (0.35 + 0.65 * (y + 1) / rows)  // harsh low, gentle high
+    for (var x = 1; x <= gw; x++) {
+      var sx = x
+      if (wind != 0 && random(1) < bend * 0.7) sx = x + wind
+      v = B[(y + 1) * sw + sx] - random(cool)
+      A[y * sw + x] = max(v, 0)
+    }
+  }
+  // refresh the hidden source row
+  base = (rows) * sw
+  if (dragon) {
+    pulse = pow(wave(time(0.06)), 2)  // the exhale, ~4 s cycle
+    for (var x = 1; x <= gw; x++) {
+      A[base + x] = pulse * (0.65 + 0.35 * wave(x / gw * 2))
+    }
+  } else {
+    ph = triangle(time(0.3)) * 3  // bed shimmer drifts over ~20 s
+    for (var x = 1; x <= gw; x++) {
+      A[base + x] = 0.82 + 0.18 * wave(x * 0.13 + ph)
+    }
+  }
+}
+
+export function beforeRender(delta) {
+  stepT += min(delta, 100)
+  while (stepT >= stepMs) {
+    stepT -= stepMs
+    step()
+  }
+}
+
+export function render2D(index, x, y) {
+  heat = A[floor(y * 15.99) * sw + 1 + floor(x * 15.99)]
+  v = heat * heat * heat * bright
+  hsv(baseH + heat * 0.06, 1 - saturate(heat - 0.75) * 1.2, min(v, 1))
+}
+`,
+  },
+  {
+    name: "Voronoi 2D",
+    layout: { kind: "grid", w: 16, h: 16 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Voronoi Mix 2D" (no source consulted). Bouncing seed points
+// partition the panel by nearest-seed; swapping the distance metric and
+// the draw mode morphs stained-glass cells into orbs, rings, and bands.
+maxP = 8
+px = array(maxP)
+py = array(maxP)
+vx = array(maxP)
+vy = array(maxP)
+
+count = 5
+export function sliderPoints(v) { count = 1 + floor(v * (maxP - 1)) } //# min=1 max=8 step=1 default=5
+metric = 0
+export function sliderMetric(v) { metric = floor(v * 3.99) } //# min=0 max=3 step=1 default=0
+mode = 1
+export function sliderStyle(v) { mode = floor(v * 3.99) } //# min=0 max=3 step=1 default=1
+export function sliderSpeed(v) {
+  for (var i = 0; i < maxP; i++) {
+    px[i] = random(1)
+    py[i] = random(1)
+    vx[i] = (random(1) - 0.5) * (0.05 + v * 0.4)
+    vy[i] = (random(1) - 0.5) * (0.05 + v * 0.4)
+  }
+} //# min=0 max=1 step=0.01 default=0.3
+sliderSpeed(0.3)
+
+export function beforeRender(delta) {
+  dt = min(delta, 50) * 0.001
+  for (var i = 0; i < count; i++) {
+    px[i] += vx[i] * dt
+    py[i] += vy[i] * dt
+    if (px[i] < 0) { px[i] = 0; vx[i] = -vx[i] }
+    if (px[i] > 1) { px[i] = 1; vx[i] = -vx[i] }
+    if (py[i] < 0) { py[i] = 0; vy[i] = -vy[i] }
+    if (py[i] > 1) { py[i] = 1; vy[i] = -vy[i] }
+  }
+}
+
+export function render2D(index, x, y) {
+  bd = 9
+  bi = 0
+  for (var i = 0; i < count; i++) {
+    dx = x - px[i]
+    dy = y - py[i]
+    if (metric == 0) d = hypot(dx, dy)                 // classic cells
+    else if (metric == 1) d = wave((dx * dx + dy * dy) * 5)  // rings
+    else if (metric == 2) d = max(abs(dx), abs(dy))    // chessboard
+    else d = abs(dx + dy) * 0.7                        // diagonal bands
+    if (d < bd) {
+      bd = d
+      bi = i
+    }
+  }
+  h = bi / count
+  bd = saturate(bd)
+  if (mode == 0) hsv(h, 1, 1)                          // flat cells
+  else if (mode == 1) {                                // glowing orbs
+    v = 1 - bd
+    hsv(h, 1, v * v * v)
+  } else if (mode == 2) hsv(h + bd, 1, 1 - bd)         // rainbow fringe
+  else {                                               // far-field glow
+    v = bd * bd
+    hsv(h + bd, 1, v * v)
+  }
+}
+`,
+  },
+  {
+    name: "Kaleidoscope 2D",
+    layout: { kind: "grid", w: 16, h: 16 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Perlin Kaleidoscope 2D" (no source consulted). Three
+// noise-displaced lines — one per additive primary — get folded into
+// mirrored pie wedges (the abs() against the wedge bisector is what makes
+// true mirrors instead of rotated copies) and the whole thing spins.
+zt = 0
+rot = 0
+
+slices = 5
+export function sliderSlices(v) { slices = 1 + floor(v * 6) } //# min=1 max=7 step=1 default=5
+spd = 0.5
+export function sliderSpeed(v) { spd = 0.1 + v * v * 2 } //# min=0 max=1 step=0.01 default=0.5
+lineW = 0.14
+export function sliderLineWidth(v) { lineW = 0.05 + v * 0.3 } //# min=0 max=1 step=0.01 default=0.3
+
+export function beforeRender(delta) {
+  dt = min(delta, 50) * 0.001
+  zt += dt * 0.1 * spd
+  if (zt > 512) zt -= 512
+  rot = mod(rot + dt * 0.4 * spd, PI2)
+}
+
+export function render2D(index, x, y) {
+  dx = x - 0.5
+  dy = y - 0.5
+  if (slices > 1) {
+    r = hypot(dx, dy)
+    seg = PI2 / slices
+    a = abs(mod(atan2(dy, dx), seg) - seg / 2) + rot  // mirror fold + spin
+    dx = cos(a) * r
+    dy = sin(a) * r
+  }
+  u = dx + 0.5
+  w = dy + 0.5
+  // three independently wandering lines, one per channel
+  ry = 0.5 + simplex3(u * 1.2, zt, 0, 31) * 0.35
+  gy = 0.5 + simplex3(zt, u * 1.7, 1, 32) * 0.35
+  by = 0.5 + simplex3(u * 0.9, 3, zt * 1.4, 33) * 0.3
+  rgb(
+    saturate((lineW - abs(w - ry)) / lineW * 1.4),
+    saturate((lineW - abs(w - gy)) / lineW * 1.4),
+    saturate((lineW - abs(w - by)) / lineW * 1.4)
+  )
+}
+`,
+  },
+  {
+    name: "Coronal Ejection 2D",
+    layout: { kind: "grid", w: 16, h: 16 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Coronal Mass Ejection 2D" (no source consulted). A white-hot
+// core with turbulence-carved flares streaming outward. The noise wrap
+// period is matched to the angular scale so the texture tiles seamlessly
+// around the circle; a smooth threshold carves the field into discrete
+// tongues; saturation grows with radius so the core whitens for free.
+rDrift = 0
+zt = 0
+
+density = 6
+export function sliderDensity(v) { density = 1 + floor(v * 11) } //# min=1 max=12 step=1 default=6
+export function showNumberDensity() { return density }
+mirror = 0
+export function toggleMirror(v) { mirror = v }
+cutoff = 0.35
+export function sliderCutoff(v) { cutoff = 0.15 + v * 0.55 } //# min=0 max=1 step=0.01 default=0.35
+
+export function beforeRender(delta) {
+  dt = min(delta, 50) * 0.001
+  hueT = time(0.2)          // full color-wheel lap, ~13 s
+  rDrift += dt * 0.25       // flares stream outward
+  if (rDrift > 512) rDrift -= 512
+  zt += dt * 0.03
+  if (zt > 256) zt -= 256
+  lobes = density * (mirror ? 2 : 1)
+  setPerlinWrap(lobes, 0, 0)
+}
+
+export function render2D(index, x, y) {
+  dx = x - 0.5
+  dy = y - 0.5
+  r = hypot(dx, dy)
+  a = (atan2(dy, dx) / PI2 + 0.5) * lobes  // spans the wrap period exactly
+  n = 1 - perlinTurbulence(a, r * 3 - rDrift, zt, 2, 0.55, 3)
+  flare = smoothstep(cutoff, 0.9, n) * saturate(1.3 - r * 1.9)
+  core = saturate(1.3 - r * 8 * (0.35 + n * 0.5))  // edge nibbled by turbulence
+  v = max(flare, core)
+  v = v * v
+  hsv(hueT - v * 0.05, saturate(r * 4.5 - v * 0.6), v)
+}
+`,
+  },
+  {
+    name: "Unstable Orbits 2D",
+    layout: { kind: "grid", w: 16, h: 16 },
+    source: `// Clean-room reimplementation from a prose description of the community
+// pattern "Unstable Orbits" (no source consulted), plotting into an
+// explicit canvas instead of trusting pixel-index order. Lissajous dots
+// whose vertical clock is a wave *of* the horizontal clock, so the
+// orbits stretch and tumble forever; reciprocal per-dot phase offsets
+// cluster the swarm organically instead of spacing it evenly.
+gw = 16
+n = 24
+vbuf = array(gw * gw)
+hbuf = array(gw * gw)
+
+export function beforeRender(delta) {
+  feedback(vbuf, pow(0.85, delta * 0.06))  // brightness-only trail fade
+  t1 = time(0.025)          // primary clock, ~1.6 s
+  t2 = wave(t1) * 1.5       // nested clock: speeds up and slows down
+  for (var i = 0; i < n; i++) {
+    off = 1 / (i + 1)       // reciprocal spacing → dense head, stragglers
+    xx = 0.5 + 0.44 * sin((t1 + off) * PI2)
+    yy = 0.5 + 0.44 * sin((t2 + off) * PI2)
+    idx = floor(yy * 15.99) * gw + floor(xx * 15.99)
+    vbuf[idx] = 1
+    hbuf[idx] = i / n       // rainbow by rank
+  }
+}
+
+export function render2D(index, x, y) {
+  idx = floor(y * 15.99) * gw + floor(x * 15.99)
+  v = vbuf[idx]
+  hsv(hbuf[idx], 1, v * v)
+}
+`,
+  },
 ];

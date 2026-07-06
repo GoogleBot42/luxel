@@ -103,6 +103,28 @@ Ranked by visual payoff ÷ effort, all feasible with current builtins.
   (DDP input, I2S FFT); keyboards confirm these are table stakes
   ecosystem-wide.
 
+## Clean-room reimplementations of corpus patterns
+
+The scraped corpus has unknown licensing, so its best patterns are being
+reimplemented clean-room: a describer agent reads the original and writes
+a functional spec (prose only — no code, no identifier names, no copied
+constants), and the implementer writes fresh code from the spec without
+ever seeing the source. Each reimplementation notes this provenance in
+its header comment.
+
+Done 2026-07-06 (specs + implementations, all verified in the VM):
+Edgeburst, Rainbow Melt, Color Twinkles, Thunderstorm, Glittering
+Jewels, Doom Fire 2D, Voronoi 2D, Kaleidoscope 2D, Coronal Ejection 2D,
+Unstable Orbits 2D. The gallery dedupes by name, so these shadow their
+corpus originals in the pattern browser.
+
+Worthwhile future clean-room candidates (not yet spec'd): the sound-
+reactive set (blocked on mic hardware anyway), Cellular Automata 1D,
+Slime mold palette, Swirlpool 2D, block reflections, fireblobs,
+Mandelbrot 2D. Once coverage feels sufficient, the corpus can be dropped
+from the gallery entirely and kept only as a private compile-compat test
+battery.
+
 ## What we already cover (don't duplicate)
 
 Fire (5+ variants incl. Doom Fire), matrix rain, plasma, kaleidoscopes,
