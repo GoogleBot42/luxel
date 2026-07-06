@@ -19,6 +19,7 @@ pub mod compile;
 pub mod diag;
 pub mod engine;
 pub mod fixed;
+pub mod color;
 pub mod fmath;
 pub mod jsonview;
 pub mod lex;

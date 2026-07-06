@@ -66,6 +66,8 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "hsv", sig: "hsv(h, s, v)", doc: "Set the current pixel from hue/saturation/value (h wraps)." },
   { name: "hsv24", sig: "hsv24(h, s, v)", doc: "hsv() variant (24-bit path on PB; same output here)." },
   { name: "rgb", sig: "rgb(r, g, b)", doc: "Set the current pixel from red/green/blue 0..1." },
+  { name: "oklch", sig: "oklch(l, c, h)", doc: "Set the pixel from perceptual OKLCH: lightness 0..1, chroma ~0..0.4, hue in turns. Smoother gradients than hsv. (Luxel)" },
+  { name: "oklab", sig: "oklab(l, a, b)", doc: "Set the pixel from OKLab lightness/a/b. (Luxel)" },
   // arrays
   { name: "array", sig: "array(length)", doc: "Create a zero-filled array." },
   { name: "arrayLength", sig: "arrayLength(arr)", doc: "Number of elements in arr." },

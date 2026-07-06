@@ -166,6 +166,11 @@ where PB compile-errors on arity).
 `hsv(h, s, v)` (hue wraps), `hsv24`, `rgb(r, g, b)`; palette:
 `setPalette([pos, r, g, b, …])` then `paint(t, brightness)`.
 
+**Luxel extension** — perceptual color: `oklch(l, c, h)` sets the pixel from
+OKLCH (lightness 0..1, chroma ~0..0.4, hue in turns like `hsv`), and
+`oklab(l, a, b)` from OKLab. Gradients and fades through these look far
+smoother than HSV — even brightness across hues, no dark band through blue.
+
 ### Arrays
 
 `array(n)`, `arrayLength`, `arraySum`, `arrayForEach(a, fn)`,

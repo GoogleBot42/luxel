@@ -609,3 +609,26 @@ fn extension_builtins() {
     // easeInQuad(0.5) = 0.25
     assert!((eval("easeInQuad(0.5)").to_f64() - 0.25).abs() < 1e-3);
 }
+
+#[test]
+fn oklch_produces_reasonable_colors() {
+    // oklch/oklab set the current pixel; read it back through a render
+    fn render_rgb(body: &str) -> [f64; 3] {
+        let src = format!("export function render(index) {{ {body} }}");
+        let mut e = Engine::new(&src, 1, 1).expect("compile");
+        let px = e.frame(Fx::ZERO);
+        [px[0][0] as f64 / 255.0, px[0][1] as f64 / 255.0, px[0][2] as f64 / 255.0]
+    }
+    // OKLCH red ≈ oklch(0.628, 0.258, hue 29.23°/360 = 0.0812 turns)
+    let red = render_rgb("oklch(0.628, 0.258, 0.0812)");
+    assert!(red[0] > 0.8 && red[1] < 0.35 && red[2] < 0.35, "red = {red:?}");
+    // near-white: high L, ~zero chroma
+    let white = render_rgb("oklch(0.99, 0, 0)");
+    assert!(white.iter().all(|&c| c > 0.9), "white = {white:?}");
+    // black
+    let black = render_rgb("oklch(0, 0, 0)");
+    assert!(black.iter().all(|&c| c < 0.05), "black = {black:?}");
+    // oklab neutral gray (a=b=0) is achromatic (r≈g≈b)
+    let gray = render_rgb("oklab(0.6, 0, 0)");
+    assert!((gray[0] - gray[1]).abs() < 0.03 && (gray[1] - gray[2]).abs() < 0.03, "gray = {gray:?}");
+}

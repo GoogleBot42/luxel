@@ -25,6 +25,11 @@ fn fmul(a: i64, b: i64) -> i64 {
 }
 
 /// sin of a phase in *turns* (1.0 = full cycle). The waveform functions are
+/// cos in turns: cos(t) = sin(t + 1/4).
+pub fn cos_turns(t: Fx) -> Fx {
+    sin_turns(t + Fx::from_raw(1 << 14))
+}
+
 /// specified in turns, so this is the core primitive; radian `sin` reduces
 /// into it.
 pub fn sin_turns(t: Fx) -> Fx {

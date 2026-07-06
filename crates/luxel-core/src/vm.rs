@@ -220,6 +220,8 @@ pub enum Builtin {
     EaseInCubic,
     EaseOutCubic,
     EaseInOutCubic,
+    Oklch,
+    Oklab,
     Random,
     Prng,
     PrngSeed,
@@ -324,6 +326,7 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("easeInQuad", EaseInQuad), b!("easeOutQuad", EaseOutQuad),
     b!("easeInOutQuad", EaseInOutQuad), b!("easeInCubic", EaseInCubic),
     b!("easeOutCubic", EaseOutCubic), b!("easeInOutCubic", EaseInOutCubic),
+    b!("oklch", Oklch), b!("oklab", Oklab),
     b!("random", Random), b!("prng", Prng), b!("prngSeed", PrngSeed),
     b!("time", Time), b!("wave", Wave), b!("square", Square),
     b!("triangle", Triangle), b!("mix", Mix), b!("smoothstep", Smoothstep),
@@ -1198,6 +1201,16 @@ impl Vm {
                     n(1).clamp(Fx::ZERO, Fx::ONE),
                     n(2).clamp(Fx::ZERO, Fx::ONE),
                 ];
+                self.pixel_written = true;
+                Ok(Value::default())
+            }
+            Oklch => {
+                self.pixel = crate::color::oklch_to_rgb(n(0), n(1), n(2));
+                self.pixel_written = true;
+                Ok(Value::default())
+            }
+            Oklab => {
+                self.pixel = crate::color::oklab_to_rgb(n(0), n(1), n(2));
                 self.pixel_written = true;
                 Ok(Value::default())
             }
