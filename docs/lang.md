@@ -156,6 +156,11 @@ where PB compile-errors on arity).
 `mix(a, b, t)`, `smoothstep(lo, hi, x)`, `bezierQuadratic(t, p0, p1, p2)`,
 `bezierCubic(t, p0, p1, p2, p3)`.
 
+**Luxel extensions** (not in PB): `map(x, inLo, inHi, outLo, outHi)`,
+`sign(x)`, `step(edge, x)`, `saturate(x)` (= clamp to 0..1),
+`dist(x1,y1,x2,y2)`, `dist3(x1,y1,z1,x2,y2,z2)`, and easing curves on 0..1:
+`easeInQuad`/`easeOutQuad`/`easeInOutQuad` and the `…Cubic` trio.
+
 ### Color
 
 `hsv(h, s, v)` (hue wraps), `hsv24`, `rgb(r, g, b)`; palette:

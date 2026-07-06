@@ -206,6 +206,20 @@ pub enum Builtin {
     Log2,
     Hypot,
     Hypot3,
+    // Luxel extension builtins (not in Pixel Blaze). Pure math; adding
+    // builtins can't break existing patterns.
+    Map,
+    Sign,
+    Step,
+    Saturate,
+    Dist,
+    Dist3,
+    EaseInQuad,
+    EaseOutQuad,
+    EaseInOutQuad,
+    EaseInCubic,
+    EaseOutCubic,
+    EaseInOutCubic,
     Random,
     Prng,
     PrngSeed,
@@ -304,6 +318,12 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("cos", Cos), b!("tan", Tan), b!("asin", Asin), b!("acos", Acos),
     b!("atan", Atan), b!("atan2", Atan2), b!("pow", Pow), b!("exp", Exp),
     b!("log", Log), b!("log2", Log2), b!("hypot", Hypot), b!("hypot3", Hypot3),
+    // Luxel extensions
+    b!("map", Map), b!("sign", Sign), b!("step", Step), b!("saturate", Saturate),
+    b!("dist", Dist), b!("dist3", Dist3),
+    b!("easeInQuad", EaseInQuad), b!("easeOutQuad", EaseOutQuad),
+    b!("easeInOutQuad", EaseInOutQuad), b!("easeInCubic", EaseInCubic),
+    b!("easeOutCubic", EaseOutCubic), b!("easeInOutCubic", EaseInOutCubic),
     b!("random", Random), b!("prng", Prng), b!("prngSeed", PrngSeed),
     b!("time", Time), b!("wave", Wave), b!("square", Square),
     b!("triangle", Triangle), b!("mix", Mix), b!("smoothstep", Smoothstep),
@@ -1046,6 +1066,62 @@ impl Vm {
             Log2 => num(fmath::log2(n(0))),
             Hypot => num(fmath::hypot(n(0), n(1))),
             Hypot3 => num(fmath::hypot3(n(0), n(1), n(2))),
+            // map(x, inLo, inHi, outLo, outHi): re-range x; degenerate input
+            // range maps to outLo (avoids div-by-zero surprises).
+            Map => {
+                let (x, ilo, ihi, olo, ohi) = (n(0), n(1), n(2), n(3), n(4));
+                let d = ihi - ilo;
+                num(if d == Fx::ZERO {
+                    olo
+                } else {
+                    olo + (x - ilo) * (ohi - olo) / d
+                })
+            }
+            Sign => num(if n(0) > Fx::ZERO {
+                Fx::ONE
+            } else if n(0) < Fx::ZERO {
+                -Fx::ONE
+            } else {
+                Fx::ZERO
+            }),
+            // step(edge, x): 0 below the edge, 1 at/above it (GLSL order)
+            Step => num(if n(1) < n(0) { Fx::ZERO } else { Fx::ONE }),
+            Saturate => num(n(0).clamp(Fx::ZERO, Fx::ONE)),
+            Dist => num(fmath::hypot(n(2) - n(0), n(3) - n(1))),
+            Dist3 => num(fmath::hypot3(n(3) - n(0), n(4) - n(1), n(5) - n(2))),
+            // easing on t (typically 0..1); polynomial forms, no clamping
+            // (callers control the domain, matching smoothstep's contract)
+            EaseInQuad => num(n(0) * n(0)),
+            EaseOutQuad => {
+                let t = n(0);
+                num(t * (Fx::from_int(2) - t))
+            }
+            EaseInOutQuad => {
+                let t = n(0);
+                num(if t < Fx::from_raw(1 << 15) {
+                    Fx::from_int(2) * t * t
+                } else {
+                    // -1 + (4 - 2t)·t
+                    -Fx::ONE + (Fx::from_int(4) - Fx::from_int(2) * t) * t
+                })
+            }
+            EaseInCubic => {
+                let t = n(0);
+                num(t * t * t)
+            }
+            EaseOutCubic => {
+                let u = n(0) - Fx::ONE;
+                num(u * u * u + Fx::ONE)
+            }
+            EaseInOutCubic => {
+                let t = n(0);
+                num(if t < Fx::from_raw(1 << 15) {
+                    Fx::from_int(4) * t * t * t
+                } else {
+                    let u = t + t - Fx::from_int(2);
+                    u * u * u / Fx::from_int(2) + Fx::ONE
+                })
+            }
             Random => {
                 let r = self.next_random();
                 Ok(Self::scale_random(r, n(0)))

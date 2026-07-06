@@ -580,3 +580,32 @@ fn const_let_in_for_loop() {
         fx(6.0)
     );
 }
+
+#[test]
+fn extension_builtins() {
+    // map: re-range
+    assert_eq!(eval("map(5, 0, 10, 0, 100)"), fx(50.0));
+    assert_eq!(eval("map(0, 0, 10, 20, 40)"), fx(20.0));
+    // sign
+    assert_eq!(eval("sign(0 - 3)"), fx(-1.0));
+    assert_eq!(eval("sign(3)"), fx(1.0));
+    assert_eq!(eval("sign(0)"), fx(0.0));
+    // step / saturate
+    assert_eq!(eval("step(0.5, 0.4)"), fx(0.0));
+    assert_eq!(eval("step(0.5, 0.6)"), fx(1.0));
+    assert_eq!(eval("saturate(1.5)"), fx(1.0));
+    assert_eq!(eval("saturate(0 - 0.2)"), fx(0.0));
+    // dist
+    assert_eq!(eval("dist(0, 0, 3, 4)"), fx(5.0));
+    assert_eq!(eval("dist3(0, 0, 0, 2, 3, 6)"), fx(7.0));
+    // easing endpoints: all ease*(0)=0, ease*(1)=1
+    for f in [
+        "easeInQuad", "easeOutQuad", "easeInOutQuad",
+        "easeInCubic", "easeOutCubic", "easeInOutCubic",
+    ] {
+        assert!(eval(&format!("{f}(0)")).to_f64().abs() < 1e-3, "{f}(0) != 0");
+        assert!((eval(&format!("{f}(1)")).to_f64() - 1.0).abs() < 1e-3, "{f}(1) != 1");
+    }
+    // easeInQuad(0.5) = 0.25
+    assert!((eval("easeInQuad(0.5)").to_f64() - 0.25).abs() < 1e-3);
+}
