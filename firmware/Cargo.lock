@@ -883,6 +883,7 @@ version = "0.9.0"
 source = "git+https://github.com/esp-rs/esp-hal?rev=7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7#7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7"
 dependencies = [
  "document-features",
+ "embedded-storage",
  "esp-hal",
  "esp-hal-procmacros",
  "esp-metadata-generated",

@@ -89,10 +89,13 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
 
         let result: Result<u32, &'static str> = {
             let mut reader = request.body_connection.body().reader();
+            let expected = reader.content_length() as u32;
             match crate::ota::begin() {
                 Err(e) => Err(e),
-                Ok(mut writer) => {
-                    // sector-sized chunks: FlashStorage handles erase, and
+                Ok(mut writer) => match writer.erase(expected).await {
+                    Err(e) => Err(e),
+                    Ok(()) => {
+                    // sector-sized chunks into the pre-erased region;
                     // 4 KiB keeps peak RAM small
                     let mut buf = alloc::vec![0u8; 4096];
                     let mut fill = 0usize;
@@ -122,10 +125,11 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                         }
                     }
                     match failed {
-                        None => writer.commit(),
+                        None => writer.commit(expected),
                         Some(e) => Err(e),
                     }
-                }
+                    }
+                },
             }
         };
 
@@ -313,7 +317,17 @@ pub const WEB_TASK_POOL_SIZE: usize = 2;
 // keep_connection_alive: without it every preview poll (15/s) pays a full
 // TCP open/close on a chip with a 2-connection pool — the browser reuses
 // one connection instead.
-static CONFIG: picoserve::Config = picoserve::Config::const_default().keep_connection_alive();
+// keep-alive + a generous mid-request read timeout: OTA uploads over a busy
+// WiFi link can see multi-second gaps (the default 3 s aborted real pushes).
+static CONFIG: picoserve::Config = picoserve::Config {
+    timeouts: picoserve::Timeouts {
+        start_read_request: picoserve::time::Duration::from_secs(5),
+        persistent_start_read_request: picoserve::time::Duration::from_secs(1),
+        read_request: picoserve::time::Duration::from_secs(20),
+        write: picoserve::time::Duration::from_secs(5),
+    },
+    connection: picoserve::KeepAlive::KeepAlive,
+};
 
 #[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
 pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
