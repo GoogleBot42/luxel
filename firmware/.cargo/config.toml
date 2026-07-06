@@ -18,3 +18,7 @@ rustflags = [
 
 [env]
 ESP_LOG = "info"
+# Bring-up: make stack overflows fail loudly (named panic) instead of
+# corrupting memory. Range-check + HW watchpoint are on by default; this
+# adds the software guard check on RTOS task switches too.
+ESP_RTOS_CONFIG_SW_TASK_OVERFLOW_DETECTION = "true"
