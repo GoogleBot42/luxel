@@ -15,6 +15,8 @@
 //!   POST /api/code      body = source → {"ok":true} | {"ok":false,"line","col","error"}
 //!   POST /api/control   body = "name raw0 [raw1 raw2]" → {"ok":true}
 //!   POST /api/var       body = "name raw" → {"ok":true}
+//!   GET  /api/wifi      {"ssid":"…"|null,"source":"flash"|"builtin"|"none"}
+//!   POST /api/wifi      body = "ssid\npassword" → stores creds in flash + reboots
 
 use alloc::format;
 use alloc::string::String;
@@ -496,6 +498,30 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     ))
                     .await;
                 }
+                // body: "ssid\npassword" → stored in flash, applied by the
+                // reboot this triggers. See config.rs.
+                "/api/wifi" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let (ssid, pass) = body.split_once('\n').unwrap_or((body.as_str(), ""));
+                    let (ssid, pass) = (ssid.trim_end_matches('\r'), pass.trim_end_matches(['\r', '\n']));
+                    let result = crate::config::write_wifi(ssid, pass);
+                    let response = json_response(match &result {
+                        Ok(()) => {
+                            esp_println::println!("wifi creds stored (ssid \"{}\"); rebooting", ssid);
+                            format!("{{\"ok\":true,\"ssid\":\"{}\",\"note\":\"rebooting to apply\"}}", json_escape(ssid))
+                        }
+                        Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e)),
+                    });
+                    let conn = request.body_connection.finalize().await?;
+                    let sent = response.write_to(conn, response_writer).await?;
+                    if result.is_ok() {
+                        crate::REBOOT.signal(());
+                    }
+                    return Ok(sent);
+                }
                 "/api/code" | "/api/control" | "/api/var" => {
                     let body = match request.body_connection.body().read_all().await {
                         Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
@@ -567,6 +593,23 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 }
                 "/min" => respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML)),
                 "/api/status" => respond!(api_status().await),
+                // which network the NEXT boot will join (never the password)
+                "/api/wifi" => {
+                    let body = match crate::config::read_wifi() {
+                        Some((ssid, _)) => format!(
+                            "{{\"ssid\":\"{}\",\"source\":\"flash\"}}",
+                            json_escape(&ssid)
+                        ),
+                        None => match option_env!("LUXEL_SSID") {
+                            Some(s) if !s.is_empty() => format!(
+                                "{{\"ssid\":\"{}\",\"source\":\"builtin\"}}",
+                                json_escape(s)
+                            ),
+                            _ => String::from("{\"ssid\":null,\"source\":\"none\"}"),
+                        },
+                    };
+                    respond!(json_response(body));
+                }
                 "/api/pixels" => respond!(api_pixels().await),
                 "/api/pattern" => respond!(api_pattern().await),
                 "/api/controls" => respond!(api_controls().await),

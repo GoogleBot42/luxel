@@ -39,6 +39,7 @@ use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 
 mod assets;
+mod config;
 mod leds;
 mod ota;
 mod server;
@@ -191,16 +192,33 @@ async fn main(spawner: Spawner) -> ! {
         println!("LUXEL_QUIET: render task disabled");
     }
 
-    // Treat empty strings like unset — `LUXEL_SSID='' …` shouldn't try to
-    // join a network named "".
-    let creds = match (SSID, PASSWORD) {
+    // Credentials: the flash record wins (survives images built without
+    // env creds — the lockout class that stranded the device twice), then
+    // compile-time env, else offline. Treat empty env strings like unset —
+    // `LUXEL_SSID='' …` shouldn't try to join a network named "".
+    let flash_creds = if option_env!("LUXEL_NO_OTA").is_none() {
+        config::read_wifi()
+    } else {
+        None
+    };
+    let baked = match (SSID, PASSWORD) {
         (Some(s), Some(p)) if !s.is_empty() => Some((s, p)),
         _ => None,
     };
-    let Some((ssid, password)) = creds else {
-        println!("no wifi credentials (LUXEL_SSID/LUXEL_PASS unset); offline mode");
-        loop {
-            Timer::after(Duration::from_secs(3600)).await;
+    let (ssid, password) = match (&flash_creds, baked) {
+        (Some((s, p)), _) => {
+            println!("wifi: joining \"{}\" (flash-stored creds)", s);
+            (s.as_str(), p.as_str())
+        }
+        (None, Some((s, p))) => {
+            println!("wifi: joining \"{}\" (compile-time creds)", s);
+            (s, p)
+        }
+        (None, None) => {
+            println!("no wifi credentials (no flash record, LUXEL_SSID/LUXEL_PASS unset); offline mode");
+            loop {
+                Timer::after(Duration::from_secs(3600)).await;
+            }
         }
     };
 
