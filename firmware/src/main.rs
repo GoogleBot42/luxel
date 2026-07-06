@@ -117,8 +117,18 @@ async fn main(spawner: Spawner) -> ! {
     // Classic ESP32 has less contiguous DRAM than the C3 once the WiFi
     // blob's statics are linked in — 160 KB here overflows the region by
     // ~17 KB (linker: "cannot move location counter backwards").
+    //
+    // CAUTION: whatever RWDATA this static does NOT claim becomes the main
+    // task's stack (esp-hal's .stack section is "the rest of the region"),
+    // and that one stack runs the embassy executor — every task's poll,
+    // picoserve's response path, esp-storage's flash ops, AND the WiFi
+    // level-6 NMI frames that land on whatever stack is current. At
+    // 120 KB heap the leftover stack measured 15.6 KB and overflowed
+    // reproducibly during flash reads (all 24 logged stack-guard panics).
+    // 96 KB leaves ~40 KB of stack; /api/status heap_free still shows
+    // ~70 KB headroom.
     #[cfg(feature = "esp32")]
-    esp_alloc::heap_allocator!(size: 120 * 1024);
+    esp_alloc::heap_allocator!(size: 96 * 1024);
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 

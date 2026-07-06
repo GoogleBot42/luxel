@@ -1,5 +1,50 @@
 # Update log
 
+## 2026-07-06 ~09:00 — OTA crash ROOT CAUSE found + fixed (v0.1.4) — this supersedes the 08:15 note
+
+You were right that something was fundamentally wrong. The serial log had
+24 panics and every single one is the same signature: **stack overflow on
+the main task** ("write to the stack guard value on ProCpu"), caught during
+a flash read in the HTTP serving path.
+
+Three compounding causes:
+
+1. **The main task stack was 15.6 KB, by accident.** esp-hal gives the
+   main task "whatever RWDATA is left after .data/.bss" — and our 120 KB
+   heap static ate almost all of it. That one stack runs the entire
+   embassy executor (every task's poll), picoserve's deep response path,
+   AND the WiFi level-6 NMI frames, which land on whatever stack is
+   current. Measured in the ELF: 15,596 bytes. The captured panic's SP was
+   already 1.7 KB *past* the stack end.
+2. **esp-storage's `FlashStorage::read` puts a 4 KiB sector bounce-buffer
+   on the caller's stack** — every asset chunk we served pushed 4 KB onto
+   that already-deep stack at maximum depth. (This is the "library
+   function" trap: the convenient `Storage::read` API is the wrong one;
+   `read_nor` with aligned offset/len/buffer reads directly, zero stack.)
+3. WiFi NMI on top of 1+2 → guard hit → panic → reboot. It looked like
+   "OTA crashes" because OTA sessions are exactly when the page/status/
+   asset traffic and flash ops coincide; the erase-on-write fix (v0.1.2)
+   was real but treated a different, secondary hazard.
+
+The v0.1.4 fix (firmware only, two small changes): heap 120→96 KB so the
+main stack is now **60 KB** (measured in the ELF: 61,712 bytes; heap_free
+still ~70 KB), and `assets::read_chunk` now uses `read_nor` through a
+word-aligned heap staging buffer — no more stack bounce-buffer in the
+serving path.
+
+On your "reinventing the wheel" hunch: partially right, wrong culprit.
+ota.rs does hand-roll erase/write at raw offsets where
+esp-bootloader-esp-idf's `OtaUpdater::next_partition()` hands you a
+bounds-checked `FlashRegion` — worth cleaning up later — but that code
+wasn't the crash; the reads/stack were. Queued the cleanup.
+
+**I attempted OTA of v0.1.4 myself** (fails safe: a crash mid-upload just
+reboots to the current slot). Check /api/status — if it says 0.1.4, go to
+bed, nothing needed. If it still says 0.1.3, one serial flash:
+```
+cd firmware && BOARD=board-pixelblaze-v3 ./build-esp32.sh flash
+```
+
 ## 2026-07-06 ~08:15 — ⚡ PLEASE FLASH THIS before bed (v0.1.2, task-16 fix)
 
 You asked what I need flashed to unblock M3 remote work. This is it:

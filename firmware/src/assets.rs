@@ -45,7 +45,25 @@ pub fn count() -> usize {
 }
 
 pub fn read_chunk(offset: u32, buf: &mut [u8]) -> bool {
-    crate::ota::with_flash(|f| f.read(offset, buf).is_ok()).unwrap_or(false)
+    // read_nor, NOT FlashStorage::read: the Storage::read convenience path
+    // puts a 4 KiB sector bounce-buffer on the CALLER's stack for every
+    // call. These reads happen at maximum picoserve depth on the shared
+    // main-task stack, and (with a WiFi NMI frame on top) that buffer was
+    // the #1 source of the stack-guard panics. read_nor with a word-aligned
+    // offset/length/buffer reads straight into the destination — zero stack
+    // cost — so stage through a word-aligned heap buffer.
+    let start = offset & !3;
+    let head = (offset - start) as usize;
+    let aligned_len = (head + buf.len() + 3) & !3;
+    let mut stage = alloc::vec![0u32; aligned_len / 4];
+    let stage_bytes = unsafe {
+        core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), aligned_len)
+    };
+    let ok = crate::ota::with_flash(|f| f.read_nor(start, stage_bytes).is_ok()).unwrap_or(false);
+    if ok {
+        buf.copy_from_slice(&stage_bytes[head..head + buf.len()]);
+    }
+    ok
 }
 
 /// (Re)parse the archive TOC from flash into RAM. Called at boot and after
