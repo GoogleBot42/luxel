@@ -281,6 +281,35 @@ try {
     );
   }
 
+  // 10. pattern browser: overlay opens, tiles animate live, pick loads
+  await page.click('[data-role="browse"]');
+  await page.waitForSelector(".overlay .tile", { timeout: 5000 }).catch(() => null);
+  const tileCount = await page.$$eval(".overlay .tile", (els) => els.length);
+  check("gallery shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
+  await sleep(2500); // let visible tiles compile + render a few frames
+  const litTiles = await page.$$eval(".overlay .tile canvas", (cs) =>
+    cs.slice(0, 12).filter((c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      return d.some((v, i) => i % 4 !== 3 && v > 8);
+    }).length,
+  );
+  check("gallery tiles animate (≥4 of first 12 lit)", litTiles >= 4, `${litTiles} lit`);
+  await page.screenshot({ path: `${shotDir}/e2e-5-gallery.png` });
+  const pickName = await page.$$eval(".overlay .tile", (els) => {
+    const t = els.find((el) => !el.classList.contains("dead") && el.querySelector(".tname"));
+    t?.scrollIntoView();
+    return t?.querySelector(".tname")?.textContent ?? "";
+  });
+  await page.click(".overlay .tile:not(.dead)");
+  await sleep(700);
+  check("gallery pick closes overlay", (await page.$(".overlay")) === null);
+  const pickedLabel = await page.$eval(
+    "header select",
+    (el) => el.selectedOptions[0]?.textContent ?? "",
+  );
+  check("gallery pick loads the pattern", pickedLabel.trim() === pickName.trim(), pickedLabel);
+  check("picked pattern compiles", (await page.$(".banner.error")) === null);
+
   await page.screenshot({ path: `${shotDir}/e2e-4-final.png` });
 
   check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));

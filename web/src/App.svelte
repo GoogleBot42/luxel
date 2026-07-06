@@ -2,6 +2,7 @@
   import { onDestroy, onMount, tick } from "svelte";
   import Controls from "./components/Controls.svelte";
   import Editor from "./components/Editor.svelte";
+  import Gallery from "./components/Gallery.svelte";
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
@@ -263,6 +264,24 @@
     e.preventDefault();
     const f = e.dataTransfer?.files?.[0];
     if (f && /\.(epe|json)$/i.test(f.name)) void importEpeFile(f);
+  }
+
+  // ---- pattern browser ----
+
+  let browseOpen = false;
+
+  function onGalleryPick(e: CustomEvent<{ name: string; kind: "strip" | "grid"; source: string }>): void {
+    const p = e.detail;
+    browseOpen = false;
+    patternName = p.name;
+    exampleName = "";
+    importError = "";
+    if (!device) {
+      layout = p.kind === "grid" ? { kind: "grid", w: 16, h: 16 } : { kind: "strip", pixels: 60 };
+    }
+    source = p.source;
+    controlValues = {};
+    void tick().then(recompile);
   }
 
   /** PB-style 17-char base-58 id, so exports round-trip into PB tooling. */
@@ -573,6 +592,13 @@
 
     <span class="group">
       <button
+        data-role="browse"
+        title="browse all patterns with live previews"
+        on:click={() => (browseOpen = true)}
+      >
+        browse
+      </button>
+      <button
         data-role="epe-import"
         title="import a Pixel Blaze .epe (or drop one anywhere on the page)"
         on:click={() => fileInput.click()}
@@ -792,6 +818,10 @@
       {/if}
     </section>
   </main>
+
+  {#if browseOpen && luxel}
+    <Gallery {luxel} on:pick={onGalleryPick} on:close={() => (browseOpen = false)} />
+  {/if}
 </div>
 
 <style>

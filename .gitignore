@@ -15,3 +15,4 @@ pb-v3-stock.bin
 firmware/serial.log
 web/device-served.png
 web/dist.luxa
+web/public/gallery.json
