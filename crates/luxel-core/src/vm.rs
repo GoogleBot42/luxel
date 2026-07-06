@@ -305,6 +305,7 @@ pub enum Builtin {
     MixColors,
     Simplex2,
     Simplex3,
+    SetGamma,
 }
 
 pub struct BuiltinDef {
@@ -378,6 +379,7 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("dot", Dot), b!("dot3", Dot3), b!("angleBetween", AngleBetween),
     b!("rgb2hsv", Rgb2Hsv), b!("hsv2rgb", Hsv2Rgb), b!("mixColors", MixColors),
     b!("simplex2", Simplex2), b!("simplex3", Simplex3),
+    b!("setGamma", SetGamma),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -497,6 +499,9 @@ pub struct Vm {
     /// Wall-clock unix seconds (timezone-adjusted by the host); None → the
     /// clock builtins return 0. TODO(oracle): PB's no-time behavior.
     pub wall_unix: Option<i64>,
+    /// Output gamma set by `setGamma(g)`; ZERO/ONE = off. The engine applies
+    /// it after render, at quantization (Luxel post-process extension).
+    pub post_gamma: Fx,
 }
 
 #[derive(Debug, Clone)]
@@ -532,6 +537,7 @@ impl Vm {
             palette: Vec::new(),
             perlin_wrap: [256; 3],
             wall_unix: None,
+            post_gamma: Fx::ZERO,
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             pixel: [Fx::ZERO; 3],
@@ -1640,6 +1646,12 @@ impl Vm {
             // artifacts. The lattice does not wrap (setPerlinWrap N/A).
             Simplex2 => num(crate::noise::simplex2(n(0), n(1), n(2))),
             Simplex3 => num(crate::noise::simplex3(n(0), n(1), n(2), n(3))),
+            // setGamma(g): output gamma applied after render (2.0–2.8 makes
+            // LED fades perceptually even). g <= 0 or g == 1 turns it off.
+            SetGamma => {
+                self.post_gamma = n(0).max(Fx::ZERO);
+                Ok(Value::default())
+            }
             // mixColors(r1,g1,b1, r2,g2,b2, t, out): blend two RGB colors in
             // OKLab — perceptually even, no muddy midpoints
             MixColors => {

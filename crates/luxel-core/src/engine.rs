@@ -91,6 +91,10 @@ pub struct Engine {
     /// Some(stage) while the pipeline is suspended at a debug stop.
     run_stage: Option<RunStage>,
     cur_delta: Fx,
+    /// 256-entry output curve for `setGamma` — rebuilt only when the value
+    /// changes, so the per-pixel cost is one table lookup, not a pow().
+    gamma_lut: Option<alloc::boxed::Box<[u8; 256]>>,
+    gamma_lut_for: Fx,
 }
 
 impl Engine {
@@ -159,6 +163,8 @@ impl Engine {
             debug_enabled: false,
             run_stage: None,
             cur_delta: Fx::ZERO,
+            gamma_lut: None,
+            gamma_lut_for: Fx::ZERO,
         })
     }
 
@@ -481,7 +487,11 @@ impl Engine {
                     }
                     RunStage::Pixel(i) => {
                         let [r, g, b] = self.vm.pixel;
-                        self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+                        let mut px = [quantize(r), quantize(g), quantize(b)];
+                        if let Some(lut) = self.gamma_lut() {
+                            px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
+                        }
+                        self.pixels[i as usize] = px;
                         if i + 1 < self.pixel_count {
                             self.run_stage = Some(RunStage::Pixel(i + 1));
                         } else {
@@ -517,6 +527,28 @@ impl Engine {
 
     pub fn pixels(&self) -> &[[u8; 3]] {
         &self.pixels
+    }
+
+    /// The output curve for the current `setGamma` value (rebuilt on change;
+    /// gamma 0/1 disables). 255 always maps to 255.
+    fn gamma_lut(&mut self) -> Option<&[u8; 256]> {
+        let g = self.vm.post_gamma;
+        if g == Fx::ZERO || g == Fx::ONE {
+            self.gamma_lut = None;
+            self.gamma_lut_for = g;
+            return None;
+        }
+        if self.gamma_lut.is_none() || self.gamma_lut_for != g {
+            let mut lut = alloc::boxed::Box::new([0u8; 256]);
+            for (i, slot) in lut.iter_mut().enumerate() {
+                let v = Fx::from_raw(((i as i32) << 16) / 255);
+                *slot = quantize(crate::fmath::pow(v, g));
+            }
+            lut[255] = 255;
+            self.gamma_lut = Some(lut);
+            self.gamma_lut_for = g;
+        }
+        self.gamma_lut.as_deref()
     }
 
     /// Take and clear the recorded error (hosts poll this per frame).

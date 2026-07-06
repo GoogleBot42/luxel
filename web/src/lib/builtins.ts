@@ -82,6 +82,7 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "hsv2rgb", sig: "hsv2rgb(h, s, v, out)", doc: "Convert HSV to RGB into out[0..2] (returns out) — value form of hsv(). (Luxel)" },
   { name: "rgb2hsv", sig: "rgb2hsv(r, g, b, out)", doc: "Convert RGB to HSV into out[0..2] (returns out); hue in turns. (Luxel)" },
   { name: "mixColors", sig: "mixColors(r1,g1,b1, r2,g2,b2, t, out)", doc: "Blend two RGB colors in OKLab (perceptually even) into out[0..2]; returns out. (Luxel)" },
+  { name: "setGamma", sig: "setGamma(g)", doc: "Output gamma applied after render (try 2.2 for perceptually even fades); 0 or 1 turns it off. (Luxel)" },
   // arrays
   { name: "array", sig: "array(length)", doc: "Create a zero-filled array." },
   { name: "arrayLength", sig: "arrayLength(arr)", doc: "Number of elements in arr." },

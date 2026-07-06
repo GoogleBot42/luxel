@@ -63,9 +63,9 @@ and the autocomplete/docs pipeline, and can't break existing code.
   crossfade (the corpus "Shimmer Crossfade" fakes this per-pixel). A
   first-class compositor enables playlists with real transitions and
   layered effects. Big but headline-worthy.
-- **Global post-process chain** [M] ★★ — brightness curve, gamma, global
-  blur/glow, palette remap applied after `render`. Cheap visual polish knob
-  users expect.
+- **Global post-process chain** [M] ★★ — STARTED: `setGamma(g)` (LUT-based
+  output gamma) is in. Remaining: brightness curve, global blur/glow,
+  palette remap, and a settings-page (not in-pattern) way to set them.
 - **Per-pixel persistent state buffer** [M] ★★ — a sanctioned scratch array
   the engine double-buffers, for feedback effects without manual bookkeeping.
 - **Deterministic seedable `prng` matching a documented algorithm** [S] ★ —

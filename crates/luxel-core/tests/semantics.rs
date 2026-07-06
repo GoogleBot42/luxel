@@ -731,3 +731,22 @@ fn simplex_builtins() {
     let v = eval("simplex3(0.3, 0.7, 1.9)").to_f64();
     assert!((-1.6..=1.6).contains(&v), "{v}");
 }
+
+#[test]
+fn set_gamma_output_curve() {
+    fn render_val(body: &str) -> u8 {
+        let src = format!("export function render(index) {{ {body} }}");
+        let mut e = Engine::new(&src, 1, 1).expect("compile");
+        e.frame(Fx::ZERO)[0][0]
+    }
+    // gamma 2: mid-gray 0.5 → 0.25 (128 → ~64); off leaves it linear
+    let linear = render_val("rgb(0.5, 0, 0)");
+    let curved = render_val("setGamma(2); rgb(0.5, 0, 0)");
+    assert!((linear as i32 - 128).abs() <= 1, "linear = {linear}");
+    assert!((curved as i32 - 64).abs() <= 2, "gamma 2 = {curved}");
+    // endpoints survive exactly
+    assert_eq!(render_val("setGamma(2.2); rgb(1, 1, 1)"), 255);
+    assert_eq!(render_val("setGamma(2.2); rgb(0, 0, 0)"), 0);
+    // gamma 1 = off
+    assert_eq!(render_val("setGamma(1); rgb(0.5, 0, 0)"), linear);
+}

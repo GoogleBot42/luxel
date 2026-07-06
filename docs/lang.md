@@ -199,6 +199,12 @@ export function render(index) {
 }
 ```
 
+**Luxel extension — output gamma**: `setGamma(g)` applies an output gamma
+curve after `render` (a cached 256-entry table — no per-pixel cost). LEDs
+are linear but eyes aren't; `setGamma(2.2)` makes fades and dim colors
+perceptually even. `setGamma(0)` or `setGamma(1)` turns it off. Full
+brightness always stays full.
+
 ### Arrays
 
 `array(n)`, `arrayLength`, `arraySum`, `arrayForEach(a, fn)`,
