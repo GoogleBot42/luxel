@@ -721,3 +721,13 @@ fn value_returning_color() {
         assert!((-0.05..=1.05).contains(&v), "mid channel {ch} = {v}");
     }
 }
+
+#[test]
+fn simplex_builtins() {
+    // deterministic, bounded, varies with position and seed
+    assert_eq!(eval("simplex2(1.3, 2.7)"), eval("simplex2(1.3, 2.7)"));
+    assert_ne!(eval("simplex2(1.3, 2.7)"), eval("simplex2(1.4, 2.7)"));
+    assert_ne!(eval("simplex2(1.3, 2.7, 5)"), eval("simplex2(1.3, 2.7, 6)"));
+    let v = eval("simplex3(0.3, 0.7, 1.9)").to_f64();
+    assert!((-1.6..=1.6).contains(&v), "{v}");
+}

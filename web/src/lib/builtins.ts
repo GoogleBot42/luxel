@@ -57,6 +57,8 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "dot", sig: "dot(x1, y1, x2, y2)", doc: "2D dot product. (Luxel)" },
   { name: "dot3", sig: "dot3(x1,y1,z1, x2,y2,z2)", doc: "3D dot product. (Luxel)" },
   { name: "angleBetween", sig: "angleBetween(x1, y1, x2, y2)", doc: "Signed angle from vector 1 to vector 2, radians (CCW positive). (Luxel)" },
+  { name: "simplex2", sig: "simplex2(x, y, seed = 0)", doc: "2D simplex noise ~[-1,1] — smoother than perlin, no axis artifacts. (Luxel)" },
+  { name: "simplex3", sig: "simplex3(x, y, z, seed = 0)", doc: "3D simplex noise ~[-1,1]. (Luxel)" },
   // randomness
   { name: "random", sig: "random(max)", doc: "True random in [0, max)." },
   { name: "prng", sig: "prng(max)", doc: "Seedable pseudo-random in [0, max)." },

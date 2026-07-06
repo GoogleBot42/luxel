@@ -92,6 +92,134 @@ pub fn perlin(x: Fx, y: Fx, z: Fx, seed: Fx, wraps: [i32; 3]) -> Fx {
     Fx::from_raw(lerp(nxy0, nxy1, w) as i32)
 }
 
+// ---- simplex noise (Luxel extension; smoother than perlin, no axis
+// artifacts). Standard Gustavson construction in 16.16: skew to the
+// simplex lattice, sum per-corner (t = r² − d²)⁴ · grad·d falloffs, scale
+// to roughly [-1, 1]. The lattice does NOT wrap (setPerlinWrap doesn't
+// apply — wrapping a skewed lattice isn't meaningful). ----
+
+/// 2D skew/unskew constants in 16-frac: F2 = (√3−1)/2, G2 = (3−√3)/6.
+const F2: i64 = 23994;
+const G2: i64 = 13849;
+
+/// 8 gradient directions for 2D (never a zero component pair).
+#[inline]
+fn grad2(h: u32, fx: i64, fy: i64) -> i64 {
+    match h & 7 {
+        0 => fx + fy,
+        1 => -fx + fy,
+        2 => fx - fy,
+        3 => -fx - fy,
+        4 => fx,
+        5 => -fx,
+        6 => fy,
+        _ => -fy,
+    }
+}
+
+/// One simplex corner's contribution: (t² · t²) · grad, t = cap − d².
+#[inline]
+fn corner(t: i64, g: i64) -> i64 {
+    if t <= 0 {
+        return 0;
+    }
+    let t2 = fmul(t, t);
+    fmul(fmul(t2, t2), g)
+}
+
+/// 2D simplex noise, roughly in [-1, 1]. Deterministic (seed included in
+/// the corner hash, like perlin's).
+pub fn simplex2(x: Fx, y: Fx, seed: Fx) -> Fx {
+    let (xr, yr) = (x.raw() as i64, y.raw() as i64);
+    let s = fmul(xr + yr, F2);
+    let i = ((xr + s) >> 16) as i32;
+    let j = ((yr + s) >> 16) as i32;
+    let t = fmul(((i as i64) + (j as i64)) << 16, G2);
+    // distance from cell origin
+    let x0 = xr - ((i as i64) << 16) + t;
+    let y0 = yr - ((j as i64) << 16) + t;
+    // which triangle of the skewed cell
+    let (i1, j1) = if x0 > y0 { (1, 0) } else { (0, 1) };
+    let x1 = x0 - ((i1 as i64) << 16) + G2;
+    let y1 = y0 - ((j1 as i64) << 16) + G2;
+    let x2 = x0 - (1 << 16) + 2 * G2;
+    let y2 = y0 - (1 << 16) + 2 * G2;
+
+    let sd = seed.raw();
+    let half = ONE / 2;
+    let n0 = corner(half - fmul(x0, x0) - fmul(y0, y0), grad2(hash(i, j, 0, sd), x0, y0));
+    let n1 = corner(
+        half - fmul(x1, x1) - fmul(y1, y1),
+        grad2(hash(i + i1, j + j1, 0, sd), x1, y1),
+    );
+    let n2 = corner(
+        half - fmul(x2, x2) - fmul(y2, y2),
+        grad2(hash(i + 1, j + 1, 0, sd), x2, y2),
+    );
+    // 70× puts the sum in ~[-1, 1] (Gustavson's constant)
+    Fx::from_raw((70 * (n0 + n1 + n2)) as i32)
+}
+
+/// 3D simplex noise, roughly in [-1, 1].
+pub fn simplex3(x: Fx, y: Fx, z: Fx, seed: Fx) -> Fx {
+    const F3: i64 = ONE / 3;
+    const G3: i64 = ONE / 6;
+    let (xr, yr, zr) = (x.raw() as i64, y.raw() as i64, z.raw() as i64);
+    let s = fmul(xr + yr + zr, F3);
+    let i = ((xr + s) >> 16) as i32;
+    let j = ((yr + s) >> 16) as i32;
+    let k = ((zr + s) >> 16) as i32;
+    let t = fmul(((i as i64) + (j as i64) + (k as i64)) << 16, G3);
+    let x0 = xr - ((i as i64) << 16) + t;
+    let y0 = yr - ((j as i64) << 16) + t;
+    let z0 = zr - ((k as i64) << 16) + t;
+
+    // simplex (tetrahedron) traversal order by coordinate ranking
+    let (i1, j1, k1, i2, j2, k2) = if x0 >= y0 {
+        if y0 >= z0 {
+            (1, 0, 0, 1, 1, 0)
+        } else if x0 >= z0 {
+            (1, 0, 0, 1, 0, 1)
+        } else {
+            (0, 0, 1, 1, 0, 1)
+        }
+    } else if y0 < z0 {
+        (0, 0, 1, 0, 1, 1)
+    } else if x0 < z0 {
+        (0, 1, 0, 0, 1, 1)
+    } else {
+        (0, 1, 0, 1, 1, 0)
+    };
+
+    let x1 = x0 - ((i1 as i64) << 16) + G3;
+    let y1 = y0 - ((j1 as i64) << 16) + G3;
+    let z1 = z0 - ((k1 as i64) << 16) + G3;
+    let x2 = x0 - ((i2 as i64) << 16) + 2 * G3;
+    let y2 = y0 - ((j2 as i64) << 16) + 2 * G3;
+    let z2 = z0 - ((k2 as i64) << 16) + 2 * G3;
+    let x3 = x0 - (1 << 16) + 3 * G3;
+    let y3 = y0 - (1 << 16) + 3 * G3;
+    let z3 = z0 - (1 << 16) + 3 * G3;
+
+    let sd = seed.raw();
+    let cap = (ONE * 6) / 10; // 0.6, the classic 3D falloff radius²
+    let d = |xx: i64, yy: i64, zz: i64| cap - fmul(xx, xx) - fmul(yy, yy) - fmul(zz, zz);
+    let n0 = corner(d(x0, y0, z0), grad(hash(i, j, k, sd), x0, y0, z0));
+    let n1 = corner(
+        d(x1, y1, z1),
+        grad(hash(i + i1, j + j1, k + k1, sd), x1, y1, z1),
+    );
+    let n2 = corner(
+        d(x2, y2, z2),
+        grad(hash(i + i2, j + j2, k + k2, sd), x2, y2, z2),
+    );
+    let n3 = corner(
+        d(x3, y3, z3),
+        grad(hash(i + 1, j + 1, k + 1, sd), x3, y3, z3),
+    );
+    Fx::from_raw((32 * (n0 + n1 + n2 + n3)) as i32)
+}
+
 fn octaves_of(n: Fx) -> i32 {
     n.to_int_trunc().clamp(1, 8)
 }
@@ -210,6 +338,39 @@ mod tests {
         assert_eq!(
             perlin(fx(0.5), fx(0.5), fx(0.5), Fx::ZERO, w),
             perlin(fx(4.5), fx(0.5), fx(0.5), Fx::ZERO, w)
+        );
+    }
+
+    #[test]
+    fn simplex_range_and_smoothness() {
+        let mut min = 0.0f64;
+        let mut max = 0.0f64;
+        let mut prev2 = simplex2(Fx::ZERO, Fx::ZERO, Fx::ZERO).to_f64();
+        let mut prev3 = simplex3(Fx::ZERO, Fx::ZERO, Fx::ZERO, Fx::ZERO).to_f64();
+        for i in 1..3000 {
+            let p = fx(i as f64 * 0.01);
+            let n2 = simplex2(p, p * fx(0.7), Fx::ZERO).to_f64();
+            let n3 = simplex3(p, p * fx(0.7), p * fx(1.3), Fx::ZERO).to_f64();
+            for n in [n2, n3] {
+                min = min.min(n);
+                max = max.max(n);
+            }
+            // continuity: 0.01 steps never jump
+            assert!((n2 - prev2).abs() < 0.15, "2D jump at {i}: {prev2} → {n2}");
+            assert!((n3 - prev3).abs() < 0.15, "3D jump at {i}: {prev3} → {n3}");
+            prev2 = n2;
+            prev3 = n3;
+        }
+        assert!(min < -0.3 && max > 0.3, "no variation: {min}..{max}");
+        assert!(min > -1.6 && max < 1.6, "out of range: {min}..{max}");
+        // deterministic; seed changes the field
+        assert_eq!(
+            simplex2(fx(1.5), fx(2.5), fx(7.0)),
+            simplex2(fx(1.5), fx(2.5), fx(7.0))
+        );
+        assert_ne!(
+            simplex3(fx(1.5), fx(2.5), fx(3.5), fx(7.0)),
+            simplex3(fx(1.5), fx(2.5), fx(3.5), fx(8.0))
         );
     }
 

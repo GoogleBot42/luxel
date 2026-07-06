@@ -218,6 +218,12 @@ decay loop as one call. Both are the ubiquitous hand-rolled patterns
 `perlinRidge`, `perlinTurbulence`; `setPerlinWrap(x, y, z)` makes the
 lattice tile.
 
+**Luxel extensions**: `simplex2(x, y, seed = 0)` and `simplex3(x, y, z,
+seed = 0)` — simplex noise in roughly [-1, 1]: smoother than perlin with
+no axis-aligned artifacts (the classic choice for organic motion; feed
+`time(...)` into one axis). The simplex lattice does not wrap —
+`setPerlinWrap` doesn't apply.
+
 ### Mapped coordinates
 
 `resetTransform`, `translate(x, y)`, `scale(x, y)`, `rotate(θ)`,

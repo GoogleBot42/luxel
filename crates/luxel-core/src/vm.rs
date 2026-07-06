@@ -303,6 +303,8 @@ pub enum Builtin {
     Rgb2Hsv,
     Hsv2Rgb,
     MixColors,
+    Simplex2,
+    Simplex3,
 }
 
 pub struct BuiltinDef {
@@ -375,6 +377,7 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("blur1D", Blur1D), b!("feedback", Feedback),
     b!("dot", Dot), b!("dot3", Dot3), b!("angleBetween", AngleBetween),
     b!("rgb2hsv", Rgb2Hsv), b!("hsv2rgb", Hsv2Rgb), b!("mixColors", MixColors),
+    b!("simplex2", Simplex2), b!("simplex3", Simplex3),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -1632,6 +1635,11 @@ impl Vm {
                 self.write3(a(3), hsv).map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
+            // simplex2(x, y, seed = 0) / simplex3(x, y, z, seed = 0):
+            // simplex noise in ~[-1, 1] — smoother than perlin, no axis
+            // artifacts. The lattice does not wrap (setPerlinWrap N/A).
+            Simplex2 => num(crate::noise::simplex2(n(0), n(1), n(2))),
+            Simplex3 => num(crate::noise::simplex3(n(0), n(1), n(2), n(3))),
             // mixColors(r1,g1,b1, r2,g2,b2, t, out): blend two RGB colors in
             // OKLab — perceptually even, no muddy midpoints
             MixColors => {

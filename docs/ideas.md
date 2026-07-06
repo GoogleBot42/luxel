@@ -29,9 +29,10 @@ and the autocomplete/docs pipeline, and can't break existing code.
   expects; trivial and constantly wanted.
 - **`fract`/`step`/`sign`/`saturate`** [S] ★★ — the shader vocabulary;
   authors coming from GLSL/Shadertoy reach for these.
-- **Simplex noise + curl noise** [M] ★★ — smoother than Perlin, no axis
-  artifacts; curl noise gives divergence-free flow fields (gorgeous for
-  particle-ish looks).
+- **Simplex noise + curl noise** [M] ★★ — simplex DONE (`simplex2`/
+  `simplex3`, hash-based fixed point, tested). Curl noise deferred: a
+  finite-difference curl on 16.16 noise is too quantization-noisy to be
+  pretty; do it when the noise gets analytic derivatives.
 - **`beatSin`/`beat`(bpm, lo, hi)** [S] ★★ — FastLED-style tempo helpers;
   makes music-synced-feeling patterns easy without real audio.
 - **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — stable per-pixel
@@ -98,15 +99,15 @@ and the autocomplete/docs pipeline, and can't break existing code.
 
 ## Playground / DX
 
-- **Hover docs from the builtin table** [S] ★★ — the autocomplete data
-  already has signatures + docs; show them on hover (partially there for
-  values).
+- **Hover docs from the builtin table** [S] ★★ — DONE (builtins +
+  predefined globals show sig + doc on hover; e2e-covered).
 - **Pattern browser with animated previews** [M] ★★★ — DONE (192 live
   tiles: examples + compiles-clean corpus; 1D → bar, render2D → 16×16
   rectangle per Jeremy's distinction; viewport-lazy with an engine cap).
   Remaining niceties: render3D projection tiles, search/filter box,
   waterfall option for 1D.
-- **Shareable pattern URLs** [S] ★ — encode source in the URL for sharing.
+- **Shareable pattern URLs** [S] ★ — DONE (`#p=` deflate+base64url
+  fragment; share button copies, load restores; e2e-covered).
 - **Multi-pane: map editor + preview** [L] ★★ — visual 2D/3D map editing.
 
 ## Top picks if forced to choose 5
