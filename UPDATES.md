@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-07-06 ~07:15 — const/let landed; caught a real playground bug
+
+`const` and `let` now work (your request). `let` == `var` for now
+(function-scoped; block scoping later); `const` needs an initializer and
+errors on reassignment, correctly scoped (a local const doesn't lock a
+same-named global). Full stack: lexer → AST → parser → compiler, 3 new
+tests, editor keyword completion, and docs/lang.md updated with a
+"Luxel extensions" section. All 32 semantics tests green.
+
+Writing the e2e for it surfaced a genuine bug I'd introduced with the
+device-served playground: the auto-connect probe fetched `/api/status`,
+and a dev server answers that with its SPA fallback (200 HTML), so the
+local playground tried to "connect to a device", failed, and left a
+stuck "device unreachable" banner. Fixed to require real device JSON.
+Good catch — it would've bitten the normal local playground, not just
+the test.
+
+Queued your other note (extend builtins/features/language — the "not
+limited to PB" thesis) as a design task for a docs/ideas.md brainstorm.
+
+The device is back (you re-flashed it) and healthy; I've deliberately
+kept my remote testing light after the earlier WiFi-wedge, and the
+flash-vs-WiFi fix (task 16) is the thing that unlocks safe remote
+iteration again.
+
 ## 2026-07-06 ~06:30 — full playground serves from flash (works!) + an OTA regression to fix, and I've STOPPED touching the device
 
 Big win and an honest problem, both real.
