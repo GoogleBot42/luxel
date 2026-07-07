@@ -54,6 +54,7 @@ mod assets;
 mod config;
 mod devicemap;
 mod leds;
+mod netin;
 mod ota;
 mod patterns;
 mod playlist;
@@ -300,7 +301,8 @@ async fn main(spawner: Spawner) -> ! {
         wifi_interface,
         embassy_net::Config::dhcpv4(dhcp),
         mk_static!(
-            StackResources<{ server::WEB_TASK_POOL_SIZE + 2 }>,
+            // +2 spare, +2 for the DDP/E1.31 UDP sockets
+            StackResources<{ server::WEB_TASK_POOL_SIZE + 4 }>,
             StackResources::new()
         ),
         seed,
@@ -318,6 +320,8 @@ async fn main(spawner: Spawner) -> ! {
     for task_id in 0..server::WEB_TASK_POOL_SIZE {
         spawner.spawn(server::web_task(task_id, stack).unwrap());
     }
+    spawner.spawn(netin::ddp_task(stack).unwrap());
+    spawner.spawn(netin::e131_task(stack).unwrap());
 
     loop {
         Timer::after(Duration::from_secs(60)).await;
@@ -478,7 +482,27 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             }
         }
 
-        if engine.is_some() {
+        // network input (DDP/E1.31) overrides the engine while packets flow;
+        // LIVE_TIMEOUT_MS after the stream stops, the pattern takes back over
+        if shared::live_proto(Instant::now().as_millis() as u32).is_some() {
+            shared::LIVE_PIXELS.lock(|c| {
+                let live = c.borrow();
+                blend_buf.clear();
+                for i in 0..PIXEL_COUNT.load(Ordering::Relaxed) as usize {
+                    let p = i * 3;
+                    blend_buf.push(match live.get(p..p + 3) {
+                        Some(px) => [px[0], px[1], px[2]],
+                        None => [0, 0, 0],
+                    });
+                }
+            });
+            set_pixels(&blend_buf);
+            cur_protocol().encode(&blend_buf, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
+            if let Err(e) = spi.write(&buf) {
+                println!("spi write error: {:?}", e);
+            }
+            last = Instant::now(); // keep the pattern clock fresh for resume
+        } else if engine.is_some() {
             let now = Instant::now();
             let delta_us = (now - last).as_micros();
             last = now;

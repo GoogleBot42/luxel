@@ -80,8 +80,10 @@ and the autocomplete/docs pipeline, and can't break existing code.
 
 - **MQTT + Home Assistant discovery** [M] ★★★ — the reason this project
   exists for a lot of people; brightness/power/pattern-select as HA entities.
-- **DDP / E1.31 input** [M] ★★ — let xLights/Resolume drive Luxel as a dumb
-  output; complements the live-coding story.
+- **DDP / E1.31 input** [M] ★★ — DONE (firmware v0.1.18 + mirror; UDP
+  :4048/:5568, shared parser in luxel-core::netin, live override with 2.5 s
+  fallback to the pattern, `live` in /api/status + Settings row. Multicast
+  sACN joined but only unicast verified from the dev container).
 - **Luxel-to-Luxel sync** [L] ★★★ — timebase sync + leader/follower groups
   so multiple controllers render one coherent installation. `nodeId()` is
   already a builtin anticipating this.

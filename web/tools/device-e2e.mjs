@@ -6,6 +6,7 @@
 // Usage (from web/): npm run build && node tools/device-e2e.mjs
 
 import { execSync, spawn } from "node:child_process";
+import dgram from "node:dgram";
 import puppeteer from "puppeteer-core";
 
 const CHROMIUM =
@@ -329,6 +330,36 @@ try {
     "wifi: save stores the SSID on the device",
     (await (await fetch(`${DEV}/api/wifi`)).json()).ssid === "TestNet",
   );
+
+  // network input: a DDP packet overrides the engine (status.live + pixels),
+  // and the pattern resumes after the 2.5s timeout
+  {
+    const udp = dgram.createSocket("udp4");
+    const ddp = Buffer.alloc(10 + 3);
+    ddp[0] = 0x41; // v1 | push
+    ddp[2] = 1; // type: RGB
+    ddp[3] = 1; // dest: default output
+    ddp.writeUInt16BE(3, 8); // length
+    ddp.set([1, 2, 3], 10); // first pixel = rgb(1,2,3)
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => udp.send(ddp, 4048, "127.0.0.1", r));
+      await sleep(80);
+    }
+    udp.close();
+    await sleep(150);
+    const stLive = await (await fetch(`${DEV}/api/status`)).json();
+    check("netin: DDP packet flips status.live", stLive.live === "ddp", JSON.stringify(stLive));
+    const pxLive = Buffer.from(await (await fetch(`${DEV}/api/pixels`)).arrayBuffer());
+    check(
+      "netin: DDP data drives the pixel buffer",
+      pxLive[0] === 1 && pxLive[1] === 2 && pxLive[2] === 3,
+      pxLive.subarray(0, 3).join(","),
+    );
+    check("netin: settings shows a status row", (await page.$('[data-role="netin-status"]')) !== null);
+    await sleep(2700); // live timeout
+    const stIdle = await (await fetch(`${DEV}/api/status`)).json();
+    check("netin: pattern resumes after timeout", stIdle.live === null, JSON.stringify(stIdle));
+  }
 
   await page.click('[data-role="save"]'); // save (editor header) → stores on the device
   await sleep(900);

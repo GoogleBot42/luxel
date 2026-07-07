@@ -23,6 +23,7 @@ pub mod color;
 pub mod fmath;
 pub mod jsonview;
 pub mod lex;
+pub mod netin;
 pub mod noise;
 pub mod parse;
 pub mod vm;

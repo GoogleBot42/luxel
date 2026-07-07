@@ -1,5 +1,26 @@
 # Update log
 
+## 2026-07-07 — DDP + E1.31 network input (firmware v0.1.18) ✅
+
+xLights / LedFx / Resolume can now drive Luxel as a network pixel output:
+the device listens for **DDP on UDP :4048** and **E1.31/sACN on UDP :5568**
+(universe 1 up, 170 px each). Incoming frames paint the strip directly,
+bypassing the engine; ~2.5 s after the stream stops, the running pattern
+takes back over — so a LedFx session ends and the wall just resumes its
+playlist. `/api/status` gained a `live` field (`"ddp"`/`"e131"`/`null`) and
+Settings shows a "Network input" status row.
+
+Packet parsing lives in `luxel_core::netin` (unit-tested, shared by firmware
+and mirror). Verified end-to-end on the wall unit: DDP red/green/blue +
+offset writes, E1.31 magenta, and the timeout-resume — all over real WiFi.
+Multicast sACN groups are joined at boot but only unicast was verifiable
+from the dev container (bridges/APs commonly filter multicast); xLights and
+LedFx default to unicast anyway. Image is 887 KB — still 161 KB under the
+1 MiB OTA slot. Both e2e suites green (65 device checks); v0.1.18 OTA'd.
+
+Also: **springy easings** — `easeOutBack`, `easeOutElastic`, `easeOutBounce`
+join the builtins (that completes the entire builtins backlog in ideas.md).
+
 ## 2026-07-07 — Playlist crossfade transitions (firmware v0.1.17) ✅
 
 Playlists can now **crossfade** between items instead of hard-cutting. The

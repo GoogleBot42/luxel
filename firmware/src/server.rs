@@ -95,19 +95,24 @@ fn status_json() -> String {
     let slot = crate::ota::booted_slot();
     let version = env!("CARGO_PKG_VERSION");
     let heap = esp_alloc::HEAP.free();
+    let live = match crate::shared::live_proto(embassy_time::Instant::now().as_millis() as u32) {
+        Some(p) => format!("\"{p}\""),
+        None => String::from("null"),
+    };
     match get_vmerr() {
         Some(e) => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":\"{}\"}}",
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":\"{}\"}}",
             fps,
             pixels,
             slot,
             version,
             heap,
+            live,
             json_escape(&e)
         ),
         None => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":null}}",
-            fps, pixels, slot, version, heap
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":null}}",
+            fps, pixels, slot, version, heap, live
         ),
     }
 }

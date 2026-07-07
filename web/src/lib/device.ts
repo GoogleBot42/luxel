@@ -7,6 +7,8 @@ export interface DeviceStatus {
   fps: number;
   pixels: number;
   vmerr: string | null;
+  /** Network input currently driving the strip (DDP/E1.31), if any. */
+  live?: "ddp" | "e131" | null;
 }
 
 export type RunResult = { ok: true } | { ok: false; line: number; col: number; error: string };

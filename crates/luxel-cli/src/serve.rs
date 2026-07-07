@@ -132,6 +132,87 @@ struct State {
     /// Installed pixel map (dims, per-pixel [x,y,z] in Fx) + a re-apply flag.
     device_map: Mutex<Option<(u8, Vec<[Fx; 3]>)>>,
     map_dirty: AtomicBool,
+    /// Network input (DDP/E1.31): assembled RGB frame + when it last moved.
+    /// While packets flow the render loop shows this instead of the engine;
+    /// LIVE_TIMEOUT after the last packet, the running pattern resumes.
+    live_pixels: Mutex<Vec<u8>>,
+    live_mark: Mutex<Option<Instant>>,
+    live_proto: AtomicU8, // 0 = none, 1 = ddp, 2 = e131
+}
+
+/// How long after the last DDP/E1.31 packet the pattern takes back over.
+const LIVE_TIMEOUT: Duration = Duration::from_millis(2500);
+
+/// The protocol currently overriding the engine, if any.
+fn live_proto(state: &State) -> Option<&'static str> {
+    let fresh = state
+        .live_mark
+        .lock()
+        .unwrap()
+        .is_some_and(|m| m.elapsed() < LIVE_TIMEOUT);
+    match state.live_proto.load(Ordering::Relaxed) {
+        1 if fresh => Some("ddp"),
+        2 if fresh => Some("e131"),
+        _ => None,
+    }
+}
+
+/// Write `data` at byte `offset` of the live frame (grows as needed, bounded
+/// by the strip) and stamp it fresh.
+fn live_write(state: &State, offset: usize, data: &[u8], proto: u8) {
+    let max = state.pixel_count.load(Ordering::Relaxed) as usize * 3;
+    if offset >= max {
+        return;
+    }
+    let n = data.len().min(max - offset);
+    {
+        let mut buf = state.live_pixels.lock().unwrap();
+        if buf.len() < offset + n {
+            buf.resize(offset + n, 0);
+        }
+        buf[offset..offset + n].copy_from_slice(&data[..n]);
+    }
+    *state.live_mark.lock().unwrap() = Some(Instant::now());
+    state.live_proto.store(proto, Ordering::Relaxed);
+}
+
+/// UDP listener for one network-input protocol; parse is shared with the
+/// firmware via luxel_core::netin.
+fn netin_listener(state: Arc<State>, port: u16) {
+    let sock = match std::net::UdpSocket::bind(("0.0.0.0", port)) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("netin: bind :{port} failed ({e}); network input off");
+            return;
+        }
+    };
+    if port == luxel_core::netin::E131_PORT {
+        // sACN defaults to multicast 239.255.<universe-hi>.<universe-lo>;
+        // join enough universes for the largest strip. Unicast also works.
+        let n = (MAX_PIXELS as usize * 3).div_ceil(luxel_core::netin::E131_CHANNELS);
+        for u in 1..=n as u16 {
+            let [hi, lo] = u.to_be_bytes();
+            let _ = sock.join_multicast_v4(
+                &std::net::Ipv4Addr::new(239, 255, hi, lo),
+                &std::net::Ipv4Addr::UNSPECIFIED,
+            );
+        }
+    }
+    let mut buf = [0u8; 2048];
+    loop {
+        let Ok((len, _)) = sock.recv_from(&mut buf) else {
+            continue;
+        };
+        let pkt = &buf[..len];
+        if port == luxel_core::netin::DDP_PORT {
+            if let Some(d) = luxel_core::netin::parse_ddp(pkt) {
+                live_write(&state, d.offset, d.data, 1);
+            }
+        } else if let Some(d) = luxel_core::netin::parse_e131(pkt) {
+            let off = (d.universe.max(1) as usize - 1) * luxel_core::netin::E131_CHANNELS;
+            live_write(&state, off, d.data, 2);
+        }
+    }
 }
 
 fn push(state: &State, msg: Msg) {
@@ -144,11 +225,16 @@ fn status_json(state: &State) -> String {
         Some(e) => format!("\"{}\"", json_escape(e)),
         None => String::from("null"),
     };
+    let live = match live_proto(state) {
+        Some(p) => format!("\"{p}\""),
+        None => String::from("null"),
+    };
     format!(
-        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":0,\"vmerr\":{}}}",
+        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":0,\"live\":{},\"vmerr\":{}}}",
         fps,
         state.pixel_count.load(Ordering::Relaxed),
         env!("CARGO_PKG_VERSION"),
+        live,
         vmerr
     )
 }
@@ -360,7 +446,15 @@ fn render_loop(state: Arc<State>) {
             }
         }
 
-        if engine.is_some() {
+        // network input (DDP/E1.31) overrides the engine while packets flow
+        if live_proto(&state).is_some() {
+            let live = state.live_pixels.lock().unwrap().clone();
+            let mut snap = state.pixels.lock().unwrap();
+            snap.clear();
+            snap.extend_from_slice(&live);
+            snap.resize(count() as usize * 3, 0);
+            last = Instant::now(); // keep the pattern clock fresh for resume
+        } else if engine.is_some() {
             let now = Instant::now();
             let delta_us = now.duration_since(last).as_micros() as u64;
             last = now;
@@ -1033,11 +1127,18 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         wifi_ssid: Mutex::new(None),
         device_map: Mutex::new(None),
         map_dirty: AtomicBool::new(false),
+        live_pixels: Mutex::new(Vec::new()),
+        live_mark: Mutex::new(None),
+        live_proto: AtomicU8::new(0),
     });
 
     {
         let state = state.clone();
         std::thread::spawn(move || render_loop(state));
+    }
+    for port in [luxel_core::netin::DDP_PORT, luxel_core::netin::E131_PORT] {
+        let state = state.clone();
+        std::thread::spawn(move || netin_listener(state, port));
     }
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {

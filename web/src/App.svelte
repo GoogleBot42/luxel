@@ -269,6 +269,27 @@
     }
   }
 
+  // ---- network input (DDP/E1.31) status, shown on the Settings tab ----
+  let netLive: "ddp" | "e131" | null = null;
+  let netPoll: ReturnType<typeof setInterval> | undefined;
+
+  async function refreshNetLive(): Promise<void> {
+    if (!device) return;
+    try {
+      netLive = (await device.status()).live ?? null;
+    } catch {
+      /* older firmware without the live field — stays idle */
+    }
+  }
+
+  $: {
+    clearInterval(netPoll);
+    if (device && tab === "settings" && !editing) {
+      void refreshNetLive();
+      netPoll = setInterval(refreshNetLive, 2000);
+    }
+  }
+
   async function refreshDevicePatterns(): Promise<void> {
     if (!device) return;
     try {
@@ -1968,6 +1989,22 @@ export function render(index) {
                 : ""}
             </span>
           </div>
+        </section>
+
+        <section class="card">
+          <h2>Network input</h2>
+          <div class="field">
+            <span class="flabel">Status</span>
+            <span class="mono" data-role="netin-status">
+              {netLive === "ddp" ? "receiving DDP" : netLive === "e131" ? "receiving E1.31" : "idle"}
+            </span>
+          </div>
+          <p class="dim hint">
+            The device listens for DDP on UDP :4048 and E1.31/sACN on UDP :5568 (universe 1 and
+            up, 170 pixels each; multicast or unicast). Frames from xLights, LedFx, Resolume, etc.
+            drive the strip directly; the running pattern resumes a couple of seconds after the
+            stream stops.
+          </p>
         </section>
 
         <section class="card">

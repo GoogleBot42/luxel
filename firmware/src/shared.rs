@@ -107,6 +107,34 @@ pub fn get_pattern_src() -> String {
     share_get(&PATTERN_SRC)
 }
 
+/// Network input (DDP/E1.31): the assembled RGB frame. While packets flow
+/// (see LIVE_MARK_MS) the render task outputs this instead of the engine.
+pub static LIVE_PIXELS: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));
+
+/// embassy now() ms of the last network-input packet (0 = never), and which
+/// protocol sent it (0 = none, 1 = DDP, 2 = E1.31). Written by the netin
+/// task, read by the render task and /api/status.
+pub static LIVE_MARK_MS: AtomicU32 = AtomicU32::new(0);
+pub static LIVE_PROTO: AtomicU8 = AtomicU8::new(0);
+
+/// How long after the last DDP/E1.31 packet the pattern takes back over.
+pub const LIVE_TIMEOUT_MS: u32 = 2500;
+
+/// The protocol currently overriding the engine, if any (shared by the
+/// render task's frame gate and the status JSON).
+pub fn live_proto(now_ms: u32) -> Option<&'static str> {
+    use core::sync::atomic::Ordering;
+    let mark = LIVE_MARK_MS.load(Ordering::Relaxed);
+    if mark == 0 || now_ms.wrapping_sub(mark) >= LIVE_TIMEOUT_MS {
+        return None;
+    }
+    match LIVE_PROTO.load(Ordering::Relaxed) {
+        1 => Some("ddp"),
+        2 => Some("e131"),
+        _ => None,
+    }
+}
+
 /// JSON snapshots published by the render task (see luxel_core::jsonview):
 /// controls on pattern swap; vars/readouts every ~250 ms.
 pub static CONTROLS_JSON: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
