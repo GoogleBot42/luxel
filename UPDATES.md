@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-07-07 overnight — batch: gallery search, playlist polish, 3D preview, WiFi form, device map ✅
+
+While you slept (you picked web features + WiFi + device map, OTA authorized):
+
+- **Gallery search** — a search box filters the 190+ patterns by name.
+- **Playlist polish** — a Clear button, a "N items · loop ≈ Xm Ys" total, and
+  playlist entries whose pattern was deleted now show "(deleted)" and can be
+  removed (the scheduler skips past them).
+- **3D map preview** — a map whose z varies now renders as a slowly
+  auto-rotating point cloud (depth-sorted, nearer points larger/brighter)
+  instead of flat.
+- **WiFi settings form** — the Settings tab shows the network the device will
+  join and lets you change the credentials (it reboots to apply).
+- **Device map upload** (firmware v0.1.16) — install a computed 2D/3D map onto
+  the device so its patterns render with real geometry (render2D). Verified on
+  the wall unit: a reversed map really does drive the pixels (and it survives a
+  reboot). "Install on device" / "clear device map" live in the map sub-tab.
+
+All committed + deployed (v0.1.16 OTA'd; web hot-reloaded); the wall is back to
+the rainbow with a clean slate. Both e2e suites green (61 device checks). Left
+alone per your note: persistence of a single ad-hoc (non-playlist) pattern.
+
 ## 2026-07-06 night — Playlist + "untitled" fix ✅
 
 **Playlist** (firmware v0.1.15): a new device tab that plays your saved patterns

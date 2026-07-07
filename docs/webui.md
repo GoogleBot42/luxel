@@ -167,11 +167,15 @@ the pattern is loading, instead of appearing dead/blank.
 3. **Phase 3 (firmware + settings):** ~~connect-on-load race~~ ✅ (web-only);
    ~~`/api/brightness` + slider~~ ✅ (v0.1.12); ~~`/api/config` pixel count~~ ✅
    (v0.1.13); ~~`/api/protocol` LED protocol switch~~ ✅ (v0.1.14) — all **live,
-   no reboot**. Remaining: the Settings **WiFi form** (endpoint already exists).
-4. **Phase 4 (bigger features):** ~~mapper-as-editor-tab (CodeMirror) +
-   debuggable~~ ✅ done (Luxel map program, see above); 3D preview (map already
-   emits `[x,y,z]` — Preview needs a projection); Playlist tab + firmware
-   playlist storage; MQTT/HA (M4); AP-mode provisioning; device map upload
-   (install a computed map on hardware).
+   no reboot**; ~~Settings **WiFi form**~~ ✅ (shows current network + change
+   creds, reboots to apply; mirror /api/wifi for e2e).
+4. **Phase 4 (bigger features):** ~~mapper-as-editor-tab + debuggable~~ ✅;
+   ~~3D preview~~ ✅ (rotating depth-sorted point cloud when the map's z varies);
+   ~~Playlist tab + firmware playlist storage~~ ✅ (v0.1.15, resumes across
+   reboots); ~~device map upload~~ ✅ (v0.1.16, `/api/map` install a computed
+   2D/3D map on hardware so device patterns render2D; persisted). Also shipped:
+   **gallery search** (filter 190+ patterns by name), **playlist polish**
+   (clear-all, total run-time, deleted-pattern handling). Remaining: MQTT/HA
+   (M4); AP-mode provisioning; runtime LED-protocol re-init edge cases.
 </content>
 </invoke>
