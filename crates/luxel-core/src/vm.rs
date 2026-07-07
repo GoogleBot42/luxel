@@ -309,6 +309,9 @@ pub enum Builtin {
     SetGamma,
     // Luxel map programs: emit one coordinate per pixel (see engine map mode).
     Plot,
+    EaseOutBack,
+    EaseOutElastic,
+    EaseOutBounce,
 }
 
 pub struct BuiltinDef {
@@ -386,6 +389,9 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("simplex2", Simplex2), b!("simplex3", Simplex3),
     b!("setGamma", SetGamma),
     b!("plot", Plot),
+    // springy easings (the polynomial ones are up with the other eases)
+    b!("easeOutBack", EaseOutBack), b!("easeOutElastic", EaseOutElastic),
+    b!("easeOutBounce", EaseOutBounce),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -1172,6 +1178,47 @@ impl Vm {
                 } else {
                     let u = t + t - Fx::from_int(2);
                     u * u * u / Fx::from_int(2) + Fx::ONE
+                })
+            }
+            // 1 + c3·(t-1)³ + c1·(t-1)² with c1 = 1.70158 (the classic ~10%
+            // overshoot constant), c3 = c1 + 1
+            EaseOutBack => {
+                let u = n(0) - Fx::ONE;
+                let c1 = Fx::from_f64(1.70158);
+                let c3 = c1 + Fx::ONE;
+                num(Fx::ONE + c3 * u * u * u + c1 * u * u)
+            }
+            // 2^(-10t)·sin((10t - 0.75)·2π/3) + 1, endpoints pinned exactly
+            EaseOutElastic => {
+                let t = n(0);
+                num(if t <= Fx::ZERO {
+                    Fx::ZERO
+                } else if t >= Fx::ONE {
+                    Fx::ONE
+                } else {
+                    let ten_t = Fx::from_int(10) * t;
+                    let decay = fmath::pow(Fx::from_int(2), -ten_t);
+                    // sin's argument in turns: (10t - 0.75) / 3
+                    let s = fmath::sin_turns((ten_t - Fx::from_f64(0.75)) / Fx::from_int(3));
+                    decay * s + Fx::ONE
+                })
+            }
+            // piecewise parabolas, n1 = 7.5625, d1 = 2.75 (the standard fit)
+            EaseOutBounce => {
+                let t = n(0);
+                let n1 = Fx::from_f64(7.5625);
+                let d1 = Fx::from_f64(2.75);
+                num(if t < Fx::ONE / d1 {
+                    n1 * t * t
+                } else if t < Fx::from_int(2) / d1 {
+                    let u = t - Fx::from_f64(1.5) / d1;
+                    n1 * u * u + Fx::from_f64(0.75)
+                } else if t < Fx::from_f64(2.5) / d1 {
+                    let u = t - Fx::from_f64(2.25) / d1;
+                    n1 * u * u + Fx::from_f64(0.9375)
+                } else {
+                    let u = t - Fx::from_f64(2.625) / d1;
+                    n1 * u * u + Fx::from_f64(0.984375)
                 })
             }
             Random => {

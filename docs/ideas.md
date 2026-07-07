@@ -12,32 +12,23 @@ Legend: **[S/M/L]** effort · ★ value (1–3) · `compat` = keeps PB patterns 
 New builtins are the cheapest high-value wins — they slot into the VM table
 and the autocomplete/docs pipeline, and can't break existing code.
 
-- **Easing functions** [S] ★★★ — `easeIn/OutQuad`, `easeInOutCubic`,
-  `easeOutBack`, `easeOutElastic`, `easeOutBounce`. Pattern authors
-  reinvent these constantly. Pure math over 0..1.
-- **Color-space helpers** [M] ★★★ — `oklch(l, c, h)` / `oklab(...)` for
-  perceptually-uniform gradients (dramatically nicer fades than HSV),
-  `rgb2hsv`/`hsv2rgb` as value-returning (not just pixel-setting) forms,
-  `mixColors(c1, c2, t)` in a good space. The single biggest visual-quality
-  lever.
-- **Smoothing / filters over arrays** [M] ★★ — `blur1D(arr, radius)`,
-  `boxBlur`, `feedback(arr, decay)` — trails/glow are ubiquitous and
-  hand-rolled today (KITT's decay loop is the pattern).
-- **Vector helpers** [S] ★★ — `dist(x1,y1,x2,y2)`, `dist3`, `dot`, `norm`,
-  `angleBetween`. 2D/3D map patterns need these; today it's raw `hypot`.
-- **`map(x, inLo, inHi, outLo, outHi)`** [S] ★★★ — Arduino-ism everyone
-  expects; trivial and constantly wanted.
-- **`fract`/`step`/`sign`/`saturate`** [S] ★★ — the shader vocabulary;
-  authors coming from GLSL/Shadertoy reach for these.
+- **Easing functions** [S] ★★★ — DONE (quad/cubic in/out/inOut +
+  `easeOutBack`/`easeOutElastic`/`easeOutBounce`; endpoint + shape tests).
+- **Color-space helpers** [M] ★★★ — DONE (`oklch`/`oklab`, value-returning
+  `rgb2hsv`/`hsv2rgb`, `mixColors`).
+- **Smoothing / filters over arrays** [M] ★★ — DONE (`blur1D(arr, radius)`,
+  `feedback(arr, decay)`).
+- **Vector helpers** [S] ★★ — DONE (`dist`/`dist3`, `dot`/`dot3`,
+  `angleBetween`, `length`/`length3`).
+- **`map(x, inLo, inHi, outLo, outHi)`** [S] ★★★ — DONE.
+- **`fract`/`step`/`sign`/`saturate`** [S] ★★ — DONE.
 - **Simplex noise + curl noise** [M] ★★ — simplex DONE (`simplex2`/
   `simplex3`, hash-based fixed point, tested). Curl noise deferred: a
   finite-difference curl on 16.16 noise is too quantization-noisy to be
   pretty; do it when the noise gets analytic derivatives.
-- **`beatSin`/`beat`(bpm, lo, hi)** [S] ★★ — FastLED-style tempo helpers;
-  makes music-synced-feeling patterns easy without real audio.
-- **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — stable per-pixel
-  randomness (sparkle that doesn't reshuffle each frame) — the corpus
-  fakes this with the prng today.
+- **`beatSin`/`beat`(bpm, lo, hi)** [S] ★★ — DONE.
+- **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — DONE (lowbias32,
+  sequence pinned by test).
 
 ## Language
 

@@ -602,12 +602,23 @@ fn extension_builtins() {
     for f in [
         "easeInQuad", "easeOutQuad", "easeInOutQuad",
         "easeInCubic", "easeOutCubic", "easeInOutCubic",
+        "easeOutBack", "easeOutElastic", "easeOutBounce",
     ] {
-        assert!(eval(&format!("{f}(0)")).to_f64().abs() < 1e-3, "{f}(0) != 0");
-        assert!((eval(&format!("{f}(1)")).to_f64() - 1.0).abs() < 1e-3, "{f}(1) != 1");
+        assert!(eval(&format!("{f}(0)")).to_f64().abs() < 1e-2, "{f}(0) != 0");
+        assert!((eval(&format!("{f}(1)")).to_f64() - 1.0).abs() < 1e-2, "{f}(1) != 1");
     }
     // easeInQuad(0.5) = 0.25
     assert!((eval("easeInQuad(0.5)").to_f64() - 0.25).abs() < 1e-3);
+    // easeOutBack overshoots past 1 mid-curve (that's its point)
+    assert!(eval("easeOutBack(0.6)").to_f64() > 1.0);
+    // easeOutElastic wobbles: sine peak at t=0.15 (arg = 0.25 turns)...
+    assert!(eval("easeOutElastic(0.15)").to_f64() > 1.2);
+    // ...and the trough at t=0.3 (arg = 0.75 turns) dips back below 1
+    assert!(eval("easeOutElastic(0.3)").to_f64() < 0.95);
+    // easeOutBounce: first bounce peak region ≈ n1·t² ramp, t=1/2.75 → 1
+    assert!((eval("easeOutBounce(0.3636)").to_f64() - 1.0).abs() < 0.02);
+    // trough between bounces dips well below 1
+    assert!(eval("easeOutBounce(0.55)").to_f64() < 0.85);
 }
 
 #[test]

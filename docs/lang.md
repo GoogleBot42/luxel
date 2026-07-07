@@ -159,7 +159,11 @@ where PB compile-errors on arity).
 **Luxel extensions** (not in PB): `map(x, inLo, inHi, outLo, outHi)`,
 `sign(x)`, `step(edge, x)`, `saturate(x)` (= clamp to 0..1),
 `dist(x1,y1,x2,y2)`, `dist3(x1,y1,z1,x2,y2,z2)`, and easing curves on 0..1:
-`easeInQuad`/`easeOutQuad`/`easeInOutQuad` and the `…Cubic` trio.
+`easeInQuad`/`easeOutQuad`/`easeInOutQuad`, the `…Cubic` trio, and the
+springy set — `easeOutBack(t)` (overshoots ~10% and settles),
+`easeOutElastic(t)` (decaying spring wobble), `easeOutBounce(t)` (dropped
+ball). The springy ones exceed 0..1 mid-curve by design; saturate() the
+result if you're feeding a color channel directly.
 
 **Luxel extensions — tempo & hashing**: `beat(bpm)` is a 0..1 sawtooth
 beat phase at `bpm` on the engine clock; `beatSin(bpm, lo = 0, hi = 1)`
