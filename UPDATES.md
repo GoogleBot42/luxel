@@ -1,5 +1,26 @@
 # Update log
 
+## 2026-07-06 night — device mode = local preview + push (no streaming) ✅
+
+Per your call: the live pixel stream from the device wasn't helpful, so it's
+gone — along with the connect/disconnect buttons (it's always connected for the
+API). Device mode is now **the playground that also drives the strip**:
+
+- The preview runs on the **local WASM engine**, instantly — no device round-trip
+  and no ws/HTTP pixel polling. You watch the real strip for the real thing.
+- **Editing pushes to the device**: typing recompiles locally (fast) and pushes
+  the code over WiFi (throttled; a broken pattern is never sent). Controls drive
+  both the preview and the strip. The **step-debugger now works in device mode**
+  (it's genuine local compute).
+- **No connect/disconnect/reconnect buttons or badge** — the wordmark shows the
+  device; a failed connect just shows an error (reload to retry).
+- It **still waits for the device on load** so it opens whatever pattern is
+  running, exactly as you asked.
+
+Web-only (the firmware still can stream — the UI just stopped asking), so it went
+out as a hot asset reload, no reflash. Both e2e suites green (43 device checks);
+code-push verified on the wall unit.
+
 ## 2026-07-06 night — live LED-protocol switch (firmware v0.1.14, no reboot) ✅
 
 You asked about protocol — different strips use different ones. You can now
