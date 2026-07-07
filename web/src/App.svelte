@@ -211,6 +211,20 @@
     queuePlaylistSave();
   }
 
+  /** drag-to-reorder: index the grip drag started from. */
+  let playlistDragFrom = -1;
+  function dropPlaylistItem(to: number): void {
+    const from = playlistDragFrom;
+    playlistDragFrom = -1;
+    if (from < 0 || from === to) return;
+    const items = [...playlist.items];
+    const [moved] = items.splice(from, 1);
+    if (moved === undefined) return;
+    items.splice(to, 0, moved);
+    playlist = { ...playlist, items };
+    queuePlaylistSave();
+  }
+
   function onDefaultSecChange(e: Event): void {
     const v = (e.target as HTMLInputElement).value.trim();
     playlist = { ...playlist, defaultSec: v === "" ? 0 : Math.max(0, Math.round(Number(v) || 0)) };
@@ -373,6 +387,19 @@
 
   function closeEditor(): void {
     editing = false;
+  }
+
+  /** Editor keyboard shortcuts: ⌘/Ctrl+S save, ⌘/Ctrl+Enter force run + push. */
+  function onKeydown(e: KeyboardEvent): void {
+    if (!editing) return;
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      saveToLibrary();
+    } else if (mod && e.key === "Enter") {
+      e.preventDefault();
+      applyEdit(); // recompile the preview + push to the device
+    }
   }
 
   /** Start a brand-new pattern in the editor. `onDevice` routes save to the
@@ -1312,7 +1339,7 @@ export function render(index) {
   });
 </script>
 
-<svelte:window on:click={() => (menuOpen = false)} />
+<svelte:window on:click={() => (menuOpen = false)} on:keydown={onKeydown} />
 
 <div
   class="shell"
@@ -1866,6 +1893,8 @@ export function render(index) {
                 }}
                 on:remove={() => removePlaylistItem(i)}
                 on:move={(e) => movePlaylistItem(i, e.detail)}
+                on:dragstart={() => (playlistDragFrom = i)}
+                on:drop={() => dropPlaylistItem(i)}
               />
             {/if}
           {/each}

@@ -494,6 +494,23 @@ try {
     "playlist: per-item override persisted",
     (await (await fetch(`${DEV}/api/playlist`)).json()).items[0].sec === 2,
   );
+  // drag-to-reorder: move item 0 (hue 0.2) below item 1 (hue 0.8)
+  await page.evaluate(() => {
+    const rows = document.querySelectorAll('[data-role="playlist-item"]');
+    const grip = rows[0].querySelector('[data-role="pl-grip"]');
+    const dt = new DataTransfer();
+    grip.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+    rows[1].dispatchEvent(new DragEvent("dragover", { bubbles: true, dataTransfer: dt }));
+    rows[1].dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: dt }));
+  });
+  await sleep(600);
+  check(
+    "playlist: drag reorders items",
+    Math.abs(
+      (await (await fetch(`${DEV}/api/playlist`)).json()).items[0].controls.sliderHue[0] - 0.8,
+    ) < 0.01,
+    JSON.stringify((await (await fetch(`${DEV}/api/playlist`)).json()).items.map((i) => i.controls)),
+  );
   // play + advance
   await page.click('[data-role="pl-play"]');
   await sleep(500);

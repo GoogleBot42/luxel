@@ -96,6 +96,16 @@ try {
   check("New opens the editor (back button)", (await page.$('[data-role="editor-back"]')) !== null);
   const fpsText = await page.$eval('[data-role="fps"]', (el) => el.textContent ?? "");
   check("engine renders (fps > 0)", parseInt(fpsText) > 10, fpsText.trim());
+
+  // keyboard shortcut: Cmd/Ctrl+S saves (the global dialog handler names it)
+  await page.keyboard.down("Control");
+  await page.keyboard.press("s");
+  await page.keyboard.up("Control");
+  await sleep(400);
+  check(
+    "Ctrl+S saves the pattern",
+    (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "")).includes("e2e saved"),
+  );
   const lit = await page.$eval(".waterfall", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, 3).data;
     return d.some((v, i) => i % 4 !== 3 && v > 0);

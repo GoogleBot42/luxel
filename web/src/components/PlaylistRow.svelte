@@ -26,7 +26,11 @@
     change: void;
     remove: void;
     move: number;
+    dragstart: void;
+    drop: void;
   }>();
+
+  let dragover = false;
 
   let controls: Control[] = [];
   let hints = new Map<string, ControlHint>();
@@ -71,8 +75,30 @@
   }
 </script>
 
-<li class="row" class:active class:missing data-role="playlist-item">
+<li
+  class="row"
+  class:active
+  class:missing
+  class:dragover
+  data-role="playlist-item"
+  on:dragover|preventDefault={() => (dragover = true)}
+  on:dragleave={() => (dragover = false)}
+  on:drop|preventDefault={() => {
+    dragover = false;
+    dispatch("drop");
+  }}
+>
   <div class="head">
+    <span
+      class="grip"
+      data-role="pl-grip"
+      title="drag to reorder"
+      role="button"
+      tabindex="-1"
+      aria-label="drag to reorder"
+      draggable="true"
+      on:dragstart={() => dispatch("dragstart")}
+    >⠿</span>
     {#if luxel && !missing}<PatternThumb {luxel} {source} />{/if}
     <span class="name" data-role="pl-name">
       {item.name || item.id}{#if missing}<span class="miss"> (deleted)</span>{/if}
@@ -128,6 +154,23 @@
   .row.missing {
     opacity: 0.6;
     border-style: dashed;
+  }
+
+  .row.dragover {
+    border-color: var(--accent);
+    border-style: dashed;
+  }
+
+  .grip {
+    cursor: grab;
+    color: var(--text-dim);
+    user-select: none;
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .grip:active {
+    cursor: grabbing;
   }
 
   .miss {
