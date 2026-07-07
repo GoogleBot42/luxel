@@ -96,6 +96,42 @@
   let wifiSource = "none";
   let wifiForm = { ssid: "", password: "" };
   let wifiNote = "";
+  /** Whether a pixel map is installed on the device (render2D geometry). */
+  let deviceMap = { installed: false, dims: 0, count: 0 };
+
+  async function refreshDeviceMap(): Promise<void> {
+    if (!device) return;
+    try {
+      deviceMap = await device.map();
+    } catch {
+      /* older firmware without /api/map */
+    }
+  }
+
+  /** Install the current computed map on the device (device patterns then
+   *  render2D with this geometry). */
+  function installDeviceMap(): void {
+    if (!device || layout.kind !== "map") return;
+    const coords = layout.coords;
+    const dims = (coords[0]?.length ?? 2) >= 3 ? 3 : 2;
+    void (async () => {
+      const r = await device?.setMap(dims, coords);
+      if (r?.ok) {
+        deviceMap = { installed: true, dims, count: r.count ?? coords.length };
+        saveNote = "map installed on the device";
+        setTimeout(() => (saveNote = ""), 2500);
+      }
+    })();
+  }
+
+  function clearDeviceMap(): void {
+    void (async () => {
+      await device?.clearMap();
+      deviceMap = { installed: false, dims: 0, count: 0 };
+      saveNote = "device map cleared";
+      setTimeout(() => (saveNote = ""), 2000);
+    })();
+  }
 
   // ---- playlist (device mode) ----
   let playlist: Playlist = { defaultSec: 0, playing: false, index: 0, items: [] };
@@ -446,6 +482,7 @@
       compileError = null;
       await refreshDevicePatterns();
       await refreshPlaylist();
+      await refreshDeviceMap();
     } catch (e) {
       device = null;
       deviceError = `cannot reach device: ${String(e)}`;
@@ -1539,6 +1576,27 @@ export function render(index) {
           <button data-role="map-run" title="run the map program and install it" on:click={runMapNow}>
             run map
           </button>
+          {#if device && layout.kind === "map"}
+            <button
+              data-role="map-install"
+              title="upload this map to the device so its patterns render in 2D/3D"
+              on:click={installDeviceMap}
+            >
+              install on device
+            </button>
+            {#if deviceMap.installed}
+              <button
+                data-role="map-clear"
+                title="remove the map from the device"
+                on:click={clearDeviceMap}
+              >
+                clear device map
+              </button>
+              <span class="dim mono" data-role="map-installed">
+                {deviceMap.count}px {deviceMap.dims}D on device
+              </span>
+            {/if}
+          {/if}
           {#if mapError}<span class="mapper-error" data-role="map-error">{mapError}</span>{/if}
         {/if}
         <span class="sep"></span>

@@ -26,6 +26,8 @@
 //!   GET  /api/playlist  {"defaultSec":N,"playing":bool,"index":N,"items":[{"id","name","sec","controls"}]}
 //!   POST /api/playlist  body = D/I/C lines → stores + applies live
 //!   POST /api/playlist/{play,stop,next,prev}  play body = start index
+//!   GET  /api/map       {"installed":bool,"dims":D,"count":N}
+//!   POST /api/map       body = "<dims> <raw...>" → install (empty = clear); persisted
 //!   GET    /api/patterns              {"patterns":[{"id","name"},…]}
 //!   GET    /api/patterns/<id>         {"id","name","source"}
 //!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
@@ -708,6 +710,22 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let conn = request.body_connection.finalize().await?;
                     return response.write_to(conn, response_writer).await;
                 }
+                // POST /api/map — install a computed 2D/3D map (raw 16.16).
+                // Empty/invalid body clears it. Applied live + persisted.
+                "/api/map" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let (installed, count) = crate::devicemap::set_from_wire(&body);
+                    let conn = request.body_connection.finalize().await?;
+                    return json_response(format!(
+                        "{{\"ok\":true,\"installed\":{},\"count\":{}}}",
+                        installed, count
+                    ))
+                    .write_to(conn, response_writer)
+                    .await;
+                }
                 // POST /api/playlist — line-format definition (D/I/C lines).
                 // Persisted to flash; applied live if already playing.
                 "/api/playlist" => {
@@ -922,6 +940,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
                 ))),
                 "/api/playlist" => respond!(json_response(crate::playlist::to_json())),
+                "/api/map" => respond!(json_response(crate::devicemap::to_json())),
                 "/api/protocol" => respond!(json_response(format!(
                     "{{\"protocol\":\"{}\",\"options\":[\"sk9822\",\"ws2812\"]}}",
                     Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()

@@ -121,6 +121,9 @@ struct State {
     pl_playing: AtomicBool,
     pl_index: AtomicUsize,
     wifi_ssid: Mutex<Option<String>>,
+    /// Installed pixel map (dims, per-pixel [x,y,z] in Fx) + a re-apply flag.
+    device_map: Mutex<Option<(u8, Vec<[Fx; 3]>)>>,
+    map_dirty: AtomicBool,
 }
 
 fn push(state: &State, msg: Msg) {
@@ -151,6 +154,38 @@ fn controls_json(state: &State) -> String {
     }
 }
 
+/// Parse a `POST /api/map` body: `<dims> <raw...>` (raw 16.16, dims per pixel).
+/// None = clear.
+fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>)> {
+    let mut it = body.split_whitespace();
+    let dims: u8 = it.next()?.parse().ok()?;
+    if !(2..=3).contains(&dims) {
+        return None;
+    }
+    let vals: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
+    let n = vals.len() / dims as usize;
+    if n == 0 {
+        return None;
+    }
+    let coords: Vec<[Fx; 3]> = (0..n)
+        .map(|i| {
+            let mut c = [Fx::ZERO; 3];
+            for d in 0..dims as usize {
+                c[d] = Fx::from_raw(vals[i * dims as usize + d]);
+            }
+            c
+        })
+        .collect();
+    Some((dims, coords))
+}
+
+/// Apply the installed map to an engine (no-op if none).
+fn apply_map(state: &State, engine: &mut Engine) {
+    if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
+        engine.set_map(*dims, coords);
+    }
+}
+
 /// Load playlist item `i`: compile its stored pattern, apply its saved control
 /// values, and publish the source/controls snapshots. Returns the engine +
 /// source on success. Also records the active index.
@@ -165,6 +200,7 @@ fn enter_item(state: &State, i: usize) -> Option<(Engine, String)> {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         eng.set_control(name, &vals);
     }
+    apply_map(state, &mut eng);
     *state.pattern_src.lock().unwrap() = sp.source.clone();
     *state.controls_json.lock().unwrap() = jsonview::controls_json(&eng);
     *state.vmerr.lock().unwrap() = None;
@@ -198,6 +234,7 @@ fn render_loop(state: Arc<State>) {
                         *state.pattern_src.lock().unwrap() = src;
                         *state.vmerr.lock().unwrap() = None;
                         last = Instant::now();
+                        state.map_dirty.store(true, Ordering::Relaxed);
                     }
                 }
                 Msg::Control(name, values) => {
@@ -219,6 +256,7 @@ fn render_loop(state: Arc<State>) {
                         engine = Some(e);
                         *state.vmerr.lock().unwrap() = None;
                         last = Instant::now();
+                        state.map_dirty.store(true, Ordering::Relaxed);
                     }
                 }
                 Msg::PlaylistPlay(i) => {
@@ -275,6 +313,17 @@ fn render_loop(state: Arc<State>) {
                     last = Instant::now();
                 }
                 pl_start = Instant::now();
+            }
+        }
+
+        // apply (or clear) the installed pixel map when it changed
+        if state.map_dirty.swap(false, Ordering::Relaxed) {
+            if state.device_map.lock().unwrap().is_some() {
+                if let Some(eng) = engine.as_mut() {
+                    apply_map(&state, eng);
+                }
+            } else if let Ok(e) = Engine::new(&current_src, count(), 1) {
+                engine = Some(e); // cleared → rebuild without a map
             }
         }
 
@@ -792,6 +841,34 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/map") => {
+            let body = match &*state.device_map.lock().unwrap() {
+                Some((dims, coords)) => format!(
+                    "{{\"installed\":true,\"dims\":{},\"count\":{}}}",
+                    dims,
+                    coords.len()
+                ),
+                None => String::from("{\"installed\":false,\"dims\":0,\"count\":0}"),
+            };
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/map") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let (installed, count) = match parse_map(&body) {
+                Some((dims, coords)) => {
+                    let n = coords.len();
+                    *state.device_map.lock().unwrap() = Some((dims, coords));
+                    (true, n)
+                }
+                None => {
+                    *state.device_map.lock().unwrap() = None;
+                    (false, 0)
+                }
+            };
+            state.map_dirty.store(true, Ordering::Relaxed);
+            let r = format!("{{\"ok\":true,\"installed\":{},\"count\":{}}}", installed, count);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("GET", "/api/playlist") => {
             respond(&mut stream, 200, "application/json", playlist_json(&state).as_bytes());
         }
@@ -907,6 +984,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         pl_playing: AtomicBool::new(false),
         pl_index: AtomicUsize::new(0),
         wifi_ssid: Mutex::new(None),
+        device_map: Mutex::new(None),
+        map_dirty: AtomicBool::new(false),
     });
 
     {

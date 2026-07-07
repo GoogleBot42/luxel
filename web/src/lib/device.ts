@@ -120,6 +120,31 @@ export class DeviceSession {
     await fetch(this.url(`/api/patterns/${id}`), { method: "DELETE" });
   }
 
+  /** Installed pixel map status. */
+  async map(): Promise<{ installed: boolean; dims: number; count: number }> {
+    return (await (await fetch(this.url("/api/map"))).json()) as {
+      installed: boolean;
+      dims: number;
+      count: number;
+    };
+  }
+
+  /** Install a computed 2D/3D map so device patterns render with real geometry
+   *  (render2D). `coords` are pattern-unit floats; sent as raw 16.16. */
+  async setMap(dims: number, coords: number[][]): Promise<{ ok: boolean; count?: number }> {
+    const parts: string[] = [String(dims)];
+    for (const c of coords) {
+      for (let d = 0; d < dims; d++) parts.push(String(Math.round((c[d] ?? 0) * RAW)));
+    }
+    const res = await fetch(this.url("/api/map"), { method: "POST", body: parts.join(" ") });
+    return (await res.json()) as { ok: boolean; count?: number };
+  }
+
+  /** Remove the installed map (patterns render 1D again). */
+  async clearMap(): Promise<void> {
+    await fetch(this.url("/api/map"), { method: "POST", body: "" });
+  }
+
   /** Which network the device will join next boot (never the password). */
   async wifi(): Promise<{ ssid: string | null; source: string }> {
     return (await (await fetch(this.url("/api/wifi"))).json()) as {

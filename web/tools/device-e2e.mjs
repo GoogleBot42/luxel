@@ -169,6 +169,36 @@ try {
   await page.select('[data-role="layout-kind"]', "strip"); // restore
   await sleep(200);
 
+  // device map upload (Phase 4): compute a 2D map and install it on the device
+  await page.select('[data-role="layout-kind"]', "map");
+  await sleep(500);
+  await page.click('[data-role="map-install"]');
+  await sleep(500);
+  const mapGet = await (await fetch(`${DEV}/api/map`)).json();
+  check(
+    "map: install uploads the computed map to the device",
+    mapGet.installed === true && mapGet.count > 0,
+    JSON.stringify(mapGet),
+  );
+  // a render2D pattern now uses the installed geometry
+  await fetch(`${DEV}/api/code`, {
+    method: "POST",
+    body: "export function render2D(index, x, y) { rgb(x, y, 0) }",
+  });
+  await sleep(500);
+  const mpx = new Uint8Array(await (await fetch(`${DEV}/api/pixels`)).arrayBuffer());
+  let varied = false;
+  for (let i = 0; i < mpx.length; i += 3) if (mpx[i] !== mpx[0] || mpx[i + 1] !== mpx[1]) varied = true;
+  check("map: render2D uses the geometry (pixels vary by x/y)", varied);
+  await page.click('[data-role="map-clear"]');
+  await sleep(400);
+  check(
+    "map: clear removes it from the device",
+    (await (await fetch(`${DEV}/api/map`)).json()).installed === false,
+  );
+  await page.select('[data-role="layout-kind"]', "strip");
+  await sleep(200);
+
   // brightness (Phase 3): the Settings slider drives GET/POST /api/brightness
   // live (the settings panel is in the DOM even while the editor is open)
   const b0 = await (await fetch(`${DEV}/api/brightness`)).json();

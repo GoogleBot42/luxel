@@ -52,6 +52,7 @@ use luxel_core::fixed::Fx;
 
 mod assets;
 mod config;
+mod devicemap;
 mod leds;
 mod ota;
 mod patterns;
@@ -200,6 +201,7 @@ async fn main(spawner: Spawner) -> ! {
     assets::init();
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)
+    devicemap::init();
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }
@@ -381,6 +383,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                             current_src = src;
                             set_vmerr(None);
                             last = Instant::now();
+                            devicemap::mark_dirty(); // re-apply the installed map
                         }
                         Err(d) => println!("recompile error (bug?): {}", d.message),
                     }
@@ -408,6 +411,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                             engine = Some(e);
                             set_vmerr(None);
                             last = Instant::now();
+                            devicemap::mark_dirty(); // re-apply the installed map
                             println!("pixel count → {}", count);
                         }
                         Err(d) => println!("resize recompile error (bug?): {}", d.message),
@@ -426,6 +430,18 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     last = Instant::now();
                     println!("protocol → {}", p.name());
                 }
+            }
+        }
+
+        // apply (or clear) the installed pixel map when it changed
+        if devicemap::take_dirty() {
+            if devicemap::has_map() {
+                if let Some(eng) = engine.as_mut() {
+                    devicemap::apply(eng);
+                }
+            } else if let Ok(e) = Engine::new(&current_src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
+                // cleared → rebuild without a map (do not re-mark dirty)
+                engine = Some(e);
             }
         }
 

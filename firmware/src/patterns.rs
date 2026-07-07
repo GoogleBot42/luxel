@@ -455,6 +455,7 @@ pub fn name_of(id: &str) -> Option<String> {
 // FORMAT_KEY. Each must fit one flash page.
 pub const PLAYLIST_KEY: u32 = 0x7FFF_FFFE;
 pub const PLAYSTATE_KEY: u32 = 0x7FFF_FFFD;
+pub const MAP_KEY: u32 = 0x7FFF_FFFC;
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.
