@@ -1,202 +1,263 @@
 // name: Bouncy Boxes
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Bouncy Boxes"; original source never consulted.
+//
+// Four solid squares glide over a cylindrical matrix: wrapping horizontally,
+// bouncing off top and bottom, colliding elastically (impulse swap + per-frame
+// speed renormalization, so they never overlap and never slow down). Rainbow
+// hues rotate slowly, offset a quarter wheel per square, with a radial hue
+// gradient inside each square. Optional "digital glitch" garnish: hashed
+// sparkles, a short streak, and up to three frozen tearing bands that shift
+// a whole row's sample position sideways.
+//
+// Simulated on a 16x16 virtual canvas (wrapping horizontally = the cylinder);
+// render2D samples the canvas, so any mapped layout works.
 
-// Four solid soft-edged squares glide around a 2D surface at constant speed,
-// wrapping horizontally (cylinder seam-safe: all horizontal math uses the
-// shortest signed distance) and bouncing off top/bottom. Squares collide as
-// rigid bodies — pushed apart along the axis of least penetration, elastic
-// velocity exchange — and every frame each velocity is renormalized to a
-// fixed speed so the scene never slows down. Each square carries a rainbow
-// hue a quarter-wheel from its siblings, rotating over ~10 s, with a radial
-// hue gradient from its center. Optional "digital glitch" garnish: hashed
-// per-tick sparkles, a short horizontal streak, and up to three tearing
-// bands — rows whose sample position is shifted sideways so squares passing
-// through appear sliced. All glitch randomness is a stateless hash of a
-// coarse tick counter, so glitches hold still between re-rolls.
-// Original was hardcoded to a 32x8 serpentine cylinder; this version uses
-// the supplied normalized 2D coordinates (the spec's "obvious fix") with a
-// 16-row virtual grid for tear/sparkle quantization.
+var W = 16
+var H = 16
+var CELLS = 256
+var S = 4                  // square side, in cells (half the original height)
+var NB = 4                 // number of squares
+var TARGET_SPEED = 6       // cells per second, renormalized every frame
 
-var ROWS = 16                // virtual rows for tears / sparkles / streaks
-var COLS = 16
-var N = 4                    // squares
-var S = 0.3                  // square side, normalized units
-var SPEED = 0.22             // constant speed, units/sec (crosses in a few s)
-var SOFT = 1 / 16            // ~one pixel of edge falloff
-var HALFDIAG = S * 0.7071
+// canvas
+var hc = array(CELLS)
+var sc = array(CELLS)
+var vc = array(CELLS)
 
-// ---- controls --------------------------------------------------------------
-var sparkleRate = 0          // default off
-var sparkleBright = 0        // default off
-var sparkleSat = 1
-var tearChance = 0.15        // default: rare
-var tearRate = 0.5           // 0..1 -> up to ~10 re-rolls per second
-var tearBright = 0.5
+// square state: top-left corner (x wraps), velocity
+var bx = array(NB)
+var by = array(NB)
+var bvx = array(NB)
+var bvy = array(NB)
+bx[0] = 1;  by[0] = 1;  bvx[0] = 4.2;  bvy[0] = 4.2
+bx[1] = 5;  by[1] = 9;  bvx[1] = -4.2; bvy[1] = 4.2
+bx[2] = 9;  by[2] = 4;  bvx[2] = 4.2;  bvy[2] = -4.2
+bx[3] = 13; by[3] = 11; bvx[3] = -3;   bvy[3] = 5
 
-//# min=0 max=1 step=0.01 default=0
-export function sliderSparkleRate(v) { sparkleRate = v * 0.25 }
-//# min=0 max=1 step=0.01 default=0
-export function sliderSparkleBrightness(v) { sparkleBright = v }
-//# min=0 max=1 step=0.01 default=1
-export function sliderSparkleSaturation(v) { sparkleSat = v }
-//# min=0 max=1 step=0.01 default=0.15
-export function sliderTearChance(v) { tearChance = v }
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderTearRate(v) { tearRate = v }
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderTearBrightness(v) { tearBright = v }
-
-// ---- square state -----------------------------------------------------------
-var px = array(N)            // top-left corner, x wraps in [0,1)
-var py = array(N)
-var vx = array(N)
-var vy = array(N)
-var hue = array(N)
-
-var k
-for (k = 0; k < N; k++) {
-  px[k] = k / N                          // spread evenly around the cylinder
-  py[k] = mod(0.1 + k * 0.17, 1 - S)     // varied heights
-  var a = 0.5 + k * 1.7                  // varied diagonal directions
-  vx[k] = SPEED * cos(a)
-  vy[k] = SPEED * sin(a)
-}
-
-// tear band records (recomputed from a hashed tick, so they hold still)
+// glitch state
+var sparkAcc = 0, sparkTick = 0
+var tearAcc = 0, tearTick = 0
 var tearRow = array(3)
 var tearShift = array(3)
-var tearHue = array(3)
 var tearOn = array(3)
-var sparkTick = 0
-var accumMs = 0
+var tearHueArr = array(3)
+var hueBase = 0
 
-function shortDist(d) { return mod(d + 0.5, 1) - 0.5 }   // seam-safe signed dx
+// ---- controls -----------------------------------------------------------------
+var sparkRate = 0
+export function sliderSparkleRate(v) {
+  //# min=0 max=1 step=0.01 default=0
+  sparkRate = v * 0.3
+}
+var sparkBright = 0
+export function sliderSparkleBrightness(v) {
+  //# min=0 max=1 step=0.01 default=0
+  sparkBright = v
+}
+var sparkSat = 1
+export function sliderSparkleSaturation(v) {
+  //# min=0 max=1 step=0.01 default=1
+  sparkSat = v
+}
+var tearChance = 0.1
+export function sliderTearChance(v) {
+  //# min=0 max=1 step=0.01 default=0.1
+  tearChance = v
+}
+var tearHz = 3
+export function sliderTearRate(v) {
+  //# min=0 max=1 step=0.01 default=0.3
+  tearHz = 0.2 + v * 9.8            // up to about ten re-rolls per second
+}
+var tearBright = 0.5
+export function sliderTearBrightness(v) {
+  //# min=0 max=1 step=0.01 default=0.5
+  tearBright = v
+}
+
+// shortest signed horizontal distance around the cylinder
+function wrapDist(d) {
+  return mod(d + W / 2, W) - W / 2
+}
+
+function bounceY(k) {
+  if (by[k] < 0) {
+    by[k] = -by[k]
+    bvy[k] = abs(bvy[k])
+  }
+  if (by[k] > H - S) {
+    by[k] = 2 * (H - S) - by[k]
+    bvy[k] = -abs(bvy[k])
+  }
+  by[k] = clamp(by[k], 0, H - S)
+}
 
 export function beforeRender(delta) {
-  var dt = min(delta, 40) / 1000        // clamp so physics stays stable
-  accumMs += delta
-  if (accumMs > 30000) accumMs -= 30000  // keep well inside 16.16 range
+  var i, j, k, pass, tmp
+  var dt = min(delta, 50) / 1000    // clamp delta so physics stays stable
 
-  // 1. integrate, wrap, bounce
-  var i, j
-  for (i = 0; i < N; i++) {
-    px[i] = mod(px[i] + vx[i] * dt, 1)
-    py[i] += vy[i] * dt
-    if (py[i] < 0) { py[i] = -py[i]; vy[i] = abs(vy[i]) }
-    if (py[i] > 1 - S) { py[i] = 2 * (1 - S) - py[i]; vy[i] = -abs(vy[i]) }
+  // integrate: wrap horizontally, reflect off top/bottom
+  for (k = 0; k < NB; k++) {
+    bx[k] = mod(bx[k] + bvx[k] * dt, W)
+    by[k] += bvy[k] * dt
+    bounceY(k)
   }
 
-  // 2. rigid collisions: several relaxation passes over all pairs
-  var pass
+  // rigid collisions, several passes over all six unordered pairs
   for (pass = 0; pass < 3; pass++) {
-    for (i = 0; i < N - 1; i++) {
-      for (j = i + 1; j < N; j++) {
-        var dx = shortDist((px[j] + S / 2) - (px[i] + S / 2))
-        var dy = (py[j] + S / 2) - (py[i] + S / 2)
-        var penX = S - abs(dx)
-        var penY = S - abs(dy)
-        if (penX <= 0 || penY <= 0) continue
-        if (penX < penY) {               // resolve along x
-          var sx = dx >= 0 ? 1 : -1
-          var push = (penX - 0.002) * 0.45
-          px[i] = mod(px[i] - sx * push, 1)
-          px[j] = mod(px[j] + sx * push, 1)
-          if ((vx[j] - vx[i]) * sx < 0) {  // approaching: swap x velocities
-            var tmp = vx[i]; vx[i] = vx[j]; vx[j] = tmp
-          }
-        } else {                         // resolve along y
-          var sy = dy >= 0 ? 1 : -1
-          var pushY = (penY - 0.002) * 0.45
-          py[i] = clamp(py[i] - sy * pushY, 0, 1 - S)
-          py[j] = clamp(py[j] + sy * pushY, 0, 1 - S)
-          if ((vy[j] - vy[i]) * sy < 0) {
-            var tmp2 = vy[i]; vy[i] = vy[j]; vy[j] = tmp2
+    for (i = 0; i < NB - 1; i++) {
+      for (j = i + 1; j < NB; j++) {
+        var dx = wrapDist(bx[j] - bx[i])   // center delta == corner delta
+        var dy = by[j] - by[i]
+        var ox = S - abs(dx)
+        var oy = S - abs(dy)
+        if (ox > 0 && oy > 0) {
+          if (ox < oy) {
+            // resolve along x: split the penetration, minus a tiny slop
+            var sgx = dx >= 0 ? 1 : -1
+            var push = max(ox * 0.45 - 0.01, 0)
+            bx[i] = mod(bx[i] - sgx * push, W)
+            bx[j] = mod(bx[j] + sgx * push, W)
+            // approaching along the normal? elastic swap of that component
+            if ((bvx[j] - bvx[i]) * sgx < 0) {
+              tmp = bvx[i]; bvx[i] = bvx[j]; bvx[j] = tmp
+            }
+          } else {
+            var sgy = dy >= 0 ? 1 : -1
+            var pushy = max(oy * 0.45 - 0.01, 0)
+            by[i] -= sgy * pushy
+            by[j] += sgy * pushy
+            bounceY(i)
+            bounceY(j)
+            if ((bvy[j] - bvy[i]) * sgy < 0) {
+              tmp = bvy[i]; bvy[i] = bvy[j]; bvy[j] = tmp
+            }
           }
         }
       }
     }
   }
 
-  // 3. renormalize speed: collisions redirect, liveliness never decays
-  for (i = 0; i < N; i++) {
-    var sp = hypot(vx[i], vy[i])
-    if (sp > 0.001) {
-      vx[i] = vx[i] * SPEED / sp
-      vy[i] = vy[i] * SPEED / sp
+  // renormalize speed: collisions redirect, liveliness never decays
+  for (k = 0; k < NB; k++) {
+    var sp = hypot(bvx[k], bvy[k])
+    if (sp > 0.01) {
+      bvx[k] *= TARGET_SPEED / sp
+      bvy[k] *= TARGET_SPEED / sp
     } else {
-      vx[i] = SPEED * 0.7; vy[i] = SPEED * 0.7
+      bvx[k] = TARGET_SPEED * 0.7
+      bvy[k] = TARGET_SPEED * 0.7
     }
   }
 
-  // 4. hues: one slow rainbow phase, squares offset by quarter wheels
-  var base = time(0.15)                  // ~9.8 s full rotation
-  for (i = 0; i < N; i++) hue[i] = base + i * 0.25
+  // slow global rainbow, ~10 s per revolution
+  hueBase = time(0.15)
 
-  // 5. glitch state, all hashed from coarse tick counters
-  sparkTick = floor(accumMs / 50)        // sparkles re-roll 20x/sec
-  var tearMs = 1000 / (0.5 + tearRate * 9.5)
-  var tick = floor(accumMs / tearMs)
-  for (i = 0; i < 3; i++) {
-    tearOn[i] = hash2(tick, i * 4 + 1) < tearChance
-    tearRow[i] = floor(hash2(tick, i * 4 + 2) * ROWS)
-    tearShift[i] = (hash2(tick, i * 4 + 3) - 0.5) * 0.66  // up to ~1/3 around
-    tearHue[i] = hash2(tick, i * 4 + 4)
+  // glitch ticks: hashed, so everything holds still between re-rolls
+  sparkAcc += delta
+  if (sparkAcc > 50) {              // sparkles refresh ~20x/s
+    sparkAcc = mod(sparkAcc, 50)
+    sparkTick = (sparkTick + 1) % 997
+  }
+  tearAcc += delta
+  if (tearAcc > 1000 / tearHz) {
+    tearAcc = mod(tearAcc, 1000 / tearHz)
+    tearTick = (tearTick + 1) % 991
+  }
+  var b
+  for (b = 0; b < 3; b++) {
+    var seed = tearTick * 3 + b
+    tearRow[b] = floor(hash2(seed, 17) * H)
+    tearShift[b] = (hash2(seed, 29) - 0.5) * W * 2 / 3
+    tearOn[b] = hash2(seed, 43) < tearChance
+    tearHueArr[b] = hash2(seed, 61)
+  }
+
+  paintCanvas()
+}
+
+var HALF_DIAG = S * SQRT2 / 2
+
+function paintCanvas() {
+  var cx, cy, k, b
+  var streakRow = floor(hash2(sparkTick, 7) * H)
+  var streakCol = hash2(sparkTick, 11) * W
+  for (cy = 0; cy < H; cy++) {
+    for (cx = 0; cx < W; cx++) {
+      var idx = cy * W + cx
+      var sx = cx + 0.5             // sample at the cell center
+      var sy = cy + 0.5
+
+      // tearing shifts the SAMPLE position only, slicing whatever passes by
+      var inTear = 0
+      var tHue = 0
+      for (b = 0; b < 3; b++) {
+        if (tearOn[b] && tearRow[b] == cy) {
+          sx = mod(sx + tearShift[b], W)
+          inTear = 1
+          tHue = tearHueArr[b]
+        }
+      }
+
+      // soft-box coverage of each square (~one pixel of edge falloff)
+      var bestCov = 0
+      var bestK = 0
+      var bestD = 0
+      var totCov = 0
+      for (k = 0; k < NB; k++) {
+        var dx = wrapDist(sx - (bx[k] + S / 2))
+        var dy = sy - (by[k] + S / 2)
+        var cov = min(
+          clamp(S / 2 - abs(dx) + 0.5, 0, 1),
+          clamp(S / 2 - abs(dy) + 0.5, 0, 1)
+        )
+        if (cov > 0) {
+          totCov += cov
+          if (cov > bestCov) {
+            bestCov = cov
+            bestK = k
+            bestD = hypot(dx, dy)
+          }
+        }
+      }
+
+      var h = 0, s = 1, v = 0
+      if (bestCov > 0) {
+        // radial two-tone gradient out from the square's center
+        h = hueBase + bestK * 0.25 + bestD / HALF_DIAG * 0.55
+        v = min(totCov + inTear * 0.2, 1)
+        s = 1
+      } else if (inTear) {
+        h = tHue                    // pale, nearly white torn row
+        s = 0.12
+        v = tearBright
+      } else {
+        // hashed confetti sparkles + one short horizontal streak
+        if (hash2(idx, sparkTick) < sparkRate) {
+          h = hash2(idx + 500, sparkTick)
+          s = sparkSat
+          v = sparkBright
+        }
+        if (cy == streakRow && abs(wrapDist(cx - streakCol)) < 1.5) {
+          h = hash2(sparkTick, 13)
+          s = sparkSat
+          v = max(v, sparkBright * 0.6)
+        }
+      }
+      hc[idx] = h
+      sc[idx] = s
+      vc[idx] = v
+    }
   }
 }
 
 export function render2D(index, x, y) {
-  var row = floor(y * 15.99)
-  var sx = x
-  var inTear = 0
-  var tHue = 0
-  var b
-  for (b = 0; b < 3; b++) {
-    if (tearOn[b] && tearRow[b] == row) {
-      sx = mod(sx + tearShift[b], 1)     // lie about the sample position only
-      inTear = 1
-      tHue = tearHue[b]
-    }
-  }
-
-  // soft-box coverage of each square at the (possibly shifted) sample point
-  var best = 0, bestK = 0, total = 0, bestOx = 0, bestOy = 0
-  var i
-  for (i = 0; i < N; i++) {
-    var ox = shortDist(sx - (px[i] + S / 2))
-    var oy = y - (py[i] + S / 2)
-    var c = min(S / 2 - abs(ox), S / 2 - abs(oy)) / SOFT
-    c = clamp(c, 0, 1)
-    total += c
-    if (c > best) { best = c; bestK = i; bestOx = ox; bestOy = oy }
-  }
-
-  if (best > 0) {
-    var d = hypot(bestOx, bestOy) / HALFDIAG          // radial hue gradient
-    var v = min(total, 1) + (inTear ? 0.25 : 0)
-    hsv(hue[bestK] + d * 0.55, 1, min(v, 1))
-    return
-  }
-  if (inTear) {
-    hsv(tHue, 0.15, tearBright)          // pale near-white torn band
-    return
-  }
-  // sparkles + one short streak, per-tick hashed so they hold still
-  if (sparkleBright > 0) {
-    var cell = row * COLS + floor(x * 15.99)
-    if (hash2(sparkTick, cell) < sparkleRate) {
-      hsv(hash2(sparkTick, cell + 300), sparkleSat, sparkleBright)
-      return
-    }
-    var sRow = floor(hash2(sparkTick, 777) * ROWS)
-    var sCol = hash2(sparkTick, 888)
-    if (row == sRow && abs(shortDist(x - sCol)) < 1.5 / COLS) {
-      hsv(hash2(sparkTick, 999), sparkleSat, sparkleBright * 0.6)
-      return
-    }
-  }
-  rgb(0, 0, 0)
+  var idx = floor(y * 15.99) * 16 + floor(x * 15.99)
+  hsv(hc[idx], sc[idx], vc[idx])
 }
 
-// 1D fallback: this pattern needs a 2D map
-export function render(index) { rgb(0, 0, 0) }
+// 1D fallback exists but just outputs black (matches the original's behavior)
+export function render(index) {
+  rgb(0, 0, 0)
+}

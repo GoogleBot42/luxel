@@ -2,23 +2,22 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "2 Colors"; original source never consulted.
 
-// Static pattern: the strip alternates equal-width blocks of two
-// user-chosen colors. Nothing animates; only the controls change the
-// display. Defaults: color A = saturated red, color B = black, so the
-// strip comes up as red blocks separated by dark gaps.
+// Static display: alternating equal-width blocks of two user-chosen
+// colors. Nothing animates — no beforeRender — the picture only changes
+// when a control moves.
 
-var MAX_WIDTH = 15
-
-// Two HSV triples: [hA, sA, vA, hB, sB, vB]
+// Two HSV triples in one flat array: A in slots 0..2, B in slots 3..5.
+// Deliberately seeded with two visible defaults (the original's init
+// block was garbled; we don't reproduce it).
 var colors = array(6)
-colors[0] = 0     // color A: red
+colors[0] = 0      // color A: red
 colors[1] = 1
 colors[2] = 1
-colors[3] = 0     // color B: black
-colors[4] = 0
-colors[5] = 0
+colors[3] = 0.667  // color B: blue
+colors[4] = 1
+colors[5] = 1
 
-var blockWidth = 5
+var blockWidth = 4
 
 export function hsvPickerColor1(h, s, v) {
   colors[0] = h
@@ -32,15 +31,14 @@ export function hsvPickerColor2(h, s, v) {
   colors[5] = v
 }
 
-//# min=0 max=1 step=0.01 default=0.3
+//# min=0 max=1 step=0.01 default=0.25
 export function sliderSpacing(v) {
-  // Scale to at most MAX_WIDTH pixels and round up; the tiny epsilon
-  // keeps the very bottom of the slider at width 1 (never 0, which
-  // would divide by zero).
-  blockWidth = ceil(v * MAX_WIDTH + 0.001)
+  // 0..1 -> block width 1..15; epsilon keeps the bottom of the slider
+  // at width 1 (width 0 would divide by zero)
+  blockWidth = ceil(v * 15 + 0.001)
 }
 
 export function render(index) {
-  var base = (floor(index / blockWidth) % 2) * 3
+  var base = floor(index / blockWidth) % 2 * 3   // 0 for A, 3 for B
   hsv(colors[base], colors[base + 1], colors[base + 2])
 }

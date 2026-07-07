@@ -2,32 +2,30 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Rainbow rocket sparks"; original source never consulted.
 
-// A fire-colored rocket head sweeps toward the start of the strip, trailed by
-// a window of furiously re-randomizing white sparks. No particle state at all:
-// motion comes from phase-shifted traveling square waves, and the fire hue is
-// a static positional ramp so the flame sheds "exhaust" as it passes.
+// A fiery rocket head loops toward the strip's start, trailed by a window of
+// crackling white sparks. Stateless: everything is phase-shifted traveling
+// square waves plus a static positional fire-hue ramp (the "exhaust" trick).
 
 var phase = 0
 
 export function beforeRender(delta) {
-  phase = time(0.04)   // one full traversal every ~2.6 s
+  phase = time(0.04)               // one traversal every ~2.6 s
 }
 
 export function render(index) {
   var p = index / pixelCount
 
-  // spark window: traveling square wave, ~15% duty; adding the phase makes
-  // it move toward the low-index end
-  var inSparkZone = square(p + phase, 0.15)
-  // sparks re-roll every frame: ~1-in-20 chance inside the window
+  // spark window: traveling square wave, ~15% duty, moving toward index 0
+  var inSparkZone = square(p + phase, 0.15) > 0
+  // sparks re-roll every frame: ~1 in 20 pixels light inside the window
   var spark = inSparkZone && random(1) > 0.95
 
-  // fire window: same phase, offset ~5% ahead, a bit over half as wide
-  var fire = square(p + phase + 0.05, 0.08)
+  // fire window: same phase, ~5% ahead of the sparks, a bit over half as wide
+  var fire = square(p + phase + 0.05, 0.09) > 0
 
-  // static spatial hue ramp: red->yellow, repeating ~8x along the strip
-  var h = frac(p * 8) * 0.16
+  // fire hue fixed to the strip: red->yellow ramp repeating ~8 times
+  var hue = frac(p * 8) * 0.17
 
-  // fire = saturated flame color, spark = pure white, otherwise black
-  hsv(h, fire ? 1 : 0, (fire || spark) ? 1 : 0)
+  // exactly one of: black, saturated fire, or pure white spark
+  hsv(hue, fire ? 1 : 0, (fire || spark) ? 1 : 0)
 }

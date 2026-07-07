@@ -3,124 +3,146 @@
 // community pattern "Sound Reactive Color Fade"; original source never
 // consulted.
 
-// The whole display is one solid, fully saturated color. Idle, the hue
-// creeps slowly around the wheel (minutes per lap at mid slider). Each
-// detected bass beat snaps the hue forward to the next of six anchor
-// hues, then the slow drift resumes. The beat detector is edge-triggered
-// on the rate of rise of a fast-smoothed bass signal, normalized by a
-// decaying recent maximum (auto gain control), so it is volume
-// independent. With no sensor board (all-zero audio) it just fades.
+// The whole display is one solid, fully saturated color. The hue creeps
+// slowly around the wheel; every detected bass beat snaps it forward to
+// the next of six anchor hues. Beat detection is edge-triggered on the
+// rate of rise of a fast-smoothed bass signal, normalized by the recent
+// peak level, so it is volume-independent.
 
-// Sensor-board bindings (engine stubs these when no board is present).
+// Sensor bindings (engine stubs these with zeros when no sensor board).
 export var frequencyData = array(32)
-export var energyAverage = 0
-export var maxFrequency = 0
-export var maxFrequencyMagnitude = 0
+export var energyAverage
+export var maxFrequency
+export var maxFrequencyMagnitude
 export var accelerometer = array(3)
-// Presence probe: impossible negative unless a sensor board overwrites it.
+// Presence probe: initialized to an impossible negative value; only a real
+// sensor board ever overwrites it.
 export var light = -1
 
-// Six anchor hues: red, yellow, green, cyan, blue, and a magenta that
-// sits a bit past pure blue rather than exactly evenly spaced.
-var anchors = array(6)
-anchors[0] = 0
-anchors[1] = 1 / 6
-anchors[2] = 2 / 6
-anchors[3] = 3 / 6
-anchors[4] = 4 / 6
-anchors[5] = 0.75
+// Six anchor hues: red, yellow, green, cyan, blue, magenta (the magenta
+// anchor sits a bit past pure blue rather than exactly evenly spaced).
+var ANCHORS = 6
+var anchor = array(ANCHORS)
+anchor[0] = 0
+anchor[1] = 0.167
+anchor[2] = 0.333
+anchor[3] = 0.5
+anchor[4] = 0.667
+anchor[5] = 0.78
 
-// --- state kept between frames ---
-export var hue = 0
-var slowEma = 0        // very long time constant bass average
-var fastEma = 0        // ~ten-frame bass average
-var lastFast = 0
-var maxBass = 0        // decaying recent maximum (AGC)
-var debounceMs = 0
+var hue = 0
 
-// Circular buffer of normalized frame-to-frame rises of the fast EMA.
-var DBUF_MAX = 15
-var dbuf = array(15)
-var dlen = 4
-var dpos = 0
-var dsum = 0
+// Bass detector state.
+var slowEma = 0            // very long time constant baseline
+var fastEma = 0            // ~ten-frame smoothing
+var recentMax = 0.01       // decaying recent peak (auto gain control)
+var NOISE_FLOOR = 0.02
 
-var beatSensitivity = 0.4
+// Circular buffer of recent "fast EMA rose this frame" indicators; a beat
+// candidate fires when its average exceeds a threshold slightly over half.
+var MAXBUF = 16
+var riseBuf = array(MAXBUF)
+var bufLen = 4
+var bufPos = 0
+var RISE_THRESHOLD = 0.55
+
+// Debounce: about a fifth of a quarter-note at an ordinary dance tempo
+// (~128 bpm quarter = ~469 ms), so fast doubled kicks can re-trigger but
+// chatter is rejected.
+var DEBOUNCE_MS = 94
+var debounce = 0
+
+var beatSens = 0.3
 var fadeSpeed = 0.5
 
-//# min=0 max=1 step=0.01 default=0.4
+// Beat sensitivity: quadratic map from a couple of samples (twitchy) up to
+// about fifteen (slow to react, better for sparse bass). Recomputed live
+// whenever the slider moves — resizing clears the buffer.
+//# min=0 max=1 step=0.01 default=0.3
 export function sliderBeatSensitivity(v) {
-  beatSensitivity = v
-  // Quadratic map: 2 samples (twitchy) up to 15 (slow, forgiving).
-  // Recompute and clear whenever the control moves (fixing the
-  // original's compute-once-before-default bug).
-  var n = floor(2 + v * v * (DBUF_MAX - 2))
-  if (n != dlen) {
-    dlen = n
-    dsum = 0
-    dpos = 0
-    var i
-    for (i = 0; i < DBUF_MAX; i++) dbuf[i] = 0
+  beatSens = v
+  var n = floor(2 + v * v * 13)
+  if (n != bufLen) {
+    bufLen = n
+    bufPos = 0
+    for (var i = 0; i < MAXBUF; i++) riseBuf[i] = 0
   }
 }
-sliderBeatSensitivity(beatSensitivity)
 
+export function showNumberBeatBuffer() {
+  return bufLen
+}
+
+// Fade speed: multiplies the idle hue-drift rate severalfold.
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderFadeSpeed(v) {
   fadeSpeed = v
 }
 
-function nextAnchor(h) {
-  var i
-  for (i = 0; i < 6; i++) {
-    if (anchors[i] > h) return anchors[i]
-  }
-  return anchors[0]
+export function showNumberFadeSpeed() {
+  return fadeSpeed
 }
 
 export function beforeRender(delta) {
-  // Sound processing only when a sensor board has claimed the inputs.
+  // --- Sound processing (skipped when no sensor board is present) ---
   if (light >= 0) {
-    // Bass energy: sum the lowest few bands, skipping the DC band.
+    // Bass energy: sum the lowest few bands, skipping the DC band —
+    // kick-drum fundamentals.
     var bass = frequencyData[1] + frequencyData[2] + frequencyData[3]
 
-    // Decaying recent maximum = automatic gain control.
-    if (bass > maxBass) maxBass = bass
-    if (maxBass > slowEma * 3 && maxBass > 0.01) maxBass = maxBass * 0.999
+    // Auto gain control: track the recent peak, decay it slowly while it
+    // sits far above the long-term average.
+    if (bass > recentMax) recentMax = bass
+    if (recentMax > slowEma * 2 && recentMax > NOISE_FLOOR) {
+      recentMax = recentMax * 0.999
+    }
 
-    slowEma = slowEma + (bass - slowEma) / 1000
-    fastEma = fastEma + (bass - fastEma) / 10
+    // Slow (~thousand-frame) and fast (~ten-frame) moving averages.
+    slowEma += (bass - slowEma) / 1000
+    var prevFast = fastEma
+    fastEma += (bass - prevFast) / 10
 
-    // Normalized rise of the fast average, recentered so "no change"
-    // sits at one half; the buffer's running mean crossing a threshold
-    // slightly over half means "bass is rising" — a beat candidate.
-    var d = 0
-    if (maxBass > 0) d = (fastEma - lastFast) / maxBass
-    lastFast = fastEma
-    var norm = clamp(0.5 + d * 4, 0, 1)
-    dsum = dsum - dbuf[dpos] + norm
-    dbuf[dpos] = norm
-    dpos = (dpos + 1) % dlen
+    // Rate-of-rise, normalized by the recent peak (volume-independent):
+    // record whether the fast average rose meaningfully this frame.
+    var rise = 0
+    if (recentMax > NOISE_FLOOR && (fastEma - prevFast) / recentMax > 0.01) {
+      rise = 1
+    }
+    riseBuf[bufPos] = rise
+    bufPos = (bufPos + 1) % bufLen
 
-    debounceMs = debounceMs - delta
-    if (dsum / dlen > 0.55 && debounceMs <= 0) {
-      // Beat: snap to the next anchor hue. Debounce reloads with about
-      // a fifth of a quarter note at ordinary dance tempo (~120 BPM),
-      // so doubled kicks still retrigger but chatter is rejected.
-      hue = nextAnchor(hue)
-      debounceMs = 100
+    var sum = 0
+    for (var i = 0; i < bufLen; i++) sum += riseBuf[i]
+
+    if (debounce > 0) debounce -= delta
+
+    // Beat: bass has been rising for most of the window and the debounce
+    // countdown has expired. Snap the hue forward to the next anchor
+    // strictly greater than the current hue, wrapping past the last.
+    if (sum / bufLen > RISE_THRESHOLD && debounce <= 0) {
+      debounce = DEBOUNCE_MS
+      var next = anchor[0]
+      for (var i = 0; i < ANCHORS; i++) {
+        if (anchor[i] > hue + 0.001) {
+          next = anchor[i]
+          break
+        }
+      }
+      hue = next
     }
   }
 
-  // Independent slow drift: barely-perceptible base rate plus a
-  // several-times-larger slider-scaled rate. Minutes per lap at mid.
-  hue = frac(hue + delta * (0.0000015 + fadeSpeed * 0.00001))
+  // --- Idle drift, always on: a small base rate plus a several-times ---
+  // larger slider-scaled rate. Minutes per lap at mid slider.
+  hue = frac(hue + (0.002 + 0.01 * fadeSpeed) * delta / 1000)
 }
 
 export function render(index) {
   hsv(hue, 1, 1)
 }
 
+// The output is a single solid color, so the 2D renderer is trivially
+// identical — offered for mapped fixtures.
 export function render2D(index, x, y) {
   hsv(hue, 1, 1)
 }

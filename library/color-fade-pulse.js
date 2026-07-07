@@ -2,34 +2,31 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "color fade pulse"; original source never consulted.
 
-// A scrolling double rainbow with narrow bright pulse peaks drifting over
-// it while saturation breathes between vivid color and washed-out white.
-// Three free-running sawtooth timers with unrelated periods drive hue
-// scroll (fast), the saturation wash (slow, as a full-circle angle), and
-// the brightness-pulse motion (medium). Raising the triangle brightness
-// wave to the fourth power sharpens broad triangles into narrow spikes.
+// Three free-running sawtooth timers with unrelated periods: a fast hue
+// scroll, a slow saturation wash (as a full-circle angle), and a medium
+// brightness-pulse drift. Everything else is stateless per-pixel math.
 
 export function beforeRender(delta) {
-  hueT = time(0.012)            // fast hue scroll, ~0.8 s per cycle
-  satAngle = time(0.09) * PI2   // slow saturation wave, ~6 s breathing
-  pulseT = time(0.025)          // medium pulse drift, ~1.6 s
+  hueT = time(0.01)            // ~0.66 s: fast rainbow scroll
+  satT = time(0.08) * PI2      // ~5.2 s: slow saturation wave, as an angle
+  pulseT = time(0.025)         // ~1.6 s: pulse-peak drift
 }
 
 export function render(index) {
-  var p = index / pixelCount
+  var p = index / pixelCount   // normalized position, layout-proportional
 
   // Two full hue cycles across the strip, scrolling steadily.
-  var h = p * 2 - hueT
+  var h = 2 * p - hueT
 
-  // One long spatial saturation wave (half a hue-circle of positional
-  // offset), remapped from -1..1 into 0..1, sliding with time.
-  var s = (1 + sin(satAngle + p * PI)) / 2
+  // One long spatial saturation wave (half a hue-circle of offset across
+  // the strip) sliding with time: vivid <-> washed-out near-white.
+  var s = (1 + sin(satT + p * PI)) / 2
 
-  // ~Four triangular brightness peaks across the strip, moving with time;
-  // fourth power turns them into sharp pulses, halved to keep peaks tame.
-  var v = triangle(frac(pulseT + p * 4))
-  v = v * v
-  v = v * v * 0.5
+  // ~4 triangular brightness peaks drifting along the strip; the 4th
+  // power sharpens them into narrow spikes with long dark valleys, and
+  // the halving keeps the peaks moderate.
+  var tri = triangle(pulseT + 4 * p)
+  var v = tri * tri * tri * tri * 0.5
 
   hsv(h, s, v)
 }

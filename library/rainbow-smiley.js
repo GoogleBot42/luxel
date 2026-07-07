@@ -2,49 +2,49 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Rainbow Smiley"; original source never consulted.
 
-// A static 16x16 pixel-art smiley: the face disc is solid white, and
-// everything else (background plus the eye/mouth cutouts) is a stencil
-// filled with an animated rainbow keyed to the linear pixel index.
+// A static 16x16 pixel-art smiley: the face disc is solid white, while the
+// background plus the eye/mouth cutouts are a stencil filled with an
+// animated rainbow keyed to linear pixel index. Only the rainbow animates.
 
-// 16x16 bitmap, row-major: 1 = white face pixel, 0 = rainbow stencil.
-// Built procedurally instead of hand-packed color data — for this image
-// the mask is all that matters.
-var face = array(256)
+var SIZE = 16
+// Stencil bitmap: 1 = white face pixel, 0 = masked (rainbow shows through).
+var face = array(SIZE * SIZE)
+
+// Build the smiley procedurally instead of hand-typing 256 cells:
+// a filled disc, minus two square eyes and a lower arc for the mouth.
 var r, c
-for (r = 0; r < 16; r++) {
-  for (c = 0; c < 16; c++) {
-    var dy = r - 7.5
-    var dx = c - 7.5
-    var d = sqrt(dx * dx + dy * dy)
-    var lit = d <= 7                                   // the head disc
-    if (r >= 4 && r <= 5 && ((c >= 4 && c <= 5) || (c >= 10 && c <= 11))) {
-      lit = 0                                          // two square eyes
-    }
-    if (d >= 4.4 && d <= 6.3 && dy >= 2.2) {
-      lit = 0                                          // smiling mouth arc
-    }
-    face[r * 16 + c] = lit
+for (r = 0; r < SIZE; r++) {
+  for (c = 0; c < SIZE; c++) {
+    var dr = r - 7.5
+    var dc = c - 7.5
+    var d = sqrt(dr * dr + dc * dc)
+    var lit = d <= 7                                  // head disc
+    if (r >= 4 && r <= 5 && c >= 4 && c <= 5) lit = 0 // left eye
+    if (r >= 4 && r <= 5 && c >= 10 && c <= 11) lit = 0 // right eye
+    if (r >= 9 && d >= 4 && d <= 5.6) lit = 0         // smiling mouth arc
+    face[r * SIZE + c] = lit
   }
 }
 
-var hueBase = 0
+var t1
 
 export function beforeRender(delta) {
-  hueBase = time(0.03)  // full rainbow rotation every ~2 s
+  t1 = time(0.03) // ~2 s full hue rotation
 }
 
 export function render2D(index, x, y) {
-  var cell = floor(y * 15.99) * 16 + floor(x * 15.99)
+  // First coordinate selects the row, second the column (per the original;
+  // orientation depends on the mapper).
+  var cell = floor(y * 15.99) * SIZE + floor(x * 15.99)
   if (face[cell]) {
-    rgb(1, 1, 1)  // face: pure white
+    rgb(1, 1, 1) // the face itself stays plain white
   } else {
-    // stencil: full hue wheel spread across the panel in wiring order,
-    // rotating with the phase clock
-    hsv(hueBase + index / pixelCount, 1, 1)
+    // Background, eyes and mouth: rainbow spread by wiring-order index.
+    hsv(t1 + index / pixelCount, 1, 1)
   }
 }
 
-// 1D fallback: just the animated rainbow
+// 1D fallback: whole strip becomes the rainbow fill.
 export function render(index) {
-  hsv(hueBase + index / pixelCount, 1, 1)
+  hsv(t1 + index / pixelCount, 1, 1)
 }

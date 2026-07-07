@@ -3,30 +3,27 @@
 // community pattern "Three Red Pixels (mathy)"; original source never
 // consulted.
 
-// Teaching example: a solid bright blue strip with three evenly spaced
-// single red pixels crawling steadily along and wrapping. The dots are
-// not tracked separately — one moving position is mirrored by taking
-// pixel offsets modulo a third of the strip. Delta-scaled movement keeps
-// the speed identical at any frame rate.
+// Teaching example: frame-rate-independent motion + modular arithmetic.
+// Three evenly spaced red dots crawl over a solid blue strip, ~10 px/s.
+// One fractional position drives all three dots: pixel offsets are taken
+// modulo a third of the strip, so a single comparison finds every dot.
 
-var speed = 10    // pixels per second
-var numDots = 3
-var spacing = floor(pixelCount / numDots)
+var speed = 10 // pixels per second, identical at any frame rate
+var dots = 3
+var spacing = floor(pixelCount / dots)
 
-export var pos = 0  // fractional head position, exported for inspection
+export var pos = 0 // exported for external inspection/adjustment
 
 export function beforeRender(delta) {
-  // pixels/second * seconds elapsed: frame-rate independent motion
   pos = (pos + speed * delta / 1000) % pixelCount
 }
 
 export function render(index) {
-  // offset behind the moving position; add a strip length first so the
-  // value never goes negative, then fold by the dot spacing
-  var offset = (pixelCount + index - pos) % spacing
+  // Add a strip length before subtracting so the offset never goes negative.
+  var offset = (index - pos + pixelCount) % spacing
   if (floor(offset) == 0) {
-    hsv(0, 1, 1)      // red dot (or one of its spaced images)
+    hsv(0, 1, 1)     // red dot (within one pixel-width of an image of pos)
   } else {
-    hsv(2 / 3, 1, 1)  // blue background
+    hsv(2 / 3, 1, 1) // blue background
   }
 }

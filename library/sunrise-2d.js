@@ -2,185 +2,162 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Sunrise 2D"; original source never consulted.
 
-// A warm sun disc rises from the bottom of a 2D matrix over several
-// seconds, pauses, then "activates": its surface boils with plasma-like
-// granulation while a couple dozen flare particles erupt off the limb,
-// loop under constant-magnitude gravity toward a jittered center, and fall
-// back, leaving fading trails. Moving the slider fades to black and
-// restarts the sunrise.
+// A warm disc rises from the bottom of a 2D matrix, pauses, then burns as
+// an active sun: plasma-like granulation boils over the disc while flare
+// particles erupt from the limb, loop under constant-magnitude gravity,
+// and fall back, leaving cooling trails. Moving the slider fades to black
+// and restarts the sunrise.
 //
-// Simulated on a 16x16 virtual canvas at a fixed ~10 Hz tick, independent
-// of LED frame rate; render2D just samples the canvas. Each cell packs
-// hue and brightness into one number: integer part = hue in thousandths
-// of the wheel, fractional part = brightness (the original's key trick).
+// Off-screen 16x16 canvas updated at a fixed ~10 Hz simulation tick; each
+// cell packs hue and brightness into one number: integer part = hue in
+// thousandths of the wheel, fractional part = brightness.
 
-var W = 16
-var H = 16
-var buf = array(W * H)
+var W = 16, H = 16
+var cells = array(W * H)
+var mask = array(W * H)        // precomputed radial disc falloff
+var CX = 7.5, CY = 7.5
+var SUN_R = 5.4                // ~a third of the display width
 
-// --- precomputed sun disc mask: linear falloff, full center -> zero rim ---
-var SUN_R = 5.3                     // ~a third of the display width, cells
-var CX = 7.5
-var CY = 7.5
-var mask = array(W * H)
-for (i = 0; i < W * H; i++) {
-  var d = hypot(i % W - CX, floor(i / W) - CY)
-  mask[i] = d < SUN_R ? 1 - d / SUN_R : 0
-}
-
-// --- flare particles ---
-var NP = 22
-var px = array(NP), py = array(NP), pvx = array(NP), pvy = array(NP)
-var phue = array(NP)                // personal warm hue offset, thousandths
-for (i = 0; i < NP; i++) {
-  var a = random(PI2)
-  var rr = random(SUN_R * 0.8)
-  px[i] = CX + cos(a) * rr
-  py[i] = CY + sin(a) * rr
-  phue[i] = random(45)              // reds through oranges
-}
-
-var PULL = 0.10                     // constant-magnitude attraction
-var VMAX = 1.6                      // per-axis "speed of light", cells/tick
-var COOL = 0.11                     // brightness lost per tick (~1 s fade)
-var BASE_HUE = 18                   // deep orange-red, thousandths of wheel
-
-// --- stage machine ---
-var STAGE_RISE = 0
-var STAGE_PAUSE = 1
-var STAGE_ACTIVE = 2
-var STAGE_FADE = 3
-var stage = STAGE_RISE
-var RISE_START = 14                 // cells below final position
-var riseOfs = RISE_START
-var stageT = 0                      // seconds in current stage
-var booted = 0
-
-var msAcc = 0
-var TICK_MS = 100                   // ~10 simulation updates per second
-var tSec = 0                        // for the slow drifts
-
-export function sliderRestartSunrise(v) {
-  //# min=0 max=1 step=0.1 default=0
-  // Value ignored: any movement fades out and restarts the sunrise.
-  if (booted) {
-    stage = STAGE_FADE
-    stageT = 0
+// precompute the disc mask once
+var i, xx, yy
+for (yy = 0; yy < H; yy++) {
+  for (xx = 0; xx < W; xx++) {
+    var d = hypot(xx - CX, yy - CY)
+    mask[yy * W + xx] = max(0, 1 - d / SUN_R)
   }
 }
 
+// flare particles: constant-magnitude pull toward a jittered center
+var NP = 20
+var px = array(NP), py = array(NP), pvx = array(NP), pvy = array(NP)
+var phue = array(NP)
+for (i = 0; i < NP; i++) {
+  var a = random(PI2), rr = random(SUN_R * 0.8)
+  px[i] = CX + cos(a) * rr
+  py[i] = CY + sin(a) * rr
+  phue[i] = random(18) - 6      // personal warm hue offset, thousandths
+}
+
+// stages: 0 sunrise, 1 pause, 2 active, 3 fadeout
+var stage = 0
+var riseOffset = H             // cells still to rise
+var stageSec = 0
+var simAccum = 0
+var TICK = 0.1                 // ~10 sim updates per second
+var runSec = 0                 // for the slow drifts
+var driftA, driftB
+var baseHue = 40               // flare base hue drifts very slowly
+
+var sliderSeen = 0
+export function sliderMakeTheSunRiseAgain(v) {
+  //# min=0 max=1 step=0.01 default=0
+  // value ignored; any movement (after the initial load call) restarts
+  if (sliderSeen && stage != 3) { stage = 3; stageSec = 0 }
+  sliderSeen = 1
+}
+
 function stampSun() {
-  // Drifting plasma coefficients: periods of tens of seconds to a minute+.
-  var c1 = 3 + 2 * sin(time(0.55) * PI2)     // ~36 s
-  var c2 = 4 + 2.5 * sin(time(1.1) * PI2)    // ~72 s
-  var ofs = floor(riseOfs)
-  for (var i = 0; i < W * H; i++) {
-    var m = mask[i]
-    if (m <= 0) continue
-    var x = i % W
-    var y = floor(i / W) + ofs
-    if (y >= H) continue
-    // Additive plasma: sine of one x/y combo, triangle of another, sine
-    // of the mask itself; average and cube for contrast.
-    var nx = x / W, ny = y / H
-    var p = (wave(nx * c1 + ny * (5 - c1) + tSec * 0.13)
-           + triangle(frac(nx * c2 + ny * 2.5 - tSec * 0.09))
-           + wave(m * 0.8)) / 3
-    p = p * p * p
-    // Mask-weighted brightness mix keeps the center brightest; hue shifts
-    // toward gold where the granulation is hot.
-    var b = clamp(m * (0.35 + 0.85 * p), 0, 0.98)
-    buf[y * W + x] = BASE_HUE + floor(p * 55) + b
+  var off = floor(riseOffset)
+  for (var y = 0; y < H; y++) {
+    var my = y - off
+    if (my < 0 || my >= H) continue
+    for (var x = 0; x < W; x++) {
+      var m = mask[my * W + x]
+      if (m <= 0) continue
+      // additive plasma: two drifting-direction waves + a ring wave
+      var nx = x / W, ny = y / H
+      var p = (sin((nx * driftA + ny * (3 - driftA)) * PI2) +
+               triangle(frac(nx * (2 - driftB) + ny * driftB)) * 2 - 1 +
+               sin(m * PI2 * 1.5)) / 3
+      p = (p + 1) / 2
+      p = p * p * p                       // cube for contrast
+      var b = clamp(m * (0.45 + 0.55 * p), 0.02, 0.999)
+      var hue = 15 + floor(p * 55)        // deep orange-red -> gold
+      cells[y * W + x] = hue + b
+    }
   }
 }
 
 function coolCanvas() {
-  for (var i = 0; i < W * H; i++) {
-    var v = buf[i]
+  for (var k = 0; k < W * H; k++) {
+    var v = cells[k]
     var b = frac(v)
-    if (b > 0) {
-      b -= COOL
-      buf[i] = b > 0 ? trunc(v) + b : 0
-    }
+    if (b > 0) cells[k] = floor(v) + max(0, b - 0.09)
   }
 }
 
-function runParticles() {
-  // Jittered center of gravity "stirs" the system so orbits never settle.
-  var gx = CX + random(1.2) - 0.6
-  var gy = CY + random(1.2) - 0.6
-  var hueDrift = time(2) * 30       // base flare hue creeps over minutes
-  for (var i = 0; i < NP; i++) {
-    var dx = gx - px[i]
-    var dy = gy - py[i]
+function moveParticles() {
+  // jittered center of gravity keeps orbits from settling
+  var gx = CX + random(1.6) - 0.8
+  var gy = CY + random(1.6) - 0.8
+  for (var k = 0; k < NP; k++) {
+    var dx = gx - px[k], dy = gy - py[k]
     var d = hypot(dx, dy)
-    if (d > 0.2) {                  // tiny inner cutoff
-      // Constant-magnitude pull regardless of distance — this is what
-      // makes the wide looping arcs.
-      pvx[i] = clamp(pvx[i] + dx / d * PULL, -VMAX, VMAX)
-      pvy[i] = clamp(pvy[i] + dy / d * PULL, -VMAX, VMAX)
+    if (d > 0.15) {
+      // constant-magnitude attraction (the falloff cancels): wide arcs
+      pvx[k] = clamp(pvx[k] + dx / d * 0.55, -2.4, 2.4)
+      pvy[k] = clamp(pvy[k] + dy / d * 0.55, -2.4, 2.4)
     }
-    px[i] += pvx[i]
-    py[i] += pvy[i]
-    // Draw only beyond ~9/10 of the sun radius (flares erupt from the
-    // limb, never crawl across the face) and only when on-screen;
-    // off-screen particles keep simulating and get pulled back.
-    var rr = hypot(px[i] - CX, py[i] - CY)
-    if (rr < SUN_R * 0.9) continue
-    var cx = floor(px[i])
-    var cy = floor(py[i])
-    if (cx < 0 || cx >= W || cy < 0 || cy >= H) continue
-    var cell = cy * W + cx
-    var b = frac(buf[cell])
-    buf[cell] = BASE_HUE + phue[i] + hueDrift + max(b, 0.55)
+    px[k] += pvx[k]
+    py[k] += pvy[k]
+    // draw only beyond ~0.9 sun radii: flares erupt from the limb
+    var cxk = floor(px[k]), cyk = floor(py[k])
+    if (cxk < 0 || cxk >= W || cyk < 0 || cyk >= H) continue
+    if (hypot(px[k] - CX, py[k] - CY) < SUN_R * 0.9) continue
+    var idx = cyk * W + cxk
+    cells[idx] = floor(baseHue + phue[k]) + max(frac(cells[idx]), 0.55)
   }
 }
 
-function tick(dt) {
-  stageT += dt
-  if (stage == STAGE_RISE) {
+function simTick() {
+  driftA = 1.5 + sin(runSec * PI2 / 47) * 1.2   // tens-of-seconds drifts
+  driftB = 1.5 + sin(runSec * PI2 / 83) * 1.2
+  baseHue = 40 + sin(runSec * PI2 / 240) * 12   // flares drift over minutes
+
+  if (stage == 0) {
+    riseOffset = max(0, riseOffset - 0.32)      // full rise ~5 s
     stampSun()
     coolCanvas()
-    riseOfs = RISE_START * (1 - stageT / 5)   // full rise in ~5 s
-    if (riseOfs <= 0) {
-      riseOfs = 0
-      stage = STAGE_PAUSE
-      stageT = 0
-    }
-  } else if (stage == STAGE_PAUSE) {
+    if (riseOffset <= 0) { stage = 1; stageSec = 0 }
+  } else if (stage == 1) {
     stampSun()
     coolCanvas()
-    if (stageT > 2) { stage = STAGE_ACTIVE; stageT = 0 }
-  } else if (stage == STAGE_ACTIVE) {
+    if (stageSec > 2) { stage = 2; stageSec = 0 }
+  } else if (stage == 2) {
     stampSun()
     coolCanvas()
-    runParticles()
-  } else {                                    // STAGE_FADE
-    coolCanvas()                              // only cool: image dies away
-    if (stageT > 1.5) {
-      stage = STAGE_RISE
-      stageT = 0
-      riseOfs = RISE_START
-      for (var i = 0; i < NP; i++) { pvx[i] = 0; pvy[i] = 0 }
+    moveParticles()
+  } else {
+    coolCanvas()                                // fade to black
+    if (stageSec > 1.5) {
+      riseOffset = H
+      stage = 0
+      stageSec = 0
+      for (var k = 0; k < NP; k++) {
+        var a2 = random(PI2), r2 = random(SUN_R * 0.8)
+        px[k] = CX + cos(a2) * r2
+        py[k] = CY + sin(a2) * r2
+        pvx[k] = 0
+        pvy[k] = 0
+      }
     }
   }
 }
 
 export function beforeRender(delta) {
-  booted = 1
-  tSec += delta / 1000
-  if (tSec > 3600) tSec -= 3600
-  msAcc += delta
-  var guard = 0
-  while (msAcc >= TICK_MS && guard < 5) {     // catch up, bounded
-    msAcc -= TICK_MS
-    tick(TICK_MS / 1000)
-    guard++
+  var dt = delta / 1000
+  runSec += dt
+  if (runSec > 3600) runSec -= 3600
+  stageSec += dt
+  simAccum += dt
+  while (simAccum >= TICK) {
+    simAccum -= TICK
+    simTick()
   }
-  if (guard == 5) msAcc = 0
 }
 
 export function render2D(index, x, y) {
-  var v = buf[floor(y * 15.99) * 16 + floor(x * 15.99)]
-  hsv(trunc(v) / 1000, 1, frac(v))
+  var v = cells[floor(y * 15.99) * 16 + floor(x * 15.99)]
+  var b = frac(v)
+  hsv(floor(v) / 1000, 1, b * b)
 }

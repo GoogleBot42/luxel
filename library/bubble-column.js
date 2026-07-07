@@ -2,33 +2,36 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Bubble Column"; original source never consulted.
 
+// A vertical tube of dimly glowing fluid with bright pale bubbles rising
+// through it. A noise-driven "valve" gates bubble release, so they arrive
+// in organic bursts and lulls. Bubbles accelerate as they rise (buoyancy).
+
 const NUM_BUBBLES = 10
-const RADIUS = 3            // bubble glow radius, in pixels
-const FLUID = 0.07          // dim fluid brightness / bubble threshold
+const RADIUS = 3        // bubble glow radius, in pixels
+const FLUID = 0.06      // dim fluid brightness / bubble threshold
+const ACCEL = 6         // upward acceleration, px/s^2
 
-var pos = array(NUM_BUBBLES)   // position in pixel units along the strip
-var vel = array(NUM_BUBBLES)   // pixels per second
-var buf = array(pixelCount)    // per-pixel bubble brightness buffer
-var clock = 0
-var baseHue = 0.66             // deep blue fluid by default
-var valveEase = 0.5
-var baseSpeed = pixelCount / 3 // a few seconds to traverse the strip
+var baseSpeed = pixelCount / 4  // ~4 s to traverse the strip before accel
 
-// start every bubble beyond the top: display opens as plain fluid and
-// bubbles trickle in through the normal reinjection path
+var pos = array(NUM_BUBBLES)    // pixel-unit position along the strip
+var vel = array(NUM_BUBBLES)    // px/s
+var buf = array(pixelCount)     // per-pixel bubble brightness
+var clock = 0                   // seconds, wrapped after ~1 hour
+
+var fluidHue = 0.66             // deep blue default
+var valveOpen = 0.5
+
+// start every bubble parked past the top: plain fluid, bubbles trickle in
 var i
-for (i = 0; i < NUM_BUBBLES; i++) {
-  pos[i] = pixelCount + RADIUS + 1
-  vel[i] = 0
-}
+for (i = 0; i < NUM_BUBBLES; i++) pos[i] = pixelCount + RADIUS + 1
 
 export function hsvPickerFluidHue(h, s, v) {
-  baseHue = h
+  fluidHue = h
 }
 
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderBubbleValve(v) {
-  valveEase = v
+  valveOpen = v
 }
 
 export function beforeRender(delta) {
@@ -36,50 +39,51 @@ export function beforeRender(delta) {
   clock += dt
   if (clock > 3600) clock -= 3600
 
-  // hidden valve: smooth noise from two time coordinates advancing at
-  // different rates, rescaled to 0..1 -> organic bursts and lulls
-  var valve = (perlin(clock * 0.21, clock * 0.13, 0, 3.7) + 1) * 0.5
+  // valve: smooth noise over two time-derived axes, rescaled to 0..1
+  var valve = (perlin(clock * 0.21, clock * 0.07, 0, 5.3) + 1) * 0.5
 
-  // accumulate bubble glow per pixel: sharp quartic falloff, with an early
-  // exit once past the fluid level (source of the fizzy overlap look)
-  var p, b, acc, t
+  // accumulate bubble glow per pixel: sharp (linear falloff)^4 peaks.
+  // The early-out once past the fluid level clips overlapping bubbles
+  // against each other — the deliberate "fizzy" merge look.
+  var p, b, v, d, c
   for (p = 0; p < pixelCount; p++) {
-    acc = 0
+    v = 0
     for (b = 0; b < NUM_BUBBLES; b++) {
-      t = abs(p - pos[b])
-      if (t < RADIUS) {
-        t = 1 - t / RADIUS
-        acc += t * t * t * t
-        if (acc > FLUID) break
+      d = abs(p - pos[b])
+      if (d < RADIUS) {
+        c = 1 - d / RADIUS
+        v += c * c * c * c
+        if (v > FLUID) break
       }
     }
-    buf[p] = acc
+    buf[p] = v
   }
 
-  // rise, accelerate, recycle through the valve
-  var threshold = 0.85 - valveEase * 0.7   // higher slider = easier to meet
+  // move bubbles; recycle through the valve once fully past the top
   for (b = 0; b < NUM_BUBBLES; b++) {
     pos[b] += vel[b] * dt
-    vel[b] += 6 * dt                       // buoyancy: speed up while rising
-    if (pos[b] > pixelCount + RADIUS) {    // fully off the top (glow decayed)
-      if (valve > threshold) {
+    vel[b] += ACCEL * dt
+    if (pos[b] > pixelCount + RADIUS) {
+      // park just off the end (glow already decayed off-screen)
+      pos[b] = pixelCount + RADIUS + 1
+      vel[b] = 0
+      if (valve > 1 - valveOpen) {
+        // reinject at the bottom: base speed +/- ~75% uniform spread
         pos[b] = -RADIUS
-        vel[b] = baseSpeed * (0.25 + random(1.5))  // base +/- 3/4 base
-      } else {
-        pos[b] = pixelCount + RADIUS + 1   // wait off-screen for the valve
-        vel[b] = 0
+        vel[b] = baseSpeed * (0.25 + random(1.5))
       }
     }
   }
 }
 
 export function render(index) {
-  // gentle fluid swirl: ~a dozen noise cells along the strip, drifting slowly
-  var swirl = perlin(index / pixelCount * 12, clock * 0.04, 0, 7.3) * 0.06
+  // fluid swirl: gentle hue wander along the strip, drifting over tens of s
+  var wobble = 0.08 * perlin(index * 12 / pixelCount, clock * 0.04, 0, 8.8)
+  var h = fluidHue + wobble
   var v = buf[index]
   if (v <= FLUID) {
-    hsv(baseHue + swirl, 1, FLUID)             // dim, fully saturated fluid
+    hsv(h, 1, FLUID)             // dim saturated fluid
   } else {
-    hsv(baseHue + swirl, 0.5, min(v, 1))       // bright, milky bubble
+    hsv(h, 0.5, min(v, 1))       // bright, milky bubble
   }
 }

@@ -2,38 +2,38 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Sierpinski Rainbow 2D"; original source never consulted.
 
-// The whole fractal is one bitwise AND of the two coordinates: 16.16
-// fixed-point x & y ANDs the binary fraction bits, and the surviving bits
-// trace the classic Sierpinski triangle (Pascal's triangle mod 2). That
-// static scalar field is run through a chain of wave() calls offset by a
-// slow clock (brightness ripples) while a second, ~30% slower clock spins
-// the hue wheel. On a bare strip it degrades to a center-mirrored rainbow
-// ripple.
+// The whole fractal is one bitwise AND of the two coordinates: x and y are
+// 16.16 fixed-point fractions, so `x & y` ANDs their binary fraction bits,
+// and the surviving-bit structure is the classic Sierpinski triangle (the
+// Pascal's-triangle-mod-2 trick). Brightness ripples come from chaining
+// wave() into itself with a time offset injected at each stage; hue is the
+// raw fractal scalar plus a slightly slower rotating phase.
 
-var rippleT = 0
-var hueT = 0
+var tRipple = 0 // brightness-ripple clock
+var tHue = 0    // hue-rotation clock, ~30% slower
 
 export function beforeRender(delta) {
-  rippleT = time(0.055)   // brightness-ripple clock, ~3.6 s per lap
-  hueT = time(0.078)      // hue clock, ~5.1 s — roughly 30% slower
+  tRipple = time(0.05)  // ~3.3 s cycle
+  tHue = time(0.065)    // ~4.3 s cycle
+}
+
+// Shared shaping: nested waves offset by the ripple clock, squared for
+// contrast so dark regions dominate and bright filaments pop.
+function shimmer(f) {
+  var v = wave(wave(wave(f) + tRipple) + tRipple)
+  return v * v
 }
 
 export function render2D(index, x, y) {
-  var f = x & y           // fixed-point AND of fraction bits = Sierpinski
-  var v = wave(f)
-  v = wave(v + rippleT)
-  v = wave(v + rippleT)
-  v = v * v               // deepen contrast: dark voids, bright filaments
-  hsv(f + hueT, 1, v)
+  var f = x & y  // fixed-point AND of fractional coords -> Sierpinski field
+  hsv(f + tHue, 1, shimmer(f))
 }
 
+// 1D fallback: a folded position ramp (1 at the strip midpoint, 0 at both
+// ends) stands in for the fractal coordinate, with one extra wave-shaping
+// step before the same time-offset chain.
 export function render(index) {
-  // folded ramp: 1 at the strip midpoint, 0 at both ends, plus one extra
-  // wave-shaping pass; then the same time-offset chain as the 2D path
-  var s = wave(triangle(index / pixelCount))
-  var v = wave(s)
-  v = wave(v + rippleT)
-  v = wave(v + rippleT)
-  v = v * v
-  hsv(s + hueT, 1, v)
+  var ramp = 1 - abs(2 * index / pixelCount - 1)
+  var f = wave(ramp)
+  hsv(f + tHue, 1, shimmer(f))
 }

@@ -2,19 +2,20 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "rainbow fonts"; original source never consulted.
 
-// Mirror-symmetric rainbow: hue comes from a folded distance-from-center
-// passed through a sine fold twice (once before, once after adding the
-// animation phase), so the color bands compress and stretch as they sweep.
-
-var phase = 0
+// A smoothly animated rainbow, mirror-symmetric about the strip midpoint.
+// A folded distance-from-center ramp is passed through a sine-shaped wave,
+// phase-shifted, and sine-folded again — so the hue bands compress and
+// expand as the phase slides. Fixed modest brightness.
 
 export function beforeRender(delta) {
-  phase = time(0.1)   // ~6.5 s cycle — relaxed pace
+  phase = time(0.1)   // ~6.5 s cycle, relaxed pace
 }
 
 export function render(index) {
-  var half = pixelCount / 2
-  var c = 1 - abs(index - half) / half   // 1 at midpoint, 0 at both ends
-  var h = wave(wave(c) + phase)          // double sine-fold + sliding phase
-  hsv(h, 1, 0.35)                        // full saturation, modest brightness
+  // 1 at the strip midpoint, falling linearly to 0 at both ends
+  var mid = (pixelCount - 1) / 2
+  var c = 1 - abs(index - mid) / mid
+  // double sine-fold: ramp -> wave -> add phase -> wave -> hue
+  var h = wave(wave(c) + phase)
+  hsv(h, 1, 0.35)
 }

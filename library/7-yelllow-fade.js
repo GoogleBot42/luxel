@@ -2,19 +2,20 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "7 Yelllow Fade"; original source never consulted.
 
-// The whole strip glows one warm golden yellow and breathes in unison:
-// brightness swells sinusoidally from black to full and back, taking on
-// the order of half a minute per full cycle. Hue/saturation never change.
+// The whole strip breathes a single warm golden yellow in unison:
+// one slow sawtooth timebase, shaped by wave() into a smooth 0..1
+// sinusoidal pulse. Roughly half a minute per full dim-bright-dim cycle.
 
-var YELLOW_HUE = 0.13   // warm yellow, slightly toward golden
+const YELLOW_HUE = 0.13   // warm yellow, slightly toward golden
+
 var brightness = 0
 
 export function beforeRender(delta) {
-  // time(0.45) -> sawtooth with ~29.5 s period; wave() shapes it into a
-  // smooth 0..1 sinusoidal pulse.
+  // time(0.45) -> ~29.5 s period; wave() shapes it 0..1 smoothly
   brightness = wave(time(0.45))
 }
 
 export function render(index) {
+  // uniform: every pixel identical, index ignored
   hsv(YELLOW_HUE, 1, brightness)
 }

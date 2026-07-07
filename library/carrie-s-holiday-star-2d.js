@@ -16,18 +16,16 @@ export function sliderSpeed(v) {
 
 var tAcc = 0               // master time accumulator
 var baseHue = 0.55         // starts in cyan/blue territory
-var twinkle = 0            // per-frame noise value in ~[-1, 1]
-var rotC = 1
+var rotC = 1               // frame rotation, precomputed per frame
 var rotS = 0
+var numA = 0.16            // axis-star ray reach (fixed + twinkle)
+var numD = 0.1             // diagonal-star ray reach
+var p2 = 0.55              // diagonal star p-norm exponent (breathes with noise)
+var inv2 = 1.818           // 1 / p2, recomputed alongside it
 
-// eighth-of-a-turn rotation for the diagonal star, precomputed once
-const C8 = cos(PI / 4)
-const S8 = sin(PI / 4)
-
-// generalized (Minkowski) distance: p-th root of sum of p-th powers
-function mink(ax, ay, p) {
-  return pow(pow(ax, p) + pow(ay, p), 1 / p)
-}
+// eighth-of-a-turn rotation for the diagonal star (sin/cos of PI/4)
+var C8 = 0.7071
+var S8 = 0.7071
 
 export function beforeRender(delta) {
   // advance by elapsed time / period, wrapped mod ~an hour to keep precision
@@ -41,8 +39,13 @@ export function beforeRender(delta) {
   rotC = cos(ang)
   rotS = sin(ang)
 
-  // one smooth noise sample drives the twinkle for the whole frame
-  twinkle = simplex2(tAcc * 1.5, 4.31)
+  // one smooth noise sample drives the twinkle for the whole frame:
+  // it modulates the axis star's reach and the diagonal star's pointiness
+  var tw = simplex2(tAcc * 1.5, 4.31)
+  numA = 0.16 + 0.08 * tw
+  numD = 0.1 + 0.05 * tw
+  p2 = 0.55 + 0.12 * tw
+  inv2 = 1 / p2
 }
 
 export function render2D(index, x, y) {
@@ -52,23 +55,28 @@ export function render2D(index, x, y) {
   var px = cx * rotC - cy * rotS
   var py = cx * rotS + cy * rotC
 
-  // axis-aligned star: fixed-plus-twinkle reach over the star distance,
-  // sharpened hard so the rays are crisp
-  var d1 = mink(abs(px), abs(py), 0.55)
-  var v1 = pow(clamp((0.13 + 0.07 * twinkle) / d1, 0, 1), 5)
+  // axis-aligned star: generalized (Minkowski) distance with p = 0.55 —
+  // the p-th root of the sum of p-th powers gives concave star contours.
+  // Reach over distance, clamped, then sharpened hard so rays are crisp.
+  var ax = abs(px)
+  var ay = abs(py)
+  var d1 = pow(pow(ax, 0.55) + pow(ay, 0.55), 1.818)
+  var r1 = clamp(numA / d1, 0, 1)
+  var v1 = r1 * r1 * r1 * r1 * r1
 
   // diagonal star: rotate an eighth turn, smaller reach, and the p-norm
-  // exponent itself breathes with the noise so the rays change shape
-  var dx = px * C8 - py * S8
-  var dy = px * S8 + py * C8
-  var p2 = 0.55 + 0.14 * twinkle
-  var d2 = mink(abs(dx), abs(dy), p2)
-  var v2 = pow(clamp((0.09 + 0.05 * twinkle) / d2, 0, 1), 4)
+  // exponent itself breathes with the noise so the rays change shape;
+  // sharpened a touch less than the axis star
+  var dx = abs(px * C8 - py * S8)
+  var dy = abs(px * S8 + py * C8)
+  var d2 = pow(pow(dx, p2) + pow(dy, p2), inv2)
+  var r2 = clamp(numD / d2, 0, 1)
+  var v2 = r2 * r2 * r2 * r2
 
   var v = (v1 + v2) / 2
 
   // center fix: at the exact origin the distance is zero and the division
-  // misbehaves; detect coordinates at the origin and force near-full bright
+  // yields zero; detect coordinates at the origin and force near-full bright
   if (cx * cx + cy * cy < 0.0005) v = 0.95
 
   // bright core desaturates toward white; dim ray tips stay fully saturated

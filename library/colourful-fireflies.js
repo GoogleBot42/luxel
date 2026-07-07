@@ -2,56 +2,49 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "colourful fireflies"; original source never consulted.
 
-// A swarm of colored sparks darts along the strip, each dragging a fading
-// comet tail, slowing under friction until it dies and respawns elsewhere
-// with a fresh random velocity. Each spark owns a fixed hue; together they
-// cover the rainbow.
+// A swarm of colored sparks that dart along the strip with comet tails,
+// slow down by friction, coast to a stop, and respawn elsewhere with a new
+// random velocity. Density scales with strip length.
 
-var sparkCount = 1 + floor(pixelCount / 10)
-var velocity = array(sparkCount)   // signed, pixels per scaled ms
-var position = array(sparkCount)   // fractional, in pixel units
-var sparkHue = array(sparkCount)
-var bright = array(pixelCount)     // accumulated (signed) energy
-var hueStamp = array(pixelCount)   // hue of the last spark to touch a pixel
-
-var maxSpeed = 0.15
-var deadBand = 0.01
+var numSparks = 1 + floor(pixelCount / 10)
+var sparkV = array(numSparks)   // signed velocity, pixels per (scaled) ms
+var sparkX = array(numSparks)   // fractional position in pixel units
+var sparkH = array(numSparks)   // fixed hue, spread around the wheel
+var pixV = array(pixelCount)    // accumulated signed energy per pixel
+var pixH = array(pixelCount)    // hue stamp: last spark to touch the pixel
 
 var i
-for (i = 0; i < sparkCount; i++) {
-  sparkHue[i] = i / sparkCount  // spread evenly around the hue wheel
-  // velocity starts at 0 = inside the dead-band, so every spark
-  // respawns with a random state on the first frame
+for (i = 0; i < numSparks; i++) {
+  sparkV[i] = (random(2) - 1) * 0.5
+  sparkX[i] = random(pixelCount)
+  sparkH[i] = i / numSparks
 }
 
 export function beforeRender(delta) {
-  var dt = delta * 0.1  // global speed trim
+  delta *= 0.1                       // global speed trim
 
-  // Trail decay: ~10% per frame (frame-rate-dependent, like the original).
-  feedback(bright, 0.9)
+  feedback(pixV, 0.9)                // trails: ~10% decay per frame
 
-  for (var s = 0; s < sparkCount; s++) {
-    if (abs(velocity[s]) < deadBand) {
-      // Died: respawn somewhere else with a fresh signed velocity.
-      velocity[s] = random(2 * maxSpeed) - maxSpeed
-      position[s] = random(pixelCount)
+  for (i = 0; i < numSparks; i++) {
+    // Friction has brought it to rest: respawn with fresh speed/position.
+    if (abs(sparkV[i]) < 0.005) {
+      sparkV[i] = (random(2) - 1) * 0.5
+      sparkX[i] = random(pixelCount)
     }
-    velocity[s] *= 0.995  // friction
 
-    var p = position[s] + velocity[s] * dt
-    if (p >= pixelCount) p -= pixelCount
-    if (p < 0) p += pixelCount
-    position[s] = p
+    sparkV[i] *= 0.99                // friction
+    sparkX[i] = mod(sparkX[i] + sparkV[i] * delta, pixelCount)
 
-    // Deposit signed energy proportional to speed; render squares it,
-    // so backward movers glow just as bright and dying sparks dim out.
-    var px = floor(p)
-    bright[px] += velocity[s]
-    hueStamp[px] = sparkHue[s]
+    // Deposit signed energy under the spark and stamp its hue.
+    var p = floor(sparkX[i])
+    pixV[p] += sparkV[i]
+    pixH[p] = sparkH[i]
   }
 }
 
 export function render(index) {
-  var b = bright[index]
-  hsv(hueStamp[index], 0.95, b * b * 10)
+  // Squaring makes backward (negative-energy) sparks just as bright, and
+  // gives the tails a fast nonlinear fade.
+  var v = pixV[index]
+  hsv(pixH[index], 0.95, v * v * 10)
 }

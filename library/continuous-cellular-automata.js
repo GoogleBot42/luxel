@@ -1,39 +1,33 @@
 // name: Continuous Cellular Automata
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Continuous Cellular Automata"; original source never
-// consulted. Concept credit: Wolfram's continuous-valued cellular automata.
+// consulted. Concept: Wolfram-style continuous-valued cellular automata.
 
-// A hidden grid of continuous cells (0..1) re-derives itself forever: each
-// cell is the average of the three cells above it, plus a user offset,
-// fractional-wrapped — the wrap is what makes the fractal triangles. Only
-// one row is recomputed per frame (round-robin) to stay inside the frame
-// budget, and a display-sized exponential-moving-average grid melts the
-// row-scan updates into a smooth continuous morph. The hidden grid is twice
-// as tall as the display and carries side margins as wide as it is tall, so
-// edge artifacts (which propagate one column per row) can never reach the
-// viewport.
+// A hidden grid (taller and much wider than the display) continuously
+// re-derives itself from a persistent seed row: each cell is the average of
+// its three parents plus a user offset, fractional part kept. One row is
+// recomputed per frame (round-robin), and a display-sized exponential
+// moving average hides the row scanning so structures melt smoothly.
 
-var W = 16                           // displayed columns (virtual canvas)
-var H = 16                           // displayed rows
-var HROWS = H * 2                    // hidden grid rows
-var MARGIN = HROWS                   // side margin width (rows == diagonal reach)
-var HCOLS = W + 2 * MARGIN           // hidden grid columns
+var VIEW = 16 // displayed rows/columns (16x16 virtual canvas)
+var ROWS = 32 // hidden rows: ~2x displayed
+var COLS = VIEW + 2 * ROWS // margins as wide as the row count on each side
+var grid = array(ROWS * COLS) // the automaton
+var smooth = array(VIEW * VIEW) // display-sized EMA
+var SMOOTHING = 0.1
 
-var grid = array(HROWS * HCOLS)      // the automaton, row-major
-var smooth = array(W * H)            // display EMA, row-major 16x16
-var SMOOTHING = 0.08                 // EMA blend fraction per frame
+var offsetParam = 0.31 // rule offset, added before the fractional wrap
+var pan = 0.5
+var depth = 0.5
+var diffMode = 0
+var seedMode = 0
+var curRow = 0
+var initialized = 0
+var hueDrift = 0
 
-var param = 0.31                     // rule offset added before frac()
-var pan = 0.5                        // viewport horizontal shift
-var depth = 0                        // viewport vertical shift
-var diffMode = 0                     // show |cell - left neighbor| instead
-var seedRandom = 0                   // random top row vs single center dot
-var curRow = 1                       // next hidden row to recompute
-var drift = 0                        // slow global hue phase
-
-//# min=0 max=1 step=0.005 default=0.31
+//# min=0 max=1 step=0.001 default=0.31
 export function sliderParam(v) {
-  param = v
+  offsetParam = v
 }
 
 //# min=0 max=1 step=0.01 default=0.5
@@ -41,7 +35,7 @@ export function sliderPan(v) {
   pan = v
 }
 
-//# min=0 max=1 step=0.01 default=0
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderDepth(v) {
   depth = v
 }
@@ -53,67 +47,77 @@ export function sliderElimStripes(v) {
 
 //# min=0 max=1 step=1 default=0
 export function sliderRandomSeeds(v) {
-  var want = v > 0.5
-  if (want != seedRandom) {          // re-seed on midpoint crossing
-    seedRandom = want
+  var mode = v > 0.5
+  if (mode != seedMode) {
+    seedMode = mode
     seedTopRow()
   }
 }
 
 function seedTopRow() {
-  var c
-  for (c = 0; c < HCOLS; c++) {
-    grid[c] = seedRandom ? random(1) : 0
+  for (var c = 0; c < COLS; c++) {
+    grid[c] = seedMode ? random(1) : 0
   }
-  if (!seedRandom) grid[floor(HCOLS / 2)] = 1   // single maximal center cell
+  if (!seedMode) grid[floor(COLS / 2)] = 1 // single centered dot
 }
 
-seedTopRow()
+// Row r derives from row r-1: average of the three parents, plus the
+// offset, fractional part kept. Edge columns use a 2-parent weighted
+// average (double weight straight up), no offset or wrap.
+function computeRow(r) {
+  var above = (r - 1) * COLS
+  var cur = r * COLS
+  grid[cur] = (2 * grid[above] + grid[above + 1]) / 3
+  grid[cur + COLS - 1] = (grid[above + COLS - 2] + 2 * grid[above + COLS - 1]) / 3
+  for (var c = 1; c < COLS - 1; c++) {
+    grid[cur + c] = frac(
+      (grid[above + c - 1] + grid[above + c] + grid[above + c + 1]) / 3 +
+      offsetParam)
+  }
+}
 
 export function beforeRender(delta) {
-  drift = time(0.5)                  // hue drift: one cycle ~33 s
-
-  // Recompute exactly one hidden row from the row above it.
-  var above = (curRow - 1) * HCOLS
-  var here = curRow * HCOLS
-  var c
-  // Edge columns: weighted average of the two available parents (double
-  // weight straight up), no offset, no wrap. They live in the margin.
-  grid[here] = (2 * grid[above] + grid[above + 1]) / 3
-  grid[here + HCOLS - 1] =
-    (grid[above + HCOLS - 2] + 2 * grid[above + HCOLS - 1]) / 3
-  for (c = 1; c < HCOLS - 1; c++) {
-    grid[here + c] = frac(
-      (grid[above + c - 1] + grid[above + c] + grid[above + c + 1]) / 3 + param)
+  if (!initialized) {
+    initialized = 1
+    seedTopRow()
+    for (var r = 1; r < ROWS; r++) computeRow(r) // one-time full derivation
   }
-  curRow++
-  if (curRow >= HROWS) curRow = 1    // row 0 is the persistent seed
 
-  // Blend the current viewport into the display EMA.
-  var rowOff = floor(depth * (HROWS - H))
-  var colOff = floor(pan * (HCOLS - W))
-  var r
-  for (r = 0; r < H; r++) {
-    var src = (rowOff + r) * HCOLS + colOff
-    var dst = r * W
-    for (c = 0; c < W; c++) {
-      smooth[dst + c] += (grid[src + c] - smooth[dst + c]) * SMOOTHING
+  // Amortized: recompute a single row per frame, cycling 1..ROWS-1.
+  curRow += 1
+  if (curRow >= ROWS) curRow = 1
+  computeRow(curRow)
+
+  hueDrift = time(0.5) // one slow hue cycle in ~33 s
+
+  // Blend the current viewport into the smoothing grid.
+  var row0 = floor(depth * (ROWS - VIEW))
+  var col0 = floor(pan * (COLS - VIEW))
+  for (var r = 0; r < VIEW; r++) {
+    var src = (row0 + r) * COLS + col0
+    var dst = r * VIEW
+    for (var c = 0; c < VIEW; c++) {
+      smooth[dst + c] += SMOOTHING * (grid[src + c] - smooth[dst + c])
     }
   }
 }
 
 export function render2D(index, x, y) {
-  var gx = floor(x * 15.99)
-  var gy = floor(y * 15.99)
-  var i = gy * 16 + gx
-  var v = smooth[i]
+  var col = floor(x * 15.99)
+  var row = floor(y * 15.99)
+  var i = row * VIEW + col
+
+  var v
   if (diffMode) {
-    v = gx == 0 ? 0 : abs(v - smooth[i - 1])   // first column shows black
+    v = col == 0 ? 0 : abs(smooth[i] - smooth[i - 1])
+  } else {
+    v = smooth[i]
   }
-  // Base hue falls as value rises (about a third of the wheel), plus the
-  // slow global drift; smoothstep easing compresses the ends of the arc so
-  // the palette reads band-limited rather than a hard rainbow.
-  var h = frac(0.33 * (1 - v) + drift)
-  h = h * h * (3 - 2 * h)
-  hsv(h, 1, v * v)                   // brightness = value squared
+
+  // Hue base falls ~a third of the wheel as value rises, with a sinusoidal
+  // easing that compresses the ends of the range; the whole arc drifts.
+  var eased = (1 - cos(PI * clamp(v, 0, 1))) / 2
+  var h = frac(hueDrift + 0.33 - eased / 3)
+
+  hsv(h, 1, v * v)
 }

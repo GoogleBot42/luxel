@@ -2,30 +2,26 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Animated Asterisks 2D"; original source never consulted.
 
-// N full-span line segments fan evenly across a half-turn through the
-// display center, forming a rotating asterisk. Each arm carries its own
-// hue (evenly spread around the wheel, drifting together) and fades
-// linearly to black at its edge. By default the arm thickness breathes
-// slowly over about a minute — hairline sparkle at the thin extreme, a
-// flooded matrix at the thick one. Widths are expressed as fractions of
-// the unit square, so no square-matrix assumption is needed.
+// N full-span segments through the center, evenly fanned over a half-turn,
+// rotating together. Each arm gets its own hue from an evenly spaced,
+// drifting rainbow; arms fade linearly to black at their edges. Arm width
+// optionally "breathes" on a slow triangle wave.
 
-const MAX_LINES = 24
-const HALF_LEN = 0.75    // half-length from center: spans the unit square
-const SEG_LEN = 1.5
+var MAX_LINES = 24
+var lineCos = array(MAX_LINES)
+var lineSin = array(MAX_LINES)
+var lineHue = array(MAX_LINES)
 
-var x0 = array(MAX_LINES)      // one endpoint of each segment
-var y0 = array(MAX_LINES)
-var dirX = array(MAX_LINES)    // unit direction along each segment
-var dirY = array(MAX_LINES)
-var hues = array(MAX_LINES)
+var HALF_LEN = 0.75   // half segment length: spans the whole unit square
 
 var numLines = 6
-//# min=0 max=1 step=0.01 default=0.25
+//# min=0 max=1 step=0.01 default=0.22
 export function sliderNumberOfLines(v) {
-  numLines = max(1, floor(v * 24.99))   // 1..24, default about half a dozen
+  numLines = floor(1 + v * (MAX_LINES - 1))
 }
 
+// Width in unit-square terms: hairline up to matrix-flooding.
+// Max per-arm width shrinks as more arms are added.
 var widthSetting = 0.5
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderLineWidth(v) {
@@ -35,75 +31,80 @@ export function sliderLineWidth(v) {
 var animateWidth = 1
 //# min=0 max=1 step=1 default=1
 export function sliderAnimateWidth(v) {
-  animateWidth = v > 0.05   // toggle: on except at the very bottom
+  animateWidth = v > 0.03   // on except at the very bottom of travel
 }
 
-var rotRate = 0.65   // revolutions per second at the default position
-//# min=0 max=1 step=0.01 default=0.5
+// Rotation: inverted + quadratic-eased, ~10x range, never stops.
+// time() interval 0.03 => one revolution ~2 s.
+var rotInterval = 0.032
+//# min=0 max=1 step=0.01 default=0.7
 export function sliderRotationSpeed(v) {
-  // eased (quadratic), never stopping: 5 s/rev up to 2 rev/s
-  rotRate = 0.2 + 1.8 * v * v
+  rotInterval = 0.06 - 0.054 * v * v   // 0.06 (slow) .. 0.006 (fast)
 }
 
-var colRate = 0.08   // hue cycles per second at the default position
-//# min=0 max=1 step=0.01 default=0.2
+// Hue drift: same inverted/eased shape, sub-second up to tens of seconds.
+var hueInterval = 0.2
+//# min=0 max=1 step=0.01 default=0.6
 export function sliderColorSpeed(v) {
-  // eased: a wheel in ~50 s at the bottom, well under a second at the top
-  colRate = 0.02 + 1.5 * v * v
+  hueInterval = 0.35 - 0.34 * v * v    // ~23 s .. ~0.65 s per hue cycle
 }
 
-var rot = 0
-var hueBase = 0
+function widthFromSetting(v) {
+  return 0.003 + v * v * (0.9 / numLines)
+}
+
 var halfWidth = 0.05
 
-function widthCurve(v) {
-  // hairline up to arms that flood the matrix; more lines -> thinner max
-  return 0.004 + v * v * 0.9 / numLines
-}
-
 export function beforeRender(delta) {
-  var dt = delta / 1000
-  rot = mod(rot + dt * rotRate, 1)
-  hueBase = mod(hueBase + dt * colRate, 1)
+  var angle = time(rotInterval) * PI2   // continuous rotation
+  var hueBase = time(hueInterval)       // shared hue drift
 
-  // slow triangle-wave breathing (~1 min per thick-thin cycle) when the
-  // animate toggle is on; phase offset starts it at a medium width
-  var w = animateWidth ? triangle(time(0.9) + 0.25) : widthSetting
-  halfWidth = widthCurve(w)
+  if (animateWidth) {
+    // triangle wave, ~one minute per thick-thin-thick cycle
+    halfWidth = widthFromSetting(triangle(time(0.9)))
+  } else {
+    halfWidth = widthFromSetting(widthSetting)
+  }
 
   for (var i = 0; i < numLines; i++) {
-    // arms spread over a half-turn (each spans the display through center)
-    var a = rot * PI2 + PI * i / numLines
-    var cx = cos(a)
-    var cy = sin(a)
-    dirX[i] = cx
-    dirY[i] = cy
-    x0[i] = 0.5 - cx * HALF_LEN
-    y0[i] = 0.5 - cy * HALF_LEN
-    hues[i] = hueBase + i / numLines
+    // Arms spread over a half-turn (each spans the display through center).
+    var a = angle + PI * i / numLines
+    lineCos[i] = cos(a)
+    lineSin[i] = sin(a)
+    lineHue[i] = hueBase + i / numLines
   }
 }
 
 export function render2D(index, x, y) {
   for (var i = 0; i < numLines; i++) {
-    var vx = x - x0[i]
-    var vy = y - y0[i]
-    // true distance to the *segment*: beyond either endpoint use the
-    // endpoint distance, else the perpendicular distance
-    var along = vx * dirX[i] + vy * dirY[i]
+    var c = lineCos[i]
+    var s = lineSin[i]
+    // Segment: (0.5, 0.5) +/- HALF_LEN * (c, s). Work from the center.
+    var px = x - 0.5
+    var py = y - 0.5
+
+    // Projection of the pixel onto the arm direction.
+    var t = px * c + py * s
     var d
-    if (along < 0) {
-      d = hypot(vx, vy)
-    } else if (along > SEG_LEN) {
-      d = hypot(vx - dirX[i] * SEG_LEN, vy - dirY[i] * SEG_LEN)
+    if (t > HALF_LEN) {
+      // beyond the far endpoint: distance to that endpoint
+      var ex = px - HALF_LEN * c
+      var ey = py - HALF_LEN * s
+      d = hypot(ex, ey)
+    } else if (t < -HALF_LEN) {
+      var fx = px + HALF_LEN * c
+      var fy = py + HALF_LEN * s
+      d = hypot(fx, fy)
     } else {
-      d = abs(vx * dirY[i] - vy * dirX[i])
+      // perpendicular distance to the infinite line
+      d = abs(px * s - py * c)
     }
+
     if (d < halfWidth) {
       // first matching arm wins; linear falloff to the edge
-      hsv(hues[i], 1, 1 - d / halfWidth)
+      hsv(lineHue[i], 1, 1 - d / halfWidth)
       return
     }
   }
-  hsv(0, 0, 0)
+  rgb(0, 0, 0)
 }

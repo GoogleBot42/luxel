@@ -2,50 +2,39 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "ChristmasStretch"; original source never consulted.
 
-// Holiday bands of red / green / dim white that slide along the strip while
-// one band shrinks and another grows over each ~2 s cycle; at the cycle
-// boundary the three colors rotate roles.
+// Bands of red, green, and dim white creep along the strip. Over each
+// ~2 s cycle the whole banding drifts one band-width toward the start
+// while the first band shrinks and the last widens (the "stretch").
+// On wrap the three colors rotate roles.
 
-const CYCLE_MS = 2000
-
-// Derive the block width from the strip so the look scales; the original
-// hardcoded a couple dozen pixels per block.
-var blockSize = floor(pixelCount / 9)
-if (blockSize < 1) blockSize = 1
+const CYCLE = 2000       // ms per slide/stretch cycle
+const BANDS = 9          // color bands across the strip (3 of each color)
 
 var elapsed = 0
+var rotation = 0         // which color currently holds the first role
 var phase = 0
-
-// roles[slot] = which color occupies that block position (0 red, 1 green, 2 dim white)
-var roles = array(3)
-roles[0] = 0
-roles[1] = 1
-roles[2] = 2
 
 export function beforeRender(delta) {
   elapsed += delta
-  if (elapsed >= CYCLE_MS) {
-    elapsed -= CYCLE_MS
-    // rotate which color occupies each block role
-    var tmp = roles[0]
-    roles[0] = roles[1]
-    roles[1] = roles[2]
-    roles[2] = tmp
+  if (elapsed >= CYCLE) {
+    elapsed -= CYCLE
+    rotation = (rotation + 1) % 3
   }
-  phase = elapsed / CYCLE_MS
-}
-
-function paintRole(r) {
-  if (r == 0) hsv(0, 1, 1)          // saturated red
-  else if (r == 1) hsv(0.333, 1, 1) // saturated green
-  else hsv(0, 0, 0.4)               // dim white accent
+  phase = elapsed / CYCLE
 }
 
 export function render(index) {
-  // Adding phase drifts the banding one block width per cycle; subtracting
-  // phase from the thresholds shrinks the first band and grows the last.
-  var b = (index / blockSize + phase) % 3
-  if (b < 1 - phase) paintRole(roles[0])
-  else if (b < 2 - phase) paintRole(roles[1])
-  else paintRole(roles[2])
+  // band coordinate reduced mod 3, drifting with the phase
+  var b = mod(index / pixelCount * BANDS + phase, 3)
+
+  // thresholds shrink with phase: first band narrows, last band grows
+  var role
+  if (b < 1 - phase) role = 0
+  else if (b < 2 - phase) role = 1
+  else role = 2
+
+  var c = (role + rotation) % 3
+  if (c == 0) hsv(0, 1, 1)         // saturated red
+  else if (c == 1) hsv(1 / 3, 1, 1) // saturated green
+  else hsv(0, 0, 0.4)              // dim white accent
 }

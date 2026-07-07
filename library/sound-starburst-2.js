@@ -2,105 +2,108 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "sound - Starburst 2"; original source never consulted.
 
-// Mirrored sets of comet heads sweep the strip in opposite directions,
-// crossing through each other. Trails linger while the music is loud and
-// rising; in quiet moments trails snuff out fast and the hue strobes.
-// With no sound input the strip idles dark.
+// Evenly spaced comet heads sweep one way while a mirrored set sweeps the
+// other, crossing and passing through each other, each leaving a decaying
+// trail. Rising sound energy flares the heads, lets trails linger, and
+// picks a slow calm hue drift; falling energy snuffs trails fast and
+// switches to a fast hue accumulator for a flickery rainbow shimmer.
+// With no sound input everything stays dark (flare gate is zero).
 
-// Sound sensor bindings (engine stubs them with zeros when absent)
-export var frequencyData = array(32)   // 32 bands, low frequencies first
+// Sensor bindings (engine stubs these with zeros when no sensor board)
+export var frequencyData = array(32)
 export var energyAverage = 0
 
-var SLOW_FADE = 0.99    // per-frame trail decay while energy is rising
-var FAST_FADE = 0.86    // per-frame trail decay while energy is falling
-var HEAD_SAT = 0.15     // freshly stamped heads are near-white
+// Per-pixel state
+var pix = array(pixelCount)   // brightness
+var fade = array(pixelCount)  // per-pixel decay coefficient
+var sat = array(pixelCount)   // saturation (heads stamp low, re-saturates)
+var age = array(pixelCount)   // written for parity with the original; unused
 
-// Per-pixel state buffers
-var vals = array(pixelCount)   // brightness
-var fades = array(pixelCount)  // per-pixel decay coefficient
-var sats = array(pixelCount)   // saturation (re-saturates as trail ages)
-var i
-for (i = 0; i < pixelCount; i++) fades[i] = FAST_FADE
-
-var numLeaders = 4
-var rainbow = 0
-
-var avgShort = 0    // short-window EMA of total spectrum energy
-var avgLong = 0     // ~double-window EMA
-var rising = 0      // beat / rising-energy detector
-
-var fastHue = 0     // cycles a few times per second (quiet passages)
-var slowHue = 0     // cycles over a few seconds (loud passages)
-var hue = 0         // active hue phase
-var pos = 0
+// Energy tracking: short and long exponential moving averages
+var avgShort = 0
+var avgLong = 0
+var rising = 0
 var flare = 0
 
-//# min=1 max=12 step=1 default=4
+// Hue phase accumulators
+var fastHue = 0   // cycles several times per second
+var slowHue = 0   // cycles over a few seconds
+var activeHue = 0
+
+// Decay constants (applied once per rendered frame, like the original —
+// decay speed is therefore frame-rate dependent, kept for fidelity)
+var slowFade = 0.985
+var fastFade = 0.86
+
+var heads = 4
+//# min=0 max=1 step=0.01 default=0.3
 export function sliderHowManyLeaders(v) {
-  numLeaders = clamp(floor(v + 0.5), 1, 12)
+  heads = floor(1 + v * 11)   // 1..12 head pairs
 }
 
+var rainbow = 0
 //# min=0 max=1 step=1 default=0
 export function sliderRainbow(v) {
-  rainbow = v > 0.5
+  rainbow = v > 0.5           // above halfway = many rainbow cycles
 }
 
+var t1 = 0
+
 export function beforeRender(delta) {
-  // Sweep position: one full traversal every ~5 seconds
-  pos = time(0.08)
+  // position phase: one traversal takes several seconds
+  t1 = time(0.08)                       // ~5.2 s per sweep
+  var t1r = 1 - t1                      // mirrored, opposite direction
 
-  // Hand-rolled hue phase accumulators, advanced by frame delta (ms)
-  fastHue = frac(fastHue + delta / 350)    // ~3 cycles per second
-  slowHue = frac(slowHue + delta / 4200)   // one cycle over a few seconds
+  // hue accumulators advanced by frame delta, wrapping at 1
+  fastHue = (fastHue + delta / 350) % 1   // ~3 cycles/s
+  slowHue = (slowHue + delta / 4200) % 1  // ~4 s per cycle
 
-  // Spectrum sums: lowest handful of bands + all the rest
-  var lows = 0, highs = 0
-  for (i = 0; i < 5; i++) lows += frequencyData[i]
-  for (i = 5; i < 32; i++) highs += frequencyData[i]
+  // spectrum sums: lowest handful of bands vs all the rest
+  var lows = 0, highs = 0, i = 0
+  for (i = 0; i < 4; i++) lows += frequencyData[i]
+  for (i = 4; i < 32; i++) highs += frequencyData[i]
   var total = lows + highs
 
-  // Two exponential moving averages; the short one crossing above the
-  // long one is the beat / rising-energy detector
-  avgShort = avgShort * 0.88 + total * 0.12
-  avgLong = avgLong * 0.94 + total * 0.06
+  // short window EMA and one with roughly twice the window
+  avgShort += (total - avgShort) * 0.25
+  avgLong += (total - avgLong) * 0.125
+
+  // beat / rising-energy detector
   rising = avgShort > avgLong
 
-  // Head brightness: overall energy scaled ~two orders of magnitude,
+  // head brightness: overall energy scaled ~two orders of magnitude,
   // gated to nonzero only while energy is rising
-  flare = rising ? clamp(energyAverage * 150, 0, 1) : 0
+  flare = rising ? clamp(energyAverage * 120, 0, 1) : 0
 
-  // Stamp the heads and their mirror images
-  var mirror = 1 - pos
-  for (i = 0; i < numLeaders; i++) {
-    var p = floor(frac(pos + i / numLeaders) * pixelCount)
-    vals[p] = flare
-    sats[p] = HEAD_SAT
-    fades[p] = SLOW_FADE
-
-    p = floor(frac(mirror + i / numLeaders) * pixelCount)
-    vals[p] = flare
-    sats[p] = HEAD_SAT
-    fades[p] = SLOW_FADE
+  // stamp the heads and their mirrors
+  for (i = 0; i < heads; i++) {
+    var p = floor(((t1 + i / heads) % 1) * pixelCount)
+    var q = floor(((t1r + i / heads) % 1) * pixelCount)
+    pix[p] = flare
+    sat[p] = 0.2            // whitish hot core
+    fade[p] = slowFade
+    age[p] = 0
+    pix[q] = flare
+    sat[q] = 0.2
+    fade[q] = slowFade
+    age[q] = 0
   }
 
-  // Calm slow hue while loud and rising; fast strobing hue when quiet
-  hue = rising ? slowHue : fastHue
+  // calm slow hue while loud and rising, fast strobing hue when quiet
+  activeHue = rising ? slowHue : fastHue
 }
 
 export function render(index) {
-  var h = hue
-  // Mild positional gradient when energy is falling: a few hue cycles
-  // spread across four strip-lengths
-  if (!rising) h += index / pixelCount * 0.75
-  // Strong positional gradient when the rainbow toggle is on
-  if (rainbow) h += index / pixelCount * 5
+  var h = activeHue
+  if (!rising) h += index / pixelCount * 0.75   // few cycles per 4 strips
+  if (rainbow) h += index / pixelCount * 6      // several full cycles
 
-  // Whitish hot cores re-saturate to full color over a handful of frames
-  sats[index] = min(1, sats[index] * 1.12)
+  // freshly stamped whitish heads re-saturate to full color as they age
+  sat[index] = min(1, sat[index] * 1.12)
 
-  // Trails collapse quickly whenever energy is falling
-  if (!rising) fades[index] = FAST_FADE
-  vals[index] = vals[index] * fades[index]
+  // trails collapse quickly whenever energy is falling
+  if (!rising) fade[index] = fastFade
+  pix[index] = pix[index] * fade[index]
 
-  hsv(h, sats[index], vals[index])
+  hsv(h, sat[index], pix[index])
 }

@@ -2,48 +2,48 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "glitch bands"; original source never consulted.
 
-// Rainbow gradient segments that shear, stretch and hard-wrap ("glitch"),
-// overlaid with desaturated flashes where two traveling triangle waves
-// collide, plus a hard bright/dim segmentation. Everything is deterministic
-// interference between incommensurate time ramps -- no randomness.
+// Rainbow gradient segments that shear, stretch and hard-wrap ("glitch")
+// as a slope factor sweeps through zero, overlaid with whitish desaturated
+// flashes where two opposing traveling triangle waves collide, plus a hard
+// bright/dim segmentation where one wave exceeds the other. Deterministic
+// interference between incommensurate time ramps -- no randomness at all.
 
-var baseHue, modulus, slope, w1t, w2t
+var baseHue = 0, modulus = 0.2, slope = 0, tW1 = 0, tW2 = 0
 
 export function beforeRender(delta) {
-  // slow sine swings the base hue back and forth (~5 s cycle)
-  baseHue = 0.5 + 0.35 * sin(time(0.08) * PI2)
+  // base hue swings back and forth through part of the wheel (~6.5 s)
+  baseHue = 0.35 * sin(time(0.1) * PI2)
 
-  // band wrap modulus: smallish, varying by ~half its own size (~6 s)
-  modulus = 0.18 + 0.09 * triangle(time(0.09))
+  // hue-band wrap modulus: smallish, varying by about half its size (~5 s)
+  modulus = 0.18 + 0.09 * triangle(time(0.08))
 
-  // spatial slope: slow triangle (~26 s) + moderate sinusoid (~10 s);
-  // sweeps from mildly negative through zero to strongly positive
-  slope = (triangle(time(0.4)) * 2 - 0.5) * 3 + 1.2 * sin(time(0.15) * PI2)
+  // spatial slope: slow triangle (tens of seconds) + moderate sinusoid
+  // (~10 s); sweeps from mildly negative through zero to strongly positive
+  slope = (triangle(time(0.5)) - 0.35) * 4 + 1.5 * sin(time(0.16) * PI2)
 
-  // phases for the two traveling waves
-  w1t = time(0.05)    // ~3.3 s drift, one direction
-  w2t = time(0.016)   // ~1 s, the other direction
+  // drivers for the two traveling waves
+  tW1 = time(0.05)    // ~3.3 s cycle
+  tW2 = time(0.015)   // ~1 s cycle, opposite direction
 }
 
 export function render(index) {
-  var pos = index / pixelCount
-  var d = pos - 0.5   // signed distance from strip center
+  var p = index / pixelCount - 0.5   // signed distance from strip center
 
-  // hue offset = position * slope, wrapped modulo the band modulus.
-  // `%` keeps the sign of its left operand, so the two halves of the
-  // strip wrap in mirrored directions -- that is the glitch-band trick.
-  var h = baseHue + (d * slope) % modulus
+  // repeating gradient segments with hard wrap discontinuities: modulo the
+  // hue OFFSET, not the position; % keeps the sign of its left operand so
+  // the two halves of the strip wrap in mirrored directions
+  var hue = baseHue + (p * slope) % modulus
 
-  // wave one: several repetitions, sharpened by squaring
-  var v1 = pow(triangle(pos * 4 + w1t), 2)
-  // wave two: ~one repetition, opposite direction, sharpened hard
-  var v2 = pow(triangle(pos - w2t), 4)
+  // wave one: several reps across the strip, drifting one way, squared
+  var w1 = pow(triangle(p * 4 - tW1), 2)
+  // wave two: ~one rep, moving the other way faster, sharpened harder
+  var w2 = pow(triangle(index / pixelCount + tW2), 4)
 
-  // white-hot flashes where the wave product lands mid-range
-  var s = 1 - triangle(v1 * v2)
+  // desaturated flashes where the waves overlap at moderate strength
+  var sat = 1 - triangle(w1 * w2)
 
-  // hard bright/dim segmentation; the bright side deliberately overdrives
-  var v = v1 > v2 ? 1.5 : 0.55
+  // hard bright/dim segmentation; bright side overdrives and clamps
+  var val = w1 > w2 ? 1.5 : 0.5
 
-  hsv(h, s, v)
+  hsv(hue, sat, val)
 }

@@ -3,83 +3,83 @@
 // community pattern "sound - spectro kalidastrip"; original source never
 // consulted.
 
-// Music-reactive spectrum painted along the strip through a kaleidoscope
-// fold: normalized position is folded twice with triangle waves (with a
-// slowly scrolling phase between the folds), so the spectrum mirrors around
-// moving fold points. Per band, the rolling average is subtracted from the
-// live level, turning the display into an onset detector; hits flare, decay
-// through a persistence buffer, and bloom toward white. A PI auto-gain
-// controller targets roughly a fifth of the strip lit, so it works at any
-// room volume without a knob. Idles dark in silence.
+// Music-reactive spectrum with a sliding kaleidoscope fold. Per-band
+// transients (live energy above a rolling average) flare rainbow regions
+// that decay as short trails; a PI auto-gain controller keeps roughly a
+// fifth of the strip lit regardless of room volume. All-zero audio input
+// simply renders dark.
 
-export var frequencyData = array(32)
+export var frequencyData = array(32)   // 32-band spectrum, low bands first
 export var energyAverage
 export var maxFrequency
 export var maxFrequencyMagnitude
 
-var nBands = arrayLength(frequencyData)
+var bands = arrayLength(frequencyData)
 
-var targetFill = 0.2   // aim: ~1/5 of the strip lit
-var kp = 0.4           // proportional gain (a bit larger than integral)
-var ki = 0.25          // integral gain
-var errSum = 30        // accumulated error; starts moderately positive
-var sensitivity = 10
-var feedback = 0       // sum of clamped per-pixel brightness, last frame
+// --- tuning ---------------------------------------------------------------
+var TARGET_FILL = 0.2      // aim: ~1/5 of the strip lit
+var KP = 0.4               // proportional gain
+var KI = 0.06              // integral gain (a bit smaller than KP)
+var INTEGRAL_MAX = 300
+var AVG_WINDOW = 1500      // ms — rolling-average time window
+var AVG_EPS = 0.0002       // rolling averages never reach zero
+var SCROLL_INTERVAL = 0.035 // time() interval: fold slides over ~2.3 s
+var ATTACK_GAIN = 4        // live energy amplification before subtracting avg
+var DECAY = 0.75           // trail persistence per frame
+var FEEDBACK_CAP = 1       // per-pixel clamp feeding the controller
 
-var avg = array(nBands)          // sensitivity-scaled EMA per band
-var pix = array(pixelCount)      // per-pixel persistence buffer (trails)
+// --- state ----------------------------------------------------------------
+var avg = array(bands)       // per-band rolling average (sensitivity-scaled)
+var pix = array(pixelCount)  // per-pixel persistence buffer (trails)
+var integral = 40            // PI integral term, starts moderately positive
+var sensitivity = 1
+var accum = 0                // brightness fed back from last frame's render
 var scroll = 0
 
-var bi
-for (bi = 0; bi < nBands; bi++) avg[bi] = 0.001
-
 export function beforeRender(delta) {
-  // PI auto-gain from last frame's lit fraction
-  var err = targetFill - feedback / pixelCount
-  errSum = clamp(errSum + err, 0, 400)
-  sensitivity = max(0, kp * err + ki * errSum)
-  feedback = 0
+  // 1. Auto-gain: PI controller on last frame's lit fraction.
+  var err = TARGET_FILL - accum / pixelCount
+  integral = clamp(integral + err, 0, INTEGRAL_MAX)
+  sensitivity = max(0, KP * err + KI * integral)
+  accum = 0
 
-  // frequency-to-position mapping slides over a couple of seconds
-  scroll = time(2.2 / 65.536)
+  // 2. Slide the kaleidoscope fold back and forth.
+  scroll = time(SCROLL_INTERVAL)
 
-  // rolling average: EMA over ~1.5 s of sensitivity-scaled energy
-  var alpha = min(1, delta / 1500)
-  var i
-  for (i = 0; i < nBands; i++) {
-    var a = avg[i] + (frequencyData[i] * sensitivity - avg[i]) * alpha
-    avg[i] = max(0.0002, a)
+  // 3. Update each band's rolling average toward the scaled live energy.
+  var k = min(1, delta / AVG_WINDOW)
+  for (var b = 0; b < bands; b++) {
+    avg[b] = max(AVG_EPS, avg[b] + (frequencyData[b] * sensitivity - avg[b]) * k)
   }
 }
 
 export function render(index) {
   var pos = index / pixelCount
 
-  // double triangle fold = the kaleidoscope; scroll slides the mirrors
-  var band = triangle(triangle(pos * 2) + scroll) * (nBands - 1.001)
-  var b0 = floor(band)
-  var f = band - b0
-  var b1 = b0 + 1
-  if (b1 >= nBands) b1 = nBands - 1
+  // Nested triangle fold: mirrors the spectrum around moving fold points.
+  var f = triangle(triangle(pos * 2) + scroll) * (bands - 1)
 
-  var live = frequencyData[b0] * (1 - f) + frequencyData[b1] * f
-  var norm = avg[b0] * (1 - f) + avg[b1] * f
+  // Linear interpolation between adjacent bands, live and averaged.
+  var b0 = floor(f)
+  var b1 = min(bands - 1, b0 + 1)
+  var ft = f - b0
+  var live = frequencyData[b0] + (frequencyData[b1] - frequencyData[b0]) * ft
+  var norm = avg[b0] + (avg[b1] - avg[b0]) * ft
 
-  // transient above the recent norm, boosted where the band is usually busy
-  var boost = 0.1 + 3 * min(norm, 1)
-  var v = (live * 3 * sensitivity - norm) * boost
-  if (v < 0) v = 0
-  v = min(v, 2)
-  v = v * v // square for contrast: punchy peaks
+  // Transient above the recent norm, emphasized where the band is
+  // generally active, squared for contrast.
+  var v = (live * ATTACK_GAIN * sensitivity - norm) * (0.4 + norm * 8)
+  v = max(0, v)
+  v = v * v
 
-  // fast attack, slow decay trails
-  var p = pix[index] * 0.75 + v
-  pix[index] = p
+  // Fast attack, slow decay: blend into the persistence buffer.
+  v = pix[index] = pix[index] * DECAY + v
 
-  feedback += min(p, 2) // gain-controller feedback, clamped small
+  // Feedback for the auto-gain controller.
+  accum += min(v, FEEDBACK_CAP)
 
-  // rainbow keyed to frequency + a quarter-turn gradient along the strip
-  var hue = band / nBands + pos * 0.25
-  var sat = clamp(2 - p, 0, 1) // overdriven peaks whiten
-  hsv(hue, sat, min(p, 1))
+  // Rainbow keyed to frequency, plus a mild gradient along the strip;
+  // overdriven peaks desaturate toward white.
+  var h = f / (bands - 1) + pos * 0.25
+  hsv(h, clamp(2 - v, 0, 1), min(v, 1))
 }

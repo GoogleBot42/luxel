@@ -2,87 +2,87 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "multimap simpledemo"; original source never consulted.
 
-// A minimal "multiple sub-maps" framework: parallel, index-aligned lists of
-// region tests and mini-patterns. First region to claim a pixel wins (earlier
-// entries are on top); unclaimed pixels are painted black explicitly.
-// To extend: bump NUM_REGIONS and append a test + pattern pair.
-var NUM_REGIONS = 2
+// Framework demo: partition one mapped display into named regions, each
+// running its own mini-pattern. Region tests and patterns live in parallel,
+// index-aligned lists (append your own to grow it). First match wins, so
+// earlier regions layer on top; unmatched pixels are painted black.
+
+const NUM_REGIONS = 2
 var regionTests = array(NUM_REGIONS)
 var regionPatterns = array(NUM_REGIONS)
 
-// Shared out-parameters. Seeded with the pixel's real values before each
-// test; a test may overwrite them to re-express the pixel in its region's
-// local frame. (Index/count remap hooks exist but are unused in this demo.)
-var outIndex = 0
-var outCount = 0
-var outX = 0
-var outY = 0
+// shared out-parameters: a region test sets `matched`, and may overwrite the
+// remapped index / count / coordinates to re-express the pixel in its own
+// local frame before its pattern runs
+var matched = 0
+var rIndex = 0
+var rCount = 0
+var rX = 0
+var rY = 0
 
-var clock = 0
-var bluePulse = 0
+var t1 = 0
+var t2 = 0
 
-export function beforeRender(delta) {
-  clock += delta / 1000
-  if (clock > 3600) clock -= 3600
-  bluePulse = wave(time(0.023))   // synchronized ~1.5 s pulse
-}
+// --- region 1: disc at panel center, radius ~1/5 of the panel -------------
+const DISC_R2 = 0.2 * 0.2  // squared radius: circle test without a sqrt
 
-// Region 1: disc at panel center, radius ~1/5 of the panel.
-// Squared-distance test: no square root needed. Remaps coordinates to be
-// center-relative (this demo pattern happens not to use them).
-function testCenterDisc(index, x, y) {
+function testDisc(index, x, y) {
   var cx = x - 0.5
   var cy = y - 0.5
-  if (cx * cx + cy * cy < 0.04) {   // 0.2 squared
-    outX = cx
-    outY = cy
-    return 1
+  if (cx * cx + cy * cy < DISC_R2) {
+    matched = 1
+    rX = cx // pass center-relative coordinates through
+    rY = cy
   }
-  return 0
 }
 
-// Region 2: the quadrant where both coordinates are below their midpoints.
-// No remapping.
-function testLowQuadrant(index, x, y) {
-  return x < 0.5 && y < 0.5
+function patternDisc(index, x, y) {
+  // synchronized blue pulse, ~1.3 s period
+  hsv(0.667, 1, wave(t1))
 }
 
-// Pattern 1: blue, whole region pulsing in unison.
-function patternBluePulse(index, x, y) {
-  hsv(0.667, 1, bluePulse)
+// --- region 2: the quadrant where both coordinates are below midpoint -----
+function testQuadrant(index, x, y) {
+  if (x < 0.5 && y < 0.5) matched = 1 // no remapping
 }
 
-// Pattern 2: green, pulse period offset per pixel by the coordinate product
-// so neighbors drift in and out of phase -> shimmer.
-function patternGreenShimmer(index, x, y) {
-  hsv(0.333, 1, wave(clock / (1.5 + x * y * 2)))
+function patternQuadrant(index, x, y) {
+  // green pulse whose rate varies with the product of the coordinates:
+  // nearby pixels drift in and out of phase — a gentle shimmer
+  hsv(0.333, 1, wave(t2 * (8 + rX * rY * 16)))
 }
 
-regionTests[0] = testCenterDisc
-regionTests[1] = testLowQuadrant
-regionPatterns[0] = patternBluePulse
-regionPatterns[1] = patternGreenShimmer
+regionTests[0] = testDisc
+regionPatterns[0] = patternDisc
+regionTests[1] = testQuadrant
+regionPatterns[1] = patternQuadrant
+
+export function beforeRender(delta) {
+  t1 = time(0.02)
+  t2 = time(0.3)
+}
 
 export function render2D(index, x, y) {
   var i, test, pat
   for (i = 0; i < NUM_REGIONS; i++) {
     // seed the out-parameters with the pixel's real values
-    outIndex = index
-    outCount = pixelCount
-    outX = x
-    outY = y
+    matched = 0
+    rIndex = index
+    rCount = pixelCount
+    rX = x
+    rY = y
     test = regionTests[i]
-    if (test(index, x, y)) {        // first match wins
+    test(rIndex, rX, rY)
+    if (matched) {
       pat = regionPatterns[i]
-      pat(outIndex, outX, outY)
-      return
+      pat(rIndex, rX, rY)
+      return // first match wins
     }
   }
-  rgb(0, 0, 0)                      // no stale colors on unclaimed pixels
+  rgb(0, 0, 0) // explicit black so stale colors never linger
 }
 
-// Token 1D fallback: the strip becomes one row (y pinned at 0), so only the
-// green shimmer region can match.
+// token 1D fallback: strip position as x, y pinned to zero
 export function render(index) {
   render2D(index, index / pixelCount, 0)
 }

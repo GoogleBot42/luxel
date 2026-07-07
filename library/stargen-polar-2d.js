@@ -1,289 +1,396 @@
 // name: StarGen polar 2D
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "StarGen polar 2D"; original source never consulted.
-
+//
 // A self-advancing playlist of twelve polar "star/figure" animations for a
-// circular disc with a POLAR pixel map: coordinate 1 = radius (0 center,
-// 1 rim), coordinate 2 = angle in turns, coordinate 3 = azimuth from the
-// pole (0.5 = equatorial plane). Consecutive modes hand over via a
-// stochastic per-pixel "shimmer" dissolve rather than an alpha blend.
+// disc whose pixel map is stored in normalized SPHERICAL/POLAR coordinates:
+// first coordinate = radius (0 center .. 1 rim), second = angle in turns,
+// third = azimuth from the pole (0.5 = equatorial plane). render2D takes
+// the equatorial slice; render(index) is a degenerate radial fallback.
+// Consecutive modes crossfade with a stochastic per-pixel "shimmer" dither.
 
-var NUM_MODES = 12
+var NUMMODES = 12
+var FADESECS = 2        // constant absolute crossfade duration
 
-var tNow = 0
-var dwellS = 10          // seconds per mode
-var modeOverride = 0     // 0 = auto playlist, 1..12 pins a mode
-var rotOff = 0           // physical-orientation rotation, in turns
-var lineHw = 0.1         // proximity half-width for the curve drawing
+var dwell = 8           // seconds per mode
+var modeOverride = 0    // 0 = auto playlist, 1..12 = pinned mode
+var rotOffset = 0       // constant added to the angular coordinate
+var baseW = 0.125       // default proximity half-width (~1/8 unit)
 
+var clock = 0           // playlist position, in mode units
+var dt = 0.016          // seconds elapsed this frame
 var curMode = 0
 var nextMode = 1
-var fadeP = 0            // probability a pixel is drawn by the next mode
+var inFade = 0
+var fadeEase = 0
 
-//# min=0 max=1 step=0.077 default=0
+//# min=0 max=1 step=0.0769 default=0
 export function sliderModeOverride(v) {
-  modeOverride = floor(v * (NUM_MODES + 0.999))
+  // 0 = playlist; 1..12 pins a mode
+  modeOverride = floor(v * 12.001)
+  if (modeOverride > NUMMODES) modeOverride = NUMMODES
 }
 
-//# min=0 max=1 step=0.01 default=0.15
+//# min=0 max=1 step=0.01 default=0.36
 export function sliderDwellTime(v) {
-  dwellS = 0.5 + v * 63
+  dwell = 0.3 + v * v * 60   // nearly instant .. about a minute
 }
 
 //# min=0 max=1 step=0.01 default=0
 export function sliderRotationOffset(v) {
-  rotOff = v
+  rotOffset = v
 }
 
-//# min=0.02 max=0.3 step=0.01 default=0.1
+//# min=0 max=1 step=0.01 default=0.35
 export function sliderLineWidth(v) {
-  lineHw = max(0.02, v)
+  baseW = 0.02 + v * 0.3
 }
 
-// ---- shared helpers ------------------------------------------------
+// ---- helpers -------------------------------------------------------------
 
-// Slow sinusoidal oscillator, 0..1, with a period in seconds.
+// Slow sinusoidal oscillator, 0..1, with a period in seconds
 function osc(period) {
-  return wave(tNow / period)
+  return wave(time(period / 65.536))
 }
 
-// Proximity: 1 when v == target, falling to 0 once they differ by more
-// than hw; falloff squared for a gamma-corrected soft edge.
-function near(v, target, hw) {
+// Sawtooth 0..1 with a period in seconds
+function saw(period) {
+  return time(period / 65.536)
+}
+
+// Proximity line helper: 1 when v == target, falling to 0 once they differ
+// by more than half-width w; falloff squared for a gamma-corrected edge.
+function near(v, target, w) {
   var d = abs(v - target)
-  if (d >= hw) return 0
-  d = 1 - d / hw
-  return d * d
+  if (d >= w) return 0
+  var t = 1 - d / w
+  return t * t
 }
 
-// Same, for wrapped (angular, 0..1) quantities via triangle distance.
-function nearWrap(v, target, hw) {
-  var d = v - target
-  d -= floor(d)
-  if (d > 0.5) d = 1 - d
-  if (d >= hw) return 0
-  d = 1 - d / hw
-  return d * d
+// Wrapped variant for angular quantities (values in turns): triangle-wave
+// distance so values just below 1 and just above 0 read as close.
+function nearWrap(v, target, w) {
+  var d = triangle(v - target) * 0.5
+  if (d >= w) return 0
+  var t = 1 - d / w
+  return t * t
 }
 
-// Star-polygon family: n points, pinch = 1 gives the regular polygon,
-// larger pinch pulls the edges inward into a star. Returns radius (max 1)
-// at angle theta (radians).
-function starR(theta, n, pinch) {
-  var a = acos(cos(n * theta)) / n * pinch
-  return cos(PI * pinch / n) / cos(a)
+// Star-polygon family: n points, pinch factor k (k=1 is the regular n-gon,
+// larger k pinches the edges inward into a star), circumradius scl.
+// Reciprocal cosine of a scaled arccos-of-cosine of n times the angle.
+function starR(a, n, k, scl) {
+  var d = acos(cos(n * a * PI2)) / n        // 0..PI/n from nearest point
+  return scl * cos(PI * k / n) / cos(k * (PI / n - d))
 }
 
-// ---- mode 0: orbits / ellipse --------------------------------------
-var eA = 0.4, eB = 0.4, eRot = 0, eSkew = 0, eSat = 0.85, eHue = 0.075
+// ---- mode 0: orbits / ellipse --------------------------------------------
 
-// ---- mode 1: six-lobed sinus star ----------------------------------
-var sBase = 0.5
+var e0a = 0.4, e0b = 0.4, e0rot = 0, e0skew = 0, e0hue = 0.07, e0sat = 1
 
-// ---- mode 3: Star of David (kaleidoscopic) -------------------------
-var sdC = 0.35, sdRot = 0
+function setup0() {
+  e0a = 0.3 + 0.35 * osc(7)                 // axes breathe independently
+  e0b = 0.3 + 0.35 * osc(11)
+  e0rot = frac(e0rot + (0.02 + 0.06 * osc(23)) * dt)  // slowly varying spin
+  e0skew = max(0, osc(31) - 0.8) * 4        // occasional galaxy-spiral smear
+  e0hue = 0.07 + max(0, osc(17) - 0.9) * 0.8 // hue drifts only at one extreme
+  e0sat = 0.75 + 0.25 * min(1, abs(e0a - e0b) * 6) // dips when near-circular
+}
 
-// ---- mode 4: Star over Bethlehem -----------------------------------
-var bPw = 1, bMask = 0
+function draw0(index, r, a) {
+  if (r < 0.001) {
+    // the exact center pixel: a little colorful heart, half bright
+    hsv(saw(20), 1, 0.5)
+    return
+  }
+  var aa = (a - e0rot) * PI2 + e0skew * r
+  var er = e0a * e0b / hypot(e0b * cos(aa), e0a * sin(aa))
+  hsv(e0hue, e0sat, near(r, er, baseW))
+}
 
-// ---- mode 5: pentagram ----------------------------------------------
-var pScale = 0.6, penHw = 0.07
+// ---- mode 1: six-lobed sinus star ----------------------------------------
 
-// ---- mode 8: heart ---------------------------------------------------
-var hScale = 0.45, hSat = 1
+var s1base = 0.5
 
-// ---- mode 9: bird flap -----------------------------------------------
-var bFlap = 0, bBend = 0.6, bGlow = 1
+function setup1() {
+  s1base = 0.42 + 0.18 * osc(9)             // slowly breathing base radius
+}
 
-// ---- mode 10: rainbow spirals ---------------------------------------
-var spS = 1, spM = 0.3, spArms = 2
+function draw1(index, r, a) {
+  var target = s1base + 0.13 * cos(PI2 * (a - saw(5)) * 6)
+  hsv(0, 0, near(r, target, baseW * 1.3))   // pure white snowflake
+}
 
-// ---- mode 11: snowglobe (1D sparks over pixel index) -----------------
-var NSPARKS = 20
-var skPos = array(NSPARKS)
-var skVel = array(NSPARKS)
-var energy = array(pixelCount)
-var skMaxV = pixelCount / 2
-var skInit = 0
+// ---- mode 2: sinus shimmer ------------------------------------------------
+
+function draw2(index, r, a) {
+  // same construction, angular frequency several times higher — reads as
+  // snowy sparkling texture near the rim rather than a figure
+  var target = 0.82 + 0.1 * cos(PI2 * (a - saw(4)) * 24)
+  hsv(0, 0, near(r, target, baseW))
+}
+
+// ---- mode 3: Star of David (kaleidoscopic) --------------------------------
+
+var s3scale = 0.35, s3rot = 0, s3drift = 0
+
+function setup3() {
+  s3scale = 0.28 + 0.18 * osc(13)           // chord scale breathes
+  s3rot = saw(37)                           // rotation drifts
+  s3drift = (osc(19) - 0.5) * 0.55          // radians
+}
+
+function draw3(index, r, a) {
+  // twelve alternating sectors; alternate sectors mirror the polar line
+  // equation of a straight chord: scale / cos(offset angle)
+  var aa = frac(a + s3rot)
+  var sector = floor(aa * 12)
+  var offR = (frac(aa * 12) - 0.5) * PI2 / 12
+  if (mod(sector, 2) == 1) offR = -offR
+  var target = s3scale / cos(offR + s3drift)
+  hsv(0, 0, near(r, target, baseW))
+}
+
+// ---- mode 4: Star over Bethlehem ------------------------------------------
+
+var s4pow = 1, s4diag = 0
+
+function setup4() {
+  s4pow = 0.5 + 2.5 * osc(9)                // breathing radial shaping power
+  s4diag = triangle(saw(6))                 // diagonal rays fade in and out
+}
+
+function draw4(index, r, a) {
+  var dA = triangle(a * 8) / 16             // turns to nearest of 8 rays
+  var v = near(dA, 0, baseW * 0.35)         // thin radial rays
+  v = v * pow(max(0, 1 - r * 0.92), s4pow)  // length/spread ~ radius^power
+  var k = floor(frac(a + 1 / 16) * 8)       // which ray is nearest
+  if (mod(k, 2) == 1) v = v * s4diag        // diagonals: 4-ray <-> 8-ray star
+  // white-hot center shading to orange, warmer toward the rim
+  hsv(0.04 + 0.05 * r, min(1, r * r * 4), v)
+}
+
+// ---- mode 5: pentagram ------------------------------------------------------
+
+var s5scale = 0.6, s5walk = 0.1
+
+function setup5() {
+  // scale swells/shrinks over many minutes: damped-sinc-like function of a
+  // very slow triangle LFO — gentle drift punctuated by big swings
+  var u = (triangle(saw(280)) - 0.5) * 14
+  s5scale = 0.6 + 0.3 * sin(u) / (abs(u) + 1.2)
+  // stroke weight wanders randomly within bounds
+  s5walk = clamp(s5walk + random(0.02) - 0.01, 0.04, 0.18)
+}
+
+function draw5(index, r, a) {
+  var target = starR(a - saw(50), 5, 2, s5scale)
+  hsv(0, 0, near(r, target, s5walk * (s5scale + 0.5)))
+}
+
+// ---- mode 6: decagram -------------------------------------------------------
+
+function draw6(index, r, a) {
+  var v
+  if (r < 0.28) {
+    v = 1                                    // inner third filled solid
+  } else {
+    var target = starR(a - saw(300), 10, 3, 0.78) // extremely slow spin
+    v = near(r, target, baseW * 2.2)         // quite thick stroke
+  }
+  hsv(0, 0, v)
+}
+
+// ---- mode 7: hexagram -------------------------------------------------------
+
+function draw7(index, r, a) {
+  var target = starR(a - saw(35), 6, 2, 0.72)
+  hsv(0, 0, near(r, target, baseW * 1.5))
+}
+
+// ---- mode 8: heart ----------------------------------------------------------
+
+var h8scale = 0.55, h8sat = 1
+
+function setup8() {
+  var pulse = osc(8)
+  h8scale = 0.45 + 0.25 * pulse
+  h8sat = 0.55 + 0.45 * pulse               // whitens as it shrinks
+}
+
+// A known polar heart: sine terms plus a square-root-of-absolute-cosine lobe
+function heartR(th) {
+  var s = sin(th)
+  return s * sqrt(abs(cos(th))) / (s + 1.4) - 2 * s + 2
+}
+
+function draw8(index, r, a) {
+  var th = (a + 0.5) * PI2                  // half-turn shift: point it right
+  var target = h8scale * heartR(th) * 0.25
+  hsv(0, h8sat, near(r, target, baseW))
+}
+
+// ---- mode 9: bird flap ------------------------------------------------------
+
+var b9dih = 0, b9bend = 1, b9glow = 1
+
+function setup9() {
+  b9dih = (abs(cos(PI2 * saw(4))) - 0.35) * 1.1  // wingbeat dihedral angle
+  b9bend = 0.75 + 0.25 * osc(7)                   // wing bend breathes
+  b9glow = 0.6 + 0.4 * osc(4.5)                   // ember brightness breathes
+}
+
+function draw9(index, r, a) {
+  var da = frac(a - 0.25 + 0.5) - 0.5       // signed turns from the heading
+  var arg = abs(da) * PI2 * b9bend - b9dih
+  var co = cos(arg)
+  var v = 0
+  if (co > 0.12) {                          // cull the chord's blow-up zone
+    var target = 0.22 / co
+    // line width grows with radius: wingtips softer/broader
+    v = near(r, target, baseW * (0.5 + 1.8 * r)) * b9glow
+  }
+  hsv(0.05, 0.9, v)                         // warm ember orange
+}
+
+// ---- mode 10: rainbow spirals -----------------------------------------------
+
+var sp1 = 1, sp2 = 0.3, sp3 = 2, spPhase = 0
+
+function setup10() {
+  sp1 = 1 + 2 * osc(33)                     // radius scale LFO
+  sp2 = 0.18 + 0.3 * osc(47)                // modulo LFO
+  sp3 = floor(1 + osc(26) * 3.99)           // arm count LFO
+  spPhase = saw(15)                         // winding motion
+}
+
+function draw10(index, r, a) {
+  var ph = mod(r * sp1 + spPhase, sp2) / sp2
+  var v = nearWrap(ph, frac(a * sp3), baseW * 1.2)
+  // perceptual rainbow correction: sine reshaping that de-emphasizes the
+  // overlong green band
+  var h0 = frac(r * 0.7 + a + saw(30))
+  hsv(frac(h0 - 0.1 * sin(PI2 * h0)), 1, v)
+}
+
+// ---- mode 11: snowglobe (1D sparks over the pixel index) ---------------------
+
+var SPARKN = 20
+var spkPos = array(SPARKN)
+var spkVel = array(SPARKN)
+var energy = array(pixelCount)  // per-pixel accumulation buffer
 
 function respawnSpark(i) {
-  skPos[i] = random(pixelCount)
-  skVel[i] = (random(2) - 1) * skMaxV   // either direction
+  spkPos[i] = random(pixelCount)
+  spkVel[i] = (random(2) - 1) * pixelCount * 0.4  // either direction
 }
 
-function setupMode(m, delta) {
-  if (m == 0) {
-    eA = 0.28 + 0.22 * osc(7.3)
-    eB = 0.28 + 0.22 * osc(11.1)
-    eRot += delta / 1000 * (0.03 + 0.09 * osc(19))   // slowly varying spin
-    eSkew = max(0, osc(31) - 0.85) * 6               // occasional spiral smear
-    eSat = 0.68 + 0.27 * min(1, abs(eA - eB) * 5)    // dips when circular
-    eHue = 0.075 + max(0, osc(13) - 0.9) * 0.8       // brief drift at one extreme
-  } else if (m == 1) {
-    sBase = 0.5 + 0.12 * osc(8.2)
-  } else if (m == 3) {
-    sdC = 0.28 + 0.16 * osc(12.7)   // chord scale breathes
-    sdRot = 0.2 * osc(41)           // rotation drifts
-  } else if (m == 4) {
-    bPw = 0.6 + 1.8 * osc(16)       // ray spread exponent breathes
-    bMask = triangle(tNow / 6)      // diagonal rays fade in/out
-  } else if (m == 5) {
-    // damped-sinc-flavored size envelope on a very slow triangle LFO:
-    // long gentle drift punctuated by big swings
-    var x = 0.4 + triangle(tNow / 420) * 9
-    pScale = clamp(0.55 + 0.35 * sin(x * PI2) / x, 0.15, 0.95)
-    // stroke weight wanders randomly within bounds
-    penHw += random(0.006) - 0.003
-    penHw = clamp(penHw, 0.03, 0.12)
-  } else if (m == 8) {
-    var pulse = osc(5.5)
-    hScale = 0.35 + 0.18 * pulse
-    hSat = 0.55 + 0.45 * pulse      // whitens as it shrinks
-  } else if (m == 9) {
-    bFlap = abs(cos(tNow * PI2 / 2.8))   // the wingbeat
-    bBend = 0.5 + 0.35 * osc(9.3)
-    bGlow = 0.55 + 0.45 * osc(6.1)
-  } else if (m == 10) {
-    spS = 0.8 + 2.2 * osc(27)
-    spM = 0.18 + 0.35 * osc(43)
-    spArms = 1 + floor(3 * osc(61))
-  } else if (m == 11) {
-    var i
-    if (!skInit) {
-      skInit = 1
-      for (i = 0; i < NSPARKS; i++) respawnSpark(i)
-    }
-    var dt = delta / 1000 * 0.1     // deliberately slowed 10x
-    var friction = pixelCount / 3   // friction inversely felt vs. strip length
-    arrayReplace(energy, 0)         // accumulation buffer cleared every frame
-    for (i = 0; i < NSPARKS; i++) {
-      var v = skVel[i]
-      if (v > 0) v = max(0, v - friction * dt)
-      else v = min(0, v + friction * dt)
-      skVel[i] = v
-      skPos[i] += v * dt
-      if (abs(v) < 0.4 || skPos[i] < 0 || skPos[i] >= pixelCount) {
-        respawnSpark(i)
-      } else {
-        energy[floor(skPos[i])] += abs(v) / skMaxV * 1.4
-      }
+var _si = 0
+while (_si < SPARKN) {
+  respawnSpark(_si)
+  _si = _si + 1
+}
+
+function setup11() {
+  var t = dt * 0.1                          // time step slowed 10x on purpose
+  var friction = 600 / pixelCount           // friction ~ 1/pixelCount
+  arrayReplace(energy, 0)                   // buffer cleared every frame
+  for (var i = 0; i < SPARKN; i++) {
+    spkVel[i] = spkVel[i] * (1 - friction * t)
+    spkPos[i] = spkPos[i] + spkVel[i] * t
+    if (spkPos[i] < 0 || spkPos[i] >= pixelCount || abs(spkVel[i]) < pixelCount * 0.02) {
+      respawnSpark(i)
+    } else {
+      // deposit speed as energy
+      energy[floor(spkPos[i])] += abs(spkVel[i]) * t
     }
   }
 }
 
-function drawMode(m, index, r, a) {
-  var th, v, d
-  if (m == 0) {
-    // orbits: a breathing, spinning, occasionally skewed ellipse
-    if (r < 0.02) {
-      hsv(time(0.3), 1, 0.5)        // colorful little heart at dead center
-      return
-    }
-    th = frac(a + eRot + eSkew * r * 0.15) * PI2
-    var ca = eB * cos(th)
-    var sa = eA * sin(th)
-    var rE = eA * eB / sqrt(ca * ca + sa * sa)
-    hsv(eHue, eSat, near(r, rE, lineHw))
-  } else if (m == 1) {
-    // six-lobed sinus star, pure white
-    v = near(r, sBase + 0.14 * cos(PI2 * (a * 6 + tNow * 0.18)), lineHw)
-    hsv(0, 0, v)
-  } else if (m == 2) {
-    // sinus shimmer: same construction, lobes many times finer, near rim
-    v = near(r, 0.84 + 0.1 * cos(PI2 * (a * 37 + tNow * 0.3)), lineHw)
-    hsv(0, 0, v)
-  } else if (m == 3) {
-    // Star of David: 12 alternating mirrored sectors of a chord equation
-    var k = frac(a + sdRot) * 12
-    var lo = frac(k) - 0.5
-    if (mod(floor(k), 2) == 1) lo = -lo
-    v = near(r, sdC / cos(lo * 1.9), lineHw)
-    hsv(0, 0, v)
-  } else if (m == 4) {
-    // Star over Bethlehem: eight radial rays, warm, white-hot center
-    var g = frac(a * 8)
-    d = min(g, 1 - g)
-    var sp = 0.45 * pow(1.01 - r, bPw) + 0.02
-    v = near(d, 0, sp)
-    if (mod(floor(a * 8 + 0.5), 2) == 1) v *= bMask   // diagonals breathe
-    hsv(0.04 + 0.05 * r, min(1, pow(r, 1.5) * 2), v)
-  } else if (m == 5) {
-    // pentagram {5/2}, slow spin, wandering stroke weight
-    th = frac(a + tNow / 45) * PI2
-    v = near(r, starR(th, 5, 2) * pScale, penHw * (0.5 + pScale))
-    hsv(0, 0, v)
-  } else if (m == 6) {
-    // decagram, thick stroke, glacial spin, solid inner fill
-    th = frac(a + tNow / 300) * PI2
-    v = near(r, starR(th, 10, 4) * 0.85, 0.12)
-    if (r < 0.3) v = 1
-    hsv(0, 0, v)
-  } else if (m == 7) {
-    // hexagram
-    th = frac(a + tNow / 40) * PI2
-    hsv(0, 0, near(r, starR(th, 6, 2) * 0.8, 0.08))
-  } else if (m == 8) {
-    // heart: polar heart curve, pulsing scale, whitening as it shrinks
-    th = frac(a + 0.5) * PI2        // half-turn shift so it points right
-    var sn = sin(th)
-    var rH = (sn * sqrt(abs(cos(th))) / (sn + 1.4) - 2 * sn + 2) * hScale / 3.2
-    hsv(0, hSat, near(r, rH, 0.09))
-  } else if (m == 9) {
-    // bird flap: chord-like wings off a fixed heading, animated dihedral
-    d = a - 0.25
-    d -= floor(d + 0.5)
-    th = abs(d) * PI2 * bBend - (bFlap - 0.5) * 1.1
-    v = near(r, 0.22 / cos(th), 0.05 + 0.09 * r)   // wider at wingtips
-    hsv(0.045, 0.9, v * bGlow)
-  } else if (m == 10) {
-    // rainbow spirals: wrapped scaled radius vs. scaled angle
-    var kk = mod(r * spS, spM) / spM
-    v = nearWrap(kk, frac(a * spArms + tNow * 0.04), 0.28)
-    // perceptual rainbow correction: sine reshaping squeezes the green band
-    var h = frac(r * 0.7 + a + tNow * 0.015)
-    hsv(frac(h + 0.07 * sin(PI2 * h)), 1, v)
-  } else {
-    // snowglobe: 1D sparks energy buffer read back by pixel index
-    var e = energy[floor(index)]
-    var b = min(1, e)
-    hsv(0.63, clamp(1 - e, 0, 1), b * b)   // deep blue traces, white-hot cores
-  }
+function draw11(index, r, a) {
+  // ignores polar coordinates entirely; on a disc the pixel order reads as
+  // concentric drifting snow sparkle
+  var v = min(1, energy[index] * 6)
+  // faint traces deep icy blue, hot ones white; brightness squared
+  hsv(0.58, clamp(1 - v * 0.85, 0.1, 1), v * v)
+}
+
+// ---- playlist machinery -----------------------------------------------------
+
+function needsSetup(m) {
+  if (curMode == m) return 1
+  return inFade && nextMode == m
 }
 
 export function beforeRender(delta) {
-  tNow += delta / 1000
+  dt = delta / 1000
+  clock += delta / (dwell * 1000)
+  if (clock >= NUMMODES) clock -= NUMMODES
+  if (clock < 0 || clock >= NUMMODES) clock = 0
+
+  curMode = floor(clock)
+  var modeFrac = clock - curMode
+  nextMode = curMode + 1
+  if (nextMode >= NUMMODES) nextMode = 0
+
+  // crossfade window: constant absolute duration at the end of each dwell
+  var wf = min(0.5, FADESECS / dwell)
+  inFade = modeFrac > 1 - wf
+  fadeEase = 0
+  if (inFade) {
+    var p = (modeFrac - (1 - wf)) / wf
+    fadeEase = (1 - cos(PI * p)) / 2        // smooth sinusoidal easing
+  }
+
   if (modeOverride > 0) {
     curMode = modeOverride - 1
-    fadeP = 0
-    setupMode(curMode, delta)
-    return
+    inFade = 0
   }
-  curMode = mod(floor(tNow / dwellS), NUM_MODES)
-  nextMode = mod(curMode + 1, NUM_MODES)
-  // constant-feeling transition window at the tail of each dwell
-  var fadeLen = min(2.5, dwellS * 0.25)
-  var tm = mod(tNow, dwellS)
-  if (tm > dwellS - fadeLen) {
-    var u = (tm - (dwellS - fadeLen)) / fadeLen
-    fadeP = (1 - cos(u * PI)) / 2         // sinusoidal easing, not linear
-  } else {
-    fadeP = 0
-  }
-  setupMode(curMode, delta)
-  if (fadeP > 0) setupMode(nextMode, delta)
+
+  // run the current mode's per-frame setup; during a crossfade the incoming
+  // mode's setup runs too so both are live
+  if (needsSetup(0)) setup0()
+  if (needsSetup(1)) setup1()
+  if (needsSetup(3)) setup3()
+  if (needsSetup(4)) setup4()
+  if (needsSetup(5)) setup5()
+  if (needsSetup(8)) setup8()
+  if (needsSetup(9)) setup9()
+  if (needsSetup(10)) setup10()
+  if (needsSetup(11)) setup11()
 }
 
+function drawMode(m, index, r, a) {
+  if (m == 0) draw0(index, r, a)
+  else if (m == 1) draw1(index, r, a)
+  else if (m == 2) draw2(index, r, a)
+  else if (m == 3) draw3(index, r, a)
+  else if (m == 4) draw4(index, r, a)
+  else if (m == 5) draw5(index, r, a)
+  else if (m == 6) draw6(index, r, a)
+  else if (m == 7) draw7(index, r, a)
+  else if (m == 8) draw8(index, r, a)
+  else if (m == 9) draw9(index, r, a)
+  else if (m == 10) draw10(index, r, a)
+  else draw11(index, r, a)
+}
+
+// coordinates arrive as (radius, angle, azimuth), each normalized 0..1
 export function render3D(index, r, a, az) {
-  // stochastic shimmer dissolve: each pixel independently picks a scene
+  a = frac(a + rotOffset)
   var m = curMode
-  if (fadeP > 0 && random(1) < fadeP) m = nextMode
-  drawMode(m, index, r, frac(a + rotOff + 1))
+  // stochastic shimmer crossfade: each pixel independently and randomly
+  // picks the outgoing or incoming mode each frame — never both
+  if (inFade && random(1) < fadeEase) m = nextMode
+  drawMode(m, index, r, a)
 }
 
+// 2D: equatorial slice (azimuth pinned to the midpoint)
 export function render2D(index, r, a) {
-  render3D(index, r, a, 0.5)      // equatorial slice
+  render3D(index, r, a, 0.5)
 }
 
+// 1D fallback: strip position as radius, angle zero
 export function render(index) {
-  render3D(index, index / pixelCount, 0, 0.5)   // degenerate radial fallback
+  render3D(index, index / pixelCount, 0, 0.5)
 }

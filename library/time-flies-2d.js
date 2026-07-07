@@ -2,92 +2,97 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Time Flies 2D"; original source never consulted.
 
-// Half a dozen rainbow-spread flies wander a black display. One shared
-// additive-wave noise function, sampled at a private per-fly phase, drives
-// both speed random-walks and steering; turn rate grows with distance from
-// center, so flies loosely congregate mid-display without walls. A fast
-// global sawtooth added to the dot radius reads as flapping wings. The 1D
-// renderer is a deliberate no-op.
+// A handful of rainbow-hued dots wander erratically like insects on a black
+// 2D display: speeds random-walk, headings veer via a shared jagged wave
+// noise (per-fly phase offsets), and dot radius pulses fast like flapping
+// wings. Turn rate grows with distance from center, which keeps flies
+// loosely congregated without walls. The 1D renderer is a deliberate no-op.
 
-const NUM = 6
+var NUM = 6          // fly count (source constant)
+var MOVE_MS = 30     // position tick
+var STEER_MS = 250   // heading tick
+var MAX_SPEED = 0.05 // per movement tick
+var MIN_SPEED = 0.002
+var MAX_TURN = 0.13  // turns, at screen center
+var FALL_R = 0.125   // brightness hits zero about an eighth of the display
 
-var fx = array(NUM)   // position
+var fx = array(NUM)
 var fy = array(NUM)
-var fh = array(NUM)   // heading, in turns
-var fs = array(NUM)   // speed per movement tick
-var fp = array(NUM)   // private phase into the shared noise
+var heading = array(NUM) // fraction of a full turn
+var speed = array(NUM)
+var phase = array(NUM)   // private phase into the shared noise
+var hue = array(NUM)
 
 var i
 for (i = 0; i < NUM; i++) {
   fx[i] = random(1)
   fy[i] = random(1)
-  fh[i] = random(1)
-  fs[i] = 0.01 + random(0.02)
-  fp[i] = random(1)
+  heading[i] = random(1)
+  speed[i] = MIN_SPEED
+  phase[i] = random(1)
+  hue[i] = i / NUM  // even rainbow spread
 }
 
-var rad = 0.05
-var moveAcc = 0
-var steerAcc = 0
-
-// jagged-but-smooth deterministic noise: triangle + three incommensurate
-// sine humps, spanning roughly -1..1
+// Hand-rolled 1D "wave noise": a triangle plus three sines at incommensurate
+// frequencies, rescaled to roughly -1..+1. Deterministic but chaotic-looking.
 function wnoise(p) {
-  var v = triangle(p) - 0.5
-  v += 0.4 * (wave(p * 2 + 0.13) - 0.5)
-  v += 0.35 * (wave(p * 2.2 + 0.41) - 0.5)
-  v += 0.25 * (wave(p * 5 + 0.77) - 0.5)
-  return v * 1.1
+  var s = triangle(p) * 0.5 + wave(p * 2) * 0.3
+        + wave(p * 2.2 + 0.31) * 0.4 + wave(p * 5 + 0.67) * 0.3
+  return (s - 0.75) * 1.35
 }
+
+var flyR = 0.05   // current pulsing dot radius
+var moveT = 0, steerT = 0
 
 export function beforeRender(delta) {
-  rad = 0.045 + 0.03 * time(0.005)   // wing flap: ~3 size pulses / s
-  var adv = 0.003 + 0.02 * time(0.5) // noise traversal rate, ~33 s cycle
+  // slow sawtooth (~33 s) modulates how fast flies traverse the noise,
+  // so their temperament evolves over tens of seconds
+  var adv = 0.004 + time(0.5) * 0.02
+  // fast tiny sawtooth = the wing flap
+  flyR = 0.04 + time(0.005) * 0.03
 
-  steerAcc += delta
-  var doSteer = 0
-  if (steerAcc >= 240) {             // steer only every few move ticks
-    steerAcc = 0
-    doSteer = 1
+  moveT += delta
+  if (moveT >= MOVE_MS) {
+    moveT = 0
+    for (i = 0; i < NUM; i++) {
+      phase[i] = mod(phase[i] + adv, 8)
+      // speed random-walks, riding its clamps
+      speed[i] = clamp(speed[i] + wnoise(phase[i]) * 0.008, MIN_SPEED, MAX_SPEED)
+      fx[i] = clamp(fx[i] - cos(heading[i] * PI2) * speed[i], 0, 1)
+      fy[i] = clamp(fy[i] - sin(heading[i] * PI2) * speed[i], 0, 1)
+    }
   }
 
-  moveAcc += delta
-  if (moveAcc >= 30) {               // movement tick ~33 / s
-    moveAcc = 0
-    var j
-    for (j = 0; j < NUM; j++) {
-      fp[j] = frac(fp[j] + adv)
-      var n = wnoise(fp[j])
-      // speed random-walks between its bounds
-      fs[j] = clamp(fs[j] + n * 0.02, 0.002, 0.05)
-      fx[j] = clamp(fx[j] - cos(fh[j] * PI2) * fs[j], 0, 1)
-      fy[j] = clamp(fy[j] - sin(fh[j] * PI2) * fs[j], 0, 1)
-      if (doSteer) {
-        // soft containment: the farther out, the harder the turn
-        var d = hypot(fx[j] - 0.5, fy[j] - 0.5)
-        fh[j] = mod(fh[j] + n * 0.12 * (0.4 + d * 4), 1)
-      }
+  steerT += delta
+  if (steerT >= STEER_MS) {
+    steerT = 0
+    for (i = 0; i < NUM; i++) {
+      // soft containment: the farther from center, the harder the turn
+      var d = hypot(fx[i] - 0.5, fy[i] - 0.5)
+      heading[i] = mod(heading[i] + wnoise(phase[i]) * MAX_TURN * (1 + d * 4), 1)
     }
   }
 }
 
 export function render2D(index, x, y) {
-  var j
-  for (j = 0; j < NUM; j++) {
-    var dx = abs(x - fx[j])
-    var dy = abs(y - fy[j])
-    if (dx + dy > rad * 1.5) continue   // cheap Manhattan pre-reject
-    var d = hypot(dx, dy)
-    if (d < rad) {
-      var b = max(0, 1 - d * 8)         // zero at ~ an eighth of display
-      b = b * b * b                     // sharp bright-centered dot
-      hsv(j / NUM, 1, b)                // even rainbow spread by index
-      return                            // first fly wins overlaps
+  rgb(0, 0, 0)
+  var k, dx, dy, d, v
+  for (k = 0; k < NUM; k++) {
+    dx = x - fx[k]
+    dy = y - fy[k]
+    // cheap Manhattan-style pre-test before the true distance
+    if (abs(dx) + abs(dy) > flyR * 1.5) continue
+    d = hypot(dx, dy)
+    if (d < flyR) {
+      // sharp bright-centered dot: cubic falloff
+      v = max(0, 1 - d / FALL_R)
+      hsv(hue[k], 1, v * v * v)
+      return  // first fly in list order wins overlaps
     }
   }
-  rgb(0, 0, 0)
 }
 
+// deliberate no-op on unmapped strips
 export function render(index) {
-  rgb(0, 0, 0)   // intentionally blank on unmapped 1D strips
+  rgb(0, 0, 0)
 }

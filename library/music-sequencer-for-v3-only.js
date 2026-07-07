@@ -3,559 +3,661 @@
 // community pattern "Music Sequencer - for V3 ONLY"; original source never
 // consulted.
 
-// A music-choreography framework, not a single effect: a queue of
-// mini-patterns, each played for a duration in musical beats, driven by a
-// beat clock plus audio analysis from the sensor board (volume
-// normalization, bass/clap/hi-hat detectors with debounced hooks,
-// derivative-based beat detection, tempo estimation). Without audio it
-// degrades gracefully: detectors stay quiet, sound-only minis idle or
-// skip, clock-driven minis keep time. Content is 1D; the 2D/3D renderers
-// forward to the shared 1D renderer.
+// A music-choreography framework plus demo mini-patterns and a scripted
+// show: a queue of mini-patterns, each played for a duration in musical
+// beats, with audio analysis (volume normalization, bass/clap/hi-hat
+// detectors, derivative-based beat detection, tempo estimation) driving
+// beat-locked timers. Expects the sensor expansion board; without one it
+// degrades gracefully (clock-driven behavior, some patterns skip).
+// Without any audio input it idles dark / gently — that is by design.
 
 // ---------------------------------------------------------------- sensors
-export var frequencyData = array(32)   // 32-band spectrum
+export var frequencyData = array(32)     // 32-band spectrum
 export var energyAverage = 0
 export var maxFrequency = 0
 export var maxFrequencyMagnitude = 0
-export var accelerometer = array(3)
-export var light = -1                  // board probe: stays -1 if no board
+export var light = -1                    // board probe: stays negative = no board
+var boardPresent = 0
 
-var sigSeen = 0                        // latched: any real audio observed
+// ---------------------------------------------------------------- shared
+var N = pixelCount
+var hueA = array(N + 1)                  // shared scratch (one extra: safe interp)
+var satA = array(N + 1)
+var valA = array(N + 1)
+var themeHue = 0.6                       // script-settable shared theme
+var direction = 0                        // script-settable orientation flag
+var setupDone = 0                        // run-once latch per queue entry
+var edgeLatch = 0                        // shared edge-trigger latch
 
-// -------------------------------------------------------- analysis state
-var vol = 0, emaFast = 0, emaSlow = 0
-var maxVol = 0.1, maxHold = 0
+// ------------------------------------------------------- volume tracking
 var SILENCE = 0.02
-var volume01 = 0, loudRatio = 0
+var emaE = 0, maxE = 0.05, sinceMax = 0
+var volume = 0, loudRatio = 0, soundSpike = 0
 
-var bassNow = 0, bassFast = 0, bassSlow = 0, bassMax = 0.01, bassNorm = 0
-var lastBassFast = 0
-var DERIV_N = 5
-var derivBuf = array(DERIV_N)
-var derivIdx = 0
+// ---------------------------------------------------- instrument detection
+var bassFast = 0, bassSlow = 0, bassMax = 0.001, bassNorm = 0, lastNorm = 0
+var dBuf = array(5), dPos = 0            // derivative ring buffer
+var beatFired = 0, beatOn = 0, sinceBeat = 9
+var clapAvg = 0, clapFired = 0, clapOn = 0, sinceClap = 9
+var hhAvg = 0, hhFired = 0, hhOn = 0, sinceHh = 9
 
-var clapNow = 0, clapAvg = 0.001, clapOn = 0
-var hatNow = 0, hatAvg = 0.001, hihatOn = 0
-
-var beatFired = 0                      // this-frame flags
-var clapFired = 0, hatFired = 0
-var DEBOUNCE_FRAC = 0.2                // min gap between hits, in beats
-var beatGap = 9, clapGap = 9, hatGap = 9   // seconds since last hit
-
-// instrument hooks — minis assign lambdas; cleared between entries
-var onBeat = 0, onClap = 0, onHihat = 0
-
-// tempo estimation: last 8 beat intervals must agree within ~10%
-var ivals = array(8), ivN = 0, lastBeatT = -9
+// ------------------------------------------------------- tempo estimation
+var ivl = array(8), ivlPos = 0, ivlCount = 0
 var detectedBpm = 0, tempoReliable = 0
 
-// ------------------------------------------------------------ beat clock
-var bpm = 120, beatSec = 0.5
-var phraseBeats = 32
-var patBeats = 0                       // decimal beat counter, resets/entry
-var entryDur = 32
-var patProgress = 0, phrasePos = 0     // ramp-ups 0..1
-var r1 = 1, r2 = 1, r4 = 1, r8 = 1, r16 = 1   // ramp-DOWNS 1..0 (signature)
-var tSec = 0, dt = 0
+// ------------------------------------------------------------- beat clock
+var bpm = 120
+var phraseBeats = 16
+var entrySec = 0                         // time in current entry (seconds!)
+var beatSec = 0.5
+var beatCount = 0                        // decimal running beat counter
+// ramp-DOWN (1 -> 0) note timers — the framework's signature shape
+var whole = 0, half = 0, quarter = 0, eighth = 0, sixteenth = 0
+var phraseProg = 0, patternProg = 0
+var curDur = 16
 
-// ----------------------------------------------------------------- queue
-var QMAX = 48
-var qFn = array(QMAX), qBeats = array(QMAX), qMode = array(QMAX)
-var qArg = array(QMAX), qLen = 0, qPos = 0
-var MODE_FIXED = 0, MODE_BEAT = 1, MODE_LOUD = 2, MODE_CMD = 3, MODE_PRED = 4
-var setupDone = 0, skipEntry = 0, edgeLatch = 0
-var LATENCY_SKIP = 0.08                // beats skipped into the next entry
-
-function add(fn, beats, mode, arg) {
-  qFn[qLen] = fn; qBeats[qLen] = beats; qMode[qLen] = mode; qArg[qLen] = arg
-  qLen++
-}
-function cmd(fn, arg) { add(fn, 0, MODE_CMD, arg) }
-
-// -------------------------------------------------------- shared helpers
-var N1 = pixelCount + 1                // +1 so interpolation loops are safe
-var hueA = array(N1), satA = array(N1), briA = array(N1)
-var themeHue = 0.55, dir = 1
-var renderFn = 0
-
-function dpos(p) { return dir > 0 ? p : 1 - p }
-function near(a, b, hw) {              // 1 when coincident, 0 at half-width
-  var d = clamp(1 - abs(a - b) / hw, 0, 1)
-  return d * d                         // squared: gamma-ish soft edge
-}
-function hueWarp(h) { return wave(h / 2 - 0.25) }  // perceptual respread
-function decayBri(sec) {               // fade briA toward 0, ~sec to dark
-  feedback(briA, max(0, 1 - 3 * dt / max(sec, 0.05)))
-}
-var polarOut = array(2)
-function polarAdd(h1, b1, h2, b2) {    // mix two hue/level pairs as vectors
-  var x = b1 * cos(h1 * PI2) + b2 * cos(h2 * PI2)
-  var y = b1 * sin(h1 * PI2) + b2 * sin(h2 * PI2)
-  polarOut[0] = atan2(y, x) / PI2
-  polarOut[1] = hypot(x, y)
-}
-function risingEdge(v) {               // run-once edge trigger
-  var e = v && !edgeLatch
-  edgeLatch = v != 0
-  return e
-}
-function noteNumber() {                // semitones above A1 (55 Hz)
-  if (maxFrequency < 30) return -1
-  return 12 * log2(maxFrequency / 55)
-}
-var gainI = 1                          // PI auto-gain for brightness
-function autoGain(fill, target) {
-  gainI = clamp(gainI + (target - fill) * dt * 2, 0.2, 8)
-  return gainI
+// ------------------------------------------------------------------ queue
+var QMAX = 64
+var qPat = array(QMAX), qDur = array(QMAX), qMode = array(QMAX), qArg = array(QMAX)
+var qLen = 0, qIndex = 0
+// modes: 0 = fixed beats; 1 = also advance on detected beat ("hold for the
+// drop"); 2 = also advance on a volume spike (silence -> sound); 3 = one-shot
+// command with argument, executes and advances immediately
+function enq(pat, dur, mode, arg) {
+  qPat[qLen] = pat
+  qDur[qLen] = dur
+  qMode[qLen] = mode
+  qArg[qLen] = arg
+  qLen += 1
 }
 
-function resetShared() {               // between-entries reset
-  arrayReplace(hueA, 0); arrayReplace(satA, 0); arrayReplace(briA, 0)
-  onBeat = 0; onClap = 0; onHihat = 0
-  edgeLatch = 0; setupDone = 0; skipEntry = 0
-}
+// pattern ids
+var OFF = 0, PROGRESS = 1, MPROGRESS = 2, SWEEP = 3, QUARTERS = 4, EIGHTHS = 5
+var STROBE = 6, SURGE = 7, DANCER = 8, BSCOPE = 9, FIZZLE = 10, BUILDUP = 11
+var OCEAN = 12, SPLOTCH = 13, ANALYZER = 14, ELASTIC = 15
+// command ids
+var CMD_TEMPO = 100, CMD_PHRASE = 101, CMD_THEME = 102, CMD_FLIP = 103
+var CMD_SEEDBASS = 104
 
-// ---------------------------------------------------------- queue engine
-function nextEntry(skip) {
-  qPos = qPos + 1
-  if (qPos >= qLen) qPos = 0           // loop forever
-  patBeats = skip
+// debugging aid: pick a mini-pattern by hand (takes effect only if the
+// manual entry below is uncommented into the script)
+var manualPattern = 0
+export function sliderChooseManualPattern(v) {
+  //# min=0 max=1 step=0.0625 default=0
+  manualPattern = floor(v * 15.99)
   resetShared()
 }
+// commented-out tuning aid, as shipped:
+// export function sliderHihatThreshold(v) { hhThresh = 1.5 + v * 3 }
 
-function runQueue() {
-  if (qLen == 0) return
-  var guard = 0
-  while (qMode[qPos] == MODE_CMD && guard < QMAX) {
-    var cf = qFn[qPos]
-    cf(qArg[qPos])                     // one-shot command, advance at once
-    nextEntry(0)
-    guard++
-  }
-  entryDur = qBeats[qPos] > 0 ? qBeats[qPos] : phraseBeats
-  var adv = patBeats >= entryDur || skipEntry
-  var early = 0
-  if (qMode[qPos] == MODE_BEAT && beatFired) { adv = 1; early = 1 }
-  if (qMode[qPos] == MODE_LOUD && loudRatio > 2.5 && vol > SILENCE) {
-    adv = 1; early = 1
-  }
-  if (qMode[qPos] == MODE_PRED && qArg[qPos]) {
-    var pf = qArg[qPos]
-    if (pf()) adv = 1
-  }
-  if (adv) {
-    nextEntry(early * LATENCY_SKIP)    // early: skip in, land on the beat
-    entryDur = qBeats[qPos] > 0 ? qBeats[qPos] : phraseBeats
-  }
-  var sf = qFn[qPos]                   // per-frame setup; assigns renderFn
-  if (sf) sf()
+// ---------------------------------------------------------------- helpers
+function resetShared() {
+  arrayReplace(hueA, 0)
+  arrayReplace(satA, 1)
+  arrayReplace(valA, 0)
+  setupDone = 0
+  edgeLatch = 0
+  beatFired = 0
+  clapFired = 0
+  hhFired = 0
 }
 
-// -------------------------------------------------------------- commands
-function cSetTempo(v) { bpm = v; beatSec = 60 / bpm }
-function cSetPhrase(v) { phraseBeats = v }
-function cSetTheme(v) { themeHue = v }
-function cSetDir(v) { dir = v }
-function cSeedBass(v) { bassMax = v }  // pre-seed AGC so first beats detect
+// proximity: 1 when positions coincide, 0 at halfWidth, squared soft edge
+function near(a, b, w) {
+  var v = 1 - abs(a - b) / w
+  return v > 0 ? v * v : 0
+}
 
-// -------------------------------------------------------- sound analysis
-function analyze(deltaSec) {
-  var fSum = arraySum(frequencyData)
-  if (fSum > 0.0005 || energyAverage > 0.0005) sigSeen = 1
+// perceptually-evened hue redistribution
+function warpHue(h) {
+  h = frac(frac(h) + 1)
+  return h + 0.08 * sin(h * PI2)
+}
 
-  // volume normalization: scaled energy vs. EMAs and a peak-hold max
-  vol = energyAverage * 10
-  emaFast += (vol - emaFast) * min(1, deltaSec)          // ~1 s
-  emaSlow += (vol - emaSlow) * min(1, deltaSec / 5)      // ~5 s
-  if (vol > maxVol) { maxVol = vol; maxHold = 0 }
-  else {
-    maxHold += deltaSec
-    if (maxHold > 70) maxVol *= 1 - 0.05 * deltaSec      // longer than a bridge
+// directed position of pixel i, honoring the shared direction flag
+function posOf(i) {
+  var p = i / N
+  return direction ? 1 - p : p
+}
+
+// exponential-ish fade of the brightness scratch toward black
+function decayVals(secToDark, dt) {
+  feedback(valA, max(0, 1 - dt / secToDark))
+}
+
+// run fn once on a rising edge of v (shared latch, cleared between entries)
+function onRisingEdge(v) {
+  var fire = v && !edgeLatch
+  edgeLatch = v != 0
+  return fire
+}
+
+// dominant frequency -> semitones above A1 (55 Hz)
+function noteNumber() {
+  if (maxFrequency < 20) return 0
+  return log2(maxFrequency / 55) * 12
+}
+
+// --------------------------------------------------------- sound analysis
+function analyzeSound(delta) {
+  var dt = delta / 1000
+  boardPresent = light >= 0
+
+  // volume normalization: EMA vs. a very-slowly-decaying running max
+  var e = energyAverage * 10
+  emaE += (e - emaE) * min(1, dt)
+  if (e > maxE) {
+    maxE = e
+    sinceMax = 0
+  } else {
+    sinceMax += dt
+    if (sinceMax > 70) maxE = max(0.02, maxE * (1 - dt / 30))
   }
-  volume01 = emaFast > SILENCE ? clamp(emaFast / max(maxVol, 0.01), 0, 1) : 0
-  loudRatio = vol / max(emaSlow, 0.005)
+  volume = emaE > SILENCE ? clamp(emaE / maxE, 0, 1) : 0
+  loudRatio = emaE > 0.001 ? e / emaE : 0
+  soundSpike = loudRatio > 2 && e > SILENCE
 
-  // bass / kick: lowest bins, fast+slow EMA, self-decaying max (AGC)
-  bassNow = frequencyData[0] + frequencyData[1] + frequencyData[2]
-  bassFast += (bassNow - bassFast) * min(1, deltaSec / 0.06)
-  bassSlow += (bassNow - bassSlow) * min(1, deltaSec / 2)
-  bassMax = max(bassMax * (1 - 0.02 * deltaSec), 0.005)
-  if (bassFast > bassMax) bassMax = bassFast
-  bassNorm = clamp(bassFast / bassMax, 0, 1)
+  // bass / kick: slow + fast EMAs and a self-decaying max (auto gain)
+  var braw = frequencyData[0] + frequencyData[1] + frequencyData[2]
+  bassFast += (braw - bassFast) * min(1, dt * 12)
+  bassSlow += (braw - bassSlow) * min(1, dt * 0.7)
+  bassMax = max(bassMax * (1 - dt / 60), braw)
+  bassNorm = bassMax > 0.0001 ? bassFast / bassMax : 0
 
-  // rising-derivative beat detection (not absolute level)
-  derivBuf[derivIdx] = (bassFast - lastBassFast) / bassMax
-  derivIdx = (derivIdx + 1) % DERIV_N
-  lastBassFast = bassFast
-  var dm = arraySum(derivBuf) / DERIV_N
+  // beat = rising derivative of the normalized fast bass average
+  dBuf[dPos] = bassNorm - lastNorm
+  lastNorm = bassNorm
+  dPos = (dPos + 1) % 5
+  var dMean = arraySum(dBuf) / 5
+  beatOn = dMean > 0.015 && braw > 0.0001
   beatFired = 0
-  beatGap += deltaSec
-  if (dm > 0.03 && bassNow > 0.001 && beatGap > DEBOUNCE_FRAC * beatSec) {
+  sinceBeat += dt
+  var debounce = beatSec / 5             // 16th-note doubles still retrigger
+  if (beatOn && sinceBeat > debounce) {
     beatFired = 1
-    // tempo: 8 consecutive intervals agreeing within ~10% -> integer BPM
-    var iv = beatGap
-    beatGap = 0
-    if (iv > 3) ivN = 0                // long silence: restart collection
-    else {
-      ivals[ivN % 8] = iv
-      ivN++
-      if (ivN >= 8) {
-        var mean = arraySum(ivals) / 8
-        var v2 = 0
-        for (var k = 0; k < 8; k++) {
-          var e = ivals[k] - mean
-          v2 += e * e
-        }
-        var rel = sqrt(v2 / 8) / max(mean, 0.01)
-        if (rel < 0.1) {
-          detectedBpm = floor(60 / mean + 0.5)   // integer: released music
+    // tempo: accept 8 consecutive intervals agreeing within ~10%
+    if (sinceBeat < 3) {
+      ivl[ivlPos] = sinceBeat
+      ivlPos = (ivlPos + 1) % 8
+      ivlCount = min(8, ivlCount + 1)
+      if (ivlCount == 8) {
+        var mean = arraySum(ivl) / 8
+        var ss = 0, k
+        for (k = 0; k < 8; k++) ss += (ivl[k] - mean) * (ivl[k] - mean)
+        var relSd = mean > 0.01 ? sqrt(ss / 8) / mean : 1
+        if (relSd < 0.1) {
+          detectedBpm = round(60 / mean)  // released music: integer BPM
           tempoReliable = 1
         }
       }
+    } else {
+      ivlCount = 0                        // long gap: restart collection
     }
-    if (onBeat) onBeat()
+    sinceBeat = 0
   }
 
-  // claps/snare: upper-middle bins vs. slow average
-  clapNow = frequencyData[18] + frequencyData[19] + frequencyData[20] +
-            frequencyData[21] + frequencyData[22]
-  clapAvg += (clapNow - clapAvg) * min(1, deltaSec / 3)
-  clapOn = clapNow > clapAvg * 2.2 && clapNow > 0.001
+  // claps / snare: upper-middle bins vs. their slow average
+  var craw = frequencyData[16] + frequencyData[17] + frequencyData[18] + frequencyData[19]
+  clapAvg += (craw - clapAvg) * min(1, dt * 0.5)
   clapFired = 0
-  clapGap += deltaSec
-  if (clapOn && clapGap > DEBOUNCE_FRAC * beatSec) {
-    clapFired = 1; clapGap = 0
-    if (onClap) onClap()
+  sinceClap += dt
+  if (craw > clapAvg * 2 && craw > 0.001 && sinceClap > debounce) {
+    clapFired = 1
+    sinceClap = 0
   }
+  clapOn = sinceClap < 0.15
 
-  // hi-hat: top bins, scaled up (raw readings there are tiny)
-  hatNow = (frequencyData[30] + frequencyData[31]) * 32
-  hatAvg += (hatNow - hatAvg) * min(1, deltaSec / 3)
-  hihatOn = hatNow > hatAvg * 2 && hatNow > 0.001
-  hatFired = 0
-  hatGap += deltaSec
-  if (hihatOn && hatGap > DEBOUNCE_FRAC * beatSec) {
-    hatFired = 1; hatGap = 0
-    if (onHihat) onHihat()
+  // hi-hat: top-of-spectrum bins, scaled way up
+  var hraw = (frequencyData[30] + frequencyData[31]) * 30
+  hhAvg += (hraw - hhAvg) * min(1, dt * 0.5)
+  hhFired = 0
+  sinceHh += dt
+  if (hraw > hhAvg * 2 && hraw > 0.01 && sinceHh > debounce) {
+    hhFired = 1
+    sinceHh = 0
   }
+  hhOn = sinceHh < 0.15
 }
 
-// ---------------------------------------------------------- mini-patterns
-// Each is a per-frame setup fn queued via add(); it must assign renderFn.
-
-function fnBlack(i, p) { hsv(0, 0, 0) }
-function pOff() { renderFn = fnBlack }
-
-function fnProgress(i, p) {
-  hsv(themeHue, 1, (dpos(p) < progFill) * (0.35 + 0.65 * r4 * r4))
-}
-function pProgress() {                 // fill over the queued duration
-  progFill = patProgress
-  renderFn = fnProgress
-}
-function pMeasure() {                  // fill over one measure, repeating
-  progFill = 1 - r1
-  renderFn = fnProgress
+// ---------------------------------------------------------------- commands
+function doCmd(id, arg) {
+  if (id == CMD_TEMPO) bpm = arg > 0 ? arg : (tempoReliable ? detectedBpm : bpm)
+  if (id == CMD_PHRASE) phraseBeats = max(1, arg)
+  if (id == CMD_THEME) themeHue = arg
+  if (id == CMD_FLIP) direction = !direction
+  if (id == CMD_SEEDBASS) bassMax = max(bassMax, arg)
 }
 
-function fnSweep(i, p) {
-  hsv(themeHue, 1, near(dpos(p), 1 - r4, 0.08))
-}
-function pSweep() { renderFn = fnSweep }   // soft dot, once per beat
-
-function fnQuarters(i, p) {
-  var ridge = triangle(p / 2 + 0.25)   // whole-strip triangular ridge
-  hsv(themeHue + p * 0.08, 1, ridge * r4 * r4 * r4)
-}
-function pQuarters() { renderFn = fnQuarters }
-
-function fnEighths(i, p) {
-  var seg = floor(dpos(p) * 7.99)
-  var cur = floor(frac(patBeats / 4) * 8)
-  hsv(themeHue + (1 - r1) * 0.25, 0.75 + 0.25 * r1, (seg == cur) * r8)
-}
-function pEighths() { renderFn = fnEighths }
-
-function fnStrobe(i, p) { hsv(0, 0, r16 > 0.8) }
-function pStrobe() { renderFn = fnStrobe }  // photosensitivity warning!
-
-function fnSurge(i, p) {               // emanates from center every 2 beats
-  var c = abs(p - 0.5) * 2
-  var reach = 1 - r2 * r2              // smoothed half-note ramp, folded
-  hsv(themeHue + patProgress * 0.2 + c * 0.05, 1,
-      clamp((reach - c) * 3, 0, 1) * (0.3 + 0.7 * r2))
-}
-function pSurge() { renderFn = fnSurge }
-
-function fnDancing(i, p) {
-  hsv(danceHue, 1, near(p, dancePos, danceW))
-}
-function pDancing() {                  // layered-oscillation bright dot
-  var wander = 0.5 + 0.27 * sin(tSec * 0.6)
-  var wiggle = r4 * r4 * r4 * 0.12 * sin(tSec * 25)
-  var jitter = (square(patBeats * 2, 0.5) - 0.5) * 0.12 * (1 - patProgress)
-  var bassT = bassNorm * 0.18 * patProgress * sin(tSec * 5)
-  dancePos = clamp(wander + wiggle + jitter + bassT, 0.02, 0.98)
-  danceW = 0.035 + bassNorm * 0.08     // width breathes with the bass
-  danceHue = themeHue + (patProgress > 0.5) * 0.5   // complement at halfway
-  renderFn = fnDancing
-}
-
-function fnScope(i, p) {
-  hsv(scopeHue, 1, near(p, scopePos, 0.05))
-}
-function pBassScope() {                // decaying bass "waveform", 1/2-note
-  var ph = 1 - r2                      // 0..1 across two beats
-  var amp = r2 * r2 * r2 * 0.38       // cubic amplitude decay
-  scopePos = 0.5 + amp * sin(ph * PI2 * (7 - 4 * ph))  // downward chirp
-  scopeHue = themeHue + floor((1 - r1) * 4) * 0.12     // hue steps per beat
-  renderFn = fnScope
-}
-
-// paint fizzle — texture brush; beats start random sputtering strokes,
-// claps extend them, everything decays (faster when loud)
-var fizzPos = 0, fizzDir = 1, fizzHue = 0
-function fizzSputter(n) {
-  for (var k = 0; k < n; k++) {
-    var idx = floor(fizzPos * (pixelCount - 1)) + k * fizzDir
-    if (idx < 0 || idx >= pixelCount) break
-    if (random(1) < 0.8) {             // ~4/5 of alternating pixels
-      briA[idx] = 0.25 + random(0.75)  // sparkly random brightnesses
-      hueA[idx] = fizzHue
-    }
-  }
-}
-function pFizzle() {
-  if (!setupDone) {
-    setupDone = 1
-    onBeat = () => {
-      fizzPos = random(1)
-      fizzDir = random(1) < 0.15 ? -1 : 1          // occasionally reversed
-      fizzHue = time(0.3) + (random(1) < 0.5) * 0.07
-      fizzSputter(floor(4 + random(0.25) * pixelCount))
-    }
-    onClap = () => { fizzSputter(6) }  // claps extend the stroke
-  }
-  feedback(briA, max(0, 1 - dt * (0.8 + volume01 * 2.5)))
-  renderFn = fnFizzle
-}
-function fnFizzle(i, p) {
-  var b = briA[i]
-  var shimmer = 0.9 + 0.1 * wave(p * 3 + tSec * 0.4)  // slow spatial ripple
-  hsv(hueA[i], 1 - b * 0.45, b * b * shimmer)         // bright grains whiten
-}
-
-// build-up: segments multiply as the drop approaches, random bitmask flash
-var segMask = array(32), segN = 2, lastTickI = -1
-function pBuildUp() {
-  var remaining = entryDur - patBeats
-  var n = clamp(floor(5 - remaining / 4), 1, 5)
-  segN = pow(2, n)
-  var subdiv = remaining < 3 ? 4 : (remaining < 6 ? 2 : 1)  // beat/8th/16th
-  var tickI = floor(patBeats * subdiv)
-  if (tickI != lastTickI || !setupDone) {
-    setupDone = 1
-    lastTickI = tickI
-    var lit = 0
-    for (var s = 0; s < segN; s++) {
-      segMask[s] = random(1) < 0.5
-      lit += segMask[s]
-    }
-    if (lit == 0) segMask[floor(random(segN))] = 1   // at least one lit
-  }
-  renderFn = fnBuildUp
-}
-function fnBuildUp(i, p) {
-  var remaining = entryDur - patBeats
-  hsv(themeHue + phrasePos, remaining < 2 ? 0 : 1,   // white for the drop
-      segMask[floor(dpos(p) * (segN - 0.01))] * (0.4 + 0.6 * r8))
-}
-
-// ocean ("budget Pacifica"): layered slow waves, cubed, volume-scaled
-function fnOcean(i, p) {
-  var w1 = wave(p * 1.5 + tSec * 0.05)
-  var w2 = wave(p * 3.3 - tSec * 0.08 + wave(tSec * 0.011) * 1.5)
-  var w3 = wave(p * 7 + tSec * 0.03)
-  var b = (w1 + w2 + w3) / 3
-  b = b * b * b
-  var crest = near(p, frac(tSec * 0.14) * 1.2 - 0.1, 0.04) *
-              square(tSec * 0.09, 0.12)              // occasional white pulse
-  var late = max(0, patProgress - 0.7) * 0.3         // hue drifts late
-  hsv(themeHue + w2 * 0.05 + late, 1 - crest,
-      min(1, b * (0.25 + 0.75 * volume01) + crest * 0.8))
-}
-function pOcean() { renderFn = fnOcean }
-
-// splotch on beat: random soft blob (red/pink; cyan on the hi-freq
-// variant) decaying exponentially; hats/claps flick the strip ends
-var blobC = 0.5, blobW = 0.08, blobHue = 0.95, blobB = 0
-function pSplotch() {
-  if (!setupDone) {
-    setupDone = 1
-    onBeat = () => {
-      blobC = random(1)
-      blobW = 0.04 + random(0.1)
-      blobHue = hihatOn ? 0.5 : 0.93 + random(0.05)
-      blobB = 1
-    }
-  }
-  blobB *= max(0, 1 - dt * 2.5)
-  renderFn = fnSplotch
-}
-function fnSplotch(i, p) {
-  var b = blobB * near(p, blobC, blobW)
-  if (hihatOn && p > 0.92 && i % 3 == 0) { hsv(0.09, 0.5, random(1)); return }
-  if (clapOn && p < 0.08 && i % 3 == 0) { hsv(0.09, 0.5, random(1)); return }
-  hsv(blobHue, 1, b)
-}
-
-// spectrum analyzer: ~20 bins along the strip through the PI auto-gain
-var BINS = 20
-var binLvl = array(BINS)
-function pAnalyzer() {
-  if (!sigSeen) { skipEntry = 1 }      // skips itself without a board
-  var fill = 0
-  for (var b2 = 0; b2 < BINS; b2++) {
-    var raw = frequencyData[floor(b2 * 32 / BINS)] * (2 + b2 * 0.5)
-    binLvl[b2] += (raw - binLvl[b2]) * min(1, dt / 0.15)
-    fill += clamp(binLvl[b2] * gainI, 0, 1)
-  }
-  autoGain(fill / BINS, 0.15 + volume01 * 0.3)       // target fill ~ volume
-  renderFn = fnAnalyzer
-}
-function fnAnalyzer(i, p) {
-  var b = floor(p * (BINS - 0.01))
-  var lvl = clamp(binLvl[b] * gainI, 0, 1)
-  var peaky = clamp(loudRatio - 1, 0, 1)
-  // second half: desaturated marker tracks the dominant frequency
-  if (patProgress > 0.5 && maxFrequency > 30) {
-    var mp = clamp(log2(maxFrequency / 60) / 8, 0, 1)
-    if (abs(p - mp) < 0.02) { hsv(0, 0.15, 0.6); return }
-  }
-  hsv(hueWarp(p) * 0.6 + peaky * 0.3, 1, lvl * lvl)
-}
-
-// elastic: springy particle chain chasing a beat-jumped target
-var EN = 5
-var epx = array(EN), evx = array(EN)
-var elasticTarget = 0.5, lastWholeBeat = -1
-function pElastic() {
-  if (!setupDone) {
-    setupDone = 1
-    for (var k = 0; k < EN; k++) { epx[k] = 0.5; evx[k] = 0 }
-    onBeat = () => {
-      var t2 = random(1)
-      if (abs(t2 - elasticTarget) < 0.125) t2 = frac(t2 + 0.5) // jump >= 1/8
-      elasticTarget = t2
-    }
-  }
-  if (!sigSeen) {                      // no board: once per beat by clock
-    var wb = floor(patBeats)
-    if (wb != lastWholeBeat) {
-      lastWholeBeat = wb
-      elasticTarget = 0.3 + random(0.4)   // wander around the center
-    }
-  }
-  var stiff = 6 + patProgress * 14     // spring constant stiffens over slot
-  var d2 = min(dt, 0.05)
-  evx[0] += (elasticTarget - epx[0]) * stiff * d2
-  for (var k2 = 1; k2 < EN; k2++) {
-    var stretch = epx[k2 - 1] - epx[k2]
-    stretch -= sign(stretch) * min(abs(stretch), 0.04)   // rest length
-    evx[k2] += stretch * stiff * d2
-    evx[k2 - 1] -= stretch * stiff * d2 * 0.5
-  }
-  // trails linger periodically: decay time itself oscillates over beats
-  decayBri(0.15 + 0.5 * wave(patBeats / 24))
-  for (var k3 = 0; k3 < EN; k3++) {
-    evx[k3] *= max(0, 1 - 3 * d2)      // friction
-    epx[k3] = clamp(epx[k3] + evx[k3] * d2 * 8, 0, 1)
-    var fi = epx[k3] * (pixelCount - 1)
-    var i0 = floor(fi)
-    var ff = fi - i0
-    var hue2 = 0.78 + k3 * volume01 * 0.05  // violet base, volume splay
-    if (1 - ff > briA[i0]) { briA[i0] = 1 - ff; hueA[i0] = hue2 }
-    if (ff > briA[i0 + 1]) { briA[i0 + 1] = ff; hueA[i0 + 1] = hue2 }
-  }
-  renderFn = fnScratch
-}
-function fnScratch(i, p) { hsv(hueA[i], 1, briA[i]) }
-
-// ------------------------------------------------------- the demo show
-// (a condensed tour in the spirit of the shipped sequence)
-cmd(cSetTempo, 120)
-cmd(cSetPhrase, 32)
-add(pOff, 128, MODE_LOUD)              // hold dark until any sound
-cmd(cSeedBass, 0.3)                    // pre-seed AGC for the first beats
-cmd(cSetTheme, 0.55)                   // light blue
-add(pOcean, 32, MODE_BEAT)             // ocean until a beat is detected
-add(pFizzle, 32)
-add(pBuildUp, 16)
-add(pSurge, 16)
-add(pFizzle, 16)
-cmd(cSetTheme, 0.78)                   // violet
-add(pOcean, 16)
-cmd(cSetTheme, 0)                      // red
-add(pOff, 16, MODE_BEAT)               // wait on black for the downbeat
-add(pProgress, 8)
-add(pSweep, 8)
-cmd(cSetDir, -1)
-add(pSweep, 8)
-cmd(cSetDir, 1)
-add(pQuarters, 8)
-add(pEighths, 8)
-add(pBassScope, 8)
-add(pOff, 4)
-add(pStrobe, 4)
-cmd(cSetTheme, 0.33)                   // green
-add(pDancing, 16)
-add(pBassScope, 8)
-add(pElastic, 32)
-add(pSplotch, 16)
-add(pMeasure, 8)
-add(pAnalyzer, 64)                     // long analyzer stint, then loop
-// To drive minis by hand, replace the show with:
-//   add(pManual, 4)   // and let sliderChooseManualPattern pick
-
-// manual-pattern debugging aid (takes effect only via pManual above)
-var manualFns = array(16)
-manualFns[0] = pOff;      manualFns[1] = pProgress; manualFns[2] = pSweep
-manualFns[3] = pQuarters; manualFns[4] = pEighths;  manualFns[5] = pStrobe
-manualFns[6] = pSurge;    manualFns[7] = pDancing;  manualFns[8] = pBassScope
-manualFns[9] = pFizzle;   manualFns[10] = pBuildUp; manualFns[11] = pOcean
-manualFns[12] = pSplotch; manualFns[13] = pAnalyzer; manualFns[14] = pElastic
-manualFns[15] = pMeasure
-var manualSel = 0
-export function sliderChooseManualPattern(v) {
-  //# min=0 max=1 step=0.0667 default=0
-  manualSel = floor(v * 15.99)
+function nextEntry(skipSec) {
+  qIndex = (qIndex + 1) % qLen
+  entrySec = skipSec                     // skip in: absorbs detection latency
   resetShared()
 }
-function pManual() { manualFns[manualSel]() }
 
-// --------------------------------------------------------------- engine
+// ============================================================ mini-patterns
+// Every mini-pattern fills the shared hue/sat/val scratch arrays each frame;
+// the exported renderers just read them (2D/3D forward to the same 1D look).
+
+function fpOff() {
+  arrayReplace(valA, 0)
+}
+
+function fpProgress(dt, perMeasure) {
+  var fill = perMeasure ? frac(beatCount / 4) : patternProg
+  var pulse = 0.45 + 0.55 * quarter * quarter    // brightness rides each beat
+  for (var i = 0; i < N; i++) {
+    var lit = posOf(i) <= fill
+    hueA[i] = themeHue
+    satA[i] = 1
+    valA[i] = lit ? pulse : 0
+  }
+}
+
+function fpSweep(dt) {
+  var dot = frac(beatCount)              // one pass per beat
+  if (direction) dot = 1 - dot
+  for (var i = 0; i < N; i++) {
+    hueA[i] = themeHue
+    satA[i] = 1
+    valA[i] = near(i / N, dot, 0.08)
+  }
+}
+
+function fpQuarters(dt) {
+  var q2 = quarter * quarter
+  for (var i = 0; i < N; i++) {
+    var p = i / N
+    hueA[i] = themeHue + p * 0.12        // slight hue grade along the strip
+    satA[i] = 1
+    valA[i] = (1 - abs(p - 0.5) * 2) * q2
+  }
+}
+
+function fpEighths(dt) {
+  decayVals(0.35, dt)
+  var mPos = frac(beatCount / 4)
+  var e8 = floor(mPos * 8)
+  var e2 = eighth * eighth
+  for (var i = 0; i < N; i++) {
+    var seg = min(7, floor(posOf(i) * 8))
+    if (seg == e8) {
+      valA[i] = max(valA[i], e2)
+      hueA[i] = themeHue + mPos * 0.25   // hue drifts through the measure
+      satA[i] = 0.75 + 0.25 * mPos
+    }
+  }
+}
+
+function fpStrobe(dt) {
+  var on = frac(beatCount * 4) < 0.25 ? 1 : 0  // leading edge of each 16th
+  for (var i = 0; i < N; i++) {
+    satA[i] = 0
+    valA[i] = on
+  }
+}
+
+function fpSurge(dt) {
+  // colors emanate from center and withdraw sharply every two beats
+  var front = 1 - half * half            // smoothed half-note ramp
+  for (var i = 0; i < N; i++) {
+    var radial = abs(i / N - 0.5) * 2
+    var v = clamp(1 - abs(radial - front) * 4, 0, 1)
+    if (radial < front) v = max(v, 0.3 * (1 - radial))
+    hueA[i] = themeHue + patternProg * 0.35 + radial * 0.08
+    satA[i] = 1
+    valA[i] = v
+  }
+}
+
+function fpDancer(dt) {
+  var wig = quarter * quarter * quarter
+  var jit = (square(frac(beatCount * 2), 0.5) * 2 - 1) * max(0, 1 - patternProg * 2)
+  var grow = patternProg * bassNorm
+  var dot = 0.5 + 0.27 * sin(entrySec * 0.8)     // slow wander
+          + 0.1 * wig * sin(entrySec * 13)       // beat-cubed wiggle
+          + 0.07 * jit                           // 8th-note jitter, fading out
+          + 0.2 * grow * sin(entrySec * 5)       // bass term, growing in
+  dot = clamp(dot, 0.02, 0.98)
+  var w = 0.025 + 0.08 * bassNorm                // width breathes with bass
+  var h = themeHue + (patternProg > 0.5 ? 0.5 : 0)  // snap to complement
+  for (var i = 0; i < N; i++) {
+    hueA[i] = h
+    satA[i] = 1
+    valA[i] = near(posOf(i), dot, w)
+  }
+}
+
+function fpBassScope(dt) {
+  decayVals(0.25, dt)
+  // dot oscillates about center like a decaying bass note, chirping down
+  var life = 1 - half                    // 0 -> 1 across the two beats
+  var amp = half * half * half * 0.45
+  var dot = 0.5 + amp * sin(life * (16 - 7 * life))
+  var w = 0.04 + 0.04 * (1 - half)
+  var h = themeHue + floor(frac(beatCount / 4) * 4) * 0.12  // step per beat
+  for (var i = 0; i < N; i++) {
+    var v = near(i / N, dot, w)
+    if (v > valA[i]) {
+      valA[i] = v
+      hueA[i] = h
+      satA[i] = 1
+    }
+  }
+}
+
+// paint fizzle — a texture brush: beat = new random sputtering stroke,
+// claps extend it, everything decays (faster when loud) with a soft shimmer
+var strokePos = 0.5, strokeLen = 0.2, strokeHue = 0
+function sputter(start, len, h) {
+  var n = max(1, floor(abs(len) * N))
+  for (var k = 0; k < n; k++) {
+    var idx = floor((start + len * k / n) * N)
+    if (idx < 0 || idx >= N) continue
+    if (random(1) < 0.8) {               // ~4/5 of pixels, biased bright
+      valA[idx] = 0.35 + random(0.65)
+      hueA[idx] = h
+    }
+  }
+}
+function fpFizzle(dt) {
+  // spatially-rippled decay = continuous decay + slow shimmer in one pass
+  var base = max(0, 1 - dt * (1.2 + 2.5 * volume))
+  var ph = time(0.15) * PI2
+  for (var i = 0; i < N; i++) {
+    valA[i] *= base * (0.985 + 0.015 * sin(i / N * PI2 * 3 + ph))
+    satA[i] = 0.35 + 0.65 * clamp(valA[i], 0, 1)  // dim grains go whitish
+  }
+  if (beatFired) {
+    strokePos = random(1)
+    strokeLen = (random(1) < 0.2 ? -1 : 1) * (0.08 + random(0.22))
+    strokeHue = warpHue(time(0.3) + (random(1) < 0.5 ? 0.07 : 0))
+    sputter(strokePos, strokeLen, strokeHue)
+  }
+  if (clapFired) sputter(strokePos + strokeLen, strokeLen * 0.6, strokeHue)
+}
+
+// build-up: segments multiply as the drop approaches, random on/off masks
+var buMask = array(16)
+var buLastTick = 0
+function fpBuildup(dt) {
+  var remaining = max(0, curDur - beatCount)
+  var n = remaining > 16 ? 1 : remaining > 8 ? 2 : remaining > 4 ? 3 : 4
+  var segs = n == 1 ? 2 : n == 2 ? 4 : n == 3 ? 8 : 16
+  // reroll cadence: beats, then 8ths, then 16ths in the final bars
+  var tickRate = remaining > 8 ? 1 : remaining > 4 ? 2 : 4
+  var tick = floor(beatCount * tickRate)
+  if (tick != buLastTick || beatFired || !setupDone) {
+    buLastTick = tick
+    setupDone = 1
+    var lit = 0, k
+    for (k = 0; k < segs; k++) {
+      buMask[k] = random(1) < 0.5
+      lit += buMask[k]
+    }
+    if (!lit) buMask[floor(random(segs))] = 1   // at least one always on
+  }
+  var h = themeHue + phraseProg * 0.5
+  var s = remaining < 2 ? 0 : 1                 // white for the last beats
+  var pulse = 0.35 + 0.65 * quarter
+  for (var i = 0; i < N; i++) {
+    var seg = min(segs - 1, floor(posOf(i) * segs))
+    hueA[i] = h
+    satA[i] = s
+    valA[i] = buMask[seg] ? pulse : 0
+  }
+}
+
+function fpOcean(dt) {
+  // layered slow sines, cubed for contrast; volume scales brightness
+  var fMod = 3 + sin(entrySec * 0.1)            // one frequency self-modulates
+  var t1 = time(0.07), t2 = time(0.05), t3 = time(0.03)
+  var lvl = 0.2 + 0.8 * volume
+  var lateDrift = patternProg > 0.7 ? (patternProg - 0.7) * 0.5 : 0
+  var crestGate = square(time(0.1), 0.07)       // occasional crest pulse
+  var crestPos = frac(beatCount / 8)
+  for (var i = 0; i < N; i++) {
+    var p = i / N
+    var v = (wave(p * 1.5 + t1) + wave(p * fMod - t2) + wave(p * 5 + t3)) / 3
+    v = v * v * v * lvl
+    var c = crestGate * near(p, crestPos, 0.05)
+    hueA[i] = themeHue + 0.04 * sin(p * PI2 + entrySec * 0.2) + lateDrift
+    satA[i] = 1 - c * 0.85                      // white crest
+    valA[i] = max(v, c)
+  }
+}
+
+function fpSplotch(dt) {
+  decayVals(0.4, dt)
+  if (beatFired) {
+    // deep red/pink blob normally, cyan on the high-frequency variant
+    var bp = random(1), bw = 0.05 + random(0.08)
+    var bh = hhOn ? 0.5 : (random(1) < 0.5 ? 0.97 : 0.93)
+    for (var k = 0; k < N; k++) {
+      var v = near(k / N, bp, bw)
+      if (v > valA[k]) {
+        valA[k] = v
+        hueA[k] = bh
+        satA[k] = 1
+      }
+    }
+  }
+  for (var i = 0; i < N; i++) {
+    var p = i / N
+    if (hhOn && p < 0.12 && i % 3 == 0) {       // one end flicks warm white
+      valA[i] = 0.8
+      hueA[i] = 0.1
+      satA[i] = 0.3
+    }
+    if (clapOn && p > 0.88 && i % 3 == 0) {     // the other end for claps
+      valA[i] = 0.8
+      hueA[i] = 0.1
+      satA[i] = 0.3
+    }
+  }
+}
+
+// spectrum analyzer with a PI auto-gain toward a target fill
+var binAvg = array(20), binHue = array(20)
+var gainI = 1, markerPos = 0.5
+function fpAnalyzer(dt) {
+  var b, k
+  for (b = 0; b < 20; b++) {
+    var idx = floor(b * 1.55)
+    var lvl = frequencyData[idx] + frequencyData[min(31, idx + 1)]
+    binAvg[b] += (lvl - binAvg[b]) * min(1, dt * 8)
+    var peaky = binAvg[b] > 0.0005 ? lvl / binAvg[b] : 0
+    if (peaky > 2) binHue[b] = clamp(peaky / 5, 0, 0.8)  // jump on peaks
+    else binHue[b] += (themeHue - binHue[b]) * min(1, dt)  // relax back
+  }
+  // PI controller: keep average lit fraction near a volume-tied target
+  var fill = arraySum(valA) / N
+  var err = (0.1 + 0.3 * volume) - fill
+  gainI = clamp(gainI + err * dt * 2, 0, 40)
+  var gain = clamp(gainI + err * 4, 0, 40)
+  // smooth/sparkle crossfade oscillates over the phrase
+  var sparkle = wave(phraseProg) * 0.5
+  for (var i = 0; i < N; i++) {
+    b = min(19, floor(i / N * 20))
+    var v = clamp(binAvg[b] * 8 * gain, 0, 1)
+    if (sparkle > 0.3) v *= 0.7 + random(0.5)
+    hueA[i] = binHue[b]
+    satA[i] = 1
+    valA[i] = v
+  }
+  // second half: desaturated marker tracks the dominant frequency
+  if (patternProg > 0.5 && maxFrequency > 20) {
+    var mp = clamp(log2(maxFrequency / 55) / 6, 0, 1)
+    markerPos += (mp - markerPos) * min(1, dt * 4)
+    k = floor(markerPos * (N - 1))
+    valA[k] = max(valA[k], 0.8)
+    satA[k] = 0.15
+  }
+}
+
+// elastic: a spring chain chasing a beat-jumping target
+var EP = 5
+var ex = array(EP), ev = array(EP)
+var eTarget = 0.5, eLastQ = 0
+function fpElastic(dt) {
+  var j
+  if (!setupDone) {
+    setupDone = 1
+    for (j = 0; j < EP; j++) {
+      ex[j] = 0.5
+      ev[j] = 0
+    }
+  }
+  // trails linger periodically: the decay time itself oscillates
+  decayVals(0.15 + 0.3 * wave(beatCount / 24), dt)
+
+  // target jumps on detected beats; by clock without a board; wanders in silence
+  var jump = beatFired
+  var q = floor(beatCount)
+  if ((!boardPresent || bassMax < 0.002) && q != eLastQ) jump = 1
+  eLastQ = q
+  if (jump) eTarget = frac(eTarget + 0.125 + random(0.75))  // >= 1/8 away
+  if (volume < 0.02) eTarget = 0.5 + 0.2 * sin(entrySec * 0.5)
+
+  var k = 3 + 6 * patternProg                    // spring stiffens over slot
+  var dts = min(dt, 0.05)
+  for (j = 0; j < EP; j++) {
+    var anchor = j == 0 ? eTarget : ex[j - 1]
+    var d = anchor - ex[j]
+    if (j > 0) d -= clamp(d, -0.03, 0.03)        // rest length
+    ev[j] += d * k * dts * 8
+    ev[j] *= max(0, 1 - 3 * dts)                 // friction
+    ex[j] = clamp(ex[j] + ev[j] * dts, 0, 1)
+  }
+  // plot with linear interpolation between adjacent pixels
+  var baseH = 0.78                               // violet base, splayed by volume
+  for (j = 0; j < EP; j++) {
+    var f = ex[j] * (N - 1)
+    var i0 = floor(f)
+    var fr = f - i0
+    var h = baseH + j * 0.02 * (1 + volume * 4)
+    if (1 - fr > valA[i0]) {
+      valA[i0] = 1 - fr
+      hueA[i0] = h
+      satA[i0] = 1
+    }
+    if (fr > valA[i0 + 1]) {
+      valA[i0 + 1] = fr
+      hueA[i0 + 1] = h
+      satA[i0 + 1] = 1
+    }
+  }
+}
+
+function runPattern(id, dt) {
+  if (id == OFF) fpOff()
+  else if (id == PROGRESS) fpProgress(dt, 0)
+  else if (id == MPROGRESS) fpProgress(dt, 1)
+  else if (id == SWEEP) fpSweep(dt)
+  else if (id == QUARTERS) fpQuarters(dt)
+  else if (id == EIGHTHS) fpEighths(dt)
+  else if (id == STROBE) fpStrobe(dt)
+  else if (id == SURGE) fpSurge(dt)
+  else if (id == DANCER) fpDancer(dt)
+  else if (id == BSCOPE) fpBassScope(dt)
+  else if (id == FIZZLE) fpFizzle(dt)
+  else if (id == BUILDUP) fpBuildup(dt)
+  else if (id == OCEAN) fpOcean(dt)
+  else if (id == SPLOTCH) fpSplotch(dt)
+  else if (id == ANALYZER) fpAnalyzer(dt)
+  else if (id == ELASTIC) fpElastic(dt)
+  else fpOff()
+}
+
+// =============================================================== frame loop
 export function beforeRender(delta) {
-  dt = delta / 1000
-  tSec += dt
-  if (tSec > 3600) tSec -= 3600
+  var dt = delta / 1000
+  analyzeSound(delta)
 
-  analyze(dt)
+  entrySec += dt
+  beatSec = 60 / max(30, bpm)
 
-  patBeats += dt / beatSec
-  patProgress = clamp(patBeats / entryDur, 0, 1)
-  phrasePos = frac(patBeats / phraseBeats)
-  r16 = 1 - frac(patBeats * 4)
-  r8 = 1 - frac(patBeats * 2)
-  r4 = 1 - frac(patBeats)
-  r2 = 1 - frac(patBeats / 2)
-  r1 = 1 - frac(patBeats / 4)
+  // queue management: commands run through; timed entries advance (possibly
+  // early on beat / sound), skipping slightly into the next entry
+  var guard = 0
+  while (guard < 80 && qLen > 0) {
+    guard += 1
+    var mode = qMode[qIndex]
+    var id = qPat[qIndex]
+    if (mode == 3) {
+      doCmd(id, qArg[qIndex])
+      nextEntry(0)
+      continue
+    }
+    curDur = qDur[qIndex]
+    if (curDur <= 0) curDur = phraseBeats
+    beatCount = entrySec / beatSec
+    var adv = beatCount >= curDur
+    if (mode == 1 && beatFired) adv = 1
+    if (mode == 2 && soundSpike) adv = 1
+    if (id == ANALYZER && !boardPresent) adv = 1  // skips without a board
+    if (!adv) break
+    nextEntry(0.04)
+  }
 
-  runQueue()
+  // the beat clock: ramp-DOWN note timers derived from time-in-entry
+  beatCount = entrySec / beatSec
+  quarter = 1 - frac(beatCount)
+  eighth = 1 - frac(beatCount * 2)
+  sixteenth = 1 - frac(beatCount * 4)
+  half = 1 - frac(beatCount / 2)
+  whole = 1 - frac(beatCount / 4)
+  phraseProg = frac(beatCount / phraseBeats)
+  patternProg = clamp(beatCount / curDur, 0, 1)
+
+  runPattern(qPat[qIndex], dt)
 }
 
+// all three renderers export; content is 1D — 2D/3D forward to the shared look
 export function render(index) {
-  if (renderFn) renderFn(index, index / pixelCount)
-  else hsv(0, 0, 0)
+  hsv(hueA[index], satA[index], valA[index])
 }
-export function render2D(index, x, y) { render(index) }
-export function render3D(index, x, y, z) { render(index) }
+export function render2D(index, x, y) {
+  render(index)
+}
+export function render3D(index, x, y, z) {
+  render(index)
+}
+
+// ========================================================== the demo show
+// (loops forever; queue restarts when exhausted)
+enq(CMD_TEMPO, 0, 3, 120)
+enq(CMD_PHRASE, 0, 3, 16)
+enq(OFF, 128, 2, 0)            // hold dark until any sound (up to ~4 min)
+enq(CMD_SEEDBASS, 0, 3, 0.3)   // pre-seed bass gain so first beats detect
+enq(CMD_THEME, 0, 3, 0.55)     // light blue
+enq(OCEAN, 32, 1, 0)           // ocean until a beat is detected
+enq(FIZZLE, 16, 0, 0)
+enq(BUILDUP, 16, 0, 0)
+enq(SURGE, 8, 0, 0)
+enq(FIZZLE, 8, 0, 0)
+enq(CMD_THEME, 0, 3, 0.8)      // violet
+enq(OCEAN, 16, 0, 0)
+enq(CMD_THEME, 0, 3, 0)        // red, wait for a downbeat
+enq(OFF, 16, 1, 0)
+// rhythmic-precision section
+enq(PROGRESS, 8, 0, 0)
+enq(SWEEP, 4, 0, 0)
+enq(CMD_FLIP, 0, 3, 0)
+enq(CMD_THEME, 0, 3, 0.03)     // tiny hue nudge between sweeps
+enq(SWEEP, 4, 0, 0)
+enq(CMD_FLIP, 0, 3, 0)
+enq(QUARTERS, 8, 0, 0)
+enq(EIGHTHS, 8, 0, 0)
+enq(BSCOPE, 4, 0, 0)
+enq(OFF, 2, 0, 0)
+enq(BSCOPE, 4, 0, 0)
+enq(STROBE, 2, 0, 0)
+enq(CMD_THEME, 0, 3, 0.33)     // green dancing pixel
+enq(DANCER, 16, 0, 0)
+enq(BSCOPE, 8, 0, 0)
+enq(ELASTIC, 16, 0, 0)
+enq(SPLOTCH, 16, 0, 0)
+enq(MPROGRESS, 8, 0, 0)
+enq(ELASTIC, 16, 0, 0)
+enq(ANALYZER, 32, 0, 0)        // long analyzer stint, then loop forever
+// enq(manualPattern, 9999, 0, 0)  // manual-pattern debugging entry (see slider)

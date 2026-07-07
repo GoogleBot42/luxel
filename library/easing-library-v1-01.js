@@ -1,227 +1,134 @@
 // name: Easing Library v1.01
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Easing Library v1.01"; original source never consulted.
+//
+// A library of the 30 canonical easings.net curves (in/out/inOut of sine,
+// quad, cubic, quart, quint, expo, circ, back, elastic, bounce), plus the
+// bundled demo that cycles through them: 1D shows a white dot at the eased
+// position; 2D plots the curve in rainbow with a white output marker and a
+// faint gray identity diagonal.
 
-// A library of the thirty standard easings.net curves (in/out/inOut of ten
-// families), plus a bundled demo: each curve gets a ~5 second dwell while a
-// progress value ping-pongs 0 -> 1 -> 0. 1D shows a white dot moving with the
-// curve's character; 2D plots the curve as a rainbow graph with a white
-// output marker and a faint gray identity diagonal.
+// ---- library ----------------------------------------------------------
 
-// ---------- the library ----------
-
-function easeInSine(t) { return 1 - cos(t * PI / 2) }
-function easeOutSine(t) { return sin(t * PI / 2) }
-function easeInOutSine(t) { return (1 - cos(PI * t)) / 2 }
-
-function easeInQuadratic(t) { return t * t }
-function easeOutQuadratic(t) { return 1 - (1 - t) * (1 - t) }
-function easeInOutQuadratic(t) {
-  if (t < 0.5) return 2 * t * t
-  var u = -2 * t + 2
-  return 1 - u * u / 2
-}
-
-function easeInCubic(t) { return t * t * t }
-function easeOutCubic(t) { var u = 1 - t; return 1 - u * u * u }
-function easeInOutCubic(t) {
-  if (t < 0.5) return 4 * t * t * t
-  var u = -2 * t + 2
-  return 1 - u * u * u / 2
-}
-
-function easeInQuart(t) { return t * t * t * t }
-function easeOutQuart(t) { var u = 1 - t; return 1 - u * u * u * u }
-function easeInOutQuart(t) {
-  if (t < 0.5) return 8 * t * t * t * t
-  var u = -2 * t + 2
-  return 1 - u * u * u * u / 2
-}
-
-function easeInQuint(t) { return t * t * t * t * t }
-function easeOutQuint(t) { var u = 1 - t; return 1 - u * u * u * u * u }
-function easeInOutQuint(t) {
-  if (t < 0.5) return 16 * t * t * t * t * t
-  var u = -2 * t + 2
-  return 1 - u * u * u * u * u / 2
-}
-
-function easeInExpo(t) {
-  if (t == 0) return 0
-  return pow(2, 10 * t - 10)
-}
-function easeOutExpo(t) {
-  if (t == 1) return 1
-  return 1 - pow(2, -10 * t)
-}
-function easeInOutExpo(t) {
-  if (t == 0) return 0
-  if (t == 1) return 1
-  if (t < 0.5) return pow(2, 20 * t - 10) / 2
-  return (2 - pow(2, -20 * t + 10)) / 2
-}
-
-function easeInCirc(t) { return 1 - sqrt(1 - t * t) }
-function easeOutCirc(t) { var u = t - 1; return sqrt(1 - u * u) }
-function easeInOutCirc(t) {
-  if (t < 0.5) return (1 - sqrt(1 - 4 * t * t)) / 2
-  var u = -2 * t + 2
-  return (sqrt(1 - u * u) + 1) / 2
-}
-
-// back: deliberately overshoots slightly past both ends
-function easeInBack(t) {
-  var c1 = 1.70158, c3 = c1 + 1
-  return c3 * t * t * t - c1 * t * t
-}
-function easeOutBack(t) {
-  var c1 = 1.70158, c3 = c1 + 1
-  var u = t - 1
-  return 1 + c3 * u * u * u + c1 * u * u
-}
-function easeInOutBack(t) {
-  var c2 = 1.70158 * 1.525
-  if (t < 0.5) {
-    var u = 2 * t
-    return u * u * ((c2 + 1) * u - c2) / 2
-  }
-  var v = 2 * t - 2
-  return (v * v * ((c2 + 1) * v + c2) + 2) / 2
-}
-
-// elastic: deliberately oscillates past both ends
-function easeInElastic(t) {
-  if (t == 0) return 0
-  if (t == 1) return 1
-  var c4 = PI2 / 3
-  return -pow(2, 10 * t - 10) * sin((t * 10 - 10.75) * c4)
-}
-function easeOutElastic(t) {
-  if (t == 0) return 0
-  if (t == 1) return 1
-  var c4 = PI2 / 3
-  return pow(2, -10 * t) * sin((t * 10 - 0.75) * c4) + 1
-}
-function easeInOutElastic(t) {
-  if (t == 0) return 0
-  if (t == 1) return 1
-  var c5 = PI2 / 4.5
-  if (t < 0.5) return -pow(2, 20 * t - 10) * sin((20 * t - 11.125) * c5) / 2
-  return pow(2, -20 * t + 10) * sin((20 * t - 11.125) * c5) / 2 + 1
-}
-
-// bounce: piecewise parabolic, like a ball settling
-function easeOutBounce(t) {
-  var n1 = 7.5625, d1 = 2.75
+function bounceOut(t) {
+  var n1 = 7.5625
+  var d1 = 2.75
   if (t < 1 / d1) return n1 * t * t
-  if (t < 2 / d1) { t -= 1.5 / d1; return n1 * t * t + 0.75 }
-  if (t < 2.5 / d1) { t -= 2.25 / d1; return n1 * t * t + 0.9375 }
-  t -= 2.625 / d1
+  if (t < 2 / d1) { t = t - 1.5 / d1; return n1 * t * t + 0.75 }
+  if (t < 2.5 / d1) { t = t - 2.25 / d1; return n1 * t * t + 0.9375 }
+  t = t - 2.625 / d1
   return n1 * t * t + 0.984375
 }
-function easeInBounce(t) { return 1 - easeOutBounce(1 - t) }
-function easeInOutBounce(t) {
-  if (t < 0.5) return (1 - easeOutBounce(1 - 2 * t)) / 2
-  return (1 + easeOutBounce(2 * t - 1)) / 2
+
+// ease-in of family f (0 sine, 1 quad, 2 cubic, 3 quart, 4 quint,
+// 5 expo, 6 circ, 7 back, 8 elastic, 9 bounce)
+function easeInF(f, t) {
+  if (f == 0) return 1 - cos(t * PI / 2)
+  if (f == 1) return t * t
+  if (f == 2) return t * t * t
+  if (f == 3) return t * t * t * t
+  if (f == 4) return t * t * t * t * t
+  if (f == 5) {                          // expo: exact endpoints special-cased
+    if (t <= 0) return 0
+    if (t >= 1) return 1
+    return pow(2, 10 * t - 10)
+  }
+  if (f == 6) return 1 - sqrt(1 - t * t) // circ
+  if (f == 7) return 2.70158 * t * t * t - 1.70158 * t * t  // back (overshoots)
+  if (f == 8) {                          // elastic (oscillates past the ends)
+    if (t <= 0) return 0
+    if (t >= 1) return 1
+    return -pow(2, 10 * t - 10) * sin((t * 10 - 10.75) * PI2 / 3)
+  }
+  return 1 - bounceOut(1 - t)            // bounce
 }
 
-// ---------- demo plumbing ----------
-
-var NUM_CURVES = 30
-
-function evalCurve(i, t) {
-  if (i == 0) return easeInSine(t)
-  if (i == 1) return easeOutSine(t)
-  if (i == 2) return easeInOutSine(t)
-  if (i == 3) return easeInQuadratic(t)
-  if (i == 4) return easeOutQuadratic(t)
-  if (i == 5) return easeInOutQuadratic(t)
-  if (i == 6) return easeInCubic(t)
-  if (i == 7) return easeOutCubic(t)
-  if (i == 8) return easeInOutCubic(t)
-  if (i == 9) return easeInQuart(t)
-  if (i == 10) return easeOutQuart(t)
-  if (i == 11) return easeInOutQuart(t)
-  if (i == 12) return easeInQuint(t)
-  if (i == 13) return easeOutQuint(t)
-  if (i == 14) return easeInOutQuint(t)
-  if (i == 15) return easeInExpo(t)
-  if (i == 16) return easeOutExpo(t)
-  if (i == 17) return easeInOutExpo(t)
-  if (i == 18) return easeInCirc(t)
-  if (i == 19) return easeOutCirc(t)
-  if (i == 20) return easeInOutCirc(t)
-  // back family: scaled/offset in the demo so the overshoot stays on-screen
-  if (i == 21) return easeInBack(t) * 0.7 + 0.15
-  if (i == 22) return easeOutBack(t) * 0.7 + 0.15
-  if (i == 23) return easeInOutBack(t) * 0.7 + 0.15
-  if (i == 24) return easeInElastic(t)
-  if (i == 25) return easeOutElastic(t)
-  if (i == 26) return easeInOutElastic(t)
-  if (i == 27) return easeInBounce(t)
-  if (i == 28) return easeOutBounce(t)
-  return easeInOutBounce(t)
+// curve i (0..29) at t: i = family*3 + variant (0 in, 1 out, 2 inOut).
+// out/inOut derive from ease-in by reflection, which reproduces the
+// canonical formulations exactly — except inOutBack and inOutElastic,
+// which use their own canonical constants and are special-cased.
+function easeAt(i, t) {
+  var f = floor(i / 3)
+  var v = i - f * 3
+  if (v == 2 && f == 7) {                // inOutBack, c2 = 1.70158 * 1.525
+    if (t < 0.5) {
+      var u = 2 * t
+      return u * u * (3.5949095 * u - 2.5949095) / 2
+    }
+    var w = 2 * t - 2
+    return (w * w * (3.5949095 * w + 2.5949095) + 2) / 2
+  }
+  if (v == 2 && f == 8) {                // inOutElastic, c5 = 2*PI/4.5
+    if (t <= 0) return 0
+    if (t >= 1) return 1
+    var c5 = PI2 / 4.5
+    if (t < 0.5) return -(pow(2, 20 * t - 10) * sin((20 * t - 11.125) * c5)) / 2
+    return pow(2, -20 * t + 10) * sin((20 * t - 11.125) * c5) / 2 + 1
+  }
+  if (v == 0) return easeInF(f, t)
+  if (v == 1) return 1 - easeInF(f, 1 - t)
+  if (t < 0.5) return easeInF(f, 2 * t) / 2
+  return 1 - easeInF(f, 2 - 2 * t) / 2
 }
 
-var DWELL = 5 // seconds per curve
+// ---- demo -------------------------------------------------------------
+
+var DWELL = 5000                  // ms per curve
 var elapsed = 0
 var curveIndex = 0
-var progress = 0 // ping-pong 0..1..0 within each dwell
+var progress = 0
 var eased = 0
-export var easedMin = 1
-export var easedMax = 0
+var tol2 = 0.0625
+
+// demo evaluation: the back family is scaled/offset to stay on-screen
+// (elastic is shown raw, off-screen excursions just vanish)
+function demoEase(i, t) {
+  var v = easeAt(i, t)
+  if (floor(i / 3) == 7) v = v * 0.8 + 0.1
+  return v
+}
 
 export function beforeRender(delta) {
-  elapsed += delta / 1000
-  if (elapsed >= DWELL * NUM_CURVES) {
-    elapsed -= DWELL * NUM_CURVES
-    easedMin = 1
-    easedMax = 0
+  elapsed += delta
+  while (elapsed >= DWELL) {
+    elapsed -= DWELL
+    curveIndex = (curveIndex + 1) % 30
   }
-  curveIndex = floor(elapsed / DWELL)
-  var p = (elapsed - curveIndex * DWELL) / DWELL
-  progress = p < 0.5 ? p * 2 : 2 - p * 2
-  eased = evalCurve(curveIndex, progress)
-  if (eased < easedMin) easedMin = eased
-  if (eased > easedMax) easedMax = eased
+  // ping-pong progress: 0 -> 1 over the first half of the dwell, back down
+  progress = triangle(elapsed / DWELL)
+  eased = demoEase(curveIndex, progress)
+  tol2 = 1 / sqrt(pixelCount)     // ~one pixel-row on a square matrix
 }
 
 export function render(index) {
-  // single white dot at the eased position
   if (abs(index / pixelCount - eased) < 1 / pixelCount) {
-    rgb(1, 1, 1)
+    rgb(1, 1, 1)                  // white dot sweeping with the curve's character
   } else {
     rgb(0, 0, 0)
   }
 }
 
 export function render2D(index, x, y) {
-  var tol = 1 / sqrt(pixelCount) // roughly one pixel row/column
-
-  // faithful leftover from the original: the 1D dot rule applied by index
+  // 1D-style dot by pixel index (faithful leftover from the original)
   if (abs(index / pixelCount - eased) < 1 / pixelCount) {
     rgb(1, 1, 1)
     return
   }
-
-  // white output marker near mid-height, tracking the eased value horizontally
-  if (abs(y - 0.5) < tol && abs(x - eased) < tol / 2) {
+  // the curve itself, hue = eased value (rainbow sweep along the plot)
+  var fy = demoEase(curveIndex, x)
+  if (abs(1 - y - fy) < tol2) {
+    hsv(fy, 1, 1)
+    return
+  }
+  // white output marker near mid-height tracking the eased position
+  if (abs(y - 0.5) < tol2 / 2 && abs(x - eased) < tol2) {
     rgb(1, 1, 1)
     return
   }
-
-  // the curve itself: y (flipped so up = larger) vs curve(x), rainbow by value
-  var v = evalCurve(curveIndex, x)
-  if (abs((1 - y) - v) < tol) {
-    hsv(v, 1, 1)
-    return
-  }
-
   // faint gray identity diagonal for reference
-  if (abs((1 - y) - x) < tol / 2) {
-    rgb(0.1, 0.1, 0.1)
+  if (abs(x - y) < tol2 / 2) {
+    rgb(0.2, 0.2, 0.2)
     return
   }
-
   rgb(0, 0, 0)
 }

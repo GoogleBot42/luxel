@@ -2,40 +2,40 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "block reflections"; original source never consulted.
 
-// Chunky banded blocks of color, mirror-symmetric about the strip center,
-// like reflections in facing mirrors. A signed center-distance ramp is
-// zoomed by a slow triangle wave (bands multiply and merge) and folded by
-// a signed modulo into repeating block segments. All blocks share a
-// drifting base hue; feeding the position-dependent hue back into the
-// brightness formula makes brightness break up per block, so blocks blink
-// through dark seams instead of dimming smoothly.
+// Mirror-symmetric bands folding out from the strip midpoint: a signed
+// center-distance ramp is zoomed by slow breathing waves, folded into
+// repeating blocks with a signed modulo, and the per-block hue feeds back
+// into the brightness formula so blocks blink through dark seams.
 
 export function beforeRender(delta) {
-  hueAngle = time(0.07) * PI2   // base-hue phase, ~4.6 s, used via sine
-  linPhase = time(0.07)         // same-speed linear phase: size wobble + brightness bias
-  zoomT = time(0.5)             // dominant zoom, ~33 s triangle breathing
-  wobAngle = time(0.16) * PI2   // secondary zoom wobble, ~10 s sine
+  hueBase = sin(time(0.06) * PI2)    // ~3.9 s: drifting shared base hue
+  linPhase = time(0.06)              // same speed, linear: size wobble + brightness bias
+  zoomTri = triangle(time(0.5))      // ~33 s: dominant zoom (bands multiply/merge)
+  zoomWobble = sin(time(0.15) * PI2) // ~10 s: secondary zoom wobble
 }
 
 export function render(index) {
   // Signed distance from the strip midpoint, about -0.5 .. +0.5.
   var d = (index - pixelCount / 2) / pixelCount
 
-  // Zoom: slow triangle up to roughly ten-fold, plus a sinusoidal
-  // wobble of about half that reach.
-  var zoom = triangle(zoomT) * 10 + sin(wobAngle) * 5
+  // Zoom: roughly ten-fold triangle sweep plus a sinusoidal wobble of
+  // about half that reach. Sets how many bands fit on the strip.
+  var zoom = zoomTri * 10 + zoomWobble * 5
 
-  // Time-varying block size around a third of the hue circle.
-  var blockSize = 0.33 + (triangle(linPhase) - 0.5) * 0.12
-
-  // Signed modulo folds the zoomed ramp into blocks; the two halves of
-  // the strip fold in opposite directions — the mirror effect.
+  // Block size hovers around a third of the hue circle, wobbling by a
+  // modest fraction. The signed modulo folds the zoomed ramp into
+  // repeating sawtooth blocks; the two halves fold in opposite
+  // directions, giving the mirror effect for free.
+  var blockSize = 0.33 + (triangle(linPhase) - 0.5) * 0.15
   var block = (d * zoom) % blockSize
 
-  // All blocks share a drifting base hue; each spans adjacent hues.
-  var h = sin(hueAngle) + block
+  // All blocks share the drifting base color; each block spans a slice
+  // of adjacent hues (hue wraps naturally through both signs).
+  var h = hueBase + block
 
-  // Per-block brightness ramp; squaring deepens the dark seams.
+  // Brightness couples back to the per-block hue, so it breaks up
+  // per-block; the wrap of frac() makes hard travelling seams and the
+  // squaring deepens the dark phase.
   var v = frac(abs(h) + abs(blockSize) + linPhase)
   v = v * v
 

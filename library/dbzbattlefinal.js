@@ -39,6 +39,7 @@ var ringX = array(NR), ringY = array(NR), ringAge = array(NR)
 var RING_LIFE = 0.9, RING_SPEED = 0.7, RING_BAND = 0.06
 
 var clashCount = 0
+var clashCd = 0          // brief cooldown so one clash counts only once
 var clashNeed = 2        // clashes before the finale, re-rolled each round
 var phase = 0            // 0 fighting, 1 finale projectiles, 2 recovery
 var recTimer = 0
@@ -185,8 +186,10 @@ export function beforeRender(delta) {
     fy[0] = clamp(fy[0], 0.12, 0.88)
     fy[1] = clamp(fy[1], 0.12, 0.88)
 
-    // clash detection
-    if (abs(fx[1] - fx[0]) < 0.07 * sizeMul) {
+    // clash detection (with a short cooldown so one collision counts once)
+    if (clashCd > 0) clashCd -= dt
+    if (clashCd <= 0 && abs(fx[1] - fx[0]) < 0.07 * sizeMul) {
+      clashCd = 0.3
       spawnRing((fx[0] + fx[1]) / 2, (fy[0] + fy[1]) / 2)
       fvx[0] = -(0.9 + random(0.7)) * speedMul
       fvx[1] = (0.9 + random(0.7)) * speedMul

@@ -2,60 +2,60 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Tunnel of Squares 2D"; original source never consulted.
 
-// Concentric square-ish rings rush toward the viewer from the center of
-// the display. Log-spaced radii sell the fly-down-a-corridor perspective;
-// a small fixed rotation of the per-quadrant sign vector warps the clean
-// diamonds into a subtly corkscrewing spiral. Hue sweeps radially outward
-// and the whole palette drifts slowly around the wheel.
+// Concentric, slightly spiral-twisted square rings rushing outward from the
+// center, log-spaced for a tunnel-perspective illusion. Hue sweeps radially
+// and drifts slowly around the wheel.
 
-// fixed twist applied to the sign vector, precomputed once
-const TWIST = 0.12
-var twistCos = cos(TWIST)
-var twistSin = sin(TWIST)
+// Fixed twist angle (~0.1 rad), precomputed as cos/sin once at startup.
+var TWIST = 0.12
+var twC = cos(TWIST)
+var twS = sin(TWIST)
 
-var flowRate = 11.2   // rad/s at the default slider position
+// Speed slider: ~10x range, never fully stops.
+var flowRate = 7.75  // rad/s at default slider position
 //# min=0 max=1 step=0.01 default=0.75
 export function sliderSpeed(v) {
-  // tenfold sweep that never fully stops: ~2 rad/s crawl to ~20 rad/s rush
-  flowRate = 2 * pow(10, v)
+  flowRate = 1 + v * 9
 }
 
+// "Squarocity": integer rings per log-octave, 1..7.
 var rings = 4
-//# min=0 max=1 step=0.01 default=0.55
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderSquarocity(v) {
-  rings = 1 + floor(v * 6.99)   // 1..7 square rings per log-octave
+  rings = floor(1 + v * 6.99)
 }
 
-var flowPhase = 0
-var hueDrift = 0
+var flowPhase = 0   // fast animation phase (kept wrapped so it never overflows)
+var hueBase = 0     // slow global hue drift
 
 export function beforeRender(delta) {
-  // accumulate the animation phase directly; wrapping at 2*PI inside the
-  // accumulator is equivalent to the original's hour-long time wrap, and
-  // keeps full fixed-point precision forever
-  flowPhase = mod(flowPhase + delta / 1000 * flowRate, PI2)
-  hueDrift = time(0.08)   // full palette rotation every ~5 s
+  flowPhase += delta / 1000 * flowRate
+  if (flowPhase > PI2) flowPhase -= PI2   // wrap: sin() only cares mod 2*pi
+  hueBase = time(0.1)                     // full hue drift ~6.5 s
 }
 
 export function render2D(index, x, y) {
-  // center the unit square on the origin
+  // center the unit square
   var px = x - 0.5
   var py = y - 0.5
 
-  // square-ish radial metric: dot the position with its own sign vector,
-  // rotated by a fixed nudge — an |x|+|y| diamond norm warped into a
-  // twisted square, with the twist differing per quadrant
-  var sx = sign(px)
-  var sy = sign(py)
-  var m = px * (sx * twistCos - sy * twistSin)
-        + py * (sx * twistSin + sy * twistCos)
-  m = max(m, 0.004)   // floor the log singularity at dead center
+  // Sign vector of the position, rotated by the fixed twist angle...
+  var sx = px > 0 ? 1 : (px < 0 ? -1 : 0)
+  var sy = py > 0 ? 1 : (py < 0 ? -1 : 0)
+  var rx = sx * twC - sy * twS
+  var ry = sx * twS + sy * twC
 
-  // log spacing packs rings tight at the center, exponentially wider out;
-  // adding the polar angle turns rings into one continuous spiral
+  // ...dotted with the position: a twisted diamond/square norm (~|x|+|y|).
+  var m = px * rx + py * ry
+  if (m < 0.002) m = 0.002   // floor away the log singularity at dead center
+
+  // Log-spacing packs rings tight in the middle, exponentially wider outward.
   var phase = rings * log(m) + atan2(py, px) - flowPhase
 
-  // |sin| cubed: narrow bright bands, deep dark gaps, crisp ring edges
-  var s = abs(sin(phase))
-  hsv(hueDrift + m, 1, s * s * s)
+  // |sin| cubed: crisp bright rings with deep dark gaps.
+  var b = abs(sin(phase))
+  b = b * b * b
+
+  // Hue: radial sweep by the (un-logged) square metric plus the slow drift.
+  hsv(hueBase + m, 1, b)
 }

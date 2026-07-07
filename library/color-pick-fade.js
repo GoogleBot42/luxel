@@ -3,41 +3,35 @@
 // community pattern "Color Pick Fade"; original source never consulted.
 
 // Four evenly spaced soft pulses of one user-chosen color drift along the
-// strip against black. A triangle wave raised to the fourth power narrows
-// each pulse into a soft bump with long dark gaps; peak brightness is
-// capped at half. The speed slider scales the period (higher = slower).
+// strip against black. Gentle mood lighting: each pulse is a triangle wave
+// raised to the fourth power (narrow bump, long dark gaps) and peak
+// brightness is capped at half of maximum.
 
-const REPEATS = 4
+var PULSES = 4
 
-var phase = 0
-var hue = 0.06        // warm orange default
+var hue = 0.05  // warm orange default
 var sat = 1
-var period = 10       // seconds per drift cycle
+var speedV = 0.15
+var t1 = 0
 
-//# min=0 max=1 step=0.01 default=0.06
-export function sliderHue(v) {
-  hue = v
-}
+//# min=0 max=1 step=0.01 default=0.05
+export function sliderHue(v) { hue = v }
 
 //# min=0 max=1 step=0.01 default=1
-export function sliderSaturation(v) {
-  sat = v
-}
+export function sliderSaturation(v) { sat = v }
 
-// scales the period, not the rate: ~0.3 s at 0 up to ~60 s at 1
-//# min=0 max=1 step=0.01 default=0.16
-export function sliderSpeed(v) {
-  period = 0.3 + v * 60
-}
+// scales the period, not the rate: higher = slower
+// (sub-second frenzy up to roughly a minute per cycle)
+//# min=0 max=1 step=0.01 default=0.15
+export function sliderSpeed(v) { speedV = v }
 
 export function beforeRender(delta) {
-  phase = frac(phase + delta / 1000 / period)
+  t1 = time(0.01 + speedV * 0.9)
 }
 
 export function render(index) {
-  var t = frac(index / pixelCount * REPEATS + phase)
-  var b = triangle(t)
+  var p = frac(index / pixelCount * PULSES + t1)
+  var b = triangle(p)
   b = b * b
-  b = b * b            // fourth power: narrow soft pulses
-  hsv(hue, sat, b * 0.5)
+  hsv(hue, sat, b * b * 0.5)
 }

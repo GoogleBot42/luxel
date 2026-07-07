@@ -1,22 +1,23 @@
 // name: policeLights
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "policeLights"; original source never consulted.
+//
+// Emergency-flasher blocks: alternating ~10-pixel blocks of red and
+// blue-violet at full brightness, hard-swapping colors about five times a
+// second. Both color states are initialized up front (fixing the
+// original's first-swap quirk), and parity is taken on a floored quotient.
 
-// Emergency-vehicle flashers: the strip is split into fixed-size blocks,
-// alternating blocks show red and blue-violet at full blast, and the two
-// colors swap places a few times per second with hard cuts.
+const BLOCK_SIZE = 10
+const BLINK_MS = 200
 
-var BLOCK_SIZE = 10     // pixels per block
-var BLINK_MS = 200      // swap interval, milliseconds
-
-var hueA = 0            // red (top of the hue wheel)
-var hueB = 0.7          // blue-violet, ~7/10 around the wheel
-var elapsed = 0
+var acc = 0
+var hueA = 0      // red
+var hueB = 0.7    // blue-violet
 
 export function beforeRender(delta) {
-  elapsed += delta
-  if (elapsed > BLINK_MS) {
-    elapsed = 0
+  acc += delta
+  if (acc > BLINK_MS) {
+    acc = 0
     var t = hueA
     hueA = hueB
     hueB = t
@@ -24,11 +25,6 @@ export function beforeRender(delta) {
 }
 
 export function render(index) {
-  // Parity of the block this pixel sits in picks which hue it shows.
   var block = floor(index / BLOCK_SIZE)
-  if (mod(block, 2) < 1) {
-    hsv(hueA, 1, 1)
-  } else {
-    hsv(hueB, 1, 1)
-  }
+  hsv(mod(block, 2) ? hueB : hueA, 1, 1)
 }

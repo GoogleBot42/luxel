@@ -3,27 +3,26 @@
 // community pattern "spin cycle"; original source never consulted.
 
 // About five sharp bright bands race along the strip on a several-second
-// loop. Each band is painted from a compressed half-wheel slice of the
-// rainbow; the slice rotates around the wheel while the hue-striping
-// density breathes between ~5 and ~10 repetitions across the strip.
+// loop. Hues are folded into a half-wheel window whose position rotates
+// steadily around the full wheel, while the hue striping density breathes
+// between ~5 and ~10 repetitions.
 
-var t1 = 0
+var t1
 
 export function beforeRender(delta) {
-  t1 = time(0.06)   // ~4 s cycle
+  t1 = time(0.065) // ~4.3 s cycle
 }
 
 export function render(index) {
   var p = index / pixelCount
 
-  // hue: breathing repetition count + scrolling offset, folded into a
-  // half-wheel window that itself rotates once per cycle
-  var reps = 5 + 5 * wave(t1)
-  var h = p * reps + 2 * wave(t1)
+  // Breathing repetition count (~5..10) plus a scrolling offset, folded into
+  // a half-wheel window that itself rotates once per cycle.
+  var h = p * (5 + 5 * wave(t1)) + wave(t1) * 2
   h = h % 0.5 + t1
 
-  // brightness: ~5 triangular bands translating along the strip, cubed
-  // for narrow punchy bars with dark gaps
-  var b = triangle(frac(p * 5 + t1 * 10))
-  hsv(h, 1, b * b * b)
+  // ~5 triangular bands translating along the strip several times per cycle;
+  // cubed for narrow punchy bars with dark gaps.
+  var v = triangle(frac(p * 5 + t1 * 10))
+  hsv(h, 1, v * v * v)
 }

@@ -1,118 +1,117 @@
 // name: MidpointDisplacement1D
 // Clean-room reimplementation from a prose functional description of the
-// community pattern "MidpointDisplacement1D"; original source never consulted.
+// community pattern "MidpointDisplacement1D"; original source never
+// consulted.
 
-// A fractal mountain-range silhouette drawn as brightness along the strip:
-// peaks bright, valleys black. The terrain is static, but a compressed slice
-// of the hue wheel scrolls through the height field, so ridgelines ripple
-// with moving color. Every mapLifetime seconds a fresh random range is
-// generated (lifetime 0 = keep the map forever). All the fractal work
-// happens only at (re)generation; per-frame cost is trivial.
+// A fractal mountain-range silhouette: brightness = terrain height, with a
+// compressed slice of the hue wheel scrolling through the height field so
+// ridgelines ripple with color. The terrain regenerates every few seconds.
+//
+// The terrain is built by midpoint displacement on a fixed 2^MAX_DEPTH + 1
+// breakpoint array (levels processed iteratively), then min-max normalized;
+// pixels sample it with linear interpolation, so any pixel count works and
+// all fractal cost happens only at (re)generation.
 
-var maxDepth = min(7, ceil(log2(pixelCount))) // device-perf depth cap
+var MAX_DEPTH = 7            // performance cap from the original
+var N = 128                  // 2^MAX_DEPTH segments -> N+1 breakpoints
+var heights = array(N + 1)
 
-// Defaults, exported so they're watchable/tweakable
-export var detail = 1        // fraction of maxDepth actually recursed
-export var mapLifetime = 8   // seconds per terrain; 0 = forever
-export var speed = 0.5       // color scroll rate (higher = faster)
-export var paletteWidth = 1  // fraction of the hue wheel spanned
+// Tunables (also watchable) -------------------------------------------------
+export var detail = 1        // fraction of MAX_DEPTH actually recursed
+export var lifetime = 8      // seconds each terrain lives; 0 = forever
+export var speed = 0.5       // hue scroll rate (cycles/second)
+export var paletteWidth = 1  // fraction of the hue wheel the terrain spans
 export var paletteOffset = 0 // base hue of the palette slice
-export var roughness = 0.5   // 0 = rolling hills, 1 = spiky seismograph
+export var roughness = 1.7   // per-level displacement falloff factor
 
-var heights = array(pixelCount)
-var usedDepth = maxDepth
-var falloff = 1.85           // per-level displacement divisor, from roughness
 var phase = 0
 var age = 0
 
-// Recursive midpoint displacement over heights[lo..hi]. Once past the depth
-// budget, fill the remaining span with a straight line.
-function displace(lo, hi, level, amp) {
-  if (hi - lo < 2) return
-  var mid = floor((lo + hi) / 2)
-  if (level >= usedDepth) {
-    var i
-    for (i = lo + 1; i < hi; i++) {
-      heights[i] = mix(heights[lo], heights[hi], (i - lo) / (hi - lo))
+function generate() {
+  var depth = max(1, floor(MAX_DEPTH * detail))
+
+  // Endpoints get small random heights.
+  heights[0] = random(0.3)
+  heights[N] = random(0.3)
+
+  // Displace midpoints level by level; the displacement half-width shrinks
+  // by the roughness factor each level (>1 smooths, <1 goes wild).
+  var seg = N
+  var amp = 0.5
+  var i
+  for (var level = 0; level < depth; level++) {
+    for (i = 0; i < N; i += seg) {
+      heights[i + seg / 2] =
+        (heights[i] + heights[i + seg]) / 2 + (random(2) - 1) * amp
     }
-    return
+    seg = seg / 2
+    amp = amp / roughness
   }
-  heights[mid] = (heights[lo] + heights[hi]) / 2 + (random(2) - 1) * amp
-  displace(lo, mid, level + 1, amp / falloff)
-  displace(mid, hi, level + 1, amp / falloff)
-}
 
-function regenerate() {
-  usedDepth = max(1, floor(detail * maxDepth + 0.5))
-  // roughness slider -> per-level falloff: big divisor = smooth,
-  // divisor below 1 = deeper levels get wilder
-  falloff = 2.6 - roughness * 1.8
-  heights[0] = random(0.25)
-  heights[pixelCount - 1] = random(0.25)
-  displace(0, pixelCount - 1, 0, 0.5)
+  // Straight lines across any segments the recursion never split.
+  if (seg > 1) {
+    for (i = 0; i < N; i += seg) {
+      for (var j = 1; j < seg; j++) {
+        heights[i + j] = heights[i] + (heights[i + seg] - heights[i]) * j / seg
+      }
+    }
+  }
 
-  // min-max normalize to 0..1
-  var lo = heights[0], hi = heights[0], i
-  for (i = 1; i < pixelCount; i++) {
-    if (heights[i] < lo) lo = heights[i]
-    if (heights[i] > hi) hi = heights[i]
+  // Min-max normalize to 0..1.
+  var lo = heights[0]
+  var hi = heights[0]
+  for (i = 1; i <= N; i++) {
+    lo = min(lo, heights[i])
+    hi = max(hi, heights[i])
   }
   var span = hi - lo
   if (span <= 0) span = 1
-  for (i = 0; i < pixelCount; i++) {
-    heights[i] = (heights[i] - lo) / span
-  }
+  for (i = 0; i <= N; i++) heights[i] = (heights[i] - lo) / span
+
   age = 0
 }
 
-//# min=0 max=1 step=0.05 default=1
-export function sliderDetailLevel(v) {
-  detail = v
-  regenerate()
-}
+generate()
 
-//# min=0 max=1 step=0.05 default=0.27
-export function sliderMapLifetime(v) {
-  mapLifetime = v * 30 // up to ~half a minute; 0 = forever
-  regenerate()
-}
+// UI controls ---------------------------------------------------------------
+//# min=0 max=1 step=0.01 default=1
+export function sliderDetailLevel(v) { detail = v; generate() }
 
-//# min=0 max=1 step=0.05 default=0.5
-export function sliderSpeed(v) {
-  speed = v // inverted into the period below: right = faster
-}
+//# min=0 max=1 step=0.01 default=0.27
+export function sliderMapLifetime(v) { lifetime = v * 30; generate() }
 
-//# min=0 max=1 step=0.05 default=1
-export function sliderPaletteWidth(v) {
-  paletteWidth = v
-}
+//# min=0 max=1 step=0.01 default=0.5
+export function sliderSpeed(v) { speed = 0.05 + v }  // right = faster
 
-//# min=0 max=1 step=0.05 default=0
-export function sliderPaletteOffset(v) {
-  paletteOffset = v
-}
+//# min=0 max=1 step=0.01 default=1
+export function sliderPaletteWidth(v) { paletteWidth = v }
 
-//# min=0 max=1 step=0.05 default=0.5
+//# min=0 max=1 step=0.01 default=0
+export function sliderPaletteOffset(v) { paletteOffset = v }
+
+//# min=0 max=1 step=0.01 default=0.45
 export function sliderRoughness(v) {
-  roughness = v
-  regenerate()
+  // Left = smooth (fast falloff), right = jagged (slow / amplifying falloff).
+  roughness = 3 - 2.4 * v
+  generate()
 }
-
-regenerate()
 
 export function beforeRender(delta) {
-  // scroll period from ~4 s (slider left) down to ~0.4 s (right)
-  var period = mix(4000, 400, speed)
-  phase = frac(phase + delta / period)
-
-  if (mapLifetime > 0) {
+  phase = mod(phase + delta / 1000 * speed, 1)
+  if (lifetime > 0) {
     age += delta / 1000
-    if (age > mapLifetime) regenerate()
+    if (age > lifetime) generate()
   }
 }
 
 export function render(index) {
-  var h = heights[index]
-  var hue = frac(h + phase) * paletteWidth + paletteOffset
+  // Sample the breakpoint array with linear interpolation.
+  var p = index / max(1, pixelCount - 1) * N
+  var i0 = floor(p)
+  var i1 = min(N, i0 + 1)
+  var h = heights[i0] + (heights[i1] - heights[i0]) * (p - i0)
+
+  // Height + scroll wrapped, compressed to a palette slice off a base hue.
+  var hue = mod(h + phase, 1) * paletteWidth + paletteOffset
   hsv(hue, 1, h)
 }

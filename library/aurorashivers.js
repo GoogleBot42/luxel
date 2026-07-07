@@ -2,82 +2,49 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "aurorashivers"; original source never consulted.
 
-// Two families of soft drifting blooms (violet drifting up-strip, aqua
-// drifting down-strip) that quiver with a tiny per-frame gaussian-ish
-// jitter, over a pure-blue afterglow that tracks the running max of pulse
-// activity and decays exponentially.
+// Two families of soft triangular blobs bloom, drift and shiver along the
+// strip — one violet drifting up-strip, one aqua drifting down-strip —
+// while a pure-blue afterglow (running max with exponential decay) leaves
+// ghostly trails wherever blobs have been.
 
-const SLOTS = 4            // pulse pool per instance
-const LIFETIME = 2.5       // seconds a pulse lives
-const DRIFT = 0.2          // fraction of strip drifted over a full lifetime
-const HALFW = 0.075        // half-width of the spatial bump (~15% total)
-const GLOW_HALFLIFE = 2.5  // seconds
-const SPAWN_BASE = 0.8     // next spawn = clock + SPAWN_BASE + random(SPAWN_JITTER)
-const SPAWN_JITTER = 0.4
+const SLOTS = 4          // pulse slots per instance
+const LIFE = 2           // pulse lifetime, seconds
+const DRIFT = 0.2        // total drift over a lifetime, strip fractions
+const HALFW = 0.075      // half-width of a blob (~15% of strip total)
+const JITTER = 0.006     // per-frame shiver amplitude
+
+// instance A (violet, drifts +): slot state
+var aAlive = array(SLOTS)
+var aBirth = array(SLOTS)
+var aBase = array(SLOTS)
+var aNextSpawn = 0
+
+// instance B (aqua, drifts -): slot state
+var bAlive = array(SLOTS)
+var bBirth = array(SLOTS)
+var bBase = array(SLOTS)
+var bNextSpawn = 0.5
+
+var pulseA = array(pixelCount)
+var pulseB = array(pixelCount)
+var glow = array(pixelCount)
 
 var clock = 0
-var nextSpawn = array(2)
 
-var aliveA = array(SLOTS)
-var birthA = array(SLOTS)
-var baseA = array(SLOTS)
-var aliveB = array(SLOTS)
-var birthB = array(SLOTS)
-var baseB = array(SLOTS)
+// zero-mean roughly-gaussian shiver from summed uniforms
+function shiver() {
+  return (random(1) + random(1) + random(1) - 1.5) * JITTER
+}
 
-var pulseA = array(pixelCount)   // violet family field
-var pulseB = array(pixelCount)   // aqua family field
-var glow = array(pixelCount)     // blue afterglow
-
-// inst 0: spawns in the lower four-fifths, drifts toward the far end.
-// inst 1: spawns in the upper four-fifths, drifts toward the start.
-function updateInstance(inst, alive, birth, base, buf) {
-  var dir = 1
-  var spawnLo = 0
-  if (inst == 1) {
-    dir = -1
-    spawnLo = 0.2
-  }
-
-  // spawn if due and a slot is free
-  if (clock >= nextSpawn[inst]) {
-    var s
-    for (s = 0; s < SLOTS; s++) {
-      if (!alive[s]) {
-        alive[s] = 1
-        birth[s] = clock
-        base[s] = spawnLo + random(0.8)
-        nextSpawn[inst] = clock + SPAWN_BASE + random(SPAWN_JITTER)
-        break
-      }
-    }
-  }
-
-  var k
-  for (k = 0; k < SLOTS; k++) {
-    if (!alive[k]) continue
-    var age = clock - birth[k]
-    if (age >= LIFETIME) {
-      alive[k] = 0
-      continue
-    }
-    var life = age / LIFETIME
-    var env = triangle(life)  // linear rise to mid-life, linear fall to death
-
-    // small zero-mean roughly-gaussian shiver from summed uniforms
-    var jit = (random(1) + random(1) + random(1) - 1.5) * 0.006
-    var p = base[k] + dir * DRIFT * life + jit
-
-    // triangular spatial bump; overlapping pulses of one instance sum
-    var lo = floor((p - HALFW) * pixelCount)
-    var hi = ceil((p + HALFW) * pixelCount)
-    if (lo < 0) lo = 0
-    if (hi > pixelCount - 1) hi = pixelCount - 1
-    var i
-    for (i = lo; i <= hi; i++) {
-      var amt = 1 - abs(i / pixelCount - p) / HALFW
-      if (amt > 0) buf[i] += env * amt
-    }
+// stamp a triangle bump of height env centered at pos into buf
+function stampBump(buf, pos, env) {
+  var lo = floor((pos - HALFW) * pixelCount)
+  var hi = ceil((pos + HALFW) * pixelCount)
+  if (lo < 0) lo = 0
+  if (hi > pixelCount - 1) hi = pixelCount - 1
+  for (var j = lo; j <= hi; j++) {
+    var d = abs(j / pixelCount - pos)
+    if (d < HALFW) buf[j] += env * (1 - d / HALFW)
   }
 }
 
@@ -85,27 +52,73 @@ export function beforeRender(delta) {
   var dt = delta / 1000
   clock += dt
 
-  // Afterglow first: envelope the previous frame's peak pulse activity and
-  // let it decay with a fixed half-life.
-  var decay = pow(0.5, dt / GLOW_HALFLIFE)
-  var i
-  for (i = 0; i < pixelCount; i++) {
-    glow[i] = max(glow[i] * decay, max(pulseA[i], pulseB[i]))
+  // afterglow first: decay + envelope last frame's pulse activity
+  var decay = exp(-0.3466 * dt)  // ~2 s half-life
+  for (var j = 0; j < pixelCount; j++) {
+    glow[j] = max(glow[j] * decay, max(pulseA[j], pulseB[j]))
   }
 
+  // --- instance A: spawns in lower 4/5, drifts toward far end ---
+  if (clock >= aNextSpawn) {
+    for (var s = 0; s < SLOTS; s++) {
+      if (!aAlive[s]) {
+        aAlive[s] = 1
+        aBirth[s] = clock
+        aBase[s] = random(0.8)
+        aNextSpawn = clock + 0.8 + random(0.4)
+        break
+      }
+    }
+  }
   arrayReplace(pulseA, 0)
+  for (var s = 0; s < SLOTS; s++) {
+    if (aAlive[s]) {
+      var age = clock - aBirth[s]
+      if (age > LIFE) {
+        aAlive[s] = 0
+      } else {
+        var u = age / LIFE
+        stampBump(pulseA, aBase[s] + DRIFT * u + shiver(), triangle(u))
+      }
+    }
+  }
+
+  // --- instance B: spawns in upper 4/5, drifts toward the start ---
+  if (clock >= bNextSpawn) {
+    for (var s = 0; s < SLOTS; s++) {
+      if (!bAlive[s]) {
+        bAlive[s] = 1
+        bBirth[s] = clock
+        bBase[s] = 0.2 + random(0.8)
+        bNextSpawn = clock + 0.8 + random(0.4)
+        break
+      }
+    }
+  }
   arrayReplace(pulseB, 0)
-  updateInstance(0, aliveA, birthA, baseA, pulseA)
-  updateInstance(1, aliveB, birthB, baseB, pulseB)
+  for (var s = 0; s < SLOTS; s++) {
+    if (bAlive[s]) {
+      var age = clock - bBirth[s]
+      if (age > LIFE) {
+        bAlive[s] = 0
+      } else {
+        var u = age / LIFE
+        stampBump(pulseB, bBase[s] - DRIFT * u + shiver(), triangle(u))
+      }
+    }
+  }
 }
 
 export function render(index) {
-  var a = pulseA[index]   // violet: strong blue, moderate red, no green
-  var c = pulseB[index]   // aqua: full blue, strong green, no red
-  var w = glow[index]     // pure-blue afterglow
+  var a = pulseA[index]
+  var q = pulseB[index]
+  // violet tint from A, aqua tint from B, pure blue from the afterglow
   var r = 0.45 * a
-  var g = 0.7 * c
-  var b = 0.9 * a + c + 0.7 * w
-  // squaring each channel deepens the fades and smooths the triangle ramps
+  var g = 0.7 * q
+  var b = 0.9 * a + q + glow[index]
+  if (r > 1) r = 1
+  if (g > 1) g = 1
+  if (b > 1) b = 1
+  // squaring deepens the fades so triangle envelopes read smooth
   rgb(r * r, g * g, b * b)
 }

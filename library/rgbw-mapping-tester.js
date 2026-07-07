@@ -2,26 +2,28 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "RGBW Mapping Tester"; original source never consulted.
 
-// Diagnostic: solid red -> green -> blue -> white (all channels at ~1/3 so
-// power draw matches the single-channel phases), each held for ~2 seconds.
-// If the observed order or colors differ, fix the controller's color-order
-// or LED-type settings.
+// Diagnostic: whole strip cycles solid red -> green -> blue -> white.
+// If the colors appear in a different order, fix the controller's
+// color-order / LED-type settings.
 
 var phase = 0
 
 export function beforeRender(delta) {
-  phase = time(8 / 65.536) // full 4-color cycle every ~8 s
+  // Full cycle ~8.7 s, so each color holds a bit over two seconds.
+  phase = time(0.133)
 }
 
 export function render(index) {
-  var quarter = floor(phase * 4)
-  if (quarter == 0) {
+  var q = floor(phase * 4)
+  if (q == 0) {
     rgb(1, 0, 0)
-  } else if (quarter == 1) {
+  } else if (q == 1) {
     rgb(0, 1, 0)
-  } else if (quarter == 2) {
+  } else if (q == 2) {
     rgb(0, 0, 1)
   } else {
-    rgb(1 / 3, 1 / 3, 1 / 3)
+    // White at ~1/3 per channel keeps power draw close to the
+    // single-channel phases.
+    rgb(0.33, 0.33, 0.33)
   }
 }

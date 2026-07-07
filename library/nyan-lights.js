@@ -2,113 +2,116 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Nyan Lights"; original source never consulted.
 
-// Nyan Cat pixel art: a pop-tart with golden crust and sprinkled pink
-// frosting, a gray cat head with ears/eyes/cheeks plus paws and tail, and
-// a six-band rainbow waving across the rest of the panel. A two-frame
-// animation flips ~5x/second: rainbow column groups bob one row out of
-// phase and the sprite jiggles one pixel sideways — the classic GIF wiggle.
-//
-// The original hardcoded a serpentine ~30x10 strip layout; this version is
-// a true 2D renderer over a 16x16 virtual canvas, letting the pixel mapper
-// own the wiring. Sprite transparency is an explicit flag (the original
-// abused "hue == 0" as the sentinel, making red sprite pixels impossible).
+// Nyan Cat pixel art: a pop-tart with crust and sprinkled pink frosting, a
+// gray cat head with paws and tail, and a bobbing rainbow. Implemented as a
+// true 2D renderer over a 16x16 logical canvas (the pixel mapper handles the
+// physical wiring) instead of the original's hardcoded serpentine math. The
+// original used "hue == 0" as a transparency sentinel; we use an explicit
+// opacity flag instead.
 
 var W = 16
-var canvasH = array(256)
-var canvasS = array(256)
-var canvasV = array(256)
-var opaque = array(256)
+var hueA = array(256)
+var satA = array(256)
+var valA = array(256)
+var opq = array(256) // explicit transparency flag: 1 = sprite pixel
 
-function stamp(c, r, h, s, v) {
+function px(c, r, h, s, v) {
   var i = r * W + c
-  canvasH[i] = h
-  canvasS[i] = s
-  canvasV[i] = v
-  opaque[i] = 1
+  hueA[i] = h
+  satA[i] = s
+  valA[i] = v
+  opq[i] = 1
 }
 
-// ---- static sprite setup (runs once) ----
-var i
-var j
+// ---- sprite colors ----
+var CRUST_H = 0.09, CRUST_S = 1, CRUST_V = 1        // golden orange-brown
+var FROST_H = 0.95, FROST_S = 0.45, FROST_V = 1     // light pink
+var BERRY_H = 0.93, BERRY_S = 0.85, BERRY_V = 0.9   // deeper pink sprinkles
+var GRAY_H = 0.1, GRAY_S = 0.12, GRAY_V = 0.28      // warm dim gray
+var EYE_V = 0.04                                    // near-black beads
+var CHEEK_H = 0.95, CHEEK_S = 0.6, CHEEK_V = 0.8    // pink cheek dots
 
-// pop-tart crust: rectangle outline, c1..7 x r4..11, golden orange-brown
-for (i = 1; i <= 7; i++) { stamp(i, 4, 0.09, 1, 1); stamp(i, 11, 0.09, 1, 1) }
-for (j = 4; j <= 11; j++) { stamp(1, j, 0.09, 1, 1); stamp(7, j, 0.09, 1, 1) }
+// ---- stamp the sprite (once, at startup) ----
+var c, r
 
-// frosting fill: light pink interior
-for (j = 5; j <= 10; j++) {
-  for (i = 2; i <= 6; i++) stamp(i, j, 0.97, 0.5, 1)
+// Pop-tart: rectangle cols 1..7, rows 5..11 — crust border, frosting fill.
+for (r = 5; r <= 11; r++) {
+  for (c = 1; c <= 7; c++) {
+    if (r == 5 || r == 11 || c == 1 || c == 7) {
+      px(c, r, CRUST_H, CRUST_S, CRUST_V)
+    } else if (c % 2 == 0 && r % 2 == 0) {
+      px(c, r, BERRY_H, BERRY_S, BERRY_V) // sparse checker of berry sprinkles
+    } else {
+      px(c, r, FROST_H, FROST_S, FROST_V)
+    }
+  }
 }
-// berry sprinkles: deeper pink on a sparse checker
-for (j = 5; j <= 9; j += 2) {
-  for (i = 2; i <= 6; i += 2) stamp(i, j, 0.95, 0.95, 1)
+
+// Cat head to the right of the tart: fill rows 6..10, cols 8..12.
+for (r = 6; r <= 10; r++) {
+  for (c = 8; c <= 12; c++) {
+    px(c, r, GRAY_H, GRAY_S, GRAY_V)
+  }
 }
+px(8, 5, GRAY_H, GRAY_S, GRAY_V)   // left ear
+px(12, 5, GRAY_H, GRAY_S, GRAY_V)  // right ear
+px(9, 7, GRAY_H, GRAY_S, EYE_V)    // eyes: same gray family, very dim
+px(11, 7, GRAY_H, GRAY_S, EYE_V)
+px(8, 8, CHEEK_H, CHEEK_S, CHEEK_V)  // pink cheek dots
+px(12, 8, CHEEK_H, CHEEK_S, CHEEK_V)
+px(10, 9, GRAY_H, GRAY_S, 0.16)    // mouth line
+px(0, 8, GRAY_H, GRAY_S, GRAY_V)   // short tail at the tart's left
 
-// cat head to the right of the tart: dim warm gray outline
-for (i = 8; i <= 12; i++) { stamp(i, 5, 0.08, 0.15, 0.3); stamp(i, 9, 0.08, 0.15, 0.3) }
-for (j = 5; j <= 9; j++) { stamp(8, j, 0.08, 0.15, 0.3); stamp(12, j, 0.08, 0.15, 0.3) }
-stamp(8, 4, 0.08, 0.15, 0.3)    // ears
-stamp(12, 4, 0.08, 0.15, 0.3)
-stamp(9, 6, 0.08, 0.15, 0.04)   // bead eyes: near-black
-stamp(11, 6, 0.08, 0.15, 0.04)
-stamp(9, 8, 0.97, 0.7, 0.6)     // pink cheek dots
-stamp(11, 8, 0.97, 0.7, 0.6)
-stamp(10, 8, 0.08, 0.15, 0.3)   // mouth
+// Paws below the body.
+px(2, 12, GRAY_H, GRAY_S, GRAY_V)
+px(4, 12, GRAY_H, GRAY_S, GRAY_V)
+px(9, 12, GRAY_H, GRAY_S, GRAY_V)
+px(11, 12, GRAY_H, GRAY_S, GRAY_V)
 
-// paws below, tail at the left
-stamp(2, 12, 0.08, 0.15, 0.3)
-stamp(4, 12, 0.08, 0.15, 0.3)
-stamp(6, 12, 0.08, 0.15, 0.3)
-stamp(9, 12, 0.08, 0.15, 0.3)
-stamp(11, 12, 0.08, 0.15, 0.3)
-stamp(0, 7, 0.08, 0.15, 0.3)
-stamp(0, 8, 0.08, 0.15, 0.3)
+// Rainbow band hues, top to bottom.
+var rain = array(6)
+rain[0] = 0     // red
+rain[1] = 0.075 // orange/amber
+rain[2] = 0.18  // yellow-green
+rain[3] = 0.33  // green
+rain[4] = 0.55  // cyan-leaning blue
+rain[5] = 0.78  // violet
 
-// rainbow band hues, top to bottom: red, amber, yellow-green, green,
-// cyan-leaning blue, violet
-var rainbow = array(6)
-rainbow[0] = 0.0
-rainbow[1] = 0.08
-rainbow[2] = 0.2
-rainbow[3] = 0.33
-rainbow[4] = 0.58
-rainbow[5] = 0.78
-
-// ---- two-frame animation clock ----
-var FLIP_MS = 200
-var accum = 0
+// ---- two-frame GIF-style animation ----
+var acc = 0
 var shifted = 0
 
 export function beforeRender(delta) {
-  accum += delta
-  if (accum >= FLIP_MS) {
-    accum -= FLIP_MS
-    shifted = 1 - shifted
+  acc += delta
+  if (acc > 200) { // flip ~5x per second
+    acc -= 200
+    shifted = !shifted
   }
 }
 
 export function render2D(index, x, y) {
-  var c = floor(x * 15.99)
-  var r = floor(y * 15.99)
-  var idx = r * W + c
+  var col = floor(x * 15.99)
+  var row = floor(y * 15.99)
+  var i = row * W + col
 
-  // sprite jiggles one pixel sideways on alternate frames; transparent
-  // after the shift falls through to the rainbow/black logic
-  var si = idx
-  if (shifted && c < 15) si = idx + 1
-  if (opaque[si]) {
-    hsv(canvasH[si], canvasS[si], canvasV[si])
+  // Sprite pass: on alternate frames read the neighboring entry so the cat
+  // jiggles one pixel sideways. Transparent-after-shift falls through to the
+  // rainbow/black logic (cleaner than the original's stale-pixel quirk).
+  var j = i
+  if (shifted) j = i + 1
+  if (j < 256 && opq[j]) {
+    hsv(hueA[j], satA[j], valA[j])
     return
   }
 
-  // rainbow trail past roughly the first third of the panel: column
-  // groups of four bob one row up/down in alternation
-  if (c >= 6) {
+  // Rainbow: columns past roughly the first third, grouped in runs of four;
+  // alternate groups bob one row out of phase with the flip flag.
+  if (col >= 5) {
     var f = shifted
-    if (floor(c / 4) % 2) f = 1 - f
-    var band = r - 4 - f
+    if (floor(col / 4) % 2 == 1) f = !f
+    var band = row - 2 - f // six rows starting a couple rows from the top
     if (band >= 0 && band < 6) {
-      hsv(rainbow[band], 1, 1)
+      hsv(rain[band], 1, 1)
       return
     }
   }

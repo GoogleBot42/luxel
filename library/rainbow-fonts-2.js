@@ -2,24 +2,22 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "rainbow fonts 2"; original source never consulted.
 
-// Concentric rainbow bands mirrored around the strip's middle, rippling as
-// hues cycle. The mirror point sways slowly side to side by about a tenth
-// of the strip. Full saturation, deliberately dim (~1/5 brightness).
-
-const BRIGHTNESS = 0.2
-const SWAY_AMPLITUDE = 0.1  // fraction of the strip
+var huePhase = 0
+var swayFrac = 0
 
 export function beforeRender(delta) {
-  huePhase = time(0.08)                       // hue ripple, ~5 s per cycle
-  sway = sin(time(0.16) * PI2) * SWAY_AMPLITUDE  // ~10 s per back-and-forth
+  huePhase = time(0.06)                       // hue ripple, ~4 s per cycle
+  // slow sinusoidal sway, ~10 s per back-and-forth, amplitude ~1/10 strip
+  swayFrac = (wave(time(0.15)) - 0.5) * 0.2
 }
 
 export function render(index) {
-  var p = index / pixelCount
-  // Symmetric ramp: 1 at the (swaying) center, falling toward both ends
-  var ramp = 1 - abs(p - (0.5 + sway))
-  // Double sine-fold turns the ramp into mirrored bands that compress
-  // and expand nonlinearly as the phase advances
-  var h = wave(wave(ramp) + huePhase + sway)
-  hsv(h, 1, BRIGHTNESS)
+  var pos = index / pixelCount
+  var center = 0.5 + swayFrac
+  // symmetric ramp: 1 at the (swaying) center, falling to 0 at the ends
+  var ramp = max(0, 1 - abs(pos - center) * 2)
+  // fold the ramp through two sine-shaped waves; the second adds the time
+  // phase and the sway offset, turning one ramp into rippling mirrored bands
+  var h = wave(wave(ramp) + huePhase + swayFrac)
+  hsv(h, 1, 0.2)                              // full saturation, deliberately dim
 }

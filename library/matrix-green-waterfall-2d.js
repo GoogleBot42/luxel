@@ -13,9 +13,9 @@ var speed = 20     // integer fall-rate multiplier, 0..50
 var fallPhase = 0
 var colFreq = 8
 
-//# min=0 max=50 step=1 default=20
+//# min=0 max=1 step=0.02 default=0.4
 export function sliderSpeed(v) {
-  speed = floor(v * 50)
+  speed = floor(v * 50)   // quantized to integer steps, 0..50
 }
 
 export function beforeRender(delta) {

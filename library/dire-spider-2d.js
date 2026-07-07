@@ -2,121 +2,116 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Dire Spider 2D"; original source never consulted.
 
-// A glowing orange spider crawls across a 2D matrix (~10 s per pass),
-// re-entering from a random direction after each pass, legs scissoring and
-// body swaying, while ridged-noise green "poison mist" swirls around it.
+// A glowing orange spider crawls across a 2D matrix, legs scissoring and
+// body swaying, re-entering from a random direction after each pass, while
+// swirling toxic-green mist wisps radiate around it.
 //
-// The two tricks that carry the pattern:
-//  1. Symmetry — only two leg segments are defined; pixel coordinates are
-//     mirrored into the first quadrant (abs of both axes) before testing,
-//     so each drawn leg appears four times: eight legs from two.
-//  2. All motion lives in the coordinate transform — recenter, rotate by
-//     the crawl heading, translate along the crawl axis. The spider is
-//     always drawn at the origin; the world moves under it.
+// Two structural tricks (per the description):
+// 1. Only two leg segments exist; pixel coords are mirrored into the first
+//    quadrant so each drawn leg appears four times -> eight legs.
+// 2. All motion lives in the map transform: recenter, rotate to the crawl
+//    heading, translate along the crawl axis. The spider itself is always
+//    drawn at the origin.
 
-var legHalfWidth = 0.14        // set by slider
-var bgLevel = 0.02             // set by slider
+var t = 0                 // wall clock, seconds (wrapped hourly)
+var crawlPeriod = 9       // seconds per pass
+var lastPhase = 1
+var heading = 0           // crawl direction, radians (re-rolled each pass)
 
-// Two stored leg segments (unit direction + length), defined in the first
-// quadrant. Gait rotation is applied to these each frame.
-var LEG1_ANG = 0.45            // radians from +x axis
-var LEG2_ANG = 1.05
-var LEG1_LEN = 0.48
-var LEG2_LEN = 0.52
-var l1x, l1y, l2x, l2y         // rotated unit directions, per frame
+// leg segments, defined once in the first quadrant: endpoint angles/lengths
+var legA_ang = 0.5, legA_len = 0.44
+var legB_ang = 1.05, legB_len = 0.4
+// per-frame rotated leg endpoint unit vectors
+var laX, laY, lbX, lbY
 
-var ABD_X = 0.10               // abdomen center offset along +x
-var ABD_R = 0.11               // abdomen radius
-
-var MIST_ANG_DENSITY = 6       // angular noise density (wrap matches it)
-setPerlinWrap(MIST_ANG_DENSITY, 0, 0)
-
-var tSec = 0                   // wall clock, seconds, wrapped hourly
-var crawl, lastCrawl = 9
-var heading = 0                // crawl direction, re-rolled per pass
-var mistScroll, mistMorph
-
+var legWidth = 0.14
 export function sliderLegWidth(v) {
-  //# min=0 max=1 step=0.05 default=0.4
-  legHalfWidth = 0.1 + v * 0.1          // ~a tenth to a fifth of display
+  //# min=0.1 max=0.2 step=0.01 default=0.14
+  legWidth = 0.1 + v * 0.1
 }
 
+var bgLevel = 0.02
 export function sliderBackgroundLevel(v) {
-  //# min=0 max=1 step=0.05 default=0.05
-  bgLevel = v * 0.4                      // black up to a dim green haze
+  //# min=0 max=0.35 step=0.01 default=0.02
+  bgLevel = v * 0.35
 }
+
+var mistMorph, mistScroll
+var ANG_DENSITY = 8
+setPerlinWrap(ANG_DENSITY, 0, 0)  // hide the seam at the angle wraparound
 
 export function beforeRender(delta) {
-  tSec += delta / 1000
-  if (tSec > 3600) tSec -= 3600
+  t = t + delta / 1000
+  if (t > 3600) t -= 3600
 
-  // Crawl: sawtooth, ~10 s per pass, spanning ±1.5 display-widths so the
-  // spider is fully off-screen at both ends.
-  crawl = (frac(tSec / 10) - 0.5) * 3
-  if (crawl < lastCrawl) heading = random(PI2)   // wrapped: new entry angle
-  lastCrawl = crawl
+  // Crawl position: sawtooth spanning ~1.5 display-widths off both edges
+  var phase = frac(t / crawlPeriod)
+  if (phase < lastPhase) heading = random(PI2)  // wrapped: new entry angle
+  lastPhase = phase
+  var crawl = -1.5 + 3 * phase
 
-  // Leg gait: small oscillation, a couple of cycles per second. One leg
-  // rotates positively, the other negatively and slightly less.
-  var gait = 0.12 * sin(tSec * PI2 * 2)
-  var a1 = LEG1_ANG + gait
-  var a2 = LEG2_ANG - gait * 0.8
-  l1x = cos(a1); l1y = sin(a1)
-  l2x = cos(a2); l2y = sin(a2)
+  // Leg gait: ~2 scissor cycles per second, ~0.1 rad amplitude
+  var gait = 0.1 * sin(t * PI2 * 2)
+  var ca = cos(gait), sa = sin(gait)
+  var ax = cos(legA_ang), ay = sin(legA_ang)
+  var bx = cos(legB_ang), by = sin(legB_ang)
+  laX = ax * ca - ay * sa           // leg A rotated +gait
+  laY = ax * sa + ay * ca
+  var ca2 = cos(-gait * 0.7), sa2 = sin(-gait * 0.7)
+  lbX = bx * ca2 - by * sa2         // leg B rotated -0.7*gait
+  lbY = bx * sa2 + by * ca2
 
-  // Mist clocks: slow morph (several seconds), faster radial scroll.
-  mistMorph = time(0.12) * 4             // shape morph, ~8 s lap
-  mistScroll = time(0.05) * 3            // radial drift, ~3 s lap
+  // Mist clocks: slow morph (several s), faster radial outward scroll
+  mistMorph = time(0.12) * 4        // ~7.9 s per lap, scaled to noise units
+  mistScroll = time(0.05) * 3       // ~3.3 s per lap
 
-  // Motion via transform: recenter, rotate to heading, slide along the
-  // crawl axis with a touch of the gait as lateral body sway.
+  // World moves under the spider: recenter, rotate to heading, slide along
+  // the crawl axis; a slice of the gait becomes lateral body sway.
   resetTransform()
   translate(-0.5, -0.5)
   rotate(heading)
-  translate(crawl, gait * 0.3)
+  translate(-crawl, gait * 0.3)
 }
 
 export function render2D(index, x, y) {
-  // --- polar-ish quantities (coordinates are spider-centric) ---
+  // spider-centric polar-ish quantities
   var r = hypot(x, y)
-  var rSkew = r - 0.18 * x               // front legs read longer than back
-  var mx = abs(x), my = abs(y)           // quadrant mirror: 2 legs -> 8
+  var rSkew = r - 0.12 * x          // front legs read longer than back
+  var ang = atan2(y, x) / PI2 + 0.5 // 0..1 turn
+  var abX = x - 0.09                // abdomen center offset along x
+  var abd = hypot(abX, y)
 
-  // --- mist: ridged noise in cylindrical space, seamless in angle ---
-  var ang = atan2(y, x) / PI2 + 0.5
-  var m = perlinRidge(ang * MIST_ANG_DENSITY, r * 3 - mistScroll,
-                      mistMorph, 2, 0.5, 1, 3)
-  m = m * m; m = m * m                   // ^4: sharpen into wisps
-  m = m * clamp(1 - r / 0.75, 0, 1)      // hug the spider, die at the edge
+  // mirrored quadrant for the four-fold leg symmetry
+  var mx = abs(x), my = abs(y)
 
-  // --- legs: distance-to-segment test on the two rotated definitions ---
+  // Mist: ridged noise in cylindrical space, sharpened, edge-attenuated
+  var mist = perlinRidge(ang * ANG_DENSITY, r * 3 - mistScroll, mistMorph, 2, 0.5, 1, 3)
+  mist = clamp(mist, 0, 1)
+  mist = mist * mist
+  mist = mist * mist
+  mist = mist * clamp(1 - r / 0.72, 0, 1)
+
+  // Legs: brightness from perpendicular distance to each rotated segment
   var leg = 0
-  var along = mx * l1x + my * l1y
-  if (along > 0 && rSkew < LEG1_LEN) {
-    var perp = abs(mx * l1y - my * l1x)
-    leg = clamp(1 - perp / legHalfWidth, 0, 1)
+  if (rSkew <= legA_len && mx * laX + my * laY > 0) {
+    var d = abs(mx * laY - my * laX)
+    leg = max(leg, 1 - d / legWidth)
   }
-  along = mx * l2x + my * l2y
-  if (along > 0 && rSkew < LEG2_LEN) {
-    var perp2 = abs(mx * l2y - my * l2x)
-    var b2 = clamp(1 - perp2 / legHalfWidth, 0, 1)
-    if (b2 > leg) leg = b2
+  if (rSkew <= legB_len && mx * lbX + my * lbY > 0) {
+    var d2 = abs(mx * lbY - my * lbX)
+    leg = max(leg, 1 - d2 / legWidth)
   }
-  leg = smoothstep(0.45, 1, leg)         // soft edges
+  leg = smoothstep(0.45, 1, leg)    // soft leg edges
 
-  // --- abdomen: filled disc, saturates quickly to full ---
-  var dAbd = hypot(x - ABD_X, y)
-  var abd = clamp((ABD_R - dAbd) * 6, 0, 1)
+  // Abdomen: filled disc that saturates quickly
+  var body = max(leg, clamp((0.14 - abd) * 8, 0, 1))
 
-  var body = max(leg, abd)
-
-  if (m >= body) {
-    // Toxic mist: green nudged by intensity, hot cores go whitish-green.
-    // The background floor keeps this a dim green haze when raised.
-    hsv(0.33 + m * 0.05, 1 - m * 0.35, max(m, bgLevel))
+  var mistV = max(mist, bgLevel)
+  if (mistV > body) {
+    // toxic green, whitening at the hottest cores
+    hsv(0.33 + mist * 0.06, 1 - mist * 0.35, mistV)
   } else {
-    // Spider: deep red-orange at the abdomen, warming toward amber along
-    // the legs with distance from the abdomen.
-    hsv(0.015 + dAbd * 0.07, 1, body)
+    // deep red-orange at the abdomen, warming to amber along the legs
+    hsv(0.015 + abd * 0.13, 1, body)
   }
 }

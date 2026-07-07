@@ -2,16 +2,16 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "1 White Fade"; original source never consulted.
 
-// The whole strip breathes in plain white: a slow time ramp shaped by
-// wave() gives a smooth 0..1..0 sinusoidal fade, one breath every ~33 s.
+// Every pixel breathes together in plain white: one slow time ramp shaped
+// by wave() into a smooth 0..1..0 sinusoid, roughly half a minute per
+// breath. No state, no randomness, no layout assumptions.
 
-var brightness = 0
+var glow = 0
 
 export function beforeRender(delta) {
-  brightness = wave(time(0.5))   // period 0.5 * 65.536 s ~ half a minute
+  glow = wave(time(0.5))     // 0.5 * 65.536 s = ~33 s per full breathe
 }
 
 export function render(index) {
-  // zero saturation = white; hue is irrelevant
-  hsv(0, 0, brightness)
+  hsv(0, 0, glow)            // saturation 0 => white; hue irrelevant
 }

@@ -2,47 +2,50 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Utility: Scheduled Percent-On Demo"; original source
 // never consulted.
+//
+// A tutorial/utility pattern: two sliders pick a start and end hour; the
+// fraction elapsed through that daily window drives the hue of a solid
+// color on every pixel — a slow once-per-window rainbow sweep. Outside the
+// window the fraction is 0, which renders solid red (it demonstrates the
+// schedule variable; it does not black out).
 
-// Tutorial/utility pattern: computes how far the wall clock is through a
-// daily on-window and shows that fraction as a solid hue on every pixel.
-// Inside the window the display sweeps once through the rainbow (red at
-// the window start, back toward red at the end); outside the window the
-// fraction is zero, which renders solid red — it demonstrates the
-// schedule variable, it does not black out.
+var beginHour = 8
+var endHour = 20
 
-var startHour = 0
-var endHour = 24
-
-// Exported for inspection in the vars watcher, tutorial-style.
+// Intermediate values exported for inspection, tutorial-style.
 export var currentHour = 0
-export var windowHours = 24
+export var currentMinute = 0
+export var currentSecond = 0
+export var windowLength = 12
 export var onFraction = 0
 
-//# min=0 max=1 step=0.04 default=0
+//# min=0 max=1 step=0.0417 default=0.333
 export function sliderBeginTime(v) {
-  startHour = min(23, floor(v * 24))
+  beginHour = floor(v * 23.99)   // whole hours across the 24-hour day
 }
 
-//# min=0 max=1 step=0.04 default=1
+//# min=0 max=1 step=0.0417 default=0.833
 export function sliderEndTime(v) {
-  endHour = min(24, floor(v * 24 + 0.5))
+  endHour = floor(v * 23.99)
 }
 
 export function beforeRender(delta) {
-  // Schedule math is pixel-independent, so it lives here rather than in
-  // render (the original recomputed it per pixel).
-  currentHour = clockHour() + clockMinute() / 60 + clockSecond() / 3600
+  // Clock reads and schedule math are pixel-independent, so they live
+  // here rather than in render() (a documented fix over the original).
+  currentHour = clockHour()
+  currentMinute = clockMinute()
+  currentSecond = clockSecond()
+  var now = currentHour + currentMinute / 60 + currentSecond / 3600
 
-  windowHours = endHour - startHour
-  if (windowHours <= 0) windowHours += 24   // window length wraps midnight
+  windowLength = endHour - beginHour
+  if (windowLength <= 0) windowLength += 24  // window length wraps midnight
 
-  // Faithful port of a documented flaw: this inside-the-window test is a
-  // plain start <= h < end comparison, so an overnight window (end before
-  // start) never tests true even though the length math above handles it.
-  if (currentHour >= startHour && currentHour < endHour) {
-    onFraction = (currentHour - startHour) / windowHours
-  } else {
-    onFraction = 0
+  // Faithfully ported flaw: the inside-the-window test is a plain
+  // start <= hour < end comparison, so an overnight window (end before
+  // start) never tests true even though windowLength handles the wrap.
+  onFraction = 0
+  if (currentHour >= beginHour && currentHour < endHour) {
+    onFraction = (now - beginHour) / windowLength
   }
 }
 

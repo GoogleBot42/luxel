@@ -91,8 +91,8 @@ export function beforeRender(delta) {
 export function render2D(index, x, y) {
   var i = floor(y * 15.99) * 16 + floor(x * 15.99)
   var h = cur[i]                 // wave height; negative in troughs
-  var v = 0.3 + h                // modest constant floor
+  var v = max(0.3 + h, 0)        // modest constant floor, darkened by troughs
   v = v * v                      // gamma
   // tall crests desaturate toward white foam
-  hsv(bg[i], clamp(1.1 - v, 0, 1), v)
+  hsv(bg[i], clamp(1.1 - v, 0, 1), clamp(v, 0, 1))
 }

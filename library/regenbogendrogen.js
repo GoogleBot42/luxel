@@ -2,18 +2,21 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "regenbogendrogen"; original source never consulted.
 
-var phase = 0
+// A mirrored psychedelic rainbow: the center-distance ramp is folded through
+// wave() twice (once before, once after adding the time phase), compressing
+// and stretching the colors into flowing multicolored bands.
+
+var t1 = 0
 
 export function beforeRender(delta) {
-  phase = time(0.18)   // ~11.8 s per full color cycle
+  t1 = time(0.2) // ~13 s per full cycle
 }
 
 export function render(index) {
-  // distance from the strip midpoint -> mirror-symmetric output
+  // distance from strip midpoint -> symmetric about the center
   var d = abs(index / pixelCount - 0.5)
-  // negate/offset slightly, then fold through wave() twice with the time
-  // phase added in between: the double waveshaping compresses/stretches the
-  // rainbow into shifting multicolored bands
-  var h = wave(wave(0.05 - d) + phase)
+  // negate/offset slightly so the center sits near one end of the ramp,
+  // then fold twice through the sine waveshaper with the time phase between
+  var h = wave(wave(0.05 - d) + t1)
   hsv(h, 1, 1)
 }
