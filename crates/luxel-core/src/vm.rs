@@ -343,6 +343,8 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // Luxel extensions
     b!("map", Map), b!("sign", Sign), b!("step", Step), b!("saturate", Saturate),
     b!("dist", Dist), b!("dist3", Dist3),
+    // familiar aliases: fract=frac, lerp=mix, length/length3=hypot
+    b!("fract", Frac), b!("lerp", Mix), b!("length", Hypot), b!("length3", Hypot3),
     b!("easeInQuad", EaseInQuad), b!("easeOutQuad", EaseOutQuad),
     b!("easeInOutQuad", EaseInOutQuad), b!("easeInCubic", EaseInCubic),
     b!("easeOutCubic", EaseOutCubic), b!("easeInOutCubic", EaseInOutCubic),

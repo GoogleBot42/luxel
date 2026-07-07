@@ -37,6 +37,10 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "hypot3", sig: "hypot3(a, b, c)", doc: "sqrt(a² + b² + c²)." },
   // Luxel extension builtins (not in Pixel Blaze)
   { name: "map", sig: "map(x, inLo, inHi, outLo, outHi)", doc: "Re-range x from one interval to another. (Luxel)" },
+  { name: "fract", sig: "fract(x)", doc: "Fractional part of x (alias of frac). (Luxel)" },
+  { name: "lerp", sig: "lerp(a, b, t)", doc: "Linear blend of a and b by t (alias of mix). (Luxel)" },
+  { name: "length", sig: "length(a, b)", doc: "Vector length sqrt(a² + b²) (alias of hypot). (Luxel)" },
+  { name: "length3", sig: "length3(a, b, c)", doc: "3D vector length (alias of hypot3). (Luxel)" },
   { name: "sign", sig: "sign(x)", doc: "-1, 0, or 1 by the sign of x. (Luxel)" },
   { name: "step", sig: "step(edge, x)", doc: "0 if x < edge, else 1. (Luxel)" },
   { name: "saturate", sig: "saturate(x)", doc: "Clamp x to 0..1. (Luxel)" },

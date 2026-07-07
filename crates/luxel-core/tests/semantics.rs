@@ -763,3 +763,17 @@ fn exponent_operator() {
     // unary lhs binds first (documented divergence from JS's SyntaxError)
     assert_eq!(eval("0 - 2 ** 2"), fx(-4.0)); // (-) after: 0 - (2**2)
 }
+
+#[test]
+fn familiar_builtin_aliases() {
+    // fract = frac (fractional part)
+    assert_eq!(eval("fract(2.75)"), fx(0.75));
+    assert_eq!(eval("fract(2.75)"), eval("frac(2.75)"));
+    // lerp = mix (linear blend)
+    assert_eq!(eval("lerp(0, 10, 0.25)"), fx(2.5));
+    assert_eq!(eval("lerp(4, 8, 0.5)"), eval("mix(4, 8, 0.5)"));
+    // length / length3 = hypot / hypot3 (vector magnitude)
+    assert_eq!(eval("length(3, 4)"), fx(5.0));
+    assert_eq!(eval("length3(2, 3, 6)"), fx(7.0));
+    assert_eq!(eval("length(3, 4)"), eval("hypot(3, 4)"));
+}
