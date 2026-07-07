@@ -276,6 +276,7 @@ try {
   page.on("dialog", (d) => {
     if (d.message().includes("save pattern")) return void d.accept("device kept");
     if (d.message().includes("delete")) return void d.accept();
+    if (d.message().includes("clear")) return void d.accept();
     void d.dismiss();
   });
   await page.click('[data-role="save"]'); // save (editor header) → stores on the device
@@ -458,6 +459,16 @@ try {
   check(
     "playlist: stop halts auto-advance",
     (await (await fetch(`${DEV}/api/playlist`)).json()).playing === false,
+  );
+  // total run-time summary (item0 override 2s + item1 default 5s = 7s)
+  const total = await page.$eval('[data-role="pl-total"]', (el) => el.textContent ?? "");
+  check("playlist: total run-time shown", /2 items/.test(total) && /7s/.test(total), total.trim());
+  // clear empties the playlist
+  await page.click('[data-role="pl-clear"]'); // dialog handler accepts
+  await sleep(500);
+  check(
+    "playlist: clear empties it",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).items.length === 0,
   );
 
   // ---- "untitled" fix: a running pattern that matches a saved one shows its

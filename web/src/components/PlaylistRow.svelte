@@ -17,6 +17,7 @@
   export let source: string | undefined;
   export let item: PlaylistItem;
   export let defaultSec: number;
+  export let missing = false;
   export let active = false;
   export let first = false;
   export let last = false;
@@ -70,10 +71,12 @@
   }
 </script>
 
-<li class="row" class:active data-role="playlist-item">
+<li class="row" class:active class:missing data-role="playlist-item">
   <div class="head">
-    {#if luxel}<PatternThumb {luxel} {source} />{/if}
-    <span class="name" data-role="pl-name">{item.name || item.id}</span>
+    {#if luxel && !missing}<PatternThumb {luxel} {source} />{/if}
+    <span class="name" data-role="pl-name">
+      {item.name || item.id}{#if missing}<span class="miss"> (deleted)</span>{/if}
+    </span>
     <span class="dur dim" data-role="pl-duration">{durationLabel}</span>
     <span class="spacer"></span>
     <label class="ovr" title="override the playlist default for this item">
@@ -120,6 +123,17 @@
   .row.active {
     border-color: var(--accent);
     box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  .row.missing {
+    opacity: 0.6;
+    border-style: dashed;
+  }
+
+  .miss {
+    color: var(--error, #e05555);
+    font-weight: 400;
+    font-size: 12px;
   }
 
   .head {

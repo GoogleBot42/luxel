@@ -135,6 +135,29 @@
     queuePlaylistSave();
   }
 
+  function clearPlaylist(): void {
+    if (playlist.items.length === 0) return;
+    if (!window.confirm("clear the whole playlist?")) return;
+    playlist = { ...playlist, items: [] };
+    queuePlaylistSave();
+  }
+
+  /** Total auto-advance run time (manual items — effective 0s — are excluded);
+   *  also whether any item is manual. */
+  $: playlistTotalSec = playlist.items.reduce(
+    (s, it) => s + Math.max(0, it.sec ?? playlist.defaultSec),
+    0,
+  );
+  $: playlistHasManual = playlist.items.some((it) => (it.sec ?? playlist.defaultSec) <= 0);
+  const fmtDuration = (sec: number): string => {
+    if (sec <= 0) return "0s";
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  };
+  /** A playlist item whose pattern was deleted from the device. */
+  const itemMissing = (id: string): boolean => !devicePatterns.some((p) => p.id === id);
+
   function movePlaylistItem(i: number, dir: number): void {
     const j = i + dir;
     const items = [...playlist.items];
@@ -1697,6 +1720,11 @@ export function render(index) {
               ▶ play
             </button>
           {/if}
+          {#if playlist.items.length > 0}
+            <button data-role="pl-clear" title="remove all items" on:click={clearPlaylist}>
+              clear
+            </button>
+          {/if}
         </span>
       </div>
 
@@ -1712,6 +1740,14 @@ export function render(index) {
           on:change={onDefaultSecChange}
         />
         <span class="dim">seconds (blank/0 = manual advance) · items can override</span>
+        {#if playlist.items.length > 0}
+          <span class="spacer"></span>
+          <span class="dim" data-role="pl-total">
+            {playlist.items.length} item{playlist.items.length === 1 ? "" : "s"} · loop ≈ {fmtDuration(
+              playlistTotalSec,
+            )}{playlistHasManual ? " + manual stops" : ""}
+          </span>
+        {/if}
       </div>
 
       {#if !device}
@@ -1731,6 +1767,7 @@ export function render(index) {
                 source={itemSource(item.id)}
                 {item}
                 defaultSec={playlist.defaultSec}
+                missing={itemMissing(item.id)}
                 active={playlist.playing && playlist.index === i}
                 first={i === 0}
                 last={i === playlist.items.length - 1}

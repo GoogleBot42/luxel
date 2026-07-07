@@ -155,6 +155,9 @@ fn controls_json(state: &State) -> String {
 /// source on success. Also records the active index.
 fn enter_item(state: &State, i: usize) -> Option<(Engine, String)> {
     let item = state.playlist.lock().unwrap().items.get(i).cloned()?;
+    // advance the active index even if the pattern is missing (deleted), so a
+    // dangling entry just holds for its duration and the loop moves past it
+    state.pl_index.store(i, Ordering::Relaxed);
     let sp = pattern_by_id(state, &item.pattern_id)?;
     let mut eng = Engine::new(&sp.source, state.pixel_count.load(Ordering::Relaxed), 1).ok()?;
     for (name, raw) in &item.controls {
@@ -164,7 +167,6 @@ fn enter_item(state: &State, i: usize) -> Option<(Engine, String)> {
     *state.pattern_src.lock().unwrap() = sp.source.clone();
     *state.controls_json.lock().unwrap() = jsonview::controls_json(&eng);
     *state.vmerr.lock().unwrap() = None;
-    state.pl_index.store(i, Ordering::Relaxed);
     Some((eng, sp.source))
 }
 
