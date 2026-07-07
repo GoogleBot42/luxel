@@ -27,6 +27,7 @@ enum Msg {
     Code(String),
     Control(String, Vec<Fx>),
     Var(String, Fx),
+    Config(u32),
 }
 
 /// A stored pattern (the device pattern library; firmware keeps these in
@@ -45,8 +46,10 @@ struct StoredPattern {
     source: String,
 }
 
+const MAX_PIXELS: u32 = 2048;
+
 struct State {
-    pixel_count: u32,
+    pixel_count: AtomicU32,
     inbox: Mutex<Vec<Msg>>,
     pixels: Mutex<Vec<u8>>,
     fps: AtomicU32,
@@ -73,7 +76,7 @@ fn status_json(state: &State) -> String {
     format!(
         "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":0,\"vmerr\":{}}}",
         fps,
-        state.pixel_count,
+        state.pixel_count.load(Ordering::Relaxed),
         env!("CARGO_PKG_VERSION"),
         vmerr
     )
@@ -89,7 +92,9 @@ fn controls_json(state: &State) -> String {
 }
 
 fn render_loop(state: Arc<State>) {
-    let mut engine = Engine::new(DEFAULT_PATTERN, state.pixel_count, 1).ok();
+    let count = || state.pixel_count.load(Ordering::Relaxed);
+    let mut current_src = DEFAULT_PATTERN.to_string();
+    let mut engine = Engine::new(DEFAULT_PATTERN, count(), 1).ok();
     *state.pattern_src.lock().unwrap() = DEFAULT_PATTERN.to_string();
     if let Some(eng) = engine.as_ref() {
         *state.controls_json.lock().unwrap() = jsonview::controls_json(eng);
@@ -103,9 +108,10 @@ fn render_loop(state: Arc<State>) {
         for msg in state.inbox.lock().unwrap().drain(..) {
             match msg {
                 Msg::Code(src) => {
-                    if let Ok(e) = Engine::new(&src, state.pixel_count, 1) {
+                    if let Ok(e) = Engine::new(&src, count(), 1) {
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
                         engine = Some(e);
+                        current_src = src.clone();
                         *state.pattern_src.lock().unwrap() = src;
                         *state.vmerr.lock().unwrap() = None;
                         last = Instant::now();
@@ -119,6 +125,17 @@ fn render_loop(state: Arc<State>) {
                 Msg::Var(name, value) => {
                     if let Some(eng) = engine.as_mut() {
                         eng.set_var(&name, value);
+                    }
+                }
+                // live pixel-count change: rebuild the engine at the new count
+                Msg::Config(n) => {
+                    let n = n.clamp(1, MAX_PIXELS);
+                    state.pixel_count.store(n, Ordering::Relaxed);
+                    if let Ok(e) = Engine::new(&current_src, n, 1) {
+                        *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
+                        engine = Some(e);
+                        *state.vmerr.lock().unwrap() = None;
+                        last = Instant::now();
                     }
                 }
             }
@@ -167,7 +184,7 @@ fn render_loop(state: Arc<State>) {
 // ---- shared request handlers (same JSON as the firmware routes) ----
 
 fn api_code(state: &State, body: String) -> String {
-    match Engine::new(&body, state.pixel_count, 1) {
+    match Engine::new(&body, state.pixel_count.load(Ordering::Relaxed), 1) {
         Ok(_) => {
             push(state, Msg::Code(body));
             String::from("{\"ok\":true}")
@@ -221,7 +238,7 @@ fn patterns_save(state: &State, body: &str) -> String {
         _ => return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}"),
     };
     // compile-check before storing — the library never holds broken source
-    if let Err(d) = Engine::new(source, state.pixel_count, 1) {
+    if let Err(d) = Engine::new(source, state.pixel_count.load(Ordering::Relaxed), 1) {
         let (line, col) = line_col(source, d.span.start);
         return format!(
             "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
@@ -504,6 +521,25 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/config") => {
+            let body = format!(
+                "{{\"pixels\":{},\"max\":{},\"protocol\":\"native\"}}",
+                state.pixel_count.load(Ordering::Relaxed),
+                MAX_PIXELS
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/config") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim().parse::<u32>() {
+                Ok(n) if n >= 1 && n <= MAX_PIXELS => {
+                    push(&state, Msg::Config(n));
+                    format!("{{\"ok\":true,\"pixels\":{}}}", n)
+                }
+                _ => format!("{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}", MAX_PIXELS),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("POST", "/api/code") => {
             let body = String::from_utf8_lossy(&req.body).into_owned();
             let r = api_code(&state, body);
@@ -575,7 +611,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     }
 
     let state = Arc::new(State {
-        pixel_count: pixels,
+        pixel_count: AtomicU32::new(pixels),
         inbox: Mutex::new(Vec::new()),
         pixels: Mutex::new(Vec::new()),
         fps: AtomicU32::new(0),

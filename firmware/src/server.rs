@@ -19,6 +19,8 @@
 //!   POST /api/wifi      body = "ssid\npassword" → stores creds in flash + reboots
 //!   GET  /api/brightness {"brightness":0..31,"max":31}
 //!   POST /api/brightness body = "0".."31" → applied live + persisted {"ok":true,"brightness":N}
+//!   GET  /api/config    {"pixels":N,"max":2048,"protocol":"sk9822"}
+//!   POST /api/config    body = pixel count → live resize + persisted {"ok":true,"pixels":N}
 //!   GET    /api/patterns              {"patterns":[{"id","name"},…]}
 //!   GET    /api/patterns/<id>         {"id","name","source"}
 //!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
@@ -42,7 +44,8 @@ use crate::shared::{
     get_pattern_src, get_pixels, get_vmerr, snapshot, Msg, CONTROLS_JSON, FPS, MSG_QUEUE,
     READOUTS_JSON, VARS_JSON,
 };
-use crate::PIXEL_COUNT;
+use crate::config::DeviceConfig;
+use crate::shared::{BRIGHTNESS, MAX_PIXELS, PIXEL_COUNT};
 
 const INDEX_HTML: &str = include_str!("index.html");
 
@@ -80,6 +83,7 @@ fn etag_matches(token: &[u8], etag: &[u8]) -> bool {
 
 fn status_json() -> String {
     let fps = FPS.load(Ordering::Relaxed);
+    let pixels = PIXEL_COUNT.load(Ordering::Relaxed);
     let slot = crate::ota::booted_slot();
     let version = env!("CARGO_PKG_VERSION");
     let heap = esp_alloc::HEAP.free();
@@ -87,7 +91,7 @@ fn status_json() -> String {
         Some(e) => format!(
             "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":\"{}\"}}",
             fps,
-            PIXEL_COUNT,
+            pixels,
             slot,
             version,
             heap,
@@ -95,7 +99,7 @@ fn status_json() -> String {
         ),
         None => format!(
             "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"vmerr\":null}}",
-            fps, PIXEL_COUNT, slot, version, heap
+            fps, pixels, slot, version, heap
         ),
     }
 }
@@ -437,7 +441,7 @@ async fn api_readouts() -> ApiResponse {
 async fn api_code(src: String) -> ApiResponse {
     // Compile-check with the real pixel count so errors surface here with
     // source locations; the render task recompiles the accepted source.
-    json_response(match Engine::new(&src, PIXEL_COUNT, 1) {
+    json_response(match Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         Ok(_) => {
             MSG_QUEUE.send(Msg::Code(src)).await;
             String::from("{\"ok\":true}")
@@ -465,7 +469,7 @@ fn api_patterns_save(body: String) -> String {
     if source.is_empty() {
         return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}");
     }
-    if let Err(d) = Engine::new(source, PIXEL_COUNT, 1) {
+    if let Err(d) = Engine::new(source, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         let (line, col) = line_col(source, d.span.start);
         return format!(
             "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
@@ -483,7 +487,7 @@ async fn api_patterns_activate(id: &str) -> String {
     let Some(source) = crate::patterns::source_of(id) else {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     };
-    match Engine::new(&source, PIXEL_COUNT, 1) {
+    match Engine::new(&source, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         Ok(_) => {
             MSG_QUEUE.send(Msg::Code(source)).await;
             String::from("{\"ok\":true}")
@@ -608,9 +612,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     };
                     let response = json_response(match body.trim().parse::<u8>() {
                         Ok(b) if b <= 31 => {
-                            crate::shared::BRIGHTNESS
-                                .store(b, core::sync::atomic::Ordering::Relaxed);
-                            match crate::config::write_brightness(b) {
+                            BRIGHTNESS.store(b, Ordering::Relaxed);
+                            // read-modify-write so we don't clobber the pixel count
+                            let cfg = DeviceConfig {
+                                brightness: b,
+                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+                            };
+                            match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"brightness\":{}}}", b),
                                 // applied live even if the flash write failed
                                 Err(e) => format!(
@@ -621,6 +629,40 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             }
                         }
                         _ => String::from("{\"ok\":false,\"error\":\"brightness must be 0..=31\"}"),
+                    });
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
+                // POST /api/config — body is a pixel count 1..=MAX_PIXELS.
+                // Applied live (render task rebuilds the engine + SPI buffer)
+                // and persisted. No reboot.
+                "/api/config" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let response = json_response(match body.trim().parse::<u32>() {
+                        Ok(n) if n >= 1 && n <= MAX_PIXELS => {
+                            // the render task is the sole writer of PIXEL_COUNT;
+                            // it flips the atomic + rebuilds when it drains this
+                            MSG_QUEUE.send(Msg::Config(n)).await;
+                            let cfg = DeviceConfig {
+                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
+                                pixel_count: n,
+                            };
+                            match crate::config::write_device(&cfg) {
+                                Ok(()) => format!("{{\"ok\":true,\"pixels\":{}}}", n),
+                                Err(e) => format!(
+                                    "{{\"ok\":true,\"pixels\":{},\"note\":\"not persisted: {}\"}}",
+                                    n,
+                                    json_escape(e)
+                                ),
+                            }
+                        }
+                        _ => format!(
+                            "{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}",
+                            MAX_PIXELS
+                        ),
                     });
                     let conn = request.body_connection.finalize().await?;
                     return response.write_to(conn, response_writer).await;
@@ -796,7 +838,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 }
                 "/api/brightness" => respond!(json_response(format!(
                     "{{\"brightness\":{},\"max\":31}}",
-                    crate::shared::BRIGHTNESS.load(core::sync::atomic::Ordering::Relaxed)
+                    BRIGHTNESS.load(Ordering::Relaxed)
+                ))),
+                "/api/config" => respond!(json_response(format!(
+                    "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
+                    PIXEL_COUNT.load(Ordering::Relaxed),
+                    MAX_PIXELS,
+                    crate::PROTOCOL.name()
                 ))),
                 "/api/pixels" => respond!(api_pixels().await),
                 "/api/pattern" => respond!(api_pattern().await),

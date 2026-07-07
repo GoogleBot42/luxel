@@ -19,6 +19,8 @@ pub enum Msg {
     Code(String),
     Control(String, Vec<Fx>),
     Var(String, Fx),
+    /// New pixel count — the render task rebuilds the engine + SPI buffer live.
+    Config(u32),
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
@@ -31,6 +33,16 @@ pub static FPS: AtomicU32 = AtomicU32::new(0);
 /// WS2812). HTTP `/api/brightness` writes it; boot seeds it from flash (else
 /// the compile-time default). Cheap enough to apply per-frame with no cost.
 pub static BRIGHTNESS: AtomicU8 = AtomicU8::new(4);
+
+/// Active pixel count. Runtime-configurable (`/api/config`): only the render
+/// task writes it — on `Msg::Config` it rebuilds the engine + SPI buffer to
+/// match, no reboot. Everyone else (status, compile-validation) reads it. Boot
+/// seeds it from flash (else the board default).
+pub static PIXEL_COUNT: AtomicU32 = AtomicU32::new(300);
+
+/// Hard cap on a runtime pixel count, to bound heap use (engine buffers + the
+/// SPI encode buffer). 2048 leaves ample headroom on the ESP32.
+pub const MAX_PIXELS: u32 = 2048;
 
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 

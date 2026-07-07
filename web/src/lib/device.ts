@@ -74,6 +74,24 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; brightness?: number };
   }
 
+  /** Device config: pixel count, its max, and the LED protocol. */
+  async config(): Promise<{ pixels: number; max: number; protocol: string }> {
+    return (await (await fetch(this.url("/api/config"))).json()) as {
+      pixels: number;
+      max: number;
+      protocol: string;
+    };
+  }
+
+  /** Set the pixel count; the device resizes its strip live (no reboot). */
+  async setConfig(pixels: number): Promise<{ ok: boolean; pixels?: number; error?: string }> {
+    const res = await fetch(this.url("/api/config"), {
+      method: "POST",
+      body: String(Math.max(1, Math.round(pixels))),
+    });
+    return (await res.json()) as { ok: boolean; pixels?: number; error?: string };
+  }
+
   async run(source: string): Promise<RunResult> {
     const ws = this.wsCall("code", source);
     if (ws) return (await ws) as RunResult;

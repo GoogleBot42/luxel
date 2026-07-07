@@ -114,9 +114,13 @@ A real device needs a settings surface (page/dialog). Fields:
   nvs record (survives reboot). The Settings slider drives it live. Shipped in
   firmware v0.1.12. (Preview is intentionally pre-brightness — it shows the
   pattern's colors; brightness dims the physical strip only.)
-- **Strip type & pixel count** 🔧 — **not editable when connected** today
-  (layout is locked in device mode). Needs `GET/POST /api/config` (pixel count,
-  LED protocol) with persistence + safe re-init of the LED driver.
+- **Pixel count** ✅ — `GET/POST /api/config` resizes the strip **live, no
+  reboot**: the render task rebuilds the engine + SPI buffer on a `Msg::Config`
+  (feasible because the SPI is Blocking, no DMA, and the encode buffer is a plain
+  heap Vec). Persisted in the `LXDV` nvs record; capped at `MAX_PIXELS` (2048).
+  Shipped firmware v0.1.13. The Settings Pixels field is editable and re-anchors
+  the local preview. (LED **protocol** is still compile-time — reported by GET
+  but not settable; a runtime protocol switch is a later item.)
 - **MQTT / Home Assistant** 🔧 — ("HQTT" in the notes) M4 territory, unbuilt.
   Broker host/port/creds + HA discovery toggle.
 - **WiFi** — `GET/POST /api/wifi` already exists (stores creds + reboots).
@@ -149,11 +153,10 @@ the pattern is loading, instead of appearing dead/blank.
    → playback bar; gallery promoted from modal to inline Patterns tab; Settings
    shell (device info + pixel readout, Phase-3 placeholders). Both e2e suites
    updated to the new `data-role` hooks and green.
-3. **Phase 3 (firmware + settings):** ~~fix the connect-on-load race~~ ✅ done
-   (web-only); ~~`/api/brightness` + Settings brightness slider~~ ✅ done
-   (firmware v0.1.12, runtime + persisted + live-applied); remaining:
-   `/api/config` (pixel count/protocol — needs runtime `PIXEL_COUNT`, buffer
-   re-sizing, and a reboot-to-apply flow like WiFi) + Settings WiFi form.
+3. **Phase 3 (firmware + settings):** ~~connect-on-load race~~ ✅ (web-only);
+   ~~`/api/brightness` + slider~~ ✅ (v0.1.12); ~~`/api/config` pixel count +
+   Settings field~~ ✅ (v0.1.13, **live resize, no reboot**). Remaining: a
+   runtime LED-protocol switch (re-init the driver) + the Settings WiFi form.
 4. **Phase 4 (bigger features):** ~~mapper-as-editor-tab (CodeMirror) +
    debuggable~~ ✅ done (Luxel map program, see above); 3D preview (map already
    emits `[x,y,z]` — Preview needs a projection); Playlist tab + firmware

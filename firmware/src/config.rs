@@ -21,11 +21,21 @@ const MAGIC: &[u8; 4] = b"LXCF";
 pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
-/// Device settings (brightness, …) live in the next nvs sector, so writing
-/// them never disturbs the WiFi record. Record: "LXDV" u8 version=1
-/// u8 brightness  u8 0 u8 0  u32-LE checksum.
+/// Device settings live in the next nvs sector, so writing them never disturbs
+/// the WiFi record. Record (v2): "LXDV" u8 version=2  u8 brightness  u8 0 u8 0
+/// u32-LE pixel_count  u32-LE checksum (16 bytes). A v1 record (brightness
+/// only) fails the version check and reads as "no record" → defaults.
 const DEV_OFFSET: u32 = 0xA000;
 const DEV_MAGIC: &[u8; 4] = b"LXDV";
+const DEV_VER: u8 = 2;
+
+/// Persisted device settings. Both fields are written together (read-modify-
+/// write) so setting one never clobbers the other.
+#[derive(Clone, Copy)]
+pub struct DeviceConfig {
+    pub brightness: u8,
+    pub pixel_count: u32,
+}
 
 fn checksum(bytes: &[u8]) -> u32 {
     bytes.iter().fold(0u32, |a, &b| a.wrapping_add(b as u32))
@@ -101,34 +111,40 @@ pub fn write_wifi(ssid: &str, pass: &str) -> Result<(), &'static str> {
     }
 }
 
-/// Read the persisted output brightness (0–31), if a valid record exists.
-pub fn read_brightness() -> Option<u8> {
-    let mut rec = [0u8; 12]; // 8-byte header + 4-byte checksum
+/// Read the persisted device settings, if a valid record exists.
+pub fn read_device() -> Option<DeviceConfig> {
+    let mut rec = [0u8; 16]; // 12-byte body + 4-byte checksum
     if !crate::assets::read_chunk(DEV_OFFSET, &mut rec) {
         return None;
     }
-    if &rec[0..4] != DEV_MAGIC || rec[4] != 1 {
+    if &rec[0..4] != DEV_MAGIC || rec[4] != DEV_VER {
         return None;
     }
-    let stored = u32::from_le_bytes(rec[8..12].try_into().ok()?);
-    if stored != checksum(&rec[0..8]) {
+    let stored = u32::from_le_bytes(rec[12..16].try_into().ok()?);
+    if stored != checksum(&rec[0..12]) {
         return None;
     }
-    let b = rec[5];
-    (b <= 31).then_some(b)
+    let brightness = rec[5];
+    let pixel_count = u32::from_le_bytes(rec[8..12].try_into().ok()?);
+    if brightness > 31 {
+        return None;
+    }
+    Some(DeviceConfig { brightness, pixel_count })
 }
 
-/// Persist the output brightness (0–31), applied live and on next boot.
-pub fn write_brightness(brightness: u8) -> Result<(), &'static str> {
-    if brightness > 31 {
+/// Persist device settings (brightness applied live; pixel count applied live
+/// by the render task). Callers do a read-modify-write via read_device().
+pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
+    if cfg.brightness > 31 {
         return Err("brightness must be 0..=31");
     }
-    let mut rec: Vec<u8> = Vec::with_capacity(12);
+    let mut rec: Vec<u8> = Vec::with_capacity(16);
     rec.extend_from_slice(DEV_MAGIC);
-    rec.push(1);
-    rec.push(brightness);
+    rec.push(DEV_VER);
+    rec.push(cfg.brightness);
     rec.push(0);
     rec.push(0);
+    rec.extend_from_slice(&cfg.pixel_count.to_le_bytes());
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());
     // word-aligned staging (same rationale as write_wifi)

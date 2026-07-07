@@ -23,6 +23,14 @@ impl Protocol {
         }
     }
 
+    /// Short lowercase name for the API (`/api/config`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::Sk9822 => "sk9822",
+            Protocol::Ws2812 => "ws2812",
+        }
+    }
+
     pub fn buf_len(self, pixels: usize) -> usize {
         match self {
             // 4B start + 4B/px + 4B SK9822 reset + px/16 end-clock bytes

@@ -181,6 +181,28 @@ try {
   const bReadout = await page.$eval('[data-role="brightness-val"]', (el) => el.textContent ?? "");
   check("brightness: readout reflects it", bReadout.includes("20"), bReadout);
 
+  // pixel count (Phase 3): the Settings Pixels field resizes the strip LIVE
+  // via /api/config (no reboot)
+  const cfg0 = await (await fetch(`${DEV}/api/config`)).json();
+  check("config: GET returns {pixels,max}", cfg0.pixels === 120 && cfg0.max >= 120, JSON.stringify(cfg0));
+  await page.$eval('[data-role="cfg-pixels"]', (el) => {
+    el.value = "48";
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(700);
+  const cfg1 = await (await fetch(`${DEV}/api/config`)).json();
+  check("config: field resizes the device live", cfg1.pixels === 48, JSON.stringify(cfg1));
+  const stAfter = await (await fetch(`${DEV}/api/status`)).json();
+  check("config: status reports the new count", stAfter.pixels === 48, JSON.stringify(stAfter));
+  // the device now streams 48 px — verify the pixel buffer resized
+  const pxLen = (await (await fetch(`${DEV}/api/pixels`)).arrayBuffer()).byteLength;
+  check("config: pixel buffer resized (48×3)", pxLen === 48 * 3, `${pxLen} bytes`);
+  await page.$eval('[data-role="cfg-pixels"]', (el) => {
+    el.value = "120";
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(700); // restore for the rest of the suite
+
   // live-code push: slider-controlled solid color + exported var
   await setEditor(
     page,

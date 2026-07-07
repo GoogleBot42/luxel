@@ -62,7 +62,7 @@ use leds::Protocol;
 use luxel_core::jsonview;
 use shared::{
     publish, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS,
-    MSG_QUEUE, READOUTS_JSON, VARS_JSON,
+    MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, READOUTS_JSON, VARS_JSON,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -95,7 +95,9 @@ pub static REBOOT: embassy_sync::signal::Signal<
 //   (SCK), both through the onboard 5V level shifter; status LED GPIO12
 //   (lit at boot = Luxel alive), button GPIO32 (unused).
 const PROTOCOL: Protocol = Protocol::Sk9822;
-pub const PIXEL_COUNT: u32 = 300;
+/// Board default pixel count; the live value lives in `shared::PIXEL_COUNT`
+/// (seeded from this at boot, overridable at runtime via `/api/config`).
+const DEFAULT_PIXEL_COUNT: u32 = 300;
 /// Global brightness 0–31 (APA102 5-bit current limiter; ignored for
 /// WS2812). Keep modest on USB power.
 const APA_BRIGHTNESS: u8 = 4;
@@ -151,8 +153,8 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     println!(
-        "luxel-fw: boot ({} px, {} Hz SPI)",
-        PIXEL_COUNT,
+        "luxel-fw: boot ({} px default, {} Hz SPI)",
+        DEFAULT_PIXEL_COUNT,
         PROTOCOL.spi_hz()
     );
 
@@ -196,6 +198,24 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }
+
+    // Seed runtime settings from flash (else compile-time defaults) BEFORE the
+    // render task spawns — it reads PIXEL_COUNT once when it builds the engine.
+    let stored = config::read_device();
+    let brightness = stored.map(|c| c.brightness).unwrap_or(APA_BRIGHTNESS);
+    let pixels = stored
+        .map(|c| c.pixel_count)
+        .filter(|&n| n >= 1 && n <= MAX_PIXELS)
+        .unwrap_or(DEFAULT_PIXEL_COUNT);
+    BRIGHTNESS.store(brightness, Ordering::Relaxed);
+    PIXEL_COUNT.store(pixels, Ordering::Relaxed);
+    println!(
+        "settings: {} px, brightness {}/31 ({})",
+        pixels,
+        brightness,
+        if stored.is_some() { "flash" } else { "default" }
+    );
+
     spawner.spawn(reboot_task().unwrap());
     // Bisect knob: LUXEL_QUIET=1 at build time skips the render task
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
@@ -205,17 +225,6 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         println!("LUXEL_QUIET: render task disabled");
     }
-
-    // Seed runtime brightness from flash (else the compile-time default). The
-    // render task starts at the default and picks this up within a frame.
-    let stored_brightness = config::read_brightness();
-    let brightness = stored_brightness.unwrap_or(APA_BRIGHTNESS);
-    BRIGHTNESS.store(brightness, Ordering::Relaxed);
-    println!(
-        "brightness: {}/31 ({})",
-        brightness,
-        if stored_brightness.is_some() { "flash" } else { "default" }
-    );
 
     // Credentials: the flash record wins (survives images built without
     // env creds — the lockout class that stranded the device twice), then
@@ -312,19 +321,22 @@ async fn main(spawner: Spawner) -> ! {
 /// frames. Yields to the network tasks after every frame.
 #[embassy_executor::task]
 async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
-    let mut engine = match Engine::new(PATTERN, PIXEL_COUNT, 1) {
+    let mut engine = match Engine::new(PATTERN, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         Ok(e) => Some(e),
         Err(d) => {
             println!("embedded pattern compile error: {}", d.message);
             None
         }
     };
+    // the source currently running — kept so a live pixel-count change can
+    // recompile it at the new count without a round-trip through the client
+    let mut current_src = alloc::string::String::from(PATTERN);
     set_pattern_src(PATTERN);
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
     }
 
-    let mut buf = alloc::vec![0u8; PROTOCOL.buf_len(PIXEL_COUNT as usize)];
+    let mut buf = alloc::vec![0u8; PROTOCOL.buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
@@ -337,11 +349,12 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     // Compile-checked by the upload handler; failure here
                     // would mean non-determinism, so log and keep the old
                     // pattern.
-                    match Engine::new(&src, PIXEL_COUNT, 1) {
+                    match Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
                         Ok(e) => {
                             publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                             engine = Some(e);
                             set_pattern_src(&src);
+                            current_src = src;
                             set_vmerr(None);
                             last = Instant::now();
                         }
@@ -356,6 +369,24 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 Msg::Var(name, value) => {
                     if let Some(eng) = engine.as_mut() {
                         eng.set_var(&name, value);
+                    }
+                }
+                // Live pixel-count change (no reboot): resize the SPI buffer
+                // and rebuild the engine at the new count from the current
+                // source. This task is the sole writer of PIXEL_COUNT.
+                Msg::Config(count) => {
+                    let count = count.clamp(1, MAX_PIXELS);
+                    PIXEL_COUNT.store(count, Ordering::Relaxed);
+                    buf = alloc::vec![0u8; PROTOCOL.buf_len(count as usize)];
+                    match Engine::new(&current_src, count, 1) {
+                        Ok(e) => {
+                            publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                            engine = Some(e);
+                            set_vmerr(None);
+                            last = Instant::now();
+                            println!("pixel count → {}", count);
+                        }
+                        Err(d) => println!("resize recompile error (bug?): {}", d.message),
                     }
                 }
             }

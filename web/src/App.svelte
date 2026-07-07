@@ -80,6 +80,8 @@
   /** Device output brightness (0–brightnessMax), from GET /api/brightness. */
   let brightness = 4;
   let brightnessMax = 31;
+  /** Max pixel count the device firmware accepts (GET /api/config). */
+  let pixelMax = 2048;
 
   async function refreshDevicePatterns(): Promise<void> {
     if (!device) return;
@@ -337,6 +339,12 @@
         brightnessMax = b.max || 31;
       } catch {
         /* older firmware without /api/brightness — leave the default */
+      }
+      try {
+        const c = await session.config();
+        pixelMax = c.max || 2048;
+      } catch {
+        /* older firmware without /api/config — pixel count stays read-only */
       }
       compileError = null;
       runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
@@ -893,6 +901,25 @@ export function render(index) {
   function onBrightnessChange(e: Event): void {
     brightness = Number((e.target as HTMLInputElement).value);
     void device?.setBrightness(brightness);
+  }
+
+  /** Live pixel-count change: the device resizes its strip (no reboot); we
+   *  re-anchor the local preview to the new count. */
+  function onPixelCountChange(e: Event): void {
+    const n = Math.max(1, Math.min(pixelMax, Number((e.target as HTMLInputElement).value) || 1));
+    void (async () => {
+      const r = await device?.setConfig(n);
+      if (r?.ok) {
+        devicePixels = r.pixels ?? n;
+        // the arrangement resets to a plain strip at the new count (any grid/
+        // map was derived from the old count)
+        layout = { kind: "strip", pixels: devicePixels };
+        subTab = "pattern";
+        preview?.clear();
+      } else if (r) {
+        deviceError = r.error ? `config: ${r.error}` : "config change failed";
+      }
+    })();
   }
 
   function togglePause(): void {
@@ -1667,8 +1694,16 @@ export function render(index) {
           </div>
           <div class="field">
             <span class="flabel">Pixels</span>
-            <input class="num" data-role="cfg-pixels" type="number" value={pixelTotal} disabled />
-            <span class="dim">strip — editable once firmware config lands (Phase 3)</span>
+            <input
+              class="num"
+              data-role="cfg-pixels"
+              type="number"
+              min="1"
+              max={pixelMax}
+              value={devicePixels}
+              on:change={onPixelCountChange}
+            />
+            <span class="dim">resized live — max {pixelMax}, no reboot</span>
           </div>
           <div class="field">
             <span class="flabel">Status</span>
