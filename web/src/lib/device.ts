@@ -13,6 +13,16 @@ export interface DeviceStatus {
 
 export type RunResult = { ok: true } | { ok: false; line: number; col: number; error: string };
 
+/** MQTT broker settings + connection state (GET /api/mqtt). */
+export interface MqttStatus {
+  enabled: boolean;
+  host: string;
+  port: number;
+  user: string;
+  hasPass: boolean;
+  connected: boolean;
+}
+
 const RAW = 65536;
 
 export class DeviceSession {
@@ -160,6 +170,26 @@ export class DeviceSession {
     const res = await fetch(this.url("/api/wifi"), {
       method: "POST",
       body: `${ssid}\n${password}`,
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
+  /** MQTT broker settings (never the password) + connection state. */
+  async mqtt(): Promise<MqttStatus> {
+    return (await (await fetch(this.url("/api/mqtt"))).json()) as MqttStatus;
+  }
+
+  /** Set the MQTT broker; the device reconnects live (no reboot). Empty
+   *  host disables MQTT. */
+  async setMqtt(
+    host: string,
+    port: number,
+    user: string,
+    pass: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(this.url("/api/mqtt"), {
+      method: "POST",
+      body: `${host}\n${port || 1883}\n${user}\n${pass}`,
     });
     return (await res.json()) as { ok: boolean; error?: string };
   }

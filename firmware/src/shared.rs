@@ -5,7 +5,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicU32, AtomicU8};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -106,6 +106,33 @@ pub fn set_pattern_src(src: &str) {
 pub fn get_pattern_src() -> String {
     share_get(&PATTERN_SRC)
 }
+
+/// Master power (Home Assistant's light switch): when false the render task
+/// outputs black — the engine keeps ticking so ON resumes mid-animation.
+/// Written by the MQTT task, read by the render task and state publishing.
+pub static POWER: AtomicBool = AtomicBool::new(true);
+
+/// Library id of the running pattern ("" = ad-hoc code push / built-in
+/// default). Set on activate/playlist-enter, cleared on raw code push; the
+/// MQTT pattern-select state reads it.
+pub static CURRENT_PATTERN_ID: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
+
+pub fn set_current_pattern_id(id: &str) {
+    CURRENT_PATTERN_ID.lock(|c| {
+        let mut s = c.borrow_mut();
+        s.clear();
+        s.push_str(id);
+    });
+}
+
+pub fn get_current_pattern_id() -> String {
+    share_get(&CURRENT_PATTERN_ID)
+}
+
+/// Poked when the MQTT broker config changes so the MQTT task reconnects
+/// (or connects for the first time) without a reboot.
+pub static MQTT_POKE: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
 
 /// Network input (DDP/E1.31): the assembled RGB frame. While packets flow
 /// (see LIVE_MARK_MS) the render task outputs this instead of the engine.

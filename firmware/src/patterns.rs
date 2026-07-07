@@ -379,6 +379,27 @@ pub fn list_json() -> String {
     alloc::format!("{{\"patterns\":[{}]}}", items.join(","))
 }
 
+/// (id, name) of every stored pattern, from the RAM index (for the MQTT
+/// pattern select).
+pub fn list() -> Vec<(String, String)> {
+    INDEX.lock(|c| {
+        c.borrow()
+            .iter()
+            .map(|e| (id_hex(e.seq), e.name.clone()))
+            .collect()
+    })
+}
+
+/// Find a stored pattern's id by exact name (first match).
+pub fn id_by_name(name: &str) -> Option<String> {
+    INDEX.lock(|c| {
+        c.borrow()
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| id_hex(e.seq))
+    })
+}
+
 /// Look up a pattern's (gen, count, name) in the RAM index by id.
 fn lookup(id: &str) -> Option<(u32, u8, u8, String)> {
     let seq = seq_of(id)?;

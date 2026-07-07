@@ -54,6 +54,7 @@ mod assets;
 mod config;
 mod devicemap;
 mod leds;
+mod mqtt;
 mod netin;
 mod ota;
 mod patterns;
@@ -146,10 +147,15 @@ async fn main(spawner: Spawner) -> ! {
     // level-6 NMI frames that land on whatever stack is current. At
     // 120 KB heap the leftover stack measured 15.6 KB and overflowed
     // reproducibly during flash reads (all 24 logged stack-guard panics).
-    // 96 KB leaves ~40 KB of stack; /api/status heap_free still shows
-    // ~70 KB headroom.
+    //
+    // The SAME budget applies to every static — embassy task futures
+    // included. v0.1.19's first cut put ~12 KB of MQTT/netin buffers in
+    // task futures and bricked the boot (stack ≈ 10.7 KB); big task
+    // buffers must be heap Vecs. 88 KB here (96 KB cost stack erosion as
+    // features grew) leaves ~31 KB of stack with ~155 KB of statics;
+    // /api/status heap_free shows the live heap margin.
     #[cfg(feature = "esp32")]
-    esp_alloc::heap_allocator!(size: 96 * 1024);
+    esp_alloc::heap_allocator!(size: 88 * 1024);
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 
@@ -199,6 +205,10 @@ async fn main(spawner: Spawner) -> ! {
     // esp32 radio crashes (serving worked before the OTA commit).
     if option_env!("LUXEL_NO_OTA").is_none() {
         ota::init(esp_storage::FlashStorage::new(p.FLASH));
+    // Boot-loop guard BEFORE the risky part of boot (WiFi init is where a
+    // bad image dies): 3 consecutive boots that never reach ota::boot_ok →
+    // roll back to the other OTA slot.
+    ota::boot_guard();
     assets::init();
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)
@@ -263,6 +273,9 @@ async fn main(spawner: Spawner) -> ! {
         }
         (None, None) => {
             println!("no wifi credentials (no flash record, LUXEL_SSID/LUXEL_PASS unset); offline mode");
+            // offline is a stable state, not a failed boot — clear the guard
+            Timer::after(Duration::from_secs(30)).await;
+            ota::boot_ok();
             loop {
                 Timer::after(Duration::from_secs(3600)).await;
             }
@@ -301,8 +314,8 @@ async fn main(spawner: Spawner) -> ! {
         wifi_interface,
         embassy_net::Config::dhcpv4(dhcp),
         mk_static!(
-            // +2 spare, +2 for the DDP/E1.31 UDP sockets
-            StackResources<{ server::WEB_TASK_POOL_SIZE + 4 }>,
+            // +2 spare, +2 DDP/E1.31 UDP, +1 MQTT TCP, +1 its DNS queries
+            StackResources<{ server::WEB_TASK_POOL_SIZE + 6 }>,
             StackResources::new()
         ),
         seed,
@@ -322,9 +335,15 @@ async fn main(spawner: Spawner) -> ! {
     }
     spawner.spawn(netin::ddp_task(stack).unwrap());
     spawner.spawn(netin::e131_task(stack).unwrap());
+    spawner.spawn(mqtt::mqtt_task(stack).unwrap());
 
+    let mut first_beat = true;
     loop {
         Timer::after(Duration::from_secs(60)).await;
+        if first_beat {
+            first_beat = false;
+            ota::boot_ok(); // survived a minute of serving — not a boot loop
+        }
         println!(
             "fps: {}  heap free: {}",
             FPS.load(Ordering::Relaxed),
@@ -352,6 +371,15 @@ fn spi_cfg(p: Protocol) -> SpiConfig {
 #[embassy_executor::task]
 async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
+    // master power (HA light switch): off = encode at brightness 0 (black on
+    // both protocols) while the engine keeps ticking, so ON resumes mid-motion
+    let out_brightness = || {
+        if shared::POWER.load(Ordering::Relaxed) {
+            BRIGHTNESS.load(Ordering::Relaxed)
+        } else {
+            0
+        }
+    };
     let mut engine = match Engine::new(PATTERN, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         Ok(e) => Some(e),
         Err(d) => {
@@ -497,7 +525,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 }
             });
             set_pixels(&blend_buf);
-            cur_protocol().encode(&blend_buf, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
+            cur_protocol().encode(&blend_buf, out_brightness(), &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }
@@ -530,7 +558,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 engine.as_mut().unwrap().frame(delta)
             };
             set_pixels(out);
-            cur_protocol().encode(out, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
+            cur_protocol().encode(out, out_brightness(), &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }

@@ -61,7 +61,9 @@ pub async fn ddp_task(stack: Stack<'static>) -> ! {
     let (rx_meta, rx_buf, tx_meta, tx_buf) = bufs!();
     let mut sock = UdpSocket::new(stack, rx_meta, rx_buf, tx_meta, tx_buf);
     sock.bind(DDP_PORT).expect("bind ddp");
-    let mut pkt = [0u8; PKT];
+    // heap, not a future-local: task futures are statics, and statics eat
+    // the DRAM that becomes the main task stack
+    let mut pkt = alloc::vec![0u8; PKT];
     loop {
         let Ok((len, _peer)) = sock.recv_from(&mut pkt).await else {
             continue;
@@ -87,7 +89,7 @@ pub async fn e131_task(stack: Stack<'static>) -> ! {
     let (rx_meta, rx_buf, tx_meta, tx_buf) = bufs!();
     let mut sock = UdpSocket::new(stack, rx_meta, rx_buf, tx_meta, tx_buf);
     sock.bind(E131_PORT).expect("bind e131");
-    let mut pkt = [0u8; PKT];
+    let mut pkt = alloc::vec![0u8; PKT];
     loop {
         let Ok((len, _peer)) = sock.recv_from(&mut pkt).await else {
             continue;

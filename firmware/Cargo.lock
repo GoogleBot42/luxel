@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "luxel-fw"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "critical-section",
  "embassy-executor",
@@ -1296,6 +1296,8 @@ dependencies = [
  "embassy-net",
  "embassy-sync 0.8.0",
  "embassy-time",
+ "embedded-io 0.6.1",
+ "embedded-io-async 0.6.1",
  "embedded-storage",
  "embedded-storage-async",
  "esp-alloc",
@@ -1309,6 +1311,7 @@ dependencies = [
  "heapless 0.9.3",
  "luxel-core",
  "picoserve",
+ "rust-mqtt",
  "sequential-storage",
  "static_cell",
 ]
@@ -1614,6 +1617,18 @@ dependencies = [
  "libc",
  "rustversion",
  "svgbobdoc",
+]
+
+[[package]]
+name = "rust-mqtt"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9d4e054be48b0882a44a0f6c653685ff245404c99ea0d2f7a86b99b743a786a"
+dependencies = [
+ "embedded-io 0.6.1",
+ "embedded-io-async 0.6.1",
+ "heapless 0.9.3",
+ "rand_core 0.9.5",
 ]
 
 [[package]]

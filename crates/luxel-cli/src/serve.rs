@@ -138,6 +138,25 @@ struct State {
     live_pixels: Mutex<Vec<u8>>,
     live_mark: Mutex<Option<Instant>>,
     live_proto: AtomicU8, // 0 = none, 1 = ddp, 2 = e131
+    /// Master power (the HA light switch; mirror drives no strip, so this is
+    /// state-only) — see the MQTT bridge below.
+    power: AtomicBool,
+    /// Library id of the running pattern ("" = ad-hoc code push).
+    current_pattern_id: Mutex<String>,
+    /// MQTT broker config (None = disabled) + a generation counter the bridge
+    /// watches to reconnect on change, and its connection status.
+    mqtt_cfg: Mutex<Option<MqttCfg>>,
+    mqtt_gen: AtomicU32,
+    mqtt_connected: AtomicBool,
+}
+
+/// MQTT broker settings (mirrors the firmware's config::MqttConfig).
+#[derive(Clone)]
+struct MqttCfg {
+    host: String,
+    port: u16,
+    user: String,
+    pass: String,
 }
 
 /// How long after the last DDP/E1.31 packet the pattern takes back over.
@@ -174,6 +193,166 @@ fn live_write(state: &State, offset: usize, data: &[u8], proto: u8) {
     }
     *state.live_mark.lock().unwrap() = Some(Instant::now());
     state.live_proto.store(proto, Ordering::Relaxed);
+}
+
+// ---- MQTT / Home Assistant bridge (mirrors firmware/src/mqtt.rs) ----
+// Topics and payloads come from luxel_core::hamqtt, so the wire contract is
+// byte-identical to the device's. rumqttc's sync client runs in one thread.
+
+/// The mirror's device id (client id, topic segment, HA unique_id).
+const MQTT_ID: &str = "luxel-native";
+
+fn mqtt_thread(state: Arc<State>) {
+    loop {
+        let gen = state.mqtt_gen.load(Ordering::Relaxed);
+        let cfg = state.mqtt_cfg.lock().unwrap().clone();
+        let Some(cfg) = cfg else {
+            state.mqtt_connected.store(false, Ordering::Relaxed);
+            // disabled — poll for a config (the mirror has no signal primitive)
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        };
+        if let Err(e) = mqtt_session(&state, &cfg, gen) {
+            eprintln!("mqtt: {e}");
+        }
+        state.mqtt_connected.store(false, Ordering::Relaxed);
+        // back off before reconnecting, but react to config changes quickly
+        for _ in 0..30 {
+            if state.mqtt_gen.load(Ordering::Relaxed) != gen {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// One broker session: announce (availability + HA discovery + state), then
+/// serve commands until the connection drops or the config generation moves.
+fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), String> {
+    use luxel_core::hamqtt;
+    use rumqttc::{Client, Event, Incoming, LastWill, MqttOptions, QoS};
+
+    let avail = hamqtt::availability_topic(MQTT_ID);
+    let mut opts = MqttOptions::new(MQTT_ID, &cfg.host, cfg.port);
+    opts.set_keep_alive(Duration::from_secs(30));
+    opts.set_last_will(LastWill::new(&avail, hamqtt::OFFLINE, QoS::AtMostOnce, true));
+    if !cfg.user.is_empty() {
+        opts.set_credentials(&cfg.user, &cfg.pass);
+    }
+    let (client, mut conn) = Client::new(opts, 16);
+    let err = |e: rumqttc::ClientError| e.to_string();
+
+    let light_set = hamqtt::light_set_topic(MQTT_ID);
+    let pattern_set = hamqtt::pattern_set_topic(MQTT_ID);
+    client.subscribe(&light_set, QoS::AtMostOnce).map_err(err)?;
+    client.subscribe(&pattern_set, QoS::AtMostOnce).map_err(err)?;
+    client
+        .publish(&avail, QoS::AtMostOnce, true, hamqtt::ONLINE)
+        .map_err(err)?;
+    let version = env!("CARGO_PKG_VERSION");
+    client
+        .publish(
+            hamqtt::light_config_topic(MQTT_ID),
+            QoS::AtMostOnce,
+            true,
+            hamqtt::light_discovery_json(MQTT_ID, MQTT_ID, version),
+        )
+        .map_err(err)?;
+
+    let options = |state: &State| -> Vec<String> {
+        state.library.lock().unwrap().iter().map(|p| p.name.clone()).collect()
+    };
+    let mut last_options = options(state);
+    client
+        .publish(
+            hamqtt::pattern_config_topic(MQTT_ID),
+            QoS::AtMostOnce,
+            true,
+            hamqtt::pattern_discovery_json(MQTT_ID, MQTT_ID, version, &last_options),
+        )
+        .map_err(err)?;
+
+    let mut last_light = String::new();
+    let mut last_pattern: Option<String> = None;
+    loop {
+        // publish dirty state (initial pass runs before the first recv)
+        let light = hamqtt::light_state_json(
+            state.power.load(Ordering::Relaxed),
+            hamqtt::brightness_to_ha(state.brightness.load(Ordering::Relaxed)),
+        );
+        if light != last_light {
+            client
+                .publish(hamqtt::light_state_topic(MQTT_ID), QoS::AtMostOnce, false, light.clone())
+                .map_err(err)?;
+            last_light = light;
+        }
+        let cur = state.current_pattern_id.lock().unwrap().clone();
+        let name = pattern_by_id(state, &cur).map(|p| p.name).unwrap_or_default();
+        if last_pattern.as_deref() != Some(&name) {
+            client
+                .publish(hamqtt::pattern_state_topic(MQTT_ID), QoS::AtMostOnce, false, name.clone())
+                .map_err(err)?;
+            last_pattern = Some(name);
+        }
+        let now = options(state);
+        if now != last_options {
+            last_options = now;
+            client
+                .publish(
+                    hamqtt::pattern_config_topic(MQTT_ID),
+                    QoS::AtMostOnce,
+                    true,
+                    hamqtt::pattern_discovery_json(MQTT_ID, MQTT_ID, version, &last_options),
+                )
+                .map_err(err)?;
+        }
+
+        match conn.recv_timeout(Duration::from_millis(500)) {
+            Ok(Ok(Event::Incoming(Incoming::ConnAck(_)))) => {
+                state.mqtt_connected.store(true, Ordering::Relaxed);
+            }
+            Ok(Ok(Event::Incoming(Incoming::Publish(p)))) => {
+                let payload = String::from_utf8_lossy(&p.payload).into_owned();
+                if p.topic == light_set {
+                    let cmd = hamqtt::parse_light_command(&payload);
+                    if let Some(ha) = cmd.brightness {
+                        state
+                            .brightness
+                            .store(hamqtt::brightness_from_ha(ha), Ordering::Relaxed);
+                    }
+                    if let Some(on) = cmd.on {
+                        state.power.store(on, Ordering::Relaxed);
+                    }
+                } else if p.topic == pattern_set {
+                    // run a library pattern by its HA option (exact name)
+                    let found = state
+                        .library
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find(|sp| sp.name == payload)
+                        .map(|sp| (sp.id.clone(), sp.source.clone()));
+                    match found {
+                        Some((id, source)) => {
+                            if api_code(state, source).contains("\"ok\":true") {
+                                *state.current_pattern_id.lock().unwrap() = id;
+                            }
+                        }
+                        None => eprintln!("mqtt: no pattern named \"{payload}\""),
+                    }
+                }
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(rumqttc::RecvTimeoutError::Timeout) => {}
+            Err(rumqttc::RecvTimeoutError::Disconnected) => return Err("disconnected".into()),
+        }
+        if state.mqtt_gen.load(Ordering::Relaxed) != gen {
+            let _ = client.publish(&avail, QoS::AtMostOnce, true, hamqtt::OFFLINE);
+            let _ = client.disconnect();
+            return Ok(()); // config changed — reconnect with the new one
+        }
+    }
 }
 
 /// UDP listener for one network-input protocol; parse is shared with the
@@ -289,6 +468,7 @@ fn enter_item(state: &State, i: usize) -> Option<(Engine, String)> {
     // dangling entry just holds for its duration and the loop moves past it
     state.pl_index.store(i, Ordering::Relaxed);
     let sp = pattern_by_id(state, &item.pattern_id)?;
+    *state.current_pattern_id.lock().unwrap() = item.pattern_id.clone();
     let mut eng = Engine::new(&sp.source, state.pixel_count.load(Ordering::Relaxed), 1).ok()?;
     for (name, raw) in &item.controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
@@ -512,6 +692,7 @@ fn api_code(state: &State, body: String) -> String {
     match Engine::new(&body, state.pixel_count.load(Ordering::Relaxed), 1) {
         Ok(_) => {
             push(state, Msg::Code(body));
+            state.current_pattern_id.lock().unwrap().clear(); // ad-hoc code
             String::from("{\"ok\":true}")
         }
         Err(d) => {
@@ -963,6 +1144,42 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/mqtt") => {
+            // broker settings (never the password) + connection state
+            let body = match &*state.mqtt_cfg.lock().unwrap() {
+                Some(c) => format!(
+                    "{{\"enabled\":true,\"host\":\"{}\",\"port\":{},\"user\":\"{}\",\"hasPass\":{},\"connected\":{}}}",
+                    json_escape(&c.host),
+                    c.port,
+                    json_escape(&c.user),
+                    !c.pass.is_empty(),
+                    state.mqtt_connected.load(Ordering::Relaxed)
+                ),
+                None => String::from(
+                    "{\"enabled\":false,\"host\":\"\",\"port\":1883,\"user\":\"\",\"hasPass\":false,\"connected\":false}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/mqtt") => {
+            // body: "host\nport\nuser\npass"; empty host disables MQTT
+            let body = String::from_utf8_lossy(&req.body).into_owned();
+            let mut lines = body.lines();
+            let host = lines.next().unwrap_or("").trim().to_string();
+            let port = lines.next().unwrap_or("").trim().parse::<u16>().unwrap_or(1883);
+            let user = lines.next().unwrap_or("").trim().to_string();
+            let pass = lines.next().unwrap_or("").trim().to_string();
+            let enabled = !host.is_empty();
+            *state.mqtt_cfg.lock().unwrap() = enabled.then(|| MqttCfg {
+                host,
+                port: if port == 0 { 1883 } else { port },
+                user,
+                pass,
+            });
+            state.mqtt_gen.fetch_add(1, Ordering::Relaxed);
+            let r = format!("{{\"ok\":true,\"enabled\":{}}}", enabled);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("GET", "/api/wifi") => {
             let body = match &*state.wifi_ssid.lock().unwrap() {
                 Some(ssid) => format!("{{\"ssid\":\"{}\",\"source\":\"flash\"}}", json_escape(ssid)),
@@ -1078,7 +1295,13 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 },
                 ("DELETE", None) => patterns_delete(&state, id),
                 ("POST", Some("activate")) => match pattern_by_id(&state, id) {
-                    Some(p) => api_code(&state, p.source),
+                    Some(p) => {
+                        let r = api_code(&state, p.source);
+                        if r.contains("\"ok\":true") {
+                            *state.current_pattern_id.lock().unwrap() = p.id;
+                        }
+                        r
+                    }
                     None => String::from("{\"ok\":false,\"error\":\"no such pattern\"}"),
                 },
                 _ => String::from("{\"ok\":false,\"error\":\"bad patterns route\"}"),
@@ -1130,6 +1353,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         live_pixels: Mutex::new(Vec::new()),
         live_mark: Mutex::new(None),
         live_proto: AtomicU8::new(0),
+        power: AtomicBool::new(true),
+        current_pattern_id: Mutex::new(String::new()),
+        mqtt_cfg: Mutex::new(None),
+        mqtt_gen: AtomicU32::new(0),
+        mqtt_connected: AtomicBool::new(false),
     });
 
     {
@@ -1139,6 +1367,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     for port in [luxel_core::netin::DDP_PORT, luxel_core::netin::E131_PORT] {
         let state = state.clone();
         std::thread::spawn(move || netin_listener(state, port));
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || mqtt_thread(state));
     }
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {

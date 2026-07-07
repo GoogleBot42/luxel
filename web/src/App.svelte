@@ -9,7 +9,7 @@
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
-  import type { Playlist } from "./lib/device";
+  import type { MqttStatus, Playlist } from "./lib/device";
   import { EXAMPLES, type Layout } from "./lib/examples";
   import {
     deletePattern,
@@ -96,6 +96,35 @@
   let wifiSource = "none";
   let wifiForm = { ssid: "", password: "" };
   let wifiNote = "";
+
+  // ---- MQTT / Home Assistant (device mode) ----
+  let mqttStatus: MqttStatus | null = null;
+  let mqttForm = { host: "", port: 1883, user: "", pass: "" };
+  let mqttNote = "";
+
+  async function refreshMqtt(): Promise<void> {
+    if (!device) return;
+    try {
+      mqttStatus = await device.mqtt();
+    } catch {
+      /* older firmware without /api/mqtt */
+    }
+  }
+
+  function saveMqtt(): void {
+    void (async () => {
+      mqttNote = "saving…";
+      const host = mqttForm.host.trim();
+      const r = await device?.setMqtt(host, mqttForm.port, mqttForm.user.trim(), mqttForm.pass);
+      if (r?.ok) {
+        mqttNote = host ? "saved — connecting to the broker…" : "saved — MQTT disabled";
+        mqttForm = { ...mqttForm, pass: "" };
+      } else {
+        mqttNote = r?.error ? `failed: ${r.error}` : "save failed";
+      }
+      void refreshMqtt();
+    })();
+  }
   /** Whether a pixel map is installed on the device (render2D geometry). */
   let deviceMap = { installed: false, dims: 0, count: 0 };
 
@@ -286,7 +315,11 @@
     clearInterval(netPoll);
     if (device && tab === "settings" && !editing) {
       void refreshNetLive();
-      netPoll = setInterval(refreshNetLive, 2000);
+      void refreshMqtt();
+      netPoll = setInterval(() => {
+        void refreshNetLive();
+        void refreshMqtt();
+      }, 2000);
     }
   }
 
@@ -534,6 +567,13 @@
         wifiForm = { ssid: w.ssid ?? "", password: "" };
       } catch {
         /* older firmware — leave defaults */
+      }
+      try {
+        const m = await session.mqtt();
+        mqttStatus = m;
+        mqttForm = { host: m.host, port: m.port || 1883, user: m.user, pass: "" };
+      } catch {
+        /* older firmware without /api/mqtt — leave defaults */
       }
       compileError = null;
       await refreshDevicePatterns();
@@ -2073,6 +2113,63 @@ export function render(index) {
             The device stores the credentials in flash and <strong>reboots</strong> to join the new
             network. AP-mode provisioning (for a device that can't reach any known network) is still
             to come.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>MQTT / Home Assistant</h2>
+          <div class="field">
+            <span class="flabel">Status</span>
+            <span class="mono" data-role="mqtt-status">
+              {mqttStatus?.connected
+                ? "connected"
+                : mqttStatus?.enabled
+                  ? "not connected"
+                  : "disabled"}
+            </span>
+          </div>
+          <div class="field">
+            <span class="flabel">Broker</span>
+            <input
+              class="grow"
+              data-role="mqtt-host"
+              placeholder="host or IP (blank = disable)"
+              bind:value={mqttForm.host}
+            />
+            <input
+              class="num"
+              data-role="mqtt-port"
+              type="number"
+              min="1"
+              max="65535"
+              bind:value={mqttForm.port}
+            />
+          </div>
+          <div class="field">
+            <span class="flabel">User</span>
+            <input class="grow" data-role="mqtt-user" placeholder="optional" bind:value={mqttForm.user} />
+          </div>
+          <div class="field">
+            <span class="flabel">Password</span>
+            <input
+              class="grow"
+              data-role="mqtt-pass"
+              type="password"
+              placeholder={mqttStatus?.hasPass ? "(saved — retype to change)" : "optional"}
+              bind:value={mqttForm.pass}
+            />
+          </div>
+          <div class="field">
+            <button class="primary" data-role="mqtt-save" disabled={!device} on:click={saveMqtt}>
+              save
+            </button>
+            {#if mqttNote}<span class="dim" data-role="mqtt-note">{mqttNote}</span>{/if}
+          </div>
+          <p class="dim hint">
+            Point this at your MQTT broker (e.g. the Home Assistant Mosquitto add-on) and the
+            device shows up in HA automatically: a light (power + brightness) and a pattern
+            selector for the device library. Applied live, no reboot. Saving stores exactly what's
+            entered — including a blank password.
           </p>
         </section>
 

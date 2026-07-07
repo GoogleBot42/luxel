@@ -1,5 +1,58 @@
 # Update log
 
+## 2026-07-07 — ⚠️ DEV DEVICE NEEDS A BENCH RECOVERY (serial reflash)
+
+The v0.1.19 OTA (MQTT) **bricked the boot**: the first cut put ~12 KB of
+MQTT/netin buffers into embassy task futures — which are *statics*, and
+statics eat the DRAM that becomes the main task stack (the v0.1.4 lesson,
+re-learned). Main stack fell to ~10.7 KB (known-fatal is <15.6 KB) and the
+device now crash-loops before WiFi comes up, so OTA can't reach it.
+
+**To recover at the bench** (bad image is in ota_0; USB/serial):
+
+```
+cd firmware && ./build-esp32.sh board-pixelblaze-v3
+nix develop --command espflash save-image --chip esp32 \
+    target/xtensa-esp32-none-elf/release/luxel-fw /tmp/luxel-fix.bin
+nix develop --command espflash write-bin 0x10000 /tmp/luxel-fix.bin
+```
+
+(That writes the fixed v0.1.19 over the bad one; otadata already points at
+ota_0. The fixed build moves all big task buffers to the heap and trims the
+heap static 96→88 KB — main stack is back to ~31 KB.)
+
+**So this can never happen again:** the firmware now has a **boot-loop
+guard** — it counts boot attempts in flash before the risky part of boot,
+and on the 3rd consecutive boot that never reached "healthy" (60 s of
+serving) it flips otadata back to the other OTA slot by itself. A future
+bad OTA self-heals in ~30 s instead of wedging the device.
+
+## 2026-07-07 — MQTT + Home Assistant discovery (firmware v0.1.19) 🔶 device-blocked
+
+Point the device at an MQTT broker (Settings → "MQTT / Home Assistant":
+host/port/user/pass, applied live, persisted in flash) and it announces
+itself to Home Assistant automatically via MQTT discovery:
+
+- **Light** — power + brightness as a normal HA light. Power off blanks the
+  strip while the engine keeps running, so ON resumes mid-animation.
+- **Pattern select** — the device pattern library by name; picking one runs
+  it (and re-announces when the library changes).
+- Availability (`luxel/<id>/status`) with an offline LWT; state topics echo
+  changes made anywhere (web UI slider moves show up in HA within ~5 s).
+
+Topics/payloads live in `luxel_core::hamqtt` (unit-tested), shared between
+firmware (rust-mqtt over embassy-net, with a tiny embedded-io 0.7→0.6
+adapter) and the mirror (rumqttc). **Verified end-to-end against a real
+mosquitto** with the mirror: retained discovery configs, brightness
+round-trip (HA 128 → device 16 → state 132), pattern select switched the
+running pattern. Also: `/api/mqtt` GET/POST, broker creds in the third nvs
+sector, `connected` status in Settings. e2e: 68 device checks green.
+
+🔶 On-device verification is blocked on the bench recovery above; after
+that, OTA the fixed image and point it at a broker (HA's Mosquitto add-on
+or any broker; note the dev container's broker may not be reachable from
+the device's subnet — use the HA one).
+
 ## 2026-07-07 — DDP + E1.31 network input (firmware v0.1.18) ✅
 
 xLights / LedFx / Resolume can now drive Luxel as a network pixel output:

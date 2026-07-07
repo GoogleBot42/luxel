@@ -78,8 +78,10 @@ and the autocomplete/docs pipeline, and can't break existing code.
 
 ## Integration (M4)
 
-- **MQTT + Home Assistant discovery** [M] ★★★ — the reason this project
-  exists for a lot of people; brightness/power/pattern-select as HA entities.
+- **MQTT + Home Assistant discovery** [M] ★★★ — DONE (firmware v0.1.19 +
+  mirror; light = power/brightness, select = pattern library, MQTT
+  discovery, /api/mqtt + Settings form; shared payloads in
+  luxel_core::hamqtt; verified against real mosquitto via the mirror).
 - **DDP / E1.31 input** [M] ★★ — DONE (firmware v0.1.18 + mirror; UDP
   :4048/:5568, shared parser in luxel-core::netin, live override with 2.5 s
   fallback to the pattern, `live` in /api/status + Settings row. Multicast

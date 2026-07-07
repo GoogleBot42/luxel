@@ -331,6 +331,35 @@ try {
     (await (await fetch(`${DEV}/api/wifi`)).json()).ssid === "TestNet",
   );
 
+  // MQTT settings: the Settings form stores the broker config (no broker is
+  // running here, so it stays "not connected" — the announce/command contract
+  // is covered by luxel-core::hamqtt unit tests + a live mosquitto check)
+  {
+    const m0 = await (await fetch(`${DEV}/api/mqtt`)).json();
+    check("mqtt: GET returns disabled by default", m0.enabled === false, JSON.stringify(m0));
+    await page.$eval('[data-role="mqtt-host"]', (el) => {
+      el.value = "mqtt.example.test";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await page.$eval('[data-role="mqtt-user"]', (el) => {
+      el.value = "ha";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await sleep(100);
+    await page.$eval('[data-role="mqtt-save"]', (el) => el.click());
+    await sleep(400);
+    const m1 = await (await fetch(`${DEV}/api/mqtt`)).json();
+    check(
+      "mqtt: form stores the broker config",
+      m1.enabled === true && m1.host === "mqtt.example.test" && m1.user === "ha",
+      JSON.stringify(m1),
+    );
+    // blank host = disable
+    await fetch(`${DEV}/api/mqtt`, { method: "POST", body: "\n\n\n" });
+    const m2 = await (await fetch(`${DEV}/api/mqtt`)).json();
+    check("mqtt: blank host disables", m2.enabled === false, JSON.stringify(m2));
+  }
+
   // network input: a DDP packet overrides the engine (status.live + pixels),
   // and the pattern resumes after the 2.5s timeout
   {

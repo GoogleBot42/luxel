@@ -458,6 +458,7 @@ async fn api_code(src: String) -> ApiResponse {
         Ok(_) => {
             crate::playlist::stop(); // a manual push takes over from the playlist
             MSG_QUEUE.send(Msg::Code(src)).await;
+            crate::shared::set_current_pattern_id(""); // ad-hoc code, no library id
             String::from("{\"ok\":true}")
         }
         Err(d) => {
@@ -504,6 +505,7 @@ async fn api_patterns_activate(id: &str) -> String {
     match Engine::new(&source, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         Ok(_) => {
             MSG_QUEUE.send(Msg::Code(source)).await;
+            crate::shared::set_current_pattern_id(id);
             String::from("{\"ok\":true}")
         }
         Err(d) => {
@@ -615,6 +617,41 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         crate::REBOOT.signal(());
                     }
                     return Ok(sent);
+                }
+                // body: "host\nport\nuser\npass" → stored in flash; the MQTT
+                // task reconnects live (no reboot). Empty host disables MQTT.
+                "/api/mqtt" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let mut lines = body.lines();
+                    let host = lines.next().unwrap_or("").trim();
+                    let port = lines.next().unwrap_or("").trim().parse::<u16>().unwrap_or(1883);
+                    let user = lines.next().unwrap_or("").trim();
+                    let pass = lines.next().unwrap_or("").trim();
+                    let result = if host.is_empty() {
+                        crate::config::write_mqtt(None)
+                    } else {
+                        crate::config::write_mqtt(Some(&crate::config::MqttConfig {
+                            host: String::from(host),
+                            port: if port == 0 { 1883 } else { port },
+                            user: String::from(user),
+                            pass: String::from(pass),
+                        }))
+                    };
+                    let response = json_response(match &result {
+                        Ok(()) => {
+                            crate::shared::MQTT_POKE.signal(());
+                            format!(
+                                "{{\"ok\":true,\"enabled\":{}}}",
+                                if host.is_empty() { "false" } else { "true" }
+                            )
+                        }
+                        Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e)),
+                    });
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
                 }
                 // POST /api/brightness — body is a number 0..=31. Applied live
                 // (the render task reads BRIGHTNESS every frame) and persisted
@@ -938,6 +975,23 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     "{{\"brightness\":{},\"max\":31}}",
                     BRIGHTNESS.load(Ordering::Relaxed)
                 ))),
+                // broker settings (never the password) + connection state
+                "/api/mqtt" => {
+                    let body = match crate::config::read_mqtt() {
+                        Some(c) => format!(
+                            "{{\"enabled\":true,\"host\":\"{}\",\"port\":{},\"user\":\"{}\",\"hasPass\":{},\"connected\":{}}}",
+                            json_escape(&c.host),
+                            c.port,
+                            json_escape(&c.user),
+                            !c.pass.is_empty(),
+                            crate::mqtt::CONNECTED.load(Ordering::Relaxed)
+                        ),
+                        None => String::from(
+                            "{\"enabled\":false,\"host\":\"\",\"port\":1883,\"user\":\"\",\"hasPass\":false,\"connected\":false}",
+                        ),
+                    };
+                    respond!(json_response(body));
+                }
                 "/api/config" => respond!(json_response(format!(
                     "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
                     PIXEL_COUNT.load(Ordering::Relaxed),

@@ -231,6 +231,7 @@ async fn enter_item(i: usize) {
     } else {
         MSG_QUEUE.send(Msg::Code(src)).await;
     }
+    crate::shared::set_current_pattern_id(&item.pattern_id);
     for (name, raw) in item.controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         MSG_QUEUE.send(Msg::Control(name, vals)).await;

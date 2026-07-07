@@ -21,6 +21,7 @@ pub mod engine;
 pub mod fixed;
 pub mod color;
 pub mod fmath;
+pub mod hamqtt;
 pub mod jsonview;
 pub mod lex;
 pub mod netin;
