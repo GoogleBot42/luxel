@@ -373,6 +373,29 @@ try {
     await page.click('[data-role="map-debug"]');
     await sleep(300);
   }
+  // ── 10b. a 3D map (z spirals) renders as an auto-rotating point cloud ──
+  await page.click('[data-role="subtab-map"]');
+  await sleep(300);
+  await setEditor(
+    page,
+    "export function render(index) { plot(cos(index/pixelCount*PI2*3), sin(index/pixelCount*PI2*3), index/pixelCount - 0.5) }",
+  );
+  await page.click('[data-role="map-run"]');
+  await sleep(500);
+  await page.click('[data-role="subtab-pattern"]');
+  await sleep(400);
+  const is3d = await page.$eval(".map", (c) => c.dataset["3d"]).catch(() => "");
+  check(
+    "3D map detected (badge shown)",
+    is3d === "true" && (await page.$('[data-role="map-3d"]')) !== null,
+    `data-3d=${is3d}`,
+  );
+  const m3a = await page.$eval(".map", (c) => c.toDataURL());
+  await sleep(500);
+  const m3b = await page.$eval(".map", (c) => c.toDataURL());
+  check("3D map auto-rotates", m3a !== m3b);
+  await page.screenshot({ path: `${shotDir}/e2e-4b-map3d.png` });
+
   // turning mapping off hides the map sub-tab
   await page.select('[data-role="layout-kind"]', "strip");
   await sleep(400);

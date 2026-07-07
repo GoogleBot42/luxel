@@ -30,27 +30,39 @@
     }
   }
 
-  // mapped pixel positions normalized to canvas space, cached per layout
-  let mapNorm: { x: number; y: number }[] = [];
-  $: if (layout.kind === "map") mapNorm = normalizeMap(layout.coords);
+  // mapped pixel positions, normalized to a centered unit cube, cached per
+  // layout. `is3D` is true when the z axis actually varies → a rotating cloud.
+  let mapNorm: { x: number; y: number; z: number }[] = [];
+  let map3D = false;
+  let mapAngle = 0;
+  $: if (layout.kind === "map") {
+    const r = normalizeMap(layout.coords);
+    mapNorm = r.pts;
+    map3D = r.is3D;
+  }
 
-  function normalizeMap(coords: number[][]): { x: number; y: number }[] {
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
+  function normalizeMap(coords: number[][]): {
+    pts: { x: number; y: number; z: number }[];
+    is3D: boolean;
+  } {
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
     for (const c of coords) {
-      minX = Math.min(minX, c[0] ?? 0);
-      maxX = Math.max(maxX, c[0] ?? 0);
-      minY = Math.min(minY, c[1] ?? 0);
-      maxY = Math.max(maxY, c[1] ?? 0);
+      for (let d = 0; d < 3; d++) {
+        const v = c[d] ?? 0;
+        lo[d] = Math.min(lo[d]!, v);
+        hi[d] = Math.max(hi[d]!, v);
+      }
     }
-    const sx = maxX - minX || 1;
-    const sy = maxY - minY || 1;
-    return coords.map((c) => ({
-      x: ((c[0] ?? 0) - minX) / sx,
-      y: ((c[1] ?? 0) - minY) / sy,
+    const is3D = hi[2]! - lo[2]! > 1e-6;
+    const s = [hi[0]! - lo[0]! || 1, hi[1]! - lo[1]! || 1, hi[2]! - lo[2]! || 1];
+    // centered on 0 so rotation is about the middle; y flipped (screen down)
+    const pts = coords.map((c) => ({
+      x: ((c[0] ?? 0) - lo[0]!) / s[0]! - 0.5,
+      y: ((c[1] ?? 0) - lo[1]!) / s[1]! - 0.5,
+      z: is3D ? ((c[2] ?? 0) - lo[2]!) / s[2]! - 0.5 : 0,
     }));
+    return { pts, is3D };
   }
 
   function drawMap(px: Uint8Array): void {
@@ -59,14 +71,55 @@
     const { width: w, height: h } = map;
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, w, h);
-    const pad = 8;
-    const r = Math.max(2, Math.min(6, Math.floor(w / Math.sqrt(mapNorm.length) / 4)));
+    const baseR = Math.max(2, Math.min(7, Math.floor(w / Math.sqrt(mapNorm.length) / 4)));
+
+    if (!map3D) {
+      // flat 2D scatter
+      const pad = 8;
+      const span = w - 2 * pad;
+      for (let i = 0; i < mapNorm.length; i++) {
+        const p = mapNorm[i];
+        if (!p) continue;
+        ctx.fillStyle = `rgb(${px[i * 3] ?? 0},${px[i * 3 + 1] ?? 0},${px[i * 3 + 2] ?? 0})`;
+        ctx.beginPath();
+        ctx.arc(pad + (p.x + 0.5) * span, pad + (p.y + 0.5) * span, baseR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
+
+    // 3D: slowly rotate about the vertical axis, fixed tilt, orthographic
+    // projection, painter's algorithm + depth cue (farther = smaller/dimmer).
+    mapAngle += 0.012;
+    const cx = w / 2;
+    const cy = h / 2;
+    const scale = Math.min(w, h) * 0.72;
+    const ca = Math.cos(mapAngle);
+    const sa = Math.sin(mapAngle);
+    const tilt = 0.45;
+    const ct = Math.cos(tilt);
+    const st = Math.sin(tilt);
+    const proj: { sx: number; sy: number; depth: number; i: number }[] = [];
     for (let i = 0; i < mapNorm.length; i++) {
       const p = mapNorm[i];
       if (!p) continue;
-      ctx.fillStyle = `rgb(${px[i * 3] ?? 0},${px[i * 3 + 1] ?? 0},${px[i * 3 + 2] ?? 0})`;
+      const x = p.x * ca - p.z * sa; // rotate about Y
+      const z = p.x * sa + p.z * ca;
+      const y2 = p.y * ct - z * st; // tilt about X
+      const z2 = p.y * st + z * ct;
+      proj.push({ sx: cx + x * scale, sy: cy + y2 * scale, depth: z2, i });
+    }
+    proj.sort((a, b) => a.depth - b.depth); // back to front
+    for (const q of proj) {
+      const cue = 0.55 + 0.45 * (q.depth + 0.6); // ~0.55..1.15
+      const bri = Math.max(0.35, Math.min(1, cue));
+      const rr = baseR * Math.max(0.6, Math.min(1.3, cue));
+      const r = Math.round((px[q.i * 3] ?? 0) * bri);
+      const g = Math.round((px[q.i * 3 + 1] ?? 0) * bri);
+      const b = Math.round((px[q.i * 3 + 2] ?? 0) * bri);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
       ctx.beginPath();
-      ctx.arc(pad + p.x * (w - 2 * pad), pad + p.y * (h - 2 * pad), r, 0, Math.PI * 2);
+      ctx.arc(q.sx, q.sy, rr, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -122,7 +175,15 @@
   {:else if layout.kind === "grid"}
     <canvas class="grid" bind:this={grid} width={layout.w} height={layout.h}></canvas>
   {:else}
-    <canvas class="map" bind:this={map} width="320" height="320"></canvas>
+    <canvas
+      class="map"
+      class:cube={map3D}
+      data-3d={map3D}
+      bind:this={map}
+      width="320"
+      height="320"
+    ></canvas>
+    {#if map3D}<span class="map-3d-badge" data-role="map-3d">3D · auto-rotating</span>{/if}
   {/if}
 </div>
 
@@ -158,5 +219,12 @@
     aspect-ratio: 1;
     max-height: 320px;
     image-rendering: auto; /* smooth dots, unlike the pixelated grid */
+  }
+
+  .map-3d-badge {
+    align-self: center;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
   }
 </style>
