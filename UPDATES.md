@@ -12,10 +12,16 @@ You serial-flashed the fix — thanks! Verified on the wall unit right after:
   from the dev container — it hard-jumped onto the fake leader clock in <1 s
   and held **±6 ms**. (Two-device sync awaits a second Luxel.)
 - **DDP/E1.31 re-verified** on the new build.
-- **MQTT: blocked on a broker** — the device can't reach the dev container's
-  subnet. Point Settings → MQTT at your HA/Mosquitto (or tell me its IP) and
-  it should appear in HA; every other part is verified against a real
-  mosquitto via the mirror.
+- **MQTT/HA verified on your live broker** (192.168.1.2, user root): the
+  device connected, published retained discovery, and shows up as device
+  `luxel-4ae0d4` in HA — a **Light** and a **Pattern** select. Exercised
+  from the MQTT side against the real wall: brightness 66/255 → device 8/31
+  (state echoed back), power OFF blanked the strip with the engine still
+  running, ON restored, and selecting "Rainbow" from the (auto-announced)
+  library options switched the running pattern with the state topic
+  following. Brightness restored to your 4/31 afterwards. The device
+  library was empty post-recovery — I saved "Rainbow" into it so the
+  select has an option; check Settings → Devices in HA for the new device.
 
 **Your question — does flashing firmware also flash the asset bundle? No.**
 `espflash flash` writes only the app image; the web app lives in the
