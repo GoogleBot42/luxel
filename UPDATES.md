@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-07-06 night — live pixel-count resize (firmware v0.1.13, no reboot) ✅
+
+You asked for `/api/config` pixel count next and said a reboot isn't ideal — it
+turned out a **live resize with no reboot** is feasible, so that's what shipped.
+The SPI is Blocking (no DMA) and the encode buffer is a plain heap Vec, so the
+render task (which already rebuilds the engine on every code upload) just
+reallocs and recompiles at the new count between frames.
+
+- `GET/POST /api/config` — POST a pixel count (1–2048), the strip resizes
+  instantly. Persisted alongside brightness in flash (the settings record went
+  v2). The **Settings Pixels field is now editable** and re-anchors the preview.
+- Verified on the wall unit: 300→150→300 with **no reboot** (same OTA slot, fps
+  never dropped, heap freed at 150 and came back at 300), out-of-range rejected,
+  and it persists. Left at 300 (the physical strip length).
+- Firmware v0.1.13 OTA'd; mirror + web + e2e all updated (device suite now 46
+  checks); assets hot-reloaded.
+
+Still open in Phase 3: a runtime LED-protocol switch and the Settings WiFi form.
+
 ## 2026-07-06 night — device-editor polish + real brightness (firmware v0.1.12) ✅
 
 Continued from your feedback, then took the plan's next step.
