@@ -360,6 +360,43 @@ try {
     check("mqtt: blank host disables", m2.enabled === false, JSON.stringify(m2));
   }
 
+  // sensor injection: POST /api/sensors takes a raw sensor-board frame
+  // ("SB1.0\0"…"END\0", the serial wire format) and feeds exported sensor
+  // vars — the render path a physical PB sensor board will use
+  {
+    await fetch(`${DEV}/api/code`, {
+      method: "POST",
+      body:
+        "export var energyAverage\nexport var frequencyData\n" +
+        "export function render(index) { hsv(0, 1, energyAverage) }",
+    });
+    await sleep(300);
+    const sb = Buffer.alloc(98);
+    sb.write("SB1.0\0", 0, "latin1");
+    sb.writeUInt16LE(0x8000, 6); // frequencyData[0] = 0.5
+    sb.writeUInt16LE(0x4000, 70); // energyAverage = 0.25
+    sb.writeUInt16LE(440, 74); // maxFrequency = 440 Hz
+    sb.write("END\0", 94, "latin1");
+    const r = await (await fetch(`${DEV}/api/sensors`, { method: "POST", body: sb })).json();
+    check("sensors: frame accepted", r.ok === true, JSON.stringify(r));
+    await sleep(600); // vars snapshot refreshes every 250ms
+    const vars = await (await fetch(`${DEV}/api/vars`)).json();
+    check(
+      "sensors: energyAverage landed (raw 16.16)",
+      vars.energyAverage === 0x4000,
+      JSON.stringify(vars.energyAverage),
+    );
+    check(
+      "sensors: frequencyData[0] landed",
+      Array.isArray(vars.frequencyData) && vars.frequencyData[0] === 0x8000,
+      JSON.stringify(vars.frequencyData?.[0]),
+    );
+    const bad = await (
+      await fetch(`${DEV}/api/sensors`, { method: "POST", body: "junk" })
+    ).json();
+    check("sensors: junk rejected", bad.ok === false, JSON.stringify(bad));
+  }
+
   // network input: a DDP packet overrides the engine (status.live + pixels),
   // and the pattern resumes after the 2.5s timeout
   {

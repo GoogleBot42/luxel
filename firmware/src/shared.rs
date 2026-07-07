@@ -134,6 +134,33 @@ pub fn get_current_pattern_id() -> String {
 pub static MQTT_POKE: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
     embassy_sync::signal::Signal::new();
 
+/// Latest sensor frame (PB sensor-board serial or POST /api/sensors) + a
+/// sequence counter so the render task applies each frame exactly once.
+pub static SENSOR_FRAME: Shared<Option<luxel_core::engine::SensorFrame>> =
+    BlockingMutex::new(RefCell::new(None));
+pub static SENSOR_SEQ: AtomicU32 = AtomicU32::new(0);
+
+pub fn set_sensor_frame(s: luxel_core::engine::SensorFrame) {
+    use core::sync::atomic::Ordering;
+    // seq bump inside the critical section (rv32imc has no fetch_add, and
+    // there are multiple writers: the UART task and HTTP handlers)
+    SENSOR_FRAME.lock(|c| {
+        *c.borrow_mut() = Some(s);
+        SENSOR_SEQ.store(SENSOR_SEQ.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
+    });
+}
+
+/// The newest unapplied sensor frame, if any (tracks per-caller via `seen`).
+pub fn take_sensor_frame(seen: &mut u32) -> Option<luxel_core::engine::SensorFrame> {
+    use core::sync::atomic::Ordering;
+    let seq = SENSOR_SEQ.load(Ordering::Relaxed);
+    if seq == *seen {
+        return None;
+    }
+    *seen = seq;
+    share_get(&SENSOR_FRAME)
+}
+
 /// Network input (DDP/E1.31): the assembled RGB frame. While packets flow
 /// (see LIVE_MARK_MS) the render task outputs this instead of the engine.
 pub static LIVE_PIXELS: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));

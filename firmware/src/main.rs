@@ -59,6 +59,7 @@ mod netin;
 mod ota;
 mod patterns;
 mod playlist;
+mod sensors;
 mod server;
 mod shared;
 
@@ -239,6 +240,22 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     spawner.spawn(reboot_task().unwrap());
+    // PB sensor expansion board input: the classic-ESP32 boards expose
+    // UART0's RX (GPIO3) on the expansion header, where the board's TX
+    // lands. Same 115200-8N1 the console runs, and TX stays untouched, so
+    // logging is unaffected. (C3 devkit: no header wired — skipped.)
+    #[cfg(feature = "esp32")]
+    {
+        let uart_cfg =
+            esp_hal::uart::Config::default().with_baudrate(115_200);
+        match esp_hal::uart::UartRx::new(p.UART0, uart_cfg) {
+            Ok(rx) => {
+                let rx = rx.with_rx(p.GPIO3).into_async();
+                spawner.spawn(sensors::uart_task(rx).unwrap());
+            }
+            Err(e) => println!("sensor uart init failed: {:?}", e),
+        }
+    }
     // Bisect knob: LUXEL_QUIET=1 at build time skips the render task
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
     // whether it interacts with the esp32 radio crashes.
@@ -411,6 +428,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
+    let mut sensor_seen: u32 = 0;
 
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
@@ -507,6 +525,13 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             } else if let Ok(e) = Engine::new(&current_src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
                 // cleared → rebuild without a map (do not re-mark dirty)
                 engine = Some(e);
+            }
+        }
+
+        // sensor data (sensor board / POST /api/sensors) lands between frames
+        if let Some(sf) = shared::take_sensor_frame(&mut sensor_seen) {
+            if let Some(eng) = engine.as_mut() {
+                eng.set_sensors(&sf);
             }
         }
 

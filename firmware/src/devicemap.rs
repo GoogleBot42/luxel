@@ -34,8 +34,15 @@ pub fn has_map() -> bool {
 }
 
 /// Consume the "map changed" flag (render task calls this each frame).
+/// load+store, not `swap`: rv32imc (the C3) has no atomic RMW. The gap is
+/// harmless — the only writer of `true` re-marks dirty, so a lost flag is
+/// re-set; the render task is the sole consumer.
 pub fn take_dirty() -> bool {
-    DIRTY.swap(false, Ordering::Relaxed)
+    let was = DIRTY.load(Ordering::Relaxed);
+    if was {
+        DIRTY.store(false, Ordering::Relaxed);
+    }
+    was
 }
 
 /// Re-apply the map on the next frame (e.g. after the engine was rebuilt).

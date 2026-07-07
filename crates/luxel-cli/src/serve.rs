@@ -148,6 +148,10 @@ struct State {
     mqtt_cfg: Mutex<Option<MqttCfg>>,
     mqtt_gen: AtomicU32,
     mqtt_connected: AtomicBool,
+    /// Latest sensor frame (POST /api/sensors) + seq so the render loop
+    /// applies each frame once (mirrors shared::SENSOR_FRAME).
+    sensor_frame: Mutex<Option<luxel_core::engine::SensorFrame>>,
+    sensor_seq: AtomicU32,
 }
 
 /// MQTT broker settings (mirrors the firmware's config::MqttConfig).
@@ -509,6 +513,7 @@ fn render_loop(state: Arc<State>) {
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
+    let mut sensor_seen: u32 = 0;
 
     loop {
         for msg in state.inbox.lock().unwrap().drain(..) {
@@ -623,6 +628,17 @@ fn render_loop(state: Arc<State>) {
             if let Some(eng) = engine.as_mut() {
                 *state.vars_json.lock().unwrap() = jsonview::vars_json(eng);
                 *state.readouts_json.lock().unwrap() = jsonview::readouts_json(eng);
+            }
+        }
+
+        // sensor data (POST /api/sensors) lands between frames
+        let seq = state.sensor_seq.load(Ordering::Relaxed);
+        if seq != sensor_seen {
+            sensor_seen = seq;
+            if let (Some(sf), Some(eng)) =
+                (state.sensor_frame.lock().unwrap().clone(), engine.as_mut())
+            {
+                eng.set_sensors(&sf);
             }
         }
 
@@ -1144,6 +1160,19 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("POST", "/api/sensors") => {
+            // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0") —
+            // same parser the firmware runs on its UART stream
+            let r = match luxel_core::netin::parse_sensor_board(&req.body) {
+                Some(s) => {
+                    *state.sensor_frame.lock().unwrap() = Some(s);
+                    state.sensor_seq.fetch_add(1, Ordering::Relaxed);
+                    String::from("{\"ok\":true}")
+                }
+                None => String::from("{\"ok\":false,\"error\":\"not a sensor-board frame\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("GET", "/api/mqtt") => {
             // broker settings (never the password) + connection state
             let body = match &*state.mqtt_cfg.lock().unwrap() {
@@ -1358,6 +1387,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         mqtt_cfg: Mutex::new(None),
         mqtt_gen: AtomicU32::new(0),
         mqtt_connected: AtomicBool::new(false),
+        sensor_frame: Mutex::new(None),
+        sensor_seq: AtomicU32::new(0),
     });
 
     {

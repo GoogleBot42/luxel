@@ -93,6 +93,49 @@ pub fn parse_e131(pkt: &[u8]) -> Option<E131Data<'_>> {
     Some(E131Data { universe, data })
 }
 
+// ---- PB sensor expansion board (open source, MIT) serial frames ----
+// One-way 115200-baud stream: "SB1.0\0" + 32×u16 freq + u16 energyAverage +
+// u16 maxFreqMagnitude + u16 maxFreqHz + 3×s16 accel + u16 light +
+// 5×u16 analog + "END\0" — 98 bytes, ~40 frames/s.
+
+pub const SB_MAGIC: &[u8; 6] = b"SB1.0\0";
+pub const SB_FRAME_LEN: usize = 98;
+
+/// Parse one sensor-board frame starting at `pkt[0]` (use [sb_find] to
+/// locate the header in a byte stream first).
+///
+/// Scaling: u16 fields land as raw 16.16 fractions (0..1), matching PB's
+/// normalized bindings; `max_frequency` is in Hz; accelerometer s16 maps to
+/// ±0.5 = ±full-scale. TODO(oracle): pin accel/light scaling against a real
+/// board on the PB.
+pub fn parse_sensor_board(pkt: &[u8]) -> Option<crate::engine::SensorFrame> {
+    use crate::fixed::Fx;
+    if pkt.len() < SB_FRAME_LEN || &pkt[..6] != SB_MAGIC || &pkt[94..98] != b"END\0" {
+        return None;
+    }
+    let u16le = |at: usize| u16::from_le_bytes([pkt[at], pkt[at + 1]]);
+    let mut s = crate::engine::SensorFrame::default();
+    for (i, slot) in s.frequency_data.iter_mut().enumerate() {
+        *slot = Fx::from_raw(u16le(6 + i * 2) as i32);
+    }
+    s.energy_average = Fx::from_raw(u16le(70) as i32);
+    s.max_frequency_magnitude = Fx::from_raw(u16le(72) as i32);
+    s.max_frequency = Fx::from_int(u16le(74) as i32);
+    for (i, slot) in s.accelerometer.iter_mut().enumerate() {
+        *slot = Fx::from_raw(u16le(76 + i * 2) as i16 as i32);
+    }
+    s.light = Fx::from_raw(u16le(82) as i32);
+    for (i, slot) in s.analog_inputs.iter_mut().enumerate() {
+        *slot = Fx::from_raw(u16le(84 + i * 2) as i32);
+    }
+    Some(s)
+}
+
+/// Index of the next sensor-board header in `buf`, if any.
+pub fn sb_find(buf: &[u8]) -> Option<usize> {
+    buf.windows(SB_MAGIC.len()).position(|w| w == SB_MAGIC)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +202,41 @@ mod tests {
         let d = parse_e131(&p).unwrap();
         assert_eq!(d.universe, 2);
         assert_eq!(d.data, &[1, 2, 3, 4, 5, 6]);
+    }
+
+    pub fn sb_frame(freq0: u16, energy: u16, max_hz: u16) -> alloc::vec::Vec<u8> {
+        let mut p = alloc::vec::Vec::new();
+        p.extend_from_slice(SB_MAGIC);
+        p.extend_from_slice(&freq0.to_le_bytes());
+        p.extend_from_slice(&[0u8; 62]); // bins 1..32
+        p.extend_from_slice(&energy.to_le_bytes());
+        p.extend_from_slice(&0x8000u16.to_le_bytes()); // maxFreqMagnitude 0.5
+        p.extend_from_slice(&max_hz.to_le_bytes());
+        p.extend_from_slice(&(-16384i16).to_le_bytes()); // accel x
+        p.extend_from_slice(&[0u8; 4]); // accel y, z
+        p.extend_from_slice(&0xFFFFu16.to_le_bytes()); // light ≈ 1
+        p.extend_from_slice(&[0u8; 10]); // analog
+        p.extend_from_slice(b"END\0");
+        p
+    }
+
+    #[test]
+    fn sensor_board_frame() {
+        let p = sb_frame(0x4000, 0x2000, 440);
+        assert_eq!(p.len(), SB_FRAME_LEN);
+        let s = parse_sensor_board(&p).unwrap();
+        assert_eq!(s.frequency_data[0], crate::fixed::Fx::from_f64(0.25));
+        assert_eq!(s.energy_average, crate::fixed::Fx::from_f64(0.125));
+        assert_eq!(s.max_frequency, crate::fixed::Fx::from_int(440));
+        assert_eq!(s.accelerometer[0], crate::fixed::Fx::from_f64(-0.25));
+        // resync: header found mid-stream
+        let mut stream = alloc::vec![0xAAu8; 7];
+        stream.extend_from_slice(&p);
+        assert_eq!(sb_find(&stream), Some(7));
+        // corrupt trailer rejected
+        let mut bad = p.clone();
+        bad[95] = b'X';
+        assert!(parse_sensor_board(&bad).is_none());
     }
 
     #[test]

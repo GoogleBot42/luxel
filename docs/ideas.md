@@ -67,9 +67,12 @@ and the autocomplete/docs pipeline, and can't break existing code.
 
 ## Peripherals & audio (M5 territory, high wow-factor)
 
-- **I2S mic + on-device FFT** [L] ★★★ — real sound-reactivity: expose
-  `frequencyData[]`, `energyAverage`, `maxFrequency` like PB's sensor board.
-  The single most-requested LED-controller feature. The stubs already exist.
+- **I2S mic + on-device FFT** [L] ★★★ — real sound-reactivity. GROUNDWORK
+  DONE (v0.1.20): engine sensor bindings live (`Engine::set_sensors`),
+  playground browser-mic source, PB sensor-board UART frames parsed on the
+  expansion header, POST /api/sensors network injection. Remaining: the PB
+  v3's own onboard mic (undocumented closed hardware — needs a bench
+  session to find the pins) or any I2S/PDM mic + on-device FFT.
 - **Generic sensor framework** [L] ★★ — accelerometer/light/analog as
   pluggable providers (already the M5 plan); makes the PB sensor board just
   one driver.

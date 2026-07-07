@@ -618,6 +618,26 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     return Ok(sent);
                 }
+                // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0")
+                // — network sensor injection, byte-identical to the serial
+                // board's stream (luxel_core::netin::parse_sensor_board).
+                "/api/sensors" => {
+                    let response =
+                        json_response(match request.body_connection.body().read_all().await {
+                            Ok(bytes) => match luxel_core::netin::parse_sensor_board(bytes) {
+                                Some(s) => {
+                                    crate::shared::set_sensor_frame(s);
+                                    String::from("{\"ok\":true}")
+                                }
+                                None => String::from(
+                                    "{\"ok\":false,\"error\":\"not a sensor-board frame\"}",
+                                ),
+                            },
+                            Err(_) => String::from("{\"ok\":false,\"error\":\"read failed\"}"),
+                        });
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
                 // body: "host\nport\nuser\npass" → stored in flash; the MQTT
                 // task reconnects live (no reboot). Empty host disables MQTT.
                 "/api/mqtt" => {

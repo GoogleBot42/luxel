@@ -17,15 +17,45 @@ nix develop --command espflash save-image --chip esp32 \
 nix develop --command espflash write-bin 0x10000 /tmp/luxel-fix.bin
 ```
 
-(That writes the fixed v0.1.19 over the bad one; otadata already points at
-ota_0. The fixed build moves all big task buffers to the heap and trims the
-heap static 96→88 KB — main stack is back to ~31 KB.)
+(That writes the current fixed build — now v0.1.20, which also picks up the
+sensor-board + sound work below — over the bad one; otadata already points
+at ota_0. The fix moves all big task buffers to the heap and trims the heap
+static 96→88 KB — main stack is back to ~31 KB.)
 
 **So this can never happen again:** the firmware now has a **boot-loop
 guard** — it counts boot attempts in flash before the risky part of boot,
 and on the 3rd consecutive boot that never reached "healthy" (60 s of
 serving) it flips otadata back to the other OTA slot by itself. A future
 bad OTA self-heals in ~30 s instead of wedging the device.
+
+## 2026-07-07 — Sound-reactive groundwork: playground mic + sensor-board support (v0.1.20) 🔶 partly device-blocked
+
+Per your pick (audio next, engine+playground first, sensor board too):
+
+- **Sensor bindings live in the engine** — `export var frequencyData` /
+  `energyAverage` / `maxFrequencyMagnitude` / `maxFrequency` / `light` /
+  `accelerometer` / `analogInputs` now receive data (they were zero-stubs).
+- **Playground "sound" toggle** (next to *debug*): feeds your microphone
+  through a WebAudio analyser reshaped to the PB sensor board's 32 log-spaced
+  bands (37 Hz–10 kHz) — sound-reactive patterns run in the browser today.
+  e2e-covered with chromium's fake mic.
+- **PB sensor expansion board support (firmware)** — the official board's
+  115200-baud `SB1.0` frames are parsed off UART0 RX (the expansion header's
+  RX0, where the board plugs in PB-style). Parser is shared with the mirror
+  and unit-tested; 🔶 hardware verification needs the recovered device (and a
+  physical board, if you have one).
+- **`POST /api/sensors`** (firmware + mirror) — accepts a raw sensor-board
+  frame over HTTP, so a desktop script can stream audio/motion data to the
+  device with no extra hardware. e2e-verified against the mirror.
+- Also: the **firmware size report** you asked for is in
+  [docs/size-report.md](docs/size-report.md) — TLDR: ~⅓ is Espressif's
+  closed radio stack; found + fixed one real lump (Fx printed via f64 →
+  −14.4 KB); regenerate with `tools/size-report.py`. And the **C3 devkit
+  build** compiles again (two rv32imc atomic-RMW slips).
+
+The onboard PB v3 mic (your "SPI audio") stays open: closed hardware,
+undocumented pinout — that's a bench session with the recovered device
+(I2S/PDM driver + FFT prep can happen any time; say the word).
 
 ## 2026-07-07 — MQTT + Home Assistant discovery (firmware v0.1.19) 🔶 device-blocked
 
