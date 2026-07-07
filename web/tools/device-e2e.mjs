@@ -203,6 +203,22 @@ try {
   });
   await sleep(700); // restore for the rest of the suite
 
+  // LED protocol (Phase 3): the Settings dropdown switches the driver live
+  const p0 = await (await fetch(`${DEV}/api/protocol`)).json();
+  check(
+    "protocol: GET returns current + options",
+    p0.protocol === "sk9822" && p0.options.includes("ws2812"),
+    JSON.stringify(p0),
+  );
+  await page.select('[data-role="cfg-protocol"]', "ws2812");
+  await sleep(500);
+  const p1 = await (await fetch(`${DEV}/api/protocol`)).json();
+  check("protocol: dropdown switches the device", p1.protocol === "ws2812", JSON.stringify(p1));
+  const cfgP = await (await fetch(`${DEV}/api/config`)).json();
+  check("protocol: config GET reflects it", cfgP.protocol === "ws2812", JSON.stringify(cfgP));
+  await page.select('[data-role="cfg-protocol"]', "sk9822");
+  await sleep(300); // restore
+
   // live-code push: slider-controlled solid color + exported var
   await setEditor(
     page,

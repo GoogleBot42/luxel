@@ -62,7 +62,7 @@ use leds::Protocol;
 use luxel_core::jsonview;
 use shared::{
     publish, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS,
-    MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, READOUTS_JSON, VARS_JSON,
+    MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -94,7 +94,9 @@ pub static REBOOT: embassy_sync::signal::Signal<
 //   github.com/simap/pixelblaze) — DATA = GPIO23 (MOSI), CLOCK = GPIO18
 //   (SCK), both through the onboard 5V level shifter; status LED GPIO12
 //   (lit at boot = Luxel alive), button GPIO32 (unused).
-const PROTOCOL: Protocol = Protocol::Sk9822;
+/// Board default LED protocol; the live value lives in `shared::PROTOCOL`
+/// (seeded at boot, overridable at runtime via `/api/protocol`).
+const DEFAULT_PROTOCOL: Protocol = Protocol::Sk9822;
 /// Board default pixel count; the live value lives in `shared::PIXEL_COUNT`
 /// (seeded from this at boot, overridable at runtime via `/api/config`).
 const DEFAULT_PIXEL_COUNT: u32 = 300;
@@ -153,9 +155,10 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     println!(
-        "luxel-fw: boot ({} px default, {} Hz SPI)",
+        "luxel-fw: boot ({} px default, {} @ {} Hz SPI)",
         DEFAULT_PIXEL_COUNT,
-        PROTOCOL.spi_hz()
+        DEFAULT_PROTOCOL.name(),
+        DEFAULT_PROTOCOL.spi_hz()
     );
 
     // Strip power relay: on before anything renders (see board notes above).
@@ -176,7 +179,7 @@ async fn main(spawner: Spawner) -> ! {
     let spi = Spi::new(
         p.SPI2,
         SpiConfig::default()
-            .with_frequency(Rate::from_hz(PROTOCOL.spi_hz()))
+            .with_frequency(Rate::from_hz(DEFAULT_PROTOCOL.spi_hz()))
             .with_mode(Mode::_0),
     )
     .expect("spi init");
@@ -200,18 +203,22 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     // Seed runtime settings from flash (else compile-time defaults) BEFORE the
-    // render task spawns — it reads PIXEL_COUNT once when it builds the engine.
+    // render task spawns — it reads these once when it builds the engine and
+    // configures SPI.
     let stored = config::read_device();
     let brightness = stored.map(|c| c.brightness).unwrap_or(APA_BRIGHTNESS);
     let pixels = stored
         .map(|c| c.pixel_count)
         .filter(|&n| n >= 1 && n <= MAX_PIXELS)
         .unwrap_or(DEFAULT_PIXEL_COUNT);
+    let protocol = stored.map(|c| Protocol::from_u8(c.protocol)).unwrap_or(DEFAULT_PROTOCOL);
     BRIGHTNESS.store(brightness, Ordering::Relaxed);
     PIXEL_COUNT.store(pixels, Ordering::Relaxed);
+    PROTOCOL.store(protocol.as_u8(), Ordering::Relaxed);
     println!(
-        "settings: {} px, brightness {}/31 ({})",
+        "settings: {} px, {}, brightness {}/31 ({})",
         pixels,
+        protocol.name(),
         brightness,
         if stored.is_some() { "flash" } else { "default" }
     );
@@ -318,9 +325,17 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 /// Renders frames and drives the strip; picks up uploaded patterns between
+/// SPI config for a protocol (only the clock rate differs; mode 0 for both).
+fn spi_cfg(p: Protocol) -> SpiConfig {
+    SpiConfig::default()
+        .with_frequency(Rate::from_hz(p.spi_hz()))
+        .with_mode(Mode::_0)
+}
+
 /// frames. Yields to the network tasks after every frame.
 #[embassy_executor::task]
 async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
+    let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
     let mut engine = match Engine::new(PATTERN, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         Ok(e) => Some(e),
         Err(d) => {
@@ -336,7 +351,13 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
     }
 
-    let mut buf = alloc::vec![0u8; PROTOCOL.buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
+    // Apply the seeded protocol — flash may specify one different from the
+    // boot-time default the SPI was constructed with.
+    if let Err(e) = spi.apply_config(&spi_cfg(cur_protocol())) {
+        println!("spi config error: {:?}", e);
+    }
+    let mut buf =
+        alloc::vec![0u8; cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
@@ -377,7 +398,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 Msg::Config(count) => {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
-                    buf = alloc::vec![0u8; PROTOCOL.buf_len(count as usize)];
+                    buf = alloc::vec![0u8; cur_protocol().buf_len(count as usize)];
                     match Engine::new(&current_src, count, 1) {
                         Ok(e) => {
                             publish(&CONTROLS_JSON, jsonview::controls_json(&e));
@@ -388,6 +409,19 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                         }
                         Err(d) => println!("resize recompile error (bug?): {}", d.message),
                     }
+                }
+                // Live LED-protocol change (no reboot): reconfigure the SPI
+                // clock and resize the buffer to the new encoding. Sole writer
+                // of PROTOCOL.
+                Msg::Protocol(code) => {
+                    let p = Protocol::from_u8(code);
+                    PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
+                    if let Err(e) = spi.apply_config(&spi_cfg(p)) {
+                        println!("spi config error: {:?}", e);
+                    }
+                    buf = alloc::vec![0u8; p.buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
+                    last = Instant::now();
+                    println!("protocol → {}", p.name());
                 }
             }
         }
@@ -401,7 +435,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
 
             let px = eng.frame(delta);
             set_pixels(px);
-            PROTOCOL.encode(px, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
+            cur_protocol().encode(px, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }

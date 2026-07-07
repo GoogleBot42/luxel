@@ -22,18 +22,20 @@ pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
 /// Device settings live in the next nvs sector, so writing them never disturbs
-/// the WiFi record. Record (v2): "LXDV" u8 version=2  u8 brightness  u8 0 u8 0
-/// u32-LE pixel_count  u32-LE checksum (16 bytes). A v1 record (brightness
-/// only) fails the version check and reads as "no record" → defaults.
+/// the WiFi record. Record (v3): "LXDV" u8 version=3  u8 brightness  u8 protocol
+/// u8 0  u32-LE pixel_count  u32-LE checksum (16 bytes). Older versions fail the
+/// version check and read as "no record" → defaults.
 const DEV_OFFSET: u32 = 0xA000;
 const DEV_MAGIC: &[u8; 4] = b"LXDV";
-const DEV_VER: u8 = 2;
+const DEV_VER: u8 = 3;
 
-/// Persisted device settings. Both fields are written together (read-modify-
-/// write) so setting one never clobbers the other.
+/// Persisted device settings. All fields are written together (read-modify-
+/// write) so setting one never clobbers the others.
 #[derive(Clone, Copy)]
 pub struct DeviceConfig {
     pub brightness: u8,
+    /// LED protocol code (leds::Protocol::as_u8).
+    pub protocol: u8,
     pub pixel_count: u32,
 }
 
@@ -125,11 +127,16 @@ pub fn read_device() -> Option<DeviceConfig> {
         return None;
     }
     let brightness = rec[5];
+    let protocol = rec[6];
     let pixel_count = u32::from_le_bytes(rec[8..12].try_into().ok()?);
     if brightness > 31 {
         return None;
     }
-    Some(DeviceConfig { brightness, pixel_count })
+    Some(DeviceConfig {
+        brightness,
+        protocol,
+        pixel_count,
+    })
 }
 
 /// Persist device settings (brightness applied live; pixel count applied live
@@ -142,7 +149,7 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     rec.extend_from_slice(DEV_MAGIC);
     rec.push(DEV_VER);
     rec.push(cfg.brightness);
-    rec.push(0);
+    rec.push(cfg.protocol);
     rec.push(0);
     rec.extend_from_slice(&cfg.pixel_count.to_le_bytes());
     let ck = checksum(&rec);

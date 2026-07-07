@@ -119,8 +119,13 @@ A real device needs a settings surface (page/dialog). Fields:
   (feasible because the SPI is Blocking, no DMA, and the encode buffer is a plain
   heap Vec). Persisted in the `LXDV` nvs record; capped at `MAX_PIXELS` (2048).
   Shipped firmware v0.1.13. The Settings Pixels field is editable and re-anchors
-  the local preview. (LED **protocol** is still compile-time — reported by GET
-  but not settable; a runtime protocol switch is a later item.)
+  the local preview.
+- **LED protocol** ✅ — `GET/POST /api/protocol` (sk9822/ws2812 + aliases)
+  switches the driver **live, no reboot**: `Msg::Protocol` calls
+  `spi.apply_config()` to change the clock (8 MHz ↔ 2.4 MHz) and resizes the
+  encode buffer. Persisted in `LXDV` (v3). Settings has a protocol dropdown.
+  Shipped firmware v0.1.14. Verified on hardware (sk9822↔ws2812↔sk9822, no
+  crash, SPI restores full speed).
 - **MQTT / Home Assistant** 🔧 — ("HQTT" in the notes) M4 territory, unbuilt.
   Broker host/port/creds + HA discovery toggle.
 - **WiFi** — `GET/POST /api/wifi` already exists (stores creds + reboots).
@@ -154,9 +159,9 @@ the pattern is loading, instead of appearing dead/blank.
    shell (device info + pixel readout, Phase-3 placeholders). Both e2e suites
    updated to the new `data-role` hooks and green.
 3. **Phase 3 (firmware + settings):** ~~connect-on-load race~~ ✅ (web-only);
-   ~~`/api/brightness` + slider~~ ✅ (v0.1.12); ~~`/api/config` pixel count +
-   Settings field~~ ✅ (v0.1.13, **live resize, no reboot**). Remaining: a
-   runtime LED-protocol switch (re-init the driver) + the Settings WiFi form.
+   ~~`/api/brightness` + slider~~ ✅ (v0.1.12); ~~`/api/config` pixel count~~ ✅
+   (v0.1.13); ~~`/api/protocol` LED protocol switch~~ ✅ (v0.1.14) — all **live,
+   no reboot**. Remaining: the Settings **WiFi form** (endpoint already exists).
 4. **Phase 4 (bigger features):** ~~mapper-as-editor-tab (CodeMirror) +
    debuggable~~ ✅ done (Luxel map program, see above); 3D preview (map already
    emits `[x,y,z]` — Preview needs a projection); Playlist tab + firmware

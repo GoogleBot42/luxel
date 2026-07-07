@@ -82,6 +82,9 @@
   let brightnessMax = 31;
   /** Max pixel count the device firmware accepts (GET /api/config). */
   let pixelMax = 2048;
+  /** LED protocol the device is driving + the selectable options. */
+  let deviceProtocol = "sk9822";
+  let protocolOptions: string[] = ["sk9822", "ws2812"];
 
   async function refreshDevicePatterns(): Promise<void> {
     if (!device) return;
@@ -343,8 +346,16 @@
       try {
         const c = await session.config();
         pixelMax = c.max || 2048;
+        if (c.protocol) deviceProtocol = c.protocol;
       } catch {
         /* older firmware without /api/config — pixel count stays read-only */
+      }
+      try {
+        const p = await session.protocol();
+        deviceProtocol = p.protocol;
+        if (p.options?.length) protocolOptions = p.options;
+      } catch {
+        /* older firmware without /api/protocol — leave the default */
       }
       compileError = null;
       runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
@@ -901,6 +912,17 @@ export function render(index) {
   function onBrightnessChange(e: Event): void {
     brightness = Number((e.target as HTMLInputElement).value);
     void device?.setBrightness(brightness);
+  }
+
+  /** Live LED-protocol change: the device reconfigures its driver (no reboot). */
+  function onProtocolChange(e: Event): void {
+    const name = (e.target as HTMLSelectElement).value;
+    deviceProtocol = name;
+    void (async () => {
+      const r = await device?.setProtocol(name);
+      if (r?.ok && r.protocol) deviceProtocol = r.protocol;
+      else if (r?.error) deviceError = `protocol: ${r.error}`;
+    })();
   }
 
   /** Live pixel-count change: the device resizes its strip (no reboot); we
@@ -1704,6 +1726,15 @@ export function render(index) {
               on:change={onPixelCountChange}
             />
             <span class="dim">resized live — max {pixelMax}, no reboot</span>
+          </div>
+          <div class="field">
+            <span class="flabel">LED protocol</span>
+            <select data-role="cfg-protocol" value={deviceProtocol} on:change={onProtocolChange}>
+              {#each protocolOptions as opt}
+                <option value={opt}>{opt}</option>
+              {/each}
+            </select>
+            <span class="dim">match your strip — switched live (no reboot)</span>
           </div>
           <div class="field">
             <span class="flabel">Status</span>

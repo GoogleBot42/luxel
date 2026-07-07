@@ -30,6 +30,23 @@ enum Msg {
     Config(u32),
 }
 
+/// Protocol name for a stored code (mirrors leds::Protocol; the mirror drives
+/// no real LEDs, so it just round-trips the setting for the UI/e2e).
+fn protocol_name(code: u8) -> &'static str {
+    match code {
+        1 => "ws2812",
+        _ => "sk9822",
+    }
+}
+
+fn protocol_code(name: &str) -> Option<u8> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "sk9822" | "apa102" => Some(0),
+        "ws2812" | "ws2811" | "ws2815" | "ws281x" => Some(1),
+        _ => None,
+    }
+}
+
 /// A stored pattern (the device pattern library; firmware keeps these in
 /// flash, the mirror in memory). API contract — keep in lockstep with
 /// firmware/src/server.rs:
@@ -61,6 +78,7 @@ struct State {
     library: Mutex<Vec<StoredPattern>>,
     next_id: AtomicU32,
     brightness: AtomicU8,
+    protocol: AtomicU8,
 }
 
 fn push(state: &State, msg: Msg) {
@@ -523,9 +541,10 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         }
         ("GET", "/api/config") => {
             let body = format!(
-                "{{\"pixels\":{},\"max\":{},\"protocol\":\"native\"}}",
+                "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
                 state.pixel_count.load(Ordering::Relaxed),
-                MAX_PIXELS
+                MAX_PIXELS,
+                protocol_name(state.protocol.load(Ordering::Relaxed))
             );
             respond(&mut stream, 200, "application/json", body.as_bytes());
         }
@@ -537,6 +556,25 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                     format!("{{\"ok\":true,\"pixels\":{}}}", n)
                 }
                 _ => format!("{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}", MAX_PIXELS),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/protocol") => {
+            let body = format!(
+                "{{\"protocol\":\"{}\",\"options\":[\"sk9822\",\"ws2812\"]}}",
+                protocol_name(state.protocol.load(Ordering::Relaxed))
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/protocol") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match protocol_code(&body) {
+                Some(code) => {
+                    // the mirror drives no real LEDs — just round-trip the setting
+                    state.protocol.store(code, Ordering::Relaxed);
+                    format!("{{\"ok\":true,\"protocol\":\"{}\"}}", protocol_name(code))
+                }
+                None => String::from("{\"ok\":false,\"error\":\"protocol must be sk9822 or ws2812\"}"),
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
@@ -623,6 +661,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         library: Mutex::new(Vec::new()),
         next_id: AtomicU32::new(0x1a5e_0001),
         brightness: AtomicU8::new(4), // matches the firmware's default
+        protocol: AtomicU8::new(0), // sk9822
     });
 
     {

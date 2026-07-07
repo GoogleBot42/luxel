@@ -21,6 +21,8 @@
 //!   POST /api/brightness body = "0".."31" → applied live + persisted {"ok":true,"brightness":N}
 //!   GET  /api/config    {"pixels":N,"max":2048,"protocol":"sk9822"}
 //!   POST /api/config    body = pixel count → live resize + persisted {"ok":true,"pixels":N}
+//!   GET  /api/protocol  {"protocol":"sk9822","options":["sk9822","ws2812"]}
+//!   POST /api/protocol  body = name → live SPI reconfig + persisted {"ok":true,"protocol":"…"}
 //!   GET    /api/patterns              {"patterns":[{"id","name"},…]}
 //!   GET    /api/patterns/<id>         {"id","name","source"}
 //!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
@@ -45,7 +47,8 @@ use crate::shared::{
     READOUTS_JSON, VARS_JSON,
 };
 use crate::config::DeviceConfig;
-use crate::shared::{BRIGHTNESS, MAX_PIXELS, PIXEL_COUNT};
+use crate::leds::Protocol;
+use crate::shared::{BRIGHTNESS, MAX_PIXELS, PIXEL_COUNT, PROTOCOL};
 
 const INDEX_HTML: &str = include_str!("index.html");
 
@@ -613,9 +616,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let response = json_response(match body.trim().parse::<u8>() {
                         Ok(b) if b <= 31 => {
                             BRIGHTNESS.store(b, Ordering::Relaxed);
-                            // read-modify-write so we don't clobber the pixel count
+                            // read-modify-write so we don't clobber the others
                             let cfg = DeviceConfig {
                                 brightness: b,
+                                protocol: PROTOCOL.load(Ordering::Relaxed),
                                 pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
                             };
                             match crate::config::write_device(&cfg) {
@@ -648,6 +652,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             MSG_QUEUE.send(Msg::Config(n)).await;
                             let cfg = DeviceConfig {
                                 brightness: BRIGHTNESS.load(Ordering::Relaxed),
+                                protocol: PROTOCOL.load(Ordering::Relaxed),
                                 pixel_count: n,
                             };
                             match crate::config::write_device(&cfg) {
@@ -663,6 +668,38 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             "{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}",
                             MAX_PIXELS
                         ),
+                    });
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
+                // POST /api/protocol — body is a protocol name (sk9822/ws2812
+                // + aliases). Reconfigures SPI + resizes the buffer live, and
+                // persists. No reboot.
+                "/api/protocol" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let response = json_response(match Protocol::from_name(body.trim()) {
+                        Some(p) => {
+                            MSG_QUEUE.send(Msg::Protocol(p.as_u8())).await;
+                            let cfg = DeviceConfig {
+                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
+                                protocol: p.as_u8(),
+                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+                            };
+                            match crate::config::write_device(&cfg) {
+                                Ok(()) => format!("{{\"ok\":true,\"protocol\":\"{}\"}}", p.name()),
+                                Err(e) => format!(
+                                    "{{\"ok\":true,\"protocol\":\"{}\",\"note\":\"not persisted: {}\"}}",
+                                    p.name(),
+                                    json_escape(e)
+                                ),
+                            }
+                        }
+                        None => {
+                            String::from("{\"ok\":false,\"error\":\"protocol must be sk9822 or ws2812\"}")
+                        }
                     });
                     let conn = request.body_connection.finalize().await?;
                     return response.write_to(conn, response_writer).await;
@@ -844,7 +881,11 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
                     PIXEL_COUNT.load(Ordering::Relaxed),
                     MAX_PIXELS,
-                    crate::PROTOCOL.name()
+                    Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
+                ))),
+                "/api/protocol" => respond!(json_response(format!(
+                    "{{\"protocol\":\"{}\",\"options\":[\"sk9822\",\"ws2812\"]}}",
+                    Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
                 ))),
                 "/api/pixels" => respond!(api_pixels().await),
                 "/api/pattern" => respond!(api_pattern().await),

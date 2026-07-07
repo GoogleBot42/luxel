@@ -21,6 +21,9 @@ pub enum Msg {
     Var(String, Fx),
     /// New pixel count — the render task rebuilds the engine + SPI buffer live.
     Config(u32),
+    /// New LED protocol — the render task reconfigures SPI + resizes the buffer
+    /// live (0 = SK9822, 1 = WS2812; see leds::Protocol::from_u8).
+    Protocol(u8),
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
@@ -43,6 +46,12 @@ pub static PIXEL_COUNT: AtomicU32 = AtomicU32::new(300);
 /// Hard cap on a runtime pixel count, to bound heap use (engine buffers + the
 /// SPI encode buffer). 2048 leaves ample headroom on the ESP32.
 pub const MAX_PIXELS: u32 = 2048;
+
+/// Active LED protocol as a code (0 = SK9822, 1 = WS2812; leds::Protocol
+/// from_u8/as_u8). Runtime-configurable (`/api/protocol`): only the render task
+/// writes it — on `Msg::Protocol` it reconfigures the SPI clock + resizes the
+/// buffer, no reboot. Boot seeds it from flash (else the board default).
+pub static PROTOCOL: AtomicU8 = AtomicU8::new(0);
 
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 

@@ -23,11 +23,35 @@ impl Protocol {
         }
     }
 
-    /// Short lowercase name for the API (`/api/config`).
+    /// Short lowercase name for the API (`/api/config`, `/api/protocol`).
     pub fn name(self) -> &'static str {
         match self {
             Protocol::Sk9822 => "sk9822",
             Protocol::Ws2812 => "ws2812",
+        }
+    }
+
+    /// Parse an API name (aliases: apa102 = sk9822, ws2811/ws2815 = ws2812).
+    pub fn from_name(s: &str) -> Option<Protocol> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "sk9822" | "apa102" => Some(Protocol::Sk9822),
+            "ws2812" | "ws2811" | "ws2815" | "ws281x" => Some(Protocol::Ws2812),
+            _ => None,
+        }
+    }
+
+    /// Compact code for atomic storage / flash persistence.
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Protocol::Sk9822 => 0,
+            Protocol::Ws2812 => 1,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Protocol {
+        match v {
+            1 => Protocol::Ws2812,
+            _ => Protocol::Sk9822,
         }
     }
 

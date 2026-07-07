@@ -92,6 +92,20 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; pixels?: number; error?: string };
   }
 
+  /** Current LED protocol and the selectable options. */
+  async protocol(): Promise<{ protocol: string; options: string[] }> {
+    return (await (await fetch(this.url("/api/protocol"))).json()) as {
+      protocol: string;
+      options: string[];
+    };
+  }
+
+  /** Set the LED protocol; the device reconfigures its driver live (no reboot). */
+  async setProtocol(name: string): Promise<{ ok: boolean; protocol?: string; error?: string }> {
+    const res = await fetch(this.url("/api/protocol"), { method: "POST", body: name });
+    return (await res.json()) as { ok: boolean; protocol?: string; error?: string };
+  }
+
   async run(source: string): Promise<RunResult> {
     const ws = this.wsCall("code", source);
     if (ws) return (await ws) as RunResult;
