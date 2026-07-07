@@ -72,6 +72,22 @@ try {
   check("library shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
   await page.screenshot({ path: `${shotDir}/e2e-1-library.png` });
 
+  // gallery search filters the tiles by name
+  await page.type('[data-role="gallery-search"]', "rainbow");
+  await sleep(250);
+  const visible = await page.$$eval(".tile", (els) => els.filter((e) => !e.hidden).length);
+  const allMatch = await page.$$eval(".tile", (els) =>
+    els.filter((e) => !e.hidden).every((e) => /rainbow/i.test(e.textContent ?? "")),
+  );
+  check("gallery search filters tiles", visible > 0 && visible < tileCount && allMatch, `${visible} shown`);
+  await page.$eval('[data-role="gallery-search"]', (el) => {
+    el.value = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(200);
+  const backToAll = await page.$$eval(".tile", (els) => els.filter((e) => !e.hidden).length);
+  check("gallery search clears", backToAll === tileCount, `${backToAll}`);
+
   // ── 2. New pattern opens the editor full-screen ──
   await page.click('[data-role="new-pattern"]');
   await page.waitForSelector('[data-role="editor-back"]', { timeout: 3000 });

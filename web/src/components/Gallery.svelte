@@ -44,6 +44,10 @@
   const ENGINE_CAP = 40;
 
   let tiles: Tile[] = [];
+  let search = "";
+  const matches = (t: Tile): boolean =>
+    !search || t.name.toLowerCase().includes(search.toLowerCase().trim());
+  $: shown = search ? tiles.filter(matches).length : tiles.length;
   let corpusNote = "";
   let loading = true; // corpus (gallery.json) still streaming in
   let raf = 0;
@@ -195,11 +199,20 @@
 
 <div class="browser" role="region" aria-label="pattern browser">
   <header>
+    <input
+      class="search"
+      data-role="gallery-search"
+      type="search"
+      placeholder="search patterns…"
+      bind:value={search}
+    />
     {#if loading}
       <span class="spinner header-spinner" aria-hidden="true"></span>
       <span class="dim" data-role="gallery-loading">loading patterns…</span>
     {:else}
-      <span class="dim">{tiles.length} patterns — click one to open it in the editor</span>
+      <span class="dim" data-role="gallery-count">
+        {search ? `${shown} of ${tiles.length}` : `${tiles.length} patterns`} — click one to open it
+      </span>
     {/if}
     {#if corpusNote}<span class="dim">· {corpusNote}</span>{/if}
   </header>
@@ -210,6 +223,8 @@
         class:dead={t.dead}
         data-kind={t.kind}
         title={t.dead ? `${t.name} (does not compile)` : t.name}
+        hidden={search.trim() !== "" &&
+          !t.name.toLowerCase().includes(search.trim().toLowerCase())}
         use:register={i}
         on:click={() => !t.dead && dispatch("pick", { name: t.name, kind: t.kind, source: t.source })}
       >
@@ -259,6 +274,21 @@
     gap: 10px;
     padding: 12px;
     align-content: start;
+  }
+
+  .search {
+    flex: none;
+    width: 200px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-inset);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .tile[hidden] {
+    display: none;
   }
 
   .tile {
