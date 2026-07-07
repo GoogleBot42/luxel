@@ -134,18 +134,64 @@
    *  "playground" otherwise — drives which affordances the header shows. */
   $: mode = isPlayground ? "playground" : "device";
 
-  // ---- top-level tabs ----
-  // Both modes get the tab bar; device mode adds Settings. Panels stay
-  // mounted and hide via CSS so the render loop, editor state, and gallery
-  // engines survive a tab switch.
-  type Tab = "editor" | "patterns" | "settings";
-  let tab: Tab = "editor";
+  // ---- navigation ----
+  // Home tabs: Patterns Library (always), Device Patterns + Settings (device
+  // only). The editor is NOT a tab — it opens full-screen over the home tab
+  // when you pick a pattern or create one, with a back button. `tab` is the
+  // home you return to.
+  type Tab = "library" | "device" | "settings";
+  let tab: Tab = "library";
+  /** Full-screen editor open (over the home tab). */
+  let editing = false;
   /** File-actions overflow menu (import/export). */
   let menuOpen = false;
-  /** Lazy-mount the gallery on first Patterns visit, then keep it alive so
-   *  its compiled tile engines persist across tab switches. */
+  /** Lazy-mount the gallery on first Library visit, then keep it alive so its
+   *  compiled tile engines persist. */
   let galleryMounted = false;
-  $: if (tab === "patterns") galleryMounted = true;
+  $: if (tab === "library" && !editing) galleryMounted = true;
+
+  const NEW_PATTERN = `export function render(index) {
+  hsv(index / pixelCount, 1, 1)
+}`;
+
+  /** Open the editor full-screen; `home` is the tab the back button returns
+   *  to (Library for local patterns, Device Patterns for device ones). */
+  function openEditor(home: Tab): void {
+    tab = home;
+    editing = true;
+  }
+
+  function closeEditor(): void {
+    editing = false;
+  }
+
+  /** Start a brand-new pattern in the editor. `onDevice` routes save to the
+   *  device (from the Device Patterns tab) vs the local library. */
+  function newPattern(onDevice: boolean): void {
+    source = NEW_PATTERN;
+    patternName = "";
+    exampleName = "";
+    devicePatternId = "";
+    importError = "";
+    controlValues = {};
+    subTab = "pattern";
+    if (layout.kind === "map") layout = { kind: "strip", pixels: pixelCount() };
+    void tick().then(recompile);
+    openEditor(onDevice ? "device" : "library");
+  }
+
+  function openSavedPattern(name: string): void {
+    loadSaved(name);
+    openEditor("library");
+  }
+
+  function openDevicePatternInEditor(id: string): void {
+    void loadDevicePattern(id);
+    openEditor("device");
+  }
+
+  /** The label/target the editor's back button returns to. */
+  $: backLabel = tab === "device" ? "Device Patterns" : "Patterns Library";
   /** Total installed pixels — reactive so the Settings readout tracks the
    *  active layout (device connect sets it from the hardware). */
   $: pixelTotal =
@@ -154,8 +200,8 @@
       : layout.kind === "grid"
         ? layout.w * layout.h
         : layout.coords.length;
-  // the map sub-tab is playground-only (device map upload comes later)
-  $: if (!isPlayground && subTab === "map") subTab = "pattern";
+  // the map sub-tab exists only while a 2D map is the active layout
+  $: if (layout.kind !== "map" && subTab === "map") subTab = "pattern";
 
   function openDeviceSocket(): void {
     if (!device) return;
@@ -208,8 +254,9 @@
 
   /** Connect (or reconnect) to the bound device. The base is always known —
    *  from served-from-device detection or a `?device=` override — so there's
-   *  never a URL to type. */
-  async function connectDevice(base: string): Promise<void> {
+   *  never a URL to type. `pullPattern` loads the device's running pattern into
+   *  the editor; pass false to keep an in-progress edit (working copy). */
+  async function connectDevice(base: string, pullPattern = true): Promise<void> {
     deviceError = "";
     base = base.trim().replace(/\/+$/, "");
     const session = new DeviceSession(base);
@@ -224,8 +271,12 @@
       wsGraceUntil = performance.now() + 6000;
       if (debugMode) toggleDebug();
       layout = { kind: "strip", pixels: st.pixels };
-      source = await session.pattern();
-      hints = parseControlHints(source);
+      if (pullPattern) {
+        source = await session.pattern(); // show what's running on the device
+        hints = parseControlHints(source);
+        patternName = "";
+        exampleName = "";
+      }
       controls = await session.controls();
       compileError = null;
       runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
@@ -248,7 +299,7 @@
     deviceError = "";
     devicePatterns = [];
     devicePatternId = "";
-    if (tab === "settings") tab = "editor"; // Settings only exists in device mode
+    if (tab === "settings") tab = "library"; // Settings needs a live connection
     recompile();
   }
 
@@ -327,18 +378,6 @@
     debounce = setTimeout(recompile, device ? 500 : 150);
   }
 
-  function loadExample(name: string): void {
-    const ex = EXAMPLES.find((x) => x.name === name);
-    if (!ex) return;
-    exampleName = ex.name;
-    patternName = "";
-    importError = "";
-    if (!device) layout = structuredClone(ex.layout); // device layout is fixed
-    source = ex.source;
-    controlValues = {};
-    void tick().then(recompile);
-  }
-
   // ---- .epe import / export (Pixel Blaze pattern interchange) ----
   // An .epe is JSON: { name, id, sources: { main } } — we recompile from
   // sources.main, the only portable part (PB byte/blob keys are its own
@@ -368,6 +407,7 @@
       devicePatternId = "";
       source = main;
       controlValues = {};
+      editing = true; // a dropped/imported .epe opens straight in the editor
       await tick();
       recompile();
     } catch (e) {
@@ -616,10 +656,6 @@ export function render(index) {
     return g ? fmtLocal(g) : null;
   }
 
-  function backToStrip(): void {
-    layout = { kind: "strip", pixels: pixelCount() };
-    recompile();
-  }
 
   // keep the map editor's squiggle in sync with its compile status
   $: if (mapEditor) {
@@ -638,7 +674,7 @@ export function render(index) {
 
   function onGalleryPick(e: CustomEvent<{ name: string; kind: "strip" | "grid"; source: string }>): void {
     const p = e.detail;
-    tab = "editor"; // picking a pattern jumps back to the editor
+    openEditor("library"); // picking a pattern opens it in the editor
     patternName = p.name;
     exampleName = "";
     importError = "";
@@ -735,36 +771,24 @@ export function render(index) {
     URL.revokeObjectURL(a.href);
   }
 
-  function onExampleChange(e: Event): void {
-    const v = (e.target as HTMLSelectElement).value;
-    devicePatternId = "";
-    if (v.startsWith("saved:")) {
-      loadSaved(v.slice(6));
-    } else if (v.startsWith("device:")) {
-      void loadDevicePattern(v.slice(7));
-    } else {
-      loadExample(v);
-    }
-  }
-
-  /** What the picker shows: an example, a saved/device pattern, or the
-   *  ad-hoc imported/shared entry. */
-  $: selectValue =
-    devicePatternId !== ""
-      ? "device:" + devicePatternId
-      : exampleName !== ""
-        ? exampleName
-        : saved.some((s) => s.name === patternName)
-          ? "saved:" + patternName
-          : "";
-
   // ---- layout editing ----
 
   function setLayoutKind(e: Event): void {
     const kind = (e.target as HTMLSelectElement).value;
-    if (kind === "strip" && layout.kind !== "strip") {
+    if (kind === "map") {
+      // "2D map" is how mapping is enabled: reveal + run the map program (the
+      // map sub-tab appears because layout.kind becomes "map"). This is the
+      // only enable/disable — switching back to strip/grid turns it off.
+      subTab = "map";
+      if (!mapEngine) recompileMap(false);
+      runMapNow(); // installMap() flips layout → map on success
+      if (layout.kind !== "map") recompile();
+      return;
+    }
+    subTab = "pattern";
+    if (kind === "strip") {
       layout = { kind: "strip", pixels: pixelCount() };
-    } else if (kind === "grid" && layout.kind !== "grid") {
+    } else if (kind === "grid") {
       const side = Math.max(2, Math.round(Math.sqrt(pixelCount())));
       layout = { kind: "grid", w: side, h: side };
     }
@@ -1002,10 +1026,11 @@ export function render(index) {
       loadFailure = `failed to load luxel.wasm: ${String(e)}`;
       return;
     }
-    // a share link's pattern beats the default example — and suppresses
-    // device auto-connect (the link's intent is "look at this pattern").
-    // Otherwise restore the autosaved working copy: never lose edits.
+    // In-progress work wins: a share link's pattern, else the autosaved
+    // working copy. If either is present the editor opens on it (resume — never
+    // lose edits), and we keep it even when connecting to a device.
     const fromHash = await loadFromHash();
+    let hadWip = fromHash;
     if (!fromHash) {
       const wc = loadWorkingCopy();
       if (wc) {
@@ -1013,44 +1038,49 @@ export function render(index) {
         layout = wc.layout;
         patternName = wc.patternName;
         exampleName = wc.exampleName;
+        hadWip = true;
       }
     }
     recompile();
     raf = requestAnimationFrame(loop);
-    if (fromHash) return;
+    editing = hadWip; // resume in the editor if there was work in progress
+    if (fromHash) return; // a share link never auto-connects to a device
 
     // How we bind to a device (a plain playground binds to none):
-    //  1. `?device=<base>` — a dev/e2e override to point the built UI at a
+    //  1. `?device=<base>` — a dev/e2e override pointing the built UI at a
     //     device or the native mirror.
     //  2. served-from-device — the UI loaded from the device's own flash, so
     //     the device is this same origin. Auto-connect.
     // Either way the base is then *known*, so reconnect never needs a URL.
+    // On a device the editor opens over the Device Patterns tab, showing the
+    // running pattern (unless the user had work in progress — then that wins).
     const override = new URLSearchParams(location.search).get("device");
+    let base: string | null = null;
     if (override !== null) {
-      deviceBase = override.trim().replace(/\/+$/, "");
-      await connectDevice(deviceBase);
-      return;
-    }
-
-    // Served from a device? Must be a genuine device response — a dev
-    // server's SPA fallback returns 200 HTML for /api/status, so require JSON
-    // with the device's shape before binding (else we'd strand a "device
-    // unreachable" banner on a hosted playground).
-    try {
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 1500);
-      const r = await fetch("/api/status", { signal: ctl.signal });
-      clearTimeout(t);
-      const isJson = r.headers.get("content-type")?.includes("application/json");
-      if (r.ok && isJson) {
-        const st = (await r.json()) as { pixels?: unknown };
-        if (typeof st.pixels === "number") {
-          deviceBase = ""; // bind to this origin even if the connect races
-          await connectDevice("");
+      base = override.trim().replace(/\/+$/, "");
+    } else {
+      // Served from a device? Require a genuine device response — a dev
+      // server's SPA fallback returns 200 HTML for /api/status, so require
+      // JSON with the device's shape before binding.
+      try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 1500);
+        const r = await fetch("/api/status", { signal: ctl.signal });
+        clearTimeout(t);
+        const isJson = r.headers.get("content-type")?.includes("application/json");
+        if (r.ok && isJson) {
+          const st = (await r.json()) as { pixels?: unknown };
+          if (typeof st.pixels === "number") base = "";
         }
+      } catch {
+        /* not a device — stays a playground */
       }
-    } catch {
-      /* not a device — stays a playground */
+    }
+    if (base !== null) {
+      deviceBase = base; // bind (device UI shows even if the connect races)
+      tab = "device"; // the editor's back button lands on Device Patterns
+      editing = true;
+      await connectDevice(base, !hadWip); // keep a wip; else show what's running
     }
   });
 
@@ -1074,38 +1104,53 @@ export function render(index) {
   on:dragover|preventDefault
 >
   <header>
-    <span class="wordmark">
-      luxel <span class="dim">{isPlayground ? "playground" : (device?.base ?? deviceBase) || "device"}</span>
-    </span>
-
-    <nav class="tabs" data-role="tabs">
+    {#if editing}
       <button
-        data-role="tab-editor"
-        class="tab"
-        class:active={tab === "editor"}
-        on:click={() => (tab = "editor")}
+        data-role="editor-back"
+        class="back"
+        on:click={closeEditor}
+        title={`back to ${backLabel}`}
       >
-        Editor
+        ← {backLabel}
       </button>
-      <button
-        data-role="tab-patterns"
-        class="tab"
-        class:active={tab === "patterns"}
-        on:click={() => (tab = "patterns")}
-      >
-        Patterns
-      </button>
-      {#if device}
+      <span class="pattern-name" data-role="pattern-name">
+        {patternName || exampleName || "untitled pattern"}
+      </span>
+    {:else}
+      <span class="wordmark">
+        luxel <span class="dim">{isPlayground ? "playground" : (device?.base ?? deviceBase) || "device"}</span>
+      </span>
+      <nav class="tabs" data-role="tabs">
         <button
-          data-role="tab-settings"
+          data-role="tab-library"
           class="tab"
-          class:active={tab === "settings"}
-          on:click={() => (tab = "settings")}
+          class:active={tab === "library"}
+          on:click={() => (tab = "library")}
         >
-          Settings
+          Patterns Library
         </button>
-      {/if}
-    </nav>
+        {#if !isPlayground}
+          <button
+            data-role="tab-device"
+            class="tab"
+            class:active={tab === "device"}
+            on:click={() => (tab = "device")}
+          >
+            Device Patterns
+          </button>
+        {/if}
+        {#if device}
+          <button
+            data-role="tab-settings"
+            class="tab"
+            class:active={tab === "settings"}
+            on:click={() => (tab = "settings")}
+          >
+            Settings
+          </button>
+        {/if}
+      </nav>
+    {/if}
 
     <span class="spacer"></span>
 
@@ -1125,6 +1170,67 @@ export function render(index) {
       {/if}
     {/if}
     <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
+
+    {#if editing}
+      {#if saveNote}<span class="dim note" data-role="save-note">{saveNote}</span>{/if}
+      {#if shareNote}<span class="dim note" data-role="share-note">{shareNote}</span>{/if}
+      <span class="file-actions">
+        <button
+          data-role="save"
+          title={device ? "save the current pattern on the device" : "save to this browser's library"}
+          on:click={saveToLibrary}
+        >
+          save
+        </button>
+        {#if devicePatternId !== "" || saved.some((s) => s.name === patternName && exampleName === "")}
+          <button
+            data-role="delete"
+            title={devicePatternId ? "remove from the device" : "remove from the library"}
+            on:click={deleteSaved}
+          >
+            delete
+          </button>
+        {/if}
+        {#if isPlayground}
+          <button
+            data-role="share"
+            class="primary"
+            title="copy a link that carries this pattern in the URL"
+            on:click={() => void sharePattern()}
+          >
+            share
+          </button>
+        {/if}
+        <span class="overflow">
+          <button
+            class="more"
+            data-role="overflow"
+            title="more actions"
+            aria-label="more actions"
+            on:click|stopPropagation={() => (menuOpen = !menuOpen)}
+          >
+            ⋯
+          </button>
+          {#if menuOpen}
+            <div class="menu" role="menu">
+              <button data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
+                import .epe…
+              </button>
+              <button data-role="epe-export" role="menuitem" on:click={exportEpe}>
+                export .epe
+              </button>
+            </div>
+          {/if}
+        </span>
+        <input
+          class="file-input"
+          type="file"
+          accept=".epe,.json,application/json"
+          bind:this={fileInput}
+          on:change={onImportPick}
+        />
+      </span>
+    {/if}
 
     {#if !isPlayground}
       <span class="conn">
@@ -1146,100 +1252,9 @@ export function render(index) {
   </header>
 
   <!-- ───────────── Editor tab ───────────── -->
-  <main class="editor-tab" hidden={tab !== "editor"}>
+  <main class="editor-view" hidden={!editing}>
     <section class="left">
-      <div class="toolbar">
-        <select data-role="pattern-picker" value={selectValue} on:change={onExampleChange}>
-          {#if selectValue === ""}
-            <option value="">{patternName || "imported"}</option>
-          {/if}
-          <optgroup label="examples">
-            {#each EXAMPLES as ex (ex.name)}
-              <option value={ex.name}>{ex.name}</option>
-            {/each}
-          </optgroup>
-          {#if saved.length > 0}
-            <optgroup label="saved">
-              {#each saved as s (s.name)}
-                <option value={"saved:" + s.name}>{s.name}</option>
-              {/each}
-            </optgroup>
-          {/if}
-          {#if device && devicePatterns.length > 0}
-            <optgroup label="on device">
-              {#each devicePatterns as p (p.id)}
-                <option value={"device:" + p.id}>{p.name}</option>
-              {/each}
-            </optgroup>
-          {/if}
-        </select>
-
-        <span class="spacer"></span>
-
-        {#if saveNote}<span class="dim note" data-role="save-note">{saveNote}</span>{/if}
-        {#if shareNote}<span class="dim note" data-role="share-note">{shareNote}</span>{/if}
-
-        <span class="file-actions">
-          <button
-            data-role="save"
-            title={device
-              ? "save the current pattern on the device"
-              : "save to this browser's library"}
-            on:click={saveToLibrary}
-          >
-            save
-          </button>
-          {#if devicePatternId !== "" || saved.some((s) => s.name === patternName && exampleName === "")}
-            <button
-              data-role="delete"
-              title={devicePatternId ? "remove from the device" : "remove from the library"}
-              on:click={deleteSaved}
-            >
-              delete
-            </button>
-          {/if}
-          {#if isPlayground}
-            <button
-              data-role="share"
-              class="primary"
-              title="copy a link that carries this pattern in the URL"
-              on:click={() => void sharePattern()}
-            >
-              share
-            </button>
-          {/if}
-          <span class="overflow">
-            <button
-              class="more"
-              data-role="overflow"
-              title="more actions"
-              aria-label="more actions"
-              on:click|stopPropagation={() => (menuOpen = !menuOpen)}
-            >
-              ⋯
-            </button>
-            {#if menuOpen}
-              <div class="menu" role="menu">
-                <button data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
-                  import .epe…
-                </button>
-                <button data-role="epe-export" role="menuitem" on:click={exportEpe}>
-                  export .epe
-                </button>
-              </div>
-            {/if}
-          </span>
-          <input
-            class="file-input"
-            type="file"
-            accept=".epe,.json,application/json"
-            bind:this={fileInput}
-            on:change={onImportPick}
-          />
-        </span>
-      </div>
-
-      {#if isPlayground}
+      {#if layout.kind === "map"}
         <div class="subtabs" data-role="editor-subtabs">
           <button
             data-role="subtab-pattern"
@@ -1258,7 +1273,7 @@ export function render(index) {
               if (!mapEngine) recompileMap(!mapDebugMode);
             }}
           >
-            map{#if layout.kind === "map"}<span class="dot" title="a map is installed">●</span>{/if}
+            map
           </button>
         </div>
       {/if}
@@ -1273,7 +1288,7 @@ export function render(index) {
             on:breakpoints={onBreakpoints}
           />
         </div>
-        {#if isPlayground && mapMounted}
+        {#if mapMounted && layout.kind === "map"}
           <div class="editor-slot" data-role="map-editor" hidden={subTab !== "map"}>
             <Editor
               bind:this={mapEditor}
@@ -1287,29 +1302,15 @@ export function render(index) {
       </div>
 
       <div class="playback">
-        {#if isPlayground && subTab === "map"}
-          <button data-role="map-run" title="run the map program and install it" on:click={runMapNow}>
-            run map
-          </button>
-          {#if layout.kind === "map"}
-            <button data-role="map-back" title="drop the map, back to a strip" on:click={backToStrip}>
-              back to strip
-            </button>
-            <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
-          {/if}
-          {#if mapError}<span class="mapper-error" data-role="map-error">{mapError}</span>{/if}
-          <span class="sep"></span>
-        {:else if !device}
-          <select value={layout.kind} on:change={setLayoutKind}>
+        {#if isPlayground}
+          <!-- "2D map" is the single enable/disable for mapping: choosing it
+               reveals the pattern·map sub-tabs and runs the map program -->
+          <select value={layout.kind} data-role="layout-kind" on:change={setLayoutKind}>
             <option value="strip">strip</option>
             <option value="grid">grid</option>
-            {#if layout.kind === "map"}
-              <option value="map">2D map</option>
-            {/if}
+            <option value="map">2D map</option>
           </select>
-          {#if layout.kind === "map"}
-            <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
-          {:else if layout.kind === "strip"}
+          {#if layout.kind === "strip"}
             <input
               class="num"
               data-role="layout-px"
@@ -1320,7 +1321,7 @@ export function render(index) {
               on:change={(e) => setLayoutNum("pixels", e)}
             />
             <span class="dim">px</span>
-          {:else}
+          {:else if layout.kind === "grid"}
             <input
               class="num"
               data-role="layout-w"
@@ -1340,6 +1341,14 @@ export function render(index) {
               value={layout.h}
               on:change={(e) => setLayoutNum("h", e)}
             />
+          {:else}
+            <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
+          {/if}
+          {#if subTab === "map"}
+            <button data-role="map-run" title="run the map program and install it" on:click={runMapNow}>
+              run map
+            </button>
+            {#if mapError}<span class="mapper-error" data-role="map-error">{mapError}</span>{/if}
           {/if}
           <span class="sep"></span>
         {/if}
@@ -1439,18 +1448,13 @@ export function render(index) {
         </p>
       {/if}
 
-      {#if isPlayground}
+      {#if isPlayground && layout.kind === "map"}
         <h2>Map</h2>
         <p class="dim hint">
-          {#if layout.kind === "map"}
-            A {pixelTotal}-point map is installed. Edit it in the
-            <button class="link" data-role="goto-map" on:click={() => (subTab = "map")}>map</button>
-            tab — it's a debuggable Luxel program.
-          {:else}
-            Lay pixels out in 2D/3D from the
-            <button class="link" data-role="goto-map" on:click={() => (subTab = "map")}>map</button>
-            tab. The map is a Luxel program (<code>plot(x, y)</code> per pixel) you can step through.
-          {/if}
+          A {pixelTotal}-point map is installed. Edit it in the
+          <button class="link" data-role="goto-map" on:click={() => (subTab = "map")}>map</button>
+          sub-tab — it's a debuggable Luxel program (<code>plot(x, y)</code> per pixel). Choose a
+          different layout to turn mapping off.
         </p>
       {/if}
 
@@ -1462,18 +1466,78 @@ export function render(index) {
     </section>
   </main>
 
-  <!-- ───────────── Patterns tab ───────────── -->
-  <div class="patterns-tab" data-role="patterns-panel" hidden={tab !== "patterns"}>
-    {#if galleryMounted && luxel}
-      <Gallery {luxel} on:pick={onGalleryPick} on:close={() => (tab = "editor")} />
-    {:else}
-      <div class="tab-empty dim">loading patterns…</div>
+  <!-- ───────────── Patterns Library tab ───────────── -->
+  <div class="library-tab" data-role="library-panel" hidden={editing || tab !== "library"}>
+    <div class="lib-head">
+      <span class="lib-title">Patterns Library</span>
+      <span class="dim">examples &amp; community patterns{saved.length ? " · your saved" : ""}</span>
+      <span class="spacer"></span>
+      <button class="primary" data-role="new-pattern" on:click={() => newPattern(false)}>
+        + New pattern
+      </button>
+    </div>
+    {#if saved.length > 0}
+      <div class="saved-row">
+        <span class="dim">your patterns:</span>
+        {#each saved as s (s.name)}
+          <button class="chip" data-role="saved-pattern" on:click={() => openSavedPattern(s.name)}>
+            {s.name}
+          </button>
+        {/each}
+      </div>
     {/if}
+    <div class="lib-gallery">
+      {#if galleryMounted && luxel}
+        <Gallery {luxel} on:pick={onGalleryPick} />
+      {:else}
+        <div class="tab-empty dim">loading patterns…</div>
+      {/if}
+    </div>
   </div>
+
+  <!-- ───────────── Device Patterns tab ───────────── -->
+  {#if !isPlayground}
+    <div class="device-tab" data-role="device-panel" hidden={editing || tab !== "device"}>
+      <div class="lib-head">
+        <span class="lib-title">Device Patterns</span>
+        <span class="dim">stored in the device's memory</span>
+        <span class="spacer"></span>
+        <button
+          class="primary"
+          data-role="device-new-pattern"
+          disabled={!device}
+          on:click={() => newPattern(true)}
+        >
+          + New pattern
+        </button>
+      </div>
+      {#if !device}
+        <p class="dim hint">device offline — reconnect to manage its patterns.</p>
+      {:else if devicePatterns.length === 0}
+        <p class="dim hint">no patterns stored on the device yet. Create one with “+ New pattern”.</p>
+      {:else}
+        <ul class="dev-list">
+          {#each devicePatterns as p (p.id)}
+            <li>
+              <button
+                class="dev-item"
+                data-role="device-pattern"
+                class:active={p.id === devicePatternId}
+                on:click={() => openDevicePatternInEditor(p.id)}
+              >
+                <span class="dev-name">{p.name}</span>
+                <span class="dim">edit ›</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 
   <!-- ───────────── Settings tab (device mode only) ───────────── -->
   {#if device}
-    <div class="settings-tab" data-role="settings-panel" hidden={tab !== "settings"}>
+    <div class="settings-tab" data-role="settings-panel" hidden={editing || tab !== "settings"}>
       <div class="settings">
         <h1>Device settings</h1>
 
@@ -1520,9 +1584,8 @@ export function render(index) {
           <h2>Pattern library</h2>
           <p class="dim hint">
             {devicePatterns.length} pattern{devicePatterns.length === 1 ? "" : "s"} stored on the
-            device. Browse and load them from the
-            <button class="link" on:click={() => (tab = "patterns")}>Patterns</button> tab; save the
-            editor's current pattern with <em>save</em>.
+            device. Manage them from the
+            <button class="link" on:click={() => (tab = "device")}>Device Patterns</button> tab.
           </p>
         </section>
       </div>
@@ -1598,29 +1661,117 @@ export function render(index) {
     flex: 1;
   }
 
-  .editor-tab {
+  .editor-view {
     display: grid;
     grid-template-columns: minmax(360px, 1fr) minmax(320px, 420px);
     flex: 1;
     min-height: 0;
   }
 
-  /* one panel visible at a time; hidden ones stay mounted (state survives) */
-  .editor-tab[hidden],
-  .patterns-tab[hidden],
+  /* one surface visible at a time; hidden ones stay mounted (state survives) */
+  .editor-view[hidden],
+  .library-tab[hidden],
+  .device-tab[hidden],
   .settings-tab[hidden] {
     display: none;
   }
 
-  .patterns-tab,
+  .library-tab,
+  .device-tab,
   .settings-tab {
+    flex: 1;
+    min-height: 0;
+    background: var(--bg-panel);
+  }
+
+  .library-tab {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .device-tab,
+  .settings-tab {
+    overflow-y: auto;
+  }
+
+  .lib-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .lib-title {
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--accent);
+    font-size: 14px;
+  }
+
+  .saved-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chip {
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 999px;
+  }
+
+  .lib-gallery {
     flex: 1;
     min-height: 0;
   }
 
-  .settings-tab {
-    overflow-y: auto;
-    background: var(--bg-panel);
+  .dev-list {
+    list-style: none;
+    margin: 0;
+    padding: 8px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 620px;
+  }
+
+  .dev-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-inset);
+    cursor: pointer;
+  }
+
+  .dev-item:hover {
+    border-color: var(--accent);
+  }
+
+  .dev-item.active {
+    border-color: var(--accent);
+  }
+
+  .dev-name {
+    flex: 1;
+    color: var(--text);
+  }
+
+  .back {
+    font-weight: 600;
+  }
+
+  .pattern-name {
+    color: var(--text);
+    font-weight: 600;
   }
 
   .tab-empty {
@@ -1635,16 +1786,7 @@ export function render(index) {
     min-height: 0;
   }
 
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-panel);
-  }
-
-  .toolbar .note {
+  .note {
     font-size: 12px;
   }
 
@@ -1726,13 +1868,6 @@ export function render(index) {
   .subtab.active {
     color: var(--accent);
     border-bottom-color: var(--accent);
-  }
-
-  .subtab .dot {
-    color: var(--accent);
-    font-size: 8px;
-    vertical-align: middle;
-    margin-left: 4px;
   }
 
   .editor-host {

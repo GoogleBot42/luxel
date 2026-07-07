@@ -178,61 +178,51 @@ try {
   const still = await fetch(`${DEV}/api/pattern`);
   check("errors: device keeps old pattern", (await still.text()).includes("sliderBlue"));
 
-  // ---- device pattern library (CRUD against the mirror) ----
+  // ---- device pattern library (CRUD via the Device Patterns tab) ----
   // restore a valid pattern in the editor first (the error test left junk)
-  await setEditor(
-    page,
-    "export function render(index) { hsv(index / pixelCount, 1, 0.4) }",
-  );
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.4) }");
   await sleep(900);
   page.on("dialog", (d) => {
     if (d.message().includes("save pattern")) return void d.accept("device kept");
     if (d.message().includes("delete")) return void d.accept();
     void d.dismiss();
   });
-  await page.click('[data-role="save"]');
+  await page.click('[data-role="save"]'); // save (editor header) → stores on the device
   await sleep(900);
-  const devOpt = await page.$$eval('[data-role="pattern-picker"] option', (els) =>
-    els.some((o) => o.value.startsWith("device:") && o.textContent === "device kept"),
-  );
-  check("library: save-to-device adds an 'on device' entry", devOpt);
   const apiList = await (await fetch(`${DEV}/api/patterns`)).json();
   check(
-    "library: device API lists it",
+    "library: save-to-device stores it",
     apiList.patterns?.some((p) => p.name === "device kept"),
     JSON.stringify(apiList),
   );
-  // switch to an example, then load the stored pattern back — it activates
-  await page.select('[data-role="pattern-picker"]', "Rainbow");
-  await sleep(900);
-  const devValue = await page.$$eval(
-    '[data-role="pattern-picker"] option',
-    (els) => els.find((o) => o.value.startsWith("device:"))?.value ?? "",
-  );
-  await page.select('[data-role="pattern-picker"]', devValue);
-  await sleep(1200);
-  const activated = await (await fetch(`${DEV}/api/pattern`)).text();
-  check("library: selecting a device pattern activates it", activated.includes("0.4"));
-  const editorNow = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("library: editor shows the stored source", editorNow.includes("0.4"));
-  // delete it from the device
+  // the Device Patterns tab lists it (back out of the editor)
+  await page.click('[data-role="editor-back"]');
+  await sleep(400);
+  check("library: back lands on Device Patterns", (await page.$('[data-role="device-panel"]:not([hidden])')) !== null);
+  const listed = await page.$$eval('[data-role="device-pattern"]', (els) => els.map((e) => e.textContent ?? ""));
+  check("library: Device Patterns tab lists it", listed.some((t) => t.includes("device kept")), listed.join("|"));
+  // clicking it opens the editor and activates it on the device
   const seenReqs = [];
   page.on("request", (r) => {
     if (r.url().includes("/api/patterns") && r.method() === "DELETE") seenReqs.push(r.url());
   });
+  await page.click('[data-role="device-pattern"]');
+  await sleep(1300);
+  check("library: opening a device pattern opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
+  const activated = await (await fetch(`${DEV}/api/pattern`)).text();
+  check("library: selecting a device pattern activates it", activated.includes("0.4"));
+  check("library: editor shows the stored source", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.4"));
+  // delete it from the editor
   const delBtn = await page.$('[data-role="delete"]');
-  check("library: delete button present after loading device pattern", delBtn !== null);
+  check("library: delete button present", delBtn !== null);
   await delBtn?.click();
   await sleep(900);
   check("library: DELETE request was sent", seenReqs.length > 0, seenReqs.join(","));
   const apiAfter = await (await fetch(`${DEV}/api/patterns`)).json();
-  const note = await page
-    .$eval('[data-role="save-note"]', (el) => el.textContent ?? "")
-    .catch(() => "(no note)");
   check(
     "library: delete removes it on the device",
     (apiAfter.patterns ?? []).length === 0,
-    `note=${note} api=${JSON.stringify(apiAfter)}`,
+    JSON.stringify(apiAfter),
   );
 
   // disconnect returns to the local wasm engine

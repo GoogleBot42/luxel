@@ -29,21 +29,27 @@ wordmark · tab bar · status (fps/streaming) · connection. File actions moved 
 the editor toolbar (save/delete/share visible, import/export in a ⋯ overflow
 menu); layout/fps/pause/debug moved to a playback bar under the editor.
 
-### Tabbed structure [L] ✅ (Phase 2, minus Playlist)
-The app now has top-level tabs shown in both modes (device adds Settings).
+### Tabbed structure [L] ✅ (revised — editor-on-demand)
+**The Editor is not a tab.** It opens full-screen (own bar: ← back · name ·
+save/⋯) when you create a pattern or pick one to inspect; back returns to the
+originating library. On load it resumes the last edit (else the Library); on a
+device it opens on the running pattern (back → Device Patterns).
 
-- **Device mode tabs:** Editor · Patterns · Settings _(Playlist deferred — 🔧)_
-  - *Editor* — code + live preview + controls + vars + mapper (still a right-rail
-    `<details>`; promoting it to a CodeMirror sub-tab is Phase 4).
-  - *Patterns* ✅ — the gallery, promoted from a modal overlay to a first-class
-    inline tab (lazy-mounted on first visit, then kept alive so tile engines
-    persist). Picking a pattern jumps back to the Editor tab.
-  - *Playlist* 🔧 — choose patterns and play them on a loop. Needs firmware
-    playlist storage + a scheduler (does not exist yet — big). Still Phase 4.
-  - *Settings* ✅ (shell) — device info + pixel-count readout now; brightness /
+- **Home tabs — playground:** Patterns Library (only).
+- **Home tabs — device:** Patterns Library · Device Patterns · Settings.
+  - *Patterns Library* ✅ — examples + community corpus + your saved patterns
+    (chips), with **+ New pattern**. The gallery is lazy-mounted then kept alive.
+    Picking a tile opens the editor on it.
+  - *Device Patterns* ✅ — the device's stored patterns; each opens/activates in
+    the editor; its own **+ New pattern**. (Replaces the old examples dropdown
+    for device patterns.)
+  - *Playlist* 🔧 — choose patterns and play on a loop. Needs firmware playlist
+    storage + a scheduler. Still deferred.
+  - *Settings* ✅ (shell) — device info + pixel-count readout; brightness /
     pixel-count editing / WiFi form are honest Phase-3 placeholders (see below).
-- **Playground mode tabs:** Editor · Patterns. Share is a prominent toolbar
-  button here (hidden in device mode).
+- The **examples dropdown was removed entirely**; pattern selection is the
+  Library / Device Patterns lists. Share is a prominent editor-bar button in the
+  playground (hidden on a device).
 
 ## Editor
 

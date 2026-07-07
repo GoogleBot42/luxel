@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-07-06 night — navigation redesign: library-first, editor-on-demand ✅
+
+Restructured the app around how you actually work with patterns, per your
+direction:
+
+- **The Editor is no longer a tab.** It opens **full-screen** (its own bar:
+  ← back · name · save/⋯) when you create a pattern or pick one to inspect —
+  which "really gives you the feel that you are editing something." On load it
+  **resumes your last edit** (falls back to the Patterns Library); on a device
+  it opens on the **running pattern**.
+- **"Patterns" → "Patterns Library"**, with a **+ New pattern** button. It holds
+  the examples, community corpus, and your saved patterns (chips). Picking a
+  tile opens it in the editor.
+- **New "Device Patterns" tab** (device mode) — the patterns in the device's
+  memory, each opens/activates in the editor; its own **+ New pattern**.
+- **The examples dropdown is gone entirely.** Pattern selection is the Library /
+  Device Patterns lists now.
+- **Mapping is clearly optional**: the layout selector gained a **"2D map"**
+  option — choosing it is the *only* enable/disable for mapping. It reveals the
+  pattern·map editor sub-tabs and runs the map program; any other layout turns
+  mapping off. (Replaces the old "back to strip" button.)
+
+Both e2e suites were rewritten for the new flow (editor entered via New / tile /
+device pattern; no picker) and are green in real chromium: 58 playground + 28
+device checks. Pushed to the dev device.
+
 ## 2026-07-06 night — control-picker layout, no device-URL field, no share on device ✅
 
 Three UI fixes from your feedback:

@@ -195,7 +195,6 @@
 
 <div class="browser" role="region" aria-label="pattern browser">
   <header>
-    <span class="title">patterns</span>
     {#if loading}
       <span class="spinner header-spinner" aria-hidden="true"></span>
       <span class="dim" data-role="gallery-loading">loading patterns…</span>
@@ -203,8 +202,6 @@
       <span class="dim">{tiles.length} patterns — click one to open it in the editor</span>
     {/if}
     {#if corpusNote}<span class="dim">· {corpusNote}</span>{/if}
-    <span class="spacer"></span>
-    <button data-role="gallery-close" on:click={() => dispatch("close")}>back to editor</button>
   </header>
   <div class="tiles">
     {#each tiles as t, i (i)}
@@ -250,18 +247,8 @@
     font-size: 13px;
   }
 
-  .title {
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    color: var(--accent);
-  }
-
   .dim {
     color: var(--text-dim);
-  }
-
-  .spacer {
-    flex: 1;
   }
 
   .tiles {
