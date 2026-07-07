@@ -43,8 +43,15 @@ device it opens on the running pattern (back → Device Patterns).
   - *Device Patterns* ✅ — the device's stored patterns; each opens/activates in
     the editor; its own **+ New pattern**. (Replaces the old examples dropdown
     for device patterns.)
-  - *Playlist* 🔧 — choose patterns and play on a loop. Needs firmware playlist
-    storage + a scheduler. Still deferred.
+  - *Playlist* ✅ (firmware v0.1.15) — plays saved patterns in order with
+    **per-entry parameters** (the same pattern can appear multiple times with
+    different looks) and a flexible duration model: a playlist-level default,
+    optional per-item override, and default-0/blank = manual advance. Flash-
+    persisted; **resumes across reboots**. Wire = line format (D/I/C, no JSON
+    parser); scheduler = an embassy task loading each item's pattern + controls;
+    a manual code push stops it. UI: PlaylistRow with inline Controls + reorder/
+    remove; "+ playlist" in the editor toolbar captures the current params.
+    Single ad-hoc (non-playlist) patterns don't persist across reboot yet.
   - *Settings* ✅ (shell) — device info + pixel-count readout; brightness /
     pixel-count editing / WiFi form are honest Phase-3 placeholders (see below).
 - The **examples dropdown was removed entirely**; pattern selection is the

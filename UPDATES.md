@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-07-06 night — Playlist + "untitled" fix ✅
+
+**Playlist** (firmware v0.1.15): a new device tab that plays your saved patterns
+in order. Each entry carries its own **parameters**, so the same pattern can
+appear multiple times with different looks — "+ playlist" in the editor captures
+the current slider values. Durations are flexible: a playlist-level default,
+each item can override it, and default-blank = manual advance (so you get global
+timed, per-item timed, or manual, even mixed). It's **saved on the device and
+resumes across reboots** — verified on the wall unit (after a reboot the playlist
+and its params were intact and still playing). Built across the native mirror,
+the web UI (reorder / remove / inline params), and the firmware scheduler.
+
+**"untitled pattern" fix:** on a device the header showed "untitled" because the
+device streams only source, not which saved pattern it is. Now the editor
+recognizes the running pattern as its saved library entry and shows the name.
+(Along the way, fixed the editor spuriously marking freshly-loaded patterns as
+edited — which also makes the resume-your-edits behavior more reliable.)
+
+Re: your reboot question — **playlists** now persist and resume across reboots.
+A single ad-hoc (non-playlist) pattern still resets to the default on reboot;
+I can add persistence for that too — say the word.
+
 ## 2026-07-06 night — clean device load (no flash, clear "running on device") ✅
 
 You saw the window flash the playground before a connecting spinner appeared. On
