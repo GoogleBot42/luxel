@@ -86,6 +86,15 @@ try {
   });
   check("waterfall shows pixels", lit);
 
+  // file actions live in a toolbar ABOVE the editor (inside the editor's left
+  // column), not in the header next to the connection controls
+  const saveInToolbar = await page.$(
+    'main.editor-view .left [data-role="editor-toolbar"] [data-role="save"]',
+  );
+  check("file actions are in the editor toolbar (above the editor)", saveInToolbar !== null);
+  const saveInHeader = await page.$('header [data-role="save"]');
+  check("no file actions in the header", saveInHeader === null);
+
   // ── 3. a clean rainbow, then typing + compile error. Single-line bodies
   //      throughout: CodeMirror auto-closes `{`, so a trailing `}` on its own
   //      line would double up. ──

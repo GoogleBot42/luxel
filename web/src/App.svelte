@@ -159,6 +159,12 @@
   function openEditor(home: Tab): void {
     tab = home;
     editing = true;
+    // A new/switched pattern gets a fresh waterfall: wipe the previous
+    // pattern's scroll history now, synchronously. recompile() also clears on a
+    // successful local compile, but that path is skipped in device mode (push
+    // returns early) and on a compile error — so clearing here covers every
+    // open path (device-pattern switch included) regardless of outcome.
+    preview?.clear();
   }
 
   function closeEditor(): void {
@@ -408,6 +414,7 @@
       source = main;
       controlValues = {};
       editing = true; // a dropped/imported .epe opens straight in the editor
+      preview?.clear(); // fresh waterfall for the imported pattern
       await tick();
       recompile();
     } catch (e) {
@@ -1171,10 +1178,32 @@ export function render(index) {
     {/if}
     <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
 
-    {#if editing}
-      {#if saveNote}<span class="dim note" data-role="save-note">{saveNote}</span>{/if}
-      {#if shareNote}<span class="dim note" data-role="share-note">{shareNote}</span>{/if}
-      <span class="file-actions">
+    {#if !isPlayground}
+      <span class="conn">
+        {#if device}
+          <span class="device-badge mono">device{device.base ? ` ${device.base}` : ""}</span>
+          <button on:click={disconnectDevice}>disconnect</button>
+        {:else}
+          <!-- the device address is already known — reconnect, no URL to type -->
+          <button
+            data-role="reconnect"
+            on:click={() => void connectDevice(deviceBase ?? "")}
+            title={`reconnect to ${deviceBase || "the device"}`}
+          >
+            {deviceError ? "retry" : "reconnect"}
+          </button>
+        {/if}
+      </span>
+    {/if}
+  </header>
+
+  <!-- ───────────── Editor tab ───────────── -->
+  <main class="editor-view" hidden={!editing}>
+    <section class="left">
+      <!-- File actions live in a toolbar fixed above the editor (not in the
+           header next to the device connection) — they act on the pattern
+           being edited. -->
+      <div class="editor-toolbar" data-role="editor-toolbar">
         <button
           data-role="save"
           title={device ? "save the current pattern on the device" : "save to this browser's library"}
@@ -1222,6 +1251,8 @@ export function render(index) {
             </div>
           {/if}
         </span>
+        {#if saveNote}<span class="dim note" data-role="save-note">{saveNote}</span>{/if}
+        {#if shareNote}<span class="dim note" data-role="share-note">{shareNote}</span>{/if}
         <input
           class="file-input"
           type="file"
@@ -1229,31 +1260,8 @@ export function render(index) {
           bind:this={fileInput}
           on:change={onImportPick}
         />
-      </span>
-    {/if}
+      </div>
 
-    {#if !isPlayground}
-      <span class="conn">
-        {#if device}
-          <span class="device-badge mono">device{device.base ? ` ${device.base}` : ""}</span>
-          <button on:click={disconnectDevice}>disconnect</button>
-        {:else}
-          <!-- the device address is already known — reconnect, no URL to type -->
-          <button
-            data-role="reconnect"
-            on:click={() => void connectDevice(deviceBase ?? "")}
-            title={`reconnect to ${deviceBase || "the device"}`}
-          >
-            {deviceError ? "retry" : "reconnect"}
-          </button>
-        {/if}
-      </span>
-    {/if}
-  </header>
-
-  <!-- ───────────── Editor tab ───────────── -->
-  <main class="editor-view" hidden={!editing}>
-    <section class="left">
       {#if layout.kind === "map"}
         <div class="subtabs" data-role="editor-subtabs">
           <button
@@ -1790,15 +1798,22 @@ export function render(index) {
     font-size: 12px;
   }
 
-  .file-actions {
+  .editor-toolbar {
     display: flex;
     align-items: center;
     gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
   }
 
-  .file-actions .primary {
+  .editor-toolbar .primary {
     border-color: var(--accent);
     color: var(--accent);
+  }
+
+  .editor-toolbar .note {
+    margin-left: auto;
   }
 
   .overflow {
@@ -1814,7 +1829,7 @@ export function render(index) {
   .menu {
     position: absolute;
     top: calc(100% + 4px);
-    right: 0;
+    left: 0;
     z-index: 20;
     display: flex;
     flex-direction: column;
