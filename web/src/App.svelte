@@ -91,6 +91,11 @@
   /** LED protocol the device is driving + the selectable options. */
   let deviceProtocol = "sk9822";
   let protocolOptions: string[] = ["sk9822", "ws2812"];
+  /** WiFi: the network the device will join next boot (never the password). */
+  let wifiSsid: string | null = null;
+  let wifiSource = "none";
+  let wifiForm = { ssid: "", password: "" };
+  let wifiNote = "";
 
   // ---- playlist (device mode) ----
   let playlist: Playlist = { defaultSec: 0, playing: false, index: 0, items: [] };
@@ -429,6 +434,14 @@
         if (p.options?.length) protocolOptions = p.options;
       } catch {
         /* older firmware without /api/protocol — leave the default */
+      }
+      try {
+        const w = await session.wifi();
+        wifiSsid = w.ssid;
+        wifiSource = w.source;
+        wifiForm = { ssid: w.ssid ?? "", password: "" };
+      } catch {
+        /* older firmware — leave defaults */
       }
       compileError = null;
       await refreshDevicePatterns();
@@ -963,6 +976,24 @@ export function render(index) {
   function onBrightnessChange(e: Event): void {
     brightness = Number((e.target as HTMLInputElement).value);
     void device?.setBrightness(brightness);
+  }
+
+  /** Save WiFi creds — the device stores them and reboots to apply. */
+  function saveWifi(): void {
+    const ssid = wifiForm.ssid.trim();
+    if (!ssid) return;
+    if (!window.confirm(`Save WiFi and reboot the device to join "${ssid}"?`)) return;
+    void (async () => {
+      wifiNote = "saving…";
+      const r = await device?.setWifi(ssid, wifiForm.password);
+      if (r?.ok) {
+        wifiNote = "saved — the device is rebooting to join the new network";
+        wifiSsid = ssid;
+        wifiSource = "flash";
+      } else {
+        wifiNote = r?.error ? `failed: ${r.error}` : "save failed";
+      }
+    })();
   }
 
   /** Live LED-protocol change: the device reconfigures its driver (no reboot). */
@@ -1853,10 +1884,48 @@ export function render(index) {
 
         <section class="card">
           <h2>WiFi</h2>
+          <div class="field">
+            <span class="flabel">Current</span>
+            <span class="mono" data-role="wifi-current">
+              {wifiSsid ?? "—"}
+              <span class="dim">
+                ({wifiSource === "flash"
+                  ? "saved"
+                  : wifiSource === "builtin"
+                    ? "compiled-in"
+                    : "none"})
+              </span>
+            </span>
+          </div>
+          <div class="field">
+            <span class="flabel">Network</span>
+            <input class="grow" data-role="wifi-ssid" placeholder="SSID" bind:value={wifiForm.ssid} />
+          </div>
+          <div class="field">
+            <span class="flabel">Password</span>
+            <input
+              class="grow"
+              data-role="wifi-pass"
+              type="password"
+              placeholder="password"
+              bind:value={wifiForm.password}
+            />
+          </div>
+          <div class="field">
+            <button
+              class="primary"
+              data-role="wifi-save"
+              disabled={!device || !wifiForm.ssid.trim()}
+              on:click={saveWifi}
+            >
+              save &amp; reboot
+            </button>
+            {#if wifiNote}<span class="dim" data-role="wifi-note">{wifiNote}</span>{/if}
+          </div>
           <p class="dim hint">
-            The device stores WiFi credentials (<code>/api/wifi</code>) and reboots to apply them. A
-            form to change them from here — plus AP-mode provisioning — arrives with the settings
-            firmware work.
+            The device stores the credentials in flash and <strong>reboots</strong> to join the new
+            network. AP-mode provisioning (for a device that can't reach any known network) is still
+            to come.
           </p>
         </section>
 

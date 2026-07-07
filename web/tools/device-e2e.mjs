@@ -277,8 +277,29 @@ try {
     if (d.message().includes("save pattern")) return void d.accept("device kept");
     if (d.message().includes("delete")) return void d.accept();
     if (d.message().includes("clear")) return void d.accept();
+    if (d.message().includes("WiFi")) return void d.accept();
     void d.dismiss();
   });
+
+  // WiFi settings form (the panel is in the DOM even while the editor is open)
+  const w0 = await (await fetch(`${DEV}/api/wifi`)).json();
+  check("wifi: GET returns {ssid,source}", "source" in w0, JSON.stringify(w0));
+  await page.$eval('[data-role="wifi-ssid"]', (el) => {
+    el.value = "TestNet";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.$eval('[data-role="wifi-pass"]', (el) => {
+    el.value = "hunter2000";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(100);
+  await page.$eval('[data-role="wifi-save"]', (el) => el.click()); // panel is hidden; click directly
+  await sleep(500);
+  check(
+    "wifi: save stores the SSID on the device",
+    (await (await fetch(`${DEV}/api/wifi`)).json()).ssid === "TestNet",
+  );
+
   await page.click('[data-role="save"]'); // save (editor header) → stores on the device
   await sleep(900);
   const apiList = await (await fetch(`${DEV}/api/patterns`)).json();

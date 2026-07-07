@@ -120,6 +120,7 @@ struct State {
     playlist: Mutex<Playlist>,
     pl_playing: AtomicBool,
     pl_index: AtomicUsize,
+    wifi_ssid: Mutex<Option<String>>,
 }
 
 fn push(state: &State, msg: Msg) {
@@ -772,6 +773,25 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/wifi") => {
+            let body = match &*state.wifi_ssid.lock().unwrap() {
+                Some(ssid) => format!("{{\"ssid\":\"{}\",\"source\":\"flash\"}}", json_escape(ssid)),
+                None => String::from("{\"ssid\":null,\"source\":\"none\"}"),
+            };
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/wifi") => {
+            // body = "ssid\npassword"; the mirror just stores the ssid (no reboot)
+            let body = String::from_utf8_lossy(&req.body);
+            let ssid = body.split('\n').next().unwrap_or("").trim().to_string();
+            let r = if ssid.is_empty() {
+                String::from("{\"ok\":false,\"error\":\"ssid must be 1..=32 bytes\"}")
+            } else {
+                *state.wifi_ssid.lock().unwrap() = Some(ssid.clone());
+                format!("{{\"ok\":true,\"ssid\":\"{}\",\"note\":\"rebooting to apply\"}}", json_escape(&ssid))
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("GET", "/api/playlist") => {
             respond(&mut stream, 200, "application/json", playlist_json(&state).as_bytes());
         }
@@ -886,6 +906,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         playlist: Mutex::new(Playlist::default()),
         pl_playing: AtomicBool::new(false),
         pl_index: AtomicUsize::new(0),
+        wifi_ssid: Mutex::new(None),
     });
 
     {

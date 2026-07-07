@@ -120,6 +120,23 @@ export class DeviceSession {
     await fetch(this.url(`/api/patterns/${id}`), { method: "DELETE" });
   }
 
+  /** Which network the device will join next boot (never the password). */
+  async wifi(): Promise<{ ssid: string | null; source: string }> {
+    return (await (await fetch(this.url("/api/wifi"))).json()) as {
+      ssid: string | null;
+      source: string;
+    };
+  }
+
+  /** Set WiFi credentials — the device stores them and REBOOTS to apply. */
+  async setWifi(ssid: string, password: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(this.url("/api/wifi"), {
+      method: "POST",
+      body: `${ssid}\n${password}`,
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
   /** Compile + run a stored pattern on the device. */
   async activatePattern(id: string): Promise<RunResult> {
     const res = await fetch(this.url(`/api/patterns/${id}/activate`), { method: "POST" });
