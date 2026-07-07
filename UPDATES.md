@@ -1,5 +1,14 @@
 # Update log
 
+## 2026-07-06 night — clean device load (no flash, clear "running on device") ✅
+
+You saw the window flash the playground before a connecting spinner appeared. On
+a device the app now probes for the device in parallel with the wasm load and
+holds a **full-screen boot cover** until it's decided device-vs-playground and
+loaded the device's running pattern — so nothing flashes first. The cover reads
+**"opening the pattern running on the device…"**, making it clear the pattern is
+the one already on the device. Web-only hot reload; both e2e suites green.
+
 ## 2026-07-06 night — device mode = local preview + push (no streaming) ✅
 
 Per your call: the live pixel stream from the device wasn't helpful, so it's
