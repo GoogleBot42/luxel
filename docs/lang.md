@@ -281,7 +281,10 @@ differ, it is deliberate:
   each platform, not across them.
 - **Array writes with fractional literal indices**: PB aborts the frame;
   Luxel truncates (consistent with PB's own variable-index behavior).
-- **Builtin arity is not compile-checked** — missing arguments are 0.
+- **Builtin arity is not compile-checked** — missing arguments are 0
+  (PB rejects e.g. one-arg `square(x)` at compile time; we default duty).
+- **Builtins are first-class values** in Luxel (`f = floor` works); PB
+  rejects referencing a builtin without calling it ("Undefined symbol").
 - `//#` control-bound comments are a Luxel extension; PB ignores them.
 
 ## Luxel extensions

@@ -90,7 +90,7 @@ impl Value {
     pub fn num(self) -> Fx {
         match self {
             Value::Num(v) => v,
-            _ => Fx::ZERO, // TODO(oracle): arithmetic on refs
+            _ => Fx::ZERO, // oracle-verified: refs act as 0 in arithmetic
         }
     }
 

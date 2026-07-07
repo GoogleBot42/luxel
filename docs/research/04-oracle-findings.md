@@ -123,6 +123,41 @@ errors in raw 16.16 units unless noted:
   deliberate leniency (everything that compiles on PB compiles here);
   revisit if strict-compat mode is wanted.
 
+## Sweep 2026-07-07 (fw 3.67 — 130/165 exact, + 6 new probes)
+
+- **Transforms fully verified** (the raw sweep "diffs" decoded as map
+  artifacts: the oracle's installed dodecahedron map puts pixel 0 at world
+  x≈1.0 while our CLI side ran mapless). On equal maps Luxel matches PB on
+  all three questions: first-called transform is *outermost*
+  (`translate(.25)` then `scale(2)` → `(x+.25)·2`), transforms
+  **accumulate across frames** (no implicit per-frame reset), and
+  `rotate(PI/2)` maps `(x,y) → (−y,x)`. Pinned in
+  `semantics.rs::transform_semantics_match_pixelblaze` and
+  `transforms_accumulate_across_frames`. 1D-x transform behavior remains
+  unverifiable while a map is installed on the oracle.
+- **Refs in arithmetic**: an array value used in math acts as 0
+  (`a+1 == 1`) — matches Luxel. Ref equality is identity (`a==a` true,
+  `a==b` false for equal contents) — matches.
+- **Assigning over a builtin's name** (`floor = 5`) is allowed and reads
+  back 5; *calling* the name afterwards aborts pattern init — both sides
+  identical (sentinel never lands).
+- **`arr.replace(find, val)`** method form: exact wrap-encoded match.
+- **PB rejects a builtin as a value** (`f = floor` → "Undefined symbol
+  floor") — Luxel's first-class builtin references are a documented
+  superset, same class as 1-arg `square`.
+- Division/modulo-by-zero, overflow wrap, all shift edge cases (incl.
+  negative `>>` = arithmetic shift), rounding family, `%` vs `mod`, logic
+  values, literal precision, array OOB/fractional-index sentinels: **all
+  exact matches** — those TODO(oracle) markers are settled.
+- **`pow(negative, fractional)` fixed**: PB propagates log2(neg) = raw
+  `0x80000000` through (its vars JSON shows it *unsigned* as +32768.0); we
+  returned 0. Luxel now returns `Fx::MIN` — the identical bit pattern, the
+  closest an i32 can get (+2³¹ is unrepresentable). `log2(0)`/`log2(neg)`
+  = raw i32::MIN verified exact on both.
+- Transcendentals: ±1–5 raw as before. Largest remaining numeric gaps:
+  `asin/acos` ~167 raw (~0.0025) and `atan(100)` 128 raw — fine for LEDs,
+  but the place to look if we ever chase exactness.
+
 ## Operational notes
 
 - The device's websocket (port 81) wedges permanently if clients vanish

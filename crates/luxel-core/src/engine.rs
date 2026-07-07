@@ -7,7 +7,10 @@
 //! Pixel maps install via [`Engine::set_map`] (host-normalized to world
 //! units 0..1 exclusive); render selection follows the documented priority
 //! per map dimensionality, missing coordinates fill with mid-space (0.5),
-//! and the transform stack applies to 2D/3D coordinates. TODO(oracle).
+//! and the transform stack applies to 2D/3D coordinates. Oracle-verified
+//! 2026-07-07: composition order (first call outermost), cross-frame
+//! accumulation, and rotate direction all match PB; 1D-x remains
+//! TODO(oracle) (the oracle has a map installed, masking the 1D path).
 
 use alloc::string::String;
 use alloc::vec::Vec;

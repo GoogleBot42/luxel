@@ -43,7 +43,7 @@ fn arithmetic_semantics() {
     assert_eq!(eval("182 * 182").to_f64(), -32412.0);
     assert_eq!(eval("0.001 * 0.001"), Fx::ZERO); // quantizes to zero
     assert_eq!(eval("1 / 2"), fx(0.5));
-    assert_eq!(eval("5 / 0"), Fx::ZERO); // TODO(oracle)
+    assert_eq!(eval("5 / 0"), Fx::ZERO); // oracle-verified (div0 vector)
     assert_eq!(eval("floor(-5.1)"), fx(-6.0));
     assert_eq!(eval("ceil(-5.9)"), fx(-5.0));
     assert_eq!(eval("frac(-5.5)"), fx(-0.5));
@@ -507,7 +507,8 @@ fn compile_errors() {
 #[test]
 fn implicit_global_can_shadow_a_builtin() {
     // "implicit assignment creates a global" wins over the builtin table;
-    // calling the shadowed name is then a runtime error. TODO(oracle).
+    // calling the shadowed name is then a runtime error. Oracle-verified
+    // 2026-07-07: PB aborts init identically (shadow_call sentinel).
     let e = Engine::new("sin = 3\nout = sin(1)", 10, 1).unwrap();
     assert!(e.last_error.is_some());
 }
@@ -619,6 +620,68 @@ fn extension_builtins() {
     assert!((eval("easeOutBounce(0.3636)").to_f64() - 1.0).abs() < 0.02);
     // trough between bounces dips well below 1
     assert!(eval("easeOutBounce(0.55)").to_f64() < 0.85);
+}
+
+#[test]
+fn transform_semantics_match_pixelblaze() {
+    // Pinned against the real PB (fw 3.67, oracle sweep 2026-07-07). Its
+    // installed map put pixel 0 at world (≈1.0, 0.5); replicate that here
+    // (set_map normalizes per axis) and expect the same transform behavior:
+    //   - order:  first-called transform is OUTERMOST
+    //             translate(.25) then scale(2)  →  (x + .25) · 2
+    //             scale(2) then translate(.25)  →  x · 2 + .25
+    //   - rotate(PI/2): (x, y) → (−y, x)
+    let src = "export var ta = -99\nexport var tb = -99\n\
+               export var rx = -99\nexport var ry = -99\n\
+               export function beforeRender(delta) {\n\
+                 resetTransform()\n\
+                 translate(0.25, 0)\n\
+                 scale(2, 2)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) ta = x })\n\
+                 resetTransform()\n\
+                 scale(2, 2)\n\
+                 translate(0.25, 0)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) tb = x })\n\
+                 resetTransform()\n\
+                 rotate(PI / 2)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) { rx = x\n ry = y } })\n\
+               }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 3, 1).expect("compile");
+    // normalized: pixel 0 → (1.0, 0.5)
+    let m = |x: f64, y: f64| [Fx::from_f64(x), Fx::from_f64(y), Fx::ZERO];
+    e.set_map(2, &[m(1.0, 0.5), m(0.0, 0.0), m(0.5, 1.0)]);
+    e.frame(Fx::ZERO);
+    let v = |n: &str| e.var(n).unwrap().num().to_f64();
+    // PB measured: ta=2.4999695, tb=2.2499695, rx=−0.49998474, ry=0.99998474
+    assert!((v("ta") - 2.5).abs() < 0.01, "ta = {}", v("ta"));
+    assert!((v("tb") - 2.25).abs() < 0.01, "tb = {}", v("tb"));
+    assert!((v("rx") + 0.5).abs() < 0.01, "rx = {}", v("rx"));
+    assert!((v("ry") - 1.0).abs() < 0.01, "ry = {}", v("ry"));
+}
+
+#[test]
+fn transforms_accumulate_across_frames() {
+    // PB measured (oracle sweep): a translate(0.1) per beforeRender with no
+    // resetTransform stacks up — x advances 0.1 per frame (1.1, 1.2, 1.3
+    // from base 1.0 on the device). No implicit per-frame reset.
+    let src = "export var x0 = -99\nexport var pass = 0\n\
+               export function beforeRender(delta) {\n\
+                 pass = pass + 1\n\
+                 translate(0.1, 0)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) x0 = x })\n\
+               }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 2, 1).expect("compile");
+    let v = |e: &Engine| e.var("x0").unwrap().num().to_f64();
+    e.frame(Fx::ZERO);
+    let a = v(&e);
+    e.frame(Fx::ZERO);
+    let b = v(&e);
+    e.frame(Fx::ZERO);
+    let c = v(&e);
+    assert!((b - a - 0.1).abs() < 0.01, "frame 2: {a} → {b}");
+    assert!((c - b - 0.1).abs() < 0.01, "frame 3: {b} → {c}");
 }
 
 #[test]
