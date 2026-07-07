@@ -445,6 +445,53 @@ pub fn source_of(id: &str) -> Option<String> {
     .flatten()
 }
 
+/// Human name of a stored pattern.
+pub fn name_of(id: &str) -> Option<String> {
+    lookup(id).map(|(_, _, _, name)| name)
+}
+
+// --- small reserved-key blobs (playlist definition + playback state) ---
+// These live in the meta-space (< CHUNK_FLAG), above any real seq, alongside
+// FORMAT_KEY. Each must fit one flash page.
+pub const PLAYLIST_KEY: u32 = 0x7FFF_FFFE;
+pub const PLAYSTATE_KEY: u32 = 0x7FFF_FFFD;
+
+/// Store a small blob under a reserved key. False if storage is unavailable or
+/// the blob is too large for one page.
+pub fn store_blob(key: u32, bytes: &[u8]) -> bool {
+    if bytes.len() > CHUNK {
+        return false;
+    }
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return false;
+    }
+    with_store!(start, |af, range, buf| {
+        let mut cache = NoCache::new();
+        let b: &[u8] = bytes;
+        map::store_item(&mut af, range.clone(), &mut cache, buf, &key, &b)
+            .await
+            .is_ok()
+    })
+    .unwrap_or(false)
+}
+
+/// Read a blob previously written with [store_blob].
+pub fn read_blob(key: u32) -> Option<Vec<u8>> {
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return None;
+    }
+    with_store!(start, |af, range, buf| {
+        let mut cache = NoCache::new();
+        match map::fetch_item::<u32, &[u8], _>(&mut af, range, &mut cache, buf, &key).await {
+            Ok(Some(b)) => Some(b.to_vec()),
+            _ => None,
+        }
+    })
+    .flatten()
+}
+
 /// `POST /api/patterns` body `"name\nsource"` → `{"ok":true,"id"}`.
 /// Upserts by name. Caller compile-checks first.
 pub fn save(name: &str, source: &str) -> String {

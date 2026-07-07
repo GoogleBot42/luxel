@@ -55,6 +55,7 @@ mod config;
 mod leds;
 mod ota;
 mod patterns;
+mod playlist;
 mod server;
 mod shared;
 
@@ -198,6 +199,7 @@ async fn main(spawner: Spawner) -> ! {
         ota::init(esp_storage::FlashStorage::new(p.FLASH));
     assets::init();
     patterns::init();
+    playlist::init(); // after patterns::init (shares the storage partition)
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }
@@ -229,6 +231,7 @@ async fn main(spawner: Spawner) -> ! {
     // whether it interacts with the esp32 radio crashes.
     if option_env!("LUXEL_QUIET").is_none() {
         spawner.spawn(render_task(spi).unwrap());
+        spawner.spawn(playlist::playlist_task().unwrap());
     } else {
         println!("LUXEL_QUIET: render task disabled");
     }

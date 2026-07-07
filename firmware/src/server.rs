@@ -23,6 +23,9 @@
 //!   POST /api/config    body = pixel count → live resize + persisted {"ok":true,"pixels":N}
 //!   GET  /api/protocol  {"protocol":"sk9822","options":["sk9822","ws2812"]}
 //!   POST /api/protocol  body = name → live SPI reconfig + persisted {"ok":true,"protocol":"…"}
+//!   GET  /api/playlist  {"defaultSec":N,"playing":bool,"index":N,"items":[{"id","name","sec","controls"}]}
+//!   POST /api/playlist  body = D/I/C lines → stores + applies live
+//!   POST /api/playlist/{play,stop,next,prev}  play body = start index
 //!   GET    /api/patterns              {"patterns":[{"id","name"},…]}
 //!   GET    /api/patterns/<id>         {"id","name","source"}
 //!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
@@ -446,6 +449,7 @@ async fn api_code(src: String) -> ApiResponse {
     // source locations; the render task recompiles the accepted source.
     json_response(match Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
         Ok(_) => {
+            crate::playlist::stop(); // a manual push takes over from the playlist
             MSG_QUEUE.send(Msg::Code(src)).await;
             String::from("{\"ok\":true}")
         }
@@ -704,6 +708,40 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let conn = request.body_connection.finalize().await?;
                     return response.write_to(conn, response_writer).await;
                 }
+                // POST /api/playlist — line-format definition (D/I/C lines).
+                // Persisted to flash; applied live if already playing.
+                "/api/playlist" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    crate::playlist::set_from_wire(&body);
+                    let conn = request.body_connection.finalize().await?;
+                    return json_response(String::from("{\"ok\":true}"))
+                        .write_to(conn, response_writer)
+                        .await;
+                }
+                "/api/playlist/play"
+                | "/api/playlist/stop"
+                | "/api/playlist/next"
+                | "/api/playlist/prev" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    match route {
+                        "/api/playlist/play" => {
+                            crate::playlist::play(body.trim().parse().unwrap_or(0))
+                        }
+                        "/api/playlist/stop" => crate::playlist::stop(),
+                        "/api/playlist/next" => crate::playlist::step(1),
+                        _ => crate::playlist::step(-1),
+                    }
+                    let conn = request.body_connection.finalize().await?;
+                    return json_response(String::from("{\"ok\":true}"))
+                        .write_to(conn, response_writer)
+                        .await;
+                }
                 "/api/code" | "/api/control" | "/api/var" => {
                     let body = match request.body_connection.body().read_all().await {
                         Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
@@ -883,6 +921,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     MAX_PIXELS,
                     Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
                 ))),
+                "/api/playlist" => respond!(json_response(crate::playlist::to_json())),
                 "/api/protocol" => respond!(json_response(format!(
                     "{{\"protocol\":\"{}\",\"options\":[\"sk9822\",\"ws2812\"]}}",
                     Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
