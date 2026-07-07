@@ -570,6 +570,11 @@ impl Vm {
         self.arrays.get(id as usize).map(|a| a.as_slice())
     }
 
+    /// Mutable view of an array (sensor-frame injection writes in place).
+    pub fn array_mut(&mut self, id: u32) -> Option<&mut [Value]> {
+        self.arrays.get_mut(id as usize).map(|a| a.as_mut_slice())
+    }
+
     /// Read-only view of the (possibly suspended) call stack.
     pub fn frames(&self) -> &[Frame] {
         &self.frames

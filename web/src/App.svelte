@@ -29,6 +29,7 @@
     type RuntimeError,
     type StepKind,
   } from "./lib/luxel";
+  import { MicSource } from "./lib/audio";
 
   let luxel: Luxel | undefined;
   let engine: Engine | undefined;
@@ -1196,6 +1197,29 @@ export function render(index) {
     }
   }
 
+  // ---- microphone → sensor patterns (frequencyData etc.) ----
+  const mic = new MicSource();
+  let micOn = false;
+  let micError = "";
+
+  function toggleMic(): void {
+    if (micOn) {
+      mic.stop();
+      micOn = false;
+      return;
+    }
+    void (async () => {
+      try {
+        await mic.start();
+        micOn = true;
+        micError = "";
+      } catch {
+        micError = "microphone unavailable";
+        setTimeout(() => (micError = ""), 4000);
+      }
+    })();
+  }
+
   function toggleDebug(): void {
     debugMode = !debugMode;
     if (!engine) return;
@@ -1292,6 +1316,7 @@ export function render(index) {
     if (lastT !== 0 && t - lastT < minInterval) return;
     const dt = lastT === 0 ? 1000 / (targetFps || 60) : Math.min(t - lastT, 200);
     lastT = t;
+    if (micOn) engine.setSensors(mic.frame());
     const px = engine.frame(dt);
     if (engine.debugPaused()) {
       onPausedRefresh();
@@ -1405,6 +1430,7 @@ export function render(index) {
     clearInterval(playlistPoll);
     engine?.free();
     mapEngine?.free();
+    mic.stop();
   });
 </script>
 
@@ -1719,6 +1745,16 @@ export function render(index) {
         {:else}
           <!-- the preview runs on the local engine (even on a device), so the
                step-debugger works everywhere -->
+          <button
+            class="debug-toggle"
+            class:active={micOn}
+            data-role="mic-toggle"
+            title="feed microphone audio to sensor patterns (frequencyData, energyAverage, maxFrequency)"
+            on:click={toggleMic}
+          >
+            sound
+          </button>
+          {#if micError}<span class="mapper-error" data-role="mic-error">{micError}</span>{/if}
           <button
             class="debug-toggle"
             class:active={debugMode}

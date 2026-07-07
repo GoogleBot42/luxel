@@ -330,6 +330,49 @@ pub extern "C" fn lx_set_wall_clock(h: i32, unix_seconds: f64) {
     with_engine(h, |s| s.engine.set_wall_clock(unix_seconds as i64));
 }
 
+/// 1 if the pattern binds any sensor-board variable (frequencyData,
+/// energyAverage, …) — the UI uses this to decide whether to run audio
+/// capture at all.
+#[no_mangle]
+pub extern "C" fn lx_wants_sensors(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.wants_sensors() as i32).unwrap_or(0)
+}
+
+/// Inject one sensor frame as 43 packed raw-16.16 i32s:
+/// [0..32) frequencyData, [32] energyAverage, [33] maxFrequencyMagnitude,
+/// [34] maxFrequency (Hz), [35] light, [36..39) accelerometer,
+/// [39..44) analogInputs. Shorter buffers leave the tail fields zero.
+///
+/// # Safety
+/// `ptr` must point to `len` valid i32s (lx_alloc buffers are align-1, so
+/// the values are read unaligned).
+#[no_mangle]
+pub unsafe extern "C" fn lx_set_sensors(h: i32, ptr: *const i32, len: usize) {
+    use luxel_core::engine::SensorFrame;
+    let at = |i: usize| {
+        if i < len {
+            Fx::from_raw(ptr.add(i).read_unaligned())
+        } else {
+            Fx::ZERO
+        }
+    };
+    let mut s = SensorFrame::default();
+    for i in 0..32 {
+        s.frequency_data[i] = at(i);
+    }
+    s.energy_average = at(32);
+    s.max_frequency_magnitude = at(33);
+    s.max_frequency = at(34);
+    s.light = at(35);
+    for i in 0..3 {
+        s.accelerometer[i] = at(36 + i);
+    }
+    for i in 0..5 {
+        s.analog_inputs[i] = at(39 + i);
+    }
+    with_engine(h, |slot| slot.engine.set_sensors(&s));
+}
+
 // ---- map programs (this engine emits coordinates, not colors) ----
 
 /// Turn this engine into a map-program runner (per-pixel `plot(x, y[, z])`).

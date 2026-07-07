@@ -248,6 +248,17 @@ GPIO (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`,
 `clockWeekday`) — needs wall time from the host. Sequencer/playlist
 (`sequencerNext`, `playlistGetPosition`, …) and `nodeId()`.
 
+### Sensor bindings
+
+`export var` any of `frequencyData` (32 bins, ~37 Hz–10 kHz, 0..1),
+`energyAverage`, `maxFrequencyMagnitude` (0..1), `maxFrequency` (Hz),
+`light`, `accelerometer` (3), `analogInputs` (5) — the PB sensor-board
+surface. Bound vars are zero-filled when no source is attached (sound
+patterns run dark, not error). Sources: the playground's **sound** toggle
+(browser microphone → WebAudio FFT), and on hardware the PB sensor
+expansion board's serial stream. Updates land between frames (~40 Hz on
+real hardware).
+
 ### Predefined globals
 
 `pixelCount`; math constants `PI PI2 PI3_4 PISQ E SQRT2 SQRT1_2 LN2 LN10

@@ -22,7 +22,14 @@ await sleep(1500);
 const browser = await puppeteer.launch({
   executablePath: CHROMIUM,
   headless: true,
-  args: ["--no-sandbox", "--disable-gpu", "--window-size=1400,900"],
+  args: [
+    "--no-sandbox",
+    "--disable-gpu",
+    "--window-size=1400,900",
+    // fake mic (a generated tone) + auto-grant, for the sound-reactive check
+    "--use-fake-device-for-media-stream",
+    "--use-fake-ui-for-media-stream",
+  ],
 });
 
 const fails = [];
@@ -194,7 +201,7 @@ try {
   await sleep(150);
   const status3 = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
   check("continue re-arms breakpoint", status3.includes("pixel 2"), status3.trim());
-  await page.click(".debug-toggle"); // debug off (also clears breakpoints on next swap)
+  await page.click('[data-role="debug"]'); // debug off (also clears breakpoints on next swap)
   await sleep(300);
   check("debug off resumes rendering", (await page.$(".debugger")) === null);
   await page.screenshot({ path: `${shotDir}/e2e-debugger.png` });
@@ -216,7 +223,7 @@ try {
   check("globals test paused", gpaused);
   const globals = await page.$eval('[data-role="globals"]', (el) => el.textContent ?? "").catch(() => "");
   check("globals pane shows implicit globals (phase, bright)", globals.includes("phase") && globals.includes("bright"), globals.slice(0, 40));
-  await page.click(".debug-toggle");
+  await page.click('[data-role="debug"]');
   await sleep(300);
 
   // ── 5. controls: slider + numeric entry are two-way ──
@@ -290,6 +297,25 @@ try {
   await page.click('[data-role="pause"]');
   const varText = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
   check("var watcher lists zoom", varText.includes("zoom"));
+
+  // ── 7b. sound: mic toggle feeds sensor vars (fake chromium mic tone) ──
+  await setEditor(
+    page,
+    "export var energyAverage\nexport var frequencyData\n" +
+      "export function render(index) { hsv(0, 1, energyAverage) }",
+  );
+  await sleep(300);
+  await page.click('[data-role="mic-toggle"]');
+  let heard = false;
+  for (let i = 0; i < 12 && !heard; i++) {
+    await sleep(250);
+    // the var watcher polls every 250ms; fake mic emits a beeping tone
+    const t = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
+    const m = t.match(/energyAverage\s*([0-9.]+)/);
+    if (m && Number(m[1]) > 0.001) heard = true;
+  }
+  check("sound: mic drives energyAverage", heard);
+  await page.click('[data-role="mic-toggle"]'); // off again for the rest
 
   // ── 8. .epe import / export ──
   const { mkdtempSync, writeFileSync, readFileSync, readdirSync } = await import("node:fs");

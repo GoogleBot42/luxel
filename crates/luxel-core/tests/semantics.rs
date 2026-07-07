@@ -622,6 +622,27 @@ fn extension_builtins() {
 }
 
 #[test]
+fn sensor_injection() {
+    use luxel_core::engine::SensorFrame;
+    let src = "export var frequencyData\nexport var energyAverage\n\
+               export function render(index) { rgb(frequencyData[0], energyAverage, 0) }";
+    let mut e = Engine::new(src, 1, 1).expect("compile");
+    assert!(e.wants_sensors());
+    // dark until a sensor source feeds it
+    assert_eq!(e.frame(Fx::ZERO)[0], [0, 0, 0]);
+    let mut s = SensorFrame::default();
+    s.frequency_data[0] = Fx::ONE;
+    s.energy_average = Fx::from_f64(0.5);
+    e.set_sensors(&s);
+    let px = e.frame(Fx::ZERO)[0];
+    assert!(px[0] > 250, "freq bin drives red: {px:?}");
+    assert!((px[1] as i32 - 128).abs() < 4, "energy drives green: {px:?}");
+    // a pattern with no sensor bindings reports not wanting them
+    let plain = Engine::new("export function render(i) { hsv(0, 0, 0) }", 1, 1).unwrap();
+    assert!(!plain.wants_sensors());
+}
+
+#[test]
 fn oklch_produces_reasonable_colors() {
     // oklch/oklab set the current pixel; read it back through a render
     fn render_rgb(body: &str) -> [f64; 3] {

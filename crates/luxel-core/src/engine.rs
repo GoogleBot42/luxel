@@ -76,6 +76,20 @@ const CONTROL_PREFIXES: &[(&str, ControlKind)] = &[
     ("gauge", ControlKind::Gauge),
 ];
 
+/// One frame of sensor-board data (the PB sensor expansion board surface).
+/// Everything is normalized 0..1 except `accelerometer` (signed G-ish) and
+/// `max_frequency` (Hz of the loudest bin).
+#[derive(Clone, Default)]
+pub struct SensorFrame {
+    pub frequency_data: [Fx; 32],
+    pub energy_average: Fx,
+    pub max_frequency_magnitude: Fx,
+    pub max_frequency: Fx,
+    pub light: Fx,
+    pub accelerometer: [Fx; 3],
+    pub analog_inputs: [Fx; 5],
+}
+
 pub struct Engine {
     prog: Program,
     vm: Vm,
@@ -111,10 +125,10 @@ impl Engine {
         let mut vm = Vm::new(&prog, seed);
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
-        // Sensor-board bindings: until a peripheral provides them (M5),
-        // exported sensor arrays are stubbed with zeros so sound/motion
-        // patterns run dark instead of erroring. Scalars are already 0.
-        // The pattern's own init may overwrite these.
+        // Sensor-board bindings: exported sensor arrays start zero-filled so
+        // sound/motion patterns run dark instead of erroring when no sensor
+        // source is attached; a source feeds them via [Engine::set_sensors].
+        // Scalars are already 0. The pattern's own init may overwrite these.
         for (name, len) in [
             ("frequencyData", 32),
             ("accelerometer", 3),
@@ -402,6 +416,55 @@ impl Engine {
             Err(e) => {
                 self.last_error = Some(e);
                 None
+            }
+        }
+    }
+
+    /// True if the pattern binds any sensor-board variable — callers use it
+    /// to decide whether capturing/forwarding sensor data is worth anything.
+    pub fn wants_sensors(&self) -> bool {
+        [
+            "frequencyData",
+            "energyAverage",
+            "maxFrequencyMagnitude",
+            "maxFrequency",
+            "light",
+            "accelerometer",
+            "analogInputs",
+        ]
+        .iter()
+        .any(|n| {
+            self.prog
+                .global_index(n)
+                .is_some_and(|i| self.prog.globals[i as usize].export)
+        })
+    }
+
+    /// Inject one frame of sensor data into the exported sensor bindings
+    /// (PB sensor-board surface, ~40 Hz on real hardware). Bindings the
+    /// pattern doesn't export are skipped; array writes go into whatever
+    /// array the exported name currently references.
+    pub fn set_sensors(&mut self, s: &SensorFrame) {
+        for (name, v) in [
+            ("energyAverage", s.energy_average),
+            ("maxFrequencyMagnitude", s.max_frequency_magnitude),
+            ("maxFrequency", s.max_frequency),
+            ("light", s.light),
+        ] {
+            self.set_var(name, v);
+        }
+        self.set_sensor_array("frequencyData", &s.frequency_data);
+        self.set_sensor_array("accelerometer", &s.accelerometer);
+        self.set_sensor_array("analogInputs", &s.analog_inputs);
+    }
+
+    fn set_sensor_array(&mut self, name: &str, vals: &[Fx]) {
+        let Some(Value::Arr(id)) = self.var(name) else {
+            return;
+        };
+        if let Some(arr) = self.vm.array_mut(id) {
+            for (dst, v) in arr.iter_mut().zip(vals) {
+                *dst = Value::Num(*v);
             }
         }
     }

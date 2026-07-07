@@ -57,6 +57,18 @@ export interface DebugSnapshot {
 }
 
 export type StepKind = "continue" | "over" | "into" | "out";
+
+/** One frame of sensor-board data (the PB sensor expansion board surface).
+ *  0..1 throughout, except `accelerometer` (signed) and `maxFrequency` (Hz). */
+export interface SensorFrame {
+  frequencyData: number[]; // 32 bins, 37 Hz – 10 kHz
+  energyAverage: number;
+  maxFrequencyMagnitude: number;
+  maxFrequency: number;
+  light?: number;
+  accelerometer?: [number, number, number];
+  analogInputs?: number[];
+}
 const STEP_CODE: Record<StepKind, number> = { continue: 0, over: 1, into: 2, out: 3 };
 
 interface Exports {
@@ -89,6 +101,8 @@ interface Exports {
   lx_map_count(h: number): number;
   lx_map_coords(h: number): number;
   lx_set_wall_clock(h: number, unixSeconds: number): void;
+  lx_wants_sensors(h: number): number;
+  lx_set_sensors(h: number, ptr: number, len: number): void;
   lx_pixels(h: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
@@ -212,6 +226,34 @@ export class Engine {
       }
     }
     this.e.lx_set_map(this.h, dims, ptr, n);
+    this.e.lx_dealloc(ptr, bytes);
+  }
+
+  /** True if the pattern binds any sensor-board variable (frequencyData,
+   *  energyAverage, …) — capture audio only when it's actually consumed. */
+  wantsSensors(): boolean {
+    return this.e.lx_wants_sensors(this.h) === 1;
+  }
+
+  /** Inject one sensor frame (PB sensor-board surface). All values 0..1
+   *  except accelerometer (signed) and maxFrequency (Hz). */
+  setSensors(s: SensorFrame): void {
+    const vals = [
+      ...Array.from({ length: 32 }, (_, i) => s.frequencyData[i] ?? 0),
+      s.energyAverage,
+      s.maxFrequencyMagnitude,
+      s.maxFrequency,
+      s.light ?? 0,
+      ...(s.accelerometer ?? [0, 0, 0]),
+      ...(s.analogInputs ?? [0, 0, 0, 0, 0]),
+    ];
+    const bytes = vals.length * 4;
+    const ptr = this.e.lx_alloc(bytes);
+    const view = new DataView(this.e.memory.buffer);
+    for (let i = 0; i < vals.length; i++) {
+      view.setInt32(ptr + i * 4, Math.round((vals[i] ?? 0) * RAW), true);
+    }
+    this.e.lx_set_sensors(this.h, ptr, vals.length);
     this.e.lx_dealloc(ptr, bytes);
   }
 
