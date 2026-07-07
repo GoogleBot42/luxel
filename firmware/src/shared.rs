@@ -5,7 +5,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::sync::atomic::AtomicU32;
+use core::sync::atomic::{AtomicU32, AtomicU8};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -25,6 +25,12 @@ pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
 
 /// Frames rendered in the last full second, updated by the render task.
 pub static FPS: AtomicU32 = AtomicU32::new(0);
+
+/// Global output brightness, 0–31. The render task reads it every frame and
+/// feeds it to the encoder (SK9822's 5-bit current field; a software scale for
+/// WS2812). HTTP `/api/brightness` writes it; boot seeds it from flash (else
+/// the compile-time default). Cheap enough to apply per-frame with no cost.
+pub static BRIGHTNESS: AtomicU8 = AtomicU8::new(4);
 
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 

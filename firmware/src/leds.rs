@@ -36,9 +36,16 @@ impl Protocol {
     pub fn encode(self, rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
         match self {
             Protocol::Sk9822 => encode_sk9822(rgb, brightness5, out),
-            Protocol::Ws2812 => encode_ws2812(rgb, out),
+            Protocol::Ws2812 => encode_ws2812(rgb, brightness5, out),
         }
     }
+}
+
+/// Scale an 8-bit channel by a 0–31 brightness level (31 = unchanged). Used
+/// for WS2812, which has no hardware current field like SK9822's.
+#[inline]
+fn scale5(channel: u8, brightness5: u8) -> u8 {
+    ((channel as u16 * (brightness5 & 0x1F) as u16) / 31) as u8
 }
 
 fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
@@ -54,11 +61,17 @@ fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
 }
 
 /// Expand one byte into 24 SPI bits (3 per LED bit): `1` → `110`, `0` → `100`.
-fn encode_ws2812(rgb: &[[u8; 3]], out: &mut [u8]) {
+/// `brightness5` (0–31) scales each channel in software — WS2812 has no
+/// hardware brightness field.
+fn encode_ws2812(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
     let mut o = 0;
     for px in rgb {
         // WS2812 wants GRB
-        for byte in [px[1], px[0], px[2]] {
+        for byte in [
+            scale5(px[1], brightness5),
+            scale5(px[0], brightness5),
+            scale5(px[2], brightness5),
+        ] {
             let mut acc: u32 = 0;
             for bit in 0..8 {
                 let one = (byte >> (7 - bit)) & 1 == 1;

@@ -61,8 +61,8 @@ mod shared;
 use leds::Protocol;
 use luxel_core::jsonview;
 use shared::{
-    publish, set_pattern_src, set_pixels, set_vmerr, Msg, CONTROLS_JSON, FPS, MSG_QUEUE,
-    READOUTS_JSON, VARS_JSON,
+    publish, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS,
+    MSG_QUEUE, READOUTS_JSON, VARS_JSON,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -205,6 +205,17 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         println!("LUXEL_QUIET: render task disabled");
     }
+
+    // Seed runtime brightness from flash (else the compile-time default). The
+    // render task starts at the default and picks this up within a frame.
+    let stored_brightness = config::read_brightness();
+    let brightness = stored_brightness.unwrap_or(APA_BRIGHTNESS);
+    BRIGHTNESS.store(brightness, Ordering::Relaxed);
+    println!(
+        "brightness: {}/31 ({})",
+        brightness,
+        if stored_brightness.is_some() { "flash" } else { "default" }
+    );
 
     // Credentials: the flash record wins (survives images built without
     // env creds — the lockout class that stranded the device twice), then
@@ -359,7 +370,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
 
             let px = eng.frame(delta);
             set_pixels(px);
-            PROTOCOL.encode(px, APA_BRIGHTNESS, &mut buf);
+            PROTOCOL.encode(px, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }

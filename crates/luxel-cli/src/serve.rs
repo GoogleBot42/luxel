@@ -11,7 +11,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -57,6 +57,7 @@ struct State {
     readouts_json: Mutex<String>,
     library: Mutex<Vec<StoredPattern>>,
     next_id: AtomicU32,
+    brightness: AtomicU8,
 }
 
 fn push(state: &State, msg: Msg) {
@@ -487,6 +488,22 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             let s = if s.is_empty() { String::from("{}") } else { s };
             respond(&mut stream, 200, "application/json", s.as_bytes());
         }
+        ("GET", "/api/brightness") => {
+            let b = state.brightness.load(Ordering::Relaxed);
+            let body = format!("{{\"brightness\":{},\"max\":31}}", b);
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/brightness") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim().parse::<u8>() {
+                Ok(b) if b <= 31 => {
+                    state.brightness.store(b, Ordering::Relaxed);
+                    format!("{{\"ok\":true,\"brightness\":{}}}", b)
+                }
+                _ => String::from("{\"ok\":false,\"error\":\"brightness must be 0..=31\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("POST", "/api/code") => {
             let body = String::from_utf8_lossy(&req.body).into_owned();
             let r = api_code(&state, body);
@@ -569,6 +586,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         readouts_json: Mutex::new(String::from("{}")),
         library: Mutex::new(Vec::new()),
         next_id: AtomicU32::new(0x1a5e_0001),
+        brightness: AtomicU8::new(4), // matches the firmware's default
     });
 
     {

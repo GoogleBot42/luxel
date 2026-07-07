@@ -77,6 +77,9 @@
    *  pixel total in device mode (layout changes only rearrange the preview,
    *  they never change how many pixels the device drives). */
   let devicePixels = 0;
+  /** Device output brightness (0–brightnessMax), from GET /api/brightness. */
+  let brightness = 4;
+  let brightnessMax = 31;
 
   async function refreshDevicePatterns(): Promise<void> {
     if (!device) return;
@@ -328,6 +331,13 @@
         devicePatternId = "";
       }
       controls = await session.controls();
+      try {
+        const b = await session.brightness();
+        brightness = b.brightness;
+        brightnessMax = b.max || 31;
+      } catch {
+        /* older firmware without /api/brightness — leave the default */
+      }
       compileError = null;
       runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
       fps = st.fps;
@@ -877,6 +887,12 @@ export function render(index) {
 
   function onFpsChange(e: Event): void {
     targetFps = Number((e.target as HTMLSelectElement).value);
+  }
+
+  /** Live brightness: the device applies it immediately and persists it. */
+  function onBrightnessChange(e: Event): void {
+    brightness = Number((e.target as HTMLInputElement).value);
+    void device?.setBrightness(brightness);
   }
 
   function togglePause(): void {
@@ -1666,10 +1682,23 @@ export function render(index) {
 
         <section class="card">
           <h2>Brightness</h2>
-          <input type="range" min="0" max="31" value="31" disabled />
+          <div class="field">
+            <input
+              type="range"
+              class="grow"
+              data-role="brightness"
+              min="0"
+              max={brightnessMax}
+              step="1"
+              value={brightness}
+              on:input={onBrightnessChange}
+            />
+            <span class="mono dim" data-role="brightness-val">{brightness}/{brightnessMax}</span>
+          </div>
           <p class="dim hint">
-            Runtime brightness needs firmware support (today it's a compile-time constant,
-            <code>APA_BRIGHTNESS</code>). Wiring <code>GET/POST&nbsp;/api/brightness</code> is Phase&nbsp;3.
+            Global output brightness (the LED driver's current limiter). Applied live and saved on
+            the device. It dims the physical strip, not the preview above (which shows the pattern's
+            colors at full range).
           </p>
         </section>
 

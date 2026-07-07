@@ -21,6 +21,12 @@ const MAGIC: &[u8; 4] = b"LXCF";
 pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
+/// Device settings (brightness, …) live in the next nvs sector, so writing
+/// them never disturbs the WiFi record. Record: "LXDV" u8 version=1
+/// u8 brightness  u8 0 u8 0  u32-LE checksum.
+const DEV_OFFSET: u32 = 0xA000;
+const DEV_MAGIC: &[u8; 4] = b"LXDV";
+
 fn checksum(bytes: &[u8]) -> u32 {
     bytes.iter().fold(0u32, |a, &b| a.wrapping_add(b as u32))
 }
@@ -86,6 +92,54 @@ pub fn write_wifi(ssid: &str, pass: &str) -> Result<(), &'static str> {
         use embedded_storage::nor_flash::NorFlash;
         NorFlash::erase(f, RECORD_OFFSET, RECORD_OFFSET + 4096).is_ok()
             && NorFlash::write(f, RECORD_OFFSET, stage_bytes).is_ok()
+    })
+    .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err("flash write failed (update in progress?)")
+    }
+}
+
+/// Read the persisted output brightness (0–31), if a valid record exists.
+pub fn read_brightness() -> Option<u8> {
+    let mut rec = [0u8; 12]; // 8-byte header + 4-byte checksum
+    if !crate::assets::read_chunk(DEV_OFFSET, &mut rec) {
+        return None;
+    }
+    if &rec[0..4] != DEV_MAGIC || rec[4] != 1 {
+        return None;
+    }
+    let stored = u32::from_le_bytes(rec[8..12].try_into().ok()?);
+    if stored != checksum(&rec[0..8]) {
+        return None;
+    }
+    let b = rec[5];
+    (b <= 31).then_some(b)
+}
+
+/// Persist the output brightness (0–31), applied live and on next boot.
+pub fn write_brightness(brightness: u8) -> Result<(), &'static str> {
+    if brightness > 31 {
+        return Err("brightness must be 0..=31");
+    }
+    let mut rec: Vec<u8> = Vec::with_capacity(12);
+    rec.extend_from_slice(DEV_MAGIC);
+    rec.push(1);
+    rec.push(brightness);
+    rec.push(0);
+    rec.push(0);
+    let ck = checksum(&rec);
+    rec.extend_from_slice(&ck.to_le_bytes());
+    // word-aligned staging (same rationale as write_wifi)
+    let mut stage = alloc::vec![0u32; rec.len() / 4];
+    let stage_bytes =
+        unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), rec.len()) };
+    stage_bytes.copy_from_slice(&rec);
+    let ok = crate::ota::with_flash(|f| {
+        use embedded_storage::nor_flash::NorFlash;
+        NorFlash::erase(f, DEV_OFFSET, DEV_OFFSET + 4096).is_ok()
+            && NorFlash::write(f, DEV_OFFSET, stage_bytes).is_ok()
     })
     .unwrap_or(false);
     if ok {

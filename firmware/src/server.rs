@@ -17,6 +17,8 @@
 //!   POST /api/var       body = "name raw" → {"ok":true}
 //!   GET  /api/wifi      {"ssid":"…"|null,"source":"flash"|"builtin"|"none"}
 //!   POST /api/wifi      body = "ssid\npassword" → stores creds in flash + reboots
+//!   GET  /api/brightness {"brightness":0..31,"max":31}
+//!   POST /api/brightness body = "0".."31" → applied live + persisted {"ok":true,"brightness":N}
 //!   GET    /api/patterns              {"patterns":[{"id","name"},…]}
 //!   GET    /api/patterns/<id>         {"id","name","source"}
 //!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
@@ -596,6 +598,33 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     return Ok(sent);
                 }
+                // POST /api/brightness — body is a number 0..=31. Applied live
+                // (the render task reads BRIGHTNESS every frame) and persisted
+                // to flash so it survives reboot. No reboot needed.
+                "/api/brightness" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let response = json_response(match body.trim().parse::<u8>() {
+                        Ok(b) if b <= 31 => {
+                            crate::shared::BRIGHTNESS
+                                .store(b, core::sync::atomic::Ordering::Relaxed);
+                            match crate::config::write_brightness(b) {
+                                Ok(()) => format!("{{\"ok\":true,\"brightness\":{}}}", b),
+                                // applied live even if the flash write failed
+                                Err(e) => format!(
+                                    "{{\"ok\":true,\"brightness\":{},\"note\":\"not persisted: {}\"}}",
+                                    b,
+                                    json_escape(e)
+                                ),
+                            }
+                        }
+                        _ => String::from("{\"ok\":false,\"error\":\"brightness must be 0..=31\"}"),
+                    });
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
                 "/api/code" | "/api/control" | "/api/var" => {
                     let body = match request.body_connection.body().read_all().await {
                         Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
@@ -765,6 +794,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     };
                     respond!(json_response(body));
                 }
+                "/api/brightness" => respond!(json_response(format!(
+                    "{{\"brightness\":{},\"max\":31}}",
+                    crate::shared::BRIGHTNESS.load(core::sync::atomic::Ordering::Relaxed)
+                ))),
                 "/api/pixels" => respond!(api_pixels().await),
                 "/api/pattern" => respond!(api_pattern().await),
                 "/api/controls" => respond!(api_controls().await),

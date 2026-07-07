@@ -163,6 +163,24 @@ try {
   await page.select('[data-role="layout-kind"]', "strip"); // restore
   await sleep(200);
 
+  // brightness (Phase 3): the Settings slider drives GET/POST /api/brightness
+  // live (the settings panel is in the DOM even while the editor is open)
+  const b0 = await (await fetch(`${DEV}/api/brightness`)).json();
+  check(
+    "brightness: GET returns {brightness,max}",
+    typeof b0.brightness === "number" && b0.max === 31,
+    JSON.stringify(b0),
+  );
+  await page.$eval('[data-role="brightness"]', (el) => {
+    el.value = "20";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(400);
+  const b1 = await (await fetch(`${DEV}/api/brightness`)).json();
+  check("brightness: slider sets device brightness", b1.brightness === 20, JSON.stringify(b1));
+  const bReadout = await page.$eval('[data-role="brightness-val"]', (el) => el.textContent ?? "");
+  check("brightness: readout reflects it", bReadout.includes("20"), bReadout);
+
   // live-code push: slider-controlled solid color + exported var
   await setEditor(
     page,

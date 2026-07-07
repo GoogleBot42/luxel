@@ -57,6 +57,23 @@ export class DeviceSession {
     return (await fetch(this.url("/api/pattern"))).text();
   }
 
+  /** Current output brightness (0–31) and its max. */
+  async brightness(): Promise<{ brightness: number; max: number }> {
+    return (await (await fetch(this.url("/api/brightness"))).json()) as {
+      brightness: number;
+      max: number;
+    };
+  }
+
+  /** Set output brightness (0–31); applied live and persisted on the device. */
+  async setBrightness(value: number): Promise<{ ok: boolean; brightness?: number }> {
+    const res = await fetch(this.url("/api/brightness"), {
+      method: "POST",
+      body: String(Math.max(0, Math.min(31, Math.round(value)))),
+    });
+    return (await res.json()) as { ok: boolean; brightness?: number };
+  }
+
   async run(source: string): Promise<RunResult> {
     const ws = this.wsCall("code", source);
     if (ws) return (await ws) as RunResult;

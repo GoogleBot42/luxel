@@ -108,9 +108,12 @@ App.svelte.
 ## Settings page 🔧 [L]
 
 A real device needs a settings surface (page/dialog). Fields:
-- **Brightness** 🔧 — currently a compile-time const (`APA_BRIGHTNESS`, 0–31,
-  SK9822 only). Needs a runtime value + `GET/POST /api/brightness` + apply in
-  the render/encode path (and a WS2812-side global scale).
+- **Brightness** ✅ — runtime value (`shared::BRIGHTNESS` atomic, 0–31) with
+  `GET/POST /api/brightness`, applied every frame in the encode path (SK9822's
+  5-bit current field + a software scale for WS2812) and persisted in a `LXDV`
+  nvs record (survives reboot). The Settings slider drives it live. Shipped in
+  firmware v0.1.12. (Preview is intentionally pre-brightness — it shows the
+  pattern's colors; brightness dims the physical strip only.)
 - **Strip type & pixel count** 🔧 — **not editable when connected** today
   (layout is locked in device mode). Needs `GET/POST /api/config` (pixel count,
   LED protocol) with persistence + safe re-init of the LED driver.
@@ -147,8 +150,10 @@ the pattern is loading, instead of appearing dead/blank.
    shell (device info + pixel readout, Phase-3 placeholders). Both e2e suites
    updated to the new `data-role` hooks and green.
 3. **Phase 3 (firmware + settings):** ~~fix the connect-on-load race~~ ✅ done
-   (web-only, see above); remaining: `/api/brightness`, `/api/config` (pixel
-   count/protocol) + Settings tab wiring WiFi + brightness + pixel count.
+   (web-only); ~~`/api/brightness` + Settings brightness slider~~ ✅ done
+   (firmware v0.1.12, runtime + persisted + live-applied); remaining:
+   `/api/config` (pixel count/protocol — needs runtime `PIXEL_COUNT`, buffer
+   re-sizing, and a reboot-to-apply flow like WiFi) + Settings WiFi form.
 4. **Phase 4 (bigger features):** ~~mapper-as-editor-tab (CodeMirror) +
    debuggable~~ ✅ done (Luxel map program, see above); 3D preview (map already
    emits `[x,y,z]` — Preview needs a projection); Playlist tab + firmware
