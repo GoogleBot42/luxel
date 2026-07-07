@@ -330,6 +330,13 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 /// Renders frames and drives the strip; picks up uploaded patterns between
+/// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
+#[inline]
+fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
+    let mix = |x: u8, y: u8| (((x as i32) * (65536 - t) + (y as i32) * t) >> 16) as u8;
+    [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
+}
+
 /// SPI config for a protocol (only the clock rate differs; mode 0 for both).
 fn spi_cfg(p: Protocol) -> SpiConfig {
     SpiConfig::default()
@@ -363,6 +370,11 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     }
     let mut buf =
         alloc::vec![0u8; cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
+    // crossfade: the outgoing engine + blend timing + a reusable blend buffer
+    let mut prev: Option<Engine> = None;
+    let mut blend_start = Instant::now();
+    let mut blend_ms: u32 = 0;
+    let mut blend_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
@@ -430,6 +442,27 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     last = Instant::now();
                     println!("protocol → {}", p.name());
                 }
+                // Crossfade to a new pattern (playlist transition): keep the
+                // outgoing engine and blend over `ms`.
+                Msg::Crossfade(src, ms) => {
+                    match Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
+                        Ok(e) => {
+                            publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                            if ms > 0 && engine.is_some() {
+                                prev = engine.take();
+                                blend_start = Instant::now();
+                                blend_ms = ms;
+                            }
+                            engine = Some(e);
+                            set_pattern_src(&src);
+                            current_src = src;
+                            set_vmerr(None);
+                            last = Instant::now();
+                            devicemap::mark_dirty();
+                        }
+                        Err(d) => println!("crossfade compile error (bug?): {}", d.message),
+                    }
+                }
             }
         }
 
@@ -445,20 +478,39 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             }
         }
 
-        if let Some(eng) = engine.as_mut() {
+        if engine.is_some() {
             let now = Instant::now();
             let delta_us = (now - last).as_micros();
             last = now;
             // µs → 16.16 ms
             let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
 
-            let px = eng.frame(delta);
-            set_pixels(px);
-            cur_protocol().encode(px, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
+            // crossfade progress (0..=65536); 65536 = the fade is complete
+            let t = if blend_ms > 0 {
+                ((blend_start.elapsed().as_millis() as i64 * 65536 / blend_ms as i64).min(65536))
+                    as i32
+            } else {
+                65536
+            };
+            let out: &[[u8; 3]] = if prev.is_some() && t < 65536 {
+                // copy the incoming frame, then blend the outgoing on top
+                blend_buf.clear();
+                blend_buf.extend_from_slice(engine.as_mut().unwrap().frame(delta));
+                let px_old = prev.as_mut().unwrap().frame(delta);
+                for i in 0..blend_buf.len().min(px_old.len()) {
+                    blend_buf[i] = blend_px(px_old[i], blend_buf[i], t);
+                }
+                &blend_buf
+            } else {
+                prev = None; // fade finished
+                engine.as_mut().unwrap().frame(delta)
+            };
+            set_pixels(out);
+            cur_protocol().encode(out, BRIGHTNESS.load(Ordering::Relaxed), &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }
-            if let Some(e) = eng.take_error() {
+            if let Some(e) = engine.as_mut().unwrap().take_error() {
                 println!("vmerr: line {}:{}: {}", e.line, e.col, e.message);
                 set_vmerr(Some(alloc::format!(
                     "line {}:{}: {}",

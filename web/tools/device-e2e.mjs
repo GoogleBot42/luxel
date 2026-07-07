@@ -480,6 +480,16 @@ try {
     "playlist: default duration persisted",
     (await (await fetch(`${DEV}/api/playlist`)).json()).defaultSec === 5,
   );
+  // crossfade field (seconds in the UI → crossfadeMs on the wire)
+  await page.$eval('[data-role="pl-crossfade"]', (el) => {
+    el.value = "0.5";
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(500);
+  check(
+    "playlist: crossfade persisted as ms",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).crossfadeMs === 500,
+  );
   // per-item override on the first row
   await page.$$eval('[data-role="pl-override"]', (els) => {
     els[0].click();

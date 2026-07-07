@@ -55,7 +55,15 @@ struct PlaylistItem {
 struct Playlist {
     /// Default seconds per item; 0 = manual (no auto-advance).
     default_sec: i32,
+    /// Crossfade duration between items in ms; 0 = hard cut.
+    crossfade_ms: i32,
     items: Vec<PlaylistItem>,
+}
+
+/// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
+fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
+    let mix = |x: u8, y: u8| (((x as i32) * (65536 - t) + (y as i32) * t) >> 16) as u8;
+    [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
 }
 
 impl Playlist {
@@ -217,6 +225,21 @@ fn render_loop(state: Arc<State>) {
     }
     let mut last = Instant::now();
     let mut pl_start = Instant::now(); // when the current playlist item started
+    // crossfade: the outgoing engine + when/how long to blend
+    let mut prev: Option<Engine> = None;
+    let mut blend_start = Instant::now();
+    let mut blend_ms: i32 = 0;
+    // start a crossfade from the current engine (call before swapping engine in)
+    macro_rules! begin_crossfade {
+        () => {{
+            let cf = state.playlist.lock().unwrap().crossfade_ms;
+            if cf > 0 && engine.is_some() {
+                prev = engine.take();
+                blend_start = Instant::now();
+                blend_ms = cf;
+            }
+        }};
+    }
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
@@ -275,6 +298,7 @@ fn render_loop(state: Arc<State>) {
                         let cur = state.pl_index.load(Ordering::Relaxed) as i64;
                         let ni = (cur + d as i64).rem_euclid(len as i64) as usize;
                         if let Some((e, src)) = enter_item(&state, ni) {
+                            begin_crossfade!();
                             engine = Some(e);
                             current_src = src;
                             last = Instant::now();
@@ -308,6 +332,7 @@ fn render_loop(state: Arc<State>) {
             } else if sec > 0 && pl_start.elapsed() >= Duration::from_secs(sec as u64) {
                 let ni = (state.pl_index.load(Ordering::Relaxed) + 1) % len;
                 if let Some((e, src)) = enter_item(&state, ni) {
+                    begin_crossfade!();
                     engine = Some(e);
                     current_src = src;
                     last = Instant::now();
@@ -335,21 +360,41 @@ fn render_loop(state: Arc<State>) {
             }
         }
 
-        if let Some(eng) = engine.as_mut() {
+        if engine.is_some() {
             let now = Instant::now();
             let delta_us = now.duration_since(last).as_micros() as u64;
             last = now;
             let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
 
-            let px = eng.frame(delta);
+            // crossfade progress (0..=65536); 65536 = done
+            let t = if blend_ms > 0 {
+                (blend_start.elapsed().as_millis() as i64 * 65536 / blend_ms as i64).min(65536) as i32
+            } else {
+                65536
+            };
+            let px_new: Vec<[u8; 3]> = engine.as_mut().unwrap().frame(delta).to_vec();
+            let out: Vec<[u8; 3]> = match prev.as_mut() {
+                Some(p) if t < 65536 => {
+                    let px_old = p.frame(delta);
+                    px_new
+                        .iter()
+                        .zip(px_old.iter())
+                        .map(|(n, o)| blend_px(*o, *n, t))
+                        .collect()
+                }
+                _ => px_new,
+            };
+            if t >= 65536 {
+                prev = None; // fade finished
+            }
             {
                 let mut snap = state.pixels.lock().unwrap();
                 snap.clear();
-                for p in px {
+                for p in &out {
                     snap.extend_from_slice(p);
                 }
             }
-            if let Some(e) = eng.take_error() {
+            if let Some(e) = engine.as_mut().unwrap().take_error() {
                 *state.vmerr.lock().unwrap() =
                     Some(format!("line {}:{}: {}", e.line, e.col, e.message));
             }
@@ -496,8 +541,9 @@ fn playlist_json(state: &State) -> String {
         })
         .collect();
     format!(
-        "{{\"defaultSec\":{},\"playing\":{},\"index\":{},\"items\":[{}]}}",
+        "{{\"defaultSec\":{},\"crossfadeMs\":{},\"playing\":{},\"index\":{},\"items\":[{}]}}",
         pl.default_sec,
+        pl.crossfade_ms,
         state.pl_playing.load(Ordering::Relaxed),
         state.pl_index.load(Ordering::Relaxed),
         items.join(",")
@@ -513,6 +559,7 @@ fn parse_playlist(body: &str) -> Playlist {
         let mut it = line.split_whitespace();
         match it.next() {
             Some("D") => pl.default_sec = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("X") => pl.crossfade_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("I") => {
                 let id = it.next().unwrap_or("").to_string();
                 let sec = it.next().and_then(|v| v.parse::<i32>().ok());

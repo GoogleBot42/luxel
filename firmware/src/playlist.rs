@@ -41,6 +41,8 @@ struct Item {
 #[derive(Clone)]
 struct Playlist {
     default_sec: i32,
+    /// Crossfade between items in ms; 0 = hard cut.
+    crossfade_ms: i32,
     items: Vec<Item>,
 }
 
@@ -57,6 +59,7 @@ type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 
 static PLAYLIST: Shared<Playlist> = BlockingMutex::new(RefCell::new(Playlist {
     default_sec: 0,
+    crossfade_ms: 0,
     items: Vec::new(),
 }));
 static PLAYING: AtomicBool = AtomicBool::new(false);
@@ -77,12 +80,14 @@ fn wake() {
 fn parse(body: &str) -> Playlist {
     let mut pl = Playlist {
         default_sec: 0,
+        crossfade_ms: 0,
         items: Vec::new(),
     };
     for line in body.lines() {
         let mut it = line.split_whitespace();
         match it.next() {
             Some("D") => pl.default_sec = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("X") => pl.crossfade_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("I") => {
                 let id = it.next().unwrap_or("").into();
                 let sec = it.next().and_then(|v| v.parse::<i32>().ok());
@@ -140,8 +145,9 @@ pub fn to_json() -> String {
             })
             .collect();
         format!(
-            "{{\"defaultSec\":{},\"playing\":{},\"index\":{},\"items\":[{}]}}",
+            "{{\"defaultSec\":{},\"crossfadeMs\":{},\"playing\":{},\"index\":{},\"items\":[{}]}}",
             pl.default_sec,
+            pl.crossfade_ms,
             PLAYING.load(Ordering::Relaxed),
             INDEX.load(Ordering::Relaxed),
             items.join(",")
@@ -209,7 +215,10 @@ pub fn init() {
 /// Load item `i`: compile its stored pattern on the render task and apply its
 /// saved control values.
 async fn enter_item(i: usize) {
-    let item = PLAYLIST.lock(|c| c.borrow().items.get(i).cloned());
+    let (item, crossfade) = PLAYLIST.lock(|c| {
+        let pl = c.borrow();
+        (pl.items.get(i).cloned(), pl.crossfade_ms)
+    });
     let Some(item) = item else {
         return;
     };
@@ -217,7 +226,11 @@ async fn enter_item(i: usize) {
         println!("playlist: item {} missing pattern {}", i, item.pattern_id);
         return;
     };
-    MSG_QUEUE.send(Msg::Code(src)).await;
+    if crossfade > 0 {
+        MSG_QUEUE.send(Msg::Crossfade(src, crossfade as u32)).await;
+    } else {
+        MSG_QUEUE.send(Msg::Code(src)).await;
+    }
     for (name, raw) in item.controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         MSG_QUEUE.send(Msg::Control(name, vals)).await;

@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-07-07 — Playlist crossfade transitions (firmware v0.1.17) ✅
+
+Playlists can now **crossfade** between items instead of hard-cutting. The
+Playlist tab has a new "crossfade" field (seconds; blank/0 = hard cut). During
+a transition the render task keeps the outgoing pattern alive and linearly
+blends it into the incoming one over the set time — verified on the wall unit:
+a red→blue item change ramps through `a3005b`→`62009c` mid-fade rather than
+snapping. The crossfade time persists in flash (playlist wire format gained an
+`X <ms>` line) and applies on both auto-advance and manual next/prev.
+
+Also: the app crossed the **1 MiB OTA-slot** boundary at this version, so the
+release profile moved to `opt-level = "s"` (size) — reclaimed ~177 KB (image
+1,052 KB → 875 KB) with no visible render-rate hit (still 125 fps). Both e2e
+suites green; v0.1.17 OTA'd to the wall unit.
+
 ## 2026-07-07 overnight — batch: gallery search, playlist polish, 3D preview, WiFi form, device map ✅
 
 While you slept (you picked web features + WiFi + device map, OTA authorized):

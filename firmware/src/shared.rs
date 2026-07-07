@@ -24,6 +24,9 @@ pub enum Msg {
     /// New LED protocol — the render task reconfigures SPI + resizes the buffer
     /// live (0 = SK9822, 1 = WS2812; see leds::Protocol::from_u8).
     Protocol(u8),
+    /// Like Code, but crossfade from the current pattern over `ms` (playlist
+    /// transitions): the render task keeps the outgoing engine and blends.
+    Crossfade(String, u32),
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();

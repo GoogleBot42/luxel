@@ -178,7 +178,10 @@ export class DeviceSession {
   /** Replace the stored playlist. `defaultSec` 0 = manual; per-item `sec` null
    *  inherits the default. Serialized to the firmware's line format. */
   async setPlaylist(pl: Playlist): Promise<void> {
-    const lines: string[] = [`D ${Math.max(0, Math.round(pl.defaultSec))}`];
+    const lines: string[] = [
+      `D ${Math.max(0, Math.round(pl.defaultSec))}`,
+      `X ${Math.max(0, Math.round(pl.crossfadeMs))}`,
+    ];
     for (const it of pl.items) {
       lines.push(`I ${it.id} ${it.sec === null ? -1 : Math.max(0, Math.round(it.sec))}`);
       for (const [name, vals] of Object.entries(it.controls)) {
@@ -214,6 +217,8 @@ export interface PlaylistItem {
 export interface Playlist {
   /** Default seconds per item; 0 = manual (no auto-advance). */
   defaultSec: number;
+  /** Crossfade between items in ms; 0 = hard cut. */
+  crossfadeMs: number;
   playing: boolean;
   index: number;
   items: PlaylistItem[];

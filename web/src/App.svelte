@@ -134,7 +134,7 @@
   }
 
   // ---- playlist (device mode) ----
-  let playlist: Playlist = { defaultSec: 0, playing: false, index: 0, items: [] };
+  let playlist: Playlist = { defaultSec: 0, crossfadeMs: 0, playing: false, index: 0, items: [] };
   let playlistDebounce: ReturnType<typeof setTimeout> | undefined;
   let playlistPoll: ReturnType<typeof setInterval> | undefined;
 
@@ -228,6 +228,14 @@
   function onDefaultSecChange(e: Event): void {
     const v = (e.target as HTMLInputElement).value.trim();
     playlist = { ...playlist, defaultSec: v === "" ? 0 : Math.max(0, Math.round(Number(v) || 0)) };
+    queuePlaylistSave();
+  }
+
+  function onCrossfadeChange(e: Event): void {
+    const v = (e.target as HTMLInputElement).value.trim();
+    // field is in seconds; store ms
+    const ms = v === "" ? 0 : Math.max(0, Math.round((Number(v) || 0) * 1000));
+    playlist = { ...playlist, crossfadeMs: ms };
     queuePlaylistSave();
   }
 
@@ -1864,6 +1872,21 @@ export function render(index) {
             )}{playlistHasManual ? " + manual stops" : ""}
           </span>
         {/if}
+      </div>
+
+      <div class="pl-default">
+        <span class="dim">crossfade</span>
+        <input
+          class="num"
+          data-role="pl-crossfade"
+          type="number"
+          min="0"
+          step="0.1"
+          placeholder="0"
+          value={playlist.crossfadeMs ? playlist.crossfadeMs / 1000 : ""}
+          on:change={onCrossfadeChange}
+        />
+        <span class="dim">seconds to blend between items (blank/0 = hard cut)</span>
       </div>
 
       {#if !device}

@@ -2,7 +2,7 @@
 # workspace: it builds for a different target than the host crates.
 [package]
 name = "luxel-fw"
-version = "0.1.16"
+version = "0.1.17"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -64,8 +64,11 @@ esp32 = [
   "esp-storage/esp32",
 ]
 
+# opt-level "s" (size), not 3: the app crossed the 1 MiB OTA-slot boundary at
+# v0.1.17 (crossfade). "s" reclaims ~5% with no visible render-rate hit — the
+# VM eval loop is not the bottleneck (SPI/embassy pacing dominate frame time).
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 
