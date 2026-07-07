@@ -460,6 +460,21 @@ try {
     (await (await fetch(`${DEV}/api/playlist`)).json()).playing === false,
   );
 
+  // ---- "untitled" fix: a running pattern that matches a saved one shows its
+  // name (the device streams only source, not which library entry it is) ----
+  await fetch(`${DEV}/api/playlist/stop`, { method: "POST" });
+  const uniq = "export function render(index) { rgb(0.13, 0.26, 0.39) }";
+  await fetch(`${DEV}/api/code`, { method: "POST", body: uniq }); // run it
+  await fetch(`${DEV}/api/patterns`, { method: "POST", body: `Named Thing\n${uniq}` }); // save same source
+  await sleep(400);
+  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
+    waitUntil: "networkidle0",
+  });
+  await page.waitForSelector(".cm-content");
+  await sleep(1800); // connect + device pattern sources stream in, then match
+  const nm = await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "");
+  check("untitled: running pattern adopts its saved name", nm.includes("Named Thing"), nm.trim());
+
   // clean up the saved pattern so a re-run starts fresh
   await fetch(`${DEV}/api/patterns`)
     .then((r) => r.json())

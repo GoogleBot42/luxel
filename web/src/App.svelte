@@ -194,6 +194,28 @@
     void loadDevicePreviewSources();
   }
 
+  // The device streams only source, not which library entry it came from — so
+  // a freshly-opened running pattern shows as "untitled". If its source matches
+  // a saved device pattern, adopt that name/id (so the header isn't "untitled"
+  // and Add-to-playlist works). Runs as device pattern sources stream in.
+  // deps passed as args so Svelte tracks devicePatterns (source-fill re-runs it)
+  $: matchRunningToLibrary(devicePatterns, source, dirty, devicePatternId, editing, device);
+  function matchRunningToLibrary(
+    pats: typeof devicePatterns,
+    src: string,
+    drt: boolean,
+    dpid: string,
+    edt: boolean,
+    dev: DeviceSession | null,
+  ): void {
+    if (!dev || !edt || drt || dpid || !src) return;
+    const m = pats.find((p) => p.source && p.source.trim() === src.trim());
+    if (m) {
+      patternName = m.name;
+      devicePatternId = m.id;
+    }
+  }
+
   /** Fetch each stored pattern's source one at a time (the device serves only
    *  ~2 connections, so never in parallel) to feed the row thumbnails. */
   async function loadDevicePreviewSources(): Promise<void> {
