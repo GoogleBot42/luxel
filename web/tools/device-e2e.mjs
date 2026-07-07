@@ -68,57 +68,33 @@ try {
     waitUntil: "networkidle0",
   });
   await page.waitForSelector(".cm-content");
-  await page.waitForSelector(".device-badge", { timeout: 8000 });
-  check("connect: badge shown (auto-connect, no URL typed)", true);
-
-  // the device-URL field is gone entirely (the address is always known)
-  check("device: no device-url field", (await page.$(".device-url")) === null);
-  // share makes no sense on a device (the link is the device's LAN address) —
-  // it must not appear in device mode
-  check("device: no share button", (await page.$('[data-role="share"]')) === null);
-
-  // connect-on-load race (#9): the async handshake is held cleanly — a
-  // "connecting…" state shows and the waterfall is kept blank so no
-  // pre-stream frames (the playground was running before we connected) leak
-  // into it. The ws dial is delayed ~1.6 s, so we're still connecting here.
-  const sawConnecting = await page
+  // The handshake still runs on load (so we know what pattern to open); the
+  // editor syncs to the device's RUNNING pattern once it finishes. Wait for
+  // that rather than a connection badge.
+  const synced = await page
     .waitForFunction(
-      () => document.querySelector('[data-role="conn-state"]')?.textContent?.includes("connecting"),
-      { timeout: 2500 },
+      () => document.querySelector(".cm-content")?.textContent?.includes("canonical default"),
+      { timeout: 10000 },
     )
     .then(() => true)
     .catch(() => false);
-  check("connect: shows a connecting state", sawConnecting);
-  const blankWhileConnecting = await page.$eval(".waterfall", (c) => {
-    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-    let lit = 0;
-    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 0) lit++;
-    return lit;
-  });
-  check(
-    "connect: waterfall held blank while connecting (no stale frames)",
-    blankWhileConnecting === 0,
-    `${blankWhileConnecting} lit`,
+  check("connect: editor synced to the device's running pattern", synced);
+
+  // no connection chrome: the device is always connected for the API, so there
+  // are no connect/disconnect/reconnect buttons and no URL field.
+  check("device: no device-url field", (await page.$(".device-url")) === null);
+  check("device: no share button", (await page.$('[data-role="share"]')) === null);
+  check("device: no reconnect button", (await page.$('[data-role="reconnect"]')) === null);
+  const hasDisconnect = await page.$$eval("header button", (btns) =>
+    btns.some((b) => /disconnect/i.test(b.textContent ?? "")),
   );
+  check("device: no disconnect button", hasDisconnect === false);
 
   const px = await page.$eval('[data-role="cfg-pixels"]', (el) => el.value);
   check("connect: pixel count from device", px === "120", `got ${px}`);
-  // CodeMirror virtualizes: textContent only holds visible lines — check
-  // the top of the device's default pattern
-  const doc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check(
-    "connect: editor synced to device pattern",
-    doc.includes("canonical default pattern"),
-    doc.slice(0, 40),
-  );
 
-  // the playground deliberately delays the ws dial (~1.6 s grace after
-  // connect) — wait for the badge rather than racing a fixed sleep
-  const wsBadge = await page
-    .waitForFunction(() => document.body.innerText.includes("streaming"), { timeout: 10000 })
-    .then(() => true)
-    .catch(() => false);
-  check("preview: websocket push active", wsBadge);
+  // the preview runs on the LOCAL engine now (no device pixel stream) — it
+  // lights up from local rendering
   const lit = await page
     .waitForFunction(
       () => {
@@ -133,7 +109,7 @@ try {
     )
     .then((h) => h.jsonValue())
     .catch(() => 0);
-  check("preview streams from device", lit > 60, `lit=${lit}`);
+  check("preview: local engine renders (not the device stream)", lit > 60, `lit=${lit}`);
 
   // layout dropdown is back in device mode (#3): strip/grid/2D map arrange the
   // live stream in the local preview (the device's pixel count stays fixed)
@@ -233,9 +209,10 @@ try {
   check("push: device runs the typed pattern", (await res.text()).includes("sliderBlue"));
 
   await page.waitForSelector('input[type="range"]', { timeout: 5000 });
-  check("controls: slider appeared from device", true);
+  check("controls: slider appeared (from the local engine)", true);
 
-  // move the slider to full; device pixels should go bright blue
+  // move the slider to full; onControlSet pushes to the device too, so its
+  // real pixels should go bright blue
   await page.$eval('input[type="range"]', (el) => {
     el.value = "1";
     el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -253,14 +230,14 @@ try {
   const varsText = await page.evaluate(() => document.body.innerText);
   check("vars: exported var visible", varsText.includes("level"), "");
 
-  // compile error path: line/col + squiggle source range
+  // compile error path: line/col from the local compile; the broken source is
+  // NOT pushed, so the device keeps running the previous pattern
   await setEditor(page, "export function render(index) { hsv( }");
   await sleep(1000);
   const banner = await page.$eval(".banner.error", (el) => el.textContent ?? "").catch(() => "");
-  check("errors: device diagnostics shown", /line \d+:\d+/.test(banner), banner.trim());
-  // device keeps the previous pattern running
+  check("errors: local diagnostics shown", /line \d+:\d+/.test(banner), banner.trim());
   const still = await fetch(`${DEV}/api/pattern`);
-  check("errors: device keeps old pattern", (await still.text()).includes("sliderBlue"));
+  check("errors: broken pattern not pushed (device keeps old)", (await still.text()).includes("sliderBlue"));
 
   // ---- device pattern library (CRUD via the Device Patterns tab) ----
   // restore a valid pattern in the editor first (the error test left junk)
@@ -340,7 +317,7 @@ try {
     waitUntil: "networkidle0",
   });
   await page.waitForSelector(".cm-content");
-  await page.waitForSelector(".device-badge", { timeout: 8000 });
+  await sleep(500); // let the device handshake settle after reload
   await sleep(1800); // let the resume push land on the device
   check(
     "resume: editor restores the unsaved edit",
@@ -364,7 +341,7 @@ try {
     waitUntil: "networkidle0",
   });
   await page.waitForSelector(".cm-content");
-  await page.waitForSelector(".device-badge", { timeout: 8000 });
+  await sleep(500); // let the device handshake settle after reload
   await sleep(1200);
   check(
     "resume(clean): opens the device's running pattern, not the saved editor",
@@ -381,21 +358,6 @@ try {
       ),
     )
     .catch(() => {});
-
-  // disconnect returns to the local wasm engine
-  await page.$$eval("header button", (btns) => {
-    btns.find((b) => b.textContent?.trim() === "disconnect")?.click();
-  });
-  await sleep(1200);
-  const badge = await page.$(".device-badge");
-  check("disconnect: badge gone", badge === null);
-  // reconnecting needs no URL — a plain reconnect button (the base is known)
-  const reconnect = await page.$('[data-role="reconnect"]');
-  check("disconnect: reconnect button shown (no URL field)", reconnect !== null);
-  check("disconnect: still no device-url field", (await page.$(".device-url")) === null);
-  await reconnect?.click();
-  await page.waitForSelector(".device-badge", { timeout: 8000 }).catch(() => null);
-  check("reconnect: reconnects without a URL", (await page.$(".device-badge")) !== null);
 } finally {
   await browser.close();
   device.kill();

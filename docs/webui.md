@@ -72,38 +72,37 @@ Playground-only for now — device map upload is a later firmware item.
 `[x,y,z]` but Preview only renders 2D. Add a 3D projection view (rotatable
 point cloud / isometric). Pairs with the mapper-tab work.
 
-### Debugging must not lie when connected to a live device [M]
-The device has no stepping debugger, yet placing a gutter breakpoint currently
-arms debug mode even in device mode (via `onBreakpoints → toggleDebug`,
-bypassing the disabled button). Two acceptable fixes: **hide the debug
-capability entirely while streaming**, or **switch to local WASM computation**
-for debugging (compile the same source locally and step there). Start by fully
-gating it off in device mode; local-compute debugging is the nicer follow-up.
+### Debugging must not lie when connected to a live device [M] ✅
+**Resolved by the local-preview model (below).** Device mode now runs the same
+WASM engine as the playground for its preview, so the step-debugger is genuine
+local computation — it works everywhere, no lying. The old "gating it off in
+device mode" concern is moot.
 
-## Device connection & status
+## Device mode = local preview + push [L] ✅
 
-### "ws push" is jargon [S] ✅-able now
-The streaming indicator says "ws push" — meaningless to users. Say something
-like "streaming" / "live" (and "polling · 40 ms" for the HTTP fallback).
-
-### Remember the device URL across reconnect [S] ✅ (superseded)
-Resolved by removing the device-URL field entirely. The address is always known:
-a real device serves the UI from its own flash (auto-connect to same origin),
-`?device=<base>` is a dev/e2e override, and reconnect reuses the bound base — so
-disconnect → a plain **"reconnect"** button, never a URL to type. A hosted
-playground has no device support at all (`isPlayground` gates all device UI).
-
-### Connection is async and handled badly on load [M] ✅
-**Done.** Added a connection phase state (`idle → connecting → live`).
-`connectDevice` enters `connecting` and holds the preview blank; a `markLive()`
-helper flips to `live` on the *first real datum from the stream* (ws pixels or
-status, or the HTTP-fallback poll) and clears the preview once at that moment —
-so no pre-stabilization frames (leftover playground content, canvas-resize
-artifacts, HTTP/WS cadence jitter) ever land in the waterfall. A "connecting…"
-pill (header) + overlay (preview) shows the async handshake instead of stale
-frames. Verified in the device-e2e: on connect the waterfall is held blank
-(0 lit) through the handshake, then streams. See `deviceConn`/`markLive` in
-App.svelte.
+Jeremy: the live pixel stream from the device "isn't helpful — remove it," and
+the connect/disconnect buttons too ("it's always connected for the API"). So
+device mode was re-architected into **"the playground that also drives the
+strip":**
+- **No pixel streaming.** Removed the ws push socket, HTTP pixel/vars/readouts
+  polling, `deviceConn`/`markLive`, the connecting pill + preview overlay, and
+  the streaming/polling indicator. The preview always runs on the **local WASM
+  engine** (even on a device); `recompile()` is device-independent now.
+- **No connect/disconnect/reconnect buttons, no device badge.** The wordmark
+  shows the bound device; the API connection is assumed always-up. A failed
+  connect just shows an error (reload to retry).
+- **Editing pushes to the device.** Typing → local recompile (150 ms) + a
+  throttled `devicePush` (500 ms, guarded by the local compile so a broken
+  pattern is never sent). New/opened/imported patterns push immediately
+  (`applyEdit`). Controls update the local engine AND the device. Layout changes
+  are preview-only (never push).
+- **The connect handshake on load stays** (Jeremy: "still wait for the device to
+  finish connecting so it knows what pattern to open"): `patternLoading` covers
+  the editor while `connectDevice` fetches status/pattern/brightness/config/
+  protocol; then the local engine builds from the pulled/resumed source.
+- device.ts lost `openSocket`/`wsCall`/`pixels`/`vars`/`readouts`/`controls`/
+  `setVar` (all unused now). device-e2e asserts no connect chrome + local preview
+  renders + controls still drive the device pixels via push.
 
 ## Settings page 🔧 [L]
 

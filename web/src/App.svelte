@@ -131,36 +131,14 @@
       dirty = false; // freshly loaded from the device — matches what's running
       hints = parseControlHints(source);
       compileError = null;
-      setTimeout(async () => {
-        if (device) controls = await device.controls();
-      }, 300);
+      // controls come from the local recompile the caller runs next
     } catch (e) {
       deviceError = `cannot load pattern: ${String(e)}`;
     }
   }
-  let devicePreviewBusy = false;
-  let lastDevicePreview = 0;
-  let lastDeviceStatus = 0;
-  let pollMs = 0; // measured preview request latency (HTTP fallback only)
-  let deviceWs: WebSocket | null = null;
-  let wsLive = false; // push socket delivering — HTTP polling stands down
-  let statusMisses = 0;
-  let wsGraceUntil = 0; // suppress HTTP polls while the handshake runs
-
-  /** Connection phase. `connecting` holds the preview blank so the async
-   *  status→source→controls→stream handshake never leaks pre-stabilization
-   *  frames (old playground content, resize artifacts, HTTP/WS jitter) into
-   *  the waterfall; `live` starts the moment the real stream delivers. */
-  let deviceConn: "idle" | "connecting" | "live" = "idle";
-
-  /** First real datum from the device → go live, wiping anything drawn before
-   *  the stream stabilized. Idempotent. */
-  function markLive(): void {
-    if (deviceConn === "connecting") {
-      deviceConn = "live";
-      preview?.clear();
-    }
-  }
+  /** Debounced push of the working source to the device (over WiFi, so slower
+   *  than the local preview recompile). */
+  let pushDebounce: ReturnType<typeof setTimeout> | undefined;
 
   /** The device this app is bound to, if any. `""` = served from the device
    *  itself (same origin); a URL = a `?device=` dev/e2e override; `null` = a
@@ -226,7 +204,7 @@
     dirty = false; // a fresh template — not yet edited
     subTab = "pattern";
     if (layout.kind === "map") layout = { kind: "strip", pixels: pixelCount() };
-    void tick().then(recompile);
+    void tick().then(applyEdit);
     openEditor(onDevice ? "device" : "library");
   }
 
@@ -239,7 +217,8 @@
     openEditor("device");
     patternLoading = true; // cover the editor until the source is fetched
     try {
-      await loadDevicePattern(id);
+      await loadDevicePattern(id); // activates it on the device
+      recompile(); // build the local preview (no push — it's already running)
     } finally {
       patternLoading = false;
     }
@@ -258,48 +237,6 @@
   // the map sub-tab exists only while a 2D map is the active layout
   $: if (layout.kind !== "map" && subTab === "map") subTab = "pattern";
 
-  function openDeviceSocket(): void {
-    if (!device) return;
-    // The device serves 2 connections and the server reaps idle keep-alive
-    // sockets after ~1 s. Quiet the HTTP polls first, wait out the reaper,
-    // THEN dial — otherwise the handshake races our own idle connections.
-    wsGraceUntil = performance.now() + 6000;
-    const session = device;
-    setTimeout(() => {
-      if (!device || deviceWs) return;
-      dialDeviceSocket(session);
-    }, 1600);
-  }
-
-  function dialDeviceSocket(session: DeviceSession): void {
-    deviceWs = session.openSocket({
-      onPixels: (px) => {
-        wsLive = true;
-        if (px.length >= pixelCount() * 3) {
-          markLive(); // first good frame → clear the connecting hold
-          if (running) preview?.draw(px);
-        }
-      },
-      onStatus: (st) => {
-        markLive(); // a status frame confirms the stream even while paused
-        fps = st.fps;
-        runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
-      },
-      onVars: (v) => (vars = v),
-      onReadouts: (r) => (readouts = r),
-      onControls: (c) => (controls = c),
-      onClose: () => {
-        wsLive = false;
-        deviceWs = null; // deviceTick's HTTP polling takes back over
-        // retry: the socket can lose the connection race against asset
-        // loading on the 2-connection device
-        setTimeout(() => {
-          if (device && !deviceWs) openDeviceSocket();
-        }, 3000);
-      },
-    });
-  }
-
   const pixelCount = () =>
     layout.kind === "strip"
       ? layout.pixels
@@ -307,10 +244,11 @@
         ? layout.w * layout.h
         : layout.coords.length;
 
-  /** Connect (or reconnect) to the bound device. The base is always known —
-   *  from served-from-device detection or a `?device=` override — so there's
-   *  never a URL to type. `pullPattern` loads the device's running pattern into
-   *  the editor; pass false to keep an in-progress edit (working copy). */
+  /** Bind to the device and open its running pattern. The base is always known
+   *  (served-from-device same-origin, or a `?device=` override). No pixel
+   *  streaming: the preview runs locally; the device is a sink we push code +
+   *  controls to. `pullPattern` loads the device's running pattern into the
+   *  editor; pass false to keep an in-progress edit (working copy). */
   async function connectDevice(base: string, pullPattern = true): Promise<void> {
     deviceError = "";
     base = base.trim().replace(/\/+$/, "");
@@ -318,13 +256,7 @@
     try {
       const st = await session.status();
       device = session;
-      deviceBase = base; // bind (survives disconnect → reconnect needs no URL)
-      deviceConn = "connecting"; // hold the preview blank until the stream is live
-      // suppress HTTP preview polling from the very start of the handshake, so
-      // the ws wins the race and no HTTP frame flips us live before the stream
-      // is really up (openDeviceSocket refreshes this + schedules the dial)
-      wsGraceUntil = performance.now() + 6000;
-      if (debugMode) toggleDebug();
+      deviceBase = base;
       devicePixels = st.pixels; // hardware pixel count (fixed; layout only rearranges)
       layout = { kind: "strip", pixels: st.pixels };
       if (pullPattern) {
@@ -335,7 +267,6 @@
         exampleName = "";
         devicePatternId = "";
       }
-      controls = await session.controls();
       try {
         const b = await session.brightness();
         brightness = b.brightness;
@@ -358,63 +289,38 @@
         /* older firmware without /api/protocol — leave the default */
       }
       compileError = null;
-      runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
-      fps = st.fps;
-      preview?.clear();
       await refreshDevicePatterns();
-      openDeviceSocket();
     } catch (e) {
       device = null;
       deviceError = `cannot reach device: ${String(e)}`;
     }
   }
 
-  function disconnectDevice(): void {
-    deviceWs?.close();
-    deviceWs = null;
-    wsLive = false;
-    deviceConn = "idle";
-    device = null;
-    deviceError = "";
-    devicePatterns = [];
-    devicePatternId = "";
-    if (tab === "settings") tab = "library"; // Settings needs a live connection
-    recompile();
-  }
-
-  /** byte offset of (1-based line, col) for squiggles on device errors */
-  function lineColToByte(text: string, line: number, col: number): number {
-    const lines = text.split("\n");
-    let off = 0;
-    for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
-      off += new TextEncoder().encode(lines[i]).length + 1;
-    }
-    return off + Math.max(0, col - 1);
-  }
-
+  /** Send the current source to the device so its real LEDs follow the local
+   *  preview. The source is already validated by the local compile, so this
+   *  just runs it; a rejection (or network error) surfaces as a device error. */
   async function devicePush(): Promise<void> {
     if (!device) return;
-    const r = await device.run(source);
-    if (r.ok) {
-      compileError = null;
-      runtimeError = null;
-      hints = parseControlHints(source);
-      // the swap happens on the device's next render tick; give the
-      // controls snapshot a moment (the status tick also refreshes them)
-      setTimeout(async () => {
-        if (device) controls = await device.controls();
-      }, 300);
-    } else {
-      const start = lineColToByte(source, r.line, r.col);
-      compileError = { line: r.line, col: r.col, message: r.error, start, end: start + 1 };
+    if (compileError) return; // never push a pattern the local compile rejected
+    try {
+      const r = await device.run(source);
+      if (!r.ok) deviceError = `device rejected the pattern: ${r.error}`;
+      else deviceError = "";
+    } catch (e) {
+      deviceError = `push failed: ${String(e)}`;
     }
   }
 
+  /** Local recompile (for the preview) plus an immediate device push — used
+   *  when a whole new pattern is opened/created (typing debounces separately). */
+  function applyEdit(): void {
+    recompile();
+    if (device) void devicePush();
+  }
+
+  /** Rebuild the local preview engine from `source`. Device-independent now:
+   *  the preview always runs on the local WASM engine, even on a device. */
   function recompile(): void {
-    if (device) {
-      void devicePush();
-      return;
-    }
     if (!luxel) return;
     const result = luxel.compile(source, pixelCount());
     if (result instanceof Engine) {
@@ -453,9 +359,13 @@
   function onSourceChange(e: CustomEvent<string>): void {
     source = e.detail;
     dirty = true; // the user edited away from the loaded/saved pattern
+    // local preview recompiles fast; the device push (over WiFi) is throttled
     clearTimeout(debounce);
-    // device pushes go over WiFi — debounce longer than local recompiles
-    debounce = setTimeout(recompile, device ? 500 : 150);
+    debounce = setTimeout(recompile, 150);
+    if (device) {
+      clearTimeout(pushDebounce);
+      pushDebounce = setTimeout(() => void devicePush(), 500);
+    }
   }
 
   // ---- .epe import / export (Pixel Blaze pattern interchange) ----
@@ -491,7 +401,7 @@
       editing = true; // a dropped/imported .epe opens straight in the editor
       preview?.clear(); // fresh waterfall for the imported pattern
       await tick();
-      recompile();
+      applyEdit();
     } catch (e) {
       importError = `.epe import failed: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -572,7 +482,7 @@
     source = p.source;
     controlValues = {};
     dirty = false; // freshly loaded from the library
-    void tick().then(recompile);
+    void tick().then(applyEdit);
   }
 
   function deleteSaved(): void {
@@ -670,9 +580,7 @@ export function render(index) {
   function installMap(coords: number[][], _dims: number): void {
     if (coords.length === 0) return;
     layout = { kind: "map", coords };
-    // on a device the map only rearranges the preview — the device keeps
-    // running its own pattern, so don't re-push anything
-    if (!device) recompile();
+    recompile(); // local preview only — a layout change never pushes to the device
   }
 
   function onMapSourceChange(e: CustomEvent<string>): void {
@@ -782,7 +690,7 @@ export function render(index) {
     source = p.source;
     controlValues = {};
     dirty = false; // freshly picked from the gallery
-    void tick().then(recompile);
+    void tick().then(applyEdit);
   }
 
   // ---- shareable pattern URLs ----
@@ -880,7 +788,7 @@ export function render(index) {
       subTab = "map";
       if (!mapEngine) recompileMap(false);
       runMapNow(); // installMap() flips layout → map on success
-      if (layout.kind !== "map" && !device) recompile();
+      if (layout.kind !== "map") recompile();
       return;
     }
     subTab = "pattern";
@@ -892,7 +800,7 @@ export function render(index) {
       const side = Math.max(2, Math.round(Math.sqrt(total)));
       layout = { kind: "grid", w: side, h: side };
     }
-    if (!device) recompile(); // preview-only on a device (don't re-push)
+    recompile(); // rebuild the local preview (a layout change never pushes)
   }
 
   function setLayoutNum(field: "pixels" | "w" | "h", e: Event): void {
@@ -901,7 +809,7 @@ export function render(index) {
     if (layout.kind === "grid" && (field === "w" || field === "h")) {
       layout = { ...layout, [field]: v };
     }
-    if (!device) recompile(); // preview-only on a device (don't re-push)
+    recompile(); // rebuild the local preview (a layout change never pushes)
   }
 
   function onFpsChange(e: Event): void {
@@ -950,11 +858,8 @@ export function render(index) {
   }
 
   function onControlSet(e: CustomEvent<{ name: string; values: number[] }>): void {
-    if (device) {
-      void device.setControl(e.detail.name, e.detail.values);
-    } else {
-      engine?.setControl(e.detail.name, e.detail.values);
-    }
+    engine?.setControl(e.detail.name, e.detail.values); // drives the local preview
+    if (device) void device.setControl(e.detail.name, e.detail.values); // and the strip
   }
 
   // ---- debugger ----
@@ -1072,60 +977,8 @@ export function render(index) {
 
   // ---- render loop ----
 
-  async function deviceTick(t: number): Promise<void> {
-    if (!device) return;
-    if (wsLive) return; // push socket is delivering everything
-    if (performance.now() < wsGraceUntil) return; // ws handshake in flight
-    if (t - lastDeviceStatus > 1000) {
-      lastDeviceStatus = t;
-      try {
-        const st = await device.status();
-        statusMisses = 0;
-        markLive(); // HTTP fallback is up → leave the connecting hold
-        fps = st.fps;
-        runtimeError = st.vmerr ? { message: st.vmerr, fn: 0, pc: 0 } : null;
-        deviceError = "";
-        controls = await device.controls(); // tracks pattern swaps
-      } catch {
-        // tolerate transient misses — the device serves only 2 connections
-        if (++statusMisses >= 3) deviceError = "device unreachable";
-      }
-    }
-    if (t - lastPoll > 300) {
-      lastPoll = t;
-      try {
-        vars = await device.vars();
-        readouts = await device.readouts();
-      } catch {
-        /* transient; status poll reports connectivity */
-      }
-    }
-    const interval = 1000 / Math.min(targetFps || 30, 30);
-    if (!devicePreviewBusy && running && t - lastDevicePreview >= interval) {
-      devicePreviewBusy = true;
-      lastDevicePreview = t;
-      const t0 = performance.now();
-      try {
-        const px = await device.pixels();
-        pollMs = pollMs * 0.8 + (performance.now() - t0) * 0.2;
-        if (px.length >= pixelCount() * 3) {
-          markLive();
-          preview?.draw(px);
-        }
-      } catch {
-        /* ditto */
-      } finally {
-        devicePreviewBusy = false;
-      }
-    }
-  }
-
   function loop(t: number): void {
     raf = requestAnimationFrame(loop);
-    if (device) {
-      void deviceTick(t);
-      return;
-    }
     if (!engine || !running) return;
     if (dbg.paused) return; // suspended at a debug stop — step buttons drive
     const minInterval = targetFps > 0 ? 1000 / targetFps - 1 : 0;
@@ -1226,6 +1079,7 @@ export function render(index) {
         // too (editor, preview and device all agree). A clean copy instead
         // opens whatever pattern is currently active on the device.
         await connectDevice(base, /* pullPattern */ !wipDirty);
+        recompile(); // build the local preview engine from the resumed/pulled source
         if (wipDirty && device) await devicePush();
       } finally {
         patternLoading = false;
@@ -1236,6 +1090,7 @@ export function render(index) {
   onDestroy(() => {
     cancelAnimationFrame(raf);
     clearTimeout(debounce);
+    clearTimeout(pushDebounce);
     clearTimeout(mapDebounce);
     engine?.free();
     mapEngine?.free();
@@ -1303,40 +1158,7 @@ export function render(index) {
 
     <span class="spacer"></span>
 
-    {#if device}
-      {#if deviceConn === "connecting"}
-        <span class="mono connecting" data-role="conn-state" title="handshaking with the device">
-          <span class="spinner" aria-hidden="true"></span> connecting…
-        </span>
-      {:else}
-        <span
-          class="mono dim"
-          data-role="conn-state"
-          title={wsLive ? "live pixel stream over websocket" : "polling over HTTP"}
-        >
-          {wsLive ? "streaming" : `polling · ${pollMs.toFixed(0)} ms`}
-        </span>
-      {/if}
-    {/if}
     <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
-
-    {#if !isPlayground}
-      <span class="conn">
-        {#if device}
-          <span class="device-badge mono">device{device.base ? ` ${device.base}` : ""}</span>
-          <button on:click={disconnectDevice}>disconnect</button>
-        {:else}
-          <!-- the device address is already known — reconnect, no URL to type -->
-          <button
-            data-role="reconnect"
-            on:click={() => void connectDevice(deviceBase ?? "")}
-            title={`reconnect to ${deviceBase || "the device"}`}
-          >
-            {deviceError ? "retry" : "reconnect"}
-          </button>
-        {/if}
-      </span>
-    {/if}
   </header>
 
   <!-- ───────────── Editor tab ───────────── -->
@@ -1524,8 +1346,6 @@ export function render(index) {
           {running ? "pause" : "play"}
         </button>
         {#if subTab === "map"}
-          <!-- the map is a local WASM program, so it's debuggable even on a
-               device (where the pattern debugger itself is unavailable) -->
           <button
             class="debug-toggle"
             class:active={mapDebugMode}
@@ -1535,10 +1355,13 @@ export function render(index) {
           >
             debug
           </button>
-        {:else if !device}
+        {:else}
+          <!-- the preview runs on the local engine (even on a device), so the
+               step-debugger works everywhere -->
           <button
             class="debug-toggle"
             class:active={debugMode}
+            data-role="debug"
             title="toggle debugger"
             on:click={toggleDebug}
           >
@@ -1589,17 +1412,12 @@ export function render(index) {
           on:step={(e) => mapStep(e.detail)}
           on:break={mapRequestBreak}
         />
-      {:else if debugMode && !device && subTab === "pattern"}
+      {:else if debugMode && subTab === "pattern"}
         <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
       {/if}
 
       <div class="preview-wrap">
         <Preview bind:this={preview} {layout} />
-        {#if device && deviceConn === "connecting"}
-          <div class="preview-connecting" data-role="preview-connecting">
-            <span class="spinner"></span> connecting to device…
-          </div>
-        {/if}
       </div>
 
       <h2>Controls</h2>
@@ -1676,7 +1494,9 @@ export function render(index) {
         </button>
       </div>
       {#if !device}
-        <p class="dim hint">device offline — reconnect to manage its patterns.</p>
+        <p class="dim hint" data-role="device-offline">
+          device unreachable — {deviceError || "reload to retry"}.
+        </p>
       {:else if devicePatterns.length === 0}
         <p class="dim hint">no patterns stored on the device yet. Create one with “+ New pattern”.</p>
       {:else}
@@ -1739,7 +1559,7 @@ export function render(index) {
           <div class="field">
             <span class="flabel">Status</span>
             <span class="mono dim">
-              {fps.toFixed(0)} fps · {wsLive ? "streaming" : "polling"}{runtimeError
+              {fps.toFixed(0)} fps (local preview){runtimeError
                 ? ` · vmerr: ${runtimeError.message}`
                 : ""}
             </span>
@@ -1840,12 +1660,6 @@ export function render(index) {
   .tab.active {
     color: var(--accent);
     border-bottom-color: var(--accent);
-  }
-
-  .conn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
   }
 
   .num {
@@ -2244,35 +2058,8 @@ export function render(index) {
     font-size: 12px;
   }
 
-  .device-badge {
-    color: var(--accent);
-    font-size: 12px;
-  }
-
-  .connecting {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--warn);
-    font-size: 12px;
-  }
-
   .preview-wrap {
     position: relative;
-  }
-
-  .preview-connecting {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--bg) 70%, transparent);
-    color: var(--text-dim);
-    font-size: 13px;
-    pointer-events: none;
   }
 
   .spinner {
