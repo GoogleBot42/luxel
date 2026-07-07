@@ -59,6 +59,36 @@ async function setEditor(page, text) {
 }
 
 try {
+  // ---- boot cover: no playground flash, device-aware message ----
+  // On load the whole app is covered until the device's running pattern is
+  // loaded (delaying /api/pattern makes the cover linger long enough to read).
+  {
+    const boot = await browser.newPage();
+    await boot.setRequestInterception(true);
+    boot.on("request", (r) =>
+      r.url().includes("/api/pattern") ? setTimeout(() => r.continue(), 2000) : r.continue(),
+    );
+    boot.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
+      waitUntil: "domcontentloaded",
+    });
+    // the delayed /api/pattern keeps the handshake (and the cover) up long
+    // enough to observe the device-aware message
+    const sawDeviceLabel = await boot
+      .waitForFunction(
+        () =>
+          /running on the device/.test(
+            document.querySelector('[data-role="boot-label"]')?.textContent ?? "",
+          ),
+        { timeout: 6000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    check("boot: device-aware loading message", sawDeviceLabel);
+    // the cover is over the whole app during the connect — nothing flashes
+    check("boot: cover up during device connect", (await boot.$('[data-role="boot"]')) !== null);
+    await boot.close();
+  }
+
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
   // No device-URL field any more: a real device serves the UI from its own

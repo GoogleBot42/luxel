@@ -55,6 +55,10 @@
   /** Fetching/activating a pattern for the editor — cover the editor with a
    *  loading screen so a stale last-opened script never flashes first. */
   let patternLoading = false;
+  /** First-load cover: hides the app until we've decided playground vs device
+   *  (and, on a device, loaded its running pattern) so nothing flashes first. */
+  let booting = true;
+  let bootLabel = "loading…";
   let debugMode = false;
   let breakpoints: number[] = [];
   let dbg: DebugSnapshot = { paused: false };
@@ -1008,11 +1012,40 @@ export function render(index) {
     }
   }
 
+  /** How we bind to a device (a plain playground binds to none):
+   *   1. `?device=<base>` — a dev/e2e override pointing the built UI at a
+   *      device or the native mirror (known synchronously).
+   *   2. served-from-device — the UI loaded from the device's own flash, so the
+   *      device is this same origin (probe `/api/status`; a dev server's SPA
+   *      fallback returns 200 HTML, so require a genuine device JSON shape). */
+  async function detectDeviceBase(): Promise<string | null> {
+    const override = new URLSearchParams(location.search).get("device");
+    if (override !== null) return override.trim().replace(/\/+$/, "");
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 1500);
+      const r = await fetch("/api/status", { signal: ctl.signal });
+      clearTimeout(t);
+      const isJson = r.headers.get("content-type")?.includes("application/json");
+      if (r.ok && isJson) {
+        const st = (await r.json()) as { pixels?: unknown };
+        if (typeof st.pixels === "number") return "";
+      }
+    } catch {
+      /* not a device — stays a playground */
+    }
+    return null;
+  }
+
   onMount(async () => {
+    // Probe for a device in parallel with the wasm load, so we can go straight
+    // into device mode without ever flashing the playground first.
+    const deviceProbe = detectDeviceBase();
     try {
       luxel = await Luxel.load(`${import.meta.env.BASE_URL}luxel.wasm`);
     } catch (e) {
       loadFailure = `failed to load luxel.wasm: ${String(e)}`;
+      booting = false;
       return;
     }
     // In-progress work wins: a share link's pattern, else the autosaved
@@ -1034,57 +1067,30 @@ export function render(index) {
         wipDirty = wc.dirty; // the device only resumes it if it's genuinely dirty
       }
     }
-    recompile();
-    raf = requestAnimationFrame(loop);
-    editing = hadWip; // resume in the editor if there was work in progress
-    if (fromHash) return; // a share link never auto-connects to a device
+    // a share link never auto-connects to a device
+    const base = fromHash ? null : await deviceProbe;
 
-    // How we bind to a device (a plain playground binds to none):
-    //  1. `?device=<base>` — a dev/e2e override pointing the built UI at a
-    //     device or the native mirror.
-    //  2. served-from-device — the UI loaded from the device's own flash, so
-    //     the device is this same origin. Auto-connect.
-    // Either way the base is then *known*, so reconnect never needs a URL.
-    // On a device the editor opens over the Device Patterns tab, showing the
-    // running pattern (unless the user had work in progress — then that wins).
-    const override = new URLSearchParams(location.search).get("device");
-    let base: string | null = null;
-    if (override !== null) {
-      base = override.trim().replace(/\/+$/, "");
-    } else {
-      // Served from a device? Require a genuine device response — a dev
-      // server's SPA fallback returns 200 HTML for /api/status, so require
-      // JSON with the device's shape before binding.
-      try {
-        const ctl = new AbortController();
-        const t = setTimeout(() => ctl.abort(), 1500);
-        const r = await fetch("/api/status", { signal: ctl.signal });
-        clearTimeout(t);
-        const isJson = r.headers.get("content-type")?.includes("application/json");
-        if (r.ok && isJson) {
-          const st = (await r.json()) as { pixels?: unknown };
-          if (typeof st.pixels === "number") base = "";
-        }
-      } catch {
-        /* not a device — stays a playground */
-      }
-    }
     if (base !== null) {
-      deviceBase = base; // bind (device UI shows even if the connect races)
+      // Device mode: keep the boot cover up (with device-aware text) through the
+      // whole handshake so the running pattern is loaded before anything shows.
+      bootLabel = "opening the pattern running on the device…";
+      deviceBase = base;
       tab = "device"; // the editor's back button lands on Device Patterns
       editing = true;
-      patternLoading = true; // cover the editor through the async handshake
-      try {
-        // A genuinely-unsaved edit is resumed AND pushed so the device runs it
-        // too (editor, preview and device all agree). A clean copy instead
-        // opens whatever pattern is currently active on the device.
-        await connectDevice(base, /* pullPattern */ !wipDirty);
-        recompile(); // build the local preview engine from the resumed/pulled source
-        if (wipDirty && device) await devicePush();
-      } finally {
-        patternLoading = false;
-      }
+      recompile(); // a local engine so the boot cover lifts onto a live preview
+      raf = requestAnimationFrame(loop);
+      // A genuinely-unsaved edit is resumed AND pushed so the device runs it too
+      // (editor, preview and device all agree). A clean copy instead opens
+      // whatever pattern is currently active on the device.
+      await connectDevice(base, /* pullPattern */ !wipDirty);
+      recompile(); // rebuild the preview from the pulled/resumed source
+      if (wipDirty && device) await devicePush();
+    } else {
+      recompile();
+      raf = requestAnimationFrame(loop);
+      editing = hadWip; // resume in the editor if there was work in progress
     }
+    booting = false;
   });
 
   onDestroy(() => {
@@ -1107,6 +1113,14 @@ export function render(index) {
   on:drop={onDrop}
   on:dragover|preventDefault
 >
+  {#if booting}
+    <!-- first-load cover: nothing renders behind it, so the playground never
+         flashes before we switch into device mode + load the running pattern -->
+    <div class="boot" data-role="boot">
+      <span class="spinner"></span>
+      <span class="boot-label" data-role="boot-label">{bootLabel}</span>
+    </div>
+  {/if}
   <header>
     {#if editing}
       <button
@@ -1167,7 +1181,8 @@ export function render(index) {
       <!-- cover the editor while a pattern is being fetched/activated so the
            previously-open script never flashes before the real one loads -->
       <div class="pattern-loading" data-role="pattern-loading">
-        <span class="spinner"></span> loading pattern…
+        <span class="spinner"></span>
+        {device ? "loading the pattern from the device…" : "loading pattern…"}
       </div>
     {/if}
     <section class="left">
@@ -1690,6 +1705,20 @@ export function render(index) {
     gap: 10px;
     color: var(--text-dim);
     background: var(--bg);
+  }
+
+  /* first-load cover over the whole app (header included) */
+  .boot {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--bg);
+    color: var(--text-dim);
+    font-size: 15px;
   }
 
   /* one surface visible at a time; hidden ones stay mounted (state survives) */
