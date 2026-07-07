@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-07-06 night — control-picker layout, no device-URL field, no share on device ✅
+
+Three UI fixes from your feedback:
+
+- **Color-picker controls no longer run off-screen.** An `hsvPicker`/`rgbPicker`
+  laid its three channels out in one horizontal row, so the 2nd/3rd sliders
+  overflowed the narrow right rail and were unreachable — and the channels had
+  no numeric field. They now **stack vertically**, each channel with a slider
+  **and** an editable number box (like the scalar sliders). Verified: 0 rail
+  overflow.
+- **No more "device url" field.** The address is always known — a real device
+  serves the UI from its own flash (auto-connect to same origin), and reconnect
+  just reuses that. So disconnect → **"reconnect" button, no URL to type**. A
+  hosted/standalone playground has *no* device support at all (that's what
+  playground mode is for), so it shows no connect UI. (Dev/e2e point the built
+  UI at a device or the mirror with `?device=<base>`.)
+- **Share is gone in device mode.** Those links carry the pattern in the URL —
+  on a device that's a LAN address that won't work for anyone else. Share is now
+  shown only in the playground (keyed off the same "is this a playground?"
+  state, so it's hidden whether you're connected or just served from a device).
+
+The map sub-tab is likewise gated to playground mode (device map upload is a
+later firmware item). device-e2e updated (auto-connect via `?device=`, asserts
+no URL field / no share button in device mode, and reconnect-without-URL); both
+suites green. Pushed to the dev device.
+
 ## 2026-07-06 night — clean device connect-on-load (no more waterfall garbage) ✅
 
 Fixed the connect weirdness you flagged: on load the waterfall skipped and kept

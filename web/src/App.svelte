@@ -58,7 +58,6 @@
 
   // ---- device mode ----
   let device: DeviceSession | null = null;
-  let deviceUrl = "";
   let deviceError = "";
   /** The device's stored pattern library (empty on firmware without CRUD). */
   let devicePatterns: { id: string; name: string }[] = [];
@@ -120,14 +119,20 @@
     }
   }
 
-  const DEVICE_URL_KEY = "luxel:deviceUrl";
-  /** Base of the last successful connection ("" = served-from-device), kept
-   *  so reconnect works without re-typing the URL. */
-  let lastBase: string | null = null;
+  /** The device this app is bound to, if any. `""` = served from the device
+   *  itself (same origin); a URL = a `?device=` dev/e2e override; `null` = a
+   *  plain playground (no hardware — no connection UI at all). Set once we
+   *  know we're on a device; survives disconnect so reconnect needs no URL. */
+  let deviceBase: string | null = null;
 
-  /** "device" once a session is up, "playground" otherwise — drives which
-   *  affordances the header shows (share vs. device console). */
-  $: mode = device ? "device" : "playground";
+  /** No device involved — a hosted/standalone playground. Devices are only
+   *  reached by loading the UI *from* a device (or a `?device=` override), so
+   *  the playground never shows connect/share-to-device affordances. */
+  $: isPlayground = deviceBase === null;
+
+  /** "device" whenever we're bound to hardware (even while disconnected),
+   *  "playground" otherwise — drives which affordances the header shows. */
+  $: mode = isPlayground ? "playground" : "device";
 
   // ---- top-level tabs ----
   // Both modes get the tab bar; device mode adds Settings. Panels stay
@@ -150,7 +155,7 @@
         ? layout.w * layout.h
         : layout.coords.length;
   // the map sub-tab is playground-only (device map upload comes later)
-  $: if (device && subTab === "map") subTab = "pattern";
+  $: if (!isPlayground && subTab === "map") subTab = "pattern";
 
   function openDeviceSocket(): void {
     if (!device) return;
@@ -201,31 +206,22 @@
         ? layout.w * layout.h
         : layout.coords.length;
 
-  /** Connect from the UI: reuse the last known base when the field is empty
-   *  (e.g. reconnecting after a served-from-device session), else use the
-   *  typed URL. */
-  function connectFromUi(): void {
-    if (deviceUrl.trim() === "" && lastBase !== null) void connectDevice(lastBase);
-    else void connectDevice();
-  }
-
-  async function connectDevice(baseOverride?: string): Promise<void> {
+  /** Connect (or reconnect) to the bound device. The base is always known —
+   *  from served-from-device detection or a `?device=` override — so there's
+   *  never a URL to type. */
+  async function connectDevice(base: string): Promise<void> {
     deviceError = "";
-    const base = (baseOverride ?? deviceUrl).trim().replace(/\/+$/, "");
+    base = base.trim().replace(/\/+$/, "");
     const session = new DeviceSession(base);
     try {
       const st = await session.status();
       device = session;
+      deviceBase = base; // bind (survives disconnect → reconnect needs no URL)
       deviceConn = "connecting"; // hold the preview blank until the stream is live
-      lastBase = base; // remember it so reconnect needs no re-typing
-      if (base !== "") {
-        deviceUrl = base;
-        try {
-          localStorage.setItem(DEVICE_URL_KEY, base);
-        } catch {
-          /* private mode — non-fatal */
-        }
-      }
+      // suppress HTTP preview polling from the very start of the handshake, so
+      // the ws wins the race and no HTTP frame flips us live before the stream
+      // is really up (openDeviceSocket refreshes this + schedules the dial)
+      wsGraceUntil = performance.now() + 6000;
       if (debugMode) toggleDebug();
       layout = { kind: "strip", pixels: st.pixels };
       source = await session.pattern();
@@ -1006,14 +1002,6 @@ export function render(index) {
       loadFailure = `failed to load luxel.wasm: ${String(e)}`;
       return;
     }
-    // pre-fill the device URL from the last successful connection so manual
-    // reconnect needs no re-typing
-    try {
-      deviceUrl = localStorage.getItem(DEVICE_URL_KEY) ?? "";
-    } catch {
-      /* private mode — non-fatal */
-    }
-
     // a share link's pattern beats the default example — and suppresses
     // device auto-connect (the link's intent is "look at this pattern").
     // Otherwise restore the autosaved working copy: never lose edits.
@@ -1031,12 +1019,23 @@ export function render(index) {
     raf = requestAnimationFrame(loop);
     if (fromHash) return;
 
-    // Served from a device (playground installed in its flash)? Auto-enter
-    // device mode against the same origin. Must be a genuine device
-    // response — a dev server's SPA fallback returns 200 HTML for
-    // /api/status, so require JSON with the device's shape before
-    // connecting (otherwise we'd strand a "device unreachable" banner on
-    // the local playground).
+    // How we bind to a device (a plain playground binds to none):
+    //  1. `?device=<base>` — a dev/e2e override to point the built UI at a
+    //     device or the native mirror.
+    //  2. served-from-device — the UI loaded from the device's own flash, so
+    //     the device is this same origin. Auto-connect.
+    // Either way the base is then *known*, so reconnect never needs a URL.
+    const override = new URLSearchParams(location.search).get("device");
+    if (override !== null) {
+      deviceBase = override.trim().replace(/\/+$/, "");
+      await connectDevice(deviceBase);
+      return;
+    }
+
+    // Served from a device? Must be a genuine device response — a dev
+    // server's SPA fallback returns 200 HTML for /api/status, so require JSON
+    // with the device's shape before binding (else we'd strand a "device
+    // unreachable" banner on a hosted playground).
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 1500);
@@ -1046,11 +1045,12 @@ export function render(index) {
       if (r.ok && isJson) {
         const st = (await r.json()) as { pixels?: unknown };
         if (typeof st.pixels === "number") {
-          await connectDevice(""); // served-from-device → same origin
+          deviceBase = ""; // bind to this origin even if the connect races
+          await connectDevice("");
         }
       }
     } catch {
-      /* not a device */
+      /* not a device — stays a playground */
     }
   });
 
@@ -1075,7 +1075,7 @@ export function render(index) {
 >
   <header>
     <span class="wordmark">
-      luxel <span class="dim">{device ? (device.base ? device.base : "device") : "playground"}</span>
+      luxel <span class="dim">{isPlayground ? "playground" : (device?.base ?? deviceBase) || "device"}</span>
     </span>
 
     <nav class="tabs" data-role="tabs">
@@ -1126,29 +1126,23 @@ export function render(index) {
     {/if}
     <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
 
-    <span class="conn">
-      {#if device}
-        <span class="device-badge mono">device{device.base ? ` ${device.base}` : ""}</span>
-        <button on:click={disconnectDevice}>disconnect</button>
-      {:else}
-        <input
-          class="device-url"
-          type="text"
-          placeholder={lastBase ? lastBase || "reconnect device" : "device url (http://…)"}
-          bind:value={deviceUrl}
-          on:keydown={(e) => e.key === "Enter" && connectFromUi()}
-        />
-        <button
-          on:click={connectFromUi}
-          disabled={deviceUrl.trim() === "" && lastBase === null}
-          title={deviceUrl.trim() === "" && lastBase !== null
-            ? `reconnect to ${lastBase || "the device"}`
-            : "connect to a device"}
-        >
-          connect
-        </button>
-      {/if}
-    </span>
+    {#if !isPlayground}
+      <span class="conn">
+        {#if device}
+          <span class="device-badge mono">device{device.base ? ` ${device.base}` : ""}</span>
+          <button on:click={disconnectDevice}>disconnect</button>
+        {:else}
+          <!-- the device address is already known — reconnect, no URL to type -->
+          <button
+            data-role="reconnect"
+            on:click={() => void connectDevice(deviceBase ?? "")}
+            title={`reconnect to ${deviceBase || "the device"}`}
+          >
+            {deviceError ? "retry" : "reconnect"}
+          </button>
+        {/if}
+      </span>
+    {/if}
   </header>
 
   <!-- ───────────── Editor tab ───────────── -->
@@ -1204,7 +1198,7 @@ export function render(index) {
               delete
             </button>
           {/if}
-          {#if !device}
+          {#if isPlayground}
             <button
               data-role="share"
               class="primary"
@@ -1245,7 +1239,7 @@ export function render(index) {
         </span>
       </div>
 
-      {#if !device}
+      {#if isPlayground}
         <div class="subtabs" data-role="editor-subtabs">
           <button
             data-role="subtab-pattern"
@@ -1279,7 +1273,7 @@ export function render(index) {
             on:breakpoints={onBreakpoints}
           />
         </div>
-        {#if !device && mapMounted}
+        {#if isPlayground && mapMounted}
           <div class="editor-slot" data-role="map-editor" hidden={subTab !== "map"}>
             <Editor
               bind:this={mapEditor}
@@ -1293,7 +1287,7 @@ export function render(index) {
       </div>
 
       <div class="playback">
-        {#if !device && subTab === "map"}
+        {#if isPlayground && subTab === "map"}
           <button data-role="map-run" title="run the map program and install it" on:click={runMapNow}>
             run map
           </button>
@@ -1359,7 +1353,7 @@ export function render(index) {
         <button data-role="pause" on:click={togglePause} title={running ? "pause" : "resume"}>
           {running ? "pause" : "play"}
         </button>
-        {#if !device && subTab === "map"}
+        {#if isPlayground && subTab === "map"}
           <button
             class="debug-toggle"
             class:active={mapDebugMode}
@@ -1416,7 +1410,7 @@ export function render(index) {
         </div>
       {/if}
 
-      {#if !device && subTab === "map" && mapDebugMode}
+      {#if isPlayground && subTab === "map" && mapDebugMode}
         <Debugger
           snapshot={mapDbg}
           runningHint="set a gutter breakpoint, then Run map to step through it"
@@ -1445,7 +1439,7 @@ export function render(index) {
         </p>
       {/if}
 
-      {#if !device}
+      {#if isPlayground}
         <h2>Map</h2>
         <p class="dim hint">
           {#if layout.kind === "map"}
@@ -1894,12 +1888,6 @@ export function render(index) {
 
   .mapper-error {
     color: var(--error);
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-  }
-
-  .device-url {
-    width: 180px;
     font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: 12px;
   }

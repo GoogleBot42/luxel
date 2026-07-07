@@ -61,15 +61,21 @@ async function setEditor(page, text) {
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
-  await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle0" });
+  // No device-URL field any more: a real device serves the UI from its own
+  // flash (auto-connect to same origin); here we use the `?device=` dev
+  // override to point the built playground at the mirror, and it auto-connects.
+  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
+    waitUntil: "networkidle0",
+  });
   await page.waitForSelector(".cm-content");
-  await sleep(500);
+  await page.waitForSelector(".device-badge", { timeout: 8000 });
+  check("connect: badge shown (auto-connect, no URL typed)", true);
 
-  // connect to the device mirror
-  await page.type(".device-url", DEV);
-  await page.click(".device-url + button");
-  await page.waitForSelector(".device-badge", { timeout: 5000 });
-  check("connect: badge shown", true);
+  // the device-URL field is gone entirely (the address is always known)
+  check("device: no device-url field", (await page.$(".device-url")) === null);
+  // share makes no sense on a device (the link is the device's LAN address) —
+  // it must not appear in device mode
+  check("device: no share button", (await page.$('[data-role="share"]')) === null);
 
   // connect-on-load race (#9): the async handshake is held cleanly — a
   // "connecting…" state shows and the waterfall is kept blank so no
@@ -236,6 +242,13 @@ try {
   await sleep(1200);
   const badge = await page.$(".device-badge");
   check("disconnect: badge gone", badge === null);
+  // reconnecting needs no URL — a plain reconnect button (the base is known)
+  const reconnect = await page.$('[data-role="reconnect"]');
+  check("disconnect: reconnect button shown (no URL field)", reconnect !== null);
+  check("disconnect: still no device-url field", (await page.$(".device-url")) === null);
+  await reconnect?.click();
+  await page.waitForSelector(".device-badge", { timeout: 8000 }).catch(() => null);
+  check("reconnect: reconnects without a URL", (await page.$(".device-badge")) !== null);
 } finally {
   await browser.close();
   device.kill();

@@ -80,9 +80,12 @@ gating it off in device mode; local-compute debugging is the nicer follow-up.
 The streaming indicator says "ws push" — meaningless to users. Say something
 like "streaming" / "live" (and "polling · 40 ms" for the HTTP fallback).
 
-### Remember the device URL across reconnect [S]
-Disconnect then connect should not require re-typing the URL. Persist the last
-device URL (localStorage) and pre-fill / reuse it.
+### Remember the device URL across reconnect [S] ✅ (superseded)
+Resolved by removing the device-URL field entirely. The address is always known:
+a real device serves the UI from its own flash (auto-connect to same origin),
+`?device=<base>` is a dev/e2e override, and reconnect reuses the bound base — so
+disconnect → a plain **"reconnect"** button, never a URL to type. A hosted
+playground has no device support at all (`isPlayground` gates all device UI).
 
 ### Connection is async and handled badly on load [M] ✅
 **Done.** Added a connection phase state (`idle → connecting → live`).
@@ -112,10 +115,10 @@ A real device needs a settings surface (page/dialog). Fields:
 
 ## Sharing
 
-### Share only in playground mode [S]
-Share (pattern-in-URL) makes sense for the hosted/GitHub-Pages playground, not
-on a device console. Hide it in device mode; keep it prominent in playground
-mode.
+### Share only in playground mode [S] ✅
+Done. Share (pattern-in-URL) is shown only when `isPlayground` — hidden whether
+you're connected to a device or merely served from one (its link would be a LAN
+address). Prominent in the playground toolbar.
 
 ## Patterns browser
 

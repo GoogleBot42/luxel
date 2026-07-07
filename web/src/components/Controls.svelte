@@ -75,17 +75,32 @@
             on:change={(e) => scalar(c.name, e)}
           />
         {:else if c.kind === "hsvPicker" || c.kind === "rgbPicker"}
-          {#each c.kind === "hsvPicker" ? ["H", "S", "V"] : ["R", "G", "B"] as ch, i}
-            <span class="dim">{ch}</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.001"
-              value={values[c.name]?.[i] ?? (i === 0 ? 0 : 1)}
-              on:input={(e) => picker(c.name, i, e)}
-            />
-          {/each}
+          <!-- three channels stacked (H/S/V or R/G/B), each with a slider +
+               number field — a single row overflows the narrow rail -->
+          <div class="channels">
+            {#each c.kind === "hsvPicker" ? ["H", "S", "V"] : ["R", "G", "B"] as ch, i}
+              <div class="ch-row">
+                <span class="dim ch">{ch}</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.001"
+                  value={values[c.name]?.[i] ?? (i === 0 ? 0 : 1)}
+                  on:input={(e) => picker(c.name, i, e)}
+                />
+                <input
+                  class="num"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.001"
+                  value={values[c.name]?.[i] ?? (i === 0 ? 0 : 1)}
+                  on:change={(e) => picker(c.name, i, e)}
+                />
+              </div>
+            {/each}
+          </div>
         {:else if c.kind === "toggle"}
           <input
             type="checkbox"
@@ -117,6 +132,30 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  /* pickers stack their channels, so the label rides at the top */
+  .control:has(.channels) {
+    align-items: flex-start;
+  }
+
+  .channels {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ch-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ch {
+    width: 14px;
+    text-align: center;
   }
 
   .label {
