@@ -135,6 +135,34 @@ try {
     .catch(() => 0);
   check("preview streams from device", lit > 60, `lit=${lit}`);
 
+  // layout dropdown is back in device mode (#3): strip/grid/2D map arrange the
+  // live stream in the local preview (the device's pixel count stays fixed)
+  const layoutSel = await page.$('[data-role="layout-kind"]');
+  check("layout: dropdown present on device", layoutSel !== null);
+  const layoutOpts = await page.$$eval('[data-role="layout-kind"] option', (os) =>
+    os.map((o) => o.value),
+  );
+  check(
+    "layout: offers strip/grid/2D map",
+    ["strip", "grid", "map"].every((k) => layoutOpts.includes(k)),
+    layoutOpts.join(","),
+  );
+  // the strip pixel count is fixed by hardware — the field is read-only
+  const pxDisabled = await page.$eval('[data-role="layout-px"]', (el) => el.disabled);
+  check("layout: strip pixel count is read-only on device", pxDisabled === true);
+  // switching to grid rearranges the preview and reveals the grid inputs
+  await page.select('[data-role="layout-kind"]', "grid");
+  await sleep(300);
+  check("layout: grid reveals w×h inputs", (await page.$('[data-role="layout-w"]')) !== null);
+  // a preview-only layout change must NOT re-push the pattern to the device
+  const stillRunning = await (await fetch(`${DEV}/api/pattern`)).text();
+  check(
+    "layout: grid switch doesn't disturb the device pattern",
+    stillRunning.includes("canonical default pattern"),
+  );
+  await page.select('[data-role="layout-kind"]', "strip"); // restore
+  await sleep(200);
+
   // live-code push: slider-controlled solid color + exported var
   await setEditor(
     page,
@@ -201,6 +229,13 @@ try {
   check("library: back lands on Device Patterns", (await page.$('[data-role="device-panel"]:not([hidden])')) !== null);
   const listed = await page.$$eval('[data-role="device-pattern"]', (els) => els.map((e) => e.textContent ?? ""));
   check("library: Device Patterns tab lists it", listed.some((t) => t.includes("device kept")), listed.join("|"));
+  // each device pattern renders a live preview thumbnail (#2) — its source is
+  // fetched in the background, so wait for the canvas to appear
+  const hasThumb = await page
+    .waitForSelector('[data-role="device-pattern"] canvas', { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  check("library: device pattern shows a preview thumbnail", hasThumb);
   // clicking it opens the editor and activates it on the device
   const seenReqs = [];
   page.on("request", (r) => {
@@ -224,6 +259,72 @@ try {
     (apiAfter.patterns ?? []).length === 0,
     JSON.stringify(apiAfter),
   );
+
+  // ---- dirty-aware resume across reload (#4) ----
+  // An unsaved edit must (a) survive a reload and (b) be re-pushed so the
+  // device runs it — even when the device was changed out-of-band meanwhile.
+  await setEditor(page, "export function render(index) { rgb(0.111, 0.222, 0.333) }");
+  await sleep(1500); // push debounce (500) + working-copy autosave (800) + margin
+  check(
+    "resume: unsaved edit was pushed to the device",
+    (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.111"),
+  );
+  // change what the device runs out from under the editor
+  await fetch(`${DEV}/api/code`, {
+    method: "POST",
+    body: "export function render(index) { rgb(0.9, 0.8, 0.7) }",
+  });
+  await sleep(300);
+  check(
+    "resume: device changed out-of-band",
+    (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.9"),
+  );
+  // reload — the dirty edit must win over the out-of-band device pattern
+  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
+    waitUntil: "networkidle0",
+  });
+  await page.waitForSelector(".cm-content");
+  await page.waitForSelector(".device-badge", { timeout: 8000 });
+  await sleep(1800); // let the resume push land on the device
+  check(
+    "resume: editor restores the unsaved edit",
+    (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.111"),
+  );
+  check(
+    "resume: device re-runs the resumed edit (not the out-of-band one)",
+    (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.111"),
+  );
+
+  // clean copy → defer to the device. Save (clean), change the device
+  // out-of-band, reload: the editor must open the RUNNING pattern, not resume.
+  await page.click('[data-role="save"]'); // dialog handler accepts as "device kept"
+  await sleep(1000);
+  await fetch(`${DEV}/api/code`, {
+    method: "POST",
+    body: "export function render(index) { rgb(0.44, 0.55, 0.66) }",
+  });
+  await sleep(300);
+  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
+    waitUntil: "networkidle0",
+  });
+  await page.waitForSelector(".cm-content");
+  await page.waitForSelector(".device-badge", { timeout: 8000 });
+  await sleep(1200);
+  check(
+    "resume(clean): opens the device's running pattern, not the saved editor",
+    (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.44"),
+  );
+  // clean up the saved pattern so a re-run starts fresh
+  await fetch(`${DEV}/api/patterns`)
+    .then((r) => r.json())
+    .then((j) =>
+      Promise.all(
+        (j.patterns ?? []).map((p) =>
+          fetch(`${DEV}/api/patterns/${p.id}`, { method: "DELETE" }),
+        ),
+      ),
+    )
+    .catch(() => {});
 
   // disconnect returns to the local wasm engine
   await page.$$eval("header button", (btns) => {

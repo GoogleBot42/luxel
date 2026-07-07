@@ -4,6 +4,7 @@
   import Debugger from "./components/Debugger.svelte";
   import Editor from "./components/Editor.svelte";
   import Gallery from "./components/Gallery.svelte";
+  import PatternThumb from "./components/PatternThumb.svelte";
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
@@ -47,6 +48,13 @@
   let targetFps = 60;
   let running = true;
   let loadFailure = "";
+  /** The editor's source differs from the pattern it was loaded from / saved
+   *  as — genuinely unsaved changes. Persisted in the working copy so a reload
+   *  can tell "resume my edit" from "show what's running". */
+  let dirty = false;
+  /** Fetching/activating a pattern for the editor — cover the editor with a
+   *  loading screen so a stale last-opened script never flashes first. */
+  let patternLoading = false;
   let debugMode = false;
   let breakpoints: number[] = [];
   let dbg: DebugSnapshot = { paused: false };
@@ -59,10 +67,16 @@
   // ---- device mode ----
   let device: DeviceSession | null = null;
   let deviceError = "";
-  /** The device's stored pattern library (empty on firmware without CRUD). */
-  let devicePatterns: { id: string; name: string }[] = [];
+  /** The device's stored pattern library (empty on firmware without CRUD).
+   *  `source` is filled lazily in the background so each row can show a live
+   *  preview thumbnail. */
+  let devicePatterns: { id: string; name: string; source?: string }[] = [];
   /** Set while the editor holds a device-stored pattern. */
   let devicePatternId = "";
+  /** The device's fixed hardware pixel count — the source of truth for the
+   *  pixel total in device mode (layout changes only rearrange the preview,
+   *  they never change how many pixels the device drives). */
+  let devicePixels = 0;
 
   async function refreshDevicePatterns(): Promise<void> {
     if (!device) return;
@@ -70,6 +84,26 @@
       devicePatterns = await device.patterns();
     } catch {
       devicePatterns = []; // older firmware — no /api/patterns yet
+      return;
+    }
+    void loadDevicePreviewSources();
+  }
+
+  /** Fetch each stored pattern's source one at a time (the device serves only
+   *  ~2 connections, so never in parallel) to feed the row thumbnails. */
+  async function loadDevicePreviewSources(): Promise<void> {
+    const session = device;
+    if (!session) return;
+    for (const p of devicePatterns) {
+      if (device !== session) return; // disconnected/reconnected mid-fetch
+      if (p.source !== undefined) continue;
+      try {
+        const full = await session.patternSource(p.id);
+        p.source = full.source;
+        devicePatterns = devicePatterns; // reflect the filled-in thumbnail
+      } catch {
+        /* skip a pattern that won't load; its row just stays a spinner */
+      }
     }
   }
 
@@ -86,6 +120,7 @@
       patternName = p.name;
       exampleName = "";
       source = p.source;
+      dirty = false; // freshly loaded from the device — matches what's running
       hints = parseControlHints(source);
       compileError = null;
       setTimeout(async () => {
@@ -180,6 +215,7 @@
     devicePatternId = "";
     importError = "";
     controlValues = {};
+    dirty = false; // a fresh template — not yet edited
     subTab = "pattern";
     if (layout.kind === "map") layout = { kind: "strip", pixels: pixelCount() };
     void tick().then(recompile);
@@ -191,9 +227,14 @@
     openEditor("library");
   }
 
-  function openDevicePatternInEditor(id: string): void {
-    void loadDevicePattern(id);
+  async function openDevicePatternInEditor(id: string): Promise<void> {
     openEditor("device");
+    patternLoading = true; // cover the editor until the source is fetched
+    try {
+      await loadDevicePattern(id);
+    } finally {
+      patternLoading = false;
+    }
   }
 
   /** The label/target the editor's back button returns to. */
@@ -276,12 +317,15 @@
       // is really up (openDeviceSocket refreshes this + schedules the dial)
       wsGraceUntil = performance.now() + 6000;
       if (debugMode) toggleDebug();
+      devicePixels = st.pixels; // hardware pixel count (fixed; layout only rearranges)
       layout = { kind: "strip", pixels: st.pixels };
       if (pullPattern) {
         source = await session.pattern(); // show what's running on the device
+        dirty = false; // editor now matches the running pattern
         hints = parseControlHints(source);
         patternName = "";
         exampleName = "";
+        devicePatternId = "";
       }
       controls = await session.controls();
       compileError = null;
@@ -379,6 +423,7 @@
 
   function onSourceChange(e: CustomEvent<string>): void {
     source = e.detail;
+    dirty = true; // the user edited away from the loaded/saved pattern
     clearTimeout(debounce);
     // device pushes go over WiFi — debounce longer than local recompiles
     debounce = setTimeout(recompile, device ? 500 : 150);
@@ -413,6 +458,7 @@
       devicePatternId = "";
       source = main;
       controlValues = {};
+      dirty = true; // an imported .epe isn't in the library/device until saved
       editing = true; // a dropped/imported .epe opens straight in the editor
       preview?.clear(); // fresh waterfall for the imported pattern
       await tick();
@@ -445,10 +491,18 @@
   function queueAutosave(): void {
     clearTimeout(autosave);
     autosave = setTimeout(() => {
-      saveWorkingCopy({ source, layout, patternName, exampleName });
+      saveWorkingCopy({ source, layout, patternName, exampleName, dirty });
     }, 800);
   }
-  $: if (source || layout) queueAutosave();
+  // re-persist on any change to the fields the working copy stores — including
+  // `dirty`, which flips to false on save WITHOUT a source change (so a reload
+  // then correctly defers to the device instead of resuming a saved pattern)
+  $: {
+    source;
+    layout;
+    dirty;
+    queueAutosave();
+  }
 
   function saveToLibrary(): void {
     const suggestion = patternName || exampleName || "my pattern";
@@ -462,6 +516,7 @@
           patternName = name;
           exampleName = "";
           devicePatternId = r.id ?? "";
+          dirty = false; // now stored on the device
           saveNote = "saved to device";
           await refreshDevicePatterns();
         } else {
@@ -474,6 +529,7 @@
     saved = savePattern(name, source);
     patternName = name;
     exampleName = "";
+    dirty = false; // now stored in the library
     saveNote = "saved";
     setTimeout(() => (saveNote = ""), 2000);
   }
@@ -486,6 +542,7 @@
     importError = "";
     source = p.source;
     controlValues = {};
+    dirty = false; // freshly loaded from the library
     void tick().then(recompile);
   }
 
@@ -542,7 +599,9 @@ export function render(index) {
    *  we're debugging — then the user drives it with Run). */
   function recompileMap(autoRun = true): void {
     if (!luxel) return;
-    const result = luxel.compileMap(mapSrc, pixelCount());
+    // on a device the map lays out the fixed hardware pixel count (it's a local
+    // preview aid); in the playground it's whatever the current layout declares
+    const result = luxel.compileMap(mapSrc, device ? devicePixels : pixelCount());
     if (result instanceof Engine) {
       mapEngine?.free();
       mapEngine = result;
@@ -582,7 +641,9 @@ export function render(index) {
   function installMap(coords: number[][], _dims: number): void {
     if (coords.length === 0) return;
     layout = { kind: "map", coords };
-    recompile();
+    // on a device the map only rearranges the preview — the device keeps
+    // running its own pattern, so don't re-push anything
+    if (!device) recompile();
   }
 
   function onMapSourceChange(e: CustomEvent<string>): void {
@@ -691,6 +752,7 @@ export function render(index) {
     }
     source = p.source;
     controlValues = {};
+    dirty = false; // freshly picked from the gallery
     void tick().then(recompile);
   }
 
@@ -789,17 +851,19 @@ export function render(index) {
       subTab = "map";
       if (!mapEngine) recompileMap(false);
       runMapNow(); // installMap() flips layout → map on success
-      if (layout.kind !== "map") recompile();
+      if (layout.kind !== "map" && !device) recompile();
       return;
     }
     subTab = "pattern";
+    // on a device the pixel count is fixed by hardware; layout only rearranges
+    const total = device ? devicePixels : pixelCount();
     if (kind === "strip") {
-      layout = { kind: "strip", pixels: pixelCount() };
+      layout = { kind: "strip", pixels: total };
     } else if (kind === "grid") {
-      const side = Math.max(2, Math.round(Math.sqrt(pixelCount())));
+      const side = Math.max(2, Math.round(Math.sqrt(total)));
       layout = { kind: "grid", w: side, h: side };
     }
-    recompile();
+    if (!device) recompile(); // preview-only on a device (don't re-push)
   }
 
   function setLayoutNum(field: "pixels" | "w" | "h", e: Event): void {
@@ -808,7 +872,7 @@ export function render(index) {
     if (layout.kind === "grid" && (field === "w" || field === "h")) {
       layout = { ...layout, [field]: v };
     }
-    recompile();
+    if (!device) recompile(); // preview-only on a device (don't re-push)
   }
 
   function onFpsChange(e: Event): void {
@@ -1034,10 +1098,12 @@ export function render(index) {
       return;
     }
     // In-progress work wins: a share link's pattern, else the autosaved
-    // working copy. If either is present the editor opens on it (resume — never
-    // lose edits), and we keep it even when connecting to a device.
+    // working copy. The editor opens on it (resume — never lose edits). A
+    // device, though, only resumes it when it has *unsaved changes*; a clean
+    // copy defers to whatever pattern is actually running on the device.
     const fromHash = await loadFromHash();
     let hadWip = fromHash;
+    let wipDirty = fromHash; // a shared link is itself an unsaved edit to resume
     if (!fromHash) {
       const wc = loadWorkingCopy();
       if (wc) {
@@ -1045,7 +1111,9 @@ export function render(index) {
         layout = wc.layout;
         patternName = wc.patternName;
         exampleName = wc.exampleName;
-        hadWip = true;
+        dirty = wc.dirty;
+        hadWip = true; // the playground always resumes the last working copy
+        wipDirty = wc.dirty; // the device only resumes it if it's genuinely dirty
       }
     }
     recompile();
@@ -1087,7 +1155,16 @@ export function render(index) {
       deviceBase = base; // bind (device UI shows even if the connect races)
       tab = "device"; // the editor's back button lands on Device Patterns
       editing = true;
-      await connectDevice(base, !hadWip); // keep a wip; else show what's running
+      patternLoading = true; // cover the editor through the async handshake
+      try {
+        // A genuinely-unsaved edit is resumed AND pushed so the device runs it
+        // too (editor, preview and device all agree). A clean copy instead
+        // opens whatever pattern is currently active on the device.
+        await connectDevice(base, /* pullPattern */ !wipDirty);
+        if (wipDirty && device) await devicePush();
+      } finally {
+        patternLoading = false;
+      }
     }
   });
 
@@ -1199,6 +1276,13 @@ export function render(index) {
 
   <!-- ───────────── Editor tab ───────────── -->
   <main class="editor-view" hidden={!editing}>
+    {#if patternLoading}
+      <!-- cover the editor while a pattern is being fetched/activated so the
+           previously-open script never flashes before the real one loads -->
+      <div class="pattern-loading" data-role="pattern-loading">
+        <span class="spinner"></span> loading pattern…
+      </div>
+    {/if}
     <section class="left">
       <!-- File actions live in a toolbar fixed above the editor (not in the
            header next to the device connection) — they act on the pattern
@@ -1310,56 +1394,60 @@ export function render(index) {
       </div>
 
       <div class="playback">
-        {#if isPlayground}
-          <!-- "2D map" is the single enable/disable for mapping: choosing it
-               reveals the pattern·map sub-tabs and runs the map program -->
-          <select value={layout.kind} data-role="layout-kind" on:change={setLayoutKind}>
-            <option value="strip">strip</option>
-            <option value="grid">grid</option>
-            <option value="map">2D map</option>
-          </select>
-          {#if layout.kind === "strip"}
-            <input
-              class="num"
-              data-role="layout-px"
-              type="number"
-              min="1"
-              max="4096"
-              value={layout.pixels}
-              on:change={(e) => setLayoutNum("pixels", e)}
-            />
-            <span class="dim">px</span>
-          {:else if layout.kind === "grid"}
-            <input
-              class="num"
-              data-role="layout-w"
-              type="number"
-              min="1"
-              max="256"
-              value={layout.w}
-              on:change={(e) => setLayoutNum("w", e)}
-            />
-            <span class="dim">×</span>
-            <input
-              class="num"
-              data-role="layout-h"
-              type="number"
-              min="1"
-              max="256"
-              value={layout.h}
-              on:change={(e) => setLayoutNum("h", e)}
-            />
-          {:else}
-            <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
-          {/if}
-          {#if subTab === "map"}
-            <button data-role="map-run" title="run the map program and install it" on:click={runMapNow}>
-              run map
-            </button>
-            {#if mapError}<span class="mapper-error" data-role="map-error">{mapError}</span>{/if}
-          {/if}
-          <span class="sep"></span>
+        <!-- Layout controls how the preview is arranged. In the playground it
+             also sets how many pixels the local engine runs; on a device the
+             pixel count is fixed by hardware and this only rearranges the live
+             stream (strip row / grid / 2D map) — "2D map" is a local preview
+             aid, not uploaded to the device. Choosing "2D map" reveals the
+             pattern·map sub-tabs and runs the map program. -->
+        <select value={layout.kind} data-role="layout-kind" on:change={setLayoutKind}>
+          <option value="strip">strip</option>
+          <option value="grid">grid</option>
+          <option value="map">2D map</option>
+        </select>
+        {#if layout.kind === "strip"}
+          <input
+            class="num"
+            data-role="layout-px"
+            type="number"
+            min="1"
+            max="4096"
+            value={layout.pixels}
+            disabled={!isPlayground}
+            title={isPlayground ? "pixel count" : "fixed by the device's hardware"}
+            on:change={(e) => setLayoutNum("pixels", e)}
+          />
+          <span class="dim">px</span>
+        {:else if layout.kind === "grid"}
+          <input
+            class="num"
+            data-role="layout-w"
+            type="number"
+            min="1"
+            max="256"
+            value={layout.w}
+            on:change={(e) => setLayoutNum("w", e)}
+          />
+          <span class="dim">×</span>
+          <input
+            class="num"
+            data-role="layout-h"
+            type="number"
+            min="1"
+            max="256"
+            value={layout.h}
+            on:change={(e) => setLayoutNum("h", e)}
+          />
+        {:else}
+          <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
         {/if}
+        {#if subTab === "map"}
+          <button data-role="map-run" title="run the map program and install it" on:click={runMapNow}>
+            run map
+          </button>
+          {#if mapError}<span class="mapper-error" data-role="map-error">{mapError}</span>{/if}
+        {/if}
+        <span class="sep"></span>
         <select value={targetFps} on:change={onFpsChange}>
           <option value={0}>max fps</option>
           <option value={60}>60 fps</option>
@@ -1370,7 +1458,9 @@ export function render(index) {
         <button data-role="pause" on:click={togglePause} title={running ? "pause" : "resume"}>
           {running ? "pause" : "play"}
         </button>
-        {#if isPlayground && subTab === "map"}
+        {#if subTab === "map"}
+          <!-- the map is a local WASM program, so it's debuggable even on a
+               device (where the pattern debugger itself is unavailable) -->
           <button
             class="debug-toggle"
             class:active={mapDebugMode}
@@ -1427,7 +1517,7 @@ export function render(index) {
         </div>
       {/if}
 
-      {#if isPlayground && subTab === "map" && mapDebugMode}
+      {#if subTab === "map" && mapDebugMode}
         <Debugger
           snapshot={mapDbg}
           runningHint="set a gutter breakpoint, then Run map to step through it"
@@ -1456,13 +1546,14 @@ export function render(index) {
         </p>
       {/if}
 
-      {#if isPlayground && layout.kind === "map"}
+      {#if layout.kind === "map"}
         <h2>Map</h2>
         <p class="dim hint">
           A {pixelTotal}-point map is installed. Edit it in the
           <button class="link" data-role="goto-map" on:click={() => (subTab = "map")}>map</button>
-          sub-tab — it's a debuggable Luxel program (<code>plot(x, y)</code> per pixel). Choose a
-          different layout to turn mapping off.
+          sub-tab — it's a debuggable Luxel program (<code>plot(x, y)</code> per pixel).{" "}
+          {#if device}It only arranges this preview — it isn't uploaded to the device.{/if} Choose
+          a different layout to turn mapping off.
         </p>
       {/if}
 
@@ -1533,6 +1624,9 @@ export function render(index) {
                 class:active={p.id === devicePatternId}
                 on:click={() => openDevicePatternInEditor(p.id)}
               >
+                {#if luxel}
+                  <PatternThumb {luxel} source={p.source} />
+                {/if}
                 <span class="dev-name">{p.name}</span>
                 <span class="dim">edit ›</span>
               </button>
@@ -1670,10 +1764,23 @@ export function render(index) {
   }
 
   .editor-view {
+    position: relative;
     display: grid;
     grid-template-columns: minmax(360px, 1fr) minmax(320px, 420px);
     flex: 1;
     min-height: 0;
+  }
+
+  .pattern-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--text-dim);
+    background: var(--bg);
   }
 
   /* one surface visible at a time; hidden ones stay mounted (state survives) */
