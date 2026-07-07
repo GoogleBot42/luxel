@@ -41,7 +41,14 @@ await sleep(1500);
 const browser = await puppeteer.launch({
   executablePath: CHROMIUM,
   headless: true,
-  args: ["--no-sandbox", "--disable-gpu", "--window-size=1400,900"],
+  args: [
+    "--no-sandbox",
+    "--disable-gpu",
+    "--window-size=1400,900",
+    // fake mic + auto-grant, for the mic-to-device forwarding check
+    "--use-fake-device-for-media-stream",
+    "--use-fake-ui-for-media-stream",
+  ],
 });
 
 const fails = [];
@@ -395,6 +402,20 @@ try {
       await fetch(`${DEV}/api/sensors`, { method: "POST", body: "junk" })
     ).json();
     check("sensors: junk rejected", bad.ok === false, JSON.stringify(bad));
+
+    // mic-to-device forwarding: with the sound toggle on in device mode,
+    // the browser mic streams frames to the device (fake mic = a tone).
+    // A real (trusted) click: AudioContext needs the user activation.
+    await page.click('[data-role="mic-toggle"]');
+    let forwarded = false;
+    for (let i = 0; i < 16 && !forwarded; i++) {
+      await sleep(250);
+      const v = (await (await fetch(`${DEV}/api/vars`)).json()).energyAverage;
+      // injected value above (0x4000) gets overwritten by live mic frames
+      if (typeof v === "number" && v !== 0x4000 && v > 0) forwarded = true;
+    }
+    check("sensors: mic frames stream to the device", forwarded);
+    await page.click('[data-role="mic-toggle"]'); // off
   }
 
   // network input: a DDP packet overrides the engine (status.live + pixels),

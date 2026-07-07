@@ -194,6 +194,14 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; error?: string };
   }
 
+  /** Stream one sensor-board frame (98-byte SB1.0 wire format) to the
+   *  device — the browser mic standing in for the physical sensor board. */
+  async sendSensors(frame: Uint8Array): Promise<void> {
+    // cast: TS 5.7 types Uint8Array over ArrayBufferLike, which BodyInit
+    // rejects; ours is a plain (non-shared) buffer
+    await fetch(this.url("/api/sensors"), { method: "POST", body: frame.buffer as ArrayBuffer });
+  }
+
   /** Compile + run a stored pattern on the device. */
   async activatePattern(id: string): Promise<RunResult> {
     const res = await fetch(this.url(`/api/patterns/${id}/activate`), { method: "POST" });

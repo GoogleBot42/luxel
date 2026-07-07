@@ -9,6 +9,34 @@ const BANDS = 32;
 const LO_HZ = 37;
 const HI_HZ = 10_000;
 
+/** Encode a frame as the sensor board's 98-byte serial format
+ *  ("SB1.0\0" … "END\0") — what POST /api/sensors expects, so the browser
+ *  mic can stand in for the physical board. */
+export function toSensorBoardFrame(s: SensorFrame): Uint8Array {
+  const buf = new Uint8Array(98);
+  const view = new DataView(buf.buffer);
+  const ascii = (at: number, str: string): void => {
+    for (let i = 0; i < str.length; i++) buf[at + i] = str.charCodeAt(i);
+  };
+  const u16 = (at: number, v: number): void =>
+    view.setUint16(at, Math.max(0, Math.min(0xffff, Math.round(v * 0x10000))), true);
+  ascii(0, "SB1.0\0");
+  for (let i = 0; i < BANDS; i++) u16(6 + i * 2, s.frequencyData[i] ?? 0);
+  u16(70, s.energyAverage);
+  u16(72, s.maxFrequencyMagnitude);
+  view.setUint16(74, Math.max(0, Math.min(0xffff, Math.round(s.maxFrequency))), true);
+  for (let i = 0; i < 3; i++)
+    view.setInt16(
+      76 + i * 2,
+      Math.max(-0x8000, Math.min(0x7fff, Math.round((s.accelerometer?.[i] ?? 0) * 0x10000))),
+      true,
+    );
+  u16(82, s.light ?? 0);
+  for (let i = 0; i < 5; i++) u16(84 + i * 2, s.analogInputs?.[i] ?? 0);
+  ascii(94, "END\0");
+  return buf;
+}
+
 export class MicSource {
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -43,6 +71,9 @@ export class MicSource {
       const e = Math.max(s + 1, Math.ceil(f1 / hzPerBin));
       this.bands.push([s, Math.min(e, this.bytes.length)]);
     }
+    // autoplay policy can start the context suspended (e.g. a synthetic
+    // click) — resume explicitly so the analyser actually runs
+    await ctx.resume();
     this.ctx = ctx;
     this.analyser = analyser;
   }

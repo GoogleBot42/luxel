@@ -29,7 +29,7 @@
     type RuntimeError,
     type StepKind,
   } from "./lib/luxel";
-  import { MicSource } from "./lib/audio";
+  import { MicSource, toSensorBoardFrame } from "./lib/audio";
 
   let luxel: Luxel | undefined;
   let engine: Engine | undefined;
@@ -1201,6 +1201,8 @@ export function render(index) {
   const mic = new MicSource();
   let micOn = false;
   let micError = "";
+  let sensorInFlight = false;
+  let lastSensorPush = 0;
 
   function toggleMic(): void {
     if (micOn) {
@@ -1316,7 +1318,20 @@ export function render(index) {
     if (lastT !== 0 && t - lastT < minInterval) return;
     const dt = lastT === 0 ? 1000 / (targetFps || 60) : Math.min(t - lastT, 200);
     lastT = t;
-    if (micOn) engine.setSensors(mic.frame());
+    if (micOn) {
+      const sf = mic.frame();
+      engine.setSensors(sf);
+      // in device mode, the mic also stands in for the physical sensor
+      // board: stream frames to the strip (throttled, one in flight)
+      if (device && !sensorInFlight && t - lastSensorPush > 50) {
+        lastSensorPush = t;
+        sensorInFlight = true;
+        device
+          .sendSensors(toSensorBoardFrame(sf))
+          .catch(() => {})
+          .finally(() => (sensorInFlight = false));
+      }
+    }
     const px = engine.frame(dt);
     if (engine.debugPaused()) {
       onPausedRefresh();
