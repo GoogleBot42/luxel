@@ -1,5 +1,25 @@
 # Update log
 
+## 2026-07-06 night — live LED-protocol switch (firmware v0.1.14, no reboot) ✅
+
+You asked about protocol — different strips use different ones. You can now
+switch **SK9822 (APA102) ↔ WS2812 (WS281x)** at runtime, no reboot, from a
+Settings dropdown. esp-hal's blocking SPI has `apply_config()`, so the render
+task just changes the clock (8 MHz ↔ 2.4 MHz) and re-sizes the encode buffer
+between frames — same live-swap trick as pixel count.
+
+- `GET/POST /api/protocol` (accepts sk9822/ws2812 plus aliases apa102/ws2811/
+  ws2815). Persisted alongside brightness + pixel count (settings record → v3).
+- Verified on the wall unit: sk9822→ws2812→sk9822 live, no crash, SPI restored
+  to full speed (a trivial pattern is back to 124 fps). Left on sk9822 (its real
+  strip), rainbow running.
+- Firmware v0.1.14 OTA'd; mirror + web + e2e updated (device suite now 49
+  checks); assets hot-reloaded.
+
+**All three device settings — brightness, pixel count, LED protocol — are now
+live, persisted, and reboot-free.** Phase 3 is down to just the Settings WiFi
+form (the endpoint already exists).
+
 ## 2026-07-06 night — live pixel-count resize (firmware v0.1.13, no reboot) ✅
 
 You asked for `/api/config` pixel count next and said a reboot isn't ideal — it
