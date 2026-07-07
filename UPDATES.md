@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-07-06 night — device-editor polish + real brightness (firmware v0.1.12) ✅
+
+Continued from your feedback, then took the plan's next step.
+
+- **Waterfall clears on every open**, and the **save/⋯ actions moved** out of the
+  header into a toolbar fixed above the editor (`1945a73`).
+- **Device editor fixes** (`6db7f03`): opening a device pattern now shows a
+  **loading screen** until its source is fetched (no more flash of the last
+  script); **Device Patterns get live preview thumbnails**; the **strip/grid/2D
+  map dropdown is back on the device** (pixel count fixed by hardware; map is a
+  local preview aid); and a **dirty-aware resume** — on load we only resume the
+  last file if it had unsaved changes (and then push it so the device runs it
+  too), otherwise we open whatever pattern is active on the device.
+- **Brightness is real** (`6143352`, **firmware v0.1.12**, OTA'd to the dev
+  device): a runtime `GET/POST /api/brightness`, applied every frame in the
+  encode path (SK9822 current field + a WS2812 software scale) and **persisted
+  in flash** (new `LXDV` nvs record, its own sector so it never touches WiFi
+  creds) so it survives reboot. The Settings **Brightness slider is now live**
+  (was a placeholder). Verified on hardware: live apply, out-of-range rejected,
+  flash-persist ok. Note: the web preview stays at full range — brightness dims
+  the physical strip only. Remaining Phase-3 item is `/api/config` (pixel
+  count/protocol), which needs a runtime pixel count + reboot-to-apply.
+
+Both e2e suites green (device suite now 42 checks incl. layout/thumbnail/
+dirty-resume/brightness); assets hot-reloaded to 192.168.0.205.
+
 ## 2026-07-06 night — navigation redesign: library-first, editor-on-demand ✅
 
 Restructured the app around how you actually work with patterns, per your
