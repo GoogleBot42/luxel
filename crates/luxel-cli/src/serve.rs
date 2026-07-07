@@ -11,7 +11,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,44 @@ enum Msg {
     Control(String, Vec<Fx>),
     Var(String, Fx),
     Config(u32),
+    /// Start the playlist at an index (loads that item + its params).
+    PlaylistPlay(usize),
+    /// Stop auto-advance; the current pattern keeps running.
+    PlaylistStop,
+    /// Manual advance by +1 / -1 (wraps).
+    PlaylistStep(i32),
+    /// The playlist definition changed while playing — re-enter the current
+    /// item so edits (params/source) take effect.
+    PlaylistReload,
+}
+
+/// One playlist entry: a stored pattern + a snapshot of its control values, so
+/// the same pattern can appear multiple times with different params.
+#[derive(Clone, Default)]
+struct PlaylistItem {
+    pattern_id: String,
+    /// name → raw 16.16 control values (matches /api/control on the wire).
+    controls: Vec<(String, Vec<i32>)>,
+    /// Per-item duration override in seconds. `None` = inherit the playlist
+    /// default; `Some(0)` = manual (wait for next); `Some(n)` = n seconds.
+    override_sec: Option<i32>,
+}
+
+#[derive(Clone, Default)]
+struct Playlist {
+    /// Default seconds per item; 0 = manual (no auto-advance).
+    default_sec: i32,
+    items: Vec<PlaylistItem>,
+}
+
+impl Playlist {
+    /// Effective auto-advance seconds for item `i` (0 = manual).
+    fn item_sec(&self, i: usize) -> i32 {
+        self.items
+            .get(i)
+            .and_then(|it| it.override_sec)
+            .unwrap_or(self.default_sec)
+    }
 }
 
 /// Protocol name for a stored code (mirrors leds::Protocol; the mirror drives
@@ -79,6 +117,9 @@ struct State {
     next_id: AtomicU32,
     brightness: AtomicU8,
     protocol: AtomicU8,
+    playlist: Mutex<Playlist>,
+    pl_playing: AtomicBool,
+    pl_index: AtomicUsize,
 }
 
 fn push(state: &State, msg: Msg) {
@@ -109,6 +150,24 @@ fn controls_json(state: &State) -> String {
     }
 }
 
+/// Load playlist item `i`: compile its stored pattern, apply its saved control
+/// values, and publish the source/controls snapshots. Returns the engine +
+/// source on success. Also records the active index.
+fn enter_item(state: &State, i: usize) -> Option<(Engine, String)> {
+    let item = state.playlist.lock().unwrap().items.get(i).cloned()?;
+    let sp = pattern_by_id(state, &item.pattern_id)?;
+    let mut eng = Engine::new(&sp.source, state.pixel_count.load(Ordering::Relaxed), 1).ok()?;
+    for (name, raw) in &item.controls {
+        let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
+        eng.set_control(name, &vals);
+    }
+    *state.pattern_src.lock().unwrap() = sp.source.clone();
+    *state.controls_json.lock().unwrap() = jsonview::controls_json(&eng);
+    *state.vmerr.lock().unwrap() = None;
+    state.pl_index.store(i, Ordering::Relaxed);
+    Some((eng, sp.source))
+}
+
 fn render_loop(state: Arc<State>) {
     let count = || state.pixel_count.load(Ordering::Relaxed);
     let mut current_src = DEFAULT_PATTERN.to_string();
@@ -118,6 +177,7 @@ fn render_loop(state: Arc<State>) {
         *state.controls_json.lock().unwrap() = jsonview::controls_json(eng);
     }
     let mut last = Instant::now();
+    let mut pl_start = Instant::now(); // when the current playlist item started
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
@@ -126,6 +186,8 @@ fn render_loop(state: Arc<State>) {
         for msg in state.inbox.lock().unwrap().drain(..) {
             match msg {
                 Msg::Code(src) => {
+                    // a manual code push takes over from the playlist
+                    state.pl_playing.store(false, Ordering::Relaxed);
                     if let Ok(e) = Engine::new(&src, count(), 1) {
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
                         engine = Some(e);
@@ -156,6 +218,60 @@ fn render_loop(state: Arc<State>) {
                         last = Instant::now();
                     }
                 }
+                Msg::PlaylistPlay(i) => {
+                    state.pl_playing.store(true, Ordering::Relaxed);
+                    if let Some((e, src)) = enter_item(&state, i) {
+                        engine = Some(e);
+                        current_src = src;
+                        last = Instant::now();
+                        pl_start = Instant::now();
+                    }
+                }
+                Msg::PlaylistStop => state.pl_playing.store(false, Ordering::Relaxed),
+                Msg::PlaylistStep(d) => {
+                    let len = state.playlist.lock().unwrap().items.len();
+                    if state.pl_playing.load(Ordering::Relaxed) && len > 0 {
+                        let cur = state.pl_index.load(Ordering::Relaxed) as i64;
+                        let ni = (cur + d as i64).rem_euclid(len as i64) as usize;
+                        if let Some((e, src)) = enter_item(&state, ni) {
+                            engine = Some(e);
+                            current_src = src;
+                            last = Instant::now();
+                            pl_start = Instant::now();
+                        }
+                    }
+                }
+                Msg::PlaylistReload => {
+                    if state.pl_playing.load(Ordering::Relaxed) {
+                        let i = state.pl_index.load(Ordering::Relaxed);
+                        if let Some((e, src)) = enter_item(&state, i) {
+                            engine = Some(e);
+                            current_src = src;
+                            last = Instant::now();
+                            pl_start = Instant::now();
+                        }
+                    }
+                }
+            }
+        }
+
+        // playlist auto-advance: effective seconds = item override ?? default;
+        // 0 means manual (wait for a next/prev).
+        if state.pl_playing.load(Ordering::Relaxed) {
+            let (len, sec) = {
+                let pl = state.playlist.lock().unwrap();
+                (pl.items.len(), pl.item_sec(state.pl_index.load(Ordering::Relaxed)))
+            };
+            if len == 0 {
+                state.pl_playing.store(false, Ordering::Relaxed);
+            } else if sec > 0 && pl_start.elapsed() >= Duration::from_secs(sec as u64) {
+                let ni = (state.pl_index.load(Ordering::Relaxed) + 1) % len;
+                if let Some((e, src)) = enter_item(&state, ni) {
+                    engine = Some(e);
+                    current_src = src;
+                    last = Instant::now();
+                }
+                pl_start = Instant::now();
             }
         }
 
@@ -292,6 +408,82 @@ fn patterns_delete(state: &State, id: &str) -> String {
     } else {
         String::from("{\"ok\":false,\"error\":\"no such pattern\"}")
     }
+}
+
+// ---- playlist (see firmware/src/server.rs for the same contract) ----
+
+fn playlist_json(state: &State) -> String {
+    let pl = state.playlist.lock().unwrap();
+    let lib = state.library.lock().unwrap();
+    let items: Vec<String> = pl
+        .items
+        .iter()
+        .map(|it| {
+            let name = lib
+                .iter()
+                .find(|p| p.id == it.pattern_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let sec = it.override_sec.map(|s| s.to_string()).unwrap_or_else(|| "null".into());
+            let controls: Vec<String> = it
+                .controls
+                .iter()
+                .map(|(n, raw)| {
+                    let vals: Vec<String> =
+                        raw.iter().map(|&r| format!("{}", r as f64 / 65536.0)).collect();
+                    format!("\"{}\":[{}]", json_escape(n), vals.join(","))
+                })
+                .collect();
+            format!(
+                "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}}}",
+                it.pattern_id,
+                json_escape(&name),
+                sec,
+                controls.join(",")
+            )
+        })
+        .collect();
+    format!(
+        "{{\"defaultSec\":{},\"playing\":{},\"index\":{},\"items\":[{}]}}",
+        pl.default_sec,
+        state.pl_playing.load(Ordering::Relaxed),
+        state.pl_index.load(Ordering::Relaxed),
+        items.join(",")
+    )
+}
+
+/// Parse the line-based playlist body (no JSON parser needed, mirrors the
+/// firmware). Lines: `D <sec>` default; `I <patternId> <sec|-1>` item
+/// (-1 = inherit default); `C <name> <raw...>` a control for the last item.
+fn parse_playlist(body: &str) -> Playlist {
+    let mut pl = Playlist::default();
+    for line in body.lines() {
+        let mut it = line.split_whitespace();
+        match it.next() {
+            Some("D") => pl.default_sec = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("I") => {
+                let id = it.next().unwrap_or("").to_string();
+                let sec = it.next().and_then(|v| v.parse::<i32>().ok());
+                let override_sec = match sec {
+                    Some(n) if n < 0 => None,
+                    other => other,
+                };
+                pl.items.push(PlaylistItem {
+                    pattern_id: id,
+                    controls: Vec::new(),
+                    override_sec,
+                });
+            }
+            Some("C") => {
+                if let (Some(item), Some(name)) = (pl.items.last_mut(), it.next()) {
+                    let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
+                    item.controls.push((name.to_string(), raw));
+                }
+            }
+            _ => {}
+        }
+    }
+    pl
 }
 
 /// One multiplexed ws request: `"<id> <call>\n<body>"` →
@@ -578,6 +770,33 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/playlist") => {
+            respond(&mut stream, 200, "application/json", playlist_json(&state).as_bytes());
+        }
+        ("POST", "/api/playlist") => {
+            let body = String::from_utf8_lossy(&req.body);
+            *state.playlist.lock().unwrap() = parse_playlist(&body);
+            push(&state, Msg::PlaylistReload); // apply edits if already playing
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/play") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let i = body.trim().parse::<usize>().unwrap_or(0);
+            push(&state, Msg::PlaylistPlay(i));
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/stop") => {
+            push(&state, Msg::PlaylistStop);
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/next") => {
+            push(&state, Msg::PlaylistStep(1));
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/prev") => {
+            push(&state, Msg::PlaylistStep(-1));
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
         ("POST", "/api/code") => {
             let body = String::from_utf8_lossy(&req.body).into_owned();
             let r = api_code(&state, body);
@@ -662,6 +881,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         next_id: AtomicU32::new(0x1a5e_0001),
         brightness: AtomicU8::new(4), // matches the firmware's default
         protocol: AtomicU8::new(0), // sk9822
+        playlist: Mutex::new(Playlist::default()),
+        pl_playing: AtomicBool::new(false),
+        pl_index: AtomicUsize::new(0),
     });
 
     {

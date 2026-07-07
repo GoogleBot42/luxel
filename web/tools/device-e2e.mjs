@@ -377,6 +377,89 @@ try {
     "resume(clean): opens the device's running pattern, not the saved editor",
     (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.44"),
   );
+  // ---- playlist (Phase 4) ----
+  // save a pattern with a slider, add it to the playlist TWICE with different
+  // params, set durations, play, advance
+  await setEditor(page, "export function sliderHue(h) { g = h } export function render(index) { hsv(g + index / pixelCount, 1, 1) }");
+  await sleep(900);
+  await page.click('[data-role="save"]'); // dialog handler saves as "device kept"
+  await sleep(900);
+  const addBtn = await page.$('[data-role="add-to-playlist"]');
+  check("playlist: add-to-playlist appears for a saved pattern", addBtn !== null);
+  // first add with hue=0.2
+  await page.$eval('input[type="range"]', (el) => {
+    el.value = "0.2";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(200);
+  await addBtn?.click();
+  await sleep(300);
+  // second add with hue=0.8 (same pattern, different params)
+  await page.$eval('input[type="range"]', (el) => {
+    el.value = "0.8";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(200);
+  await addBtn?.click();
+  await sleep(500);
+  const plAfterAdd = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: same pattern added twice with different params",
+    plAfterAdd.items.length === 2 &&
+      plAfterAdd.items[0].id === plAfterAdd.items[1].id &&
+      Math.abs(plAfterAdd.items[0].controls.sliderHue[0] - 0.2) < 0.01 &&
+      Math.abs(plAfterAdd.items[1].controls.sliderHue[0] - 0.8) < 0.01,
+    JSON.stringify(plAfterAdd.items.map((i) => i.controls)),
+  );
+  // go to the Playlist tab
+  await page.click('[data-role="editor-back"]');
+  await sleep(300);
+  await page.click('[data-role="tab-playlist"]');
+  await sleep(500);
+  const rows = await page.$$('[data-role="playlist-item"]');
+  check("playlist: tab shows both items", rows.length === 2);
+  // set default duration
+  await page.$eval('[data-role="pl-default-sec"]', (el) => {
+    el.value = "5";
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(500);
+  check(
+    "playlist: default duration persisted",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).defaultSec === 5,
+  );
+  // per-item override on the first row
+  await page.$$eval('[data-role="pl-override"]', (els) => {
+    els[0].click();
+  });
+  await sleep(200);
+  await page.$$eval('[data-role="pl-sec"]', (els) => {
+    els[0].value = "2";
+    els[0].dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(500);
+  check(
+    "playlist: per-item override persisted",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).items[0].sec === 2,
+  );
+  // play + advance
+  await page.click('[data-role="pl-play"]');
+  await sleep(500);
+  const playing = await (await fetch(`${DEV}/api/playlist`)).json();
+  check("playlist: play starts at index 0", playing.playing === true && playing.index === 0, JSON.stringify({ p: playing.playing, i: playing.index }));
+  await page.click('[data-role="pl-next"]');
+  await sleep(400);
+  check(
+    "playlist: next advances the device",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).index === 1,
+  );
+  await page.click('[data-role="pl-stop"]');
+  await sleep(400);
+  check(
+    "playlist: stop halts auto-advance",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).playing === false,
+  );
+
   // clean up the saved pattern so a re-run starts fresh
   await fetch(`${DEV}/api/patterns`)
     .then((r) => r.json())

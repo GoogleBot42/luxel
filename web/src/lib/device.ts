@@ -126,5 +126,53 @@ export class DeviceSession {
     return (await res.json()) as RunResult;
   }
 
-  /** Current showNumber/gauge display values. */
+  // ---- playlist ----
+
+  /** The stored playlist + current playback state. */
+  async playlist(): Promise<Playlist> {
+    return (await (await fetch(this.url("/api/playlist"))).json()) as Playlist;
+  }
+
+  /** Replace the stored playlist. `defaultSec` 0 = manual; per-item `sec` null
+   *  inherits the default. Serialized to the firmware's line format. */
+  async setPlaylist(pl: Playlist): Promise<void> {
+    const lines: string[] = [`D ${Math.max(0, Math.round(pl.defaultSec))}`];
+    for (const it of pl.items) {
+      lines.push(`I ${it.id} ${it.sec === null ? -1 : Math.max(0, Math.round(it.sec))}`);
+      for (const [name, vals] of Object.entries(it.controls)) {
+        lines.push(`C ${name} ${vals.map((v) => Math.round(v * RAW)).join(" ")}`);
+      }
+    }
+    await fetch(this.url("/api/playlist"), { method: "POST", body: lines.join("\n") });
+  }
+
+  async playlistPlay(index = 0): Promise<void> {
+    await fetch(this.url("/api/playlist/play"), { method: "POST", body: String(index) });
+  }
+  async playlistStop(): Promise<void> {
+    await fetch(this.url("/api/playlist/stop"), { method: "POST" });
+  }
+  async playlistNext(): Promise<void> {
+    await fetch(this.url("/api/playlist/next"), { method: "POST" });
+  }
+  async playlistPrev(): Promise<void> {
+    await fetch(this.url("/api/playlist/prev"), { method: "POST" });
+  }
+}
+
+export interface PlaylistItem {
+  id: string;
+  name: string;
+  /** Per-item duration override in seconds; null = inherit the default. */
+  sec: number | null;
+  /** name → control values (floats). */
+  controls: Record<string, number[]>;
+}
+
+export interface Playlist {
+  /** Default seconds per item; 0 = manual (no auto-advance). */
+  defaultSec: number;
+  playing: boolean;
+  index: number;
+  items: PlaylistItem[];
 }

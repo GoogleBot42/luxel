@@ -5,9 +5,11 @@
   import Editor from "./components/Editor.svelte";
   import Gallery from "./components/Gallery.svelte";
   import PatternThumb from "./components/PatternThumb.svelte";
+  import PlaylistRow from "./components/PlaylistRow.svelte";
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
+  import type { Playlist } from "./lib/device";
   import { EXAMPLES, type Layout } from "./lib/examples";
   import {
     deletePattern,
@@ -90,6 +92,97 @@
   let deviceProtocol = "sk9822";
   let protocolOptions: string[] = ["sk9822", "ws2812"];
 
+  // ---- playlist (device mode) ----
+  let playlist: Playlist = { defaultSec: 0, playing: false, index: 0, items: [] };
+  let playlistDebounce: ReturnType<typeof setTimeout> | undefined;
+  let playlistPoll: ReturnType<typeof setInterval> | undefined;
+
+  async function refreshPlaylist(): Promise<void> {
+    if (!device) return;
+    try {
+      playlist = await device.playlist();
+    } catch {
+      /* older firmware without /api/playlist — leave empty */
+    }
+  }
+
+  /** Persist the playlist to the device (debounced — edits stream in). */
+  function queuePlaylistSave(): void {
+    clearTimeout(playlistDebounce);
+    const snapshot = playlist;
+    playlistDebounce = setTimeout(() => void device?.setPlaylist(snapshot), 400);
+  }
+
+  /** Append the CURRENT editor pattern (must be saved on the device) with its
+   *  current control values — so the same pattern can be added repeatedly with
+   *  different params. */
+  function addToPlaylist(): void {
+    if (!device || !devicePatternId) return;
+    const name = devicePatterns.find((p) => p.id === devicePatternId)?.name ?? patternName;
+    const controls: Record<string, number[]> = {};
+    for (const [k, v] of Object.entries(controlValues)) controls[k] = v;
+    playlist = {
+      ...playlist,
+      items: [...playlist.items, { id: devicePatternId, name, sec: null, controls }],
+    };
+    queuePlaylistSave();
+    saveNote = "added to playlist";
+    setTimeout(() => (saveNote = ""), 2000);
+  }
+
+  function removePlaylistItem(i: number): void {
+    playlist = { ...playlist, items: playlist.items.filter((_, j) => j !== i) };
+    queuePlaylistSave();
+  }
+
+  function movePlaylistItem(i: number, dir: number): void {
+    const j = i + dir;
+    const items = [...playlist.items];
+    const a = items[i];
+    const b = items[j];
+    if (a === undefined || b === undefined) return;
+    items[i] = b;
+    items[j] = a;
+    playlist = { ...playlist, items };
+    queuePlaylistSave();
+  }
+
+  function onDefaultSecChange(e: Event): void {
+    const v = (e.target as HTMLInputElement).value.trim();
+    playlist = { ...playlist, defaultSec: v === "" ? 0 : Math.max(0, Math.round(Number(v) || 0)) };
+    queuePlaylistSave();
+  }
+
+  async function playlistPlay(): Promise<void> {
+    await device?.playlistPlay(0);
+    void refreshPlaylist();
+  }
+  async function playlistStop(): Promise<void> {
+    await device?.playlistStop();
+    void refreshPlaylist();
+  }
+  async function playlistNext(): Promise<void> {
+    await device?.playlistNext();
+    void refreshPlaylist();
+  }
+  async function playlistPrev(): Promise<void> {
+    await device?.playlistPrev();
+    void refreshPlaylist();
+  }
+
+  /** Source for a playlist item's thumbnail/params, from the device library. */
+  const itemSource = (id: string): string | undefined =>
+    devicePatterns.find((p) => p.id === id)?.source;
+
+  // follow the playing item while the Playlist tab is open (light status poll,
+  // not pixel streaming) so the current entry highlights as it advances
+  $: {
+    clearInterval(playlistPoll);
+    if (device && tab === "playlist" && !editing && playlist.playing) {
+      playlistPoll = setInterval(refreshPlaylist, 1000);
+    }
+  }
+
   async function refreshDevicePatterns(): Promise<void> {
     if (!device) return;
     try {
@@ -164,7 +257,7 @@
   // only). The editor is NOT a tab — it opens full-screen over the home tab
   // when you pick a pattern or create one, with a back button. `tab` is the
   // home you return to.
-  type Tab = "library" | "device" | "settings";
+  type Tab = "library" | "device" | "playlist" | "settings";
   let tab: Tab = "library";
   /** Full-screen editor open (over the home tab). */
   let editing = false;
@@ -294,6 +387,7 @@
       }
       compileError = null;
       await refreshDevicePatterns();
+      await refreshPlaylist();
     } catch (e) {
       device = null;
       deviceError = `cannot reach device: ${String(e)}`;
@@ -1098,6 +1192,8 @@ export function render(index) {
     clearTimeout(debounce);
     clearTimeout(pushDebounce);
     clearTimeout(mapDebounce);
+    clearTimeout(playlistDebounce);
+    clearInterval(playlistPoll);
     engine?.free();
     mapEngine?.free();
   });
@@ -1159,6 +1255,17 @@ export function render(index) {
         {/if}
         {#if device}
           <button
+            data-role="tab-playlist"
+            class="tab"
+            class:active={tab === "playlist"}
+            on:click={() => {
+              tab = "playlist";
+              void refreshPlaylist();
+            }}
+          >
+            Playlist
+          </button>
+          <button
             data-role="tab-settings"
             class="tab"
             class:active={tab === "settings"}
@@ -1214,6 +1321,15 @@ export function render(index) {
             on:click={() => void sharePattern()}
           >
             share
+          </button>
+        {/if}
+        {#if device && devicePatternId}
+          <button
+            data-role="add-to-playlist"
+            title="add this pattern (with its current parameters) to the playlist"
+            on:click={addToPlaylist}
+          >
+            + playlist
           </button>
         {/if}
         <span class="overflow">
@@ -1537,6 +1653,79 @@ export function render(index) {
     </div>
   {/if}
 
+  <!-- ───────────── Playlist tab (device mode only) ───────────── -->
+  {#if !isPlayground}
+    <div class="playlist-tab" data-role="playlist-panel" hidden={editing || tab !== "playlist"}>
+      <div class="lib-head">
+        <span class="lib-title">Playlist</span>
+        <span class="dim">plays your saved patterns in order</span>
+        <span class="spacer"></span>
+        <span class="pl-transport">
+          {#if playlist.playing}
+            <button data-role="pl-prev" title="previous" on:click={playlistPrev}>⏮</button>
+            <button data-role="pl-stop" on:click={playlistStop}>■ stop</button>
+            <button data-role="pl-next" title="next" on:click={playlistNext}>⏭</button>
+          {:else}
+            <button
+              class="primary"
+              data-role="pl-play"
+              disabled={!device || playlist.items.length === 0}
+              on:click={playlistPlay}
+            >
+              ▶ play
+            </button>
+          {/if}
+        </span>
+      </div>
+
+      <div class="pl-default">
+        <span class="dim">default duration</span>
+        <input
+          class="num"
+          data-role="pl-default-sec"
+          type="number"
+          min="0"
+          placeholder="manual"
+          value={playlist.defaultSec || ""}
+          on:change={onDefaultSecChange}
+        />
+        <span class="dim">seconds (blank/0 = manual advance) · items can override</span>
+      </div>
+
+      {#if !device}
+        <p class="dim hint">device unreachable — {deviceError || "reload to retry"}.</p>
+      {:else if playlist.items.length === 0}
+        <p class="dim hint" data-role="pl-empty">
+          Empty. Open a saved device pattern in the editor, set its parameters, and use
+          <strong>“+ Add to playlist”</strong> — add the same pattern more than once for different
+          looks.
+        </p>
+      {:else}
+        <ul class="pl-list">
+          {#each playlist.items as item, i (i)}
+            {#if luxel}
+              <PlaylistRow
+                {luxel}
+                source={itemSource(item.id)}
+                {item}
+                defaultSec={playlist.defaultSec}
+                active={playlist.playing && playlist.index === i}
+                first={i === 0}
+                last={i === playlist.items.length - 1}
+                on:change={() => {
+                  playlist = playlist;
+                  queuePlaylistSave();
+                }}
+                on:remove={() => removePlaylistItem(i)}
+                on:move={(e) => movePlaylistItem(i, e.detail)}
+              />
+            {/if}
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
+
   <!-- ───────────── Settings tab (device mode only) ───────────── -->
   {#if device}
     <div class="settings-tab" data-role="settings-panel" hidden={editing || tab !== "settings"}>
@@ -1725,12 +1914,14 @@ export function render(index) {
   .editor-view[hidden],
   .library-tab[hidden],
   .device-tab[hidden],
+  .playlist-tab[hidden],
   .settings-tab[hidden] {
     display: none;
   }
 
   .library-tab,
   .device-tab,
+  .playlist-tab,
   .settings-tab {
     flex: 1;
     min-height: 0;
@@ -1743,8 +1934,29 @@ export function render(index) {
   }
 
   .device-tab,
+  .playlist-tab,
   .settings-tab {
     overflow-y: auto;
+  }
+
+  .pl-transport {
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  .pl-default {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .pl-list {
+    list-style: none;
+    margin: 0;
+    padding: 12px 16px;
+    max-width: 680px;
   }
 
   .lib-head {
