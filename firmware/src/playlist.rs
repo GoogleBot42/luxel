@@ -130,8 +130,10 @@ pub fn to_json() -> String {
                     .controls
                     .iter()
                     .map(|(n, raw)| {
+                        // Fx's Display, not f64's: `r as f64 / 65536.0` was the
+                        // last user of core's ~8 KB flt2dec printing machinery
                         let vals: Vec<String> =
-                            raw.iter().map(|&r| format!("{}", r as f64 / 65536.0)).collect();
+                            raw.iter().map(|&r| format!("{}", Fx::from_raw(r))).collect();
                         format!("\"{}\":[{}]", json_escape(n), vals.join(","))
                     })
                     .collect();

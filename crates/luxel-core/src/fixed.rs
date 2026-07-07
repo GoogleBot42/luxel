@@ -332,13 +332,40 @@ impl Shr for Fx {
 
 impl fmt::Debug for Fx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Fx({})", self.to_f64())
+        write!(f, "Fx({})", self)
     }
 }
 
 impl fmt::Display for Fx {
+    /// Prints the exact decimal value, without going through f64: routing
+    /// this through `{}` on f64 pulled ~8 KB of flt2dec machinery into the
+    /// firmware (measured; these strings only feed diagnostics). 16.16 is
+    /// exactly representable in ≤ 16 fractional decimal digits; trailing
+    /// zeros are trimmed, so integers print as "3", halves as "3.5".
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_f64())
+        let raw = self.0;
+        if raw < 0 {
+            f.write_str("-")?;
+        }
+        // unsigned magnitude avoids i32::MIN overflow
+        let mag = (raw as i64).unsigned_abs();
+        write!(f, "{}", mag >> 16)?;
+        let mut frac = mag & 0xFFFF;
+        if frac != 0 {
+            f.write_str(".")?;
+            let mut digits = [0u8; 16];
+            let mut n = 0;
+            while frac != 0 {
+                frac *= 10;
+                digits[n] = b'0' + (frac >> 16) as u8;
+                frac &= 0xFFFF;
+                n += 1;
+            }
+            for &d in &digits[..n] {
+                fmt::Write::write_char(f, d as char)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -348,6 +375,22 @@ mod tests {
 
     fn fx(v: f64) -> Fx {
         Fx::from_f64(v)
+    }
+
+    #[test]
+    fn display_exact_decimal() {
+        assert_eq!(alloc::format!("{}", Fx::from_int(3)), "3");
+        assert_eq!(alloc::format!("{}", fx(3.5)), "3.5");
+        assert_eq!(alloc::format!("{}", fx(-0.25)), "-0.25");
+        assert_eq!(alloc::format!("{}", Fx::EPSILON), "0.0000152587890625");
+        assert_eq!(alloc::format!("{}", Fx::MIN), "-32768");
+        assert_eq!(alloc::format!("{:?}", fx(1.5)), "Fx(1.5)");
+        // exact digits round-trip through f64 parsing for any raw value
+        for raw in [1, -1, 12345, -98765, 0x7fff_ffff, i32::MIN + 1] {
+            let v = Fx::from_raw(raw);
+            let s = alloc::format!("{}", v);
+            assert_eq!(Fx::from_f64(s.parse::<f64>().unwrap()), v, "{s}");
+        }
     }
 
     #[test]

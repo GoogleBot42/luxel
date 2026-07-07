@@ -802,7 +802,7 @@ fn playlist_json(state: &State) -> String {
                 .iter()
                 .map(|(n, raw)| {
                     let vals: Vec<String> =
-                        raw.iter().map(|&r| format!("{}", r as f64 / 65536.0)).collect();
+                        raw.iter().map(|&r| format!("{}", Fx::from_raw(r))).collect();
                     format!("\"{}\":[{}]", json_escape(n), vals.join(","))
                 })
                 .collect();
