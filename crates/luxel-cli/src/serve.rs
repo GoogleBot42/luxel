@@ -152,6 +152,116 @@ struct State {
     /// applies each frame once (mirrors shared::SENSOR_FRAME).
     sensor_frame: Mutex<Option<luxel_core::engine::SensorFrame>>,
     sensor_seq: AtomicU32,
+    /// Luxel-to-Luxel sync: role (0 off, 1 leader, 2 follower), this
+    /// process's boot id, the engine clock (published by the render loop
+    /// for the leader beacon), and the last beacon heard as a follower.
+    sync_mode: AtomicU8,
+    sync_boot_id: u32,
+    engine_time_ms: std::sync::atomic::AtomicU64,
+    sync_leader: Mutex<Option<(u32, u64, Instant)>>,
+}
+
+fn sync_mode_name(m: u8) -> &'static str {
+    match m {
+        1 => "leader",
+        2 => "follower",
+        _ => "off",
+    }
+}
+
+/// Leader/follower beacon loop (both roles share the thread; the mode
+/// atomic steers it live). `target`/`port` come from --sync-target/-port
+/// so e2e can run two mirrors over loopback.
+fn sync_thread(state: Arc<State>, target: String, port: u16) {
+    use luxel_core::netin::{build_sync, parse_sync};
+    let send_sock = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok();
+    if let Some(s) = &send_sock {
+        let _ = s.set_broadcast(true);
+    }
+    let mut recv_sock: Option<std::net::UdpSocket> = None;
+    let mut sensor_sent: u32 = 0;
+    let mut buf = [0u8; 128];
+    loop {
+        match state.sync_mode.load(Ordering::Relaxed) {
+            1 => {
+                recv_sock = None;
+                // piggyback the sensor frame only when it moved since last
+                let seq = state.sensor_seq.load(Ordering::Relaxed);
+                let sb = if seq != sensor_sent {
+                    sensor_sent = seq;
+                    state
+                        .sensor_frame
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(sensor_frame_to_sb)
+                } else {
+                    None
+                };
+                let pkt = build_sync(
+                    state.sync_boot_id,
+                    state.engine_time_ms.load(Ordering::Relaxed),
+                    sb.as_deref(),
+                );
+                if let Some(s) = &send_sock {
+                    let _ = s.send_to(&pkt, (target.as_str(), port));
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            2 => {
+                if recv_sock.is_none() {
+                    recv_sock = std::net::UdpSocket::bind(("0.0.0.0", port))
+                        .inspect_err(|e| eprintln!("sync: bind :{port} failed ({e})"))
+                        .ok();
+                    if let Some(s) = &recv_sock {
+                        let _ = s.set_read_timeout(Some(Duration::from_millis(400)));
+                    }
+                    if recv_sock.is_none() {
+                        std::thread::sleep(Duration::from_secs(2));
+                        continue;
+                    }
+                }
+                if let Some(s) = &recv_sock {
+                    if let Ok((n, _)) = s.recv_from(&mut buf) {
+                        if let Some(b) = parse_sync(&buf[..n]) {
+                            *state.sync_leader.lock().unwrap() =
+                                Some((b.boot_id, b.time_ms, Instant::now()));
+                            if let Some(sf) = b.sensor {
+                                *state.sensor_frame.lock().unwrap() = Some(sf);
+                                state.sensor_seq.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                recv_sock = None;
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        }
+    }
+}
+
+/// Re-encode a SensorFrame as the 98-byte SB wire format (for the beacon).
+fn sensor_frame_to_sb(s: &luxel_core::engine::SensorFrame) -> Vec<u8> {
+    let mut p = Vec::with_capacity(luxel_core::netin::SB_FRAME_LEN);
+    p.extend_from_slice(luxel_core::netin::SB_MAGIC);
+    let u16le = |v: Fx| (v.raw().clamp(0, 0xFFFF) as u16).to_le_bytes();
+    for v in &s.frequency_data {
+        p.extend_from_slice(&u16le(*v));
+    }
+    p.extend_from_slice(&u16le(s.energy_average));
+    p.extend_from_slice(&u16le(s.max_frequency_magnitude));
+    p.extend_from_slice(&(s.max_frequency.to_int_trunc().clamp(0, 65535) as u16).to_le_bytes());
+    for v in &s.accelerometer {
+        p.extend_from_slice(&((v.raw().clamp(-32768, 32767) as i16).to_le_bytes()));
+    }
+    p.extend_from_slice(&u16le(s.light));
+    for v in &s.analog_inputs {
+        p.extend_from_slice(&u16le(*v));
+    }
+    p.extend_from_slice(b"END\0");
+    p
 }
 
 /// MQTT broker settings (mirrors the firmware's config::MqttConfig).
@@ -654,7 +764,24 @@ fn render_loop(state: Arc<State>) {
             let now = Instant::now();
             let delta_us = now.duration_since(last).as_micros() as u64;
             last = now;
-            let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
+            let mut delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
+
+            // follower: converge on the leader clock — big offsets jump,
+            // small ones slew by stretching this frame's delta ≤ ±25%
+            if state.sync_mode.load(Ordering::Relaxed) == 2 {
+                if let Some((_, lt, at)) = *state.sync_leader.lock().unwrap() {
+                    let eng = engine.as_mut().unwrap();
+                    let target = lt + at.elapsed().as_millis() as u64;
+                    let err = target as i64 - eng.time_ms() as i64;
+                    if err.unsigned_abs() > 1000 {
+                        eng.set_time_ms(target);
+                    } else {
+                        let cap = (delta.raw() as i64 / 4).max(1);
+                        let adj = (err << 16).clamp(-cap, cap); // err ms → raw 16.16
+                        delta = Fx::from_raw((delta.raw() as i64 + adj).clamp(0, i32::MAX as i64) as i32);
+                    }
+                }
+            }
 
             // crossfade progress (0..=65536); 65536 = done
             let t = if blend_ms > 0 {
@@ -677,6 +804,9 @@ fn render_loop(state: Arc<State>) {
             if t >= 65536 {
                 prev = None; // fade finished
             }
+            state
+                .engine_time_ms
+                .store(engine.as_ref().unwrap().time_ms(), Ordering::Relaxed);
             {
                 let mut snap = state.pixels.lock().unwrap();
                 snap.clear();
@@ -1160,6 +1290,49 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/sync") => {
+            let mode = sync_mode_name(state.sync_mode.load(Ordering::Relaxed));
+            let time_ms = state.engine_time_ms.load(Ordering::Relaxed);
+            let leader = match *state.sync_leader.lock().unwrap() {
+                Some((boot, lt, at)) => {
+                    let age = at.elapsed().as_millis() as u64;
+                    let offset = (lt + age) as i64 - time_ms as i64;
+                    format!(
+                        "{{\"bootId\":{},\"ageMs\":{},\"offsetMs\":{}}}",
+                        boot, age, offset
+                    )
+                }
+                None => String::from("null"),
+            };
+            let body = format!(
+                "{{\"mode\":\"{}\",\"timeMs\":{},\"leader\":{}}}",
+                mode, time_ms, leader
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/sync") => {
+            // body: "off" | "leader" | "follower"
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim() {
+                "off" => Some(0u8),
+                "leader" => Some(1),
+                "follower" => Some(2),
+                _ => None,
+            };
+            let resp = match r {
+                Some(m) => {
+                    state.sync_mode.store(m, Ordering::Relaxed);
+                    if m != 2 {
+                        *state.sync_leader.lock().unwrap() = None;
+                    }
+                    format!("{{\"ok\":true,\"mode\":\"{}\"}}", sync_mode_name(m))
+                }
+                None => String::from(
+                    "{\"ok\":false,\"error\":\"mode must be off, leader, or follower\"}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", resp.as_bytes());
+        }
         ("POST", "/api/sensors") => {
             // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0") —
             // same parser the firmware runs on its UART stream
@@ -1344,6 +1517,10 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut pixels: u32 = 300;
     let mut port: u16 = 8720;
+    // Luxel-to-Luxel sync transport (overridable so e2e can run two
+    // mirrors over loopback; the firmware broadcasts on the LAN)
+    let mut sync_target = String::from("255.255.255.255");
+    let mut sync_port: u16 = luxel_core::netin::SYNC_PORT;
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         match (flag.as_str(), it.next()) {
@@ -1353,6 +1530,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             },
             ("--port", Some(v)) => match v.parse() {
                 Ok(n) => port = n,
+                Err(_) => return super::usage(),
+            },
+            ("--sync-target", Some(v)) => sync_target = v.clone(),
+            ("--sync-port", Some(v)) => match v.parse() {
+                Ok(n) => sync_port = n,
                 Err(_) => return super::usage(),
             },
             _ => return super::usage(),
@@ -1389,6 +1571,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         mqtt_connected: AtomicBool::new(false),
         sensor_frame: Mutex::new(None),
         sensor_seq: AtomicU32::new(0),
+        sync_mode: AtomicU8::new(0),
+        sync_boot_id: std::process::id() ^ 0x5a5a_5a5a,
+        engine_time_ms: std::sync::atomic::AtomicU64::new(0),
+        sync_leader: Mutex::new(None),
     });
 
     {
@@ -1402,6 +1588,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     {
         let state = state.clone();
         std::thread::spawn(move || mqtt_thread(state));
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || sync_thread(state, sync_target, sync_port));
     }
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {

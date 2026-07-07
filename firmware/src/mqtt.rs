@@ -274,6 +274,7 @@ fn persist_brightness(dev: u8) {
     let mut c = config::read_device().unwrap_or(config::DeviceConfig {
         brightness: dev,
         protocol: crate::shared::PROTOCOL.load(Ordering::Relaxed),
+        sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
         pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
     });
     c.brightness = dev;

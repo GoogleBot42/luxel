@@ -89,9 +89,12 @@ and the autocomplete/docs pipeline, and can't break existing code.
   :4048/:5568, shared parser in luxel-core::netin, live override with 2.5 s
   fallback to the pattern, `live` in /api/status + Settings row. Multicast
   sACN joined but only unicast verified from the dev container).
-- **Luxel-to-Luxel sync** [L] ★★★ — timebase sync + leader/follower groups
-  so multiple controllers render one coherent installation. `nodeId()` is
-  already a builtin anticipating this.
+- **Luxel-to-Luxel sync** [L] ★★★ — v1 DONE (v0.1.21): leader broadcasts
+  its engine timebase (+ sensor relay) on UDP :4049; followers hard-jump
+  then slew by stretching frame deltas (≤±25%). Role in Settings +
+  /api/sync, persisted. Proven with two mirrors (sync-e2e: 2.5 s desync →
+  −5 ms). On-device verification blocked (needs ≥2 recovered Luxels).
+  Future: pattern/playlist distribution to followers.
 - **Web-based .epe import/export in the playground** [S] ★★★ — DONE
   (import button + drag-drop anywhere + export download; e2e-covered).
 

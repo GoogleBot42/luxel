@@ -527,6 +527,20 @@ impl Engine {
         }
     }
 
+    /// The engine clock in whole ms (what `time()`/`beat` run on) — the
+    /// Luxel-to-Luxel sync surface, together with [Engine::set_time_ms].
+    pub fn time_ms(&self) -> u64 {
+        self.time_acc >> 16
+    }
+
+    /// Hard-set the engine clock (sync convergence when the offset is too
+    /// big to slew; small offsets are corrected by stretching `frame`'s
+    /// delta instead, which stays smooth).
+    pub fn set_time_ms(&mut self, ms: u64) {
+        self.time_acc = ms << 16;
+        self.vm.time_ms = ms;
+    }
+
     /// Advance time by `delta_ms` and render one frame.
     pub fn frame(&mut self, delta_ms: Fx) -> &[[u8; 3]] {
         if self.run_stage.is_some() {

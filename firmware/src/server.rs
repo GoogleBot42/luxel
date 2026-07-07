@@ -89,6 +89,14 @@ fn etag_matches(token: &[u8], etag: &[u8]) -> bool {
     t == etag
 }
 
+fn sync_mode_name(m: u8) -> &'static str {
+    match m {
+        1 => "leader",
+        2 => "follower",
+        _ => "off",
+    }
+}
+
 fn status_json() -> String {
     let fps = FPS.load(Ordering::Relaxed);
     let pixels = PIXEL_COUNT.load(Ordering::Relaxed);
@@ -618,6 +626,41 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     return Ok(sent);
                 }
+                // body: "off" | "leader" | "follower" → applied live +
+                // persisted (Luxel-to-Luxel sync role)
+                "/api/sync" => {
+                    let body = match request.body_connection.body().read_all().await {
+                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    let mode = match body.trim() {
+                        "off" => Some(0u8),
+                        "leader" => Some(1),
+                        "follower" => Some(2),
+                        _ => None,
+                    };
+                    let response = json_response(match mode {
+                        Some(m) => {
+                            crate::shared::SYNC_MODE.store(m, Ordering::Relaxed);
+                            if m != 2 {
+                                crate::shared::clear_sync_leader();
+                            }
+                            let cfg = DeviceConfig {
+                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
+                                protocol: PROTOCOL.load(Ordering::Relaxed),
+                                sync_mode: m,
+                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+                            };
+                            let _ = crate::config::write_device(&cfg);
+                            format!("{{\"ok\":true,\"mode\":\"{}\"}}", sync_mode_name(m))
+                        }
+                        None => String::from(
+                            "{\"ok\":false,\"error\":\"mode must be off, leader, or follower\"}",
+                        ),
+                    });
+                    let conn = request.body_connection.finalize().await?;
+                    return response.write_to(conn, response_writer).await;
+                }
                 // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0")
                 // — network sensor injection, byte-identical to the serial
                 // board's stream (luxel_core::netin::parse_sensor_board).
@@ -689,6 +732,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                                 brightness: b,
                                 protocol: PROTOCOL.load(Ordering::Relaxed),
                                 pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
                             };
                             match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"brightness\":{}}}", b),
@@ -721,6 +765,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             let cfg = DeviceConfig {
                                 brightness: BRIGHTNESS.load(Ordering::Relaxed),
                                 protocol: PROTOCOL.load(Ordering::Relaxed),
+                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
                                 pixel_count: n,
                             };
                             match crate::config::write_device(&cfg) {
@@ -755,6 +800,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                                 brightness: BRIGHTNESS.load(Ordering::Relaxed),
                                 protocol: p.as_u8(),
                                 pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
                             };
                             match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"protocol\":\"{}\"}}", p.name()),
@@ -995,6 +1041,26 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     "{{\"brightness\":{},\"max\":31}}",
                     BRIGHTNESS.load(Ordering::Relaxed)
                 ))),
+                // sync role + engine clock + last leader beacon heard
+                "/api/sync" => {
+                    let mode = sync_mode_name(crate::shared::SYNC_MODE.load(Ordering::Relaxed));
+                    let time_ms = crate::shared::engine_time_ms();
+                    let leader = match crate::shared::sync_leader() {
+                        Some((boot, lt, at)) => {
+                            let age = at.elapsed().as_millis();
+                            let offset = (lt + age) as i64 - time_ms as i64;
+                            format!(
+                                "{{\"bootId\":{},\"ageMs\":{},\"offsetMs\":{}}}",
+                                boot, age, offset
+                            )
+                        }
+                        None => String::from("null"),
+                    };
+                    respond!(json_response(format!(
+                        "{{\"mode\":\"{}\",\"timeMs\":{},\"leader\":{}}}",
+                        mode, time_ms, leader
+                    )));
+                }
                 // broker settings (never the password) + connection state
                 "/api/mqtt" => {
                     let body = match crate::config::read_mqtt() {

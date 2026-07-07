@@ -22,12 +22,13 @@ pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
 /// Device settings live in the next nvs sector, so writing them never disturbs
-/// the WiFi record. Record (v3): "LXDV" u8 version=3  u8 brightness  u8 protocol
-/// u8 0  u32-LE pixel_count  u32-LE checksum (16 bytes). Older versions fail the
-/// version check and read as "no record" → defaults.
+/// the WiFi record. Record (v4): "LXDV" u8 version=4  u8 brightness  u8 protocol
+/// u8 sync_mode  u32-LE pixel_count  u32-LE checksum (16 bytes). v3 (same
+/// layout, byte 7 was a zero pad) reads compatibly with sync_mode=off; older
+/// versions fail the version check and read as "no record" → defaults.
 const DEV_OFFSET: u32 = 0xA000;
 const DEV_MAGIC: &[u8; 4] = b"LXDV";
-const DEV_VER: u8 = 3;
+const DEV_VER: u8 = 4;
 
 /// Persisted device settings. All fields are written together (read-modify-
 /// write) so setting one never clobbers the others.
@@ -36,6 +37,8 @@ pub struct DeviceConfig {
     pub brightness: u8,
     /// LED protocol code (leds::Protocol::as_u8).
     pub protocol: u8,
+    /// Luxel-to-Luxel sync role (0 off, 1 leader, 2 follower).
+    pub sync_mode: u8,
     pub pixel_count: u32,
 }
 
@@ -213,7 +216,8 @@ pub fn read_device() -> Option<DeviceConfig> {
     if !crate::assets::read_chunk(DEV_OFFSET, &mut rec) {
         return None;
     }
-    if &rec[0..4] != DEV_MAGIC || rec[4] != DEV_VER {
+    // v3 shares the layout; byte 7 (then a zero pad) becomes sync_mode
+    if &rec[0..4] != DEV_MAGIC || !(rec[4] == DEV_VER || rec[4] == 3) {
         return None;
     }
     let stored = u32::from_le_bytes(rec[12..16].try_into().ok()?);
@@ -222,6 +226,7 @@ pub fn read_device() -> Option<DeviceConfig> {
     }
     let brightness = rec[5];
     let protocol = rec[6];
+    let sync_mode = if rec[7] <= 2 { rec[7] } else { 0 };
     let pixel_count = u32::from_le_bytes(rec[8..12].try_into().ok()?);
     if brightness > 31 {
         return None;
@@ -229,6 +234,7 @@ pub fn read_device() -> Option<DeviceConfig> {
     Some(DeviceConfig {
         brightness,
         protocol,
+        sync_mode,
         pixel_count,
     })
 }
@@ -244,7 +250,7 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     rec.push(DEV_VER);
     rec.push(cfg.brightness);
     rec.push(cfg.protocol);
-    rec.push(0);
+    rec.push(cfg.sync_mode);
     rec.extend_from_slice(&cfg.pixel_count.to_le_bytes());
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());

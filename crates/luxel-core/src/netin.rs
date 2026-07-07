@@ -136,6 +136,57 @@ pub fn sb_find(buf: &[u8]) -> Option<usize> {
     buf.windows(SB_MAGIC.len()).position(|w| w == SB_MAGIC)
 }
 
+// ---- Luxel-to-Luxel sync beacons ----
+// A leader broadcasts its engine timebase (and, when fresh, its latest
+// sensor frame) on UDP :4049 a few times a second; followers slew their
+// clock to it so identical patterns stay phase-locked across controllers.
+//   "LXS1" + u32-LE boot_id + u64-LE time_ms + u8 flags [+ 98-byte SB frame]
+// boot_id is random per boot — followers use it to notice leader restarts
+// (a fresh leader clock needs a hard jump, not a slew).
+
+pub const SYNC_PORT: u16 = 4049;
+pub const SYNC_MAGIC: &[u8; 4] = b"LXS1";
+const SYNC_FLAG_SENSOR: u8 = 0x01;
+
+pub struct SyncBeacon {
+    pub boot_id: u32,
+    pub time_ms: u64,
+    pub sensor: Option<crate::engine::SensorFrame>,
+}
+
+pub fn build_sync(boot_id: u32, time_ms: u64, sensor_frame: Option<&[u8]>) -> alloc::vec::Vec<u8> {
+    let mut p = alloc::vec::Vec::with_capacity(17 + SB_FRAME_LEN);
+    p.extend_from_slice(SYNC_MAGIC);
+    p.extend_from_slice(&boot_id.to_le_bytes());
+    p.extend_from_slice(&time_ms.to_le_bytes());
+    match sensor_frame {
+        Some(sb) if sb.len() == SB_FRAME_LEN => {
+            p.push(SYNC_FLAG_SENSOR);
+            p.extend_from_slice(sb);
+        }
+        _ => p.push(0),
+    }
+    p
+}
+
+pub fn parse_sync(pkt: &[u8]) -> Option<SyncBeacon> {
+    if pkt.len() < 17 || &pkt[..4] != SYNC_MAGIC {
+        return None;
+    }
+    let boot_id = u32::from_le_bytes(pkt[4..8].try_into().ok()?);
+    let time_ms = u64::from_le_bytes(pkt[8..16].try_into().ok()?);
+    let sensor = if pkt[16] & SYNC_FLAG_SENSOR != 0 {
+        parse_sensor_board(pkt.get(17..17 + SB_FRAME_LEN)?)
+    } else {
+        None
+    };
+    Some(SyncBeacon {
+        boot_id,
+        time_ms,
+        sensor,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +288,25 @@ mod tests {
         let mut bad = p.clone();
         bad[95] = b'X';
         assert!(parse_sensor_board(&bad).is_none());
+    }
+
+    #[test]
+    fn sync_beacon_round_trip() {
+        // bare beacon
+        let p = build_sync(0xdead_beef, 123_456_789_012, None);
+        let b = parse_sync(&p).unwrap();
+        assert_eq!(b.boot_id, 0xdead_beef);
+        assert_eq!(b.time_ms, 123_456_789_012);
+        assert!(b.sensor.is_none());
+        // with a piggybacked sensor frame
+        let sb = sb_frame(0x4000, 0x2000, 440);
+        let p = build_sync(7, 1000, Some(&sb));
+        let b = parse_sync(&p).unwrap();
+        let s = b.sensor.expect("sensor present");
+        assert_eq!(s.max_frequency, crate::fixed::Fx::from_int(440));
+        // truncated sensor payload rejected as a whole
+        assert!(parse_sync(&p[..p.len() - 1]).is_none());
+        assert!(parse_sync(b"LXS0aaaaaaaaaaaaa").is_none());
     }
 
     #[test]

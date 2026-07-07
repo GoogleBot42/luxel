@@ -1,5 +1,29 @@
 # Update log
 
+## 2026-07-08 — Mic-to-strip, oracle sweep, Luxel-to-Luxel sync (v0.1.21)
+
+Per your picks (all without the wedged device; everything below rides the
+same recovery flash):
+
+- **Mic → device forwarding**: with the playground's *sound* toggle on in
+  device mode, mic frames also stream to the strip via POST /api/sensors
+  (~20 Hz) — your laptop mic IS the sensor board. e2e-verified on the mirror.
+- **Oracle sweep vs the real PB (fw 3.67)**: 130/165 exact + new probes.
+  Transforms fully verified (composition order, cross-frame accumulation,
+  rotate direction — pinned as tests); found + fixed one real divergence
+  (`pow(negative, fractional)` now returns the PB's raw 0x80000000 instead
+  of 0); several TODO(oracle) markers settled (log2(≤0), refs-as-0, ref
+  identity equality, builtin shadowing aborts, div/0 family). New documented
+  supersets: builtins as first-class values, lenient arity.
+- **Luxel-to-Luxel sync v1**: one device leads, broadcasting its engine
+  timebase on UDP :4049 (4×/s, sensor frame piggybacked when fresh);
+  followers hard-jump when >1 s off, then slew smoothly by stretching frame
+  deltas. Same pattern on several Luxels = phase-locked, one mic drives all.
+  Role select in Settings (persisted; device-settings record → v4 with a
+  compatible v3 fallback). **Proven with two mirrors** — tools/sync-e2e.mjs
+  desyncs them 2.5 s and watches them converge to single-digit ms + the
+  sensor relay land. On-device: needs two recovered Luxels someday.
+
 ## 2026-07-07 — ⚠️ DEV DEVICE NEEDS A BENCH RECOVERY (serial reflash)
 
 The v0.1.19 OTA (MQTT) **bricked the boot**: the first cut put ~12 KB of
@@ -17,10 +41,10 @@ nix develop --command espflash save-image --chip esp32 \
 nix develop --command espflash write-bin 0x10000 /tmp/luxel-fix.bin
 ```
 
-(That writes the current fixed build — now v0.1.20, which also picks up the
-sensor-board + sound work below — over the bad one; otadata already points
-at ota_0. The fix moves all big task buffers to the heap and trims the heap
-static 96→88 KB — main stack is back to ~31 KB.)
+(That writes the current fixed build — now v0.1.21, which also picks up the
+sensor-board/sound/sync work above — over the bad one; otadata already
+points at ota_0. The fix moves all big task buffers to the heap and trims
+the heap static 96→88 KB — main stack is back to ~31 KB.)
 
 **So this can never happen again:** the firmware now has a **boot-loop
 guard** — it counts boot attempts in flash before the risky part of boot,

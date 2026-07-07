@@ -134,6 +134,40 @@ pub fn get_current_pattern_id() -> String {
 pub static MQTT_POKE: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
     embassy_sync::signal::Signal::new();
 
+/// Luxel-to-Luxel sync role (0 off, 1 leader, 2 follower). Seeded from
+/// flash at boot; POST /api/sync writes it live (and persists).
+pub static SYNC_MODE: AtomicU8 = AtomicU8::new(0);
+
+/// Engine clock in ms, published by the render task every frame (the
+/// leader beacon's payload; also /api/sync). u64 needs the critical
+/// section — no 64-bit atomics on these cores.
+pub static ENGINE_TIME_MS: Shared<u64> = BlockingMutex::new(RefCell::new(0));
+
+pub fn set_engine_time_ms(ms: u64) {
+    ENGINE_TIME_MS.lock(|c| *c.borrow_mut() = ms);
+}
+
+pub fn engine_time_ms() -> u64 {
+    share_get(&ENGINE_TIME_MS)
+}
+
+/// Last sync beacon heard as a follower: (leader boot id, leader engine ms,
+/// when it arrived). The render task slews toward it.
+pub static SYNC_LEADER: Shared<Option<(u32, u64, embassy_time::Instant)>> =
+    BlockingMutex::new(RefCell::new(None));
+
+pub fn set_sync_leader(boot_id: u32, time_ms: u64) {
+    SYNC_LEADER.lock(|c| *c.borrow_mut() = Some((boot_id, time_ms, embassy_time::Instant::now())));
+}
+
+pub fn sync_leader() -> Option<(u32, u64, embassy_time::Instant)> {
+    share_get(&SYNC_LEADER)
+}
+
+pub fn clear_sync_leader() {
+    SYNC_LEADER.lock(|c| *c.borrow_mut() = None);
+}
+
 /// Latest sensor frame (PB sensor-board serial or POST /api/sensors) + a
 /// sequence counter so the render task applies each frame exactly once.
 pub static SENSOR_FRAME: Shared<Option<luxel_core::engine::SensorFrame>> =

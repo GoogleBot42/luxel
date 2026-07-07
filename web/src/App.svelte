@@ -9,7 +9,7 @@
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
-  import type { MqttStatus, Playlist } from "./lib/device";
+  import type { MqttStatus, Playlist, SyncStatus } from "./lib/device";
   import { EXAMPLES, type Layout } from "./lib/examples";
   import {
     deletePattern,
@@ -110,6 +110,26 @@
     } catch {
       /* older firmware without /api/mqtt */
     }
+  }
+
+  // ---- Luxel-to-Luxel sync (device mode) ----
+  let syncStatus: SyncStatus | null = null;
+
+  async function refreshSync(): Promise<void> {
+    if (!device) return;
+    try {
+      syncStatus = await device.sync();
+    } catch {
+      /* older firmware without /api/sync */
+    }
+  }
+
+  function onSyncModeChange(e: Event): void {
+    const mode = (e.target as HTMLSelectElement).value as "off" | "leader" | "follower";
+    void (async () => {
+      await device?.setSync(mode);
+      void refreshSync();
+    })();
   }
 
   function saveMqtt(): void {
@@ -317,9 +337,11 @@
     if (device && tab === "settings" && !editing) {
       void refreshNetLive();
       void refreshMqtt();
+      void refreshSync();
       netPoll = setInterval(() => {
         void refreshNetLive();
         void refreshMqtt();
+        void refreshSync();
       }, 2000);
     }
   }
@@ -2164,6 +2186,36 @@ export function render(index) {
             The device stores the credentials in flash and <strong>reboots</strong> to join the new
             network. AP-mode provisioning (for a device that can't reach any known network) is still
             to come.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>Multi-device sync</h2>
+          <div class="field">
+            <span class="flabel">Role</span>
+            <select
+              data-role="sync-mode"
+              value={syncStatus?.mode ?? "off"}
+              on:change={onSyncModeChange}
+            >
+              <option value="off">off</option>
+              <option value="leader">leader</option>
+              <option value="follower">follower</option>
+            </select>
+            <span class="mono dim" data-role="sync-status">
+              {syncStatus?.mode === "follower"
+                ? syncStatus.leader
+                  ? `following (offset ${syncStatus.leader.offsetMs}ms)`
+                  : "waiting for a leader…"
+                : syncStatus?.mode === "leader"
+                  ? "broadcasting the timebase"
+                  : ""}
+            </span>
+          </div>
+          <p class="dim hint">
+            Run the same pattern on several Luxels and they stay phase-locked: one device leads
+            (broadcasting its clock on UDP :4049) and the rest follow. The leader also relays its
+            sensor data, so one microphone can drive every strip.
           </p>
         </section>
 

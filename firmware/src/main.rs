@@ -231,6 +231,7 @@ async fn main(spawner: Spawner) -> ! {
     BRIGHTNESS.store(brightness, Ordering::Relaxed);
     PIXEL_COUNT.store(pixels, Ordering::Relaxed);
     PROTOCOL.store(protocol.as_u8(), Ordering::Relaxed);
+    shared::SYNC_MODE.store(stored.map(|c| c.sync_mode).unwrap_or(0), Ordering::Relaxed);
     println!(
         "settings: {} px, {}, brightness {}/31 ({})",
         pixels,
@@ -331,8 +332,9 @@ async fn main(spawner: Spawner) -> ! {
         wifi_interface,
         embassy_net::Config::dhcpv4(dhcp),
         mk_static!(
-            // +2 spare, +2 DDP/E1.31 UDP, +1 MQTT TCP, +1 its DNS queries
-            StackResources<{ server::WEB_TASK_POOL_SIZE + 6 }>,
+            // +2 spare, +2 DDP/E1.31 UDP, +1 MQTT TCP, +1 its DNS queries,
+            // +1 the sync beacon socket
+            StackResources<{ server::WEB_TASK_POOL_SIZE + 7 }>,
             StackResources::new()
         ),
         seed,
@@ -353,6 +355,8 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(netin::ddp_task(stack).unwrap());
     spawner.spawn(netin::e131_task(stack).unwrap());
     spawner.spawn(mqtt::mqtt_task(stack).unwrap());
+    // boot id: random per boot, so followers notice a leader restart
+    spawner.spawn(netin::sync_task(stack, rng.random()).unwrap());
 
     let mut first_beat = true;
     loop {
@@ -560,7 +564,25 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             let delta_us = (now - last).as_micros();
             last = now;
             // µs → 16.16 ms
-            let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
+            let mut delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
+
+            // sync follower: converge on the leader clock — big offsets
+            // jump, small ones slew by stretching this delta ≤ ±25%
+            if shared::SYNC_MODE.load(Ordering::Relaxed) == 2 {
+                if let Some((_, lt, at)) = shared::sync_leader() {
+                    let eng = engine.as_mut().unwrap();
+                    let target = lt + at.elapsed().as_millis();
+                    let err = target as i64 - eng.time_ms() as i64;
+                    if err.unsigned_abs() > 1000 {
+                        eng.set_time_ms(target);
+                    } else {
+                        let cap = (delta.raw() as i64 / 4).max(1);
+                        let adj = (err << 16).clamp(-cap, cap); // ms → raw
+                        delta =
+                            Fx::from_raw((delta.raw() as i64 + adj).clamp(0, i32::MAX as i64) as i32);
+                    }
+                }
+            }
 
             // crossfade progress (0..=65536); 65536 = the fade is complete
             let t = if blend_ms > 0 {
@@ -596,6 +618,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     e.message
                 )));
             }
+            // publish the engine clock (leader beacons + /api/sync)
+            shared::set_engine_time_ms(engine.as_ref().unwrap().time_ms());
         }
 
         frames += 1;

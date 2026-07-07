@@ -13,6 +13,13 @@ export interface DeviceStatus {
 
 export type RunResult = { ok: true } | { ok: false; line: number; col: number; error: string };
 
+/** Luxel-to-Luxel sync state (GET /api/sync). */
+export interface SyncStatus {
+  mode: "off" | "leader" | "follower";
+  timeMs: number;
+  leader: { bootId: number; ageMs: number; offsetMs: number } | null;
+}
+
 /** MQTT broker settings + connection state (GET /api/mqtt). */
 export interface MqttStatus {
   enabled: boolean;
@@ -191,6 +198,17 @@ export class DeviceSession {
       method: "POST",
       body: `${host}\n${port || 1883}\n${user}\n${pass}`,
     });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
+  /** Luxel-to-Luxel sync role + clock + last leader beacon heard. */
+  async sync(): Promise<SyncStatus> {
+    return (await (await fetch(this.url("/api/sync"))).json()) as SyncStatus;
+  }
+
+  /** Set the sync role; applied live and persisted on the device. */
+  async setSync(mode: "off" | "leader" | "follower"): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(this.url("/api/sync"), { method: "POST", body: mode });
     return (await res.json()) as { ok: boolean; error?: string };
   }
 

@@ -11,7 +11,7 @@ use embassy_net::Stack;
 use embassy_time::Instant;
 use luxel_core::netin::{parse_ddp, parse_e131, DDP_PORT, E131_CHANNELS, E131_PORT};
 
-use crate::shared::{LIVE_MARK_MS, LIVE_PIXELS, LIVE_PROTO, PIXEL_COUNT};
+use crate::shared::{self, LIVE_MARK_MS, LIVE_PIXELS, LIVE_PROTO, PIXEL_COUNT};
 
 /// Largest packet either protocol sends (DDP data ≤ 1440 + header; E1.31 is
 /// 638). One recv buffer of this size per socket.
@@ -72,6 +72,87 @@ pub async fn ddp_task(stack: Stack<'static>) -> ! {
             live_write(d.offset, d.data, 1);
         }
     }
+}
+
+/// Luxel-to-Luxel sync (UDP :4049, LAN broadcast). Leader: beacon 4×/s
+/// with the engine timebase + the latest sensor frame when it moved;
+/// follower: record beacons (the render task slews toward them) and
+/// inject relayed sensors. The mode atomic steers the task live.
+#[embassy_executor::task]
+pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
+    use core::sync::atomic::Ordering;
+    use embassy_futures::select::{select, Either};
+    use embassy_time::{Duration, Timer};
+    use luxel_core::netin::{build_sync, parse_sync, SYNC_PORT};
+
+    let (rx_meta, rx_buf, tx_meta, tx_buf) = bufs!();
+    let mut sock = UdpSocket::new(stack, rx_meta, rx_buf, tx_meta, tx_buf);
+    sock.bind(SYNC_PORT).expect("bind sync");
+    let mut pkt = alloc::vec![0u8; 256];
+    let mut sensor_sent: u32 = 0;
+    loop {
+        match shared::SYNC_MODE.load(Ordering::Relaxed) {
+            1 => {
+                // leader: piggyback the sensor frame only when it moved
+                let seq = shared::SENSOR_SEQ.load(Ordering::Relaxed);
+                let sb = if seq != sensor_sent {
+                    sensor_sent = seq;
+                    shared::SENSOR_FRAME
+                        .lock(|c| c.borrow().clone())
+                        .map(|s| sensor_frame_to_sb(&s))
+                } else {
+                    None
+                };
+                let beacon = build_sync(boot_id, shared::engine_time_ms(), sb.as_deref());
+                let dest = (embassy_net::Ipv4Address::BROADCAST, SYNC_PORT);
+                if let Err(e) = sock.send_to(&beacon, dest).await {
+                    esp_println::println!("sync: send {:?}", e);
+                }
+                Timer::after(Duration::from_millis(250)).await;
+            }
+            2 => {
+                // follower: wait for a beacon (bounded, so a mode change
+                // out of follower is noticed within a second)
+                match select(sock.recv_from(&mut pkt), Timer::after(Duration::from_secs(1))).await
+                {
+                    Either::First(Ok((len, _))) => {
+                        if let Some(b) = parse_sync(&pkt[..len]) {
+                            shared::set_sync_leader(b.boot_id, b.time_ms);
+                            if let Some(sf) = b.sensor {
+                                shared::set_sensor_frame(sf);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => Timer::after(Duration::from_millis(500)).await,
+        }
+    }
+}
+
+/// Re-encode a SensorFrame as the 98-byte SB wire format (beacon payload;
+/// mirrors serve.rs sensor_frame_to_sb).
+fn sensor_frame_to_sb(s: &luxel_core::engine::SensorFrame) -> alloc::vec::Vec<u8> {
+    use luxel_core::fixed::Fx;
+    let mut p = alloc::vec::Vec::with_capacity(luxel_core::netin::SB_FRAME_LEN);
+    p.extend_from_slice(luxel_core::netin::SB_MAGIC);
+    let u16le = |v: Fx| (v.raw().clamp(0, 0xFFFF) as u16).to_le_bytes();
+    for v in &s.frequency_data {
+        p.extend_from_slice(&u16le(*v));
+    }
+    p.extend_from_slice(&u16le(s.energy_average));
+    p.extend_from_slice(&u16le(s.max_frequency_magnitude));
+    p.extend_from_slice(&(s.max_frequency.to_int_trunc().clamp(0, 65535) as u16).to_le_bytes());
+    for v in &s.accelerometer {
+        p.extend_from_slice(&(v.raw().clamp(-32768, 32767) as i16).to_le_bytes());
+    }
+    p.extend_from_slice(&u16le(s.light));
+    for v in &s.analog_inputs {
+        p.extend_from_slice(&u16le(*v));
+    }
+    p.extend_from_slice(b"END\0");
+    p
 }
 
 #[embassy_executor::task]

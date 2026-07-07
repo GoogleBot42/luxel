@@ -367,6 +367,18 @@ try {
     check("mqtt: blank host disables", m2.enabled === false, JSON.stringify(m2));
   }
 
+  // sync role: the Settings select round-trips through /api/sync (the full
+  // two-device convergence story is covered by tools/sync-e2e.mjs)
+  {
+    const s0 = await (await fetch(`${DEV}/api/sync`)).json();
+    check("sync: defaults to off", s0.mode === "off" && s0.leader === null, JSON.stringify(s0));
+    await page.select('[data-role="sync-mode"]', "leader");
+    await sleep(400);
+    const s1 = await (await fetch(`${DEV}/api/sync`)).json();
+    check("sync: settings select sets the role", s1.mode === "leader", JSON.stringify(s1));
+    await fetch(`${DEV}/api/sync`, { method: "POST", body: "off" }); // restore
+  }
+
   // sensor injection: POST /api/sensors takes a raw sensor-board frame
   // ("SB1.0\0"…"END\0", the serial wire format) and feeds exported sensor
   // vars — the render path a physical PB sensor board will use
