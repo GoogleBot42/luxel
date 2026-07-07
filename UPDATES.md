@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-07-08 — device recovered ✅: v0.1.21 verified on hardware + tools/deploy.sh
+
+You serial-flashed the fix — thanks! Verified on the wall unit right after:
+
+- **Boot + OTA path healthy**: v0.1.21 up at ~124 fps, and a fresh OTA cycle
+  (ota_0 → ota_1) worked, so the wedge is fully behind us (boot guard armed).
+- **Sensors on hardware**: injected a frame via POST /api/sensors — exported
+  vars carried the exact values and the strip lit from `energyAverage`.
+- **Sync on hardware**: put the device in follower mode and fed it beacons
+  from the dev container — it hard-jumped onto the fake leader clock in <1 s
+  and held **±6 ms**. (Two-device sync awaits a second Luxel.)
+- **DDP/E1.31 re-verified** on the new build.
+- **MQTT: blocked on a broker** — the device can't reach the dev container's
+  subnet. Point Settings → MQTT at your HA/Mosquitto (or tell me its IP) and
+  it should appear in HA; every other part is verified against a real
+  mosquitto via the mirror.
+
+**Your question — does flashing firmware also flash the asset bundle? No.**
+`espflash flash` writes only the app image; the web app lives in the
+`assets` partition (0x310000), deployed separately via POST /api/assets.
+Your recovery left the device serving a stale playground — fixed (pushed the
+current bundle), and now there's **`tools/deploy.sh <ip>`**: builds + OTAs
+the firmware, then builds + packs + pushes the assets, one command
+(`--fw-only` / `--assets-only` to split; validated live end-to-end).
+
 ## 2026-07-08 — Mic-to-strip, oracle sweep, Luxel-to-Luxel sync (v0.1.21)
 
 Per your picks (all without the wedged device; everything below rides the
