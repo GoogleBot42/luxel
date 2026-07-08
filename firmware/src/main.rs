@@ -355,8 +355,9 @@ async fn main(spawner: Spawner) -> ! {
         net_config,
         mk_static!(
             // +2 spare, +2 DDP/E1.31 UDP, +1 MQTT TCP, +1 its DNS queries,
-            // +1 the sync beacon socket (AP mode: DHCP + DNS + spare)
-            StackResources<{ server::WEB_TASK_POOL_SIZE + 7 }>,
+            // +1 sync beacons, +1 the follower's pattern-pull TCP
+            // (AP mode reuses the pool for DHCP + DNS)
+            StackResources<{ server::WEB_TASK_POOL_SIZE + 8 }>,
             StackResources::new()
         ),
         seed,

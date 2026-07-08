@@ -187,7 +187,7 @@ fn exp2f(x: f32) -> f32 {
     let i = if x < 0.0 { (x - 0.9999) as i32 } else { x as i32 };
     let f = x - i as f32; // 0..1
     let p = 1.0 + f * (0.6931472 + f * (0.2401597 + f * (0.0558263 + f * 0.0089893)));
-    f32::from_bits((((i + 127) as u32) << 23)) * p
+    f32::from_bits(((i + 127) as u32) << 23) * p
 }
 
 #[cfg(test)]

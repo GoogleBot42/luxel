@@ -166,18 +166,35 @@ fn sync_mode_name(m: u8) -> &'static str {
     }
 }
 
+/// Minimal HTTP GET for the follower's pattern pull (the mirror trusts its
+/// loopback/LAN peer; 64 KB cap).
+fn http_get_text(addr: &str, path: &str) -> Option<String> {
+    let mut s = TcpStream::connect(addr).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+    write!(s, "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").ok()?;
+    let mut buf = Vec::new();
+    s.take(64 * 1024).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let body_at = text.find("\r\n\r\n")? + 4;
+    text.get(body_at..).map(String::from)
+}
+
 /// Leader/follower beacon loop (both roles share the thread; the mode
-/// atomic steers it live). `target`/`port` come from --sync-target/-port
-/// so e2e can run two mirrors over loopback.
-fn sync_thread(state: Arc<State>, target: String, port: u16) {
-    use luxel_core::netin::{build_sync, parse_sync};
+/// atomic steers it live). `target`/`port` come from --sync-target/-port,
+/// `leader_http` from --sync-http-port (the leader's HTTP port for pattern
+/// pulls — a real device is always :80) so e2e can run two mirrors over
+/// loopback.
+fn sync_thread(state: Arc<State>, target: String, port: u16, leader_http: u16) {
+    use luxel_core::netin::{build_sync, fnv1a, parse_sync};
     let send_sock = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok();
     if let Some(s) = &send_sock {
         let _ = s.set_broadcast(true);
     }
     let mut recv_sock: Option<std::net::UdpSocket> = None;
     let mut sensor_sent: u32 = 0;
-    let mut buf = [0u8; 128];
+    let mut last_pull: u32 = 0;
+    let mut pull_at = Instant::now() - Duration::from_secs(10);
+    let mut buf = [0u8; 160];
     loop {
         match state.sync_mode.load(Ordering::Relaxed) {
             1 => {
@@ -195,9 +212,11 @@ fn sync_thread(state: Arc<State>, target: String, port: u16) {
                 } else {
                     None
                 };
+                let hash = fnv1a(state.pattern_src.lock().unwrap().as_bytes());
                 let pkt = build_sync(
                     state.sync_boot_id,
                     state.engine_time_ms.load(Ordering::Relaxed),
+                    hash,
                     sb.as_deref(),
                 );
                 if let Some(s) = &send_sock {
@@ -219,13 +238,33 @@ fn sync_thread(state: Arc<State>, target: String, port: u16) {
                     }
                 }
                 if let Some(s) = &recv_sock {
-                    if let Ok((n, _)) = s.recv_from(&mut buf) {
+                    if let Ok((n, peer)) = s.recv_from(&mut buf) {
                         if let Some(b) = parse_sync(&buf[..n]) {
                             *state.sync_leader.lock().unwrap() =
                                 Some((b.boot_id, b.time_ms, Instant::now()));
                             if let Some(sf) = b.sensor {
                                 *state.sensor_frame.lock().unwrap() = Some(sf);
                                 state.sensor_seq.fetch_add(1, Ordering::Relaxed);
+                            }
+                            // pattern distribution: the leader runs something
+                            // we don't — pull it and adopt it
+                            if let Some(h) = b.pattern_hash {
+                                let local =
+                                    fnv1a(state.pattern_src.lock().unwrap().as_bytes());
+                                if h != local
+                                    && h != last_pull
+                                    && pull_at.elapsed() >= Duration::from_secs(2)
+                                {
+                                    last_pull = h;
+                                    pull_at = Instant::now();
+                                    let addr = format!("{}:{}", peer.ip(), leader_http);
+                                    if let Some(src) = http_get_text(&addr, "/api/pattern") {
+                                        let r = api_code(&state, src);
+                                        if !r.contains("\"ok\":true") {
+                                            eprintln!("sync: leader pattern rejected: {r}");
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1072,15 +1111,9 @@ fn parse_playlist(body: &str) -> Playlist {
 struct Request {
     method: String,
     path: String,
-    headers: Vec<(String, String)>,
+    // headers are parsed for Content-Length but not retained — nothing
+    // needed them once /ws (Sec-WebSocket-Key) was removed
     body: Vec<u8>,
-}
-
-fn header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
-    req.headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.as_str())
 }
 
 fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
@@ -1112,12 +1145,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
     if len > 0 {
         reader.read_exact(&mut body).ok()?;
     }
-    Some(Request {
-        method,
-        path,
-        headers,
-        body,
-    })
+    Some(Request { method, path, body })
 }
 
 fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) {
@@ -1482,6 +1510,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     // mirrors over loopback; the firmware broadcasts on the LAN)
     let mut sync_target = String::from("255.255.255.255");
     let mut sync_port: u16 = luxel_core::netin::SYNC_PORT;
+    let mut sync_http_port: u16 = 80; // a real leader device serves on :80
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         match (flag.as_str(), it.next()) {
@@ -1496,6 +1525,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             ("--sync-target", Some(v)) => sync_target = v.clone(),
             ("--sync-port", Some(v)) => match v.parse() {
                 Ok(n) => sync_port = n,
+                Err(_) => return super::usage(),
+            },
+            ("--sync-http-port", Some(v)) => match v.parse() {
+                Ok(n) => sync_http_port = n,
                 Err(_) => return super::usage(),
             },
             _ => return super::usage(),
@@ -1552,7 +1585,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     }
     {
         let state = state.clone();
-        std::thread::spawn(move || sync_thread(state, sync_target, sync_port));
+        std::thread::spawn(move || sync_thread(state, sync_target, sync_port, sync_http_port));
     }
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {

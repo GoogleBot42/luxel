@@ -28,7 +28,12 @@ const started = (p) =>
   });
 
 const a = mirror(A_PORT, ["--sync-target", "127.0.0.1", "--sync-port", String(SYNC_PORT)]);
-const b = mirror(B_PORT, ["--sync-port", String(SYNC_PORT)]);
+const b = mirror(B_PORT, [
+  "--sync-port",
+  String(SYNC_PORT),
+  "--sync-http-port",
+  String(A_PORT), // pattern pulls hit the leader's HTTP port (device = :80)
+]);
 await Promise.all([started(a), started(b)]);
 
 const fails = [];
@@ -95,6 +100,33 @@ try {
     if (vars.energyAverage === 0x3000) relayed = true;
   }
   check("sync: sensor frame relays leader → follower", relayed);
+
+  // pattern distribution: pushing NEW code to the leader propagates to the
+  // follower (hash in the beacon → follower pulls /api/pattern and adopts)
+  const marker = `export var syncMarker = 42\n${src}`;
+  await fetch(`${A}/api/code`, { method: "POST", body: marker });
+  let adopted = false;
+  for (let i = 0; i < 20 && !adopted; i++) {
+    await sleep(400);
+    const bSrc = await (await fetch(`${B}/api/pattern`)).text();
+    adopted = bSrc.includes("syncMarker");
+  }
+  check("sync: leader's new pattern propagates to the follower", adopted);
+  // adoption rebuilds the follower engine (clock restarts) — it re-converges
+  let offset2 = null;
+  for (let i = 0; i < 20; i++) {
+    await sleep(300);
+    const s2 = await getSync(B);
+    if (s2.leader) {
+      offset2 = s2.leader.offsetMs;
+      if (Math.abs(offset2) < 40) break;
+    }
+  }
+  check(
+    "sync: re-converges after adoption (<40ms)",
+    offset2 !== null && Math.abs(offset2) < 40,
+    `offset ${offset2}ms`,
+  );
 
   // follower back to off clears the leader lock
   await fetch(`${B}/api/sync`, { method: "POST", body: "off" });

@@ -90,6 +90,8 @@ pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
     sock.bind(SYNC_PORT).expect("bind sync");
     let mut pkt = alloc::vec![0u8; 256];
     let mut sensor_sent: u32 = 0;
+    let mut last_pull: u32 = 0;
+    let mut pull_cooldown = embassy_time::Instant::now();
     loop {
         match shared::SYNC_MODE.load(Ordering::Relaxed) {
             1 => {
@@ -103,7 +105,12 @@ pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
                 } else {
                     None
                 };
-                let beacon = build_sync(boot_id, shared::engine_time_ms(), sb.as_deref());
+                let beacon = build_sync(
+                    boot_id,
+                    shared::engine_time_ms(),
+                    shared::PATTERN_HASH.load(Ordering::Relaxed),
+                    sb.as_deref(),
+                );
                 let dest = (embassy_net::Ipv4Address::BROADCAST, SYNC_PORT);
                 if let Err(e) = sock.send_to(&beacon, dest).await {
                     esp_println::println!("sync: send {:?}", e);
@@ -115,11 +122,24 @@ pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
                 // out of follower is noticed within a second)
                 match select(sock.recv_from(&mut pkt), Timer::after(Duration::from_secs(1))).await
                 {
-                    Either::First(Ok((len, _))) => {
+                    Either::First(Ok((len, meta))) => {
                         if let Some(b) = parse_sync(&pkt[..len]) {
                             shared::set_sync_leader(b.boot_id, b.time_ms);
                             if let Some(sf) = b.sensor {
                                 shared::set_sensor_frame(sf);
+                            }
+                            // pattern distribution: leader runs something we
+                            // don't → pull its source and adopt it
+                            if let Some(h) = b.pattern_hash {
+                                let local = shared::PATTERN_HASH.load(Ordering::Relaxed);
+                                if h != local
+                                    && h != last_pull
+                                    && pull_cooldown.elapsed().as_secs() >= 2
+                                {
+                                    last_pull = h;
+                                    pull_cooldown = embassy_time::Instant::now();
+                                    adopt_leader_pattern(stack, meta.endpoint.addr).await;
+                                }
                             }
                         }
                     }
@@ -128,6 +148,57 @@ pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
             }
             _ => Timer::after(Duration::from_millis(500)).await,
         }
+    }
+}
+
+/// Pull the leader's running pattern (GET /api/pattern on its HTTP port)
+/// and adopt it: compile-checked, playlist stopped, same swap path as
+/// POST /api/code. Failures just log — the next changed beacon retries.
+async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddress) {
+    use embassy_net::tcp::TcpSocket;
+
+    // heap buffers (task futures are statics — the main-stack rule)
+    let mut rx = alloc::vec![0u8; 2048];
+    let mut tx = alloc::vec![0u8; 1024];
+    let mut sock = TcpSocket::new(stack, &mut rx, &mut tx);
+    sock.set_timeout(Some(embassy_time::Duration::from_secs(5)));
+    if sock.connect((leader, 80)).await.is_err() {
+        esp_println::println!("sync: leader {:?} not reachable on :80", leader);
+        return;
+    }
+    let req = alloc::format!(
+        "GET /api/pattern HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        leader
+    );
+    let mut out = req.as_bytes();
+    while !out.is_empty() {
+        match sock.write(out).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => out = &out[n..],
+        }
+    }
+    // read to close, capped at the pattern-size bound (~16 KB + headers)
+    let mut body = alloc::vec::Vec::with_capacity(4096);
+    let mut chunk = alloc::vec![0u8; 1024];
+    while body.len() < 20 * 1024 {
+        match sock.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
+        }
+    }
+    let text = alloc::string::String::from_utf8_lossy(&body);
+    let Some(at) = text.find("\r\n\r\n") else {
+        return;
+    };
+    let src = alloc::string::String::from(&text[at + 4..]);
+    match luxel_core::engine::Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
+        Ok(_) => {
+            crate::playlist::stop(); // following the leader takes over
+            shared::MSG_QUEUE.send(shared::Msg::Code(src)).await;
+            shared::set_current_pattern_id("");
+            esp_println::println!("sync: adopted the leader's pattern");
+        }
+        Err(d) => esp_println::println!("sync: leader pattern rejected: {}", d.message),
     }
 }
 

@@ -95,7 +95,12 @@ pub fn get_pixels() -> Vec<u8> {
 /// Source of the running pattern (`GET /api/pattern`) — updated on swap.
 pub static PATTERN_SRC: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
 
+/// FNV-1a of the running source — the sync beacon's pattern identity.
+pub static PATTERN_HASH: AtomicU32 = AtomicU32::new(0);
+
 pub fn set_pattern_src(src: &str) {
+    use core::sync::atomic::Ordering;
+    PATTERN_HASH.store(luxel_core::netin::fnv1a(src.as_bytes()), Ordering::Relaxed);
     PATTERN_SRC.lock(|c| {
         let mut s = c.borrow_mut();
         s.clear();

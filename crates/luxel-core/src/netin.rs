@@ -140,25 +140,47 @@ pub fn sb_find(buf: &[u8]) -> Option<usize> {
 // A leader broadcasts its engine timebase (and, when fresh, its latest
 // sensor frame) on UDP :4049 a few times a second; followers slew their
 // clock to it so identical patterns stay phase-locked across controllers.
-//   "LXS1" + u32-LE boot_id + u64-LE time_ms + u8 flags [+ 98-byte SB frame]
+//   v2: "LXS2" + u32-LE boot_id + u64-LE time_ms + u32-LE pattern_hash
+//       + u8 flags [+ 98-byte SB frame]
+//   v1: "LXS1" — same minus pattern_hash (still parsed; hash = None).
 // boot_id is random per boot — followers use it to notice leader restarts
-// (a fresh leader clock needs a hard jump, not a slew).
+// (a fresh leader clock needs a hard jump, not a slew). pattern_hash is
+// FNV-1a over the leader's running source: when it changes, followers pull
+// http://<leader>/api/pattern and adopt it (pattern distribution).
 
 pub const SYNC_PORT: u16 = 4049;
-pub const SYNC_MAGIC: &[u8; 4] = b"LXS1";
+pub const SYNC_MAGIC_V1: &[u8; 4] = b"LXS1";
+pub const SYNC_MAGIC: &[u8; 4] = b"LXS2";
 const SYNC_FLAG_SENSOR: u8 = 0x01;
 
 pub struct SyncBeacon {
     pub boot_id: u32,
     pub time_ms: u64,
+    /// FNV-1a of the leader's running pattern source (None from v1 beacons).
+    pub pattern_hash: Option<u32>,
     pub sensor: Option<crate::engine::SensorFrame>,
 }
 
-pub fn build_sync(boot_id: u32, time_ms: u64, sensor_frame: Option<&[u8]>) -> alloc::vec::Vec<u8> {
-    let mut p = alloc::vec::Vec::with_capacity(17 + SB_FRAME_LEN);
+/// FNV-1a — the pattern-identity hash carried in beacons.
+pub fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &b in bytes {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+pub fn build_sync(
+    boot_id: u32,
+    time_ms: u64,
+    pattern_hash: u32,
+    sensor_frame: Option<&[u8]>,
+) -> alloc::vec::Vec<u8> {
+    let mut p = alloc::vec::Vec::with_capacity(21 + SB_FRAME_LEN);
     p.extend_from_slice(SYNC_MAGIC);
     p.extend_from_slice(&boot_id.to_le_bytes());
     p.extend_from_slice(&time_ms.to_le_bytes());
+    p.extend_from_slice(&pattern_hash.to_le_bytes());
     match sensor_frame {
         Some(sb) if sb.len() == SB_FRAME_LEN => {
             p.push(SYNC_FLAG_SENSOR);
@@ -170,19 +192,26 @@ pub fn build_sync(boot_id: u32, time_ms: u64, sensor_frame: Option<&[u8]>) -> al
 }
 
 pub fn parse_sync(pkt: &[u8]) -> Option<SyncBeacon> {
-    if pkt.len() < 17 || &pkt[..4] != SYNC_MAGIC {
-        return None;
-    }
-    let boot_id = u32::from_le_bytes(pkt[4..8].try_into().ok()?);
-    let time_ms = u64::from_le_bytes(pkt[8..16].try_into().ok()?);
-    let sensor = if pkt[16] & SYNC_FLAG_SENSOR != 0 {
-        parse_sensor_board(pkt.get(17..17 + SB_FRAME_LEN)?)
+    let (hash, flags_at) = match pkt.get(..4)? {
+        m if m == SYNC_MAGIC => (
+            Some(u32::from_le_bytes(pkt.get(16..20)?.try_into().ok()?)),
+            20,
+        ),
+        m if m == SYNC_MAGIC_V1 => (None, 16),
+        _ => return None,
+    };
+    let boot_id = u32::from_le_bytes(pkt.get(4..8)?.try_into().ok()?);
+    let time_ms = u64::from_le_bytes(pkt.get(8..16)?.try_into().ok()?);
+    let flags = *pkt.get(flags_at)?;
+    let sensor = if flags & SYNC_FLAG_SENSOR != 0 {
+        parse_sensor_board(pkt.get(flags_at + 1..flags_at + 1 + SB_FRAME_LEN)?)
     } else {
         None
     };
     Some(SyncBeacon {
         boot_id,
         time_ms,
+        pattern_hash: hash,
         sensor,
     })
 }
@@ -293,20 +322,33 @@ mod tests {
     #[test]
     fn sync_beacon_round_trip() {
         // bare beacon
-        let p = build_sync(0xdead_beef, 123_456_789_012, None);
+        let p = build_sync(0xdead_beef, 123_456_789_012, 0xabcd, None);
         let b = parse_sync(&p).unwrap();
         assert_eq!(b.boot_id, 0xdead_beef);
         assert_eq!(b.time_ms, 123_456_789_012);
+        assert_eq!(b.pattern_hash, Some(0xabcd));
         assert!(b.sensor.is_none());
         // with a piggybacked sensor frame
         let sb = sb_frame(0x4000, 0x2000, 440);
-        let p = build_sync(7, 1000, Some(&sb));
+        let p = build_sync(7, 1000, 1, Some(&sb));
         let b = parse_sync(&p).unwrap();
         let s = b.sensor.expect("sensor present");
         assert_eq!(s.max_frequency, crate::fixed::Fx::from_int(440));
         // truncated sensor payload rejected as a whole
         assert!(parse_sync(&p[..p.len() - 1]).is_none());
-        assert!(parse_sync(b"LXS0aaaaaaaaaaaaa").is_none());
+        assert!(parse_sync(b"LXS0aaaaaaaaaaaaaaaaaaaa").is_none());
+        // a v1 beacon still parses (no hash)
+        let mut v1 = alloc::vec::Vec::new();
+        v1.extend_from_slice(SYNC_MAGIC_V1);
+        v1.extend_from_slice(&7u32.to_le_bytes());
+        v1.extend_from_slice(&1000u64.to_le_bytes());
+        v1.push(0);
+        let b = parse_sync(&v1).unwrap();
+        assert_eq!(b.pattern_hash, None);
+        assert_eq!(b.time_ms, 1000);
+        // fnv sanity: known vector ("" → offset basis, stability pin)
+        assert_eq!(fnv1a(b""), 0x811c_9dc5);
+        assert_eq!(fnv1a(b"a"), 0xe40c_292c);
     }
 
     #[test]
