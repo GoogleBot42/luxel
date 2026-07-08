@@ -19,13 +19,15 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::fixed::Fx;
-use crate::vm::{lookup_builtin, FnDef, GlobalDef, Program, BUILTINS};
+use crate::vm::{lookup_builtin, FnDef, GlobalDef, Program, Value, BUILTINS};
 
 pub const MAGIC: [u8; 4] = *b"LXBC";
 /// v2: jump operands are function-relative BYTE offsets (v1 used
 /// instruction indices) and debug positions are offset-keyed runs — the
 /// encoding the VM executes in place.
-pub const FORMAT_VERSION: u16 = 2;
+/// v3: const-array data section (deduplicated all-numeric literals) +
+/// the `ConstArr` opcode — a pattern's `.rodata`.
+pub const FORMAT_VERSION: u16 = 3;
 
 /// Decoder hard limits — bound allocations before trusting any count field.
 const MAX_BLOB: usize = 256 * 1024;
@@ -36,6 +38,8 @@ const MAX_GLOBALS: usize = 256;
 const MAX_LOCALS: usize = 255;
 const MAX_CODE: usize = 65_536;
 const MAX_ARGC: u8 = 16;
+const MAX_DATA_ARRAYS: usize = 4096;
+const MAX_DATA_ELEMS: usize = 65_536;
 
 const FLAG_DEBUG: u16 = 1;
 
@@ -133,6 +137,9 @@ pub(crate) mod op {
     pub const STORE_IDX: u8 = 0x09;
     pub const ARR_LEN: u8 = 0x0A;
     pub const NEW_ARRAY: u8 = 0x0B;
+    /// v3: allocate an arena array sharing a const-pool entry (u16 index
+    /// into the data section) — copy-on-write on first mutation.
+    pub const CONST_ARR: u8 = 0x0F;
     pub const DUP: u8 = 0x0C;
     pub const DUP2: u8 = 0x0D;
     pub const POP: u8 = 0x0E;
@@ -208,6 +215,8 @@ struct Walk {
     fn_ref: Option<u16>,
     global_ref: Option<u16>,
     local_ref: Option<u8>,
+    /// Const-pool index (ConstArr).
+    data_ref: Option<u16>,
     jump: Option<u32>,
     argc: Option<u8>,
 }
@@ -221,6 +230,7 @@ fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
         fn_ref: None,
         global_ref: None,
         local_ref: None,
+        data_ref: None,
         jump: None,
         argc: None,
     };
@@ -262,6 +272,11 @@ fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
         }
         op::NEW_ARRAY => {
             need(2)?;
+            w.next = at + 3;
+        }
+        op::CONST_ARR => {
+            need(2)?;
+            w.data_ref = Some(u16_at(at + 1));
             w.next = at + 3;
         }
         op::JMP | op::JMP_IF_FALSE | op::JMP_IF_TRUE_PEEK | op::JMP_IF_FALSE_PEEK => {
@@ -339,7 +354,7 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
     w.u16(prog.fns.len() as u16);
     w.u16(prog.exported_fns.len() as u16);
     w.u16(imports.len() as u16);
-    w.u16(0); // reserved
+    w.u16(prog.data_arrays.len() as u16); // n_data (was reserved pre-v3)
 
     for &b in &imports {
         w.str8(BUILTINS[b as usize].name)?;
@@ -349,6 +364,14 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
         w.str8(&g.name)?;
         w.u8((g.export as u8) | ((g.predefined as u8) << 1));
         w.i32(g.init.raw());
+    }
+
+    // const-array data section (the pattern's .rodata, deduplicated)
+    for d in &prog.data_arrays {
+        w.u16(d.len() as u16);
+        for v in d.iter() {
+            w.i32(v.num().raw());
+        }
     }
 
     for f in &prog.fns {
@@ -493,9 +516,9 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
     let n_fns = r.u16()? as usize;
     let n_exports = r.u16()? as usize;
     let n_imports = r.u16()? as usize;
-    let _reserved = r.u16()?;
+    let n_data = r.u16()? as usize;
 
-    if n_globals > MAX_GLOBALS || n_fns > MAX_FNS || n_exports > MAX_EXPORTS || n_imports > MAX_IMPORTS {
+    if n_globals > MAX_GLOBALS || n_fns > MAX_FNS || n_exports > MAX_EXPORTS || n_imports > MAX_IMPORTS || n_data > MAX_DATA_ARRAYS {
         return err("section count over limit");
     }
     if n_fns == 0 {
@@ -535,6 +558,30 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
                 predefined: flags & 2 != 0,
                 init,
             });
+        }
+    }
+
+    // const-array data section (deduped all-numeric literals)
+    let mut data_arrays: Vec<alloc::boxed::Box<[Value]>> = Vec::new();
+    if collect {
+        reserve(&mut data_arrays, n_data)?;
+    }
+    let mut data_total = 0usize;
+    for _ in 0..n_data {
+        let len = r.u16()? as usize;
+        data_total += len;
+        if data_total > MAX_DATA_ELEMS {
+            return err("const-array data section over limit");
+        }
+        if collect {
+            let mut values: Vec<Value> = Vec::new();
+            reserve(&mut values, len)?;
+            for _ in 0..len {
+                values.push(Value::Num(Fx::from_raw(r.i32()?)));
+            }
+            data_arrays.push(values.into());
+        } else {
+            r.take(len * 4)?;
         }
     }
 
@@ -600,6 +647,11 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
             if let Some(i) = w.local_ref {
                 if i as usize >= locals {
                     return err("local slot out of range");
+                }
+            }
+            if let Some(d) = w.data_ref {
+                if d as usize >= n_data {
+                    return err("const-array index out of range");
                 }
             }
             if let Some(a) = w.argc {
@@ -695,6 +747,7 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
 
     Ok(collect.then(|| Program {
         code: prog_code,
+        data_arrays,
         fns,
         globals,
         exported_fns,

@@ -1,5 +1,38 @@
 # Update log
 
+## 2026-07-08 — LXBC v3: const-array data section — 192/195, capacity failures extinct
+
+Jeremy's idea, straight out of mainline compilers: array literals are
+constants — put them in a data section instead of building them at runtime.
+The measurement made it a slam dunk: Emoji Animation #2's 768 `[r,g,b]`
+literals contain FOUR unique triplets.
+
+- The compiler interns every all-numeric array literal into a
+  **deduplicated const pool** in the blob (the pattern's `.rodata`); a new
+  `ConstArr` opcode replaces the per-element push/NewArray stream.
+- Mutability preserved by **copy-on-write**: each literal occurrence keeps
+  its own arena identity as a plain index into the pool (`ArrRepr::
+  Const(u32)` — no Rc/Arc, no new dependencies; the arena can never
+  outlive the Program, so ids suffice, same as fn/global/builtin ids), and
+  materializes an owned copy only on first write. Never written → never
+  copied. Identity-preservation is unit-tested (two identical literals
+  don't alias after a write).
+- Element budget (PB-compat 10,240) still counts const arrays; the byte
+  ledger charges only the 32 B entry.
+- Emoji Animation #2: blob 17.3 → 5.8 KB, decoded program 19.3 → 8 KB,
+  full engine 70.7 → 41 KB — **runs on the device at 34 fps with ~67 KB
+  free**. It was the last capacity holdout.
+
+**Certification soak: 192/195 clean, 0 panics, 0 rejections, lowest heap
+observed 60.6 KB free.** The 3 remaining errors are the no-map `render2D`
+index bugs (Breakout/Crosstown/Frogger — oracle question in ideas.md);
+Rainbow Smiley and Rainbow Comet cleared too (their errors were array-
+degradation side effects). Day's full arc: 134 → 176 → 182 → 189 → 192,
+and idle free heap 50 → 107 KB.
+
+Also: docs/tools.md — a one-page index of every script/harness (soak,
+oracle, corpus, e2e, deploy, heapstat), linked from the README.
+
 ## 2026-07-08 — v0.1.26/27: the RAM reclaim — 189/195 gallery patterns run; idle free heap 50 → 107 KB
 
 Follow-through on "find something systemic": four structural changes, each

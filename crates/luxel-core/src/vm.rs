@@ -113,6 +113,12 @@ pub struct Program {
     /// Builtin operands hold RUNTIME builtin ids (the wire format's
     /// import-table slots are resolved by the decoder).
     pub code: Vec<u8>,
+    /// Constant-array pool (the blob's "data section"): every all-numeric
+    /// array literal, DEDUPLICATED by content — pixel-art patterns repeat
+    /// the same rows/triplets hundreds of times. `ConstArr` instructions
+    /// allocate arena entries that INDEX into this pool until first
+    /// mutation (copy-on-write in [`Vm::arr_mut`]).
+    pub data_arrays: Vec<alloc::boxed::Box<[Value]>>,
     /// `fns[0]` is top-level initialization code.
     pub fns: Vec<FnDef>,
     pub globals: Vec<GlobalDef>,
@@ -440,15 +446,46 @@ pub enum Outcome {
     Paused,
 }
 
+/// Byte-ledger cost of a const-backed arena entry (the enum slot + Rc
+/// bookkeeping; the element data itself is shared with the program).
+const CONST_ENTRY_COST: usize = 32;
+
 const MAX_DEPTH: usize = 48;
 const MAX_STACK: usize = 1024;
 const MAX_ARGS: usize = 16;
 pub const DEFAULT_ARRAY_BUDGET: usize = 10_240;
 const FUEL: u32 = 8_000_000;
 
+/// One arena array: owned storage, or an index into the program's
+/// const-array pool (until first mutation — copy-on-write). Every `[…]`
+/// literal occurrence keeps its own arena identity either way: writing
+/// through one handle never affects another. Pool indices are
+/// decoder-validated, like every other id the VM trusts.
+#[derive(Debug, Clone)]
+pub enum ArrRepr {
+    Owned(Vec<Value>),
+    Const(u32),
+}
+
+impl Default for ArrRepr {
+    fn default() -> Self {
+        ArrRepr::Owned(Vec::new())
+    }
+}
+
+impl ArrRepr {
+    #[inline]
+    fn slice<'a>(&'a self, prog: &'a Program) -> &'a [Value] {
+        match self {
+            ArrRepr::Owned(v) => v,
+            ArrRepr::Const(d) => &prog.data_arrays[*d as usize],
+        }
+    }
+}
+
 pub struct Vm {
     pub globals: Vec<Value>,
-    arrays: Vec<Vec<Value>>,
+    arrays: Vec<ArrRepr>,
     array_elems: usize,
     /// PB-compat element budget (10,240 — arrays are never freed).
     pub array_budget: usize,
@@ -547,13 +584,44 @@ impl Vm {
         }
     }
 
-    pub fn array(&self, id: u32) -> Option<&[Value]> {
-        self.arrays.get(id as usize).map(|a| a.as_slice())
+    pub fn array<'a>(&'a self, prog: &'a Program, id: u32) -> Option<&'a [Value]> {
+        self.arrays.get(id as usize).map(|a| a.slice(prog))
     }
 
     /// Mutable view of an array (sensor-frame injection writes in place).
-    pub fn array_mut(&mut self, id: u32) -> Option<&mut [Value]> {
-        self.arrays.get_mut(id as usize).map(|a| a.as_mut_slice())
+    /// A const-backed array is materialized first (copy-on-write); on
+    /// allocation failure this returns None rather than panicking.
+    pub fn array_mut(&mut self, prog: &Program, id: u32) -> Option<&mut [Value]> {
+        self.arr_mut(prog, id).ok().map(|v| v.as_mut_slice())
+    }
+
+    /// Read view by id — arena ids come from the VM itself, so `id` is
+    /// always valid at these call sites (matches the old direct indexing).
+    #[inline]
+    fn arr<'a>(&'a self, prog: &'a Program, id: u32) -> &'a [Value] {
+        self.arrays[id as usize].slice(prog)
+    }
+
+    /// Mutable storage by id, materializing const-backed arrays
+    /// (copy-on-write). Fails only if the copy can't be allocated.
+    fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut Vec<Value>, &'static str> {
+        let slot = &mut self.arrays[id as usize];
+        if let ArrRepr::Const(d) = slot {
+            let data: &[Value] = &prog.data_arrays[*d as usize];
+            let mut owned: Vec<Value> = Vec::new();
+            if owned.try_reserve_exact(data.len()).is_err() {
+                return Err("out of memory for array");
+            }
+            owned.extend_from_slice(data);
+            // the shared bytes stop being charged... they were never
+            // charged; the owned copy joins the byte ledger now
+            self.array_bytes += Self::array_cost(owned.len()) - CONST_ENTRY_COST;
+            *slot = ArrRepr::Owned(owned);
+        }
+        match &mut self.arrays[id as usize] {
+            ArrRepr::Owned(v) => Ok(v),
+            ArrRepr::Const(_) => unreachable!("materialized above"),
+        }
     }
 
     /// Read-only view of the (possibly suspended) call stack.
@@ -916,7 +984,7 @@ impl Vm {
                         fail!("array index out of bounds");
                     }
                     let i = idx.to_int_trunc() as usize;
-                    match self.arrays[a as usize].get(i) {
+                    match self.arr(prog, a).get(i) {
                         Some(v) => push!(*v),
                         None => fail!("array index out of bounds"),
                     }
@@ -933,9 +1001,12 @@ impl Vm {
                         fail!("array index out of bounds");
                     }
                     let i = idx.to_int_trunc() as usize;
-                    match self.arrays[a as usize].get_mut(i) {
-                        Some(slot) => *slot = val,
-                        None => fail!("array index out of bounds"),
+                    match self.arr_mut(prog, a) {
+                        Ok(v) => match v.get_mut(i) {
+                            Some(slot) => *slot = val,
+                            None => fail!("array index out of bounds"),
+                        },
+                        Err(m) => fail!(m),
                     }
                     push!(val);
                 }
@@ -945,9 +1016,7 @@ impl Vm {
                     let Value::Arr(a) = arr else {
                         fail!(".length of a non-array value")
                     };
-                    push!(Value::Num(Fx::from_int(
-                        self.arrays[a as usize].len() as i32
-                    )));
+                    push!(Value::Num(Fx::from_int(self.arr(prog, a).len() as i32)));
                 }
                 op::NEW_ARRAY => {
                     let n = op_u16!() as usize;
@@ -959,10 +1028,23 @@ impl Vm {
                             let Value::Arr(id) = v else { unreachable!() };
                             for i in (0..n).rev() {
                                 let e = pop!();
-                                self.arrays[id as usize][i] = e;
+                                // freshly allocated ⇒ always Owned
+                                if let ArrRepr::Owned(vs) = &mut self.arrays[id as usize] {
+                                    vs[i] = e;
+                                }
                             }
                             push!(v);
                         }
+                        Err(m) => fail!(m),
+                    }
+                }
+                op::CONST_ARR => {
+                    let d = op_u16!() as u32;
+                    set_pc!(at as u32);
+                    // decoder-validated: d < data_arrays.len()
+                    let len = prog.data_arrays[d as usize].len();
+                    match self.alloc_const_array(d, len) {
+                        Ok(v) => push!(v),
                         Err(m) => fail!(m),
                     }
                 }
@@ -1173,21 +1255,32 @@ impl Vm {
         len * core::mem::size_of::<Value>() + 32
     }
 
-    fn charge_array(&mut self, len: usize) -> Result<(), &'static str> {
+    fn charge_array(&mut self, len: usize, bytes: usize) -> Result<(), &'static str> {
         if self.array_elems + len > self.array_budget {
             return Err("array element budget exceeded (arrays are never freed)");
         }
-        if self.array_bytes + Self::array_cost(len) > self.array_byte_budget {
+        if self.array_bytes + bytes > self.array_byte_budget {
             return Err("array memory budget exceeded (pattern too large for this device)");
         }
         Ok(())
     }
 
     pub fn alloc_array(&mut self, elems: Vec<Value>) -> Result<Value, &'static str> {
-        self.charge_array(elems.len())?;
+        self.charge_array(elems.len(), Self::array_cost(elems.len()))?;
         self.array_elems += elems.len();
         self.array_bytes += Self::array_cost(elems.len());
-        self.arrays.push(elems);
+        self.arrays.push(ArrRepr::Owned(elems));
+        Ok(Value::Arr((self.arrays.len() - 1) as u32))
+    }
+
+    /// Arena entry sharing a const-pool array (copy-on-write). Elements
+    /// still count against the PB-compat element budget; bytes only for
+    /// the entry itself — the data is shared with the program.
+    fn alloc_const_array(&mut self, d: u32, len: usize) -> Result<Value, &'static str> {
+        self.charge_array(len, CONST_ENTRY_COST)?;
+        self.array_elems += len;
+        self.array_bytes += CONST_ENTRY_COST;
+        self.arrays.push(ArrRepr::Const(d));
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
     }
 
@@ -1196,7 +1289,7 @@ impl Vm {
     /// fallible — on a small-heap device a huge `array(n)` must be a
     /// recorded runtime error, never an allocator panic (= reboot).
     fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, &'static str> {
-        self.charge_array(len)?;
+        self.charge_array(len, Self::array_cost(len))?;
         let mut elems: Vec<Value> = Vec::new();
         if elems.try_reserve_exact(len).is_err() {
             return Err("out of memory for array");
@@ -1204,7 +1297,7 @@ impl Vm {
         elems.resize(len, Value::default());
         self.array_elems += len;
         self.array_bytes += Self::array_cost(len);
-        self.arrays.push(elems);
+        self.arrays.push(ArrRepr::Owned(elems));
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
     }
 
@@ -1490,14 +1583,14 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arrayLength of a non-array".into()));
                 };
-                num(Fx::from_int(self.arrays[arr as usize].len() as i32))
+                num(Fx::from_int(self.arr(prog, arr).len() as i32))
             }
             ArraySum => {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arraySum of a non-array".into()));
                 };
                 let mut sum = Fx::ZERO;
-                for v in &self.arrays[arr as usize] {
+                for v in self.arr(prog, arr) {
                     sum = sum + v.num();
                 }
                 num(sum)
@@ -1509,15 +1602,17 @@ impl Vm {
                 let f = a(1);
                 let mutate = builtin == ArrayMutate;
                 let mut i = 0usize;
-                while i < self.arrays[arr as usize].len() {
-                    let v = self.arrays[arr as usize][i];
+                while i < self.arr(prog, arr).len() {
+                    let v = self.arr(prog, arr)[i];
                     let r = self.dispatch_direct(
                         prog,
                         f,
                         &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
                     )?;
                     if mutate {
-                        if let Some(slot) = self.arrays[arr as usize].get_mut(i) {
+                        if let Some(slot) =
+                            self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?.get_mut(i)
+                        {
                             *slot = r;
                         }
                     }
@@ -1531,14 +1626,18 @@ impl Vm {
                 };
                 let f = a(2);
                 let mut i = 0usize;
-                while i < self.arrays[src as usize].len() && i < self.arrays[dst as usize].len() {
-                    let v = self.arrays[src as usize][i];
+                while i < self.arr(prog, src).len() && i < self.arr(prog, dst).len() {
+                    let v = self.arr(prog, src)[i];
                     let r = self.dispatch_direct(
                         prog,
                         f,
                         &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
                     )?;
-                    self.arrays[dst as usize][i] = r;
+                    if let Some(slot) =
+                        self.arr_mut(prog, dst).map_err(|m| no_site(m.into()))?.get_mut(i)
+                    {
+                        *slot = r;
+                    }
                     i += 1;
                 }
                 Ok(a(1))
@@ -1550,8 +1649,8 @@ impl Vm {
                 let f = a(1);
                 let mut acc = a(2);
                 let mut i = 0usize;
-                while i < self.arrays[arr as usize].len() {
-                    let v = self.arrays[arr as usize][i];
+                while i < self.arr(prog, arr).len() {
+                    let v = self.arr(prog, arr)[i];
                     acc = self.dispatch_direct(
                         prog,
                         f,
@@ -1570,9 +1669,12 @@ impl Vm {
                 } else {
                     (0, 1)
                 };
-                for (j, arg) in args[first..argc].iter().enumerate() {
-                    if let Some(slot) = self.arrays[arr as usize].get_mut(off + j) {
-                        *slot = *arg;
+                {
+                    let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    for (j, arg) in args[first..argc].iter().enumerate() {
+                        if let Some(slot) = slots.get_mut(off + j) {
+                            *slot = *arg;
+                        }
                     }
                 }
                 Ok(a(0))
@@ -1583,7 +1685,12 @@ impl Vm {
                 };
                 let cmp = a(1);
                 let by = builtin == ArraySortBy;
-                let mut data = core::mem::take(&mut self.arrays[arr as usize]);
+                self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?; // materialize (CoW)
+                let ArrRepr::Owned(mut data) =
+                    core::mem::take(&mut self.arrays[arr as usize])
+                else {
+                    unreachable!("materialized above")
+                };
                 let mut err = None;
                 // insertion sort (documented as not stable; small arrays)
                 'outer: for i in 1..data.len() {
@@ -1609,7 +1716,7 @@ impl Vm {
                     }
                     data[j] = key;
                 }
-                self.arrays[arr as usize] = data;
+                self.arrays[arr as usize] = ArrRepr::Owned(data);
                 match err {
                     Some(e) => Err(e),
                     None => Ok(a(0)),
@@ -1756,7 +1863,7 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("setPalette needs an array".into()));
                 };
-                let data = &self.arrays[arr as usize];
+                let data = self.arr(prog, arr);
                 let mut pal = Vec::new();
                 let mut i = 0;
                 while i + 3 < data.len() {
@@ -1842,20 +1949,21 @@ impl Vm {
                     return Err(no_site("blur1D of a non-array".into()));
                 };
                 let r = n(1).to_int_trunc().max(0) as usize;
-                let idx = arr as usize;
-                let len = self.arrays[idx].len();
+                // materialize up front (copy-on-write) — this writes in place
+                let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                let len = data.len();
                 if r > 0 && len > 0 {
                     // prefix sums in raw i64 — exact, no overflow at 10K els
                     let mut pre = alloc::vec::Vec::with_capacity(len + 1);
                     pre.push(0i64);
-                    for v in &self.arrays[idx] {
+                    for v in data.iter() {
                         pre.push(pre.last().unwrap() + v.num().raw() as i64);
                     }
                     for i in 0..len {
                         let lo = i.saturating_sub(r);
                         let hi = (i + r).min(len - 1);
                         let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
-                        self.arrays[idx][i] = Value::Num(Fx::from_raw(avg as i32));
+                        data[i] = Value::Num(Fx::from_raw(avg as i32));
                     }
                 }
                 Ok(a(0))
@@ -1867,7 +1975,11 @@ impl Vm {
                     return Err(no_site("feedback of a non-array".into()));
                 };
                 let decay = n(1);
-                for slot in self.arrays[arr as usize].iter_mut() {
+                for slot in self
+                    .arr_mut(prog, arr)
+                    .map_err(|m| no_site(m.into()))?
+                    .iter_mut()
+                {
                     *slot = Value::Num(slot.num() * decay);
                 }
                 Ok(a(0))
@@ -1887,12 +1999,12 @@ impl Vm {
             // reuse one array, so render loops don't grow the arena.
             Hsv2Rgb => {
                 let rgb = hsv_to_rgb(n(0), n(1), n(2));
-                self.write3(a(3), rgb).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(3), rgb).map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
             Rgb2Hsv => {
                 let hsv = rgb_to_hsv(n(0), n(1), n(2));
-                self.write3(a(3), hsv).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(3), hsv).map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
             // simplex2(x, y, seed = 0) / simplex3(x, y, z, seed = 0):
@@ -1910,7 +2022,7 @@ impl Vm {
             // OKLab — perceptually even, no muddy midpoints
             MixColors => {
                 let c = crate::color::mix_oklab([n(0), n(1), n(2)], [n(3), n(4), n(5)], n(6));
-                self.write3(a(7), c).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(7), c).map_err(|m| no_site(m.into()))?;
                 Ok(a(7))
             }
         }
@@ -1925,11 +2037,11 @@ impl Vm {
     }
 
     /// Write three numbers into the first three slots of `out`.
-    fn write3(&mut self, out: Value, vals: [Fx; 3]) -> Result<(), &'static str> {
+    fn write3(&mut self, prog: &Program, out: Value, vals: [Fx; 3]) -> Result<(), &'static str> {
         let Value::Arr(arr) = out else {
             return Err("`out` must be an array");
         };
-        let slots = &mut self.arrays[arr as usize];
+        let slots = self.arr_mut(prog, arr)?;
         if slots.len() < 3 {
             return Err("`out` array needs length >= 3");
         }

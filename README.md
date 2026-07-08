@@ -98,6 +98,8 @@ CLI extras: `luxel run pattern.js` (PPM frame strip), `bench`, `parse`,
 Good starting docs: [docs/lang.md](docs/lang.md) (the pattern language),
 [UPDATES.md](UPDATES.md) (what shipped, newest first),
 [docs/PLAN.md](docs/PLAN.md) (architecture),
+[docs/tools.md](docs/tools.md) (every script/harness: soak, oracle,
+corpus, e2e, deploy — what to reach for and when),
 [docs/research/04-oracle-findings.md](docs/research/04-oracle-findings.md)
 (how we know it matches the real thing).
 

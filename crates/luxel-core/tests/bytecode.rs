@@ -55,6 +55,45 @@ fn debug_info_survives() {
 }
 
 #[test]
+fn const_array_dedup_keeps_identities_separate() {
+    // Two identical all-numeric literals intern to ONE const-pool entry
+    // but remain distinct mutable arrays (copy-on-write): writing through
+    // one must never leak into the other.
+    let src = r#"
+var a = [1, 2, 3]
+var b = [1, 2, 3]
+var c = [4, -5, 3.5]
+export var a0
+export var b0
+export var probe
+a[0] = 9
+a0 = a[0]
+b0 = b[0]
+probe = c[1]
+b.mutate((v) => v * 2)      // CoW via a builtin, too
+export var b0m
+b0m = b[0]
+export function render(i) { hsv(0, 0, 0) }
+"#;
+    let prog = compile(src).unwrap();
+    // identical literals deduped; the distinct one adds a second entry
+    assert_eq!(prog.data_arrays.len(), 2, "expected dedup to 2 pool entries");
+    // and the whole thing round-trips + runs identically from the blob
+    let blob = serialize(&prog).unwrap();
+    let prog2 = deserialize(&blob).unwrap();
+    assert_eq!(serialize(&prog2).unwrap(), blob);
+    let e = Engine::from_program(prog2, 10, 1);
+    let get = |name: &str| match e.var(name) {
+        Some(luxel_core::vm::Value::Num(v)) => v,
+        other => panic!("{name}: {other:?}"),
+    };
+    assert_eq!(get("a0"), Fx::from_int(9), "write through a");
+    assert_eq!(get("b0"), Fx::from_int(1), "b unaffected by a's write");
+    assert_eq!(get("b0m"), Fx::from_int(2), "mutate() copied-on-write");
+    assert_eq!(get("probe"), Fx::from_int(-5));
+}
+
+#[test]
 fn validate_agrees_with_deserialize() {
     let prog = compile(PATTERN).unwrap();
     let blob = serialize(&prog).unwrap();

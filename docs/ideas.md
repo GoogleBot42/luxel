@@ -60,12 +60,12 @@ bytecode execution is being worked on now; the rest are queued:
 - ~~In-place bytecode execution~~ — DONE (v0.1.26, LXBC v2): the VM
   interprets flat bytes; decoded Programs ≈ 1.2–2.5× blob (was ~5×).
 - **Oracle probe: `render2D` with no map installed** [S] ★★★ — Breakout
-  2D, Crosstown Traffic 2D, Frogger 2D, Rainbow Smiley, and Rainbow Comet
-  die with `array index out of bounds` on a mapless device but pass on the
-  host harness (which installs a grid map). The last 5 non-capacity soak
-  failures. Probe the real PB (192.168.0.140): what coordinates does
-  `render2D` receive with no map? Match those semantics (or auto-install a
-  default grid).
+  2D, Crosstown Traffic 2D, and Frogger 2D die with `array index out of
+  bounds` on a mapless device but pass on the host harness (which installs
+  a grid map). THE last 3 soak failures — capacity failures are extinct as
+  of LXBC v3 (192/195). Probe the real PB (192.168.0.140): what
+  coordinates does `render2D` receive with no map? Match those semantics
+  (or auto-install a default grid).
 - **Flash-mapped library execution** [L] ★ — the very last word in pattern
   RAM: run library patterns straight out of flash-mapped storage (no RAM
   copy of the code at all). Needs contiguous blob placement (the

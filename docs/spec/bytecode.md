@@ -29,15 +29,15 @@ All integers little-endian. `str8` = `u8` length + UTF-8 bytes.
 
 ```
 0   4   magic "LXBC"
-4   u16 version          (currently 2)
+4   u16 version          (currently 3)
 6   u16 flags            bit0: debug info present; others reserved (0)
 8   u16 pixel_count_g    global slot holding pixelCount
 10  u16 n_globals        (≤ 256)
 12  u16 n_fns            (≥ 1, ≤ 1024; fn 0 is top-level init)
 14  u16 n_exports        (≤ 1024)
 16  u16 n_imports        builtin import table size (≤ 512)
-18  u16 reserved         (0)
-20  …   sections, in order: imports, globals, fns, exports
+18  u16 n_data           const-array pool entries (≤ 4096; v3+)
+20  …   sections, in order: imports, globals, data, fns, exports
 ```
 
 **imports** — `n_imports × str8`: builtin names. Instructions reference
@@ -55,6 +55,14 @@ i32  init       Fx raw (16.16)
 Predefined globals (pixelCount, PI, GPIO constants, …) are serialized like
 any other slot: the blob is self-contained and slot numbering is preserved
 exactly (opcodes index globals by slot).
+
+**data** (v3+) — `n_data × { u16 len, len × i32 }`: the pattern's
+"`.rodata`" — every all-numeric array literal, **deduplicated by content**
+(pixel-art patterns repeat identical rows hundreds of times; Emoji
+Animation #2's 768 `[r,g,b]` literals collapse to 4 pool entries). Total
+elements ≤ 65 536. The `ConstArr` opcode allocates an arena array that
+*shares* a pool entry copy-on-write: each literal occurrence keeps its own
+mutable identity, but no bytes are copied until (unless) it is written.
 
 **fns** — `n_fns ×`:
 
@@ -98,6 +106,7 @@ instruction boundary, so the in-place interpreter can never misalign.
 | 0x09 | StoreIdx | |
 | 0x0A | ArrLen | |
 | 0x0B | NewArray | u16 |
+| 0x0F | ConstArr | u16 const-pool index (v3+) |
 | 0x0C | Dup | |
 | 0x0D | Dup2 | |
 | 0x0E | Pop | |

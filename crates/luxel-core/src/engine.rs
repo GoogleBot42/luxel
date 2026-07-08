@@ -497,7 +497,7 @@ impl Engine {
         let Some(Value::Arr(id)) = self.var(name) else {
             return;
         };
-        if let Some(arr) = self.vm.array_mut(id) {
+        if let Some(arr) = self.vm.array_mut(&self.prog, id) {
             for (dst, v) in arr.iter_mut().zip(vals) {
                 *dst = Value::Num(*v);
             }
@@ -548,13 +548,13 @@ impl Engine {
 
     /// Length of a VM array by id (debugger display).
     pub fn array_len(&self, id: u32) -> usize {
-        self.vm.array(id).map(|a| a.len()).unwrap_or(0)
+        self.vm.array(&self.prog, id).map(|a| a.len()).unwrap_or(0)
     }
 
     /// Read an element of an exported array variable.
     pub fn var_array(&self, name: &str) -> Option<&[Value]> {
         match self.var(name)? {
-            Value::Arr(id) => self.vm.array(id),
+            Value::Arr(id) => self.vm.array(&self.prog, id),
             _ => None,
         }
     }

@@ -9,7 +9,7 @@
 //! - No closures: a lambda sees only its own params/locals and globals.
 //! - `pixelCount` and the math constants are predefined globals.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -36,6 +36,9 @@ pub(crate) enum Insn {
     StoreIdx,   // [arr idx val] → [val]
     ArrLen,     // [arr] → [len]
     NewArray(u16),
+    /// Allocate an arena array sharing const-pool entry N (all-numeric
+    /// literal, deduplicated) — copy-on-write on first mutation.
+    ConstArr(u16),
     Dup,
     Dup2, // [a b] → [a b a b]
     Pop,
@@ -80,14 +83,23 @@ pub fn compile(src: &str) -> Result<Program, Diagnostic> {
     let mut c = Compiler::new(src);
     c.collect(&ast)?;
     c.emit_program(&ast)?;
-    Ok(assemble(c.fns, c.globals, c.exported_fns))
+    Ok(assemble(c.fns, c.globals, c.exported_fns, c.data_arrays))
 }
+
+/// Const-pool limits (mirrored by the decoder).
+const MAX_DATA_ARRAYS: usize = 4096;
+const MAX_DATA_ELEMS: usize = 65_536;
 
 /// Lower the compiler IR to the flat byte encoding the VM executes in
 /// place: two passes per function — measure each instruction's byte offset,
 /// then emit with jump targets mapped from instruction indices to byte
 /// offsets. Per-instruction positions collapse to offset-keyed runs.
-fn assemble(fns: Vec<FnIr>, globals: Vec<GlobalDef>, exported_fns: Vec<(String, u16)>) -> Program {
+fn assemble(
+    fns: Vec<FnIr>,
+    globals: Vec<GlobalDef>,
+    exported_fns: Vec<(String, u16)>,
+    data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+) -> Program {
     let mut code: Vec<u8> = Vec::new();
     let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
     for f in fns {
@@ -125,6 +137,7 @@ fn assemble(fns: Vec<FnIr>, globals: Vec<GlobalDef>, exported_fns: Vec<(String, 
     }
     Program {
         code,
+        data_arrays,
         fns: defs,
         globals,
         exported_fns,
@@ -138,7 +151,7 @@ fn insn_len(insn: &Insn) -> u32 {
     match insn {
         Const(Value::Num(_)) | Const(Value::Arr(_)) => 5,
         Const(Value::Fun(_)) | Const(Value::Builtin(_)) => 3,
-        LoadG(_) | StoreG(_) | NewArray(_) => 3,
+        LoadG(_) | StoreG(_) | NewArray(_) | ConstArr(_) => 3,
         LoadL(_) | StoreL(_) => 2,
         Jmp(_) | JmpIfFalse(_) | JmpIfTruePeek(_) | JmpIfFalsePeek(_) => 5,
         CallFn { .. } | CallBuiltin { .. } => 4,
@@ -190,6 +203,10 @@ fn emit_insn(out: &mut Vec<u8>, insn: &Insn, offsets: &[u32]) {
         NewArray(n) => {
             out.push(op::NEW_ARRAY);
             out.extend_from_slice(&n.to_le_bytes());
+        }
+        ConstArr(d) => {
+            out.push(op::CONST_ARR);
+            out.extend_from_slice(&d.to_le_bytes());
         }
         Dup => out.push(op::DUP),
         Dup2 => out.push(op::DUP2),
@@ -322,6 +339,10 @@ struct Compiler<'s> {
     src: &'s str,
     globals: Vec<GlobalDef>,
     fns: Vec<FnIr>,
+    /// Const-array pool: all-numeric array literals, deduplicated by
+    /// content (pixel-art patterns repeat the same rows hundreds of times).
+    data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+    data_map: BTreeMap<Vec<i32>, u16>,
     /// Top-level named functions: (name, fn index, exported).
     named_fns: Vec<(String, u16, bool)>,
     exported_fns: Vec<(String, u16)>,
@@ -356,6 +377,8 @@ impl<'s> Compiler<'s> {
             exported_fns: Vec::new(),
             demoted: Vec::new(),
             const_globals: BTreeSet::new(),
+            data_arrays: Vec::new(),
+            data_map: BTreeMap::new(),
             depth: 0,
         }
     }
@@ -945,6 +968,16 @@ impl<'s> Compiler<'s> {
                         "array literal too large".to_string(),
                     ));
                 }
+                // All-numeric literals intern into the const-array pool
+                // (deduplicated — the .rodata of a pattern): the VM shares
+                // the data copy-on-write instead of materializing it.
+                if let Some(consts) = const_elements(elems) {
+                    if let Some(d) = self.intern_data(consts) {
+                        ctx.push(Insn::ConstArr(d));
+                        return Ok(());
+                    }
+                    // pool full — fall through to the runtime-built path
+                }
                 for el in elems {
                     self.emit_expr(ctx, el)?;
                 }
@@ -1138,6 +1171,45 @@ impl<'s> Compiler<'s> {
                 Ok(())
             }
         }
+    }
+}
+
+/// The literal's elements as compile-time constants, if EVERY element is a
+/// numeric literal (optionally under unary +/-). Nested arrays, idents,
+/// and expressions disqualify it — those need runtime construction.
+fn const_elements(elems: &[Expr]) -> Option<Vec<i32>> {
+    let mut out = Vec::with_capacity(elems.len());
+    for e in elems {
+        let raw = match &e.kind {
+            ExprKind::Num(v) => v.raw(),
+            ExprKind::Unary { op, expr } => match (&op, &expr.kind) {
+                (UnOp::Neg, ExprKind::Num(v)) => (-*v).raw(),
+                (UnOp::Pos, ExprKind::Num(v)) => v.raw(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        out.push(raw);
+    }
+    Some(out)
+}
+
+impl<'s> Compiler<'s> {
+    /// Intern a const array's contents; None if the pool is at capacity
+    /// (the caller falls back to runtime construction).
+    fn intern_data(&mut self, raws: Vec<i32>) -> Option<u16> {
+        if let Some(&d) = self.data_map.get(&raws) {
+            return Some(d);
+        }
+        let total: usize = self.data_arrays.iter().map(|a| a.len()).sum();
+        if self.data_arrays.len() >= MAX_DATA_ARRAYS || total + raws.len() > MAX_DATA_ELEMS {
+            return None;
+        }
+        let values: Vec<Value> = raws.iter().map(|&r| Value::Num(Fx::from_raw(r))).collect();
+        let d = self.data_arrays.len() as u16;
+        self.data_arrays.push(values.into());
+        self.data_map.insert(raws, d);
+        Some(d)
     }
 }
 
