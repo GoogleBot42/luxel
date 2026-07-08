@@ -1,4 +1,4 @@
-// name: ChristmasLights
+// name: ChristmasLights (2)
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "ChristmasLights"; original source never consulted.
 

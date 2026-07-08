@@ -1,4 +1,4 @@
-// name: twinkle
+// name: twinkle (2)
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "twinkle"; original source never consulted.
 
