@@ -49,6 +49,7 @@ default = ["board-c3-devkit"]
 board-c3-devkit = ["esp32c3"]
 board-athom-music = ["esp32"]
 board-pixelblaze-v3 = ["esp32"]
+board-esp32-generic = ["esp32"]
 
 # Chip features (selected via a board feature, not directly).
 esp32c3 = [

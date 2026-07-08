@@ -51,6 +51,7 @@ use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 
 mod assets;
+mod board;
 mod config;
 mod devicemap;
 mod leds;
@@ -101,12 +102,10 @@ pub static REBOOT: embassy_sync::signal::Signal<
 //   github.com/simap/pixelblaze) — DATA = GPIO23 (MOSI), CLOCK = GPIO18
 //   (SCK), both through the onboard 5V level shifter; status LED GPIO12
 //   (lit at boot = Luxel alive), button GPIO32 (unused).
-/// Board default LED protocol; the live value lives in `shared::PROTOCOL`
-/// (seeded at boot, overridable at runtime via `/api/protocol`).
-const DEFAULT_PROTOCOL: Protocol = Protocol::Sk9822;
-/// Board default pixel count; the live value lives in `shared::PIXEL_COUNT`
-/// (seeded from this at boot, overridable at runtime via `/api/config`).
-const DEFAULT_PIXEL_COUNT: u32 = 300;
+/// Board defaults (name, protocol, pixel count) come from board.rs; the
+/// live values live in shared:: atomics (seeded at boot, runtime-settable
+/// via /api/protocol and /api/config).
+use board::{DEFAULT_PIXEL_COUNT, DEFAULT_PROTOCOL};
 /// Global brightness 0–31 (APA102 5-bit current limiter; ignored for
 /// WS2812). Keep modest on USB power.
 const APA_BRIGHTNESS: u8 = 4;
@@ -173,6 +172,8 @@ async fn main(spawner: Spawner) -> ! {
         DEFAULT_PROTOCOL.spi_hz()
     );
 
+    // ---- BOARD WIRING (the only pin-specific code; see docs/boards.md) ----
+    println!("board: {}", board::NAME);
     // Strip power relay: on before anything renders (see board notes above).
     #[cfg(feature = "board-athom-music")]
     let _relay = esp_hal::gpio::Output::new(
@@ -201,6 +202,10 @@ async fn main(spawner: Spawner) -> ! {
     let spi = spi.with_sck(p.GPIO5).with_mosi(p.GPIO18);
     #[cfg(feature = "board-pixelblaze-v3")]
     let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
+    // generic classic-ESP32: VSPI defaults — most WROOM boards break these out
+    #[cfg(feature = "board-esp32-generic")]
+    let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
+    // ---- end board wiring ----
 
     // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —
     // no esp-storage FlashStorage construction, no boot-time partition
