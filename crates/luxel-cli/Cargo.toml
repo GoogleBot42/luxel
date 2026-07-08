@@ -13,4 +13,3 @@ path = "src/main.rs"
 luxel-core = { path = "../luxel-core" }
 rumqttc = "0.24"
 serde_json = "1"
-tungstenite = "0.24"

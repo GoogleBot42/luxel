@@ -1,12 +1,9 @@
-//! `luxel serve` — a native mirror of the firmware's HTTP + WebSocket
-//! server, backed by the same engine core, so the browser UI can be
-//! developed and end-to-end tested without hardware. Keep routes, response
-//! shapes, and the ws protocol in lockstep with firmware/src/server.rs.
-//!
-//! Hand-rolled HTTP over std TcpStream (rather than a server crate) so the
-//! /ws upgrade keeps the raw socket and can set read timeouts — that's what
-//! makes the single-threaded full-duplex ws loop (push + multiplexed API
-//! calls) possible, mirroring the device exactly.
+//! `luxel serve` — a native mirror of the firmware's HTTP server, backed by
+//! the same engine core, so the browser UI can be developed and end-to-end
+//! tested without hardware. Keep routes and response shapes in lockstep
+//! with firmware/src/server.rs. (The /ws preview stream was removed on
+//! both sides 2026-07-08: nothing consumed it since device mode went
+//! local-preview, and it cost the firmware ~28 KB of flash.)
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -1006,27 +1003,6 @@ fn parse_playlist(body: &str) -> Playlist {
     pl
 }
 
-/// One multiplexed ws request: `"<id> <call>\n<body>"` →
-/// `{"id":<id>,"r":<json>}`. Mirrors firmware handle_ws_call.
-fn handle_ws_call(state: &State, frame: &str) -> String {
-    let (header, body) = frame.split_once('\n').unwrap_or((frame, ""));
-    let mut it = header.split_whitespace();
-    let (id, call) = match (it.next().and_then(|v| v.parse::<u32>().ok()), it.next()) {
-        (Some(id), Some(call)) => (id, call),
-        _ => return String::from("{\"id\":0,\"r\":{\"ok\":false,\"error\":\"bad frame\"}}"),
-    };
-    let r = match call {
-        "code" => api_code(state, String::from(body)),
-        "control" => api_control_or_var(state, body, false),
-        "var" => api_control_or_var(state, body, true),
-        "pattern" => format!(
-            "{{\"pattern\":\"{}\"}}",
-            json_escape(&state.pattern_src.lock().unwrap())
-        ),
-        _ => String::from("{\"ok\":false,\"error\":\"unknown call\"}"),
-    };
-    format!("{{\"id\":{},\"r\":{}}}", id, r)
-}
 
 // ---- minimal HTTP plumbing ----
 
@@ -1102,89 +1078,6 @@ fn respond_preflight(stream: &mut TcpStream) {
     );
 }
 
-/// Full-duplex ws loop, single thread: a short read timeout doubles as the
-/// push tick (mirrors the device's next_message-with-signal structure).
-fn ws_session(stream: TcpStream, key: &str, state: Arc<State>) {
-    let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
-    let mut stream = stream;
-    let _ = write!(
-        stream,
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
-        accept
-    );
-    stream
-        .set_read_timeout(Some(Duration::from_millis(66)))
-        .ok();
-    let mut ws = tungstenite::WebSocket::from_raw_socket(
-        stream,
-        tungstenite::protocol::Role::Server,
-        None,
-    );
-    let mut tick: u32 = 0;
-    loop {
-        // read with the 66 ms timeout; WouldBlock/TimedOut = push tick
-        match ws.read() {
-            Ok(tungstenite::Message::Text(t)) => {
-                let reply = handle_ws_call(&state, &t);
-                if ws.send(tungstenite::Message::Text(reply)).is_err() {
-                    return;
-                }
-                continue;
-            }
-            Ok(tungstenite::Message::Close(_)) | Err(tungstenite::Error::ConnectionClosed) => {
-                return;
-            }
-            Ok(_) => continue,
-            Err(tungstenite::Error::Io(e))
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(_) => return,
-        }
-
-        let px = state.pixels.lock().unwrap().clone();
-        if !px.is_empty() && ws.send(tungstenite::Message::Binary(px)).is_err() {
-            return;
-        }
-        if tick % 4 == 0 {
-            let vars = state.vars_json.lock().unwrap().clone();
-            let ro = state.readouts_json.lock().unwrap().clone();
-            if ws
-                .send(tungstenite::Message::Text(format!(
-                    "{{\"type\":\"vars\",\"vars\":{}}}",
-                    vars
-                )))
-                .is_err()
-                || ws
-                    .send(tungstenite::Message::Text(format!(
-                        "{{\"type\":\"readouts\",\"readouts\":{}}}",
-                        ro
-                    )))
-                    .is_err()
-            {
-                return;
-            }
-        }
-        if tick % 15 == 0 {
-            if ws
-                .send(tungstenite::Message::Text(format!(
-                    "{{\"type\":\"status\",\"status\":{}}}",
-                    status_json(&state)
-                )))
-                .is_err()
-                || ws
-                    .send(tungstenite::Message::Text(format!(
-                        "{{\"type\":\"controls\",\"controls\":{}}}",
-                        controls_json(&state)
-                    )))
-                    .is_err()
-            {
-                return;
-            }
-        }
-        tick = tick.wrapping_add(1);
-    }
-}
-
 fn handle_connection(stream: TcpStream, state: Arc<State>) {
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
@@ -1197,14 +1090,6 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 
     match (req.method.as_str(), req.path.as_str()) {
         ("OPTIONS", _) => respond_preflight(&mut stream),
-        ("GET", "/ws") => {
-            if let Some(key) = header(&req, "Sec-WebSocket-Key") {
-                let key = key.to_string();
-                ws_session(stream, &key, state);
-            } else {
-                respond(&mut stream, 400, "text/plain", b"missing Sec-WebSocket-Key");
-            }
-        }
         ("GET", "/") => respond(
             &mut stream,
             200,

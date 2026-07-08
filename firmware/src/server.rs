@@ -129,103 +129,6 @@ async fn api_status() -> ApiResponse {
     json_response(status_json())
 }
 
-/// Handle one multiplexed request from the socket. Wire format keeps the
-/// device side trivial: text frame `"<id> <call>\n<body>"`, reply
-/// `{"id":<id>,"r":<the same JSON the HTTP route returns>}`. Multiplexing
-/// API calls onto the push socket matters because the chip only serves two
-/// connections — the browser needs just this one.
-async fn handle_ws_call(frame: &str) -> String {
-    let (header, body) = frame.split_once('\n').unwrap_or((frame, ""));
-    let mut it = header.split_whitespace();
-    let (id, call) = match (it.next().and_then(|v| v.parse::<u32>().ok()), it.next()) {
-        (Some(id), Some(call)) => (id, call),
-        _ => return String::from("{\"id\":0,\"r\":{\"ok\":false,\"error\":\"bad frame\"}}"),
-    };
-    let r = match call {
-        "code" => api_code(String::from(body)).await.2,
-        "control" => api_control(String::from(body)).await.2,
-        "var" => api_var(String::from(body)).await.2,
-        "pattern" => format!("{{\"pattern\":\"{}\"}}", json_escape(&get_pattern_src())),
-        _ => String::from("{\"ok\":false,\"error\":\"unknown call\"}"),
-    };
-    format!("{{\"id\":{},\"r\":{}}}", id, r)
-}
-
-/// Full-duplex preview + API socket. Pushes binary pixel frames (~15 Hz)
-/// and typed JSON text frames ({"type":"status"|"controls"|"vars"|
-/// "readouts",…}); receives multiplexed API calls (see [handle_ws_call]).
-/// Receiving uses next_message's signal parameter (a timer) — the
-/// sanctioned way to interleave pushes with reads.
-struct PreviewWs;
-
-impl picoserve::response::ws::WebSocketCallback for PreviewWs {
-    async fn run<R: picoserve::io::Read, W: picoserve::io::Write<Error = R::Error>>(
-        self,
-        mut rx: picoserve::response::ws::SocketRx<R>,
-        mut tx: picoserve::response::ws::SocketTx<W>,
-    ) -> Result<(), W::Error> {
-        use picoserve::futures::Either;
-        use picoserve::response::ws::Message;
-
-        // pattern sources arrive here in device mode — size for the corpus
-        let mut rxbuf = alloc::vec![0u8; 16 * 1024];
-        let mut tick: u32 = 0;
-        let mut next_push = embassy_time::Instant::now();
-        loop {
-            match rx
-                .next_message(&mut rxbuf, embassy_time::Timer::at(next_push))
-                .await?
-            {
-                Either::First(Ok(Message::Text(t))) => {
-                    let reply = handle_ws_call(t).await;
-                    tx.send_text(&reply).await?;
-                }
-                Either::First(Ok(Message::Ping(d))) => tx.send_pong(d).await?,
-                Either::First(Ok(Message::Close(_))) => return tx.close(None).await,
-                Either::First(Ok(_)) => {}
-                Either::First(Err(_)) => return tx.close((1002u16, "protocol error")).await,
-                Either::Second(()) => {
-                    next_push = embassy_time::Instant::now()
-                        + embassy_time::Duration::from_millis(66);
-                    let px = get_pixels();
-                    if !px.is_empty() {
-                        tx.send_binary(&px).await?;
-                    }
-                    if tick % 4 == 0 {
-                        let vars = snapshot(&VARS_JSON);
-                        tx.send_text(&format!("{{\"type\":\"vars\",\"vars\":{}}}", vars))
-                            .await?;
-                        let ro = snapshot(&READOUTS_JSON);
-                        tx.send_text(&format!("{{\"type\":\"readouts\",\"readouts\":{}}}", ro))
-                            .await?;
-                    }
-                    if tick % 15 == 0 {
-                        tx.send_text(&format!(
-                            "{{\"type\":\"status\",\"status\":{}}}",
-                            status_json()
-                        ))
-                        .await?;
-                        let controls = {
-                            let s = snapshot(&CONTROLS_JSON);
-                            if s == "{}" {
-                                String::from("[]")
-                            } else {
-                                s
-                            }
-                        };
-                        tx.send_text(&format!(
-                            "{{\"type\":\"controls\",\"controls\":{}}}",
-                            controls
-                        ))
-                        .await?;
-                    }
-                    tick = tick.wrapping_add(1);
-                }
-            }
-        }
-    }
-}
-
 /// A flash-resident asset (playground bundle) streamed in 2 KiB chunks —
 /// whole files don't fit the heap.
 struct FlashAsset(crate::assets::AssetEntry);
@@ -442,7 +345,7 @@ async fn api_pixels() -> impl picoserve::response::IntoResponse {
     (CORS, ("Content-Type", "application/octet-stream"), get_pixels())
 }
 
-async fn api_pattern() -> impl picoserve::response::IntoResponse {
+async fn api_pattern() -> ApiResponse {
     (CORS, ("Content-Type", "text/plain; charset=utf-8"), get_pattern_src())
 }
 
@@ -583,7 +486,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             match route {
                 // streams its own body; delegates entirely (boxed — large
                 // sub-futures must stay off the dispatcher's poll stack, see
-                // the /ws arm)
+                // the old /ws incident: stack-guard overflow)
                 "/api/ota" => {
                     return alloc::boxed::Box::pin(OtaService.call_request_handler_service(
                         state,
@@ -638,20 +541,29 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     crate::REBOOT.signal(());
                     return Ok(sent);
                 }
+                _ => {}
+            }
+            // Every other POST reads its body, builds ONE json ApiResponse,
+            // and leaves through a single write at the bottom. Inlining a
+            // finalize+write_to future per route made this poll frame the
+            // largest symbol in the image (see docs/size-report.md).
+            let raw: alloc::vec::Vec<u8> = match request.body_connection.body().read_all().await {
+                Ok(b) => b.to_vec(),
+                Err(_) => alloc::vec::Vec::new(),
+            };
+            let text = || String::from_utf8_lossy(&raw).into_owned();
+            let api: Option<ApiResponse> = match route {
                 // body: "off" | "leader" | "follower" → applied live +
                 // persisted (Luxel-to-Luxel sync role)
                 "/api/sync" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
+                    let body = text();
                     let mode = match body.trim() {
                         "off" => Some(0u8),
                         "leader" => Some(1),
                         "follower" => Some(2),
                         _ => None,
                     };
-                    let response = json_response(match mode {
+                    Some(json_response(match mode {
                         Some(m) => {
                             crate::shared::SYNC_MODE.store(m, Ordering::Relaxed);
                             if m != 2 {
@@ -669,37 +581,26 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         None => String::from(
                             "{\"ok\":false,\"error\":\"mode must be off, leader, or follower\"}",
                         ),
-                    });
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
+                    }))
                 }
                 // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0")
                 // — network sensor injection, byte-identical to the serial
                 // board's stream (luxel_core::netin::parse_sensor_board).
                 "/api/sensors" => {
-                    let response =
-                        json_response(match request.body_connection.body().read_all().await {
-                            Ok(bytes) => match luxel_core::netin::parse_sensor_board(bytes) {
-                                Some(s) => {
-                                    crate::shared::set_sensor_frame(s);
-                                    String::from("{\"ok\":true}")
-                                }
-                                None => String::from(
-                                    "{\"ok\":false,\"error\":\"not a sensor-board frame\"}",
-                                ),
-                            },
-                            Err(_) => String::from("{\"ok\":false,\"error\":\"read failed\"}"),
-                        });
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
+                    Some(json_response(match luxel_core::netin::parse_sensor_board(&raw) {
+                        Some(s) => {
+                            crate::shared::set_sensor_frame(s);
+                            String::from("{\"ok\":true}")
+                        }
+                        None => {
+                            String::from("{\"ok\":false,\"error\":\"not a sensor-board frame\"}")
+                        }
+                    }))
                 }
                 // body: "host\nport\nuser\npass" → stored in flash; the MQTT
                 // task reconnects live (no reboot). Empty host disables MQTT.
                 "/api/mqtt" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
+                    let body = text();
                     let mut lines = body.lines();
                     let host = lines.next().unwrap_or("").trim();
                     let port = lines.next().unwrap_or("").trim().parse::<u16>().unwrap_or(1883);
@@ -715,7 +616,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             pass: String::from(pass),
                         }))
                     };
-                    let response = json_response(match &result {
+                    Some(json_response(match &result {
                         Ok(()) => {
                             crate::shared::MQTT_POKE.signal(());
                             format!(
@@ -724,19 +625,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             )
                         }
                         Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e)),
-                    });
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
+                    }))
                 }
                 // POST /api/brightness — body is a number 0..=31. Applied live
                 // (the render task reads BRIGHTNESS every frame) and persisted
                 // to flash so it survives reboot. No reboot needed.
                 "/api/brightness" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
-                    let response = json_response(match body.trim().parse::<u8>() {
+                    Some(json_response(match text().trim().parse::<u8>() {
                         Ok(b) if b <= 31 => {
                             BRIGHTNESS.store(b, Ordering::Relaxed);
                             // read-modify-write so we don't clobber the others
@@ -757,19 +652,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             }
                         }
                         _ => String::from("{\"ok\":false,\"error\":\"brightness must be 0..=31\"}"),
-                    });
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
+                    }))
                 }
                 // POST /api/config — body is a pixel count 1..=MAX_PIXELS.
                 // Applied live (render task rebuilds the engine + SPI buffer)
                 // and persisted. No reboot.
                 "/api/config" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
-                    let response = json_response(match body.trim().parse::<u32>() {
+                    Some(json_response(match text().trim().parse::<u32>() {
                         Ok(n) if n >= 1 && n <= MAX_PIXELS => {
                             // the render task is the sole writer of PIXEL_COUNT;
                             // it flips the atomic + rebuilds when it drains this
@@ -793,19 +682,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             "{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}",
                             MAX_PIXELS
                         ),
-                    });
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
+                    }))
                 }
                 // POST /api/protocol — body is a protocol name (sk9822/ws2812
                 // + aliases). Reconfigures SPI + resizes the buffer live, and
                 // persists. No reboot.
                 "/api/protocol" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
-                    let response = json_response(match Protocol::from_name(body.trim()) {
+                    Some(json_response(match Protocol::from_name(text().trim()) {
                         Some(p) => {
                             MSG_QUEUE.send(Msg::Protocol(p.as_u8())).await;
                             let cfg = DeviceConfig {
@@ -826,101 +709,57 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         None => {
                             String::from("{\"ok\":false,\"error\":\"protocol must be sk9822 or ws2812\"}")
                         }
-                    });
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
+                    }))
                 }
                 // POST /api/map — install a computed 2D/3D map (raw 16.16).
                 // Empty/invalid body clears it. Applied live + persisted.
                 "/api/map" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
-                    let (installed, count) = crate::devicemap::set_from_wire(&body);
-                    let conn = request.body_connection.finalize().await?;
-                    return json_response(format!(
+                    let (installed, count) = crate::devicemap::set_from_wire(&text());
+                    Some(json_response(format!(
                         "{{\"ok\":true,\"installed\":{},\"count\":{}}}",
                         installed, count
-                    ))
-                    .write_to(conn, response_writer)
-                    .await;
+                    )))
                 }
                 // POST /api/playlist — line-format definition (D/I/C lines).
                 // Persisted to flash; applied live if already playing.
                 "/api/playlist" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
-                    crate::playlist::set_from_wire(&body);
-                    let conn = request.body_connection.finalize().await?;
-                    return json_response(String::from("{\"ok\":true}"))
-                        .write_to(conn, response_writer)
-                        .await;
+                    crate::playlist::set_from_wire(&text());
+                    Some(json_response(String::from("{\"ok\":true}")))
                 }
                 "/api/playlist/play"
                 | "/api/playlist/stop"
                 | "/api/playlist/next"
                 | "/api/playlist/prev" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
                     match route {
                         "/api/playlist/play" => {
-                            crate::playlist::play(body.trim().parse().unwrap_or(0))
+                            crate::playlist::play(text().trim().parse().unwrap_or(0))
                         }
                         "/api/playlist/stop" => crate::playlist::stop(),
                         "/api/playlist/next" => crate::playlist::step(1),
                         _ => crate::playlist::step(-1),
                     }
-                    let conn = request.body_connection.finalize().await?;
-                    return json_response(String::from("{\"ok\":true}"))
-                        .write_to(conn, response_writer)
-                        .await;
+                    Some(json_response(String::from("{\"ok\":true}")))
                 }
-                "/api/code" | "/api/control" | "/api/var" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => {
-                            let conn = request.body_connection.finalize().await?;
-                            return (StatusCode::BAD_REQUEST, "body read failed")
-                                .write_to(conn, response_writer)
-                                .await;
-                        }
-                    };
-                    let response = match route {
-                        "/api/code" => api_code(body).await,
-                        "/api/control" => api_control(body).await,
-                        _ => api_var(body).await,
-                    };
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
-                }
+                "/api/code" => Some(api_code(text()).await),
+                "/api/control" => Some(api_control(text()).await),
+                "/api/var" => Some(api_var(text()).await),
                 // save a pattern: body "name\nsource", compile-checked here
                 // so the store never holds broken source (mirrors serve.rs).
-                "/api/patterns" => {
-                    let body = match request.body_connection.body().read_all().await {
-                        Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
-                    let response = json_response(api_patterns_save(body));
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
-                }
+                "/api/patterns" => Some(json_response(api_patterns_save(text()))),
                 // POST /api/patterns/<id>/activate — run a stored pattern
                 r if r.starts_with("/api/patterns/") => {
-                    let response = match r["/api/patterns/".len()..].strip_suffix("/activate") {
+                    Some(match r["/api/patterns/".len()..].strip_suffix("/activate") {
                         Some(id) => json_response(api_patterns_activate(id).await),
                         None => json_response(String::from(
                             "{\"ok\":false,\"error\":\"bad patterns route\"}",
                         )),
-                    };
-                    let conn = request.body_connection.finalize().await?;
-                    return response.write_to(conn, response_writer).await;
+                    })
                 }
-                _ => {}
+                _ => None,
+            };
+            if let Some(response) = api {
+                let conn = request.body_connection.finalize().await?;
+                return response.write_to(conn, response_writer).await;
             }
         } else if method.eq_ignore_ascii_case("DELETE") {
             if let Some(id) = route.strip_prefix("/api/patterns/") {
@@ -992,35 +831,11 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     respond!((etag, cc, FlashAsset(e)));
                 }};
             }
-            if route == "/ws" {
-                use picoserve::extract::FromRequest as _;
-                let parts = request.parts;
-                let upgrade = picoserve::response::ws::WebSocketUpgrade::from_request(
-                    state,
-                    parts,
-                    request.body_connection.body(),
-                )
-                .await;
-                let conn = request.body_connection.finalize().await?;
-                return match upgrade {
-                    // Box::pin: the ws-session state machine is large, and
-                    // inlining it bloated the dispatcher's poll frame enough
-                    // that ANY request overflowed the task stack (second
-                    // stack-guard incident). Heap-allocate it instead.
-                    Ok(u) => {
-                        alloc::boxed::Box::pin(
-                            u.on_upgrade(PreviewWs).write_to(conn, response_writer),
-                        )
-                        .await
-                    }
-                    Err(_) => {
-                        (StatusCode::BAD_REQUEST, "expected a websocket upgrade")
-                            .write_to(conn, response_writer)
-                            .await
-                    }
-                };
-            }
-            match route {
+            // JSON arms collect into ONE ApiResponse and exit through a
+            // single write below; assets / binary / redirects keep their own
+            // early returns (respond!). Same shape as the POST section — it
+            // keeps a write_to future per route out of this poll frame.
+            let api: Option<ApiResponse> = match route {
                 // "/" serves the installed playground when present; the
                 // embedded minimal page is the fallback (and stays reachable
                 // at /min for bring-up debugging)
@@ -1031,7 +846,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML));
                 }
                 "/min" => respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML)),
-                "/api/status" => respond!(api_status().await),
+                "/api/status" => Some(api_status().await),
                 // which network the NEXT boot will join (never the password)
                 "/api/wifi" => {
                     let body = match crate::config::read_wifi() {
@@ -1047,14 +862,14 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             _ => String::from("{\"ssid\":null,\"source\":\"none\"}"),
                         },
                     };
-                    respond!(json_response(body));
+                    Some(json_response(body))
                 }
-                "/api/brightness" => respond!(json_response(format!(
+                "/api/brightness" => Some(json_response(format!(
                     "{{\"brightness\":{},\"max\":31}}",
                     BRIGHTNESS.load(Ordering::Relaxed)
                 ))),
                 // whether we're currently the provisioning AP
-                "/api/apmode" => respond!(json_response(format!(
+                "/api/apmode" => Some(json_response(format!(
                     "{{\"ap\":{}}}",
                     crate::provision::AP_MODE.load(Ordering::Relaxed)
                 ))),
@@ -1073,10 +888,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         }
                         None => String::from("null"),
                     };
-                    respond!(json_response(format!(
+                    Some(json_response(format!(
                         "{{\"mode\":\"{}\",\"timeMs\":{},\"leader\":{}}}",
                         mode, time_ms, leader
-                    )));
+                    )))
                 }
                 // broker settings (never the password) + connection state
                 "/api/mqtt" => {
@@ -1093,32 +908,32 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             "{\"enabled\":false,\"host\":\"\",\"port\":1883,\"user\":\"\",\"hasPass\":false,\"connected\":false}",
                         ),
                     };
-                    respond!(json_response(body));
+                    Some(json_response(body))
                 }
-                "/api/config" => respond!(json_response(format!(
+                "/api/config" => Some(json_response(format!(
                     "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
                     PIXEL_COUNT.load(Ordering::Relaxed),
                     MAX_PIXELS,
                     Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
                 ))),
-                "/api/playlist" => respond!(json_response(crate::playlist::to_json())),
-                "/api/map" => respond!(json_response(crate::devicemap::to_json())),
-                "/api/protocol" => respond!(json_response(format!(
+                "/api/playlist" => Some(json_response(crate::playlist::to_json())),
+                "/api/map" => Some(json_response(crate::devicemap::to_json())),
+                "/api/protocol" => Some(json_response(format!(
                     "{{\"protocol\":\"{}\",\"options\":[\"sk9822\",\"ws2812\"]}}",
                     Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
                 ))),
                 "/api/pixels" => respond!(api_pixels().await),
-                "/api/pattern" => respond!(api_pattern().await),
-                "/api/controls" => respond!(api_controls().await),
-                "/api/vars" => respond!(api_vars().await),
-                "/api/readouts" => respond!(api_readouts().await),
-                "/api/patterns" => respond!(json_response(crate::patterns::list_json())),
+                "/api/pattern" => Some(api_pattern().await),
+                "/api/controls" => Some(api_controls().await),
+                "/api/vars" => Some(api_vars().await),
+                "/api/readouts" => Some(api_readouts().await),
+                "/api/patterns" => Some(json_response(crate::patterns::list_json())),
                 // GET /api/patterns/<id> → {"id","name","source"}; missing id
                 // returns 200 + {"ok":false,…} to match the mirror (serve.rs).
                 r if r.starts_with("/api/patterns/") => {
                     let j = crate::patterns::get_json(&r["/api/patterns/".len()..])
                         .unwrap_or_else(|| String::from("{\"ok\":false,\"error\":\"no such pattern\"}"));
-                    respond!(json_response(j));
+                    Some(json_response(j))
                 }
                 other => {
                     if let Some(e) = crate::assets::lookup(other) {
@@ -1140,7 +955,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             .write_to(conn, response_writer)
                             .await;
                     }
+                    None
                 }
+            };
+            if let Some(response) = api {
+                let conn = request.body_connection.finalize().await?;
+                return response.write_to(conn, response_writer).await;
             }
         }
 

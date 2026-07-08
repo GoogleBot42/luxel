@@ -33,7 +33,7 @@ embassy-time = "0.5"
 embassy-sync = "0.8"
 embassy-futures = "0.1"
 static_cell = "2.1"
-picoserve = { version = "0.18", default-features = false, features = ["embassy", "alloc", "ws"] }
+picoserve = { version = "0.18", default-features = false, features = ["embassy", "alloc"] }
 # MQTT (Home Assistant integration): established no_std MQTT v5 client over
 # any embedded-io-async transport. embassy-net 0.9 implements embedded-io
 # 0.7 but rust-mqtt wants 0.6 — mqtt.rs has a paper-thin adapter, hence the
