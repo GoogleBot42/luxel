@@ -182,6 +182,39 @@ scaled by device brightness.
 - Untouched pixels default to black on both. hsv24 behaves as hsv in the
   preview path.
 
+## Maps and render2D (probed 2026-07-08, fw 3.67)
+
+Motivated by the sqrt-grid soak failures (Breakout 2D et al. index out of
+bounds on a mapless Luxel):
+
+- **A PB that has ever saved a map cannot be made mapless through its
+  public interface.** Saving a blank map source and saving `[]` are both
+  no-ops: `pixelmap.txt` updates but the compiled map (`pixelmap.dat`)
+  and the LIVE map survive untouched. Combined with new devices shipping
+  with a default matrix map, `render2D` on a real PB always receives
+  genuine map coordinates — the "no map" state effectively doesn't exist
+  for users. (True factory-mapless behavior remains unverifiable without
+  a factory-fresh device.)
+- With BOTH `render` and `render2D` exported and a 2D map installed, PB
+  calls **only `render2D`** (10,920 calls vs 0) — matches our dims-2
+  render selection priority.
+- **Luxel consequence**: a pattern that renders only in 2D/3D now gets a
+  default ceil(√pixelCount) row-major grid map at engine construction
+  (`Engine::set_default_grid_map`) instead of 1D-fallback coordinates —
+  the PB-as-experienced behavior. A host/user map replaces it, exactly
+  like saving a map on a PB. Note this does NOT paper over square-rig
+  patterns' own assumption: `floor(1.0·√300) = 17` indexes past a
+  17-slot array on a real PB just like on Luxel (engine test pins both
+  halves of that).
+- Map plumbing learned along the way: maps save via `POST /edit`
+  (form-file `/pixelmap.txt`) + ws `{savePixelMap:true}`; the compiled
+  map is `GET /pixelmap.dat` (u16 header: version, dims, byte length;
+  u16-quantized coords /65536); `GET /list?dir=/` enumerates the FS. An
+  installed map can be reconstructed losslessly from INSIDE the pattern
+  language (export arrays, fill from render2D/3D args) — how the probe
+  snapshotted and bit-exactly restored the oracle's map
+  (`tools/oracle/mapdump.mjs`).
+
 ## Operational notes
 
 - The device's websocket (port 81) wedges permanently if clients vanish

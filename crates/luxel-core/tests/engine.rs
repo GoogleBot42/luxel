@@ -67,14 +67,43 @@ fn delta_is_passed_in_ms() {
 }
 
 #[test]
-fn render3d_fallback_gets_midspace() {
+fn map_only_pattern_gets_default_grid() {
+    // A pattern that renders ONLY in 2D/3D gets a default ceil(√n) grid
+    // map (PB-as-experienced: a real PB always has a map — oracle-verified
+    // 2026-07-08); z (absent from a 2D map) still fills with midspace 0.5.
     let src = "export var ys\nexport var zs\n\
                export function render3D(index, x, y, z) { ys = y\n zs = z\n rgb(x, y, z) }";
     let mut e = Engine::new(src, 2, 1).unwrap();
     e.frame(Fx::ZERO);
-    let half = Fx::from_raw(1 << 15);
-    assert_eq!(e.var("ys"), Some(Value::Num(half)));
-    assert_eq!(e.var("zs"), Some(Value::Num(half)));
+    // 2 px → 2-wide grid, single row: y is 0 for every pixel
+    assert_eq!(e.var("ys"), Some(Value::Num(Fx::ZERO)));
+    assert_eq!(e.var("zs"), Some(Value::Num(Fx::from_raw(1 << 15))));
+}
+
+#[test]
+fn default_grid_matches_pb_for_sqrt_matrix_patterns() {
+    // The Breakout-2D class: grids sized by sqrt(pixelCount), indexed by
+    // floor(coord · sqrt(pixelCount)). These are square-rig patterns: at a
+    // square count they work; at a non-square count floor(1·√n) indexes one
+    // past the truncated array — on a real PB just like here. The default
+    // grid gives them PB-faithful coordinates; it does not (and must not)
+    // paper over their square-count assumption.
+    let src = "var w = sqrt(pixelCount)\n\
+               var cells = array(w)\n\
+               cells.mutate(() => array(w))\n\
+               export function render2D(index, x, y) {\n\
+                 v = cells[floor(y * w)][floor(x * w)]\n\
+                 hsv(0, 0, v)\n\
+               }";
+    // square count: works
+    let mut e = Engine::new(src, 256, 1).unwrap();
+    e.frame(Fx::ZERO);
+    assert!(e.take_error().is_none(), "square count must run clean");
+    // non-square count: the same out-of-bounds a real PB reports
+    let mut e = Engine::new(src, 300, 1).unwrap();
+    e.frame(Fx::ZERO);
+    let err = e.take_error().expect("non-square count OOBs, like PB");
+    assert!(err.message.contains("out of bounds"), "{}", err.message);
 }
 
 #[test]

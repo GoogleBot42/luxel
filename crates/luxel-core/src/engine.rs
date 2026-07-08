@@ -198,7 +198,7 @@ impl Engine {
             }
         }
 
-        Engine {
+        let mut engine = Engine {
             pixels: alloc::vec![[0u8; 3]; pixel_count as usize],
             prog,
             vm,
@@ -216,7 +216,50 @@ impl Engine {
             is_map: false,
             map_coords: Vec::new(),
             map_dims: 0,
+        };
+
+        // A pattern that renders ONLY in 2D/3D gets a default square-ish
+        // grid map rather than 1D fallback coordinates. This is the
+        // PB-as-experienced behavior (oracle-verified 2026-07-08): new PBs
+        // ship with a default matrix map and a saved map cannot be removed
+        // through the public interface, so on a real PB `render2D` always
+        // receives genuine map coordinates — and the common
+        // `sqrt(pixelCount)`-grid patterns depend on that. A host-installed
+        // map replaces this (set_map), exactly like saving a map on a PB.
+        if engine.prog.exported_fn("render").is_none()
+            && (engine.prog.exported_fn("render2D").is_some()
+                || engine.prog.exported_fn("render3D").is_some())
+        {
+            engine.set_default_grid_map();
         }
+        engine
+    }
+
+    /// Install the default ceil(√pixelCount)-wide row-major grid map (see
+    /// from_program_budgeted for why). Public so hosts that clear a user
+    /// map can fall back to the same default.
+    pub fn set_default_grid_map(&mut self) {
+        let n = self.pixel_count as usize;
+        if n == 0 {
+            return;
+        }
+        // integer ceil(sqrt(n)) without floats
+        let mut w = 1usize;
+        while w * w < n {
+            w += 1;
+        }
+        let mut coords: Vec<[Fx; 3]> = Vec::new();
+        if coords.try_reserve_exact(n).is_err() {
+            return; // starved heap: keep the 1D fallback rather than fail
+        }
+        for i in 0..n {
+            coords.push([
+                Fx::from_int((i % w) as i32),
+                Fx::from_int((i / w) as i32),
+                Fx::ZERO,
+            ]);
+        }
+        self.set_map(2, &coords);
     }
 
     /// Turn this engine into a *map program* runner: [`run_map`] executes its

@@ -59,13 +59,13 @@ bytecode execution is being worked on now; the rest are queued:
 - ~~Byte-accurate array budget~~ — DONE (v0.1.27).
 - ~~In-place bytecode execution~~ — DONE (v0.1.26, LXBC v2): the VM
   interprets flat bytes; decoded Programs ≈ 1.2–2.5× blob (was ~5×).
-- **Oracle probe: `render2D` with no map installed** [S] ★★★ — Breakout
-  2D, Crosstown Traffic 2D, and Frogger 2D die with `array index out of
-  bounds` on a mapless device but pass on the host harness (which installs
-  a grid map). THE last 3 soak failures — capacity failures are extinct as
-  of LXBC v3 (192/195). Probe the real PB (192.168.0.140): what
-  coordinates does `render2D` receive with no map? Match those semantics
-  (or auto-install a default grid).
+- ~~Oracle probe: `render2D` with no map~~ — DONE 2026-07-08 (see
+  04-oracle-findings.md): a PB that ever saved a map can't be made mapless
+  via its public interface, so PB-as-experienced always has one; Luxel now
+  auto-installs a default ceil(√n) grid for 2D/3D-only patterns. The
+  remaining Breakout/Crosstown/Frogger failures at 300 px are the
+  patterns' own square-rig assumption — they'd OOB identically on a real
+  PB at 300 px (engine test pins both halves).
 - **Flash-mapped library execution** [L] ★ — the very last word in pattern
   RAM: run library patterns straight out of flash-mapped storage (no RAM
   copy of the code at all). Needs contiguous blob placement (the
