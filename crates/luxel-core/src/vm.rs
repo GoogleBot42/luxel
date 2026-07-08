@@ -13,63 +13,25 @@
 //! - Fuel and call-depth guards keep hostile/buggy patterns from hanging a
 //!   host.
 //!
-//! The in-memory `Insn` enum IS the bytecode for now; the packed/serialized
-//! encoding (the stable multi-frontend ABI) gets specified once the
-//! instruction set survives contact with the corpus — see docs/spec/.
+//! The VM executes LXBC bytecode IN PLACE: `Program.code` is the flat byte
+//! encoding (docs/spec/bytecode.md), `pc` is a function-relative byte
+//! offset, and jump operands are byte offsets too. Nothing is materialized
+//! per instruction — a decoded Program costs roughly its blob size, which
+//! is what lets 50–80 KB-of-heap devices run real patterns (like PB, whose
+//! device VM also runs its bytecode directly). Every host — firmware,
+//! wasm, native — runs THIS interpreter, so semantics can't drift between
+//! the browser preview and the strip. The decoder (`bytecode::decode`)
+//! establishes every invariant the loop trusts: operand indices in range,
+//! jump targets on instruction boundaries, argc capped.
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::{format, vec};
+use alloc::format;
 
 use crate::fixed::Fx;
 use crate::fmath;
 
 // ---- program ----
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Insn {
-    Const(Value),
-    LoadG(u16),
-    StoreG(u16), // pops value, pushes it back (assignment is an expression)
-    LoadL(u8),
-    StoreL(u8), // ditto
-    LoadIdx,    // [arr idx] → [elem]
-    StoreIdx,   // [arr idx val] → [val]
-    ArrLen,     // [arr] → [len]
-    NewArray(u16),
-    Dup,
-    Dup2, // [a b] → [a b a b]
-    Pop,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Pow,
-    Neg,
-    Not,
-    BitNot,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    Shr,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Eq,
-    Ne,
-    Jmp(u32),
-    JmpIfFalse(u32),     // pops
-    JmpIfTruePeek(u32),  // ||: jump keeping the lhs value
-    JmpIfFalsePeek(u32), // &&
-    CallFn { fn_idx: u16, argc: u8 },
-    CallBuiltin { b: u16, argc: u8 },
-    CallValue { argc: u8 },
-    Ret,
-    RetNull,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
@@ -90,7 +52,7 @@ impl Value {
     pub fn num(self) -> Fx {
         match self {
             Value::Num(v) => v,
-            _ => Fx::ZERO, // TODO(oracle): arithmetic on refs
+            _ => Fx::ZERO, // oracle-verified: refs act as 0 in arithmetic
         }
     }
 
@@ -109,28 +71,29 @@ pub struct FnDef {
     pub params: u8,
     /// Total local slots including params.
     pub locals: u8,
-    pub code: Vec<Insn>,
-    /// Debug info: 1-based (line, col) per instruction; (0, 0) = unknown.
-    pub pos: Vec<(u32, u32)>,
+    /// This function's bytecode: `Program.code[code_start..code_start+code_len]`.
+    /// `pc` and jump operands are byte offsets relative to `code_start`.
+    pub code_start: u32,
+    pub code_len: u32,
+    /// Debug info: source-position RUNS keyed by fn-relative byte offset —
+    /// (start_offset, line, col), sorted by offset, each run extending to
+    /// the next. Statement-granular, so a handful of entries per function.
+    /// Empty in lean decodes (device) — pos_at then reports (0, 0).
+    pub pos: Vec<(u32, u32, u32)>,
     /// Debug info: name per local slot (params first).
     pub local_names: Vec<String>,
 }
 
 impl FnDef {
-    pub fn placeholder(name: String) -> FnDef {
-        FnDef {
-            name,
-            params: 0,
-            locals: 0,
-            code: Vec::new(),
-            pos: Vec::new(),
-            local_names: Vec::new(),
-        }
-    }
-
-    /// (line, col) of an instruction, if known.
+    /// (line, col) at a byte offset, if known.
     pub fn pos_at(&self, pc: u32) -> (u32, u32) {
-        self.pos.get(pc as usize).copied().unwrap_or((0, 0))
+        match self.pos.partition_point(|&(off, _, _)| off <= pc) {
+            0 => (0, 0),
+            i => {
+                let (_, line, col) = self.pos[i - 1];
+                (line, col)
+            }
+        }
     }
 }
 
@@ -146,11 +109,25 @@ pub struct GlobalDef {
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    /// Every function's bytecode, concatenated (see `FnDef.code_start`).
+    /// Builtin operands hold RUNTIME builtin ids (the wire format's
+    /// import-table slots are resolved by the decoder).
+    pub code: Vec<u8>,
+    /// Constant-array pool (the blob's "data section"): every all-numeric
+    /// array literal, DEDUPLICATED by content — pixel-art patterns repeat
+    /// the same rows/triplets hundreds of times. `ConstArr` instructions
+    /// allocate arena entries that INDEX into this pool until first
+    /// mutation (copy-on-write in [`Vm::arr_mut`]).
+    pub data_arrays: Vec<alloc::boxed::Box<[Value]>>,
     /// `fns[0]` is top-level initialization code.
     pub fns: Vec<FnDef>,
     pub globals: Vec<GlobalDef>,
     /// Exported functions (render, beforeRender, controls, …) by name.
     pub exported_fns: Vec<(String, u16)>,
+    /// `assert()` messages (deduplicated; default = the condition's source
+    /// text). Kept even by lean decodes — they're user-facing error text,
+    /// not debug info.
+    pub assert_msgs: Vec<String>,
     /// Global slot holding `pixelCount`.
     pub pixel_count_g: u16,
 }
@@ -307,6 +284,11 @@ pub enum Builtin {
     Simplex2,
     Simplex3,
     SetGamma,
+    // Luxel map programs: emit one coordinate per pixel (see engine map mode).
+    Plot,
+    EaseOutBack,
+    EaseOutElastic,
+    EaseOutBounce,
 }
 
 pub struct BuiltinDef {
@@ -341,6 +323,8 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // Luxel extensions
     b!("map", Map), b!("sign", Sign), b!("step", Step), b!("saturate", Saturate),
     b!("dist", Dist), b!("dist3", Dist3),
+    // familiar aliases: fract=frac, lerp=mix, length/length3=hypot
+    b!("fract", Frac), b!("lerp", Mix), b!("length", Hypot), b!("length3", Hypot3),
     b!("easeInQuad", EaseInQuad), b!("easeOutQuad", EaseOutQuad),
     b!("easeInOutQuad", EaseInOutQuad), b!("easeInCubic", EaseInCubic),
     b!("easeOutCubic", EaseOutCubic), b!("easeInOutCubic", EaseInOutCubic),
@@ -381,6 +365,10 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("rgb2hsv", Rgb2Hsv), b!("hsv2rgb", Hsv2Rgb), b!("mixColors", MixColors),
     b!("simplex2", Simplex2), b!("simplex3", Simplex3),
     b!("setGamma", SetGamma),
+    b!("plot", Plot),
+    // springy easings (the polynomial ones are up with the other eases)
+    b!("easeOutBack", EaseOutBack), b!("easeOutElastic", EaseOutElastic),
+    b!("easeOutBounce", EaseOutBounce),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -416,6 +404,10 @@ pub struct VmError {
     /// 1-based source location; (0, 0) if unknown.
     pub line: u32,
     pub col: u32,
+    /// A failed `assert()` — a declared configuration invariant, not a
+    /// bug. The engine blocks rendering for the pattern's lifetime (the
+    /// fix is a config change, which rebuilds the engine).
+    pub is_assert: bool,
 }
 
 /// A suspended (or active) pattern-function activation. `pc` points at the
@@ -462,23 +454,65 @@ pub enum Outcome {
     Paused,
 }
 
+/// Byte-ledger cost of a const-backed arena entry (the enum slot + Rc
+/// bookkeeping; the element data itself is shared with the program).
+const CONST_ENTRY_COST: usize = 32;
+
 const MAX_DEPTH: usize = 48;
 const MAX_STACK: usize = 1024;
 const MAX_ARGS: usize = 16;
 pub const DEFAULT_ARRAY_BUDGET: usize = 10_240;
 const FUEL: u32 = 8_000_000;
 
+/// One arena array: owned storage, or an index into the program's
+/// const-array pool (until first mutation — copy-on-write). Every `[…]`
+/// literal occurrence keeps its own arena identity either way: writing
+/// through one handle never affects another. Pool indices are
+/// decoder-validated, like every other id the VM trusts.
+#[derive(Debug, Clone)]
+pub enum ArrRepr {
+    Owned(Vec<Value>),
+    Const(u32),
+}
+
+impl Default for ArrRepr {
+    fn default() -> Self {
+        ArrRepr::Owned(Vec::new())
+    }
+}
+
+impl ArrRepr {
+    #[inline]
+    fn slice<'a>(&'a self, prog: &'a Program) -> &'a [Value] {
+        match self {
+            ArrRepr::Owned(v) => v,
+            ArrRepr::Const(d) => &prog.data_arrays[*d as usize],
+        }
+    }
+}
+
 pub struct Vm {
     pub globals: Vec<Value>,
-    arrays: Vec<Vec<Value>>,
+    arrays: Vec<ArrRepr>,
     array_elems: usize,
+    /// PB-compat element budget (10,240 — arrays are never freed).
     pub array_budget: usize,
+    /// Actual bytes charged so far (elements × 8 + per-array overhead).
+    array_bytes: usize,
+    /// Device-RAM byte budget for the arena; `usize::MAX` on hosts. Byte-
+    /// accurate so one big array (8 B/element) isn't taxed for the Vec
+    /// overhead only swarms of tiny arrays pay.
+    pub array_byte_budget: usize,
     stack: Vec<Value>,
     locals: Vec<Value>,
     frames: Vec<Frame>,
     /// Debugger state; None disables all checks (the fast path).
     pub dbg: Option<DebugState>,
     fuel: u32,
+    /// Byte offset (fn-relative) of the instruction currently executing in
+    /// the top frame — error attribution (the frame's own pc has already
+    /// advanced past it).
+    insn_start: u32,
     /// Milliseconds since pattern start; the engine advances this.
     pub time_ms: u64,
     rng: u64,
@@ -486,6 +520,12 @@ pub struct Vm {
     /// Set by hsv()/rgb() — the engine reads this after each render call.
     pub pixel: [Fx; 3],
     pub pixel_written: bool,
+    /// Set by plot() in a map program — the engine reads this after each
+    /// per-pixel map call to build the coordinate list. `plot_dims` is 2 or 3
+    /// per the arg count of the last plot() this pixel.
+    pub plot_coord: [Fx; 3],
+    pub plot_dims: u8,
+    pub plot_written: bool,
     /// Current coordinate transform (pre-multiplied ops; points transform in
     /// call order — the corpus `translate(-.5,-.5); rotate(θ)` idiom).
     pub transform: [[Fx; 4]; 4],
@@ -524,11 +564,14 @@ impl Vm {
             arrays: Vec::new(),
             array_elems: 0,
             array_budget: DEFAULT_ARRAY_BUDGET,
+            array_bytes: 0,
+            array_byte_budget: usize::MAX,
             stack: Vec::new(),
             locals: Vec::new(),
             frames: Vec::new(),
             dbg: None,
             fuel: FUEL,
+            insn_start: 0,
             time_ms: 0,
             transform: IDENTITY,
             transform_active: false,
@@ -543,11 +586,50 @@ impl Vm {
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             pixel: [Fx::ZERO; 3],
             pixel_written: false,
+            plot_coord: [Fx::ZERO; 3],
+            plot_dims: 0,
+            plot_written: false,
         }
     }
 
-    pub fn array(&self, id: u32) -> Option<&[Value]> {
-        self.arrays.get(id as usize).map(|a| a.as_slice())
+    pub fn array<'a>(&'a self, prog: &'a Program, id: u32) -> Option<&'a [Value]> {
+        self.arrays.get(id as usize).map(|a| a.slice(prog))
+    }
+
+    /// Mutable view of an array (sensor-frame injection writes in place).
+    /// A const-backed array is materialized first (copy-on-write); on
+    /// allocation failure this returns None rather than panicking.
+    pub fn array_mut(&mut self, prog: &Program, id: u32) -> Option<&mut [Value]> {
+        self.arr_mut(prog, id).ok().map(|v| v.as_mut_slice())
+    }
+
+    /// Read view by id — arena ids come from the VM itself, so `id` is
+    /// always valid at these call sites (matches the old direct indexing).
+    #[inline]
+    fn arr<'a>(&'a self, prog: &'a Program, id: u32) -> &'a [Value] {
+        self.arrays[id as usize].slice(prog)
+    }
+
+    /// Mutable storage by id, materializing const-backed arrays
+    /// (copy-on-write). Fails only if the copy can't be allocated.
+    fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut Vec<Value>, &'static str> {
+        let slot = &mut self.arrays[id as usize];
+        if let ArrRepr::Const(d) = slot {
+            let data: &[Value] = &prog.data_arrays[*d as usize];
+            let mut owned: Vec<Value> = Vec::new();
+            if owned.try_reserve_exact(data.len()).is_err() {
+                return Err("out of memory for array");
+            }
+            owned.extend_from_slice(data);
+            // the shared bytes stop being charged... they were never
+            // charged; the owned copy joins the byte ledger now
+            self.array_bytes += Self::array_cost(owned.len()) - CONST_ENTRY_COST;
+            *slot = ArrRepr::Owned(owned);
+        }
+        match &mut self.arrays[id as usize] {
+            ArrRepr::Owned(v) => Ok(v),
+            ArrRepr::Const(_) => unreachable!("materialized above"),
+        }
     }
 
     /// Read-only view of the (possibly suspended) call stack.
@@ -571,8 +653,9 @@ impl Vm {
     fn err_at(&self, prog: &Program, message: String) -> VmError {
         match self.frames.last() {
             Some(f) => {
-                // pc has advanced past the faulting instruction
-                let pc = f.pc.saturating_sub(1);
+                // the frame's pc has advanced past the faulting instruction;
+                // the dispatch loop records each instruction's start offset
+                let pc = self.insn_start;
                 let (line, col) = prog.fns[f.fn_idx as usize].pos_at(pc);
                 VmError {
                     message,
@@ -580,6 +663,7 @@ impl Vm {
                     pc,
                     line,
                     col,
+                    is_assert: false,
                 }
             }
             None => VmError {
@@ -588,6 +672,7 @@ impl Vm {
                 pc: u32::MAX,
                 line: 0,
                 col: 0,
+                is_assert: false,
             },
         }
     }
@@ -793,6 +878,7 @@ impl Vm {
             };
         }
 
+        use crate::bytecode::op;
         loop {
             let (fi, pc, lbase) = {
                 let f = self.frames.last().expect("frame");
@@ -801,25 +887,91 @@ impl Vm {
             if debug && self.debug_stop(prog, fi, pc) {
                 return Ok(Outcome::Paused);
             }
-            let insn = match prog.fns[fi as usize].code.get(pc as usize) {
-                Some(&i) => i,
-                None => Insn::RetNull, // fell off the end
+            let fdef = &prog.fns[fi as usize];
+            let code = &prog.code
+                [fdef.code_start as usize..(fdef.code_start + fdef.code_len) as usize];
+            self.insn_start = pc;
+            // Byte-decode the instruction in place. The decoder validated
+            // every operand and jump target, so the unwrap_or(0) fallbacks
+            // are unreachable; they exist so a logic bug degrades to a
+            // runtime error instead of a panic.
+            let mut at = pc as usize;
+            macro_rules! op_u8 {
+                () => {{
+                    let v = code.get(at).copied().unwrap_or(0);
+                    at += 1;
+                    v
+                }};
+            }
+            macro_rules! op_u16 {
+                () => {{
+                    let v = u16::from_le_bytes([
+                        code.get(at).copied().unwrap_or(0),
+                        code.get(at + 1).copied().unwrap_or(0),
+                    ]);
+                    at += 2;
+                    v
+                }};
+            }
+            macro_rules! op_u32 {
+                () => {{
+                    let v = u32::from_le_bytes([
+                        code.get(at).copied().unwrap_or(0),
+                        code.get(at + 1).copied().unwrap_or(0),
+                        code.get(at + 2).copied().unwrap_or(0),
+                        code.get(at + 3).copied().unwrap_or(0),
+                    ]);
+                    at += 4;
+                    v
+                }};
+            }
+            let opcode = match code.get(at) {
+                Some(&b) => {
+                    at += 1;
+                    b
+                }
+                None => op::RET_NULL, // fell off the end
             };
-            set_pc!(pc + 1);
             if self.fuel == 0 {
                 fail!("execution limit exceeded (infinite loop?)");
             }
             self.fuel -= 1;
-            match insn {
-                Insn::Const(v) => push!(v),
-                Insn::LoadG(i) => push!(self.globals[i as usize]),
-                Insn::StoreG(i) => {
+            match opcode {
+                op::CONST_NUM => {
+                    let v = Value::Num(Fx::from_raw(op_u32!() as i32));
+                    set_pc!(at as u32);
+                    push!(v)
+                }
+                op::CONST_FUN => {
+                    let v = Value::Fun(op_u16!());
+                    set_pc!(at as u32);
+                    push!(v)
+                }
+                op::CONST_BUILTIN => {
+                    let v = Value::Builtin(op_u16!());
+                    set_pc!(at as u32);
+                    push!(v)
+                }
+                op::LOAD_G => {
+                    let i = op_u16!();
+                    set_pc!(at as u32);
+                    push!(self.globals[i as usize])
+                }
+                op::STORE_G => {
+                    let i = op_u16!();
+                    set_pc!(at as u32);
                     let v = pop!();
                     self.globals[i as usize] = v;
                     push!(v);
                 }
-                Insn::LoadL(i) => push!(self.locals[lbase + i as usize]),
-                Insn::StoreL(i) => {
+                op::LOAD_L => {
+                    let i = op_u8!();
+                    set_pc!(at as u32);
+                    push!(self.locals[lbase + i as usize])
+                }
+                op::STORE_L => {
+                    let i = op_u8!();
+                    set_pc!(at as u32);
                     let v = pop!();
                     self.locals[lbase + i as usize] = v;
                     push!(v);
@@ -831,7 +983,8 @@ impl Vm {
                 // execution. Known divergence: PB aborts on a fractional
                 // *literal* index write (`a[1.5] = 9`), a compiler-path
                 // quirk we deliberately don't copy — we truncate uniformly.
-                Insn::LoadIdx => {
+                op::LOAD_IDX => {
+                    set_pc!(at as u32);
                     let idx = pop!().num();
                     let arr = pop!();
                     let Value::Arr(a) = arr else {
@@ -841,12 +994,13 @@ impl Vm {
                         fail!("array index out of bounds");
                     }
                     let i = idx.to_int_trunc() as usize;
-                    match self.arrays[a as usize].get(i) {
+                    match self.arr(prog, a).get(i) {
                         Some(v) => push!(*v),
                         None => fail!("array index out of bounds"),
                     }
                 }
-                Insn::StoreIdx => {
+                op::STORE_IDX => {
+                    set_pc!(at as u32);
                     let val = pop!();
                     let idx = pop!().num();
                     let arr = pop!();
@@ -857,37 +1011,79 @@ impl Vm {
                         fail!("array index out of bounds");
                     }
                     let i = idx.to_int_trunc() as usize;
-                    match self.arrays[a as usize].get_mut(i) {
-                        Some(slot) => *slot = val,
-                        None => fail!("array index out of bounds"),
+                    match self.arr_mut(prog, a) {
+                        Ok(v) => match v.get_mut(i) {
+                            Some(slot) => *slot = val,
+                            None => fail!("array index out of bounds"),
+                        },
+                        Err(m) => fail!(m),
                     }
                     push!(val);
                 }
-                Insn::ArrLen => {
+                op::ARR_LEN => {
+                    set_pc!(at as u32);
                     let arr = pop!();
                     let Value::Arr(a) = arr else {
                         fail!(".length of a non-array value")
                     };
-                    push!(Value::Num(Fx::from_int(
-                        self.arrays[a as usize].len() as i32
-                    )));
+                    push!(Value::Num(Fx::from_int(self.arr(prog, a).len() as i32)));
                 }
-                Insn::NewArray(n) => {
-                    let n = n as usize;
-                    let mut elems = vec![Value::default(); n];
-                    for i in (0..n).rev() {
-                        elems[i] = pop!();
+                op::NEW_ARRAY => {
+                    let n = op_u16!() as usize;
+                    set_pc!(at as u32);
+                    // budget-first: the elements are popped into the slot
+                    // only once the (fallible) allocation succeeded
+                    match self.alloc_array_zeroed(n) {
+                        Ok(v) => {
+                            let Value::Arr(id) = v else { unreachable!() };
+                            for i in (0..n).rev() {
+                                let e = pop!();
+                                // freshly allocated ⇒ always Owned
+                                if let ArrRepr::Owned(vs) = &mut self.arrays[id as usize] {
+                                    vs[i] = e;
+                                }
+                            }
+                            push!(v);
+                        }
+                        Err(m) => fail!(m),
                     }
-                    match self.alloc_array(elems) {
+                }
+                op::CONST_ARR => {
+                    let d = op_u16!() as u32;
+                    set_pc!(at as u32);
+                    // decoder-validated: d < data_arrays.len()
+                    let len = prog.data_arrays[d as usize].len();
+                    match self.alloc_const_array(d, len) {
                         Ok(v) => push!(v),
                         Err(m) => fail!(m),
                     }
                 }
-                Insn::Dup => {
+                op::ASSERT => {
+                    let m = op_u16!();
+                    set_pc!(at as u32);
+                    if !pop!().truthy() {
+                        // decoder-validated: m < assert_msgs.len()
+                        let px = self.globals[prog.pixel_count_g as usize]
+                            .num()
+                            .to_int_trunc();
+                        let mut e = self.err_at(
+                            prog,
+                            alloc::format!(
+                                "pattern requires: {} (pixelCount = {px})",
+                                prog.assert_msgs[m as usize]
+                            ),
+                        );
+                        e.is_assert = true;
+                        return Err(e);
+                    }
+                }
+                op::DUP => {
+                    set_pc!(at as u32);
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     push!(v);
                 }
-                Insn::Dup2 => {
+                op::DUP2 => {
+                    set_pc!(at as u32);
                     let n = self.stack.len();
                     if n < 2 {
                         fail!("stack underflow (compiler bug)");
@@ -897,73 +1093,137 @@ impl Vm {
                     push!(a);
                     push!(b);
                 }
-                Insn::Pop => {
+                op::POP => {
+                    set_pc!(at as u32);
                     pop!();
                 }
-                Insn::Add => binnum!(+),
-                Insn::Sub => binnum!(-),
-                Insn::Mul => binnum!(*),
-                Insn::Div => binnum!(/),
-                Insn::Rem => binnum!(%),
-                Insn::Pow => {
+                op::ADD => {
+                    set_pc!(at as u32);
+                    binnum!(+)
+                }
+                op::SUB => {
+                    set_pc!(at as u32);
+                    binnum!(-)
+                }
+                op::MUL => {
+                    set_pc!(at as u32);
+                    binnum!(*)
+                }
+                op::DIV => {
+                    set_pc!(at as u32);
+                    binnum!(/)
+                }
+                op::REM => {
+                    set_pc!(at as u32);
+                    binnum!(%)
+                }
+                op::POW => {
+                    set_pc!(at as u32);
                     let b = pop!().num();
                     let a = pop!().num();
                     push!(Value::Num(fmath::pow(a, b)));
                 }
-                Insn::Neg => {
+                op::NEG => {
+                    set_pc!(at as u32);
                     let v = pop!().num();
                     push!(Value::Num(-v));
                 }
-                Insn::Not => {
+                op::NOT => {
+                    set_pc!(at as u32);
                     let v = pop!();
                     push!(Value::Num(if v.truthy() { Fx::ZERO } else { Fx::ONE }));
                 }
-                Insn::BitNot => {
+                op::BIT_NOT => {
+                    set_pc!(at as u32);
                     let v = pop!().num();
                     push!(Value::Num(!v));
                 }
-                Insn::BitAnd => binnum!(&),
-                Insn::BitOr => binnum!(|),
-                Insn::BitXor => binnum!(^),
-                Insn::Shl => binnum!(<<),
-                Insn::Shr => binnum!(>>),
-                Insn::Lt => bincmp!(<),
-                Insn::Le => bincmp!(<=),
-                Insn::Gt => bincmp!(>),
-                Insn::Ge => bincmp!(>=),
-                Insn::Eq => {
+                op::BIT_AND => {
+                    set_pc!(at as u32);
+                    binnum!(&)
+                }
+                op::BIT_OR => {
+                    set_pc!(at as u32);
+                    binnum!(|)
+                }
+                op::BIT_XOR => {
+                    set_pc!(at as u32);
+                    binnum!(^)
+                }
+                op::SHL => {
+                    set_pc!(at as u32);
+                    binnum!(<<)
+                }
+                op::SHR => {
+                    set_pc!(at as u32);
+                    binnum!(>>)
+                }
+                op::LT => {
+                    set_pc!(at as u32);
+                    bincmp!(<)
+                }
+                op::LE => {
+                    set_pc!(at as u32);
+                    bincmp!(<=)
+                }
+                op::GT => {
+                    set_pc!(at as u32);
+                    bincmp!(>)
+                }
+                op::GE => {
+                    set_pc!(at as u32);
+                    bincmp!(>=)
+                }
+                op::EQ => {
+                    set_pc!(at as u32);
                     let b = pop!();
                     let a = pop!();
                     push!(Value::Num(if value_eq(a, b) { Fx::ONE } else { Fx::ZERO }));
                 }
-                Insn::Ne => {
+                op::NE => {
+                    set_pc!(at as u32);
                     let b = pop!();
                     let a = pop!();
                     push!(Value::Num(if value_eq(a, b) { Fx::ZERO } else { Fx::ONE }));
                 }
-                Insn::Jmp(t) => set_pc!(t),
-                Insn::JmpIfFalse(t) => {
+                op::JMP => {
+                    let t = op_u32!();
+                    set_pc!(t);
+                }
+                op::JMP_IF_FALSE => {
+                    let t = op_u32!();
+                    set_pc!(at as u32);
                     if !pop!().truthy() {
                         set_pc!(t);
                     }
                 }
-                Insn::JmpIfTruePeek(t) => {
+                op::JMP_IF_TRUE_PEEK => {
+                    let t = op_u32!();
+                    set_pc!(at as u32);
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     if v.truthy() {
                         set_pc!(t);
                     }
                 }
-                Insn::JmpIfFalsePeek(t) => {
+                op::JMP_IF_FALSE_PEEK => {
+                    let t = op_u32!();
+                    set_pc!(at as u32);
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     if !v.truthy() {
                         set_pc!(t);
                     }
                 }
-                Insn::CallFn { fn_idx: f, argc } => {
+                op::CALL_FN => {
+                    let f = op_u16!();
+                    let argc = op_u8!();
+                    set_pc!(at as u32);
                     let (args, n) = self.pop_args(argc as usize);
                     self.push_frame(prog, f, &args[..n])?;
                 }
-                Insn::CallBuiltin { b, argc } => {
+                op::CALL_BUILTIN => {
+                    let b = op_u16!();
+                    let argc = op_u8!();
+                    set_pc!(at as u32);
                     match self.call_builtin(prog, b, argc as usize) {
                         Ok(v) => push!(v),
                         Err(mut e) => {
@@ -975,9 +1235,10 @@ impl Vm {
                         }
                     }
                 }
-                Insn::CallValue { argc } => {
+                op::CALL_VALUE => {
+                    let argc = op_u8!() as usize;
+                    set_pc!(at as u32);
                     let n = self.stack.len();
-                    let argc = argc as usize;
                     if n < argc + 1 {
                         fail!("stack underflow (compiler bug)");
                     }
@@ -999,8 +1260,9 @@ impl Vm {
                         _ => fail!("call of a non-function value"),
                     }
                 }
-                Insn::Ret | Insn::RetNull => {
-                    let v = if matches!(insn, Insn::Ret) {
+                op::RET | op::RET_NULL => {
+                    set_pc!(at as u32);
+                    let v = if opcode == op::RET {
                         pop!()
                     } else {
                         Value::default()
@@ -1011,16 +1273,60 @@ impl Vm {
                     }
                     push!(v);
                 }
+                _ => fail!("unknown opcode (corrupt bytecode?)"),
             }
         }
     }
 
-    pub fn alloc_array(&mut self, elems: Vec<Value>) -> Result<Value, &'static str> {
-        if self.array_elems + elems.len() > self.array_budget {
+    /// Real arena cost of an array: elements plus Vec header + allocator
+    /// overhead (what many tiny nested [r,g,b] arrays actually pay).
+    fn array_cost(len: usize) -> usize {
+        len * core::mem::size_of::<Value>() + 32
+    }
+
+    fn charge_array(&mut self, len: usize, bytes: usize) -> Result<(), &'static str> {
+        if self.array_elems + len > self.array_budget {
             return Err("array element budget exceeded (arrays are never freed)");
         }
+        if self.array_bytes + bytes > self.array_byte_budget {
+            return Err("array memory budget exceeded (pattern too large for this device)");
+        }
+        Ok(())
+    }
+
+    pub fn alloc_array(&mut self, elems: Vec<Value>) -> Result<Value, &'static str> {
+        self.charge_array(elems.len(), Self::array_cost(elems.len()))?;
         self.array_elems += elems.len();
-        self.arrays.push(elems);
+        self.array_bytes += Self::array_cost(elems.len());
+        self.arrays.push(ArrRepr::Owned(elems));
+        Ok(Value::Arr((self.arrays.len() - 1) as u32))
+    }
+
+    /// Arena entry sharing a const-pool array (copy-on-write). Elements
+    /// still count against the PB-compat element budget; bytes only for
+    /// the entry itself — the data is shared with the program.
+    fn alloc_const_array(&mut self, d: u32, len: usize) -> Result<Value, &'static str> {
+        self.charge_array(len, CONST_ENTRY_COST)?;
+        self.array_elems += len;
+        self.array_bytes += CONST_ENTRY_COST;
+        self.arrays.push(ArrRepr::Const(d));
+        Ok(Value::Arr((self.arrays.len() - 1) as u32))
+    }
+
+    /// Budget-checked zero-filled array allocation: the budgets are verified
+    /// BEFORE any memory is reserved, and the reservation itself is
+    /// fallible — on a small-heap device a huge `array(n)` must be a
+    /// recorded runtime error, never an allocator panic (= reboot).
+    fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, &'static str> {
+        self.charge_array(len, Self::array_cost(len))?;
+        let mut elems: Vec<Value> = Vec::new();
+        if elems.try_reserve_exact(len).is_err() {
+            return Err("out of memory for array");
+        }
+        elems.resize(len, Value::default());
+        self.array_elems += len;
+        self.array_bytes += Self::array_cost(len);
+        self.arrays.push(ArrRepr::Owned(elems));
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
     }
 
@@ -1055,6 +1361,7 @@ impl Vm {
             pc: u32::MAX,
             line: 0,
             col: 0,
+            is_assert: false,
         };
         let def = &BUILTINS[id as usize];
         let builtin = match def.kind {
@@ -1160,6 +1467,47 @@ impl Vm {
                     u * u * u / Fx::from_int(2) + Fx::ONE
                 })
             }
+            // 1 + c3·(t-1)³ + c1·(t-1)² with c1 = 1.70158 (the classic ~10%
+            // overshoot constant), c3 = c1 + 1
+            EaseOutBack => {
+                let u = n(0) - Fx::ONE;
+                let c1 = Fx::from_f64(1.70158);
+                let c3 = c1 + Fx::ONE;
+                num(Fx::ONE + c3 * u * u * u + c1 * u * u)
+            }
+            // 2^(-10t)·sin((10t - 0.75)·2π/3) + 1, endpoints pinned exactly
+            EaseOutElastic => {
+                let t = n(0);
+                num(if t <= Fx::ZERO {
+                    Fx::ZERO
+                } else if t >= Fx::ONE {
+                    Fx::ONE
+                } else {
+                    let ten_t = Fx::from_int(10) * t;
+                    let decay = fmath::pow(Fx::from_int(2), -ten_t);
+                    // sin's argument in turns: (10t - 0.75) / 3
+                    let s = fmath::sin_turns((ten_t - Fx::from_f64(0.75)) / Fx::from_int(3));
+                    decay * s + Fx::ONE
+                })
+            }
+            // piecewise parabolas, n1 = 7.5625, d1 = 2.75 (the standard fit)
+            EaseOutBounce => {
+                let t = n(0);
+                let n1 = Fx::from_f64(7.5625);
+                let d1 = Fx::from_f64(2.75);
+                num(if t < Fx::ONE / d1 {
+                    n1 * t * t
+                } else if t < Fx::from_int(2) / d1 {
+                    let u = t - Fx::from_f64(1.5) / d1;
+                    n1 * u * u + Fx::from_f64(0.75)
+                } else if t < Fx::from_f64(2.5) / d1 {
+                    let u = t - Fx::from_f64(2.25) / d1;
+                    n1 * u * u + Fx::from_f64(0.9375)
+                } else {
+                    let u = t - Fx::from_f64(2.625) / d1;
+                    n1 * u * u + Fx::from_f64(0.984375)
+                })
+            }
             Random => {
                 let r = self.next_random();
                 Ok(Self::scale_random(r, n(0)))
@@ -1239,6 +1587,14 @@ impl Vm {
                 self.pixel_written = true;
                 Ok(Value::default())
             }
+            // plot(x, y) or plot(x, y, z): map programs emit one coordinate
+            // per pixel; the engine (map mode) reads plot_coord after the call.
+            Plot => {
+                self.plot_coord = [n(0), n(1), if argc >= 3 { n(2) } else { Fx::ZERO }];
+                self.plot_dims = if argc >= 3 { 3 } else { 2 };
+                self.plot_written = true;
+                Ok(Value::default())
+            }
             Oklch => {
                 self.pixel = crate::color::oklch_to_rgb(n(0), n(1), n(2));
                 self.pixel_written = true;
@@ -1251,21 +1607,20 @@ impl Vm {
             }
             Array => {
                 let len = n(0).to_int_trunc().max(0) as usize;
-                self.alloc_array(vec![Value::default(); len])
-                    .map_err(|m| no_site(m.into()))
+                self.alloc_array_zeroed(len).map_err(|m| no_site(m.into()))
             }
             ArrayLength => {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arrayLength of a non-array".into()));
                 };
-                num(Fx::from_int(self.arrays[arr as usize].len() as i32))
+                num(Fx::from_int(self.arr(prog, arr).len() as i32))
             }
             ArraySum => {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arraySum of a non-array".into()));
                 };
                 let mut sum = Fx::ZERO;
-                for v in &self.arrays[arr as usize] {
+                for v in self.arr(prog, arr) {
                     sum = sum + v.num();
                 }
                 num(sum)
@@ -1277,15 +1632,17 @@ impl Vm {
                 let f = a(1);
                 let mutate = builtin == ArrayMutate;
                 let mut i = 0usize;
-                while i < self.arrays[arr as usize].len() {
-                    let v = self.arrays[arr as usize][i];
+                while i < self.arr(prog, arr).len() {
+                    let v = self.arr(prog, arr)[i];
                     let r = self.dispatch_direct(
                         prog,
                         f,
                         &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
                     )?;
                     if mutate {
-                        if let Some(slot) = self.arrays[arr as usize].get_mut(i) {
+                        if let Some(slot) =
+                            self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?.get_mut(i)
+                        {
                             *slot = r;
                         }
                     }
@@ -1299,14 +1656,18 @@ impl Vm {
                 };
                 let f = a(2);
                 let mut i = 0usize;
-                while i < self.arrays[src as usize].len() && i < self.arrays[dst as usize].len() {
-                    let v = self.arrays[src as usize][i];
+                while i < self.arr(prog, src).len() && i < self.arr(prog, dst).len() {
+                    let v = self.arr(prog, src)[i];
                     let r = self.dispatch_direct(
                         prog,
                         f,
                         &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
                     )?;
-                    self.arrays[dst as usize][i] = r;
+                    if let Some(slot) =
+                        self.arr_mut(prog, dst).map_err(|m| no_site(m.into()))?.get_mut(i)
+                    {
+                        *slot = r;
+                    }
                     i += 1;
                 }
                 Ok(a(1))
@@ -1318,8 +1679,8 @@ impl Vm {
                 let f = a(1);
                 let mut acc = a(2);
                 let mut i = 0usize;
-                while i < self.arrays[arr as usize].len() {
-                    let v = self.arrays[arr as usize][i];
+                while i < self.arr(prog, arr).len() {
+                    let v = self.arr(prog, arr)[i];
                     acc = self.dispatch_direct(
                         prog,
                         f,
@@ -1338,9 +1699,12 @@ impl Vm {
                 } else {
                     (0, 1)
                 };
-                for (j, arg) in args[first..argc].iter().enumerate() {
-                    if let Some(slot) = self.arrays[arr as usize].get_mut(off + j) {
-                        *slot = *arg;
+                {
+                    let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    for (j, arg) in args[first..argc].iter().enumerate() {
+                        if let Some(slot) = slots.get_mut(off + j) {
+                            *slot = *arg;
+                        }
                     }
                 }
                 Ok(a(0))
@@ -1351,7 +1715,12 @@ impl Vm {
                 };
                 let cmp = a(1);
                 let by = builtin == ArraySortBy;
-                let mut data = core::mem::take(&mut self.arrays[arr as usize]);
+                self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?; // materialize (CoW)
+                let ArrRepr::Owned(mut data) =
+                    core::mem::take(&mut self.arrays[arr as usize])
+                else {
+                    unreachable!("materialized above")
+                };
                 let mut err = None;
                 // insertion sort (documented as not stable; small arrays)
                 'outer: for i in 1..data.len() {
@@ -1377,7 +1746,7 @@ impl Vm {
                     }
                     data[j] = key;
                 }
-                self.arrays[arr as usize] = data;
+                self.arrays[arr as usize] = ArrRepr::Owned(data);
                 match err {
                     Some(e) => Err(e),
                     None => Ok(a(0)),
@@ -1524,7 +1893,7 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("setPalette needs an array".into()));
                 };
-                let data = &self.arrays[arr as usize];
+                let data = self.arr(prog, arr);
                 let mut pal = Vec::new();
                 let mut i = 0;
                 while i + 3 < data.len() {
@@ -1538,7 +1907,23 @@ impl Vm {
                 Ok(Value::default())
             }
             Paint => {
-                let v = n(0).mod_floor(Fx::ONE);
+                // PB semantics (ramp-palette pixel oracle, 2026-07-08): the
+                // position wraps as floored-frac(v) EXACTLY (1.25 → 0.25,
+                // −0.5 → 0.5), with two measured edge artifacts: v == 1
+                // stays at the palette end, and whole numbers ≥ 2 land at
+                // 254/255 (just under the end) — pathological inputs, but
+                // pinned to match the device byte-for-byte.
+                let x = n(0);
+                let frac = x.mod_floor(Fx::ONE);
+                let v = if frac == Fx::ZERO && x >= Fx::ONE {
+                    if x == Fx::ONE {
+                        Fx::ONE
+                    } else {
+                        Fx::from_raw(65535) // 1−ε: matches both probe palettes
+                    }
+                } else {
+                    frac
+                };
                 let b = if argc >= 2 { n(1) } else { Fx::ONE };
                 let rgb = self.palette_lookup(v);
                 let b = b.clamp(Fx::ZERO, Fx::ONE);
@@ -1594,20 +1979,21 @@ impl Vm {
                     return Err(no_site("blur1D of a non-array".into()));
                 };
                 let r = n(1).to_int_trunc().max(0) as usize;
-                let idx = arr as usize;
-                let len = self.arrays[idx].len();
+                // materialize up front (copy-on-write) — this writes in place
+                let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                let len = data.len();
                 if r > 0 && len > 0 {
                     // prefix sums in raw i64 — exact, no overflow at 10K els
                     let mut pre = alloc::vec::Vec::with_capacity(len + 1);
                     pre.push(0i64);
-                    for v in &self.arrays[idx] {
+                    for v in data.iter() {
                         pre.push(pre.last().unwrap() + v.num().raw() as i64);
                     }
                     for i in 0..len {
                         let lo = i.saturating_sub(r);
                         let hi = (i + r).min(len - 1);
                         let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
-                        self.arrays[idx][i] = Value::Num(Fx::from_raw(avg as i32));
+                        data[i] = Value::Num(Fx::from_raw(avg as i32));
                     }
                 }
                 Ok(a(0))
@@ -1619,7 +2005,11 @@ impl Vm {
                     return Err(no_site("feedback of a non-array".into()));
                 };
                 let decay = n(1);
-                for slot in self.arrays[arr as usize].iter_mut() {
+                for slot in self
+                    .arr_mut(prog, arr)
+                    .map_err(|m| no_site(m.into()))?
+                    .iter_mut()
+                {
                     *slot = Value::Num(slot.num() * decay);
                 }
                 Ok(a(0))
@@ -1639,12 +2029,12 @@ impl Vm {
             // reuse one array, so render loops don't grow the arena.
             Hsv2Rgb => {
                 let rgb = hsv_to_rgb(n(0), n(1), n(2));
-                self.write3(a(3), rgb).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(3), rgb).map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
             Rgb2Hsv => {
                 let hsv = rgb_to_hsv(n(0), n(1), n(2));
-                self.write3(a(3), hsv).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(3), hsv).map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
             // simplex2(x, y, seed = 0) / simplex3(x, y, z, seed = 0):
@@ -1662,7 +2052,7 @@ impl Vm {
             // OKLab — perceptually even, no muddy midpoints
             MixColors => {
                 let c = crate::color::mix_oklab([n(0), n(1), n(2)], [n(3), n(4), n(5)], n(6));
-                self.write3(a(7), c).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(7), c).map_err(|m| no_site(m.into()))?;
                 Ok(a(7))
             }
         }
@@ -1677,11 +2067,11 @@ impl Vm {
     }
 
     /// Write three numbers into the first three slots of `out`.
-    fn write3(&mut self, out: Value, vals: [Fx; 3]) -> Result<(), &'static str> {
+    fn write3(&mut self, prog: &Program, out: Value, vals: [Fx; 3]) -> Result<(), &'static str> {
         let Value::Arr(arr) = out else {
             return Err("`out` must be an array");
         };
-        let slots = &mut self.arrays[arr as usize];
+        let slots = self.arr_mut(prog, arr)?;
         if slots.len() < 3 {
             return Err("`out` array needs length >= 3");
         }
@@ -1794,6 +2184,7 @@ impl Vm {
                 pc: u32::MAX,
                 line: 0,
                 col: 0,
+                is_assert: false,
             }),
         }
     }

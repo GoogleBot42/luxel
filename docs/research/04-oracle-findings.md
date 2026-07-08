@@ -123,6 +123,98 @@ errors in raw 16.16 units unless noted:
   deliberate leniency (everything that compiles on PB compiles here);
   revisit if strict-compat mode is wanted.
 
+## Sweep 2026-07-07 (fw 3.67 — 130/165 exact, + 6 new probes)
+
+- **Transforms fully verified** (the raw sweep "diffs" decoded as map
+  artifacts: the oracle's installed dodecahedron map puts pixel 0 at world
+  x≈1.0 while our CLI side ran mapless). On equal maps Luxel matches PB on
+  all three questions: first-called transform is *outermost*
+  (`translate(.25)` then `scale(2)` → `(x+.25)·2`), transforms
+  **accumulate across frames** (no implicit per-frame reset), and
+  `rotate(PI/2)` maps `(x,y) → (−y,x)`. Pinned in
+  `semantics.rs::transform_semantics_match_pixelblaze` and
+  `transforms_accumulate_across_frames`. 1D-x transform behavior remains
+  unverifiable while a map is installed on the oracle.
+- **Refs in arithmetic**: an array value used in math acts as 0
+  (`a+1 == 1`) — matches Luxel. Ref equality is identity (`a==a` true,
+  `a==b` false for equal contents) — matches.
+- **Assigning over a builtin's name** (`floor = 5`) is allowed and reads
+  back 5; *calling* the name afterwards aborts pattern init — both sides
+  identical (sentinel never lands).
+- **`arr.replace(find, val)`** method form: exact wrap-encoded match.
+- **PB rejects a builtin as a value** (`f = floor` → "Undefined symbol
+  floor") — Luxel's first-class builtin references are a documented
+  superset, same class as 1-arg `square`.
+- Division/modulo-by-zero, overflow wrap, all shift edge cases (incl.
+  negative `>>` = arithmetic shift), rounding family, `%` vs `mod`, logic
+  values, literal precision, array OOB/fractional-index sentinels: **all
+  exact matches** — those TODO(oracle) markers are settled.
+- **`pow(negative, fractional)` fixed**: PB propagates log2(neg) = raw
+  `0x80000000` through (its vars JSON shows it *unsigned* as +32768.0); we
+  returned 0. Luxel now returns `Fx::MIN` — the identical bit pattern, the
+  closest an i32 can get (+2³¹ is unrepresentable). `log2(0)`/`log2(neg)`
+  = raw i32::MIN verified exact on both.
+- Transcendentals: ±1–5 raw as before. Largest remaining numeric gaps:
+  `asin/acos` ~167 raw (~0.0025) and `atan(100)` 128 raw — fine for LEDs,
+  but the place to look if we ever chase exactness.
+
+## Pixel-level sweep 2026-07-08 (previewFrame harness — fw 3.67)
+
+`tools/oracle/pixels.mjs` + `luxel pixels`: whole per-pixel test batteries
+ship as ONE live-coded pattern (a case per pixel) and the device's
+previewFrame stream (binary ws type 5, enabled by `{"sendUpdates":true}`)
+is diffed byte-for-byte against the local engine. previewFrames are NOT
+scaled by device brightness.
+
+- **Quantization: PB is `floor(v·255)`** (0.5 → 127, 1−ε → 254). Luxel
+  rounded to nearest; switched to floor — all 21 rgb/hsv rounding /
+  clamping / hue-wrap cases now **bit-exact** (hsv internals were already
+  identical). Every golden pixel test updated.
+- **`paint(v)` position = floored-frac(v) exactly** (1.25 → 0.25, −0.5 →
+  0.5) — measured with an identity (black→white ramp) palette so the
+  output byte reveals the internal position directly. Edge artifacts,
+  pinned to match: `v == 1` stays at the palette end; whole `v ≥ 2` lands
+  at ≈1−ε (byte 254). Luxel previously frac'd everything (paint(1) wrapped
+  to the start — a visible red-vs-blue divergence, now fixed).
+- Result: **38/41 exact, 3 within ±1, none diverging.** The ±1s
+  (paint(1.5), paint(2.5), paint(−2)) are PB float32 ULP loss on
+  out-of-range inputs — not representable in 16.16 and ≤1/255 visually.
+- Untouched pixels default to black on both. hsv24 behaves as hsv in the
+  preview path.
+
+## Maps and render2D (probed 2026-07-08, fw 3.67)
+
+Motivated by the sqrt-grid soak failures (Breakout 2D et al. index out of
+bounds on a mapless Luxel):
+
+- **A PB that has ever saved a map cannot be made mapless through its
+  public interface.** Saving a blank map source and saving `[]` are both
+  no-ops: `pixelmap.txt` updates but the compiled map (`pixelmap.dat`)
+  and the LIVE map survive untouched. Combined with new devices shipping
+  with a default matrix map, `render2D` on a real PB always receives
+  genuine map coordinates — the "no map" state effectively doesn't exist
+  for users. (True factory-mapless behavior remains unverifiable without
+  a factory-fresh device.)
+- With BOTH `render` and `render2D` exported and a 2D map installed, PB
+  calls **only `render2D`** (10,920 calls vs 0) — matches our dims-2
+  render selection priority.
+- **Luxel consequence**: a pattern that renders only in 2D/3D now gets a
+  default ceil(√pixelCount) row-major grid map at engine construction
+  (`Engine::set_default_grid_map`) instead of 1D-fallback coordinates —
+  the PB-as-experienced behavior. A host/user map replaces it, exactly
+  like saving a map on a PB. Note this does NOT paper over square-rig
+  patterns' own assumption: `floor(1.0·√300) = 17` indexes past a
+  17-slot array on a real PB just like on Luxel (engine test pins both
+  halves of that).
+- Map plumbing learned along the way: maps save via `POST /edit`
+  (form-file `/pixelmap.txt`) + ws `{savePixelMap:true}`; the compiled
+  map is `GET /pixelmap.dat` (u16 header: version, dims, byte length;
+  u16-quantized coords /65536); `GET /list?dir=/` enumerates the FS. An
+  installed map can be reconstructed losslessly from INSIDE the pattern
+  language (export arrays, fill from render2D/3D args) — how the probe
+  snapshotted and bit-exactly restored the oracle's map
+  (`tools/oracle/mapdump.mjs`).
+
 ## Operational notes
 
 - The device's websocket (port 81) wedges permanently if clients vanish

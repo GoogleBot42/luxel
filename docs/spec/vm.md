@@ -195,9 +195,12 @@ zero-overhead fast path.
 
 ## 6. Stability
 
-The instruction set is **not yet frozen**. Until a serialized bytecode
-format ships, the compiler and VM are versioned together and other
-frontends should target the `Program`-building API in-process. When the
-on-flash format lands, this document gains opcode numbers, an encoding,
-and a version header — that is the point where backward compatibility
-starts being guaranteed.
+The serialized encoding of `Program` is **LXBC** — see
+[bytecode.md](bytecode.md) for the container, opcode numbers, and the
+version header. Devices execute LXBC only (the compiler is not linked into
+firmware); the browser/CLI compile and upload it alongside the source.
+Compatibility contract: builtins are referenced by *name* in LXBC (adding
+or reordering builtins never invalidates blobs), while any change to
+instruction semantics, operand widths, or the container bumps
+`bytecode::FORMAT_VERSION` — devices reject stale blobs with a distinct
+`bc-version` error and hosts recompile from the stored source.

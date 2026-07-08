@@ -149,7 +149,8 @@ pub fn exp2(x: Fx) -> Fx {
     }
 }
 
-/// log2(x); x ≤ 0 yields the most-negative value. TODO(oracle).
+/// log2(x); x ≤ 0 yields the most-negative value (oracle-verified exact:
+/// log2_0/log2_neg both return raw i32::MIN on the PB).
 pub fn log2(x: Fx) -> Fx {
     if x.raw() <= 0 {
         return Fx::MIN;
@@ -192,7 +193,8 @@ pub fn exp(x: Fx) -> Fx {
 /// pow(base, exp) = 2^(exp·log2 base). Oracle-confirmed: pow(x, 0) == 1
 /// (including 0^0), and negative bases work with integer exponents with the
 /// usual sign rule (pow(-2, 3) == -8). Negative base with a fractional
-/// exponent yields 0. TODO(oracle): confirm the fractional-exponent case.
+/// exponent yields Fx::MIN — the PB does log2(negative) = MIN and lets it
+/// propagate (oracle-verified 2026-07-07, pow_neg2_half/pow_neg2_15).
 pub fn pow(base: Fx, e: Fx) -> Fx {
     if e == Fx::ZERO {
         return Fx::ONE;
@@ -202,7 +204,7 @@ pub fn pow(base: Fx, e: Fx) -> Fx {
     }
     if base.raw() < 0 {
         if e.frac() != Fx::ZERO {
-            return Fx::ZERO;
+            return Fx::MIN;
         }
         let mag = exp2(e * log2(-base));
         return if e.to_int_trunc() & 1 == 1 { -mag } else { mag };
@@ -351,7 +353,9 @@ mod tests {
         // negative bases: sign rule for integer exponents (oracle)
         assert_close(pow(Fx::from_int(-2), Fx::from_int(2)), 4.0, 1e-2);
         assert_close(pow(Fx::from_int(-2), Fx::from_int(3)), -8.0, 3e-2);
-        assert_eq!(pow(Fx::from_int(-2), Fx::from_f64(2.5)), Fx::ZERO);
+        // negative base, fractional exponent: raw 0x80000000, like the PB
+        // (whose float path shows it as +32768; oracle pow_neg2_half)
+        assert_eq!(pow(Fx::from_int(-2), Fx::from_f64(2.5)), Fx::MIN);
         assert_eq!(pow(Fx::from_int(5), Fx::ZERO), Fx::ONE);
         assert_eq!(pow(Fx::ZERO, Fx::ZERO), Fx::ONE); // oracle: pow_0_0
     }

@@ -16,3 +16,6 @@ firmware/serial.log
 web/device-served.png
 web/dist.luxa
 web/public/gallery.json
+
+# transient agent worktrees
+.claude/worktrees/

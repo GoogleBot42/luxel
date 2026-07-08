@@ -57,6 +57,10 @@ export interface WorkingCopy {
   /** name context so the picker label survives a reload */
   patternName: string;
   exampleName: string;
+  /** true once the source was edited away from the pattern it was loaded from
+   *  (or saved as) — i.e. the reload has genuinely unsaved changes. Drives the
+   *  device resume decision (resume a dirty edit vs. show what's running). */
+  dirty: boolean;
 }
 
 export function saveWorkingCopy(wc: WorkingCopy): void {
@@ -66,5 +70,5 @@ export function saveWorkingCopy(wc: WorkingCopy): void {
 export function loadWorkingCopy(): WorkingCopy | null {
   const wc = read<WorkingCopy>(CUR_KEY);
   if (!wc || typeof wc.source !== "string" || !wc.layout?.kind) return null;
-  return wc;
+  return { ...wc, dirty: wc.dirty === true }; // default legacy copies to clean
 }

@@ -27,6 +27,8 @@ struct EngineSlot {
     engine: Engine,
     src: String,
     pixels: Vec<u8>, // flattened RGB copy handed to JS
+    map_buf: Vec<i32>, // flattened raw-16.16 [x y z] map coords handed to JS
+    bc: Vec<u8>,       // LXBC blob, filled by lx_bytecode
 }
 
 fn set_response(s: String) {
@@ -100,6 +102,8 @@ pub unsafe extern "C" fn lx_new(
                 engine,
                 src: src.to_string(),
                 pixels: vec![0; pixel_count as usize * 3],
+                map_buf: Vec::new(),
+                bc: Vec::new(),
             };
             let mut engines = ENGINES.lock().unwrap();
             let h = engines.iter().position(|e| e.is_none());
@@ -125,6 +129,31 @@ pub unsafe extern "C" fn lx_new(
             -1
         }
     }
+}
+
+/// Serialize this engine's compiled program to LXBC bytecode (what devices
+/// execute — see docs/spec/bytecode.md). Returns the blob length (read it
+/// via `lx_bytecode_ptr`, valid until the engine is freed or this is called
+/// again) or -1 with an error message in the response buffer.
+#[no_mangle]
+pub extern "C" fn lx_bytecode(h: i32) -> i32 {
+    with_engine(h, |s| match luxel_core::bytecode::serialize(s.engine.program()) {
+        Ok(blob) => {
+            let len = blob.len() as i32;
+            s.bc = blob;
+            len
+        }
+        Err(e) => {
+            set_response(format!("{{\"message\":\"{}\"}}", json_escape(&e.to_string())));
+            -1
+        }
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn lx_bytecode_ptr(h: i32) -> *const u8 {
+    with_engine(h, |s| s.bc.as_ptr()).unwrap_or(std::ptr::null())
 }
 
 #[no_mangle]
@@ -326,6 +355,94 @@ pub extern "C" fn lx_set_map_grid(h: i32, w: u32, grid_h: u32) {
 #[no_mangle]
 pub extern "C" fn lx_set_wall_clock(h: i32, unix_seconds: f64) {
     with_engine(h, |s| s.engine.set_wall_clock(unix_seconds as i64));
+}
+
+/// 1 if the pattern binds any sensor-board variable (frequencyData,
+/// energyAverage, …) — the UI uses this to decide whether to run audio
+/// capture at all.
+#[no_mangle]
+pub extern "C" fn lx_wants_sensors(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.wants_sensors() as i32).unwrap_or(0)
+}
+
+/// Inject one sensor frame as 43 packed raw-16.16 i32s:
+/// [0..32) frequencyData, [32] energyAverage, [33] maxFrequencyMagnitude,
+/// [34] maxFrequency (Hz), [35] light, [36..39) accelerometer,
+/// [39..44) analogInputs. Shorter buffers leave the tail fields zero.
+///
+/// # Safety
+/// `ptr` must point to `len` valid i32s (lx_alloc buffers are align-1, so
+/// the values are read unaligned).
+#[no_mangle]
+pub unsafe extern "C" fn lx_set_sensors(h: i32, ptr: *const i32, len: usize) {
+    use luxel_core::engine::SensorFrame;
+    let at = |i: usize| {
+        if i < len {
+            Fx::from_raw(ptr.add(i).read_unaligned())
+        } else {
+            Fx::ZERO
+        }
+    };
+    let mut s = SensorFrame::default();
+    for i in 0..32 {
+        s.frequency_data[i] = at(i);
+    }
+    s.energy_average = at(32);
+    s.max_frequency_magnitude = at(33);
+    s.max_frequency = at(34);
+    s.light = at(35);
+    for i in 0..3 {
+        s.accelerometer[i] = at(36 + i);
+    }
+    for i in 0..5 {
+        s.analog_inputs[i] = at(39 + i);
+    }
+    with_engine(h, |slot| slot.engine.set_sensors(&s));
+}
+
+// ---- map programs (this engine emits coordinates, not colors) ----
+
+/// Turn this engine into a map-program runner (per-pixel `plot(x, y[, z])`).
+#[no_mangle]
+pub extern "C" fn lx_enable_map_mode(h: i32) {
+    with_engine(h, |s| s.engine.enable_map_mode());
+}
+
+/// Run (or resume) the map program over every pixel, collecting coordinates.
+/// Returns 1 if it suspended at a debug stop (resume with `lx_debug_step`), 0
+/// when finished. Runtime errors surface via `lx_take_error`.
+#[no_mangle]
+pub extern "C" fn lx_run_map(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.run_map() as i32).unwrap_or(0)
+}
+
+/// Dimensionality (2 or 3) of the collected map.
+#[no_mangle]
+pub extern "C" fn lx_map_dims(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.map().0 as i32).unwrap_or(2)
+}
+
+/// Number of collected coordinates.
+#[no_mangle]
+pub extern "C" fn lx_map_count(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.map().1.len() as i32).unwrap_or(0)
+}
+
+/// Pointer to the collected coordinates as tightly packed raw-16.16 [x y z]
+/// triples (count·3 i32s). Valid until the next call.
+#[no_mangle]
+pub extern "C" fn lx_map_coords(h: i32) -> *const i32 {
+    with_engine(h, |s| {
+        let (_, coords) = s.engine.map();
+        s.map_buf.clear();
+        for c in coords {
+            s.map_buf.push(c[0].raw());
+            s.map_buf.push(c[1].raw());
+            s.map_buf.push(c[2].raw());
+        }
+        s.map_buf.as_ptr()
+    })
+    .unwrap_or(std::ptr::null())
 }
 
 /// Refresh the RGB copy of the engine's current pixel buffer (for redrawing

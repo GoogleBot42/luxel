@@ -7,12 +7,17 @@
 //! Pixel maps install via [`Engine::set_map`] (host-normalized to world
 //! units 0..1 exclusive); render selection follows the documented priority
 //! per map dimensionality, missing coordinates fill with mid-space (0.5),
-//! and the transform stack applies to 2D/3D coordinates. TODO(oracle).
+//! and the transform stack applies to 2D/3D coordinates. Oracle-verified
+//! 2026-07-07: composition order (first call outermost), cross-frame
+//! accumulation, and rotate direction all match PB; 1D-x remains
+//! TODO(oracle) (the oracle has a map installed, masking the 1D path).
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
+#[cfg(feature = "frontend")]
 use crate::compile::compile;
+#[cfg(feature = "frontend")]
 use crate::diag::Diagnostic;
 use crate::fixed::Fx;
 use crate::vm::{DebugState, MapData, Outcome, Program, StepKind, Value, Vm, VmError};
@@ -76,6 +81,20 @@ const CONTROL_PREFIXES: &[(&str, ControlKind)] = &[
     ("gauge", ControlKind::Gauge),
 ];
 
+/// One frame of sensor-board data (the PB sensor expansion board surface).
+/// Everything is normalized 0..1 except `accelerometer` (signed G-ish) and
+/// `max_frequency` (Hz of the loudest bin).
+#[derive(Clone, Default)]
+pub struct SensorFrame {
+    pub frequency_data: [Fx; 32],
+    pub energy_average: Fx,
+    pub max_frequency_magnitude: Fx,
+    pub max_frequency: Fx,
+    pub light: Fx,
+    pub accelerometer: [Fx; 3],
+    pub analog_inputs: [Fx; 5],
+}
+
 pub struct Engine {
     prog: Program,
     vm: Vm,
@@ -95,21 +114,54 @@ pub struct Engine {
     /// changes, so the per-pixel cost is one table lookup, not a pow().
     gamma_lut: Option<alloc::boxed::Box<[u8; 256]>>,
     gamma_lut_for: Fx,
+    /// Map mode: this engine runs a *map program* (per-pixel `plot(x, y[, z])`)
+    /// and collects coordinates instead of colors. Set via `enable_map_mode`.
+    is_map: bool,
+    map_coords: Vec<[Fx; 3]>,
+    map_dims: u8,
+    /// An `assert()` invariant failed during init: rendering is blocked
+    /// for this engine's lifetime (map installs must not resurrect it —
+    /// the fix is a config change, which rebuilds the engine).
+    requires_violated: bool,
 }
 
 impl Engine {
     /// Compile and initialize a pattern. Compile errors fail construction;
     /// runtime errors during init are recorded in `last_error` and the
     /// engine stays usable (PB shows vmerr and keeps going).
+    #[cfg(feature = "frontend")]
     pub fn new(src: &str, pixel_count: u32, seed: u64) -> Result<Engine, Diagnostic> {
-        let prog = compile(src)?;
+        Ok(Engine::from_program(compile(src)?, pixel_count, seed))
+    }
+
+    /// Initialize from an already-compiled program (deserialized LXBC
+    /// bytecode, or a fresh `compile()` result). Infallible: like `new`
+    /// after its compile step, init-time runtime errors land in
+    /// `last_error` and the engine stays usable.
+    pub fn from_program(prog: Program, pixel_count: u32, seed: u64) -> Engine {
+        Engine::from_program_budgeted(prog, pixel_count, seed, usize::MAX)
+    }
+
+    /// [`from_program`] with an array-arena BYTE budget, applied BEFORE the
+    /// pattern's init code runs (the PB-compat 10,240-element budget always
+    /// applies on top). Small-heap devices size this from live free heap so
+    /// an array-hungry pattern gets a recorded "array budget" vmerr instead
+    /// of exhausting the allocator (which panics = reboots the device — the
+    /// soak-v5 lesson).
+    pub fn from_program_budgeted(
+        prog: Program,
+        pixel_count: u32,
+        seed: u64,
+        array_byte_budget: usize,
+    ) -> Engine {
         let mut vm = Vm::new(&prog, seed);
+        vm.array_byte_budget = array_byte_budget;
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
-        // Sensor-board bindings: until a peripheral provides them (M5),
-        // exported sensor arrays are stubbed with zeros so sound/motion
-        // patterns run dark instead of erroring. Scalars are already 0.
-        // The pattern's own init may overwrite these.
+        // Sensor-board bindings: exported sensor arrays start zero-filled so
+        // sound/motion patterns run dark instead of erroring when no sensor
+        // source is attached; a source feeds them via [Engine::set_sensors].
+        // Scalars are already 0. The pattern's own init may overwrite these.
         for (name, len) in [
             ("frequencyData", 32),
             ("accelerometer", 3),
@@ -124,14 +176,20 @@ impl Engine {
             }
         }
 
+        // Run top-level init. `assert()` statements execute inline here —
+        // they see everything initialized above them; a failed assert
+        // aborts init on the spot (is_assert) and blocks the pattern:
+        // its declared configuration invariant doesn't hold, and the fix
+        // is a config change, which rebuilds the engine.
         let mut last_error = None;
         if let Err(e) = vm.call(&prog, 0, &[]) {
             last_error = Some(e);
         }
+        let violated = last_error.as_ref().is_some_and(|e| e.is_assert);
 
         vm.pixel_count = pixel_count;
-        let before = prog.exported_fn("beforeRender");
-        let render = pick_render(&prog, 0);
+        let before = if violated { None } else { prog.exported_fn("beforeRender") };
+        let render = if violated { None } else { pick_render(&prog, 0) };
 
         let mut controls = Vec::new();
         for (name, idx) in &prog.exported_fns {
@@ -150,7 +208,7 @@ impl Engine {
             }
         }
 
-        Ok(Engine {
+        let mut engine = Engine {
             pixels: alloc::vec![[0u8; 3]; pixel_count as usize],
             prog,
             vm,
@@ -165,7 +223,99 @@ impl Engine {
             cur_delta: Fx::ZERO,
             gamma_lut: None,
             gamma_lut_for: Fx::ZERO,
-        })
+            is_map: false,
+            map_coords: Vec::new(),
+            map_dims: 0,
+            requires_violated: violated,
+        };
+
+        // A pattern that renders ONLY in 2D/3D gets a default square-ish
+        // grid map rather than 1D fallback coordinates. This is the
+        // PB-as-experienced behavior (oracle-verified 2026-07-08): new PBs
+        // ship with a default matrix map and a saved map cannot be removed
+        // through the public interface, so on a real PB `render2D` always
+        // receives genuine map coordinates — and the common
+        // `sqrt(pixelCount)`-grid patterns depend on that. A host-installed
+        // map replaces this (set_map), exactly like saving a map on a PB.
+        if !violated
+            && engine.prog.exported_fn("render").is_none()
+            && (engine.prog.exported_fn("render2D").is_some()
+                || engine.prog.exported_fn("render3D").is_some())
+        {
+            engine.set_default_grid_map();
+        }
+        engine
+    }
+
+    /// Install the default ceil(√pixelCount)-wide row-major grid map (see
+    /// from_program_budgeted for why). Public so hosts that clear a user
+    /// map can fall back to the same default.
+    pub fn set_default_grid_map(&mut self) {
+        let n = self.pixel_count as usize;
+        if n == 0 {
+            return;
+        }
+        // integer ceil(sqrt(n)) without floats
+        let mut w = 1usize;
+        while w * w < n {
+            w += 1;
+        }
+        let mut coords: Vec<[Fx; 3]> = Vec::new();
+        if coords.try_reserve_exact(n).is_err() {
+            return; // starved heap: keep the 1D fallback rather than fail
+        }
+        for i in 0..n {
+            coords.push([
+                Fx::from_int((i % w) as i32),
+                Fx::from_int((i / w) as i32),
+                Fx::ZERO,
+            ]);
+        }
+        self.set_map(2, &coords);
+    }
+
+    /// Turn this engine into a *map program* runner: [`run_map`] executes its
+    /// per-pixel `render(index)` (which calls `plot(x, y[, z])`) and collects
+    /// one coordinate per pixel. Debugging works exactly as for a pattern —
+    /// the same per-pixel `drive` loop, so breakpoints/stepping just work.
+    pub fn enable_map_mode(&mut self) {
+        self.is_map = true;
+    }
+
+    /// Run the map program over every pixel, collecting coordinates. Returns
+    /// `true` if it suspended at a debug stop (resume with [`debug_step`]);
+    /// `false` when the collection finished. Read the result with [`map`].
+    pub fn run_map(&mut self) -> bool {
+        if self.run_stage.is_some() {
+            return true; // already running/paused — drive it with debug_step
+        }
+        self.map_coords = alloc::vec![[Fx::ZERO; 3]; self.pixel_count as usize];
+        self.map_dims = 0;
+        if self.render.is_none() {
+            self.last_error = Some(VmError {
+                message: String::from(
+                    "map program must export function render(index) and call plot(x, y)",
+                ),
+                fn_idx: u16::MAX,
+                pc: u32::MAX,
+                line: 0,
+                col: 0,
+                is_assert: false,
+            });
+            return false;
+        }
+        if self.pixel_count == 0 {
+            return false;
+        }
+        self.run_stage = Some(RunStage::Pixel(0)); // maps need no beforeRender
+        self.drive(None);
+        self.run_stage.is_some()
+    }
+
+    /// The collected map: dimensionality (2 or 3) and one coordinate per pixel
+    /// (pattern units — the consumer's [`set_map`] normalizes them).
+    pub fn map(&self) -> (u8, &[[Fx; 3]]) {
+        (if self.map_dims == 0 { 2 } else { self.map_dims }, &self.map_coords)
     }
 
     // ---- debugger ----
@@ -195,10 +345,11 @@ impl Engine {
         let mut pcs = Vec::new();
         let mut resolved = Vec::new();
         for &line in lines {
-            // nearest executable line >= requested
+            // nearest executable line >= requested (pos entries are runs
+            // keyed by fn-relative byte offset)
             let mut target: Option<u32> = None;
             for f in &self.prog.fns {
-                for &(l, _) in &f.pos {
+                for &(_, l, _) in &f.pos {
                     if l >= line && l != 0 {
                         target = Some(target.map_or(l, |t| t.min(l)));
                     }
@@ -206,8 +357,8 @@ impl Engine {
             }
             let Some(t) = target else { continue };
             for (fi, f) in self.prog.fns.iter().enumerate() {
-                if let Some(pc) = f.pos.iter().position(|&(l, _)| l == t) {
-                    pcs.push((fi as u16, pc as u32));
+                if let Some(&(off, _, _)) = f.pos.iter().find(|&&(_, l, _)| l == t) {
+                    pcs.push((fi as u16, off));
                 }
             }
             if !resolved.contains(&t) {
@@ -293,6 +444,11 @@ impl Engine {
         self.pixel_count
     }
 
+    /// The compiled program this engine runs (e.g. for [`crate::bytecode::serialize`]).
+    pub fn program(&self) -> &Program {
+        &self.prog
+    }
+
     /// Install a pixel map: one coordinate tuple per pixel, any units.
     /// Coordinates normalize per-axis into world units 0..1 (exclusive —
     /// quantized to u16/65536 like PB's map binary). Render selection
@@ -318,7 +474,9 @@ impl Engine {
             }
         }
         self.vm.map = Some(MapData { dims, coords });
-        self.render = pick_render(&self.prog, dims);
+        if !self.requires_violated {
+            self.render = pick_render(&self.prog, dims);
+        }
     }
 
     /// Provide wall-clock time (unix seconds, timezone already applied) for
@@ -351,6 +509,55 @@ impl Engine {
             Err(e) => {
                 self.last_error = Some(e);
                 None
+            }
+        }
+    }
+
+    /// True if the pattern binds any sensor-board variable — callers use it
+    /// to decide whether capturing/forwarding sensor data is worth anything.
+    pub fn wants_sensors(&self) -> bool {
+        [
+            "frequencyData",
+            "energyAverage",
+            "maxFrequencyMagnitude",
+            "maxFrequency",
+            "light",
+            "accelerometer",
+            "analogInputs",
+        ]
+        .iter()
+        .any(|n| {
+            self.prog
+                .global_index(n)
+                .is_some_and(|i| self.prog.globals[i as usize].export)
+        })
+    }
+
+    /// Inject one frame of sensor data into the exported sensor bindings
+    /// (PB sensor-board surface, ~40 Hz on real hardware). Bindings the
+    /// pattern doesn't export are skipped; array writes go into whatever
+    /// array the exported name currently references.
+    pub fn set_sensors(&mut self, s: &SensorFrame) {
+        for (name, v) in [
+            ("energyAverage", s.energy_average),
+            ("maxFrequencyMagnitude", s.max_frequency_magnitude),
+            ("maxFrequency", s.max_frequency),
+            ("light", s.light),
+        ] {
+            self.set_var(name, v);
+        }
+        self.set_sensor_array("frequencyData", &s.frequency_data);
+        self.set_sensor_array("accelerometer", &s.accelerometer);
+        self.set_sensor_array("analogInputs", &s.analog_inputs);
+    }
+
+    fn set_sensor_array(&mut self, name: &str, vals: &[Fx]) {
+        let Some(Value::Arr(id)) = self.var(name) else {
+            return;
+        };
+        if let Some(arr) = self.vm.array_mut(&self.prog, id) {
+            for (dst, v) in arr.iter_mut().zip(vals) {
+                *dst = Value::Num(*v);
             }
         }
     }
@@ -399,15 +606,29 @@ impl Engine {
 
     /// Length of a VM array by id (debugger display).
     pub fn array_len(&self, id: u32) -> usize {
-        self.vm.array(id).map(|a| a.len()).unwrap_or(0)
+        self.vm.array(&self.prog, id).map(|a| a.len()).unwrap_or(0)
     }
 
     /// Read an element of an exported array variable.
     pub fn var_array(&self, name: &str) -> Option<&[Value]> {
         match self.var(name)? {
-            Value::Arr(id) => self.vm.array(id),
+            Value::Arr(id) => self.vm.array(&self.prog, id),
             _ => None,
         }
+    }
+
+    /// The engine clock in whole ms (what `time()`/`beat` run on) — the
+    /// Luxel-to-Luxel sync surface, together with [Engine::set_time_ms].
+    pub fn time_ms(&self) -> u64 {
+        self.time_acc >> 16
+    }
+
+    /// Hard-set the engine clock (sync convergence when the offset is too
+    /// big to slew; small offsets are corrected by stretching `frame`'s
+    /// delta instead, which stays smooth).
+    pub fn set_time_ms(&mut self, ms: u64) {
+        self.time_acc = ms << 16;
+        self.vm.time_ms = ms;
     }
 
     /// Advance time by `delta_ms` and render one frame.
@@ -453,6 +674,9 @@ impl Engine {
                         };
                         self.vm.pixel = [Fx::ZERO; 3];
                         self.vm.pixel_written = false;
+                        self.vm.plot_coord = [Fx::ZERO; 3];
+                        self.vm.plot_dims = 0;
+                        self.vm.plot_written = false;
                         let (fn_idx, args, argc) = self.render_args(render, i);
                         self.vm
                             .start(&self.prog, fn_idx, &args[..argc], self.debug_enabled)
@@ -486,12 +710,20 @@ impl Engine {
                         self.run_stage = Some(RunStage::Pixel(0));
                     }
                     RunStage::Pixel(i) => {
-                        let [r, g, b] = self.vm.pixel;
-                        let mut px = [quantize(r), quantize(g), quantize(b)];
-                        if let Some(lut) = self.gamma_lut() {
-                            px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
+                        if self.is_map {
+                            // map mode: keep the plotted coordinate, not a color
+                            if let Some(slot) = self.map_coords.get_mut(i as usize) {
+                                *slot = self.vm.plot_coord;
+                            }
+                            self.map_dims = self.map_dims.max(self.vm.plot_dims);
+                        } else {
+                            let [r, g, b] = self.vm.pixel;
+                            let mut px = [quantize(r), quantize(g), quantize(b)];
+                            if let Some(lut) = self.gamma_lut() {
+                                px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
+                            }
+                            self.pixels[i as usize] = px;
                         }
-                        self.pixels[i as usize] = px;
                         if i + 1 < self.pixel_count {
                             self.run_stage = Some(RunStage::Pixel(i + 1));
                         } else {
@@ -555,12 +787,44 @@ impl Engine {
     pub fn take_error(&mut self) -> Option<VmError> {
         self.last_error.take()
     }
+
+    /// An `assert()` invariant failed during init — the pattern is blocked
+    /// (renders black) until a config change rebuilds the engine. Hosts use
+    /// this to pre-flight stored patterns against the current config.
+    pub fn requires_violated(&self) -> bool {
+        self.requires_violated
+    }
 }
 
-/// Fx 0..1 → 0..255, round to nearest. TODO(oracle): PB's exact quantization
-/// (and HDR paths) may differ.
+/// Pre-flight a program's `assert()` invariants against a configuration
+/// WITHOUT building a full engine: runs top-level init in a throwaway VM
+/// and returns the violation message, if any. Free for assert-less
+/// programs (the v4 message table makes them detectable without running
+/// anything). Runtime errors that aren't asserts return None — "would
+/// error" is not "declares itself incompatible", and hosts must not badge
+/// patterns for OOMs caused by the pre-flight's own tighter budget.
+pub fn check_asserts(
+    prog: &Program,
+    pixel_count: u32,
+    array_byte_budget: usize,
+) -> Option<String> {
+    if prog.assert_msgs.is_empty() {
+        return None;
+    }
+    let mut vm = Vm::new(prog, 1);
+    vm.array_byte_budget = array_byte_budget;
+    vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
+    match vm.call(prog, 0, &[]) {
+        Err(e) if e.is_assert => Some(e.message),
+        _ => None,
+    }
+}
+
+/// Fx 0..1 → 0..255 by floor(v·255) — PB-exact (pixel oracle, fw 3.67:
+/// 0.5 → 127, 1−ε → 254). We used to round to nearest; floor makes whole
+/// frames diff bit-identical against previewFrame captures.
 fn quantize(v: Fx) -> u8 {
-    ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255 + 32_768) >> 16) as u8
+    ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255) >> 16) as u8
 }
 
 /// Render-function selection priority by map dimensionality (documented PB

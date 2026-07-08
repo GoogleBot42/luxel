@@ -2,7 +2,7 @@
 # workspace: it builds for a different target than the host crates.
 [package]
 name = "luxel-fw"
-version = "0.1.6"
+version = "0.1.28"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -21,19 +21,34 @@ esp-storage = { version = "0.9", features = ["embedded-storage"] }
 # bridges esp-storage's blocking FlashStorage to these async NorFlash traits.
 sequential-storage = "4"
 embedded-storage-async = "0.4"
-luxel-core = { path = "../crates/luxel-core" }
+# default-features = false drops the "frontend" (lexer/parser/compiler):
+# the device only executes LXBC bytecode compiled by the browser/CLI.
+luxel-core = { path = "../crates/luxel-core", default-features = false }
 
 # networking (WiFi station + async TCP + HTTP server)
 esp-rtos = { version = "0.3", features = ["esp-radio", "embassy", "log-04"] }
 esp-radio = { version = "1.0.0-beta.0", features = ["wifi", "unstable"] }
 embassy-executor = "0.10"
-embassy-net = { version = "0.9", features = ["dhcpv4", "dhcpv4-hostname", "medium-ethernet", "tcp", "dns"] }
+embassy-net = { version = "0.9", features = ["dhcpv4", "dhcpv4-hostname", "medium-ethernet", "tcp", "dns", "udp", "multicast"] }
 heapless = { version = "0.9", default-features = false }
 embassy-time = "0.5"
 embassy-sync = "0.8"
 embassy-futures = "0.1"
 static_cell = "2.1"
-picoserve = { version = "0.18", default-features = false, features = ["embassy", "alloc", "ws"] }
+picoserve = { version = "0.18", default-features = false, features = ["embassy", "alloc"] }
+# MQTT (Home Assistant integration): established no_std MQTT v5 client over
+# any embedded-io-async transport. embassy-net 0.9 implements embedded-io
+# 0.7 but rust-mqtt wants 0.6 — mqtt.rs has a paper-thin adapter, hence the
+# explicit 0.6 deps here.
+rust-mqtt = { version = "0.3", default-features = false }
+embedded-io = "0.6"
+embedded-io-async = "0.6"
+edge-dhcp = { version = "0.8", default-features = false }
+
+# build.rs compiles the built-in default pattern to LXBC at build time
+# (host-target build dep — the frontend never enters the firmware image).
+[build-dependencies]
+luxel-core = { path = "../crates/luxel-core" }
 
 [features]
 # Boards (pick exactly one; they pull in the right chip). See docs/firmware.md.
@@ -41,6 +56,7 @@ default = ["board-c3-devkit"]
 board-c3-devkit = ["esp32c3"]
 board-athom-music = ["esp32"]
 board-pixelblaze-v3 = ["esp32"]
+board-esp32-generic = ["esp32"]
 
 # Chip features (selected via a board feature, not directly).
 esp32c3 = [
@@ -64,8 +80,11 @@ esp32 = [
   "esp-storage/esp32",
 ]
 
+# opt-level "s" (size), not 3: the app crossed the 1 MiB OTA-slot boundary at
+# v0.1.17 (crossfade). "s" reclaims ~5% with no visible render-rate hit — the
+# VM eval loop is not the bottleneck (SPI/embassy pacing dominate frame time).
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 

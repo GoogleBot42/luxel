@@ -159,7 +159,11 @@ where PB compile-errors on arity).
 **Luxel extensions** (not in PB): `map(x, inLo, inHi, outLo, outHi)`,
 `sign(x)`, `step(edge, x)`, `saturate(x)` (= clamp to 0..1),
 `dist(x1,y1,x2,y2)`, `dist3(x1,y1,z1,x2,y2,z2)`, and easing curves on 0..1:
-`easeInQuad`/`easeOutQuad`/`easeInOutQuad` and the `…Cubic` trio.
+`easeInQuad`/`easeOutQuad`/`easeInOutQuad`, the `…Cubic` trio, and the
+springy set — `easeOutBack(t)` (overshoots ~10% and settles),
+`easeOutElastic(t)` (decaying spring wobble), `easeOutBounce(t)` (dropped
+ball). The springy ones exceed 0..1 mid-curve by design; saturate() the
+result if you're feeding a color channel directly.
 
 **Luxel extensions — tempo & hashing**: `beat(bpm)` is a 0..1 sawtooth
 beat phase at `bpm` on the engine clock; `beatSin(bpm, lo = 0, hi = 1)`
@@ -244,6 +248,17 @@ GPIO (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`,
 `clockWeekday`) — needs wall time from the host. Sequencer/playlist
 (`sequencerNext`, `playlistGetPosition`, …) and `nodeId()`.
 
+### Sensor bindings
+
+`export var` any of `frequencyData` (32 bins, ~37 Hz–10 kHz, 0..1),
+`energyAverage`, `maxFrequencyMagnitude` (0..1), `maxFrequency` (Hz),
+`light`, `accelerometer` (3), `analogInputs` (5) — the PB sensor-board
+surface. Bound vars are zero-filled when no source is attached (sound
+patterns run dark, not error). Sources: the playground's **sound** toggle
+(browser microphone → WebAudio FFT), and on hardware the PB sensor
+expansion board's serial stream. Updates land between frames (~40 Hz on
+real hardware).
+
 ### Predefined globals
 
 `pixelCount`; math constants `PI PI2 PI3_4 PISQ E SQRT2 SQRT1_2 LN2 LN10
@@ -266,7 +281,10 @@ differ, it is deliberate:
   each platform, not across them.
 - **Array writes with fractional literal indices**: PB aborts the frame;
   Luxel truncates (consistent with PB's own variable-index behavior).
-- **Builtin arity is not compile-checked** — missing arguments are 0.
+- **Builtin arity is not compile-checked** — missing arguments are 0
+  (PB rejects e.g. one-arg `square(x)` at compile time; we default duty).
+- **Builtins are first-class values** in Luxel (`f = floor` works); PB
+  rejects referencing a builtin without calling it ("Undefined symbol").
 - `//#` control-bound comments are a Luxel extension; PB ignores them.
 
 ## Luxel extensions
@@ -292,5 +310,39 @@ speed = 2
   (`2 ** 3 ** 2` = 512), binds tighter than `*`. One divergence from JS:
   a unary minus on the left is allowed and binds first (`-x ** 2` means
   `(-x) ** 2`; JS makes it a syntax error).
+
+- **`assert(cond[, "message"])` — configuration invariants.** A pattern
+  can declare what it needs from the rig; if the condition is falsy the
+  pattern refuses to run (black output + a clear error carrying the
+  message) instead of misbehaving or crashing mid-render:
+
+```js
+assert(pixelCount % 2 == 0)
+
+var w = sqrt(pixelCount)
+assert(floor(w) == w, "needs a square number of pixels")
+assert(pixelCount >= 100, "needs at least 100 pixels")
+```
+
+  `assert` is real init code, executed **inline where it appears** in
+  top-level initialization — so the condition can use anything set up
+  above it: derived vars, function calls, array contents. A failed
+  assert aborts init on the spot (statements above it ran; statements
+  below it don't) and blocks rendering with
+  `pattern requires: <message> (pixelCount = N)`. Without a custom
+  message, the condition's source text is used. Changing the device's
+  pixel count (or any config that rebuilds the engine) re-runs init and
+  therefore re-checks every assert automatically.
+
+  Restrictions: `assert` is only legal as a **top-level statement** —
+  not inside functions (it would fire per frame), not nested in blocks
+  or branches (a conditional invariant isn't an invariant). The quoted
+  message is the language's only string literal and exists only there.
+  A runtime error *inside* the condition (e.g. indexing out of bounds)
+  is an ordinary vmerr, not a violation.
+
+  This is the one extension that breaks PB-source compatibility when
+  used: a real Pixel Blaze has no `assert`, so patterns using it are
+  Luxel-only by choice.
 
 More conservative JS conveniences may follow (see the roadmap).

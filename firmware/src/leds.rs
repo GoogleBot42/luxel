@@ -23,6 +23,38 @@ impl Protocol {
         }
     }
 
+    /// Short lowercase name for the API (`/api/config`, `/api/protocol`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::Sk9822 => "sk9822",
+            Protocol::Ws2812 => "ws2812",
+        }
+    }
+
+    /// Parse an API name (aliases: apa102 = sk9822, ws2811/ws2815 = ws2812).
+    pub fn from_name(s: &str) -> Option<Protocol> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "sk9822" | "apa102" => Some(Protocol::Sk9822),
+            "ws2812" | "ws2811" | "ws2815" | "ws281x" => Some(Protocol::Ws2812),
+            _ => None,
+        }
+    }
+
+    /// Compact code for atomic storage / flash persistence.
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Protocol::Sk9822 => 0,
+            Protocol::Ws2812 => 1,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Protocol {
+        match v {
+            1 => Protocol::Ws2812,
+            _ => Protocol::Sk9822,
+        }
+    }
+
     pub fn buf_len(self, pixels: usize) -> usize {
         match self {
             // 4B start + 4B/px + 4B SK9822 reset + px/16 end-clock bytes
@@ -36,9 +68,16 @@ impl Protocol {
     pub fn encode(self, rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
         match self {
             Protocol::Sk9822 => encode_sk9822(rgb, brightness5, out),
-            Protocol::Ws2812 => encode_ws2812(rgb, out),
+            Protocol::Ws2812 => encode_ws2812(rgb, brightness5, out),
         }
     }
+}
+
+/// Scale an 8-bit channel by a 0–31 brightness level (31 = unchanged). Used
+/// for WS2812, which has no hardware current field like SK9822's.
+#[inline]
+fn scale5(channel: u8, brightness5: u8) -> u8 {
+    ((channel as u16 * (brightness5 & 0x1F) as u16) / 31) as u8
 }
 
 fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
@@ -54,11 +93,17 @@ fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
 }
 
 /// Expand one byte into 24 SPI bits (3 per LED bit): `1` → `110`, `0` → `100`.
-fn encode_ws2812(rgb: &[[u8; 3]], out: &mut [u8]) {
+/// `brightness5` (0–31) scales each channel in software — WS2812 has no
+/// hardware brightness field.
+fn encode_ws2812(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
     let mut o = 0;
     for px in rgb {
         // WS2812 wants GRB
-        for byte in [px[1], px[0], px[2]] {
+        for byte in [
+            scale5(px[1], brightness5),
+            scale5(px[0], brightness5),
+            scale5(px[2], brightness5),
+        ] {
             let mut acc: u32 = 0;
             for bit in 0..8 {
                 let one = (byte >> (7 - bit)) & 1 == 1;

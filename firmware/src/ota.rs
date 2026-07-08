@@ -93,6 +93,122 @@ pub fn give_flash(flash: FlashStorage<'static>) {
     FLASH.lock(|c| *c.borrow_mut() = Some(flash));
 }
 
+// ---- boot-loop guard: app-level OTA rollback ----
+// The stock (espflash) bootloader has no auto-rollback, so a freshly OTA'd
+// image that crashes during boot wedges the device until a serial reflash
+// (this happened: v0.1.19's first cut overflowed the main stack in WiFi
+// init). The guard runs BEFORE the risky part of boot: it counts boot
+// attempts in the fourth nvs sector, and on the 3rd consecutive failed
+// boot flips otadata back to the other slot and reboots. main() calls
+// [boot_ok] once the device has been demonstrably healthy for a while,
+// which resets the counter. Rapid manual power-cycling can theoretically
+// trip it — that's benign (the other slot also boots) and self-corrects.
+
+const GUARD_OFFSET: u32 = 0xC000;
+const GUARD_MAGIC: &[u8; 4] = b"LXBG";
+
+fn read_guard() -> (u8, bool) {
+    let mut rec = [0u8; 8];
+    if !crate::assets::read_chunk(GUARD_OFFSET, &mut rec) || &rec[0..4] != GUARD_MAGIC {
+        return (0, false);
+    }
+    (rec[4], rec[5] == 1)
+}
+
+fn read_boot_attempts() -> u8 {
+    read_guard().0
+}
+
+/// One-shot "boot into the provisioning AP next time" flag (byte 5 of the
+/// guard record). One-shot on purpose: if the AP path ever crashes, the
+/// following boot reads no flag and comes up as a normal station — a bad
+/// AP build can't strand the device off-network.
+pub fn set_force_ap() {
+    write_guard(read_boot_attempts(), true);
+}
+
+/// Read AND clear the force-AP flag.
+pub fn take_force_ap() -> bool {
+    let (count, ap) = read_guard();
+    if ap {
+        write_guard(count, false);
+    }
+    ap
+}
+
+fn write_boot_attempts(n: u8) {
+    // preserve the force-AP flag: the boot counter moves before the WiFi
+    // path consumes the flag with take_force_ap
+    write_guard(n, read_guard().1);
+}
+
+fn write_guard(n: u8, force_ap: bool) {
+    let mut rec = [0u8; 8];
+    rec[0..4].copy_from_slice(GUARD_MAGIC);
+    rec[4] = n;
+    rec[5] = force_ap as u8;
+    // word-aligned stage (see config.rs for why unaligned paths are off limits)
+    let mut stage = [0u32; 2];
+    let bytes = unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), 8) };
+    bytes.copy_from_slice(&rec);
+    let _ = with_flash(|f| {
+        use embedded_storage::nor_flash::NorFlash;
+        let _ = NorFlash::erase(f, GUARD_OFFSET, GUARD_OFFSET + 4096);
+        let _ = NorFlash::write(f, GUARD_OFFSET, bytes);
+    });
+}
+
+/// Call early in boot, after [init] but before WiFi/radio setup. On the
+/// third consecutive boot that never reached [boot_ok], activates the other
+/// OTA slot and resets.
+pub fn boot_guard() {
+    let attempts = read_boot_attempts();
+    if attempts >= 2 {
+        println!(
+            "boot guard: {} consecutive failed boots — rolling back to the other OTA slot",
+            attempts
+        );
+        write_boot_attempts(0);
+        let ok = with_flash(|flash| {
+            let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> = alloc::vec![
+                    0u8;
+                    PARTITION_TABLE_MAX_LEN
+                ]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+            let Ok(mut ota) = OtaUpdater::new(flash, &mut *buffer) else {
+                return false;
+            };
+            ota.activate_next_partition().is_ok()
+        })
+        .unwrap_or(false);
+        if ok {
+            esp_hal::system::software_reset();
+        }
+        println!("boot guard: rollback failed; continuing with this slot");
+    }
+    write_boot_attempts(attempts + 1);
+}
+
+/// The device survived boot and has been serving for a while: clear the
+/// failed-boot counter (and mark the image valid for rollback-capable
+/// bootloaders, where the state machine expects it).
+pub fn boot_ok() {
+    write_boot_attempts(0);
+    let _ = with_flash(|flash| {
+        let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> =
+            alloc::vec![0u8; PARTITION_TABLE_MAX_LEN]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap();
+        if let Ok(mut ota) = OtaUpdater::new(flash, &mut *buffer) {
+            let _ = ota.set_current_ota_state(OtaImageState::Valid);
+        }
+    });
+    println!("boot guard: healthy — counter cleared");
+}
+
 /// Locate a data partition by label → (offset, len). The pattern store
 /// calls this to confirm its `storage` partition actually exists before
 /// touching that flash: a device still carrying the old (factory) table

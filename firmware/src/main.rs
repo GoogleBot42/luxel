@@ -51,18 +51,26 @@ use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 
 mod assets;
+mod board;
 mod config;
+mod devicemap;
 mod leds;
+mod mqtt;
+mod netin;
 mod ota;
 mod patterns;
+mod playlist;
+mod provision;
+mod sensors;
 mod server;
+mod sntp;
 mod shared;
 
 use leds::Protocol;
 use luxel_core::jsonview;
 use shared::{
-    publish, set_pattern_src, set_pixels, set_vmerr, Msg, CONTROLS_JSON, FPS, MSG_QUEUE,
-    READOUTS_JSON, VARS_JSON,
+    publish, set_pattern_bc, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS,
+    CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -94,8 +102,10 @@ pub static REBOOT: embassy_sync::signal::Signal<
 //   github.com/simap/pixelblaze) — DATA = GPIO23 (MOSI), CLOCK = GPIO18
 //   (SCK), both through the onboard 5V level shifter; status LED GPIO12
 //   (lit at boot = Luxel alive), button GPIO32 (unused).
-const PROTOCOL: Protocol = Protocol::Sk9822;
-pub const PIXEL_COUNT: u32 = 300;
+/// Board defaults (name, protocol, pixel count) come from board.rs; the
+/// live values live in shared:: atomics (seeded at boot, runtime-settable
+/// via /api/protocol and /api/config).
+use board::{DEFAULT_PIXEL_COUNT, DEFAULT_PROTOCOL};
 /// Global brightness 0–31 (APA102 5-bit current limiter; ignored for
 /// WS2812). Keep modest on USB power.
 const APA_BRIGHTNESS: u8 = 4;
@@ -105,7 +115,10 @@ const APA_BRIGHTNESS: u8 = 4;
 const SSID: Option<&str> = option_env!("LUXEL_SSID");
 const PASSWORD: Option<&str> = option_env!("LUXEL_PASS");
 
+/// Built-in default pattern: source for `GET /api/pattern`, bytecode (built
+/// by build.rs — the firmware links no compiler) for execution.
 const PATTERN: &str = include_str!("../../examples/rainbow.js");
+const PATTERN_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default.lxbc"));
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -139,8 +152,17 @@ async fn main(spawner: Spawner) -> ! {
     // level-6 NMI frames that land on whatever stack is current. At
     // 120 KB heap the leftover stack measured 15.6 KB and overflowed
     // reproducibly during flash reads (all 24 logged stack-guard panics).
-    // 96 KB leaves ~40 KB of stack; /api/status heap_free still shows
-    // ~70 KB headroom.
+    //
+    // The SAME budget applies to every static — embassy task futures
+    // included. v0.1.19's first cut put ~12 KB of MQTT/netin buffers in
+    // task futures and bricked the boot (stack ≈ 10.7 KB); big task
+    // buffers must be heap Vecs. History: 88 KB left ~31 KB of stack —
+    // sized for the on-device compiler's recursion, which v0.1.24 removed
+    // (devices execute bytecode; the decoder is iterative). 96 KB now:
+    // the ~8 KB of stack it costs is repaid by the web pool shrink
+    // (3→2 slots freed ~9 KB of static task arena), so stack stays ~31 KB
+    // while patterns gain heap. The esp-rtos stack guard + boot-loop guard
+    // catch it non-destructively if this ever proves too tight.
     #[cfg(feature = "esp32")]
     esp_alloc::heap_allocator!(size: 96 * 1024);
     #[cfg(not(feature = "esp32"))]
@@ -151,11 +173,14 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     println!(
-        "luxel-fw: boot ({} px, {} Hz SPI)",
-        PIXEL_COUNT,
-        PROTOCOL.spi_hz()
+        "luxel-fw: boot ({} px default, {} @ {} Hz SPI)",
+        DEFAULT_PIXEL_COUNT,
+        DEFAULT_PROTOCOL.name(),
+        DEFAULT_PROTOCOL.spi_hz()
     );
 
+    // ---- BOARD WIRING (the only pin-specific code; see docs/boards.md) ----
+    println!("board: {}", board::NAME);
     // Strip power relay: on before anything renders (see board notes above).
     #[cfg(feature = "board-athom-music")]
     let _relay = esp_hal::gpio::Output::new(
@@ -174,7 +199,7 @@ async fn main(spawner: Spawner) -> ! {
     let spi = Spi::new(
         p.SPI2,
         SpiConfig::default()
-            .with_frequency(Rate::from_hz(PROTOCOL.spi_hz()))
+            .with_frequency(Rate::from_hz(DEFAULT_PROTOCOL.spi_hz()))
             .with_mode(Mode::_0),
     )
     .expect("spi init");
@@ -184,6 +209,10 @@ async fn main(spawner: Spawner) -> ! {
     let spi = spi.with_sck(p.GPIO5).with_mosi(p.GPIO18);
     #[cfg(feature = "board-pixelblaze-v3")]
     let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
+    // generic classic-ESP32: VSPI defaults — most WROOM boards break these out
+    #[cfg(feature = "board-esp32-generic")]
+    let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
+    // ---- end board wiring ----
 
     // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —
     // no esp-storage FlashStorage construction, no boot-time partition
@@ -191,17 +220,70 @@ async fn main(spawner: Spawner) -> ! {
     // esp32 radio crashes (serving worked before the OTA commit).
     if option_env!("LUXEL_NO_OTA").is_none() {
         ota::init(esp_storage::FlashStorage::new(p.FLASH));
+    // Boot-loop guard BEFORE the risky part of boot (WiFi init is where a
+    // bad image dies): 3 consecutive boots that never reach ota::boot_ok →
+    // roll back to the other OTA slot.
+    ota::boot_guard();
     assets::init();
     patterns::init();
+    playlist::init(); // after patterns::init (shares the storage partition)
+    devicemap::init();
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }
+
+    // Seed runtime settings from flash (else compile-time defaults) BEFORE the
+    // render task spawns — it reads these once when it builds the engine and
+    // configures SPI.
+    let stored = config::read_device();
+    let brightness = stored.map(|c| c.brightness).unwrap_or(APA_BRIGHTNESS);
+    let pixels = stored
+        .map(|c| c.pixel_count)
+        .filter(|&n| n >= 1 && n <= MAX_PIXELS)
+        .unwrap_or(DEFAULT_PIXEL_COUNT);
+    let protocol = stored.map(|c| Protocol::from_u8(c.protocol)).unwrap_or(DEFAULT_PROTOCOL);
+    BRIGHTNESS.store(brightness, Ordering::Relaxed);
+    PIXEL_COUNT.store(pixels, Ordering::Relaxed);
+    PROTOCOL.store(protocol.as_u8(), Ordering::Relaxed);
+    shared::SYNC_MODE.store(stored.map(|c| c.sync_mode).unwrap_or(0), Ordering::Relaxed);
+    shared::TZ_MINUTES.store(
+        stored.map(|c| c.tz_minutes as i32).unwrap_or(0),
+        Ordering::Relaxed,
+    );
+    shared::COLOR_ORDER.store(stored.map(|c| c.color_order).unwrap_or(0), Ordering::Relaxed);
+    shared::GAMMA_TENTHS.store(stored.map(|c| c.gamma_tenths).unwrap_or(0), Ordering::Relaxed);
+    shared::CAP_MA.store(stored.map(|c| c.cap_ma as u32).unwrap_or(0), Ordering::Relaxed);
+    println!(
+        "settings: {} px, {}, brightness {}/31 ({})",
+        pixels,
+        protocol.name(),
+        brightness,
+        if stored.is_some() { "flash" } else { "default" }
+    );
+
     spawner.spawn(reboot_task().unwrap());
+    // PB sensor expansion board input: the classic-ESP32 boards expose
+    // UART0's RX (GPIO3) on the expansion header, where the board's TX
+    // lands. Same 115200-8N1 the console runs, and TX stays untouched, so
+    // logging is unaffected. (C3 devkit: no header wired — skipped.)
+    #[cfg(feature = "esp32")]
+    {
+        let uart_cfg =
+            esp_hal::uart::Config::default().with_baudrate(115_200);
+        match esp_hal::uart::UartRx::new(p.UART0, uart_cfg) {
+            Ok(rx) => {
+                let rx = rx.with_rx(p.GPIO3).into_async();
+                spawner.spawn(sensors::uart_task(rx).unwrap());
+            }
+            Err(e) => println!("sensor uart init failed: {:?}", e),
+        }
+    }
     // Bisect knob: LUXEL_QUIET=1 at build time skips the render task
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
     // whether it interacts with the esp32 radio crashes.
     if option_env!("LUXEL_QUIET").is_none() {
         spawner.spawn(render_task(spi).unwrap());
+        spawner.spawn(playlist::playlist_task().unwrap());
     } else {
         println!("LUXEL_QUIET: render task disabled");
     }
@@ -219,40 +301,7 @@ async fn main(spawner: Spawner) -> ! {
         (Some(s), Some(p)) if !s.is_empty() => Some((s, p)),
         _ => None,
     };
-    let (ssid, password) = match (&flash_creds, baked) {
-        (Some((s, p)), _) => {
-            println!("wifi: joining \"{}\" (flash-stored creds)", s);
-            (s.as_str(), p.as_str())
-        }
-        (None, Some((s, p))) => {
-            println!("wifi: joining \"{}\" (compile-time creds)", s);
-            (s, p)
-        }
-        (None, None) => {
-            println!("no wifi credentials (no flash record, LUXEL_SSID/LUXEL_PASS unset); offline mode");
-            loop {
-                Timer::after(Duration::from_secs(3600)).await;
-            }
-        }
-    };
-
-    let station = WifiConfig::Station(
-        StationConfig::default()
-            .with_ssid(ssid)
-            .with_password(password.into()),
-    );
-    let wifi_interface = Interface::station();
-    let controller = WifiController::new(
-        p.WIFI,
-        ControllerConfig::default().with_initial_config(station),
-    )
-    .expect("wifi controller");
-
-    let rng = Rng::new();
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-
-    // DHCP hostname (option 12): "luxel-" + the low MAC bytes, so the
-    // device shows up recognizably (and uniquely) in router lease tables.
+    // "luxel-xxxxxx": the DHCP hostname as a station, the SSID as an AP.
     let mac_addr = esp_hal::efuse::base_mac_address();
     let mac = mac_addr.as_bytes();
     let mut hostname = heapless::String::<32>::new();
@@ -261,20 +310,84 @@ async fn main(spawner: Spawner) -> ! {
         format_args!("luxel-{:02x}{:02x}{:02x}", mac[3], mac[4], mac[5]),
     );
     println!("hostname: {}", hostname);
-    let mut dhcp = embassy_net::DhcpConfig::default();
-    dhcp.hostname = Some(hostname);
+
+    // Provisioning AP when there's no way onto a network (or on request via
+    // POST /api/apmode — a one-shot flag, so a crash here can't strand the
+    // device off-net: the next boot is a normal station boot again).
+    let force_ap = option_env!("LUXEL_NO_OTA").is_none() && ota::take_force_ap();
+    let creds = match (&flash_creds, baked) {
+        (Some((s, p)), _) => {
+            println!("wifi: creds from flash (\"{}\")", s);
+            Some((s.as_str(), p.as_str()))
+        }
+        (None, Some((s, p))) => {
+            println!("wifi: compile-time creds (\"{}\")", s);
+            Some((s, p))
+        }
+        (None, None) => None,
+    };
+    let ap_mode = force_ap || creds.is_none();
+
+    let (config, wifi_interface, net_config) = if ap_mode {
+        println!(
+            "provisioning mode{}: open AP \"{}\"",
+            if force_ap { " (requested)" } else { " (no wifi credentials)" },
+            hostname
+        );
+        (
+            WifiConfig::AccessPoint(
+                esp_radio::wifi::ap::AccessPointConfig::default().with_ssid(hostname.as_str()),
+            ),
+            Interface::access_point(),
+            embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+                address: embassy_net::Ipv4Cidr::new(provision::AP_IP, 24),
+                gateway: Some(provision::AP_IP),
+                dns_servers: heapless::Vec::new(),
+            }),
+        )
+    } else {
+        let (ssid, password) = creds.unwrap();
+        println!("wifi: joining \"{}\"", ssid);
+        let mut dhcp = embassy_net::DhcpConfig::default();
+        dhcp.hostname = Some(hostname.clone());
+        (
+            WifiConfig::Station(
+                StationConfig::default()
+                    .with_ssid(ssid)
+                    .with_password(password.into()),
+            ),
+            Interface::station(),
+            embassy_net::Config::dhcpv4(dhcp),
+        )
+    };
+
+    let controller = WifiController::new(
+        p.WIFI,
+        ControllerConfig::default().with_initial_config(config),
+    )
+    .expect("wifi controller");
+
+    let rng = Rng::new();
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
     let (stack, runner) = embassy_net::new(
         wifi_interface,
-        embassy_net::Config::dhcpv4(dhcp),
+        net_config,
         mk_static!(
-            StackResources<{ server::WEB_TASK_POOL_SIZE + 2 }>,
+            // +2 spare, +2 DDP/E1.31 UDP, +1 MQTT TCP, +1 its DNS queries,
+            // +1 sync beacons, +1 the follower's pattern-pull TCP
+            // (AP mode reuses the pool for DHCP + DNS)
+            StackResources<{ server::WEB_TASK_POOL_SIZE + 8 }>,
             StackResources::new()
         ),
         seed,
     );
 
-    spawner.spawn(connection_task(controller).unwrap());
+    if ap_mode {
+        spawner.spawn(ap_task(controller).unwrap());
+    } else {
+        spawner.spawn(connection_task(controller).unwrap());
+    }
     spawner.spawn(net_task(runner).unwrap());
 
     stack.wait_config_up().await;
@@ -286,9 +399,26 @@ async fn main(spawner: Spawner) -> ! {
     for task_id in 0..server::WEB_TASK_POOL_SIZE {
         spawner.spawn(server::web_task(task_id, stack).unwrap());
     }
+    if ap_mode {
+        provision::log_started(hostname.as_str());
+        spawner.spawn(provision::dhcp_task(stack).unwrap());
+        spawner.spawn(provision::dns_task(stack).unwrap());
+    } else {
+        spawner.spawn(netin::ddp_task(stack).unwrap());
+        spawner.spawn(netin::e131_task(stack).unwrap());
+        spawner.spawn(mqtt::mqtt_task(stack).unwrap());
+        // boot id: random per boot, so followers notice a leader restart
+        spawner.spawn(netin::sync_task(stack, rng.random()).unwrap());
+        spawner.spawn(sntp::sntp_task(stack).unwrap());
+    }
 
+    let mut first_beat = true;
     loop {
         Timer::after(Duration::from_secs(60)).await;
+        if first_beat {
+            first_beat = false;
+            ota::boot_ok(); // survived a minute of serving — not a boot loop
+        }
         println!(
             "fps: {}  heap free: {}",
             FPS.load(Ordering::Relaxed),
@@ -298,44 +428,216 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 /// Renders frames and drives the strip; picks up uploaded patterns between
+/// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
+#[inline]
+fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
+    let mix = |x: u8, y: u8| (((x as i32) * (65536 - t) + (y as i32) * t) >> 16) as u8;
+    [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
+}
+
+/// Output pipeline (Settings): color-order remap + gamma LUT + power cap,
+/// applied to a scratch copy just before protocol encoding. Returns the
+/// original frame untouched when every knob is off. The LUT is cached and
+/// rebuilt only when the gamma setting changes.
+fn apply_outpipe<'a>(
+    frame: &'a [[u8; 3]],
+    pipe_buf: &'a mut alloc::vec::Vec<[u8; 3]>,
+    gamma_cache: &mut (u8, Option<alloc::boxed::Box<[u8; 256]>>),
+    brightness5: u8,
+) -> &'a [[u8; 3]] {
+    use luxel_core::outpipe::{self, ColorOrder};
+    let order = shared::COLOR_ORDER.load(Ordering::Relaxed);
+    let gamma = shared::GAMMA_TENTHS.load(Ordering::Relaxed);
+    let cap = shared::CAP_MA.load(Ordering::Relaxed);
+    let gamma_on = gamma > 0 && gamma != 10;
+    if order == 0 && !gamma_on && cap == 0 {
+        return frame;
+    }
+    if gamma_on && gamma_cache.0 != gamma {
+        *gamma_cache = (gamma, Some(alloc::boxed::Box::new(outpipe::gamma_lut(gamma))));
+    }
+    pipe_buf.clear();
+    pipe_buf.extend_from_slice(frame);
+    outpipe::apply(
+        pipe_buf,
+        ColorOrder(order),
+        if gamma_on { gamma_cache.1.as_deref() } else { None },
+        cap,
+        brightness5,
+    );
+    pipe_buf
+}
+
+/// SPI config for a protocol (only the clock rate differs; mode 0 for both).
+fn spi_cfg(p: Protocol) -> SpiConfig {
+    SpiConfig::default()
+        .with_frequency(Rate::from_hz(p.spi_hz()))
+        .with_mode(Mode::_0)
+}
+
+/// Build an engine from a decoded program with an array budget derived
+/// from LIVE free heap (half of it, in 8-byte `Value`s, capped at PB's
+/// 10240 elements). Patterns that out-allocate the device then record an
+/// "array budget" vmerr instead of exhausting the allocator — an alloc
+/// failure is a panic, i.e. a reboot (the soak-v5 OOM).
+/// Heap the rest of the firmware needs while a pattern runs: jsonview
+/// snapshots (~8.5 KB peak for var-heavy patterns — a 8 KB floor lost to
+/// exactly that once), MQTT publishes, SPI buffer resizes, WiFi-blob
+/// mallocs (which do NOT null-check), plus two HTTP connection buffers
+/// (4 KB each — bodies STREAM, so connections never need body-sized
+/// buffers). A pattern may not eat into this — its array budget stops
+/// short of it, and a pattern whose engine leaves less free is rejected
+/// outright after loading ("pattern too large" vmerr; soak-proven to
+/// never panic).
+const RUNTIME_FLOOR: usize = 20 * 1024;
+
+fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
+    // Arrays may consume free heap down to (but not past) the runtime
+    // floor — byte-accurate (elements × 8 + per-array overhead), so one
+    // big array isn't taxed for overhead only swarms of tiny ones pay.
+    // The extra 4 KB keeps a maxed-out array arena from sitting EXACTLY on
+    // the floor and losing the post-load check to a few bytes of churn.
+    // The 16 KB minimum keeps ordinary strip patterns (a few arrays of
+    // pixelCount) working even when free heap reads low mid-churn — if
+    // that minimum genuinely doesn't fit, the post-load floor check
+    // rejects the pattern instead (soak-proven: a rejection, never a
+    // panic).
+    let budget = (esp_alloc::HEAP.free() as usize)
+        .saturating_sub(RUNTIME_FLOOR + 4 * 1024)
+        .max(16 * 1024);
+    Engine::from_program_budgeted(prog, count, 1, budget)
+}
+
+/// [`budgeted_engine`] + post-build floor check: a pattern that fits its
+/// array budget but still leaves the heap under the floor (huge program,
+/// long strip) is rejected — soak v5 showed a routine 8.5 KB jsonview
+/// alloc panicking (= reboot) right after such a pattern loaded.
+/// `Err(free_bytes_at_rejection)` — measured BEFORE the engine is dropped,
+/// so error messages report the pressure that caused the rejection, not
+/// the comfortable number after freeing.
+fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engine, usize> {
+    let e = budgeted_engine(prog, count);
+    let free = esp_alloc::HEAP.free() as usize;
+    if free < RUNTIME_FLOOR {
+        println!(
+            "pattern rejected: {} B heap left after load (< {} floor)",
+            free, RUNTIME_FLOOR
+        );
+        return Err(free); // drops the engine, freeing its heap
+    }
+    Ok(e)
+}
+
 /// frames. Yields to the network tasks after every frame.
 #[embassy_executor::task]
 async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
-    let mut engine = match Engine::new(PATTERN, PIXEL_COUNT, 1) {
-        Ok(e) => Some(e),
-        Err(d) => {
-            println!("embedded pattern compile error: {}", d.message);
+    let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
+    // master power (HA light switch): off = encode at brightness 0 (black on
+    // both protocols) while the engine keeps ticking, so ON resumes mid-motion
+    let out_brightness = || {
+        if shared::POWER.load(Ordering::Relaxed) {
+            BRIGHTNESS.load(Ordering::Relaxed)
+        } else {
+            0
+        }
+    };
+    // Heap discipline: exactly ONE decoded Program lives at a time — inside
+    // the engine. Rebuilds (pixel-count change, map clear) re-decode from
+    // the running pattern's blob (shared::PATTERN_BC, ≤23 KB) rather than
+    // keeping a second Program resident; a resident copy + per-rebuild
+    // clones is what OOM'd soak v5 (Programs with debug info are several
+    // times their blob size).
+    // deserialize_lean: no debug info on-device — halves a Program's RAM
+    let mut engine = match luxel_core::bytecode::deserialize_lean(PATTERN_BC) {
+        Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
+        Err(e) => {
+            println!("embedded pattern bytecode error (build bug?): {}", e);
             None
         }
     };
     set_pattern_src(PATTERN);
+    set_pattern_bc(PATTERN_BC);
+    // rebuild the engine from the running blob at the current pixel count
+    let rebuild = || {
+        luxel_core::bytecode::deserialize_lean(&crate::shared::get_pattern_bc())
+            .ok()
+            .and_then(|p| try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)).ok())
+    };
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
     }
 
-    let mut buf = alloc::vec![0u8; PROTOCOL.buf_len(PIXEL_COUNT as usize)];
+    // Apply the seeded protocol — flash may specify one different from the
+    // boot-time default the SPI was constructed with.
+    if let Err(e) = spi.apply_config(&spi_cfg(cur_protocol())) {
+        println!("spi config error: {:?}", e);
+    }
+    let mut buf =
+        alloc::vec![0u8; cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
+    // crossfade: the outgoing engine + blend timing + a reusable blend buffer
+    let mut prev: Option<Engine> = None;
+    let mut blend_start = Instant::now();
+    let mut blend_ms: u32 = 0;
+    let mut blend_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
+    let mut sensor_seen: u32 = 0;
+    // last reported vmerr site (fn, pc) — dedupes the per-frame report
+    let mut vmerr_seen: Option<(u16, u32)> = None;
+    // output-pipeline scratch (heap: the main-stack rule for task futures)
+    let mut pipe_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
+    let mut gamma_cache: (u8, Option<alloc::boxed::Box<[u8; 256]>>) = (0, None);
 
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
             match msg {
-                Msg::Code(src) => {
-                    // Compile-checked by the upload handler; failure here
-                    // would mean non-determinism, so log and keep the old
-                    // pattern.
-                    match Engine::new(&src, PIXEL_COUNT, 1) {
-                        Ok(e) => {
-                            publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                            engine = Some(e);
-                            set_pattern_src(&src);
-                            set_vmerr(None);
-                            last = Instant::now();
-                        }
-                        Err(d) => println!("recompile error (bug?): {}", d.message),
+                Msg::Code { env } => {
+                    // Envelope-validated by the sender. Drop the outgoing
+                    // engine BEFORE decoding the new program — peak heap
+                    // lands here, where the most is free.
+                    engine = None;
+                    prev = None;
+                    match luxel_core::bytecode::decode_envelope(&env) {
+                        Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
+                            Ok(p) => {
+                                set_pattern_src(le.source);
+                                set_pattern_bc(le.bytecode);
+                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
+                                {
+                                    Ok(e) => {
+                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                        engine = Some(e);
+                                        set_vmerr(None);
+                                        vmerr_seen = None;
+                                        last = Instant::now();
+                                        devicemap::mark_dirty(); // re-apply the installed map
+                                    }
+                                    Err(left) => set_vmerr(Some(alloc::format!(
+                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                        left / 1024,
+                                        RUNTIME_FLOOR / 1024
+                                    ))),
+                                }
+                            }
+                            // decode can legitimately fail on a starved heap
+                            // (try_reserve) — surface it, don't just log
+                            Err(e) => {
+                                println!("bytecode decode failed: {}", e);
+                                set_vmerr(Some(alloc::format!("{}", e)));
+                            }
+                        },
+                        Err(e) => println!("envelope decode failed (bug?): {}", e),
                     }
+                }
+                Msg::Freeze => {
+                    // free the engine's heap for whoever asked (OTA flash
+                    // phase, or a pattern upload that couldn't allocate);
+                    // the next Code/Crossfade revives rendering
+                    engine = None;
+                    prev = None;
+                    println!("engine frozen (heap released)");
                 }
                 Msg::Control(name, values) => {
                     if let Some(eng) = engine.as_mut() {
@@ -347,31 +649,198 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                         eng.set_var(&name, value);
                     }
                 }
+                // Live pixel-count change (no reboot): resize the SPI buffer
+                // and rebuild the engine at the new count from the current
+                // source. This task is the sole writer of PIXEL_COUNT.
+                Msg::Config(count) => {
+                    let count = count.clamp(1, MAX_PIXELS);
+                    PIXEL_COUNT.store(count, Ordering::Relaxed);
+                    buf = alloc::vec![0u8; cur_protocol().buf_len(count as usize)];
+                    engine = None; // free before re-decoding (peak heap)
+                    prev = None;
+                    if let Some(e) = rebuild() {
+                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                        engine = Some(e);
+                        set_vmerr(None);
+                        vmerr_seen = None;
+                        last = Instant::now();
+                        devicemap::mark_dirty(); // re-apply the installed map
+                    }
+                    // invariants are config-relative — re-check the playlist
+                    playlist::preflight_mark_dirty();
+                    println!("pixel count → {}", count);
+                }
+                // Live LED-protocol change (no reboot): reconfigure the SPI
+                // clock and resize the buffer to the new encoding. Sole writer
+                // of PROTOCOL.
+                Msg::Protocol(code) => {
+                    let p = Protocol::from_u8(code);
+                    PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
+                    if let Err(e) = spi.apply_config(&spi_cfg(p)) {
+                        println!("spi config error: {:?}", e);
+                    }
+                    buf = alloc::vec![0u8; p.buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
+                    last = Instant::now();
+                    println!("protocol → {}", p.name());
+                }
+                // Crossfade to a new pattern (playlist transition): keep the
+                // outgoing engine and blend over `ms`.
+                Msg::Crossfade { env, ms } => {
+                    // the outgoing engine stays alive on purpose (it's the
+                    // blend source) — this is the one path where two
+                    // programs coexist, bounded by the crossfade duration
+                    prev = None; // but never THREE (a fade still in flight)
+                    match luxel_core::bytecode::decode_envelope(&env) {
+                        Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
+                            Ok(p) => {
+                                set_pattern_src(le.source);
+                                set_pattern_bc(le.bytecode);
+                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
+                                {
+                                    Ok(e) => {
+                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                        if ms > 0 && engine.is_some() {
+                                            prev = engine.take();
+                                            blend_start = Instant::now();
+                                            blend_ms = ms;
+                                        }
+                                        engine = Some(e);
+                                        set_vmerr(None);
+                                        vmerr_seen = None;
+                                        last = Instant::now();
+                                        devicemap::mark_dirty();
+                                    }
+                                    Err(left) => set_vmerr(Some(alloc::format!(
+                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                        left / 1024,
+                                        RUNTIME_FLOOR / 1024
+                                    ))),
+                                }
+                            }
+                            Err(e) => {
+                                println!("crossfade bytecode decode failed: {}", e);
+                                set_vmerr(Some(alloc::format!("{}", e)));
+                            }
+                        },
+                        Err(e) => println!("envelope decode failed (bug?): {}", e),
+                    }
+                }
             }
         }
 
-        if let Some(eng) = engine.as_mut() {
+        // apply (or clear) the installed pixel map when it changed
+        if devicemap::take_dirty() {
+            if devicemap::has_map() {
+                if let Some(eng) = engine.as_mut() {
+                    devicemap::apply(eng);
+                }
+            } else {
+                // cleared → rebuild without a map (do not re-mark dirty)
+                drop(engine.take()); // free before re-decoding (peak heap)
+                engine = rebuild();
+            }
+        }
+
+        // sensor data (sensor board / POST /api/sensors) lands between frames
+        if let Some(sf) = shared::take_sensor_frame(&mut sensor_seen) {
+            if let Some(eng) = engine.as_mut() {
+                eng.set_sensors(&sf);
+            }
+        }
+
+        // network input (DDP/E1.31) overrides the engine while packets flow;
+        // LIVE_TIMEOUT_MS after the stream stops, the pattern takes back over
+        if shared::live_proto(Instant::now().as_millis() as u32).is_some() {
+            shared::LIVE_PIXELS.lock(|c| {
+                let live = c.borrow();
+                blend_buf.clear();
+                for i in 0..PIXEL_COUNT.load(Ordering::Relaxed) as usize {
+                    let p = i * 3;
+                    blend_buf.push(match live.get(p..p + 3) {
+                        Some(px) => [px[0], px[1], px[2]],
+                        None => [0, 0, 0],
+                    });
+                }
+            });
+            set_pixels(&blend_buf);
+            let b5 = out_brightness();
+            let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, b5);
+            cur_protocol().encode(wire, b5, &mut buf);
+            if let Err(e) = spi.write(&buf) {
+                println!("spi write error: {:?}", e);
+            }
+            last = Instant::now(); // keep the pattern clock fresh for resume
+        } else if engine.is_some() {
             let now = Instant::now();
             let delta_us = (now - last).as_micros();
             last = now;
             // µs → 16.16 ms
-            let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
+            let mut delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
 
-            let px = eng.frame(delta);
-            set_pixels(px);
-            PROTOCOL.encode(px, APA_BRIGHTNESS, &mut buf);
+            // sync follower: converge on the leader clock — big offsets
+            // jump, small ones slew by stretching this delta ≤ ±25%
+            if shared::SYNC_MODE.load(Ordering::Relaxed) == 2 {
+                if let Some((_, lt, at)) = shared::sync_leader() {
+                    let eng = engine.as_mut().unwrap();
+                    let target = lt + at.elapsed().as_millis();
+                    let err = target as i64 - eng.time_ms() as i64;
+                    if err.unsigned_abs() > 1000 {
+                        eng.set_time_ms(target);
+                    } else {
+                        let cap = (delta.raw() as i64 / 4).max(1);
+                        let adj = (err << 16).clamp(-cap, cap); // ms → raw
+                        delta =
+                            Fx::from_raw((delta.raw() as i64 + adj).clamp(0, i32::MAX as i64) as i32);
+                    }
+                }
+            }
+
+            // crossfade progress (0..=65536); 65536 = the fade is complete
+            let t = if blend_ms > 0 {
+                ((blend_start.elapsed().as_millis() as i64 * 65536 / blend_ms as i64).min(65536))
+                    as i32
+            } else {
+                65536
+            };
+            let out: &[[u8; 3]] = if prev.is_some() && t < 65536 {
+                // copy the incoming frame, then blend the outgoing on top
+                blend_buf.clear();
+                blend_buf.extend_from_slice(engine.as_mut().unwrap().frame(delta));
+                let px_old = prev.as_mut().unwrap().frame(delta);
+                for i in 0..blend_buf.len().min(px_old.len()) {
+                    blend_buf[i] = blend_px(px_old[i], blend_buf[i], t);
+                }
+                &blend_buf
+            } else {
+                prev = None; // fade finished
+                engine.as_mut().unwrap().frame(delta)
+            };
+            set_pixels(out);
+            let b5 = out_brightness();
+            let wire = apply_outpipe(out, &mut pipe_buf, &mut gamma_cache, b5);
+            cur_protocol().encode(wire, b5, &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }
-            if let Some(e) = eng.take_error() {
-                println!("vmerr: line {}:{}: {}", e.line, e.col, e.message);
-                set_vmerr(Some(alloc::format!(
-                    "line {}:{}: {}",
-                    e.line,
-                    e.col,
-                    e.message
-                )));
+            if let Some(e) = engine.as_mut().unwrap().take_error() {
+                // report each distinct error site once, not per frame — an
+                // erroring pattern at 120 fps floods serial and churns the
+                // (possibly already tight) heap with format! strings
+                if vmerr_seen != Some((e.fn_idx, e.pc)) {
+                    vmerr_seen = Some((e.fn_idx, e.pc));
+                    // (0,0) = no source location (lean decode) — don't
+                    // prefix noise
+                    let msg = if e.line == 0 && e.col == 0 {
+                        e.message
+                    } else {
+                        alloc::format!("line {}:{}: {}", e.line, e.col, e.message)
+                    };
+                    println!("vmerr: {}", msg);
+                    set_vmerr(Some(msg));
+                }
             }
+            // publish the engine clock (leader beacons + /api/sync)
+            shared::set_engine_time_ms(engine.as_ref().unwrap().time_ms());
         }
 
         frames += 1;
@@ -385,12 +854,50 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             if let Some(eng) = engine.as_mut() {
                 publish(&VARS_JSON, jsonview::vars_json(eng));
                 publish(&READOUTS_JSON, jsonview::readouts_json(eng));
+                // NTP-synced local time for the clock builtins
+                if let Some(local) = shared::wall_now_local() {
+                    eng.set_wall_clock(local);
+                }
             }
+        }
+
+        // playlist pre-flight: one queued item per frame — run its
+        // assert() invariants against the CURRENT config in a throwaway
+        // VM (free for assert-less patterns; the message table gates it).
+        // Same headroom math as budgeted_engine so a check can't starve
+        // the live engine; a stale-format blob reports its decode error
+        // (the fix — recompile — is the same user action either way).
+        if let Some(id) = playlist::preflight_next() {
+            let violation = match patterns::bytecode_of(&id) {
+                Some(bc) => match luxel_core::bytecode::deserialize_lean(&bc) {
+                    Ok(p) => {
+                        let budget = (esp_alloc::HEAP.free() as usize)
+                            .saturating_sub(RUNTIME_FLOOR + 4 * 1024)
+                            .max(16 * 1024);
+                        luxel_core::engine::check_asserts(
+                            &p,
+                            PIXEL_COUNT.load(Ordering::Relaxed),
+                            budget,
+                        )
+                    }
+                    Err(e) => Some(alloc::format!("{}", e)),
+                },
+                None => None, // deleted pattern; the scheduler logs it
+            };
+            if let Some(m) = &violation {
+                println!("playlist preflight: {} → {}", id, m);
+            }
+            playlist::preflight_record(&id, violation);
         }
 
         // Pace to ~120 fps: an uncapped render loop starves the network
         // tasks (choppy preview, timed-out polls) for frame rate nobody can
-        // see. Slow patterns just yield.
+        // see. Slow patterns just yield. No engine (rejected pattern) =
+        // nothing to render — idle properly instead of busy-spinning.
+        if engine.is_none() {
+            Timer::after(Duration::from_millis(50)).await;
+            continue;
+        }
         let spent = Instant::now() - last;
         if spent.as_micros() < 8_000 {
             Timer::after(Duration::from_micros(8_000 - spent.as_micros())).await;
@@ -430,4 +937,14 @@ async fn connection_task(mut controller: WifiController<'static>) {
 #[embassy_executor::task]
 async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
+}
+
+/// AP (provisioning) mode: the controller's initial config already started
+/// the access point — this task just owns it for the rest of the boot.
+#[embassy_executor::task]
+async fn ap_task(controller: WifiController<'static>) -> ! {
+    let _keep = controller;
+    loop {
+        Timer::after(Duration::from_secs(3600)).await;
+    }
 }

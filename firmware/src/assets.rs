@@ -7,9 +7,12 @@
 //! for future serial flashes — the running code uses absolute offsets and
 //! doesn't need the table entry).
 //!
-//! Archive layout (little-endian):
-//!   "LUXA" u32-count { u8 path_len, path, u8 ctype_len, ctype,
-//!                      u8 gzip, u32 len, u32 offset } … blobs
+//! Archive layout (little-endian). Format v2 ("LUX2") adds an 8-byte content
+//! hash per entry, served as a strong ETag for browser revalidation (304s):
+//!   "LUX2" u32-count { u8 path_len, path, u8 ctype_len, ctype,
+//!                      u8 gzip, u32 len, u32 offset, u8[8] etag } … blobs
+//! Legacy "LUXA" archives (no etag field) are still read — such assets get no
+//! ETag and simply revalidate to a full 200.
 //! Offsets are relative to the region start.
 
 use alloc::string::String;
@@ -31,6 +34,9 @@ pub struct AssetEntry {
     pub len: u32,
     /// absolute flash offset of the blob
     pub offset: u32,
+    /// strong ETag incl. quotes (e.g. `"a1b2c3d4e5f60718"`), or empty for a
+    /// legacy archive with no hash
+    pub etag: String,
 }
 
 static TOC: BlockingMutex<CriticalSectionRawMutex, RefCell<Vec<AssetEntry>>> =
@@ -70,7 +76,9 @@ pub fn read_chunk(offset: u32, buf: &mut [u8]) -> bool {
 /// an asset upload.
 pub fn init() {
     let mut header = [0u8; 8];
-    if !read_chunk(REGION_START, &mut header) || &header[0..4] != b"LUXA" {
+    let magic = read_chunk(REGION_START, &mut header);
+    let has_etag = &header[0..4] == b"LUX2";
+    if !magic || !(has_etag || &header[0..4] == b"LUXA") {
         println!("assets: none installed");
         TOC.lock(|c| c.borrow_mut().clear());
         return;
@@ -108,12 +116,28 @@ pub fn init() {
         let gzip = meta[0] == 1;
         let len = u32::from_le_bytes(meta[1..5].try_into().unwrap());
         let rel = u32::from_le_bytes(meta[5..9].try_into().unwrap());
+        let mut etag = String::new();
+        if has_etag {
+            let mut hash = [0u8; 8];
+            if !read_chunk(at, &mut hash) {
+                return;
+            }
+            at += 8;
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            etag.push('"');
+            for b in hash {
+                etag.push(HEX[(b >> 4) as usize] as char);
+                etag.push(HEX[(b & 0xf) as usize] as char);
+            }
+            etag.push('"');
+        }
         entries.push(AssetEntry {
             path,
             ctype,
             gzip,
             len,
             offset: REGION_START + rel,
+            etag,
         });
     }
     println!("assets: {} files installed", entries.len());
@@ -144,7 +168,7 @@ pub async fn begin(expected: u32) -> Result<AssetWriter, &'static str> {
 
 impl AssetWriter {
     pub async fn write(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
-        if self.written == 0 && !chunk.starts_with(b"LUXA") {
+        if self.written == 0 && !(chunk.starts_with(b"LUXA") || chunk.starts_with(b"LUX2")) {
             return Err("not a LUXA archive (pack with web/tools/pack-assets.mjs)");
         }
         if self.written + chunk.len() as u32 > self.expected {

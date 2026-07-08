@@ -1,9 +1,9 @@
 // Generate public/gallery.json for the pattern browser from the
 // clean-room pattern library (library/*.js), as [{ name, kind, source }].
-// kind picks the thumbnail shape: "grid" for render2D patterns (previewed
-// as a mapped rectangle), "strip" for 1D (previewed as a horizontal bar) —
-// Jeremy's 1D-bar-vs-2D-rectangle distinction. render3D-only patterns are
-// skipped until the preview grows a projection.
+// kind picks the thumbnail shape: "cloud" for render3D-only patterns (a
+// rotating projected point cloud on a cube-lattice map), "grid" for
+// render2D (a mapped rectangle), "strip" for 1D (a horizontal bar) —
+// Jeremy's 1D-bar-vs-2D-rectangle distinction.
 //
 // The scraped corpus is no longer read here (unknown licensing); it stays
 // an untracked, local-only compile-compatibility test battery.
@@ -37,8 +37,10 @@ for (const f of fs.readdirSync(libDir).sort()) {
   seen.add(key);
   const has2D = /render2D/.test(source);
   const has3D = /render3D/.test(source);
-  if (has3D && !has2D) continue; // no 3D projection tiles yet
-  entries.push({ name, kind: has2D ? "grid" : "strip", source });
+  // render3D-only → cloud; render2D (with or without render3D) → grid;
+  // plain render → strip
+  const kind = has3D && !has2D ? "cloud" : has2D ? "grid" : "strip";
+  entries.push({ name, kind, source });
 }
 
 entries.sort((a, b) => a.name.localeCompare(b.name));

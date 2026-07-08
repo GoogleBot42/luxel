@@ -9,31 +9,277 @@
 //! - No closures: a lambda sees only its own params/locals and globals.
 //! - `pixelCount` and the math constants are predefined globals.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::ast::*;
+use crate::bytecode::op;
 use crate::diag::{line_col, Diagnostic, Span};
 use crate::fixed::Fx;
 use crate::parse::parse_program;
-use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Insn, Program, Value};
+use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Program, Value};
+
+/// Compiler IR: one virtual instruction, jump targets as INSTRUCTION
+/// INDICES. This never reaches the VM — [`assemble`] lowers it to the flat
+/// LXBC byte encoding (byte-offset jumps) that `Program.code` holds and the
+/// interpreter executes in place.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Insn {
+    Const(Value),
+    LoadG(u16),
+    StoreG(u16), // pops value, pushes it back (assignment is an expression)
+    LoadL(u8),
+    StoreL(u8), // ditto
+    LoadIdx,    // [arr idx] → [elem]
+    StoreIdx,   // [arr idx val] → [val]
+    ArrLen,     // [arr] → [len]
+    NewArray(u16),
+    /// Allocate an arena array sharing const-pool entry N (all-numeric
+    /// literal, deduplicated) — copy-on-write on first mutation.
+    ConstArr(u16),
+    /// Pop the condition; falsy aborts the run with message-pool entry N
+    /// (`assert()` — top-level init only).
+    Assert(u16),
+    Dup,
+    Dup2, // [a b] → [a b a b]
+    Pop,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Pow,
+    Neg,
+    Not,
+    BitNot,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+    Jmp(u32),
+    JmpIfFalse(u32),     // pops
+    JmpIfTruePeek(u32),  // ||: jump keeping the lhs value
+    JmpIfFalsePeek(u32), // &&
+    CallFn { fn_idx: u16, argc: u8 },
+    CallBuiltin { b: u16, argc: u8 },
+    CallValue { argc: u8 },
+    Ret,
+    RetNull,
+}
 
 const MAX_GLOBALS: usize = 256;
-const MAX_LOCALS: usize = 256;
+// 255, not 256: FnDef.locals is a u8 slot *count* (a 256th slot would wrap
+// it to 0) and LoadL/StoreL operands are u8 slot indices.
+const MAX_LOCALS: usize = 255;
 
 pub fn compile(src: &str) -> Result<Program, Diagnostic> {
     let ast = parse_program(src)?;
     let mut c = Compiler::new(src);
     c.collect(&ast)?;
     c.emit_program(&ast)?;
-    Ok(Program {
-        fns: c.fns,
-        globals: c.globals,
-        exported_fns: c.exported_fns,
+    Ok(assemble(
+        c.fns,
+        c.globals,
+        c.exported_fns,
+        c.data_arrays,
+        c.assert_msgs,
+    ))
+}
+
+/// Const-pool limits (mirrored by the decoder).
+const MAX_DATA_ARRAYS: usize = 4096;
+const MAX_DATA_ELEMS: usize = 65_536;
+const MAX_ASSERT_MSGS: usize = 4096;
+
+/// Lower the compiler IR to the flat byte encoding the VM executes in
+/// place: two passes per function — measure each instruction's byte offset,
+/// then emit with jump targets mapped from instruction indices to byte
+/// offsets. Per-instruction positions collapse to offset-keyed runs.
+fn assemble(
+    fns: Vec<FnIr>,
+    globals: Vec<GlobalDef>,
+    exported_fns: Vec<(String, u16)>,
+    data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+    assert_msgs: Vec<String>,
+) -> Program {
+    let mut code: Vec<u8> = Vec::new();
+    let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
+    for f in fns {
+        // pass 1: byte offset of each instruction (+ end)
+        let mut offsets: Vec<u32> = Vec::with_capacity(f.code.len() + 1);
+        let mut at = 0u32;
+        for insn in &f.code {
+            offsets.push(at);
+            at += insn_len(insn);
+        }
+        offsets.push(at);
+        // pass 2: emit
+        let code_start = code.len() as u32;
+        for insn in &f.code {
+            emit_insn(&mut code, insn, &offsets);
+        }
+        let code_len = code.len() as u32 - code_start;
+        // positions → offset-keyed runs (statement granularity ⇒ few runs)
+        let mut pos: Vec<(u32, u32, u32)> = Vec::new();
+        for (i, &(line, col)) in f.pos.iter().enumerate() {
+            match pos.last() {
+                Some(&(_, l, c)) if l == line && c == col => {}
+                _ => pos.push((offsets[i], line, col)),
+            }
+        }
+        defs.push(FnDef {
+            name: f.name,
+            params: f.params,
+            locals: f.local_names.len() as u8,
+            code_start,
+            code_len,
+            pos,
+            local_names: f.local_names,
+        });
+    }
+    Program {
+        code,
+        data_arrays,
+        fns: defs,
+        globals,
+        exported_fns,
+        assert_msgs,
         pixel_count_g: 0,
-    })
+    }
+}
+
+/// Encoded byte length of one IR instruction.
+fn insn_len(insn: &Insn) -> u32 {
+    use Insn::*;
+    match insn {
+        Const(Value::Num(_)) | Const(Value::Arr(_)) => 5,
+        Const(Value::Fun(_)) | Const(Value::Builtin(_)) => 3,
+        LoadG(_) | StoreG(_) | NewArray(_) | ConstArr(_) | Assert(_) => 3,
+        LoadL(_) | StoreL(_) => 2,
+        Jmp(_) | JmpIfFalse(_) | JmpIfTruePeek(_) | JmpIfFalsePeek(_) => 5,
+        CallFn { .. } | CallBuiltin { .. } => 4,
+        CallValue { .. } => 2,
+        _ => 1,
+    }
+}
+
+fn emit_insn(out: &mut Vec<u8>, insn: &Insn, offsets: &[u32]) {
+    use Insn::*;
+    let target = |t: u32| offsets.get(t as usize).copied().unwrap_or(*offsets.last().unwrap());
+    match insn {
+        Const(Value::Num(v)) => {
+            out.push(op::CONST_NUM);
+            out.extend_from_slice(&v.raw().to_le_bytes());
+        }
+        // Arr constants don't exist in compiler output; encode zero.
+        Const(Value::Arr(_)) => {
+            out.push(op::CONST_NUM);
+            out.extend_from_slice(&0i32.to_le_bytes());
+        }
+        Const(Value::Fun(i)) => {
+            out.push(op::CONST_FUN);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        Const(Value::Builtin(b)) => {
+            out.push(op::CONST_BUILTIN);
+            out.extend_from_slice(&b.to_le_bytes());
+        }
+        LoadG(i) => {
+            out.push(op::LOAD_G);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        StoreG(i) => {
+            out.push(op::STORE_G);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        LoadL(i) => {
+            out.push(op::LOAD_L);
+            out.push(*i);
+        }
+        StoreL(i) => {
+            out.push(op::STORE_L);
+            out.push(*i);
+        }
+        LoadIdx => out.push(op::LOAD_IDX),
+        StoreIdx => out.push(op::STORE_IDX),
+        ArrLen => out.push(op::ARR_LEN),
+        NewArray(n) => {
+            out.push(op::NEW_ARRAY);
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        ConstArr(d) => {
+            out.push(op::CONST_ARR);
+            out.extend_from_slice(&d.to_le_bytes());
+        }
+        Assert(m) => {
+            out.push(op::ASSERT);
+            out.extend_from_slice(&m.to_le_bytes());
+        }
+        Dup => out.push(op::DUP),
+        Dup2 => out.push(op::DUP2),
+        Pop => out.push(op::POP),
+        Add => out.push(op::ADD),
+        Sub => out.push(op::SUB),
+        Mul => out.push(op::MUL),
+        Div => out.push(op::DIV),
+        Rem => out.push(op::REM),
+        Pow => out.push(op::POW),
+        Neg => out.push(op::NEG),
+        Not => out.push(op::NOT),
+        BitNot => out.push(op::BIT_NOT),
+        BitAnd => out.push(op::BIT_AND),
+        BitOr => out.push(op::BIT_OR),
+        BitXor => out.push(op::BIT_XOR),
+        Shl => out.push(op::SHL),
+        Shr => out.push(op::SHR),
+        Lt => out.push(op::LT),
+        Le => out.push(op::LE),
+        Gt => out.push(op::GT),
+        Ge => out.push(op::GE),
+        Eq => out.push(op::EQ),
+        Ne => out.push(op::NE),
+        Jmp(t) => {
+            out.push(op::JMP);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        JmpIfFalse(t) => {
+            out.push(op::JMP_IF_FALSE);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        JmpIfTruePeek(t) => {
+            out.push(op::JMP_IF_TRUE_PEEK);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        JmpIfFalsePeek(t) => {
+            out.push(op::JMP_IF_FALSE_PEEK);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        CallFn { fn_idx, argc } => {
+            out.push(op::CALL_FN);
+            out.extend_from_slice(&fn_idx.to_le_bytes());
+            out.push(*argc);
+        }
+        CallBuiltin { b, argc } => {
+            out.push(op::CALL_BUILTIN);
+            out.extend_from_slice(&b.to_le_bytes());
+            out.push(*argc);
+        }
+        CallValue { argc } => {
+            out.push(op::CALL_VALUE);
+            out.push(*argc);
+        }
+        Ret => out.push(op::RET),
+        RetNull => out.push(op::RET_NULL),
+    }
 }
 
 /// Predefined constants (name, value). `pixelCount` is global 0, written by
@@ -81,10 +327,40 @@ fn predefined() -> Vec<GlobalDef> {
     ]
 }
 
+/// One function in compiler IR form (see [`Insn`]); [`assemble`] turns the
+/// full set into the byte-coded [`Program`].
+struct FnIr {
+    name: String,
+    params: u8,
+    code: Vec<Insn>,
+    /// (line, col) per instruction — collapsed to runs at assembly.
+    pos: Vec<(u32, u32)>,
+    /// Local slot names, params first (count = the local slot count).
+    local_names: Vec<String>,
+}
+
+impl FnIr {
+    fn placeholder(name: String) -> FnIr {
+        FnIr {
+            name,
+            params: 0,
+            code: Vec::new(),
+            pos: Vec::new(),
+            local_names: Vec::new(),
+        }
+    }
+}
+
 struct Compiler<'s> {
     src: &'s str,
     globals: Vec<GlobalDef>,
-    fns: Vec<FnDef>,
+    fns: Vec<FnIr>,
+    /// Const-array pool: all-numeric array literals, deduplicated by
+    /// content (pixel-art patterns repeat the same rows hundreds of times).
+    data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+    data_map: BTreeMap<Vec<i32>, u16>,
+    /// `assert()` message pool, deduplicated.
+    assert_msgs: Vec<String>,
     /// Top-level named functions: (name, fn index, exported).
     named_fns: Vec<(String, u16, bool)>,
     exported_fns: Vec<(String, u16)>,
@@ -93,7 +369,14 @@ struct Compiler<'s> {
     demoted: Vec<String>,
     /// Names declared `const` at the top level (reassignment is an error).
     const_globals: BTreeSet<String>,
+    /// Current emit recursion depth — bounded like the parser's so a deep
+    /// AST becomes a compile error instead of a stack overflow on the
+    /// firmware's small task stack.
+    depth: u32,
 }
+
+/// Matches the parser's nesting bound (see parse.rs MAX_DEPTH).
+const MAX_EMIT_DEPTH: u32 = 60;
 
 enum Place {
     Local(u8),
@@ -107,11 +390,15 @@ impl<'s> Compiler<'s> {
         Compiler {
             src,
             globals: predefined(),
-            fns: alloc::vec![FnDef::placeholder("<init>".to_string())],
+            fns: alloc::vec![FnIr::placeholder("<init>".to_string())],
             named_fns: Vec::new(),
             exported_fns: Vec::new(),
             demoted: Vec::new(),
             const_globals: BTreeSet::new(),
+            data_arrays: Vec::new(),
+            data_map: BTreeMap::new(),
+            assert_msgs: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -154,7 +441,7 @@ impl<'s> Compiler<'s> {
         register_fns(self, top);
         // reserve placeholder defs so indices are stable during emission
         for (name, _, _) in self.named_fns.clone() {
-            self.fns.push(FnDef::placeholder(name));
+            self.fns.push(FnIr::placeholder(name));
         }
         // top level: every var / assignment is a global (even inside blocks)
         let empty: Vec<String> = Vec::new();
@@ -239,6 +526,7 @@ impl<'s> Compiler<'s> {
                 self.scan_stmt(body, locals, top)
             }
             StmtKind::Block(b) => self.scan_stmts(b, locals, top),
+            StmtKind::Assert { cond, .. } => self.scan_expr(cond, locals),
             StmtKind::Return(Some(e)) => self.scan_expr(e, locals),
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Empty => {
                 Ok(())
@@ -375,6 +663,7 @@ impl<'s> Compiler<'s> {
             self.emit_stmt(&mut ctx, s)?;
         }
         ctx.push(Insn::RetNull);
+        self.fns[0].pos = ctx.pos; // keep line info for init-time vmerrs
         self.fns[0].code = ctx.code;
         Ok(())
     }
@@ -385,7 +674,7 @@ impl<'s> Compiler<'s> {
         params: &[String],
         body: &[Stmt],
         span: Span,
-    ) -> Result<FnDef, Diagnostic> {
+    ) -> Result<FnIr, Diagnostic> {
         let locals = function_scope(params, body);
         if locals.len() > MAX_LOCALS {
             return Err(Diagnostic::new(
@@ -410,7 +699,7 @@ impl<'s> Compiler<'s> {
         let idx = self.fns.len() as u16;
         let name = format!("<lambda#{idx}>");
         // reserve slot first (nested lambdas may allocate more)
-        self.fns.push(FnDef::placeholder(name.clone()));
+        self.fns.push(FnIr::placeholder(name.clone()));
         let def = match body {
             LambdaBody::Expr(e) => {
                 let locals = function_scope(params, &[]);
@@ -462,6 +751,17 @@ impl<'s> Compiler<'s> {
     }
 
     fn emit_stmt(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
+        self.depth += 1;
+        if self.depth > MAX_EMIT_DEPTH {
+            self.depth -= 1;
+            return Err(Diagnostic::new(s.span, "statement nesting too deep"));
+        }
+        let r = self.emit_stmt_inner(ctx, s);
+        self.depth -= 1;
+        r
+    }
+
+    fn emit_stmt_inner(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
         ctx.set_pos(line_col(self.src, s.span.start));
         match &s.kind {
             StmtKind::Empty => Ok(()),
@@ -595,6 +895,31 @@ impl<'s> Compiler<'s> {
                     )),
                 }
             }
+            StmtKind::Assert { cond, message } => {
+                // Top level only: asserts run once, inline in init. Inside a
+                // function they'd fire per frame/pixel; nested in a block
+                // they'd be conditional — neither is a declared invariant.
+                // depth == 1 ⇔ this statement came straight off the top
+                // level (emit_stmt is the only way in, and it counts).
+                if !ctx.is_top || self.depth != 1 {
+                    return Err(Diagnostic::new(
+                        s.span,
+                        "assert() is only allowed at the top level of a pattern \
+                         (it runs once, as part of initialization)"
+                            .to_string(),
+                    ));
+                }
+                self.emit_expr(ctx, cond)?;
+                let text = match message {
+                    Some(m) => m.clone(),
+                    None => self.src[cond.span.start as usize..cond.span.end as usize]
+                        .trim()
+                        .to_string(),
+                };
+                let m = self.intern_msg(text, s.span)?;
+                ctx.push(Insn::Assert(m));
+                Ok(())
+            }
         }
     }
 
@@ -656,6 +981,17 @@ impl<'s> Compiler<'s> {
     }
 
     fn emit_expr(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
+        self.depth += 1;
+        if self.depth > MAX_EMIT_DEPTH {
+            self.depth -= 1;
+            return Err(Diagnostic::new(e.span, "expression nesting too deep"));
+        }
+        let r = self.emit_expr_inner(ctx, e);
+        self.depth -= 1;
+        r
+    }
+
+    fn emit_expr_inner(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
         match &e.kind {
             ExprKind::Num(v) => {
                 ctx.push(Insn::Const(Value::Num(*v)));
@@ -676,6 +1012,16 @@ impl<'s> Compiler<'s> {
                         e.span,
                         "array literal too large".to_string(),
                     ));
+                }
+                // All-numeric literals intern into the const-array pool
+                // (deduplicated — the .rodata of a pattern): the VM shares
+                // the data copy-on-write instead of materializing it.
+                if let Some(consts) = const_elements(elems) {
+                    if let Some(d) = self.intern_data(consts) {
+                        ctx.push(Insn::ConstArr(d));
+                        return Ok(());
+                    }
+                    // pool full — fall through to the runtime-built path
                 }
                 for el in elems {
                     self.emit_expr(ctx, el)?;
@@ -873,6 +1219,69 @@ impl<'s> Compiler<'s> {
     }
 }
 
+/// The literal's elements as compile-time constants, if EVERY element is a
+/// numeric literal (optionally under unary +/-). Nested arrays, idents,
+/// and expressions disqualify it — those need runtime construction.
+fn const_elements(elems: &[Expr]) -> Option<Vec<i32>> {
+    let mut out = Vec::with_capacity(elems.len());
+    for e in elems {
+        let raw = match &e.kind {
+            ExprKind::Num(v) => v.raw(),
+            ExprKind::Unary { op, expr } => match (&op, &expr.kind) {
+                (UnOp::Neg, ExprKind::Num(v)) => (-*v).raw(),
+                (UnOp::Pos, ExprKind::Num(v)) => v.raw(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        out.push(raw);
+    }
+    Some(out)
+}
+
+impl<'s> Compiler<'s> {
+    /// Intern an `assert()` message into the program's message pool
+    /// (deduplicated), truncated to the str8 wire limit on a char boundary.
+    fn intern_msg(&mut self, mut text: String, span: Span) -> Result<u16, Diagnostic> {
+        if text.len() > 255 {
+            let mut cut = 252;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            text.truncate(cut);
+            text.push_str("...");
+        }
+        if let Some(i) = self.assert_msgs.iter().position(|m| *m == text) {
+            return Ok(i as u16);
+        }
+        if self.assert_msgs.len() >= MAX_ASSERT_MSGS {
+            return Err(Diagnostic::new(
+                span,
+                format!("too many distinct assert messages (max {MAX_ASSERT_MSGS})"),
+            ));
+        }
+        self.assert_msgs.push(text);
+        Ok((self.assert_msgs.len() - 1) as u16)
+    }
+
+    /// Intern a const array's contents; None if the pool is at capacity
+    /// (the caller falls back to runtime construction).
+    fn intern_data(&mut self, raws: Vec<i32>) -> Option<u16> {
+        if let Some(&d) = self.data_map.get(&raws) {
+            return Some(d);
+        }
+        let total: usize = self.data_arrays.iter().map(|a| a.len()).sum();
+        if self.data_arrays.len() >= MAX_DATA_ARRAYS || total + raws.len() > MAX_DATA_ELEMS {
+            return None;
+        }
+        let values: Vec<Value> = raws.iter().map(|&r| Value::Num(Fx::from_raw(r))).collect();
+        let d = self.data_arrays.len() as u16;
+        self.data_arrays.push(values.into());
+        self.data_map.insert(raws, d);
+        Some(d)
+    }
+}
+
 fn bin_insn(op: BinOp) -> Insn {
     match op {
         BinOp::Add => Insn::Add,
@@ -905,7 +1314,7 @@ struct FnCtx {
     loops: Vec<LoopFrame>,
     /// Local slots declared `const` in this function.
     const_locals: BTreeSet<u8>,
-    #[allow(dead_code)]
+    /// This is fn 0 (top-level init) — where `assert()` is legal.
     is_top: bool,
 }
 
@@ -950,11 +1359,10 @@ impl FnCtx {
         self.code[at] = insn;
     }
 
-    fn finish(self, name: String, params: u8) -> FnDef {
-        FnDef {
+    fn finish(self, name: String, params: u8) -> FnIr {
+        FnIr {
             name,
             params,
-            locals: self.locals.len() as u8,
             code: self.code,
             pos: self.pos,
             local_names: self.locals,

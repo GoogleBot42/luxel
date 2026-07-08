@@ -18,17 +18,18 @@
 
   interface GalleryPick {
     name: string;
-    kind: "strip" | "grid";
+    kind: "strip" | "grid" | "cloud";
     source: string;
   }
 
   interface Tile {
     name: string;
-    kind: "strip" | "grid";
+    kind: "strip" | "grid" | "cloud";
     source: string;
     engine?: Engine;
     canvas?: HTMLCanvasElement;
     dead: boolean;
+    ready: boolean; // has drawn at least one frame (spinner off)
     last: number; // last stepped (ms)
     seen: number; // last visible (ms)
     visible: boolean;
@@ -38,12 +39,23 @@
 
   const STRIP_PX = 64;
   const GRID = 16;
+  // render3D thumbs: a 5×5×5 cube-lattice map, projected + slowly rotating
+  const CUBE = 5;
+  const CUBE_MAP: number[][] = [];
+  for (let z = 0; z < CUBE; z++)
+    for (let y = 0; y < CUBE; y++)
+      for (let x = 0; x < CUBE; x++) CUBE_MAP.push([x, y, z]);
   const STEP_BUDGET = 6; // engine frames per rAF tick
   const TILE_FPS_MS = 90; // ~11 fps per tile
   const ENGINE_CAP = 40;
 
   let tiles: Tile[] = [];
+  let search = "";
+  const matches = (t: Tile): boolean =>
+    !search || t.name.toLowerCase().includes(search.toLowerCase().trim());
+  $: shown = search ? tiles.filter(matches).length : tiles.length;
   let corpusNote = "";
+  let loading = true; // corpus (gallery.json) still streaming in
   let raf = 0;
   let cursor = 0;
 
@@ -54,6 +66,7 @@
       t.visible = e.isIntersecting;
       if (t.visible) t.seen = performance.now();
     }
+    tiles = tiles; // reflect visibility so spinners only run for in-view tiles
   });
 
   function register(node: HTMLElement, i: number): { destroy: () => void } {
@@ -66,10 +79,11 @@
 
   function ensureEngine(t: Tile): void {
     if (t.engine || t.dead) return;
-    const px = t.kind === "grid" ? GRID * GRID : STRIP_PX;
+    const px = t.kind === "grid" ? GRID * GRID : t.kind === "cloud" ? CUBE_MAP.length : STRIP_PX;
     const r = luxel.compile(t.source, px);
     if (r instanceof Engine) {
       if (t.kind === "grid") r.setMapGrid(GRID, GRID);
+      if (t.kind === "cloud") r.setMap(CUBE_MAP);
       r.setWallClock(Date.now() / 1000);
       t.engine = r;
     } else {
@@ -82,6 +96,43 @@
     const c = t.canvas;
     const ctx = c?.getContext("2d");
     if (!c || !ctx) return;
+    if (t.kind === "cloud") {
+      // rotating orthographic projection of the cube lattice (the same
+      // painter's-algorithm look as the editor's 3D map preview)
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, c.width, c.height);
+      const a = performance.now() / 2500;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const tilt = 0.45;
+      const ct = Math.cos(tilt);
+      const st = Math.sin(tilt);
+      const scale = Math.min(c.width, c.height) * 0.6;
+      const proj: { sx: number; sy: number; depth: number; i: number }[] = [];
+      for (let i = 0; i < CUBE_MAP.length; i++) {
+        const m = CUBE_MAP[i];
+        if (!m) continue;
+        const nx = ((m[0] ?? 0) / (CUBE - 1)) - 0.5;
+        const ny = ((m[1] ?? 0) / (CUBE - 1)) - 0.5;
+        const nz = ((m[2] ?? 0) / (CUBE - 1)) - 0.5;
+        const x = nx * ca - nz * sa;
+        const z = nx * sa + nz * ca;
+        const y2 = ny * ct - z * st;
+        const z2 = ny * st + z * ct;
+        proj.push({ sx: c.width / 2 + x * scale, sy: c.height / 2 + y2 * scale, depth: z2, i });
+      }
+      proj.sort((p, q) => p.depth - q.depth);
+      for (const q of proj) {
+        const cue = Math.max(0.4, Math.min(1, 0.65 + 0.5 * q.depth));
+        ctx.fillStyle = `rgb(${Math.round((px[q.i * 3] ?? 0) * cue)},${Math.round(
+          (px[q.i * 3 + 1] ?? 0) * cue,
+        )},${Math.round((px[q.i * 3 + 2] ?? 0) * cue)})`;
+        ctx.beginPath();
+        ctx.arc(q.sx, q.sy, 2.6 * cue + 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
     if (t.kind === "grid") {
       const cell = c.width / GRID;
       for (let y = 0; y < GRID; y++) {
@@ -122,6 +173,10 @@
       t.last = now;
       draw(t, t.engine.frame(dt));
       t.engine.takeError(); // tolerate runtime errors; many patterns recover
+      if (!t.ready) {
+        t.ready = true;
+        tiles = tiles; // first frame drawn → drop the spinner
+      }
       steps++;
     }
     const live = tiles.filter((t) => t.engine);
@@ -142,10 +197,16 @@
       kind: e.layout.kind === "grid" ? ("grid" as const) : ("strip" as const),
       source: e.source,
       dead: false,
+      ready: false,
       last: 0,
       seen: 0,
       visible: false,
     }));
+    // show the built-in examples (and start animating) immediately — the
+    // corpus fetch below can take a beat, and a blank "0 patterns" while it
+    // loads reads as broken
+    tiles = ex;
+    raf = requestAnimationFrame(loop);
     let corpus: Tile[] = [];
     try {
       const r = await fetch(`${import.meta.env.BASE_URL}gallery.json`);
@@ -156,9 +217,15 @@
           .filter((p) => !known.has(p.name.toLowerCase()))
           .map((p) => ({
             name: p.name,
-            kind: p.kind === "grid" ? ("grid" as const) : ("strip" as const),
+            kind:
+              p.kind === "grid"
+                ? ("grid" as const)
+                : p.kind === "cloud"
+                  ? ("cloud" as const)
+                  : ("strip" as const),
             source: p.source,
             dead: false,
+            ready: false,
             last: 0,
             seen: 0,
             visible: false,
@@ -168,8 +235,8 @@
       /* gallery.json is optional — examples still show */
     }
     if (corpus.length === 0) corpusNote = "community patterns unavailable (no gallery.json)";
-    tiles = [...ex, ...corpus];
-    raf = requestAnimationFrame(loop);
+    tiles = [...ex, ...corpus]; // reuses ex refs, so example engines survive
+    loading = false;
   });
 
   onDestroy(() => {
@@ -179,13 +246,24 @@
   });
 </script>
 
-<div class="overlay" role="dialog" aria-label="pattern browser">
+<div class="browser" role="region" aria-label="pattern browser">
   <header>
-    <span class="title">pattern browser</span>
-    <span class="dim">{tiles.length} patterns — click one to open it in the editor</span>
+    <input
+      class="search"
+      data-role="gallery-search"
+      type="search"
+      placeholder="search patterns…"
+      bind:value={search}
+    />
+    {#if loading}
+      <span class="spinner header-spinner" aria-hidden="true"></span>
+      <span class="dim" data-role="gallery-loading">loading patterns…</span>
+    {:else}
+      <span class="dim" data-role="gallery-count">
+        {search ? `${shown} of ${tiles.length}` : `${tiles.length} patterns`} — click one to open it
+      </span>
+    {/if}
     {#if corpusNote}<span class="dim">· {corpusNote}</span>{/if}
-    <span class="spacer"></span>
-    <button data-role="gallery-close" on:click={() => dispatch("close")}>close</button>
   </header>
   <div class="tiles">
     {#each tiles as t, i (i)}
@@ -194,14 +272,21 @@
         class:dead={t.dead}
         data-kind={t.kind}
         title={t.dead ? `${t.name} (does not compile)` : t.name}
+        hidden={search.trim() !== "" &&
+          !t.name.toLowerCase().includes(search.trim().toLowerCase())}
         use:register={i}
         on:click={() => !t.dead && dispatch("pick", { name: t.name, kind: t.kind, source: t.source })}
       >
-        {#if t.kind === "grid"}
-          <canvas width="96" height="96"></canvas>
-        {:else}
-          <canvas width="128" height="18"></canvas>
-        {/if}
+        <span class="thumb" class:strip={t.kind === "strip"}>
+          {#if t.kind === "grid" || t.kind === "cloud"}
+            <canvas width="96" height="96"></canvas>
+          {:else}
+            <canvas width="128" height="18"></canvas>
+          {/if}
+          {#if t.visible && !t.ready && !t.dead}
+            <span class="spinner" aria-label="loading" title="computing preview…"></span>
+          {/if}
+        </span>
         <span class="tname">{t.name}</span>
       </button>
     {/each}
@@ -209,10 +294,8 @@
 </div>
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
+  .browser {
+    height: 100%;
     background: var(--bg, #14161a);
     display: flex;
     flex-direction: column;
@@ -228,18 +311,8 @@
     font-size: 13px;
   }
 
-  .title {
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    color: var(--accent);
-  }
-
   .dim {
     color: var(--text-dim);
-  }
-
-  .spacer {
-    flex: 1;
   }
 
   .tiles {
@@ -250,6 +323,21 @@
     gap: 10px;
     padding: 12px;
     align-content: start;
+  }
+
+  .search {
+    flex: none;
+    width: 200px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-inset);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .tile[hidden] {
+    display: none;
   }
 
   .tile {
@@ -273,11 +361,48 @@
     cursor: default;
   }
 
+  .thumb {
+    position: relative;
+    display: inline-flex;
+    max-width: 100%;
+  }
+
+  .thumb.strip {
+    width: 100%;
+    justify-content: center;
+  }
+
   .tile canvas {
     image-rendering: pixelated;
     border-radius: 3px;
     background: #000;
     max-width: 100%;
+  }
+
+  .spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: tile-spin 0.7s linear infinite;
+  }
+
+  .header-spinner {
+    position: static;
+    display: inline-block;
+    margin: 0;
+    vertical-align: middle;
+  }
+
+  @keyframes tile-spin {
+    to {
+      transform: rotate(1turn);
+    }
   }
 
   .tname {

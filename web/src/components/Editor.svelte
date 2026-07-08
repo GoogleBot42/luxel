@@ -33,6 +33,9 @@
   // Svelte flushes this component before the parent echoes our edits back,
   // and the stale prop would revert every keystroke (bug found in e2e).
   let lastReceived = value;
+  /** True while applying an external `value` swap, so the resulting doc change
+   *  doesn't masquerade as a user edit (which would spuriously mark it dirty). */
+  let applyingExternal = false;
 
   // ---- breakpoint gutter ----
 
@@ -228,7 +231,7 @@
           },
         }),
         EditorView.updateListener.of((u) => {
-          if (u.docChanged) {
+          if (u.docChanged && !applyingExternal) {
             dispatch("change", u.state.doc.toString());
           }
           if (
@@ -251,11 +254,14 @@
     lastReceived = value;
     if (value !== view.state.doc.toString()) {
       // a wholesale external swap (example load) also drops breakpoints —
-      // they belong to the old program
+      // they belong to the old program. Suppress the change dispatch: the
+      // parent set this value, it isn't a user edit.
+      applyingExternal = true;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: value },
         effects: clearBps.of(null),
       });
+      applyingExternal = false;
     }
   }
 

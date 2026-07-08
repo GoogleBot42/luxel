@@ -2,12 +2,16 @@
 // assets flash region. Usage (from web/): npm run build && node
 // tools/pack-assets.mjs [outfile]
 //
-// Layout (little-endian):
-//   "LUXA" u32 count { u8 path_len, path, u8 ctype_len, ctype,
-//                      u8 gzip, u32 len, u32 offset } … blobs
+// Layout (little-endian), format v2 ("LUX2"):
+//   "LUX2" u32 count { u8 path_len, path, u8 ctype_len, ctype,
+//                      u8 gzip, u32 len, u32 offset, u8[8] etag } … blobs
 // Offsets are relative to the archive start. All text/wasm is gzipped
-// (served with Content-Encoding: gzip).
+// (served with Content-Encoding: gzip). `etag` is the first 8 bytes of
+// SHA-256 over the *raw* (pre-gzip) file — the device serves it as a strong
+// ETag so browsers can revalidate with If-None-Match and get 304s.
+// The firmware still reads legacy "LUXA" archives (no etag field).
 
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
@@ -41,16 +45,17 @@ for (const f of walk(DIST)) {
   const raw = fs.readFileSync(f);
   const gz = gzipSync(raw, { level: 9 });
   const useGz = gz.length < raw.length;
-  files.push({ path: rel, ctype, gzip: useGz, data: useGz ? gz : raw });
+  const etag = createHash("sha256").update(raw).digest().subarray(0, 8); // 8-byte content id
+  files.push({ path: rel, ctype, gzip: useGz, etag, data: useGz ? gz : raw });
 }
 
-// header size first so blob offsets are known
+// header size first so blob offsets are known (meta = 9 + 8-byte etag)
 let headerSize = 8;
 for (const f of files) {
-  headerSize += 1 + Buffer.byteLength(f.path) + 1 + Buffer.byteLength(f.ctype) + 9;
+  headerSize += 1 + Buffer.byteLength(f.path) + 1 + Buffer.byteLength(f.ctype) + 17;
 }
 let offset = headerSize;
-const parts = [Buffer.from("LUXA"), u32(files.length)];
+const parts = [Buffer.from("LUX2"), u32(files.length)];
 function u32(n) {
   const b = Buffer.alloc(4);
   b.writeUInt32LE(n);
@@ -59,7 +64,7 @@ function u32(n) {
 for (const f of files) {
   parts.push(Buffer.from([Buffer.byteLength(f.path)]), Buffer.from(f.path));
   parts.push(Buffer.from([Buffer.byteLength(f.ctype)]), Buffer.from(f.ctype));
-  parts.push(Buffer.from([f.gzip ? 1 : 0]), u32(f.data.length), u32(offset));
+  parts.push(Buffer.from([f.gzip ? 1 : 0]), u32(f.data.length), u32(offset), f.etag);
   offset += f.data.length;
 }
 for (const f of files) parts.push(f.data);

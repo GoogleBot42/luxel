@@ -87,6 +87,10 @@ export const VECTORS = [
   { name: "pow_neg2_2", setup: "n$ = -2", code: "pow(n$, 2)" },
   { name: "pow_neg2_3", setup: "n$ = -2", code: "pow(n$, 3)" },
   { name: "pow_x_0", code: "pow(5, 0)" },
+  { name: "pow_neg2_half", setup: "n$ = -2", code: "pow(n$, 0.5)" },
+  { name: "pow_neg2_15", setup: "n$ = -2", code: "pow(n$, 1.5)" },
+  { name: "log2_0", setup: "z$ = 0", code: "log2(z$)" },
+  { name: "log2_neg", setup: "n$ = -2", code: "log2(n$)" },
   { name: "pow_0_0", setup: "z$ = 0", code: "pow(z$, z$)" },
   { name: "atan1", code: "atan(1)" },
   { name: "atan100", code: "atan(100)" },
@@ -175,6 +179,15 @@ export const VECTORS = [
   { name: "postinc", setup: "i$ = 5\nr$ = i$++ * 10 + i$", code: "r$" },
   { name: "preinc", setup: "i$ = 5\nr$ = ++i$ * 10 + i$", code: "r$" },
   { name: "postdec", setup: "i$ = 5\nr$ = i$-- * 10 + i$", code: "r$" },
+  // --- refs (array/function values) in arithmetic
+  { name: "ref_arith", setup: "a$ = [1, 2, 3]\nx$ = a$ + 1\ns$ = 91", code: "s$ * 1000 + x$" },
+  { name: "fn_arith", setup: "f$ = floor\nx$ = f$ + 1\ns$ = 92", code: "s$ * 1000 + x$" },
+  { name: "ref_cmp", setup: "a$ = [1]\nb$ = [1]\nx$ = (a$ == b$) + (a$ == a$) * 10\ns$ = 95", code: "s$ * 1000 + x$" },
+  // --- arrayReplace method form: (find, replace) or (index, value)?
+  { name: "arr_replace", setup: "a$ = [1, 2, 2, 3]\na$.replace(2, 9)\ns$ = 93", code: "s$ * 100000 + a$[1] * 100 + a$[2] * 10 + a$[3]" },
+  // --- assigning to a builtin's name, then calling it
+  { name: "shadow_builtin", setup: "floor = 5\ns$ = 94", code: "s$ * 1000 + floor" },
+  { name: "shadow_call", setup: "floor = 5\nx$ = floor(2.5)\ns$ = 96", code: "s$ * 1000 + x$" },
 ];
 
 // Whole-program probes whose exported vars are compared key-by-key.

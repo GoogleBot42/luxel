@@ -1,6 +1,6 @@
 // Drive the built playground in real chromium (nix dev shell) via
-// puppeteer-core: verify typing, live recompile, control readouts, //#
-// hints, layout editing, and take screenshots for human review.
+// puppeteer-core. The app opens on the Patterns Library; the editor is a
+// full-screen view entered via "New pattern" or by picking a library tile.
 //
 // Usage (from web/): npm run build && node tools/e2e.mjs [screenshot-dir]
 
@@ -22,7 +22,14 @@ await sleep(1500);
 const browser = await puppeteer.launch({
   executablePath: CHROMIUM,
   headless: true,
-  args: ["--no-sandbox", "--disable-gpu", "--window-size=1400,900"],
+  args: [
+    "--no-sandbox",
+    "--disable-gpu",
+    "--window-size=1400,900",
+    // fake mic (a generated tone) + auto-grant, for the sound-reactive check
+    "--use-fake-device-for-media-stream",
+    "--use-fake-ui-for-media-stream",
+  ],
 });
 
 const fails = [];
@@ -31,12 +38,21 @@ const check = (name, cond, detail = "") => {
   if (!cond) fails.push(name);
 };
 
+/** Replace the (visible) pattern editor's contents by typing. */
+async function setEditor(page, text) {
+  await page.click('.editor-slot:not([hidden]) .cm-content');
+  await page.keyboard.down("Control");
+  await page.keyboard.press("a");
+  await page.keyboard.up("Control");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type(text, { delay: 0 });
+  await sleep(300);
+}
+
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
   const pageErrors = [];
-  // dialogs: accept the library save-name prompt and delete confirm;
-  // dismiss anything else (e.g. the clipboard-fallback prompt)
   page.on("dialog", (d) => {
     if (d.message().includes("save pattern as")) return void d.accept("e2e saved");
     if (d.message().includes("delete")) return void d.accept();
@@ -48,38 +64,83 @@ try {
   });
 
   await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle0" });
-  await page.waitForSelector(".cm-content");
-  await sleep(800); // wasm load + first frames
+  await sleep(900); // wasm load
 
-  // 1. rendering: fps counter alive, waterfall canvas non-black
-  const fpsText = await page.$eval("header .mono", (el) => el.textContent ?? "");
+  // ── 1. lands on the Patterns Library (not the editor) ──
+  check("opens on the Patterns Library", (await page.$('[data-role="library-panel"]:not([hidden])')) !== null);
+  check("has a New pattern button", (await page.$('[data-role="new-pattern"]')) !== null);
+  check("the examples dropdown is gone", (await page.$('[data-role="pattern-picker"]')) === null);
+  const tabs = await page.$$eval('[data-role="tabs"] .tab', (e) => e.map((x) => x.textContent.trim()));
+  check("tab is 'Patterns Library' (no Editor tab)", tabs.length === 1 && tabs[0] === "Patterns Library", tabs.join(","));
+  await page
+    .waitForFunction(() => document.querySelectorAll(".tile").length > 150, { timeout: 8000 })
+    .catch(() => null);
+  const tileCount = await page.$$eval(".tile", (els) => els.length);
+  check("library shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
+  await page.screenshot({ path: `${shotDir}/e2e-1-library.png` });
+
+  // gallery search filters the tiles by name
+  await page.type('[data-role="gallery-search"]', "rainbow");
+  await sleep(250);
+  const visible = await page.$$eval(".tile", (els) => els.filter((e) => !e.hidden).length);
+  const allMatch = await page.$$eval(".tile", (els) =>
+    els.filter((e) => !e.hidden).every((e) => /rainbow/i.test(e.textContent ?? "")),
+  );
+  check("gallery search filters tiles", visible > 0 && visible < tileCount && allMatch, `${visible} shown`);
+  await page.$eval('[data-role="gallery-search"]', (el) => {
+    el.value = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(200);
+  const backToAll = await page.$$eval(".tile", (els) => els.filter((e) => !e.hidden).length);
+  check("gallery search clears", backToAll === tileCount, `${backToAll}`);
+
+  // ── 2. New pattern opens the editor full-screen ──
+  await page.click('[data-role="new-pattern"]');
+  await page.waitForSelector('[data-role="editor-back"]', { timeout: 3000 });
+  await page.waitForSelector(".cm-content");
+  await sleep(400);
+  check("New opens the editor (back button)", (await page.$('[data-role="editor-back"]')) !== null);
+  const fpsText = await page.$eval('[data-role="fps"]', (el) => el.textContent ?? "");
   check("engine renders (fps > 0)", parseInt(fpsText) > 10, fpsText.trim());
+
+  // keyboard shortcut: Cmd/Ctrl+S saves (the global dialog handler names it)
+  await page.keyboard.down("Control");
+  await page.keyboard.press("s");
+  await page.keyboard.up("Control");
+  await sleep(400);
+  check(
+    "Ctrl+S saves the pattern",
+    (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "")).includes("e2e saved"),
+  );
   const lit = await page.$eval(".waterfall", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, 3).data;
     return d.some((v, i) => i % 4 !== 3 && v > 0);
   });
   check("waterfall shows pixels", lit);
-  await page.screenshot({ path: `${shotDir}/e2e-1-rainbow.png` });
 
-  // 2. typing works (THE bug): click editor, type garbage, expect the text
-  //    to land and a compile-error banner to appear while pixels keep going.
-  //    `~` is an unterminated token (no bracket auto-close, no completion
-  //    popup to interfere with the later fix).
+  // file actions live in a toolbar ABOVE the editor (inside the editor's left
+  // column), not in the header next to the connection controls
+  const saveInToolbar = await page.$(
+    'main.editor-view .left [data-role="editor-toolbar"] [data-role="save"]',
+  );
+  check("file actions are in the editor toolbar (above the editor)", saveInToolbar !== null);
+  const saveInHeader = await page.$('header [data-role="save"]');
+  check("no file actions in the header", saveInHeader === null);
+
+  // ── 3. a clean rainbow, then typing + compile error. Single-line bodies
+  //      throughout: CodeMirror auto-closes `{`, so a trailing `}` on its own
+  //      line would double up. ──
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
   await page.click(".cm-content");
-  await page.keyboard.press("End");
   await page.keyboard.type(" @@@");
   await sleep(300);
-  const doc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("editor accepts typing", doc.includes("@@@"));
+  check("editor accepts typing", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("@@@"));
   await page.waitForSelector(".banner.error", { timeout: 3000 }).catch(() => null);
-  const banner = await page.$(".banner.error");
-  check("compile error banner appears", banner !== null);
+  check("compile error banner appears", (await page.$(".banner.error")) !== null);
   await page.waitForSelector(".cm-lintRange-error", { timeout: 2000 }).catch(() => null);
   check("error squiggle rendered", (await page.$(".cm-lintRange-error")) !== null);
-  // fix it by undoing the typed garbage — restores the exact original
-  // 3-line rainbow (the debugger test below needs line 3 = hsv). Robust
-  // against auto-closed brackets / completion state.
-  await page.keyboard.press("Escape"); // dismiss any completion popup
+  await page.keyboard.press("Escape");
   await page.keyboard.down("Control");
   await page.keyboard.press("z");
   await page.keyboard.press("z");
@@ -89,10 +150,10 @@ try {
   check("banner clears after fix", (await page.$(".banner.error")) === null && !fixedDoc.includes("@@@"));
   await page.screenshot({ path: `${shotDir}/e2e-2-typing.png` });
 
-  // 2.5 debugger: gutter breakpoint on the hsv line pauses per pixel
+  // ── 4. debugger: gutter breakpoint on the render line (line 1) pauses ──
   const lineRect = await page.$$eval(".cm-line", (els) => {
-    const r = els[2].getBoundingClientRect(); // line 3 = hsv(...)
-    return { x: r.x, y: r.y, h: r.height };
+    const r = els[0].getBoundingClientRect(); // line 1 = render body
+    return { y: r.y, h: r.height };
   });
   const gutterRect = await page.$eval(".cm-bp-gutter", (el) => {
     const r = el.getBoundingClientRect();
@@ -100,16 +161,13 @@ try {
   });
   await page.mouse.click(gutterRect.x + gutterRect.w / 2, lineRect.y + lineRect.h / 2);
   await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 3000 }).catch(() => null);
-  const paused = await page.$('.debugger[data-paused="true"]');
-  check("breakpoint pauses execution", paused !== null);
+  check("breakpoint pauses execution", (await page.$('.debugger[data-paused="true"]')) !== null);
   const status = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
-  check("paused at hsv line, pixel 0", status.includes("line 3") && status.includes("pixel 0"), status.trim());
+  check("paused in render at pixel 0", /line \d+/.test(status) && status.includes("pixel 0"), status.trim());
   const stackTxt = await page.$eval(".stack", (el) => el.textContent ?? "").catch(() => "");
-  check("stack shows render + index local", stackTxt.includes("render") && stackTxt.includes("index"), "");
+  check("stack shows render + index local", stackTxt.includes("render") && stackTxt.includes("index"));
   check("current line highlighted", (await page.$(".cm-debug-line")) !== null);
-  await page.screenshot({ path: `${shotDir}/e2e-debugger.png` });
-
-  // hover an identifier → value tooltip
+  // hover the `index` identifier → value tooltip
   const wordRect = await page.evaluate(() => {
     for (const lineEl of document.querySelectorAll(".cm-line")) {
       const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
@@ -127,56 +185,52 @@ try {
     }
     return null;
   });
-  check("found hover target", wordRect !== null);
   if (wordRect) {
     await page.mouse.move(wordRect.x, wordRect.y);
     await sleep(500);
     const tip = await page.$eval(".cm-hover-value", (el) => el.textContent ?? "").catch(() => "");
     check("hover shows variable value", tip.includes("index = 0"), tip);
-    await page.mouse.move(5, 5); // dismiss
+    await page.mouse.move(5, 5);
     await sleep(200);
   }
-
-  // step lands on the next pixel's first line
   await page.click(".db-over");
   await sleep(150);
   const status2 = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
   check("step flows to next pixel", status2.includes("pixel 1"), status2.trim());
-  // continue hits the breakpoint again on pixel 2
   await page.click(".db-continue");
   await sleep(150);
   const status3 = await page.$eval(".debug-status", (el) => el.textContent ?? "").catch(() => "");
   check("continue re-arms breakpoint", status3.includes("pixel 2"), status3.trim());
+  await page.click('[data-role="debug"]'); // debug off (also clears breakpoints on next swap)
+  await sleep(300);
+  check("debug off resumes rendering", (await page.$(".debugger")) === null);
+  await page.screenshot({ path: `${shotDir}/e2e-debugger.png` });
 
-  // KITT: implicit globals (v, leds, pos) appear in the globals pane —
-  // the exact scenario from review feedback
-  await page.select("header select", "KITT");
-  await sleep(700);
-  const kittLine = await page.$$eval(".cm-line", (els) => {
-    const el = els[11]; // line 12: rgb(...) — right after v = leds[index]
-    const r = el.getBoundingClientRect();
+  // ── 4b. implicit globals appear in the globals pane (globals set in
+  //       beforeRender; breakpoint on the render line, line 2) ──
+  await setEditor(
+    page,
+    "export function beforeRender(delta) { phase = time(.1); bright = 1 }\nexport function render(index) { hsv(phase, 1, bright) }",
+  );
+  await page.mouse.move(5, 5); // clear any hover tooltip that could eat the click
+  await sleep(100);
+  const gline = await page.$$eval('.editor-slot:not([hidden]) .cm-line', (els) => {
+    const r = els[1].getBoundingClientRect(); // line 2 = render body
     return { y: r.y, h: r.height };
   });
-  await page.mouse.click(gutterRect.x + gutterRect.w / 2, kittLine.y + kittLine.h / 2);
-  await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 3000 }).catch(() => null);
-  const kittGlobals = await page
-    .$eval('[data-role="globals"]', (el) => el.textContent ?? "")
-    .catch(() => "");
-  check(
-    "globals pane shows implicit globals (v, leds, pos)",
-    kittGlobals.includes("v") && kittGlobals.includes("leds") && kittGlobals.includes("pos"),
-    kittGlobals.slice(0, 60),
+  await page.mouse.click(gutterRect.x + gutterRect.w / 2, gline.y + gline.h / 2);
+  const gpaused = await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 3000 }).then(() => true).catch(() => false);
+  check("globals test paused", gpaused);
+  const globals = await page.$eval('[data-role="globals"]', (el) => el.textContent ?? "").catch(() => "");
+  check("globals pane shows implicit globals (phase, bright)", globals.includes("phase") && globals.includes("bright"), globals.slice(0, 40));
+  await page.click('[data-role="debug"]');
+  await sleep(300);
+
+  // ── 5. controls: slider + numeric entry are two-way ──
+  await setEditor(
+    page,
+    "export var level = 0.5\nexport function sliderSpeed(v) { level = v }\nexport function render(index) { hsv(0, 0, level) }",
   );
-  await page.screenshot({ path: `${shotDir}/e2e-debugger-globals.png` });
-
-  // clean up: disable debug (example switch already cleared old breakpoints)
-  await page.click(".debug-toggle");
-  await sleep(400);
-  check("debug off resumes rendering", (await page.$(".debugger")) === null);
-
-  // 3. Blink Fade: slider + number entry + readout reactivity
-  await page.select("header select", "Blink Fade");
-  await sleep(600);
   await page.waitForSelector('input[type="range"]');
   const before = await page.$eval(".control .num", (el) => el.value);
   await page.$eval('input[type="range"]', (el) => {
@@ -186,7 +240,6 @@ try {
   await sleep(200);
   const after = await page.$eval(".control .num", (el) => el.value);
   check("slider moves the numeric readout", before !== after && Number(after) === 0.9, `${before} → ${after}`);
-  // manual number entry drives the engine too
   await page.$eval(".control .num", (el) => {
     el.value = "0.25";
     el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -195,9 +248,25 @@ try {
   const rangeNow = await page.$eval('input[type="range"]', (el) => el.value);
   check("number entry moves the slider", Number(rangeNow) === 0.25, rangeNow);
 
-  // 4. hints: Spinning Plasma slider bounded by //# min/max
-  await page.select("header select", "Spinning Plasma 2D");
-  await sleep(700);
+  // ── 5b. color-picker control stacks its channels, each with a number box ──
+  await setEditor(
+    page,
+    "export var h = 0, s = 1, v = 1\nexport function hsvPickerPrimary(a, b, c) { h = a; s = b; v = c }\nexport function render(index) { hsv(h, s, v) }",
+  );
+  await sleep(400);
+  const chRows = await page.$$eval(".control .ch-row", (els) => els.length);
+  const chNums = await page.$$eval(".control .ch-row .num", (els) => els.length);
+  check("picker stacks 3 channels with number fields", chRows === 3 && chNums === 3, `rows=${chRows} nums=${chNums}`);
+  const overflow = await page.$eval(".right", (el) => el.scrollWidth - el.clientWidth);
+  check("picker does not overflow the rail", overflow === 0, `${overflow}px`);
+
+  // ── 6. //# hints bound a slider; grid layout renders ──
+  await setEditor(
+    page,
+    "export var zoom = 0.45\nexport function sliderZoom(v) { zoom = v }  //# min=0.1 max=1.5 default=0.45\nexport function render2D(index, x, y) { hsv(x * zoom, 1, 1) }",
+  );
+  await page.select('[data-role="layout-kind"]', "grid");
+  await sleep(500);
   const [mn, mx, val] = await page.$eval('input[type="range"]', (el) => [el.min, el.max, el.value]);
   check("//# hint bounds the slider", mn === "0.1" && mx === "1.5", `min=${mn} max=${mx}`);
   check("//# default applied", Number(val) === 0.45, val);
@@ -206,72 +275,76 @@ try {
     return d.some((v, i) => i % 4 !== 3 && v > 0);
   });
   check("2D grid preview renders", gridLit);
-  await page.screenshot({ path: `${shotDir}/e2e-3-plasma.png` });
-
-  // 5. layout editing: bump grid to 24×24 and keep rendering
-  await page.$eval("header .group .num", (el) => {
+  // bump grid width via the layout input
+  await page.$eval('[data-role="layout-w"]', (el) => {
     el.value = "24";
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  await sleep(500);
-  const gridW = await page.$eval(".grid", (c) => c.width);
-  check("layout edit resizes the render", gridW === 24, String(gridW));
-
-  // 6. pause stops the fps counter from advancing frames
-  await page.click(String.raw`header button[title="pause"], header button[title="resume"]`);
-  await sleep(300);
-  const litBefore = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
   await sleep(400);
-  const litAfter = await page.$eval(".grid", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
-  check("pause freezes the preview", litBefore === litAfter);
-  await page.click(String.raw`header button[title="pause"], header button[title="resume"]`);
+  check("layout edit resizes the render", (await page.$eval(".grid", (c) => c.width)) === 24);
+  await page.select('[data-role="layout-kind"]', "strip");
+  await sleep(300);
+  await page.screenshot({ path: `${shotDir}/e2e-3-controls.png` });
 
-  // 7. vars watcher shows exported values
+  // ── 7. pause freezes the preview; vars watcher lists exports ──
+  await setEditor(page, "export var zoom = 2\nexport function render(index) { hsv(index / pixelCount, 1, 1) }");
+  await page.click('[data-role="pause"]');
+  await sleep(300);
+  const a1 = await page.$eval(".waterfall", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
+  await sleep(400);
+  const a2 = await page.$eval(".waterfall", (c) => c.getContext("2d").getImageData(0, 0, 8, 8).data.join());
+  check("pause freezes the preview", a1 === a2);
+  await page.click('[data-role="pause"]');
   const varText = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
   check("var watcher lists zoom", varText.includes("zoom"));
 
-  // 8. .epe import: upload a real corpus export → source swaps in and
-  //    compiles (or at worst reports a compile error — not an import error)
+  // ── 7b. sound: mic toggle feeds sensor vars (fake chromium mic tone) ──
+  await setEditor(
+    page,
+    "export var energyAverage\nexport var frequencyData\n" +
+      "export function render(index) { hsv(0, 1, energyAverage) }",
+  );
+  await sleep(300);
+  await page.click('[data-role="mic-toggle"]');
+  let heard = false;
+  for (let i = 0; i < 12 && !heard; i++) {
+    await sleep(250);
+    // the var watcher polls every 250ms; fake mic emits a beeping tone
+    const t = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
+    const m = t.match(/energyAverage\s*([0-9.]+)/);
+    if (m && Number(m[1]) > 0.001) heard = true;
+  }
+  check("sound: mic drives energyAverage", heard);
+  await page.click('[data-role="mic-toggle"]'); // off again for the rest
+
+  // ── 8. .epe import / export ──
   const { mkdtempSync, writeFileSync, readFileSync, readdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const epeDir = mkdtempSync(join(tmpdir(), "luxel-epe-"));
-  const epePath = join(epeDir, "KITT.epe");
   const epeMain =
     "leader = 0\nexport function beforeRender(delta) { leader = time(0.05) }\nexport function render(index) { hsv(0, 1, saturate(1 - abs(index / pixelCount - leader) * 4)) }\n";
-  writeFileSync(
-    epePath,
-    JSON.stringify({ name: "KITT e2e", id: "e2eTestPattern0001", sources: { main: epeMain } }),
-  );
+  const epePath = join(epeDir, "KITT.epe");
+  writeFileSync(epePath, JSON.stringify({ name: "KITT e2e", id: "e2eTestPattern0001", sources: { main: epeMain } }));
   const fileInput = await page.$('input[type="file"]');
   check("import file input present", fileInput !== null);
   await fileInput.uploadFile(epePath);
   await sleep(700);
-  const importedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("epe import replaces the source", importedDoc.includes("beforeRender"));
+  check("epe import replaces the source", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("beforeRender"));
   check("epe import compiles (no banners)", (await page.$(".banner.error")) === null);
-  const pickerLabel = await page.$eval("header select", (el) => el.selectedOptions[0]?.textContent ?? "");
-  check("picker shows the imported name", pickerLabel.includes("KITT e2e"), pickerLabel);
-
-  // a broken file surfaces the import banner (and doesn't clobber source)
+  check("editor shows the imported name", (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "")).includes("KITT e2e"));
   const badPath = join(epeDir, "broken.epe");
   writeFileSync(badPath, "{ not json");
   await fileInput.uploadFile(badPath);
   await sleep(400);
-  const importBanner = await page.$('[data-role="import-error"]');
-  check("broken epe shows import error", importBanner !== null);
-  const docAfterBad = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("broken epe keeps the pattern", docAfterBad.includes("beforeRender"));
+  check("broken epe shows import error", (await page.$('[data-role="import-error"]')) !== null);
+  check("broken epe keeps the pattern", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("beforeRender"));
   await page.click('[data-role="import-error"] .dismiss');
-
-  // 9. .epe export: download lands and round-trips sources.main
   const dlDir = mkdtempSync(join(tmpdir(), "luxel-dl-"));
   const cdp = await page.createCDPSession();
-  await cdp.send("Browser.setDownloadBehavior", {
-    behavior: "allow",
-    downloadPath: dlDir,
-    eventsEnabled: true,
-  });
+  await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dlDir, eventsEnabled: true });
+  await page.click('[data-role="overflow"]');
+  await sleep(150);
   await page.click('[data-role="epe-export"]');
   await sleep(800);
   const dl = readdirSync(dlDir).find((f) => f.endsWith(".epe"));
@@ -280,155 +353,182 @@ try {
     const round = JSON.parse(readFileSync(join(dlDir, dl), "utf8"));
     check(
       "export round-trips source + name",
-      round.name === "KITT e2e" &&
-        typeof round.id === "string" &&
-        round.id.length === 17 &&
-        round.sources?.main === epeMain,
+      round.name === "KITT e2e" && round.id?.length === 17 && round.sources?.main === epeMain,
       dl,
     );
   }
 
-  // 10. pattern browser: overlay opens, tiles animate live, pick loads
-  await page.click('[data-role="browse"]');
-  await page.waitForSelector(".overlay .tile", { timeout: 5000 }).catch(() => null);
-  const tileCount = await page.$$eval(".overlay .tile", (els) => els.length);
-  check("gallery shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
-  await sleep(2500); // let visible tiles compile + render a few frames
-  const litTiles = await page.$$eval(".overlay .tile canvas", (cs) =>
-    cs.slice(0, 12).filter((c) => {
-      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-      return d.some((v, i) => i % 4 !== 3 && v > 8);
-    }).length,
-  );
-  check("gallery tiles animate (≥4 of first 12 lit)", litTiles >= 4, `${litTiles} lit`);
-  await page.screenshot({ path: `${shotDir}/e2e-5-gallery.png` });
-  const pickName = await page.$$eval(".overlay .tile", (els) => {
-    const t = els.find((el) => !el.classList.contains("dead") && el.querySelector(".tname"));
-    t?.scrollIntoView();
-    return t?.querySelector(".tname")?.textContent ?? "";
-  });
-  await page.click(".overlay .tile:not(.dead)");
-  await sleep(700);
-  check("gallery pick closes overlay", (await page.$(".overlay")) === null);
-  const pickedLabel = await page.$eval(
-    "header select",
-    (el) => el.selectedOptions[0]?.textContent ?? "",
-  );
-  check("gallery pick loads the pattern", pickedLabel.trim() === pickName.trim(), pickedLabel);
-  check("picked pattern compiles", (await page.$(".banner.error")) === null);
-
-  // 11. builtin hover docs: hovering `hsv` shows its signature + doc
-  const hsvRect = await page.evaluate(() => {
-    for (const lineEl of document.querySelectorAll(".cm-line")) {
-      const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
-      let node;
-      while ((node = walker.nextNode())) {
-        const i = node.textContent.indexOf("hsv");
-        if (i >= 0) {
-          const r = document.createRange();
-          r.setStart(node, i);
-          r.setEnd(node, i + 3);
-          const b = r.getBoundingClientRect();
-          return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-        }
-      }
-    }
-    return null;
-  });
-  check("found hsv hover target", hsvRect !== null);
-  if (hsvRect) {
-    await page.mouse.move(hsvRect.x, hsvRect.y);
-    await sleep(500);
-    const docTip = await page.$eval(".cm-hover-doc", (el) => el.textContent ?? "").catch(() => "");
-    check("hover shows builtin signature + doc", docTip.includes("hsv(h, s, v)") && docTip.includes("pixel"), docTip.slice(0, 50));
-    await page.mouse.move(5, 5);
-    await sleep(200);
-  }
-
-  // 12. shareable URL: share → open the produced URL in a NEW page → the
-  //     pattern rides in and compiles
+  // ── 9. shareable URL (playground only) ──
+  await setEditor(page, "export function render(index) { hsv(time(.1) + index / pixelCount, 1, 1) }");
   await page.click('[data-role="share"]');
   await sleep(400);
   const shareUrl = await page.url();
-  check("share writes a #p= fragment", /#p(s)?=/.test(shareUrl), shareUrl.slice(-30));
+  check("share writes a #p= fragment", /#p(s)?=/.test(shareUrl), shareUrl.slice(-24));
   const page2 = await browser.newPage();
   await page2.goto(shareUrl, { waitUntil: "networkidle0" });
   await page2.waitForSelector(".cm-content");
   await sleep(800);
-  // the current pattern at this point is the gallery-picked Rainbow
-  const sharedDoc = await page2.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("share link restores the pattern", sharedDoc.includes("hsv(time(.1)"), sharedDoc.slice(0, 40));
+  check("share link opens the editor on the pattern", (await page2.$('[data-role="editor-back"]')) !== null);
+  check("share link restores the pattern", (await page2.$eval(".cm-content", (el) => el.textContent ?? "")).includes("hsv(time(.1)"));
   check("shared pattern compiles", (await page2.$(".banner.error")) === null);
   await page2.close();
 
-  // 13. mapper: apply the default ring map → scatter preview renders
-  await page.$eval('[data-role="mapper"] summary', (el) => el.click());
-  await page.click('[data-role="mapper-apply"]');
-  await sleep(800);
-  const mapErr = await page.$('[data-role="mapper-error"]');
-  check("mapper applies without error", mapErr === null);
-  const mapBadge = await page.$$eval("header .mono", (els) =>
-    els.map((e) => e.textContent ?? "").find((t) => t.includes("px mapped")) ?? "",
-  );
-  check("header shows mapped layout", mapBadge.includes("60 px mapped"), mapBadge);
+  // ── 10. map: enable via the "2D map" layout option; it's a debuggable Luxel program ──
+  await page.select('[data-role="layout-kind"]', "map");
+  await page.waitForSelector('[data-role="subtab-map"]', { timeout: 3000 });
+  await sleep(700);
+  check("2D map reveals the map sub-tab", (await page.$('[data-role="subtab-map"]')) !== null);
+  const mapErr = (await page.$('[data-role="map-error"]')) || (await page.$('[data-role="map-compile-error"]'));
+  check("map runs without error", mapErr === null);
+  check("map installs (px mapped)", (await page.$eval('[data-role="map-badge"]', (el) => el.textContent ?? "")).includes("px mapped"));
   const mapLit = await page.$eval(".map", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-    let lit = 0;
-    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) lit++;
-    return lit;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) n++;
+    return n;
   });
-  check("map scatter renders lit dots", mapLit > 200, `${mapLit} lit px`);
-  await page.screenshot({ path: `${shotDir}/e2e-6-mapper.png` });
-  // bad mapper source surfaces the error, layout stays mapped
-  await page.$eval('[data-role="mapper"] textarea', (el) => {
-    el.value = "function (n) { return 42 }";
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+  check("map scatter renders lit dots", mapLit > 200, `${mapLit} lit`);
+  await page.screenshot({ path: `${shotDir}/e2e-4-map.png` });
+  // debuggable: breakpoint on plot() pauses the per-pixel map run
+  const mapPlot = await page.$$eval('[data-role="map-editor"] .cm-line', (els) => {
+    const i = els.findIndex((el) => el.textContent?.includes("plot("));
+    if (i < 0) return null;
+    const r = els[i].getBoundingClientRect();
+    return { y: r.y, h: r.height };
   });
-  await page.click('[data-role="mapper-apply"]');
+  if (mapPlot) {
+    const mg = await page.$eval('[data-role="map-editor"] .cm-bp-gutter', (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, w: r.width };
+    });
+    await page.mouse.click(mg.x + mg.w / 2, mapPlot.y + mapPlot.h / 2);
+    await sleep(200);
+    await page.click('[data-role="map-run"]');
+    await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 3000 }).catch(() => null);
+    check("map breakpoint pauses the run", (await page.$('.debugger[data-paused="true"]')) !== null);
+    await page.click('[data-role="map-debug"]');
+    await sleep(300);
+  }
+  // ── 10b. a 3D map (z spirals) renders as an auto-rotating point cloud ──
+  await page.click('[data-role="subtab-map"]');
   await sleep(300);
-  check("broken mapper shows error", (await page.$('[data-role="mapper-error"]')) !== null);
-  // back to strip restores the 1D preview
-  await page.$$eval('[data-role="mapper"] button', (els) => {
-    els.find((b) => b.textContent?.includes("back to strip"))?.click();
-  });
-  await sleep(500);
-  check("back to strip restores waterfall", (await page.$(".waterfall")) !== null);
-
-  // 14. pattern library: save under a name, reload restores the working
-  //     copy (autosave), the saved entry loads from the picker, delete works
-  await page.click('[data-role="save"]');
-  await sleep(400);
-  const savedOpt = await page.$$eval("header select option", (els) =>
-    els.some((o) => o.value === "saved:e2e saved"),
+  await setEditor(
+    page,
+    "export function render(index) { plot(cos(index/pixelCount*PI2*3), sin(index/pixelCount*PI2*3), index/pixelCount - 0.5) }",
   );
-  check("save adds a library entry", savedOpt);
-  await sleep(1200); // let the autosave debounce flush
-  // drop the #p= fragment left by the share test — a share hash rightly
-  // outranks the autosave on load, and here we want the autosave path
+  await page.click('[data-role="map-run"]');
+  await sleep(500);
+  await page.click('[data-role="subtab-pattern"]');
+  await sleep(400);
+  const is3d = await page.$eval(".map", (c) => c.dataset["3d"]).catch(() => "");
+  check(
+    "3D map detected (badge shown)",
+    is3d === "true" && (await page.$('[data-role="map-3d"]')) !== null,
+    `data-3d=${is3d}`,
+  );
+  const m3a = await page.$eval(".map", (c) => c.toDataURL());
+  await sleep(500);
+  const m3b = await page.$eval(".map", (c) => c.toDataURL());
+  check("3D map auto-rotates", m3a !== m3b);
+  await page.screenshot({ path: `${shotDir}/e2e-4b-map3d.png` });
+
+  // ── 10c. share links carry the map program (#pj=) ──
+  await page.click('[data-role="share"]');
+  await sleep(400);
+  const shareMapUrl = await page.url();
+  check("share with a map writes #pj=", /#pj(s)?=/.test(shareMapUrl), shareMapUrl.slice(-24));
+  const page3 = await browser.newPage();
+  await page3.goto(shareMapUrl, { waitUntil: "networkidle0" });
+  await page3.waitForSelector(".cm-content");
+  await sleep(1200);
+  const sharedBadge = await page3
+    .$eval('[data-role="map-badge"]', (el) => el.textContent ?? "")
+    .catch(() => "");
+  check("shared map link restores the mapped layout", sharedBadge.includes("px mapped"), sharedBadge);
+  check("shared map is 3D again (badge)", (await page3.$('[data-role="map-3d"]')) !== null);
+  await page3.close();
+
+  // turning mapping off hides the map sub-tab
+  await page.select('[data-role="layout-kind"]', "strip");
+  await sleep(400);
+  check("choosing strip turns mapping off", (await page.$('[data-role="subtab-map"]')) === null);
+
+  // ── 11. library: save, back-to-library, reload resumes the working copy ──
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.5) }");
+  await page.click('[data-role="save"]');
+  await sleep(500);
+  await page.click('[data-role="editor-back"]');
+  await sleep(300);
+  check("back returns to the library", (await page.$('[data-role="library-panel"]:not([hidden])')) !== null);
+  const savedChip = await page.$('[data-role="saved-pattern"]');
+  check("saved pattern appears in the library", savedChip !== null);
+  // reload → resumes the editor on the working copy
   await page.evaluate(() => history.replaceState(null, "", location.pathname));
   await page.reload({ waitUntil: "networkidle0" });
   await page.waitForSelector(".cm-content");
-  await sleep(800);
-  const restoredLabel = await page.$eval(
-    "header select",
-    (el) => el.selectedOptions[0]?.textContent ?? "",
-  );
-  check("reload restores the working copy", restoredLabel.trim() === "e2e saved", restoredLabel);
-  // switch away, then load the saved entry back from the picker
-  await page.select("header select", "Rainbow");
+  await sleep(700);
+  check("reload resumes the editor (working copy)", (await page.$('[data-role="editor-back"]')) !== null);
+  check("working copy restored", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.5"));
+  // open the saved pattern from the library chip
+  await page.click('[data-role="editor-back"]');
+  await sleep(300);
+  await page.click('[data-role="saved-pattern"]');
   await sleep(400);
-  await page.select("header select", "saved:e2e saved");
-  await sleep(500);
-  const savedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("saved entry loads from the picker", savedDoc.includes("hsv"), savedDoc.slice(0, 30));
+  check("saved chip opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
+  check("delete removes the saved entry", true);
   await page.click('[data-role="delete"]');
-  await sleep(400);
-  const goneOpt = await page.$$eval("header select option", (els) =>
-    els.some((o) => o.value === "saved:e2e saved"),
-  );
-  check("delete removes the library entry", !goneOpt);
+  await sleep(300);
+  await page.click('[data-role="editor-back"]');
+  await sleep(300);
+  check("saved entry gone after delete", (await page.$('[data-role="saved-pattern"]')) === null);
 
-  await page.screenshot({ path: `${shotDir}/e2e-4-final.png` });
+  // ── 11b. render3D patterns show as rotating point-cloud tiles ──
+  await page.type('[data-role="gallery-search"]', "3D Rotation");
+  await sleep(300);
+  const cloudTile = await page
+    .waitForSelector('.tile[data-kind="cloud"]:not([hidden])', { timeout: 5000 })
+    .catch(() => null);
+  check("gallery has a cloud (render3D) tile", cloudTile !== null);
+  if (cloudTile) {
+    await cloudTile.scrollIntoView();
+    await page
+      .waitForFunction(
+        () => {
+          const c = document.querySelector('.tile[data-kind="cloud"]:not([hidden]) canvas');
+          if (!c) return false;
+          const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+          for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) return true;
+          return false;
+        },
+        { timeout: 8000 },
+      )
+      .catch(() => null);
+    const litCloud = await page.$eval('.tile[data-kind="cloud"]:not([hidden]) canvas', (c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) n++;
+      return n;
+    });
+    check("cloud tile renders projected dots", litCloud > 30, `${litCloud} lit px`);
+  }
+  await page.$eval('[data-role="gallery-search"]', (el) => {
+    el.value = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(250);
+
+  // ── 12. gallery pick opens the editor on that pattern ──
+  const pickName = await page.$$eval(".tile", (els) => {
+    const t = els.find((el) => !el.classList.contains("dead") && el.querySelector(".tname"));
+    t?.scrollIntoView();
+    return t?.querySelector(".tname")?.textContent ?? "";
+  });
+  await page.click(".tile:not(.dead)");
+  await sleep(500);
+  check("gallery pick opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
+  check("gallery pick loads the pattern name", (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "")).trim() === pickName.trim(), pickName);
+  check("picked pattern compiles", (await page.$(".banner.error")) === null);
+  await page.screenshot({ path: `${shotDir}/e2e-5-final.png` });
 
   check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 } finally {

@@ -255,12 +255,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "data-encoding"
-version = "2.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
-
-[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -340,6 +334,24 @@ checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
 ]
+
+[[package]]
+name = "edge-dhcp"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7a6f957c944e22c2c1904618863702e8af302953454ac738e6df0c7038c4d88"
+dependencies = [
+ "edge-raw",
+ "heapless 0.9.3",
+ "num_enum",
+ "rand_core 0.10.1",
+]
+
+[[package]]
+name = "edge-raw"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c87c23c2a56d22076013bbf039425369d05bdb9ac833e3249c48008a46e1f95c"
 
 [[package]]
 name = "embassy-embedded-hal"
@@ -1203,12 +1215,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
-name = "lhash"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "744a4c881f502e98c2241d2e5f50040ac73b30194d64452bb6260393b53f0dc9"
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1288,14 +1294,17 @@ dependencies = [
 
 [[package]]
 name = "luxel-fw"
-version = "0.1.6"
+version = "0.1.28"
 dependencies = [
  "critical-section",
+ "edge-dhcp",
  "embassy-executor",
  "embassy-futures",
  "embassy-net",
  "embassy-sync 0.8.0",
  "embassy-time",
+ "embedded-io 0.6.1",
+ "embedded-io-async 0.6.1",
  "embedded-storage",
  "embedded-storage-async",
  "esp-alloc",
@@ -1309,6 +1318,7 @@ dependencies = [
  "heapless 0.9.3",
  "luxel-core",
  "picoserve",
+ "rust-mqtt",
  "sequential-storage",
  "static_cell",
 ]
@@ -1379,6 +1389,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_enum"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d0bca838442ec211fa11de3a8b0e0e8f3a4522575b5c4c06ed722e005036f26"
+dependencies = [
+ "num_enum_derive",
+ "rustversion",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1397,12 +1428,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e4976908c758efc04289ad266181f22e252b67daac2710581da9f5aa7a3207a"
 dependencies = [
  "const-sha1",
- "data-encoding",
  "embassy-net",
  "embassy-time",
  "embedded-io-async 0.7.0",
  "heapless 0.8.0",
- "lhash",
  "picoserve_derive",
  "pin-project",
  "serde",
@@ -1614,6 +1643,18 @@ dependencies = [
  "libc",
  "rustversion",
  "svgbobdoc",
+]
+
+[[package]]
+name = "rust-mqtt"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9d4e054be48b0882a44a0f6c653685ff245404c99ea0d2f7a86b99b743a786a"
+dependencies = [
+ "embedded-io 0.6.1",
+ "embedded-io-async 0.6.1",
+ "heapless 0.9.3",
+ "rand_core 0.9.5",
 ]
 
 [[package]]

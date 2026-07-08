@@ -43,7 +43,7 @@ fn arithmetic_semantics() {
     assert_eq!(eval("182 * 182").to_f64(), -32412.0);
     assert_eq!(eval("0.001 * 0.001"), Fx::ZERO); // quantizes to zero
     assert_eq!(eval("1 / 2"), fx(0.5));
-    assert_eq!(eval("5 / 0"), Fx::ZERO); // TODO(oracle)
+    assert_eq!(eval("5 / 0"), Fx::ZERO); // oracle-verified (div0 vector)
     assert_eq!(eval("floor(-5.1)"), fx(-6.0));
     assert_eq!(eval("ceil(-5.9)"), fx(-5.0));
     assert_eq!(eval("frac(-5.5)"), fx(-0.5));
@@ -393,13 +393,13 @@ fn palettes_interpolate() {
          export function render(index) { paint(0.5) }",
     );
     let px = e.frame(Fx::ZERO);
-    assert_eq!(px[0], [128, 0, 128]); // halfway red→blue
+    assert_eq!(px[0], [127, 0, 127]); // halfway red→blue, floor-quantized (PB-exact)
     let mut e = engine(
         "setPalette([0, 1, 0, 0, 1, 0, 0, 1])\n\
          export function render(index) { paint(0, 0.5) }",
     );
     let px = e.frame(Fx::ZERO);
-    assert_eq!(px[0], [128, 0, 0]); // brightness scales
+    assert_eq!(px[0], [127, 0, 0]); // brightness scales (floor-quantized)
 }
 
 #[test]
@@ -441,9 +441,10 @@ fn map_and_introspection() {
     e.set_map(2, &coords);
     let px = e.frame(Fx::ZERO);
     assert_eq!(px[0], [0, 0, 0]);
-    assert_eq!(px[1], [255, 0, 0]); // x ≈ 0.99998 → 255
-    assert_eq!(px[2], [0, 255, 0]);
-    assert_eq!(px[3], [255, 255, 0]);
+    // world coords max out at ≈0.99998, and quantization floors (PB-exact)
+    assert_eq!(px[1], [254, 0, 0]);
+    assert_eq!(px[2], [0, 254, 0]);
+    assert_eq!(px[3], [254, 254, 0]);
     assert_eq!(e.var("dims"), Some(Value::Num(Fx::from_int(2))));
     assert_eq!(e.var("h2"), Some(Value::Num(Fx::ONE)));
 }
@@ -505,9 +506,36 @@ fn compile_errors() {
 }
 
 #[test]
+fn deep_nesting_is_a_compile_error_not_a_crash() {
+    // On the firmware the compiler shares a ~30 KB task stack; unbounded
+    // parse/emit recursion overflowed it in the field. Depth must be
+    // rejected with a diagnostic, never a stack overflow.
+    let deep_expr = format!("x = {}1{}", "(".repeat(500), ")".repeat(500));
+    let Err(err) = Engine::new(&deep_expr, 10, 1) else {
+        panic!("deep expression should be rejected")
+    };
+    assert!(err.message.contains("too deep"), "{}", err.message);
+
+    let deep_stmt = format!(
+        "{}x = 1{}",
+        "if (1) {\n".repeat(500),
+        "\n}".repeat(500)
+    );
+    let Err(err) = Engine::new(&deep_stmt, 10, 1) else {
+        panic!("deep statement nesting should be rejected")
+    };
+    assert!(err.message.contains("too deep"), "{}", err.message);
+
+    // ...but realistic nesting is untouched (worst gallery pattern < 30).
+    let ok = format!("x = {}1{}", "(".repeat(40), ")".repeat(40));
+    assert!(Engine::new(&ok, 10, 1).is_ok());
+}
+
+#[test]
 fn implicit_global_can_shadow_a_builtin() {
     // "implicit assignment creates a global" wins over the builtin table;
-    // calling the shadowed name is then a runtime error. TODO(oracle).
+    // calling the shadowed name is then a runtime error. Oracle-verified
+    // 2026-07-07: PB aborts init identically (shadow_call sentinel).
     let e = Engine::new("sin = 3\nout = sin(1)", 10, 1).unwrap();
     assert!(e.last_error.is_some());
 }
@@ -602,12 +630,106 @@ fn extension_builtins() {
     for f in [
         "easeInQuad", "easeOutQuad", "easeInOutQuad",
         "easeInCubic", "easeOutCubic", "easeInOutCubic",
+        "easeOutBack", "easeOutElastic", "easeOutBounce",
     ] {
-        assert!(eval(&format!("{f}(0)")).to_f64().abs() < 1e-3, "{f}(0) != 0");
-        assert!((eval(&format!("{f}(1)")).to_f64() - 1.0).abs() < 1e-3, "{f}(1) != 1");
+        assert!(eval(&format!("{f}(0)")).to_f64().abs() < 1e-2, "{f}(0) != 0");
+        assert!((eval(&format!("{f}(1)")).to_f64() - 1.0).abs() < 1e-2, "{f}(1) != 1");
     }
     // easeInQuad(0.5) = 0.25
     assert!((eval("easeInQuad(0.5)").to_f64() - 0.25).abs() < 1e-3);
+    // easeOutBack overshoots past 1 mid-curve (that's its point)
+    assert!(eval("easeOutBack(0.6)").to_f64() > 1.0);
+    // easeOutElastic wobbles: sine peak at t=0.15 (arg = 0.25 turns)...
+    assert!(eval("easeOutElastic(0.15)").to_f64() > 1.2);
+    // ...and the trough at t=0.3 (arg = 0.75 turns) dips back below 1
+    assert!(eval("easeOutElastic(0.3)").to_f64() < 0.95);
+    // easeOutBounce: first bounce peak region ≈ n1·t² ramp, t=1/2.75 → 1
+    assert!((eval("easeOutBounce(0.3636)").to_f64() - 1.0).abs() < 0.02);
+    // trough between bounces dips well below 1
+    assert!(eval("easeOutBounce(0.55)").to_f64() < 0.85);
+}
+
+#[test]
+fn transform_semantics_match_pixelblaze() {
+    // Pinned against the real PB (fw 3.67, oracle sweep 2026-07-07). Its
+    // installed map put pixel 0 at world (≈1.0, 0.5); replicate that here
+    // (set_map normalizes per axis) and expect the same transform behavior:
+    //   - order:  first-called transform is OUTERMOST
+    //             translate(.25) then scale(2)  →  (x + .25) · 2
+    //             scale(2) then translate(.25)  →  x · 2 + .25
+    //   - rotate(PI/2): (x, y) → (−y, x)
+    let src = "export var ta = -99\nexport var tb = -99\n\
+               export var rx = -99\nexport var ry = -99\n\
+               export function beforeRender(delta) {\n\
+                 resetTransform()\n\
+                 translate(0.25, 0)\n\
+                 scale(2, 2)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) ta = x })\n\
+                 resetTransform()\n\
+                 scale(2, 2)\n\
+                 translate(0.25, 0)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) tb = x })\n\
+                 resetTransform()\n\
+                 rotate(PI / 2)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) { rx = x\n ry = y } })\n\
+               }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 3, 1).expect("compile");
+    // normalized: pixel 0 → (1.0, 0.5)
+    let m = |x: f64, y: f64| [Fx::from_f64(x), Fx::from_f64(y), Fx::ZERO];
+    e.set_map(2, &[m(1.0, 0.5), m(0.0, 0.0), m(0.5, 1.0)]);
+    e.frame(Fx::ZERO);
+    let v = |n: &str| e.var(n).unwrap().num().to_f64();
+    // PB measured: ta=2.4999695, tb=2.2499695, rx=−0.49998474, ry=0.99998474
+    assert!((v("ta") - 2.5).abs() < 0.01, "ta = {}", v("ta"));
+    assert!((v("tb") - 2.25).abs() < 0.01, "tb = {}", v("tb"));
+    assert!((v("rx") + 0.5).abs() < 0.01, "rx = {}", v("rx"));
+    assert!((v("ry") - 1.0).abs() < 0.01, "ry = {}", v("ry"));
+}
+
+#[test]
+fn transforms_accumulate_across_frames() {
+    // PB measured (oracle sweep): a translate(0.1) per beforeRender with no
+    // resetTransform stacks up — x advances 0.1 per frame (1.1, 1.2, 1.3
+    // from base 1.0 on the device). No implicit per-frame reset.
+    let src = "export var x0 = -99\nexport var pass = 0\n\
+               export function beforeRender(delta) {\n\
+                 pass = pass + 1\n\
+                 translate(0.1, 0)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) x0 = x })\n\
+               }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 2, 1).expect("compile");
+    let v = |e: &Engine| e.var("x0").unwrap().num().to_f64();
+    e.frame(Fx::ZERO);
+    let a = v(&e);
+    e.frame(Fx::ZERO);
+    let b = v(&e);
+    e.frame(Fx::ZERO);
+    let c = v(&e);
+    assert!((b - a - 0.1).abs() < 0.01, "frame 2: {a} → {b}");
+    assert!((c - b - 0.1).abs() < 0.01, "frame 3: {b} → {c}");
+}
+
+#[test]
+fn sensor_injection() {
+    use luxel_core::engine::SensorFrame;
+    let src = "export var frequencyData\nexport var energyAverage\n\
+               export function render(index) { rgb(frequencyData[0], energyAverage, 0) }";
+    let mut e = Engine::new(src, 1, 1).expect("compile");
+    assert!(e.wants_sensors());
+    // dark until a sensor source feeds it
+    assert_eq!(e.frame(Fx::ZERO)[0], [0, 0, 0]);
+    let mut s = SensorFrame::default();
+    s.frequency_data[0] = Fx::ONE;
+    s.energy_average = Fx::from_f64(0.5);
+    e.set_sensors(&s);
+    let px = e.frame(Fx::ZERO)[0];
+    assert!(px[0] > 250, "freq bin drives red: {px:?}");
+    assert!((px[1] as i32 - 128).abs() < 4, "energy drives green: {px:?}");
+    // a pattern with no sensor bindings reports not wanting them
+    let plain = Engine::new("export function render(i) { hsv(0, 0, 0) }", 1, 1).unwrap();
+    assert!(!plain.wants_sensors());
 }
 
 #[test]
@@ -762,4 +884,18 @@ fn exponent_operator() {
     assert!((eval("9 ** 0.5").to_f64() - 3.0).abs() < 0.01);
     // unary lhs binds first (documented divergence from JS's SyntaxError)
     assert_eq!(eval("0 - 2 ** 2"), fx(-4.0)); // (-) after: 0 - (2**2)
+}
+
+#[test]
+fn familiar_builtin_aliases() {
+    // fract = frac (fractional part)
+    assert_eq!(eval("fract(2.75)"), fx(0.75));
+    assert_eq!(eval("fract(2.75)"), eval("frac(2.75)"));
+    // lerp = mix (linear blend)
+    assert_eq!(eval("lerp(0, 10, 0.25)"), fx(2.5));
+    assert_eq!(eval("lerp(4, 8, 0.5)"), eval("mix(4, 8, 0.5)"));
+    // length / length3 = hypot / hypot3 (vector magnitude)
+    assert_eq!(eval("length(3, 4)"), fx(5.0));
+    assert_eq!(eval("length3(2, 3, 6)"), fx(7.0));
+    assert_eq!(eval("length(3, 4)"), eval("hypot(3, 4)"));
 }

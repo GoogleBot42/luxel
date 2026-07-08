@@ -1,21 +1,17 @@
-//! `luxel serve` — a native mirror of the firmware's HTTP + WebSocket
-//! server, backed by the same engine core, so the browser UI can be
-//! developed and end-to-end tested without hardware. Keep routes, response
-//! shapes, and the ws protocol in lockstep with firmware/src/server.rs.
-//!
-//! Hand-rolled HTTP over std TcpStream (rather than a server crate) so the
-//! /ws upgrade keeps the raw socket and can set read timeouts — that's what
-//! makes the single-threaded full-duplex ws loop (push + multiplexed API
-//! calls) possible, mirroring the device exactly.
+//! `luxel serve` — a native mirror of the firmware's HTTP server, backed by
+//! the same engine core, so the browser UI can be developed and end-to-end
+//! tested without hardware. Keep routes and response shapes in lockstep
+//! with firmware/src/server.rs. (The /ws preview stream was removed on
+//! both sides 2026-07-08: nothing consumed it since device mode went
+//! local-preview, and it cost the firmware ~28 KB of flash.)
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
@@ -24,9 +20,75 @@ const INDEX_HTML: &str = include_str!("../../../firmware/src/index.html");
 const DEFAULT_PATTERN: &str = include_str!("../../../examples/rainbow.js");
 
 enum Msg {
-    Code(String),
+    /// Run this pattern: source (for read-back) + the LXBC bytecode the
+    /// engine is built from — the mirror executes exactly like a device.
+    Code { src: String, bc: Vec<u8> },
     Control(String, Vec<Fx>),
     Var(String, Fx),
+    Config(u32),
+    /// Start the playlist at an index (loads that item + its params).
+    PlaylistPlay(usize),
+    /// Stop auto-advance; the current pattern keeps running.
+    PlaylistStop,
+    /// Manual advance by +1 / -1 (wraps).
+    PlaylistStep(i32),
+    /// The playlist definition changed while playing — re-enter the current
+    /// item so edits (params/source) take effect.
+    PlaylistReload,
+}
+
+/// One playlist entry: a stored pattern + a snapshot of its control values, so
+/// the same pattern can appear multiple times with different params.
+#[derive(Clone, Default)]
+struct PlaylistItem {
+    pattern_id: String,
+    /// name → raw 16.16 control values (matches /api/control on the wire).
+    controls: Vec<(String, Vec<i32>)>,
+    /// Per-item duration override in seconds. `None` = inherit the playlist
+    /// default; `Some(0)` = manual (wait for next); `Some(n)` = n seconds.
+    override_sec: Option<i32>,
+}
+
+#[derive(Clone, Default)]
+struct Playlist {
+    /// Default seconds per item; 0 = manual (no auto-advance).
+    default_sec: i32,
+    /// Crossfade duration between items in ms; 0 = hard cut.
+    crossfade_ms: i32,
+    items: Vec<PlaylistItem>,
+}
+
+/// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
+fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
+    let mix = |x: u8, y: u8| (((x as i32) * (65536 - t) + (y as i32) * t) >> 16) as u8;
+    [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
+}
+
+impl Playlist {
+    /// Effective auto-advance seconds for item `i` (0 = manual).
+    fn item_sec(&self, i: usize) -> i32 {
+        self.items
+            .get(i)
+            .and_then(|it| it.override_sec)
+            .unwrap_or(self.default_sec)
+    }
+}
+
+/// Protocol name for a stored code (mirrors leds::Protocol; the mirror drives
+/// no real LEDs, so it just round-trips the setting for the UI/e2e).
+fn protocol_name(code: u8) -> &'static str {
+    match code {
+        1 => "ws2812",
+        _ => "sk9822",
+    }
+}
+
+fn protocol_code(name: &str) -> Option<u8> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "sk9822" | "apa102" => Some(0),
+        "ws2812" | "ws2811" | "ws2815" | "ws281x" => Some(1),
+        _ => None,
+    }
 }
 
 /// A stored pattern (the device pattern library; firmware keeps these in
@@ -34,29 +96,533 @@ enum Msg {
 /// firmware/src/server.rs:
 ///   GET    /api/patterns              {"patterns":[{"id","name"},…]}
 ///   GET    /api/patterns/<id>         {"id","name","source"}
-///   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
-///                                     (same name = overwrite, id stable)
+///   POST   /api/patterns              body = LXP1 envelope (name+source+LXBC)
+///                                     → {"ok":true,"id"} (same name =
+///                                     overwrite, id stable)
 ///   DELETE /api/patterns/<id>         {"ok":true}
-///   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | code-error shape
+///   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | error shape
 #[derive(Clone)]
 struct StoredPattern {
     id: String,
     name: String,
     source: String,
+    /// LXBC bytecode — what activation actually executes (device parity).
+    bc: Vec<u8>,
 }
 
+const MAX_PIXELS: u32 = 2048;
+
 struct State {
-    pixel_count: u32,
+    pixel_count: AtomicU32,
     inbox: Mutex<Vec<Msg>>,
     pixels: Mutex<Vec<u8>>,
     fps: AtomicU32,
     vmerr: Mutex<Option<String>>,
     pattern_src: Mutex<String>,
+    /// LXBC blob of the running pattern (GET /api/pattern.lxp — sync adopt).
+    pattern_bc: Mutex<Vec<u8>>,
     controls_json: Mutex<String>,
     vars_json: Mutex<String>,
     readouts_json: Mutex<String>,
     library: Mutex<Vec<StoredPattern>>,
     next_id: AtomicU32,
+    brightness: AtomicU8,
+    protocol: AtomicU8,
+    playlist: Mutex<Playlist>,
+    pl_playing: AtomicBool,
+    pl_index: AtomicUsize,
+    wifi_ssid: Mutex<Option<String>>,
+    /// Installed pixel map (dims, per-pixel [x,y,z] in Fx) + a re-apply flag.
+    device_map: Mutex<Option<(u8, Vec<[Fx; 3]>)>>,
+    map_dirty: AtomicBool,
+    /// Network input (DDP/E1.31): assembled RGB frame + when it last moved.
+    /// While packets flow the render loop shows this instead of the engine;
+    /// LIVE_TIMEOUT after the last packet, the running pattern resumes.
+    live_pixels: Mutex<Vec<u8>>,
+    live_mark: Mutex<Option<Instant>>,
+    live_proto: AtomicU8, // 0 = none, 1 = ddp, 2 = e131
+    /// Master power (the HA light switch; mirror drives no strip, so this is
+    /// state-only) — see the MQTT bridge below.
+    power: AtomicBool,
+    /// Library id of the running pattern ("" = ad-hoc code push).
+    current_pattern_id: Mutex<String>,
+    /// MQTT broker config (None = disabled) + a generation counter the bridge
+    /// watches to reconnect on change, and its connection status.
+    mqtt_cfg: Mutex<Option<MqttCfg>>,
+    mqtt_gen: AtomicU32,
+    mqtt_connected: AtomicBool,
+    /// Latest sensor frame (POST /api/sensors) + seq so the render loop
+    /// applies each frame once (mirrors shared::SENSOR_FRAME).
+    sensor_frame: Mutex<Option<luxel_core::engine::SensorFrame>>,
+    sensor_seq: AtomicU32,
+    /// Luxel-to-Luxel sync: role (0 off, 1 leader, 2 follower), this
+    /// process's boot id, the engine clock (published by the render loop
+    /// for the leader beacon), and the last beacon heard as a follower.
+    sync_mode: AtomicU8,
+    sync_boot_id: u32,
+    /// Local-time offset from UTC in minutes (clock builtins).
+    tz_minutes: std::sync::atomic::AtomicI32,
+    /// Output pipeline knobs (settings round-trip; the mirror drives no
+    /// strip, so they aren't applied to the preview snapshot — matching
+    /// the firmware, whose preview also shows logical colors).
+    color_order: AtomicU8,
+    gamma_tenths: AtomicU8,
+    cap_ma: AtomicU32,
+    engine_time_ms: std::sync::atomic::AtomicU64,
+    sync_leader: Mutex<Option<(u32, u64, Instant)>>,
+}
+
+fn sync_mode_name(m: u8) -> &'static str {
+    match m {
+        1 => "leader",
+        2 => "follower",
+        _ => "off",
+    }
+}
+
+/// Minimal HTTP GET for the follower's pattern pull (the mirror trusts its
+/// loopback/LAN peer; 64 KB cap).
+fn http_get_bytes(addr: &str, path: &str) -> Option<Vec<u8>> {
+    let mut s = TcpStream::connect(addr).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+    write!(s, "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").ok()?;
+    let mut buf = Vec::new();
+    s.take(64 * 1024).read_to_end(&mut buf).ok()?;
+    let body_at = buf.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
+    Some(buf[body_at..].to_vec())
+}
+
+/// Leader/follower beacon loop (both roles share the thread; the mode
+/// atomic steers it live). `target`/`port` come from --sync-target/-port,
+/// `leader_http` from --sync-http-port (the leader's HTTP port for pattern
+/// pulls — a real device is always :80) so e2e can run two mirrors over
+/// loopback.
+fn sync_thread(state: Arc<State>, target: String, port: u16, leader_http: u16) {
+    use luxel_core::netin::{build_sync, fnv1a, parse_sync};
+    let send_sock = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok();
+    if let Some(s) = &send_sock {
+        let _ = s.set_broadcast(true);
+    }
+    let mut recv_sock: Option<std::net::UdpSocket> = None;
+    let mut sensor_sent: u32 = 0;
+    let mut last_pull: u32 = 0;
+    let mut pull_at = Instant::now() - Duration::from_secs(10);
+    let mut buf = [0u8; 160];
+    loop {
+        match state.sync_mode.load(Ordering::Relaxed) {
+            1 => {
+                recv_sock = None;
+                // piggyback the sensor frame only when it moved since last
+                let seq = state.sensor_seq.load(Ordering::Relaxed);
+                let sb = if seq != sensor_sent {
+                    sensor_sent = seq;
+                    state
+                        .sensor_frame
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(sensor_frame_to_sb)
+                } else {
+                    None
+                };
+                let hash = fnv1a(state.pattern_src.lock().unwrap().as_bytes());
+                let pkt = build_sync(
+                    state.sync_boot_id,
+                    state.engine_time_ms.load(Ordering::Relaxed),
+                    hash,
+                    sb.as_deref(),
+                );
+                if let Some(s) = &send_sock {
+                    let _ = s.send_to(&pkt, (target.as_str(), port));
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            2 => {
+                if recv_sock.is_none() {
+                    recv_sock = std::net::UdpSocket::bind(("0.0.0.0", port))
+                        .inspect_err(|e| eprintln!("sync: bind :{port} failed ({e})"))
+                        .ok();
+                    if let Some(s) = &recv_sock {
+                        let _ = s.set_read_timeout(Some(Duration::from_millis(400)));
+                    }
+                    if recv_sock.is_none() {
+                        std::thread::sleep(Duration::from_secs(2));
+                        continue;
+                    }
+                }
+                if let Some(s) = &recv_sock {
+                    if let Ok((n, peer)) = s.recv_from(&mut buf) {
+                        if let Some(b) = parse_sync(&buf[..n]) {
+                            *state.sync_leader.lock().unwrap() =
+                                Some((b.boot_id, b.time_ms, Instant::now()));
+                            if let Some(sf) = b.sensor {
+                                *state.sensor_frame.lock().unwrap() = Some(sf);
+                                state.sensor_seq.fetch_add(1, Ordering::Relaxed);
+                            }
+                            // pattern distribution: the leader runs something
+                            // we don't — pull it and adopt it
+                            if let Some(h) = b.pattern_hash {
+                                let local =
+                                    fnv1a(state.pattern_src.lock().unwrap().as_bytes());
+                                if h != local
+                                    && h != last_pull
+                                    && pull_at.elapsed() >= Duration::from_secs(2)
+                                {
+                                    last_pull = h;
+                                    pull_at = Instant::now();
+                                    let addr = format!("{}:{}", peer.ip(), leader_http);
+                                    // an LXP1 envelope — exactly what /api/code takes
+                                    if let Some(env) = http_get_bytes(&addr, "/api/pattern.lxp") {
+                                        let r = api_code(&state, &env);
+                                        if !r.contains("\"ok\":true") {
+                                            eprintln!("sync: leader pattern rejected: {r}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                recv_sock = None;
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        }
+    }
+}
+
+/// Re-encode a SensorFrame as the 98-byte SB wire format (for the beacon).
+fn sensor_frame_to_sb(s: &luxel_core::engine::SensorFrame) -> Vec<u8> {
+    let mut p = Vec::with_capacity(luxel_core::netin::SB_FRAME_LEN);
+    p.extend_from_slice(luxel_core::netin::SB_MAGIC);
+    let u16le = |v: Fx| (v.raw().clamp(0, 0xFFFF) as u16).to_le_bytes();
+    for v in &s.frequency_data {
+        p.extend_from_slice(&u16le(*v));
+    }
+    p.extend_from_slice(&u16le(s.energy_average));
+    p.extend_from_slice(&u16le(s.max_frequency_magnitude));
+    p.extend_from_slice(&(s.max_frequency.to_int_trunc().clamp(0, 65535) as u16).to_le_bytes());
+    for v in &s.accelerometer {
+        p.extend_from_slice(&((v.raw().clamp(-32768, 32767) as i16).to_le_bytes()));
+    }
+    p.extend_from_slice(&u16le(s.light));
+    for v in &s.analog_inputs {
+        p.extend_from_slice(&u16le(*v));
+    }
+    p.extend_from_slice(b"END\0");
+    p
+}
+
+/// MQTT broker settings (mirrors the firmware's config::MqttConfig).
+#[derive(Clone)]
+struct MqttCfg {
+    host: String,
+    port: u16,
+    user: String,
+    pass: String,
+}
+
+/// How long after the last DDP/E1.31 packet the pattern takes back over.
+const LIVE_TIMEOUT: Duration = Duration::from_millis(2500);
+
+/// The protocol currently overriding the engine, if any.
+fn live_proto(state: &State) -> Option<&'static str> {
+    let fresh = state
+        .live_mark
+        .lock()
+        .unwrap()
+        .is_some_and(|m| m.elapsed() < LIVE_TIMEOUT);
+    match state.live_proto.load(Ordering::Relaxed) {
+        1 if fresh => Some("ddp"),
+        2 if fresh => Some("e131"),
+        _ => None,
+    }
+}
+
+/// Write `data` at byte `offset` of the live frame (grows as needed, bounded
+/// by the strip) and stamp it fresh.
+fn live_write(state: &State, offset: usize, data: &[u8], proto: u8) {
+    let max = state.pixel_count.load(Ordering::Relaxed) as usize * 3;
+    if offset >= max {
+        return;
+    }
+    let n = data.len().min(max - offset);
+    {
+        let mut buf = state.live_pixels.lock().unwrap();
+        if buf.len() < offset + n {
+            buf.resize(offset + n, 0);
+        }
+        buf[offset..offset + n].copy_from_slice(&data[..n]);
+    }
+    *state.live_mark.lock().unwrap() = Some(Instant::now());
+    state.live_proto.store(proto, Ordering::Relaxed);
+}
+
+// ---- MQTT / Home Assistant bridge (mirrors firmware/src/mqtt.rs) ----
+// Topics and payloads come from luxel_core::hamqtt, so the wire contract is
+// byte-identical to the device's. rumqttc's sync client runs in one thread.
+
+/// The mirror's device id (client id, topic segment, HA unique_id).
+const MQTT_ID: &str = "luxel-native";
+
+fn mqtt_thread(state: Arc<State>) {
+    loop {
+        let gen = state.mqtt_gen.load(Ordering::Relaxed);
+        let cfg = state.mqtt_cfg.lock().unwrap().clone();
+        let Some(cfg) = cfg else {
+            state.mqtt_connected.store(false, Ordering::Relaxed);
+            // disabled — poll for a config (the mirror has no signal primitive)
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        };
+        if let Err(e) = mqtt_session(&state, &cfg, gen) {
+            eprintln!("mqtt: {e}");
+        }
+        state.mqtt_connected.store(false, Ordering::Relaxed);
+        // back off before reconnecting, but react to config changes quickly
+        for _ in 0..30 {
+            if state.mqtt_gen.load(Ordering::Relaxed) != gen {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// One broker session: announce (availability + HA discovery + state), then
+/// serve commands until the connection drops or the config generation moves.
+fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), String> {
+    use luxel_core::hamqtt;
+    use rumqttc::{Client, Event, Incoming, LastWill, MqttOptions, QoS};
+
+    let avail = hamqtt::availability_topic(MQTT_ID);
+    let mut opts = MqttOptions::new(MQTT_ID, &cfg.host, cfg.port);
+    opts.set_keep_alive(Duration::from_secs(30));
+    opts.set_last_will(LastWill::new(&avail, hamqtt::OFFLINE, QoS::AtMostOnce, true));
+    if !cfg.user.is_empty() {
+        opts.set_credentials(&cfg.user, &cfg.pass);
+    }
+    let (client, mut conn) = Client::new(opts, 16);
+    let err = |e: rumqttc::ClientError| e.to_string();
+
+    let light_set = hamqtt::light_set_topic(MQTT_ID);
+    let pattern_set = hamqtt::pattern_set_topic(MQTT_ID);
+    let playlist_cmd = hamqtt::playlist_cmd_topic(MQTT_ID);
+    for t in [&light_set, &pattern_set, &playlist_cmd] {
+        client.subscribe(t, QoS::AtMostOnce).map_err(err)?;
+    }
+    client
+        .publish(&avail, QoS::AtMostOnce, true, hamqtt::ONLINE)
+        .map_err(err)?;
+    let version = env!("CARGO_PKG_VERSION");
+    client
+        .publish(
+            hamqtt::light_config_topic(MQTT_ID),
+            QoS::AtMostOnce,
+            true,
+            hamqtt::light_discovery_json(MQTT_ID, MQTT_ID, version),
+        )
+        .map_err(err)?;
+    for which in ["fps", "heap"] {
+        client
+            .publish(
+                hamqtt::diag_config_topic(MQTT_ID, which),
+                QoS::AtMostOnce,
+                true,
+                hamqtt::diag_discovery_json(MQTT_ID, MQTT_ID, version, which),
+            )
+            .map_err(err)?;
+    }
+    client
+        .publish(
+            hamqtt::playlist_switch_config_topic(MQTT_ID),
+            QoS::AtMostOnce,
+            true,
+            hamqtt::playlist_switch_discovery_json(MQTT_ID, MQTT_ID, version),
+        )
+        .map_err(err)?;
+    for which in ["next", "prev"] {
+        client
+            .publish(
+                hamqtt::playlist_button_config_topic(MQTT_ID, which),
+                QoS::AtMostOnce,
+                true,
+                hamqtt::playlist_button_discovery_json(MQTT_ID, MQTT_ID, version, which),
+            )
+            .map_err(err)?;
+    }
+
+    let options = |state: &State| -> Vec<String> {
+        state.library.lock().unwrap().iter().map(|p| p.name.clone()).collect()
+    };
+    let mut last_options = options(state);
+    client
+        .publish(
+            hamqtt::pattern_config_topic(MQTT_ID),
+            QoS::AtMostOnce,
+            true,
+            hamqtt::pattern_discovery_json(MQTT_ID, MQTT_ID, version, &last_options),
+        )
+        .map_err(err)?;
+
+    let mut last_light = String::new();
+    let mut last_pattern: Option<String> = None;
+    let mut last_playing: Option<bool> = None;
+    let mut diag_at = Instant::now();
+    loop {
+        // publish dirty state (initial pass runs before the first recv)
+        let light = hamqtt::light_state_json(
+            state.power.load(Ordering::Relaxed),
+            hamqtt::brightness_to_ha(state.brightness.load(Ordering::Relaxed)),
+        );
+        if light != last_light {
+            client
+                .publish(hamqtt::light_state_topic(MQTT_ID), QoS::AtMostOnce, false, light.clone())
+                .map_err(err)?;
+            last_light = light;
+        }
+        let cur = state.current_pattern_id.lock().unwrap().clone();
+        let name = pattern_by_id(state, &cur).map(|p| p.name).unwrap_or_default();
+        if last_pattern.as_deref() != Some(&name) {
+            client
+                .publish(hamqtt::pattern_state_topic(MQTT_ID), QoS::AtMostOnce, false, name.clone())
+                .map_err(err)?;
+            last_pattern = Some(name);
+        }
+        let now = options(state);
+        if now != last_options {
+            last_options = now;
+            client
+                .publish(
+                    hamqtt::pattern_config_topic(MQTT_ID),
+                    QoS::AtMostOnce,
+                    true,
+                    hamqtt::pattern_discovery_json(MQTT_ID, MQTT_ID, version, &last_options),
+                )
+                .map_err(err)?;
+        }
+        let playing = state.pl_playing.load(Ordering::Relaxed);
+        if last_playing != Some(playing) {
+            client
+                .publish(
+                    hamqtt::playlist_state_topic(MQTT_ID),
+                    QoS::AtMostOnce,
+                    false,
+                    if playing { "ON" } else { "OFF" },
+                )
+                .map_err(err)?;
+            last_playing = Some(playing);
+        }
+        if diag_at.elapsed() >= Duration::from_secs(15) {
+            diag_at = Instant::now();
+            client
+                .publish(
+                    hamqtt::diag_state_topic(MQTT_ID),
+                    QoS::AtMostOnce,
+                    false,
+                    hamqtt::diag_state_json(state.fps.load(Ordering::Relaxed), 0),
+                )
+                .map_err(err)?;
+        }
+
+        match conn.recv_timeout(Duration::from_millis(500)) {
+            Ok(Ok(Event::Incoming(Incoming::ConnAck(_)))) => {
+                state.mqtt_connected.store(true, Ordering::Relaxed);
+            }
+            Ok(Ok(Event::Incoming(Incoming::Publish(p)))) => {
+                let payload = String::from_utf8_lossy(&p.payload).into_owned();
+                if p.topic == light_set {
+                    let cmd = hamqtt::parse_light_command(&payload);
+                    if let Some(ha) = cmd.brightness {
+                        state
+                            .brightness
+                            .store(hamqtt::brightness_from_ha(ha), Ordering::Relaxed);
+                    }
+                    if let Some(on) = cmd.on {
+                        state.power.store(on, Ordering::Relaxed);
+                    }
+                } else if p.topic == pattern_set {
+                    // run a library pattern by its HA option (exact name)
+                    let found = state
+                        .library
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find(|sp| sp.name == payload)
+                        .map(|sp| (sp.id.clone(), sp.source.clone(), sp.bc.clone()));
+                    match found {
+                        Some((id, source, bc)) => {
+                            // stored blobs are decode-validated on save
+                            if luxel_core::bytecode::deserialize(&bc).is_ok() {
+                                push(state, Msg::Code { src: source, bc });
+                                *state.current_pattern_id.lock().unwrap() = id;
+                            } else {
+                                eprintln!("mqtt: stored bytecode for \"{payload}\" is stale");
+                            }
+                        }
+                        None => eprintln!("mqtt: no pattern named \"{payload}\""),
+                    }
+                } else if p.topic == playlist_cmd {
+                    match payload.as_str() {
+                        "play" => push(state, Msg::PlaylistPlay(0)),
+                        "stop" => push(state, Msg::PlaylistStop),
+                        "next" => push(state, Msg::PlaylistStep(1)),
+                        "prev" => push(state, Msg::PlaylistStep(-1)),
+                        other => eprintln!("mqtt: unknown playlist cmd \"{other}\""),
+                    }
+                }
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(rumqttc::RecvTimeoutError::Timeout) => {}
+            Err(rumqttc::RecvTimeoutError::Disconnected) => return Err("disconnected".into()),
+        }
+        if state.mqtt_gen.load(Ordering::Relaxed) != gen {
+            let _ = client.publish(&avail, QoS::AtMostOnce, true, hamqtt::OFFLINE);
+            let _ = client.disconnect();
+            return Ok(()); // config changed — reconnect with the new one
+        }
+    }
+}
+
+/// UDP listener for one network-input protocol; parse is shared with the
+/// firmware via luxel_core::netin.
+fn netin_listener(state: Arc<State>, port: u16) {
+    let sock = match std::net::UdpSocket::bind(("0.0.0.0", port)) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("netin: bind :{port} failed ({e}); network input off");
+            return;
+        }
+    };
+    if port == luxel_core::netin::E131_PORT {
+        // sACN defaults to multicast 239.255.<universe-hi>.<universe-lo>;
+        // join enough universes for the largest strip. Unicast also works.
+        let n = (MAX_PIXELS as usize * 3).div_ceil(luxel_core::netin::E131_CHANNELS);
+        for u in 1..=n as u16 {
+            let [hi, lo] = u.to_be_bytes();
+            let _ = sock.join_multicast_v4(
+                &std::net::Ipv4Addr::new(239, 255, hi, lo),
+                &std::net::Ipv4Addr::UNSPECIFIED,
+            );
+        }
+    }
+    let mut buf = [0u8; 2048];
+    loop {
+        let Ok((len, _)) = sock.recv_from(&mut buf) else {
+            continue;
+        };
+        let pkt = &buf[..len];
+        if port == luxel_core::netin::DDP_PORT {
+            if let Some(d) = luxel_core::netin::parse_ddp(pkt) {
+                live_write(&state, d.offset, d.data, 1);
+            }
+        } else if let Some(d) = luxel_core::netin::parse_e131(pkt) {
+            let off = (d.universe.max(1) as usize - 1) * luxel_core::netin::E131_CHANNELS;
+            live_write(&state, off, d.data, 2);
+        }
+    }
 }
 
 fn push(state: &State, msg: Msg) {
@@ -69,11 +635,16 @@ fn status_json(state: &State) -> String {
         Some(e) => format!("\"{}\"", json_escape(e)),
         None => String::from("null"),
     };
+    let live = match live_proto(state) {
+        Some(p) => format!("\"{p}\""),
+        None => String::from("null"),
+    };
     format!(
-        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":0,\"vmerr\":{}}}",
+        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":0,\"live\":{},\"vmerr\":{}}}",
         fps,
-        state.pixel_count,
+        state.pixel_count.load(Ordering::Relaxed),
         env!("CARGO_PKG_VERSION"),
+        live,
         vmerr
     )
 }
@@ -87,27 +658,117 @@ fn controls_json(state: &State) -> String {
     }
 }
 
+/// Parse a `POST /api/map` body: `<dims> <raw...>` (raw 16.16, dims per pixel).
+/// None = clear.
+fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>)> {
+    let mut it = body.split_whitespace();
+    let dims: u8 = it.next()?.parse().ok()?;
+    if !(2..=3).contains(&dims) {
+        return None;
+    }
+    let vals: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
+    let n = vals.len() / dims as usize;
+    if n == 0 {
+        return None;
+    }
+    let coords: Vec<[Fx; 3]> = (0..n)
+        .map(|i| {
+            let mut c = [Fx::ZERO; 3];
+            for d in 0..dims as usize {
+                c[d] = Fx::from_raw(vals[i * dims as usize + d]);
+            }
+            c
+        })
+        .collect();
+    Some((dims, coords))
+}
+
+/// Apply the installed map to an engine (no-op if none).
+fn apply_map(state: &State, engine: &mut Engine) {
+    if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
+        engine.set_map(*dims, coords);
+    }
+}
+
+/// Load playlist item `i`: build its stored bytecode into an engine (the
+/// device execution path), apply its saved control values, and publish the
+/// source/controls snapshots. Returns the engine + source + bytecode on
+/// success. Also records the active index.
+fn enter_item(state: &State, i: usize) -> Option<(Engine, String, Vec<u8>)> {
+    let item = state.playlist.lock().unwrap().items.get(i).cloned()?;
+    // advance the active index even if the pattern is missing (deleted), so a
+    // dangling entry just holds for its duration and the loop moves past it
+    state.pl_index.store(i, Ordering::Relaxed);
+    let sp = pattern_by_id(state, &item.pattern_id)?;
+    *state.current_pattern_id.lock().unwrap() = item.pattern_id.clone();
+    let prog = luxel_core::bytecode::deserialize(&sp.bc).ok()?;
+    let mut eng = Engine::from_program(prog, state.pixel_count.load(Ordering::Relaxed), 1);
+    for (name, raw) in &item.controls {
+        let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
+        eng.set_control(name, &vals);
+    }
+    apply_map(state, &mut eng);
+    *state.pattern_src.lock().unwrap() = sp.source.clone();
+    *state.pattern_bc.lock().unwrap() = sp.bc.clone();
+    *state.controls_json.lock().unwrap() = jsonview::controls_json(&eng);
+    *state.vmerr.lock().unwrap() = None;
+    Some((eng, sp.source, sp.bc))
+}
+
 fn render_loop(state: Arc<State>) {
-    let mut engine = Engine::new(DEFAULT_PATTERN, state.pixel_count, 1).ok();
+    let count = || state.pixel_count.load(Ordering::Relaxed);
+    // Boot default: compile once, then run through the serialize→deserialize
+    // path so the mirror executes exactly what a device would.
+    let mut current_bc: Vec<u8> = Engine::new(DEFAULT_PATTERN, count(), 1)
+        .ok()
+        .and_then(|e| luxel_core::bytecode::serialize(e.program()).ok())
+        .unwrap_or_default();
+    let mut engine = luxel_core::bytecode::deserialize(&current_bc)
+        .ok()
+        .map(|p| Engine::from_program(p, count(), 1));
     *state.pattern_src.lock().unwrap() = DEFAULT_PATTERN.to_string();
+    *state.pattern_bc.lock().unwrap() = current_bc.clone();
     if let Some(eng) = engine.as_ref() {
         *state.controls_json.lock().unwrap() = jsonview::controls_json(eng);
     }
     let mut last = Instant::now();
+    let mut pl_start = Instant::now(); // when the current playlist item started
+    // crossfade: the outgoing engine + when/how long to blend
+    let mut prev: Option<Engine> = None;
+    let mut blend_start = Instant::now();
+    let mut blend_ms: i32 = 0;
+    // start a crossfade from the current engine (call before swapping engine in)
+    macro_rules! begin_crossfade {
+        () => {{
+            let cf = state.playlist.lock().unwrap().crossfade_ms;
+            if cf > 0 && engine.is_some() {
+                prev = engine.take();
+                blend_start = Instant::now();
+                blend_ms = cf;
+            }
+        }};
+    }
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
+    let mut sensor_seen: u32 = 0;
 
     loop {
         for msg in state.inbox.lock().unwrap().drain(..) {
             match msg {
-                Msg::Code(src) => {
-                    if let Ok(e) = Engine::new(&src, state.pixel_count, 1) {
+                Msg::Code { src, bc } => {
+                    // a manual code push takes over from the playlist
+                    state.pl_playing.store(false, Ordering::Relaxed);
+                    if let Ok(p) = luxel_core::bytecode::deserialize(&bc) {
+                        let e = Engine::from_program(p, count(), 1);
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
                         engine = Some(e);
                         *state.pattern_src.lock().unwrap() = src;
+                        *state.pattern_bc.lock().unwrap() = bc.clone();
+                        current_bc = bc;
                         *state.vmerr.lock().unwrap() = None;
                         last = Instant::now();
+                        state.map_dirty.store(true, Ordering::Relaxed);
                     }
                 }
                 Msg::Control(name, values) => {
@@ -120,6 +781,87 @@ fn render_loop(state: Arc<State>) {
                         eng.set_var(&name, value);
                     }
                 }
+                // live pixel-count change: rebuild the engine at the new count
+                Msg::Config(n) => {
+                    let n = n.clamp(1, MAX_PIXELS);
+                    state.pixel_count.store(n, Ordering::Relaxed);
+                    if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
+                        let e = Engine::from_program(p, n, 1);
+                        *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
+                        engine = Some(e);
+                        *state.vmerr.lock().unwrap() = None;
+                        last = Instant::now();
+                        state.map_dirty.store(true, Ordering::Relaxed);
+                    }
+                }
+                Msg::PlaylistPlay(i) => {
+                    state.pl_playing.store(true, Ordering::Relaxed);
+                    if let Some((e, _src, bc)) = enter_item(&state, i) {
+                        engine = Some(e);
+                        current_bc = bc;
+                        last = Instant::now();
+                        pl_start = Instant::now();
+                    }
+                }
+                Msg::PlaylistStop => state.pl_playing.store(false, Ordering::Relaxed),
+                Msg::PlaylistStep(d) => {
+                    let len = state.playlist.lock().unwrap().items.len();
+                    if state.pl_playing.load(Ordering::Relaxed) && len > 0 {
+                        let cur = state.pl_index.load(Ordering::Relaxed) as i64;
+                        let ni = (cur + d as i64).rem_euclid(len as i64) as usize;
+                        if let Some((e, _src, bc)) = enter_item(&state, ni) {
+                            begin_crossfade!();
+                            engine = Some(e);
+                            current_bc = bc;
+                            last = Instant::now();
+                            pl_start = Instant::now();
+                        }
+                    }
+                }
+                Msg::PlaylistReload => {
+                    if state.pl_playing.load(Ordering::Relaxed) {
+                        let i = state.pl_index.load(Ordering::Relaxed);
+                        if let Some((e, _src, bc)) = enter_item(&state, i) {
+                            engine = Some(e);
+                            current_bc = bc;
+                            last = Instant::now();
+                            pl_start = Instant::now();
+                        }
+                    }
+                }
+            }
+        }
+
+        // playlist auto-advance: effective seconds = item override ?? default;
+        // 0 means manual (wait for a next/prev).
+        if state.pl_playing.load(Ordering::Relaxed) {
+            let (len, sec) = {
+                let pl = state.playlist.lock().unwrap();
+                (pl.items.len(), pl.item_sec(state.pl_index.load(Ordering::Relaxed)))
+            };
+            if len == 0 {
+                state.pl_playing.store(false, Ordering::Relaxed);
+            } else if sec > 0 && pl_start.elapsed() >= Duration::from_secs(sec as u64) {
+                let ni = (state.pl_index.load(Ordering::Relaxed) + 1) % len;
+                if let Some((e, _src, bc)) = enter_item(&state, ni) {
+                    begin_crossfade!();
+                    engine = Some(e);
+                    current_bc = bc;
+                    last = Instant::now();
+                }
+                pl_start = Instant::now();
+            }
+        }
+
+        // apply (or clear) the installed pixel map when it changed
+        if state.map_dirty.swap(false, Ordering::Relaxed) {
+            if state.device_map.lock().unwrap().is_some() {
+                if let Some(eng) = engine.as_mut() {
+                    apply_map(&state, eng);
+                }
+            } else if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
+                // cleared → rebuild without a map
+                engine = Some(Engine::from_program(p, count(), 1));
             }
         }
 
@@ -128,24 +870,88 @@ fn render_loop(state: Arc<State>) {
             if let Some(eng) = engine.as_mut() {
                 *state.vars_json.lock().unwrap() = jsonview::vars_json(eng);
                 *state.readouts_json.lock().unwrap() = jsonview::readouts_json(eng);
+                // host wall clock + tz for the clock builtins
+                if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                    let tz = state.tz_minutes.load(Ordering::Relaxed) as i64;
+                    eng.set_wall_clock(d.as_secs() as i64 + tz * 60);
+                }
             }
         }
 
-        if let Some(eng) = engine.as_mut() {
+        // sensor data (POST /api/sensors) lands between frames
+        let seq = state.sensor_seq.load(Ordering::Relaxed);
+        if seq != sensor_seen {
+            sensor_seen = seq;
+            if let (Some(sf), Some(eng)) =
+                (state.sensor_frame.lock().unwrap().clone(), engine.as_mut())
+            {
+                eng.set_sensors(&sf);
+            }
+        }
+
+        // network input (DDP/E1.31) overrides the engine while packets flow
+        if live_proto(&state).is_some() {
+            let live = state.live_pixels.lock().unwrap().clone();
+            let mut snap = state.pixels.lock().unwrap();
+            snap.clear();
+            snap.extend_from_slice(&live);
+            snap.resize(count() as usize * 3, 0);
+            last = Instant::now(); // keep the pattern clock fresh for resume
+        } else if engine.is_some() {
             let now = Instant::now();
             let delta_us = now.duration_since(last).as_micros() as u64;
             last = now;
-            let delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
+            let mut delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
 
-            let px = eng.frame(delta);
+            // follower: converge on the leader clock — big offsets jump,
+            // small ones slew by stretching this frame's delta ≤ ±25%
+            if state.sync_mode.load(Ordering::Relaxed) == 2 {
+                if let Some((_, lt, at)) = *state.sync_leader.lock().unwrap() {
+                    let eng = engine.as_mut().unwrap();
+                    let target = lt + at.elapsed().as_millis() as u64;
+                    let err = target as i64 - eng.time_ms() as i64;
+                    if err.unsigned_abs() > 1000 {
+                        eng.set_time_ms(target);
+                    } else {
+                        let cap = (delta.raw() as i64 / 4).max(1);
+                        let adj = (err << 16).clamp(-cap, cap); // err ms → raw 16.16
+                        delta = Fx::from_raw((delta.raw() as i64 + adj).clamp(0, i32::MAX as i64) as i32);
+                    }
+                }
+            }
+
+            // crossfade progress (0..=65536); 65536 = done
+            let t = if blend_ms > 0 {
+                (blend_start.elapsed().as_millis() as i64 * 65536 / blend_ms as i64).min(65536) as i32
+            } else {
+                65536
+            };
+            let px_new: Vec<[u8; 3]> = engine.as_mut().unwrap().frame(delta).to_vec();
+            let out: Vec<[u8; 3]> = match prev.as_mut() {
+                Some(p) if t < 65536 => {
+                    let px_old = p.frame(delta);
+                    px_new
+                        .iter()
+                        .zip(px_old.iter())
+                        .map(|(n, o)| blend_px(*o, *n, t))
+                        .collect()
+                }
+                _ => px_new,
+            };
+            if t >= 65536 {
+                prev = None; // fade finished
+            }
+            state
+                .engine_time_ms
+                .store(engine.as_ref().unwrap().time_ms(), Ordering::Relaxed);
             {
                 let mut snap = state.pixels.lock().unwrap();
                 snap.clear();
-                for p in px {
+                for p in &out {
                     snap.extend_from_slice(p);
                 }
             }
-            if let Some(e) = eng.take_error() {
+            if let Some(e) = engine.as_mut().unwrap().take_error() {
                 *state.vmerr.lock().unwrap() =
                     Some(format!("line {}:{}: {}", e.line, e.col, e.message));
             }
@@ -165,21 +971,36 @@ fn render_loop(state: Arc<State>) {
 
 // ---- shared request handlers (same JSON as the firmware routes) ----
 
-fn api_code(state: &State, body: String) -> String {
-    match Engine::new(&body, state.pixel_count, 1) {
-        Ok(_) => {
-            push(state, Msg::Code(body));
+/// Decode an LXP1 envelope + validate its LXBC blob — identical rules and
+/// error shapes to firmware/src/server.rs `decode_upload`.
+fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, String> {
+    use luxel_core::bytecode::{decode_envelope, validate, BcError};
+    let env = decode_envelope(raw)
+        .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
+    match validate(env.bytecode) {
+        Ok(_) => Ok(env),
+        Err(e @ BcError::Version { .. }) => Err(format!(
+            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        )),
+        Err(e) => Err(format!(
+            "{{\"ok\":false,\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        )),
+    }
+}
+
+fn api_code(state: &State, raw: &[u8]) -> String {
+    match decode_upload(raw) {
+        Ok(env) => {
+            push(
+                state,
+                Msg::Code { src: env.source.to_string(), bc: env.bytecode.to_vec() },
+            );
+            state.current_pattern_id.lock().unwrap().clear(); // ad-hoc code
             String::from("{\"ok\":true}")
         }
-        Err(d) => {
-            let (line, col) = line_col(&body, d.span.start);
-            format!(
-                "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
-                line,
-                col,
-                json_escape(&d.message)
-            )
-        }
+        Err(e) => e,
     }
 }
 
@@ -214,31 +1035,28 @@ fn patterns_list_json(state: &State) -> String {
     format!("{{\"patterns\":[{}]}}", items.join(","))
 }
 
-fn patterns_save(state: &State, body: &str) -> String {
-    let (name, source) = match body.split_once('\n') {
-        Some((n, s)) if !n.trim().is_empty() && !s.is_empty() => (n.trim().to_string(), s),
-        _ => return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}"),
+fn patterns_save(state: &State, raw: &[u8]) -> String {
+    // decode-validate before storing — the library never holds a stale blob
+    let env = match decode_upload(raw) {
+        Ok(e) => e,
+        Err(e) => return e,
     };
-    // compile-check before storing — the library never holds broken source
-    if let Err(d) = Engine::new(source, state.pixel_count, 1) {
-        let (line, col) = line_col(source, d.span.start);
-        return format!(
-            "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
-            line,
-            col,
-            json_escape(&d.message)
-        );
+    let name = env.name.trim().to_string();
+    if name.is_empty() || env.source.is_empty() {
+        return String::from("{\"ok\":false,\"error\":\"pattern name required\"}");
     }
     let mut lib = state.library.lock().unwrap();
     if let Some(p) = lib.iter_mut().find(|p| p.name == name) {
-        p.source = source.to_string();
+        p.source = env.source.to_string();
+        p.bc = env.bytecode.to_vec();
         return format!("{{\"ok\":true,\"id\":\"{}\"}}", p.id);
     }
     let id = format!("{:08x}", state.next_id.fetch_add(1, Ordering::Relaxed) ^ 0x5eed_1e55);
     lib.push(StoredPattern {
         id: id.clone(),
         name,
-        source: source.to_string(),
+        source: env.source.to_string(),
+        bc: env.bytecode.to_vec(),
     });
     format!("{{\"ok\":true,\"id\":\"{}\"}}", id)
 }
@@ -258,42 +1076,103 @@ fn patterns_delete(state: &State, id: &str) -> String {
     }
 }
 
-/// One multiplexed ws request: `"<id> <call>\n<body>"` →
-/// `{"id":<id>,"r":<json>}`. Mirrors firmware handle_ws_call.
-fn handle_ws_call(state: &State, frame: &str) -> String {
-    let (header, body) = frame.split_once('\n').unwrap_or((frame, ""));
-    let mut it = header.split_whitespace();
-    let (id, call) = match (it.next().and_then(|v| v.parse::<u32>().ok()), it.next()) {
-        (Some(id), Some(call)) => (id, call),
-        _ => return String::from("{\"id\":0,\"r\":{\"ok\":false,\"error\":\"bad frame\"}}"),
-    };
-    let r = match call {
-        "code" => api_code(state, String::from(body)),
-        "control" => api_control_or_var(state, body, false),
-        "var" => api_control_or_var(state, body, true),
-        "pattern" => format!(
-            "{{\"pattern\":\"{}\"}}",
-            json_escape(&state.pattern_src.lock().unwrap())
-        ),
-        _ => String::from("{\"ok\":false,\"error\":\"unknown call\"}"),
-    };
-    format!("{{\"id\":{},\"r\":{}}}", id, r)
+// ---- playlist (see firmware/src/server.rs for the same contract) ----
+
+fn playlist_json(state: &State) -> String {
+    let pl = state.playlist.lock().unwrap();
+    let lib = state.library.lock().unwrap();
+    let pixel_count = state.pixel_count.load(Ordering::Relaxed);
+    let items: Vec<String> = pl
+        .items
+        .iter()
+        .map(|it| {
+            let stored = lib.iter().find(|p| p.id == it.pattern_id);
+            let name = stored.map(|p| p.name.clone()).unwrap_or_default();
+            let sec = it.override_sec.map(|s| s.to_string()).unwrap_or_else(|| "null".into());
+            let controls: Vec<String> = it
+                .controls
+                .iter()
+                .map(|(n, raw)| {
+                    let vals: Vec<String> =
+                        raw.iter().map(|&r| format!("{}", Fx::from_raw(r))).collect();
+                    format!("\"{}\":[{}]", json_escape(n), vals.join(","))
+                })
+                .collect();
+            // pre-flight: the item's assert() invariants vs the current
+            // config. The firmware checks off the render task and caches;
+            // natively it's cheap enough to compute inline (and free for
+            // assert-less patterns).
+            let invalid = stored
+                .and_then(|p| luxel_core::bytecode::deserialize_lean(&p.bc).ok())
+                .and_then(|prog| {
+                    luxel_core::engine::check_asserts(&prog, pixel_count, usize::MAX)
+                })
+                .map(|m| format!(",\"invalid\":\"{}\"", json_escape(&m)))
+                .unwrap_or_default();
+            format!(
+                "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}}}",
+                it.pattern_id,
+                json_escape(&name),
+                sec,
+                controls.join(","),
+                invalid
+            )
+        })
+        .collect();
+    format!(
+        "{{\"defaultSec\":{},\"crossfadeMs\":{},\"playing\":{},\"index\":{},\"items\":[{}]}}",
+        pl.default_sec,
+        pl.crossfade_ms,
+        state.pl_playing.load(Ordering::Relaxed),
+        state.pl_index.load(Ordering::Relaxed),
+        items.join(",")
+    )
 }
+
+/// Parse the line-based playlist body (no JSON parser needed, mirrors the
+/// firmware). Lines: `D <sec>` default; `I <patternId> <sec|-1>` item
+/// (-1 = inherit default); `C <name> <raw...>` a control for the last item.
+fn parse_playlist(body: &str) -> Playlist {
+    let mut pl = Playlist::default();
+    for line in body.lines() {
+        let mut it = line.split_whitespace();
+        match it.next() {
+            Some("D") => pl.default_sec = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("X") => pl.crossfade_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("I") => {
+                let id = it.next().unwrap_or("").to_string();
+                let sec = it.next().and_then(|v| v.parse::<i32>().ok());
+                let override_sec = match sec {
+                    Some(n) if n < 0 => None,
+                    other => other,
+                };
+                pl.items.push(PlaylistItem {
+                    pattern_id: id,
+                    controls: Vec::new(),
+                    override_sec,
+                });
+            }
+            Some("C") => {
+                if let (Some(item), Some(name)) = (pl.items.last_mut(), it.next()) {
+                    let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
+                    item.controls.push((name.to_string(), raw));
+                }
+            }
+            _ => {}
+        }
+    }
+    pl
+}
+
 
 // ---- minimal HTTP plumbing ----
 
 struct Request {
     method: String,
     path: String,
-    headers: Vec<(String, String)>,
+    // headers are parsed for Content-Length but not retained — nothing
+    // needed them once /ws (Sec-WebSocket-Key) was removed
     body: Vec<u8>,
-}
-
-fn header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
-    req.headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.as_str())
 }
 
 fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
@@ -325,12 +1204,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
     if len > 0 {
         reader.read_exact(&mut body).ok()?;
     }
-    Some(Request {
-        method,
-        path,
-        headers,
-        body,
-    })
+    Some(Request { method, path, body })
 }
 
 fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) {
@@ -354,89 +1228,6 @@ fn respond_preflight(stream: &mut TcpStream) {
     );
 }
 
-/// Full-duplex ws loop, single thread: a short read timeout doubles as the
-/// push tick (mirrors the device's next_message-with-signal structure).
-fn ws_session(stream: TcpStream, key: &str, state: Arc<State>) {
-    let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
-    let mut stream = stream;
-    let _ = write!(
-        stream,
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
-        accept
-    );
-    stream
-        .set_read_timeout(Some(Duration::from_millis(66)))
-        .ok();
-    let mut ws = tungstenite::WebSocket::from_raw_socket(
-        stream,
-        tungstenite::protocol::Role::Server,
-        None,
-    );
-    let mut tick: u32 = 0;
-    loop {
-        // read with the 66 ms timeout; WouldBlock/TimedOut = push tick
-        match ws.read() {
-            Ok(tungstenite::Message::Text(t)) => {
-                let reply = handle_ws_call(&state, &t);
-                if ws.send(tungstenite::Message::Text(reply)).is_err() {
-                    return;
-                }
-                continue;
-            }
-            Ok(tungstenite::Message::Close(_)) | Err(tungstenite::Error::ConnectionClosed) => {
-                return;
-            }
-            Ok(_) => continue,
-            Err(tungstenite::Error::Io(e))
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(_) => return,
-        }
-
-        let px = state.pixels.lock().unwrap().clone();
-        if !px.is_empty() && ws.send(tungstenite::Message::Binary(px)).is_err() {
-            return;
-        }
-        if tick % 4 == 0 {
-            let vars = state.vars_json.lock().unwrap().clone();
-            let ro = state.readouts_json.lock().unwrap().clone();
-            if ws
-                .send(tungstenite::Message::Text(format!(
-                    "{{\"type\":\"vars\",\"vars\":{}}}",
-                    vars
-                )))
-                .is_err()
-                || ws
-                    .send(tungstenite::Message::Text(format!(
-                        "{{\"type\":\"readouts\",\"readouts\":{}}}",
-                        ro
-                    )))
-                    .is_err()
-            {
-                return;
-            }
-        }
-        if tick % 15 == 0 {
-            if ws
-                .send(tungstenite::Message::Text(format!(
-                    "{{\"type\":\"status\",\"status\":{}}}",
-                    status_json(&state)
-                )))
-                .is_err()
-                || ws
-                    .send(tungstenite::Message::Text(format!(
-                        "{{\"type\":\"controls\",\"controls\":{}}}",
-                        controls_json(&state)
-                    )))
-                    .is_err()
-            {
-                return;
-            }
-        }
-        tick = tick.wrapping_add(1);
-    }
-}
-
 fn handle_connection(stream: TcpStream, state: Arc<State>) {
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
@@ -449,14 +1240,6 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 
     match (req.method.as_str(), req.path.as_str()) {
         ("OPTIONS", _) => respond_preflight(&mut stream),
-        ("GET", "/ws") => {
-            if let Some(key) = header(&req, "Sec-WebSocket-Key") {
-                let key = key.to_string();
-                ws_session(stream, &key, state);
-            } else {
-                respond(&mut stream, 400, "text/plain", b"missing Sec-WebSocket-Key");
-            }
-        }
         ("GET", "/") => respond(
             &mut stream,
             200,
@@ -474,6 +1257,13 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             let src = state.pattern_src.lock().unwrap().clone();
             respond(&mut stream, 200, "text/plain; charset=utf-8", src.as_bytes());
         }
+        ("GET", "/api/pattern.lxp") => {
+            // running pattern as an LXP1 envelope — what a sync follower adopts
+            let src = state.pattern_src.lock().unwrap().clone();
+            let bc = state.pattern_bc.lock().unwrap().clone();
+            let env = luxel_core::bytecode::encode_envelope("", &src, &bc);
+            respond(&mut stream, 200, "application/octet-stream", &env);
+        }
         ("GET", "/api/controls") => {
             respond(&mut stream, 200, "application/json", controls_json(&state).as_bytes())
         }
@@ -487,9 +1277,301 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             let s = if s.is_empty() { String::from("{}") } else { s };
             respond(&mut stream, 200, "application/json", s.as_bytes());
         }
-        ("POST", "/api/code") => {
+        ("GET", "/api/brightness") => {
+            let b = state.brightness.load(Ordering::Relaxed);
+            let body = format!("{{\"brightness\":{},\"max\":31}}", b);
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/brightness") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim().parse::<u8>() {
+                Ok(b) if b <= 31 => {
+                    state.brightness.store(b, Ordering::Relaxed);
+                    format!("{{\"ok\":true,\"brightness\":{}}}", b)
+                }
+                _ => String::from("{\"ok\":false,\"error\":\"brightness must be 0..=31\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/config") => {
+            let body = format!(
+                "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
+                state.pixel_count.load(Ordering::Relaxed),
+                MAX_PIXELS,
+                protocol_name(state.protocol.load(Ordering::Relaxed))
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/config") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim().parse::<u32>() {
+                Ok(n) if n >= 1 && n <= MAX_PIXELS => {
+                    push(&state, Msg::Config(n));
+                    format!("{{\"ok\":true,\"pixels\":{}}}", n)
+                }
+                _ => format!("{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}", MAX_PIXELS),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/protocol") => {
+            let body = format!(
+                "{{\"protocol\":\"{}\",\"options\":[\"sk9822\",\"ws2812\"]}}",
+                protocol_name(state.protocol.load(Ordering::Relaxed))
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/protocol") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match protocol_code(&body) {
+                Some(code) => {
+                    // the mirror drives no real LEDs — just round-trip the setting
+                    state.protocol.store(code, Ordering::Relaxed);
+                    format!("{{\"ok\":true,\"protocol\":\"{}\"}}", protocol_name(code))
+                }
+                None => String::from("{\"ok\":false,\"error\":\"protocol must be sk9822 or ws2812\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/apmode") => {
+            // the mirror has no radio — it's never the provisioning AP
+            respond(&mut stream, 200, "application/json", b"{\"ap\":false}");
+        }
+        ("POST", "/api/apmode") => {
+            // accepted for API parity; a real device reboots into the AP
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                b"{\"ok\":true,\"note\":\"mirror: no radio; a device would reboot into the setup AP\"}",
+            );
+        }
+        ("GET", "/api/output") => {
+            let body = format!(
+                "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                luxel_core::outpipe::ColorOrder(state.color_order.load(Ordering::Relaxed)).name(),
+                state.gamma_tenths.load(Ordering::Relaxed),
+                state.cap_ma.load(Ordering::Relaxed)
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/output") => {
             let body = String::from_utf8_lossy(&req.body).into_owned();
-            let r = api_code(&state, body);
+            let mut it = body.split_whitespace();
+            let order = it.next().and_then(luxel_core::outpipe::ColorOrder::from_name);
+            let gamma: Option<u8> = it.next().and_then(|v| v.parse().ok()).filter(|g| *g <= 50);
+            let cap: Option<u16> = it.next().and_then(|v| v.parse().ok()).filter(|c| *c <= 20_000);
+            let r = match (order, gamma, cap) {
+                (Some(o), Some(g), Some(c)) => {
+                    state.color_order.store(o.0, Ordering::Relaxed);
+                    state.gamma_tenths.store(g, Ordering::Relaxed);
+                    state.cap_ma.store(c as u32, Ordering::Relaxed);
+                    format!(
+                        "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                        o.name(),
+                        g,
+                        c
+                    )
+                }
+                _ => String::from(
+                    "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000>\"}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/clock") => {
+            // the mirror's clock is the host's (always "synced")
+            let tz = state.tz_minutes.load(Ordering::Relaxed);
+            let local = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64 + tz as i64 * 60)
+                .unwrap_or(0);
+            let body = format!(
+                "{{\"synced\":true,\"local\":{},\"tzMinutes\":{}}}",
+                local, tz
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/clock") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim().parse::<i32>() {
+                Ok(tz) if (-840..=840).contains(&tz) => {
+                    state.tz_minutes.store(tz, Ordering::Relaxed);
+                    format!("{{\"ok\":true,\"tzMinutes\":{}}}", tz)
+                }
+                _ => String::from(
+                    "{\"ok\":false,\"error\":\"tz must be minutes in -840..=840\"}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/sync") => {
+            let mode = sync_mode_name(state.sync_mode.load(Ordering::Relaxed));
+            let time_ms = state.engine_time_ms.load(Ordering::Relaxed);
+            let leader = match *state.sync_leader.lock().unwrap() {
+                Some((boot, lt, at)) => {
+                    let age = at.elapsed().as_millis() as u64;
+                    let offset = (lt + age) as i64 - time_ms as i64;
+                    format!(
+                        "{{\"bootId\":{},\"ageMs\":{},\"offsetMs\":{}}}",
+                        boot, age, offset
+                    )
+                }
+                None => String::from("null"),
+            };
+            let body = format!(
+                "{{\"mode\":\"{}\",\"timeMs\":{},\"leader\":{}}}",
+                mode, time_ms, leader
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/sync") => {
+            // body: "off" | "leader" | "follower"
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim() {
+                "off" => Some(0u8),
+                "leader" => Some(1),
+                "follower" => Some(2),
+                _ => None,
+            };
+            let resp = match r {
+                Some(m) => {
+                    state.sync_mode.store(m, Ordering::Relaxed);
+                    if m != 2 {
+                        *state.sync_leader.lock().unwrap() = None;
+                    }
+                    format!("{{\"ok\":true,\"mode\":\"{}\"}}", sync_mode_name(m))
+                }
+                None => String::from(
+                    "{\"ok\":false,\"error\":\"mode must be off, leader, or follower\"}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", resp.as_bytes());
+        }
+        ("POST", "/api/sensors") => {
+            // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0") —
+            // same parser the firmware runs on its UART stream
+            let r = match luxel_core::netin::parse_sensor_board(&req.body) {
+                Some(s) => {
+                    *state.sensor_frame.lock().unwrap() = Some(s);
+                    state.sensor_seq.fetch_add(1, Ordering::Relaxed);
+                    String::from("{\"ok\":true}")
+                }
+                None => String::from("{\"ok\":false,\"error\":\"not a sensor-board frame\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/mqtt") => {
+            // broker settings (never the password) + connection state
+            let body = match &*state.mqtt_cfg.lock().unwrap() {
+                Some(c) => format!(
+                    "{{\"enabled\":true,\"host\":\"{}\",\"port\":{},\"user\":\"{}\",\"hasPass\":{},\"connected\":{}}}",
+                    json_escape(&c.host),
+                    c.port,
+                    json_escape(&c.user),
+                    !c.pass.is_empty(),
+                    state.mqtt_connected.load(Ordering::Relaxed)
+                ),
+                None => String::from(
+                    "{\"enabled\":false,\"host\":\"\",\"port\":1883,\"user\":\"\",\"hasPass\":false,\"connected\":false}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/mqtt") => {
+            // body: "host\nport\nuser\npass"; empty host disables MQTT
+            let body = String::from_utf8_lossy(&req.body).into_owned();
+            let mut lines = body.lines();
+            let host = lines.next().unwrap_or("").trim().to_string();
+            let port = lines.next().unwrap_or("").trim().parse::<u16>().unwrap_or(1883);
+            let user = lines.next().unwrap_or("").trim().to_string();
+            let pass = lines.next().unwrap_or("").trim().to_string();
+            let enabled = !host.is_empty();
+            *state.mqtt_cfg.lock().unwrap() = enabled.then(|| MqttCfg {
+                host,
+                port: if port == 0 { 1883 } else { port },
+                user,
+                pass,
+            });
+            state.mqtt_gen.fetch_add(1, Ordering::Relaxed);
+            let r = format!("{{\"ok\":true,\"enabled\":{}}}", enabled);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/wifi") => {
+            let body = match &*state.wifi_ssid.lock().unwrap() {
+                Some(ssid) => format!("{{\"ssid\":\"{}\",\"source\":\"flash\"}}", json_escape(ssid)),
+                None => String::from("{\"ssid\":null,\"source\":\"none\"}"),
+            };
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/wifi") => {
+            // body = "ssid\npassword"; the mirror just stores the ssid (no reboot)
+            let body = String::from_utf8_lossy(&req.body);
+            let ssid = body.split('\n').next().unwrap_or("").trim().to_string();
+            let r = if ssid.is_empty() {
+                String::from("{\"ok\":false,\"error\":\"ssid must be 1..=32 bytes\"}")
+            } else {
+                *state.wifi_ssid.lock().unwrap() = Some(ssid.clone());
+                format!("{{\"ok\":true,\"ssid\":\"{}\",\"note\":\"rebooting to apply\"}}", json_escape(&ssid))
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/map") => {
+            let body = match &*state.device_map.lock().unwrap() {
+                Some((dims, coords)) => format!(
+                    "{{\"installed\":true,\"dims\":{},\"count\":{}}}",
+                    dims,
+                    coords.len()
+                ),
+                None => String::from("{\"installed\":false,\"dims\":0,\"count\":0}"),
+            };
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/map") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let (installed, count) = match parse_map(&body) {
+                Some((dims, coords)) => {
+                    let n = coords.len();
+                    *state.device_map.lock().unwrap() = Some((dims, coords));
+                    (true, n)
+                }
+                None => {
+                    *state.device_map.lock().unwrap() = None;
+                    (false, 0)
+                }
+            };
+            state.map_dirty.store(true, Ordering::Relaxed);
+            let r = format!("{{\"ok\":true,\"installed\":{},\"count\":{}}}", installed, count);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/playlist") => {
+            respond(&mut stream, 200, "application/json", playlist_json(&state).as_bytes());
+        }
+        ("POST", "/api/playlist") => {
+            let body = String::from_utf8_lossy(&req.body);
+            *state.playlist.lock().unwrap() = parse_playlist(&body);
+            push(&state, Msg::PlaylistReload); // apply edits if already playing
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/play") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let i = body.trim().parse::<usize>().unwrap_or(0);
+            push(&state, Msg::PlaylistPlay(i));
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/stop") => {
+            push(&state, Msg::PlaylistStop);
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/next") => {
+            push(&state, Msg::PlaylistStep(1));
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/playlist/prev") => {
+            push(&state, Msg::PlaylistStep(-1));
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        }
+        ("POST", "/api/code") => {
+            let r = api_code(&state, &req.body);
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         ("POST", "/api/control") => {
@@ -506,8 +1588,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             respond(&mut stream, 200, "application/json", patterns_list_json(&state).as_bytes())
         }
         ("POST", "/api/patterns") => {
-            let body = String::from_utf8_lossy(&req.body).into_owned();
-            let r = patterns_save(&state, &body);
+            let r = patterns_save(&state, &req.body);
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         (m, p) if p.starts_with("/api/patterns/") => {
@@ -528,7 +1609,21 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 },
                 ("DELETE", None) => patterns_delete(&state, id),
                 ("POST", Some("activate")) => match pattern_by_id(&state, id) {
-                    Some(p) => api_code(&state, p.source),
+                    Some(p) => match luxel_core::bytecode::deserialize(&p.bc) {
+                        Ok(_) => {
+                            push(&state, Msg::Code { src: p.source, bc: p.bc });
+                            *state.current_pattern_id.lock().unwrap() = p.id;
+                            String::from("{\"ok\":true}")
+                        }
+                        Err(e @ luxel_core::bytecode::BcError::Version { .. }) => format!(
+                            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
+                            json_escape(&e.to_string())
+                        ),
+                        Err(e) => format!(
+                            "{{\"ok\":false,\"error\":\"{}\"}}",
+                            json_escape(&e.to_string())
+                        ),
+                    },
                     None => String::from("{\"ok\":false,\"error\":\"no such pattern\"}"),
                 },
                 _ => String::from("{\"ok\":false,\"error\":\"bad patterns route\"}"),
@@ -542,6 +1637,11 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut pixels: u32 = 300;
     let mut port: u16 = 8720;
+    // Luxel-to-Luxel sync transport (overridable so e2e can run two
+    // mirrors over loopback; the firmware broadcasts on the LAN)
+    let mut sync_target = String::from("255.255.255.255");
+    let mut sync_port: u16 = luxel_core::netin::SYNC_PORT;
+    let mut sync_http_port: u16 = 80; // a real leader device serves on :80
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         match (flag.as_str(), it.next()) {
@@ -553,27 +1653,75 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 Ok(n) => port = n,
                 Err(_) => return super::usage(),
             },
+            ("--sync-target", Some(v)) => sync_target = v.clone(),
+            ("--sync-port", Some(v)) => match v.parse() {
+                Ok(n) => sync_port = n,
+                Err(_) => return super::usage(),
+            },
+            ("--sync-http-port", Some(v)) => match v.parse() {
+                Ok(n) => sync_http_port = n,
+                Err(_) => return super::usage(),
+            },
             _ => return super::usage(),
         }
     }
 
     let state = Arc::new(State {
-        pixel_count: pixels,
+        pixel_count: AtomicU32::new(pixels),
         inbox: Mutex::new(Vec::new()),
         pixels: Mutex::new(Vec::new()),
         fps: AtomicU32::new(0),
         vmerr: Mutex::new(None),
         pattern_src: Mutex::new(String::new()),
+        pattern_bc: Mutex::new(Vec::new()),
         controls_json: Mutex::new(String::from("[]")),
         vars_json: Mutex::new(String::from("{}")),
         readouts_json: Mutex::new(String::from("{}")),
         library: Mutex::new(Vec::new()),
         next_id: AtomicU32::new(0x1a5e_0001),
+        brightness: AtomicU8::new(4), // matches the firmware's default
+        protocol: AtomicU8::new(0), // sk9822
+        playlist: Mutex::new(Playlist::default()),
+        pl_playing: AtomicBool::new(false),
+        pl_index: AtomicUsize::new(0),
+        wifi_ssid: Mutex::new(None),
+        device_map: Mutex::new(None),
+        map_dirty: AtomicBool::new(false),
+        live_pixels: Mutex::new(Vec::new()),
+        live_mark: Mutex::new(None),
+        live_proto: AtomicU8::new(0),
+        power: AtomicBool::new(true),
+        current_pattern_id: Mutex::new(String::new()),
+        mqtt_cfg: Mutex::new(None),
+        mqtt_gen: AtomicU32::new(0),
+        mqtt_connected: AtomicBool::new(false),
+        sensor_frame: Mutex::new(None),
+        sensor_seq: AtomicU32::new(0),
+        sync_mode: AtomicU8::new(0),
+        sync_boot_id: std::process::id() ^ 0x5a5a_5a5a,
+        tz_minutes: std::sync::atomic::AtomicI32::new(0),
+        color_order: AtomicU8::new(0),
+        gamma_tenths: AtomicU8::new(0),
+        cap_ma: AtomicU32::new(0),
+        engine_time_ms: std::sync::atomic::AtomicU64::new(0),
+        sync_leader: Mutex::new(None),
     });
 
     {
         let state = state.clone();
         std::thread::spawn(move || render_loop(state));
+    }
+    for port in [luxel_core::netin::DDP_PORT, luxel_core::netin::E131_PORT] {
+        let state = state.clone();
+        std::thread::spawn(move || netin_listener(state, port));
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || mqtt_thread(state));
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || sync_thread(state, sync_target, sync_port, sync_http_port));
     }
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {

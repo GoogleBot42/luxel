@@ -1,5 +1,831 @@
 # Update log
 
+## 2026-07-08 — v0.1.28: `assert()` — invariants become real code; playlists pre-flight against the config
+
+Jeremy's redesign of the hours-old `//# require` directive, and it's
+strictly better: **`assert(cond[, "message"])` is a real statement** that
+runs inline in top-level init, so invariants can use anything initialized
+above them — derived vars, user function calls, array contents — not just
+`pixelCount` arithmetic. The comment-directive form is gone (it shipped
+yesterday; nothing depended on it).
+
+```js
+var w = sqrt(pixelCount)
+assert(floor(w) == w, "needs a square number of pixels")
+```
+
+- A failed assert **aborts init on the spot** (code above it ran, code
+  below didn't) and blocks rendering with
+  `pattern requires: needs a square number of pixels (pixelCount = 300)`.
+  Changing the pixel count rebuilds the engine → re-runs init → re-checks
+  every assert: the settings-page workflow is self-healing, live-verified
+  both directions on the wall unit.
+- Top-level only, by compile error: inside a function it would fire per
+  frame; nested in a branch it isn't an invariant. The quoted message is
+  the language's first (and only) string literal, legal only there. A
+  runtime error inside the condition stays an ordinary vmerr.
+- **LXBC v4**: deduplicated assert-message table + `Assert` opcode, so the
+  message survives to compiler-less devices (lean decode keeps it — it's
+  user-facing error text, not debug info). `bc-version` auto-heal covers
+  v3 blobs; the dev unit's library was upsert-healed to v4.
+- **Playlist pre-flight** (the workflow gap that motivated all this): the
+  render task re-validates every playlist entry's asserts between frames
+  whenever config or content changes (boot, playlist edit, pattern
+  save/delete, pixel-count change) — free for assert-less patterns, the
+  message table gates it. `GET /api/playlist` reports per-item
+  `"invalid":"<msg>"` and the web UI badges the row (⚠ won't run). The
+  native mirror computes the same field inline, and device-e2e covers the
+  whole loop (API verdict + rendered badge in real chromium).
+- One deliberate compatibility note: `assert` is the first extension that
+  makes a pattern Luxel-only when used (on a real PB it's an unknown
+  identifier). Zero corpus collisions (293/293 clean of `assert`); corpus
+  report unchanged at 291/293.
+- Hardware: v0.1.28 on the dev unit; assert + config-flip + playlist
+  badge verified live; pixel-count sweep 300→600→1024→2048→300 with zero
+  panics (heap ≥ 90 KB throughout).
+
+## 2026-07-08 — `//# require` invariants + PB-faithful default grid — the last 2D failures explained
+
+The Breakout/Crosstown/Frogger/Swirlpool class is now understood end to
+end, and patterns get a language-level way to state their assumptions.
+
+- **Default map** (PB-as-experienced, oracle-verified): a pattern that
+  exports only `render2D`/`render3D` with no installed map now gets an
+  automatic ceil(√n)×ceil(√n) row-major grid instead of erroring with
+  "no map". Probing the real PB showed a stronger fact: a PB that has
+  ever saved a map *cannot be returned to maplessness* via its public
+  interface — blank map source and `[]` both keep the old compiled map
+  (documented in docs/research/04-oracle-findings.md, plus
+  tools/oracle/mapdump.mjs to snapshot/restore a PB's map losslessly).
+- With that grid, the four holdouts fail **identically on a real PB** at
+  non-square pixel counts (verified live: clean at 17×17, same
+  out-of-bounds at 10×30). They're square-rig patterns; 300 isn't square.
+  At 289 px Breakout runs on the device at 45 fps. Luxel's 191/195 is
+  every pattern PB itself could run on this rig.
+- **`//# require <expr> ["message"]`**: patterns can declare invariants in
+  a comment directive — `//# require pixelCount % 2 == 0`, or the
+  Breakout fix, `//# require floor(sqrt(pixelCount)) == sqrt(pixelCount)
+  "needs a square number of pixels"`. Checked before `init` ever runs; a
+  violation blocks rendering (black frame) and surfaces as
+  `pattern requires: needs a square number of pixels (pixelCount = 300)`.
+  Compiled by the frontend into ordinary hidden exported fns (name-tagged
+  `require …`), so the wire format is unchanged and the compiler-less
+  firmware enforces them by just calling functions. PB-compatible: on a
+  real PB the directive is a comment. Documented in docs/lang.md.
+- vmerr polish: errors without a source location (require violations,
+  lean-decoded blobs) no longer carry a noisy `line 0:0:` prefix.
+
+## 2026-07-08 — LXBC v3: const-array data section — 192/195, capacity failures extinct
+
+Jeremy's idea, straight out of mainline compilers: array literals are
+constants — put them in a data section instead of building them at runtime.
+The measurement made it a slam dunk: Emoji Animation #2's 768 `[r,g,b]`
+literals contain FOUR unique triplets.
+
+- The compiler interns every all-numeric array literal into a
+  **deduplicated const pool** in the blob (the pattern's `.rodata`); a new
+  `ConstArr` opcode replaces the per-element push/NewArray stream.
+- Mutability preserved by **copy-on-write**: each literal occurrence keeps
+  its own arena identity as a plain index into the pool (`ArrRepr::
+  Const(u32)` — no Rc/Arc, no new dependencies; the arena can never
+  outlive the Program, so ids suffice, same as fn/global/builtin ids), and
+  materializes an owned copy only on first write. Never written → never
+  copied. Identity-preservation is unit-tested (two identical literals
+  don't alias after a write).
+- Element budget (PB-compat 10,240) still counts const arrays; the byte
+  ledger charges only the 32 B entry.
+- Emoji Animation #2: blob 17.3 → 5.8 KB, decoded program 19.3 → 8 KB,
+  full engine 70.7 → 41 KB — **runs on the device at 34 fps with ~67 KB
+  free**. It was the last capacity holdout.
+
+**Certification soak: 192/195 clean, 0 panics, 0 rejections, lowest heap
+observed 60.6 KB free.** The 3 remaining errors are the no-map `render2D`
+index bugs (Breakout/Crosstown/Frogger — oracle question in ideas.md);
+Rainbow Smiley and Rainbow Comet cleared too (their errors were array-
+degradation side effects). Day's full arc: 134 → 176 → 182 → 189 → 192,
+and idle free heap 50 → 107 KB.
+
+Also: docs/tools.md — a one-page index of every script/harness (soak,
+oracle, corpus, e2e, deploy, heapstat), linked from the README.
+
+## 2026-07-08 — v0.1.26/27: the RAM reclaim — 189/195 gallery patterns run; idle free heap 50 → 107 KB
+
+Follow-through on "find something systemic": four structural changes, each
+soak-verified on the wall unit, stacking to a device that runs almost the
+whole gallery where the morning's build ran two-thirds of it.
+
+- **In-place bytecode execution (LXBC v2)**: the VM now interprets the
+  flat LXBC bytes directly — `pc` and jump operands are byte offsets, and
+  nothing is materialized per instruction. A decoded Program went from
+  ~5× its blob to ~1.2–2.5× (Emoji Animation's 17 KB blob: 60.7 → 19.3 KB
+  decoded). One interpreter everywhere (firmware, wasm, native), so
+  browser preview and strip can't drift; the decoder additionally proves
+  every jump lands on an instruction boundary. Same speed (fps curve
+  within noise: 123/84/49 fps at 300/600/1024 px). Format bump v1→v2 —
+  stored patterns auto-heal via the bc-version recompile path. The old
+  `Insn` enum survives only as compiler IR.
+- **Streaming pattern uploads**: /api/code and /api/patterns now stream
+  their bodies like OTA/assets do, into an exact-size fallibly-reserved
+  Vec. The per-connection HTTP buffer dropped 24 KB → 4 KB (big uploads
+  used to dictate its size for every connection) and the upload-size cap
+  is gone — the "invalid bytecode: truncated" failures with it.
+- **Per-connection buffers + engine freeze**: HTTP buffers are allocated
+  per connection, not held for the server's lifetime (the 3rd pool slot
+  had already died with the /ws stream). If an upload can't get memory
+  because the running pattern owns the heap, the engine is FROZEN (heap
+  released, strip holds its last frame) and the reservation retried — and
+  OTA freezes the engine up front (a reboot follows anyway). No more
+  "can't reach the device because a big pattern is running".
+- **Byte-accurate array budget** (elements × 8 + per-array overhead
+  against free heap, PB's 10,240-element compat cap on top) and
+  pattern-cell hygiene (PATTERN_SRC/_BC no longer retain a past giant's
+  capacity forever).
+
+**Definitive soak (docs/bench-report.md): 189/195 clean, 0 panics or
+reboots.** The 6 remaining: Emoji Animation #2 (genuinely beyond ~107 KB
+free — cleanly rejected), and five 2D patterns hitting `array index out
+of bounds` with no map installed (Breakout/Crosstown/Frogger/Rainbow
+Smiley/Rainbow Comet) — a map-semantics question for the PB oracle, on
+the backlog, not a memory problem. Day's arc: 134 clean (with dozens of
+disguised OOM reboots) → 176 → 182 → **189, zero reboots**.
+
+## 2026-07-08 — v0.1.25: the OOM hunt — soak v5 finally runs the whole gallery with zero reboots
+
+Soak v5 on v0.1.24 kept OOM-panicking the device ("memory allocation of N
+bytes failed" → reboot). Root cause wasn't one bug but a heap-economics
+problem: ~50 KB free for patterns, and several paths that allocated
+infallibly while a heavy pattern legitimately held most of it. Fixed over
+six soak iterations, each verified on the wall unit via serial:
+
+- **One decoded Program at a time.** The render task kept a resident
+  second copy (`current_prog`) + per-rebuild clones — a decoded Program is
+  2–3× its blob. Now the only Program lives inside the engine; rebuilds
+  re-decode from the running blob, and the outgoing engine is freed
+  *before* the new one decodes (peak lands where the most is free).
+- **`bytecode::validate()`** — every check the decoder does, near-zero
+  allocation (equivalence-tested against `deserialize` on truncations and
+  corruptions). Upload/activate/MQTT/sync handlers no longer build a
+  throwaway Program in request context.
+- **`deserialize_lean`** — devices decode without debug info (pos +
+  local names): ~half the Program RAM; vmerrs keep fn/pc, lose line:col.
+- **Envelope passthrough** — `Msg::Code`/`Crossfade` carry the received
+  LXP1 buffer verbatim; producers (HTTP/MQTT/sync/playlist) make ZERO
+  source/blob copies (a copy in the HTTP task OOM'd while amoeba ran).
+- **Fallible everything in the swap path** — decoder Vecs, the request
+  body copy, PATTERN_SRC/_BC updates all `try_reserve`; array allocation
+  is budget-checked BEFORE reserving and the reservation itself is
+  fallible (also fixes a pre-existing VM hole: `array(50000)` allocated
+  first, budget-checked after = panic even pre-bytecode).
+- **Heap-aware array budget + runtime floor** — arrays may fill free heap
+  down to a 20 KB floor (÷12 per element, min 1024 so ordinary strip
+  patterns never trip it); a pattern whose engine leaves less than the
+  floor is REJECTED with a "pattern too large for this device" vmerr.
+  Rejected patterns idle properly (a busy-spin showed up as "150825 fps").
+- **DRAM rebalance** — the third HTTP pool slot existed for the removed
+  preview websocket: pool 3→2 (each slot = 32 KB of buffers), request
+  buffer 16→24 KB (envelopes are src+bytecode now), main heap region
+  88→96 KB (the ~31 KB stack was sized for the deleted on-device
+  compiler; the pool's static shrink pays the stack back). Idle free
+  heap: ~50 → ~66 KB.
+- vmerr reporting deduped per error site (was per frame: serial flood +
+  format! churn at 120 fps).
+
+**Soak v5 final (docs/bench-report.md): 176/195 clean, 0 panics/reboots**
+across all 195 patterns + the pixel-count curve — vs the old committed
+baseline of 134 clean/61 errors (most of those "timeouts" were OOM
+reboots in disguise). The 19 remaining: 7 genuinely-too-large patterns
+(amoeba, tixy, bustle, Bouncy Boxes, DBZBattleFinal, neutronorbit,
+StarGen polar 2D — clean rejections), ~6 array-budget degradations, 3
+2D-game patterns with map-related index errors (separate issue), and a
+dozen heavy patterns now run *slow* (20–29 fps) that previously crashed
+the device outright. Closing the rest wants in-place bytecode execution
+(skip the `Vec<Insn>` materialization — the PB way); tracked in ideas.
+
+## 2026-07-08 — v0.1.24: devices execute LXBC bytecode; compiler out of firmware
+
+The browser (wasm) and CLI now compile patterns to a serialized bytecode
+(**LXBC**, docs/spec/bytecode.md) and upload it alongside the source in an
+LXP1 envelope; the device stores both and only ever *decodes + executes* —
+the lexer/parser/compiler are no longer linked into the firmware (a
+default-on `frontend` cargo feature in luxel-core).
+
+- **Flash**: app text+data 929.4 KB → 876.8 KB (−52.6 KB net, decoder
+  included) against the 1 MiB OTA slot.
+- **Robustness**: the on-device compile path — the deep-recursion,
+  alloc-spiky thing behind the v0.1.21 stack-overflow saga — is gone by
+  construction. The LXBC decoder fully validates untrusted blobs (the VM
+  trusts `Program`, so indices/jumps/argc are proven at decode time).
+- **ABI**: builtins are referenced by name via a per-blob import table, so
+  growing the builtin table never invalidates stored patterns; real format
+  changes bump `FORMAT_VERSION` and devices answer `"code":"bc-version"` —
+  the web app then recompiles from the stored source and re-saves
+  automatically.
+- **Sync**: followers adopt the leader via `GET /api/pattern.lxp`
+  (source + bytecode envelope) instead of compiling `/api/pattern`.
+- **Storage**: pattern store format v3 (bytecode chunks next to source
+  chunks; bc gets 6×3840 B ≈ 23 KB — corpus max blob is 17.5 KB). ⚠️ the
+  v2→v3 bump wipes the on-device library + playlist on first boot after
+  OTA; re-save from the app.
+- **API break**: `POST /api/code` and `POST /api/patterns` take the binary
+  LXP1 envelope now — raw-source curls need `luxel compile` (new
+  subcommand) or the web app. Mirror (`luxel serve`) matches, and executes
+  stored bytecode via the same decode path as the device.
+- Verified: corpus 291/293 compile+run with byte-identical LXBC round-trip
+  and pixel-identical source-vs-bytecode rendering; luxel-core tests (135)
+  incl. decoder corruption tests; device/sync/playground e2e all green;
+  ESP32 (Xtensa + C3) builds with zero frontend symbols.
+- Drive-bys: `<init>` now keeps line info for init-time vmerrs;
+  MAX_LOCALS off-by-one (256th local wrapped a u8) fixed at 255.
+
+## 2026-07-07 — the v0.1.23 batch (catch-up entry): HA polish, sync v2, SNTP, output pipeline, panic fix, boards
+
+Written after the fact — this batch shipped across 2026-07-06/07 in commits
+e04f661…012d71b and was verified piecemeal; collecting it here.
+
+- **HA polish** (e04f661): diagnostics sensors (fps/heap/rssi) + playlist
+  switch and next/prev buttons via MQTT discovery. Verified live on the
+  real broker + wall unit — the HA integration task (#54) is closed.
+- **Sync v2** (0908341): followers adopt the leader's *pattern*, not just
+  its timebase — beacon carries a source hash; on change the follower
+  pulls and swaps. (Since v0.1.24 the pull is `/api/pattern.lxp` bytecode.)
+- **SNTP wall clock + timezone** (7fe7aa7): `clockHour()`-family builtins
+  work unplugged from a browser; tz persisted, settable via /api/clock.
+- **Output pipeline** (3a29bfd): wire color order, global gamma LUT, and a
+  current-estimate power cap — applied between blend and protocol encode,
+  all live-settable + persisted (/api/output).
+- **Compile-panic fix, part 1** (61c4266): parser/compiler recursion
+  bounded at depth 60 → "nesting too deep" diagnostic instead of a device
+  stack overflow (the soak-v4 crash). Deepest real gallery pattern is 16.
+  Part 2 (a stack byte budget) was designed but became moot — v0.1.24
+  removed the compiler from the device entirely.
+- **Socket hardening + soak harness** (bd8d258): 45 s read_request timeout
+  (kills the pinned-socket cascade) and tools/hw-bench.mjs, the on-hardware
+  gallery soak + fps/pixel-count bench behind docs/bench-report.md.
+- **Board portability** (012d71b): board.rs identity module, four board
+  features incl. `board-esp32-generic`, wiring isolated to one marked
+  section of main.rs. All three Xtensa variants + C3 build clean as of
+  2026-07-08; docs/boards.md has the add-a-board recipe.
+- Plus: README front-door rewrite (9781563).
+
+## 2026-07-08 — device recovered ✅: v0.1.21 verified on hardware + tools/deploy.sh
+
+You serial-flashed the fix — thanks! Verified on the wall unit right after:
+
+- **Boot + OTA path healthy**: v0.1.21 up at ~124 fps, and a fresh OTA cycle
+  (ota_0 → ota_1) worked, so the wedge is fully behind us (boot guard armed).
+- **Sensors on hardware**: injected a frame via POST /api/sensors — exported
+  vars carried the exact values and the strip lit from `energyAverage`.
+- **Sync on hardware**: put the device in follower mode and fed it beacons
+  from the dev container — it hard-jumped onto the fake leader clock in <1 s
+  and held **±6 ms**. (Two-device sync awaits a second Luxel.)
+- **DDP/E1.31 re-verified** on the new build.
+- **MQTT/HA verified on your live broker** (192.168.1.2, user root): the
+  device connected, published retained discovery, and shows up as device
+  `luxel-4ae0d4` in HA — a **Light** and a **Pattern** select. Exercised
+  from the MQTT side against the real wall: brightness 66/255 → device 8/31
+  (state echoed back), power OFF blanked the strip with the engine still
+  running, ON restored, and selecting "Rainbow" from the (auto-announced)
+  library options switched the running pattern with the state topic
+  following. Brightness restored to your 4/31 afterwards. The device
+  library was empty post-recovery — I saved "Rainbow" into it so the
+  select has an option; check Settings → Devices in HA for the new device.
+
+**Your question — does flashing firmware also flash the asset bundle? No.**
+`espflash flash` writes only the app image; the web app lives in the
+`assets` partition (0x310000), deployed separately via POST /api/assets.
+Your recovery left the device serving a stale playground — fixed (pushed the
+current bundle), and now there's **`tools/deploy.sh <ip>`**: builds + OTAs
+the firmware, then builds + packs + pushes the assets, one command
+(`--fw-only` / `--assets-only` to split; validated live end-to-end).
+
+## 2026-07-08 — Mic-to-strip, oracle sweep, Luxel-to-Luxel sync (v0.1.21)
+
+Per your picks (all without the wedged device; everything below rides the
+same recovery flash):
+
+- **Mic → device forwarding**: with the playground's *sound* toggle on in
+  device mode, mic frames also stream to the strip via POST /api/sensors
+  (~20 Hz) — your laptop mic IS the sensor board. e2e-verified on the mirror.
+- **Oracle sweep vs the real PB (fw 3.67)**: 130/165 exact + new probes.
+  Transforms fully verified (composition order, cross-frame accumulation,
+  rotate direction — pinned as tests); found + fixed one real divergence
+  (`pow(negative, fractional)` now returns the PB's raw 0x80000000 instead
+  of 0); several TODO(oracle) markers settled (log2(≤0), refs-as-0, ref
+  identity equality, builtin shadowing aborts, div/0 family). New documented
+  supersets: builtins as first-class values, lenient arity.
+- **Luxel-to-Luxel sync v1**: one device leads, broadcasting its engine
+  timebase on UDP :4049 (4×/s, sensor frame piggybacked when fresh);
+  followers hard-jump when >1 s off, then slew smoothly by stretching frame
+  deltas. Same pattern on several Luxels = phase-locked, one mic drives all.
+  Role select in Settings (persisted; device-settings record → v4 with a
+  compatible v3 fallback). **Proven with two mirrors** — tools/sync-e2e.mjs
+  desyncs them 2.5 s and watches them converge to single-digit ms + the
+  sensor relay land. On-device: needs two recovered Luxels someday.
+
+## 2026-07-07 — ⚠️ DEV DEVICE NEEDS A BENCH RECOVERY (serial reflash)
+
+The v0.1.19 OTA (MQTT) **bricked the boot**: the first cut put ~12 KB of
+MQTT/netin buffers into embassy task futures — which are *statics*, and
+statics eat the DRAM that becomes the main task stack (the v0.1.4 lesson,
+re-learned). Main stack fell to ~10.7 KB (known-fatal is <15.6 KB) and the
+device now crash-loops before WiFi comes up, so OTA can't reach it.
+
+**To recover at the bench** (bad image is in ota_0; USB/serial):
+
+```
+cd firmware && ./build-esp32.sh board-pixelblaze-v3
+nix develop --command espflash save-image --chip esp32 \
+    target/xtensa-esp32-none-elf/release/luxel-fw /tmp/luxel-fix.bin
+nix develop --command espflash write-bin 0x10000 /tmp/luxel-fix.bin
+```
+
+(That writes the current fixed build — now v0.1.21, which also picks up the
+sensor-board/sound/sync work above — over the bad one; otadata already
+points at ota_0. The fix moves all big task buffers to the heap and trims
+the heap static 96→88 KB — main stack is back to ~31 KB.)
+
+**So this can never happen again:** the firmware now has a **boot-loop
+guard** — it counts boot attempts in flash before the risky part of boot,
+and on the 3rd consecutive boot that never reached "healthy" (60 s of
+serving) it flips otadata back to the other OTA slot by itself. A future
+bad OTA self-heals in ~30 s instead of wedging the device.
+
+## 2026-07-07 — Sound-reactive groundwork: playground mic + sensor-board support (v0.1.20) 🔶 partly device-blocked
+
+Per your pick (audio next, engine+playground first, sensor board too):
+
+- **Sensor bindings live in the engine** — `export var frequencyData` /
+  `energyAverage` / `maxFrequencyMagnitude` / `maxFrequency` / `light` /
+  `accelerometer` / `analogInputs` now receive data (they were zero-stubs).
+- **Playground "sound" toggle** (next to *debug*): feeds your microphone
+  through a WebAudio analyser reshaped to the PB sensor board's 32 log-spaced
+  bands (37 Hz–10 kHz) — sound-reactive patterns run in the browser today.
+  e2e-covered with chromium's fake mic.
+- **PB sensor expansion board support (firmware)** — the official board's
+  115200-baud `SB1.0` frames are parsed off UART0 RX (the expansion header's
+  RX0, where the board plugs in PB-style). Parser is shared with the mirror
+  and unit-tested; 🔶 hardware verification needs the recovered device (and a
+  physical board, if you have one).
+- **`POST /api/sensors`** (firmware + mirror) — accepts a raw sensor-board
+  frame over HTTP, so a desktop script can stream audio/motion data to the
+  device with no extra hardware. e2e-verified against the mirror.
+- Also: the **firmware size report** you asked for is in
+  [docs/size-report.md](docs/size-report.md) — TLDR: ~⅓ is Espressif's
+  closed radio stack; found + fixed one real lump (Fx printed via f64 →
+  −14.4 KB); regenerate with `tools/size-report.py`. And the **C3 devkit
+  build** compiles again (two rv32imc atomic-RMW slips).
+
+The onboard PB v3 mic (your "SPI audio") stays open: closed hardware,
+undocumented pinout — that's a bench session with the recovered device
+(I2S/PDM driver + FFT prep can happen any time; say the word).
+
+## 2026-07-07 — MQTT + Home Assistant discovery (firmware v0.1.19) 🔶 device-blocked
+
+Point the device at an MQTT broker (Settings → "MQTT / Home Assistant":
+host/port/user/pass, applied live, persisted in flash) and it announces
+itself to Home Assistant automatically via MQTT discovery:
+
+- **Light** — power + brightness as a normal HA light. Power off blanks the
+  strip while the engine keeps running, so ON resumes mid-animation.
+- **Pattern select** — the device pattern library by name; picking one runs
+  it (and re-announces when the library changes).
+- Availability (`luxel/<id>/status`) with an offline LWT; state topics echo
+  changes made anywhere (web UI slider moves show up in HA within ~5 s).
+
+Topics/payloads live in `luxel_core::hamqtt` (unit-tested), shared between
+firmware (rust-mqtt over embassy-net, with a tiny embedded-io 0.7→0.6
+adapter) and the mirror (rumqttc). **Verified end-to-end against a real
+mosquitto** with the mirror: retained discovery configs, brightness
+round-trip (HA 128 → device 16 → state 132), pattern select switched the
+running pattern. Also: `/api/mqtt` GET/POST, broker creds in the third nvs
+sector, `connected` status in Settings. e2e: 68 device checks green.
+
+🔶 On-device verification is blocked on the bench recovery above; after
+that, OTA the fixed image and point it at a broker (HA's Mosquitto add-on
+or any broker; note the dev container's broker may not be reachable from
+the device's subnet — use the HA one).
+
+## 2026-07-07 — DDP + E1.31 network input (firmware v0.1.18) ✅
+
+xLights / LedFx / Resolume can now drive Luxel as a network pixel output:
+the device listens for **DDP on UDP :4048** and **E1.31/sACN on UDP :5568**
+(universe 1 up, 170 px each). Incoming frames paint the strip directly,
+bypassing the engine; ~2.5 s after the stream stops, the running pattern
+takes back over — so a LedFx session ends and the wall just resumes its
+playlist. `/api/status` gained a `live` field (`"ddp"`/`"e131"`/`null`) and
+Settings shows a "Network input" status row.
+
+Packet parsing lives in `luxel_core::netin` (unit-tested, shared by firmware
+and mirror). Verified end-to-end on the wall unit: DDP red/green/blue +
+offset writes, E1.31 magenta, and the timeout-resume — all over real WiFi.
+Multicast sACN groups are joined at boot but only unicast was verifiable
+from the dev container (bridges/APs commonly filter multicast); xLights and
+LedFx default to unicast anyway. Image is 887 KB — still 161 KB under the
+1 MiB OTA slot. Both e2e suites green (65 device checks); v0.1.18 OTA'd.
+
+Also: **springy easings** — `easeOutBack`, `easeOutElastic`, `easeOutBounce`
+join the builtins (that completes the entire builtins backlog in ideas.md).
+
+## 2026-07-07 — Playlist crossfade transitions (firmware v0.1.17) ✅
+
+Playlists can now **crossfade** between items instead of hard-cutting. The
+Playlist tab has a new "crossfade" field (seconds; blank/0 = hard cut). During
+a transition the render task keeps the outgoing pattern alive and linearly
+blends it into the incoming one over the set time — verified on the wall unit:
+a red→blue item change ramps through `a3005b`→`62009c` mid-fade rather than
+snapping. The crossfade time persists in flash (playlist wire format gained an
+`X <ms>` line) and applies on both auto-advance and manual next/prev.
+
+Also: the app crossed the **1 MiB OTA-slot** boundary at this version, so the
+release profile moved to `opt-level = "s"` (size) — reclaimed ~177 KB (image
+1,052 KB → 875 KB) with no visible render-rate hit (still 125 fps). Both e2e
+suites green; v0.1.17 OTA'd to the wall unit.
+
+## 2026-07-07 overnight — batch: gallery search, playlist polish, 3D preview, WiFi form, device map ✅
+
+While you slept (you picked web features + WiFi + device map, OTA authorized):
+
+- **Gallery search** — a search box filters the 190+ patterns by name.
+- **Playlist polish** — a Clear button, a "N items · loop ≈ Xm Ys" total, and
+  playlist entries whose pattern was deleted now show "(deleted)" and can be
+  removed (the scheduler skips past them).
+- **3D map preview** — a map whose z varies now renders as a slowly
+  auto-rotating point cloud (depth-sorted, nearer points larger/brighter)
+  instead of flat.
+- **WiFi settings form** — the Settings tab shows the network the device will
+  join and lets you change the credentials (it reboots to apply).
+- **Device map upload** (firmware v0.1.16) — install a computed 2D/3D map onto
+  the device so its patterns render with real geometry (render2D). Verified on
+  the wall unit: a reversed map really does drive the pixels (and it survives a
+  reboot). "Install on device" / "clear device map" live in the map sub-tab.
+
+All committed + deployed (v0.1.16 OTA'd; web hot-reloaded); the wall is back to
+the rainbow with a clean slate. Both e2e suites green (61 device checks). Left
+alone per your note: persistence of a single ad-hoc (non-playlist) pattern.
+
+## 2026-07-06 night — Playlist + "untitled" fix ✅
+
+**Playlist** (firmware v0.1.15): a new device tab that plays your saved patterns
+in order. Each entry carries its own **parameters**, so the same pattern can
+appear multiple times with different looks — "+ playlist" in the editor captures
+the current slider values. Durations are flexible: a playlist-level default,
+each item can override it, and default-blank = manual advance (so you get global
+timed, per-item timed, or manual, even mixed). It's **saved on the device and
+resumes across reboots** — verified on the wall unit (after a reboot the playlist
+and its params were intact and still playing). Built across the native mirror,
+the web UI (reorder / remove / inline params), and the firmware scheduler.
+
+**"untitled pattern" fix:** on a device the header showed "untitled" because the
+device streams only source, not which saved pattern it is. Now the editor
+recognizes the running pattern as its saved library entry and shows the name.
+(Along the way, fixed the editor spuriously marking freshly-loaded patterns as
+edited — which also makes the resume-your-edits behavior more reliable.)
+
+Re: your reboot question — **playlists** now persist and resume across reboots.
+A single ad-hoc (non-playlist) pattern still resets to the default on reboot;
+I can add persistence for that too — say the word.
+
+## 2026-07-06 night — clean device load (no flash, clear "running on device") ✅
+
+You saw the window flash the playground before a connecting spinner appeared. On
+a device the app now probes for the device in parallel with the wasm load and
+holds a **full-screen boot cover** until it's decided device-vs-playground and
+loaded the device's running pattern — so nothing flashes first. The cover reads
+**"opening the pattern running on the device…"**, making it clear the pattern is
+the one already on the device. Web-only hot reload; both e2e suites green.
+
+## 2026-07-06 night — device mode = local preview + push (no streaming) ✅
+
+Per your call: the live pixel stream from the device wasn't helpful, so it's
+gone — along with the connect/disconnect buttons (it's always connected for the
+API). Device mode is now **the playground that also drives the strip**:
+
+- The preview runs on the **local WASM engine**, instantly — no device round-trip
+  and no ws/HTTP pixel polling. You watch the real strip for the real thing.
+- **Editing pushes to the device**: typing recompiles locally (fast) and pushes
+  the code over WiFi (throttled; a broken pattern is never sent). Controls drive
+  both the preview and the strip. The **step-debugger now works in device mode**
+  (it's genuine local compute).
+- **No connect/disconnect/reconnect buttons or badge** — the wordmark shows the
+  device; a failed connect just shows an error (reload to retry).
+- It **still waits for the device on load** so it opens whatever pattern is
+  running, exactly as you asked.
+
+Web-only (the firmware still can stream — the UI just stopped asking), so it went
+out as a hot asset reload, no reflash. Both e2e suites green (43 device checks);
+code-push verified on the wall unit.
+
+## 2026-07-06 night — live LED-protocol switch (firmware v0.1.14, no reboot) ✅
+
+You asked about protocol — different strips use different ones. You can now
+switch **SK9822 (APA102) ↔ WS2812 (WS281x)** at runtime, no reboot, from a
+Settings dropdown. esp-hal's blocking SPI has `apply_config()`, so the render
+task just changes the clock (8 MHz ↔ 2.4 MHz) and re-sizes the encode buffer
+between frames — same live-swap trick as pixel count.
+
+- `GET/POST /api/protocol` (accepts sk9822/ws2812 plus aliases apa102/ws2811/
+  ws2815). Persisted alongside brightness + pixel count (settings record → v3).
+- Verified on the wall unit: sk9822→ws2812→sk9822 live, no crash, SPI restored
+  to full speed (a trivial pattern is back to 124 fps). Left on sk9822 (its real
+  strip), rainbow running.
+- Firmware v0.1.14 OTA'd; mirror + web + e2e updated (device suite now 49
+  checks); assets hot-reloaded.
+
+**All three device settings — brightness, pixel count, LED protocol — are now
+live, persisted, and reboot-free.** Phase 3 is down to just the Settings WiFi
+form (the endpoint already exists).
+
+## 2026-07-06 night — live pixel-count resize (firmware v0.1.13, no reboot) ✅
+
+You asked for `/api/config` pixel count next and said a reboot isn't ideal — it
+turned out a **live resize with no reboot** is feasible, so that's what shipped.
+The SPI is Blocking (no DMA) and the encode buffer is a plain heap Vec, so the
+render task (which already rebuilds the engine on every code upload) just
+reallocs and recompiles at the new count between frames.
+
+- `GET/POST /api/config` — POST a pixel count (1–2048), the strip resizes
+  instantly. Persisted alongside brightness in flash (the settings record went
+  v2). The **Settings Pixels field is now editable** and re-anchors the preview.
+- Verified on the wall unit: 300→150→300 with **no reboot** (same OTA slot, fps
+  never dropped, heap freed at 150 and came back at 300), out-of-range rejected,
+  and it persists. Left at 300 (the physical strip length).
+- Firmware v0.1.13 OTA'd; mirror + web + e2e all updated (device suite now 46
+  checks); assets hot-reloaded.
+
+Still open in Phase 3: a runtime LED-protocol switch and the Settings WiFi form.
+
+## 2026-07-06 night — device-editor polish + real brightness (firmware v0.1.12) ✅
+
+Continued from your feedback, then took the plan's next step.
+
+- **Waterfall clears on every open**, and the **save/⋯ actions moved** out of the
+  header into a toolbar fixed above the editor (`1945a73`).
+- **Device editor fixes** (`6db7f03`): opening a device pattern now shows a
+  **loading screen** until its source is fetched (no more flash of the last
+  script); **Device Patterns get live preview thumbnails**; the **strip/grid/2D
+  map dropdown is back on the device** (pixel count fixed by hardware; map is a
+  local preview aid); and a **dirty-aware resume** — on load we only resume the
+  last file if it had unsaved changes (and then push it so the device runs it
+  too), otherwise we open whatever pattern is active on the device.
+- **Brightness is real** (`6143352`, **firmware v0.1.12**, OTA'd to the dev
+  device): a runtime `GET/POST /api/brightness`, applied every frame in the
+  encode path (SK9822 current field + a WS2812 software scale) and **persisted
+  in flash** (new `LXDV` nvs record, its own sector so it never touches WiFi
+  creds) so it survives reboot. The Settings **Brightness slider is now live**
+  (was a placeholder). Verified on hardware: live apply, out-of-range rejected,
+  flash-persist ok. Note: the web preview stays at full range — brightness dims
+  the physical strip only. Remaining Phase-3 item is `/api/config` (pixel
+  count/protocol), which needs a runtime pixel count + reboot-to-apply.
+
+Both e2e suites green (device suite now 42 checks incl. layout/thumbnail/
+dirty-resume/brightness); assets hot-reloaded to 192.168.0.205.
+
+## 2026-07-06 night — navigation redesign: library-first, editor-on-demand ✅
+
+Restructured the app around how you actually work with patterns, per your
+direction:
+
+- **The Editor is no longer a tab.** It opens **full-screen** (its own bar:
+  ← back · name · save/⋯) when you create a pattern or pick one to inspect —
+  which "really gives you the feel that you are editing something." On load it
+  **resumes your last edit** (falls back to the Patterns Library); on a device
+  it opens on the **running pattern**.
+- **"Patterns" → "Patterns Library"**, with a **+ New pattern** button. It holds
+  the examples, community corpus, and your saved patterns (chips). Picking a
+  tile opens it in the editor.
+- **New "Device Patterns" tab** (device mode) — the patterns in the device's
+  memory, each opens/activates in the editor; its own **+ New pattern**.
+- **The examples dropdown is gone entirely.** Pattern selection is the Library /
+  Device Patterns lists now.
+- **Mapping is clearly optional**: the layout selector gained a **"2D map"**
+  option — choosing it is the *only* enable/disable for mapping. It reveals the
+  pattern·map editor sub-tabs and runs the map program; any other layout turns
+  mapping off. (Replaces the old "back to strip" button.)
+
+Both e2e suites were rewritten for the new flow (editor entered via New / tile /
+device pattern; no picker) and are green in real chromium: 58 playground + 28
+device checks. Pushed to the dev device.
+
+## 2026-07-06 night — control-picker layout, no device-URL field, no share on device ✅
+
+Three UI fixes from your feedback:
+
+- **Color-picker controls no longer run off-screen.** An `hsvPicker`/`rgbPicker`
+  laid its three channels out in one horizontal row, so the 2nd/3rd sliders
+  overflowed the narrow right rail and were unreachable — and the channels had
+  no numeric field. They now **stack vertically**, each channel with a slider
+  **and** an editable number box (like the scalar sliders). Verified: 0 rail
+  overflow.
+- **No more "device url" field.** The address is always known — a real device
+  serves the UI from its own flash (auto-connect to same origin), and reconnect
+  just reuses that. So disconnect → **"reconnect" button, no URL to type**. A
+  hosted/standalone playground has *no* device support at all (that's what
+  playground mode is for), so it shows no connect UI. (Dev/e2e point the built
+  UI at a device or the mirror with `?device=<base>`.)
+- **Share is gone in device mode.** Those links carry the pattern in the URL —
+  on a device that's a LAN address that won't work for anyone else. Share is now
+  shown only in the playground (keyed off the same "is this a playground?"
+  state, so it's hidden whether you're connected or just served from a device).
+
+The map sub-tab is likewise gated to playground mode (device map upload is a
+later firmware item). device-e2e updated (auto-connect via `?device=`, asserts
+no URL field / no share button in device mode, and reconnect-without-URL); both
+suites green. Pushed to the dev device.
+
+## 2026-07-06 night — clean device connect-on-load (no more waterfall garbage) ✅
+
+Fixed the connect weirdness you flagged: on load the waterfall skipped and kept
+stale/old data after the connection stabilized, because the async handshake
+(status → source → controls → ws) leaked pre-stabilization frames.
+
+- **Connection phase state** (`idle → connecting → live`). `connectDevice` enters
+  **connecting** and holds the preview blank; a `markLive()` helper flips to
+  **live** the moment the *real* stream delivers its first datum (ws pixels or
+  status, or the HTTP-fallback poll) and clears the preview **once** at that
+  transition. So leftover playground content, canvas-resize artifacts, and
+  HTTP/WS cadence jitter can never end up in the waterfall.
+- **Visible connecting state** — a "connecting…" pill in the header and a
+  spinner overlay on the preview, so the async handshake reads as intentional
+  instead of showing stale frames.
+
+Verified in the device-e2e (against the native mirror): on connect, the
+waterfall is held **blank (0 lit)** all the way through the handshake, then
+streams cleanly — plus the existing 19 device checks and 55 playground checks
+stay green. Pushed to the dev device.
+
+## 2026-07-06 night — mapper is a debuggable Luxel program in its own editor tab ✅
+
+Re-read the feedback and fixed the thing I'd under-heard: "the mapping function
+should be a tab on the script editor **and debuggable as well**." Per your call,
+the map is now a **Luxel program** (not JS), which makes it debuggable for free
+by reusing the pattern VM + debugger.
+
+- **New `plot(x, y[, z])` builtin** + engine "map mode": a map program exports
+  `render(index)` and calls `plot()` once per pixel. A second engine runs it
+  through the *same* per-pixel `drive` loop as patterns, but stores the plotted
+  coordinate instead of a color. Collected coords install into the pattern
+  engine as a 2D/3D map.
+- **Editor sub-tab (pattern · map).** The map is edited in the same CodeMirror
+  as patterns — luxel highlighting, completions, hover — not a bare textarea.
+- **Debuggable exactly like a pattern.** Gutter breakpoints, step over/into/out,
+  the call stack, locals, and globals all work on the map program because it's
+  real VM code. (The debugger panel is now a shared `Debugger.svelte`.) A live
+  scatter preview renders the pattern on the computed map.
+- Spans all layers: luxel-core (`plot`, `enable_map_mode`/`run_map`/`map` +
+  4 unit tests), luxel-wasm (`lx_run_map`/`lx_map_*`), luxel.ts
+  (`compileMap`/`runMap`), App.svelte. Playground-only for now (installing a
+  computed map on the device is a later firmware item).
+
+Also, two small fixes you flagged: the page **`<title>` is now just "Luxel"**
+(was "Luxel Playground"), and the **Patterns tab shows a loading state** — the
+built-in examples render immediately and a spinner reads "loading patterns…"
+while the corpus streams in, instead of a bare "0 patterns."
+
+Verified in real chromium: 55 playground checks (incl. map runs, installs,
+scatter renders, **breakpoint pauses the map run at pixel 0**, compile errors,
+back-to-strip) + 19 device-mode checks, all green; 65 Rust tests pass. Pushed to
+the dev device as a hot asset reload (the map tab is playground-only, so it's
+hidden in device mode).
+
+## 2026-07-06 night — web UI Phase 2: tabs + decluttered header ✅
+
+Phase 2 of the web-UI redesign — a real tabbed app instead of one crowded
+header. Web-only (no firmware / no reflash); pushed to the dev device as a hot
+asset reload, so http://192.168.0.205/ is already running it.
+
+- **Tab bar in both modes.** `Editor · Patterns` in playground; device mode adds
+  `Settings`. Panels stay mounted and hide via CSS, so the render loop, editor
+  state, and gallery tile-engines all survive a tab switch.
+- **Header decluttered** to just wordmark · tabs · status (fps + streaming/
+  polling) · connection. Everything else moved out:
+  - *Editor toolbar* (above the editor): pattern picker + `save`/`delete`,
+    `share` (playground only, prominent), and a `⋯` overflow with import/export.
+  - *Playback bar* (below the editor): layout (strip/grid/px — playground only),
+    fps, pause, debug.
+- **Patterns tab** — the gallery, promoted from a modal overlay to a first-class
+  inline tab. Lazy-mounted on first visit then kept alive; picking a pattern
+  jumps back to the Editor tab.
+- **Settings tab** (device mode) — device address, live pixel-count readout, and
+  status; brightness / pixel-count editing / WiFi are honest **Phase-3
+  placeholders** (labeled as needing firmware — only `/api/wifi` exists today).
+- **Share** hidden in device mode (it's a playground affordance), prominent in
+  playground mode — per the feedback.
+
+Both e2e suites were rewired to the new `data-role` hooks (`pattern-picker`,
+`tab-*`, `overflow`, `map-badge`, `layout-*`, `cfg-pixels`, `pause`, `fps`) and
+are **green in real chromium** — 51 playground checks + 19 device-mode checks
+against the native mirror. Verified the served bundle on hardware: index.html
+(revalidated) points at the new immutable hashed JS/CSS.
+
+Still ahead (docs/webui.md): Phase 3 (firmware `/api/brightness` + `/api/config`,
+wire the Settings fields, fix the connect-on-load race), Phase 4 (mapper as a
+CodeMirror tab + debuggable, 3D preview, Playlist tab + firmware storage,
+MQTT/HA, AP-mode).
+
+## 2026-07-06 evening — HTTP caching: assets only re-download when changed (v0.1.11) ✅
+
+You asked the device to take advantage of browser caching — no redownload of
+unchanged assets. Done and verified live on hardware:
+
+- **Content-hashed bundle files** (`/assets/index-<hash>.js`/`.css`) now serve
+  `Cache-Control: public, max-age=31536000, immutable` — the browser reuses
+  them with **zero network** until their hash (and thus URL) changes.
+- **The unhashed files** (`index.html`, `luxel.wasm`, `gallery.json`) serve a
+  **strong ETag** + `Cache-Control: no-cache`, so the browser revalidates with
+  `If-None-Match` and gets a **304 Not Modified** (empty body) when unchanged —
+  a full download only when the content actually changed.
+
+Implementation: the LUXA archive gained a v2 format (`LUX2`) carrying an
+8-byte SHA-256 content hash per file (packed host-side); the firmware serves it
+as the ETag and answers `If-None-Match` with a 304. The firmware still reads
+legacy `LUXA` archives (those assets just revalidate to a 200). No new stack
+cost (stack-check green at 12 KB; clippy clean).
+
+Verified on the device (v0.1.11, OTA'd onto ota_0): every asset returns its own
+correct ETag; a matching `If-None-Match` → `304` with no body; a stale one →
+`200`; `/assets/*` carries `immutable`, the rest `no-cache`. So a second visit
+to http://192.168.0.205/ re-fetches nothing unless a file changed.
+
+## 2026-07-06 evening — web UI feedback sorted + Phase-1 fixes ✅
+
+You gave a big batch of web-UI feedback. First, **sorted into the docs so
+nothing is forgotten**: the full redesign backlog now lives in
+[docs/webui.md](docs/webui.md) (two modes: device console vs. playground;
+tabs; settings page; header declutter — each item tagged with effort and
+firmware-dependency), cross-referenced from ideas.md. Notable finding: a real
+settings page needs new firmware (brightness/pixel-count/config endpoints,
+MQTT) — only `/api/wifi` exists today.
+
+Then **Phase 1** (web-only, no reflash — both e2e suites green in chromium):
+
+- **Not a "playground" on a device.** The wordmark now shows the device
+  (name/URL) in device mode, "playground" only when standalone. A `data-mode`
+  hook is in place for the Phase-2 restructure.
+- **Reconnect remembers the device.** Disconnect → connect no longer needs the
+  URL re-typed; the last successful base is remembered (and persisted to
+  localStorage), reused automatically.
+- **"ws push" → "streaming"** (and "polling · N ms" for the HTTP fallback) —
+  the old jargon meant nothing to users.
+- **Debugger no longer lies on a live device.** A gutter breakpoint used to arm
+  debug mode even when connected (the button was disabled but the gutter path
+  bypassed it); it's now fully gated off in device mode.
+- **Share hidden in device mode** — it only makes sense for the hosted
+  playground.
+- **Pattern-browser spinners** while a tile's preview is still computing.
+
+The heavier items (tab restructure + header overflow menu, firmware settings
+endpoints, connect-on-load race, mapper-as-editor-tab, 3D preview, playlists)
+are phased in docs/webui.md as Phases 2–4.
+
+## 2026-07-06 late — chunked patterns: larger than one flash page (v0.1.10) ✅
+
+You asked for chunking so patterns aren't capped at one 4 KB flash page.
+Done and hardware-verified:
+
+- A pattern's source now splits across up to 4 chunk items (~3.8 KB each,
+  ~15 KB total — 4x the old limit, and the practical ceiling since the 16 KB
+  HTTP buffer bounds a POST there anyway). Each pattern also has a small meta
+  item (name + chunk count + generation).
+- **Atomic updates via generation flip:** an update writes new chunks to the
+  *other* generation, then rewrites the meta (the single-item commit point) —
+  a power loss before that leaves the old version fully intact. A **RAM
+  index** (built at boot) keeps list/lookup off the flash.
+- **Format-version marker:** boot wipes `storage` if the on-flash layout
+  isn't the current one, so the incompatible pre-chunking items auto-migrate
+  (saw `format 0 != 2, wiping storage` on the upgrade boot).
+
+**Two bugs caught in hardware testing, both fixed:**
+- A GET of a >4 KB pattern OOM'd (`allocation of 21880 bytes failed`): the
+  old `format!(json_escape(..))` path built an ~11 KB intermediate plus a
+  doubling result buffer → a ~22 KB contiguous request that fragmentation
+  couldn't satisfy. Now escapes into one pre-sized string; `read_source`
+  pre-sizes too.
+
+Verified on hardware: byte-exact round-trip of 2-, 3-, and 4-chunk patterns
+(7.7 / 10.8 / 15.1 KB, md5-matched), upsert returns the latest, small +
+large patterns coexist, persistence across reboot. Larger-than-15 KB
+patterns stay in the browser library (source stays there regardless).
+
+## 2026-07-06 afternoon — pattern library verified on hardware (v0.1.7) ✅
+
+You serial-flashed v0.1.6 (new factory-less table). Boot was textbook:
+`Erasing storage (Data(Spiffs))…`, table shows `storage @ 0x210000`,
+`booted from: ota_0`, `patterns: 0 stored`, flash creds + assets both
+survived. Then full pattern CRUD verified on the real device:
+
+- list/save/get/activate/delete all round-trip through flash; activate
+  drives the pixels; missing-delete → "no such pattern".
+- **Found + fixed a bug in testing (v0.1.7):** sequential-storage's
+  `fetch_all_items` returns superseded item versions after an upsert, so
+  the list showed a duplicate id — now deduped by key (`fetch_item` already
+  returns the latest for reads).
+- **Persistence:** OTA'd both slot directions on the factory-less table
+  (ota_0↔ota_1, clean) and confirmed saved patterns survive the reboot —
+  serial `patterns: 2 stored`, NEXT_SEQ correctly reseeded from stored ids.
+
+Left two curated patterns in the device library ("simplex aurora", "beat
+pulse", both using the new builtins) with aurora running. **Task #9 done.**
+
 ## 2026-07-06 midday — firmware pattern storage (v0.1.6); dropped factory; stack guardrails
 
 Working with you awake. Two design calls you made, both shipped:

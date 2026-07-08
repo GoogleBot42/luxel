@@ -24,6 +24,7 @@ pub fn parse_program(src: &str) -> Result<Vec<Stmt>, Diagnostic> {
         toks,
         pos: 0,
         prev_span: Span::default(),
+        depth: 0,
     };
     let mut stmts = Vec::new();
     while !p.at_eof() {
@@ -37,7 +38,21 @@ struct Parser<'s> {
     toks: Vec<Token>,
     pos: usize,
     prev_span: Span,
+    /// Current recursion depth (statements + expressions). Bounded so a
+    /// pathologically nested source becomes a compile ERROR — on the
+    /// firmware the parser shares a ~30 KB task stack with everything
+    /// (incl. WiFi NMI frames), and unbounded recursion overflowed it in
+    /// the field (stack-guard panic while soaking the corpus).
+    depth: u32,
 }
+
+/// Deepest allowed statement/expression nesting. The heaviest community
+/// pattern measures well under half of this; Xtensa frames for
+/// stmt/expr levels are ~200-400 B, so 60 levels stays within a few KB.
+const MAX_DEPTH: u32 = 60;
+
+#[cfg(feature = "depth-probe")]
+pub static PEAK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 impl<'s> Parser<'s> {
     // ---- cursor helpers ----
@@ -134,6 +149,18 @@ impl<'s> Parser<'s> {
     // ---- statements ----
 
     fn stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        self.depth += 1;
+        #[cfg(feature = "depth-probe")]
+        crate::parse::PEAK.fetch_max(self.depth, core::sync::atomic::Ordering::Relaxed);
+        let r = self.stmt_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn stmt_inner(&mut self) -> Result<Stmt, Diagnostic> {
+        if self.depth > MAX_DEPTH {
+            return Err(self.err_here("nesting too deep".into()));
+        }
         let start = self.span_here();
         match self.peek() {
             None => Err(self.err_here("expected statement".into())),
@@ -160,6 +187,7 @@ impl<'s> Parser<'s> {
                 }
             }
             Some(Tok::Function) => self.func_stmt(false, start),
+            Some(Tok::Assert) => self.assert_stmt(start),
             Some(Tok::If) => self.if_stmt(),
             Some(Tok::While) => self.while_stmt(),
             Some(Tok::For) => self.for_stmt(),
@@ -310,6 +338,27 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// `assert(cond[, "message"])` — the compiler additionally rejects it
+    /// anywhere but the top level (it runs inline in init).
+    fn assert_stmt(&mut self, start: Span) -> Result<Stmt, Diagnostic> {
+        self.bump(); // `assert`
+        self.expect(Tok::LParen, "`(` after `assert`")?;
+        let cond = self.assign_expr()?;
+        let message = if self.eat(Tok::Comma) {
+            let t = self.expect(Tok::Str, "a quoted \"message\" after `,`")?;
+            let quoted = self.slice(t.span);
+            Some(quoted[1..quoted.len() - 1].to_string())
+        } else {
+            None
+        };
+        self.expect(Tok::RParen, "`)`")?;
+        self.terminate()?;
+        Ok(Stmt {
+            kind: StmtKind::Assert { cond, message },
+            span: start.to(self.prev_span),
+        })
+    }
+
     fn if_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         let start = self.span_here();
         self.bump(); // `if`
@@ -402,6 +451,19 @@ impl<'s> Parser<'s> {
     }
 
     fn assign_expr(&mut self) -> Result<Expr, Diagnostic> {
+        self.depth += 1;
+        #[cfg(feature = "depth-probe")]
+        crate::parse::PEAK.fetch_max(self.depth, core::sync::atomic::Ordering::Relaxed);
+        if self.depth > MAX_DEPTH {
+            self.depth -= 1;
+            return Err(self.err_here("expression nesting too deep".into()));
+        }
+        let r = self.assign_expr_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn assign_expr_inner(&mut self) -> Result<Expr, Diagnostic> {
         let lhs = self.ternary_expr()?;
         let op = match self.peek() {
             Some(Tok::Assign) => Some(None),
@@ -715,6 +777,11 @@ impl<'s> Parser<'s> {
                     span: start.to(self.prev_span),
                 })
             }
+            Some(Tok::Str) => Err(self.err_here(
+                "the pattern language has no string values — a quoted string \
+                 is only allowed as `assert(cond, \"message\")`"
+                    .into(),
+            )),
             _ => Err(self.err_here("expected an expression".into())),
         }
     }

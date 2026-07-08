@@ -12,32 +12,23 @@ Legend: **[S/M/L]** effort · ★ value (1–3) · `compat` = keeps PB patterns 
 New builtins are the cheapest high-value wins — they slot into the VM table
 and the autocomplete/docs pipeline, and can't break existing code.
 
-- **Easing functions** [S] ★★★ — `easeIn/OutQuad`, `easeInOutCubic`,
-  `easeOutBack`, `easeOutElastic`, `easeOutBounce`. Pattern authors
-  reinvent these constantly. Pure math over 0..1.
-- **Color-space helpers** [M] ★★★ — `oklch(l, c, h)` / `oklab(...)` for
-  perceptually-uniform gradients (dramatically nicer fades than HSV),
-  `rgb2hsv`/`hsv2rgb` as value-returning (not just pixel-setting) forms,
-  `mixColors(c1, c2, t)` in a good space. The single biggest visual-quality
-  lever.
-- **Smoothing / filters over arrays** [M] ★★ — `blur1D(arr, radius)`,
-  `boxBlur`, `feedback(arr, decay)` — trails/glow are ubiquitous and
-  hand-rolled today (KITT's decay loop is the pattern).
-- **Vector helpers** [S] ★★ — `dist(x1,y1,x2,y2)`, `dist3`, `dot`, `norm`,
-  `angleBetween`. 2D/3D map patterns need these; today it's raw `hypot`.
-- **`map(x, inLo, inHi, outLo, outHi)`** [S] ★★★ — Arduino-ism everyone
-  expects; trivial and constantly wanted.
-- **`fract`/`step`/`sign`/`saturate`** [S] ★★ — the shader vocabulary;
-  authors coming from GLSL/Shadertoy reach for these.
+- **Easing functions** [S] ★★★ — DONE (quad/cubic in/out/inOut +
+  `easeOutBack`/`easeOutElastic`/`easeOutBounce`; endpoint + shape tests).
+- **Color-space helpers** [M] ★★★ — DONE (`oklch`/`oklab`, value-returning
+  `rgb2hsv`/`hsv2rgb`, `mixColors`).
+- **Smoothing / filters over arrays** [M] ★★ — DONE (`blur1D(arr, radius)`,
+  `feedback(arr, decay)`).
+- **Vector helpers** [S] ★★ — DONE (`dist`/`dist3`, `dot`/`dot3`,
+  `angleBetween`, `length`/`length3`).
+- **`map(x, inLo, inHi, outLo, outHi)`** [S] ★★★ — DONE.
+- **`fract`/`step`/`sign`/`saturate`** [S] ★★ — DONE.
 - **Simplex noise + curl noise** [M] ★★ — simplex DONE (`simplex2`/
   `simplex3`, hash-based fixed point, tested). Curl noise deferred: a
   finite-difference curl on 16.16 noise is too quantization-noisy to be
   pretty; do it when the noise gets analytic derivatives.
-- **`beatSin`/`beat`(bpm, lo, hi)** [S] ★★ — FastLED-style tempo helpers;
-  makes music-synced-feeling patterns easy without real audio.
-- **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — stable per-pixel
-  randomness (sparkle that doesn't reshuffle each frame) — the corpus
-  fakes this with the prng today.
+- **`beatSin`/`beat`(bpm, lo, hi)** [S] ★★ — DONE.
+- **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — DONE (lowbias32,
+  sequence pinned by test).
 - **`blur2D(arr, w, h, radius)`** [S/M] ★★★ — the 2D sibling of `blur1D`
   for the row-major virtual-canvas idiom the 2D examples settled on.
   Typing Heatmap hand-rolls a 4-neighbor diffusion loop today, Soap and
@@ -77,6 +68,36 @@ and the autocomplete/docs pipeline, and can't break existing code.
   change (heap strings, ops). Gated behind a use case.
 - **Named/default parameters** [M] ★ — `function f(a, b = 1)`. Modest.
 
+## Soak-v5 follow-ups (2026-07-08 — see bench-report.md for the failing list)
+
+The v0.1.25 heap hardening left 19/195 gallery patterns degraded on-device
+(zero panics — every failure below is a clean vmerr/rejection). In-place
+bytecode execution is being worked on now; the rest are queued:
+
+- ~~Streaming pattern uploads~~ — DONE (v0.1.27): /api/code + /api/patterns
+  stream like OTA/assets; upload cap gone, per-connection buffer 4 KB.
+- ~~Byte-accurate array budget~~ — DONE (v0.1.27).
+- ~~In-place bytecode execution~~ — DONE (v0.1.26, LXBC v2): the VM
+  interprets flat bytes; decoded Programs ≈ 1.2–2.5× blob (was ~5×).
+- ~~Oracle probe: `render2D` with no map~~ — DONE 2026-07-08 (see
+  04-oracle-findings.md): a PB that ever saved a map can't be made mapless
+  via its public interface, so PB-as-experienced always has one; Luxel now
+  auto-installs a default ceil(√n) grid for 2D/3D-only patterns. The
+  remaining Breakout/Crosstown/Frogger failures at 300 px are the
+  patterns' own square-rig assumption — they'd OOB identically on a real
+  PB at 300 px (engine test pins both halves).
+- **Flash-mapped library execution** [L] ★ — the very last word in pattern
+  RAM: run library patterns straight out of flash-mapped storage (no RAM
+  copy of the code at all). Needs contiguous blob placement (the
+  sequential-storage KV chunks aren't mappable) — e.g. a dedicated raw
+  region like the web-assets partition. With in-place execution shipped,
+  only Emoji-class patterns (arrays, not code) still exceed the device, so
+  this is now low-priority.
+- **WiFi-blob buffer tuning** [M] ★ — esp-radio's RX/TX buffer counts are
+  default-generous; the blob's heap draw is the biggest remaining consumer
+  (~40+ KB). Tunable via esp-config; trade OTA/preview throughput for
+  pattern headroom if ever needed.
+
 ## Engine / runtime
 
 - **Multi-pattern blend / transitions** [L] ★★★ — run two patterns and
@@ -106,9 +127,12 @@ and the autocomplete/docs pipeline, and can't break existing code.
 
 ## Peripherals & audio (M5 territory, high wow-factor)
 
-- **I2S mic + on-device FFT** [L] ★★★ — real sound-reactivity: expose
-  `frequencyData[]`, `energyAverage`, `maxFrequency` like PB's sensor board.
-  The single most-requested LED-controller feature. The stubs already exist.
+- **I2S mic + on-device FFT** [L] ★★★ — real sound-reactivity. GROUNDWORK
+  DONE (v0.1.20): engine sensor bindings live (`Engine::set_sensors`),
+  playground browser-mic source, PB sensor-board UART frames parsed on the
+  expansion header, POST /api/sensors network injection. Remaining: the PB
+  v3's own onboard mic (undocumented closed hardware — needs a bench
+  session to find the pins) or any I2S/PDM mic + on-device FFT.
 - **Generic sensor framework** [L] ★★ — accelerometer/light/analog as
   pluggable providers (already the M5 plan); makes the PB sensor board just
   one driver.
@@ -117,17 +141,35 @@ and the autocomplete/docs pipeline, and can't break existing code.
 
 ## Integration (M4)
 
-- **MQTT + Home Assistant discovery** [M] ★★★ — the reason this project
-  exists for a lot of people; brightness/power/pattern-select as HA entities.
-- **DDP / E1.31 input** [M] ★★ — let xLights/Resolume drive Luxel as a dumb
-  output; complements the live-coding story.
-- **Luxel-to-Luxel sync** [L] ★★★ — timebase sync + leader/follower groups
-  so multiple controllers render one coherent installation. `nodeId()` is
-  already a builtin anticipating this.
+- **MQTT + Home Assistant discovery** [M] ★★★ — DONE (firmware v0.1.19 +
+  mirror; light = power/brightness, select = pattern library, MQTT
+  discovery, /api/mqtt + Settings form; shared payloads in
+  luxel_core::hamqtt; verified against real mosquitto via the mirror).
+- **DDP / E1.31 input** [M] ★★ — DONE (firmware v0.1.18 + mirror; UDP
+  :4048/:5568, shared parser in luxel-core::netin, live override with 2.5 s
+  fallback to the pattern, `live` in /api/status + Settings row. Multicast
+  sACN joined but only unicast verified from the dev container).
+- **Luxel-to-Luxel sync** [L] ★★★ — v1 DONE (v0.1.21): leader broadcasts
+  its engine timebase (+ sensor relay) on UDP :4049; followers hard-jump
+  then slew by stretching frame deltas (≤±25%). Role in Settings +
+  /api/sync, persisted. Proven with two mirrors (sync-e2e: 2.5 s desync →
+  −5 ms). On-device verification blocked (needs ≥2 recovered Luxels).
+  Future: pattern/playlist distribution to followers.
 - **Web-based .epe import/export in the playground** [S] ★★★ — DONE
   (import button + drag-drop anywhere + export download; e2e-covered).
 
+- **AP-mode provisioning** — DONE (v0.1.22): no-creds boot (or POST
+  /api/apmode / the Settings button — a one-shot flag, crash-safe) → open
+  AP `luxel-xxxx` @ 192.168.4.1 with DHCP (edge-dhcp) + catch-all DNS +
+  captive-portal redirect serving the normal web app; Settings → WiFi
+  provisions and reboots to station. Radio path needs a phone test.
+
 ## Playground / DX
+
+> Web-UI structural redesign (two modes: device console vs. playground;
+> tabs; settings page; header declutter) is tracked in
+> [docs/webui.md](webui.md). Items below are feature-level.
+
 
 - **Hover docs from the builtin table** [S] ★★ — DONE (builtins +
   predefined globals show sig + doc on hover; e2e-covered).
@@ -138,10 +180,13 @@ and the autocomplete/docs pipeline, and can't break existing code.
   waterfall option for 1D.
 - **Shareable pattern URLs** [S] ★ — DONE (`#p=` deflate+base64url
   fragment; share button copies, load restores; e2e-covered).
-- **Multi-pane: map editor + preview** [L] ★★ — mapper v1 DONE (PB-style
-  JS map function → normalized map installed in the engine, scatter
-  preview, render2D auto-selected). Still open: visual drag-editing,
-  Fill/Contain toggles, device map upload, map in share links.
+- **Multi-pane: map editor + preview** [L] ★★ — mapper DONE through v2:
+  first-class editor tab (CodeMirror, breakpoint-debuggable), 3D
+  auto-rotating projection preview, device map upload, **map in share
+  links** (`#pj=` envelope), and **render3D gallery tiles** (cube-lattice
+  point-cloud thumbs; the 5 render3D-only corpus patterns are no longer
+  skipped). Still open (niceties): visual drag-editing, Fill/Contain
+  toggles. Web-UI redesign tracking lives in [docs/webui.md](webui.md).
 
 ## Top picks if forced to choose 5
 
