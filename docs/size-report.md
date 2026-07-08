@@ -76,8 +76,10 @@ in ≤16 fractional digits; pinned by test): **−14,368 bytes**, and
 
 ## If we ever need more room (ranked, unimplemented)
 
-Current headroom: **132 KB** to the 1 MiB OTA slot. If a future feature
-(e.g. on-device FFT + audio) threatens it:
+Current headroom: **132 KB** to the 1 MiB OTA slot *(update 2026-07-08:
+v0.1.22 — MQTT + sensors + sync + AP-mode — is at 956 KB, so headroom is
+down to **92 KB**; item 1 below is getting close to "soon")*. If a future
+feature (e.g. on-device FFT + audio) threatens it:
 
 1. **picoserve monomorphization** (~10–15 KB est.): the single 25.6 KB
    route-table symbol exists because every route's response type is a
