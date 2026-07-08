@@ -114,12 +114,13 @@ and the autocomplete/docs pipeline, and can't break existing code.
   waterfall option for 1D.
 - **Shareable pattern URLs** [S] ★ — DONE (`#p=` deflate+base64url
   fragment; share button copies, load restores; e2e-covered).
-- **Multi-pane: map editor + preview** [L] ★★ — mapper v1 DONE (PB-style
-  JS map function → normalized map installed in the engine, scatter
-  preview, render2D auto-selected). Still open: mapper as a first-class
-  **editor tab** (CodeMirror, debuggable), **3D projection preview**, visual
-  drag-editing, Fill/Contain toggles, device map upload, map in share links.
-  Web-UI redesign tracking these lives in [docs/webui.md](webui.md).
+- **Multi-pane: map editor + preview** [L] ★★ — mapper DONE through v2:
+  first-class editor tab (CodeMirror, breakpoint-debuggable), 3D
+  auto-rotating projection preview, device map upload, **map in share
+  links** (`#pj=` envelope), and **render3D gallery tiles** (cube-lattice
+  point-cloud thumbs; the 5 render3D-only corpus patterns are no longer
+  skipped). Still open (niceties): visual drag-editing, Fill/Contain
+  toggles. Web-UI redesign tracking lives in [docs/webui.md](webui.md).
 
 ## Top picks if forced to choose 5
 

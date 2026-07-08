@@ -18,13 +18,13 @@
 
   interface GalleryPick {
     name: string;
-    kind: "strip" | "grid";
+    kind: "strip" | "grid" | "cloud";
     source: string;
   }
 
   interface Tile {
     name: string;
-    kind: "strip" | "grid";
+    kind: "strip" | "grid" | "cloud";
     source: string;
     engine?: Engine;
     canvas?: HTMLCanvasElement;
@@ -39,6 +39,12 @@
 
   const STRIP_PX = 64;
   const GRID = 16;
+  // render3D thumbs: a 5×5×5 cube-lattice map, projected + slowly rotating
+  const CUBE = 5;
+  const CUBE_MAP: number[][] = [];
+  for (let z = 0; z < CUBE; z++)
+    for (let y = 0; y < CUBE; y++)
+      for (let x = 0; x < CUBE; x++) CUBE_MAP.push([x, y, z]);
   const STEP_BUDGET = 6; // engine frames per rAF tick
   const TILE_FPS_MS = 90; // ~11 fps per tile
   const ENGINE_CAP = 40;
@@ -73,10 +79,11 @@
 
   function ensureEngine(t: Tile): void {
     if (t.engine || t.dead) return;
-    const px = t.kind === "grid" ? GRID * GRID : STRIP_PX;
+    const px = t.kind === "grid" ? GRID * GRID : t.kind === "cloud" ? CUBE_MAP.length : STRIP_PX;
     const r = luxel.compile(t.source, px);
     if (r instanceof Engine) {
       if (t.kind === "grid") r.setMapGrid(GRID, GRID);
+      if (t.kind === "cloud") r.setMap(CUBE_MAP);
       r.setWallClock(Date.now() / 1000);
       t.engine = r;
     } else {
@@ -89,6 +96,43 @@
     const c = t.canvas;
     const ctx = c?.getContext("2d");
     if (!c || !ctx) return;
+    if (t.kind === "cloud") {
+      // rotating orthographic projection of the cube lattice (the same
+      // painter's-algorithm look as the editor's 3D map preview)
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, c.width, c.height);
+      const a = performance.now() / 2500;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const tilt = 0.45;
+      const ct = Math.cos(tilt);
+      const st = Math.sin(tilt);
+      const scale = Math.min(c.width, c.height) * 0.6;
+      const proj: { sx: number; sy: number; depth: number; i: number }[] = [];
+      for (let i = 0; i < CUBE_MAP.length; i++) {
+        const m = CUBE_MAP[i];
+        if (!m) continue;
+        const nx = ((m[0] ?? 0) / (CUBE - 1)) - 0.5;
+        const ny = ((m[1] ?? 0) / (CUBE - 1)) - 0.5;
+        const nz = ((m[2] ?? 0) / (CUBE - 1)) - 0.5;
+        const x = nx * ca - nz * sa;
+        const z = nx * sa + nz * ca;
+        const y2 = ny * ct - z * st;
+        const z2 = ny * st + z * ct;
+        proj.push({ sx: c.width / 2 + x * scale, sy: c.height / 2 + y2 * scale, depth: z2, i });
+      }
+      proj.sort((p, q) => p.depth - q.depth);
+      for (const q of proj) {
+        const cue = Math.max(0.4, Math.min(1, 0.65 + 0.5 * q.depth));
+        ctx.fillStyle = `rgb(${Math.round((px[q.i * 3] ?? 0) * cue)},${Math.round(
+          (px[q.i * 3 + 1] ?? 0) * cue,
+        )},${Math.round((px[q.i * 3 + 2] ?? 0) * cue)})`;
+        ctx.beginPath();
+        ctx.arc(q.sx, q.sy, 2.6 * cue + 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
     if (t.kind === "grid") {
       const cell = c.width / GRID;
       for (let y = 0; y < GRID; y++) {
@@ -173,7 +217,12 @@
           .filter((p) => !known.has(p.name.toLowerCase()))
           .map((p) => ({
             name: p.name,
-            kind: p.kind === "grid" ? ("grid" as const) : ("strip" as const),
+            kind:
+              p.kind === "grid"
+                ? ("grid" as const)
+                : p.kind === "cloud"
+                  ? ("cloud" as const)
+                  : ("strip" as const),
             source: p.source,
             dead: false,
             ready: false,
@@ -228,8 +277,8 @@
         use:register={i}
         on:click={() => !t.dead && dispatch("pick", { name: t.name, kind: t.kind, source: t.source })}
       >
-        <span class="thumb" class:strip={t.kind !== "grid"}>
-          {#if t.kind === "grid"}
+        <span class="thumb" class:strip={t.kind === "strip"}>
+          {#if t.kind === "grid" || t.kind === "cloud"}
             <canvas width="96" height="96"></canvas>
           {:else}
             <canvas width="128" height="18"></canvas>

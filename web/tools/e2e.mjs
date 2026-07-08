@@ -432,6 +432,22 @@ try {
   check("3D map auto-rotates", m3a !== m3b);
   await page.screenshot({ path: `${shotDir}/e2e-4b-map3d.png` });
 
+  // ── 10c. share links carry the map program (#pj=) ──
+  await page.click('[data-role="share"]');
+  await sleep(400);
+  const shareMapUrl = await page.url();
+  check("share with a map writes #pj=", /#pj(s)?=/.test(shareMapUrl), shareMapUrl.slice(-24));
+  const page3 = await browser.newPage();
+  await page3.goto(shareMapUrl, { waitUntil: "networkidle0" });
+  await page3.waitForSelector(".cm-content");
+  await sleep(1200);
+  const sharedBadge = await page3
+    .$eval('[data-role="map-badge"]', (el) => el.textContent ?? "")
+    .catch(() => "");
+  check("shared map link restores the mapped layout", sharedBadge.includes("px mapped"), sharedBadge);
+  check("shared map is 3D again (badge)", (await page3.$('[data-role="map-3d"]')) !== null);
+  await page3.close();
+
   // turning mapping off hides the map sub-tab
   await page.select('[data-role="layout-kind"]', "strip");
   await sleep(400);
@@ -465,6 +481,41 @@ try {
   await page.click('[data-role="editor-back"]');
   await sleep(300);
   check("saved entry gone after delete", (await page.$('[data-role="saved-pattern"]')) === null);
+
+  // ── 11b. render3D patterns show as rotating point-cloud tiles ──
+  await page.type('[data-role="gallery-search"]', "3D Rotation");
+  await sleep(300);
+  const cloudTile = await page
+    .waitForSelector('.tile[data-kind="cloud"]:not([hidden])', { timeout: 5000 })
+    .catch(() => null);
+  check("gallery has a cloud (render3D) tile", cloudTile !== null);
+  if (cloudTile) {
+    await cloudTile.scrollIntoView();
+    await page
+      .waitForFunction(
+        () => {
+          const c = document.querySelector('.tile[data-kind="cloud"]:not([hidden]) canvas');
+          if (!c) return false;
+          const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+          for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) return true;
+          return false;
+        },
+        { timeout: 8000 },
+      )
+      .catch(() => null);
+    const litCloud = await page.$eval('.tile[data-kind="cloud"]:not([hidden]) canvas', (c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) n++;
+      return n;
+    });
+    check("cloud tile renders projected dots", litCloud > 30, `${litCloud} lit px`);
+  }
+  await page.$eval('[data-role="gallery-search"]', (el) => {
+    el.value = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(250);
 
   // ── 12. gallery pick opens the editor on that pattern ──
   const pickName = await page.$$eval(".tile", (els) => {

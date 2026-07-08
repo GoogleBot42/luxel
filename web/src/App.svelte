@@ -989,7 +989,9 @@ export function render(index) {
 
   // ---- pattern browser (Patterns tab) ----
 
-  function onGalleryPick(e: CustomEvent<{ name: string; kind: "strip" | "grid"; source: string }>): void {
+  function onGalleryPick(
+    e: CustomEvent<{ name: string; kind: "strip" | "grid" | "cloud"; source: string }>,
+  ): void {
     const p = e.detail;
     openEditor("library"); // picking a pattern opens it in the editor
     patternName = p.name;
@@ -997,12 +999,25 @@ export function render(index) {
     importError = "";
     devicePatternId = "";
     if (!device) {
-      layout = p.kind === "grid" ? { kind: "grid", w: 16, h: 16 } : { kind: "strip", pixels: 60 };
+      layout =
+        p.kind === "grid"
+          ? { kind: "grid", w: 16, h: 16 }
+          : p.kind === "cloud"
+            ? { kind: "map", coords: cubeLattice(5) } // render3D → rotating cloud
+            : { kind: "strip", pixels: 60 };
     }
     source = p.source;
     controlValues = {};
     dirty = false; // freshly picked from the gallery
     void tick().then(applyEdit);
+  }
+
+  /** n×n×n lattice map — the default geometry for render3D patterns. */
+  function cubeLattice(n: number): number[][] {
+    const coords: number[][] = [];
+    for (let z = 0; z < n; z++)
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) coords.push([x, y, z]);
+    return coords;
   }
 
   // ---- shareable pattern URLs ----
@@ -1031,12 +1046,17 @@ export function render(index) {
   }
 
   async function sharePattern(): Promise<void> {
-    const bytes = new TextEncoder().encode(source);
+    // a custom map is part of the look — carry its PROGRAM in the link
+    // (JSON envelope under pj=; plain p= stays the mapless format)
+    const withMap = layout.kind === "map";
+    const payload = withMap ? JSON.stringify({ s: source, m: mapSrc }) : source;
+    const key = withMap ? "pj" : "p";
+    const bytes = new TextEncoder().encode(payload);
     let frag: string;
     try {
-      frag = `p=${b64url(await pipe(bytes, new CompressionStream("deflate-raw")))}`;
+      frag = `${key}=${b64url(await pipe(bytes, new CompressionStream("deflate-raw")))}`;
     } catch {
-      frag = `ps=${b64url(bytes)}`;
+      frag = `${key}s=${b64url(bytes)}`;
     }
     history.replaceState(null, "", `#${frag}`);
     const url = location.href;
@@ -1051,17 +1071,31 @@ export function render(index) {
     setTimeout(() => (shareNote = ""), 2500);
   }
 
-  /** Restore a `#p=`/`#ps=` fragment; returns whether one was loaded. */
+  /** Set when a share link carried a map program — the boot path runs it
+   *  once the wasm engine is up, restoring the sender's geometry. */
+  let sharedMapPending = false;
+
+  /** Restore a `#p=`/`#ps=`/`#pj=`/`#pjs=` fragment; true if one loaded. */
   async function loadFromHash(): Promise<boolean> {
-    const m = /^(p|ps)=([A-Za-z0-9_-]+)$/.exec(location.hash.slice(1));
+    const m = /^(pj|p)(s?)=([A-Za-z0-9_-]+)$/.exec(location.hash.slice(1));
     const kind = m?.[1];
-    const payload = m?.[2];
+    const plain = m?.[2] === "s";
+    const payload = m?.[3];
     if (!kind || !payload) return false;
     try {
       const data = b64urlDecode(payload);
-      const bytes =
-        kind === "p" ? await pipe(data, new DecompressionStream("deflate-raw")) : data;
-      source = new TextDecoder().decode(bytes);
+      const bytes = plain ? data : await pipe(data, new DecompressionStream("deflate-raw"));
+      const text = new TextDecoder().decode(bytes);
+      if (kind === "pj") {
+        const j = JSON.parse(text) as { s: string; m?: string };
+        source = j.s;
+        if (j.m) {
+          mapSrc = j.m;
+          sharedMapPending = true;
+        }
+      } else {
+        source = text;
+      }
       exampleName = "";
       patternName = "shared pattern";
       return true;
@@ -1452,6 +1486,12 @@ export function render(index) {
       if (wipDirty && device) await devicePush();
     } else {
       recompile();
+      if (sharedMapPending) {
+        // the link carried a map program: run it to restore the geometry
+        sharedMapPending = false;
+        mapMounted = true;
+        recompileMap(true);
+      }
       raf = requestAnimationFrame(loop);
       editing = hadWip; // resume in the editor if there was work in progress
     }

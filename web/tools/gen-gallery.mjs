@@ -2,10 +2,9 @@
 // pattern that compiles clean on the current engine (per
 // tools/corpus/last-report.json) with no missing builtins and no sensor
 // bindings, as [{ name, kind, source }]. kind picks the thumbnail shape:
-// "grid" for render2D patterns (previewed as a mapped rectangle), "strip"
-// for 1D (previewed as a horizontal bar) — Jeremy's 1D-bar-vs-2D-rectangle
-// distinction. render3D-only patterns are skipped until the preview grows
-// a projection.
+// "cloud" for render3D patterns (a rotating projected point cloud on a
+// cube-lattice map), "grid" for render2D (a mapped rectangle), "strip"
+// for 1D (a horizontal bar) — Jeremy's 1D-bar-vs-2D-rectangle distinction.
 //
 // Runs as part of `npm run build` when the corpus is present; silently
 // keeps the existing (or empty) gallery.json otherwise, so builds without
@@ -35,7 +34,6 @@ const entries = [];
 for (const p of report) {
   if (p.stage !== "ok") continue;
   if (p.uses.todo.length > 0 || p.uses.sensors.length > 0) continue;
-  if (p.uses.render3D && !p.uses.render2D) continue;
   const name = (p.name ?? "").trim() || path.basename(p.file, ".epe");
   const key = name.toLowerCase();
   if (seen.has(key)) continue;
@@ -46,7 +44,10 @@ for (const p of report) {
   } catch {
     continue;
   }
-  entries.push({ name, kind: p.uses.render2D ? "grid" : "strip", source });
+  // render3D-only → cloud; render2D (with or without render3D) keeps the
+  // grid it always had; plain render → strip
+  const kind = p.uses.render3D && !p.uses.render2D ? "cloud" : p.uses.render2D ? "grid" : "strip";
+  entries.push({ name, kind, source });
 }
 entries.sort((a, b) => a.name.localeCompare(b.name));
 fs.writeFileSync(outPath, JSON.stringify(entries));
