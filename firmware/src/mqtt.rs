@@ -171,20 +171,40 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
         hamqtt::pattern_discovery_json(&id, &id, version, &options),
         true
     );
+    // diagnostics + playlist entities
+    for which in ["fps", "heap"] {
+        publish!(
+            &hamqtt::diag_config_topic(&id, which),
+            hamqtt::diag_discovery_json(&id, &id, version, which),
+            true
+        );
+    }
+    publish!(
+        &hamqtt::playlist_switch_config_topic(&id),
+        hamqtt::playlist_switch_discovery_json(&id, &id, version),
+        true
+    );
+    for which in ["next", "prev"] {
+        publish!(
+            &hamqtt::playlist_button_config_topic(&id, which),
+            hamqtt::playlist_button_discovery_json(&id, &id, version, which),
+            true
+        );
+    }
     let light_set = hamqtt::light_set_topic(&id);
     let pattern_set = hamqtt::pattern_set_topic(&id);
-    client
-        .subscribe_to_topic(&light_set)
-        .await
-        .map_err(|_| "subscribe failed")?;
-    client
-        .subscribe_to_topic(&pattern_set)
-        .await
-        .map_err(|_| "subscribe failed")?;
+    let playlist_cmd = hamqtt::playlist_cmd_topic(&id);
+    for t in [&light_set, &pattern_set, &playlist_cmd] {
+        client
+            .subscribe_to_topic(t)
+            .await
+            .map_err(|_| "subscribe failed")?;
+    }
 
     // state publishing: on change (checked every tick) and at session start
     let mut last_light = String::new();
     let mut last_pattern: Option<String> = None;
+    let mut last_playing: Option<bool> = None;
     let mut ticks: u32 = 0;
     loop {
         // ---- publish dirty state ----
@@ -201,6 +221,15 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
         if last_pattern.as_deref() != Some(&name) {
             publish!(&hamqtt::pattern_state_topic(&id), name, false);
             last_pattern = Some(name);
+        }
+        let playing = crate::playlist::is_playing();
+        if last_playing != Some(playing) {
+            publish!(
+                &hamqtt::playlist_state_topic(&id),
+                if playing { "ON" } else { "OFF" },
+                false
+            );
+            last_playing = Some(playing);
         }
 
         // ---- wait for a command, ~5s at a time ----
@@ -219,6 +248,14 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
                     }
                 } else if topic == pattern_set {
                     activate_by_name(payload).await;
+                } else if topic == playlist_cmd {
+                    match payload {
+                        "play" => crate::playlist::play(0),
+                        "stop" => crate::playlist::stop(),
+                        "next" => crate::playlist::step(1),
+                        "prev" => crate::playlist::step(-1),
+                        other => println!("mqtt: unknown playlist cmd \"{}\"", other),
+                    }
                 }
                 // loop: publishes the resulting state before waiting again
             }
@@ -227,6 +264,15 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
                 ticks += 1;
                 if ticks % 3 == 0 {
                     client.send_ping().await.map_err(|_| "ping failed")?;
+                    // diagnostics every ~15s (HA graphs don't need more)
+                    publish!(
+                        &hamqtt::diag_state_topic(&id),
+                        hamqtt::diag_state_json(
+                            crate::shared::FPS.load(Ordering::Relaxed),
+                            esp_alloc::HEAP.free() as u32
+                        ),
+                        false
+                    );
                 }
                 // library changed? re-announce the select's options
                 let now: alloc::vec::Vec<String> =

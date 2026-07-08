@@ -355,8 +355,10 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
 
     let light_set = hamqtt::light_set_topic(MQTT_ID);
     let pattern_set = hamqtt::pattern_set_topic(MQTT_ID);
-    client.subscribe(&light_set, QoS::AtMostOnce).map_err(err)?;
-    client.subscribe(&pattern_set, QoS::AtMostOnce).map_err(err)?;
+    let playlist_cmd = hamqtt::playlist_cmd_topic(MQTT_ID);
+    for t in [&light_set, &pattern_set, &playlist_cmd] {
+        client.subscribe(t, QoS::AtMostOnce).map_err(err)?;
+    }
     client
         .publish(&avail, QoS::AtMostOnce, true, hamqtt::ONLINE)
         .map_err(err)?;
@@ -369,6 +371,34 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
             hamqtt::light_discovery_json(MQTT_ID, MQTT_ID, version),
         )
         .map_err(err)?;
+    for which in ["fps", "heap"] {
+        client
+            .publish(
+                hamqtt::diag_config_topic(MQTT_ID, which),
+                QoS::AtMostOnce,
+                true,
+                hamqtt::diag_discovery_json(MQTT_ID, MQTT_ID, version, which),
+            )
+            .map_err(err)?;
+    }
+    client
+        .publish(
+            hamqtt::playlist_switch_config_topic(MQTT_ID),
+            QoS::AtMostOnce,
+            true,
+            hamqtt::playlist_switch_discovery_json(MQTT_ID, MQTT_ID, version),
+        )
+        .map_err(err)?;
+    for which in ["next", "prev"] {
+        client
+            .publish(
+                hamqtt::playlist_button_config_topic(MQTT_ID, which),
+                QoS::AtMostOnce,
+                true,
+                hamqtt::playlist_button_discovery_json(MQTT_ID, MQTT_ID, version, which),
+            )
+            .map_err(err)?;
+    }
 
     let options = |state: &State| -> Vec<String> {
         state.library.lock().unwrap().iter().map(|p| p.name.clone()).collect()
@@ -385,6 +415,8 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
 
     let mut last_light = String::new();
     let mut last_pattern: Option<String> = None;
+    let mut last_playing: Option<bool> = None;
+    let mut diag_at = Instant::now();
     loop {
         // publish dirty state (initial pass runs before the first recv)
         let light = hamqtt::light_state_json(
@@ -414,6 +446,29 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
                     QoS::AtMostOnce,
                     true,
                     hamqtt::pattern_discovery_json(MQTT_ID, MQTT_ID, version, &last_options),
+                )
+                .map_err(err)?;
+        }
+        let playing = state.pl_playing.load(Ordering::Relaxed);
+        if last_playing != Some(playing) {
+            client
+                .publish(
+                    hamqtt::playlist_state_topic(MQTT_ID),
+                    QoS::AtMostOnce,
+                    false,
+                    if playing { "ON" } else { "OFF" },
+                )
+                .map_err(err)?;
+            last_playing = Some(playing);
+        }
+        if diag_at.elapsed() >= Duration::from_secs(15) {
+            diag_at = Instant::now();
+            client
+                .publish(
+                    hamqtt::diag_state_topic(MQTT_ID),
+                    QoS::AtMostOnce,
+                    false,
+                    hamqtt::diag_state_json(state.fps.load(Ordering::Relaxed), 0),
                 )
                 .map_err(err)?;
         }
@@ -450,6 +505,14 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
                             }
                         }
                         None => eprintln!("mqtt: no pattern named \"{payload}\""),
+                    }
+                } else if p.topic == playlist_cmd {
+                    match payload.as_str() {
+                        "play" => push(state, Msg::PlaylistPlay(0)),
+                        "stop" => push(state, Msg::PlaylistStop),
+                        "next" => push(state, Msg::PlaylistStep(1)),
+                        "prev" => push(state, Msg::PlaylistStep(-1)),
+                        other => eprintln!("mqtt: unknown playlist cmd \"{other}\""),
                     }
                 }
             }

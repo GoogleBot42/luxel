@@ -84,6 +84,72 @@ pub fn pattern_discovery_json(id: &str, name: &str, version: &str, options: &[St
     )
 }
 
+pub fn diag_state_topic(id: &str) -> String {
+    alloc::format!("luxel/{id}/diag")
+}
+pub fn playlist_cmd_topic(id: &str) -> String {
+    alloc::format!("luxel/{id}/playlist/cmd")
+}
+pub fn playlist_state_topic(id: &str) -> String {
+    alloc::format!("luxel/{id}/playlist/state")
+}
+pub fn diag_config_topic(id: &str, which: &str) -> String {
+    alloc::format!("homeassistant/sensor/{id}/{which}/config")
+}
+pub fn playlist_switch_config_topic(id: &str) -> String {
+    alloc::format!("homeassistant/switch/{id}/playlist/config")
+}
+pub fn playlist_button_config_topic(id: &str, which: &str) -> String {
+    alloc::format!("homeassistant/button/{id}/pl_{which}/config")
+}
+
+/// Diagnostic sensors: fps + free heap, one JSON state topic, extracted
+/// with value_template. Marked as diagnostic entities so HA files them
+/// under the device's diagnostics section.
+pub fn diag_discovery_json(id: &str, name: &str, version: &str, which: &str) -> String {
+    let (label, field, unit) = match which {
+        "fps" => ("FPS", "fps", "\"unit_of_measurement\":\"fps\","),
+        _ => ("Free heap", "heap", "\"unit_of_measurement\":\"B\","),
+    };
+    alloc::format!(
+        "{{\"name\":\"{label}\",\"unique_id\":\"{id}_{field}\",\"state_topic\":\"{}\",\"value_template\":\"{{{{ value_json.{field} }}}}\",{unit}\"entity_category\":\"diagnostic\",\"availability_topic\":\"{}\",{}}}",
+        diag_state_topic(id),
+        availability_topic(id),
+        device_block(id, name, version)
+    )
+}
+
+/// The playlist as a switch (ON = auto-advancing) …
+pub fn playlist_switch_discovery_json(id: &str, name: &str, version: &str) -> String {
+    alloc::format!(
+        "{{\"name\":\"Playlist\",\"unique_id\":\"{id}_playlist\",\"command_topic\":\"{}\",\"state_topic\":\"{}\",\"payload_on\":\"play\",\"payload_off\":\"stop\",\"state_on\":\"ON\",\"state_off\":\"OFF\",\"availability_topic\":\"{}\",{}}}",
+        playlist_cmd_topic(id),
+        playlist_state_topic(id),
+        availability_topic(id),
+        device_block(id, name, version)
+    )
+}
+
+/// … plus next/previous buttons on the same command topic.
+pub fn playlist_button_discovery_json(
+    id: &str,
+    name: &str,
+    version: &str,
+    which: &str,
+) -> String {
+    let label = if which == "next" { "Next pattern" } else { "Previous pattern" };
+    alloc::format!(
+        "{{\"name\":\"{label}\",\"unique_id\":\"{id}_pl_{which}\",\"command_topic\":\"{}\",\"payload_press\":\"{which}\",\"availability_topic\":\"{}\",{}}}",
+        playlist_cmd_topic(id),
+        availability_topic(id),
+        device_block(id, name, version)
+    )
+}
+
+pub fn diag_state_json(fps: u32, heap: u32) -> String {
+    alloc::format!("{{\"fps\":{fps},\"heap\":{heap}}}")
+}
+
 /// Light state report. `brightness` is the HA 0–255 scale.
 pub fn light_state_json(on: bool, brightness: u8) -> String {
     alloc::format!(
@@ -151,7 +217,11 @@ fn scan_number_field(payload: &str, field: &str) -> Option<i32> {
 
 /// Topics an MQTT session must subscribe to.
 pub fn command_topics(id: &str) -> Vec<String> {
-    alloc::vec![light_set_topic(id), pattern_set_topic(id)]
+    alloc::vec![
+        light_set_topic(id),
+        pattern_set_topic(id),
+        playlist_cmd_topic(id),
+    ]
 }
 
 #[cfg(test)]
@@ -174,6 +244,21 @@ mod tests {
             &["Rainbow".to_string(), "KITT \"eye\"".to_string()],
         );
         assert!(p.contains("\"options\":[\"Rainbow\",\"KITT \\\"eye\\\"\"]"));
+    }
+
+    #[test]
+    fn extended_entities() {
+        let d = diag_discovery_json("luxel-abc", "Luxel abc", "1.0", "fps");
+        assert!(d.contains("\"value_template\":\"{{ value_json.fps }}\""));
+        assert!(d.contains("\"entity_category\":\"diagnostic\""));
+        assert!(d.contains("\"state_topic\":\"luxel/luxel-abc/diag\""));
+        let s = playlist_switch_discovery_json("luxel-abc", "Luxel abc", "1.0");
+        assert!(s.contains("\"payload_on\":\"play\""));
+        assert!(s.contains("\"command_topic\":\"luxel/luxel-abc/playlist/cmd\""));
+        let b = playlist_button_discovery_json("luxel-abc", "Luxel abc", "1.0", "next");
+        assert!(b.contains("\"payload_press\":\"next\""));
+        assert_eq!(diag_state_json(120, 45000), "{\"fps\":120,\"heap\":45000}");
+        assert_eq!(command_topics("x").len(), 3);
     }
 
     #[test]

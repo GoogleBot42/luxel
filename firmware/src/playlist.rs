@@ -166,6 +166,11 @@ pub fn set_from_wire(body: &str) {
     wake(); // apply edits if playing
 }
 
+/// Whether the playlist is auto-advancing (the HA switch state).
+pub fn is_playing() -> bool {
+    PLAYING.load(Ordering::Relaxed)
+}
+
 pub fn play(i: usize) {
     PLAYING.store(true, Ordering::Relaxed);
     INDEX.store(i, Ordering::Relaxed);
