@@ -506,6 +506,32 @@ fn compile_errors() {
 }
 
 #[test]
+fn deep_nesting_is_a_compile_error_not_a_crash() {
+    // On the firmware the compiler shares a ~30 KB task stack; unbounded
+    // parse/emit recursion overflowed it in the field. Depth must be
+    // rejected with a diagnostic, never a stack overflow.
+    let deep_expr = format!("x = {}1{}", "(".repeat(500), ")".repeat(500));
+    let Err(err) = Engine::new(&deep_expr, 10, 1) else {
+        panic!("deep expression should be rejected")
+    };
+    assert!(err.message.contains("too deep"), "{}", err.message);
+
+    let deep_stmt = format!(
+        "{}x = 1{}",
+        "if (1) {\n".repeat(500),
+        "\n}".repeat(500)
+    );
+    let Err(err) = Engine::new(&deep_stmt, 10, 1) else {
+        panic!("deep statement nesting should be rejected")
+    };
+    assert!(err.message.contains("too deep"), "{}", err.message);
+
+    // ...but realistic nesting is untouched (worst gallery pattern < 30).
+    let ok = format!("x = {}1{}", "(".repeat(40), ")".repeat(40));
+    assert!(Engine::new(&ok, 10, 1).is_ok());
+}
+
+#[test]
 fn implicit_global_can_shadow_a_builtin() {
     // "implicit assignment creates a global" wins over the builtin table;
     // calling the shadowed name is then a runtime error. Oracle-verified

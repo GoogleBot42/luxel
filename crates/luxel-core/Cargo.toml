@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 logos = { version = "0.15", default-features = false, features = ["export_derive"] }
+
+[features]
+depth-probe = []

@@ -93,7 +93,14 @@ struct Compiler<'s> {
     demoted: Vec<String>,
     /// Names declared `const` at the top level (reassignment is an error).
     const_globals: BTreeSet<String>,
+    /// Current emit recursion depth — bounded like the parser's so a deep
+    /// AST becomes a compile error instead of a stack overflow on the
+    /// firmware's small task stack.
+    depth: u32,
 }
+
+/// Matches the parser's nesting bound (see parse.rs MAX_DEPTH).
+const MAX_EMIT_DEPTH: u32 = 60;
 
 enum Place {
     Local(u8),
@@ -112,6 +119,7 @@ impl<'s> Compiler<'s> {
             exported_fns: Vec::new(),
             demoted: Vec::new(),
             const_globals: BTreeSet::new(),
+            depth: 0,
         }
     }
 
@@ -462,6 +470,17 @@ impl<'s> Compiler<'s> {
     }
 
     fn emit_stmt(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
+        self.depth += 1;
+        if self.depth > MAX_EMIT_DEPTH {
+            self.depth -= 1;
+            return Err(Diagnostic::new(s.span, "statement nesting too deep"));
+        }
+        let r = self.emit_stmt_inner(ctx, s);
+        self.depth -= 1;
+        r
+    }
+
+    fn emit_stmt_inner(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
         ctx.set_pos(line_col(self.src, s.span.start));
         match &s.kind {
             StmtKind::Empty => Ok(()),
@@ -656,6 +675,17 @@ impl<'s> Compiler<'s> {
     }
 
     fn emit_expr(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
+        self.depth += 1;
+        if self.depth > MAX_EMIT_DEPTH {
+            self.depth -= 1;
+            return Err(Diagnostic::new(e.span, "expression nesting too deep"));
+        }
+        let r = self.emit_expr_inner(ctx, e);
+        self.depth -= 1;
+        r
+    }
+
+    fn emit_expr_inner(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
         match &e.kind {
             ExprKind::Num(v) => {
                 ctx.push(Insn::Const(Value::Num(*v)));
