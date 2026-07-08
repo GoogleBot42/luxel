@@ -38,7 +38,13 @@ export class PB {
     pb.queue = [];
     pb.waiters = [];
     pb.ws.onmessage = (ev) => {
-      if (typeof ev.data !== "string") return; // ignore binary pushes
+      if (typeof ev.data !== "string") {
+        // binary pushes: keep the newest previewFrame (type 5: header byte
+        // + 3 bytes RGB per pixel) once sendUpdates has been enabled
+        const b = new Uint8Array(ev.data);
+        if (b[0] === 5) pb.lastPreview = b.subarray(1);
+        return;
+      }
       let obj;
       try {
         obj = JSON.parse(ev.data);
@@ -115,6 +121,22 @@ export class PB {
     this.send({ getVars: true });
     const msg = await this.waitFor((o) => o.vars !== undefined, "vars");
     return msg.vars;
+  }
+
+  /** One fresh previewFrame (RGB bytes) — enables the stream on first use.
+   *  `settleMs` lets the just-uploaded pattern render before sampling. */
+  async getPreviewFrame(settleMs = 400) {
+    if (!this.previewOn) {
+      this.previewOn = true;
+      this.send({ sendUpdates: true });
+    }
+    await sleep(settleMs);
+    this.lastPreview = undefined; // demand a frame newer than the settle
+    for (let i = 0; i < 40; i++) {
+      if (this.lastPreview) return this.lastPreview;
+      await sleep(50);
+    }
+    throw new Error("no previewFrame arrived (sendUpdates enabled?)");
   }
 
   async setActivePattern(id) {

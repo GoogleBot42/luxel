@@ -60,7 +60,7 @@ fn breakpoint_pauses_each_pixel() {
     assert!(!e.debug_step(StepKind::Continue));
     assert!(!e.debug_paused());
     // and the frame rendered correctly despite all the pausing
-    assert_eq!(e.pixels()[2], [128, 128, 128]); // v = 2/4
+    assert_eq!(e.pixels()[2], [127, 127, 127]); // v = 2/4, floor-quantized (PB-exact)
     assert!(e.last_error.is_none());
 }
 
@@ -133,7 +133,7 @@ fn disable_abandons_paused_run() {
     assert!(!e.debug_paused());
     // engine renders normally afterwards
     let px = e.frame(Fx::from_f64(16.7));
-    assert_eq!(px[2], [128, 128, 128]);
+    assert_eq!(px[2], [127, 127, 127]); // floor-quantized (PB-exact)
     assert!(e.last_error.is_none());
 }
 

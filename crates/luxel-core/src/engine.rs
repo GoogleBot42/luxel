@@ -699,10 +699,11 @@ impl Engine {
     }
 }
 
-/// Fx 0..1 → 0..255, round to nearest. TODO(oracle): PB's exact quantization
-/// (and HDR paths) may differ.
+/// Fx 0..1 → 0..255 by floor(v·255) — PB-exact (pixel oracle, fw 3.67:
+/// 0.5 → 127, 1−ε → 254). We used to round to nearest; floor makes whole
+/// frames diff bit-identical against previewFrame captures.
 fn quantize(v: Fx) -> u8 {
-    ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255 + 32_768) >> 16) as u8
+    ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255) >> 16) as u8
 }
 
 /// Render-function selection priority by map dimensionality (documented PB

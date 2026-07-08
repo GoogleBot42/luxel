@@ -1612,7 +1612,23 @@ impl Vm {
                 Ok(Value::default())
             }
             Paint => {
-                let v = n(0).mod_floor(Fx::ONE);
+                // PB semantics (ramp-palette pixel oracle, 2026-07-08): the
+                // position wraps as floored-frac(v) EXACTLY (1.25 → 0.25,
+                // −0.5 → 0.5), with two measured edge artifacts: v == 1
+                // stays at the palette end, and whole numbers ≥ 2 land at
+                // 254/255 (just under the end) — pathological inputs, but
+                // pinned to match the device byte-for-byte.
+                let x = n(0);
+                let frac = x.mod_floor(Fx::ONE);
+                let v = if frac == Fx::ZERO && x >= Fx::ONE {
+                    if x == Fx::ONE {
+                        Fx::ONE
+                    } else {
+                        Fx::from_raw(65535) // 1−ε: matches both probe palettes
+                    }
+                } else {
+                    frac
+                };
                 let b = if argc >= 2 { n(1) } else { Fx::ONE };
                 let rgb = self.palette_lookup(v);
                 let b = b.clamp(Fx::ZERO, Fx::ONE);

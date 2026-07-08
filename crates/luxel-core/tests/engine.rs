@@ -15,9 +15,9 @@ fn rainbow_golden_frame() {
     // delta 0 → time() is 0 → hue is exactly index/4
     let px = e.frame(Fx::ZERO);
     assert_eq!(px[0], [255, 0, 0]); // h=0    red
-    assert_eq!(px[1], [128, 255, 0]); // h=0.25 chartreuse
+    assert_eq!(px[1], [127, 255, 0]); // h=0.25 chartreuse (floor-quantized, PB-exact)
     assert_eq!(px[2], [0, 255, 255]); // h=0.5  cyan
-    assert_eq!(px[3], [128, 0, 255]); // h=0.75 violet
+    assert_eq!(px[3], [127, 0, 255]); // h=0.75 violet (floor-quantized, PB-exact)
     assert!(e.last_error.is_none());
 }
 

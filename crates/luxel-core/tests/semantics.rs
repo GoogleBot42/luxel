@@ -393,13 +393,13 @@ fn palettes_interpolate() {
          export function render(index) { paint(0.5) }",
     );
     let px = e.frame(Fx::ZERO);
-    assert_eq!(px[0], [128, 0, 128]); // halfway red→blue
+    assert_eq!(px[0], [127, 0, 127]); // halfway red→blue, floor-quantized (PB-exact)
     let mut e = engine(
         "setPalette([0, 1, 0, 0, 1, 0, 0, 1])\n\
          export function render(index) { paint(0, 0.5) }",
     );
     let px = e.frame(Fx::ZERO);
-    assert_eq!(px[0], [128, 0, 0]); // brightness scales
+    assert_eq!(px[0], [127, 0, 0]); // brightness scales (floor-quantized)
 }
 
 #[test]
@@ -441,9 +441,10 @@ fn map_and_introspection() {
     e.set_map(2, &coords);
     let px = e.frame(Fx::ZERO);
     assert_eq!(px[0], [0, 0, 0]);
-    assert_eq!(px[1], [255, 0, 0]); // x ≈ 0.99998 → 255
-    assert_eq!(px[2], [0, 255, 0]);
-    assert_eq!(px[3], [255, 255, 0]);
+    // world coords max out at ≈0.99998, and quantization floors (PB-exact)
+    assert_eq!(px[1], [254, 0, 0]);
+    assert_eq!(px[2], [0, 254, 0]);
+    assert_eq!(px[3], [254, 254, 0]);
     assert_eq!(e.var("dims"), Some(Value::Num(Fx::from_int(2))));
     assert_eq!(e.var("h2"), Some(Value::Num(Fx::ONE)));
 }

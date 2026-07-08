@@ -37,6 +37,7 @@ fn main() -> ExitCode {
         "run" if args.len() >= 2 => run_cmd(&args[1], &args[2..], false),
         "bench" if args.len() >= 2 => run_cmd(&args[1], &args[2..], true),
         "vars" if args.len() >= 2 => vars_cmd(&args[1], &args[2..]),
+        "pixels" if args.len() >= 2 => pixels_cmd(&args[1], &args[2..]),
         "check" if args.len() >= 2 => check_cmd(&args[1], &args[2..]),
         "serve" => serve::serve_cmd(&args[1..]),
         _ => usage(),
@@ -124,6 +125,46 @@ fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
         }
     }
     report("ok", None)
+}
+
+/// Render a pattern and dump the final frame's RGB bytes as a JSON array —
+/// the local half of the PIXEL-level differential-oracle harness (the PB
+/// side is a previewFrame capture; tools/oracle/pixels.mjs compares).
+/// Frames run with delta 0, so only time-independent patterns make sense.
+fn pixels_cmd(path: &str, rest: &[String]) -> ExitCode {
+    let src = match read(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    let pixels = match rest {
+        [flag, n] if flag == "--pixels" => match num(n) {
+            Ok(v) => v,
+            Err(c) => return c,
+        },
+        [] => 60,
+        _ => return usage(),
+    };
+    let mut engine = match Engine::new(&src, pixels, 1) {
+        Ok(e) => e,
+        Err(d) => {
+            let (line, col) = line_col(&src, d.span.start);
+            eprintln!("{path}:{line}:{col}: error: {}", d.message);
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut last: Vec<u8> = Vec::new();
+    for _ in 0..3 {
+        last = engine.frame(Fx::ZERO).iter().flatten().copied().collect();
+    }
+    if let Some(e) = engine.take_error() {
+        eprintln!(
+            "warning: runtime error: line {}:{}: {}",
+            e.line, e.col, e.message
+        );
+    }
+    let items: Vec<String> = last.iter().map(|b| b.to_string()).collect();
+    println!("[{}]", items.join(","));
+    ExitCode::SUCCESS
 }
 
 /// Run a pattern's init (plus one frame) and dump exported vars as JSON with

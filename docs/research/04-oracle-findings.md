@@ -158,6 +158,30 @@ errors in raw 16.16 units unless noted:
   `asin/acos` ~167 raw (~0.0025) and `atan(100)` 128 raw — fine for LEDs,
   but the place to look if we ever chase exactness.
 
+## Pixel-level sweep 2026-07-08 (previewFrame harness — fw 3.67)
+
+`tools/oracle/pixels.mjs` + `luxel pixels`: whole per-pixel test batteries
+ship as ONE live-coded pattern (a case per pixel) and the device's
+previewFrame stream (binary ws type 5, enabled by `{"sendUpdates":true}`)
+is diffed byte-for-byte against the local engine. previewFrames are NOT
+scaled by device brightness.
+
+- **Quantization: PB is `floor(v·255)`** (0.5 → 127, 1−ε → 254). Luxel
+  rounded to nearest; switched to floor — all 21 rgb/hsv rounding /
+  clamping / hue-wrap cases now **bit-exact** (hsv internals were already
+  identical). Every golden pixel test updated.
+- **`paint(v)` position = floored-frac(v) exactly** (1.25 → 0.25, −0.5 →
+  0.5) — measured with an identity (black→white ramp) palette so the
+  output byte reveals the internal position directly. Edge artifacts,
+  pinned to match: `v == 1` stays at the palette end; whole `v ≥ 2` lands
+  at ≈1−ε (byte 254). Luxel previously frac'd everything (paint(1) wrapped
+  to the start — a visible red-vs-blue divergence, now fixed).
+- Result: **38/41 exact, 3 within ±1, none diverging.** The ±1s
+  (paint(1.5), paint(2.5), paint(−2)) are PB float32 ULP loss on
+  out-of-range inputs — not representable in 16.16 and ≤1/255 visually.
+- Untouched pixels default to black on both. hsv24 behaves as hsv in the
+  preview path.
+
 ## Operational notes
 
 - The device's websocket (port 81) wedges permanently if clients vanish
