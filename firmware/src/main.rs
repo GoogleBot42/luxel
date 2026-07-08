@@ -512,18 +512,20 @@ fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
 /// array budget but still leaves the heap under the floor (huge program,
 /// long strip) is rejected — soak v5 showed a routine 8.5 KB jsonview
 /// alloc panicking (= reboot) right after such a pattern loaded.
-fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Option<Engine> {
+/// `Err(free_bytes_at_rejection)` — measured BEFORE the engine is dropped,
+/// so error messages report the pressure that caused the rejection, not
+/// the comfortable number after freeing.
+fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engine, usize> {
     let e = budgeted_engine(prog, count);
-    let floor = RUNTIME_FLOOR;
-    if (esp_alloc::HEAP.free() as usize) < floor {
+    let free = esp_alloc::HEAP.free() as usize;
+    if free < RUNTIME_FLOOR {
         println!(
             "pattern rejected: {} B heap left after load (< {} floor)",
-            esp_alloc::HEAP.free(),
-            floor
+            free, RUNTIME_FLOOR
         );
-        return None; // drops the engine, freeing its heap
+        return Err(free); // drops the engine, freeing its heap
     }
-    Some(e)
+    Ok(e)
 }
 
 /// frames. Yields to the network tasks after every frame.
@@ -559,7 +561,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     let rebuild = || {
         luxel_core::bytecode::deserialize_lean(&crate::shared::get_pattern_bc())
             .ok()
-            .and_then(|p| try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)))
+            .and_then(|p| try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)).ok())
     };
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
@@ -604,7 +606,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                                 set_pattern_bc(le.bytecode);
                                 match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
                                 {
-                                    Some(e) => {
+                                    Ok(e) => {
                                         publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                                         engine = Some(e);
                                         set_vmerr(None);
@@ -612,8 +614,10 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                                         last = Instant::now();
                                         devicemap::mark_dirty(); // re-apply the installed map
                                     }
-                                    None => set_vmerr(Some(alloc::string::String::from(
-                                        "pattern too large for this device (out of memory)",
+                                    Err(left) => set_vmerr(Some(alloc::format!(
+                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                        left / 1024,
+                                        RUNTIME_FLOOR / 1024
                                     ))),
                                 }
                             }
@@ -691,7 +695,7 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                                 set_pattern_bc(le.bytecode);
                                 match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
                                 {
-                                    Some(e) => {
+                                    Ok(e) => {
                                         publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                                         if ms > 0 && engine.is_some() {
                                             prev = engine.take();
@@ -704,8 +708,10 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                                         last = Instant::now();
                                         devicemap::mark_dirty();
                                     }
-                                    None => set_vmerr(Some(alloc::string::String::from(
-                                        "pattern too large for this device (out of memory)",
+                                    Err(left) => set_vmerr(Some(alloc::format!(
+                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                        left / 1024,
+                                        RUNTIME_FLOOR / 1024
                                     ))),
                                 }
                             }

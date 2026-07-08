@@ -119,14 +119,14 @@ const MAX_NAME: usize = 64;
 /// practical ceiling: the 16 KiB HTTP request buffer bounds a POST there
 /// anyway, and a larger GET response would risk OOM on the fragmented heap.
 /// Still ~4x the old single-page limit; covers virtually all patterns.
-const MC: u8 = 4;
+const MC: u8 = 8;
 const CHUNK: usize = 3840;
-const MAX_SOURCE: usize = MC as usize * CHUNK; // ~15 KB
-/// Bytecode chunk budget: LXBC (with debug info) can run larger than its
-/// source — the corpus max is ~17.5 KB for a 15 KB source — so it gets 6
-/// chunks (~23 KB).
-const MC_BC: u8 = 6;
-pub const MAX_BC: usize = MC_BC as usize * CHUNK; // ~23 KB
+const MAX_SOURCE: usize = MC as usize * CHUNK; // 30 KB
+/// Bytecode chunk budget: LXBC can run larger than its source, so it gets
+/// more chunks. Both caps sit comfortably past what the device's heap can
+/// actually run — the RAM floor, not flash, is the real ceiling.
+const MC_BC: u8 = 10;
+pub const MAX_BC: usize = MC_BC as usize * CHUNK; // ~38 KB
 const MAX_PATTERNS: usize = 24;
 /// Chunk keys carry bit 31; meta keys (= seq) do not, keeping them disjoint.
 const CHUNK_FLAG: u32 = 0x8000_0000;
@@ -141,7 +141,9 @@ const BUF: usize = 4096;
 /// pre-chunking single-item format — would otherwise be misparsed). Stored
 /// under a reserved meta-space key no real seq can reach.
 /// v3: bytecode chunks + bc_count in the meta (patterns carry LXBC).
-const FORMAT_VERSION: u32 = 3;
+/// v4: bigger chunk budgets (MC 4→8, MC_BC 6→10) — the chunk-key layout
+/// depends on MC/MC_BC, so raising them is a format bump.
+const FORMAT_VERSION: u32 = 4;
 const FORMAT_KEY: u32 = 0x7FFF_FFFF;
 
 fn meta_key(seq: u32) -> u32 {
@@ -595,14 +597,16 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
     }
     if source.is_empty() || source.len() > MAX_SOURCE {
         return alloc::format!(
-            "{{\"ok\":false,\"error\":\"source must be 1..={} bytes\"}}",
-            MAX_SOURCE
+            "{{\"ok\":false,\"error\":\"this pattern's source is too large for the on-device library ({} KB; the device stores up to {} KB)\"}}",
+            source.len() / 1024,
+            MAX_SOURCE / 1024
         );
     }
     if bc.is_empty() || bc.len() > MAX_BC {
         return alloc::format!(
-            "{{\"ok\":false,\"error\":\"bytecode must be 1..={} bytes\"}}",
-            MAX_BC
+            "{{\"ok\":false,\"error\":\"this pattern's compiled code is too large for the on-device library ({} KB; the device stores up to {} KB)\"}}",
+            bc.len() / 1024,
+            MAX_BC / 1024
         );
     }
     let start = REGION.load(Ordering::Relaxed);
@@ -635,7 +639,12 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
         }
     });
     let (seq, new_gen, old_gen, old_count, old_bc, is_new) = match plan {
-        Plan::Full => return String::from("{\"ok\":false,\"error\":\"library full\"}"),
+        Plan::Full => {
+            return alloc::format!(
+                "{{\"ok\":false,\"error\":\"the device library is full ({} patterns) — delete one first\"}}",
+                MAX_PATTERNS
+            )
+        }
         Plan::New { seq } => (seq, 0u8, 0u8, 0u8, 0u8, true),
         Plan::Update { seq, new_gen, old_gen, old_count, old_bc } => {
             (seq, new_gen, old_gen, old_count, old_bc, false)
@@ -660,7 +669,9 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
     .unwrap_or(false);
 
     if !committed {
-        return String::from("{\"ok\":false,\"error\":\"flash write failed\"}");
+        return String::from(
+            "{\"ok\":false,\"error\":\"couldn't write the pattern to flash — the store may be full; delete some patterns and retry\"}",
+        );
     }
 
     INDEX.lock(|c| {

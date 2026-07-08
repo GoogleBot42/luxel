@@ -282,10 +282,16 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
         let body = 'resp: {
             let body = request.body_connection.body();
             let expected = body.content_length();
-            if expected == 0 || expected > MAX_UPLOAD {
+            if expected == 0 {
+                break 'resp String::from(
+                    "{\"ok\":false,\"error\":\"empty upload (the request needs a Content-Length body)\"}",
+                );
+            }
+            if expected > MAX_UPLOAD {
                 break 'resp format!(
-                    "{{\"ok\":false,\"error\":\"pattern upload must be 1..={} bytes\"}}",
-                    MAX_UPLOAD
+                    "{{\"ok\":false,\"error\":\"pattern upload too large ({} KB; this device accepts up to {} KB)\"}}",
+                    expected / 1024,
+                    MAX_UPLOAD / 1024
                 );
             }
             let mut env: Vec<u8> = Vec::new();
@@ -296,8 +302,10 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                 MSG_QUEUE.send(Msg::Freeze).await;
                 embassy_time::Timer::after(embassy_time::Duration::from_millis(60)).await;
                 if env.try_reserve_exact(expected).is_err() {
-                    break 'resp String::from(
-                        "{\"ok\":false,\"error\":\"not enough free memory for this upload\"}",
+                    break 'resp format!(
+                        "{{\"ok\":false,\"error\":\"not enough free memory on the device for this {} KB upload (about {} KB free) — it is too large to run here\"}}",
+                        expected / 1024,
+                        esp_alloc::HEAP.free() as usize / 1024
                     );
                 }
             }
