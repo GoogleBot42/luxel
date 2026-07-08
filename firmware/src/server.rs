@@ -626,6 +626,18 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     return Ok(sent);
                 }
+                // any body → set the one-shot force-AP flag and reboot into
+                // the provisioning access point ("luxel-xxxx" @ 192.168.4.1)
+                "/api/apmode" => {
+                    crate::ota::set_force_ap();
+                    let response = json_response(String::from(
+                        "{\"ok\":true,\"note\":\"rebooting into the setup AP (one boot only)\"}",
+                    ));
+                    let conn = request.body_connection.finalize().await?;
+                    let sent = response.write_to(conn, response_writer).await?;
+                    crate::REBOOT.signal(());
+                    return Ok(sent);
+                }
                 // body: "off" | "leader" | "follower" → applied live +
                 // persisted (Luxel-to-Luxel sync role)
                 "/api/sync" => {
@@ -1041,6 +1053,11 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     "{{\"brightness\":{},\"max\":31}}",
                     BRIGHTNESS.load(Ordering::Relaxed)
                 ))),
+                // whether we're currently the provisioning AP
+                "/api/apmode" => respond!(json_response(format!(
+                    "{{\"ap\":{}}}",
+                    crate::provision::AP_MODE.load(Ordering::Relaxed)
+                ))),
                 // sync role + engine clock + last leader beacon heard
                 "/api/sync" => {
                     let mode = sync_mode_name(crate::shared::SYNC_MODE.load(Ordering::Relaxed));
@@ -1106,6 +1123,22 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 other => {
                     if let Some(e) = crate::assets::lookup(other) {
                         serve_asset!(e);
+                    }
+                    // captive-portal detection: as a provisioning AP, any
+                    // unknown URL (a phone's connectivity probe) redirects
+                    // to the portal, which pops the sign-in sheet
+                    if crate::provision::AP_MODE.load(Ordering::Relaxed) {
+                        let conn = request.body_connection.finalize().await?;
+                        return (
+                            StatusCode::TEMPORARY_REDIRECT,
+                            [
+                                ("Location", "http://192.168.4.1/"),
+                                ("Cache-Control", "no-store"),
+                            ],
+                            "redirecting to setup",
+                        )
+                            .write_to(conn, response_writer)
+                            .await;
                     }
                 }
             }

@@ -201,6 +201,12 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; error?: string };
   }
 
+  /** Reboot the device into its provisioning access point (one boot). */
+  async startApMode(): Promise<{ ok: boolean; note?: string }> {
+    const res = await fetch(this.url("/api/apmode"), { method: "POST", body: "" });
+    return (await res.json()) as { ok: boolean; note?: string };
+  }
+
   /** Luxel-to-Luxel sync role + clock + last leader beacon heard. */
   async sync(): Promise<SyncStatus> {
     return (await (await fetch(this.url("/api/sync"))).json()) as SyncStatus;

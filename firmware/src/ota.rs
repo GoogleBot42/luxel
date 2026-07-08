@@ -107,18 +107,46 @@ pub fn give_flash(flash: FlashStorage<'static>) {
 const GUARD_OFFSET: u32 = 0xC000;
 const GUARD_MAGIC: &[u8; 4] = b"LXBG";
 
-fn read_boot_attempts() -> u8 {
+fn read_guard() -> (u8, bool) {
     let mut rec = [0u8; 8];
     if !crate::assets::read_chunk(GUARD_OFFSET, &mut rec) || &rec[0..4] != GUARD_MAGIC {
-        return 0;
+        return (0, false);
     }
-    rec[4]
+    (rec[4], rec[5] == 1)
+}
+
+fn read_boot_attempts() -> u8 {
+    read_guard().0
+}
+
+/// One-shot "boot into the provisioning AP next time" flag (byte 5 of the
+/// guard record). One-shot on purpose: if the AP path ever crashes, the
+/// following boot reads no flag and comes up as a normal station — a bad
+/// AP build can't strand the device off-network.
+pub fn set_force_ap() {
+    write_guard(read_boot_attempts(), true);
+}
+
+/// Read AND clear the force-AP flag.
+pub fn take_force_ap() -> bool {
+    let (count, ap) = read_guard();
+    if ap {
+        write_guard(count, false);
+    }
+    ap
 }
 
 fn write_boot_attempts(n: u8) {
+    // preserve the force-AP flag: the boot counter moves before the WiFi
+    // path consumes the flag with take_force_ap
+    write_guard(n, read_guard().1);
+}
+
+fn write_guard(n: u8, force_ap: bool) {
     let mut rec = [0u8; 8];
     rec[0..4].copy_from_slice(GUARD_MAGIC);
     rec[4] = n;
+    rec[5] = force_ap as u8;
     // word-aligned stage (see config.rs for why unaligned paths are off limits)
     let mut stage = [0u32; 2];
     let bytes = unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), 8) };

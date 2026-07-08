@@ -2,7 +2,7 @@
 # workspace: it builds for a different target than the host crates.
 [package]
 name = "luxel-fw"
-version = "0.1.21"
+version = "0.1.22"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -41,6 +41,7 @@ picoserve = { version = "0.18", default-features = false, features = ["embassy",
 rust-mqtt = { version = "0.3", default-features = false }
 embedded-io = "0.6"
 embedded-io-async = "0.6"
+edge-dhcp = { version = "0.8", default-features = false }
 
 [features]
 # Boards (pick exactly one; they pull in the right chip). See docs/firmware.md.

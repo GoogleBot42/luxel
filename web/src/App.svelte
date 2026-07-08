@@ -112,6 +112,18 @@
     }
   }
 
+  // ---- AP-mode provisioning (device mode) ----
+  let apNote = "";
+
+  function startApMode(): void {
+    if (!window.confirm("Reboot the device into its setup access point? It leaves this network for one boot (rejoin it by saving WiFi from the AP, or just reboot it again).")) return;
+    void (async () => {
+      const r = await device?.startApMode();
+      apNote = r?.ok ? "rebooting into AP \"luxel-…\" — connect to it at 192.168.4.1" : "failed";
+      setTimeout(() => (apNote = ""), 8000);
+    })();
+  }
+
   // ---- Luxel-to-Luxel sync (device mode) ----
   let syncStatus: SyncStatus | null = null;
 
@@ -2224,9 +2236,17 @@ export function render(index) {
           </div>
           <p class="dim hint">
             The device stores the credentials in flash and <strong>reboots</strong> to join the new
-            network. AP-mode provisioning (for a device that can't reach any known network) is still
-            to come.
+            network. A device with no way onto any network boots as an open access point
+            (<span class="mono">luxel-xxxx</span> → <span class="mono">http://192.168.4.1/</span>)
+            where this same page provisions it.
           </p>
+          <div class="field">
+            <button data-role="apmode" on:click={startApMode}>reboot into setup AP</button>
+            <span class="dim">
+              one boot only — good for re-provisioning; it comes back as a station afterwards
+            </span>
+            {#if apNote}<span class="dim" data-role="apmode-note">{apNote}</span>{/if}
+          </div>
         </section>
 
         <section class="card">

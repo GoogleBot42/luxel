@@ -1290,6 +1290,19 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("GET", "/api/apmode") => {
+            // the mirror has no radio — it's never the provisioning AP
+            respond(&mut stream, 200, "application/json", b"{\"ap\":false}");
+        }
+        ("POST", "/api/apmode") => {
+            // accepted for API parity; a real device reboots into the AP
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                b"{\"ok\":true,\"note\":\"mirror: no radio; a device would reboot into the setup AP\"}",
+            );
+        }
         ("GET", "/api/sync") => {
             let mode = sync_mode_name(state.sync_mode.load(Ordering::Relaxed));
             let time_ms = state.engine_time_ms.load(Ordering::Relaxed);

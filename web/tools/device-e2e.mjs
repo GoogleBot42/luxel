@@ -367,6 +367,16 @@ try {
     check("mqtt: blank host disables", m2.enabled === false, JSON.stringify(m2));
   }
 
+  // AP-mode provisioning surface (the real AP needs a radio; the mirror
+  // covers the API shape and the settings button presence)
+  {
+    const ap = await (await fetch(`${DEV}/api/apmode`)).json();
+    check("apmode: GET reports not-AP", ap.ap === false, JSON.stringify(ap));
+    const trig = await (await fetch(`${DEV}/api/apmode`, { method: "POST", body: "" })).json();
+    check("apmode: POST accepted", trig.ok === true, JSON.stringify(trig));
+    check("apmode: settings has the reboot-to-AP button", (await page.$('[data-role="apmode"]')) !== null);
+  }
+
   // sync role: the Settings select round-trips through /api/sync (the full
   // two-device convergence story is covered by tools/sync-e2e.mjs)
   {

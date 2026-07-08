@@ -59,6 +59,7 @@ mod netin;
 mod ota;
 mod patterns;
 mod playlist;
+mod provision;
 mod sensors;
 mod server;
 mod shared;
@@ -280,43 +281,7 @@ async fn main(spawner: Spawner) -> ! {
         (Some(s), Some(p)) if !s.is_empty() => Some((s, p)),
         _ => None,
     };
-    let (ssid, password) = match (&flash_creds, baked) {
-        (Some((s, p)), _) => {
-            println!("wifi: joining \"{}\" (flash-stored creds)", s);
-            (s.as_str(), p.as_str())
-        }
-        (None, Some((s, p))) => {
-            println!("wifi: joining \"{}\" (compile-time creds)", s);
-            (s, p)
-        }
-        (None, None) => {
-            println!("no wifi credentials (no flash record, LUXEL_SSID/LUXEL_PASS unset); offline mode");
-            // offline is a stable state, not a failed boot — clear the guard
-            Timer::after(Duration::from_secs(30)).await;
-            ota::boot_ok();
-            loop {
-                Timer::after(Duration::from_secs(3600)).await;
-            }
-        }
-    };
-
-    let station = WifiConfig::Station(
-        StationConfig::default()
-            .with_ssid(ssid)
-            .with_password(password.into()),
-    );
-    let wifi_interface = Interface::station();
-    let controller = WifiController::new(
-        p.WIFI,
-        ControllerConfig::default().with_initial_config(station),
-    )
-    .expect("wifi controller");
-
-    let rng = Rng::new();
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-
-    // DHCP hostname (option 12): "luxel-" + the low MAC bytes, so the
-    // device shows up recognizably (and uniquely) in router lease tables.
+    // "luxel-xxxxxx": the DHCP hostname as a station, the SSID as an AP.
     let mac_addr = esp_hal::efuse::base_mac_address();
     let mac = mac_addr.as_bytes();
     let mut hostname = heapless::String::<32>::new();
@@ -325,22 +290,83 @@ async fn main(spawner: Spawner) -> ! {
         format_args!("luxel-{:02x}{:02x}{:02x}", mac[3], mac[4], mac[5]),
     );
     println!("hostname: {}", hostname);
-    let mut dhcp = embassy_net::DhcpConfig::default();
-    dhcp.hostname = Some(hostname);
+
+    // Provisioning AP when there's no way onto a network (or on request via
+    // POST /api/apmode — a one-shot flag, so a crash here can't strand the
+    // device off-net: the next boot is a normal station boot again).
+    let force_ap = option_env!("LUXEL_NO_OTA").is_none() && ota::take_force_ap();
+    let creds = match (&flash_creds, baked) {
+        (Some((s, p)), _) => {
+            println!("wifi: creds from flash (\"{}\")", s);
+            Some((s.as_str(), p.as_str()))
+        }
+        (None, Some((s, p))) => {
+            println!("wifi: compile-time creds (\"{}\")", s);
+            Some((s, p))
+        }
+        (None, None) => None,
+    };
+    let ap_mode = force_ap || creds.is_none();
+
+    let (config, wifi_interface, net_config) = if ap_mode {
+        println!(
+            "provisioning mode{}: open AP \"{}\"",
+            if force_ap { " (requested)" } else { " (no wifi credentials)" },
+            hostname
+        );
+        (
+            WifiConfig::AccessPoint(
+                esp_radio::wifi::ap::AccessPointConfig::default().with_ssid(hostname.as_str()),
+            ),
+            Interface::access_point(),
+            embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+                address: embassy_net::Ipv4Cidr::new(provision::AP_IP, 24),
+                gateway: Some(provision::AP_IP),
+                dns_servers: heapless::Vec::new(),
+            }),
+        )
+    } else {
+        let (ssid, password) = creds.unwrap();
+        println!("wifi: joining \"{}\"", ssid);
+        let mut dhcp = embassy_net::DhcpConfig::default();
+        dhcp.hostname = Some(hostname.clone());
+        (
+            WifiConfig::Station(
+                StationConfig::default()
+                    .with_ssid(ssid)
+                    .with_password(password.into()),
+            ),
+            Interface::station(),
+            embassy_net::Config::dhcpv4(dhcp),
+        )
+    };
+
+    let controller = WifiController::new(
+        p.WIFI,
+        ControllerConfig::default().with_initial_config(config),
+    )
+    .expect("wifi controller");
+
+    let rng = Rng::new();
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
     let (stack, runner) = embassy_net::new(
         wifi_interface,
-        embassy_net::Config::dhcpv4(dhcp),
+        net_config,
         mk_static!(
             // +2 spare, +2 DDP/E1.31 UDP, +1 MQTT TCP, +1 its DNS queries,
-            // +1 the sync beacon socket
+            // +1 the sync beacon socket (AP mode: DHCP + DNS + spare)
             StackResources<{ server::WEB_TASK_POOL_SIZE + 7 }>,
             StackResources::new()
         ),
         seed,
     );
 
-    spawner.spawn(connection_task(controller).unwrap());
+    if ap_mode {
+        spawner.spawn(ap_task(controller).unwrap());
+    } else {
+        spawner.spawn(connection_task(controller).unwrap());
+    }
     spawner.spawn(net_task(runner).unwrap());
 
     stack.wait_config_up().await;
@@ -352,11 +378,17 @@ async fn main(spawner: Spawner) -> ! {
     for task_id in 0..server::WEB_TASK_POOL_SIZE {
         spawner.spawn(server::web_task(task_id, stack).unwrap());
     }
-    spawner.spawn(netin::ddp_task(stack).unwrap());
-    spawner.spawn(netin::e131_task(stack).unwrap());
-    spawner.spawn(mqtt::mqtt_task(stack).unwrap());
-    // boot id: random per boot, so followers notice a leader restart
-    spawner.spawn(netin::sync_task(stack, rng.random()).unwrap());
+    if ap_mode {
+        provision::log_started(hostname.as_str());
+        spawner.spawn(provision::dhcp_task(stack).unwrap());
+        spawner.spawn(provision::dns_task(stack).unwrap());
+    } else {
+        spawner.spawn(netin::ddp_task(stack).unwrap());
+        spawner.spawn(netin::e131_task(stack).unwrap());
+        spawner.spawn(mqtt::mqtt_task(stack).unwrap());
+        // boot id: random per boot, so followers notice a leader restart
+        spawner.spawn(netin::sync_task(stack, rng.random()).unwrap());
+    }
 
     let mut first_beat = true;
     loop {
@@ -678,4 +710,14 @@ async fn connection_task(mut controller: WifiController<'static>) {
 #[embassy_executor::task]
 async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
+}
+
+/// AP (provisioning) mode: the controller's initial config already started
+/// the access point — this task just owns it for the rest of the boot.
+#[embassy_executor::task]
+async fn ap_task(controller: WifiController<'static>) -> ! {
+    let _keep = controller;
+    loop {
+        Timer::after(Duration::from_secs(3600)).await;
+    }
 }

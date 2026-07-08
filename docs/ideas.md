@@ -98,6 +98,12 @@ and the autocomplete/docs pipeline, and can't break existing code.
 - **Web-based .epe import/export in the playground** [S] ★★★ — DONE
   (import button + drag-drop anywhere + export download; e2e-covered).
 
+- **AP-mode provisioning** — DONE (v0.1.22): no-creds boot (or POST
+  /api/apmode / the Settings button — a one-shot flag, crash-safe) → open
+  AP `luxel-xxxx` @ 192.168.4.1 with DHCP (edge-dhcp) + catch-all DNS +
+  captive-portal redirect serving the normal web app; Settings → WiFi
+  provisions and reboots to station. Radio path needs a phone test.
+
 ## Playground / DX
 
 > Web-UI structural redesign (two modes: device console vs. playground;
