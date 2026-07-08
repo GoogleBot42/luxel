@@ -117,7 +117,7 @@ const PASSWORD: Option<&str> = option_env!("LUXEL_PASS");
 
 /// Built-in default pattern: source for `GET /api/pattern`, bytecode (built
 /// by build.rs — the firmware links no compiler) for execution.
-const PATTERN: &str = include_str!("../../examples/rainbow.js");
+const PATTERN: &str = include_str!("../../library/rainbow.js");
 const PATTERN_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default.lxbc"));
 
 macro_rules! mk_static {

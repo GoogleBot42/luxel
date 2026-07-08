@@ -21,11 +21,15 @@ File conventions:
   frequencyData`, etc.); the engine stubs them with zeros until real
   peripherals land, so they run dark rather than erroring.
 
-The curated teaching set lives in `examples/`; this directory is the
-bulk library (all 283 corpus patterns, reimplemented) that feeds the
-playground's pattern browser via `web/tools/gen-gallery.mjs`.
+This is the single source for every pattern the playground shows — the
+curated hand-written showcase examples and the reimplemented community
+corpus together. `web/tools/gen-gallery.mjs` builds the playground's
+pattern browser (`gallery.json`) from this directory alone; there is no
+separate inlined example set. The firmware/CLI/test default seed
+(`rainbow.js`, `blink-fade.js`) is `include_str!`'d from here too.
 
-The prose specification each file was built from is preserved at
+The prose specification each corpus reimplementation was built from is
+preserved at
 `docs/pattern-specs/<slug>.md` — the clean-room firewall's audit trail.
 The original scraped corpus is never read by the build; it survives only
 as an untracked, local compile-compatibility test battery.

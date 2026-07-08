@@ -1,9 +1,9 @@
-//! Compile the built-in default pattern (examples/rainbow.js) to LXBC at
+//! Compile the built-in default pattern (library/rainbow.js) to LXBC at
 //! build time. The firmware links no compiler — it boots straight into the
 //! precompiled blob (main.rs includes OUT_DIR/default.lxbc).
 
 fn main() {
-    let src_path = "../examples/rainbow.js";
+    let src_path = "../library/rainbow.js";
     println!("cargo:rerun-if-changed={src_path}");
     let src = std::fs::read_to_string(src_path).expect("read default pattern");
     let prog = match luxel_core::compile::compile(&src) {

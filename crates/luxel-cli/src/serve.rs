@@ -17,7 +17,7 @@ use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
 
 const INDEX_HTML: &str = include_str!("../../../firmware/src/index.html");
-const DEFAULT_PATTERN: &str = include_str!("../../../examples/rainbow.js");
+const DEFAULT_PATTERN: &str = include_str!("../../../library/rainbow.js");
 
 enum Msg {
     /// Run this pattern: source (for read-back) + the LXBC bytecode the

@@ -212,7 +212,7 @@ fn render_priority_prefers_1d() {
 
 #[test]
 fn blinkfade_soaks_clean() {
-    let src = include_str!("../../../examples/blinkfade.js");
+    let src = include_str!("../../../library/blink-fade.js");
     let mut e = Engine::new(src, 60, 7).unwrap();
     assert!(e.last_error.is_none(), "{:?}", e.last_error);
     let delta = Fx::from_f64(1000.0 / 60.0);
@@ -227,7 +227,7 @@ fn blinkfade_soaks_clean() {
 
 #[test]
 fn determinism_same_seed_same_bytes() {
-    let src = include_str!("../../../examples/blinkfade.js");
+    let src = include_str!("../../../library/blink-fade.js");
     let delta = Fx::from_f64(16.0);
     let run = |seed| {
         let mut e = Engine::new(src, 30, seed).unwrap();

@@ -43,7 +43,7 @@ async function api(path, body) {
 }
 
 const gallery = JSON.parse(fs.readFileSync("web/public/gallery.json", "utf8"));
-const rainbow = fs.readFileSync("examples/rainbow.js", "utf8");
+const rainbow = fs.readFileSync("library/rainbow.js", "utf8");
 const status0 = await api("/api/status");
 const bright0 = (await api("/api/brightness")).brightness;
 console.log(`device ${IP}: v${status0.version}, ${status0.pixels}px, brightness ${bright0} — soaking ${gallery.length} patterns`);

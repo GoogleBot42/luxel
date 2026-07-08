@@ -10,7 +10,7 @@
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
   import type { MqttStatus, Playlist, SyncStatus } from "./lib/device";
-  import { EXAMPLES, type Layout } from "./lib/examples";
+  import { DEFAULT_PATTERN, type Layout } from "./lib/examples";
   import {
     deletePattern,
     listPatterns,
@@ -36,9 +36,9 @@
   let editor: Editor;
   let preview: Preview;
 
-  let source = EXAMPLES[0]?.source ?? "";
-  let layout: Layout = EXAMPLES[0]?.layout ?? { kind: "strip", pixels: 60 };
-  let exampleName = EXAMPLES[0]?.name ?? "";
+  let source = DEFAULT_PATTERN.source;
+  let layout: Layout = DEFAULT_PATTERN.layout;
+  let exampleName = DEFAULT_PATTERN.name;
 
   let compileError: Diagnostic | null = null;
   let runtimeError: RuntimeError | null = null;

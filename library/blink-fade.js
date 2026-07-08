@@ -1,34 +1,25 @@
-// name: blink fade
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "blink fade"; original source never consulted.
+// name: Blink Fade
+// Curated example (hand-written showcase of the Luxel language/builtins).
+// Frame-buffer idiom: random pixels flare up and decay each frame.
+values = array(pixelCount)
+hues = array(pixelCount)
+fade = 0.02
 
-// Twinkle field: each pixel pops on at a random brightness, decays
-// linearly to black over a few seconds, then instantly re-ignites at a
-// fresh random level with a hue drawn from a slowly drifting palette.
-// Random restart heights keep the pixels permanently desynchronized.
-
-var levels = array(pixelCount)   // per-pixel current brightness
-var hues = array(pixelCount)     // per-pixel hue, frozen at ignition
-
-const FADE_MS = 3500             // full brightness -> black in ~3.5 s
-const BAND = 0.2                 // positional gradient spans ~1/5 of wheel
+export var speed = 0.5
+export function sliderSpeed(v) { speed = v }
 
 export function beforeRender(delta) {
-  var drift = time(0.08)         // palette circles the wheel in ~5 s
-  var decay = delta / FADE_MS    // frame-rate independent linear decay
+  t1 = time(.05)
   for (var i = 0; i < pixelCount; i++) {
-    levels[i] -= decay
-    if (levels[i] <= 0) {
-      // re-ignite: random restart height, hue = drifting base plus a
-      // symmetric triangle-shaped positional offset (strip ends match)
-      levels[i] = random(1)
-      hues[i] = drift + triangle(i / pixelCount) * BAND
+    values[i] -= fade * delta * (0.05 + speed)
+    if (values[i] <= 0) {
+      values[i] = random(1)
+      hues[i] = t1 + random(.2)
     }
   }
 }
 
 export function render(index) {
-  var v = levels[index]
-  // squaring the linear level reads as a natural fade (cheap gamma)
+  v = values[index]
   hsv(hues[index], 1, v * v)
 }
