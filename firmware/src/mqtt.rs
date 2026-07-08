@@ -309,12 +309,14 @@ async fn activate_by_name(name: &str) {
         println!("mqtt: pattern \"{}\" has no stored bytecode", name);
         return;
     };
-    if luxel_core::bytecode::deserialize(&bc).is_err() {
+    if luxel_core::bytecode::validate(&bc).is_err() {
         println!("mqtt: stored bytecode for \"{}\" is stale (re-save from the app)", name);
         return;
     }
     crate::playlist::stop();
-    MSG_QUEUE.send(Msg::Code { src: source, bc }).await;
+    let env = luxel_core::bytecode::encode_envelope("", &source, &bc);
+    drop((source, bc));
+    MSG_QUEUE.send(Msg::Code { env }).await;
     set_current_pattern_id(&id);
 }
 

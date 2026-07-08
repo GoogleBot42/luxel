@@ -2,7 +2,7 @@
 //! `luxel check` (tools/corpus/report.mjs); these cover the properties and
 //! the rejection paths directly.
 
-use luxel_core::bytecode::{deserialize, serialize, BcError, FORMAT_VERSION};
+use luxel_core::bytecode::{deserialize, serialize, validate, BcError, FORMAT_VERSION};
 use luxel_core::compile::compile;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
@@ -51,6 +51,31 @@ fn debug_info_survives() {
         assert_eq!(f.pos, g.pos, "positions differ in {}", f.name);
         assert_eq!(f.local_names, g.local_names);
         assert_eq!(f.name, g.name);
+    }
+}
+
+#[test]
+fn validate_agrees_with_deserialize() {
+    let prog = compile(PATTERN).unwrap();
+    let blob = serialize(&prog).unwrap();
+    assert!(validate(&blob).is_ok());
+    // every truncation and every single-byte corruption must produce the
+    // same accept/reject verdict as the allocating decoder
+    for cut in 0..blob.len() {
+        assert_eq!(
+            validate(&blob[..cut]).is_ok(),
+            deserialize(&blob[..cut]).is_ok(),
+            "verdicts diverge at truncation {cut}"
+        );
+    }
+    for i in 0..blob.len() {
+        let mut b = blob.clone();
+        b[i] ^= 0xFF;
+        assert_eq!(
+            validate(&b).is_ok(),
+            deserialize(&b).is_ok(),
+            "verdicts diverge at corrupted byte {i}"
+        );
     }
 }
 

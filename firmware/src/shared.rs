@@ -12,14 +12,15 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
 use luxel_core::fixed::Fx;
 
-/// Writes from HTTP handlers to the engine. Patterns arrive as LXBC
-/// bytecode + source: the blob is decode-validated by the upload handler
-/// before queueing, and the render task decodes it again to build the
-/// engine (keeps `Engine` off the channel, only `Send` data crosses). The
-/// source rides along for `GET /api/pattern` and the sync envelope — the
-/// device never compiles it.
+/// Writes from HTTP handlers to the engine. Patterns cross as the RAW LXP1
+/// envelope buffer (name + source + bytecode), decode-validated by the
+/// sender but parsed only by the render task — the producer side must not
+/// allocate source/blob copies: on a heap dominated by the *running*
+/// pattern those copies OOM'd (soak v5), while the render task frees the
+/// outgoing engine before it decodes, so peak memory lands where the most
+/// is free.
 pub enum Msg {
-    Code { src: String, bc: Vec<u8> },
+    Code { env: Vec<u8> },
     Control(String, Vec<Fx>),
     Var(String, Fx),
     /// New pixel count — the render task rebuilds the engine + SPI buffer live.
@@ -29,7 +30,7 @@ pub enum Msg {
     Protocol(u8),
     /// Like Code, but crossfade from the current pattern over `ms` (playlist
     /// transitions): the render task keeps the outgoing engine and blends.
-    Crossfade { src: String, bc: Vec<u8>, ms: u32 },
+    Crossfade { env: Vec<u8>, ms: u32 },
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
@@ -107,7 +108,10 @@ pub fn set_pattern_src(src: &str) {
     PATTERN_SRC.lock(|c| {
         let mut s = c.borrow_mut();
         s.clear();
-        s.push_str(src);
+        // fallible: losing the read-back copy beats an OOM panic
+        if s.try_reserve(src.len()).is_ok() {
+            s.push_str(src);
+        }
     });
 }
 
@@ -123,7 +127,10 @@ pub fn set_pattern_bc(bc: &[u8]) {
     PATTERN_BC.lock(|c| {
         let mut v = c.borrow_mut();
         v.clear();
-        v.extend_from_slice(bc);
+        // fallible: losing the sync-envelope copy beats an OOM panic
+        if v.try_reserve(bc.len()).is_ok() {
+            v.extend_from_slice(bc);
+        }
     });
 }
 

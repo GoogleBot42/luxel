@@ -19,7 +19,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::{format, vec};
+use alloc::format;
 
 use crate::fixed::Fx;
 use crate::fmath;
@@ -899,12 +899,17 @@ impl Vm {
                 }
                 Insn::NewArray(n) => {
                     let n = n as usize;
-                    let mut elems = vec![Value::default(); n];
-                    for i in (0..n).rev() {
-                        elems[i] = pop!();
-                    }
-                    match self.alloc_array(elems) {
-                        Ok(v) => push!(v),
+                    // budget-first: the elements are popped into the slot
+                    // only once the (fallible) allocation succeeded
+                    match self.alloc_array_zeroed(n) {
+                        Ok(v) => {
+                            let Value::Arr(id) = v else { unreachable!() };
+                            for i in (0..n).rev() {
+                                let e = pop!();
+                                self.arrays[id as usize][i] = e;
+                            }
+                            push!(v);
+                        }
                         Err(m) => fail!(m),
                     }
                 }
@@ -1045,6 +1050,24 @@ impl Vm {
             return Err("array element budget exceeded (arrays are never freed)");
         }
         self.array_elems += elems.len();
+        self.arrays.push(elems);
+        Ok(Value::Arr((self.arrays.len() - 1) as u32))
+    }
+
+    /// Budget-checked zero-filled array allocation: the budget is verified
+    /// BEFORE any memory is reserved, and the reservation itself is
+    /// fallible — on a small-heap device a huge `array(n)` must be a
+    /// recorded runtime error, never an allocator panic (= reboot).
+    fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, &'static str> {
+        if self.array_elems + len > self.array_budget {
+            return Err("array element budget exceeded (arrays are never freed)");
+        }
+        let mut elems: Vec<Value> = Vec::new();
+        if elems.try_reserve_exact(len).is_err() {
+            return Err("out of memory for array");
+        }
+        elems.resize(len, Value::default());
+        self.array_elems += len;
         self.arrays.push(elems);
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
     }
@@ -1325,8 +1348,7 @@ impl Vm {
             }
             Array => {
                 let len = n(0).to_int_trunc().max(0) as usize;
-                self.alloc_array(vec![Value::default(); len])
-                    .map_err(|m| no_site(m.into()))
+                self.alloc_array_zeroed(len).map_err(|m| no_site(m.into()))
             }
             ArrayLength => {
                 let Value::Arr(arr) = a(0) else {

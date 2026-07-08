@@ -365,10 +365,13 @@ async fn api_readouts() -> ApiResponse {
 /// decodes for this firmware's format version. A version mismatch gets
 /// `"code":"bc-version"` so clients know to recompile from source.
 fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, String> {
-    use luxel_core::bytecode::{decode_envelope, deserialize, BcError};
+    use luxel_core::bytecode::{decode_envelope, validate, BcError};
     let env = decode_envelope(raw)
         .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
-    match deserialize(env.bytecode) {
+    // validate() checks everything deserialize() would but allocates nothing —
+    // the full Program is only ever materialized once, by the render task
+    // (building it here too OOM'd the heap under soak-speed pattern churn).
+    match validate(env.bytecode) {
         Ok(_) => Ok(env),
         Err(e @ BcError::Version { .. }) => Err(format!(
             "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
@@ -382,13 +385,15 @@ fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, Strin
 }
 
 /// POST /api/code — LXP1 envelope (empty name): run this pattern now.
-async fn api_code(raw: &[u8]) -> ApiResponse {
-    json_response(match decode_upload(raw) {
-        Ok(env) => {
+/// Takes the body by VALUE and forwards it unparsed: this handler must not
+/// allocate source/blob copies — while a heavy pattern owns the heap those
+/// copies OOM'd (soak v5). The render task frees the old engine first,
+/// then parses.
+async fn api_code(raw: Vec<u8>) -> ApiResponse {
+    json_response(match decode_upload(&raw) {
+        Ok(_) => {
             crate::playlist::stop(); // a manual push takes over from the playlist
-            MSG_QUEUE
-                .send(Msg::Code { src: String::from(env.source), bc: env.bytecode.to_vec() })
-                .await;
+            MSG_QUEUE.send(Msg::Code { env: raw }).await;
             crate::shared::set_current_pattern_id(""); // ad-hoc code, no library id
             String::from("{\"ok\":true}")
         }
@@ -413,16 +418,18 @@ fn api_patterns_save(raw: &[u8]) -> String {
 /// (same swap path as /api/code). A stored blob that no longer decodes
 /// (format bump via OTA) reports `bc-version` so the client re-saves.
 async fn api_patterns_activate(id: &str) -> String {
-    use luxel_core::bytecode::{deserialize, BcError};
+    use luxel_core::bytecode::{validate, BcError};
     let Some(bc) = crate::patterns::bytecode_of(id) else {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     };
     let Some(source) = crate::patterns::source_of(id) else {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     };
-    match deserialize(&bc) {
+    match validate(&bc) {
         Ok(_) => {
-            MSG_QUEUE.send(Msg::Code { src: source, bc }).await;
+            let env = luxel_core::bytecode::encode_envelope("", &source, &bc);
+            drop((source, bc));
+            MSG_QUEUE.send(Msg::Code { env }).await;
             crate::shared::set_current_pattern_id(id);
             String::from("{\"ok\":true}")
         }
@@ -554,15 +561,23 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             // finalize+write_to future per route made this poll frame the
             // largest symbol in the image (see docs/size-report.md).
             let raw: alloc::vec::Vec<u8> = match request.body_connection.body().read_all().await {
-                Ok(b) => b.to_vec(),
+                // fallible copy: on a starved heap a failed POST body beats
+                // an OOM panic — the route then rejects it cleanly
+                Ok(b) => {
+                    let mut v = alloc::vec::Vec::new();
+                    if v.try_reserve_exact(b.len()).is_ok() {
+                        v.extend_from_slice(b);
+                    }
+                    v
+                }
                 Err(_) => alloc::vec::Vec::new(),
             };
-            let text = || String::from_utf8_lossy(&raw).into_owned();
+            let text = |r: &[u8]| String::from_utf8_lossy(r).into_owned();
             let api: Option<ApiResponse> = match route {
                 // body: tz offset from UTC in minutes (e.g. "-360") →
                 // applied live + persisted (clock builtins shift with it)
                 "/api/clock" => {
-                    Some(json_response(match text().trim().parse::<i16>() {
+                    Some(json_response(match text(&raw).trim().parse::<i16>() {
                         Ok(tz) if (-14 * 60..=14 * 60).contains(&(tz as i32)) => {
                             crate::shared::TZ_MINUTES.store(tz as i32, Ordering::Relaxed);
                             let cfg = DeviceConfig { tz_minutes: tz, ..crate::shared::device_config_snapshot() };
@@ -577,7 +592,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // body: "<order> <gamma_tenths> <cap_ma>" (e.g. "grb 22 1500")
                 // → the output pipeline, applied live + persisted
                 "/api/output" => {
-                    let body = text();
+                    let body = text(&raw);
                     let mut it = body.split_whitespace();
                     let order = it
                         .next()
@@ -609,7 +624,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // body: "off" | "leader" | "follower" → applied live +
                 // persisted (Luxel-to-Luxel sync role)
                 "/api/sync" => {
-                    let body = text();
+                    let body = text(&raw);
                     let mode = match body.trim() {
                         "off" => Some(0u8),
                         "leader" => Some(1),
@@ -648,7 +663,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // body: "host\nport\nuser\npass" → stored in flash; the MQTT
                 // task reconnects live (no reboot). Empty host disables MQTT.
                 "/api/mqtt" => {
-                    let body = text();
+                    let body = text(&raw);
                     let mut lines = body.lines();
                     let host = lines.next().unwrap_or("").trim();
                     let port = lines.next().unwrap_or("").trim().parse::<u16>().unwrap_or(1883);
@@ -679,7 +694,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // (the render task reads BRIGHTNESS every frame) and persisted
                 // to flash so it survives reboot. No reboot needed.
                 "/api/brightness" => {
-                    Some(json_response(match text().trim().parse::<u8>() {
+                    Some(json_response(match text(&raw).trim().parse::<u8>() {
                         Ok(b) if b <= 31 => {
                             BRIGHTNESS.store(b, Ordering::Relaxed);
                             // read-modify-write so we don't clobber the others
@@ -701,7 +716,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // Applied live (render task rebuilds the engine + SPI buffer)
                 // and persisted. No reboot.
                 "/api/config" => {
-                    Some(json_response(match text().trim().parse::<u32>() {
+                    Some(json_response(match text(&raw).trim().parse::<u32>() {
                         Ok(n) if n >= 1 && n <= MAX_PIXELS => {
                             // the render task is the sole writer of PIXEL_COUNT;
                             // it flips the atomic + rebuilds when it drains this
@@ -726,7 +741,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // + aliases). Reconfigures SPI + resizes the buffer live, and
                 // persists. No reboot.
                 "/api/protocol" => {
-                    Some(json_response(match Protocol::from_name(text().trim()) {
+                    Some(json_response(match Protocol::from_name(text(&raw).trim()) {
                         Some(p) => {
                             MSG_QUEUE.send(Msg::Protocol(p.as_u8())).await;
                             let cfg = DeviceConfig { protocol: p.as_u8(), ..crate::shared::device_config_snapshot() };
@@ -747,7 +762,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // POST /api/map — install a computed 2D/3D map (raw 16.16).
                 // Empty/invalid body clears it. Applied live + persisted.
                 "/api/map" => {
-                    let (installed, count) = crate::devicemap::set_from_wire(&text());
+                    let (installed, count) = crate::devicemap::set_from_wire(&text(&raw));
                     Some(json_response(format!(
                         "{{\"ok\":true,\"installed\":{},\"count\":{}}}",
                         installed, count
@@ -756,7 +771,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // POST /api/playlist — line-format definition (D/I/C lines).
                 // Persisted to flash; applied live if already playing.
                 "/api/playlist" => {
-                    crate::playlist::set_from_wire(&text());
+                    crate::playlist::set_from_wire(&text(&raw));
                     Some(json_response(String::from("{\"ok\":true}")))
                 }
                 "/api/playlist/play"
@@ -765,7 +780,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 | "/api/playlist/prev" => {
                     match route {
                         "/api/playlist/play" => {
-                            crate::playlist::play(text().trim().parse().unwrap_or(0))
+                            crate::playlist::play(text(&raw).trim().parse().unwrap_or(0))
                         }
                         "/api/playlist/stop" => crate::playlist::stop(),
                         "/api/playlist/next" => crate::playlist::step(1),
@@ -773,9 +788,9 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     Some(json_response(String::from("{\"ok\":true}")))
                 }
-                "/api/code" => Some(api_code(&raw).await),
-                "/api/control" => Some(api_control(text()).await),
-                "/api/var" => Some(api_var(text()).await),
+                "/api/code" => Some(api_code(raw).await),
+                "/api/control" => Some(api_control(text(&raw)).await),
+                "/api/var" => Some(api_var(text(&raw)).await),
                 // save a pattern: LXP1 envelope, bytecode decode-validated
                 // here so the store never holds a stale blob (mirrors serve.rs).
                 "/api/patterns" => Some(json_response(api_patterns_save(&raw))),
@@ -1039,12 +1054,12 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
     picoserve::Router::new().nest_service("", Api)
 }
 
-// 3: one slot can be pinned by the preview websocket
-// 3 connections: the bidirectional preview socket pins one, leaving two for
-// page/asset loads + API — ends the ws-handshake-vs-poll race. (The earlier
-// crash that forced this back to 2 was the dispatcher stack overflow, now
-// fixed by boxing the ws/ota sub-futures; the pool size was never the cause.)
-pub const WEB_TASK_POOL_SIZE: usize = 3;
+// 2: the third slot existed for the bidirectional preview WEBSOCKET, which
+// the size diet removed (the preview polls /api/pixels over keep-alive
+// now). Each slot costs 32 KB of heap in connection buffers — on a device
+// where patterns compete for ~50 KB, the idle third slot was a quarter of
+// the pattern budget.
+pub const WEB_TASK_POOL_SIZE: usize = 2;
 
 // keep_connection_alive: without it every preview poll (15/s) pays a full
 // TCP open/close on a chip with a 2-connection pool — the browser reuses
@@ -1069,12 +1084,14 @@ static CONFIG: picoserve::Config = picoserve::Config {
 
 #[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
 pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
-    // Pattern uploads arrive in the http buffer; size it for real-world
-    // .epe sources (the corpus tops out around 16 KB). Heap-allocated so
-    // the task future (statically allocated per pool slot) stays small.
+    // Pattern uploads arrive in the http buffer; since v0.1.24 a POST is an
+    // LXP1 envelope (source + LXBC bytecode), so size it for both together —
+    // 24 KB covers every pattern the device can actually fit; the true
+    // giants exceed the runtime floor anyway. Heap-allocated so the task
+    // future (statically allocated per pool slot) stays small.
     let mut tcp_rx_buffer = alloc::vec![0u8; 4096];
     let mut tcp_tx_buffer = alloc::vec![0u8; 4096];
-    let mut http_buffer = alloc::vec![0u8; 16 * 1024];
+    let mut http_buffer = alloc::vec![0u8; 24 * 1024];
 
     let app = make_app();
     picoserve::Server::new(&app, &CONFIG, &mut http_buffer)

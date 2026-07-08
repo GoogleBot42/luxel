@@ -237,10 +237,12 @@ async fn enter_item(i: usize) {
         println!("playlist: item {} pattern {} has no bytecode", i, item.pattern_id);
         return;
     };
+    let env = luxel_core::bytecode::encode_envelope("", &src, &bc);
+    drop((src, bc));
     if crossfade > 0 {
-        MSG_QUEUE.send(Msg::Crossfade { src, bc, ms: crossfade as u32 }).await;
+        MSG_QUEUE.send(Msg::Crossfade { env, ms: crossfade as u32 }).await;
     } else {
-        MSG_QUEUE.send(Msg::Code { src, bc }).await;
+        MSG_QUEUE.send(Msg::Code { env }).await;
     }
     crate::shared::set_current_pattern_id(&item.pattern_id);
     for (name, raw) in item.controls {

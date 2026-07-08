@@ -199,14 +199,13 @@ async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddr
             return;
         }
     };
-    match luxel_core::bytecode::deserialize(env.bytecode) {
-        Ok(_) => {
+    match luxel_core::bytecode::validate(env.bytecode) {
+        Ok(()) => {
             crate::playlist::stop(); // following the leader takes over
+            // forward the envelope bytes as-is (one copy, no src/bc splits —
+            // producer-side copies OOM under a heavy running pattern)
             shared::MSG_QUEUE
-                .send(shared::Msg::Code {
-                    src: alloc::string::String::from(env.source),
-                    bc: env.bytecode.to_vec(),
-                })
+                .send(shared::Msg::Code { env: payload.to_vec() })
                 .await;
             shared::set_current_pattern_id("");
             esp_println::println!("sync: adopted the leader's pattern");

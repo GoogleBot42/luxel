@@ -1,5 +1,57 @@
 # Update log
 
+## 2026-07-08 — v0.1.25: the OOM hunt — soak v5 finally runs the whole gallery with zero reboots
+
+Soak v5 on v0.1.24 kept OOM-panicking the device ("memory allocation of N
+bytes failed" → reboot). Root cause wasn't one bug but a heap-economics
+problem: ~50 KB free for patterns, and several paths that allocated
+infallibly while a heavy pattern legitimately held most of it. Fixed over
+six soak iterations, each verified on the wall unit via serial:
+
+- **One decoded Program at a time.** The render task kept a resident
+  second copy (`current_prog`) + per-rebuild clones — a decoded Program is
+  2–3× its blob. Now the only Program lives inside the engine; rebuilds
+  re-decode from the running blob, and the outgoing engine is freed
+  *before* the new one decodes (peak lands where the most is free).
+- **`bytecode::validate()`** — every check the decoder does, near-zero
+  allocation (equivalence-tested against `deserialize` on truncations and
+  corruptions). Upload/activate/MQTT/sync handlers no longer build a
+  throwaway Program in request context.
+- **`deserialize_lean`** — devices decode without debug info (pos +
+  local names): ~half the Program RAM; vmerrs keep fn/pc, lose line:col.
+- **Envelope passthrough** — `Msg::Code`/`Crossfade` carry the received
+  LXP1 buffer verbatim; producers (HTTP/MQTT/sync/playlist) make ZERO
+  source/blob copies (a copy in the HTTP task OOM'd while amoeba ran).
+- **Fallible everything in the swap path** — decoder Vecs, the request
+  body copy, PATTERN_SRC/_BC updates all `try_reserve`; array allocation
+  is budget-checked BEFORE reserving and the reservation itself is
+  fallible (also fixes a pre-existing VM hole: `array(50000)` allocated
+  first, budget-checked after = panic even pre-bytecode).
+- **Heap-aware array budget + runtime floor** — arrays may fill free heap
+  down to a 20 KB floor (÷12 per element, min 1024 so ordinary strip
+  patterns never trip it); a pattern whose engine leaves less than the
+  floor is REJECTED with a "pattern too large for this device" vmerr.
+  Rejected patterns idle properly (a busy-spin showed up as "150825 fps").
+- **DRAM rebalance** — the third HTTP pool slot existed for the removed
+  preview websocket: pool 3→2 (each slot = 32 KB of buffers), request
+  buffer 16→24 KB (envelopes are src+bytecode now), main heap region
+  88→96 KB (the ~31 KB stack was sized for the deleted on-device
+  compiler; the pool's static shrink pays the stack back). Idle free
+  heap: ~50 → ~66 KB.
+- vmerr reporting deduped per error site (was per frame: serial flood +
+  format! churn at 120 fps).
+
+**Soak v5 final (docs/bench-report.md): 176/195 clean, 0 panics/reboots**
+across all 195 patterns + the pixel-count curve — vs the old committed
+baseline of 134 clean/61 errors (most of those "timeouts" were OOM
+reboots in disguise). The 19 remaining: 7 genuinely-too-large patterns
+(amoeba, tixy, bustle, Bouncy Boxes, DBZBattleFinal, neutronorbit,
+StarGen polar 2D — clean rejections), ~6 array-budget degradations, 3
+2D-game patterns with map-related index errors (separate issue), and a
+dozen heavy patterns now run *slow* (20–29 fps) that previously crashed
+the device outright. Closing the rest wants in-place bytecode execution
+(skip the `Vec<Insn>` materialization — the PB way); tracked in ideas.
+
 ## 2026-07-08 — v0.1.24: devices execute LXBC bytecode; compiler out of firmware
 
 The browser (wasm) and CLI now compile patterns to a serialized bytecode
@@ -35,6 +87,36 @@ default-on `frontend` cargo feature in luxel-core).
   ESP32 (Xtensa + C3) builds with zero frontend symbols.
 - Drive-bys: `<init>` now keeps line info for init-time vmerrs;
   MAX_LOCALS off-by-one (256th local wrapped a u8) fixed at 255.
+
+## 2026-07-07 — the v0.1.23 batch (catch-up entry): HA polish, sync v2, SNTP, output pipeline, panic fix, boards
+
+Written after the fact — this batch shipped across 2026-07-06/07 in commits
+e04f661…012d71b and was verified piecemeal; collecting it here.
+
+- **HA polish** (e04f661): diagnostics sensors (fps/heap/rssi) + playlist
+  switch and next/prev buttons via MQTT discovery. Verified live on the
+  real broker + wall unit — the HA integration task (#54) is closed.
+- **Sync v2** (0908341): followers adopt the leader's *pattern*, not just
+  its timebase — beacon carries a source hash; on change the follower
+  pulls and swaps. (Since v0.1.24 the pull is `/api/pattern.lxp` bytecode.)
+- **SNTP wall clock + timezone** (7fe7aa7): `clockHour()`-family builtins
+  work unplugged from a browser; tz persisted, settable via /api/clock.
+- **Output pipeline** (3a29bfd): wire color order, global gamma LUT, and a
+  current-estimate power cap — applied between blend and protocol encode,
+  all live-settable + persisted (/api/output).
+- **Compile-panic fix, part 1** (61c4266): parser/compiler recursion
+  bounded at depth 60 → "nesting too deep" diagnostic instead of a device
+  stack overflow (the soak-v4 crash). Deepest real gallery pattern is 16.
+  Part 2 (a stack byte budget) was designed but became moot — v0.1.24
+  removed the compiler from the device entirely.
+- **Socket hardening + soak harness** (bd8d258): 45 s read_request timeout
+  (kills the pinned-socket cascade) and tools/hw-bench.mjs, the on-hardware
+  gallery soak + fps/pixel-count bench behind docs/bench-report.md.
+- **Board portability** (012d71b): board.rs identity module, four board
+  features incl. `board-esp32-generic`, wiring isolated to one marked
+  section of main.rs. All three Xtensa variants + C3 build clean as of
+  2026-07-08; docs/boards.md has the add-a-board recipe.
+- Plus: README front-door rewrite (9781563).
 
 ## 2026-07-08 — device recovered ✅: v0.1.21 verified on hardware + tools/deploy.sh
 

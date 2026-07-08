@@ -416,11 +416,13 @@ impl<'a> Reader<'a> {
     fn i32(&mut self) -> Result<i32, BcError> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn str8(&mut self) -> Result<String, BcError> {
+    /// Borrowed name — allocation (String::from) is the caller's choice, so
+    /// the validate-only path stays allocation-free.
+    fn str8(&mut self) -> Result<&'a str, BcError> {
         let n = self.u8()? as usize;
         let bytes = self.take(n)?;
         match core::str::from_utf8(bytes) {
-            Ok(s) => Ok(String::from(s)),
+            Ok(s) => Ok(s),
             Err(_) => err("name is not UTF-8"),
         }
     }
@@ -429,6 +431,43 @@ impl<'a> Reader<'a> {
 /// Decode and fully validate a blob. The returned `Program` upholds every
 /// invariant the VM trusts (see module docs).
 pub fn deserialize(bytes: &[u8]) -> Result<Program, BcError> {
+    Ok(decode(bytes, Mode::Full)?.expect("collecting mode returns a program"))
+}
+
+/// Like [`deserialize`] but skips debug info (per-instruction source
+/// positions + local names) — roughly HALF the decoded `Program`'s RAM.
+/// Small-heap devices run on this: runtime errors keep the function name
+/// and pc but report line/col (0, 0); by-name vars/controls/exports are
+/// unaffected (those names are not debug info).
+pub fn deserialize_lean(bytes: &[u8]) -> Result<Program, BcError> {
+    Ok(decode(bytes, Mode::Lean)?.expect("collecting mode returns a program"))
+}
+
+/// Validate a blob without materializing the `Program` — same checks as
+/// [`deserialize`], near-zero allocation. This is what request handlers
+/// (HTTP upload, MQTT activate, sync adopt) call on small-heap devices:
+/// a full `Program` is only ever built once, by the render task.
+pub fn validate(bytes: &[u8]) -> Result<(), BcError> {
+    decode(bytes, Mode::Validate).map(|_| ())
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Full,
+    Lean,
+    Validate,
+}
+
+/// `try_reserve` wrapper: an oversized pattern on an exhausted heap must be
+/// a clean decode error, never an allocation panic (= device reboot).
+fn reserve<T>(v: &mut Vec<T>, n: usize) -> Result<(), BcError> {
+    v.try_reserve_exact(n)
+        .map_err(|_| BcError::Malformed("not enough memory for this pattern".to_string()))
+}
+
+fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
+    let collect = mode != Mode::Validate;
+    let keep_debug = mode == Mode::Full;
     if bytes.len() > MAX_BLOB {
         return err("blob too large");
     }
@@ -463,7 +502,7 @@ pub fn deserialize(bytes: &[u8]) -> Result<Program, BcError> {
     let mut imports: Vec<u16> = Vec::with_capacity(n_imports);
     for _ in 0..n_imports {
         let name = r.str8()?;
-        match lookup_builtin(&name) {
+        match lookup_builtin(name) {
             Some(b) => imports.push(b),
             None => {
                 return Err(BcError::Malformed(format!(
@@ -473,20 +512,28 @@ pub fn deserialize(bytes: &[u8]) -> Result<Program, BcError> {
         }
     }
 
-    let mut globals: Vec<GlobalDef> = Vec::with_capacity(n_globals);
+    let mut globals: Vec<GlobalDef> = Vec::new();
+    if collect {
+        reserve(&mut globals, n_globals)?;
+    }
     for _ in 0..n_globals {
         let name = r.str8()?;
         let flags = r.u8()?;
         let init = Fx::from_raw(r.i32()?);
-        globals.push(GlobalDef {
-            name,
-            export: flags & 1 != 0,
-            predefined: flags & 2 != 0,
-            init,
-        });
+        if collect {
+            globals.push(GlobalDef {
+                name: String::from(name),
+                export: flags & 1 != 0,
+                predefined: flags & 2 != 0,
+                init,
+            });
+        }
     }
 
-    let mut fns: Vec<FnDef> = Vec::with_capacity(n_fns);
+    let mut fns: Vec<FnDef> = Vec::new();
+    if collect {
+        reserve(&mut fns, n_fns)?;
+    }
     for _ in 0..n_fns {
         let name = r.str8()?;
         let params = r.u8()?;
@@ -505,9 +552,15 @@ pub fn deserialize(bytes: &[u8]) -> Result<Program, BcError> {
         if code_len > bytes.len() - r.at {
             return err("truncated code");
         }
-        let mut code: Vec<Insn> = Vec::with_capacity(code_len);
+        let mut code: Vec<Insn> = Vec::new();
+        if collect {
+            reserve(&mut code, code_len)?;
+        }
         for _ in 0..code_len {
-            code.push(read_insn(&mut r, &imports, n_fns, n_globals, locals, code_len)?);
+            let insn = read_insn(&mut r, &imports, n_fns, n_globals, locals, code_len)?;
+            if collect {
+                code.push(insn);
+            }
         }
         let mut pos: Vec<(u32, u32)> = Vec::new();
         let mut local_names: Vec<String> = Vec::new();
@@ -516,56 +569,74 @@ pub fn deserialize(bytes: &[u8]) -> Result<Program, BcError> {
             if n_runs > code_len {
                 return err("bad debug runs");
             }
-            pos.reserve(code_len);
+            if keep_debug {
+                reserve(&mut pos, code_len)?;
+            }
+            let mut covered = 0usize;
             for _ in 0..n_runs {
                 let count = r.u16()? as usize;
                 let line = r.u32()?;
                 let col = r.u32()?;
-                if pos.len() + count > code_len {
+                if covered + count > code_len {
                     return err("debug runs exceed code length");
                 }
-                for _ in 0..count {
-                    pos.push((line, col));
+                covered += count;
+                if keep_debug {
+                    for _ in 0..count {
+                        pos.push((line, col));
+                    }
                 }
             }
-            if pos.len() != code_len {
+            if covered != code_len {
                 return err("debug runs shorter than code");
             }
-            local_names.reserve(locals);
+            if keep_debug {
+                reserve(&mut local_names, locals)?;
+            }
             for _ in 0..locals {
-                local_names.push(r.str8()?);
+                let n = r.str8()?;
+                if keep_debug {
+                    local_names.push(String::from(n));
+                }
             }
         }
-        fns.push(FnDef {
-            name,
-            params,
-            locals: locals as u8,
-            code,
-            pos,
-            local_names,
-        });
+        if collect {
+            fns.push(FnDef {
+                name: String::from(name),
+                params,
+                locals: locals as u8,
+                code,
+                pos,
+                local_names,
+            });
+        }
     }
 
-    let mut exported_fns: Vec<(String, u16)> = Vec::with_capacity(n_exports);
+    let mut exported_fns: Vec<(String, u16)> = Vec::new();
+    if collect {
+        reserve(&mut exported_fns, n_exports)?;
+    }
     for _ in 0..n_exports {
         let name = r.str8()?;
         let idx = r.u16()?;
         if idx as usize >= n_fns {
             return err("export function index out of range");
         }
-        exported_fns.push((name, idx));
+        if collect {
+            exported_fns.push((String::from(name), idx));
+        }
     }
 
     if r.at != bytes.len() {
         return err("trailing bytes");
     }
 
-    Ok(Program {
+    Ok(collect.then(|| Program {
         fns,
         globals,
         exported_fns,
         pixel_count_g,
-    })
+    }))
 }
 
 fn read_insn(

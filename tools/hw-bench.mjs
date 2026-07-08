@@ -9,6 +9,9 @@
 // patterns, one after another on the actual strip.
 
 import fs from "node:fs";
+// devices take LXP1 envelopes (source + LXBC bytecode), not raw source —
+// compile locally via the built playground wasm (needs `npm run wasm` once)
+import { lxpBody } from "../web/tools/lxp.mjs";
 
 const IP = process.argv[2] ?? "192.168.0.205";
 const OUT = process.argv[3] ?? "docs/bench-report.md";
@@ -51,13 +54,13 @@ for (const p of gallery) {
   i++;
   let res;
   try {
-    res = await api("/api/code", p.source);
+    res = await api("/api/code", await lxpBody("", p.source));
   } catch (e) {
     rows.push({ name: p.name, kind: p.kind, fail: `push failed: ${e}` });
     continue;
   }
   if (!res.ok) {
-    rows.push({ name: p.name, kind: p.kind, fail: `compile: ${res.error} @${res.line}:${res.col}` });
+    rows.push({ name: p.name, kind: p.kind, fail: `rejected: ${res.error}` });
     continue;
   }
   await sleep(DWELL_MS);
@@ -69,7 +72,8 @@ for (const p of gallery) {
 
 // fps vs pixel count with the reference pattern
 console.log("-- pixel-count curve --");
-await api("/api/code", rainbow);
+const rainbowBody = await lxpBody("", rainbow);
+await api("/api/code", rainbowBody);
 const curve = [];
 for (const n of [60, 150, 300, 600, 1024, 2048]) {
   await api("/api/config", String(n));
@@ -82,7 +86,7 @@ for (const n of [60, 150, 300, 600, 1024, 2048]) {
 // restore
 await api("/api/config", "300");
 await api("/api/brightness", String(bright0));
-await api("/api/code", rainbow);
+await api("/api/code", rainbowBody);
 
 // report
 const errs = rows.filter((r) => r.fail || r.vmerr);

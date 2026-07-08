@@ -974,10 +974,10 @@ fn render_loop(state: Arc<State>) {
 /// Decode an LXP1 envelope + validate its LXBC blob — identical rules and
 /// error shapes to firmware/src/server.rs `decode_upload`.
 fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, String> {
-    use luxel_core::bytecode::{decode_envelope, deserialize, BcError};
+    use luxel_core::bytecode::{decode_envelope, validate, BcError};
     let env = decode_envelope(raw)
         .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
-    match deserialize(env.bytecode) {
+    match validate(env.bytecode) {
         Ok(_) => Ok(env),
         Err(e @ BcError::Version { .. }) => Err(format!(
             "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",

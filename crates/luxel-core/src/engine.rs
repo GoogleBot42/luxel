@@ -135,7 +135,22 @@ impl Engine {
     /// after its compile step, init-time runtime errors land in
     /// `last_error` and the engine stays usable.
     pub fn from_program(prog: Program, pixel_count: u32, seed: u64) -> Engine {
+        Engine::from_program_budgeted(prog, pixel_count, seed, crate::vm::DEFAULT_ARRAY_BUDGET)
+    }
+
+    /// [`from_program`] with an explicit array-element budget, applied
+    /// BEFORE the pattern's init code runs. Small-heap devices size this
+    /// from live free heap so an array-hungry pattern gets a recorded
+    /// "array budget" vmerr instead of exhausting the allocator (which
+    /// panics = reboots the device — the soak-v5 lesson).
+    pub fn from_program_budgeted(
+        prog: Program,
+        pixel_count: u32,
+        seed: u64,
+        array_budget: usize,
+    ) -> Engine {
         let mut vm = Vm::new(&prog, seed);
+        vm.array_budget = array_budget;
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
         // Sensor-board bindings: exported sensor arrays start zero-filled so

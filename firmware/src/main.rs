@@ -156,11 +156,15 @@ async fn main(spawner: Spawner) -> ! {
     // The SAME budget applies to every static — embassy task futures
     // included. v0.1.19's first cut put ~12 KB of MQTT/netin buffers in
     // task futures and bricked the boot (stack ≈ 10.7 KB); big task
-    // buffers must be heap Vecs. 88 KB here (96 KB cost stack erosion as
-    // features grew) leaves ~31 KB of stack with ~155 KB of statics;
-    // /api/status heap_free shows the live heap margin.
+    // buffers must be heap Vecs. History: 88 KB left ~31 KB of stack —
+    // sized for the on-device compiler's recursion, which v0.1.24 removed
+    // (devices execute bytecode; the decoder is iterative). 96 KB now:
+    // the ~8 KB of stack it costs is repaid by the web pool shrink
+    // (3→2 slots freed ~9 KB of static task arena), so stack stays ~31 KB
+    // while patterns gain heap. The esp-rtos stack guard + boot-loop guard
+    // catch it non-destructively if this ever proves too tight.
     #[cfg(feature = "esp32")]
-    esp_alloc::heap_allocator!(size: 88 * 1024);
+    esp_alloc::heap_allocator!(size: 96 * 1024);
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 
@@ -471,6 +475,56 @@ fn spi_cfg(p: Protocol) -> SpiConfig {
         .with_mode(Mode::_0)
 }
 
+/// Build an engine from a decoded program with an array budget derived
+/// from LIVE free heap (half of it, in 8-byte `Value`s, capped at PB's
+/// 10240 elements). Patterns that out-allocate the device then record an
+/// "array budget" vmerr instead of exhausting the allocator — an alloc
+/// failure is a panic, i.e. a reboot (the soak-v5 OOM).
+/// Heap the rest of the firmware needs while a pattern runs: jsonview
+/// snapshots (~8 KB peak for var-heavy patterns), HTTP request/response
+/// buffers, MQTT publishes, SPI buffer resizes, WiFi-blob mallocs (which
+/// do NOT null-check). A pattern may not eat into this — its array budget
+/// stops short of it, and a pattern whose engine leaves less free is
+/// rejected outright after loading. Sized generously: soak v5 kept
+/// finding ~8 KB infallible allocs panicking at smaller floors; trading
+/// the few over-sized gallery patterns for zero reboots is the right side
+/// of the line. Win the margin back by rebalancing statics/stack→heap
+/// (the compiler that the ~31 KB main stack was sized for no longer
+/// exists on-device).
+const RUNTIME_FLOOR: usize = 20 * 1024;
+
+fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
+    // Arrays may consume free heap down to (but not past) the runtime
+    // floor. ÷12 splits the per-element cost difference between big arrays
+    // (8 B/element) and many tiny nested ones (Vec headers + allocator
+    // overhead ≈ 16 B/element). The 1024-element minimum keeps ordinary
+    // strip patterns (a few arrays of pixelCount) working even when free
+    // heap reads low mid-churn — if that minimum genuinely doesn't fit,
+    // the post-load floor check rejects the pattern instead (soak-proven:
+    // a rejection, never a panic).
+    let budget = ((esp_alloc::HEAP.free() as usize).saturating_sub(RUNTIME_FLOOR) / 12)
+        .max(1024)
+        .min(luxel_core::vm::DEFAULT_ARRAY_BUDGET);
+    Engine::from_program_budgeted(prog, count, 1, budget)
+}
+
+/// [`budgeted_engine`] + post-build floor check: a pattern that fits its
+/// array budget but still leaves the heap under the floor (huge program,
+/// long strip) is rejected — soak v5 showed a routine 8.5 KB jsonview
+/// alloc panicking (= reboot) right after such a pattern loaded.
+fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Option<Engine> {
+    let e = budgeted_engine(prog, count);
+    if (esp_alloc::HEAP.free() as usize) < RUNTIME_FLOOR {
+        println!(
+            "pattern rejected: {} B heap left after load (< {} floor)",
+            esp_alloc::HEAP.free(),
+            RUNTIME_FLOOR
+        );
+        return None; // drops the engine, freeing its heap
+    }
+    Some(e)
+}
+
 /// frames. Yields to the network tasks after every frame.
 #[embassy_executor::task]
 async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
@@ -484,22 +538,28 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             0
         }
     };
-    // the program currently running — kept so a live pixel-count change or
-    // map clear can rebuild the engine without a round-trip through the
-    // client (the device has no compiler; bytecode is all it ever executes)
-    let mut current_prog: Option<luxel_core::vm::Program> =
-        match luxel_core::bytecode::deserialize(PATTERN_BC) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                println!("embedded pattern bytecode error (build bug?): {}", e);
-                None
-            }
-        };
-    let mut engine = current_prog
-        .clone()
-        .map(|p| Engine::from_program(p, PIXEL_COUNT.load(Ordering::Relaxed), 1));
+    // Heap discipline: exactly ONE decoded Program lives at a time — inside
+    // the engine. Rebuilds (pixel-count change, map clear) re-decode from
+    // the running pattern's blob (shared::PATTERN_BC, ≤23 KB) rather than
+    // keeping a second Program resident; a resident copy + per-rebuild
+    // clones is what OOM'd soak v5 (Programs with debug info are several
+    // times their blob size).
+    // deserialize_lean: no debug info on-device — halves a Program's RAM
+    let mut engine = match luxel_core::bytecode::deserialize_lean(PATTERN_BC) {
+        Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
+        Err(e) => {
+            println!("embedded pattern bytecode error (build bug?): {}", e);
+            None
+        }
+    };
     set_pattern_src(PATTERN);
     set_pattern_bc(PATTERN_BC);
+    // rebuild the engine from the running blob at the current pixel count
+    let rebuild = || {
+        luxel_core::bytecode::deserialize_lean(&crate::shared::get_pattern_bc())
+            .ok()
+            .and_then(|p| try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)))
+    };
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
     }
@@ -521,6 +581,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
     let mut sensor_seen: u32 = 0;
+    // last reported vmerr site (fn, pc) — dedupes the per-frame report
+    let mut vmerr_seen: Option<(u16, u32)> = None;
     // output-pipeline scratch (heap: the main-stack rule for task futures)
     let mut pipe_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
     let mut gamma_cache: (u8, Option<alloc::boxed::Box<[u8; 256]>>) = (0, None);
@@ -528,27 +590,40 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
             match msg {
-                Msg::Code { src, bc } => {
-                    // Decode-validated by the upload handler; failure here
-                    // would mean non-determinism, so log and keep the old
-                    // pattern.
-                    match luxel_core::bytecode::deserialize(&bc) {
-                        Ok(p) => {
-                            let e = Engine::from_program(
-                                p.clone(),
-                                PIXEL_COUNT.load(Ordering::Relaxed),
-                                1,
-                            );
-                            publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                            engine = Some(e);
-                            current_prog = Some(p);
-                            set_pattern_src(&src);
-                            set_pattern_bc(&bc);
-                            set_vmerr(None);
-                            last = Instant::now();
-                            devicemap::mark_dirty(); // re-apply the installed map
-                        }
-                        Err(e) => println!("bytecode decode error (bug?): {}", e),
+                Msg::Code { env } => {
+                    // Envelope-validated by the sender. Drop the outgoing
+                    // engine BEFORE decoding the new program — peak heap
+                    // lands here, where the most is free.
+                    engine = None;
+                    prev = None;
+                    match luxel_core::bytecode::decode_envelope(&env) {
+                        Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
+                            Ok(p) => {
+                                set_pattern_src(le.source);
+                                set_pattern_bc(le.bytecode);
+                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
+                                {
+                                    Some(e) => {
+                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                        engine = Some(e);
+                                        set_vmerr(None);
+                                        vmerr_seen = None;
+                                        last = Instant::now();
+                                        devicemap::mark_dirty(); // re-apply the installed map
+                                    }
+                                    None => set_vmerr(Some(alloc::string::String::from(
+                                        "pattern too large for this device (out of memory)",
+                                    ))),
+                                }
+                            }
+                            // decode can legitimately fail on a starved heap
+                            // (try_reserve) — surface it, don't just log
+                            Err(e) => {
+                                println!("bytecode decode failed: {}", e);
+                                set_vmerr(Some(alloc::format!("{}", e)));
+                            }
+                        },
+                        Err(e) => println!("envelope decode failed (bug?): {}", e),
                     }
                 }
                 Msg::Control(name, values) => {
@@ -568,11 +643,13 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
                     buf = alloc::vec![0u8; cur_protocol().buf_len(count as usize)];
-                    if let Some(p) = current_prog.clone() {
-                        let e = Engine::from_program(p, count, 1);
+                    engine = None; // free before re-decoding (peak heap)
+                    prev = None;
+                    if let Some(e) = rebuild() {
                         publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                         engine = Some(e);
                         set_vmerr(None);
+                        vmerr_seen = None;
                         last = Instant::now();
                         devicemap::mark_dirty(); // re-apply the installed map
                     }
@@ -593,29 +670,42 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 }
                 // Crossfade to a new pattern (playlist transition): keep the
                 // outgoing engine and blend over `ms`.
-                Msg::Crossfade { src, bc, ms } => {
-                    match luxel_core::bytecode::deserialize(&bc) {
-                        Ok(p) => {
-                            let e = Engine::from_program(
-                                p.clone(),
-                                PIXEL_COUNT.load(Ordering::Relaxed),
-                                1,
-                            );
-                            publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                            if ms > 0 && engine.is_some() {
-                                prev = engine.take();
-                                blend_start = Instant::now();
-                                blend_ms = ms;
+                Msg::Crossfade { env, ms } => {
+                    // the outgoing engine stays alive on purpose (it's the
+                    // blend source) — this is the one path where two
+                    // programs coexist, bounded by the crossfade duration
+                    prev = None; // but never THREE (a fade still in flight)
+                    match luxel_core::bytecode::decode_envelope(&env) {
+                        Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
+                            Ok(p) => {
+                                set_pattern_src(le.source);
+                                set_pattern_bc(le.bytecode);
+                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
+                                {
+                                    Some(e) => {
+                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                        if ms > 0 && engine.is_some() {
+                                            prev = engine.take();
+                                            blend_start = Instant::now();
+                                            blend_ms = ms;
+                                        }
+                                        engine = Some(e);
+                                        set_vmerr(None);
+                                        vmerr_seen = None;
+                                        last = Instant::now();
+                                        devicemap::mark_dirty();
+                                    }
+                                    None => set_vmerr(Some(alloc::string::String::from(
+                                        "pattern too large for this device (out of memory)",
+                                    ))),
+                                }
                             }
-                            engine = Some(e);
-                            current_prog = Some(p);
-                            set_pattern_src(&src);
-                            set_pattern_bc(&bc);
-                            set_vmerr(None);
-                            last = Instant::now();
-                            devicemap::mark_dirty();
-                        }
-                        Err(e) => println!("crossfade bytecode error (bug?): {}", e),
+                            Err(e) => {
+                                println!("crossfade bytecode decode failed: {}", e);
+                                set_vmerr(Some(alloc::format!("{}", e)));
+                            }
+                        },
+                        Err(e) => println!("envelope decode failed (bug?): {}", e),
                     }
                 }
             }
@@ -627,9 +717,10 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 if let Some(eng) = engine.as_mut() {
                     devicemap::apply(eng);
                 }
-            } else if let Some(p) = current_prog.clone() {
+            } else {
                 // cleared → rebuild without a map (do not re-mark dirty)
-                engine = Some(Engine::from_program(p, PIXEL_COUNT.load(Ordering::Relaxed), 1));
+                drop(engine.take()); // free before re-decoding (peak heap)
+                engine = rebuild();
             }
         }
 
@@ -715,13 +806,19 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 println!("spi write error: {:?}", e);
             }
             if let Some(e) = engine.as_mut().unwrap().take_error() {
-                println!("vmerr: line {}:{}: {}", e.line, e.col, e.message);
-                set_vmerr(Some(alloc::format!(
-                    "line {}:{}: {}",
-                    e.line,
-                    e.col,
-                    e.message
-                )));
+                // report each distinct error site once, not per frame — an
+                // erroring pattern at 120 fps floods serial and churns the
+                // (possibly already tight) heap with format! strings
+                if vmerr_seen != Some((e.fn_idx, e.pc)) {
+                    vmerr_seen = Some((e.fn_idx, e.pc));
+                    println!("vmerr: line {}:{}: {}", e.line, e.col, e.message);
+                    set_vmerr(Some(alloc::format!(
+                        "line {}:{}: {}",
+                        e.line,
+                        e.col,
+                        e.message
+                    )));
+                }
             }
             // publish the engine clock (leader beacons + /api/sync)
             shared::set_engine_time_ms(engine.as_ref().unwrap().time_ms());
@@ -747,7 +844,12 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
 
         // Pace to ~120 fps: an uncapped render loop starves the network
         // tasks (choppy preview, timed-out polls) for frame rate nobody can
-        // see. Slow patterns just yield.
+        // see. Slow patterns just yield. No engine (rejected pattern) =
+        // nothing to render — idle properly instead of busy-spinning.
+        if engine.is_none() {
+            Timer::after(Duration::from_millis(50)).await;
+            continue;
+        }
         let spent = Instant::now() - last;
         if spent.as_micros() < 8_000 {
             Timer::after(Duration::from_micros(8_000 - spent.as_micros())).await;
