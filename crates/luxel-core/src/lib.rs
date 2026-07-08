@@ -15,6 +15,7 @@
 extern crate alloc;
 
 pub mod ast;
+pub mod audio;
 pub mod compile;
 pub mod diag;
 pub mod engine;
