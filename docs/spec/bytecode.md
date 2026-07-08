@@ -29,7 +29,7 @@ All integers little-endian. `str8` = `u8` length + UTF-8 bytes.
 
 ```
 0   4   magic "LXBC"
-4   u16 version          (currently 3)
+4   u16 version          (currently 4)
 6   u16 flags            bit0: debug info present; others reserved (0)
 8   u16 pixel_count_g    global slot holding pixelCount
 10  u16 n_globals        (≤ 256)
@@ -37,7 +37,8 @@ All integers little-endian. `str8` = `u8` length + UTF-8 bytes.
 14  u16 n_exports        (≤ 1024)
 16  u16 n_imports        builtin import table size (≤ 512)
 18  u16 n_data           const-array pool entries (≤ 4096; v3+)
-20  …   sections, in order: imports, globals, data, fns, exports
+20  u16 n_msgs           assert-message table entries (≤ 4096; v4+)
+22  …   sections, in order: imports, globals, data, msgs, fns, exports
 ```
 
 **imports** — `n_imports × str8`: builtin names. Instructions reference
@@ -63,6 +64,12 @@ Animation #2's 768 `[r,g,b]` literals collapse to 4 pool entries). Total
 elements ≤ 65 536. The `ConstArr` opcode allocates an arena array that
 *shares* a pool entry copy-on-write: each literal occurrence keeps its own
 mutable identity, but no bytes are copied until (unless) it is written.
+
+**msgs** (v4+) — `n_msgs × str8`: `assert()` messages (custom text, or the
+condition's source when none was given), **deduplicated**. These are
+user-facing error text, not debug info — lean decodes keep them, so a
+compiler-less device reports `pattern requires: <message> (pixelCount = N)`
+verbatim.
 
 **fns** — `n_fns ×`:
 
@@ -122,6 +129,11 @@ instruction boundary, so the in-place interpreter can never misalign.
 | 0x3A | CallValue | u8 argc |
 | 0x3E | Ret | |
 | 0x3F | RetNull | |
+| 0x40 | Assert | u16 msg-table index (v4+) |
+
+`Assert` pops the condition; falsy aborts the run with an `is_assert`
+error carrying the message (plus pixelCount context). The compiler only
+emits it in fn 0 (top-level init).
 
 `Const` of an array value is not representable (the compiler never emits it;
 arrays are built at runtime by `NewArray`).

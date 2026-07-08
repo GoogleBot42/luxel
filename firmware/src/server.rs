@@ -499,7 +499,12 @@ fn api_patterns_save(raw: &[u8]) -> String {
         Ok(env) if env.name.is_empty() => {
             String::from("{\"ok\":false,\"error\":\"pattern name required\"}")
         }
-        Ok(env) => crate::patterns::save(env.name, env.source, env.bytecode),
+        Ok(env) => {
+            let r = crate::patterns::save(env.name, env.source, env.bytecode);
+            // content changed — re-validate any playlist entries using it
+            crate::playlist::preflight_mark_dirty();
+            r
+        }
         Err(e) => e,
     }
 }
@@ -924,6 +929,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             }
         } else if method.eq_ignore_ascii_case("DELETE") {
             if let Some(id) = route.strip_prefix("/api/patterns/") {
+                crate::playlist::preflight_mark_dirty();
                 let response = json_response(crate::patterns::delete(id));
                 let conn = request.body_connection.finalize().await?;
                 return response.write_to(conn, response_writer).await;

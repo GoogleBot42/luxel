@@ -55,6 +55,35 @@ fn debug_info_survives() {
 }
 
 #[test]
+fn assert_messages_round_trip_and_validate() {
+    // messages dedup into the v4 table and survive serialize→deserialize
+    let src = "assert(pixelCount > 4, \"needs at least 5 pixels\")\n\
+               assert(pixelCount < 10000, \"needs at least 5 pixels\")\n\
+               assert(pixelCount % 2 == 0)\n\
+               export function render(i) { hsv(0, 0, 1) }";
+    let prog = compile(src).unwrap();
+    assert_eq!(prog.assert_msgs.len(), 2, "identical messages must dedup");
+    let blob = serialize(&prog).unwrap();
+    let prog2 = deserialize(&blob).unwrap();
+    assert_eq!(prog.assert_msgs, prog2.assert_msgs);
+    assert_eq!(blob, serialize(&prog2).unwrap());
+
+    // a corrupted Assert message index must be a decode error, not a panic:
+    // patch every 0x40-opcode operand to an out-of-range table index
+    let mut evil = blob.clone();
+    let mut hits = 0;
+    for i in 0..evil.len() - 2 {
+        if evil[i] == 0x40 && evil[i + 1] < 2 && evil[i + 2] == 0 {
+            evil[i + 1] = 0xFF;
+            evil[i + 2] = 0xFF;
+            hits += 1;
+        }
+    }
+    assert!(hits >= 3, "expected to find the assert instructions");
+    assert!(validate(&evil).is_err(), "bad msg index must be rejected");
+}
+
+#[test]
 fn const_array_dedup_keeps_identities_separate() {
     // Two identical all-numeric literals intern to ONE const-pool entry
     // but remain distinct mutable arrays (copy-on-write): writing through

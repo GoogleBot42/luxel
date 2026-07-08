@@ -33,24 +33,6 @@ pub fn parse_program(src: &str) -> Result<Vec<Stmt>, Diagnostic> {
     Ok(stmts)
 }
 
-/// Parse a single standalone EXPRESSION (a `//# require` directive body).
-/// Trailing tokens are an error.
-pub(crate) fn parse_expr_snippet(src: &str) -> Result<Expr, Diagnostic> {
-    let toks = lex(src)?;
-    let mut p = Parser {
-        src,
-        toks,
-        pos: 0,
-        prev_span: Span::default(),
-        depth: 0,
-    };
-    let e = p.expr()?;
-    if !p.at_eof() {
-        return Err(Diagnostic::new(p.prev_span, "unexpected trailing tokens"));
-    }
-    Ok(e)
-}
-
 struct Parser<'s> {
     src: &'s str,
     toks: Vec<Token>,
@@ -205,6 +187,7 @@ impl<'s> Parser<'s> {
                 }
             }
             Some(Tok::Function) => self.func_stmt(false, start),
+            Some(Tok::Assert) => self.assert_stmt(start),
             Some(Tok::If) => self.if_stmt(),
             Some(Tok::While) => self.while_stmt(),
             Some(Tok::For) => self.for_stmt(),
@@ -351,6 +334,27 @@ impl<'s> Parser<'s> {
                 params,
                 body,
             },
+            span: start.to(self.prev_span),
+        })
+    }
+
+    /// `assert(cond[, "message"])` — the compiler additionally rejects it
+    /// anywhere but the top level (it runs inline in init).
+    fn assert_stmt(&mut self, start: Span) -> Result<Stmt, Diagnostic> {
+        self.bump(); // `assert`
+        self.expect(Tok::LParen, "`(` after `assert`")?;
+        let cond = self.assign_expr()?;
+        let message = if self.eat(Tok::Comma) {
+            let t = self.expect(Tok::Str, "a quoted \"message\" after `,`")?;
+            let quoted = self.slice(t.span);
+            Some(quoted[1..quoted.len() - 1].to_string())
+        } else {
+            None
+        };
+        self.expect(Tok::RParen, "`)`")?;
+        self.terminate()?;
+        Ok(Stmt {
+            kind: StmtKind::Assert { cond, message },
             span: start.to(self.prev_span),
         })
     }
@@ -773,6 +777,11 @@ impl<'s> Parser<'s> {
                     span: start.to(self.prev_span),
                 })
             }
+            Some(Tok::Str) => Err(self.err_here(
+                "the pattern language has no string values — a quoted string \
+                 is only allowed as `assert(cond, \"message\")`"
+                    .into(),
+            )),
             _ => Err(self.err_here("expected an expression".into())),
         }
     }

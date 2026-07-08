@@ -150,6 +150,14 @@ pub enum StmtKind {
     Break,
     Continue,
     Empty,
+    /// `assert(cond[, "message"])` — Luxel extension. Runs inline in
+    /// top-level init; a falsy condition aborts init and blocks the
+    /// pattern with the message (default: the condition's source text).
+    /// The compiler rejects it anywhere but the top level.
+    Assert {
+        cond: Expr,
+        message: Option<String>,
+    },
 }
 
 /// How a variable was declared. `Var` and `Let` are semantically identical

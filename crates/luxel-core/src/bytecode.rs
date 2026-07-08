@@ -27,7 +27,9 @@ pub const MAGIC: [u8; 4] = *b"LXBC";
 /// encoding the VM executes in place.
 /// v3: const-array data section (deduplicated all-numeric literals) +
 /// the `ConstArr` opcode — a pattern's `.rodata`.
-pub const FORMAT_VERSION: u16 = 3;
+/// v4: assert-message table + the `Assert` opcode (`assert()` invariants
+/// run inline in init; the message must survive to compiler-less devices).
+pub const FORMAT_VERSION: u16 = 4;
 
 /// Decoder hard limits — bound allocations before trusting any count field.
 const MAX_BLOB: usize = 256 * 1024;
@@ -40,6 +42,7 @@ const MAX_CODE: usize = 65_536;
 const MAX_ARGC: u8 = 16;
 const MAX_DATA_ARRAYS: usize = 4096;
 const MAX_DATA_ELEMS: usize = 65_536;
+const MAX_ASSERT_MSGS: usize = 4096;
 
 const FLAG_DEBUG: u16 = 1;
 
@@ -172,6 +175,8 @@ pub(crate) mod op {
     pub const CALL_VALUE: u8 = 0x3A;
     pub const RET: u8 = 0x3E;
     pub const RET_NULL: u8 = 0x3F;
+    /// v4: pop the condition; falsy aborts with message-table entry (u16).
+    pub const ASSERT: u8 = 0x40;
 }
 
 // ---- serialize ----
@@ -217,6 +222,8 @@ struct Walk {
     local_ref: Option<u8>,
     /// Const-pool index (ConstArr).
     data_ref: Option<u16>,
+    /// Assert-message-table index (Assert).
+    msg_ref: Option<u16>,
     jump: Option<u32>,
     argc: Option<u8>,
 }
@@ -231,6 +238,7 @@ fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
         global_ref: None,
         local_ref: None,
         data_ref: None,
+        msg_ref: None,
         jump: None,
         argc: None,
     };
@@ -277,6 +285,11 @@ fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
         op::CONST_ARR => {
             need(2)?;
             w.data_ref = Some(u16_at(at + 1));
+            w.next = at + 3;
+        }
+        op::ASSERT => {
+            need(2)?;
+            w.msg_ref = Some(u16_at(at + 1));
             w.next = at + 3;
         }
         op::JMP | op::JMP_IF_FALSE | op::JMP_IF_TRUE_PEEK | op::JMP_IF_FALSE_PEEK => {
@@ -355,6 +368,7 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
     w.u16(prog.exported_fns.len() as u16);
     w.u16(imports.len() as u16);
     w.u16(prog.data_arrays.len() as u16); // n_data (was reserved pre-v3)
+    w.u16(prog.assert_msgs.len() as u16); // n_msgs (v4)
 
     for &b in &imports {
         w.str8(BUILTINS[b as usize].name)?;
@@ -372,6 +386,11 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
         for v in d.iter() {
             w.i32(v.num().raw());
         }
+    }
+
+    // assert-message table (user-facing invariant text, deduplicated)
+    for m in &prog.assert_msgs {
+        w.str8(m)?;
     }
 
     for f in &prog.fns {
@@ -517,8 +536,9 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
     let n_exports = r.u16()? as usize;
     let n_imports = r.u16()? as usize;
     let n_data = r.u16()? as usize;
+    let n_msgs = r.u16()? as usize;
 
-    if n_globals > MAX_GLOBALS || n_fns > MAX_FNS || n_exports > MAX_EXPORTS || n_imports > MAX_IMPORTS || n_data > MAX_DATA_ARRAYS {
+    if n_globals > MAX_GLOBALS || n_fns > MAX_FNS || n_exports > MAX_EXPORTS || n_imports > MAX_IMPORTS || n_data > MAX_DATA_ARRAYS || n_msgs > MAX_ASSERT_MSGS {
         return err("section count over limit");
     }
     if n_fns == 0 {
@@ -582,6 +602,19 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
             data_arrays.push(values.into());
         } else {
             r.take(len * 4)?;
+        }
+    }
+
+    // assert-message table: kept even by lean decodes — user-facing error
+    // text, not debug info
+    let mut assert_msgs: Vec<String> = Vec::new();
+    if collect {
+        reserve(&mut assert_msgs, n_msgs)?;
+    }
+    for _ in 0..n_msgs {
+        let m = r.str8()?;
+        if collect {
+            assert_msgs.push(String::from(m));
         }
     }
 
@@ -652,6 +685,11 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
             if let Some(d) = w.data_ref {
                 if d as usize >= n_data {
                     return err("const-array index out of range");
+                }
+            }
+            if let Some(m) = w.msg_ref {
+                if m as usize >= n_msgs {
+                    return err("assert message index out of range");
                 }
             }
             if let Some(a) = w.argc {
@@ -751,6 +789,7 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         fns,
         globals,
         exported_fns,
+        assert_msgs,
         pixel_count_g,
     }))
 }

@@ -67,41 +67,46 @@ fn delta_is_passed_in_ms() {
 }
 
 #[test]
-fn require_directive_gates_the_pattern() {
-    // `//# require <expr> ["message"]`: checked BEFORE init; a violation
-    // blocks rendering (and init's side effects) with the requirement text
-    // as the error. PB-compatible: it's just a comment there.
-    let src = "//# require floor(sqrt(pixelCount)) == sqrt(pixelCount) \"needs a square number of pixels\"\n\
-               export var inited\n\
-               inited = 1\n\
+fn assert_gates_the_pattern() {
+    // `assert(cond[, "message"])` runs inline in top-level init: a falsy
+    // condition aborts init on the spot and blocks rendering, with the
+    // message (or the condition's source text) as the error.
+    let src = "export var before, after\n\
+               before = 1\n\
+               assert(floor(sqrt(pixelCount)) == sqrt(pixelCount), \"needs a square number of pixels\")\n\
+               after = 1\n\
                export function render(i) { hsv(0, 0, 1) }";
 
-    // satisfied (square count): runs, init happened
+    // satisfied (square count): runs, all of init happened
     let mut ok = Engine::new(src, 256, 1).unwrap();
     assert!(ok.take_error().is_none());
+    assert!(!ok.requires_violated());
     ok.frame(Fx::ZERO);
-    assert_eq!(ok.var("inited"), Some(Value::Num(Fx::ONE)));
+    assert_eq!(ok.var("after"), Some(Value::Num(Fx::ONE)));
 
-    // violated (non-square): blocked with the custom message, init skipped
+    // violated (non-square): init aborts AT the assert — statements above
+    // it ran, statements below it did not — and the frame renders black
     let mut bad = Engine::new(src, 300, 1).unwrap();
     let err = bad.take_error().expect("invariant must fail at 300");
+    assert!(err.is_assert);
     assert!(
         err.message.contains("needs a square number of pixels")
             && err.message.contains("pixelCount = 300"),
         "{}",
         err.message
     );
-    assert_eq!(bad.var("inited"), Some(Value::Num(Fx::ZERO)), "init must not run");
+    assert!(bad.requires_violated());
+    assert_eq!(bad.var("before"), Some(Value::Num(Fx::ONE)));
+    assert_eq!(bad.var("after"), Some(Value::Num(Fx::ZERO)), "init must stop at the assert");
     let frame = bad.frame(Fx::ZERO).to_vec();
     assert!(frame.iter().all(|px| *px == [0, 0, 0]), "must render black");
 
-    // without a custom message, the expression text is the message
-    let src2 = "//# require pixelCount % 2 == 0\nexport function render(i) { hsv(0,0,1) }";
+    // without a custom message, the condition's source text is the message
+    let src2 = "assert(pixelCount % 2 == 0)\nexport function render(i) { hsv(0,0,1) }";
     let mut odd = Engine::new(src2, 7, 1).unwrap();
     let err = odd.take_error().expect("odd count must fail");
     assert!(err.message.contains("pixelCount % 2 == 0"), "{}", err.message);
-    // and it round-trips through the wire format (the check function is an
-    // ordinary exported fn — no format change)
+    // and the message survives the wire format's LEAN decode (devices)
     let blob = luxel_core::bytecode::serialize(
         &luxel_core::compile::compile(src2).unwrap(),
     )
@@ -111,11 +116,48 @@ fn require_directive_gates_the_pattern() {
         7,
         1,
     );
-    assert!(e.take_error().is_some(), "invariant survives lean decode");
+    let err = e.take_error().expect("invariant survives lean decode");
+    assert!(err.is_assert);
+    assert!(err.message.contains("pixelCount % 2 == 0"), "{}", err.message);
+}
 
-    // a bad expression is a compile error pointing at the directive
-    let bad_src = "//# require pixelCount %% 2\nexport function render(i) {}";
-    assert!(Engine::new(bad_src, 10, 1).is_err());
+#[test]
+fn assert_sees_vars_and_functions() {
+    // assert is REAL init code: it runs in line, so it can use anything
+    // initialized above it — vars, derived values, function calls.
+    let src = "var w = sqrt(pixelCount)\n\
+               function isInt(v) { return floor(v) == v }\n\
+               assert(isInt(w), \"width must be a whole number\")\n\
+               export function render(i) { hsv(0, 0, 1) }";
+    let mut ok = Engine::new(src, 289, 1).unwrap();
+    assert!(ok.take_error().is_none());
+    let mut bad = Engine::new(src, 300, 1).unwrap();
+    let err = bad.take_error().expect("must fail at 300");
+    assert!(err.is_assert);
+    assert!(err.message.contains("width must be a whole number"), "{}", err.message);
+}
+
+#[test]
+fn assert_is_top_level_only() {
+    // inside a function
+    assert!(Engine::new(
+        "export function render(i) { assert(pixelCount > 1) }",
+        10,
+        1
+    )
+    .is_err());
+    // nested in a top-level block/branch
+    assert!(Engine::new("if (pixelCount > 5) assert(pixelCount % 2 == 0)", 10, 1).is_err());
+    assert!(Engine::new("{ assert(true) }", 10, 1).is_err());
+    // strings exist ONLY as assert's message argument
+    assert!(Engine::new("x = \"hello\"", 10, 1).is_err());
+    // a runtime error INSIDE the condition is an ordinary vmerr, not a
+    // violation — the engine stays usable (PB keeps going on init errors)
+    let src = "a = array(3)\nassert(a[9] == 0)\nexport function render(i) { hsv(0,0,1) }";
+    let mut e = Engine::new(src, 10, 1).unwrap();
+    let err = e.take_error().expect("OOB in the condition");
+    assert!(!err.is_assert);
+    assert!(!e.requires_violated());
 }
 
 #[test]

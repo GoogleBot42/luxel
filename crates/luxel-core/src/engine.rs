@@ -119,9 +119,9 @@ pub struct Engine {
     is_map: bool,
     map_coords: Vec<[Fx; 3]>,
     map_dims: u8,
-    /// A `//# require` invariant failed: rendering is blocked for this
-    /// engine's lifetime (map installs must not resurrect it — the fix is
-    /// a config change, which rebuilds the engine).
+    /// An `assert()` invariant failed during init: rendering is blocked
+    /// for this engine's lifetime (map installs must not resurrect it —
+    /// the fix is a config change, which rebuilds the engine).
     requires_violated: bool,
 }
 
@@ -176,42 +176,16 @@ impl Engine {
             }
         }
 
-        // `//# require` invariants run BEFORE init: a violated
-        // configuration must not execute the pattern's setup (the classic
-        // square-rig patterns die IN init at the wrong pixel count). Only
-        // the predefined globals (pixelCount, PI, …) are meaningful here.
+        // Run top-level init. `assert()` statements execute inline here —
+        // they see everything initialized above them; a failed assert
+        // aborts init on the spot (is_assert) and blocks the pattern:
+        // its declared configuration invariant doesn't hold, and the fix
+        // is a config change, which rebuilds the engine.
         let mut last_error = None;
-        for (name, idx) in &prog.exported_fns {
-            let Some(text) = name.strip_prefix(crate::vm::REQUIRE_PREFIX) else {
-                continue;
-            };
-            match vm.call(&prog, *idx, &[]) {
-                Ok(v) if v.truthy() => {}
-                Ok(_) => {
-                    last_error = Some(VmError {
-                        message: alloc::format!(
-                            "pattern requires: {text} (pixelCount = {pixel_count})"
-                        ),
-                        fn_idx: *idx,
-                        pc: 0,
-                        line: 0,
-                        col: 0,
-                    });
-                    break;
-                }
-                Err(e) => {
-                    last_error = Some(e);
-                    break;
-                }
-            }
+        if let Err(e) = vm.call(&prog, 0, &[]) {
+            last_error = Some(e);
         }
-        let violated = last_error.is_some();
-
-        if !violated {
-            if let Err(e) = vm.call(&prog, 0, &[]) {
-                last_error = Some(e);
-            }
-        }
+        let violated = last_error.as_ref().is_some_and(|e| e.is_assert);
 
         vm.pixel_count = pixel_count;
         let before = if violated { None } else { prog.exported_fn("beforeRender") };
@@ -326,6 +300,7 @@ impl Engine {
                 pc: u32::MAX,
                 line: 0,
                 col: 0,
+                is_assert: false,
             });
             return false;
         }
@@ -811,6 +786,37 @@ impl Engine {
     /// Take and clear the recorded error (hosts poll this per frame).
     pub fn take_error(&mut self) -> Option<VmError> {
         self.last_error.take()
+    }
+
+    /// An `assert()` invariant failed during init — the pattern is blocked
+    /// (renders black) until a config change rebuilds the engine. Hosts use
+    /// this to pre-flight stored patterns against the current config.
+    pub fn requires_violated(&self) -> bool {
+        self.requires_violated
+    }
+}
+
+/// Pre-flight a program's `assert()` invariants against a configuration
+/// WITHOUT building a full engine: runs top-level init in a throwaway VM
+/// and returns the violation message, if any. Free for assert-less
+/// programs (the v4 message table makes them detectable without running
+/// anything). Runtime errors that aren't asserts return None — "would
+/// error" is not "declares itself incompatible", and hosts must not badge
+/// patterns for OOMs caused by the pre-flight's own tighter budget.
+pub fn check_asserts(
+    prog: &Program,
+    pixel_count: u32,
+    array_byte_budget: usize,
+) -> Option<String> {
+    if prog.assert_msgs.is_empty() {
+        return None;
+    }
+    let mut vm = Vm::new(prog, 1);
+    vm.array_byte_budget = array_byte_budget;
+    vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
+    match vm.call(prog, 0, &[]) {
+        Err(e) if e.is_assert => Some(e.message),
+        _ => None,
     }
 }
 

@@ -103,6 +103,9 @@
     <span class="name" data-role="pl-name">
       {item.name || item.id}{#if missing}<span class="miss"> (deleted)</span>{/if}
     </span>
+    {#if item.invalid}
+      <span class="invalid" data-role="pl-invalid" title={item.invalid}>⚠ won't run</span>
+    {/if}
     <span class="dur dim" data-role="pl-duration">{durationLabel}</span>
     <span class="spacer"></span>
     <label class="ovr" title="override the playlist default for this item">
@@ -177,6 +180,16 @@
     color: var(--error, #e05555);
     font-weight: 400;
     font-size: 12px;
+  }
+
+  .invalid {
+    color: var(--error, #e05555);
+    border: 1px solid var(--error, #e05555);
+    border-radius: 6px;
+    padding: 1px 6px;
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: help;
   }
 
   .head {

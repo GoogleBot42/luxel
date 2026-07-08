@@ -311,26 +311,38 @@ speed = 2
   a unary minus on the left is allowed and binds first (`-x ** 2` means
   `(-x) ** 2`; JS makes it a syntax error).
 
-- **`//# require` — configuration invariants.** A pattern can declare
-  what it needs from the rig; if a requirement is false the pattern
-  refuses to run (black output + a clear error naming the requirement)
-  instead of misbehaving or crashing mid-render:
+- **`assert(cond[, "message"])` — configuration invariants.** A pattern
+  can declare what it needs from the rig; if the condition is falsy the
+  pattern refuses to run (black output + a clear error carrying the
+  message) instead of misbehaving or crashing mid-render:
 
 ```js
-//# require pixelCount % 2 == 0
-//# require floor(sqrt(pixelCount)) == sqrt(pixelCount) "needs a square number of pixels"
-//# require pixelCount >= 100 "needs at least 100 pixels"
+assert(pixelCount % 2 == 0)
+
+var w = sqrt(pixelCount)
+assert(floor(w) == w, "needs a square number of pixels")
+assert(pixelCount >= 100, "needs at least 100 pixels")
 ```
 
-  The expression is ordinary pattern-language code (any builtins, any
-  operators) evaluated **before the pattern's own init runs**, so a bad
-  configuration can't even execute setup code — this is what the classic
-  square-matrix patterns (grids sized by `sqrt(pixelCount)`) need to fail
-  politely on a strip. Only the predefined globals (`pixelCount`, `PI`,
-  …) have values at check time; other globals read as 0. The optional
-  trailing `"message"` replaces the expression text in the error.
-  Multiple `require` lines are checked in order; the first failure
-  reports. On a real PB the whole line is a comment, so patterns remain
-  PB-source compatible.
+  `assert` is real init code, executed **inline where it appears** in
+  top-level initialization — so the condition can use anything set up
+  above it: derived vars, function calls, array contents. A failed
+  assert aborts init on the spot (statements above it ran; statements
+  below it don't) and blocks rendering with
+  `pattern requires: <message> (pixelCount = N)`. Without a custom
+  message, the condition's source text is used. Changing the device's
+  pixel count (or any config that rebuilds the engine) re-runs init and
+  therefore re-checks every assert automatically.
+
+  Restrictions: `assert` is only legal as a **top-level statement** —
+  not inside functions (it would fire per frame), not nested in blocks
+  or branches (a conditional invariant isn't an invariant). The quoted
+  message is the language's only string literal and exists only there.
+  A runtime error *inside* the condition (e.g. indexing out of bounds)
+  is an ordinary vmerr, not a violation.
+
+  This is the one extension that breaks PB-source compatibility when
+  used: a real Pixel Blaze has no `assert`, so patterns using it are
+  Luxel-only by choice.
 
 More conservative JS conveniences may follow (see the roadmap).

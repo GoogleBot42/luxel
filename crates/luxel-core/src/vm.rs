@@ -33,13 +33,6 @@ use crate::fmath;
 
 // ---- program ----
 
-/// Exported-fn name prefix for `//# require` invariants (compiled check
-/// functions; the rest of the name is the user-facing requirement text).
-/// Contains a space, so it can never collide with a real identifier. Lives
-/// here rather than in the (frontend-gated) compiler because the ENGINE
-/// enforces it on every host, including devices with no compiler.
-pub const REQUIRE_PREFIX: &str = "require ";
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
     Num(Fx),
@@ -131,6 +124,10 @@ pub struct Program {
     pub globals: Vec<GlobalDef>,
     /// Exported functions (render, beforeRender, controls, …) by name.
     pub exported_fns: Vec<(String, u16)>,
+    /// `assert()` messages (deduplicated; default = the condition's source
+    /// text). Kept even by lean decodes — they're user-facing error text,
+    /// not debug info.
+    pub assert_msgs: Vec<String>,
     /// Global slot holding `pixelCount`.
     pub pixel_count_g: u16,
 }
@@ -407,6 +404,10 @@ pub struct VmError {
     /// 1-based source location; (0, 0) if unknown.
     pub line: u32,
     pub col: u32,
+    /// A failed `assert()` — a declared configuration invariant, not a
+    /// bug. The engine blocks rendering for the pattern's lifetime (the
+    /// fix is a config change, which rebuilds the engine).
+    pub is_assert: bool,
 }
 
 /// A suspended (or active) pattern-function activation. `pc` points at the
@@ -662,6 +663,7 @@ impl Vm {
                     pc,
                     line,
                     col,
+                    is_assert: false,
                 }
             }
             None => VmError {
@@ -670,6 +672,7 @@ impl Vm {
                 pc: u32::MAX,
                 line: 0,
                 col: 0,
+                is_assert: false,
             },
         }
     }
@@ -1055,6 +1058,25 @@ impl Vm {
                         Err(m) => fail!(m),
                     }
                 }
+                op::ASSERT => {
+                    let m = op_u16!();
+                    set_pc!(at as u32);
+                    if !pop!().truthy() {
+                        // decoder-validated: m < assert_msgs.len()
+                        let px = self.globals[prog.pixel_count_g as usize]
+                            .num()
+                            .to_int_trunc();
+                        let mut e = self.err_at(
+                            prog,
+                            alloc::format!(
+                                "pattern requires: {} (pixelCount = {px})",
+                                prog.assert_msgs[m as usize]
+                            ),
+                        );
+                        e.is_assert = true;
+                        return Err(e);
+                    }
+                }
                 op::DUP => {
                     set_pc!(at as u32);
                     let v = *self.stack.last().unwrap_or(&Value::default());
@@ -1339,6 +1361,7 @@ impl Vm {
             pc: u32::MAX,
             line: 0,
             col: 0,
+            is_assert: false,
         };
         let def = &BUILTINS[id as usize];
         let builtin = match def.kind {
@@ -2161,6 +2184,7 @@ impl Vm {
                 pc: u32::MAX,
                 line: 0,
                 col: 0,
+                is_assert: false,
             }),
         }
     }

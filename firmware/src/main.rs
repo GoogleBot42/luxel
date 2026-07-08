@@ -666,6 +666,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                         last = Instant::now();
                         devicemap::mark_dirty(); // re-apply the installed map
                     }
+                    // invariants are config-relative — re-check the playlist
+                    playlist::preflight_mark_dirty();
                     println!("pixel count → {}", count);
                 }
                 // Live LED-protocol change (no reboot): reconfigure the SPI
@@ -826,8 +828,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 // (possibly already tight) heap with format! strings
                 if vmerr_seen != Some((e.fn_idx, e.pc)) {
                     vmerr_seen = Some((e.fn_idx, e.pc));
-                    // (0,0) = no source location (lean decode, or a
-                    // `//# require` violation) — don't prefix noise
+                    // (0,0) = no source location (lean decode) — don't
+                    // prefix noise
                     let msg = if e.line == 0 && e.col == 0 {
                         e.message
                     } else {
@@ -857,6 +859,35 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     eng.set_wall_clock(local);
                 }
             }
+        }
+
+        // playlist pre-flight: one queued item per frame — run its
+        // assert() invariants against the CURRENT config in a throwaway
+        // VM (free for assert-less patterns; the message table gates it).
+        // Same headroom math as budgeted_engine so a check can't starve
+        // the live engine; a stale-format blob reports its decode error
+        // (the fix — recompile — is the same user action either way).
+        if let Some(id) = playlist::preflight_next() {
+            let violation = match patterns::bytecode_of(&id) {
+                Some(bc) => match luxel_core::bytecode::deserialize_lean(&bc) {
+                    Ok(p) => {
+                        let budget = (esp_alloc::HEAP.free() as usize)
+                            .saturating_sub(RUNTIME_FLOOR + 4 * 1024)
+                            .max(16 * 1024);
+                        luxel_core::engine::check_asserts(
+                            &p,
+                            PIXEL_COUNT.load(Ordering::Relaxed),
+                            budget,
+                        )
+                    }
+                    Err(e) => Some(alloc::format!("{}", e)),
+                },
+                None => None, // deleted pattern; the scheduler logs it
+            };
+            if let Some(m) = &violation {
+                println!("playlist preflight: {} → {}", id, m);
+            }
+            playlist::preflight_record(&id, violation);
         }
 
         // Pace to ~120 fps: an uncapped render loop starves the network

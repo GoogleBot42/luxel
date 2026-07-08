@@ -1081,15 +1081,13 @@ fn patterns_delete(state: &State, id: &str) -> String {
 fn playlist_json(state: &State) -> String {
     let pl = state.playlist.lock().unwrap();
     let lib = state.library.lock().unwrap();
+    let pixel_count = state.pixel_count.load(Ordering::Relaxed);
     let items: Vec<String> = pl
         .items
         .iter()
         .map(|it| {
-            let name = lib
-                .iter()
-                .find(|p| p.id == it.pattern_id)
-                .map(|p| p.name.clone())
-                .unwrap_or_default();
+            let stored = lib.iter().find(|p| p.id == it.pattern_id);
+            let name = stored.map(|p| p.name.clone()).unwrap_or_default();
             let sec = it.override_sec.map(|s| s.to_string()).unwrap_or_else(|| "null".into());
             let controls: Vec<String> = it
                 .controls
@@ -1100,12 +1098,24 @@ fn playlist_json(state: &State) -> String {
                     format!("\"{}\":[{}]", json_escape(n), vals.join(","))
                 })
                 .collect();
+            // pre-flight: the item's assert() invariants vs the current
+            // config. The firmware checks off the render task and caches;
+            // natively it's cheap enough to compute inline (and free for
+            // assert-less patterns).
+            let invalid = stored
+                .and_then(|p| luxel_core::bytecode::deserialize_lean(&p.bc).ok())
+                .and_then(|prog| {
+                    luxel_core::engine::check_asserts(&prog, pixel_count, usize::MAX)
+                })
+                .map(|m| format!(",\"invalid\":\"{}\"", json_escape(&m)))
+                .unwrap_or_default();
             format!(
-                "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}}}",
+                "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}}}",
                 it.pattern_id,
                 json_escape(&name),
                 sec,
-                controls.join(",")
+                controls.join(","),
+                invalid
             )
         })
         .collect();

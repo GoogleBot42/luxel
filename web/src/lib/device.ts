@@ -356,6 +356,12 @@ export interface PlaylistItem {
   sec: number | null;
   /** name → control values (floats). */
   controls: Record<string, number[]>;
+  /**
+   * Device pre-flight verdict: the pattern's assert() invariants fail
+   * against the device's CURRENT config, so this entry would play black.
+   * Absent = fine (or still being checked).
+   */
+  invalid?: string;
 }
 
 export interface Playlist {

@@ -75,6 +75,71 @@ fn wake() {
     let _ = CMD.try_send(Cmd::Wake);
 }
 
+// ---- pre-flight: validate items against the current config ----
+//
+// A stored pattern's `assert()` invariants can start failing when the
+// device's pixel count changes — and a playlist happily schedules it,
+// playing black for the whole slot. Pre-flight runs each (unique) item's
+// init in a throwaway VM off the render task — one item between frames —
+// and `GET /api/playlist` reports violations per item so the UI can badge
+// them. Re-queued on: boot, playlist edit, pattern save, pixel-count
+// change.
+
+struct Preflight {
+    /// Pattern ids awaiting a check.
+    pending: Vec<String>,
+    /// id → violation message (ok items are simply absent).
+    violations: Vec<(String, String)>,
+}
+
+static PREFLIGHT: Shared<Preflight> = BlockingMutex::new(RefCell::new(Preflight {
+    pending: Vec::new(),
+    violations: Vec::new(),
+}));
+
+/// Queue every distinct playlist pattern for re-validation (config or
+/// content changed). Previous results are kept until each item's fresh
+/// verdict lands, so the UI never flickers to "all fine" mid-check.
+pub fn preflight_mark_dirty() {
+    let ids = PLAYLIST.lock(|c| {
+        let pl = c.borrow();
+        let mut ids: Vec<String> = Vec::new();
+        for it in &pl.items {
+            if !ids.contains(&it.pattern_id) {
+                ids.push(it.pattern_id.clone());
+            }
+        }
+        ids
+    });
+    PREFLIGHT.lock(|c| c.borrow_mut().pending = ids);
+}
+
+/// Next pattern id awaiting validation (the render task polls this).
+pub fn preflight_next() -> Option<String> {
+    PREFLIGHT.lock(|c| c.borrow_mut().pending.pop())
+}
+
+/// Record a verdict from the render task.
+pub fn preflight_record(id: &str, violation: Option<String>) {
+    PREFLIGHT.lock(|c| {
+        let mut p = c.borrow_mut();
+        p.violations.retain(|(i, _)| i != id);
+        if let Some(msg) = violation {
+            p.violations.push((String::from(id), msg));
+        }
+    });
+}
+
+fn preflight_violation(id: &str) -> Option<String> {
+    PREFLIGHT.lock(|c| {
+        c.borrow()
+            .violations
+            .iter()
+            .find(|(i, _)| i == id)
+            .map(|(_, m)| m.clone())
+    })
+}
+
 // ---- parsing / serialization ----
 
 fn parse(body: &str) -> Playlist {
@@ -137,12 +202,19 @@ pub fn to_json() -> String {
                         format!("\"{}\":[{}]", json_escape(n), vals.join(","))
                     })
                     .collect();
+                // pre-flight verdict: the item's assert() invariants vs the
+                // CURRENT config (absent = fine / still checking)
+                let invalid = match preflight_violation(&it.pattern_id) {
+                    Some(m) => format!(",\"invalid\":\"{}\"", json_escape(&m)),
+                    None => String::new(),
+                };
                 format!(
-                    "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}}}",
+                    "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}}}",
                     it.pattern_id,
                     json_escape(&name),
                     sec,
-                    controls.join(",")
+                    controls.join(","),
+                    invalid
                 )
             })
             .collect();
@@ -163,6 +235,7 @@ pub fn set_from_wire(body: &str) {
     let pl = parse(body);
     PLAYLIST.lock(|c| *c.borrow_mut() = pl);
     patterns::store_blob(patterns::PLAYLIST_KEY, body.as_bytes());
+    preflight_mark_dirty();
     wake(); // apply edits if playing
 }
 
@@ -205,6 +278,7 @@ pub fn init() {
         if let Ok(s) = String::from_utf8(bytes) {
             let pl = parse(&s);
             PLAYLIST.lock(|c| *c.borrow_mut() = pl);
+            preflight_mark_dirty(); // validate against the booted config
         }
     }
     if patterns::read_blob(patterns::PLAYSTATE_KEY)

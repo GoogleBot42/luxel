@@ -1,5 +1,49 @@
 # Update log
 
+## 2026-07-08 — v0.1.28: `assert()` — invariants become real code; playlists pre-flight against the config
+
+Jeremy's redesign of the hours-old `//# require` directive, and it's
+strictly better: **`assert(cond[, "message"])` is a real statement** that
+runs inline in top-level init, so invariants can use anything initialized
+above them — derived vars, user function calls, array contents — not just
+`pixelCount` arithmetic. The comment-directive form is gone (it shipped
+yesterday; nothing depended on it).
+
+```js
+var w = sqrt(pixelCount)
+assert(floor(w) == w, "needs a square number of pixels")
+```
+
+- A failed assert **aborts init on the spot** (code above it ran, code
+  below didn't) and blocks rendering with
+  `pattern requires: needs a square number of pixels (pixelCount = 300)`.
+  Changing the pixel count rebuilds the engine → re-runs init → re-checks
+  every assert: the settings-page workflow is self-healing, live-verified
+  both directions on the wall unit.
+- Top-level only, by compile error: inside a function it would fire per
+  frame; nested in a branch it isn't an invariant. The quoted message is
+  the language's first (and only) string literal, legal only there. A
+  runtime error inside the condition stays an ordinary vmerr.
+- **LXBC v4**: deduplicated assert-message table + `Assert` opcode, so the
+  message survives to compiler-less devices (lean decode keeps it — it's
+  user-facing error text, not debug info). `bc-version` auto-heal covers
+  v3 blobs; the dev unit's library was upsert-healed to v4.
+- **Playlist pre-flight** (the workflow gap that motivated all this): the
+  render task re-validates every playlist entry's asserts between frames
+  whenever config or content changes (boot, playlist edit, pattern
+  save/delete, pixel-count change) — free for assert-less patterns, the
+  message table gates it. `GET /api/playlist` reports per-item
+  `"invalid":"<msg>"` and the web UI badges the row (⚠ won't run). The
+  native mirror computes the same field inline, and device-e2e covers the
+  whole loop (API verdict + rendered badge in real chromium).
+- One deliberate compatibility note: `assert` is the first extension that
+  makes a pattern Luxel-only when used (on a real PB it's an unknown
+  identifier). Zero corpus collisions (293/293 clean of `assert`); corpus
+  report unchanged at 291/293.
+- Hardware: v0.1.28 on the dev unit; assert + config-flip + playlist
+  badge verified live; pixel-count sweep 300→600→1024→2048→300 with zero
+  panics (heap ≥ 90 KB throughout).
+
 ## 2026-07-08 — `//# require` invariants + PB-faithful default grid — the last 2D failures explained
 
 The Breakout/Crosstown/Frogger/Swirlpool class is now understood end to

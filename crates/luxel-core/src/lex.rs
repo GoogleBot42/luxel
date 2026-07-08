@@ -56,9 +56,18 @@ pub enum Tok {
     True,
     #[token("false")]
     False,
+    /// `assert(expr[, "message"])` — Luxel extension, top-level only.
+    #[token("assert")]
+    Assert,
 
     #[regex(r"[A-Za-z_$][A-Za-z0-9_$]*")]
     Ident,
+
+    /// A double-quoted string. The pattern language has no string values —
+    /// this token is legal ONLY as `assert()`'s message argument (the
+    /// parser rejects it anywhere else). No escapes; can't span lines.
+    #[regex(r#""[^"\n]*""#)]
+    Str,
 
     // `.015`-style literals are idiomatic (e.g. `time(.015)`), hence the
     // leading-dot alternative; plain `.` still lexes as Dot for members.

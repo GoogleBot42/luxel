@@ -742,6 +742,40 @@ try {
     (await (await fetch(`${DEV}/api/playlist`)).json()).items.length === 0,
   );
 
+  // ---- playlist pre-flight: an item whose assert() fails at the current
+  // pixel count is reported per-item ("invalid") and badged in the UI ----
+  const picky =
+    'assert(pixelCount == 123456, "needs exactly 123456 pixels")\n' +
+    "export function render(index) { hsv(0, 0, 1) }";
+  const savedPicky = await (
+    await fetch(`${DEV}/api/patterns`, { method: "POST", body: await lxpBody("Picky", picky) })
+  ).json();
+  await fetch(`${DEV}/api/playlist`, {
+    method: "POST",
+    body: `D 5\nI ${savedPicky.id} -1`,
+  });
+  await sleep(600); // give the device's pre-flight a beat
+  const plPicky = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: pre-flight flags an assert violation per item",
+    typeof plPicky.items[0].invalid === "string" &&
+      plPicky.items[0].invalid.includes("123456"),
+    JSON.stringify(plPicky.items[0].invalid),
+  );
+  await page.click('[data-role="tab-device"]');
+  await sleep(200);
+  await page.click('[data-role="tab-playlist"]');
+  await sleep(800); // poll picks up the fresh playlist
+  const badge = await page.$('[data-role="pl-invalid"]');
+  check(
+    "playlist: UI badges the invalid item",
+    badge !== null &&
+      (await page.$eval('[data-role="pl-invalid"]', (el) => el.title)).includes("123456"),
+  );
+  await fetch(`${DEV}/api/playlist`, { method: "POST", body: "D 5" }); // clean up
+  await fetch(`${DEV}/api/patterns/${savedPicky.id}`, { method: "DELETE" });
+  await sleep(300);
+
   // ---- "untitled" fix: a running pattern that matches a saved one shows its
   // name (the device streams only source, not which library entry it is) ----
   await fetch(`${DEV}/api/playlist/stop`, { method: "POST" });

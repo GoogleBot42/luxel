@@ -39,6 +39,9 @@ pub(crate) enum Insn {
     /// Allocate an arena array sharing const-pool entry N (all-numeric
     /// literal, deduplicated) — copy-on-write on first mutation.
     ConstArr(u16),
+    /// Pop the condition; falsy aborts the run with message-pool entry N
+    /// (`assert()` — top-level init only).
+    Assert(u16),
     Dup,
     Dup2, // [a b] → [a b a b]
     Pop,
@@ -78,20 +81,24 @@ const MAX_GLOBALS: usize = 256;
 // it to 0) and LoadL/StoreL operands are u8 slot indices.
 const MAX_LOCALS: usize = 255;
 
-pub use crate::vm::REQUIRE_PREFIX;
-
 pub fn compile(src: &str) -> Result<Program, Diagnostic> {
     let ast = parse_program(src)?;
     let mut c = Compiler::new(src);
     c.collect(&ast)?;
     c.emit_program(&ast)?;
-    c.emit_requires(src)?;
-    Ok(assemble(c.fns, c.globals, c.exported_fns, c.data_arrays))
+    Ok(assemble(
+        c.fns,
+        c.globals,
+        c.exported_fns,
+        c.data_arrays,
+        c.assert_msgs,
+    ))
 }
 
 /// Const-pool limits (mirrored by the decoder).
 const MAX_DATA_ARRAYS: usize = 4096;
 const MAX_DATA_ELEMS: usize = 65_536;
+const MAX_ASSERT_MSGS: usize = 4096;
 
 /// Lower the compiler IR to the flat byte encoding the VM executes in
 /// place: two passes per function — measure each instruction's byte offset,
@@ -102,6 +109,7 @@ fn assemble(
     globals: Vec<GlobalDef>,
     exported_fns: Vec<(String, u16)>,
     data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+    assert_msgs: Vec<String>,
 ) -> Program {
     let mut code: Vec<u8> = Vec::new();
     let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
@@ -144,6 +152,7 @@ fn assemble(
         fns: defs,
         globals,
         exported_fns,
+        assert_msgs,
         pixel_count_g: 0,
     }
 }
@@ -154,7 +163,7 @@ fn insn_len(insn: &Insn) -> u32 {
     match insn {
         Const(Value::Num(_)) | Const(Value::Arr(_)) => 5,
         Const(Value::Fun(_)) | Const(Value::Builtin(_)) => 3,
-        LoadG(_) | StoreG(_) | NewArray(_) | ConstArr(_) => 3,
+        LoadG(_) | StoreG(_) | NewArray(_) | ConstArr(_) | Assert(_) => 3,
         LoadL(_) | StoreL(_) => 2,
         Jmp(_) | JmpIfFalse(_) | JmpIfTruePeek(_) | JmpIfFalsePeek(_) => 5,
         CallFn { .. } | CallBuiltin { .. } => 4,
@@ -210,6 +219,10 @@ fn emit_insn(out: &mut Vec<u8>, insn: &Insn, offsets: &[u32]) {
         ConstArr(d) => {
             out.push(op::CONST_ARR);
             out.extend_from_slice(&d.to_le_bytes());
+        }
+        Assert(m) => {
+            out.push(op::ASSERT);
+            out.extend_from_slice(&m.to_le_bytes());
         }
         Dup => out.push(op::DUP),
         Dup2 => out.push(op::DUP2),
@@ -346,6 +359,8 @@ struct Compiler<'s> {
     /// content (pixel-art patterns repeat the same rows hundreds of times).
     data_arrays: Vec<alloc::boxed::Box<[Value]>>,
     data_map: BTreeMap<Vec<i32>, u16>,
+    /// `assert()` message pool, deduplicated.
+    assert_msgs: Vec<String>,
     /// Top-level named functions: (name, fn index, exported).
     named_fns: Vec<(String, u16, bool)>,
     exported_fns: Vec<(String, u16)>,
@@ -382,6 +397,7 @@ impl<'s> Compiler<'s> {
             const_globals: BTreeSet::new(),
             data_arrays: Vec::new(),
             data_map: BTreeMap::new(),
+            assert_msgs: Vec::new(),
             depth: 0,
         }
     }
@@ -510,6 +526,7 @@ impl<'s> Compiler<'s> {
                 self.scan_stmt(body, locals, top)
             }
             StmtKind::Block(b) => self.scan_stmts(b, locals, top),
+            StmtKind::Assert { cond, .. } => self.scan_expr(cond, locals),
             StmtKind::Return(Some(e)) => self.scan_expr(e, locals),
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Empty => {
                 Ok(())
@@ -878,6 +895,31 @@ impl<'s> Compiler<'s> {
                     )),
                 }
             }
+            StmtKind::Assert { cond, message } => {
+                // Top level only: asserts run once, inline in init. Inside a
+                // function they'd fire per frame/pixel; nested in a block
+                // they'd be conditional — neither is a declared invariant.
+                // depth == 1 ⇔ this statement came straight off the top
+                // level (emit_stmt is the only way in, and it counts).
+                if !ctx.is_top || self.depth != 1 {
+                    return Err(Diagnostic::new(
+                        s.span,
+                        "assert() is only allowed at the top level of a pattern \
+                         (it runs once, as part of initialization)"
+                            .to_string(),
+                    ));
+                }
+                self.emit_expr(ctx, cond)?;
+                let text = match message {
+                    Some(m) => m.clone(),
+                    None => self.src[cond.span.start as usize..cond.span.end as usize]
+                        .trim()
+                        .to_string(),
+                };
+                let m = self.intern_msg(text, s.span)?;
+                ctx.push(Insn::Assert(m));
+                Ok(())
+            }
         }
     }
 
@@ -1198,73 +1240,28 @@ fn const_elements(elems: &[Expr]) -> Option<Vec<i32>> {
 }
 
 impl<'s> Compiler<'s> {
-    /// Compile `//# require <expr> ["message"]` directives into hidden
-    /// exported check functions (see [`REQUIRE_PREFIX`]). The engine calls
-    /// them BEFORE the pattern's init runs; a falsy result blocks the
-    /// pattern with the requirement text as the error. Scripts use this to
-    /// declare configuration invariants — e.g. the square-rig matrix
-    /// patterns:
-    ///
-    ///   //# require floor(sqrt(pixelCount)) == sqrt(pixelCount) "needs a square number of pixels"
-    ///
-    /// PB-compatible by construction: it's a comment there. The expression
-    /// sees the predefined globals (pixelCount, PI, …) and builtins; other
-    /// pattern globals are still 0 when it runs.
-    fn emit_requires(&mut self, src: &str) -> Result<(), Diagnostic> {
-        let mut byte = 0usize;
-        for line in src.split_inclusive('\n') {
-            let line_start = byte;
-            byte += line.len();
-            let t = line.trim();
-            let Some(rest) = t.strip_prefix("//#") else { continue };
-            let Some(body) = rest.trim_start().strip_prefix("require") else { continue };
-            if !body.starts_with([' ', '\t', '(']) {
-                continue; // e.g. a control hint that happens to start alike
+    /// Intern an `assert()` message into the program's message pool
+    /// (deduplicated), truncated to the str8 wire limit on a char boundary.
+    fn intern_msg(&mut self, mut text: String, span: Span) -> Result<u16, Diagnostic> {
+        if text.len() > 255 {
+            let mut cut = 252;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
             }
-            // the pattern language has no string literals, so the first `"`
-            // unambiguously starts the optional custom message
-            let (expr_text, message) = match body.find('"') {
-                Some(q) => {
-                    let msg = body[q + 1..].trim_end().trim_end_matches('"');
-                    (body[..q].trim(), Some(msg.trim().to_string()))
-                }
-                None => (body.trim(), None),
-            };
-            let here = |m: String| {
-                Diagnostic::new(
-                    Span {
-                        start: line_start as u32,
-                        end: (line_start + line.trim_end().len()) as u32,
-                    },
-                    m,
-                )
-            };
-            if expr_text.is_empty() {
-                return Err(here("`//# require` needs an expression".to_string()));
-            }
-            let expr = crate::parse::parse_expr_snippet(expr_text)
-                .map_err(|d| here(format!("invalid `//# require` expression: {}", d.message)))?;
-            let mut ctx = FnCtx::new(Vec::new(), false);
-            self.emit_expr(&mut ctx, &expr)
-                .map_err(|d| here(format!("invalid `//# require` expression: {}", d.message)))?;
-            ctx.push(Insn::Ret);
-            let text = message.unwrap_or_else(|| expr_text.to_string());
-            let mut name = format!("{REQUIRE_PREFIX}{text}");
-            // str8 wire limit — keep the requirement text within a name
-            // (truncate on a char boundary; messages may be non-ASCII)
-            if name.len() > 255 {
-                let mut cut = 252;
-                while !name.is_char_boundary(cut) {
-                    cut -= 1;
-                }
-                name.truncate(cut);
-                name.push_str("...");
-            }
-            let idx = self.fns.len() as u16;
-            self.fns.push(ctx.finish(name.clone(), 0));
-            self.exported_fns.push((name, idx));
+            text.truncate(cut);
+            text.push_str("...");
         }
-        Ok(())
+        if let Some(i) = self.assert_msgs.iter().position(|m| *m == text) {
+            return Ok(i as u16);
+        }
+        if self.assert_msgs.len() >= MAX_ASSERT_MSGS {
+            return Err(Diagnostic::new(
+                span,
+                format!("too many distinct assert messages (max {MAX_ASSERT_MSGS})"),
+            ));
+        }
+        self.assert_msgs.push(text);
+        Ok((self.assert_msgs.len() - 1) as u16)
     }
 
     /// Intern a const array's contents; None if the pool is at capacity
@@ -1317,7 +1314,7 @@ struct FnCtx {
     loops: Vec<LoopFrame>,
     /// Local slots declared `const` in this function.
     const_locals: BTreeSet<u8>,
-    #[allow(dead_code)]
+    /// This is fn 0 (top-level init) — where `assert()` is legal.
     is_top: bool,
 }
 
