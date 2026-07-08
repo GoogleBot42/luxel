@@ -553,6 +553,27 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             };
             let text = || String::from_utf8_lossy(&raw).into_owned();
             let api: Option<ApiResponse> = match route {
+                // body: tz offset from UTC in minutes (e.g. "-360") →
+                // applied live + persisted (clock builtins shift with it)
+                "/api/clock" => {
+                    Some(json_response(match text().trim().parse::<i16>() {
+                        Ok(tz) if (-14 * 60..=14 * 60).contains(&(tz as i32)) => {
+                            crate::shared::TZ_MINUTES.store(tz as i32, Ordering::Relaxed);
+                            let cfg = DeviceConfig {
+                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
+                                protocol: PROTOCOL.load(Ordering::Relaxed),
+                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
+                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+                                tz_minutes: tz,
+                            };
+                            let _ = crate::config::write_device(&cfg);
+                            format!("{{\"ok\":true,\"tzMinutes\":{}}}", tz)
+                        }
+                        _ => String::from(
+                            "{\"ok\":false,\"error\":\"tz must be minutes in -840..=840\"}",
+                        ),
+                    }))
+                }
                 // body: "off" | "leader" | "follower" → applied live +
                 // persisted (Luxel-to-Luxel sync role)
                 "/api/sync" => {
@@ -574,6 +595,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                                 protocol: PROTOCOL.load(Ordering::Relaxed),
                                 sync_mode: m,
                                 pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
                             };
                             let _ = crate::config::write_device(&cfg);
                             format!("{{\"ok\":true,\"mode\":\"{}\"}}", sync_mode_name(m))
@@ -640,6 +662,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                                 protocol: PROTOCOL.load(Ordering::Relaxed),
                                 pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
                                 sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
+                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
                             };
                             match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"brightness\":{}}}", b),
@@ -667,6 +690,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                                 brightness: BRIGHTNESS.load(Ordering::Relaxed),
                                 protocol: PROTOCOL.load(Ordering::Relaxed),
                                 sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
+                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
                                 pixel_count: n,
                             };
                             match crate::config::write_device(&cfg) {
@@ -696,6 +720,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                                 protocol: p.as_u8(),
                                 pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
                                 sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
+                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
                             };
                             match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"protocol\":\"{}\"}}", p.name()),
@@ -873,6 +898,16 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     "{{\"ap\":{}}}",
                     crate::provision::AP_MODE.load(Ordering::Relaxed)
                 ))),
+                // wall clock: NTP-synced local time + tz (clock builtins)
+                "/api/clock" => {
+                    let local = crate::shared::wall_now_local();
+                    Some(json_response(format!(
+                        "{{\"synced\":{},\"local\":{},\"tzMinutes\":{}}}",
+                        local.is_some(),
+                        local.unwrap_or(0),
+                        crate::shared::TZ_MINUTES.load(Ordering::Relaxed)
+                    )))
+                }
                 // sync role + engine clock + last leader beacon heard
                 "/api/sync" => {
                     let mode = sync_mode_name(crate::shared::SYNC_MODE.load(Ordering::Relaxed));

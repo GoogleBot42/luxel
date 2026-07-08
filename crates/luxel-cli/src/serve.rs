@@ -154,6 +154,8 @@ struct State {
     /// for the leader beacon), and the last beacon heard as a follower.
     sync_mode: AtomicU8,
     sync_boot_id: u32,
+    /// Local-time offset from UTC in minutes (clock builtins).
+    tz_minutes: std::sync::atomic::AtomicI32,
     engine_time_ms: std::sync::atomic::AtomicU64,
     sync_leader: Mutex<Option<(u32, u64, Instant)>>,
 }
@@ -837,6 +839,11 @@ fn render_loop(state: Arc<State>) {
             if let Some(eng) = engine.as_mut() {
                 *state.vars_json.lock().unwrap() = jsonview::vars_json(eng);
                 *state.readouts_json.lock().unwrap() = jsonview::readouts_json(eng);
+                // host wall clock + tz for the clock builtins
+                if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                    let tz = state.tz_minutes.load(Ordering::Relaxed) as i64;
+                    eng.set_wall_clock(d.as_secs() as i64 + tz * 60);
+                }
             }
         }
 
@@ -1279,6 +1286,32 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 b"{\"ok\":true,\"note\":\"mirror: no radio; a device would reboot into the setup AP\"}",
             );
         }
+        ("GET", "/api/clock") => {
+            // the mirror's clock is the host's (always "synced")
+            let tz = state.tz_minutes.load(Ordering::Relaxed);
+            let local = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64 + tz as i64 * 60)
+                .unwrap_or(0);
+            let body = format!(
+                "{{\"synced\":true,\"local\":{},\"tzMinutes\":{}}}",
+                local, tz
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/clock") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = match body.trim().parse::<i32>() {
+                Ok(tz) if (-840..=840).contains(&tz) => {
+                    state.tz_minutes.store(tz, Ordering::Relaxed);
+                    format!("{{\"ok\":true,\"tzMinutes\":{}}}", tz)
+                }
+                _ => String::from(
+                    "{\"ok\":false,\"error\":\"tz must be minutes in -840..=840\"}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("GET", "/api/sync") => {
             let mode = sync_mode_name(state.sync_mode.load(Ordering::Relaxed));
             let time_ms = state.engine_time_ms.load(Ordering::Relaxed);
@@ -1567,6 +1600,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         sensor_seq: AtomicU32::new(0),
         sync_mode: AtomicU8::new(0),
         sync_boot_id: std::process::id() ^ 0x5a5a_5a5a,
+        tz_minutes: std::sync::atomic::AtomicI32::new(0),
         engine_time_ms: std::sync::atomic::AtomicU64::new(0),
         sync_leader: Mutex::new(None),
     });

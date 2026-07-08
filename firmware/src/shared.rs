@@ -173,6 +173,25 @@ pub fn clear_sync_leader() {
     SYNC_LEADER.lock(|c| *c.borrow_mut() = None);
 }
 
+/// Wall clock: (unix seconds at the last NTP sync, when it landed).
+/// None = never synced — clock builtins stay at 0, like before.
+pub static WALL_CLOCK: Shared<Option<(i64, embassy_time::Instant)>> =
+    BlockingMutex::new(RefCell::new(None));
+
+/// Local-time offset from UTC in minutes (Settings → clock; persisted).
+pub static TZ_MINUTES: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+
+pub fn set_wall_clock(unix: i64) {
+    WALL_CLOCK.lock(|c| *c.borrow_mut() = Some((unix, embassy_time::Instant::now())));
+}
+
+/// Current LOCAL unix-style seconds (UTC + tz), if synced.
+pub fn wall_now_local() -> Option<i64> {
+    use core::sync::atomic::Ordering;
+    let (base, at) = share_get(&WALL_CLOCK)?;
+    Some(base + at.elapsed().as_secs() as i64 + TZ_MINUTES.load(Ordering::Relaxed) as i64 * 60)
+}
+
 /// Latest sensor frame (PB sensor-board serial or POST /api/sensors) + a
 /// sequence counter so the render task applies each frame exactly once.
 pub static SENSOR_FRAME: Shared<Option<luxel_core::engine::SensorFrame>> =

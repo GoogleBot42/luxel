@@ -201,6 +201,24 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; error?: string };
   }
 
+  /** Wall clock: NTP sync status, local unix seconds, tz offset. */
+  async clock(): Promise<{ synced: boolean; local: number; tzMinutes: number }> {
+    return (await (await fetch(this.url("/api/clock"))).json()) as {
+      synced: boolean;
+      local: number;
+      tzMinutes: number;
+    };
+  }
+
+  /** Set the UTC offset in minutes; applied live + persisted. */
+  async setClock(tzMinutes: number): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(this.url("/api/clock"), {
+      method: "POST",
+      body: String(Math.round(tzMinutes)),
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
   /** Reboot the device into its provisioning access point (one boot). */
   async startApMode(): Promise<{ ok: boolean; note?: string }> {
     const res = await fetch(this.url("/api/apmode"), { method: "POST", body: "" });

@@ -112,6 +112,33 @@
     }
   }
 
+  // ---- wall clock / timezone (device mode) ----
+  let clockStatus: { synced: boolean; local: number; tzMinutes: number } | null = null;
+
+  async function refreshClock(): Promise<void> {
+    if (!device) return;
+    try {
+      clockStatus = await device.clock();
+    } catch {
+      /* older firmware without /api/clock */
+    }
+  }
+
+  function onTzChange(e: Event): void {
+    const v = Number((e.target as HTMLInputElement).value);
+    if (!Number.isFinite(v)) return;
+    void (async () => {
+      await device?.setClock(v * 60); // UI is hours, API is minutes
+      void refreshClock();
+    })();
+  }
+
+  const fmtDeviceTime = (unixLocal: number): string => {
+    // the value is already local — render it without the browser's tz
+    const d = new Date(unixLocal * 1000);
+    return d.toLocaleString("en-US", { timeZone: "UTC", hour12: false });
+  };
+
   // ---- AP-mode provisioning (device mode) ----
   let apNote = "";
 
@@ -350,10 +377,12 @@
       void refreshNetLive();
       void refreshMqtt();
       void refreshSync();
+      void refreshClock();
       netPoll = setInterval(() => {
         void refreshNetLive();
         void refreshMqtt();
         void refreshSync();
+        void refreshClock();
       }, 2000);
     }
   }
@@ -2246,6 +2275,30 @@ export function render(index) {
               one boot only — good for re-provisioning; it comes back as a station afterwards
             </span>
             {#if apNote}<span class="dim" data-role="apmode-note">{apNote}</span>{/if}
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Clock</h2>
+          <div class="field">
+            <span class="flabel">Device time</span>
+            <span class="mono" data-role="clock-status">
+              {clockStatus?.synced ? fmtDeviceTime(clockStatus.local) : "not NTP-synced yet"}
+            </span>
+          </div>
+          <div class="field">
+            <span class="flabel">UTC offset</span>
+            <input
+              class="num"
+              data-role="clock-tz"
+              type="number"
+              step="0.5"
+              min="-14"
+              max="14"
+              value={(clockStatus?.tzMinutes ?? 0) / 60}
+              on:change={onTzChange}
+            />
+            <span class="dim">hours (e.g. -6 for Mountain DST) — drives clockHour() patterns</span>
           </div>
         </section>
 

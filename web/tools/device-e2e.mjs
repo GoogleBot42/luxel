@@ -367,6 +367,36 @@ try {
     check("mqtt: blank host disables", m2.enabled === false, JSON.stringify(m2));
   }
 
+  // wall clock: tz round-trips and local time tracks the host (mirror =
+  // host clock; the device gets it from NTP)
+  {
+    const r = await (await fetch(`${DEV}/api/clock`, { method: "POST", body: "-360" })).json();
+    check("clock: tz accepted", r.ok === true && r.tzMinutes === -360, JSON.stringify(r));
+    const c = await (await fetch(`${DEV}/api/clock`)).json();
+    const expect = Math.floor(Date.now() / 1000) - 360 * 60;
+    check(
+      "clock: local = host - 6h",
+      c.synced === true && Math.abs(c.local - expect) < 5,
+      JSON.stringify(c),
+    );
+    // a clock pattern sees the shifted hour
+    await fetch(`${DEV}/api/code`, {
+      method: "POST",
+      body: "export var h\nexport function beforeRender(d) { h = clockHour() }\nexport function render(i) { hsv(0,0,0) }",
+    });
+    await sleep(600);
+    const vars = await (await fetch(`${DEV}/api/vars`)).json();
+    const wantHour = new Date((expect) * 1000).getUTCHours();
+    check(
+      "clock: clockHour() reflects the tz",
+      Math.round(vars.h / 65536) === wantHour,
+      `h=${vars.h / 65536} want ${wantHour}`,
+    );
+    await fetch(`${DEV}/api/clock`, { method: "POST", body: "0" });
+    const bad = await (await fetch(`${DEV}/api/clock`, { method: "POST", body: "9999" })).json();
+    check("clock: silly tz rejected", bad.ok === false);
+  }
+
   // AP-mode provisioning surface (the real AP needs a radio; the mirror
   // covers the API shape and the settings button presence)
   {

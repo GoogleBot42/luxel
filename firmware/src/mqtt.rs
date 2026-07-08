@@ -321,6 +321,7 @@ fn persist_brightness(dev: u8) {
         brightness: dev,
         protocol: crate::shared::PROTOCOL.load(Ordering::Relaxed),
         sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
+                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
         pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
     });
     c.brightness = dev;

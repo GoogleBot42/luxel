@@ -62,6 +62,7 @@ mod playlist;
 mod provision;
 mod sensors;
 mod server;
+mod sntp;
 mod shared;
 
 use leds::Protocol;
@@ -233,6 +234,10 @@ async fn main(spawner: Spawner) -> ! {
     PIXEL_COUNT.store(pixels, Ordering::Relaxed);
     PROTOCOL.store(protocol.as_u8(), Ordering::Relaxed);
     shared::SYNC_MODE.store(stored.map(|c| c.sync_mode).unwrap_or(0), Ordering::Relaxed);
+    shared::TZ_MINUTES.store(
+        stored.map(|c| c.tz_minutes as i32).unwrap_or(0),
+        Ordering::Relaxed,
+    );
     println!(
         "settings: {} px, {}, brightness {}/31 ({})",
         pixels,
@@ -389,6 +394,7 @@ async fn main(spawner: Spawner) -> ! {
         spawner.spawn(mqtt::mqtt_task(stack).unwrap());
         // boot id: random per boot, so followers notice a leader restart
         spawner.spawn(netin::sync_task(stack, rng.random()).unwrap());
+        spawner.spawn(sntp::sntp_task(stack).unwrap());
     }
 
     let mut first_beat = true;
@@ -666,6 +672,10 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             if let Some(eng) = engine.as_mut() {
                 publish(&VARS_JSON, jsonview::vars_json(eng));
                 publish(&READOUTS_JSON, jsonview::readouts_json(eng));
+                // NTP-synced local time for the clock builtins
+                if let Some(local) = shared::wall_now_local() {
+                    eng.set_wall_clock(local);
+                }
             }
         }
 

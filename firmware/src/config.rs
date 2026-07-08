@@ -22,13 +22,13 @@ pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
 /// Device settings live in the next nvs sector, so writing them never disturbs
-/// the WiFi record. Record (v4): "LXDV" u8 version=4  u8 brightness  u8 protocol
-/// u8 sync_mode  u32-LE pixel_count  u32-LE checksum (16 bytes). v3 (same
-/// layout, byte 7 was a zero pad) reads compatibly with sync_mode=off; older
-/// versions fail the version check and read as "no record" → defaults.
+/// the WiFi record. Record (v5): "LXDV" u8 version=5  u8 brightness  u8 protocol
+/// u8 sync_mode  u32-LE pixel_count  i16-LE tz_minutes  u16 0  u32-LE checksum
+/// (20 bytes). v4/v3 (12-byte body, no tz) read compatibly with tz = 0;
+/// older versions fail the version check and read as "no record" → defaults.
 const DEV_OFFSET: u32 = 0xA000;
 const DEV_MAGIC: &[u8; 4] = b"LXDV";
-const DEV_VER: u8 = 4;
+const DEV_VER: u8 = 5;
 
 /// Persisted device settings. All fields are written together (read-modify-
 /// write) so setting one never clobbers the others.
@@ -40,6 +40,8 @@ pub struct DeviceConfig {
     /// Luxel-to-Luxel sync role (0 off, 1 leader, 2 follower).
     pub sync_mode: u8,
     pub pixel_count: u32,
+    /// Local-time offset from UTC in minutes (clock builtins).
+    pub tz_minutes: i16,
 }
 
 fn checksum(bytes: &[u8]) -> u32 {
@@ -212,22 +214,29 @@ pub fn write_mqtt(cfg: Option<&MqttConfig>) -> Result<(), &'static str> {
 
 /// Read the persisted device settings, if a valid record exists.
 pub fn read_device() -> Option<DeviceConfig> {
-    let mut rec = [0u8; 16]; // 12-byte body + 4-byte checksum
+    let mut rec = [0u8; 20]; // 16-byte v5 body + checksum (v3/v4: 12 + ck)
     if !crate::assets::read_chunk(DEV_OFFSET, &mut rec) {
         return None;
     }
-    // v3 shares the layout; byte 7 (then a zero pad) becomes sync_mode
-    if &rec[0..4] != DEV_MAGIC || !(rec[4] == DEV_VER || rec[4] == 3) {
+    let ver = rec[4];
+    if &rec[0..4] != DEV_MAGIC || !(ver == DEV_VER || ver == 4 || ver == 3) {
         return None;
     }
-    let stored = u32::from_le_bytes(rec[12..16].try_into().ok()?);
-    if stored != checksum(&rec[0..12]) {
+    let body = if ver == DEV_VER { 16 } else { 12 };
+    let stored = u32::from_le_bytes(rec[body..body + 4].try_into().ok()?);
+    if stored != checksum(&rec[0..body]) {
         return None;
     }
     let brightness = rec[5];
     let protocol = rec[6];
+    // v3's byte 7 was a zero pad — reads as sync off, which is right
     let sync_mode = if rec[7] <= 2 { rec[7] } else { 0 };
     let pixel_count = u32::from_le_bytes(rec[8..12].try_into().ok()?);
+    let tz_minutes = if ver == DEV_VER {
+        i16::from_le_bytes(rec[12..14].try_into().ok()?)
+    } else {
+        0
+    };
     if brightness > 31 {
         return None;
     }
@@ -236,6 +245,7 @@ pub fn read_device() -> Option<DeviceConfig> {
         protocol,
         sync_mode,
         pixel_count,
+        tz_minutes,
     })
 }
 
@@ -245,13 +255,15 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     if cfg.brightness > 31 {
         return Err("brightness must be 0..=31");
     }
-    let mut rec: Vec<u8> = Vec::with_capacity(16);
+    let mut rec: Vec<u8> = Vec::with_capacity(20);
     rec.extend_from_slice(DEV_MAGIC);
     rec.push(DEV_VER);
     rec.push(cfg.brightness);
     rec.push(cfg.protocol);
     rec.push(cfg.sync_mode);
     rec.extend_from_slice(&cfg.pixel_count.to_le_bytes());
+    rec.extend_from_slice(&cfg.tz_minutes.to_le_bytes());
+    rec.extend_from_slice(&[0, 0]);
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());
     // word-aligned staging (same rationale as write_wifi)
