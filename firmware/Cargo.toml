@@ -2,7 +2,7 @@
 # workspace: it builds for a different target than the host crates.
 [package]
 name = "luxel-fw"
-version = "0.1.23"
+version = "0.1.24"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -21,7 +21,9 @@ esp-storage = { version = "0.9", features = ["embedded-storage"] }
 # bridges esp-storage's blocking FlashStorage to these async NorFlash traits.
 sequential-storage = "4"
 embedded-storage-async = "0.4"
-luxel-core = { path = "../crates/luxel-core" }
+# default-features = false drops the "frontend" (lexer/parser/compiler):
+# the device only executes LXBC bytecode compiled by the browser/CLI.
+luxel-core = { path = "../crates/luxel-core", default-features = false }
 
 # networking (WiFi station + async TCP + HTTP server)
 esp-rtos = { version = "0.3", features = ["esp-radio", "embassy", "log-04"] }
@@ -42,6 +44,11 @@ rust-mqtt = { version = "0.3", default-features = false }
 embedded-io = "0.6"
 embedded-io-async = "0.6"
 edge-dhcp = { version = "0.8", default-features = false }
+
+# build.rs compiles the built-in default pattern to LXBC at build time
+# (host-target build dep — the frontend never enters the firmware image).
+[build-dependencies]
+luxel-core = { path = "../crates/luxel-core" }
 
 [features]
 # Boards (pick exactly one; they pull in the right chip). See docs/firmware.md.

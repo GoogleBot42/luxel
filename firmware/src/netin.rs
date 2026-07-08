@@ -151,9 +151,10 @@ pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
     }
 }
 
-/// Pull the leader's running pattern (GET /api/pattern on its HTTP port)
-/// and adopt it: compile-checked, playlist stopped, same swap path as
-/// POST /api/code. Failures just log — the next changed beacon retries.
+/// Pull the leader's running pattern (GET /api/pattern.lxp — an LXP1
+/// envelope of source + bytecode; this device has no compiler) and adopt
+/// it: decode-validated, playlist stopped, same swap path as POST
+/// /api/code. Failures just log — the next changed beacon retries.
 async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddress) {
     use embassy_net::tcp::TcpSocket;
 
@@ -167,7 +168,7 @@ async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddr
         return;
     }
     let req = alloc::format!(
-        "GET /api/pattern HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        "GET /api/pattern.lxp HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         leader
     );
     let mut out = req.as_bytes();
@@ -177,28 +178,40 @@ async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddr
             Ok(n) => out = &out[n..],
         }
     }
-    // read to close, capped at the pattern-size bound (~16 KB + headers)
+    // read to close, capped at the envelope bound (source + bytecode + headers)
     let mut body = alloc::vec::Vec::with_capacity(4096);
     let mut chunk = alloc::vec![0u8; 1024];
-    while body.len() < 20 * 1024 {
+    while body.len() < 48 * 1024 {
         match sock.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(n) => body.extend_from_slice(&chunk[..n]),
         }
     }
-    let text = alloc::string::String::from_utf8_lossy(&body);
-    let Some(at) = text.find("\r\n\r\n") else {
+    // split HTTP headers from the binary envelope
+    let Some(at) = body.windows(4).position(|w| w == b"\r\n\r\n") else {
         return;
     };
-    let src = alloc::string::String::from(&text[at + 4..]);
-    match luxel_core::engine::Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
+    let payload = &body[at + 4..];
+    let env = match luxel_core::bytecode::decode_envelope(payload) {
+        Ok(e) => e,
+        Err(e) => {
+            esp_println::println!("sync: leader envelope rejected: {}", e);
+            return;
+        }
+    };
+    match luxel_core::bytecode::deserialize(env.bytecode) {
         Ok(_) => {
             crate::playlist::stop(); // following the leader takes over
-            shared::MSG_QUEUE.send(shared::Msg::Code(src)).await;
+            shared::MSG_QUEUE
+                .send(shared::Msg::Code {
+                    src: alloc::string::String::from(env.source),
+                    bc: env.bytecode.to_vec(),
+                })
+                .await;
             shared::set_current_pattern_id("");
             esp_println::println!("sync: adopted the leader's pattern");
         }
-        Err(d) => esp_println::println!("sync: leader pattern rejected: {}", d.message),
+        Err(e) => esp_println::println!("sync: leader bytecode rejected: {}", e),
     }
 }
 

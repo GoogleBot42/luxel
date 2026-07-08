@@ -16,7 +16,6 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, Ipv4Address, Stack};
 use embassy_time::{Duration, Timer};
 use esp_println::println;
-use luxel_core::engine::Engine;
 use luxel_core::hamqtt;
 use rust_mqtt::client::client::MqttClient;
 use rust_mqtt::client::client_config::{ClientConfig, MqttVersion};
@@ -26,7 +25,7 @@ use rust_mqtt::utils::rng_generator::CountingRng;
 use crate::config;
 use crate::patterns;
 use crate::shared::{
-    self, set_current_pattern_id, Msg, BRIGHTNESS, MQTT_POKE, MSG_QUEUE, PIXEL_COUNT, POWER,
+    self, set_current_pattern_id, Msg, BRIGHTNESS, MQTT_POKE, MSG_QUEUE, POWER,
 };
 
 /// Broker session currently up (for /api/mqtt's `connected`).
@@ -306,12 +305,16 @@ async fn activate_by_name(name: &str) {
     let Some(source) = patterns::source_of(&id) else {
         return;
     };
-    if Engine::new(&source, PIXEL_COUNT.load(Ordering::Relaxed), 1).is_err() {
-        println!("mqtt: stored pattern \"{}\" no longer compiles", name);
+    let Some(bc) = patterns::bytecode_of(&id) else {
+        println!("mqtt: pattern \"{}\" has no stored bytecode", name);
+        return;
+    };
+    if luxel_core::bytecode::deserialize(&bc).is_err() {
+        println!("mqtt: stored bytecode for \"{}\" is stale (re-save from the app)", name);
         return;
     }
     crate::playlist::stop();
-    MSG_QUEUE.send(Msg::Code(source)).await;
+    MSG_QUEUE.send(Msg::Code { src: source, bc }).await;
     set_current_pattern_id(&id);
 }
 

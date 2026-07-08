@@ -28,6 +28,7 @@ struct EngineSlot {
     src: String,
     pixels: Vec<u8>, // flattened RGB copy handed to JS
     map_buf: Vec<i32>, // flattened raw-16.16 [x y z] map coords handed to JS
+    bc: Vec<u8>,       // LXBC blob, filled by lx_bytecode
 }
 
 fn set_response(s: String) {
@@ -102,6 +103,7 @@ pub unsafe extern "C" fn lx_new(
                 src: src.to_string(),
                 pixels: vec![0; pixel_count as usize * 3],
                 map_buf: Vec::new(),
+                bc: Vec::new(),
             };
             let mut engines = ENGINES.lock().unwrap();
             let h = engines.iter().position(|e| e.is_none());
@@ -127,6 +129,31 @@ pub unsafe extern "C" fn lx_new(
             -1
         }
     }
+}
+
+/// Serialize this engine's compiled program to LXBC bytecode (what devices
+/// execute — see docs/spec/bytecode.md). Returns the blob length (read it
+/// via `lx_bytecode_ptr`, valid until the engine is freed or this is called
+/// again) or -1 with an error message in the response buffer.
+#[no_mangle]
+pub extern "C" fn lx_bytecode(h: i32) -> i32 {
+    with_engine(h, |s| match luxel_core::bytecode::serialize(s.engine.program()) {
+        Ok(blob) => {
+            let len = blob.len() as i32;
+            s.bc = blob;
+            len
+        }
+        Err(e) => {
+            set_response(format!("{{\"message\":\"{}\"}}", json_escape(&e.to_string())));
+            -1
+        }
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn lx_bytecode_ptr(h: i32) -> *const u8 {
+    with_engine(h, |s| s.bc.as_ptr()).unwrap_or(std::ptr::null())
 }
 
 #[no_mangle]

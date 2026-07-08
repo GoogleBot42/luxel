@@ -69,8 +69,8 @@ mod shared;
 use leds::Protocol;
 use luxel_core::jsonview;
 use shared::{
-    publish, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS,
-    MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
+    publish, set_pattern_bc, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS,
+    CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -115,7 +115,10 @@ const APA_BRIGHTNESS: u8 = 4;
 const SSID: Option<&str> = option_env!("LUXEL_SSID");
 const PASSWORD: Option<&str> = option_env!("LUXEL_PASS");
 
+/// Built-in default pattern: source for `GET /api/pattern`, bytecode (built
+/// by build.rs — the firmware links no compiler) for execution.
 const PATTERN: &str = include_str!("../../examples/rainbow.js");
+const PATTERN_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default.lxbc"));
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -481,17 +484,22 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             0
         }
     };
-    let mut engine = match Engine::new(PATTERN, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
-        Ok(e) => Some(e),
-        Err(d) => {
-            println!("embedded pattern compile error: {}", d.message);
-            None
-        }
-    };
-    // the source currently running — kept so a live pixel-count change can
-    // recompile it at the new count without a round-trip through the client
-    let mut current_src = alloc::string::String::from(PATTERN);
+    // the program currently running — kept so a live pixel-count change or
+    // map clear can rebuild the engine without a round-trip through the
+    // client (the device has no compiler; bytecode is all it ever executes)
+    let mut current_prog: Option<luxel_core::vm::Program> =
+        match luxel_core::bytecode::deserialize(PATTERN_BC) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                println!("embedded pattern bytecode error (build bug?): {}", e);
+                None
+            }
+        };
+    let mut engine = current_prog
+        .clone()
+        .map(|p| Engine::from_program(p, PIXEL_COUNT.load(Ordering::Relaxed), 1));
     set_pattern_src(PATTERN);
+    set_pattern_bc(PATTERN_BC);
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
     }
@@ -520,21 +528,27 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
             match msg {
-                Msg::Code(src) => {
-                    // Compile-checked by the upload handler; failure here
+                Msg::Code { src, bc } => {
+                    // Decode-validated by the upload handler; failure here
                     // would mean non-determinism, so log and keep the old
                     // pattern.
-                    match Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
-                        Ok(e) => {
+                    match luxel_core::bytecode::deserialize(&bc) {
+                        Ok(p) => {
+                            let e = Engine::from_program(
+                                p.clone(),
+                                PIXEL_COUNT.load(Ordering::Relaxed),
+                                1,
+                            );
                             publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                             engine = Some(e);
+                            current_prog = Some(p);
                             set_pattern_src(&src);
-                            current_src = src;
+                            set_pattern_bc(&bc);
                             set_vmerr(None);
                             last = Instant::now();
                             devicemap::mark_dirty(); // re-apply the installed map
                         }
-                        Err(d) => println!("recompile error (bug?): {}", d.message),
+                        Err(e) => println!("bytecode decode error (bug?): {}", e),
                     }
                 }
                 Msg::Control(name, values) => {
@@ -554,17 +568,15 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
                     buf = alloc::vec![0u8; cur_protocol().buf_len(count as usize)];
-                    match Engine::new(&current_src, count, 1) {
-                        Ok(e) => {
-                            publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                            engine = Some(e);
-                            set_vmerr(None);
-                            last = Instant::now();
-                            devicemap::mark_dirty(); // re-apply the installed map
-                            println!("pixel count → {}", count);
-                        }
-                        Err(d) => println!("resize recompile error (bug?): {}", d.message),
+                    if let Some(p) = current_prog.clone() {
+                        let e = Engine::from_program(p, count, 1);
+                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                        engine = Some(e);
+                        set_vmerr(None);
+                        last = Instant::now();
+                        devicemap::mark_dirty(); // re-apply the installed map
                     }
+                    println!("pixel count → {}", count);
                 }
                 // Live LED-protocol change (no reboot): reconfigure the SPI
                 // clock and resize the buffer to the new encoding. Sole writer
@@ -581,9 +593,14 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 }
                 // Crossfade to a new pattern (playlist transition): keep the
                 // outgoing engine and blend over `ms`.
-                Msg::Crossfade(src, ms) => {
-                    match Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
-                        Ok(e) => {
+                Msg::Crossfade { src, bc, ms } => {
+                    match luxel_core::bytecode::deserialize(&bc) {
+                        Ok(p) => {
+                            let e = Engine::from_program(
+                                p.clone(),
+                                PIXEL_COUNT.load(Ordering::Relaxed),
+                                1,
+                            );
                             publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                             if ms > 0 && engine.is_some() {
                                 prev = engine.take();
@@ -591,13 +608,14 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                                 blend_ms = ms;
                             }
                             engine = Some(e);
+                            current_prog = Some(p);
                             set_pattern_src(&src);
-                            current_src = src;
+                            set_pattern_bc(&bc);
                             set_vmerr(None);
                             last = Instant::now();
                             devicemap::mark_dirty();
                         }
-                        Err(d) => println!("crossfade compile error (bug?): {}", d.message),
+                        Err(e) => println!("crossfade bytecode error (bug?): {}", e),
                     }
                 }
             }
@@ -609,9 +627,9 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 if let Some(eng) = engine.as_mut() {
                     devicemap::apply(eng);
                 }
-            } else if let Ok(e) = Engine::new(&current_src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
+            } else if let Some(p) = current_prog.clone() {
                 // cleared → rebuild without a map (do not re-mark dirty)
-                engine = Some(e);
+                engine = Some(Engine::from_program(p, PIXEL_COUNT.load(Ordering::Relaxed), 1));
             }
         }
 

@@ -14,13 +14,15 @@
 //! # Chunked patterns (larger than one flash page)
 //!
 //! A sequential-storage item must fit one flash page (~4 KB), so a pattern's
-//! source is split across up to [MC] chunk items of [CHUNK] bytes. Each
-//! pattern has a small monotonic **seq** (its API id is `seq ^ ID_MASK`,
-//! mirroring serve.rs). Keys, all u32:
-//!   - meta  key = `seq`                      (bit 31 clear)
-//!   - chunk key = `CHUNK_FLAG | seq*2*MC + gen*MC + c`   (bit 31 set)
-//! The meta value is `[gen][count][name_len][name]`; the source lives in
-//! `count` chunk items under the current generation.
+//! source is split across up to [MC] chunk items of [CHUNK] bytes, and its
+//! LXBC bytecode across up to [MC_BC] chunks (devices execute bytecode only —
+//! the compiler lives in the browser/CLI). Each pattern has a small monotonic
+//! **seq** (its API id is `seq ^ ID_MASK`, mirroring serve.rs). Keys, all u32:
+//!   - meta      key = `seq`                                 (bits 31/30 clear)
+//!   - src chunk key = `CHUNK_FLAG | seq*2*MC + gen*MC + c`  (bit 31 set)
+//!   - bc  chunk key = `CHUNK_FLAG | BC_FLAG | seq*2*MC_BC + gen*MC_BC + c`
+//! The meta value is `[gen][count][bc_count][name_len][name]`; source and
+//! bytecode live in their chunk items under the current generation.
 //!
 //! **Atomic updates via generation flip.** An update writes the new chunks
 //! to the *other* generation, then rewrites the meta (which selects the
@@ -120,9 +122,17 @@ const MAX_NAME: usize = 64;
 const MC: u8 = 4;
 const CHUNK: usize = 3840;
 const MAX_SOURCE: usize = MC as usize * CHUNK; // ~15 KB
+/// Bytecode chunk budget: LXBC (with debug info) can run larger than its
+/// source — the corpus max is ~17.5 KB for a 15 KB source — so it gets 6
+/// chunks (~23 KB).
+const MC_BC: u8 = 6;
+pub const MAX_BC: usize = MC_BC as usize * CHUNK; // ~23 KB
 const MAX_PATTERNS: usize = 24;
 /// Chunk keys carry bit 31; meta keys (= seq) do not, keeping them disjoint.
 const CHUNK_FLAG: u32 = 0x8000_0000;
+/// Bit 30 separates bytecode chunks from source chunks (seqs are tiny, so
+/// the low bits never reach it).
+const BC_FLAG: u32 = 0x4000_0000;
 /// sequential-storage scratch: ≥ the largest item (one chunk + key + header).
 const BUF: usize = 4096;
 
@@ -130,7 +140,8 @@ const BUF: usize = 4096;
 /// mismatch at boot wipes `storage` (incompatible old data — e.g. the
 /// pre-chunking single-item format — would otherwise be misparsed). Stored
 /// under a reserved meta-space key no real seq can reach.
-const FORMAT_VERSION: u32 = 2;
+/// v3: bytecode chunks + bc_count in the meta (patterns carry LXBC).
+const FORMAT_VERSION: u32 = 3;
 const FORMAT_KEY: u32 = 0x7FFF_FFFF;
 
 fn meta_key(seq: u32) -> u32 {
@@ -138,6 +149,9 @@ fn meta_key(seq: u32) -> u32 {
 }
 fn chunk_key(seq: u32, gen: u8, c: u8) -> u32 {
     CHUNK_FLAG | (seq * (2 * MC as u32) + gen as u32 * MC as u32 + c as u32)
+}
+fn bc_chunk_key(seq: u32, gen: u8, c: u8) -> u32 {
+    CHUNK_FLAG | BC_FLAG | (seq * (2 * MC_BC as u32) + gen as u32 * MC_BC as u32 + c as u32)
 }
 
 fn id_hex(seq: u32) -> String {
@@ -147,33 +161,36 @@ fn seq_of(id: &str) -> Option<u32> {
     u32::from_str_radix(id, 16).ok().map(|v| v ^ ID_MASK)
 }
 
-/// RAM index entry — one per stored pattern. Sources stay in flash.
+/// RAM index entry — one per stored pattern. Sources/bytecode stay in flash.
 #[derive(Clone)]
 struct Entry {
     seq: u32,
     gen: u8,
     count: u8,
+    bc_count: u8,
     name: String,
 }
 
 static INDEX: BlockingMutex<CriticalSectionRawMutex, RefCell<Vec<Entry>>> =
     BlockingMutex::new(RefCell::new(Vec::new()));
 
-/// meta value: `[gen][count][name_len][name]`
-fn deserialize_meta(bytes: &[u8]) -> Option<(u8, u8, String)> {
+/// meta value: `[gen][count][bc_count][name_len][name]`
+fn deserialize_meta(bytes: &[u8]) -> Option<(u8, u8, u8, String)> {
     let gen = *bytes.first()? & 1; // clamp to {0,1} so `1 - gen` can't underflow
     let count = *bytes.get(1)?;
-    let nlen = *bytes.get(2)? as usize;
-    if bytes.len() < 3 + nlen {
+    let bc_count = *bytes.get(2)?;
+    let nlen = *bytes.get(3)? as usize;
+    if bytes.len() < 4 + nlen {
         return None;
     }
-    let name = String::from(core::str::from_utf8(&bytes[3..3 + nlen]).ok()?);
-    Some((gen, count, name))
+    let name = String::from(core::str::from_utf8(&bytes[4..4 + nlen]).ok()?);
+    Some((gen, count, bc_count, name))
 }
-fn serialize_meta(gen: u8, count: u8, name: &str) -> Vec<u8> {
-    let mut v = Vec::with_capacity(3 + name.len());
+fn serialize_meta(gen: u8, count: u8, bc_count: u8, name: &str) -> Vec<u8> {
+    let mut v = Vec::with_capacity(4 + name.len());
     v.push(gen);
     v.push(count);
+    v.push(bc_count);
     v.push(name.len() as u8);
     v.extend_from_slice(name.as_bytes());
     v
@@ -216,7 +233,7 @@ async fn read_meta(
     range: Range<u32>,
     buf: &mut [u8],
     seq: u32,
-) -> Option<(u8, u8, String)> {
+) -> Option<(u8, u8, u8, String)> {
     let mut cache = NoCache::new();
     match map::fetch_item::<u32, &[u8], _>(af, range, &mut cache, buf, &meta_key(seq)).await {
         Ok(Some(bytes)) => deserialize_meta(bytes),
@@ -246,6 +263,27 @@ async fn read_source(
     String::from_utf8(out).ok()
 }
 
+/// Reassemble a pattern's LXBC bytecode from its chunks.
+async fn read_bc(
+    af: &mut AsyncFlash<'_>,
+    range: Range<u32>,
+    buf: &mut [u8],
+    seq: u32,
+    gen: u8,
+    bc_count: u8,
+) -> Option<Vec<u8>> {
+    let mut cache = NoCache::new();
+    let mut out: Vec<u8> = Vec::with_capacity(bc_count as usize * CHUNK);
+    for c in 0..bc_count {
+        let key = bc_chunk_key(seq, gen, c);
+        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), &mut cache, buf, &key).await {
+            Ok(Some(bytes)) => out.extend_from_slice(bytes),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 /// Write all chunks under `gen`, then the meta (the atomic commit).
 async fn write_pattern(
     af: &mut AsyncFlash<'_>,
@@ -254,8 +292,10 @@ async fn write_pattern(
     seq: u32,
     gen: u8,
     count: u8,
+    bc_count: u8,
     name: &str,
     source: &str,
+    bc: &[u8],
 ) -> Result<(), ()> {
     let mut cache = NoCache::new();
     let bytes = source.as_bytes();
@@ -268,7 +308,16 @@ async fn write_pattern(
             return Err(());
         }
     }
-    let meta = serialize_meta(gen, count, name);
+    for c in 0..bc_count {
+        let s = c as usize * CHUNK;
+        let e = (s + CHUNK).min(bc.len());
+        let chunk: &[u8] = &bc[s..e];
+        let key = bc_chunk_key(seq, gen, c);
+        if map::store_item(af, range.clone(), &mut cache, buf, &key, &chunk).await.is_err() {
+            return Err(());
+        }
+    }
+    let meta = serialize_meta(gen, count, bc_count, name);
     let mslice: &[u8] = &meta;
     if map::store_item(af, range.clone(), &mut cache, buf, &meta_key(seq), &mslice).await.is_err() {
         return Err(());
@@ -276,8 +325,8 @@ async fn write_pattern(
     Ok(())
 }
 
-/// Best-effort removal of `count` chunks under `gen` (post-commit cleanup, or
-/// full delete when paired with meta removal).
+/// Best-effort removal of a generation's source + bytecode chunks
+/// (post-commit cleanup, or full delete when paired with meta removal).
 async fn remove_chunks(
     af: &mut AsyncFlash<'_>,
     range: Range<u32>,
@@ -285,10 +334,15 @@ async fn remove_chunks(
     seq: u32,
     gen: u8,
     count: u8,
+    bc_count: u8,
 ) {
     let mut cache = NoCache::new();
     for c in 0..count {
         let key = chunk_key(seq, gen, c);
+        let _ = map::remove_item::<u32, _>(af, range.clone(), &mut cache, buf, &key).await;
+    }
+    for c in 0..bc_count {
+        let key = bc_chunk_key(seq, gen, c);
         let _ = map::remove_item::<u32, _>(af, range.clone(), &mut cache, buf, &key).await;
     }
 }
@@ -349,8 +403,10 @@ pub fn init() {
         }
         let mut out: Vec<Entry> = Vec::new();
         for seq in seqs {
-            if let Some((gen, count, name)) = read_meta(&mut af, range.clone(), buf, seq).await {
-                out.push(Entry { seq, gen, count, name });
+            if let Some((gen, count, bc_count, name)) =
+                read_meta(&mut af, range.clone(), buf, seq).await
+            {
+                out.push(Entry { seq, gen, count, bc_count, name });
             }
         }
         out
@@ -400,14 +456,14 @@ pub fn id_by_name(name: &str) -> Option<String> {
     })
 }
 
-/// Look up a pattern's (gen, count, name) in the RAM index by id.
-fn lookup(id: &str) -> Option<(u32, u8, u8, String)> {
+/// Look up a pattern's (gen, count, bc_count, name) in the RAM index by id.
+fn lookup(id: &str) -> Option<(u32, u8, u8, u8, String)> {
     let seq = seq_of(id)?;
     INDEX.lock(|c| {
         c.borrow()
             .iter()
             .find(|e| e.seq == seq)
-            .map(|e| (e.seq, e.gen, e.count, e.name.clone()))
+            .map(|e| (e.seq, e.gen, e.count, e.bc_count, e.name.clone()))
     })
 }
 
@@ -429,7 +485,7 @@ fn escape_into(out: &mut String, s: &str) {
 
 /// `GET /api/patterns/<id>` → `{"id","name","source"}` | None.
 pub fn get_json(id: &str) -> Option<String> {
-    let (seq, gen, count, name) = lookup(id)?;
+    let (seq, gen, count, _, name) = lookup(id)?;
     let start = REGION.load(Ordering::Relaxed);
     if start == 0 {
         return None;
@@ -453,9 +509,9 @@ pub fn get_json(id: &str) -> Option<String> {
     Some(out)
 }
 
-/// Read a stored pattern's source (for activation).
+/// Read a stored pattern's source (editor read-back, sync envelope).
 pub fn source_of(id: &str) -> Option<String> {
-    let (seq, gen, count, _) = lookup(id)?;
+    let (seq, gen, count, _, _) = lookup(id)?;
     let start = REGION.load(Ordering::Relaxed);
     if start == 0 {
         return None;
@@ -466,9 +522,25 @@ pub fn source_of(id: &str) -> Option<String> {
     .flatten()
 }
 
+/// Read a stored pattern's LXBC bytecode (what activation executes).
+pub fn bytecode_of(id: &str) -> Option<Vec<u8>> {
+    let (seq, gen, _, bc_count, _) = lookup(id)?;
+    if bc_count == 0 {
+        return None;
+    }
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return None;
+    }
+    with_store!(start, |af, range, buf| {
+        read_bc(&mut af, range, buf, seq, gen, bc_count).await
+    })
+    .flatten()
+}
+
 /// Human name of a stored pattern.
 pub fn name_of(id: &str) -> Option<String> {
-    lookup(id).map(|(_, _, _, name)| name)
+    lookup(id).map(|(_, _, _, _, name)| name)
 }
 
 // --- small reserved-key blobs (playlist definition + playback state) ---
@@ -514,9 +586,9 @@ pub fn read_blob(key: u32) -> Option<Vec<u8>> {
     .flatten()
 }
 
-/// `POST /api/patterns` body `"name\nsource"` → `{"ok":true,"id"}`.
-/// Upserts by name. Caller compile-checks first.
-pub fn save(name: &str, source: &str) -> String {
+/// `POST /api/patterns` (LXP1 envelope) → `{"ok":true,"id"}`.
+/// Upserts by name. Caller decode-validates the bytecode first.
+pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
     let name = name.trim();
     if name.is_empty() || name.len() > MAX_NAME {
         return String::from("{\"ok\":false,\"error\":\"name must be 1..=64 bytes\"}");
@@ -525,6 +597,12 @@ pub fn save(name: &str, source: &str) -> String {
         return alloc::format!(
             "{{\"ok\":false,\"error\":\"source must be 1..={} bytes\"}}",
             MAX_SOURCE
+        );
+    }
+    if bc.is_empty() || bc.len() > MAX_BC {
+        return alloc::format!(
+            "{{\"ok\":false,\"error\":\"bytecode must be 1..={} bytes\"}}",
+            MAX_BC
         );
     }
     let start = REGION.load(Ordering::Relaxed);
@@ -536,38 +614,47 @@ pub fn save(name: &str, source: &str) -> String {
 
     // Decide seq + generation under the index lock.
     enum Plan {
-        Update { seq: u32, new_gen: u8, old_gen: u8, old_count: u8 },
+        Update { seq: u32, new_gen: u8, old_gen: u8, old_count: u8, old_bc: u8 },
         New { seq: u32 },
         Full,
     }
     let plan = INDEX.lock(|c| {
         let idx = c.borrow();
         if let Some(e) = idx.iter().find(|e| e.name == name) {
-            Plan::Update { seq: e.seq, new_gen: 1 - e.gen, old_gen: e.gen, old_count: e.count }
+            Plan::Update {
+                seq: e.seq,
+                new_gen: 1 - e.gen,
+                old_gen: e.gen,
+                old_count: e.count,
+                old_bc: e.bc_count,
+            }
         } else if idx.len() >= MAX_PATTERNS {
             Plan::Full
         } else {
             Plan::New { seq: NEXT_SEQ.load(Ordering::Relaxed) }
         }
     });
-    let (seq, new_gen, old_gen, old_count, is_new) = match plan {
+    let (seq, new_gen, old_gen, old_count, old_bc, is_new) = match plan {
         Plan::Full => return String::from("{\"ok\":false,\"error\":\"library full\"}"),
-        Plan::New { seq } => (seq, 0u8, 0u8, 0u8, true),
-        Plan::Update { seq, new_gen, old_gen, old_count } => {
-            (seq, new_gen, old_gen, old_count, false)
+        Plan::New { seq } => (seq, 0u8, 0u8, 0u8, 0u8, true),
+        Plan::Update { seq, new_gen, old_gen, old_count, old_bc } => {
+            (seq, new_gen, old_gen, old_count, old_bc, false)
         }
     };
     let count = source.len().div_ceil(CHUNK) as u8;
+    let bc_count = bc.len().div_ceil(CHUNK) as u8;
 
     let committed = with_store!(start, |af, range, buf| {
-        if write_pattern(&mut af, range.clone(), buf, seq, new_gen, count, name, source)
-            .await
-            .is_err()
+        if write_pattern(
+            &mut af, range.clone(), buf, seq, new_gen, count, bc_count, name, source, bc,
+        )
+        .await
+        .is_err()
         {
             return false;
         }
         // commit done — old generation is now unreferenced; reclaim it.
-        remove_chunks(&mut af, range, buf, seq, old_gen, old_count).await;
+        remove_chunks(&mut af, range, buf, seq, old_gen, old_count, old_bc).await;
         true
     })
     .unwrap_or(false);
@@ -581,9 +668,10 @@ pub fn save(name: &str, source: &str) -> String {
         if let Some(e) = idx.iter_mut().find(|e| e.seq == seq) {
             e.gen = new_gen;
             e.count = count;
+            e.bc_count = bc_count;
             e.name = String::from(name);
         } else {
-            idx.push(Entry { seq, gen: new_gen, count, name: String::from(name) });
+            idx.push(Entry { seq, gen: new_gen, count, bc_count, name: String::from(name) });
         }
     });
     if is_new {
@@ -594,7 +682,7 @@ pub fn save(name: &str, source: &str) -> String {
 
 /// `DELETE /api/patterns/<id>` → `{"ok":true}` | `{"ok":false,…}`.
 pub fn delete(id: &str) -> String {
-    let Some((seq, gen, count, _)) = lookup(id) else {
+    let Some((seq, gen, count, bc_count, _)) = lookup(id) else {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     };
     let start = REGION.load(Ordering::Relaxed);
@@ -607,7 +695,7 @@ pub fn delete(id: &str) -> String {
             map::remove_item::<u32, _>(&mut af, range.clone(), &mut cache, buf, &meta_key(seq))
                 .await
                 .is_ok();
-        remove_chunks(&mut af, range, buf, seq, gen, count).await;
+        remove_chunks(&mut af, range, buf, seq, gen, count, bc_count).await;
         meta_ok
     })
     .unwrap_or(false);

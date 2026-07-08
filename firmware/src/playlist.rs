@@ -219,7 +219,7 @@ pub fn init() {
 
 // ---- scheduler ----
 
-/// Load item `i`: compile its stored pattern on the render task and apply its
+/// Load item `i`: hand its stored bytecode to the render task and apply its
 /// saved control values.
 async fn enter_item(i: usize) {
     let (item, crossfade) = PLAYLIST.lock(|c| {
@@ -233,10 +233,14 @@ async fn enter_item(i: usize) {
         println!("playlist: item {} missing pattern {}", i, item.pattern_id);
         return;
     };
+    let Some(bc) = patterns::bytecode_of(&item.pattern_id) else {
+        println!("playlist: item {} pattern {} has no bytecode", i, item.pattern_id);
+        return;
+    };
     if crossfade > 0 {
-        MSG_QUEUE.send(Msg::Crossfade(src, crossfade as u32)).await;
+        MSG_QUEUE.send(Msg::Crossfade { src, bc, ms: crossfade as u32 }).await;
     } else {
-        MSG_QUEUE.send(Msg::Code(src)).await;
+        MSG_QUEUE.send(Msg::Code { src, bc }).await;
     }
     crate::shared::set_current_pattern_id(&item.pattern_id);
     for (name, raw) in item.controls {

@@ -13,8 +13,11 @@ protocols, multi-device sync, and open APIs everywhere.
 ## What works today
 
 **The engine** (`crates/luxel-core`, Rust `no_std`, 16.16 fixed point) —
-one compiler + VM + frame engine that runs identically in the ESP32
-firmware, in the browser via WASM, and natively for tests. The full
+one compiler + VM + frame engine. The VM runs identically on the ESP32,
+in the browser via WASM, and natively for tests; the compiler runs in the
+browser/CLI and ships **LXBC bytecode** to the device (like a real Pixel
+Blaze, the firmware executes bytecode only — no parser on the chip, so no
+compile-time stack or RAM spikes there either). The full
 documented builtin surface (waveforms, math, arrays, color incl. oklch,
 transforms, perlin/simplex, palettes, clock, pixel maps, sensors) plus
 Luxel extensions (easings, `blur1D`/`feedback`, `beatSin`, `hash`, …).

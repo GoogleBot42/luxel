@@ -35,14 +35,12 @@
 //!   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | code-error shape
 
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use core::sync::atomic::Ordering;
 
 use embassy_net::Stack;
-use luxel_core::diag::line_col;
-use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::json_escape;
 use picoserve::routing::RequestHandlerService as _;
@@ -362,72 +360,80 @@ async fn api_readouts() -> ApiResponse {
     json_response(snapshot(&READOUTS_JSON))
 }
 
-async fn api_code(src: String) -> ApiResponse {
-    // Compile-check with the real pixel count so errors surface here with
-    // source locations; the render task recompiles the accepted source.
-    json_response(match Engine::new(&src, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
-        Ok(_) => {
+/// Decode an LXP1 envelope and validate its bytecode blob. Compilation
+/// happens in the browser/CLI — the device only checks that the blob
+/// decodes for this firmware's format version. A version mismatch gets
+/// `"code":"bc-version"` so clients know to recompile from source.
+fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, String> {
+    use luxel_core::bytecode::{decode_envelope, deserialize, BcError};
+    let env = decode_envelope(raw)
+        .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
+    match deserialize(env.bytecode) {
+        Ok(_) => Ok(env),
+        Err(e @ BcError::Version { .. }) => Err(format!(
+            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        )),
+        Err(e) => Err(format!(
+            "{{\"ok\":false,\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        )),
+    }
+}
+
+/// POST /api/code — LXP1 envelope (empty name): run this pattern now.
+async fn api_code(raw: &[u8]) -> ApiResponse {
+    json_response(match decode_upload(raw) {
+        Ok(env) => {
             crate::playlist::stop(); // a manual push takes over from the playlist
-            MSG_QUEUE.send(Msg::Code(src)).await;
+            MSG_QUEUE
+                .send(Msg::Code { src: String::from(env.source), bc: env.bytecode.to_vec() })
+                .await;
             crate::shared::set_current_pattern_id(""); // ad-hoc code, no library id
             String::from("{\"ok\":true}")
         }
-        Err(d) => {
-            let (line, col) = line_col(&src, d.span.start);
-            format!(
-                "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
-                line,
-                col,
-                json_escape(&d.message)
-            )
-        }
+        Err(e) => e,
     })
 }
 
-/// POST /api/patterns — body "name\nsource". Compile-checks the source
-/// (so the store never holds broken code) then persists via the pattern
-/// library. Returns {"ok":true,"id"} or the same {line,col,error} shape as
-/// /api/code on a compile failure. Mirrors serve.rs `patterns_save`.
-fn api_patterns_save(body: String) -> String {
-    let Some((name, source)) = body.split_once('\n') else {
-        return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}");
-    };
-    if source.is_empty() {
-        return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}");
+/// POST /api/patterns — LXP1 envelope (name + source + bytecode) → persist
+/// via the pattern library. The blob is decode-validated so the store never
+/// holds bytecode this firmware can't run. Mirrors serve.rs `patterns_save`.
+fn api_patterns_save(raw: &[u8]) -> String {
+    match decode_upload(raw) {
+        Ok(env) if env.name.is_empty() => {
+            String::from("{\"ok\":false,\"error\":\"pattern name required\"}")
+        }
+        Ok(env) => crate::patterns::save(env.name, env.source, env.bytecode),
+        Err(e) => e,
     }
-    if let Err(d) = Engine::new(source, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
-        let (line, col) = line_col(source, d.span.start);
-        return format!(
-            "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
-            line,
-            col,
-            json_escape(&d.message)
-        );
-    }
-    crate::patterns::save(name, source)
 }
 
-/// POST /api/patterns/<id>/activate — load the stored source and run it
-/// (same swap path as /api/code). 404-shaped error if the id is unknown.
+/// POST /api/patterns/<id>/activate — load the stored bytecode and run it
+/// (same swap path as /api/code). A stored blob that no longer decodes
+/// (format bump via OTA) reports `bc-version` so the client re-saves.
 async fn api_patterns_activate(id: &str) -> String {
+    use luxel_core::bytecode::{deserialize, BcError};
+    let Some(bc) = crate::patterns::bytecode_of(id) else {
+        return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
+    };
     let Some(source) = crate::patterns::source_of(id) else {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     };
-    match Engine::new(&source, PIXEL_COUNT.load(Ordering::Relaxed), 1) {
+    match deserialize(&bc) {
         Ok(_) => {
-            MSG_QUEUE.send(Msg::Code(source)).await;
+            MSG_QUEUE.send(Msg::Code { src: source, bc }).await;
             crate::shared::set_current_pattern_id(id);
             String::from("{\"ok\":true}")
         }
-        Err(d) => {
-            let (line, col) = line_col(&source, d.span.start);
-            format!(
-                "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
-                line,
-                col,
-                json_escape(&d.message)
-            )
-        }
+        Err(e @ BcError::Version { .. }) => format!(
+            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        ),
+        Err(e) => format!(
+            "{{\"ok\":false,\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        ),
     }
 }
 
@@ -767,12 +773,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     Some(json_response(String::from("{\"ok\":true}")))
                 }
-                "/api/code" => Some(api_code(text()).await),
+                "/api/code" => Some(api_code(&raw).await),
                 "/api/control" => Some(api_control(text()).await),
                 "/api/var" => Some(api_var(text()).await),
-                // save a pattern: body "name\nsource", compile-checked here
-                // so the store never holds broken source (mirrors serve.rs).
-                "/api/patterns" => Some(json_response(api_patterns_save(text()))),
+                // save a pattern: LXP1 envelope, bytecode decode-validated
+                // here so the store never holds a stale blob (mirrors serve.rs).
+                "/api/patterns" => Some(json_response(api_patterns_save(&raw))),
                 // POST /api/patterns/<id>/activate — run a stored pattern
                 r if r.starts_with("/api/patterns/") => {
                     Some(match r["/api/patterns/".len()..].strip_suffix("/activate") {
@@ -971,6 +977,17 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 ))),
                 "/api/pixels" => respond!(api_pixels().await),
                 "/api/pattern" => Some(api_pattern().await),
+                // running pattern as an LXP1 envelope (source + bytecode) —
+                // what a sync follower adopts (it has no compiler)
+                "/api/pattern.lxp" => respond!((
+                    CORS,
+                    ("Content-Type", "application/octet-stream"),
+                    luxel_core::bytecode::encode_envelope(
+                        "",
+                        &get_pattern_src(),
+                        &crate::shared::get_pattern_bc(),
+                    ),
+                )),
                 "/api/controls" => Some(api_controls().await),
                 "/api/vars" => Some(api_vars().await),
                 "/api/readouts" => Some(api_readouts().await),

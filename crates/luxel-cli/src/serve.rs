@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
@@ -21,7 +20,9 @@ const INDEX_HTML: &str = include_str!("../../../firmware/src/index.html");
 const DEFAULT_PATTERN: &str = include_str!("../../../examples/rainbow.js");
 
 enum Msg {
-    Code(String),
+    /// Run this pattern: source (for read-back) + the LXBC bytecode the
+    /// engine is built from — the mirror executes exactly like a device.
+    Code { src: String, bc: Vec<u8> },
     Control(String, Vec<Fx>),
     Var(String, Fx),
     Config(u32),
@@ -95,15 +96,18 @@ fn protocol_code(name: &str) -> Option<u8> {
 /// firmware/src/server.rs:
 ///   GET    /api/patterns              {"patterns":[{"id","name"},…]}
 ///   GET    /api/patterns/<id>         {"id","name","source"}
-///   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
-///                                     (same name = overwrite, id stable)
+///   POST   /api/patterns              body = LXP1 envelope (name+source+LXBC)
+///                                     → {"ok":true,"id"} (same name =
+///                                     overwrite, id stable)
 ///   DELETE /api/patterns/<id>         {"ok":true}
-///   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | code-error shape
+///   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | error shape
 #[derive(Clone)]
 struct StoredPattern {
     id: String,
     name: String,
     source: String,
+    /// LXBC bytecode — what activation actually executes (device parity).
+    bc: Vec<u8>,
 }
 
 const MAX_PIXELS: u32 = 2048;
@@ -115,6 +119,8 @@ struct State {
     fps: AtomicU32,
     vmerr: Mutex<Option<String>>,
     pattern_src: Mutex<String>,
+    /// LXBC blob of the running pattern (GET /api/pattern.lxp — sync adopt).
+    pattern_bc: Mutex<Vec<u8>>,
     controls_json: Mutex<String>,
     vars_json: Mutex<String>,
     readouts_json: Mutex<String>,
@@ -176,15 +182,14 @@ fn sync_mode_name(m: u8) -> &'static str {
 
 /// Minimal HTTP GET for the follower's pattern pull (the mirror trusts its
 /// loopback/LAN peer; 64 KB cap).
-fn http_get_text(addr: &str, path: &str) -> Option<String> {
+fn http_get_bytes(addr: &str, path: &str) -> Option<Vec<u8>> {
     let mut s = TcpStream::connect(addr).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
     write!(s, "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").ok()?;
     let mut buf = Vec::new();
     s.take(64 * 1024).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let body_at = text.find("\r\n\r\n")? + 4;
-    text.get(body_at..).map(String::from)
+    let body_at = buf.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
+    Some(buf[body_at..].to_vec())
 }
 
 /// Leader/follower beacon loop (both roles share the thread; the mode
@@ -266,8 +271,9 @@ fn sync_thread(state: Arc<State>, target: String, port: u16, leader_http: u16) {
                                     last_pull = h;
                                     pull_at = Instant::now();
                                     let addr = format!("{}:{}", peer.ip(), leader_http);
-                                    if let Some(src) = http_get_text(&addr, "/api/pattern") {
-                                        let r = api_code(&state, src);
+                                    // an LXP1 envelope — exactly what /api/code takes
+                                    if let Some(env) = http_get_bytes(&addr, "/api/pattern.lxp") {
+                                        let r = api_code(&state, &env);
                                         if !r.contains("\"ok\":true") {
                                             eprintln!("sync: leader pattern rejected: {r}");
                                         }
@@ -544,11 +550,15 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
                         .unwrap()
                         .iter()
                         .find(|sp| sp.name == payload)
-                        .map(|sp| (sp.id.clone(), sp.source.clone()));
+                        .map(|sp| (sp.id.clone(), sp.source.clone(), sp.bc.clone()));
                     match found {
-                        Some((id, source)) => {
-                            if api_code(state, source).contains("\"ok\":true") {
+                        Some((id, source, bc)) => {
+                            // stored blobs are decode-validated on save
+                            if luxel_core::bytecode::deserialize(&bc).is_ok() {
+                                push(state, Msg::Code { src: source, bc });
                                 *state.current_pattern_id.lock().unwrap() = id;
+                            } else {
+                                eprintln!("mqtt: stored bytecode for \"{payload}\" is stale");
                             }
                         }
                         None => eprintln!("mqtt: no pattern named \"{payload}\""),
@@ -680,33 +690,44 @@ fn apply_map(state: &State, engine: &mut Engine) {
     }
 }
 
-/// Load playlist item `i`: compile its stored pattern, apply its saved control
-/// values, and publish the source/controls snapshots. Returns the engine +
-/// source on success. Also records the active index.
-fn enter_item(state: &State, i: usize) -> Option<(Engine, String)> {
+/// Load playlist item `i`: build its stored bytecode into an engine (the
+/// device execution path), apply its saved control values, and publish the
+/// source/controls snapshots. Returns the engine + source + bytecode on
+/// success. Also records the active index.
+fn enter_item(state: &State, i: usize) -> Option<(Engine, String, Vec<u8>)> {
     let item = state.playlist.lock().unwrap().items.get(i).cloned()?;
     // advance the active index even if the pattern is missing (deleted), so a
     // dangling entry just holds for its duration and the loop moves past it
     state.pl_index.store(i, Ordering::Relaxed);
     let sp = pattern_by_id(state, &item.pattern_id)?;
     *state.current_pattern_id.lock().unwrap() = item.pattern_id.clone();
-    let mut eng = Engine::new(&sp.source, state.pixel_count.load(Ordering::Relaxed), 1).ok()?;
+    let prog = luxel_core::bytecode::deserialize(&sp.bc).ok()?;
+    let mut eng = Engine::from_program(prog, state.pixel_count.load(Ordering::Relaxed), 1);
     for (name, raw) in &item.controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         eng.set_control(name, &vals);
     }
     apply_map(state, &mut eng);
     *state.pattern_src.lock().unwrap() = sp.source.clone();
+    *state.pattern_bc.lock().unwrap() = sp.bc.clone();
     *state.controls_json.lock().unwrap() = jsonview::controls_json(&eng);
     *state.vmerr.lock().unwrap() = None;
-    Some((eng, sp.source))
+    Some((eng, sp.source, sp.bc))
 }
 
 fn render_loop(state: Arc<State>) {
     let count = || state.pixel_count.load(Ordering::Relaxed);
-    let mut current_src = DEFAULT_PATTERN.to_string();
-    let mut engine = Engine::new(DEFAULT_PATTERN, count(), 1).ok();
+    // Boot default: compile once, then run through the serialize→deserialize
+    // path so the mirror executes exactly what a device would.
+    let mut current_bc: Vec<u8> = Engine::new(DEFAULT_PATTERN, count(), 1)
+        .ok()
+        .and_then(|e| luxel_core::bytecode::serialize(e.program()).ok())
+        .unwrap_or_default();
+    let mut engine = luxel_core::bytecode::deserialize(&current_bc)
+        .ok()
+        .map(|p| Engine::from_program(p, count(), 1));
     *state.pattern_src.lock().unwrap() = DEFAULT_PATTERN.to_string();
+    *state.pattern_bc.lock().unwrap() = current_bc.clone();
     if let Some(eng) = engine.as_ref() {
         *state.controls_json.lock().unwrap() = jsonview::controls_json(eng);
     }
@@ -735,14 +756,16 @@ fn render_loop(state: Arc<State>) {
     loop {
         for msg in state.inbox.lock().unwrap().drain(..) {
             match msg {
-                Msg::Code(src) => {
+                Msg::Code { src, bc } => {
                     // a manual code push takes over from the playlist
                     state.pl_playing.store(false, Ordering::Relaxed);
-                    if let Ok(e) = Engine::new(&src, count(), 1) {
+                    if let Ok(p) = luxel_core::bytecode::deserialize(&bc) {
+                        let e = Engine::from_program(p, count(), 1);
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
                         engine = Some(e);
-                        current_src = src.clone();
                         *state.pattern_src.lock().unwrap() = src;
+                        *state.pattern_bc.lock().unwrap() = bc.clone();
+                        current_bc = bc;
                         *state.vmerr.lock().unwrap() = None;
                         last = Instant::now();
                         state.map_dirty.store(true, Ordering::Relaxed);
@@ -762,7 +785,8 @@ fn render_loop(state: Arc<State>) {
                 Msg::Config(n) => {
                     let n = n.clamp(1, MAX_PIXELS);
                     state.pixel_count.store(n, Ordering::Relaxed);
-                    if let Ok(e) = Engine::new(&current_src, n, 1) {
+                    if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
+                        let e = Engine::from_program(p, n, 1);
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
                         engine = Some(e);
                         *state.vmerr.lock().unwrap() = None;
@@ -772,9 +796,9 @@ fn render_loop(state: Arc<State>) {
                 }
                 Msg::PlaylistPlay(i) => {
                     state.pl_playing.store(true, Ordering::Relaxed);
-                    if let Some((e, src)) = enter_item(&state, i) {
+                    if let Some((e, _src, bc)) = enter_item(&state, i) {
                         engine = Some(e);
-                        current_src = src;
+                        current_bc = bc;
                         last = Instant::now();
                         pl_start = Instant::now();
                     }
@@ -785,10 +809,10 @@ fn render_loop(state: Arc<State>) {
                     if state.pl_playing.load(Ordering::Relaxed) && len > 0 {
                         let cur = state.pl_index.load(Ordering::Relaxed) as i64;
                         let ni = (cur + d as i64).rem_euclid(len as i64) as usize;
-                        if let Some((e, src)) = enter_item(&state, ni) {
+                        if let Some((e, _src, bc)) = enter_item(&state, ni) {
                             begin_crossfade!();
                             engine = Some(e);
-                            current_src = src;
+                            current_bc = bc;
                             last = Instant::now();
                             pl_start = Instant::now();
                         }
@@ -797,9 +821,9 @@ fn render_loop(state: Arc<State>) {
                 Msg::PlaylistReload => {
                     if state.pl_playing.load(Ordering::Relaxed) {
                         let i = state.pl_index.load(Ordering::Relaxed);
-                        if let Some((e, src)) = enter_item(&state, i) {
+                        if let Some((e, _src, bc)) = enter_item(&state, i) {
                             engine = Some(e);
-                            current_src = src;
+                            current_bc = bc;
                             last = Instant::now();
                             pl_start = Instant::now();
                         }
@@ -819,10 +843,10 @@ fn render_loop(state: Arc<State>) {
                 state.pl_playing.store(false, Ordering::Relaxed);
             } else if sec > 0 && pl_start.elapsed() >= Duration::from_secs(sec as u64) {
                 let ni = (state.pl_index.load(Ordering::Relaxed) + 1) % len;
-                if let Some((e, src)) = enter_item(&state, ni) {
+                if let Some((e, _src, bc)) = enter_item(&state, ni) {
                     begin_crossfade!();
                     engine = Some(e);
-                    current_src = src;
+                    current_bc = bc;
                     last = Instant::now();
                 }
                 pl_start = Instant::now();
@@ -835,8 +859,9 @@ fn render_loop(state: Arc<State>) {
                 if let Some(eng) = engine.as_mut() {
                     apply_map(&state, eng);
                 }
-            } else if let Ok(e) = Engine::new(&current_src, count(), 1) {
-                engine = Some(e); // cleared → rebuild without a map
+            } else if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
+                // cleared → rebuild without a map
+                engine = Some(Engine::from_program(p, count(), 1));
             }
         }
 
@@ -946,22 +971,36 @@ fn render_loop(state: Arc<State>) {
 
 // ---- shared request handlers (same JSON as the firmware routes) ----
 
-fn api_code(state: &State, body: String) -> String {
-    match Engine::new(&body, state.pixel_count.load(Ordering::Relaxed), 1) {
-        Ok(_) => {
-            push(state, Msg::Code(body));
+/// Decode an LXP1 envelope + validate its LXBC blob — identical rules and
+/// error shapes to firmware/src/server.rs `decode_upload`.
+fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, String> {
+    use luxel_core::bytecode::{decode_envelope, deserialize, BcError};
+    let env = decode_envelope(raw)
+        .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
+    match deserialize(env.bytecode) {
+        Ok(_) => Ok(env),
+        Err(e @ BcError::Version { .. }) => Err(format!(
+            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        )),
+        Err(e) => Err(format!(
+            "{{\"ok\":false,\"error\":\"{}\"}}",
+            json_escape(&e.to_string())
+        )),
+    }
+}
+
+fn api_code(state: &State, raw: &[u8]) -> String {
+    match decode_upload(raw) {
+        Ok(env) => {
+            push(
+                state,
+                Msg::Code { src: env.source.to_string(), bc: env.bytecode.to_vec() },
+            );
             state.current_pattern_id.lock().unwrap().clear(); // ad-hoc code
             String::from("{\"ok\":true}")
         }
-        Err(d) => {
-            let (line, col) = line_col(&body, d.span.start);
-            format!(
-                "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
-                line,
-                col,
-                json_escape(&d.message)
-            )
-        }
+        Err(e) => e,
     }
 }
 
@@ -996,31 +1035,28 @@ fn patterns_list_json(state: &State) -> String {
     format!("{{\"patterns\":[{}]}}", items.join(","))
 }
 
-fn patterns_save(state: &State, body: &str) -> String {
-    let (name, source) = match body.split_once('\n') {
-        Some((n, s)) if !n.trim().is_empty() && !s.is_empty() => (n.trim().to_string(), s),
-        _ => return String::from("{\"ok\":false,\"error\":\"expected: name\\nsource\"}"),
+fn patterns_save(state: &State, raw: &[u8]) -> String {
+    // decode-validate before storing — the library never holds a stale blob
+    let env = match decode_upload(raw) {
+        Ok(e) => e,
+        Err(e) => return e,
     };
-    // compile-check before storing — the library never holds broken source
-    if let Err(d) = Engine::new(source, state.pixel_count.load(Ordering::Relaxed), 1) {
-        let (line, col) = line_col(source, d.span.start);
-        return format!(
-            "{{\"ok\":false,\"line\":{},\"col\":{},\"error\":\"{}\"}}",
-            line,
-            col,
-            json_escape(&d.message)
-        );
+    let name = env.name.trim().to_string();
+    if name.is_empty() || env.source.is_empty() {
+        return String::from("{\"ok\":false,\"error\":\"pattern name required\"}");
     }
     let mut lib = state.library.lock().unwrap();
     if let Some(p) = lib.iter_mut().find(|p| p.name == name) {
-        p.source = source.to_string();
+        p.source = env.source.to_string();
+        p.bc = env.bytecode.to_vec();
         return format!("{{\"ok\":true,\"id\":\"{}\"}}", p.id);
     }
     let id = format!("{:08x}", state.next_id.fetch_add(1, Ordering::Relaxed) ^ 0x5eed_1e55);
     lib.push(StoredPattern {
         id: id.clone(),
         name,
-        source: source.to_string(),
+        source: env.source.to_string(),
+        bc: env.bytecode.to_vec(),
     });
     format!("{{\"ok\":true,\"id\":\"{}\"}}", id)
 }
@@ -1210,6 +1246,13 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         ("GET", "/api/pattern") => {
             let src = state.pattern_src.lock().unwrap().clone();
             respond(&mut stream, 200, "text/plain; charset=utf-8", src.as_bytes());
+        }
+        ("GET", "/api/pattern.lxp") => {
+            // running pattern as an LXP1 envelope — what a sync follower adopts
+            let src = state.pattern_src.lock().unwrap().clone();
+            let bc = state.pattern_bc.lock().unwrap().clone();
+            let env = luxel_core::bytecode::encode_envelope("", &src, &bc);
+            respond(&mut stream, 200, "application/octet-stream", &env);
         }
         ("GET", "/api/controls") => {
             respond(&mut stream, 200, "application/json", controls_json(&state).as_bytes())
@@ -1518,8 +1561,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
         }
         ("POST", "/api/code") => {
-            let body = String::from_utf8_lossy(&req.body).into_owned();
-            let r = api_code(&state, body);
+            let r = api_code(&state, &req.body);
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         ("POST", "/api/control") => {
@@ -1536,8 +1578,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             respond(&mut stream, 200, "application/json", patterns_list_json(&state).as_bytes())
         }
         ("POST", "/api/patterns") => {
-            let body = String::from_utf8_lossy(&req.body).into_owned();
-            let r = patterns_save(&state, &body);
+            let r = patterns_save(&state, &req.body);
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         (m, p) if p.starts_with("/api/patterns/") => {
@@ -1558,13 +1599,21 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 },
                 ("DELETE", None) => patterns_delete(&state, id),
                 ("POST", Some("activate")) => match pattern_by_id(&state, id) {
-                    Some(p) => {
-                        let r = api_code(&state, p.source);
-                        if r.contains("\"ok\":true") {
+                    Some(p) => match luxel_core::bytecode::deserialize(&p.bc) {
+                        Ok(_) => {
+                            push(&state, Msg::Code { src: p.source, bc: p.bc });
                             *state.current_pattern_id.lock().unwrap() = p.id;
+                            String::from("{\"ok\":true}")
                         }
-                        r
-                    }
+                        Err(e @ luxel_core::bytecode::BcError::Version { .. }) => format!(
+                            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
+                            json_escape(&e.to_string())
+                        ),
+                        Err(e) => format!(
+                            "{{\"ok\":false,\"error\":\"{}\"}}",
+                            json_escape(&e.to_string())
+                        ),
+                    },
                     None => String::from("{\"ok\":false,\"error\":\"no such pattern\"}"),
                 },
                 _ => String::from("{\"ok\":false,\"error\":\"bad patterns route\"}"),
@@ -1614,6 +1663,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         fps: AtomicU32::new(0),
         vmerr: Mutex::new(None),
         pattern_src: Mutex::new(String::new()),
+        pattern_bc: Mutex::new(Vec::new()),
         controls_json: Mutex::new(String::from("[]")),
         vars_json: Mutex::new(String::from("{}")),
         readouts_json: Mutex::new(String::from("{}")),

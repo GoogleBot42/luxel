@@ -460,11 +460,35 @@
     }
   }
 
+  /** Compile source with the local wasm engine and return its LXBC bytecode
+   *  (null if it doesn't compile). Fresh compile so the blob always matches
+   *  the given source, not a stale preview engine. */
+  function compileToBytecode(src: string): Uint8Array | null {
+    if (!luxel) return null;
+    const eng = luxel.compile(src, pixelCount());
+    if (!(eng instanceof Engine)) return null;
+    try {
+      return eng.bytecode();
+    } finally {
+      eng.free();
+    }
+  }
+
   async function loadDevicePattern(id: string): Promise<void> {
     if (!device) return;
     try {
       const p = await device.patternSource(id);
-      const r = await device.activatePattern(id);
+      let r = await device.activatePattern(id);
+      if (!r.ok && r.code === "bc-version") {
+        // the stored bytecode predates a firmware format bump (the device
+        // can't recompile — it has no compiler): recompile from the stored
+        // source, re-save, and retry once
+        const bc = compileToBytecode(p.source);
+        if (bc) {
+          await device.savePattern(p.name, p.source, bc);
+          r = await device.activatePattern(id);
+        }
+      }
       if (!r.ok) {
         deviceError = `activate failed: ${r.error}`;
         return;
@@ -676,14 +700,15 @@
     }
   }
 
-  /** Send the current source to the device so its real LEDs follow the local
-   *  preview. The source is already validated by the local compile, so this
-   *  just runs it; a rejection (or network error) surfaces as a device error. */
+  /** Send the current source + its compiled LXBC bytecode to the device so
+   *  its real LEDs follow the local preview. The device has no compiler —
+   *  the local engine's bytecode IS what it executes; a rejection (or
+   *  network error) surfaces as a device error. */
   async function devicePush(): Promise<void> {
     if (!device) return;
-    if (compileError) return; // never push a pattern the local compile rejected
+    if (compileError || !engine) return; // never push a pattern the local compile rejected
     try {
-      const r = await device.run(source);
+      const r = await device.run(source, engine.bytecode());
       if (!r.ok) deviceError = `device rejected the pattern: ${r.error}`;
       else deviceError = "";
     } catch (e) {
@@ -830,7 +855,13 @@
     if (!name) return;
     if (device) {
       void (async () => {
-        const r = await device?.savePattern(name, source);
+        const bc = compileToBytecode(source);
+        if (!bc) {
+          saveNote = "save failed: pattern does not compile";
+          setTimeout(() => (saveNote = ""), 3000);
+          return;
+        }
+        const r = await device?.savePattern(name, source, bc);
         if (r?.ok) {
           patternName = name;
           exampleName = "";

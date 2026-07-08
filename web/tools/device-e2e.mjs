@@ -8,6 +8,7 @@
 import { execSync, spawn } from "node:child_process";
 import dgram from "node:dgram";
 import puppeteer from "puppeteer-core";
+import { lxpBody } from "./lxp.mjs";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
@@ -191,7 +192,7 @@ try {
   // a render2D pattern now uses the installed geometry
   await fetch(`${DEV}/api/code`, {
     method: "POST",
-    body: "export function render2D(index, x, y) { rgb(x, y, 0) }",
+    body: await lxpBody("", "export function render2D(index, x, y) { rgb(x, y, 0) }"),
   });
   await sleep(500);
   const mpx = new Uint8Array(await (await fetch(`${DEV}/api/pixels`)).arrayBuffer());
@@ -399,7 +400,10 @@ try {
     // a clock pattern sees the shifted hour
     await fetch(`${DEV}/api/code`, {
       method: "POST",
-      body: "export var h\nexport function beforeRender(d) { h = clockHour() }\nexport function render(i) { hsv(0,0,0) }",
+      body: await lxpBody(
+        "",
+        "export var h\nexport function beforeRender(d) { h = clockHour() }\nexport function render(i) { hsv(0,0,0) }",
+      ),
     });
     await sleep(600);
     const vars = await (await fetch(`${DEV}/api/vars`)).json();
@@ -442,9 +446,11 @@ try {
   {
     await fetch(`${DEV}/api/code`, {
       method: "POST",
-      body:
+      body: await lxpBody(
+        "",
         "export var energyAverage\nexport var frequencyData\n" +
-        "export function render(index) { hsv(0, 1, energyAverage) }",
+          "export function render(index) { hsv(0, 1, energyAverage) }",
+      ),
     });
     await sleep(300);
     const sb = Buffer.alloc(98);
@@ -574,7 +580,7 @@ try {
   // change what the device runs out from under the editor
   await fetch(`${DEV}/api/code`, {
     method: "POST",
-    body: "export function render(index) { rgb(0.9, 0.8, 0.7) }",
+    body: await lxpBody("", "export function render(index) { rgb(0.9, 0.8, 0.7) }"),
   });
   await sleep(300);
   check(
@@ -603,7 +609,7 @@ try {
   await sleep(1000);
   await fetch(`${DEV}/api/code`, {
     method: "POST",
-    body: "export function render(index) { rgb(0.44, 0.55, 0.66) }",
+    body: await lxpBody("", "export function render(index) { rgb(0.44, 0.55, 0.66) }"),
   });
   await sleep(300);
   await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
@@ -740,8 +746,11 @@ try {
   // name (the device streams only source, not which library entry it is) ----
   await fetch(`${DEV}/api/playlist/stop`, { method: "POST" });
   const uniq = "export function render(index) { rgb(0.13, 0.26, 0.39) }";
-  await fetch(`${DEV}/api/code`, { method: "POST", body: uniq }); // run it
-  await fetch(`${DEV}/api/patterns`, { method: "POST", body: `Named Thing\n${uniq}` }); // save same source
+  await fetch(`${DEV}/api/code`, { method: "POST", body: await lxpBody("", uniq) }); // run it
+  await fetch(`${DEV}/api/patterns`, {
+    method: "POST",
+    body: await lxpBody("Named Thing", uniq),
+  }); // save same source
   await sleep(400);
   await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
     waitUntil: "networkidle0",

@@ -12,11 +12,14 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
 use luxel_core::fixed::Fx;
 
-/// Writes from HTTP handlers to the engine. Sources are compile-checked by
-/// the upload handler before queueing (the render task recompiles — keeps
-/// `Engine` off the channel, only `Send` data crosses).
+/// Writes from HTTP handlers to the engine. Patterns arrive as LXBC
+/// bytecode + source: the blob is decode-validated by the upload handler
+/// before queueing, and the render task decodes it again to build the
+/// engine (keeps `Engine` off the channel, only `Send` data crosses). The
+/// source rides along for `GET /api/pattern` and the sync envelope — the
+/// device never compiles it.
 pub enum Msg {
-    Code(String),
+    Code { src: String, bc: Vec<u8> },
     Control(String, Vec<Fx>),
     Var(String, Fx),
     /// New pixel count — the render task rebuilds the engine + SPI buffer live.
@@ -26,7 +29,7 @@ pub enum Msg {
     Protocol(u8),
     /// Like Code, but crossfade from the current pattern over `ms` (playlist
     /// transitions): the render task keeps the outgoing engine and blends.
-    Crossfade(String, u32),
+    Crossfade { src: String, bc: Vec<u8>, ms: u32 },
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
@@ -110,6 +113,22 @@ pub fn set_pattern_src(src: &str) {
 
 pub fn get_pattern_src() -> String {
     share_get(&PATTERN_SRC)
+}
+
+/// LXBC blob of the running pattern (`GET /api/pattern.lxp`) — what a sync
+/// follower adopts. Updated on swap, alongside PATTERN_SRC.
+pub static PATTERN_BC: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));
+
+pub fn set_pattern_bc(bc: &[u8]) {
+    PATTERN_BC.lock(|c| {
+        let mut v = c.borrow_mut();
+        v.clear();
+        v.extend_from_slice(bc);
+    });
+}
+
+pub fn get_pattern_bc() -> Vec<u8> {
+    share_get(&PATTERN_BC)
 }
 
 /// Master power (Home Assistant's light switch): when false the render task

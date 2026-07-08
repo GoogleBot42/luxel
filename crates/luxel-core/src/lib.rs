@@ -14,8 +14,11 @@
 
 extern crate alloc;
 
+#[cfg(feature = "frontend")]
 pub mod ast;
 pub mod audio;
+pub mod bytecode;
+#[cfg(feature = "frontend")]
 pub mod compile;
 pub mod diag;
 pub mod engine;
@@ -24,9 +27,11 @@ pub mod color;
 pub mod fmath;
 pub mod hamqtt;
 pub mod jsonview;
+#[cfg(feature = "frontend")]
 pub mod lex;
 pub mod netin;
 pub mod noise;
 pub mod outpipe;
+#[cfg(feature = "frontend")]
 pub mod parse;
 pub mod vm;

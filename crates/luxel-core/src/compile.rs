@@ -21,7 +21,9 @@ use crate::parse::parse_program;
 use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Insn, Program, Value};
 
 const MAX_GLOBALS: usize = 256;
-const MAX_LOCALS: usize = 256;
+// 255, not 256: FnDef.locals is a u8 slot *count* (a 256th slot would wrap
+// it to 0) and LoadL/StoreL operands are u8 slot indices.
+const MAX_LOCALS: usize = 255;
 
 pub fn compile(src: &str) -> Result<Program, Diagnostic> {
     let ast = parse_program(src)?;
@@ -383,6 +385,7 @@ impl<'s> Compiler<'s> {
             self.emit_stmt(&mut ctx, s)?;
         }
         ctx.push(Insn::RetNull);
+        self.fns[0].pos = ctx.pos; // keep line info for init-time vmerrs
         self.fns[0].code = ctx.code;
         Ok(())
     }

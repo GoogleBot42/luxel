@@ -5,6 +5,7 @@
 // Usage (from web/): node tools/sync-e2e.mjs
 
 import { execSync, spawn } from "node:child_process";
+import { lxpBody } from "./lxp.mjs";
 
 const A_PORT = 8731;
 const B_PORT = 8732;
@@ -51,9 +52,10 @@ try {
   const src =
     "export var energyAverage\n" +
     "export function render(index) { hsv(time(0.05), 1, 1) }";
-  await fetch(`${A}/api/code`, { method: "POST", body: src });
+  const srcBody = await lxpBody("", src);
+  await fetch(`${A}/api/code`, { method: "POST", body: srcBody });
   await sleep(2500);
-  await fetch(`${B}/api/code`, { method: "POST", body: src });
+  await fetch(`${B}/api/code`, { method: "POST", body: srcBody });
   await sleep(400);
   const t0a = (await getSync(A)).timeMs;
   const t0b = (await getSync(B)).timeMs;
@@ -104,7 +106,7 @@ try {
   // pattern distribution: pushing NEW code to the leader propagates to the
   // follower (hash in the beacon → follower pulls /api/pattern and adopts)
   const marker = `export var syncMarker = 42\n${src}`;
-  await fetch(`${A}/api/code`, { method: "POST", body: marker });
+  await fetch(`${A}/api/code`, { method: "POST", body: await lxpBody("", marker) });
   let adopted = false;
   for (let i = 0; i < 20 && !adopted; i++) {
     await sleep(400);

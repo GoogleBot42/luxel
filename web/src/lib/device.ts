@@ -11,7 +11,40 @@ export interface DeviceStatus {
   live?: "ddp" | "e131" | null;
 }
 
-export type RunResult = { ok: true } | { ok: false; line: number; col: number; error: string };
+export type RunResult =
+  | { ok: true }
+  | { ok: false; line?: number; col?: number; error: string; code?: string };
+
+/** LXP1 envelope: how a pattern crosses the wire to a device — name (empty
+ *  for ad-hoc runs), source, and the LXBC bytecode the browser compiled.
+ *  Devices execute bytecode only; the source is stored alongside it. */
+export function lxpEnvelope(
+  name: string,
+  source: string,
+  bytecode: Uint8Array,
+): Uint8Array<ArrayBuffer> {
+  const enc = new TextEncoder();
+  const nameB = enc.encode(name).slice(0, 255);
+  const srcB = enc.encode(source);
+  const out = new Uint8Array(
+    new ArrayBuffer(4 + 1 + nameB.length + 4 + srcB.length + 4 + bytecode.length),
+  );
+  const view = new DataView(out.buffer);
+  let at = 0;
+  out.set(enc.encode("LXP1"), at);
+  at += 4;
+  out[at++] = nameB.length;
+  out.set(nameB, at);
+  at += nameB.length;
+  view.setUint32(at, srcB.length, true);
+  at += 4;
+  out.set(srcB, at);
+  at += srcB.length;
+  view.setUint32(at, bytecode.length, true);
+  at += 4;
+  out.set(bytecode, at);
+  return out;
+}
 
 /** Luxel-to-Luxel sync state (GET /api/sync). */
 export interface SyncStatus {
@@ -98,8 +131,11 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; protocol?: string; error?: string };
   }
 
-  async run(source: string): Promise<RunResult> {
-    const res = await fetch(this.url("/api/code"), { method: "POST", body: source });
+  async run(source: string, bytecode: Uint8Array): Promise<RunResult> {
+    const res = await fetch(this.url("/api/code"), {
+      method: "POST",
+      body: lxpEnvelope("", source, bytecode),
+    });
     return (await res.json()) as RunResult;
   }
 
@@ -125,12 +161,16 @@ export class DeviceSession {
     };
   }
 
-  /** Save (same name overwrites). Body is "name\nsource" — text, so the
-   *  firmware needs no JSON parser. */
-  async savePattern(name: string, source: string): Promise<RunResult & { id?: string }> {
+  /** Save (same name overwrites). Body is an LXP1 envelope — the device
+   *  stores source + bytecode and validates only that the blob decodes. */
+  async savePattern(
+    name: string,
+    source: string,
+    bytecode: Uint8Array,
+  ): Promise<RunResult & { id?: string }> {
     const res = await fetch(this.url("/api/patterns"), {
       method: "POST",
-      body: `${name}\n${source}`,
+      body: lxpEnvelope(name, source, bytecode),
     });
     return (await res.json()) as RunResult & { id?: string };
   }

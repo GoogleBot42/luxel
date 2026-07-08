@@ -78,6 +78,8 @@ interface Exports {
   lx_response_ptr(): number;
   lx_response_len(): number;
   lx_new(srcPtr: number, srcLen: number, pixelCount: number, seed: number): number;
+  lx_bytecode(h: number): number;
+  lx_bytecode_ptr(h: number): number;
   lx_free(h: number): void;
   lx_frame(h: number, deltaRaw: number): number;
   lx_take_error(h: number): number;
@@ -284,6 +286,15 @@ export class Engine {
       coords.push(p);
     }
     return { dims, coords };
+  }
+
+  /** Serialize the compiled program to LXBC bytecode — what devices execute
+   *  (they carry no compiler). Uploads pair this with the source. */
+  bytecode(): Uint8Array {
+    const len = this.e.lx_bytecode(this.h);
+    if (len < 0) throw new Error(JSON.parse(this.lx.response()).message as string);
+    const ptr = this.e.lx_bytecode_ptr(this.h);
+    return new Uint8Array(this.e.memory.buffer.slice(ptr, ptr + len));
   }
 
   /** Current pixel buffer without rendering (partial frames while paused). */

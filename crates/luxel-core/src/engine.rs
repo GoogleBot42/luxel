@@ -15,7 +15,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+#[cfg(feature = "frontend")]
 use crate::compile::compile;
+#[cfg(feature = "frontend")]
 use crate::diag::Diagnostic;
 use crate::fixed::Fx;
 use crate::vm::{DebugState, MapData, Outcome, Program, StepKind, Value, Vm, VmError};
@@ -123,8 +125,16 @@ impl Engine {
     /// Compile and initialize a pattern. Compile errors fail construction;
     /// runtime errors during init are recorded in `last_error` and the
     /// engine stays usable (PB shows vmerr and keeps going).
+    #[cfg(feature = "frontend")]
     pub fn new(src: &str, pixel_count: u32, seed: u64) -> Result<Engine, Diagnostic> {
-        let prog = compile(src)?;
+        Ok(Engine::from_program(compile(src)?, pixel_count, seed))
+    }
+
+    /// Initialize from an already-compiled program (deserialized LXBC
+    /// bytecode, or a fresh `compile()` result). Infallible: like `new`
+    /// after its compile step, init-time runtime errors land in
+    /// `last_error` and the engine stays usable.
+    pub fn from_program(prog: Program, pixel_count: u32, seed: u64) -> Engine {
         let mut vm = Vm::new(&prog, seed);
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
@@ -172,7 +182,7 @@ impl Engine {
             }
         }
 
-        Ok(Engine {
+        Engine {
             pixels: alloc::vec![[0u8; 3]; pixel_count as usize],
             prog,
             vm,
@@ -190,7 +200,7 @@ impl Engine {
             is_map: false,
             map_coords: Vec::new(),
             map_dims: 0,
-        })
+        }
     }
 
     /// Turn this engine into a *map program* runner: [`run_map`] executes its
@@ -359,6 +369,11 @@ impl Engine {
 
     pub fn pixel_count(&self) -> u32 {
         self.pixel_count
+    }
+
+    /// The compiled program this engine runs (e.g. for [`crate::bytecode::serialize`]).
+    pub fn program(&self) -> &Program {
+        &self.prog
     }
 
     /// Install a pixel map: one coordinate tuple per pixel, any units.

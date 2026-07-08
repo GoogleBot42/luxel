@@ -1,5 +1,41 @@
 # Update log
 
+## 2026-07-08 — v0.1.24: devices execute LXBC bytecode; compiler out of firmware
+
+The browser (wasm) and CLI now compile patterns to a serialized bytecode
+(**LXBC**, docs/spec/bytecode.md) and upload it alongside the source in an
+LXP1 envelope; the device stores both and only ever *decodes + executes* —
+the lexer/parser/compiler are no longer linked into the firmware (a
+default-on `frontend` cargo feature in luxel-core).
+
+- **Flash**: app text+data 929.4 KB → 876.8 KB (−52.6 KB net, decoder
+  included) against the 1 MiB OTA slot.
+- **Robustness**: the on-device compile path — the deep-recursion,
+  alloc-spiky thing behind the v0.1.21 stack-overflow saga — is gone by
+  construction. The LXBC decoder fully validates untrusted blobs (the VM
+  trusts `Program`, so indices/jumps/argc are proven at decode time).
+- **ABI**: builtins are referenced by name via a per-blob import table, so
+  growing the builtin table never invalidates stored patterns; real format
+  changes bump `FORMAT_VERSION` and devices answer `"code":"bc-version"` —
+  the web app then recompiles from the stored source and re-saves
+  automatically.
+- **Sync**: followers adopt the leader via `GET /api/pattern.lxp`
+  (source + bytecode envelope) instead of compiling `/api/pattern`.
+- **Storage**: pattern store format v3 (bytecode chunks next to source
+  chunks; bc gets 6×3840 B ≈ 23 KB — corpus max blob is 17.5 KB). ⚠️ the
+  v2→v3 bump wipes the on-device library + playlist on first boot after
+  OTA; re-save from the app.
+- **API break**: `POST /api/code` and `POST /api/patterns` take the binary
+  LXP1 envelope now — raw-source curls need `luxel compile` (new
+  subcommand) or the web app. Mirror (`luxel serve`) matches, and executes
+  stored bytecode via the same decode path as the device.
+- Verified: corpus 291/293 compile+run with byte-identical LXBC round-trip
+  and pixel-identical source-vs-bytecode rendering; luxel-core tests (135)
+  incl. decoder corruption tests; device/sync/playground e2e all green;
+  ESP32 (Xtensa + C3) builds with zero frontend symbols.
+- Drive-bys: `<init>` now keeps line info for init-time vmerrs;
+  MAX_LOCALS off-by-one (256th local wrapped a u8) fixed at 255.
+
 ## 2026-07-08 — device recovered ✅: v0.1.21 verified on hardware + tools/deploy.sh
 
 You serial-flashed the fix — thanks! Verified on the wall unit right after:

@@ -39,6 +39,7 @@ fn main() -> ExitCode {
         "vars" if args.len() >= 2 => vars_cmd(&args[1], &args[2..]),
         "pixels" if args.len() >= 2 => pixels_cmd(&args[1], &args[2..]),
         "check" if args.len() >= 2 => check_cmd(&args[1], &args[2..]),
+        "compile" if args.len() >= 2 => compile_cmd(&args[1], &args[2..]),
         "serve" => serve::serve_cmd(&args[1..]),
         _ => usage(),
     }
@@ -94,16 +95,35 @@ fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
     // grid sizes matter — patterns hardcoding rig shapes (width = 16) or
     // doing pixelCount/10 are genuinely OOB (on PB too) at other counts
     let pixels = w * h;
-    let mut engine = match Engine::new(&src, pixels, 1) {
-        Ok(e) => e,
+    let prog = match luxel_core::compile::compile(&src) {
+        Ok(p) => p,
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);
             return report("compile", Some(format!("{line}:{col}: {}", d.message)));
         }
     };
+    // LXBC round-trip: encode must decode to a byte-identical re-encode, and
+    // the decoded program must render exactly like the fresh compile — this
+    // is the device's execution path, so the corpus report exercises it.
+    let blob = match luxel_core::bytecode::serialize(&prog) {
+        Ok(b) => b,
+        Err(e) => return report("bytecode", Some(e.to_string())),
+    };
+    let prog_bc = match luxel_core::bytecode::deserialize(&blob) {
+        Ok(p) => p,
+        Err(e) => return report("bytecode", Some(e.to_string())),
+    };
+    match luxel_core::bytecode::serialize(&prog_bc) {
+        Ok(b) if b == blob => {}
+        Ok(_) => return report("bytecode", Some("re-encode not byte-identical".into())),
+        Err(e) => return report("bytecode", Some(e.to_string())),
+    }
+    let mut engine = Engine::from_program(prog, pixels, 1);
+    let mut engine_bc = Engine::from_program(prog_bc, pixels, 1);
     if let Some(e) = engine.take_error() {
         return report("init", Some(e.message));
     }
+    engine_bc.take_error();
     // a W×H grid map so render2D patterns exercise real coordinates
     let coords: Vec<[Fx; 3]> = (0..pixels)
         .map(|i| {
@@ -115,14 +135,21 @@ fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
         })
         .collect();
     engine.set_map(2, &coords);
+    engine_bc.set_map(2, &coords);
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         engine.set_wall_clock(now.as_secs() as i64);
+        engine_bc.set_wall_clock(now.as_secs() as i64);
     }
     for _ in 0..3 {
-        engine.frame(Fx::from_f64(16.7));
+        let px = engine.frame(Fx::from_f64(16.7)).to_vec();
+        let px_bc = engine_bc.frame(Fx::from_f64(16.7));
+        if px != px_bc {
+            return report("bytecode", Some("frame differs from source path".into()));
+        }
         if let Some(e) = engine.take_error() {
             return report("frame", Some(e.message));
         }
+        engine_bc.take_error();
     }
     report("ok", None)
 }
@@ -228,7 +255,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel serve [--pixels N] [--port P]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc]\n       luxel serve [--pixels N] [--port P]"
     );
     ExitCode::from(2)
 }
@@ -238,6 +265,62 @@ fn read(path: &str) -> Result<String, ExitCode> {
         eprintln!("error: cannot read {path}: {e}");
         ExitCode::FAILURE
     })
+}
+
+/// Compile a pattern to LXBC bytecode (what devices execute — they carry no
+/// compiler). Default output: the input path with an .lxbc extension.
+fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
+    let out_path = match rest {
+        [flag, p] if flag == "--out" => p.clone(),
+        [] => {
+            let stem = path.rsplit_once('.').map(|(s, _)| s).unwrap_or(path);
+            format!("{stem}.lxbc")
+        }
+        _ => return usage(),
+    };
+    let raw = match read(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    let src = if path.ends_with(".epe") {
+        match serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|v| v["sources"]["main"].as_str().map(String::from))
+        {
+            Some(s) => s,
+            None => {
+                eprintln!("error: no sources.main in {path}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        raw
+    };
+    let prog = match luxel_core::compile::compile(&src) {
+        Ok(p) => p,
+        Err(d) => {
+            let (line, col) = line_col(&src, d.span.start);
+            eprintln!("error: {path}:{line}:{col}: {}", d.message);
+            return ExitCode::FAILURE;
+        }
+    };
+    let blob = match luxel_core::bytecode::serialize(&prog) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match std::fs::write(&out_path, &blob) {
+        Ok(()) => {
+            eprintln!("{out_path}: {} bytes", blob.len());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: cannot write {out_path}: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn parse_cmd(path: &str) -> ExitCode {
