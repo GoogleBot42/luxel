@@ -105,25 +105,38 @@ Ranked by visual payoff ÷ effort, all feasible with current builtins.
 
 ## Clean-room reimplementations of corpus patterns
 
-The scraped corpus has unknown licensing, so its best patterns are being
+The scraped corpus has unknown licensing, so its patterns were
 reimplemented clean-room: a describer agent reads the original and writes
 a functional spec (prose only — no code, no identifier names, no copied
 constants), and the implementer writes fresh code from the spec without
 ever seeing the source. Each reimplementation notes this provenance in
 its header comment.
 
-Done 2026-07-06 (specs + implementations, all verified in the VM):
-Edgeburst, Rainbow Melt, Color Twinkles, Thunderstorm, Glittering
-Jewels, Doom Fire 2D, Voronoi 2D, Kaleidoscope 2D, Coronal Ejection 2D,
-Unstable Orbits 2D. The gallery dedupes by name, so these shadow their
-corpus originals in the pattern browser.
+**Complete as of 2026-07-08.** All 283 corpus patterns are reimplemented
+in `library/*.js` (the pattern browser now builds from `library/`, not
+the corpus). The 283 prose specs are version-controlled at
+`docs/pattern-specs/*.md` as the firewall's audit trail. Every file
+passes `luxel check` on both default and 16×16 grids, soaks 300+ frames
+with no runtime error, and (except intentionally-dark sensor patterns)
+renders visibly; the chromium gallery e2e passes with 312 tiles (38
+curated `examples/` + the library, deduped by name).
 
-Worthwhile future clean-room candidates (not yet spec'd): the sound-
-reactive set (blocked on mic hardware anyway), Cellular Automata 1D,
-Slime mold palette, Swirlpool 2D, block reflections, fireblobs,
-Mandelbrot 2D. Once coverage feels sufficient, the corpus can be dropped
-from the gallery entirely and kept only as a private compile-compat test
-battery.
+Notes on categories that needed interpretation:
+- **Sound/sensor patterns** (~52) bind PB-style sensor globals
+  (`frequencyData`, `energyAverage`, `accelerometer`, …) which the engine
+  stubs with zeros until mic/IMU hardware lands; each guards the all-zero
+  case so it idles gracefully (some self-drive a simulated beat) rather
+  than erroring. They will come alive once the M5 sensor framework does.
+- **3D patterns** (~10 render3D-only) implement `render3D` but are skipped
+  by the gallery until it grows a projection tile; they still verify.
+- **String-dependent patterns** (scrolling text marquee) approximate the
+  look with blocky glyphs, since Luxel has no string type yet.
+- **Utility/tutorial patterns** (easing library, coordinate helpers, color
+  pickers, mapping helpers) became faithful minimal *visible* demos of the
+  functionality they teach.
+
+The corpus itself can now be dropped from the build entirely and kept only
+as a private, local, compile-compatibility test battery.
 
 ## What we already cover (don't duplicate)
 

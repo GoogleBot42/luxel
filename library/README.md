@@ -22,5 +22,10 @@ File conventions:
   peripherals land, so they run dark rather than erroring.
 
 The curated teaching set lives in `examples/`; this directory is the
-bulk library that feeds the playground's pattern browser via
-`web/tools/gen-gallery.mjs`.
+bulk library (all 283 corpus patterns, reimplemented) that feeds the
+playground's pattern browser via `web/tools/gen-gallery.mjs`.
+
+The prose specification each file was built from is preserved at
+`docs/pattern-specs/<slug>.md` — the clean-room firewall's audit trail.
+The original scraped corpus is never read by the build; it survives only
+as an untracked, local compile-compatibility test battery.
