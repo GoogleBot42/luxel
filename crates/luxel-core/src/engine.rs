@@ -135,22 +135,23 @@ impl Engine {
     /// after its compile step, init-time runtime errors land in
     /// `last_error` and the engine stays usable.
     pub fn from_program(prog: Program, pixel_count: u32, seed: u64) -> Engine {
-        Engine::from_program_budgeted(prog, pixel_count, seed, crate::vm::DEFAULT_ARRAY_BUDGET)
+        Engine::from_program_budgeted(prog, pixel_count, seed, usize::MAX)
     }
 
-    /// [`from_program`] with an explicit array-element budget, applied
-    /// BEFORE the pattern's init code runs. Small-heap devices size this
-    /// from live free heap so an array-hungry pattern gets a recorded
-    /// "array budget" vmerr instead of exhausting the allocator (which
-    /// panics = reboots the device — the soak-v5 lesson).
+    /// [`from_program`] with an array-arena BYTE budget, applied BEFORE the
+    /// pattern's init code runs (the PB-compat 10,240-element budget always
+    /// applies on top). Small-heap devices size this from live free heap so
+    /// an array-hungry pattern gets a recorded "array budget" vmerr instead
+    /// of exhausting the allocator (which panics = reboots the device — the
+    /// soak-v5 lesson).
     pub fn from_program_budgeted(
         prog: Program,
         pixel_count: u32,
         seed: u64,
-        array_budget: usize,
+        array_byte_budget: usize,
     ) -> Engine {
         let mut vm = Vm::new(&prog, seed);
-        vm.array_budget = array_budget;
+        vm.array_byte_budget = array_byte_budget;
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
         // Sensor-board bindings: exported sensor arrays start zero-filled so
@@ -288,10 +289,11 @@ impl Engine {
         let mut pcs = Vec::new();
         let mut resolved = Vec::new();
         for &line in lines {
-            // nearest executable line >= requested
+            // nearest executable line >= requested (pos entries are runs
+            // keyed by fn-relative byte offset)
             let mut target: Option<u32> = None;
             for f in &self.prog.fns {
-                for &(l, _) in &f.pos {
+                for &(_, l, _) in &f.pos {
                     if l >= line && l != 0 {
                         target = Some(target.map_or(l, |t| t.min(l)));
                     }
@@ -299,8 +301,8 @@ impl Engine {
             }
             let Some(t) = target else { continue };
             for (fi, f) in self.prog.fns.iter().enumerate() {
-                if let Some(pc) = f.pos.iter().position(|&(l, _)| l == t) {
-                    pcs.push((fi as u16, pc as u32));
+                if let Some(&(off, _, _)) = f.pos.iter().find(|&&(_, l, _)| l == t) {
+                    pcs.push((fi as u16, off));
                 }
             }
             if !resolved.contains(&t) {

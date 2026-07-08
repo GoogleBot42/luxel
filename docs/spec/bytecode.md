@@ -29,7 +29,7 @@ All integers little-endian. `str8` = `u8` length + UTF-8 bytes.
 
 ```
 0   4   magic "LXBC"
-4   u16 version          (currently 1)
+4   u16 version          (currently 2)
 6   u16 flags            bit0: debug info present; others reserved (0)
 8   u16 pixel_count_g    global slot holding pixelCount
 10  u16 n_globals        (≤ 256)
@@ -62,21 +62,28 @@ exactly (opcodes index globals by slot).
 str8 name                (kept even without debug info: runtime errors name it)
 u8   params
 u16  locals              total slots incl. params (≤ 255; params ≤ locals)
-u32  code_len            instruction count (≤ 65 536)
-code_len × insn          (see opcode table)
+u32  code_len            code section length in BYTES (≤ 65 536)
+code_len bytes of code   (see opcode table)
 if flags.debug:
-  u32 n_runs             RLE source positions, Σcount == code_len
-  n_runs × { u16 count, u32 line, u32 col }
+  u32 n_runs             source-position runs, strictly ascending offsets
+  n_runs × { u32 offset, u32 line, u32 col }
   locals × str8          local slot names (params first)
 ```
+
+The VM executes this code section **in place**: `pc` is a byte offset into
+it, and each position run covers from its offset to the next run's. v1
+(instruction-indexed jumps, per-instruction RLE positions) required
+materializing an instruction array at load — several times the blob size in
+RAM, which is what small-heap devices cannot afford.
 
 **exports** — `n_exports × { str8 name, u16 fn_idx }`.
 
 ## Opcodes
 
-One `u8` opcode + fixed-width operands. Jump targets are absolute
-*instruction indices* within the function (not byte offsets), matching the
-in-memory `Insn` representation.
+One `u8` opcode + fixed-width operands. Jump targets are function-relative
+**byte offsets**; a target equal to `code_len` means "fall off the end"
+(returns like RetNull). The decoder proves every jump lands on an
+instruction boundary, so the in-place interpreter can never misalign.
 
 | op | insn | operands |
 |----|------|----------|
@@ -114,26 +121,28 @@ arrays are built at runtime by `NewArray`).
 
 Rejected at decode time (`BcError::Malformed`): bad magic; section overrun /
 trailing bytes; counts over the caps above; invalid UTF-8; unknown opcode;
-`fn_idx ≥ n_fns` (in `Const Fun`, `CallFn`, exports); `slot ≥ n_imports`;
-unresolvable builtin name; global operand ≥ `n_globals`;
-`pixel_count_g ≥ n_globals`; local operand ≥ `locals`; `params > locals`;
-`argc > 16`; jump target > `code_len`; debug RLE not summing to `code_len`.
-Total blob size is capped at 256 KiB. `BcError::Version` is reserved for a
-`version` field mismatch.
+an instruction overrunning its function's code section; `fn_idx ≥ n_fns`
+(in `Const Fun`, `CallFn`, exports); `slot ≥ n_imports`; unresolvable
+builtin name; global operand ≥ `n_globals`; `pixel_count_g ≥ n_globals`;
+local operand ≥ `locals`; `params > locals`; `argc > 16`; a jump target
+past `code_len` or not on an instruction boundary; debug runs not strictly
+ascending or past the code. Total blob size is capped at 256 KiB.
+`BcError::Version` is reserved for a `version` field mismatch.
 
-An accepted blob reconstructs a `Program` indistinguishable from the
-compiler's output (byte-identical on re-encode — the corpus round-trip test
-asserts this), so the VM's trust in `Program` is preserved.
+An accepted blob's code section is kept verbatim (builtin import slots are
+rewritten to runtime ids in the copy — same width) and re-encodes
+byte-identically (the corpus round-trip test asserts this). Every invariant
+the in-place interpreter relies on is proven here.
 
 ## Debug info
 
-`flags.debug` gates per-instruction source positions (RLE — positions have
-statement granularity, so runs are long) and local names. Without it,
-runtime errors report `fn`/`pc` but `(line, col) = (0, 0)`, and debugger
-stack panes lose local names. Everything else — by-name vars, controls,
-sensor bindings, exported functions — works either way, since global and
-function names are always present. Producers currently always emit debug
-info; strip it only if blob size ever matters.
+`flags.debug` gates source positions (offset-keyed runs — statement
+granularity, so a handful per function) and local names. Devices decode
+with `deserialize_lean`, which skips storing both: runtime errors report
+`fn`/`pc` but `(line, col) = (0, 0)`, and debugger stack panes lose local
+names. Everything else — by-name vars, controls, sensor bindings, exported
+functions — works either way, since global and function names are always
+present. Producers always emit debug info.
 
 ## What LXBC is not
 

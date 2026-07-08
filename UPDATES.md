@@ -1,5 +1,46 @@
 # Update log
 
+## 2026-07-08 — v0.1.26/27: the RAM reclaim — 189/195 gallery patterns run; idle free heap 50 → 107 KB
+
+Follow-through on "find something systemic": four structural changes, each
+soak-verified on the wall unit, stacking to a device that runs almost the
+whole gallery where the morning's build ran two-thirds of it.
+
+- **In-place bytecode execution (LXBC v2)**: the VM now interprets the
+  flat LXBC bytes directly — `pc` and jump operands are byte offsets, and
+  nothing is materialized per instruction. A decoded Program went from
+  ~5× its blob to ~1.2–2.5× (Emoji Animation's 17 KB blob: 60.7 → 19.3 KB
+  decoded). One interpreter everywhere (firmware, wasm, native), so
+  browser preview and strip can't drift; the decoder additionally proves
+  every jump lands on an instruction boundary. Same speed (fps curve
+  within noise: 123/84/49 fps at 300/600/1024 px). Format bump v1→v2 —
+  stored patterns auto-heal via the bc-version recompile path. The old
+  `Insn` enum survives only as compiler IR.
+- **Streaming pattern uploads**: /api/code and /api/patterns now stream
+  their bodies like OTA/assets do, into an exact-size fallibly-reserved
+  Vec. The per-connection HTTP buffer dropped 24 KB → 4 KB (big uploads
+  used to dictate its size for every connection) and the upload-size cap
+  is gone — the "invalid bytecode: truncated" failures with it.
+- **Per-connection buffers + engine freeze**: HTTP buffers are allocated
+  per connection, not held for the server's lifetime (the 3rd pool slot
+  had already died with the /ws stream). If an upload can't get memory
+  because the running pattern owns the heap, the engine is FROZEN (heap
+  released, strip holds its last frame) and the reservation retried — and
+  OTA freezes the engine up front (a reboot follows anyway). No more
+  "can't reach the device because a big pattern is running".
+- **Byte-accurate array budget** (elements × 8 + per-array overhead
+  against free heap, PB's 10,240-element compat cap on top) and
+  pattern-cell hygiene (PATTERN_SRC/_BC no longer retain a past giant's
+  capacity forever).
+
+**Definitive soak (docs/bench-report.md): 189/195 clean, 0 panics or
+reboots.** The 6 remaining: Emoji Animation #2 (genuinely beyond ~107 KB
+free — cleanly rejected), and five 2D patterns hitting `array index out
+of bounds` with no map installed (Breakout/Crosstown/Frogger/Rainbow
+Smiley/Rainbow Comet) — a map-semantics question for the PB oracle, on
+the backlog, not a memory problem. Day's arc: 134 clean (with dozens of
+disguised OOM reboots) → 176 → 182 → **189, zero reboots**.
+
 ## 2026-07-08 — v0.1.25: the OOM hunt — soak v5 finally runs the whole gallery with zero reboots
 
 Soak v5 on v0.1.24 kept OOM-panicking the device ("memory allocation of N

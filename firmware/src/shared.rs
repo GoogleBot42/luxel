@@ -21,6 +21,11 @@ use luxel_core::fixed::Fx;
 /// is free.
 pub enum Msg {
     Code { env: Vec<u8> },
+    /// Drop the running engine to free its heap (strip freezes on the last
+    /// frame). Sent before an OTA (a reboot follows anyway) and when a
+    /// pattern upload can't allocate its buffer — the next Code revives
+    /// rendering.
+    Freeze,
     Control(String, Vec<Fx>),
     Var(String, Fx),
     /// New pixel count — the render task rebuilds the engine + SPI buffer live.
@@ -108,6 +113,7 @@ pub fn set_pattern_src(src: &str) {
     PATTERN_SRC.lock(|c| {
         let mut s = c.borrow_mut();
         s.clear();
+        s.shrink_to_fit(); // don't retain a past giant's capacity forever
         // fallible: losing the read-back copy beats an OOM panic
         if s.try_reserve(src.len()).is_ok() {
             s.push_str(src);
@@ -127,6 +133,7 @@ pub fn set_pattern_bc(bc: &[u8]) {
     PATTERN_BC.lock(|c| {
         let mut v = c.borrow_mut();
         v.clear();
+        v.shrink_to_fit(); // don't retain a past giant's capacity forever
         // fallible: losing the sync-envelope copy beats an OOM panic
         if v.try_reserve(bc.len()).is_ok() {
             v.extend_from_slice(bc);

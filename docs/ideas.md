@@ -48,6 +48,36 @@ and the autocomplete/docs pipeline, and can't break existing code.
   change (heap strings, ops). Gated behind a use case.
 - **Named/default parameters** [M] ★ — `function f(a, b = 1)`. Modest.
 
+## Soak-v5 follow-ups (2026-07-08 — see bench-report.md for the failing list)
+
+The v0.1.25 heap hardening left 19/195 gallery patterns degraded on-device
+(zero panics — every failure below is a clean vmerr/rejection). In-place
+bytecode execution is being worked on now; the rest are queued:
+
+- ~~Streaming pattern uploads~~ — DONE (v0.1.27): /api/code + /api/patterns
+  stream like OTA/assets; upload cap gone, per-connection buffer 4 KB.
+- ~~Byte-accurate array budget~~ — DONE (v0.1.27).
+- ~~In-place bytecode execution~~ — DONE (v0.1.26, LXBC v2): the VM
+  interprets flat bytes; decoded Programs ≈ 1.2–2.5× blob (was ~5×).
+- **Oracle probe: `render2D` with no map installed** [S] ★★★ — Breakout
+  2D, Crosstown Traffic 2D, Frogger 2D, Rainbow Smiley, and Rainbow Comet
+  die with `array index out of bounds` on a mapless device but pass on the
+  host harness (which installs a grid map). The last 5 non-capacity soak
+  failures. Probe the real PB (192.168.0.140): what coordinates does
+  `render2D` receive with no map? Match those semantics (or auto-install a
+  default grid).
+- **Flash-mapped library execution** [L] ★ — the very last word in pattern
+  RAM: run library patterns straight out of flash-mapped storage (no RAM
+  copy of the code at all). Needs contiguous blob placement (the
+  sequential-storage KV chunks aren't mappable) — e.g. a dedicated raw
+  region like the web-assets partition. With in-place execution shipped,
+  only Emoji-class patterns (arrays, not code) still exceed the device, so
+  this is now low-priority.
+- **WiFi-blob buffer tuning** [M] ★ — esp-radio's RX/TX buffer counts are
+  default-generous; the blob's heap draw is the biggest remaining consumer
+  (~40+ KB). Tunable via esp-config; trade OTA/preview throughput for
+  pattern headroom if ever needed.
+
 ## Engine / runtime
 
 - **Multi-pattern blend / transitions** [L] ★★★ — run two patterns and

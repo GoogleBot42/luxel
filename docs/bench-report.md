@@ -1,48 +1,35 @@
 # Hardware soak + benchmark — 2026-07-08
 
-*Device 192.168.0.205, firmware v0.1.25, 300 px SK9822, brightness 4.*
+*Device 192.168.0.205, firmware v0.1.26, 300 px SK9822, brightness 4.*
 *Regenerate: `node tools/hw-bench.mjs <ip>` (≈15 min; runs every gallery pattern on the strip).*
 
 ## Summary
 
-- 195 patterns: **176 clean**, 19 with errors, 29 under 30 fps.
-- fps at 300 px: median **69**, p10 21, p90 123.
-- lowest heap_free seen while soaking: 30696 bytes.
+- 195 patterns: **189 clean**, 6 with errors, 40 under 30 fps.
+- fps at 300 px: median **64**, p10 18, p90 122.
+- lowest heap_free seen while soaking: 60808 bytes.
 
 ## fps vs pixel count (rainbow reference)
 
 | pixels | fps |
 |---:|---:|
-| 60 | 124 |
-| 150 | 124 |
-| 300 | 124 |
-| 600 | 87 |
-| 1024 | 51 |
-| 2048 | 26 |
+| 60 | 123 |
+| 150 | 123 |
+| 300 | 123 |
+| 600 | 84 |
+| 1024 | 49 |
+| 2048 | 25 |
 
 ## Errors
 
 | pattern | kind | problem |
 |---|---|---|
-| amoeba | strip | pattern too large for this device (out of memory) |
-| aurorashivers | strip | line 0:0: indexing a non-array value |
-| Bouncy Boxes | grid | pattern too large for this device (out of memory) |
 | Breakout 2D | grid | line 0:0: array index out of bounds |
-| bustle | strip | pattern too large for this device (out of memory) |
-| Chasing Rainbows & HSLuv | strip | rejected: invalid bytecode: truncated |
-| Continuous Cellular Automata | grid | line 0:0: indexing a non-array value |
 | Crosstown Traffic 2D | grid | line 0:0: array index out of bounds |
-| DAFTPUNK | grid | rejected: invalid bytecode: truncated |
-| DBZBattleFinal | grid | pattern too large for this device (out of memory) |
-| Emoji Animation #2 | grid | rejected: invalid bytecode: truncated |
+| Emoji Animation #2 | grid | pattern too large for this device (out of memory) |
 | Frogger 2D | grid | line 0:0: array index out of bounds |
-| heatshivers | strip | line 0:0: indexing a non-array value |
-| neutronorbit | strip | pattern too large for this device (out of memory) |
-| Rainbow Smiley | grid | rejected: invalid bytecode: truncated |
-| slowflies | strip | line 0:0: indexing a non-array value |
-| StarGen polar 2D | grid | pattern too large for this device (out of memory) |
-| tixy | grid | pattern too large for this device (out of memory) |
-| Utility: Palettes | strip | rejected: invalid bytecode: truncated |
+| Rainbow Comet | strip | line 0:0: array index out of bounds |
+| Rainbow Smiley | grid | line 0:0: array index out of bounds |
 
 ## Slowest (< 30 fps at 300 px)
 
@@ -51,229 +38,240 @@
 | Animated Asterisks 2D | grid | 7 |
 | Mandelbrot 2D | grid | 7 |
 | Complements 3D | grid | 9 |
-| Iran - Solidarity | cloud | 10 |
-| portal | strip | 10 |
-| scrolls | strip | 10 |
-| wanderedges | strip | 11 |
-| Voronoi Mix 2D | grid | 13 |
-| Ice Floes 2D | grid | 14 |
-| All Lasers Fire | grid | 16 |
-| Custom Sequences | strip | 16 |
-| Metaballs of Fire 2D | grid | 16 |
-| coolaura | strip | 18 |
-| fireblobs | strip | 20 |
-| novas | strip | 20 |
-| Pew-Pew-Pew! | strip | 20 |
-| 2D Bouncing Additive Primaries | grid | 21 |
-| 2D sinc(theta)/theta | grid | 21 |
+| Iran - Solidarity | cloud | 9 |
+| portal | strip | 9 |
+| wanderedges | strip | 10 |
+| scrolls | strip | 11 |
+| amoeba | strip | 12 |
+| Ice Floes 2D | grid | 12 |
+| Voronoi Mix 2D | grid | 12 |
+| neutronorbit | strip | 13 |
+| Utility: Palettes | strip | 13 |
+| DBZBattleFinal | grid | 14 |
+| All Lasers Fire | grid | 15 |
+| coolaura | strip | 15 |
+| Custom Sequences | strip | 15 |
+| Metaballs of Fire 2D | grid | 15 |
+| bustle | strip | 18 |
+| novas | strip | 18 |
+| 2D Bouncing Additive Primaries | grid | 19 |
+| 2D sinc(theta)/theta | grid | 19 |
+| Pew-Pew-Pew! | strip | 19 |
+| StarGen polar 2D | grid | 19 |
+| 1D Aurora Borealis | strip | 20 |
+| slowflies | strip | 20 |
+| Twinkling Classic Xmas Strands | strip | 20 |
+| aurorashivers | strip | 21 |
 | ChristmasPewPew | strip | 21 |
-| Twinkling Classic Xmas Strands | strip | 21 |
-| 1D Aurora Borealis | strip | 22 |
+| fireblobs | strip | 21 |
+| heatshivers | strip | 21 |
+| Wichmann–Hill PRNG | strip | 21 |
 | 3D Rotation / Spotlights | cloud | 22 |
-| Wichmann–Hill PRNG | strip | 22 |
 | Bouncer3D | grid | 23 |
 | Crossfading | grid | 23 |
-| spotlights / rotation 3D | grid | 24 |
-| fractal flower | grid | 26 |
-| The Grinch | strip | 26 |
-| 2D Spiral Twirls | grid | 29 |
+| spotlights / rotation 3D | grid | 23 |
+| fractal flower | grid | 24 |
+| The Grinch | strip | 25 |
+| 2D Spiral Twirls | grid | 26 |
+| angle and radius from coordinates | grid | 27 |
+| XmasFlies | strip | 29 |
 
 ## All results
 
 | pattern | kind | fps |
 |---|---|---:|
-| _Fairies | strip | 59 |
-| 1 White Fade | strip | 124 |
-| 1-USFLAG_BLINK | strip | 119 |
-| 1D Aurora Borealis | strip | 22 |
-| 2 Colors | strip | 102 |
-| 2 Purple Fade | strip | 124 |
-| 2D Bouncing Additive Primaries | grid | 21 |
-| 2D canvas example | grid | 79 |
-| 2D sinc(theta)/theta | grid | 21 |
-| 2D Spiral Twirls | grid | 29 |
-| 2D Wandering Fireball | grid | 53 |
-| 3 color rotation | strip | 74 |
-| 3 Violet Fade | strip | 124 |
+| _Fairies | strip | 57 |
+| 1 White Fade | strip | 123 |
+| 1-USFLAG_BLINK | strip | 112 |
+| 1D Aurora Borealis | strip | 20 |
+| 2 Colors | strip | 101 |
+| 2 Purple Fade | strip | 123 |
+| 2D Bouncing Additive Primaries | grid | 19 |
+| 2D canvas example | grid | 76 |
+| 2D sinc(theta)/theta | grid | 19 |
+| 2D Spiral Twirls | grid | 26 |
+| 2D Wandering Fireball | grid | 51 |
+| 3 color rotation | strip | 71 |
+| 3 Violet Fade | strip | 123 |
 | 3D Rotation / Spotlights | cloud | 22 |
 | 4 Blue Fade | strip | 123 |
-| 4th | strip | 42 |
-| 5 Teal Fade | strip | 124 |
-| 6 Green Fade | strip | 124 |
-| 7 Yelllow Fade | strip | 124 |
-| 8 Red Fade | strip | 124 |
-| 9 Pink Fade | strip | 124 |
-| All Lasers Fire | grid | 16 |
-| amoeba | strip | 20 |
-| angle and radius from coordinates | grid | 32 |
-| Angry Xmass 3D | cloud | 81 |
+| 4th | strip | 40 |
+| 5 Teal Fade | strip | 123 |
+| 6 Green Fade | strip | 122 |
+| 7 Yelllow Fade | strip | 123 |
+| 8 Red Fade | strip | 123 |
+| 9 Pink Fade | strip | 123 |
+| All Lasers Fire | grid | 15 |
+| amoeba | strip | 12 |
+| angle and radius from coordinates | grid | 27 |
+| Angry Xmass 3D | cloud | 78 |
 | Animated Asterisks 2D | grid | 7 |
-| aurorashivers | strip | 41 |
-| Austin FC | strip | 79 |
-| Automap | strip | 124 |
-| Autumn Colors | strip | 95 |
+| aurorashivers | strip | 21 |
+| Austin FC | strip | 77 |
+| Automap | strip | 123 |
+| Autumn Colors | strip | 93 |
 | b_lightning_flashes | strip | 120 |
-| Bessel Chaos | strip | 55 |
-| blink fade | strip | 73 |
-| Blinky Eyes 2D | grid | 40 |
-| block reflections | strip | 51 |
+| Bessel Chaos | strip | 52 |
+| blink fade | strip | 70 |
+| Blinky Eyes 2D | grid | 34 |
+| block reflections | strip | 49 |
 | Bouncer3D | grid | 23 |
-| bouncing balls - hsv | strip | 91 |
-| bouncing balls - rgb | strip | 75 |
+| bouncing balls - hsv | strip | 86 |
+| bouncing balls - rgb | strip | 72 |
 | Bouncing RGB Balls - 2D | grid | 38 |
-| Bouncy Boxes | grid | 20 |
-| Breakout 2D | grid | 52 |
-| bustle | strip | 20 |
-| Cellular Automata 1D | strip | 102 |
-| Chasing Rainbows & HSLuv | strip | — |
-| chill confetti | strip | 119 |
-| Christmas Candy Cane | strip | 61 |
-| Christmas Lights | strip | 96 |
-| Christmas RG Fade | strip | 74 |
-| Christmas string lights | strip | 60 |
-| ChristmasLights | strip | 97 |
+| Bouncy Boxes | grid | 98 |
+| Breakout 2D | grid | 43 |
+| bustle | strip | 18 |
+| Cellular Automata 1D | strip | 100 |
+| Chasing Rainbows & HSLuv | strip | 114 |
+| chill confetti | strip | 121 |
+| Christmas Candy Cane | strip | 57 |
+| Christmas Lights | strip | 93 |
+| Christmas RG Fade | strip | 71 |
+| Christmas string lights | strip | 58 |
+| ChristmasLights | strip | 93 |
 | ChristmasPewPew | strip | 21 |
-| ChristmasStretch | strip | 74 |
-| color bands | strip | 47 |
-| color bands (buffered) | strip | 37 |
+| ChristmasStretch | strip | 71 |
+| color bands | strip | 44 |
+| color bands (buffered) | strip | 36 |
 | Color Blend | strip | 51 |
-| color fade pulse | strip | 61 |
-| Color Pick Fade | strip | 90 |
-| color twinkle bounce | strip | 54 |
-| color twinkles | strip | 48 |
-| colourful fireflies | strip | 75 |
+| color fade pulse | strip | 59 |
+| Color Pick Fade | strip | 88 |
+| color twinkle bounce | strip | 52 |
+| color twinkles | strip | 47 |
+| colourful fireflies | strip | 73 |
 | Complements 3D | grid | 9 |
-| Continuous Cellular Automata | grid | 124 |
-| coolaura | strip | 18 |
+| Continuous Cellular Automata | grid | 33 |
+| coolaura | strip | 15 |
 | Crossfading | grid | 23 |
 | Crosstown Traffic 2D | grid | 123 |
-| Custom Sequences | strip | 16 |
-| Cyclic Cellular Automata 2D | grid | 69 |
-| Cylon | strip | 71 |
-| DAFTPUNK | grid | — |
-| DBZBattleFinal | grid | 20 |
-| dimbypixel | strip | 124 |
-| Doom Fire | grid | 68 |
-| Doom Fire (v2.0) 2D | grid | 64 |
-| Easing Library v1.0 | grid | 77 |
-| Easing Library v1.01 | grid | 71 |
-| Edgeburst | strip | 81 |
-| Emoji Animation #2 | grid | — |
-| Example: color hues | strip | 118 |
-| Example: modes and waveforms | strip | 111 |
+| Custom Sequences | strip | 15 |
+| Cyclic Cellular Automata 2D | grid | 61 |
+| Cylon | strip | 69 |
+| DAFTPUNK | grid | 95 |
+| DBZBattleFinal | grid | 14 |
+| dimbypixel | strip | 123 |
+| Doom Fire | grid | 64 |
+| Doom Fire (v2.0) 2D | grid | 61 |
+| Easing Library v1.0 | grid | 74 |
+| Easing Library v1.01 | grid | 68 |
+| Edgeburst | strip | 78 |
+| Emoji Animation #2 | grid | 20 |
+| Example: color hues | strip | 119 |
+| Example: modes and waveforms | strip | 108 |
 | Example: Smooth Speed Slider | strip | 122 |
-| Example: time and animation | strip | 98 |
-| fast pulse | strip | 83 |
-| fast pulse 3d | grid | 83 |
-| fire - blue | strip | 34 |
-| fire - red | strip | 34 |
-| fireblobs | strip | 20 |
-| FireFlies | strip | 79 |
-| firework dust | strip | 124 |
-| firework nova | cloud | 41 |
-| firework rocket sparks | strip | 58 |
-| fractal flower | grid | 26 |
-| Frogger 2D | grid | 124 |
-| glitch bands | strip | 36 |
-| Golden Tix | strip | 77 |
-| Gradient blue  purple pink | strip | 64 |
-| green ripple reflections | strip | 47 |
-| Halloween color twinkles | strip | 45 |
-| heart | grid | 39 |
-| heatshivers | strip | 41 |
-| Holiday_Diagonal_Stripes | grid | 83 |
-| Ice Floes 2D | grid | 14 |
-| Icicleblaze | grid | 40 |
-| index walk | strip | 123 |
-| Infinity Flower 2D | grid | 31 |
-| Iran - Solidarity | cloud | 10 |
-| KITT | strip | 70 |
-| KITT (w/ color picker) | strip | 68 |
-| lightning ZAP! | strip | 76 |
+| Example: time and animation | strip | 95 |
+| fast pulse | strip | 80 |
+| fast pulse 3d | grid | 80 |
+| fire - blue | strip | 32 |
+| fire - red | strip | 33 |
+| fireblobs | strip | 21 |
+| FireFlies | strip | 76 |
+| firework dust | strip | 123 |
+| firework nova | cloud | 35 |
+| firework rocket sparks | strip | 56 |
+| fractal flower | grid | 24 |
+| Frogger 2D | grid | 122 |
+| glitch bands | strip | 35 |
+| Golden Tix | strip | 74 |
+| Gradient blue  purple pink | strip | 61 |
+| green ripple reflections | strip | 46 |
+| Halloween color twinkles | strip | 43 |
+| heart | grid | 33 |
+| heatshivers | strip | 21 |
+| Holiday_Diagonal_Stripes | grid | 79 |
+| Ice Floes 2D | grid | 12 |
+| Icicleblaze | grid | 38 |
+| index walk | strip | 121 |
+| Infinity Flower 2D | grid | 30 |
+| Iran - Solidarity | cloud | 9 |
+| KITT | strip | 68 |
+| KITT (w/ color picker) | strip | 66 |
+| lightning ZAP! | strip | 72 |
 | Mandelbrot 2D | grid | 7 |
-| Map - Concentric | grid | 123 |
-| mapped vertical line 2D | grid | 121 |
-| marching rainbow | strip | 57 |
-| marching rainbow (buffered) | strip | 50 |
-| Matrix 2 tone pulse | strip | 37 |
-| matrix 2D honeycomb | strip | 42 |
-| matrix 2D pulse edit | strip | 52 |
-| Matrix Green Waterfall 2D | grid | 96 |
-| matrix rain | grid | 62 |
-| Metaballs of Fire 2D | grid | 16 |
-| Meteor Shower | strip | 111 |
-| MidpointDisplacement1D | strip | 119 |
-| millipede | strip | 72 |
-| millipede 1d/2d controls | grid | 81 |
-| neutronorbit | strip | 20 |
-| Newfire | strip | 69 |
-| novas | strip | 20 |
-| Nyan Lights | strip | 53 |
-| opposites | strip | 48 |
-| Performance test framework | strip | 57 |
-| Pew-Pew-Pew! | strip | 20 |
-| policeLights | strip | 124 |
-| portal | strip | 10 |
-| Pride Progress | strip | 64 |
-| quiet blinkfade | strip | 86 |
-| rainbow | strip | 123 |
-| Rainbow Comet | strip | 60 |
-| Rainbow Flag | strip | 77 |
-| rainbow fonts | strip | 94 |
+| Map - Concentric | grid | 122 |
+| mapped vertical line 2D | grid | 119 |
+| marching rainbow | strip | 55 |
+| marching rainbow (buffered) | strip | 48 |
+| Matrix 2 tone pulse | strip | 35 |
+| matrix 2D honeycomb | strip | 40 |
+| matrix 2D pulse edit | strip | 51 |
+| Matrix Green Waterfall 2D | grid | 93 |
+| matrix rain | grid | 59 |
+| Metaballs of Fire 2D | grid | 15 |
+| Meteor Shower | strip | 107 |
+| MidpointDisplacement1D | strip | 116 |
+| millipede | strip | 70 |
+| millipede 1d/2d controls | grid | 79 |
+| neutronorbit | strip | 13 |
+| Newfire | strip | 66 |
+| novas | strip | 18 |
+| Nyan Lights | strip | 51 |
+| opposites | strip | 46 |
+| Performance test framework | strip | 46 |
+| Pew-Pew-Pew! | strip | 19 |
+| policeLights | strip | 123 |
+| portal | strip | 9 |
+| Pride Progress | strip | 61 |
+| quiet blinkfade | strip | 83 |
+| rainbow | strip | 122 |
+| Rainbow Comet | strip | 58 |
+| Rainbow Flag | strip | 73 |
+| rainbow fonts | strip | 91 |
 | rainbow fonts 2 | strip | 83 |
-| rainbow melt | strip | 69 |
-| rainbow pinwheel | strip | 120 |
-| Rainbow rocket sparks | strip | 74 |
-| Rainbow Smiley | grid | — |
-| Rainbow v2 | strip | 122 |
+| rainbow melt | strip | 66 |
+| rainbow pinwheel | strip | 117 |
+| Rainbow rocket sparks | strip | 72 |
+| Rainbow Smiley | grid | 32 |
+| Rainbow v2 | strip | 121 |
 | Raindrops 2D | grid | 57 |
-| Red-Green XY 2D Sweep | grid | 82 |
-| regenbogendrogen | strip | 93 |
-| RGB Test Pattern | strip | 120 |
-| RGB-XYZ 3D Octants | cloud | 110 |
+| Red-Green XY 2D Sweep | grid | 79 |
+| regenbogendrogen | strip | 89 |
+| RGB Test Pattern | strip | 116 |
+| RGB-XYZ 3D Octants | cloud | 103 |
 | RGBW Mapping Tester | strip | 116 |
-| RGBW Mapping Tester - HSV Version | strip | 113 |
-| Scanner | strip | 59 |
-| scrolls | strip | 10 |
-| Shimmer Crossfade 2D | grid | 41 |
-| Sierpinski Rainbow 2D | grid | 68 |
-| Single Color Picker - wide or spot | strip | 104 |
-| sinpulse 3D | grid | 52 |
-| sinus | grid | 58 |
-| slow color shift | strip | 53 |
-| slowflies | strip | 34 |
-| snake | strip | 85 |
-| Solid Rainbow | strip | 124 |
-| sparkfire | strip | 35 |
-| sparks | strip | 81 |
-| sparks center | strip | 85 |
-| spin cycle | strip | 60 |
-| Spinwheel 2D | grid | 41 |
-| spotlights / rotation 3D | grid | 24 |
-| Spring Colors | strip | 96 |
-| Stacker | strip | 92 |
-| StarGen polar 2D | grid | 20 |
-| Static Christmas Lights - 4 Colors | strip | 108 |
-| static random colors | strip | 43 |
-| Swirlpool 2D | grid | 67 |
-| Synchronized Random Numbers | strip | 33 |
-| The Grinch | strip | 26 |
-| Three Red Pixels (array) | strip | 82 |
-| Three Red Pixels (mathy) | strip | 112 |
-| Thunderstorm | strip | 66 |
-| Time Flies 2D | grid | 124 |
-| tixy | grid | 20 |
-| Twinkle | strip | 75 |
-| Twinkling Classic Xmas Strands | strip | 21 |
-| TwoColorHSVMix | strip | 48 |
-| Unstable Orbits | grid | 84 |
-| Utility: Palettes | strip | — |
-| Utility: Perceptual hue | strip | 106 |
-| UtilityColorTemp | strip | 124 |
-| Voronoi Mix 2D | grid | 13 |
-| wanderedges | strip | 11 |
-| wanderers | strip | 69 |
-| White Rainbows | strip | 76 |
-| Wichmann–Hill PRNG | strip | 22 |
-| XmasFlies | strip | 30 |
-| xorcery 2D/3D | grid | 34 |
+| RGBW Mapping Tester - HSV Version | strip | 111 |
+| Scanner | strip | 57 |
+| scrolls | strip | 11 |
+| Shimmer Crossfade 2D | grid | 35 |
+| Sierpinski Rainbow 2D | grid | 67 |
+| Single Color Picker - wide or spot | strip | 101 |
+| sinpulse 3D | grid | 50 |
+| sinus | grid | 56 |
+| slow color shift | strip | 51 |
+| slowflies | strip | 20 |
+| snake | strip | 82 |
+| Solid Rainbow | strip | 123 |
+| sparkfire | strip | 33 |
+| sparks | strip | 78 |
+| sparks center | strip | 81 |
+| spin cycle | strip | 58 |
+| Spinwheel 2D | grid | 35 |
+| spotlights / rotation 3D | grid | 23 |
+| Spring Colors | strip | 93 |
+| Stacker | strip | 88 |
+| StarGen polar 2D | grid | 19 |
+| Static Christmas Lights - 4 Colors | strip | 103 |
+| static random colors | strip | 41 |
+| Swirlpool 2D | grid | 64 |
+| Synchronized Random Numbers | strip | 32 |
+| The Grinch | strip | 25 |
+| Three Red Pixels (array) | strip | 79 |
+| Three Red Pixels (mathy) | strip | 108 |
+| Thunderstorm | strip | 64 |
+| Time Flies 2D | grid | 122 |
+| tixy | grid | 67 |
+| Twinkle | strip | 69 |
+| Twinkling Classic Xmas Strands | strip | 20 |
+| TwoColorHSVMix | strip | 46 |
+| Unstable Orbits | grid | 81 |
+| Utility: Palettes | strip | 13 |
+| Utility: Perceptual hue | strip | 102 |
+| UtilityColorTemp | strip | 123 |
+| Voronoi Mix 2D | grid | 12 |
+| wanderedges | strip | 10 |
+| wanderers | strip | 67 |
+| White Rainbows | strip | 73 |
+| Wichmann–Hill PRNG | strip | 21 |
+| XmasFlies | strip | 29 |
+| xorcery 2D/3D | grid | 33 |

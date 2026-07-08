@@ -92,7 +92,7 @@ fn gallery_heap_model() {
         let base = live();
         let prog = bytecode::deserialize_lean(&blob).unwrap();
         reset_peak();
-        let mut eng = Engine::from_program_budgeted(prog, 300, 1, 4096);
+        let mut eng = Engine::from_program_budgeted(prog, 300, 1, 32 * 1024);
         for _ in 0..3 {
             eng.frame(Fx::from_f64(16.7));
         }

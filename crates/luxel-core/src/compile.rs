@@ -15,10 +15,60 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::ast::*;
+use crate::bytecode::op;
 use crate::diag::{line_col, Diagnostic, Span};
 use crate::fixed::Fx;
 use crate::parse::parse_program;
-use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Insn, Program, Value};
+use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Program, Value};
+
+/// Compiler IR: one virtual instruction, jump targets as INSTRUCTION
+/// INDICES. This never reaches the VM — [`assemble`] lowers it to the flat
+/// LXBC byte encoding (byte-offset jumps) that `Program.code` holds and the
+/// interpreter executes in place.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Insn {
+    Const(Value),
+    LoadG(u16),
+    StoreG(u16), // pops value, pushes it back (assignment is an expression)
+    LoadL(u8),
+    StoreL(u8), // ditto
+    LoadIdx,    // [arr idx] → [elem]
+    StoreIdx,   // [arr idx val] → [val]
+    ArrLen,     // [arr] → [len]
+    NewArray(u16),
+    Dup,
+    Dup2, // [a b] → [a b a b]
+    Pop,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Pow,
+    Neg,
+    Not,
+    BitNot,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+    Jmp(u32),
+    JmpIfFalse(u32),     // pops
+    JmpIfTruePeek(u32),  // ||: jump keeping the lhs value
+    JmpIfFalsePeek(u32), // &&
+    CallFn { fn_idx: u16, argc: u8 },
+    CallBuiltin { b: u16, argc: u8 },
+    CallValue { argc: u8 },
+    Ret,
+    RetNull,
+}
 
 const MAX_GLOBALS: usize = 256;
 // 255, not 256: FnDef.locals is a u8 slot *count* (a 256th slot would wrap
@@ -30,12 +80,173 @@ pub fn compile(src: &str) -> Result<Program, Diagnostic> {
     let mut c = Compiler::new(src);
     c.collect(&ast)?;
     c.emit_program(&ast)?;
-    Ok(Program {
-        fns: c.fns,
-        globals: c.globals,
-        exported_fns: c.exported_fns,
+    Ok(assemble(c.fns, c.globals, c.exported_fns))
+}
+
+/// Lower the compiler IR to the flat byte encoding the VM executes in
+/// place: two passes per function — measure each instruction's byte offset,
+/// then emit with jump targets mapped from instruction indices to byte
+/// offsets. Per-instruction positions collapse to offset-keyed runs.
+fn assemble(fns: Vec<FnIr>, globals: Vec<GlobalDef>, exported_fns: Vec<(String, u16)>) -> Program {
+    let mut code: Vec<u8> = Vec::new();
+    let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
+    for f in fns {
+        // pass 1: byte offset of each instruction (+ end)
+        let mut offsets: Vec<u32> = Vec::with_capacity(f.code.len() + 1);
+        let mut at = 0u32;
+        for insn in &f.code {
+            offsets.push(at);
+            at += insn_len(insn);
+        }
+        offsets.push(at);
+        // pass 2: emit
+        let code_start = code.len() as u32;
+        for insn in &f.code {
+            emit_insn(&mut code, insn, &offsets);
+        }
+        let code_len = code.len() as u32 - code_start;
+        // positions → offset-keyed runs (statement granularity ⇒ few runs)
+        let mut pos: Vec<(u32, u32, u32)> = Vec::new();
+        for (i, &(line, col)) in f.pos.iter().enumerate() {
+            match pos.last() {
+                Some(&(_, l, c)) if l == line && c == col => {}
+                _ => pos.push((offsets[i], line, col)),
+            }
+        }
+        defs.push(FnDef {
+            name: f.name,
+            params: f.params,
+            locals: f.local_names.len() as u8,
+            code_start,
+            code_len,
+            pos,
+            local_names: f.local_names,
+        });
+    }
+    Program {
+        code,
+        fns: defs,
+        globals,
+        exported_fns,
         pixel_count_g: 0,
-    })
+    }
+}
+
+/// Encoded byte length of one IR instruction.
+fn insn_len(insn: &Insn) -> u32 {
+    use Insn::*;
+    match insn {
+        Const(Value::Num(_)) | Const(Value::Arr(_)) => 5,
+        Const(Value::Fun(_)) | Const(Value::Builtin(_)) => 3,
+        LoadG(_) | StoreG(_) | NewArray(_) => 3,
+        LoadL(_) | StoreL(_) => 2,
+        Jmp(_) | JmpIfFalse(_) | JmpIfTruePeek(_) | JmpIfFalsePeek(_) => 5,
+        CallFn { .. } | CallBuiltin { .. } => 4,
+        CallValue { .. } => 2,
+        _ => 1,
+    }
+}
+
+fn emit_insn(out: &mut Vec<u8>, insn: &Insn, offsets: &[u32]) {
+    use Insn::*;
+    let target = |t: u32| offsets.get(t as usize).copied().unwrap_or(*offsets.last().unwrap());
+    match insn {
+        Const(Value::Num(v)) => {
+            out.push(op::CONST_NUM);
+            out.extend_from_slice(&v.raw().to_le_bytes());
+        }
+        // Arr constants don't exist in compiler output; encode zero.
+        Const(Value::Arr(_)) => {
+            out.push(op::CONST_NUM);
+            out.extend_from_slice(&0i32.to_le_bytes());
+        }
+        Const(Value::Fun(i)) => {
+            out.push(op::CONST_FUN);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        Const(Value::Builtin(b)) => {
+            out.push(op::CONST_BUILTIN);
+            out.extend_from_slice(&b.to_le_bytes());
+        }
+        LoadG(i) => {
+            out.push(op::LOAD_G);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        StoreG(i) => {
+            out.push(op::STORE_G);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        LoadL(i) => {
+            out.push(op::LOAD_L);
+            out.push(*i);
+        }
+        StoreL(i) => {
+            out.push(op::STORE_L);
+            out.push(*i);
+        }
+        LoadIdx => out.push(op::LOAD_IDX),
+        StoreIdx => out.push(op::STORE_IDX),
+        ArrLen => out.push(op::ARR_LEN),
+        NewArray(n) => {
+            out.push(op::NEW_ARRAY);
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        Dup => out.push(op::DUP),
+        Dup2 => out.push(op::DUP2),
+        Pop => out.push(op::POP),
+        Add => out.push(op::ADD),
+        Sub => out.push(op::SUB),
+        Mul => out.push(op::MUL),
+        Div => out.push(op::DIV),
+        Rem => out.push(op::REM),
+        Pow => out.push(op::POW),
+        Neg => out.push(op::NEG),
+        Not => out.push(op::NOT),
+        BitNot => out.push(op::BIT_NOT),
+        BitAnd => out.push(op::BIT_AND),
+        BitOr => out.push(op::BIT_OR),
+        BitXor => out.push(op::BIT_XOR),
+        Shl => out.push(op::SHL),
+        Shr => out.push(op::SHR),
+        Lt => out.push(op::LT),
+        Le => out.push(op::LE),
+        Gt => out.push(op::GT),
+        Ge => out.push(op::GE),
+        Eq => out.push(op::EQ),
+        Ne => out.push(op::NE),
+        Jmp(t) => {
+            out.push(op::JMP);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        JmpIfFalse(t) => {
+            out.push(op::JMP_IF_FALSE);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        JmpIfTruePeek(t) => {
+            out.push(op::JMP_IF_TRUE_PEEK);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        JmpIfFalsePeek(t) => {
+            out.push(op::JMP_IF_FALSE_PEEK);
+            out.extend_from_slice(&target(*t).to_le_bytes());
+        }
+        CallFn { fn_idx, argc } => {
+            out.push(op::CALL_FN);
+            out.extend_from_slice(&fn_idx.to_le_bytes());
+            out.push(*argc);
+        }
+        CallBuiltin { b, argc } => {
+            out.push(op::CALL_BUILTIN);
+            out.extend_from_slice(&b.to_le_bytes());
+            out.push(*argc);
+        }
+        CallValue { argc } => {
+            out.push(op::CALL_VALUE);
+            out.push(*argc);
+        }
+        Ret => out.push(op::RET),
+        RetNull => out.push(op::RET_NULL),
+    }
 }
 
 /// Predefined constants (name, value). `pixelCount` is global 0, written by
@@ -83,10 +294,34 @@ fn predefined() -> Vec<GlobalDef> {
     ]
 }
 
+/// One function in compiler IR form (see [`Insn`]); [`assemble`] turns the
+/// full set into the byte-coded [`Program`].
+struct FnIr {
+    name: String,
+    params: u8,
+    code: Vec<Insn>,
+    /// (line, col) per instruction — collapsed to runs at assembly.
+    pos: Vec<(u32, u32)>,
+    /// Local slot names, params first (count = the local slot count).
+    local_names: Vec<String>,
+}
+
+impl FnIr {
+    fn placeholder(name: String) -> FnIr {
+        FnIr {
+            name,
+            params: 0,
+            code: Vec::new(),
+            pos: Vec::new(),
+            local_names: Vec::new(),
+        }
+    }
+}
+
 struct Compiler<'s> {
     src: &'s str,
     globals: Vec<GlobalDef>,
-    fns: Vec<FnDef>,
+    fns: Vec<FnIr>,
     /// Top-level named functions: (name, fn index, exported).
     named_fns: Vec<(String, u16, bool)>,
     exported_fns: Vec<(String, u16)>,
@@ -116,7 +351,7 @@ impl<'s> Compiler<'s> {
         Compiler {
             src,
             globals: predefined(),
-            fns: alloc::vec![FnDef::placeholder("<init>".to_string())],
+            fns: alloc::vec![FnIr::placeholder("<init>".to_string())],
             named_fns: Vec::new(),
             exported_fns: Vec::new(),
             demoted: Vec::new(),
@@ -164,7 +399,7 @@ impl<'s> Compiler<'s> {
         register_fns(self, top);
         // reserve placeholder defs so indices are stable during emission
         for (name, _, _) in self.named_fns.clone() {
-            self.fns.push(FnDef::placeholder(name));
+            self.fns.push(FnIr::placeholder(name));
         }
         // top level: every var / assignment is a global (even inside blocks)
         let empty: Vec<String> = Vec::new();
@@ -396,7 +631,7 @@ impl<'s> Compiler<'s> {
         params: &[String],
         body: &[Stmt],
         span: Span,
-    ) -> Result<FnDef, Diagnostic> {
+    ) -> Result<FnIr, Diagnostic> {
         let locals = function_scope(params, body);
         if locals.len() > MAX_LOCALS {
             return Err(Diagnostic::new(
@@ -421,7 +656,7 @@ impl<'s> Compiler<'s> {
         let idx = self.fns.len() as u16;
         let name = format!("<lambda#{idx}>");
         // reserve slot first (nested lambdas may allocate more)
-        self.fns.push(FnDef::placeholder(name.clone()));
+        self.fns.push(FnIr::placeholder(name.clone()));
         let def = match body {
             LambdaBody::Expr(e) => {
                 let locals = function_scope(params, &[]);
@@ -983,11 +1218,10 @@ impl FnCtx {
         self.code[at] = insn;
     }
 
-    fn finish(self, name: String, params: u8) -> FnDef {
-        FnDef {
+    fn finish(self, name: String, params: u8) -> FnIr {
+        FnIr {
             name,
             params,
-            locals: self.locals.len() as u8,
             code: self.code,
             pos: self.pos,
             local_names: self.locals,

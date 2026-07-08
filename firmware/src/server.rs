@@ -249,6 +249,84 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
     }
 }
 
+/// Streams a pattern upload (an LXP1 envelope: name + source + LXBC) into
+/// an exact-size heap Vec, then validates and dispatches it — `/api/code`
+/// runs it, `/api/patterns` stores it. Streaming keeps the per-connection
+/// HTTP buffer small (4 KB — big uploads used to dictate 24 KB for every
+/// connection) and removes the upload-size cap: the only limit is what
+/// actually fits free heap, reserved fallibly. If the running pattern owns
+/// too much heap for the buffer, the engine is frozen (its heap freed) and
+/// the reservation retried — the upload that follows revives rendering
+/// anyway.
+struct PatternService {
+    save: bool,
+}
+
+impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, PathParameters>
+    for PatternService
+{
+    async fn call_request_handler_service<
+        R: picoserve::io::Read,
+        W: picoserve::response::ResponseWriter<Error = R::Error>,
+    >(
+        &self,
+        _state: &State,
+        _path_parameters: PathParameters,
+        mut request: picoserve::request::Request<'_, R>,
+        response_writer: W,
+    ) -> Result<picoserve::ResponseSent, W::Error> {
+        use picoserve::io::Read as _;
+
+        const MAX_UPLOAD: usize = 80 * 1024;
+
+        let body = 'resp: {
+            let body = request.body_connection.body();
+            let expected = body.content_length();
+            if expected == 0 || expected > MAX_UPLOAD {
+                break 'resp format!(
+                    "{{\"ok\":false,\"error\":\"pattern upload must be 1..={} bytes\"}}",
+                    MAX_UPLOAD
+                );
+            }
+            let mut env: Vec<u8> = Vec::new();
+            if env.try_reserve_exact(expected).is_err() {
+                // the running pattern owns the heap — freeze it (frees its
+                // program + arrays; the strip holds its last frame) and
+                // retry once the render task has drained the message
+                MSG_QUEUE.send(Msg::Freeze).await;
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(60)).await;
+                if env.try_reserve_exact(expected).is_err() {
+                    break 'resp String::from(
+                        "{\"ok\":false,\"error\":\"not enough free memory for this upload\"}",
+                    );
+                }
+            }
+            env.resize(expected, 0);
+            let mut reader = body.reader();
+            let mut fill = 0usize;
+            while fill < expected {
+                match reader.read(&mut env[fill..]).await {
+                    Ok(0) => break,
+                    Ok(n) => fill += n,
+                    Err(_) => break,
+                }
+            }
+            if fill != expected {
+                break 'resp String::from("{\"ok\":false,\"error\":\"upload truncated\"}");
+            }
+            if self.save {
+                api_patterns_save(&env)
+            } else {
+                api_code(env).await
+            }
+        };
+
+        use picoserve::response::IntoResponse as _;
+        let connection = request.body_connection.finalize().await?;
+        json_response(body).write_to(connection, response_writer).await
+    }
+}
+
 /// Streams an app image into the inactive OTA slot. See src/ota.rs. Reboots
 /// ~400 ms after the success response so the reply reaches the client.
 struct OtaService;
@@ -267,6 +345,10 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
         response_writer: W,
     ) -> Result<picoserve::ResponseSent, W::Error> {
         use picoserve::io::Read as _;
+
+        // free the engine's heap for the flash phase — a reboot follows a
+        // successful OTA anyway, and the strip just holds its last frame
+        MSG_QUEUE.send(Msg::Freeze).await;
 
         let result: Result<u32, &'static str> = {
             // NOTE: picoserve's read_request timeout is one timer for the
@@ -389,8 +471,8 @@ fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, Strin
 /// allocate source/blob copies — while a heavy pattern owns the heap those
 /// copies OOM'd (soak v5). The render task frees the old engine first,
 /// then parses.
-async fn api_code(raw: Vec<u8>) -> ApiResponse {
-    json_response(match decode_upload(&raw) {
+async fn api_code(raw: Vec<u8>) -> String {
+    match decode_upload(&raw) {
         Ok(_) => {
             crate::playlist::stop(); // a manual push takes over from the playlist
             MSG_QUEUE.send(Msg::Code { env: raw }).await;
@@ -398,7 +480,7 @@ async fn api_code(raw: Vec<u8>) -> ApiResponse {
             String::from("{\"ok\":true}")
         }
         Err(e) => e,
-    })
+    }
 }
 
 /// POST /api/patterns — LXP1 envelope (name + source + bytecode) → persist
@@ -516,6 +598,31 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         request,
                         response_writer,
                     ))
+                    .await;
+                }
+                // pattern uploads (LXP1 envelopes) stream into an exact-size
+                // heap Vec — no resident big HTTP buffer, no upload cap
+                // beyond what actually fits free heap
+                "/api/code" => {
+                    return alloc::boxed::Box::pin(
+                        PatternService { save: false }.call_request_handler_service(
+                            state,
+                            path_parameters,
+                            request,
+                            response_writer,
+                        ),
+                    )
+                    .await;
+                }
+                "/api/patterns" => {
+                    return alloc::boxed::Box::pin(
+                        PatternService { save: true }.call_request_handler_service(
+                            state,
+                            path_parameters,
+                            request,
+                            response_writer,
+                        ),
+                    )
                     .await;
                 }
                 // body: "ssid\npassword" → stored in flash, applied by the
@@ -788,12 +895,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     Some(json_response(String::from("{\"ok\":true}")))
                 }
-                "/api/code" => Some(api_code(raw).await),
+                // (/api/code and /api/patterns stream their own bodies via
+                // PatternService — dispatched before the body is read)
                 "/api/control" => Some(api_control(text(&raw)).await),
                 "/api/var" => Some(api_var(text(&raw)).await),
-                // save a pattern: LXP1 envelope, bytecode decode-validated
-                // here so the store never holds a stale blob (mirrors serve.rs).
-                "/api/patterns" => Some(json_response(api_patterns_save(&raw))),
                 // POST /api/patterns/<id>/activate — run a stored pattern
                 r if r.starts_with("/api/patterns/") => {
                     Some(match r["/api/patterns/".len()..].strip_suffix("/activate") {
@@ -1084,18 +1189,48 @@ static CONFIG: picoserve::Config = picoserve::Config {
 
 #[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
 pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
-    // Pattern uploads arrive in the http buffer; since v0.1.24 a POST is an
-    // LXP1 envelope (source + LXBC bytecode), so size it for both together —
-    // 24 KB covers every pattern the device can actually fit; the true
-    // giants exceed the runtime floor anyway. Heap-allocated so the task
-    // future (statically allocated per pool slot) stays small.
+    // Only the TCP rx/tx buffers persist (they must exist to accept). The
+    // HTTP buffer is allocated per CONNECTION and freed at close, and it's
+    // small: request lines + headers + text bodies. Everything big streams
+    // past it — OTA images, asset archives, and pattern uploads all read
+    // their bodies in chunks (PatternService/OtaService/AssetsService), so
+    // no connection ever needs a body-sized buffer. If even 4 KB can't be
+    // allocated, the connection is turned away with a 503 instead of an
+    // alloc panic.
     let mut tcp_rx_buffer = alloc::vec![0u8; 4096];
     let mut tcp_tx_buffer = alloc::vec![0u8; 4096];
-    let mut http_buffer = alloc::vec![0u8; 24 * 1024];
 
     let app = make_app();
-    picoserve::Server::new(&app, &CONFIG, &mut http_buffer)
-        .listen_and_serve(task_id, stack, 80, &mut tcp_rx_buffer, &mut tcp_tx_buffer)
-        .await
-        .into_never()
+    loop {
+        let mut socket =
+            embassy_net::tcp::TcpSocket::new(stack, &mut tcp_rx_buffer, &mut tcp_tx_buffer);
+        if socket.accept(80).await.is_err() {
+            continue;
+        }
+        // same knobs picoserve's own accept loop sets
+        socket.set_keep_alive(Some(embassy_time::Duration::from_secs(30)));
+        socket.set_timeout(Some(embassy_time::Duration::from_secs(45)));
+
+        let mut http_buffer: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        if http_buffer.try_reserve_exact(4 * 1024).is_err() {
+            let mut msg: &[u8] =
+                b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            while !msg.is_empty() {
+                match socket.write(msg).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => msg = &msg[n..],
+                }
+            }
+            let _ = socket.flush().await;
+            socket.close();
+            esp_println::println!("http[{}]: 503 — no heap for a connection buffer", task_id);
+            continue;
+        }
+        http_buffer.resize(4 * 1024, 0);
+
+        let _ = picoserve::Server::new(&app, &CONFIG, &mut http_buffer)
+            .serve(socket)
+            .await;
+        // http_buffer freed here
+    }
 }

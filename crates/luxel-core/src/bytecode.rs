@@ -19,10 +19,13 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::fixed::Fx;
-use crate::vm::{lookup_builtin, FnDef, GlobalDef, Insn, Program, Value, BUILTINS};
+use crate::vm::{lookup_builtin, FnDef, GlobalDef, Program, BUILTINS};
 
 pub const MAGIC: [u8; 4] = *b"LXBC";
-pub const FORMAT_VERSION: u16 = 1;
+/// v2: jump operands are function-relative BYTE offsets (v1 used
+/// instruction indices) and debug positions are offset-keyed runs — the
+/// encoding the VM executes in place.
+pub const FORMAT_VERSION: u16 = 2;
 
 /// Decoder hard limits — bound allocations before trusting any count field.
 const MAX_BLOB: usize = 256 * 1024;
@@ -118,7 +121,7 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope<'_>, BcError> {
 
 // ---- opcodes ----
 
-mod op {
+pub(crate) mod op {
     pub const CONST_NUM: u8 = 0x01;
     pub const CONST_FUN: u8 = 0x02;
     pub const CONST_BUILTIN: u8 = 0x03;
@@ -193,35 +196,137 @@ impl Writer {
     }
 }
 
+/// One instruction, walked in its byte encoding: where it ends and which
+/// operands need validation or import-slot translation. Shared by the
+/// serializer (runtime builtin id → import slot) and the decoder (the
+/// reverse, plus full validation).
+struct Walk {
+    /// Offset just past this instruction.
+    next: usize,
+    /// Offset of a u16 builtin operand (Const Builtin / CallBuiltin).
+    builtin_at: Option<usize>,
+    fn_ref: Option<u16>,
+    global_ref: Option<u16>,
+    local_ref: Option<u8>,
+    jump: Option<u32>,
+    argc: Option<u8>,
+}
+
+/// Walk the instruction starting at `at`. Errors on an unknown opcode or an
+/// instruction truncated by the end of `code`.
+fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
+    let mut w = Walk {
+        next: at + 1,
+        builtin_at: None,
+        fn_ref: None,
+        global_ref: None,
+        local_ref: None,
+        jump: None,
+        argc: None,
+    };
+    let need = |n: usize| -> Result<(), BcError> {
+        if at + 1 + n <= code.len() {
+            Ok(())
+        } else {
+            err("truncated instruction")
+        }
+    };
+    let u16_at = |p: usize| u16::from_le_bytes([code[p], code[p + 1]]);
+    let u32_at = |p: usize| {
+        u32::from_le_bytes([code[p], code[p + 1], code[p + 2], code[p + 3]])
+    };
+    match *code.get(at).ok_or_else(|| BcError::Malformed("truncated instruction".to_string()))? {
+        op::CONST_NUM => {
+            need(4)?;
+            w.next = at + 5;
+        }
+        op::CONST_FUN => {
+            need(2)?;
+            w.fn_ref = Some(u16_at(at + 1));
+            w.next = at + 3;
+        }
+        op::CONST_BUILTIN => {
+            need(2)?;
+            w.builtin_at = Some(at + 1);
+            w.next = at + 3;
+        }
+        op::LOAD_G | op::STORE_G => {
+            need(2)?;
+            w.global_ref = Some(u16_at(at + 1));
+            w.next = at + 3;
+        }
+        op::LOAD_L | op::STORE_L => {
+            need(1)?;
+            w.local_ref = Some(code[at + 1]);
+            w.next = at + 2;
+        }
+        op::NEW_ARRAY => {
+            need(2)?;
+            w.next = at + 3;
+        }
+        op::JMP | op::JMP_IF_FALSE | op::JMP_IF_TRUE_PEEK | op::JMP_IF_FALSE_PEEK => {
+            need(4)?;
+            w.jump = Some(u32_at(at + 1));
+            w.next = at + 5;
+        }
+        op::CALL_FN => {
+            need(3)?;
+            w.fn_ref = Some(u16_at(at + 1));
+            w.argc = Some(code[at + 3]);
+            w.next = at + 4;
+        }
+        op::CALL_BUILTIN => {
+            need(3)?;
+            w.builtin_at = Some(at + 1);
+            w.argc = Some(code[at + 3]);
+            w.next = at + 4;
+        }
+        op::CALL_VALUE => {
+            need(1)?;
+            w.argc = Some(code[at + 1]);
+            w.next = at + 2;
+        }
+        op::LOAD_IDX | op::STORE_IDX | op::ARR_LEN | op::DUP | op::DUP2 | op::POP | op::ADD
+        | op::SUB | op::MUL | op::DIV | op::REM | op::POW | op::NEG | op::NOT | op::BIT_NOT
+        | op::BIT_AND | op::BIT_OR | op::BIT_XOR | op::SHL | op::SHR | op::LT | op::LE
+        | op::GT | op::GE | op::EQ | op::NE | op::RET | op::RET_NULL => {}
+        _ => return err("unknown opcode"),
+    }
+    Ok(w)
+}
+
 /// Serialize a compiled program (with debug info — positions + local names).
 ///
 /// Fails only on a `Program` the compiler could not have produced (e.g. a
 /// hand-built one referencing a builtin id past the table).
 pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
-    // Builtin import table: unique ids in first-appearance order.
-    let mut imports: Vec<u16> = Vec::new();
-    let slot_of = |imports: &mut Vec<u16>, b: u16| -> u16 {
-        match imports.iter().position(|&x| x == b) {
-            Some(i) => i as u16,
-            None => {
-                imports.push(b);
-                (imports.len() - 1) as u16
-            }
+    let fn_code = |f: &FnDef| -> Result<core::ops::Range<usize>, BcError> {
+        let s = f.code_start as usize;
+        let e = s + f.code_len as usize;
+        if e <= prog.code.len() && s <= e {
+            Ok(s..e)
+        } else {
+            err("function code range out of bounds")
         }
     };
+
+    // Builtin import table: unique RUNTIME ids in first-appearance order.
+    let mut imports: Vec<u16> = Vec::new();
     for f in &prog.fns {
-        for insn in &f.code {
-            match insn {
-                Insn::Const(Value::Builtin(b)) | Insn::CallBuiltin { b, .. } => {
-                    slot_of(&mut imports, *b);
+        let code = &prog.code[fn_code(f)?];
+        let mut at = 0;
+        while at < code.len() {
+            let w = walk_insn(code, at)?;
+            if let Some(p) = w.builtin_at {
+                let b = u16::from_le_bytes([code[p], code[p + 1]]);
+                if b as usize >= BUILTINS.len() {
+                    return Err(BcError::Malformed(format!("builtin id {b} out of range")));
                 }
-                _ => {}
+                if !imports.contains(&b) {
+                    imports.push(b);
+                }
             }
-        }
-    }
-    for &b in &imports {
-        if b as usize >= BUILTINS.len() {
-            return Err(BcError::Malformed(format!("builtin id {b} out of range")));
+            at = w.next;
         }
     }
 
@@ -246,27 +351,30 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
         w.i32(g.init.raw());
     }
 
-    let import_slot = |b: u16| imports.iter().position(|&x| x == b).unwrap() as u16;
     for f in &prog.fns {
         w.str8(&f.name)?;
         w.u8(f.params);
         w.u16(f.locals as u16);
-        w.u32(f.code.len() as u32);
-        for insn in &f.code {
-            emit_insn(&mut w, insn, &import_slot);
-        }
-        // debug: RLE positions (statement granularity → long runs)
-        let mut runs: Vec<(u16, u32, u32)> = Vec::new();
-        for pc in 0..f.code.len() {
-            let (line, col) = f.pos_at(pc as u32);
-            match runs.last_mut() {
-                Some((count, l, c)) if *l == line && *c == col && *count < u16::MAX => *count += 1,
-                _ => runs.push((1, line, col)),
+        w.u32(f.code_len);
+        // code bytes verbatim, then builtin operands rewritten to slots
+        let out_base = w.out.len();
+        let range = fn_code(f)?;
+        w.out.extend_from_slice(&prog.code[range.clone()]);
+        let code = &prog.code[range];
+        let mut at = 0;
+        while at < code.len() {
+            let walk = walk_insn(code, at)?;
+            if let Some(p) = walk.builtin_at {
+                let b = u16::from_le_bytes([code[p], code[p + 1]]);
+                let slot = imports.iter().position(|&x| x == b).unwrap() as u16;
+                w.out[out_base + p..out_base + p + 2].copy_from_slice(&slot.to_le_bytes());
             }
+            at = walk.next;
         }
-        w.u32(runs.len() as u32);
-        for (count, line, col) in runs {
-            w.u16(count);
+        // debug: offset-keyed source-position runs
+        w.u32(f.pos.len() as u32);
+        for &(off, line, col) in &f.pos {
+            w.u32(off);
             w.u32(line);
             w.u32(col);
         }
@@ -283,107 +391,6 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
     Ok(w.out)
 }
 
-fn emit_insn(w: &mut Writer, insn: &Insn, import_slot: &dyn Fn(u16) -> u16) {
-    use Insn::*;
-    match insn {
-        Const(Value::Num(v)) => {
-            w.u8(op::CONST_NUM);
-            w.i32(v.raw());
-        }
-        Const(Value::Fun(i)) => {
-            w.u8(op::CONST_FUN);
-            w.u16(*i);
-        }
-        Const(Value::Builtin(b)) => {
-            w.u8(op::CONST_BUILTIN);
-            w.u16(import_slot(*b));
-        }
-        // Arr constants don't exist in compiler output (arrays are built at
-        // runtime); encode the handle-less equivalent, zero.
-        Const(Value::Arr(_)) => {
-            w.u8(op::CONST_NUM);
-            w.i32(0);
-        }
-        LoadG(i) => {
-            w.u8(op::LOAD_G);
-            w.u16(*i);
-        }
-        StoreG(i) => {
-            w.u8(op::STORE_G);
-            w.u16(*i);
-        }
-        LoadL(i) => {
-            w.u8(op::LOAD_L);
-            w.u8(*i);
-        }
-        StoreL(i) => {
-            w.u8(op::STORE_L);
-            w.u8(*i);
-        }
-        LoadIdx => w.u8(op::LOAD_IDX),
-        StoreIdx => w.u8(op::STORE_IDX),
-        ArrLen => w.u8(op::ARR_LEN),
-        NewArray(n) => {
-            w.u8(op::NEW_ARRAY);
-            w.u16(*n);
-        }
-        Dup => w.u8(op::DUP),
-        Dup2 => w.u8(op::DUP2),
-        Pop => w.u8(op::POP),
-        Add => w.u8(op::ADD),
-        Sub => w.u8(op::SUB),
-        Mul => w.u8(op::MUL),
-        Div => w.u8(op::DIV),
-        Rem => w.u8(op::REM),
-        Pow => w.u8(op::POW),
-        Neg => w.u8(op::NEG),
-        Not => w.u8(op::NOT),
-        BitNot => w.u8(op::BIT_NOT),
-        BitAnd => w.u8(op::BIT_AND),
-        BitOr => w.u8(op::BIT_OR),
-        BitXor => w.u8(op::BIT_XOR),
-        Shl => w.u8(op::SHL),
-        Shr => w.u8(op::SHR),
-        Lt => w.u8(op::LT),
-        Le => w.u8(op::LE),
-        Gt => w.u8(op::GT),
-        Ge => w.u8(op::GE),
-        Eq => w.u8(op::EQ),
-        Ne => w.u8(op::NE),
-        Jmp(t) => {
-            w.u8(op::JMP);
-            w.u32(*t);
-        }
-        JmpIfFalse(t) => {
-            w.u8(op::JMP_IF_FALSE);
-            w.u32(*t);
-        }
-        JmpIfTruePeek(t) => {
-            w.u8(op::JMP_IF_TRUE_PEEK);
-            w.u32(*t);
-        }
-        JmpIfFalsePeek(t) => {
-            w.u8(op::JMP_IF_FALSE_PEEK);
-            w.u32(*t);
-        }
-        CallFn { fn_idx, argc } => {
-            w.u8(op::CALL_FN);
-            w.u16(*fn_idx);
-            w.u8(*argc);
-        }
-        CallBuiltin { b, argc } => {
-            w.u8(op::CALL_BUILTIN);
-            w.u16(import_slot(*b));
-            w.u8(*argc);
-        }
-        CallValue { argc } => {
-            w.u8(op::CALL_VALUE);
-            w.u8(*argc);
-        }
-        Ret => w.u8(op::RET),
-        RetNull => w.u8(op::RET_NULL),
-    }
-}
 
 // ---- deserialize ----
 
@@ -499,7 +506,8 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
     }
 
     // builtin imports, resolved by name to runtime ids
-    let mut imports: Vec<u16> = Vec::with_capacity(n_imports);
+    let mut imports: Vec<u16> = Vec::new();
+    reserve(&mut imports, n_imports)?;
     for _ in 0..n_imports {
         let name = r.str8()?;
         match lookup_builtin(name) {
@@ -530,10 +538,13 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         }
     }
 
+    let mut prog_code: Vec<u8> = Vec::new();
     let mut fns: Vec<FnDef> = Vec::new();
     if collect {
         reserve(&mut fns, n_fns)?;
     }
+    // instruction-boundary bitmap, reused across functions (transient)
+    let mut bits: Vec<u64> = Vec::new();
     for _ in 0..n_fns {
         let name = r.str8()?;
         let params = r.u8()?;
@@ -548,47 +559,97 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         if code_len > MAX_CODE {
             return err("function too long");
         }
-        // cheapest possible insn is 1 byte — pre-check before allocating
-        if code_len > bytes.len() - r.at {
-            return err("truncated code");
+        let sect = r.take(code_len)?;
+
+        // walk 1: instruction boundaries (also proves decodability)
+        let words = code_len / 64 + 1;
+        bits.clear();
+        reserve(&mut bits, words)?;
+        bits.resize(words, 0);
+        let mut at = 0usize;
+        while at < code_len {
+            bits[at / 64] |= 1u64 << (at % 64);
+            at = walk_insn(sect, at)?.next;
         }
-        let mut code: Vec<Insn> = Vec::new();
+        if at != code_len {
+            return err("instruction overruns function end");
+        }
+
+        // collect: append the section now; builtin operands are patched in
+        // the copy during walk 2
+        let code_start = prog_code.len();
         if collect {
-            reserve(&mut code, code_len)?;
+            reserve(&mut prog_code, code_len)?;
+            prog_code.extend_from_slice(sect);
         }
-        for _ in 0..code_len {
-            let insn = read_insn(&mut r, &imports, n_fns, n_globals, locals, code_len)?;
-            if collect {
-                code.push(insn);
+
+        // walk 2: operand validation (+ builtin slot → runtime id rewrite)
+        let mut at = 0usize;
+        while at < code_len {
+            let w = walk_insn(sect, at)?;
+            if let Some(i) = w.fn_ref {
+                if i as usize >= n_fns {
+                    return err("function index out of range");
+                }
             }
+            if let Some(i) = w.global_ref {
+                if i as usize >= n_globals {
+                    return err("global index out of range");
+                }
+            }
+            if let Some(i) = w.local_ref {
+                if i as usize >= locals {
+                    return err("local slot out of range");
+                }
+            }
+            if let Some(a) = w.argc {
+                if a > MAX_ARGC {
+                    return err("argc too large");
+                }
+            }
+            if let Some(t) = w.jump {
+                let t = t as usize;
+                // == code_len is a valid "fall off the end" target
+                if t > code_len || (t < code_len && bits[t / 64] & (1u64 << (t % 64)) == 0) {
+                    return err("jump target not on an instruction boundary");
+                }
+            }
+            if let Some(p) = w.builtin_at {
+                let slot = u16::from_le_bytes([sect[p], sect[p + 1]]) as usize;
+                let Some(&b) = imports.get(slot) else {
+                    return err("builtin import slot out of range");
+                };
+                if collect {
+                    prog_code[code_start + p..code_start + p + 2]
+                        .copy_from_slice(&b.to_le_bytes());
+                }
+            }
+            at = w.next;
         }
-        let mut pos: Vec<(u32, u32)> = Vec::new();
+
+        // debug info: offset-keyed source-position runs + local names
+        let mut pos: Vec<(u32, u32, u32)> = Vec::new();
         let mut local_names: Vec<String> = Vec::new();
         if debug {
             let n_runs = r.u32()? as usize;
-            if n_runs > code_len {
+            if n_runs > code_len + 1 {
                 return err("bad debug runs");
             }
             if keep_debug {
-                reserve(&mut pos, code_len)?;
+                reserve(&mut pos, n_runs)?;
             }
-            let mut covered = 0usize;
+            let mut prev: Option<u32> = None;
             for _ in 0..n_runs {
-                let count = r.u16()? as usize;
+                let off = r.u32()?;
                 let line = r.u32()?;
                 let col = r.u32()?;
-                if covered + count > code_len {
-                    return err("debug runs exceed code length");
+                if off as usize >= code_len.max(1) || prev.is_some_and(|p| off <= p) {
+                    return err("debug runs not ascending");
                 }
-                covered += count;
+                prev = Some(off);
                 if keep_debug {
-                    for _ in 0..count {
-                        pos.push((line, col));
-                    }
+                    pos.push((off, line, col));
                 }
-            }
-            if covered != code_len {
-                return err("debug runs shorter than code");
             }
             if keep_debug {
                 reserve(&mut local_names, locals)?;
@@ -605,7 +666,8 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
                 name: String::from(name),
                 params,
                 locals: locals as u8,
-                code,
+                code_start: code_start as u32,
+                code_len: code_len as u32,
                 pos,
                 local_names,
             });
@@ -632,124 +694,10 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
     }
 
     Ok(collect.then(|| Program {
+        code: prog_code,
         fns,
         globals,
         exported_fns,
         pixel_count_g,
     }))
-}
-
-fn read_insn(
-    r: &mut Reader,
-    imports: &[u16],
-    n_fns: usize,
-    n_globals: usize,
-    locals: usize,
-    code_len: usize,
-) -> Result<Insn, BcError> {
-    use Insn::*;
-    let opcode = r.u8()?;
-    let fn_idx = |i: u16| -> Result<u16, BcError> {
-        if (i as usize) < n_fns {
-            Ok(i)
-        } else {
-            err("function index out of range")
-        }
-    };
-    let global = |i: u16| -> Result<u16, BcError> {
-        if (i as usize) < n_globals {
-            Ok(i)
-        } else {
-            err("global index out of range")
-        }
-    };
-    let local = |i: u8| -> Result<u8, BcError> {
-        if (i as usize) < locals {
-            Ok(i)
-        } else {
-            err("local slot out of range")
-        }
-    };
-    let builtin = |slot: u16| -> Result<u16, BcError> {
-        imports
-            .get(slot as usize)
-            .copied()
-            .ok_or_else(|| BcError::Malformed("builtin import slot out of range".to_string()))
-    };
-    // targets may equal code_len (fetch past the end returns like RetNull),
-    // never exceed it
-    let target = |t: u32| -> Result<u32, BcError> {
-        if t as usize <= code_len {
-            Ok(t)
-        } else {
-            err("jump target out of range")
-        }
-    };
-    let argc = |a: u8| -> Result<u8, BcError> {
-        if a <= MAX_ARGC {
-            Ok(a)
-        } else {
-            err("argc too large")
-        }
-    };
-    Ok(match opcode {
-        op::CONST_NUM => Const(Value::Num(Fx::from_raw(r.i32()?))),
-        op::CONST_FUN => Const(Value::Fun(fn_idx(r.u16()?)?)),
-        op::CONST_BUILTIN => Const(Value::Builtin(builtin(r.u16()?)?)),
-        op::LOAD_G => LoadG(global(r.u16()?)?),
-        op::STORE_G => StoreG(global(r.u16()?)?),
-        op::LOAD_L => LoadL(local(r.u8()?)?),
-        op::STORE_L => StoreL(local(r.u8()?)?),
-        op::LOAD_IDX => LoadIdx,
-        op::STORE_IDX => StoreIdx,
-        op::ARR_LEN => ArrLen,
-        op::NEW_ARRAY => NewArray(r.u16()?),
-        op::DUP => Dup,
-        op::DUP2 => Dup2,
-        op::POP => Pop,
-        op::ADD => Add,
-        op::SUB => Sub,
-        op::MUL => Mul,
-        op::DIV => Div,
-        op::REM => Rem,
-        op::POW => Pow,
-        op::NEG => Neg,
-        op::NOT => Not,
-        op::BIT_NOT => BitNot,
-        op::BIT_AND => BitAnd,
-        op::BIT_OR => BitOr,
-        op::BIT_XOR => BitXor,
-        op::SHL => Shl,
-        op::SHR => Shr,
-        op::LT => Lt,
-        op::LE => Le,
-        op::GT => Gt,
-        op::GE => Ge,
-        op::EQ => Eq,
-        op::NE => Ne,
-        op::JMP => Jmp(target(r.u32()?)?),
-        op::JMP_IF_FALSE => JmpIfFalse(target(r.u32()?)?),
-        op::JMP_IF_TRUE_PEEK => JmpIfTruePeek(target(r.u32()?)?),
-        op::JMP_IF_FALSE_PEEK => JmpIfFalsePeek(target(r.u32()?)?),
-        op::CALL_FN => {
-            let f = fn_idx(r.u16()?)?;
-            CallFn {
-                fn_idx: f,
-                argc: argc(r.u8()?)?,
-            }
-        }
-        op::CALL_BUILTIN => {
-            let b = builtin(r.u16()?)?;
-            CallBuiltin {
-                b,
-                argc: argc(r.u8()?)?,
-            }
-        }
-        op::CALL_VALUE => CallValue {
-            argc: argc(r.u8()?)?,
-        },
-        op::RET => Ret,
-        op::RET_NULL => RetNull,
-        _ => return err("unknown opcode"),
-    })
 }

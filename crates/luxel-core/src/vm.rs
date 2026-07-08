@@ -13,9 +13,16 @@
 //! - Fuel and call-depth guards keep hostile/buggy patterns from hanging a
 //!   host.
 //!
-//! The in-memory `Insn` enum IS the bytecode for now; the packed/serialized
-//! encoding (the stable multi-frontend ABI) gets specified once the
-//! instruction set survives contact with the corpus — see docs/spec/.
+//! The VM executes LXBC bytecode IN PLACE: `Program.code` is the flat byte
+//! encoding (docs/spec/bytecode.md), `pc` is a function-relative byte
+//! offset, and jump operands are byte offsets too. Nothing is materialized
+//! per instruction — a decoded Program costs roughly its blob size, which
+//! is what lets 50–80 KB-of-heap devices run real patterns (like PB, whose
+//! device VM also runs its bytecode directly). Every host — firmware,
+//! wasm, native — runs THIS interpreter, so semantics can't drift between
+//! the browser preview and the strip. The decoder (`bytecode::decode`)
+//! establishes every invariant the loop trusts: operand indices in range,
+//! jump targets on instruction boundaries, argc capped.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -25,51 +32,6 @@ use crate::fixed::Fx;
 use crate::fmath;
 
 // ---- program ----
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Insn {
-    Const(Value),
-    LoadG(u16),
-    StoreG(u16), // pops value, pushes it back (assignment is an expression)
-    LoadL(u8),
-    StoreL(u8), // ditto
-    LoadIdx,    // [arr idx] → [elem]
-    StoreIdx,   // [arr idx val] → [val]
-    ArrLen,     // [arr] → [len]
-    NewArray(u16),
-    Dup,
-    Dup2, // [a b] → [a b a b]
-    Pop,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Pow,
-    Neg,
-    Not,
-    BitNot,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    Shr,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Eq,
-    Ne,
-    Jmp(u32),
-    JmpIfFalse(u32),     // pops
-    JmpIfTruePeek(u32),  // ||: jump keeping the lhs value
-    JmpIfFalsePeek(u32), // &&
-    CallFn { fn_idx: u16, argc: u8 },
-    CallBuiltin { b: u16, argc: u8 },
-    CallValue { argc: u8 },
-    Ret,
-    RetNull,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
@@ -109,28 +71,29 @@ pub struct FnDef {
     pub params: u8,
     /// Total local slots including params.
     pub locals: u8,
-    pub code: Vec<Insn>,
-    /// Debug info: 1-based (line, col) per instruction; (0, 0) = unknown.
-    pub pos: Vec<(u32, u32)>,
+    /// This function's bytecode: `Program.code[code_start..code_start+code_len]`.
+    /// `pc` and jump operands are byte offsets relative to `code_start`.
+    pub code_start: u32,
+    pub code_len: u32,
+    /// Debug info: source-position RUNS keyed by fn-relative byte offset —
+    /// (start_offset, line, col), sorted by offset, each run extending to
+    /// the next. Statement-granular, so a handful of entries per function.
+    /// Empty in lean decodes (device) — pos_at then reports (0, 0).
+    pub pos: Vec<(u32, u32, u32)>,
     /// Debug info: name per local slot (params first).
     pub local_names: Vec<String>,
 }
 
 impl FnDef {
-    pub fn placeholder(name: String) -> FnDef {
-        FnDef {
-            name,
-            params: 0,
-            locals: 0,
-            code: Vec::new(),
-            pos: Vec::new(),
-            local_names: Vec::new(),
-        }
-    }
-
-    /// (line, col) of an instruction, if known.
+    /// (line, col) at a byte offset, if known.
     pub fn pos_at(&self, pc: u32) -> (u32, u32) {
-        self.pos.get(pc as usize).copied().unwrap_or((0, 0))
+        match self.pos.partition_point(|&(off, _, _)| off <= pc) {
+            0 => (0, 0),
+            i => {
+                let (_, line, col) = self.pos[i - 1];
+                (line, col)
+            }
+        }
     }
 }
 
@@ -146,6 +109,10 @@ pub struct GlobalDef {
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    /// Every function's bytecode, concatenated (see `FnDef.code_start`).
+    /// Builtin operands hold RUNTIME builtin ids (the wire format's
+    /// import-table slots are resolved by the decoder).
+    pub code: Vec<u8>,
     /// `fns[0]` is top-level initialization code.
     pub fns: Vec<FnDef>,
     pub globals: Vec<GlobalDef>,
@@ -483,13 +450,24 @@ pub struct Vm {
     pub globals: Vec<Value>,
     arrays: Vec<Vec<Value>>,
     array_elems: usize,
+    /// PB-compat element budget (10,240 — arrays are never freed).
     pub array_budget: usize,
+    /// Actual bytes charged so far (elements × 8 + per-array overhead).
+    array_bytes: usize,
+    /// Device-RAM byte budget for the arena; `usize::MAX` on hosts. Byte-
+    /// accurate so one big array (8 B/element) isn't taxed for the Vec
+    /// overhead only swarms of tiny arrays pay.
+    pub array_byte_budget: usize,
     stack: Vec<Value>,
     locals: Vec<Value>,
     frames: Vec<Frame>,
     /// Debugger state; None disables all checks (the fast path).
     pub dbg: Option<DebugState>,
     fuel: u32,
+    /// Byte offset (fn-relative) of the instruction currently executing in
+    /// the top frame — error attribution (the frame's own pc has already
+    /// advanced past it).
+    insn_start: u32,
     /// Milliseconds since pattern start; the engine advances this.
     pub time_ms: u64,
     rng: u64,
@@ -541,11 +519,14 @@ impl Vm {
             arrays: Vec::new(),
             array_elems: 0,
             array_budget: DEFAULT_ARRAY_BUDGET,
+            array_bytes: 0,
+            array_byte_budget: usize::MAX,
             stack: Vec::new(),
             locals: Vec::new(),
             frames: Vec::new(),
             dbg: None,
             fuel: FUEL,
+            insn_start: 0,
             time_ms: 0,
             transform: IDENTITY,
             transform_active: false,
@@ -596,8 +577,9 @@ impl Vm {
     fn err_at(&self, prog: &Program, message: String) -> VmError {
         match self.frames.last() {
             Some(f) => {
-                // pc has advanced past the faulting instruction
-                let pc = f.pc.saturating_sub(1);
+                // the frame's pc has advanced past the faulting instruction;
+                // the dispatch loop records each instruction's start offset
+                let pc = self.insn_start;
                 let (line, col) = prog.fns[f.fn_idx as usize].pos_at(pc);
                 VmError {
                     message,
@@ -818,6 +800,7 @@ impl Vm {
             };
         }
 
+        use crate::bytecode::op;
         loop {
             let (fi, pc, lbase) = {
                 let f = self.frames.last().expect("frame");
@@ -826,25 +809,91 @@ impl Vm {
             if debug && self.debug_stop(prog, fi, pc) {
                 return Ok(Outcome::Paused);
             }
-            let insn = match prog.fns[fi as usize].code.get(pc as usize) {
-                Some(&i) => i,
-                None => Insn::RetNull, // fell off the end
+            let fdef = &prog.fns[fi as usize];
+            let code = &prog.code
+                [fdef.code_start as usize..(fdef.code_start + fdef.code_len) as usize];
+            self.insn_start = pc;
+            // Byte-decode the instruction in place. The decoder validated
+            // every operand and jump target, so the unwrap_or(0) fallbacks
+            // are unreachable; they exist so a logic bug degrades to a
+            // runtime error instead of a panic.
+            let mut at = pc as usize;
+            macro_rules! op_u8 {
+                () => {{
+                    let v = code.get(at).copied().unwrap_or(0);
+                    at += 1;
+                    v
+                }};
+            }
+            macro_rules! op_u16 {
+                () => {{
+                    let v = u16::from_le_bytes([
+                        code.get(at).copied().unwrap_or(0),
+                        code.get(at + 1).copied().unwrap_or(0),
+                    ]);
+                    at += 2;
+                    v
+                }};
+            }
+            macro_rules! op_u32 {
+                () => {{
+                    let v = u32::from_le_bytes([
+                        code.get(at).copied().unwrap_or(0),
+                        code.get(at + 1).copied().unwrap_or(0),
+                        code.get(at + 2).copied().unwrap_or(0),
+                        code.get(at + 3).copied().unwrap_or(0),
+                    ]);
+                    at += 4;
+                    v
+                }};
+            }
+            let opcode = match code.get(at) {
+                Some(&b) => {
+                    at += 1;
+                    b
+                }
+                None => op::RET_NULL, // fell off the end
             };
-            set_pc!(pc + 1);
             if self.fuel == 0 {
                 fail!("execution limit exceeded (infinite loop?)");
             }
             self.fuel -= 1;
-            match insn {
-                Insn::Const(v) => push!(v),
-                Insn::LoadG(i) => push!(self.globals[i as usize]),
-                Insn::StoreG(i) => {
+            match opcode {
+                op::CONST_NUM => {
+                    let v = Value::Num(Fx::from_raw(op_u32!() as i32));
+                    set_pc!(at as u32);
+                    push!(v)
+                }
+                op::CONST_FUN => {
+                    let v = Value::Fun(op_u16!());
+                    set_pc!(at as u32);
+                    push!(v)
+                }
+                op::CONST_BUILTIN => {
+                    let v = Value::Builtin(op_u16!());
+                    set_pc!(at as u32);
+                    push!(v)
+                }
+                op::LOAD_G => {
+                    let i = op_u16!();
+                    set_pc!(at as u32);
+                    push!(self.globals[i as usize])
+                }
+                op::STORE_G => {
+                    let i = op_u16!();
+                    set_pc!(at as u32);
                     let v = pop!();
                     self.globals[i as usize] = v;
                     push!(v);
                 }
-                Insn::LoadL(i) => push!(self.locals[lbase + i as usize]),
-                Insn::StoreL(i) => {
+                op::LOAD_L => {
+                    let i = op_u8!();
+                    set_pc!(at as u32);
+                    push!(self.locals[lbase + i as usize])
+                }
+                op::STORE_L => {
+                    let i = op_u8!();
+                    set_pc!(at as u32);
                     let v = pop!();
                     self.locals[lbase + i as usize] = v;
                     push!(v);
@@ -856,7 +905,8 @@ impl Vm {
                 // execution. Known divergence: PB aborts on a fractional
                 // *literal* index write (`a[1.5] = 9`), a compiler-path
                 // quirk we deliberately don't copy — we truncate uniformly.
-                Insn::LoadIdx => {
+                op::LOAD_IDX => {
+                    set_pc!(at as u32);
                     let idx = pop!().num();
                     let arr = pop!();
                     let Value::Arr(a) = arr else {
@@ -871,7 +921,8 @@ impl Vm {
                         None => fail!("array index out of bounds"),
                     }
                 }
-                Insn::StoreIdx => {
+                op::STORE_IDX => {
+                    set_pc!(at as u32);
                     let val = pop!();
                     let idx = pop!().num();
                     let arr = pop!();
@@ -888,7 +939,8 @@ impl Vm {
                     }
                     push!(val);
                 }
-                Insn::ArrLen => {
+                op::ARR_LEN => {
+                    set_pc!(at as u32);
                     let arr = pop!();
                     let Value::Arr(a) = arr else {
                         fail!(".length of a non-array value")
@@ -897,8 +949,9 @@ impl Vm {
                         self.arrays[a as usize].len() as i32
                     )));
                 }
-                Insn::NewArray(n) => {
-                    let n = n as usize;
+                op::NEW_ARRAY => {
+                    let n = op_u16!() as usize;
+                    set_pc!(at as u32);
                     // budget-first: the elements are popped into the slot
                     // only once the (fallible) allocation succeeded
                     match self.alloc_array_zeroed(n) {
@@ -913,11 +966,13 @@ impl Vm {
                         Err(m) => fail!(m),
                     }
                 }
-                Insn::Dup => {
+                op::DUP => {
+                    set_pc!(at as u32);
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     push!(v);
                 }
-                Insn::Dup2 => {
+                op::DUP2 => {
+                    set_pc!(at as u32);
                     let n = self.stack.len();
                     if n < 2 {
                         fail!("stack underflow (compiler bug)");
@@ -927,73 +982,137 @@ impl Vm {
                     push!(a);
                     push!(b);
                 }
-                Insn::Pop => {
+                op::POP => {
+                    set_pc!(at as u32);
                     pop!();
                 }
-                Insn::Add => binnum!(+),
-                Insn::Sub => binnum!(-),
-                Insn::Mul => binnum!(*),
-                Insn::Div => binnum!(/),
-                Insn::Rem => binnum!(%),
-                Insn::Pow => {
+                op::ADD => {
+                    set_pc!(at as u32);
+                    binnum!(+)
+                }
+                op::SUB => {
+                    set_pc!(at as u32);
+                    binnum!(-)
+                }
+                op::MUL => {
+                    set_pc!(at as u32);
+                    binnum!(*)
+                }
+                op::DIV => {
+                    set_pc!(at as u32);
+                    binnum!(/)
+                }
+                op::REM => {
+                    set_pc!(at as u32);
+                    binnum!(%)
+                }
+                op::POW => {
+                    set_pc!(at as u32);
                     let b = pop!().num();
                     let a = pop!().num();
                     push!(Value::Num(fmath::pow(a, b)));
                 }
-                Insn::Neg => {
+                op::NEG => {
+                    set_pc!(at as u32);
                     let v = pop!().num();
                     push!(Value::Num(-v));
                 }
-                Insn::Not => {
+                op::NOT => {
+                    set_pc!(at as u32);
                     let v = pop!();
                     push!(Value::Num(if v.truthy() { Fx::ZERO } else { Fx::ONE }));
                 }
-                Insn::BitNot => {
+                op::BIT_NOT => {
+                    set_pc!(at as u32);
                     let v = pop!().num();
                     push!(Value::Num(!v));
                 }
-                Insn::BitAnd => binnum!(&),
-                Insn::BitOr => binnum!(|),
-                Insn::BitXor => binnum!(^),
-                Insn::Shl => binnum!(<<),
-                Insn::Shr => binnum!(>>),
-                Insn::Lt => bincmp!(<),
-                Insn::Le => bincmp!(<=),
-                Insn::Gt => bincmp!(>),
-                Insn::Ge => bincmp!(>=),
-                Insn::Eq => {
+                op::BIT_AND => {
+                    set_pc!(at as u32);
+                    binnum!(&)
+                }
+                op::BIT_OR => {
+                    set_pc!(at as u32);
+                    binnum!(|)
+                }
+                op::BIT_XOR => {
+                    set_pc!(at as u32);
+                    binnum!(^)
+                }
+                op::SHL => {
+                    set_pc!(at as u32);
+                    binnum!(<<)
+                }
+                op::SHR => {
+                    set_pc!(at as u32);
+                    binnum!(>>)
+                }
+                op::LT => {
+                    set_pc!(at as u32);
+                    bincmp!(<)
+                }
+                op::LE => {
+                    set_pc!(at as u32);
+                    bincmp!(<=)
+                }
+                op::GT => {
+                    set_pc!(at as u32);
+                    bincmp!(>)
+                }
+                op::GE => {
+                    set_pc!(at as u32);
+                    bincmp!(>=)
+                }
+                op::EQ => {
+                    set_pc!(at as u32);
                     let b = pop!();
                     let a = pop!();
                     push!(Value::Num(if value_eq(a, b) { Fx::ONE } else { Fx::ZERO }));
                 }
-                Insn::Ne => {
+                op::NE => {
+                    set_pc!(at as u32);
                     let b = pop!();
                     let a = pop!();
                     push!(Value::Num(if value_eq(a, b) { Fx::ZERO } else { Fx::ONE }));
                 }
-                Insn::Jmp(t) => set_pc!(t),
-                Insn::JmpIfFalse(t) => {
+                op::JMP => {
+                    let t = op_u32!();
+                    set_pc!(t);
+                }
+                op::JMP_IF_FALSE => {
+                    let t = op_u32!();
+                    set_pc!(at as u32);
                     if !pop!().truthy() {
                         set_pc!(t);
                     }
                 }
-                Insn::JmpIfTruePeek(t) => {
+                op::JMP_IF_TRUE_PEEK => {
+                    let t = op_u32!();
+                    set_pc!(at as u32);
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     if v.truthy() {
                         set_pc!(t);
                     }
                 }
-                Insn::JmpIfFalsePeek(t) => {
+                op::JMP_IF_FALSE_PEEK => {
+                    let t = op_u32!();
+                    set_pc!(at as u32);
                     let v = *self.stack.last().unwrap_or(&Value::default());
                     if !v.truthy() {
                         set_pc!(t);
                     }
                 }
-                Insn::CallFn { fn_idx: f, argc } => {
+                op::CALL_FN => {
+                    let f = op_u16!();
+                    let argc = op_u8!();
+                    set_pc!(at as u32);
                     let (args, n) = self.pop_args(argc as usize);
                     self.push_frame(prog, f, &args[..n])?;
                 }
-                Insn::CallBuiltin { b, argc } => {
+                op::CALL_BUILTIN => {
+                    let b = op_u16!();
+                    let argc = op_u8!();
+                    set_pc!(at as u32);
                     match self.call_builtin(prog, b, argc as usize) {
                         Ok(v) => push!(v),
                         Err(mut e) => {
@@ -1005,9 +1124,10 @@ impl Vm {
                         }
                     }
                 }
-                Insn::CallValue { argc } => {
+                op::CALL_VALUE => {
+                    let argc = op_u8!() as usize;
+                    set_pc!(at as u32);
                     let n = self.stack.len();
-                    let argc = argc as usize;
                     if n < argc + 1 {
                         fail!("stack underflow (compiler bug)");
                     }
@@ -1029,8 +1149,9 @@ impl Vm {
                         _ => fail!("call of a non-function value"),
                     }
                 }
-                Insn::Ret | Insn::RetNull => {
-                    let v = if matches!(insn, Insn::Ret) {
+                op::RET | op::RET_NULL => {
+                    set_pc!(at as u32);
+                    let v = if opcode == op::RET {
                         pop!()
                     } else {
                         Value::default()
@@ -1041,33 +1162,48 @@ impl Vm {
                     }
                     push!(v);
                 }
+                _ => fail!("unknown opcode (corrupt bytecode?)"),
             }
         }
     }
 
-    pub fn alloc_array(&mut self, elems: Vec<Value>) -> Result<Value, &'static str> {
-        if self.array_elems + elems.len() > self.array_budget {
+    /// Real arena cost of an array: elements plus Vec header + allocator
+    /// overhead (what many tiny nested [r,g,b] arrays actually pay).
+    fn array_cost(len: usize) -> usize {
+        len * core::mem::size_of::<Value>() + 32
+    }
+
+    fn charge_array(&mut self, len: usize) -> Result<(), &'static str> {
+        if self.array_elems + len > self.array_budget {
             return Err("array element budget exceeded (arrays are never freed)");
         }
+        if self.array_bytes + Self::array_cost(len) > self.array_byte_budget {
+            return Err("array memory budget exceeded (pattern too large for this device)");
+        }
+        Ok(())
+    }
+
+    pub fn alloc_array(&mut self, elems: Vec<Value>) -> Result<Value, &'static str> {
+        self.charge_array(elems.len())?;
         self.array_elems += elems.len();
+        self.array_bytes += Self::array_cost(elems.len());
         self.arrays.push(elems);
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
     }
 
-    /// Budget-checked zero-filled array allocation: the budget is verified
+    /// Budget-checked zero-filled array allocation: the budgets are verified
     /// BEFORE any memory is reserved, and the reservation itself is
     /// fallible — on a small-heap device a huge `array(n)` must be a
     /// recorded runtime error, never an allocator panic (= reboot).
     fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, &'static str> {
-        if self.array_elems + len > self.array_budget {
-            return Err("array element budget exceeded (arrays are never freed)");
-        }
+        self.charge_array(len)?;
         let mut elems: Vec<Value> = Vec::new();
         if elems.try_reserve_exact(len).is_err() {
             return Err("out of memory for array");
         }
         elems.resize(len, Value::default());
         self.array_elems += len;
+        self.array_bytes += Self::array_cost(len);
         self.arrays.push(elems);
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
     }

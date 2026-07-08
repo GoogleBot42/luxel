@@ -481,30 +481,30 @@ fn spi_cfg(p: Protocol) -> SpiConfig {
 /// "array budget" vmerr instead of exhausting the allocator — an alloc
 /// failure is a panic, i.e. a reboot (the soak-v5 OOM).
 /// Heap the rest of the firmware needs while a pattern runs: jsonview
-/// snapshots (~8 KB peak for var-heavy patterns), HTTP request/response
-/// buffers, MQTT publishes, SPI buffer resizes, WiFi-blob mallocs (which
-/// do NOT null-check). A pattern may not eat into this — its array budget
-/// stops short of it, and a pattern whose engine leaves less free is
-/// rejected outright after loading. Sized generously: soak v5 kept
-/// finding ~8 KB infallible allocs panicking at smaller floors; trading
-/// the few over-sized gallery patterns for zero reboots is the right side
-/// of the line. Win the margin back by rebalancing statics/stack→heap
-/// (the compiler that the ~31 KB main stack was sized for no longer
-/// exists on-device).
+/// snapshots (~8.5 KB peak for var-heavy patterns — a 8 KB floor lost to
+/// exactly that once), MQTT publishes, SPI buffer resizes, WiFi-blob
+/// mallocs (which do NOT null-check), plus two HTTP connection buffers
+/// (4 KB each — bodies STREAM, so connections never need body-sized
+/// buffers). A pattern may not eat into this — its array budget stops
+/// short of it, and a pattern whose engine leaves less free is rejected
+/// outright after loading ("pattern too large" vmerr; soak-proven to
+/// never panic).
 const RUNTIME_FLOOR: usize = 20 * 1024;
 
 fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
     // Arrays may consume free heap down to (but not past) the runtime
-    // floor. ÷12 splits the per-element cost difference between big arrays
-    // (8 B/element) and many tiny nested ones (Vec headers + allocator
-    // overhead ≈ 16 B/element). The 1024-element minimum keeps ordinary
-    // strip patterns (a few arrays of pixelCount) working even when free
-    // heap reads low mid-churn — if that minimum genuinely doesn't fit,
-    // the post-load floor check rejects the pattern instead (soak-proven:
-    // a rejection, never a panic).
-    let budget = ((esp_alloc::HEAP.free() as usize).saturating_sub(RUNTIME_FLOOR) / 12)
-        .max(1024)
-        .min(luxel_core::vm::DEFAULT_ARRAY_BUDGET);
+    // floor — byte-accurate (elements × 8 + per-array overhead), so one
+    // big array isn't taxed for overhead only swarms of tiny ones pay.
+    // The extra 4 KB keeps a maxed-out array arena from sitting EXACTLY on
+    // the floor and losing the post-load check to a few bytes of churn.
+    // The 16 KB minimum keeps ordinary strip patterns (a few arrays of
+    // pixelCount) working even when free heap reads low mid-churn — if
+    // that minimum genuinely doesn't fit, the post-load floor check
+    // rejects the pattern instead (soak-proven: a rejection, never a
+    // panic).
+    let budget = (esp_alloc::HEAP.free() as usize)
+        .saturating_sub(RUNTIME_FLOOR + 4 * 1024)
+        .max(16 * 1024);
     Engine::from_program_budgeted(prog, count, 1, budget)
 }
 
@@ -514,11 +514,12 @@ fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
 /// alloc panicking (= reboot) right after such a pattern loaded.
 fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Option<Engine> {
     let e = budgeted_engine(prog, count);
-    if (esp_alloc::HEAP.free() as usize) < RUNTIME_FLOOR {
+    let floor = RUNTIME_FLOOR;
+    if (esp_alloc::HEAP.free() as usize) < floor {
         println!(
             "pattern rejected: {} B heap left after load (< {} floor)",
             esp_alloc::HEAP.free(),
-            RUNTIME_FLOOR
+            floor
         );
         return None; // drops the engine, freeing its heap
     }
@@ -625,6 +626,14 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                         },
                         Err(e) => println!("envelope decode failed (bug?): {}", e),
                     }
+                }
+                Msg::Freeze => {
+                    // free the engine's heap for whoever asked (OTA flash
+                    // phase, or a pattern upload that couldn't allocate);
+                    // the next Code/Crossfade revives rendering
+                    engine = None;
+                    prev = None;
+                    println!("engine frozen (heap released)");
                 }
                 Msg::Control(name, values) => {
                     if let Some(eng) = engine.as_mut() {
