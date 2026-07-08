@@ -27,5 +27,6 @@ pub mod jsonview;
 pub mod lex;
 pub mod netin;
 pub mod noise;
+pub mod outpipe;
 pub mod parse;
 pub mod vm;

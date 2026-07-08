@@ -238,6 +238,9 @@ async fn main(spawner: Spawner) -> ! {
         stored.map(|c| c.tz_minutes as i32).unwrap_or(0),
         Ordering::Relaxed,
     );
+    shared::COLOR_ORDER.store(stored.map(|c| c.color_order).unwrap_or(0), Ordering::Relaxed);
+    shared::GAMMA_TENTHS.store(stored.map(|c| c.gamma_tenths).unwrap_or(0), Ordering::Relaxed);
+    shared::CAP_MA.store(stored.map(|c| c.cap_ma as u32).unwrap_or(0), Ordering::Relaxed);
     println!(
         "settings: {} px, {}, brightness {}/31 ({})",
         pixels,
@@ -420,6 +423,39 @@ fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
     [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
 }
 
+/// Output pipeline (Settings): color-order remap + gamma LUT + power cap,
+/// applied to a scratch copy just before protocol encoding. Returns the
+/// original frame untouched when every knob is off. The LUT is cached and
+/// rebuilt only when the gamma setting changes.
+fn apply_outpipe<'a>(
+    frame: &'a [[u8; 3]],
+    pipe_buf: &'a mut alloc::vec::Vec<[u8; 3]>,
+    gamma_cache: &mut (u8, Option<alloc::boxed::Box<[u8; 256]>>),
+    brightness5: u8,
+) -> &'a [[u8; 3]] {
+    use luxel_core::outpipe::{self, ColorOrder};
+    let order = shared::COLOR_ORDER.load(Ordering::Relaxed);
+    let gamma = shared::GAMMA_TENTHS.load(Ordering::Relaxed);
+    let cap = shared::CAP_MA.load(Ordering::Relaxed);
+    let gamma_on = gamma > 0 && gamma != 10;
+    if order == 0 && !gamma_on && cap == 0 {
+        return frame;
+    }
+    if gamma_on && gamma_cache.0 != gamma {
+        *gamma_cache = (gamma, Some(alloc::boxed::Box::new(outpipe::gamma_lut(gamma))));
+    }
+    pipe_buf.clear();
+    pipe_buf.extend_from_slice(frame);
+    outpipe::apply(
+        pipe_buf,
+        ColorOrder(order),
+        if gamma_on { gamma_cache.1.as_deref() } else { None },
+        cap,
+        brightness5,
+    );
+    pipe_buf
+}
+
 /// SPI config for a protocol (only the clock rate differs; mode 0 for both).
 fn spi_cfg(p: Protocol) -> SpiConfig {
     SpiConfig::default()
@@ -472,6 +508,9 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
     let mut sensor_seen: u32 = 0;
+    // output-pipeline scratch (heap: the main-stack rule for task futures)
+    let mut pipe_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
+    let mut gamma_cache: (u8, Option<alloc::boxed::Box<[u8; 256]>>) = (0, None);
 
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
@@ -593,7 +632,9 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 }
             });
             set_pixels(&blend_buf);
-            cur_protocol().encode(&blend_buf, out_brightness(), &mut buf);
+            let b5 = out_brightness();
+            let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, b5);
+            cur_protocol().encode(wire, b5, &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }
@@ -644,7 +685,9 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 engine.as_mut().unwrap().frame(delta)
             };
             set_pixels(out);
-            cur_protocol().encode(out, out_brightness(), &mut buf);
+            let b5 = out_brightness();
+            let wire = apply_outpipe(out, &mut pipe_buf, &mut gamma_cache, b5);
+            cur_protocol().encode(wire, b5, &mut buf);
             if let Err(e) = spi.write(&buf) {
                 println!("spi write error: {:?}", e);
             }

@@ -367,6 +367,23 @@ try {
     check("mqtt: blank host disables", m2.enabled === false, JSON.stringify(m2));
   }
 
+  // output pipeline: settings round-trip through the form + API
+  {
+    const o0 = await (await fetch(`${DEV}/api/output`)).json();
+    check("output: defaults", o0.order === "rgb" && o0.gamma === 0 && o0.capMa === 0, JSON.stringify(o0));
+    await page.select('[data-role="out-order"]', "grb");
+    await sleep(400);
+    const o1 = await (await fetch(`${DEV}/api/output`)).json();
+    check("output: order select applies", o1.order === "grb", JSON.stringify(o1));
+    const r = await (
+      await fetch(`${DEV}/api/output`, { method: "POST", body: "bgr 22 1500" })
+    ).json();
+    check("output: POST sets all three", r.ok === true && r.gamma === 22 && r.capMa === 1500, JSON.stringify(r));
+    const bad = await (await fetch(`${DEV}/api/output`, { method: "POST", body: "xyz 22 0" })).json();
+    check("output: bad order rejected", bad.ok === false);
+    await fetch(`${DEV}/api/output`, { method: "POST", body: "rgb 0 0" }); // restore
+  }
+
   // wall clock: tz round-trips and local time tracks the host (mirror =
   // host clock; the device gets it from NTP)
   {

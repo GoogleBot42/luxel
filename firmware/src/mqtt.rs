@@ -317,13 +317,7 @@ async fn activate_by_name(name: &str) {
 
 /// Persist a brightness change (read-modify-write, like POST /api/brightness).
 fn persist_brightness(dev: u8) {
-    let mut c = config::read_device().unwrap_or(config::DeviceConfig {
-        brightness: dev,
-        protocol: crate::shared::PROTOCOL.load(Ordering::Relaxed),
-        sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
-                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
-        pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
-    });
+    let mut c = config::read_device().unwrap_or(crate::shared::device_config_snapshot());
     c.brightness = dev;
     if let Err(e) = config::write_device(&c) {
         println!("mqtt: persist brightness: {}", e);

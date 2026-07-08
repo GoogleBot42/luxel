@@ -559,18 +559,44 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Some(json_response(match text().trim().parse::<i16>() {
                         Ok(tz) if (-14 * 60..=14 * 60).contains(&(tz as i32)) => {
                             crate::shared::TZ_MINUTES.store(tz as i32, Ordering::Relaxed);
-                            let cfg = DeviceConfig {
-                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
-                                protocol: PROTOCOL.load(Ordering::Relaxed),
-                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
-                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
-                                tz_minutes: tz,
-                            };
+                            let cfg = DeviceConfig { tz_minutes: tz, ..crate::shared::device_config_snapshot() };
                             let _ = crate::config::write_device(&cfg);
                             format!("{{\"ok\":true,\"tzMinutes\":{}}}", tz)
                         }
                         _ => String::from(
                             "{\"ok\":false,\"error\":\"tz must be minutes in -840..=840\"}",
+                        ),
+                    }))
+                }
+                // body: "<order> <gamma_tenths> <cap_ma>" (e.g. "grb 22 1500")
+                // → the output pipeline, applied live + persisted
+                "/api/output" => {
+                    let body = text();
+                    let mut it = body.split_whitespace();
+                    let order = it
+                        .next()
+                        .and_then(luxel_core::outpipe::ColorOrder::from_name);
+                    let gamma: Option<u8> =
+                        it.next().and_then(|v| v.parse().ok()).filter(|g| *g <= 50);
+                    let cap: Option<u16> =
+                        it.next().and_then(|v| v.parse().ok()).filter(|c| *c <= 20_000);
+                    Some(json_response(match (order, gamma, cap) {
+                        (Some(o), Some(g), Some(c)) => {
+                            crate::shared::COLOR_ORDER.store(o.0, Ordering::Relaxed);
+                            crate::shared::GAMMA_TENTHS.store(g, Ordering::Relaxed);
+                            crate::shared::CAP_MA.store(c as u32, Ordering::Relaxed);
+                            let _ = crate::config::write_device(
+                                &crate::shared::device_config_snapshot(),
+                            );
+                            format!(
+                                "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                                o.name(),
+                                g,
+                                c
+                            )
+                        }
+                        _ => String::from(
+                            "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000>\"}",
                         ),
                     }))
                 }
@@ -590,13 +616,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             if m != 2 {
                                 crate::shared::clear_sync_leader();
                             }
-                            let cfg = DeviceConfig {
-                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
-                                protocol: PROTOCOL.load(Ordering::Relaxed),
-                                sync_mode: m,
-                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
-                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
-                            };
+                            let cfg = DeviceConfig { sync_mode: m, ..crate::shared::device_config_snapshot() };
                             let _ = crate::config::write_device(&cfg);
                             format!("{{\"ok\":true,\"mode\":\"{}\"}}", sync_mode_name(m))
                         }
@@ -657,13 +677,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         Ok(b) if b <= 31 => {
                             BRIGHTNESS.store(b, Ordering::Relaxed);
                             // read-modify-write so we don't clobber the others
-                            let cfg = DeviceConfig {
-                                brightness: b,
-                                protocol: PROTOCOL.load(Ordering::Relaxed),
-                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
-                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
-                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
-                            };
+                            let cfg = DeviceConfig { brightness: b, ..crate::shared::device_config_snapshot() };
                             match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"brightness\":{}}}", b),
                                 // applied live even if the flash write failed
@@ -686,13 +700,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             // the render task is the sole writer of PIXEL_COUNT;
                             // it flips the atomic + rebuilds when it drains this
                             MSG_QUEUE.send(Msg::Config(n)).await;
-                            let cfg = DeviceConfig {
-                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
-                                protocol: PROTOCOL.load(Ordering::Relaxed),
-                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
-                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
-                                pixel_count: n,
-                            };
+                            let cfg = DeviceConfig { pixel_count: n, ..crate::shared::device_config_snapshot() };
                             match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"pixels\":{}}}", n),
                                 Err(e) => format!(
@@ -715,13 +723,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Some(json_response(match Protocol::from_name(text().trim()) {
                         Some(p) => {
                             MSG_QUEUE.send(Msg::Protocol(p.as_u8())).await;
-                            let cfg = DeviceConfig {
-                                brightness: BRIGHTNESS.load(Ordering::Relaxed),
-                                protocol: p.as_u8(),
-                                pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
-                                sync_mode: crate::shared::SYNC_MODE.load(Ordering::Relaxed),
-                                tz_minutes: crate::shared::TZ_MINUTES.load(Ordering::Relaxed) as i16,
-                            };
+                            let cfg = DeviceConfig { protocol: p.as_u8(), ..crate::shared::device_config_snapshot() };
                             match crate::config::write_device(&cfg) {
                                 Ok(()) => format!("{{\"ok\":true,\"protocol\":\"{}\"}}", p.name()),
                                 Err(e) => format!(
@@ -897,6 +899,16 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/apmode" => Some(json_response(format!(
                     "{{\"ap\":{}}}",
                     crate::provision::AP_MODE.load(Ordering::Relaxed)
+                ))),
+                // output pipeline settings
+                "/api/output" => Some(json_response(format!(
+                    "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                    luxel_core::outpipe::ColorOrder(
+                        crate::shared::COLOR_ORDER.load(Ordering::Relaxed)
+                    )
+                    .name(),
+                    crate::shared::GAMMA_TENTHS.load(Ordering::Relaxed),
+                    crate::shared::CAP_MA.load(Ordering::Relaxed)
                 ))),
                 // wall clock: NTP-synced local time + tz (clock builtins)
                 "/api/clock" => {

@@ -112,6 +112,27 @@
     }
   }
 
+  // ---- output pipeline (device mode) ----
+  let outputStatus: { order: string; gamma: number; capMa: number } | null = null;
+
+  async function refreshOutput(): Promise<void> {
+    if (!device) return;
+    try {
+      outputStatus = await device.output();
+    } catch {
+      /* older firmware without /api/output */
+    }
+  }
+
+  function onOutputChange(): void {
+    void (async () => {
+      const o = outputStatus;
+      if (!o) return;
+      await device?.setOutput(o.order, o.gamma, o.capMa);
+      void refreshOutput();
+    })();
+  }
+
   // ---- wall clock / timezone (device mode) ----
   let clockStatus: { synced: boolean; local: number; tzMinutes: number } | null = null;
 
@@ -378,6 +399,7 @@
       void refreshMqtt();
       void refreshSync();
       void refreshClock();
+      void refreshOutput();
       netPoll = setInterval(() => {
         void refreshNetLive();
         void refreshMqtt();
@@ -638,6 +660,11 @@
         mqttForm = { host: m.host, port: m.port || 1883, user: m.user, pass: "" };
       } catch {
         /* older firmware without /api/mqtt — leave defaults */
+      }
+      try {
+        outputStatus = await session.output();
+      } catch {
+        /* older firmware without /api/output — card shows unavailable */
       }
       compileError = null;
       await refreshDevicePatterns();
@@ -2276,6 +2303,59 @@ export function render(index) {
             </span>
             {#if apNote}<span class="dim" data-role="apmode-note">{apNote}</span>{/if}
           </div>
+        </section>
+
+        <section class="card">
+          <h2>Output</h2>
+          {#if outputStatus}
+            <div class="field">
+              <span class="flabel">Color order</span>
+              <select
+                data-role="out-order"
+                bind:value={outputStatus.order}
+                on:change={onOutputChange}
+              >
+                {#each ["rgb", "rbg", "grb", "gbr", "brg", "bgr"] as o}
+                  <option value={o}>{o.toUpperCase()}</option>
+                {/each}
+              </select>
+              <span class="dim">match your strip's wiring (colors swapped? try GRB/BGR)</span>
+            </div>
+            <div class="field">
+              <span class="flabel">Gamma</span>
+              <input
+                class="num"
+                data-role="out-gamma"
+                type="number"
+                min="0"
+                max="5"
+                step="0.1"
+                value={outputStatus.gamma / 10}
+                on:change={(e) => {
+                  if (outputStatus)
+                    outputStatus.gamma = Math.round(Number(e.currentTarget.value) * 10);
+                  onOutputChange();
+                }}
+              />
+              <span class="dim">0 = off; 2.2 gives smoother dark fades on the strip</span>
+            </div>
+            <div class="field">
+              <span class="flabel">Power cap</span>
+              <input
+                class="num"
+                data-role="out-cap"
+                type="number"
+                min="0"
+                max="20000"
+                step="100"
+                bind:value={outputStatus.capMa}
+                on:change={onOutputChange}
+              />
+              <span class="dim">mA — frames estimated above this get scaled down; 0 = off</span>
+            </div>
+          {:else}
+            <p class="dim hint">not available on this firmware</p>
+          {/if}
         </section>
 
         <section class="card">

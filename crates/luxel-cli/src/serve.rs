@@ -156,6 +156,12 @@ struct State {
     sync_boot_id: u32,
     /// Local-time offset from UTC in minutes (clock builtins).
     tz_minutes: std::sync::atomic::AtomicI32,
+    /// Output pipeline knobs (settings round-trip; the mirror drives no
+    /// strip, so they aren't applied to the preview snapshot — matching
+    /// the firmware, whose preview also shows logical colors).
+    color_order: AtomicU8,
+    gamma_tenths: AtomicU8,
+    cap_ma: AtomicU32,
     engine_time_ms: std::sync::atomic::AtomicU64,
     sync_leader: Mutex<Option<(u32, u64, Instant)>>,
 }
@@ -1286,6 +1292,39 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 b"{\"ok\":true,\"note\":\"mirror: no radio; a device would reboot into the setup AP\"}",
             );
         }
+        ("GET", "/api/output") => {
+            let body = format!(
+                "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                luxel_core::outpipe::ColorOrder(state.color_order.load(Ordering::Relaxed)).name(),
+                state.gamma_tenths.load(Ordering::Relaxed),
+                state.cap_ma.load(Ordering::Relaxed)
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/output") => {
+            let body = String::from_utf8_lossy(&req.body).into_owned();
+            let mut it = body.split_whitespace();
+            let order = it.next().and_then(luxel_core::outpipe::ColorOrder::from_name);
+            let gamma: Option<u8> = it.next().and_then(|v| v.parse().ok()).filter(|g| *g <= 50);
+            let cap: Option<u16> = it.next().and_then(|v| v.parse().ok()).filter(|c| *c <= 20_000);
+            let r = match (order, gamma, cap) {
+                (Some(o), Some(g), Some(c)) => {
+                    state.color_order.store(o.0, Ordering::Relaxed);
+                    state.gamma_tenths.store(g, Ordering::Relaxed);
+                    state.cap_ma.store(c as u32, Ordering::Relaxed);
+                    format!(
+                        "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                        o.name(),
+                        g,
+                        c
+                    )
+                }
+                _ => String::from(
+                    "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000>\"}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("GET", "/api/clock") => {
             // the mirror's clock is the host's (always "synced")
             let tz = state.tz_minutes.load(Ordering::Relaxed);
@@ -1601,6 +1640,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         sync_mode: AtomicU8::new(0),
         sync_boot_id: std::process::id() ^ 0x5a5a_5a5a,
         tz_minutes: std::sync::atomic::AtomicI32::new(0),
+        color_order: AtomicU8::new(0),
+        gamma_tenths: AtomicU8::new(0),
+        cap_ma: AtomicU32::new(0),
         engine_time_ms: std::sync::atomic::AtomicU64::new(0),
         sync_leader: Mutex::new(None),
     });

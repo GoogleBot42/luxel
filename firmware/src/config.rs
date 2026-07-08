@@ -22,13 +22,15 @@ pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
 /// Device settings live in the next nvs sector, so writing them never disturbs
-/// the WiFi record. Record (v5): "LXDV" u8 version=5  u8 brightness  u8 protocol
-/// u8 sync_mode  u32-LE pixel_count  i16-LE tz_minutes  u16 0  u32-LE checksum
-/// (20 bytes). v4/v3 (12-byte body, no tz) read compatibly with tz = 0;
-/// older versions fail the version check and read as "no record" → defaults.
+/// the WiFi record. Record (v6): "LXDV" u8 version=6  u8 brightness  u8 protocol
+/// u8 sync_mode  u32-LE pixel_count  i16-LE tz_minutes  u8 color_order
+/// u8 gamma_tenths  u16-LE cap_ma  u16 0  u32-LE checksum (24 bytes).
+/// v5 (16-byte body: tz but no output pipe), v4/v3 (12-byte body) read
+/// compatibly with defaults for the missing fields; older versions fail the
+/// version check and read as "no record" → defaults.
 const DEV_OFFSET: u32 = 0xA000;
 const DEV_MAGIC: &[u8; 4] = b"LXDV";
-const DEV_VER: u8 = 5;
+const DEV_VER: u8 = 6;
 
 /// Persisted device settings. All fields are written together (read-modify-
 /// write) so setting one never clobbers the others.
@@ -42,6 +44,12 @@ pub struct DeviceConfig {
     pub pixel_count: u32,
     /// Local-time offset from UTC in minutes (clock builtins).
     pub tz_minutes: i16,
+    /// Wire color order (luxel_core::outpipe::ColorOrder code).
+    pub color_order: u8,
+    /// Output gamma × 10 (22 = γ2.2; 0/10 = off).
+    pub gamma_tenths: u8,
+    /// Power cap in mA (0 = off).
+    pub cap_ma: u16,
 }
 
 fn checksum(bytes: &[u8]) -> u32 {
@@ -214,15 +222,19 @@ pub fn write_mqtt(cfg: Option<&MqttConfig>) -> Result<(), &'static str> {
 
 /// Read the persisted device settings, if a valid record exists.
 pub fn read_device() -> Option<DeviceConfig> {
-    let mut rec = [0u8; 20]; // 16-byte v5 body + checksum (v3/v4: 12 + ck)
+    let mut rec = [0u8; 24]; // 20-byte v6 body + checksum (older: shorter)
     if !crate::assets::read_chunk(DEV_OFFSET, &mut rec) {
         return None;
     }
     let ver = rec[4];
-    if &rec[0..4] != DEV_MAGIC || !(ver == DEV_VER || ver == 4 || ver == 3) {
+    if &rec[0..4] != DEV_MAGIC || !(ver == DEV_VER || ver == 5 || ver == 4 || ver == 3) {
         return None;
     }
-    let body = if ver == DEV_VER { 16 } else { 12 };
+    let body = match ver {
+        6 => 20,
+        5 => 16,
+        _ => 12,
+    };
     let stored = u32::from_le_bytes(rec[body..body + 4].try_into().ok()?);
     if stored != checksum(&rec[0..body]) {
         return None;
@@ -232,10 +244,19 @@ pub fn read_device() -> Option<DeviceConfig> {
     // v3's byte 7 was a zero pad — reads as sync off, which is right
     let sync_mode = if rec[7] <= 2 { rec[7] } else { 0 };
     let pixel_count = u32::from_le_bytes(rec[8..12].try_into().ok()?);
-    let tz_minutes = if ver == DEV_VER {
+    let tz_minutes = if ver >= 5 {
         i16::from_le_bytes(rec[12..14].try_into().ok()?)
     } else {
         0
+    };
+    let (color_order, gamma_tenths, cap_ma) = if ver >= 6 {
+        (
+            rec[14],
+            rec[15],
+            u16::from_le_bytes(rec[16..18].try_into().ok()?),
+        )
+    } else {
+        (0, 0, 0)
     };
     if brightness > 31 {
         return None;
@@ -246,6 +267,9 @@ pub fn read_device() -> Option<DeviceConfig> {
         sync_mode,
         pixel_count,
         tz_minutes,
+        color_order,
+        gamma_tenths,
+        cap_ma,
     })
 }
 
@@ -263,6 +287,9 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     rec.push(cfg.sync_mode);
     rec.extend_from_slice(&cfg.pixel_count.to_le_bytes());
     rec.extend_from_slice(&cfg.tz_minutes.to_le_bytes());
+    rec.push(cfg.color_order);
+    rec.push(cfg.gamma_tenths);
+    rec.extend_from_slice(&cfg.cap_ma.to_le_bytes());
     rec.extend_from_slice(&[0, 0]);
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());

@@ -201,6 +201,28 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; error?: string };
   }
 
+  /** Output pipeline: wire color order, gamma (×10), power cap (mA). */
+  async output(): Promise<{ order: string; gamma: number; capMa: number }> {
+    return (await (await fetch(this.url("/api/output"))).json()) as {
+      order: string;
+      gamma: number;
+      capMa: number;
+    };
+  }
+
+  /** Set the output pipeline; applied live + persisted. */
+  async setOutput(
+    order: string,
+    gammaTenths: number,
+    capMa: number,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(this.url("/api/output"), {
+      method: "POST",
+      body: `${order} ${Math.round(gammaTenths)} ${Math.round(capMa)}`,
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
   /** Wall clock: NTP sync status, local unix seconds, tz offset. */
   async clock(): Promise<{ synced: boolean; local: number; tzMinutes: number }> {
     return (await (await fetch(this.url("/api/clock"))).json()) as {

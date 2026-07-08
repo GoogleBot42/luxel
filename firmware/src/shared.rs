@@ -173,6 +173,29 @@ pub fn clear_sync_leader() {
     SYNC_LEADER.lock(|c| *c.borrow_mut() = None);
 }
 
+/// Output pipeline knobs (Settings → output; persisted; the render task
+/// applies them between blending and protocol encoding).
+pub static COLOR_ORDER: AtomicU8 = AtomicU8::new(0); // outpipe::ColorOrder code
+pub static GAMMA_TENTHS: AtomicU8 = AtomicU8::new(0); // 22 = γ2.2; 0/10 = off
+pub static CAP_MA: AtomicU32 = AtomicU32::new(0); // 0 = no power cap
+
+/// The persisted settings record built from the live atomics — write sites
+/// override the one field they change instead of hand-assembling the
+/// (ever-growing) struct.
+pub fn device_config_snapshot() -> crate::config::DeviceConfig {
+    use core::sync::atomic::Ordering;
+    crate::config::DeviceConfig {
+        brightness: BRIGHTNESS.load(Ordering::Relaxed),
+        protocol: PROTOCOL.load(Ordering::Relaxed),
+        sync_mode: SYNC_MODE.load(Ordering::Relaxed),
+        pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+        tz_minutes: TZ_MINUTES.load(Ordering::Relaxed) as i16,
+        color_order: COLOR_ORDER.load(Ordering::Relaxed),
+        gamma_tenths: GAMMA_TENTHS.load(Ordering::Relaxed),
+        cap_ma: CAP_MA.load(Ordering::Relaxed) as u16,
+    }
+}
+
 /// Wall clock: (unix seconds at the last NTP sync, when it landed).
 /// None = never synced — clock builtins stay at 0, like before.
 pub static WALL_CLOCK: Shared<Option<(i64, embassy_time::Instant)>> =
