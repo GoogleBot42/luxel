@@ -1038,9 +1038,13 @@ static CONFIG: picoserve::Config = picoserve::Config {
     timeouts: picoserve::Timeouts {
         start_read_request: picoserve::time::Duration::from_secs(5),
         persistent_start_read_request: picoserve::time::Duration::from_secs(1),
-        // one timer for an ENTIRE request body, not per-read — must cover a
-        // full OTA upload on a slow link
-        read_request: picoserve::time::Duration::from_secs(300),
+        // One timer for an ENTIRE request body, not per-read — must cover a
+        // full OTA upload on a slow link (~20s at 55 KB/s + erase pauses).
+        // But NOT much more: an abandoned upload (client timed out mid-body)
+        // pins one of only THREE server sockets until this expires — at the
+        // original 300s a couple of WiFi hiccups cascaded into minutes-long
+        // outages (the hw-bench soak lost ~60 requests to exactly this).
+        read_request: picoserve::time::Duration::from_secs(45),
         write: picoserve::time::Duration::from_secs(5),
     },
     connection: picoserve::KeepAlive::KeepAlive,
