@@ -311,4 +311,26 @@ speed = 2
   a unary minus on the left is allowed and binds first (`-x ** 2` means
   `(-x) ** 2`; JS makes it a syntax error).
 
+- **`//# require` — configuration invariants.** A pattern can declare
+  what it needs from the rig; if a requirement is false the pattern
+  refuses to run (black output + a clear error naming the requirement)
+  instead of misbehaving or crashing mid-render:
+
+```js
+//# require pixelCount % 2 == 0
+//# require floor(sqrt(pixelCount)) == sqrt(pixelCount) "needs a square number of pixels"
+//# require pixelCount >= 100 "needs at least 100 pixels"
+```
+
+  The expression is ordinary pattern-language code (any builtins, any
+  operators) evaluated **before the pattern's own init runs**, so a bad
+  configuration can't even execute setup code — this is what the classic
+  square-matrix patterns (grids sized by `sqrt(pixelCount)`) need to fail
+  politely on a strip. Only the predefined globals (`pixelCount`, `PI`,
+  …) have values at check time; other globals read as 0. The optional
+  trailing `"message"` replaces the expression text in the error.
+  Multiple `require` lines are checked in order; the first failure
+  reports. On a real PB the whole line is a comment, so patterns remain
+  PB-source compatible.
+
 More conservative JS conveniences may follow (see the roadmap).

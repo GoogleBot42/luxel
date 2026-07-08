@@ -1,5 +1,36 @@
 # Update log
 
+## 2026-07-08 — `//# require` invariants + PB-faithful default grid — the last 2D failures explained
+
+The Breakout/Crosstown/Frogger/Swirlpool class is now understood end to
+end, and patterns get a language-level way to state their assumptions.
+
+- **Default map** (PB-as-experienced, oracle-verified): a pattern that
+  exports only `render2D`/`render3D` with no installed map now gets an
+  automatic ceil(√n)×ceil(√n) row-major grid instead of erroring with
+  "no map". Probing the real PB showed a stronger fact: a PB that has
+  ever saved a map *cannot be returned to maplessness* via its public
+  interface — blank map source and `[]` both keep the old compiled map
+  (documented in docs/research/04-oracle-findings.md, plus
+  tools/oracle/mapdump.mjs to snapshot/restore a PB's map losslessly).
+- With that grid, the four holdouts fail **identically on a real PB** at
+  non-square pixel counts (verified live: clean at 17×17, same
+  out-of-bounds at 10×30). They're square-rig patterns; 300 isn't square.
+  At 289 px Breakout runs on the device at 45 fps. Luxel's 191/195 is
+  every pattern PB itself could run on this rig.
+- **`//# require <expr> ["message"]`**: patterns can declare invariants in
+  a comment directive — `//# require pixelCount % 2 == 0`, or the
+  Breakout fix, `//# require floor(sqrt(pixelCount)) == sqrt(pixelCount)
+  "needs a square number of pixels"`. Checked before `init` ever runs; a
+  violation blocks rendering (black frame) and surfaces as
+  `pattern requires: needs a square number of pixels (pixelCount = 300)`.
+  Compiled by the frontend into ordinary hidden exported fns (name-tagged
+  `require …`), so the wire format is unchanged and the compiler-less
+  firmware enforces them by just calling functions. PB-compatible: on a
+  real PB the directive is a comment. Documented in docs/lang.md.
+- vmerr polish: errors without a source location (require violations,
+  lean-decoded blobs) no longer carry a noisy `line 0:0:` prefix.
+
 ## 2026-07-08 — LXBC v3: const-array data section — 192/195, capacity failures extinct
 
 Jeremy's idea, straight out of mainline compilers: array literals are

@@ -33,6 +33,13 @@ use crate::fmath;
 
 // ---- program ----
 
+/// Exported-fn name prefix for `//# require` invariants (compiled check
+/// functions; the rest of the name is the user-facing requirement text).
+/// Contains a space, so it can never collide with a real identifier. Lives
+/// here rather than in the (frontend-gated) compiler because the ENGINE
+/// enforces it on every host, including devices with no compiler.
+pub const REQUIRE_PREFIX: &str = "require ";
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
     Num(Fx),

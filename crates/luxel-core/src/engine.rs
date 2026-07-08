@@ -119,6 +119,10 @@ pub struct Engine {
     is_map: bool,
     map_coords: Vec<[Fx; 3]>,
     map_dims: u8,
+    /// A `//# require` invariant failed: rendering is blocked for this
+    /// engine's lifetime (map installs must not resurrect it — the fix is
+    /// a config change, which rebuilds the engine).
+    requires_violated: bool,
 }
 
 impl Engine {
@@ -172,14 +176,46 @@ impl Engine {
             }
         }
 
+        // `//# require` invariants run BEFORE init: a violated
+        // configuration must not execute the pattern's setup (the classic
+        // square-rig patterns die IN init at the wrong pixel count). Only
+        // the predefined globals (pixelCount, PI, …) are meaningful here.
         let mut last_error = None;
-        if let Err(e) = vm.call(&prog, 0, &[]) {
-            last_error = Some(e);
+        for (name, idx) in &prog.exported_fns {
+            let Some(text) = name.strip_prefix(crate::vm::REQUIRE_PREFIX) else {
+                continue;
+            };
+            match vm.call(&prog, *idx, &[]) {
+                Ok(v) if v.truthy() => {}
+                Ok(_) => {
+                    last_error = Some(VmError {
+                        message: alloc::format!(
+                            "pattern requires: {text} (pixelCount = {pixel_count})"
+                        ),
+                        fn_idx: *idx,
+                        pc: 0,
+                        line: 0,
+                        col: 0,
+                    });
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    break;
+                }
+            }
+        }
+        let violated = last_error.is_some();
+
+        if !violated {
+            if let Err(e) = vm.call(&prog, 0, &[]) {
+                last_error = Some(e);
+            }
         }
 
         vm.pixel_count = pixel_count;
-        let before = prog.exported_fn("beforeRender");
-        let render = pick_render(&prog, 0);
+        let before = if violated { None } else { prog.exported_fn("beforeRender") };
+        let render = if violated { None } else { pick_render(&prog, 0) };
 
         let mut controls = Vec::new();
         for (name, idx) in &prog.exported_fns {
@@ -216,6 +252,7 @@ impl Engine {
             is_map: false,
             map_coords: Vec::new(),
             map_dims: 0,
+            requires_violated: violated,
         };
 
         // A pattern that renders ONLY in 2D/3D gets a default square-ish
@@ -226,7 +263,8 @@ impl Engine {
         // receives genuine map coordinates — and the common
         // `sqrt(pixelCount)`-grid patterns depend on that. A host-installed
         // map replaces this (set_map), exactly like saving a map on a PB.
-        if engine.prog.exported_fn("render").is_none()
+        if !violated
+            && engine.prog.exported_fn("render").is_none()
             && (engine.prog.exported_fn("render2D").is_some()
                 || engine.prog.exported_fn("render3D").is_some())
         {
@@ -461,7 +499,9 @@ impl Engine {
             }
         }
         self.vm.map = Some(MapData { dims, coords });
-        self.render = pick_render(&self.prog, dims);
+        if !self.requires_violated {
+            self.render = pick_render(&self.prog, dims);
+        }
     }
 
     /// Provide wall-clock time (unix seconds, timezone already applied) for

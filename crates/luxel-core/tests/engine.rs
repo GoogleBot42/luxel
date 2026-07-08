@@ -67,6 +67,58 @@ fn delta_is_passed_in_ms() {
 }
 
 #[test]
+fn require_directive_gates_the_pattern() {
+    // `//# require <expr> ["message"]`: checked BEFORE init; a violation
+    // blocks rendering (and init's side effects) with the requirement text
+    // as the error. PB-compatible: it's just a comment there.
+    let src = "//# require floor(sqrt(pixelCount)) == sqrt(pixelCount) \"needs a square number of pixels\"\n\
+               export var inited\n\
+               inited = 1\n\
+               export function render(i) { hsv(0, 0, 1) }";
+
+    // satisfied (square count): runs, init happened
+    let mut ok = Engine::new(src, 256, 1).unwrap();
+    assert!(ok.take_error().is_none());
+    ok.frame(Fx::ZERO);
+    assert_eq!(ok.var("inited"), Some(Value::Num(Fx::ONE)));
+
+    // violated (non-square): blocked with the custom message, init skipped
+    let mut bad = Engine::new(src, 300, 1).unwrap();
+    let err = bad.take_error().expect("invariant must fail at 300");
+    assert!(
+        err.message.contains("needs a square number of pixels")
+            && err.message.contains("pixelCount = 300"),
+        "{}",
+        err.message
+    );
+    assert_eq!(bad.var("inited"), Some(Value::Num(Fx::ZERO)), "init must not run");
+    let frame = bad.frame(Fx::ZERO).to_vec();
+    assert!(frame.iter().all(|px| *px == [0, 0, 0]), "must render black");
+
+    // without a custom message, the expression text is the message
+    let src2 = "//# require pixelCount % 2 == 0\nexport function render(i) { hsv(0,0,1) }";
+    let mut odd = Engine::new(src2, 7, 1).unwrap();
+    let err = odd.take_error().expect("odd count must fail");
+    assert!(err.message.contains("pixelCount % 2 == 0"), "{}", err.message);
+    // and it round-trips through the wire format (the check function is an
+    // ordinary exported fn — no format change)
+    let blob = luxel_core::bytecode::serialize(
+        &luxel_core::compile::compile(src2).unwrap(),
+    )
+    .unwrap();
+    let mut e = Engine::from_program(
+        luxel_core::bytecode::deserialize_lean(&blob).unwrap(),
+        7,
+        1,
+    );
+    assert!(e.take_error().is_some(), "invariant survives lean decode");
+
+    // a bad expression is a compile error pointing at the directive
+    let bad_src = "//# require pixelCount %% 2\nexport function render(i) {}";
+    assert!(Engine::new(bad_src, 10, 1).is_err());
+}
+
+#[test]
 fn map_only_pattern_gets_default_grid() {
     // A pattern that renders ONLY in 2D/3D gets a default ceil(√n) grid
     // map (PB-as-experienced: a real PB always has a map — oracle-verified

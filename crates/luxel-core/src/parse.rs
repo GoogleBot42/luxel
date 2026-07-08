@@ -33,6 +33,24 @@ pub fn parse_program(src: &str) -> Result<Vec<Stmt>, Diagnostic> {
     Ok(stmts)
 }
 
+/// Parse a single standalone EXPRESSION (a `//# require` directive body).
+/// Trailing tokens are an error.
+pub(crate) fn parse_expr_snippet(src: &str) -> Result<Expr, Diagnostic> {
+    let toks = lex(src)?;
+    let mut p = Parser {
+        src,
+        toks,
+        pos: 0,
+        prev_span: Span::default(),
+        depth: 0,
+    };
+    let e = p.expr()?;
+    if !p.at_eof() {
+        return Err(Diagnostic::new(p.prev_span, "unexpected trailing tokens"));
+    }
+    Ok(e)
+}
+
 struct Parser<'s> {
     src: &'s str,
     toks: Vec<Token>,

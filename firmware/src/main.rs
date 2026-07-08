@@ -826,13 +826,15 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 // (possibly already tight) heap with format! strings
                 if vmerr_seen != Some((e.fn_idx, e.pc)) {
                     vmerr_seen = Some((e.fn_idx, e.pc));
-                    println!("vmerr: line {}:{}: {}", e.line, e.col, e.message);
-                    set_vmerr(Some(alloc::format!(
-                        "line {}:{}: {}",
-                        e.line,
-                        e.col,
+                    // (0,0) = no source location (lean decode, or a
+                    // `//# require` violation) — don't prefix noise
+                    let msg = if e.line == 0 && e.col == 0 {
                         e.message
-                    )));
+                    } else {
+                        alloc::format!("line {}:{}: {}", e.line, e.col, e.message)
+                    };
+                    println!("vmerr: {}", msg);
+                    set_vmerr(Some(msg));
                 }
             }
             // publish the engine clock (leader beacons + /api/sync)
