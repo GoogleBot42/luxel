@@ -16,6 +16,7 @@ firmware/serial.log
 web/device-served.png
 web/dist.luxa
 web/public/gallery.json
+web/public/pixelblaze-library.json
 
 # transient agent worktrees
 .claude/worktrees/

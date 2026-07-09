@@ -529,8 +529,15 @@
   // only). The editor is NOT a tab — it opens full-screen over the home tab
   // when you pick a pattern or create one, with a back button. `tab` is the
   // home you return to.
-  type Tab = "library" | "device" | "playlist" | "settings";
+  type Tab = "library" | "pixelblaze" | "device" | "playlist" | "settings";
   let tab: Tab = "library";
+  /** The "PixelBlaze Library" tab browses the scraped corpus (original
+   *  Pixelblaze community patterns). It's a local-only convenience: the tab
+   *  only exists when tools/gen-corpus-gallery.mjs found a populated corpus/
+   *  and wrote public/pixelblaze-library.json (see onMount probe). */
+  let hasPixelblazeLibrary = false;
+  let pixelblazeMounted = false;
+  $: if (tab === "pixelblaze" && !editing) pixelblazeMounted = true;
   /** Full-screen editor open (over the home tab). */
   let editing = false;
   /** File-actions overflow menu (import/export). */
@@ -607,7 +614,12 @@
   }
 
   /** The label/target the editor's back button returns to. */
-  $: backLabel = tab === "device" ? "Device Patterns" : "Patterns Library";
+  $: backLabel =
+    tab === "device"
+      ? "Device Patterns"
+      : tab === "pixelblaze"
+        ? "PixelBlaze Library"
+        : "Patterns Library";
   /** Total installed pixels — reactive so the Settings readout tracks the
    *  active layout (device connect sets it from the hardware). */
   $: pixelTotal =
@@ -1090,9 +1102,10 @@ export function render(index) {
 
   function onGalleryPick(
     e: CustomEvent<{ name: string; kind: "strip" | "grid" | "cloud"; source: string }>,
+    home: Tab = "library",
   ): void {
     const p = e.detail;
-    openEditor("library"); // picking a pattern opens it in the editor
+    openEditor(home); // picking a pattern opens it in the editor
     patternName = p.name;
     exampleName = "";
     importError = "";
@@ -1546,6 +1559,13 @@ export function render(index) {
       booting = false;
       return;
     }
+    // Probe for a local corpus gallery; its tab appears only when present.
+    void fetch(`${import.meta.env.BASE_URL}pixelblaze-library.json`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((list) => {
+        hasPixelblazeLibrary = Array.isArray(list) && list.length > 0;
+      })
+      .catch(() => {});
     // In-progress work wins: a share link's pattern, else the autosaved
     // working copy. The editor opens on it (resume — never lose edits). A
     // device, though, only resumes it when it has *unsaved changes*; a clean
@@ -1654,6 +1674,16 @@ export function render(index) {
         >
           Patterns Library
         </button>
+        {#if hasPixelblazeLibrary}
+          <button
+            data-role="tab-pixelblaze"
+            class="tab"
+            class:active={tab === "pixelblaze"}
+            on:click={() => (tab = "pixelblaze")}
+          >
+            PixelBlaze Library
+          </button>
+        {/if}
         {#if !isPlayground}
           <button
             data-role="tab-device"
@@ -2049,6 +2079,29 @@ export function render(index) {
       {/if}
     </div>
   </div>
+
+  <!-- ───────────── PixelBlaze Library tab (local corpus only) ───────────── -->
+  {#if hasPixelblazeLibrary}
+    <div class="library-tab" data-role="pixelblaze-panel" hidden={editing || tab !== "pixelblaze"}>
+      <div class="lib-head">
+        <span class="lib-title">PixelBlaze Library</span>
+        <span class="dim">original Pixelblaze community patterns (local corpus)</span>
+        <span class="spacer"></span>
+      </div>
+      <div class="lib-gallery">
+        {#if pixelblazeMounted && luxel}
+          <Gallery
+            {luxel}
+            src="pixelblaze-library.json"
+            emptyNote="corpus unavailable (no pixelblaze-library.json)"
+            on:pick={(e) => onGalleryPick(e, "pixelblaze")}
+          />
+        {:else}
+          <div class="tab-empty dim">loading patterns…</div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- ───────────── Device Patterns tab ───────────── -->
   {#if !isPlayground}
