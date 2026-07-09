@@ -103,10 +103,24 @@ corpus, e2e, deploy — what to reach for and when),
 [docs/research/04-oracle-findings.md](docs/research/04-oracle-findings.md)
 (how we know it matches the real thing).
 
-## Licensing (planned)
+## License
 
-Core, IDE, and CLI under Apache-2.0; device firmware under
-GPL-3.0-or-later.
+Luxel is licensed by component:
+
+| Component | Path | License |
+|---|---|---|
+| Engine (compiler + VM + engine) | `crates/luxel-core` | Apache-2.0 |
+| Browser/WASM bindings | `crates/luxel-wasm` | Apache-2.0 |
+| CLI + device-API mirror | `crates/luxel-cli` | Apache-2.0 |
+| Playground / IDE | `web/` | Apache-2.0 |
+| Pattern library | `library/` | Apache-2.0 |
+| Device firmware | `firmware/` | GPL-3.0-or-later |
+
+Full texts: [LICENSE-APACHE](LICENSE-APACHE) (SPDX `Apache-2.0`) and
+[LICENSE-GPL](LICENSE-GPL) (SPDX `GPL-3.0-or-later`, also copied into
+[firmware/LICENSE](firmware/LICENSE) so the firmware subtree is
+self-contained). Unless a file or directory says otherwise, code outside
+`firmware/` is Apache-2.0.
 
 *Pixel Blaze is a trademark of its owner; this is an independent project,
 built clean-room from public documentation, compatible with the Pixel
