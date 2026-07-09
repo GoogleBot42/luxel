@@ -40,7 +40,7 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 | `web/tools/lxp.mjs` | Node-side pattern compiler for scripts: loads the built `luxel.wasm`, exports `compile()` / `envelope()` / `lxpBody()` — how anything outside a browser produces the LXP1 envelopes the device API takes. |
 | `web/tools/gen-gallery.mjs` | Builds `public/gallery.json` from the corpus, filtered to patterns that compile clean per the last corpus report. Runs as part of `npm run build`. |
 | `web/tools/pack-assets.mjs` | Packs `dist/` into the LUXA flash archive `deploy.sh` uploads. |
-| `web/tools/serve-e2e.mjs` (repo `tools/`) | Older live-code page e2e against the mirror. |
+| `tools/serve-e2e.mjs` | Fast fetch-only smoke test of the mirror: HTTP API + page routing (`/` serves the built playground or the minimal fallback; `/min` the minimal page). Full-UI browser coverage is `web/tools/device-e2e.mjs`. |
 
 ## CLI (`cargo run -p luxel-cli --` or `target/release/luxel`)
 

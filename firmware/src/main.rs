@@ -3,8 +3,8 @@
 //! ESP32-C3 + SK9822/APA102 strip over SPI (data GPIO7, clock GPIO6 by
 //! default — see board configuration below). Runs the Luxel engine and
 //! pushes frames as fast as they render; when WiFi credentials are baked in
-//! it joins the network, serves a live-code page on port 80, and swaps the
-//! running pattern on upload without dropping frames.
+//! it joins the network, serves the playground web app on port 80, and swaps
+//! the running pattern on upload without dropping frames.
 //!
 //! Flash + monitor (devkit over USB):
 //!   cd firmware && LUXEL_SSID=net LUXEL_PASS=secret cargo run --release

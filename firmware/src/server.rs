@@ -1,11 +1,11 @@
-//! HTTP server: serves the live-code page and the device API. Keep routes
+//! HTTP server: serves the playground web app and the device API. Keep routes
 //! and response shapes in lockstep with the native mirror
 //! (crates/luxel-cli/src/serve.rs) — the playground's device mode talks to
 //! both interchangeably.
 //!
 //! API (all responses carry Access-Control-Allow-Origin: * so the
 //! playground dev server can target a device directly):
-//!   GET  /              live-code page
+//!   GET  /              installed playground, else the minimal page (also /min)
 //!   GET  /api/status    {"fps":N,"pixels":N,"vmerr":"…"|null}
 //!   GET  /api/pixels    raw RGB bytes, 3 per pixel
 //!   GET  /api/pattern   source of the running pattern (text/plain)

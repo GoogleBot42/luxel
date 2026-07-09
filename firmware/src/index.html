@@ -6,147 +6,23 @@
 <title>Luxel</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; background: #14151a; color: #e6e6ea; font: 14px/1.5 system-ui, sans-serif;
-         display: flex; flex-direction: column; height: 100vh; }
-  header { display: flex; align-items: baseline; gap: 1rem; padding: .6rem 1rem; background: #1d1f27; }
-  header h1 { font-size: 1rem; margin: 0; letter-spacing: .08em; }
-  header .status { color: #8b8fa3; font-variant-numeric: tabular-nums; }
-  header .vmerr { color: #ff7b72; }
-  main { flex: 1; display: flex; flex-direction: column; padding: .8rem 1rem; gap: .6rem; min-height: 0; }
-  canvas { display: block; width: 100%; image-rendering: pixelated; border-radius: 4px; background: #000; }
-  #strip { height: 14px; }
-  #waterfall { height: 90px; }
-  textarea { flex: 1; resize: none; background: #0f1014; color: #e6e6ea; border: 1px solid #2a2d39;
-             border-radius: 6px; padding: .7rem; font: 13px/1.5 ui-monospace, monospace; tab-size: 2; }
-  textarea:focus { outline: none; border-color: #4a72ff; }
-  .bar { display: flex; align-items: center; gap: .8rem; }
-  button { background: #4a72ff; color: #fff; border: 0; border-radius: 6px; padding: .45rem 1.1rem;
-           font: inherit; cursor: pointer; }
-  button:hover { background: #6285ff; }
-  #result { white-space: pre-wrap; font-family: ui-monospace, monospace; }
-  #result.err { color: #ff7b72; }
-  #result.ok { color: #7ee787; }
-  .hint { color: #565a6e; margin-left: auto; }
+  body { margin: 0; min-height: 100vh; background: #14151a; color: #e6e6ea;
+         font: 15px/1.6 system-ui, sans-serif; display: flex;
+         align-items: center; justify-content: center; padding: 1.5rem; }
+  main { max-width: 34rem; }
+  h1 { font-size: 1rem; letter-spacing: .18em; color: #8b8fa3; margin: 0 0 1.4rem; }
+  p { margin: 0 0 1rem; color: #b9bccb; }
+  code { background: #0f1014; border: 1px solid #2a2d39; border-radius: 6px;
+         padding: .7rem .8rem; display: block; font: 13px/1.4 ui-monospace, monospace;
+         color: #e6e6ea; overflow-x: auto; white-space: nowrap; }
 </style>
 </head>
 <body>
-<header>
-  <h1>LUXEL</h1>
-  <span class="status" id="status">–</span>
-  <span class="vmerr" id="vmerr"></span>
-</header>
 <main>
-  <canvas id="strip" width="1" height="1"></canvas>
-  <canvas id="waterfall" width="1" height="90"></canvas>
-  <textarea id="src" spellcheck="false" placeholder="// Paste a pattern and hit Run (Ctrl+Enter)
-export function beforeRender(delta) { t1 = time(.05) }
-export function render(index) { hsv(t1 + index / pixelCount, 1, 1) }"></textarea>
-  <div class="bar">
-    <button id="run">Run</button>
-    <span id="result"></span>
-    <span class="hint">full playground UI coming soon — this is the minimal live-code page</span>
-  </div>
+  <h1>LUXEL</h1>
+  <p>The web UI isn't installed on this device. Install it from the Luxel repo
+     (inside <code style="display:inline;padding:.1em .35em">nix develop</code>):</p>
+  <code>tools/deploy.sh &lt;device-ip&gt; --assets-only</code>
 </main>
-<script>
-"use strict";
-const $ = (id) => document.getElementById(id);
-
-async function run() {
-  const src = $("src").value;
-  $("result").textContent = "compiling…";
-  $("result").className = "";
-  try {
-    const res = await fetch("/api/code", { method: "POST", body: src });
-    const r = await res.json();
-    if (r.ok) {
-      $("result").textContent = "running ✓";
-      $("result").className = "ok";
-    } else {
-      $("result").textContent = `line ${r.line}:${r.col}: ${r.error}`;
-      $("result").className = "err";
-    }
-  } catch (e) {
-    $("result").textContent = String(e);
-    $("result").className = "err";
-  }
-}
-
-$("run").addEventListener("click", run);
-$("src").addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
-  if (e.key === "Tab") {
-    e.preventDefault();
-    const t = e.target, s = t.selectionStart;
-    t.setRangeText("  ", s, t.selectionEnd, "end");
-  }
-});
-
-let statusMisses = 0;
-setInterval(async () => {
-  if (wsLive) return; // status arrives on the socket
-  try {
-    const s = await (await fetch("/api/status")).json();
-    statusMisses = 0;
-    $("status").textContent = `${s.fps} fps · ${s.pixels} px`;
-    $("vmerr").textContent = s.vmerr ?? "";
-  } catch {
-    // tolerate isolated timeouts (busy device) before declaring offline
-    if (++statusMisses >= 3) $("status").textContent = "offline";
-  }
-}, 1000);
-
-// ---- pixel preview (strip + waterfall) ----
-// WebSocket push when available; HTTP polling as fallback.
-const strip = $("strip"), wf = $("waterfall");
-const sctx = strip.getContext("2d"), wctx = wf.getContext("2d");
-let wsLive = false;
-
-function drawFrame(buf) {
-  const n = Math.floor(buf.length / 3);
-  if (n === 0) return;
-  if (strip.width !== n) { strip.width = n; strip.height = 1; wf.width = n; }
-  const row = sctx.createImageData(n, 1);
-  for (let i = 0; i < n; i++) {
-    row.data[i * 4] = buf[i * 3];
-    row.data[i * 4 + 1] = buf[i * 3 + 1];
-    row.data[i * 4 + 2] = buf[i * 3 + 2];
-    row.data[i * 4 + 3] = 255;
-  }
-  sctx.putImageData(row, 0, 0);
-  wctx.drawImage(wf, 0, 0, n, wf.height - 1, 0, 1, n, wf.height - 1);
-  wctx.putImageData(row, 0, 0);
-}
-
-function connectWs() {
-  const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws");
-  ws.binaryType = "arraybuffer";
-  ws.onmessage = (e) => {
-    if (typeof e.data === "string") {
-      const m = JSON.parse(e.data);
-      if (m.type === "status") {
-        $("status").textContent = `${m.status.fps} fps · ${m.status.pixels} px · ws`;
-        $("vmerr").textContent = m.status.vmerr ?? "";
-      }
-    } else {
-      wsLive = true;
-      drawFrame(new Uint8Array(e.data));
-    }
-  };
-  ws.onclose = () => { wsLive = false; setTimeout(connectWs, 3000); };
-  ws.onerror = () => ws.close();
-}
-connectWs();
-
-let previewBusy = false;
-setInterval(async () => {
-  if (wsLive || previewBusy) return;   // polling is the fallback path only
-  previewBusy = true;
-  try {
-    const buf = new Uint8Array(await (await fetch("/api/pixels")).arrayBuffer());
-    drawFrame(buf);
-  } catch { /* offline; status line already says so */ }
-  finally { previewBusy = false; }
-}, 66);
-</script>
 </body>
 </html>

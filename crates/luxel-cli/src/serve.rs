@@ -1,9 +1,12 @@
 //! `luxel serve` — a native mirror of the firmware's HTTP server, backed by
 //! the same engine core, so the browser UI can be developed and end-to-end
 //! tested without hardware. Keep routes and response shapes in lockstep
-//! with firmware/src/server.rs. (The /ws preview stream was removed on
-//! both sides 2026-07-08: nothing consumed it since device mode went
-//! local-preview, and it cost the firmware ~28 KB of flash.)
+//! with firmware/src/server.rs. Like a device, `/` serves the built
+//! playground (web/dist, the stand-in for a device's flashed asset archive)
+//! and falls back to the embedded minimal page when it isn't built. (The /ws
+//! preview stream was removed on both sides 2026-07-08: nothing consumed it
+//! since device mode went local-preview, and it cost the firmware ~28 KB of
+//! flash.)
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -170,6 +173,11 @@ struct State {
     cap_ma: AtomicU32,
     engine_time_ms: std::sync::atomic::AtomicU64,
     sync_leader: Mutex<Option<(u32, u64, Instant)>>,
+    /// Built playground directory (web/dist) served at `/` and asset paths —
+    /// the native stand-in for a device's flashed asset archive. `None` when
+    /// it isn't built; then `/` falls back to the embedded minimal page,
+    /// exactly like a device with no assets installed.
+    web_dir: Option<std::path::PathBuf>,
 }
 
 fn sync_mode_name(m: u8) -> &'static str {
@@ -1218,6 +1226,52 @@ fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8])
     let _ = stream.write_all(body);
 }
 
+/// Locate the built playground directory. An explicit `--web-dir` wins;
+/// otherwise probe the usual spots relative to the cwd (repo root or web/),
+/// picking the first that actually holds an index.html. `None` = not built,
+/// so `/` falls back to the embedded minimal page.
+fn locate_web_dir(explicit: Option<String>) -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let candidates: Vec<PathBuf> = match explicit {
+        Some(d) => vec![PathBuf::from(d)],
+        None => ["web/dist", "dist", "../web/dist"].iter().map(PathBuf::from).collect(),
+    };
+    candidates.into_iter().find(|d| d.join("index.html").is_file())
+}
+
+fn content_type_for(name: &str) -> &'static str {
+    match name.rsplit('.').next().unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "wasm" => "application/wasm",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "json" | "map" => "application/json; charset=utf-8",
+        "woff2" => "font/woff2",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Serve a file from the built-playground dir. Returns false (caller decides
+/// the fallback/404) when assets aren't built, the path escapes the dir, or
+/// the file is missing. `/` maps to index.html.
+fn serve_static(stream: &mut TcpStream, web_dir: &Option<std::path::PathBuf>, path: &str) -> bool {
+    let Some(dir) = web_dir else { return false };
+    let path = path.split('?').next().unwrap_or(path); // drop any query string
+    let rel = path.trim_start_matches('/');
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+    // no traversal / absolute / odd components — keep reads inside `dir`
+    if rel.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+        return false;
+    }
+    let Ok(bytes) = std::fs::read(dir.join(rel)) else { return false };
+    respond(stream, 200, content_type_for(rel), &bytes);
+    true
+}
+
 /// CORS preflight reply: a cross-origin DELETE (and any non-simple method)
 /// sends an OPTIONS first; without these headers the browser blocks the
 /// real request. GET/POST with a text body are "simple" and skip this.
@@ -1240,12 +1294,17 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 
     match (req.method.as_str(), req.path.as_str()) {
         ("OPTIONS", _) => respond_preflight(&mut stream),
-        ("GET", "/") => respond(
-            &mut stream,
-            200,
-            "text/html; charset=utf-8",
-            INDEX_HTML.as_bytes(),
-        ),
+        // `/` serves the built playground when present (like a device serving
+        // its flashed assets); the embedded minimal page is the fallback and
+        // stays reachable at /min — same shape as firmware/src/server.rs.
+        ("GET", "/") => {
+            if !serve_static(&mut stream, &state.web_dir, "/index.html") {
+                respond(&mut stream, 200, "text/html; charset=utf-8", INDEX_HTML.as_bytes());
+            }
+        }
+        ("GET", "/min") => {
+            respond(&mut stream, 200, "text/html; charset=utf-8", INDEX_HTML.as_bytes())
+        }
         ("GET", "/api/status") => {
             respond(&mut stream, 200, "application/json", status_json(&state).as_bytes())
         }
@@ -1630,6 +1689,13 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        // Static assets from the built playground (hashed JS/CSS, luxel.wasm,
+        // icons, …). Anything not an /api route falls through to here.
+        ("GET", p) if !p.starts_with("/api/") => {
+            if !serve_static(&mut stream, &state.web_dir, p) {
+                respond(&mut stream, 404, "text/plain", b"not found");
+            }
+        }
         _ => respond(&mut stream, 404, "text/plain", b"not found"),
     }
 }
@@ -1642,9 +1708,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut sync_target = String::from("255.255.255.255");
     let mut sync_port: u16 = luxel_core::netin::SYNC_PORT;
     let mut sync_http_port: u16 = 80; // a real leader device serves on :80
+    let mut web_dir_arg: Option<String> = None;
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         match (flag.as_str(), it.next()) {
+            ("--web-dir", Some(v)) => web_dir_arg = Some(v.clone()),
             ("--pixels", Some(v)) => match v.parse() {
                 Ok(n) => pixels = n,
                 Err(_) => return super::usage(),
@@ -1705,6 +1773,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         cap_ma: AtomicU32::new(0),
         engine_time_ms: std::sync::atomic::AtomicU64::new(0),
         sync_leader: Mutex::new(None),
+        web_dir: locate_web_dir(web_dir_arg),
     });
 
     {
@@ -1731,7 +1800,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!("luxel serve: http://127.0.0.1:{port}/  ({pixels} px)");
+    let ui = match &state.web_dir {
+        Some(d) => format!("playground: {}", d.display()),
+        None => String::from("playground: not built (serving minimal page — run `npm run build` in web/)"),
+    };
+    println!("luxel serve: http://127.0.0.1:{port}/  ({pixels} px, {ui})");
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };

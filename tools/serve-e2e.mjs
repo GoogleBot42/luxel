@@ -1,13 +1,12 @@
-// End-to-end test of the device live-code page against `luxel serve` (the
-// native mirror of the firmware server). Run from the repo root:
+// Smoke test of `luxel serve` (the native mirror of the firmware server):
+// its HTTP API plus page routing — `/` serves the built playground when
+// present (else the minimal fallback), `/min` always the minimal page. The
+// full playground UI is driven in a real browser by web/tools/device-e2e.mjs;
+// this is the fast, dependency-light check. Run from the repo root:
 //   node tools/serve-e2e.mjs
-// Requires the flake devshell (chromium) and web/node_modules (puppeteer-core).
 
 import { execSync, spawn } from "node:child_process";
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url + "/../../web/");
-const puppeteer = require("puppeteer-core");
+import { lxpBody } from "../web/tools/lxp.mjs"; // needs web/public/luxel.wasm (npm run wasm)
 
 const PORT = 8721;
 let failures = 0;
@@ -41,96 +40,74 @@ const px1 = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer
 check("pixels: 3 bytes per pixel", px1.length === 360, `len=${px1.length}`);
 check("pixels: not all black", px1.some((b) => b > 0));
 
-const bad = await (await fetch(`${base}/api/code`, { method: "POST", body: "export function render(index) { hsv(" })).json();
-check("code: syntax error rejected", bad.ok === false && bad.line >= 1, JSON.stringify(bad));
+// Patterns compile to LXBC client-side and upload as an LXP1 envelope
+// (devices carry no compiler), so a syntax error throws at compile time and
+// never reaches the wire.
+let compileThrew = false;
+try {
+  await lxpBody("", "export function render(index) { hsv(");
+} catch {
+  compileThrew = true;
+}
+check("code: syntax error rejected at compile", compileThrew);
 
 const good = await (await fetch(`${base}/api/code`, {
   method: "POST",
-  body: "export function render(index) { rgb(0, 0, 1) }",
+  body: await lxpBody("", "export function render(index) { rgb(0, 0, 1) }"),
 })).json();
 check("code: upload accepted", good.ok === true, JSON.stringify(good));
 await sleep(300);
 const px2 = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
 check("code: pattern actually swapped (all blue)", px2.length === 360 && px2[0] === 0 && px2[1] === 0 && px2[2] === 255, `first px = ${px2[0]},${px2[1]},${px2[2]}`);
 
+// runtime out-of-bounds compiles clean but faults at render → surfaces on /api/status
 const vmerrSrc = "export var arr = array(4)\nexport function render(index) { arr[9] = 1\nhsv(0,0,0) }";
-const ve = await (await fetch(`${base}/api/code`, { method: "POST", body: vmerrSrc })).json();
-check("code: vmerr pattern accepted (compiles)", ve.ok === true);
+const ve = await (await fetch(`${base}/api/code`, { method: "POST", body: await lxpBody("", vmerrSrc) })).json();
+check("code: vmerr pattern accepted (compiles)", ve.ok === true, JSON.stringify(ve));
 await sleep(400);
 const st2 = await (await fetch(`${base}/api/status`)).json();
 check("status: vmerr surfaced with location", typeof st2.vmerr === "string" && st2.vmerr.includes("line 2"), String(st2.vmerr));
 
-// restore a lit pattern (the vmerr pattern above correctly renders black:
-// render aborts before hsv) so the preview check sees light
+// restore a lit pattern (the vmerr pattern renders black: render aborts
+// before hsv) so the preview check sees light
 await fetch(`${base}/api/code`, {
   method: "POST",
-  body: "export function render(index) { hsv(index / pixelCount, 1, 1) }",
+  body: await lxpBody("", "export function render(index) { hsv(index / pixelCount, 1, 1) }"),
 });
 await sleep(300);
 
 // ---- browser-level checks ----
-const executablePath = execSync("command -v chromium").toString().trim();
-const browser = await puppeteer.launch({
-  executablePath,
-  args: ["--no-sandbox", "--headless=new"],
-});
-try {
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1100, height: 800 });
-  await page.goto(base, { waitUntil: "networkidle2" });
-
-  check("page: title", (await page.title()) === "Luxel");
-  await sleep(1500);
-  const statusText = await page.$eval("#status", (el) => el.textContent);
-  check("page: status line shows fps + px", /\d+ fps · 120 px/.test(statusText), statusText);
-
-  // preview canvases resized to the strip and painting non-black pixels
-  const preview = await page.evaluate(() => {
-    const strip = document.getElementById("strip");
-    const wf = document.getElementById("waterfall");
-    const d = strip.getContext("2d").getImageData(0, 0, strip.width, 1).data;
-    let lit = 0;
-    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 0) lit++;
-    return { stripW: strip.width, wfW: wf.width, lit };
-  });
-  check("page: strip canvas sized to pixel count", preview.stripW === 120, JSON.stringify(preview));
-  check("page: preview shows lit pixels", preview.lit > 100, `lit=${preview.lit}`);
-
-  // type a pattern and run it via the button
-  await page.evaluate(() => {
-    document.getElementById("src").value = "export function render(index) { rgb(1, 0, 0) }";
-  });
-  await page.click("#run");
-  await page.waitForFunction(
-    () => document.getElementById("result").textContent.includes("running"),
-    { timeout: 5000 },
+// ---- page routing (the mirror stands in for a device serving its assets) ----
+const rootRes = await fetch(base);
+const rootBody = await rootRes.text();
+check(
+  "GET /: 200 html",
+  rootRes.status === 200 && (rootRes.headers.get("content-type") || "").includes("text/html"),
+  `status=${rootRes.status}`,
+);
+// `/` serves the built playground when web/dist exists, else the minimal
+// fallback page — either is a valid mirror state, so accept both.
+const builtUi = /(?:src|href)=["']\.?\/assets\//.test(rootBody);
+const minimalFallback = /isn['’]t installed/.test(rootBody);
+check(
+  "GET /: playground when built, else minimal fallback",
+  builtUi || minimalFallback,
+  builtUi ? "playground" : minimalFallback ? "minimal fallback (web/dist not built)" : rootBody.slice(0, 80),
+);
+if (builtUi) {
+  // a hashed asset the page references must resolve through the mirror
+  const asset = rootBody.match(/["']\.?(\/assets\/[^"']+?\.js)["']/)?.[1];
+  const ar = await fetch(base + asset);
+  check(
+    "GET playground asset: 200 js",
+    ar.status === 200 && (ar.headers.get("content-type") || "").includes("javascript"),
+    `${asset} -> ${ar.status}`,
   );
-  check("page: run reports success", true);
-  await sleep(400);
-  const red = await page.evaluate(() => {
-    const strip = document.getElementById("strip");
-    const d = strip.getContext("2d").getImageData(0, 0, 1, 1).data;
-    return [d[0], d[1], d[2]];
-  });
-  check("page: preview went red after live-code", red[0] === 255 && red[1] === 0 && red[2] === 0, red.join(","));
-
-  // compile error path
-  await page.evaluate(() => {
-    document.getElementById("src").value = "export function render(index) { hsv( }";
-  });
-  await page.click("#run");
-  await page.waitForFunction(
-    () => document.getElementById("result").className === "err",
-    { timeout: 5000 },
-  );
-  const errText = await page.$eval("#result", (el) => el.textContent);
-  check("page: compile error shown with line:col", /line \d+:\d+/.test(errText), errText);
-
-  await page.screenshot({ path: "web/e2e-serve.png" });
-} finally {
-  await browser.close();
-  server.kill();
 }
+const minBody = await (await fetch(`${base}/min`)).text();
+check("GET /min: minimal fallback page", /isn['’]t installed/.test(minBody), minBody.slice(0, 80));
+check("GET /nope.js: 404 for a missing asset", (await fetch(`${base}/nope.js`)).status === 404);
 
+server.kill();
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
