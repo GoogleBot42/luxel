@@ -71,7 +71,6 @@ the hardware pass has a checklist in docs/webui.md).
     drains the message — back-to-back POSTs could previously persist a stale
     value for the other field and lose one setting across a reboot.
 
-
 ## 2026-07-08 — v0.1.28: `assert()` — invariants become real code; playlists pre-flight against the config
 
 Jeremy's redesign of the hours-old `//# require` directive, and it's
