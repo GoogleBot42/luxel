@@ -22,18 +22,13 @@ export function beforeRender(delta) {
   var x = 0.5 + cos(a) * 0.333
   var y = 0.5 + sin(a) * 0.333
 
-  // 3. write the dot into the canvas (bounds-checked)
-  var cx = floor(x * DIM)
-  var cy = floor(y * DIM)
-  if (cx >= 0 && cx < DIM && cy >= 0 && cy < DIM) {
-    var idx = cy * DIM + cx
-    canvasBri[idx] = 1
-    canvasHue[idx] = time(0.03)   // slower hue drift, ~2 s per wheel
-  }
+  // 3. write the dot into the canvas — canvasSet clamps to the edges,
+  // so no manual bounds check is needed
+  canvasSet(canvasBri, DIM, x, y, 1)
+  canvasSet(canvasHue, DIM, x, y, time(0.03))   // slower hue drift, ~2 s per wheel
 }
 
 export function render2D(index, x, y) {
-  var idx = floor(y * 15.99) * DIM + floor(x * 15.99)
-  var b = canvasBri[idx]
-  hsv(canvasHue[idx], 1, b * b)   // square at display time
+  var b = canvasGet(canvasBri, DIM, x, y)   // bilinear — smooth on any map
+  hsv(canvasGet(canvasHue, DIM, x, y), 1, b * b)   // square at display time
 }

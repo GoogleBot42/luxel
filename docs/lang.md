@@ -222,6 +222,38 @@ decay)` multiplies every element by `decay` in place — the trails/glow
 decay loop as one call. Both are the ubiquitous hand-rolled patterns
 (KITT's decay, fire's cooling blur) as builtins.
 
+**Luxel extensions — bulk array math**: element-wise in-place loops as
+single VM calls (the big FPS lever for grid simulations, which otherwise
+spend ~15 interpreted ops per cell per frame). `arrayAdd(dst, src)` /
+`arraySub(dst, src)` do `dst[i] ±= src[i]` over the shorter of the two
+lengths (extra `dst` elements are untouched); `arrayScale(arr, k)`
+multiplies every element by `k` (alias of `feedback`); `arrayMix(dst,
+src, t)` does `dst[i] += (src[i] − dst[i])·t` — an unclamped lerp like
+`mix`, so `t = 1` copies `src` into `dst`. All return `dst` for
+chaining, and `src` is never written.
+
+**Luxel extensions — 2D canvases**: helpers for the row-major
+virtual-canvas idiom (draw into a small `array(w * h)` buffer in
+`beforeRender`, sample it in `render2D`).
+
+- `blur2D(arr, w, h, radius)` — in-place separable box blur over the
+  first `w × h` elements (window `2·radius + 1` per axis, edges clamped
+  exactly like `blur1D`); returns the array. Diffusion/soften loops —
+  the hottest loop in buffer-based 2D patterns — as one call. An array
+  shorter than `w × h` is a runtime error; `w`, `h`, or `radius` < 1 is
+  a no-op.
+- `canvasSet(buf, w, x, y, v)` — write `v` at the cell under normalized
+  `(x, y)` (cell = `floor(x·w)`, clamped to the edges: `x = 1` lands in
+  the last column, out-of-range coordinates clamp instead of aborting
+  the frame). Returns `v`. Replaces the manual
+  `buf[floor(y * 15.99) * w + floor(x * 15.99)]` footgun.
+- `canvasGet(buf, w, x, y)` — **bilinear** sample at normalized
+  `(x, y)`. Texel centers sit at `(i + 0.5)/w`, so a read at a cell's
+  center returns exactly what `canvasSet` stored there; between centers
+  it blends the four neighbors (edges clamp). Canvas patterns get
+  smooth upscaling on larger maps for free; the canvas height is
+  `arrayLength(buf) / w`.
+
 ### Noise
 
 `perlin(x, y, z, seed)` and the fractal variants `perlinFbm`,

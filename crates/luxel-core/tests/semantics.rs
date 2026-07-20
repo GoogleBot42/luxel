@@ -800,6 +800,139 @@ fn blur_and_feedback() {
 }
 
 #[test]
+fn blur2d() {
+    // 3×3 impulse (center 9), radius 1: separable box blur with clamped
+    // windows, matching blur1D per axis. Horizontal [0,9,0] → [4.5,3,4.5];
+    // vertical then gives center 1, corner 2.25, edge-mid 1.5.
+    let grid = "a = [0,0,0, 0,9,0, 0,0,0]\nblur2D(a, 3, 3, 1)\n";
+    assert_eq!(eval_prog(&format!("{grid}export var out = a[4]")), fx(1.0));
+    assert_eq!(eval_prog(&format!("{grid}export var out = a[0]")), fx(2.25));
+    assert_eq!(eval_prog(&format!("{grid}export var out = a[1]")), fx(1.5));
+    // non-square pins row-major orientation: w=2, h=3, impulse mid-row
+    let rect = "a = [0,0, 3,0, 0,0]\nblur2D(a, 2, 3, 1)\n";
+    assert_eq!(eval_prog(&format!("{rect}export var out = a[0]")), fx(0.75));
+    assert_eq!(eval_prog(&format!("{rect}export var out = a[2]")), fx(0.5));
+    assert_eq!(eval_prog(&format!("{rect}export var out = a[5]")), fx(0.75));
+    // radius 0 is a no-op; returns the array (chainable)
+    assert_eq!(
+        eval_prog("a = [5, 1, 5, 1]\nexport var out = blur2D(a, 2, 2, 0)[0]"),
+        fx(5.0)
+    );
+    // an array shorter than w×h is a runtime error, not an OOB abort
+    let e = luxel_core::engine::Engine::new("a = array(3)\nblur2D(a, 2, 2, 1)", 10, 1)
+        .expect("compiles");
+    assert!(
+        e.last_error.expect("expected error").message.contains("shorter"),
+        "blur2D undersized array should error"
+    );
+}
+
+#[test]
+fn bulk_array_math() {
+    // arrayAdd / arraySub: element-wise in place, returns dst
+    assert_eq!(
+        eval_prog("a = [1, 2]\nb = [10, 20]\nexport var out = arrayAdd(a, b)[1]"),
+        fx(22.0)
+    );
+    assert_eq!(
+        eval_prog("a = [10, 20]\nb = [1, 2]\narraySub(a, b)\nexport var out = a[0]"),
+        fx(9.0)
+    );
+    // length mismatch: ops run over the shorter length, extras untouched
+    assert_eq!(
+        eval_prog("a = [1, 2, 3]\nb = [10, 10]\narrayAdd(a, b)\nexport var out = a[2]"),
+        fx(3.0)
+    );
+    // src is never written
+    assert_eq!(
+        eval_prog("a = [1, 2]\nb = [10, 20]\narrayAdd(a, b)\nexport var out = b[0]"),
+        fx(10.0)
+    );
+    // arrayScale = feedback under its general name
+    assert_eq!(
+        eval_prog("a = [2, 4]\narrayScale(a, 0.5)\nexport var out = a[1]"),
+        fx(2.0)
+    );
+    // arrayMix: dst + (src − dst)·t, unclamped lerp; t = 1 is an exact copy
+    assert_eq!(
+        eval_prog("a = [0, 4]\nb = [8, 0]\narrayMix(a, b, 0.25)\nexport var out = a[0]"),
+        fx(2.0)
+    );
+    assert_eq!(
+        eval_prog("a = [0, 4]\nb = [8, 0]\narrayMix(a, b, 0.25)\nexport var out = a[1]"),
+        fx(3.0)
+    );
+    assert_eq!(
+        eval_prog("a = [5, 5]\nb = [1, 9]\narrayMix(a, b, 1)\nexport var out = a[1]"),
+        fx(9.0)
+    );
+    // aliased calls have their closed forms (no double-borrow, no garbage)
+    assert_eq!(
+        eval_prog("a = [3, 4]\narrayAdd(a, a)\nexport var out = a[1]"),
+        fx(8.0)
+    );
+    assert_eq!(
+        eval_prog("a = [3, 4]\narraySub(a, a)\nexport var out = a[0]"),
+        fx(0.0)
+    );
+    assert_eq!(
+        eval_prog("a = [3, 4]\narrayMix(a, a, 0.5)\nexport var out = a[0]"),
+        fx(3.0)
+    );
+}
+
+#[test]
+fn canvas_helpers() {
+    // canvasSet: floor(x·w) cells with edge clamping — x = 1 lands in the
+    // last column (no `* 15.99` fudge), negatives clamp to 0. Returns v.
+    assert_eq!(
+        eval_prog("c = array(16)\ncanvasSet(c, 4, 0.99, 0, 7)\nexport var out = c[3]"),
+        fx(7.0)
+    );
+    assert_eq!(
+        eval_prog("c = array(16)\ncanvasSet(c, 4, 1, 1, 7)\nexport var out = c[15]"),
+        fx(7.0)
+    );
+    assert_eq!(
+        eval_prog("c = array(16)\ncanvasSet(c, 4, -2, 0.5, 7)\nexport var out = c[8]"),
+        fx(7.0)
+    );
+    assert_eq!(
+        eval_prog("c = array(16)\nexport var out = canvasSet(c, 4, 0, 0, 3)"),
+        fx(3.0)
+    );
+    // canvasGet at a texel center returns exactly what canvasSet stored
+    // (centers at (i + 0.5)/w — set and get agree on the grid)
+    assert_eq!(
+        eval_prog(
+            "c = array(16)\ncanvasSet(c, 4, 0.125, 0.375, 5)\nexport var out = canvasGet(c, 4, 0.125, 0.375)"
+        ),
+        fx(5.0)
+    );
+    // bilinear: halfway between two texel centers blends them evenly
+    assert_eq!(
+        eval_prog("c = array(16)\nc[0] = 0\nc[1] = 1\nexport var out = canvasGet(c, 4, 0.25, 0.125)"),
+        fx(0.5)
+    );
+    // edge clamp: coordinates at/past the border read the border texel
+    assert_eq!(
+        eval_prog("c = array(16)\nc[0] = 0.75\nexport var out = canvasGet(c, 4, 0, 0)"),
+        fx(0.75)
+    );
+    assert_eq!(
+        eval_prog("c = array(16)\nc[15] = 0.5\nexport var out = canvasGet(c, 4, 2, 2)"),
+        fx(0.5)
+    );
+    // 2D blend: center of a 2×2 checkerboard corner block averages all 4
+    assert_eq!(
+        eval_prog(
+            "c = array(16)\nc[0] = 1\nc[1] = 0\nc[4] = 0\nc[5] = 1\nexport var out = canvasGet(c, 4, 0.25, 0.25)"
+        ),
+        fx(0.5)
+    );
+}
+
+#[test]
 fn value_returning_color() {
     // hsv2rgb writes into out and returns it: hue 0 = red
     assert_eq!(

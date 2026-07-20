@@ -289,6 +289,13 @@ pub enum Builtin {
     EaseOutBack,
     EaseOutElastic,
     EaseOutBounce,
+    // Luxel extension builtins, batch 3: 2D canvases + bulk array math
+    Blur2D,
+    ArrayAdd,
+    ArraySub,
+    ArrayMix,
+    CanvasSet,
+    CanvasGet,
 }
 
 pub struct BuiltinDef {
@@ -369,6 +376,12 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // springy easings (the polynomial ones are up with the other eases)
     b!("easeOutBack", EaseOutBack), b!("easeOutElastic", EaseOutElastic),
     b!("easeOutBounce", EaseOutBounce),
+    // Luxel extensions, batch 3 (appended): 2D canvases + bulk array math.
+    // arrayScale(a, k) is feedback(a, k) under its general-purpose name.
+    b!("blur2D", Blur2D),
+    b!("arrayAdd", ArrayAdd), b!("arraySub", ArraySub),
+    b!("arrayScale", Feedback), b!("arrayMix", ArrayMix),
+    b!("canvasSet", CanvasSet), b!("canvasGet", CanvasGet),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -630,6 +643,32 @@ impl Vm {
             ArrRepr::Owned(v) => Ok(v),
             ArrRepr::Const(_) => unreachable!("materialized above"),
         }
+    }
+
+    /// Simultaneous mutable-dst + read-only-src views for the bulk array
+    /// ops (`arrayAdd` and friends). `dst` is materialized (copy-on-write)
+    /// first. The ids must differ — callers handle `dst == src` themselves
+    /// (each op has a cheap closed form for the aliased case).
+    fn arr_pair<'a>(
+        &'a mut self,
+        prog: &'a Program,
+        dst: u32,
+        src: u32,
+    ) -> Result<(&'a mut [Value], &'a [Value]), &'static str> {
+        debug_assert_ne!(dst, src);
+        self.arr_mut(prog, dst)?;
+        let (d, s) = (dst as usize, src as usize);
+        let (dslot, sslot) = if d < s {
+            let (lo, hi) = self.arrays.split_at_mut(s);
+            (&mut lo[d], &hi[0])
+        } else {
+            let (lo, hi) = self.arrays.split_at_mut(d);
+            (&mut hi[0], &lo[s])
+        };
+        let ArrRepr::Owned(dv) = dslot else {
+            unreachable!("materialized above")
+        };
+        Ok((dv.as_mut_slice(), sslot.slice(prog)))
     }
 
     /// Read-only view of the (possibly suspended) call stack.
@@ -2055,6 +2094,151 @@ impl Vm {
                 self.write3(prog, a(7), c).map_err(|m| no_site(m.into()))?;
                 Ok(a(7))
             }
+            // ---- Luxel extensions, batch 3: 2D canvases + bulk array math ----
+            // blur2D(arr, w, h, radius): separable in-place box blur over
+            // the first w×h elements (row-major), window 2·radius+1 per
+            // axis, edges clamped like blur1D; returns the array. Any of
+            // w/h/radius < 1 is a no-op.
+            Blur2D => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("blur2D of a non-array".into()));
+                };
+                let (w, h, r) = (n(1).to_int_trunc(), n(2).to_int_trunc(), n(3).to_int_trunc());
+                if w >= 1 && h >= 1 && r >= 1 {
+                    let (w, h, r) = (w as usize, h as usize, r as usize);
+                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    if data.len() < w * h {
+                        return Err(no_site(format!(
+                            "blur2D: array shorter than w\u{d7}h ({} < {})",
+                            data.len(),
+                            w * h
+                        )));
+                    }
+                    // one reusable prefix-sum line (raw i64 — exact sums)
+                    let mut pre: alloc::vec::Vec<i64> = alloc::vec::Vec::new();
+                    if pre.try_reserve_exact(w.max(h) + 1).is_err() {
+                        return Err(no_site("out of memory for blur2D".into()));
+                    }
+                    // horizontal pass, then vertical: a separable box blur
+                    for row in 0..h {
+                        let base = row * w;
+                        pre.clear();
+                        pre.push(0i64);
+                        for i in 0..w {
+                            pre.push(pre[i] + data[base + i].num().raw() as i64);
+                        }
+                        for i in 0..w {
+                            let lo = i.saturating_sub(r);
+                            let hi = (i + r).min(w - 1);
+                            let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
+                            data[base + i] = Value::Num(Fx::from_raw(avg as i32));
+                        }
+                    }
+                    for col in 0..w {
+                        pre.clear();
+                        pre.push(0i64);
+                        for i in 0..h {
+                            pre.push(pre[i] + data[i * w + col].num().raw() as i64);
+                        }
+                        for i in 0..h {
+                            let lo = i.saturating_sub(r);
+                            let hi = (i + r).min(h - 1);
+                            let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
+                            data[i * w + col] = Value::Num(Fx::from_raw(avg as i32));
+                        }
+                    }
+                }
+                Ok(a(0))
+            }
+            // arrayAdd/arraySub(dst, src): element-wise dst ±= src over the
+            // shorter of the two lengths; arrayMix(dst, src, t): dst +=
+            // (src − dst)·t, unclamped like mix(). All in place, returning
+            // dst — one VM call instead of an interpreted per-element loop.
+            // (arrayScale(a, k) is the Feedback arm above under its
+            // general-purpose alias.)
+            ArrayAdd | ArraySub | ArrayMix => {
+                let (Value::Arr(dst), Value::Arr(src)) = (a(0), a(1)) else {
+                    return Err(no_site(format!("{} needs two arrays", def.name)));
+                };
+                let t = n(2);
+                if dst == src {
+                    // closed forms for the aliased call
+                    for slot in self
+                        .arr_mut(prog, dst)
+                        .map_err(|m| no_site(m.into()))?
+                        .iter_mut()
+                    {
+                        *slot = Value::Num(match builtin {
+                            ArrayAdd => slot.num() + slot.num(),
+                            ArraySub => Fx::ZERO,
+                            _ => slot.num(), // mix(x, x, t) = x
+                        });
+                    }
+                } else {
+                    let (d, s) = self
+                        .arr_pair(prog, dst, src)
+                        .map_err(|m| no_site(m.into()))?;
+                    for (dv, sv) in d.iter_mut().zip(s.iter()) {
+                        let (x, y) = (dv.num(), sv.num());
+                        *dv = Value::Num(match builtin {
+                            ArrayAdd => x + y,
+                            ArraySub => x - y,
+                            _ => x + (y - x) * t,
+                        });
+                    }
+                }
+                Ok(a(0))
+            }
+            // canvasSet(buf, w, x, y, v): write v at the cell under
+            // normalized (x, y) on a row-major w-wide canvas (h = len/w
+            // rows). Coordinates clamp to the edges — no OOB frame-abort,
+            // no `* 15.99` footgun (x = 1 lands in the last column).
+            // Returns v.
+            CanvasSet => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("canvasSet of a non-array".into()));
+                };
+                let w = n(1).to_int_trunc();
+                let v = a(4);
+                if w >= 1 {
+                    let w = w as usize;
+                    let (x, y) = (n(2), n(3));
+                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    let h = data.len() / w;
+                    if h >= 1 {
+                        data[cell_index(y, h) * w + cell_index(x, w)] = v;
+                    }
+                }
+                Ok(v)
+            }
+            // canvasGet(buf, w, x, y): bilinear sample of the canvas at
+            // normalized (x, y). Texel centers sit at (i + 0.5)/w — a read
+            // at a cell's center returns exactly what canvasSet put there;
+            // between centers it blends the 4 neighbors (edges clamp, so
+            // out-of-range coordinates read the border). Free upscaling
+            // for canvas patterns on larger maps.
+            CanvasGet => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("canvasGet of a non-array".into()));
+                };
+                let w = n(1).to_int_trunc();
+                if w < 1 {
+                    return num(Fx::ZERO);
+                }
+                let w = w as usize;
+                let data = self.arr(prog, arr);
+                let h = data.len() / w;
+                if h < 1 {
+                    return num(Fx::ZERO);
+                }
+                let (c0, c1, tx) = sample_axis(n(2), w);
+                let (r0, r1, ty) = sample_axis(n(3), h);
+                let at = |r: usize, c: usize| data[r * w + c].num().raw() as i64;
+                let lerp = |a: i64, b: i64, t: i64| a + (((b - a) * t) >> 16);
+                let top = lerp(at(r0, c0), at(r0, c1), tx);
+                let bot = lerp(at(r1, c0), at(r1, c1), tx);
+                num(Fx::from_raw(lerp(top, bot, ty) as i32))
+            }
         }
     }
 
@@ -2297,6 +2481,25 @@ fn hash32(mut x: u32) -> u32 {
 /// Hash to a uniform value in [0, 1).
 fn hash_unit(x: u32) -> Fx {
     Fx::from_raw((hash32(x) & 0xFFFF) as i32)
+}
+
+/// Cell index for a normalized coordinate on an n-cell axis:
+/// floor(x·n) clamped to 0..n−1 (so x = 1.0 lands in the last cell,
+/// with no `* 15.99` fudge). Exact in i64 raw — no 16.16 overflow.
+fn cell_index(x: Fx, n: usize) -> usize {
+    let i = (x.raw() as i64 * n as i64) >> 16; // arithmetic shift = floor
+    i.clamp(0, n as i64 - 1) as usize
+}
+
+/// One axis of a bilinear canvas sample: texel centers sit at
+/// (i + 0.5)/n, so the sample position is x·n − ½. Returns the two
+/// edge-clamped texel indices and the 16-bit blend fraction between
+/// them (coordinates past the borders clamp to the border texel).
+fn sample_axis(x: Fx, n: usize) -> (usize, usize, i64) {
+    let pos = x.raw() as i64 * n as i64 - (1i64 << 15); // 16.16
+    let (i, t) = (pos >> 16, pos & 0xFFFF);
+    let last = n as i64 - 1;
+    (i.clamp(0, last) as usize, (i + 1).clamp(0, last) as usize, t)
 }
 
 /// Inverse of [hsv_to_rgb]: gamma-sRGB → [h, s, v], hue in turns (0..1).
