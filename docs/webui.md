@@ -175,7 +175,45 @@ the pattern is loading, instead of appearing dead/blank.
    reboots); ~~device map upload~~ ✅ (v0.1.16, `/api/map` install a computed
    2D/3D map on hardware so device patterns render2D; persisted). Also shipped:
    **gallery search** (filter 190+ patterns by name), **playlist polish**
-   (clear-all, total run-time, deleted-pattern handling). Remaining: MQTT/HA
-   (M4); AP-mode provisioning; runtime LED-protocol re-init edge cases.
+   (clear-all, total run-time, deleted-pattern handling); **single-pattern
+   reboot resume** (v0.1.29 — an activated saved pattern + its slider values
+   persist debounced under a reserved storage key and resume at boot when no
+   playlist was playing; see firmware/src/resume.rs);
+   ~~runtime LED-protocol re-init edge cases~~ ✅ (v0.1.29 — hardened
+   off-hardware; see the checklist below). Remaining: MQTT/HA (M4); AP-mode
+   provisioning.
+
+## v0.1.29 hardware-verification checklist (protocol re-init + resume)
+
+Code-level fixes verified only by compile/review — they need an
+eyes-on-LEDs pass:
+
+1. **SPI-first commit ordering**: `Msg::Protocol` now applies the SPI clock
+   *before* committing the protocol (atomic + encode buffer); a failed
+   `apply_config` keeps the old protocol entirely, so encode format and wire
+   clock can't disagree. Verify the happy path didn't regress:
+   sk9822↔ws2812↔sk9822 live switches still render correctly at full rate.
+2. **Encode-buffer realloc discipline**: the old buffer is freed *before*
+   the new one is allocated (ws2812 at 2048 px ≈ 18 KB), the reserve is
+   fallible, and on failure the engines are frozen and the alloc retried;
+   both encode paths length-check the buffer (lazily re-allocating once heap
+   frees up, else skipping SPI output) instead of indexing out of bounds
+   (= panic + reboot). Verify: at 2048 px with a
+   heap-heavy pattern, switch sk9822→ws2812 — expect a clean switch or an
+   "output paused" serial line, never a reboot.
+3. **Requested-vs-applied persistence** (`WANT_PIXEL_COUNT`/`WANT_PROTOCOL`):
+   back-to-back `POST /api/config` + `POST /api/protocol` (either order, no
+   delay) must persist BOTH new values across a reboot — previously the
+   second write could persist the first setting's stale value.
+4. **Switch under DDP/E1.31 and mid-crossfade**: switching protocol while a
+   stream is live (or a playlist crossfade is blending) resizes the buffer
+   between frames; frames go out whole (blocking SPI), so no tearing is
+   expected. Verify visually in both situations.
+5. **Single-pattern reboot resume**: activate a saved pattern, move sliders,
+   wait >3 s (debounce), power-cycle → the same pattern + slider values come
+   back; a playlist that was playing still wins over the record; an ad-hoc
+   editor push must NOT change what resumes (the last *saved* state
+   returns); stopping a playing playlist then rebooting resumes the item
+   that was showing.
 </content>
 </invoke>

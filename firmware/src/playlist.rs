@@ -254,6 +254,9 @@ pub fn play(i: usize) {
 pub fn stop() {
     PLAYING.store(false, Ordering::Relaxed);
     persist_state();
+    // playback now rests on the last-entered item — persist it as the
+    // single-pattern resume state (debounced; see resume.rs)
+    crate::resume::mark_dirty();
     wake();
 }
 
@@ -319,6 +322,9 @@ async fn enter_item(i: usize) {
         MSG_QUEUE.send(Msg::Code { env }).await;
     }
     crate::shared::set_current_pattern_id(&item.pattern_id);
+    // seed the resume-controls set with the item's saved values, so stopping
+    // the playlist persists exactly what's showing (resume.rs)
+    crate::shared::set_current_controls(item.controls.clone());
     for (name, raw) in item.controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         MSG_QUEUE.send(Msg::Control(name, vals)).await;

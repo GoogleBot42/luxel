@@ -526,6 +526,9 @@ async fn api_patterns_activate(id: &str) -> String {
             drop((source, bc));
             MSG_QUEUE.send(Msg::Code { env }).await;
             crate::shared::set_current_pattern_id(id);
+            // controls reset to the pattern's defaults on activation
+            crate::shared::set_current_controls(Vec::new());
+            crate::resume::mark_dirty(); // debounced single-pattern persist
             String::from("{\"ok\":true}")
         }
         Err(e @ BcError::Version { .. }) => format!(
@@ -549,6 +552,12 @@ async fn api_control(body: String) -> ApiResponse {
         .filter_map(|v| v.parse::<i32>().ok())
         .map(Fx::from_raw)
         .collect();
+    // remember explicit tweaks for single-pattern reboot resume — only when
+    // the running pattern is a saved one and no playlist owns the params
+    if !crate::playlist::is_playing() && !crate::shared::get_current_pattern_id().is_empty() {
+        crate::shared::record_control(name, &values);
+        crate::resume::mark_dirty(); // debounced — a slider drag is a burst
+    }
     MSG_QUEUE.send(Msg::Control(String::from(name), values)).await;
     json_response(String::from("{\"ok\":true}"))
 }
@@ -839,7 +848,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Some(json_response(match text(&raw).trim().parse::<u32>() {
                         Ok(n) if n >= 1 && n <= MAX_PIXELS => {
                             // the render task is the sole writer of PIXEL_COUNT;
-                            // it flips the atomic + rebuilds when it drains this
+                            // it flips the atomic + rebuilds when it drains this.
+                            // WANT_PIXEL_COUNT is the requested value — what
+                            // persistence reads (the applied atomic lags).
+                            crate::shared::WANT_PIXEL_COUNT.store(n, Ordering::Relaxed);
                             MSG_QUEUE.send(Msg::Config(n)).await;
                             let cfg = DeviceConfig { pixel_count: n, ..crate::shared::device_config_snapshot() };
                             match crate::config::write_device(&cfg) {
@@ -863,6 +875,9 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/protocol" => {
                     Some(json_response(match Protocol::from_name(text(&raw).trim()) {
                         Some(p) => {
+                            // WANT_PROTOCOL: same requested-vs-applied split
+                            // as /api/config above
+                            crate::shared::WANT_PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
                             MSG_QUEUE.send(Msg::Protocol(p.as_u8())).await;
                             let cfg = DeviceConfig { protocol: p.as_u8(), ..crate::shared::device_config_snapshot() };
                             match crate::config::write_device(&cfg) {

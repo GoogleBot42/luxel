@@ -65,6 +65,16 @@ pub const MAX_PIXELS: u32 = 2048;
 /// buffer, no reboot. Boot seeds it from flash (else the board default).
 pub static PROTOCOL: AtomicU8 = AtomicU8::new(0);
 
+/// The *requested* pixel count / protocol — what the persisted settings
+/// record must reflect. PIXEL_COUNT/PROTOCOL above lag behind a POST until
+/// the render task drains the message; persisting from those could clobber
+/// a concurrent change with a stale value (e.g. POST /api/config then POST
+/// /api/protocol before the render task ran → the protocol write persisted
+/// the OLD pixel count). HTTP handlers store these when they enqueue; boot
+/// seeds them alongside the applied values.
+pub static WANT_PIXEL_COUNT: AtomicU32 = AtomicU32::new(300);
+pub static WANT_PROTOCOL: AtomicU8 = AtomicU8::new(0);
+
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 
 fn share_get<T: Clone>(cell: &Shared<T>) -> T {
@@ -167,6 +177,35 @@ pub fn get_current_pattern_id() -> String {
     share_get(&CURRENT_PATTERN_ID)
 }
 
+/// Control values explicitly set since the last pattern swap (name → raw
+/// 16.16), for single-pattern reboot resume (resume.rs). Reset on
+/// activation (controls return to the pattern's defaults) and seeded from
+/// the playlist item's saved values on playlist entry.
+pub static CURRENT_CONTROLS: Shared<Vec<(String, Vec<i32>)>> =
+    BlockingMutex::new(RefCell::new(Vec::new()));
+
+/// Record one explicitly-set control (replaces a previous value by name).
+pub fn record_control(name: &str, values: &[Fx]) {
+    CURRENT_CONTROLS.lock(|c| {
+        let mut list = c.borrow_mut();
+        let raw: Vec<i32> = values.iter().map(|v| v.raw()).collect();
+        if let Some(entry) = list.iter_mut().find(|(n, _)| n == name) {
+            entry.1 = raw;
+        } else {
+            list.push((String::from(name), raw));
+        }
+    });
+}
+
+/// Replace the whole set (activation reset / playlist entry / boot resume).
+pub fn set_current_controls(controls: Vec<(String, Vec<i32>)>) {
+    CURRENT_CONTROLS.lock(|c| *c.borrow_mut() = controls);
+}
+
+pub fn get_current_controls() -> Vec<(String, Vec<i32>)> {
+    share_get(&CURRENT_CONTROLS)
+}
+
 /// Poked when the MQTT broker config changes so the MQTT task reconnects
 /// (or connects for the first time) without a reboot.
 pub static MQTT_POKE: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
@@ -214,14 +253,16 @@ pub static CAP_MA: AtomicU32 = AtomicU32::new(0); // 0 = no power cap
 
 /// The persisted settings record built from the live atomics — write sites
 /// override the one field they change instead of hand-assembling the
-/// (ever-growing) struct.
+/// (ever-growing) struct. Pixel count and protocol come from the WANT_*
+/// (requested) atomics: the applied ones lag until the render task drains
+/// the message, and persistence must never lose an in-flight change.
 pub fn device_config_snapshot() -> crate::config::DeviceConfig {
     use core::sync::atomic::Ordering;
     crate::config::DeviceConfig {
         brightness: BRIGHTNESS.load(Ordering::Relaxed),
-        protocol: PROTOCOL.load(Ordering::Relaxed),
+        protocol: WANT_PROTOCOL.load(Ordering::Relaxed),
         sync_mode: SYNC_MODE.load(Ordering::Relaxed),
-        pixel_count: PIXEL_COUNT.load(Ordering::Relaxed),
+        pixel_count: WANT_PIXEL_COUNT.load(Ordering::Relaxed),
         tz_minutes: TZ_MINUTES.load(Ordering::Relaxed) as i16,
         color_order: COLOR_ORDER.load(Ordering::Relaxed),
         gamma_tenths: GAMMA_TENTHS.load(Ordering::Relaxed),

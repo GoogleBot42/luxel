@@ -61,6 +61,7 @@ mod ota;
 mod patterns;
 mod playlist;
 mod provision;
+mod resume;
 mod sensors;
 mod server;
 mod sntp;
@@ -245,6 +246,9 @@ async fn main(spawner: Spawner) -> ! {
     BRIGHTNESS.store(brightness, Ordering::Relaxed);
     PIXEL_COUNT.store(pixels, Ordering::Relaxed);
     PROTOCOL.store(protocol.as_u8(), Ordering::Relaxed);
+    // requested == applied at boot (see shared::device_config_snapshot)
+    shared::WANT_PIXEL_COUNT.store(pixels, Ordering::Relaxed);
+    shared::WANT_PROTOCOL.store(protocol.as_u8(), Ordering::Relaxed);
     shared::SYNC_MODE.store(stored.map(|c| c.sync_mode).unwrap_or(0), Ordering::Relaxed);
     shared::TZ_MINUTES.store(
         stored.map(|c| c.tz_minutes as i32).unwrap_or(0),
@@ -284,6 +288,7 @@ async fn main(spawner: Spawner) -> ! {
     if option_env!("LUXEL_QUIET").is_none() {
         spawner.spawn(render_task(spi).unwrap());
         spawner.spawn(playlist::playlist_task().unwrap());
+        spawner.spawn(resume::resume_task().unwrap());
     } else {
         println!("LUXEL_QUIET: render task disabled");
     }
@@ -475,6 +480,21 @@ fn spi_cfg(p: Protocol) -> SpiConfig {
         .with_mode(Mode::_0)
 }
 
+/// Resize the SPI encode buffer, releasing the old allocation BEFORE
+/// reserving the new one — a protocol switch can more than double it
+/// (WS2812 is 9 B/px vs SK9822's ~4 B/px; at 2048 px that's an 18 KB
+/// allocation which must not coexist with the old buffer on a tight heap).
+/// Fallible: on false the buffer is left empty and the encode paths (which
+/// check the length) skip SPI output rather than indexing out of bounds.
+fn realloc_buf(buf: &mut alloc::vec::Vec<u8>, len: usize) -> bool {
+    *buf = alloc::vec::Vec::new(); // free the old allocation first
+    if buf.try_reserve_exact(len).is_err() {
+        return false;
+    }
+    buf.resize(len, 0);
+    true
+}
+
 /// Build an engine from a decoded program with an array budget derived
 /// from LIVE free heap (half of it, in 8-byte `Value`s, capped at PB's
 /// 10240 elements). Patterns that out-allocate the device then record an
@@ -655,9 +675,13 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 Msg::Config(count) => {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
-                    buf = alloc::vec![0u8; cur_protocol().buf_len(count as usize)];
                     engine = None; // free before re-decoding (peak heap)
                     prev = None;
+                    // resize AFTER freeing the engines — at 2048 px the new
+                    // buffer is a multi-KB alloc that wants the peak heap too
+                    if !realloc_buf(&mut buf, cur_protocol().buf_len(count as usize)) {
+                        println!("encode buffer alloc failed ({} px) — output paused", count);
+                    }
                     if let Some(e) = rebuild() {
                         publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                         engine = Some(e);
@@ -672,16 +696,42 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                 }
                 // Live LED-protocol change (no reboot): reconfigure the SPI
                 // clock and resize the buffer to the new encoding. Sole writer
-                // of PROTOCOL.
+                // of PROTOCOL. Ordering matters twice over:
+                // - the SPI clock is reconfigured FIRST, and the protocol only
+                //   commits (atomic + buffer) if that succeeded — otherwise
+                //   the encode format and the wire clock would disagree and
+                //   the strip would show garbage until the next switch;
+                // - messages drain between frames and spi.write is blocking,
+                //   so a switch can never land mid-frame — each frame goes
+                //   out entirely in one protocol at one clock.
                 Msg::Protocol(code) => {
                     let p = Protocol::from_u8(code);
-                    PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
                     if let Err(e) = spi.apply_config(&spi_cfg(p)) {
-                        println!("spi config error: {:?}", e);
+                        println!(
+                            "spi config error: {:?} — staying on {}",
+                            e,
+                            cur_protocol().name()
+                        );
+                    } else {
+                        PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
+                        let need = p.buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize);
+                        if !realloc_buf(&mut buf, need) {
+                            // heap too tight for the bigger encoding: free the
+                            // engines (Freeze semantics — the strip holds its
+                            // last frame) and retry; the next Code/Crossfade
+                            // revives rendering
+                            engine = None;
+                            prev = None;
+                            if !realloc_buf(&mut buf, need) {
+                                println!(
+                                    "encode buffer alloc failed ({} B) — output paused",
+                                    need
+                                );
+                            }
+                        }
+                        last = Instant::now();
+                        println!("protocol → {}", p.name());
                     }
-                    buf = alloc::vec![0u8; p.buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
-                    last = Instant::now();
-                    println!("protocol → {}", p.name());
                 }
                 // Crossfade to a new pattern (playlist transition): keep the
                 // outgoing engine and blend over `ms`.
@@ -765,9 +815,15 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             set_pixels(&blend_buf);
             let b5 = out_brightness();
             let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, b5);
-            cur_protocol().encode(wire, b5, &mut buf);
-            if let Err(e) = spi.write(&buf) {
-                println!("spi write error: {:?}", e);
+            let proto = cur_protocol();
+            // the buffer is empty after a failed realloc — retry it lazily
+            // (heap may have freed up); never index out of bounds
+            let need = proto.buf_len(wire.len());
+            if buf.len() >= need || realloc_buf(&mut buf, need) {
+                proto.encode(wire, b5, &mut buf);
+                if let Err(e) = spi.write(&buf) {
+                    println!("spi write error: {:?}", e);
+                }
             }
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() {
@@ -818,9 +874,15 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             set_pixels(out);
             let b5 = out_brightness();
             let wire = apply_outpipe(out, &mut pipe_buf, &mut gamma_cache, b5);
-            cur_protocol().encode(wire, b5, &mut buf);
-            if let Err(e) = spi.write(&buf) {
-                println!("spi write error: {:?}", e);
+            let proto = cur_protocol();
+            // the buffer is empty after a failed realloc — retry it lazily
+            // (heap may have freed up); never index out of bounds
+            let need = proto.buf_len(wire.len());
+            if buf.len() >= need || realloc_buf(&mut buf, need) {
+                proto.encode(wire, b5, &mut buf);
+                if let Err(e) = spi.write(&buf) {
+                    println!("spi write error: {:?}", e);
+                }
             }
             if let Some(e) = engine.as_mut().unwrap().take_error() {
                 // report each distinct error site once, not per frame — an
