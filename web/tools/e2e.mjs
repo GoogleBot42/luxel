@@ -11,7 +11,7 @@ const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
 
 const shotDir = process.argv[2] ?? "/tmp";
-const PORT = 4179;
+const PORT = Number(process.env.E2E_PORT ?? 4179);
 
 const server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
   stdio: "ignore",
@@ -70,14 +70,49 @@ try {
   check("opens on the Patterns Library", (await page.$('[data-role="library-panel"]:not([hidden])')) !== null);
   check("has a New pattern button", (await page.$('[data-role="new-pattern"]')) !== null);
   check("the examples dropdown is gone", (await page.$('[data-role="pattern-picker"]')) === null);
+  // "PixelBlaze Library" is a local-only tab (only when corpus/ is built)
   const tabs = await page.$$eval('[data-role="tabs"] .tab', (e) => e.map((x) => x.textContent.trim()));
-  check("tab is 'Patterns Library' (no Editor tab)", tabs.length === 1 && tabs[0] === "Patterns Library", tabs.join(","));
+  check(
+    "tab is 'Patterns Library' (no Editor tab)",
+    tabs[0] === "Patterns Library" &&
+      tabs.every((t) => t === "Patterns Library" || t === "PixelBlaze Library"),
+    tabs.join(","),
+  );
   await page
     .waitForFunction(() => document.querySelectorAll(".tile").length > 150, { timeout: 8000 })
     .catch(() => null);
   const tileCount = await page.$$eval(".tile", (els) => els.length);
   check("library shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
   await page.screenshot({ path: `${shotDir}/e2e-1-library.png` });
+
+  // ── 1b. tiles show a spinner until their preview draws its first frame ──
+  // Tiles only start compiling once scrolled into view, so throttle the CPU
+  // and jump to the (never-yet-visible) bottom of the list to catch the
+  // transient loading state, then confirm it clears once frames land.
+  const cdpTiles = await page.createCDPSession();
+  await cdpTiles.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+  await page.$eval('[data-role="library-panel"] .tiles', (el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const sawSpinner = await page
+    .waitForSelector('[data-role="tile-spinner"]', { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  check("tiles spin while their preview compiles", sawSpinner);
+  await cdpTiles.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+  await page
+    .waitForFunction(
+      () => document.querySelectorAll('[data-role="tile-spinner"]').length === 0,
+      { timeout: 10000 },
+    )
+    .catch(() => null);
+  const spinLeft = await page.$$eval('[data-role="tile-spinner"]', (els) => els.length);
+  check("spinners clear after the first frame", spinLeft === 0, `${spinLeft} left`);
+  await cdpTiles.detach();
+  await page.$eval('[data-role="library-panel"] .tiles', (el) => {
+    el.scrollTop = 0;
+  });
+  await sleep(300);
 
   // gallery search filters the tiles by name
   await page.type('[data-role="gallery-search"]', "rainbow");
