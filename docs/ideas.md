@@ -29,26 +29,21 @@ and the autocomplete/docs pipeline, and can't break existing code.
 - **`beatSin`/`beat`(bpm, lo, hi)** [S] ★★ — DONE.
 - **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — DONE (lowbias32,
   sequence pinned by test).
-- **`blur2D(arr, w, h, radius)`** [S/M] ★★★ — the 2D sibling of `blur1D`
-  for the row-major virtual-canvas idiom the 2D examples settled on.
-  Typing Heatmap hand-rolls a 4-neighbor diffusion loop today, Soap and
-  reaction–diffusion would both use it; it's the single hottest loop in
-  every buffer-based 2D pattern. Signature matches how the canvases are
-  already laid out, so it drops straight in.
-- **Bulk array math** [S] ★★ — `arrayAdd(dst, src)`, `arraySub`,
-  `arrayScale(a, k)`, `arrayMix(dst, src, t)` as tight VM loops.
-  Simulation patterns (reaction–diffusion runs 2×256-cell update loops
-  per frame, ~15 VM ops per cell) spend nearly all their time in
-  interpreted per-element loops; bulk ops would make grid sims several
-  times faster on-device. `feedback` already proved the shape works.
-- **Canvas deposit/sample helpers** [M] ★★ — every stateful 2D example
-  repeats `buf[floor(y * 15.99) * gw + floor(x * 15.99)]` for both
-  writes (particle deposits) and reads (render sampling), with manual
-  clamping to avoid OOB frame-aborts. A `canvasSet(buf, w, x, y, v)` /
-  `canvasGet(buf, w, x, y)` pair (or a small canvas object API) would
-  remove the sharpest footgun in 2D-buffer patterns. Bilinear sampling
-  in `canvasGet` would upgrade every canvas pattern's look on larger
-  maps for free.
+- **`blur2D(arr, w, h, radius)`** [S/M] ★★★ — DONE (separable in-place
+  box blur over the first w×h row-major elements, per-axis windows
+  `2·radius + 1` with clamped edges matching `blur1D`; undersized array
+  is a clean runtime error; Typing Heatmap now uses it).
+- **Bulk array math** [S] ★★ — DONE (`arrayAdd`/`arraySub` over the
+  shorter length, `arrayScale` = alias of `feedback`, `arrayMix(dst,
+  src, t)` unclamped lerp with `t = 1` as exact copy; all in-place,
+  return dst; aliased `f(a, a)` calls pinned by test).
+- **Canvas deposit/sample helpers** [M] ★★ — DONE (`canvasSet(buf, w,
+  x, y, v)` edge-clamped `floor(x·w)` cells — `x = 1` lands in the last
+  column, no `* 15.99` fudge; `canvasGet(buf, w, x, y)` **bilinear**
+  with texel centers at `(i + 0.5)/w`, so set/get agree on cell centers
+  and larger maps upscale smoothly; h = len/w). Possible follow-up: an
+  accumulate variant (`canvasAdd`) for particle deposits, which today
+  still index manually for read-modify-write.
 
 ## Language
 
