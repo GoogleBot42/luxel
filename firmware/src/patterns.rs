@@ -540,6 +540,12 @@ pub fn bytecode_of(id: &str) -> Option<Vec<u8>> {
     .flatten()
 }
 
+/// Upper bound on a stored pattern's source + bytecode bytes, from the TOC
+/// chunk counts alone — no flash reads, no allocation. For heap pre-flights.
+pub fn stored_size_hint(id: &str) -> Option<usize> {
+    lookup(id).map(|(_, _, count, bc_count, _)| (count as usize + bc_count as usize) * CHUNK)
+}
+
 /// Human name of a stored pattern.
 pub fn name_of(id: &str) -> Option<String> {
     lookup(id).map(|(_, _, _, _, name)| name)

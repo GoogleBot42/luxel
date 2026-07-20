@@ -118,6 +118,32 @@ async fn apply_stored() {
     let Some((id, controls)) = String::from_utf8(bytes).ok().as_deref().and_then(parse) else {
         return;
     };
+    let Some(stored) = patterns::stored_size_hint(&id) else {
+        println!("resume: stored pattern {} is gone — skipping", id);
+        return;
+    };
+    // Boot-time heap is at its trough while WiFi (whose mallocs don't
+    // null-check) is still coming up, and everything below allocates
+    // infallibly: src + bc + the envelope ≈ 2× the stored bytes. Loading
+    // straight away at a heavy config (big LED buffer, large pattern)
+    // OOM-panicked into the boot-loop guard — three strikes flipped the OTA
+    // slot back to the previous firmware. Wait for comfortable headroom;
+    // if it never shows up, skip resume and leave the default rendering.
+    let need = stored * 2 + 24 * 1024;
+    let mut waited = 0u32;
+    while esp_alloc::HEAP.free() < need {
+        if waited >= 20 {
+            println!(
+                "resume: heap too tight for {} ({} free, need {}) — skipping",
+                id,
+                esp_alloc::HEAP.free(),
+                need
+            );
+            return;
+        }
+        Timer::after(Duration::from_secs(2)).await;
+        waited += 2;
+    }
     let (Some(src), Some(bc)) = (patterns::source_of(&id), patterns::bytecode_of(&id)) else {
         println!("resume: stored pattern {} is gone — skipping", id);
         return;

@@ -288,7 +288,6 @@ async fn main(spawner: Spawner) -> ! {
     if option_env!("LUXEL_QUIET").is_none() {
         spawner.spawn(render_task(spi).unwrap());
         spawner.spawn(playlist::playlist_task().unwrap());
-        spawner.spawn(resume::resume_task().unwrap());
     } else {
         println!("LUXEL_QUIET: render task disabled");
     }
@@ -400,6 +399,14 @@ async fn main(spawner: Spawner) -> ! {
         println!("ip: http://{}/", cfg.address.address());
     }
     println!("heap free: {}", esp_alloc::HEAP.free());
+
+    // Single-pattern resume waits for the network on purpose: WiFi bring-up
+    // mallocs don't null-check, and resume's pattern load is a multi-KB burst.
+    // Spawned earlier it raced WiFi init and OOM-panicked the boot on heavy
+    // configs (2048 px) — three strikes and the boot-loop guard flipped slots.
+    // Post-IP the heap is at steady state and resume's own pre-flight is
+    // measuring reality.
+    spawner.spawn(resume::resume_task().unwrap());
 
     for task_id in 0..server::WEB_TASK_POOL_SIZE {
         spawner.spawn(server::web_task(task_id, stack).unwrap());

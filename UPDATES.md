@@ -1,5 +1,34 @@
 # Update log
 
+## 2026-07-19 — v0.1.30: boot-resume heap pre-flight (found on hardware)
+
+The v0.1.29 hardware pass caught a real boot-loop: with 2048 px + a large
+pattern persisted, boot-time resume loaded source + bytecode + envelope
+(all infallible allocations) into the boot heap trough while WiFi — whose
+mallocs don't null-check — was still initializing. OOM panic, three
+strikes, and the boot-loop guard (correctly) flipped the OTA slot back to
+v0.1.28. Two-part fix, found iteratively on the wall (a heap pre-flight
+alone still flipped — measured before WiFi had allocated anything, the
+heap looked deceptively roomy):
+- `resume_task` now spawns **after `wait_config_up()`** — resume always
+  runs against post-WiFi steady-state heap instead of racing radio
+  bring-up (no network means no resume, but also nothing to persist);
+- `apply_stored` pre-flights the heap using a new
+  `patterns::stored_size_hint` (TOC chunk counts — no flash reads, no
+  allocation), waits up to 20 s for `2× stored bytes + 24 KB` of headroom,
+  and skips resume gracefully if it never appears (the default pattern
+  keeps rendering; the library copy is untouched).
+Verified on the wall: the same 2048 px scenario now reboots cleanly on
+the same slot. The playlist task still spawns pre-WiFi as it always has
+(soak-proven at 300 px) — worth revisiting if heavy-config playlists ever
+misbehave at boot.
+
+Also verified on hardware from the v0.1.29 checklist: single-pattern
+resume at 300 px (pattern + controls back after power-cycle), live
+sk9822↔ws2812 switches with no outage, and the back-to-back
+`/api/config` + `/api/protocol` persistence race (both values survive a
+reboot — the WANT_* fix works).
+
 ## 2026-07-19 — First full-library hardware soak: 321/322 clean, 0 panics — the render2D holdouts are closed
 
 The first soak since library/ became the gallery source, and it covers the
