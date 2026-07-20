@@ -318,6 +318,9 @@ async fn activate_by_name(name: &str) {
     drop((source, bc));
     MSG_QUEUE.send(Msg::Code { env }).await;
     set_current_pattern_id(&id);
+    // same single-pattern resume bookkeeping as the HTTP activate
+    crate::shared::set_current_controls(alloc::vec::Vec::new());
+    crate::resume::mark_dirty();
 }
 
 /// Persist a brightness change (read-modify-write, like POST /api/brightness).

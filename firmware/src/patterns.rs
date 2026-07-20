@@ -551,6 +551,8 @@ pub fn name_of(id: &str) -> Option<String> {
 pub const PLAYLIST_KEY: u32 = 0x7FFF_FFFE;
 pub const PLAYSTATE_KEY: u32 = 0x7FFF_FFFD;
 pub const MAP_KEY: u32 = 0x7FFF_FFFC;
+/// Single-pattern resume record (see resume.rs).
+pub const RESUME_KEY: u32 = 0x7FFF_FFFB;
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.

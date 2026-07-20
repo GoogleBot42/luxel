@@ -1,5 +1,42 @@
 # Update log
 
+## 2026-07-19 — v0.1.29: single-pattern reboot resume + LED-protocol re-init hardening
+
+Two device-robustness features, both off-hardware so far (compile-checked;
+the hardware pass has a checklist in docs/webui.md).
+
+- **Single-pattern reboot persistence** (the deferred half of playlist
+  resume): an *activated saved* pattern + its explicitly-set slider values
+  now survive a reboot. New `firmware/src/resume.rs`; record under reserved
+  storage key `0x7FFF_FFFB` (next to the playlist's), line format matching
+  playlist.rs (`P <id>` + `C <name> <raw…>`). Rules:
+  - only library patterns persist — an ad-hoc `/api/code` push has no saved
+    source, so the record is left alone and a reboot resumes the last
+    *saved* state;
+  - **playlist precedence**: the record is neither written while a playlist
+    plays nor applied at boot when the playlist's was-playing flag resumes;
+    stopping a playlist marks the item that was showing as the resume state;
+  - **flash-wear discipline**: writes debounce (3 s of quiet after the last
+    activation/slider event) and identical records are never rewritten;
+  - resume is graceful about deleted patterns and stale-format bytecode
+    (post-OTA LXBC bump) — it just skips, leaving the built-in default.
+- **LED-protocol re-init edge cases** (the last Phase-4 stragglers):
+  - `Msg::Protocol` reconfigures the SPI clock *first* and only commits the
+    protocol if that succeeded (no more encode-format/wire-clock mismatch on
+    a failed apply);
+  - the encode buffer is reallocated old-buffer-freed-first and *fallibly*
+    (ws2812@2048px ≈ 18 KB; the infallible re-alloc could OOM-panic → reboot
+    on a tight heap); on failure the engines freeze and it retries; both
+    encode paths length-check the buffer (lazily re-allocating once heap
+    frees up, else skipping output) instead of indexing out of bounds;
+  - `Msg::Config` frees the engines *before* resizing the buffer (peak-heap
+    ordering);
+  - **requested-vs-applied persistence fix**: `/api/config` + `/api/protocol`
+    persist from new `WANT_PIXEL_COUNT`/`WANT_PROTOCOL` atomics (stored at
+    enqueue) instead of the applied atomics, which lag until the render task
+    drains the message — back-to-back POSTs could previously persist a stale
+    value for the other field and lose one setting across a reboot.
+
 ## 2026-07-08 — v0.1.28: `assert()` — invariants become real code; playlists pre-flight against the config
 
 Jeremy's redesign of the hours-old `//# require` directive, and it's
