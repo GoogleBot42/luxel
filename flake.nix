@@ -188,6 +188,12 @@
           target = "xtensa-esp32-none-elf";
           buildStd = true;
         };
+        luxel-fw-esp32-generic = {
+          board = "board-esp32-generic";
+          chip = "esp32";
+          target = "xtensa-esp32-none-elf";
+          buildStd = true;
+        };
       };
     in
     {
