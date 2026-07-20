@@ -7,6 +7,10 @@
 | `board-c3-devkit` (default) | ESP32-C3 | RISC-V | mainline Rust (in the flake) | bare C3 devkits; SPI CLK GPIO6 / DATA GPIO7 |
 | `board-pixelblaze-v3` | ESP32 (WROOM-32) | Xtensa | Espressif rustc fork (in the flake) | Pixelblaze v3 Standard — the preferred real-hardware target |
 | `board-athom-music` | ESP32 (WROOM-32E) | Xtensa | Espressif rustc fork (in the flake) | Athom music-reactive WLED controller (OTA-only, riskier) |
+| `board-esp32-generic` | ESP32 (WROOM/DevKitC) | Xtensa | Espressif rustc fork (in the flake) | generic devkit, VSPI defaults (CLK GPIO18 / DATA GPIO23) |
+
+Pin maps, per-board status, and the add-a-board recipe live in
+[docs/boards.md](boards.md).
 
 Both toolchains come from `nix develop` — no imperative setup. The Xtensa
 one (Espressif's rustc fork + xtensa GNU linker, needed because mainline
@@ -29,7 +33,8 @@ BOARD=board-pixelblaze-v3 ./build-esp32.sh      # or `… ./build-esp32.sh flash
 Build (nix package, hermetic — reproducible images):
 
 ```sh
-nix build .#luxel-fw-pixelblaze-v3     # also: luxel-fw-c3-devkit, luxel-fw-athom-music
+nix build .#luxel-fw-pixelblaze-v3     # also: luxel-fw-c3-devkit,
+                                        #   luxel-fw-athom-music, luxel-fw-esp32-generic
 ls result/                              # luxel-fw.elf + luxel-fw.bin
 espflash write-bin 0 result/luxel-fw.bin   # full-flash image (bootloader+partitions+app)
 ```

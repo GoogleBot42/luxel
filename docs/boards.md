@@ -17,23 +17,49 @@ BOARD=board-pixelblaze-v3 ./build-esp32.sh          # build only
 BOARD=board-esp32-generic ./build-esp32.sh flash    # flash app + web assets
 ```
 
+Hermetic images (no devshell needed) come from the flake — one package per
+board: `nix build .#luxel-fw-pixelblaze-v3` (also `luxel-fw-c3-devkit`,
+`luxel-fw-athom-music`, `luxel-fw-esp32-generic`); see docs/firmware.md for
+the credential-baking caveats.
+
 ## Supported boards
 
-| feature | chip | strip pins | defaults | notes |
-|---|---|---|---|---|
-| `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | bare devkit |
-| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
-| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18 | WS2812, 60 px | Athom music-reactive WLED controller; strip-VCC relay on GPIO2 must be driven high or the strip stays dark; channel 2 + mic + IR unused for now |
-| `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | VSPI defaults — most WROOM/DevKitC boards break these out |
+| feature | chip | strip pins | defaults | status | notes |
+|---|---|---|---|---|---|
+| `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | supported (hardware-verified) | bare devkit |
+| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
+| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18 | WS2812, 60 px | builds, untested on hardware | Athom music-reactive WLED controller — demoted from bench hardware, config stays maintained; strip-VCC relay on GPIO2 must be driven high or the strip stays dark; channel 2 + mic + IR unused for now |
+| `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
 
-All four build clean as of v0.1.24 (C3 + the three Xtensa variants).
-Hardware-verified: `board-pixelblaze-v3` (the dev unit) and
-`board-c3-devkit`. The Athom and generic definitions are wiring-reviewed
-but not yet lit up.
+All four build clean as of v0.1.28 (verified compile + image-size check;
+"untested" above means the wiring is reviewed but the board has not been
+lit up). Both protocols run over SPI: SK9822/APA102 uses CLK+DATA; WS281x
+uses DATA only (encoded bitstream), so a WS2812 board simply leaves CLK
+unconnected — the pin still gets claimed.
 
-Both protocols run over SPI: SK9822/APA102 uses CLK+DATA; WS281x uses DATA
-only (encoded bitstream), so a WS2812 board simply leaves CLK unconnected —
-the pin still gets claimed.
+## The 1 MiB OTA-slot ceiling
+
+The partition table (firmware/partitions.csv) is pure A/B with 1 MiB
+(1,048,576-byte) app slots, so the app image — what `espflash save-image`
+emits and `/api/ota` writes — must stay under that or OTA rejects it
+(crossed once at v0.1.17; opt-level "s" bought it back — history and diet
+options in docs/size-report.md). Per-board app images at v0.1.28:
+
+| board | app image | slot margin |
+|---|---:|---:|
+| `board-c3-devkit` | 838,416 B | 210,160 B |
+| `board-pixelblaze-v3` | 889,376 B | 159,200 B |
+| `board-athom-music` | 889,248 B | 159,328 B |
+| `board-esp32-generic` | 889,232 B | 159,344 B |
+
+The Xtensa variants differ only by a few hundred bytes (same chip feature
+set; only board.rs strings and the wiring lines change), so checking one
+classic-ESP32 board per release is enough. Measure with:
+
+```sh
+espflash save-image --chip esp32 \
+  target/xtensa-esp32-none-elf/release/luxel-fw /tmp/ota.bin && stat -c %s /tmp/ota.bin
+```
 
 ## Adding a board (a five-minute diff)
 
@@ -83,7 +109,9 @@ Three files, no other code paths involved:
 
 Then build it (`BOARD=board-my-thing ./build-esp32.sh` for Xtensa, or
 `cargo build --no-default-features --features board-my-thing` for a C3-class
-chip) and add a row to the table above.
+chip) and add a row to the table above. If the board should also get a
+hermetic `nix build` image, add a `luxel-fw-my-thing` entry to
+`firmwareVariants` in flake.nix (a four-line attrset — copy a neighbor).
 
 Pins are esp-hal *types*, not data — that's why wiring lives in code behind
 `cfg` rather than in the `def` table. Defaults only seed the first boot;
