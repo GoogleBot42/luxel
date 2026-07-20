@@ -146,9 +146,15 @@ address). Prominent in the playground toolbar.
 
 ## Patterns browser
 
-### Spinners while computing/loading [S]
-Pattern tiles should show a spinner while their preview engine is compiling /
-the pattern is loading, instead of appearing dead/blank.
+### Spinners while computing/loading [S] ✅
+Done. Pattern tiles (Patterns Library + PixelBlaze Library tabs — the same
+Gallery component backs both) overlay a small spinner (`data-role=
+"tile-spinner"`) from the moment a tile is in view until its engine has
+compiled and drawn its first frame; patterns that don't compile keep the
+existing grayed-out "dead" treatment instead. Device-pattern thumbnails
+(PatternThumb) do the same (`data-role="thumb-spinner"`), covering the
+source fetch as well. e2e covers spinner-appears / spinner-clears via CPU
+throttling + scrolling fresh tiles into view.
 
 ---
 

@@ -94,7 +94,7 @@
     <canvas bind:this={canvas} width="72" height="16"></canvas>
   {/if}
   {#if source === undefined || (!ready && !dead)}
-    <span class="spinner" aria-label="loading preview"></span>
+    <span class="spinner" data-role="thumb-spinner" aria-label="loading preview"></span>
   {/if}
 </span>
 

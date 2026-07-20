@@ -280,7 +280,12 @@
             <canvas width="128" height="18"></canvas>
           {/if}
           {#if t.visible && !t.ready && !t.dead}
-            <span class="spinner" aria-label="loading" title="computing preview…"></span>
+            <span
+              class="spinner"
+              data-role="tile-spinner"
+              aria-label="loading"
+              title="computing preview…"
+            ></span>
           {/if}
         </span>
         <span class="tname">{t.name}</span>

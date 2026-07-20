@@ -13,7 +13,7 @@ import { lxpBody } from "./lxp.mjs";
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
 
-const PORT = 4181;
+const PORT = Number(process.env.E2E_PORT ?? 4181);
 const DEV_PORT = 8723;
 const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -544,6 +544,16 @@ try {
     .then(() => true)
     .catch(() => false);
   check("library: device pattern shows a preview thumbnail", hasThumb);
+  // the thumb spins while the source fetch + compile are in flight, then the
+  // spinner drops once the first frame lands
+  await page
+    .waitForFunction(
+      () => document.querySelectorAll('[data-role="thumb-spinner"]').length === 0,
+      { timeout: 6000 },
+    )
+    .catch(() => null);
+  const thumbSpin = await page.$$eval('[data-role="thumb-spinner"]', (els) => els.length);
+  check("library: thumb spinner clears after first frame", thumbSpin === 0, `${thumbSpin} left`);
   // clicking it opens the editor and activates it on the device
   const seenReqs = [];
   page.on("request", (r) => {
