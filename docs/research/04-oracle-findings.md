@@ -206,6 +206,18 @@ bounds on a mapless Luxel):
   patterns' own assumption: `floor(1.0·√300) = 17` indexes past a
   17-slot array on a real PB just like on Luxel (engine test pins both
   halves of that).
+- **Resolution (2026-07-19)**: the four square-rig soak holdouts
+  (Breakout/Crosstown Traffic/Frogger/Swirlpool 2D) are gone — not via an
+  engine change but because the clean-room library reimplementations that
+  now source the gallery deliberately dropped the original patterns'
+  `sqrt(pixelCount)`-square assumption (fixed 16×16 virtual canvases /
+  map-driven normalized-coordinate math), so they run at any pixel count.
+  Verified three ways at 300 px: native CLI (10 simulated minutes each,
+  plus seed and fps sweeps), the shipped playground wasm (6000 frames
+  each), and on-device (no vmerr). The default-grid semantics above are
+  unchanged and remain the PB-as-experienced behavior; a corpus-faithful
+  square-rig pattern would still OOB at non-square counts on Luxel *and*
+  on a real PB alike (verified live at 10×30 earlier).
 - Map plumbing learned along the way: maps save via `POST /edit`
   (form-file `/pixelmap.txt`) + ws `{savePixelMap:true}`; the compiled
   map is `GET /pixelmap.dat` (u16 header: version, dims, byte length;

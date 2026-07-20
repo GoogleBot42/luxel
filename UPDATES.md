@@ -1,5 +1,39 @@
 # Update log
 
+## 2026-07-19 — First full-library hardware soak: 321/322 clean, 0 panics — the render2D holdouts are closed
+
+The first soak since library/ became the gallery source, and it covers the
+whole thing: all **322** patterns (the old 195 plus the completed clean-room
+corpus), each run on the wall unit's strip.
+
+- **321/322 clean, 0 panics, 0 rejections, 0 reboots** (serial monitored
+  end to end); lowest heap seen 53.1 KB; fps at 300 px median 56, p90 123.
+  Report regenerated at docs/bench-report.md.
+- **The Breakout/Crosstown/Frogger/Swirlpool OOB class is closed.** Root
+  cause of the old 4 errors: the pre-clean-room gallery sources carried the
+  originals' `sqrt(pixelCount)`-square-rig assumption (fails identically on
+  a real PB at 300 px — oracle-verified earlier). The clean-room
+  reimplementations dropped that assumption by design (fixed 16×16 virtual
+  canvases / map-driven normalized coordinates), so with the oracle-derived
+  default ceil(√n) grid they run at any pixel count. Verified natively
+  (10 simulated minutes each + seed/fps sweeps), in the shipped playground
+  wasm (6000 frames each), and on-device. No engine change was needed;
+  the PB-semantics reasoning is recorded in
+  docs/research/04-oracle-findings.md ("Maps and render2D" → Resolution).
+- **Emoji Animation #2 confirmed on-device**: 20 fps, no vmerr, 87 KB free
+  (the LXBC v3 const-array fix holding in practice).
+- The one remaining holdout is new territory from the expanded library:
+  **"Music Sequencer - for V3 ONLY"** — a true capacity failure, and a
+  near miss. 663 lines, 17.8 KB blob, ~71 KB total engine footprint
+  (heapstat's largest); it loads at idle heap but leaves **19 KB** free,
+  1 KB under the firmware's 20 KB floor, and is cleanly rejected with the
+  user-facing "pattern too large for this device" error (mid-soak, with
+  less heap, it fails at decode instead). It runs fine in the playground.
+  Closing it means flash-mapped execution or WiFi-blob tuning
+  (docs/ideas.md) — not worth a risky radio-stack gamble for one pattern.
+- No firmware change; device stays on v0.1.28, restored to rainbow/300 px
+  and healthy (103.8 KB idle free) after the soak.
+
 ## 2026-07-08 — v0.1.28: `assert()` — invariants become real code; playlists pre-flight against the config
 
 Jeremy's redesign of the hours-old `//# require` directive, and it's

@@ -83,16 +83,22 @@ bytecode execution is being worked on now; the rest are queued:
   04-oracle-findings.md): a PB that ever saved a map can't be made mapless
   via its public interface, so PB-as-experienced always has one; Luxel now
   auto-installs a default ceil(√n) grid for 2D/3D-only patterns. The
-  remaining Breakout/Crosstown/Frogger failures at 300 px are the
+  remaining Breakout/Crosstown/Frogger failures at 300 px were the
   patterns' own square-rig assumption — they'd OOB identically on a real
-  PB at 300 px (engine test pins both halves).
+  PB at 300 px (engine test pins both halves). CLOSED 2026-07-19: the
+  clean-room library reimplementations dropped that assumption; all four
+  run clean on-device (full-library soak 321/322).
 - **Flash-mapped library execution** [L] ★ — the very last word in pattern
   RAM: run library patterns straight out of flash-mapped storage (no RAM
   copy of the code at all). Needs contiguous blob placement (the
   sequential-storage KV chunks aren't mappable) — e.g. a dedicated raw
-  region like the web-assets partition. With in-place execution shipped,
-  only Emoji-class patterns (arrays, not code) still exceed the device, so
-  this is now low-priority.
+  region like the web-assets partition. With in-place execution + the
+  const-array pool shipped, exactly ONE library pattern still exceeds the
+  device: "Music Sequencer - for V3 ONLY" (663 lines; 17.8 KB blob,
+  ~71 KB total engine footprint per heapstat — it loads at idle heap but
+  leaves 19 KB free, 1 KB under the 20 KB floor, and is rejected with the
+  friendly capacity error). This item or WiFi-blob tuning below would
+  clear it.
 - **WiFi-blob buffer tuning** [M] ★ — esp-radio's RX/TX buffer counts are
   default-generous; the blob's heap draw is the biggest remaining consumer
   (~40+ KB). Tunable via esp-config; trade OTA/preview throughput for
