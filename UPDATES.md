@@ -37,11 +37,16 @@ until the first single-wire strip.
   interleave (frozen assets push = clean), upload pacing (8 KB/s
   throttle still crashed). The one structural delta left was
   taken-bare vs borrowed-per-op flash access, so the OTA writer now
-  uses the empirically-bulletproof shape. NOT yet verified on
-  hardware — v0.1.31's broken OTA path can't receive this image, so
-  the first v0.1.32 install needs a serial flash (`luxel-full.bin`
-  built and ready; that also upgrades the Athom off the Arduino-2019
-  bootloader it kept through the WLED takeover).
+  uses the empirically-bulletproof shape. **Verified on hardware**:
+  after a serial full-flash install (which also upgraded the Athom
+  off the Arduino-2019 bootloader to espflash's ESP-IDF v5.5.1 one),
+  a full 908 KB OTA self-push wrote all 222 sectors, activated, and
+  rebooted into ota_1 cleanly — the first successful /api/ota on this
+  device ever. (Caveat: bootloader and writer changed together, so
+  the fix isn't isolated to one of them.) Residual cosmetic flaw:
+  the success response still often dies in the reboot window, so
+  ota-push.sh reports failure on a push that actually landed — check
+  /api/status version/slot.
 - **Known hole, documented not fixed**: `commit` activates on
   `written == Content-Length` alone, so a *truncated prefix* of a real
   image (valid header magic + app-desc) activates and hands the
