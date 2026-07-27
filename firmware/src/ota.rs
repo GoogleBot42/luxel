@@ -21,6 +21,7 @@
 //! assets::read_chunk), not this loop.
 
 use core::cell::RefCell;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -34,6 +35,15 @@ use esp_storage::FlashStorage;
 
 static FLASH: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<FlashStorage<'static>>>> =
     BlockingMutex::new(RefCell::new(None));
+
+/// True while an OTA upload owns the flash write path. Blocks a second OTA
+/// and [take_flash] users (pattern/playlist stores) for the duration — the
+/// OTA writer itself goes through [with_flash] per operation, exactly like
+/// the assets writer, so the driver stays in the global. (The previous
+/// design *took* the driver for the whole upload and ran the flash ops on
+/// it bare; that path crashed the Athom mid-erase-burst 5/5 while the
+/// borrow-per-op assets path was clean 4/4 — see UPDATES.md 2026-07-27.)
+static OTA_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Which app partition is running, for /api/status. Set once at boot.
 static BOOTED: BlockingMutex<CriticalSectionRawMutex, RefCell<&'static str>> =
@@ -83,8 +93,12 @@ pub fn with_flash<T>(f: impl FnOnce(&mut FlashStorage<'static>) -> T) -> Option<
 /// holding one across sequential-storage's scans + page erases would disable
 /// interrupts far too long. The caller runs its (blocking) flash work with
 /// interrupts enabled, then returns the driver via [give_flash]. Returns None
-/// if an OTA currently owns it. Pair with a Drop guard for panic safety.
+/// while an OTA upload is in progress (its slot writes must not interleave
+/// with a store transaction). Pair with a Drop guard for panic safety.
 pub fn take_flash() -> Option<FlashStorage<'static>> {
+    if OTA_ACTIVE.load(Ordering::Acquire) {
+        return None;
+    }
     FLASH.lock(|c| c.borrow_mut().take())
 }
 
@@ -235,8 +249,6 @@ pub fn data_partition(label: &str) -> Option<(u32, u32)> {
 }
 
 pub struct OtaWriter {
-    /// Some until commit/drop; Drop returns the driver to `FLASH`.
-    flash: Option<FlashStorage<'static>>,
     partition_offset: u32,
     capacity: u32,
     written: u32,
@@ -247,20 +259,38 @@ pub struct OtaWriter {
 
 impl Drop for OtaWriter {
     fn drop(&mut self) {
-        if let Some(f) = self.flash.take() {
-            FLASH.lock(|c| *c.borrow_mut() = Some(f));
-        }
+        OTA_ACTIVE.store(false, Ordering::Release);
     }
 }
 
-/// Begin an update: claims the flash driver and locates the inactive slot.
-/// Stream sectors with [OtaWriter::write]; [OtaWriter::commit] activates.
-/// Dropping without commit leaves otadata untouched (the half-written slot
-/// stays inactive).
+/// Begin an update: marks the OTA active (blocking [take_flash] users) and
+/// locates the inactive slot. Stream sectors with [OtaWriter::write];
+/// [OtaWriter::commit] activates. Dropping without commit leaves otadata
+/// untouched (the half-written slot stays inactive).
 pub fn begin() -> Result<OtaWriter, &'static str> {
-    let Some(mut flash) = FLASH.lock(|c| c.borrow_mut().take()) else {
+    // claim flag + driver together inside the FLASH critical section (the
+    // C3 target has no atomic swap, so the mutex provides the atomicity)
+    let claimed = FLASH.lock(|c| {
+        if OTA_ACTIVE.load(Ordering::Relaxed) {
+            return None;
+        }
+        let f = c.borrow_mut().take()?;
+        OTA_ACTIVE.store(true, Ordering::Relaxed);
+        Some(f)
+    });
+    let Some(mut flash) = claimed else {
         return Err("update already in progress");
     };
+    // released on every early-out below; OtaWriter's Drop takes over after
+    struct ActiveGuard(bool);
+    impl Drop for ActiveGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                OTA_ACTIVE.store(false, Ordering::Release);
+            }
+        }
+    }
+    let mut guard = ActiveGuard(true);
     // Heap, not stack (3 KiB frames + WiFi level-6 NMIs on the current task
     // stack overflowed the main task during flash ops). into_boxed_slice,
     // NOT Box::new([..]): the latter builds the array on the stack first
@@ -298,8 +328,10 @@ pub fn begin() -> Result<OtaWriter, &'static str> {
 
     let slot = slot_name(next);
     println!("ota: writing {} at {:#x} (capacity {})", slot, offset, capacity);
+    // the driver goes back to the global — the writer borrows it per op
+    FLASH.lock(|c| *c.borrow_mut() = Some(flash));
+    guard.0 = false; // the OtaWriter's Drop owns the flag from here
     Ok(OtaWriter {
-        flash: Some(flash),
         partition_offset: offset,
         capacity,
         written: 0,
@@ -342,27 +374,41 @@ impl OtaWriter {
         const SECTOR: u32 = 4096;
         let at = self.partition_offset + self.written;
         let end = at + chunk.len() as u32;
-        // erase every sector in [at, end) not yet erased
+        // erase every sector in [at, end) not yet erased — borrow-per-op
+        // via with_flash, byte-for-byte the assets writer's shape
         let mut s = self.erased_end.max(at & !(SECTOR - 1));
         while s < end {
-            let flash = self.flash.as_mut().expect("live until drop");
-            embedded_storage::nor_flash::NorFlash::erase(flash, s, s + SECTOR)
-                .map_err(|_| "flash erase failed")?;
+            let ok = with_flash(|f| {
+                embedded_storage::nor_flash::NorFlash::erase(f, s, s + SECTOR).is_ok()
+            })
+            .unwrap_or(false);
+            if !ok {
+                return Err("flash erase failed");
+            }
             s += SECTOR;
             self.erased_end = s;
             embassy_futures::yield_now().await;
         }
-        let flash = self.flash.as_mut().expect("live until drop");
         let whole = chunk.len() & !3;
         if whole > 0 {
-            embedded_storage::nor_flash::NorFlash::write(flash, at, &chunk[..whole])
-                .map_err(|_| "flash write failed")?;
+            let ok = with_flash(|f| {
+                embedded_storage::nor_flash::NorFlash::write(f, at, &chunk[..whole]).is_ok()
+            })
+            .unwrap_or(false);
+            if !ok {
+                return Err("flash write failed");
+            }
         }
         if whole < chunk.len() {
             let mut tail = [0xFFu8; 4];
             tail[..chunk.len() - whole].copy_from_slice(&chunk[whole..]);
-            embedded_storage::nor_flash::NorFlash::write(flash, at + whole as u32, &tail)
-                .map_err(|_| "flash write failed")?;
+            let ok = with_flash(|f| {
+                embedded_storage::nor_flash::NorFlash::write(f, at + whole as u32, &tail).is_ok()
+            })
+            .unwrap_or(false);
+            if !ok {
+                return Err("flash write failed");
+            }
         }
         self.written += chunk.len() as u32;
         Ok(())
@@ -371,24 +417,26 @@ impl OtaWriter {
     /// Activate the freshly written slot. The caller reboots afterwards.
     /// `expected` is the request's Content-Length: a short body (client
     /// aborted but the reads drained cleanly) must never activate.
-    pub fn commit(mut self, expected: u32) -> Result<u32, &'static str> {
+    pub fn commit(self, expected: u32) -> Result<u32, &'static str> {
         if self.written == 0 || self.written != expected {
             return Err("incomplete image; not activating");
         }
-        let flash = self.flash.as_mut().expect("live until drop");
         // heap, not stack: 3 KiB frames + WiFi level-6 NMIs (which run on the
-    // current task stack) overflowed the main task during flash ops
-    // into_boxed_slice, NOT Box::new([..]): the latter builds the ~3 KiB
-    // array on the stack before moving it to the heap (caught by
-    // clippy::large_stack_arrays) — exactly the transient stack pressure the
-    // OTA path must avoid. This allocates straight on the heap.
-    let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> =
-        alloc::vec![0u8; PARTITION_TABLE_MAX_LEN].into_boxed_slice().try_into().unwrap();
-        let mut ota =
-            OtaUpdater::new(flash, &mut *buffer).map_err(|_| "ota reopen failed")?;
-        ota.activate_next_partition()
-            .and_then(|_| ota.set_current_ota_state(OtaImageState::New))
-            .map_err(|_| "activate failed")?;
-        Ok(self.written)
+        // current task stack) overflowed the main task during flash ops.
+        // into_boxed_slice, NOT Box::new([..]): the latter builds the ~3 KiB
+        // array on the stack before moving it to the heap (caught by
+        // clippy::large_stack_arrays) — exactly the transient stack pressure
+        // the OTA path must avoid. This allocates straight on the heap.
+        let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> =
+            alloc::vec![0u8; PARTITION_TABLE_MAX_LEN].into_boxed_slice().try_into().unwrap();
+        with_flash(|f| {
+            let mut ota =
+                OtaUpdater::new(f, &mut *buffer).map_err(|_| "ota reopen failed")?;
+            ota.activate_next_partition()
+                .and_then(|_| ota.set_current_ota_state(OtaImageState::New))
+                .map_err(|_| "activate failed")?;
+            Ok(self.written)
+        })
+        .unwrap_or(Err("flash driver unavailable"))
     }
 }

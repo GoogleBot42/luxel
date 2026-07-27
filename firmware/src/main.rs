@@ -39,7 +39,7 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::rng::Rng;
-use esp_hal::spi::master::{Config as SpiConfig, Spi};
+use esp_hal::spi::master::{Config as SpiConfig, Spi, SpiDma};
 use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
@@ -220,6 +220,17 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "board-esp32-generic")]
     let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
     // ---- end board wiring ----
+
+    // DMA, so each frame is ONE continuous transfer. The FIFO path splits
+    // writes into 64-byte transactions with a CPU busy-wait between them;
+    // 64 B = 512 SPI bits, not divisible by WS2812's 3-bits-per-bit, so
+    // every chunk boundary corrupts a bit mid-symbol — and a WiFi interrupt
+    // in the gap stretches it past the strip's latch time (partial-frame
+    // latch). SK9822 is clocked and never noticed.
+    #[cfg(feature = "esp32c3")]
+    let spi = spi.with_dma(p.DMA_CH0);
+    #[cfg(feature = "esp32")]
+    let spi = spi.with_dma(p.DMA_SPI2);
 
     // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —
     // no esp-storage FlashStorage construction, no boot-time partition
@@ -500,18 +511,44 @@ fn spi_cfg(p: Protocol) -> SpiConfig {
         .with_mode(Mode::_0)
 }
 
+/// SPI encode buffer, u32-backed: the DMA driver only streams a slice
+/// zero-copy when its base is 4-byte-aligned and its length a multiple
+/// of 4 (classic-ESP32 DMA rule) — a Vec<u8> guarantees neither, and the
+/// fallback re-chunks the frame through a bounce buffer (wire gaps: the
+/// exact WS2812 corruption DMA is here to prevent). The ≤3 pad bytes
+/// stay zero — harmless on both protocols (SK9822 end clocks / WS2812
+/// latch tail).
+struct EncodeBuf(alloc::vec::Vec<u32>);
+
+impl EncodeBuf {
+    const fn new() -> Self {
+        Self(alloc::vec::Vec::new())
+    }
+    fn len(&self) -> usize {
+        self.0.len() * 4
+    }
+    fn bytes(&self) -> &[u8] {
+        // u32 → u8 reinterpret: alignment only loosens, length is exact
+        unsafe { core::slice::from_raw_parts(self.0.as_ptr().cast(), self.0.len() * 4) }
+    }
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.0.as_mut_ptr().cast(), self.0.len() * 4) }
+    }
+}
+
 /// Resize the SPI encode buffer, releasing the old allocation BEFORE
 /// reserving the new one — a protocol switch can more than double it
 /// (WS2812 is 9 B/px vs SK9822's ~4 B/px; at 2048 px that's an 18 KB
 /// allocation which must not coexist with the old buffer on a tight heap).
 /// Fallible: on false the buffer is left empty and the encode paths (which
 /// check the length) skip SPI output rather than indexing out of bounds.
-fn realloc_buf(buf: &mut alloc::vec::Vec<u8>, len: usize) -> bool {
-    *buf = alloc::vec::Vec::new(); // free the old allocation first
-    if buf.try_reserve_exact(len).is_err() {
+fn realloc_buf(buf: &mut EncodeBuf, len: usize) -> bool {
+    buf.0 = alloc::vec::Vec::new(); // free the old allocation first
+    let words = len.div_ceil(4);
+    if buf.0.try_reserve_exact(words).is_err() {
         return false;
     }
-    buf.resize(len, 0);
+    buf.0.resize(words, 0);
     true
 }
 
@@ -570,7 +607,7 @@ fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engi
 
 /// frames. Yields to the network tasks after every frame.
 #[embassy_executor::task]
-async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
+async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
     let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
     // master power (HA light switch): off = encode at brightness 0 (black on
     // both protocols) while the engine keeps ticking, so ON resumes mid-motion
@@ -612,8 +649,14 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     if let Err(e) = spi.apply_config(&spi_cfg(cur_protocol())) {
         println!("spi config error: {:?}", e);
     }
-    let mut buf =
-        alloc::vec![0u8; cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
+    let mut buf = EncodeBuf::new();
+    if !realloc_buf(
+        &mut buf,
+        cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize),
+    ) {
+        // the encode paths retry lazily once heap frees up
+        println!("encode buffer alloc failed at boot — output paused");
+    }
     // crossfade: the outgoing engine + blend timing + a reusable blend buffer
     let mut prev: Option<Engine> = None;
     let mut blend_start = Instant::now();
@@ -840,8 +883,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             // (heap may have freed up); never index out of bounds
             let need = proto.buf_len(wire.len());
             if buf.len() >= need || realloc_buf(&mut buf, need) {
-                proto.encode(wire, b5, &mut buf);
-                if let Err(e) = spi.write(&buf) {
+                proto.encode(wire, b5, buf.bytes_mut());
+                if let Err(e) = spi.write(buf.bytes()) {
                     println!("spi write error: {:?}", e);
                 }
             }
@@ -899,8 +942,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             // (heap may have freed up); never index out of bounds
             let need = proto.buf_len(wire.len());
             if buf.len() >= need || realloc_buf(&mut buf, need) {
-                proto.encode(wire, b5, &mut buf);
-                if let Err(e) = spi.write(&buf) {
+                proto.encode(wire, b5, buf.bytes_mut());
+                if let Err(e) = spi.write(buf.bytes()) {
                     println!("spi write error: {:?}", e);
                 }
             }

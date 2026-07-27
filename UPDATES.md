@@ -1,5 +1,57 @@
 # Update log
 
+## 2026-07-27 — v0.1.32: WS2812 goes DMA (fixes erratic colors) + OTA
+## writer parity
+
+Jeremy's first real WS2812b test (300 px on the Athom) showed erratic
+colors on a plain rainbow. Root cause, confirmed in esp-hal source: the
+blocking `Spi::write` splits every frame into 64-byte FIFO transactions
+with a busy-wait between them. 64 B = 512 SPI bits, and WS2812 encodes
+each LED bit as 3 SPI bits — so every chunk boundary lands mid-symbol
+and corrupts a bit (43 boundaries per 300-px frame), and a WiFi
+interrupt in the gap stretches it past the strip's latch threshold
+(partial-frame latch, rest of the frame re-addresses from pixel 0).
+SK9822 has a clock line and never cared — which is why nothing showed
+until the first single-wire strip.
+
+- **SPI output is now DMA** (`SpiDma`, blocking mode): one continuous
+  gap-free transfer per frame on both chips (esp32: `DMA_SPI2`, c3:
+  `DMA_CH0`). The encode buffer became a `u32`-backed `EncodeBuf` —
+  the DMA driver only streams a slice zero-copy when it's 4-byte
+  aligned with a length that's a multiple of 4 (classic-ESP32 rule);
+  anything else bounces through a 4-byte internal buffer, i.e. the
+  exact re-chunking the DMA is here to prevent. Max frame (2048 px
+  WS2812 = 18.5 KB) fits one transfer (driver cap 32,736 B).
+- **OTA writer rebuilt to match the assets writer** (borrow-per-op via
+  `with_flash` instead of taking the driver for the whole upload; an
+  `OTA_ACTIVE` flag now provides the in-progress guard). Motivation:
+  on the Athom, `/api/ota` crashed the device (CPU exception or silent
+  lockup mid-erase-burst, panic-reboot or power-cycle to recover)
+  **5/5 attempts**, while the line-for-line-identical assets upload
+  path was clean 4/4 (930 KB, 227 sector erases each — including with
+  the engine frozen). Exonerated by experiment: the Freeze (assets
+  push with engine provably frozen at 20 fps = clean), `ota::begin`'s
+  partition-table reads (junk-image OTA runs them and rejects cleanly,
+  device stays healthy), esp-storage's per-op critical section (active
+  in both paths, verified via cargo tree), executor-idle/WAITI
+  interleave (frozen assets push = clean), upload pacing (8 KB/s
+  throttle still crashed). The one structural delta left was
+  taken-bare vs borrowed-per-op flash access, so the OTA writer now
+  uses the empirically-bulletproof shape. NOT yet verified on
+  hardware — v0.1.31's broken OTA path can't receive this image, so
+  the first v0.1.32 install needs a serial flash (`luxel-full.bin`
+  built and ready; that also upgrades the Athom off the Arduino-2019
+  bootloader it kept through the WLED takeover).
+- **Known hole, documented not fixed**: `commit` activates on
+  `written == Content-Length` alone, so a *truncated prefix* of a real
+  image (valid header magic + app-desc) activates and hands the
+  problem to the bootloader's image validation / boot-loop guard. Real
+  espflash images from ota-push.sh are never truncated; my probe files
+  were. A structural end-of-image check would close it.
+- Rig lesson recorded: /dev/ttyUSB0 serial works fine — but only ONE
+  reader at a time; a forgotten background `cat` silently steals every
+  byte and looks exactly like dead serial.
+
 ## 2026-07-26 — v0.1.31: takeover always-on + WiFi inheritance + the
 ## browser-starvation fix
 
