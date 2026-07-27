@@ -66,6 +66,8 @@ mod sensors;
 mod server;
 mod sntp;
 mod shared;
+mod takeover;
+mod wledfs;
 
 use leds::Protocol;
 use luxel_core::jsonview;
@@ -159,13 +161,17 @@ async fn main(spawner: Spawner) -> ! {
     // task futures and bricked the boot (stack ≈ 10.7 KB); big task
     // buffers must be heap Vecs. History: 88 KB left ~31 KB of stack —
     // sized for the on-device compiler's recursion, which v0.1.24 removed
-    // (devices execute bytecode; the decoder is iterative). 96 KB now:
-    // the ~8 KB of stack it costs is repaid by the web pool shrink
-    // (3→2 slots freed ~9 KB of static task arena), so stack stays ~31 KB
-    // while patterns gain heap. The esp-rtos stack guard + boot-loop guard
-    // catch it non-destructively if this ever proves too tight.
+    // (devices execute bytecode; the decoder is iterative). 92 KB now:
+    // the web pool went back to 3 slots (v0.1.31 — browsers TCP-starved
+    // themselves against 2; see server::WEB_TASK_POOL_SIZE), whose ~9 KB
+    // of static task arena comes straight off this stack, so 4 KB of heap
+    // is handed back to keep the stack near ~27 KB (the reproducible
+    // overflow point was 15.6 KB; 31 KB ran clean for weeks). Runtime
+    // heap_free stays ~114 KB — soak-proven range. The esp-rtos stack
+    // guard + boot-loop guard catch it non-destructively if this ever
+    // proves too tight.
     #[cfg(feature = "esp32")]
-    esp_alloc::heap_allocator!(size: 96 * 1024);
+    esp_alloc::heap_allocator!(size: 92 * 1024);
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 
@@ -225,6 +231,13 @@ async fn main(spawner: Spawner) -> ! {
     // bad image dies): 3 consecutive boots that never reach ota::boot_ok →
     // roll back to the other OTA slot.
     ota::boot_guard();
+    // WLED → Luxel self-install (no-op when the partition table is already
+    // ours). AFTER boot_guard: a crash-looping takeover build then rolls
+    // back to the WLED slot (WLED's table has valid ota_0/ota_1 + otadata,
+    // so the guard's rollback works there too). BEFORE assets/patterns
+    // init: under a foreign table those regions belong to other partitions
+    // (they fail safe, but takeover reboots).
+    //SIZETEST takeover::maybe_takeover();
     assets::init();
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)

@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-07-26 — v0.1.31: takeover always-on + WiFi inheritance + the
+## browser-starvation fix
+
+Follow-through on the takeover work below, all verified on the Athom:
+
+- **Takeover is now always compiled in** (feature flag removed): a no-op
+  256-byte table check per boot, ~17 KB of image (module + littlefs
+  reader + embedded table), and it turns partition-layout changes into
+  ordinary OTAs — any future partitions.csv change self-installs on the
+  device's next boot. Two new guards for that generality: a flash-size
+  preflight (never write a table past the end of the chip) and a
+  src/dest overlap check (a resized app slot must never erase the code
+  it's running from).
+- **WiFi inheritance**: during a takeover the device now mounts the
+  outgoing WLED's littlefs read-only (`src/wledfs.rs`, a dependency-free
+  ~330-line littlefs v2 reader) and carries SSID (cfg.json) + password
+  (wsec.json) into Luxel's own creds record — the device reappears on
+  the user's network without provisioning. Factory-fresh WLED (nothing
+  to inherit) falls through to the provisioning AP as before. The reader
+  is host-tested against real device dumps via `tools/wledfs-check`
+  (cfg.json read back byte-identical to an HTTP-fetched reference).
+- **"Cannot reach device" in the web UI, root-caused and fixed twice
+  over**: the ESP32's 2-socket HTTP pool meant a browser's parallel
+  fetches TCP-refused *each other* (headless-chromium repro: 8/10
+  parallel API calls refused; even `luxel.wasm` failed during page
+  load). Fix 1: web pool back to 3 slots — slots cost ~8 KB heap now,
+  not the old 32 KB static (the ~9 KB task-arena growth is repaid by
+  trimming the esp32 heap 96→92 KB, keeping the main stack ≈ 27 KB;
+  stack-check clean). Fix 2: `device.ts` routes every API call through
+  a wrapper capping in-flight requests at 2 with backoff-retry on
+  connection-refused. Verified: 3× cold loads on hardware in real
+  chromium, zero failed requests, editor synced.
+- docs/wled-migration.md: mechanism walkthrough + working notes for the
+  future installer page (chip detection via WLED's /json/info, its CORS
+  limitation, artifact layout, the open first-boot-panic issue).
+
+## 2026-07-26 — WLED → Luxel OTA takeover (proven on the Athom)
+
+New `wled-takeover` firmware feature (`TAKEOVER=1 ./build-esp32.sh`,
+`firmware/src/takeover.rs`): a Luxel app image uploaded through **WLED's
+own OTA updater** self-installs the Luxel partition layout. WLED writes
+the image into one of its 1.5 MB app slots and boots it (ESP32 apps are
+slot-position-independent; WLED's updater only checks the 0xE9 magic); on
+boot the module notices the foreign partition table, locates itself by
+comparing its `esp_app_desc` against each app slot, copies itself to
+0x10000 (sector-by-sector, read-back verified), wipes the nvs/otadata
+sectors, rewrites the table (the single ~ms non-re-runnable window), and
+reboots. WLED's Arduino-era bootloader is kept and boots our image fine
+(proven: "ets Jul 29 2019", DOUT). Crash-safety: everything before the
+table write re-runs under WLED's intact table, and since `boot_guard`
+runs first (WLED's table also has ota_0/ota_1 + otadata), a crash-looping
+takeover build rolls itself back to stock WLED after 3 strikes.
+build.rs now serializes partitions.csv via esp-idf-part (byte-identical
+to espflash's output, MD5 row included) for the embedded table.
+
+First live run (Athom LS8P music controller, WLED 0.13.2 → Luxel
+v0.1.30): upload → self-copy (910 KB) → repartition → clean boot on
+ota_0, same DHCP lease (192.168.0.183), storage self-formatted, assets
+pushed via `deploy.sh --assets-only`, web UI + engine live at 123 fps.
+OPEN ISSUE: the very first boot (from the WLED slot) panicked once with
+`esp-alloc: Exceeded the maximum of 3 heap memory regions` *before*
+`ota::init`, then self-healed via the panic-reboot handler and never
+recurred. A second full takeover run later the same day did NOT reproduce
+it — intermittent, 1-in-2 so far. Pre-guard panic loops would never arm
+the rollback — understand before advertising this as a public migration
+path.
+
+Same-day follow-up — credential/settings inheritance VALIDATED offline:
+a configured WLED 0.13.2 stores the WiFi SSID in `cfg.json` and the
+password in `wsec.json`, both on littlefs v2 (4 KiB blocks) in the old
+spiffs partition — mounted the real device's dump and matched both
+against known-good creds. The factory-fresh dump (never provisioned) has
+both empty, and WLED's captive-portal config writes NOTHING to NVS (its
+`nvs.net80211` blobs stay unprogrammed — WLED runs WiFi.persistent(false)),
+so littlefs is the only credential source. cfg.json also carries the
+board wiring (relay/IR/mic pins, LED outputs) for the future settings
+import. Migration design settled: takeover attempts littlefs inheritance
+(creds + pins + name) BEFORE wiping anything; if creds are absent
+(factory-default devices) it falls back to the provisioning AP — which is
+therefore mandatory, not optional, for the public migration path. Local
+corpus (git-ignored, contains real creds): athom-wled-fs-configured.bin,
+athom-wled-nvs-configured.bin.
+
 ## 2026-07-19 — v0.1.30: boot-resume heap pre-flight (found on hardware)
 
 The v0.1.29 hardware pass caught a real boot-loop: with 2048 px + a large

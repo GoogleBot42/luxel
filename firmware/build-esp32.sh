@@ -17,6 +17,12 @@ cd "$(dirname "$0")"
 
 BOARD="${BOARD:-board-pixelblaze-v3}"
 
+# The WLED→Luxel takeover self-install (src/takeover.rs) is always built
+# in — a no-op on devices already running the Luxel partition layout. To
+# produce the image WLED's /update page accepts, use espflash save-image
+# (NOT the merged image): see docs/wled-migration.md.
+FEATURES="$BOARD"
+
 # Dev WiFi creds: auto-source the git-ignored creds.env so every build —
 # whoever runs it — bakes working credentials. An image without creds
 # boots offline and is unreachable for OTA (locked out the device twice
@@ -83,12 +89,12 @@ if [ "$CMD" = "run" ]; then
   # flash + monitor: tee the monitor session (symbolicated by espflash)
   # into serial.log so it's remotely readable
   "$TC/bin/cargo" run --release \
-    --no-default-features --features "$BOARD" \
+    --no-default-features --features "$FEATURES" \
     --target xtensa-esp32-none-elf \
     -Zbuild-std=core,alloc 2>&1 | tee -a serial.log
 elif [ "$CMD" = "image" ]; then
   "$TC/bin/cargo" build --release \
-    --no-default-features --features "$BOARD" \
+    --no-default-features --features "$FEATURES" \
     --target xtensa-esp32-none-elf \
     -Zbuild-std=core,alloc
   build_assets || { echo "image needs the assets (unset SKIP_ASSETS)"; exit 1; }
@@ -103,7 +109,7 @@ elif [ "$CMD" = "image" ]; then
   echo "  espflash write-bin 0x0 firmware/$OUT"
 else
   "$TC/bin/cargo" build --release \
-    --no-default-features --features "$BOARD" \
+    --no-default-features --features "$FEATURES" \
     --target xtensa-esp32-none-elf \
     -Zbuild-std=core,alloc
 fi

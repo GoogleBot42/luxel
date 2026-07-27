@@ -1188,12 +1188,17 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
     picoserve::Router::new().nest_service("", Api)
 }
 
-// 2: the third slot existed for the bidirectional preview WEBSOCKET, which
-// the size diet removed (the preview polls /api/pixels over keep-alive
-// now). Each slot costs 32 KB of heap in connection buffers — on a device
-// where patterns compete for ~50 KB, the idle third slot was a quarter of
-// the pattern budget.
-pub const WEB_TASK_POOL_SIZE: usize = 2;
+// 3. History: the original 3rd slot fed the preview websocket and cost
+// 32 KB of static connection buffers, so the size diet cut it. Buffers
+// have since moved to per-task 4+4 KB heap vecs, so a slot now costs
+// ~8 KB heap — and 2 proved too few for a BROWSER: page load fires
+// css/js/wasm/gallery in parallel, and with both sockets busy the rest
+// get TCP-refused. Chromium against the Athom reproducibly dropped
+// luxel.wasm at 2 (ERR_CONNECTION_REFUSED mid-load, 2026-07-26); at 3
+// the shell loads clean. The web app additionally caps its own API
+// concurrency at 2 and retries refused fetches (device.ts), so the
+// third socket mostly serves the browser's asset burst.
+pub const WEB_TASK_POOL_SIZE: usize = 3;
 
 // keep_connection_alive: without it every preview poll (15/s) pays a full
 // TCP open/close on a chip with a 2-connection pool — the browser reuses

@@ -1,0 +1,17 @@
+# Host-side test rig for firmware/src/wledfs.rs (the read-only littlefs
+# reader the WLED takeover uses to inherit settings). Compiles the exact
+# on-device source file against real filesystem dumps:
+#
+#   cargo run --release -- <fs-image.bin> [file-to-dump ...]
+#
+# Dumps live in the repo root (athom-wled-*.bin, git-ignored — they
+# contain real WiFi creds).
+[package]
+name = "wledfs-check"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+
+[workspace]
