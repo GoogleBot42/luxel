@@ -46,8 +46,7 @@ use luxel_core::jsonview::json_escape;
 use picoserve::routing::RequestHandlerService as _;
 
 use crate::shared::{
-    get_pattern_src, get_pixels, get_vmerr, snapshot, Msg, CONTROLS_JSON, FPS, MSG_QUEUE,
-    READOUTS_JSON, VARS_JSON,
+    get_pixels, get_vmerr, snapshot, Msg, CONTROLS_JSON, FPS, MSG_QUEUE, READOUTS_JSON, VARS_JSON,
 };
 use crate::config::DeviceConfig;
 use crate::leds::Protocol;
@@ -105,20 +104,28 @@ fn status_json() -> String {
         Some(p) => format!("\"{p}\""),
         None => String::from("null"),
     };
+    // Read-back availability: the running pattern's source + blob now live in
+    // flash (see patterns::store_current). True = serveable (rodata default or
+    // a good flash write); false = a swap's flash write shed the copy — the
+    // soak-log signal that shedding actually happened on this device.
+    let src = crate::shared::current_src_available();
+    let bc = crate::shared::current_bc_available();
     match get_vmerr() {
         Some(e) => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":\"{}\"}}",
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"vmerr\":\"{}\"}}",
             fps,
             pixels,
             slot,
             version,
             heap,
             live,
+            src,
+            bc,
             json_escape(&e)
         ),
         None => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":null}}",
-            fps, pixels, slot, version, heap, live
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"vmerr\":null}}",
+            fps, pixels, slot, version, heap, live, src, bc
         ),
     }
 }
@@ -167,6 +174,150 @@ impl picoserve::response::Content for FlashAsset {
             writer.write_all(&buf[..n]).await?;
             at += n as u32;
             embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
+        }
+        Ok(())
+    }
+}
+
+/// Stream a flash-resident read-back blob (the running pattern's source or
+/// bytecode) chunk by chunk, yielding a real Timer between reads so the WiFi
+/// task runs during each esp-storage cache-off window (same discipline as
+/// [FlashAsset]). Bytes written are capped at `len` (the snapshot the
+/// Content-Length was computed from) so a swap landing mid-stream can only
+/// truncate the body, never overrun it; a flash-busy read truncates too.
+async fn stream_flash_readback<W: picoserve::io::Write>(
+    writer: &mut W,
+    abs: Option<u32>,
+    len: usize,
+    label: &str,
+) -> Result<(), W::Error> {
+    let mut written = 0usize;
+    if let Some(abs) = abs {
+        let mut buf = alloc::vec![0u8; 4096];
+        while written < len {
+            let n = (len - written).min(4096);
+            if !crate::assets::read_chunk(abs + written as u32, &mut buf[..n]) {
+                // Flash busy (OTA / library save holds the lease). The
+                // Content-Length header is already on the wire, so a SHORT
+                // body would desync the connection and wedge this pool slot
+                // until the write timeout (observed on-device as cascading
+                // dead requests). Pad to the promised length below instead:
+                // framing stays valid, the client sees obviously-wrong
+                // bytes, and the log names the failure.
+                esp_println::println!(
+                    "readback: {} read failed at {}/{} B — padding",
+                    label,
+                    written,
+                    len
+                );
+                break;
+            }
+            writer.write_all(&buf[..n]).await?;
+            written += n;
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
+        }
+    } else {
+        esp_println::println!("readback: {} — no storage region, padding {} B", label, len);
+    }
+    while written < len {
+        let pad = [b'\n'; 64];
+        let take = pad.len().min(len - written);
+        writer.write_all(&pad[..take]).await?;
+        written += take;
+    }
+    Ok(())
+}
+
+/// `GET /api/pattern`: the running pattern's SOURCE, streamed from flash (or
+/// rodata for the default) — the bytes no longer sit in a standing RAM copy.
+/// The location is snapshotted at construction so Content-Length matches the
+/// bytes written even if a swap lands mid-response.
+struct CurrentSource(crate::shared::SrcLoc);
+
+impl picoserve::response::Content for CurrentSource {
+    fn content_type(&self) -> &'static str {
+        "text/plain; charset=utf-8"
+    }
+    fn content_length(&self) -> usize {
+        match self.0 {
+            crate::shared::SrcLoc::Default(s) => s.len(),
+            crate::shared::SrcLoc::Flash(len) => len,
+            crate::shared::SrcLoc::Gone => 0,
+        }
+    }
+    async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
+        match self.0 {
+            // rodata: a plain RAM slice, no flash cache-off — write it straight
+            crate::shared::SrcLoc::Default(s) => writer.write_all(s.as_bytes()).await,
+            crate::shared::SrcLoc::Flash(len) => {
+                let abs = crate::patterns::current_slot_abs().map(|(s, _)| s);
+                stream_flash_readback(&mut writer, abs, len, "src").await
+            }
+            crate::shared::SrcLoc::Gone => Ok(()),
+        }
+    }
+}
+
+/// `GET /api/pattern.lxp`: the running pattern as an LXP1 envelope (empty
+/// name + source + bytecode) — what a sync follower adopts. Assembled on the
+/// wire without ever materialising the whole envelope in RAM: the fixed
+/// header + length prefixes are tiny and the source/blob bytes stream
+/// straight from flash (or rodata). Byte-identical to
+/// bytecode::encode_envelope("", src, bc), so the follower's decoder is
+/// unchanged. Locations snapshotted at construction for a stable
+/// Content-Length.
+struct CurrentEnvelope {
+    src: crate::shared::SrcLoc,
+    bc: crate::shared::BcLoc,
+}
+
+impl CurrentEnvelope {
+    fn src_len(&self) -> usize {
+        match self.src {
+            crate::shared::SrcLoc::Default(s) => s.len(),
+            crate::shared::SrcLoc::Flash(len) => len,
+            crate::shared::SrcLoc::Gone => 0,
+        }
+    }
+    fn bc_len(&self) -> usize {
+        match self.bc {
+            crate::shared::BcLoc::Default(b) => b.len(),
+            crate::shared::BcLoc::Flash(len) => len,
+            crate::shared::BcLoc::Gone => 0,
+        }
+    }
+}
+
+impl picoserve::response::Content for CurrentEnvelope {
+    fn content_type(&self) -> &'static str {
+        "application/octet-stream"
+    }
+    fn content_length(&self) -> usize {
+        // LXP1(4) | name_len(1) | name(0) | src_len(4) | src | bc_len(4) | bc
+        4 + 1 + 4 + self.src_len() + 4 + self.bc_len()
+    }
+    async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
+        let src_len = self.src_len();
+        let bc_len = self.bc_len();
+        writer.write_all(&luxel_core::bytecode::ENVELOPE_MAGIC).await?;
+        writer.write_all(&[0u8]).await?; // empty name (len 0)
+        writer.write_all(&(src_len as u32).to_le_bytes()).await?;
+        match self.src {
+            crate::shared::SrcLoc::Default(s) => writer.write_all(s.as_bytes()).await?,
+            crate::shared::SrcLoc::Flash(len) => {
+                let abs = crate::patterns::current_slot_abs().map(|(s, _)| s);
+                stream_flash_readback(&mut writer, abs, len, "src").await?
+            }
+            crate::shared::SrcLoc::Gone => {}
+        }
+        writer.write_all(&(bc_len as u32).to_le_bytes()).await?;
+        match self.bc {
+            crate::shared::BcLoc::Default(b) => writer.write_all(b).await?,
+            crate::shared::BcLoc::Flash(len) => {
+                let abs = crate::patterns::current_slot_abs().map(|(_, b)| b);
+                stream_flash_readback(&mut writer, abs, len, "bc").await?
+            }
+            crate::shared::BcLoc::Gone => {}
         }
         Ok(())
     }
@@ -431,10 +582,6 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
 /// Last rendered frame as raw RGB bytes (3 per pixel) for the preview.
 async fn api_pixels() -> impl picoserve::response::IntoResponse {
     (CORS, ("Content-Type", "application/octet-stream"), get_pixels())
-}
-
-async fn api_pattern() -> ApiResponse {
-    (CORS, ("Content-Type", "text/plain; charset=utf-8"), get_pattern_src())
 }
 
 async fn api_controls() -> ApiResponse {
@@ -1125,17 +1272,17 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
                 ))),
                 "/api/pixels" => respond!(api_pixels().await),
-                "/api/pattern" => Some(api_pattern().await),
+                // running pattern source, streamed from flash (no RAM copy)
+                "/api/pattern" => respond!((CORS, CurrentSource(crate::shared::current_src()))),
                 // running pattern as an LXP1 envelope (source + bytecode) —
-                // what a sync follower adopts (it has no compiler)
+                // what a sync follower adopts (it has no compiler); streamed
+                // from flash so a big pattern needs no ~40 KB RAM residency
                 "/api/pattern.lxp" => respond!((
                     CORS,
-                    ("Content-Type", "application/octet-stream"),
-                    luxel_core::bytecode::encode_envelope(
-                        "",
-                        &get_pattern_src(),
-                        &crate::shared::get_pattern_bc(),
-                    ),
+                    CurrentEnvelope {
+                        src: crate::shared::current_src(),
+                        bc: crate::shared::current_bc(),
+                    },
                 )),
                 "/api/controls" => Some(api_controls().await),
                 "/api/vars" => Some(api_vars().await),

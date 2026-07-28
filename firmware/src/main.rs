@@ -72,8 +72,8 @@ mod wledfs;
 use leds::Protocol;
 use luxel_core::jsonview;
 use shared::{
-    publish, set_pattern_bc, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS,
-    CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
+    publish, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE,
+    PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -613,6 +613,30 @@ fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engi
     Ok(e)
 }
 
+/// Persist the just-swapped pattern to the flash read-back slot (replacing
+/// the old standing RAM copies) and publish where its source + blob now live.
+/// Runs on the render task at the swap: the swap already pays a decode, so the
+/// added flash write is a brief one-time frame hitch — acceptable for a rare
+/// event and worth the ~40 KB of steady-state heap the RAM copies used to hold.
+/// On a failed write (flash leased out by a concurrent OTA/save, or too large)
+/// read-back is marked unavailable and logged — /api/status then reports
+/// src=false, bc=false, and GET /api/pattern + the sync envelope serve nothing
+/// until the next swap (never a panic).
+async fn persist_current_pattern(src: &str, bc: &[u8]) {
+    shared::set_pattern_hash(src);
+    if patterns::store_current(src, bc).await {
+        shared::set_current_flash(src.len(), bc.len());
+    } else {
+        println!(
+            "current-pattern: flash write failed (src {} B + bc {} B, {} B free) — read-back (/api/pattern, sync) degraded until the next swap",
+            src.len(),
+            bc.len(),
+            esp_alloc::HEAP.free()
+        );
+        shared::set_current_gone();
+    }
+}
+
 /// frames. Yields to the network tasks after every frame.
 #[embassy_executor::task]
 async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
@@ -628,10 +652,11 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
     };
     // Heap discipline: exactly ONE decoded Program lives at a time — inside
     // the engine. Rebuilds (pixel-count change, map clear) re-decode from
-    // the running pattern's blob (shared::PATTERN_BC, ≤23 KB) rather than
-    // keeping a second Program resident; a resident copy + per-rebuild
-    // clones is what OOM'd soak v5 (Programs with debug info are several
-    // times their blob size).
+    // the running pattern's blob rather than keeping a second Program
+    // resident; a resident copy + per-rebuild clones is what OOM'd soak v5
+    // (Programs with debug info are several times their blob size). That blob
+    // no longer sits in RAM either — it lives in the flash read-back slot
+    // (shared::current_bc), read into a TRANSIENT Vec only for the rebuild.
     // deserialize_lean: no debug info on-device — halves a Program's RAM
     let mut engine = match luxel_core::bytecode::deserialize_lean(PATTERN_BC) {
         Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
@@ -640,13 +665,28 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
             None
         }
     };
-    set_pattern_src(PATTERN);
-    set_pattern_bc(PATTERN_BC);
-    // rebuild the engine from the running blob at the current pixel count
+    // The boot default is `&'static` rodata: read-back serves it directly,
+    // no heap and no flash write. Every later swap repoints this at flash.
+    shared::set_current_default(PATTERN, PATTERN_BC);
+    // Rebuild the engine from the running blob at the current pixel count.
+    // The blob comes from wherever read-back currently points: the rodata
+    // default (borrowed, no alloc) or the flash slot (a transient fallible
+    // Vec, dropped as soon as the Program is built). A flash-busy read yields
+    // None and the engine stays paused until the next swap — never a panic.
     let rebuild = || {
-        luxel_core::bytecode::deserialize_lean(&crate::shared::get_pattern_bc())
-            .ok()
-            .and_then(|p| try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)).ok())
+        let count = PIXEL_COUNT.load(Ordering::Relaxed);
+        match shared::current_bc() {
+            shared::BcLoc::Default(b) => luxel_core::bytecode::deserialize_lean(b)
+                .ok()
+                .and_then(|p| try_budgeted_engine(p, count).ok()),
+            shared::BcLoc::Flash(len) => {
+                let bc = crate::patterns::read_current_bc(len)?;
+                luxel_core::bytecode::deserialize_lean(&bc)
+                    .ok()
+                    .and_then(|p| try_budgeted_engine(p, count).ok())
+            }
+            shared::BcLoc::Gone => None,
+        }
     };
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
@@ -690,36 +730,53 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                     // lands here, where the most is free.
                     engine = None;
                     prev = None;
-                    match luxel_core::bytecode::decode_envelope(&env) {
+                    // The Program owns its bytes, so once it's decoded and the
+                    // envelope is persisted to the flash read-back slot, the
+                    // ~envelope-sized buffer can be DROPPED before the engine
+                    // builds — its 10s-of-KB then count toward the array budget
+                    // and the post-load floor check instead of against them.
+                    // (Observed on-device: Music Sequencer @300 px missed the
+                    // floor by 456 B purely because the envelope was still
+                    // held here.)
+                    let decoded = match luxel_core::bytecode::decode_envelope(&env) {
                         Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
                             Ok(p) => {
-                                set_pattern_src(le.source);
-                                set_pattern_bc(le.bytecode);
-                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
-                                {
-                                    Ok(e) => {
-                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                        engine = Some(e);
-                                        set_vmerr(None);
-                                        vmerr_seen = None;
-                                        last = Instant::now();
-                                        devicemap::mark_dirty(); // re-apply the installed map
-                                    }
-                                    Err(left) => set_vmerr(Some(alloc::format!(
-                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
-                                        left / 1024,
-                                        RUNTIME_FLOOR / 1024
-                                    ))),
-                                }
+                                persist_current_pattern(le.source, le.bytecode).await;
+                                Ok(p)
                             }
                             // decode can legitimately fail on a starved heap
                             // (try_reserve) — surface it, don't just log
-                            Err(e) => {
-                                println!("bytecode decode failed: {}", e);
-                                set_vmerr(Some(alloc::format!("{}", e)));
-                            }
+                            Err(e) => Err(Some(e)),
                         },
-                        Err(e) => println!("envelope decode failed (bug?): {}", e),
+                        Err(e) => {
+                            println!("envelope decode failed (bug?): {}", e);
+                            Err(None)
+                        }
+                    };
+                    drop(env);
+                    match decoded {
+                        Ok(p) => {
+                            match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
+                                Ok(e) => {
+                                    publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                    engine = Some(e);
+                                    set_vmerr(None);
+                                    vmerr_seen = None;
+                                    last = Instant::now();
+                                    devicemap::mark_dirty(); // re-apply the installed map
+                                }
+                                Err(left) => set_vmerr(Some(alloc::format!(
+                                    "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                    left / 1024,
+                                    RUNTIME_FLOOR / 1024
+                                ))),
+                            }
+                        }
+                        Err(Some(e)) => {
+                            println!("bytecode decode failed: {}", e);
+                            set_vmerr(Some(alloc::format!("{}", e)));
+                        }
+                        Err(None) => {}
                     }
                 }
                 Msg::Freeze => {
@@ -811,39 +868,51 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                     // blend source) — this is the one path where two
                     // programs coexist, bounded by the crossfade duration
                     prev = None; // but never THREE (a fade still in flight)
-                    match luxel_core::bytecode::decode_envelope(&env) {
+                    // Same envelope-drop-before-engine-build discipline as
+                    // Msg::Code above — doubly important here, where the
+                    // outgoing engine also stays alive as the blend source.
+                    let decoded = match luxel_core::bytecode::decode_envelope(&env) {
                         Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
                             Ok(p) => {
-                                set_pattern_src(le.source);
-                                set_pattern_bc(le.bytecode);
-                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
-                                {
-                                    Ok(e) => {
-                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                        if ms > 0 && engine.is_some() {
-                                            prev = engine.take();
-                                            blend_start = Instant::now();
-                                            blend_ms = ms;
-                                        }
-                                        engine = Some(e);
-                                        set_vmerr(None);
-                                        vmerr_seen = None;
-                                        last = Instant::now();
-                                        devicemap::mark_dirty();
-                                    }
-                                    Err(left) => set_vmerr(Some(alloc::format!(
-                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
-                                        left / 1024,
-                                        RUNTIME_FLOOR / 1024
-                                    ))),
-                                }
+                                persist_current_pattern(le.source, le.bytecode).await;
+                                Ok(p)
                             }
-                            Err(e) => {
-                                println!("crossfade bytecode decode failed: {}", e);
-                                set_vmerr(Some(alloc::format!("{}", e)));
-                            }
+                            Err(e) => Err(Some(e)),
                         },
-                        Err(e) => println!("envelope decode failed (bug?): {}", e),
+                        Err(e) => {
+                            println!("envelope decode failed (bug?): {}", e);
+                            Err(None)
+                        }
+                    };
+                    drop(env);
+                    match decoded {
+                        Ok(p) => {
+                            match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
+                                Ok(e) => {
+                                    publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                    if ms > 0 && engine.is_some() {
+                                        prev = engine.take();
+                                        blend_start = Instant::now();
+                                        blend_ms = ms;
+                                    }
+                                    engine = Some(e);
+                                    set_vmerr(None);
+                                    vmerr_seen = None;
+                                    last = Instant::now();
+                                    devicemap::mark_dirty();
+                                }
+                                Err(left) => set_vmerr(Some(alloc::format!(
+                                    "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                    left / 1024,
+                                    RUNTIME_FLOOR / 1024
+                                ))),
+                            }
+                        }
+                        Err(Some(e)) => {
+                            println!("crossfade bytecode decode failed: {}", e);
+                            set_vmerr(Some(alloc::format!("{}", e)));
+                        }
+                        Err(None) => {}
                     }
                 }
             }

@@ -111,48 +111,106 @@ pub fn get_pixels() -> Vec<u8> {
     share_get(&PIXELS)
 }
 
-/// Source of the running pattern (`GET /api/pattern`) — updated on swap.
-pub static PATTERN_SRC: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
+// --- running pattern read-back (flash-resident; see patterns::store_current) ---
+//
+// The source + LXBC blob of the *currently running* pattern used to sit in
+// two standing heap copies (PATTERN_SRC / PATTERN_BC) purely to serve them
+// back: GET /api/pattern, the sync envelope (/api/pattern.lxp), and the
+// engine rebuild on a pixel-count / map change. On a heap already dominated
+// by that same running pattern those copies were its single largest resident
+// cost (~40 KB for a big pattern) — and nothing on the render path ever reads
+// them. They now live in the flash storage partition and are streamed on
+// demand; only these tiny location scalars stay in RAM. The compile-time
+// default is `&'static` rodata, so it serves with zero heap and zero flash.
 
-/// FNV-1a of the running source — the sync beacon's pattern identity.
+/// Where the running pattern's SOURCE currently lives, for read-back.
+#[derive(Clone, Copy)]
+pub enum SrcLoc {
+    /// Compile-time default (rodata) — no heap, no flash write.
+    Default(&'static str),
+    /// In the flash read-back slot; the usize is its exact byte length (for
+    /// the streamer and Content-Length).
+    Flash(usize),
+    /// The swap's flash write failed — nothing to serve until the next swap.
+    Gone,
+}
+
+/// Where the running pattern's LXBC BLOB currently lives — the mirror of
+/// [SrcLoc] for the sync envelope and engine rebuilds.
+#[derive(Clone, Copy)]
+pub enum BcLoc {
+    Default(&'static [u8]),
+    Flash(usize),
+    Gone,
+}
+
+/// The running pattern's read-back locations. Only tiny scalars/pointers —
+/// the actual source + blob bytes are in flash (or rodata for the default),
+/// never a standing heap copy.
+struct CurrentMeta {
+    src: SrcLoc,
+    bc: BcLoc,
+}
+
+static CURRENT: Shared<CurrentMeta> =
+    BlockingMutex::new(RefCell::new(CurrentMeta { src: SrcLoc::Gone, bc: BcLoc::Gone }));
+
+/// FNV-1a of the running source — the sync beacon's pattern identity. Stays
+/// in RAM (a single u32) as before; every swap restamps it.
 pub static PATTERN_HASH: AtomicU32 = AtomicU32::new(0);
 
-pub fn set_pattern_src(src: &str) {
+/// Restamp the sync pattern-identity hash from the running source.
+pub fn set_pattern_hash(src: &str) {
     use core::sync::atomic::Ordering;
     PATTERN_HASH.store(luxel_core::netin::fnv1a(src.as_bytes()), Ordering::Relaxed);
-    PATTERN_SRC.lock(|c| {
-        let mut s = c.borrow_mut();
-        s.clear();
-        s.shrink_to_fit(); // don't retain a past giant's capacity forever
-        // fallible: losing the read-back copy beats an OOM panic
-        if s.try_reserve(src.len()).is_ok() {
-            s.push_str(src);
-        }
+}
+
+/// Boot / built-in default: source + blob are compile-time `&'static` rodata,
+/// so read-back serves them directly with zero heap and zero flash writes.
+/// Also the standing fallback whenever no pattern has been swapped in this
+/// session — the flash read-back slot is only authoritative once a swap
+/// rewrites it (at boot it may still hold the previous session's pattern).
+pub fn set_current_default(src: &'static str, bc: &'static [u8]) {
+    set_pattern_hash(src);
+    CURRENT.lock(|c| {
+        *c.borrow_mut() = CurrentMeta { src: SrcLoc::Default(src), bc: BcLoc::Default(bc) };
     });
 }
 
-pub fn get_pattern_src() -> String {
-    share_get(&PATTERN_SRC)
-}
-
-/// LXBC blob of the running pattern (`GET /api/pattern.lxp`) — what a sync
-/// follower adopts. Updated on swap, alongside PATTERN_SRC.
-pub static PATTERN_BC: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));
-
-pub fn set_pattern_bc(bc: &[u8]) {
-    PATTERN_BC.lock(|c| {
-        let mut v = c.borrow_mut();
-        v.clear();
-        v.shrink_to_fit(); // don't retain a past giant's capacity forever
-        // fallible: losing the sync-envelope copy beats an OOM panic
-        if v.try_reserve(bc.len()).is_ok() {
-            v.extend_from_slice(bc);
-        }
+/// A swapped-in pattern was persisted to the flash read-back slot: point
+/// read-back at flash, recording the byte lengths. The caller restamps the
+/// hash (it holds the source).
+pub fn set_current_flash(src_len: usize, bc_len: usize) {
+    CURRENT.lock(|c| {
+        *c.borrow_mut() = CurrentMeta { src: SrcLoc::Flash(src_len), bc: BcLoc::Flash(bc_len) };
     });
 }
 
-pub fn get_pattern_bc() -> Vec<u8> {
-    share_get(&PATTERN_BC)
+/// The swap's flash write failed — read-back has nothing to serve until the
+/// next swap (/api/status then reports src=false, bc=false).
+pub fn set_current_gone() {
+    CURRENT.lock(|c| *c.borrow_mut() = CurrentMeta { src: SrcLoc::Gone, bc: BcLoc::Gone });
+}
+
+/// Snapshot of where the running source lives (the /api/pattern streamer).
+pub fn current_src() -> SrcLoc {
+    CURRENT.lock(|c| c.borrow().src)
+}
+
+/// Snapshot of where the running blob lives (sync envelope + engine rebuild).
+pub fn current_bc() -> BcLoc {
+    CURRENT.lock(|c| c.borrow().bc)
+}
+
+/// /api/status observability: is each read-back copy currently serveable?
+/// True for the rodata default or a good flash write; false only after a
+/// flash write shed the copy (fragmentation / flash busy) — the soak-log
+/// signal that shedding happened.
+pub fn current_src_available() -> bool {
+    !matches!(current_src(), SrcLoc::Gone)
+}
+pub fn current_bc_available() -> bool {
+    !matches!(current_bc(), BcLoc::Gone)
 }
 
 /// Master power (Home Assistant's light switch): when false the render task

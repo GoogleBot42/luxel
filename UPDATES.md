@@ -1,5 +1,62 @@
 # Update log
 
+## 2026-07-27 — v0.1.34: current pattern lives in flash (~40 KB heap
+## back) + decode churn fix — Music Sequencer V3 runs at 300 px
+
+Per-allocation profiling (new host harness, below) showed the biggest
+pattern's RAM footprint was 62% bookkeeping: the PATTERN_SRC/PATTERN_BC
+read-back copies (22.3 + 17.8 KB for "Music Sequencer - for V3 ONLY"),
+which nothing on the render path ever reads. Three changes, all
+verified on the Athom at 300 px:
+
+- **Decode pre-pass** (luxel-core): `prog_code` is reserved once from a
+  header-only sum instead of per function. try_reserve_exact per
+  function reallocs the whole buffer each time — 157 KB of copy churn
+  for 9 KB of tables on the big pattern (measured), and the realloc
+  ladder fragments the heap enough to starve later 17–22 KB contiguous
+  reservations (the silent src/bc shedding seen on-device). Now: one
+  9,170 B allocation; total decode churn 213 → 65 KB; resident
+  byte-identical.
+- **Flash-resident current pattern**: on swap the source + blob are
+  written as RAW PAGES into the reserved upper half of the storage
+  partition (header page written last), and only tiny location enums
+  stay in RAM (shared::SrcLoc/BcLoc; boot default = rodata, zero heap
+  and zero flash). GET /api/pattern and /api/pattern.lxp stream from
+  flash with the FlashAsset discipline (4 KiB reads + Timer yields);
+  the engine rebuild reads a transient fallible Vec. A first cut as
+  reserved-key map items made every read a 512 KiB NoCache scan whose
+  cache-off bursts starved WiFi — raw pages fixed that. Byte-integrity
+  verified on-device (src and envelope sections cmp-exact against the
+  uploaded originals). /api/status gains `"src"/"bc"` booleans and a
+  serial log line when a swap's flash write fails — the shedding that
+  used to be silent is now observable.
+- **Envelope dropped before the engine builds** (main.rs): the ~40 KB
+  upload buffer is freed after the flash persist, so it no longer
+  counts against the array budget or the post-load floor check.
+  On-device before/after at 300 px: Music Sequencer V3 was REJECTED
+  456 B under the floor (v0.1.33 stock: 13 KB under); now it RUNS with
+  ~70 KB free. Steady-state heap while running it: was impossible,
+  now 70,608 B free.
+
+Known issue (documented, not fixed): back-to-back big readbacks
+(/api/pattern twice with no gap) intermittently time out (000, retry
+succeeds) — NOT present on v0.1.33's RAM path (A/B'd on hardware).
+Slot/keep-alive recycling under load is suspected; a live DDP stream
+(LedFx?) was hitting the bench device during later tests, which muddies
+attribution. Mid-stream flash failures now PAD the body to the promised
+Content-Length instead of truncating — a short body desyncs the
+connection and wedges the pool slot until the write timeout (observed
+as cascading dead requests; the padding closed that class).
+
+New host tooling: `crates/luxel-cli/tests/allocprof.rs` — dhat-based
+per-allocation profile of the device lifecycle (resident / peak / churn
+per callsite, driven by AP_SRC/AP_PIXELS/AP_BUDGET env vars), validated
+against live hardware to ~2% (Doom Fire predicted 14.7 KB resident
+delta, device measured 14.4 KB). `examples/mkenvelope.rs` packs LXP1
+envelopes for /api/code. The playlist boot-resume path now also writes
+the flash slot on its first swap — soak big-pattern resume before
+trusting it hard.
+
 ## 2026-07-27 — v0.1.33: main-task stack was 18 KB, not 27 — measured,
 ## fixed (deterministic /api/wifi + page-load panics)
 
