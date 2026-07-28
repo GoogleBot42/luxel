@@ -161,17 +161,25 @@ async fn main(spawner: Spawner) -> ! {
     // task futures and bricked the boot (stack ≈ 10.7 KB); big task
     // buffers must be heap Vecs. History: 88 KB left ~31 KB of stack —
     // sized for the on-device compiler's recursion, which v0.1.24 removed
-    // (devices execute bytecode; the decoder is iterative). 92 KB now:
-    // the web pool went back to 3 slots (v0.1.31 — browsers TCP-starved
-    // themselves against 2; see server::WEB_TASK_POOL_SIZE), whose ~9 KB
-    // of static task arena comes straight off this stack, so 4 KB of heap
-    // is handed back to keep the stack near ~27 KB (the reproducible
-    // overflow point was 15.6 KB; 31 KB ran clean for weeks). Runtime
-    // heap_free stays ~114 KB — soak-proven range. The esp-rtos stack
-    // guard + boot-loop guard catch it non-destructively if this ever
-    // proves too tight.
+    // (devices execute bytecode; the decoder is iterative).
+    //
+    // MEASURE, don't estimate: `.stack` in `readelf -S` is the ground
+    // truth. v0.1.31's 92 KB was tuned by estimating the 3-slot web pool
+    // (server::WEB_TASK_POOL_SIZE) at ~9 KB total and claiming ~27 KB of
+    // stack; the pool's static is really ~8.6 KB PER SLOT (26 KB — each
+    // slot holds picoserve's whole response-path future), and the shipped
+    // stack was 17.9 KB. That's ~2 KB above the measured 15.6 KB overflow
+    // point, and one WiFi NMI frame atop a request-context flash read
+    // (read_wifi, asset streaming) ate it: deterministic stack-guard
+    // panics with SP at the stack floor and PC in
+    // esp_rom_spiflash_read_status (Athom, v0.1.32, 2026-07-27). 80 KB
+    // puts .stack at ~30 KB (31 KB ran clean for weeks). Runtime
+    // heap_free ~102 KB — pattern loads need stored×2 + 24 KB (resume.rs)
+    // and the soak peaked well under this. The esp-rtos stack guard +
+    // boot-loop guard catch it non-destructively if this ever proves too
+    // tight.
     #[cfg(feature = "esp32")]
-    esp_alloc::heap_allocator!(size: 92 * 1024);
+    esp_alloc::heap_allocator!(size: 80 * 1024);
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 

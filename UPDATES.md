@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-07-27 — v0.1.33: main-task stack was 18 KB, not 27 — measured,
+## fixed (deterministic /api/wifi + page-load panics)
+
+Jeremy hit a hard-reproducible stack-guard panic on the Athom: every
+`GET /api/wifi` (and every load of `/`, whose page JS calls it) died
+with "write to the stack guard value on ProCpu". The panic registers
+told the whole story: SP = `0x3FFDBA60`, 60 bytes above the `.stack`
+section's floor (`0x3FFDBA24`), PC inside
+`esp_rom_spiflash_read_status` — main-task stack exhaustion during a
+request-context flash read (`read_wifi` → `assets::read_chunk`), the
+classic failure mode, back again.
+
+Root cause: v0.1.31's heap retune was arithmetic on an estimate that
+was wrong by ~17 KB. The comment budgeted the 3-slot web pool at
+"~9 KB of static task arena" and claimed ~27 KB of leftover stack;
+`readelf -S` on the shipped ELFs says `server::web_task::POOL` is
+25,968 bytes (~8.6 KB **per slot** — each slot embeds picoserve's
+whole response-path future) and `.stack` was 18,140 B in v0.1.31 /
+17,884 B in v0.1.32. That's ~2 KB above the empirically measured
+15.6 KB overflow point — one WiFi NMI frame landing on top of a flash
+read at picoserve depth eats it. (This also retroactively explains
+v0.1.31's 5/5 `/api/ota` crash-mid-erase-burst on this device.)
+
+- **esp32 heap static 92 KB → 80 KB**: `.stack` measured 30,172 B in
+  the new image (the "31 KB ran clean for weeks" zone). Runtime
+  heap_free on the Athom: ~95 KB — comfortably above resume.rs's
+  `stored×2 + 24 KB` pre-flight and the soak's observed peak.
+- **Comment rewritten around the measurement**, with the rule that
+  should have been there all along: `.stack` in `readelf -S` is the
+  ground truth — measure, don't estimate. `tools/stack-check.sh` now
+  enforces it: it prints the linked `.stack` size and fails below a
+  24 KB floor (per-frame budget check unchanged).
+- **Verified on the Athom**: OTA'd 908 KB to ota_0, then 5/5 clean
+  `GET /api/wifi`, repeated `/` loads, api/output/clock/brightness
+  all stable. Also pushed the 930 KB playground bundle (the assets
+  partition was empty after the serial full-flash — the minimal
+  fallback page was what Jeremy's browser was loading), which
+  doubles as a clean 227-sector flash-write soak on the new stack.
+
 ## 2026-07-27 — v0.1.32: WS2812 goes DMA (fixes erratic colors) + OTA
 ## writer parity
 
