@@ -99,7 +99,8 @@ bytecode execution is being worked on now; the rest are queued:
   current-pattern slot v0.1.34 added is also exactly the "contiguous,
   mappable region" this item needs, so what remains is purely the MMU
   work — now a perf/endgame item, not a capacity one.
-- **WiFi-blob buffer tuning** [M] ★ — esp-radio's RX/TX buffer counts are
+- **WiFi-blob buffer tuning** [M] ★★ — AGREED FOLLOW-UP 2026-07-29.
+  esp-radio's RX/TX buffer counts are
   default-generous; the blob's heap draw is the biggest remaining consumer
   (~50 KB measured residual at idle on v0.1.34). VERIFIED 2026-07-29
   where the knobs actually live on our pinned esp-radio: NOT esp-config —
@@ -113,6 +114,21 @@ bytecode execution is being worked on now; the rest are queued:
   under load shows up as StoreProhibited, not a clean error. Main use
   now: the small-chip profile (see boards.md tiers), not classic-ESP32
   capacity.
+- **Web pool 3→2 (make the webui tolerant first)** [M] ★★ — AGREED
+  FOLLOW-UP 2026-07-29. The pool went 2→3 in v0.1.31 solely because a
+  browser page load fires css/js/wasm/gallery in parallel and got
+  TCP-refused at 2 (server.rs WEB_TASK_POOL_SIZE history) — but that's
+  the wrong layer paying: the 3rd slot costs ~8 KB heap + ~8.6 KB of
+  static task arena (each slot embeds picoserve's whole response future —
+  the arena that ate v0.1.33's stack margin) on EVERY device forever, to
+  absorb a burst the client could pace. Web side first: stagger/serialize
+  the initial asset loads and extend device.ts's retry-on-refused (it
+  already covers API calls, but NOT the asset fetches — luxel.wasm was
+  the reproducible casualty) so a 2-slot device loads clean; then drop
+  WEB_TASK_POOL_SIZE to 2. Verify with the original repro: real Chromium
+  (in the flake) against the Athom, cold page load, watch for
+  ERR_CONNECTION_REFUSED on assets. Reclaims ~17 KB across heap+statics —
+  also exactly what tiers 3–4 in boards.md want.
 - **Small-chip profile + more board features** [M] ★★ — follow-ups from
   the 2026-07-29 chip-support assessment (docs/boards.md "Beyond the
   current boards"): (1) add `board-s3-devkit` and `board-c6-devkit`
