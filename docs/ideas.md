@@ -92,12 +92,38 @@ bytecode execution is being worked on now; the rest are queued:
   device: "Music Sequencer - for V3 ONLY" (663 lines; 17.8 KB blob,
   ~71 KB total engine footprint per heapstat — it loads at idle heap but
   leaves 19 KB free, 1 KB under the 20 KB floor, and is rejected with the
-  friendly capacity error). This item or WiFi-blob tuning below would
-  clear it.
+  friendly capacity error). UPDATE 2026-07-27: v0.1.34 (flash-resident
+  read-back copies + envelope dropped pre-floor-check) CLEARED the
+  capacity motivation — Music Sequencer V3 now runs at 300 px with
+  ~70 KB free (full-library capacity, 322/322 modeled). The raw
+  current-pattern slot v0.1.34 added is also exactly the "contiguous,
+  mappable region" this item needs, so what remains is purely the MMU
+  work — now a perf/endgame item, not a capacity one.
 - **WiFi-blob buffer tuning** [M] ★ — esp-radio's RX/TX buffer counts are
   default-generous; the blob's heap draw is the biggest remaining consumer
-  (~40+ KB). Tunable via esp-config; trade OTA/preview throughput for
-  pattern headroom if ever needed.
+  (~50 KB measured residual at idle on v0.1.34). VERIFIED 2026-07-29
+  where the knobs actually live on our pinned esp-radio: NOT esp-config —
+  they're runtime fields on `esp_radio::wifi::ControllerConfig` (already
+  constructed in main.rs): `static_rx_buf_num` (default 10 × ~1.6 KB,
+  allocated at wifi init and never freed), `dynamic_rx_buf_num` (default
+  32, on-demand), tx counts, `ampdu_rx_enable`/`rx_ba_win`. Dropping
+  static 10→4 + dynamic 32→16 + AMPDU off should reclaim ~15-25 KB at
+  the cost of RX throughput on busy networks; tune conservatively and
+  soak — the blob's allocations don't null-check, so an undersized pool
+  under load shows up as StoreProhibited, not a clean error. Main use
+  now: the small-chip profile (see boards.md tiers), not classic-ESP32
+  capacity.
+- **Small-chip profile + more board features** [M] ★★ — follow-ups from
+  the 2026-07-29 chip-support assessment (docs/boards.md "Beyond the
+  current boards"): (1) add `board-s3-devkit` and `board-c6-devkit`
+  features — both are five-minute diffs + toolchains we already have,
+  shipping as "builds, untested on metal" (no bench hardware); (2) a
+  `small-chip` cargo feature bundling web pool 3→2 + tuned WiFi buffers
+  for the S2/C2 tier, where giants reject cleanly (acceptable — the
+  budgeted-engine rejection path is the degradation story); (3) WROVER
+  PSRAM as an esp-alloc second region for pattern arrays (WiFi blob must
+  stay on internal RAM) — the big capacity unlock for the classic line
+  if ever wanted.
 
 ## Engine / runtime
 
