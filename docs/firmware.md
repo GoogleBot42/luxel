@@ -89,6 +89,94 @@ Migrating a device that predates the OTA layout requires ONE serial flash
 of the merged image (it rewrites the partition table):
 `espflash write-bin 0 result/luxel-fw.bin` — after that, everything is OTA.
 
+## Stack & heap invariants
+
+Three real incidents — the v0.1.4 OTA-crash root cause (2026-07-06), the
+v0.1.19 boot brick, and the v0.1.31-33 deterministic stack panics
+(2026-07-27) — all trace back to the same memory model. This section is
+the permanent home for those lessons; UPDATES.md has the full incident
+writeups under those dates.
+
+**The main-task stack is leftover DRAM.** esp-hal gives the main task
+whatever RWDATA the linker doesn't claim for `.data`/`.bss` — every static
+shrinks it further, including the `esp_alloc::heap_allocator!` arenas and
+embassy task futures. There is no linker error for shrinking it too far;
+the failure is a runtime stack overflow ("write to the stack guard value on
+ProCpu"), and because the WiFi blob's own statics sit in the same region,
+overflow symptoms can look like blob corruption rather than a stack bug.
+`firmware/src/main.rs::main` runs two `heap_allocator!` calls per board: a
+`#[esp_hal::ram(reclaimed)]` region (96 KB on esp32 / 64 KB on the C3 —
+DRAM the WiFi blob would otherwise reserve before init reclaims it) and the
+main heap region (80 KB on esp32 / 160 KB on the C3). Whatever DRAM is left
+after both becomes `.stack`.
+
+**Task futures are statics.** `#[embassy_executor::task]` functions compile
+to statics, so a large buffer held across an `.await` inside one lives in
+`.bss` for the life of the firmware, not on a per-call frame. v0.1.19's
+first cut put ~12 KB of MQTT/netin buffers in task futures and bricked the
+boot (measured stack ≈ 10.7 KB). Big task buffers must be heap `Vec`s.
+
+**WiFi NMI frames land on whatever stack is current.** The single main
+stack runs the whole embassy executor, picoserve's response path,
+esp-storage's flash ops, and the WiFi level-6 NMI frames — a tight main
+stack plus one NMI atop a deep call overflows even when normal execution
+alone would have fit. This was the actual trigger in both the v0.1.4 and
+v0.1.33 incidents: a request-context flash read at picoserve's max call
+depth, with a WiFi NMI frame landing on top.
+
+**Never call `FlashStorage::read` (esp-storage) in request/async context.**
+It puts an unconditional 4 KiB sector bounce-buffer on the caller's stack.
+Use `read_nor` instead — word-aligned offset/length/buffer, reads straight
+into the destination, zero stack cost. `read_chunk` in
+`firmware/src/assets.rs` is the reference pattern: stage through a
+word-aligned heap buffer, then copy out the unaligned slice actually
+wanted.
+
+**Measure `.stack`, don't estimate it.** `readelf -S` (or
+`tools/stack-check.sh`, see docs/tools.md) is ground truth. v0.1.31 shipped
+on an arithmetic estimate of ~27 KB of leftover stack; the real, linked
+`.stack` was 18,140 B (17,884 B in v0.1.32) — ~2 KB above the measured
+15.6 KB overflow point — and every request-context flash read panicked
+deterministically. `tools/stack-check.sh` now fails the build if `.stack`
+drops under a 24 KB floor, on top of its existing per-function frame-budget
+check across the whole linked image (deps and build-std core/alloc
+included — the class of check that originally caught esp-storage's
+`FlashStorage::read` bounce buffer).
+
+**Heap economics.** Two `esp_alloc` regions per board (above). Boot tasks
+that do multi-KB loads (playlist/pattern resume) must run after
+`stack.wait_config_up().await` — WiFi bring-up mallocs don't null-check, so
+a heavy load racing WiFi init shows up as a `StoreProhibited` crash inside
+the blob, not a clean OOM panic. The engine holds exactly one decoded
+`Program`; swap-path allocations are fallible (`try_reserve_exact`,
+`firmware/src/main.rs`). `RUNTIME_FLOOR` (20 KB, `main.rs`) is the floor
+`try_budgeted_engine` checks after a pattern loads — a pattern that fits
+its array budget but still leaves the heap under the floor is rejected as
+a vmerr instead of panicking. `budgeted_engine` derives the array budget
+itself as `esp_alloc::HEAP.free() - (RUNTIME_FLOOR + 4 KiB)`, clamped to a
+16 KB minimum — byte-accurate per array element, so one big array isn't
+taxed for overhead that only swarms of tiny arrays pay.
+
+**WS2812 (bit-serial protocols) requires the DMA SPI path, never blocking
+writes.** Blocking `Spi::write` splits every frame into 64-byte FIFO
+transactions with a busy-wait between them; 64 B = 512 SPI bits, not
+divisible by WS2812's 3-SPI-bits-per-LED-bit encoding, so every chunk
+boundary corrupts a bit mid-symbol, and a WiFi interrupt landing in the
+inter-chunk gap stretches it past the strip's latch threshold (partial
+frame, rest of the frame re-addresses from pixel 0). `main.rs` now runs
+every board's SPI through `.with_dma()` (`DMA_SPI2` on esp32, `DMA_CH0` on
+the C3, both typed `SpiDma`) so each frame is one continuous transfer.
+Clocked protocols (APA102/SK9822) are immune — they never showed the bug,
+which is why it went unnoticed until the first single-wire WS2812 test.
+
+**Clippy runs on the default target only.** `cargo clippy` targets the
+default `board-c3-devkit` feature (mainline rustc); it can't drive the
+Xtensa `-Zbuild-std` build (clippy-driver has no Xtensa backend). The
+stack lints declared at the top of `main.rs`
+(`#![deny(clippy::large_stack_arrays)]`, tuned via `firmware/clippy.toml`)
+are board-independent, so running clippy on the C3 build still covers the
+Xtensa boards' source.
+
 ## Board: Pixelblaze v3 Standard (preferred dev target)
 
 Jeremy has two identical v3s: one stays the untouched compatibility oracle,

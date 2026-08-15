@@ -18,8 +18,9 @@ web/dist.luxa
 web/public/gallery.json
 web/public/pixelblaze-library.json
 
-# transient agent worktrees
+# transient agent worktrees + per-machine agent settings
 .claude/worktrees/
+.claude/settings.local.json
 
 # Device flash dumps — may contain WiFi creds (never commit)
 athom-wled-*.bin

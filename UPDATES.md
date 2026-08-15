@@ -1,5 +1,39 @@
 # Update log
 
+## 2026-08-15 — Claude Code setup bootstrapped from session history
+
+The repo now carries its own agent configuration, mined from six weeks of
+memories, session transcripts, and UPDATES.md itself:
+
+- **CLAUDE.md** — orientation, toolchain norms (nix-flake-only, Rust-first,
+  strict TS), environment boundaries (container/no-serial, one device + one
+  oracle), autonomy grants, hard rules (clean-room corpus, black-box oracle,
+  no secrets in tracked files), verification norms, and tripwires.
+- **.claude/rules/** — path-scoped must-know risks: `firmware.md` (stack/heap
+  footguns), `vm-bytecode.md` (BUILTINS append-only), `web.md` (browser
+  verification, Svelte/e2e gotchas, terminology), `corpus-cleanroom.md`,
+  `oracle.md` (websocket-wedge et al.).
+- **.claude/skills/** — procedures: `deploy-device`, `athom-rig`,
+  `verify-webui`, `worktree-setup`, `cleanroom-port`, plus meta-skills
+  `fetch-work` / `unblock` / `reflect`.
+- **docs/firmware.md** gains a "Stack & heap invariants" section — the
+  permanent home for the v0.1.4 / v0.1.19 / v0.1.31-33 memory-model lessons
+  (leftover-DRAM stack, task-futures-are-statics, FlashStorage::read bounce
+  buffer, measure-don't-estimate, heap economics, WS2812-needs-DMA).
+- **docs/wled-migration.md** gains the serial-rig facts (ttyUSB0 ownership,
+  single-reader rule, no-DTR/RTS → `--before no-reset --after no-reset`,
+  verify dumps twice) and the restore command now carries both no-reset
+  flags. Flag spelling verified against the installed esptool v5.3.1 /
+  espflash v4.4.0 (hyphenated).
+- Cleanup: deleted the untracked `tools/corpus/cleanroom/` scratch dir after
+  verifying all 283 specs are byte-identical to the committed
+  `docs/pattern-specs/`; gitignored `.claude/settings.local.json`.
+
+Everything cited was verified against the tree during writing; writer
+subagents corrected several stale memories along the way (gen-gallery
+doesn't read `last-report.json`; the corpus symlink is no longer needed for
+the e2e tile assertion; esptool flag spelling).
+
 ## 2026-07-27 — v0.1.34: current pattern lives in flash (~40 KB heap
 ## back) + decode churn fix — Music Sequencer V3 runs at 300 px
 

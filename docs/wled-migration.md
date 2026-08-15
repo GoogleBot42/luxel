@@ -93,9 +93,26 @@ The whole migration can be one static web page (no backend), because:
 
 ## Bench workflow (this repo, the Athom)
 
+- **Serial rig**: FTDI FT232R USB-UART adapter, `/dev/ttyUSB0`, 115200
+  baud. The device node comes back root-owned after every USB replug —
+  `chmod` it before use, every time. Only one process may hold the port
+  open: a second reader (a stray `screen`/`minicom`/monitor left running)
+  silently steals bytes instead of erroring, and looks exactly like a
+  dead line from the other reader's side — check for orphaned readers
+  first if serial output goes quiet. Nothing wires DTR/RTS to
+  EN/IO0 on this rig (same constraint as the Pixelblaze v3's expansion
+  header, see docs/firmware.md), so esptool/espflash can't reset the chip
+  into the bootloader themselves — pass explicit no-reset on both ends
+  (`--before no-reset --after no-reset` for esptool; espflash's
+  `--before no-reset --after no-reset` match) and pair every command with
+  the button-held power-up below for entering download mode. The FTDI can
+  also re-enumerate mid-transfer (the port vanishing and reappearing as
+  the same or a new `/dev/ttyUSB*`); treat any flash dump as unverified
+  until a second `read-flash` and a hash compare (`sha256sum`) agree with
+  the first.
 - Restore stock WLED: button-held power-up (GPIO0 = case button, power
   via `zigbee2mqtt/claude-switch`), then
-  `esptool --before no-reset write-flash 0x0 athom-wled-stock.bin`.
+  `esptool --before no-reset --after no-reset write-flash 0x0 athom-wled-stock.bin`.
 - Re-takeover: `curl -F "update=@firmware/target/luxel-wled-takeover.bin"
   http://192.168.0.183/update`, watch serial at 115200.
 - Corpus for the littlefs reader: `athom-wled-fs-configured.bin` (+ NVS
