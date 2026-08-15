@@ -65,26 +65,64 @@ export interface MqttStatus {
 
 const RAW = 65536;
 
+/** The device's HTTP server keeps a deliberately tiny connection pool
+ *  (2 sockets on classic ESP32 — RAM budget), so a browser firing
+ *  parallel fetches can starve *itself*: excess connections are refused
+ *  at the TCP level and surface as "cannot reach device" while the
+ *  device is perfectly healthy. Two defenses, both here so no call site
+ *  has to care: at most `MAX_INFLIGHT` requests in flight (matching the
+ *  device pool), and connection-level failures retry with backoff.
+ *  HTTP error statuses are never retried — those responses came from the
+ *  device. Retrying POSTs is safe here: a refused connection was never
+ *  processed, and every mutating endpoint in this API is idempotent
+ *  (set-value, overwrite-by-name, delete). */
+const MAX_INFLIGHT = 2;
+const RETRIES = 3;
+
 export class DeviceSession {
   /** `base` is "" when served from the device itself, else "http://host[:port]". */
   constructor(readonly base: string) {}
+
+  private static inflight = 0;
+  private static waiters: (() => void)[] = [];
 
   private url(path: string): string {
     return this.base + path;
   }
 
+  private async fetch(path: string, init?: RequestInit): Promise<Response> {
+    while (DeviceSession.inflight >= MAX_INFLIGHT) {
+      await new Promise<void>((wake) => DeviceSession.waiters.push(wake));
+    }
+    DeviceSession.inflight++;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await fetch(this.url(path), init);
+        } catch (err) {
+          if (attempt >= RETRIES) throw err;
+          const backoff = 150 * 2 ** attempt + Math.random() * 100;
+          await new Promise((r) => setTimeout(r, backoff));
+        }
+      }
+    } finally {
+      DeviceSession.inflight--;
+      DeviceSession.waiters.shift()?.();
+    }
+  }
+
   async status(): Promise<DeviceStatus> {
-    const res = await fetch(this.url("/api/status"));
+    const res = await this.fetch("/api/status");
     return (await res.json()) as DeviceStatus;
   }
 
   async pattern(): Promise<string> {
-    return (await fetch(this.url("/api/pattern"))).text();
+    return (await this.fetch("/api/pattern")).text();
   }
 
   /** Current output brightness (0–31) and its max. */
   async brightness(): Promise<{ brightness: number; max: number }> {
-    return (await (await fetch(this.url("/api/brightness"))).json()) as {
+    return (await (await this.fetch("/api/brightness")).json()) as {
       brightness: number;
       max: number;
     };
@@ -92,7 +130,7 @@ export class DeviceSession {
 
   /** Set output brightness (0–31); applied live and persisted on the device. */
   async setBrightness(value: number): Promise<{ ok: boolean; brightness?: number }> {
-    const res = await fetch(this.url("/api/brightness"), {
+    const res = await this.fetch("/api/brightness", {
       method: "POST",
       body: String(Math.max(0, Math.min(31, Math.round(value)))),
     });
@@ -101,7 +139,7 @@ export class DeviceSession {
 
   /** Device config: pixel count, its max, and the LED protocol. */
   async config(): Promise<{ pixels: number; max: number; protocol: string }> {
-    return (await (await fetch(this.url("/api/config"))).json()) as {
+    return (await (await this.fetch("/api/config")).json()) as {
       pixels: number;
       max: number;
       protocol: string;
@@ -110,7 +148,7 @@ export class DeviceSession {
 
   /** Set the pixel count; the device resizes its strip live (no reboot). */
   async setConfig(pixels: number): Promise<{ ok: boolean; pixels?: number; error?: string }> {
-    const res = await fetch(this.url("/api/config"), {
+    const res = await this.fetch("/api/config", {
       method: "POST",
       body: String(Math.max(1, Math.round(pixels))),
     });
@@ -119,7 +157,7 @@ export class DeviceSession {
 
   /** Current LED protocol and the selectable options. */
   async protocol(): Promise<{ protocol: string; options: string[] }> {
-    return (await (await fetch(this.url("/api/protocol"))).json()) as {
+    return (await (await this.fetch("/api/protocol")).json()) as {
       protocol: string;
       options: string[];
     };
@@ -127,12 +165,12 @@ export class DeviceSession {
 
   /** Set the LED protocol; the device reconfigures its driver live (no reboot). */
   async setProtocol(name: string): Promise<{ ok: boolean; protocol?: string; error?: string }> {
-    const res = await fetch(this.url("/api/protocol"), { method: "POST", body: name });
+    const res = await this.fetch("/api/protocol", { method: "POST", body: name });
     return (await res.json()) as { ok: boolean; protocol?: string; error?: string };
   }
 
   async run(source: string, bytecode: Uint8Array): Promise<RunResult> {
-    const res = await fetch(this.url("/api/code"), {
+    const res = await this.fetch("/api/code", {
       method: "POST",
       body: lxpEnvelope("", source, bytecode),
     });
@@ -141,20 +179,20 @@ export class DeviceSession {
 
   async setControl(name: string, values: number[]): Promise<void> {
     const body = `${name} ${values.map((v) => Math.round(v * RAW)).join(" ")}`.trim();
-    await fetch(this.url("/api/control"), { method: "POST", body });
+    await this.fetch("/api/control", { method: "POST", body });
   }
 
   // ---- device pattern library (see serve.rs / server.rs contract) ----
 
   async patterns(): Promise<{ id: string; name: string }[]> {
-    const r = (await (await fetch(this.url("/api/patterns"))).json()) as {
+    const r = (await (await this.fetch("/api/patterns")).json()) as {
       patterns?: { id: string; name: string }[];
     };
     return r.patterns ?? [];
   }
 
   async patternSource(id: string): Promise<{ id: string; name: string; source: string }> {
-    return (await (await fetch(this.url(`/api/patterns/${id}`))).json()) as {
+    return (await (await this.fetch(`/api/patterns/${id}`)).json()) as {
       id: string;
       name: string;
       source: string;
@@ -168,7 +206,7 @@ export class DeviceSession {
     source: string,
     bytecode: Uint8Array,
   ): Promise<RunResult & { id?: string }> {
-    const res = await fetch(this.url("/api/patterns"), {
+    const res = await this.fetch("/api/patterns", {
       method: "POST",
       body: lxpEnvelope(name, source, bytecode),
     });
@@ -176,12 +214,12 @@ export class DeviceSession {
   }
 
   async deletePattern(id: string): Promise<void> {
-    await fetch(this.url(`/api/patterns/${id}`), { method: "DELETE" });
+    await this.fetch(`/api/patterns/${id}`, { method: "DELETE" });
   }
 
   /** Installed pixel map status. */
   async map(): Promise<{ installed: boolean; dims: number; count: number }> {
-    return (await (await fetch(this.url("/api/map"))).json()) as {
+    return (await (await this.fetch("/api/map")).json()) as {
       installed: boolean;
       dims: number;
       count: number;
@@ -195,18 +233,18 @@ export class DeviceSession {
     for (const c of coords) {
       for (let d = 0; d < dims; d++) parts.push(String(Math.round((c[d] ?? 0) * RAW)));
     }
-    const res = await fetch(this.url("/api/map"), { method: "POST", body: parts.join(" ") });
+    const res = await this.fetch("/api/map", { method: "POST", body: parts.join(" ") });
     return (await res.json()) as { ok: boolean; count?: number };
   }
 
   /** Remove the installed map (patterns render 1D again). */
   async clearMap(): Promise<void> {
-    await fetch(this.url("/api/map"), { method: "POST", body: "" });
+    await this.fetch("/api/map", { method: "POST", body: "" });
   }
 
   /** Which network the device will join next boot (never the password). */
   async wifi(): Promise<{ ssid: string | null; source: string }> {
-    return (await (await fetch(this.url("/api/wifi"))).json()) as {
+    return (await (await this.fetch("/api/wifi")).json()) as {
       ssid: string | null;
       source: string;
     };
@@ -214,7 +252,7 @@ export class DeviceSession {
 
   /** Set WiFi credentials — the device stores them and REBOOTS to apply. */
   async setWifi(ssid: string, password: string): Promise<{ ok: boolean; error?: string }> {
-    const res = await fetch(this.url("/api/wifi"), {
+    const res = await this.fetch("/api/wifi", {
       method: "POST",
       body: `${ssid}\n${password}`,
     });
@@ -223,7 +261,7 @@ export class DeviceSession {
 
   /** MQTT broker settings (never the password) + connection state. */
   async mqtt(): Promise<MqttStatus> {
-    return (await (await fetch(this.url("/api/mqtt"))).json()) as MqttStatus;
+    return (await (await this.fetch("/api/mqtt")).json()) as MqttStatus;
   }
 
   /** Set the MQTT broker; the device reconnects live (no reboot). Empty
@@ -234,7 +272,7 @@ export class DeviceSession {
     user: string,
     pass: string,
   ): Promise<{ ok: boolean; error?: string }> {
-    const res = await fetch(this.url("/api/mqtt"), {
+    const res = await this.fetch("/api/mqtt", {
       method: "POST",
       body: `${host}\n${port || 1883}\n${user}\n${pass}`,
     });
@@ -243,7 +281,7 @@ export class DeviceSession {
 
   /** Output pipeline: wire color order, gamma (×10), power cap (mA). */
   async output(): Promise<{ order: string; gamma: number; capMa: number }> {
-    return (await (await fetch(this.url("/api/output"))).json()) as {
+    return (await (await this.fetch("/api/output")).json()) as {
       order: string;
       gamma: number;
       capMa: number;
@@ -256,7 +294,7 @@ export class DeviceSession {
     gammaTenths: number,
     capMa: number,
   ): Promise<{ ok: boolean; error?: string }> {
-    const res = await fetch(this.url("/api/output"), {
+    const res = await this.fetch("/api/output", {
       method: "POST",
       body: `${order} ${Math.round(gammaTenths)} ${Math.round(capMa)}`,
     });
@@ -265,7 +303,7 @@ export class DeviceSession {
 
   /** Wall clock: NTP sync status, local unix seconds, tz offset. */
   async clock(): Promise<{ synced: boolean; local: number; tzMinutes: number }> {
-    return (await (await fetch(this.url("/api/clock"))).json()) as {
+    return (await (await this.fetch("/api/clock")).json()) as {
       synced: boolean;
       local: number;
       tzMinutes: number;
@@ -274,7 +312,7 @@ export class DeviceSession {
 
   /** Set the UTC offset in minutes; applied live + persisted. */
   async setClock(tzMinutes: number): Promise<{ ok: boolean; error?: string }> {
-    const res = await fetch(this.url("/api/clock"), {
+    const res = await this.fetch("/api/clock", {
       method: "POST",
       body: String(Math.round(tzMinutes)),
     });
@@ -283,18 +321,18 @@ export class DeviceSession {
 
   /** Reboot the device into its provisioning access point (one boot). */
   async startApMode(): Promise<{ ok: boolean; note?: string }> {
-    const res = await fetch(this.url("/api/apmode"), { method: "POST", body: "" });
+    const res = await this.fetch("/api/apmode", { method: "POST", body: "" });
     return (await res.json()) as { ok: boolean; note?: string };
   }
 
   /** Luxel-to-Luxel sync role + clock + last leader beacon heard. */
   async sync(): Promise<SyncStatus> {
-    return (await (await fetch(this.url("/api/sync"))).json()) as SyncStatus;
+    return (await (await this.fetch("/api/sync")).json()) as SyncStatus;
   }
 
   /** Set the sync role; applied live and persisted on the device. */
   async setSync(mode: "off" | "leader" | "follower"): Promise<{ ok: boolean; error?: string }> {
-    const res = await fetch(this.url("/api/sync"), { method: "POST", body: mode });
+    const res = await this.fetch("/api/sync", { method: "POST", body: mode });
     return (await res.json()) as { ok: boolean; error?: string };
   }
 
@@ -303,12 +341,12 @@ export class DeviceSession {
   async sendSensors(frame: Uint8Array): Promise<void> {
     // cast: TS 5.7 types Uint8Array over ArrayBufferLike, which BodyInit
     // rejects; ours is a plain (non-shared) buffer
-    await fetch(this.url("/api/sensors"), { method: "POST", body: frame.buffer as ArrayBuffer });
+    await this.fetch("/api/sensors", { method: "POST", body: frame.buffer as ArrayBuffer });
   }
 
   /** Compile + run a stored pattern on the device. */
   async activatePattern(id: string): Promise<RunResult> {
-    const res = await fetch(this.url(`/api/patterns/${id}/activate`), { method: "POST" });
+    const res = await this.fetch(`/api/patterns/${id}/activate`, { method: "POST" });
     return (await res.json()) as RunResult;
   }
 
@@ -316,7 +354,7 @@ export class DeviceSession {
 
   /** The stored playlist + current playback state. */
   async playlist(): Promise<Playlist> {
-    return (await (await fetch(this.url("/api/playlist"))).json()) as Playlist;
+    return (await (await this.fetch("/api/playlist")).json()) as Playlist;
   }
 
   /** Replace the stored playlist. `defaultSec` 0 = manual; per-item `sec` null
@@ -332,20 +370,20 @@ export class DeviceSession {
         lines.push(`C ${name} ${vals.map((v) => Math.round(v * RAW)).join(" ")}`);
       }
     }
-    await fetch(this.url("/api/playlist"), { method: "POST", body: lines.join("\n") });
+    await this.fetch("/api/playlist", { method: "POST", body: lines.join("\n") });
   }
 
   async playlistPlay(index = 0): Promise<void> {
-    await fetch(this.url("/api/playlist/play"), { method: "POST", body: String(index) });
+    await this.fetch("/api/playlist/play", { method: "POST", body: String(index) });
   }
   async playlistStop(): Promise<void> {
-    await fetch(this.url("/api/playlist/stop"), { method: "POST" });
+    await this.fetch("/api/playlist/stop", { method: "POST" });
   }
   async playlistNext(): Promise<void> {
-    await fetch(this.url("/api/playlist/next"), { method: "POST" });
+    await this.fetch("/api/playlist/next", { method: "POST" });
   }
   async playlistPrev(): Promise<void> {
-    await fetch(this.url("/api/playlist/prev"), { method: "POST" });
+    await this.fetch("/api/playlist/prev", { method: "POST" });
   }
 }
 

@@ -92,12 +92,54 @@ bytecode execution is being worked on now; the rest are queued:
   device: "Music Sequencer - for V3 ONLY" (663 lines; 17.8 KB blob,
   ~71 KB total engine footprint per heapstat — it loads at idle heap but
   leaves 19 KB free, 1 KB under the 20 KB floor, and is rejected with the
-  friendly capacity error). This item or WiFi-blob tuning below would
-  clear it.
-- **WiFi-blob buffer tuning** [M] ★ — esp-radio's RX/TX buffer counts are
+  friendly capacity error). UPDATE 2026-07-27: v0.1.34 (flash-resident
+  read-back copies + envelope dropped pre-floor-check) CLEARED the
+  capacity motivation — Music Sequencer V3 now runs at 300 px with
+  ~70 KB free (full-library capacity, 322/322 modeled). The raw
+  current-pattern slot v0.1.34 added is also exactly the "contiguous,
+  mappable region" this item needs, so what remains is purely the MMU
+  work — now a perf/endgame item, not a capacity one.
+- **WiFi-blob buffer tuning** [M] ★★ — AGREED FOLLOW-UP 2026-07-29.
+  esp-radio's RX/TX buffer counts are
   default-generous; the blob's heap draw is the biggest remaining consumer
-  (~40+ KB). Tunable via esp-config; trade OTA/preview throughput for
-  pattern headroom if ever needed.
+  (~50 KB measured residual at idle on v0.1.34). VERIFIED 2026-07-29
+  where the knobs actually live on our pinned esp-radio: NOT esp-config —
+  they're runtime fields on `esp_radio::wifi::ControllerConfig` (already
+  constructed in main.rs): `static_rx_buf_num` (default 10 × ~1.6 KB,
+  allocated at wifi init and never freed), `dynamic_rx_buf_num` (default
+  32, on-demand), tx counts, `ampdu_rx_enable`/`rx_ba_win`. Dropping
+  static 10→4 + dynamic 32→16 + AMPDU off should reclaim ~15-25 KB at
+  the cost of RX throughput on busy networks; tune conservatively and
+  soak — the blob's allocations don't null-check, so an undersized pool
+  under load shows up as StoreProhibited, not a clean error. Main use
+  now: the small-chip profile (see boards.md tiers), not classic-ESP32
+  capacity.
+- **Web pool 3→2 (make the webui tolerant first)** [M] ★★ — AGREED
+  FOLLOW-UP 2026-07-29. The pool went 2→3 in v0.1.31 solely because a
+  browser page load fires css/js/wasm/gallery in parallel and got
+  TCP-refused at 2 (server.rs WEB_TASK_POOL_SIZE history) — but that's
+  the wrong layer paying: the 3rd slot costs ~8 KB heap + ~8.6 KB of
+  static task arena (each slot embeds picoserve's whole response future —
+  the arena that ate v0.1.33's stack margin) on EVERY device forever, to
+  absorb a burst the client could pace. Web side first: stagger/serialize
+  the initial asset loads and extend device.ts's retry-on-refused (it
+  already covers API calls, but NOT the asset fetches — luxel.wasm was
+  the reproducible casualty) so a 2-slot device loads clean; then drop
+  WEB_TASK_POOL_SIZE to 2. Verify with the original repro: real Chromium
+  (in the flake) against the Athom, cold page load, watch for
+  ERR_CONNECTION_REFUSED on assets. Reclaims ~17 KB across heap+statics —
+  also exactly what tiers 3–4 in boards.md want.
+- **Small-chip profile + more board features** [M] ★★ — follow-ups from
+  the 2026-07-29 chip-support assessment (docs/boards.md "Beyond the
+  current boards"): (1) add `board-s3-devkit` and `board-c6-devkit`
+  features — both are five-minute diffs + toolchains we already have,
+  shipping as "builds, untested on metal" (no bench hardware); (2) a
+  `small-chip` cargo feature bundling web pool 3→2 + tuned WiFi buffers
+  for the S2/C2 tier, where giants reject cleanly (acceptable — the
+  budgeted-engine rejection path is the degradation story); (3) WROVER
+  PSRAM as an esp-alloc second region for pattern arrays (WiFi blob must
+  stay on internal RAM) — the big capacity unlock for the classic line
+  if ever wanted.
 
 ## Engine / runtime
 

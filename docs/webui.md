@@ -158,6 +158,20 @@ throttling + scrolling fresh tiles into view.
 
 ---
 
+## Asset-load tolerance for 2-socket devices [M]
+
+Follow-up agreed 2026-07-29 (firmware half in ideas.md "Web pool 3→2"):
+the device's 3rd HTTP slot exists only because our initial page load
+fires css/js/wasm/gallery.json in parallel and a 2-slot device
+TCP-refuses part of the burst (Chromium reproducibly lost luxel.wasm,
+2026-07-26). Fix on this side so the firmware can go back to 2 slots:
+stagger/serialize the startup asset fetches, and extend device.ts's
+retry-on-refused to cover asset fetches (today it only guards API
+calls). Done = cold page load against a `WEB_TASK_POOL_SIZE = 2` build
+on real hardware loads clean in real Chromium (flake) repeatedly.
+
+---
+
 ## Rough phasing
 
 1. **Phase 1 (web-only, no firmware):** mode concept + naming; remember device

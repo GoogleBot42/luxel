@@ -61,6 +61,44 @@ espflash save-image --chip esp32 \
   target/xtensa-esp32-none-elf/release/luxel-fw /tmp/ota.bin && stat -c %s /tmp/ota.bin
 ```
 
+## Beyond the current boards: chip-support assessment (2026-07-29)
+
+What a chip actually needs to run Luxel, derived from the v0.1.34
+memory accounting (per-allocation profiling + on-device validation, see
+UPDATES.md v0.1.34):
+
+- **WiFi.** Not negotiable — without it there is no web UI, no OTA, no
+  MQTT, no sync; that isn't meaningfully Luxel.
+- **~230–240 KB of usable data RAM.** Baseline statics (~83 KB) + main
+  stack (30 KB, the v0.1.33 lesson) + WiFi blob (~50 KB heap) + web pool
+  (~50 KB heap+static at 3 slots) + the 20 KB runtime floor + room for a
+  modest pattern. Chips above ~300 KB run most of the library; the full
+  322-pattern library (Music Sequencer V3 included) is proven on the
+  classic ESP32's 520 KB as of v0.1.34.
+- **SPI.** Both LED protocols run over SPI (no RMT dependency) — every
+  variant qualifies.
+- **4 MB flash.** UNCHANGED by any RAM relaxation: A/B OTA alone is
+  2 MB, and the storage partition became load-bearing in v0.1.34 (the
+  current-pattern read-back slot lives there). 2 MB variants are out.
+
+Pattern capacity is a per-chip quality tier, not a support gate: the
+budgeted engine + floor check + "pattern too large" vmerr + playlist
+pre-flight mean a smaller chip *rejects giants cleanly* instead of
+crashing. That machinery is what makes the lower tiers cheap to support.
+
+| tier | chips | assessment |
+|---|---|---|
+| 1 — supported today | ESP32 (classic), C3 | Classic: full library, both bench boards. C3: already a board feature; unified SRAM means no instruction/data-bus split, so despite 400 vs 520 KB total it's the *more* comfortable target (224 KB heap configured vs the classic's 176). |
+| 2 — add next (follow-up) | S3, C6 | Board-feature diffs + toolchains we already have. S3 (512 KB, cheap ubiquitous modules, optional PSRAM) is the "recommended hardware" pick for new builds; C6 is the C3 successor. No bench hardware — would ship as "builds, untested on metal". |
+| 3 — works, giants reject | S2 | 320 KB clears the baseline with room for small/medium patterns; the heavy tail of the library rejects cleanly. Single-core is fine (the firmware is one async executor). |
+| 4 — experimental only | C2/ESP8684 (4 MB-flash variants only) | ~272 KB total leaves ~20 KB pattern headroom even with the small-chip profile (web pool 2, tuned WiFi buffers — ideas.md). Runs the simple tier of the library. Only worth it with a concrete product reason. |
+| no | H2, P4 | H2 has no WiFi (802.15.4/BLE only). P4 has no radio at all and the C6-companion path doesn't exist in bare-metal Rust yet. Neither is a RAM problem, so no tuning changes the answer. Watch: C5 (5 GHz), once esp-hal support matures. |
+
+Follow-ups tracked in docs/ideas.md ("Small-chip profile + more board
+features"): `board-s3-devkit` / `board-c6-devkit`, the small-chip
+profile for tier 3–4, and WROVER PSRAM as an array arena for the
+classic line.
+
 ## Adding a board (a five-minute diff)
 
 Three files, no other code paths involved:

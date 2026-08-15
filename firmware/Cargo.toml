@@ -2,7 +2,7 @@
 # workspace: it builds for a different target than the host crates.
 [package]
 name = "luxel-fw"
-version = "0.1.30"
+version = "0.1.34"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -47,8 +47,12 @@ edge-dhcp = { version = "0.8", default-features = false }
 
 # build.rs compiles the built-in default pattern to LXBC at build time
 # (host-target build dep — the frontend never enters the firmware image).
+# esp-idf-part serializes partitions.csv to the binary table format for
+# src/takeover.rs (same crate espflash uses, so the bytes match what a
+# serial flash would put at 0x8000).
 [build-dependencies]
 luxel-core = { path = "../crates/luxel-core" }
+esp-idf-part = "0.6"
 
 [features]
 # Boards (pick exactly one; they pull in the right chip). See docs/firmware.md.

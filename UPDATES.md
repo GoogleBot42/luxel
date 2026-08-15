@@ -1,5 +1,275 @@
 # Update log
 
+## 2026-08-15 — Claude Code setup bootstrapped from session history
+
+The repo now carries its own agent configuration, mined from six weeks of
+memories, session transcripts, and UPDATES.md itself:
+
+- **CLAUDE.md** — orientation, toolchain norms (nix-flake-only, Rust-first,
+  strict TS), environment boundaries (container/no-serial, one device + one
+  oracle), autonomy grants, hard rules (clean-room corpus, black-box oracle,
+  no secrets in tracked files), verification norms, and tripwires.
+- **.claude/rules/** — path-scoped must-know risks: `firmware.md` (stack/heap
+  footguns), `vm-bytecode.md` (BUILTINS append-only), `web.md` (browser
+  verification, Svelte/e2e gotchas, terminology), `corpus-cleanroom.md`,
+  `oracle.md` (websocket-wedge et al.).
+- **.claude/skills/** — procedures: `deploy-device`, `athom-rig`,
+  `verify-webui`, `worktree-setup`, `cleanroom-port`, plus meta-skills
+  `fetch-work` / `unblock` / `reflect`.
+- **docs/firmware.md** gains a "Stack & heap invariants" section — the
+  permanent home for the v0.1.4 / v0.1.19 / v0.1.31-33 memory-model lessons
+  (leftover-DRAM stack, task-futures-are-statics, FlashStorage::read bounce
+  buffer, measure-don't-estimate, heap economics, WS2812-needs-DMA).
+- **docs/wled-migration.md** gains the serial-rig facts (ttyUSB0 ownership,
+  single-reader rule, no-DTR/RTS → `--before no-reset --after no-reset`,
+  verify dumps twice) and the restore command now carries both no-reset
+  flags. Flag spelling verified against the installed esptool v5.3.1 /
+  espflash v4.4.0 (hyphenated).
+- Cleanup: deleted the untracked `tools/corpus/cleanroom/` scratch dir after
+  verifying all 283 specs are byte-identical to the committed
+  `docs/pattern-specs/`; gitignored `.claude/settings.local.json`.
+
+Everything cited was verified against the tree during writing; writer
+subagents corrected several stale memories along the way (gen-gallery
+doesn't read `last-report.json`; the corpus symlink is no longer needed for
+the e2e tile assertion; esptool flag spelling).
+
+## 2026-07-27 — v0.1.34: current pattern lives in flash (~40 KB heap
+## back) + decode churn fix — Music Sequencer V3 runs at 300 px
+
+Per-allocation profiling (new host harness, below) showed the biggest
+pattern's RAM footprint was 62% bookkeeping: the PATTERN_SRC/PATTERN_BC
+read-back copies (22.3 + 17.8 KB for "Music Sequencer - for V3 ONLY"),
+which nothing on the render path ever reads. Three changes, all
+verified on the Athom at 300 px:
+
+- **Decode pre-pass** (luxel-core): `prog_code` is reserved once from a
+  header-only sum instead of per function. try_reserve_exact per
+  function reallocs the whole buffer each time — 157 KB of copy churn
+  for 9 KB of tables on the big pattern (measured), and the realloc
+  ladder fragments the heap enough to starve later 17–22 KB contiguous
+  reservations (the silent src/bc shedding seen on-device). Now: one
+  9,170 B allocation; total decode churn 213 → 65 KB; resident
+  byte-identical.
+- **Flash-resident current pattern**: on swap the source + blob are
+  written as RAW PAGES into the reserved upper half of the storage
+  partition (header page written last), and only tiny location enums
+  stay in RAM (shared::SrcLoc/BcLoc; boot default = rodata, zero heap
+  and zero flash). GET /api/pattern and /api/pattern.lxp stream from
+  flash with the FlashAsset discipline (4 KiB reads + Timer yields);
+  the engine rebuild reads a transient fallible Vec. A first cut as
+  reserved-key map items made every read a 512 KiB NoCache scan whose
+  cache-off bursts starved WiFi — raw pages fixed that. Byte-integrity
+  verified on-device (src and envelope sections cmp-exact against the
+  uploaded originals). /api/status gains `"src"/"bc"` booleans and a
+  serial log line when a swap's flash write fails — the shedding that
+  used to be silent is now observable.
+- **Envelope dropped before the engine builds** (main.rs): the ~40 KB
+  upload buffer is freed after the flash persist, so it no longer
+  counts against the array budget or the post-load floor check.
+  On-device before/after at 300 px: Music Sequencer V3 was REJECTED
+  456 B under the floor (v0.1.33 stock: 13 KB under); now it RUNS with
+  ~70 KB free. Steady-state heap while running it: was impossible,
+  now 70,608 B free.
+
+Known issue (documented, not fixed): back-to-back big readbacks
+(/api/pattern twice with no gap) intermittently time out (000, retry
+succeeds) — NOT present on v0.1.33's RAM path (A/B'd on hardware).
+Slot/keep-alive recycling under load is suspected; a live DDP stream
+(LedFx?) was hitting the bench device during later tests, which muddies
+attribution. Mid-stream flash failures now PAD the body to the promised
+Content-Length instead of truncating — a short body desyncs the
+connection and wedges the pool slot until the write timeout (observed
+as cascading dead requests; the padding closed that class).
+
+New host tooling: `crates/luxel-cli/tests/allocprof.rs` — dhat-based
+per-allocation profile of the device lifecycle (resident / peak / churn
+per callsite, driven by AP_SRC/AP_PIXELS/AP_BUDGET env vars), validated
+against live hardware to ~2% (Doom Fire predicted 14.7 KB resident
+delta, device measured 14.4 KB). `examples/mkenvelope.rs` packs LXP1
+envelopes for /api/code. The playlist boot-resume path now also writes
+the flash slot on its first swap — soak big-pattern resume before
+trusting it hard.
+
+## 2026-07-27 — v0.1.33: main-task stack was 18 KB, not 27 — measured,
+## fixed (deterministic /api/wifi + page-load panics)
+
+Jeremy hit a hard-reproducible stack-guard panic on the Athom: every
+`GET /api/wifi` (and every load of `/`, whose page JS calls it) died
+with "write to the stack guard value on ProCpu". The panic registers
+told the whole story: SP = `0x3FFDBA60`, 60 bytes above the `.stack`
+section's floor (`0x3FFDBA24`), PC inside
+`esp_rom_spiflash_read_status` — main-task stack exhaustion during a
+request-context flash read (`read_wifi` → `assets::read_chunk`), the
+classic failure mode, back again.
+
+Root cause: v0.1.31's heap retune was arithmetic on an estimate that
+was wrong by ~17 KB. The comment budgeted the 3-slot web pool at
+"~9 KB of static task arena" and claimed ~27 KB of leftover stack;
+`readelf -S` on the shipped ELFs says `server::web_task::POOL` is
+25,968 bytes (~8.6 KB **per slot** — each slot embeds picoserve's
+whole response-path future) and `.stack` was 18,140 B in v0.1.31 /
+17,884 B in v0.1.32. That's ~2 KB above the empirically measured
+15.6 KB overflow point — one WiFi NMI frame landing on top of a flash
+read at picoserve depth eats it. (This also retroactively explains
+v0.1.31's 5/5 `/api/ota` crash-mid-erase-burst on this device.)
+
+- **esp32 heap static 92 KB → 80 KB**: `.stack` measured 30,172 B in
+  the new image (the "31 KB ran clean for weeks" zone). Runtime
+  heap_free on the Athom: ~95 KB — comfortably above resume.rs's
+  `stored×2 + 24 KB` pre-flight and the soak's observed peak.
+- **Comment rewritten around the measurement**, with the rule that
+  should have been there all along: `.stack` in `readelf -S` is the
+  ground truth — measure, don't estimate. `tools/stack-check.sh` now
+  enforces it: it prints the linked `.stack` size and fails below a
+  24 KB floor (per-frame budget check unchanged).
+- **Verified on the Athom**: OTA'd 908 KB to ota_0, then 5/5 clean
+  `GET /api/wifi`, repeated `/` loads, api/output/clock/brightness
+  all stable. Also pushed the 930 KB playground bundle (the assets
+  partition was empty after the serial full-flash — the minimal
+  fallback page was what Jeremy's browser was loading), which
+  doubles as a clean 227-sector flash-write soak on the new stack.
+
+## 2026-07-27 — v0.1.32: WS2812 goes DMA (fixes erratic colors) + OTA
+## writer parity
+
+Jeremy's first real WS2812b test (300 px on the Athom) showed erratic
+colors on a plain rainbow. Root cause, confirmed in esp-hal source: the
+blocking `Spi::write` splits every frame into 64-byte FIFO transactions
+with a busy-wait between them. 64 B = 512 SPI bits, and WS2812 encodes
+each LED bit as 3 SPI bits — so every chunk boundary lands mid-symbol
+and corrupts a bit (43 boundaries per 300-px frame), and a WiFi
+interrupt in the gap stretches it past the strip's latch threshold
+(partial-frame latch, rest of the frame re-addresses from pixel 0).
+SK9822 has a clock line and never cared — which is why nothing showed
+until the first single-wire strip.
+
+- **SPI output is now DMA** (`SpiDma`, blocking mode): one continuous
+  gap-free transfer per frame on both chips (esp32: `DMA_SPI2`, c3:
+  `DMA_CH0`). The encode buffer became a `u32`-backed `EncodeBuf` —
+  the DMA driver only streams a slice zero-copy when it's 4-byte
+  aligned with a length that's a multiple of 4 (classic-ESP32 rule);
+  anything else bounces through a 4-byte internal buffer, i.e. the
+  exact re-chunking the DMA is here to prevent. Max frame (2048 px
+  WS2812 = 18.5 KB) fits one transfer (driver cap 32,736 B).
+- **OTA writer rebuilt to match the assets writer** (borrow-per-op via
+  `with_flash` instead of taking the driver for the whole upload; an
+  `OTA_ACTIVE` flag now provides the in-progress guard). Motivation:
+  on the Athom, `/api/ota` crashed the device (CPU exception or silent
+  lockup mid-erase-burst, panic-reboot or power-cycle to recover)
+  **5/5 attempts**, while the line-for-line-identical assets upload
+  path was clean 4/4 (930 KB, 227 sector erases each — including with
+  the engine frozen). Exonerated by experiment: the Freeze (assets
+  push with engine provably frozen at 20 fps = clean), `ota::begin`'s
+  partition-table reads (junk-image OTA runs them and rejects cleanly,
+  device stays healthy), esp-storage's per-op critical section (active
+  in both paths, verified via cargo tree), executor-idle/WAITI
+  interleave (frozen assets push = clean), upload pacing (8 KB/s
+  throttle still crashed). The one structural delta left was
+  taken-bare vs borrowed-per-op flash access, so the OTA writer now
+  uses the empirically-bulletproof shape. **Verified on hardware**:
+  after a serial full-flash install (which also upgraded the Athom
+  off the Arduino-2019 bootloader to espflash's ESP-IDF v5.5.1 one),
+  a full 908 KB OTA self-push wrote all 222 sectors, activated, and
+  rebooted into ota_1 cleanly — the first successful /api/ota on this
+  device ever. (Caveat: bootloader and writer changed together, so
+  the fix isn't isolated to one of them.) Residual cosmetic flaw:
+  the success response still often dies in the reboot window, so
+  ota-push.sh reports failure on a push that actually landed — check
+  /api/status version/slot.
+- **Known hole, documented not fixed**: `commit` activates on
+  `written == Content-Length` alone, so a *truncated prefix* of a real
+  image (valid header magic + app-desc) activates and hands the
+  problem to the bootloader's image validation / boot-loop guard. Real
+  espflash images from ota-push.sh are never truncated; my probe files
+  were. A structural end-of-image check would close it.
+- Rig lesson recorded: /dev/ttyUSB0 serial works fine — but only ONE
+  reader at a time; a forgotten background `cat` silently steals every
+  byte and looks exactly like dead serial.
+
+## 2026-07-26 — v0.1.31: takeover always-on + WiFi inheritance + the
+## browser-starvation fix
+
+Follow-through on the takeover work below, all verified on the Athom:
+
+- **Takeover is now always compiled in** (feature flag removed): a no-op
+  256-byte table check per boot, ~17 KB of image (module + littlefs
+  reader + embedded table), and it turns partition-layout changes into
+  ordinary OTAs — any future partitions.csv change self-installs on the
+  device's next boot. Two new guards for that generality: a flash-size
+  preflight (never write a table past the end of the chip) and a
+  src/dest overlap check (a resized app slot must never erase the code
+  it's running from).
+- **WiFi inheritance**: during a takeover the device now mounts the
+  outgoing WLED's littlefs read-only (`src/wledfs.rs`, a dependency-free
+  ~330-line littlefs v2 reader) and carries SSID (cfg.json) + password
+  (wsec.json) into Luxel's own creds record — the device reappears on
+  the user's network without provisioning. Factory-fresh WLED (nothing
+  to inherit) falls through to the provisioning AP as before. The reader
+  is host-tested against real device dumps via `tools/wledfs-check`
+  (cfg.json read back byte-identical to an HTTP-fetched reference).
+- **"Cannot reach device" in the web UI, root-caused and fixed twice
+  over**: the ESP32's 2-socket HTTP pool meant a browser's parallel
+  fetches TCP-refused *each other* (headless-chromium repro: 8/10
+  parallel API calls refused; even `luxel.wasm` failed during page
+  load). Fix 1: web pool back to 3 slots — slots cost ~8 KB heap now,
+  not the old 32 KB static (the ~9 KB task-arena growth is repaid by
+  trimming the esp32 heap 96→92 KB, keeping the main stack ≈ 27 KB;
+  stack-check clean). Fix 2: `device.ts` routes every API call through
+  a wrapper capping in-flight requests at 2 with backoff-retry on
+  connection-refused. Verified: 3× cold loads on hardware in real
+  chromium, zero failed requests, editor synced.
+- docs/wled-migration.md: mechanism walkthrough + working notes for the
+  future installer page (chip detection via WLED's /json/info, its CORS
+  limitation, artifact layout, the open first-boot-panic issue).
+
+## 2026-07-26 — WLED → Luxel OTA takeover (proven on the Athom)
+
+New `wled-takeover` firmware feature (`TAKEOVER=1 ./build-esp32.sh`,
+`firmware/src/takeover.rs`): a Luxel app image uploaded through **WLED's
+own OTA updater** self-installs the Luxel partition layout. WLED writes
+the image into one of its 1.5 MB app slots and boots it (ESP32 apps are
+slot-position-independent; WLED's updater only checks the 0xE9 magic); on
+boot the module notices the foreign partition table, locates itself by
+comparing its `esp_app_desc` against each app slot, copies itself to
+0x10000 (sector-by-sector, read-back verified), wipes the nvs/otadata
+sectors, rewrites the table (the single ~ms non-re-runnable window), and
+reboots. WLED's Arduino-era bootloader is kept and boots our image fine
+(proven: "ets Jul 29 2019", DOUT). Crash-safety: everything before the
+table write re-runs under WLED's intact table, and since `boot_guard`
+runs first (WLED's table also has ota_0/ota_1 + otadata), a crash-looping
+takeover build rolls itself back to stock WLED after 3 strikes.
+build.rs now serializes partitions.csv via esp-idf-part (byte-identical
+to espflash's output, MD5 row included) for the embedded table.
+
+First live run (Athom LS8P music controller, WLED 0.13.2 → Luxel
+v0.1.30): upload → self-copy (910 KB) → repartition → clean boot on
+ota_0, same DHCP lease (192.168.0.183), storage self-formatted, assets
+pushed via `deploy.sh --assets-only`, web UI + engine live at 123 fps.
+OPEN ISSUE: the very first boot (from the WLED slot) panicked once with
+`esp-alloc: Exceeded the maximum of 3 heap memory regions` *before*
+`ota::init`, then self-healed via the panic-reboot handler and never
+recurred. A second full takeover run later the same day did NOT reproduce
+it — intermittent, 1-in-2 so far. Pre-guard panic loops would never arm
+the rollback — understand before advertising this as a public migration
+path.
+
+Same-day follow-up — credential/settings inheritance VALIDATED offline:
+a configured WLED 0.13.2 stores the WiFi SSID in `cfg.json` and the
+password in `wsec.json`, both on littlefs v2 (4 KiB blocks) in the old
+spiffs partition — mounted the real device's dump and matched both
+against known-good creds. The factory-fresh dump (never provisioned) has
+both empty, and WLED's captive-portal config writes NOTHING to NVS (its
+`nvs.net80211` blobs stay unprogrammed — WLED runs WiFi.persistent(false)),
+so littlefs is the only credential source. cfg.json also carries the
+board wiring (relay/IR/mic pins, LED outputs) for the future settings
+import. Migration design settled: takeover attempts littlefs inheritance
+(creds + pins + name) BEFORE wiping anything; if creds are absent
+(factory-default devices) it falls back to the provisioning AP — which is
+therefore mandatory, not optional, for the public migration path. Local
+corpus (git-ignored, contains real creds): athom-wled-fs-configured.bin,
+athom-wled-nvs-configured.bin.
+
 ## 2026-07-19 — v0.1.30: boot-resume heap pre-flight (found on hardware)
 
 The v0.1.29 hardware pass caught a real boot-loop: with 2048 px + a large

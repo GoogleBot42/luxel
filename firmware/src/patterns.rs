@@ -596,6 +596,142 @@ pub fn read_blob(key: u32) -> Option<Vec<u8>> {
     .flatten()
 }
 
+// --- running-pattern read-back slot (replaces the old RAM copies) ---
+//
+// The source + blob of the *currently running* pattern used to live in two
+// standing heap Vecs (shared::PATTERN_SRC / PATTERN_BC) purely for read-back
+// (GET /api/pattern, the sync envelope, engine rebuilds). On a heap already
+// dominated by that same running pattern they were the single largest
+// resident cost, so they now live in flash and stream on demand.
+//
+// NOT map items: RAW PAGES in the reserved upper half of the partition
+// (STORE_LEN..PAT_LEN -- sequential-storage never touches it). A first cut
+// stored them as reserved-key map items, and every chunk read was then a
+// NoCache scan over the whole 512 KiB store: dozens of back-to-back
+// cache-off flash reads per chunk starved the WiFi task long enough to
+// drop the NEXT connection's handshake (observed on-device as intermittent
+// dead requests right after a readback). Raw pages make reads direct
+// offset reads -- one short cache-off window per 4 KiB, the exact
+// discipline assets.rs::read_chunk + FlashAsset have soak-proven -- and
+// writes skip the map's GC entirely.
+//
+// Layout (offsets relative to the partition base):
+//   CUR_OFF          header page: [magic u32][src_len u32][bc_len u32],
+//                    written LAST so a power loss mid-store leaves a stale
+//                    magic/len pair at worst (the slot is ignored at boot
+//                    anyway -- RAM meta rules within a session)
+//   CUR_SRC_OFF      source bytes (up to CUR_MAX)
+//   CUR_BC_OFF       LXBC bytes (fixed offset -- independent of src_len, so
+//                    readers need no coupling between the two lengths)
+const CUR_OFF: u32 = STORE_LEN;
+const PAGE: u32 = 4096;
+const CUR_MAX: u32 = 24 * PAGE; // 96 KiB per side, past every upload cap
+const CUR_SRC_OFF: u32 = CUR_OFF + PAGE;
+const CUR_BC_OFF: u32 = CUR_SRC_OFF + CUR_MAX;
+const CUR_MAGIC: u32 = 0x4C58_4350; // "LXCP"
+
+/// Absolute flash offsets of the slot's (src, bc) data, or None when the
+/// storage partition is absent. Lengths come from the RAM meta
+/// (shared::SrcLoc/BcLoc) -- the header page is for future boot-time use.
+pub fn current_slot_abs() -> Option<(u32, u32)> {
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return None;
+    }
+    Some((start + CUR_SRC_OFF, start + CUR_BC_OFF))
+}
+
+/// Write one raw region (erase + word-aligned page writes), yielding
+/// between pages so the WiFi task gets airtime inside each erase/write
+/// burst (same reasoning as FlashAsset's per-chunk Timer).
+async fn write_raw(flash: &mut FlashStorage<'static>, abs: u32, data: &[u8]) -> bool {
+    let end = abs + (data.len() as u32).div_ceil(PAGE) * PAGE;
+    let mut at = abs;
+    while at < end {
+        if BlockingNorFlash::erase(flash, at, at + PAGE).is_err() {
+            return false;
+        }
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
+        at += PAGE;
+    }
+    // stage through a word-aligned heap buffer (write wants 4-byte units;
+    // never a stack buffer -- this runs on the shared main-task stack)
+    let mut stage = alloc::vec![0u32; PAGE as usize / 4];
+    let mut at = 0usize;
+    while at < data.len() {
+        let n = (data.len() - at).min(PAGE as usize);
+        let words = n.div_ceil(4);
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(stage.as_mut_ptr() as *mut u8, words * 4)
+        };
+        bytes[words * 4 - 4..].fill(0xFF); // pad the tail word with erased-state bytes
+        bytes[..n].copy_from_slice(&data[at..at + n]);
+        if BlockingNorFlash::write(flash, abs + at as u32, &bytes[..words * 4]).is_err() {
+            return false;
+        }
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
+        at += n;
+    }
+    true
+}
+
+/// Persist the running pattern's source + blob to the read-back slot. Runs
+/// on the render task's swap path -- a brief one-time hitch (a few dozen
+/// page erases/writes with yields between them), acceptable for a rare
+/// event and worth the ~40 KB of steady-state heap the old RAM copies
+/// held. Best-effort: false if storage is absent, the flash is leased out
+/// (a concurrent OTA / library save), or the pattern is implausibly large.
+/// While the lease is held other flash users read as busy and degrade
+/// gracefully (documented per caller).
+pub async fn store_current(src: &str, bc: &[u8]) -> bool {
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return false;
+    }
+    if src.len() > CUR_MAX as usize || bc.len() > CUR_MAX as usize {
+        return false;
+    }
+    let Some(mut flash) = crate::ota::take_flash() else {
+        return false;
+    };
+    let mut ok = write_raw(&mut flash, start + CUR_SRC_OFF, src.as_bytes()).await
+        && write_raw(&mut flash, start + CUR_BC_OFF, bc).await;
+    if ok {
+        let mut hdr = [0u8; 12];
+        hdr[0..4].copy_from_slice(&CUR_MAGIC.to_le_bytes());
+        hdr[4..8].copy_from_slice(&(src.len() as u32).to_le_bytes());
+        hdr[8..12].copy_from_slice(&(bc.len() as u32).to_le_bytes());
+        ok = write_raw(&mut flash, start + CUR_OFF, &hdr).await;
+    }
+    crate::ota::give_flash(flash);
+    ok
+}
+
+/// Read the running pattern's whole blob back from flash into a TRANSIENT
+/// fallible Vec -- the engine rebuild (pixel-count / map change) needs it
+/// contiguous to deserialize, then drops it immediately. `len` comes from
+/// the RAM meta. None on a failed reservation or a flash-busy read; the
+/// caller keeps the engine paused rather than panicking.
+pub fn read_current_bc(len: usize) -> Option<Vec<u8>> {
+    let (_, bc_abs) = current_slot_abs()?;
+    let mut out: Vec<u8> = Vec::new();
+    if out.try_reserve_exact(len).is_err() {
+        println!("readback: {} B bc buffer failed to allocate", len);
+        return None;
+    }
+    out.resize(len, 0);
+    let mut at = 0usize;
+    while at < len {
+        let n = (len - at).min(PAGE as usize);
+        if !crate::assets::read_chunk(bc_abs + at as u32, &mut out[at..at + n]) {
+            println!("readback: bc read failed at {}/{} B (flash busy?)", at, len);
+            return None;
+        }
+        at += n;
+    }
+    Some(out)
+}
+
 /// `POST /api/patterns` (LXP1 envelope) → `{"ok":true,"id"}`.
 /// Upserts by name. Caller decode-validates the bytecode first.
 pub fn save(name: &str, source: &str, bc: &[u8]) -> String {

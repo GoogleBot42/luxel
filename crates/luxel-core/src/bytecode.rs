@@ -622,6 +622,49 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
     let mut fns: Vec<FnDef> = Vec::new();
     if collect {
         reserve(&mut fns, n_fns)?;
+
+        // Pre-pass: sum every function's code_len so `prog_code` is reserved
+        // exactly ONCE, up front. Reserving per function instead (exact, so it
+        // never over-allocates) reallocs and copies the whole buffer-so-far on
+        // each of up to MAX_FNS functions — O(n²) churn that, on the device's
+        // ~188 KB heap, fragments the free space enough to later starve the
+        // 17–22 KB contiguous reservations a pattern swap needs. Functions are
+        // laid out header + code (+ debug info when the blob carries it), so to
+        // reach the next code_len we read the header and step over both the
+        // code section and any trailing debug runs/local names with take(); the
+        // main pass below re-reads from this same point. Bounds/overflow-safe:
+        // the blob is already <= MAX_BLOB, each code_len is held to MAX_CODE and
+        // n_runs to code_len+1 (as the main pass does, so the byte skips can't
+        // wrap), and code_total is accumulated with checked_add.
+        let mut pre = Reader { buf: r.buf, at: r.at };
+        let mut code_total = 0usize;
+        for _ in 0..n_fns {
+            pre.str8()?; // name
+            pre.u8()?; // params
+            let locals = pre.u16()? as usize;
+            if locals > MAX_LOCALS {
+                return err("too many locals");
+            }
+            let code_len = pre.u32()? as usize;
+            if code_len > MAX_CODE {
+                return err("function too long");
+            }
+            pre.take(code_len)?; // skip the code section
+            code_total = code_total.checked_add(code_len).ok_or_else(|| {
+                BcError::Malformed("not enough memory for this pattern".to_string())
+            })?;
+            if debug {
+                let n_runs = pre.u32()? as usize;
+                if n_runs > code_len + 1 {
+                    return err("bad debug runs");
+                }
+                pre.take(n_runs * 12)?; // off/line/col u32 triples
+                for _ in 0..locals {
+                    pre.str8()?; // local name
+                }
+            }
+        }
+        reserve(&mut prog_code, code_total)?;
     }
     // instruction-boundary bitmap, reused across functions (transient)
     let mut bits: Vec<u64> = Vec::new();
@@ -659,7 +702,8 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         // the copy during walk 2
         let code_start = prog_code.len();
         if collect {
-            reserve(&mut prog_code, code_len)?;
+            // Capacity for the whole code section was reserved up front by the
+            // pre-pass above, so this extend never reallocs (no churn).
             prog_code.extend_from_slice(sect);
         }
 

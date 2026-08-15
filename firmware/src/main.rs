@@ -39,7 +39,7 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::rng::Rng;
-use esp_hal::spi::master::{Config as SpiConfig, Spi};
+use esp_hal::spi::master::{Config as SpiConfig, Spi, SpiDma};
 use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
@@ -66,12 +66,14 @@ mod sensors;
 mod server;
 mod sntp;
 mod shared;
+mod takeover;
+mod wledfs;
 
 use leds::Protocol;
 use luxel_core::jsonview;
 use shared::{
-    publish, set_pattern_bc, set_pattern_src, set_pixels, set_vmerr, Msg, BRIGHTNESS,
-    CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE, PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
+    publish, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE,
+    PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -159,13 +161,25 @@ async fn main(spawner: Spawner) -> ! {
     // task futures and bricked the boot (stack ≈ 10.7 KB); big task
     // buffers must be heap Vecs. History: 88 KB left ~31 KB of stack —
     // sized for the on-device compiler's recursion, which v0.1.24 removed
-    // (devices execute bytecode; the decoder is iterative). 96 KB now:
-    // the ~8 KB of stack it costs is repaid by the web pool shrink
-    // (3→2 slots freed ~9 KB of static task arena), so stack stays ~31 KB
-    // while patterns gain heap. The esp-rtos stack guard + boot-loop guard
-    // catch it non-destructively if this ever proves too tight.
+    // (devices execute bytecode; the decoder is iterative).
+    //
+    // MEASURE, don't estimate: `.stack` in `readelf -S` is the ground
+    // truth. v0.1.31's 92 KB was tuned by estimating the 3-slot web pool
+    // (server::WEB_TASK_POOL_SIZE) at ~9 KB total and claiming ~27 KB of
+    // stack; the pool's static is really ~8.6 KB PER SLOT (26 KB — each
+    // slot holds picoserve's whole response-path future), and the shipped
+    // stack was 17.9 KB. That's ~2 KB above the measured 15.6 KB overflow
+    // point, and one WiFi NMI frame atop a request-context flash read
+    // (read_wifi, asset streaming) ate it: deterministic stack-guard
+    // panics with SP at the stack floor and PC in
+    // esp_rom_spiflash_read_status (Athom, v0.1.32, 2026-07-27). 80 KB
+    // puts .stack at ~30 KB (31 KB ran clean for weeks). Runtime
+    // heap_free ~102 KB — pattern loads need stored×2 + 24 KB (resume.rs)
+    // and the soak peaked well under this. The esp-rtos stack guard +
+    // boot-loop guard catch it non-destructively if this ever proves too
+    // tight.
     #[cfg(feature = "esp32")]
-    esp_alloc::heap_allocator!(size: 96 * 1024);
+    esp_alloc::heap_allocator!(size: 80 * 1024);
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 
@@ -215,6 +229,17 @@ async fn main(spawner: Spawner) -> ! {
     let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
     // ---- end board wiring ----
 
+    // DMA, so each frame is ONE continuous transfer. The FIFO path splits
+    // writes into 64-byte transactions with a CPU busy-wait between them;
+    // 64 B = 512 SPI bits, not divisible by WS2812's 3-bits-per-bit, so
+    // every chunk boundary corrupts a bit mid-symbol — and a WiFi interrupt
+    // in the gap stretches it past the strip's latch time (partial-frame
+    // latch). SK9822 is clocked and never noticed.
+    #[cfg(feature = "esp32c3")]
+    let spi = spi.with_dma(p.DMA_CH0);
+    #[cfg(feature = "esp32")]
+    let spi = spi.with_dma(p.DMA_SPI2);
+
     // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —
     // no esp-storage FlashStorage construction, no boot-time partition
     // table read — to test whether flash-driver setup interacts with the
@@ -225,6 +250,13 @@ async fn main(spawner: Spawner) -> ! {
     // bad image dies): 3 consecutive boots that never reach ota::boot_ok →
     // roll back to the other OTA slot.
     ota::boot_guard();
+    // WLED → Luxel self-install (no-op when the partition table is already
+    // ours). AFTER boot_guard: a crash-looping takeover build then rolls
+    // back to the WLED slot (WLED's table has valid ota_0/ota_1 + otadata,
+    // so the guard's rollback works there too). BEFORE assets/patterns
+    // init: under a foreign table those regions belong to other partitions
+    // (they fail safe, but takeover reboots).
+    //SIZETEST takeover::maybe_takeover();
     assets::init();
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)
@@ -487,18 +519,44 @@ fn spi_cfg(p: Protocol) -> SpiConfig {
         .with_mode(Mode::_0)
 }
 
+/// SPI encode buffer, u32-backed: the DMA driver only streams a slice
+/// zero-copy when its base is 4-byte-aligned and its length a multiple
+/// of 4 (classic-ESP32 DMA rule) — a Vec<u8> guarantees neither, and the
+/// fallback re-chunks the frame through a bounce buffer (wire gaps: the
+/// exact WS2812 corruption DMA is here to prevent). The ≤3 pad bytes
+/// stay zero — harmless on both protocols (SK9822 end clocks / WS2812
+/// latch tail).
+struct EncodeBuf(alloc::vec::Vec<u32>);
+
+impl EncodeBuf {
+    const fn new() -> Self {
+        Self(alloc::vec::Vec::new())
+    }
+    fn len(&self) -> usize {
+        self.0.len() * 4
+    }
+    fn bytes(&self) -> &[u8] {
+        // u32 → u8 reinterpret: alignment only loosens, length is exact
+        unsafe { core::slice::from_raw_parts(self.0.as_ptr().cast(), self.0.len() * 4) }
+    }
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.0.as_mut_ptr().cast(), self.0.len() * 4) }
+    }
+}
+
 /// Resize the SPI encode buffer, releasing the old allocation BEFORE
 /// reserving the new one — a protocol switch can more than double it
 /// (WS2812 is 9 B/px vs SK9822's ~4 B/px; at 2048 px that's an 18 KB
 /// allocation which must not coexist with the old buffer on a tight heap).
 /// Fallible: on false the buffer is left empty and the encode paths (which
 /// check the length) skip SPI output rather than indexing out of bounds.
-fn realloc_buf(buf: &mut alloc::vec::Vec<u8>, len: usize) -> bool {
-    *buf = alloc::vec::Vec::new(); // free the old allocation first
-    if buf.try_reserve_exact(len).is_err() {
+fn realloc_buf(buf: &mut EncodeBuf, len: usize) -> bool {
+    buf.0 = alloc::vec::Vec::new(); // free the old allocation first
+    let words = len.div_ceil(4);
+    if buf.0.try_reserve_exact(words).is_err() {
         return false;
     }
-    buf.resize(len, 0);
+    buf.0.resize(words, 0);
     true
 }
 
@@ -555,9 +613,33 @@ fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engi
     Ok(e)
 }
 
+/// Persist the just-swapped pattern to the flash read-back slot (replacing
+/// the old standing RAM copies) and publish where its source + blob now live.
+/// Runs on the render task at the swap: the swap already pays a decode, so the
+/// added flash write is a brief one-time frame hitch — acceptable for a rare
+/// event and worth the ~40 KB of steady-state heap the RAM copies used to hold.
+/// On a failed write (flash leased out by a concurrent OTA/save, or too large)
+/// read-back is marked unavailable and logged — /api/status then reports
+/// src=false, bc=false, and GET /api/pattern + the sync envelope serve nothing
+/// until the next swap (never a panic).
+async fn persist_current_pattern(src: &str, bc: &[u8]) {
+    shared::set_pattern_hash(src);
+    if patterns::store_current(src, bc).await {
+        shared::set_current_flash(src.len(), bc.len());
+    } else {
+        println!(
+            "current-pattern: flash write failed (src {} B + bc {} B, {} B free) — read-back (/api/pattern, sync) degraded until the next swap",
+            src.len(),
+            bc.len(),
+            esp_alloc::HEAP.free()
+        );
+        shared::set_current_gone();
+    }
+}
+
 /// frames. Yields to the network tasks after every frame.
 #[embassy_executor::task]
-async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
+async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
     let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
     // master power (HA light switch): off = encode at brightness 0 (black on
     // both protocols) while the engine keeps ticking, so ON resumes mid-motion
@@ -570,10 +652,11 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     };
     // Heap discipline: exactly ONE decoded Program lives at a time — inside
     // the engine. Rebuilds (pixel-count change, map clear) re-decode from
-    // the running pattern's blob (shared::PATTERN_BC, ≤23 KB) rather than
-    // keeping a second Program resident; a resident copy + per-rebuild
-    // clones is what OOM'd soak v5 (Programs with debug info are several
-    // times their blob size).
+    // the running pattern's blob rather than keeping a second Program
+    // resident; a resident copy + per-rebuild clones is what OOM'd soak v5
+    // (Programs with debug info are several times their blob size). That blob
+    // no longer sits in RAM either — it lives in the flash read-back slot
+    // (shared::current_bc), read into a TRANSIENT Vec only for the rebuild.
     // deserialize_lean: no debug info on-device — halves a Program's RAM
     let mut engine = match luxel_core::bytecode::deserialize_lean(PATTERN_BC) {
         Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
@@ -582,13 +665,28 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             None
         }
     };
-    set_pattern_src(PATTERN);
-    set_pattern_bc(PATTERN_BC);
-    // rebuild the engine from the running blob at the current pixel count
+    // The boot default is `&'static` rodata: read-back serves it directly,
+    // no heap and no flash write. Every later swap repoints this at flash.
+    shared::set_current_default(PATTERN, PATTERN_BC);
+    // Rebuild the engine from the running blob at the current pixel count.
+    // The blob comes from wherever read-back currently points: the rodata
+    // default (borrowed, no alloc) or the flash slot (a transient fallible
+    // Vec, dropped as soon as the Program is built). A flash-busy read yields
+    // None and the engine stays paused until the next swap — never a panic.
     let rebuild = || {
-        luxel_core::bytecode::deserialize_lean(&crate::shared::get_pattern_bc())
-            .ok()
-            .and_then(|p| try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)).ok())
+        let count = PIXEL_COUNT.load(Ordering::Relaxed);
+        match shared::current_bc() {
+            shared::BcLoc::Default(b) => luxel_core::bytecode::deserialize_lean(b)
+                .ok()
+                .and_then(|p| try_budgeted_engine(p, count).ok()),
+            shared::BcLoc::Flash(len) => {
+                let bc = crate::patterns::read_current_bc(len)?;
+                luxel_core::bytecode::deserialize_lean(&bc)
+                    .ok()
+                    .and_then(|p| try_budgeted_engine(p, count).ok())
+            }
+            shared::BcLoc::Gone => None,
+        }
     };
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
@@ -599,8 +697,14 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
     if let Err(e) = spi.apply_config(&spi_cfg(cur_protocol())) {
         println!("spi config error: {:?}", e);
     }
-    let mut buf =
-        alloc::vec![0u8; cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize)];
+    let mut buf = EncodeBuf::new();
+    if !realloc_buf(
+        &mut buf,
+        cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize),
+    ) {
+        // the encode paths retry lazily once heap frees up
+        println!("encode buffer alloc failed at boot — output paused");
+    }
     // crossfade: the outgoing engine + blend timing + a reusable blend buffer
     let mut prev: Option<Engine> = None;
     let mut blend_start = Instant::now();
@@ -626,36 +730,53 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     // lands here, where the most is free.
                     engine = None;
                     prev = None;
-                    match luxel_core::bytecode::decode_envelope(&env) {
+                    // The Program owns its bytes, so once it's decoded and the
+                    // envelope is persisted to the flash read-back slot, the
+                    // ~envelope-sized buffer can be DROPPED before the engine
+                    // builds — its 10s-of-KB then count toward the array budget
+                    // and the post-load floor check instead of against them.
+                    // (Observed on-device: Music Sequencer @300 px missed the
+                    // floor by 456 B purely because the envelope was still
+                    // held here.)
+                    let decoded = match luxel_core::bytecode::decode_envelope(&env) {
                         Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
                             Ok(p) => {
-                                set_pattern_src(le.source);
-                                set_pattern_bc(le.bytecode);
-                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
-                                {
-                                    Ok(e) => {
-                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                        engine = Some(e);
-                                        set_vmerr(None);
-                                        vmerr_seen = None;
-                                        last = Instant::now();
-                                        devicemap::mark_dirty(); // re-apply the installed map
-                                    }
-                                    Err(left) => set_vmerr(Some(alloc::format!(
-                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
-                                        left / 1024,
-                                        RUNTIME_FLOOR / 1024
-                                    ))),
-                                }
+                                persist_current_pattern(le.source, le.bytecode).await;
+                                Ok(p)
                             }
                             // decode can legitimately fail on a starved heap
                             // (try_reserve) — surface it, don't just log
-                            Err(e) => {
-                                println!("bytecode decode failed: {}", e);
-                                set_vmerr(Some(alloc::format!("{}", e)));
-                            }
+                            Err(e) => Err(Some(e)),
                         },
-                        Err(e) => println!("envelope decode failed (bug?): {}", e),
+                        Err(e) => {
+                            println!("envelope decode failed (bug?): {}", e);
+                            Err(None)
+                        }
+                    };
+                    drop(env);
+                    match decoded {
+                        Ok(p) => {
+                            match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
+                                Ok(e) => {
+                                    publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                    engine = Some(e);
+                                    set_vmerr(None);
+                                    vmerr_seen = None;
+                                    last = Instant::now();
+                                    devicemap::mark_dirty(); // re-apply the installed map
+                                }
+                                Err(left) => set_vmerr(Some(alloc::format!(
+                                    "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                    left / 1024,
+                                    RUNTIME_FLOOR / 1024
+                                ))),
+                            }
+                        }
+                        Err(Some(e)) => {
+                            println!("bytecode decode failed: {}", e);
+                            set_vmerr(Some(alloc::format!("{}", e)));
+                        }
+                        Err(None) => {}
                     }
                 }
                 Msg::Freeze => {
@@ -747,39 +868,51 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
                     // blend source) — this is the one path where two
                     // programs coexist, bounded by the crossfade duration
                     prev = None; // but never THREE (a fade still in flight)
-                    match luxel_core::bytecode::decode_envelope(&env) {
+                    // Same envelope-drop-before-engine-build discipline as
+                    // Msg::Code above — doubly important here, where the
+                    // outgoing engine also stays alive as the blend source.
+                    let decoded = match luxel_core::bytecode::decode_envelope(&env) {
                         Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
                             Ok(p) => {
-                                set_pattern_src(le.source);
-                                set_pattern_bc(le.bytecode);
-                                match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))
-                                {
-                                    Ok(e) => {
-                                        publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                        if ms > 0 && engine.is_some() {
-                                            prev = engine.take();
-                                            blend_start = Instant::now();
-                                            blend_ms = ms;
-                                        }
-                                        engine = Some(e);
-                                        set_vmerr(None);
-                                        vmerr_seen = None;
-                                        last = Instant::now();
-                                        devicemap::mark_dirty();
-                                    }
-                                    Err(left) => set_vmerr(Some(alloc::format!(
-                                        "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
-                                        left / 1024,
-                                        RUNTIME_FLOOR / 1024
-                                    ))),
-                                }
+                                persist_current_pattern(le.source, le.bytecode).await;
+                                Ok(p)
                             }
-                            Err(e) => {
-                                println!("crossfade bytecode decode failed: {}", e);
-                                set_vmerr(Some(alloc::format!("{}", e)));
-                            }
+                            Err(e) => Err(Some(e)),
                         },
-                        Err(e) => println!("envelope decode failed (bug?): {}", e),
+                        Err(e) => {
+                            println!("envelope decode failed (bug?): {}", e);
+                            Err(None)
+                        }
+                    };
+                    drop(env);
+                    match decoded {
+                        Ok(p) => {
+                            match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
+                                Ok(e) => {
+                                    publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                    if ms > 0 && engine.is_some() {
+                                        prev = engine.take();
+                                        blend_start = Instant::now();
+                                        blend_ms = ms;
+                                    }
+                                    engine = Some(e);
+                                    set_vmerr(None);
+                                    vmerr_seen = None;
+                                    last = Instant::now();
+                                    devicemap::mark_dirty();
+                                }
+                                Err(left) => set_vmerr(Some(alloc::format!(
+                                    "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
+                                    left / 1024,
+                                    RUNTIME_FLOOR / 1024
+                                ))),
+                            }
+                        }
+                        Err(Some(e)) => {
+                            println!("crossfade bytecode decode failed: {}", e);
+                            set_vmerr(Some(alloc::format!("{}", e)));
+                        }
+                        Err(None) => {}
                     }
                 }
             }
@@ -827,8 +960,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             // (heap may have freed up); never index out of bounds
             let need = proto.buf_len(wire.len());
             if buf.len() >= need || realloc_buf(&mut buf, need) {
-                proto.encode(wire, b5, &mut buf);
-                if let Err(e) = spi.write(&buf) {
+                proto.encode(wire, b5, buf.bytes_mut());
+                if let Err(e) = spi.write(buf.bytes()) {
                     println!("spi write error: {:?}", e);
                 }
             }
@@ -886,8 +1019,8 @@ async fn render_task(mut spi: Spi<'static, Blocking>) -> ! {
             // (heap may have freed up); never index out of bounds
             let need = proto.buf_len(wire.len());
             if buf.len() >= need || realloc_buf(&mut buf, need) {
-                proto.encode(wire, b5, &mut buf);
-                if let Err(e) = spi.write(&buf) {
+                proto.encode(wire, b5, buf.bytes_mut());
+                if let Err(e) = spi.write(buf.bytes()) {
                     println!("spi write error: {:?}", e);
                 }
             }
