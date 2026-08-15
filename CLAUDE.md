@@ -39,6 +39,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - License split: Apache-2.0 (crates, web, library) vs GPL-3.0-or-later (firmware).
   Match the split when adding files.
 
+## Session shape
+- After finishing any substantial piece of work (and before the final summary), run the
+  `reflect` skill — it patches stale guidance and prunes memory. "No changes needed" is
+  the normal outcome; small/routine tasks skip it.
+
 ## Verification norms
 - Web UI change → drive it in real chromium (puppeteer-core) and screenshot before
   calling it done — .claude/skills/verify-webui. Build/typecheck alone is not verification.
