@@ -23,6 +23,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - OTA deploys and real-chromium browser testing DO work from inside the container.
 - There is ONE Luxel dev device and ONE Pixel Blaze oracle — never parallelize
   device-touching work across subagents.
+- Other Claude instances may be working in this checkout concurrently. ALWAYS do your
+  work in a fresh git worktree (.claude/skills/worktree-setup), never in the main
+  checkout directly. Treat uncommitted changes in the main checkout as another live
+  session's work-in-progress: don't commit, revert, build on, or "finish" them, and
+  don't assume the tree state you see is yours alone.
 
 ## Subagents
 - Prefer Opus or Sonnet models for subagent work where they're up to the task
