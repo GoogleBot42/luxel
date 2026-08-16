@@ -261,7 +261,11 @@ async fn main(spawner: Spawner) -> ! {
     // so the guard's rollback works there too). BEFORE assets/patterns
     // init: under a foreign table those regions belong to other partitions
     // (they fail safe, but takeover reboots).
-    //SIZETEST takeover::maybe_takeover();
+    // Load-bearing for the WLED migration path: this exact call shipped
+    // commented out ("//SIZETEST") from v0.1.31 through v0.1.38-dev and
+    // nobody noticed until a real via-WLED install (2026-08-16). Don't
+    // disable it outside a local experiment, and never commit that.
+    takeover::maybe_takeover();
     assets::init();
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)
