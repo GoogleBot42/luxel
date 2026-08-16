@@ -37,7 +37,9 @@ follow-up than to start the wrong thing.
 3. Rank the surviving candidates by value ÷ effort, with two hardware
    constraints:
    - Any candidate needing the physical device requires the dev unit to be
-     reachable right now (ping it / check recent memory for wedged state).
+     reachable right now (probe `http://<ip>/api/status` — raw `ping` is
+     blocked in this container, no cap_net_raw — and check recent memory
+     for wedged state).
      If it's not reachable, rank device-dependent items lower or flag them
      as blocked (and consider pointing Jeremy at `unblock` instead).
    - There is only **one** device. Never propose or start two device-work
