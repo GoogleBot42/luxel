@@ -101,12 +101,21 @@ smoothest origin for converting a *second* device.
   covers portal-configured WLED; the provisioning AP covers the rest.
   (Client-side image patching was considered and shelved; UPDATES.md
   2026-07-26.)
-- **Open issue, why the page says "beta"**: the intermittent first-boot
-  `esp-alloc: Exceeded the maximum of 3 heap memory regions` panic
-  (1-in-2 observed). It self-heals via the panic-reboot handler, but it
-  fires *before* the boot guard arms, so a deterministic variant would
-  loop without the WLED rollback. Root-cause before dropping the beta
-  label.
+- **Open issues, why the page says "beta"** (observed on the real bench
+  conversion 2026-08-16, which otherwise ran end to end — credential
+  inheritance included):
+  - Intermittent self-copy **verify failure** (first sector, both
+    in-boot retries failed) — the takeover aborts safely (WLED table
+    intact) and boots the provisioning AP; the *next* boot's re-attempt
+    succeeded cleanly. Consequence: the device sits in AP mode until
+    someone power-cycles it — the takeover has no reboot-to-retry yet.
+    Both the retry-design gap and the underlying flash-op flake want
+    fixing (Gitea issue).
+  - One silent first-boot hang (zero serial output, RTC-WDT reset) when
+    a takeover-less build booted under WLED's table; not reproduced.
+  - The older intermittent `esp-alloc: 3 heap regions` first-boot panic
+    (1-in-2, 2026-07-26, TAKEOVER=1-era builds; not seen since). Like
+    the others it fires before the boot guard arms.
 
 ## Bench workflow (this repo, the Athom)
 

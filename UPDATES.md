@@ -1,5 +1,51 @@
 # Update log
 
+## 2026-08-16 (midnight bench session) — the WLED→Luxel takeover was
+## SHIPPED DISABLED since v0.1.31; fixed, and the full conversion proven
+## end to end through the installer page on real hardware
+
+The first real via-WLED install (installer page → Athom restored to
+stock WLED 0.13.2) exposed it: `takeover::maybe_takeover()` in main.rs
+has been commented out as `//SIZETEST` **since commit 2e5d6ff — the
+v0.1.31 commit literally titled "takeover always-on"**. A size
+measurement toggle that never got reverted. Every release (v0.1.36,
+v0.1.37) advertises WLED takeover and ships it dead; nothing noticed
+because no via-WLED install had been run since the July 26 TAKEOVER=1
+feature builds. Uncommented (with a do-not-disable comment), athom
+image 938,240 B (107 KB OTA margin), stack-check clean.
+
+**Round 1 (v0.1.37 release image, takeover dead) documented what
+"dead" looks like**: one silent first boot (zero serial bytes, RTC-WDT
+reset), then Luxel running absurdly from WLED's app1 under WLED's
+partition table, credless → provisioning AP. Also proved: WLED
+**Improv-serial provisioning persists both cfg.json and wsec.json**
+(WLED rejoined after a cold power cycle) — the bench can provision
+stock WLED with zero button-holds (`scratchpad improv script; packet
+format in the session log`; worth a tools/ script if we do this again).
+
+**Round 2 (fixed image, via the page's bundled mode)**: takeover ran —
+foreign table detected, **WiFi inherited from WLED's littlefs**
+("MOMCorp Intranet"), 920 KiB self-copy... first attempt hit an
+**intermittent verify failure on the first sector** (both in-boot
+retries), aborted exactly as designed (WLED table untouched) into the
+provisioning AP; the next power cycle's re-attempt ran clean end to
+end: otadata/nvs wiped, table rewritten, reboot to ota_0, **joined the
+LAN on the inherited creds at the same DHCP address**, page detected
+Luxel and pushed the web app — "All done — open your Luxel 🎉". Device
+end state: Athom = Luxel v0.1.38 (local build = master + this fix),
+ota_0, Luxel partition table, fresh store, full web app, 122 fps.
+
+Open (documented in docs/wled-migration.md's beta list): the
+intermittent first-sector verify flake; the takeover has no
+reboot-to-retry after an abort (device waits in AP mode for a power
+cycle); the two first-boot anomaly classes. The installer page's
+timeout guidance ("power cycle helps") turned out to be literally the
+right advice.
+
+Harness note: both bench runs crashed the puppeteer driver mid-wait
+(CDP WaitTask against a live device; the fake-wled e2e has never done
+this) — unexplained, low priority, the device outcome was unaffected.
+
 ## 2026-08-16 — v0.1.39: MQTT topic → pattern events (`luxel/<id>/event`)
 
 The follow-up v0.1.38 left on the table, and the last leg of the event
