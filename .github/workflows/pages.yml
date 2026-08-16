@@ -1,0 +1,95 @@
+name: pages
+
+# Deploys the installer/playground site to GitHub Pages: the web dist
+# (playground + the WLED→Luxel installer, web/flash.html) next to a
+# firmware/ dir holding the LATEST RELEASE's per-board OTA images, the
+# LUXA bundle, and a manifest.json the installer reads.
+#
+# Co-hosting is load-bearing, not cosmetic: GitHub's release-asset
+# downloads send no CORS headers (verified 2026-08-15), so a browser page
+# can only fetch firmware binaries same-origin — see
+# docs/wled-migration.md. This runs server-side, so it downloads the
+# release assets without any such restriction.
+#
+# Separate from release.yml so the site tracks BOTH inputs on its own
+# cadence: web changes deploy on the next mirrored master push without
+# waiting for a firmware release, and a new release re-deploys with its
+# fresh binaries via the release trigger. Same mirror rules as
+# release.yml: this workflow never creates commits or tags, and the
+# server_url guard keeps it off the Gitea runner.
+#
+# One-time setup: GitHub repo Settings → Pages → Source: "GitHub Actions"
+# (enabled 2026-08-15).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+      - 'library/**'
+      - '.github/workflows/pages.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  site:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build web dist
+        # Same build as release.yml: a fresh clone has no corpus/, so the
+        # gallery comes from the clean-room library/ alone; web/public is
+        # gitignored build output and must exist first.
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            mkdir -p web/public
+            cd web
+            npm ci
+            npm run build
+          '
+
+      - name: Compose site with the latest release firmware
+        run: |
+          set -euo pipefail
+          mkdir -p site/firmware
+          cp -r web/dist/. site/
+          rel="$(curl -sf -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest")"
+          V="$(echo "$rel" | jq -r .tag_name | sed 's/^v//')"
+          echo "$rel" | jq -r '.assets[]
+              | select(.name | test("-ota\\.bin$|\\.luxa$"))
+              | .browser_download_url' \
+            | while read -r u; do
+                curl -sfL -o "site/firmware/$(basename "$u")" "$u"
+              done
+          node web/tools/gen-flash-manifest.mjs "$V" site/firmware
+          echo "--- site/firmware ---"; ls -l site/firmware
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v4
+        id: deployment
