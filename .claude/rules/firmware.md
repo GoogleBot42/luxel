@@ -24,6 +24,13 @@ paths:
 - Boot tasks that do multi-KB loads (e.g. playlist/pattern resume) must run
   after `stack.wait_config_up().await` — WiFi bring-up mallocs don't
   null-check, so a heavy load racing WiFi init OOM-panics the boot.
+- Never size an infallible allocation from a length/count field read out of
+  flash or any stored record — a corrupt record becomes an OOM panic-reboot
+  loop (a torn pattern-store TOC record with chunk-count 32 crash-rebooted
+  the Athom on EVERY /api/patterns read until serial found it, 2026-08-15).
+  Validate the count against the writer's own cap and `try_reserve`; see
+  `patterns::read_source`. This is the same class v0.1.25's "fallible
+  everything" sweep fixed elsewhere — check for it in any new read path.
 - The app must fit in a 1 MiB OTA slot; `firmware/Cargo.toml` sets
   `opt-level = "s"` to stay under it (see docs/boards.md for the ceiling
   history). Size-check WITH WiFi creds baked in — a credless build

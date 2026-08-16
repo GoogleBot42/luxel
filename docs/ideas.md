@@ -114,21 +114,26 @@ bytecode execution is being worked on now; the rest are queued:
   under load shows up as StoreProhibited, not a clean error. Main use
   now: the small-chip profile (see boards.md tiers), not classic-ESP32
   capacity.
-- **Web pool 3→2 (make the webui tolerant first)** [M] ★★ — AGREED
-  FOLLOW-UP 2026-07-29. The pool went 2→3 in v0.1.31 solely because a
-  browser page load fires css/js/wasm/gallery in parallel and got
-  TCP-refused at 2 (server.rs WEB_TASK_POOL_SIZE history) — but that's
-  the wrong layer paying: the 3rd slot costs ~8 KB heap + ~8.6 KB of
-  static task arena (each slot embeds picoserve's whole response future —
-  the arena that ate v0.1.33's stack margin) on EVERY device forever, to
-  absorb a burst the client could pace. Web side first: stagger/serialize
-  the initial asset loads and extend device.ts's retry-on-refused (it
-  already covers API calls, but NOT the asset fetches — luxel.wasm was
-  the reproducible casualty) so a 2-slot device loads clean; then drop
-  WEB_TASK_POOL_SIZE to 2. Verify with the original repro: real Chromium
-  (in the flake) against the Athom, cold page load, watch for
-  ERR_CONNECTION_REFUSED on assets. Reclaims ~17 KB across heap+statics —
-  also exactly what tiers 3–4 in boards.md want.
+- ~~Web pool 3→2 (make the webui tolerant first)~~ — RESOLVED 2026-08-15
+  (UPDATES.md entry has the full story): the web tolerance shipped
+  (fetchgate.ts + coldload.mjs acceptance harness, 10/10 clean on the
+  Athom), the verification gauntlet surfaced and fixed a pattern-store
+  OOM-on-read panic and the picoserve shutdown slot-wedge
+  (QuickCloseSocket) — but Chromium needs ~3 sockets at cold NAVIGATION
+  (preconnect + nav, pre-page, unfixable client-side), so the default
+  pool STAYS 3 and pool 2 shipped as the **`small-chip` cargo feature**
+  (pool 2 + esp32 heap 88 KB, ~17 KB reclaimed, occasionally-refused
+  first nav accepted). Tiers 3–4 in boards.md get it via that feature.
+- **Flash-access fairness under playlist churn** [M] ★★ — NEW 2026-08-15.
+  v0.1.34's per-swap flash persist makes a fast playlist (5 s items)
+  hold the flash driver so often that asset pushes fail 5/6, /api/ota
+  rejects ("update already in progress"), and served assets truncate
+  mid-body. Deploy tooling works around it (stop playlist → push →
+  resume, codified in the deploy-device skill) and the web app's
+  retry+deadline absorbs the read-side symptom, but the real fix is
+  fairness: skip/defer the swap's flash write while an HTTP request or
+  OTA is active (or a driver-level yield between pages). Measured on the
+  Athom 2026-08-15.
 - **Small-chip profile + more board features** [M] ★★ — follow-ups from
   the 2026-07-29 chip-support assessment (docs/boards.md "Beyond the
   current boards"): (1) add `board-s3-devkit` and `board-c6-devkit`
@@ -136,7 +141,9 @@ bytecode execution is being worked on now; the rest are queued:
   shipping as "builds, untested on metal" (no bench hardware); (2) a
   `small-chip` cargo feature bundling web pool 3→2 + tuned WiFi buffers
   for the S2/C2 tier, where giants reject cleanly (acceptable — the
-  budgeted-engine rejection path is the degradation story); (3) WROVER
+  budgeted-engine rejection path is the degradation story) — the feature
+  EXISTS as of 2026-08-15 with the pool half (2 slots + esp32 heap
+  88 KB); WiFi-buffer tuning still to join it; (3) WROVER
   PSRAM as an esp-alloc second region for pattern arrays (WiFi blob must
   stay on internal RAM) — the big capacity unlock for the classic line
   if ever wanted.

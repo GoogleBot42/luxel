@@ -158,17 +158,20 @@ throttling + scrolling fresh tiles into view.
 
 ---
 
-## Asset-load tolerance for 2-socket devices [M]
+## Asset-load tolerance for 2-socket devices [M] ✅ (2026-08-15)
 
-Follow-up agreed 2026-07-29 (firmware half in ideas.md "Web pool 3→2"):
-the device's 3rd HTTP slot exists only because our initial page load
-fires css/js/wasm/gallery.json in parallel and a 2-slot device
-TCP-refuses part of the burst (Chromium reproducibly lost luxel.wasm,
-2026-07-26). Fix on this side so the firmware can go back to 2 slots:
-stagger/serialize the startup asset fetches, and extend device.ts's
-retry-on-refused to cover asset fetches (today it only guards API
-calls). Done = cold page load against a `WEB_TASK_POOL_SIZE = 2` build
-on real hardware loads clean in real Chromium (flake) repeatedly.
+Follow-up agreed 2026-07-29 — done, with a twist (full story in
+UPDATES.md 2026-08-15). `src/lib/fetchgate.ts` gates EVERY app-initiated
+fetch (assets + API) at 2 in-flight with backoff-retry on refused, holds
+the gate slot until the body is fully received (fetch resolves at
+headers — the original hole), bounds each attempt at 30 s; device probe
+abort 1500 → 8000 ms. Acceptance harness: `web/tools/coldload.mjs`
+(10/10 clean cold loads on the Athom). The twist: Chromium opens ~2
+sockets at cold NAVIGATION (preconnect + nav) before any page code
+exists, so the firmware default pool stays 3 and pool-2 became the
+`small-chip` firmware profile (occasionally-refused first nav accepted
+there). The gate still matters at 3 slots — it's what makes loads clean
+while a playlist churns flash and after the in-page burst.
 
 ---
 
