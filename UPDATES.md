@@ -1,5 +1,48 @@
 # Update log
 
+## 2026-08-15 (late) — WLED→Luxel installer page (issues #2/#9): one static
+## page drives the whole takeover, riding the release pipeline
+
+`web/flash.html` — a wizard that converts a WLED device to Luxel over the
+air: probe the device, pick/auto-detect the board, upload the release OTA
+image through WLED's own `/update`, watch `/api/status` for the Luxel
+signature (3 min budget, with AP-mode/OTA-passphrase/first-boot-panic
+troubleshooting on timeout), then push the LUXA web app. Svelte entry
+`web/src/flash/` (+`lib/releases.ts`, `lib/device.ts`), second Vite page
+next to the playground — so it ships in the web-dist tarball AND onto
+every Luxel device's assets partition (+~11 KB gz; a Luxel on the LAN is
+the friction-free plain-HTTP origin for converting the next device).
+
+The load-bearing measurement (docs/wled-migration.md): **GitHub's
+release-asset downloads send no CORS headers on any hop** (checked
+`browser_download_url` and the API octet-stream redirect, incl.
+`Origin: null`), so a browser can only fetch firmware same-origin. Hence
+two firmware-source modes: *bundled* — the release workflow now composes
+a GitHub Pages site (whole web dist + `firmware/` with per-board OTA
+bins, LUXA, `manifest.json` via new `web/tools/gen-flash-manifest.mjs`,
+sha256sums) and a `pages` job deploys it (needs one-time Settings →
+Pages → "GitHub Actions" — flagged for Jeremy; job is continue-on-error
+until then), fully automatic; *github* — API metadata (CORS `*`) +
+download-link + file-picker fallback for self-hosted/device-served
+copies. WLED-side quirks handled per docs/wled-migration.md: 0.13 has no
+CORS (opaque no-cors probe → manual board pick, pointer at `/json/info`),
+multipart `/update` POST is CORS-safelisted so it sends everywhere,
+esp8266 → hard stop, s2/s3 → "no builds yet", https→LAN mixed content →
+Chromium LNA `targetAddressSpace` hint + manual-steps fallback. The page
+wears a visible **beta** banner until the pre-guard first-boot
+heap-regions panic is root-caused.
+
+Verified per verify-webui: `web/tools/flash-e2e.mjs` in real chromium
+against new `web/tools/fake-wled.mjs` (a fake WLED that "reboots into
+Luxel" after /update) — 14/14 checks across 4 scenarios (CORS-less full
+auto run with byte-counted upload + byte-exact LUXA landing; 0.14-CORS
+arch detect + c3 board filtering; esp8266 stop; github-mode file-picker
+run), screenshots reviewed. actionlint clean on the workflow. No
+hardware touched (Athom in use by another session; the takeover
+mechanism itself was hardware-proven 2026-07-26). Untested on real
+hardware end-to-end as a *page*: needs a WLED device on the bench —
+noted for the next Athom restore-to-stock window.
+
 ## 2026-08-15 (late night) — v0.1.37: flash-wear fix — playlist swaps
 ## write nothing
 

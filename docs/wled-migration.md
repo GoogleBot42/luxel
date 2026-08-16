@@ -1,8 +1,9 @@
 # WLED → Luxel migration
 
-How a WLED device becomes a Luxel device over the air, and working notes
-for the **installer web page** (not yet built). Mechanism proven end to
-end on the Athom LS8P music controller 2026-07-26 (twice); see UPDATES.md.
+How a WLED device becomes a Luxel device over the air, and how the
+**installer web page** (`web/flash.html`) drives it. Mechanism proven end
+to end on the Athom LS8P music controller 2026-07-26 (twice); see
+UPDATES.md.
 
 ## How the takeover works
 
@@ -40,56 +41,62 @@ flash read on devices already running the Luxel layout).
    the *mandatory* fallback, not an error: factory-fresh/app-provisioned
    WLED stores no creds on its filesystem (verified on real hardware).
 
-## Installer page — implementation notes
+## Installer page (`web/flash.html`, shipped 2026-08-15)
 
-The whole migration can be one static web page (no backend), because:
+One static page, no backend: `web/src/flash/` (wizard UI) +
+`lib/releases.ts` (where firmware comes from) + `lib/device.ts` (talking
+to the device). E2e: `web/tools/flash-e2e.mjs` against
+`web/tools/fake-wled.mjs` (both WLED CORS generations, esp8266 stop,
+both firmware-source modes). It ships inside the web dist, so it's also
+on every Luxel device and in the release web-dist tarball.
 
-- **Chip detection is installer-side, not on-device.** An Xtensa image
-  can't run on a RISC-V chip, so per-chip artifacts are unavoidable —
-  but WLED tells us which to pick: `GET http://<ip>/json/info` →
-  `.arch` ("esp32", "esp32-s3", "esp32c3", "esp8266"…). ESP8266 → hard
-  stop, unsupported forever. S2/S3 → need Luxel builds first (esp-hal
-  supports them; we just don't build/test them yet).
-- **Upload**: `POST http://<ip>/update`, multipart form, field name
-  `update`, filename set, the .bin as payload. WLED replies with an HTML
-  page and reboots. If the device has an OTA passphrase set, WLED wants
-  it (form auth on /update) — ask the user when the upload bounces.
-- **Progress watching**: after upload, poll `http://<ip>/api/status`
-  (1–2 s interval, ~3 min budget: WLED flash-write ≈ 30 s, takeover copy
-  ≈ 15 s, two reboots, WiFi join). Same IP is expected — the MAC doesn't
-  change, so the DHCP lease survives. Success signature: JSON with
-  `version` + `slot` keys (WLED has neither). Also handle the AP case:
-  if polling times out, tell the user to look for the `luxel-XXXX` AP —
-  creds inheritance may have found nothing.
-- **Assets**: the firmware image has no web app in it (arithmetic: app
-  ~910 KB + assets ~930 KB don't fit any slot). After Luxel answers,
-  `POST /api/assets` with the LUXA bundle (`web/tools/pack-assets.mjs`
-  output) — hot reload, no reboot, CORS already handled by the device
-  (deploy.sh --assets-only does exactly this from the CLI today). Until
-  assets arrive the device serves the built-in fallback page.
-- **CORS caveat for the WLED side**: WLED 0.13 sends no CORS headers, so
-  a cross-origin installer page cannot read `/json/info` responses. The
-  upload POST itself works (form POSTs don't need CORS to *send*), but
-  arch detection needs one of: `mode:"no-cors"` + asking the user which
-  chip, a tiny "copy this URL's output" step, or serving the installer
-  from something LAN-local. PROTOTYPE THIS FIRST — it shapes the UX.
-  (WLED 0.14+ added `Access-Control-Allow-Origin: *` to the JSON API —
-  check per-version.)
-- **Credentials**: never ask for WiFi creds in the page. Inheritance
+**Firmware source, two modes** (`lib/releases.ts`):
+
+- *bundled*: `firmware/manifest.json` + binaries published NEXT TO the
+  page — the release workflow composes exactly that as the GitHub Pages
+  site (docs/releases.md). Same-origin, page fetches binaries itself,
+  fully automatic. `web/tools/gen-flash-manifest.mjs` builds the
+  manifest.
+- *github*: no bundle (self-hosted web-dist, device-served copy) —
+  release *metadata* comes from api.github.com (CORS `*`), but the
+  binary downloads are NOT browser-fetchable: **GitHub's release-asset
+  hosts send no `Access-Control-Allow-Origin` on any hop** (measured
+  2026-08-15, both the `browser_download_url` chain and the API
+  per-asset octet-stream redirect; `Origin: null` too). The page falls
+  back to download-link + file-picker for the two files.
+
+**Device protocol** (`lib/device.ts` — all previously proven notes,
+now implemented): arch detect via `GET /json/info` `.arch` (esp8266 →
+hard stop; s2/s3 → "no builds yet"; WLED 0.13 has no CORS so an opaque
+`no-cors` probe means "reachable, pick your board yourself"; 0.14+ is
+readable); upload as multipart `POST /update` field `update`
+(CORS-safelisted, sendable everywhere, response opaque; OTA-passphrase
+rejections surface via the timeout help); success = `/api/status`
+answering with `version`+`slot` (3 min poll budget), timeout help covers
+the `luxel-XXXX` provisioning AP (no inheritable creds), the OTA
+passphrase, and the first-boot panic; assets = `POST /api/assets` with
+the LUXA (Luxel serves CORS, so this leg is fully readable).
+
+**Browser-policy edges**: an https-hosted copy (GitHub Pages) can't
+normally touch `http://` LAN devices (mixed content) — `device.ts`
+passes Chromium's Local-Network-Access `targetAddressSpace: "private"`
+hint when the page is https (permission-prompt flow on new Chromium;
+inert elsewhere), and every automated step has manual equivalents
+(open `/update` yourself, curl line for assets) shown when a fetch is
+browser-blocked. Plain-http hosting (a Luxel device serving the page, a
+LAN web-dist host) has none of these restrictions — that's the
+smoothest origin for converting a *second* device.
+
+- **Credentials**: the page never asks for WiFi creds — inheritance
   covers portal-configured WLED; the provisioning AP covers the rest.
-  (A third option — patching creds into the image client-side + fixing
-  the image checksum/SHA in JS — was considered and shelved; see
-  UPDATES.md 2026-07-26.)
-- **Release artifacts** the page needs per chip: `luxel-takeover-<chip>.bin`
-  (save-image output with the takeover built in — i.e. any release app
-  image) + one LUXA asset bundle (chip-independent) + a manifest with
-  versions/hashes.
-- **Open issue to resolve before shipping this to strangers**: the
-  intermittent first-boot `esp-alloc: Exceeded the maximum of 3 heap
-  memory regions` panic (1-in-2 observed). It self-heals via the
-  panic-reboot handler, but it fires *before* the boot guard arms, so a
-  deterministic variant would loop without the WLED rollback. Root-cause
-  first.
+  (Client-side image patching was considered and shelved; UPDATES.md
+  2026-07-26.)
+- **Open issue, why the page says "beta"**: the intermittent first-boot
+  `esp-alloc: Exceeded the maximum of 3 heap memory regions` panic
+  (1-in-2 observed). It self-heals via the panic-reboot handler, but it
+  fires *before* the boot guard arms, so a deterministic variant would
+  loop without the WLED rollback. Root-cause before dropping the beta
+  label.
 
 ## Bench workflow (this repo, the Athom)
 
