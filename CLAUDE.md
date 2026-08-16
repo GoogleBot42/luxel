@@ -52,6 +52,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   (Deliberate duplication with .claude/rules/corpus-cleanroom.md — keep both.)
 - The real Pixel Blaze is a black-box oracle: public websocket API only; never reverse
   or disassemble its firmware.
+- The QEMU harness is strictly isolated: emulation fixes live in `tools/qemu/` only
+  (derivation patches, eFuse images) — never guest-side workarounds, QEMU-conditional
+  firmware code, or build flags. The image under test must be byte-identical to what
+  ships. See docs/research/qemu-emulation-spike.md.
 - No secrets in tracked files, ever. WiFi creds live in `firmware/creds.env` (gitignored);
   HA/MQTT broker details live only in agent memory. Device flash dumps (`*.bin`) are
   gitignored — keep it that way.
