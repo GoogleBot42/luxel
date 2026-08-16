@@ -20,7 +20,13 @@ use luxel_core::fixed::Fx;
 /// outgoing engine before it decodes, so peak memory lands where the most
 /// is free.
 pub enum Msg {
-    Code { env: Vec<u8> },
+    /// Run this pattern now. `id` is the library id ("" = ad-hoc push) and
+    /// travels IN the message so the render task stamps identity and
+    /// read-back location atomically with the swap — senders setting the id
+    /// separately raced the queue (the playlist task set it after send, so
+    /// a fast render task could bind the PREVIOUS item's id to the new
+    /// pattern's read-back).
+    Code { env: Vec<u8>, id: String },
     /// Drop the running engine to free its heap (strip freezes on the last
     /// frame). Sent before an OTA (a reboot follows anyway) and when a
     /// pattern upload can't allocate its buffer — the next Code revives
@@ -35,7 +41,7 @@ pub enum Msg {
     Protocol(u8),
     /// Like Code, but crossfade from the current pattern over `ms` (playlist
     /// transitions): the render task keeps the outgoing engine and blends.
-    Crossfade { env: Vec<u8>, ms: u32 },
+    Crossfade { env: Vec<u8>, ms: u32, id: String },
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
@@ -131,6 +137,15 @@ pub enum SrcLoc {
     /// In the flash read-back slot; the usize is its exact byte length (for
     /// the streamer and Content-Length).
     Flash(usize),
+    /// A LIBRARY pattern: the bytes already live in the pattern store under
+    /// [CURRENT_PATTERN_ID], so the swap wrote nothing — read-back loads
+    /// them transiently via patterns::source_of. The usize is the length
+    /// snapshot from the swapped envelope (Content-Length); a re-save or
+    /// delete mid-request degrades to truncate/pad, never a panic. This is
+    /// what makes playlist churn flash-WEAR-free: the raw slot's fixed
+    /// sectors are no longer erased on every item advance (~17k cycles/day
+    /// at 5 s items against a ~100k NOR spec before this existed).
+    Library(usize),
     /// The swap's flash write failed — nothing to serve until the next swap.
     Gone,
 }
@@ -141,6 +156,8 @@ pub enum SrcLoc {
 pub enum BcLoc {
     Default(&'static [u8]),
     Flash(usize),
+    /// See [SrcLoc::Library]; loads via patterns::bytecode_of.
+    Library(usize),
     Gone,
 }
 
@@ -186,6 +203,16 @@ pub fn set_current_flash(src_len: usize, bc_len: usize) {
     });
 }
 
+/// A swapped-in LIBRARY pattern: read-back serves from the pattern store
+/// (under the already-stamped [CURRENT_PATTERN_ID]) — no slot write
+/// happened. Lengths are the swapped envelope's, for Content-Length.
+pub fn set_current_library(src_len: usize, bc_len: usize) {
+    CURRENT.lock(|c| {
+        *c.borrow_mut() =
+            CurrentMeta { src: SrcLoc::Library(src_len), bc: BcLoc::Library(bc_len) };
+    });
+}
+
 /// The swap's flash write failed — read-back has nothing to serve until the
 /// next swap (/api/status then reports src=false, bc=false).
 pub fn set_current_gone() {
@@ -219,8 +246,10 @@ pub fn current_bc_available() -> bool {
 pub static POWER: AtomicBool = AtomicBool::new(true);
 
 /// Library id of the running pattern ("" = ad-hoc code push / built-in
-/// default). Set on activate/playlist-enter, cleared on raw code push; the
-/// MQTT pattern-select state reads it.
+/// default). Stamped by the RENDER TASK at the swap, from the id carried in
+/// Msg::Code/Crossfade — always consistent with the running content and the
+/// read-back location (senders stamping it after send raced the queue). The
+/// MQTT pattern-select state and the Library read-back paths read it.
 pub static CURRENT_PATTERN_ID: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
 
 pub fn set_current_pattern_id(id: &str) {

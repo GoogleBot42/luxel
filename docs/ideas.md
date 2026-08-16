@@ -137,19 +137,18 @@ bytecode execution is being worked on now; the rest are queued:
   identical served-asset hashes, OTA accepted + clean reboot, cold loads
   5/5. Deploy tooling no longer needs stop-playlist→push→resume on
   v0.1.36+.
-- **Per-swap flash WEAR under playlist churn** [M] ★★ — NEW 2026-08-15,
-  found while fixing the fairness item. `store_current` erases the same
-  raw slot sectors on EVERY swap: a 5 s playlist is ~17k erase
-  cycles/day against a ~100k NOR spec — days-to-weeks to spec-exhaustion
-  under continuous churn (1 min items ≈ 69 days). Sketch: playlist/
-  library swaps don't need the slot at all — their src/bc already live
-  in the pattern store, so carry the library id in `Msg::Code`/
-  `Crossfade` (senders know it; deriving it after the fact races the
-  playlist task's `set_current_pattern_id`), add `SrcLoc::Library`/
-  `BcLoc::Library` read-back variants served transiently via
-  `source_of`/`bytecode_of`, and keep the slot write only for ad-hoc
-  pushes (rare). Touches all six Msg senders + resume/sync/MQTT
-  semantics — its own change, do not bolt on.
+- ~~Per-swap flash WEAR under playlist churn~~ — RESOLVED 2026-08-15
+  (v0.1.37), implemented exactly as sketched: `Msg::Code`/`Crossfade`
+  carry the library id (stamped by the RENDER task at the swap — fixes
+  the sender-side id race too), `SrcLoc::Library`/`BcLoc::Library`
+  read-back variants serve transiently from the pattern store, and
+  `store_current` runs only for ad-hoc pushes (which now log a serial
+  line — if it appears on playlist advances, the fix regressed).
+  Playlist churn writes NOTHING to flash (was ~17k erase cycles/day on
+  fixed sectors at 5 s items vs ~100k NOR spec). Verified on the Athom:
+  0 slot writes across churn, read-back byte-identical to the library
+  copy, envelope framing exact, live pixel-count rebuilds mid-playlist,
+  resume-across-reboot, 3/3 cold loads, full hw-bench soak.
 - **Small-chip profile + more board features** [M] ★★ — follow-ups from
   the 2026-07-29 chip-support assessment (docs/boards.md "Beyond the
   current boards"): (1) add `board-s3-devkit` and `board-c6-devkit`

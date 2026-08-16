@@ -316,12 +316,20 @@ async fn enter_item(i: usize) {
     };
     let env = luxel_core::bytecode::encode_envelope("", &src, &bc);
     drop((src, bc));
+    // the library id rides in the message: the render task stamps identity
+    // + library read-back at the swap (and writes NOTHING to flash — the
+    // wear fix), so no post-send set_current_pattern_id race here
     if crossfade > 0 {
-        MSG_QUEUE.send(Msg::Crossfade { env, ms: crossfade as u32 }).await;
+        MSG_QUEUE
+            .send(Msg::Crossfade {
+                env,
+                ms: crossfade as u32,
+                id: item.pattern_id.clone(),
+            })
+            .await;
     } else {
-        MSG_QUEUE.send(Msg::Code { env }).await;
+        MSG_QUEUE.send(Msg::Code { env, id: item.pattern_id.clone() }).await;
     }
-    crate::shared::set_current_pattern_id(&item.pattern_id);
     // seed the resume-controls set with the item's saved values, so stopping
     // the playlist persists exactly what's showing (resume.rs)
     crate::shared::set_current_controls(item.controls.clone());

@@ -154,8 +154,7 @@ async fn apply_stored() {
     }
     let env = luxel_core::bytecode::encode_envelope("", &src, &bc);
     drop((src, bc));
-    MSG_QUEUE.send(Msg::Code { env }).await;
-    crate::shared::set_current_pattern_id(&id);
+    MSG_QUEUE.send(Msg::Code { env, id: id.clone() }).await;
     crate::shared::set_current_controls(controls.clone());
     for (name, raw) in controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();

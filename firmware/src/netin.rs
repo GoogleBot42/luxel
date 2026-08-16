@@ -205,9 +205,8 @@ async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddr
             // forward the envelope bytes as-is (one copy, no src/bc splits —
             // producer-side copies OOM under a heavy running pattern)
             shared::MSG_QUEUE
-                .send(shared::Msg::Code { env: payload.to_vec() })
+                .send(shared::Msg::Code { env: payload.to_vec(), id: alloc::string::String::new() })
                 .await;
-            shared::set_current_pattern_id("");
             esp_println::println!("sync: adopted the leader's pattern");
         }
         Err(e) => esp_println::println!("sync: leader bytecode rejected: {}", e),

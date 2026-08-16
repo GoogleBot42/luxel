@@ -708,9 +708,11 @@ async fn write_raw(abs: u32, data: &[u8]) -> bool {
 }
 
 /// Persist the running pattern's source + blob to the read-back slot. Runs
-/// on the render task's swap path -- a brief hitch (a few dozen page
-/// erases/writes with yields between them) that under playlist churn
-/// recurs every item swap, which is why it borrows the driver per op
+/// on the render task's swap path for AD-HOC pushes ONLY (library swaps --
+/// playlist/activate/resume/MQTT -- read back from the pattern store
+/// instead and never touch this slot: the flash-wear fix; see
+/// main.rs::persist_current_pattern). A brief hitch (a few dozen page
+/// erases/writes with yields between them), borrowing the driver per op
 /// (see [write_raw]) instead of monopolizing it. Best-effort: false if
 /// storage is absent, an OTA is in progress, a store transaction leases
 /// the driver away mid-burst, or the pattern is implausibly large --
@@ -726,6 +728,9 @@ pub async fn store_current(src: &str, bc: &[u8]) -> bool {
     if crate::ota::ota_active() {
         return false;
     }
+    // ad-hoc swaps only — if this line shows up on every playlist advance,
+    // the flash-wear fix regressed (library swaps must not reach here)
+    println!("current-pattern: slot write (ad-hoc, src {} B + bc {} B)", src.len(), bc.len());
     let mut ok = write_raw(start + CUR_SRC_OFF, src.as_bytes()).await
         && write_raw(start + CUR_BC_OFF, bc).await;
     if ok {
