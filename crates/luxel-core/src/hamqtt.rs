@@ -1,7 +1,8 @@
 //! Home Assistant MQTT integration: topic names, discovery payloads, and
 //! command parsing — pure `no_std` string builders shared by the firmware
 //! MQTT task and the native mirror, so the wire contract is identical and
-//! unit-testable off-device.
+//! unit-testable off-device. User-facing topic reference: docs/mqtt.md
+//! (keep it in sync with this file).
 //!
 //! Entity model (HA MQTT discovery, <https://www.home-assistant.io/integrations/mqtt/>):
 //!   - one `light` (JSON schema: power + brightness) per device

@@ -83,6 +83,13 @@ margin is ample either way.) On-device + real-HA hop: queued in
 UNTESTED.md (broker details live in agent memory; the wall unit is
 offline).
 
+Same-day follow-up: **docs/mqtt.md** — the MQTT surface finally has a
+user-facing reference (enabling, HA discovery entity list, the full
+`luxel/<id>/…` topic/payload table, event-topic grammar + an HA
+automation example, brightness-scale note, mqtt-e2e pointer). Until now
+the only topic list lived in hamqtt.rs source comments; README, lang.md,
+and the hamqtt module doc now link to it.
+
 ## 2026-08-15 — v0.1.38: external event injection (`readEvent`) + webui.md dedusting
 
 The ideas.md ★★★ item, done end to end (no-device work by design; the

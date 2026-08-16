@@ -308,9 +308,10 @@ value 1 — 1D previews send `y = 0`); `POST /api/events` with an
 `luxel_core::netin`); or **MQTT** — publish to `luxel/<id>/event`, one
 event per line as whitespace-separated decimals `type [x [y [value]]]`
 (missing x/y default to 0, value to 1, so an HA automation can send just
-`"1"`). The queue holds 32 events, dropping the OLDEST when full, and
-events land between frames. `type`/`value` meanings beyond the pointer
-convention are yours to define.
+`"1"` — topic reference + an HA automation example in
+[mqtt.md](mqtt.md)). The queue holds 32 events, dropping the OLDEST
+when full, and events land between frames. `type`/`value` meanings
+beyond the pointer convention are yours to define.
 
 ### Predefined globals
 
