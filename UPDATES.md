@@ -46,6 +46,25 @@ mechanism itself was hardware-proven 2026-07-26). Untested on real
 hardware end-to-end as a *page*: needs a WLED device on the bench —
 noted for the next Athom restore-to-stock window.
 
+**Site went live the same night** (Jeremy enabled Pages):
+https://googlebot42.github.io/luxel/flash.html, deploying via the new
+pages.yml, serving the v0.1.37 firmware set. Smoke-testing the LIVE
+site caught a real bug and a spec rename (PRs #27/#28): Chromium
+hard-fails a fetch whose `targetAddressSpace` hint mismatches the
+target's real address space, and the current LNA spec's value is
+`"local"` (PNA's `"private"` renamed) — the hint is now derived from
+the target host (RFC1918/.local only; loopback/public get none).
+Measured and documented: headless chromium DENIES local-network access
+outright (no prompt; CDP grant ineffective in Chromium 150), so from
+the https site the page correctly degrades to its manual-steps UX —
+the automatic flow from https needs a real user's headful Chrome
+permission prompt, still unverified. After the Athom freed up:
+current assets pushed (installer included), and the **device-served
+page verified against the real device** — resolves v0.1.37 from the
+GitHub API in github mode and detects the Athom as already-Luxel.
+Remaining for the full conversion proof: stock-WLED restore (needs
+Jeremy's button-hold) then the page end to end.
+
 ## 2026-08-15 (late night) — v0.1.37: flash-wear fix — playlist swaps
 ## write nothing
 
