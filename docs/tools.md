@@ -22,6 +22,7 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 | `tools/soak.mjs` | The host-side twin: same pattern-churn against `luxel serve` (the native mirror) — liveness/fps/memory without hardware. |
 | `tools/stack-check.sh [budget]` | Builds the Xtensa firmware with `-Z emit-stack-sizes` and fails if any function's stack frame exceeds the budget (default 12 KB). Sees EVERY linked function incl. deps — catches what clippy's lints can't. `stack-check.py` is its ELF parser. |
 | `tools/size-report.py` | Flash-size breakdown of the firmware ELF (see docs/size-report.md for the methodology + history). |
+| `tools/image-check.sh <elf-or-bin>` | Asserts load-bearing features (WLED takeover, AP provisioning, boot guard) are actually linked into a built image via their serial-string markers — the //SIZETEST regression guard. Runs automatically in build-esp32.sh and the release workflow. |
 
 ## Compatibility: corpus & oracle
 
