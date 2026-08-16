@@ -113,3 +113,8 @@ else
     --target xtensa-esp32-none-elf \
     -Zbuild-std=core,alloc
 fi
+
+# Load-bearing features must actually be linked (the //SIZETEST guard —
+# see tools/image-check.sh). Runs for every command that produced an ELF.
+ELF=target/xtensa-esp32-none-elf/release/luxel-fw
+[ -f "$ELF" ] && ../tools/image-check.sh "$ELF"

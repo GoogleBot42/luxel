@@ -1,5 +1,19 @@
 # Update log
 
+## 2026-08-16 — image-check: linked-feature guard (the //SIZETEST answer)
+
+Jeremy asked what prevents the takeover class of regression. Answer:
+`tools/image-check.sh` — asserts that load-bearing features are actually
+LINKED into every built image by grepping for their distinctive serial
+strings (dead-code elimination strips a feature's rodata along with its
+code, so a commented-out call makes the strings vanish). Markers:
+takeover, AP-mode provisioning, boot-loop guard. Wired into
+build-esp32.sh (every local build) and release.yml next to the OTA size
+guard (every board, every release). Test-of-the-test done: a clean
+athom build passes; rebuilding with the call re-commented fails with
+"MISSING marker 'takeover: foreign partition table'". actionlint +
+shellcheck clean.
+
 ## 2026-08-16 (midnight bench session) — the WLED→Luxel takeover was
 ## SHIPPED DISABLED since v0.1.31; fixed, and the full conversion proven
 ## end to end through the installer page on real hardware
