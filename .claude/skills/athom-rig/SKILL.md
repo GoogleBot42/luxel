@@ -77,6 +77,23 @@ and a hash compare before trusting it — the FTDI adapter has re-enumerated
 mid-dump before, which silently truncates the read without an obvious
 error.
 
+### Provisioning restored WLED with zero button-holds (proven 2026-08-16)
+
+The stock backup is UNCONFIGURED — restored WLED boots its captive-portal
+AP, unreachable from the container. Don't ask for a phone: WLED 0.13
+speaks **Improv over serial**. Write one Improv RPC packet (type 0x03,
+command 0x01: `[ssid_len, ssid…, pass_len, pass…]`, header `"IMPROV"`
++ version 1, trailing sum-checksum + `\n`) to `/dev/ttyUSB0` at 115200
+and WLED joins the LAN in seconds AND persists both cfg.json and
+wsec.json (verified by cold power cycle rejoin — so takeover credential
+inheritance works afterwards too). WiFi creds are in agent memory
+(luxel-dev-device). A ready packet-builder script pattern is in the
+UPDATES.md 2026-08-16 entry's session; ~20 lines of node using plain
+`fs.writeSync`. Read the response with a separate short-lived `cat`
+(single-reader rule — and mind that `pkill -f` patterns containing the
+port name match your own compound command's shell and kill it; use a
+character-class pattern like `tty[U]SB0`).
+
 ## 5. Normal updates vs. recovery
 
 Once the board is back on Luxel, ordinary firmware/asset updates go over
