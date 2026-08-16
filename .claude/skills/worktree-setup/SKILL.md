@@ -47,3 +47,25 @@ these before trusting any build/test failure as a real regression.
 - `cargo`/`node`: command not found — you're outside `nix develop`.
 - A leftover `corpus` symlink showing up in `git status`/a diff — remove it before
   committing; it's a worktree convenience, never a tracked or intended artifact.
+
+## Merging back (concurrent sessions)
+
+Expect `origin/master` to have moved while you worked — other sessions
+merge their own PRs continuously. Before opening the PR: `git fetch
+origin master && git rebase origin/master`.
+
+- An `UPDATES.md` conflict is the NORMAL case (every session prepends an
+  entry under `# Update log`). Resolution is always: keep BOTH entries,
+  yours on top (newest first), markers removed.
+- After resolving, `grep -c '^<<<<<<<\|^=======$\|^>>>>>>>' UPDATES.md`
+  must print 0 BEFORE `git rebase --continue` — `git add` happily stages
+  a file that still contains conflict markers, and the rebase commits it
+  without complaint (this has happened; the markers shipped into a
+  commit and needed an amend).
+- After any rebase over real upstream changes, re-run the verification
+  that overlaps them (at minimum the affected test suite / e2e) before
+  force-pushing — green-before-rebase proves nothing about the merged
+  result.
+- If `tea pr merge` fails with "is it still open?" right after a
+  force-push, Gitea is still re-checking mergeability — wait a few
+  seconds and retry before diagnosing anything.
