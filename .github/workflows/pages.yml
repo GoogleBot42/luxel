@@ -28,8 +28,14 @@ on:
       - 'web/**'
       - 'library/**'
       - '.github/workflows/pages.yml'
-  release:
-    types: [published]
+  # NOT `release: types: [published]` — our releases are published by
+  # release.yml's own GITHUB_TOKEN, and GitHub suppresses workflow
+  # triggers for token-created events (loop prevention), so that trigger
+  # never fires (observed: v0.1.39 published, no pages run). workflow_run
+  # fires on the release WORKFLOW finishing, which is not suppressed.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
