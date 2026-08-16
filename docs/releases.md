@@ -73,6 +73,18 @@ Plus, once per release:
   isn't produced. Release web bundles are license-clean without any
   filtering step.
 
+## The installer site (GitHub Pages)
+
+The release job also composes a `site/` = the whole web dist (playground
++ the WLED→Luxel installer, `flash.html`) + `firmware/` (per-board OTA
+images, the LUXA bundle, `manifest.json` via
+`web/tools/gen-flash-manifest.mjs`, sha256sums) and a `pages` job
+deploys it with `actions/deploy-pages`. Reason for co-hosting: GitHub's
+release-asset downloads send no CORS headers (verified 2026-08-15), so a
+browser page can only fetch firmware binaries same-origin — see
+docs/wled-migration.md. The site lands at
+`https://googlebot42.github.io/luxel/` (installer at `/flash.html`).
+
 ## One-time infrastructure (state as of 2026-08-15)
 
 - Push mirror Gitea → GitHub: **already configured and syncing** (the
@@ -83,3 +95,7 @@ Plus, once per release:
 - Gitea Actions must be enabled on the repo for the cut-release UI path
   (open-nanokvm-pro uses it on the same server, so a runner exists);
   `tools/release.sh` works regardless.
+- GitHub Pages must be enabled once for the installer site: GitHub repo
+  Settings → Pages → Source: **GitHub Actions** (Jeremy — it's a repo
+  setting, the workflow can't flip it). Until then the `pages` job fails
+  (it's `continue-on-error`; the release itself is unaffected).

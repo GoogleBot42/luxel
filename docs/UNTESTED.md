@@ -74,6 +74,12 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   need the mic's type + pins probed.
 - [ ] **PB sensor board** (only if you own one): plugs into the expansion
   header RX0; sound-reactive patterns should react with zero config.
+- [ ] **WLED→Luxel installer page against real WLED** — the page
+  (`flash.html` in the web dist, or the GitHub Pages site once enabled)
+  is e2e-verified against a fake WLED only; the next time the Athom is
+  free and restored to stock WLED, run the page against it end to end
+  (both the automatic flow and, from an https origin, the Chrome
+  local-network permission path).
 
 ## Verified hard by machines, low review value (FYI only)
 
