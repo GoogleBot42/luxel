@@ -3,11 +3,19 @@
 // requiring the full device-mode boot (device tab + editor with the
 // running pattern) every time. Usage: node coldload.mjs <device-url> [N]
 import puppeteer from "puppeteer-core";
+import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const DEV = process.argv[2] ?? "http://192.168.0.183";
+// same resolution as e2e.mjs — puppeteer needs an absolute path, a bare
+// "chromium" fails even with chromium on PATH
+const CHROMIUM =
+  process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
+
+// trailing slashes stripped: DEV + "/" with a slashed arg requested "//",
+// a 404, and every load read as boot-FAILED (cost a confused run 2026-08-15)
+const DEV = (process.argv[2] ?? "http://192.168.0.183").replace(/\/+$/, "");
 const N = Number(process.argv[3] ?? 10);
 const SHOT_DIR = process.argv[4] ?? "/tmp";
 
@@ -17,7 +25,7 @@ const allFailures = [];
 for (let i = 1; i <= N; i++) {
   const profile = mkdtempSync(join(tmpdir(), "coldload-"));
   const browser = await puppeteer.launch({
-    executablePath: process.env.CHROMIUM ?? "chromium",
+    executablePath: CHROMIUM,
     args: ["--no-sandbox", "--disable-gpu", ...(process.env.NO_PRECONNECT ? ["--disable-features=NetworkPrediction,PreconnectToOrigin,LoadingPredictorPrefetch"] : [])],
     userDataDir: profile,
   });
