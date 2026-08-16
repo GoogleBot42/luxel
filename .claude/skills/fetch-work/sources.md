@@ -33,6 +33,15 @@ add it here once.
   package, report `type + pins`). Relevant to both `fetch-work` (once
   unblocked) and `unblock` (it's blocked right now).
 
+## Gitea issues
+
+`tea issues list --repo zuckerberg/luxel --output simple` — Jeremy's own
+tracker for feature-sized work (the WLED installer page, hosted
+playground, ESPNow, image display, …). Some issues predate work that has
+since shipped or partially shipped — the dedupe-against-reality rule
+applies with extra force here; check UPDATES.md and comment threads
+before proposing one.
+
 ## Agent memory
 
 `/home/googlebot/.claude/projects/-home-googlebot-workspace-pixler/memory/`
