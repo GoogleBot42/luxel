@@ -39,6 +39,12 @@ it, and covers only the agent-side procedure for driving that rig.
   forgotten reader (e.g. a stray `cat`) silently steals bytes instead of
   erroring, and this has been mistaken for a dead port before. Kill any
   stray readers before concluding the port is broken.
+- The converse trap: a background capture (`timeout N cat /dev/ttyUSB0 >
+  log`) dies SILENTLY when its timeout expires, and the log's tail then
+  reads as plausible-but-stale output. Before trusting a capture's tail as
+  live, confirm the file is still growing (two `wc -c` a few seconds
+  apart). Cost a confused test-read on 2026-08-15. Expect dropped bytes in
+  captures too (FTDI flakiness) — grep counts are lower bounds, not exact.
 - There's no DTR/RTS wired to the board, so `esptool` can't auto-reset it
   — it needs no-reset flags on the relevant esptool invocations. Use
   whatever docs/wled-migration.md's bench-workflow section currently shows
