@@ -75,15 +75,19 @@ Plus, once per release:
 
 ## The installer site (GitHub Pages)
 
-The release job also composes a `site/` = the whole web dist (playground
-+ the WLED→Luxel installer, `flash.html`) + `firmware/` (per-board OTA
-images, the LUXA bundle, `manifest.json` via
-`web/tools/gen-flash-manifest.mjs`, sha256sums) and a `pages` job
-deploys it with `actions/deploy-pages`. Reason for co-hosting: GitHub's
-release-asset downloads send no CORS headers (verified 2026-08-15), so a
-browser page can only fetch firmware binaries same-origin — see
-docs/wled-migration.md. The site lands at
-`https://googlebot42.github.io/luxel/` (installer at `/flash.html`).
+`.github/workflows/pages.yml` (separate from release.yml) composes and
+deploys `site/` = the whole web dist (playground + the WLED→Luxel
+installer, `flash.html`) + `firmware/` (the **latest release's**
+per-board OTA images and LUXA bundle, downloaded via the GitHub API,
+plus `manifest.json` via `web/tools/gen-flash-manifest.mjs`). Triggers:
+mirrored master pushes touching `web/`/`library/`, every published
+release, and manual dispatch — so installer/web changes go live without
+waiting for a firmware release, and new firmware refreshes the site's
+binaries. Reason for co-hosting: GitHub's release-asset downloads send
+no CORS headers (verified 2026-08-15), so a browser page can only fetch
+firmware binaries same-origin — see docs/wled-migration.md. The site
+lands at `https://googlebot42.github.io/luxel/` (installer at
+`/flash.html`).
 
 ## One-time infrastructure (state as of 2026-08-15)
 
@@ -95,7 +99,5 @@ docs/wled-migration.md. The site lands at
 - Gitea Actions must be enabled on the repo for the cut-release UI path
   (open-nanokvm-pro uses it on the same server, so a runner exists);
   `tools/release.sh` works regardless.
-- GitHub Pages must be enabled once for the installer site: GitHub repo
-  Settings → Pages → Source: **GitHub Actions** (Jeremy — it's a repo
-  setting, the workflow can't flip it). Until then the `pages` job fails
-  (it's `continue-on-error`; the release itself is unaffected).
+- GitHub Pages: Settings → Pages → Source: **GitHub Actions** — enabled
+  by Jeremy 2026-08-15.

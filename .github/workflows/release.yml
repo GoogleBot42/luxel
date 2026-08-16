@@ -136,30 +136,6 @@ jobs:
           sha256sum -- * > sha256sums.txt
           echo "--- release assets ---"; ls -l
 
-      - name: Compose installer site (GitHub Pages)
-        # The WLED→Luxel installer (web/flash.html, docs/wled-migration.md)
-        # must be hosted NEXT TO the firmware binaries: GitHub's release-
-        # asset downloads send no CORS headers (verified 2026-08-15), so a
-        # browser page can only fetch the images same-origin. The Pages
-        # site is the whole web dist (playground + installer) plus a
-        # firmware/ dir with the per-board OTA images, the LUXA bundle,
-        # and a manifest.json the page reads.
-        run: |
-          V=${{ steps.ver.outputs.version }}
-          mkdir -p site
-          cp -r web/dist/. site/
-          mkdir -p site/firmware
-          for board in c3-devkit pixelblaze-v3 athom-music esp32-generic; do
-            cp "dist/luxel-$board-$V-ota.bin" site/firmware/
-          done
-          cp "dist/luxel-web-assets-$V.luxa" site/firmware/
-          node web/tools/gen-flash-manifest.mjs "$V" site/firmware
-          cp dist/sha256sums.txt site/firmware/
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -178,20 +154,6 @@ jobs:
             - **Update over the network**: `curl --data-binary @luxel-<board>-*-ota.bin http://<device>/api/ota`
             - **Web app only**: `curl --data-binary @luxel-web-assets-*.luxa http://<device>/api/assets`
 
-  # Deploy the installer site composed above. Needs GitHub Pages enabled
-  # once in the mirror repo's Settings → Pages → Source: "GitHub Actions";
-  # until then this job fails without affecting the release itself.
-  pages:
-    needs: release
-    if: github.server_url == 'https://github.com'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/deploy-pages@v4
-        id: deployment
+# The installer site (GitHub Pages) is deployed by pages.yml, which this
+# workflow's published release triggers — see that file and
+# docs/releases.md.

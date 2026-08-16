@@ -19,10 +19,13 @@ release-asset downloads send no CORS headers on any hop** (checked
 `Origin: null`), so a browser can only fetch firmware same-origin. Hence
 two firmware-source modes: *bundled* — the release workflow now composes
 a GitHub Pages site (whole web dist + `firmware/` with per-board OTA
-bins, LUXA, `manifest.json` via new `web/tools/gen-flash-manifest.mjs`,
-sha256sums) and a `pages` job deploys it (needs one-time Settings →
-Pages → "GitHub Actions" — flagged for Jeremy; job is continue-on-error
-until then), fully automatic; *github* — API metadata (CORS `*`) +
+bins, LUXA, `manifest.json` via new `web/tools/gen-flash-manifest.mjs`),
+fully automatic. (Same-night follow-up after Jeremy enabled Pages: the
+v0.1.37 tag predated this work, so deployment moved from a release-job
+step to a standalone `.github/workflows/pages.yml` — master-push /
+release-published / manual triggers, latest-release firmware via the
+GitHub API — which also means installer fixes deploy without waiting
+for a firmware release.) *github* mode — API metadata (CORS `*`) +
 download-link + file-picker fallback for self-hosted/device-served
 copies. WLED-side quirks handled per docs/wled-migration.md: 0.13 has no
 CORS (opaque no-cors probe → manual board pick, pointer at `/json/info`),
