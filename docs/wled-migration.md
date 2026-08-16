@@ -79,13 +79,19 @@ the LUXA (Luxel serves CORS, so this leg is fully readable).
 
 **Browser-policy edges**: an https-hosted copy (GitHub Pages) can't
 normally touch `http://` LAN devices (mixed content) — `device.ts`
-passes Chromium's Local-Network-Access `targetAddressSpace: "private"`
-hint when the page is https AND the target host is actually
-private-space (RFC1918 IP or `.local`; permission-prompt flow on new
-Chromium, inert elsewhere). The hint must match the target's real
-address space — Chromium fails mismatched requests, measured against a
-localhost target from the live site — so localhost/public hosts get no
-hint. Every automated step has manual equivalents
+passes Chromium's Local-Network-Access `targetAddressSpace: "local"`
+hint when the page is https AND the target host is actually local-space
+(RFC1918 IP or `.local`). Spec facts (developer.chrome.com/blog/
+local-network-access, checked 2026-08-15): the value is `"local"` (the
+PNA-era `"private"` was renamed), Chrome auto-detects private-IP
+literals/.local and exempts recognized-local requests from mixed
+content, and access is permission-prompted in headful Chrome. The hint
+must match the target's real address space — mismatches hard-fail
+(measured), so loopback/public hosts get no hint. Headless chromium
+denies the permission outright (no prompt; CDP `localNetworkAccess`
+grant did not help in Chromium 150) — the page then shows its
+browser-blocked message and manual path, by design. Every automated
+step has manual equivalents
 (open `/update` yourself, curl line for assets) shown when a fetch is
 browser-blocked. Plain-http hosting (a Luxel device serving the page, a
 LAN web-dist host) has none of these restrictions — that's the
