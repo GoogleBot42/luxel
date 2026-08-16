@@ -12,9 +12,14 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   crates over hand-rolling.
 
 ## Environment boundaries
-- This session runs in a container with NO serial access. Serial flashing is Jeremy-only
-  (needs a physical button hold). `firmware/serial.log` is fed from outside the container
-  and can go stale — check its mtime before trusting soak/panic claims from it.
+- Serial flashing of the DEV UNIT is Jeremy-only (needs a physical button hold), and its
+  `firmware/serial.log` is fed from outside the container and can go stale — check its
+  mtime before trusting soak/panic claims from it. The ATHOM RIG's serial IS live
+  in-container at `/dev/ttyUSB0` (read it directly; single-reader rule — see the
+  athom-rig skill). Verified 2026-08-15 by capturing a full test battery.
+- The GitHub repo (github.com/GoogleBot42/luxel) is a READ-ONLY downstream mirror for
+  releases/CI only — never push, PR, or file issues there; everything happens on Gitea.
+  See docs/releases.md.
 - OTA deploys and real-chromium browser testing DO work from inside the container.
 - There is ONE Luxel dev device and ONE Pixel Blaze oracle — never parallelize
   device-touching work across subagents.
