@@ -39,7 +39,26 @@ in
     url = "https://github.com/espressif/qemu/releases/download/esp-develop-9.2.2-20260417/qemu-esp_develop_9.2.2_20260417-src.tar.xz";
     sha256 = "126631yqvc0s8hj2vb08kakg2npvn2q5vi1hw7nymj6f95h7ab6w";
   };
-  patches = [];
+  # QEMU's esp32 model never implemented DPORT_{PRO,APP}_INTR_STATUS_REG_0..2
+  # (0x3FF000EC / 0x3FF000F8) — the per-source pending bitmap that esp-hal's
+  # `InterruptStatus::current()` dispatches level-triggered peripheral
+  # interrupts from. Reads returned 0, so no handler ran, nothing acked the
+  # peripheral, and any esp-rtos guest wedged in an endless level-1 interrupt
+  # storm. (ESP-IDF is unaffected: _xt_lowint1 dispatches off the Xtensa
+  # INTERRUPT sreg instead.) Too much C for substituteInPlace — carried as a
+  # real patch. Also makes a CPU interrupt line shared by several matrix
+  # sources deassert only when the last of them drops.
+  #
+  # And two esp32_timg bugs that only bite a non-IDF guest: the model gated the
+  # timer's LEVEL interrupt on TIMG_INT_ENA, but on ESP32 silicon that register
+  # is inert and TIMG_Tx_LEVEL_INT_EN in the timer config gates it (esp-hal
+  # leaves INT_ENA at 0 forever, so the scheduler tick never fired); and an
+  # alarm value already behind the counter silently disarmed instead of firing
+  # immediately (espressif/qemu#69).
+  patches = [
+    ./patches/esp32-dport-intr-status.patch
+    ./patches/esp32-timg-level-int.patch
+  ];
   buildInputs = (o.buildInputs or []) ++ [ pkgs.libgcrypt pkgs.libslirp ];
   configureFlags = (o.configureFlags or []) ++ [ "--enable-gcrypt" ];
   postPatch = (o.postPatch or "") + ''
