@@ -1,5 +1,23 @@
 # Update log
 
+## 2026-08-16 — QEMU emulation spike: takeover-in-CI is ~80% viable, one
+## precisely-characterized blocker left
+
+Jeremy asked whether the takeover could be tested in an emulator. Spike
+findings (full writeup: docs/research/qemu-emulation-spike.md; nix
+derivation for Espressif's QEMU fork: tools/qemu/qemu-espressif.nix):
+the emulator builds reproducibly under nix (meson wrap subprojects
+vendored, four one-line robustness patches to their RSA/AES device
+models — all worth upstreaming), boots our real bootloader + partition
+table + app from a plain flash FILE (perfect for compose→boot→assert
+takeover tests), and esp-hal's chip-revision gate has a build knob.
+Remaining wall: a guest double fault in the xtensa-lx-rt FPU
+save_context path on the main task's first float (Cp0Disabled →
+save_context faults at 0x400C200C) — hardware runs the same binary
+fine, so it's a QEMU-vs-silicon divergence in coprocessor handling.
+Next steps + worth-it assessment in the research doc; docs/tools.md
+row added.
+
 ## 2026-08-16 — image-check: linked-feature guard (the //SIZETEST answer)
 
 Jeremy asked what prevents the takeover class of regression. Answer:
