@@ -50,6 +50,9 @@ sound-reactive patterns from your microphone — locally and on the device.
 - **Sensors**: the (open) PB sensor-board serial protocol, network
   injection (`POST /api/sensors`), and a ready fixed-point FFT for the
   onboard-mic bring-up.
+- **External events**: `readEvent`/`eventCount` builtins + `POST
+  /api/events` — keyboards, MQTT/HA bridges, and preview clicks drive
+  keypress-reactive patterns.
 - NTP wall clock (+ timezone) so `clockHour()` patterns work unplugged
   from a browser.
 - **AP-mode provisioning**: a device with no network boots as

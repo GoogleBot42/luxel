@@ -68,6 +68,29 @@ await sleep(400);
 const st2 = await (await fetch(`${base}/api/status`)).json();
 check("status: vmerr surfaced with location", typeof st2.vmerr === "string" && st2.vmerr.includes("line 2"), String(st2.vmerr));
 
+// ---- external event injection (POST /api/events → readEvent builtin) ----
+const evSrc =
+  "var ev = array(4)\nvar hit = 0\n" +
+  "export function beforeRender(delta) { while (readEvent(ev)) hit = ev[3] }\n" +
+  "export function render(index) { rgb(hit, 0, 0) }";
+const evUp = await (await fetch(`${base}/api/code`, { method: "POST", body: await lxpBody("", evSrc) })).json();
+check("events: readEvent pattern accepted", evUp.ok === true, JSON.stringify(evUp));
+await sleep(300);
+const pxDark = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+check("events: dark before injection", pxDark.every((b) => b === 0));
+// "EV1\0" + count + [type=1, x=0.5, y=0.25, value=1] as raw 16.16 LE
+const evFrame = new Uint8Array(5 + 16);
+evFrame.set([0x45, 0x56, 0x31, 0, 1]);
+const dv = new DataView(evFrame.buffer);
+[1, 0.5, 0.25, 1].forEach((v, i) => dv.setInt32(5 + i * 4, Math.round(v * 65536), true));
+const evRes = await (await fetch(`${base}/api/events`, { method: "POST", body: evFrame })).json();
+check("events: EV1 frame accepted", evRes.ok === true, JSON.stringify(evRes));
+await sleep(300);
+const pxLit = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+check("events: event drives pixels red", pxLit[0] === 255 && pxLit[1] === 0, `first px = ${pxLit[0]},${pxLit[1]},${pxLit[2]}`);
+const evBad = await (await fetch(`${base}/api/events`, { method: "POST", body: "junk" })).json();
+check("events: junk body rejected", evBad.ok === false, JSON.stringify(evBad));
+
 // restore a lit pattern (the vmerr pattern renders black: render aborts
 // before hsv) so the preview check sees light
 await fetch(`${base}/api/code`, {

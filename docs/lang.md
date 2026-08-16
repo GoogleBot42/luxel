@@ -291,6 +291,24 @@ patterns run dark, not error). Sources: the playground's **sound** toggle
 expansion board's serial stream. Updates land between frames (~40 Hz on
 real hardware).
 
+### External events (Luxel extension)
+
+Injected events carry `[type, x, y, value]` — the generic surface for
+keypress-reactive patterns (QMK splash/nexus/heatmap style), MQTT/HA
+bridges, and anything else that pokes a pattern from outside:
+
+- `eventCount()` — events waiting to be read.
+- `readEvent(out)` — pop the oldest event into `out[0..4]` and return 1;
+  returns 0 (out untouched) when none are queued. `out` must be an array
+  of length ≥ 4. Drain per frame with `while (readEvent(ev)) { … }`.
+
+Sources: **click or drag the preview** (type 1, `x`/`y` normalized 0..1,
+value 1 — 1D previews send `y = 0`), or `POST /api/events` with an
+`EV1\0` frame (magic + u8 count + count × 4×i32-LE raw 16.16; see
+`luxel_core::netin`). The queue holds 32 events, dropping the OLDEST
+when full, and events land between frames. `type`/`value` meanings
+beyond the pointer convention are yours to define.
+
 ### Predefined globals
 
 `pixelCount`; math constants `PI PI2 PI3_4 PISQ E SQRT2 SQRT1_2 LN2 LN10

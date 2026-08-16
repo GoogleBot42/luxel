@@ -179,16 +179,14 @@ bytecode execution is being worked on now; the rest are queued:
   patterns are reproducible across Luxel devices (for synced installations).
 - **Frame-rate / time-scale controls in-pattern** [S] ★ — expose
   `setFrameRate`, `timeScale` for slow-mo/debug.
-- **External event injection** [M] ★★★ — the entire RGB-keyboard
-  "keypress-reactive" genre (QMK splash/nexus/heatmap, iCUE type
-  lighting) is patterns driven by *events*. Trigger controls emulate one
-  button today; a small engine-side event queue fed over the
-  websocket/HTTP API — `eventCount()`, `readEvent(out)` filling
-  `[type, x, y, value]` — would let keyboards, MQTT/HA, and sensors
-  drive patterns generically. The Typing Heatmap and Crosshair Pulse
-  examples currently synthesize phantom events and are written to swap
-  to real ones when this lands. Pairs naturally with the M4 integration
-  milestone (an MQTT topic → event is one mapping away).
+- **External event injection** [M] ★★★ — DONE (v0.1.38): engine-side
+  32-event drop-oldest queue; `eventCount()` + `readEvent(out)` filling
+  `[type, x, y, value]`; fed by preview clicks/drags (type 1, normalized
+  x/y — playground AND device mode, batched ~50 ms) and `POST
+  /api/events` ("EV1\0" frame, shared parser in `netin`, firmware +
+  mirror). Typing Heatmap and Crosshair Pulse now consume real events
+  (phantom generators pause while input flows). Remaining follow-up: an
+  MQTT-topic → event mapping (one small bridge away now).
 
 ## Peripherals & audio (M5 territory, high wow-factor)
 

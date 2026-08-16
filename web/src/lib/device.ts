@@ -317,6 +317,21 @@ export class DeviceSession {
     await this.fetch("/api/sensors", { method: "POST", body: frame.buffer as ArrayBuffer });
   }
 
+  /** Forward external events to the device (EV1 wire frame: "EV1\0" +
+   *  u8 count + count × 4×i32-LE raw 16.16 [type, x, y, value]). The
+   *  device queue caps at 32; extras here would only push older ones out. */
+  async sendEvents(events: [number, number, number, number][]): Promise<void> {
+    const evs = events.slice(0, 32);
+    const buf = new Uint8Array(5 + evs.length * 16);
+    buf.set([0x45, 0x56, 0x31, 0]); // "EV1\0"
+    buf[4] = evs.length;
+    const view = new DataView(buf.buffer);
+    evs.forEach((ev, i) =>
+      ev.forEach((v, j) => view.setInt32(5 + i * 16 + j * 4, Math.round(v * 65536) | 0, true)),
+    );
+    await this.fetch("/api/events", { method: "POST", body: buf.buffer as ArrayBuffer });
+  }
+
   /** Compile + run a stored pattern on the device. */
   async activatePattern(id: string): Promise<RunResult> {
     const res = await this.fetch(`/api/patterns/${id}/activate`, { method: "POST" });

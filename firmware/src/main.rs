@@ -968,6 +968,16 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
             }
         }
 
+        // injected events (POST /api/events) land between frames too
+        let evs = shared::take_events();
+        if !evs.is_empty() {
+            if let Some(eng) = engine.as_mut() {
+                for ev in evs {
+                    eng.push_event(ev);
+                }
+            }
+        }
+
         // network input (DDP/E1.31) overrides the engine while packets flow;
         // LIVE_TIMEOUT_MS after the stream stops, the pattern takes back over
         if shared::live_proto(Instant::now().as_millis() as u32).is_some() {

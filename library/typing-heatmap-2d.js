@@ -1,15 +1,19 @@
 // name: Typing Heatmap 2D
 // Curated example (hand-written showcase of the Luxel language/builtins).
-// QMK's typing-heatmap idea: phantom keystrokes deposit heat, heat
-// diffuses to its neighbors and cools, and a thermal palette maps
-// it black → blue → red → white. The trigger hammers a few keys at once.
-// Diffusion is blur2D + arrayMix (three builtin calls replace the old
-// hand-rolled neighbor loop); rendering samples bilinearly via canvasGet.
+// QMK's typing-heatmap idea: keystrokes deposit heat, heat diffuses to
+// its neighbors and cools, and a thermal palette maps it black → blue →
+// red → white. REAL keystrokes arrive as injected events (click/drag the
+// preview, or POST /api/events); a phantom typist fills the idle time
+// and pauses whenever real input is flowing. The trigger hammers a few
+// keys at once. Diffusion is blur2D + arrayMix; rendering samples
+// bilinearly via canvasGet.
 gw = 16
 heat = array(gw * gw)
 scratch = array(gw * gw)
 acc = 0
 burst = 0
+ev = array(4)
+quiet = 0  // seconds of phantom silence left after real input
 
 setPalette([
   0.0,  0,    0,    0,
@@ -24,8 +28,18 @@ export function triggerKeys() { burst = 6 }
 
 export function beforeRender(delta) {
   dt = min(delta, 50) * 0.001
-  // phantom typist: ~8 keys/s, clustered toward the middle rows
-  acc += dt * 10 + burst
+  // real input: each event heats the cell under its normalized (x, y)
+  while (readEvent(ev)) {
+    kx = clamp(floor(ev[1] * gw), 0, gw - 1)
+    ky = clamp(floor(ev[2] * gw), 0, gw - 1)
+    heat[ky * gw + kx] = min(heat[ky * gw + kx] + 0.85, 1.3)
+    quiet = 4
+  }
+  quiet -= dt
+  // phantom typist: ~8 keys/s, clustered toward the middle rows —
+  // silenced while real events are flowing
+  acc = quiet > 0 ? 0 : acc + dt * 10
+  acc += burst
   burst = 0
   while (acc >= 1) {
     acc -= 1

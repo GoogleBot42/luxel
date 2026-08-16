@@ -64,6 +64,8 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "feedback", sig: "feedback(arr, decay)", doc: "Multiply every element by decay in place (trails/glow); returns arr. (Luxel)" },
   { name: "canvasSet", sig: "canvasSet(buf, w, x, y, v)", doc: "Write v at normalized (x, y) on a row-major w-wide canvas (h = length/w). Coordinates clamp to the edges — no OOB, no *15.99 fudge. Returns v. (Luxel)" },
   { name: "canvasGet", sig: "canvasGet(buf, w, x, y)", doc: "Bilinear sample of a row-major w-wide canvas at normalized (x, y); texel centers at (i+0.5)/w, edges clamped. Smooth upscaling on larger maps for free. (Luxel)" },
+  { name: "eventCount", sig: "eventCount()", doc: "Number of injected external events waiting to be read. Events arrive from preview clicks, POST /api/events, or any websocket/HTTP source. (Luxel)" },
+  { name: "readEvent", sig: "readEvent(out)", doc: "Pop the oldest injected event into out[0..4] = [type, x, y, value] and return 1; returns 0 (out untouched) when none are queued. Idiom: while (readEvent(ev)) { … }. Preview clicks send type 1 with x/y normalized 0..1. (Luxel)" },
   { name: "dot", sig: "dot(x1, y1, x2, y2)", doc: "2D dot product. (Luxel)" },
   { name: "dot3", sig: "dot3(x1,y1,z1, x2,y2,z2)", doc: "3D dot product. (Luxel)" },
   { name: "angleBetween", sig: "angleBetween(x1, y1, x2, y2)", doc: "Signed angle from vector 1 to vector 2, radians (CCW positive). (Luxel)" },

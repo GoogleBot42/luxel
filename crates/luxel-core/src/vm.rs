@@ -24,6 +24,7 @@
 //! establishes every invariant the loop trusts: operand indices in range,
 //! jump targets on instruction boundaries, argc capped.
 
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
@@ -296,6 +297,8 @@ pub enum Builtin {
     ArrayMix,
     CanvasSet,
     CanvasGet,
+    EventCount,
+    ReadEvent,
 }
 
 pub struct BuiltinDef {
@@ -382,6 +385,8 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("arrayAdd", ArrayAdd), b!("arraySub", ArraySub),
     b!("arrayScale", Feedback), b!("arrayMix", ArrayMix),
     b!("canvasSet", CanvasSet), b!("canvasGet", CanvasGet),
+    // Luxel extensions, batch 4 (appended): external event injection.
+    b!("eventCount", EventCount), b!("readEvent", ReadEvent),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -556,7 +561,15 @@ pub struct Vm {
     /// Output gamma set by `setGamma(g)`; ZERO/ONE = off. The engine applies
     /// it after render, at quantization (Luxel post-process extension).
     pub post_gamma: Fx,
+    /// Injected external events `[type, x, y, value]`, drained FIFO by
+    /// `readEvent`. The engine pushes (bounded — see `MAX_EVENTS`); a
+    /// pattern switch rebuilds the VM, which clears the queue.
+    pub events: VecDeque<[Fx; 4]>,
 }
+
+/// Event-queue capacity: when full the oldest event is dropped, so the
+/// freshest input wins and a pattern that never reads can't leak.
+pub const MAX_EVENTS: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct MapData {
@@ -595,6 +608,7 @@ impl Vm {
             perlin_wrap: [256; 3],
             wall_unix: None,
             post_gamma: Fx::ZERO,
+            events: VecDeque::new(),
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             pixel: [Fx::ZERO; 3],
@@ -2093,6 +2107,30 @@ impl Vm {
                 let c = crate::color::mix_oklab([n(0), n(1), n(2)], [n(3), n(4), n(5)], n(6));
                 self.write3(prog, a(7), c).map_err(|m| no_site(m.into()))?;
                 Ok(a(7))
+            }
+            // ---- Luxel extensions, batch 4: external event injection ----
+            // eventCount(): injected events waiting to be read.
+            EventCount => num(Fx::from_int(self.events.len() as i32)),
+            // readEvent(out): pop the oldest injected event into out[0..4]
+            // = [type, x, y, value] and return 1; return 0 (out untouched)
+            // when the queue is empty. Idiom: while (readEvent(ev)) { … }
+            ReadEvent => {
+                if self.events.is_empty() {
+                    return num(Fx::ZERO);
+                }
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("readEvent: `out` must be an array".into()));
+                };
+                let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                if slots.len() < 4 {
+                    return Err(no_site("readEvent: `out` array needs length >= 4".into()));
+                }
+                let ev = self.events.pop_front().unwrap_or_default();
+                let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                for (slot, v) in slots.iter_mut().zip(ev) {
+                    *slot = Value::Num(v);
+                }
+                num(Fx::ONE)
             }
             // ---- Luxel extensions, batch 3: 2D canvases + bulk array math ----
             // blur2D(arr, w, h, radius): separable in-place box blur over
