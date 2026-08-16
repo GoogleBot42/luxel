@@ -37,6 +37,7 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 | `web/tools/e2e.mjs` | Playground-only e2e in real chromium (puppeteer-core, nix-provided): gallery, editor, compile. |
 | `web/tools/device-e2e.mjs` | Device-mode e2e: builds `luxel-cli`, starts the mirror, points the UI at it via `?device=` — connect, live push, library CRUD, playlist, map install, controls. The pattern-flow gate. |
 | `web/tools/sync-e2e.mjs` | Two mirrors over loopback UDP: leader/follower clock convergence, sensor relay, pattern adoption via `/api/pattern.lxp`. |
+| `web/tools/coldload.mjs` | Cold-load soak against a REAL device: `node tools/coldload.mjs <url> [N]` launches N fresh-profile chromiums (cache off) and requires full device-mode boot with zero failed requests — the acceptance check for the 2-socket web pool. `TRACE=1` prints per-request timelines on clean loads too. |
 | `web/tools/lxp.mjs` | Node-side pattern compiler for scripts: loads the built `luxel.wasm`, exports `compile()` / `envelope()` / `lxpBody()` — how anything outside a browser produces the LXP1 envelopes the device API takes. |
 | `web/tools/gen-gallery.mjs` | Builds `public/gallery.json` from the corpus, filtered to patterns that compile clean per the last corpus report. Runs as part of `npm run build`. |
 | `web/tools/pack-assets.mjs` | Packs `dist/` into the LUXA flash archive `deploy.sh` uploads. |

@@ -12,6 +12,7 @@
   // tiles cost no more than a couple dozen small engines.
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
   import { Engine, Luxel } from "../lib/luxel";
+  import { gatedFetch } from "../lib/fetchgate";
 
   export let luxel: Luxel;
   /** Which generated JSON to browse (relative to BASE_URL). Defaults to the
@@ -201,7 +202,7 @@
     // clean-room library/, via tools/gen-gallery.mjs) by default, or the
     // corpus one for the PixelBlaze Library tab. No inlined example set.
     try {
-      const r = await fetch(`${import.meta.env.BASE_URL}${src}`);
+      const r = await gatedFetch(`${import.meta.env.BASE_URL}${src}`);
       if (r.ok) {
         const list = (await r.json()) as { name: string; kind: string; source: string }[];
         const seen = new Set<string>();

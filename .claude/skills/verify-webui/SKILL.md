@@ -52,6 +52,17 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    `wasm`/`gen-gallery`/`svelte-check`/`vite build` step behind `tail`'s own success exit
    code. Either don't pipe, or check `${PIPESTATUS[0]}` explicitly.
 
+### Cold loads against a REAL device
+
+For changes touching startup/connection behavior (fetch gating, device
+probe, boot cover), the mirror is not enough: browser connection-pool
+behavior vs the device's tiny socket pool only shows on hardware. Use
+`web/tools/coldload.mjs <device-url> [N]` — N fresh-profile chromium
+launches, cache off, per-request tracing (`TRACE=1`), clean/dirty verdict
+per load. Watch `/api/status`'s `"web"` slot stages and (if wired)
+serial while it runs; check `slot` afterwards — a crash-looping build
+rolls back silently to the same version string.
+
 ## Failure modes
 
 - Reporting success off `npm run build` alone — it doesn't execute the app; a

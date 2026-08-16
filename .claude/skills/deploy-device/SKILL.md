@@ -67,6 +67,24 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   before. Any serial recovery (see athom-rig skill) must be followed by
   `tools/deploy.sh <ip> --assets-only` before the web UI on that device can
   be trusted again.
+- **`ota-push.sh` does NOT rebuild — it pushes the existing ELF.** After
+  editing firmware sources (or switching branches / stashing), run
+  `firmware/build-esp32.sh` first or you push a stale image with no
+  warning; both images can even report the same version string
+  (2026-08-15: an A/B test silently pushed the wrong build this way).
+- **Stop a playing playlist before any flash-touching push** (v0.1.34+):
+  every playlist swap writes the pattern to flash, holding the driver so
+  often that asset pushes fail ("flash write failed"), `/api/ota` rejects
+  ("update already in progress"), and even served assets truncate
+  mid-body. `POST /api/playlist/stop`, push, then restore with
+  `POST /api/playlist/play` (body = index). See UPDATES.md 2026-08-15.
+- **After any crashy test run, re-check `slot`, not just `version`.** The
+  boot-loop guard flips slots silently after 3 failed boots, and when both
+  slots hold the same version the rollback is invisible in `version` —
+  minutes of measurements were once taken against the rolled-back build
+  (2026-08-15). Distinguish builds by `slot` (or a build-specific status
+  field), and re-verify which slot is live before trusting any on-device
+  measurement.
 - **1 MiB OTA slot ceiling.** The app image must fit the OTA slot or
   `/api/ota` rejects it before writing. Per-board margins and how to
   reclaim space if a push starts failing for size live in docs/boards.md

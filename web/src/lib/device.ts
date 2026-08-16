@@ -3,6 +3,8 @@
 // local wasm engine. Raw 16.16 values cross the wire; this wrapper converts
 // at the boundary, mirroring the wasm wrapper's conventions.
 
+import { gatedFetch } from "./fetchgate";
+
 export interface DeviceStatus {
   fps: number;
   pixels: number;
@@ -65,50 +67,21 @@ export interface MqttStatus {
 
 const RAW = 65536;
 
-/** The device's HTTP server keeps a deliberately tiny connection pool
- *  (2 sockets on classic ESP32 — RAM budget), so a browser firing
- *  parallel fetches can starve *itself*: excess connections are refused
- *  at the TCP level and surface as "cannot reach device" while the
- *  device is perfectly healthy. Two defenses, both here so no call site
- *  has to care: at most `MAX_INFLIGHT` requests in flight (matching the
- *  device pool), and connection-level failures retry with backoff.
- *  HTTP error statuses are never retried — those responses came from the
- *  device. Retrying POSTs is safe here: a refused connection was never
- *  processed, and every mutating endpoint in this API is idempotent
- *  (set-value, overwrite-by-name, delete). */
-const MAX_INFLIGHT = 2;
-const RETRIES = 3;
-
 export class DeviceSession {
   /** `base` is "" when served from the device itself, else "http://host[:port]". */
   constructor(readonly base: string) {}
-
-  private static inflight = 0;
-  private static waiters: (() => void)[] = [];
 
   private url(path: string): string {
     return this.base + path;
   }
 
-  private async fetch(path: string, init?: RequestInit): Promise<Response> {
-    while (DeviceSession.inflight >= MAX_INFLIGHT) {
-      await new Promise<void>((wake) => DeviceSession.waiters.push(wake));
-    }
-    DeviceSession.inflight++;
-    try {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          return await fetch(this.url(path), init);
-        } catch (err) {
-          if (attempt >= RETRIES) throw err;
-          const backoff = 150 * 2 ** attempt + Math.random() * 100;
-          await new Promise((r) => setTimeout(r, backoff));
-        }
-      }
-    } finally {
-      DeviceSession.inflight--;
-      DeviceSession.waiters.shift()?.();
-    }
+  /** All API traffic goes through the global fetch gate (see fetchgate.ts):
+   *  in-flight cap matching the device's 2-socket pool + backoff-retry on
+   *  refused connections. Retrying POSTs is safe here: a refused connection
+   *  was never processed, and every mutating endpoint in this API is
+   *  idempotent (set-value, overwrite-by-name, delete). */
+  private fetch(path: string, init?: RequestInit): Promise<Response> {
+    return gatedFetch(this.url(path), init);
   }
 
   async status(): Promise<DeviceStatus> {

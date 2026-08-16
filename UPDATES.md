@@ -1,5 +1,81 @@
 # Update log
 
+## 2026-08-15 (later) — v0.1.35: cold-load hardening end to end — fetch
+## gate + slot reclaim + a pattern-store OOM found by serial; pool stays
+## 3 (Chromium needs it), 2 becomes the small-chip profile
+
+The agreed "web pool 3→2 via webui tolerance" follow-up (2026-07-29)
+ran its full course and ended somewhere better than planned: the client
+tolerance shipped, three real firmware bugs fell out of the verification
+gauntlet (one a crash-on-every-page-load), and the pool question got a
+definitive answer — **Chromium needs 3 sockets at cold navigation**, so
+2 slots is now a `small-chip` cargo feature rather than the default.
+Acceptance: **10/10 clean cold chromium loads** on the Athom (fresh
+profile, cache off, ~8.6 s to a fully-booted device console, zero failed
+requests, zero panics), plus 5/5 with a 5-second playlist churning flash
+the whole time. Harness: new `web/tools/coldload.mjs` (docs/tools.md).
+
+**Web (both e2e suites green):** new `web/src/lib/fetchgate.ts` — one
+global gate for every fetch the app fires (assets AND API): 2 in-flight
+max, backoff-retry on refused (6 tries ≈ 10 s), a 30 s per-attempt
+deadline, and the slot is held until the BODY completes, not just
+headers — fetch() resolves at headers, and 300 KB gallery bodies kept
+device sockets busy for ~6 s afterwards, starving the boot handshake
+(caught by per-request tracing). Bodies are buffered inside the gate and
+returned as a detached Response. DeviceSession now delegates to it; the
+device probe abort went 1.5 → 8 s.
+
+**Firmware fix 1 — pattern-store OOM panic (the big one, found via
+serial):** `patterns::read_source`/`read_bc` allocated
+`count × CHUNK` bytes INFALLIBLY from a stored TOC record. The Athom had
+a corrupt record (playlist wire-format bytes as its name, chunk count 32
+= 4× the writer's cap) → every `GET /api/patterns/<id>` tried a 120 KB
+alloc → OOM panic → reboot, i.e. **the device crash-rebooted on every
+web-app cold load**, on both slots, and the boot guard ping-ponged the
+slots — which masqueraded as everything else for hours. Both readers now
+reject counts beyond the writer's own caps (MC/MC_BC) and try_reserve.
+The corrupt record was deleted (id 2112e1ab). How it got there is
+unproven — likely a torn write during the flash-contention chaos below.
+
+**Firmware fix 2 — pool-slot reclaim (`QuickCloseSocket`):** picoserve's
+graceful shutdown waits for the CLIENT's FIN bounded by
+`timeouts.read_request` — our 45 s, sized for OTA bodies — and browser
+socket pools sit on connections after our FIN. Measured: two idle raw
+TCP connections wedged BOTH slots ≥60 s. server.rs now wraps the socket
+in `QuickCloseSocket`: inline staged shutdown (close → 2 s bounded
+discard → 2 s bounded flush → terminal abort), per-slot lifecycle stages
+exposed as `"web":[…]` in /api/status, and serial lines on grace
+expiry/serve errors. Full 2-slot wedge now self-heals in ~12 s; a
+teardown is typically 50 ms–2 s.
+
+**The pool answer:** with everything above fixed, 2-slot cold loads
+still failed ~randomly at the NAVIGATION: serial-correlated to Chromium
+opening ~2 sockets at cold nav (speculative preconnect + the nav; the
+preconnects win both slots, the nav SYN is refused — and
+`--disable-features=NetworkPrediction` doesn't stop it). No page code
+can fix what happens before the page exists. So `WEB_TASK_POOL_SIZE`
+stays 3 by default (esp32 heap static back at 80 KB, .stack 29,716 B
+measured) and the new **`small-chip` feature** takes pool 2 + 88 KB heap
+(.stack 30,540 B) — reclaiming ~17 KB for the S2/C2 tier at the cost of
+an occasionally-refused FIRST navigation (reload works). Both variants
+stack-check clean; C3 builds.
+
+**Finding, documented not fixed — playlist flash churn starves flash
+users** (v0.1.34's per-swap flash persist): with a 5 s playlist running,
+asset pushes failed 5/6 ("flash write failed"), /api/ota rejected
+("update already in progress"), and served assets truncated mid-body.
+Deploy procedure now: stop playlist → push → resume (in the
+deploy-device skill). With the client's retry+deadline the cold-load UX
+under churn is clean (5/5), but the write-path starvation stands — a
+fairness mechanism (or swap-write backoff while a request is active) is
+the real fix, backlogged.
+
+Device end state: Athom on ota_0 = v0.1.35 default (3 slots, all fixes),
+current assets, playlist playing as found. The dev unit was OFFLINE at
+session end and still runs v0.1.34 — push v0.1.35 to it when it's back
+(the pattern-store OOM fix matters everywhere). /api/status gained
+`"web"` slot stages. New tool: web/tools/coldload.mjs.
+
 ## 2026-08-15 — Claude Code setup bootstrapped from session history
 
 The repo now carries its own agent configuration, mined from six weeks of
