@@ -9,6 +9,10 @@
 //! State/command topics live under `luxel/<id>/…`; discovery configs under
 //! `homeassistant/…/config` (retained). `luxel/<id>/status` is the
 //! availability topic (LWT: `offline`).
+//!
+//! `luxel/<id>/event` is a command-only topic with no HA entity: each
+//! payload line is one injected pattern event (`type x y value`, see
+//! [`parse_event_lines`]) — the MQTT face of the `readEvent()` surface.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -32,6 +36,9 @@ pub fn pattern_set_topic(id: &str) -> String {
 }
 pub fn pattern_state_topic(id: &str) -> String {
     alloc::format!("luxel/{id}/pattern/state")
+}
+pub fn event_topic(id: &str) -> String {
+    alloc::format!("luxel/{id}/event")
 }
 pub fn light_config_topic(id: &str) -> String {
     alloc::format!("homeassistant/light/{id}/light/config")
@@ -197,6 +204,36 @@ pub fn parse_light_command(payload: &str) -> LightCmd {
     cmd
 }
 
+/// Parse a plain decimal ("-12.5", ".25", "3") into `Fx` with integer
+/// math only — keeps this no_std path independent of core's dec2flt
+/// (~19 KB of flash) staying resident in the firmware image, which today
+/// it does only incidentally (other code happens to parse floats). No
+/// exponent form; magnitudes beyond the 16.16 range clamp.
+fn parse_fx(s: &str) -> Option<crate::fixed::Fx> {
+    let (neg, s) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let (ip, fp) = s.split_once('.').unwrap_or((s, ""));
+    if (ip.is_empty() && fp.is_empty())
+        || !ip.bytes().all(|b| b.is_ascii_digit())
+        || !fp.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let int: u64 = if ip.is_empty() { 0 } else { ip.parse().ok()? };
+    let (mut num, mut den) = (0u64, 1u64);
+    for b in fp.bytes().take(9) {
+        num = num * 10 + (b - b'0') as u64;
+        den *= 10;
+    }
+    let raw = int
+        .saturating_mul(65536)
+        .saturating_add((num * 65536 + den / 2) / den)
+        .min(i32::MAX as u64) as i32;
+    Some(crate::fixed::Fx::from_raw(if neg { -raw } else { raw }))
+}
+
 fn field_value_start<'a>(payload: &'a str, field: &str) -> Option<&'a str> {
     let key = alloc::format!("\"{field}\"");
     let at = payload.find(&key)? + key.len();
@@ -221,7 +258,41 @@ pub fn command_topics(id: &str) -> Vec<String> {
         light_set_topic(id),
         pattern_set_topic(id),
         playlist_cmd_topic(id),
+        event_topic(id),
     ]
+}
+
+/// Parse a `luxel/<id>/event` payload into `[type, x, y, value]` quads
+/// for the engine event queue (the `readEvent()` surface, see netin's
+/// `EV1` frame for the binary HTTP twin).
+///
+/// Text, automation-friendly: one event per line, whitespace-separated
+/// decimal numbers `type [x [y [value]]]` — missing x/y default to 0,
+/// missing value to 1, so an HA automation can publish just `"1"`.
+/// Blank lines and lines that don't start with a number are skipped;
+/// at most [`crate::netin::EV_MAX_BATCH`] events per payload.
+pub fn parse_event_lines(payload: &str) -> Vec<[crate::fixed::Fx; 4]> {
+    use crate::fixed::Fx;
+    let mut out = Vec::new();
+    for line in payload.lines() {
+        if out.len() >= crate::netin::EV_MAX_BATCH {
+            break;
+        }
+        let mut nums = line.split_whitespace().map(parse_fx);
+        let Some(Some(ty)) = nums.next() else {
+            continue; // blank or non-numeric line
+        };
+        let mut ev = [ty, Fx::ZERO, Fx::ZERO, Fx::ONE];
+        for slot in ev.iter_mut().skip(1) {
+            match nums.next() {
+                Some(Some(v)) => *slot = v,
+                Some(None) => break, // trailing garbage: keep what parsed
+                None => break,
+            }
+        }
+        out.push(ev);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -258,7 +329,62 @@ mod tests {
         let b = playlist_button_discovery_json("luxel-abc", "Luxel abc", "1.0", "next");
         assert!(b.contains("\"payload_press\":\"next\""));
         assert_eq!(diag_state_json(120, 45000), "{\"fps\":120,\"heap\":45000}");
-        assert_eq!(command_topics("x").len(), 3);
+        assert_eq!(command_topics("x").len(), 4);
+        assert_eq!(event_topic("luxel-abc"), "luxel/luxel-abc/event");
+        assert!(command_topics("luxel-abc").contains(&event_topic("luxel-abc")));
+    }
+
+    #[test]
+    fn event_line_parsing() {
+        use crate::fixed::Fx;
+        let fx = |v: f64| Fx::from_f64(v);
+        // full quad
+        assert_eq!(
+            parse_event_lines("1 0.5 0.25 0.75"),
+            alloc::vec![[fx(1.0), fx(0.5), fx(0.25), fx(0.75)]]
+        );
+        // defaults: bare type → x/y 0, value 1; negative + int coords fine
+        assert_eq!(parse_event_lines("2"), alloc::vec![[fx(2.0), fx(0.0), fx(0.0), fx(1.0)]]);
+        assert_eq!(
+            parse_event_lines("1 -0.5"),
+            alloc::vec![[fx(1.0), fx(-0.5), fx(0.0), fx(1.0)]]
+        );
+        // multiple lines, blanks and junk skipped, CRLF tolerated
+        let evs = parse_event_lines("1 0.1 0.2\r\n\r\nnope\n3\n");
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[1][0], fx(3.0));
+        // trailing garbage keeps the parsed prefix
+        assert_eq!(
+            parse_event_lines("1 0.5 what"),
+            alloc::vec![[fx(1.0), fx(0.5), fx(0.0), fx(1.0)]]
+        );
+        // batch cap
+        let big: String = (0..40).map(|_| "1\n").collect();
+        assert_eq!(parse_event_lines(&big).len(), crate::netin::EV_MAX_BATCH);
+        // empty/garbage-only payloads parse to nothing
+        assert!(parse_event_lines("").is_empty());
+        assert!(parse_event_lines("{\"not\":\"numbers\"}").is_empty());
+    }
+
+    #[test]
+    fn fx_decimal_parsing_matches_float() {
+        use crate::fixed::Fx;
+        for s in ["0", "1", "-1", "0.5", "-0.25", ".75", "3.", "12.345", "-100.001", "+2.5"] {
+            let want = Fx::from_f64(s.parse::<f64>().unwrap());
+            let got = parse_fx(s).unwrap();
+            assert!(
+                (got.raw() - want.raw()).abs() <= 1,
+                "{s}: got raw {} want {}",
+                got.raw(),
+                want.raw()
+            );
+        }
+        for s in ["", ".", "-", "1e3", "0x10", "one", "1.2.3", "1,5"] {
+            assert!(parse_fx(s).is_none(), "{s} should not parse");
+        }
+        // out-of-range clamps instead of wrapping
+        assert_eq!(parse_fx("999999999").unwrap().raw(), i32::MAX);
+        assert_eq!(parse_fx("-999999999").unwrap().raw(), -i32::MAX);
     }
 
     #[test]

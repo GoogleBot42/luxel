@@ -46,6 +46,7 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 | `web/tools/fake-wled.mjs` | A fake WLED device over HTTP that "reboots into Luxel" after an `/update` upload — the fixture flash-e2e drives. Arch/CORS/reboot-time via env. |
 | `web/tools/gen-flash-manifest.mjs` | Writes `firmware/manifest.json` for the installer page from a directory of release artifacts (release workflow + flash-e2e fixture both use it). |
 | `tools/serve-e2e.mjs` | Fast fetch-only smoke test of the mirror: HTTP API + page routing (`/` serves the built playground or the minimal fallback; `/min` the minimal page). Full-UI browser coverage is `web/tools/device-e2e.mjs`. |
+| `tools/mqtt-e2e.mjs` | MQTT bridge against a REAL local mosquitto (dev-shell dep): mirror connects, retained availability, and the `luxel/<id>/event` topic driving a `readEvent()` pattern (text lines → pixels). Needs `web/public/luxel.wasm` (`npm run wasm`). |
 
 ## CLI (`cargo run -p luxel-cli --` or `target/release/luxel`)
 

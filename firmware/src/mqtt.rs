@@ -191,7 +191,8 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
     let light_set = hamqtt::light_set_topic(&id);
     let pattern_set = hamqtt::pattern_set_topic(&id);
     let playlist_cmd = hamqtt::playlist_cmd_topic(&id);
-    for t in [&light_set, &pattern_set, &playlist_cmd] {
+    let event_cmd = hamqtt::event_topic(&id);
+    for t in [&light_set, &pattern_set, &playlist_cmd, &event_cmd] {
         client
             .subscribe_to_topic(t)
             .await
@@ -252,6 +253,13 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
                         "next" => crate::playlist::step(1),
                         "prev" => crate::playlist::step(-1),
                         other => println!("mqtt: unknown playlist cmd \"{}\"", other),
+                    }
+                } else if topic == event_cmd {
+                    // pattern event injection: "type [x [y [value]]]" per
+                    // line → the readEvent() queue, same as POST /api/events
+                    let evs = hamqtt::parse_event_lines(payload);
+                    if !evs.is_empty() {
+                        shared::push_events(&evs);
                     }
                 }
                 // loop: publishes the resulting state before waiting again
