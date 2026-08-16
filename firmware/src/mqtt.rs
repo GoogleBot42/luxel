@@ -24,9 +24,7 @@ use rust_mqtt::utils::rng_generator::CountingRng;
 
 use crate::config;
 use crate::patterns;
-use crate::shared::{
-    self, set_current_pattern_id, Msg, BRIGHTNESS, MQTT_POKE, MSG_QUEUE, POWER,
-};
+use crate::shared::{self, Msg, BRIGHTNESS, MQTT_POKE, MSG_QUEUE, POWER};
 
 /// Broker session currently up (for /api/mqtt's `connected`).
 pub static CONNECTED: AtomicBool = AtomicBool::new(false);
@@ -316,8 +314,7 @@ async fn activate_by_name(name: &str) {
     crate::playlist::stop();
     let env = luxel_core::bytecode::encode_envelope("", &source, &bc);
     drop((source, bc));
-    MSG_QUEUE.send(Msg::Code { env }).await;
-    set_current_pattern_id(&id);
+    MSG_QUEUE.send(Msg::Code { env, id }).await;
     // same single-pattern resume bookkeeping as the HTTP activate
     crate::shared::set_current_controls(alloc::vec::Vec::new());
     crate::resume::mark_dirty();

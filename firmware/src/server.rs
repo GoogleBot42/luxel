@@ -241,6 +241,52 @@ async fn stream_flash_readback<W: picoserve::io::Write>(
     Ok(())
 }
 
+/// Serve a LIBRARY pattern's read-back: `bytes` freshly fetched from the
+/// pattern store (a transient heap copy, dropped when the response ends —
+/// the standing-RAM-copy cost this design replaced stays gone). Exactly
+/// `len` bytes go out (the Content-Length snapshot from the swap):
+/// truncated / newline-padded on mismatch (a re-save changed the stored
+/// content mid-session) and fully padded when `bytes` is None (pattern
+/// deleted, or the store's flash lease is busy) — framing stays valid,
+/// same discipline as [stream_flash_readback].
+async fn stream_store_readback<W: picoserve::io::Write>(
+    writer: &mut W,
+    bytes: Option<alloc::vec::Vec<u8>>,
+    len: usize,
+    label: &str,
+) -> Result<(), W::Error> {
+    let mut written = 0usize;
+    match bytes {
+        Some(b) => {
+            let n = b.len().min(len);
+            writer.write_all(&b[..n]).await?;
+            written = n;
+            if b.len() != len {
+                esp_println::println!(
+                    "readback: {} store copy is {} B, snapshot promised {} B — truncating/padding",
+                    label,
+                    b.len(),
+                    len
+                );
+            }
+        }
+        None => {
+            esp_println::println!(
+                "readback: {} — library pattern unavailable (deleted / store busy), padding {} B",
+                label,
+                len
+            );
+        }
+    }
+    while written < len {
+        let pad = [b'\n'; 64];
+        let take = pad.len().min(len - written);
+        writer.write_all(&pad[..take]).await?;
+        written += take;
+    }
+    Ok(())
+}
+
 /// `GET /api/pattern`: the running pattern's SOURCE, streamed from flash (or
 /// rodata for the default) — the bytes no longer sit in a standing RAM copy.
 /// The location is snapshotted at construction so Content-Length matches the
@@ -255,6 +301,7 @@ impl picoserve::response::Content for CurrentSource {
         match self.0 {
             crate::shared::SrcLoc::Default(s) => s.len(),
             crate::shared::SrcLoc::Flash(len) => len,
+            crate::shared::SrcLoc::Library(len) => len,
             crate::shared::SrcLoc::Gone => 0,
         }
     }
@@ -265,6 +312,10 @@ impl picoserve::response::Content for CurrentSource {
             crate::shared::SrcLoc::Flash(len) => {
                 let abs = crate::patterns::current_slot_abs().map(|(s, _)| s);
                 stream_flash_readback(&mut writer, abs, len, "src").await
+            }
+            crate::shared::SrcLoc::Library(len) => {
+                let src = crate::patterns::source_of(&crate::shared::get_current_pattern_id());
+                stream_store_readback(&mut writer, src.map(String::into_bytes), len, "src").await
             }
             crate::shared::SrcLoc::Gone => Ok(()),
         }
@@ -289,6 +340,7 @@ impl CurrentEnvelope {
         match self.src {
             crate::shared::SrcLoc::Default(s) => s.len(),
             crate::shared::SrcLoc::Flash(len) => len,
+            crate::shared::SrcLoc::Library(len) => len,
             crate::shared::SrcLoc::Gone => 0,
         }
     }
@@ -296,6 +348,7 @@ impl CurrentEnvelope {
         match self.bc {
             crate::shared::BcLoc::Default(b) => b.len(),
             crate::shared::BcLoc::Flash(len) => len,
+            crate::shared::BcLoc::Library(len) => len,
             crate::shared::BcLoc::Gone => 0,
         }
     }
@@ -321,6 +374,10 @@ impl picoserve::response::Content for CurrentEnvelope {
                 let abs = crate::patterns::current_slot_abs().map(|(s, _)| s);
                 stream_flash_readback(&mut writer, abs, len, "src").await?
             }
+            crate::shared::SrcLoc::Library(len) => {
+                let src = crate::patterns::source_of(&crate::shared::get_current_pattern_id());
+                stream_store_readback(&mut writer, src.map(String::into_bytes), len, "src").await?
+            }
             crate::shared::SrcLoc::Gone => {}
         }
         writer.write_all(&(bc_len as u32).to_le_bytes()).await?;
@@ -329,6 +386,10 @@ impl picoserve::response::Content for CurrentEnvelope {
             crate::shared::BcLoc::Flash(len) => {
                 let abs = crate::patterns::current_slot_abs().map(|(_, b)| b);
                 stream_flash_readback(&mut writer, abs, len, "bc").await?
+            }
+            crate::shared::BcLoc::Library(len) => {
+                let bc = crate::patterns::bytecode_of(&crate::shared::get_current_pattern_id());
+                stream_store_readback(&mut writer, bc, len, "bc").await?
             }
             crate::shared::BcLoc::Gone => {}
         }
@@ -643,8 +704,8 @@ async fn api_code(raw: Vec<u8>) -> String {
     match decode_upload(&raw) {
         Ok(_) => {
             crate::playlist::stop(); // a manual push takes over from the playlist
-            MSG_QUEUE.send(Msg::Code { env: raw }).await;
-            crate::shared::set_current_pattern_id(""); // ad-hoc code, no library id
+            // empty id = ad-hoc; the render task stamps identity at the swap
+            MSG_QUEUE.send(Msg::Code { env: raw, id: String::new() }).await;
             String::from("{\"ok\":true}")
         }
         Err(e) => e,
@@ -684,8 +745,7 @@ async fn api_patterns_activate(id: &str) -> String {
         Ok(_) => {
             let env = luxel_core::bytecode::encode_envelope("", &source, &bc);
             drop((source, bc));
-            MSG_QUEUE.send(Msg::Code { env }).await;
-            crate::shared::set_current_pattern_id(id);
+            MSG_QUEUE.send(Msg::Code { env, id: String::from(id) }).await;
             // controls reset to the pattern's defaults on activation
             crate::shared::set_current_controls(Vec::new());
             crate::resume::mark_dirty(); // debounced single-pattern persist

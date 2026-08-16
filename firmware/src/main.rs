@@ -618,17 +618,31 @@ fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engi
     Ok(e)
 }
 
-/// Persist the just-swapped pattern to the flash read-back slot (replacing
-/// the old standing RAM copies) and publish where its source + blob now live.
-/// Runs on the render task at the swap: the swap already pays a decode, so the
-/// added flash write is a brief one-time frame hitch — acceptable for a rare
-/// event and worth the ~40 KB of steady-state heap the RAM copies used to hold.
-/// On a failed write (flash leased out by a concurrent OTA/save, or too large)
-/// read-back is marked unavailable and logged — /api/status then reports
-/// src=false, bc=false, and GET /api/pattern + the sync envelope serve nothing
-/// until the next swap (never a panic).
-async fn persist_current_pattern(src: &str, bc: &[u8]) {
+/// Stamp the just-swapped pattern's identity + read-back location. Runs on
+/// the render task at the swap, so id / hash / location can never disagree
+/// with the running content (senders used to stamp the id after queueing —
+/// racy).
+///
+/// LIBRARY swaps (`id` non-empty: playlist advance, activate, MQTT select,
+/// boot resume) write NOTHING: their source + blob already live in the
+/// pattern store, and read-back serves from there (shared::*Loc::Library).
+/// This is the flash-WEAR fix — the raw slot's fixed sectors used to be
+/// erased on EVERY playlist advance (~17k cycles/day at 5 s items).
+///
+/// AD-HOC swaps (`id` empty: /api/code, sync adoption) still persist to the
+/// slot (replacing the old standing RAM copies): a brief one-time frame
+/// hitch on a rare, human-driven event. On a failed write (flash leased out
+/// by a concurrent OTA/save, or too large) read-back is marked unavailable
+/// and logged — /api/status then reports src=false, bc=false, and
+/// GET /api/pattern + the sync envelope serve nothing until the next swap
+/// (never a panic).
+async fn persist_current_pattern(src: &str, bc: &[u8], id: &str) {
     shared::set_pattern_hash(src);
+    shared::set_current_pattern_id(id);
+    if !id.is_empty() {
+        shared::set_current_library(src.len(), bc.len());
+        return;
+    }
     if patterns::store_current(src, bc).await {
         shared::set_current_flash(src.len(), bc.len());
     } else {
@@ -675,9 +689,11 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
     shared::set_current_default(PATTERN, PATTERN_BC);
     // Rebuild the engine from the running blob at the current pixel count.
     // The blob comes from wherever read-back currently points: the rodata
-    // default (borrowed, no alloc) or the flash slot (a transient fallible
-    // Vec, dropped as soon as the Program is built). A flash-busy read yields
-    // None and the engine stays paused until the next swap — never a panic.
+    // default (borrowed, no alloc), the flash slot, or the pattern store for
+    // a library pattern — the latter two are transient fallible Vecs dropped
+    // as soon as the Program is built. A flash-busy read (or a library
+    // pattern deleted mid-session) yields None and the engine stays paused
+    // until the next swap — never a panic.
     let rebuild = || {
         let count = PIXEL_COUNT.load(Ordering::Relaxed);
         match shared::current_bc() {
@@ -686,6 +702,15 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                 .and_then(|p| try_budgeted_engine(p, count).ok()),
             shared::BcLoc::Flash(len) => {
                 let bc = crate::patterns::read_current_bc(len)?;
+                luxel_core::bytecode::deserialize_lean(&bc)
+                    .ok()
+                    .and_then(|p| try_budgeted_engine(p, count).ok())
+            }
+            // library pattern: fetch the store's CURRENT blob (not the
+            // snapshot length — a re-save may have changed it, and the
+            // store's copy is the truth)
+            shared::BcLoc::Library(_) => {
+                let bc = crate::patterns::bytecode_of(&shared::get_current_pattern_id())?;
                 luxel_core::bytecode::deserialize_lean(&bc)
                     .ok()
                     .and_then(|p| try_budgeted_engine(p, count).ok())
@@ -729,7 +754,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
             match msg {
-                Msg::Code { env } => {
+                Msg::Code { env, id } => {
                     // Envelope-validated by the sender. Drop the outgoing
                     // engine BEFORE decoding the new program — peak heap
                     // lands here, where the most is free.
@@ -746,7 +771,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                     let decoded = match luxel_core::bytecode::decode_envelope(&env) {
                         Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
                             Ok(p) => {
-                                persist_current_pattern(le.source, le.bytecode).await;
+                                persist_current_pattern(le.source, le.bytecode, &id).await;
                                 Ok(p)
                             }
                             // decode can legitimately fail on a starved heap
@@ -868,7 +893,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                 }
                 // Crossfade to a new pattern (playlist transition): keep the
                 // outgoing engine and blend over `ms`.
-                Msg::Crossfade { env, ms } => {
+                Msg::Crossfade { env, ms, id } => {
                     // the outgoing engine stays alive on purpose (it's the
                     // blend source) — this is the one path where two
                     // programs coexist, bounded by the crossfade duration
@@ -879,7 +904,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                     let decoded = match luxel_core::bytecode::decode_envelope(&env) {
                         Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
                             Ok(p) => {
-                                persist_current_pattern(le.source, le.bytecode).await;
+                                persist_current_pattern(le.source, le.bytecode, &id).await;
                                 Ok(p)
                             }
                             Err(e) => Err(Some(e)),

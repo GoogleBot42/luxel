@@ -1,5 +1,38 @@
 # Update log
 
+## 2026-08-15 (late night) — v0.1.37: flash-wear fix — playlist swaps
+## write nothing
+
+The wear finding from the fairness session (same day, below) is fixed:
+`store_current` used to erase the same raw-slot sectors on EVERY pattern
+swap, so a 5 s playlist burned ~17k erase cycles/day against a ~100k NOR
+spec — days-to-weeks to spec-exhaustion on the header sector. Now
+**library swaps (playlist advance, activate, MQTT select, boot resume)
+write nothing at all**: their source + blob already live in the pattern
+store, and read-back serves from there.
+
+Mechanics: the library id rides IN `Msg::Code`/`Msg::Crossfade` ("" =
+ad-hoc) and the RENDER task stamps id + hash + read-back location
+atomically at the swap — which also fixes a latent race, since every
+sender used to `set_current_pattern_id` AFTER queueing (a fast render
+task could bind the previous item's id to the new content). New
+`SrcLoc::Library`/`BcLoc::Library` variants: `/api/pattern` and the sync
+envelope serve via `source_of`/`bytecode_of` into a transient Vec
+(exact-length framing kept — truncate/pad on a mid-session re-save or
+delete, mirroring `stream_flash_readback`), and engine rebuilds fetch
+the store's CURRENT blob (not the snapshot length — a re-save is the
+truth). The slot write remains only for ad-hoc `/api/code` pushes and
+sync adoption, and now logs `slot write (ad-hoc…)` on serial — a
+tripwire line: seeing it on playlist advances means the fix regressed.
+
+Verified on the Athom (v0.1.37, serial captured): **0 slot writes across
+~10+ churn swaps** and exactly one from a deliberate ad-hoc push;
+`/api/pattern` byte-identical to the playing item's library copy;
+`.lxp` envelope framing computed == actual; pixel-count 300→150→300
+mid-playlist rebuilds live off the store; activate → OTA-reboot resumes
+the activated pattern; 3/3 clean cold loads under churn; full hw-bench
+soak (results in docs/bench-report.md). Stack-check clean, C3 builds.
+
 ## 2026-08-15 (night) — CI/releases (issue #8): Gitea-tags → GitHub-builds
 ## pipeline, modeled on open-nanokvm-pro
 
