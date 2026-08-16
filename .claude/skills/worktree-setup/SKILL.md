@@ -1,6 +1,6 @@
 ---
 name: worktree-setup
-description: Making a fresh git worktree of pixler actually buildable — worktrees are missing untracked assets (corpus/, web/public/, node_modules) that the main checkout has.
+description: Making a fresh git worktree of pixler actually buildable — worktrees are missing untracked assets (corpus/, web/public/, node_modules, firmware/creds.env) that the main checkout has.
 ---
 
 This repo keeps some build inputs gitignored, so a fresh `git worktree add` gives you
@@ -25,6 +25,9 @@ these before trusting any build/test failure as a real regression.
    step fails hard because the destination directory doesn't exist. Fix: `mkdir -p
    web/public` before the first `npm run wasm` / `npm run dev` / `npm run build`.
 3. `web/node_modules` — run `npm ci` inside `nix develop` (bare shells have no `node`).
+3b. `firmware/creds.env` (gitignored WiFi creds) — required by any firmware build
+   (`build-esp32.sh` reads it). Copy it from the main checkout:
+   `cp /home/googlebot/workspace/pixler/firmware/creds.env firmware/creds.env`.
 4. `cargo` and `node` are only on `PATH` inside `nix develop`. If you need
    ImageMagick or similar one-off tools not in the flake, `nix-shell -p <pkg>` alongside
    it rather than assuming it's present.
