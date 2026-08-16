@@ -11,6 +11,7 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 | `tools/deploy.sh <ip> [--fw-only\|--assets-only]` | The one-shot deploy: builds firmware + web app, OTAs the image (waits for the reboot), streams the asset archive. Serial flashing does NOT update assets — use this after any serial recovery. |
 | `tools/ota-push.sh <ip>` | Just the firmware OTA + comes-back-on-the-new-slot verification (deploy.sh calls it). Refuses images built without WiFi creds. |
 | `tools/decode-backtrace.sh` | Symbolicate ESP32 panic backtraces from a serial log against the current ELF. |
+| `tools/release.sh [X.Y.Z] [--dry-run]` | Cut a release tag (validates tag == firmware/Cargo.toml on origin/master, then tags via the Gitea API). The GitHub mirror's release workflow builds + publishes the assets — see docs/releases.md for the whole pipeline. |
 | `firmware/serial.log` | Live serial feed from the dev unit (fed from outside the container — there is no in-container serial). Watch for `PANIC` / `panic: rebooting in 3s` / `pattern rejected`; the HTTP-side view of a soak hides reboots (the device is back in ~5 s and retries succeed). |
 
 ## Hardware verification

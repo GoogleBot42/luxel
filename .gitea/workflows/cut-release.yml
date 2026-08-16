@@ -1,0 +1,72 @@
+name: cut-release
+
+# Cut a release from the Gitea web UI: Actions → cut-release → Run workflow,
+# enter the version (e.g. 0.1.36). This job runs ON GITEA (the source of
+# truth) and only does git work — no nix, no builds:
+#
+#   validate → tag vX.Y.Z → push the tag
+#
+# Unlike some projects there is NO version-bump commit here: luxel's version
+# lives in firmware/Cargo.toml and is bumped in the PR that ships the
+# release-worthy change, so the tag must match what master already says.
+# If the versions disagree this job fails and tells you to bump first.
+#
+# From there the existing machinery takes over: the push mirror replicates
+# the tag to GitHub (github.com/GoogleBot42/luxel), and
+# .github/workflows/release.yml (which runs only on GitHub — see its
+# server_url guard) builds the firmware images + web assets and publishes
+# them as release assets. See docs/releases.md.
+#
+# tools/release.sh is the local/agent fallback for the same tag-cutting step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without leading v (e.g. 0.1.36) — must equal firmware/Cargo.toml'
+        required: true
+      dry_run:
+        description: 'Validate and show what would happen, but push nothing'
+        type: boolean
+        default: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0   # need existing tags for the duplicate check
+
+      - name: Validate
+        run: |
+          V="${{ inputs.version }}"
+          V="${V#v}"
+          echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$' \
+            || { echo "invalid version '$V' (expected X.Y.Z)"; exit 1; }
+          git rev-parse -q --verify "refs/tags/v$V" >/dev/null \
+            && { echo "tag v$V already exists"; exit 1; }
+          TOML="$(sed -n 's/^version = "\(.*\)"$/\1/p' firmware/Cargo.toml | head -1)"
+          [ "$TOML" = "$V" ] \
+            || { echo "firmware/Cargo.toml says '$TOML' but you asked for '$V' — bump the version in a PR first, then cut the release"; exit 1; }
+          echo "V=$V" >> "$GITHUB_ENV"
+
+      - name: Tag
+        run: |
+          git config user.name  "gitea-actions"
+          git config user.email "actions@git.neet.dev"
+          git tag -a "v$V" -m "release: $V"
+          git show --stat --oneline "v$V" | head -5
+
+      - name: Push tag (skipped on dry run)
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git push origin "refs/tags/v$V"
+          echo "Pushed tag v$V. The push mirror carries it to GitHub, whose"
+          echo "release workflow builds and publishes the assets:"
+          echo "  https://github.com/GoogleBot42/luxel/actions"
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: echo "DRY RUN — nothing pushed. Would have pushed tag v$V."
