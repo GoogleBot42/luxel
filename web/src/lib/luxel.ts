@@ -2,6 +2,8 @@
 // domain are raw 16.16 fixed point (raw = value·65536) — this wrapper
 // converts at the boundary so the app deals in plain numbers.
 
+import { gatedFetch } from "./fetchgate";
+
 export interface Diagnostic {
   line: number;
   col: number;
@@ -122,7 +124,10 @@ export class Luxel {
   private constructor(private e: Exports) {}
 
   static async load(url: string): Promise<Luxel> {
-    const res = await fetch(url);
+    // Gated: on a device this shares the 2-socket pool with the startup
+    // API probe — an ungated parallel burst gets TCP-refused (the
+    // reproducible cold-load casualty was exactly this wasm fetch).
+    const res = await gatedFetch(url);
     const { instance } = await WebAssembly.instantiateStreaming(res, {});
     return new Luxel(instance.exports as unknown as Exports);
   }

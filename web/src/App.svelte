@@ -9,6 +9,7 @@
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession } from "./lib/device";
+  import { gatedFetch } from "./lib/fetchgate";
   import type { MqttStatus, Playlist, SyncStatus } from "./lib/device";
   import { DEFAULT_PATTERN, type Layout } from "./lib/examples";
   import {
@@ -1533,9 +1534,15 @@ export function render(index) {
     const override = new URLSearchParams(location.search).get("device");
     if (override !== null) return override.trim().replace(/\/+$/, "");
     try {
+      // Generous abort: on a 2-socket device the boot burst can leave this
+      // probe connection-refused for seconds (the gate retries with
+      // backoff), and a premature abort strands a real device in playground
+      // mode. Genuine playgrounds aren't delayed by it: their origins
+      // ANSWER (dev server 200-HTML, static host 404) rather than refuse,
+      // so the fetch resolves on the first try either way.
       const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 1500);
-      const r = await fetch("/api/status", { signal: ctl.signal });
+      const t = setTimeout(() => ctl.abort(), 8000);
+      const r = await gatedFetch("/api/status", { signal: ctl.signal });
       clearTimeout(t);
       const isJson = r.headers.get("content-type")?.includes("application/json");
       if (r.ok && isJson) {
@@ -1560,7 +1567,7 @@ export function render(index) {
       return;
     }
     // Probe for a local corpus gallery; its tab appears only when present.
-    void fetch(`${import.meta.env.BASE_URL}pixelblaze-library.json`)
+    void gatedFetch(`${import.meta.env.BASE_URL}pixelblaze-library.json`)
       .then((r) => (r.ok ? r.json() : null))
       .then((list) => {
         hasPixelblazeLibrary = Array.isArray(list) && list.length > 0;
