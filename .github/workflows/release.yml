@@ -117,6 +117,9 @@ jobs:
             nix build ".#luxel-fw-$board" --print-build-logs --out-link "result-$board"
             SZ=$(stat -c%s "result-$board/luxel-fw-ota.bin")
             [ "$SZ" -le "$OTA_MAX" ] || { echo "::error::$board OTA image ($SZ B) exceeds the 1 MiB OTA slot"; exit 1; }
+            # load-bearing features must be linked (the //SIZETEST guard)
+            tools/image-check.sh "result-$board/luxel-fw-ota.bin" \
+              || { echo "::error::$board image is missing load-bearing features (see tools/image-check.sh)"; exit 1; }
             cp "result-$board/luxel-fw-ota.bin" "dist/luxel-$board-$V-ota.bin"
             # full image = merged (bootloader + partitions + app, 0xFF-padded
             # to 4 MB) with the web assets written into their partition —
