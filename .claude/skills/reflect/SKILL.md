@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: End-of-substantial-work harness review — checks whether this session learned something that should update CLAUDE.md, .claude/rules, or .claude/skills, and prunes the memory index. Use after finishing a substantial piece of work, not after small or routine tasks.
+description: End-of-substantial-work harness review — checks whether this session learned something that should update CLAUDE.md, .claude/rules, or .claude/skills, whether user-facing docs cover what shipped, and prunes the memory index. Use after finishing a substantial piece of work, not after small or routine tasks.
 ---
 
 # Reflect
@@ -29,14 +29,25 @@ that's the case.
    procedure you just did twice, extend it; if no skill fits and the
    procedure is clearly repeatable, propose a new one (don't create it
    unasked for something speculative).
-4. **Prune the agent memory index**
+4. **Check that user-facing docs cover what shipped.** For anything this
+   session added or changed that a *user* touches — a builtin, an API
+   route, an MQTT topic, a wire format, a UI behavior — ask: does it have
+   a documentation home a user would actually find (README, `docs/*.md`,
+   lang.md), or does it exist only in source comments and UPDATES.md?
+   Source comments document the code for maintainers; they are not user
+   docs. Also check the docs the work touched for lines the change made
+   stale. (Real case: the MQTT topic table lived only in hamqtt.rs
+   comments from v0.1.19 until 2026-08-16 — three features shipped
+   against topics no doc listed, and it took Jeremy asking "make sure it
+   is documented" to surface. UPDATES.md is a worklog, not a reference.)
+5. **Prune the agent memory index**
    (`/home/googlebot/.claude/projects/-home-googlebot-workspace-pixler/memory/MEMORY.md`).
    If an entry's content is now codified in the repo setup (a rule, a
    skill, a doc), collapse it to a one-line "codified in X" pointer so the
    same guidance isn't loaded twice from two places. Leave entries that
    are still purely runtime/state facts (device IPs, current hardware
    status, open bugs) alone — those belong in memory, not the repo.
-5. Report back tersely: either "no changes needed" or a short list of what
+6. Report back tersely: either "no changes needed" or a short list of what
    was patched/pruned and why.
 
 ## Constraints
