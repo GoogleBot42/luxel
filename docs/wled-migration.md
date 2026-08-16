@@ -80,8 +80,12 @@ the LUXA (Luxel serves CORS, so this leg is fully readable).
 **Browser-policy edges**: an https-hosted copy (GitHub Pages) can't
 normally touch `http://` LAN devices (mixed content) — `device.ts`
 passes Chromium's Local-Network-Access `targetAddressSpace: "private"`
-hint when the page is https (permission-prompt flow on new Chromium;
-inert elsewhere), and every automated step has manual equivalents
+hint when the page is https AND the target host is actually
+private-space (RFC1918 IP or `.local`; permission-prompt flow on new
+Chromium, inert elsewhere). The hint must match the target's real
+address space — Chromium fails mismatched requests, measured against a
+localhost target from the live site — so localhost/public hosts get no
+hint. Every automated step has manual equivalents
 (open `/update` yourself, curl line for assets) shown when a fetch is
 browser-blocked. Plain-http hosting (a Luxel device serving the page, a
 LAN web-dist host) has none of these restrictions — that's the
