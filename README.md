@@ -42,7 +42,9 @@ sound-reactive patterns from your microphone — locally and on the device.
 - **Playlists** with per-item parameters, durations, and crossfades;
   survive reboots.
 - **Home Assistant** via MQTT discovery: light (power + brightness),
-  pattern select, playlist switch + next/prev, diagnostics.
+  pattern select, playlist switch + next/prev, diagnostics, and an
+  event topic for automations — full topic reference in
+  [docs/mqtt.md](docs/mqtt.md).
 - **DDP + E1.31/sACN input** — xLights/LedFx/Resolume drive the strip
   directly; the pattern resumes when the stream stops.
 - **Luxel-to-Luxel sync**: leader broadcasts its timebase, sensor data,
