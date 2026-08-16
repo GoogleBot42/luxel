@@ -28,8 +28,9 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - Be decisive on routine engineering safeguards (tests, lints, guards, docs): add them
   and report, don't ask.
 - Commit and push completed, verified work when it's the right time — don't leave
-  finished work sitting dirty in the tree waiting for Jeremy to ask (his standing
-  instruction, 2026-08-15).
+  finished work sitting dirty in the tree waiting for Jeremy to ask. Open the PR
+  AND merge it yourself; don't wait for Jeremy to merge (his standing
+  instructions, 2026-08-15).
 - OTA / live-coding / soak testing on the dev device and the Athom rig is pre-authorized
   (see .claude/skills/deploy-device and athom-rig).
 - Ask first for: irreversible hardware actions, outward-facing actions, and design
