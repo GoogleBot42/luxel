@@ -21,11 +21,15 @@
 type LnaInit = RequestInit & { targetAddressSpace?: "private" | "local" };
 
 /** The LNA hint only helps (and is only safe to send) from an https page
- * reaching down to a plain-http PRIVATE-network device — the mixed-content
- * case. Chromium fails any request whose actual address space doesn't
- * match the hint (measured: hinting "private" broke localhost targets,
- * whose space is "local"), so derive it from the target host and send
- * nothing for localhost (already mixed-content-exempt) or public hosts. */
+ * reaching down to a plain-http local-network device — the mixed-content
+ * case. Per Chrome's Local Network Access spec the value is "local"
+ * (the PNA-era "private" was renamed; "local" parses on old builds too),
+ * and Chrome auto-detects private-IP literals and .local hosts anyway —
+ * the explicit hint is what buys the mixed-content exemption. Chromium
+ * fails any request whose actual address space doesn't match the hint
+ * (measured against a loopback target from the live site), so send it
+ * only for hosts that are genuinely local-space, and never for loopback
+ * (already mixed-content-exempt). */
 function lnaHint(origin: string): LnaInit {
   if (window.location.protocol !== "https:") return {};
   const host = new URL(origin).hostname;
@@ -36,7 +40,7 @@ function lnaHint(origin: string): LnaInit {
     (oct[1] === "10" ||
       (oct[1] === "192" && oct[2] === "168") ||
       (oct[1] === "172" && Number(oct[2]) >= 16 && Number(oct[2]) <= 31));
-  if (privateIp || host.endsWith(".local")) return { targetAddressSpace: "private" };
+  if (privateIp || host.endsWith(".local")) return { targetAddressSpace: "local" };
   return {};
 }
 
