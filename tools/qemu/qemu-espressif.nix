@@ -78,6 +78,20 @@ in
     substituteInPlace hw/misc/esp32_aes.c \
       --replace-fail "    AES_KEY aes_key;" \
                      "    AES_KEY aes_key; if (s->mode.bits != 128 && s->mode.bits != 192 && s->mode.bits != 256) { s->aes_idle_reg = 1; return; }"
+    # ESP32 silicon comes out of reset with CPENABLE=0xff (all coprocessors
+    # enabled), but generic xtensa cpu_reset only does that under
+    # CONFIG_USER_ONLY, so in system mode the first FP instruction traps
+    # Cp0Disabled — and xtensa-lx-rt's save_context re-faults spilling
+    # f0..f15, turning it into a silent double exception. Re-apply the
+    # silicon reset value on both cores. Ref espressif/qemu#154 and the
+    # unmerged PR #155 (which only fixes esp32s3).
+    substituteInPlace hw/xtensa/esp32.c \
+      --replace-fail "        cpu_reset(CPU(&s->cpu[0]));" \
+                     "        cpu_reset(CPU(&s->cpu[0]));
+            s->cpu[0].env.sregs[CPENABLE] = 0xff;" \
+      --replace-fail "        cpu_reset(CPU(&s->cpu[1]));" \
+                     "        cpu_reset(CPU(&s->cpu[1]));
+            s->cpu[1].env.sregs[CPENABLE] = 0xff;"
   '';
   # espressif's tree force-enables slirp while the meson dep lookup can
   # fail silently — hand the paths straight to cc/ld
