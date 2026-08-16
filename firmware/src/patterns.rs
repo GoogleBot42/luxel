@@ -252,9 +252,20 @@ async fn read_source(
     count: u8,
 ) -> Option<String> {
     let mut cache = NoCache::new();
+    // The count comes from a stored TOC record — never trust it with an
+    // infallible alloc. A corrupt record on the Athom claimed 32 chunks
+    // (120 KB: 4× the writer's own MC cap) and the with_capacity here
+    // OOM-panic-rebooted the device on every /api/patterns/<id> fetch,
+    // i.e. every web-app cold load (found via serial, 2026-08-15).
+    if count > MC {
+        return None;
+    }
     // pre-size to avoid Vec doubling (a large pattern's peak alloc matters on
-    // a fragmented heap — see get_json).
-    let mut out: Vec<u8> = Vec::with_capacity(count as usize * CHUNK);
+    // a fragmented heap — see get_json), but fallibly.
+    let mut out: Vec<u8> = Vec::new();
+    if out.try_reserve_exact(count as usize * CHUNK).is_err() {
+        return None;
+    }
     for c in 0..count {
         let key = chunk_key(seq, gen, c);
         match map::fetch_item::<u32, &[u8], _>(af, range.clone(), &mut cache, buf, &key).await {
@@ -275,7 +286,14 @@ async fn read_bc(
     bc_count: u8,
 ) -> Option<Vec<u8>> {
     let mut cache = NoCache::new();
-    let mut out: Vec<u8> = Vec::with_capacity(bc_count as usize * CHUNK);
+    // Same defense as read_source: bc_count is untrusted stored data.
+    if bc_count > MC_BC {
+        return None;
+    }
+    let mut out: Vec<u8> = Vec::new();
+    if out.try_reserve_exact(bc_count as usize * CHUNK).is_err() {
+        return None;
+    }
     for c in 0..bc_count {
         let key = bc_chunk_key(seq, gen, c);
         match map::fetch_item::<u32, &[u8], _>(af, range.clone(), &mut cache, buf, &key).await {

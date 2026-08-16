@@ -2,7 +2,7 @@
 # workspace: it builds for a different target than the host crates.
 [package]
 name = "luxel-fw"
-version = "0.1.34"
+version = "0.1.35"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -61,6 +61,10 @@ board-c3-devkit = ["esp32c3"]
 board-athom-music = ["esp32"]
 board-pixelblaze-v3 = ["esp32"]
 board-esp32-generic = ["esp32"]
+# RAM-constrained profile (S2/C2 tier, see docs/boards.md): web pool 3→2
+# (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
+# browser navigation — Chromium preconnect wants 3 sockets at cold nav.
+small-chip = []
 
 # Chip features (selected via a board feature, not directly).
 esp32c3 = [

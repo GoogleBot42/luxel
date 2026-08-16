@@ -173,12 +173,17 @@ async fn main(spawner: Spawner) -> ! {
     // (read_wifi, asset streaming) ate it: deterministic stack-guard
     // panics with SP at the stack floor and PC in
     // esp_rom_spiflash_read_status (Athom, v0.1.32, 2026-07-27). 80 KB
-    // puts .stack at ~30 KB (31 KB ran clean for weeks). Runtime
-    // heap_free ~102 KB — pattern loads need stored×2 + 24 KB (resume.rs)
-    // and the soak peaked well under this. The esp-rtos stack guard +
-    // boot-loop guard catch it non-destructively if this ever proves too
-    // tight.
-    #[cfg(feature = "esp32")]
+    // puts .stack at ~30 KB (31 KB ran clean for weeks) with the 3-slot
+    // web pool. The pairing matters: `small-chip` drops the pool to 2
+    // slots (server::WEB_TASK_POOL_SIZE), freeing ~8.6 KB of task arena,
+    // and 88 KB here banks that as heap while keeping .stack in the same
+    // measured ~30 KB zone (stack-check verified at 30,564 B). Never mix
+    // 88 KB with the 3-slot pool — that lands ~22 KB of stack, under the
+    // 24 KB floor. The esp-rtos stack guard + boot-loop guard catch it
+    // non-destructively if this ever proves too tight.
+    #[cfg(all(feature = "esp32", feature = "small-chip"))]
+    esp_alloc::heap_allocator!(size: 88 * 1024);
+    #[cfg(all(feature = "esp32", not(feature = "small-chip")))]
     esp_alloc::heap_allocator!(size: 80 * 1024);
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);

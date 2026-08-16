@@ -110,9 +110,21 @@ fn status_json() -> String {
     // soak-log signal that shedding actually happened on this device.
     let src = crate::shared::current_src_available();
     let bc = crate::shared::current_bc_available();
+    // Per-slot lifecycle stages (see SLOT_STAGE) — a slot parked at a
+    // shutdown stage is wedged on a client that won't close its half.
+    let web = {
+        let mut s = String::new();
+        for (i, st) in SLOT_STAGE.iter().take(WEB_TASK_POOL_SIZE).enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push_str(&format!("{}", st.load(Ordering::Relaxed)));
+        }
+        s
+    };
     match get_vmerr() {
         Some(e) => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"vmerr\":\"{}\"}}",
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":\"{}\"}}",
             fps,
             pixels,
             slot,
@@ -121,11 +133,12 @@ fn status_json() -> String {
             live,
             src,
             bc,
+            web,
             json_escape(&e)
         ),
         None => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"vmerr\":null}}",
-            fps, pixels, slot, version, heap, live, src, bc
+            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":null}}",
+            fps, pixels, slot, version, heap, live, src, bc, web
         ),
     }
 }
@@ -1335,17 +1348,28 @@ pub fn make_app() -> picoserve::Router<impl picoserve::routing::PathRouter> {
     picoserve::Router::new().nest_service("", Api)
 }
 
-// 3. History: the original 3rd slot fed the preview websocket and cost
+// 2. History: the original 3rd slot fed the preview websocket and cost
 // 32 KB of static connection buffers, so the size diet cut it. Buffers
-// have since moved to per-task 4+4 KB heap vecs, so a slot now costs
-// ~8 KB heap — and 2 proved too few for a BROWSER: page load fires
-// css/js/wasm/gallery in parallel, and with both sockets busy the rest
-// get TCP-refused. Chromium against the Athom reproducibly dropped
-// luxel.wasm at 2 (ERR_CONNECTION_REFUSED mid-load, 2026-07-26); at 3
-// the shell loads clean. The web app additionally caps its own API
-// concurrency at 2 and retries refused fetches (device.ts), so the
-// third socket mostly serves the browser's asset burst.
-pub const WEB_TASK_POOL_SIZE: usize = 3;
+// have since moved to per-task 4+4 KB heap vecs — but each slot still
+// embeds picoserve's whole response-path future as ~8.6 KB of STATIC
+// task arena (the arena that ate v0.1.33's stack margin) plus ~8 KB of
+// heap. The pool briefly went back to 3 (v0.1.31) because a cold page
+// load fires css/js/wasm/gallery in parallel and Chromium against the
+// Athom reproducibly dropped luxel.wasm at 2 (ERR_CONNECTION_REFUSED
+// mid-load, 2026-07-26) — but that was the wrong layer paying: the web
+// app now routes EVERY fetch it fires (assets included, not just API
+// calls) through a global 2-in-flight gate with backoff-retry on
+// refused connections (web fetchgate.ts). That absorbs everything the
+// PAGE does — but not what the BROWSER does before the page exists:
+// Chromium opens ~2 sockets at cold navigation (speculative preconnect
+// plus the nav itself; serial-correlated on the Athom 2026-08-15, and
+// --disable-features=NetworkPrediction does not stop it). At 2 slots
+// the preconnects win and the navigation SYN is refused — "site can't
+// be reached" on first visit, no client code can compensate. So:
+// browser-facing devices keep 3 slots; the `small-chip` profile takes
+// 2 slots (saving ~8.6 KB static task arena + ~8 KB heap) and accepts
+// an occasionally-refused first navigation (reload works).
+pub const WEB_TASK_POOL_SIZE: usize = if cfg!(feature = "small-chip") { 2 } else { 3 };
 
 // keep_connection_alive: without it every preview poll (15/s) pays a full
 // TCP open/close on a chip with a 2-connection pool — the browser reuses
@@ -1359,7 +1383,7 @@ static CONFIG: picoserve::Config = picoserve::Config {
         // One timer for an ENTIRE request body, not per-read — must cover a
         // full OTA upload on a slow link (~20s at 55 KB/s + erase pauses).
         // But NOT much more: an abandoned upload (client timed out mid-body)
-        // pins one of only THREE server sockets until this expires — at the
+        // pins one of only TWO server sockets until this expires — at the
         // original 300s a couple of WiFi hiccups cascaded into minutes-long
         // outages (the hw-bench soak lost ~60 requests to exactly this).
         read_request: picoserve::time::Duration::from_secs(45),
@@ -1367,6 +1391,111 @@ static CONFIG: picoserve::Config = picoserve::Config {
     },
     connection: picoserve::KeepAlive::KeepAlive,
 };
+
+// Per-slot lifecycle stage, exposed as "web" in /api/status. Diagnostic for
+// the slot-wedge class: a slot that sits at a shutdown stage (3-5) is stuck
+// tearing down a connection the client won't close.
+//   0 accepting · 1 serving · 2 shutdown entered · 3 FIN sent (close)
+//   4 discard done · 5 flush done · 9 abort path
+pub static SLOT_STAGE: [core::sync::atomic::AtomicU8; 4] = [
+    core::sync::atomic::AtomicU8::new(0),
+    core::sync::atomic::AtomicU8::new(0),
+    core::sync::atomic::AtomicU8::new(0),
+    core::sync::atomic::AtomicU8::new(0),
+];
+fn slot_stage(id: usize, stage: u8) {
+    SLOT_STAGE[id & 3].store(stage, Ordering::Relaxed);
+}
+
+// TcpSocket wrapper that bounds the graceful-shutdown FIN-wait at 2 s.
+// picoserve's embassy shutdown reuses `timeouts.read_request` (our 45 s,
+// sized for OTA bodies) as "wait for the CLIENT's FIN after ours" — and
+// browsers' socket pools routinely sit on connections after our FIN, so
+// an idle keep-alive/preconnect socket pinned a pool slot (measured on the
+// Athom with 2 idle raw connections: refusals until the client closed). At
+// 2 slots that starves every cold page load. The shutdown stages are
+// reimplemented inline (close → bounded discard → bounded flush) with
+// embassy_time::with_timeout directly and stage markers, so a wedge shows
+// up in /api/status as the exact stuck stage. A client that hasn't FIN'd
+// 2 s after us gets the connection dropped (embassy-net aborts on drop);
+// the response was already flushed.
+struct QuickCloseSocket<'s> {
+    sock: embassy_net::tcp::TcpSocket<'s>,
+    task_id: usize,
+}
+
+const SHUTDOWN_GRACE: embassy_time::Duration = embassy_time::Duration::from_secs(2);
+
+impl<'s> picoserve::io::Socket<picoserve::EmbassyRuntime> for QuickCloseSocket<'s> {
+    type Error = embassy_net::tcp::Error;
+    type ReadHalf<'a>
+        = embassy_net::tcp::TcpReader<'a>
+    where
+        's: 'a;
+    type WriteHalf<'a>
+        = embassy_net::tcp::TcpWriter<'a>
+    where
+        's: 'a;
+
+    fn split(&mut self) -> (Self::ReadHalf<'_>, Self::WriteHalf<'_>) {
+        self.sock.split()
+    }
+
+    async fn abort<T: picoserve::Timer<picoserve::EmbassyRuntime>>(
+        mut self,
+        _timeouts: &picoserve::Timeouts,
+        _timer: &mut T,
+    ) -> Result<(), picoserve::Error<Self::Error>> {
+        slot_stage(self.task_id, 9);
+        embassy_net::tcp::TcpSocket::abort(&mut self.sock);
+        let _ = embassy_time::with_timeout(SHUTDOWN_GRACE, self.sock.flush()).await;
+        Ok(())
+    }
+
+    async fn shutdown<T: picoserve::Timer<picoserve::EmbassyRuntime>>(
+        mut self,
+        _timeouts: &picoserve::Timeouts,
+        _timer: &mut T,
+    ) -> Result<(), picoserve::Error<Self::Error>> {
+        slot_stage(self.task_id, 2);
+        let t0 = embassy_time::Instant::now();
+        self.sock.close();
+        slot_stage(self.task_id, 3);
+        {
+            let (mut rx, _tx) = self.sock.split();
+            let mut buf = [0u8; 128];
+            let r = embassy_time::with_timeout(SHUTDOWN_GRACE, async {
+                use embedded_io_async::Read;
+                while matches!(rx.read(&mut buf).await, Ok(n) if n > 0) {}
+            })
+            .await;
+            if r.is_err() {
+                esp_println::println!("http[{}]: shutdown discard grace expired", self.task_id);
+            }
+        }
+        slot_stage(self.task_id, 4);
+        if embassy_time::with_timeout(SHUTDOWN_GRACE, self.sock.flush())
+            .await
+            .is_err()
+        {
+            esp_println::println!("http[{}]: shutdown flush grace expired", self.task_id);
+        }
+        esp_println::println!(
+            "http[{}]: closed ({} ms)",
+            self.task_id,
+            t0.elapsed().as_millis()
+        );
+        // Leave the socket in a terminal state before drop: if the peer
+        // never FIN'd, the graceful close above leaves a live TCP state
+        // (FIN-WAIT), and the slot's rx/tx buffers are re-lent to a fresh
+        // socket the moment this returns. An explicit abort (RST, flushed)
+        // ends the connection for certain.
+        embassy_net::tcp::TcpSocket::abort(&mut self.sock);
+        let _ = embassy_time::with_timeout(SHUTDOWN_GRACE, self.sock.flush()).await;
+        slot_stage(self.task_id, 5);
+        Ok(())
+    }
+}
 
 #[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
 pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
@@ -1409,9 +1538,17 @@ pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
         }
         http_buffer.resize(4 * 1024, 0);
 
-        let _ = picoserve::Server::new(&app, &CONFIG, &mut http_buffer)
-            .serve(socket)
+        slot_stage(task_id, 1);
+        let served = picoserve::Server::new(&app, &CONFIG, &mut http_buffer)
+            .serve(QuickCloseSocket {
+                sock: socket,
+                task_id,
+            })
             .await;
+        if let Err(e) = served {
+            esp_println::println!("http[{}]: serve error: {:?}", task_id, e);
+        }
+        slot_stage(task_id, 0);
         // http_buffer freed here
     }
 }
