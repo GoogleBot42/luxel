@@ -1,0 +1,155 @@
+name: release
+
+# Publishes a release when a `vX.Y.Z` tag arrives.
+#
+# This GitHub repo is a READ-ONLY DOWNSTREAM MIRROR of the Gitea source of
+# truth (git.neet.dev/zuckerberg/luxel, Tailscale-only). Tags are cut on
+# Gitea (.gitea/workflows/cut-release.yml or tools/release.sh) and reach
+# here via the push mirror; this workflow's only job is to build and attach
+# release assets to the mirrored tag. It must NEVER create commits or tags —
+# that would diverge from the mirror. Hence: no workflow_dispatch on tags;
+# the version in firmware/Cargo.toml is the source of truth and must already
+# equal the tag (cut-release validates that before the tag leaves Gitea).
+#
+# Assets per release (see docs/releases.md for what each is for):
+#   luxel-<board>-<ver>-ota.bin   app-only image: POST /api/ota, and the
+#                                 image WLED's /update page accepts for the
+#                                 WLED→Luxel takeover (docs/wled-migration.md)
+#   luxel-<board>-<ver>-full.bin  full-flash image incl. bootloader,
+#                                 partition table, app AND the web assets:
+#                                 espflash write-bin 0x0 <file>
+#   luxel-web-assets-<ver>.luxa   the packed web app alone: POST /api/assets
+#   luxel-web-dist-<ver>.tar.gz   the playground as plain static files
+#                                 (host anywhere; playground mode needs no
+#                                 device)
+#   luxel-elfs-<ver>.tar.gz       per-board ELFs for symbolicating panic
+#                                 backtraces (tools/decode-backtrace.sh)
+#   sha256sums.txt
+#
+# IMPORTANT: release images are built with the flake's PURE evaluation, so
+# they bake NO WiFi credentials (a pure build cannot see the environment).
+# A credless device boots into AP-mode provisioning (open AP luxel-XXXX,
+# captive portal) — that is the intended public setup path. Never wire
+# creds into this workflow.
+#
+# The job is idempotent: re-running upserts the release and re-uploads
+# missing assets.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write        # create releases + upload assets (never commits)
+
+jobs:
+  release:
+    # Gitea Actions also picks up .github/workflows/ — this guard makes sure
+    # the heavy build only ever runs on GitHub's runners, never on the Gitea
+    # runner (which has no nix).
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # 3× Xtensa -Zbuild-std release builds are slow
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0   # full history for release notes
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Resolve and verify version
+        id: ver
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$' \
+            || { echo "::error::invalid tag '$GITHUB_REF_NAME' (expected vX.Y.Z)"; exit 1; }
+          TOML="$(sed -n 's/^version = "\(.*\)"$/\1/p' firmware/Cargo.toml | head -1)"
+          [ "$TOML" = "$V" ] || { echo "::error::firmware/Cargo.toml ('$TOML') != tag version ('$V'). Tags are cut from Gitea (cut-release), which validates this — do not hand-create tags."; exit 1; }
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V"    >> "$GITHUB_OUTPUT"
+          echo "Release v$V"
+
+      - name: Build web app + pack assets
+        # The devshell provides node + stable rust with the wasm target (the
+        # web build compiles luxel-wasm). Also produces the plain static
+        # dist/ for hosting the playground anywhere.
+        #
+        # web/public is gitignored build output — it must exist before
+        # `npm run wasm`'s cp step (same gotcha as fresh worktrees).
+        #
+        # A fresh clone has no corpus/, so the packed gallery is built from
+        # the clean-room library/ alone and pixelblaze-library.json is NOT
+        # produced — deliberate: the scraped corpus is never redistributed
+        # (rehearsed 2026-08-15: 5-file LUXA, ~615 KB).
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            mkdir -p web/public dist-luxa
+            cd web
+            npm ci
+            npm run build
+            node tools/pack-assets.mjs ../dist-luxa/web-assets.luxa
+          '
+          mkdir -p dist
+          V=${{ steps.ver.outputs.version }}
+          cp dist-luxa/web-assets.luxa "dist/luxel-web-assets-$V.luxa"
+          tar -C web/dist -czf "dist/luxel-web-dist-$V.tar.gz" .
+          # the LUXA must fit the 0x0F0000 assets partition
+          LUXA_MAX=$((0x0F0000))
+          SZ=$(stat -c%s dist-luxa/web-assets.luxa)
+          [ "$SZ" -le "$LUXA_MAX" ] || { echo "::error::web-assets.luxa ($SZ B) exceeds the assets partition ($LUXA_MAX B)"; exit 1; }
+
+      - name: Build firmware (all boards)
+        # Pure nix builds: credless by construction (see header note).
+        # Sequential in one job so the Xtensa toolchain downloads once.
+        run: |
+          V=${{ steps.ver.outputs.version }}
+          OTA_MAX=$((0x100000))   # 1 MiB OTA slot (firmware/partitions.csv)
+          ASSETS_OFF=$((0x310000))
+          mkdir -p elfs
+          for board in c3-devkit pixelblaze-v3 athom-music esp32-generic; do
+            echo "::group::luxel-fw-$board"
+            nix build ".#luxel-fw-$board" --print-build-logs --out-link "result-$board"
+            SZ=$(stat -c%s "result-$board/luxel-fw-ota.bin")
+            [ "$SZ" -le "$OTA_MAX" ] || { echo "::error::$board OTA image ($SZ B) exceeds the 1 MiB OTA slot"; exit 1; }
+            cp "result-$board/luxel-fw-ota.bin" "dist/luxel-$board-$V-ota.bin"
+            # full image = merged (bootloader + partitions + app, 0xFF-padded
+            # to 4 MB) with the web assets written into their partition —
+            # the same composition as firmware/build-esp32.sh `image`
+            cp "result-$board/luxel-fw.bin" "dist/luxel-$board-$V-full.bin"
+            chmod +w "dist/luxel-$board-$V-full.bin"
+            dd if=dist-luxa/web-assets.luxa "of=dist/luxel-$board-$V-full.bin" \
+               bs=4096 seek=$((ASSETS_OFF / 4096)) conv=notrunc status=none
+            cp "result-$board/luxel-fw.elf" "elfs/luxel-$board-$V.elf"
+            echo "::endgroup::"
+          done
+          tar -czf "dist/luxel-elfs-$V.tar.gz" -C elfs .
+
+      - name: Checksums + stage summary
+        run: |
+          cd dist
+          sha256sum -- * > sha256sums.txt
+          echo "--- release assets ---"; ls -l
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Firmware images are **credential-free**: a freshly flashed device
+            boots an open `luxel-xxxx` WiFi access point with a captive-portal
+            setup page — join it and enter your WiFi there.
+
+            - **New device** (or full reset): `espflash write-bin 0x0 luxel-<board>-*-full.bin`
+            - **Update over the network**: `curl --data-binary @luxel-<board>-*-ota.bin http://<device>/api/ota`
+            - **WLED device takeover**: upload `luxel-<board>-*-ota.bin` via WLED's update page
+            - **Web app only**: `curl --data-binary @luxel-web-assets-*.luxa http://<device>/api/assets`

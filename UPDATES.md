@@ -1,5 +1,43 @@
 # Update log
 
+## 2026-08-15 (night) — CI/releases (issue #8): Gitea-tags → GitHub-builds
+## pipeline, modeled on open-nanokvm-pro
+
+Jeremy created github.com/GoogleBot42/luxel and pointed at
+open-nanokvm-pro as the reference; the same architecture now exists here
+(docs/releases.md is the canonical writeup):
+
+- **Gitea stays the source of truth** (Tailscale-only); the push mirror
+  Jeremy configured already replicates to GitHub (verified: the mirror
+  carried a merge within minutes).
+- **`.gitea/workflows/cut-release.yml`** — tag-cutting from the Gitea UI.
+  Unlike onkp there is NO version-bump commit: luxel's version is bumped
+  in the shipping PR (firmware/Cargo.toml), so cut-release only validates
+  tag == Cargo.toml and pushes the tag. `tools/release.sh` is the
+  local/agent fallback (tea API path — the agent has no direct push).
+- **`.github/workflows/release.yml`** — GitHub-only (server_url guard,
+  since Gitea Actions also reads .github/workflows). On a mirrored
+  vX.Y.Z tag: nix-builds all four board variants (the flake's existing
+  luxel-fw-* packages: ELF + merged full image + OTA image), builds the
+  web app + LUXA, composes full images (LUXA dd'd at 0x310000, same as
+  build-esp32.sh image), guards OTA size ≤ 1 MiB and LUXA ≤ the assets
+  partition, and publishes: per-board `-ota.bin` + `-full.bin`, the
+  `.luxa`, a static `web-dist` tarball (issues #10/#11 fodder), an ELF
+  bundle for backtrace decoding, and sha256sums.
+
+Two properties fell out for free and are now documented invariants:
+release firmware is **credless by construction** (pure nix eval can't see
+creds.env → AP-mode provisioning is the setup path) and release web
+bundles are **corpus-free by construction** (fresh clone has no corpus/ →
+gallery builds from the clean-room library/ only; rehearsed: 5-file LUXA,
+615 KB vs the dev checkout's 6-file 930 KB).
+
+Everything rehearsed locally before the workflows were written: all four
+`nix build .#luxel-fw-*` variants build (Athom OTA 916 KB, fits), a
+pristine clone builds the web app (after `mkdir -p web/public` — the
+fresh-worktree gotcha, now in the workflow), the dd-composition
+byte-verified, actionlint clean.
+
 ## 2026-08-15 (evening) — v0.1.36: flash-access fairness under playlist
 ## churn — the driver never leaves the global
 
