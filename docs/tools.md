@@ -22,7 +22,8 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 | `tools/soak.mjs` | The host-side twin: same pattern-churn against `luxel serve` (the native mirror) — liveness/fps/memory without hardware. |
 | `tools/stack-check.sh [budget]` | Builds the Xtensa firmware with `-Z emit-stack-sizes` and fails if any function's stack frame exceeds the budget (default 12 KB). Sees EVERY linked function incl. deps — catches what clippy's lints can't. `stack-check.py` is its ELF parser. |
 | `tools/size-report.py` | Flash-size breakdown of the firmware ELF (see docs/size-report.md for the methodology + history). |
-| `tools/qemu/qemu-espressif.nix` | Nix derivation for Espressif's QEMU fork (esp32 machine, flash-file backed) — the firmware-emulation spike artifact; see docs/research/qemu-emulation-spike.md before using. |
+| `tools/qemu/qemu-espressif.nix` | Nix derivation for Espressif's QEMU fork (esp32 machine, flash-file backed), carrying the patches that make esp-rs firmware run: CPENABLE reset, DPORT `INTR_STATUS`, TIMG level-int gating (`tools/qemu/patches/`). Stock images boot to the WiFi task — see docs/research/qemu-emulation-spike.md for the CLI and the divergence notes. |
+| `tools/qemu/make-efuse.py [-o efuse.bin]` | Generates the eFuse backing image that presents chip revision v3.0 to the guest, so *unmodified release* firmware clears esp-hal's min-revision gate under QEMU. Attach with `-drive ...,id=efuse -global driver=nvram.esp32.efuse,property=drive,value=efuse` (add `snapshot=on` in CI — the model writes back on a fuse burn). |
 | `tools/image-check.sh <elf-or-bin>` | Asserts load-bearing features (WLED takeover, AP provisioning, boot guard) are actually linked into a built image via their serial-string markers — the //SIZETEST regression guard. Runs automatically in build-esp32.sh and the release workflow. |
 
 ## Compatibility: corpus & oracle
