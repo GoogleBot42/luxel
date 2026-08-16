@@ -20,12 +20,28 @@
  * unknown dictionary members are ignored by other browsers. */
 type LnaInit = RequestInit & { targetAddressSpace?: "private" | "local" };
 
-function lna(init: RequestInit = {}, timeoutMs = 4000): LnaInit {
-  // The hint only helps (and is only safe to send) when we're an https
-  // page reaching down to a plain-http LAN device — the mixed-content case.
-  const hint: LnaInit =
-    window.location.protocol === "https:" ? { targetAddressSpace: "private" } : {};
-  return { signal: AbortSignal.timeout(timeoutMs), ...hint, ...init };
+/** The LNA hint only helps (and is only safe to send) from an https page
+ * reaching down to a plain-http PRIVATE-network device — the mixed-content
+ * case. Chromium fails any request whose actual address space doesn't
+ * match the hint (measured: hinting "private" broke localhost targets,
+ * whose space is "local"), so derive it from the target host and send
+ * nothing for localhost (already mixed-content-exempt) or public hosts. */
+function lnaHint(origin: string): LnaInit {
+  if (window.location.protocol !== "https:") return {};
+  const host = new URL(origin).hostname;
+  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return {};
+  const oct = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
+  const privateIp =
+    oct !== null &&
+    (oct[1] === "10" ||
+      (oct[1] === "192" && oct[2] === "168") ||
+      (oct[1] === "172" && Number(oct[2]) >= 16 && Number(oct[2]) <= 31));
+  if (privateIp || host.endsWith(".local")) return { targetAddressSpace: "private" };
+  return {};
+}
+
+function lna(origin: string, init: RequestInit = {}, timeoutMs = 4000): LnaInit {
+  return { signal: AbortSignal.timeout(timeoutMs), ...lnaHint(origin), ...init };
 }
 
 /** Accepts "192.168.1.50", "192.168.1.50:8080", "luxel.local", or a full
@@ -60,7 +76,7 @@ export async function probeDevice(origin: string): Promise<Probe> {
   // Luxel first: its status shape (version + slot) doubles as the success
   // signature after the takeover, and its CORS always works.
   try {
-    const res = await fetch(`${origin}/api/status`, lna());
+    const res = await fetch(`${origin}/api/status`, lna(origin));
     if (res.ok) {
       const s = (await res.json()) as { version?: string; slot?: string };
       if (typeof s.version === "string" && typeof s.slot === "string")
@@ -70,7 +86,7 @@ export async function probeDevice(origin: string): Promise<Probe> {
     /* fall through */
   }
   try {
-    const res = await fetch(`${origin}/json/info`, lna());
+    const res = await fetch(`${origin}/json/info`, lna(origin));
     if (res.ok) {
       const i = (await res.json()) as { arch?: string; ver?: string; name?: string };
       if (typeof i.arch === "string")
@@ -80,7 +96,7 @@ export async function probeDevice(origin: string): Promise<Probe> {
     /* fall through */
   }
   try {
-    await fetch(`${origin}/json/info`, lna({ mode: "no-cors" }));
+    await fetch(`${origin}/json/info`, lna(origin, { mode: "no-cors" }));
     return { kind: "reachable" }; // opaque response — WLED 0.13's CORS-less API
   } catch {
     return { kind: "unreachable", blocked: browserBlocked(origin) };
@@ -95,7 +111,7 @@ export async function uploadToWled(origin: string, image: Blob, filename: string
   const form = new FormData();
   form.append("update", new File([image], filename, { type: "application/octet-stream" }));
   try {
-    await fetch(`${origin}/update`, lna({ method: "POST", body: form, mode: "no-cors" }, 120_000));
+    await fetch(`${origin}/update`, lna(origin, { method: "POST", body: form, mode: "no-cors" }, 120_000));
     return true;
   } catch {
     return false;
@@ -131,7 +147,7 @@ export async function waitForLuxel(
  * headers, so the result is readable. Hot-reloads, no reboot. */
 export async function pushAssets(origin: string, luxa: ArrayBuffer): Promise<boolean> {
   try {
-    const res = await fetch(`${origin}/api/assets`, lna({ method: "POST", body: luxa }, 120_000));
+    const res = await fetch(`${origin}/api/assets`, lna(origin, { method: "POST", body: luxa }, 120_000));
     return res.ok;
   } catch {
     return false;
