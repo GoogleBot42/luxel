@@ -236,7 +236,13 @@
       packages = forEachSystem (pkgs:
         # Firmware images need the Xtensa artifacts (x86_64-linux hashes only).
         lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux")
-          (lib.mapAttrs (_: v: mkFirmware pkgs v) firmwareVariants));
+          (lib.mapAttrs (_: v: mkFirmware pkgs v) firmwareVariants)
+        // {
+          # Espressif's patched QEMU fork — the emulation harness
+          # (tools/qemu/takeover-test.py, docs/research/qemu-emulation-spike.md)
+          # resolves it as `nix build .#qemu-espressif`.
+          qemu-espressif = import ./tools/qemu/qemu-espressif.nix { inherit pkgs; };
+        });
 
       formatter = forEachSystem (pkgs: pkgs.nixfmt-rfc-style);
     };

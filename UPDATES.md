@@ -1,5 +1,48 @@
 # Update log
 
+## 2026-08-16 — The WLED takeover now has a hardware-free
+## compose→boot→assert test (Gitea #43)
+
+`tools/qemu/takeover-test.py` builds a 4 MiB flash in the exact state a
+real Athom is in the instant WLED's OTA updater accepts a Luxel upload —
+stock dump, configured WLED littlefs at 0x310000, `luxel-fw-ota.bin` in an
+app slot, an otadata entry selecting it — boots it under the patched
+emulator from this morning's spike, and asserts on both the takeover's
+serial narration and the flash bytes it leaves behind: Luxel's partition
+table at 0x8000, the `LXCF` record carrying the inherited SSID, the copied
+image byte-for-byte at ota_0, WLED's littlefs untouched, and the
+otadata/boot-guard state. One QEMU invocation covers both boots
+(`software_reset()` reboots in-process); it exits the moment boot 2 prints
+`wifi: creds from flash ("…")`, which is the inheritance proof and also
+the last safe moment — the PHY panic's reboot would otherwise let a third
+boot's `boot_guard` rewrite otadata.
+
+Two variants, both passing against a **stock** image (isolation rule
+holds: nothing here touches firmware source):
+
+- `--slot app1` (default) — the realistic post-upload state, exercising
+  the full 920 KiB self-copy where issue #35's verify flake lives. 23
+  assertions, **12 s**.
+- `--slot app0` — image already at the destination; the skip-the-copy
+  path. 20 assertions, **1.5 s**.
+
+Three things the first run taught us, now encoded as comments rather than
+worked around: the `software_reset()` boot doesn't survive under QEMU (ROM
+banner truncates, TG0 watchdog fires, and *that* reset loads Luxel —
+cosmetic, pre-bootloader); the ESP-IDF bootloader **writes otadata back**
+on the erased-otadata fallback (`seq=1`, `ESP_OTA_IMG_VALID`), so
+"erased" was the wrong expectation there; and only the first 0x80000 of
+WLED's app1 survives boot 2, because under the new table 0x210000 is
+Luxel's `storage` partition and the pattern store legitimately reclaims
+it. Also newly confirmed: `esp-storage`'s `FlashStorage::capacity()`
+reports the true 4 MiB under emulation, so the takeover's flash-size
+preflight is exercised, not skipped.
+
+Espressif's QEMU fork is now a proper flake output
+(`nix build .#qemu-espressif`), which was the standing TODO in
+`tools/qemu/qemu-espressif.nix`; the `--impure` expression still works and
+the test falls back to it.
+
 ## 2026-08-16 — QEMU emulation unblocked: stock firmware boots under
 ## emulation, takeover-in-CI is go
 
