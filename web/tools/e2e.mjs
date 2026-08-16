@@ -185,6 +185,29 @@ try {
   check("banner clears after fix", (await page.$(".banner.error")) === null && !fixedDoc.includes("@@@"));
   await page.screenshot({ path: `${shotDir}/e2e-2-typing.png` });
 
+  // ── 3b. event injection: a preview click feeds readEvent() ──
+  await setEditor(
+    page,
+    "var ev = array(4)\nvar hit = 0\n" +
+      "export function beforeRender(delta) { while (readEvent(ev)) hit = 1 }\n" +
+      "export function render(index) { rgb(hit, 0, 0) }",
+  );
+  await sleep(300);
+  const stripPx = () =>
+    page.$eval(".strip", (c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, 1).data;
+      return Array.from(d).some((v, i) => i % 4 !== 3 && v > 0);
+    });
+  const darkBefore = !(await stripPx());
+  await page.click(".strip"); // pointerdown → inject event at the click
+  await sleep(300);
+  const litAfter = await stripPx();
+  check("preview click injects a readEvent event", darkBefore && litAfter, `dark=${darkBefore} lit=${litAfter}`);
+  await page.screenshot({ path: `${shotDir}/e2e-2b-events.png` });
+  // restore the rainbow the debugger section expects (render on line 1)
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
+  await sleep(300);
+
   // ── 4. debugger: gutter breakpoint on the render line (line 1) pauses ──
   const lineRect = await page.$$eval(".cm-line", (els) => {
     const r = els[0].getBoundingClientRect(); // line 1 = render body

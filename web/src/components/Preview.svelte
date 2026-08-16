@@ -1,7 +1,39 @@
 <script lang="ts">
+  import { createEventDispatcher } from "svelte";
   import type { Layout } from "../lib/examples";
 
   export let layout: Layout;
+
+  // Click/drag anywhere on the preview → an `inject` event with the
+  // normalized hit position — App feeds it to the engine's event queue
+  // (readEvent) and, on a device, forwards it to the strip.
+  const dispatch = createEventDispatcher<{ inject: { x: number; y: number } }>();
+  let injecting = false;
+
+  function injectAt(e: PointerEvent): void {
+    const c = e.currentTarget as HTMLCanvasElement;
+    const r = c.getBoundingClientRect();
+    const clamp = (v: number) => Math.min(1, Math.max(0, v));
+    dispatch("inject", {
+      x: clamp((e.clientX - r.left) / r.width),
+      // 1D previews (strip + waterfall) only have a meaningful x
+      y: layout.kind === "strip" ? 0 : clamp((e.clientY - r.top) / r.height),
+    });
+  }
+
+  function onDown(e: PointerEvent): void {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    injecting = true;
+    injectAt(e);
+  }
+
+  function onMove(e: PointerEvent): void {
+    if (injecting) injectAt(e);
+  }
+
+  function onUp(): void {
+    injecting = false;
+  }
 
   let strip: HTMLCanvasElement;
   let waterfall: HTMLCanvasElement;
@@ -170,10 +202,37 @@
 
 <div class="preview">
   {#if layout.kind === "strip"}
-    <canvas class="strip" bind:this={strip} width={layout.pixels} height="1"></canvas>
-    <canvas class="waterfall" bind:this={waterfall} width={layout.pixels} height="160"></canvas>
+    <canvas
+      class="strip"
+      bind:this={strip}
+      width={layout.pixels}
+      height="1"
+      on:pointerdown={onDown}
+      on:pointermove={onMove}
+      on:pointerup={onUp}
+      on:pointercancel={onUp}
+    ></canvas>
+    <canvas
+      class="waterfall"
+      bind:this={waterfall}
+      width={layout.pixels}
+      height="160"
+      on:pointerdown={onDown}
+      on:pointermove={onMove}
+      on:pointerup={onUp}
+      on:pointercancel={onUp}
+    ></canvas>
   {:else if layout.kind === "grid"}
-    <canvas class="grid" bind:this={grid} width={layout.w} height={layout.h}></canvas>
+    <canvas
+      class="grid"
+      bind:this={grid}
+      width={layout.w}
+      height={layout.h}
+      on:pointerdown={onDown}
+      on:pointermove={onMove}
+      on:pointerup={onUp}
+      on:pointercancel={onUp}
+    ></canvas>
   {:else}
     <canvas
       class="map"
@@ -182,6 +241,10 @@
       bind:this={map}
       width="320"
       height="320"
+      on:pointerdown={onDown}
+      on:pointermove={onMove}
+      on:pointerup={onUp}
+      on:pointercancel={onUp}
     ></canvas>
     {#if map3D}<span class="map-3d-badge" data-role="map-3d">3D · auto-rotating</span>{/if}
   {/if}
@@ -199,6 +262,9 @@
     image-rendering: pixelated;
     border-radius: 6px;
     background: #000;
+    /* preview clicks inject events; keep touch drags from scrolling */
+    touch-action: none;
+    cursor: crosshair;
   }
 
   .strip {

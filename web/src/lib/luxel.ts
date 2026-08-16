@@ -107,6 +107,7 @@ interface Exports {
   lx_set_wall_clock(h: number, unixSeconds: number): void;
   lx_wants_sensors(h: number): number;
   lx_set_sensors(h: number, ptr: number, len: number): void;
+  lx_push_event(h: number, t: number, x: number, y: number, v: number): void;
   lx_pixels(h: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
@@ -262,6 +263,14 @@ export class Engine {
     }
     this.e.lx_set_sensors(this.h, ptr, vals.length);
     this.e.lx_dealloc(ptr, bytes);
+  }
+
+  /** Queue one external event for the pattern to read via `readEvent(out)`
+   *  as `[type, x, y, value]`. x/y are normalized 0..1; type and value are
+   *  source-defined (preview clicks send type 1, value 1). */
+  pushEvent(type: number, x: number, y: number, value = 1): void {
+    const raw = (v: number) => Math.round(v * RAW) | 0;
+    this.e.lx_push_event(this.h, raw(type), raw(x), raw(y), raw(value));
   }
 
   // ---- map mode (this engine emits coordinates, not colors) ----

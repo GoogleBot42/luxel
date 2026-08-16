@@ -158,6 +158,9 @@ struct State {
     /// applies each frame once (mirrors shared::SENSOR_FRAME).
     sensor_frame: Mutex<Option<luxel_core::engine::SensorFrame>>,
     sensor_seq: AtomicU32,
+    /// Injected events (POST /api/events) awaiting the render loop
+    /// (mirrors shared::EVENTS).
+    events: Mutex<Vec<[luxel_core::fixed::Fx; 4]>>,
     /// Luxel-to-Luxel sync: role (0 off, 1 leader, 2 follower), this
     /// process's boot id, the engine clock (published by the render loop
     /// for the leader beacon), and the last beacon heard as a follower.
@@ -897,6 +900,16 @@ fn render_loop(state: Arc<State>) {
             }
         }
 
+        // injected events (POST /api/events) land between frames too
+        {
+            let evs = std::mem::take(&mut *state.events.lock().unwrap());
+            if let Some(eng) = engine.as_mut() {
+                for ev in evs {
+                    eng.push_event(ev);
+                }
+            }
+        }
+
         // network input (DDP/E1.31) overrides the engine while packets flow
         if live_proto(&state).is_some() {
             let live = state.live_pixels.lock().unwrap().clone();
@@ -1506,6 +1519,24 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", resp.as_bytes());
         }
+        ("POST", "/api/events") => {
+            // binary body: one "EV1\0" event frame — external event
+            // injection for readEvent()-driven patterns
+            let r = match luxel_core::netin::parse_events(&req.body) {
+                Some(evs) => {
+                    let mut q = state.events.lock().unwrap();
+                    for e in evs {
+                        if q.len() >= luxel_core::vm::MAX_EVENTS {
+                            q.remove(0);
+                        }
+                        q.push(e);
+                    }
+                    String::from("{\"ok\":true}")
+                }
+                None => String::from("{\"ok\":false,\"error\":\"not an event frame\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("POST", "/api/sensors") => {
             // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0") —
             // same parser the firmware runs on its UART stream
@@ -1765,6 +1796,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         mqtt_connected: AtomicBool::new(false),
         sensor_frame: Mutex::new(None),
         sensor_seq: AtomicU32::new(0),
+        events: Mutex::new(Vec::new()),
         sync_mode: AtomicU8::new(0),
         sync_boot_id: std::process::id() ^ 0x5a5a_5a5a,
         tz_minutes: std::sync::atomic::AtomicI32::new(0),

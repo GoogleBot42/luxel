@@ -1391,6 +1391,27 @@ export function render(index) {
     })();
   }
 
+  // ---- external event injection (preview clicks → readEvent patterns) ----
+
+  const EV_POINTER = 1; // event type carried in [type, x, y, value]
+  let evQueue: [number, number, number, number][] = [];
+  let evFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function onInject(e: CustomEvent<{ x: number; y: number }>): void {
+    engine?.pushEvent(EV_POINTER, e.detail.x, e.detail.y, 1);
+    if (!device) return;
+    // batch drags into one POST per ~50 ms instead of a request per move
+    evQueue.push([EV_POINTER, e.detail.x, e.detail.y, 1]);
+    if (!evFlushTimer) evFlushTimer = setTimeout(flushEvents, 50);
+  }
+
+  function flushEvents(): void {
+    evFlushTimer = null;
+    const batch = evQueue;
+    evQueue = [];
+    if (device && batch.length) void device.sendEvents(batch).catch(() => {});
+  }
+
   function toggleDebug(): void {
     debugMode = !debugMode;
     if (!engine) return;
@@ -2027,7 +2048,7 @@ export function render(index) {
       {/if}
 
       <div class="preview-wrap">
-        <Preview bind:this={preview} {layout} />
+        <Preview bind:this={preview} {layout} on:inject={onInject} />
       </div>
 
       <h2>Controls</h2>

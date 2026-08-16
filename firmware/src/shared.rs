@@ -403,6 +403,34 @@ pub fn take_sensor_frame(seen: &mut u32) -> Option<luxel_core::engine::SensorFra
     share_get(&SENSOR_FRAME)
 }
 
+/// Injected external events (POST /api/events) awaiting the render task —
+/// a small batch buffer, drained whole between frames. The engine's own
+/// queue enforces the drop-oldest cap; this only bridges tasks, so it
+/// carries the same bound. Alloc is fallible: a heap-starved push drops
+/// the event (best-effort input, like sensor frames).
+pub static EVENTS: Shared<Vec<[luxel_core::fixed::Fx; 4]>> =
+    BlockingMutex::new(RefCell::new(Vec::new()));
+
+pub fn push_events(evs: &[[luxel_core::fixed::Fx; 4]]) {
+    EVENTS.lock(|c| {
+        let mut q = c.borrow_mut();
+        for &e in evs {
+            if q.len() >= luxel_core::vm::MAX_EVENTS {
+                q.remove(0);
+            }
+            if q.len() == q.capacity() && q.try_reserve(1).is_err() {
+                return;
+            }
+            q.push(e);
+        }
+    });
+}
+
+/// All pending events (empty Vec if none — no alloc on the idle path).
+pub fn take_events() -> Vec<[luxel_core::fixed::Fx; 4]> {
+    EVENTS.lock(|c| core::mem::take(&mut *c.borrow_mut()))
+}
+
 /// Network input (DDP/E1.31): the assembled RGB frame. While packets flow
 /// (see LIVE_MARK_MS) the render task outputs this instead of the engine.
 pub static LIVE_PIXELS: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));

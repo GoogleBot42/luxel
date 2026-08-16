@@ -562,6 +562,26 @@ impl Engine {
         }
     }
 
+    /// Queue an external event `[type, x, y, value]` for the pattern to
+    /// read via `readEvent` (HTTP/websocket injection surface — keyboards,
+    /// MQTT/HA, sensors). Bounded at [`crate::vm::MAX_EVENTS`], dropping
+    /// the OLDEST when full so the freshest input wins. The one-time queue
+    /// allocation is fallible: on a heap-starved device the event is
+    /// silently dropped rather than erroring — events are best-effort
+    /// input, like sensor frames.
+    pub fn push_event(&mut self, ev: [Fx; 4]) {
+        let q = &mut self.vm.events;
+        if q.capacity() < crate::vm::MAX_EVENTS
+            && q.try_reserve(crate::vm::MAX_EVENTS - q.len()).is_err()
+        {
+            return;
+        }
+        while q.len() >= crate::vm::MAX_EVENTS {
+            q.pop_front();
+        }
+        q.push_back(ev);
+    }
+
     /// Read an exported variable.
     pub fn var(&self, name: &str) -> Option<Value> {
         let i = self.prog.global_index(name)?;

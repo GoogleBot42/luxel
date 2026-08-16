@@ -1,5 +1,42 @@
 # Update log
 
+## 2026-08-15 — v0.1.38: external event injection (`readEvent`) + webui.md dedusting
+
+The ideas.md ★★★ item, done end to end (no-device work by design; the
+firmware side is mirror-verified, on-device soak deferred until a device
+is back online):
+
+- **Engine**: a 32-slot drop-oldest FIFO on the VM (fresh per pattern —
+  a switch clears it) + builtins batch 4: `eventCount()` and
+  `readEvent(out)` filling `out[0..4] = [type, x, y, value]` (returns
+  1/0; non-array or short `out` is a clean vmerr, and only when an event
+  was actually there to deliver). `Engine::push_event` try_reserves the
+  queue once, dropping events instead of erroring on a starved heap.
+  Semantics pinned in tests: FIFO order, drain idiom, overflow keeps the
+  newest 32, error cases.
+- **Wire**: `"EV1\0" + u8 count + count × 4×i32-LE raw 16.16` — parser +
+  builder in `luxel_core::netin` (round-trip + reject tests). `POST
+  /api/events` accepts it on the firmware AND the CLI mirror; the render
+  task/loop drains a shared batch buffer between frames, same shape as
+  sensor frames.
+- **Web**: click/drag anywhere on the preview (strip, waterfall, grid,
+  or map canvas) injects a type-1 event with normalized x/y into the
+  local WASM engine (`lx_push_event`), and in device mode also forwards
+  it to the strip (batched ~50 ms per POST). Crosshair cursor +
+  `touch-action: none` on the canvases; hover docs + autocomplete for
+  both builtins.
+- **Patterns**: Typing Heatmap 2D + Crosshair Pulse 2D now consume real
+  events; their phantom generators go quiet for 4 s whenever real input
+  flows (both soak 300 frames clean).
+- **Docs**: lang.md "External events" section; README feature bullet;
+  ideas.md item marked DONE. Folded in: webui.md stale-line fixes (3D
+  mapping, MQTT/HA, AP-mode were all still marked open despite shipping
+  in v0.1.19/v0.1.22/Phase 4).
+
+Follow-up left on the table: an MQTT-topic → event mapping in the
+firmware bridge (the generic surface now exists), and swapping the
+sound-reactive corpus patterns' trigger controls over where it helps.
+
 ## 2026-08-15 (late) — WLED→Luxel installer page (issues #2/#9): one static
 ## page drives the whole takeover, riding the release pipeline
 

@@ -733,6 +733,82 @@ fn sensor_injection() {
 }
 
 #[test]
+fn event_injection() {
+    let src = "export var cnt = 0\nexport var got = 0\n\
+               export var t = -1\nexport var x = -1\nexport var y = -1\nexport var v = -1\n\
+               var ev = array(4)\n\
+               export function beforeRender(delta) {\n\
+                 cnt = eventCount()\n\
+                 while (readEvent(ev)) { got = got + 1; t = ev[0]; x = ev[1]; y = ev[2]; v = ev[3] }\n\
+               }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 1, 1).expect("compile");
+    let num = |e: &Engine, n: &str| e.var(n).unwrap().num().to_f64();
+    // no events: count 0, readEvent returns 0, out untouched
+    e.frame(Fx::ZERO);
+    assert_eq!(num(&e, "cnt"), 0.0);
+    assert_eq!(num(&e, "got"), 0.0);
+    assert_eq!(num(&e, "t"), -1.0);
+    // two events drain FIFO in one frame; the last one sticks
+    e.push_event([Fx::from_int(1), Fx::from_f64(0.25), Fx::from_f64(0.5), Fx::ONE]);
+    e.push_event([Fx::from_int(2), Fx::from_f64(0.75), Fx::ZERO, Fx::from_f64(0.5)]);
+    e.frame(Fx::ZERO);
+    assert_eq!(num(&e, "cnt"), 2.0, "eventCount sees both before the drain");
+    assert_eq!(num(&e, "got"), 2.0);
+    assert_eq!(num(&e, "t"), 2.0, "FIFO: the second event is read last");
+    assert!((num(&e, "x") - 0.75).abs() < 1e-4);
+    assert!((num(&e, "v") - 0.5).abs() < 1e-4);
+    // drained: next frame sees an empty queue again
+    e.frame(Fx::ZERO);
+    assert_eq!(num(&e, "cnt"), 0.0);
+    assert_eq!(num(&e, "got"), 2.0);
+}
+
+#[test]
+fn event_queue_overflow_drops_oldest() {
+    let src = "export var first = -1\nexport var n = 0\nvar ev = array(4)\n\
+               export function beforeRender(delta) {\n\
+                 while (readEvent(ev)) { n = n + 1; if (first == -1) { first = ev[3] } }\n\
+               }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 1, 1).expect("compile");
+    // 40 events into a 32-slot queue: 0..7 fall off the front
+    for i in 0..40 {
+        e.push_event([Fx::ZERO, Fx::ZERO, Fx::ZERO, Fx::from_int(i)]);
+    }
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("n").unwrap().num().to_f64(), 32.0);
+    assert_eq!(
+        e.var("first").unwrap().num().to_f64(),
+        8.0,
+        "drop-oldest: the first surviving event is #8"
+    );
+}
+
+#[test]
+fn read_event_bad_out_is_a_clean_vmerr() {
+    // a non-array `out` only errors when there IS an event to deliver
+    let src = "export function beforeRender(delta) { readEvent(3) }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 1, 1).expect("compile");
+    e.frame(Fx::ZERO);
+    assert!(e.take_error().is_none(), "empty queue: no error, returns 0");
+    e.push_event([Fx::ZERO; 4]);
+    e.frame(Fx::ZERO);
+    let err = e.take_error().expect("vmerr");
+    assert!(err.message.contains("must be an array"), "{}", err.message);
+    // and a too-short array errors too
+    let src2 = "var ev = array(2)\n\
+                export function beforeRender(delta) { readEvent(ev) }\n\
+                export function render(index) { hsv(0, 0, 0) }";
+    let mut e2 = Engine::new(src2, 1, 1).expect("compile");
+    e2.push_event([Fx::ZERO; 4]);
+    e2.frame(Fx::ZERO);
+    let err2 = e2.take_error().expect("vmerr");
+    assert!(err2.message.contains("length >= 4"), "{}", err2.message);
+}
+
+#[test]
 fn oklch_produces_reasonable_colors() {
     // oklch/oklab set the current pixel; read it back through a render
     fn render_rgb(body: &str) -> [f64; 3] {

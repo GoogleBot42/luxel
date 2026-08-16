@@ -216,9 +216,82 @@ pub fn parse_sync(pkt: &[u8]) -> Option<SyncBeacon> {
     })
 }
 
+// ---- External event injection ----
+// POST /api/events body (and a future UDP surface): "EV1\0" + u8 count +
+// count × 4×i32-LE raw 16.16 [type, x, y, value]. Length must match
+// exactly; count is capped at the engine queue size — send more and the
+// oldest would be dropped anyway, so the cap loses nothing.
+
+pub const EV_MAGIC: &[u8; 4] = b"EV1\0";
+/// Max events per frame — mirrors `vm::MAX_EVENTS` (the engine queue size).
+pub const EV_MAX_BATCH: usize = crate::vm::MAX_EVENTS;
+
+/// Parse an event-injection frame into `[type, x, y, value]` quads.
+pub fn parse_events(pkt: &[u8]) -> Option<alloc::vec::Vec<[crate::fixed::Fx; 4]>> {
+    use crate::fixed::Fx;
+    if pkt.len() < 5 || &pkt[..4] != EV_MAGIC {
+        return None;
+    }
+    let count = pkt[4] as usize;
+    if count > EV_MAX_BATCH || pkt.len() != 5 + count * 16 {
+        return None;
+    }
+    let mut out = alloc::vec::Vec::new();
+    out.try_reserve_exact(count).ok()?;
+    for i in 0..count {
+        let mut ev = [Fx::ZERO; 4];
+        for (j, slot) in ev.iter_mut().enumerate() {
+            let at = 5 + i * 16 + j * 4;
+            *slot = Fx::from_raw(i32::from_le_bytes(pkt[at..at + 4].try_into().unwrap()));
+        }
+        out.push(ev);
+    }
+    Some(out)
+}
+
+/// Build an event-injection frame (test + mirror + beacon-relay helper;
+/// the web client encodes the same layout in TS). Truncates to
+/// [`EV_MAX_BATCH`].
+pub fn build_events(events: &[[crate::fixed::Fx; 4]]) -> alloc::vec::Vec<u8> {
+    let events = &events[..events.len().min(EV_MAX_BATCH)];
+    let mut p = alloc::vec::Vec::with_capacity(5 + events.len() * 16);
+    p.extend_from_slice(EV_MAGIC);
+    p.push(events.len() as u8);
+    for ev in events {
+        for v in ev {
+            p.extend_from_slice(&v.raw().to_le_bytes());
+        }
+    }
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_frame_round_trip() {
+        use crate::fixed::Fx;
+        let evs = [
+            [Fx::from_int(1), Fx::from_f64(0.25), Fx::from_f64(0.5), Fx::ONE],
+            [Fx::from_int(2), Fx::ZERO, Fx::from_f64(-0.5), Fx::from_f64(0.125)],
+        ];
+        let frame = build_events(&evs);
+        assert_eq!(frame.len(), 5 + 2 * 16);
+        assert_eq!(parse_events(&frame).unwrap(), evs);
+        // rejects: bad magic, short body, count/length mismatch, oversize count
+        assert!(parse_events(b"EV2\0\0").is_none());
+        assert!(parse_events(&frame[..frame.len() - 1]).is_none());
+        let mut wrong = frame.clone();
+        wrong[4] = 1;
+        assert!(parse_events(&wrong).is_none());
+        let mut big = build_events(&[[Fx::ZERO; 4]; 40]);
+        assert_eq!(big[4] as usize, EV_MAX_BATCH, "builder truncates");
+        big[4] = 40; // forged oversize count
+        assert!(parse_events(&big).is_none());
+        // empty frame is valid and empty
+        assert_eq!(parse_events(&build_events(&[])).unwrap().len(), 0);
+    }
 
     fn ddp_pkt(flags: u8, id: u8, offset: u32, data: &[u8]) -> alloc::vec::Vec<u8> {
         let mut p = alloc::vec![flags, 0, 1, id];

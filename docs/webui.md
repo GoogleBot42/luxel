@@ -74,10 +74,9 @@ Implementation spans luxel-core (`plot` builtin + `Engine::enable_map_mode`/
 (`compileMap`/`runMap`), and App.svelte (map sub-tab + shared `Debugger.svelte`).
 Playground-only for now — device map upload is a later firmware item.
 
-### 3D mapping [L]
-`normalizeMap` currently drops the z coordinate; the mapper already accepts
-`[x,y,z]` but Preview only renders 2D. Add a 3D projection view (rotatable
-point cloud / isometric). Pairs with the mapper-tab work.
+### 3D mapping [L] ✅
+Done (see Phase 4): `normalizeMap` keeps z, and Preview renders a rotating
+depth-sorted point cloud whenever the map's z actually varies.
 
 ### Debugging must not lie when connected to a live device [M] ✅
 **Resolved by the local-preview model (below).** Device mode now runs the same
@@ -132,10 +131,10 @@ A real device needs a settings surface (page/dialog). Fields:
   encode buffer. Persisted in `LXDV` (v3). Settings has a protocol dropdown.
   Shipped firmware v0.1.14. Verified on hardware (sk9822↔ws2812↔sk9822, no
   crash, SPI restores full speed).
-- **MQTT / Home Assistant** 🔧 — ("HQTT" in the notes) M4 territory, unbuilt.
-  Broker host/port/creds + HA discovery toggle.
-- **WiFi** — `GET/POST /api/wifi` already exists (stores creds + reboots).
-  Surface it here. **AP-mode** provisioning is still to build.
+- **MQTT / Home Assistant** ✅ — shipped (firmware v0.1.19 + mirror):
+  broker host/port/creds + HA discovery, `/api/mqtt` + Settings form.
+- **WiFi** ✅ — Settings form shipped (Phase 3); **AP-mode** provisioning
+  shipped in v0.1.22 (open AP + captive portal when there are no creds).
 
 ## Sharing
 
@@ -203,8 +202,8 @@ while a playlist churns flash and after the in-page burst.
    persist debounced under a reserved storage key and resume at boot when no
    playlist was playing; see firmware/src/resume.rs);
    ~~runtime LED-protocol re-init edge cases~~ ✅ (v0.1.29 — hardened
-   off-hardware; see the checklist below). Remaining: MQTT/HA (M4); AP-mode
-   provisioning.
+   off-hardware; see the checklist below); ~~MQTT/HA~~ ✅ (v0.1.19);
+   ~~AP-mode provisioning~~ ✅ (v0.1.22). Nothing left open in this phase.
 
 ## v0.1.29 hardware-verification checklist (protocol re-init + resume)
 

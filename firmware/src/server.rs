@@ -33,6 +33,8 @@
 //!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
 //!   DELETE /api/patterns/<id>         {"ok":true}
 //!   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | code-error shape
+//!   POST /api/events    body = "EV1\0" frame (netin::parse_events) → queues
+//!                       [type,x,y,value] events for readEvent() patterns
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -1007,6 +1009,18 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         None => {
                             String::from("{\"ok\":false,\"error\":\"not a sensor-board frame\"}")
                         }
+                    }))
+                }
+                // binary body: one "EV1\0" event frame (netin::parse_events)
+                // — external event injection for readEvent()-driven patterns
+                // (keyboards, MQTT/HA bridges, preview clicks).
+                "/api/events" => {
+                    Some(json_response(match luxel_core::netin::parse_events(&raw) {
+                        Some(evs) => {
+                            crate::shared::push_events(&evs);
+                            String::from("{\"ok\":true}")
+                        }
+                        None => String::from("{\"ok\":false,\"error\":\"not an event frame\"}"),
                     }))
                 }
                 // body: "host\nport\nuser\npass" → stored in flash; the MQTT

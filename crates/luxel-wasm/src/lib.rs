@@ -400,6 +400,17 @@ pub unsafe extern "C" fn lx_set_sensors(h: i32, ptr: *const i32, len: usize) {
     with_engine(h, |slot| slot.engine.set_sensors(&s));
 }
 
+/// Queue one external event `[type, x, y, value]` (raw 16.16 each) for the
+/// pattern to read via `readEvent`. Bounded drop-oldest queue; a pattern
+/// that never reads events just lets them age out.
+#[no_mangle]
+pub extern "C" fn lx_push_event(h: i32, t: i32, x: i32, y: i32, v: i32) {
+    with_engine(h, |s| {
+        s.engine
+            .push_event([Fx::from_raw(t), Fx::from_raw(x), Fx::from_raw(y), Fx::from_raw(v)])
+    });
+}
+
 // ---- map programs (this engine emits coordinates, not colors) ----
 
 /// Turn this engine into a map-program runner (per-pixel `plot(x, y[, z])`).
