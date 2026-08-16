@@ -1,5 +1,47 @@
 # Update log
 
+## 2026-08-16 — QEMU emulation unblocked: stock firmware boots under
+## emulation, takeover-in-CI is go
+
+Resumed the morning's spike and killed the blocker — plus the two behind
+it. Three root causes, all fixed QEMU-side in the nix derivation
+(`tools/qemu/`), none of them touching the firmware:
+
+1. **CPENABLE.** ESP32 silicon resets it to 0xff; QEMU leaves it 0, and
+   nothing in ROM/bootloader/app ever writes it (disassembly-verified) —
+   esp-hal relies on the silicon value. So the first float trapped
+   `Cp0Disabled`, xtensa-lx-rt's `float-save-restore` `save_context`
+   re-faulted on its own `rur.fcr`, and the guest looped silently in the
+   double-exception handler. (espressif/qemu#154; PR #155 is unmerged and
+   s3-only — no merged fix exists anywhere.)
+2. **DPORT `PRO/APP_INTR_STATUS_REG_0..2` were never implemented.** That
+   per-source pending bitmap is what esp-hal's level-interrupt dispatcher
+   reads; it returned 0, so no handler ran, nothing acked, and esp-rtos
+   livelocked in an interrupt storm on its scheduler-start interrupt.
+   esp-hal is the *only* guest OS dispatching from those registers
+   (IDF/Zephyr/NuttX use the Xtensa INTERRUPT sreg) — which is why this
+   sat unnoticed. No prior art; we're first.
+3. **TIMG level interrupts gated on `TIMG_INT_ENA`**, which is inert on
+   ESP32/S2 silicon — the real gate is `Tx_LEVEL_INT_EN` in the timer
+   config reg, what esp-hal writes — so the scheduler tick never fired.
+   Folded in espressif/qemu#69 (an alarm already behind the counter now
+   fires immediately instead of disarming).
+
+Plus `tools/qemu/make-efuse.py`: a rev-3.0 eFuse image so **stock release
+images** clear esp-hal's min-chip-revision gate with no build override.
+
+Result: a byte-identical-to-shipping firmware image boots through engine
+init, pattern storage and settings to the WiFi task, where the esp-radio
+PHY blob faults on an unmapped peripheral alias (radio modeling is the
+next frontier, and it's large). That's well past what the takeover test
+needs — the takeover path runs before WiFi init — so
+**compose→boot→assert takeover testing in CI is now unblocked**. Full
+writeup, run instructions, QEMU-vs-silicon divergences and
+upstream-filing candidates: docs/research/qemu-emulation-spike.md.
+
+Standing rule recorded in the doc: the harness stays strictly isolated —
+fixes go in `tools/qemu/`, never into the firmware.
+
 ## 2026-08-16 — QEMU emulation spike: takeover-in-CI is ~80% viable, one
 ## precisely-characterized blocker left
 

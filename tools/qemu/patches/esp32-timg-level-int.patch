@@ -1,0 +1,73 @@
+--- a/hw/timer/esp32_timg.c
++++ b/hw/timer/esp32_timg.c
+@@ -169,6 +169,9 @@
+     case A_TIMG_LACTCONFIG:
+         ts->config_reg = value;
+         esp32_timg_timer_update_config(ts);
++        /* TIMG_Tx_LEVEL_INT_EN lives in this register and gates the level
++         * interrupt line, so re-evaluate it here. */
++        esp32_timg_int_update(s);
+         break;
+     case A_TIMG_T0UPDATE:
+     case A_TIMG_T1UPDATE:
+@@ -351,9 +354,7 @@
+ 
+     if (ts->level_int_en) {
+         s->int_raw |= int_mask;
+-        if (s->int_ena & int_mask) {
+-            qemu_irq_raise(get_level_irq(s, ts->int_type));
+-        }
++        esp32_timg_int_update(s);
+     }
+ 
+     if (ts->edge_int_en) {
+@@ -381,9 +382,32 @@
+     }
+ }
+ 
++/* Which interrupt sources may drive the level interrupt line out of this
++ * timer group.  On ESP32 (and S2) silicon TIMG_INT_ENA does NOT gate the
++ * level interrupt — TIMG_Tx_LEVEL_INT_EN in the timer's own config register
++ * does; see the esp-hal comment in esp-hal/src/timer/timg.rs
++ * (`set_interrupt_enabled`, "on ESP32 and S2 the int_ena register is
++ * ineffective").  esp-hal therefore leaves INT_ENA at 0 forever, so a model
++ * that gates on INT_ENA alone never delivers the timer tick.  ESP-IDF sets
++ * both, hence it never noticed. */
++static uint32_t esp32_timg_int_level_mask(Esp32TimgState *s)
++{
++    uint32_t mask = s->int_ena;
++    if (s->t0.level_int_en) {
++        mask |= 1 << s->t0.int_type;
++    }
++    if (s->t1.level_int_en) {
++        mask |= 1 << s->t1.int_type;
++    }
++    if (s->lact.level_int_en) {
++        mask |= 1 << s->lact.int_type;
++    }
++    return mask;
++}
++
+ static void esp32_timg_int_update(Esp32TimgState *s)
+ {
+-    uint32_t int_st = s->int_ena & s->int_raw;
++    uint32_t int_st = esp32_timg_int_level_mask(s) & s->int_raw;
+     esp32_timg_int_update_inttype(s, int_st, TIMG_T0_INT);
+     esp32_timg_int_update_inttype(s, int_st, TIMG_T1_INT);
+     esp32_timg_int_update_inttype(s, int_st, TIMG_WDT_INT);
+@@ -473,8 +497,13 @@
+     int64_t count_to_alarm = ((int64_t) ts->alarm_val - (int64_t) ts->count_base)
+                                 * esp32_timg_timer_direction(ts);
+     if (count_to_alarm <= 0) {
+-        /* ignore overflow modulo 64 bits */
+-        timer_del(&ts->alarm_timer);
++        /* Silicon fires the alarm right away when the alarm value is already
++         * behind the counter; the model used to silently disarm instead, so a
++         * deadline that landed in the past (easy under slow emulation) never
++         * expired at all.  See espressif/qemu#69 — fixed upstream only for the
++         * C3 systimer (PR #148).  The callback clears ts->alarm, so the
++         * autoreload path below cannot spin on this.  */
++        timer_mod_anticipate_ns(&ts->alarm_timer, ns_now);
+         return;
+     }
+ 
