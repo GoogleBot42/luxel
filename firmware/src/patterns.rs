@@ -659,14 +659,25 @@ pub fn current_slot_abs() -> Option<(u32, u32)> {
     Some((start + CUR_SRC_OFF, start + CUR_BC_OFF))
 }
 
-/// Write one raw region (erase + word-aligned page writes), yielding
-/// between pages so the WiFi task gets airtime inside each erase/write
-/// burst (same reasoning as FlashAsset's per-chunk Timer).
-async fn write_raw(flash: &mut FlashStorage<'static>, abs: u32, data: &[u8]) -> bool {
+/// Write one raw region (erase + word-aligned page writes). Every flash op
+/// borrows the driver via [crate::ota::with_flash] for just that one op --
+/// the driver never leaves the global, so concurrent flash users (asset
+/// serving/pushes, an incoming OTA begin, a store transaction) interleave
+/// between pages instead of reading busy for the whole burst. The previous
+/// take-for-the-whole-burst design starved them: with a 5 s playlist
+/// churning swaps, asset pushes failed 5/6, /api/ota misreported "update
+/// already in progress", and served assets truncated mid-body (measured on
+/// the Athom, 2026-08-15). The 1 ms yields between ops keep WiFi airtime
+/// AND give waiting HTTP tasks a real window to grab the driver.
+/// Best-effort: false when an OTA begins or a store transaction leases the
+/// driver away mid-burst -- the caller degrades (never a panic).
+async fn write_raw(abs: u32, data: &[u8]) -> bool {
+    let op_ok = |r: Option<bool>| r == Some(true) && !crate::ota::ota_active();
     let end = abs + (data.len() as u32).div_ceil(PAGE) * PAGE;
     let mut at = abs;
     while at < end {
-        if BlockingNorFlash::erase(flash, at, at + PAGE).is_err() {
+        let r = crate::ota::with_flash(|f| BlockingNorFlash::erase(f, at, at + PAGE).is_ok());
+        if !op_ok(r) {
             return false;
         }
         embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
@@ -684,7 +695,10 @@ async fn write_raw(flash: &mut FlashStorage<'static>, abs: u32, data: &[u8]) -> 
         };
         bytes[words * 4 - 4..].fill(0xFF); // pad the tail word with erased-state bytes
         bytes[..n].copy_from_slice(&data[at..at + n]);
-        if BlockingNorFlash::write(flash, abs + at as u32, &bytes[..words * 4]).is_err() {
+        let r = crate::ota::with_flash(|f| {
+            BlockingNorFlash::write(f, abs + at as u32, &bytes[..words * 4]).is_ok()
+        });
+        if !op_ok(r) {
             return false;
         }
         embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
@@ -694,13 +708,13 @@ async fn write_raw(flash: &mut FlashStorage<'static>, abs: u32, data: &[u8]) -> 
 }
 
 /// Persist the running pattern's source + blob to the read-back slot. Runs
-/// on the render task's swap path -- a brief one-time hitch (a few dozen
-/// page erases/writes with yields between them), acceptable for a rare
-/// event and worth the ~40 KB of steady-state heap the old RAM copies
-/// held. Best-effort: false if storage is absent, the flash is leased out
-/// (a concurrent OTA / library save), or the pattern is implausibly large.
-/// While the lease is held other flash users read as busy and degrade
-/// gracefully (documented per caller).
+/// on the render task's swap path -- a brief hitch (a few dozen page
+/// erases/writes with yields between them) that under playlist churn
+/// recurs every item swap, which is why it borrows the driver per op
+/// (see [write_raw]) instead of monopolizing it. Best-effort: false if
+/// storage is absent, an OTA is in progress, a store transaction leases
+/// the driver away mid-burst, or the pattern is implausibly large --
+/// read-back degrades until the next swap (documented per caller).
 pub async fn store_current(src: &str, bc: &[u8]) -> bool {
     let start = REGION.load(Ordering::Relaxed);
     if start == 0 {
@@ -709,19 +723,18 @@ pub async fn store_current(src: &str, bc: &[u8]) -> bool {
     if src.len() > CUR_MAX as usize || bc.len() > CUR_MAX as usize {
         return false;
     }
-    let Some(mut flash) = crate::ota::take_flash() else {
+    if crate::ota::ota_active() {
         return false;
-    };
-    let mut ok = write_raw(&mut flash, start + CUR_SRC_OFF, src.as_bytes()).await
-        && write_raw(&mut flash, start + CUR_BC_OFF, bc).await;
+    }
+    let mut ok = write_raw(start + CUR_SRC_OFF, src.as_bytes()).await
+        && write_raw(start + CUR_BC_OFF, bc).await;
     if ok {
         let mut hdr = [0u8; 12];
         hdr[0..4].copy_from_slice(&CUR_MAGIC.to_le_bytes());
         hdr[4..8].copy_from_slice(&(src.len() as u32).to_le_bytes());
         hdr[8..12].copy_from_slice(&(bc.len() as u32).to_le_bytes());
-        ok = write_raw(&mut flash, start + CUR_OFF, &hdr).await;
+        ok = write_raw(start + CUR_OFF, &hdr).await;
     }
-    crate::ota::give_flash(flash);
     ok
 }
 

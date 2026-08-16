@@ -124,16 +124,32 @@ bytecode execution is being worked on now; the rest are queued:
   pool STAYS 3 and pool 2 shipped as the **`small-chip` cargo feature**
   (pool 2 + esp32 heap 88 KB, ~17 KB reclaimed, occasionally-refused
   first nav accepted). Tiers 3–4 in boards.md get it via that feature.
-- **Flash-access fairness under playlist churn** [M] ★★ — NEW 2026-08-15.
-  v0.1.34's per-swap flash persist makes a fast playlist (5 s items)
-  hold the flash driver so often that asset pushes fail 5/6, /api/ota
-  rejects ("update already in progress"), and served assets truncate
-  mid-body. Deploy tooling works around it (stop playlist → push →
-  resume, codified in the deploy-device skill) and the web app's
-  retry+deadline absorbs the read-side symptom, but the real fix is
-  fairness: skip/defer the swap's flash write while an HTTP request or
-  OTA is active (or a driver-level yield between pages). Measured on the
-  Athom 2026-08-15.
+- ~~Flash-access fairness under playlist churn~~ — RESOLVED 2026-08-15
+  (v0.1.36): the per-swap persist (`patterns::store_current`) was taking
+  the flash driver OUT of the global for its whole multi-page burst, so
+  every `with_flash` user read busy — that one absence explained all
+  three symptoms (asset pushes "flash write failed", `/api/ota`'s
+  misleading "update already in progress" from `begin()` finding no
+  driver, served assets truncating). `write_raw` now borrows the driver
+  per erase/write op via `with_flash` (the same soak-proven shape as the
+  OTA/assets writers) and skips while an OTA is active. Verified on the
+  Athom under a 5 s playlist: asset pushes 6/6 (was 1/6), 20/20
+  identical served-asset hashes, OTA accepted + clean reboot, cold loads
+  5/5. Deploy tooling no longer needs stop-playlist→push→resume on
+  v0.1.36+.
+- **Per-swap flash WEAR under playlist churn** [M] ★★ — NEW 2026-08-15,
+  found while fixing the fairness item. `store_current` erases the same
+  raw slot sectors on EVERY swap: a 5 s playlist is ~17k erase
+  cycles/day against a ~100k NOR spec — days-to-weeks to spec-exhaustion
+  under continuous churn (1 min items ≈ 69 days). Sketch: playlist/
+  library swaps don't need the slot at all — their src/bc already live
+  in the pattern store, so carry the library id in `Msg::Code`/
+  `Crossfade` (senders know it; deriving it after the fact races the
+  playlist task's `set_current_pattern_id`), add `SrcLoc::Library`/
+  `BcLoc::Library` read-back variants served transiently via
+  `source_of`/`bytecode_of`, and keep the slot write only for ad-hoc
+  pushes (rare). Touches all six Msg senders + resume/sync/MQTT
+  semantics — its own change, do not bolt on.
 - **Small-chip profile + more board features** [M] ★★ — follow-ups from
   the 2026-07-29 chip-support assessment (docs/boards.md "Beyond the
   current boards"): (1) add `board-s3-devkit` and `board-c6-devkit`
