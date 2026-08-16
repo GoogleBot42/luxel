@@ -420,7 +420,8 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
     let light_set = hamqtt::light_set_topic(MQTT_ID);
     let pattern_set = hamqtt::pattern_set_topic(MQTT_ID);
     let playlist_cmd = hamqtt::playlist_cmd_topic(MQTT_ID);
-    for t in [&light_set, &pattern_set, &playlist_cmd] {
+    let event_cmd = hamqtt::event_topic(MQTT_ID);
+    for t in [&light_set, &pattern_set, &playlist_cmd, &event_cmd] {
         client.subscribe(t, QoS::AtMostOnce).map_err(err)?;
     }
     client
@@ -582,6 +583,10 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
                         "prev" => push(state, Msg::PlaylistStep(-1)),
                         other => eprintln!("mqtt: unknown playlist cmd \"{other}\""),
                     }
+                } else if p.topic == event_cmd {
+                    // pattern event injection: "type [x [y [value]]]" per
+                    // line → the readEvent() queue, same as POST /api/events
+                    queue_events(state, hamqtt::parse_event_lines(&payload));
                 }
             }
             Ok(Ok(_)) => {}
@@ -594,6 +599,19 @@ fn mqtt_session(state: &Arc<State>, cfg: &MqttCfg, gen: u32) -> Result<(), Strin
             let _ = client.disconnect();
             return Ok(()); // config changed — reconnect with the new one
         }
+    }
+}
+
+/// Queue injected events for the render loop (drop-oldest at the engine
+/// cap — mirrors firmware shared::push_events). Fed by POST /api/events
+/// and the MQTT event topic.
+fn queue_events(state: &State, evs: Vec<[luxel_core::fixed::Fx; 4]>) {
+    let mut q = state.events.lock().unwrap();
+    for e in evs {
+        if q.len() >= luxel_core::vm::MAX_EVENTS {
+            q.remove(0);
+        }
+        q.push(e);
     }
 }
 
@@ -1524,13 +1542,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             // injection for readEvent()-driven patterns
             let r = match luxel_core::netin::parse_events(&req.body) {
                 Some(evs) => {
-                    let mut q = state.events.lock().unwrap();
-                    for e in evs {
-                        if q.len() >= luxel_core::vm::MAX_EVENTS {
-                            q.remove(0);
-                        }
-                        q.push(e);
-                    }
+                    queue_events(&state, evs);
                     String::from("{\"ok\":true}")
                 }
                 None => String::from("{\"ok\":false,\"error\":\"not an event frame\"}"),

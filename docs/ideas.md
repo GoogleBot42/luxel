@@ -185,8 +185,10 @@ bytecode execution is being worked on now; the rest are queued:
   x/y — playground AND device mode, batched ~50 ms) and `POST
   /api/events` ("EV1\0" frame, shared parser in `netin`, firmware +
   mirror). Typing Heatmap and Crosshair Pulse now consume real events
-  (phantom generators pause while input flows). Remaining follow-up: an
-  MQTT-topic → event mapping (one small bridge away now).
+  (phantom generators pause while input flows). The MQTT-topic → event
+  mapping followed in v0.1.39: `luxel/<id>/event`, text lines
+  `type [x [y [value]]]`, verified against real mosquitto
+  (tools/mqtt-e2e.mjs).
 
 ## Peripherals & audio (M5 territory, high wow-factor)
 

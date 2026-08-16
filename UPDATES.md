@@ -1,5 +1,42 @@
 # Update log
 
+## 2026-08-16 — v0.1.39: MQTT topic → pattern events (`luxel/<id>/event`)
+
+The follow-up v0.1.38 left on the table, and the last leg of the event
+surface: HA automations (or anything with an MQTT client) can now drive
+`readEvent()` patterns directly.
+
+- **Topic**: `luxel/<id>/event`, command-only (no HA entity/discovery —
+  it's an automation target, not a control). Subscribed by the firmware
+  MQTT task and the mirror alongside the existing three; also added to
+  `hamqtt::command_topics` (which, note, neither consumer actually calls
+  — both keep inline lists; all three places updated).
+- **Payload**: text, one event per line — `type [x [y [value]]]`,
+  whitespace-separated decimals; x/y default 0, value defaults 1 (an
+  automation can publish just `"1"`), junk lines skipped, 32-event batch
+  cap. Parsed by `hamqtt::parse_event_lines` with a hand-rolled
+  integer-math decimal→Fx parser (keeps the no_std path off core's
+  dec2flt; that ~19 KB table-heavy machinery is in the firmware image
+  only incidentally today). Both feed the same queues as
+  `POST /api/events`.
+- **Harness**: `tools/mqtt-e2e.mjs` (docs/tools.md) — a REAL mosquitto
+  (now a dev-shell flake dep) + the mirror: connect, retained
+  availability, event → pixels red, value scaling, junk tolerance,
+  bare-type defaults. 8/8. This finally gives the MQTT bridge an
+  automated check; v0.1.19's verification was a manual procedure.
+- Mirror refactor: the inline drop-oldest push in `/api/events` became
+  `queue_events`, shared with the MQTT path.
+
+Verified: full workspace tests (hamqtt gains topic/parse/decimal suites),
+mqtt-e2e 8/8, serve-e2e, stack-check clean, OTA image 941,952 B
+(106,624 B margin). Measured attribution: current master builds the
+SAME 941,952 with or without this diff — the mapping itself costs ~0
+flash. (The v0.1.38 entry's 922,496 came from that branch's own
+worktree build and doesn't reproduce on master; cause not chased —
+margin is ample either way.) On-device + real-HA hop: queued in
+UNTESTED.md (broker details live in agent memory; the wall unit is
+offline).
+
 ## 2026-08-15 — v0.1.38: external event injection (`readEvent`) + webui.md dedusting
 
 The ideas.md ★★★ item, done end to end (no-device work by design; the

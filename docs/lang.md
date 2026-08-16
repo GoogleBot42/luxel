@@ -303,11 +303,14 @@ bridges, and anything else that pokes a pattern from outside:
   of length ≥ 4. Drain per frame with `while (readEvent(ev)) { … }`.
 
 Sources: **click or drag the preview** (type 1, `x`/`y` normalized 0..1,
-value 1 — 1D previews send `y = 0`), or `POST /api/events` with an
+value 1 — 1D previews send `y = 0`); `POST /api/events` with an
 `EV1\0` frame (magic + u8 count + count × 4×i32-LE raw 16.16; see
-`luxel_core::netin`). The queue holds 32 events, dropping the OLDEST
-when full, and events land between frames. `type`/`value` meanings
-beyond the pointer convention are yours to define.
+`luxel_core::netin`); or **MQTT** — publish to `luxel/<id>/event`, one
+event per line as whitespace-separated decimals `type [x [y [value]]]`
+(missing x/y default to 0, value to 1, so an HA automation can send just
+`"1"`). The queue holds 32 events, dropping the OLDEST when full, and
+events land between frames. `type`/`value` meanings beyond the pointer
+convention are yours to define.
 
 ### Predefined globals
 
