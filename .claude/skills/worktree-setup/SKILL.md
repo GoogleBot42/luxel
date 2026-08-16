@@ -69,3 +69,7 @@ origin master && git rebase origin/master`.
 - If `tea pr merge` fails with "is it still open?" right after a
   force-push, Gitea is still re-checking mergeability — wait a few
   seconds and retry before diagnosing anything.
+- `cargo test --workspace` failing only in `luxel-cli`'s `heapstat` test with
+  "web/public/gallery.json … No such file or directory" — not a regression,
+  you skipped step 5 (any `npm run build` / `gen-gallery.mjs` run fixes it).
+  Bitten twice in one session; check this before reading the diff.
