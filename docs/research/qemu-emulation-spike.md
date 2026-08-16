@@ -140,11 +140,15 @@ on a fuse burn, so CI should attach it `snapshot=on`.
 
 ## How to run
 
-Build the emulator (nix, reproducible, cache-friendly):
+Build the emulator (a flake output, so nixpkgs is pinned by flake.lock):
 
 ```sh
-nix build --impure --expr 'import ./tools/qemu/qemu-espressif.nix {}'
+nix build .#qemu-espressif
 ```
+
+The standalone `--impure --expr 'import ./tools/qemu/qemu-espressif.nix {}'`
+form still works, but resolves `<nixpkgs>` off NIX_PATH and therefore
+builds a *different* store path. Prefer the flake.
 
 Generate an eFuse image (defaults are what you want: rev 3.0, Espressif
 OUI MAC, 512-byte pad):
@@ -243,14 +247,38 @@ Worth filing even if they sit — each is a real bug with a clean repro:
    is a footgun. Suggested fix: enable CP in `Reset`, as NuttX did in
    apache/nuttx#6314.
 
+## The takeover test (shipped)
+
+The prize the spike was chasing exists: **`tools/qemu/takeover-test.py`**
+(usage in its header, indexed in docs/tools.md). Compose → boot → assert,
+both variants passing against a stock image:
+
+- `--slot app1` (default) — the realistic "WLED accepted the upload into
+  its inactive slot" state; runs the full 920 KiB self-copy. **~12 s.**
+- `--slot app0` — image already at the destination offset; the
+  skip-the-copy path. **~1.5 s.**
+
+Two things it turned up that are worth knowing before reading a log:
+
+- **The `software_reset()` boot doesn't survive under QEMU.** The ROM
+  banner stops mid-line at `mode:DOUT, clock div:`, the TG0 watchdog
+  fires, and the resulting `TG0WDT_SYS_RESET` is the boot that actually
+  loads Luxel. It happens before the second-stage bootloader reads
+  anything, so it's cosmetic — but the log shows three resets, not two.
+- **The bootloader writes otadata back on the erased-otadata fallback**
+  (`set_actual_ota_seq()`: seq=1, `ESP_OTA_IMG_VALID`, CRC over the seq
+  word). So post-takeover otadata at 0xD000 is *not* erased, and neither
+  is the boot-guard sector at 0xC000 — boot 2's `ota::boot_guard` has
+  already written its `LXBG` record by the time anything else runs.
+
+Also confirmed, since it had never been exercised: `esp-storage`'s
+`FlashStorage::capacity()` reports the real 4 MiB under QEMU, so the
+takeover's flash-size preflight passes rather than refusing to
+repartition.
+
 ## Next steps
 
-1. **Build the takeover test.** Compose a WLED-state flash image → boot
-   under the patched QEMU → assert on takeover serial lines + the
-   repartitioned flash bytes + the inherited-creds record. This is the
-   prize the spike was chasing and nothing blocks it now: the takeover
-   path completes before WiFi init.
-2. **PHY/radio modeling** is the only route to testing anything WiFi-era
+1. **PHY/radio modeling** is the only route to testing anything WiFi-era
    (OTA, MQTT, the web UI) under emulation. Large. Only worth starting if
    emulated WiFi becomes the bottleneck for something specific.
-3. **File the upstream candidates** above.
+2. **File the upstream candidates** above.

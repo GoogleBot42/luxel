@@ -1,9 +1,11 @@
 # Espressif's QEMU fork (esp32/esp32s3 machine models), packaged for the
 # firmware-emulation spike — see docs/research/qemu-emulation-spike.md for
 # what works, what's patched and why, and the one remaining blocker.
-# Build: nix build --impure --expr 'import ./tools/qemu/qemu-espressif.nix {}'
-# TODO: wire into flake.nix as a proper output if/when the takeover
-# emulation harness lands (repo norm: toolchains are flake derivations).
+# Build: nix build .#qemu-espressif   (flake output, nixpkgs pinned by
+# flake.lock — this is the one tools/qemu/takeover-test.py resolves).
+# Standalone, against whatever <nixpkgs> is on NIX_PATH — a different store
+# path, so prefer the flake unless you have a reason not to:
+#   nix build --impure --expr 'import ./tools/qemu/qemu-espressif.nix {}'
 { pkgs ? import <nixpkgs> {} }:
 let
   keycodemapdb = pkgs.fetchFromGitHub {
