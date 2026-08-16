@@ -1,5 +1,59 @@
 # Update log
 
+## 2026-08-15 (evening) — v0.1.36: flash-access fairness under playlist
+## churn — the driver never leaves the global
+
+The "flash churn starves flash users" finding from this morning's session
+is fixed, and the root cause turned out to be one design flaw with three
+disguises: `patterns::store_current` (the per-swap read-back persist,
+v0.1.34) **took the flash driver out of the global** (`take_flash`) for
+its entire multi-page erase/write burst (~200-500 ms per swap). Every
+`with_flash` user read busy for that whole window — asset pushes failed
+("flash write failed", assets.rs), served assets truncated mid-body
+(`read_chunk` → None mid-stream), and `/api/ota` returned the misleading
+"update already in progress" (`ota::begin` finds no driver and can't tell
+absent-because-store from absent-because-OTA).
+
+**The fix** (firmware v0.1.36): `write_raw` now borrows the driver per
+erase/write op via `with_flash` — the same borrow-per-op shape the OTA
+and assets writers already soak-proved (2026-07-27: take-for-the-burst
+crashed 5/5, borrow-per-op clean 4/4) — with the existing 1 ms yields
+between ops now doubling as real windows for waiting HTTP tasks to grab
+the driver. `store_current` also skips while an OTA is active (new
+`ota::ota_active()` accessor; `with_flash` deliberately doesn't check it
+because OTA's own writes go through it). Contention inverts correctly
+now: a store transaction (`take_flash` — user-initiated save/playlist
+edit) stealing the driver mid-burst aborts the background persist
+(read-back degraded until next swap, never a panic), not the user's op.
+
+**Verified on the Athom under a 5 s three-item playlist** (the exact
+morning repro): asset pushes **6/6** (was 1/6), **20/20** identical
+sha256 on a 315 KB served asset (was truncating), **OTA accepted and
+clean-rebooted mid-churn** (was rejected), coldload.mjs **5/5 clean**,
+playlist auto-resumed after the OTA reboot, zero panics on live serial
+(/dev/ttyUSB0 captured throughout). Deploy tooling's
+stop-playlist→push→resume dance is no longer needed on v0.1.36+
+(deploy-device skill updated; keep it for 0.1.34/35 devices — the dev
+unit is still on v0.1.34 and OFFLINE, push v0.1.36 when it's back).
+Stack-check clean; clippy delta zero (the 5 pre-existing `bufs` macro
+errors on the c3 target are untouched).
+
+**New finding while verifying — per-swap flash WEAR** (ideas.md): the
+persist erases the same slot sectors every swap; a 5 s playlist is ~17k
+erase cycles/day against ~100k NOR spec. Fix sketch (carry the library
+id in Msg::Code/Crossfade; Library read-back variants; slot write only
+for ad-hoc pushes) is written up in ideas.md — deliberately NOT bolted
+onto this change (touches all six Msg senders + resume/sync semantics).
+
+Also repaired on the Athom: stored pattern "Doom Fire" (5eed1e55) had
+lost its bytecode chunks (playlist skipped it every cycle with
+"has no bytecode"; confirmed at idle flash = pre-existing data damage
+from the morning's contention chaos, not the new code). Re-saved via
+lxp.mjs — same id, plays clean now.
+
+Device end state: Athom on ota_0 = v0.1.36, current assets, empty
+playlist stopped (as found), zero panics.
+
 ## 2026-08-15 (later) — v0.1.35: cold-load hardening end to end — fetch
 ## gate + slot reclaim + a pattern-store OOM found by serial; pool stays
 ## 3 (Chromium needs it), 2 becomes the small-chip profile

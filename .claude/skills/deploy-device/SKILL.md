@@ -72,12 +72,15 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   `firmware/build-esp32.sh` first or you push a stale image with no
   warning; both images can even report the same version string
   (2026-08-15: an A/B test silently pushed the wrong build this way).
-- **Stop a playing playlist before any flash-touching push** (v0.1.34+):
-  every playlist swap writes the pattern to flash, holding the driver so
-  often that asset pushes fail ("flash write failed"), `/api/ota` rejects
-  ("update already in progress"), and even served assets truncate
-  mid-body. `POST /api/playlist/stop`, push, then restore with
-  `POST /api/playlist/play` (body = index). See UPDATES.md 2026-08-15.
+- **Stop a playing playlist before any flash-touching push — ONLY on
+  v0.1.34–v0.1.35**: those builds' per-swap flash persist took the driver
+  for the whole burst, so asset pushes failed ("flash write failed"),
+  `/api/ota` rejected ("update already in progress"), and served assets
+  truncated mid-body. `POST /api/playlist/stop`, push, then restore with
+  `POST /api/playlist/play` (body = index). Fixed in v0.1.36 (borrow-per-op
+  flash writes) — check `version` in `/api/status` first; on v0.1.36+
+  pushes are safe with a playlist churning (verified 2026-08-15: 6/6 asset
+  pushes, OTA accepted, no truncation, 5/5 cold loads).
 - **After any crashy test run, re-check `slot`, not just `version`.** The
   boot-loop guard flips slots silently after 3 failed boots, and when both
   slots hold the same version the rollback is invisible in `version` —

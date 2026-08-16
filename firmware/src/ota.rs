@@ -107,6 +107,14 @@ pub fn give_flash(flash: FlashStorage<'static>) {
     FLASH.lock(|c| *c.borrow_mut() = Some(flash));
 }
 
+/// True while an OTA upload owns the flash write path. Borrow-per-op
+/// writers outside the OTA (patterns::store_current) check this themselves —
+/// [with_flash] deliberately doesn't, because OTA's own per-op writes go
+/// through it.
+pub fn ota_active() -> bool {
+    OTA_ACTIVE.load(Ordering::Acquire)
+}
+
 // ---- boot-loop guard: app-level OTA rollback ----
 // The stock (espflash) bootloader has no auto-rollback, so a freshly OTA'd
 // image that crashes during boot wedges the device until a serial reflash

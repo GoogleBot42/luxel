@@ -31,6 +31,15 @@ paths:
   Validate the count against the writer's own cap and `try_reserve`; see
   `patterns::read_source`. This is the same class v0.1.25's "fallible
   everything" sweep fixed elsewhere — check for it in any new read path.
+- Never take the flash driver out of the global (`ota::take_flash`) for a
+  long burst of ops — every `with_flash` user reads busy for the whole
+  window, and the failure shows up as UNRELATED symptoms (asset pushes
+  "flash write failed", `/api/ota` "update already in progress", served
+  assets truncating — all three were one absent driver, 2026-08-15).
+  Multi-page writers borrow per op via `with_flash` with yields between ops
+  (see `patterns::write_raw`, the OTA/assets writers); reserve `take_flash`
+  for sequential-storage transactions that genuinely need exclusive
+  multi-op ownership, and keep those short.
 - The app must fit in a 1 MiB OTA slot; `firmware/Cargo.toml` sets
   `opt-level = "s"` to stay under it (see docs/boards.md for the ceiling
   history). Size-check WITH WiFi creds baked in — a credless build
