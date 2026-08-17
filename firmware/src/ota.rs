@@ -129,16 +129,31 @@ pub fn ota_active() -> bool {
 const GUARD_OFFSET: u32 = 0xC000;
 const GUARD_MAGIC: &[u8; 4] = b"LXBG";
 
-fn read_guard() -> (u8, bool) {
+/// The guard record: magic + byte 4 = failed-boot counter, byte 5 =
+/// one-shot force-AP flag, byte 6 = takeover reboot-to-retry counter
+/// (issue #35). One sector, one record; every writer preserves the
+/// fields it doesn't own.
+#[derive(Clone, Copy, Default)]
+struct Guard {
+    attempts: u8,
+    force_ap: bool,
+    takeover_retries: u8,
+}
+
+fn read_guard() -> Guard {
     let mut rec = [0u8; 8];
     if !crate::assets::read_chunk(GUARD_OFFSET, &mut rec) || &rec[0..4] != GUARD_MAGIC {
-        return (0, false);
+        return Guard::default();
     }
-    (rec[4], rec[5] == 1)
+    Guard {
+        attempts: rec[4],
+        force_ap: rec[5] == 1,
+        takeover_retries: rec[6],
+    }
 }
 
 fn read_boot_attempts() -> u8 {
-    read_guard().0
+    read_guard().attempts
 }
 
 /// One-shot "boot into the provisioning AP next time" flag (byte 5 of the
@@ -146,29 +161,70 @@ fn read_boot_attempts() -> u8 {
 /// following boot reads no flag and comes up as a normal station — a bad
 /// AP build can't strand the device off-network.
 pub fn set_force_ap() {
-    write_guard(read_boot_attempts(), true);
+    write_guard(Guard {
+        force_ap: true,
+        ..read_guard()
+    });
 }
 
 /// Read AND clear the force-AP flag.
 pub fn take_force_ap() -> bool {
-    let (count, ap) = read_guard();
-    if ap {
-        write_guard(count, false);
+    let g = read_guard();
+    if g.force_ap {
+        write_guard(Guard {
+            force_ap: false,
+            ..g
+        });
     }
-    ap
+    g.force_ap
 }
 
 fn write_boot_attempts(n: u8) {
-    // preserve the force-AP flag: the boot counter moves before the WiFi
-    // path consumes the flag with take_force_ap
-    write_guard(n, read_guard().1);
+    // preserve the other fields: the boot counter moves before the WiFi
+    // path consumes the force-AP flag, and mid-takeover-retry
+    write_guard(Guard {
+        attempts: n,
+        ..read_guard()
+    });
 }
 
-fn write_guard(n: u8, force_ap: bool) {
+/// How many aborted takeover attempts have already rebooted to retry.
+pub fn takeover_retries() -> u8 {
+    read_guard().takeover_retries
+}
+
+/// Record one more aborted takeover attempt, just before a deliberate
+/// reboot-to-retry. Also zeroes the failed-boot counter: this boot ran to
+/// a controlled abort, it didn't crash — without the clear, two retry
+/// reboots would trip [boot_guard]'s rollback-to-the-other-slot (i.e.
+/// straight back to WLED) before the takeover's own retry cap is reached.
+pub fn bump_takeover_retries() {
+    let g = read_guard();
+    write_guard(Guard {
+        attempts: 0,
+        takeover_retries: g.takeover_retries.saturating_add(1),
+        ..g
+    });
+}
+
+/// Retry budget exhausted (or takeover no longer applicable): forget the
+/// counter so a later manual power cycle starts with a fresh budget.
+pub fn clear_takeover_retries() {
+    let g = read_guard();
+    if g.takeover_retries != 0 {
+        write_guard(Guard {
+            takeover_retries: 0,
+            ..g
+        });
+    }
+}
+
+fn write_guard(g: Guard) {
     let mut rec = [0u8; 8];
     rec[0..4].copy_from_slice(GUARD_MAGIC);
-    rec[4] = n;
-    rec[5] = force_ap as u8;
+    rec[4] = g.attempts;
+    rec[5] = g.force_ap as u8;
+    rec[6] = g.takeover_retries;
     // word-aligned stage (see config.rs for why unaligned paths are off limits)
     let mut stage = [0u32; 2];
     let bytes = unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), 8) };

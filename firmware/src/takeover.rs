@@ -24,6 +24,14 @@
 //! (which runs first) flips otadata back to the WLED slot on the third
 //! failed boot — the device recovers to stock WLED on its own.
 //!
+//! Flake-safety (issue #35): an abort on anything that could be a
+//! per-boot flash flake (the self-copy verify, the config wipe, a
+//! descriptor read) reboots and retries, at most [TAKEOVER_TRIES] boots
+//! total, before settling into the provisioning AP — the 2026-08-16 bench
+//! conversion hit exactly one such flake and recovered on the next power
+//! cycle, which this automates. Retry reboots are marked deliberate in
+//! the guard record so they don't count toward boot_guard's rollback.
+//!
 //! Settings inheritance: before touching anything, the takeover mounts
 //! WLED's littlefs (read-only, src/wledfs.rs) and lifts the WiFi
 //! credentials out of cfg.json/wsec.json; after the config wipe they are
@@ -169,6 +177,12 @@ fn write_aligned(at: u32, bytes: &[u8]) -> bool {
 
 /// Copy `len` bytes from `src` to `dst` sector by sector with read-back
 /// verification. Runs pre-WiFi on the main task; buffers live on the heap.
+///
+/// On failure the log says WHICH op failed (erase / write / read-back /
+/// data mismatch, and for a mismatch whether the sector read back as
+/// still-erased 0xFF or as stale old data) — the 2026-08-16 bench flake
+/// (issue #35) printed only "verify failed" and left the failing stage
+/// unknowable after the fact.
 fn copy_image(src: u32, dst: u32, len: u32) -> bool {
     let sectors = len.div_ceil(SECTOR);
     let mut buf = alloc::vec![0u8; SECTOR as usize];
@@ -179,17 +193,43 @@ fn copy_image(src: u32, dst: u32, len: u32) -> bool {
             println!("takeover: read failed at {:#x}", src + off);
             return false;
         }
-        // one retry per sector: the write path has no other error recovery
+        // one in-boot retry per sector; the bounded reboot-to-retry in
+        // maybe_takeover covers whole-boot flakes these can't
         let mut ok = false;
-        for _attempt in 0..2 {
-            if erase_sector(dst + off)
-                && write_aligned(dst + off, &buf)
-                && crate::assets::read_chunk(dst + off, &mut check)
-                && check == buf
-            {
+        for attempt in 0..2 {
+            let stage = if !erase_sector(dst + off) {
+                "erase op failed"
+            } else if !write_aligned(dst + off, &buf) {
+                "write op failed"
+            } else if !crate::assets::read_chunk(dst + off, &mut check) {
+                "read-back op failed"
+            } else if check != buf {
+                let diffs = buf.iter().zip(&check).filter(|(a, b)| a != b).count();
+                let first = buf.iter().zip(&check).position(|(a, b)| a != b).unwrap_or(0);
+                println!(
+                    "takeover:   mismatch detail: {} of {} bytes differ, first at +{:#x} (wrote {:#04x}, read {:#04x}){}",
+                    diffs,
+                    SECTOR,
+                    first,
+                    buf[first],
+                    check[first],
+                    if check.iter().all(|b| *b == 0xFF) {
+                        " — read back still erased"
+                    } else {
+                        ""
+                    }
+                );
+                "data mismatch"
+            } else {
                 ok = true;
                 break;
-            }
+            };
+            println!(
+                "takeover:   sector {:#x} attempt {}: {}",
+                dst + off,
+                attempt + 1,
+                stage
+            );
         }
         if !ok {
             println!("takeover: verify failed at {:#x}", dst + off);
@@ -200,6 +240,33 @@ fn copy_image(src: u32, dst: u32, len: u32) -> bool {
         }
     }
     true
+}
+
+/// Total boots that attempt the takeover before giving up and settling
+/// into the provisioning AP (1 initial + 2 reboot-to-retries).
+const TAKEOVER_TRIES: u8 = 3;
+
+/// A takeover attempt aborted on something that might be a per-boot flash
+/// flake (the 2026-08-16 bench conversion failed its first boot's
+/// self-copy and ran clean on the next — issue #35): reboot to retry, at
+/// most [TAKEOVER_TRIES] boots total, then settle into the provisioning
+/// AP so a confused device never reboot-loops. WLED's table is intact in
+/// either case; a later power cycle gets a fresh retry budget.
+fn retry_or_settle(what: &str) {
+    let done = crate::ota::takeover_retries().saturating_add(1); // incl. this boot
+    if done < TAKEOVER_TRIES {
+        crate::ota::bump_takeover_retries();
+        println!(
+            "takeover: {} — rebooting to retry ({}/{} attempts used)",
+            what, done, TAKEOVER_TRIES
+        );
+        esp_hal::system::software_reset()
+    }
+    crate::ota::clear_takeover_retries();
+    println!(
+        "takeover: {} — giving up after {} attempts; provisioning AP will cover (WLED table intact)",
+        what, TAKEOVER_TRIES
+    );
 }
 
 /// Called once at boot, after ota::init + ota::boot_guard and before any
@@ -259,7 +326,9 @@ pub fn maybe_takeover() {
         crate::assets::read_chunk(c.offset + 0x20, &mut desc) && desc == me
     });
     let Some(src) = src else {
-        println!("takeover: own image not found in any app slot — aborting (still bootable)");
+        // a Luxel image IS running under this foreign table, so "not
+        // found" can only be a descriptor-read flake — retryable
+        retry_or_settle("own image not found in any app slot");
         return;
     };
 
@@ -267,7 +336,7 @@ pub fn maybe_takeover() {
         println!("takeover: image already in place at {:#x}", dest.offset);
     } else {
         let Some(len) = image_len(src.offset) else {
-            println!("takeover: cannot size own image — aborting");
+            retry_or_settle("cannot size own image");
             return;
         };
         if len > dest.len {
@@ -288,6 +357,7 @@ pub fn maybe_takeover() {
         println!("takeover: copying {} B {:#x} → {:#x}", len, src.offset, dest.offset);
         if !copy_image(src.offset, dest.offset, len) {
             println!("takeover: copy failed — aborting before table rewrite (WLED table intact)");
+            retry_or_settle("self-copy failed");
             return;
         }
     }
@@ -297,6 +367,9 @@ pub fn maybe_takeover() {
     while at < CONFIG_WIPE.end {
         if !erase_sector(at) {
             println!("takeover: config wipe failed at {:#x} — aborting", at);
+            // safe to re-run whole: the image is already in place, so the
+            // retry boot short-circuits the copy and re-wipes from scratch
+            retry_or_settle("config wipe failed");
             return;
         }
         at += SECTOR;
@@ -313,8 +386,21 @@ pub fn maybe_takeover() {
 
     // The point of no return: one sector erase + write. Everything above
     // is re-runnable under the old table; after this line the new table is
-    // authoritative and the bootloader boots ota_0.
-    if !erase_sector(TABLE_OFFSET) || !write_aligned(TABLE_OFFSET, LUXEL_TABLE) {
+    // authoritative and the bootloader boots ota_0. Retry in place (a
+    // reboot can't help once the old table's sector is erased) and verify
+    // by read-back — a wrong table here is a brick.
+    let mut installed = false;
+    for _attempt in 0..3 {
+        if erase_sector(TABLE_OFFSET) && write_aligned(TABLE_OFFSET, LUXEL_TABLE) {
+            let mut back = alloc::vec![0u8; LUXEL_TABLE.len()];
+            if crate::assets::read_chunk(TABLE_OFFSET, &mut back) && back == LUXEL_TABLE {
+                installed = true;
+                break;
+            }
+        }
+        println!("takeover: table write attempt failed — retrying in place");
+    }
+    if !installed {
         println!("takeover: TABLE WRITE FAILED — device needs a serial reflash");
         return;
     }
