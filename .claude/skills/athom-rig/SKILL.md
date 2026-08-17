@@ -102,26 +102,34 @@ Luxel in the first place is the takeover mechanism documented in
 docs/wled-migration.md, not this skill; this skill only covers the
 physical rig actions (power, serial, restore) that support it.
 
-## 6. Known open bug
+## 6. The pre-guard heap-regions panic (root-caused + fixed 2026-08-16, PR #50)
 
-An intermittent first-boot panic, `esp-alloc: Exceeded the maximum of 3
-heap memory regions`, has been observed before `ota::init` runs. It
-self-heals via the normal panic-reboot handler, but because it fires
-before the boot-loop guard arms, a hypothetical deterministic version of
-it would loop forever without ever tripping the guard's rollback. Not yet
-root-caused (tracked in the athom-flash-rig.md agent memory file). If a
-flash/takeover session starts looping instead of settling, this is the
-leading suspect — stop and reassess rather than repeating the same flash
-attempt.
+The intermittent first-boot panic `esp-alloc: Exceeded the maximum of 3
+heap memory regions` (before `ota::init`, self-heals on reboot) is
+root-caused and fixed. Cause: only two `heap_allocator!` calls fill 2 of
+esp-alloc's 3 region slots, so a flash-read flake corrupting the `HEAP`
+static's `.data` slot array during the WLED bootloader's `.data` copy on
+the takeover boot overflows it. The fix, `ota::preboot_guard`, arms before
+the heap allocators (heap-free) and rolls back to WLED after 3 consecutive
+pre-guard panics instead of looping forever. Reproduced + verified under
+QEMU (`tools/qemu/heap-regions-test.py`); writeup in
+docs/research/qemu-emulation-spike.md.
+
+**Still QEMU-only** — no real via-WLED takeover has exercised it on metal.
+If a flash/takeover session ever loops instead of settling, this remains
+the leading suspect: stop and reassess rather than repeating the flash.
+The serial now prints `preboot guard: … rolling back to the other OTA
+slot` when the rollback fires.
 
 ## Failure modes
 
 - **Board doesn't respond on the network after a restore/flash**: check
   the liveness signal (plug power draw) before assuming a bad flash — it
   may simply still be booting or joining WiFi.
-- **Board loops instead of settling after a flash**: see the open bug
-  above; don't keep re-flashing the same image expecting a different
-  result — capture serial output and stop.
+- **Board loops instead of settling after a flash**: the pre-guard
+  heap-regions panic (§6) is the leading suspect; don't keep re-flashing
+  the same image expecting a different result — capture serial output and
+  stop. `preboot_guard` should roll it back to WLED after 3 boots.
 - **esptool can't connect in download mode**: almost always a
   button-hold/power-on timing issue — recoordinate with Jeremy rather than
   retrying blindly.
