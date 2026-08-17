@@ -1,5 +1,57 @@
 # Update log
 
+## 2026-08-16 — Pre-guard heap-regions panic root-caused + fixed, and a
+## one-command QEMU test harness
+
+Closed the last open thread on the WLED-takeover arc: the intermittent
+`esp-alloc: Exceeded the maximum of 3 heap memory regions` panic that hit
+the first Athom takeover (2026-07-26), fired before `ota::init`, and
+self-healed on reboot — the one the installer page's beta banner was
+waiting on.
+
+**Root cause** (established under the QEMU harness, disassembly-confirmed):
+the athom firmware makes exactly **two** `esp_alloc::heap_allocator!` calls
+→ two `add_region()`s into esp-alloc's **three**-slot region array (the
+`#[ram(reclaimed)]` 96 KiB + the 80 KiB region; the other arms are
+`cfg`-gated out, and nothing in esp-hal/esp-rtos/esp-radio adds a region).
+A clean boot fills 2 of 3 slots, so "exceeded 3" can only happen if the
+slot array already holds stale `Some` entries when the allocators run —
+which is what a flash-read flake corrupting the `HEAP` static's `.data`
+`[None; 3]` initializer during the **ancient WLED bootloader's `.data`
+copy** produces on the takeover boot. Same flake family as issue #35's
+self-copy verify flake: intermittent, pre-`ota::init`, tied to the
+via-WLED boot.
+
+**The real danger** wasn't the intermittent panic (it self-heals via
+`custom_halt`'s reboot) but a *deterministic* one: the boot-loop guard ran
+**after** `ota::init`, past the allocators, so a pre-guard panic rebooted
+forever without ever counting toward rollback — a bricked device that
+never falls back to WLED.
+
+**Fix**: `ota::preboot_guard`, armed **before** the heap allocators
+(heap-free by necessity — stack buffers only, borrowing the `FlashStorage`
+that is handed to `ota::init` once the heap is up). It increments the same
+`LXBG` failed-boot counter the old guard used and, on the third
+consecutive boot that never reached `boot_ok`, rolls back to the other OTA
+slot (→ WLED on a takeover device). It fully replaces the old post-init
+`boot_guard()`; `boot_ok` still clears the counter, and the takeover-retry
+logic still zeroes it on a deliberate retry. Same increment/rollback
+semantics, just early enough to catch a pre-heap panic. `stack-check`
+clean (main-task stack unchanged at 29,492 B — no new heap statics; the
+3 KiB partition-table buffer runs at the top of `main` with no WiFi NMI in
+play). Builds green on athom + c3 + pixelblaze-v3.
+
+**Harness** (the second half of the ask): `tools/qemu/run-all.py` is now
+the single entry point for every emulator-backed test — it builds the
+firmware + QEMU (separate out-links so they don't clobber each other),
+autodetects the gitignored Athom dumps, and runs takeover (app1/app0/
+fault) + the new `heap-regions-test.py` (selfheal/rollback), printing a
+pass/fail summary (~36 s warm, 5/5 green). New QEMU tests slot into its
+`suite` list. Also added: `tools/qemu/gdbrsp.py`, a dependency-free
+GDB-remote client for driving QEMU's gdbstub from the Python harnesses
+(the flake stays free of a `gdb`/pygdbmi dependency). All indexed in
+docs/tools.md; root-cause writeup in docs/research/qemu-emulation-spike.md.
+
 ## 2026-08-16 — Takeover reboot-to-retry + attributable copy diagnostics
 ## (Gitea #35)
 

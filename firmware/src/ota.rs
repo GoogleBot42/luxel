@@ -152,9 +152,6 @@ fn read_guard() -> Guard {
     }
 }
 
-fn read_boot_attempts() -> u8 {
-    read_guard().attempts
-}
 
 /// One-shot "boot into the provisioning AP next time" flag (byte 5 of the
 /// guard record). One-shot on purpose: if the AP path ever crashes, the
@@ -236,38 +233,108 @@ fn write_guard(g: Guard) {
     });
 }
 
-/// Call early in boot, after [init] but before WiFi/radio setup. On the
-/// third consecutive boot that never reached [boot_ok], activates the other
-/// OTA slot and resets.
-pub fn boot_guard() {
-    let attempts = read_boot_attempts();
-    if attempts >= 2 {
+// ---- heap-free guard I/O (used by [preboot_guard], before the allocators) ----
+// The record encoding matches [read_guard]/[write_guard]; only the plumbing
+// differs — a borrowed FlashStorage and a stack buffer, no heap, no FLASH
+// global (neither exists yet in the pre-guard window).
+
+fn decode_guard(rec: &[u8; 8]) -> Guard {
+    if &rec[0..4] != GUARD_MAGIC {
+        return Guard::default();
+    }
+    Guard {
+        attempts: rec[4],
+        force_ap: rec[5] == 1,
+        takeover_retries: rec[6],
+    }
+}
+
+fn read_guard_raw(flash: &mut FlashStorage<'static>) -> Guard {
+    // read_nor straight into a word-aligned stack buffer (GUARD_OFFSET and the
+    // 8-byte length are both word-aligned), matching assets::read_chunk's
+    // zero-bounce-buffer discipline.
+    let mut stage = [0u32; 2];
+    let bytes = unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), 8) };
+    if flash.read_nor(GUARD_OFFSET, bytes).is_err() {
+        return Guard::default();
+    }
+    let mut rec = [0u8; 8];
+    rec.copy_from_slice(bytes);
+    decode_guard(&rec)
+}
+
+fn write_guard_raw(flash: &mut FlashStorage<'static>, g: Guard) {
+    let mut rec = [0u8; 8];
+    rec[0..4].copy_from_slice(GUARD_MAGIC);
+    rec[4] = g.attempts;
+    rec[5] = g.force_ap as u8;
+    rec[6] = g.takeover_retries;
+    let mut stage = [0u32; 2];
+    let bytes = unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), 8) };
+    bytes.copy_from_slice(&rec);
+    use embedded_storage::nor_flash::NorFlash;
+    let _ = NorFlash::erase(flash, GUARD_OFFSET, GUARD_OFFSET + 4096);
+    let _ = NorFlash::write(flash, GUARD_OFFSET, bytes);
+}
+
+/// Boot-loop guard armed BEFORE the heap allocators run.
+///
+/// It must run before the `heap_allocator!` calls and esp_rtos::start (which
+/// itself allocates). A panic in that pre-guard window — most notably
+/// esp-alloc's "Exceeded the maximum of 3 heap memory regions", which a
+/// flash-read flake corrupting the HEAP static's `.data` slot array can
+/// trigger on a WLED-bootloader takeover boot (reproduced under QEMU; see
+/// docs/research/qemu-emulation-spike.md) — reboots via custom_halt but,
+/// before this guard existed, never reached the post-[init] rollback, so a
+/// *deterministic* such panic would loop forever and never roll back to the
+/// working slot (WLED, on a takeover device).
+///
+/// This closes that gap: it increments the failed-boot counter (byte 4 of the
+/// guard record), and on the third consecutive boot that never reached
+/// [boot_ok] it rolls back to the other OTA slot and resets — heap-free, so
+/// it is safe to call before any allocation. [boot_ok] still clears the
+/// counter once the device has served for a while, and the takeover retry
+/// logic still zeroes it on a deliberate retry reboot.
+///
+/// The flash driver is borrowed, not consumed, so it can be handed to [init]
+/// once the heap is up.
+pub fn preboot_guard(flash: &mut FlashStorage<'static>) {
+    let g = read_guard_raw(flash);
+    if g.attempts >= 2 {
         println!(
-            "boot guard: {} consecutive failed boots — rolling back to the other OTA slot",
-            attempts
+            "preboot guard: {} consecutive failed boots — rolling back to the other OTA slot",
+            g.attempts
         );
-        write_boot_attempts(0);
-        let ok = with_flash(|flash| {
-            let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> = alloc::vec![
-                    0u8;
-                    PARTITION_TABLE_MAX_LEN
-                ]
-            .into_boxed_slice()
-            .try_into()
-            .unwrap();
-            let Ok(mut ota) = OtaUpdater::new(flash, &mut *buffer) else {
-                return false;
-            };
-            ota.activate_next_partition().is_ok()
-        })
-        .unwrap_or(false);
-        if ok {
+        write_guard_raw(
+            flash,
+            Guard {
+                attempts: 0,
+                ..g
+            },
+        );
+        let mut buffer = [0u8; PARTITION_TABLE_MAX_LEN];
+        let rolled = match OtaUpdater::new(&mut *flash, &mut buffer) {
+            Ok(mut ota) => ota.activate_next_partition().is_ok(),
+            Err(_) => false,
+        };
+        if rolled {
             esp_hal::system::software_reset();
         }
-        println!("boot guard: rollback failed; continuing with this slot");
+        println!("preboot guard: rollback failed; continuing with this slot");
     }
-    write_boot_attempts(attempts + 1);
+    write_guard_raw(
+        flash,
+        Guard {
+            attempts: g.attempts + 1,
+            ..g
+        },
+    );
 }
+
+// The failed-boot counter is incremented and acted on by [preboot_guard],
+// which runs before the heap allocators; [boot_ok] clears it once the device
+// has served for a while. (The old post-init boot_guard() lived here; it was
+// replaced by preboot_guard so a pre-heap panic can still roll back.)
 
 /// The device survived boot and has been serving for a while: clear the
 /// failed-boot counter (and mark the image valid for rollback-capable

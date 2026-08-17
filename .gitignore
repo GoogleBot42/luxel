@@ -1,6 +1,10 @@
 /target
 node_modules/
 /result
+# second nix out-link used by the QEMU harness (tools/qemu/run-all.py) so
+# building .#qemu-espressif doesn't clobber ./result
+/result-qemu
+__pycache__/
 *.ppm
 .direnv/
 /corpus/
