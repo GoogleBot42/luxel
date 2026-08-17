@@ -30,9 +30,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   don't assume the tree state you see is yours alone.
 
 ## Subagents
-- Prefer Opus or Sonnet models for subagent work where they're up to the task
-  (searches, mechanical edits, well-specified implementation); reserve the
-  top-tier model for the main loop and genuinely hard reasoning.
+- ALWAYS prefer Opus-model subagents for any task where Opus works (searches,
+  mechanical edits, well-specified implementation, routine verification) — this
+  saves Fable token usage, which is the scarce resource. Sonnet is fine for the
+  simplest lookups. Reserve Fable for the main loop and subagent tasks that
+  genuinely need top-tier reasoning (Jeremy's standing instruction, 2026-08-16).
 
 ## Autonomy
 - Be decisive on routine engineering safeguards (tests, lints, guards, docs): add them
