@@ -87,6 +87,19 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   free and restored to stock WLED, run the page against it end to end
   (both the automatic flow and, from an https origin, the Chrome
   local-network permission path).
+- [ ] **Pre-guard heap-regions fix (`preboot_guard`) on real hardware**
+  (PR #50, 2026-08-16) — the `esp-alloc: 3 heap regions` first-boot panic
+  is root-caused + fixed and QEMU-verified (`tools/qemu/heap-regions-test.py`),
+  but the fix relocated the boot-loop guard to run *before* the heap
+  allocators (heap-free flash access pre-`esp_rtos::start`), which no
+  metal has exercised. Piggyback on the installer-page test above: do a
+  real via-WLED takeover and confirm (a) the normal takeover still
+  completes and rejoins (the guard's early flash writes don't disrupt
+  boot), and (b) if you can force a repeated pre-guard panic, the serial
+  prints `preboot guard: … rolling back to the other OTA slot` and the
+  device falls back to WLED rather than looping. This is the last thing
+  gating the installer page's **beta banner** (docs/wled-migration.md) —
+  drop the banner once it passes.
 
 ## Verified hard by machines, low review value (FYI only)
 
