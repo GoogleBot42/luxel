@@ -54,6 +54,7 @@ Usage:
         --fs    /path/to/athom-wled-fs-configured.bin
 
     tools/qemu/takeover-test.py --slot app0 --keep
+    tools/qemu/takeover-test.py --inject-fault   # reboot-to-retry path (#35)
 
 `--qemu` defaults to auto-resolving the emulator through nix (the flake's
 `qemu-espressif` output, falling back to the `--impure` expression path).
@@ -110,6 +111,20 @@ ABORT_MARKERS = (
     "takeover: TABLE WRITE FAILED",
     "takeover: no ota_0 in embedded table",
     "consecutive failed boots — rolling back",
+)
+
+# --inject-fault: the m25p80 fault-injection patch (qemu-espressif.nix) drops
+# both of boot 1's program attempts at sector 0x10000, so boot 1 is EXPECTED
+# to print verify-failed/copy-failed and reboot-to-retry; boot 1b then runs
+# clean.  Fail fast only on what would mean the retry path itself broke.
+FAULT_SPEC = "0x10000:0x1000:8192"  # addr:len:budget — 2 × 4096 program bytes
+RETRY_LINE = "takeover: self-copy failed — rebooting to retry (1/3 attempts used)"
+FAULT_ABORT_MARKERS = tuple(
+    m for m in ABORT_MARKERS
+    if m not in ("takeover: verify failed at", "takeover: copy failed")
+) + (
+    "(2/3 attempts used)",   # the retry boot failed too — budget should be spent
+    "giving up after",       # settled into the AP instead of succeeding
 )
 
 # Markers that mean something more specific than "the takeover gave up".
@@ -213,7 +228,8 @@ def make_efuse(path: str) -> None:
         raise Fail(f"make-efuse.py failed:\n{p.stderr}")
 
 
-def run_qemu(qemu: str, flash: str, efuse: str, log: str, timeout: float) -> tuple[str, float]:
+def run_qemu(qemu: str, flash: str, efuse: str, log: str, timeout: float,
+             inject_fault: bool = False) -> tuple[str, float]:
     """Boot the composed image; return (serial log, wall seconds).
 
     Marker-driven: returns as soon as boot 2 proves credential inheritance.
@@ -227,11 +243,13 @@ def run_qemu(qemu: str, flash: str, efuse: str, log: str, timeout: float) -> tup
         "-global", "driver=nvram.esp32.efuse,property=drive,value=efuse",
         "-serial", f"file:{log}",
     ]
+    abort_markers = FAULT_ABORT_MARKERS if inject_fault else ABORT_MARKERS
+    env = dict(os.environ, LUXEL_FLAKY_WRITE=FAULT_SPEC) if inject_fault else None
     open(log, "wb").close()
     start = time.monotonic()
     with open(os.devnull, "rb") as devnull:
         proc = subprocess.Popen(cmd, stdin=devnull, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.PIPE)
+                                stderr=subprocess.PIPE, env=env)
         text = ""
         outcome = None
         try:
@@ -241,7 +259,7 @@ def run_qemu(qemu: str, flash: str, efuse: str, log: str, timeout: float) -> tup
                 if KILL_MARKER in text.split(REBOOT_LINE)[-1] and REBOOT_LINE in text:
                     outcome = "marker"
                     break
-                for m in ABORT_MARKERS:
+                for m in abort_markers:
                     if m in text:
                         outcome = f"abort line: {m.strip()}"
                         if m in ABORT_HINTS:
@@ -295,10 +313,30 @@ class Checks:
                      f"not found in the {where} section of the log")
 
 
-def check_serial(log: str, slot: str, ota_len: int, c: Checks) -> None:
+def check_serial(log: str, slot: str, ota_len: int, c: Checks,
+                 inject_fault: bool = False) -> None:
     if REBOOT_LINE not in log:
         raise Fail("takeover never reached the table rewrite")
     boot1, boot2 = log.split(REBOOT_LINE, 1)
+
+    if inject_fault:
+        # boot 1a: both in-boot attempts hit the injected fault (write
+        # dropped, sector reads back erased), the copy aborts, and the
+        # takeover reboots to retry — boot 1b then runs the whole thing
+        # clean.  All of that is on the boot1 side of REBOOT_LINE.
+        c.line(boot1, "takeover:   sector 0x10000 attempt 1: data mismatch", "boot1a")
+        c.line(boot1, "takeover:   sector 0x10000 attempt 2: data mismatch", "boot1a")
+        c.line(boot1, "read back still erased", "boot1a")
+        c.line(boot1, "takeover: verify failed at 0x10000", "boot1a")
+        c.line(boot1, "takeover: copy failed — aborting before table rewrite (WLED table intact)",
+               "boot1a")
+        c.line(boot1, RETRY_LINE, "boot1a")
+        c.require(log.count(RETRY_LINE) == 1, "serial: exactly one reboot-to-retry",
+                  f"found {log.count(RETRY_LINE)}")
+        copy_line = f"takeover: copying {ota_len} B 0x190000 → 0x10000"
+        c.require(boot1.count(copy_line) == 2,
+                  "serial: copy started twice (aborted boot 1a + clean boot 1b)",
+                  f"found {boot1.count(copy_line)}")
 
     c.line(boot1, "takeover: foreign partition table at 0x8000 — installing Luxel layout", "boot1")
     c.line(boot1, f'takeover: inherited WiFi credentials for "{SSID}"', "boot1")
@@ -361,6 +399,11 @@ def check_flash(flash: bytes, expected_table: bytes, ota: bytes, fs: bytes,
     c.require(guard[0:4] == b"LXBG" and guard[4] == 1 and guard[5] == 0,
               "flash: boot-guard record at 0xC000 (LXBG, 1 attempt, no force-AP)",
               f"got {guard.hex()}")
+    # byte 6 is the takeover reboot-to-retry counter (issue #35); a successful
+    # takeover wipes the sector, so it must not leak into the final state even
+    # when a retry actually happened (--inject-fault).
+    c.require(guard[6] == 0, "flash: takeover retry counter cleared (guard byte 6)",
+              f"got {guard[6]}")
 
     # 0xD000 is Luxel's otadata.  The takeover wipes it, so the next boot's
     # ESP-IDF second-stage bootloader finds both entries erased, falls back to
@@ -424,7 +467,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--keep", action="store_true", help="keep the work dir on success")
     ap.add_argument("--timeout", type=float, default=300.0,
                     help="overall boot timeout in seconds (default 300)")
+    ap.add_argument("--inject-fault", action="store_true",
+                    help="drop both of boot 1's flash-program attempts at sector "
+                         "0x10000 (m25p80 patch, LUXEL_FLAKY_WRITE) and assert the "
+                         "takeover reboot-to-retry recovers — issue #35")
     args = ap.parse_args(argv)
+    if args.inject_fault and args.slot != "app1":
+        ap.error("--inject-fault requires --slot app1 (the fault targets the self-copy)")
 
     workdir = args.workdir or tempfile.mkdtemp(prefix="luxel-takeover-")
     os.makedirs(workdir, exist_ok=True)
@@ -463,7 +512,8 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     # (build timestamp included) at slot+0x20 against the running image.
     expected_table = open(merged_path, "rb").read()[TABLE_OFFSET : TABLE_OFFSET + TABLE_LEN]
 
-    print(f"== WLED takeover test, --slot {args.slot} ==")
+    mode = " --inject-fault" if args.inject_fault else ""
+    print(f"== WLED takeover test, --slot {args.slot}{mode} ==")
     print(f"   app image : {ota_path} ({len(ota)} B)")
     print(f"   work dir  : {workdir}")
 
@@ -477,11 +527,12 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     qemu = resolve_qemu(args.qemu)
     print(f"   qemu      : {qemu}")
     print("   booting…")
-    text, elapsed = run_qemu(qemu, flash, efuse, log, args.timeout)
+    text, elapsed = run_qemu(qemu, flash, efuse, log, args.timeout,
+                             inject_fault=args.inject_fault)
     print(f"   reached the inheritance marker in {elapsed:.1f}s wall")
 
     c = Checks()
-    check_serial(text, args.slot, len(ota), c)
+    check_serial(text, args.slot, len(ota), c, inject_fault=args.inject_fault)
     with open(flash, "rb") as f:
         written = f.read()
     check_flash(written, expected_table, ota, fs, args.slot, c)

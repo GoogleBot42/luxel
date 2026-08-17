@@ -57,9 +57,15 @@ in
   # leaves INT_ENA at 0 forever, so the scheduler tick never fired); and an
   # alarm value already behind the counter silently disarmed instead of firing
   # immediately (espressif/qemu#69).
+  #
+  # m25p80-luxel-fault-injection: opt-in write-fault injection for the
+  # takeover reboot-to-retry test (LUXEL_FLAKY_WRITE env var, inert when
+  # unset) — takeover-test.py --inject-fault. Harness-side per the
+  # isolation rule; the guest image stays byte-identical to shipping.
   patches = [
     ./patches/esp32-dport-intr-status.patch
     ./patches/esp32-timg-level-int.patch
+    ./patches/m25p80-luxel-fault-injection.patch
   ];
   buildInputs = (o.buildInputs or []) ++ [ pkgs.libgcrypt pkgs.libslirp ];
   configureFlags = (o.configureFlags or []) ++ [ "--enable-gcrypt" ];

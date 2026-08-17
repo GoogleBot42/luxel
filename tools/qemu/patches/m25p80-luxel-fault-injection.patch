@@ -1,0 +1,49 @@
+Test-harness fault injection for the Luxel takeover's reboot-to-retry path
+(Gitea issue #35). LUXEL_FLAKY_WRITE=<addr>:<len>:<budget> silently drops
+the first <budget> page-program bytes aimed at [<addr>, <addr>+<len>) —
+the erase lands, the program doesn't, and the sector reads back 0xFF:
+byte-for-byte the failure signature of the 2026-08-16 bench conversion
+flake. Harness-side only (the isolation hard rule): the guest image stays
+byte-identical to what ships. Used by takeover-test.py --inject-fault.
+
+--- a/hw/block/m25p80.c
++++ b/hw/block/m25p80.c
+@@ -701,6 +701,38 @@
+         trace_m25p80_programming_zero_to_one(s, addr, prev, data);
+     }
+ 
++    /*
++     * Luxel test harness: LUXEL_FLAKY_WRITE=<addr>:<len>:<budget> drops
++     * the first <budget> program bytes aimed at [<addr>, <addr>+<len>),
++     * emulating a program op that didn't take (the sector reads back
++     * erased). tools/qemu/takeover-test.py --inject-fault uses this to
++     * exercise the WLED-takeover reboot-to-retry path (Luxel issue #35).
++     */
++    {
++        static bool flaky_parsed;
++        static uint64_t flaky_addr, flaky_len, flaky_budget;
++        if (!flaky_parsed) {
++            const char *spec = getenv("LUXEL_FLAKY_WRITE");
++            flaky_parsed = true;
++            if (spec) {
++                char *end;
++                flaky_addr = strtoull(spec, &end, 0);
++                flaky_len = (*end == ':') ? strtoull(end + 1, &end, 0) : 0;
++                flaky_budget = (*end == ':') ? strtoull(end + 1, &end, 0) : 0;
++                qemu_log("m25p80: LUXEL_FLAKY_WRITE: dropping first %" PRIu64
++                         " program bytes in [0x%" PRIx64 ", 0x%" PRIx64 ")\n",
++                         flaky_budget, flaky_addr, flaky_addr + flaky_len);
++            }
++        }
++        if (flaky_budget > 0 && addr >= flaky_addr &&
++            addr < flaky_addr + flaky_len) {
++            if (--flaky_budget == 0) {
++                qemu_log("m25p80: LUXEL_FLAKY_WRITE: budget exhausted\n");
++            }
++            return;
++        }
++    }
++
+     if (s->pi->flags & EEPROM) {
+         s->storage[s->cur_addr] = data;
+     } else {

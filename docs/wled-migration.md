@@ -106,11 +106,17 @@ smoothest origin for converting a *second* device.
   inheritance included):
   - Intermittent self-copy **verify failure** (first sector, both
     in-boot retries failed) — the takeover aborts safely (WLED table
-    intact) and boots the provisioning AP; the *next* boot's re-attempt
-    succeeded cleanly. Consequence: the device sits in AP mode until
-    someone power-cycles it — the takeover has no reboot-to-retry yet.
-    Both the retry-design gap and the underlying flash-op flake want
-    fixing (Gitea issue).
+    intact); the *next* boot's re-attempt succeeded cleanly. ADDRESSED
+    (Gitea #35): an aborted takeover now reboots itself to retry (3
+    boots total, counter in the boot-guard sector, marked deliberate so
+    boot_guard doesn't roll back to WLED) before settling into the
+    provisioning AP, and the copy loop logs which flash op failed +
+    a mismatch classification, so the next flake is attributable. The
+    retry path has a hardware-free regression test
+    (`tools/qemu/takeover-test.py --inject-fault`, write-fault injection
+    in the emulator's flash model). The underlying silicon-side flake
+    root cause is still unconfirmed — reopened/retitle #35 if it
+    recurs with the new diagnostics.
   - One silent first-boot hang (zero serial output, RTC-WDT reset) when
     a takeover-less build booted under WLED's table; not reproduced.
   - The older intermittent `esp-alloc: 3 heap regions` first-boot panic

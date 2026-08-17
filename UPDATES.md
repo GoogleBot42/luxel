@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-08-16 — Takeover reboot-to-retry + attributable copy diagnostics
+## (Gitea #35)
+
+The bench conversion's one rough edge is now self-healing: a takeover
+that aborts on anything possibly-flaky (self-copy verify, config wipe,
+descriptor read/size) reboots and re-attempts, at most 3 boots total,
+before settling into the provisioning AP — with the counter in byte 6 of
+the boot-guard record (`LXBG` @0xC000) and each retry reboot zeroing the
+failed-boot counter so a deliberate restart can't trip `boot_guard`'s
+rollback-to-WLED (which would otherwise fire after two aborts, before
+the retry cap). Exhaustion clears the counter, so a manual power cycle
+starts a fresh budget; a successful takeover's config wipe erases it
+anyway. Deterministic aborts (flash too small, image exceeds slot,
+overlap) still settle immediately.
+
+The copy loop also now says WHICH op failed — erase / write / read-back
+/ data mismatch, with a mismatch classified further (differing-byte
+count, first diff, and whether the sector read back still-erased 0xFF vs
+stale data). The 2026-08-16 bench flake printed only "verify failed" and
+left the failing stage forever unknowable; the next occurrence will be
+attributable. The table write (the brick window) additionally gained
+in-place retries ×3 with full read-back verify — a reboot can't rescue
+that step, so it retries without one.
+
+Tested hardware-free: the QEMU harness (harness-side per the isolation
+rule) gained an opt-in write-fault injector in the m25p80 flash model
+(`LUXEL_FLAKY_WRITE=<addr>:<len>:<budget>`, inert unless set), and
+`takeover-test.py --inject-fault` drops both of boot 1's program
+attempts at sector 0x10000 — byte-for-byte the bench failure signature
+(erase lands, program doesn't, sector reads back 0xFF). 32 assertions:
+boot 1a fails exactly like the bench did, reboots itself with `1/3
+attempts used`, boot 1b converts cleanly, and the final flash state is
+identical to the happy path (retry counter included). Both existing
+variants re-verified green on the new firmware + patched QEMU.
+
+The underlying silicon-side flake itself remains unreproduced/un-root-
+caused — if it recurs, the new per-stage log lines are the evidence to
+file the follow-up with.
+
 ## 2026-08-16 — The WLED takeover now has a hardware-free
 ## compose→boot→assert test (Gitea #43)
 
