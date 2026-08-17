@@ -39,6 +39,12 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 ## Autonomy
 - Be decisive on routine engineering safeguards (tests, lints, guards, docs): add them
   and report, don't ask.
+- Work to be done goes in a Gitea issue — ALWAYS. Whenever something is deferred,
+  left for Jeremy to verify on hardware, or otherwise "to do later," file it as a
+  ticket on Gitea (`tea issues create --repo zuckerberg/luxel …`, see the git-forges
+  skill), not as a docs entry, a memory note, or a session task. Docs like
+  docs/UNTESTED.md may still describe status, but the actionable to-do lives in the
+  tracker (Jeremy's instruction, 2026-08-16).
 - Commit and push completed, verified work when it's the right time — don't leave
   finished work sitting dirty in the tree waiting for Jeremy to ask. Open the PR
   AND merge it yourself; don't wait for Jeremy to merge (his standing
