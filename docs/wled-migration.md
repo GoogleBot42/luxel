@@ -120,8 +120,16 @@ smoothest origin for converting a *second* device.
   - One silent first-boot hang (zero serial output, RTC-WDT reset) when
     a takeover-less build booted under WLED's table; not reproduced.
   - The older intermittent `esp-alloc: 3 heap regions` first-boot panic
-    (1-in-2, 2026-07-26, TAKEOVER=1-era builds; not seen since). Like
-    the others it fires before the boot guard arms.
+    (1-in-2, 2026-07-26, TAKEOVER=1-era builds; not seen since) —
+    ROOT-CAUSED + FIXED 2026-08-16 (PR #50): a flash-read flake corrupts
+    the `HEAP` static's `.data` slot array during the WLED bootloader's
+    `.data` copy, overflowing esp-alloc's 3-slot region array (only 2 are
+    ever filled legitimately). It fired before the boot guard armed;
+    `ota::preboot_guard` now arms before the heap allocators and rolls
+    back to WLED after 3 consecutive pre-guard panics. Reproduced +
+    verified under QEMU (`tools/qemu/heap-regions-test.py`), but not yet
+    on metal — this is the remaining reason the page still says "beta";
+    drop the banner once a real via-WLED takeover confirms it.
 
 ## Bench workflow (this repo, the Athom)
 
