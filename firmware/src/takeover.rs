@@ -20,9 +20,10 @@
 //! table and otadata intact, so a power cut mid-copy just re-runs the
 //! takeover on the next boot. The only serial-recovery-only window is the
 //! single 4 KiB erase+write of the table sector itself (milliseconds).
-//! If a takeover build crash-loops before getting this far, ota::boot_guard
-//! (which runs first) flips otadata back to the WLED slot on the third
-//! failed boot — the device recovers to stock WLED on its own.
+//! If a takeover build crash-loops before getting this far, ota::preboot_guard
+//! (which runs first, before the heap allocators) flips otadata back to the
+//! WLED slot on the third failed boot — the device recovers to stock WLED on
+//! its own, even for a panic in the pre-heap window.
 //!
 //! Flake-safety (issue #35): an abort on anything that could be a
 //! per-boot flash flake (the self-copy verify, the config wipe, a
@@ -30,7 +31,7 @@
 //! total, before settling into the provisioning AP — the 2026-08-16 bench
 //! conversion hit exactly one such flake and recovered on the next power
 //! cycle, which this automates. Retry reboots are marked deliberate in
-//! the guard record so they don't count toward boot_guard's rollback.
+//! the guard record so they don't count toward preboot_guard's rollback.
 //!
 //! Settings inheritance: before touching anything, the takeover mounts
 //! WLED's littlefs (read-only, src/wledfs.rs) and lifts the WiFi
@@ -269,9 +270,10 @@ fn retry_or_settle(what: &str) {
     );
 }
 
-/// Called once at boot, after ota::init + ota::boot_guard and before any
-/// module that touches data partitions. No-op (one 256-byte flash read)
-/// when the partition table is already Luxel's.
+/// Called once at boot, after ota::init (and after ota::preboot_guard, which
+/// runs before the heap allocators) and before any module that touches data
+/// partitions. No-op (one 256-byte flash read) when the partition table is
+/// already Luxel's.
 pub fn maybe_takeover() {
     let mut live = alloc::vec![0u8; LUXEL_TABLE.len()];
     if !crate::assets::read_chunk(TABLE_OFFSET, &mut live) {

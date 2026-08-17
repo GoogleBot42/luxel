@@ -135,6 +135,24 @@ async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
+    // Boot-loop guard, armed BEFORE the heap allocators below. A panic in the
+    // pre-guard window — notably esp-alloc's "Exceeded the maximum of 3 heap
+    // memory regions", which a flash-read flake corrupting the HEAP static's
+    // .data slot array can trigger on a WLED-bootloader takeover boot
+    // (reproduced under QEMU; tools/qemu/heap-regions-test.py) — reboots via
+    // custom_halt but never reaches the old post-init guard, so a
+    // deterministic version would loop forever without ever rolling back to
+    // the working slot (WLED, on a takeover device). preboot_guard is
+    // heap-free by necessity (no allocator yet); it fully replaces the old
+    // ota::boot_guard() call. The flash driver is borrowed here and handed to
+    // ota::init once the heap is up.
+    let ota_flash = if option_env!("LUXEL_NO_OTA").is_none() {
+        let mut flash = esp_storage::FlashStorage::new(p.FLASH);
+        ota::preboot_guard(&mut flash);
+        Some(flash)
+    } else {
+        None
+    };
     // The WiFi blob mallocs through this allocator and does NOT null-check;
     // running the heap dry shows up as StoreProhibited crashes inside the
     // blob (seen on the PB v3 in pm_on_beacon_rx), not as clean OOM panics.
@@ -249,16 +267,15 @@ async fn main(spawner: Spawner) -> ! {
     // no esp-storage FlashStorage construction, no boot-time partition
     // table read — to test whether flash-driver setup interacts with the
     // esp32 radio crashes (serving worked before the OTA commit).
-    if option_env!("LUXEL_NO_OTA").is_none() {
-        ota::init(esp_storage::FlashStorage::new(p.FLASH));
-    // Boot-loop guard BEFORE the risky part of boot (WiFi init is where a
-    // bad image dies): 3 consecutive boots that never reach ota::boot_ok →
-    // roll back to the other OTA slot.
-    ota::boot_guard();
+    if let Some(flash) = ota_flash {
+        // The boot-loop guard already ran (preboot_guard, before the heap
+        // allocators); reuse the flash driver it borrowed. Consuming
+        // ota_flash here is what gates the rest on LUXEL_NO_OTA.
+        ota::init(flash);
     // WLED → Luxel self-install (no-op when the partition table is already
-    // ours). AFTER boot_guard: a crash-looping takeover build then rolls
-    // back to the WLED slot (WLED's table has valid ota_0/ota_1 + otadata,
-    // so the guard's rollback works there too). BEFORE assets/patterns
+    // ours). The boot guard (preboot_guard) already ran and armed rollback,
+    // so a crash-looping takeover build still rolls back to the WLED slot
+    // (WLED's table has valid ota_0/ota_1 + otadata). BEFORE assets/patterns
     // init: under a foreign table those regions belong to other partitions
     // (they fail safe, but takeover reboots).
     // Load-bearing for the WLED migration path: this exact call shipped

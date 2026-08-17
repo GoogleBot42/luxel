@@ -268,13 +268,53 @@ Two things it turned up that are worth knowing before reading a log:
 - **The bootloader writes otadata back on the erased-otadata fallback**
   (`set_actual_ota_seq()`: seq=1, `ESP_OTA_IMG_VALID`, CRC over the seq
   word). So post-takeover otadata at 0xD000 is *not* erased, and neither
-  is the boot-guard sector at 0xC000 — boot 2's `ota::boot_guard` has
-  already written its `LXBG` record by the time anything else runs.
+  is the boot-guard sector at 0xC000 — `ota::preboot_guard` has already
+  written its `LXBG` record (before the heap allocators) by the time
+  anything else runs.
 
 Also confirmed, since it had never been exercised: `esp-storage`'s
 `FlashStorage::capacity()` reports the real 4 MiB under QEMU, so the
 takeover's flash-size preflight passes rather than refusing to
 repartition.
+
+## Root-caused with the harness: the pre-guard heap-regions panic
+
+The intermittent `esp-alloc: Exceeded the maximum of 3 heap memory regions`
+panic — seen once on the first Athom takeover (2026-07-26), before
+`ota::init`, self-healing on reboot — was root-caused under this harness
+and fixed. Full mechanism and the reproduction are in
+`tools/qemu/heap-regions-test.py`; in brief:
+
+- The athom firmware makes exactly **two** `esp_alloc::heap_allocator!`
+  calls (the `#[ram(reclaimed)]` 96 KiB region + the 80 KiB region; the
+  other arms are `cfg`-gated out) → two `add_region()`s into esp-alloc's
+  **three**-slot region array. Disassembly confirms only two call sites
+  (two `l32r` loads of `add_region`'s address in `main`); nothing in
+  esp-hal/esp-rtos/esp-radio adds a region. So a clean boot fills 2 of 3
+  slots. A panic ("exceeded 3") therefore requires the slot array to
+  already hold stale `Some` entries when `main`'s allocators run.
+- That happens when the (ancient Arduino-2019) **WLED bootloader's copy of
+  the app's `.data` segment** — which contains the `HEAP` static's
+  `[None; 3]` initializer — is corrupted by a flash-read flake on the
+  takeover boot. The same flake family as issue #35's self-copy verify
+  flake, which is why it's intermittent, pre-`ota::init`, and tied to the
+  via-WLED boot. Under QEMU (deterministic RAM) it never occurs naturally,
+  so the test pokes the slot discriminants to `Some` over the gdbstub at
+  the first `add_region` to stand in for the flake — no firmware bytes are
+  changed, keeping the harness isolated.
+- **The danger** was not the intermittent panic (it self-heals via
+  `custom_halt`'s reboot) but a *deterministic* one: the old boot-loop
+  guard ran after `ota::init`, well past the allocators, so a pre-guard
+  panic rebooted forever without ever incrementing the guard counter or
+  rolling back to WLED. The installer page wore a beta banner because of
+  exactly this.
+- **The fix** (UPDATES.md 2026-08-16): `ota::preboot_guard`, armed *before*
+  the heap allocators (heap-free — stack buffers only, borrowing the
+  `FlashStorage` later handed to `ota::init`). It increments the same
+  `LXBG` failed-boot counter and, on the third consecutive boot that never
+  reached `boot_ok`, rolls back to the other OTA slot. The `rollback` mode
+  of the test proves it preempts the allocators; the `selfheal` mode proves
+  the panic still self-heals in the one-shot case.
 
 ## Next steps
 
