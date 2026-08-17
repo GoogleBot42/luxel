@@ -50,6 +50,15 @@ these before trusting any build/test failure as a real regression.
 - `cargo`/`node`: command not found — you're outside `nix develop`.
 - A leftover `corpus` symlink showing up in `git status`/a diff — remove it before
   committing; it's a worktree convenience, never a tracked or intended artifact.
+- `nix build .#<output>` failing with "No such file or directory" on a file that
+  plainly exists — flake builds copy only **git-tracked** files into the store, so a
+  brand-new untracked file (a patch, a new source file) is invisible until `git add`.
+  The error message names the `git add` fix; believe it.
+- A flake-output test suddenly missing its inputs (e.g. takeover-test.py: "missing
+  input: result/luxel-fw-ota.bin" right after it worked) — every `nix build` reuses
+  the same `./result` symlink, so building `.#qemu-espressif` clobbers the
+  `.#luxel-fw-athom-music` link the test reads. Rebuild the firmware output (cached,
+  seconds) or use `--out-link` for the non-firmware build.
 
 ## Merging back (concurrent sessions)
 
