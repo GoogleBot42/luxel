@@ -14,9 +14,12 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 ## Environment boundaries
 - Serial flashing of the DEV UNIT is Jeremy-only (needs a physical button hold), and its
   `firmware/serial.log` is fed from outside the container and can go stale — check its
-  mtime before trusting soak/panic claims from it. The ATHOM RIG's serial IS live
-  in-container at `/dev/ttyUSB0` (read it directly; single-reader rule — see the
-  athom-rig skill). Verified 2026-08-15 by capturing a full test battery.
+  mtime before trusting soak/panic claims from it. The ATHOM RIG's serial appears
+  in-container at `/dev/ttyUSB0` (single-reader rule — see the athom-rig skill), but
+  the hotplugged node CAN be absent entirely (it was gone all of 2026-08-22; worked
+  2026-08-15) — check it exists before planning around it, and fall back to polling
+  `/api/status` for panic/reboot detection. Restoring it (replug + `doas chmod 666`)
+  is a Jeremy action.
 - The GitHub repo (github.com/GoogleBot42/luxel) is a READ-ONLY downstream mirror for
   releases/CI only — never push, PR, or file issues there; everything happens on Gitea.
   See docs/releases.md.
