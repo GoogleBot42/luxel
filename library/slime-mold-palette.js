@@ -7,6 +7,8 @@
 // similar colors clump into smooth amoeba regions. Fills over a few seconds,
 // holds, then (auto) wipes and regrows with a fresh randomly-chosen palette.
 // Simulated on a 16x16 virtual canvas; neighbors are the regular-grid 8-ring.
+// Injected events seed the cell you poke, so the growth can be steered from
+// outside (see the readEvent note by the controls).
 
 var GRID = 16
 var CELLS = GRID * GRID
@@ -33,6 +35,12 @@ export function toggleAutoRedraw(v) { autoRedraw = v > 0.5 }
 var redrawDelay = 30
 //# min=1 max=120 step=1 default=30
 export function inputNumberRedrawDelaySeconds(v) { redrawDelay = max(1, v) }
+
+// The trigger below seeds a random free cell. Injected events (click/drag
+// the preview, POST /api/events, or the MQTT event topic — [type, x, y,
+// value]) seed the cell you poke instead, so an outside source can steer
+// where the blobs start rather than rolling dice.
+var ev = array(4)
 
 export function triggerSeedAPixel(v) { plantSeed() }
 export function triggerNewDrawing(v) { startDrawing() }
@@ -66,6 +74,17 @@ function plantSeed() {
     if (canvas[ci] < 0) { canvas[ci] = random(0.999); painted += 1; return }
     tries += 1
   }
+}
+
+// Seed the cell under a normalized (x, y). Already painted? Repaint it —
+// a deliberate poke should always show, and a fresh palette position there
+// is what re-colors the region as growth spreads from it.
+function plantSeedAt(nx, ny) {
+  var gx = clamp(floor(nx * GRID), 0, GRID - 1)
+  var gy = clamp(floor(ny * GRID), 0, GRID - 1)
+  var ci = gy * GRID + gx
+  if (canvas[ci] < 0) painted += 1
+  canvas[ci] = random(0.999)
 }
 
 function growStep() {
@@ -116,6 +135,7 @@ function startDrawing() {
 }
 
 export function beforeRender(delta) {
+  while (readEvent(ev)) plantSeedAt(ev[1], ev[2])
   if (phase == DRAW) {
     var k
     for (k = 0; k < 4 && painted < CELLS; k++) growStep()   // budgeted per frame

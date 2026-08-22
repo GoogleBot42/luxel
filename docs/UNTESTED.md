@@ -27,9 +27,11 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   button next to *debug*, allow the mic — the preview should pump with your
   voice. In device mode the same button ALSO drives the wall
   (mic → strip at ~20 Hz).
-- [ ] **Event injection** (v0.1.38/39): open *Typing Heatmap 2D* or
-  *Crosshair Pulse 2D* and click/drag the preview — hits should land where
-  you click (and on the wall too, in device mode). Then from HA (or
+- [ ] **Event injection** (v0.1.38/39): open *Typing Heatmap 2D*,
+  *Crosshair Pulse 2D*, *Ripples 2D* or *Slime mold palette* and click/drag
+  the preview — hits should land where
+  you click (and on the wall too, in device mode; *SaberDeploy Tutorial*
+  takes any event as a button press). Then from HA (or
   `mosquitto_pub` at your broker): publish `1 0.5 0.5` to
   `luxel/luxel-4ae0d4/event` while one of those patterns runs — the wall
   should react. Machine-verified against local mosquitto via the mirror;

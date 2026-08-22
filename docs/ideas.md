@@ -215,7 +215,9 @@ bytecode execution is being worked on now; the rest are queued:
   (phantom generators pause while input flows). The MQTT-topic → event
   mapping followed in v0.1.39: `luxel/<id>/event`, text lines
   `type [x [y [value]]]`, verified against real mosquitto
-  (tools/mqtt-e2e.mjs).
+  (tools/mqtt-e2e.mjs). Follow-up done 2026-08-22: the library's remaining
+  fake-trigger controls (Ripples 2D, Slime mold palette, SaberDeploy
+  Tutorial) now listen for events too, with the manual controls kept.
 
 ## Peripherals & audio (M5 territory, high wow-factor)
 
