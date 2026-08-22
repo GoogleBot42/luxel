@@ -189,6 +189,15 @@ The engine (any host: firmware, wasm, CLI) drives a program as:
    control functions (`sliderX`, `hsvPickerY`, …) are invoked with the
    UI-provided values.
 
+The host supplies real elapsed ms; the two in-pattern timing controls are
+applied by the engine, not the host, so every host behaves identically:
+`timeScale(s)` scales the delta before it advances the pattern clock, and
+`setFrameRate(fps)` makes a frame call a no-op (previous pixels returned,
+no pattern code run) until `1000/fps` real ms have accumulated, at which
+point `beforeRender` receives the whole interval. Hosts keep their own
+output cadence either way — the cap throttles pattern evaluation, not the
+LED/preview refresh.
+
 Debug hooks (breakpoints as `(fn_idx, pc)`, step Continue/Over/Into/Out,
 frame/locals/globals inspection) are host-optional; `dbg: None` is the
 zero-overhead fast path.
