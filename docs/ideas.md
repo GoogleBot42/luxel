@@ -41,9 +41,9 @@ and the autocomplete/docs pipeline, and can't break existing code.
   x, y, v)` edge-clamped `floor(x·w)` cells — `x = 1` lands in the last
   column, no `* 15.99` fudge; `canvasGet(buf, w, x, y)` **bilinear**
   with texel centers at `(i + 0.5)/w`, so set/get agree on cell centers
-  and larger maps upscale smoothly; h = len/w). Possible follow-up: an
-  accumulate variant (`canvasAdd`) for particle deposits, which today
-  still index manually for read-modify-write.
+  and larger maps upscale smoothly; h = len/w). Follow-up DONE too:
+  `canvasAdd(buf, w, x, y, v)` accumulates into the same cell for
+  particle deposits, returning the cell's new value.
 
 ## Language
 
@@ -175,10 +175,22 @@ bytecode execution is being worked on now; the rest are queued:
 - **Per-pixel persistent state buffer** [M] ★★ — a sanctioned scratch array
   the engine double-buffers, for feedback effects without manual bookkeeping.
 - **Deterministic seedable `prng` matching a documented algorithm** [S] ★ —
-  we diverge from PB (documented); pinning our own good algorithm + docs so
-  patterns are reproducible across Luxel devices (for synced installations).
-- **Frame-rate / time-scale controls in-pattern** [S] ★ — expose
-  `setFrameRate`, `timeScale` for slow-mo/debug.
+  DONE. Both generators are now pinned by test and spelled out in
+  docs/lang.md ("Determinism and seeding"): `random()` = splitmix64,
+  `prng()` = xorshift32 (13/17/5), state ← the seed's raw 16.16 word,
+  scaling `(r · max) >> 32`. New `randomSeed(s)` seeds `random()`'s
+  stream the way `prngSeed` seeds `prng`'s (returns the previous seed;
+  `prngSeed` keeps returning the previous *state*, which round-trips) —
+  so an installation can agree on a sequence without rewriting patterns
+  onto `prng`. No sequence changed; PB source is unaffected.
+- **Frame-rate / time-scale controls in-pattern** [S] ★ — DONE.
+  `timeScale(s)` scales the delta the engine applies to the pattern
+  clock (time/beat/beforeRender delta all follow; 0 freezes, negatives
+  clamp); `setFrameRate(fps)` holds the last frame until 1000/fps real ms
+  have passed and then hands `beforeRender` the whole interval. Both
+  enforced in `Engine::frame`, so every host honors them identically; the
+  host output cadence (and therefore the reported `fps`) is unchanged —
+  documented, not faked.
 - **External event injection** [M] ★★★ — DONE (v0.1.38): engine-side
   32-event drop-oldest queue; `eventCount()` + `readEvent(out)` filling
   `[type, x, y, value]`; fed by preview clicks/drags (type 1, normalized

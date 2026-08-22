@@ -1,5 +1,62 @@
 # Update log
 
+## 2026-08-22 — Builtins batch 5: canvasAdd, seedable random(),
+## timeScale / setFrameRate
+
+The three small `docs/ideas.md` items that were left in the engine/runtime
+section, appended to the builtin table (ids stable, no LXBC version bump,
+every stored blob still valid) and each pinned by test.
+
+- **`canvasAdd(buf, w, x, y, v)`** — the accumulate half of the canvas
+  helpers: `cell += v` at exactly the cell `canvasSet` writes (same
+  edge-clamped `floor(x·w)` addressing, same "of a non-array" runtime
+  error, same degenerate-canvas no-op). Particle deposits and heatmap
+  splats stop hand-rolling the read-modify-write. Returns the cell's
+  **new** value, the way `+=` evaluates in JS.
+
+- **Determinism, pinned.** Both generators are now documented as contract
+  and asserted by test (`random_seed_pins_the_documented_sequence`,
+  `prng_pins_the_documented_sequence`, both recomputing the sequence
+  independently rather than snapshotting a run): `random()` is splitmix64
+  (low 32 bits), `prng()` is xorshift32 13/17/5, state ← the seed's raw
+  16.16 word, scaled `(r · max) >> 32`. The new **`randomSeed(s)`** seeds
+  `random()`'s stream the way `prngSeed` seeds `prng()`'s — so a synced
+  installation gets an agreed-on sequence without porting patterns from
+  `random()` onto `prng()`. It returns the previous *seed* (the 64-bit
+  state can't round-trip through an `Fx`, where `prngSeed`'s 32-bit state
+  can, and that save/restore property is now tested too). **No existing
+  sequence changed** — the algorithms are what Luxel always ran; they were
+  just undocumented and unpinned, with a stale `TODO(oracle)` on `prng`.
+
+- **`timeScale(s)` / `setFrameRate(fps)`** — in-pattern timing. `timeScale`
+  scales the frame delta before it advances the clock, so `time()`,
+  `beat()`, sync's `time_ms` and `beforeRender`'s delta all slow (or
+  freeze, or speed up) together; negatives clamp to 0. `setFrameRate`
+  holds the previous frame — same pixels, no pattern code run — until
+  `1000/fps` ms of **real** time have accumulated, then hands
+  `beforeRender` the whole interval, so delta-driven motion lands where it
+  would have uncapped. Period clamped to 60 s.
+
+  Both are enforced in `Engine::frame`, not per host, so firmware, WASM
+  playground and CLI behave identically — no host plumbing, no
+  QEMU/firmware exposure, and nothing to fake. Two honest consequences,
+  now in docs/lang.md and docs/spec/vm.md: the host's output stage is
+  untouched (LEDs/preview still refresh at the host's cadence re-sending
+  the held frame, so the reported `fps` does **not** follow the cap — the
+  cap throttles pattern evaluation, which is the expensive part), and
+  the clock keeps running while frames are held so sync stays continuous
+  (a sync *jump* is no longer misreported to the pattern as elapsed
+  delta — `set_time_ms` now moves the render mark with it).
+
+Verification: `cargo test --workspace` green; the 322-pattern `luxel check`
+sweep over `library/` clean (compile + LXBC round-trip + smoke); web
+`npm run build` (svelte-check 0/0) plus `e2e.mjs`, `device-e2e.mjs` and
+`sync-e2e.mjs` all green — sync especially, since the delta path moved.
+Autocomplete + hover for all four names driven in real chromium
+(screenshot), including a pattern using every one of them running in the
+playground preview. Clippy warning set identical to master. No firmware
+source touched.
+
 ## 2026-08-16 — Pre-guard heap-regions panic root-caused + fixed, and a
 ## one-command QEMU test harness
 

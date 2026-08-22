@@ -1009,6 +1009,141 @@ fn canvas_helpers() {
 }
 
 #[test]
+fn canvas_add_accumulates_in_the_same_cells_as_canvas_set() {
+    // canvasAdd addresses exactly like canvasSet — floor(x·w), edges
+    // clamped — but read-modify-writes the cell (particle deposits)
+    assert_eq!(
+        eval_prog("c = array(16)\ncanvasAdd(c, 4, 0.99, 0, 7)\nexport var out = c[3]"),
+        fx(7.0)
+    );
+    assert_eq!(
+        eval_prog(
+            "c = array(16)\ncanvasAdd(c, 4, 0.3, 0.6, 0.25)\ncanvasAdd(c, 4, 0.3, 0.6, 0.5)\n\
+             export var out = c[9]"
+        ),
+        fx(0.75)
+    );
+    // same cell as canvasSet for every corner, including x = 1 → last column
+    assert_eq!(
+        eval_prog(
+            "a = array(16)\nb = array(16)\n\
+             for (i = 0; i < 5; i++) {\n\
+               x = i / 4\n  canvasSet(a, 4, x, 1, 1)\n  canvasAdd(b, 4, x, 1, 1)\n}\n\
+             export var out = 0\n\
+             for (i = 0; i < 16; i++) if (a[i] != min(b[i], 1)) out = 1"
+        ),
+        Fx::ZERO
+    );
+    // negative deposits subtract; the cell keeps its running total
+    assert_eq!(
+        eval_prog("c = array(4)\nc[0] = 1\ncanvasAdd(c, 2, 0, 0, -0.25)\nexport var out = c[0]"),
+        fx(0.75)
+    );
+    // returns the cell's NEW value (`cell += v`, like JS `+=`)
+    assert_eq!(
+        eval_prog("c = array(4)\nc[0] = 2\nexport var out = canvasAdd(c, 2, 0, 0, 3)"),
+        fx(5.0)
+    );
+    // degenerate canvas: nothing written, returns v — where canvasSet
+    // also returns v untouched
+    assert_eq!(
+        eval_prog("c = array(4)\nexport var out = canvasAdd(c, 0, 0, 0, 3)"),
+        fx(3.0)
+    );
+    assert_eq!(
+        eval_prog("c = array(2)\nexport var out = canvasAdd(c, 4, 0, 0, 3)"),
+        fx(3.0)
+    );
+    // …and a non-array first argument is the same clean runtime error
+    for src in ["canvasAdd(5, 4, 0, 0, 1)", "canvasSet(5, 4, 0, 0, 1)"] {
+        let e = Engine::new(src, 10, 1).unwrap();
+        let err = e
+            .last_error
+            .unwrap_or_else(|| panic!("expected error for {src:?}"));
+        assert!(err.message.contains("of a non-array"), "{}", err.message);
+    }
+}
+
+#[test]
+fn random_seed_pins_the_documented_sequence() {
+    // The generator is part of the contract (docs/lang.md "Determinism and
+    // seeding"): splitmix64, state = the seed's raw 16.16 word, output =
+    // the low 32 bits, scaled by (r · max) >> 32. Same seed → same stream
+    // on firmware, WASM and CLI, which is what synced installations need.
+    // These values are computed independently below, not copied from a run.
+    fn splitmix_next(state: &mut u64) -> u32 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) as u32
+    }
+    let mut state = Fx::from_int(7).raw() as u32 as u64; // randomSeed(7)
+    for i in 0..8 {
+        let want = Fx::from_raw(((splitmix_next(&mut state) as u64 * Fx::ONE.raw() as u64) >> 32)
+            as i32);
+        let got = eval_prog(&format!(
+            "randomSeed(7)\nexport var out\nfor (i = 0; i <= {i}; i++) out = random(1)"
+        ));
+        assert_eq!(got, want, "random draw {i} after randomSeed(7)");
+    }
+    // Fractional seeds are distinct states (the raw 16.16 word is the seed)
+    assert_ne!(
+        eval_prog("randomSeed(1)\nexport var out = random(1)"),
+        eval_prog("randomSeed(1.5)\nexport var out = random(1)")
+    );
+    // Reseeding restarts the same stream
+    assert_eq!(
+        eval_prog("randomSeed(3)\nrandom(1)\nrandom(1)\nrandomSeed(3)\nexport var out = random(1)"),
+        eval_prog("randomSeed(3)\nexport var out = random(1)")
+    );
+    // …and returns the PREVIOUS seed (0 before the stream is ever seeded)
+    assert_eq!(eval_prog("export var out = randomSeed(4)"), Fx::ZERO);
+    assert_eq!(
+        eval_prog("randomSeed(4.5)\nexport var out = randomSeed(9)"),
+        fx(4.5)
+    );
+}
+
+#[test]
+fn prng_pins_the_documented_sequence() {
+    // prng() is xorshift32 (Marsaglia 13/17/5) over the seed's raw 16.16
+    // word — pinned so a seeded pattern reproduces across Luxel devices.
+    // Unchanged from the sequence Luxel has always produced.
+    fn xorshift_next(x: &mut u32) -> u32 {
+        *x ^= *x << 13;
+        *x ^= *x >> 17;
+        *x ^= *x << 5;
+        *x
+    }
+    let mut state = Fx::from_int(7).raw() as u32; // prngSeed(7)
+    for i in 0..8 {
+        let want =
+            Fx::from_raw(((xorshift_next(&mut state) as u64 * Fx::ONE.raw() as u64) >> 32) as i32);
+        let got = eval_prog(&format!(
+            "prngSeed(7)\nexport var out\nfor (i = 0; i <= {i}; i++) out = prng(1)"
+        ));
+        assert_eq!(got, want, "prng draw {i} after prngSeed(7)");
+    }
+    // prngSeed's state is 32 bits, so its return value round-trips exactly:
+    // save the state, draw from it, restore, and the same draw comes back.
+    // (prngSeed(0) is the one exception — state 0 is xorshift32's fixed
+    // point, so it is remapped to 1.)
+    assert_eq!(
+        eval_prog(
+            "prngSeed(11)\nprng(1)\ns = prngSeed(0)\nprngSeed(s)\nfirst = prng(1)\nprngSeed(s)\n\
+             export var out = prng(1) - first"
+        ),
+        Fx::ZERO
+    );
+    // seeding does not disturb random()'s independent stream
+    assert_eq!(
+        eval_prog("randomSeed(2)\nprngSeed(99)\nprng(1)\nexport var out = random(1)"),
+        eval_prog("randomSeed(2)\nexport var out = random(1)")
+    );
+}
+
+#[test]
 fn value_returning_color() {
     // hsv2rgb writes into out and returns it: hue 0 = red
     assert_eq!(

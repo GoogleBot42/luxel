@@ -64,6 +64,7 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "feedback", sig: "feedback(arr, decay)", doc: "Multiply every element by decay in place (trails/glow); returns arr. (Luxel)" },
   { name: "canvasSet", sig: "canvasSet(buf, w, x, y, v)", doc: "Write v at normalized (x, y) on a row-major w-wide canvas (h = length/w). Coordinates clamp to the edges — no OOB, no *15.99 fudge. Returns v. (Luxel)" },
   { name: "canvasGet", sig: "canvasGet(buf, w, x, y)", doc: "Bilinear sample of a row-major w-wide canvas at normalized (x, y); texel centers at (i+0.5)/w, edges clamped. Smooth upscaling on larger maps for free. (Luxel)" },
+  { name: "canvasAdd", sig: "canvasAdd(buf, w, x, y, v)", doc: "Add v into the cell canvasSet would write at normalized (x, y) — particle deposits without a manual read-modify-write. Same edge-clamped floor(x·w) addressing; returns the cell's new value. (Luxel)" },
   { name: "eventCount", sig: "eventCount()", doc: "Number of injected external events waiting to be read. Events arrive from preview clicks, POST /api/events, or any websocket/HTTP source. (Luxel)" },
   { name: "readEvent", sig: "readEvent(out)", doc: "Pop the oldest injected event into out[0..4] = [type, x, y, value] and return 1; returns 0 (out untouched) when none are queued. Idiom: while (readEvent(ev)) { … }. Preview clicks send type 1 with x/y normalized 0..1. (Luxel)" },
   { name: "dot", sig: "dot(x1, y1, x2, y2)", doc: "2D dot product. (Luxel)" },
@@ -74,12 +75,15 @@ export const BUILTINS: BuiltinDoc[] = [
   // randomness
   { name: "random", sig: "random(max)", doc: "True random in [0, max)." },
   { name: "prng", sig: "prng(max)", doc: "Seedable pseudo-random in [0, max)." },
-  { name: "prngSeed", sig: "prngSeed(seed)", doc: "Seed prng(); returns the previous state." },
+  { name: "prngSeed", sig: "prngSeed(seed)", doc: "Seed prng() — xorshift32 over the seed's raw 16.16 word; returns the previous state (restore it to rewind the stream)." },
+  { name: "randomSeed", sig: "randomSeed(seed)", doc: "Pin random()'s stream: same seed → same sequence on every Luxel device (splitmix64, pinned by test — for synced installations). Returns the previous seed. (Luxel)" },
   // waveforms & timing
   { name: "time", sig: "time(interval)", doc: "Sawtooth 0→1 every interval × 65.536 s." },
   { name: "wave", sig: "wave(v)", doc: "Sine shaped 0..1: (1 + sin(v·2π)) / 2." },
   { name: "square", sig: "square(v, duty)", doc: "Square wave 0/1 with given duty cycle." },
   { name: "triangle", sig: "triangle(v)", doc: "Triangle wave 0..1..0 per unit input." },
+  { name: "timeScale", sig: "timeScale(s)", doc: "Run the pattern clock at s × real time — 0.25 slow-mo, 0 frozen, 2 double speed. time(), beat() and beforeRender's delta all follow. Returns the previous scale. (Luxel)" },
+  { name: "setFrameRate", sig: "setFrameRate(fps)", doc: "Cap how often the pattern is evaluated: the last frame is held until 1000/fps ms have passed, then beforeRender gets the whole elapsed delta. 0 removes the cap; returns the previous one. (Luxel)" },
   // interpolation
   { name: "mix", sig: "mix(a, b, t)", doc: "Linear blend of a and b by t." },
   { name: "smoothstep", sig: "smoothstep(low, high, x)", doc: "Smooth 0..1 ramp between low and high." },

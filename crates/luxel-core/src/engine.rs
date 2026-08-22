@@ -105,6 +105,17 @@ pub struct Engine {
     pixels: Vec<[u8; 3]>,
     /// Pattern-local time in ms, 16-frac for sub-ms delta accumulation.
     time_acc: u64,
+    /// `time_acc` as of the last frame the pattern actually ran — the
+    /// difference is `beforeRender`'s delta, so a frame-rate-capped
+    /// pattern sees the whole elapsed interval, not one host tick.
+    render_time_acc: u64,
+    /// Real (unscaled) ms since the last pattern render, 16-frac —
+    /// `setFrameRate`'s accounting. Real time, not pattern time, so a
+    /// `timeScale(0)` freeze doesn't also stop rendering.
+    frame_acc: u64,
+    /// False until the first frame runs, so a cap set during init can't
+    /// hold a never-rendered (black) buffer.
+    rendered_once: bool,
     pub last_error: Option<VmError>,
     debug_enabled: bool,
     /// Some(stage) while the pipeline is suspended at a debug stop.
@@ -217,6 +228,9 @@ impl Engine {
             render,
             controls,
             time_acc: 0,
+            render_time_acc: 0,
+            frame_acc: 0,
+            rendered_once: false,
             last_error,
             debug_enabled: false,
             run_stage: None,
@@ -648,20 +662,49 @@ impl Engine {
     /// delta instead, which stays smooth).
     pub fn set_time_ms(&mut self, ms: u64) {
         self.time_acc = ms << 16;
+        // a clock jump is not a frame delta: don't hand the sync step to
+        // beforeRender as elapsed time
+        self.render_time_acc = self.time_acc;
         self.vm.time_ms = ms;
     }
 
     /// Advance time by `delta_ms` and render one frame.
+    ///
+    /// Two in-pattern controls shape this (both default to off, so an
+    /// untouched pattern behaves exactly as before):
+    ///
+    /// - `timeScale(s)` scales `delta_ms` before it advances the clock, so
+    ///   the whole pattern-visible time base — `time()`, `beat()`, the
+    ///   `beforeRender` delta — runs at s × real time.
+    /// - `setFrameRate(fps)` holds the previous frame (returning the same
+    ///   pixels, running no pattern code) until 1000/fps ms of *real* time
+    ///   have accumulated. The clock itself keeps running, so `time_ms()`
+    ///   stays continuous for Luxel-to-Luxel sync; when the frame does run,
+    ///   `beforeRender` gets the whole interval as its delta.
     pub fn frame(&mut self, delta_ms: Fx) -> &[[u8; 3]] {
         if self.run_stage.is_some() {
             // paused at a debug stop mid-frame: time frozen, pixels as-is
             return &self.pixels;
         }
-        if delta_ms.raw() > 0 {
-            self.time_acc += delta_ms.raw() as u64;
-        }
+        let real = delta_ms.raw().max(0) as u64;
+        // Fx::mul wraps on overflow; scale on the raw i64 product instead
+        // and clamp, so a big timeScale saturates rather than going negative.
+        let scaled = if self.vm.time_scale == Fx::ONE {
+            real
+        } else {
+            ((real as i64 * self.vm.time_scale.raw() as i64) >> 16).min(i32::MAX as i64) as u64
+        };
+        self.time_acc += scaled;
         self.vm.time_ms = self.time_acc >> 16;
-        self.cur_delta = delta_ms;
+        self.frame_acc = self.frame_acc.saturating_add(real);
+        if self.rendered_once && self.vm.frame_min_raw > self.frame_acc {
+            return &self.pixels; // under the frame-rate cap: hold this frame
+        }
+        self.frame_acc = 0;
+        self.rendered_once = true;
+        self.cur_delta =
+            Fx::from_raw((self.time_acc - self.render_time_acc).min(i32::MAX as u64) as i32);
+        self.render_time_acc = self.time_acc;
         self.run_stage = Some(RunStage::Before);
         self.drive(None);
         &self.pixels

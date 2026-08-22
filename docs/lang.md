@@ -123,6 +123,49 @@ the source location and keeps rendering. Array storage is budgeted
    display). Luxel extension: a `//# min=0 max=5 step=0.5 default=2`
    comment on the line above bounds the control in the UI (PB ignores it).
 
+### Timing controls (Luxel extension)
+
+Two builtins let a pattern shape its own timing. Both default to off, so
+an untouched pattern behaves exactly as it always has. Call them from
+top-level init (they take effect from the first frame) or from
+`beforeRender` (from the next one).
+
+- **`timeScale(s)`** — run the pattern-visible clock at `s` × real time.
+  The engine scales each frame's delta before advancing the clock, so
+  everything time-based follows together: `time()`, `beat()`/`beatSin()`,
+  the clock `time_ms` used for Luxel-to-Luxel sync, and the `delta`
+  handed to `beforeRender`. `timeScale(0.25)` is slow-motion for reading
+  a fast effect, `timeScale(0)` freezes the animation while still
+  rendering every frame (interaction and controls keep working),
+  `timeScale(2)` doubles the speed. Negative values clamp to 0 — the
+  clock never runs backwards. Returns the previous scale.
+- **`setFrameRate(fps)`** — cap how often the pattern is *evaluated*. The
+  engine holds the previous frame — same pixels, no pattern code run —
+  until `1000/fps` ms of **real** time have passed, then runs
+  `beforeRender` with the whole accumulated interval as its delta, so
+  delta-driven motion lands in exactly the same place as it would
+  uncapped. Deliberately chunky, hand-animated looks (`setFrameRate(8)`)
+  and CPU headroom on a heavy pattern. `setFrameRate(0)` removes the cap;
+  returns the previous cap (0 = uncapped). The period is clamped to 60 s,
+  so a pathological `setFrameRate(0.0001)` stalls for a minute, not an
+  hour.
+
+The cap is enforced **inside the engine**, so it behaves identically on
+every host — firmware, playground, CLI — rather than depending on each
+render loop. Two consequences worth knowing:
+
+- The host's output stage is untouched. The firmware still pushes pixels
+  to the LEDs (and the playground still paints the preview) at its own
+  cadence, re-sending the held frame; `setFrameRate` throttles pattern
+  work, not the wire. The `fps` figure in the status bar and the HA
+  diagnostic sensor is that host loop rate, so it does **not** drop to
+  the cap you set.
+- The clock keeps running while frames are held, so a sync follower's
+  `time_ms` stays continuous; a clock jump from sync convergence is not
+  reported to the pattern as elapsed delta. `timeScale` is a local
+  authoring/debug control, though — a device that scales its clock will
+  drift from its sync group and keep getting yanked back.
+
 ## Builtin reference
 
 Arguments and results are 16.16 numbers; angles are radians; `t` values
@@ -148,8 +191,38 @@ where PB compile-errors on arity).
 | `time(interval)` | 0..1 sawtooth with period `interval` × 65.536 s |
 | `wave(v)` | `(1 + sin(v·2π)) / 2` |
 | `square(v, duty)` `triangle(v)` | unit-period waveforms |
+| `timeScale(s)` `setFrameRate(fps)` | Luxel extensions — see [Timing controls](#timing-controls-luxel-extension) |
 | `random(max)` | true random [0, max) |
 | `prng(max)` `prngSeed(seed)` | seedable PRNG; Luxel's sequence differs from PB's (see divergences) |
+| `randomSeed(seed)` | Luxel extension — pins `random()`'s stream (see below) |
+
+#### Determinism and seeding (Luxel extension)
+
+Both generators are **pinned**: the algorithms below are part of Luxel's
+contract, asserted by `crates/luxel-core/tests/semantics.rs`, so a seeded
+pattern produces the identical sequence on every Luxel build — ESP32
+firmware, playground WASM, CLI. That is what synced installations need:
+several devices running the same pattern from the same seed pick the same
+"random" sparkles.
+
+| | `random()` | `prng()` |
+|---|---|---|
+| algorithm | splitmix64 (γ = `0x9E3779B97F4A7C15`, the two standard mix constants), output = the low 32 bits | xorshift32, Marsaglia 13/17/5, output = the whole state |
+| seeded by | `randomSeed(s)` | `prngSeed(s)` |
+| state ← seed | the seed's raw 16.16 word, zero-extended (splitmix is counter-based, so a low-entropy seed is fine) | the seed's raw 16.16 word; `0` is remapped to `1` (xorshift32's fixed point) |
+| returns | the **previous seed** (0 if never seeded) | the **previous state** — 32 bits, so it round-trips: save it, draw, restore, and the same draws come back |
+| unseeded | host seed at pattern start — differs per device | host seed at pattern start |
+
+Both are scaled to the requested range the same way: `(r · max) >> 32`
+over the raw 16.16 word, so the result is in `[0, max)` and `max <= 0`
+gives 0. Fractional seeds are distinct states (`randomSeed(1)` and
+`randomSeed(1.5)` start different streams). The two streams are
+independent — seeding one never disturbs the other.
+
+```js
+randomSeed(1234)                 // every device in the installation agrees
+randomSeed(1234 + clockDay())    // …and re-rolls once a day, together
+```
 
 ### Interpolation
 
@@ -253,6 +326,19 @@ virtual-canvas idiom (draw into a small `array(w * h)` buffer in
   it blends the four neighbors (edges clamp). Canvas patterns get
   smooth upscaling on larger maps for free; the canvas height is
   `arrayLength(buf) / w`.
+- `canvasAdd(buf, w, x, y, v)` — the accumulate variant: `cell += v` at
+  exactly the cell `canvasSet` would write (same edge-clamped
+  `floor(x·w)` addressing, same runtime error on a non-array). Particle
+  deposits, heatmaps and splat accumulation without a manual
+  read-modify-write. Returns the cell's **new** value, like `+=` in JS,
+  so you can react to a cell saturating; negative `v` subtracts.
+
+```js
+// deposit N particles into a 16×16 canvas, then diffuse
+for (i = 0; i < n; i++) canvasAdd(buf, 16, px[i], py[i], 0.2)
+blur2D(buf, 16, 16, 1)
+feedback(buf, 0.92)
+```
 
 ### Noise
 
@@ -332,7 +418,10 @@ differ, it is deliberate:
   Differences are invisible in LED output.
 - **`prng` sequences** differ (PB's generator is unidentified float-based
   state machine; Luxel uses xorshift32). Seeded determinism holds within
-  each platform, not across them.
+  each platform, not across them — Luxel's algorithms are pinned by test
+  and documented under [Determinism and
+  seeding](#determinism-and-seeding-luxel-extension), which PB does not
+  promise. `randomSeed` is a Luxel-only builtin.
 - **Array writes with fractional literal indices**: PB aborts the frame;
   Luxel truncates (consistent with PB's own variable-index behavior).
 - **Builtin arity is not compile-checked** — missing arguments are 0

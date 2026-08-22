@@ -299,6 +299,12 @@ pub enum Builtin {
     CanvasGet,
     EventCount,
     ReadEvent,
+    // Luxel extension builtins, batch 5: canvas accumulate + determinism
+    // + in-pattern timing controls
+    CanvasAdd,
+    RandomSeed,
+    TimeScale,
+    SetFrameRate,
 }
 
 pub struct BuiltinDef {
@@ -387,6 +393,10 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("canvasSet", CanvasSet), b!("canvasGet", CanvasGet),
     // Luxel extensions, batch 4 (appended): external event injection.
     b!("eventCount", EventCount), b!("readEvent", ReadEvent),
+    // Luxel extensions, batch 5 (appended): canvas accumulate, seedable
+    // `random`, in-pattern clock/frame-rate controls.
+    b!("canvasAdd", CanvasAdd), b!("randomSeed", RandomSeed),
+    b!("timeScale", TimeScale), b!("setFrameRate", SetFrameRate),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -535,6 +545,19 @@ pub struct Vm {
     pub time_ms: u64,
     rng: u64,
     prng_state: u32,
+    /// Last seed handed to `randomSeed` — its return value (the state
+    /// itself is 64-bit and doesn't round-trip through an `Fx`).
+    random_seed: Fx,
+    /// `timeScale(s)`: the engine multiplies each frame's real delta by
+    /// this before advancing the pattern clock. ONE = real time, ZERO
+    /// freezes the clock. Never negative.
+    pub time_scale: Fx,
+    /// `setFrameRate(fps)`: minimum real ms between pattern renders, in
+    /// 16.16 (0 = uncapped). Enforced by the engine, which holds the
+    /// previous frame while under it. See [`MAX_FRAME_PERIOD_RAW`].
+    pub frame_min_raw: u64,
+    /// Last fps handed to `setFrameRate` — its return value (0 = uncapped).
+    frame_cap_fps: Fx,
     /// Set by hsv()/rgb() — the engine reads this after each render call.
     pub pixel: [Fx; 3],
     pub pixel_written: bool,
@@ -570,6 +593,11 @@ pub struct Vm {
 /// Event-queue capacity: when full the oldest event is dropped, so the
 /// freshest input wins and a pattern that never reads can't leak.
 pub const MAX_EVENTS: usize = 32;
+
+/// Longest period `setFrameRate` can ask for, 60 s in 16.16 ms. A pattern
+/// asking for 1/3600 fps would otherwise stop rendering for an hour and
+/// look like a hang; the cap keeps the worst case explainable.
+pub const MAX_FRAME_PERIOD_RAW: u64 = 60_000 << 16;
 
 #[derive(Debug, Clone)]
 pub struct MapData {
@@ -611,6 +639,10 @@ impl Vm {
             events: VecDeque::new(),
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
+            random_seed: Fx::ZERO,
+            time_scale: Fx::ONE,
+            frame_min_raw: 0,
+            frame_cap_fps: Fx::ZERO,
             pixel: [Fx::ZERO; 3],
             pixel_written: false,
             plot_coord: [Fx::ZERO; 3],
@@ -1383,8 +1415,13 @@ impl Vm {
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
     }
 
+    /// `random()`'s generator: **splitmix64**, low 32 bits of each output.
+    /// Pinned (docs/lang.md "Determinism and seeding", sequence asserted by
+    /// `semantics::random_seed_pins_the_documented_sequence`) so that
+    /// `randomSeed(s)` gives the identical stream on every Luxel build —
+    /// firmware, playground WASM, CLI. Counter-based, so a low-entropy
+    /// seed is fine: the finalizer decorrelates adjacent states.
     fn next_random(&mut self) -> u32 {
-        // splitmix64
         self.rng = self.rng.wrapping_add(0x9E3779B97F4A7C15);
         let mut z = self.rng;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
@@ -1392,8 +1429,12 @@ impl Vm {
         (z ^ (z >> 31)) as u32
     }
 
+    /// `prng()`'s generator: **xorshift32** (Marsaglia 13/17/5), state
+    /// returned whole. Pinned by test like `next_random`; the state is
+    /// 32 bits, so `prngSeed`'s return value round-trips exactly.
+    /// Diverges from PB by design — PB's generator is an unidentified
+    /// float-based state machine (docs/lang.md "Known divergences").
     fn next_prng(&mut self) -> u32 {
-        // xorshift32. TODO(oracle): PB's prng sequence is unknown.
         let mut x = self.prng_state;
         x ^= x << 13;
         x ^= x >> 17;
@@ -2276,6 +2317,75 @@ impl Vm {
                 let top = lerp(at(r0, c0), at(r0, c1), tx);
                 let bot = lerp(at(r1, c0), at(r1, c1), tx);
                 num(Fx::from_raw(lerp(top, bot, ty) as i32))
+            }
+            // ---- Luxel extensions, batch 5 ----
+            // canvasAdd(buf, w, x, y, v): `cell += v` at the same
+            // edge-clamped floor(x·w) cell canvasSet writes — particle
+            // deposits without the manual read-modify-write. Returns the
+            // cell's new value (like `+=` in JS); a degenerate canvas
+            // (w < 1, or fewer than w elements) writes nothing and
+            // returns v, exactly where canvasSet returns v.
+            CanvasAdd => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("canvasAdd of a non-array".into()));
+                };
+                let w = n(1).to_int_trunc();
+                let v = n(4);
+                if w >= 1 {
+                    let w = w as usize;
+                    let (x, y) = (n(2), n(3));
+                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    let h = data.len() / w;
+                    if h >= 1 {
+                        let i = cell_index(y, h) * w + cell_index(x, w);
+                        let sum = data[i].num() + v;
+                        data[i] = Value::Num(sum);
+                        return num(sum);
+                    }
+                }
+                num(v)
+            }
+            // randomSeed(seed): pin `random()`'s stream — same seed, same
+            // sequence on every Luxel build (synced installations). The
+            // splitmix64 state becomes the seed's raw 16.16 word, so
+            // fractional seeds are distinct and the generator's finalizer
+            // handles the low entropy. Returns the previous seed (0 if the
+            // stream was never seeded).
+            RandomSeed => {
+                let old = self.random_seed;
+                let s = n(0);
+                self.random_seed = s;
+                self.rng = s.raw() as u32 as u64;
+                num(old)
+            }
+            // timeScale(s): run the pattern-visible clock at s × real time
+            // (0.25 = slow-mo, 0 = frozen, 2 = double speed). The engine
+            // scales the frame delta before advancing `time_ms`, so
+            // time()/beat()/beforeRender's delta all follow. Negative
+            // scales clamp to 0. Returns the previous scale.
+            TimeScale => {
+                let old = self.time_scale;
+                self.time_scale = n(0).max(Fx::ZERO);
+                num(old)
+            }
+            // setFrameRate(fps): cap how often the pattern is evaluated.
+            // The engine holds the last frame until 1000/fps ms of real
+            // time have passed, then runs beforeRender with the whole
+            // accumulated delta. fps <= 0 removes the cap; the period is
+            // clamped to MAX_FRAME_PERIOD_RAW. Returns the previous cap
+            // (0 = uncapped).
+            SetFrameRate => {
+                let old = self.frame_cap_fps;
+                let fps = n(0).max(Fx::ZERO);
+                self.frame_cap_fps = fps;
+                self.frame_min_raw = if fps.raw() <= 0 {
+                    0
+                } else {
+                    // (1000 ms << 16) / fps, in 16.16 ms: the fps operand
+                    // is itself 16.16, hence the << 32 numerator.
+                    ((1000u64 << 32) / fps.raw() as u64).min(MAX_FRAME_PERIOD_RAW)
+                };
+                num(old)
             }
         }
     }

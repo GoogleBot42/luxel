@@ -66,6 +66,126 @@ fn delta_is_passed_in_ms() {
     assert_eq!(e.var("d"), Some(Value::Num(Fx::from_f64(16.5))));
 }
 
+const COUNTER: &str = "export var frames, d, t\n\
+                       export function beforeRender(delta) { frames++\n d = delta\n t = time(.1) }\n\
+                       export function render(i) { rgb(1, 1, 1) }";
+
+fn num(e: &Engine, name: &str) -> f64 {
+    match e.var(name) {
+        Some(Value::Num(v)) => v.to_f64(),
+        other => panic!("{name} = {other:?}"),
+    }
+}
+
+#[test]
+fn time_scale_scales_the_pattern_clock() {
+    // timeScale(s) runs the pattern-visible clock at s × real time: the
+    // engine clock, time()/beat(), and beforeRender's delta all follow.
+    let mut e = Engine::new(&format!("timeScale(.25)\n{COUNTER}"), 1, 1).unwrap();
+    for _ in 0..4 {
+        e.frame(Fx::from_int(40));
+    }
+    assert_eq!(e.time_ms(), 40); // 160 real ms at quarter speed
+    assert_eq!(num(&e, "d"), 10.0); // delta is scaled too
+    assert_eq!(num(&e, "frames"), 4.0); // …but every frame still renders
+
+    // 0 freezes the clock without stopping rendering
+    let mut z = Engine::new(&format!("timeScale(0)\n{COUNTER}"), 1, 1).unwrap();
+    for _ in 0..3 {
+        z.frame(Fx::from_int(40));
+    }
+    assert_eq!(z.time_ms(), 0);
+    assert_eq!(num(&z, "d"), 0.0);
+    assert_eq!(num(&z, "frames"), 3.0);
+
+    // negative clamps to frozen rather than running the clock backwards
+    let mut n = Engine::new(&format!("timeScale(-2)\n{COUNTER}"), 1, 1).unwrap();
+    n.frame(Fx::from_int(40));
+    assert_eq!(n.time_ms(), 0);
+
+    // >1 speeds up, and the call returns the previous scale
+    let mut f = Engine::new(&format!("export var prev\n{COUNTER}\nprev = timeScale(3)"), 1, 1)
+        .unwrap();
+    f.frame(Fx::from_int(10));
+    assert_eq!(f.time_ms(), 30);
+    assert_eq!(num(&f, "prev"), 1.0);
+
+    // untouched patterns are bit-identical to before the control existed
+    let mut plain = Engine::new(COUNTER, 1, 1).unwrap();
+    plain.frame(Fx::from_f64(16.5));
+    assert_eq!(plain.time_ms(), 16);
+    assert_eq!(num(&plain, "d"), 16.5);
+}
+
+#[test]
+fn set_frame_rate_caps_pattern_evaluation() {
+    // setFrameRate(fps) holds the last frame until 1000/fps real ms have
+    // passed. The pattern runs less often; the clock does not slow down.
+    let mut e = Engine::new(&format!("setFrameRate(10)\n{COUNTER}"), 1, 1).unwrap();
+    e.frame(Fx::from_int(10)); // first frame always renders
+    assert_eq!(num(&e, "frames"), 1.0);
+    for _ in 0..9 {
+        e.frame(Fx::from_int(10)); // 90 more ms: still under the 100 ms cap
+    }
+    assert_eq!(num(&e, "frames"), 1.0, "capped frames must not run");
+    assert_eq!(e.time_ms(), 100, "the clock keeps running while capped");
+    e.frame(Fx::from_int(10));
+    assert_eq!(num(&e, "frames"), 2.0);
+    // the frame that does run sees the WHOLE elapsed interval as its delta
+    assert_eq!(num(&e, "d"), 100.0);
+    // …so time-based animation lands in the same place as uncapped
+    assert!((num(&e, "t") - 110.0 / 6552.0).abs() < 1e-3);
+
+    // held frames return the previous pixels, not black
+    let mut p = Engine::new(
+        "setFrameRate(10)\nexport function render(i) { rgb(1, 1, 1) }",
+        2,
+        1,
+    )
+    .unwrap();
+    assert_eq!(p.frame(Fx::from_int(10))[0], [255, 255, 255]);
+    assert_eq!(p.frame(Fx::from_int(10))[0], [255, 255, 255]);
+
+    // fps <= 0 removes the cap; the call returns the previous cap (0 = none)
+    let mut off = Engine::new(
+        &format!("export var a, b\n{COUNTER}\na = setFrameRate(10)\nb = setFrameRate(0)"),
+        1,
+        1,
+    )
+    .unwrap();
+    for _ in 0..3 {
+        off.frame(Fx::from_int(1));
+    }
+    assert_eq!(num(&off, "frames"), 3.0);
+    assert_eq!(num(&off, "a"), 0.0);
+    assert_eq!(num(&off, "b"), 10.0);
+
+    // an absurdly slow rate clamps to a 60 s period rather than hanging
+    let mut slow = Engine::new(&format!("setFrameRate(.0001)\n{COUNTER}"), 1, 1).unwrap();
+    slow.frame(Fx::from_int(1));
+    for _ in 0..60 {
+        slow.frame(Fx::from_int(1000));
+    }
+    assert_eq!(num(&slow, "frames"), 2.0);
+
+    // capping is real-time, so it survives a frozen clock (an interactive
+    // pattern with timeScale(0) keeps being evaluated)
+    let mut frozen = Engine::new(&format!("timeScale(0)\nsetFrameRate(50)\n{COUNTER}"), 1, 1)
+        .unwrap();
+    for _ in 0..5 {
+        frozen.frame(Fx::from_int(10));
+    }
+    assert_eq!(num(&frozen, "frames"), 3.0); // t = 0, 20, 40 ms
+    assert_eq!(frozen.time_ms(), 0);
+
+    // a sync clock jump is not a frame delta
+    let mut sync = Engine::new(COUNTER, 1, 1).unwrap();
+    sync.frame(Fx::from_int(10));
+    sync.set_time_ms(50_000);
+    sync.frame(Fx::from_int(10));
+    assert_eq!(num(&sync, "d"), 10.0);
+}
+
 #[test]
 fn assert_gates_the_pattern() {
     // `assert(cond[, "message"])` runs inline in top-level init: a falsy
