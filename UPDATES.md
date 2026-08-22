@@ -1,5 +1,50 @@
 # Update log
 
+## 2026-08-22 — library: the last fake-trigger controls now listen for
+## real events (`readEvent`)
+
+The follow-up v0.1.38 explicitly left on the table ("swapping the
+patterns' trigger controls over where it helps"). A trigger button is a
+stand-in for a poke that comes from *outside*; now that `eventCount()` /
+`readEvent()` exist, the patterns whose trigger only ever emulated one
+consume the real thing, following the Typing Heatmap / Crosshair Pulse
+idiom: **keep the manual control, add an event drain**. Backward
+compatible — nothing that worked before stopped working.
+
+Audited all 13 library files mentioning "trigger"; 4 exposed a
+trigger-style *control* (2 already converted in v0.1.38) and 2 more used
+a slider/toggle as a fake momentary button. Converted three:
+
+- **Ripples 2D** — `triggerSplash` restarted drop 0 at a random point.
+  Events now splash at the poked `(x, y)`; the trigger keeps its random
+  splash and both go through one `splash()` that recycles the
+  furthest-expanded ring instead of always clobbering slot 0. Rain keeps
+  falling during real input (unlike the reference patterns' phantom
+  generators, the drops *are* the pattern — no `quiet` window here).
+- **Slime mold palette** — `triggerSeedAPixel` planted at a random free
+  cell. Events plant at the poked cell (repainting an already-painted one,
+  so a deliberate poke always shows), which is what lets an outside source
+  steer where the blobs start.
+- **SaberDeploy Tutorial** — its header already admitted the UI toggle
+  "stands in for a momentary pushbutton". Events are now the real button:
+  any frame carrying at least one event is one press (a burst inside one
+  frame deliberately doesn't flip twice and cancel out); the toggle stays
+  as the by-hand path.
+
+Left alone, deliberately: *Golden Tix*'s `sliderSlideRightToReset` (a
+slider-as-button hack, but resetting a live-coding sandbox's clock is an
+editor action, not an external stimulus) and the ~9 patterns whose
+"trigger" is an internal edge-trigger latch on audio/physics, not a
+control.
+
+Verification: three new tests in `crates/luxel-core/tests/engine.rs` push
+an event into each converted pattern and assert the poked cell / blade
+direction changes against a same-seed unpoked control — negative-controlled
+(all three fail against the pre-change sources). Full `luxel check` sweep
+over `library/` clean at 322/322 on both the default and 16×16 grids,
+400-frame soaks clean, `cargo test --workspace` green, gallery regenerates
+at 322.
+
 ## 2026-08-22 — WiFi-blob buffer tuning: the `small-chip` profile's
 ## missing half (+9.9 KB heap, soaked on the Athom)
 

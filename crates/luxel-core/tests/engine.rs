@@ -345,6 +345,121 @@ fn blinkfade_soaks_clean() {
     assert!(lit, "blinkfade never lit a pixel in 120 frames");
 }
 
+// ── library patterns driven by injected events ───────────────────────────
+// The `readEvent` surface is only useful if the shipped patterns that
+// advertise it actually react. These lock that in: same seed, one engine
+// poked and one left alone, and the poked cell must differ.
+
+const GRID: u32 = 16;
+
+/// A GRID×GRID 2D map, same construction as `luxel check --grid`.
+fn grid_map(e: &mut Engine) {
+    let coords: Vec<[Fx; 3]> = (0..GRID * GRID)
+        .map(|i| {
+            [
+                Fx::from_int((i % GRID) as i32),
+                Fx::from_int((i / GRID) as i32),
+                Fx::ZERO,
+            ]
+        })
+        .collect();
+    e.set_map(2, &coords);
+}
+
+/// Normalized (x, y) of pixel `i` in the grid map above.
+fn grid_xy(i: u32) -> (Fx, Fx) {
+    let d = Fx::from_int((GRID - 1) as i32);
+    (
+        Fx::from_int((i % GRID) as i32) / d,
+        Fx::from_int((i / GRID) as i32) / d,
+    )
+}
+
+fn pointer_event(x: Fx, y: Fx) -> [Fx; 4] {
+    [Fx::ONE, x, y, Fx::ONE]
+}
+
+#[test]
+fn ripples_2d_event_splashes_at_the_poked_cell() {
+    let src = include_str!("../../../library/ripples-2d.js");
+    let delta = Fx::from_f64(1000.0 / 60.0);
+    let target = 9 * GRID + 6; // an interior cell, away from the edges
+
+    let mut poked = Engine::new(src, GRID * GRID, 7).unwrap();
+    let mut control = Engine::new(src, GRID * GRID, 7).unwrap();
+    grid_map(&mut poked);
+    grid_map(&mut control);
+    for _ in 0..30 {
+        poked.frame(delta);
+        control.frame(delta);
+    }
+
+    let (x, y) = grid_xy(target);
+    poked.push_event(pointer_event(x, y));
+    let after: [u8; 3] = poked.frame(delta)[target as usize];
+    let before: [u8; 3] = control.frame(delta)[target as usize];
+
+    assert!(poked.last_error.is_none(), "{:?}", poked.last_error);
+    // A drop restarts at the poke: dist 0 with phase 0 is the ring's peak,
+    // which renders near-white (hsv sat 0.4, value clamped to 1).
+    let sum: u32 = after.iter().map(|&c| c as u32).sum();
+    assert!(sum > 500, "poked cell should flash bright, got {after:?}");
+    assert_ne!(after, before, "the event changed nothing");
+}
+
+#[test]
+fn slime_mold_event_seeds_the_poked_cell() {
+    let src = include_str!("../../../library/slime-mold-palette.js");
+    let delta = Fx::from_f64(1000.0 / 60.0);
+
+    let mut control = Engine::new(src, GRID * GRID, 7).unwrap();
+    grid_map(&mut control);
+    control.frame(delta);
+    control.frame(delta);
+    // A cell the growth has not reached by frame 2 — unpainted renders black.
+    let target = control
+        .pixels()
+        .iter()
+        .position(|p| *p == [0, 0, 0])
+        .expect("early frames leave most of the canvas unpainted") as u32;
+
+    let mut poked = Engine::new(src, GRID * GRID, 7).unwrap();
+    grid_map(&mut poked);
+    poked.frame(delta);
+    let (x, y) = grid_xy(target);
+    poked.push_event(pointer_event(x, y));
+    let after: [u8; 3] = poked.frame(delta)[target as usize];
+
+    assert!(poked.last_error.is_none(), "{:?}", poked.last_error);
+    assert_ne!(after, [0, 0, 0], "the poked cell should have been seeded");
+}
+
+#[test]
+fn saberdeploy_event_reverses_the_blade() {
+    let src = include_str!("../../../library/saberdeploy-tutorial.js");
+    let delta = Fx::from_f64(1000.0 / 60.0);
+    let mut e = Engine::new(src, 60, 1).unwrap();
+    for _ in 0..10 {
+        e.frame(delta);
+    }
+    assert_eq!(e.var("dir"), Some(Value::Num(Fx::ONE)), "starts extending");
+
+    e.push_event(pointer_event(Fx::ZERO, Fx::ZERO));
+    e.frame(delta);
+    assert_eq!(
+        e.var("dir"),
+        Some(Value::Num(-Fx::ONE)),
+        "an injected press should reverse the blade"
+    );
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+
+    // A burst inside one frame is still one press, not a cancelling pair.
+    e.push_event(pointer_event(Fx::ZERO, Fx::ZERO));
+    e.push_event(pointer_event(Fx::ZERO, Fx::ZERO));
+    e.frame(delta);
+    assert_eq!(e.var("dir"), Some(Value::Num(Fx::ONE)));
+}
+
 #[test]
 fn determinism_same_seed_same_bytes() {
     let src = include_str!("../../../library/blink-fade.js");
