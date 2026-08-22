@@ -1,5 +1,83 @@
 # Update log
 
+## 2026-08-22 — The editor warns before a pattern is too big for the device (Gitea #15)
+
+Jeremy's framing on #15: *"Different ESP32s have different amounts of memory.
+A pattern can work on one device with X pixels but not another. Fortunately,
+we run the exact same pixel VM engine in WASM. We can have the device report
+back how much memory it supports. While we are executing the script, we see if
+we go over that threshold."* Plus a near-the-threshold warning.
+
+The gap was real and worse than it looked: the device's capacity rejection is
+**asynchronous**. `POST /api/code` answers 200, and only then does the render
+task fail the post-load floor check and record a `pattern too large for this
+device` vmerr. The editor showed nothing at all — the strip simply kept
+running the previous pattern and the user was left to wonder.
+
+**The estimator is a measurement, not a heuristic.** `lx_device_model`
+(luxel-wasm, new) replays the firmware's own load sequence under a counting
+allocator — the same instrument `crates/luxel-cli/tests/heapstat.rs` used to
+establish the model in the first place, moved into the wasm build: LXP
+envelope resident across `deserialize_lean`, dropped, then
+`from_program_budgeted` at the device's array budget, then three frames. Peak
+live bytes is what the floor check sees. Two things make this *better* than
+the host test it descends from — wasm32 is 32-bit like the ESP32 (structures
+measure at hardware width, where the 64-bit host test inflates every pointer),
+and it counts the **whole envelope**, source included, which for a
+source-heavy pattern is the actual peak rather than the engine.
+
+**One definition of the budget.** `RUNTIME_FLOOR` (20 KB) and the array-budget
+arithmetic moved out of `firmware/src/main.rs` into a new
+`luxel_core::budget` — firmware and wasm now import the same constants, so
+the prediction cannot drift from the device that enforces it. `load_headroom()`
+encodes the subtle part: `heap_free` is measured with the *current* pattern
+still resident, and since the firmware builds the new engine before releasing
+the old one, that number really is the incoming pattern's headroom.
+
+**Calibration against known ground truth.** Modelled over all 322 gallery
+patterns at 300 px: 322/322 clean at 90 KB free, matching the
+"full-library capacity, 322/322 modeled" figure in docs/ideas.md. Drop the
+device to 70 KB free and exactly one pattern goes over — *"Music Sequencer -
+for V3 ONLY"*, at 54.9 KB modelled against 51.2 KB of headroom. That is the
+single pattern the 2026-07-19 full-library hardware soak actually saw
+rejected. The model reproduces the hardware's one real verdict.
+
+**UI.** A banner in the editor's right-hand stack, `.banner` idiom,
+`data-role="capacity-warning"` with `data-level="tight"|"over"` and the byte
+breakdown in the `title`. Severity follows **certainty, not size**: the local
+model is advice (amber) and the device's own vmerr is a fact (red,
+`data-role="capacity-rejected"`). Non-blocking throughout — the push still
+goes, because the device is the authority and the editor only says what it
+expects. The last 15 % of headroom counts as "tight": the model is exact but
+the device's heap moves underneath it between the status read and the load.
+
+**Silence where we don't know.** The playground has no device and therefore no
+budget to judge against, and must not sprout a device affordance to say so. A
+device that reports `heap_free` 0 (native mirror, older firmware) is silent
+too — an unknown budget is not a small one, and guessing would cry wolf on
+every pattern.
+
+**Verification** (no hardware touched — the rig was another session's):
+- `luxel serve --heap-free BYTES` (new) lets the mirror impersonate a device
+  with that much free heap; default 0 keeps it honest about being a host.
+- device-e2e spawns a second mirror claiming 30 KB free — 10 KB of load
+  headroom with the arena clamped at its 16 KB minimum, which puts all four
+  verdicts within reach of a one-line pattern. 9 new checks: silent on
+  heap_free 0, clean/tight/over bands, the array-arena path, the numbers in
+  the text, the push not being blocked, and the warning clearing. **100/100
+  device-mode checks pass.** Playground e2e gained a check that an
+  array-heavy pattern raises nothing there; all pass. Screenshots taken in
+  real chromium.
+- Firmware rebuilt (`image-check: ok`), `tools/stack-check.sh` clean,
+  `cargo test --workspace` clean. The one clippy error in luxel-core
+  (`LN_2`) is pre-existing on master.
+
+Deliberately left out: no firmware API change (`heap_free` was already on the
+wire and suffices — a device reporting its own derived budget would be
+strictly more robust but needs hardware to verify); no pixel-count sweep
+("this fits at 300 px but not at 2048"); and the warning is not shown on the
+Device Patterns / Playlist lists, only in the editor.
+
 ## 2026-08-22 — ESP32-S3 and ESP32-C6 board features (builds only,
 ## untested on metal)
 

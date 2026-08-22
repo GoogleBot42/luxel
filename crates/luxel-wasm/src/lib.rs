@@ -13,12 +13,51 @@
 //!   involved (`raw = value * 65536`), so the JS side is explicit about
 //!   quantization.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use luxel_core::diag::line_col;
 use luxel_core::engine::{ControlKind, Engine};
 use luxel_core::fixed::Fx;
 use luxel_core::vm::{StepKind, Value};
+
+/// Counting allocator — the same instrument `crates/luxel-cli/tests/heapstat.rs`
+/// uses to model the device's pattern lifecycle, moved into the wasm build so
+/// the browser can run that model against the pattern in the editor
+/// (Gitea #15: "we run the exact same pixel VM engine in WASM … while we are
+/// executing the script, we see if we go over that threshold").
+///
+/// wasm32 is a 32-bit target like the ESP32, so pointer-bearing structures
+/// measure the same width here as they do on-device — this model is strictly
+/// closer to hardware than the 64-bit host test is. Cost is two relaxed
+/// atomics per allocation on a single-threaded target; measured at noise
+/// level against frame rendering.
+struct Counting;
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        let live = LIVE.fetch_add(l.size(), Ordering::Relaxed) + l.size();
+        PEAK.fetch_max(live, Ordering::Relaxed);
+        System.alloc(l)
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        LIVE.fetch_sub(l.size(), Ordering::Relaxed);
+        System.dealloc(p, l)
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+        let live = LIVE.fetch_add(new, Ordering::Relaxed) + new;
+        PEAK.fetch_max(live, Ordering::Relaxed);
+        LIVE.fetch_sub(l.size(), Ordering::Relaxed);
+        System.realloc(p, l, new)
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
 
 static ENGINES: Mutex<Vec<Option<EngineSlot>>> = Mutex::new(Vec::new());
 static RESPONSE: Mutex<String> = Mutex::new(String::new());
@@ -154,6 +193,111 @@ pub extern "C" fn lx_bytecode(h: i32) -> i32 {
 #[no_mangle]
 pub extern "C" fn lx_bytecode_ptr(h: i32) -> *const u8 {
     with_engine(h, |s| s.bc.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+/// A real `n`-byte heap allocation the optimiser cannot elide — the
+/// counting allocator only sees bytes that are genuinely requested.
+#[inline(never)]
+fn alloc_bytes(n: usize) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.resize(n, 0u8);
+    std::hint::black_box(v)
+}
+
+/// Model what an LXBC blob would cost the connected device's heap, by
+/// replaying the firmware's own pattern-load sequence under the counting
+/// allocator (Gitea #15).
+///
+/// The sequence mirrors `firmware/src/main.rs`'s `Msg::Code` arm exactly:
+/// the whole LXP envelope (name + SOURCE + bytecode) stays resident while
+/// `deserialize_lean` runs — that overlap is the real peak for a big pattern,
+/// not the engine — then it is dropped; then `try_budgeted_engine` builds the
+/// engine with the array budget the device would derive from `heap_free`;
+/// then frames render (the array arena settles in the first few). The peak
+/// live bytes across that whole window is what the device's post-load floor
+/// check sees.
+///
+/// `envelope_len` is the byte length of the LXP1 envelope that will actually
+/// be uploaded (`web/src/lib/device.ts` `lxpEnvelope`). Pass 0 and only the
+/// bytecode is assumed resident.
+///
+/// `heap_free` is the device's `/api/status` `heap_free` — free heap while
+/// the CURRENT pattern is still loaded, which is the right baseline because
+/// the firmware builds the new engine before releasing the old one.
+///
+/// Leaves JSON in the response buffer and returns 0:
+/// `{"peak":B,"budget":B,"headroom":B,"floor":B,"vmerr":string|null}`
+/// Returns -1 (with `{"message":…}`) if the blob will not even decode —
+/// which is itself a device-relevant answer.
+///
+/// `vmerr` reports ONLY the device-specific array *byte* budget failure. The
+/// PB-compat 10 240-*element* budget and ordinary runtime errors are the same
+/// on every host, so the local preview already shows them; repeating them
+/// here would blame the device for a pattern that is simply broken.
+///
+/// # Safety
+/// `blob_ptr`/`blob_len` must describe a valid LXBC buffer in linear memory.
+#[no_mangle]
+pub unsafe extern "C" fn lx_device_model(
+    blob_ptr: *const u8,
+    blob_len: usize,
+    envelope_len: usize,
+    pixel_count: u32,
+    heap_free: u32,
+) -> i32 {
+    use luxel_core::budget;
+
+    let blob = std::slice::from_raw_parts(blob_ptr, blob_len);
+    let heap_free = heap_free as usize;
+    let arena = budget::array_budget(heap_free);
+
+    // Take the baseline BEFORE anything for this pattern is allocated, then
+    // arm the peak tracker. Single-threaded wasm and a synchronous call, so
+    // nothing else can allocate inside the window. (`blob` itself was
+    // allocated by the caller before this point, so it sits in the baseline
+    // and is not double-counted against the envelope stand-in below.)
+    let base = LIVE.load(Ordering::Relaxed);
+    PEAK.store(base, Ordering::Relaxed);
+
+    let vmerr = {
+        // Stand-in for the uploaded envelope the device is still holding.
+        let env = alloc_bytes(envelope_len.max(blob_len));
+        let prog = match luxel_core::bytecode::deserialize_lean(blob) {
+            Ok(p) => p,
+            Err(e) => {
+                set_response(format!("{{\"message\":\"{}\"}}", json_escape(&e.to_string())));
+                return -1;
+            }
+        };
+        drop(env);
+        let mut eng = Engine::from_program_budgeted(prog, pixel_count, 1, arena);
+        // Take the INIT error before rendering: top-level `array(...)` calls
+        // are where the arena runs out, and the frames that follow would
+        // overwrite that with the downstream "not an array" confusion.
+        let init_err = eng.take_error();
+        for _ in 0..3 {
+            let _ = eng.frame(Fx::from_f64(16.7));
+        }
+        init_err
+            .or_else(|| eng.take_error())
+            .map(|e| e.message)
+            // vm.rs's byte-budget message; see the doc comment above.
+            .filter(|m| m.contains("pattern too large for this device"))
+    };
+
+    let peak = PEAK.load(Ordering::Relaxed).saturating_sub(base);
+    set_response(format!(
+        "{{\"peak\":{},\"budget\":{},\"headroom\":{},\"floor\":{},\"vmerr\":{}}}",
+        peak,
+        arena,
+        budget::load_headroom(heap_free),
+        budget::RUNTIME_FLOOR,
+        match &vmerr {
+            Some(m) => format!("\"{}\"", json_escape(m)),
+            None => String::from("null"),
+        }
+    ));
+    0
 }
 
 #[no_mangle]

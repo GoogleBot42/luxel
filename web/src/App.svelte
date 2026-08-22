@@ -8,7 +8,7 @@
   import PlaylistRow from "./components/PlaylistRow.svelte";
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
-  import { DeviceSession } from "./lib/device";
+  import { DeviceSession, lxpEnvelope } from "./lib/device";
   import { gatedFetch } from "./lib/fetchgate";
   import type { MqttStatus, Playlist, SyncStatus } from "./lib/device";
   import { DEFAULT_PATTERN, type Layout } from "./lib/examples";
@@ -26,6 +26,7 @@
     Luxel,
     type Control,
     type DebugSnapshot,
+    type DeviceModel,
     type Diagnostic,
     type RuntimeError,
     type StepKind,
@@ -85,6 +86,98 @@
    *  pixel total in device mode (layout changes only rearrange the preview,
    *  they never change how many pixels the device drives). */
   let devicePixels = 0;
+
+  // ---- capacity warning (Gitea #15) ----
+  // Different ESP32s have different heap. A pattern that runs happily in the
+  // playground can be rejected by the device it is pushed to, and the device's
+  // rejection is ASYNCHRONOUS — /api/code returns 200 and the render task then
+  // records a "pattern too large" vmerr — so without this the editor would
+  // just silently keep showing the old pattern on the strip.
+  //
+  // Prediction: the wasm build models the firmware's own load sequence under a
+  // counting allocator (`Luxel.deviceModel`), against the device's reported
+  // free heap. Confirmation: after each push we read /api/status back, so the
+  // device's own verdict replaces our guess the moment it exists.
+
+  /** Free heap the device last reported, in bytes. 0 = it can't tell us. */
+  let deviceHeapFree = 0;
+  /** The device's own post-push verdict (`/api/status` vmerr), if any. */
+  let deviceVmerr: string | null = null;
+  /** The local prediction for the source currently in the editor. */
+  let capacity: { level: "over" | "tight"; text: string; detail: string } | null = null;
+
+  /** How much of the device's headroom a pattern may model before we call it
+   *  "tight". The model is a measurement, not a size heuristic — but the real
+   *  device's heap moves underneath it between the status read and the load
+   *  (WiFi buffers, HTTP connection buffers, MQTT publishes, jsonview
+   *  snapshots), so the last stretch of headroom is not honestly spendable.
+   *  At a typical ~80 KB of headroom this reserves ~12 KB. */
+  const CAPACITY_TIGHT = 0.85;
+
+  /** The device's vmerr, but only when it is the capacity rejection — other
+   *  runtime errors are the local engine's business and already have a banner.
+   *  Matches the firmware's wording (`firmware/src/main.rs`) and the mirror's. */
+  $: deviceRejectedForSize =
+    deviceVmerr && /too large for this device/.test(deviceVmerr) ? deviceVmerr : "";
+
+  const kb = (bytes: number): string => `${Math.round(bytes / 1024)} KB`;
+
+  /** Model the pattern currently in the preview engine against the connected
+   *  device and set (or clear) `capacity`. Silent in the playground, and
+   *  silent on any device that can't report its free heap — an unknown budget
+   *  is not a small one, and a guess here would cry wolf on every pattern. */
+  function checkCapacity(): void {
+    if (!luxel || !engine || !device || deviceHeapFree <= 0 || devicePixels <= 0) {
+      capacity = null;
+      return;
+    }
+    const bytecode = engine.bytecode();
+    // The device holds the WHOLE upload (name + source + bytecode) while it
+    // decodes, so the envelope length — not the blob length — is what its heap
+    // actually sees. Model against the device's own pixel count, never the
+    // preview layout's: the strip length is hardware truth.
+    const envelopeLen = lxpEnvelope("", source, bytecode).length;
+    const m: DeviceModel | null = luxel.deviceModel(
+      bytecode,
+      envelopeLen,
+      devicePixels,
+      deviceHeapFree,
+    );
+    if (!m) {
+      capacity = null;
+      return;
+    }
+    const detail =
+      `models ${kb(m.peak)} of heap at ${devicePixels} px; the device reports ` +
+      `${kb(deviceHeapFree)} free and keeps ${kb(m.floor)} for itself, ` +
+      `leaving ${kb(m.headroom)} for this pattern.` +
+      (m.vmerr ? ` Device verdict: ${m.vmerr}` : "");
+    if (m.vmerr) {
+      // The array arena ran out before the floor check could even run — a
+      // different failure from "the whole load doesn't fit", and worth saying
+      // so, because the fix is smaller arrays rather than a smaller pattern.
+      capacity = {
+        level: "over",
+        text: `this pattern's arrays exceed this device's array memory budget (${kb(m.budget)} available)`,
+        detail,
+      };
+    } else if (m.peak > m.headroom) {
+      capacity = {
+        level: "over",
+        text: `this pattern is likely too large for this device (${kb(m.peak)} needed, ${kb(m.headroom)} free)`,
+        detail,
+      };
+    } else if (m.peak > m.headroom * CAPACITY_TIGHT) {
+      capacity = {
+        level: "tight",
+        text: `close to this device's limit (${kb(m.peak)} of ${kb(m.headroom)} usable)`,
+        detail,
+      };
+    } else {
+      capacity = null;
+    }
+  }
+
   /** Device output brightness (0–brightnessMax), from GET /api/brightness. */
   let brightness = 4;
   let brightnessMax = 31;
@@ -653,6 +746,8 @@
       device = session;
       deviceBase = base;
       devicePixels = st.pixels; // hardware pixel count (fixed; layout only rearranges)
+      deviceHeapFree = st.heap_free ?? 0; // 0 on a mirror / older firmware
+      deviceVmerr = st.vmerr;
       layout = { kind: "strip", pixels: st.pixels };
       if (pullPattern) {
         source = await session.pattern(); // show what's running on the device
@@ -720,12 +815,33 @@
   async function devicePush(): Promise<void> {
     if (!device) return;
     if (compileError || !engine) return; // never push a pattern the local compile rejected
+    const bc = engine.bytecode();
     try {
-      const r = await device.run(source, engine.bytecode());
+      const r = await device.run(source, bc);
       if (!r.ok) deviceError = `device rejected the pattern: ${r.error}`;
       else deviceError = "";
     } catch (e) {
       deviceError = `push failed: ${String(e)}`;
+      return;
+    }
+    // Read the device back: a capacity rejection happens on the render task
+    // AFTER /api/code has already answered 200, so the vmerr is the only place
+    // it surfaces. This also refreshes the headroom the next prediction uses.
+    await refreshCapacityFromDevice();
+  }
+
+  /** Pull `/api/status` for the free-heap headroom and the device's own vmerr,
+   *  then re-run the prediction against the fresh number. Best-effort: a
+   *  failed status read leaves the last known values alone. */
+  async function refreshCapacityFromDevice(): Promise<void> {
+    if (!device) return;
+    try {
+      const st = await device.status();
+      deviceHeapFree = st.heap_free ?? 0;
+      deviceVmerr = st.vmerr;
+      if (!compileError) checkCapacity(); // fresh headroom → fresh verdict
+    } catch {
+      /* transient; the next push retries */
     }
   }
 
@@ -769,6 +885,11 @@
         if (saved) engine.setControl(c.name, saved);
       }
       preview?.clear(); // fresh program → fresh history
+      // Re-model against the device on every successful compile, not just on
+      // push: the warning is then already up while the 500 ms push debounce is
+      // still counting down, and it appears for a pattern merely *opened* from
+      // the library too — before the user has invested any editing in it.
+      checkCapacity();
     } else {
       compileError = result; // keep the old engine running while typing
     }
@@ -2008,6 +2129,26 @@ export function render(index) {
       {#if deviceError}
         <div class="banner error">{deviceError}</div>
       {/if}
+      <!-- Capacity (Gitea #15). Severity follows CERTAINTY, not size: the
+           device's own rejection is a fact and reads as an error; our local
+           model is advice and reads as a warning. Both are non-blocking —
+           the pattern keeps previewing locally either way. -->
+      {#if deviceRejectedForSize}
+        <div class="banner error" data-role="capacity-rejected">
+          the device rejected this pattern: {deviceRejectedForSize}
+        </div>
+      {:else if capacity}
+        <div
+          class="banner warn"
+          class:capacity-over={capacity.level === "over"}
+          data-role="capacity-warning"
+          data-level={capacity.level}
+          title={capacity.detail}
+        >
+          {capacity.level === "over" ? "⚠" : "△"}
+          {capacity.text}
+        </div>
+      {/if}
       {#if importError}
         <div class="banner error" data-role="import-error">
           {importError}
@@ -3045,6 +3186,14 @@ export function render(index) {
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  /* "will not fit" vs "getting close" — same amber family (both are
+     predictions, not facts; the device's own rejection is the red one),
+     separated by weight rather than hue. */
+  .banner.warn.capacity-over {
+    background: color-mix(in srgb, var(--warn) 24%, transparent);
+    font-weight: 600;
   }
 
   .as-button {

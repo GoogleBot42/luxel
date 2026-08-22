@@ -117,6 +117,13 @@ const MAX_PIXELS: u32 = 2048;
 
 struct State {
     pixel_count: AtomicU32,
+    /// What `/api/status` reports as `heap_free`. The mirror runs on a host
+    /// heap, so it has no honest number of its own: 0 means "unknown" and
+    /// every client (including the editor's capacity warning) must treat it
+    /// as "don't guess". `--heap-free N` makes the mirror impersonate a
+    /// device with N bytes free, which is how the capacity warning is
+    /// exercised without hardware (Gitea #15).
+    heap_free: AtomicU32,
     inbox: Mutex<Vec<Msg>>,
     pixels: Mutex<Vec<u8>>,
     fps: AtomicU32,
@@ -669,10 +676,11 @@ fn status_json(state: &State) -> String {
         None => String::from("null"),
     };
     format!(
-        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":0,\"live\":{},\"vmerr\":{}}}",
+        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":{}}}",
         fps,
         state.pixel_count.load(Ordering::Relaxed),
         env!("CARGO_PKG_VERSION"),
+        state.heap_free.load(Ordering::Relaxed),
         live,
         vmerr
     )
@@ -1746,6 +1754,8 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut pixels: u32 = 300;
     let mut port: u16 = 8720;
+    // 0 = "this host has no meaningful free-heap number"; see State::heap_free
+    let mut heap_free: u32 = 0;
     // Luxel-to-Luxel sync transport (overridable so e2e can run two
     // mirrors over loopback; the firmware broadcasts on the LAN)
     let mut sync_target = String::from("255.255.255.255");
@@ -1764,6 +1774,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 Ok(n) => port = n,
                 Err(_) => return super::usage(),
             },
+            ("--heap-free", Some(v)) => match v.parse() {
+                Ok(n) => heap_free = n,
+                Err(_) => return super::usage(),
+            },
             ("--sync-target", Some(v)) => sync_target = v.clone(),
             ("--sync-port", Some(v)) => match v.parse() {
                 Ok(n) => sync_port = n,
@@ -1779,6 +1793,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
 
     let state = Arc::new(State {
         pixel_count: AtomicU32::new(pixels),
+        heap_free: AtomicU32::new(heap_free),
         inbox: Mutex::new(Vec::new()),
         pixels: Mutex::new(Vec::new()),
         fps: AtomicU32::new(0),

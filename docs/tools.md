@@ -62,6 +62,11 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 report's engine) · `compile` (source → `.lxbc`) · `pixels`/`vars` (oracle
 halves) · `serve` (the native device-API mirror the web e2e runs against).
 
+`serve --heap-free BYTES` makes the mirror report that much free heap from
+`/api/status` instead of the default 0 ("this host has no meaningful number")
+— how the editor's capacity warning (docs/webui.md) is exercised against a
+starved device without hardware.
+
 ## Heap & memory analysis
 
 | tool | what it does |

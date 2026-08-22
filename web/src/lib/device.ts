@@ -11,6 +11,13 @@ export interface DeviceStatus {
   vmerr: string | null;
   /** Network input currently driving the strip (DDP/E1.31), if any. */
   live?: "ddp" | "e131" | null;
+  /** Free heap in bytes, measured with the CURRENT pattern still loaded —
+   *  which makes it the headroom an incoming pattern has to fit inside, since
+   *  the firmware builds the new engine before releasing the old one.
+   *  0 or absent means "this device can't report it" (the native mirror
+   *  without `--heap-free`, or firmware older than the field): treat as
+   *  unknown and don't guess at capacity. */
+  heap_free?: number;
 }
 
 export type RunResult =

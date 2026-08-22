@@ -116,6 +116,29 @@ interface Exports {
   lx_debug_step(h: number, kind: number): number;
   lx_debug_state(h: number): number;
   lx_globals(h: number): number;
+  lx_device_model(
+    blobPtr: number,
+    blobLen: number,
+    envelopeLen: number,
+    pixelCount: number,
+    heapFree: number,
+  ): number;
+}
+
+/** What a pattern would cost the connected device's heap, modelled by
+ *  replaying the firmware's own load sequence in wasm under a counting
+ *  allocator. All figures are bytes. */
+export interface DeviceModel {
+  /** Peak live heap the pattern-load window would occupy on-device. */
+  peak: number;
+  /** Array-arena byte budget the device would grant this load. */
+  budget: number;
+  /** Bytes available before the device's post-load floor check rejects. */
+  headroom: number;
+  /** The device's runtime floor — heap the firmware keeps for itself. */
+  floor: number;
+  /** Set when the pattern blew the array budget rather than the floor. */
+  vmerr: string | null;
 }
 
 const RAW = 65536;
@@ -148,6 +171,39 @@ export class Luxel {
     const eng = this.compile(source, pixelCount, seed);
     if (eng instanceof Engine) eng.enableMapMode();
     return eng;
+  }
+
+  /** Model this compiled blob's cost on a device with `heapFree` bytes free.
+   *
+   *  Runs the firmware's decode → budgeted-engine → frames sequence inside
+   *  wasm with a counting allocator watching, which is why the answer is a
+   *  measurement rather than a size heuristic. `envelopeLen` is the size of
+   *  the LXP1 upload the device will be holding while it decodes (see
+   *  `lxpEnvelope`) — for a source-heavy pattern that overlap, not the
+   *  engine, is the peak. Returns null if the blob won't decode, or if this
+   *  wasm build predates the export. */
+  deviceModel(
+    bytecode: Uint8Array,
+    envelopeLen: number,
+    pixelCount: number,
+    heapFree: number,
+  ): DeviceModel | null {
+    if (typeof this.e.lx_device_model !== "function") return null;
+    const ptr = this.e.lx_alloc(bytecode.length);
+    try {
+      new Uint8Array(this.e.memory.buffer).set(bytecode, ptr);
+      const rc = this.e.lx_device_model(
+        ptr,
+        bytecode.length,
+        envelopeLen,
+        pixelCount,
+        heapFree,
+      );
+      if (rc < 0) return null;
+      return JSON.parse(this.response()) as DeviceModel;
+    } finally {
+      this.e.lx_dealloc(ptr, bytecode.length);
+    }
   }
 
   putStr(str: string): { ptr: number; len: number; free: () => void } {

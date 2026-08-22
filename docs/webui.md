@@ -110,6 +110,67 @@ strip":**
   `setVar` (all unused now). device-e2e asserts no connect chrome + local preview
   renders + controls still drive the device pixels via push.
 
+## Capacity warning: "this pattern may not fit your device" [M] ✅ (Gitea #15)
+
+The local-preview model has one honest gap: the playground's engine is
+unbudgeted, so a pattern that renders beautifully in the browser can be
+**rejected by the device it is pushed to** — and the rejection is
+*asynchronous*. `POST /api/code` answers 200; the render task then fails the
+post-load floor check and records a `pattern too large for this device`
+vmerr. Nothing in the editor used to say so; the strip just kept showing the
+previous pattern.
+
+The editor now predicts that outcome before the push lands, and confirms it
+after.
+
+**Prediction — a measurement, not a size heuristic.** `lx_device_model`
+(luxel-wasm) replays the firmware's own load sequence under a counting
+allocator: the LXP envelope resident across `deserialize_lean`, dropped, then
+`Engine::from_program_budgeted` at the device's array budget, then three
+frames. The peak live bytes is what the device's floor check would see.
+wasm32 is 32-bit like the ESP32, so the structures measure the same width —
+this is strictly closer to hardware than the 64-bit `heapstat` test that
+originally established the model. `Luxel.deviceModel()` wraps it;
+`checkCapacity()` in App.svelte runs it on every successful recompile.
+
+**Inputs.** `/api/status` `heap_free` (now declared in `DeviceStatus`) and the
+device's own pixel count — never the preview layout's, since strip length is
+hardware truth. `heap_free` is measured with the *current* pattern still
+loaded, which is exactly the right baseline: the firmware builds the new
+engine before releasing the old one, so that number really is the incoming
+pattern's headroom.
+
+**Thresholds.** `luxel_core::budget` is now the single definition of
+`RUNTIME_FLOOR` (20 KB), the array-budget arithmetic, and `load_headroom()`;
+`firmware/src/main.rs` and the wasm model both import it, so the prediction
+cannot drift from the device that enforces it. On top of that the UI reserves
+the last **15 %** of headroom as "tight" — the model is exact but the real
+device's heap moves underneath it between the status read and the load (WiFi
+buffers, HTTP connection buffers, MQTT publishes, jsonview snapshots).
+
+**Rendering.** A banner in the editor's right-hand banner stack, the same
+`.banner` idiom as compile/runtime errors, `data-role="capacity-warning"` with
+`data-level="tight"|"over"` and the full byte breakdown in the `title`.
+Severity follows *certainty*, not size: our local model is advice and renders
+amber (`.banner.warn`, with `.capacity-over` for the heavier variant); the
+device's own vmerr is a fact and renders red
+(`data-role="capacity-rejected"`). It is **non-blocking** throughout — the
+pattern still pushes, because the device is the authority on what it can run
+and the editor only says what it expects.
+
+**Playground: silent.** No device, no budget to judge against — and per the
+mode rules the playground must not sprout a device affordance. A device that
+can't report its free heap (`heap_free` 0 or absent: the native mirror,
+older firmware) is silent too; an unknown budget is not a small one, and
+guessing would cry wolf on every pattern.
+
+**Testing without hardware.** `luxel serve --heap-free BYTES` makes the mirror
+impersonate a device with that much free heap (default 0 = "can't tell you").
+device-e2e spawns a second mirror claiming 30 KB free — 10 KB of load
+headroom with the arena clamped at its 16 KB minimum, which puts all four
+verdicts within reach of a one-line pattern — and asserts each band appears,
+clears, and doesn't block the push.
+
 ## Settings page 🔧 [L]
 
 A real device needs a settings surface (page/dialog). Fields:

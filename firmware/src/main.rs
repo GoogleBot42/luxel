@@ -606,36 +606,21 @@ fn realloc_buf(buf: &mut EncodeBuf, len: usize) -> bool {
     true
 }
 
-/// Build an engine from a decoded program with an array budget derived
-/// from LIVE free heap (half of it, in 8-byte `Value`s, capped at PB's
-/// 10240 elements). Patterns that out-allocate the device then record an
-/// "array budget" vmerr instead of exhausting the allocator — an alloc
-/// failure is a panic, i.e. a reboot (the soak-v5 OOM).
-/// Heap the rest of the firmware needs while a pattern runs: jsonview
-/// snapshots (~8.5 KB peak for var-heavy patterns — a 8 KB floor lost to
-/// exactly that once), MQTT publishes, SPI buffer resizes, WiFi-blob
-/// mallocs (which do NOT null-check), plus two HTTP connection buffers
-/// (4 KB each — bodies STREAM, so connections never need body-sized
-/// buffers). A pattern may not eat into this — its array budget stops
-/// short of it, and a pattern whose engine leaves less free is rejected
-/// outright after loading ("pattern too large" vmerr; soak-proven to
-/// never panic).
-const RUNTIME_FLOOR: usize = 20 * 1024;
+// `RUNTIME_FLOOR` and the array-budget arithmetic live in
+// `luxel_core::budget` — that module carries the full rationale for both
+// numbers. They are shared rather than local because the web editor imports
+// the SAME constants through the wasm build to predict, before a push,
+// whether a pattern will fit the device it is connected to (Gitea #15).
+// One definition means the prediction can never drift from the device that
+// enforces it.
+use luxel_core::budget::RUNTIME_FLOOR;
 
 fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
     // Arrays may consume free heap down to (but not past) the runtime
     // floor — byte-accurate (elements × 8 + per-array overhead), so one
     // big array isn't taxed for overhead only swarms of tiny ones pay.
-    // The extra 4 KB keeps a maxed-out array arena from sitting EXACTLY on
-    // the floor and losing the post-load check to a few bytes of churn.
-    // The 16 KB minimum keeps ordinary strip patterns (a few arrays of
-    // pixelCount) working even when free heap reads low mid-churn — if
-    // that minimum genuinely doesn't fit, the post-load floor check
-    // rejects the pattern instead (soak-proven: a rejection, never a
-    // panic).
-    let budget = (esp_alloc::HEAP.free() as usize)
-        .saturating_sub(RUNTIME_FLOOR + 4 * 1024)
-        .max(16 * 1024);
+    // See luxel_core::budget::array_budget for the slack + minimum rules.
+    let budget = luxel_core::budget::array_budget(esp_alloc::HEAP.free() as usize);
     Engine::from_program_budgeted(prog, count, 1, budget)
 }
 

@@ -154,13 +154,20 @@ that do multi-KB loads (playlist/pattern resume) must run after
 a heavy load racing WiFi init shows up as a `StoreProhibited` crash inside
 the blob, not a clean OOM panic. The engine holds exactly one decoded
 `Program`; swap-path allocations are fallible (`try_reserve_exact`,
-`firmware/src/main.rs`). `RUNTIME_FLOOR` (20 KB, `main.rs`) is the floor
+`firmware/src/main.rs`). `RUNTIME_FLOOR` (20 KB) is the floor
 `try_budgeted_engine` checks after a pattern loads — a pattern that fits
 its array budget but still leaves the heap under the floor is rejected as
 a vmerr instead of panicking. `budgeted_engine` derives the array budget
 itself as `esp_alloc::HEAP.free() - (RUNTIME_FLOOR + 4 KiB)`, clamped to a
 16 KB minimum — byte-accurate per array element, so one big array isn't
 taxed for overhead that only swarms of tiny arrays pay.
+
+Both numbers live in **`luxel_core::budget`**, not in `main.rs`: the web
+editor imports the same constants through the wasm build to warn the user,
+before a push, that their pattern won't fit the device they're connected to
+(Gitea #15; docs/webui.md "Capacity warning"). Change them there and the
+device and its prediction move together — a divergence would mean the editor
+promising a pattern fits a device that then rejects it.
 
 **WS2812 (bit-serial protocols) requires the DMA SPI path, never blocking
 writes.** Blocking `Spi::write` splits every frame into 64-byte FIFO
