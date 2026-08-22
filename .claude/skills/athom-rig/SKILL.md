@@ -18,7 +18,11 @@ it, and covers only the agent-side procedure for driving that rig.
 
 - **Board**: Athom ESP32 music-reactive WLED controller, normally running
   Luxel at 192.168.0.183 (DHCP hostname `luxel-797e10`).
-- **Serial**: FTDI adapter at `/dev/ttyUSB0`, 115200 baud.
+- **Serial**: FTDI adapter at `/dev/ttyUSB0`, 115200 baud. The hotplugged
+  node can be ABSENT from the container (gone all of 2026-08-22) — check it
+  exists first; if missing, panic/reboot detection falls back to polling
+  `/api/status` (1 Hz worked) + post-hoc `slot` checks, and only Jeremy can
+  restore it (replug, then `doas chmod 666 /dev/ttyUSB0`).
 - **Power**: a zigbee2mqtt smart plug, topic `zigbee2mqtt/claude-switch`.
   Publish `{"state":"ON"}` or `{"state":"OFF"}` to
   `zigbee2mqtt/claude-switch/set` (e.g. via `mosquitto_pub`, available
