@@ -1,5 +1,78 @@
 # Update log
 
+## 2026-08-22 — ESP32-S3 and ESP32-C6 board features (builds only,
+## untested on metal)
+
+`board-s3-devkit` and `board-c6-devkit` join the four existing boards,
+closing part (1) of docs/ideas.md "Small-chip profile + more board
+features" (half of Gitea #3). Both ship as **builds, untested on metal**
+— there is no S3 or C6 on the bench, so all that is established is: they
+compile, link every load-bearing feature (`tools/image-check.sh`), fit
+the 1 MiB OTA slot, and keep a `.stack` well above the 24 KB floor. Pin
+choices, heap sizing and radio behaviour are unverified, and every place
+they appear says so (Cargo.toml, board.rs, main.rs, flake.nix,
+release.yml, docs/boards.md, docs/firmware.md, docs/releases.md).
+
+Pins are each chip's SPI2/FSPI IO_MUX set, so DMA gets the direct route:
+S3 CLK GPIO12 / DATA GPIO11 (clear of the octal-PSRAM pins GPIO33–37),
+C6 CLK GPIO6 / DATA GPIO7 (clear of the devkit's RGB LED on GPIO8 — and
+the same numbers as the C3 by coincidence of the IO_MUX tables).
+
+**"Five-minute diff" held for the firmware, not for the build plumbing.**
+The firmware side was exactly what docs/boards.md promised — a feature, a
+`def` block, one `with_sck/with_mosi` line, plus widening the SPI-DMA cfg
+from `esp32c3` to `not(esp32)` (C3/S3/C6 are all GDMA). No logic changed.
+What actually needed doing was the surrounding machinery, which had the
+classic-ESP32 chip/target/toolchain hardcoded in three places:
+
+- `firmware/board-target.sh` (new) is now the single board → chip / rust
+  target / toolchain map. `firmware/build-esp32.sh` and
+  `tools/stack-check.sh` source it, so they can't drift. Both scripts
+  drive *any* board now, Xtensa (`-Zbuild-std` + the Espressif fork) or
+  RISC-V (mainline rustc, no build-std) — `BOARD=board-c3-devkit
+  ./build-esp32.sh` works too, which it never did before.
+- The flake needed `riscv32imac-unknown-none-elf` (the C6's target is one
+  ISA letter off the C3's `riscv32imc`) in both the devshell toolchain
+  and `riscvRust`, plus the two `firmwareVariants` entries.
+- `.github/workflows/release.yml` builds and size-gates all six now.
+
+Per-board app image at v0.1.39 (devshell builds, creds baked in) and
+1 MiB-slot margin:
+
+| board | app image | margin |
+|---|---:|---:|
+| `board-s3-devkit` | 885,840 B | 162,736 B |
+| `board-c6-devkit` | 987,600 B | **60,976 B** |
+| `board-c3-devkit` | 894,496 B | 154,080 B |
+| `board-pixelblaze-v3` | 944,832 B | 103,744 B |
+| `board-athom-music` | 944,720 B | 103,856 B |
+| `board-esp32-generic` | 944,688 B | 103,888 B |
+
+The C6 is the finding worth remembering: ~93 KB fatter than the C3 for
+identical source, and at 5.8% it owns the tightest OTA margin in the
+fleet — it is the board that will cross the ceiling first, so it's the
+one to size-check on any release that grows the image. (docs/boards.md
+now says this next to the table.)
+
+`tools/stack-check.sh` on all four devkit/PB boards: no frame over
+12 KB, `.stack` = 29,412 (pb-v3) / 39,632 (c3) / 51,172 (s3) / 141,320
+(c6) bytes. The S3/C6 numbers come from reusing the C3's 160 KB heap on
+chips with more DRAM; when hardware exists, that slack should become heap
+(pattern capacity), not stack.
+
+Verified: all six boards build in the devshell, `nix build
+.#luxel-fw-s3-devkit` / `.#luxel-fw-c6-devkit` produce hermetic
+images that pass `image-check.sh`, and the four pre-existing boards still
+build byte-for-byte the way they did.
+
+Deliberately NOT done: the installer page (web/flash.html) still lists
+only the four known-good boards. It's a WLED-takeover flow for real
+products, adding a chip there means extending the `Chip` union, the
+arch-unsupported copy and the e2e fixtures plus a real-chromium pass, and
+unknown board ids in a release manifest are skipped by design — so the
+new artifacts publish harmlessly without it. Tracked as Gitea #57;
+hardware bring-up for the two boards is Gitea #56.
+
 ## 2026-08-22 — Builtins batch 5: canvasAdd, seedable random(),
 ## timeScale / setFrameRate
 

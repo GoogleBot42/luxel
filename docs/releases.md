@@ -37,13 +37,16 @@ tag; every path validates tag == Cargo.toml before anything is pushed:
 
 Then watch https://github.com/GoogleBot42/luxel/actions — the release
 appears at https://github.com/GoogleBot42/luxel/releases when the build
-finishes (~30–60 min; three of the four boards are slow Xtensa
+finishes (~30–60 min; four of the six boards are slow Xtensa
 `-Zbuild-std` builds). The job is idempotent: re-run it to recover from a
 transient failure — it upserts the release and re-uploads missing assets.
 
 ## What gets published
 
-Per board (`c3-devkit`, `pixelblaze-v3`, `athom-music`, `esp32-generic`):
+Per board (`c3-devkit`, `pixelblaze-v3`, `athom-music`, `esp32-generic`,
+and — **untested on metal**, see docs/boards.md — `s3-devkit`,
+`c6-devkit`). The untested boards are published as artifacts only; the
+installer page (web/flash.html) does not list them:
 
 | asset | what it's for |
 |---|---|
