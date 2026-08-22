@@ -5,9 +5,12 @@
 //! is a project requirement. Accuracy targets LED work (errors well under
 //! one 8-bit color step), not scientific computing.
 //!
-//! Pixel Blaze's exact algorithms for these functions are not public, so all
-//! of these are TODO(oracle): differential-test against real hardware and
-//! adjust where patterns could visibly care.
+//! Pixel Blaze's exact algorithms for these functions are not public. All
+//! of them have been differential-tested against real hardware via dense
+//! sweeps (docs/research/04-oracle-findings.md): ours are equal or closer
+//! to true math everywhere measured; remaining diffs are PB-side
+//! approximation error and its documented seam/endpoint bugs — deliberate
+//! divergences, not open questions.
 
 use crate::fixed::Fx;
 

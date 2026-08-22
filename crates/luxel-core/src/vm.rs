@@ -3,7 +3,7 @@
 //! Design notes:
 //! - One scalar domain (`Fx`) plus reference values (arrays, functions,
 //!   builtins), matching the PB model. Arithmetic on a reference treats it
-//!   as 0 (permissive; TODO(oracle)).
+//!   as 0 (oracle-verified 2026-07-07: refs act as 0 in math on PB too).
 //! - Arrays live in an arena and are never freed — re-binding a variable
 //!   orphans the old array permanently, exactly like PB. Total element
 //!   budget defaults to PB's 10,240.
@@ -413,7 +413,7 @@ pub fn lookup_method(name: &str) -> Option<u16> {
         "mutate" => "arrayMutate",
         "mapTo" => "arrayMapTo",
         "reduce" => "arrayReduce",
-        "replace" => "arrayReplace", // TODO(oracle): offset form via method
+        "replace" => "arrayReplace", // oracle-verified: a.replace(2,9) writes from index 0
         "sort" => "arraySort",
         "sortBy" => "arraySortBy",
         "sum" => "arraySum",
@@ -579,7 +579,9 @@ pub struct Vm {
     palette: Vec<(Fx, [Fx; 3])>,
     perlin_wrap: [i32; 3],
     /// Wall-clock unix seconds (timezone-adjusted by the host); None → the
-    /// clock builtins return 0. TODO(oracle): PB's no-time behavior.
+    /// clock builtins return 0. With-time civil conversion is oracle-exact
+    /// (2026-08-22); the no-time case is UNTESTABLE on a configured PB
+    /// (can't unset its clock via the public API), so 0 stays our choice.
     pub wall_unix: Option<i64>,
     /// Output gamma set by `setGamma(g)`; ZERO/ONE = off. The engine applies
     /// it after render, at quantization (Luxel post-process extension).
@@ -2029,7 +2031,7 @@ impl Vm {
             ClockYear | ClockMonth | ClockDay | ClockHour | ClockMinute | ClockSecond
             | ClockWeekday => {
                 let Some(unix) = self.wall_unix else {
-                    return num(Fx::ZERO); // TODO(oracle): PB with no time source
+                    return num(Fx::ZERO); // no-time untestable on the oracle; 0 is our choice
                 };
                 let c = civil_from_unix(unix);
                 num(Fx::from_int(match builtin {
@@ -2415,11 +2417,13 @@ impl Vm {
 
     /// Pre-multiply an op onto the current transform: points transform in
     /// call order (`translate(-.5,-.5); rotate(θ)` rotates about the center,
-    /// per the universal corpus idiom). Capped at 31 stacked ops like PB.
-    /// TODO(oracle): verify order/sign/cap by probe when the device is back.
+    /// per the universal corpus idiom). Order/sign/cap all oracle-verified
+    /// (fw 3.67, 2026-08-22): ops past the 31st are silently IGNORED on PB
+    /// (no error, no abort), so we drop them too. `resetTransform()` clears
+    /// the count.
     fn push_op(&mut self, op: [[Fx; 4]; 4]) -> Result<(), &'static str> {
         if self.transform_ops >= 31 {
-            return Err("too many stacked transforms (max 31)");
+            return Ok(()); // PB caps silently at 31 stacked ops
         }
         self.transform_ops += 1;
         self.transform_active = true;
@@ -2461,7 +2465,10 @@ impl Vm {
     }
 
     fn palette_lookup(&self, v: Fx) -> [Fx; 3] {
-        // no palette installed → grayscale ramp. TODO(oracle).
+        // No palette installed → grayscale ramp. Oracle-verified (fw 3.67,
+        // 2026-08-22): a freshly live-coded pattern with no setPalette
+        // paints exactly [v,v,v], and palette state does NOT leak across
+        // pattern loads.
         if self.palette.is_empty() {
             return [v, v, v];
         }
@@ -2470,8 +2477,15 @@ impl Vm {
         if v <= first.0 {
             return first.1;
         }
-        if v >= last.0 {
-            return last.1; // clamp at the ends. TODO(oracle): wrap?
+        // Ends are ASYMMETRIC on PB (oracle-verified, fw 3.67, 2026-08-22):
+        // below the first stop clamps to the first color, but anything past
+        // the last stop is BLACK (hard edge exactly at the stop; single-stop
+        // palettes behave the same way).
+        if v == last.0 {
+            return last.1;
+        }
+        if v > last.0 {
+            return [Fx::ZERO; 3];
         }
         for w in self.palette.windows(2) {
             let (p0, c0) = w[0];
@@ -2547,7 +2561,8 @@ fn mat_mul(a: &[[Fx; 4]; 4], b: &[[Fx; 4]; 4]) -> [[Fx; 4]; 4] {
 }
 
 /// Rotation about axis 0=X, 1=Y, 2=Z, counterclockwise for +angle (radians).
-/// TODO(oracle): direction convention unverified.
+/// Oracle-verified (fw 3.67, 2026-08-22): rotateX/Y/Z are all CCW for
+/// +angle, right-handed, matching these matrices exactly.
 fn rotation(axis: usize, angle: Fx) -> [[Fx; 4]; 4] {
     let c = fmath::cos(angle);
     let s = fmath::sin(angle);
@@ -2613,7 +2628,8 @@ fn civil_from_unix(secs: i64) -> Civil {
 }
 
 /// HSV → RGB in pure fixed point. Hue wraps (negative wraps backward),
-/// saturation/value clamp to 0..1. TODO(oracle): compare rounding against PB.
+/// saturation/value clamp to 0..1. Rounding oracle-verified 2026-07-08:
+/// all 21 rgb/hsv cases bit-exact after the floor(v*255) quantization fix.
 /// lowbias32 (Chris Wellons) — well-mixed 32-bit integer hash, the basis of
 /// the deterministic `hash`/`hash2` builtins. Pinned: changing this changes
 /// pattern output on every device, so treat it as part of the bytecode ABI.

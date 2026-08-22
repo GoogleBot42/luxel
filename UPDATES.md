@@ -1,5 +1,45 @@
 # Update log
 
+## 2026-08-22 — TODO(oracle) sweep: every probe-able marker settled,
+## two bug-for-bug fixes, perlin sweeps captured
+
+All 24 `TODO(oracle)` markers are gone from the source. About half were
+stale — settled by the July probe sessions but never cleaned up (div/mod
+by zero, shift edge cases, sub-epsilon truncation, hsv rounding, refs-as-0,
+transform order/sign) — and the rest were settled today against the live
+oracle (fw 3.67) with a new self-judging battery,
+`tools/oracle/todo-probes.mjs`.
+
+**Two real divergences found and fixed in luxel-core:**
+
+- **Transform stack cap is silent on PB.** 40 stacked translates: dx
+  stalls after 31 ops, no error, pattern keeps running. `push_op` now
+  ignores ops past 31 instead of erroring
+  (test: `transform_stack_caps_at_31_silently`).
+- **Palette lookup past the last stop is BLACK, not a clamp** — and the
+  ends are asymmetric: below-first clamps to the first color. Hard edge
+  exactly at the stop; single-stop palettes agree. `palette_lookup` now
+  matches bug-for-bug (test: `palette_edges_match_pixelblaze`).
+
+**Confirmed matches** (comments updated, no code change): method-form
+`a.replace()` writes from index 0; `arrayReplaceAt` exists on PB and
+matches; rotateX/Y/Z all CCW right-handed; no-palette paint = grayscale
+ramp; palette state does not leak across live-code reloads; `null` = 0 at
+runtime; clock civil conversion exact vs America/Denver. `undefined` is
+REJECTED by PB's compiler — ours stays as a documented leniency.
+
+**Perlin family:** arities verified identical via PB's own compiler
+(perlin 4, fbm 6, ridge 7, turbulence 6, setPerlinWrap 3) and 3,320 raw
+samples captured into `tools/oracle/sweeps/` (1D slices, seed sweep,
+wrap-4 periodicity, per-arg fbm sweeps) for offline algorithm fitting —
+filed as a ticket.
+
+**Regression:** full `run.mjs` battery 138/175 — every diff is a
+documented category (PB approximation error/seam bugs, deliberate prng
+divergence, map-dependent transform specials pinned by unit tests
+instead). Workspace tests green. Still open, all hardware-blocked: 1D
+transform coords (oracle can never be mapless), sensor-board scaling,
+no-time clock behavior. Findings doc has the full session record.
 ## 2026-08-22 — library: the last fake-trigger controls now listen for
 ## real events (`readEvent`)
 

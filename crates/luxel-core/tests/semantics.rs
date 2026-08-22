@@ -381,9 +381,63 @@ fn transforms_apply_in_call_order() {
 }
 
 #[test]
-fn transform_stack_caps_at_31() {
-    let e = Engine::new("for (i = 0; i < 40; i++) translate(0.01, 0)", 4, 1).unwrap();
-    assert!(e.last_error.unwrap().message.contains("stacked transforms"));
+fn transform_stack_caps_at_31_silently() {
+    // Oracle-verified (fw 3.67, 2026-08-22): ops past the 31st are silently
+    // IGNORED on PB — no error, no abort (probed with 40 stacked translates;
+    // dx stalls after 31 steps). We match: push_op is a no-op past the cap.
+    let src = "export var x0 = -99\nexport var done = -99\n\
+               export function beforeRender(delta) {\n\
+                 resetTransform()\n\
+                 for (k = 0; k < 40; k++) translate(0.01, 0)\n\
+                 mapPixels((i, x, y, z) => { if (i == 0) x0 = x })\n\
+                 done = 1\n\
+               }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 3, 1).unwrap();
+    let m = |x: f64, y: f64| [Fx::from_f64(x), Fx::from_f64(y), Fx::ZERO];
+    e.set_map(2, &[m(1.0, 0.5), m(0.0, 0.0), m(0.5, 1.0)]);
+    e.frame(Fx::ZERO);
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+    let v = |n: &str| e.var(n).unwrap().num().to_f64();
+    assert_eq!(v("done"), 1.0);
+    // PB measured dx = 0.3094 (31 steps of the 16.15-quantized 0.01), NOT 0.4
+    assert!((v("x0") - 1.0 - 0.3094).abs() < 0.005, "x0 = {}", v("x0"));
+}
+
+#[test]
+fn palette_edges_match_pixelblaze() {
+    // Oracle-verified (fw 3.67, 2026-08-22): lookups below the first stop
+    // CLAMP to the first color; anything past the last stop renders BLACK
+    // (hard edge exactly at the stop). Single-stop palettes: at-or-below →
+    // the color, above → black. Fresh-load default (no setPalette) is the
+    // grayscale ramp, and palette state does not leak across loads.
+    let src = "setPalette([0.25, 0,0,1,  0.75, 0,1,0])\n\
+               export function render(index) {\n\
+                 if (index == 0) { paint(0.1) }\n\
+                 if (index == 1) { paint(0.5) }\n\
+                 if (index == 2) { paint(0.75) }\n\
+                 if (index == 3) { paint(0.8) }\n\
+                 if (index == 4) { paint(0.999) }\n\
+               }";
+    let mut e = engine(src);
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [0, 0, 255]); // below first stop: clamp to blue
+    assert_eq!(px[1], [0, 127, 127]); // midpoint blend (floor-quantized)
+    assert_eq!(px[2], [0, 255, 0]); // exactly at last stop: green
+    assert_eq!(px[3], [0, 0, 0]); // past last stop: BLACK, not clamp
+    assert_eq!(px[4], [0, 0, 0]);
+
+    let src = "setPalette([0.5, 1,0,0])\n\
+               export function render(index) {\n\
+                 if (index == 0) { paint(0) }\n\
+                 if (index == 1) { paint(0.5) }\n\
+                 if (index == 2) { paint(0.51) }\n\
+               }";
+    let mut e = engine(src);
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [255, 0, 0]);
+    assert_eq!(px[1], [255, 0, 0]);
+    assert_eq!(px[2], [0, 0, 0]);
 }
 
 #[test]

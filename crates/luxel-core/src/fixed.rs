@@ -126,7 +126,7 @@ impl Fx {
 
     /// The `mod()` builtin: floored modulo, result takes the sign of the
     /// divisor — this is the wrapping semantic the waveform functions use.
-    /// `mod(x, 0)` is 0. TODO(oracle): verify the zero-divisor case.
+    /// `mod(x, 0)` is 0 (oracle-verified, fw 3.67).
     pub fn mod_floor(self, rhs: Fx) -> Fx {
         if rhs.0 == 0 {
             return Fx::ZERO;
@@ -240,7 +240,7 @@ impl Mul for Fx {
     type Output = Fx;
     /// Full 64-bit product, then take the middle 32 bits: truncation toward
     /// negative infinity on the discarded fraction bits, wrap on overflow.
-    /// TODO(oracle): confirm PB truncates (vs rounds) sub-epsilon products.
+    /// Oracle-verified: PB truncates sub-epsilon products (`multrunc` vector).
     #[inline]
     fn mul(self, rhs: Fx) -> Fx {
         Fx(((self.0 as i64 * rhs.0 as i64) >> FRAC_BITS) as i32)
@@ -250,7 +250,7 @@ impl Mul for Fx {
 impl Div for Fx {
     type Output = Fx;
     /// Truncated division; wraps on overflow (`MIN / -epsilon` etc.).
-    /// Division by zero yields 0. TODO(oracle): verify PB's x/0 result.
+    /// Division by zero yields 0 (oracle-verified, fw 3.67).
     #[inline]
     fn div(self, rhs: Fx) -> Fx {
         if rhs.0 == 0 {
@@ -263,7 +263,7 @@ impl Div for Fx {
 impl Rem for Fx {
     type Output = Fx;
     /// The `%` operator: truncated remainder, sign of the dividend.
-    /// `x % 0` yields 0. TODO(oracle): verify PB's x % 0 result.
+    /// `x % 0` yields 0 (oracle-verified, fw 3.67).
     #[inline]
     fn rem(self, rhs: Fx) -> Fx {
         if rhs.0 == 0 {
@@ -311,7 +311,8 @@ impl Shl for Fx {
     type Output = Fx;
     /// Shifts the full 32-bit word (`x << 1 == x * 2`, fraction included).
     /// Count is the truncated integer part masked to 0..31.
-    /// TODO(oracle): verify PB's handling of counts ≥ 32 and negative counts.
+    /// Oracle-verified incl. counts ≥ 32, negative and fractional counts
+    /// (`shl32/shl33/shlneg/shlfrac` vectors).
     #[inline]
     #[allow(clippy::suspicious_arithmetic_impl)] // the &31 mask is the semantic
     fn shl(self, rhs: Fx) -> Fx {
@@ -322,7 +323,7 @@ impl Shl for Fx {
 impl Shr for Fx {
     type Output = Fx;
     /// Arithmetic (sign-preserving) shift of the full word.
-    /// TODO(oracle): verify arithmetic-vs-logical on negative values.
+    /// Oracle-verified: PB's `>>` is arithmetic on negatives (`shrneg` vectors).
     #[inline]
     #[allow(clippy::suspicious_arithmetic_impl)] // the &31 mask is the semantic
     fn shr(self, rhs: Fx) -> Fx {
@@ -425,7 +426,7 @@ mod tests {
         assert_eq!(fx(3.5).mod_floor(fx(3.0)), fx(0.5));
         // sign of divisor for mod
         assert_eq!(fx(3.5).mod_floor(fx(-3.0)), fx(-2.5));
-        // zero divisor defined as 0 (TODO(oracle))
+        // zero divisor defined as 0 (oracle-verified)
         assert_eq!(fx(1.0) % Fx::ZERO, Fx::ZERO);
         assert_eq!(fx(1.0).mod_floor(Fx::ZERO), Fx::ZERO);
     }
@@ -468,7 +469,7 @@ mod tests {
     fn division() {
         assert_eq!(Fx::from_int(1) / Fx::from_int(2), fx(0.5));
         assert_eq!(Fx::from_int(-1) / Fx::from_int(2), fx(-0.5));
-        assert_eq!(Fx::from_int(1) / Fx::ZERO, Fx::ZERO); // TODO(oracle)
+        assert_eq!(Fx::from_int(1) / Fx::ZERO, Fx::ZERO); // oracle-verified
     }
 
     #[test]
