@@ -99,21 +99,30 @@ bytecode execution is being worked on now; the rest are queued:
   current-pattern slot v0.1.34 added is also exactly the "contiguous,
   mappable region" this item needs, so what remains is purely the MMU
   work — now a perf/endgame item, not a capacity one.
-- **WiFi-blob buffer tuning** [M] ★★ — AGREED FOLLOW-UP 2026-07-29.
-  esp-radio's RX/TX buffer counts are
-  default-generous; the blob's heap draw is the biggest remaining consumer
-  (~50 KB measured residual at idle on v0.1.34). VERIFIED 2026-07-29
-  where the knobs actually live on our pinned esp-radio: NOT esp-config —
-  they're runtime fields on `esp_radio::wifi::ControllerConfig` (already
-  constructed in main.rs): `static_rx_buf_num` (default 10 × ~1.6 KB,
-  allocated at wifi init and never freed), `dynamic_rx_buf_num` (default
-  32, on-demand), tx counts, `ampdu_rx_enable`/`rx_ba_win`. Dropping
-  static 10→4 + dynamic 32→16 + AMPDU off should reclaim ~15-25 KB at
-  the cost of RX throughput on busy networks; tune conservatively and
-  soak — the blob's allocations don't null-check, so an undersized pool
-  under load shows up as StoreProhibited, not a clean error. Main use
-  now: the small-chip profile (see boards.md tiers), not classic-ESP32
-  capacity.
+- ~~WiFi-blob buffer tuning~~ — DONE 2026-08-22, shipped as the missing
+  half of the **`small-chip`** feature (UPDATES.md entry has the full
+  numbers). The knobs are runtime fields on
+  `esp_radio::wifi::ControllerConfig` (NOT esp-config), set in main.rs:
+  under `small-chip` it's `static_rx_buf_num` 10→4,
+  `dynamic_rx_buf_num` 32→16, `ampdu_rx_enable` off. TX counts stay at
+  the defaults on purpose — dynamic TX buffers are on-demand, so
+  lowering the cap reclaims nothing at idle and only buys TX starvation.
+  **Measured on the Athom (A/B, both small-chip builds, idle
+  `heap_free`): 115,548 → 125,460 = +9,912 B (9.7 KB).** Below the
+  15–25 KB the 2026-07-29 note guessed, and the reason is instructive:
+  essentially ALL of it is `static_rx_buf_num` (6 buffers × ~1.6 KB =
+  9.6 KB, allocated in `esp_wifi_init` and never freed). The dynamic
+  pools and the AMPDU block-ack buffers are on-demand — capping them
+  bounds the worst case but reclaims ~nothing at idle. Full small-chip
+  profile vs the default build is now +27.1 KB (98,352 → 125,460).
+  Soaked clean: 321/322 hw-bench (the one failure is the same
+  pattern-side OOB the default build has), 44 k DDP frames at 245 pkt/s
+  × 300 px alongside 6-way API hammering, a 629 KB streaming asset
+  upload, 18/20 cold loads — no panic, no rollback, `heap_free` floor
+  99 KB. Going below static 4 is NOT recommended without fresh soak
+  evidence: the blob doesn't null-check, so an undersized pool is a
+  StoreProhibited crash, not an error. Whether the DEFAULT build should
+  take a milder trim is untested — tracked as a Gitea issue.
 - ~~Web pool 3→2 (make the webui tolerant first)~~ — RESOLVED 2026-08-15
   (UPDATES.md entry has the full story): the web tolerance shipped
   (fetchgate.ts + coldload.mjs acceptance harness, 10/10 clean on the
@@ -162,10 +171,10 @@ bytecode execution is being worked on now; the rest are queued:
   #56), and decide whether the installer page should list them (#57); (2) a
   `small-chip` cargo feature bundling web pool 3→2 + tuned WiFi buffers
   for the S2/C2 tier, where giants reject cleanly (acceptable — the
-  budgeted-engine rejection path is the degradation story) — the feature
-  EXISTS as of 2026-08-15 with the pool half (2 slots + esp32 heap
-  88 KB); WiFi-buffer tuning still to join it; (3) WROVER
-  PSRAM as an esp-alloc second region for pattern arrays (WiFi blob must
+  budgeted-engine rejection path is the degradation story) — DONE: the
+  pool half landed 2026-08-15 (2 slots + esp32 heap 88 KB) and the
+  WiFi-buffer half 2026-08-22, together +27.1 KB of heap on the Athom;
+  (3) WROVER PSRAM as an esp-alloc second region for pattern arrays (WiFi blob must
   stay on internal RAM) — the big capacity unlock for the classic line
   if ever wanted.
 

@@ -1,5 +1,89 @@
 # Update log
 
+## 2026-08-22 — WiFi-blob buffer tuning: the `small-chip` profile's
+## missing half (+9.9 KB heap, soaked on the Athom)
+
+The 2026-07-29 agreed follow-up from docs/ideas.md is done. esp-radio's
+RX buffer pools are throughput-tuned by default; the `small-chip` cargo
+feature now trims them, completing the feature that until today was only
+its web-pool half.
+
+**What changed** — three `cfg(feature = "small-chip")` lines on the
+`ControllerConfig` main.rs already builds:
+
+| knob | default | small-chip |
+|---|---|---|
+| `static_rx_buf_num` | 10 | 4 |
+| `dynamic_rx_buf_num` | 32 | 16 |
+| `ampdu_rx_enable` | true | false |
+
+TX counts stay at the defaults deliberately: dynamic TX buffers are
+allocated on demand, so lowering the cap reclaims nothing at idle and
+only buys TX starvation under load. `rx_ba_win` stays at 6, which still
+satisfies `ControllerConfig::validate()` against the trimmed pools
+(6 < 16 dynamic, 6 < 2 × 4 static), so the pairing stays legal if AMPDU
+RX is ever switched back on. The default build is untouched.
+
+Plumbing: `firmware/build-esp32.sh` and `tools/stack-check.sh` both take
+`EXTRA_FEATURES=` now — there was previously no way to build or
+stack-check a non-board feature at all, which is a large part of why the
+small-chip half sat unfinished.
+
+**Measured (Athom rig, v0.1.39, idle `heap_free` from /api/status):**
+
+| build | heap_free | Δ |
+|---|---:|---:|
+| default (as shipped) | 98,352 | — |
+| small-chip, WiFi untuned | 115,548 | +17.2 KB |
+| small-chip, WiFi tuned | **125,460** | **+26.5 KB** |
+
+So the WiFi tuning's own share is **+9,912 B (9.7 KB)**, isolated by an
+A/B of the two small-chip builds rather than inferred.
+
+**The estimate was wrong in an instructive way.** The 2026-07-29 note
+predicted 15–25 KB; the truth is 9.7 KB, and essentially all of it is
+`static_rx_buf_num` (6 fewer buffers × ~1.6 KB = 9.6 KB, allocated inside
+`esp_wifi_init` and never freed). The dynamic RX pool and the AMPDU
+block-ack buffers are *on-demand* allocations — capping them bounds the
+worst case but reclaims ~nothing at idle. Anyone tempted to chase the
+remaining ~40 KB of blob draw should know it isn't sitting in the
+configurable pools.
+
+**Soak** (all on the tuned small-chip build, Athom, 300 px WS2812):
+
+- `tools/hw-bench.mjs`: **321/322 clean**, identical to the default
+  build's long-standing result (the one failure is the same pattern-side
+  array OOB in "sound - spectromatrix render2D"). Lowest `heap_free`
+  across the whole churn: 99,036 B — still above the *default* build's
+  idle figure.
+- **RX-pool stress**, the thing that would actually bite: 44,172 DDP
+  frames at 245 pkt/s × 300 px (~220 KB/s inbound UDP) concurrent with a
+  6-worker HTTP API hammer for 180 s, then a 629 KB streaming asset
+  upload. No panic, no reboot, no rollback (slot held `ota_0`
+  throughout).
+- `web/tools/coldload.mjs`: 9/10 and 9/10 across two runs.
+
+**The two refusals are the pool-2 tradeoff, not the buffers.** Both are
+`ERR_CONNECTION_REFUSED` on the navigation itself at ~150 ms, before any
+body — picoserve having no free slot, which is exactly the
+"occasionally-refused first nav" cost the 2026-08-15 pool decision
+accepted (Chromium wants ~3 sockets at a cold nav). An undersized
+esp-radio RX pool presents as a StoreProhibited crash or dropped frames,
+never as a clean TCP refusal. Same story for the hammer's 5,841
+refused/reset vs 1,605 served: **zero** body-level failures, so
+sustained throughput is fine and it's parallel fan-out that's capped.
+docs/boards.md now states both costs with numbers instead of adjectives.
+
+`tools/stack-check.sh` on both builds: `.stack` 29,516 B (default) and
+30,340 B (small-chip), both clear of the 24 KB floor, no frame over
+12 KB.
+
+**Caveat on this session's evidence:** `/dev/ttyUSB0` was not present in
+the container, so there was no serial capture — panic detection was a
+1 Hz `/api/status` poller plus post-hoc `slot` checks (a boot-loop
+rollback flips slots and would have been visible; none happened). Device
+was left on the default build, `ota_1`, 60 px, playlist empty and
+stopped, as found.
 ## 2026-08-22 — The editor warns before a pattern is too big for the device (Gitea #15)
 
 Jeremy's framing on #15: *"Different ESP32s have different amounts of memory.

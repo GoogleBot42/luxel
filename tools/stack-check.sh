@@ -15,6 +15,11 @@ BUDGET="${1:-12288}"
 # shellcheck source=../firmware/board-target.sh
 . ./board-target.sh
 board_target "$BOARD"
+# Same knob as firmware/build-esp32.sh: extra non-board cargo features
+# (space-separated), e.g. EXTRA_FEATURES=small-chip. The small-chip profile
+# moves 8 KB of task arena into the heap, so its .stack floor must be
+# checked separately from the default build's.
+FEATURES="$BOARD${EXTRA_FEATURES:+ $EXTRA_FEATURES}"
 
 CARGO=cargo
 STD_FLAGS=()
@@ -38,9 +43,9 @@ else
 fi
 [ -f creds.env ] && . ./creds.env || true
 
-echo "building with -Z emit-stack-sizes (board $BOARD, target $TARGET)…"
+echo "building with -Z emit-stack-sizes (features: $FEATURES, target $TARGET)…"
 "$CARGO" build --release \
-  --no-default-features --features "$BOARD" \
+  --no-default-features --features "$FEATURES" \
   --target "$TARGET" \
   "${STD_FLAGS[@]}"
 
