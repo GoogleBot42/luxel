@@ -29,6 +29,13 @@ board_target "$BOARD"
 # produce the image WLED's /update page accepts, use espflash save-image
 # (NOT the merged image): see docs/wled-migration.md.
 FEATURES="$BOARD"
+# Extra non-board cargo features, space-separated. The one in practical use
+# is `small-chip` (RAM-constrained profile: web pool 2 + 88 KB heap + tuned
+# WiFi buffer pools — docs/boards.md tiers). Example:
+#   EXTRA_FEATURES=small-chip BOARD=board-athom-music ./build-esp32.sh
+if [ -n "${EXTRA_FEATURES:-}" ]; then
+  FEATURES="$FEATURES $EXTRA_FEATURES"
+fi
 
 # Dev WiFi creds: auto-source the git-ignored creds.env so every build —
 # whoever runs it — bakes working credentials. An image without creds

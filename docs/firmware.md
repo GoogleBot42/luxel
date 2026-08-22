@@ -32,7 +32,13 @@ cd firmware && cargo build --release            # or `cargo run --release` to fl
 # (firmware/board-target.sh), Xtensa and RISC-V alike
 BOARD=board-pixelblaze-v3 ./build-esp32.sh      # or `… ./build-esp32.sh flash`
 BOARD=board-c6-devkit ./build-esp32.sh
+
+# RAM-constrained profile (docs/boards.md "The `small-chip` profile")
+EXTRA_FEATURES=small-chip BOARD=board-athom-music ./build-esp32.sh
 ```
+
+`EXTRA_FEATURES` adds non-board cargo features (space-separated);
+`tools/stack-check.sh` takes the same variable.
 
 Build (nix package, hermetic — reproducible images):
 

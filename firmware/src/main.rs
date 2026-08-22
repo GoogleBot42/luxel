@@ -443,11 +443,37 @@ async fn main(spawner: Spawner) -> ! {
         )
     };
 
-    let controller = WifiController::new(
-        p.WIFI,
-        ControllerConfig::default().with_initial_config(config),
-    )
-    .expect("wifi controller");
+    // WiFi buffer pools. esp-radio's defaults are throughput-tuned and
+    // generous for a device whose traffic is a handful of small HTTP
+    // requests plus DDP/E1.31 frames: 10 static RX buffers (~1.6 KB each,
+    // allocated inside esp_wifi_init and NEVER freed), a 32-deep dynamic
+    // RX pool, and AMPDU RX on with a 6-frame block-ack window. Measured
+    // residual blob draw at idle was ~50 KB — the single biggest heap
+    // consumer left on classic ESP32.
+    //
+    // `small-chip` (the RAM-constrained profile — docs/boards.md tiers)
+    // trims it: static RX 10 -> 4 reclaims ~9.6 KB outright, AMPDU RX off
+    // drops the block-ack reassembly buffers, and the dynamic RX cap
+    // 32 -> 16 bounds the on-demand pool's worst case. TX counts are left
+    // at the defaults on purpose: dynamic TX buffers are allocated on
+    // demand, so lowering the cap reclaims nothing at idle and only buys
+    // TX starvation under load.
+    //
+    // Deliberately conservative, because the blob's allocations do NOT
+    // null-check — an undersized pool under load is a StoreProhibited
+    // panic, not a clean error. rx_ba_win stays at its default 6, which
+    // still satisfies ControllerConfig::validate() against the trimmed
+    // pools (6 < 16 dynamic, 6 < 2 x 4 static) so the pairing remains
+    // legal if AMPDU RX is ever switched back on. The default build keeps
+    // esp-radio's own numbers until a soak says otherwise.
+    let wifi_cfg = ControllerConfig::default().with_initial_config(config);
+    #[cfg(feature = "small-chip")]
+    let wifi_cfg = wifi_cfg
+        .with_static_rx_buf_num(4)
+        .with_dynamic_rx_buf_num(16)
+        .with_ampdu_rx_enable(false);
+
+    let controller = WifiController::new(p.WIFI, wifi_cfg).expect("wifi controller");
 
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;

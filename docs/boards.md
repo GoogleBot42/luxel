@@ -125,13 +125,60 @@ crashing. That machinery is what makes the lower tiers cheap to support.
 | 1 — supported today | ESP32 (classic), C3 | Classic: full library, both bench boards. C3: already a board feature; unified SRAM means no instruction/data-bus split, so despite 400 vs 520 KB total it's the *more* comfortable target (224 KB heap configured vs the classic's 176). |
 | 2 — **shipped 2026-08-22, untested on metal** | S3, C6 | `board-s3-devkit` / `board-c6-devkit` exist as of v0.1.39. The claim above ("board-feature diffs + toolchains we already have") held: no firmware logic changed, but the *build* plumbing did — build-esp32.sh and stack-check.sh had the classic-ESP32 chip/target/toolchain hardcoded and now share `firmware/board-target.sh`, and the flake needed the `riscv32imac` target for the C6. S3 (512 KB, cheap ubiquitous modules, optional PSRAM) is the "recommended hardware" pick for new builds; C6 is the C3 successor. Still no bench hardware: images build, fit the slot and link every load-bearing feature, and nothing more is known. |
 | 3 — works, giants reject | S2 | 320 KB clears the baseline with room for small/medium patterns; the heavy tail of the library rejects cleanly. Single-core is fine (the firmware is one async executor). |
-| 4 — experimental only | C2/ESP8684 (4 MB-flash variants only) | ~272 KB total leaves ~20 KB pattern headroom even with the small-chip profile (web pool 2, tuned WiFi buffers — ideas.md). Runs the simple tier of the library. Only worth it with a concrete product reason. |
+| 4 — experimental only | C2/ESP8684 (4 MB-flash variants only) | ~272 KB total leaves ~20 KB pattern headroom even with the small-chip profile (web pool 2, tuned WiFi buffers — see below). Runs the simple tier of the library. Only worth it with a concrete product reason. |
 | no | H2, P4 | H2 has no WiFi (802.15.4/BLE only). P4 has no radio at all and the C6-companion path doesn't exist in bare-metal Rust yet. Neither is a RAM problem, so no tuning changes the answer. Watch: C5 (5 GHz), once esp-hal support matures. |
 
+### The `small-chip` profile (tiers 3–4)
+
+`small-chip` is a cargo feature, not a board — combine it with a board
+feature to build the RAM-constrained profile:
+
+```
+EXTRA_FEATURES=small-chip BOARD=board-athom-music firmware/build-esp32.sh
+EXTRA_FEATURES=small-chip BOARD=board-athom-music tools/stack-check.sh
+```
+
+It bundles three things, all `cfg`-gated so the default build is byte-for-byte
+unaffected:
+
+| knob | default | small-chip | why |
+|---|---|---|---|
+| `server::WEB_TASK_POOL_SIZE` | 3 | 2 | each slot is ~8.6 KB of static task arena (picoserve's whole response-path future) |
+| esp32 `heap_allocator!` | 80 KB | 88 KB | banks the freed arena as heap; keeps `.stack` in the measured ~30 KB zone |
+| `ControllerConfig` RX pools | static 10 / dynamic 32 / AMPDU RX on | static 4 / dynamic 16 / AMPDU RX off | the WiFi blob's static RX buffers are ~1.6 KB each, allocated in `esp_wifi_init` and never freed |
+
+**Measured on the Athom rig (idle `heap_free`, v0.1.39, 2026-08-22):**
+default 98,352 → small-chip 115,548 → small-chip + WiFi tuning **125,460**
+(+27.1 KB total, of which **+9.9 KB is the WiFi tuning** — an A/B of the two
+small-chip builds). Nearly all of the WiFi share is `static_rx_buf_num`
+10→4; the dynamic pools and AMPDU buffers are on-demand, so capping them
+bounds the worst case but reclaims almost nothing at idle. Don't push
+`static_rx_buf_num` below 4 without a fresh soak — the blob's allocations
+do not null-check, so an undersized pool under load is a StoreProhibited
+crash, not a clean error.
+
+**Accepted costs**, both measured on the Athom under this profile:
+
+- **~10% of cold browser navigations are refused** (18/20 clean over two
+  `web/tools/coldload.mjs` runs; the failure is `ERR_CONNECTION_REFUSED`
+  on the navigation itself, before any body). Chromium wants ~3 sockets at
+  a cold nav and the pool has 2 — this is the known, deliberate tradeoff
+  from the 2026-08-15 pool decision, not an RX-buffer effect. A reload
+  always succeeds.
+- **Concurrency beyond ~2 in-flight HTTP requests is refused, not queued**
+  (a 6-worker API hammer got 1,605 served and 5,841 refused over 180 s,
+  with *zero* body-level failures). Sustained throughput is fine; parallel
+  fan-out is not.
+
+Everything else held: 321/322 hw-bench (identical to the default build —
+the one failure is a pattern-side array OOB), 44 k DDP frames at 245 pkt/s
+× 300 px concurrent with the API hammer, a 629 KB streaming asset upload,
+`heap_free` floor 99 KB, no panic and no boot-loop rollback.
+
 Follow-ups tracked in docs/ideas.md ("Small-chip profile + more board
-features"): the small-chip profile for tier 3–4, and WROVER PSRAM as an
-array arena for the classic line. (The S3/C6 board features themselves
-are done — see the tier-2 row.)
+features"): WROVER PSRAM as an array arena for the classic line. (The
+S3/C6 board features are done — see the tier-2 row — and so is the
+small-chip profile, documented just above.)
 
 ## Adding a board (a five-minute diff)
 
