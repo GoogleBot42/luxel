@@ -105,6 +105,15 @@ pub static REBOOT: embassy_sync::signal::Signal<
 //   github.com/simap/pixelblaze) — DATA = GPIO23 (MOSI), CLOCK = GPIO18
 //   (SCK), both through the onboard 5V level shifter; status LED GPIO12
 //   (lit at boot = Luxel alive), button GPIO32 (unused).
+// board-s3-devkit: ESP32-S3-DevKitC-1 — CLOCK → GPIO12, DATA → GPIO11
+//   (SPI2/FSPI IO_MUX pins, so DMA gets the direct route; both free on
+//   WROOM-1 modules including the octal-PSRAM variants, which claim
+//   GPIO33–37). UNTESTED ON METAL — no S3 on the bench, wiring reviewed
+//   against the devkit pinout only.
+// board-c6-devkit: ESP32-C6-DevKitC-1 — CLOCK → GPIO6, DATA → GPIO7
+//   (SPI2/FSPI IO_MUX pins; same numbers as the C3 devkit by coincidence
+//   of the IO_MUX tables, and clear of the onboard RGB LED on GPIO8).
+//   UNTESTED ON METAL — same caveat as the S3.
 /// Board defaults (name, protocol, pixel count) come from board.rs; the
 /// live values live in shared:: atomics (seeded at boot, runtime-settable
 /// via /api/protocol and /api/config).
@@ -203,6 +212,10 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(size: 88 * 1024);
     #[cfg(all(feature = "esp32", not(feature = "small-chip")))]
     esp_alloc::heap_allocator!(size: 80 * 1024);
+    // Non-esp32 (C3/S3/C6): tuned on the C3's 313 KB DRAM, which is the
+    // tightest of the three — the S3 (dram_seg ~334 KB) and C6 (~441 KB)
+    // inherit it and simply keep a larger leftover .stack. UNTESTED ON
+    // METAL for S3/C6; revisit per-chip when hardware exists.
     #[cfg(not(feature = "esp32"))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
 
@@ -250,6 +263,11 @@ async fn main(spawner: Spawner) -> ! {
     // generic classic-ESP32: VSPI defaults — most WROOM boards break these out
     #[cfg(feature = "board-esp32-generic")]
     let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
+    // S3/C6 devkits: the chip's SPI2 (FSPI) IO_MUX pins. UNTESTED ON METAL.
+    #[cfg(feature = "board-s3-devkit")]
+    let spi = spi.with_sck(p.GPIO12).with_mosi(p.GPIO11);
+    #[cfg(feature = "board-c6-devkit")]
+    let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
     // ---- end board wiring ----
 
     // DMA, so each frame is ONE continuous transfer. The FIFO path splits
@@ -258,7 +276,9 @@ async fn main(spawner: Spawner) -> ! {
     // every chunk boundary corrupts a bit mid-symbol — and a WiFi interrupt
     // in the gap stretches it past the strip's latch time (partial-frame
     // latch). SK9822 is clocked and never noticed.
-    #[cfg(feature = "esp32c3")]
+    // GDMA chips (C3/S3/C6) take a numbered channel; the classic ESP32's
+    // older DMA is bound to the peripheral instead.
+    #[cfg(not(feature = "esp32"))]
     let spi = spi.with_dma(p.DMA_CH0);
     #[cfg(feature = "esp32")]
     let spi = spi.with_dma(p.DMA_SPI2);

@@ -8,6 +8,8 @@
 | `board-pixelblaze-v3` | ESP32 (WROOM-32) | Xtensa | Espressif rustc fork (in the flake) | Pixelblaze v3 Standard — the preferred real-hardware target |
 | `board-athom-music` | ESP32 (WROOM-32E) | Xtensa | Espressif rustc fork (in the flake) | Athom music-reactive WLED controller (OTA-only, riskier) |
 | `board-esp32-generic` | ESP32 (WROOM/DevKitC) | Xtensa | Espressif rustc fork (in the flake) | generic devkit, VSPI defaults (CLK GPIO18 / DATA GPIO23) |
+| `board-s3-devkit` | ESP32-S3 | Xtensa | Espressif rustc fork (in the flake) | ESP32-S3-DevKitC-1 (CLK GPIO12 / DATA GPIO11) — **untested on metal** |
+| `board-c6-devkit` | ESP32-C6 | RISC-V (`riscv32imac`) | mainline Rust (in the flake) | ESP32-C6-DevKitC-1 (CLK GPIO6 / DATA GPIO7) — **untested on metal** |
 
 Pin maps, per-board status, and the add-a-board recipe live in
 [docs/boards.md](boards.md).
@@ -26,15 +28,18 @@ Build (devshell, incremental — day-to-day development):
 # ESP32-C3 (default)
 cd firmware && cargo build --release            # or `cargo run --release` to flash
 
-# classic ESP32 (Xtensa)
+# any board — build-esp32.sh maps $BOARD to chip/target/toolchain
+# (firmware/board-target.sh), Xtensa and RISC-V alike
 BOARD=board-pixelblaze-v3 ./build-esp32.sh      # or `… ./build-esp32.sh flash`
+BOARD=board-c6-devkit ./build-esp32.sh
 ```
 
 Build (nix package, hermetic — reproducible images):
 
 ```sh
 nix build .#luxel-fw-pixelblaze-v3     # also: luxel-fw-c3-devkit,
-                                        #   luxel-fw-athom-music, luxel-fw-esp32-generic
+                                        #   luxel-fw-athom-music, luxel-fw-esp32-generic,
+                                        #   luxel-fw-s3-devkit, luxel-fw-c6-devkit
 ls result/                              # luxel-fw.elf + luxel-fw.bin
 espflash write-bin 0 result/luxel-fw.bin   # full-flash image (bootloader+partitions+app)
 ```

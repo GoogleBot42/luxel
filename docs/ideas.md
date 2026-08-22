@@ -151,9 +151,15 @@ bytecode execution is being worked on now; the rest are queued:
   resume-across-reboot, 3/3 cold loads, full hw-bench soak.
 - **Small-chip profile + more board features** [M] ★★ — follow-ups from
   the 2026-07-29 chip-support assessment (docs/boards.md "Beyond the
-  current boards"): (1) add `board-s3-devkit` and `board-c6-devkit`
-  features — both are five-minute diffs + toolchains we already have,
-  shipping as "builds, untested on metal" (no bench hardware); (2) a
+  current boards"): (1) DONE (2026-08-22): `board-s3-devkit` and
+  `board-c6-devkit` ship as "builds, untested on metal" — no firmware
+  logic changed, but build-esp32.sh/stack-check.sh had the classic-ESP32
+  chip/target/toolchain hardcoded and now share
+  `firmware/board-target.sh`, and the flake gained the `riscv32imac`
+  target for the C6. Both are in the release matrix; the C6 image is the
+  fleet's tightest OTA margin (60,976 B). Remaining for these two: light
+  them up on real hardware and spend their DRAM slack on heap (Gitea
+  #56), and decide whether the installer page should list them (#57); (2) a
   `small-chip` cargo feature bundling web pool 3→2 + tuned WiFi buffers
   for the S2/C2 tier, where giants reject cleanly (acceptable — the
   budgeted-engine rejection path is the degradation story) — the feature

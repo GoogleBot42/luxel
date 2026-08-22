@@ -97,8 +97,9 @@
             let
               xtensaRust = mkXtensaRust pkgs;
               xtensaGcc = mkXtensaGcc pkgs;
+              # imc = C3, imac = C6 (one letter of ISA extensions apart)
               riscvRust = pkgs.rust-bin.stable.latest.default.override {
-                targets = [ "riscv32imc-unknown-none-elf" ];
+                targets = [ "riscv32imc-unknown-none-elf" "riscv32imac-unknown-none-elf" ];
               };
               stdFlags = lib.optionalString buildStd " -Zbuild-std=core,alloc";
             in
@@ -194,6 +195,19 @@
           target = "xtensa-esp32-none-elf";
           buildStd = true;
         };
+        # UNTESTED ON METAL (no S3/C6 on the bench) — these build and pass
+        # the OTA-slot + image-check gates, nothing more. See docs/boards.md.
+        luxel-fw-s3-devkit = {
+          board = "board-s3-devkit";
+          chip = "esp32s3";
+          target = "xtensa-esp32s3-none-elf";
+          buildStd = true;
+        };
+        luxel-fw-c6-devkit = {
+          board = "board-c6-devkit";
+          chip = "esp32c6";
+          target = "riscv32imac-unknown-none-elf";
+        };
       };
     in
     {
@@ -208,8 +222,13 @@
               # ESP32-C3 (riscv32imc-unknown-none-elf) is a plain target here.
               (pkgs.rust-bin.stable.latest.default.override {
                 extensions = [ "rust-src" "rust-analyzer" "clippy" ];
-                # wasm32: browser playground; riscv32imc: ESP32-C3 firmware
-                targets = [ "wasm32-unknown-unknown" "riscv32imc-unknown-none-elf" ];
+                # wasm32: browser playground; riscv32imc: ESP32-C3 firmware;
+                # riscv32imac: ESP32-C6 firmware
+                targets = [
+                  "wasm32-unknown-unknown"
+                  "riscv32imc-unknown-none-elf"
+                  "riscv32imac-unknown-none-elf"
+                ];
               })
               # ESP32 flashing/monitoring over USB
               pkgs.espflash

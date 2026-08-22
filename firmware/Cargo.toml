@@ -61,6 +61,9 @@ board-c3-devkit = ["esp32c3"]
 board-athom-music = ["esp32"]
 board-pixelblaze-v3 = ["esp32"]
 board-esp32-generic = ["esp32"]
+# Untested on metal (no bench hardware) — reviewed wiring only; see docs/boards.md.
+board-s3-devkit = ["esp32s3"]
+board-c6-devkit = ["esp32c6"]
 # RAM-constrained profile (S2/C2 tier, see docs/boards.md): web pool 3→2
 # (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
 # browser navigation — Chromium preconnect wants 3 sockets at cold nav.
@@ -86,6 +89,28 @@ esp32 = [
   "esp-rtos/esp32",
   "esp-radio/esp32",
   "esp-storage/esp32",
+]
+# ESP32-S3 (Xtensa, like the classic ESP32 — same espup rustc fork, a
+# different target triple; build-esp32.sh picks it from BOARD).
+esp32s3 = [
+  "esp-hal/esp32s3",
+  "esp-println/esp32s3",
+  "esp-backtrace/esp32s3",
+  "esp-bootloader-esp-idf/esp32s3",
+  "esp-rtos/esp32s3",
+  "esp-radio/esp32s3",
+  "esp-storage/esp32s3",
+]
+# ESP32-C6 (RISC-V, mainline Rust — riscv32imac, one letter off the C3's
+# riscv32imc, so it needs its own rustup target).
+esp32c6 = [
+  "esp-hal/esp32c6",
+  "esp-println/esp32c6",
+  "esp-backtrace/esp32c6",
+  "esp-bootloader-esp-idf/esp32c6",
+  "esp-rtos/esp32c6",
+  "esp-radio/esp32c6",
+  "esp-storage/esp32c6",
 ]
 
 # opt-level "s" (size), not 3: the app crossed the 1 MiB OTA-slot boundary at

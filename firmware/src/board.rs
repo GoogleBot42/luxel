@@ -38,11 +38,33 @@ mod def {
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
 }
 
+// UNTESTED ON METAL: no S3 on the bench. Wiring is reviewed against the
+// ESP32-S3-DevKitC-1 pinout (SPI2/FSPI IO_MUX pins), never lit up.
+#[cfg(feature = "board-s3-devkit")]
+mod def {
+    use super::*;
+    pub const NAME: &str = "ESP32-S3 devkit (untested)";
+    pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
+    pub const DEFAULT_PIXEL_COUNT: u32 = 60;
+}
+
+// UNTESTED ON METAL: no C6 on the bench. Wiring is reviewed against the
+// ESP32-C6-DevKitC-1 pinout (SPI2/FSPI IO_MUX pins), never lit up.
+#[cfg(feature = "board-c6-devkit")]
+mod def {
+    use super::*;
+    pub const NAME: &str = "ESP32-C6 devkit (untested)";
+    pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
+    pub const DEFAULT_PIXEL_COUNT: u32 = 60;
+}
+
 #[cfg(not(any(
     feature = "board-c3-devkit",
     feature = "board-pixelblaze-v3",
     feature = "board-athom-music",
     feature = "board-esp32-generic",
+    feature = "board-s3-devkit",
+    feature = "board-c6-devkit",
 )))]
 compile_error!(
     "no board selected — build with --features board-<name> \
@@ -54,5 +76,7 @@ compile_error!(
     feature = "board-pixelblaze-v3",
     feature = "board-athom-music",
     feature = "board-esp32-generic",
+    feature = "board-s3-devkit",
+    feature = "board-c6-devkit",
 ))]
 pub use def::*;
