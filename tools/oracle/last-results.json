@@ -1,8 +1,410 @@
 {
   "ip": "192.168.0.140",
   "fw": "3.67",
-  "when": "2026-07-07T22:42:17.658Z",
+  "when": "2026-08-22T23:36:12.228Z",
   "results": [
+    {
+      "name": "div0",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "div0n",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "div00",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "rem0",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "mod0",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sq181",
+      "pb": 2147024896,
+      "luxel": 2147024896,
+      "match": true
+    },
+    {
+      "name": "sq182",
+      "pb": -2124152832,
+      "luxel": -2124152832,
+      "match": true
+    },
+    {
+      "name": "addmax",
+      "pb": -2147483648,
+      "luxel": -2147483648,
+      "match": true
+    },
+    {
+      "name": "submin",
+      "pb": 2147418112,
+      "luxel": 2147418112,
+      "match": true
+    },
+    {
+      "name": "mul200",
+      "pb": -1673527296,
+      "luxel": -1673527296,
+      "match": true
+    },
+    {
+      "name": "divwrap",
+      "pb": -2147483648,
+      "luxel": -2147483648,
+      "match": true
+    },
+    {
+      "name": "or0",
+      "pb": 98304,
+      "luxel": 98304,
+      "match": true
+    },
+    {
+      "name": "shl1",
+      "pb": 163840,
+      "luxel": 163840,
+      "match": true
+    },
+    {
+      "name": "shr1",
+      "pb": 81920,
+      "luxel": 81920,
+      "match": true
+    },
+    {
+      "name": "shrneg",
+      "pb": -81920,
+      "luxel": -81920,
+      "match": true
+    },
+    {
+      "name": "shrneg31",
+      "pb": -1,
+      "luxel": -1,
+      "match": true
+    },
+    {
+      "name": "not15",
+      "pb": -131072,
+      "luxel": -131072,
+      "match": true
+    },
+    {
+      "name": "not0",
+      "pb": -65536,
+      "luxel": -65536,
+      "match": true
+    },
+    {
+      "name": "and53",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "xor53",
+      "pb": 393216,
+      "luxel": 393216,
+      "match": true
+    },
+    {
+      "name": "andfrac",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "shl32",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "shl33",
+      "pb": 131072,
+      "luxel": 131072,
+      "match": true
+    },
+    {
+      "name": "shlneg",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "shlfrac",
+      "pb": 131072,
+      "luxel": 131072,
+      "match": true
+    },
+    {
+      "name": "shr32",
+      "pb": 4259840,
+      "luxel": 4259840,
+      "match": true
+    },
+    {
+      "name": "floorneg",
+      "pb": -393216,
+      "luxel": -393216,
+      "match": true
+    },
+    {
+      "name": "ceilneg",
+      "pb": -327680,
+      "luxel": -327680,
+      "match": true
+    },
+    {
+      "name": "fracneg",
+      "pb": -32768,
+      "luxel": -32768,
+      "match": true
+    },
+    {
+      "name": "truncneg",
+      "pb": -327680,
+      "luxel": -327680,
+      "match": true
+    },
+    {
+      "name": "round25",
+      "pb": 196608,
+      "luxel": 196608,
+      "match": true
+    },
+    {
+      "name": "roundn25",
+      "pb": -131072,
+      "luxel": -131072,
+      "match": true
+    },
+    {
+      "name": "round05",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "roundn05",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "remneg",
+      "pb": -32768,
+      "luxel": -32768,
+      "match": true
+    },
+    {
+      "name": "modneg",
+      "pb": 163840,
+      "luxel": 163840,
+      "match": true
+    },
+    {
+      "name": "remposneg",
+      "pb": 32768,
+      "luxel": 32768,
+      "match": true
+    },
+    {
+      "name": "modposneg",
+      "pb": -163840,
+      "luxel": -163840,
+      "match": true
+    },
+    {
+      "name": "or42",
+      "pb": 2752512,
+      "luxel": 2752512,
+      "match": true
+    },
+    {
+      "name": "and7",
+      "pb": 458752,
+      "luxel": 458752,
+      "match": true
+    },
+    {
+      "name": "or2",
+      "pb": 131072,
+      "luxel": 131072,
+      "match": true
+    },
+    {
+      "name": "not5",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "truesum",
+      "pb": 131072,
+      "luxel": 131072,
+      "match": true
+    },
+    {
+      "name": "cmppack",
+      "pb": 6619136,
+      "luxel": 6619136,
+      "match": true
+    },
+    {
+      "name": "tern",
+      "pb": 1310720,
+      "luxel": 1310720,
+      "match": true
+    },
+    {
+      "name": "tinymul",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "lit_epsilon",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "multrunc",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "sin1",
+      "pb": 55147,
+      "luxel": 55146,
+      "match": false
+    },
+    {
+      "name": "sinpi",
+      "pb": 404,
+      "luxel": 6,
+      "match": false
+    },
+    {
+      "name": "sinhalfpi",
+      "pb": 65537,
+      "luxel": 65536,
+      "match": false
+    },
+    {
+      "name": "sin100",
+      "pb": -33188,
+      "luxel": -33190,
+      "match": false
+    },
+    {
+      "name": "sinneg",
+      "pb": -55147,
+      "luxel": -55148,
+      "match": false
+    },
+    {
+      "name": "cos1",
+      "pb": 35408,
+      "luxel": 35412,
+      "match": false
+    },
+    {
+      "name": "tan1",
+      "pb": 102070,
+      "luxel": 102057,
+      "match": false
+    },
+    {
+      "name": "sqrt2",
+      "pb": 92681,
+      "luxel": 92681,
+      "match": true
+    },
+    {
+      "name": "sqrthalf",
+      "pb": 46340,
+      "luxel": 46340,
+      "match": true
+    },
+    {
+      "name": "sqrtbig",
+      "pb": 11351169,
+      "luxel": 11351168,
+      "match": false
+    },
+    {
+      "name": "sqrtneg",
+      "pb": -131072,
+      "luxel": -131072,
+      "match": true
+    },
+    {
+      "name": "exp1",
+      "pb": 178145,
+      "luxel": 178144,
+      "match": false
+    },
+    {
+      "name": "exp10",
+      "pb": 1443482173,
+      "luxel": 1443463168,
+      "match": false
+    },
+    {
+      "name": "log2_8",
+      "pb": 196608,
+      "luxel": 196608,
+      "match": true
+    },
+    {
+      "name": "loghalf",
+      "pb": -45425,
+      "luxel": -45426,
+      "match": false
+    },
+    {
+      "name": "log0",
+      "pb": -2147483648,
+      "luxel": -2147483648,
+      "match": true
+    },
+    {
+      "name": "logneg",
+      "pb": -2147483648,
+      "luxel": -2147483648,
+      "match": true
+    },
+    {
+      "name": "pow_2_10",
+      "pb": 67108864,
+      "luxel": 67108864,
+      "match": true
+    },
+    {
+      "name": "pow_9_half",
+      "pb": 196608,
+      "luxel": 196608,
+      "match": true
+    },
     {
       "name": "pow_neg2_2",
       "pb": 262144,
@@ -16,6 +418,12 @@
       "match": true
     },
     {
+      "name": "pow_x_0",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
       "name": "pow_neg2_half",
       "pb": 2147483648,
       "luxel": -2147483648,
@@ -25,6 +433,623 @@
       "name": "pow_neg2_15",
       "pb": 2147483648,
       "luxel": -2147483648,
+      "match": false
+    },
+    {
+      "name": "log2_0",
+      "pb": -2147483648,
+      "luxel": -2147483648,
+      "match": true
+    },
+    {
+      "name": "log2_neg",
+      "pb": -2147483648,
+      "luxel": -2147483648,
+      "match": true
+    },
+    {
+      "name": "pow_0_0",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "atan1",
+      "pb": 51471,
+      "luxel": 51473,
+      "match": false
+    },
+    {
+      "name": "atan100",
+      "pb": 102418,
+      "luxel": 102290,
+      "match": false
+    },
+    {
+      "name": "atan2_11",
+      "pb": 51471,
+      "luxel": 51473,
+      "match": false
+    },
+    {
+      "name": "atan2_1n1",
+      "pb": 154415,
+      "luxel": 154414,
+      "match": false
+    },
+    {
+      "name": "atan2_n1n1",
+      "pb": -154415,
+      "luxel": -154414,
+      "match": false
+    },
+    {
+      "name": "atan2_00",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "asin_half",
+      "pb": 34480,
+      "luxel": 34313,
+      "match": false
+    },
+    {
+      "name": "acos_half",
+      "pb": 68463,
+      "luxel": 68631,
+      "match": false
+    },
+    {
+      "name": "hypot34",
+      "pb": 327680,
+      "luxel": 327680,
+      "match": true
+    },
+    {
+      "name": "hypotbig",
+      "pb": 7881779,
+      "luxel": 7881776,
+      "match": false
+    },
+    {
+      "name": "hypot3_122",
+      "pb": 196608,
+      "luxel": 196608,
+      "match": true
+    },
+    {
+      "name": "wave25",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "wave125",
+      "pb": 55938,
+      "luxel": 55938,
+      "match": true
+    },
+    {
+      "name": "wave75",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "waveneg",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "square_1arg",
+      "pbCompileError": "Incorrect number of operation arguments for square found 1 expected 2 at line 2:27",
+      "match": false
+    },
+    {
+      "name": "tri25",
+      "pb": 32768,
+      "luxel": 32768,
+      "match": true
+    },
+    {
+      "name": "tri6",
+      "pb": 52432,
+      "luxel": 52432,
+      "match": true
+    },
+    {
+      "name": "trineg",
+      "pb": 32768,
+      "luxel": 32768,
+      "match": true
+    },
+    {
+      "name": "square2",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "square5",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "mix1020",
+      "pb": 983040,
+      "luxel": 983040,
+      "match": true
+    },
+    {
+      "name": "smooth5",
+      "pb": 32768,
+      "luxel": 32768,
+      "match": true
+    },
+    {
+      "name": "smooth25",
+      "pb": 10240,
+      "luxel": 10240,
+      "match": true
+    },
+    {
+      "name": "bezq",
+      "pb": 32768,
+      "luxel": 32768,
+      "match": true
+    },
+    {
+      "name": "bezc",
+      "pb": 49152,
+      "luxel": 49152,
+      "match": true
+    },
+    {
+      "name": "clamp5",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "minmax",
+      "pb": 46071808,
+      "luxel": 46071808,
+      "match": true
+    },
+    {
+      "name": "cPI",
+      "pb": 205886,
+      "luxel": 205886,
+      "match": true
+    },
+    {
+      "name": "cPI2",
+      "pb": 411774,
+      "luxel": 411774,
+      "match": true
+    },
+    {
+      "name": "cE",
+      "pb": 178144,
+      "luxel": 178144,
+      "match": true
+    },
+    {
+      "name": "cPI3_4",
+      "pb": 154414,
+      "luxel": 154414,
+      "match": true
+    },
+    {
+      "name": "cPISQ",
+      "pb": 646814,
+      "luxel": 646814,
+      "match": true
+    },
+    {
+      "name": "cSQRT2",
+      "pb": 92680,
+      "luxel": 92680,
+      "match": true
+    },
+    {
+      "name": "cSQRT1_2",
+      "pb": 46340,
+      "luxel": 46340,
+      "match": true
+    },
+    {
+      "name": "cLN2",
+      "pb": 45426,
+      "luxel": 45426,
+      "match": true
+    },
+    {
+      "name": "cLOG2E",
+      "pb": 94548,
+      "luxel": 94548,
+      "match": true
+    },
+    {
+      "name": "oob_read",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "oob_write",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "neg_index",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "frac_index",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "frac_index_n",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "arr_sum",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "arr_len",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "arr_sort",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_fracread",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_fracrval",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_negfrac",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_oobfrac",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_oobint",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_lastidx",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_negread",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_fracwrite",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_fracwval",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_oobwrite",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_negwrite",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_fwvar",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_fwcomp",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_owvar",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_owvarc",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "sent_nwvar",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "jnull",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "jstrict",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen74",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen05",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen76",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alen70",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "alenrd",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gLOW",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "gHIGH",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "gINPUT",
+      "pb": 65536,
+      "luxel": 65536,
+      "match": true
+    },
+    {
+      "name": "gOUTPUT",
+      "pb": 131072,
+      "luxel": 131072,
+      "match": true
+    },
+    {
+      "name": "gINPUT_PULLUP",
+      "pb": 327680,
+      "luxel": 327680,
+      "match": true
+    },
+    {
+      "name": "gINPUT_PULLDOWN",
+      "pb": 589824,
+      "luxel": 589824,
+      "match": true
+    },
+    {
+      "name": "gOUTPUT_OPEN_DRAIN",
+      "pb": 1179648,
+      "luxel": 1179648,
+      "match": true
+    },
+    {
+      "name": "gANALOG",
+      "pb": 12582912,
+      "luxel": 12582912,
+      "match": true
+    },
+    {
+      "name": "postinc",
+      "pb": 3670016,
+      "luxel": 3670016,
+      "match": true
+    },
+    {
+      "name": "preinc",
+      "pb": 4325376,
+      "luxel": 4325376,
+      "match": true
+    },
+    {
+      "name": "postdec",
+      "pb": 3538944,
+      "luxel": 3538944,
+      "match": true
+    },
+    {
+      "name": "ref_arith",
+      "pb": 1668874240,
+      "luxel": 1668874240,
+      "match": true
+    },
+    {
+      "name": "fn_arith",
+      "pb": 1734410240,
+      "luxel": 1734410240,
+      "match": true
+    },
+    {
+      "name": "ref_cmp",
+      "pb": 1931608064,
+      "luxel": 1931608064,
+      "match": true
+    },
+    {
+      "name": "arr_replace",
+      "pb": -340066304,
+      "luxel": -340066304,
+      "match": true
+    },
+    {
+      "name": "shadow_builtin",
+      "pb": 1865744384,
+      "luxel": 1865744384,
+      "match": true
+    },
+    {
+      "name": "shadow_call",
+      "pb": 0,
+      "luxel": 0,
+      "match": true
+    },
+    {
+      "name": "prng-sequence.o_prng1",
+      "pb": 5002916,
+      "luxel": 1777413,
+      "match": false
+    },
+    {
+      "name": "prng-sequence.o_prng2",
+      "pb": 4959237,
+      "luxel": 4252852,
+      "match": false
+    },
+    {
+      "name": "prng-sequence.o_prng3",
+      "pb": 6467877,
+      "luxel": 2841444,
+      "match": false
+    },
+    {
+      "name": "prng-sequence.o_seedret",
+      "pb": -402413388,
+      "luxel": 1862168905,
+      "match": false
+    },
+    {
+      "name": "prng-sequence.o_prng4",
+      "pb": 5046077,
+      "luxel": 5757743,
+      "match": false
+    },
+    {
+      "name": "transform-accumulation.x0",
+      "pb": 72087,
+      "luxel": 6552,
+      "match": false
+    },
+    {
+      "name": "transform-accumulation.x1",
+      "pb": 78639,
+      "luxel": 13104,
+      "match": false
+    },
+    {
+      "name": "transform-accumulation.x2",
+      "pb": 85191,
+      "luxel": 19656,
+      "match": false
+    },
+    {
+      "name": "transform-order.base",
+      "pb": 65535,
+      "luxel": 0,
+      "match": false
+    },
+    {
+      "name": "transform-order.ta",
+      "pb": 163838,
+      "luxel": 32768,
+      "match": false
+    },
+    {
+      "name": "transform-order.tb",
+      "pb": 147454,
+      "luxel": 16384,
+      "match": false
+    },
+    {
+      "name": "transform-rotate.bx",
+      "pb": 65535,
+      "luxel": 0,
+      "match": false
+    },
+    {
+      "name": "transform-rotate.by",
+      "pb": 32768,
+      "luxel": 0,
+      "match": false
+    },
+    {
+      "name": "transform-rotate.rx",
+      "pb": -32767,
+      "luxel": 0,
+      "match": false
+    },
+    {
+      "name": "transform-rotate.ry",
+      "pb": 65535,
+      "luxel": 0,
       "match": false
     }
   ]

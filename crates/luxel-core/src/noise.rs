@@ -1,9 +1,12 @@
 //! Perlin-style gradient noise in fixed point — deterministic, integer-only,
 //! hash-based (no permutation tables to seed).
 //!
-//! TODO(oracle): PB's exact noise algorithm, output range, and fbm/ridge/
-//! turbulence normalization are unknown — these are visually-plausible
-//! stand-ins to be tuned via sweep probes against real hardware.
+//! PB's exact noise algorithm, output range, and fbm/ridge/turbulence
+//! normalization are unknown — these are visually-plausible stand-ins.
+//! Arities match PB exactly (verified against its compiler 2026-08-22:
+//! perlin 4, fbm 6, ridge 7, turbulence 6, setPerlinWrap 3), and raw
+//! sweeps for fitting are captured in tools/oracle/sweeps/perlin*.json,
+//! fbm*.json, ridge1d.json, turb1d.json (fitting = open Gitea ticket).
 
 use crate::fixed::Fx;
 

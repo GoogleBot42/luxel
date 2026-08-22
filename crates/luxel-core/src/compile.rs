@@ -312,7 +312,10 @@ fn predefined() -> Vec<GlobalDef> {
         g("LOG10E", consts::LOG10_E),
         g("SQRT1_2", consts::FRAC_1_SQRT_2),
         g("SQRT2", consts::SQRT_2),
-        // JS-isms the PB compiler accepts; both behave as 0. TODO(oracle).
+        // `null` compiles on PB and acts as 0 at runtime (oracle-verified
+        // 2026-08-22). `undefined` is REJECTED by the PB compiler
+        // ("Undefined symbol") — keeping it as 0 here is a deliberate
+        // Luxel leniency, same class as 1-arg `square`.
         gi("null", 0),
         gi("undefined", 0),
         // GPIO constants, oracle-probed from fw 3.67

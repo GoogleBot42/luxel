@@ -236,3 +236,64 @@ bounds on a mapless Luxel):
   retry loop after live-coding.
 - Restore the user's active pattern (`activeProgramId`) when done; the
   harness does this automatically.
+
+## TODO(oracle) sweep 2026-08-22 (fw 3.67 — `tools/oracle/todo-probes.mjs`)
+
+One session settled every remaining probe-able `TODO(oracle)` marker. New
+probe battery: `tools/oracle/todo-probes.mjs` (self-judging — prints
+verdicts rather than diffing raws, since map-dependent probes can't be
+compared against a mapless CLI run).
+
+Confirmed matches (markers removed, no code change):
+
+- **Method-form `a.replace(2, 9)` writes from index 0** ([2,9,0,0] on a
+  4-slot array) — it is `arrayReplace`, not the offset form. **Global
+  `arrayReplaceAt(b, 1, 7, 8)` exists on PB** and matches Luxel exactly
+  ([0,7,8,0]); PB's compiler accepts it variadically (arity 2+).
+- **rotateX/rotateY/rotateZ are all CCW for +angle, right-handed** —
+  probed at π/2 against pixel 0's 3D map coords, all three axes match our
+  matrices bit-for-bit (rotateX: (x,y,z)→(x,−z,y), rotateY: →(z,y,−x),
+  rotateZ: →(−y,x,z)).
+- **`paint()` with no palette installed is the grayscale ramp** [v,v,v]
+  (floor-quantized), and **palette state does NOT persist across
+  live-code reloads** (A/B/A probe: grayscale → all-red palette →
+  grayscale again, bit-identical).
+- **`null` compiles and acts as 0 at runtime** (null+1 = 1, null*5+3 = 3).
+- **Clock builtins**: device in America/Denver matched host wall clock
+  exactly (date, hour, minute, weekday Sun=1). The **no-time-source case
+  is untestable** — a configured PB's clock can't be unset via the public
+  API; our "return 0" stays a documented choice.
+- **Perlin-family arities match** (checked against PB's own compiler,
+  no device needed): perlin(4), perlinFbm(6), perlinRidge(7),
+  perlinTurbulence(6), setPerlinWrap(3) — exactly Luxel's signatures.
+
+Divergences found and FIXED in luxel-core:
+
+- **Transform stack cap is a SILENT cap at 31, not an error.** 40 stacked
+  translates: dx advances for 31 steps then stalls; the pattern keeps
+  running (no abort, sentinel lands). Luxel previously errored past 31 —
+  `push_op` now silently ignores ops past the cap
+  (`transform_stack_caps_at_31_silently`).
+- **Palette lookup past the LAST stop is BLACK, not a clamp.** With stops
+  {0.25→blue, 0.75→green}: paint(0.1..0.25) = blue (below-first CLAMPS),
+  paint(0.75) = green exactly, paint(0.7501..0.999) = (0,0,0). Hard edge
+  exactly at the stop (a "+1 raw" literal quantizes back to the stop, so
+  the first representable value above it is already black). Single-stop
+  palette [0.5→red]: ≤0.5 red, >0.5 black. Luxel clamped both ends —
+  `palette_lookup` now returns black above the last stop
+  (`palette_edges_match_pixelblaze`). The asymmetry is bug-for-bug PB.
+- **`undefined` is NOT a PB symbol** ("Undefined symbol undefined" at
+  compile). `null` is. Luxel keeps `undefined` = 0 as a documented
+  leniency (same class as 1-arg `square`).
+
+Noise sweeps captured for offline fitting (algorithm still unmatched —
+ours remains a visually-plausible stand-in): `sweeps/perlin1d*.json`,
+`perlin_seed`, `perlin_wrap4` (setPerlinWrap(4,4,4) periodicity),
+`fbm1d` + per-arg sweeps `fbm_arg4/5/6`, `ridge1d`, `turb1d` — 3,320
+samples total. Fitting is tracked as a Gitea ticket.
+
+Still open, and why: **1D transform coords** (this oracle can never be
+mapless again — see the maps section above); **sensor-board accel/light
+scaling** (needs the physical PB sensor board); **PB's exact noise
+algorithm** (sweeps captured, fitting pending); **no-time clock behavior**
+(untestable on a configured device).

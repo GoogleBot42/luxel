@@ -10,7 +10,8 @@
 //! and the transform stack applies to 2D/3D coordinates. Oracle-verified
 //! 2026-07-07: composition order (first call outermost), cross-frame
 //! accumulation, and rotate direction all match PB; 1D-x remains
-//! TODO(oracle) (the oracle has a map installed, masking the 1D path).
+//! unverifiable on our oracle: a PB that has ever saved a map can never be
+//! made mapless again through its public API (see 04-oracle-findings.md).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -802,7 +803,8 @@ impl Engine {
     fn render_args(&self, render: RenderKind, i: u32) -> (u16, [Value; 4], usize) {
         let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
         let p = self.vm.pixel_coords(i, [mid; 3]);
-        // transforms apply to 2D/3D coordinates (TODO(oracle): 1D x?)
+        // transforms apply to 2D/3D coordinates (1D x: unverifiable on our
+        // oracle — its installed map can never be removed; keeping 1D raw)
         let p = match render {
             RenderKind::R1(_) => p,
             _ => self.vm.apply_transform(p),

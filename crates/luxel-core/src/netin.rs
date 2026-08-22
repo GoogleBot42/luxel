@@ -106,8 +106,8 @@ pub const SB_FRAME_LEN: usize = 98;
 ///
 /// Scaling: u16 fields land as raw 16.16 fractions (0..1), matching PB's
 /// normalized bindings; `max_frequency` is in Hz; accelerometer s16 maps to
-/// ±0.5 = ±full-scale. TODO(oracle): pin accel/light scaling against a real
-/// board on the PB.
+/// ±0.5 = ±full-scale. Accel/light scaling still needs pinning against a
+/// real sensor board on the PB (blocked on hardware — Gitea ticket).
 pub fn parse_sensor_board(pkt: &[u8]) -> Option<crate::engine::SensorFrame> {
     use crate::fixed::Fx;
     if pkt.len() < SB_FRAME_LEN || &pkt[..6] != SB_MAGIC || &pkt[94..98] != b"END\0" {

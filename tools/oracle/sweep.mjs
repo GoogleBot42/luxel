@@ -38,6 +38,25 @@ export const SWEEPS = {
   powx2: { expr: "pow(x, 2.5)", inputs: gridRaw(0.01, 40, 200) },
   tan: { expr: "tan(x)", inputs: gridRaw(-1.5, 1.5, 200) },
   wave: { expr: "wave(x)", inputs: gridRaw(-1, 2, 300) },
+  // --- perlin family (2026-08-22): capture for offline algorithm fitting.
+  // Arities verified against PB's compiler: perlin(x,y,z,seed),
+  // perlinFbm(6), perlinRidge(7), perlinTurbulence(6), setPerlinWrap(3) —
+  // same as Luxel. Tail-arg MEANINGS on PB are unknown; the argN sweeps
+  // isolate each one's effect at a fixed sample point.
+  perlin1d: { expr: "perlin(x, 0.3, 0.7, 5)", inputs: [...gridRaw(-2, 2, 400), ...gridRaw(2, 10, 200)] },
+  perlin1d_fine: { expr: "perlin(x, 0.3, 0.7, 5)", inputs: gridRaw(0, 1, 400) },
+  perlin_seed: { expr: "perlin(0.37, 0.3, 0.7, x)", inputs: [...gridRaw(0, 20, 200), ...gridRaw(0, 1, 100)] },
+  perlin_wrap4: {
+    expr: "perlin(x, 0.3, 0.7, 5)",
+    setup: "setPerlinWrap(4, 4, 4)",
+    inputs: gridRaw(0, 9, 400),
+  },
+  fbm1d: { expr: "perlinFbm(x, 0.3, 0.7, 2, 0.5, 3)", inputs: gridRaw(-2, 4, 400) },
+  fbm_arg4: { expr: "perlinFbm(0.37, 0.3, 0.7, x, 0.5, 3)", inputs: gridRaw(0.25, 6, 150) },
+  fbm_arg5: { expr: "perlinFbm(0.37, 0.3, 0.7, 2, x, 3)", inputs: gridRaw(0, 2, 150) },
+  fbm_arg6: { expr: "perlinFbm(0.37, 0.3, 0.7, 2, 0.5, x)", inputs: gridRaw(1, 8, 120) },
+  ridge1d: { expr: "perlinRidge(x, 0.3, 0.7, 2, 0.5, 1, 3)", inputs: gridRaw(-2, 4, 400) },
+  turb1d: { expr: "perlinTurbulence(x, 0.3, 0.7, 2, 0.5, 3)", inputs: gridRaw(-2, 4, 400) },
 };
 
 function sweepSource(exprTemplate, inputRaws) {
@@ -61,8 +80,9 @@ function sweepSource(exprTemplate, inputRaws) {
   return null; // built inline below
 }
 
-export function buildBatchSource(expr, raws) {
+export function buildBatchSource(expr, raws, setup = "") {
   let src = "eps = 1 >> 16\n";
+  if (setup) src += setup + "\n";
   src += `export var ys = array(${raws.length})\n`;
   src += `export var n = ${raws.length}\n`;
   const lines = raws.map((r, i) => {
@@ -105,7 +125,7 @@ async function runSweep(pb, compile, name, def) {
   const results = [];
   for (let off = 0; off < def.inputs.length; off += BATCH) {
     const batch = def.inputs.slice(off, off + BATCH);
-    const src = buildBatchSource(def.expr, batch);
+    const src = buildBatchSource(def.expr, batch, def.setup);
     const compiled = compile(src);
     if (!compiled.ok) throw new Error(`${name}: PB compile failed: ${compiled.error}`);
     await pb.setCode(packBytecode(compiled));
