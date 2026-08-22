@@ -14,6 +14,8 @@ const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
 
 const PORT = Number(process.env.E2E_PORT ?? 4181);
+/** Where screenshots land (matching e2e.mjs's convention). */
+const shotDir = process.argv[2] ?? "/tmp";
 const DEV_PORT = 8723;
 const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -57,6 +59,17 @@ const check = (name, cond, detail = "") => {
   console.log(`${cond ? " ok " : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`);
   if (!cond) fails.push(name);
 };
+
+// Capacity fixtures (Gitea #15), sized against a mirror claiming 30 KB free:
+// 10 KB of load headroom, array arena clamped at its 16 KB minimum. Arrays are
+// 8 B/element, so the element count is the dial. One line each — CodeMirror
+// auto-closes `{`, and short sources keep the typing fast.
+const SMALL = "export function render(index) { hsv(index / pixelCount, 1, 1) }";
+const arrayPattern = (n) =>
+  `var a = array(${n})\nexport function render(index) { hsv(a[index % ${n}] + index / pixelCount, 1, 1) }`;
+const ARRAY_TIGHT = arrayPattern(1000); // ~9.5 KB modelled — inside 10 KB, past 85%
+const ARRAY_OVER = arrayPattern(1400); // ~12.7 KB modelled — past the runtime floor
+const ARRAY_ARENA = arrayPattern(2100); // 16.8 KB of arrays — past the 16 KB arena
 
 async function setEditor(page, text) {
   await page.click(".cm-content");
@@ -815,6 +828,107 @@ try {
       ),
     )
     .catch(() => {});
+
+  // ---- capacity warning (Gitea #15) ----
+  // The editor models the firmware's own pattern-load sequence (decode →
+  // budgeted engine → frames, under a counting allocator in wasm) against the
+  // free heap the device reports, and warns before the push lands.
+  //
+  // Silence first: this mirror reports heap_free 0 ("I can't tell you"), and
+  // an unknown budget must never be treated as a small one.
+  await setEditor(page, ARRAY_OVER);
+  await sleep(1200);
+  check(
+    "capacity: silent when the device can't report free heap",
+    (await page.$('[data-role="capacity-warning"]')) === null,
+  );
+
+  // A second mirror impersonating a starved device. 30 KB free leaves a
+  // 10 KB load headroom (20 KB runtime floor) with the array arena clamped at
+  // its 16 KB minimum — which puts all four verdicts within reach of a
+  // one-line pattern. See crates/luxel-core/src/budget.rs.
+  const TIGHT_PORT = DEV_PORT + 1;
+  const TIGHT = `http://127.0.0.1:${TIGHT_PORT}`;
+  const tightDev = spawn(
+    "../target/debug/luxel",
+    ["serve", "--port", String(TIGHT_PORT), "--pixels", "120", "--heap-free", "30720"],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  await new Promise((resolve, reject) => {
+    tightDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+    tightDev.on("exit", () => reject(new Error("starved mirror died")));
+    setTimeout(() => reject(new Error("starved mirror start timeout")), 30000);
+  });
+  process.on("exit", () => tightDev.kill());
+
+  try {
+    check(
+      "capacity: mirror reports the impersonated free heap",
+      (await fetch(`${TIGHT}/api/status`).then((r) => r.json())).heap_free === 30720,
+    );
+
+    await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(TIGHT)}`, {
+      waitUntil: "networkidle0",
+    });
+    await page.waitForSelector(".cm-content");
+    await sleep(1500);
+
+    /** The warning banner's level, or "" when there is no warning. */
+    const level = async () =>
+      await page
+        .$eval('[data-role="capacity-warning"]', (el) => el.getAttribute("data-level") ?? "")
+        .catch(() => "");
+
+    await setEditor(page, SMALL);
+    await sleep(1200);
+    check("capacity: no warning for a pattern that fits", (await level()) === "", await level());
+
+    await setEditor(page, ARRAY_TIGHT);
+    await sleep(1200);
+    check("capacity: 'close to the limit' warning appears", (await level()) === "tight");
+    await page.screenshot({
+      path: `${shotDir}/device-e2e-capacity-tight.png`,
+    });
+
+    await setEditor(page, ARRAY_OVER);
+    await sleep(1200);
+    check("capacity: 'too large' warning appears", (await level()) === "over");
+    const overText = await page
+      .$eval('[data-role="capacity-warning"]', (el) => el.textContent ?? "")
+      .catch(() => "");
+    check(
+      "capacity: warning names both figures",
+      /\d+ KB needed, \d+ KB free/.test(overText),
+      overText.trim(),
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-capacity-over.png` });
+
+    // Non-blocking: an over-budget pattern is still pushed. The device is the
+    // authority on what it can run; the editor only says what it expects.
+    const pushed = await fetch(`${TIGHT}/api/pattern`).then((r) => r.text());
+    check("capacity: warning does not block the push", pushed.includes("array(1400)"), pushed.slice(0, 60));
+
+    // The array arena is the OTHER rejection path: the pattern never gets far
+    // enough for the floor check because its arrays don't fit the budget.
+    await setEditor(page, ARRAY_ARENA);
+    await sleep(1200);
+    check("capacity: array-budget overrun also warns", (await level()) === "over");
+    const arenaText = await page
+      .$eval('[data-role="capacity-warning"]', (el) => el.textContent ?? "")
+      .catch(() => "");
+    check(
+      "capacity: array-budget warning names the arena, not the floor",
+      /arrays exceed this device's array memory budget/.test(arenaText),
+      arenaText.trim(),
+    );
+
+    await setEditor(page, SMALL);
+    await sleep(1200);
+    check("capacity: warning clears when the pattern shrinks", (await level()) === "");
+    await page.screenshot({ path: `${shotDir}/device-e2e-capacity-clear.png` });
+  } finally {
+    tightDev.kill();
+  }
 } finally {
   await browser.close();
   device.kill();

@@ -588,6 +588,19 @@ try {
   check("picked pattern compiles", (await page.$(".banner.error")) === null);
   await page.screenshot({ path: `${shotDir}/e2e-5-final.png` });
 
+  // The playground has no device, so it has no capacity budget to judge
+  // against — and it must not sprout a device affordance to say so. A
+  // deliberately array-heavy pattern still gets nothing (Gitea #15).
+  await setEditor(
+    page,
+    "var a = array(9000)\nexport function render(index) { hsv(a[index % 9000] + index / pixelCount, 1, 1) }",
+  );
+  await sleep(600);
+  check(
+    "playground never shows a device capacity warning",
+    (await page.$('[data-role="capacity-warning"]')) === null,
+  );
+
   check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 } finally {
   await browser.close();

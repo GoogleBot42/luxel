@@ -255,7 +255,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc]\n       luxel serve [--pixels N] [--port P]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES]"
     );
     ExitCode::from(2)
 }

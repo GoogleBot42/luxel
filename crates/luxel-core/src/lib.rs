@@ -17,6 +17,7 @@ extern crate alloc;
 #[cfg(feature = "frontend")]
 pub mod ast;
 pub mod audio;
+pub mod budget;
 pub mod bytecode;
 #[cfg(feature = "frontend")]
 pub mod compile;
