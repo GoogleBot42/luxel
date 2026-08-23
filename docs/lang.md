@@ -116,6 +116,8 @@ the source location and keeps rendering. Array storage is budgeted
    `x, y, z` values your mapped renderer receives. They compose in call
    order and **persist across frames** — call `resetTransform()` first if
    you rebuild the transform every frame (hardware-confirmed PB behavior).
+   At most 31 ops stack; further calls are silently ignored until the next
+   `resetTransform()` (hardware-confirmed PB behavior).
 4. UI controls: `export function sliderSpeed(v) { … }` creates a slider
    named "Speed" that calls your function with 0..1 when moved. Prefixes:
    `slider`, `toggle`, `trigger`, `inputNumber`, `hsvPicker`, `rgbPicker`
@@ -254,7 +256,11 @@ vector 1 to vector 2 in radians (counter-clockwise positive, like `atan2`).
 ### Color
 
 `hsv(h, s, v)` (hue wraps), `hsv24`, `rgb(r, g, b)`; palette:
-`setPalette([pos, r, g, b, …])` then `paint(t, brightness)`.
+`setPalette([pos, r, g, b, …])` then `paint(t, brightness)`. With no
+palette installed `paint(t)` is a grayscale ramp. Outside the stops the
+ends are asymmetric (hardware-confirmed PB behavior): below the first stop
+clamps to the first color, past the last stop paints **black** — end a
+palette at position 1.0 unless you want the cutoff.
 
 **Luxel extension** — perceptual color: `oklch(l, c, h)` sets the pixel from
 OKLCH (lightness 0..1, chroma ~0..0.4, hue in turns like `hsv`), and
