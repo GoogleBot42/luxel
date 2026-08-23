@@ -1,5 +1,34 @@
 # Update log
 
+## 2026-08-22 — Output-driver abstraction: the render loop no longer
+## knows it's talking SPI (Gitea #71, HUB75 prereq)
+
+The output-driver trait docs/PLAN.md promised ("so parallel drivers slot
+in later without touching the render loop") now exists: new
+`firmware/src/output.rs` with an `OutputDriver` trait (`set_protocol` /
+`resize` / `write_frame`) and `SpiStripOutput`, which absorbed
+`EncodeBuf`, `realloc_buf`, and `spi_cfg` from main.rs verbatim — the
+u32-alignment DMA invariant and the lazy per-frame realloc retry moved
+with them, unchanged. `render_task` now takes the `BoardOutput` type
+alias (static dispatch — embassy tasks can't be generic, and there's no
+`dyn` in the frame path); the engine-freeing retry policy on tight-heap
+protocol switches stays in the task, where the engines live. HUB75 (#72)
+becomes "new impl + alias switch" instead of "rewrite the render loop."
+
+Zero intended behavior change. Verified: builds for c3-devkit, s3-devkit,
+c6-devkit, athom-music+small-chip; stack-check on default and
+athom+small-chip (.stack 30,236 B, floor 24 KB); full QEMU suite 5/5
+PASS; athom OTA image 946,880 B vs master's 948,400 B (−1.5 KB, slot
+margin unaffected). One log-format nit: the protocol-switch alloc-failure
+message now reports pixels, not bytes. Athom hardware soak deferred —
+the rig was occupied by another session (noted on the PR).
+
+Context: HUB75 support planned with Jeremy 2026-08-22 (Seengreat HUB75
+S3 + 64x64 panel ordered; series = Gitea #71–#75). Pre-existing, NOT
+from this change: `cargo clippy` on master fails with 7
+`large_stack_arrays` errors in netin/ota/provision (clippy 1.96 bump) —
+filed separately.
+
 ## 2026-08-22 — Takeover imports WLED's LED wiring: a converted device
 ## comes up configured, not defaulted (the open half of Gitea #3)
 
