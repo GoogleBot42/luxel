@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-08-22 — Event injection hardware-soaked on the Athom (v0.1.39)
+
+The deferred half of the v0.1.38/39 event work ("on-device soak when a
+device is back"): 15 minutes against the rig at 192.168.0.183, serial-less
+(/api/status + /api/vars polling — note /api/vars returns raw 16.16).
+New indexed tool: `tools/event-soak.mjs`.
+
+- **Delivery: 30,286/30,286** — steady 1–32-event batches at ~50 ev/s all
+  arrived, and even the deliberate 30×32-batch overflow bursts were fully
+  drained (at ~120 fps the queue empties between sequential HTTP posts;
+  the drop path stays covered by unit tests).
+- **Malformed frames: 44/44 rejected** (bad magic, truncation, count 33,
+  count/length mismatch) — clean `ok:false`, no crash.
+- **Heap stable** (97.7 KB idle → 92.5 KB min under load → 97.1 KB after
+  cooldown, no drift), **no vmerr, no reboot** (evTotal monotonic), fps
+  115–119 under combined injection+polling vs 123 idle.
+- Fun correctness sighting: the counter pattern's `frames` export wrapped
+  i32 right on schedule past 32768.0 — the documented two's-complement VM
+  semantics, live on hardware. (It also false-positived the tool's first
+  reboot detector; fixed to key on evTotal only.)
+- Device left as found: ad-hoc live pushes persist nothing; rainbow
+  restored.
+
+Remaining for Jeremy (docs/UNTESTED.md unchanged in scope): the playground
+click-through and the real-HA MQTT hop on the wall unit — still gated on
+the dev unit coming back online.
+
 ## 2026-08-22 — TODO(oracle) sweep: every probe-able marker settled,
 ## two bug-for-bug fixes, perlin sweeps captured
 
