@@ -20,8 +20,20 @@ c6-devkit, athom-music+small-chip; stack-check on default and
 athom+small-chip (.stack 30,236 B, floor 24 KB); full QEMU suite 5/5
 PASS; athom OTA image 946,880 B vs master's 948,400 B (−1.5 KB, slot
 margin unaffected). One log-format nit: the protocol-switch alloc-failure
-message now reports pixels, not bytes. Athom hardware soak deferred —
-the rig was occupied by another session (noted on the PR).
+message now reports pixels, not bytes.
+
+**Athom hardware soak (default profile, OTA'd to ota_0):** targeted
+exercises of the refactored paths first — live protocol switch
+ws2812→sk9822→ws2812 and pixel count 60→2048→60, including the worst
+case (ws2812 @ 2048 px = the 18 KB encode-buffer realloc; heap deltas
+matched the math, no reboot, no vmerr). Then `tools/hw-bench.mjs`:
+**321/322 clean** — the one failure is the long-standing pattern-side
+array OOB in "sound - spectromatrix render2D", same as every prior soak
+(see the 2026-08-22 RX-pool entry). Lowest heap_free 63,992 B (vs
+65,840 B in the v0.1.37 default-profile baseline; the gap is the bigger
+ws2812-vs-sk9822 encode buffer at 300 px). fps-vs-pixel-count curve
+unchanged (122 @ 60 px … 5 @ 2048 px). Slot held ota_0 throughout; no
+rollback. Device restored to as-found config (60 px ws2812).
 
 Context: HUB75 support planned with Jeremy 2026-08-22 (Seengreat HUB75
 S3 + 64x64 panel ordered; series = Gitea #71–#75). Pre-existing, NOT
