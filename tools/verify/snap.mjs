@@ -15,7 +15,9 @@
 //   --skip N             seconds of warmup discarded before capture (default 0)
 //   --seed N             RNG seed handed to both sides (default 1)
 //   --rig strip|grid|cloud   override the rig from pairs.json
-//   --pixels N           override pixel count for the rig
+//   --pixels N           override pixel count for the rig (snapped to a whole
+//                        grid / cubic lattice where the rig needs it, with a
+//                        warning)
 //   --grid WxH           override grid dimensions (grid rig; implies pixels)
 //   --controls-orig "name=v[,v,v];name2=v"   controls for the original
 //   --controls-port "..."                    controls for the port
@@ -90,7 +92,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { load, cubeLattice } from "./enginehost.mjs";
+import { load, cubeLattice, WASM_PATH } from "./enginehost.mjs";
 import { encodePNG, upscale, drawText, textSize } from "./png.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -102,6 +104,7 @@ const PAIRS = path.join(HERE, "pairs.json");
 const WALL_CLOCK = 1756000000;
 const SEP = [32, 32, 36]; // contact-sheet separator colour
 const SHEET_COLS = 6;
+const CLOUD_SIDE = 5; // default cloud rig: 5x5x5 = 125 pixels
 const MAX_DIM = 1200;
 const STAMP_FG = [128, 128, 128]; // timestamp ink
 const STAMP_BG = [0, 0, 0]; // 1px backing box, so the ink survives any content
@@ -682,12 +685,32 @@ if (kind === "grid") {
   // so a --pixels override can't make the tiles read past the frame buffer.
   rig.gridW = gw;
   rig.gridH = Math.max(1, Math.ceil(rig.pixels / gw));
-  if (rig.gridH !== gh) rig.pixels = rig.gridW * rig.gridH;
+  if (rig.gridH !== gh) {
+    const want = rig.pixels;
+    rig.pixels = rig.gridW * rig.gridH;
+    if (opts.pixels !== null && rig.pixels !== want) {
+      warn(
+        `--pixels ${want} snapped to ${rig.pixels} — the grid rig fills whole ` +
+          `rows of ${rig.gridW} (${rig.gridW}x${rig.gridH})`,
+      );
+    }
+  }
 } else if (kind === "cloud") {
-  const side = 5;
+  // The cloud rig is an n×n×n lattice, so its pixel count is always a cube:
+  // derive the side from the requested count and snap the count to side³.
+  // Anything else leaves pixels off the map — they all render at the same
+  // default coordinate and light up together as one bogus clump.
+  const want = opts.pixels ?? CLOUD_SIDE ** 3;
+  if (!(want > 0)) die("--pixels must be > 0");
+  const side = Math.max(1, Math.round(Math.cbrt(want)));
   rig.points = cubeLattice(side);
-  rig.pixels = opts.pixels ?? rig.points.length;
-  if (rig.pixels !== rig.points.length) rig.points = rig.points.slice(0, rig.pixels);
+  rig.pixels = rig.points.length;
+  if (rig.pixels !== want) {
+    warn(
+      `--pixels ${want} snapped to ${rig.pixels} — the cloud rig is a ` +
+        `${side}x${side}x${side} lattice and its pixel count must be a cube`,
+    );
+  }
 } else {
   rig.pixels = opts.pixels ?? 60;
 }
@@ -808,7 +831,15 @@ const meta = {
     gitSha: gitSha12(),
     portSha256: sha12(fs.readFileSync(libPath)),
     epeSha256: sha12(fs.readFileSync(epePath)),
-    harnessSha256: sha12(fs.readFileSync(SELF)),
+    // Covers every input that shapes a render: this file, its sibling
+    // modules, and the engine wasm itself — not just snap.mjs.
+    harnessSha256: sha12(
+      Buffer.concat(
+        [SELF, path.join(HERE, "enginehost.mjs"), path.join(HERE, "png.mjs"), WASM_PATH].map((p) =>
+          fs.readFileSync(p),
+        ),
+      ),
+    ),
   },
   ...(picks ? { sheetTimesSeconds: picks.map((i) => +(opts.skip + i / opts.fps).toFixed(3)) } : {}),
   ...(stripPicks

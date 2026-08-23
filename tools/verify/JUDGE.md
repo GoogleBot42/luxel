@@ -83,7 +83,13 @@ replace it:
 
 - `--rig strip|grid|cloud` — render both sides on a different rig entirely.
 - `--grid WxH` — grid dimensions for the grid rig (implies the pixel count).
-- `--pixels N` — pixel count for the rig.
+- `--pixels N` — pixel count for the rig. Some rigs need a count of a
+  particular shape and SNAP yours to the nearest one: the cloud rig is an
+  n×n×n lattice, so `--pixels` picks the side (`round(cbrt(N))`) and the count
+  becomes side³ — `--pixels 1000` gives a 10×10×10 cloud, the default is
+  5×5×5 = 125 — and the grid rig fills whole rows. When a snap changes your
+  number the harness says so on stderr and in `meta.json`'s `warnings`, and
+  `settings.pixels` records the count actually rendered.
 
 Re-rendering a 1D pattern on a small grid (`--rig grid --grid 8x8`) is often
 worth doing: the contact sheet and filmstrip make spatial structure legible in
@@ -140,14 +146,23 @@ Output lands in `tools/verify/out/<slug>/<label>/`:
   Slopes read as horizontal motion; bands read as flashes. When the window is
   long, adjacent frames are averaged into one row rather than dropped —
   `meta.json` `rhythmRowsPerPixel` says how many frames each row covers.
-- `meta.json` — settings, run-level `warnings`, each side's control list
-  (name + kind), any compile/runtime error, and each side's `statsSummary`.
+- `meta.json` — settings, run-level `warnings`, and — under the same `sides`
+  wrapper (`sides.orig` / `sides.port`) — each side's control list
+  (name + kind), any compile/runtime error, and its `statsSummary`.
   It no longer carries the per-frame series, so it is short: **Read it whole.**
-- `stats.json` — the FULL per-frame series, per side: `meanBrightness`,
-  `meanR/G/B`, `motion` (mean abs frame-to-frame diff). Each series is one
-  line. Use these to detect black, static, or strobing output numerically
-  before trusting your eyes — but read `meta.json`'s summaries first and only
-  come here when one of them flags something.
+- `stats.json` — the FULL per-frame series, per side. Exact shape (the series
+  live under a `sides` wrapper, NOT at the top level):
+
+      stats.json = {slug, label, capturedFrames,
+                    sides: {orig: {meanBrightness: [...], meanR: [...],
+                                   meanG: [...], meanB: [...], motion: [...]},
+                            port: {…same keys…}}}
+
+  so the port's motion series is `sides.port.motion`. `motion` is the mean abs
+  frame-to-frame diff. Each series is one line. Use these to detect black,
+  static, or strobing output numerically before trusting your eyes — but read
+  `meta.json`'s summaries first and only come here when one of them flags
+  something.
 - `probe.json` — **only when you passed `--probe-controls`.** See below.
 - `frames.json` — **only when you passed `--dump`.** Exact per-pixel values at
   the moments you asked for. See below.
@@ -190,10 +205,18 @@ sides sample identical frame indices by construction.
 `provenance` (top-level) stamps the run: `gitSha` of the worktree plus
 `portSha256`, `epeSha256` and `harnessSha256` (12-hex prefixes). If you reuse
 an existing run directory rather than rendering it yourself, check its
-provenance against a fresh run of the same slug — if `portSha256` or `gitSha`
-differs, the port or the engine has changed since and the old run describes
-code that no longer exists. Discard it and re-render; never mix runs with
-different provenance in one verdict.
+provenance against a fresh run of the same slug.
+
+**The authoritative reuse keys are `portSha256`, `epeSha256` and
+`harnessSha256`** — the port source, the original `.epe`, and the harness
+itself. If ANY of those three differ, the old run describes inputs that no
+longer exist: discard it and re-render, and never mix runs with different
+values in one verdict.
+
+`gitSha` is informational context only — it is NOT a discard trigger on its
+own. Sweeps commit verdict files and doc edits mid-run, so `gitSha` moves
+constantly without any pattern or harness byte changing. A run whose three
+content hashes match a fresh one is reusable no matter what `gitSha` says.
 
 View the PNGs with the Read tool. Both sides always render on the same rig,
 same seed, same clock — differences you see are real differences.
