@@ -1,8 +1,10 @@
 //! Frame pipeline: compile a pattern, run its init code, then per frame run
 //! `beforeRender(delta)` and the best-matching render function per pixel.
 //!
-//! Runtime errors never stop the engine — the first error of a frame is
-//! recorded (PB's `vmerr` model) and rendering continues on the next frame.
+//! Runtime errors never stop the engine — a pattern-level error aborts only
+//! the current handler invocation (recorded as `vmerr`; the frame keeps
+//! going, matching PB's blast radius — tools/oracle/oob-probes.mjs). Only
+//! `assert()` failures and VM resource guards end the frame early.
 //!
 //! Pixel maps install via [`Engine::set_map`] (host-normalized to world
 //! units 0..1 exclusive); render selection follows the documented priority
@@ -747,18 +749,39 @@ impl Engine {
                     }
                 }
             };
-            match outcome {
+            let outcome = match outcome {
                 Err(e) => {
-                    // record once, blank the rest of the frame, move on
-                    self.last_error = Some(e);
-                    if let Some(RunStage::Pixel(i)) = self.run_stage {
-                        for p in i as usize..self.pixel_count as usize {
-                            self.pixels[p] = [0; 3];
-                        }
+                    let fatal = e.is_assert || e.is_resource_guard();
+                    // first error wins until read: a per-pixel error would
+                    // otherwise re-alloc its message for every pixel of
+                    // every frame, and the root cause is the earliest one
+                    if self.last_error.is_none() || fatal {
+                        self.last_error = Some(e);
                     }
-                    self.run_stage = None;
-                    return;
+                    if fatal {
+                        // asserts and VM resource guards stay frame-fatal:
+                        // blank the rest of the frame, move on
+                        if let Some(RunStage::Pixel(i)) = self.run_stage {
+                            for p in i as usize..self.pixel_count as usize {
+                                self.pixels[p] = [0; 3];
+                            }
+                        }
+                        self.run_stage = None;
+                        return;
+                    }
+                    // PB blast radius (oracle fw 3.67, tools/oracle/
+                    // oob-probes.mjs): a runtime error aborts only the
+                    // current handler invocation — after a beforeRender
+                    // abort the pixel pass still runs, and an erroring
+                    // render(i) keeps its pre-error hsv() and doesn't stop
+                    // later pixels. Fall through as if the handler returned;
+                    // vm.pixel already holds whatever was set pre-abort.
+                    Ok(Outcome::Done(Value::default()))
                 }
+                ok => ok,
+            };
+            match outcome {
+                Err(_) => unreachable!("fatal errors return above"),
                 Ok(Outcome::Paused) => return,
                 Ok(Outcome::Done(_)) => match stage {
                     RunStage::Before => {

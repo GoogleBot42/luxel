@@ -438,6 +438,27 @@ pub struct VmError {
     pub is_assert: bool,
 }
 
+/// VM resource-guard messages. Kept as consts so [VmError::is_resource_guard]
+/// can't drift from the `fail!` sites that raise them.
+pub(crate) const ERR_STACK_OVERFLOW: &str = "value stack overflow";
+pub(crate) const ERR_STACK_UNDERFLOW: &str = "stack underflow (compiler bug)";
+pub(crate) const ERR_EXEC_LIMIT: &str = "execution limit exceeded (infinite loop?)";
+
+impl VmError {
+    /// True for the VM's own resource guards (step limit, value-stack
+    /// bounds) rather than a language-level runtime error. The engine keeps
+    /// these frame-fatal: a pattern-level error aborts only the current
+    /// handler invocation (PB blast radius, tools/oracle/oob-probes.mjs),
+    /// but re-running a stuck handler per pixel would multiply the step
+    /// limit by pixel_count each frame and starve the firmware watchdog.
+    pub fn is_resource_guard(&self) -> bool {
+        matches!(
+            self.message.as_str(),
+            ERR_STACK_OVERFLOW | ERR_STACK_UNDERFLOW | ERR_EXEC_LIMIT
+        )
+    }
+}
+
 /// A suspended (or active) pattern-function activation. `pc` points at the
 /// next instruction to execute.
 #[derive(Debug, Clone, Copy)]
@@ -932,7 +953,7 @@ impl Vm {
         macro_rules! push {
             ($v:expr) => {{
                 if self.stack.len() >= MAX_STACK {
-                    fail!("value stack overflow");
+                    fail!(ERR_STACK_OVERFLOW);
                 }
                 self.stack.push($v);
             }};
@@ -941,7 +962,7 @@ impl Vm {
             () => {
                 match self.stack.pop() {
                     Some(v) => v,
-                    None => fail!("stack underflow (compiler bug)"),
+                    None => fail!(ERR_STACK_UNDERFLOW),
                 }
             };
         }
@@ -1020,7 +1041,7 @@ impl Vm {
                 None => op::RET_NULL, // fell off the end
             };
             if self.fuel == 0 {
-                fail!("execution limit exceeded (infinite loop?)");
+                fail!(ERR_EXEC_LIMIT);
             }
             self.fuel -= 1;
             match opcode {
@@ -1173,7 +1194,7 @@ impl Vm {
                     set_pc!(at as u32);
                     let n = self.stack.len();
                     if n < 2 {
-                        fail!("stack underflow (compiler bug)");
+                        fail!(ERR_STACK_UNDERFLOW);
                     }
                     let a = self.stack[n - 2];
                     let b = self.stack[n - 1];
@@ -1327,7 +1348,7 @@ impl Vm {
                     set_pc!(at as u32);
                     let n = self.stack.len();
                     if n < argc + 1 {
-                        fail!("stack underflow (compiler bug)");
+                        fail!(ERR_STACK_UNDERFLOW);
                     }
                     let callee = self.stack.remove(n - argc - 1);
                     match callee {

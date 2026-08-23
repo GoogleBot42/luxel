@@ -1,6 +1,40 @@
 # Update log
 
-## 2026-08-22 — Hygiene sweep: stale wasm goldens, the clippy deny that
+## 2026-08-22 — Runtime-error blast radius now matches PB: an error kills
+## the handler call, not the frame (Gitea #84)
+
+The two corpus originals that "hit array-OOB at frame 0 and render
+all-black" (Nano Orbital, Orv - Christmas Tree) weren't hitting an
+array-semantics gap at all — `array(3.2)` truncates to 3 slots on PB
+exactly like ours (probed), so both patterns OOB on the real device too.
+The gap was what happens NEXT. Oracle probes (fw 3.67, new
+`tools/oracle/oob-probes.mjs`, self-judging): a runtime error aborts only
+the current handler invocation — writes made before the abort stick, a
+`beforeRender` abort does NOT skip the per-pixel pass, and a `render(i)`
+abort keeps that pixel's pre-error hsv while later pixels render
+normally. Our engine ended the whole frame on any error, so a
+pattern erroring in `beforeRender` every frame stayed black forever.
+
+`engine.rs drive()` now coerces a non-fatal error to the handler's normal
+completion (the existing continuation logic then does the right thing —
+`vm.pixel` already holds the pre-abort color); first error of a frame
+wins `last_error` (a per-pixel error would otherwise re-alloc its message
+per pixel). Deliberately still frame-fatal: `assert()` (init-only by
+construction, belt-and-braces) and the VM resource guards — step limit,
+value-stack bounds (named consts + `VmError::is_resource_guard`) — since
+re-running a stuck handler per pixel would multiply the step limit by
+pixel_count per frame and starve the firmware watchdog. Blast radius
+recorded in docs/research/04-oracle-findings.md §10 and docs/lang.md.
+
+Verified: luxel-core suite + full workspace green (5 new blast-radius
+tests; 1 old test updated — it pinned the pre-oracle blanking behavior);
+both originals render their real designs at 64 px via `luxel-cli pixels`
+(orbit dots / full tree scene) with the OOB still reported as vmerr;
+native↔wasm goldens bit-identical (wasm-smoke); athom-music firmware
+builds, image-check ok, app 946,432 B (90.26% of slot), stack-check ok.
+Follow-up: the output-verifier sweep (#84 filing) should re-judge the two
+pairs as renderable once it lands/reruns.
+
 ## couldn't hold, and an indexed library sweep (#85, #79, #67)
 
 Three small things that had each been quietly blocking a gate.
