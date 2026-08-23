@@ -1,0 +1,44 @@
+{
+  "slug": "light-organ-2-0",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Port reproduces the architecture (sound-only, strip split into repeating 4-colour band groups plus an 8-px tick grid) but its dynamics and palette are wrong: it strobes the whole strip to full black between beats and re-picks its band layout every beat, where the original keeps a red-dominant bar display continuously lit and holds a layout for ~3 s.",
+  "observations": [
+    "Both sides are purely sensor-driven: with --sensors off (run 'sens-off', 12 s @20 fps) BOTH render mean brightness 0 / motion 0. With the beat120 feed both animate, so the port does react to sound.",
+    "Both sides share the same spatial architecture: the 60-px strip is tiled with a repeating group of 4 uniform-colour bands (each band 2-5 px wide, so the group period is 8/12/16/20 px), overlaid with a single-pixel tick every 8 pixels (indices 0,8,16,...,56 or 4,12,...,52). Confirmed by --dump RLE on both sides at many times.",
+    "ENVELOPE (biggest divergence). Per-frame lit-pixel count over 8 s at 20 fps: original 21-60 lit pixels every frame (never dark); port alternates 60 -> 12-15 -> 60 -> 12-15 on a 0.5 s cycle. Dumped pixel values at t=4.30/4.35/4.40/4.45/4.50 s show the ENTIRE port strip at exactly 0,0,0, then a 255-saturated hit at 4.55 s. The original never blacks out.",
+    "Beat decay, baseline 6 s @20 fps meanBrightness: original 111,104,96,75,66,58,51 then a +20 bump at the next beat, i.e. peak-to-trough ratio ~3:1 with a floor around 16-25; port 88,57,38,28,23,7,5,4,3,3 -> ratio ~50:1, black for the last 4 frames (0.2 s) of every 0.5 s beat. Port zeroMotionFrames 86/600 in the 60 s survey vs 1/600 for the original.",
+    "RHYTHM. Autocorrelation of meanBrightness over 180 s @10 fps: original peaks at 4.0 s (0.97), 8.0 s (0.97), 12.0 s (1.00) — dominated by the synthetic melody's 4 s scale cycle, with the 0.5 s beat only a minor ripple; port peaks at every multiple of 0.5 s (0.5 s: 0.96, 1.0 s: 1.00) — dominated by the 2 Hz beat. Motion stat over 180 s: orig avg 24, port avg 45.",
+    "BAND-LAYOUT TIMESCALE. Dominant spatial period per frame (autocorrelation of the luma profile, 41 frames at 0.2 s spacing over 8 s): original 24,24,24,...,24 (t=0.25-3.05 s), then 16,16,...,16 (t=3.25-6.05 s), then 8 (t=6.25-8.05 s) — it holds one layout for ~3 s. Port: 24,24,24,16,16,20,20,20,24,24,16,16,16,24,12,24,12,12,16,16,20,... — it re-picks the layout on essentially every beat.",
+    "PALETTE. Mean channel levels over 180 s: original R 60 / G 25 / B 30 (red-dominant, stable in every 10 s block: R ranges only 55-80); port R 43 / G 29 / B 51 (blue-dominant, and its B swings 24-84 between blocks). The original's waterfall is visually dominated by tall persistent RED columns; the port's is an even rainbow mosaic with no persistent red.",
+    "TICK GRID. The original draws a dim neutral grey tick (43,43,43 to 50,50,50) at 8-px spacing in EVERY frame sampled (21/21 frames across t=4.00-5.00 s, and 33/41 across 0-8 s, the misses being frames where a saturated band overwrites it). The port draws its ticks in only 2 of those 21 frames (t=4.10, 4.15) and 2 of 41 across 0-8 s, and when present they are a brighter pink-grey 127,102,102 rather than neutral ~45 grey.",
+    "SUPER-CYCLE. Autocorrelation of a 5 s-smoothed meanBrightness over 180 s: port has a clean ~47.9 s period (correlation 0.99) with the smoothed level swinging 33.7 counts (10 s block means alternate ~29 <-> ~57); the original has no such peak (best 3.9 s at 0.54) and a smoothed range of only 18.2. The port therefore breathes bright/dim on a ~48 s cycle the original does not have.",
+    "Waterfall character (survey-180, mode-bright t=30-42 s, mode-dim t=55-67 s, all identical in kind): the original reads as VERTICAL structure — red bars persisting at fixed pixel positions for seconds with coloured accents flickering around them; the port reads as HORIZONTAL structure — a whole-strip flash every 0.5 s whose colour changes each time, with dark rows between.",
+    "Neither side exposes any controls (probe: 'no settable controls' on both), so there is no control-surface mismatch.",
+    "Seed-independent: seed 7 over 60 s @10 fps gives identical summary stats to seed 1 on both sides (orig mean 41 / motion 27; port mean 41 / motion 44)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Fix the decay envelope first: the port collapses the whole strip to exact 0,0,0 for ~0.2 s of every 0.5 s beat. The original never goes dark — between beats it sits at roughly a third of its peak brightness (meanBrightness floor ~16-25 against peaks of 50-110) and falls smoothly over ~1-2 s rather than dying in ~0.3 s. Give the bands a slow fall/decay with a non-zero floor instead of following the audio envelope directly.",
+    "Slow down the band-layout changes by roughly 6x: the original holds one band-group period (8, 16 or 24 px measured on the default 60-px strip) for about 3 seconds at a time; the port picks a new one on every beat (every 0.5 s). Whatever chooses the band width should be on a multi-second clock, not the per-beat one.",
+    "Rebalance the palette toward red. Over 180 s the original averages R 60 / G 25 / B 30 with red dominant in every 10 s window; the port averages R 43 / G 29 / B 51 and reads blue/rainbow. The original's signature look is one or two saturated red bars (255,0,0 / 225,13,0) that stay lit while the other bands come and go — the port has no persistently-lit band at all.",
+    "Restore the tick grid. The original paints a dim neutral grey pixel (~43,43,43) every 8 pixels in every frame; the port paints its ticks in only ~10% of frames and uses a brighter pink-grey (127,102,102). Draw them every frame and desaturate/dim them to about a fifth of full brightness.",
+    "Remove (or greatly reduce) the port's ~48 s brightness/colour breathing cycle: its 5 s-smoothed mean brightness swings between ~29 and ~57 with a 47.9 s period, while the original is flat (36-48) across the whole 180 s. Nothing in the original's output cycles on that timescale.",
+    "Do not change the sensors-off behaviour: both sides correctly render pure black with no audio, and the port already reacts on the correct 2 Hz beat grid — the reaction is present, it is just far too twitchy and too deep."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-180",
+    "probe",
+    "mode-bright",
+    "mode-dim",
+    "sens-off",
+    "seed7",
+    "dump-beat",
+    "dump-long",
+    "dump-cycle",
+    "dump-tick"
+  ]
+}

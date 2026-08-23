@@ -1,0 +1,69 @@
+{
+  "slug": "bubble-column",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same scene — bright bubbles streaming along a 60px strip over a static rippled fluid glow, same dial surface, same density and same median hue — but the port's bubbles all follow one accelerating trajectory at ~20-26 px/s where the original's each hold a constant, widely-varying speed of ~4-18 px/s, and the port compresses the per-bubble hue spread to about 40% of the original's.",
+  "observations": [
+    "Both sides render, no compile or runtime errors, on the default 60px strip rig; neither dies — steady state re-checked at t=120-140s (label steady-late) looks the same as t=0-6s on both.",
+    "Control surface matches exactly on both sides: hsvPickerFluidHue (hsvPicker) and sliderBubbleValve (slider). Probe calls both live on both sides (orig maxDeltaLit 18.5 / 26.9; port 16.9 / 17.8).",
+    "MOTION LAW (headline). Original: each bubble travels at a CONSTANT velocity, and different bubbles have very different velocities — tracked peaks over t=2.00-4.00s at 20fps gave 4.0, 6.5, 9.5, 11.5, 15.5 and 18.0 px/s, each linear to within a pixel (the 4 px/s bubble crossed index 13 at 4.00s while another bubble crossed index 13 at 11.5 px/s at 2.00s, so speed is per-bubble, not position-dependent). The waterfall is therefore a fan of STRAIGHT streaks at many slopes. Port: every bubble follows the SAME speed-vs-position law and accelerates — bubble tracked from index 19 to 38 over t=2.05-3.00s ran 20 px/s, then 38 to 59 over t=3.00-3.80s ran 26 px/s, and two other bubbles crossing indices 33-46 both clocked 23.6 px/s regardless of when they spawned. The waterfall is a family of near-PARALLEL CURVED streaks.",
+    "SPEED. Port is roughly 2-4x too fast and has no slow bubbles: over t=2.00-2.50s at 20fps with valve=0.5 the original's tracked peaks moved 2, 3, 5, 6 and 8 px (4-16 px/s, a 4x spread) while the port's moved 9, 10 and 13 px (18-26 px/s, a 1.3x spread). Matching stat: baseline (untouched, 6s @ 20fps) motion avg orig 13.8 vs port 23.9; zeroMotionFrames orig 16 vs port 4.",
+    "COLOR SPREAD. Original gives each bubble its own hue across a wide band; port keeps them nearly monochrome. Untouched, bright-pixel hues (max channel >= 120) span 199-270 deg on the original (median 233) versus 228-254 deg on the port (median 239). With FluidHue dialed to 0.6 on both: orig 191-254 deg, port 207-232 deg, identical median 217. So the centre hue is right and the variety is ~40% of the original's — visually the original mixes cyan and violet bubbles, the port is all one indigo.",
+    "DENSITY MATCHES. Bright local maxima per frame at valve=0.5, hue=0.6: orig 6.8, port 6.5. Bubble count on the strip is right; because the port's bubbles move ~2x faster, its emission rate must be correspondingly higher to sustain that count.",
+    "BACKGROUND FLUID. With the valve closed both sides show a STATIC (motion 0) blue base with a green spatial ripple of roughly 20-25px period. Original: blue channel pinned at 20, green ripples 0-18 (plus a faint red 0-5 in the troughs). Port: blue pinned at 15, green ripples 1-8. The port's fluid is slightly dimmer and its ripple contrast is about half the original's.",
+    "Saturation of bright bubbles is a fixed 0.45 on the original and a fixed 0.50 on the port (untouched) — a small constant offset, not a distribution difference.",
+    "No mode/regime structure found. 60s @ 5fps and 240s @ 2fps surveys, plus windows parked at t=20s, t=60s and t=120s, all show one continuous regime: steady bubble flow with mild density fluctuation. No palette walk, no long-period beat, nothing that repeats on a timer.",
+    "Neither side is frame-rate coupled. Rendering both at 10, 20 and 40fps gave IDENTICAL per-second displacements (orig 2/3/5/6/8 px per 0.5s at all three rates; port 9/10-11/13 px per 0.5s at all three). Both are time-based.",
+    "Seeds 1, 7 and 1234 give the same character on both sides (orig mean 30-32 / motion 25; port mean 25 / motion 27) — the divergence is not a one-seed fluke.",
+    "Untouched-default behaviour shows the same two divergences as the dialed runs (port faster, port hue band narrower), so nothing here hinges on which control values were applied."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerFluidHue",
+      "origEffect": "Rotates the hue of the whole scene — fluid glow and bubbles together. At 0 the scene is red/orange/pink, at 0.33 yellow-green through green, at 0.6 cyan-blue through violet. Bubbles are spread over roughly 60-70 deg of hue around the setting.",
+      "portEffect": "Same rotation, same direction, same magnitude — 0 gives red/salmon, 0.33 green, 0.6 blue — and the median bubble hue lands on the same value as the original (217 deg at setting 0.6 on both). But the bubbles only spread over ~25 deg around it instead of ~63 deg, so each setting reads as one flat colour rather than a two-tone mix.",
+      "matches": false
+    },
+    {
+      "name": "sliderBubbleValve",
+      "origEffect": "Gates bubble emission. At 0 the strip is a static fluid glow with no bubbles (mean 9, motion 0). Opens very fast: 0.1 already gives a healthy stream (mean 22, motion 13), 0.25 is near full (mean 30, motion 22), and 0.5, 0.75 and 1 are indistinguishable from each other (mean 33, motion 26 at all three, 20s @ 10fps).",
+      "portEffect": "Same on/off endpoints — 0 gives the same static fluid (mean 7, motion 0) — but the response curve is shifted far to the right. At 0.1 the port is still completely dead (mean 7, motion 0) where the original is already flowing; at 0.25 it is barely cracked open (mean 13, motion 9) against the original's near-full 30/22. It only reaches full flow at 0.5-1, and there it overshoots the original's motion (33 vs 26).",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Bubble velocity is the main thing to fix. The original gives each bubble its own SPEED, drawn from a wide distribution, and that speed never changes as the bubble travels — measured values at valve 0.5 were 4.0, 6.5, 9.5, 11.5, 15.5 and 18.0 px/s on a 60px strip, i.e. a slow bubble takes ~15s to cross and a fast one ~3s. The port instead gives every bubble the same trajectory, and that trajectory accelerates with position (20 px/s at index 20, 26 px/s at index 55). Replace the shared accelerating trajectory with a per-bubble constant velocity sampled over roughly a 4x range, and the waterfall should turn from parallel curves into a fan of straight lines at many slopes.",
+    "Overall speed is ~2-3x too high even before the distribution is fixed: the port's slowest bubble (18 px/s) is faster than all but one of the original's. Aim the mean per-bubble speed near ~10 px/s on 60px, not ~22 px/s.",
+    "Widen the per-bubble hue jitter. The port's bubbles occupy ~25 deg of hue around the FluidHue setting; the original's occupy ~63-70 deg. The centre is already correct, so this is purely the spread — roughly 2.5x too narrow. On the original the result reads as visibly cyan bubbles alongside visibly violet ones at FluidHue 0.6; the port reads as one indigo.",
+    "Reshape the BubbleValve response curve. The original's valve is effectively fully open by ~0.25-0.3 and flat from there to 1; the port needs ~0.5 before it reaches full flow and emits nothing at all at 0.1. Move the knee down so that 0.1 already produces a steady stream and 0.25 is near maximum. Also trim the top end slightly — at valve 1 the port's motion stat is 33 against the original's 26.",
+    "Raise the fluid background's ripple contrast and base level slightly: with the valve closed the original's static texture is blue=20 with a green ripple swinging 0-18, the port's is blue=15 with a green ripple swinging 1-8 — about half the contrast and a slightly darker base. Spatial period (~20-25px) and the fact that it is static are both already correct.",
+    "Bubble count on the strip, emission continuity, no-mode structure, fps-independence and both dials' direction/sign are all already right — do not change them. Note that if the per-bubble speeds are slowed as above, the emission rate must come down with them to keep the ~6-7 simultaneous bubbles the original shows."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "mid20",
+    "late60",
+    "steady-late",
+    "dump-a",
+    "dump-track",
+    "fluid-only",
+    "ctl-valve-0",
+    "ctl-valve-0.1",
+    "ctl-valve-0.25",
+    "ctl-valve-0.5",
+    "ctl-valve-0.75",
+    "ctl-valve-1",
+    "ctl-hue-0",
+    "ctl-hue-0.33",
+    "ctl-hue-0.66",
+    "fps-10",
+    "fps-20",
+    "fps-40",
+    "seed-7",
+    "seed-1234"
+  ]
+}

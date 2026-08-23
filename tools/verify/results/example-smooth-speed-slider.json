@@ -1,0 +1,55 @@
+{
+  "slug": "example-smooth-speed-slider",
+  "verdict": "close",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Both sides are the same full-brightness rainbow that scrolls smoothly along the strip at a slider-controlled speed, and they agree pixel-for-pixel in structure, direction and speed at every dialed slider value; the only real difference is the untouched default, where the original runs at full speed and the port runs at exactly one quarter of it.",
+  "observations": [
+    "Control surface matches exactly: both sides expose one control, name 'sliderSpeed', kind 'slider', label 'Speed'.",
+    "Structure is identical on both sides: exactly one full HSV rainbow spanning the strip, saturation and value railed (meanBrightness pinned at 127 with min=max=127 on both, meanR=meanG=meanB=127), no dark pixels or gaps. --dump at t=0 shows hue rising a uniform 1/60 cycle per pixel on both (orig 0.049->0.983 across 60 px, port 0.012->0.996).",
+    "Both are resolution-independent: re-rendered at --pixels 12 each side still draws exactly one rainbow across the strip (hue step 1/12 per pixel on both), so neither rasterizes at a fixed 60-px scale.",
+    "Motion is the same on both: a smooth, continuous, constant-velocity translation toward pixel 0 (the whole-strip hue offset increases monotonically with time on both sides), no jitter, no bounce, no reset, no modes.",
+    "Single regime only. A 60 s / 5 fps survey and a 240 s / 2 fps survey both show unbroken uniform diagonal banding on each side with no regime boundary, and a late window (--skip 40) renders the same as t=0. brightnessTrend 'steady' and zeroMotionFrames=1 (the unavoidable first frame) on both sides in every run; neither side decays, freezes or saturates.",
+    "UNTOUCHED DEFAULT SPEED DIVERGES 4x. Measured as whole-strip hue-offset rate over a 19 s baseline: original 0.9918 cycles/s (one full traversal of the strip per second), port 0.2441 cycles/s. Whole-window motion stat: orig 25, port 6 at 20 fps. The port's untouched rate is exactly the rate BOTH sides produce at sliderSpeed=0.5, and the original's untouched rate is the rate both sides produce at sliderSpeed=1 - i.e. the port's speed variable starts at half-slider where the original's starts at full.",
+    "Dialed, the speed mapping is the same quadratic curve on both sides. Long-baseline rates (cycles/s), orig vs port: sliderSpeed=0 -> 0.0000 / 0.0000; 0.25 -> 0.06102 / 0.06102; 0.5 -> 0.24415 / 0.24415; 0.75 -> 0.54931 / 0.54931. All agree to five decimals, and the whole-window motion stats are identical integers (0/0, 2/2, 6/6, 14/14).",
+    "At the very top of the slider only, the original is marginally faster: sliderSpeed=1 gives orig 0.9918 cycles/s vs port 0.9765 (1.6% slower). The port sits exactly on the fitted curve rate = 0.9766 * v^2; the original is 1.6% above it at v=1 alone. Visually indistinguishable (a full cycle of phase drift takes ~65 s) but it is a real, repeatable difference.",
+    "Both sides are frame-rate independent: rendering each at --fps 10 / 20 / 40 gives per-second hue rates of 0.9913 / 0.9935 / 0.9956 (orig) and 0.2440 / 0.2440 / 0.2440 (port), and the motion stat halves as fps doubles on both. Neither side is frame-stepped.",
+    "No randomness: seed 1234 renders byte-identical stats to seed 1 on both sides.",
+    "Neither side binds sensors (wantsSensors false on both); no compile or runtime errors on either side in any run.",
+    "No smoothing/ramp transient is visible on either side when a control is applied at init: at sliderSpeed=0 both sides post motion 0 on every one of 240 captured frames from frame 0 (no decay from a faster default), and at sliderSpeed=1 both jump to motion 25 on frame 1 and hold. Whatever 'smooth' means in this pattern, it is not observable through the harness's set-at-init control path, and the two sides behave identically there."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Sets scroll speed on a quadratic curve from dead stop to ~1 full strip traversal per second: 0 -> frozen rainbow, 0.25 -> 0.061 cyc/s, 0.5 -> 0.244 cyc/s, 0.75 -> 0.549 cyc/s, 1 -> 0.992 cyc/s. Direction, colour and structure are unaffected; only speed changes. Untouched, the original runs as if the slider were at 1.",
+      "portEffect": "Identical curve and identical rates at 0 / 0.25 / 0.5 / 0.75 (agreeing to five decimal places); at 1 it reaches 0.9765 cyc/s, 1.6% slower than the original. Also affects only speed. Untouched, the port runs as if the slider were at 0.5, i.e. a quarter of the original's default speed.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Fix the untouched default speed: with no control applied the original scrolls the rainbow at ~0.992 cycles/s (one full pass along the strip per second, motion stat 25 at 20 fps) while the port scrolls at ~0.244 cycles/s (motion 6). The port's initial speed state corresponds to sliderSpeed=0.5; it should correspond to sliderSpeed=1 (top of the slider). Everything downstream of that value is already correct, so this is purely the value the speed state holds before any control is set.",
+    "Optional nitpick, only if it is free: at sliderSpeed=1 the port runs 1.6% slower than the original (0.9765 vs 0.9918 cycles/s). The port's rate follows rate = 0.9766 * v^2 exactly across the whole slider range; the original follows the same curve at 0.25/0.5/0.75 but sits 1.6% above it at v=1. Do not chase this at the cost of the mid-range agreement, which is currently exact.",
+    "Nothing else needs changing: spatial layout (one rainbow across the strip, resolution-independent), colour (railed saturation and value, meanBrightness 127 flat), scroll direction, smoothness, frame-rate independence, steady state over 240 s, and the control surface (sliderSpeed / slider / 'Speed') all already match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "regime-steady-late",
+    "steady-30s",
+    "dump-base",
+    "untouched-long",
+    "fps10",
+    "fps20",
+    "fps40",
+    "ctl-speed-0",
+    "ctl-speed-0.25",
+    "ctl-speed-0.5",
+    "ctl-speed-0.75",
+    "ctl-speed-1",
+    "phase-v1",
+    "px12",
+    "seed1234"
+  ]
+}

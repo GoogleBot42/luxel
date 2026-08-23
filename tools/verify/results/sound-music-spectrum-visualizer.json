@@ -1,0 +1,82 @@
+{
+  "slug": "sound-music-spectrum-visualizer",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same 10-band beat-locked spectrum display with identical rhythm, melody-staircase timing and dial semantics, but the port lights three bands the original never lights (a bright persistent bar at px 6-17 plus px 54-59) and its rainbow runs the opposite direction at half the span/rate.",
+  "observations": [
+    "Rig: 60 px strip, both sides sensor-bound (wantsSensors true) and both fed the beat120 synth signal; controls-applied and control surfaces are identical (sliderRainbow / sliderColorShift / sliderColor, all kind=slider, labels Rainbow / ColorShift / Color). No compile or runtime errors on either side.",
+    "Both sides draw a 10-BAND segmented display that scales with strip length: 6 px per band at the default 60 px, 12 px per band at --pixels 120 (label px120). Band boundaries are identical on both sides.",
+    "STRUCTURE — the headline divergence. Census over 51 dumped frames of a 30 s steady window (label segcensus, --skip 20 --seconds 30 --fps 20): ORIG lights only bands 5,6,7,8 (px 30-53); bands 0-4 and band 9 are black in 100% of frames (band lit-fractions 0%,0%,0%,0%,0%,29%,69%,100%,63%,0%; per-band mean level 0,0,0,0,0,16.0,110.4,159.8,87.2,0). PORT lights bands 1,2,5,6,7,8,9 (lit-fractions 0%,100%,84%,0%,0%,35%,73%,100%,98%,94%; per-band mean level 0,100.6,24.8,0,0,14.0,75.3,130.0,91.4,63.4). Band 1 (px 6-11) is the port's BRIGHTEST band on average (mean 100.6, peak 167) and the original never lights it at all. Band 9 (px 54-59) is lit on 94% of port frames and 0% of orig frames. Confirmed on the 120 px rig too (orig lit run 60-107 = bands 5-8; port lit runs 12-35 and 84-119 = bands 1,2 and 7,8,9), so it is not a rig artefact.",
+    "The port's extra band-1 bar pulses on a 1.0 s period (levels at t=24.0..25.0 s: 115,73,72,92,79,50,83,145,159,147,115 — exactly repeating at 1.0 s), i.e. every OTHER beat, and never goes dark.",
+    "TIMING — a clean match. Both sides repeat with a period of exactly 4.000 s: the per-band amplitude vectors at t=24.00, 28.00 and 32.00 s are identical on each side (orig 0,0,0,0,0,0,0,89,255,0; port 0,115,24,0,0,0,0,126,175,124), matching the synth feed's 8-step / 4 s melody cycle. Both are beat-locked at 2 Hz and both put the melody peak on the SAME band at the SAME time (peak walks bands 6 -> 7 -> 8 in lockstep across the whole window, label melody, 0.05 s dump spacing).",
+    "ENVELOPE — the port's attack is softer and its band profile flatter. At the t=24.6 s beat the orig's band 6 jumps 92 -> 255 in one frame and holds 255 for ~0.5 s before an exponential decay (255,255,255,255,194,...); the port's band 6 ramps 38 -> 50 -> 161 -> 240 over ~0.3 s, peaks at 240 and decays sooner. The original saturates to 255 often; the port's peaks are typically 240-255 on bands 7/8 but its neighbouring bands sit far higher than the original's (t=24.0: orig bands 7,8 = 89,255 with 5,6,9 dark; port bands 7,8,9 = 126,175,124 with 1,2 also lit).",
+    "COLOR (rainbow mode, i.e. untouched default and sliderRainbow>=0.25) — the hue term is NEGATED and HALVED on the port. Spatial: at t=24.15 s the orig's band hues run 309,268,227,187 across bands 5..8 = -41 deg/band (about -1.14 full rainbows across the 60 px strip, left-to-right); the port's run 225,246,268 across bands 7..9 = +21 deg/band (about +0.58 rainbows). Temporal at a fixed band (band 7): orig 227 -> 292 -> 357 deg at t=24.15/27.15/30.10 s = +21.8 deg/s (one hue cycle per ~16.5 s); port 225 -> 188 -> 146 deg = -12.5 deg/s (one cycle per ~28.8 s, opposite direction). The port/orig ratio is about -0.5 in BOTH space and time.",
+    "WARM-UP — the original has a long railed transient the port lacks. Orig meanBrightness sits at 104-130 for the first ~150 RENDERED FRAMES then drops to ~17-22 and stays there (first frame below 60: frame 147 at --fps 20 = 7.35 s; frame 155 at --fps 10 = 15.5 s — frame-counted, not time-based). During it the whole 60 px strip is a bright scrolling rainbow (see survey/orig.png top quarter). The port shows no transient: it reaches its steady mean within ~6 frames (0.3 s). Consequence: the DEFAULT 6 s baseline window is entirely inside the original's transient (orig mean 121 vs port mean 9), which is misleading — the settled comparison is orig mean 21.8 vs port 25.9.",
+    "No further regimes: a 240 s / 10 fps survey (label survey-long) gives 20 s-block mean brightness orig 95.9, 21.9, 22.1, 21.4, 21.8, 21.8, 21.8, 21.7, 21.8, 21.6, 22.1, 21.4 and port 20.8, 25.2, 26.2, 26.0, 25.5, 26.1, 25.8, 25.7, 26.3, 25.5, 26.0, 26.2 — one transient plus one steady regime on each side, nothing long-period.",
+    "Both sides are equally frame-rate coupled in their decay (per-band amplitudes at a fixed absolute time differ between --fps 10 / 20 / 40 on BOTH sides), while the 4 s melody period is fps-invariant on both. No differential frame-coupling bug.",
+    "Seed-independent: --seed 1234 reproduces the seed-1 means on both sides (orig 20 / port 25).",
+    "With --sensors off both sides go completely black (mean 0, motion 0) — identical graceful degradation, and it confirms every lit pixel on both sides is sensor-driven."
+  ],
+  "dials": [
+    {
+      "name": "sliderRainbow",
+      "origEffect": "Binary rainbow on/off, not a continuous knob. At 0 the whole display collapses to a single hue (pure blue at the untouched sliderColor, mean brightness 20 -> 12); at 0.25, 0.5, 0.75 and 1 the render is identical to the untouched default (mean 20). Probe: responsive, maxDelta 9.64 / maxDeltaLit 35.06.",
+      "portEffect": "Same binary behaviour and the same threshold: 0 gives a single pure-blue display (mean 25 -> 17); 0.25/0.5/0.75/1 are identical to untouched (mean 25). Probe: responsive, maxDelta 15.74 / maxDeltaLit 25.39.",
+      "matches": true
+    },
+    {
+      "name": "sliderColorShift",
+      "origEffect": "GATED: inert while rainbow mode is on (byte-identical renders at 0 and 1 with sliderRainbow=1 — this is why the probe reported it inert, maxDelta 0.00). With sliderRainbow=0 it is live and binary: 0 holds the base hue fixed forever; 0.5 and 1 are identical to each other and add a global hue drift of about -22 deg/s (measured at sliderColor=0.33: hue 280 -> 212 -> 148 deg at t=20.15/23.15/26.10 s).",
+      "portEffect": "Same gating (inert under sliderRainbow=1, byte-identical at 0 and 1) and same binary 0-vs-nonzero switch, but the drift RATE is about half: -12 deg/s (hue 120 -> 85 -> 48 deg at the same three times, same base colour). Direction agrees here; magnitude is ~0.55x.",
+      "matches": false
+    },
+    {
+      "name": "sliderColor",
+      "origEffect": "GATED the same way: inert in rainbow mode (probe maxDelta 0.00), live with sliderRainbow=0 where it selects the single display hue. Measured peak-pixel hue: 0 -> 0 deg (255,0,0 family), 0.33 -> 120 deg, 0.66 -> 250 deg, 1 -> 324 deg.",
+      "portEffect": "Identical gating and near-identical mapping: 0 -> 0 deg, 0.33 -> 120 deg, 0.66 -> 270 deg, 1 -> 324 deg. Only the 0.66 point differs (270 vs 250 deg).",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "STRUCTURE (biggest fidelity gap): the port lights three bands the original leaves permanently dark. On a 60 px strip the original only ever lights bands 5-8 (px 30-53) in steady state; the port additionally lights band 1 (px 6-11) on 100% of frames at the display's highest average level (mean 100 vs the original's brightest band mean of 160 on band 7), band 2 (px 12-17) on 84% of frames, and band 9 (px 54-59) on 94% of frames. Whatever gate/normalisation suppresses the low bands and the top band on the original is missing or too permissive on the port. Target: bands 0-4 and 9 should read exactly 0 in steady state; bands 5-8 carry the whole display.",
+    "The port's spurious band-1 bar pulses on a 1.0 s cycle (every second beat) and never falls to zero — a good diagnostic that it is tracking a low-frequency/shimmer term the original discards rather than a beat term.",
+    "COLOR: the rainbow-mode hue term is negated and halved. Original: hue DECREASES ~41 deg per band going left-to-right (about 1.14 full rainbows across the 60 px strip) and ADVANCES at +21.8 deg/s (full hue cycle every ~16.5 s). Port: hue INCREASES ~21 deg per band (about 0.58 rainbows) and RETREATS at -12.5 deg/s (cycle every ~28.8 s). The port/orig ratio is about -0.5 for both the spatial gradient and the time drift, so a single sign flip plus a 2x scale on the hue term should fix both at once.",
+    "sliderColorShift's drift rate in rainbow-off mode has the same ~0.55x shortfall (orig -22 deg/s, port -12 deg/s) — consistent with the same halved hue coefficient; fixing the scale should correct this dial too.",
+    "WARM-UP: the original runs a full-strip railed rainbow (meanBrightness 104-130 vs its settled 22) for its first ~150 RENDERED FRAMES — frame-counted, so 7.4 s at 20 fps and 15.5 s at 10 fps — before the display collapses to its 4-band steady state. The port has no such transient (settled within 6 frames). If the original's opening look matters, the port needs the same slow-settling gain/peak-hold state; if not, at minimum note that any comparison run shorter than ~8 s of simulated time at 20 fps is measuring the original's transient, not its pattern.",
+    "ENVELOPE: the original's per-band attack is instantaneous (one frame from 92 to 255, then a ~0.5 s hold at 255 before a sharp exponential decay); the port ramps over ~0.3 s to ~240 and decays sooner. The port's band profile is also flatter — at t=24.0 s the original shows a 2-band cluster at 89/255 with everything else black, the port a 3-band cluster at 126/175/124. Sharpen the attack and increase the contrast between the peak band and its neighbours.",
+    "sliderColor=0.66 maps to hue 250 deg on the original and 270 deg on the port (0, 0.33 and 1 agree exactly) — a small non-linearity in the original's colour-index-to-hue mapping the port linearises. Low priority.",
+    "Things already right and worth not regressing: the 10-band layout and its scaling with strip length, the exact 4.000 s melody repeat, the 2 Hz beat lock, the identical band-by-band melody staircase timing, the sliderRainbow on/off threshold, the sliderColorShift/sliderColor gating behind rainbow-off, the sliderColor hue mapping, seed independence, and going fully black with dead sensors."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-long",
+    "settle20",
+    "steady",
+    "dumpA",
+    "probe",
+    "rb-0",
+    "rb-0.25",
+    "rb-0.5",
+    "rb-0.75",
+    "rb-1",
+    "col-0",
+    "col-0.33",
+    "col-0.66",
+    "col-1",
+    "cs-0",
+    "cs-0.5",
+    "cs-1",
+    "segcensus",
+    "melody",
+    "fps10",
+    "fps40",
+    "dl-sliderrainbow1",
+    "dl-rb1-cs0",
+    "dl-rb1-cs1",
+    "seed1234",
+    "sens-off",
+    "px120"
+  ]
+}

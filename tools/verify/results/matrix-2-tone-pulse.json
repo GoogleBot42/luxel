@@ -1,0 +1,76 @@
+{
+  "slug": "matrix-2-tone-pulse",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Port reproduces the original's moire band structure, regime sequence and ~13 s cycle faithfully, but renders only ONE of the original's two hues (the violet one; zero magenta pixels in 960 sampled) and never pulses down to black, so the pattern's two defining traits — 'two tone' and 'pulse' — are both lost.",
+  "observations": [
+    "Rig: strip, 60 px (manifest default). Both sides compile and run with no compile/runtime errors, no sensor binding (wantsSensors false on both), and identical output across seeds 1 / 7 / 1234 (byte-identical PNGs on both sides) — the pattern is fully deterministic, so all differences below are real, not RNG.",
+    "STRUCTURE (matches): both sides draw the same thing — a moire/interference texture of curved diagonal streak fronts on the strip that morph in place rather than translate. Frame-to-frame circular cross-correlation of the luminance profile at 20 fps over t=2.0-2.5 s gives best shift 0 px on BOTH sides (corr 0.85-0.92 per step), i.e. neither side scrolls; the fronts flow and bend without net drift.",
+    "TIMING (near-match, port ~4.6% fast): autocorrelation of the motion series over a 200 s / 5 fps run gives a dominant period of 66 frames = 13.2 s on the original (peak 0.76, harmonics at 131 f and 393 f) and 63 frames = 12.6 s on the port (peak 0.50, with the strongest peak at 189 f = 3x63 = 37.8 s). Confirmed fps-invariant on both sides: orig 13.1/13.2/13.1 s and port 12.6/12.6/12.4-12.6 s measured at 5, 10 and 40 fps, so there is no frame-rate coupling on either side; the ~0.6 s period difference is a genuine rate error.",
+    "COLOR (headline divergence): over 16 frames dumped across a 60 s window (960 pixels), bright pixels (max channel >= 20) split on the ORIGINAL into two fully-saturated hue clusters — tone A at mean hue 0.722 (violet/blue-purple, n=135, mean value 0.34) and tone B at mean hue 0.968 (magenta/near-red, n=102, mean value 0.21) — a hue gap of 0.246, i.e. almost exactly a quarter turn. The PORT produced 351 bright pixels, ALL in tone A (mean hue 0.725, range 0.68-0.77) and ZERO in tone B. The port's hue matches the original's violet tone almost exactly; the second tone is simply absent.",
+    "The original's two tones are spatially interleaved WITHIN each band, not alternated over time: a tone map along the strip at t=7.4 s reads '.........M.M.MMMVVVVVMVMVVVVMVMMVMM.....' (M = magenta, V = violet), i.e. runs of magenta and runs of violet inside the same lit feature. The port's same-time map is all V. Peak per-pixel values confirm it: original reaches (95,0,3) and (76,0,7) — red-dominant with the blue channel near zero — while the port's red channel never exceeds 41 and is always paired with blue ~85-107.",
+    "Whole-window channel means say the same thing at every window I checked (6 s, 8 s, 30 s, 200 s, and three --skip regimes): original meanR ~10.0-11.1 and meanB ~9.6-11.3 (balanced R/B, because the two tones cancel out), port meanR ~9.9-10.2 but meanB ~24.2-26.9 — the port is ~2.6x bluer. meanG is ~1.3-1.5 on both.",
+    "BRIGHTNESS ENVELOPE (second headline divergence): the original pulses to full black; the port does not. Over the 200 s / 5 fps run (1000 frames) the original spent 122 frames (12.2%) at meanBrightness <= 1 and 191 (19.1%) at <= 4, with min 0 in EVERY window I captured; the port spent 2 frames (0.2%) at <= 1 and 16 (1.6%) at <= 4, min 1. Percentiles: orig p05=1, p25=5, p50=8, p75=9, p95=13, max 31; port p05=8, p25=10, p50=12, p75=14, p95=20, max 34. Peaks agree (max 23-29 on both in every window) — it is the troughs the port never reaches. brightnessTrend backs this up: the original reads 'volatile' in the --skip 8 and --skip 20 windows while the port reads 'steady' in all of them.",
+    "DENSITY: the port lights ~1.5x more pixels. In the 960-pixel wide dump, 690/960 (72%) of the original's pixels were below the max-channel-8 threshold vs 545/960 (57%) for the port. Per-frame lit counts over t=20-28 s: original 9/27/47/27/26/27/18, port 22/30/34/37/32/31/30 — the original's density swings much harder (9 to 47) while the port's stays in a narrow 22-37 band, the spatial counterpart of the compressed brightness envelope.",
+    "Absolute spatial phase does not align: the zero-shift luminance correlation between the two sides is ~0 (-0.19 to +0.13) at seven times across t=20-28 s, and best-shift correlation only reaches 0.22-0.57 at varying shifts. For a moire/interference pattern this is expected drift from slightly different internal parameters and is consistent with the 4.6% period error; I do not treat it as a separate finding.",
+    "REGIME AGREEMENT: a 16x16 grid re-render (--rig grid --grid 16x16, 12 s) shows the two sides moving through the same regimes at the same times — scattered dot texture at 0-6.5 s, collapsing to horizontal bars around 8.1 s, back to scattered texture at 10.8-11.9 s. The one visible break is at 9.8 s, where the original's cell is essentially BLACK while the port's still shows bright violet bars — the pulse-depth gap again, now visible spatially.",
+    "CONTROL-SURFACE MISMATCH: the original exposes NO controls at all (meta.json sides.orig.controls is empty, probe reports '(no settable controls)'). The port adds TWO: 'hsvPickerPrimaryTone' (hsvPicker) and 'toggleZigzag' (toggle). Both are live (probe maxDelta 14.78 / 8.21, maxDeltaLit 18.16 / 9.18). This is a fidelity gap regardless of how the default render looks — the port has invented a control surface the original does not have.",
+    "The added controls do not damage the default look: toggleZigzag=0 renders byte-identical to the untouched port (same PNG md5 40786e58...), so its default is off, and the untouched picker already produces the original's tone-A hue (0.725 vs 0.722). Neither control can produce the missing second tone.",
+    "DIM FLOOR (minor): the original's sub-threshold pixels are pure green — 261 of 317 dim samples land in hue bin 0.333-0.417, typical value (0,6,0). The port's dim floor is split between hue 0.167-0.333 (209 samples, e.g. (3,6,0), (2,5,0) — yellow-green) and hue 0.667-0.79 (115 samples, dim violet). Barely visible at value ~6/255 but it is a real palette difference in the background term."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerPrimaryTone",
+      "origEffect": "control does not exist on the original (orig exposes no controls at all)",
+      "portEffect": "live and value-dependent; rotates the single rendered hue with an offset of ~+0.5 from the picker value (h=0 -> cyan (0,83,94); h=0.33 -> magenta (94,0,85); h=0.66 -> yellow-green (86,94,0); h=0.79 -> green (13,94,0)). Untouched default renders hue ~0.725, matching the original's violet tone. At EVERY setting the output is a single narrow hue band — the picker moves the one tone, it never introduces a second one. Saturation stays 1.0 throughout.",
+      "matches": false
+    },
+    {
+      "name": "toggleZigzag",
+      "origEffect": "control does not exist on the original",
+      "portEffect": "live: =0 is byte-identical to untouched (smooth curved diagonal fronts); =1 folds the strip serpentine so the same fronts render as sharp chevrons/zigzags. Mean brightness and motion are unchanged (12.7-12.8 / 6.2 either way) — it is a wiring/mapping option, not a look change. Default is 0.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "THE BIG ONE — restore the second tone. The original is genuinely two-hue: fully-saturated violet at hue 0.722 and fully-saturated magenta at hue 0.968, a gap of ~0.246 (a quarter turn), split roughly 57/43 by pixel count. They are interleaved SPATIALLY inside each lit band (runs of one tone abutting runs of the other along the strip), not alternated over time or over the animation cycle. The port emits only the violet tone (0 magenta pixels in 960 sampled, red channel capped at 41 and always paired with blue >= 85). Whatever term selects between the two hues in the original — a sign flip, a threshold, a second layer offset by ~0.25 in hue — is missing or collapsed in the port. Target: after the fix, meanR and meanB should be roughly EQUAL over a long window (original: ~10 and ~10), not 10 vs 26.",
+    "THE SECOND BIG ONE — deepen the pulse. The original drops to a fully black strip on a regular basis: 12.2% of frames at meanBrightness <= 1 and 19.1% at <= 4 over a 200 s window, with min 0 in every window sampled. The port's floor is ~8 (only 1.6% of frames <= 4, min 1). Peak brightness already matches (max ~23-29 on both), so do NOT scale the whole output down — the envelope needs more contrast, not less gain: whatever gates/attenuates the pattern between pulses is bottoming out around 30% instead of 0%. The clearest single check: on a 16x16 grid re-render the original's t=9.8 s cell is black while the port's still shows bright bars.",
+    "Density is ~1.5x too high. The original lights 28% of pixels above a max-channel-8 threshold, the port 43%. More telling than the average: the original's lit count swings from 9 to 47 pixels across t=20-28 s while the port's stays pinned in 22-37. The port's features are too wide and its quiet phases are not quiet — expect this to partly fix itself once the pulse envelope above reaches zero.",
+    "Cycle rate is ~4.6% fast. The original's dominant period is 66 frames at 5 fps = 13.15 s (verified fps-invariant at 5/10/40 fps); the port's is 63 frames = 12.55 s. Slow the master cycle by ~4.6%. Secondary: the original's autocorrelation harmonics land at 2x and 6x the base period, while the port's strongest peak is at 3x its base (37.8 s), suggesting the port's sub-cycles combine at a different ratio — worth a look once the base rate is right.",
+    "Drop the invented controls, or justify them. The original exposes NO controls whatsoever; the port adds hsvPickerPrimaryTone (hsvPicker) and toggleZigzag (toggle). Neither harms the default render (zigzag defaults off and is byte-identical to untouched; the picker's default hue 0.725 matches the original's violet tone 0.722), but a port should mirror the original's control surface. If the picker stays, note it can only rotate ONE hue — it is not a route to fixing the two-tone problem.",
+    "Minor: the dim background floor is a different colour. The original's sub-threshold pixels are pure green (hue 0.333, e.g. (0,6,0)); the port's are yellow-green (hue 0.167-0.333, e.g. (3,6,0)) plus a dim violet population the original does not have. Low priority — value ~6/255 — but it is a palette detail worth matching once the main tones are right.",
+    "What NOT to touch: the structural core is right. Both sides draw the same moire band texture, both morph in place with zero net translation (best-shift cross-correlation = 0 px per frame on both), both are fps-invariant and seed-independent, and a 16x16 grid re-render shows the two sides entering the same regimes (scattered dots -> horizontal bars -> scattered dots) at the same times. Fix colour and envelope; leave the geometry alone."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-long",
+    "dump-a",
+    "dump-wide",
+    "mode-dark",
+    "mode-peak",
+    "mode-late",
+    "steady30",
+    "dump-struct",
+    "dump-speed",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "grid16",
+    "pick-h0",
+    "pick-h0.33",
+    "pick-h0.66",
+    "pick-h0.79",
+    "pd-h0",
+    "pd-h0.33",
+    "pd-h0.66",
+    "pd-h0.79",
+    "zig-0",
+    "zig-1",
+    "zig0b",
+    "zig1b"
+  ]
+}

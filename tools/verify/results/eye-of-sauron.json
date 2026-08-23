@@ -1,0 +1,78 @@
+{
+  "slug": "eye-of-sauron",
+  "verdict": "broken",
+  "score": 1,
+  "confidence": "high",
+  "summary": "The original draws a big saturated white/gold lidded eye with a dark shifting pupil filling the 16x16 grid; the port draws a near-black field of dim red speckles (mean brightness 1 vs 93, max channel 58 vs 255, no eye shape at any dial setting) and then dies outright with an 'array element budget exceeded' runtime error at frame 512, after which it is frozen forever.",
+  "observations": [
+    "Untouched baseline (6 s, 20 fps, 16x16 grid): orig meanBrightness avg 92.9 (min 86, max 99), motion avg 4.7, zeroMotionFrames 1; port meanBrightness avg 1 (min 1, max 1), motion avg 0 on all 120 frames, motionLit avg 0.1. The port is ~90x too dim.",
+    "Original structure (survey 60 s @5 fps, dial-mid 12 s @10 fps, grid48): a horizontally-elongated lens/almond 'eye' body occupying nearly the whole rig, saturated white in the middle, graded through yellow and orange to a dark orange rim, with a dark vertical pupil/slit near the centre and flickering flame-like flecks inside the iris. A --dump at t=3 s (dial-mid) shows 182/256 pixels lit, many at exactly 255,255,255, arranged as a filled ellipse with a dark hole at the centre.",
+    "Port structure at the same moment: 62/256 pixels lit, brightest pixel 58,9,0, the rest scattered 1-35 red specks with no elliptical body, no rim, no pupil. meanG and meanB are 0 for the entire window on every run — the port's output is red-only, while the original averages R 111 / G 96 / B 71 (white-hot core).",
+    "Motion: the original's filmstrip (dial-mid, 6.00-7.10 s, consecutive frames) shows a stationary eye whose interior fire texture boils frame-to-frame and whose pupil creeps; motionLit avg 6.6-11.7 depending on window. The port's filmstrip over the same frames shows a handful of dim red blobs barely changing (motionLit 0.1-0.4), drifting slowly down-and-right over ~10 s.",
+    "Rhythm images (60 s survey): the original is a bright, steadily-lit vertical column with continuous fine flicker top to bottom (brightnessTrend steady, no regimes, no mode rotation); the port's rhythm image is essentially black with faint dark-red wisps. Extending to 240 s @2 fps changed nothing on either side (orig mean 92, port mean 1) — neither pattern has a long-period mode cycle, so the short windows are representative.",
+    "PORT RUNTIME FAILURE: on any run longer than ~512 rendered frames the port throws 'array element budget exceeded (arrays are never freed)' at line 26 and stops updating. Confirmed frame-count-based, not time-based: at --fps 20 --seconds 40 the error is reported at frame 512 exactly and sides.port.motionLit is non-zero only through frame 511, zero for the remaining 288; at --fps 10 --skip 60 it fires at warmup frame -88 (~the same absolute frame count) and every captured frame afterwards is byte-identical (motionLit 0 on all 120). The original runs the same windows with no error and brightnessTrend steady.",
+    "CONTROL NAME MISMATCH: the original exposes sliderAngularDensity, sliderRadialDensity, sliderDialation (label 'Dialation'), sliderSlitness; the port exposes sliderAngularDensity, sliderRadialDensity, sliderDilation (label 'Dilation'), sliderSlitness. The port silently renamed/corrected the third control, so anything addressing it by the original's name does not bind.",
+    "Dial triage (probe, 4 s @20 fps): all four original dials responsive with maxDeltaLit 13.7-24.3; on the port AngularDensity and RadialDensity are only marginally responsive (maxDeltaLit 3.75/3.76) and Dilation and Slitness read inert (0.12 / 0.04).",
+    "Explicitly-dialed comparisons at all-0, all-0.5 and all-1 (12 s @10 fps, same values both sides, using each side's own spelling for Dilation/Dialation) do not rescue the port: orig meanBrightness 91 / 87 / 82, port meanBrightness 1 / 1 / 1 in all three. The untouched divergence is not a defaults artefact.",
+    "Resolution independence: re-rendered at --grid 48x48 the original draws the SAME eye, just finer — resolution-independent, drawing into a logical canvas. The port at 48x48 shows a faint centred radial arrangement of dim red lobes (some angular structure exists in it) but still no eye, no rim, no pupil, and still mean brightness 1.",
+    "Seed 7 (10 s @10 fps) reproduces both sides exactly as seed 1 (orig mean 93, port mean 1) — this is not a one-seed fluke."
+  ],
+  "dials": [
+    {
+      "name": "sliderAngularDensity",
+      "origEffect": "Controls the angular fineness of the fire texture inside the iris: at 0 the eye is a smooth bright body with a few large dark flecks near the pupil; at 1 the interior breaks into many small angularly-spaced speckles and the rim gets a mottled fringe. Mean brightness barely moves (86.9 -> 88.0) while motionLit rises 19.2 -> 21.7; probe maxDeltaLit 24.3, the strongest dial.",
+      "portEffect": "Barely perceptible. Probe maxDeltaLit 3.75; over a 20 s @5 fps sweep with the other three dials pinned at 0.5, port mean brightness moves 1.3 -> 1.1 and meanR 3.7 -> 2.5 with motionLit flat at 0.3. Both renders are the same dim red speckle field.",
+      "matches": false
+    },
+    {
+      "name": "sliderRadialDensity",
+      "origEffect": "Radial counterpart: 0 gives broad smooth radial bands in the iris, 1 gives finer concentric striation and more flecks toward the rim. Mean brightness 87.4 -> 87.5, motionLit 21.4 -> 21.8; probe maxDeltaLit 21.2.",
+      "portEffect": "Effectively inert visually. Probe maxDeltaLit 3.76; 20 s sweep gives port mean brightness 0.9 -> 1.0, motionLit 0.3 -> 0.4. No structural change.",
+      "matches": false
+    },
+    {
+      "name": "sliderDialation (port: sliderDilation)",
+      "origEffect": "Pupil size. At 0 the pupil is closed — the eye is an almost solid white-hot ellipse; at 1 a wide black vertical slit pupil opens through the centre, cutting the body in two. Mean brightness drops 93.2 -> 73.4 and motionLit rises 16.9 -> 23.4 as the dark pupil grows; probe maxDeltaLit 16.6.",
+      "portEffect": "Inert. Probe maxDeltaLit 0.12, and a manual 20 s @5 fps sweep at 0 vs 1 (others pinned at 0.5, spanning many cycles of everything the survey showed) leaves port mean brightness at 1.2 and motionLit at 0.3 for both. Also a control-surface mismatch: the port spells the control sliderDilation, so the original's name does not bind on the port at all.",
+      "matches": false
+    },
+    {
+      "name": "sliderSlitness",
+      "origEffect": "Pupil shape. At 0 the dark centre is a ragged multi-armed starburst/asterisk and the whole eye is dimmer and more agitated (mean 74.1, motionLit 30.2); at 1 it collapses to a single clean narrow vertical slit and the body is brighter and calmer (mean 90.4, motionLit 19.5). Probe maxDeltaLit 13.7.",
+      "portEffect": "Inert. Probe maxDeltaLit 0.04; manual 20 s @5 fps sweep at 0 vs 1 gives port mean brightness 1.1 vs 1.2, motionLit 0.3 for both, and visually identical dim speckle fields.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The port never draws the subject. The original's whole image is a single large eye: a horizontally-elongated lens/almond body centred on the grid, roughly 14 px wide by 9 px tall on a 16x16 rig, filled to full white (255,255,255) across its core, graded outward through yellow to orange to a dark orange rim about 1-2 px thick, with a dark pupil at the centre. The port produces no body, no rim and no pupil — just 60-ish isolated dim red pixels. Rebuild the shape first; everything else is secondary.",
+    "Brightness is off by roughly two orders of magnitude. Original mean brightness sits at ~93 with the core railed at 255; the port sits at 1 with a peak channel of 58 and never exceeds it at any dial setting or grid size. Whatever scales the final output (a radius/falloff term, a normalization, an intensity multiplier) is collapsing the value almost to zero.",
+    "The palette is missing its warm-to-white ramp. The original averages R 111 / G 96 / B 71 — i.e. it climbs from dark orange through yellow to pure white. The port's meanG and meanB are 0 in every single frame of every run: it emits red only. The green and blue channels of the ramp are not being produced.",
+    "Fix the array leak — this is the hardest failure. The port allocates arrays inside its per-frame path (reported at line 26) and the engine's element budget is exhausted at exactly frame 512, after which the pattern is permanently frozen and identical frame to frame. Allocate any lookup/scratch arrays once at load time, not per frame or per pixel. The original runs 480+ frames at 2 fps and 800 at 20 fps with no error.",
+    "Restore the control name: the original's third slider is sliderDialation (label 'Dialation', the author's spelling). The port renamed it sliderDilation. Even once the rendering is fixed, the rename means the original's saved values and any external control call will not reach it.",
+    "Once the eye renders, the two pupil dials are the ones to verify, because they are currently completely dead on the port: Dialation should open a dark vertical slit through the eye's centre as it rises (mean brightness ~93 at 0 dropping to ~73 at 1), and Slitness should morph that dark centre from a ragged multi-armed starburst at 0 (dimmer, mean ~74, motionLit ~30) into a single clean narrow vertical slit at 1 (brighter, mean ~90, motionLit ~20). AngularDensity and RadialDensity should each visibly change how finely the iris texture is broken up (angularly and radially respectively) without moving mean brightness much.",
+    "Match the motion character: the original's eye is stationary — the body does not translate — while its interior fire texture boils and flickers continuously frame-to-frame (motionLit ~7 at 20 fps, ~12-22 at 5-10 fps) and the pupil creeps slowly. The port's specks drift bodily down-and-right across the grid over ~10 s, which is a translation the original does not have.",
+    "The original is resolution-independent: the same eye, occupying the same fraction of the rig, appears at 16x16 and at 48x48 with only finer detail. Preserve that — the port should draw into the same normalized canvas rather than rasterizing per-pixel features at native resolution."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dial-mid",
+    "dial-high",
+    "dial-low",
+    "dump-mid",
+    "late",
+    "crash-20fps",
+    "ctl-AngularDensity-0",
+    "ctl-AngularDensity-1",
+    "ctl-RadialDensity-0",
+    "ctl-RadialDensity-1",
+    "ctl-Slitness-0",
+    "ctl-Slitness-1",
+    "ctl-Dilation-0",
+    "ctl-Dilation-1",
+    "grid48",
+    "seed7"
+  ]
+}

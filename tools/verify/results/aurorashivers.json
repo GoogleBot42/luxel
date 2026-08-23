@@ -1,0 +1,40 @@
+{
+  "slug": "aurorashivers",
+  "verdict": "broken",
+  "score": 1,
+  "confidence": "high",
+  "summary": "The original is a dim, endlessly shimmering deep-blue aurora (mean brightness ~20-30, steady for 240 s); the port's output ramps monotonically upward from the first frame, clips every channel, and by ~45 s is a completely static, fully-saturated white strip that never changes again.",
+  "observations": [
+    "Neither side exposes any controls: meta.json `sides.orig.controls` and `sides.port.controls` are both empty, and --probe-controls reported '(no settable controls)' for both. No control-surface mismatch.",
+    "Original steady state (survey-240, 240 s @ 2 fps, and late100, t=100-120 s @ 10 fps): dim blue aurora, meanBrightness avg 19-25 with min 0 / max ~33, brightnessTrend 'steady', zeroMotionFrames 2/300. Blue dominates hugely (meanB avg 63.5 vs meanR 2.8, meanG 3.3). It oscillates around that level indefinitely with no mode changes across the whole 240 s window.",
+    "Port steady state (same runs): meanBrightness avg 210-233, brightnessTrend 'rising', climbing monotonically (survey 5 fps sampled every 1 s: 0, 30, 73, 96, 111, 117, 134, ... 238, 241, 247, 248) and crossing 245 at t=44.6 s. zeroMotionFrames 222/300 in the 60 s survey; in late100 (t=100-120 s) motion is 0 for every captured frame.",
+    "Port frozen frame confirmed exactly via --dump at t=100.0, 100.1, 110.0 and 119.9 s: pixel 0 = (0,0,0), pixels 1-58 = (255,255,255) at all four times, pixel 59 = (255,183,255). Byte-identical across a 20 s span - a genuine freeze, not a dim-pattern false read.",
+    "Original at the same four dump times is alive and evolving: pure-blue values across the strip (0,0,B) with B mostly 0-90, soft moving humps whose crests clip to B=255 and pick up a tint - either green (0,63,255), (0,128,255) or red (89,0,255) - and a completely different profile at each dump time.",
+    "Waterfalls (x = pixel, y = time): original shows soft blue bands sliding back and forth across the strip in shallow zigzag diagonals, crests brightening to violet/blue-white over a near-black background - a continuous shimmer that looks the same at t=0 and at t=240. Port's waterfall is a white block that grows outward from the centre in the first ~10 s and then is featureless white for the rest of the run.",
+    "Spatial event placement is roughly right early on, so the underlying geometry is not random: at t=1 s both sides light approximately the same region (orig pixels 22-42, port pixels 22-35) while the rest of the strip is exactly 0. The port's failure is amplitude, not position - inside that region its blue channel is already pinned at 255 and R and G blow to 255 too, giving white/magenta/cyan where the original gives dim blue with a soft envelope (orig peak there is (0,128,255) over a 0-82 blue skirt; port is (255,255,255) with hard (255,0,255) shoulders).",
+    "The over-brightness is present from the very first event, i.e. this is not only a missing decay: even at t=1 s the port is ~5-10x too bright per pixel and already clipping.",
+    "Not a seed artefact: --seed 7 (label seed7, 60 s @ 5 fps) reproduces the same runaway - port mean 227, motion 1, same white-block waterfall - while the original stays at mean 22.",
+    "Not frame-rate coupling: sampling meanBrightness at matched wall-clock times across --fps 10 / 20 / 40 gives orig 35/23/34 at t=2 s and port 86/99/107 at t=2 s, i.e. both sides are approximately time-based and the port's ramp is not an artefact of the frame rate.",
+    "Both sides report wantsSensors: false, so sensors play no part here.",
+    "Neither side reported a compileError or runtimeError; the port runs, it just produces saturated output."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port's steady state is the whole problem: after ~45 s it is a static all-white strip (pixels 1-58 exactly 255,255,255, forever). Whatever accumulates per frame in the port has no decay/fade term, or its decay is weaker than its gain, so brightness only ever grows. The original's mean brightness oscillates around 20-30 indefinitely and never trends up - target that: brightnessTrend 'steady' over a 240 s window, not 'rising'.",
+    "Per-pixel amplitude is roughly 5-10x too high from the very first event, independent of the accumulation bug. At t=1 s the original's lit region peaks at blue 255 with a skirt in the 0-82 range and a mean-strip brightness of ~5; the port already has the entire region clipped white. Scale the per-pixel output down until an untouched 6 s run reports meanBrightness avg ~21 (the original's baseline figure) instead of ~121.",
+    "Colour balance is wrong in the same direction. The original is overwhelmingly blue: meanR 2.8, meanG 3.3, meanB 63.5 over 60 s, i.e. red and green appear ONLY as a small tint on the brightest crests (values like (0,63,255) or (89,0,255)) and are 0 everywhere else. The port posts meanR 196 / meanG 207 / meanB 228 - all three channels saturated, giving white, magenta and cyan, colours that never appear in the original. Keep red and green near zero except at crest pixels, and let them reach only ~30-130, not 255.",
+    "Once amplitude and decay are fixed, check the motion character against the original's waterfall: soft blue bands that slide back and forth across the strip in shallow zigzag diagonals (motion stat avg ~3 at 20 fps, ~11 at 5 fps), on a near-black background where most pixels sit at 0-10 blue. The port's motion stat is ~2 early and exactly 0 late; it should never reach 0.",
+    "Early spatial placement is already close (both sides light approximately pixels 22-42 at t=1 s from a black strip), so the noise/field driving feature position looks correct - do not rewrite that part; fix the mapping from that field to pixel colour."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late100",
+    "early-dump",
+    "fps10",
+    "fps40",
+    "seed7"
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "slug": "2-colors",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides render the same completely static two-colour stripe pattern with identical spacing and colour-picker response; they differ only in their out-of-the-box defaults (original: 3-px red stripes on black; port: 4-px red stripes on blue) and in the colour controls' names.",
+  "observations": [
+    "Alive on both sides: no compile or runtime errors, non-black output, on the default 60-px strip rig.",
+    "Motion: NONE on either side. Every captured frame is identical - motion avg/min/max = 0 and zeroMotionFrames = all frames, on the 6 s baseline, the 60 s survey (5 fps), a --skip 20 --seconds 30 late window and a --skip 30 --seconds 10 window. The 60 s survey waterfalls are perfectly vertical stripes top to bottom on both sides: one regime, no modes, no drift, no palette walk. brightnessTrend 'steady' both sides.",
+    "Structure: both are hard-edged alternating stripes of two flat colours along the strip, no gradients, no anti-aliasing, phase anchored at pixel 0 (both start with a colour-1 stripe at the left edge).",
+    "DEFAULT COLOUR DIFFERS: original's second colour is pure black, so the default look is red stripes separated by unlit gaps (meanR 128, meanG 0, meanB 0, mean brightness 43). Port's second colour is full blue, so the default look is red/blue stripes (meanR 136, meanG 0, meanB 119, mean brightness 85 - roughly 2x the original's total light output). Confirmed independently by the probe: the original's Color_2 shows delta 0 at value 0 (i.e. its default IS h=s=v=0), the port's Color_2 has non-zero delta at all of 0/0.5/1.",
+    "DEFAULT STRIPE WIDTH DIFFERS: with both sides' second colour forced to the same blue, the original's default stripe is 3 px wide (period 6 px) and the port's is 4 px (period 8 px) - i.e. the port is ~33% coarser out of the box. Stripe width is absolute in pixels on both sides, not a fraction of the strip: the same 3-px vs 4-px result holds at --pixels 12, 24, 30, 40, 60, 90 and 120, and the predicted duty cycles (orig 50/50 everywhere; port 53/47 at 30/60 px, 51/49 at 90 px, 50/50 at 24/40/120 px) match the measured meanR/meanB exactly at all eight pixel counts.",
+    "CONTROL-SURFACE NAME MISMATCH: original exposes sliderSpacing (label 'Spacing'), hsvPickerColor_1 ('Color_1'), hsvPickerColor_2 ('Color_2'); port exposes sliderSpacing ('Spacing'), hsvPickerColor1 ('Color1'), hsvPickerColor2 ('Color2'). Same count and same kinds, but the two colour pickers' names and labels drop the underscore, so they are not the same control IDs.",
+    "Once the dials are set explicitly the two sides are numerically identical: at nine spacing values (0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75, 1) with a common blue Color_2, orig and port produced byte-for-byte equal meanR/meanG/meanB in every run, and the waterfalls are visually indistinguishable.",
+    "Non-default seed (--seed 7) changes nothing on either side, as expected for a pattern with no randomness and no time dependence."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpacing",
+      "origEffect": "Sets stripe width monotonically from 1 px at 0 (single-pixel red/blue alternation) up to 15 px at 1 (two red and two blue blocks across a 60-px strip); intermediate values give 2-3 px at 0.05-0.15, ~4 px at 0.2, ~6 px at 0.25, ~7-8 px at 0.5. No effect on colour or motion.",
+      "portEffect": "Identical at every value tested - same widths, same phase, same mean R/G/B to the unit at 0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75 and 1.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerColor_1 / hsvPickerColor1",
+      "origEffect": "Recolours the first (left-most) stripe family. Default is full red; probe delta is 0 at value 1 (h=s=v=1 -> red) and large at 0 and 0.5.",
+      "portEffect": "Same control, same default (full red, probe delta 0 at 1). Explicit HSV settings produce identical output: (0.33,1,1) gave meanR/G/B 73/171/71 on both sides, (0.5,0.2,1) gave 144/157/136 on both.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerColor_2 / hsvPickerColor2",
+      "origEffect": "Recolours the second stripe family. Default is BLACK, so the original ships looking like red stripes on an unlit strip.",
+      "portEffect": "Same control and same HSV mapping when set explicitly ((0.83,0.5,0.6) and (0.1,1,0.3) both matched the original exactly), but its DEFAULT is full blue instead of black - the one clearly visible difference between the two patterns at rest.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Change the port's default second colour from full blue back to black/off. At defaults the original is red stripes on a dark strip (mean brightness 43, meanB 0); the port is red/blue stripes (mean brightness 85, meanB 119). This is the only difference a viewer would actually notice.",
+    "Narrow the port's default stripe width from 4 px to 3 px (period 8 px -> 6 px). Verify with the second colour forced to a visible hue at --pixels 12: the original shows red(3) blue(3) red(3) blue(3), the port currently shows red(4) blue(4) red(4).",
+    "Rename the two colour controls to match the original exactly: hsvPickerColor_1 / hsvPickerColor_2 (labels 'Color_1' / 'Color_2'), not hsvPickerColor1 / hsvPickerColor2. sliderSpacing is already correct.",
+    "Nothing else needs touching: the spacing curve, the HSV-to-pixel mapping, the stripe phase (colour 1 starts at pixel 0), the absolute-pixel rather than fractional stripe sizing, and the fully static no-animation behaviour all already match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "regime-static",
+    "steady-late",
+    "seed7",
+    "defaultspacing-bluec2",
+    "ctl-spacing-0",
+    "ctl-spacing-0.05",
+    "ctl-spacing-0.1",
+    "ctl-spacing-0.15",
+    "ctl-spacing-0.2",
+    "ctl-spacing-0.25",
+    "ctl-spacing-0.5",
+    "ctl-spacing-0.75",
+    "ctl-spacing-1",
+    "ctl-color-0-33-1-1",
+    "ctl-color-0-5-0-2-1",
+    "px12-default",
+    "px16-default",
+    "px20-default",
+    "px24-default",
+    "px30-default",
+    "px40-default",
+    "px60-default",
+    "px90-default",
+    "px120-default"
+  ]
+}

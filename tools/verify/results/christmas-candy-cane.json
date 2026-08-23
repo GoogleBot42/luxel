@@ -1,0 +1,26 @@
+{
+  "slug": "christmas-candy-cane",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Port reproduces the candy-cane stripe pattern exactly in geometry and palette, but scrolls ~25% slower at the harness default 20 fps and is time-based where the original is frame-stepped (original's speed scales with fps, port's does not).",
+  "observations": [
+    "Both sides render an endlessly scrolling 1D barber-pole: hard-edged stripes with exactly two colours and no blending, dumped as (127,0,0) dark red and (255,255,255) white on both sides — the port's colour set is byte-identical to the original's.",
+    "Spatial period is 15 px on both sides on the default 60-px strip (4 full stripe pairs across the rig). White run is 7-8 px and red 7-8 px on both; duty cycle from meanR/meanG is 50.6% white on the original vs 50.0% on the port — a sub-pixel difference only.",
+    "Both scroll toward decreasing pixel index (waterfall stripes lean the same way on both sides), and both start from the identical phase at t=0 (dump at t=0: white run beginning at index 8 on both).",
+    "SPEED: at the default 20 fps the original advances 4 px/s (15-px cycle every 3.75 s), the port 3 px/s (cycle every 5.0 s) — port ~25% slower; measured from --dump white-run start indices at t=0,0.5,1,1.5,2,3 (orig 8,6,4,2,0,-4; port 8,6,5,3,2,-1).",
+    "FRAME-RATE COUPLING: tracking the same feature's position at --fps 10/20/40, the original moves a fixed 0.2 px per FRAME (2, 4, 8 px/s respectively) while the port holds a fixed 3 px/s at all three rates. The original is frame-stepped, the port is time-based — they coincide at no tested rate.",
+    "No modes or regimes: a 60 s / 5 fps survey and a 300 s / 2 fps survey show a single unchanging regime on both sides — constant diagonal stripes, no palette walk, no direction reversal, no events.",
+    "Steady state healthy on both: 300 s summaries give brightnessTrend steady on both (orig meanBrightness avg 150.4, port 149.0), no decay, no freeze, no runtime or compile errors on either side.",
+    "Late-window check at --skip 60 confirms both are still scrolling at their respective rates, with the original and port frames happening to coincide exactly at t=60 s before diverging again in phase.",
+    "Deterministic: seed 7 renders identically to seed 1 on both sides, so nothing here is RNG-driven.",
+    "Control surface matches: both sides expose zero settable controls (probe reports '(no settable controls)' for orig and port), so there is no dial fidelity gap."
+  ],
+  "dials": [],
+  "feedback": [
+    "Scroll rate is the only visible defect: at 20 fps the original advances 4 px/s and the port 3 px/s on a 60-px strip, so the port's barber-pole cycle takes 5.0 s where the original's takes 3.75 s. Speed the port up by ~4/3 to land on the original at 20 fps.",
+    "More fundamentally the two use different time bases: the original advances a fixed 0.2 px per rendered FRAME (so 2 px/s at 10 fps, 4 at 20, 8 at 40), while the port advances a fixed 3 px/s independent of frame rate. Matching only at 20 fps will still diverge at any other rate — if fidelity across frame rates matters, drive the port's stripe offset from frame count rather than elapsed time (equivalently 0.2 px per frame).",
+    "Nothing else needs touching: stripe period (15 px), duty cycle (~50/50), scroll direction (toward decreasing index), the two-colour hard-edged palette (127,0,0 / 255,255,255), the t=0 phase and the absence of controls all already match the original exactly."
+  ],
+  "experiments": ["baseline", "survey", "probe", "survey-300", "dump-base", "fps10", "fps40", "late", "seed7"]
+}

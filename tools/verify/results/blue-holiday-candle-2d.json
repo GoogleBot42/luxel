@@ -1,0 +1,46 @@
+{
+  "slug": "blue-holiday-candle-2d",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Both render the same subject — a blue-cored candle flame over a blue base glow on a near-black field with sparse sparkles — but the port's flame barely flickers and its blue base glow is ~4x too tall and bright, flipping the image from warm-dominant to blue-dominant and washing the flame's gold lower half to pale pink.",
+  "observations": [
+    "Both sides alive, no compile or runtime errors, single steady regime with no mode rotation and no decay: a 240 s / 2 fps survey rhythm image is uniform end-to-end on both sides, and a --skip 120 --seconds 12 late window looks identical to t=0 (orig brightnessTrend steady, port steady, zeroMotionFrames 0 on both).",
+    "Overall colour balance is inverted. Default 16x16 rig, 240 s survey: orig meanR/G/B = 39.2 / 19.3 / 20.0 (warm-dominant, roughly 2:1:1); port = 28.6 / 11.4 / 33.3 (blue-dominant). Mean brightness is close (orig 26.2, port 24.4), so this is hue distribution, not level.",
+    "Blue base glow is ~4x too tall on the port. --dump at 48x48, far-left column outside the flame: orig's base occupies rows 43-47 of 48 (bottom ~10% of the panel), port's occupies rows 29-47 (bottom ~40%). On the default 16x16 rig orig's base is exactly rows 14-15 (area ~24 px, x-ramp 14,31,48,65,82,99 symmetric about centre, peak B=99 rock steady across 16 sampled times); port's is rows ~9-15 (area ~63 px, ramp 12,38,63,89,114,140, peak B pulsing 146-167).",
+    "That oversized base is additively blended OVER the flame instead of sitting below it. Orig's warm ring keeps B=0 all the way down (row 8 = 224,106,0; row 10 = 228,135,0; row 12 = 215,152,0 — red at the tip ramping to gold/amber at the base). Port's ring picks up the base's blue from row 9 down (row 9 = 229,107,89; row 11 = 229,130,114; row 12 = 229,142,140), so the flame's bottom half reads as pale pink/white rather than gold. The R,G part of the warm ramp is otherwise comparable between sides (both peak at R=229).",
+    "Flame flicker is essentially missing on the port. 48x48, per-row left/right edges of the lit silhouette over t=1.00-1.60 (0.2 s steps): orig's row-8 edges swing 14-18 / 29-33 and rows 12/16/20 move 1-3 px each sample — the flame visibly sways and bulges; port's silhouette is bit-identical below row 12 across the whole 0.6 s and moves at most 1 px at the tip. The filmstrips show the same thing: orig's outline reshapes every frame, port's is a rigid ellipse that only breathes slightly.",
+    "Motion stat backs it up: survey (60 s/5 fps) orig motion avg 4.6 max 9 vs port 1.8 max 3; 240 s survey orig 5 vs port 2; late 12 s window at 20 fps orig avg 1.7 max 5 vs port avg 1.0 with min = max = 1 (literally invariant).",
+    "Blue core texture differs. Orig's core is mottled with ridges running diagonally — blue-channel values inside it swing 100-252 with multiple separate peaks per row (48x48 rows 22-30, peaks wandering across cols 21-27), which reads as diagonal striping in the render. Port's core is one smooth blob with a solid clipped 255 plateau (cols ~21-24, rows ~22-28) and a clean falloff — no striping.",
+    "Core hue differs slightly: orig's brightest core pixels have G > R (e.g. 44,67,224 / 47,71,239 — cyan-leaning blue); port's have R > G (86,62,255 / 81,58,255 — violet-leaning blue).",
+    "Flame footprint is ~25% smaller and narrower on the port. Default 16x16, warm pixels (R>60) averaged over 16 sampled times: orig ~55 px spanning cols 4-11, port ~42 px spanning cols 5-10. Vertical extent is similar (rows ~2-13 both).",
+    "Both sides emit sparse sparkles in the dark field, but they differ in colour and rate: orig's are near-neutral white (peak samples 189,165,161 / 145,126,123), port's are warm gold (152,129,99 / 141,120,91). Counting lit pixels in the outer columns (x<2 or x>13) over 16 sampled frames: orig ~0.4/frame, port ~1.1/frame — port sparkles roughly 2x as often (small sample; the 240 s rhythm images and the late-window sheets show the same imbalance).",
+    "Background is effectively identical: orig (2,0,5), port (2,0,3).",
+    "Control surface matches: --probe-controls reports 'no settable controls' on BOTH sides, and meta.json lists controls: [] for each. No dial work possible or needed.",
+    "Both sides are resolution-independent in the same way — re-rendered at 48x48 each draws the same picture at finer detail (same proportions, same feature count), so the divergences above are not a rig artefact. All headline numbers were confirmed on the default 16x16 grid rig.",
+    "Seed-independent: --seed 7 over 20 s at 10 fps reproduces the same per-side statistics (orig meanR/G/B 39.3/19.4/20.0 motion 2.9; port 28.6/11.4/33.3 motion 1.5)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Shrink the blue base glow. On a 16-row grid the original's glow covers only the bottom 2 rows (bottom ~10% of the panel at any resolution — confirmed rows 43-47 of 48 at 48x48); the port covers the bottom ~40%. Cut its vertical extent to about a quarter of what it is now.",
+    "Dim the base glow and stop it pulsing. Original's centre-column peak blue is a steady 99/255 on the default rig, never varying across a 12 s window; the port's is 146-167 and breathes. Target a constant ~100 peak with the same symmetric left-to-right ramp (14,31,48,65,82,99 across the 12 lit columns).",
+    "Composite the base glow BEHIND/BELOW the flame, not added on top of it. In the original the warm ring has B=0 for its whole length, so the flame goes red at the tip -> orange -> gold/amber at the base (row 12 is 215,152,0). In the port the glow's blue is summed into the ring from row 9 down, producing 229,142,140 pale pink where gold belongs. Fixing the extent alone will not fix this — the ring's blue channel must stay at 0 wherever the flame is drawn.",
+    "Restore the flame's flicker — this is the biggest behavioural gap and the defining feature of a candle. The original's outline sways and reshapes continuously: its left/right edges in the upper half move 2-3 px (on a 48-wide grid) between samples 0.2 s apart, and its motion stat averages 4.6 over a 60 s survey. The port's outline is frozen below the upper third and its motion stat sits pinned at exactly 1. Add per-frame noise-driven distortion to the flame silhouette, strongest near the tip and tapering to nothing at the base (the original's bottom rows barely move either).",
+    "Give the blue core its internal texture back. The original's core is not a solid fill: its brightness varies 100-252 within the core with several bright ridges running diagonally (lower-left to upper-right), clearly visible as stripes at 48x48. The port's core is a flat clipped 255 blob — reduce the peak so it stops saturating and modulate it with the missing diagonal texture.",
+    "Widen the flame slightly. Original's warm ring spans 8 of 16 columns (cols 4-11, ~55 lit px); port's spans 6 (cols 5-10, ~42 px) — about 25% too small in area.",
+    "Cool the sparkles and thin them out. Original's sparkles are near-white (R:G:B about 1.00:0.87:0.85); the port's are distinctly gold (about 1.00:0.85:0.65) and appear roughly twice as often.",
+    "Nudge the core hue: original's brightest core pixels have green above red (44,67,224), the port's have red above green (86,62,255) — the port's blue core is a shade too violet."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "grid48",
+    "dump-a",
+    "dump-flicker",
+    "dump-dense",
+    "seed7",
+    "late"
+  ]
+}

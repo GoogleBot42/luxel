@@ -1,0 +1,52 @@
+{
+  "slug": "sparks",
+  "verdict": "close",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same spark texture, colour ramp, launch point and spawn rate as the original, but the port's sparks never lose energy along the strip — the original's activity fades to pure black over the last ~10-20% of the rig while the port stays fully lit to the final pixel, leaving it ~48% brighter overall.",
+  "observations": [
+    "Both sides compile and run clean, no runtime errors, no sensors (wantsSensors false both), no controls on either side (probe: 'no settable controls' for orig and port) — control surfaces match exactly.",
+    "Baseline (6 s / 20 fps, 60 px strip): orig meanBrightness avg 30.8, motion 39.1, motionLit 89.4, trend steady; port meanBrightness avg 45.1, motion 64.6, motionLit 108.0, trend steady. zeroMotionFrames = 1 on both (the usual first-frame artefact). Neither side dies, freezes, or saturates.",
+    "COLOUR RAMP IS AN EXACT MATCH. Bucketing every lit pixel over 240 dumped frames by red channel gives identical average RGB per bucket on both sides: r-bucket 0-31 -> (10,1,0) both; 64-95 -> orig (78,24,16) / port (79,24,17); 128-159 -> (143,76,67) both; 160-191 -> orig (175,112,103) / port (176,113,104); 224-255 -> orig (253,247,246) / port (252,245,244). Same black-body ember ramp (deep red at low heat through white-hot), same saturation curve.",
+    "HEADLINE DIVERGENCE — the spatial energy envelope. Per-pixel mean luminance over 60 s @ 20 fps, 60 px, in 6-px deciles. orig: 2 56 61 60 52 33 26 11 2 0 (falls monotonically after decile 3, dead black in the last decile). port: 4 49 52 48 51 56 61 51 45 35 (essentially flat, actually peaking at decile 6, still 35 at the last pixel). Last pixel index ever lit in 240 frames: orig 54, port 59.",
+    "The same divergence in ignition-event terms (a pixel crossing from <200 to >=200 luminance, i.e. a fresh hot spark), 400 consecutive frames @ 20 fps: total ignitions/s orig 78.8 vs port 121.0 (port 1.54x). Per decile orig 1.8 17.8 16.8 16.5 12.9 8.1 3.6 1.4 0.0 0.0 vs port 2.0 18.3 16.3 15.5 12.4 13.4 13.9 12.4 10.3 6.4 — deciles 0-4 agree within 5%, deciles 5-9 are where ALL the extra port energy lives.",
+    "The envelope is a strip-FRACTION law on the original and holds at every rig size. Lit range (>2% duty) and decile profile, 30 s @ 20 fps: 12 px — orig 1..11 (8%..92%) profile 0 2 39 118 184 188 152 90 47 7 vs port 3..11 profile 0 1 0 38 146 228 230 235 211 205; 30 px — orig 3..27 (10%..90%) 0 31 114 137 109 85 65 25 5 0 vs port 4..29 (13%..97%) 0 20 108 82 104 99 129 109 103 82; 150 px — orig 5..134 (3%..89%) 12 20 23 23 19 14 9 4 1 0 vs port 5..149 (3%..99%) 12 20 23 20 22 21 20 20 15 13; 300 px — orig 5..270 (2%..90%) 8 12 12 11 9 6 4 2 0 0 vs port 5..299 (2%..100%) 8 10 11 11 10 10 10 8 7 5. On EVERY size the original dies out at ~90% of the strip and the port runs to 100%.",
+    "Launch end is identical: both sides are exactly black at pixels 0-3 on the 60 px rig (and at 2-5% of the strip on 150/300 px), then ramp up over the same few pixels. The pattern's origin/anchor is ported correctly.",
+    "Spark dwell per pixel matches: lit-run lengths over 400 consecutive frames @ 20 fps — orig median 3 frames, mean 3.77, p90 7, max 23; port median 3, mean 3.96, p90 8, max 30. Individual spark lifetime is right.",
+    "MOTION: both sides drift rightward. Whole-rig lag-1 spatial cross-correlation over px 4-44 @ 20 fps gives the same centroid, 3.21 px/frame (~64 px/s), on both. But split by position, the original DECELERATES with distance while the port barely does: peak lag-1 shift px4-18 / 18-32 / 32-46 / 46-60 is orig 4 / 4 / 3 / 1 px/frame vs port 5 / 5 / 4 / 4 px/frame. Sub-pixel centroids @ 20 fps: px4-18 orig 4.38 vs port 5.55 px/frame; px18-32 orig 3.46 vs port 4.63 — port runs ~25-35% faster through the mid strip.",
+    "fps sweep 5/10/20/40 (60 s each): mean brightness orig 20/27/31/33, port 33/41/45/48 — both sides scale the same way with frame rate (port/orig ratio 1.65/1.52/1.45/1.45), so there is no DIFFERENTIAL frame-rate-coupling bug, though both are somewhat frame-coupled (denser sparks at higher fps). The envelope difference is present identically at every fps: orig lit range px 9..42 (fps5), 7..49 (fps10), 4..53 (fps20), 2..56 (fps40); port reaches pixel 59 at all four rates.",
+    "Drift is roughly time-based rather than frame-stepped on both sides (px18-32: orig 69 px/s @ 20 fps vs 81 px/s @ 40 fps; port 93 vs 99 px/s) — no port-specific frame coupling.",
+    "Steady state confirmed: --skip 200 --seconds 60 @ 20 fps reproduces the baseline picture exactly (orig mean 30.6 trend steady, decile profile 2 56 61 60 52 33 26 11 2 0, last lit px 53; port mean 45.9 trend steady, decile profile 4 49 52 48 51 56 61 51 45 35, last lit px 59). zeroMotionFrames 0 on both. Neither side degrades over 4+ minutes; the divergence is a permanent property, not a transient.",
+    "Not a seed fluke: seeds 7 and 1234 (30 s @ 20 fps) give orig deciles 5 53 58 63 52 34 24 13 3 0 / 4 52 54 65 58 35 26 13 3 0 with last-lit px 53, and port 6 50 43 59 48 53 59 58 43 33 / 5 54 47 49 51 50 64 56 41 34 with last-lit px 59. Identical story on all three seeds.",
+    "Survey (60 s @ 5 fps) and the extended late window show a single steady regime — no modes, no long-period cycle, no palette walk. The waterfall texture (short bright white/orange streaks slanting to the right) is qualitatively the same on both sides; the only visible difference in the images is that the original has a wide black right-hand margin and a soft fade into it, while the port fills the strip edge-to-edge with a hard cut at the last pixel."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port is missing (or has far too weak) the original's falloff of spark energy with distance from the launch end. Target: per-pixel mean luminance should decay monotonically after ~30% of the strip and reach ZERO by ~90% of the strip, at every rig size. Measured original decile profile (60 px, 20 fps, 60 s): 2 56 61 60 52 33 26 11 2 0. The port currently posts 4 49 52 48 51 56 61 51 45 35. The law is strip-FRACTION based, not a fixed pixel count — the original dies out at 11/12, 27/30, 134/150 and 270/300 px, i.e. ~90% every time, so whatever term produces the falloff must be normalised by pixel count.",
+    "Concretely, fresh-spark ignition rate per decile is where the excess lives: original 1.8 17.8 16.8 16.5 12.9 8.1 3.6 1.4 0.0 0.0 ignitions/s; port 2.0 18.3 16.3 15.5 12.4 13.4 13.9 12.4 10.3 6.4. Deciles 0-4 are already correct — do not touch spawn rate, spawn position, spark lifetime or the colour ramp. The fix belongs entirely in whatever kills a spark (or damps its brightness) as it travels: from decile 5 outward the port should be shedding roughly half its rate per decile, ending at zero.",
+    "Related and probably the same root cause: the original's sparks DECELERATE as they travel and the port's do not. Lag-1 correlation shift by strip quarter (20 fps, 60 px): original 4 / 4 / 3 / 1 px/frame; port 5 / 5 / 4 / 4 px/frame. Add the missing friction/drag term so velocity bleeds off with distance; with drag in place the sparks should stall out and die around 90% of the strip on their own.",
+    "The port's launch velocity also looks ~20-25% too high in the near field (px4-18 centroid: orig 4.38 px/frame vs port 5.55 px/frame at 20 fps, i.e. ~88 vs ~111 px/s). Trim it after the drag term is in and re-measure — some of the excess is drag, some is initial speed.",
+    "Overall brightness follows automatically: original mean 30.8, port 45.1 at the harness default (60 px / 20 fps / 6 s). Do NOT fix this by scaling global brightness — the near half of the strip already matches to within a few percent and would go too dim. It is purely the un-decayed far half inflating the mean.",
+    "Everything else is already right and should be preserved: the black launch margin (pixels 0-3 on a 60 px strip), spark dwell (median 3 frames lit per pixel), the ember colour ramp (byte-level match on every brightness bucket), the absence of controls, the steady long-run behaviour, and the mild frame-rate coupling (both sides brighten with fps at the same ratio)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "sp-dist",
+    "traj",
+    "late",
+    "fps-5",
+    "fps-10",
+    "fps-40",
+    "px-12",
+    "px-30",
+    "px-150",
+    "px-300",
+    "consec",
+    "consec10",
+    "consec40",
+    "seed-7",
+    "seed-1234"
+  ]
+}

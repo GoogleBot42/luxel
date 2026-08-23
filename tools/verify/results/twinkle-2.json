@@ -1,0 +1,91 @@
+{
+  "slug": "twinkle-2",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same twinkle pattern with an identical per-event look (instant ignition to full value, strictly linear fade, uniform random hue) and near-perfect hue/saturation/decay dial behaviour, but the port's ignition rate is normalized per-FRAME instead of per-PIXEL, so on the default 60 px strip it fires ~4x too often at matched dials (~8x untouched) and its untouched IgnitionRate/DecaySpeed defaults differ from the original's.",
+  "observations": [
+    "Rig/window: default strip, 60 px. Untouched baseline (6 s @20 fps): orig meanBrightness avg 4.3, motion avg 0.9, motionLit 14.6, zeroMotionFrames 55/120; port meanBrightness avg 39.1, motion 6.5, motionLit 13.3, zeroMotionFrames 1/120. Both brightnessTrend 'rising' (warm-up from black), both alive, no compile/runtime errors.",
+    "60 s survey @5 fps shows a single steady stochastic regime on both sides — no modes, no palette walk, no long-period beat. Late window (--skip 180, 20 s @20 fps) is statistically identical to t=0-20 s on both sides (orig 7.4% lit, port 57.3% lit), so neither side dies, saturates or drifts.",
+    "Per-event shape is IDENTICAL in kind on both sides (from 20 fps --dump traces): a pixel jumps from 0 to value 255 in one frame at full saturation, then decays strictly LINEARLY by a fixed count per frame, hue held constant for the whole event (hue drift per event: orig mean -0.000, p10/p90 -0.016/+0.017; port mean -0.005, p10/p90 -0.010/+0.010). Example orig event: 183,255,0 -> 173,240,0 -> ... -> 5,8,0 -> 0. Example port event: 0,255,75 -> 0,244,72 -> ... -> 10,7,0 -> 0.",
+    "DENSITY, default 60 px, untouched, 60 s dump of 1200 frames: orig 284 ignitions = 4.7/s = 0.079 ign/px/s, 6.9% of pixel-frames lit, mean pixel value 9.2. Port 2300 ignitions = 38.3/s = 0.639 ign/px/s, 56.3% lit, mean pixel value 84.4. That is 8.1x the ignition rate and 8.2x the lit fraction.",
+    "ROOT CAUSE — wrong normalization law. Sweeping --pixels at matched dials (orig sliderOnRate=0.5 / port sliderIgnitionRate=0.5, both sliderDecaySpeed=0.5), 20 fps: orig total ignitions/s = 3.75 (15 px), 14.05 (60), 27.9 (120), 56.7 (240), 140.6 (600) — exactly proportional to pixel count, a constant 0.234 ign/px/s (lit fraction pinned at 18.3-19.7% at every size). Port total ignitions/s = ~46 (15 px, undercounted because the strip saturates), 55.7 (60), 58.1 (120), 59.05 (240), 59.5 (600) — CONSTANT at ~59/s = ~3 ignitions per rendered frame regardless of strip length (lit fraction 97.5% / 59.5% / 36% / 20.7% / 8.6%). The two laws cross near ~240 px.",
+    "At --pixels 240 with matched dials the two waterfalls are visually indistinguishable and the statistics agree: orig 0.2363 ign/px/s, 18.9% lit vs port 0.246 ign/px/s, 20.7% lit. This is strong evidence the ONLY structural defect is the pixel-count normalization: everything downstream of picking which pixels ignite is right.",
+    "Re-ignition semantics match exactly. On the 240 px matched-dial run, ignitions landing on an already-lit pixel (resetting it to 255 with a fresh hue mid-fade): orig 217/1132 = 19.2%, port 227/1178 = 19.3%.",
+    "Frame-rate coupling is IDENTICAL on both sides and is a property of the original, not a port bug. At matched dials, ignitions/s = 7.05 / 14.05 / 28.6 (orig) and 28 / 55.7 / 112.65 (port) at 10/20/40 fps — both scale linearly with fps — while the decay step stays fixed at 15 counts/frame on BOTH sides, so full-fade time is 1.70 / 0.85 / 0.425 s on both. Lit fraction is fps-invariant on both (orig 18.3/19.1/19.6%, port 58.6/59.5/61.0%). The port/orig ignition ratio holds at 3.97 / 3.96 / 3.94 across the three rates.",
+    "IgnitionRate dial mapping has the same SHAPE but a ~4x offset at 60 px. Ignitions/s on the default rig at dial 0 / 0.25 / 0.5 / 0.75 / 1: orig 4.45 / 9.90 / 14.05 / 19.0 / 28.15; port 19.65 / 38.0 / 55.7 / 72.4 / 103.8. Ratio 4.42 / 3.84 / 3.96 / 3.81 / 3.69 — a near-constant multiplier, and both curves bend upward the same way at the top of the range.",
+    "UNTOUCHED DEFAULTS DIFFER. probe.json deltas of exactly 0.00 pin the original's untouched state to HueHigh=1, HueLo=0, Saturation=1, OnRate=0 (the minimum!), DecaySpeed=0.5. The port reproduces HighHue=1, LowHue=0, Saturation=1 exactly (delta 0.00) but has NO zero-delta value for either sliderIgnitionRate (min delta 47.7 at 0) or sliderDecaySpeed (min delta 8.15 at 0.5): measured untouched, its ignition rate equals its own dial ~0.25 and its fade takes 25 frames / 11 counts per frame (1.16 s) instead of the original's 18 frames / 15 counts per frame (0.85 s), i.e. a default DecaySpeed of roughly 0.35.",
+    "CONTROL-SURFACE MISMATCH: both sides expose 5 sliders, but three names/labels differ — orig sliderHueHigh(HueHigh) vs port sliderHighHue(HighHue); orig sliderHueLo(HueLo) vs port sliderLowHue(LowHue); orig sliderOnRate(OnRate) vs port sliderIgnitionRate(IgnitionRate). sliderSaturation and sliderDecaySpeed match on both name and kind. All ten controls probe responsive with value-dependence confirmed (0 vs 1 differ from each other on every one).",
+    "Colour is a match on both sides untouched: hues uniformly distributed over the whole wheel (orig hueMean 0.490, p02 0.016, p98 0.974 over 284 events; port hueMean 0.498, p02 0.020, p98 0.972 over 2300 events), saturation exactly 1.0 on every event, peak value exactly 255 on every event.",
+    "Seed-independent: at seeds 1, 7 and 1234 (untouched, 60 px, 10 s) the port sits at 38.3 / 39.1 / 38.3 ignitions/s and 55-56% lit while the original sits at 4.7 / 5.0 / 4.1 ignitions/s and 6-7% lit. The density gap is not a one-seed fluke."
+  ],
+  "dials": [
+    {
+      "name": "HueLo / LowHue (name differs: orig sliderHueLo, port sliderLowHue)",
+      "origEffect": "Lower bound of the random hue drawn per ignition. Untouched value 0. With HueLo=0.25, HueHigh=0.5 the event hues fall in [0.265, 0.497].",
+      "portEffect": "Identical: with LowHue=0.25, HighHue=0.5 event hues fall in [0.255, 0.492]. Same distribution, same bounds.",
+      "matches": true
+    },
+    {
+      "name": "HueHigh / HighHue (name differs: orig sliderHueHigh, port sliderHighHue)",
+      "origEffect": "Upper bound of the random hue. Untouched value 1 (full wheel). Inverted setting (HueLo=0.8 > HueHigh=0.2) degenerates to a single constant hue of exactly 0.8 for every event.",
+      "portEffect": "Identical, including the degenerate inverted case: LowHue=0.8, HighHue=0.2 also collapses to a constant hue of exactly 0.8. The port reproduces the original's edge-case behaviour.",
+      "matches": true
+    },
+    {
+      "name": "sliderSaturation",
+      "origEffect": "Sets HSV saturation of every event. Untouched 1.0 (fully saturated). At 0.3 every event renders at measured saturation 0.651.",
+      "portEffect": "At 0.3 every event renders at measured saturation 0.651 — identical value, identical name and kind.",
+      "matches": true
+    },
+    {
+      "name": "OnRate / IgnitionRate (name differs: orig sliderOnRate, port sliderIgnitionRate)",
+      "origEffect": "Sets the per-PIXEL per-frame ignition probability. 60 px @20 fps: 4.45 / 9.90 / 14.05 / 19.0 / 28.15 ignitions/s at 0 / 0.25 / 0.5 / 0.75 / 1, i.e. 0.074 -> 0.469 ign/px/s. Rate per pixel is independent of strip length (0.25, 0.234, 0.233, 0.236, 0.234 ign/px/s at 15/60/120/240/600 px, dial 0.5). Untouched default = 0.",
+      "portEffect": "Same monotone curve shape but ~3.7-4.4x hotter on the 60 px default rig (19.65 / 38.0 / 55.7 / 72.4 / 103.8 ignitions/s), because the rate is a fixed COUNT PER FRAME (~3/frame at dial 0.5) rather than a per-pixel probability: total ignitions/s is ~59 at 60, 120, 240 and 600 px alike. Untouched default sits around its own 0.25 rather than 0.",
+      "matches": false
+    },
+    {
+      "name": "sliderDecaySpeed",
+      "origEffect": "Sets the linear fade step. Counts subtracted per frame at dial 0 / 0.25 / 0.5 / 0.75 / 1: 2 / 9 / 15 / 21 / 28, i.e. full-fade times of 6.38 / 1.42 / 0.85 / 0.61 / 0.46 s at 20 fps. Untouched default = 0.5.",
+      "portEffect": "Dial MAPPING matches almost exactly: 2 / 8 / 15 / 21 / 27 counts per frame (6.38 / 1.59 / 0.85 / 0.61 / 0.47 s). Only the untouched DEFAULT is wrong — 11 counts/frame (1.16 s) instead of 15 (0.85 s), i.e. roughly dial 0.35.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "PRIMARY FIX — ignition rate normalization. The original draws an independent per-pixel ignition each frame: total ignitions per second scale linearly with strip length (0.234 ign/px/s at dial 0.5, measured constant across 15/60/120/240/600 px). The port instead lights a fixed number of pixels per frame (~3 at dial 0.5), so its total is pinned near 59 ignitions/s at every strip length. Make the ignition decision per pixel, not a fixed budget per frame — i.e. remove whatever divides the rate by (or indexes into) pixelCount. Target on the default 60 px strip at dial 0.5: 14 ignitions/s and ~19% of pixel-frames lit; the port currently produces 56 ignitions/s and ~60% lit. Sanity check the fix at 600 px too, where the port is currently 2.4x too SPARSE (59 vs 141 ignitions/s) — the two laws happen to coincide near 240 px, so testing at one rig size can hide this.",
+    "SECONDARY — untouched default of the ignition slider. The original's untouched state is exactly its OnRate = 0 (the bottom of the slider; probe delta 0.00), giving 4.45 ignitions/s on 60 px. The port's untouched state corresponds to about its own dial 0.25. After the normalization fix, set the port's initial ignition-rate variable to the value its own slider maps to 0.",
+    "SECONDARY — untouched default of DecaySpeed. The dial MAPPING is already correct (2/8/15/21/27 vs the original's 2/9/15/21/28 counts per frame at 0/0.25/0.5/0.75/1), so only the initial value is wrong: the port fades at 11 counts/frame (1.16 s from 255 to 0 at 20 fps) untouched, the original at 15 counts/frame (0.85 s). Set the port's initial decay variable to what its slider produces at 0.5.",
+    "CONTROL NAMES — rename three sliders to match the original's surface, since a user's saved control values are keyed by name: sliderHighHue -> sliderHueHigh, sliderLowHue -> sliderHueLo, sliderIgnitionRate -> sliderOnRate (labels HighHue/LowHue/IgnitionRate -> HueHigh/HueLo/OnRate). sliderSaturation and sliderDecaySpeed are already correct.",
+    "DO NOT CHANGE — these were measured as exact matches and are easy to break while fixing the above: instant one-frame rise to value 255 at full saturation; strictly linear fade; hue held constant for the whole event; uniform hue draw over [HueLo, HueHigh] including the degenerate constant-hue behaviour when the bounds are inverted; saturation dial mapping (0.3 -> 0.651 on both); re-ignition of an already-lit pixel resetting it to 255 with a new hue (19.2% vs 19.3% of ignitions at matched density); and the frame-coupled timing (ignitions per second scale with fps, fade step fixed per frame) which the original also has."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "t2-dump60",
+    "t2-late",
+    "t2-rate-0",
+    "t2-rate-0.25",
+    "t2-rate-0.5",
+    "t2-rate-0.75",
+    "t2-rate-1",
+    "t2-decay-0",
+    "t2-decay-0.25",
+    "t2-decay-0.5",
+    "t2-decay-0.75",
+    "t2-decay-1",
+    "t2-hue-a",
+    "t2-hue-b",
+    "t2-sat",
+    "t2-fps10",
+    "t2-fps20",
+    "t2-fps40",
+    "t2-px15",
+    "t2-px120",
+    "t2-px240",
+    "t2-px600",
+    "t2-def240",
+    "t2-seed7",
+    "t2-seed1234"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "slug": "crawling-spider-2d",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Port reproduces the spider's geometry, crawl path, speed and cadence, but draws its eight legs as 1-px hairlines instead of thick tapered wedges and truncates the leg palette before green, so on the pattern's own 16x16 rig it reads as a red dot surrounded by scattered specks rather than a spider.",
+  "observations": [
+    "Both sides render without compile or runtime errors; neither exposes any settable control (probe: 'no settable controls' on orig and port), and neither binds sensors (wantsSensors false both sides).",
+    "Shared concept confirmed at 48x48 (label grid48): both draw a red/orange body blob with EIGHT legs radiating outward that wiggle frame-to-frame, and both walk the figure diagonally across the grid and off an edge, then re-enter.",
+    "Leg weight is the headline structural difference. At 48x48 the original's legs are thick tapered wedges (lit area 18.8%/27.2%/15.6% of the grid at t=3.15/4.4/5.75 s); the port's are single-pixel dashed lines (5.5%/9.8%/8.5%) — roughly a third of the original's lit area at every sampled moment.",
+    "On the DEFAULT 16x16 rig that hairline width aliases the port's spider apart. Eight-connected component analysis of dumped frames (label dump-geom, t=3.15-7.0 s): original = 1 connected blob of 40-63 lit pixels with 0 isolated pixels in 5 of 7 frames; port = 5-10 separate components, 3-9 of them single isolated pixels, largest component only 6-19 px. The port's legs never touch its body at native resolution.",
+    "Lit-pixel count at 16x16 peak (label dump-track, centroid sampling once per second over 60 s): original peaks at 63-70 lit pixels per crawl, port at 21-30 — ~2.8x fewer.",
+    "Palette is truncated on the port. Original leg tips reach saturated green (e.g. RGB 0,255,19 and 30,255,0 in the t=4 dump): over 45 lit frames of dump-track, 32 contained at least one green pixel and green was 16.7% of all lit pixels. Port over 37 lit frames: 1 frame with any green, 0.2% of lit pixels. Port's ramp stops at red -> orange -> yellow (olive at dimmest, e.g. 93,93,0), never green. Blue channel is 0 on both sides throughout.",
+    "Overall brightness: original meanBrightness avg 12.3 (baseline) / 9.8 (survey) / 9.6 (survey-240); port 3.3 / 2.5 / 2.3 — about 4x dimmer, which is the ~2.8x lit-area deficit multiplied by dimmer lit pixels (mean lit value 190-198 orig vs 132-146 port at t=3 and t=4).",
+    "Spider size: peak radial extent from the weighted centroid at 16x16 is 5.6-7.6 px on the original vs 4.1-5.6 px on the port; at 48x48 it is 19.6-24.6 vs 15.5-21.2 — the port's figure is consistently ~0.8x the original's reach.",
+    "Motion matches well. Horizontal crawl speed measured from weighted centroids is ~2.7 px/s (orig, x 13.3 -> 0.0 over t=2-7 s) vs ~2.8 px/s (port, x 0.0 -> 13.9 over the same window) on the 16x16 rig; both also drift vertically, so the walk is diagonal on both sides.",
+    "Both sides randomize crawl direction per traverse — over 60 s the original ran R->L, R->L, L->R, L->R, L->R, R->L, L->R and the port L->R, R->L, R->L, L->R, L->R, L->R — so the differing direction in any single window is RNG, not a port bug.",
+    "Cycle timing differs slightly. Autocorrelation of meanBrightness (survey, 300 frames @5 fps) peaks at 45 frames = 9.0 s for the original and 100 frames = 20.0 s (with a 50-frame = 10.0 s harmonic) for the port; the 240 s survey agrees (orig lags 18/36/54 s off a 9 s base, port 20/40/60 s off a 10 s base). Crawl-start times over 60 s: orig 2,10,20,28,37,46,55 s (intervals 8-10 s, variable); port 2,12,22,32,42,52 s (interval exactly 10 s).",
+    "The extra second per cycle sits in the dark gap between crawls: the original goes fully dark for ~2.5-3 s between traverses, the port for ~4-4.5 s (regime-gap, --skip 6.5: orig's gap runs ~7.3-10.6 s, port's ~7.2-11.7 s). Some of this is likely secondary to the port's smaller, dimmer figure vanishing earlier and appearing later at the grid edge.",
+    "Both sides are resolution-independent in the same way: lit fraction stays roughly constant across 8x8, 16x16 and 48x48 (orig ~17-27%, port ~5.5-10% at all three), so the port matches the original's mapping onto the rig — it is only the leg weight that is wrong, not the scaling rule.",
+    "Both sides are fps-invariant (time-based, not frame-stepped): centroid x at t=1..19 s is essentially identical at --fps 10 and --fps 40 on both sides (e.g. orig 13.3/12.0/8.9/4.6 vs 13.8/12.2/9.2/4.9; port 0.0/1.6/4.3/8.3 vs 0.0/1.7/4.4/8.2). No frame-rate coupling divergence.",
+    "Findings hold at seeds 7 and 1234 as well as the default seed 1: the original still shows a full green-tipped spider, the port still shows a red body with detached yellow/orange specks.",
+    "zeroMotionFrames is high on both (baseline: 33/120 orig, 41/120 port), i.e. both re-pose the legs at a sub-frame-rate cadence — not a divergence."
+  ],
+  "dials": [],
+  "feedback": [
+    "Thicken the legs. The original draws each of the eight legs as a tapered wedge several pixels wide near the body narrowing toward the tip; the port draws a 1-px line. Target the original's lit area: at 48x48 the original lights 16-27% of the grid at peak versus the port's 5.5-10%, and on the default 16x16 rig 40-70 lit pixels versus the port's 21-30. Right now the port's legs are so thin they break into isolated single pixels on the 16x16 rig (5-10 disconnected components per frame versus the original's single blob) — the fix must keep the legs contiguous with the body at 16x16, which is the pattern's own rig.",
+    "Extend the leg color ramp into green. The original's gradient runs red body -> orange -> yellow -> saturated green at the tips (pure values like 0,255,19 appear); the port stops at yellow and never emits green (green in 1 of 37 lit frames versus 32 of 45 for the original). Push the far end of the per-leg gradient past yellow into green rather than clamping there.",
+    "Raise overall output ~4x. The original averages meanBrightness ~10-12 over 60-240 s windows; the port averages ~2.3-3.3. Most of that comes back with the thicker legs, but the port's lit pixels are also individually dimmer (mean lit value ~135-145 versus the original's ~190-198), so the body/leg intensity envelope needs lifting too.",
+    "Grow the figure ~25%. The port's spider reaches only ~0.8x the original's radius (16x16 peak extent 4.1-5.6 px versus 5.6-7.6 px; 48x48 15.5-21.2 versus 19.6-24.6).",
+    "Shorten the pause between traverses and let it vary. The original's crawl cycle is ~9 s and irregular (traverse starts at 2,10,20,28,37,46,55 s), with ~2.5-3 s fully dark between crawls; the port's is a rigid 10 s (starts at 2,12,22,32,42,52 s) with a ~4-4.5 s dark gap. The crawl speed itself is already right (~2.7 px/s on both), so the correction belongs in the inter-crawl dwell, not the walking speed.",
+    "Do not change: crawl speed, diagonal walk, the eight-leg count and radial arrangement, the per-frame leg wiggle, the random per-traverse direction, resolution independence, and fps invariance all already match the original."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "regime-crawl",
+    "regime-gap",
+    "dump-mid",
+    "dump-geom",
+    "dump-track",
+    "grid48",
+    "grid8",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

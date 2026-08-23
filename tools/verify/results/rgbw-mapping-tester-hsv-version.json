@@ -1,0 +1,41 @@
+{
+  "slug": "rgbw-mapping-tester-hsv-version",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same four-phase whole-strip R->G->B->white test cycle on both sides, but the port runs each phase 1.3107 s against the original's 1.6384 s (25% too fast) and uses mathematically pure green/blue where the original's hues sit a hair off pure.",
+  "observations": [
+    "Both sides are a solid, spatially uniform whole-rig colour that hard-steps through a fixed 4-phase cycle: red -> green -> blue -> mid-grey/white. No gradient, no per-pixel structure, no fades: every transition is a single-frame jump (motion max 168 orig / 170 port on a 60 px strip; every other frame posts motion 0).",
+    "TIMING (the headline defect): original phase duration 1.6384 s, full cycle 6.5536 s. Measured transitions in a 30 s / 20 fps run: 1.60, 3.25, 4.90, 6.55, 8.15, 9.80, 11.45, 13.10 s (0.05 s = one frame of quantisation). Port: 1.30, 2.60, 3.90, 5.20, 6.55, 7.85, 9.15, 10.45 s -> phase 1.31072 s, cycle 5.24288 s. Ratio is exactly 1.25 (orig cycle / port cycle = 6.5536 / 5.24288).",
+    "Confirmed over 400 s at 5 fps: original made 244 colour transitions (400/244 = 1.639 s per phase), port made 305 (400/305 = 1.311 s per phase) -- ratio 305/244 = 1.250. The error is a constant rate factor, not a drift.",
+    "COLOUR: exact per-pixel dumps. Red phase identical on both: (255,0,0). Green phase orig (5,255,0) vs port (0,255,0). Blue phase orig (0,10,255) vs port (0,0,255). White/grey phase identical on both: (127,127,127). The original's green/blue carry a small leak in one other channel (2% and 4% of full scale) that the port does not reproduce -- consistent with the original stepping hue in truncated decimals rather than exact thirds. Visually imperceptible on hardware; noted for completeness.",
+    "The white/4th phase is a half-brightness neutral (127,127,127) on BOTH sides, not full white -- the port got this right.",
+    "Phase ORDER and phase COUNT match exactly (4 phases, R,G,B,W, in that order, both starting on red at t=0).",
+    "Both sides are fps-INVARIANT (time-based, not frame-stepped): rendering the same 14 s window at 10, 20 and 40 fps gives the same transition times on each side (orig 1.60/1.63, 3.20/3.27, 4.90; port 1.30, 2.60, 3.90/3.92). No frame-rate coupling on either side.",
+    "STEADY STATE is healthy on both. A --skip 120 --seconds 20 --fps 20 window shows both still cycling at their own established rates (orig transitions 121.20, 122.80, 124.45, 126.10 s; port 120.55, 121.85, 123.15, 124.45 s), brightnessTrend 'steady' on both, no runtime errors, no decay, no freeze.",
+    "meanBrightness range is identical on both sides (min 85 = one channel at 255, max 127 = the neutral phase); survey averages orig 96.6 vs port 95.2, the small gap being purely the different fraction of the window each side spends in each phase.",
+    "Geometry-independent on both sides: re-rendered on --rig grid --grid 8x8, every pixel of every dumped frame is the same single colour on both sides, with the same per-side colours and the same timing offset. Seed-independent too (seed 1234 dumps byte-identical to seed 1).",
+    "No super-cycle or second regime exists: over 400 s each side emits exactly 4 distinct RGB values and nothing else, so the 6 s baseline window is representative once the phase timing is known.",
+    "CONTROL SURFACE: both sides expose zero settable controls (meta.json controls: [] on orig and port; --probe-controls reports '(no settable controls)' for both). No control-surface mismatch."
+  ],
+  "dials": [],
+  "feedback": [
+    "Fix the phase rate: the port advances the R/G/B/W cycle 1.25x too fast. Each phase should last 1.6384 s (full cycle 6.5536 s) as the original does; the port currently holds each phase 1.31072 s (full cycle 5.24288 s). The 1.25 factor and the port's cycle length of exactly 5.24288 s point at a time-base constant that is 0.08 where the original's is 0.1 -- i.e. the port's cycle is time(0.08) split four ways instead of time(0.1) split four ways. Changing that single constant should make the timing exact.",
+    "Optional colour nitpick (cosmetic, do not let it delay the timing fix): the original's green phase is (5,255,0) and its blue phase is (0,10,255), i.e. hues of 0.33 and 0.66 rather than exact 1/3 and 2/3. The port emits pure (0,255,0) and (0,0,255). If byte-exactness with the original is wanted, drive the HSV hue from the two-decimal values 0.33 / 0.66; otherwise leave it, it is a 2-4% leak in a single channel and invisible on LEDs.",
+    "Everything else already matches and needs no work: phase order, phase count, the half-brightness (127,127,127) neutral phase, the hard single-frame transitions, whole-rig uniformity, time-based (fps-invariant) stepping, and steady-state stability past t=140 s.",
+    "Note for the sweep: the sibling non-HSV pair (rgbw-mapping-tester) has the SAME class of defect but in the opposite direction (2.18 s per phase, too slow) -- these two ports are drifting from the original's shared 1.6384 s phase in different ways, so fix them together and check both against the same 1.6384 s / 6.5536 s reference."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-400",
+    "probe",
+    "timing30",
+    "dump-phases",
+    "fps10",
+    "fps40",
+    "late-skip120",
+    "grid8-recheck",
+    "seed1234"
+  ]
+}

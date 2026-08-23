@@ -1,0 +1,119 @@
+{
+  "slug": "glittering-jewels",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — randomly placed, position-static purple 'jewels' that glow in and fade out on a black strip, with a per-jewel rainbow mode — but the port's glows are about twice as wide, its jewels turn over about 1.8x faster, it renders ~1.5-1.9x brighter, and its control surface is a dial short with an inverted rainbow polarity.",
+  "observations": [
+    "Core mechanism matches: on both sides jewels appear at FIXED pixel positions and fade in/out in place, with no translation along the strip. Tracked peak indices over 3 s at 0.25 s spacing (label track, default dials): orig peaks parked at px 3/17-18/20/25/27/31/34/49/55/57 and port at px 7/19/21/27/40-41/45/48/54, each rising and falling without moving.",
+    "Glow width is the biggest divergence. At matched Width settings (label width-0/0.5/1, 60 px strip, mean FWHM of resolvable peaks over 4 dumped frames): Width=0 orig 1.3 px vs port 1.6 px; Width=0.5 orig 6.6 px vs port 16.1 px; Width=1 orig 18.1 px vs port 30.4 px. Untouched defaults show the same thing — orig per-pixel profiles are ~3-4 px FWHM bumps (e.g. 18,57,159,255,130,44,14 at px 0-6), port's are ~14 px (25,50,81,139,184,216,234,238,227,202,220,242,252,248,232,203,162,107,63,39,12 spanning px 9-29).",
+    "Turnover rate: temporal autocorrelation of per-pixel brightness (60 dumps at 0.2 s spacing, 60 px strip) decays to 0.5 at ~1.14 s on the original vs ~0.62 s on the port at untouched defaults (label life-def), and ~0.84 s vs ~0.50 s with Speed=0.5 on both (label life-mid). The port churns roughly 1.8x too fast at every matched setting.",
+    "Brightness: port renders consistently brighter — meanBrightness 33.4 (orig) vs 45.9 (port) untouched over 6 s; 22 vs 43 with the colour picker pinned to the same hue and JewelCount=0.5 (label pick-*). motion 1.3 vs 3.0 untouched.",
+    "Jewel density response matches well. With Width=0 so peaks stay resolvable (label jewels-*), mean simultaneous peaks/frame across JewelCount 0/0.25/0.5/0.75/1: orig 0.0 / 2.4 / 4.4 / 7.2 / 9.2, port 1.0 / 3.6 / 5.6 / 7.4 / 10.0. Only real gap is at the bottom of the range: the original goes fully dark at count 0, the port always keeps ~1 jewel alive.",
+    "Untouched defaults differ in density too: the original shows 6-9 simultaneous jewels in the 6 s baseline waterfall, the port 2-5 (partly masked by the port's wider glows merging).",
+    "Hue: the original gives each jewel a slightly different hue — measured 268-281 deg across jewels in one frame, mean ~273 deg (violet), saturation 90-92%. The port paints every jewel the identical hue 281 deg (magenta-leaning) at saturation 85-88%. Net effect: the original reads blue-violet with subtle per-jewel colour variation, the port reads flat magenta.",
+    "Control surface mismatch. Original exposes 7 controls: hsvPickerUniformColor, sliderSpeed, sliderGlowWidth, sliderSparkle, sliderJewelCount, sliderColorMode, sliderDayChange. Port exposes 6: sliderSpeed, sliderWidth, sliderSparkle, sliderJewels, toggleRainbow, hsvPickerColor. sliderDayChange has NO port counterpart; sliderColorMode (slider) became toggleRainbow (a different kind); and every shared dial was renamed (GlowWidth->Width, JewelCount->Jewels, UniformColor->Color).",
+    "Sparkle renders as a different KIND of glitter. Original Sparkle=1 adds fine per-pixel brightness grain inside each jewel at unchanged hue (dumped hue stays 268-281 deg everywhere). Port Sparkle=1 adds discrete bright dots that also shift hue, e.g. 281 -> 300-310 deg with V spiking to 236-255 (label sparkle-1, sparkle-hi-dump) — visually pink speckles sitting on the purple blobs rather than the original's twinkling texture.",
+    "Speed=0 is not equally still: the original freezes completely (motion 0, dead-vertical bars in the 30 s waterfall), while the port keeps slowly breathing — brightness waves along the streaks plus sparkle dots (motion 1). At Speed=1 orig motion 9, port motion 27.",
+    "No mode rotation or long-period drift on either side. Surveys at 60 s / 5 fps and 300 s / 2 fps show one stationary regime throughout on both, so there is no hidden regime the short windows missed. brightnessTrend steady on both at every window length tried, up to 600 s.",
+    "Seeds 1, 7 and 1234 all reproduce the same character on both sides (orig mean 33-38, port 40-46), so none of the above is a one-seed fluke."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed (both)",
+      "origEffect": "Sets jewel turnover rate. 0 = completely frozen (motion 0, static vertical bars over 30 s); 0.5 = autocorrelation half-time ~0.84 s; 1 = fast churn, motion 9.",
+      "portEffect": "Same direction and role, but consistently ~1.8x too fast: 0.5 gives half-time ~0.50 s, 1 gives motion 27. At 0 the port is not fully static — it still shows slow brightness waves and sparkle dots.",
+      "matches": false
+    },
+    {
+      "name": "sliderGlowWidth (orig) / sliderWidth (port)",
+      "origEffect": "Widens each jewel's glow: FWHM 1.3 px at 0, 6.6 px at 0.5, 18.1 px at 1.",
+      "portEffect": "Same direction, but roughly double the width above the bottom of the range: 1.6 px at 0, 16.1 px at 0.5, 30.4 px at 1.",
+      "matches": false
+    },
+    {
+      "name": "sliderJewelCount (orig) / sliderJewels (port)",
+      "origEffect": "Number of simultaneous jewels: 0.0 / 2.4 / 4.4 / 7.2 / 9.2 peaks per frame at 0 / 0.25 / 0.5 / 0.75 / 1 (Width pinned to 0).",
+      "portEffect": "1.0 / 3.6 / 5.6 / 7.4 / 10.0 over the same sweep — same curve, offset high by about one jewel, and never reaching the original's fully-dark state at 0.",
+      "matches": true
+    },
+    {
+      "name": "sliderSparkle (both)",
+      "origEffect": "Adds fine per-pixel brightness grain inside the jewels; hue unchanged. Mean brightness 28 -> 33 from 0 to 1 over a 60 s window.",
+      "portEffect": "Live (the probe's 'NO' was a false inert; a 60 s manual sweep at JewelCount 0.5 shows it clearly), but the glitter is discrete pink dots that shift hue to 300-310 deg rather than uncoloured grain. Mean brightness 60 -> 62.",
+      "matches": false
+    },
+    {
+      "name": "sliderColorMode (orig) / toggleRainbow (port)",
+      "origEffect": "Effectively binary with a threshold near 0.5: 0 and 0.25 give per-jewel random hues across the full spectrum (rainbow), 0.5 / 0.75 / 1 give the uniform picked colour.",
+      "portEffect": "Reaches the same two looks, but as a toggle and with INVERTED polarity: 0 = uniform colour, 0.25 and above = rainbow. Different control kind (toggle vs slider).",
+      "matches": false
+    },
+    {
+      "name": "hsvPickerUniformColor (orig) / hsvPickerColor (port)",
+      "origEffect": "Sets the uniform jewel hue exactly; h=0/0.33/0.66 gives mean RGB 53/8/5, 5/53/7, 6/6/53.",
+      "portEffect": "Tracks identically: 99/16/15, 16/99/16, 15/17/99 for the same hues (same ratios, just the port's ~1.85x overall brightness).",
+      "matches": true
+    },
+    {
+      "name": "sliderDayChange (orig only)",
+      "origEffect": "Shifts the uniform jewel hue — R/B ratio 0.58 (violet) at 0 vs 0.97 (magenta) at 1, held constant across a 600 s window at 1 fps; no time-varying cycle observed. Effect only appears when sliderColorMode is also set (a 120 s sweep with only DayChange and JewelCount set produced byte-identical stats at 0, 0.5 and 1).",
+      "portEffect": "Control absent from the port entirely.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Halve the glow width. At matched Width settings the port's jewels are about twice as wide as the original's: target FWHM ~6.5 px (not 16 px) at Width=0.5 and ~18 px (not 30 px) at Width=1 on a 60 px strip. Width=0 already matches at ~1.5 px, so the scale factor, not the floor, is wrong.",
+    "Slow the turnover by ~1.8x. Per-pixel brightness autocorrelation should decay to 0.5 in ~1.14 s at untouched defaults and ~0.84 s at Speed=0.5; the port currently hits 0.5 at 0.62 s and 0.50 s.",
+    "Make Speed=0 a true freeze. The original goes completely static (frame-to-frame motion 0 over 30 s); the port keeps breathing and sparkling.",
+    "Overall output is ~1.5-1.9x too bright (meanBrightness 46 vs 33 untouched; 43 vs 22 with the picker pinned). Some of that follows from the over-wide glows, but check the peak/gamma scaling too.",
+    "Give each jewel a small independent hue offset instead of one flat hue. The original's jewels spread over ~268-281 deg (mean ~273, violet) in uniform mode; the port paints all of them at exactly 281 deg. Also nudge the default hue bluer and raise saturation from ~85% to ~90%.",
+    "Change the sparkle character: the original's Sparkle adds fine per-pixel BRIGHTNESS grain inside a jewel at unchanged hue, while the port adds discrete dots that jump to 300-310 deg (pink). Drop the hue shift and make the grain finer and per-pixel.",
+    "Add the missing DayChange dial. On the original it shifts the uniform jewel hue from violet (R/B ~0.58) at 0 to magenta (R/B ~0.97) at 1, on top of whatever the colour picker selects, and it only takes effect once ColorMode is set.",
+    "Flip the rainbow polarity and consider restoring it as a slider. Original ColorMode: low (0-0.25) = per-jewel rainbow, high (>=0.5) = uniform colour. Port toggleRainbow is the opposite way round, so a user carrying settings across gets the wrong mode.",
+    "At JewelCount=0 the original goes fully dark; the port still keeps about one jewel alive. Let the bottom of the range reach zero.",
+    "Dial names diverge from the original's (GlowWidth/JewelCount/UniformColor/ColorMode vs Width/Jewels/Color/Rainbow). Worth aligning if the port is meant to be a drop-in."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-300",
+    "probe",
+    "dump-def",
+    "track",
+    "life-def",
+    "life-mid",
+    "dial-mid",
+    "width-0",
+    "width-0.5",
+    "width-1",
+    "jewels-0",
+    "jewels-0.25",
+    "jewels-0.5",
+    "jewels-0.75",
+    "jewels-1",
+    "speed-0",
+    "speed-0.5",
+    "speed-1",
+    "sparkle-0",
+    "sparkle-1",
+    "sparkle-hi-dump",
+    "cmode-0",
+    "cmode-0.25",
+    "cmode-0.5",
+    "cmode-0.75",
+    "cmode-1",
+    "pick-0.0",
+    "pick-0.33",
+    "pick-0.66",
+    "day-0",
+    "day-0.5",
+    "day-1",
+    "dayrb-0",
+    "dayrb-1",
+    "daylong-0",
+    "daylong-1",
+    "seed-7",
+    "seed-1234"
+  ]
+}

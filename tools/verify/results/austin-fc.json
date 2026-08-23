@@ -1,0 +1,53 @@
+{
+  "slug": "austin-fc",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same pattern — single-hue green comets with identical trail decay criss-crossing a 60 px strip — but the port's green is noticeably more emerald (hue 0.359 vs 0.300), its runners travel ~25-35% faster, and their paths curve more than the original's near-straight lines.",
+  "observations": [
+    "Both sides render alive and error-free on the default rig (strip, 60 px) with no compile or runtime errors, across 240 s at 10 fps and 240 s at 20 fps; neither side has any settable controls (probe: 'no settable controls' on both).",
+    "Shared structure: ~25-34 comet-like 'runners' per 12 s window travel along the strip leaving a trail that decays in place, producing a diamond/lattice weave in the waterfall with a fine comb texture (alternating bright/dim pixels) along each trail. Both sides show it identically.",
+    "Trail decay is a near-exact match: median per-frame decay of a decaying pixel at 20 fps is 0.809 (orig) vs 0.810 (port), p25-p75 0.805-0.814 on both.",
+    "Density is close on the default rig: mean lit pixels per frame 38.8 (orig) vs 35.0 (port); pixels >= 60/255 8.3 vs 6.7. Mean brightness over 240 s @20 fps: 8.9 vs 7.9.",
+    "COLOR: each side uses ONE fixed hue with only value varying, and the two hues differ. Over 800+ bright pixels sampled, the original's ratio is R/G = 0.198, B/G = 0.000 (hue ~108 deg = 0.300), a yellow-leaning green; the port's is R/G = 0.000, B/G = 0.157 (hue ~129 deg = 0.359), an emerald/spring green. Confirmed globally: over 240 s the original's meanB is 0 in every frame and the port's meanR is 0 in every frame.",
+    "SPEED: tracking bright heads frame-to-frame (0.05 s dumps, default rig) the port is consistently faster. Median |velocity| per window — orig 6.9 / 8.0 / 8.3 / 7.0 / 8.1 / 6.7 px/s; port 9.3 / 9.3 / 10.5 / 8.8 / 10.9 / 10.0 px/s (windows at t=40, 80, 140, 200 on seed 1 and t=40, 120 on seed 7). That is roughly 25-35% too fast, stable across both seeds.",
+    "TRAJECTORY SHAPE: the original's runners hold near-constant velocity (median linear-fit residual 0.63-0.87 px over tracks of >=16 frames; median velocity change across a track 2.2-4.1 px/s), while the port's visibly accelerate/curve (residual 0.92-1.72 px; velocity change 5.7-7.5 px/s). In the waterfalls the original reads as straight diagonals with sharp kinks, the port as smooth arcs.",
+    "Direction is bidirectional on BOTH sides with a global bias that flips over time (e.g. at t=80 both were left-biased, at t=200 both right-biased, at t=140 they were opposite) — this is RNG divergence, not a port defect.",
+    "FRAME-RATE ROBUSTNESS: both sides are frame-rate-coupled (mean brightness rises with fps on both: orig 4.4/6/8.9/14 and port 5.4/6/7.9/12 at 5/10/20/40 fps), but the port degrades far harder at low rates. At 5 fps the port goes completely black AND frozen from t=17.6 s to t=27 s (48 zero-motion frames in 300); at 10 fps it has dead stretches of 3.3 s, 2.0 s, 2.9 s and 1.4 s (109 zero-motion frames in 2400). The original never goes dark for more than 0.3 s and never freezes at any rate. At the judged 20 fps the port is healthy (min meanBrightness 1, 36 zero-motion frames in 4800), so this is a secondary robustness gap, not what a viewer sees at normal rates.",
+    "Off-default-rig notes (not headline claims): on a 30 px strip the port is much brighter than the original (mean 19 vs 11) while on 60 px and 100 px they are comparable (8 vs 9 and 9 vs 7), suggesting spawn density scales differently with pixel count. On a 2D grid rig (8x8, 64 px) the ORIGINAL throws 'array index out of bounds' at frame 0 while the port renders fine — the original still works on 30 px and 100 px strips, so this is a 2D-rig artefact of the original, not a port bug.",
+    "No mode/regime structure found: a 240 s survey at 10 fps and a 240 s run at 20 fps show steady stochastic behaviour on both sides with no banding, palette walk or long-period cycle; brightnessTrend is 'steady' on both over 240 s @20 fps.",
+    "An apparent left-right mirror symmetry in the port's first ~2 s turned out to be an illusion — a numeric symmetry score over t=0.5-35 s gives 0.03-0.37 on the original and 0.07-0.34 on the port, i.e. no difference."
+  ],
+  "dials": [],
+  "feedback": [
+    "Shift the port's green toward yellow: the original renders every lit pixel at R:G:B = 0.198:1:0 (hue 0.300 / 108 deg); the port renders 0:1:0.157 (hue 0.359 / 129 deg). Drop the blue component and add roughly a fifth of the green's value as red — i.e. move the fixed hue down by ~0.06.",
+    "Slow the runners by about 25-30%: measured head speed is a median of ~7.5 px/s on a 60 px strip for the original versus ~9.5 px/s for the port, consistent over six windows and two seeds.",
+    "Make the runners travel in straighter lines. The original's heads hold near-constant velocity (linear fit residual ~0.7 px over a 0.8 s track, velocity change ~3 px/s across a track); the port's velocity changes ~6-7 px/s across the same span and the waterfall shows smooth arcs where the original shows straight diagonals. Whatever drives per-runner velocity should be set once and held, not continuously re-modulated.",
+    "The trail decay is already exactly right (0.81 per frame at 20 fps on both) and overall density is close — do not touch those.",
+    "Lower priority: the port stops emitting entirely at low frame rates (fully black and frozen for 2-3 s stretches at 10 fps, and for ~10 s at 5 fps) while the original keeps running at every rate tested. Whatever gates new runner spawns appears to be per-frame-probability based in a way that starves at long frame deltas; the original degrades gracefully."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "win0-30",
+    "win30-60",
+    "long20",
+    "mid12",
+    "fps10",
+    "fps40",
+    "dump-a",
+    "dump-track",
+    "dump-sym",
+    "dump-vel",
+    "dump-vel80",
+    "dump-vel140",
+    "dump-vel200",
+    "seed7-40",
+    "seed7-120",
+    "grid8",
+    "px100",
+    "px30"
+  ]
+}

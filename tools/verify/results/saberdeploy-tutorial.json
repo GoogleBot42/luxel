@@ -1,0 +1,63 @@
+{
+  "slug": "saberdeploy-tutorial",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same pattern in structure and colour (a hard-edged pure-red bar growing from pixel 0 and holding full), but the port's toggle polarity is INVERTED, its deploy is 10-14.5x too fast across the whole Speed range, and it advances on elapsed time where the original advances a fixed amount per rendered frame.",
+  "observations": [
+    "Control surface mismatch: original exposes toggle `toggleDeployOrRetract` (label \"DeployOrRetract\") + slider `sliderSpeed` (label \"Speed\"); port exposes toggle `toggleDeploy` (label \"Deploy\") + `sliderSpeed`. The toggle NAME and LABEL both differ, so a shared `--controls-*` string silently no-ops on one side.",
+    "Toggle polarity is inverted. orig toggle=1 -> saber deploys (run `dep1`: orig meanBrightness 68); orig toggle=0 -> all pixels 0,0,0 for the whole 12 s window. port toggle=1 -> all pixels 0,0,0 (max meanR 0 over 240 frames); port toggle=0 -> deploys (run `dep0`: port mean 83). Verified in both directions with 12 s / 20 fps runs.",
+    "Untouched defaults diverge as a consequence: original renders pure black for the entire 6 s baseline and the entire 60 s survey (meanBrightness 0, zeroMotionFrames 120/120) i.e. it boots RETRACTED; the port boots DEPLOYING and reaches full red in ~14 frames (baseline meanR first 7 -> last 255, brightnessTrend `rising`).",
+    "Structure and colour are pixel-identical where both are deployed. `--dump` at 0.5/2/4/8 s (orig sliderSpeed=1, port sliderSpeed=0) shows both sides drawing a solid run of exactly 255,0,0 from index 0 to the tip and exactly 0,0,0 beyond it. No gradient, no bright tip, no flicker, no other channel on either side (meanG = meanB = 0 on both, every run).",
+    "Steady state matches. After full extension both sides hold a solid 60-px 255,0,0 bar indefinitely: run `late` (--skip 30 --seconds 20) has meanR min = max = 255 on BOTH sides; run `survey-dep` (120 s at 5 fps) shows solid red to the end on both. No retract cycle, no re-trigger, no super-cycle — the pattern has exactly two regimes (extending, then held).",
+    "Deploy RATE is the headline divergence. Linear fit of tip position (meanR/4.25 px) over the extending regime, 20 fps, toggle set to deploy on each side: sliderSpeed 0 -> orig 0.059 px/frame vs port 0.600 (10.2x); 0.25 -> 0.208 vs 2.852 (13.7x); 0.5 -> 0.358 vs 5.040 (14.1x); 0.75 -> 0.507 vs 7.317 (14.4x); 1 -> 0.659 vs 9.546 (14.5x). Both sides are linear in the slider; the port's line is ~14.5x steeper with a ~10x larger intercept.",
+    "Put another way: the port's SLOWEST setting (sliderSpeed=0, 0.600 px/frame) is essentially the original's FASTEST setting (sliderSpeed=1, 0.659 px/frame). The original's entire dial range is unreachable on the port.",
+    "Time to full extension at 20 fps, sliderSpeed=0: orig 1006 frames / 50.3 s (run `spd0-long`, 90 s window) vs port 98 frames / 4.9 s. At sliderSpeed=0.5: orig 164 frames / 8.2 s vs port 11 frames / 0.55 s.",
+    "Untouched internal default speeds also differ: orig untouched-but-deployed (toggle=1 only) runs 0.612 px/frame, which sits near its sliderSpeed=0.92; port untouched runs 4.199 px/frame, which sits near its own sliderSpeed=0.40.",
+    "FRAME-RATE COUPLING MISMATCH (real port bug). Rendering sliderSpeed=0.5 at 10/20/40 fps: the ORIGINAL fills at frame 164 at both 20 fps and 40 fps (i.e. 8.2 s vs 4.1 s) and does not fill within 120 frames at 10 fps -> fixed FRAMES, frame-stepped. The PORT fills at frame 5 (0.50 s) at 10 fps, frame 11 (0.55 s) at 20 fps, frame 23 (0.575 s) at 40 fps -> fixed SECONDS, time-based. Corroborated by the 5 fps survey: the original needs ~102 frames there too (survey-dep, toggle only), matching its ~98 frames at 20 fps.",
+    "Deterministic and seed-independent on both sides: seed 1234 produced byte-identical meanR series to seed 1 on both orig and port (run `seed1234`).",
+    "Motion stats are near-useless here (both sides post motion avg 0-1, zeroMotionFrames 106+/120) because a single-pixel tip advance on a 60 px rig rounds to ~0; all rate claims above come from meanR/`--dump` tip position, not from `motion`."
+  ],
+  "dials": [
+    {
+      "name": "toggleDeployOrRetract (orig) / toggleDeploy (port)",
+      "origEffect": "1 = deploy (bar extends from pixel 0 to 59 and holds); 0 = fully retracted, strip stays 0,0,0 forever. Probe: responsive, maxDelta 34.99 / maxDeltaLit 85.00.",
+      "portEffect": "INVERTED: 0 = deploy; 1 = fully retracted (0,0,0 forever). Probe: responsive, maxDelta 78.04 / maxDeltaLit 85.00. Control is also renamed (toggleDeploy, label \"Deploy\") so the original's name does not bind.",
+      "matches": false
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Linear control of extension rate, 0.059 px/frame at 0 up to 0.659 px/frame at 1 (20 fps) — an ~11x range, full extension taking 50.3 s down to 5.0 s of simulated time. Probed INERT (maxDelta 0.00) only because the probe ran with the toggle untouched, i.e. retracted/black; a manual sweep with toggle=1 over 12-90 s windows shows it is fully live.",
+      "portEffect": "Same shape (linear, monotonically increasing) but ~14.5x steeper: 0.600 px/frame at 0 up to 9.546 px/frame at 1, full extension in 4.9 s down to 0.3 s. Probe: responsive, maxDelta 43.05 / maxDeltaLit 46.89.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Invert the toggle. The original deploys when the toggle is TRUE and stays fully dark when FALSE; the port does the opposite. Fixing this also fixes the untouched-default divergence (original boots retracted/black, port boots deploying).",
+    "Rename the port's toggle to match the original: name `toggleDeployOrRetract`, label \"DeployOrRetract\" (port currently has `toggleDeploy` / \"Deploy\"). As it stands the same `--controls` string does not bind on both sides.",
+    "Slow the extension by roughly 14.5x. Target rates at 20 fps, measured on the original: sliderSpeed 0 -> 0.059 px/frame, 0.25 -> 0.208, 0.5 -> 0.358, 0.75 -> 0.507, 1 -> 0.659. The port currently runs 0.600 / 2.852 / 5.040 / 7.317 / 9.546. The port's slowest setting equals the original's fastest, so the whole mapping needs re-scaling, not a tweak at one end.",
+    "The port's intercept is also ~10x high: the original's rate at sliderSpeed=0 is 0.059 px/frame (50 s to fill 60 px), the port's is 0.600 (4.9 s). Reproduce rate = 0.059 + 0.60*speed px per RENDER CALL.",
+    "Make the advance frame-stepped, not time-based. The original moves a fixed amount per render call (fills in the same ~164 frames at 20 and 40 fps); the port moves a fixed amount per elapsed second (fills in ~0.52 s at 10/20/40 fps). Drop the delta-time multiplier from the extension step.",
+    "Also match the internal (control-function-never-called) default speed: the original's untouched-but-deployed rate is 0.612 px/frame, equivalent to sliderSpeed ~= 0.92; the port's is 4.199 px/frame, equivalent to its own sliderSpeed ~= 0.40. After the rescale, set the default speed global near the top of the range, not the middle.",
+    "Nothing else needs changing: the drawn bar itself is already byte-exact — solid 255,0,0 from index 0 to the tip, hard edge, 0,0,0 beyond, holds full indefinitely, no randomness, no second regime."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dep1",
+    "dep0",
+    "survey-dep",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "dumpmid",
+    "fps10",
+    "fps40",
+    "late",
+    "seed1234",
+    "spd0-long"
+  ]
+}

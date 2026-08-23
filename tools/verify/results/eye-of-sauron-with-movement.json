@@ -1,0 +1,81 @@
+{
+  "slug": "eye-of-sauron-with-movement",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same eye silhouette, fire-halo palette and darting behaviour, but the port never reaches white (core is amber, 0% saturated pixels vs the original's ~25%), draws its interior as concentric bullseye rings instead of mottled filaments, and sits almost frozen between darts (per-frame diff 0.8 vs the original's 6.8).",
+  "observations": [
+    "Both sides alive, no compile/runtime errors, no sensor binding (wantsSensors false on both), one continuous regime with no mode rotation across a 240 s / 2 fps survey and a --skip 120 late window; neither side decays (brightnessTrend steady on both).",
+    "Silhouette matches almost exactly: at 48x48 with all dials at 0.5 the lit-pixel width per row runs 0,0,0,0,0,0,12,24,30,...,48,48,48,...,22,14,4,0 (orig) against 0,0,0,0,0,0,16,24,29,...,48,48,48,...,18,13,2,0 (port) - same wide-oval eye, same rows 6-42 extent, lit fraction 68.2% vs 67.1%.",
+    "Outer fire halo matches closely. Radial mean HSV at 48x48, r=17..24: orig h32 s0.77 v167 -> h3 s1.00 v39; port h30 s0.81 v151 -> h3 s1.00 v45. The amber-to-deep-red falloff and its radius are right.",
+    "Peak brightness is capped on the port. On the default 16x16 rig with dials at 0.5 the original hits 255/255/255 with 22-25% of pixels pure white on every frame dumped (t=1.5,1.55,2,6,9); the port's brightest pixel is exactly 247/241/213 on every one of those frames and 0.0% of pixels are white. Same at 48x48, and still true at the brightest dial setting tested (Dilation=0: orig peak 255/255/255, 25-27% white; port peak 247/241/213, 0%).",
+    "Mid-brightness hue differs. Original mid pixels are saturated yellow with zero blue (199/194/0, 192/177/0, 188/168/0); port mid pixels are orange-amber with a blue floor (199/163/19, 181/130/15, 172/116/13). Whole-window channel means, default rig: orig R111/G96/B72, port R98/G73/B48.",
+    "Interior structure diverges. At 48x48 with all dials 0.5 the original is a near-flat blown-white body (radial mean value 236-253 across r=7..14) with a small dark centre; the port modulates the same radii between 180 and 233, and the contact sheet shows those dips as clean concentric bullseye rings plus a bright sweeping arc. The rings survive at every dial setting except RadialDensity=0.",
+    "RadialDensity is what produces the port's rings. At RadialDensity=0 BOTH sides draw the same thing - dark radial spokes through a bright body - and the port looks correct. At 0.5 and 1 the original's radial term reads as fine mottled filament texture with no concentric banding, while the port's reads as an increasing count of hard concentric rings.",
+    "Continuous shimmer is missing on the port. In a quiet stretch (no dart event) at 48x48, mean per-channel frame-to-frame difference is 6.67 (max 233) on the original and 0.95 (max 48) on the port; over 0.5 s it is 21.6 vs 8.3. Confirmed on the default rig: 6.80 vs 0.81 between t=1.50 and t=1.55. The motion series shows the same: original floor 5-8 all window, port floor 1, with zeroMotionFrames 1 (orig) vs 7 (port) on the 6 s baseline.",
+    "Both sides do the 'movement' - discrete dart events that shift the whole texture, visible as horizontal discontinuities in the rhythm images and as decaying motion spikes. Counting motion>=10 groups over 12 s at 20 fps: ~8 on the original, ~11-12 on the port, so the port darts somewhat more often. The eye does not translate on either side; brightness centroid stays at ~23.3,23.5 of 48 on both.",
+    "Neither side is frame-rate coupled: rendering the same 12 s window at 10/20/40 fps halves mean per-frame motion on both sides (orig 11.6/7.2/4.0, port 5.0/2.9/1.3) while dart-event counts hold, so both are time-based.",
+    "Seed appears irrelevant: seed 1 and seed 1234 at 48x48 produced identical summary stats on both sides (orig mean 101 motion 6, port mean 80 motion 3).",
+    "Control-surface mismatch: the original exposes sliderDialation (label 'Dialation'); the port renames it sliderDilation (label 'Dilation'). Same kind and same role, but the name differs, so saved values and API calls against the original's name will not reach the port. The other three names match.",
+    "Untouched defaults show the same divergences as the dialed comparison (orig mean 93 / port 73 at 6 s, 20 fps), so nothing here is an artefact of leaving controls unset."
+  ],
+  "dials": [
+    {
+      "name": "sliderAngularDensity",
+      "origEffect": "0 = smooth white eye with a small blobby pupil and no spokes; 1 = a dense starburst of fine dark radial spikes across the whole eye.",
+      "portEffect": "Same direction but much weaker: 0 leaves a strong concentric bullseye that the original does not have; 1 produces a mottled dark speckle cluster at centre and some edge fringing rather than clean radial spikes.",
+      "matches": false
+    },
+    {
+      "name": "sliderRadialDensity",
+      "origEffect": "0 = sharp thin dark rays through a white body; raising it replaces them with progressively finer mottled filament texture, never concentric bands.",
+      "portEffect": "0 matches the original well (dark radial spokes); raising it produces an increasing number of hard concentric rings, which is the port's dominant visual signature at 0.5 and 1.",
+      "matches": false
+    },
+    {
+      "name": "sliderDialation (port: sliderDilation)",
+      "origEffect": "0 = tiny pupil, eye almost fully white (mean 101); 1 = pupil grows into a broad centred vertical dark bar (mean 80).",
+      "portEffect": "Same direction and larger swing (mean 88 -> 49), but at 1 the dark region is a lopsided off-centre crescent rather than a centred vertical bar.",
+      "matches": false
+    },
+    {
+      "name": "sliderSlitness",
+      "origEffect": "0 = pronounced dark radial spoke starburst, dimmer overall (mean 80); 1 = spokes collapse into a narrow slit, eye brighter (mean 98).",
+      "portEffect": "Same direction with a bigger swing (mean 57 -> 86); at 0 the port draws concentric rings and spirals with a scribbled dark centre instead of the original's radial starburst.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The port's brightest output is clamped at a fixed cream 247/241/213 and never reaches white. The original blows ~25% of the eye's area out to pure 255/255/255 at every dial setting including Dilation=0. Raise the port's overall gain so the eye's core clips to white; as it stands the port reads as a dim amber ring instead of a blazing eye.",
+    "Mid-brightness colour is too orange. The original's mid tones are saturated yellow with the blue channel at exactly 0 (199/194/0, 188/168/0); the port's carry a blue floor and much more red dominance (199/163/19, 172/116/13). Shift the mid-range hue toward yellow and drop the blue floor; the outer halo (hue ~30 falling to ~3, saturation rising to 1.0) is already correct and should not be touched.",
+    "The RadialDensity term renders as clean concentric bullseye rings on the port and as fine mottled filaments on the original. At RadialDensity=0 the two sides agree, so the angular/spoke machinery is right and only the radial term's shape is wrong - it should add high-frequency irregular texture, not a smooth low-frequency ring stack. The port's bright sweeping outer arc has no counterpart on the original either.",
+    "The port has almost no continuous animation. Between dart events the original's texture boils at a mean per-frame difference of ~6.7 (48x48) while the port's is ~0.95 - the port looks frozen and only twitches when it darts. Add per-frame turbulence to the iris texture so the eye seethes constantly, matching the original's motion floor of 5-8 at 20 fps rather than 1.",
+    "Dart cadence is close but slightly fast: ~11-12 events per 12 s on the port against ~8 on the original at 20 fps. Worth nudging down once the shimmer is fixed, but it is a minor issue next to the three above.",
+    "Rename the port's slider back to the original's spelling: the original exposes sliderDialation (label 'Dialation'), the port exposes sliderDilation (label 'Dilation'). The misspelling is in the original and the port should reproduce it so saved control values and API calls carry across.",
+    "Already correct and worth preserving: eye silhouette and size (lit fraction 68% vs 67%, identical row-width profile at 48x48), the outer fire-halo hue/saturation/value falloff, the discrete darting behaviour, resolution behaviour at 16x16 and 48x48, the direction of all four dials, and time-based (fps-invariant) evolution."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "grid48",
+    "dial-mid48",
+    "dump-mid48",
+    "dump-quiet",
+    "dump-default",
+    "ctl-AngularDensity-0",
+    "ctl-AngularDensity-1",
+    "ctl-RadialDensity-0",
+    "ctl-RadialDensity-1",
+    "ctl-Slitness-0",
+    "ctl-Slitness-1",
+    "ctl-Dilation-0",
+    "ctl-Dilation-1",
+    "dump-dil0",
+    "late",
+    "seed1234",
+    "fps10",
+    "fps40"
+  ]
+}

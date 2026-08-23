@@ -1,0 +1,47 @@
+{
+  "slug": "mapping-helper-single-and-10x",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides walk a white cursor along the strip with 10-pixel colour-coded groups, but the original lights ONLY the group the cursor is currently in while the port leaves every group it has passed lit (cumulative bar), and the port drops the original's per-sweep palette rotation, runs 17% slow, and gets the sweep-start full-strip flash colour/brightness wrong.",
+  "observations": [
+    "Rig: strip, 60 px. Neither side has any controls (probe: 'no settable controls' on both) — control surfaces match.",
+    "Both sides compile and run clean over 90 s (no compileError/runtimeError; brightnessTrend 'steady' on both in the 90 s run).",
+    "SHARED SKELETON: a single white (255,255,255) cursor pixel steps one pixel at a time from index 1 to 59, then the whole strip flashes one colour for exactly one step (the index-0 slot) and the sweep restarts. Pixels are grouped into fixed 10-px decades on both sides — confirmed on a 25 px rig too (--label px25: groups are 0-9, 10-19, 20-24 on BOTH sides), so the '10' is a literal pixel count, not a fraction of the strip, on both.",
+    "MAJOR STRUCTURAL DIVERGENCE — which decade is lit. Original: exactly ONE decade block is lit at a time, the one containing the cursor; every other pixel is exactly [0,0,0]. Example (--label dump1, t=10 s): orig = px0-29 black, px30-32 [0,0,66], px33 white, px34-39 [0,0,66], px40-59 black. Port at the same moment: px0-9 [50,0,0], px10-19 [0,50,0], px20-24 [0,0,76], px25 white, px26-29 [0,0,76], px30-59 black — i.e. every decade the cursor has already passed stays lit for the rest of the sweep, so the port ends each sweep with the entire strip lit. Verified at 14 sample times across a full cycle and again at every 1.5 s across 90 s (--label long90).",
+    "Brightness consequence: over a 90 s window meanBrightness avg is orig 8.3 vs port 16.0 (port ~1.9x brighter). The port's fill fraction ramps 1/6 -> 6/6 across a sweep; the original's holds at 1/6 the whole time.",
+    "CURSOR SPEED: original steps exactly one pixel per 0.300 s (measured by 0.05 s-spaced dumps at 20 fps, --label dense20: transitions at 0.25/0.55/0.85/1.15/1.45/1.75/2.05/2.35/2.65/2.95 s). Port steps one pixel per 0.350 s (transitions at 0.30/0.65/1.00/1.35/1.70/2.05/2.40/2.75 s). Port is 16.7% slow: full sweep 21.0 s vs 18.0 s.",
+    "Both sides are TIME-based, not frame-stepped: cursor position at t=2..11 s is identical at --fps 20 and --fps 40 on each side (orig 6,10,13,16,20,23,26,30,33,36; port 5,8,11,14,17,20,23,25,28,31). The 5 fps survey shows BOTH cycles at 24 s — that is frame-grid quantisation of the 0.30 s / 0.35 s tick to the 0.2 s frame (both round to 0.4 s), not a real divergence. No frame-rate-coupling bug on either side.",
+    "PALETTE ROTATION (original only). The original's decade colour comes from a counter that keeps advancing across sweeps, cycling red(50,0,0) -> green(0,50,0) -> blue(0,0,66) -> olive(50,38,0) -> magenta(50,0,50) with period 5, while a sweep contains 6 decades — so each sweep starts one colour further on and the whole thing has a 5-sweep / 90 s super-cycle. Measured decade colours per sweep: sweep1 = [black, red, green, blue, olive, magenta]; sweep2 = [red, green, blue, olive, magenta, red]; sweep3 = [green, blue, olive, magenta, red, green]; sweep4 = [blue, olive, magenta, red, green, blue]; sweep5 = [olive, magenta, red, green, blue, olive]. (Decade 0 of the very first sweep is pure black — the counter's initial state — and is never black again.)",
+    "The PORT has NO such rotation: decade colours are fixed as [red(50,0,0), green(0,50,0), blue(0,0,76), olive(50,38,0), violet(38,0,50), red(50,0,0)] and are byte-identical on every one of the 5 sweeps observed in 90 s (t=0, 21, 42, 63, 84). The port's whole animation repeats every 21 s; the original's takes 90 s to repeat.",
+    "PALETTE SHADES: red (50,0,0) and olive (50,38,0) match exactly. Blue differs: orig (0,0,66), port (0,0,76). The fifth colour differs: orig magenta (50,0,50), port violet (38,0,50). White cursor (255,255,255) matches.",
+    "SWEEP-START FLASH: original fills the whole strip with (50,0,76) — a bright blue-violet — for one 0.30 s tick; it is the brightest moment of the cycle (meanBrightness 42 against a cycle mean of 8.3, a ~5x spike, visible as a bright full-width band in the waterfall). Port fills the strip with (25,0,25) — a dim magenta — for one 0.35 s tick; at meanBrightness 17 it is DIMMER than the port's own end-of-sweep fully-filled state (26), so the sweep marker does not read as a flash at all.",
+    "Port's first decade (px0-9) is lit red from the first sweep onward and stays lit through every sweep; the original's px0-9 are black for all but the ~3 s the cursor spends in them. On a real mapping job this is the difference between 'which group of ten am I in' (original) and 'how far along am I' (port).",
+    "Waterfalls make it visually unambiguous: orig.png shows an isolated 10-px colour square stepping down the diagonal with black on both sides; port.png shows a filled staircase where every step persists to the bottom of the sweep (--label baseline, --label sweep2, --label survey)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Core fix: the port must light ONLY the decade containing the cursor, not every decade already passed. At any instant the original has exactly 10 pixels in the decade colour (the block containing the white cursor) and all other 50 pixels at exact [0,0,0]. The port currently accumulates, so it ends each sweep with the whole strip lit and averages ~1.9x the original's brightness.",
+    "Cursor step timing: original advances one pixel every 0.300 s exactly (60-px sweep = 18.0 s). Port advances every 0.350 s (sweep = 21.0 s). Speed up by ~17% so the sweep lands on 18.0 s. Both sides are already time-based (fps-invariant at 20/40 fps), so only the constant is wrong.",
+    "Restore the cross-sweep palette rotation. The original's decade colour index increments once per DECADE and never resets at the sweep boundary, over a 5-colour palette (red, green, blue, olive, magenta). Because a sweep holds 6 decades, each new sweep begins one palette step later, producing a 5-sweep / 90 s super-cycle: sweep1 [-, red, green, blue, olive, magenta], sweep2 [red, green, blue, olive, magenta, red], sweep3 [green, blue, olive, magenta, red, green], and so on. The port restarts the palette at red every sweep, so it repeats every 21 s and decade 0 is always red.",
+    "Palette values: blue should be (0,0,66), not (0,0,76); the fifth colour should be magenta (50,0,50), not violet (38,0,50). Red (50,0,0) and olive (50,38,0) are already exact, as is the white cursor (255,255,255).",
+    "Sweep-start flash: the original paints the entire strip (50,0,76) for one cursor tick and it is the cycle's brightest event (mean 42 vs cycle mean 8.3). The port paints (25,0,25), which is dimmer than its own mid-sweep state and reads as nothing. Both the colour and its role as the brightest frame need fixing.",
+    "Decade grouping itself is correct — both sides use fixed 10-px groups with a short final group on a non-multiple-of-10 strip (verified at --pixels 25) — so leave that alone.",
+    "Control surface is correct: neither side exposes any control; do not add one."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump1",
+    "dumpwrap",
+    "fps10",
+    "fps20",
+    "fps40",
+    "dense20",
+    "long90",
+    "sweep2",
+    "sweep3",
+    "px25"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "slug": "color-fade-pulse",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Structurally identical — four evenly-spaced pulses sliding left with a fast hue spin and a slow saturation fade — but the port's pulses travel ~21% slower while its saturation fade cycles ~20% faster.",
+  "observations": [
+    "Neither side exposes any settable control (probe run: 'orig (no settable controls)' / 'port (no settable controls)'), and neither reports a compile or runtime error; wantsSensors is false on both, so no sensor feed is involved.",
+    "Both sides draw the SAME structure: 4 identical pulses evenly spaced around a 60-px strip (15-px period, confirmed by --dump at t=8 s where both repeat exactly every 15 px), travelling toward DECREASING pixel index. Pulse profile is the same on both: a steep exponential rise to a peak of ~100-125 and a slightly slower decay, ~9 px wide above 10/255 (orig t=8 s: 0 4 12 28 58 106 87 46 21 8 2 0…; port t=8 s: 0 0 2 7 19 43 82 113 62 31 13 4 1 0…).",
+    "At t=0 the two renders are essentially byte-equal (orig peak at px7 = 122,117,36; port peak at px7 = 124,119,36; all four peak hues 57/236/56/236 on both), so they start from the same state and diverge purely by rate.",
+    "TRAVEL SPEED DIVERGES. Circular cross-correlation of --dump'ed frames, phase unwrapped over 0-2 s at 20 fps: orig accumulates -23.00 px in 2.0 s (11.5 px/s); port accumulates -18.24 px (9.12 px/s). Port is ~0.79x the original's speed, ratio ~1.26. Confirmed independently at 10 fps and 40 fps (same per-second displacement once the 1-s dump aliasing over the 15-px period is unwrapped), so BOTH sides are time-based, not frame-stepped — no frame-rate coupling on either.",
+    "Consistent with that, the 20 fps `motion` stat is orig avg 7.5 / port avg 6.2, and the baseline waterfall's stripe slope is visibly shallower on the port.",
+    "SATURATION FADE PERIOD DIVERGES IN THE OPPOSITE DIRECTION. Brightness-weighted mean saturation sampled every 0.25 s over 26 s: orig swings 0.83 -> 0.20 -> 0.83 with period ~6.5 s (minima at t~3.25, 9.9, 16.4; maxima at t~0, 6.5, 13.0); port swings 0.84 -> ~0.18 -> 0.83 with period ~5.25 s (minima at t~2.5, 8.0, 13.25, 18.5). Autocorrelation of meanR agrees: orig fundamental 32.7 frames @5 fps and 65.4 frames @10 fps (both 6.54 s); port 26.2 frames @5 fps and 52.4 frames @10 fps (both 5.24 s). Ratio 1.25, and fps-invariant on both sides. The saturation RANGE matches (~0.18-0.84 on both) — only the period is wrong.",
+    "HUE ROTATION RATE MATCHES. Tracking one pulse's hue at 100 fps with 0.02 s spacing: orig -685 deg/s, port -658 deg/s (~1.9 turns/s on both). The 27 deg/s gap is fully accounted for by the travel-speed difference acting on the spatial hue gradient (adjacent pulses are 180 deg apart over 15 px = 12 deg/px; 2.2 px/s x 12 = 26 deg/s), so the intrinsic hue spin is the same.",
+    "Spatial colour arrangement matches: pulses alternate between two complementary hue families 180 deg apart (e.g. both sides at t=0: h57, h236, h56, h236 across the four peaks).",
+    "Brightness matches: mean 19.1 (orig) vs 18.3 (port) at 20 fps, peaks ~98-127 on both, brightnessTrend 'steady' on both, zeroMotionFrames 1 (the unavoidable first frame) on both.",
+    "No mode structure on either side: a 240 s / 2 fps survey shows one uniform regime of diagonal pulses end to end on both, and a --skip 120 late window looks like the opening window. Neither side is seed-sensitive (seed 1234 reproduces seed 1 stat-for-stat on both).",
+    "Both sides are resolution-independent in the same way: re-rendered at --pixels 120 both still draw exactly 4 pulses, at peaks 14/44/74/104, i.e. spacing scales with the strip; per-strip-fraction speeds hold at 0.19 (orig) vs 0.153 (port) strip/s, the same 1.24x ratio as on the default 60-px rig."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port is the right pattern with two rate errors of the same magnitude (~5/4) in OPPOSITE directions — do not fix them with one global time scale.",
+    "Pulse travel is too SLOW: on a 60-px strip the original slides its pulses at 11.5 px/s (0.19 strip-widths/s), the port at 9.12 px/s (0.153 strip-widths/s). Speed the port's translation up by ~1.26x. Direction (toward decreasing pixel index), spacing (4 pulses, 15-px period on 60 px), and pulse profile are already correct — do not touch those.",
+    "The saturation fade is too FAST: the original's saturation breathes from ~0.84 down to ~0.20 and back with a period of 6.54 s; the port does the same swing in 5.24 s. Lengthen the port's fade period by ~1.25x. The min/max saturation endpoints are already right.",
+    "Everything else is already matching and needs no change: hue spin rate (~1.9 turns/s, decreasing hue on both), the two-complementary-hue alternation between adjacent pulses, peak brightness (~100-125), the pulse's exponential rise/decay shape, resolution scaling, and time-based (fps-invariant) animation.",
+    "No controls exist on either side, so there is no dial surface to add or match."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "seed1234",
+    "colorcycle",
+    "fps10",
+    "fps40",
+    "px120",
+    "dump-a",
+    "dump-track",
+    "dump-hue",
+    "dump-hue100",
+    "dump-sat"
+  ]
+}

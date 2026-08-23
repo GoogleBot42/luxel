@@ -1,0 +1,53 @@
+{
+  "slug": "scary-pumpkin",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Both sides draw a green-lit jack-o-lantern on a textured orange pumpkin with the same palette and the same duty cycle, but the port's face is less than half the original's size, its flicker is ~3.5x too slow and cross-fades smoothly instead of hard-strobing, and its pumpkin body is a bright constant swirl where the original's is a dark, slowly breathing set of concentric rings.",
+  "observations": [
+    "Rig: 16x16 grid, 256 px, from the manifest. Neither side has any controls (probe: 'no settable controls' on both) — dials are not a factor here.",
+    "Both sides compile and run clean over 60 s at 20 fps: no compileError/runtimeError, brightnessTrend 'steady' on both, no decay or freeze in a --skip 200 late window (orig motion avg 4.9, port 1.3 there). The port is alive at steady state.",
+    "FACE SIZE (headline structural gap). On the default 16x16 rig at full flash the original lights 50 green pixels, the port 22 — the port's carved face is 44% of the original's area. Confirmed resolution-independently at 32x32 (orig 188 green px vs port 102) and visible at 48x48. Both sides are resolution-independent (fixed logical canvas, same picture at 16x16 / 32x32 / 48x48), so this is a real geometry difference, not a rasterization artefact.",
+    "FACE GEOMETRY at 32x32, t=0: original's eyes are apex-up triangles spanning rows 3-10 (8 rows tall, 9 px wide at the base, reaching the top of the pumpkin); the port's are rows 8-12 (5 rows tall, 7 px wide) and sit noticeably lower. Original's nose triangle spans rows 14-20 (7 rows); the port's rows 15-17 (3 rows). Original's grin spans cols 4-27 with upturned corner 'fangs' rising to row 19; the port's grin spans cols 10-21 with no corner hooks. Feature SHAPES (triangle eyes, triangle nose, crescent grin) are correct on both — only scale and placement differ.",
+    "FACE COLOUR matches: both flash pure saturated green. Exact dumps: orig face pixels are (0,255,0)/(0,251,0), port (5,255,0). Mid-flash the original also visits intermediate greens (0,125,0 and 0,58,0 dumped at t=0 and t=5.95), i.e. its flash amplitude varies flash-to-flash; the port's peak is always 255 with a smooth ramp on either side.",
+    "FLICKER RATE (headline motion gap). Over 60 s at 20 fps, thresholding meanG at midpoint: original has 164 on-events (2.73 flashes/s), mean on-duration 2.5 frames = 125 ms, max 10 frames; port has 44 on-events (0.73 flashes/s), mean on-duration 8.9 frames = 445 ms, max 15 frames. The port flickers ~3.7x too slowly with ~3.6x too long a hold. Overall duty cycle is close (orig 35%, port 33%), so the port is not missing light — it is redistributing the same lit time into a few long pulses.",
+    "FLICKER SHAPE. The original switches hard: 445 of 1200 frames have |ΔmeanG| > 15, max single-frame step 50 (e.g. meanG 54,54,54,11,33,54,54,5,5,54,54,5,5 at 20 fps — a jittery strobe). The port has ZERO frames with |ΔmeanG| > 15 and a max step of 12 — it is a pure smooth fade-in/fade-out (e.g. 30,26,20,18,18,22,27,31,32,32,28,20,11,10,10). This is the single most visible difference: original = erratic strobing scare, port = gentle breathing pulse.",
+    "Overall motion stat reflects it: orig motion avg 4.8 / max 17, port avg 1.2 / max 4 on the same 60 s window (motionLit 6.1 vs 1.7).",
+    "BODY TEXTURE. At 32x32 and 48x48 the original's pumpkin is a set of smooth CONCENTRIC RINGS/ripples (large contiguous arcs, off-centre focus); the port's is a PINWHEEL SWIRL of curved fibrous streaks. Both are plausible pumpkin texture but the geometry family is different.",
+    "BODY BRIGHTNESS. Original's meanR breathes 17 -> 32 -> 17 over roughly 10-15 s irregular cycles (the pumpkin goes near-dark between glows — see baseline sheet at 4.3 s/4.8 s, meanR(lit) as low as 25 with maxR 89). The port's meanR stays pinned in 25-32 for the whole 60 s and never goes dark; per-frame meanR(lit) is 42-55 vs the original's 25-44. The port's body is ~1.3-1.7x too bright and its glow envelope has ~1/5 the swing.",
+    "BODY ANIMATION. The original's body is frozen for long stretches (zeroMotionFrames 523/1200 over 60 s at 20 fps; motion sits at exactly 0 for 18+ consecutive frames whenever the face is off), so essentially all of the original's frame-to-frame motion comes from the face strobe. The port's body churns continuously (zeroMotionFrames 147/1200, motion pinned at 1 during dark stretches).",
+    "On the NATIVE 16x16 rig the size gap matters a lot: the original's 50-px face reads as an unmistakable jack-o-lantern; the port's 22-px face reduces to a few isolated green pixels that are hard to read as a face (see baseline orig-motion.png vs port-motion.png at 3.00-3.55 s).",
+    "fps coupling: port is exactly fps-invariant (0.77 flashes/s at 10, 20 and 40 fps). Original measures 2.07 / 2.73 / 3.07 flashes/s at 10 / 20 / 40 fps — that spread is consistent with a 10 fps run being unable to resolve its 100-150 ms flashes rather than genuine frame-stepping (its flash amplitude range 5-65 is identical at all three rates). No frame-rate-coupling bug to report against the port.",
+    "Seed independence: seeds 1, 7 and 1234 give byte-identical statistics on BOTH sides (orig 2.77 flashes/s, port 0.77 flashes/s at all three) — neither side consumes the harness seed, so the flicker timing is deterministic, not stochastic. The rate gap above is therefore a real timing bug, not an RNG-character difference.",
+    "Blue channel is negligible on both (orig meanB avg 0.7, port 1.6) — no colour-family divergence.",
+    "Survey (60 s @ 5 fps) and a 240-equivalent check via the 60 s @ 20 fps run show a single regime on both sides: continuous flash-and-glow, no mode rotation, nothing left unseen."
+  ],
+  "dials": [],
+  "feedback": [
+    "Speed up the face flicker by ~3.5x: the original fires ~2.7 flashes/second with a mean lit duration of ~125 ms (2-3 frames at 20 fps, occasionally up to 0.5 s); the port fires ~0.75 flashes/second holding each for ~450 ms. Keep the duty cycle where it is (~33-35% is already right) — just chop the long pulses into many short ones.",
+    "Make the face transition INSTANT, not a fade. The original jumps between off and full green within a single 50 ms frame (single-frame meanG steps up to 50, 37% of frames have a step > 15); the port never steps more than 12 per frame. Remove the smooth ramp entirely and switch the face on/off hard, with the erratic 1-3-frame stutter the original shows (its on-run histogram at 20 fps is 44x1-frame, 67x2-frame, 37x3-frame, plus a handful of 5/9/10-frame holds).",
+    "Vary the flash intensity between flashes: the original's lit face was dumped at green levels 58, 82, 125 and 255 at different moments, so not every flash is full brightness. The port always peaks at exactly 255.",
+    "Scale the carved face up by roughly 1.4-1.5x linearly (≈2.3x in area): on 16x16 the original lights 50 face pixels vs the port's 22, on 32x32 it is 188 vs 102. Specifically, the eyes should be ~8 rows tall and ~9 px wide at the base on a 32x32 canvas (port: 5 x 7) and should start near the top of the pumpkin (orig rows 3-10, port rows 8-12); the nose triangle should be ~7 rows tall (port: 3); the grin should span nearly the full pumpkin width (orig cols 4-27 of 32, port cols 10-21) and have upturned corner hooks/fangs at each end, which the port omits entirely.",
+    "Darken the pumpkin body and give it a slow breathing envelope. The original's mean red walks 17 -> 32 -> 17 over ~10-15 s so the pumpkin visibly dims to near-black between glows; the port sits at 25-32 the whole time and never goes dark. Per-frame the port's lit-pixel mean red is 42-55 against the original's 25-44 — pull the body's overall level down ~30% and add the low-frequency dip.",
+    "Body texture family differs: the original draws smooth CONCENTRIC RINGS/ripples centred slightly off the pumpkin's middle, while the port draws a pinwheel of swirling fibrous streaks. Swap the swirl for concentric arcs (most legible at --rig grid --grid 48x48).",
+    "Minor: the original's body is essentially static between flashes (motion exactly 0 for 18+ consecutive frames at 20 fps, 43% of all frames); the port's body churns every frame. If the ring texture is animated at all it should be much slower or step-wise.",
+    "Everything else already matches — palette (pure (0,255,0) face on orange body, no blue), overall duty cycle, resolution independence, seed independence, absence of controls, and steady-state stability. The port is a recognizable jack-o-lantern; fixing flicker cadence/edges and face scale would move it to close/match."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-face",
+    "dump-peak",
+    "grid32",
+    "grid32-dump",
+    "grid48",
+    "body",
+    "long20",
+    "late",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

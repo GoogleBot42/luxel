@@ -1,0 +1,47 @@
+{
+  "slug": "millipede",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Port reproduces the original's 6-px segmented rainbow 'leg' train exactly in spatial structure, palette walk and mean crawl speed, but replaces the original's smooth sinusoidal speed undulation (5.4-14.2 px/s, 2.6x swing) with a two-level square-wave toggle (7.8 / 10.7 px/s, 1.4x swing), so the port glides where the original visibly surges and stalls.",
+  "observations": [
+    "Rig: 60-px strip, no controls on EITHER side (meta.json sides.orig.controls and sides.port.controls are both empty; --probe-controls prints '(no settable controls)' for both). wantsSensors false on both.",
+    "Both sides compile and run clean over 300 s of simulated time (no compileError/runtimeError in any run, including --skip 300).",
+    "STRUCTURE — identical. Both sides satisfy pixel[i+1] == pixel[i+6] for 83% of indices at every dumped time (best L=6 for both, identical hit-rates 6:0.83 / 11:0.65 / 16:0.48). i.e. both draw 6-pixel 'segments' whose colour ramp advances one step per segment — the millipede-leg look.",
+    "SPATIAL SPECTRUM — identical to within 0.1 unit. Mean |X(k)| over 201 dumped frames, orig vs port: k=1 20.6/20.5, k=3 1.5/1.5, k=9 7.5/7.5, k=11 20.6/20.5, k=12 8.9/8.9, k=13 4.2/4.2, k=19 5.5/5.5, k=21 7.5/7.5, k=24 4.3/4.3. Every harmonic matches; there is no missing or extra spatial component.",
+    "BRIGHTNESS / DUTY — identical. 60 s survey meanBrightness avg 47.5 on both, min 46 max 49 on both, brightnessTrend 'steady' on both, zeroMotionFrames 1 on both. Over the 201-frame dump: dark fraction (max channel < 16) 0.346 orig vs 0.333 port; 8-bin max-channel histogram matches within 1.5 pp in every bin; dark-run-length histogram 1:433/2:424/3:609/4:267 (orig) vs 1:452/2:434/3:650/4:186 (port).",
+    "COLOUR — identical and phase-locked, even at t=300 s. 60 s survey: meanR avg 47.9 both, meanG 47.8 both, meanB 46.9/46.9. Palette-walk period from autocorrelation of meanR/G/B is 33 frames @5fps = 6.60 s on BOTH sides, with matching peak heights out to lag 98 (0.89 both) in a 180 s survey. In the --skip 300 window meanR avg 50.8/50.8, meanG 46.7/46.7, meanB 45.1/45.1, first/last within 1 unit on every channel. No hue drift accumulates.",
+    "MEAN SPEED — identical. Sub-pixel circular cross-correlation of consecutive dumped frames gives a mean translation of -9.0 px/s on both sides (orig -8.84/-8.96/-8.98, port -9.00/-9.01/-9.05 at 10/20/40 fps). Motion is leftward (toward pixel 0) on both.",
+    "FPS-INVARIANCE — both sides are time-based, not frame-stepped: mean velocity -9.0 px/s at 10, 20 and 40 fps on both, and the modulation waveform is unchanged across the three rates. No frame-rate coupling on either side.",
+    "THE DIVERGENCE — speed-modulation WAVEFORM. Instantaneous velocity (cross-correlation, 0.1 s steps, confirmed independently by k=11 DFT-phase tracking and reproduced at 10/20/40 fps): ORIGINAL sweeps smoothly and continuously, e.g. -14.2 -13.6 -13.4 -12.8 -12.0 -10.2 -10.0 -8.8 -7.8 -7.0 -6.4 -5.8 -5.4 -5.4 -5.6 -5.4 -5.6 -6.0 -6.4 -7.0 -8.2 -8.6 -9.6 -10.4 -11.2 -12.4 -12.6 -13.4 -13.8 -13.8 -14.2 px/s — a sinusoid between about -5.4 and -14.2 px/s (2.6x swing, +/-49% of mean). PORT sits on two flat plateaus with ~0.2 s transitions: -10.8 -10.8 -10.6 x14 ... -8.4 -8.2 -8.0 -8.0 -7.8 -7.8 -8.0 -7.6 x13 ... -8.4 -10.0 -10.6 -10.8 — i.e. it toggles between -10.7 and -7.9 px/s (1.37x swing, +/-16% of mean).",
+    "The modulation PERIOD matches: ~3.2 s on the original (velocity autocorrelation peak 0.61 at lag 3.2 s), ~3.1-3.3 s on the port (high plateau ~1.6 s, low plateau ~1.4 s). That is exactly half the 6.60 s palette cycle on both sides, so the port has the right rhythm and the wrong shape.",
+    "The same divergence shows up for free in the motion stat: over --skip 300 --seconds 12 --fps 20, orig motion {avg 22.6, min 1, max 43} vs port {avg 21.1, min 9, max 33} — equal averages, but the original's motion dips ~9x lower and peaks ~30% higher because it genuinely stalls and surges. Same signature at seed 7 and seed 1234 (orig min 0 max 43, port min 0 max 34).",
+    "VISUALLY (240-px waterfall, tools/verify/out/millipede/big240 and late/): the original's rainbow bands are pronounced S-curves — long near-vertical (near-stationary) stretches alternating with steep dives — which reads as a crawling, undulating millipede gait. The port's bands are near-uniform diagonals with a single mild kink per 3.2 s cycle; it reads as a steady drift with a slight hesitation.",
+    "DETERMINISM — neither side uses RNG: seeds 1, 7 and 1234 give byte-equal summary stats on both sides, so the comparison is not seed-dependent.",
+    "Same-time, same-index pixel agreement is poor (mean abs channel diff ~67 unshifted, ~11 at the best pure spatial shift) but that is phase, not structure: per-frame search over (time offset, spatial shift) finds port frames matching original frames to a mean abs diff of 0.9-4.4 (out of a mean level of 48) at many times. The two sides are drawing the same picture at a wandering relative phase, which is the direct consequence of the different speed-modulation waveform."
+  ],
+  "dials": [],
+  "feedback": [
+    "Everything except one axis is already right: segment length (6 px), the per-segment colour-ramp advance, the full spatial harmonic content, mean brightness (47.5), dark duty (~34%), the 6.60 s palette cycle and its phase (still locked at t=300 s), the mean crawl speed (-9.0 px/s leftward), and time-based (fps-invariant) stepping. Do not touch any of those.",
+    "The single fix needed: the port's crawl speed is a TWO-STATE SQUARE WAVE and the original's is a SMOOTH CONTINUOUS SWEEP. Port toggles between 7.9 and 10.7 px/s with ~1.5 s dwells and ~0.2 s transitions; the original glides continuously through every speed from 5.4 px/s to 14.2 px/s and back. Whatever term modulates the leg advance needs to vary continuously (sinusoidally) rather than snapping between discrete levels — the plateau shape suggests the port is quantizing or thresholding a value that should be used raw.",
+    "The modulation DEPTH is also too shallow by ~3x. Original: +/-4.4 px/s around a -9.2 px/s mean (peak/trough ratio 2.6). Port: +/-1.4 px/s around a -9.2 px/s mean (ratio 1.37). After making the modulation continuous, its amplitude should reach roughly 0.5x the mean speed in each direction so the pattern nearly stalls at the slow phase.",
+    "The modulation PERIOD is already correct (~3.2 s, i.e. half the 6.60 s palette cycle) — keep it; only the waveform and amplitude need changing.",
+    "Quick regression check for a fixer: measure sub-pixel per-frame translation (cross-correlate consecutive frames) over ~10 s and look at the velocity series. A correct port produces a smooth sinusoid spanning about -5 to -14 px/s; the current port produces a square wave spanning -8 to -11. Equivalently, `motion` min over a 12 s window at 20 fps should fall to ~1 (it is currently 9) while max rises to ~43 (currently 33), with the average staying near 22.",
+    "No control-surface work needed: both sides genuinely expose zero controls."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-180",
+    "dump-a",
+    "dense-mp",
+    "fine20",
+    "big240",
+    "late",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

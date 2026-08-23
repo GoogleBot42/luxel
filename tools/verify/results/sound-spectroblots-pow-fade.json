@@ -1,0 +1,52 @@
+{
+  "slug": "sound-spectroblots-pow-fade",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides are alive, mirror-symmetric and beat120-reactive with identical (gauge-only) control surfaces, but the port draws a sparse single-pixel speckle field that strobes to near-black on every 2 Hz beat in 2-3 hues, where the original draws a dense, persistent, full-rainbow field of contiguous smooth blobs that never darkens — ~6x dimmer, ~3x fewer lit pixels, ~3x less hue diversity, and spatially uncorrelated with the original's field.",
+  "observations": [
+    "Rig/defaults: 16x16 grid, 256 px. Both sides report wantsSensors: true and were fed sensorModel beat120 (sensors: \"synth\") on every run; no compile or runtime errors on either side.",
+    "Control surface MATCHES exactly: both sides expose the same three display-only controls — gaugeFeedback (\"Feedback\"), gaugeGain (\"Gain\"), gaugeComplexity (\"Complexity\"), all kind=gauge. --probe-controls reports \"(no settable controls)\" for both, so there are no dials to sweep and no control-surface finding.",
+    "BRIGHTNESS GAP ~6x, stable over 240 s. survey240 (240 s @ 10 fps) meanBrightness avg: orig 84.9 (trend steady, min 6 max 255), port 15.0 (trend volatile, min 1 max 135). Per-10 s bucket means are flat on both after warm-up: orig 76-100 throughout t=10..240 s, port 11-17 throughout. baseline (6 s @ 20 fps): orig 153, port 50. late (--skip 200, 20 s @ 20 fps): orig 129, port 30.",
+    "DENSITY GAP ~3x. Lit-pixel fraction from --dump (max channel > 0): original 80-100% of the grid at every sampled steady-state time (t=2.25..32.95 s); port 22-41%. Same at 48x48 (grid48d): orig 80-97% lit, port 24-30% lit.",
+    "RHYTHM: the port hard-strobes at exactly 2 Hz, the original does not. dense20 (--skip 30, 3 s @ 20 fps, 60 consecutive dumped frames): port's whole-grid mean max-channel is a clean sawtooth — attack to ~65-71 on each beat at t=30.05/30.55/31.05/31.55/32.05/32.55 s, then exponential decay to ~5-7 just before the next beat (i.e. it is essentially black between beats). Original over the same 60 frames sits at 141-225 and drifts slowly downward with no beat-scale dip at all.",
+    "Confirmed numerically by autocorrelation of the survey motion series (10 fps, 600 frames): port peaks at lag 5 (r=0.72) with strong harmonics at 10/15/20/25/30/35/40 — locked to the 0.5 s beat. Original's motion peaks at lag 1 (r=0.51) with lag 5 only r=0.47 — it has a beat component but is dominated by smooth frame-to-frame continuity. Original meanBrightness autocorr is 0.96 at lag 1 and still 0.61 at lag 8; the port's falls to 0.48 by lag 7.",
+    "PER-PIXEL FADE: original decays x0.80 per frame at 20 fps (measured chain 255->220->176->141->112->90->72->57, half-life 3.1 frames = 0.155 s); port decays x0.60 per frame (217->135->83->50->30 and 244->146->87->52->31->18->11->6->4->2->1->0, half-life 1.36 frames = 0.068 s). So the port's fade is ~2.3x too fast in the tail — but the bigger effect is re-trigger rate: original pixels sit railed at 255 for 10-20 consecutive frames before any decay begins, port pixels fire once per beat for ~4-6 frames then run all the way to 0 and stay there.",
+    "COLOR: original steady state occupies 10-12 of 12 hue bins SIMULTANEOUSLY in every frame (a full spatial rainbow), plus ~50/256 pure-white pixels. Port occupies only 1-5 bins per frame. At t=31.05 s the port's entire lit set is three hues — ~0/36 (red), ~15-17/36 (cyan), ~33-36/36 (magenta-red) — with no greens, yellows or blues anywhere; the original at the same instant spans the whole wheel with hues varying smoothly across space.",
+    "SPATIAL TEXTURE is the biggest structural divergence. Nearest-neighbour autocorrelation of the max-channel field in steady state (t=30..32.4 s): original 0.44-0.86 (smooth, contiguous blobs and contour bands), port 0.17-0.29 (uncorrelated salt-and-pepper single-pixel speckle). Visible directly at --grid 48x48: the original draws thick continuous rainbow contour bands (nested arches, rings, mirrored 'tree' shapes) filling the whole canvas; the port draws thin, broken, mostly-white speckled lines on black.",
+    "The two value fields are genuinely unrelated, not one field with a different output mapping. At 48x48, Pearson correlation of orig vs port max-channel field: 0.071, -0.042, -0.032, 0.027, 0.002 at t=30.05/30.55/31.05/32.55/34.05 s; binarised (>32) correlation is likewise 0.08 to -0.06. Histogramming the ORIGINAL's hue at the port's bright (>128) pixels gives a flat distribution identical to the histogram at the port's dark pixels — so the port's bright lines do not sit on any particular contour of the original's field.",
+    "SENSORS-OFF DIAGNOSTIC (--sensors off, 12 s @ 20 fps) localizes the structural gap as NOT audio-driven: with dead sensors the original still draws smooth continuous rainbow arcs, rings and blobs (mean 35) while the port still draws scattered white/pale speckle (mean 51 — actually BRIGHTER than the original here). So the speckle-vs-blob difference is in the pattern's own geometry/field, and the brightness inversion says the port's audio gain path is what is under-driven, not its base level.",
+    "WARM-UP regime (t < ~2 s at 20 fps) is inverted between the sides: the original rails to literally pure white — all 256 px at (255,255,255), saturation 0.00, mean 255 — from t=0.15 to t~1.5 s, then settles to its dense saturated field by ~10 s. The port during that same window is at its densest and most colourful (100% lit, mean 116-134, 11 of 12 hue bins). Consistent with the original's 'Gain' AGC railing on the synthetic feed while the port's does not.",
+    "SHARED CORRECT PROPERTIES: both sides are exactly mirror-symmetric about the vertical centre line at every sampled frame (column profiles palindromic on both). Both are resolution-independent — mean brightness barely moves across --grid 8x8 / 16x16 / 48x48 (orig 135/129/134, port 27/30/32 over the same --skip 30 window). Both are seed-independent (seed 1234 vs seed 1: orig 131 vs 129, port 35 vs 30). Both are frame-rate coupled to a similar degree (--skip 20, 6 s: orig 68/164/174 and port 14/28/20 at 10/20/40 fps), so fps coupling is NOT a port-specific finding.",
+    "No mode/regime rotation exists: 240 s at 10 fps shows a single homogeneous steady regime on both sides after the warm-up, with per-10 s means flat to within +/-15%. Only two regimes were inspected (warm-up via baseline/dumpA, steady state via late/dense20/grid48)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Overall brightness/energy is ~6x too low: original holds meanBrightness ~85 (10 fps) / ~130-165 (20 fps) indefinitely, the port holds ~15 / ~30. Whatever the 'Gain' path is, the port is not driving the field anywhere near hard enough on the same beat120 spectrum.",
+    "The port must NOT go dark between beats. The original's field is persistent — 80-100% of pixels lit at all times, never dipping below mean ~140 at 20 fps. The port collapses to ~22-30% lit and mean ~5 in the 0.4 s gap between 2 Hz beats, producing a strobe the original does not have. Fix the re-trigger/hold behaviour first (original pixels stay railed at 255 for 10-20 frames before decaying); the fade tail is a secondary issue.",
+    "The 'pow fade' decay constant is ~2.3x too aggressive: original multiplies by ~0.80 per frame at 20 fps (half-life 0.155 s), the port by ~0.60 (half-life 0.068 s). Target ~0.80/frame at 20 fps, and note both sides are frame-coupled here so the target is per-frame, not per-second.",
+    "Spatial structure is the deepest problem: the port renders single-pixel speckle (neighbour autocorrelation 0.17-0.29) where the original renders contiguous smooth blobs and continuous contour bands (0.44-0.86). Re-render at --grid 48x48 to see it — the original's arcs are solid multi-pixel-wide ribbons, the port's are 1-px broken dotted lines. This is present with --sensors off too, so it is the field/geometry, not the audio response.",
+    "Hue span is ~3x too narrow. The original always shows 10-12 of 12 hue bins at once across the grid (a full spatial rainbow, hue varying smoothly with position); the port shows 1-5 bins and at many instants only red + cyan, with a large fraction of pixels rendered pure/near-white (saturation drops to 0.08-0.21 at each beat peak). The hue should be a smooth spatial function of the blot field, not a near-global single tint.",
+    "The port's lit pixels do not land where the original's structure is — 48x48 field correlation is |r| < 0.09 at every sampled time, and the original's hue at the port's bright pixels is uniformly distributed. So this is not a palette/exponent remap of a correct field; the blot placement/field itself needs rework, not just the output curve.",
+    "Warm-up behaviour is inverted: the original rails to pure white (all 255,255,255) for the first ~1.5-2 s at 20 fps and settles by ~10 s, whereas the port starts at its brightest and most colourful and then falls off. If the original has an auto-gain that ramps up until it saturates on a quiet synthetic feed, the port appears to be missing it or has it pinned low — that single mechanism would explain both the warm-up inversion and the 6x steady-state brightness gap.",
+    "Things already right, do not regress them: exact left-right mirror symmetry, resolution independence across 8x8/16x16/48x48, seed independence, sensor binding and 2 Hz beat lock, and the gauge-only control surface (gaugeFeedback / gaugeGain / gaugeComplexity) which matches the original name-for-name and kind-for-kind."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "probe",
+    "late",
+    "dumpA",
+    "dense1",
+    "dense20",
+    "fps10",
+    "fps20",
+    "fps40",
+    "sens-off",
+    "seed1234",
+    "grid8",
+    "grid48",
+    "grid48d"
+  ]
+}

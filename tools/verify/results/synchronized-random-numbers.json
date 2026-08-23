@@ -1,0 +1,47 @@
+{
+  "slug": "synchronized-random-numbers",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "medium",
+  "summary": "Both sides draw the same structure — exactly one fully-saturated rainbow ramp across the strip (hue = index/pixelCount + a shared offset), scrolling — but the port's offset advances ~4.8x faster than the original's at 20 fps and the port adds a persistent per-pixel hue jitter (steady-state ~0.08 rev sd, worst pixels ~0.25 rev) that the original completely lacks, so the port's bands are permanently frayed while the original's are razor-clean.",
+  "observations": [
+    "Shared structure, exactly: on BOTH sides every frame is hue = i/pixelCount + offset(t), saturation 1.00, value 1.00 on every pixel, mean brightness pinned at 127 on both. Confirmed resolution-independent on both sides — at --pixels 12, 60 and 300 the hue span across the strip is 0.917/0.984/0.997 rev respectively (i.e. always one full rainbow), so neither side is index-only or rig-size dependent.",
+    "SPEED: at the default 20 fps the original's rainbow offset advances at a perfectly constant +0.05285 rev/s (full colour cycle every ~18.9 s; measured over 30 s of 0.5 s-spaced dumps, cumulative 1.579 rev in 29.9 s). The port advances at +0.2543 rev/s (cycle every ~3.93 s; 7.600 rev in 29.9 s). The port is 4.81x too fast.",
+    "NOISE: the original has ZERO per-pixel randomness. Fitting a linear ramp to its 60-pixel hue profile leaves residuals of ±0.001 rev — pure 8-bit quantisation — and the circular sd of (hue_i - i/n) is 0.0004 at every time from t=0 to t=260 s. The port's same statistic starts at 0.0027 and grows as sqrt(frames) (0.0125 @1 s, 0.0244 @3 s, 0.043 @10 s, 0.069 @30 s) before saturating around 0.074-0.090 by t=240-260 s. Individual pixels sit up to 0.25 rev (90 deg) off the ramp.",
+    "The port's per-pixel error is PERSISTENT, not per-frame sparkle: at t=240/245/250/259.9 s pixel 3 reads +0.123/+0.143/+0.208/+0.166 rev and pixel 7 reads +0.186/+0.171/+0.223/+0.249 rev. Visually this is a fixed set of 'seam' columns in the waterfall — the survey300 port image shows vertical streaks of persistently-offset pixels that the original image does not have at all.",
+    "FRAME-RATE COUPLING, and it goes the odd way round. The ORIGINAL's scroll rate is a pure artefact of the frame delta: +0.1027 rev/s at 10 fps, +0.0528 rev/s at 20 fps, and -0.0471 rev/s at 40 fps — i.e. it halves when fps doubles and REVERSES DIRECTION by 40 fps (verified unambiguously at 40 fps with 0.25 s-spaced dumps: offset 0.9989 -> 0.9871 -> 0.9753 -> 0.9636 -> 0.9518). The port's offset rate is fps-invariant: 0.2545 / 0.2543 / 0.2554 rev/s at 10 / 20 / 40 fps. The port's NOISE, however, is frame-coupled — its dispersion at t=6 s is 0.0243 / 0.0332 / 0.0448 for 10 / 20 / 40 fps, exactly the sqrt(fps) law of a per-frame random walk.",
+    "CAVEAT ON THE REFERENCE: for a pattern named 'Synchronized Random Numbers', the original's output contains no randomness whatsoever — a mathematically exact hue ramp with an exactly linear time drift whose rate and even its SIGN are decided by the frame delta. That is the fingerprint of the original's PRNG collapsing to a constant increment on our engine (a degenerate hash/LCG), not of an author writing a plain rainbow. It is not the orig-unrenderable (c) case — the output is non-constant, animated and error-free — but it does mean the original's clean scroll may not be what real PB hardware shows, and the port's jitter may be closer to the author's intent. Judge accordingly.",
+    "Both sides are completely seed-independent: renders at --seed 1, 7 and 1234 are byte-identical on both orig and port at t=0, 1 and 3 s. Both are also wall-clock independent (--wall-clock 1400000000 vs the default 1756000000 gives byte-identical frames on both sides). So neither side draws on the harness RNG or clock; each carries its own deterministic generator.",
+    "No regime structure on either side: 60 s @ 5 fps and 300 s @ 2 fps surveys show one uniform regime throughout — steady scrolling rainbow, brightnessTrend 'steady', meanBrightness pinned at 127 on both sides for the whole 300 s. No modes, no events, no jumps in the offset (the original's offset is monotone linear over 260 s; the port's is monotone linear over 260 s).",
+    "Neither side errors or dies: compileError/runtimeError null on both, zeroMotionFrames = 1 (the mandatory first frame) on both, wantsSensors false on both. motion at 20 fps: orig avg 1.1, port avg 6.5 — the gap is the combined speed and jitter difference, not liveness."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the port's shared hue offset by ~4.8x: at 20 fps the original advances +0.0528 rev/s (one full rainbow every ~18.9 s), the port advances +0.2543 rev/s (every ~3.93 s). Note the original's rate is frame-delta-dependent (+0.103/s at 10 fps, -0.047/s at 40 fps) while the port's is fps-invariant, so 4.8x is the factor at the harness default of 20 fps specifically — pick a target rate rather than a blind divide, and say which fps it is calibrated at.",
+    "The port draws a fresh random value PER PIXEL per frame; the original's offset is shared by all 60 pixels. That is the visible defect: the port's rainbow bands are frayed (per-pixel hue sd ~0.03 rev within 5 s, saturating near 0.08 rev with worst pixels 0.25 rev off) while the original's are exactly straight (sd 0.0004 = quantisation only). If randomness belongs in this pattern at all, it should be consumed ONCE per frame and applied to the whole strip — 'synchronized' implies one number shared, not sixty independent ones.",
+    "The port's per-pixel error is a persistent random walk, not per-frame sparkle — the same pixels stay offset for tens of seconds (pixel 7 held +0.17 to +0.25 rev across t=240..260 s), which reads as fixed dead columns in the waterfall. Even if some jitter is intended, it should not accumulate into a permanent per-pixel bias.",
+    "The port's noise amplitude is frame-rate coupled (dispersion scales as sqrt(fps): 0.024/0.033/0.045 at 10/20/40 fps for the same 6 s of simulated time). Whatever randomness stays should be driven by elapsed time, not by frame count, so the look does not change with render rate.",
+    "Everything else already matches and should be left alone: the spatial law (hue = index/pixelCount, exactly one rainbow across the strip at 12, 60 and 300 px), full saturation and full value on every pixel, seed independence, wall-clock independence, and the absence of any mode/regime structure over 300 s.",
+    "Before acting on the speed feedback, note the reference caveat: the original renders with literally zero randomness and with a scroll rate whose sign flips between 20 and 40 fps, which strongly suggests the ORIGINAL's own PRNG is degenerating to a fixed increment on our engine. If that engine gap is fixed, the original's rate and cleanliness will both change and this comparison must be re-run before tuning the port to it."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey300",
+    "dump-a",
+    "longdump",
+    "late240",
+    "seed7",
+    "seed1234",
+    "px12",
+    "px300",
+    "fps10",
+    "fps40",
+    "fps40fine",
+    "fpsx5",
+    "fpsx30",
+    "fpsx100",
+    "wc2"
+  ]
+}

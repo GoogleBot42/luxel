@@ -1,0 +1,43 @@
+{
+  "slug": "fireblobs",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same fire-blob field — matching blob count, size, density, drift speed and steady-state brightness — but the original's blobs constantly wink out and reignite (a strobe that darkens ~20% of all frames) while the port glows smoothly and never blinks; the port's cores are also a shade redder.",
+  "observations": [
+    "Rig: strip, 60 px, no controls on either side (meta.json `controls` empty for orig and port); wantsSensors false on both, so `sensors: off` on every run.",
+    "Both sides are alive with no compile/runtime errors and both survive to t=215 s (regime-late200): same blob field, same steady state, no decay on either side (brightnessTrend `steady` for both over the 60 s survey).",
+    "Structure matches closely on the default rig: at 9 non-flicker dump times in the 41-56 s window the original showed 2-3 blobs and 26-33 of 60 px above half-brightness; the port showed 2-3 blobs and 24-37 px. Blob widths (~8-16 px), soft gaussian-ish edges and the dim red inter-blob floor (orig 72/4/4, port 63/0/0) all agree.",
+    "MAIN DIVERGENCE — the original strobes, the port does not. In the 20 s late window (--skip 40, 20 fps) the original had 86/400 frames below 60% of its median brightness, dipping as low as meanBrightness 0; the port's minimum over the same 400 frames was 45 (median 56). Autocorrelation of the original's meanBrightness peaks at lags 11, 66 and 132 frames (0.55 s, 3.3 s, 6.6 s): blink events come in bursts spaced ~0.55 s that repeat about every 3.3 s. The port's autocorrelation is a featureless monotonic decay — no periodic structure at any lag out to 8 s.",
+    "The strobe is per-blob, not a global dimmer. --dump at 201.55/201.65/202.05 s: the original's right-hand blob (px ~44-59) is fully lit, then two frames later that whole span has dropped to the dim floor while the mid blob (px ~27-35) stays lit, then it reignites in place at its old position. Early on (t=3.1 s, dump-flicker) every blob went out at once, so the blinks are sometimes synchronized and sometimes partial. The port's blobs never interrupt — they fade in and out only over seconds.",
+    "Blink duration is 4 captured frames at every rate tested (0.10 s at 40 fps, 0.20 s at 20 fps, 0.40 s at 10 fps), i.e. frame-counted, while the ~0.55 s gap between blinks holds in seconds across 10/20/40 fps. The port has nothing comparable at any rate.",
+    "Consequent motion-stat gap: `motion` avg 18.3 (orig) vs 6.4 (port) over the 60 s survey, and 8 vs 2 over the 20 s late window — but with flicker frames excluded the medians are 2 vs 1, so the underlying blob drift speed is close and the stat gap is almost entirely the strobe.",
+    "Colour: same fire family (red -> orange), but the original's hot cores reach 255/113/4 while the port's cap at 255/79/0. Survey meanG avg 35.1 (orig) vs 28.0 (port), meanG max 53 vs 35; meanB avg 2.4 vs 0. The original therefore reads a touch more yellow/orange at the core, the port a purer red-orange. Overall meanBrightness matches (survey avg 55.2 vs 52.9; late-window medians 55 vs 56).",
+    "Warm-up matches: both fade in from black over the first ~3 s and reach full level within a few frames of each other (orig ~70 at frame 55, port ~63 at frame 60, 20 fps).",
+    "Seed-independent: seeds 1, 7 and 1234 (30 s @ 10 fps) all give orig motion 12 / port motion 3 and the same visual split, so this is not a one-seed fluke.",
+    "Both sides behave the same way under fps change — `motion` falls monotonically from 10 to 20 to 40 fps on both — so neither side shows frame-rate-coupled drift speed; the only frame-counted quantity found is the original's blink length."
+  ],
+  "dials": [],
+  "feedback": [
+    "Add the blink. The original's blobs do not just fade — each one extinguishes to the background glow for about 4 rendered frames and then comes back at the same position and roughly the same brightness. Blinks are bunched: a burst of 2-4 of them roughly 0.55 s apart, then a ~2-3 s quiet stretch, so the whole pattern repeats about every 3.3 s. Sometimes every blob goes dark together (whole strip drops to the dim floor), sometimes only one blob does.",
+    "Target numbers for a fix, measured over a 20 s window at 20 fps: the original spends ~21% of its frames below 60% of median brightness and its meanBrightness minimum is 0; the port currently never goes below 80% of median (min 45 vs median 56). Getting those two numbers into range is the single biggest fidelity win here.",
+    "Everything else about the blob field is already right — do NOT change blob count, size, spacing, drift speed or the inter-blob dim red floor. 2-3 blobs lighting ~30 of 60 px, drifting slowly, is what the original does too.",
+    "Warm the palette slightly at the top end. The original's hottest pixel is 255/113/4 and the port's is 255/79/0; push the green ramp so peak green lands near 110-115 instead of ~79 (mean green over a 60 s window should be ~35, currently ~28). The blue term is negligible (orig peaks at 4) and can be ignored.",
+    "Do not chase the raw `motion` stat gap (18 vs 6) with faster drift — with blink frames excluded the two sides' median motion is 2 vs 1. Speeding the blobs up would overshoot; the missing motion is the blink."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-flicker",
+    "fps10",
+    "fps40",
+    "late",
+    "dump-late",
+    "regime-late200",
+    "dump-strobe200",
+    "seed7",
+    "seed1234"
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "slug": "sun-rays-through-trees",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Port keeps the right idea (warm rays fanning from a point above the top edge, same ~59 s super-cycle) but renders ~4x too dim with half the canvas at exact black, only 2-3 broad beams instead of a dense 20+ ray fan, and washes out to grey as pixels brighten while the original stays fully saturated; both ray-count dials are visually inert on the port.",
+  "observations": [
+    "Rig is a 16x16 grid by default; at that size the original's ray structure aliases into a noisy amber texture. Re-rendering both sides at --grid 48x48 (label grid48) makes the intent obvious: the original draws a fan of bright amber beams radiating from a point above the top edge and spreading down across the whole canvas.",
+    "BRIGHTNESS: untouched baseline (6 s, 20 fps, 16x16) orig meanBrightness avg 34.4, port avg 9.0 — a ~3.8x gap. The ratio holds at every RayStrength setting (strength 0: 86 vs 23; 0.25: 60 vs 15; 0.75: 27 vs 6; 1.0: 19 vs 4), so it is not a dial-phase artefact.",
+    "COVERAGE: value histogram of one 48x48 dump (label g48d-cB-0.5, RayStrength 0.3, all sliders 0.5, BaseColor 0.08,1,1) — original has 0/2304 pixels at exactly (0,0,0); port has 1181/2304 (51%) exactly black. On the default 16x16 rig at untouched defaults, dumps at t=0/10/25/40/59 s give orig 26-38 pixels below V=8, port 168-196 of 256 (65-77%).",
+    "COVERAGE SHAPE: per-row mean value on the default rig, orig falls smoothly from ~110-124 (top row) to ~23-27 (bottom row) — content everywhere. Port falls from ~39-42 to exactly 0 by around row 8 and stays 0: the bottom half of the grid is dead, whereas the original's rays reach the bottom edge.",
+    "SATURATION: same 48x48 dump, saturation binned by value — original is meanSat 1.00 in every bin from V=0 up to V=233 and only 0.84 in the top bin; the port collapses (0.92 at V 26-51, 0.62 at V 52-77, 0.45-0.50 in the midtones, 0.30 at V 130-155). Visually the port's brightest beams are near-neutral grey/white — a default-rig dump at t=3 s has port pixels of exactly (151,151,151), (135,135,135), (115,115,115) where the original's brightest are tinted amber (255,223,97), (216,128,0). The port appears to add light into all three channels rather than scaling a saturated colour.",
+    "RAY COUNT: horizontal scanline zero-crossings on 48x48 dumps (rows 4/8/16/24) with RayMultiple1/RayCountA at 0, 0.5, 1 — original 10/8/7, 21/19/15, 32/18/24 (ray count rises strongly with the dial); port 2/4/5, 2/2/5, 2/4/5 (identical at all three settings). The port draws 2-5 beams where the original draws 10-32 at the same dial value.",
+    "MOTION: on the original the fan is spatially stable while brightness shimmers and sways along the rays (see grid48/orig-motion.png, 12 consecutive frames at 20 fps); the port's white beams barely move and a separate amber blob drifts slowly across an otherwise black field (grid48/port-motion.png). Untouched 16x16 stats: orig motion avg 0.7 with 34/120 zero-motion frames, port motion avg 0.2 with 92/120 zero-motion frames (motionLit 0.7 vs 0.9). Over a 60 s span 76/256 port pixels were byte-identical at all five dump times vs 0/256 on the original.",
+    "TEMPORAL PERIOD MATCHES: autocorrelation of meanBrightness over the 240 s / 2 fps survey gives the port a dominant lag of 118 frames = 59.0 s (and its harmonic at 118 s); the original also shows a peak at 118-119 frames = 59.0-59.5 s alongside its short-lag drift. So the underlying time driver is right — the spatial/colour rendering is what diverges.",
+    "NO MODE STRUCTURE on either side: the 60 s / 5 fps and 240 s / 2 fps surveys show one steady regime throughout, and a --skip 120 late window (label late) reproduces the same means (orig 37, port 9). Both sides are steady, so this is not a dying-port case — the port looks the same at t=0 and t=232 s.",
+    "SEEDS: seed 1, 7 and 1234 give identical summary stats on both sides (orig 34, port 9), so the divergence is not a one-seed fluke and the pattern is not RNG-driven.",
+    "CONTROL SURFACE MISMATCH: both sides expose 5 controls with matching kinds, but two names differ — original has sliderRayMultiple1 / sliderRayMultiple2 (labels RayMultiple1 / RayMultiple2), port has sliderRayCountA / sliderRayCountB (labels RayCountA / RayCountB). sliderRayStrength, hsvPickerBaseColor and sliderColorVariation match by name. A user's saved control values would not carry across.",
+    "No compile or runtime errors on either side in any run; wantsSensors false on both."
+  ],
+  "dials": [
+    {
+      "name": "sliderRayStrength",
+      "origEffect": "Inverse brightness/contrast knob: 0 = bright, near-full-canvas amber wash (mean 86); 1 = dark with only the brightest rays surviving (mean 19). Continuous and monotonic.",
+      "portEffect": "Same direction and roughly the same relative curve (0 -> mean 23, 0.25 -> 15, 0.5 -> 9, 0.75 -> 6, 1 -> 4), but every point sits at ~1/4 of the original's brightness. Even at strength 0 the port leaves most of the canvas black.",
+      "matches": false
+    },
+    {
+      "name": "sliderRayMultiple1 (port: sliderRayCountA)",
+      "origEffect": "Angular frequency of the primary ray set. At 0 the fan is a handful of broad wedges (10 scanline crossings at row 4 of a 48x48 render); at 1 it is a dense comb of fine rays (32 crossings). Clear, continuous, dramatic.",
+      "portEffect": "No visible change in ray count at 0, 0.5 or 1 — scanline crossings are flat at 2/4/5/6 across all three values on every row tested. The dial only nudges overall brightness (48x48 mean 19 / 13 / 15), which is why the probe called it responsive.",
+      "matches": false
+    },
+    {
+      "name": "sliderRayMultiple2 (port: sliderRayCountB)",
+      "origEffect": "Second, weaker ray-frequency term: row-4 crossings go 20 -> 21 -> 24 across 0/0.5/1, adding finer detail on top of the primary fan.",
+      "portEffect": "Inert as a structural control — crossings identical (2/2/5/6) at all three values; only small brightness jitter (48x48 mean 21 / 17 / 20).",
+      "matches": false
+    },
+    {
+      "name": "hsvPickerBaseColor",
+      "origEffect": "Sets the base hue of the rays. Median lit-pixel hue tracks the picker exactly: 0.33 -> 0.333, 0.66 -> 0.665. Value/brightness unchanged (meanV 99.2 at all hues).",
+      "portEffect": "Hue mapping is correct — 0.33 -> 0.333, 0.66 -> 0.667, meanV unchanged at 16.9. This is the one dial that behaves the same on both sides, apart from the port's global dimness and low saturation.",
+      "matches": true
+    },
+    {
+      "name": "sliderColorVariation",
+      "origEffect": "Widens the hue spread around the base colour. 10th-90th-percentile lit-pixel hue spread goes 0.002 (single flat hue) -> 0.925 -> 0.848 across 0/0.5/1 — a huge, obvious change from monochrome rays to a full rainbow of ray colours.",
+      "portEffect": "Same direction but ~5-10x too weak: hue spread 0.083 -> 0.135 -> 0.187 across 0/0.5/1. Whole-rig probe delta was 0.69 (called INERT); the manual sweep over a 48x48 dump plus a 12 s / 10 fps default-rig run confirms it is live but far under-scaled, and at ColorVariation 0 the port still has 0.083 of residual hue spread where the original is flat at 0.002.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The port's ray field only covers the top ~40% of the canvas and leaves 51% of pixels at exactly (0,0,0); the original never emits a fully black pixel and its rays reach the bottom edge with row-mean value ~25. Whatever falloff or threshold kills the lower rows is too aggressive — the original's brightness falls smoothly from ~115 (top row) to ~25 (bottom row), roughly a 4-5x gradient, not to zero.",
+    "Overall output is ~4x too dim at every RayStrength setting (orig/port mean brightness 86/23, 60/15, 40/9, 27/6, 19/4). Raise the global gain by about 4x AFTER fixing coverage, and re-check: some of the gap is the black region dragging the mean down.",
+    "Rays desaturate to grey as they brighten. In the port, mean saturation falls from 1.00 (V<26) to 0.45-0.62 in the midtones and 0.30 near V=150, with the brightest beams at literal (151,151,151). The original holds saturation at 1.00 all the way to V=233 and only softens to 0.84 in the very top bin. The port looks like it is adding ray intensity into R, G and B equally; it should scale a saturated hue and only whiten right at the very top of the range.",
+    "Ray COUNT is fixed. Sweeping RayCountA (and RayCountB) 0 -> 0.5 -> 1 leaves the beam count unchanged at 2-5 across the canvas, while the original goes from ~10 broad wedges to ~32 fine rays on a 48x48 grid. On the original both dials are angular-frequency multipliers on the ray function; on the port they only modulate brightness. This is the single largest structural gap after coverage.",
+    "ColorVariation is under-scaled by roughly 5-10x. At ColorVariation 1 the original spreads lit-pixel hues over ~0.85 of the wheel; the port manages 0.19. At ColorVariation 0 the original is a single flat hue (spread 0.002) while the port still spreads 0.083 — so the variation term needs both a much larger gain and a true zero.",
+    "Rename the two ray-frequency sliders to match the original's control surface: the original exposes sliderRayMultiple1 / sliderRayMultiple2 (labels RayMultiple1 / RayMultiple2); the port calls them sliderRayCountA / sliderRayCountB. Names and labels should match so saved control values transfer.",
+    "Things that are already right and should not be disturbed: the hsvPickerBaseColor hue mapping is exact on both sides (0.33 -> 0.333, 0.66 -> 0.667), RayStrength's inverse-brightness direction and curve shape match, the rays emanate from the correct apex (a point above the top edge, near horizontal centre), and both sides share a ~59 s super-cycle in mean brightness, so the time driver is correct.",
+    "Verify any fix on a 48x48 grid, not the default 16x16 — at 16x16 the original's ray fan aliases into amber noise and the structural difference is easy to under-read."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "seed7",
+    "seed1234",
+    "srt-dump-base",
+    "srt-dump-long",
+    "dial-mid",
+    "ctl-strength-0",
+    "ctl-strength-0.25",
+    "ctl-strength-0.75",
+    "ctl-strength-1",
+    "ctl-raycountA-0",
+    "ctl-raycountA-1",
+    "ctl-raycountB-0",
+    "ctl-raycountB-1",
+    "grid8",
+    "grid48",
+    "g48-cA-0",
+    "g48-cA-0.5",
+    "g48-cA-1",
+    "g48d-cA-0",
+    "g48d-cA-0.5",
+    "g48d-cA-1",
+    "g48d-cB-0",
+    "g48d-cB-0.5",
+    "g48d-cB-1",
+    "g48d-cv-0",
+    "g48d-cv-0.5",
+    "g48d-cv-1",
+    "g48d-hue-0.0",
+    "g48d-hue-0.33",
+    "g48d-hue-0.66"
+  ]
+}

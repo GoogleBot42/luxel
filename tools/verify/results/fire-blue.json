@@ -1,0 +1,87 @@
+{
+  "slug": "fire-blue",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Recognizably the same blue-flame fire simulation with a matching black-blue-cyan-white heat ramp, but at its defaults the port never cools (whole strip blazes, no dark tail; mean brightness 164 vs 55) and its flames travel ~2.3x too fast, and it adds three sliders the original does not have.",
+  "observations": [
+    "Both sides are the same 1D fire: sparks flash at the low pixel indices (strip base) and heat propagates toward pixel 59 while decaying, drawn as diagonal streaks on the waterfall in the same direction. Palette family matches - along the strip both run white/pale-cyan at the base, through cyan, to deep blue, and (on the original) to black.",
+    "Heat decay along the strip is badly wrong at untouched defaults. Averaged over t=30-35.5 s at 20 fps, the original's per-pixel brightness profile falls 165 (px0) -> 149 (px10) -> 132 (px20) -> 93 (px30) -> 67 (px40) -> 37 (px50) -> 11 (px59); the port's falls only 213 -> 207 -> 191 -> 168 -> 159 -> 125 -> 100. Exact RGB at t=32 s, pixel 59: original [0,0,17] (essentially black), port [0,133,255] (bright azure). The original's top third of the strip is dark most of the time; the port's is never dark.",
+    "Whole-window brightness matches that: 6 s baseline meanBrightness avg orig 54.9 / port 163.7; 60 s at 20 fps orig 96 / port 177. Port meanB avg 235-254 with max pinned at 255, i.e. the blue channel is saturated across most of the rig most of the time.",
+    "Propagation speed is ~2.3x too fast. Detrended circular cross-correlation of consecutive dumped frames (t=30.00..30.25 s): original shifts a steady 2 px per frame, port 4-5 px per frame. At 20 fps that is 40 px/s (orig) vs ~92 px/s (port).",
+    "Frame-rate coupling differs, confirmed by tracking position (not the motion stat) at 10/20/40 fps over the same window: the ORIGINAL holds 2 px per FRAME at every rate, so its speed scales with fps (20 / 40 / 80 px/s) - it is frame-stepped. The PORT holds ~88 / 92 / 88 px/s across the same three rates - it is time-based. The two therefore agree at no frame rate; at the 20 fps default the port is the faster one.",
+    "As a consequence the low-fps survey is misleading on the original: at 5 fps it settles into frozen vertical stripes while the port keeps burning. Re-checked at 20 fps the original animates normally, so this is a survey-rate artefact, not a dead original.",
+    "The ORIGINAL locks up deterministically for long stretches on our engine: motion is exactly 0 from t=54.5 s to t=87.3 s (a 32.8 s window = 32768 ms, the 16.16 fixed-point half-wrap), holding a static striped frame, then resumes. Byte-identical onset and duration at seeds 1 and 7, so it is timing-driven, not random. The port never freezes (zeroMotionFrames 0 over 2000 frames). This looks like an original/engine clock artefact rather than intended behaviour, so it is reported but not scored against the port; all comparisons above were made inside the original's alive regime (t=0-50 s).",
+    "CONTROL SURFACE MISMATCH: the original exposes NO controls at all (meta.json orig controls: []). The port adds three sliders - sliderCooling (Cooling), sliderSparking (Sparking), sliderTickMs (TickMs). Nothing on the original side can be dialed to correspond.",
+    "sliderTickMs is value-inert but not side-effect-free: renders at 0, 0.5 and 1 are byte-identical (checked both alone and with sliderCooling=0.05 / sliderSparking=0.5 pinned), yet merely SETTING it raises propagation from ~92 px/s to 272 px/s - about 6.8x the original's 40 px/s.",
+    "Seed independence: seeds 1, 7 and 1234 give the same character on both sides (orig mean 100-119, port 171-187), so none of the above is a one-seed fluke.",
+    "Neither side binds sensors (wantsSensors false on both); no compile or runtime errors on either side in any run."
+  ],
+  "dials": [
+    {
+      "name": "sliderCooling",
+      "origEffect": "control absent on the original - it exposes no controls",
+      "portEffect": "live and value-dependent, but violently nonlinear and mis-defaulted: 0 saturates the whole strip to flat white (mean 255, motion 0), 0.045 reproduces the original's decay profile and mean (101 vs orig 98), 0.08 already truncates the fire at ~px 30, and 0.25-1.0 leave the strip essentially dead (mean 3-8). The entire useful range sits below 0.1 and the untouched default sits well below even that.",
+      "matches": false
+    },
+    {
+      "name": "sliderSparking",
+      "origEffect": "control absent on the original - it exposes no controls",
+      "portEffect": "live and value-dependent, monotonic: 0 renders fully black (no sparks at all), 0.5 gives mean 177, 1.0 gives mean 198.",
+      "matches": false
+    },
+    {
+      "name": "sliderTickMs",
+      "origEffect": "control absent on the original - it exposes no controls",
+      "portEffect": "value-inert - 0, 0.5 and 1 produce byte-identical frames, alone and with the other two sliders pinned - but setting it at all jumps propagation to 272 px/s. A dial that cannot be steered yet changes the pattern by being touched.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Cool much harder by default. At untouched defaults the port's heat barely decays down the strip - pixel 59 sits at [0,133,255] where the original is at [0,0,17]. Target the original's measured profile (px0/10/20/30/40/50/59 = 165/149/132/93/67/37/11 averaged over a 5 s window at 20 fps): the strip's far third should be black most of the time, with flames only occasionally licking into it. Empirically the port already reaches that shape at sliderCooling ~= 0.045, so the defect is the default cooling amount, not the cooling model - the color ramp and the shape of the falloff are right once cooled (dialed R/G/B profiles agree with the original to within ~15 per channel).",
+    "Halve the propagation speed. At 20 fps the original advances its heat array 2 px per frame (40 px/s); the port advances ~4.6 px per frame (~92 px/s). The visible symptom is streak slope on the waterfall: the original's flame trails are steep diagonals, the port's are nearly horizontal.",
+    "Decide the time model deliberately, because the two sides are on opposite sides of it: the original steps a fixed 2 px per rendered FRAME (20/40/80 px/s at 10/20/40 fps), while the port advances a fixed amount per SECOND (~90 px/s at all three rates). Matching the original's look at the harness default means matching it at 20 fps; if the port keeps its time-based model, pick the constant that reproduces 40 px/s and note the two will still diverge at other frame rates.",
+    "Drop or fix sliderTickMs. It has no value-dependent effect at all (0, 0.5 and 1 render byte-identically, even with the other sliders pinned), yet touching it accelerates the fire from ~92 px/s to 272 px/s - roughly 6.8x the original. Either wire it to something real or remove it.",
+    "Reconsider the three sliders as a whole. The original exposes no controls, so every one of them is a surface the original does not have; more importantly, their defaults are what a user actually sees and those defaults are the wrong pattern. Whatever is kept, retune so the untouched render matches - a viewer should see blue flames on a mostly dark strip, not a strip that is uniformly lit cyan.",
+    "Do not chase the original's freeze. From t=54.5 s to t=87.3 s the original stops updating entirely (exactly 32.768 s, seed-independent) - a fixed-point ms wrap signature on our engine, almost certainly an artefact rather than intended behaviour. The port's continuous burn is preferable there; just be aware that any A/B run crossing t=54.5 s is comparing against a frozen original."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "late-20fps",
+    "late2-55",
+    "fps5-late",
+    "survey-20fps",
+    "dump-late",
+    "dump-f10",
+    "dump-f40",
+    "ctl-cool-0",
+    "ctl-cool-0.02",
+    "ctl-cool-0.05",
+    "ctl-cool-0.08",
+    "ctl-cool-0.12",
+    "ctl-cool-0.18",
+    "ctl-cool-0.25",
+    "ctl-cool-0.5",
+    "ctl-cool-0.75",
+    "ctl-cool-1",
+    "ctl-spark-0",
+    "ctl-spark-05",
+    "ctl-spark-1",
+    "ctl-tick-0",
+    "ctl-tick-05",
+    "ctl-tick-1",
+    "tickspd-0",
+    "tickspd-0.5",
+    "tickspd-1",
+    "tickpin-0",
+    "tickpin-1",
+    "dialed-cool045",
+    "dialed-dump",
+    "seed7",
+    "seed1234",
+    "long-seed1",
+    "long-seed7"
+  ]
+}

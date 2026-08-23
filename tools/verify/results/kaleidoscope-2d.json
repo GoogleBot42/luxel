@@ -1,0 +1,75 @@
+{
+  "slug": "kaleidoscope-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides are full-spectrum 2D kaleidoscopes with the same symmetry/line-width/speed dial set and the same resolution-independent geometry, but the port never rotates (the original's arms visibly spin), runs ~2-2.5x slower at the same Speed, and blacks the grid out for many seconds at a stretch where the original never dims.",
+  "observations": [
+    "Alive on both sides: no compile or runtime errors, no sensor use (wantsSensors false both), identical output at seed 1 and seed 1234 on both sides, and both are resolution-independent (the 48x48 render is the same picture as 16x16, just finer, on orig and port alike).",
+    "Shared character: at mid dials both draw a mirror-symmetric rosette centred on the grid, with a repeating full-spectrum rainbow palette (red/green/blue/magenta/yellow all present over a 60 s window on both), and both take the symmetry dial from unmirrored at 0 to ~4-fold at 0.5 to ~8-fold at 1.",
+    "MOTION, the biggest divergence: on the frame-to-frame filmstrips the original's arms rotate continuously (t=3.00-3.55 s at default dials the hex ring winds into a spinning pinwheel; t=21.00-21.55 s at mid dials the four-arm cross sweeps through roughly 45 deg in 0.55 s, i.e. ~80 deg/s). The port's figure is angle-locked to its mirror axes over the same windows and only breathes radially in place while its colour shifts blue->purple. Same result at 16x16 and 48x48.",
+    "RATE: at Speed=0.5, mean-abs-pixel decorrelation from a reference frame at t=10 s reaches 46/110 (42% of asymptote) after 0.25 s on the original but only 20/135 (15%) on the port; the port needs ~0.65 s to reach the original's 0.25 s level, so the port is ~2.5x slow. The port at Speed=1 evolves at about the original's Speed=0.5 rate (both hit asymptote ~1 s after the reference frame).",
+    "RHYTHM: the port is strongly periodic - motion autocorrelation peaks at lag 267-274 frames (13.4-13.7 s at 20 fps) with r=0.62, harmonic at 535. The original is aperiodic over the same 1200-frame window: its best motion autocorrelation peak is only r=0.42 at lag 134, and meanBrightness peaks never exceed r=0.24.",
+    "BRIGHTNESS ENVELOPE: over 60 s at mid dials (label long60, 20 fps, 1200 frames) the original averages meanBrightness 112 with trend 'steady', spends 3% of frames below 20, and its longest continuous near-black run is 0.4 s. The port averages 56, trend 'volatile', spends 26% of frames below 20, and has a single 7.6 s continuous near-black run. A --dump at t=16 s shows the port with max channel 68 and 252 of 256 pixels below 10 - an effectively blank grid - while the original at the same instant has max channel 255 and 0 dark pixels. The parked run at --skip 14 shows this directly: port near-black from ~15.5 s to ~18 s while the original is a full-frame bright rosette the whole time.",
+    "Port's zeroMotionFrames is 352/1200 over that window (29% of frames identical to their predecessor at 8-bit) against 7/1200 on the original; motionLit avg 2.9 vs 20.3 confirms this is not a sparseness artefact.",
+    "CONTROL SURFACE MISMATCH: the original exposes sliderSpeed, sliderLineWidth, sliderReflections (labels Speed/LineWidth/Reflections). The port exposes sliderSlices, sliderSpeed, sliderLineWidth (Slices/Speed/LineWidth). 'Reflections' has been renamed 'Slices' and moved to first position; there is no name-for-name match for Reflections on the port.",
+    "TEXTURE: the original's rosettes have hard colour boundaries, thin dark separating lines and near-white saturated cores; the port's are softer, drawn as smooth concentric ring gradients. Visible at both grid sizes; not a sampling artefact.",
+    "FRAME-RATE COUPLING (port only): dumping the same absolute times at 10/20/40 fps, the original is fps-invariant (fps10-vs-20 mean abs diff 18.6 at t=3 s shrinking to 1.0 at t=12 s; fps20-vs-40 10.4 -> 0.0). The port is identical at 20 and 40 fps (diff 0.2-2.7) but diverges completely at 10 fps, with the diff GROWING 42.8 -> 126.8 (full decorrelation) over t=3 s to t=12 s - the port appears to clamp its per-frame time step near 1/20 s and therefore runs at half speed below 20 fps.",
+    "Untouched defaults (no controls set) diverge the same way: orig meanBrightness 65 / motion 15 with saturated rainbow rings and pinwheels; port meanBrightness 34 / motion 1 rendering a mostly blue-green six-point star that barely changes across the 6 s window (60 of 120 frames post zero motion)."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Live and continuous. Speed 0 / 0.5 / 1 gives motion 6.4 / 18.4 / 51.5; at Speed=1 the frame fully decorrelates within ~0.25 s, at Speed=0 it takes several seconds. Rotation rate of the arms scales with it.",
+      "portEffect": "Live and continuous in the same direction (motion 0.6 / 1.2 / 5.4) but the whole range is shifted slow: the port at Speed=1 evolves at about the original's Speed=0.5 rate, and no setting produces rotation.",
+      "matches": false
+    },
+    {
+      "name": "sliderLineWidth",
+      "origEffect": "0 = sparse thin bright segments on black (meanBrightness 16.5, motionLit 57.6); 0.5 = broad soft rosette (130); 1 = near-white washed-out field (202.8). Monotonic thickening.",
+      "portEffect": "Same direction and same character: 0 = thin sparse segments on black (meanBrightness 11), 0.5 = 42, 1 = broad wash (73.8). Magnitude is compressed - the port never reaches the original's near-white saturation at 1.",
+      "matches": true
+    },
+    {
+      "name": "sliderReflections (orig) / sliderSlices (port)",
+      "origEffect": "Symmetry order. 0 = no mirroring at all: a smooth organic full-colour noise field drifting across the grid. 0.5 = 4-fold rosette. 1 = ~8-fold star. Name is 'Reflections'.",
+      "portEffect": "Analogous at 0.5 (4-fold) and 1 (~8-fold), so the dial corresponds despite the rename to 'Slices'. At 0 it diverges: the port draws a horizontal rainbow zigzag band that is visually identical across all 12 sheet cells of a 6 s window (motion avg 1.0), where the original at 0 keeps moving (motion avg 9.9).",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Add the missing rotation. The original continuously rotates the kaleidoscope's arms about the centre - at Speed=0.5 the four-arm figure sweeps ~45 deg in 0.55 s (~80 deg/s), and the rate scales with Speed. The port's figure is rigidly locked to its mirror axes and only pulses in and out; this is the single most visible difference to someone watching.",
+    "Speed up the whole evolution by roughly 2.5x at every Speed setting: the port at Speed=1 currently moves like the original at Speed=0.5, so the top of the port's range should be about where the original's range ends up after doubling.",
+    "Stop the blackouts. Over 60 s at mid dials the port's mean brightness is below 20 on 26% of frames and it sits essentially blank for one continuous 7.6 s stretch (at t=16 s the whole 16x16 grid's peak channel is 68). The original never dims for longer than 0.4 s and averages roughly double the port's brightness (112 vs 56) with a 'steady' trend. Whatever term is driving the field toward zero for seconds at a time needs a floor, or the field needs to be offset so its low excursions still light the grid.",
+    "Break the periodicity. The port repeats on a hard ~13.5 s cycle (motion autocorrelation r=0.62 at lag ~270 frames at 20 fps); the original never repeats over the same 60 s window (best r=0.42). The underlying field should read as aperiodic organic noise, not a looping oscillator.",
+    "Rename the symmetry control to match the original: it is 'sliderReflections' (label 'Reflections'), not 'sliderSlices'/'Slices'. Also put the controls in the original's order - Speed, LineWidth, Reflections.",
+    "Fix the symmetry dial at its 0 end. With Reflections=0 the original still animates a full unmirrored noise field; the port collapses to a rainbow zigzag that is frozen for the whole 6 s window.",
+    "Decouple the port from the frame rate. At 10 fps the port runs at roughly half speed - its output at a given wall-clock second diverges further and further from the same second rendered at 20 or 40 fps (mean abs diff 42.8 at t=3 s growing to 126.8 at t=12 s), while 20 fps and 40 fps agree exactly. This looks like a per-frame time step clamped near 1/20 s; the original is fps-invariant.",
+    "Sharpen the palette mapping. The original's colour bands meet at hard edges with thin dark separators and saturate to near-white in the cores; the port renders the same geometry as soft concentric gradients. LineWidth=1 on the original washes to near-white (meanBrightness 203) where the port only reaches 74."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dial-mid",
+    "spd-lo",
+    "spd-hi",
+    "lw-0",
+    "lw-1",
+    "sym-0",
+    "sym-1",
+    "mode-dark",
+    "mode-bright",
+    "rot-check",
+    "long60",
+    "decorr",
+    "decorr-spd1",
+    "grid48",
+    "seed1234",
+    "fps-10",
+    "fps-40",
+    "fpsd-10",
+    "fpsd-20",
+    "fpsd-40"
+  ]
+}

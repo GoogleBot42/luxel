@@ -1,0 +1,37 @@
+{
+  "slug": "christmaslights",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides draw the same thing — fixed 20-pixel groups of red / green / warm-white swapping colour in lockstep every ~2 s — but the port's colour phase runs the opposite way along the strip (bands march left instead of right), its green and white are slightly off, and it skips the original's solid-red opening step; despite the manifest's ambiguous pairing the two render as unmistakably the same concept.",
+  "observations": [
+    "Neither side exposes any controls (meta.json sides.orig.controls and sides.port.controls are both empty; --probe-controls reports 'no settable controls' on both).",
+    "Structure, both sides, default 60 px strip: three solid 20-pixel groups, hard edges, no gradient or blending. Group size is 20 px on BOTH sides regardless of rig size — at --pixels 300 both draw 15 groups of exactly 20 px, at --pixels 12 both draw one solid colour across the whole strip. Resolution behaviour matches exactly.",
+    "Motion, both sides: the display is static between events and repaints instantaneously; motion is 0 on every frame except an event. Event frames in the 60 s / 5 fps survey are identical on both sides — frames 10, 21, 32, ... 296, i.e. every 11 frames (~2.2 s); at 20 fps both fire at frames 40, 81, 122 (every 41 frames, ~2.05 s). zeroMotionFrames 273/300 on both. Cadence is a perfect match and the two sides are co-timed to the frame.",
+    "Temporal colour cycle matches: at the first group both sides walk green -> warm-white -> red -> green, one step per event. Sampled at t=120.5/122.5/124.5/126.5 s the first group is G/W/R/G on the original AND G/W/R/G on the port — same colour at the same instant.",
+    "SPATIAL PHASE IS MIRRORED. At t=2.5 s (--pixels 300 dump) the original reads left-to-right green, red, white, green, red, white...; the port reads green, white, red, green, white, red... Following one green band: the original's green moves from pixels [0,20) at t=2.5 to [20,40) at t=4.5 (right, +20 px/step); the port's moves from [0,20) to [40,60), i.e. 20 px LEFT per step. The port applies the per-group phase offset with the opposite sign, so the bands chase the other way down the strip.",
+    "Exact palette differs slightly (--dump on the 60 px rig): original red (255,0,0) / green (51,255,0) / white (114,114,114); port red (255,0,0) / green (0,255,0) / white (127,108,108). Red is identical; the port's green is pure green where the original's is faintly yellow-shifted, and the port's 'white' is a warm pink-grey where the original's is neutral grey. Whole-strip means in steady state: orig R140 G123 B38, port R127 G121 B36.",
+    "Opening transient, original only: the entire strip is solid red (255,0,0 x60) from t=0 to t=2.0 s, then snaps into the staggered march at t=2.05 s. The port is already staggered at t=0. Confirmed by dumps at 0, 0.5, 1.5, 1.95, 2.05, 2.5 s and by the survey's first motion event being 92 on the original vs 137 on the port. This happens once at startup only; the survey and a --skip 120 late window show the original never returns to a uniform frame.",
+    "Steady state is healthy on both sides: at --skip 120 --seconds 10 both post brightnessTrend 'steady', identical zeroMotionFrames (195/200), and the same event cadence as at t=0. Neither side decays, freezes, or saturates.",
+    "Seed-independent: seed 1 and seed 1234 produce byte-identical dumps on both sides, so nothing here is stochastic.",
+    "Re-rendered on an 8x8 grid rig, both sides show the same 20-px runs wrapping across rows with the same event cadence — the mirrored ordering and the original's solid-red opening cell are both visible there too, so neither is a strip-rig artefact."
+  ],
+  "dials": [],
+  "feedback": [
+    "Reverse the sign of the per-group phase offset. The colour a group shows should lag with increasing pixel index, not lead: at a given instant the original reads green, red, white repeating left-to-right where the port reads green, white, red. The result is that the original's bands travel toward higher pixel indices at 20 px per ~2 s step while the port's travel toward lower ones. The temporal cycle order and the per-instant colour of the FIRST group are already correct, so only the across-strip ordering needs flipping.",
+    "Match the two off-red palette entries. Original green is (51,255,0) (slightly yellow-shifted); the port renders (0,255,0). Original warm-white is neutral (114,114,114); the port renders (127,108,108), noticeably pink. Red is already exact at (255,0,0).",
+    "Add the original's startup step: the original holds the WHOLE strip solid red (255,0,0) for the first cycle step (t=0 to ~2.05 s) before the groups separate; the port is staggered from frame 0. One event, once, at load."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "regime-open",
+    "late",
+    "dump-base",
+    "px300",
+    "px12",
+    "seed1234",
+    "grid8"
+  ]
+}

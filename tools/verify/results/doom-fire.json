@@ -1,0 +1,101 @@
+{
+  "slug": "doom-fire",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Unmistakably the same bottom-fed Doom-fire simulation with the same four-dial surface and the same DragonMode breathing regime, but at defaults the port burns ~2.4x brighter, ~40% taller, churns twice as fast, and whitens at the hot end where the original stays a fully saturated orange.",
+  "observations": [
+    "Rig is a 16x16 grid. Both sides render a Doom-style fire: a hot source row at the bottom, embers propagating upward and decaying, no runtime or compile errors on either side, steady over a 60 s survey and over a --skip 40 --seconds 20 late window (brightnessTrend 'steady' on both).",
+    "Survey (60 s) and rhythm images show a single regime on both sides at default controls - no mode rotation, no slow palette walk. The only other regime is control-gated (DragonMode), covered separately below.",
+    "BRIGHTNESS/DENSITY: untouched defaults, orig meanBrightness avg 4.9 vs port 12.1 (survey and late window agree). Over 7 frames spread across 20 s the orig lights 35% of the grid, the port 59%.",
+    "FLAME HEIGHT: default row profile (mean per row, bottom row first, 4 frames averaged) orig 37 / 17.7 / 9.6 / 6.1 / 3.8 / 0.8 / ~0 above; port 77 / 42 / 25 / 11 / 7 / 4 / 4 / 1.1 / 1.1 / 0.9 / ... still non-zero 14 rows up. Measured as the height at which the profile falls to 5% of the base row, the orig flame occupies 31-38% of the grid and the port 44-50%. Confirmed identically on 8x8, 16x16 and 48x48 grids, so both sides are resolution-independent in the same way - the height gap is real, not a rig artefact.",
+    "SPEED / TICK RATE: both sides advance the fire on a discrete tick and hold the frame in between (--dump of consecutive frames shows changedPx alternating with exact 0). Measured ticks/second at 20/40/60/100 fps: orig 9.7 / 13.2 / 14.6 / 14.6 (converges to ~14.6 Hz, time-based); port 20.0 / 20.3 / 30.3 / 33.2 (~33 Hz). At the default 20 fps render the orig advances every OTHER frame (zeroMotionFrames 200/400 in the late window) while the port advances EVERY frame (zeroMotionFrames 0/400) - the port's fire visibly churns about twice as fast at default dials.",
+    "PALETTE: over 400 captured frames the original's meanB is exactly 0 - its fire is fully saturated, hottest pixel (215,97,11) at defaults and (255,106,8) with the hue picker at 0/1/1. The port's meanB is 3.5, hottest pixel (246,159,99) at defaults and (248,161,101) dialed - the hot core desaturates toward white/peach. The cold ember end matches (median lit pixel ~(22,0,0) on both).",
+    "CONTROL SURFACE: same four controls, same kinds, but the hsvPicker is NAMED DIFFERENTLY - original 'hsvPickerHue' (label 'Hue'), port 'hsvPickerColor' (label 'Color'). The other three names/kinds match exactly (sliderFlameHeight, sliderDragonMode, sliderSpeed).",
+    "All four dials probe responsive on both sides, and all four were confirmed value-dependent by manual sweeps.",
+    "DRAGONMODE: on both sides a binary switch that trips between 0.5 and 0.9, turning the fire into a periodic breath (flare up, die back). Period by autocorrelation of meanBrightness: orig 130 frames @20fps = 6.50 s, port 119 frames = 5.95 s; at 10 fps both double (13.10 s / 11.80 s), so the breath is frame-stepped on BOTH sides identically - not a port-only frame-rate coupling. The port's breath is ~9% faster and much weaker: orig peak meanBrightness 47-49 with a floor of ~2 (never fully dark, 0/600 black frames at 10 fps), port peak 35 and fully BLACK for a third of every cycle (201/600 frames at meanBrightness 0).",
+    "Statistically stable across seeds 1, 7 and 1234 (orig mean 5 / 5 / 5, port 13 / 12 / 12), so none of the above is a one-seed fluke."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerHue (port: hsvPickerColor)",
+      "origEffect": "Rotates the whole fire palette; at h=0/0.33/0.66 the hot end is (255,85,0) / (0,255,80) / (75,0,255) - always a fully saturated hue with the third channel at 0, ramping from a dark ember of the same hue to a bright one. Setting v=0 blacks the pattern out.",
+      "portEffect": "Same rotation and same direction, hot end (212,120,71) / (71,212,117) / (114,71,212) - i.e. the same hue but desaturated ~30% toward white, and never reaching the original's 255 peak. Cold end matches. Also blacks out at v=0.",
+      "matches": false
+    },
+    {
+      "name": "sliderFlameHeight",
+      "origEffect": "Raises the flame monotonically. Row-1 (near top) mean over a 12 s window: 0.0 / 0.0 / 0.0 / 0.1 / 0.4 at 0 / 0.25 / 0.5 / 0.75 / 1. Even at 1 the fire only just reaches the top of a 16-row grid, base row ~42.",
+      "portEffect": "Same direction but far more sensitive. Row-1 mean: 0.0 / 0.0 / 0.3 / 2.5 / 17.2 at the same settings. The port at 0.5 gives roughly the reach the original gives at 1.0; the port at 1.0 fills nearly the whole grid (base row 107, row-1 17.2), a state the original never produces.",
+      "matches": false
+    },
+    {
+      "name": "sliderDragonMode",
+      "origEffect": "Binary; off at 0 and 0.5, on at 0.9 and above. On = a periodic breath, 6.50 s period at 20 fps, sinusoidal envelope peaking at meanBrightness ~47 and bottoming at ~2 (a low ember glow that never goes out). Filling most of the grid at peak with a white-hot central column.",
+      "portEffect": "Same binary threshold (off at 0/0.5, on at 0.9+), same breath, 5.95 s period at 20 fps (~9% fast). Envelope peaks at 35 and drops to a hard 0 - the grid is completely dark for roughly a third of each cycle. FlameHeight remains live inside the mode on both sides, but at FlameHeight=0 the port's breath is much weaker (mean 5 vs orig 13); at FlameHeight=1 they are comparable (31 vs 29).",
+      "matches": false
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "INVERTED - higher value = slower. Fire tick rate 100 / 16.6 / 9.0 / 6.5 / 4.5 Hz at 0 / 0.25 / 0.5 / 0.75 / 1 (0 = one tick per rendered frame). Untouched default ~14.6 Hz, i.e. equivalent to about 0.28 on the dial.",
+      "portEffect": "Same inversion and same shape, but consistently ~1.4x slower at the same value: 100 / 12.6 / 6.5 / 4.0 / 3.0 Hz. Untouched default ~33 Hz, i.e. near the fast end of its own range and about 2.3x the original's default rate.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Rename the port's hsvPicker control from 'hsvPickerColor' (label 'Color') to 'hsvPickerHue' (label 'Hue') to match the original's control surface.",
+    "Palette saturation is the most visible colour gap: with the picker at hue=0, sat=1, val=1 the original's hottest pixels are (255,106,8) - pure saturated orange, blue channel exactly 0 at every heat level, meanB 0 across 400 frames. The port's are (248,161,101), and its meanB sits at 3.5. The port is whitening/desaturating the top of its heat ramp; the original does not. Make the ramp go dark-red -> red -> orange at constant full saturation instead of ramping toward white, keeping the third channel at 0 for a pure input hue. The cold/ember end already matches, so only the upper ~40% of the ramp needs changing.",
+    "Default fire speed is ~2.3x too fast: the original's untouched tick rate is ~14.6 Hz (measured by dumping consecutive frames at 60 and 100 fps), the port's ~33 Hz. At the default 20 fps render this is visible as the original advancing every other frame while the port advances every frame. Slow the port's default tick to ~14-15 Hz.",
+    "The Speed dial's mapping is also ~1.4x too slow across its range: at 0.25 / 0.5 / 0.75 / 1 the original ticks at 16.6 / 9.0 / 6.5 / 4.5 Hz and the port at 12.6 / 6.5 / 4.0 / 3.0 Hz. Direction (inverted - 0 is fastest) and the value-0 endpoint (one tick per frame) are already right; just scale the delay down by ~0.7.",
+    "Default brightness is ~2.4x too high (meanBrightness 12.1 vs 4.9) and the port lights 59% of the grid vs the original's 35%. Even at matched dials (hue 0/1/1, FlameHeight 0.5, DragonMode 0, Speed 0.5) the port's base row is ~1.6x brighter (87.5 vs 55.5). Pull the overall output level down.",
+    "FlameHeight is roughly twice as aggressive as it should be: the port at 0.5 reaches about as high as the original at 1.0, and the port at 1.0 nearly fills the grid (row-1 mean 17.2 where the original manages 0.4). Compress the dial's range so 1.0 lands where the port currently lands around 0.5-0.6. Related: the port's vertical decay has a fatter tail even at matched heights - at FlameHeight 0.5 the original's profile is essentially 0 above 6 rows while the port still shows ~1 unit 14 rows up. Make the ember decay steeper so the flame ends rather than fading into a faint haze.",
+    "The original's base (bottom) row flickers hard - individual cells drop as low as (19,0,0) between hot ones, so the source row reads as a broken, guttering line. The port's base row has a much higher floor (78-201 red) and reads as a continuous near-solid hot band. Add more variance / deeper dips to the port's source row.",
+    "DragonMode: the port's breath period is ~9% short (5.95 s vs 6.50 s at 20 fps - both sides are frame-stepped here, so compare at equal fps). More importantly the port's breath goes completely black for about a third of each cycle (201 of 600 frames at meanBrightness 0) while the original never falls below a low ember glow of ~2 and its peak is 47-49 against the port's 35. Raise the trough so the fire keeps glowing between breaths, and raise the peak of the flare - particularly at low FlameHeight, where the port's breath averages 5 against the original's 13."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "late",
+    "dump-def",
+    "dump-dense",
+    "dump-100",
+    "pal-def",
+    "fps10",
+    "fps20",
+    "fps40",
+    "tick20",
+    "tick40",
+    "tick60",
+    "tick100",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "fh-0",
+    "fh-0.25",
+    "fh-0.5",
+    "fh-0.75",
+    "fh-1",
+    "dm-0",
+    "dm-0.5",
+    "dm-0.9",
+    "dm-0.95",
+    "dm-1",
+    "dm-long",
+    "dm1-fh0",
+    "dm1-fh1",
+    "hue-0",
+    "hue-0.33",
+    "hue-0.66",
+    "dialed-mid",
+    "dialed-dump",
+    "grid8",
+    "grid48",
+    "g8d",
+    "g48d",
+    "seed7",
+    "seed1234"
+  ]
+}

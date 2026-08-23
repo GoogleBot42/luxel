@@ -1,0 +1,52 @@
+{
+  "slug": "daftpunk",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides are pure-red \"DAFTPUNK\" marquees with the same 9-column glyph pitch, but the original scrolls the text UPWARD with the letters lying on their side and squashed 2:1, while the port scrolls upright letters LEFTWARD across the middle 8 rows — different axis, different aspect, different coverage, and different time base.",
+  "observations": [
+    "Rig is the manifest default grid 16x16 / 256 px; neither side has any settable control (probe: 'orig (no settable controls)', 'port (no settable controls)'), so dials are not in play.",
+    "Colour is an exact match: on both sides the only RGB values that ever appear across 120 dumped frames are 0,0,0 and 255,0,0 — pure red, hard on/off, no antialiasing or brightness ramp on either side.",
+    "Both sides display the same word. Reconstructing each side's scrolling bitmap from the incoming edge gives 8-row glyphs spelling D-A-F-T-P-U-N-K on both, at the same 9-column glyph pitch.",
+    "ORIGINAL orientation: the glyph's 8 rows map onto the display's X axis (each glyph row = 2 grid columns, so the text spans all 16 columns), and successive glyph COLUMNS map onto successive display ROWS. On screen the letters therefore lie on their side (rotated 90 deg) and are squashed 2:1 along the scroll axis — one letter occupies the full 16-px width by only ~4.5 rows. Motion is vertical, upward, new text entering at row 15.",
+    "PORT orientation: glyphs are drawn upright, 8 rows tall, occupying only rows 4-11 of the 16-row grid (rows 0-3 and 12-15 are black in every one of 120 dumped frames), 1:1 scale, scrolling LEFTWARD with new text entering at column 15. Motion is horizontal.",
+    "The rhythm images confirm the axis split: orig-rhythm.png (baseline) is pure horizontal banding — per-column means only flash, there is no horizontal component at all — while port-rhythm.png is a field of steady diagonal slopes, the signature of horizontal translation.",
+    "Message content differs at the wrap: the original's cycle is 81 glyph columns = 8 letters plus ONE BLANK glyph slot (a 9-column gap between the K and the next D), so the panel briefly clears between repeats; the port's cycle is 72 px = 8 letters with NO gap, so it reads '...PUNKDAFTPUNKDAFT...' with the K and D adjacent.",
+    "Fonts differ. Original 'A' is a pointed triangular form (apex 2 px wide at the top, legs splaying to a full-width base, crossbar low); port 'A' is a square-shouldered block A. Original 'D' is 8 px wide with square corners; port 'D' is 7 px wide with the top and bottom corners clipped.",
+    "Time base differs — this is a genuine frame-rate-coupling divergence, confirmed by tracking the incoming glyph column, not by the motion stat. The ORIGINAL advances exactly one glyph column per RENDERED FRAME: at fps 5/10/20/40 the column arriving at row 15 at time t was 10,11,12,... / 20,21,22,... / 40,41,42,... / 80,81,82,... i.e. always equal to the frame index. So its scroll speed scales with fps (20 columns/s = 10 rows/s at 20 fps, but only 5 columns/s = 2.5 rows/s at 5 fps). The PORT is time-based and fps-invariant at 25 px/s: measured per-frame shifts of 5.0 px at 5 fps, 2.5 px at 10 fps, 1.25 px at 20 fps and 0.625 px at 40 fps.",
+    "Side effect of the original's mapping: display row y samples glyph column (frame - 2*(15-y)), so the picture only climbs one row every two frames and the intermediate frame re-samples the opposite column parity. At 5 fps this makes 495 of 1200 captured frames post motion 0 (survey-240), against 1 of 1200 for the port; at 20 fps neither side has any zero-motion frame (late, --skip 120).",
+    "Brightness: the original is consistently ~1.7x brighter (survey-240 meanR avg 114.4 vs 65.5; meanBrightness 38.2 vs 21.8), because its 2x-widened glyphs cover all 16 columns while the port lights at most 8 of 16 rows.",
+    "Both sides are stable — no warm-up transient and no decay. late (--skip 120, 12 s, 20 fps): orig brightnessTrend steady (meanBrightness 37.3 avg, first 41 / last 41), port steady (21.8 avg, first 19 / last 20), zeroMotionFrames 0 on both. Nothing dies or saturates.",
+    "No mode structure to miss: over 240 s at 5 fps (survey-240) neither side ever leaves pure red or changes behaviour — the only cycle is the message repeat (orig 81 columns ~= 4.05 s at 20 fps; port 72 px ~= 2.88 s), seen ~15 and ~80 times respectively.",
+    "Deterministic on both sides: seed 7 (seed7) reproduces seed 1's stats exactly (orig mean 33 motion 24, port mean 21 motion 16) — no randomness to judge statistically.",
+    "Both sides scale their text with the rig rather than using a fixed logical canvas, so this is not a resolution-independence mismatch: at --grid 32x32 the original widens each glyph row to 4 grid columns (text still spans the full width, still scrolling up) and the port doubles glyph height to 16 rows centred in rows 8-23 (still scrolling left); at --grid 8x8 both degrade to unreadable smears."
+  ],
+  "dials": [],
+  "feedback": [
+    "Swap the port's text axis. The original lays the glyph's HEIGHT along the display's X axis and its WIDTH along Y: at 16x16, glyph row j lights grid columns 2j and 2j+1, and successive glyph columns appear on successive grid rows, so the letters read sideways and the marquee scrolls UP with new text entering at the bottom row. The port draws upright letters scrolling LEFT. Rotate the port's mapping 90 degrees to match.",
+    "Match the original's aspect. On the original a single letter is 16 px wide (glyph height doubled across the panel) by ~4.5 rows tall (glyph width halved along the scroll axis) — a 2:1 stretch across and a 2:1 squash along travel, so 3-4 letters are visible stacked at once. The port renders letters unstretched at 8x7 px, only ~2.3 visible at a time.",
+    "Stop leaving half the panel dark. The original uses all 16 columns of the 16x16 grid on every frame; the port never lights rows 0-3 or 12-15, which is why its mean red is 65 against the original's 114 (survey-240). Once the axis and 2x widening are matched this fixes itself.",
+    "Match the scroll rate AND its time base. The original advances exactly one glyph column per rendered frame (20 columns/s = 10 rows/s at 20 fps, 5 columns/s at 5 fps — verified at fps 5/10/20/40 by tracking the column entering row 15). The port advances a fixed 25 px/s of wall time regardless of fps. If fidelity to the original is the goal the port must become frame-stepped at 1 glyph column per frame; if the time-based behaviour is deliberately kept, note it explicitly, but at the default 20 fps it should at least be retuned from 25 px/s to the original's equivalent of 20 glyph columns/s.",
+    "Add the blank slot between repeats. The original's cycle is 9 glyph slots — 'DAFTPUNK' plus one empty slot, an extra 9-column gap after the K — giving a visible clear between passes (cycle 81 columns). The port's cycle is 72 columns with no gap, so K runs straight into D.",
+    "Nudge the font toward the original's. The original's A is a pointed triangular form (2-px apex, splayed legs, low crossbar) and its D is 8 px wide with square corners; the port's A is a square-shouldered block and its D is 7 px wide with clipped corners. Glyph pitch (9 columns) is already correct, so only the glyph bitmaps need work.",
+    "Nothing to do on colour or lifetime: both sides are already pure 255,0,0 on black with no intermediate values, and both hold steady with no transient or decay out to t=132 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "dump-a",
+    "dump-seq",
+    "dump-scan",
+    "fps5",
+    "fpsx5",
+    "fpsx10",
+    "fpsx20",
+    "fpsx40",
+    "grid8",
+    "grid32",
+    "seed7"
+  ]
+}

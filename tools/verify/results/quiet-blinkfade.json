@@ -1,0 +1,44 @@
+{
+  "slug": "quiet-blinkfade",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "A near-perfect port of a sparse random blink-and-fade twinkle: event rate, fade envelope, peak-amplitude distribution and even per-pixel event timing match the original to within ~1%, but the port's fixed hue sits at ~0.850 (pink-magenta) where the original's is ~0.799 (blue-violet).",
+  "observations": [
+    "Pattern is a sparse per-pixel twinkle on the default 60 px strip: pixels ignite at random, jump to a random peak brightness, then fade to black. No spatial motion, no translation, no waves — the waterfall is a field of short vertical streaks, and the field is spatially and temporally homogeneous on both sides.",
+    "No controls on EITHER side: meta.json `controls` is [] for orig and port, and --probe-controls reports '(no settable controls)' for both. Control surfaces match; dials[] is empty by design, not by omission.",
+    "Neither side binds sensors (wantsSensors:false both), no compile or runtime errors on any of 12 runs, and every run's provenance (portSha256 a01b2303effe / epeSha256 ffe6a975b1ff / harnessSha256 70c136952047) is identical with an empty warnings array.",
+    "EVENT RATE (12 s dump at 20 fps, 60 px, seed 1): orig 104 blink events, port 105 — 8.33 vs 8.42 events/s over the whole strip, i.e. ~0.139 vs ~0.140 blinks per pixel per second. Lit duty cycle 6.33% (orig) vs 6.36% (port).",
+    "EVENT ALIGNMENT: 95 of the original's 100 complete events have a port event on the SAME pixel index within 0.2 s, mean offset -0.48 frames at 20 fps. Per-pixel event counts over 12 s are near-identical (orig '2222121222222221022222121122212021222121222412...' vs port, differing at only a handful of indices). The port is not merely statistically similar, it is essentially frame-aligned with the original.",
+    "FADE ENVELOPE: identical on both sides and NOT a constant-ratio exponential — it steepens as it dies. A representative orig trace (peak channel, 20 fps): 62>56>51>45>40>35>30>26>22>19>15>12>10>7>5>3>2>1 (18 frames = 0.90 s). The port produces the byte-identical curve 42>37>32>28>24>20>17>14>11>8>6>4>3>1 that also appears in the orig set. Mean event duration 8.84 frames (orig) vs 8.89 (port) at 20 fps; median 10 frames on both; max 18 frames on both.",
+    "PEAK AMPLITUDE: mean peak channel 22.0 (orig) vs 22.4 (port); max peak 63 on both; the per-event peak multisets are near-identical (orig 42,62,40,26,32,29,35,25,59,... vs port 42,36,40,26,32,49,31,62,35,25,59,...). Peaks are dim by design — the whole pattern's mean brightness is well under 1/255, so `motion` reads 0 on most frames; `motionLit` (orig avg 2.5, port avg 2.6 at baseline) is the honest stat here and the two agree.",
+    "TOTAL LIGHT OUTPUT IS IDENTICAL: summed value channel over 240 frames x 60 px is 12227 (orig) vs 12232 (port) — 0.04% apart. Summed R+G+B is 21928 vs 23180 (+5.7% on the port), and that entire gap is explained by the hue offset (the port's second channel carries a larger fraction of the peak), not by any brightness difference.",
+    "COLOR — THE ONE REAL DIVERGENCE. Both sides are fully saturated with G pinned at exactly 0 on every lit pixel of every frame, and both use a SINGLE FIXED hue for every blink (no per-event hue jitter, no palette walk). Original: blue-dominant, R/B = 0.796 +/- 0.01 across 43 bright events (e.g. [50,0,62], [34,0,42], [25,0,32]) => hue ~= 0.799, a blue-violet. Port: red-dominant, R/B = 1.114 +/- 0.01 across 44 bright events (e.g. [63,0,56], [42,0,38], [36,0,32]) => hue ~= 0.850, a pink-magenta. That is a fixed +0.051 hue offset (~18 degrees toward red). It is stable at every fps, every seed, and at t=240 s.",
+    "The hue gap is visible without measurement: the 300 s survey waterfalls read violet/purple for the original and distinctly pink/magenta for the port.",
+    "STEADY STATE (--skip 240, 12 s dense dump at 20 fps): orig 98 events (8.17/s), mean duration 9.27 frames, mean peak 23.6, max peak 62, R/B 0.799; port 95 events (7.92/s), mean duration 9.48 frames, mean peak 24.2, max peak 62, R/B 1.111. Nothing decays, freezes, saturates or drifts on either side; brightnessTrend is 'volatile' on both, which is just what a sparse twinkle does.",
+    "REGIMES: none. The 60 s / 5 fps survey and the 300 s / 2 fps extended survey both show one homogeneous regime on both sides — constant blink density, constant hue, no banding, no cycle. There was no second regime to park a --skip run in, so the late-window run at t=240-252 s serves as the regime re-check.",
+    "FRAME-RATE COUPLING: neither side is coupled, and they agree. Events/s at 10/20/40 fps — orig 8.25/8.33/8.33, port 8.33/8.42/8.42. Mean fade duration expressed in SECONDS at 10/20/40 fps — orig 0.467/0.442/0.434, port 0.463/0.445/0.436 (the frame counts scale 4.67/8.84/17.35 and 4.63/8.89/17.43, i.e. proportional to fps as a time-based fade must). Both patterns are correctly time-based. R/B holds at 0.796 / 1.114-1.115 at all three rates.",
+    "SEED INDEPENDENCE: at seed 7 orig 7.83 events/s, mean dur 9.50 fr, mean peak 24.0, max 63, R/B 0.797 vs port 7.92, 9.40, 23.8, 63, 1.117. At seed 1234 orig 8.50, 8.71, 21.0, 61, 0.799 vs port 8.50, 8.64, 21.0, 61, 1.112. The statistical character tracks across well-separated seeds; the hue offset is seed-invariant.",
+    "RIG SCALING: re-rendered on a 300 px strip, both sides keep the same per-pixel blink density (meanBrightness 0.6 orig / 0.7 port, motionLit avg 2.7 / 2.9, meanG 0 on both). Blink probability is per-pixel on both sides, so the pattern scales identically with strip length."
+  ],
+  "dials": [],
+  "feedback": [
+    "ONLY ONE THING TO FIX: the blink hue constant. The original paints every blink at hue ~0.799 (R/B = 0.796, e.g. peak color [50,0,62] — blue-violet); the port paints hue ~0.850 (R/B = 1.114, e.g. peak color [63,0,56] — pink-magenta). Shift the port's fixed hue down by ~0.05 (about 18 degrees, from 0.85 to 0.80). Verify by dumping bright peaks: the red channel must come out BELOW the blue channel at a ratio near 0.80, not above it at 1.11.",
+    "Do not change anything else. Saturation is already correct (G is exactly 0 on every lit pixel on both sides — full saturation), peak brightness distribution is correct (mean 22.0 vs 22.4, max 63 both), fade shape is correct (the port reproduces the original's non-exponential steepening decay frame for frame), blink rate is correct (8.33 vs 8.42 events/s on 60 px), and the port is already correctly time-based rather than frame-stepped.",
+    "Regression guard for a future fix pass: after correcting the hue, total summed R+G+B over a 12 s / 20 fps / 60 px / seed 1 window should drop from ~23180 to ~21930 while the summed value channel stays at ~12230. If the value-channel sum moves, the fix touched brightness as well as hue and has overshot."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-300",
+    "dump-jz-a",
+    "late-skip240",
+    "late-jz-b",
+    "fps-jz-10",
+    "fps-jz-40",
+    "seed-jz-7",
+    "seed-jz-1234",
+    "pixels300-jz"
+  ]
+}

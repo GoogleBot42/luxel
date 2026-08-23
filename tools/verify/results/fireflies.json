@@ -1,0 +1,47 @@
+{
+  "slug": "fireflies",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides render sparse warm dots on a dark 60-px strip, but the original is a population of persistent amber fireflies that continuously fly the length of the strip with comet trails and bounce off the ends, while the port is a much sparser set of near-stationary yellow point blinks that flash to full white-yellow, fade, and leave the strip completely dark a quarter of the time.",
+  "observations": [
+    "Both sides compile and run clean on the 60-px strip rig with no runtime errors, and both are alive and unchanged in character at t=0, t=30 and t=60 (labels baseline/mid/late) — neither decays, freezes, or saturates.",
+    "MOTION is the headline divergence. Original fireflies TRAVEL: tracking bright peaks in a 0.1 s-spaced dump (label dump-mid, skip 30 s, 20 fps) follows one fly from pixel 25 at t=30.5 s to pixel 45 at t=32.2 s — 20 px in 1.7 s, ~12 px/s — and the 20 s waterfalls (labels seed1234, fps20) are full of long straight diagonals that reflect into clean V shapes at both strip ends, i.e. flies bouncing off the boundaries. Port fireflies mostly DO NOT MOVE: in the same dump, a fly sits at pixel 41 for 0.5 s, another at pixel 10 for 0.5 s, another at pixel 19 for 0.9 s, all at a fixed index; a peak-matching pass over 0.05 s-spaced frames gives a median per-frame displacement of exactly 0 px on the port at 10, 20 and 40 fps, and its fastest observed fly covered 2 px in 0.3 s. No port fly ever traverses the strip or reaches an end to bounce.",
+    "PERSISTENCE differs accordingly. Original flies are continuously present and cross the whole strip; port flies are blinks with a ~0.3-0.9 s lifetime that appear, rail to 255, fade, and disappear at (essentially) the pixel where they were born.",
+    "DENSITY: over 18 frames sampled across a 60 s / 20 fps run (label spread), the original averages 4.2 concurrent bright fireflies per frame (max-channel >= 32), 7.5 bright pixels and 27.7 non-zero pixels of 60; the port averages 1.4 fireflies, 1.7 bright pixels and 2.7 non-zero pixels. The port is roughly 3x sparser in fly count and ~10x sparser in lit area.",
+    "TRAILS: each original fly carries a soft decaying tail. Full-strip dump at t=2.0 s: pixel 13 at 104 falling 26, 17, 20, 5, 3, 1 over the next six pixels. Port flies have no tail at all — at the same instant its only feature is pixels 2:42, 3:255 with every other pixel exactly 0.",
+    "DARKNESS: over 120 s at 10 fps (label survey-long) the original is never fully dark — 0 of 1200 frames at mean brightness 0 — while the port is fully dark in 317 of 1200 frames (26.4%), including one measured gap of 0.9 s with nothing above threshold anywhere on the strip.",
+    "COLOR: the original is a single fully-saturated deep-orange hue — over 145 bright samples, hue 17.5-18.0 deg, saturation 1.00, blue channel exactly 0 in every frame of every run (meanB min=max=0). The port is a desaturated yellow — hue 53.8-59.2 deg, saturation 0.60-0.75, typical lit pixel (255,239,101). Port fireflies are visibly yellower and washed-out next to the original's amber.",
+    "BRIGHTNESS ENVELOPE: original fly peaks vary continuously over roughly 40-255 as each fly pulses; port flies spend most of their (short) life pinned at exactly 255. Whole-window mean brightness at 20 fps: orig 8.4 avg / max 14, port 3.4 avg / max 11.",
+    "The port's baseline stats look frozen on the whole-rig `motion` stat (zeroMotionFrames 57 of 120, motion avg 1.4) purely because it is so sparse; `motionLit` is 25.6 avg / 132.7 max against the original's 5.0 / 17.3, i.e. the port's few lit pixels switch far harder (on/off blinking) than the original's, which glide.",
+    "Neither side exposes any settable control — the probe run reports '(no settable controls)' for both — so there is no control-surface mismatch and no dialed comparison to make.",
+    "Character is stable across seeds 1, 7 and 1234 (all six renders byte-distinct, so the seed is live on both sides) and across 10/20/40 fps: this is a statistical property of each pattern, not a one-seed fluke. Both sides' mean brightness rises with fps (orig 3/6/8, port 3/4/5 over the same 20 s window at 10/20/40 fps), suggesting both spawn per-frame rather than per-second; the effect is present on both sides so it is not itself a port bug, and peak-tracking was too noisy at 10 fps to call frame-rate coupling of fly SPEED either way."
+  ],
+  "dials": [],
+  "feedback": [
+    "Make the fireflies MOVE. The original's flies each have a persistent constant velocity of roughly 7-12 px/s on a 60-px strip, in both directions, and they reflect off the strip ends (the waterfall shows straight diagonals bouncing into V shapes). The port's flies are pinned to their spawn pixel — median measured displacement 0 px/frame — so the port reads as blinking dots, not flying insects. This is the single biggest fix.",
+    "Give the flies a long life. Original flies persist for many seconds and cross the entire strip; port flies live 0.3-0.9 s and travel 0-2 px before vanishing. Lifetime should be long enough for a fly to make several strip traversals, with brightness pulsing during that life rather than the fly ceasing to exist.",
+    "Add the comet trail. Every original fly leaves a decaying tail spanning ~6-7 pixels behind it (e.g. 104 -> 26 -> 17 -> 20 -> 5 -> 3 -> 1); port flies are hard-edged 1-2 px dots with zero falloff, which is why the port lights only ~2.7 of 60 pixels against the original's ~27.7.",
+    "Raise the population by about 3x: original averages ~4.2 concurrent visible flies per frame at 20 fps, port averages ~1.4. Related, the strip should never go completely dark — the original had 0 fully-dark frames in 1200, the port had 317 (26.4%), with dark gaps up to ~0.9 s.",
+    "Fix the hue and saturation: the original is fully saturated deep orange/amber at hue ~18 deg with the blue channel at literal 0 in every frame; the port sits at hue ~54-59 deg with saturation ~0.6 (blue channel ~101 at full brightness), which reads as pale yellow. Drop the blue to zero and pull the hue down toward 18 deg.",
+    "Soften the brightness envelope: original fly peaks vary continuously across ~40-255 as they pulse, while port flies rail at exactly 255 for most of their life and then cut out. The port's motionLit (25.6 avg vs the original's 5.0) is the numeric signature of that on/off switching versus the original's gliding glow."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-long",
+    "mid",
+    "late",
+    "fps10",
+    "fps20",
+    "fps40",
+    "fps10-dump",
+    "fps40-dump",
+    "dump-consec",
+    "dump-mid",
+    "spread",
+    "seed7",
+    "seed1234"
+  ]
+}

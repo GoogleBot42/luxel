@@ -1,0 +1,42 @@
+{
+  "slug": "sinus",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Port reproduces the original's glowing 3-cycle sine curve, palette and hue walk almost exactly, but its wave sweeps back and forth only ~44% as far per super-cycle and therefore moves ~2.7x too slowly.",
+  "observations": [
+    "Rig/defaults: grid 16x16, 256 px, no controls on EITHER side (probe: 'no settable controls' for orig and port) — control surfaces match. No compile or runtime errors either side. Both sides seed-independent (seed 1 vs seed 7 gave byte-identical t=0 frames on both) and fps-invariant (col-0 oscillation extrema at 10/20/40 fps agree to within 0.1 s on both sides) — no frame-rate coupling on either side.",
+    "Structure: both draw a single soft-glow sine curve spanning the grid, one bright bar per column, black above and below. Dominant spatial frequency measured by DFT of the brightest-row-per-column profile over 201 frames spanning 60 s: orig 3.00-3.10 cycles across the canvas, port 3.00-3.10 — CONSTANT and identical on both sides, no breathing. Both are resolution-independent: 3 cycles at --grid 16x16 (spatial repeat every 5 columns on both, confirmed by --dump at t=0,2,4,6,8,10,12) and 3 cycles at --grid 48x48.",
+    "Glow cross-section matches: at 48x48, t=1 s, column 6 the vertical brightness profile rises 0 -> 122 peak -> 0 on both sides with FWHM ~11 rows on BOTH. Brightest pixel orig [254,111,0] vs port [254,122,0] (same saturated orange, ~4 deg hue offset from the faster hue walk).",
+    "MOTION — the one real divergence. The curve's horizontal phase (DFT phase at f=3 on the 48-wide profile, tracked over 60 s at 0.3 s spacing) sweeps sinusoidally back and forth on both sides. ORIG: phase runs +4.78 cycles (peak t~12.5 s) -> -4.20 cycles (trough t~38 s) -> +4.71 (t~60 s); excursion ~+/-4.5 cycles, sweep period ~48.5 s, peak phase rate ~0.57 cycles/s. PORT: +1.78 (peak t~15.5 s) -> -2.21 (trough t~44.5 s) -> +0.01 (t~60 s); excursion ~+/-2.0 cycles, sweep period ~58 s, peak phase rate ~0.21 cycles/s. So the port's sweep AMPLITUDE is 2.25x too small and its sweep PERIOD ~20% too long, giving a 2.7x speed deficit.",
+    "Independent confirmations of the ~2.7-3x slowdown: (a) total accumulated phase travel over 60 s = 22.4 cycles orig vs 8.2 cycles port (ratio 2.73); (b) count of col-0 vertical-position turning points over 60 s = 46 half-oscillations orig vs 17 port (predicted 44.7 / 16.4 from the phase travel — consistent); (c) `motion` stat 9.7 (orig) vs 3.4 (port) on the 6 s / 20 fps baseline, 7.14 vs 2.55 over 60 s at 20 fps, 12.7 vs 4.1 on the late window; (d) whole-frame luminance decorrelation: orig falls to corr 0.32 at lag 0.4 s, port reaches the same level only at ~1.3 s (3.2x).",
+    "Because the sweep is oscillatory the apparent speed is itself modulated: orig's col-0 half-period runs 0.85 s at its fastest to 2.6 s at its slowest; port's runs 2.4 s to 5.0 s. `motion`-series autocorrelation puts the speed-modulation super-cycle at 24.2 s (orig) vs 29.6 s (port) — i.e. half the sweep period on each side, consistent with the phase measurement.",
+    "COLOR: both do a smooth, monotonic, full-spectrum hue rotation in the same direction, whole-frame at once (no spatial hue gradient). Measured by unwrapping the brightness-weighted circular mean hue over 60 s: orig completes 4.15 turns = 14.42 s per full hue cycle; port completes 4.56 turns = 13.11 s. Port's hue walk is ~10% fast. Palette family, saturation and value are otherwise indistinguishable (both peak at 254 in the dominant channel).",
+    "BRIGHTNESS: port is consistently ~7% brighter — meanBrightness avg 39.7 (orig) vs 42.4 (port) on baseline, 40.6 vs 44.1 on the late window; per-channel max 82 vs 88. Black-pixel fraction at 48x48, t=1 s: 0.393 (orig) vs 0.342 (port). brightnessTrend `steady` on both, zeroMotionFrames 0 on both in the late window — neither side decays, freezes or saturates.",
+    "Steady state verified: --skip 120 --seconds 20 --fps 10 shows both sides still animating with the same character and the same 3.1x motion ratio as at t=0, so the difference is a constant rate/excursion scaling, not a transient or a dying port.",
+    "Single regime: the 60 s survey (5 fps) and the 60 s 20 fps runs show one continuous behaviour — sine curve + hue walk + slow phase sweep. No mode rotation, no dark gaps, no discrete events, on either side. Both rhythm images are smooth rainbow banding with faint column texture; no structural banding boundaries."
+  ],
+  "dials": [],
+  "feedback": [
+    "The only substantive gap is the amplitude of the horizontal phase sweep. The original's sine curve slides back and forth over roughly +/-4.5 wavelengths (a ~9-wavelength peak-to-peak excursion); the port covers only +/-2.0 (~4 wavelengths). Roughly 2.25x the current sweep amplitude would land it on the original.",
+    "The sweep's own period is ~20% too long: original completes one full back-and-forth in ~48.5 s (phase peak t~12.5 s, trough t~38 s, peak t~61 s), port takes ~58 s (peak t~15.5 s, trough t~44.5 s). Shortening it to ~48-49 s plus the amplitude fix together yield the 2.7x speed-up the motion stats call for (orig peak phase rate 0.57 cycles/s vs port 0.21 cycles/s).",
+    "Hue rotation is ~10% too fast: one full spectrum every 13.11 s on the port vs 14.42 s on the original. Direction and linearity are already right — only the rate needs the ~1.10x slowdown.",
+    "The curve's vertical amplitude is ~12% shallow: on a 48-row grid the brightest-row profile spans rows 7..40 (33 rows) on the original vs 9..38 (29 rows) on the port; on the default 16x16 rig it is rows 2..13 vs 2..12. This also accounts for the port's ~7% higher mean brightness and lower black fraction (0.342 vs 0.393) — a slightly taller wave pushes more of the glow off the top/bottom edges.",
+    "Do NOT touch: spatial frequency (3.0 cycles across the canvas, exact on both, at both 16-wide and 48-wide), the glow cross-section (FWHM ~11 rows at 48x48 on both), resolution independence, palette/saturation, determinism, and fps-invariance are all already correct. There are no controls on either side and none should be added."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-a",
+    "dump-fine",
+    "dump-long",
+    "dump-60",
+    "fps10",
+    "fps40",
+    "grid48",
+    "freq48",
+    "seed7",
+    "late"
+  ]
+}

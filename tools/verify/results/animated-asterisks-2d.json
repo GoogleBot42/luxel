@@ -1,0 +1,108 @@
+{
+  "slug": "animated-asterisks-2d",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same rotating rainbow asterisk with the same 12 arms, same rotation and the same slow width-breathing idea, but the port's breathing envelope blacks the panel out for ~10 s of every ~59 s cycle (original never does), and three of five dials are 2-3x off in their mid-range response.",
+  "observations": [
+    "Both sides render cleanly on the default 16x16 grid rig, no compile or runtime errors, alive from t=0 to t=240 s with no decay (late window --skip 200 --seconds 30: orig mean 43, port mean 43). Output is seed-independent on both sides (seed 1 vs seed 7 at --skip 30 gave identical stats), so this is a deterministic, non-stochastic pattern.",
+    "Untouched defaults, both sides: a rainbow asterisk radiating from the exact centre of the panel, exactly 12 arms (6 lines through centre) on both — confirmed by angular peak-counting of ring profiles at both 16x16 and 48x48. One arm is much wider than the rest and sweeps around as the figure rotates; the remaining arms are narrower wedges. Colour is a full spectrum distributed around the circle on both sides (frame-mean R/G/B are equal to within 1 count on both over a 240 s window).",
+    "Rotation: same sense of rotation on both, and fps-invariant on both (0.01 s dumps at 100 fps and 0.1 s dumps at 10/40 fps give the same deg/s), so no frame-rate-coupling bug. Rate at untouched defaults: orig ~180 deg/s, port ~165 deg/s (48x48, AnimateWidth=0, LineWidth=0.4) — within ~10%, visually indistinguishable.",
+    "THE MAIN DIVERGENCE — the animated-width envelope. Both sides slowly breathe line width over a ~1-minute cycle, but the period and the shape of the cycle differ. Untouched, over 240 s on the default rig: orig period 65.0 s, port 58.6 s (autocorrelation of the meanBrightness series). Orig ramps up, holds a broad plateau near its maximum for ~20 s, then dips through its minimum in ~3 s; only 5.3% of frames sit below 10% of peak brightness. Port ramps to a sharper, higher peak (max frame mean 71 vs orig 66) and then sits essentially BLACK (frame mean 1-6) for ~10-13 s before restarting: 22.4% of frames below 10% of peak. On screen this is the port going dark for about a sixth of every minute while the original merely thins out.",
+    "That envelope difference is NOT a defaults artefact: with all five dials explicitly set identically on both sides (AnimateWidth=1, LineWidth=0.5, NumLines=0.25, RotationSpeed=0.5, ColorSpeed=0.5) over 240 s, orig period 65.2 s / peak 57 / 4.1% dark frames vs port period 58.8 s / peak 70 / 19.8% dark frames. The port's width simply swings over a wider range than the original's — brighter at the top, clipped at zero for a long stretch at the bottom.",
+    "Visible consequence on the default rig at t=48-56 s (label regime-t48): the original still shows a full medium-width 12-arm asterisk (mean 38) while the port has collapsed to a scatter of isolated single pixels lying on the arm directions (mean 9).",
+    "CONTROL-SURFACE MISMATCH: the original exposes sliderNumLines (label \"NumLines\"); the port exposes sliderNumberOfLines (label \"NumberOfLines\"). The other four names/kinds match exactly (sliderLineWidth, sliderAnimateWidth, sliderRotationSpeed, sliderColorSpeed, all sliders).",
+    "Arm geometry, minor: the original's arms fade out at a radius of about 1.25x the panel half-width, the port's at about 1.35x, so at untouched defaults the port paints the extreme corners of the square and the original leaves them black (radial brightness profile at 48x48: orig 127/71/28/0 in the r=1.0/1.1/1.2/1.3 bands, port 143/142/63/11).",
+    "Edge/anti-alias character matches at defaults: the 48x48 whole-frame brightness histograms are near identical (orig 13/11/9/10/10/10/9/10/10/8 percent per decile, port 11/9/10/9/9/11/10/10/12/10), i.e. both use the same soft-shaded wedge rendering rather than one being hard-edged."
+  ],
+  "dials": [
+    {
+      "name": "NumLines (orig) / NumberOfLines (port)",
+      "origEffect": "Sets the number of lines through centre. 0 = a single line (2 arms) on both. It ramps up fast in the lower half of its range: at 0.25 the original already draws ~26 arms filling the disc, at 0.5 ~43 arms, and at 0.75-1.0 the arms merge into a dense, DIM fan with one bright wide bar riding over it — the original's overall brightness actually peaks near 0.25 (mean 55 at 48x48) and falls back to 24 at 1.0, because per-line width shrinks as the count grows.",
+      "portEffect": "Same 0 = single line, and the same 12 arms at the untouched default, but the count grows LINEARLY and much more slowly: 12 arms at 0.25, 24 at 0.5, 36 at 0.75, 48 at 1.0 (arms ~= 2 + 46*v). Per-line width does not shrink with count, so brightness rises monotonically (mean 20 -> 27 at 48x48) instead of peaking early and falling.",
+      "matches": false
+    },
+    {
+      "name": "sliderLineWidth",
+      "origEffect": "Reported inert by --probe-controls (delta 0.00) on BOTH sides — a false inert caused by AnimateWidth being active by default and overriding it. With AnimateWidth=0 it is clearly live: 0 renders a completely black panel, 0.5 gives mean 44, 1.0 gives mean 58 (near-full coverage) on the default rig. Its response is front-loaded: half-dial already reaches 76% of the full-dial brightness.",
+      "portEffect": "Also live once AnimateWidth=0, same endpoints in character (0 = black except a couple of stray pixels, mean 3; 1.0 = near-full coverage, mean 65), but much more linear in between: 0.5 gives mean 28, only 43% of its full-dial brightness. At LineWidth=0.5 the port's arms are visibly thinner than the original's (48x48 black-pixel fraction 60% vs orig 33%).",
+      "matches": false
+    },
+    {
+      "name": "sliderAnimateWidth",
+      "origEffect": "Boolean-like: 0 freezes line width at whatever LineWidth says, any value above 0 turns on the slow width breathing and makes LineWidth irrelevant. 0.5 and 1.0 render identically (mean 60 at 48x48).",
+      "portEffect": "Identical semantics and identical means (60/61 at 0.5 and 1.0). With AnimateWidth=1 and LineWidth=0.5 the two contact sheets are near-interchangeable.",
+      "matches": true
+    },
+    {
+      "name": "sliderRotationSpeed",
+      "origEffect": "Speeds up the rotation strongly and non-linearly: ~110 deg/s at 0, ~335 deg/s at 0.5, ~1100 deg/s at 1.0 (measured from 0.01 s dumps at 100 fps on a 48x48 grid). Untouched default is ~180 deg/s.",
+      "portEffect": "Same direction and roughly the same endpoints (~95 deg/s at 0, ~915 deg/s at 1.0, ~165 deg/s untouched) but almost flat through the middle: only ~110 deg/s at 0.5, about 3x slower than the original at the same dial position.",
+      "matches": false
+    },
+    {
+      "name": "sliderColorSpeed",
+      "origEffect": "Sets how fast the hue cycles. Measured on a single line (NumLines=0, AnimateWidth=0, LineWidth=0.6) as frame-mean hue drift over 20 s: 0.038 cycles/s at 0, 0.142 cycles/s at 0.5, 1.525 cycles/s at 1.0.",
+      "portEffect": "Endpoints match — 0.043 cycles/s at 0 and exactly 1.525 cycles/s at 1.0 — but the middle is again too slow: 0.058 cycles/s at 0.5, about 2.4x slower than the original.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Rename the port's control from sliderNumberOfLines/\"NumberOfLines\" to sliderNumLines/\"NumLines\" to match the original's control surface exactly.",
+    "Fix the animated-width envelope — this is the one difference a viewer would actually notice. Untouched and with dials matched, the original's width cycle has period ~65 s while the port's is ~59 s (port ~10% too fast), and more importantly the two envelopes have different shapes: the original holds near its MAXIMUM width for ~20 s per cycle and passes through its minimum in ~3 s, whereas the port spikes to a peak ~20% wider than the original's and then sits at zero width (panel fully black, frame mean 1-6) for ~10-13 s. Target: 4-5% of frames below 10% of peak brightness, not 20-22%. Practically, the port's width oscillation needs a narrower swing — a non-zero floor so the lines never disappear, and a lower ceiling so peak coverage matches (peak frame mean ~57-66, not ~70).",
+    "LineWidth mid-range: at LineWidth=0.5 with AnimateWidth=0, the original's lines are roughly twice as thick as the port's (default-rig frame mean 44 vs 28; 48x48 black-pixel fraction 33% vs 60%). The original reaches 76% of its full-dial brightness by half dial, the port only 43% — the port's LineWidth-to-thickness mapping needs to be front-loaded rather than linear. Endpoints (0 = black, 1 = near-full coverage) are already right.",
+    "RotationSpeed mid-range: at 0.5 the original rotates ~335 deg/s and the port only ~110 deg/s (3x too slow); the two agree at 0 (~110 vs ~95 deg/s) and roughly at 1.0 (~1100 vs ~915 deg/s). The port's slider-to-speed curve is far too flat through the lower-middle of the range — the original's rises about 3.2x for each half-step (110 -> 335 -> 1100).",
+    "ColorSpeed mid-range has the same shape of error: identical at 1.0 (1.525 hue-cycles/s on both) and close at 0 (0.038 vs 0.043), but at 0.5 the original cycles at 0.142 cycles/s against the port's 0.058 — 2.4x too slow. Fixing RotationSpeed and ColorSpeed likely means the same curve change applied to both.",
+    "NumLines response curve: at 0.25 the original already draws ~26 arms and the port only 12; at 0.5 it is ~43 vs 24. Both agree at 0 (one line) and at the untouched default (12 arms), so it is only the intermediate mapping that is wrong — the port's count is linear in the dial, the original's climbs much faster over the lower half. Also, in the original each line gets THINNER as the count rises (total brightness peaks near dial 0.25 at mean 55 and falls to 24 at 1.0, leaving a dim dense fan under one bright wide bar); the port keeps per-line width fixed, so at dial 1.0 it renders a uniformly bright 48-arm fan where the original renders a dim one with a single dominant bar.",
+    "Minor, low priority: the port's arms extend ~8% further from centre than the original's (fade-out at ~1.35x the panel half-width vs ~1.25x), so the port lights the extreme corners of the square where the original leaves them black. Rotation rate at defaults (port ~165 vs orig ~180 deg/s) and the arm count at defaults (12 on both) are already close enough to leave alone."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "regime-t15",
+    "regime-t30",
+    "regime-t48",
+    "regime-t62",
+    "dump-peak",
+    "ctl-linewidth-0",
+    "ctl-linewidth-0.5",
+    "ctl-linewidth-1",
+    "ctl-numlines-0",
+    "ctl-numlines-0.25",
+    "ctl-numlines-0.5",
+    "ctl-numlines-1",
+    "ctl-nl-w7-0",
+    "ctl-nl-w7-0.1",
+    "ctl-nl-w7-0.25",
+    "ctl-nl-w7-0.5",
+    "ctl-nl-w7-0.75",
+    "ctl-nl-w7-1",
+    "ctl-rot-0",
+    "ctl-rot-0.5",
+    "ctl-rot-1",
+    "ctl-color-0",
+    "ctl-color-0.5",
+    "ctl-color-1",
+    "g48-default",
+    "g48-lw05",
+    "g48-aw-0.5",
+    "g48-aw-1",
+    "g48-nl-0",
+    "g48-nl-0.25",
+    "g48-nl-0.5",
+    "g48-nl-0.75",
+    "g48-nl-1",
+    "rot-track",
+    "rot-fps10",
+    "rot-fps40",
+    "rot100-0",
+    "rot100-0.5",
+    "rot100-1",
+    "rot100-def",
+    "dialed-long",
+    "seed7",
+    "late"
+  ]
+}

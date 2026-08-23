@@ -1,0 +1,50 @@
+{
+  "slug": "sound-spectro-kalidastrip",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same mirrored rainbow spectrum-kaleidoscope on the strip with identical mirror axis and near-identical bar layouts, but the port re-attacks on every beat (0.5 s cycle) where the original re-attacks only every other beat (1.0 s cycle), and it runs ~1.6x brighter with visibly washed-out (white-cored) bars.",
+  "observations": [
+    "Both sides render, no compile or runtime errors, on all rigs/seeds tried. Neither side exposes any settable control (probe: 'no settable controls' on orig AND port) — control surfaces match.",
+    "Both sides bind sensors (wantsSensors true) and were fed beat120 on every run. With --sensors off (label sens-off, 12 s @ 20 fps) BOTH sides render exactly mean 0 / motion 0 — identical graceful (black) degradation, so every difference below is sensor-path behaviour, not idle-state behaviour.",
+    "Shared structure: on the 60 px default rig both sides draw a set of narrow bright bars that is mirror-symmetric under i -> (60 - i) mod 60 (i.e. mirror axes at pixel 0 and pixel 30). Verified by brute-force mirror-axis search on the luminance profile: both sides minimise mirror error at axis 0/30 on every attack frame checked.",
+    "Shared motif dictionary: normalised luminance-profile cross-correlation between orig at t=10.1 s and port at t=14.1 s is 1.00 (and orig@14.1 vs port@14.1 = 0.97) — the two sides draw the SAME bar layouts, just at different phases of their own cycles. Example bar sets (lum>60, 60 px): orig@11.1 s = [1,5,6,9,21,24,25,29,31,35,36,39,51,54,55,59]; port@10.6 s = [2,5,6,9,21,24,25,28,32,35,36,39,51,54,55,58] — same 16-bar mirrored layout, differing only by the extreme pair sitting at axis+-1 on the original vs axis+-2 on the port.",
+    "HEADLINE DIVERGENCE (rhythm): the original's full bright->dark cycle is 1.00 s; the port's is 0.50 s. Autocorrelation of meanBrightness peaks at multiples of 20 frames @20 fps for orig (1.00 s: 0.77, 2.00 s: 0.73, 3.00 s: 0.76) and at multiples of 10 frames for port (0.50 s: 0.81, 1.00 s: 0.74, 1.50 s: 0.78). Confirmed identically at t=120-140 s (label late): orig 1.00 s: 0.78, port 0.50 s: 0.80.",
+    "Per-frame confirmation of the same thing (dumpA, 0.1 s spacing, 60 px): count of pixels with lum>100 — orig peaks at t=10.1, 11.1, 12.1, 13.1, 14.1 (16,16,8,11,12 bright px) and is 0 at the intervening beats 10.6, 11.6, 12.6, 13.6; port peaks at t=10.1, 10.6, 11.1, 11.6, 12.1, 12.6, 13.1, 13.6, 14.1 (16,16,12,12,12,11,13,8,16) — i.e. the port fires on EVERY 2 Hz beat, the original on every OTHER beat. The original also latches its bar SET for a full second (its set at t=10.5 is a decayed subset of the t=10.1 set, not a new layout), while the port latches a new layout every 0.5 s.",
+    "Not frame-rate coupling: the periods above are in SECONDS and hold at both 20 fps and 40 fps (orig 1.00 s at both, port 0.50 s at both; label fps40). The 10 fps survey aliases the 2 Hz beat and reported bogus top lags (orig 3.0 s, port 3.5 s) — do not read this pattern's rhythm below 20 fps.",
+    "Brightness: port is consistently ~1.5-1.7x too bright in steady state. meanBrightness avg — dumpA (t=10-36 s, 20 fps) orig 21.0 vs port 34.9; late (t=120-140 s, 20 fps) orig 21 vs port 35; fps40 orig 24.0 vs port 38.2; survey-240 20 s-window means orig ~22.2 flat vs port ~31.0 flat across all 240 s. Both sides are long-term stable (no decay/death on either side out to 240 s).",
+    "Colour: hue distributions are a good match — full 12-bin rainbow on both, both slightly weighted to red..green (orig 7.6/8.9/10.4/11.1/10.7/9.7/9.0/7.9/7.4/6.1/5.6/5.7 %, port 5.5/6.4/9.1/10.9/12.9/12.7/11.2/8.8/7.0/6.0/5.0/4.4 %). But the port is much less saturated: mean saturation over lit pixels 0.802 (port) vs 0.971 (orig), and 15.8% of the port's lit pixels are near-white (sat<0.25) versus 2.6% for the original. Visually the port's bars have blown-out white cores where the original's stay saturated rainbow.",
+    "Opening transient differs in character on both sides. Original: rails near full white from frame 0 — meanBrightness 191,238,238,204,204,204,204,204,188,196,188,170,187,187,187,196,170,124,97,... (20 fps) — i.e. ~0.85 s of a near-white railed strip, settled into steady state by ~t=3 s. Port: starts at 0 and RAMPS UP over ~3 s to a peak mean of 131 at t~2.7 s before settling. Both are bright for ~3 s but the shapes are opposite (decay vs ramp), and only the original rails to white.",
+    "Original's layout repeats exactly on the beat120 melody's 4 s scale cycle (profile self-correlation orig@10.1 vs orig@14.1 = 0.97); the port's does not lock as cleanly (port@10.1 vs port@14.1 = 0.46). Neither side repeats at 8 s (the accelerometer tilt period), so there is an additional slow drift on both.",
+    "Off-default rig (--pixels 180, labels px180/px180d): bar POSITIONS still line up between the sides at matched phase (orig@11.1 runs 16-17,25-29,38,52,61-65,73-74,106-107,115-119,127-128,142-143,151-154,163 vs port@10.1 runs 15-17,24-29,35-38,52-55,61-66,73-75,105-107,114-119,125-128,142-145,151-156,163-165) but the port's bars are systematically 2-3 px wider (orig widths alternate 1..5 px, port 3..6 px). On the DEFAULT 60 px rig this gap almost vanishes (mean bar width orig 1.32 vs port 1.37 px, mean bars/frame 9.10 vs 10.22), so the width difference is an off-default finding only.",
+    "Seed-independent on both sides: seed 1234 (label seed1234) gives byte-identical summary stats to seed 1 (orig mean 21 / motion 9; port mean 35 / motion 12) — this pattern is driven entirely by the sensor feed.",
+    "No hidden regimes: a 240 s survey at 10 fps (label survey-240) shows a single steady texture on both sides after the ~3 s opening; 20 s-window means are flat to +-0.5 on both sides for the whole 240 s."
+  ],
+  "dials": [],
+  "feedback": [
+    "Rhythm is the big one: the port re-triggers its bar layout on every 2 Hz beat, the original on every OTHER beat. On the beat120 feed the original's full attack->dark cycle measures 1.00 s and the port's 0.50 s (autocorrelation of meanBrightness at 20 and 40 fps, and again at t=120 s). Halve the port's re-trigger/refresh rate — either the latch that holds the bar layout should hold for ~1.0 s instead of ~0.5 s, or whatever gates a new capture is firing twice as often as the original's.",
+    "Decay envelope: the original's mean brightness falls from its attack peak (~46-56) to ~3 over the full 1.0 s (half-life ~0.24 s) and reaches near-black before the next attack. The port falls from ~57 to ~8 in 0.5 s (half-life ~0.17 s). After fixing the re-trigger rate, slow the per-bar decay by roughly 1.4x so a bar is still faintly visible mid-cycle rather than fully extinguished.",
+    "Overall level is ~1.6x too hot: steady-state meanBrightness is 21 (orig) vs 35 (port) on the 60 px rig at 20 fps, stable across 240 s. Scale the port's output amplitude down by ~0.6.",
+    "Saturation/clipping: 15.8% of the port's lit pixels are near-white (sat<0.25) against 2.6% on the original, and mean saturation is 0.80 vs 0.97. The port's bars are blowing out to 255,255,255 in their cores (e.g. at 180 px, port@10.1 pixels 25-28 are all 255,255,255 where the original keeps a saturated cyan->blue ramp 0,228,241 / 0,64,96 / 0,94,237). Clamp/scale before the RGB conversion so peak bars stay saturated hue instead of saturating all three channels.",
+    "Opening transient: the original starts RAILED near full white (meanBrightness 191-238 for ~0.85 s) and decays into steady state by ~t=3 s — most likely an uninitialised peak-hold array starting at maximum. The port instead starts black and ramps up to a mean of 131 at t~2.7 s. If the transient is worth reproducing, the port should start its hold state at maximum and decay in, not at zero and ramp up.",
+    "Minor, and only visible on a long strip: at --pixels 180 the port's bars are 2-3 px wider than the original's (orig 1-5 px, port 3-6 px) at identical positions. The bar-width law appears to scale slightly differently with strip length; the port's spread/blur term is a bit too wide. Not visible at the default 60 px (1.32 vs 1.37 px).",
+    "Minor: the extreme mirrored pair sits at axis+-1 on the original (pixels 1/59 and 29/31 on a 60 px strip) but axis+-2 on the port (2/58 and 28/32) — looks like a one-pixel offset in the innermost/outermost element of the mirrored motif.",
+    "Nothing to do for dials: neither side exposes any control, so the control surfaces already match."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "warmup",
+    "dumpA",
+    "fps10",
+    "fps40",
+    "late",
+    "px180",
+    "px180d",
+    "px12",
+    "sens-off",
+    "seed1234"
+  ]
+}

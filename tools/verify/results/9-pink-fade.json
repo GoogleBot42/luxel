@@ -1,0 +1,41 @@
+{
+  "slug": "9-pink-fade",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Both sides are the same pattern — the whole strip, spatially uniform, breathing black-to-full-to-black on a ~30 s loop with no other regimes — but the port is deep pink where the original is near-pure red, its cycle is ~9% fast, and its fade envelope is a linear triangle instead of the original's raised cosine.",
+  "observations": [
+    "Both sides render without compile or runtime errors and neither side exposes any controls (probe: '(no settable controls)' on orig and port), so the control surface matches.",
+    "Structure is identical and degenerate-by-design on both sides: every pixel of the strip holds exactly the same RGB every frame. --dump on the default 60 px rig at t=8.5/15/20/33/39.95 s gives distinct-value-count 1 for both sides at every time, and an 8x8 grid re-render (--label grid8) is a flat single-colour fill on both. Mean brightness is also pixel-count independent (60 px strip and 64 px grid both give orig 50 / port 53 over the same 40 s window), so neither side has spatial structure to get wrong.",
+    "Motion on both sides is one slow whole-strip brightness breath, black -> full -> black, repeating forever. A 240 s survey (7-8 full cycles) shows no second mode, no palette walk and no drift on either side: the waterfalls are plain horizontal banding all the way down.",
+    "COLOUR (biggest difference): green is 0 on both sides at all times, and the red:blue ratio is constant through the whole cycle on both, so each side has one fixed hue. Original peak pixel = 254/0/15 (B/R = 0.06, hue ~356 deg) — it reads as pure red with only a faint blue tint. Port peak pixel = 254/0/91 (B/R = 0.36, hue ~339 deg) — it reads as deep pink/rose. Same at every brightness level: at half brightness orig is 135/0/8 while port is 136/0/49.",
+    "PERIOD: original cycles every ~32.7 s (peaks in the 240 s survey at 8.6, 41.3, 73.9, 106.5, 139.2, 171.8, 204.5, 237.2 s); port cycles every ~30.1 s (peaks at 14.5, 44.5, 75.0, 105.0, 135.0, 165.5, 195.5, 225.5 s). The port is ~8-9% fast.",
+    "FADE CURVE: the original's envelope is a raised cosine, the port's is a pure linear triangle. Normalised mean brightness at 2 s intervals after the peak — orig 1.00, .94, .83, .67, .48, .30, .14, .03, 0 (raised-cosine prediction .96/.86/.70/.51/.32/.16/.04/0); port 1.00, .87, .73, .60, .47, .33, .20, .07, 0 (exact straight line). Consequence on screen: the original dwells near full brightness for ~2 s and sits at literal 0/0/0 for ~1.5 s each cycle, moving fastest through the mid-range, while the port ramps at a constant rate and only touches peak and black instantaneously. This shows up in the survey waterfalls as visibly thicker black gaps between the original's bright bands.",
+    "PEAK LEVEL: original peaks at mean-RGB 90, port at 115. Red saturates at ~254 on both, so the entire 28% difference is the port's extra blue channel.",
+    "PHASE: at t=0 the original is already at half brightness and rising (128/0/7) while the port starts at exact black (0/0/0). Minor, since both are endless loops, but it means untouched side-by-side captures are never at the same point of the cycle.",
+    "Both sides are frame-rate invariant — peak times are unchanged at 5, 10, 20 and 40 fps on each side (orig ~8.7/41.4 s, port ~15.0/45.0 s at every rate) — so there is no frame-rate coupling on either side.",
+    "Both sides are fully deterministic and RNG-free: --seed 7 reproduces --seed 1 exactly (orig mean 47, port mean 58 over the same 60 s window at both seeds)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Hue is the most visible gap and the easiest win. The original's colour is essentially saturated red with a token blue tint — at full brightness exactly R=254, G=0, B=15, i.e. blue is 6% of red. The port sits at R=254, G=0, B=91, i.e. blue at 36% of red, which reads as deep pink rather than red. Green is correctly 0 on both. Cut the port's blue contribution by about a factor of 6 so the peak pixel lands near 254/0/15, and the ratio must stay fixed through the whole fade (the original's B/R is constant at ~0.06 at every brightness, from 128/0/7 up to 254/0/15).",
+    "Slow the cycle by ~9%: the original's full black-to-black loop is ~32.7 s, the port's is ~30.1 s. Measured over a 240 s window the original fits 7.3 cycles where the port fits 8.0.",
+    "Replace the port's linear fade envelope with a cosine one. The port ramps brightness at a constant rate and turns a sharp corner at both the peak and the trough; the original eases in and out — it holds near maximum for roughly 2 s, crosses the mid-range fastest, and rests at exact black for roughly 1.5 s before starting back up. Target curve, normalised brightness at 2 s intervals after the peak: 1.00, .94, .83, .67, .48, .30, .14, .03, 0.",
+    "Peak brightness should come out at mean-RGB ~90, not ~115 — this falls out automatically once the blue level is corrected, since red already saturates at the same 254 on both sides.",
+    "Optional and lowest priority: the original starts its run at half brightness rising rather than at black, so an untouched capture from t=0 begins mid-fade-in. Everything else about the pattern is already right — spatial uniformity, black-to-full range, single-regime behaviour, frame-rate independence and determinism all match exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "dump-cycle",
+    "dump-default",
+    "fps10",
+    "fps40",
+    "seed2",
+    "grid8",
+    "mode-peak",
+    "mode-trough"
+  ]
+}

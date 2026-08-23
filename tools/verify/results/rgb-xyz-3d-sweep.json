@@ -1,0 +1,49 @@
+{
+  "slug": "rgb-xyz-3d-sweep",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Port reproduces the R-then-G-then-B plane sweep through the cube exactly — same axis order, same direction, same traveling-bump envelope (waveform matches to ~1/255 after a pure time rescale) — but its cycle is 3.00 s instead of the original's 2.95 s and it uses pure hue 0/1/3/2/3 primaries where the original uses hue 0.0/0.30/0.60 (yellow-green and azure), leaving it ~16% dimmer overall.",
+  "observations": [
+    "Rig: default cloud, 125 px = 5x5x5 lattice (harness index i -> x=i%5, y=floor(i/5)%5, z=floor(i/25)). Both sides compile and run clean, no compile/runtime errors, wantsSensors false on both.",
+    "Shared structure (confirmed on both sides by --dump at 20 and 100 fps): exactly one axis-aligned 25-pixel plane is lit at a time; a single smooth (raised-cosine-like) bump travels across the 5 planes of one axis over ~1/3 of the cycle, then the next axis takes over. Order is always RED sweeping x=0->4, then GREEN sweeping y=0->4, then BLUE sweeping z=0->4. No other regime exists — surveyed 60 s @5 fps, 60 s @10/40 fps, 200 s @20 fps; no mode rotation, no palette walk, no drift.",
+    "CYCLE PERIOD DIFFERS. meanR autocorrelation gives the original 59 frames @20 fps, 118 @40 fps, 29.5 @10 fps = 2.950 s at every rate; the port gives 30/60/120 frames = 3.000 s at every rate. Both sides are therefore time-based and fps-invariant (verified at 10/20/40 fps by dumping the same absolute times: the port lands on identical frames at t=0,3,6,9,11 s at all three rates; the original's identical-frame recurrence shifts with fps only because 2.95 s is not a whole number of frames at 10 fps). Port is 1.69% slow. The two sides start in phase and are a full third-of-a-cycle apart by ~t=30 s, a whole cycle apart by ~t=177 s.",
+    "SWEEP WAVEFORM IS OTHERWISE IDENTICAL. Dumping the red phase at 100 fps and rescaling the port's time axis by exactly 3.00/2.95 makes the two sides' per-plane red profiles agree to a median mean-abs error of 0.8/255 (p90 3.2, max 4.4). Unrescaled the same comparison gives median 3.6 / max 13.8. So plane peak times, bump width, entry/exit at x=0 and x=4, and peak amplitude (~252-255 on both) all match; the ONLY motion divergence is the period.",
+    "HUE DIVERGENCE, stable over 180 s. Brightest-pixel colour at the middle of each phase: original R-phase [252,0,0] (h=0.000), G-phase [46,232,0] (h=0.300), B-phase [0,101,253] (h=0.600). Port: [253,0,0] (h=0.000), [0,253,0] (h=0.333), [0,0,202..255] (h=0.667). The original's secondary channel tracks the primary at an exact fixed ratio for the whole phase (R = 0.200 x G during the y sweep; G = 0.400 x B during the z sweep), i.e. the three phases sit at hue 0, 0.30, 0.60 — not at even thirds. Re-checked at t=1.1, 30.6, 60.2, 122.4, 181.6 s: ratios constant to 3 decimal places, so this is a fixed hue choice, not a drift or a blend of two phases.",
+    "Visually the original's second sweep is a yellow-green/chartreuse plane and its third is an azure (cyan-leaning) blue; the port's are pure #00FF00 and pure #0000FF. Same colour family, ~12 deg and ~24 deg of hue apart.",
+    "BRIGHTNESS CONSEQUENCE. Per-phase whole-rig mean brightness (1 s window parked in each phase, labels phase-r-x / phase-g-y / phase-b-z): original 12 / 14 / 17, port 12 / 12 / 12. The original gets brighter phase by phase because of the added secondary channel; the port is flat. Over a 6 s window meanBrightness avg is orig 14.5 vs port 12.2 (-16%), max 24 vs 17; identical figures on a 200 s window and on a --skip 60 late window, so this is a steady-state colour deficit, not a decay.",
+    "Phase boundaries are clean on both sides: dumped at 100 fps across t=0.90..1.05, both fade the outgoing plane smoothly to 0 and ramp the incoming one up from 0 with no dark gap, no flash, no overlap of two axes. (The port hits exactly 0 for one frame at the boundary; the original crosses zero mid-frame. Not visible.)",
+    "STEADY STATE HEALTHY on both sides: brightnessTrend steady everywhere, zeroMotionFrames 0-1 on the --skip 60 / 30 s window, motion series periodic with no envelope. No warm-up transient on either side.",
+    "RESOLUTION INDEPENDENCE MATCHES. Re-rendered on a 10x10x10 cloud (--pixels 1000): both sides still draw one traveling bump spanning ~2-3 of the 10 planes (proportionally the same fraction of the cube as ~2 of 5 at 125 px), so both are coordinate-driven, not index-driven, and both scale identically. The hue difference persists at 1000 px (orig shows a uniform 46-88 count of secondary channel across all planes of the other two axes; port shows 0).",
+    "SEED-INDEPENDENT: seed 1234 produces statistics byte-identical to seed 1 on both sides (meanBrightness avg 14.5 / 12.2, same min/max/first/last). Pattern is deterministic, no RNG involvement.",
+    "CONTROL SURFACE MATCHES: --probe-controls reports 'no settable controls' on BOTH sides. Neither pattern exposes any dial, so there is no control-surface gap and no dialed comparison is possible."
+  ],
+  "dials": [],
+  "feedback": [
+    "Cycle period: the port's full R->G->B cycle is 3.000 s; the original's is 2.950 s (measured as 59 frames at 20 fps, 118 at 40 fps, 29.5 at 10 fps — fps-invariant on both sides). Slow the port down by the factor 2.95/3.00 = 0.98333. 2.950 s is 0.045 x 65.536, i.e. exactly what a Pixel Blaze time(.045) sawtooth gives, so the original is almost certainly one time(.045) sweep split into three axis phases; the port looks like it hard-coded a 3-second period. Everything else about the motion is already correct — after rescaling the port's clock by 3.00/2.95 its plane profiles match the original's to under 1 count out of 255.",
+    "Phase hues: the port uses hue 0, 1/3, 2/3 (pure red, pure green, pure blue). The original uses hue 0, 0.30, 0.60 — measurable as an exact secondary-channel ratio of R = 0.200 x G through the whole y sweep and G = 0.400 x B through the whole z sweep. Change the per-phase hue step from 1/3 to 0.3 (phase index k -> hue 0.3*k, k = 0,1,2). Target colours at full brightness: phase 1 [255,0,0], phase 2 [51,255,0] (yellow-green), phase 3 [0,102,255] (azure). Do NOT do this by desaturating or adding white — the original's third channel is exactly 0 in every phase.",
+    "Fixing the hue step also closes the brightness gap for free: the port currently averages 12.2 mean brightness against the original's 14.5 (-16%), entirely because two of its three phases carry only one lit channel where the original carries two. Per-phase mean brightness should go from the port's flat 12/12/12 to the original's 12/14/17.",
+    "Nothing else needs touching: axis order (x=red, y=green, z=blue), sweep direction (index 0 -> max on every axis), plane thickness, the raised-cosine bump envelope, peak amplitude (~253), phase boundary behaviour, resolution independence, fps invariance and seed independence are all already exact matches."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "fps10",
+    "fps20",
+    "fps40",
+    "per10",
+    "per40",
+    "cycle-fine",
+    "redphase100",
+    "boundary100",
+    "huecheck",
+    "phase-r-x",
+    "phase-g-y",
+    "phase-b-z",
+    "cloud1000",
+    "seed1234",
+    "late-skip60"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "slug": "2d-wandering-fireball",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same idea rendered correctly — one soft rainbow-cycling fireball bouncing around the canvas — but the port's blob travels ~2x too fast with its X and Y rates swapped (tracing a 90deg-rotated Lissajous) and its hue cycles 1.5x too fast.",
+  "observations": [
+    "Neither side exposes any controls (meta.json `controls` empty on both; --probe-controls reports 'no settable controls' for orig and port). Control surface therefore matches.",
+    "Both sides: a single soft radial blob (a 'fireball') gliding smoothly around the 16x16 grid, bouncing off all four walls, over a uniform dim ambient wash of the same hue; hue walks continuously red->yellow->green->cyan->blue->magenta->red on both. No modes, no events, no dark gaps — one continuous regime confirmed out to 240 s (survey-240).",
+    "MOTION RATE (default grid rig, peak-pixel and brightness-weighted centroid tracked from --dump every 0.5 s over 90 s): original x-bounce turning points at t=9.5, 19.5, 29.5, 39, 49, 59, 68.5, 78.5, 88.5 s => x period 19.7 s; original y turning points every ~6.6 s => y period 13.2 s. Port x turning points every ~3.28 s => x period 6.56 s; port y every ~4.93 s => y period 9.86 s.",
+    "That makes the port's error structured, not just fast: port x period (6.56 s) = original Y period (13.2 s) / 2, and port y period (9.86 s) = original X period (19.7 s) / 2. i.e. the two axis rates are swapped AND both doubled. Original x:y period ratio is 1.50 (3:2); port's is 0.67 (2:3), so the traced Lissajous figure is effectively rotated 90 degrees. Full path repeat: original ~39.4 s, port ~19.7 s.",
+    "Visible directly in mode-mid (--skip 40 --seconds 20): the original's rhythm image shows a single left-right apex in the 20 s window, the port's shows three.",
+    "HUE RATE: mean-frame hue advances 0.017 cycles/s on the original (full rainbow in ~58.8 s) vs 0.0255 cycles/s on the port (~39.2 s) — port is exactly 1.5x too fast. Hue direction and the full-spectrum sweep are identical.",
+    "Both sides bounce with the SAME amplitude — peak pixel reaches x=0..15 and y=0..15 on both; the blob is never clipped off-canvas differently.",
+    "BLOB SIZE matches. At --grid 48x48 both fall from peak to the ambient floor at radius ~16 px (~1/3 of the canvas) — same feature size as a fraction of the rig. The port's falloff is slightly fuller through the mid-halo (radial mean at r=6, as fraction of peak: orig 0.49, port 0.63; at 16x16, r=1/r=0: orig ~0.77, port ~0.90), so the port's fireball reads a touch softer/fatter, but the outer extent is the same.",
+    "AMBIENT FLOOR differs ~1.6x: the uniform background pixel is (12,9,5) on the original vs (7,7,3) on the port at a matched moment; original floor sum ~23-27, port ~13-17 across sampled times. Peak brightness is comparable (orig 213-430, port 248-452 summed RGB).",
+    "RESOLUTION INDEPENDENCE matches: re-rendered at --grid 8x8 and --grid 48x48, both sides draw the same picture into a logical canvas (same relative blob size, same diamond-ish bright core), just coarser/finer. Neither rasterizes at native resolution.",
+    "FRAME-RATE COUPLING: none on either side. Dumped positions at the same absolute times are identical at --fps 10, 20 and 40 for both orig and port, so both are time-based.",
+    "DETERMINISM: --seed 7 produces byte-identical rhythm images and stats to --seed 1 on both sides; the pattern is not RNG-driven, so no stochastic-character caveat applies.",
+    "STEADY STATE is healthy on both. At --skip 300 --seconds 30 both report brightnessTrend 'steady' (orig meanBrightness avg 17.3, port 15.6) and the port's zeroMotionFrames is 0 vs the original's 40 — the port is if anything livelier, not dying. No decay, freeze or saturation anywhere out to 330 s."
+  ],
+  "dials": [],
+  "feedback": [
+    "Halve the port's overall traversal speed AND swap its two axis rates. Target, measured on the default 16x16 grid: horizontal bounce period 19.7 s (turning points ~9.85 s apart) and vertical bounce period 13.2 s (turning points ~6.6 s apart). The port currently has 6.56 s horizontal and 9.86 s vertical — i.e. its X rate is what the Y rate should be (doubled) and vice versa. Getting the 3:2 x:y period ratio the right way round matters as much as the speed: right now the fireball traces the original's figure rotated 90 degrees.",
+    "Slow the hue walk by exactly 1.5x: the original completes one full red->...->red rainbow in ~58.8 s; the port does it in ~39.2 s. Hue direction and spectrum coverage are already correct — only the rate is off.",
+    "Raise the ambient background floor by ~1.6x. Away from the fireball the original settles at a uniform (12,9,5)-ish glow (summed RGB ~25) while the port settles at (7,7,3)-ish (~16). The port's canvas reads slightly too black between passes.",
+    "Optional, minor: tighten the fireball's falloff a little. At 48x48 the original drops to ~49% of peak at radius 6 and the port only to ~63%; the outer extent (floor reached at r~16) is already right, so this is a shape-of-the-shoulder nitpick, not a size error.",
+    "Everything else is already correct and should not be touched: single blob, wall-bounce amplitude (full 0..15 in both axes), smooth glide (no jitter or jumping), resolution independence, time-based (fps-invariant) stepping, peak brightness, and a steady non-decaying steady state out to 330 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "mode-mid",
+    "late-steady",
+    "dump-track",
+    "dump-dense90",
+    "grid8",
+    "grid48",
+    "dump-grid48",
+    "fps10",
+    "fps40",
+    "seed7"
+  ]
+}

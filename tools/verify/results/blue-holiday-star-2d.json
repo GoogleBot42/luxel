@@ -1,0 +1,63 @@
+{
+  "slug": "blue-holiday-star-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same idea and same slow morphing-star animation, but the port draws its star roughly 4x too small with a far too tight glow falloff and in a washed-out cyan instead of saturated blue, so on the default 16x16 rig it reads as a dim 2x2 dot rather than the original's canvas-filling blue star.",
+  "observations": [
+    "Both sides compile and run with no runtime errors, on the default grid rig (16x16, 256 px), across every window tested (6 s, 60 s, 90 s, 240 s) and at seeds 1 and 7. Output is fully deterministic on both sides — seed 7 stats are identical to seed 1.",
+    "Single regime, no mode rotation: a 240 s / 2 fps survey shows the same look throughout on both sides, and the rhythm images show a continuous ~10 s morph cycle rather than discrete modes. A late window (--skip 120, 12 s @ 20 fps) matches the opening window on both sides; neither side decays, freezes or saturates (brightnessTrend 'steady' everywhere).",
+    "SIZE is the headline divergence. On a 48x48 re-render, lit-pixel fraction (max channel > 8) over a 14-point scan across 90 s: original 34-62% of the canvas, port 1.7-3.6% — ~15x less area. Max star radius from centre: original 23.6-31.9 px (the arms reach and overrun the 24 px half-canvas), port 3.8-9.9 px. On the default 16x16 rig a --dump at t=0/0.05/1/3/5.5 s counts 180-204 lit pixels of 256 on the original against 16-20 on the port.",
+    "Lit fraction is scale-invariant on BOTH sides (8x8: orig 69% / port 6.3%; 48x48: orig 76% / port 6.6%), so both draw into a logical canvas and neither is rasterizing at native resolution — the port's star is uniformly ~3.5-4x too small in radius, not a grid-mapping bug.",
+    "GLOW FALLOFF is far too steep on the port. Mean pixel value by integer radius on 48x48, averaged over 6 dump times — original: r=1:227, r=3:214, r=6:176, r=9:111, r=12:55, r=18:12, r=24:3 (half-brightness radius ~9 px, i.e. ~0.38 of the half-canvas). Port: r=1:255, r=2:149, r=3:64, r=4:25, r=6:4, r>=9:0 (half-brightness radius ~2 px, ~0.08 of the half-canvas). Peak brightness is 255 on both, so this is not a global dimming — it is the spatial extent of the glow.",
+    "STRUCTURE: the original's star has a filled body — the minimum radius between arms on 48x48 is 12.3-15.7 px, so everything from the centre out to ~13 px is lit and the arms are joined by concave edges (at some phases it becomes a solid concave-square 'four-pointed pillow' filling the frame). The port's inter-arm minimum radius is 0.0 — it draws thin isolated spikes off a small bright core with black between them, never a filled body.",
+    "COLOR: over 6275 bright pixels (>60) the original sits at hue 202 deg with saturation p10/p50/p90 = 0.80/1.00/1.00 — one fixed saturated blue. The port sits at hue 187 deg with saturation 0.15/0.64/0.86 — a greener cyan, and much whiter. Exact core RGB at t=3 s on the default rig: original [51,181,255], port [109,177,186].",
+    "MOTION RATE actually matches well, and the near-zero 'motion' stat on the port (avg 0.0, zeroMotionFrames 299/300 in the 60 s survey) is the dim/small false-freeze JUDGE.md warns about — the mean-abs-diff is diluted by the port's ~85 lit pixels against the original's ~1300. Restricting the diff to lit pixels (48x48, untouched, dumps against t=0): original 4.0/11.8/24.6/28.8/30.6/30.5 at dt = 0.05/0.5/1/2/4/6 s, port 2.2/5.9/12.8/19.3/21.0/18.1 — both decorrelate on the same ~2 s timescale.",
+    "Rotation is slow and comparable on both sides: cross-correlating angular radius profiles at 0.2 s spacing on 48x48 gives about -5 deg/s on the original and below the 2 deg measurement floor on the port over the same window; the dominant visible motion on both is arm-count morphing (4-point <-> 6/8-point <-> concave square on the original), not spin.",
+    "Both sides expose exactly one control, 'sliderSpeed' (kind slider, label 'Speed') — control surface matches exactly, no missing or extra dials, no kind mismatch.",
+    "Untouched defaults equal sliderSpeed=0.5 on both sides (identical statsSummary between the untouched 30 s / 10 fps 48x48 run and the explicit 0.5 run, on each side), so there is no untouched-vs-dialed divergence to weigh separately.",
+    "The automated probe called the port's sliderSpeed inert (maxDelta 0.86 vs the original's 9.25). That is a FALSE inert from the same dilution: manual sweeps show the dial is live on the port (see dials)."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Live and strong. Manual sweep at 48x48 / 30 s / 10 fps: mean motion 0.86 at 0, 1.64 at 0.5, 10.85 at 1 (motion/meanBrightness 0.046 / 0.087 / 0.583) — monotonic, and at 1 the arm-count morph runs visibly fast. Lit-pixel diff against t=0 at dt=0.5 s: 14.4 at speed 0, 11.8 at 0.5, and by dt=2 s it has jumped to 32.5 at speed 1. Never freezes even at 0.",
+      "portEffect": "Live, same direction, confirmed by hand after the probe's false inert. Raw motion stat 0.00 / 0.00 / 0.08 at 0 / 0.5 / 1 (48x48, 30 s) understates it; the lit-pixel diff against t=0 at dt=0.25/0.5/1 s is 3.8/4.8/6.6 at speed 0, 4.0/5.8/12.3 at speed 0.5 and 16.7/17.9/15.1 at speed 1 — i.e. the port also speeds up sharply toward 1 and slows toward 0. The port's rhythm image is a dead flat column at speed 0 and visibly textured at speed 1, matching the original's direction.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "The single highest-value fix is SCALE: the port's star is about 4x too small in radius. On a 48x48 grid the original's arms reach r=24-32 px (out to and past the canvas edge) while the port's stop at r=4-10 px. Multiply the star's radial extent by roughly 3.5-4x so that on the default 16x16 rig it lights 70-80% of the pixels instead of 6-8%.",
+    "Second, the GLOW FALLOFF is ~4-5x too tight. The original holds ~78% of centre brightness out to r=6 on a 48x48 grid and is still visible (value ~12) at r=18; the port is down to 25% by r=3 and fully black by r=9. Its half-brightness radius should be about 0.38 of the half-canvas, not 0.08 — stretch the falloff, don't just scale the peak (peak is already correct at 255 on both).",
+    "Third, the star needs a FILLED BODY. The original is lit continuously from the centre out to a minimum radius of ~13 px on 48x48 (arms joined by concave edges, and at some phases it becomes a solid concave-square shape filling the frame); the port draws thin spikes with pure black between them (inter-arm minimum radius 0). Whatever produces the arm shape should have a floor that keeps the region between arms lit rather than dropping to zero.",
+    "Fourth, COLOR: the port renders hue ~187 deg (cyan-green) at median saturation 0.64, the original hue ~202 deg at saturation 0.80-1.00 — the port reads teal and washed out where the original reads solid blue. Core RGB should be around [51,181,255], not [109,177,186]. Shift the hue ~15 deg toward blue and stop desaturating toward white at the core.",
+    "Do NOT chase the motion rate or the dial. Once brightness dilution is accounted for, the port morphs on the same ~2 s decorrelation timescale as the original, its arm-count morphing cycles over a comparable period, and sliderSpeed already scales speed in the right direction across 0/0.5/1 with the same untouched default (=0.5). Those axes are already right; fixing the size and falloff will make them read correctly too.",
+    "Note for whoever re-verifies: while the port stays this small, the harness's 'motion' stat and --probe-controls both false-read it as frozen/inert (motion 0.00, zeroMotionFrames 299/300, probe maxDelta 0.86). Judge the port with lit-pixel-restricted diffs or on a 48x48 re-render until the scale fix lands."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-base",
+    "late-skip120",
+    "seed7",
+    "grid8",
+    "grid48",
+    "grid48-survey",
+    "grid48-scan",
+    "grid48-morph",
+    "grid48-rot",
+    "port-anim",
+    "ctl-speed-0",
+    "ctl-speed-0.5",
+    "ctl-speed-1",
+    "ctl48-untouched",
+    "ctl48-speed-0",
+    "ctl48-speed-0.5",
+    "ctl48-speed-1",
+    "ctl48-dump-0",
+    "ctl48-dump-0.5",
+    "ctl48-dump-1"
+  ]
+}

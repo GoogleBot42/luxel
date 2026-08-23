@@ -1,0 +1,52 @@
+{
+  "slug": "sound-rays",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides are beat-spawned rainbow rays travelling right along the strip, but the port draws them ~1.7x too slow, twice as densely, ~5x too bright and with a continuous spatial hue gradient instead of one flat hue per ray, and it never develops the original's slow multi-minute build-up in ray population.",
+  "observations": [
+    "Rig/controls: default rig is a 60-px strip. Both sides expose ZERO settable controls (--probe-controls: 'no settable controls' on both), so there are no dials to compare and no dialed-comparison run is possible.",
+    "Both sides bind sensors (meta wantsSensors true, sensors 'synth', sensorModel 'beat120'). With --sensors off BOTH render exactly black (mean 0, motion 0) — the port degrades identically to the original with dead sensors, so the divergence is entirely in how the audio is used, not in whether it is used.",
+    "ORIGINAL structure (--dump, t=30.00 s, 20 fps): only 8 of 60 pixels non-zero. Two comets, heads at px 23 and px 48 (spacing exactly 25 px), each a SINGLE full-value pixel (v=1.00) followed by a steep decaying trail at -3/-5/-8 px with v=0.141, 0.031, 0.0039 (~x0.15 per rendered frame). Everything else is exactly 0,0,0 — the strip is ~85-87% black.",
+    "PORT structure (same dump, t=30.00 s): 28 of 60 pixels non-zero (~47% duty). A rigidly repeating 15-px unit repeated 4x across the strip; within each unit the non-zero offsets are 1,4,7,10,11,13,14 with values 0.125, 0.757, 1.00, 1.00, 0.380, 1.00, 0.008 — i.e. FOUR near-full-brightness pixels per unit rather than one bright head with a dim tail.",
+    "SPEED: original heads advance +2.5 px per frame at 20 fps = 50 px/s (23->25->28->30->33->35->38->40->43->45->48 over 0.5 s). Port heads advance +1.5 px/frame = 30 px/s (7->8->10->11->13->14->16->17->19->20->22). Port is 0.6x the original's ray velocity (original is ~1.67x faster).",
+    "RAY SPACING / COUNT: both spawn once per 0.5 s beat, so spacing = speed x 0.5 s: original 25 px (2-3 comets visible on a 60-px strip), port 15 px (4 ray groups / 12 bright pixels visible). Confirmed at a second rig size: at --pixels 180 the original's heads sit at 23,48,73,98,123,148,173 (25-px pitch, 7 comets) and the port's at 7,10,13,22,25,28,...,172,175,178 (15-px pitch, 12 groups). Both use ABSOLUTE pixel spacing, not a strip fraction — so the 15-vs-25 px pitch is a genuine speed bug, not a rig artefact.",
+    "BRIGHTNESS: baseline (6 s, 20 fps) meanBrightness avg orig 5.7 vs port 70.6 — 12x. Late window (--skip 30, 12 s, 20 fps): orig 6, port 36 — 6x. Long-run (t=470 s): orig ~14, port ~39 — 2.7x. The port is too bright at every window; the gap narrows only because the ORIGINAL slowly gets denser (next observation).",
+    "LONG-TERM REGIME (the original only — found via the 240 s survey): the original's density ramps in steps. 20 s-binned meanBrightness over 240 s at 10 fps: 5.2 5.3 5.3 5.3 | 9.2 9.8 9.8 9.7 | 14.9 16.3 16.3 16.4 — i.e. roughly 2 comets at t=30 s, 6 bright heads at t=200 s (heads 6,22,23,41,47,48), 5 heads at t=470 s (11,21,22,46,47); it plateaus around 5-6 comets / mean ~14-16 after ~3 minutes. Ray velocity stays 50 px/s throughout; comets wrap the strip and accumulate. brightnessTrend 'rising'.",
+    "The PORT has NO such evolution: its frame at t=470.0 s is structurally identical to t=30.0 s (heads 6,9,12,21,24,27,36,39,42,51,54,57 vs 7,10,13,22,25,28,37,40,43,52,55,58 — same 15-px pitch, same 12 heads, same 28-36 lit pixels). Its meanBrightness is flat at ~18 (10 fps) after a first-20 s transient (bin 1 = 32.6, all later bins 17.9-18.1); brightnessTrend 'decaying' is entirely that opening transient.",
+    "BEAT LOCK: original meanBrightness autocorrelation (late window, 20 fps) peaks at lag 10 frames = 0.5 s (r=0.78), with harmonics at 20/30/40 (0.61/0.62/0.70) — clean 2 Hz beat lock, one comet spawned per beat. The port's meanBrightness is ANTI-correlated at lag 10 (r=-0.69) and peaks near lag 73 (~3.65 s, r=0.64); its spatial pattern is still exactly 0.5 s periodic (15 px at 30 px/s), so it does spawn on the beat, but its brightness envelope carries an unrelated ~1.5 s / 3.65 s ripple the original does not have. Original swings 4-8 counts about a mean of 6 (+/-33%); port swings 30-42 about 36 (+/-17%) — a much flatter, more constantly-lit look.",
+    "HUE MAPPING: the original gives each comet ONE flat hue for its whole length (t=30.00: comet at 15/18/20/23 all ~300 deg magenta; comet at 40/43/45/48 all ~258 deg violet) and STEPS that hue once per beat by ~+31 deg (measured head-hue staircase over 6 s: 340, 11, 44, 74, 78, 108, 139, 168, 199, 231, 263, 293), i.e. a hue quantised per ray, full cycle ~6 s. The port paints a CONTINUOUS spatial rainbow: at t=30.00 hue rises monotonically with pixel index from 318 deg at px1 to 30 deg at px59 (~+1.2 deg/px), and at a fixed pixel it rotates smoothly at ~+140 deg/s (full cycle ~2.6 s) with no per-beat staircase. Within one port ray group the three heads already differ in hue (327/331/336) — the original's do not.",
+    "HUE GRADIENT DIRECTION also differs: because the original's hue is per-birth, hue DECREASES with pixel index along the strip (-1.7 deg/px between successive comets); the port's INCREASES with index (+1.2 deg/px).",
+    "FRAME-RATE COUPLING: original meanBrightness is fps-invariant — 6 / 6 / 5 at 10 / 20 / 40 fps (its trail lengthens from 4 to 8 to 10 lit pixels but the extra pixels are the near-zero tail, so the look is unchanged). The port's is strongly frame-coupled — 18 / 36 / 41 at 10 / 20 / 40 fps, with 2 / 3 / 4 near-full-brightness pixels per ray group and 16 / 28 / 40 lit pixels. On hardware running faster than 20 fps the port would look even brighter and blockier. Ray PITCH (15 px) and spawn period (0.5 s) are fps-invariant on both sides, so only the trail/head width is coupled.",
+    "Seed-independent: seed 1234 renders identical head positions to seed 1 on both sides (orig 23,48; port 7,10,13,...). No stochastic component to average over.",
+    "Waterfall read: the original's PNG is sparse dashed diagonals on black with the whole strip sharing one hue per row; the port's PNG is a dense, near-fully-saturated rainbow field with a fixed 3-px comb of black. A viewer would not accept them as the same pattern."
+  ],
+  "dials": [],
+  "feedback": [
+    "Ray velocity is too slow: the original's rays travel 50 px/s (2.5 px per frame at 20 fps) in ABSOLUTE pixels; the port's travel 30 px/s. Multiply the port's ray speed by ~1.67. This alone fixes the on-strip ray pitch (25 px, 2-3 rays on a 60-px strip) instead of the port's 15 px / 4 rays.",
+    "Ray shape is far too fat and too bright. The original draws ONE pixel at full value per ray plus a very steep tail: the next trail samples are 14%, 3% and 0.4% of the head, so ~85% of the strip is exactly 0,0,0 and mean brightness sits at 5-6/255 in the first minute. The port keeps 4-5 pixels per ray at 76-100% value and lights ~47% of the strip (mean 36-71/255). Cut the per-frame trail decay to roughly x0.15 per rendered frame and make only the head full-brightness.",
+    "Trail length must not scale with frame rate. The port's bright-pixel count per ray goes 2 -> 3 -> 4 and its mean brightness 18 -> 36 -> 41 as fps goes 10 -> 20 -> 40; the original's mean brightness is flat at 5-6 across the same sweep. Decay the trail as a function of elapsed TIME (or make the decay so steep that the extra frames land below 1/255, as the original does), not a fixed fraction per frame.",
+    "Hue must be quantised PER RAY, not spread along the strip. The original assigns each ray a single hue at birth and steps that hue by roughly +31 deg per 0.5 s beat (full wrap ~6 s), so every ray is a solid flat colour and the strip shows 2-3 distinct colours at once. The port instead applies a smooth hue-vs-index rainbow (+1.2 deg/px) that also spins at ~140 deg/s (~2.6 s per cycle), so each ray is a rainbow smear and the whole strip is a moving rainbow. Sample the hue once when the ray spawns (a beat-driven / maxFrequency-driven value) and hold it for that ray's whole life.",
+    "The gradient direction is also inverted relative to the original: in the original hue decreases with pixel index (older rays are further along and were born earlier / lower hue); the port's increases with index.",
+    "The port is missing the original's slow build-up. Over the first ~3 minutes the original accumulates rays — mean brightness 5.2 (0-80 s) -> 9.5 (80-160 s) -> 16 (160-240 s), 2 bright heads at t=30 s rising to 5-6 at t=200-470 s, at unchanged 50 px/s — because rays wrap the strip and persist for a long time before dying. The port's output is bit-for-bit structurally identical at t=30 s and t=470 s (same 12 heads, same 15-px pitch). Give rays a long, wrapping lifetime so the population grows and plateaus around 5-6 on a 60-px strip.",
+    "The port's brightness envelope carries an extra ~1.5 s / ~3.65 s ripple (meanBrightness autocorr peak at lag 73 frames @20 fps, anti-correlated at the 10-frame beat lag) that the original does not have — the original's envelope autocorrelates at lag 10 frames (0.5 s, r=0.78). Whatever slow term is modulating the port's overall level should be removed; the only slow rhythm in the original is the per-beat hue staircase.",
+    "What is already right, and should be preserved: sensor binding and graceful death with --sensors off (both black), one spawn per 2 Hz beat, rightward travel, absolute-pixel (not strip-fraction) geometry — confirmed identical laws at --pixels 180 — and seed independence."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "late",
+    "late200",
+    "t470",
+    "sens-off",
+    "dump-a",
+    "dump-fine",
+    "dump-hue",
+    "fps10",
+    "fps40",
+    "px180",
+    "seed1234"
+  ]
+}

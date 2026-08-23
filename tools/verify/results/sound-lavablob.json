@@ -1,0 +1,51 @@
+{
+  "slug": "sound-lavablob",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Blob structure and beat response are near-perfect matches, but the port adds a global hue rotation (full rainbow every 7.2 s) on top of the original's fixed red-to-green diagonal lava ramp, and its blob-scale cycle runs ~11% slow (22.5 s vs 20.3 s).",
+  "observations": [
+    "Both sides compile and render with no compile/runtime errors on the default rig (grid, 16x16, 256 px). Neither side exposes ANY settable control (probe: 'no settable controls' on orig and port), so dials are not a factor.",
+    "Both sides report wantsSensors:true and are fed the beat120 synth signal. With --sensors off (30 s @ 10 fps) BOTH sides render pure black (mean 0, motion 0) — matched graceful-degradation behaviour, and confirmation that everything either side draws is audio-driven.",
+    "STRUCTURE MATCHES. Both draw a lava-lamp field of soft blobs on black whose spatial scale breathes between ~1 and ~7 cycles across the 16x16 grid, with blobs merging into one big blob at the coarse end and a fine plaid grid at the fine end. Over 48 frames sampled across 40 s: lit fraction (V>10) 0.479 orig vs 0.491 port; value distribution p10/p50/p90/p99/max 0/8/255/255/255 orig vs 0/9/255/255/255 port; mean HSV saturation of lit pixels 0.627 orig vs 0.566 port. Matched-moment contact sheets at --skip 134 (8 s @ 20 fps) show the same blob count and blob layout cell-for-cell in most cells.",
+    "BEAT RESPONSE MATCHES. Motion autocorrelation on the 6 s / 20 fps baseline peaks at lag 10 frames = 0.50 s on BOTH sides (orig 1.30, port 1.20 normalized), i.e. both lock to the 2 Hz beat120 beat; the 60 s / 10 fps survey shows lag 5 (0.5 s beat) and lag 40 (4 s melody-scale cycle) on both sides. Beat-phase-averaged mean brightness over 300 s (10 fps, 5 frames per beat) is orig 38.4/61.1/51.4/44.4/40.8 vs port 33.0/59.3/49.1/40.1/35.9 — the same attack-then-decay envelope shape at ~8% lower level.",
+    "MAJOR COLOR DIVERGENCE — global hue rotation. The ORIGINAL's hue is a fixed diagonal ramp with NO time dependence: value-weighted hue vs (x+y) is 0 deg at (x+y)=0 rising linearly at 4.78 deg per step to 134 deg at (x+y)=28 and 144 deg at (x+y)=30 — i.e. pure red at one corner through orange and yellow to green at the opposite corner. That ramp is byte-for-byte the same at t=3.15 s, 10.15 s and 30.15 s, at 10 fps and 40 fps, and at seeds 1/7/1234 (after subtracting 4.78*(x+y) the residual offset is exactly 0 at every time tested).",
+    "The PORT reproduces that ramp's SLOPE exactly (4.79 deg per (x+y) step, same ~130 deg span) but adds a global additive hue offset that rotates continuously: measured 49.95 deg/s, i.e. a full 360 deg revolution every 7.21 s (fitted over 280 s of the 300 s survey; identical rate at 10, 20 and 40 fps, so it is time-based, not frame-coupled). Frame-mean hue over 300 s: orig pinned at ~70 deg the whole time (range 53-99, no drift); port sweeps the full circle repeatedly (10 s samples: 218, 0, 140, 272, 52, 197, 317, 115, 228, 31, 173, ...).",
+    "Consequence in channel terms over 300 s: orig meanR 58.2 / meanG 69.3 / meanB 13.9 (blue essentially absent — a warm lava palette), port meanR 43.3 / meanG 43.0 / meanB 42.4 (flat, because it visits every hue equally). Visually the port spends large stretches in cyan, blue, purple and magenta, colours the original NEVER shows.",
+    "SECONDARY TIMING DIVERGENCE — the blob-scale ('zoom') cycle runs slow on the port. Measured as the magnitude-weighted spatial-DFT centroid (mean k over rows and columns) sampled every 1.07 s for 256 s: autocorrelation gives a fundamental period of 20.3 s on the original and 22.5 s on the port (port ~11% slow). Identical periods at --fps 20 and --fps 40 on BOTH sides, so both are time-based; neither is frame-coupled.",
+    "The slow-scale error accumulates. Over t=0-24 s the port's smoothed scale envelope matches the original's shape at corr 0.94 with a lag of +2.0 s. Over t=200-224 s (same metric, --skip 200) the two are fully decorrelated (best corr across +/-6 s lag is -0.05) — the survey-300 contact sheet at 218 s shows the original dark/coarse while the port is a fine grid, and at 221 s the reverse.",
+    "MINOR early-transient difference. Baseline frame 0: orig mean brightness 82 (one bright full-frame gradient frame) vs port 3 (near black). Over the first ~3 s the original's beat peaks BUILD (frame 11/21/41/52 mean brightness 33/45/66/105) while the port's DECAY (123/127/76/36); both settle to the same level afterwards, so this is a warm-up/attack-filter difference, not a steady-state one.",
+    "MINOR peak-brightness tail difference: over 300 s the original's mean-brightness p5/p25/p50/p75/p95/max is 20/39/43/51/86/220 vs the port's 19/30/39/52/85/161. Identical through p95; only the rare bright spikes are weaker on the port (220 vs 161). Motion max 181 vs 128, same story.",
+    "Steady state is healthy on both: 300 s survey brightnessTrend 'steady' on both sides, zeroMotionFrames 4/3000 orig and 3/3000 port. Neither side freezes, blacks out or saturates.",
+    "The pattern carries no randomness reachable by the harness seed: seeds 1, 7 and 1234 produce identical stats and identical hue series on BOTH sides. Every difference reported above is therefore deterministic, not a seed fluke."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY FIX — remove the global time-varying hue term. The original's hue is purely positional and constant in time: hue(deg) = 4.78 * (x_index + y_index) on a 16x16 grid, which in Pixel Blaze normalized coordinates is hue_fraction = 0.199 * (x + y) with x,y in 0..1 — a fixed ramp from 0.0 (red) at one corner to ~0.40 (green) at the opposite corner. The port already gets this ramp's slope exactly right (4.79 deg/step, measured identical to the original), so ONLY the additive offset is wrong: the port currently computes hue = 0.199*(x+y) + t/7.21 (mod 1), rotating a full turn every 7.21 s at 49.95 deg/s. Delete that time term (or whatever accumulator feeds it) and the palette should land on the original exactly.",
+    "Sanity check for the fix: after the change, the frame-mean hue over a 300 s run should sit at ~70 deg with no drift (the original's value), and meanB should be roughly one quarter of meanR/meanG (orig: R 58 / G 69 / B 14). If meanR ~= meanG ~= meanB, the rotation is still there.",
+    "SECONDARY FIX — speed up the blob-scale ('zoom') cycle by ~11%. The original's scale cycle has a period of 20.3 s; the port's is 22.5 s. Both are time-based (period unchanged at 20 and 40 fps), so this is a rate constant, not a frame-rate coupling bug. Multiply the scale driver's rate by 22.5/20.3 = 1.108. Verify by autocorrelating the spatial-DFT centroid over a 250 s window — the port should land on 20.3 s, and its scale envelope should stay in phase with the original past t=200 s rather than decorrelating as it does now.",
+    "OPTIONAL — the port's first ~3 s ramp runs backwards relative to the original. The original's beat flashes build over the first three seconds (mean brightness 33 -> 45 -> 66 -> 105 on successive beats) as if an envelope/average filter is charging up from zero; the port starts at full amplitude on the very first beat (123) and decays into steady state (36 by t=2.5 s). Initialise the audio-level accumulator low rather than high (or let it charge over ~3 s) to reproduce the original's fade-in.",
+    "OPTIONAL — the port never reaches the original's brightest peaks. Distributions agree through p95 (86 vs 85) but the original's max mean brightness over 300 s is 220 vs the port's 161. The original saturates to near-white on the biggest beats when the blobs are at their coarsest; the port's peak clips lower. Worth checking whether the port clamps or scales the beat gain before the coarse-blob phase.",
+    "NOT a problem, do not 'fix': both sides render pure black with no sensor input, both lock to the 2 Hz beat with the same envelope shape, both are fps-invariant, and both expose zero controls. The blob geometry, blob count, lit fraction and value distribution already match the original closely."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-300",
+    "mode-bigblob",
+    "mode-216",
+    "sens-off",
+    "sens-on30",
+    "dumpA",
+    "dumpFreq",
+    "dumpScale",
+    "dumpScaleLate",
+    "dumpLong",
+    "dumpLong40",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

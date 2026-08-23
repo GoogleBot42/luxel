@@ -1,0 +1,65 @@
+{
+  "slug": "ice-floes-2d",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Port reproduces the original's drifting Voronoi ice-floe field convincingly on the default 16x16 rig, but it hard-quantizes both axes to 16 steps on any grid size and its Speed dial has a steeper (convex) response than the original's near-linear one.",
+  "observations": [
+    "Same pattern family on the default 16x16 grid rig: pale-blue/white rounded 'floe' cells separated by vivid blue cracks over near-black, ~4-6 cells visible at a time, drifting steadily leftward on both sides. No modes or regimes on either side across a 240 s / 5 fps survey — one continuous texture start to finish, and both sides are still alive and identical in character at t=200-212 s (label 'late').",
+    "RESOLUTION LOCK (structural): the original rasterizes at native grid resolution; the port quantizes to exactly 16 steps per axis regardless of grid size. Dumped mid-row/mid-column run counts at sliderSpeed=0.5: 32x32 -> orig 32 row / 31 col distinct runs vs port 16 / 16; 48x48 -> orig 46 / 47 vs port 16 / 16; 64x16 -> orig 63 row vs port 16 row. Visually the 48x48 original is a smooth, sharp-edged Voronoi field while the port is a 16x16 blocky mosaic. Invisible on the pattern's default 16x16 rig; on a 32x32 or 64x64 panel the port would render at a quarter/sixteenth of the original's detail.",
+    "Speed dial response curve differs. Leftward drift measured by frame-to-frame 2D cross-correlation of --dump'ed frames on the DEFAULT 16x16 rig at 20 fps (px/s): slider 0.1 orig 1.8 / port 0.0 (no measurable drift at all over 5 s); 0.25 orig 2.0 / port 1.4; 0.5 orig ~4 / port ~4 (match); 0.75 orig 7.8 / port 8.8; 1.0 orig ~10-14 / port ~15-18. The `motion` stat at 20 fps tracks the same shape: orig 1.1, 3.4, 6.1, 9.2, 11.1 across 0/0.25/0.5/0.75/1 (near-linear) vs port 1.3, 1.8, 5.5, 11.8, 19.5 (convex). They agree at mid-dial and split at both ends.",
+    "Untouched defaults: the port's untouched state IS sliderSpeed=0.5 (probe delta exactly 0.00 at 0.5); the original's untouched state is not (probe delta 36.21 at 0.5, and untouched motion 3.8 vs 6.1 at 0.5, implying an original default around 0.3). Measured untouched drift is nonetheless close: orig ~3 px/s, port ~4 px/s. The default-render gap only looks large at survey rate (5 fps untouched motion orig 7.5 vs port 20.9); dialed to the same value at 5 fps the gap shrinks (0.3: orig 8 / port 9; 0.5: orig 12 / port 21).",
+    "Colour: same palette family and distribution. Peak whites orig [196,235,252] vs port [229,247,255] (port whiter/brighter); mean of brightest 10% orig [124,176,205] vs port [137,171,199]; cracks are near-pure blue on both (orig [0,0,147], port [0,5,133]) over a floor of ~[0,0,30]. Across every dialed run the port's mean red channel runs consistently high — orig meanR 28-33 vs port meanR 41-50 — and port mean brightness sits ~6-8 units above the original (e.g. spd-0: orig 72 / port 82).",
+    "Temporal quantization differs slightly: at 20 fps the original's field advances in discrete steps with EVERY OTHER frame identical (zeroMotionFrames 121/240 in every dialed run), while the port skips only every 4th frame (61/240). The original is marginally steppier, the port marginally smoother; not visible at normal viewing.",
+    "No frame-rate coupling on either side: at sliderSpeed=0.5 `motion` roughly halves as fps doubles (orig 12.1 / 6.1 / 4.1, port 10.8 / 5.5 / 2.7 at 10/20/40 fps) and --dump-measured px/s holds roughly constant across 10/20/40 fps at sliderSpeed=1 (orig -10/-10/-14, port -15/-18/-17). Both are time-based.",
+    "Both sides compile and run clean (no compileError/runtimeError), neither binds sensors (wantsSensors false), brightnessTrend 'steady' on both in every run, and both survive seed changes (1, 7, 1234) with the same character — the pattern is not visibly seed-driven beyond a different starting cell layout."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Sets the leftward drift rate of the floe field, near-linearly and with a nonzero floor: ~1.8 px/s at 0.1, ~2 px/s at 0.25, ~4 px/s at 0.5, ~7.8 px/s at 0.75, ~10-14 px/s at 1.0 on the 16x16 rig. Never fully stops (motion 1.1 even at 0). Direction and cell appearance unchanged by the dial.",
+      "portEffect": "Same axis, same leftward direction, same rough top-end range, but a convex curve: effectively frozen at 0.1 (0 px/s measured over 5 s), 1.4 px/s at 0.25, ~4 px/s at 0.5 (matches), 8.8 px/s at 0.75, ~15-18 px/s at 1.0. Also the port's untouched default equals 0.5 exactly whereas the original's does not.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Biggest fix: the port hard-quantizes the render coordinates to 16 steps per axis. On a 48x48 grid a dumped row has only 16 distinct colour runs on the port versus 46 on the original, so the port draws a 16x16 mosaic upscaled instead of a native-resolution field. Derive the cell/noise coordinates from the actual normalized pixel position (full float precision) rather than from a fixed 16-step grid; the original stays smooth and sharp at 8x8, 16x16, 32x32, 48x48 and 64x16 alike.",
+    "Reshape the Speed slider response. Measured leftward drift on the default 16x16 rig at 20 fps should be roughly: 0.1 -> ~1.8 px/s, 0.25 -> ~2 px/s, 0.5 -> ~4 px/s, 0.75 -> ~7.8 px/s, 1.0 -> ~11 px/s. The port currently reads ~0, 1.4, 4, 8.8, ~17 — i.e. it maps the slider closer to a square/exponential law with no floor. Add the original's nonzero minimum drift (the original never freezes, even at slider 0, where it still posts motion ~1.1) and flatten the top end so max speed is ~1.0-1.2x the original's rather than ~1.5x.",
+    "Set the port's untouched-default speed lower. Untouched, the port renders identically to sliderSpeed=0.5 while the original's untouched state corresponds to roughly 0.3 (untouched motion 3.8 vs 6.1 at 0.5 at 20 fps). Dropping the port's initial speed value to about 0.3 of full scale would make the out-of-the-box render match.",
+    "Cool and darken the highlights slightly. The port's brightest floe centres reach [229,247,255] (essentially white) against the original's [196,235,252] (still a pale ice-blue), and across every dialed run the port's mean red channel is ~40% high (41-50 vs 28-33) with mean brightness ~6-8 units above the original. Pull the top of the ramp back so peak cells stay blue-tinted rather than going white."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "fps-10",
+    "fps-40",
+    "fps5-spd0.5",
+    "fps5-orig-def",
+    "grid8",
+    "grid48",
+    "grid48-dump",
+    "grid32-dump",
+    "grid64x16-dump",
+    "dmp-default",
+    "dmp-0.25",
+    "dmp-0.5",
+    "dmp-1",
+    "dmp-spd1-dense",
+    "sw-0.1",
+    "sw-0.25",
+    "sw-0.75",
+    "s1f10",
+    "s1f20",
+    "s1f40",
+    "seed7",
+    "seed1234"
+  ]
+}

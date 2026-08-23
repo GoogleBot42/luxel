@@ -1,0 +1,46 @@
+{
+  "slug": "distance-function-kaleidoscope-2",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides run a slowly-oscillating rainbow field on the same ~90 s timebase, but the original is a smooth, fully-lit, cleanly 4-fold-symmetric kaleidoscope while the port multiplies the same hue field by a hard, high-frequency spiky mask that blanks ~half the frame and churns ~4x faster, so on the default 16x16 rig the port reads as coloured noise on black rather than a kaleidoscope.",
+  "observations": [
+    "Both sides compile and run clean (no compile/runtime errors), on the default grid rig (16x16, 256 px), across every window tested from 6 s to 240 s. Neither side binds sensors (wantsSensors false on both).",
+    "Brightness is the headline gap. --dump of a 64x64 render at t=1/3/5 s: the ORIGINAL has 0.0% dark pixels and every one of its 4096 pixels sits at exactly value 255 and saturation 1.00 - it is a pure hue field at constant full brightness. The PORT has 51.7% / 49.2% / 54.5% of pixels below value 8 and a bimodal value histogram (56% in the bottom eighth, 24% in the top eighth, ~3% per bin in between), i.e. a hard-edged near-binary mask. Whole-window means: orig meanBrightness avg 127.6 (min 95, max 149), port 44.6 (min 12, max 57) over the 60 s survey.",
+    "Lit pixels on BOTH sides are fully saturated (meanSatLit 1.00 each), so the divergence is confined to the value channel, not the palette.",
+    "Structure: the original is strongly 4-fold rotationally symmetric about a single slowly-drifting centre. Measured on a 64x64 render as mean abs RGB diff under rotation by 2*pi/N (chance level 105.6): N=4 scores 13.0 and N=2 17.2, while N=3/5/6/8 score 36-53. Visually it is nested rotated squares plus four petal lobes, all edges smooth and every pixel lit.",
+    "The PORT has NO rotational symmetry in its rendered output: the same test gives 45-47 at every N=2..8 against a chance level of 58. Its value mask specifically is unstructured (per-channel value symmetry 76-99 vs chance 111, no N preferred), whereas the original's value channel is literally constant (symmetry diff 0.0 at every N).",
+    "The port's underlying HUE field is partly right: hue-only 4-fold symmetry scores 0.028 (chance 0.109) at t=3 s, comparable to the original's 0.027 (chance 0.214). But it is intermittent - at t=1 s and t=5 s the port's best N=4 is only 0.057/0.067 at inconsistent centres, while the original holds 0.027-0.028 at a coherent centre at all three times. So the port's geometry is the right idea, applied inconsistently and then wrecked by the mask.",
+    "Mid-cycle the port degenerates further: at 50-60 s (--label midcycle, 64x64) it draws a row of repeating triangular tiles marching sideways, not a centred kaleidoscope, while the original at the same absolute times draws a centred 4-fold diamond/cross figure filling the frame.",
+    "Motion: orig motion avg 5.8 / motionLit 5.8 at 20 fps on the 64x64 render; port motion 22.0 / motionLit 35.4 - about 4-6x the frame-to-frame churn. Consecutive-frame --dump (3.00 -> 3.05 -> 3.10 -> 3.15 s) shows the original's value channel changing by 0.0 per frame and its hue field by 0.0104 (circular units), against the port's value channel changing by 39-43 (of 255) per frame and its hue field by 0.017-0.022. The original glides; the port crawls and flickers.",
+    "Long cycle: both run one slow back-and-forth hue oscillation that ends in a bright near-white flash visible as a horizontal line in the rhythm image. Original period ~86 s (flash at t~87 s and ~172 s; centre-pixel hue turning points at 28/72/112/156/196 s). Port period ~92-96 s (flash at t~100 s and ~195 s; turning points at 44/92/136/180/232 s). Same phenomenon, port ~10% slow, and its phase drifts progressively away from the original's.",
+    "Neither side is frame-rate coupled: rendering at 10/20/40 fps, the mean-frame hue at fixed absolute times t=2/4/5.9 s reproduces to within 0.04 on both sides (orig 0.296/0.328/0.336 at t=2; port 0.278/0.300/0.296). Both are time-based; this axis matches.",
+    "Both sides are resolution-independent in the same way: 16x16 and 64x64 renders of the same window give identical summary stats (orig mean 127 motion 6; port mean 39 motion 22 at both sizes). Same logical canvas on both - this axis matches too.",
+    "Both sides are seed-independent (seed 1234 reproduces seed 1 exactly on both).",
+    "Instantaneous spatial hue spread matches: circular spread (1-R) sampled every 12 s across 240 s runs 0.03-0.18 on the original and 0.03-0.18 on the port. The palette family and how much of the wheel is on screen at once are NOT the problem.",
+    "Control surfaces match: the harness enumerates zero settable controls on BOTH sides (probe run reports '(no settable controls)' for orig and port), so there is no control-surface gap."
+  ],
+  "dials": [],
+  "feedback": [
+    "The single biggest fix: the original never dims anything. Every pixel is at full value and full saturation on every frame - measured 100% of pixels at value 255 at t=1, 3 and 5 s. The port is blanking 50-55% of the frame with a hard, spiky, near-binary brightness mask (56% of pixels in the bottom eighth of the value range, 24% in the top eighth). Drop that mask entirely and drive only hue from the distance function; brightness should be a constant 1.",
+    "Once the mask is gone, restore CONSISTENT 4-fold rotational symmetry about one centre. The original holds a hue-symmetry score of 0.027-0.028 at N=4 throughout; the port only achieves that at some moments (0.028 at t=3 s) and loses it at others (0.057 at t=1 s, 0.067 at t=5 s, with the best-fit centre jumping around). The original's centre drifts smoothly and slowly (64x64 grid coords ~(32,34) -> (28,36) -> (24,30) over 4 s); the port's is not tracking a single point.",
+    "Mid-cycle the port stops being a kaleidoscope at all: around t=50-60 s it draws a repeating row of triangles translating sideways, where the original draws a centred nested-diamond figure. Whatever produces that tiling regime needs to fold back into the same centred symmetry the port shows at t=3 s.",
+    "The port's field deforms about 1.7x too fast per second (per-frame hue change 0.017-0.022 vs the original's 0.0104, measured on consecutive frames at 20 fps), and its edges are hard where the original's are smooth gradients. Slowing the spatial deformation and softening the edges should both fall out of removing the mask plus scaling the motion term down ~40%.",
+    "The slow global colour oscillation is close but ~10% slow: the original completes one up-and-down hue cycle in ~86 s (bright flash at the turn, t~87 s and ~172 s), the port in ~92-96 s (flash at t~100 s and ~195 s). Speed the outer cycle up by roughly 1.1x once the rest is fixed.",
+    "Nothing needs changing about the palette, saturation, control surface (both have none), seed handling, resolution independence, or frame-rate independence - all five already match."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey240",
+    "grid64",
+    "dump64",
+    "dumpseq",
+    "fps10",
+    "fps40",
+    "cycle-boundary",
+    "midcycle",
+    "seed1234"
+  ]
+}

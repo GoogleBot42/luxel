@@ -1,0 +1,45 @@
+{
+  "slug": "firework-nova",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Port reproduces the nova correctly — a centred rainbow ring expanding to the grid edge with white sparks, on a repeating cycle — but runs the whole cycle ~1.5x too fast and drops the original's lingering white-spark afterglow.",
+  "observations": [
+    "Both sides render one and the same look for 240 s with no mode rotation: a burst centred on the grid centre (dump centroid (7.5,7.5) on a 16x16 rig for every burst on both sides), a coloured ring that expands from a point to the grid edge, white sparks, then a dark gap, repeating.",
+    "Burst cadence differs by a constant factor: original fires every 1.31 s, port every 0.85 s (1.54x too fast). Measured on meanBrightness burst onsets over 240 s at 5 fps, stable to 0.01 s in every 60 s quarter (orig 1.31/1.31/1.31/1.31, port 0.85/0.85/0.85/0.85), and reproduced at 20 fps over 60 s (52 bursts orig vs 71 port).",
+    "Ring expansion speed is ~1.6x too fast. --dump of one burst on each side: original's lit-pixel mean radius goes 1.50 px (t=11.10) to 8.34 px (t=11.55) = 15.2 px/s; port's goes 0.71 px (t=11.40) to 9.33 px (t=11.75) = 24.6 px/s. Both reach the grid edge (rmax 12-13 px) before dying.",
+    "Coloured-ring lifetime: original ~0.60-0.65 s per burst, port ~0.35-0.40 s. Dark gap between bursts is nearly identical on both (~0.45-0.50 s), so the entire cadence difference comes from the shorter burst, not from a shorter pause.",
+    "MISSING PHASE: the original ends each burst with ~0.20-0.25 s in which the coloured ring is completely gone and only white sparks remain, scattered wide and still drifting outward (dump: coloured pixels 0, white pixels 15,14,9,5 / 20,11,7,4,2 / 11,10,13,3,2 across successive bursts). The port has essentially no such tail — after its ring vanishes it holds 1-3 white pixels for one or two frames and cuts to black. Visible directly in the survey contact sheets (orig cells at 21.2s / 32.6s / 38.0s are pure scattered starfields; port has only two or three stray dots) and in the 48x48 re-render, where the original's 1.1s and 3.8s cells are a dense expanding white shell with no colour and the port never draws one.",
+    "Spark timing within the burst also differs: the original's white count peaks AFTER the ring has faded (col=4/white=24 at t=12.95), while the port's peaks WHILE the ring is at full size (col=129/white=14 at t=12.50) and then crashes with it. Peak spark counts are comparable (orig 20-24, port 16-21 of 256 px), so the port emits about the right number of sparks; they just don't outlive the ring.",
+    "Colour structure matches well. On both sides the hue spread around the ring circumference grows as the ring expands and caps at exactly 240 degrees, and each successive burst starts at a new hue, walking the wheel. Advance per burst: orig ~+71 deg, port ~+58 deg, i.e. a full palette lap every ~6.6 s (orig) vs ~5.3 s (port) — a minor difference next to the cadence one.",
+    "Brightness envelope: peak mean brightness over 240 s orig 47 vs port 57 (port's ring reads slightly hotter); window-average brightness is near-identical (11.8 vs 11.2) because the port's brighter-but-shorter bursts fire more often.",
+    "Both sides are resolution-independent in the same way: re-rendered at --grid 48x48 the ring occupies the same fraction of the canvas and only the spark count scales with pixel count. No structural divergence introduced by the rig change.",
+    "Both sides are time-based, not frame-stepped: burst period measured at 10, 20 and 40 fps is 1.31/1.25/1.30 s (orig) and 0.850/0.850/0.850 s (port). No frame-rate coupling on either side.",
+    "Seed-independent on both sides: seeds 1, 7 and 1234 produce identical stats and identical bursts, so the timing and hue sequence are deterministic rather than stochastic, and the cadence gap is not a seed fluke.",
+    "Control surface matches: --probe-controls reports no settable controls on either side, so there is nothing to dial and no missing/extra dial."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the whole burst cycle down by ~1.5x: the original launches a nova every 1.31 s, the port every 0.85 s. The dark gap between bursts is already right (~0.47 s on both) — the fix is in the burst's own duration, not in the delay before the next one.",
+    "Slow the ring expansion by ~1.6x: original's ring radius grows at ~15 px/s on a 16x16 grid (point to grid-edge in ~0.45 s), port's at ~25 px/s (in ~0.35 s). Both correctly stop at the grid edge, so it is rate only, not extent.",
+    "Add the afterglow: in the original the white sparks OUTLIVE the coloured ring by ~0.2-0.25 s, continuing to drift outward as a scattered white starfield after all colour is gone (about 15-25 lit white pixels of 256 at the moment the colour dies, decaying to zero). In the port the sparks are extinguished together with the ring, so each burst ends with a hard cut to black instead of a lingering sparkle. The spark COUNT is already about right — only their lifetime is short.",
+    "Related: shift the sparks later within the burst. The original's spark population peaks after the ring has faded; the port's peaks at maximum ring radius while the ring is still bright, which is why the port's white dots read as sitting ON the ring (clearly visible in the 48x48 render) rather than as a separate expanding shell.",
+    "Minor, fix last: the per-burst hue advance is a little small — the original steps ~71 deg of hue per burst (full wheel every ~6.6 s), the port ~58 deg (~5.3 s). The 240-deg hue spread around the ring itself is already exact.",
+    "Minor: the port's ring peaks a little brighter than the original's (peak mean brightness 57 vs 47 over a 240 s window)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "probe",
+    "long20",
+    "late-skip45",
+    "dump-burst",
+    "dump-multi",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "grid48"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "slug": "glowflow-3d-coord-transform-api-port",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Both sides are the same idea — a smooth linear hue gradient across the rig whose direction is driven by the accelerometer, orbiting once per 8 s tilt circle and freezing dead when sensors are off — but the port spins the gradient the WRONG WAY, packs ~2.5x more hue into the same distance (full rainbow vs the original's green-yellow-red warm ramp), never keeps the original's always-lit floor, and adds a 2 Hz beat-locked flash-plus-sparkle the original does not have at all.",
+  "observations": [
+    "Shared skeleton: on the default 16x16 grid both sides draw one smooth linear hue gradient (no blobs, no sparks) whose direction rotates continuously; both are exactly 8.0 s periodic (gradient angle at t=2.0 s, t=10.0 s and t=170.0 s is identical on each side to 0.1 deg) and both rotate at 45 deg/s.",
+    "Rotation direction is MIRRORED. Gradient-direction (hue k-vector) over 2 s: orig 95.1 -> 72.6 -> 50.0 -> 27.8 -> 5.1 deg (-45 deg/s); port 164.3 -> -173.6 -> -150.9 -> -128.4 -> -105.9 deg (+45 deg/s). Confirmed independently by the centroid of the darkest 12% of pixels, which orbits the panel in the opposite sense on the two sides (orig -81 -> -116 -> -132 deg; port -25 -> +5 -> +34 deg over the same frames). Consistent with a swapped/negated accelerometer or coordinate axis in the port.",
+    "Hue scale ~2.55x too tight on the port. Measured spatial frequency of the hue gradient on the default 16x16 grid: orig 0.0200 cycles/px, dead constant; port 0.049-0.053 cycles/px. Across the panel width the original therefore spans about 0.32 of the colour wheel (green -> yellow -> orange -> red only, meanB 21 vs meanR 179 in the 6 s baseline) while the port spans about 0.82 of it and shows cyan, blue and magenta (baseline meanR 101 / meanG 89 / meanB 63). On a 10x10x10 cloud rig the original DOES reach blue, so this is a gradient-scale difference, not a different palette family.",
+    "Brightness floor: the original never goes dark — dumped at t=10 s its dimmest pixel is 29% of full (a deep red), whole-window meanBrightness 102-103 with brightnessTrend steady. The port's dimmest pixel is 0,0,0 (true black over roughly a quadrant), meanBrightness 84 (77 with its sound toggle off).",
+    "The port invents an audio reaction. Original: motion pinned at exactly 2 on every captured frame of a 20 s / 20 fps run, meanBrightness flat 102-103, and autocorrelation of its motion series is identically 0 at every lag 1-40 — no beat response whatsoever. Port: meanBrightness pulses 78 -> 100-102 and decays on every beat, motion autocorrelation peaks hard at lag 10 frames (= 0.5 s = the beat120 2 Hz beat) and again at 20, 30, 40, with motion max 119 vs its own baseline 7.",
+    "The port also overlays a coarse per-pixel random dither/sparkle on beat frames (clearly visible as noise blocks in the filmstrip at 10.05 s and 10.65 s, and as fine speckle at 48x48); the original's filmstrip over the same frames is perfectly smooth.",
+    "Setting the port's toggleSoundReactive=0 removes both the flash and the sparkle and restores the original's steady character (motion flat 5, meanBrightness flat 77) — so the whole audio behaviour sits behind that one port-only toggle, which defaults ON.",
+    "CONTROL-SURFACE MISMATCH: the original exposes NO controls at all; the port exposes four, all probe-responsive — toggleSoundReactive (maxDeltaLit 7.8), toggleAmbientDimming (43.6), toggleCornerStand (78.3), sliderTiltSmoothing (69.0).",
+    "Original has a frame-counted warm-up the port lacks: for the first ~1100 rendered frames it carries a white/blue floor (blue channel pinned at ~25 everywhere, meanB ~20-23), then over a couple of seconds that floor falls away to meanB ~1-3 and it stays fully saturated. The transition lands at t~105-115 s at 10 fps and t~50-60 s at 20 fps (i.e. frame-counted, not time-based). The port's meanB just oscillates 55<->61 with the 8 s rotation for the whole 180 s, with no such transition.",
+    "Agreements worth recording: with --sensors off BOTH sides freeze completely (motion 0), so both are entirely sensor-driven; both are resolution-independent (same picture, same feature count at --grid 16x16 and --grid 48x48); both keep exactly the same geometry at t=170 s as at t=2 s (no positional drift); seed 1234 renders identically to seed 1 on both sides.",
+    "On a 1000-px cloud rig the same three divergences reappear: matching waterfall skeleton and 8 s cadence, but the port shows ~2.5x more hue cycles (magenta bands the original never reaches at that scale) plus beat-driven dark horizontal banding."
+  ],
+  "dials": [
+    {"name": "toggleSoundReactive", "origEffect": "control absent on the original; the original shows zero response to the beat120 feed (motion autocorrelation flat 0 at all lags)", "portEffect": "port-only toggle, defaults ON; when on, adds a 2 Hz beat-locked brightness flash (78 -> 100) and a coarse per-pixel sparkle dither; setting it 0 gives the original's steady, smooth character", "matches": false},
+    {"name": "toggleAmbientDimming", "origEffect": "control absent on the original", "portEffect": "port-only toggle, defaults OFF; setting 1 halves overall output (meanBrightness 85 -> 42) while keeping the same geometry and beat cadence", "matches": false},
+    {"name": "toggleCornerStand", "origEffect": "control absent on the original", "portEffect": "port-only toggle, defaults OFF; setting 1 reorients the tilt reference frame (gradient angle offset, band drawn corner-to-corner) and lifts mean brightness 85 -> 88", "matches": false},
+    {"name": "sliderTiltSmoothing", "origEffect": "control absent on the original", "portEffect": "port-only slider; shifts the rotation PHASE without changing its 45 deg/s rate — at t=2 s the gradient sits at 175 deg for 0, 169 deg for 0.5 and 142 deg for 1, i.e. a lag of up to ~30 deg", "matches": false}
+  ],
+  "feedback": [
+    "Reverse the sense of the tilt-driven rotation. Both sides rotate at exactly 45 deg/s with an 8 s period, but the port's gradient direction INCREASES with time where the original's decreases — the two mirror each other. Look for a swapped or sign-flipped accelerometer/coordinate axis pair; everything else about the timing is already exact.",
+    "Reduce the hue-per-distance scale by about 2.55x. On the default 16x16 grid the original's gradient measures 0.0200 cycles/px and the port's 0.051 cycles/px, so the original shows only about a third of the colour wheel (green -> yellow -> orange -> red) across the panel while the port shows nearly all of it including cyan/blue/magenta. Target: dimmest end of the panel should be deep red, not black or magenta.",
+    "Restore the original's always-lit floor. The original's darkest pixel is ~29% of full (a deep red, blue channel held near 25 early on) and its mean brightness is 102-103; the port falls to true 0,0,0 over roughly a quadrant and averages 84. The original never has a black region.",
+    "The port's default sound reactivity is not in the original. The original shows literally no response to the audio feed (motion constant, brightness constant, zero autocorrelation at the 0.5 s beat), while the port flashes 78 -> 100 on every beat and sprays a per-pixel sparkle dither. Either drop the audio path or default toggleSoundReactive OFF — with it off the port's temporal character already matches.",
+    "The original exposes no controls at all; the port adds four. Ideally drop them, or at minimum make every default (SoundReactive off, AmbientDimming off, CornerStand off, TiltSmoothing at whatever value gives zero phase lag) reproduce the original's untouched look, since a viewer who never touches a dial is what the untouched comparison sees.",
+    "Lower-priority: the original changes character once, at about 1100 rendered frames, when its white/blue floor (blue channel ~25 everywhere) fades out and it becomes fully saturated green-yellow-red. The port has no such transition and looks the same at t=2 s and t=170 s. If this is an intentional settle it should be reproduced; if it is an accumulator artefact of the original it can be ignored, but the port's early seconds are currently too saturated either way."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-180",
+    "probe",
+    "sens-on",
+    "sens-off",
+    "late",
+    "drift20",
+    "seed1234",
+    "cloud1000",
+    "grid48",
+    "dump-a",
+    "dump-rot",
+    "dump-rot2",
+    "dump-late",
+    "ctl-toggleSoundReactive-0",
+    "ctl-toggleSoundReactive-1",
+    "ctl-toggleAmbientDimming-0",
+    "ctl-toggleAmbientDimming-1",
+    "ctl-toggleCornerStand-0",
+    "ctl-toggleCornerStand-1",
+    "ctl-tilt-0",
+    "ctl-tilt-0.5",
+    "ctl-tilt-1"
+  ]
+}

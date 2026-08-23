@@ -1,0 +1,70 @@
+{
+  "slug": "dire-spider-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides run the same 9-second grow-peak-fade spider cycle with matching phase and sweep direction, but the original renders as a near-saturated white/lime bloom that fills the whole grid (mean brightness 112) while the port renders a small, dark, two-tone green disc with crisp red legs (mean 25) - the colour palette, brightness envelope and glow extent are all wrong.",
+  "observations": [
+    "Both sides compile and run clean on the 16x16 grid rig; no compile or runtime errors, no sensor use (wantsSensors false on both).",
+    "Control surface matches exactly: both expose sliderLegWidth (slider, label LegWidth) and sliderBackgroundLevel (slider, label BackgroundLevel).",
+    "Timing MATCHES: autocorrelation of meanBrightness over the 60 s / 5 fps survey gives a first strong peak at lag 45 frames on BOTH sides = 9.0 s cycle, with harmonics at 90 and 135. Each cycle is dark for ~40% of its length then ramps to a single peak - same envelope shape on both.",
+    "Phase MATCHES: in the untouched baseline both sides are dark at 0-1 s, first visible ~1.5-2 s, peak ~3.9-4.8 s, gone by ~7.5 s; the same alignment holds at --skip 11 (cycle2) and --skip 29 (cycle4).",
+    "Motion direction MATCHES: both rhythm images show the same diagonal, the figure entering from the right column and sweeping left across the window at a comparable slope.",
+    "BRIGHTNESS: original is ~4.5x the port. survey meanBrightness avg 95 (peak 210) orig vs 19.9 (peak 51) port; baseline 112 vs 25. Same ratio holds at 48x48 and 64x64, so it is not a rig artefact.",
+    "SATURATION/BLOWOUT: at t=3.9 s on a 64x64 grid the original has 4096/4096 pixels above v=0.15 and 3379 of them (82%) in the top value octave, with 1059 pixels at s<0.2 (white/pink). The port has 3120/4096 lit, values spread evenly across all eight octaves, and 2561 pixels (82%) at s>0.8.",
+    "PALETTE: original's hue histogram at the same frame spans red (1227 px), orange/yellow (605), yellow-green (1089), green (647) plus 528 px of pink/magenta. The port is strictly two-tone: 850 px in hue 0-30 (red-orange legs) and 2270 px in hue 120-150 (green field), nothing else.",
+    "GLOW EXTENT: at peak the original's field covers the entire rig with no dark pixels; the port keeps ~20% of the frame at v<0.125 (dark corners outside a bounded disc). At t=1.6 s the original already covers ~2/3 of a 64x64 grid while the port's figure occupies only the rightmost ~20%.",
+    "LEG DETAIL: the port draws sharp straight bars - an angular scan of red pixels (r>150, r>1.3g) in the r=6-20 band around the hub at t=4.3 s gives 8 clean well-separated lobes with a near-binary duty profile. The same scan on the original around its red body gives only 6 weak, broad, low-contrast lobes: its red is diffuse and largely swallowed by the blown-out field. Visually the original's legs are thin filaments plus a large bright bloom; the port's are chunky opaque wedges.",
+    "The original does contain a red spider body with radiating red filaments (clearest at 30.4-31.1 s in the cycle4 run), so the core figure IS the same idea - it is buried in a bloom the port does not draw.",
+    "Both sides are resolution-consistent: the same picture appears at 16x16, 48x48 and 64x64 on each side, so the divergence is not a grid-size effect.",
+    "Steady state is fine on both: over 60 s neither side decays, freezes or saturates away; port zeroMotionFrames 71/300 is just its longer dark gaps, and motion/motionLit agree on both sides.",
+    "Seeds 1, 7 and 1234 produce essentially the same behaviour and the same orig/port gap (orig mean 103-114, port 22-26), so this is not a one-seed fluke.",
+    "Untouched defaults and explicitly-dialed runs tell the same story, so the divergence is not a default-state artefact."
+  ],
+  "dials": [
+    {
+      "name": "sliderLegWidth",
+      "origEffect": "no visible effect: 0 vs 1 renders are indistinguishable at 48x48 over a 6 s window and over a 60 s / 5 fps six-cycle window (mean |delta meanBrightness| 0.33 on a mean of 100, max 3). Effect unverifiable from output.",
+      "portEffect": "clearly live: at 0 the legs are thin lines, at 1 they are broad wedges roughly 3x wider; mean brightness 34 -> 36 over the same window.",
+      "matches": false
+    },
+    {
+      "name": "sliderBackgroundLevel",
+      "origEffect": "raises a flat green floor behind the figure; baseline mean 114 at 0 -> 122 at 1, background goes from black to a dark saturated green. Direction correct, magnitude small relative to the already-bright field.",
+      "portEffect": "same direction, much stronger relative effect: mean 25 at 0 -> 44 at 1, background goes from near-black to a mid green.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Timing is already correct - do not touch it. Both sides share a 9.0 s cycle (45 frames at 5 fps, confirmed by autocorrelation on both), the same dark-gap/ramp/peak/fade envelope, the same right-to-left sweep and the same phase. Any fix should preserve this.",
+    "Overall output level is ~4.5x too low: original averages 112 mean brightness (peaks 210) against the port's 25 (peaks 51) on the default 16x16 rig. The port needs roughly 4-5x more total emitted light at peak.",
+    "The original's field CLIPS: 82% of its pixels sit in the top value octave and 26% are desaturated to near-white/pink at peak, i.e. it composites the legs additively on top of an already-bright body glow so overlaps clip to white/yellow. The port composites opaquely - saturated red legs painted over a dark green field, 82% of pixels at s>0.8 and zero white. Make the leg colour ADD to the background/body rather than replace it, so overlapping leg-plus-glow blows out to yellow and white the way the original does.",
+    "The port's palette is only two hues (red-orange 0-30 deg and green 120-150 deg). The original spans red, orange, yellow, yellow-green and green, plus a pink/magenta band - the intermediate warm hues come from that additive clipping, so fixing the compositing should recover most of them.",
+    "The port's glow is far too small and too dark at the edges: at peak the original leaves no dark pixel anywhere on the rig, while the port still has ~20% of the frame at v<0.125 in the corners. Widen the body/halo falloff so it fills the rig at peak, and check the growth phase too - at t=1.6 s the original already covers ~2/3 of the grid where the port's figure is still a small patch at the right edge.",
+    "Leg rendering is too hard-edged: the port's legs are opaque bars giving 8 near-binary angular lobes, the original's are thin filaments over a bloom giving 6 broad, soft, low-contrast lobes. Soften the leg profile (feathered edges, lower opacity, thinner core) and let the body glow dominate.",
+    "sliderLegWidth is a behavioural mismatch worth noting but NOT worth chasing: on the original the dial produces no visible change at all across a 60 s six-cycle window (mean |delta| 0.33 on a mean of 100), while on the port it visibly triples leg width. Keep the control, but the port is currently far more responsive to it than the original is. Do not use this as licence to drop the dial.",
+    "sliderBackgroundLevel behaves correctly in direction on both sides (raises a green floor); once overall brightness is fixed, re-check that its relative contribution is not overweighted on the port (it currently moves the port's mean by +76% versus +7% on the original)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "grid48",
+    "cycle2",
+    "cycle4",
+    "bg-0",
+    "bg-0.5",
+    "bg-1",
+    "lw-0",
+    "lw-0.5",
+    "lw-1",
+    "lwlong-0",
+    "lwlong-1",
+    "seed7",
+    "seed1234",
+    "dump-peak",
+    "dump64",
+    "dumpgrow",
+    "dumpearly"
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "slug": "wanderedges",
+  "verdict": "broken",
+  "score": 1,
+  "confidence": "high",
+  "summary": "The port renders a correct-looking green wandering blob for its first ~2 seconds, then its whole wanderer population collapses into the left edge and the strip stays permanently black except a single flickering pixel at index 0, while the original sustains 3-6 meandering green trails indefinitely for 240+ s.",
+  "observations": [
+    "Both sides are pure GREEN (meanR and meanB are exactly 0 on every frame, every run) — palette family matches.",
+    "Neither side exposes any controls: --probe-controls reports '(no settable controls)' for orig and port alike. Control surface matches; there is nothing to dial.",
+    "Original (survey 60 s @ 5 fps and survey240 240 s @ 2 fps): a single continuous regime, no mode rotation. The waterfall shows 3-6 concurrent smooth meandering traces that wander back and forth across the 60 px strip, reflect off both ends, and are continually replenished — mean brightness 6.8-8, brightnessTrend 'steady', only 2/300 zero-motion frames over 60 s, still fully alive at t=240 s.",
+    "Port steady state is DEAD. we-long20 (60 s @ 20 fps): port meanBrightness avg 0.23 with 985/1200 frames at exactly 0; --dump at t=6, 10, 20, 40 and 59 s returns ZERO lit pixels on the port while the original has 12, 4, 3, 23 and 8 lit pixels at those same instants.",
+    "The port's only late-window residue is pixel index 0 alone: dumps at t=14.25/16.5/18.8/25 s give port lit=1 at index 0 with values 234/162/199/14 (breathing brightness, never moving), while the original at the same instants has 10-19 lit pixels spread across several blobs. 143/1000 late frames are non-zero on the port, all of them meanBrightness 1 (= one pixel).",
+    "Death onset measured as the first 2 s window in which meanBrightness never exceeds 1: port 4.50 s @ 10 fps, 4.30 s @ 20 fps, 4.03 s @ 40 fps; original 'never' at all three rates. The collapse is TIME-based, not frame-rate-coupled.",
+    "The drawing routine itself looks right. At t=0.15 s the port draws a soft symmetric blob at px 29-35 with green values 11,49,112,200,129,61,18 — the same ~7 px Gaussian-ish profile and the same centre-of-strip start position the original produces at t=0.45 s (px 29-35: 6,48,144,220,144,48,6). So blob shape, width, colour and spawn location all match; the lifecycle does not.",
+    "Population dynamics diverge immediately. Lit-pixel counts: orig 3 -> 5 -> 7 -> 14 -> 18 -> 14 -> 16 at t=0.25/0.35/0.45/1.0/1.5/2.5/3.5 s (a growing, self-sustaining population). Port 8 -> 4 -> 2 -> 1 -> 3 -> 1 -> 0 over the same times — it splits once and then decays away.",
+    "The port's wanderers appear to be ABSORBED at the low edge rather than reflected. In every port waterfall (baseline, we-long20, we-px300, all seeds) each trace descends to x=0 and terminates there; the permanent residue is exactly pixel index 0, never index 59. The original's traces visibly bounce off both x=0 and x=59 and continue.",
+    "Seed-independent failure: seeds 1, 7 and 1234 at 40 s / 20 fps all give port mean 0 and the same collapse; the original stays at mean 5-6 on all three.",
+    "Rig-independent failure: at --pixels 300 the port collapses at the same wall-clock time (~5-8 s) and its trail shapes are the same fraction of the strip as at 60 px, so both sides appear to work in normalised 0..1 positions rather than pixel indices. The original is alive on 12 px, 60 px and 300 px alike.",
+    "The 5 fps survey did not fabricate the failure: it reproduces identically at 10, 20 and 40 fps, and the port's zeroMotionFrames climbs with window length (66/120 at 6 s, 254/300 at 60 s), the textbook dying-port signature."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port's blob rendering is already correct — a ~7 px soft green bump, right start position, right colour — so do not touch the drawing/falloff code. The bug is entirely in the wanderer lifecycle and edge handling.",
+    "Edge handling: the original's wanderers REFLECT off both ends of the strip (waterfall traces visibly bounce at x=0 and x=59 and reverse). The port's wanderers are absorbed at the low edge instead — every trace in every port run terminates at x=0 and the pattern's permanent steady state is a single breathing pixel at index 0. Make position 0 (and 1) reflect or wrap rather than clamp/stick.",
+    "Population maintenance: the original grows from one central blob to a sustained 3-6 concurrent wanderers (14-18 lit pixels of 60 by t=1.5 s) and holds that density for at least 240 s. The port splits once, drops to 1-2 wanderers by t=0.5 s, and reaches zero lit pixels by t≈4.3 s. Whatever spawns/respawns wanderers in the original is missing or its rate is far too low in the port.",
+    "Target for a fixed port on the default 60 px strip: meanBrightness averaging ~5-8 with brightnessTrend 'steady' over a 60 s window, fewer than ~5 zero-motion frames per 300, and non-zero lit pixels at t=40 s and t=240 s. Currently the port is at meanBrightness 0.23 with 82% of frames completely black.",
+    "The collapse is time-based (onset 4.03/4.30/4.50 s at 40/20/10 fps), seed-independent (1, 7, 1234) and pixel-count-independent (12/60/300 px) — so it is a deterministic logic error, not an RNG-tuning or frame-rate issue. Any of those axes can be used to check a fix cheaply.",
+    "Neither side has controls, so there is no dial work to do; verify a fix purely on the untouched default render over a long (>=60 s) window."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "probe",
+    "we-long20",
+    "we-late20",
+    "we-dump",
+    "we-dump2",
+    "we-early",
+    "we-seed7",
+    "we-seed1234",
+    "we-px300",
+    "we-px12",
+    "we-fps10",
+    "we-fps40"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "slug": "sound-spectromatrix-render2d",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides are sound-driven 16x16 fields sharing a concentric-ring / X-cross motif family, but the original draws thin fully-saturated rainbow contour lines on a mostly-black grid (steady-state mean brightness 8-11, ~50-58% of pixels exactly 0) while the port fills every pixel with a smooth pastel wash and blows the whole grid to pure white for ~1.4 s every ~2.9 s (mean brightness ~150, 42-48% of frames at 255).",
+  "observations": [
+    "Control surfaces MATCH: meta.json reports zero settable controls on both sides; --probe-controls printed '(no settable controls)' for orig and port. No dial work was possible or needed.",
+    "Both sides are 100% sensor-driven: with --sensors off (label sens-off, --skip 30 --seconds 20 --fps 20) BOTH render mean 0 / motion 0, i.e. pure black. With the beat120 feed (label sens-on, identical window) orig = mean 11 / motion 4, port = mean 158 / motion 9. So every divergence below lives in the audio->pixel mapping, not in a free-running term.",
+    "BRIGHTNESS, the headline gap. Steady state (label steady30, --skip 30 --seconds 30 --fps 20, 600 frames): orig whole-grid meanBrightness min 1 / p10 2 / median 8 / p90 26 / max 63 -- it NEVER exceeds 63. Port: min 6 / p10 11 / median 184 / p90 255 / max 255, and 254 of 600 frames (42.3%) sit at meanBrightness >= 250, i.e. the entire 16x16 grid is (255,255,255).",
+    "WHITEOUT CADENCE (port only). At 20 fps steady state the port whiteouts start at 30.25, 33.15, 36.05, 38.95, 41.80, 44.70, 47.65, 50.55, 53.05 s -- onset gaps 2.9, 2.9, 2.9, 2.85, 2.9, 2.95, 2.9 s -- each lasting 0.65-1.45 s (typically 1.40 s), so the port is pure white roughly 48% of the wall time. Over a 240 s window at 10 fps (label survey240) the port had 52 whiteout episodes totalling 72.7 s (30.3%). The original had exactly ONE frame >= 250 in the same 240 s: frame 0.",
+    "WARM-UP / SETTLING. Both sides open on a white frame (a gain warm-up). The original settles: 30 s-window means over 240 s at 10 fps are 40, 9, 9, 9, 9, 9, 9, 9 -- settled by ~2 s and dead-steady thereafter. The port never settles: 120, 125, 122, 127, 132, 124, 121, 113. brightnessTrend is 'volatile' on both, but only the original has a genuine quiet steady state.",
+    "SPARSITY. --dump at 11 offset steady-state times (label dump-steady, --skip 30 --seconds 24 --fps 20, times 30.15-53.15 s): orig has 81-174 of 256 pixels EXACTLY zero (32-68%, typically ~55%) and 18-41% of pixels above brightness 8. Port has ZERO black pixels at every one of the 11 times and lights 97-100% of the grid. The original is a sparse constellation of bright points on black; the port is a full-canvas wash.",
+    "SATURATION. Same 11 dumps: orig mean per-pixel HSV saturation 0.56-1.00 (usually 1.00 -- pure spectral hues). Port 0.74-0.93 when not whited out and exactly 0.00 during whiteouts. The port's colours read as washed pastels on the contact sheet; the original's as neon points.",
+    "SPATIAL LAYOUT IS UNCORRELATED. Pearson correlation of the two sides' per-pixel brightness at the same instant, over the 11 matched dump times: 0.007, 0.000, 0.400, 0.000, 0.068, -0.021, -0.125, -0.226, 0.122, -0.016, 0.000 (mean |r| = 0.090). Even ignoring brightness scale, the port is not lighting the pixels the original lights -- the spectrum->(x,y) mapping differs, not just the gain.",
+    "MOTIF FAMILY DOES resemble. Contact sheets on both sides show concentric rings, rounded-square contours, X crosses and long diagonals -- that much is recognizably the same pattern idea. At 48x48 (label grid48) the original renders these as 1-2 px thin rainbow contour outlines on black; the port renders the same family as broad filled blobs.",
+    "RESOLUTION BEHAVIOUR. Re-rendered at --grid 48x48 (labels grid48 / grid48dump, --skip 30 --seconds 12 --fps 20): the original stays resolution-independent and sparse -- 48-58% of the 2304 pixels exactly zero at all four dumped times, contours get thinner and finer, motion stat unchanged at 4. The port stays dense (0-11% black) and its motion stat explodes to 61 (15x the original's); its 48x48 imagery is coarse and blocky -- during the 39.15 s whiteout 55% of horizontally-adjacent pixel pairs are byte-identical, and adjacent-pixel colour deltas swing from 2.4 to 106.9 across dumps.",
+    "TEMPORAL CHARACTER. At 40 fps (label beat40, --skip 40 --seconds 8) the original's motion series has a clean draw-and-fade cadence: a spike (63, 36, ...) exactly every 40 frames = 1.00 s, then monotonic decay to a run of ~15-20 zero-motion frames before the next spike -- i.e. a shape is drawn, fades to black, a new shape replaces it. Autocorrelation of orig motion peaks at 1.000 s (0.75) with clean harmonics at 2, 3, 4 s. The port has no such cadence: its motion autocorrelation peaks weakly at ~3.1 s (0.19), it holds 34+ consecutive zero-motion frames (0.85 s frozen), then jumps 249 in a single frame at whiteout onset. Steady-state zeroMotionFrames at 20 fps: orig 27/600 vs port 136/600 (survey) and 93/240 (fps20 window).",
+    "FRAME-RATE COUPLING (secondary, present on BOTH sides). Port whiteout onset gap: 4.5 s at 10 fps -> 2.9 s at 20 fps -> ~1.6 s at 40 fps (labels fps10/fps20/fps40, --skip 40 --seconds 12) -- the port's internal accumulator steps per frame, not per second. The original is not clean either: its steady mean brightness rises 9 -> 11 -> 15 across the same 10/20/40 fps, and its bright-flash gap reads 1.5 s at 20 fps vs 1.0 s at 40 fps. So mild frame coupling appears to be inherent to the pattern; the port's is far more severe, but this is not the primary bug.",
+    "SEED-INDEPENDENT. Re-running the steady window at --seed 1234 (label seed1234) reproduced sens-on exactly on both sides (orig mean 11 / motion 4, port mean 158 / motion 9). Nothing here is an RNG fluke.",
+    "Neither side reported a compileError or runtimeError in any of the 16 runs; the port is alive, just wrong."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY: the port's output has no black. The original leaves ~50-58% of pixels at exactly (0,0,0) at every moment on both 16x16 and 48x48 grids and lights only 18-41% above brightness 8; the port lights 97-100% of pixels and never emits a single zero pixel. Whatever attenuation/thresholding turns the field into thin contour LINES is missing -- the port is painting the whole scalar field instead of its level set.",
+    "PRIMARY: the port's brightness gain is roughly 10-20x too hot and has no ceiling. Original whole-grid mean brightness stays in 1..63 (median 8) forever after the first frame; the port's median is 184 and it clips the entire grid to pure white (all 256 pixels at 255,255,255) for ~1.4 s out of every ~2.9 s at 20 fps -- 42-48% of the runtime. Target: after the opening frame, whole-grid mean should never exceed ~63 and should sit near 8-11.",
+    "The original's gain warm-up settles in about 2 s (30 s-window means over 240 s: 40 then 9,9,9,9,9,9,9). The port's equivalent never converges (120,125,122,127,132,124,121,113). If there is a running-maximum / AGC term, the port's is either not being updated, being reset every cycle, or decaying far too fast -- the recurring ~2.9 s whiteout looks exactly like an envelope that is re-armed and re-overshoots instead of converging once.",
+    "Fixing gain alone will NOT make the sides match: at 11 matched steady-state instants the per-pixel brightness correlation between the sides averages |r| = 0.09. The spectrum-bin -> (x,y) mapping is also wrong. Once the field is sparse again, re-check which pixels light: the original's lit set forms thin closed contours (rings / rounded squares / X crosses / long diagonals) whose hue is near-fully-saturated (mean HSV saturation 0.56-1.00, usually 1.00) and varies smoothly ALONG the contour; the port's lit set is a smooth mirror-symmetric fill with saturation 0.74-0.93.",
+    "Restore the draw-fade-redraw rhythm. At 40 fps the original spikes motion (63, 36, ...) exactly every 40 frames = 1.00 s, decays monotonically to ~15-20 frames of literally zero motion (grid gone black), then draws the next shape. The port instead freezes for 34+ consecutive frames at a dense non-black image and then jumps 249 in one frame. A viewer sees the original as a slow constellation of shapes appearing and fading; the port as a pastel kaleidoscope strobing to white twice every ~3 s.",
+    "At 48x48 the original scales gracefully (thinner contours, same motion stat of 4, still ~50% black); the port's motion stat goes to 61 and its imagery becomes coarse blocks (55% of horizontally-adjacent pixel pairs byte-identical during a whiteout). After the sparsity fix, re-verify at --grid 48x48 that feature THICKNESS shrinks with pixel pitch rather than the field turning blocky.",
+    "Verify any fix with --sensors off first: both sides correctly go fully black with no feed, and the port must keep that property.",
+    "Lower priority: the port's whiteout period is frame-rate coupled (4.5 s @10 fps, 2.9 s @20 fps, ~1.6 s @40 fps). The original shows mild coupling too (steady mean brightness 9/11/15 at 10/20/40 fps), so do not chase exact fps-invariance -- but the port's per-frame accumulation is much stronger and should shrink once the gain/AGC term is right."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "steady30",
+    "survey240",
+    "dump-steady",
+    "beat40",
+    "fps10",
+    "fps20",
+    "fps40",
+    "sens-off",
+    "sens-on",
+    "grid8",
+    "grid48",
+    "grid48dump",
+    "seed1234"
+  ]
+}

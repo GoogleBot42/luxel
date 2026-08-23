@@ -1,0 +1,119 @@
+{
+  "slug": "rocket-by-tony-hampton",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Rocket kinematics and every dial map are reproduced exactly (head positions frame-for-frame identical across all four slider sweeps), but the port renders the exhaust as a dense, near-saturated, frame-rate-coupled trail that lights most of the 60-px strip and lingers ~0.9 s after each launch, where the original's exhaust is a handful of sparse, mostly ~5/255 sparks.",
+  "observations": [
+    "Rig: strip, 60 px. Both sides compile and run clean (no compile/runtime errors), sensors not bound on either side, brightnessTrend 'steady' on both out to a --skip 120 late window and a 240 s survey — no decay, no mode rotation, single repeating regime on both sides.",
+    "Shared concept confirmed: a white rocket body sits at the strip start, crawls, then accelerates hard and exits at pixel 59, repeating. Waterfalls on both sides show the same characteristic curved launch arc.",
+    "UNTOUCHED DEFAULT CADENCE MISMATCH: autocorrelation of meanBrightness gives the original a 4.00 s launch period at 5, 10, 20 and 40 fps; the port gives 3.15-3.20 s at the same rates (seed 1, 7 and 1234 all agree). The port therefore fires ~19 launches per 60 s against the original's 15.",
+    "UNTOUCHED DEFAULT ROCKET SIZE MISMATCH: at the pad the original lights a 5-px solid white body (pixels 0-4); the port lights 3 px (pixels 0-2). Confirmed by --dump at t=0.5 and across the whole first 3 s of the dense track.",
+    "UNTOUCHED FLIGHT SHAPE: original dwells at head=4 for ~0.55 s then accelerates smoothly, reaching pixel 59 at t≈3.80 and relaunching at t≈3.95 with essentially no pad idle. The port dwells ~0.75 s, reaches 58 at t≈3.05, then parks a fresh rocket at the pad from t=3.10 to t≈3.90 (0.8 s idle) while its previous trail fades — a pause the original does not have.",
+    "DIALED KINEMATICS ARE EXACT. With FlightTime=0.5, RocketSize=0.25, BoostDelay/BoostMultiplier swept, the rocket head index (last full-white pixel) sampled every 0.1 s over a full cycle is byte-identical between sides: e.g. BoostMultiplier=1 both give 4 4 4 4 4 4 4 4 4 5 5 5 5 5 6 6 6 6 6 7 7 7 8 8 10 13 16 21 27 34 43 52 59; BoostDelay=1 both give 13 14 14 15 15 16 16 17 18 19 21 23 26 29 33 38 43 48 55 59. Only the exit frame differs (port holds a white pixel 1-2 frames longer because its trail is saturated).",
+    "MAJOR DIVERGENCE — EXHAUST DENSITY. Counting non-rocket lit pixels every 0.1 s over one dialed launch (label exhaust-track, RocketSize=0.25, rocket dyed blue so exhaust is separable): the original peaks at 7 lit exhaust pixels with a mean exhaust brightness of 3-90/255 (typical individual spark value 2-20, occasional 180-255 flare). The port peaks at 51 lit exhaust pixels — 85% of the strip — with many at a full 255.",
+    "MAJOR DIVERGENCE — EXHAUST PERSISTENCE. After the rocket exits at t=8.2, the original's exhaust count goes 3 -> 2 -> 2 -> 0 within 0.2 s. The port's goes 51, 50, 43, 40, 37, 32, 25, 18, 4, 0 — a ~0.9 s full-strip afterglow. Individual port exhaust pixels decay roughly x0.55 per 0.1 s (66 -> 35 -> 21 -> 11 -> 8 at 20 fps, i.e. ~x0.93 per FRAME); the original's sparks drop from bright to ~5 then off within 1-2 frames.",
+    "The port's exhaust is CONTINUOUS where the original's is DISCRETE. Untouched dump at t=3.0: original lights pixels 10 (255), 16 (5,5,5), 29 (2,4,0), 31-32 (5,5,5) plus the 5-px body at 33-37. The port lights EVERY pixel from 0 to 54 in a smooth monotone ramp (7,6,5 at pixel 0 rising through 37,37,37 / 71,71,71 / 135,135,135 / 185,185,185 to 255,255,255 at 52-54).",
+    "FRAME-RATE COUPLING (port only). Same 24 s window at 10/20/40 fps: original mean brightness 22.3 / 22.9 / 23.5 (invariant); port 22.0 / 30.9 / 38.9 (scales with fps). Launch period is time-based on BOTH sides at all three rates (orig 4.00 s, port 3.15 s), so the coupling is specifically in the exhaust decay, which is applied per frame instead of per second. At 10 fps the port's trail visually collapses to roughly the original's length; at 40 fps the trail carries as much light as the rocket body itself.",
+    "BRIGHTNESS BUDGET. Original mean brightness (~22-23 at every fps and dial setting tested) is essentially just the rocket body: 255 x 5 px / 60 px = 21. The exhaust contributes 1-2 counts. On the port at 20 fps the trail contributes ~10 counts of a 31 total (~45% of all emitted light) and ~18 of 39 at 40 fps.",
+    "COLOR WASH-OUT. With RocketBody hue dialed to 0 (pure red) on both sides, at t=5.0 (slow phase) both render an identical 5-px 255,0,0 body. At t=7.0 (boost phase) the original's brightest pixel is still 255,0,0 while the port's is 203,199,197 — near-white trail immediately behind the rocket outshines the coloured body.",
+    "TEXTURE ARTEFACT. The port's trail alternates hard between saturated and mid values on adjacent pixels (dialed dump t=7.8: 18:255 19:138 20:255 21:111 22:255 23:224 24:139 25:255), producing a comb/dither texture visible as vertical striping in the waterfall. The original's body is a clean solid run with no such comb.",
+    "CONTROL SURFACE: both sides expose 7 controls with matching kinds, but 3 of 7 NAMES (and labels) differ — orig hsvPickerExhaustColor/'ExhaustColor' vs port hsvPickerExhaust/'Exhaust'; orig hsvPickerRocketColor/'RocketColor' vs port hsvPickerRocketBody/'RocketBody'; orig toggleMultiColor/'MultiColor' vs port toggleMulticolorExhaust/'MulticolorExhaust'. The four sliders match exactly by name and label.",
+    "The probe reported port hsvPickerExhaust as NOT responsive (maxDelta 0.65 / maxDeltaLit 2.16). Manual sweep over a 24 s window disproves that: hue 0 / 0.33 / 0.66 shift the port's channel means to 66.5/65.4/65.3, 65.3/66.5/65.4, 65.4/65.3/66.5 respectively — a false inert caused by the 4 s probe window landing on a mostly-white rocket. The original responds the same way, just 5x weaker (43.8/43.8/43.6 -> 43.6/43.8/43.8 -> 43.8/43.6/43.8) because its exhaust is so sparse.",
+    "Seed independence: seeds 1, 7 and 1234 all give the original a 4.00 s period at mean 21.8-22.3 and the port a 3.20 s period at mean 22.0-22.6 (30 s @ 10 fps). Neither side is seed-fragile; the exhaust spark placement is stochastic on both, so per-pixel alignment was not used for any claim."
+  ],
+  "dials": [
+    {
+      "name": "sliderFlightTime",
+      "origEffect": "Sets the launch period: 0 -> ~2.0 s cycle (rapid-fire launches), 0.5 -> 4.10 s, 1 -> 5.40 s (autocorrelation of meanBrightness, 30 s @ 10 fps).",
+      "portEffect": "Identical mapping: 0.5 -> 4.10 s, 1 -> 5.40 s; at 0 both sides show the same rapid-fire cadence in the waterfall. Note the UNTOUCHED default differs (orig 4.00 s vs port 3.15 s) even though every dialed value agrees.",
+      "matches": true
+    },
+    {
+      "name": "sliderRocketSize",
+      "origEffect": "Pad-resting body width in pixels: 0 -> 1 px, 0.25 -> 5 px, 0.5 -> 10 px, 1 -> 20 px (max contiguous >=250 white run, --dump at t=0.2/1.0/2.0).",
+      "portEffect": "Same widths at the pad (1 / 5 / 10 / 20 px). During the boost phase the port's white run inflates beyond the set size (11 px at rs=0.5, 27 px at rs=1) because the saturated exhaust merges with the body; the original's run stays at exactly the dialed size throughout. Untouched default width differs (orig 5 px, port 3 px).",
+      "matches": true
+    },
+    {
+      "name": "sliderBoostDelay",
+      "origEffect": "How long the rocket crawls before the boost. 0 -> boost almost immediately (head reaches 59 in ~1.6 s); 0.5 -> ~2.8 s of crawl then a hard boost; 1 -> already mid-flight at window start, longest pre-boost hold.",
+      "portEffect": "Frame-for-frame identical head trajectories at 0, 0.5 and 1 (see observations for the sampled sequences).",
+      "matches": true
+    },
+    {
+      "name": "sliderBoostMultiplier",
+      "origEffect": "Boost strength. 0 -> no boost at all, constant slow linear climb (head 13,14,14,15,...,45 over 4.5 s); 0.5 -> moderate boost; 1 -> violent boost, strip crossed in ~0.9 s once it fires.",
+      "portEffect": "Frame-for-frame identical head trajectories at 0, 0.5 and 1.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerExhaustColor / port hsvPickerExhaust",
+      "origEffect": "Tints the exhaust sparks. Sweeping hue 0/0.33/0.66 shifts the dominant channel mean (43.8/43.8/43.6 -> 43.6/43.8/43.8 -> 43.8/43.6/43.8). The effect is very small in absolute terms because only a handful of dim pixels carry it.",
+      "portEffect": "Same hue response, correct direction, but ~5x stronger in whole-frame terms (66.5/65.4/65.3 -> 65.3/66.5/65.4 -> 65.4/65.3/66.5) because the port's trail covers most of the strip. Probe false-flagged this dial inert on the port; the manual 24 s sweep shows it live. Name and label differ from the original's.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerRocketColor / port hsvPickerRocketBody",
+      "origEffect": "Colours the rocket body. Hue 0/0.33/0.66 give a body of exactly 255,0,0 / 5,255,0 / 0,11,255 at both t=5.0 and t=7.0.",
+      "portEffect": "Body colour matches at the pad and in the slow phase (255,3,0 / 21,255,0 / 3,41,255). During the boost phase the near-white exhaust becomes the brightest thing on the strip (203,199,197 at t=7.0), so the chosen body colour is visually swamped in a way it never is on the original. Name and label differ.",
+      "matches": false
+    },
+    {
+      "name": "toggleMultiColor / port toggleMulticolorExhaust",
+      "origEffect": "0 -> exhaust sparks carry the exhaust-picker tint (meanR 22.1 slightly above meanB 21.9); 1 -> sparks take assorted hues (blue, green, orange, magenta visible in the waterfall) and the channel means neutralise to 22.1/22.1/22.0.",
+      "portEffect": "Same behaviour and same direction: 0 -> 39.4/39.0/38.5 (warm-tinted trail), 1 -> 38.6/38.7/38.7 (neutral, with multi-hued streaks visible in the waterfall). The effect reads much stronger on the port only because its exhaust occupies far more pixels. Name and label differ.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "The single biggest fix: the exhaust is far too dense and too long-lived. On the original, at most ~7 pixels of exhaust are lit at any instant and their typical value is ~5/255 (occasional 180-255 flares); the port lights up to 51 of 60 pixels in a smooth continuous ramp reaching 255. Target: a SPARSE field of discrete sparks, not a contiguous gradient — after the boost the strip behind the rocket should read mostly black with scattered dim points, not as a comet smear.",
+    "Exhaust particle lifetime is ~10x too long. Original sparks go from their birth brightness to invisible within 1-2 frames at 20 fps; port sparks decay by only ~7% per frame (66 -> 35 -> 21 -> 11 -> 8 over 0.5 s). Shorten the decay so a spark is gone in well under 0.2 s.",
+    "The exhaust decay is applied PER FRAME rather than per second, which is a frame-rate-coupling bug: port mean brightness runs 22.0 / 30.9 / 38.9 at 10 / 20 / 40 fps while the original is flat at 22.3 / 22.9 / 23.5. Make the decay a function of elapsed time (delta) so the trail's real-world length is fps-independent. The launch kinematics are already correctly time-based on both sides, so only the exhaust needs this.",
+    "After the rocket exits at pixel 59 the port leaves a full-strip afterglow that takes ~0.9 s to clear (51 lit pixels falling to 0 over 9 sample steps), and it parks the next rocket on the pad during that glow. The original clears within ~0.2 s and relaunches immediately. Once the decay above is fixed this should largely resolve, but check the inter-launch pad idle too — untouched, the original has essentially none.",
+    "Untouched default FlightTime is wrong: the port's launch period is 3.15-3.20 s against the original's 4.00 s (measured by autocorrelation at 5/10/20/40 fps and at seeds 1, 7, 1234). Every DIALED FlightTime value already agrees (0.5 -> 4.10 s, 1 -> 5.40 s on both), so this is purely the pre-dial initial value of that variable — raise it so the untouched period is 4.00 s.",
+    "Untouched default RocketSize is wrong: the port's pad-resting body is 3 px where the original's is 5 px. All dialed sizes match exactly (0/0.25/0.5/1 -> 1/5/10/20 px on both), so again only the initial value needs adjusting.",
+    "Three of the seven control NAMES and labels differ from the original's, which breaks saved-value compatibility on real hardware: hsvPickerExhaustColor ('ExhaustColor') was renamed to hsvPickerExhaust ('Exhaust'), hsvPickerRocketColor ('RocketColor') to hsvPickerRocketBody ('RocketBody'), and toggleMultiColor ('MultiColor') to toggleMulticolorExhaust ('MulticolorExhaust'). Rename them to match the original exactly; the four sliders are already correct.",
+    "Cosmetic but visible: the port's trail alternates hard between saturated and mid values on adjacent pixels (255,138,255,111,255,224,...), giving a comb/dither texture with obvious vertical striping in the waterfall. The original never produces adjacent-pixel alternation. Whatever sub-pixel accumulation produces this should be smoothed or the emission quantised to whole pixels.",
+    "Because of the bright trail the port's rocket-body colour is lost during the boost phase — with the body dyed pure red the brightest pixel mid-flight is 203,199,197 (white trail) on the port versus 255,0,0 (the body) on the original. Fixing the exhaust brightness will restore this; verify by dialing RocketBody to hue 0 and checking that the brightest pixel mid-flight is still saturated red.",
+    "Everything else is already right and should not be touched: the boost trajectory is frame-for-frame identical to the original across the full BoostDelay and BoostMultiplier ranges, RocketSize and FlightTime map identically once dialed, and both colour pickers and the multicolour toggle respond in the same direction with the same character."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-a",
+    "dump-track",
+    "fps10",
+    "fps20",
+    "fps40",
+    "dial-mid",
+    "dial-mid-dump",
+    "exhaust-track",
+    "late-skip120",
+    "ft-0",
+    "ft-0.5",
+    "ft-1",
+    "rs-0",
+    "rs-0.25",
+    "rs-0.5",
+    "rs-1",
+    "bd-0",
+    "bd-0.5",
+    "bd-1",
+    "bm-0",
+    "bm-0.5",
+    "bm-1",
+    "mc-0",
+    "mc-1",
+    "rc-0",
+    "rc-0.33",
+    "rc-0.66",
+    "exh-h0",
+    "exh-h0.33",
+    "exh-h0.66",
+    "seed7",
+    "seed1234"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "slug": "marching-rainbow",
+  "verdict": "match",
+  "score": 10,
+  "confidence": "high",
+  "summary": "The port is pixel-for-pixel indistinguishable from the original: every rendered PNG, every per-frame stat series and every dumped frame was byte-identical across 16 runs spanning 5-40 fps, 6-240 s windows, two seeds and two rigs.",
+  "observations": [
+    "Byte-identical output everywhere: sha256 of orig.png == port.png in all 16 run directories (baseline, survey, survey-240, probe, steady-late, seed1234, grid16, fps10, fps40, long10, long20, long40, and four dump runs), including grid16's orig-motion.png and orig-rhythm.png filmstrip/rhythm images.",
+    "Numerically identical: full per-frame series in stats.json (meanBrightness, meanR, meanG, meanB, motion, motionLit) differ in ZERO samples on every run checked, including long20 (1200 frames @20 fps) and survey-240 (480 frames @2 fps).",
+    "Exact pixel equality confirmed by --dump on 6 times in the baseline window (0, 0.05, 0.1, 1, 3, 5.95 s): max absolute channel difference across all 60 px x 3 channels x 6 frames = 0.",
+    "Structure (default rig, 60 px strip): a repeating rainbow motif with a ~6 px spatial period. Luminance spatial autocorrelation at t=2 s peaks at lag 6 and again at 12 and 18; the dominant spatial DFT component is k=10 (10 cycles per 60 px). Duty cycle ~42% - 25 of 60 px above luminance 5 at t=2 s; the gaps are true black (exactly 0,0,0 in frames.json), not dim.",
+    "Colour: fully saturated single-hue pixels stepping through the rainbow, e.g. at t=0 px15 = (251,0,0), px3 = (0,164,169), px9 = (190,0,231), px20 = (62,193,0). Per-pixel brightness varies strongly within the motif so the strip reads as bright rainbow slugs separated by black. meanBrightness avg 24.3 (min 21, max 27) - identical on both sides.",
+    "Motion: the 6 px repeat marches slowly toward LOWER pixel index. Phase-tracking the k=10 spatial DFT component (cross-correlation degenerates here because of the strong 6 px period) gives -1.88 px/s at 40 fps and -1.74 px/s at 10 fps - i.e. the march is essentially frame-rate-invariant, and identical on both sides to the last digit (-0.047 px/frame @40 fps, -0.174 px/frame @10 fps on BOTH orig and port).",
+    "Frame-rate coupling of the colour envelope, present IDENTICALLY on both sides (so not a port bug): meanR autocorrelation peaks at exactly 131 frames at 5, 10, 20 AND 40 fps - a constant frame count, not a constant time. That means the global hue cycle is frame-counted: 3.27 s at 40 fps, 6.55 s at 20 fps, 13.1 s at 10 fps, 26.2 s at 5 fps. The original does this and the port reproduces it exactly.",
+    "Single regime, no modes: a 240 s / 2 fps survey waterfall is uniform diagonal rainbow striping end-to-end with no texture boundaries, on both sides. A 60 s / 5 fps survey agrees.",
+    "Steady state healthy on both sides: a --skip 120 --seconds 30 --fps 4 window (t = 120-150 s) posts brightnessTrend steady, zeroMotionFrames 0, meanBrightness 24 on both, and its waterfall is visually indistinguishable from the t=0 baseline. No decay, freeze or saturation.",
+    "Seed independence: seed 1234 (20 s @10 fps) renders identically between sides and shows the same striping character as seed 1 - the pattern appears deterministic rather than RNG-driven.",
+    "Rig override (16x16 grid, 8 s): still byte-identical between sides; the rhythm image shows smooth continuous horizontal colour bands drifting steadily (no beats, no bursts), consistent with the 1D waterfall.",
+    "Control surface matches: --probe-controls reports '(no settable controls)' for BOTH orig and port; meta.json lists controls: [] on both sides. wantsSensors is false on both, so sensors were correctly not fed (sensors: 'off').",
+    "No compile or runtime errors on either side in any run; meta.json warnings arrays empty throughout."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing to fix - the port is byte-identical to the original on every run performed. No fixing pass is warranted.",
+    "For future regression runs: the cheapest single discriminator here is a --dump equality check (max channel diff must stay 0) plus the 131-frame meanR autocorrelation period at 20 fps; both are exact and fast.",
+    "If anyone later 'fixes' the frame-rate coupling (hue cycle period is a constant 131 frames at 5/10/20/40 fps rather than a constant wall-clock period), note that this is faithful to the original's behaviour on our engine - changing it would introduce a divergence, not remove one."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "steady-late",
+    "seed1234",
+    "grid16",
+    "fps10",
+    "fps40",
+    "long10",
+    "long20",
+    "long40",
+    "dump-base",
+    "dump-track",
+    "dump-phase",
+    "dump-phase10"
+  ]
+}

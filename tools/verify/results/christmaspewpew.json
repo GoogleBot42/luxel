@@ -1,0 +1,41 @@
+{
+  "slug": "christmaspewpew",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same idea — a train of red and green sawtooth 'bolts' sweeping rightward along the strip — but the port runs ~5.5x too fast and ~6x too bright, so its ramps overlap into a continuous yellow wash instead of the original's sparse bright streaks on a near-black background.",
+  "observations": [
+    "Both sides: 60px strip rig, no controls exposed on either side (probe: 'no settable controls' for orig and port), blue channel identically 0 for the whole 240 s window, one single regime with no mode rotation (survey-240, 240 s @ 5 fps, uniform texture on both sides), and steady output out to t=126 s (late-skip120) with brightnessTrend 'steady' and zeroMotionFrames 1 on both.",
+    "Structure — original: at any frame the red channel carries exactly 3 sharp-headed bolts (heads at e.g. px 5/17/26 at t=2.00 s, evenly spaced ~11 px) and green carries 5-6; each bolt is a short convex ramp (14,15,16,17,20,22,25,29,33,38,46,65) that snaps back to the floor. 43% of all pixels sit dark (R and G both <20) and the unlit floor is a dim red 14 with green 0.",
+    "Structure — port: bolt COUNT is right (3-4 red heads, 5-6 green heads per frame) but each ramp is stretched across the whole inter-head gap, so only 1.7% of pixels are dark. Every gap is filled.",
+    "Speed — measured by circular cross-correlation of consecutive dumped frames (dump-dense, 11 frames 0.05 s apart at t=2.0-2.5 s): original R shifts +1 px/frame on every pair (20 px/s), G ~+1 (16 px/s); port R +5..+7 px/frame (122 px/s), G +4..+7 (104 px/s). Port is ~5.5x too fast. In the waterfalls this reads as the original's streaks crossing the strip twice per 6 s window vs the port's ~12 times (near-horizontal).",
+    "Both sides are time-based, not frame-coupled, in SPEED: original 18/20/16 px/s and port 122(20fps)/112(40fps) px/s across --fps 10/20/40 (fps10 port numbers alias — 11 px per 0.1 s wraps a 60 px strip — so read the 20 vs 40 fps pair). So the speed error is a constant multiplier, not a frame-rate bug.",
+    "Both sides scale mean brightness ~1/fps identically (orig 22/13.3/8.9 and port 126/84/46.5 at fps 10/20/40), i.e. bolt lifetime is frame-stepped on BOTH sides. That shared quirk is not a port defect; the constant ~5-6x brightness ratio between them is.",
+    "Amplitude — original bolt peaks cap around R 68 / G 114 (max over 660 sampled pixels); port peaks reach R 193 / G 255. Mean brightness 13.3 vs 83.7 at 20 fps (6.3x), 36 vs 157 at 5 fps.",
+    "Color character is the most visible break: in the original 0.0% of pixels have BOTH R>60 and G>60 — red bolts and green bolts never coincide brightly, so it reads as separate red and green streaks on black. In the port 95.8% of pixels have both above 60, so the whole strip is yellow; the 240 s survey render is a solid yellow field with only faint red/green modulation.",
+    "Motion stat backs this up: orig motion avg 3.7 (motionLit 3.8) vs port 24.7 at 20 fps.",
+    "Seed-independent: seeds 1, 7 and 1234 give the same character and the same ratio (orig mean 13/11/15, port 84/96/93), so this is not a one-seed fluke."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the bolt travel by ~5.5x: the original's heads advance exactly 1 px per frame at 20 fps (20 px/s on a 60 px strip, ~3 s to traverse); the port advances 5-7 px per frame (~110 px/s). Speed is time-based on both sides, so this is a single constant scale factor, not a delta-time bug.",
+    "Restore the dark background. The original leaves ~43% of pixels at the floor (dim red 14, green 0) between bolts; the port leaves only 1.7% dark. The bolt COUNT is already correct (3 red / 5-6 green heads), so the fix is the tail profile, not the spawn rate: the original's tail is a short convex ramp that is still near-floor 6-8 px behind the head (14,15,16,17,20,22,25,29,33,38,46,65 over 12 px) while the port's ramp climbs gently across the entire ~15-20 px gap so nothing ever goes dark.",
+    "Cut peak amplitude ~2.5-3x: the original's bolts top out around R 68 / G 114 and never saturate; the port hits R 193 / G 255.",
+    "The red and green bolt trains must stay visually separate. In the original essentially no pixel has both R and G above 60; in the port 96% do, which turns the whole strip yellow. Once the tails are shortened and amplitude reduced this should mostly follow, but check it explicitly — 'fraction of pixels with R>60 and G>60' should be near 0.",
+    "Keep what already matches: bolt counts per channel, rightward travel direction, the even ~11 px head spacing on red, the dim red (not black) ambient floor, blue pinned to 0, no controls, and the absence of any mode rotation over 240 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late-skip120",
+    "steady30",
+    "dump-base",
+    "dump-dense",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

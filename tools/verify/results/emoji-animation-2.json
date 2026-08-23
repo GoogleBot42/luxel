@@ -1,0 +1,79 @@
+{
+  "slug": "emoji-animation-2",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same animated emoji face - identical palette, same three brow/mouth expression pairs, same blink and iris-dart behaviour - but the port's face is smaller and vertically compressed, one of its three mouths and one of its three brow styles are drawn as different shapes, it drops the nose in one expression, and its expression cycle runs ~19% slow.",
+  "observations": [
+    "Both sides render cleanly on the 16x16 grid rig with no compile or runtime errors, stay alive and steady out to t=200 s (late run: orig meanBrightness avg 20.3 / port 22.1, both brightnessTrend steady, motion.max 28 vs 22), and behave the same on seeds 1, 7 and 1234.",
+    "Shared structure: red eyebrows across the top, two eyes with a light sclera and a green iris that darts left/right, a 2x2 red nose, and a coloured mouth. Both cycle through exactly three expressions with the SAME brow/mouth pairing - flat brows + magenta mouth, inward-sloping diagonal brows + yellow smile, third brow style + red frown - each occupying exactly 1/3 of the cycle (20/60 sampled frames each, on both sides).",
+    "Palette matches exactly: both sides use only hue families red (255,0,0), yellow (255,255,0), magenta (255,0,255), green iris and neutral grey. No extra or missing colours.",
+    "RHYTHM: the original steps to the next expression every 0.80 s (motion autocorrelation fundamental 16 frames @20 fps, and identically 16/32/64 frames at 10/20/40 fps, i.e. exactly time-based); the port steps every ~0.95 s (19 frames @20 fps; 1.00 s @10 fps, 0.93 s @40 fps). Full three-expression cycle: orig 2.40 s, port ~2.85 s. The port is about 19% slow and shows a small residual fps sensitivity (+-4%) the original does not.",
+    "FACE PROPORTIONS: original eye is 6 rows x 6 cols (rows 5-10, cols 1-6 / 9-14) with the nose BELOW the eye line at rows 10-11; port eye is 4 rows x 5 cols (rows 6-9, cols 2-6 / 9-13) with the nose level with the eyes' lower half at rows 8-9. Original flat brows are 6 px per brow, port's are 5 px. The original's face fills rows 1-15; the port's stops at row 13, leaving the bottom two rows permanently black.",
+    "MAGENTA MOUTH DIVERGES COMPLETELY: original draws a smooth 4-row-deep wide U/V smile - lit cells (12,3)(13,4)(14,5)(15,6-9)(14,10)(13,11)(12,12), reaching the bottom row; the port draws a 2-row dotted zigzag/squiggle at rows 12-13, cols 4-11 (row 12 at cols 4,6,8,10 and row 13 at cols 5,7,9,11). Same colour, unrelated shape.",
+    "THIRD BROW STYLE DIVERGES: original draws a chevron '^' peak over EACH eye (rows 2-4, apex at col 4 / col 11, 3-px legs down to cols 2,6 and 9,13); the port draws one long single-pixel diagonal per brow sloping the opposite way (rows 1-5, from (1,6) down-outward to (5,2), mirrored), which together read as a single face-wide '/\\' roof. Confirmed at 16x16 by --dump and visually at 32x32.",
+    "Other two mouths are the right shape but shallower and narrower on the port: yellow smile orig 3 rows spanning cols 2-13 vs port 2 rows spanning cols 4-11; red frown orig 3 rows (rows 13-15) vs port 2 rows (rows 12-13).",
+    "NOSE MISSING IN ONE EXPRESSION on the port: across 60 samples the original has the 2x2 red nose in every frame, while the port has zero nose pixels in exactly the 20 frames of its red-frown expression.",
+    "BLINKS match in rate but not in the closed pose: blink interval averages 2.01 s on the original (9 blinks in 20 s, intervals 1.6-2.4 s) and 1.93 s on the port (10 blinks, 1.5-2.3 s), both irregular. At the closed extreme the original still draws a 2-row lid line (eye height 6 -> 2 rows); the port's eyes vanish entirely (height 6 -> 4 -> 2 -> 0 rows, ~0.15 s with no eye pixels at all).",
+    "IRIS DART: both dart with the same frequency (non-rest iris position in 43/151 non-blink samples on the original, 43/150 on the port, ~29% each). Excursion differs: the original's iris is 3 px wide in a 6-px eye and reaches both edges (column sets {3,4,5} rest, {1,2,3} left, {4,5,6} right); the port's is 2 px in a 5-px eye and travels one column ({3,4} rest, {2,3,4} left, {4,5} right) - roughly half the proportional travel.",
+    "COLOUR/BRIGHTNESS: the original's sclera is a soft anti-aliased grey topping out at 122-156, so its eyes read as green-dominant with a dim halo; the port's sclera is pure 255 white, so its eyes read bright and hard-edged. Overall mean brightness 20.3 (orig) vs 22.7 (port).",
+    "CONTROL-SURFACE MISMATCH: the original exposes NO controls at all; the port exposes two sliders, sliderIrisHue and sliderEyeOpen, both confirmed live by the probe (maxDelta 2.17 / 52.14, maxDeltaLit 11.73 / 113.12) and value-dependent between 0 and 1.",
+    "Both sides are resolution-independent: re-rendered at --grid 8x8 and --grid 32x32 each side draws the same face, just coarser/finer, with no change to feature counts."
+  ],
+  "dials": [
+    {
+      "name": "sliderIrisHue",
+      "origEffect": "control absent on the original - it exposes no controls, and its iris is always the same green",
+      "portEffect": "live hue dial on the iris: 0 -> dark red (100,10,10), 0.5 -> cyan (15,158,158), 1 -> red again (hue wraps); untouched default is green (15,158,21)",
+      "matches": false
+    },
+    {
+      "name": "sliderEyeOpen",
+      "origEffect": "control absent on the original - its eye is fixed at 6 rows tall and only changes when it blinks",
+      "portEffect": "live and very strong (probe maxDelta 52): at 1 the eyes stretch into full-height bright ovals covering most of the face (mean brightness 54 vs 22 untouched); at 0 they become tall dark vertical bars (mean 32). Either extreme leaves the face unrecognisable next to the original",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Slow the expression cycle down: the original swaps brow+mouth every 0.80 s exactly (2.40 s for all three), the port takes ~0.95 s (2.85 s). Also make the step purely time-based - the original's period is identical at 10, 20 and 40 fps while the port's drifts from 1.00 s to 0.93 s over that range.",
+    "Redraw the magenta mouth. The original is a smooth wide U/V smile 4 rows deep, spanning cols 3-12 and touching the bottom row of the grid; the port currently draws a 2-row dotted zigzag of alternating pixels across cols 4-11. This is the single most visible difference.",
+    "Redraw the third brow style. The original puts a small chevron '^' over EACH eye (3 rows tall, apex above the eye centre, legs sloping down to both sides); the port draws one long straight diagonal per brow sloping down-and-outward, so the pair reads as a single roof over the whole face.",
+    "Enlarge the face and move the nose down. The original's eye is 6 rows x 6 cols with the nose sitting BELOW the eye line (rows 10-11), its flat brows are 6 px per brow, and its mouth reaches the bottom row of the grid. The port's eye is 4 rows x 5 cols, its nose sits level with the eyes (rows 8-9), its brows are 5 px, and its mouth stops at row 13 leaving the bottom two rows always dark.",
+    "Deepen the other two mouths by a row and widen the yellow smile: original yellow smile is 3 rows spanning cols 2-13, red frown is 3 rows at rows 13-15; the port's are both 2 rows spanning cols 4-11.",
+    "Always draw the nose. The port omits it entirely during the red-frown expression (1/3 of the time); the original draws it in every frame.",
+    "Keep a visible closed-lid line at the bottom of a blink. The original never drops below a 2-row lid; the port's eyes disappear completely for ~0.15 s each blink, which reads as a dropout rather than a blink. Blink rate itself is already right (~2 s, irregular).",
+    "Dim the sclera. The original's eye white is a soft anti-aliased grey peaking around 122-156, so the green iris dominates; the port's is pure 255 white, which makes the eyes read much harder and brighter than the original's.",
+    "Give the iris more travel: the original's iris is 3 px wide in a 6-px eye and darts all the way to both edges; the port's is 2 px in a 5-px eye and moves only one column. Dart frequency is already correct.",
+    "The port adds two sliders (sliderIrisHue, sliderEyeOpen) that the original does not have. The original exposes no controls at all, so these are extra surface; sliderEyeOpen in particular destroys the face at either extreme. Either drop them or leave them at defaults that reproduce the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "mode-0",
+    "mode-1",
+    "mode-2",
+    "dump-t0",
+    "long60",
+    "vocab",
+    "vocab2",
+    "eyetrace",
+    "cyc10",
+    "cyc20",
+    "cyc40",
+    "grid8",
+    "grid32",
+    "seed7",
+    "seed1234",
+    "late",
+    "ctl-eyeopen-0",
+    "ctl-eyeopen-0.5",
+    "ctl-eyeopen-1",
+    "ctl-irishue-0",
+    "ctl-irishue-0.5",
+    "ctl-irishue-1",
+    "ctl-irishue-dump",
+    "ctl-irishue-dump5",
+    "ctl-irishue-dump1"
+  ]
+}

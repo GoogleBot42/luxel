@@ -1,0 +1,108 @@
+{
+  "slug": "cellular-automata-1d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same 1D-CA pattern and same six dials, and the first ~15 s of the untouched default are a near-perfect nested-triangle match, but the port runs the automaton 2x too fast at defaults, permanently collapses into a chaotic multicolour field after ~40 s where the original repeats clean red Sierpinski triangles for 600 s, ignores sliderLifetime entirely, and maps the lower half of sliderRule to a completely different automaton.",
+  "observations": [
+    "Both sides compile and run clean (no compileError/runtimeError) and expose the IDENTICAL control surface: six sliders, same names and kinds - sliderStartingCells, sliderRule, sliderLifetime, sliderColorMode, sliderPaletteWidth, sliderPaletteOffset.",
+    "Untouched default, first ~15 s (60 px strip): both draw the same rule-90-style nested Sierpinski triangles growing outward from a centre seed in bright red. Dumping every 0.05 s over 0-41 s, the bright-cell (max channel >= 160) sets are BYTE-IDENTICAL on ~50 % of frames in 0-15 s - the two automata are genuinely in the same states, just out of phase.",
+    "Generation rate at untouched defaults is 2x too fast on the port: counting bright-state transitions over the first 4 s gives orig ~5.25 generations/s vs port 10.0 generations/s. Confirmed fps-invariant on BOTH sides (10/20/40 fps all give orig 5.00/5.25/5.25 and port 10.00/10.00/10.00), so this is a genuine speed difference, not frame-rate coupling. Concretely at t=0.25 s the original is still showing generation 2 (cells 28,32) while the port already shows generation 3 (cells 27,29,31,33).",
+    "With all six dials explicitly set (base sliderRule=0.75, others 0.5) the rate divergence VANISHES: both sides run 9.75 generations/s. So the port's speed default is roughly the mid-dial value while the original's untouched default is half that.",
+    "Untouched-default colour: the original's palette in this regime is exactly two colours - bright red (255,0,0) live cells plus a dim cyan (0,63,63) ghost that appears at +/-1 of each live cell for roughly the back half of each generation's dwell (a visible inter-generation blend). The port renders pure (255,0,0) cells only, with no ghost and an instant switch between generations; this alone accounts for the original's steady meanG=meanB~=4 vs the port's meanG=meanB=0 over the first 35 s.",
+    "STEADY STATE (the decisive difference): the original stays in one regime forever - clean red nested triangles that recur and re-grow roughly every 15 s, with meanR/meanG/meanB pinned at ~15/3/3 across the WHOLE of a 600 s survey. The port matches for ~15 s, drifts (bright-cell count climbs from ~7 to ~12 while the original holds 4.5-5.4), saturates into a dense near-solid red texture at ~35-40 s, and from ~40 s on lives permanently in a chaotic mirror-symmetric multicolour field - dim olive/green/blue/purple pixels (2,1,0 / 8,12,0 / 4,22,0 / 0,33,6) with scattered bright red bars - with meanG/meanB running 6-17 for the rest of a 600 s run. The two never agree on a single frame after t~=15 s.",
+    "The port's collapse is NOT just 'the same timeline further along': the original at t=80-100 s (2x the port's collapse time) is still drawing clean triangles, as is the original at t=240 s and t=600 s.",
+    "Seed-independent on both sides: seeds 7 and 1234 produce statistics identical to seed 1 (orig mean 10 / motion 14, port mean 13 / motion 21 over 120 s) and the same visual behaviour, including the port's ~40 s collapse.",
+    "sliderRule mapping diverges over the lower half of its range. At 0 both sides go black (match). At 0.25 and 0.5 the ORIGINAL fills the strip with saturated red plus occasional narrow magenta columns (mean 44 / 42, motion 82 / 83) while the PORT renders near-black with only thin magenta columns at the two strip edges (mean 3 / 2, motion 5 / 2). At 0.75 and 1 the two agree closely (mean 82/80 and 84/85).",
+    "Even at sliderRule=0.75 where the pictures agree, the original still periodically resets (a hard horizontal break in the waterfall, ~2 resets per 60 s at sliderLifetime=1) and the port never does - its diagonal stripes just march on continuously."
+  ],
+  "dials": [
+    {
+      "name": "sliderStartingCells",
+      "origEffect": "0 -> almost static field (motion 1); 0.5 -> moderate churn (motion 9); 1 -> lively (motion 20), mean brightness falling 84 -> 82 -> 79. Monotonic: more seed cells, more activity.",
+      "portEffect": "Same direction and shape - 0/0.5/1 -> motion 3/11/30, mean 83/80/71 - just slightly stronger at the top of the range.",
+      "matches": true
+    },
+    {
+      "name": "sliderRule",
+      "origEffect": "Selects the automaton. 0 -> black; 0.25 and 0.5 -> strip saturated red with sparse narrow magenta columns (mean 44/42, motion 82/83); 0.75 -> red field with blue/black diagonal stripes drifting right; 1 -> near-static full field (mean 84, motion 1).",
+      "portEffect": "0 -> black (match); 0.25 and 0.5 -> near-BLACK, only thin magenta columns at the left and right strip edges (mean 3/2, motion 5/2) - nothing like the original's filled red field; 0.75 -> red field with blue diagonals (match, though stripe spacing is tighter and it never resets); 1 -> near-static full field (match).",
+      "matches": false
+    },
+    {
+      "name": "sliderLifetime",
+      "origEffect": "Controls how long the automaton runs before resetting. Probe called it inert on the untouched base, but over a 60 s window with sliderRule=0.75 pinned it is clearly live: 0 -> the original locks to a completely static solid-red strip (motion 0 across all 300 captured frames); 0.25 -> immediately dynamic (9.75 gen/s); 0.75 and 1 -> starts in a held static all-on state and only begins evolving after the lifetime expires and it resets (2 resets visible in 60 s at 1).",
+      "portEffect": "Genuinely inert - 0, 0.25, 0.5, 0.75 and 1 all give the same output (mean 80/79/80, motion 11/12/11, 9.75 gen/s at every value) and the port never resets in any 60 s window at any Lifetime setting.",
+      "matches": false
+    },
+    {
+      "name": "sliderColorMode",
+      "origEffect": "0 -> noticeably dimmer output (mean 41); 0.5 and 1 -> identical brighter output (mean 82). Effectively a two-step switch over the range tested.",
+      "portEffect": "Same: 0 -> mean 41, 0.5 and 1 -> mean 80, identical to each other. Same step location and same magnitude.",
+      "matches": true
+    },
+    {
+      "name": "sliderPaletteWidth",
+      "origEffect": "0 -> broad flat wash, mean 158; 0.5 -> mean 82; 1 -> mean 156. Non-monotonic (bright at both ends, dimmer mid-range).",
+      "portEffect": "Same non-monotonic shape and nearly the same numbers: 156 / 80 / 155.",
+      "matches": true
+    },
+    {
+      "name": "sliderPaletteOffset",
+      "origEffect": "Rotates the palette. 0 -> cyan field with green/dark diagonals (mean 156); 0.5 -> red field with blue diagonals (mean 82); 1 -> cyan again (mean 156).",
+      "portEffect": "Same hues at the same settings (cyan / red / cyan, mean 155 / 80 / 155); only the reset behaviour and stripe spacing differ, not the colour.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Halve the automaton's step rate at UNTOUCHED defaults: the original advances ~5.25 generations per second, the port advances exactly 10. Both are already time-based (fps-invariant at 10/20/40 fps) and they agree at 9.75 gen/s once every dial is explicitly set, so the bug is only in the port's default/initial value for the step interval - it currently boots at what the dials call mid, where the original boots at half that.",
+    "Restore the inter-generation blend. The original paints live cells bright red (255,0,0) AND a dim cyan (0,63,63) ghost one pixel either side of each live cell for roughly the back half of each generation's dwell, so the triangle appears to expand smoothly. The port switches hard from one generation to the next with no intermediate and no second colour, which is why the original reads as two-tone red+cyan while the port reads as pure red.",
+    "The port's untouched default does not have a stable steady state. It matches for ~15 s, then over-densifies (bright-cell count climbs from ~7 to ~12 while the original holds ~5), saturates into a solid red texture at ~35-40 s, and from ~40 s to at least 600 s sits in a chaotic mirror-symmetric multicolour field (dim olive/green/blue/purple with red bars). The original recurs indefinitely through clean red Sierpinski triangles every ~15 s and never produces green or blue at all (meanG/meanB pinned at 3 for 600 s). Whatever periodic reset/recycle the original performs is missing or ineffective on the port - and note the port's collapse is not the original's timeline sped up, since the original at t=80-600 s is still drawing clean triangles.",
+    "Wire up sliderLifetime. On the port it is a no-op: 0, 0.25, 0.5, 0.75 and 1 all render identically (mean 80, motion 11, 9.75 gen/s) and the port never resets. On the original it governs the reset cadence - at 0 the automaton locks to a static solid strip (motion 0 over 60 s), at 0.25 it runs continuously, and at 0.75/1 it holds a static all-on state and only starts evolving after the first reset (~2 resets per 60 s at 1). Fixing this is likely the same fix as the missing steady-state recycle above.",
+    "Fix the lower half of the sliderRule mapping. At 0 both go black and at 0.75/1 both agree, but at 0.25 and 0.5 the original fills the strip with saturated red plus a few narrow magenta columns (mean brightness 44 and 42) while the port renders essentially black with thin magenta columns only at the two strip edges (mean 3 and 2). The port appears to select a different (near-dead) automaton over that stretch of the dial - check the slider-value-to-rule-number mapping and whether the port is quantising or scaling the rule index differently.",
+    "Even where the rule agrees (sliderRule=0.75), the port's diagonal stripes are more tightly spaced than the original's and it never shows the original's hard reset break - re-check stripe period on the default 60 px strip once the reset/lifetime behaviour is restored."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "survey-600",
+    "probe",
+    "mode-transition",
+    "mode-late",
+    "dump-start",
+    "dump-early",
+    "dump-late",
+    "dump-diverge-ca1d",
+    "fps-10",
+    "fps-20",
+    "fps-40",
+    "seed-7",
+    "seed-1234",
+    "dialed-mid",
+    "ctl-rule-0",
+    "ctl-rule-0.25",
+    "ctl-rule-0.75",
+    "ctl-rule-1",
+    "ctl-start-0",
+    "ctl-start-0.5",
+    "ctl-start-1",
+    "ctl-color-0",
+    "ctl-color-0.5",
+    "ctl-color-1",
+    "ctl-pwidth-0",
+    "ctl-pwidth-0.5",
+    "ctl-pwidth-1",
+    "ctl-poffset-0",
+    "ctl-poffset-0.5",
+    "ctl-poffset-1",
+    "ctl-life-0",
+    "ctl-life-0.5",
+    "ctl-life-1",
+    "ctl-rate",
+    "ctl-rate-life-0",
+    "ctl-rate-life-0.25",
+    "ctl-rate-life-0.75",
+    "ctl-rate-life-1"
+  ]
+}

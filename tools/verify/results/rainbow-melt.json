@@ -1,0 +1,40 @@
+{
+  "slug": "rainbow-melt",
+  "verdict": "match",
+  "score": 10,
+  "confidence": "high",
+  "summary": "Port is pixel-for-pixel identical to the original across every window, frame rate, seed and rig tested — the only differences anywhere are single-LSB (1/255) rounding on a handful of channels.",
+  "observations": [
+    "Both sides compile and run clean: no compileError/runtimeError, wantsSensors false on both, no controls on either side (probe reports '(no settable controls)' for orig and port).",
+    "Default rig is a 60-px strip. Look: a mirror-symmetric standing-wave rainbow. At any instant there are ~8 near-black nodes across the 60 px separating saturated rainbow lobes; the node positions are symmetric about pixel ~30 (dump t=1.35 s, orig: dark-run starts at px 3,12,17,28 | 32,43,48,57 — an exact mirror pair). Peak channel value ~245-254, node minima are true black (0,0,0) at the deepest points.",
+    "Motion: the nodes migrate along the strip so the waterfall reads as nested chevrons/V shapes converging on the strip centre, with hue simultaneously walking the full rainbow. Port's waterfall is visually indistinguishable from the original's at 6 s/20 fps, 60 s/5 fps, 240 s/2 fps and in a late 120-140 s window.",
+    "Periodicity (autocorrelation of the raw meanBrightness series from the 240 s / 2 fps survey, no binning): fundamental lag 13 frames @ 2 fps = 6.5 s, with harmonics at 26/39/52 frames. meanR peaks at lag 52 frames = 26 s, i.e. a hue super-cycle four times the brightness cycle. Orig and port produce IDENTICAL top-lag lists and identical correlation values to 3 decimals (13:0.966, 26:0.929, 39:0.896, 52:0.853 on both).",
+    "Exact-frame check (--dump on the 60-px default rig at t = 0, 0.15, 0.5, 1.35, 2.85, 4.2, 5.95 s): max absolute per-channel orig-vs-port difference is 1/255 at four of the seven times and exactly 0 at the other three; mean absolute difference over all 180 channel values ranges 0.0000-0.0222. Sample at t=2.85 s px1: orig [0,147,35] vs port [0,146,35]; px14: orig [123,0,146] vs port [123,0,147]. These are rounding-level, not visible.",
+    "Hue trajectory at pixel 30 is identical on both sides across the whole 6 s dump: 1.6 deg -> 8.2 -> 23.2 -> 59 -> (grey/black, undefined) -> 178 -> 240 deg. Same palette, same phase, same rate.",
+    "Full per-frame series diff (all of meanBrightness/meanR/meanG/meanB/motion/motionLit) over 8 separate runs — baseline 120 f, survey 300 f, survey-240 480 f, late 400 f, fps10 60 f, fps40 240 f, seed7 120 f, seed1234 120 f — never exceeds 1 unit on any 8-bit mean and 0.1 on motionLit. grid16 (16x16, 160 f) diffs to exactly 0 on every series.",
+    "No mode/regime structure: the 240 s / 2 fps survey waterfall is homogeneous top-to-bottom on both sides (one continuous regime, no banding boundaries), so the 6 s baseline window is representative. zeroMotionFrames = 1 on both sides in every run (the unavoidable first-frame zero); brightnessTrend agrees on both sides in every run (steady on the 60 s survey, 'decaying' on both sides in the 6 s baseline — an artefact of catching one 6.5 s cycle, matched by the port).",
+    "Steady state confirmed: --skip 120 --seconds 20 --fps 20 shows both sides still fully alive, mean 49, motion 5, images indistinguishable from the early window. No decay, freeze or saturation on either side.",
+    "Frame-rate coupling: whole-rig motion scales inversely with fps identically on both sides (fps 10 -> motion 9, fps 20 -> 4, fps 40 -> 2), i.e. per-frame displacement halves as fps doubles, so both sides are TIME-BASED, not frame-stepped. No coupling asymmetry.",
+    "Seed independence: seeds 1, 7 and 1234 all render with identical stats on both sides, and the two sides match each other under every seed. The pattern is deterministic/non-stochastic.",
+    "Rig lenses agree: re-rendered at --pixels 300 (max per-channel orig-vs-port diff 1/255 at four dumped times) and on a 16x16 grid rig (worst per-frame series diff 0.000). The port maps onto alternate geometries exactly as the original does."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing to fix. This port is output-identical to the original; the only measurable difference is +/-1 on individual 8-bit channels at a few pixels, consistent with a last-bit float rounding difference in the hue/brightness math, and is invisible on hardware.",
+    "If a future sweep wants a regression tripwire for this slug: the meanBrightness autocorrelation fundamental is 13 frames at 2 fps (6.5 s) and the meanR fundamental is 52 frames at 2 fps (26 s); the strip profile is mirror-symmetric about the strip centre with ~8 black nodes on 60 px. Any change to those numbers is a real regression."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "late",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "dump-base",
+    "grid16",
+    "px300"
+  ]
+}

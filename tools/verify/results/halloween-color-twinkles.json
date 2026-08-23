@@ -1,0 +1,43 @@
+{
+  "slug": "halloween-color-twinkles",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Palette, density and per-pixel independence match well, but the port has no twinkle envelope at all: it re-randomizes every pixel roughly 20 times a second where the original fades each pixel smoothly up and down over ~1.9 s, so the original reads as gentle twinkling and the port as harsh orange/violet static.",
+  "observations": [
+    "Neither side exposes any settable control (probe: 'no settable controls' on orig and port); no compile or runtime errors on either side in any run; both sides wantsSensors=false.",
+    "Rig is a 60 px strip. Both sides are alive and steady across the whole 240 s survey and at --skip 60: brightnessTrend 'steady' on both, zeroMotionFrames 0, no modes, regimes, drift or death on either side. The survey texture is uniform end-to-end, so there is only one regime to compare.",
+    "Temporal envelope is the divergence. Per-pixel brightness traces from --dump at 0.05 s spacing (label dump-long, 200 frames over 10 s at 20 fps): the original ramps each pixel smoothly on and off, e.g. px10 runs 0,45,98,167,229,254,227,160,86,34,0 across ~0.55 s of rise and fall, then stays dark ~2 s before re-igniting. The port's px10 over the same 11 frames is 0, orange 226, 0, violet 172/0/246, 0, violet 165/0/238, orange 142/34/0, 0, 0, ... -- it jumps between black and a fresh random colour every frame with no intermediate values.",
+    "Quantified: median lit-run per pixel is 37 frames = 1.85 s on the original and 1 frame = 0.05 s on the port (20 fps, 60 px, 10 s window); median dark gap 44 frames = 2.20 s on the original. Ignition rate per pixel is 0.18/s original vs 6.19/s port -- the port twinkles ~34x too often.",
+    "Per-pixel brightness autocorrelation (raw series, lag scan): original decays smoothly 1.00, 0.99, 0.97, 0.95, 0.92, ... crossing half at lag 13 frames = 0.65 s. Port is 1.00 then -0.31 at lag 1 and noise thereafter -- anti-correlated at one frame, i.e. white noise, no envelope whatsoever.",
+    "Whole-window motion stat matches that: baseline (6 s, 20 fps) orig motion avg 2 / motionLit 4.7, port motion avg 53 / motionLit 68.9 -- ~25x. Same ratio at --skip 60 and across all seeds.",
+    "Both sides are TIME-based, not frame-coupled -- this is not an fps-coupling bug. Original motion is 4 / 2 / 1 at 10 / 20 / 40 fps (halving as fps doubles = constant change per second) and its median lit-run is 1.85 s at 20 fps and 1.70 s at 40 fps. The port's median lit-run is 1 frame at 20 fps and 2 frames at 40 fps -- both 0.050 s. The port simply re-randomizes on a ~20 Hz clock instead of fading.",
+    "Colour family is close on both sides: two fully-saturated lobes, orange and violet, no other hues, mean saturation 1.000 on both. Fine hue histogram (lit pixels, value>20, dump-long window) -- orig orange 5-25 deg peaking at 10 deg, violet 250-290 deg peaking at 265 deg; port orange 5-30 deg peaking at 10 deg, violet 250-300 deg with mass spread out to 300 deg. The port's violet lobe is noticeably wider and pushed further toward magenta.",
+    "Density matches: lit fraction 0.487 orig vs 0.452 port; mean value of lit pixels 130 orig vs 150 port (the port is brighter per lit pixel because it never renders the dim rising/falling part of a fade).",
+    "Spatial character matches: both are stationary per-pixel twinkles, not travelling features. Circular cross-correlation of frames 0.5/1/2 s apart on the original best-aligns at shift 0, +2, -1 px (no consistent drift); spatial autocorrelation at lags 1-7 is ~0 on both sides, so neighbouring pixels twinkle independently on both. The diagonal streaks visible in the 5 fps survey waterfall are sampling aliasing, not real motion.",
+    "Frame-to-frame whole-strip stability differs as a consequence: original meanBrightness stays in 26-34 over the late window, the port swings 15-49, because the port flips its entire strip at once every ~0.05 s.",
+    "Not a seed fluke: seeds 1, 7 and 1234 give identical stats on both sides (orig motion 2 / port motion 53 in every case) and visually identical character. That the seeds render identically is a fact about the seeds here, not evidence about the pattern; the orig/port divergence is unchanged at all three."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port is missing the fade envelope entirely -- this is the one thing to fix. Each pixel must ramp its brightness smoothly from 0 up to full and back down over roughly 1.9 s (measured median lit-run 37 frames at 20 fps), then stay dark for roughly 2.2 s before the next twinkle. The port currently holds each pixel's value for only ~0.05 s and picks a new random colour and brightness on the next update.",
+    "Target ignition rate is about 0.18 new twinkles per pixel per second (a given pixel lights up roughly every 5.5 s). The port is at 6.19/s -- about 34x too fast. Slowing the update clock alone is not enough; the intermediate brightness values must be interpolated, not stepped.",
+    "A pixel's HUE must stay fixed for the whole life of its twinkle -- the original holds one colour while only brightness moves (px10 keeps R:G at ~4.6:1 through its entire 98 -> 254 ramp). The port re-rolls the hue on every update, so a single pixel flips orange/violet/orange within a tenth of a second.",
+    "Keep what already works: the two-lobe orange+violet fully-saturated palette, ~46% lit density, and independent per-pixel (non-travelling, spatially uncorrelated) twinkles are all correct and should not be changed.",
+    "Minor colour nitpick once the envelope is fixed: the port's violet lobe is wider than the original's. Original violet sits in 250-290 deg peaking at 265 deg; port spreads to 300 deg with visible magenta. Original orange sits in 5-25 deg; port reaches 30 deg. Tighten both hue ranges slightly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-fine",
+    "dump-long",
+    "dump-fps40",
+    "fps10",
+    "fps40",
+    "late",
+    "seed7",
+    "seed1234"
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "slug": "all-lasers-fire",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same idea and same geometry — mirror-symmetric colored laser rays fired from the bottom-left corner that shatter into sparks — but the port fires 1-2 rays instead of a full fan, runs ~8x dimmer, has no barrage/rest cycle or afterglow, and its Speed dial barely responds.",
+  "observations": [
+    "Both sides render without compile or runtime errors on the default 16x16 grid rig, and both expose the same control surface: sliderSpeed (slider, label 'Speed') and sliderBlastScale (slider, label 'BlastScale'). No control-surface mismatch.",
+    "Shared structure (real, and the port gets it right): both draw straight colored rays anchored at the bottom-left corner pixel, both are mirror-symmetric about the anti-diagonal through that corner (--dump at t=9.7s: orig pixel (13,13)=ff0803 mirrors (2,2)=ff0803; port (13,0)=07090a mirrors (15,2)=07090a), and in both a ray breaks up into a field of scattered colored spark dots a few frames after it forms. Both are resolution-independent: re-rendered at --grid 48x48 both sides draw the same picture with a smooth bloomed beam rather than more/finer features (label grid48), so the port's hard 1-px look at 16x16 is a rig artefact, not a port bug.",
+    "Brightness is the largest single gap and it is seed- and window-independent. 60s survey: orig meanBrightness avg 18.7 / max 82 (peak channel 98), port avg 2.4 / max 12 (peak channel 22) — roughly 8x dim. Same ratio at 6s (17.3 vs 2.3), at 30s/20fps (18 vs 2), and at --seed 7 (18.4 vs 2.3). Orig never falls below meanBrightness 6 in any window; port's min is 0.",
+    "Rays per volley: at BlastScale=0, t=10.9s, the original lights essentially the whole lower-left quadrant — a fan of ~10-16 distinct saturated rays spanning from straight-up to straight-right, plus ~40 spark dots. At the same moment the port shows ONE ray plus a small corner glow. Untouched at t=10.05s the orig again draws a full quarter-circle fan (--dump dump-blast); the port at that instant is two dim pixels. The port's busiest observed frames (baseline t=0.55s, t=3.8s) carry 2 rays plus their mirrors; the original routinely carries 8+.",
+    "Temporal envelope is structurally different. The original has a clear ~9.8s cycle, invariant across --fps 2, 5 and 20 (so it is time-based, not frame-stepped): a ~2s barrage of 4-10 blasts (meanBrightness peaks 30-83), then ~7-8s of a near-static, slowly decaying warm glow at the corner — the mode-quiet run (--skip 13, 4s) reports orig mean 8 with motion avg 0. The port never rests: it fires a small event roughly every 0.5-0.6s continuously (77 brightness peaks in 60s vs the orig's 24), and mode-quiet shows port mean 2 / motion 3 while the orig is frozen.",
+    "Per-event dynamics differ. In the original's filmstrip (blast-strip, 0.05s cells) rays grow outward from the corner over ~5 frames, stay anchored, and then bloom into a wide soft glow that persists for 1-3 seconds. The port's ray is fully formed in a single frame, is already breaking into dots by the next frame, and is gone ~0.2s after it appeared, leaving nothing behind.",
+    "Color family matches. Both use saturated primaries and secondaries (red/green/blue/cyan/magenta/yellow) on black, per-ray random hue, with white saturation at the origin. No palette-family divergence found."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Fire rate, over a very wide range. Over a 30s/10fps window: at 0 the original fires ONE barrage at t=0 and then holds a single slowly-decaying glow for the remaining 30s (motion avg 2.0, 5 brightness peaks); at 0.5 it fires ~every 1.4s (motion 10.3, 21 peaks); at 1 it fires almost continuously ~every 0.3s (motion 16.6, 99 peaks, and peak brightness drops from 72 to 32 as blasts overlap). The rhythm image goes from one bright band + a 30s decay ramp to dense uniform banding.",
+      "portEffect": "Effectively value-independent. Same 30s/10fps windows: 0 -> 26 events (motion avg 2.6), 0.5 -> 56 (3.9), 1 -> 30 (3.0) — non-monotonic and all within a factor of two, and the rhythm images at 0 and 1 look like the same continuous ~1s-cadence drizzle. The probe agrees: port deltas 3.46 / 4.00 / 3.53 at 0 / 0.5 / 1 are indistinguishable from each other (orig: 39.78 / 19.23 / 18.46). Notably the port at Speed=0 keeps firing 26 times while the original fires once.",
+      "matches": false
+    },
+    {
+      "name": "sliderBlastScale",
+      "origEffect": "Controls how big/rich each volley is, and inversely how often volleys land. 30s/10fps: 0 -> full fans of many bright rays plus dense sparks, mean brightness 31.3, motion 20.1, events ~every 0.45s; 0.5 -> mean 18.2, motion 7.2, ~every 1.8s; 1 -> single wide rays one at a time, mean 14.3, motion 5.2, ~every 2.3s (still clearly visible, max brightness 60).",
+      "portEffect": "Same direction, far too little headroom. 0 -> mean 3.0, motion 4.9, ~every 0.55s; 0.5 -> mean 1.2, motion 1.6; 1 -> mean 0.9, motion 1.1 and the contact sheet is essentially black (only a few dim scattered dots in 10 of 12 sampled frames). So the port's high end is dead where the original's high end is still a legible pattern, and the port's low end never reaches the original's fan.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Brightness/energy is roughly 8x too low across every window and both seeds: original meanBrightness averages ~18 with peaks of 80+ and pixel channels saturating to 0xff over a large corner region; the port averages ~2 with peaks of 12 and rarely exceeds 0x60 outside one or two pixels. Scale the emitted intensity up until an untouched 60s capture averages in the high teens.",
+    "Fire a FULL FAN, not one ray. At the same instant the original lights ~10-16 rays spanning the whole quarter-circle from vertical to horizontal out of the bottom-left corner (plus its anti-diagonal mirror); the port draws 1, occasionally 2. The pattern is named for the barrage — increase the number of simultaneous rays per volley by roughly an order of magnitude.",
+    "Restore the barrage/rest cycle. The original runs a ~9.8s loop: a ~2s cluster of 4-10 blasts, then ~7-8s where nothing new fires and the corner glow decays (measured motion of exactly 0 in a 4s window parked at t=13s). The port fires a small event every ~0.5-0.6s forever with no quiet phase. Group the shots into periodic volleys and add the silence between them.",
+    "Add the afterglow. The original's mean brightness never drops below 6 because the corner keeps a warm glow that decays over 2-3s after each volley, and the rays themselves bloom into wide soft streaks that linger 1-3s. The port's events vanish completely within ~0.2s (its brightness floor is 0), so each shot reads as a flicker rather than a laser.",
+    "Slow the per-ray formation. Original rays are drawn outward from the corner over ~5 frames at 20fps and stay anchored while they fade; the port's ray is fully drawn in one frame and has already fragmented into sparks by the next. Stretch the growth phase and let the ray hold its full length before the spark breakup.",
+    "Increase spark density: at a comparable moment on the default 16x16 rig the original scatters ~40 spark dots across the quadrant, the port ~10.",
+    "Speed is not wired up in any value-dependent way. On the original, Speed=0 means a single barrage then 30s of stillness and Speed=1 means near-continuous fire (5 vs 99 brightness peaks in 30s); on the port the event rate is 26 vs 30 over the same windows and is not even monotonic. Speed should map to volley rate over roughly a 20x range.",
+    "BlastScale has the right sign but the wrong range. At BlastScale=1 the original still renders single wide bright rays (mean 14.3, max 60); the port at 1 is effectively black (mean 0.9). At BlastScale=0 the original explodes into a saturated full-quadrant fan (mean 31.3) while the port only reaches mean 3.0. Widen and re-centre the response so both endpoints stay visible."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "probe",
+    "long30",
+    "mode-blast",
+    "mode-quiet",
+    "blast-strip",
+    "dump-blast",
+    "dump-port-ev",
+    "ctl-speed-0",
+    "ctl-speed-0.5",
+    "ctl-speed-1",
+    "ctl-blast-0",
+    "ctl-blast-0.5",
+    "ctl-blast-1",
+    "ctl-both-mid",
+    "dump-blast0",
+    "seed7",
+    "grid48"
+  ]
+}

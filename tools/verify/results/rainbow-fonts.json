@@ -1,0 +1,43 @@
+{
+  "slug": "rainbow-fonts",
+  "verdict": "match",
+  "score": 8,
+  "confidence": "high",
+  "summary": "The port reproduces the original's animated rainbow-chevron field exactly — identical spatial waveform, identical phase, identical 3.28 s cycle, zero time offset — differing only by a uniform constant brightness (value 0.35 vs the original's 0.30, i.e. port ~17% brighter everywhere) and a half-pixel spatial sampling offset.",
+  "observations": [
+    "Rig: default is a 60-px strip. Both sides compile and run clean (no compileError/runtimeError, wantsSensors false on both, sensors 'off').",
+    "Both sides render a fully-saturated hue-only field: across 121 dumped frames the min RGB channel is 0 on EVERY pixel of both sides (saturation exactly 1) and the max channel is a single constant — orig 76, port 89 — on every pixel of every frame. So brightness/value is a fixed constant per side: orig 76/255 = 0.298 (≈ v 0.30), port 89/255 = 0.349 (≈ v 0.35). Ratio 89/76 = 1.171.",
+    "Waterfalls (baseline 6 s/20 fps, survey 60 s/5 fps, survey-300 300 s/2 fps) show the same picture on both sides: a rainbow wave whose hue frequency is chirped along the strip, producing nested chevrons that drift and reverse — the classic 'wavy stacked V' waterfall texture. No mode changes, no regime boundaries, no palette walk over the full 300 s window on either side; a single homogeneous regime throughout.",
+    "Temporal period is identical: autocorrelation of meanR/meanG/meanB on the 60 s/5 fps survey gives peaks at lags 33, 49, 66, 82, 98, 131 frames on BOTH sides — fundamental ~16.4 frames @5 fps ≈ 3.28 s.",
+    "fps-invariance matches: first strong meanR autocorrelation peak is lag 33 @10 fps (3.300 s) and lag 131 @40 fps (3.275 s) — same value on orig and port at both rates. Neither side is frame-rate coupled; no coupling divergence.",
+    "Time alignment is EXACT. Scanning port frames against orig frames at 0.05 s resolution (20 fps dense dump, 121 frames) the best match is dt = 0.00 s at every probe time (t = 0.5, 1.5, 2.5, 3.5, 4.5 s); dt = ±0.05 s is strictly worse. No speed or phase difference.",
+    "SPATIAL SAMPLING OFFSET (the only structural difference): the original's field is perfectly mirror-symmetric about pixel index 0 and 30 (symmetry error 0.00 averaged over all 121 frames), while the port's is perfectly mirror-symmetric about 29.5 and 59.5 (error 0.00). Confirmed on a 600-px rig too: orig axes at 0 and 300, port axes at 299.5 and 599.5. That is the signature of the port evaluating the same even function at pixel CENTRES ((i+0.5)/n) where the original evaluates at pixel EDGES (i/n).",
+    "Modelling port(i) = orig(i + d) * s with s = 89/76 and scanning d: the error minimum is at d = 0.50 exactly, on the 60-px rig (err 8.36 vs 11.79 at d=0), on the 600-px rig (err 0.63 vs 1.20 at d=0), at t = 200-207 s, and at seed 1234 — always d = 0.50.",
+    "With those two constants applied, the port is essentially byte-equivalent to the original: on the 600-px rig the residual mean-abs-pixel error after (half-pixel shift + 1.171 brightness scale) is 0.63 on a mean brightness of ~38, i.e. ~1.7%, which is at the level of the linear-interpolation loss of the model itself. Uncorrected the same residual is 6.37.",
+    "Motion stats differ only by the brightness factor: survey-300 motion avg orig 22.9 vs port 26.9 (ratio 1.175 ≈ 1.171); baseline motion avg orig 2.3 vs port 2.7. motionLit tracks motion on both (dense pattern, nothing sparse). zeroMotionFrames = 1 on both (the mandatory first frame) over 600 captured frames.",
+    "Steady state is fine on both: brightnessTrend 'steady' on both sides at 6 s, 60 s and 300 s windows; a --skip 200 late window (200-208 s, 20 fps) still shows the same waveform, the same constants (orig V 76 / port V 89), the same d = 0.50 alignment and zeroMotionFrames 0 on both. Nothing decays, freezes or saturates.",
+    "Seed independence: seed 1234 renders identically in character to seed 1 on both sides, with the same constants and the same d = 0.50 alignment — the pattern is deterministic, not RNG-driven, on both sides.",
+    "Rig lens: re-rendered on a 32x32 grid (1024 px). Both sides render as identical horizontal banding (each 32-px row nearly constant, colour changing row to row), confirming both sides are driven purely by the normalized pixel index and not by (x,y). Despite the slug name, no glyph/text structure is visible on either side at any rig size tested — the 'font' is expressed only as the chirped hue waveform, and the port matches it.",
+    "Control surface: --probe-controls reports 'no settable controls' on BOTH sides. The surfaces match; nothing dropped, nothing invented."
+  ],
+  "dials": [],
+  "feedback": [
+    "Only real fix needed: the port's constant output value is 0.35 where the original's is 0.30. Every pixel on the port renders max-channel 89/255 against the original's 76/255 — a flat 17% over-brightness with no time or position dependence. Multiply the port's value/brightness constant by 0.857 (equivalently set it to 0.30) and the brightness gap closes exactly; nothing else about the port's colour needs touching (saturation is already exactly 1 on both, and the hue field already matches).",
+    "Cosmetic nitpick, probably not worth changing: the port samples the pattern half a pixel further along the strip than the original. The original's field is even about pixel index 0 (mirror axes at 0 and n/2); the port's is even about index -0.5 (mirror axes at n/2 - 0.5 and n - 0.5). This is the pixel-centre ((i+0.5)/n) vs pixel-edge (i/n) convention. Visually invisible at any rig size (it is a sub-pixel shift), but if exactness is wanted, drop the +0.5 from the port's normalized-position computation.",
+    "Nothing else to fix: waveform shape, chirp structure, spatial symmetry order, animation direction, the 3.28 s cycle, phase (dt = 0.00 s), fps-invariance, steady state over 300 s, seed independence and the empty control surface all match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-300",
+    "probe",
+    "dump-base",
+    "dump-dense",
+    "dump-600",
+    "grid32",
+    "fps10",
+    "fps40",
+    "late",
+    "seed1234"
+  ]
+}

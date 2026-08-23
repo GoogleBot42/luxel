@@ -1,0 +1,29 @@
+{
+  "slug": "bustle",
+  "verdict": "broken",
+  "score": 2,
+  "confidence": "high",
+  "summary": "The original is a sparse, permanently-busy field of red-to-magenta comets streaking both ways along the strip; the port paints comet trails that never decay, so it fills to a solid full-magenta strip within ~2 s and stays frozen there indefinitely.",
+  "observations": [
+    "Neither side exposes any controls (meta.json sides.orig.controls and sides.port.controls are both empty; --probe-controls printed '(no settable controls)' for both). Control surfaces therefore match.",
+    "Neither side binds sensors (wantsSensors false on both, sensors 'off'). Rig is the default 60-px strip.",
+    "ORIGINAL, steady state (30-40 s window, --label late, 20 fps): a continuously replenished field of ~10-15 short comets. Each comet is a 5-9 px triangular trail with a bright head and a geometric fade behind it — --dump at t=30 s shows e.g. head 15:(255,0,18) then 16:(122,0,8) 17:(50,0,3) 18:(15,0,1) 19:(3,0,0), with a mirrored ramp on the leading side. About 23-36 of 60 pixels are lit at any instant; the rest are exactly (0,0,0). Mean brightness holds steady around 16-18 across every window and every seed tried.",
+    "ORIGINAL motion: comets travel at roughly 1 px/frame at 20 fps (~20 px/s). --dump at 30 / 30.15 / 30.3 s tracks heads 15 -> 12 -> 9, 34 -> 32 -> 29, 55 -> 52 -> 50, i.e. leftward. The baseline and seed waterfalls show streaks slanting BOTH ways with a spread of slopes, so comets run in both directions at somewhat varied speeds, crossing each other constantly. Motion stat avg 17-28 across all runs; zeroMotionFrames 4/120 in baseline.",
+    "ORIGINAL colour: red-blue only, meanG is exactly 0 in every window. Heads span deep red (255,0,18) through magenta (255,0,163) — different comets carry different amounts of blue, but none reach full magenta.",
+    "PORT, steady state (30-40 s, --label late): completely static. --dump at 30 / 30.15 / 30.3 s returns 59 of 60 pixels at exactly (255,0,255) at all three times; only pixel 0 flickers (0,0,0) <-> (41,0,0). motion avg 0, zeroMotionFrames 77/120 in the 6 s baseline and effectively total in the late window. The 60 s survey waterfall is one unbroken magenta block after the first ~2 s.",
+    "PORT, opening transient: the trails do exist briefly but they never erase. --dump on --label dump-early counts full-magenta pixels 0 -> 11 -> 45 -> 59 -> 59 -> 59 at t = 0.05 / 0.5 / 1 / 2 / 4 / 7.9 s, and the t=0.5 s frame shows two solid magenta blocks growing inward from pixels 1-6 and 53-59 with a partial-brightness pixel (181,0,115) at each advancing edge. So the port draws comet-like heads with a fade at the front edge, but every pixel a head has passed is latched at full brightness forever. The whole strip is saturated by ~t=2 s.",
+    "PORT brightness is ~9x the original's: meanBrightness avg 146 (baseline) / 162 (survey) / 167 (late) against the original's 17-18. Both sides have meanG exactly 0, so the port is at least in the right hue family (red/magenta), but it sits pinned at the extreme magenta end (255,0,255) that the original never reaches.",
+    "Seed-independent: seeds 1, 7 and 1234 (20 s @ 10 fps) all show the same picture — original mean 15-18 / motion 23-28 with a dense crossing-comet waterfall, port mean 159-162 / motion 1 with a solid magenta block. The divergence is not a one-seed fluke.",
+    "The first ~0.5 s is the only stretch where the two sides are comparable: both start black and both light a similar handful of pixels (orig 17, port 14 lit at t=0.5 s). Everything after that diverges."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port's core bug is that pixel state is never cleared or decayed between frames. Whatever a comet head lights stays lit at full brightness permanently, so the strip monotonically fills and is 100% saturated magenta by t~2 s and dead-static from then on. Every frame must start from a cleared strip (or from an explicitly decayed one), so that only the current comets and their trails are lit.",
+    "Target steady state on a 60-px strip: ~10-15 comets alive at once, ~23-36 of 60 pixels lit at any instant, the rest exactly (0,0,0), and mean strip brightness holding near 17 indefinitely. The port currently posts mean 167 with ~59/60 lit.",
+    "Trail shape to aim for: a bright head with a roughly geometric falloff over 4 px on each side — measured values on the original are head 255, then 122, 50, 15, 3. The port's trail edge shows only a single intermediate pixel (~181) before jumping to full, so the falloff is far too short as well as non-clearing.",
+    "Motion to aim for: ~1 px per frame at 20 fps (~20 px/s), with comets travelling in BOTH directions and a spread of speeds so streaks cross each other. The original's waterfall is a lattice of opposing diagonals; the port's transient fills inward from both ends only, so it may be spawning only at the two strip ends rather than at random positions.",
+    "Colour range is too narrow and too hot: the original's comet heads vary from (255,0,18) deep red to about (255,0,163) magenta — per-comet variation in the blue channel, green always 0. The port emits a single uniform (255,0,255), i.e. maximum blue on every comet. Give each comet its own red-to-magenta hue and keep it short of full magenta.",
+    "Comets must keep spawning forever — the original's density and mean brightness are unchanged from t=0 to t=40 s. Verify any fix over at least a 30-60 s window, not the first few seconds: the port's opening 0.5 s already looks roughly right today and only the long window exposes the failure."
+  ],
+  "experiments": ["baseline", "survey", "probe", "late", "dump-early", "dump-late", "seed7", "seed1234"]
+}

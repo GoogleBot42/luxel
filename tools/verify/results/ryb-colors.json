@@ -1,0 +1,71 @@
+{
+  "slug": "ryb-colors",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same rotating colour-wheel pattern with identical geometry, rotation rate and Brightness/Saturation behaviour, but the port's WheelType slider selects the wrong wheel (its low half reproduces the original's HIGH-half RGB wheel byte-for-byte, its high half a slightly-wrong RYB wheel) and its RYB wheel renders the blue->red sixth as violet instead of magenta.",
+  "observations": [
+    "Rig: grid 16x16, 256 px. Both sides compile and run clean (no compileError/runtimeError), wantsSensors false on both, so all runs were --sensors off equivalent.",
+    "Both sides expose exactly the same control surface: sliderWheelType (label 'WheelType'), sliderBrightness ('Brightness'), sliderSaturation ('Saturation'), all kind=slider. No missing/extra/renamed/retyped control.",
+    "Structure (both sides): a full-canvas angular colour wheel centred on the grid — hue is a function of atan2 angle only, radius-independent (constant colour along each ray, hard vertex at the centre). No modes, no events, no dark gaps: the 60 s / 5 fps survey rhythm image is a pure continuous diagonal hue sweep on both sides, and a 120 s run shows no drift (brightnessTrend 'steady' both sides, zeroMotionFrames 1 = the mandatory first frame).",
+    "Motion (both sides, identical): the wheel rotates at 36.6 deg/s, i.e. one revolution per ~9.84 s, in the direction of decreasing atan2 angle. Measured from redness-weighted angular centroid on a 20 s / 20 fps dump: orig red axis at 8.9 deg (t=0) -> 2.9 deg (t=10 s, one full turn +6 deg) -> 0.4 deg (t=19.9 s, two turns). Smooth, no jitter or stepping.",
+    "Rotation is TIME-BASED (fps-invariant) on BOTH sides: rotation over t=0..4 s measured 146.7 deg at --fps 10, 146.5 deg at --fps 20, 146.5 deg at --fps 40. No frame-rate coupling on either side.",
+    "There are exactly THREE distinct wheels in play across the two sides. Frame-hash clustering of sliderWheelType over 0,0.05,0.1,...,1 (24 values, 20 fps, frame 0) gives exactly two clusters per side, boundary at 0.5 on both: orig = {A for v<0.5, B for v>=0.5}; port = {B for v<0.5, C for v>=0.5}. Untouched defaults: orig = A, port = C.",
+    "Wheel A (original's default and low half): the RYB / artist wheel. Ring samples at radius 6, t=0: 0deg (255,0,0) red; 60deg (255,127,0) orange; 120deg (255,255,0) yellow; 180deg (8,255,0) green; 200deg (0,60,194); 240deg (0,0,255) blue; 300deg (244,0,255) magenta; 340deg (255,0,13). Wide red->orange->yellow arc, narrow green arc, NO cyan.",
+    "Wheel B (original's high half AND the port's low half): the standard RGB/HSV wheel with evenly spaced primaries — 0deg (255,26,0), 60deg (255,252,0) yellow, 120deg (15,255,0) green, 180deg (0,255,240) CYAN, 240deg (0,2,255) blue, 300deg (239,0,255) magenta. Visibly different from A: cyan present, much narrower yellow/orange arc.",
+    "Wheel C (the port's high half and its untouched default): identical to A over 5/6 of the circle and wrong only in the blue->red sector. Ring at t=0 — 260deg A(4,0,255) vs C(2,0,255); 280deg A(170,0,255) vs C(85,0,255); 300deg A(244,0,255) MAGENTA vs C(122,0,255) VIOLET; 320deg A(255,0,75) vs C(217,0,75); 340deg A(255,0,13) vs C(248,0,13).",
+    "Exact form of the C-vs-A error: port_R == round((orig_R + (255 - orig_B)) / 2) throughout that sector (verified on 47 distinct differing colours). The original ramps R 0->255 across the FIRST half of the blue->red sector (blue->magenta) then holds R=255 while B falls 255->0; the port ramps R linearly 0->255 across the WHOLE sector, so its mid-sector colour peaks at (127,0,255) violet instead of (255,0,255) magenta.",
+    "Untouched default comparison (orig A vs port C): G and B channels agree to within 1 count everywhere; only R differs, on 74-80 of 256 pixels (29-31%), max diff 128, whole-rig mean abs R diff 11.5-14.2. Rig-mean channel stats over 60 s: meanR orig 169.8 vs port 156.4 (-8%), meanG 98.1 both, meanB 84.8 both. The error is stable, not drifting: same [127,0,1] signature at t=120-132 s (--skip 120) as at t=0.",
+    "The wheel-index shift is exact, not approximate: rendering orig at sliderWheelType=1 against port at sliderWheelType=0 gives BYTE-IDENTICAL output — max per-pixel diff 0 at t=0,2.3,4.7,7.1,9.3,11.9 s, all six stats series identical over 240 frames, and still 0 at t=0,30.4,60.2,90.6,119.8 s at 5 fps and at t=0,2.375,5.9 s at 40 fps. So the port implements wheel B perfectly; it just puts it at the wrong end of the slider.",
+    "Consequence: no sliderWheelType value on the port exactly reproduces the original's default/low look (wheel A) — the closest is port wt>=0.5, which is A with the magenta-sector error.",
+    "Seed-independent on both sides: seeds 1, 7 and 1234 all give the same orig-vs-port signature (max diff [128,1,1]); this pattern uses no randomness.",
+    "Probe: all three dials responsive on both sides (orig maxDelta 43.5 / 117.3 / 118.6 for WheelType / Brightness / Saturation; port 47.8 / 113.0 / 120.5). No inert dials to chase, and 0 vs 1 differ from each other on every dial, so all three are genuinely value-dependent."
+  ],
+  "dials": [
+    {
+      "name": "sliderWheelType",
+      "origEffect": "Two-position switch, boundary at exactly 0.5 (confirmed at 0.48 vs 0.52). v<0.5 (and untouched) = RYB artist wheel: wide red/orange/yellow arc, narrow green, magenta between blue and red, no cyan. v>=0.5 = standard RGB/HSV wheel with evenly spaced primaries and a cyan arc.",
+      "portEffect": "Also a two-position switch with the boundary at exactly 0.5, but the SELECTION IS REVERSED: v<0.5 gives the RGB/HSV wheel (byte-identical to the original's v>=0.5 render over 120 s at 5/20/40 fps), and v>=0.5 (and untouched) gives its RYB wheel — which is itself slightly wrong (violet instead of magenta in the blue->red sixth).",
+      "matches": false
+    },
+    {
+      "name": "sliderBrightness",
+      "origEffect": "Linear master brightness. On the shared RGB wheel, rig-mean channel value 0.0 / 31.4 / 63.4 / 95.4 / 127.3 at v = 0 / 0.25 / 0.5 / 0.75 / 1. v=0 is exactly black. Hue/geometry/rotation unaffected.",
+      "portEffect": "Identical — BYTE-IDENTICAL to the original at all five values when both sides are put on the same wheel (orig wt=1 / port wt=0): max per-pixel diff 0 at t=0 and t=1.5 s for every value.",
+      "matches": true
+    },
+    {
+      "name": "sliderSaturation",
+      "origEffect": "0 = washed out toward white, 1 = fully saturated. On the shared RGB wheel, rig-mean channel value 255.0 / 222.9 / 190.9 / 159.0 / 127.3 at v = 0 / 0.25 / 0.5 / 0.75 / 1 (v=0 is pure white on every pixel). On the RYB wheel v=0 only reaches mean 198.3, i.e. that wheel does not desaturate all the way to white.",
+      "portEffect": "Identical — byte-identical to the original at all five values on the shared wheel. On the RYB pairing (orig wt=0 / port wt=1) the two agree to within 3 counts at v=0 (means 198.3 vs 197.3); the residual gap at v=0.5 (max 44) and v=1 (max 128) is purely the wheel-C red error scaling with saturation, not a saturation-dial difference.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Fix 1 (control mapping): the WheelType slider's two positions are swapped relative to the original. On the original, WheelType < 0.5 (and the untouched default) selects the RYB artist wheel and WheelType >= 0.5 selects the standard RGB/HSV wheel; the port does the opposite. The port's RGB/HSV wheel is already pixel-perfect (orig at 1.0 == port at 0.0, byte-identical over 120 s at 5, 20 and 40 fps) — only the index/threshold that chooses between the two wheels needs reversing, with the untouched default landing on the RYB wheel at the LOW end of the slider.",
+    "Fix 2 (RYB palette, blue->red sector): the port's RYB wheel never reaches magenta. Across the ~250-360 deg sector the original ramps red 0->255 over the FIRST half (blue at 240 deg -> full magenta (255,0,255) at ~300 deg) and then holds red at 255 while blue falls 255->0 down to pure red at 360 deg. The port instead ramps red linearly 0->255 across the WHOLE sector, so its 300 deg colour is (127,0,255) violet and its 320/340 deg colours are (217,0,75)/(248,0,13) instead of (255,0,75)/(255,0,13). Numerically the port's red is exactly round((correct_R + (255 - B)) / 2) there — i.e. one blend stage too many, or a two-segment ramp collapsed into one. The other five sixths of the wheel (red->orange->yellow->green->blue) are already exact to within 1 count, so only this last sector needs the two-segment ramp restored.",
+    "Nothing else needs touching: geometry (radius-independent angular wheel), rotation direction and rate (36.6 deg/s, ~9.84 s/turn, time-based and fps-invariant on both sides), the Brightness dial, the Saturation dial, seed independence and long-window steady state (checked to t=132 s) are all already exact.",
+    "Regression check after the fix: render orig and port untouched and confirm max per-pixel diff is 0 (it is currently [128,0,1] with the red error on 29-31% of pixels), and sweep sliderWheelType at 0.25 and 0.75 confirming both sides now agree at both ends."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "wt-0", "wt-0.1", "wt-0.2", "wt-0.3", "wt-0.4", "wt-0.5", "wt-0.6", "wt-0.7", "wt-0.8", "wt-0.9", "wt-1",
+    "wtf-0.05", "wtf-0.15", "wtf-0.25", "wtf-0.35", "wtf-0.45", "wtf-0.48", "wtf-0.52", "wtf-0.55", "wtf-0.65", "wtf-0.75", "wtf-0.85", "wtf-0.95", "wtf-0.99",
+    "wheel-lo",
+    "wheel-hi",
+    "shift-check",
+    "shift-dump",
+    "shift-fps5",
+    "shift-fps40",
+    "ryb-late",
+    "bri-0", "bri-0.25", "bri-0.5", "bri-0.75", "bri-1",
+    "sat-0", "sat-0.25", "sat-0.5", "sat-0.75", "sat-1",
+    "rybbri-0", "rybbri-0.5", "rybbri-1",
+    "rybsat-0", "rybsat-0.5", "rybsat-1",
+    "rot", "rot-f10", "rot-f40",
+    "seed-7", "seed-1234"
+  ]
+}

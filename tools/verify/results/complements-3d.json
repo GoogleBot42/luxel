@@ -1,0 +1,75 @@
+{
+  "slug": "complements-3d",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same pattern — a two-ended complementary-hue gradient with a dark desaturated band in the middle, rotating hue once per ~10 s on both sides — but the port sits exactly half a hue cycle out of phase, dims its far half noticeably more than the original, and adds three sliders the original does not have.",
+  "observations": [
+    "Both sides render cleanly with no compile or runtime error, are steady over a 240 s survey (brightnessTrend 'steady' on both, zeroMotionFrames 0-2), and show exactly ONE regime: a continuous hue rotation with no mode changes, events or resets in 240 s.",
+    "Structure is identical on both sides: along the rig axis the image is two flat, uniform hue fields — hue H at one end, hue H+0.5 at the other — each ramping from full saturation/value at its end down to a near-gray dark band at the midpoint. Rows are horizontally uniform, so the picture is a pure 1D gradient on the 16x16 grid rig (the rhythm image is a featureless flat gray on both sides for this reason).",
+    "Saturation profile is IDENTICAL between sides to the last digit: inward from each end, s = 1.00, 0.93, 0.85, 0.75, 0.64, 0.50, 0.34, 0.13 (16-row grid, dumped at t=0, 2.5, 5, 7.5, 10 s).",
+    "HUE PHASE: every pixel of the port is offset from the original by exactly 0.500 in hue. Verified on the grid at five times across a full cycle (orig top-row hue 0.005/0.255/0.505/0.753/0.000 vs port 0.505/0.754/0.004/0.254/0.503) and on a 10x10x10 cloud rig over all 1000 pixels (median hue delta 0.501, range 0.480-0.519). Because both sides rotate hue at the same rate, this is a half-cycle temporal phase offset: the port at time t shows what the original shows at t+5 s. Side by side at t=0 the original is red-at-top / cyan-at-bottom while the port is cyan-at-top / red-at-bottom.",
+    "BRIGHTNESS PROFILE: the two sides agree exactly on the first half of the axis (16-row grid, v = 1.000, 0.843, 0.702, 0.573, 0.459, 0.353, 0.263, 0.184) but diverge on the second half — orig v = 0.173, 0.227, 0.302, 0.392, 0.506, 0.643, 0.808, 0.996 vs port v = 0.161, 0.196, 0.251, 0.329, 0.439, 0.584, 0.769, 0.996. Peak absolute deficit ~0.067 v (about 13% relative) around 3/4 of the way along the axis; both ends still reach full brightness. Both sides are asymmetric in the same direction (second half dimmer than a mirror of the first), but the port's asymmetry is roughly 2x the original's. Net effect: port mean brightness 78 vs original 82 (-4%) on every window tested (baseline 6 s, survey 60 s, survey-240, and a --skip 200 late window).",
+    "The brightness divergence is not a rig artefact: on a 1000-px cloud rig it reproduces with the same magnitude (max abs v difference 0.067, mean v 0.549 orig vs 0.530 port).",
+    "Both sides are resolution-independent in the SAME way: v as a function of normalized axis position is the same curve at 8x8, 16x16 and 48x48, so the port maps onto the rig exactly as the original does. The first-half/second-half brightness split above holds at all three sizes.",
+    "Both sides are time-based, not frame-stepped: top-row hue at t=3 s and t=6 s is unchanged across --fps 10/20/40 (orig 0.3105/0.3046/0.3013; port 0.8098/0.8039/0.8007). No frame-rate coupling on either side.",
+    "Hue cycle rate matches at default: original ~0.0992 hue/s (period ~10.0 s), port ~0.1000 hue/s (period ~9.97 s). The port is ~0.3% faster, so the 0.500 hue offset had drifted to 0.555 by t=200 s — far too small to see.",
+    "Both sides are fully deterministic and seed-independent: seeds 1, 7 and 1234 render byte-identical frames on both sides.",
+    "CONTROL SURFACE MISMATCH: the original exposes NO controls at all (probe: 'no settable controls'). The port adds three sliders — sliderCycleTime, sliderWheelOffset, sliderDimDepth — all three probe-responsive (maxDeltaLit 44.5 / 68.8 / 48.5) and all three confirmed value-dependent by manual sweeps. Their untouched defaults do reproduce the original's cycle rate and complementary pairing, but the extra surface itself is a fidelity gap.",
+    "Setting sliderDimDepth to ANY value perturbs the first-half brightness ramp too, so the port's untouched-default profile is not reachable from that dial (consistent with the harness note that merely setting a control invokes its handler)."
+  ],
+  "dials": [
+    {
+      "name": "sliderCycleTime",
+      "origEffect": "control does not exist on the original (original exposes no controls); original's hue cycle is fixed at ~10 s",
+      "portEffect": "live speed dial, inverted and non-monotone at the low end: 0 freezes the hue rotation almost completely (top-row hue 0.541 -> 0.540 over 10 s), 0.5 gives a ~17.5 s cycle, 1 gives a ~33 s cycle. Untouched default gives ~10 s, matching the original.",
+      "matches": false
+    },
+    {
+      "name": "sliderWheelOffset",
+      "origEffect": "control does not exist on the original; the original always pairs a hue with its exact complement (H and H+0.5) at the two ends",
+      "portEffect": "live; sets the hue separation between the two ends. At 0 and at 1 both ends collapse to the SAME hue (top and bottom both 0.005 at t=0), destroying the complementary pairing the pattern is named for. At 0.5 (the default) the ends are complementary, matching the original's structure.",
+      "matches": false
+    },
+    {
+      "name": "sliderDimDepth",
+      "origEffect": "control does not exist on the original; the original's midpoint dark band bottoms out at v ~0.17, never reaching black",
+      "portEffect": "live; reshapes the whole brightness ramp. At 0 the midpoint only dims to v ~0.53 (a shallow dip); at 0.5 to ~0.27; at 1 the midpoint goes to pure black (v 0.000). The untouched default sits near 0.72 equivalent depth (midpoint v ~0.16-0.18, closest to the original).",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Remove the three added sliders (sliderCycleTime, sliderWheelOffset, sliderDimDepth) — the original exposes no controls at all, so the port's control surface should be empty. Bake in the values the defaults already produce: ~10 s hue cycle, a 0.5 hue separation between the two ends, and a midpoint dim floor of v ~0.17.",
+    "Fix the brightness ramp on the SECOND half of the axis. The port agrees with the original exactly for the first half (v = 1.000, 0.843, 0.702, 0.573, 0.459, 0.353, 0.263, 0.184 over 8 steps inward from one end) but is systematically too dark on the other side: the port renders 0.161, 0.196, 0.251, 0.329, 0.439, 0.584, 0.769, 0.996 where the original renders 0.173, 0.227, 0.302, 0.392, 0.506, 0.643, 0.808, 0.996 (16-row grid, outward toward the far end). The port's dim band is ~2x too asymmetric — it spreads too far toward the far end. Target ~4% higher overall mean brightness (82 vs the port's current 78) with the excess concentrated at 60-90% of the way along the axis. This holds at 8x8, 16x16, 48x48 and on the cloud rig, so it is a shape-of-the-dimming-curve error, not a rig mapping error.",
+    "Swap which complement lands at which end. At every instant the port's hue field is exactly 0.500 higher than the original's at the same pixel, so a viewer comparing them sees the two end colors traded (original red-top/cyan-bottom at t=0, port cyan-top/red-bottom). Since the whole picture is a fixed-brightness-asymmetry gradient, this is not just a harmless time phase — the dimmer half carries the wrong member of the complementary pair. Lowest-priority of the three, since each side viewed alone traverses the identical palette at the identical rate.",
+    "Do NOT change the cycle rate, saturation ramp, rig mapping or fps behaviour — all four already match the original exactly (0.0992-0.1000 hue/s; s = 1.00/0.93/0.85/0.75/0.64/0.50/0.34/0.13 inward from each end; resolution-independent at 8x8/16x16/48x48; time-based and fps-invariant at 10/20/40 fps)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-base",
+    "dump-cycle",
+    "late",
+    "fps10",
+    "fps20",
+    "fps40",
+    "grid8",
+    "grid48",
+    "cloud",
+    "ctl-wheel-0",
+    "ctl-wheel-0.5",
+    "ctl-wheel-1",
+    "ctl-dim-0",
+    "ctl-dim-0.25",
+    "ctl-dim-0.5",
+    "ctl-dim-0.75",
+    "ctl-dim-1",
+    "ctl-cycle-0",
+    "ctl-cycle-0.5",
+    "ctl-cycle-1",
+    "seed7",
+    "seed1234"
+  ]
+}

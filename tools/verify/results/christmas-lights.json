@@ -1,0 +1,56 @@
+{
+  "slug": "christmas-lights",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides draw the same thing — a 60 px strip tiled with 3-px red / grey / green blocks that jump one block every 5.05 s — but the port rotates the blocks in the opposite direction, skips the original's solid-red opening interval, is ~9% dimmer, and adds two sliders the original does not have.",
+  "observations": [
+    "Same concept and same pairing: both sides render a repeating 3-pixel R / grey / G block tiling of the 60-px strip (dump at t=17.7 s, both sides: RRRWWWGGG repeated x6-2/3), so this is not the ambiguous-manifest wrong-original case.",
+    "Timing is an exact match. Change frames from stats.json motion series are identical on both sides at every rate tested: 5.00, 10.05, 15.10, 20.15, 25.20 s at 20 fps and 5.0, 10.2, 15.4, 20.6 ... 57.0 s at 5 fps (26-frame spacing). Interval is ~5.05 s and is time-based, not frame-stepped, on BOTH sides (same wall-clock change times at 5 fps and 20 fps).",
+    "Both sides are otherwise completely static between changes: zeroMotionFrames 289/300 in the 60 s survey on both, motion.max 128 (orig) / 137 (port) only on the change frames, brightnessTrend steady on both.",
+    "ROTATION DIRECTION IS REVERSED. Sampling one dump inside each successive interval (labels dump-seq and late, so no Nyquist aliasing): the orig's leading block cycles R -> G -> W -> R (block tiling shifts RIGHT by 3 px each interval), the port's cycles R -> W -> G -> R (shifts LEFT by 3 px). Confirmed identically in the late window (t=123.7 / 128.7 / 133.8 / 138.8 / 143.9 s). The two sides therefore coincide exactly on every 3rd interval and are one block out of step on the other two.",
+    "STARTUP DIFFERS. The original's first interval (t=0 to 5.00 s) is SOLID RED across all 60 px (dump t=1 and t=2.5: every pixel 255,0,0); the block tiling only appears after the first change. The port shows the block tiling from t=0. One-time difference; both sides are in their normal regime from t=5 s on.",
+    "Colour: red is byte-identical (255,0,0) on both. The original's green is 51,255,0 (a yellow-leaning green, hue ~108 deg), the port's is 0,255,0 (pure green, 120 deg). The original's 'white' block is grey 114,114,114, the port's 101,101,101. Net effect: port mean brightness 91 vs orig 100 in the settled window (skip 120, 30 s), i.e. the port is ~9% dimmer.",
+    "CONTROL-SURFACE MISMATCH: meta.json reports the original with ZERO controls; the port exposes two sliders, sliderBlockSize (label 'BlockSize') and sliderInterval (label 'Interval'). Both are genuinely live (probe maxDelta 90.4 and 92.6 over a 12 s probe window).",
+    "The port's untouched defaults do reproduce the original's fixed parameters exactly: 3-px blocks and a 5.05 s interval, matching the dial-less original.",
+    "Both sides are fully deterministic and seed-independent: seeds 1, 7 and 1234 produce byte-identical block sequences and change times on both sides, so there is no stochastic character to compare.",
+    "Steady state is healthy on both: a skip-120 / 30 s window shows the same cadence, the same tiling, steady brightness (orig 100.3 avg, port 90.7 avg) and no decay, freeze or saturation on either side."
+  ],
+  "dials": [
+    {
+      "name": "sliderBlockSize",
+      "origEffect": "not present - the original exposes no controls at all; its block width is fixed at 3 px",
+      "portEffect": "live; sets block width: 0 -> 1-px blocks (RWGRWG...), 0.5 -> 6-px blocks, 1 -> 12-px blocks. Untouched default is 3 px, which equals the original.",
+      "matches": false
+    },
+    {
+      "name": "sliderInterval",
+      "origEffect": "not present - the original exposes no controls at all; its change interval is fixed at ~5.05 s",
+      "portEffect": "live; sets the change interval roughly linearly from ~1.05 s at 0, ~5.55 s at 0.5, to ~10.05 s at 1. Untouched default is 5.05 s, which equals the original.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Reverse the direction the block tiling advances. The original steps the tiling RIGHT by one block (3 px) per interval, so a fixed pixel cycles red -> green -> grey -> red; the port steps LEFT, so the same pixel cycles red -> grey -> green -> red. Everything else about the step (one block, every 5.05 s) is already correct.",
+    "Reproduce the original's opening state: its first interval (t=0 to the first change at 5.00 s) is SOLID RED over the whole strip, i.e. the tiling has not been built yet at t=0 and only appears after the first tick. The port draws the finished tiling from frame 0.",
+    "Match the block colours exactly. The original's green block is RGB 51,255,0 (slightly yellow-shifted green) but the port's is 0,255,0; the original's grey/white block is 114,114,114 but the port's is 101,101,101. Red already matches at 255,0,0. Fixing both raises the port's mean brightness from ~91 to the original's ~100.",
+    "Control surface: the original exposes NO controls, while the port adds sliderBlockSize ('BlockSize') and sliderInterval ('Interval'). The port's defaults happen to land on the original's fixed 3-px / 5.05 s values, so the default render is unaffected, but the extra dials are a fidelity gap - either drop them or confirm they belong to the other same-named corpus pattern before keeping them.",
+    "No other work needed: block width, tiling period, change cadence, time-basedness (not frame-coupled), determinism/seed-independence and steady-state stability all already match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-blocks",
+    "dump-seq",
+    "late",
+    "ctl-block-0",
+    "ctl-block-0.5",
+    "ctl-block-1",
+    "ctl-interval-0",
+    "ctl-interval-0.5",
+    "ctl-interval-1",
+    "seed-7",
+    "seed-1234"
+  ]
+}

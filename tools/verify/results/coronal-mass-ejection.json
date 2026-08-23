@@ -1,0 +1,42 @@
+{
+  "slug": "coronal-mass-ejection",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides are centered, resolution-independent radial figures that cycle the full hue wheel at nearly the same rate, but the original is a blazing white core throwing thin curved streamers across a mostly-black field while the port is a filled, ~4x brighter spiral vortex with a DARK core that only creeps around instead of erupting.",
+  "observations": [
+    "Neither side has any controls: probe reports '(no settable controls)' for both, so the control surface matches and there is nothing to dial.",
+    "Both sides render cleanly on the default 16x16 grid rig for the whole 240 s survey - no compile or runtime errors, no decay, no freeze (zeroMotionFrames = 1 on both, i.e. only the first captured frame). Neither side binds sensors (wantsSensors false on both).",
+    "Structure, original: a single very bright near-white core at grid center with fast radial falloff, and a handful of thin, smoothly curved streamers reaching to the edge over an otherwise black field. Radial mean brightness (dump-radial, 16x16, t=1/3/6/9 s) runs r1 ~150-213, r2 ~45-82, then only ~7-34 at r3-r6.",
+    "Structure, port: a bright core PLUS a dark annulus at r=2-3 PLUS a broad bright ring/spiral filling r=4-6. Same dump: r1 ~180-207, r2 ~50-55, then r4-r6 back up to ~57-177. The mid-field the original leaves black is where the port puts most of its light.",
+    "Fill/duty, same dump: counting pixels above 20/255 on each radius ring, the original lights 2-9 of 16-36 per ring (sparse filaments, azimuthal CV 1.3-2.9), the port lights 23-36 of 28-36 (near-complete rings, CV 0.34-0.92). The port has no thin rays at all.",
+    "Brightness, both sides untouched: original meanBrightness avg 22 (baseline 6 s / 20 fps), 20 (survey 60 s / 5 fps), 21 (survey-240); port 83 / 66 / 59. The port is roughly 3-4x too bright, and that is fill, not gain - its core is about as bright as the original's.",
+    "Motion magnitude: original motion avg 5.9 / 16.4 / 25 at 20 / 5 / 2 fps; port 1.4 / 5.1 / 15. motionLit tells the same story (baseline 9.9 vs 1.5), so it is not a sparseness artefact.",
+    "Motion character (baseline and grid48 filmstrips, consecutive 20 fps frames): the original's streamers whip and sweep around the core, growing, curling and dissolving visibly every 0.05 s frame; the port's spiral is near-identical across the whole 0.55 s strip, with only the white arm creeping - roughly a quarter to a third of a turn over 5.5 s in the survey-240 filmstrip (120.0-125.5 s).",
+    "Colour: both walk the entire hue wheel continuously (magenta -> red -> orange -> yellow -> green -> cyan -> blue -> magenta). Hue-vector autocorrelation of the meanR/G/B series gives a period of 13.0 s (2 fps) / 13.2 s (5 fps) for the original and 12.0 s at both rates for the port - a close match, port about 9% faster, and both fps-invariant so neither side is frame-rate-coupled.",
+    "Both sides are resolution-independent: re-rendered at --grid 48x48 each draws the SAME logical picture as at 16x16, just finer (original: smooth curved filaments off a star; port: a smooth spiral arm around a dark hub). That axis matches.",
+    "Both sides are seed-independent: seed 7 and seed 1234 produce byte-identical meanBrightness series to each other on both sides, so neither pattern is stochastic and the divergence is not an RNG artefact.",
+    "No mode/regime rotation on either side: over 240 s at 2 fps each side keeps one continuous look, and a parked late window (--skip 120, 20 fps) shows exactly the same two structures as t=0."
+  ],
+  "dials": [],
+  "feedback": [
+    "The topology is inverted in the mid-field. The original's brightness falls off monotonically from a hot core (r1 ~200 -> r2 ~60 -> r3-r6 ~10-30 on a 16x16 grid); the port dips to a dark annulus at r=2-3 and then peaks again at r=4-6 (~100-180). Remove the bright outer ring/halo and let brightness decay outward from the core instead.",
+    "The field should be mostly black. The original lights only 2-9 pixels of each radius ring (15-30%); the port lights 60-100% of them and posts 3-4x the mean brightness (66-83 vs 20-22). The target look is a few discrete filaments over darkness, not a filled disc.",
+    "Draw RAYS, not a spiral. At 48x48 the original is several distinct curved streamers that leave the core in different directions and reach the edge; the port is one continuous spiral arm wrapped around a hub. Feature count and radial reach are the things to fix - the smooth curved-filament rendering itself already looks right.",
+    "The port is far too placid. The original's arms visibly re-form frame to frame at 20 fps (motion 5.9, motionLit 9.9); the port holds essentially the same image for half a second (motion 1.4, motionLit 1.5) and only slowly rotates. It needs eruption/turbulence - streamers that appear, extend and dissolve on a ~0.5-2 s timescale - rather than rigid-body rotation of a fixed shape.",
+    "The original's overall brightness fluctuates strongly and quickly (meanBrightness 7-48 over the survey, autocorrelation decaying by lag 2-3 frames at 5 fps, with some moments nearly dark); the port's is smooth and slowly varying (43-96). Whatever drives the eruptions should also modulate total output episodically.",
+    "Keep the hue behaviour - it is already close. Both walk the full hue wheel; just slow the port slightly, from a ~12.0 s cycle to the original's ~13.1 s.",
+    "Do NOT add controls: the original exposes none, and the port correctly exposes none."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late-window",
+    "dump-radial",
+    "grid48",
+    "seed7",
+    "seed1234"
+  ]
+}

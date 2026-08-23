@@ -1,0 +1,73 @@
+{
+  "slug": "raindrops-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same 2D pond-ripple simulation and palette on both sides, and the drops even land at the same places at nearly the same times, but the port's wave front travels ~2.5x too fast, its drop impulse is ~3x too weak, and its ripples gain rather than lose energy, so the original's calm dark pond with bright white-blue splashes renders as continuously boiling teal noise.",
+  "observations": [
+    "Both sides render, compile clean, no runtime errors, both steady over a 240 s survey (orig brightnessTrend steady, port steady). No mode/regime structure on either side at 60 s or 240 s; the pattern is one continuous regime, so a late-window check (--skip 200, steady-late) shows the same relationship as t=0.",
+    "Shared algorithm skeleton: 16x16 default grid, border ring (x=0, x=15, y=0, y=15) pinned to the exact rest colour (0,~20,22) on BOTH sides; the wave lives on alternating frames at any given pixel (px(6,14) is non-rest only on even frame indices on both sides), i.e. both do the same one-sublattice-per-frame update. Both are resolution-fixed the same way: re-rendered at --grid 8x8 and --grid 32x32 the imagery stays the same blocky logical canvas on both sides, mean brightness unchanged (orig 12, port 13-14 at every grid size).",
+    "Drop schedule/placement agrees closely. On a cold start at sliderRaindrops=0 both sides put their first drop at exactly pixel (6,14); orig peaks there at t=0.10, port at t=0.30 (a ~0.2-0.3 s startup lag, and the port sits at flat rest for its first 0.20 s while the orig already has a drop at t=0.00).",
+    "DROP IMPULSE AMPLITUDE: original's splash pixel reaches luminance 189-234 (amplitude ~167-212 above the rest level of 22) essentially every time — 29 frames out of 200 in a 10 s untouched window had a peak >150. Port's cold-start splash reaches only 79 (amplitude 57), and in the same 10 s untouched window only 4 of 200 frames had any pixel >150. The bright white-blue droplet flashes that punctuate the original are effectively absent from the port.",
+    "WAVE SPEED: measured as the outermost radius with |v-rest|>5 from the single cold-start drop at (6,14), dial=0. Orig: r=1.0 at 0.05 s, 3.2 at 0.50 s, 5.0 at 0.95 s, 6.4 at 1.15 s, front gone by 1.20 s -> ~5.6 px/s. Port: r=1.0 at 0.25 s, 5.1 at 0.50 s, 10.8 at 0.95 s, 13.6 at 1.15 s (already off the 14-px interior) -> ~14.3 px/s. Port's ripple expands about 2.5x too fast.",
+    "DAMPING / ENERGY: total field energy E = sum over the 14x14 interior of |v-22|, same single-drop cold start. Orig: E peaks at 222 on the impact frame (t=0.10) and monotonically decays — 133 at 0.20 s, 115 at 0.80 s, 64 at 1.35 s (halved in ~1 s), water back at rest. Port: E climbs from 22 at 0.20 s to 385 at 0.50 s, 560 at 0.80 s, plateaus ~550, and is still 430 at 1.35 s. The port's ripple gets BRIGHTER and BROADER as it expands instead of fading, and the reflected energy keeps rattling around the box.",
+    "Net steady-state agitation: over 10 s untouched, mean |v-rest| across the interior is 2.6 for the orig vs 9.1 for the port (3.5x), and the fraction of interior pixels within +/-5 of rest is 88.7% orig vs 46.9% port. The original is mostly still water with one or two live rings; the port has no quiet water anywhere.",
+    "Over a 60 s run at sliderRaindrops=0 sampled once per second, orig field deviation averages ~1.5 (range 0.3-3.3) while the port averages ~6.7 (range 0-11.6). Neither diverges or dies — the port simply settles at a ~4.4x hotter equilibrium.",
+    "Drop RATE on the original scales cleanly with the dial (isolated-impulse count over 15 s at 20 fps): 1.53 drops/s at sliderRaindrops=0, ~2.9 drops/s untouched, 10.4 drops/s at sliderRaindrops=1. Original impulse peak stays pinned at 189-212 across the whole dial range — the dial changes rate, not brightness.",
+    "COLOR matches well and is not a finding: rest = (0,~20,22) dark teal on both; mid ripples average (0,43,70) orig vs (11,52,68) port; peak splash (118,163,216) orig vs (130,192,195) port. Only nit: the port pushes into the red channel more often because its amplitudes are hotter — meanR avg 0.0-0.1 (orig) vs 0.4-2.3 (port) depending on window.",
+    "motion stat (whole-rig, 20 fps): orig 2, port 6 untouched; at 240 s / 5 fps orig 4, port 13.6. motion and motionLit agree throughout (dense pattern, not sparse), and zeroMotionFrames is ~0 on both — neither side is frozen.",
+    "Frame-rate coupling: rendering the same 20 s window at 10/20/40 fps, the motion stat halves as fps doubles on BOTH sides (orig 3/2/1, port 9/6/3) and mean field deviation is essentially fps-flat on both (orig 4.16/2.51/2.47, port 14.35/9.88/9.97). Both engines are time-based in the same way; the port/orig energy ratio is 3.4-4.0x at every rate, so the divergence is not an fps artefact.",
+    "Seed-independent: at --seed 7 and --seed 1234 the relationship is identical (orig motion 2, port motion 6 in both), so this is not a one-seed fluke.",
+    "Control surface matches exactly: both sides expose one control, name sliderRaindrops, kind slider, label \"Raindrops\"."
+  ],
+  "dials": [
+    {
+      "name": "sliderRaindrops",
+      "origEffect": "Rate knob for how often drops fall; drop brightness is unaffected. Measured drop rate 1.53/s at 0, ~2.9/s untouched, 10.4/s at 1. Mean interior field deviation over a 20 s window: 1.58 (v=0), 1.77 (0.25), 2.20 (0.5), 3.29 (0.75), 6.55 (1.0). Peak splash luminance stays 173-198 at every setting. Even at v=1 the water still shows quiet gaps between rings.",
+      "portEffect": "Same axis and same direction, but shifted about one full dial position hotter and compressed. Mean interior field deviation: 7.28 (v=0), 8.02 (0.25), 9.42 (0.5), 12.14 (0.75), 20.44 (1.0) — i.e. the port at v=0 (7.28) is already hotter than the original at v=1 (6.55), and the whole sweep spans 2.8x where the original spans 4.1x. Peak luminance rises with the dial on the port (100 at v=0 up to 226 at v=1) instead of staying constant.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Slow the ripple propagation by roughly 2.5x. Measured on the default 16x16 grid from a single cold-start drop at (6,14) with sliderRaindrops=0: the original's outermost disturbed radius (|v-rest|>5) reaches 3.2 px at 0.50 s, 5.0 px at 0.95 s and 6.4 px at 1.15 s (~5.6 px/s); the port reaches 5.1, 10.8 and 13.6 px at the same instants (~14.3 px/s). Target: front radius ~6 px at 1.1 s, wave gone from the 14-px interior by ~1.2 s.",
+    "Raise the drop impulse amplitude by about 3x. The original deposits a splash pixel at luminance 189-234 (amplitude ~170-210 above the rest level of 22) on essentially every drop, and that amplitude is independent of the dial. The port's splash tops out around 79 at sliderRaindrops=0 and only reaches ~226 when the dial is cranked to 1 (where the whole field is also overdriven). The visible consequence: the original shows discrete near-white/pale-blue droplet flashes about 3 times a second, the port has none.",
+    "Fix the energy balance — the port's ripple GAINS energy as it expands. Sum of |v-rest| over the 14x14 interior after a single drop: original 222 on the impact frame then monotone decay to 64 by 1.35 s; port 22 -> 385 (0.50 s) -> 560 (0.80 s) -> still 430 at 1.35 s. Whatever damping/decay term is applied per step is far too weak (and the amplitude appears to be renormalised outward rather than conserved). Target: peak energy on the impact frame, then a half-life of about 1 second.",
+    "Success metric for a fix, measurable straight from a --dump: on the default 16x16 grid, untouched controls, over any 10 s window at 20 fps, at least ~85% of the 14x14 interior pixels should be within +/-5 of the rest level at any instant, and mean |v-rest| should be ~2.5 (the port currently posts 47% and 9.1).",
+    "Rebalance the dial mapping after the physics is fixed. The port's whole sliderRaindrops range sits about one dial position hot: its v=0 field energy (7.28) already exceeds the original's v=1 (6.55). Once damping and wave speed are right, re-check that v=0 gives ~1.5 drops/s and v=1 gives ~10 drops/s with the water still returning to rest between rings at v=1.",
+    "Minor: the port sits at flat rest for its first ~0.2-0.3 s before its first drop, while the original drops at t=0.00. Same location (6,14), just a startup lag — cosmetic, fix last if at all.",
+    "Minor: the port's peak splash colour is (130,192,195) against the original's (118,163,216) — the port's brightest point is slightly green-cyan where the original's is blue-white. Only worth touching once the amplitude fix lands, since the port currently almost never reaches that part of the ramp.",
+    "Do NOT change: the border-pinned rest ring, the alternate-frame (checkerboard sublattice) update cadence, the rest colour (0,20,22), the mid-ripple palette, the drop placement/schedule generator, and the fixed-logical-canvas behaviour across grid sizes — all of these already match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "steady-late",
+    "dumpA",
+    "rdrop-dense10",
+    "rd-dial-0",
+    "rd-dial-0.25",
+    "rd-dial-0.5",
+    "rd-dial-0.75",
+    "rd-dial-1",
+    "rd-dense-d0",
+    "rd-dense-d1",
+    "rd-long-d0",
+    "rd-dv0",
+    "rd-dv0.25",
+    "rd-dv0.5",
+    "rd-dv0.75",
+    "rd-dv1",
+    "rd-fps10",
+    "rd-fps20",
+    "rd-fps40",
+    "rd-fpsd10",
+    "rd-fpsd20",
+    "rd-fpsd40",
+    "rd-seed7",
+    "rd-seed1234",
+    "rd-grid8x8",
+    "rd-grid32x32"
+  ]
+}

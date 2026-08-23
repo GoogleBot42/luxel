@@ -1,0 +1,43 @@
+{
+  "slug": "color-twinkles",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides render the same thing — a field of fully-saturated rainbow twinkles on black, same brightness, same ~2 s twinkle cycle, same slow leftward creep — but the port's field is ~35% sparser with slightly wider/softer twinkles and drifts about twice as fast.",
+  "observations": [
+    "Alive on both sides: no compile or runtime errors, no warnings, both `brightnessTrend: steady` over every window tested (6 s, 60 s, 180 s), `zeroMotionFrames` 1 on each (the expected first-frame zero).",
+    "Neither side exposes any controls — `--probe-controls` reports '(no settable controls)' for orig and port alike, so the control surface matches exactly.",
+    "Single regime on both sides: a 180 s / 2 fps survey and a 60 s / 5 fps survey show a homogeneous texture end-to-end with no mode boundaries, palette walk or long-period beat on either side; a `--skip 30` window is indistinguishable in character from `--skip 0`.",
+    "Aggregate levels match closely (baseline, 60 px, 20 fps): meanBrightness avg 16.2 orig vs 15.7 port, motion avg 3.5 vs 3.5, motionLit 7.1 vs 8.6. Channel means are both red-leaning with green lowest: orig R21.3/G13.1/B14.1, port R20.0/G11.5/B15.6. The port's whole-strip brightness swings wider frame to frame (min 9 / max 24) than the original's (min 14 / max 19), the expected signature of fewer but individually brighter twinkles.",
+    "Twinkle RATE is essentially identical. Per-pixel temporal autocorrelation over a 61-frame dense dump (t=2..5 s, 20 fps) crosses zero at lag ~9 frames on both (orig 9:+0.03, port 9:-0.01) and troughs at lag ~22-23 (orig -0.48, port -0.43) — i.e. a ~2 s rise-and-fall cycle per pixel on both sides.",
+    "DENSITY differs: at 60 px the original shows ~10.2 lit runs per frame (threshold max-channel > 40), the port ~6.0; at 300 px, ~48.3 vs ~33.0. Counting pixel samples above the dark bin over the dense dump: orig 44% lit vs port 30%, and in the top brightness bin (max channel 112-127) orig 12.6% vs port 7.9%. Total lit AREA is much closer (litFrac at 300 px: 0.202 orig vs 0.183 port) because the port's twinkles are wider.",
+    "GRANULARITY differs: the original's twinkles are isolated single pixels — mean lit-run length 1.17 px at 60 px / 1.26 px at 300 px, longest run 3 px, spatial autocorrelation at lag 1 NEGATIVE (-0.17 at 60 px, -0.15 at 300 px, i.e. a lit pixel's neighbours are dark). The port's are chunkier and softer — mean run 1.36 px / 1.67 px, runs up to 6 px at 300 px, spatial autocorrelation at lag 1 clearly POSITIVE (+0.40 at 60 px, +0.48 at 300 px). The port's waterfall streaks are correspondingly fatter and smoother-edged than the original's crisp one-pixel dashes.",
+    "DRIFT differs by ~2x. Both fields creep steadily toward lower pixel index (same direction). Sub-pixel Pearson shift tracking over 0.6 s pairs on the DEFAULT 60 px rig: orig -1.67 px/s, port -3.30 px/s. Confirmed at three frame rates (10 fps: -1.67 vs -3.33; 20 fps: -1.67 vs -3.30; 40 fps: -1.67 vs -3.13). Visible on the 60 px baseline waterfall as near-vertical dashes on the original against distinctly slanted streaks on the port; at 300 px both read as near-vertical, so the drift is a fraction-of-strip rate on both.",
+    "No frame-rate coupling on either side — the measured drift is unchanged across 10 / 20 / 40 fps for orig and port alike, so both are time-based, matching each other.",
+    "Palette family matches: every lit pixel on both sides is 100% saturated (mean saturation 1.000 orig and port) and hues cover the full wheel with a red bias. The weighting differs modestly — binning lit pixels (max channel > 40) into 12 hue buckets, the two buckets straddling red hold 35.1% of the original's lit pixels vs 27.5% of the port's, while the cyan-blue buckets (6-9) hold 23.0% orig vs 35.0% port. Same palette, slightly different distribution across it.",
+    "Both sides are seed-independent: renders at seed 1, 7 and 1234 are byte-identical per side (md5 of orig.png identical across all three, likewise port.png). Neither pattern consumes the harness RNG — both are deterministic noise/time fields — so per-pixel non-alignment between the sides is inherent, not a seed artefact."
+  ],
+  "dials": [],
+  "feedback": [
+    "Port drifts ~2x too fast. Measured on the default 60 px strip, the original's twinkle field creeps toward lower pixel index at 1.67 px/s; the port's does the same thing at 3.30 px/s. Halving the port's spatial scroll rate would put the waterfall slopes on top of each other. Both are already time-based (fps-invariant), so this is a constant factor, not a timebase bug.",
+    "Port is ~35% too sparse. At any instant the original lights ~10 twinkles on a 60 px strip (~48 on 300 px); the port lights ~6 (~33). Raise the spawn density / lower the on-threshold by roughly 1.5x so the counts match.",
+    "Port's twinkles are too wide and too soft. The original's are isolated single pixels — mean lit-run 1.17 px, never longer than 3 px, and neighbouring pixels are anti-correlated (spatial ACF at lag 1 = -0.17). The port's average 1.36 px with runs up to 6 px and neighbours strongly correlated (+0.40). Narrow the per-twinkle spatial falloff so each twinkle occupies essentially one pixel with dark neighbours; that change alone will also fix the port's wider whole-strip brightness swing (min 9 / max 24 vs the original's 14 / 19).",
+    "Do NOT change the twinkle timing — the per-pixel fade cycle already matches (temporal ACF zero-crossing at lag ~9 frames and trough at lag ~22 on both sides at 20 fps, i.e. a ~2 s cycle). Do not change overall brightness either: mean 16.2 vs 15.7 is already right.",
+    "Optional colour nitpick: the port's hue distribution is a little flatter than the original's. The original concentrates ~35% of its lit pixels in the red sixth of the wheel and only ~23% in cyan-blue; the port is 27.5% red and 35% cyan-blue. Nudging the hue mapping back toward red would close the last visible gap, but this is well below the density and drift issues in priority."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-long",
+    "probe",
+    "late-window",
+    "seed7",
+    "seed1234",
+    "dump-consec",
+    "dump-drift",
+    "dump-dense",
+    "rig300",
+    "fps10",
+    "fps40"
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "slug": "marching-rainbow-buffered",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Structurally pixel-for-pixel the same marching rainbow — identical spatial spectrum, palette, brightness and direction — but the port's whole timebase runs 1.43x too fast (orig master period 6.554 s, port 4.585 s).",
+  "observations": [
+    "Both sides render cleanly on the default rig (strip, 60 px): no compileError, no runtimeError, wantsSensors false on both, sensors fed 'off' on both. Neither side exposes ANY control (meta.json sides.orig.controls and sides.port.controls are both empty) — the control surface matches exactly.",
+    "Look: a 1D strip carrying ~10 rainbow 'cells' (dominant spatial wavenumber k=10 over 60 px, i.e. a 6-px repeat), each cell a compressed red->green->cyan->blue->magenta sweep, separated by hard black gaps. A slower k=1 envelope sweeps along the strip so the lit region breathes. In the waterfall this reads as steep diagonal rainbow bars with a slower counter-sloping dark envelope crossing them. Identical description fits both sides.",
+    "Spatial structure is quantitatively identical: 10 s / 200-frame dump, spatial DFT of luminance, mean |X(k)| — orig k=1 901 / k=10 902 / k=9 493 / k=11 492; port k=1 900 / k=10 901 / k=9 493 / k=11 492. Same dominant wavenumbers, same amplitudes, same harmonic ladder.",
+    "SPEED IS THE ONLY REAL DIVERGENCE. Unwrapped spatial-phase regression over 200 consecutive frames (10 s @ 20 fps, residual rms < 0.07 rad on both, so the advance is perfectly linear): k=1 phase rate orig 0.9587 rad/s vs port 1.3705 rad/s (ratio 1.4295); k=10 phase rate orig -1.9171 rad/s vs port -2.7409 rad/s (ratio 1.4298). Directions match on both components (k=1 travels ~-9.2 px/s on orig / -13.1 px/s on port; k=10 travels ~+1.83 px/s on orig / +2.62 px/s on port).",
+    "Same factor shows up in the temporal domain. Autocorrelation of meanG (30 s @ 20 fps): orig first strong peak at lag 131 frames = 6.55 s (and 262 = 13.10 s); port at lag 92 frames = 4.60 s (and 183 = 9.15 s, 275 = 13.75 s). 120 s / 2400-frame temporal DFT: orig fundamental 0.1500-0.1525 Hz with harmonics at 0.305, 0.458, 1.525, 2.292 Hz; port fundamental 0.2167 Hz with harmonics at 0.433, 0.650, 2.183, 3.275 Hz. Harmonic RATIOS are identical (x2, x3, x10, x15 of the fundamental on both) — only the fundamental is scaled. 2.292/1.525 vs 3.275/2.183 both give 1.429.",
+    "Measured master periods: orig 6.554 s, port 4.585 s. These are almost exactly 0.1 x 65.536 and 0.07 x 65.536 — i.e. the pattern is driven by a Pixelblaze time()-style 65.536 s sawtooth and the two sides use timebase constants 0.1 (orig) and 0.07 (port). Ratio 10/7 = 1.42857, measured 1.4295.",
+    "DECISIVE TIME-SCALE EXPERIMENT: dumping the original at t and the port at 0.7*t makes the frames coincide. Mean absolute per-channel difference over 21 sample times drops from 38.3/255 (same wall time) to 10.1/255 (0.7x-scaled port time). Repeated at --fps 100 with exact 0.7 multiples: mean abs diff 9.2/255 across 10 sample times, and the residual is a sub-pixel phase offset (feature edges land ~0.3 px apart), not a structural difference. Frame-by-frame printout at orig t=2.00 / port t=1.40 shows the same lit pixel indices, the same black gaps, and the same hue at each lit pixel.",
+    "Motion stat reflects exactly the speed ratio, not a texture difference: at 20 fps orig motion avg 7.1 vs port 9.8 (1.38x); motionLit orig 13.9 vs port 19.0 (1.37x); at 5 fps orig 22.9 vs port 27.3. Brightness is indistinguishable: meanBrightness avg 24.3 on BOTH sides in every run, meanR 34.1/34.5, meanG 19.2/18.0, meanB 19.5/20.3 — palette family, saturation and duty cycle all match.",
+    "Both sides are fps-invariant (time-based, not frame-stepped): the meanG autocorrelation period expressed in SECONDS is constant across --fps 10 / 20 / 40 (orig 6.55 s at all three; port 4.58-4.60 s at all three). No frame-rate coupling bug on either side.",
+    "Steady state is healthy on both: brightnessTrend 'steady' and zeroMotionFrames 0-1 in every run including --skip 120 --seconds 20 (t=120-140 s). The late-window waterfalls are indistinguishable from the early ones except that the port fits ~4.3 macro-cycles into the 20 s window where the original fits ~3.",
+    "Deterministic, not RNG-driven: seed 7 and seed 1234 produce byte-identical statsSummary to each other on both sides (orig 24.3/34.2/18.2/20.4 motion 7.1; port 24.3/34.6/18.7/19.6 motion 9.9), so no seed-fluke risk.",
+    "Rig-override lens check (--rig grid --grid 8x8, 12 s): both sides draw the same diagonal rainbow ribbon sweeping across the 8x8 grid with the same cell colours and same serpentine-looking diagonal; only the phase differs, consistent with the speed factor. No indexing/mirroring divergence."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port is structurally correct — same wavenumbers (k=1 envelope + k=10 rainbow cells), same palette, same brightness, same directions, same fps-invariance. Do NOT touch geometry or colour; the fix is a single timebase constant.",
+    "Slow the port down by exactly 0.7x (equivalently: it currently runs 1.4295x too fast). Measured masters: original macro period 6.554 s, port 4.585 s. If the port drives everything from a time()-style sawtooth, its speed constant is 0.07 where the original's is 0.1 — 0.07 * 65.536 = 4.588 s matches the port's measured 4.585 s and 0.1 * 65.536 = 6.554 s matches the original's measured 6.554 s to three digits.",
+    "There is only ONE timebase to fix, not two: the fast k=10 rainbow march and the slow k=1 envelope are locked at exactly 2:1 phase rate on BOTH sides (orig -1.9171 vs 0.9587; port -2.7409 vs 1.3705), and both scale by the same 1.4295. Changing the single master rate fixes both components at once.",
+    "Verification after the fix: re-run `--label long120 --seconds 120 --fps 20` and check that the meanG temporal-DFT fundamental lands at 0.1526 Hz (period 6.554 s) with harmonics at ~0.305 / 0.458 / 1.525 / 2.292 Hz, matching the original; and that meanG autocorrelation peaks at lag 131 frames @ 20 fps. Also check `motion` avg falls from ~9.8 to ~7.1 at 20 fps.",
+    "After the timebase fix, expect a residual sub-pixel phase offset of roughly 0.2-0.4 px at t=0 (the port's spatial phase intercept sits slightly ahead of the original's). That is cosmetically invisible on a strip and should NOT be chased unless the frame-matched mean-abs diff stays above ~10/255 once the speeds agree."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "long120",
+    "fps10",
+    "fps40",
+    "late",
+    "seed7",
+    "seed1234",
+    "grid8",
+    "dump-mrb-a",
+    "dump-mrb-long",
+    "dump-scaleA",
+    "dump-scaleB",
+    "dump-hiA",
+    "dump-hiB"
+  ]
+}

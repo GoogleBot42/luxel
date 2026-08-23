@@ -1,0 +1,49 @@
+{
+  "slug": "blinky-eyes-2d",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides are a pair of mirrored white eyes with a blue iris that dart sideways and blink on a statistically identical ~2.2 s cadence; the port's eyes are tall-and-separated where the original's are wide-and-touching, its iris is a purer blue, and its blink fades the panel to total black instead of holding the original's lit eyelid line.",
+  "observations": [
+    "Alive on both sides, no compile or runtime errors, no controls on either side (meta.json controls: [] for orig and port), sensors not bound. brightnessTrend 'steady' on both over a 240 s window; no mode or regime changes appear on either rhythm image at 60 s or 240 s, so the pattern is a single regime of blink + gaze-dart.",
+    "Eye geometry differs. On the 48x48 rig at rest the original's left eye occupies a bounding box 23 px wide x 18 px tall (aspect w/h 1.28, wider than tall), running from x=1 to x=23 so the two eyes TOUCH at the panel midline and reach the outer edge. The port's is 17 wide x 24 tall (aspect 0.71, taller than wide), x=4..20, leaving a 6-column gap between the eyes and a 4-column margin at each edge. The same inversion shows on the default 16x16 rig (orig eye rows 5-10 x cols 1-7; port rows 4-11 x cols 2-6). Both sides are resolution-independent (same picture at 16x16 and 48x48), so this is a real shape difference, not a rasterization artefact.",
+    "Iris size and roundness match: 48x48 dump gives orig iris 11x12 px, port 10x10 px, both circular and both ~21-23% of the panel width; the difference is the eye drawn around it.",
+    "Sclera colour matches exactly (pure neutral grey, r=g=b on both). Iris hue does not: original iris pixels are consistently (0,88,220)-family, g/b = 0.40, hue ~216 deg (azure/cyan-blue); port iris pixels are (0,8,216)-family, g/b = 0.037, hue ~238 deg (near-pure blue). Whole-panel means confirm it: orig meanR 7.6 / meanG 10.0 / meanB 14.5 vs port 9.2 / 9.4 / 15.5 (original's green channel sits well above its red, the port's does not).",
+    "Blink cadence is an excellent match. Over 240 s at 5 fps: orig 108 blinks, mean gap 2.21 s, sd 0.26, range 1.8-2.6 s; port 109 blinks, mean gap 2.19 s, sd 0.28, range 1.8-2.6 s. Holds at a non-default seed too (seed 7: 26 blinks each, mean gap 2.26 s, sd 0.26/0.27 on both sides).",
+    "Blink PROFILE differs. Both start the blink the same way (the iris vanishes for one frame while the eye is still full size), and both last ~0.55-0.60 s end to end, but the middle is different. Original (20 fps meanBrightness): 13 -> 9 -> 4 -> 5,5,5,5,5,5,5,5,5 -> 9 -> 13; i.e. it snaps shut in ~2 frames and HOLDS a lit 2-row eyelid line for ~0.5 s (panel floor never below mean 5; a --dump of the closed frame shows a continuous lit line spanning cols 1-14 with a moving bright highlight). Port: 14 -> 11,9,4,2 -> 0,0,0 -> 2,4,9,11 -> 14; a smooth symmetric ramp that passes through COMPLETE blackout (mean 0, every pixel 0) for ~0.15 s with no held lid line. Across every run the original's meanBrightness min is 5 and the port's is 0.",
+    "Because the original's eyes touch at the midline, its closed state reads as one continuous lid line across the whole panel; the port's separated eyes close into two short separate lens shapes (visible at 48x48, orig sheet 2.1 s vs port sheet 4.3 s).",
+    "Gaze behaviour matches in kind. Both dart the iris HORIZONTALLY only (y centroid pinned at 7.50 on both, all 200 sampled frames), both move the two eyes conjugately in the same direction, and both push the iris exactly to the outer edge of the eye at maximum excursion. Relative excursion is essentially identical: at max, orig iris centre sits 6 px off centre on an 11 px eye half-width (0.55), port 4.5 px on an 8 px half-width (0.56) at 48x48. A fine 0.05 s dump shows both take ~0.3 s to reach the extreme.",
+    "Gaze return differs slightly. Original glides out (3.78 -> 4.67 -> 4.70 -> 5.21 -> 5.47) then SNAPS back to centre in one frame; port ramps out and eases symmetrically back (4.19 -> 5.15 -> 4.95 -> 5.15 -> 4.16 -> 4.19).",
+    "Gaze cadence is close but the original darts a bit more often: 24 gaze events in 30 s (off-centre 31% of open frames) vs the port's 20 (off-centre 21%).",
+    "Both sides are time-based, not frame-stepped: blink mean gap in SECONDS is stable across 5 / 10 / 40 fps (orig 2.15 / 2.16 / 2.07; port 2.12 / 2.08 / 1.93). No frame-rate coupling difference.",
+    "A '2x brighter, bigger iris on one eye' effect that appears in the port's 16x16 motion filmstrip during a dart is a sub-pixel quantization artefact, not a real dilation: at 48x48 the iris pixel count and summed blue are constant through the dart on both sides (port 74-76 px, orig 88-92 px)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Fix the eye aspect ratio: the original's eye is WIDER than tall (48x48 bounding box 23w x 18h, w/h 1.28); the port draws it TALLER than wide (17w x 24h, w/h 0.71). Stretch the eye horizontally and squash it vertically until an open eye measures roughly 1.28:1.",
+    "Fix the eye placement/size relative to the panel: on the original the two eyes span the full width and TOUCH at the midline (left eye x=1..23 of 48, right eye mirrored), so the pair reads as one connected mass with a bridge at the centre; the port leaves a ~6-column gap between the eyes and a ~4-column margin at each outer edge. The iris size itself is already right - only the surrounding eye shape and spacing need changing.",
+    "Shift the iris hue toward cyan. Original iris RGB runs (0,88,220) at its brightest, a green/blue ratio of ~0.40 (hue ~216 deg, azure). Port renders (0,8,216), ratio ~0.037 (hue ~238 deg, essentially pure blue). Raise the green content of the iris by roughly an order of magnitude relative to blue.",
+    "Change the blink envelope from a smooth symmetric fade to snap-hold-snap. The original drops from full to closed in ~2 frames at 20 fps, HOLDS the closed eyelid as a visibly lit 2-row line for ~0.5 s (panel mean brightness sits at 5, never 0, and the lid line has its own moving highlight), then snaps open in ~2 frames. The port instead ramps down over ~0.25 s, goes ENTIRELY black (every pixel 0) for ~0.15 s, and ramps back up - so the panel flashes fully dark ~28 times a minute, which the original never does. Total blink duration (~0.6 s) is already correct; only the shape and the closed-state floor need fixing.",
+    "Optional/minor: make the gaze snap back to centre in a single frame after an excursion instead of easing back symmetrically, and raise the gaze-dart rate slightly (original ~24 darts per 30 s vs port ~20).",
+    "Do NOT change the blink timing generator - blink interval distribution is already an excellent match (mean 2.21 s vs 2.19 s, sd 0.26 vs 0.28, range 1.8-2.6 s on both, over 108 blinks and two seeds). Likewise leave the conjugate horizontal-only gaze, the iris-vanishes-first blink onset, the neutral white sclera, the iris size and the time-based (fps-invariant) clock alone."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-open",
+    "dump-blink",
+    "blink-fine",
+    "gaze-track",
+    "gaze-fine",
+    "gaze-cadence",
+    "grid48",
+    "grid48-dump",
+    "grid48-extreme",
+    "grid48-dart",
+    "seed7",
+    "fps10",
+    "fps40"
+  ]
+}

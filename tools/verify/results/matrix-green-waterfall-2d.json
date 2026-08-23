@@ -1,0 +1,61 @@
+{
+  "slug": "matrix-green-waterfall-2d",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Structurally, chromatically and kinetically the same Matrix-rain pattern — identical per-column drop layout, identical fall speed and fps-invariance, identical Speed-dial response — but the port's slow column-brightness envelope cycles every ~59 s where the original's cycles every ~19.7 s, i.e. exactly 3x too slow.",
+  "observations": [
+    "Default rig is a 16x16 grid (256 px). Both sides expose exactly one control: sliderSpeed (kind slider, label 'Speed'). No control-surface mismatch. Neither side binds sensors (wantsSensors false on both).",
+    "Both sides render the same picture: one falling green 'drop' per grid COLUMN, a bright head with a ~10-15 row exponentially-fading tail behind it, wrapping vertically. Untouched at t=3.0 s the lit-pixel count per column matches closely (orig 14,13,15,10,15,0,16,0,15,4,14,12,15,14,14,15 vs port 14,13,15,12,15,0,15,0,15,0,15,10,14,14,14,14).",
+    "Column identity is shared: columns 5 and 7 are fully dark on BOTH sides at every sampled time, and column 0's peak sits at G=55-63 on both throughout a 128 s window. The pattern is deterministic — seed 1 and seed 1234 give byte-identical stats summaries on both sides (meanB 10.7/10.9, motion 12.3/13.4), so there is no RNG divergence to excuse.",
+    "MOTION (from per-column circular cross-correlation of consecutive dumped frames, default rig): drops fall DOWNWARD at +1 row per frame at 20 fps on both sides. Measured over a fixed 0.1 s interval the median per-column shift is 2 rows on both sides at 10, 20 and 40 fps -> ~20 rows/s untouched, and BOTH sides are frame-rate invariant (position-tracked, not motion-stat inferred).",
+    "COLOR: both are pure green with a whitened head. Original: R=B=0 for all G<192, then R and B rise together and equally (G 192-207 -> meanR 3.19 / meanB 3.19; G 240-255 -> R 20.5 / B 20.25). Port: same white-head behaviour at the top (G 240-255 -> R 24.3 / B 20.0) BUT carries a small red-only offset through the whole midtone range where the original is exactly 0 (G 48-63 -> R 1, B 0; G 112-127 -> R 2, B 0; G 176-191 -> R 3, B 0). Port's green is therefore ~1.6% desaturated toward yellow; orig's is fully saturated. Visually near-invisible, numerically consistent (port meanR avg 0.9-1.0 vs orig 0.0 in every run).",
+    "SLOW ENVELOPE — the one real divergence. The per-column peak-brightness vector (16 numbers) was sampled every 1 s over 128 s and autocorrelated. Original: strong peaks at lag 20 s (0.978), 39 s (0.975), 59 s (0.997), 79 s (0.977), 118 s (0.996), with a trough at lag 9-10 s (0.59) — a clean ~19.7 s cycle that repeats three times inside a 59 s master period. Port: NO 20 s structure at all — the autocorrelation decays monotonically from 0.98 at lag 1 s to 0.72 at lag 30 s and only recovers at lag 59 s (0.997) / 118 s (0.997).",
+    "Time-rescaling test pins the factor at exactly 3: corr(orig[t], port[3t]) = 1.00, 1.00, 0.99, 0.96, 0.94, 0.96, 0.94, 0.93, 0.91, 0.84 for t = 0,2,4,...,18 s, versus corr(orig[t], port[t]) = 1.00, 0.99, 0.93, 0.81, 0.71, 0.67, 0.57, 0.52, 0.46, 0.34. Scanning scale factors 1.0-4.0 the mean correlation peaks at x3.0 (0.944) and falls off either side (x2.5 -> 0.904, x3.5 -> 0.856). The port is running the identical modulation at one third the rate.",
+    "The envelope-rate divergence is INDEPENDENT of the Speed dial: repeating the 65 s autocorrelation with sliderSpeed=1 on both sides gives the same result (orig lag 20 s = 0.974, lag 59 s = 0.996; port lag 20 s absent, monotone decay to 0.77 by 25 s). So it is a fixed 3x constant in the slow term, not a speed-coupling bug.",
+    "The divergence is visible in the survey rhythm images (60 s, 5 fps, default rig): the original's rhythm image has clear horizontal texture boundaries at roughly 1/3 and 2/3 height (t~20 s and t~40 s) where the column-brightness arrangement recycles; the port's rhythm image is a uniform set of stripes with no boundary until the window ends.",
+    "RESOLUTION BEHAVIOUR matches. Re-rendered at --grid 8x8 and --grid 48x48 both sides rasterize at native resolution identically (8 drops vs 48 drops, one per column). At 48x48 both draw the same smooth 'arch' envelope of drop heads sweeping across the field, and their 6 s rhythm images are near-identical. No resolution-independence mismatch.",
+    "STEADY STATE is healthy on both. --skip 100 --seconds 30 --fps 4: orig meanBrightness avg 10.7 trend steady, zeroMotionFrames 0, motion avg 13.1 / motionLit 16.4; port meanBrightness avg 10.9 trend steady, zeroMotionFrames 0, motion avg 14.6 / motionLit 18.5. Neither side dies, freezes, decays or saturates. Port runs marginally 'busier' (motionLit ~13% higher) but brightness is matched (meanG 31.7 vs 31.8).",
+    "Both sides show the same first-frame startup artefact: at t=0 the drop heads sit on one flat row across the whole grid (orig row 21, port row 16 at 48x48) before dispersing within ~1 s. Not a divergence."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Sets the fall rate of every drop. Measured median per-column shift over a fixed 0.1 s window on the default 16x16 rig: 0 -> 0 rows/s (completely frozen, motion stat 0), 0.25 -> 10 rows/s, 0.5 -> 30 rows/s, 0.75 -> 40 rows/s, 1 -> 50 rows/s. Whole-run motion stat: 0/3/6/8/9. Untouched default sits at ~20 rows/s, i.e. equivalent to slider ~0.4. Does NOT affect the slow column-brightness envelope (still ~19.7 s at slider=1).",
+      "portEffect": "Same axis, same direction, same magnitude: 0 -> 0 rows/s (frozen, motion 0), 0.25 -> 10 rows/s, 0.5 -> 30 rows/s, 0.75 -> 30 rows/s, 1 -> 50 rows/s. Whole-run motion stat: 0/3/6/8/10. Untouched default also ~20 rows/s. Also leaves the slow envelope rate untouched (still ~59 s at slider=1). The single 0.75 discrepancy (median 3 vs 4 rows per 0.1 s) is inside the 16-row quantization noise — the per-column distributions overlap (orig 2,2,3,3,4,4,4,5 vs port 3,3,3,3,3,4,4).",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "PRIMARY FIX: the port's slow per-column brightness/density modulation runs exactly 3x too slow. On the original the whole field's column-brightness arrangement recycles every ~19.7 s (autocorrelation 0.978 at lag 20 s, trough 0.59 at lag ~10 s); on the port it recycles only every ~59 s (no structure whatsoever at lag 20 s). The port already reproduces the original's 59 s outer period, so it is running one cycle where the original runs three: whatever time term drives this envelope needs its rate multiplied by 3 (equivalently, its period divided by 3, 59 s -> 19.66 s). The relationship is a pure time rescale — corr(orig[t], port[3t]) stays above 0.84 across a full original cycle — so nothing else about the envelope needs changing.",
+    "This is not coupled to the Speed dial: verified at sliderSpeed=1 the original still cycles at ~19.7 s and the port still at ~59 s. Fix the constant, not the dial path.",
+    "SECONDARY NITPICK: the port's mid-brightness green is very slightly desaturated toward yellow. Where the original emits exactly R=0,B=0 for every pixel below G=192, the port emits R=1 at G~55, R=2 at G~120, R=3 at G~185 (B stays 0). Push the trail colour to fully saturated green so R and B are both 0 until the white-head blend kicks in; the head blend itself is already right (orig R=B=~20 at G=250, port R=24/B=20 — close enough, though the port's head adds slightly more red than blue where the original adds them equally).",
+    "Everything else already matches and should not be touched: drop-per-column layout, downward direction, ~20 rows/s default fall speed, frame-rate invariance, tail length and fade shape, per-column dark/dim column identity (columns 5 and 7 dark, column 0 dim), native-resolution rasterization at 8x8 and 48x48, mean brightness (meanG ~31.7 on both), steady state over 130 s, and the full sliderSpeed response curve.",
+    "The port is marginally busier than the original in steady state (motionLit 18.5 vs 16.4, motion 14.6 vs 13.1 over --skip 100 --seconds 30 --fps 4). Worth a glance after the envelope fix — it may simply be a side effect of the port sitting in a different phase of the slow cycle."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dumpA",
+    "fps10",
+    "fps20",
+    "fps40",
+    "spd0",
+    "spd0.25",
+    "spd0.5",
+    "spd0.75",
+    "spd1",
+    "longdump",
+    "cyc",
+    "cyc-spd1",
+    "phase10",
+    "phase30",
+    "phase50",
+    "steady",
+    "grid8",
+    "grid48",
+    "grid48long",
+    "seed1234"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "slug": "spin-cycle",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Pixel-accurate reproduction of the original — identical structure, envelope, palette and direction — running exactly 1.539x too fast (full cycle 4.25 s vs the original's 6.55 s).",
+  "observations": [
+    "Both sides render cleanly on the default rig (strip, 60 px): no compile or runtime errors, no sensor binding (wantsSensors false on both), no controls exposed by either side (probe: '(no settable controls)' for orig and port alike), so the control surfaces match.",
+    "Structure (identical): 5 evenly spaced comet-shaped bursts per strip, travelling toward decreasing pixel index on both sides. Each burst is a smooth accelerating ramp to a full-brightness peak followed by a longer decay tail, with a fully-black gap between bursts. On a 300 px rig at t=0 the orig burst runs 0->244 over 25 px then decays to 0 by px 51; the port runs 3->254 over 23 px then decays to 0 by px 49 (the 2 px offset is sub-pixel sampling phase, not structure).",
+    "Resolution independence matches: dominant spatial frequency is exactly k=5 cycles per strip on BOTH sides at --pixels 24, 60, 120 and 300 (period 4.8 / 12 / 24 / 60 px respectively). Neither side has a fixed-pixel feature size; both scale with the rig.",
+    "Brightness distribution over 40 frames at 300 px is effectively identical: orig dark(=0) 15.8% / mean 63.3 / p10 0 / p50 31 / p90 185 / max 254; port dark 15.9% / mean 63.3 / p10 0 / p50 31 / p90 185 / max 254. meanBrightness avg 31.7 on both in the 6 s baseline and 31.6 on both over the 240 s survey.",
+    "Colour matches: both are 100% saturated throughout the lit region, hue sweeping ~9.3 deg/px at 300 px inside a burst with the same +188 deg discontinuity at the same relative position in the burst. Hue histograms taken over ONE full cycle per side (orig 6.55 s, port 4.25 s) are both flat rainbows agreeing within 0.5 percentage points per 30 deg bin (orig 8.6/8.5/7.8/7.2/9.1/7.7/8.9/7.7/9.3/9.0/8.3/7.9 vs port 8.8/8.2/7.8/6.8/8.9/8.0/9.3/7.6/9.8/8.7/8.3/8.0).",
+    "THE ONE DIVERGENCE — speed. Translation measured by spatial-DFT phase tracking of the k=5 component: orig -0.3053 strip-widths/s (-18.314 px/s at 60 px, -91.58 px/s at 300 px); port -0.4697 strip-widths/s (-28.182 px/s at 60 px, -140.91 px/s at 300 px). Ratio 1.5388 (~= 20/13). Same direction on both.",
+    "Full-frame temporal autocorrelation (240 dumps at 0.05 s, 60 px) puts the repeat period at 131 frames = 6.55 s for the orig (corr 0.992) and 85 frames = 4.25 s for the port (corr 0.942). Ratio 1.541, consistent with the DFT figure. 6.55 s is exactly 10x the 0.655 s it takes one burst to advance one 12 px repeat; the port's 4.26 s is likewise 10x its 0.426 s.",
+    "The difference is PURELY a time rescale, proven directly: dumping at --fps 100 on a 300 px rig and correlating orig(t) against port(0.6498*t) over 20 pairs spanning t=1..8.6 s gives mean RGB correlation 0.982 with a best circular spatial shift of exactly 0 px on every pair (individual pairs up to 0.9975; residual is explained by the 0.01 s frame-grid snap). Same-time correlation is -0.024, i.e. no resemblance at matched clock time.",
+    "Neither side is frame-rate coupled: measured speed is 18.315 / 18.314 / 18.315 px/s (orig) and 28.182 / 28.182 / 28.182 px/s (port) at --fps 10 / 20 / 40. Both are time-based; the speed error is a constant, not an fps artefact.",
+    "Both sides are seed-independent: frames at t=2 s are byte-identical across --seed 1, 7 and 1234 within each side (orig hash 483aee7b8066, port hash 7be62b0df76f at all three seeds). No randomness to account for.",
+    "No mode/regime structure on either side. Surveys at 60 s / 5 fps and 240 s / 2 fps show one uniform diagonal-streak texture throughout, brightnessTrend 'steady' on both, zeroMotionFrames 1 on both (the unavoidable first frame). A late window (--skip 200 --seconds 20) reproduces the baseline exactly (orig motion 25, port motion 34), so neither side decays, freezes or saturates.",
+    "Whole-rig motion stat consistently reflects the speed gap rather than any structural difference: baseline orig 24.1 vs port 33.1; 240 s survey orig 47.3 vs port 42.5 (the survey figures cross over because 2 fps aliases both sides differently, not because the port is slower there).",
+    "Re-rendered on --rig grid --grid 16x16 as a second lens, both sides produce the same horizontal hue-band sweep in the rhythm image; the port simply fits ~1.5x as many bands into the same 6 s window."
+  ],
+  "dials": [],
+  "feedback": [
+    "The ONLY thing to fix is the animation's time base: the port runs 1.5388x too fast. Slow it by a factor of 1/1.5388 = 0.6498 (equivalently, multiply whatever period constant drives it by 1.5388). Target numbers to hit after the fix, all on the default 60 px strip at --fps 20: burst translation -18.31 px/s (-0.3053 strip-widths/s, currently -28.18 px/s), one burst advancing one 12 px repeat in 0.655 s (currently 0.426 s), and full-frame temporal autocorrelation peaking at lag 131 frames = 6.55 s (currently 85 frames = 4.25 s).",
+    "6.5536 s is a Pixel Blaze time() period for a coefficient of 0.1 (0.1 * 65.536); the port's 4.2589 s corresponds to ~0.065. If the port carries a hardcoded rate/period scalar, 0.065 -> 0.1 (ratio 20/13) is the likely single-character fix. Verify from output, not code.",
+    "Do NOT change anything else. After time-rescaling, the two sides match pixel-for-pixel: orig(t) vs port(0.6498*t) already correlates 0.982 with zero spatial shift, brightness distributions are identical to the decimal, hue histograms over a full cycle agree within 0.5 pp, the burst count (5 per strip) is resolution-independent on both, direction matches, both are fps-invariant and seed-independent, and both are steady over 240 s. Structure, envelope shape, duty cycle (~16% dark), palette and peak brightness (254) are all already correct.",
+    "Regression check for the fixer: after the change, re-run `--seconds 12 --fps 20 --dump` at 0.05 s spacing and confirm the port's k=5 spatial-DFT phase slope matches the original's to within 1%, and that the same-time RGB correlation between the sides rises from -0.02 to >0.95 (no rescale needed)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-fine",
+    "dump-track",
+    "fps10",
+    "fps20",
+    "fps40",
+    "longtrack",
+    "longtrack2",
+    "px24",
+    "px120",
+    "px300",
+    "px300-track",
+    "rescale",
+    "seed7",
+    "seed1234",
+    "late",
+    "grid16"
+  ]
+}

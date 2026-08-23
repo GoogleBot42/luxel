@@ -1,0 +1,53 @@
+{
+  "slug": "scrolls",
+  "verdict": "broken",
+  "score": 2,
+  "confidence": "high",
+  "summary": "The port reproduces the original's spawn-and-expand mechanics almost exactly for the first ~3 s (95-98% per-pixel lit agreement), but its scrolls never stop growing and the display never blanks, so by t~5 s the whole strip is a solid dark-blue field that is byte-frozen (except pixel 0) for at least the next 235 s, while the original animates continuously forever.",
+  "observations": [
+    "Rig: strip, 60 px, no controls on either side (probe: 'no settable controls' for orig AND port) - control surfaces agree, so nothing to dial.",
+    "Both sides are pure green+blue (orig meanR is exactly 0 on every frame of every run; port emits a stray R=1..3 only on its brightest green pixels).",
+    "ORIGINAL steady state (60 s @20 fps, and re-confirmed at t=120-150 s): meanBrightness avg 11.7-12.4, motion avg 3.4, zeroMotionFrames 151/600, brightnessTrend steady, 5-12% of frames fully black. It never settles.",
+    "PORT steady state (t=120-150 s @20 fps): meanBrightness pinned 35-37, motion avg 0.0 (max 1), motionLit avg 0.0, zeroMotionFrames 593/600. A --dump at t=10/20/30/45/59 s shows pixels 1..59 byte-identical at (0,31,77) at every one of those times; ONLY pixel 0 ever changes. Same at t=0..240 s in the 240 s survey (port waterfall is a solid blue rectangle).",
+    "Original's mechanics (0.1 s-spaced --dump, cycle-trace at t=30-34 s): a 'scroll' spawns as a tiny bright-green seed at a random index (e.g. 'bb###bb'), expands symmetrically outward at ~1 px per side per 0.1 s, then STOPS at a fixed finite length (~11 px on a 60 px strip, ~18% of the rig) and holds with bright-green pixels pinned at both ends and a dim body. Several coexist. Every few seconds the entire strip BLANKS to all-black for 2-5 frames and a fresh generation seeds.",
+    "Port's mechanics: identical spawn positions, identical seed shape, identical outward expansion rate for the first ~2 s - but there is no length clamp. Segments keep widening, merge with their neighbours, and cover the strip. Lit-pixel counts track the original exactly until t~3.25 s (orig 38 lit vs port 38) and then split (t=3.75 s: orig 50, port 38 because orig re-seeded; t=6 s: orig ~23 lit, port 57; t>=10 s: orig ~24, port 60).",
+    "Early-window per-pixel lit agreement (early-dense dump, 0.5-4.0 s): 98%, 98%, 98%, 95%, 97%, 95%, 90%, 88%, 97%, 97%, 98%, 97%, then 82%, 77%, 77% as the original resets and the port does not. So the port's geometry and growth timing are essentially correct - only the terminate/erase half of the lifecycle is missing.",
+    "Port never blanks: fraction of fully-black frames over 60 s is 0.003 (port) vs 0.123 (orig) at 20 fps; 0.004 vs 0.053 at 40 fps; 0.007 vs 0.067 at 10 fps.",
+    "Original's global reset/flash events land on a strict ~0.45 s grid: minimum inter-event gap is 0.50 s @10 fps (5 frames), 0.45 s @20 fps (9 frames), 0.425 s @40 fps (17 frames). Constant in SECONDS across a 4x fps range, so the original is time-based, not frame-coupled. The port produces ZERO such events at any fps, so no coupling comparison is possible on the port.",
+    "Body colour differs from t=0, independent of the freeze: original's scroll body is exactly (0,18,40) on every frame of every run; the port's is exactly (0,31,77) - about 1.9x brighter and slightly bluer (B/G 2.48 vs 2.22). Bright edge pixels are comparable on both sides (orig up to (0,169,55)/(0,151,61); port (1,105,43)/(3,190,77)).",
+    "Original also emits a single-frame 'fat' flash every ~0.45 s in which a much wider filled version of the field appears for exactly one frame (e.g. t=31.50, 32.40, 33.30 s in cycle-trace; t=4.50, 4.95 s in reset-fine). The port has no equivalent single-frame flash anywhere.",
+    "Resolution independence: the original's waterfall at --pixels 300 is structurally identical to the 60 px one (same blob sizes as a fraction of the strip) - it draws in normalised coordinates. The port is resolution-independent too, but only in the sense that it saturates identically at 60 px, 300 px and on a 16x16 grid.",
+    "Seed sweep (1 / 7 / 1234, 60 s @5 fps): original mean 17-18, motion 5 at every seed; port mean 34, motion 0 at every seed. The freeze is not a seed fluke.",
+    "Rig sweep (--rig grid --grid 16x16, 30 s @10 fps): orig-rhythm.png shows continuous banding and blackouts for the whole window; port-rhythm.png fills in ~4 s and is a flat blue block thereafter. Same failure on a 2D rig.",
+    "Survey adequacy: the 60 s survey already showed the divergence; the 240 s / 2 fps survey confirmed the original never repeats or settles (brightness oscillates 12-23 with no autocorrelation peak beyond lag 3) and the port never revives."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port's fatal bug is a missing scroll TERMINATION. In the original each scroll expands outward from its seed and then stops at a fixed maximum length of about 18% of the strip (~11 px on 60 px); the port's scrolls keep expanding without bound until they merge and cover the entire rig. Clamp each scroll's half-width so a scroll reaches its final length in about 0.5 s and then holds.",
+    "The port is also missing the global RESET. The original wipes the whole strip to all-black for 2-5 frames every few seconds and re-seeds a fresh generation of scrolls; over 60 s at 20 fps, 12% of the original's frames are fully black while only 0.3% of the port's are (and those are its warm-up). Without this the port has no way to shed accumulated scrolls even with a length clamp.",
+    "Target steady-state statistics for the port on the default 60 px strip: meanBrightness ~12 (currently 35), motion ~3.4 (currently 0.0), zeroMotionFrames ~25% of frames (currently 99%), lit-pixel count oscillating roughly 5-55 (currently pinned at 60). Verify at t=120-150 s, not just in the first 6 s.",
+    "The original's event cadence is quantised to a ~0.45 s tick that is constant in SECONDS from 10 fps to 40 fps - make the port's reset/flash timer time-based (elapsed seconds), not a per-frame counter, or it will drift on real hardware.",
+    "Scroll body colour is too bright by roughly 1.9x: the original's body pixels are exactly (0,18,40), the port's are exactly (0,31,77). The bright green end-caps are already in the right range, so only the dim body value needs scaling down. This is visible even during the first 3 s where everything else matches.",
+    "The original never emits any red at all (R=0 on every pixel of every frame); the port puts R=1..3 on its brightest green pixels. Trivial, but it is a real difference.",
+    "The original renders a one-frame 'fat'/filled flash of the whole field every ~0.45 s (single isolated frames of near-full strip amid otherwise sparse content). The port has no such flash. Low priority relative to the freeze, but it is a visible part of the original's texture.",
+    "What is already RIGHT and should not be disturbed: seed placement, seed shape (a short bright-green nucleus), symmetric two-sided expansion, expansion rate (~1 px per side per 0.1 s on 60 px), the green-edge/dim-body colour split, and resolution independence. Per-pixel lit agreement with the original is 95-98% for the first 3.25 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "early-dense",
+    "mid-window",
+    "reset-fine",
+    "cycle-trace",
+    "dump-long",
+    "late-skip120",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "px300",
+    "grid16"
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "slug": "3-color-rotation",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same skeleton — a 3-colour, 5-px segment pattern that rotates one segment at a time in the same direction — but the port replaces the original's black third colour with solid amber and steps ~5x too fast at the default frame rate.",
+  "observations": [
+    "Structure is an exact match on the default rig (strip, 60 px): both sides draw 5-pixel segments in a 3-colour repeating cycle (spatial period 15 px), with the same phase offset — a 3-px partial segment at index 0, then full 5-px segments (--dump at t=0 on both sides, run 'dump-base').",
+    "Colour: cyan is identical on both sides (0,255,255). The pink differs slightly in hue — original (255,0,153) vs port (255,0,198). The THIRD colour is completely different: original renders it black (0,0,0), the port renders amber (255,183,0). Verified by exact --dump values at four times across the window, and constant over the whole 60 s survey on both sides.",
+    "Consequence of the colour swap: the original reads as two bright stripes separated by dark gaps (meanBrightness 102, meanR/G/B 85/85/136); the port is a fully lit stripe field with no dark pixels anywhere (meanBrightness 156, meanR/G/B 170/146/151). This is the single most visible difference in the waterfalls.",
+    "Motion type matches: both are stepped, not continuous — frames are pixel-identical between steps (zeroMotionFrames 118/120 orig, 110/120 port at baseline), then jump by exactly one segment (5 px).",
+    "Rotation direction matches: on both sides the colour at a fixed index is replaced by the colour that was 5 px to its right, i.e. the field shifts left by one segment per step. Confirmed with dumps spaced 0.7 s apart over 10 s ('dump-dense'), well under the step period on both sides, so this is not an aliasing artefact.",
+    "Cadence differs by ~5x at the default rate: the original steps every ~3.0 s, the port every ~0.6 s (baseline 6 s @20 fps: 2 orig transitions vs 10 port transitions).",
+    "FRAME-RATE COUPLING MISMATCH. Rendering each side at 10, 20 and 40 fps ('fps10', 'baseline', 'fps40') shows the original's step interval is fixed at ~60 FRAMES regardless of fps (survey @5 fps: 5 transitions in 300 frames; baseline @20 fps: 2 in 120 frames), so its wall-clock speed scales with frame rate. The port's step interval is fixed at ~0.6 s of simulated time regardless of fps (3 frames/step at 5 fps, 12 frames/step at 20 fps). Original is frame-stepped, port is time-based.",
+    "CONTROL-SURFACE MISMATCH: the original exposes NO settable controls (meta.json controls: []); the port exposes two sliders, sliderSegmentSize (label 'SegmentSize') and sliderStepTime (label 'StepTime'), both confirmed live and value-dependent by the probe (maxDelta 113.9 and 119.0) and by manual sweeps. The port therefore adds two dials the original does not have.",
+    "The port's untouched defaults do land on the original's fixed geometry: 5-px segments, matching the original exactly.",
+    "Steady state is fine on both sides: brightnessTrend 'steady', mean RGB constant to the unit over a 60 s survey and over a --skip 30 --seconds 30 late window; no decay, freeze or saturation on either side.",
+    "Neither side is randomness-driven — a --seed 7 run reproduces identical stats to seed 1 on both sides."
+  ],
+  "dials": [
+    {
+      "name": "sliderSegmentSize",
+      "origEffect": "absent — the original exposes no controls; its segment width is fixed at 5 px",
+      "portEffect": "live and continuous: 0 gives 1-px segments (C/m/O alternating every pixel), 0.5 gives ~6-12 px segments, 1 gives ~12-24 px segments; untouched default is 5 px, matching the original",
+      "matches": false
+    },
+    {
+      "name": "sliderStepTime",
+      "origEffect": "absent — the original exposes no controls; its step interval is fixed at ~60 frames",
+      "portEffect": "live: controls the step interval, higher = slower. 0 = near-every-frame stepping (zeroMotionFrames 80/120), 0.5 = 114/120, 1 = 117/120. At 1 the port's cadence (117/120) is essentially the original's default (118/120)",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The third colour is wrong. The original's 3-colour cycle is cyan (0,255,255) -> pink (255,0,153) -> BLACK (0,0,0); the port's is cyan (0,255,255) -> pink (255,0,198) -> amber (255,183,0). Replace the amber with off/black. This is the biggest fidelity gap: the original's look depends on one third of the strip being dark, which is why its mean brightness is 102 against the port's 156.",
+    "Nudge the pink: original (255,0,153), port (255,0,198) — the port's is noticeably more violet. Same value, slightly different hue.",
+    "The step rate is ~5x too fast at the default 20 fps: original steps every ~3.0 s, port every ~0.6 s. Note that the port's own StepTime slider at its maximum (1) already reproduces the original's default cadence almost exactly, so the fix is to move the port's DEFAULT step interval up to roughly what StepTime=1 currently gives.",
+    "Frame-rate coupling: the original advances one step every ~60 rendered frames (its wall-clock speed depends on the frame rate), while the port advances on a ~0.6 s wall-clock timer. Verified by rendering both at 10/20/40 fps. If output-level fidelity to the original is the goal, the port should count frames rather than integrate elapsed time — or, if the time-based behaviour is a deliberate improvement, the default should still be tuned to match the original at typical hardware frame rates.",
+    "The port adds two controls the original does not have (SegmentSize, StepTime). Their defaults are well chosen for segment size (5 px, exact match) but not for step time (see above). Extra dials are a surface mismatch worth flagging even though they are harmless when untouched.",
+    "Everything else already matches and should not be changed: 5-px segment width, 15-px spatial period, the 3-px partial segment at index 0, the one-segment-left shift direction, the discrete (non-fading, non-sliding) step, and the exact cyan."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "dump-dense",
+    "fps10",
+    "fps40",
+    "ctl-seg-0",
+    "ctl-seg-0.5",
+    "ctl-seg-1",
+    "ctl-step-0",
+    "ctl-step-0.5",
+    "ctl-step-1",
+    "late",
+    "seed7"
+  ]
+}

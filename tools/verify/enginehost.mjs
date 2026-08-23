@@ -10,6 +10,7 @@
 //        const lx = await load();
 //        const eng = lx.compile(source, 60, 1);   // → Engine | {compileError}
 //        eng.setWallClock(1756000000);
+//        if (eng.wantsSensors()) eng.setSensors(sensorSlots({ light: 0.5 }));
 //        const rgb = eng.frame(50);               // Uint8Array(pixelCount*3)
 //        eng.free();
 
@@ -180,11 +181,79 @@ export class Engine {
     this.e.lx_set_wall_clock(this.h, unixSeconds);
   }
 
+  /** True if the pattern EXPORTS any sensor-board global (frequencyData,
+   *  energyAverage, maxFrequencyMagnitude, maxFrequency, light, accelerometer,
+   *  analogInputs) — i.e. whether feeding it sensor frames can change what it
+   *  renders at all. */
+  wantsSensors() {
+    return this.e.lx_wants_sensors(this.h) === 1;
+  }
+
+  /** Inject one sensor frame. `slots` is an array of SENSOR_SLOT_COUNT numbers
+   *  in the ABI's slot order (see SENSOR_SLOTS); this scales them into raw
+   *  16.16 and hands them to `lx_set_sensors`. Bindings the pattern does not
+   *  export are ignored engine-side. Use `sensorSlots()` to build the array
+   *  from named fields rather than counting indices here. */
+  setSensors(slots) {
+    const len = slots.length;
+    const bytes = len * 4;
+    const ptr = this.e.lx_alloc(bytes);
+    try {
+      // lx_alloc buffers are align-1; DataView reads/writes unaligned fine.
+      const view = new DataView(this.e.memory.buffer);
+      for (let i = 0; i < len; i++) {
+        view.setInt32(ptr + i * 4, Math.round((slots[i] ?? 0) * RAW), true);
+      }
+      this.e.lx_set_sensors(this.h, ptr, len);
+    } finally {
+      this.e.lx_dealloc(ptr, bytes);
+    }
+  }
+
   free() {
     if (this.freed) return;
     this.e.lx_free(this.h);
     this.freed = true;
   }
+}
+
+// ---- sensor frames ---------------------------------------------------------
+
+/** The `lx_set_sensors` payload layout, verbatim from
+ *  crates/luxel-wasm/src/lib.rs: 44 raw-16.16 i32s, in this order.
+ *  [0..32) frequencyData, [32] energyAverage, [33] maxFrequencyMagnitude,
+ *  [34] maxFrequency (Hz, NOT normalized), [35] light, [36..39) accelerometer,
+ *  [39..44) analogInputs. A shorter buffer leaves the tail fields zero. */
+export const SENSOR_SLOTS = Object.freeze({
+  frequencyData: 0,
+  frequencyDataLen: 32,
+  energyAverage: 32,
+  maxFrequencyMagnitude: 33,
+  maxFrequency: 34,
+  light: 35,
+  accelerometer: 36,
+  accelerometerLen: 3,
+  analogInputs: 39,
+  analogInputsLen: 5,
+});
+export const SENSOR_SLOT_COUNT = 44;
+
+/** Named sensor fields → the flat slot array `Engine.setSensors` wants.
+ *  Missing fields are zero, which is exactly the engine's idle state. */
+export function sensorSlots(frame = {}) {
+  const slots = new Array(SENSOR_SLOT_COUNT).fill(0);
+  const put = (at, values, max) => {
+    if (!values) return;
+    for (let i = 0; i < Math.min(values.length, max); i++) slots[at + i] = values[i];
+  };
+  put(SENSOR_SLOTS.frequencyData, frame.frequencyData, SENSOR_SLOTS.frequencyDataLen);
+  slots[SENSOR_SLOTS.energyAverage] = frame.energyAverage ?? 0;
+  slots[SENSOR_SLOTS.maxFrequencyMagnitude] = frame.maxFrequencyMagnitude ?? 0;
+  slots[SENSOR_SLOTS.maxFrequency] = frame.maxFrequency ?? 0;
+  slots[SENSOR_SLOTS.light] = frame.light ?? 0;
+  put(SENSOR_SLOTS.accelerometer, frame.accelerometer, SENSOR_SLOTS.accelerometerLen);
+  put(SENSOR_SLOTS.analogInputs, frame.analogInputs, SENSOR_SLOTS.analogInputsLen);
+  return slots;
 }
 
 /** n×n×n integer lattice — the default geometry for render3D patterns

@@ -1,0 +1,38 @@
+{
+  "slug": "christmas-rg-fade",
+  "verdict": "match",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Both sides are the same pattern — independent per-pixel red/green sparks that ignite instantly at a random brightness and fade linearly to black — with identical mean brightness, lit fraction and colour palette; the port only runs the twinkle ~28% denser and fades each spark ~20% faster.",
+  "observations": [
+    "Structure (both sides, 60px strip): each pixel independently jumps from black to a random peak in ONE frame (no attack ramp), then decays linearly to 0 at a constant per-frame step; waterfall reads as vertical streaks of pure red or pure green on black. Confirmed by --dump of 200 consecutive frames (label dump-long): e.g. orig px5 120,117,113,...,61 (constant -3/frame), port px5 98,94,90,...,35 (constant -3.15/frame).",
+    "Colour: meanB is exactly 0 on both sides in every run (baseline, survey, survey-240) — no blue anywhere. Peak-brightness distribution matches: orig p50 80 / p90 207 / max 258 vs port p50 75 / p90 203 / max 253 (sum of channels, dump-long). Red/green split is ~50/50 on both across seeds 1, 7 and 1234.",
+    "Spark density: original ignites 0.34 sparks per pixel per second, port 0.42 — port ~25-30% denser. Reproduced at every seed (orig 0.337/0.303/0.332 vs port 0.423/0.394/0.427 for seeds 1/7/1234) and every frame rate (10/20/40 fps).",
+    "Fade duration: the original loses ~0.63-0.75 of a spark's peak per second (median full peak-to-black ~1.4-1.6 s), the port ~0.80-0.87 per second (~1.15-1.25 s) — port fades ~20% faster. Same offset at seeds 1/7/1234 and at 10, 20 and 40 fps. Fade duration is randomised on both sides with a similar spread (orig p10-p90 ~0.67-2.3 s, port ~0.56-1.9 s).",
+    "The two offsets cancel in the aggregate: meanBrightness avg 14.2 orig / 13.8 port at 6 s 20 fps, 15.4 / 15.6 over 240 s, and the lit-pixel fraction is 0.879 vs 0.880. What differs is texture busyness — port motion avg 1.4 vs orig 1.2 at 20 fps, 12.4 vs 10.1 at 2 fps over 240 s (+17-23%) — visible in the waterfalls as slightly shorter, slightly more numerous streaks on the port.",
+    "Both sides are time-based, not frame-coupled: spawn rate per second and fade fraction per second are flat across --fps 10 / 20 / 40 (orig 0.342/0.338/0.312 spawns/px/s, port 0.433/0.425/0.405); the per-FRAME fade step halves as fps doubles on both.",
+    "Spatially uniform on both: per-pixel spawn counts over 10 s span 2-5 (orig) and 3-7 (port) across all 60 pixels with no clustering, and spawns-per-frame is Poisson-shaped on both.",
+    "No modes or regimes: 60 s @ 5 fps and 240 s @ 2 fps surveys are homogeneous top to bottom on both sides, brightnessTrend steady, zeroMotionFrames 1. No warm-up transient, no drift, no late-window decay — steady state matches the opening seconds on both.",
+    "Minor colour-purity difference: the original occasionally puts a trace of the opposite channel into a spark (32% of ignitions have a non-zero secondary channel, but capped at 2.0% of the primary — e.g. R=2 alongside G=136), while the port's sparks are always exactly pure red or pure green. At 2% this is below visible threshold and does not register in meanR/meanG.",
+    "Neither side exposes any control: --probe-controls reports '(no settable controls)' for orig and port alike, so the control surfaces match."
+  ],
+  "dials": [],
+  "feedback": [
+    "Reduce the spark ignition rate by ~25%: original produces 0.33-0.34 ignitions per pixel per second (measured at seeds 1/7/1234 and at 10/20/40 fps), the port produces 0.42-0.43. This is the main reason the port's waterfall looks busier.",
+    "Slow the fade by ~20%: a spark should take ~1.4-1.6 s to go from its peak to black on the original (losing ~0.69 of peak per second), the port takes ~1.15-1.25 s (~0.85 of peak per second). Keep the fade linear (constant subtraction per frame, scaled by elapsed time) and keep the per-spark randomised duration — both of those already match.",
+    "Everything else is already right and should not be touched: instantaneous one-frame ignition, linear decay to exactly 0, pure red-or-green with zero blue, the peak-brightness distribution (median ~75-80, 90th pct ~205 summed over channels), the ~50/50 red/green split, uniform spatial distribution, and time-based (fps-invariant) timing.",
+    "Optional nicety only if it is cheap: the original tints a spark's off-channel by up to 2% of the primary on about a third of ignitions (the port's are perfectly pure). This is invisible at that magnitude — do not chase it if it costs any accuracy elsewhere."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "dump-consec",
+    "dump-long",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

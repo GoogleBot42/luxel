@@ -1,0 +1,109 @@
+{
+  "slug": "oasis",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides are wave-on-a-strip patterns with an identical 5-slider surface, but the port is ~10-35x too slow, its waves are 5-10x too long spatially, it lacks the original's dense high-frequency 'whitecap' sparkle, and it defaults to green where the original defaults to ocean blue.",
+  "observations": [
+    "Control surfaces match exactly on both sides: sliderHue, sliderSpeed, sliderWhitecaps, sliderDepth, sliderWavelength, all kind=slider, same labels. No missing or invented dials.",
+    "Neither side compiles/runs with errors; neither binds sensors (wantsSensors:false on both). Both are seed-independent: seeds 1, 7 and 1234 give byte-identical stats on both sides.",
+    "Both sides are steady over long windows. survey-300 (300 s @ 2 fps) and late (--skip 240) show no mode rotation, no decay, no saturation on either side. brightnessTrend 'steady' both sides at every window tested. There is exactly one regime.",
+    "UNTOUCHED DEFAULT COLOUR: orig mean RGB (R 2.5, G 29, B 69) = deep ocean blue/teal. Port mean RGB (R 16.9, G 68.6, B 16.8) = mid green. Same mean brightness (34 vs 34) but a completely different hue family at defaults.",
+    "MOTION, headline finding. baseline (6 s @ 20 fps): orig motion avg 23.2, zeroMotionFrames 1/120. Port motion avg 0.0 (max 1), motionLit avg 0.4, zeroMotionFrames 117/120 — the port is animating, but so slowly it barely clears 8-bit quantisation.",
+    "Whole-frame autocorrelation vs lag at defaults (label decorr-def): orig falls to corr 0.5 by ~0.06-0.08 s; port needs ~2.5 s. With sliderSpeed=1 on both (decorr-fast) the orig is unchanged (it ignores the dial) and the port still needs ~1.3 s. So the port is ~35x too slow at default and still ~18x too slow at maximum speed.",
+    "Space-time DFT over 200 frames at 0.2 s spacing, default dials (label phase-def): orig's dominant spatial components k=5, 9, 11 all sit at v = -8.1, -8.3, -9.95 px/s — a coherent, non-dispersive travelling wave moving toward DECREASING pixel index at ~10 px/s. Port's dominant components k=1..3 sit at 0.025 Hz (the DFT resolution floor), v = 0.5-1.5 px/s, and its k=6, 8, 9, 10 components run the opposite way — a near-stationary counter-propagating pair rather than one travelling train.",
+    "Confirmed independently at sliderWavelength=0.8, whitecaps=0 (label phase-orig): orig dominant k=6, spatial-DFT phase drifts exactly -0.9995 cycles/s => 9.995 px/s. Port dominant k=1, phase drift -0.0000 cycles/s => 0.001 px/s. The port's wave does not translate at all at that setting.",
+    "SPATIAL SCALE. Spatial power spectra at whitecaps=0 (label wlk-*): orig peak k=15 (4.0 px) at wavelength=0, k=24 (2.5 px) at 0.5, k=1 (60 px) at 1.0, spectral centroid 17.8 -> 14.5 -> 4.8. Port peak k=2 (30 px) at 0, k=1 (60 px) at 0.5, k=1 at 1.0, centroid 9.8 -> 3.8 -> 6.6. At every setting the port's waves are far longer, and the port's centroid is non-monotonic (3.8 at 0.5 rises to 6.6 at 1.0) where the orig's is monotonically decreasing.",
+    "At default dials the orig's spectrum is a rich superposition — strong peaks at k=5, 9, 11, 18, 21, 22 (wavelengths 2.7-12 px) — which is what reads as the fine 'sparkle/chop' texture in the waterfall. The port's default spectrum is concentrated in k=1-5 (12-60 px) with a smooth roll-off, i.e. broad smooth bands and no chop. Per-pixel dumps confirm: orig blue channel over px 0-13 at t=0 is 47,14,42,51,158,177,57,54,8,4,134,106,22,63 (adjacent pixels wildly different); port green channel is 41,61,59,36,13,3,3,8,16,28,42,57,71,89 (smooth, ~11-12 px period).",
+    "fps-invariance: both sides are TIME-based, not frame-stepped. Autocorrelation curves at 10/20/40 fps (labels fps-10/20/40) are essentially identical per side (orig corr at 0.2 s: 0.56 / 0.47 / 0.42; port at 12.8 s: 0.93 / 0.93 / 0.93). No frame-rate-coupling bug on either side.",
+    "sliderSpeed is INERT ON THE ORIGINAL. orig.png is byte-identical (29790 bytes, identical motion series) at sliderSpeed = 0, 0.5 and 1 over a 20 s @ 10 fps window, including with sliderHue pinned to 0.5 as a second setter (label spd2-*). The original's motion is fixed at ~10 px/s regardless. The port's sliderSpeed is genuinely live (motionLit 0.4 / 0.8 / 1.4 at 0 / 0.5 / 1), which is arguably better behaviour but is a divergence from the original.",
+    "Even a best-effort dialed match (label bestmatch: port sliderHue=0.8, sliderSpeed=1, sliderWavelength=0 against the orig's untouched default) does not converge: the port becomes blue but still renders wide, smooth, nearly-static vertical bands against the original's fine, fast, diagonally-scrolling chop. The port has no dial setting that reaches the original's spatial frequency or speed.",
+    "Hue slider mapping is offset. Mean RGB at t=0 for sliderHue = 0 / 0.25 / 0.5 / 0.75: orig (71,3,34) magenta / (64,67,3) yellow / (3,71,39) spring green / (9,7,71) blue; port (58,9,62) magenta-purple / (68,35,9) orange / (18,68,15) green / (9,42,68) cyan. Both sweep the full wheel in the same direction over the same span, but the port trails the original by roughly 0.09-0.15 in hue units, growing across the range."
+  ],
+  "dials": [
+    {
+      "name": "sliderHue",
+      "origEffect": "Rotates the whole palette through the full colour wheel: 0=magenta, 0.25=yellow, 0.5=spring green, 0.75=blue, 1=magenta (wraps). Probe maxDelta 44.4.",
+      "portEffect": "Also rotates through the full wheel in the same direction and with the same period (0 and 1 identical), but lags the original by ~0.09-0.15 hue units at every point: 0=magenta-purple, 0.25=orange, 0.5=green, 0.75=cyan. Probe maxDelta 52.0.",
+      "matches": false
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "NO EFFECT. Renders byte-identical at 0, 0.5 and 1 over 20 s @ 10 fps, both alone and with sliderHue pinned. Probe maxDelta 0.00. The original's wave speed is fixed at ~10 px/s.",
+      "portEffect": "Live and roughly linear: motionLit 0.4 / 0.8 / 1.4 at 0 / 0.5 / 1; autocorrelation half-time drops from ~2.5 s to ~1.3 s. Probe maxDelta 9.4.",
+      "matches": false
+    },
+    {
+      "name": "sliderWhitecaps",
+      "origEffect": "Adds desaturated white foam highlights on top of the base hue: mean R climbs 0 -> 1.8 -> 26.2 at 0 / 0.5 / 1 while mean B holds at 69; mean brightness 32 -> 32.8 -> 45.4. Effect is concentrated in the top half of the range. Probe maxDelta 12.1.",
+      "portEffect": "Same character and same direction: mean R climbs 3.3 -> 4.5 -> 18.6 while mean G holds at 54.7; mean brightness 21 -> 21.5 -> 31.1. Slightly weaker overall. Probe maxDelta 7.8. But because the port has no fine chop, the foam appears as broad pale washes rather than per-pixel sparkle.",
+      "matches": true
+    },
+    {
+      "name": "sliderDepth",
+      "origEffect": "Deepens the water: the secondary colour channel drains away (mean G 42.7 -> 21.3 -> 2.5 at 0 / 0.5 / 1) while the base channel holds (B 67.9 -> 69), taking the palette from teal to pure deep blue, and mean brightness falls monotonically 37.7 -> 30.9 -> 25.6. Probe maxDelta 9.5.",
+      "portEffect": "Starts the same way — secondary channel drains (mean B 51.2 -> 10 -> 6.7, cyan to pure green) — but then OVERSHOOTS past the base hue: at depth=1 mean R jumps to 45.2, giving yellow-green, where the original's R stays at 2.5-5.4. Brightness is non-monotonic (37.2 -> 24.5 -> 34.1) against the original's monotonic decay. Probe maxDelta 18.3.",
+      "matches": false
+    },
+    {
+      "name": "sliderWavelength",
+      "origEffect": "Monotonically lengthens the waves: spatial centroid k 17.8 -> 14.5 -> 4.8 at 0 / 0.5 / 1; peak k 15 (4.0 px) -> 24 (2.5 px) -> 1 (60 px). At 1 the strip shows one long clean diagonal swell. Probe maxDelta 32.2.",
+      "portEffect": "Same broad direction but the port's waves are already far longer at every setting (peak k 2 / 1 / 1 = 30 / 60 / 60 px) and the centroid is non-monotonic (9.8 -> 3.8 -> 6.6). The port at its SHORTEST setting is still longer-waved than the original at its default. Probe maxDelta 33.7.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "SPEED is the biggest gap. The original's wave translates at a fixed ~10 px/s on a 60 px strip (measured two ways: spatial-DFT phase drift of -0.9995 cycles/s for k=6, and space-time DFT giving -8 to -10 px/s for all dominant components). The port creeps at 0.5-1.5 px/s at default and never exceeds ~2 px/s even at sliderSpeed=1. Multiply the port's time advance by roughly 10-20x, and make sure sliderSpeed=default lands on ~10 px/s rather than needing the dial maxed.",
+    "SPATIAL FREQUENCY is the second-biggest gap. At default the original's power sits at k=5-22 on a 60 px strip (wavelengths 2.7-12 px) — many superimposed short waves, which is what produces its choppy 'sea surface' texture. The port's default power sits at k=1-5 (12-60 px). Shorten the port's base wavelength by roughly 5-10x and, crucially, superimpose SEVERAL wave components of different spatial frequency rather than one or two; a single sine plus its mirror is what produces the port's smooth diamond lattice.",
+    "DIRECTION: the original is a single coherent travelling wave train — every dominant spatial component moves the same way (toward decreasing pixel index) at the same speed, so the waterfall shows one consistent diagonal slope. The port's components split between + and - velocity, producing a standing/crossing diamond lattice that the original never shows. Drop or heavily de-weight the counter-propagating train.",
+    "DEFAULT HUE: with no controls set, the original renders deep ocean blue (mean RGB 2.5 / 29 / 69). The port renders mid green (16.9 / 68.6 / 16.8). Move the port's built-in default hue about +0.25 in hue units so an untouched load looks like water, not grass.",
+    "HUE SLIDER OFFSET: at matched slider values the port's hue trails the original's by ~0.09-0.15 (orig 0.25 = yellow, port 0.25 = orange; orig 0.75 = blue, port 0.75 = cyan). The span and wrap are right, so this is a base-offset/gain trim, not a rewrite.",
+    "DEPTH SLIDER: the original's depth is a one-way desaturation toward the base hue with monotonically falling brightness (37.7 -> 25.6). The port keeps rotating past the base hue at the top of the range (R jumps to 45 at depth=1, yielding yellow-green) and its brightness dips then rises (37.2 -> 24.5 -> 34.1). Clamp the port's depth so it converges on the base hue instead of passing through it, and make brightness fall monotonically.",
+    "SPEED SLIDER SEMANTICS: the original ignores sliderSpeed entirely (byte-identical renders at 0, 0.5 and 1). The port honours it. This is probably an improvement rather than a bug, but a fixer should know the original's reference motion is fixed, so 'match the original' means picking one port speed value (~10 px/s) as the default rather than tuning the dial response.",
+    "WHITECAPS is the one dial that already matches in direction and character (adds white foam, mean R climbs, effect weighted to the top of the range). Leave it alone — but note it will only read correctly once the port has fine chop for the foam to sit on; right now it just washes the broad bands pale."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-300",
+    "probe",
+    "dial-mid",
+    "long-0",
+    "long-1234",
+    "late",
+    "dump-def",
+    "wl-0",
+    "wl-0.25",
+    "wl-0.5",
+    "wl-0.75",
+    "wl-1",
+    "hue-0",
+    "hue-0.25",
+    "hue-0.5",
+    "hue-0.75",
+    "hue-1",
+    "spd2-0",
+    "spd2-0.5",
+    "spd2-1",
+    "spdmeas",
+    "decorr-def",
+    "decorr-fast",
+    "fps-10",
+    "fps-20",
+    "fps-40",
+    "phase-orig",
+    "phase-def",
+    "wc-0",
+    "wc-0.5",
+    "wc-1",
+    "dp-0",
+    "dp-0.5",
+    "dp-1",
+    "wlk-0",
+    "wlk-0.5",
+    "wlk-1",
+    "seed7",
+    "seed1234",
+    "bestmatch"
+  ]
+}

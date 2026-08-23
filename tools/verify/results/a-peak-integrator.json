@@ -1,0 +1,64 @@
+{
+  "slug": "a-peak-integrator",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "With the synthetic beat feed the original is a crisp 2 Hz segmented VU meter (whole strip flashes red-to-green every 0.5 s, decays in ~0.3 s), while the port renders a near-frozen full-rainbow bar whose zones hold for seconds at the default dial and only pulses at all when IntegrationTime is turned right down.",
+  "observations": [
+    "Both sides compile and run with no errors, both report wantsSensors=true and both were fed the identical beat120 signal (meta.json sensors=synth on both, every run).",
+    "Control surface matches exactly: one slider named sliderIntegrationTime (label 'IntegrationTime') on each side, same kind.",
+    "ORIGINAL, default rig (60 px strip), 20 fps, IntegrationTime=1: perfectly periodic 10-frame (0.5 s) cycle. meanBrightness per beat = 40,40,12,4,4,4,2,0,0,0 — one-frame attack, two frames at peak, decay to black over ~0.3 s, then silence until the next beat. Identical cycle at t=0-6 s, t=20-30 s and across a full 60 s window; no regimes, no drift.",
+    "ORIGINAL spatial structure (--dump, IT=1, t=8.25 s): at the peak all 60 px are lit with hue ramping monotonically with pixel index from red (h~0) at px0 to green-cyan (h~0.42) at px59. As the level falls the strip breaks into a REPEATING segmented meter with an 18-px period: at t=8.35 s lit px are 0-3, 18-21, 36-39, 54-59 (equal fill in every segment). At IT=0.25 the peak fill is 10/18 px per segment (lit 0-9, 18-27, 36-45, 54-59); at IT=0.1 it is ~3/18. A short bright tail at the far right (px54-59) outlives the rest by ~0.1-0.2 s — the peak-hold marker.",
+    "PORT, same rig/fps, IntegrationTime=1: meanBrightness sits flat at 44 for 2+ seconds at a time, then steps 39 -> 34 -> 33 -> 27 over the following seconds. No 10-frame cadence anywhere. Average motion 1.0-1.9 against the original's 7.2-8.0 in every matched run.",
+    "PORT spatial structure (--dump, IT=1): the strip is divided into 15-px zones with INDEPENDENT, long-held fills — at t=8.20 s lit px are 0-7, 15-37, 45-59, and the frame is byte-for-byte the same at t=8.80 s, i.e. unchanged across two whole beats. The original's uniform equal-fill-per-segment look never appears.",
+    "COLOR: the original's hue ramp spans red -> green-cyan (h 0 -> ~0.42 of the wheel) across the strip; the port's spans red -> magenta (h 0 -> ~0.87), roughly twice the sweep. Confirmed by --dump hue mapping at IT=0.5 and IT=1. The port's meanB averages 26.5 against the original's 2.8 in the untouched baseline.",
+    "PORT at LOW IntegrationTime does react to the beat, but with the wrong envelope: at IT=0.25 the 10-frame cycle reads 11,0,9,9,9,9,9,0,0,0 — a ~5-frame rectangular ON plateau, not the original's instant attack plus exponential decay. At IT=0.1 it is 9,9 for two frames per beat versus the original's single 13.",
+    "FRAME-RATE COUPLING (IT=1 on both, 12 s window): original mean brightness 10 / 11 / 11 at 10 / 20 / 40 fps — time-based and fps-invariant. Port: 39 / 32 / 21 — the decay is stepped per frame, so the port gets progressively more frozen the slower the frame rate. This is a real port bug independent of the envelope shape.",
+    "Untouched defaults differ: the probe's zero-delta setting is 1.0 for the original (deltas 12.95 / 6.44 / 0 at 0 / 0.5 / 1) and 0.5 for the port (29.99 / 0 / 1.36), and the untouched means match those (orig 12 ~ its IT=1 run; port 27 ~ its IT=0.5-0.75 runs). So out of the box the two sides are not even at the same nominal integration setting.",
+    "IntegrationTime=0 renders fully black on BOTH sides (mean 0, motion 0 over 12 s) — that endpoint matches.",
+    "--sensors off: both sides render pure black for 12 s. Neither errors with dead sensors; this reproduces the pre-feed state in which this pattern was previously unjudgeable."
+  ],
+  "dials": [
+    {
+      "name": "sliderIntegrationTime",
+      "origEffect": "Scales the meter's response and its hold time while always preserving the 2 Hz flash. 0 = black; 0.1 = ~3-px fill in each 18-px segment, one lit frame per beat; 0.25 = 10/18 fill; 0.5 = segments fill completely at the peak and the strip goes fully black between beats; 1 = full fill plus a longer-lived right-end peak marker and a dim floor (meanBrightness 4) that never quite reaches black. Mean brightness 0 / 1 / 3 / 6 / 9 / 11 at 0 / 0.1 / 0.25 / 0.5 / 0.75 / 1.",
+      "portEffect": "Controls how much of the strip stays latched on, and effectively kills the animation as it rises. 0 = black (matches); 0.1 = sparse dashes that wander and hold; 0.25 = zone blocks with a rectangular ~0.25 s ON plateau per beat; 0.5 and above = the zones latch and the strip is a near-static rainbow for seconds at a time (motion ~1). Mean brightness 0 / 2 / 9 / 21 / 28 / 32 at the same settings — same monotonic direction as the original but ~3x the level, and the beat response disappears instead of growing richer.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The envelope is the headline bug. On the beat120 feed the original's level does an instant one-frame attack and then decays back to zero within ~0.3 s, giving a clean 40,40,12,4,4,4,2,0,0,0 brightness cycle every 10 frames at 20 fps. The port holds its level flat for 2-10 seconds at the default dial and shows no 10-frame cadence at all. Make the integrator decay fast enough that it is back near zero before the next beat at mid/high IntegrationTime.",
+    "The port's decay is stepped per FRAME, not per second: at IntegrationTime=1 its mean brightness is 39 / 32 / 21 at 10 / 20 / 40 fps while the original holds 10 / 11 / 11. Drive the decay from elapsed time (delta) so the envelope looks identical at any frame rate.",
+    "IntegrationTime has the wrong meaning. On the original, raising it makes each beat's flash reach further (segment fill 3/18 -> 10/18 -> 18/18 px as it goes 0.1 -> 0.25 -> 0.5) and lengthens only the small right-end peak marker; the 2 Hz flash survives at every setting including 1.0. On the port, raising it latches the display and the flash vanishes. IntegrationTime should scale the meter's sensitivity/hold, never suppress the beat response.",
+    "Spatial layout differs. The original draws a repeating meter with an 18-px period on the 60-px strip, and every segment shows the SAME fill from one global level (lit px 0-3, 18-21, 36-39, 54-59 at IT=1 mid-decay). The port draws four 15-px zones with INDEPENDENT fills that sit at different lengths for seconds (lit px 0-7, 15-37, 45-59, static across two beats). Drive all segments from one shared level and use the original's ~18-px repeat.",
+    "Hue span is about twice too wide. The original ramps red (h~0) to green-cyan (h~0.42) across the strip and never shows blue or magenta; the port ramps red all the way to magenta (h~0.87), and its meanB averages 26.5 against the original's 2.8. Clamp the index-to-hue mapping to roughly the first 40-42% of the wheel.",
+    "Untouched default state does not agree: the original's untouched render is identical to IntegrationTime=1 (probe delta 0 at 1.0), the port's to IntegrationTime=0.5 (probe delta 0 at 0.5). Initialise the port's integration-time global to the original's full-scale default.",
+    "Already correct and worth keeping: both sides expose the same single slider with the same name and kind, both render pure black at IntegrationTime=0, both degrade to black with --sensors off, and the port's brightness does rise monotonically with the dial in the same direction as the original."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-60f10",
+    "survey-long",
+    "probe",
+    "probe2",
+    "it-0",
+    "it-0.1",
+    "it-0.25",
+    "it-0.5",
+    "it-0.75",
+    "it-1",
+    "dump-it05",
+    "dump-beat05",
+    "dump-beat025",
+    "dump-it1",
+    "late-30",
+    "fps10",
+    "fps40",
+    "fpsit1-10",
+    "fpsit1-20",
+    "fpsit1-40",
+    "seed7",
+    "sensors-off"
+  ]
+}

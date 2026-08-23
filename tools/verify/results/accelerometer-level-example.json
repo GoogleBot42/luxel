@@ -1,0 +1,56 @@
+{
+  "slug": "accelerometer-level-example",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Both draw the same thing — a rainbow-hued straight bar through the centre of the 16x16 grid that tilts with the accelerometer on an 8 s cycle — but fed the identical beat120 tilt circle the port's bar rotates the OPPOSITE way at default, lags the original by ~1.7-2.0 s, and over-swings its angle range by ~32% (sweeping past vertical, which the original never does); it is also ~15% dimmer with a narrower glow and carries an extra Flip toggle the original does not have.",
+  "observations": [
+    "Rig/feed: 16x16 grid, both sides wantsSensors=true and both fed sensors=synth/beat120 on every run below; no compile or runtime errors on either side.",
+    "Structure (identical on both): a single straight bar of finite width passing through the grid centre (brightness centroid pinned at (7.5,7.5) on both sides at every dumped frame), drawn with a perpendicular-distance falloff, with hue swept along the bar. Neither side ever draws a bent/forked shape — the chevron look in some contact-sheet cells is just a near-vertical bar's pixelation (rj-angle24 dumps: brightest-row-per-column is monotonic at every non-vertical moment on both sides).",
+    "Motion (the headline divergence). Angle of the bar measured per frame by brightness-weighted principal axis, unwrapped mod 180, image coords (y down, positive = right end lower). Both sides settle to an exact 8 s cycle (matching the tilt circle) within ~1 cycle. ORIGINAL settled cycle: a slow clockwise sweep from -43.9 deg (flat dwell around t=14.9-15.05) rising at ~40 deg/s to a peak of +85.5 deg at t~12.02, then a fast counter-clockwise snap back at ~95 deg/s. PORT at default (Flip off) runs the MIRROR of that: a slow counter-clockwise sweep from +63 deg down to -99 deg, then a fast clockwise snap. Same 8 s period, opposite rotation sense.",
+    "Even with the port's Flip toggle set to 1 — which exactly negates its angle and restores the correct sweep sense — the trajectories still do not line up: port peak +108.3 deg at t~13.97 vs original +85.5 deg at t~12.02; port trough -62.8 deg (flat dwell t~16.5-16.6) vs original -43.9 deg at t~15.0; rising zero-crossing port t=19.31 vs original t=17.57. So the port lags by ~1.6-2.0 s (about a quarter of the 8 s tilt cycle) and its total angular swing is 171 deg against the original's 129 deg (~1.32x), about the same midpoint (+22.8 vs +20.8 deg). The lag is not constant, so it is not a pure time shift — the response waveform itself differs.",
+    "Consequence visible without measurement: the port's bar rotates PAST vertical (reaches ~ -99/+108 deg) once per cycle, so it flips through the vertical and comes out the other side; the original stops just short of vertical (+85.5 deg max) and never crosses. In the rhythm images of the 8 s window (rj-circle1) the near-vertical 'waist' sits at t~4.0 s on the original and t~5.8 s on the port.",
+    "Colour: identical mapping on both. Full 360 deg hue rotation across the bar, and the rainbow stretches with the tilt on BOTH sides — measured hue step per column tracks 24/cos(angle) on each side and the two agree at matched angles (e.g. orig -43.9 deg -> 33.9 deg/col, port -42.5 deg -> 31.7 deg/col; orig -35.7 deg -> 29.7, port -37.3 deg -> 29.8). No palette or saturation difference.",
+    "Brightness/width: the port's bar is dimmer and narrower. Transverse profile at the bar centre, original: rows 5..10 = 7, 63, 177, 177, 63, 7 (6 lit rows, faint outer tails); port: 4 lit rows, no tails (e.g. 39, 160, 166, 42). Total frame energy at matched bar angles is consistently 0.84-0.87x the original's (orig 16384 at -43.9 deg vs port 13551 at -42.5 deg; orig 11900 at -8.5 deg vs port 9987 at -11.3 deg). Whole-run meanBrightness: orig 16-18, port 13-15 across every run.",
+    "Control surface: the ORIGINAL exposes exactly one control, gaugeLevel (kind gauge, label 'Level'). The PORT exposes gaugeLevel (same name/kind) PLUS an extra toggleFlip (kind toggle, label 'Flip') that the original does not have. gaugeLevel is display-only on both and has no probeable output effect.",
+    "Neither side responds to the audio side of the beat120 feed: no 2 Hz banding in either rhythm image, and brightness varies only with bar angle (i.e. bar length), so the audio content is correctly ignored by both.",
+    "With --sensors off both sides degrade identically and gracefully to a frozen horizontal rainbow bar across the grid centre (motion 0 on both) — this is the pre-feed view the previous verdict judged, and on that static frame the only differences are the port's narrower/dimmer bar and the extra toggle. Both static findings re-confirmed here.",
+    "Deterministic: seed 7 reproduces seed 1 byte-for-byte in the stats summaries on both sides — no RNG involved, so nothing here is a seed fluke."
+  ],
+  "dials": [
+    {
+      "name": "gaugeLevel",
+      "origEffect": "present as kind 'gauge' (display-only); not settable and no visible effect on the rendered output",
+      "portEffect": "present with the same name and kind 'gauge'; likewise display-only",
+      "matches": true
+    },
+    {
+      "name": "toggleFlip",
+      "origEffect": "control does not exist on the original",
+      "portEffect": "port-only extra toggle. Probe (8 s window) delta 0 at value 0 (so default = off), 21.22 at 0.5 and at 1. Manually swept over the settled 8-24 s window: setting it to 1 exactly negates the bar's angle at every sampled frame (e.g. t=8.0 goes +57 -> -57 deg, t=13.9 goes -99 -> +99 deg), i.e. it mirrors the bar about the horizontal. It does not change phase, swing size, brightness or colour.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Tilt-to-angle sign is inverted at default. Fed the standard 8 s accelerometer tilt circle, the original's bar sweeps slowly clockwise (angle in image coords rising from -44 deg to +85 deg over ~5.5 s) and then snaps back counter-clockwise; the port at its default settings does the exact mirror of this. Setting the port's Flip toggle to 1 fixes the sense, so the port's default orientation convention is the one that is backwards — flip the default sign of the tilt->angle mapping.",
+    "Tilt-to-angle phase is offset by ~1.6-2.0 s (about a quarter of the 8 s tilt circle). With the sign corrected, the port reaches its peak angle at t~13.97 s where the original peaks at t~12.02 s, and its trough at t~16.55 s against the original's t~15.0 s. A quarter-cycle offset on a circular tilt input is the signature of the two accelerometer axes being swapped (or one axis negated) relative to the original — check which accelerometer component drives the numerator vs the denominator of the angle.",
+    "Angular gain is ~32% too high. The original's bar swings over 129 deg total (-43.9 deg to +85.5 deg); the port swings 171 deg (-62.8 deg to +108.3 deg) about nearly the same midpoint (~+21 deg on both). The visible symptom is that the port's bar rotates through vertical and out the other side once per cycle while the original always stops short of vertical. Scale the tilt->angle response down by ~0.76 (or use the same normalisation/reference-magnitude the original uses) so the extremes land at -44 deg and +85 deg.",
+    "The bar's glow is too tight and too dim. The original lights 6 rows across the bar with profile 7 / 63 / 177 / 177 / 63 / 7 (faint 1-count tails at the outer edge); the port lights only 4 rows with no tails, and carries ~15% less total light at matched bar angles (whole-run mean grid brightness 13-15 vs 16-18). Widen the falloff by roughly one pixel on each side and restore the faint outer tail so the bar reads as a soft glow rather than a hard 4-px stripe.",
+    "Drop the extra 'Flip' toggle, or accept that it is an addition. The original exposes only the gaugeLevel gauge; the port adds a toggleFlip the original has no equivalent for. Once the default tilt sign is corrected (feedback #1) the toggle has no fidelity purpose — removing it makes the control surface match exactly.",
+    "Everything else already matches and should not be touched: the centred straight-bar geometry, the perpendicular-distance rendering, the full-360-deg hue sweep along the bar including the way the rainbow stretches as 1/cos(angle) with tilt, the 8 s response period, the ~1-cycle settling transient, the correct indifference to the audio part of the sensor feed, and the graceful frozen-horizontal-bar fallback when sensors are dead."
+  ],
+  "experiments": [
+    "rj-baseline",
+    "rj-survey",
+    "rj-probe",
+    "rj-circle1",
+    "rj-dump-circle",
+    "rj-angle24",
+    "rj-settled",
+    "rj-flip1",
+    "rj-settled-flip1",
+    "rj-extremes",
+    "rj-sensorsoff",
+    "rj-seed7"
+  ]
+}

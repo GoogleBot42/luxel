@@ -1,0 +1,72 @@
+{
+  "slug": "rainbow-comet",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides are a hue-cycling comet ping-ponging along the 60 px strip with an exponentially fading trail, and the untouched fade constant matches exactly, but the port's comet is badly desaturated (head sat 0.35 vs 0.88), its trail sweeps only a small arc of the hue wheel instead of the original's full wrap-around rainbow, and both sliders map to wrong ranges (speed 2.4-2.8x too fast at every dialed value, fade producing 4-5x dimmer/shorter tails).",
+  "observations": [
+    "Rig: strip, 60 px. Both sides compile; neither binds sensors (wantsSensors:false on both); both are fully deterministic — seeds 1, 7 and 1234 render byte-for-byte the same stats on both sides, so there is no RNG to excuse differences.",
+    "Shared gross structure (baseline / late / longorig): a single bright 2-3 px head with an exponentially decaying trail, ping-ponging (reflecting, not wrapping) off both strip ends, while the head hue walks continuously through the full colour wheel. Both waterfalls are clean zigzags. Both sides are steady at t=30-120 s (brightnessTrend steady, zeroMotionFrames 1-2 of 2400); neither dies, freezes or saturates.",
+    "SPEED, untouched: original head advances 30.0 px/s, port 20.0 px/s (measured from --dump peak-pixel index at t=0.5/1.0/1.5 s: orig 15,30,45; port 10,20,30). Port is 1.5x too SLOW untouched — 3 s per end-to-end traversal vs the original's 2 s (4 vs 6 traversals in the 12 s `late` window).",
+    "SPEED is fps-invariant on both sides (30 / 20 px/s identical at --fps 10, 20 and 40), so there is no frame-rate coupling in the motion. FADE, by contrast, is per-FRAME on both sides equally (mean brightness 54/60 at 5 fps, 18/20 at 20 fps, 11/12 at 40 fps) — a shared property, not a divergence.",
+    "TAIL DECAY, untouched: identical on both sides — max-channel drops by a factor of 0.808 per frame at 20 fps on orig and port alike (255,206,167,135,109,88,72,58,47,38,30,25,20,16,13,10,8,7,5,4,3,2,1). The port's tail is nevertheless spatially SHORTER (~26 lit px vs ~40) purely because its head moves 1.0 px/frame instead of 1.5.",
+    "SATURATION is the most visible colour divergence and is constant over the whole run: the original's head is always sat 0.882 (min channel pinned at exactly 30/255, e.g. 255,244,30 / 255,97,30 / 30,200,255), the port's head is always sat 0.353 (min channel 165/255, e.g. 255,250,165 / 165,247,255). The port's comet reads as pastel/washed-out next to the original's near-pure spectral hues, at every dial setting and every time sampled over 60 s.",
+    "TAIL HUE ARC — the pattern's namesake feature — is much reduced in the port. Untouched, at t=1.5 s: original head hue 57 deg falling through 0 deg (red) at 15 px back, continuing to wrap into magenta (300 deg at 30 px back) and blue (240 deg at the tail tip) — a ~180 deg rainbow along one comet. Port head hue 57 deg falls to 0 deg at 18 px back and then FLOORS at pure red (7,0,0 / 5,0,0 / 3,0,0 / 1,0,0) — it never wraps into magenta or blue. Same story with a long fade (fade=0.25, t=3.0): orig spans hue 116 deg -> 0 deg -> 360 deg -> 238 deg across all 60 lit pixels; port spans 111 deg -> 0 deg over ~35 lit pixels then flat red.",
+    "The mechanism behind the arc, tracked per-pixel over consecutive frames (persist run, fade=0.5): on BOTH sides a tail pixel's hue rotates BACKWARDS as it decays while its saturation climbs to 1.0 — but the original's residue rotates ~66 deg/s (px57: hue 77->11 over 1.0 s) vs the port's ~35 deg/s (px40: hue 75->40 over 1.0 s), i.e. the port's tail recolours at roughly half the original's rate. That, plus the desaturation, is why the port's trail looks like a warm yellow->red pastel smear where the original's looks like a spectrum.",
+    "HEAD HUE CYCLE rate is close but not equal: original 39.24 deg/s (full wheel in 9.17 s), port 36.62 deg/s (9.83 s) — port ~7% slow. Measured over 55 s of 12 dumps, unambiguous (both hue series are monotone and wrap consistently). Minor on its own but it drifts the two out of phase by ~50 deg per minute.",
+    "CONTROL SURFACE MATCHES: both sides expose exactly sliderSpeed (slider, label \"Speed\") and sliderFade (slider, label \"Fade\"). Probe calls all four live (orig maxDeltaLit 43.3 / 104.4; port 72.6 / 31.3), and value-dependence is confirmed by hand on both sides — 0 and 1 differ from each other, not just from untouched.",
+    "sliderFade RANGE mismatch (fade-* runs, whole-strip max-channel sum at t=3.0 s): orig 15300 / 8665 / 6044 / 4731 / 3920 at v=0/0.25/0.5/0.75/1; port 3795 / 1675 / 1122 / 894 / 781. The port is 4-5x dimmer at every setting. In per-frame persistence terms the original's dial spans 1.000 (v=0: NO fade at all, the entire 60 px strip rails to 255,255,255) down to 0.854, while the port's spans 0.945 down to 0.66. The untouched value (0.808 both sides) sits BELOW the original's whole dial range but inside the port's.",
+    "ORIGINAL-SIDE ENGINE NOTE (not a port bug): on runs longer than ~49 s the original throws a deterministic runtime error, 'array index out of bounds' at frame 982, line 32 col 7, fn 3 (seen identically in the 60 s huelong and 120 s longorig runs). It fires once and the original keeps rendering normally afterwards (mean brightness and motion series continue unbroken through frames 960-2400). The port never errors. Worth a separate look at the engine/original, but it does not affect this comparison."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Monotonically raises comet travel speed, steeply and non-linearly: 5.0 px/s at v=0, 6.0 at 0.25, 9.0 at 0.5, 16.0 at 0.75, ~60 px/s at v=1 (measured at 50 fps with 0.02 s dump spacing to avoid aliasing). Direction and bounce behaviour unchanged; tail length in pixels grows with speed.",
+      "portEffect": "Same monotone shape, but everywhere far faster: 14 px/s at v=0, 18 at 0.25, 24 at 0.5, 38 at 0.75, ~100 px/s at v=1. Ratio to the original is 2.8x / 3.0x / 2.7x / 2.4x / 1.7x across the sweep — there is no dial value at which the two run at the same speed while the dials agree.",
+      "matches": false
+    },
+    {
+      "name": "sliderFade",
+      "origEffect": "Sets trail persistence over a narrow, very-long-tail range: v=0 disables fade entirely (all 60 px pinned to 255,255,255 — a solid white strip), v=0.25/0.5/0.75/1 give per-frame decay 0.977 / 0.931 / 0.888 / 0.854, so even at maximum the trail still spans the whole strip and every setting is LONGER-tailed than the untouched default (0.808).",
+      "portEffect": "Same direction (higher = shorter tail) but a much more aggressive range: per-frame decay 0.945 / 0.87 / 0.79 / 0.73 / 0.66 at v=0/0.25/0.5/0.75/1. v=0 still fades noticeably (never reaches the original's no-fade solid strip) and v=1 fades ~2.6x harder per frame than the original's v=1. Integrated strip brightness is 4-5x below the original at every setting.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Fix saturation first — it is the single most visible error. The original's comet head is HSV saturation 0.882 (RGB min channel pinned to 30/255) at every time and every dial setting; the port's is 0.353 (min channel 165/255). The port looks pastel where the original looks spectral. Target: peak pixel 255,244,30 where the port currently emits 255,250,165.",
+    "Restore the full rainbow in the tail. The original's trail sweeps roughly 180 deg of hue over its visible length and WRAPS past red into magenta and blue (untouched, t=1.5 s: head 57 deg -> red at 15 px back -> magenta 300 deg at 30 px back -> blue 240 deg at the tip). The port's trail sweeps only from the head hue down to 0 deg and then holds pure red (7,0,0 / 5,0,0 / 1,0,0) for the rest of the tail — no wrap. Concretely, the port's decaying-residue hue rotates backwards at ~35 deg/s where the original's rotates at ~66 deg/s; roughly doubling that back-rotation and letting the hue wrap modulo the wheel instead of stopping at red would recover the effect.",
+    "Untouched speed: the port's comet travels 20.0 px/s, the original's 30.0 px/s on the 60 px strip — 1.5x too slow, 3 s vs 2 s per end-to-end traversal. Both are fps-invariant, so this is a straight rate constant, not a frame-coupling bug.",
+    "sliderSpeed mapping is off by a factor of ~2.5 across its whole range. Original: 5, 6, 9, 16, ~60 px/s at v=0, 0.25, 0.5, 0.75, 1. Port: 14, 18, 24, 38, ~100 px/s. Both curves accelerate steeply near v=1, so the shape is roughly right — the port's floor is ~2.8x too high and the whole curve needs scaling down.",
+    "sliderFade mapping is off in both range and floor. Original per-frame persistence: 1.000 / 0.977 / 0.931 / 0.888 / 0.854 at v=0/0.25/0.5/0.75/1 — note v=0 means NO fade at all and the strip saturates to solid white 255,255,255. Port: 0.945 / 0.87 / 0.79 / 0.73 / 0.66. The port needs its whole persistence range lifted (and v=0 should be exact 1.0 persistence). Symptom to check against: integrated strip brightness at t=3.0 s should be ~15300 / 8665 / 6044 / 4731 / 3920 (max-channel sum over 60 px) rather than the port's 3795 / 1675 / 1122 / 894 / 781.",
+    "Head hue cycle is 7% slow: original completes the colour wheel in 9.17 s (39.24 deg/s), port in 9.83 s (36.62 deg/s). Low priority next to the above, but easy to correct once the other constants are right.",
+    "Things the port already gets right — do not regress them: per-frame tail decay at untouched dials is exactly 0.808 on both sides; the comet reflects off both strip ends rather than wrapping; speed is fps-invariant on both sides; the control surface (sliderSpeed, sliderFade, both sliders, same labels) is identical; the port never errors and is steady over 120 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "fps10",
+    "fps40",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "spdf-0",
+    "spdf-0.5",
+    "spdf-1",
+    "fade-0",
+    "fade-0.25",
+    "fade-0.5",
+    "fade-0.75",
+    "fade-1",
+    "huelong",
+    "late",
+    "seed7",
+    "seed1234",
+    "longorig",
+    "dialed-mid",
+    "persist"
+  ]
+}

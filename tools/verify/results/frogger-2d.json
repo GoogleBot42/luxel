@@ -1,0 +1,82 @@
+{
+  "slug": "frogger-2d",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Port reproduces the original's structure and palette exactly — hard-edged 1-px-per-row horizontal lanes, each a flat single hue, hues forming a rainbow ramp down the grid under a brightness envelope peaking mid-grid, lanes moving in mixed directions at per-lane speeds — but its lanes crawl 10-30x slower than the original's at every matched dial setting, it lights roughly twice as much of the grid, and untouched it draws a full 15-lane field where the original draws one lane at a time.",
+  "observations": [
+    "Both sides render, no compile or runtime errors, on the default 16x16 grid rig; neither binds sensors (wantsSensors false on both).",
+    "CONTROL SURFACE MISMATCH: the original exposes sliders 'sliderLineWidth', 'sliderRotationSpeed', 'sliderColorSpeed'; the port exposes 'sliderLineWidth', 'sliderMovementSpeed', 'sliderColorSpeed'. The middle slider is renamed (RotationSpeed -> MovementSpeed), so a saved-value restore or any UI keyed on the name would miss it. All six probe responsive on both sides.",
+    "STRUCTURE MATCHES. --dump at 16x16 (label dump-mid, LineWidth=0.5) shows both sides drawing per-row horizontal bars with flat interiors and one antialiased end pixel: orig row 4 reads 138 across 12 px then 126; port row 5 reads 201 across 10 px then 76. Both give each row a single hue, both ramp hue down the grid (orig rows 2->14: cyan-blue 0,46,71 -> blue-violet 14,0,138 -> magenta 175,0,204 -> pink 238,0,183 -> red 205,0,4 -> orange 171,60,0 -> yellow 94,105,0 -> green 5,38,0; port rows 0->15 walk the same wheel), and both impose a per-row brightness envelope peaking around rows 7-8 and falling to the top and bottom edges.",
+    "MOTION IS THE MAJOR DIVERGENCE. Per-row circular cross-correlation of --dump'ed frames on the default rig, LineWidth=0.5: at speed dial 0.5 the original's lanes travel 60-170 px/s (row 3 shifts -5 px in 0.03 s; row 5 shifts +3 px in 0.03 s, i.e. lanes run both directions) while the port's travel 0-6 px/s (0 px displacement over 0.05 s; only -2 to +5 px over a full second). At dial 1 the original reaches 200-300 px/s (row 0 shifts -3 px in 0.01 s) against the port's 20-35 px/s. At dial 0 the original's lanes still sweep at up to 50 px/s while the port is completely frozen (every row 0 px over 0.1 s, motion stat 0).",
+    "Consequence at survey rate: over 120 s at 5 fps with dials at 0.5 (label survey-dial) the port's rhythm image shows clean crossing diagonal streaks (lanes visibly sliding both ways) while the original's is fully aliased horizontal hash, i.e. the original is moving far faster than 5 fps can sample. The original at 0.5 reads as a fast streaking blur; the port reads as a near-static rainbow lane field.",
+    "Both sides are frame-rate independent (time-based): original row shifts halve from dt 0.05 to dt 0.025 between --fps 20 and --fps 40 runs, and the port's per-row shifts over dt=0.2 s are the same at 10, 20 and 40 fps. No frame-rate coupling bug on either side.",
+    "DENSITY/BRIGHTNESS: at matched LineWidth the port lights about twice as much. LineWidth=0.5: orig meanBrightness 12.7, ~12 of 16 rows lit with 4 rows fully black; port 34.2, 14-16 rows lit. LineWidth=1: orig 23, port 49 (port fills all 16 rows across their whole width; orig still leaves 2 rows dark). At LineWidth=0 the original goes fully black (mean 0) while the port keeps a dim residue (mean 2).",
+    "UNTOUCHED DEFAULTS DIVERGE HARD. With no controls set the original renders 0 or 1 lane at a time (meanBrightness avg 2.2, 55 of 300 survey frames with zero motion, brightnessTrend volatile); the port renders 14-15 lanes continuously (meanBrightness avg 24.0, 1 zero-motion frame, steady). Untouched lane speed is ~30 px/s on the original versus ~5-10 px/s on the port.",
+    "Both are resolution-dependent in the same way: re-rendered at --grid 48x48 (label grid48) both produce 48 thin lanes rather than the same picture scaled up, so lane count tracks grid height on both sides. The port's excess density is still visible there (nearly every row lit vs about half on the original).",
+    "Seed-independent character: a --seed 7 run at matched dials (label seed7) reproduces the same per-side behaviour and the same divergences.",
+    "No mode structure: a 240 s untouched survey at 2 fps and a 120 s dialed survey at 5 fps show one continuous regime on both sides, no cycling or long-period events."
+  ],
+  "dials": [
+    {
+      "name": "sliderLineWidth",
+      "origEffect": "0 = fully black; 0.5 = 1-px-tall lanes, ~12 of 16 rows lit, meanBrightness 13; 1 = lanes thicken to 2-3 rows and rows 0/1 and 11/12/13 share spans, meanBrightness 23. Continuous line-thickness knob.",
+      "portEffect": "Same direction and same character (thickness knob), but roughly twice as strong at every setting: 0 = near-black but not black (mean 2); 0.5 = lanes already ~2 rows thick, 14-16 rows lit, mean 34; 1 = every row lit end-to-end, mean 49.",
+      "matches": false
+    },
+    {
+      "name": "sliderRotationSpeed (orig) / sliderMovementSpeed (port)",
+      "origEffect": "Scales lane translation speed. Max lane speed on the 16x16 rig: ~50 px/s at 0, ~170 px/s at 0.5, ~300 px/s at 1. Never stops — the original still streams at dial 0. Lanes keep their individual speeds and directions across the range.",
+      "portEffect": "Same knob, same monotonic direction, but an order of magnitude weaker and with a wrong zero: completely frozen at 0, ~0-6 px/s at 0.5 (visually static), ~20-35 px/s at 1. The 20-fps motion stat tracks this: orig 3/6/10/19/23/24 across dials 0/0.25/0.5/0.75/0.9/1 against the port's 0/1/1/3/6/7.",
+      "matches": false
+    },
+    {
+      "name": "sliderColorSpeed",
+      "origEffect": "Rate of hue rotation. Net hue turns of the frame-mean colour over a 20 s window: -0.33 at 0 (essentially a static palette), 26.5 at 1 (~1.3 Hz).",
+      "portEffect": "Same knob, same direction, near-zero at 0 (+0.10 turns / 20 s) but ~4.4x too slow at the top: 6.06 turns / 20 s (~0.3 Hz) at 1.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Rename the middle slider back to 'sliderRotationSpeed' — the port calls it 'sliderMovementSpeed', which is a control-surface mismatch regardless of behaviour.",
+    "Lane translation speed is the headline bug: the port is ~30x too slow at the mid dial and ~10x too slow at the top. Targets measured on the default 16x16 grid, top-lane speed: dial 0 -> ~50 px/s (the port is frozen there, which is wrong; the original never stops), dial 0.5 -> ~170 px/s, dial 1 -> ~300 px/s. In grid-width terms the original sweeps ~3 screen-widths/s at the mid dial and ~10-19 widths/s at the top; the port manages ~0.3 and ~1.5. Fix the speed scale AND add the non-zero base speed at dial 0.",
+    "Hue rotation is ~4.4x too slow at ColorSpeed=1: the original's frame-mean hue completes ~26.5 turns in 20 s, the port ~6.1. ColorSpeed=0 is correct on both (near-static palette).",
+    "LineWidth is about twice as strong on the port. At LineWidth=0.5 the original draws 1-px-tall lanes covering ~12 of 16 rows for meanBrightness 13; the port already draws ~2-px-tall lanes over 14-16 rows for meanBrightness 34. Halve the thickness-per-dial mapping so LineWidth=1 lands near meanBrightness 23, not 49. Also make LineWidth=0 render fully black (the port leaves a mean-2 residue).",
+    "Untouched (no control values applied) the original starts with a much smaller internal line width than the port: it shows 0-1 lanes at a time, meanBrightness ~2, versus the port's 14-15 lanes at meanBrightness ~24. Whatever the port initialises its width/speed globals to at top level should be dialled way down to match — the original's untouched look is a single lonely bar drifting at ~30 px/s, not a full lane field.",
+    "Everything else already matches and should not be touched: hard-edged flat-topped bars with a single antialiased end pixel, one hue per lane, rainbow hue ramp down the grid, brightness envelope peaking at the vertical centre, per-lane random speed AND direction, lane count tracking grid height, and time-based (frame-rate-independent) motion."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "survey-dial",
+    "probe",
+    "dial-mid",
+    "ctl-lw-0",
+    "ctl-lw-1",
+    "ctl-spd-0",
+    "ctl-spd-0.25",
+    "ctl-spd-0.75",
+    "ctl-spd-0.9",
+    "ctl-spd-1",
+    "ctl-col-0",
+    "ctl-col-1",
+    "dump-mid",
+    "dump-lw1",
+    "dump-untouched",
+    "dump-spd0",
+    "dump-spd1",
+    "dump-fps20",
+    "dump-fps40",
+    "dump-fine",
+    "dump-fine-spd0",
+    "dump-fine-spd1",
+    "dump-fine-untouched",
+    "dump-port-slow",
+    "fpsc-port-10",
+    "fpsc-port-20",
+    "fpsc-port-40",
+    "seed7",
+    "grid48"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "slug": "christmasstretch",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same three-colour stretch-and-snap mechanic, palette, drift direction and 2 s phase cadence, but the port draws its tri-colour cycle three times across the strip where the original draws it once, so band count is 3x too high and absolute drift 3x too slow.",
+  "observations": [
+    "Both sides are strictly deterministic (seed 1 and seed 1234 dump byte-identical frames on both sides) and have NO controls at all (probe: 'no settable controls' on orig and port) — control surfaces match.",
+    "Palette on both sides is exactly three flat colours, no gradients: orig red (255,0,0) / green (51,255,0) / grey (114,114,114); port red (255,0,0) / green (0,255,0) / grey (101,101,101). Port's green is a pure green where the original's is slightly yellow-shifted, and port's white/grey is a touch darker (101 vs 114).",
+    "STRUCTURE (default 60-px strip, --dump at t=2 s): orig shows exactly ONE three-colour cycle — 3 boundaries, bands of 20/20/20 px; port shows THREE cycles — 9 boundaries, bands of ~7/7/6 px repeated. Confirmed on every dumped frame of the 6 s baseline window (orig boundary count 3 on 118/120 frames, port 9 on 115/120).",
+    "RESOLUTION BEHAVIOUR (labels px30 / px120): the original's spatial period is a FIXED 60 pixels — at --pixels 30 it shows only half a cycle (green 20 px + red 10 px), at --pixels 120 it shows exactly two 60-px cycles. The port is normalised to the strip — it shows exactly three cycles at every size (10 px cycles at 30 px, 20 px at 60 px, 40 px at 120 px). So the divergence is not a constant offset: the two agree in band count only on a 180-px strip.",
+    "MOTION: both drift the bands toward index 0 (same direction; waterfall boundaries slope down-right on both). Speed differs with the scale: orig advances one third of a cycle per second = ~20 px/s; port ~6.7 px/s on the same 60-px rig.",
+    "STRETCH DYNAMICS MATCH: on both sides a phase starts with the three bands at equal thirds, then over 2 s one colour shrinks linearly to zero while its cyclic predecessor grows to two thirds, the third band holding constant; then it snaps back to equal thirds and the roles rotate. Measured on orig (t=2.00: G20/R20/W20 -> t=4.00: G0/R20/W40) and on port (t=1.95: ~7/7/7 per cycle -> t=3.90: G0/R39/W21 totals) — same rule, same shrink/grow pairing.",
+    "PHASE CADENCE: motion-spike spacing in the late window (--skip 20, 20 fps) is 2.05 s on the original (spikes at 20.45/22.50/24.55/26.60/28.65/30.70) and exactly 2.00 s on the port (21.95/23.95/…). Across --fps 10/20/40 the original's phase is 2 s plus one frame (21/41/81 frames) while the port's is exactly 2 s; both are essentially time-based, but the original's extra frame per phase makes the two slowly de-phase (~0.5 s of drift per 20 s).",
+    "STARTUP TRANSIENT (original only): the orig renders the entire strip solid red (255,0,0), zero boundaries, completely static, for the first 2.00 s of the run — 40 of the first 40 captured frames at 20 fps, and it never recurs later (late window t=20-32 s is fully banded). The port is banded and animating from frame 0. This also explains the orig's zeroMotionFrames 56/120 vs port 16/120 in the 6 s baseline.",
+    "Colour balance over the 6 s baseline: orig meanR 189 / meanG 68 / meanB 26 vs port meanR 119 / meanG 119 / meanB 34 — the orig's red bias there is almost entirely the 2 s all-red startup, not a steady-state palette difference; mean brightness is close on both (94 vs 90) and brightnessTrend is 'steady' on both.",
+    "Neither side binds sensors (wantsSensors false on both), neither reports a compile or runtime error, and no run produced harness warnings."
+  ],
+  "dials": [],
+  "feedback": [
+    "The single dominant fix: the port's spatial period is one third of the strip; the original's is a fixed 60 PIXELS regardless of strip length. On the default 60-px rig that means the original paints exactly one red/green/white cycle across the whole strip and the port paints three. Stop normalising the band layout to pixelCount — make the cycle span a fixed 60 pixels so a 120-px strip shows two cycles and a 30-px strip shows half of one, as the original does.",
+    "Fixing the period fixes the speed automatically: the original drifts the bands toward pixel 0 at ~20 px/s (one third of its 60-px cycle per second); the port currently drifts at ~6.7 px/s on the same rig. The per-cycle rate (1/3 cycle per second) is already right, only the cycle size is wrong.",
+    "Add the original's opening transient: for the first 2.0 s of a run the original holds the entire strip solid red (255,0,0), perfectly static, before the first snap to equal thirds at t=2.00 s. The port starts mid-animation instead. It happens once, at startup only.",
+    "Match the exact palette entries: original green is (51,255,0) (slightly yellow-shifted), port uses pure (0,255,0); original white is grey (114,114,114), port (101,101,101). The reds already match at (255,0,0).",
+    "Phase length is very slightly off: the original's snap-to-equal-thirds fires every 2 s PLUS one rendered frame (21 frames at 10 fps, 41 at 20, 81 at 40 — measured off motion spikes), while the port fires on an exact 2.000 s period. Cosmetic, but it makes the two de-phase by ~0.5 s over 20 s if anyone compares them side by side.",
+    "Everything else is already right and should not be touched: three flat colours with no blending, the shrink/grow rule (one band shrinks linearly to zero over the phase while its cyclic predecessor grows to two thirds and the third holds), the drift direction (toward index 0), the colour rotation order across phases, and full determinism with no controls and no seed dependence."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "dump-all",
+    "px30",
+    "px120",
+    "fps10",
+    "fps40",
+    "late",
+    "seed1234",
+    "grid8"
+  ]
+}

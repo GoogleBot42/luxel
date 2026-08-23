@@ -1,0 +1,63 @@
+{
+  "slug": "lightbulb-crank-hue-to-complete",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Port nails the pattern's timing skeleton exactly — a 10.0 s full-brightness pure-red hold followed by a 4.00 s breathing glow — but gets both remaining axes wrong: it settles on amber instead of pure yellow and splits the rig into two differently-saturated halves where the original is a single uniform colour.",
+  "observations": [
+    "Both sides compile and run clean (no compile/runtime errors), on strip/60px and on every override rig tried; neither binds sensor globals (wantsSensors false on both), and both are fully deterministic — seeds 1, 7 and 1234 render identically on both sides.",
+    "STRUCTURE (the headline divergence): the original is a UNIFORM lamp — at t=21 s every one of the 60 pixels is exactly (254,254,0), and re-rendered at --pixels 600 all 600 pixels are (196,196,0). The port draws TWO zones with a hard step at the exact midpoint: on 60 px, idx 0-29 = (254,198,0) and idx 30-59 = (254,214,152); on 600 px the step moves to idx 300, so it is a fractional half-strip split, not a fixed pixel count. On --rig grid --grid 8x8 the same split reads as a top-half/bottom-half colour break while the original fills the whole grid one colour.",
+    "COLOUR: the original's steady colour is pure yellow — G equals R exactly and B is 0 on every frame of the 60 s survey (meanB {min 0, max 0}) — i.e. hue 60 deg, saturation 1. The port's first half is amber (G ~ 0.78*R, hue ~47 deg) and its second half is a desaturated cream with a large blue component (B ~ 0.60*R, saturation ~0.40); the port's meanB never reaches 0 (survey range 38-77). No dial or window found makes the port produce pure yellow.",
+    "MOTION / RHYTHM: an exact match. Brightness autocorrelation over --skip 20 --seconds 20 --fps 20 gives a first peak at 80 frames (orig) and 81 frames (port) = 4.00 s breathing on both. Envelope depth matches too (orig meanBrightness 85-170, port 89-179), and the red channel tracks value-for-value in the untouched run (t=10.5 orig 142 / port 142; t=11 127/127; t=12 196/195; t=14 186/186). Neither side is frame-rate coupled: the breathing period measures 4.00 s at --fps 10, 20 and 40 on both sides.",
+    "RED-HOLD PHASE: with both toggles dialed to 1 the two sides are indistinguishable here — 10.0 s of flat, motionless, full-saturation (255,0,0) across the whole strip, and a --fps 100 dump puts the switch to the breathing phase between t=10.00 and t=10.02 on BOTH sides. Nothing further happens after that on either side: a 300 s survey shows no additional hue advance or mode change, so 'red hold then breathing glow' is the pattern's entire cycle.",
+    "UNTOUCHED DEFAULTS DIVERGE: with no controls applied the original spends its first 10 s in the red hold (baseline 6 s window: meanBrightness flat 85, motion 0, zeroMotionFrames 120/120, pure (255,0,0)); the port skips the red hold entirely and is already breathing at t=0 (baseline mean 143.7, motion avg 2.4).",
+    "CONTROL SURFACE MISMATCH: the two sides expose two toggles each but under different names — orig 'toggleSensorSimulationMode' / 'toggleSimulateSensorActive' vs port 'toggleSensorSimulation' / 'toggleSimulatedSensor'. Same count, same kind, different identifiers, so a saved preset from the original would not bind to the port.",
+    "TOGGLE LOGIC IS INVERTED-ish: sweeping all four combinations over 60 s each, the ORIGINAL shows the 10 s red hold in three of four combos and skips it only at (mode=1, active=0) (60 s means: 00->119, 10->127, 01->119, 11->119). The PORT shows the red hold in only ONE combo, (1,1) (means: 00->134, 10->134, 01->134, 11->127). So the port's two toggles only do anything together, while on the original the mode toggle alone is the thing that changes the output.",
+    "MINOR TIMING NIT: the original's 4 s breathing runs on absolute time — its phase after the transition is the same whether the red hold happened or not (peaks at t=1,5,9,13 in both the untouched and dialed runs). The port re-anchors its breathing to the end of the red hold, so in the dialed (1,1) run the two sides end up in antiphase (best cross-correlation lag -38 frames = -1.90 s, i.e. half of the 4 s period); untouched they happen to align (lag +1 frame)."
+  ],
+  "dials": [
+    {
+      "name": "toggleSensorSimulationMode (port: toggleSensorSimulation)",
+      "origEffect": "Live and strong (probe maxDelta 71.18 over a 12 s window). Set alone to 1 it REMOVES the 10 s red hold and starts the yellow breathing immediately; set to 0 it is identical to untouched. Its effect is cancelled when the second toggle is also set to 1.",
+      "portEffect": "No effect on its own over a 60 s window at any value (probe deltas 0.00 at 0/0.5/1; combo-10 render byte-comparable to combo-00, 60 s mean 134 both). It only participates in combination with the other toggle.",
+      "matches": false
+    },
+    {
+      "name": "toggleSimulateSensorActive (port: toggleSimulatedSensor)",
+      "origEffect": "Probes inert from the untouched state, but a manual 60 s four-combo sweep shows it is mode-gated: with the first toggle at 1, moving this one from 0 to 1 restores the 10 s red hold (60 s mean 127 -> 119). Alone (0,1) it is a no-op.",
+      "portEffect": "Also inert alone over 60 s, but in combination it is the ONLY way to get the red hold on the port: (1,1) produces a 10 s red hold that matches the original's exactly in duration, colour and switch instant, while (0,1) and (1,0) do nothing.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Kill the half-strip split. The original assigns the SAME colour to every pixel regardless of index or count (verified uniform at 60 px and at 600 px, and uniform across an 8x8 grid); the port branches on pixel index at the halfway point and gives the upper half a different, washed-out colour. Verified values at t=21 s on 60 px: orig every pixel (254,254,0); port idx 0-29 (254,198,0), idx 30-59 (254,214,152).",
+    "Fix the settled hue to pure yellow. The original's steady colour has G exactly equal to R and B exactly 0 (hue 60 deg, saturation 1) on every frame of a 300 s run; the port's lit half sits at G ~ 0.78*R (hue ~47 deg, amber). Raise the final hue to 60 deg and drop the blue term to zero everywhere — the port's blue channel never reaches 0 (survey meanB 38-77) while the original's is pinned at 0.",
+    "Everything about the timing is already correct — do not touch it. 10.0 s red hold, switch between t=10.00 and 10.02 at 100 fps on both sides, 4.00 s breathing period (80 vs 81 frames at 20 fps), matching brightness envelope depth, and no frame-rate coupling at 10/20/40 fps. Only the colour and the spatial uniformity need work.",
+    "Rewire the toggles. First, rename them to the original's identifiers: 'toggleSensorSimulationMode' and 'toggleSimulateSensorActive' (port currently exposes 'toggleSensorSimulation' and 'toggleSimulatedSensor'). Second, the logic differs: on the original the FIRST toggle alone is decisive — setting it to 1 by itself skips the 10 s red hold — and the second toggle only matters as a modifier that puts the hold back. On the port neither toggle does anything alone and only (1,1) produces the hold.",
+    "Match the untouched default. With no control values applied the original starts in the 10 s red hold (flat (255,0,0), zero motion for the first 120 frames of a 6 s / 20 fps capture); the port's untouched state skips straight to the breathing phase. Whatever internal state the port initialises to, it should be the state that shows the red hold.",
+    "Optional nit once the above are fixed: anchor the breathing cycle to absolute time rather than to the end of the red hold. The original's breathing phase is unchanged by whether the hold occurred (peaks at t=1,5,9,13 in both untouched and dialed runs); the port restarts its cycle at the transition, which leaves it a half-period (1.9 s) out of phase with the original in the dialed run."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-300",
+    "probe",
+    "early",
+    "steady20",
+    "sim-on",
+    "both-on",
+    "combo-00",
+    "combo-10",
+    "combo-01",
+    "combo-11",
+    "dial11-early",
+    "dial11-steady",
+    "trans-fine",
+    "grid8",
+    "px600",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

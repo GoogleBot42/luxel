@@ -1,0 +1,44 @@
+{
+  "slug": "chill-confetti",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides are the same confetti pattern — random full-brightness, fully-saturated sparks on a 60 px strip fading in place while a global hue slowly walks the rainbow — but the port's sparks fade about 1.7x too fast and its hue cycle is about 28% too slow.",
+  "observations": [
+    "Structure matches: on the default strip rig (60 px) both sides light single isolated pixels at random indices, each popping instantly to full value 255 and then decaying in place with no spatial movement; the waterfall is a field of vertical streaks on both sides, uniformly distributed across all 60 pixels, with no banding, mirroring or index offset.",
+    "Color matches in family and direction: every spark on both sides is fully saturated (min channel 0 at spawn, measured over 200 dumped frames), and the hue is global — all simultaneously-lit pixels share one slowly-advancing hue, walking the full rainbow in the same direction (cyan -> blue -> purple -> magenta -> red -> orange -> yellow -> green -> cyan) on both sides.",
+    "Hue-cycle speed diverges: unwrapping the strip-mean hue over 120 s gives orig 0.0397 turns/s (period 25.4 s) and port 0.0310 turns/s (period 32.4 s) — port is ~28% slow. Confirmed independently by autocorrelation of meanR/meanG/meanB: orig fundamental 498 frames at 20 fps / 1000 frames at 40 fps (both 25.0-25.2 s), port 648 frames at 20 fps / 1296 at 40 fps (both 32.4 s). Visible as phase drift: at t=30-42 s the original is in purple->red->orange->yellow while the port is still in cyan->blue->purple.",
+    "Spark decay diverges: tracking 90 (orig) / 109 (port) individual spark decays from a 200-frame dump at 20 fps, the mean decay curve from 255 is orig 195 @0.25 s, 149 @0.5 s, 86 @1.0 s (half-life 0.65 s, tau 0.92 s) versus port 159 @0.25 s, 102 @0.5 s, 40 @1.0 s (half-life 0.37 s, tau 0.54 s). Both curves are exponential in shape; the port's is simply steeper. Time to fade below value 8 is ~3.3 s (orig) vs ~1.9 s (port), so the port's waterfall streaks are visibly ~1.8x shorter at every window length checked.",
+    "Spawn rate slightly high on the port: 9.8 new sparks/s (orig) vs 12.3/s (port) on the 60 px rig, measured identically at 20 fps and 40 fps on both sides, so spawn rate is time-based on both. The extra spawns partly compensate for the faster fade — instantaneous lit fraction is close (orig 0.47, port 0.43) — but mean brightness still comes out lower: 17.3 vs 13.4 over a 120 s / 20 fps window (orig 13/16/18, port 11/13/14 across the shorter runs).",
+    "Both sides are alive and stable: no compile or runtime errors, brightnessTrend 'steady' on both over 120 s, no dark gaps (mean brightness hits 0 only on the very first frame), and the longest run of unchanged output is 2 frames (orig) / 1 frame (port). The original's higher zeroMotionFrames count (819/2400 vs 322/2400 at 20 fps) is just integer rounding of its gentler per-frame change, not freezing.",
+    "Neither side exposes any controls — the harness enumerated an empty control list for both, so there is no control-surface mismatch.",
+    "Frame-rate behaviour differs below 10 fps: the port's hue period is 32.4-33.0 s at 2, 5, 10, 20 and 40 fps (purely time-based), while the original's is 25.4 s at 10/20/40 fps but stretches to 50.6 s at 5 fps and 130 s at 2 fps — i.e. the original's animation clock behaves as if the per-frame delta is capped at ~100 ms, so it slows down with the frame rate below 10 fps. This only shows up at survey rates no real controller runs at, and it may be an engine-level delta clamp rather than pattern code, so it is recorded as context rather than as the headline finding.",
+    "Stochastic character is seed-stable: seeds 1, 7 and 1234 (12 s / 20 fps) all show the same density, streak length and hue phase on each side, with the same orig-vs-port differences in every one — the divergences above are not a one-seed fluke."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the spark decay by about 1.7x: the original's sparks fall from full brightness to half in ~0.65 s (still at value ~86 after 1.0 s), the port halves in ~0.37 s (value ~40 after 1.0 s). Target an exponential decay with half-life ~0.65 s / time constant ~0.92 s at the default 20 fps. This is the most visible difference — the port reads as sharper and twitchier, the original as longer-trailed and, well, chiller.",
+    "Speed the hue walk up by about 1.28x: the original completes a full rainbow in 25.4 s (0.0397 hue turns per second); the port takes 32.4 s (0.0310 turns/s). Direction and the fact that hue is global (shared by all live sparks) are already correct — only the rate is off. Note 32.4 s is suspiciously close to 32.768 s = half of Pixelblaze's 65.536 s time() unit, so a time() coefficient is likely a factor of ~1.29 too small.",
+    "Reduce the spark spawn rate from ~12.3/s to ~9.8/s on a 60 px strip (about 0.16 spawns per pixel per second). Once the decay is lengthened, keeping the current higher spawn rate would over-fill the strip relative to the original.",
+    "Do not change: spark peak brightness (both hit exactly 255), saturation (both fully saturated at spawn), the exponential shape of the decay, the uniform-random pixel placement, the single-pixel spark size, and the direction of the hue walk — all of these already match.",
+    "Once decay and hue rate are fixed, mean brightness should land near the original's 17.3 (0-255 strip mean over a 120 s window at 20 fps); the port currently sits at 13.4."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "fps5-240",
+    "fps10-120",
+    "fps20-120",
+    "fps40-60",
+    "win12",
+    "dump-decay",
+    "dump-decay2",
+    "dump-fps40",
+    "regime-mid",
+    "regime-late",
+    "seed7",
+    "seed1234"
+  ]
+}

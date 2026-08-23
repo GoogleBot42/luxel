@@ -1,0 +1,51 @@
+{
+  "slug": "utility-palettes",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides are the same kind of palette carousel with identical scroll speed and ~1 s dwell, but the port shows 16 palettes over a 16.38 s cycle against the original's 15 over 15.00 s, and only 3 of the original's 15 palettes are actually reproduced — the rest are different, and mostly far brighter, colour tables.",
+  "observations": [
+    "Shape of the pattern (both sides): a single scrolling gradient across the whole strip whose colour table swaps to a new palette on a ~1 s timer, looping forever. Neither side exposes any control (meta.json controls: [] on both; --probe-controls reports 'no settable controls' for both).",
+    "CYCLE LENGTH / PALETTE COUNT DIFFERS. Palette-switch instants read off meanR/G/B discontinuities in a 70 s / 20 fps run: original switches at exactly integer seconds (t=1.000, 2.000, 3.000 ...) and its whole sequence repeats every 15.000 s => 15 palettes, dwell 1.000 s. Port switches at 1.000, 2.025, 3.050, 4.075, ... and repeats every 16.38 s => 16 palettes, dwell 1.0245 s (i.e. 2.4% longer per slot AND one extra slot). Confirmed at 10, 20 and 40 fps with identical absolute times, so both sides are time-based and neither is frame-rate coupled.",
+    "SCROLL MOTION MATCHES EXACTLY. Circular cross-correlation of dumped frames 0.20 s apart on a 300 px strip gives a shift of +6 px on BOTH sides at t=0.5/0.7/0.9 and again inside the 1-2 s slot => 30 px/s, one full strip traversal per 10 s, same direction. Waterfall diagonals have the same slope on both sides.",
+    "ONLY ONE PALETTE IS A TRUE MATCH. Whole-strip per-pixel diff between the sides at 20 fps over a full cycle: mean |diff| is ~2/255 for the entire t=1.0-2.0 slot (the smooth linear rainbow) and 30-195/255 everywhere else. A shift-invariant 15x16 match matrix on 300 px slot dumps gives orig-slot-1 vs port-slot-1 = 1.6 (identical), orig-slot-2 vs port-slot-2 = 17.5 (same nonlinear-rainbow family, ~16% phase offset and a slightly different curve), orig-slot-9 vs port-slot-10 = 15.1 (both the narrow red/pink gradient). Every other original palette's best port counterpart is >=27 and most of those 'best' hits are spurious (a near-black original palette scoring low against the port's one dim palette purely because both are dark).",
+    "STEPPED PALETTES: STOP POSITIONS ARE UNIFORM ON THE PORT, IRREGULAR ON THE ORIGINAL. On a 300 px strip the original's slot 0 is 6 stops with run lengths 30/15/118/34/13/90 px (colours ff0099, ff0100, ff4c00, 00ffa9, 00aaff, 0066ff) — a positional gradient with wildly uneven segments. The port's slot 0 is 7 stops of exactly 43 px each (ff00da, ff0000, ffd900, 49ff00, 00ff90, 0092ff, 4800ff) — an evenly divided 7-step rainbow. Same story at slot 3: original 5 stops, run lengths 75/23/52/50/50/50; port 7 stops at 42-45 px each.",
+    "BRIGHTNESS CHARACTER IS WRONG. Per-slot mean of max(R,G,B) over 300 px — original: 255,255,255,50,50,63,76,220,4,255,58,38,30,102,108 (8 of 15 palettes below 110, one essentially black at 4). Port: 255,255,255,255,255,125,81,255,118,50,255,87,208,255,165,208 (11 of 16 at or near full). Whole-run means: orig meanBrightness avg 73.5, port 114.7 (baseline); orig 66.4 vs port 108.6 in a --skip 300 late window. The original's palette set includes several deep/near-black tables (slot 3 caps every channel at 0x4c, slot 8 caps at 0x0c) that the port has no equivalent for.",
+    "SPECIFIC MISSING/EXTRA PALETTES (from a 300 px per-slot inventory): the original has a near-black dim-red gradient (slot 8), a dim navy/teal stepped table (slot 3), a dim blue->purple sweep (slot 4), a dark green/black table (slot 12) and a bright white/cyan/magenta/green/red 'party' table with black gaps (slot 7) that have no port counterpart. The port has an evenly-stepped 7-colour rainbow (slot 0), a bright purple/blue stepped table (slot 3), a bright purple->green smooth gradient (slot 8), a solid aqua/mint table (slot 13) and pastel tables (slots 14, 15) that the original never shows.",
+    "BOTH SIDES ARE RESOLUTION-INDEPENDENT AND SEED-INDEPENDENT. Re-rendered at --pixels 12, 60 and 300 the aggregate stats are unchanged on both sides (orig mean 68-71, port 111-112) and the palette is simply resampled across the strip; --seed 1234 reproduces --seed 1 byte-for-byte in the summary stats. So the divergence is purely the palette table + slot count, not a mapping bug.",
+    "STEADY STATE IS FINE ON BOTH SIDES. A --skip 300 --seconds 20 run still shows both cycling normally (orig motion avg 5.1, port 6.8); no decay, freeze, saturation or runtime error on either side. The port's baseline brightnessTrend 'decaying' is just where the 6 s window lands in its cycle, not a dying port.",
+    "No compile or runtime errors on either side; wantsSensors false on both (this is not a sensor pattern)."
+  ],
+  "dials": [],
+  "feedback": [
+    "The mechanism is right and does not need touching: same scrolling gradient, same scroll rate (30 px/s = one strip per 10 s on any rig size), same ~1 s palette dwell, resolution-independent, time-based (fps-invariant). Only the palette DATA and the slot count are wrong.",
+    "Palette count and dwell: the original cycles exactly 15 palettes at exactly 1.000 s each (whole loop 15.000 s, switches land on integer seconds). The port cycles 16 palettes at 1.0245 s each (loop 16.38 s). Drop to 15 entries and make the dwell a true 1.000 s rather than a 16.384 s timer divided by 16.",
+    "Palette table: only 3 of the original's 15 palettes survive in the port. Keep the smooth linear rainbow (orig slot 1, a byte-for-byte match at port slot 1), the nonlinear/plateaued rainbow (orig slot 2 vs port slot 2 — close but the port's curve has its slow region ~16% of the strip away from the original's) and the narrow red->pink gradient (orig slot 9 == port slot 10). The other 12 entries need replacing with the original's.",
+    "Brightness range is the single most visible gap. The original's set is deliberately mixed — 8 of its 15 palettes have every channel capped well below full (slot 3 caps at 0x4c on all channels, slot 8 at 0x0c so it reads as an almost-black strip for a full second, slots 11/12 cap at 0x7f). The port renders 11 of its 16 at or near full 255, so the port looks uniformly gaudy while the original breathes between bright and near-dark. Reproduce the low-value palettes at their actual (low) levels rather than normalising every table to full value.",
+    "Stepped palettes must keep the original's non-uniform stop positions. Original slot 0 on a 300 px strip is 6 colours occupying 30/15/118/34/13/90 px — the orange stop covers 39% of the strip and the azure stop 4%. The port draws its stepped tables as N equal slices (7 x 43 px). Whatever entry-position data the original palettes carry is being discarded and replaced by even spacing.",
+    "Stop counts also differ on the stepped tables: original slot 0 has 6 stops and slot 3 has 5; the port uses 7 in both.",
+    "Palettes the port is missing entirely (describe by look): a dim navy/teal stepped table (000819 / 004c4c / 000232 / 4c0016 / 4c0f46), a dim blue->purple->pink sweep, a near-black dim-red gradient, a dark green-on-black gradient, and a bright discrete white/cyan/black/magenta/white/green/black/red 'party stripe' table.",
+    "Palettes the port invents and should drop: the evenly-stepped 7-colour rainbow it opens on, a full-brightness purple/blue stepped table, a bright purple->green smooth gradient, a flat aqua/mint table, and two pastel tables."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "fps10",
+    "fps40",
+    "cycle1",
+    "upx-fine",
+    "upx-slots",
+    "px300",
+    "px12",
+    "px300-slots",
+    "px300-scroll",
+    "seed1234",
+    "late",
+    "regime-0",
+    "regime-4",
+    "regime-8",
+    "regime-12"
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "slug": "breakout-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same Breakout game with matching layout, palette drift and dial semantics, but the port's ball travels almost straight up-and-down instead of the original's shallow diagonal, its brick rainbow spans ~2.7x too much hue, and its paddle is exactly half width — so it plays and looks visibly different.",
+  "observations": [
+    "Both sides draw the same scene on the default 16x16 grid: a solid 5-row brick block at rows 0-4, a white/grey ball in the open area, and a white paddle on row 15 with a brightness taper toward its ends. Ball and paddle are greyscale on both; bricks are a vertical rainbow on both.",
+    "Brick hue per row diverges. --dump at 16x16: orig rows 0-4 hue 0.020/0.082/0.145/0.208/0.271 (step 0.0625 = 1/16); port 0.020/0.191/0.360/0.531/0.700 (step ~0.170 = ~1/6). The original therefore shows only red->yellow->green across the stack while the port shows a near-complete red->magenta rainbow, which is the most obvious visual difference in the contact sheets.",
+    "The base hue and its time drift match EXACTLY: row-0 hue at t = 0/8/16/24/32/40/48/56 s is 0.020/0.168/0.315/0.205/0.057/0.090/0.238/0.282 on both sides. Only the per-row increment is wrong.",
+    "Ball direction is fundamentally different. Centroid tracking over 90 s at fps 10 (label vel-90): orig |dx| 6.1 px/s vs |dy| 3.3 px/s (ratio 1.83, shallow near-horizontal travel); port |dx| 1.0 px/s vs |dy| 9.6 px/s (ratio 0.11, near-vertical). Confirmed over 30 s (orig 8.4/3.2, port 2.0/9.5) and at fps 40 (orig 10.6/3.0, port 2.8/10.0). Total speed is comparable (~9-10 px/s), so it is the ANGLE, not the speed, that is wrong.",
+    "Consequence: the port clears the field ~4x faster. Brick-pixel count at fps 5: orig 81 -> 65 over 240 s and 81 -> 37 over 600 s (never cleared, never reset); port 82 -> 6 over 240 s, cleared to ~0 at ~t=300 s, field refilled to 80 at ~t=330 s and eroding again by 600 s. Mean brightness over the 600 s window: orig 38, port 18.",
+    "In the original the ball only ever nibbles the underside of the stack in 600 s: rows 0-2 stay at 16/16 the entire time while rows 3-4 erode. The port loses bricks from every row including row 0 (16 -> 2 during its first game), so its field breaks into full-height rainbow columns while the original's stays a solid block with a notched bottom edge.",
+    "Paddle is exactly half width on the port at every setting. Lit pixels on row 15 (16x16 default rig): PaddleWidth untouched orig 8 / port 4; =0 orig 6 / port 2; =0.5 orig 12 / port 6; =1 orig 16 (clipped) / port 8.",
+    "Control-surface mismatch: the original exposes sliderPaddle (label 'Paddle'), the port names it sliderPaddlePosition (label 'PaddlePosition'). sliderPaddleWidth and sliderDemoMode match in name and kind.",
+    "Port loses the ball on the opening serve. In the 90 s fps-10 run the port's ball position jumps discontinuously once (t=0.7 s, from row 14 x7.2 to row ~5.7 x1.0 - a respawn after the near-vertical serve missed the 4-px paddle); the original had zero such discontinuities in the same window.",
+    "Ball sprite size differs. Default rig: orig ball is a single antialiased pixel (e.g. [5][8]=170,170,170); port spreads it over two rows ([5][8]=84, [6][8]=152). Re-rendered at --grid 32x32 the gap widens: orig ball stays a ~2x1 point and its paddle stays 1 row tall, while the port draws a 4x4 disc and a 2-row-tall paddle - the port scales ball/paddle thickness with the canvas, the original keeps them ~1 px.",
+    "Brick-block depth is resolution-scaled on both but off by one row: at --grid 32x32 the orig fills rows 0-10 (11 rows), the port rows 0-9 (10 rows); at --grid 8x8 both fill rows 0-2.",
+    "Both sides step the ball at a fixed 10 Hz independent of render fps (at --fps 20 each ball position repeats for two frames; at --fps 40 for four), so there is no frame-rate-coupling divergence.",
+    "Seed changes only the serve position/angle, identically in character on both sides (seed 1: orig serves from x=8, port from x=8; seed 7: orig x=5, port x=5.4); seeds 7 and 1234 give different runs, so the seed is honoured, and the direction asymmetry above holds across all three.",
+    "Neither side reports a compile or runtime error; neither binds sensors (wantsSensors false on both)."
+  ],
+  "dials": [
+    {
+      "name": "sliderPaddle (orig) / sliderPaddlePosition (port)",
+      "origEffect": "With DemoMode=0 the paddle is placed immediately and holds: value 0 -> centre at x=0 (cols 0-4 lit), 0.25 -> centre x=4, 0.5 -> centre x=7.5 (cols 4-11), 0.75 -> centre x=11, 1 -> centre x=15 (cols 11-15). Inert while DemoMode>0 (the AI drives the paddle), which is why the 4 s probe called it inert on both sides.",
+      "portEffect": "Same mapping and same immediate placement (value 0 -> cols 0-2, 0.5 -> cols 6-9, 1 -> cols 13-15), but the paddle is half as wide and the new position first appears one frame after t=0 rather than on the very first frame. Also inert while DemoMode>0.",
+      "matches": true
+    },
+    {
+      "name": "sliderPaddleWidth",
+      "origEffect": "Continuously widens the paddle: 6 lit px at 0, 8 untouched, 12 at 0.5, 16 (full rig width) at 1, with a smooth brightness taper toward the ends.",
+      "portEffect": "Same direction and same continuity but consistently half the width: 2 px at 0, 4 untouched, 6 at 0.5, 8 at 1.",
+      "matches": false
+    },
+    {
+      "name": "sliderDemoMode",
+      "origEffect": "Threshold switch, not a continuous knob: at 0 the paddle is frozen at centre x=7.5 and the ball is simply left to bounce; at 0.5 and at 1 (byte-identical to each other) an AI paddle tracks the ball across the row.",
+      "portEffect": "Identical semantics and identical threshold - 0 freezes the paddle at centre, 0.5 and 1 are identical to each other and drive an AI paddle that tracks the ball.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Brick row hue: the original advances hue by 0.0625 per brick row (1/16 - i.e. spread over the full 16-row grid height), so its 5-row stack covers only red->yellow->green. The port advances ~0.170 per row (~1/6, i.e. spread over the number of brick rows), producing a full red->magenta rainbow. Divide the per-row hue step by ~2.7 so the 5-row stack spans ~0.25 of the hue wheel. The base hue and its time drift are already exactly right - do not touch those.",
+    "Ball launch/bounce angle: the original's ball is horizontal-dominant (mean |dx|:|dy| = 1.83:1 over 90 s, e.g. -11 px/s horizontal against +3.3 px/s vertical on the opening serve), the port's is near-vertical (0.11:1, e.g. +12 px/s vertical against -1.3 px/s horizontal). Make the velocity vector predominantly horizontal - shallow diagonals that cross the width several times per top-to-bottom traversal - keeping the total speed at ~10 px/s, which is already correct.",
+    "Fixing the angle should also fix the pace: because the port's ball reaches the brick stack ~3x more often per second it clears the whole field in ~300 s and restarts, while the original still has 37 of 81 bricks left at 600 s and never resets. Target the original's erosion rate of roughly 0.07 bricks/s on a 16x16 grid.",
+    "Paddle width: the port's paddle is exactly 2x too narrow at every PaddleWidth value (untouched 4 px vs the original's 8; 2/6/8 px vs 6/12/16 at 0/0.5/1). Doubling the width term should fix the whole range at once. The position mapping, the end taper and the greyscale colour are already correct.",
+    "Rename the port's paddle-position control from sliderPaddlePosition to sliderPaddle so the exposed control surface matches the original (label 'Paddle', not 'PaddlePosition').",
+    "Ball and paddle thickness should be ~1 pixel regardless of grid size, as the original does: at 32x32 the original still draws a point-sized ball and a 1-row paddle, while the port draws a 4x4 ball disc and a 2-row paddle. On the default 16x16 rig this already shows as the port's ball smearing across two rows instead of one.",
+    "The port's opening serve goes almost straight down and misses the paddle, producing a visible ball teleport/respawn at t~0.75 s; the original never loses the ball in 90 s. Correcting the launch angle (and the paddle width) should remove this, but check that a served ball is at least catchable by a centred paddle.",
+    "Minor: at --grid 32x32 the port builds a 10-row brick block where the original builds 11 (both build 5 at 16x16 and 3 at 8x8) - an off-by-one in the row-count scaling."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "survey-600",
+    "probe",
+    "dump-a",
+    "ball-track",
+    "ball-track2",
+    "brickcount",
+    "late-200",
+    "vel-30",
+    "vel-90",
+    "fps40",
+    "seed-7",
+    "seed-1234",
+    "grid32",
+    "grid8",
+    "ctl-width-0",
+    "ctl-width-05",
+    "ctl-width-1",
+    "ctl-demo-0",
+    "ctl-demo-05",
+    "ctl-demo-1",
+    "ctl-pos-0",
+    "ctl-pos-025",
+    "ctl-pos-05",
+    "ctl-pos-075",
+    "ctl-pos-1",
+    "ctl-pos-slew"
+  ]
+}

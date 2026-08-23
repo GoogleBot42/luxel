@@ -1,0 +1,43 @@
+{
+  "slug": "neutronorbit",
+  "verdict": "match",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Port reproduces the pattern faithfully — a flickering gray nucleus at strip center with three red/orange/magenta electrons oscillating across the whole strip at 120-degree phase offsets on an exact 6.00 s cycle — differing only in sub-pixel rendering (orig snaps to integer pixels, port interpolates), which of the two reddish orbits gets which hue, and a ~0.6 px center offset.",
+  "observations": [
+    "Structure (both sides, 60 px strip, --dump per-pixel): a gray/white nucleus blob at strip center plus THREE colored electron blobs. Orig blob at t=0: px3-7 = 63,191,255,191,63 (orange 255/40/0); port px4-8 = 60,187,254,194,67 (orange 254/63/0). Blob geometry is effectively identical: mean lit width at threshold 8 is 5.73 px (orig) vs 5.84 px (port), mean FWHM 2.61 px vs 2.81 px, total lit pixels 28.7/frame vs 29.4/frame over 400 frames.",
+    "Motion: each electron traverses the strip sinusoidally with a 6.00 s period, the three offset by 120 deg (2.00 s). Orange electron: orig travels px 5.00 -> 53.81 (center 29.4, amplitude 24.4), port px 6.00 -> 54.00 (center 30.0, amplitude 24.0). Trajectory RMS difference between the sides over 15 s of 20 fps dumps is 1.46 px at zero shift, 1.03 px at the best time shift (-0.5 frame = -0.025 s). So the orbits are the same curve, same speed, same turning points.",
+    "Period is exact and identical: orig frame at t=0.00 equals t=6.00 equals t=12.00; same for port. At t=300 s both sides are back at the same phase as t=0 (orange centroid orig 6.00 vs 5.00; port 6.01 vs 6.03), so neither side drifts.",
+    "SUB-PIXEL RENDERING DIFFERENCE (the main finding). The original snaps electron centers to INTEGER pixel indices: its orange blob peak is exactly 255 on every one of 118 sampled frames and the profile is always drawn from a fixed ladder {255,191,95,63,47,31,15,11,7}. The port renders continuously: over the same frames its peak takes 36 distinct values (229..255 plus the sub-pixel dips), e.g. t=0.15 port px4-9 = 16,124,236,239,130,18 (center between px6 and px7) where the orig at t=0.15 is 7,63,191,255,191,63 (center pinned at px6). Consequence: the orig's blobs advance in visible one-pixel jumps and dwell 4-5 frames at the turning points; the port's glide smoothly.",
+    "That quantization is also why the frame-to-frame `motion` stat differs in peak: baseline (6 s, 20 fps) orig motion {avg 8.2, min 4, max 16}, port {avg 7.8, min 4, max 9}. The averages agree (8.2 vs 7.8); only the orig's spikes — the pixel jumps — are absent from the port. motionLit: orig avg 16.3 / max 28.4, port avg 15.2 / max 19.5. Not a speed difference: trajectory tracking above shows identical px/s.",
+    "HUE-TO-ORBIT ASSIGNMENT IS SWAPPED for two of the three electrons. Original: the electron whose orbit peaks at the right end at t=1.0 s is RED (255/18/18, hue 0 deg) and the one that reaches the left end at t=2.0 s is MAGENTA (255/0/72, hue 344 deg). Port: those are reversed — the t=1.0 s orbit carries magenta (254/0/77, hue 342 deg) and the t=2.0 s orbit carries red (229/31/31, hue 0 deg). Confirmed at 60 px and again at 300 px (t=1: orig red at px 227.5 / magenta at 94.5; port magenta at 269.8 / red at 83.9). The third (orange, phase 0) electron matches on both sides.",
+    "Palette: the port's hue triple is slightly wider and its red slightly weaker. Bright-pixel (v>=180) hue histogram over 20 s — orig: 344 deg (sat 1.00, val 0.83), 0 deg (sat 0.89, val 0.83), 10 deg (sat 1.00, val 0.84). Port: 342 deg (sat 1.00, val 0.89), 0 deg (sat 0.84, val 0.84), 14-16 deg (sat 1.00, val 0.89). So the port's orange is ~5 deg more yellow (255/40/0 vs 254/63/0) and its red peaks at 229 instead of 255 with sat 0.84 vs 0.89.",
+    "Centering: the port sits ~0.6 px right of the original. Nucleus centroid over 20 s — orig mean 29.49 px (range 27.0-32.0, sd 0.61); port mean 30.09 px (range 26.0-34.0, sd 0.91). Electron travel centers 29.4 vs 30.0. On a 60 px strip the geometric center is 29.5, so the ORIGINAL is the better-centered of the two.",
+    "Nucleus behaviour otherwise matches: both pulse in brightness over roughly the same range (orig peak 13-205, mean 136; port peak 2-196, mean 143) at a comparable ~0.6-0.65 s vibration cadence, and both wander a pixel or two around center. The port's wander is ~50% larger in amplitude (sd 0.91 vs 0.61 px) and its brightness oscillation is markedly more regular — autocorrelation of nucleus peak brightness gives port a clean 60-frame (3.0 s) peak at 0.85, while the orig's is irregular (best 0.51 at lag 100, with secondary structure at lags 13/25/39). Visible as a smooth snaking white column on the port waterfall vs a jittery flickering one on the original.",
+    "Steady state is fine on both. brightnessTrend `steady` on both sides at 6 s, 30 s and 60 s windows; zeroMotionFrames = 1 (the mandatory first frame) on every run. A --skip 60 capture and a --skip 300 capture render the same picture as the baseline on both sides — no decay, no freeze, no saturation.",
+    "Both sides are deterministic and seed-independent: seed 1234 produces a byte-identical meanBrightness series to seed 1 on orig AND port.",
+    "Both sides are resolution-independent in the same way: on --pixels 300 the orange electron travels px 29 -> 268 (same ~10%..90% of strip fraction as 5 -> 54 on 60 px) and the blobs scale proportionally. No hard-coded pixel geometry on either side.",
+    "No sensors: meta.json reports wantsSensors false on both sides, so nothing was fed and none is needed.",
+    "No controls: the engine enumerates zero settable controls on BOTH sides, and --probe-controls prints '(no settable controls)' for orig and port. Control surfaces match."
+  ],
+  "dials": [],
+  "feedback": [
+    "Swap the hue assignment of the two non-orange electrons. In the original the electron whose orbit reaches the RIGHT end at t=1.0 s is pure red (255,18,18 / hue 0 deg) and the one that reaches the LEFT end at t=2.0 s is magenta (255,0,72 / hue 344 deg); the port has these two hues on the opposite orbits. The orange (hue ~10 deg) electron, which starts at the left end at t=0 and peaks right at t=3.0 s, is already correct.",
+    "Tighten the hue triple. Original peak colors are 255/40/0 (hue 10 deg), 255/18/18 (hue 0 deg, sat 0.89) and 255/0/72 (hue 344 deg) — a 26 deg span. The port renders 254/63/0 (hue 15 deg), 229/31/31 (hue 0 deg, sat 0.84, peak value only 229) and 254/0/77 (hue 342 deg) — a 33 deg span. Pull the orange back ~5 deg toward red and bring the red electron up to full value 255 with the original's slightly higher saturation.",
+    "Shift the whole figure ~0.6 px left. The port's nucleus and electron-travel center both sit at px 30.0 on a 60 px strip; the original's sit at 29.4-29.5 (the true geometric center is 29.5). Looks like a pixel-index-vs-fractional-position off-by-half in the port's center calculation. Endpoints follow: orig electrons swing 5.00..53.81, port 6.00..54.00.",
+    "Optional / cosmetic: the original quantizes each blob's center to an integer pixel index (its peak is always exactly 255 and its profile is always the same fixed 63/191/255/191/63 kernel), so its electrons advance in one-pixel jumps and hold still for 4-5 frames at the turning points. The port interpolates sub-pixel, so its blobs glide and its peak dips to ~229 when the center falls between pixels. The port's version is arguably nicer, but it is a fidelity difference — it removes the original's characteristic stepping and flattens the orig's motion spikes (orig motion max 16 vs port 9 at 20 fps, while the AVERAGE motion matches at 8.2 vs 7.8). Only change this if exact fidelity is wanted.",
+    "Optional: damp the nucleus jitter slightly and make it less regular. The port's nucleus centroid has sd 0.91 px against the original's 0.61 px, and its brightness pulse autocorrelates at 0.85 on a clean 3.0 s lag while the original's is irregular (best 0.51). The original's nucleus reads as a nervous flicker; the port's as a smooth snake. Same brightness range and roughly the same ~0.6 s cadence, so this is about regularity and amplitude, not rate.",
+    "Do NOT change speed, period, amplitude, phase spacing, blob width, trail length, or the number of electrons — all measured identical: 6.00 s cycle on both, three electrons at 120 deg phase offsets, 5.7-5.8 px lit blob width, FWHM 2.6-2.8 px, ~29 lit pixels per frame, no drift out to t=300 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long30",
+    "late",
+    "veryLate",
+    "dump-nj20",
+    "seed1234",
+    "px300"
+  ]
+}

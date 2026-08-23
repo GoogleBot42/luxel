@@ -1,0 +1,74 @@
+{
+  "slug": "line-dancer-2d",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — full-saturation rainbow serpentine lines that writhe and kaleidoscope-mirror on a shared ~4.9 s time-based cycle — but the port badly compresses the cycle's brightness/contrast dynamic range (it never performs the original's dissolve-to-near-black) and its Speed dial has far too much authority.",
+  "observations": [
+    "Both sides expose the identical control surface: sliderSpeed / sliderTwist / sliderReflections, all three kind 'slider', all three probe responsive on both sides (orig maxDeltaLit 40.5/38.6/53.1, port 38.6/55.0/51.1). No missing or renamed dial.",
+    "Both render alive with no compile or runtime error, at 16x16, 8x8 and 48x48, untouched and dialed, at 5/10/20/40 fps, and are still healthy in a --skip 120 late window (brightnessTrend 'steady' on both).",
+    "Core look matches: on a black field both draw 1-6 vertical-ish serpentine 'dancing' lines with a soft glow, hue running the full rainbow along and across the line. Hue histograms over 30 dumped 48x48 frames are both flat across all 12 hue bins (orig 5.9-13.7%, port 4.7-11.6%), meanSat 1.00 on both, lit fraction 0.686 vs 0.707. Port is slightly dimmer (mean lit value 114 vs 131; whole-run meanBrightness 41 vs 45-46).",
+    "Both are resolution-independent in the same way: --grid 8x8, 16x16 and 48x48 draw the same picture at different fineness, no change in feature count. Both are fully deterministic — seed 1 vs seed 1234 gave byte-identical meanBrightness series on both sides.",
+    "Both are time-based, not frame-stepped: the breathing cycle's autocorrelation period is the same in SECONDS at --fps 5 and --fps 20 (orig 4.90 s, port 4.95-5.00 s). No frame-rate coupling divergence.",
+    "MAIN DIVERGENCE — the original dissolves, the port never does. Untouched at 48x48, the original's cycle spends ~0.8 s of every 4.9 s as an almost featureless dim glow: at t=3.6 s its per-row contrast is 0.3 (mean-abs adjacent-pixel luma) with a brightest pixel of only 26/255; at t=8.8 s it is 0.9 with peak 40. The port's flattest moments in the same window are t=10.0 s (contrast 4.4, peak still 209) and t=4.8 s (contrast 5.6, peak 154) — it always keeps a bright line on screen and just blurs/fattens it.",
+    "The same gap holds at matched dials, so it is not an untouched-defaults artefact. At Speed=0.5 / Twist=0.5 / Reflections=0.5, 50 dumps over 10 s at 16x16: original per-row contrast ranges 1.1 to 80, port only 12.8 to 48.9. At Speed=0 over 20 s the original's meanBrightness spans 3-101 while the port's spans 24-67.",
+    "SPEED DIAL AUTHORITY differs. Sweeping sliderSpeed 0/0.25/0.5/0.75/1 (Twist and Reflections pinned at 0.5, 4 s at 40 fps), the original's motion stat goes 15, 15, 16, 18, 19 — a gentle trim on a large speed-independent baseline; the port's goes 4, 10, 17, 22, 26 — a near-linear 0-to-6x scale. At Speed=0 the original keeps dancing and still completes a full dissolve inside 4 s, while the port's geometry nearly freezes (motion 4, rhythm image shows near-vertical streaks with only slow hue drift). At Speed=1 the port moves ~37% faster than the original.",
+    "Untouched, the two sides run the same cycle ~1.5 s out of phase (original's dissolves land at 3.4, 8.65, 13.4, 18.25 s; port's dips at 4.95, 9.75, 14.7, 19.7 s at 20 fps). Period is essentially the same (98.3 vs 99.6 frames at 20 fps); only the starting phase differs.",
+    "At Reflections=1 both go to a high-order kaleidoscope (roughly 8-fold), but the original's is a clean pinwheel of long smooth spiral arms while the port's is a busier, choppier crosshatch/maze of short segments.",
+    "Average spatial frequency is comparable: amplitude-weighted spectral centroid along x over 30 dumped 48x48 frames is kx 6.34 (orig) vs 5.73 (port); dominant kx sweeps 1-7 on the original and 1-5 on the port over a cycle."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Trims the rate of the writhing on top of a large baseline: motion stat 15 -> 19 across 0 -> 1 (4 s @ 40 fps, other dials 0.5). At 0 the pattern still dances and still completes its ~4.9 s dissolve cycle.",
+      "portEffect": "Acts as a full 0-to-6x master speed: motion stat 4 -> 26 across 0 -> 1 on the same run. At 0 the geometry nearly freezes and only the hue drifts; at 1 it runs ~37% faster than the original.",
+      "matches": false
+    },
+    {
+      "name": "sliderTwist",
+      "origEffect": "At 0 the reflected lines are straight bars crossing in a 4-fold cross; at 1 they curl into spiral/pinwheel arms with visible swirl. Direction and magnitude of the change are large and continuous.",
+      "portEffect": "Same: 0 gives straight crossing bars, 1 gives curled spiral arms. Visually the closest-matching dial of the three.",
+      "matches": true
+    },
+    {
+      "name": "sliderReflections",
+      "origEffect": "0 = no symmetry, plain vertical serpentine lines; 0.5 = 4-fold mirrored maze; 1 = clean ~8-fold pinwheel of long smooth spiral arms.",
+      "portEffect": "Same progression and same symmetry orders (0 = plain serpentines, 0.5 = 4-fold, 1 = ~8-fold), but at 1 the result is a choppier crosshatch of short segments rather than long clean arms.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Restore the amplitude of the ~4.9 s breathing cycle. The original does not merely fatten its line at the low point — it fully dissolves: for roughly 0.8 s out of every 4.9 s the whole 48x48 panel is a flat dim radial glow whose BRIGHTEST pixel is 26-63 out of 255 and whose per-row adjacent-pixel contrast is 0.3-1.1. The port's low point still has a peak pixel of 150-210 and contrast 4-7. Whatever quantity is being oscillated (line width / line intensity / a zoom factor) needs a much larger swing so the picture actually goes near-black and featureless, then blooms back. Measured at matched dials Speed=Twist=Reflections=0.5, original contrast ranges 1.1-80 over a cycle, port only 12.8-48.9; at Speed=0 over 20 s, original meanBrightness spans 3-101, port 24-67.",
+    "Rescale the Speed dial. On the original Speed is a trim on top of a large fixed baseline rate — motion 15 at Speed=0 rising only to 19 at Speed=1, and at Speed=0 the pattern still writhes and still dissolves once per ~4.9 s. On the port Speed is a master multiplier from a standstill: motion 4 at Speed=0 (geometry effectively frozen, only hue drifting) to 26 at Speed=1 (~37% faster than the original). The port needs a substantial speed floor that Speed=0 cannot remove, and a smaller span across the dial's range.",
+    "At Reflections=1 the original resolves into a small number of long, smooth spiral arms sweeping from centre to edge; the port at the same setting produces short chopped segments in a crosshatch. Once the dissolve amplitude is fixed, re-check this setting — the port's line looks like it is being broken up rather than carried continuously through the mirror folds.",
+    "Untouched, the port sits ~1.5 s later in the cycle than the original (original dissolves at 3.4/8.65/13.4 s, port dips at 4.95/9.75/14.7 s at 20 fps) and runs ~1.3% slower (99.6 vs 98.3 frames per cycle at 20 fps). Cosmetic; fix only after the amplitude and Speed issues.",
+    "Nothing to do on colour, geometry family, control surface, resolution independence, determinism or fps-independence — all four match closely. Port is uniformly ~10% dimmer than the original (mean lit value 114 vs 131), which is worth a look but is minor next to the dissolve amplitude."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "cycle-dump",
+    "dip-dump",
+    "dial-mid",
+    "dial-mid-dump",
+    "ctl-speed-low",
+    "ctl-speed-high",
+    "ctl-twist-low",
+    "ctl-twist-high",
+    "ctl-refl-low",
+    "ctl-refl-high",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "spd0-long",
+    "grid8",
+    "grid48",
+    "grid48-dump",
+    "seed1234",
+    "late"
+  ]
+}

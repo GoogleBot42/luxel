@@ -1,0 +1,67 @@
+{
+  "slug": "fairies",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Port reproduces the pattern's mechanism exactly — stationary twinkles that pop to full white or full primary-colour and decay exponentially at randomised rates — and matches the original statistically at every dialed setting; the visible gaps are all in the UNTOUCHED defaults (primary hue 324 deg vs 306 deg, a faster default speed) plus a missing ~2 s opening flash and a thinner white-sparkle share.",
+  "observations": [
+    "Rig: strip, 60 px. Both sides compile and run clean, no runtime errors, no sensor use (wantsSensors false on both). Neither side drifts, decays or freezes: brightnessTrend 'steady' on both over 60 s and 240 s surveys, zeroMotionFrames 1 (the unavoidable first frame).",
+    "Same mechanism on both sides, confirmed by dumping 200 consecutive frames (--label longdump, 20 s..29.95 s at 20 fps): individual pixels ignite at full 255, then decay multiplicatively in place with no spatial movement (waterfall = pure vertical streaks, never slanted). Two populations on BOTH sides: pure-white fairies (255/255/255 -> grey ramp) and primary-colour fairies (255/0/B -> fading ramp), and each fairy gets its own decay rate, giving a mix of short stubs and long tails.",
+    "Untouched default primary colour differs: original's colour fairies ignite at exactly 255/0/229 (hue 306 deg, i.e. magenta-violet) on every event; the port's at 255/0/153 (hue 324 deg, rose-pink). Constant across the whole run on both sides, and visible in the survey waterfalls as violet-magenta vs pink-crimson.",
+    "The picker itself is faithful: with hsvPickerPrimaryColor pinned to the SAME value on both sides the ignition chromaticity is byte-identical (0.33,1,1 -> both 0/255/0 family; 0.66,0.5,1 -> both the same blue family, including both sides ignoring the s=0.5 component the same way). So the divergence is the default value, not the colour math.",
+    "Untouched default speed differs. At default controls the original spawns 8.0 ignitions/s with mean brightness half-life 0.83 s; the port spawns 11.4/s with half-life 0.69 s (measured over 60 px x 10 s, n=80 vs n=114 ignition events). Cross-referencing the pinned-speed sweep, the original's untouched state sits at roughly sliderSpeed 0.47 and the port's at roughly 0.33 — the port runs visibly busier and shorter-lived out of the box.",
+    "With sliderSpeed pinned equal the two converge: at 0.25 orig 10.1 ign/s vs port 12.4, half-life 13.9 vs 12.1 frames; at 0.5 orig 7.8 vs port 8.4, 18.9 vs 18.2 frames; at 0.75 orig 4.8 vs port 6.4, 24.1 vs 24.4 frames. Residual: the port spawns ~15-30% more events per second at the same setting, and its slowest-decaying fairies are shorter (max half-life 22/33/45 frames on the original vs 19/27/37 on the port at 0.25/0.5/0.75).",
+    "White-vs-coloured mix differs systematically: white ignitions are 36-44% of all ignitions on the original (0.375, 0.36, 0.36, 0.44 across four measured configurations) against a flat 28-30% on the port. The port therefore reads slightly less 'sparkly' and more uniformly pink.",
+    "Startup transient exists only on the original. At t=0 the original has ~28 of 60 pixels ALL sitting at full 255 simultaneously (mean brightness 82) and they decay together into the steady state over ~2 s; the port starts with its fairies already staggered at random mid-decay levels (mean brightness 19-20 at t=0, no flash). Both settle to the same ~24-26 mean brightness afterwards.",
+    "Steady-state texture: the original is burstier. Over matched post-transient windows its mean-brightness standard deviation is 5.5-7.3 against the port's 4.1-5.4, and its extremes are wider (survey after 10 s: orig 9-49, port 13-35). Consistent with the original's fewer but longer-tailed fairies.",
+    "Both sides are time-based, not frame-stepped: spawn rate and half-life in SECONDS hold across --fps 10 / 20 / 40 (orig 8.8/8.0/8.0 per s, half-life 0.87/0.83/0.80 s; port 10.8/11.4/10.2 per s, half-life 0.73/0.69/0.68 s). No frame-rate coupling on either side.",
+    "No mode or long-cycle structure on either side: a 240 s / 2 fps survey shows one homogeneous regime throughout, statistically stationary, on both sides. Behaviour is unchanged at seeds 7 and 1234 (orig mean brightness 26.8/24.9, port 22.4/21.3, both 'steady'), so none of the above is a one-seed fluke.",
+    "Control surfaces match exactly: both sides expose hsvPickerPrimaryColor (hsvPicker, label PrimaryColor) and sliderSpeed (slider, label Speed). No missing, extra, renamed or re-kinded control."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerPrimaryColor",
+      "origEffect": "Sets the colour of the non-white fairies; ignition RGB tracks the picker hue exactly (0.33 -> green, 0.66 -> blue). White fairies are unaffected and stay white at every setting. Untouched default is hue 306 deg (255/0/229).",
+      "portEffect": "Identical: same hue mapping, same byte-identical ignition colours at matched picker values, white fairies likewise unaffected. Only the untouched default differs — hue 324 deg (255/0/153).",
+      "matches": true
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Inverse dial: low values give many short-lived fairies (0 -> motion stat 7, dense stubby streaks), high values give fewer, much longer-lived ones (1 -> motion 2, long tapering streaks). Measured 10.1 ign/s and 0.70 s half-life at 0.25 falling to 4.8 ign/s and 1.21 s at 0.75.",
+      "portEffect": "Same direction, same magnitude, same waterfall character at both extremes (motion 8 at 0, 2 at 1). 12.4 ign/s / 0.61 s at 0.25 down to 6.4 ign/s / 1.22 s at 0.75 — decay timing matches within a few percent, spawn rate runs ~15-30% high. Untouched default sits lower on the dial than the original's.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Change the default primary colour. The original's untouched colour fairies ignite at exactly RGB 255/0/229 (hue 0.85 of the wheel, saturation 1, value 1); the port's ignite at 255/0/153 (hue 0.90). Shift the default hue down by 0.05 and the untouched look matches. The picker math itself is already correct — do not touch it.",
+    "Lower the default speed. Untouched, the original produces 8.0 fairy ignitions per second on a 60 px strip with a mean brightness half-life of 0.83 s; the port produces 11.4/s with 0.69 s. On the port's own dial that means its untouched default sits near sliderSpeed 0.33 while the original's sits near 0.47 — raise the default so the untouched render slows to the original's rate.",
+    "Add the opening flash. The original ignites ~28 of 60 pixels at full brightness on frame 0 all at once (mean brightness 82) and lets them decay together into the steady state over about 2 s; the port starts with its fairies pre-staggered at random mid-decay levels (mean brightness 19). Initialise every fairy at full brightness rather than at a random phase of its decay.",
+    "Raise the white-fairy share. Across four separately-measured configurations the original made 36-44% of its ignitions pure white; the port is pinned at 28-30%. Roughly one in every 2.7 fairies should be white on the original against the port's one in 3.4.",
+    "Widen the slow tail of the decay-rate distribution. At every matched speed setting the port's longest-lived fairies die sooner than the original's — max observed half-life 19 vs 22 frames at speed 0.25, 27 vs 33 at 0.5, 37 vs 45 at 0.75 (20 fps) — while medians agree. The port's per-fairy decay rate is drawn from too narrow a range; extend it toward slower decays so the occasional long streak appears. This is also what makes the original's mean brightness swing wider (sd 5.5-7.3 vs the port's 4.1-5.4).",
+    "Trim the spawn rate slightly at matched dials: at the same sliderSpeed the port emits ~15-30% more ignitions per second than the original (12.4 vs 10.1 at 0.25, 6.4 vs 4.8 at 0.75). Secondary to the items above.",
+    "Nothing needs fixing in the core mechanism, motion or timing model: stationary in-place twinkles, exponential per-pixel decay, dual white/coloured populations, fps-invariant timing and steady long-run behaviour are all already correct."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "steady",
+    "trace",
+    "start",
+    "longdump",
+    "ctl-color-mid",
+    "ctl-color-hi",
+    "ctl-speed-0",
+    "ctl-speed-0.25",
+    "ctl-speed-0.5",
+    "ctl-speed-1",
+    "longdump-sp0.25",
+    "longdump-sp0.5",
+    "longdump-sp0.75",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

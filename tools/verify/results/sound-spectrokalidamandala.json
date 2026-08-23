@@ -1,0 +1,67 @@
+{
+  "slug": "sound-spectrokalidamandala",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same beat-locked rainbow mandala with matching rhythm, palette statistics and steady-state brightness, but the port breaks the kaleidoscope's colour symmetry (a horizontal hue ramp makes left/right mirror pixels differ by up to 120 deg of hue) and its load-in transient is inverted (original rails to full white for ~500 frames, port fades in from black).",
+  "observations": [
+    "Rig/geometry: default rig is a 16x16 grid, 256 px. Both sides draw a centred concentric-ring mandala on a dark ground, saturated full-spectrum colours, centre pixel black on both.",
+    "SETTLE / TRANSIENT (biggest visible divergence). Original loads RAILED AT FULL WHITE: meanBrightness 255 at t=0, 207 averaged over the first 5 s at 20 fps, decaying to a steady ~57-63. Port loads BLACK: meanBrightness 1 at t=0, 31 over the first 5 s, rising to ~60-66. The entire default 6 s baseline sits inside this transient (baseline run: orig mean 195, port mean 32) — that gap is transient, not steady-state.",
+    "The original's transient is FRAME-COUNTED, not time-based: mean brightness first falls below 100 at frame 315/388/467/410 for fps 5/10/20/40, i.e. at t = 63.0 s / 38.8 s / 23.4 s / 10.3 s. The port's ramp is much shallower and reaches its steady band by ~30 s at 20 fps.",
+    "STEADY STATE MATCHES on brightness: over a 300 s / 10 fps survey, 10 s-averaged meanBrightness settles at orig ~53-62 (avg 57 from t=60 s on) and port ~56-74 (avg ~65). Port is ~14% brighter in the mean, which is within eyeball tolerance.",
+    "SYMMETRY (second big divergence). Original has EXACT D4 (8-fold) symmetry: mean abs diff under horizontal mirror 0.0-0.2, vertical mirror 0.0-0.2, transpose 0.0, 90-deg rotation 0.0-0.2 (measured on 16x16, 32x32 and 48x48 grids, many frames). Port has vertical mirror EXACT (0.1-0.4) but horizontal mirror 15-34 and transpose/rotation 10-25 at 16x16, and 18-25 / 13-18 at 32x32 and 48x48. A translation search over all 16x16 offsets found no shift that fixes it, so it is not an off-by-one centring.",
+    "The port's symmetry break is PURELY IN HUE, not geometry: for horizontally mirrored pixel pairs the port's value difference is 0.001 and saturation difference 0.001 (i.e. the mandala's shape and brightness are perfectly mirrored) while the HUE difference averages 0.142-0.235 turns (51-85 deg). The original's mirrored pairs are hue-identical (0.000-0.003).",
+    "The port's extra hue term is a smooth horizontal ramp: the signed hue delta between mirrored pairs runs about -0.33 turn (-120 deg) at the left edge and shrinks monotonically to about -0.05 turn near the centre column (32x32, several frames). Vertically mirrored pairs show mean |hue diff| 0.001 — so the spurious term depends on raw x only, with no y component.",
+    "RHYTHM MATCHES. Both sides are beat-locked to the beat120 feed at 2 Hz: sharp attack one frame (0.05 s) after each beat, then exponential decay across the 0.5 s interval. Autocorrelation of the settled meanBrightness/motion series (20 fps, from t=35 s) puts the dominant lag at 20 frames = 1.00 s on BOTH sides, with harmonics at 2.00/3.00 s and 0.5 s present on the port list at 0.73.",
+    "Beat envelope differs in floor depth: averaging by beat phase over 8 s of steady state, orig runs 36 -> 99 -> 91 -> 79 -> 68 -> 60 -> 53 -> 46 -> 42 -> 38 (peak/trough 2.76); port runs 18 -> 87 -> 89 -> 81 -> 73 -> 65 -> 58 -> 49 -> 37 -> 26 (peak/trough 4.85). The port drops closer to black between beats; the original keeps a residual glow.",
+    "Consistent with that floor: per-frame fully-black pixel fraction is 3-6% on the original and 11-33% on the port (10 dumped steady frames).",
+    "COLOUR DISTRIBUTION MATCHES CLOSELY. Over 160 consecutive steady frames: lit fraction 0.56 vs 0.51, mean saturation 0.68 vs 0.69, mean value 0.53 vs 0.58, near-grey fraction of lit pixels 0.29 vs 0.28. 12-bin hue histograms agree within a few percent on every bin (orig 13.8/8.2/12.2/10.3/9.1/6.3/4.7/5.6/8.3/6.2/6.4/8.8, port 9.9/10.5/11.7/10.9/9.8/7.1/6.9/6.0/5.3/5.3/7.2/9.4). Value histograms are both strongly bimodal: 58% in the darkest bin and 21% in the brightest on both sides.",
+    "RESOLUTION BEHAVIOUR DIFFERS off the default rig. Counting radial brightness peaks per frame (mean of 6 steady frames): orig 1.3 / 3.3 / 3.7 / 3.8 at 16x16 / 32x32 / 48x48 / 64x64 with radial total-variation per bin 73 / 70 / 55 / 44 — it converges, i.e. draws a fixed logical mandala. Port: 1.5 / 3.8 / 7.2 / 8.5 peaks, TV 57 / 60 / 87 / 87 — the ring count keeps growing with the grid, i.e. it rasterizes at native resolution. On the DEFAULT 16x16 rig the two agree (1.3 vs 1.5), so this only shows on larger panels.",
+    "Instantaneous spatial agreement is nil: mean per-frame spatial correlation between the two sides' brightness fields at matched times is -0.04 over 160 steady frames, while temporal correlation of whole-panel brightness is 0.71. Per-radius correlations peak at 0.4-0.64 and several are best at a -1 shell shift (orig r3/r4/r6 correlate best with port r2/r3/r5), suggesting the port's radius-to-frequency-bin mapping is offset by roughly one shell. The two never draw the same ring at the same instant.",
+    "SEED-INDEPENDENT on both sides: seeds 1, 7 and 1234 give identical statsSummary on both sides over a --skip 120 --seconds 12 window, so nothing here is RNG-driven.",
+    "SENSORS OFF: both sides keep animating with dead sensors (orig mean 78 motion 21, port mean 59 motion 21) and both still render a recognisable mandala — so both carry a non-audio motion/rotation component, and both degrade gracefully. The divergences above all survive --sensors off, so they are not sensor-path bugs.",
+    "CONTROL SURFACE MISMATCH: the original exposes exactly one control, a display-only showNumber labelled 'S'. The port exposes three display-only showNumbers, labelled 'Zoom', 'Sensitivity' and 'Integral'. Neither side has any settable control (--probe-controls reports '(no settable controls)' for both). Setting all of them explicitly produced byte-identical statistics to the unset run on both sides, confirming they are pure readouts."
+  ],
+  "dials": [
+    {
+      "name": "S (orig) / Zoom, Sensitivity, Integral (port)",
+      "origEffect": "one display-only showNumber 'S'; not settable, no render effect (explicit set is a byte-identical no-op)",
+      "portEffect": "three display-only showNumbers 'Zoom', 'Sensitivity', 'Integral'; none settable, no render effect (explicit set is a byte-identical no-op)",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Fix the colour symmetry first — it is the pattern's namesake. The port's hue carries an extra term proportional to the RAW horizontal coordinate: mirrored pixel pairs differ by about -120 deg of hue at the left edge, tapering to about -5 deg at the centre column, while their brightness and saturation mirror exactly. The original's hue is a function of the FOLDED coordinate only, so every one of its eight mirror images is hue-identical. Whatever coordinate feeds the hue lookup must be the same folded/mirrored coordinate that already feeds the geometry, not the unfolded x.",
+    "Symmetry target to verify against: on any grid size, mean abs pixel diff under horizontal mirror, vertical mirror and transpose should all be under ~1 (the original scores 0.0-0.2). The port currently scores flipX 15-34, transpose 10-25, flipY 0.1-0.4 — vertical is already right, so only the x-fold is wrong.",
+    "Load transient is inverted. The original starts at full white (meanBrightness 255) and takes ~400-600 RENDERED FRAMES to decay to its steady ~60 — a frame-counted ramp (t = 63 s at 5 fps, 23 s at 20 fps, 10 s at 40 fps). The port starts at meanBrightness 1 and fades UP over ~30 s at 20 fps. If the original's white-out comes from an auto-gain/normalisation divisor that starts small and grows, the port's equivalent state is initialised at the opposite extreme. Match the original's initial condition and its frame-counted ramp rate.",
+    "Between-beat decay is too deep on the port. Averaged by beat phase in steady state, the original falls from 99 to 38 across the 0.5 s beat interval (peak/trough 2.76) while the port falls from 89 to 18 (4.85), and the port leaves 11-33% of pixels at exactly 0,0,0 per frame against the original's 3-6%. The port needs more persistence/residual floor between hits — a longer decay tail or a non-zero hold, not a brightness scale change (the two sides' mean brightness already agrees to ~14% in steady state).",
+    "Radius-to-frequency mapping looks offset by about one shell: the original's radial shells r3/r4/r6 correlate best (0.41-0.64) with the port's r2/r3/r5 over a 160-frame steady window, and correlate weakly (0.16-0.51) at zero shift. Check that the first spectrum bin lands on the same ring radius on both sides.",
+    "Resolution independence: the original draws a FIXED logical mandala — its radial peak count saturates at ~3.8 whether the grid is 32x32, 48x48 or 64x64, and its radial total-variation per bin falls 70 -> 55 -> 44 as the grid grows. The port's peak count keeps climbing (3.8 -> 7.2 -> 8.5) with TV pinned at ~87, so it is deriving ring spacing from pixel spacing rather than from normalised coordinates. Harmless on the default 16x16 rig, wrong on any larger panel.",
+    "Control surface: the original exposes exactly one display-only readout, showNumber 'S'. The port exposes three ('Zoom', 'Sensitivity', 'Integral'). None affect rendering, so this is cosmetic, but the port should present the same single readout the original does if the UI is meant to match.",
+    "Already correct, do not regress: 2 Hz beat lock with a one-frame attack and exponential decay (dominant autocorrelation lag 20 frames = 1.00 s on both sides), the hue histogram (within a few percent per 12-bin bucket), mean saturation/value, the bimodal value histogram (58% darkest bin / 21% brightest), the steady-state mean brightness, seed independence, and graceful behaviour with sensors off."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-300",
+    "probe",
+    "steady",
+    "dump-steady",
+    "dump-ring",
+    "fps5",
+    "fps10",
+    "fps20",
+    "fps40",
+    "grid8",
+    "grid32",
+    "dump-g32",
+    "rings-16x16",
+    "rings-32x32",
+    "rings-48x48",
+    "rings-64x64",
+    "sens-off",
+    "seed7",
+    "seed1234",
+    "ctl-attempt"
+  ]
+}

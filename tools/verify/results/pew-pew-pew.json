@@ -1,0 +1,50 @@
+{
+  "slug": "pew-pew-pew",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — rightward-travelling red/magenta laser-bolt ramps over a full-strip blue muzzle-flash that decays geometrically and re-triggers several times a second — but the port's bolts travel ~1.4x too fast (so ~40% fewer are on the strip at once), its green channel runs ~2.5x hot (pink/lavender instead of saturated crimson-magenta), and it carries a stationary per-pixel green speckle the original does not have.",
+  "observations": [
+    "Rig/controls: 60 px strip, no controls on EITHER side (probe: 'no settable controls' for orig and port), wantsSensors false on both, no compile/runtime errors on either side in any run.",
+    "Shared structure (from --dump, 60 px frames): each frame's RED channel is a series of geometric ramps rising ~x1.2 per pixel up to 255 then resetting — i.e. comet/bolt heads with exponential tails — and the BLUE channel is a single UNIFORM value across the whole strip in any given frame. Both sides do exactly this; it is unmistakably the same construction.",
+    "Blue 'muzzle flash' decay matches almost exactly: orig blue series steps 255,202,161,128,102,81,64,50,39,30,23,18,14,10 (ratio 0.792 per frame at 20 fps); port steps 255,203,163,130,104,83,66,53,42 (ratio 0.798). Essentially identical decay constant.",
+    "Flash re-trigger rate matches: over 30 s at 20 fps, orig 137 triggers (4.57/s), port 150 (5.00/s); gap distribution orig median 4 frames (min 1, max 21), port median 3 (min 1, max 17). Stochastic, same order.",
+    "Both sides are FRAME-COUPLED in spawn rate, identically: flashes/s = 0.78 / 2.83 / 5.17 / 6.17 (orig) and 0.58 / 2.50 / 4.83 / 7.33 (port) at 5 / 10 / 20 / 40 fps. Mean brightness likewise falls with fps on both (orig 185/218/172/117, port 200/227/195/151). This fps dependence is shared, so it is not a port bug.",
+    "Both sides are fps-INVARIANT in bolt travel speed (px/s measured at 10, 20 and 40 fps), so the speed gap below is a real port difference, not a frame-rate-coupling difference.",
+    "SPEED GAP: circular cross-correlation of the red channel between consecutive frames gives orig +2.16 px/frame @20 fps seed 1 (43 px/s) and +2.69 @20 fps seed 7 (54 px/s); port +3.26 (65 px/s) and +3.46 (69 px/s). Cross-checked at 10 fps (orig 42 px/s, port 64 px/s) and 40 fps (orig 42, port 56). Port is consistently ~1.3-1.5x too fast; the shift histograms barely overlap (orig almost all 2-3, port almost all 3-4).",
+    "DENSITY consequence: bolts on screen at once (counted as red-ramp resets per frame, default 60 px rig, 20 fps): orig 5.75 vs port 3.55 (seed 1), orig 4.05 vs port 3.65 (seed 7). Ratio 0.62 at seed 1 matches 1/1.55 — consistent with the same spawn rate feeding faster-moving bolts, i.e. the density difference is a symptom of the speed bug, not an independent one.",
+    "COLOR: green-to-red ratio over lit pixels — orig median 0.063 (p10 0.000, p90 0.137, mean 0.073), port median 0.161 (p10 0.075, p90 0.300, mean 0.176). Mean green over 30 s at 20 fps: orig 15 (range 4-19), port 35 (range 8-43). Red and blue are close (orig meanR 179 / meanB 176, port 203 / 196). Net effect: orig bolts are deeply saturated crimson-to-magenta with some pure-red bolts (G exactly 0 on whole bolts); the port has no pure-red bolts and reads pink/lavender/whitish.",
+    "SPECKLE ARTEFACT (port only): the port's green channel has strong pixel-to-pixel jitter. Green second-difference roughness (mean |G[k] - (G[k-1]+G[k+1])/2|) is 2.0 on orig vs 11.1 on port. Decisive test: correlate the green high-frequency residual between consecutive frames at various spatial shifts — the ORIGINAL's residual peaks at shift +2 (corr 0.64), i.e. its fine green detail TRAVELS WITH THE BOLTS at the bolt speed; the PORT's peaks at shift 0 (corr 0.87) with shift +1 at -0.69, i.e. a stationary, near-alternating per-pixel-index green offset that does not move with the content. It persists ~0.25-0.5 s (zero-shift corr 0.87 at 0.05 s, 0.41 at 0.25 s, 0.17 at 0.5 s, ~0 at 1 s) then re-randomizes. In the waterfall PNGs this is the obvious vertical striping/grain in port.png that orig.png does not have.",
+    "BRIGHTNESS: port is ~17% brighter and never gets as dark. Over 30 s at 20 fps, mean-brightness percentiles orig p5 77 / p50 128 / p95 155 (min 26) vs port p5 103 / p50 150 / p95 170 (min 68). Over 180 s at 10 fps the uniform blue level bottoms out at 0 on orig but only 83 on port — the original has genuinely dark troughs between flashes that the port never reaches.",
+    "NO REGIMES / NO DRIFT: 60 s @ 5 fps and 180 s @ 10 fps surveys show one homogeneous stochastic regime on both sides, no mode rotation, no palette walk. 30 s-segment mean brightness over 180 s: orig 157/159/160/162/161/159, port 174/175/177/176/174/174. brightnessTrend 'steady' on both in every run; zeroMotionFrames = 1 (the unavoidable first frame) on both.",
+    "STEADY STATE OK: --skip 60 window looks and measures the same as t=0 (orig mean 124 motion 32, port mean 149 motion 32). Nothing decays, freezes or saturates on either side.",
+    "SEEDS: seeds 1, 7 and 1234 all produce the same statistical character on both sides (orig mean brightness 121/124/130, port 142/143/148); the speed and green-hue gaps reproduce on every seed tested.",
+    "Frame 0 init difference (minor): orig starts with blue = 0 across the strip (dark background, a few bright red dots), port starts with blue = 127. By frame 1 both are into the normal flash cycle.",
+    "Grid-lens re-render (--rig grid --grid 8x8) shows the same picture: same banding rhythm, port visibly more purple/pink where orig is redder. No structural divergence introduced by the lens."
+  ],
+  "dials": [],
+  "feedback": [
+    "Bolt travel speed is ~1.3-1.5x too fast. On the default 60 px strip the original moves its red ramps at ~43-54 px/s (2.2-2.7 px/frame at 20 fps); the port moves them at ~65-69 px/s (3.3-3.5 px/frame). Scale the per-second bolt velocity down by ~0.7x. Both sides are already fps-invariant here, so this is a plain speed constant, not a delta-time bug.",
+    "Do NOT separately 'fix' the bolt count. The port shows ~3.6 bolts at once vs the original's ~5.8 purely because they leave the strip faster; the trigger/spawn rate already matches (orig 4.57/s vs port 5.00/s over 30 s at 20 fps). Fixing the speed should restore the density on its own.",
+    "The green channel is roughly 2.5x too hot, which desaturates the whole pattern. Target green/red ratio over lit pixels: median ~0.06, p90 ~0.14, with some bolts at exactly G=0 (pure red). The port currently sits at median 0.16, p90 0.30 and never produces a pure-red bolt. Aim for a deeper crimson-to-magenta family; right now it reads pink/lavender.",
+    "Remove the stationary per-pixel green speckle. In the original the fine green variation is part of each bolt and travels with it (green residual correlates best at the bolt's own +2 px/frame shift); in the port it is locked to pixel index (best correlation at zero shift, 0.87 frame-to-frame, with a strong odd/even alternation) and re-randomizes about every 0.3 s. That is an index-keyed noise/dither term added to green rather than a per-bolt hue — the bolt's tint should be a property of the bolt, constant along its tail, not a function of the pixel index. Numerically: get green second-difference roughness down from ~11 to the original's ~2.",
+    "The port never gets dark between flashes. The original's uniform blue level decays all the way to 0 (mean strip brightness dips to 26 over 30 s, and to 42 over 180 s); the port floors around 42-83 blue and mean brightness 68. Let the flash decay run to zero instead of clamping at a floor — the missing dark troughs are most of why the port reads ~17% brighter overall.",
+    "Everything else already matches and should not be touched: the geometric red ramp shape (~x1.2 per pixel to 255 then reset), the uniform full-strip blue flash, its ~0.79-per-frame decay ratio, the flash trigger rate and its gap distribution, the rightward travel direction, the absence of controls, and the steady non-drifting long-run behaviour."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey180",
+    "long30",
+    "late60",
+    "dumpA",
+    "dumpseq",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "dumpseed7",
+    "grid8"
+  ]
+}

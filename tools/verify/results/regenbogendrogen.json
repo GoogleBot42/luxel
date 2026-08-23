@@ -1,0 +1,48 @@
+{
+  "slug": "regenbogendrogen",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same fully-saturated mirrored-rainbow chevron pattern with an identical 13 s breathing cycle and identical colour/brightness, but the port traverses the original's spatial waveform at exactly HALF the rate across the strip, so it shows about half as many rainbow bands (orig ~7.7 hue revolutions per strip vs port ~3.9).",
+  "observations": [
+    "Both sides compile and run clean (no compileError/runtimeError), on the default rig (strip, 60 px). Neither side has any controls: probe reports '(no settable controls)' for orig AND port, so the control surfaces match exactly.",
+    "Both sides are fully saturated at full value everywhere: per-pixel saturation 1.00 and value 255 on every frame sampled across a whole cycle. meanBrightness avg 120 on both (orig 120.0 / port 119.9 at baseline; orig 120.3 / port 120.5 in the --skip 200 late window). brightnessTrend 'steady' on both, zeroMotionFrames 0 in the late window on both. Neither side dies, dims, freezes or saturates.",
+    "Both sides are mirror-symmetric about pixel 0 and about pixel 30 of the 60-px strip, i.e. the picture is a standing/breathing rainbow with chevron apexes pinned at the strip centre and the two ends. No net travel on either side; the waterfall chevrons have identical node positions.",
+    "Temporal behaviour is IDENTICAL. Autocorrelation of meanG over the 240 s / 2 fps survey gives the same fundamental on both sides: lag 26 frames = 13.0 s (r=0.990 orig, 0.995 port), with the harmonic ladder at 52.5 / 65.5 / 118.0 s matching to 3 decimal places. The motion series peaks at 13 frames = 6.5 s (half period) on both.",
+    "Both sides are fps-INVARIANT (time-based, not frame-stepped): hue at pixel 0 sampled at t=0..13 s is the same trajectory at --fps 10, 20 and 40 on each side (e.g. orig 0.03/0.02/0.02 at t=0 and 0.96/0.95/0.95 at t=5; port 0.90/0.91/0.91 and 0.00/0.00/0.00).",
+    "Both sides are resolution-independent and index-mapping-consistent: total hue traversal per frame barely moves between --pixels 30, 60 and 120 (orig 6.9 / 7.5 / 8.0 at t=0; port 3.88 / 3.91 / 3.94). Rendering on a bigger rig does not close the gap.",
+    "Both sides are fully deterministic and independent of seed and wall clock: hue at pixel 0 at t=0/2/4 is bit-identical under --seed 1234 and --wall-clock 1756003333 (orig 0.022/0.346/0.801, port 0.906/0.493/0.087 in every case).",
+    "THE DIVERGENCE — spatial rate is exactly 2x off. Total unwrapped hue variation across the 60-px strip, averaged over 27 samples spanning a full 13 s cycle: orig 7.70 hue revolutions, port 3.90 (ratio 1.97). The original's fine spatial ripple has extrema every 5 px (period 10 px = 6 cycles/strip at t=0); the port's has extrema every 10 px (period 20 px = 3 cycles/strip). Spatial DFT of the unwrapped hue agrees: at t=0 and t=6 the original peaks at k6 (0.32 / 0.31) while the port peaks at k3 (0.27 / 0.27); at t=3 and t=9 the original peaks at k3+k5 while the port peaks at k1+k2.",
+    "The half-rate relation is EXACT, not approximate. Rendering the original on a 120-px strip and mapping port pixel x -> orig120 pixel 27 + tri(x) (tri(x) = x for x<=30, 60-x above) reproduces the port's entire 60-px frame with mean |dRGB| = 0.02/255 and max per-pixel error 0.33/255, at every one of t = 0,1,2,...,13 s. So the port draws the original's waveform, same palette, same time evolution, just stepping through it at half the spatial rate and starting 27/120 = 0.225 of a full spatial period in.",
+    "Because of that offset the port's hue at pixel 0 looks time-shifted (~5.7 s of the 13 s cycle) relative to the original's, but that is a SPATIAL phase artefact, not a temporal one: at identical t the port's pixel 0 equals the original's pixel at normalised position 0.225 exactly. There is no temporal phase error.",
+    "Secondary consequence of the wrong spatial rate: the original's per-frame hue traversal is essentially constant over the cycle (7.51-7.87, +/-2.5%), while the port's breathes 3.26-4.51 (+/-16%) — the port's band density visibly thins and thickens over the 13 s cycle where the original's does not.",
+    "The 240 s / 2 fps survey shows one homogeneous regime on both sides — no mode rotation, no palette walk, no super-cycle beyond the 13 s fundamental. The --skip 200 late window (t=200-214 s) is indistinguishable in character from t=0-14 s on both sides, and the 2x hue-density gap persists there (orig TV 7.60-7.88, port TV 3.32-4.25).",
+    "Visually, side by side: the original's waterfall is a dense rainbow chevron with thin (~2 px) stripes and roughly twice as many V's per row; the port's is the same chevron geometry with wide bands and large flat red/magenta regions."
+  ],
+  "dials": [],
+  "feedback": [
+    "Single root cause: the port's spatial term advances at exactly half the original's rate. Across the 60-px strip the original sweeps ~7.7 full hue revolutions per frame; the port sweeps ~3.9. Double the port's per-pixel spatial multiplier (whatever scales pixel index / normalised position into the hue argument) and the band density matches.",
+    "The relation was verified pixel-exact: port pixel x == original's pixel (27 + tri(x)) of a 120-px render, tri(x) = x for x<=30 else 60-x, mean |dRGB| 0.02/255 across a whole 13 s cycle. Use that as the regression check — after doubling the spatial rate the two 60-px renders should agree to within a couple of LSBs at every t.",
+    "There is a second, smaller constant to check once the rate is fixed: the port currently starts 0.225 of a full spatial period into the original's waveform (27/120 in normalised coordinates). With the rate doubled that residual becomes an offset of ~0.45 period, which decides which hue sits at the chevron apex (strip centre and ends). If the port still looks phase-shifted after the rate fix, this constant is why.",
+    "Do NOT touch the time base: the temporal envelope is already exact — 13.0 s fundamental, 6.5 s motion half-period, sinusoidal hue sweep, fps-invariant, seed- and wall-clock-independent, identical to the original on every measure taken.",
+    "Do NOT touch the colour handling: saturation 1.00 and value 255 on every pixel of every frame on both sides, mean brightness 120 on both. Palette is already identical.",
+    "Confirming symptom for the fixer to watch: the original's total per-frame hue traversal is flat (7.51-7.87 over a full cycle) while the port's oscillates 3.26-4.51. If the port's traversal is still modulating after the rate fix, the spatial argument is being built differently rather than merely scaled."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-a",
+    "dump-cycle",
+    "px30",
+    "px120",
+    "px120b",
+    "fps10",
+    "fps40",
+    "wc2",
+    "seed1234",
+    "steady30",
+    "late"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "slug": "cube-fire-3d",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same shapes, same blackout-pulse rhythm and same hue sweep, but the port inverts the blob's brightness profile (white core instead of a thin white rim), clips ~13% of frames to solid white, loses the original's warm red-dominant bias, and runs its whole cycle ~1.18x too fast.",
+  "observations": [
+    "Both sides compile and run clean on every window tried (6 s / 20 fps up to 66 s, plus a late window at t=120-150 s); no compile or runtime errors, no decay, no freeze. zeroMotionFrames are the periodic full-black beats both patterns deliberately draw, not stalls.",
+    "Both sides are fully deterministic: seeds 1, 7 and 1234 produce byte-identical stats on both sides, so nothing here is RNG-driven and per-frame comparison is fair.",
+    "Both sides are time-based, not frame-stepped: the blackout timestamps are identical to within 0.05 s at 5, 10, 20 and 40 fps on each side. No frame-rate coupling on either side.",
+    "Structure matches. Both draw one large soft-edged blob/disc on black that grows, drifts and wraps around the rig edges. On a 16x16 grid the lit-pixel masks overlap strongly whenever the two are in phase (IoU 0.68 at 1.4 s, 0.64 at 3.5 s, 0.95 at 4.9 s, 1.00 at 10.5 s, 0.77 at 14.7 s, 1.00 at 18.2 s, 0.82 at 21.0 s, 1.00 at 23.8 s), drifting apart later as the timing error accumulates.",
+    "Both are resolution-independent in the same way: the same picture at --grid 8x8, 16x16 and 48x48, just coarser or finer, with no change in feature count or size. Not a divergence.",
+    "BRIGHTNESS PROFILE IS INVERTED. Dumping the 16x16 grid and mapping the min-channel (whiteness) shows the original puts a THIN white rim on the blob's boundary with a fully saturated colour body inside it, while the port fills the blob's CORE with white and leaves colour only as an outer fringe. Clearest at t=14.7 s: orig's white is a 1-2 px arc along the blob edge, port's white is the entire 11x11 interior. Aggregated over 46 dumped frames spanning 32 s: near-white share of lit pixels is 7.6% (orig) vs 40.0% (port); mean saturation of lit pixels 0.63 (orig) vs 0.56 (port).",
+    "PORT WHITES OUT, ORIGINAL NEVER DOES. Across 2220 captured frames in three separate runs the original's frame-mean brightness never once exceeded 169; the port exceeds 200 on 12-15% of frames and hits a completely white 255 frame. Visible on the --grid 8x8 sheet at 5.4 s and 10.8 s, where the port's whole panel is blank white while the original shows a magenta/red gradient. Port is ~24% brighter overall (mean 97-107 vs 79-80).",
+    "COLOUR BALANCE. The original is consistently warm and green-deficient: mean R:G:B = 93:70:75 (60 s survey), 93:71:75 (66 s), 98:67:75 (t=120-150 s), 92:70:75 (fps5) - the same warm bias in every independent window. The port is exactly neutral: 97:98:97, 99:100:99, 107:105:108, 97:99:97. Hue histogram over lit pixels: orig R 17.0% / M 17.3% / B 14.4% vs G 8.8% / C 7.3%; port is nearly flat (C 13.3 / R 11.1 / G 10.8 / B 9.9 / M 9.3 / Y 9.1).",
+    "HUE SWEEP direction and rate roughly agree. Both walk the wheel continuously in the same direction; unwrapped mean-hue rate is 50.8 deg/s (7.09 s per revolution) on the original vs 56.0 deg/s (6.43 s) on the port - port ~10% fast.",
+    "RHYTHM. Both pulse to complete black on a strict two-beat cycle. Original: blackouts spaced 2.15 s then 4.40 s, super-period 6.55 s (blackout starts 20.0, 22.1, 26.6, 28.7, 33.1, 35.3, 39.7, 41.8, 46.2, 48.4, 52.8, 54.9 s). Port: 1.8 s then 3.75 s, super-period 5.6 s (22.5, 24.4, 28.1, 33.7, 35.5, 39.2, 41.1, 44.8, 46.5, 50.4, 52.2, 55.9 s). Both sub-intervals are short by the same factor (1.8/2.15 = 0.84, 3.75/4.40 = 0.85), so the port's whole timeline runs ~1.18x too fast, uniformly. Autocorrelation of meanBrightness agrees: first strong peak at lag 131 frames @10 fps = 13.1 s = 2 x 6.55 s (orig) vs 167 frames = 16.7 s = 3 x 5.57 s (port). The port's short interval also wobbles (1.7-2.15 s) where the original's is a metronomic 2.15 s.",
+    "MOTION magnitude: orig motion avg 30.2 / motionLit 38.4 vs port 20.2 / 24.3 (60 s @ 10 fps). The port moves LESS per frame despite being brighter and cycling faster, which is consistent with its clipped white core having no colour left to change frame to frame.",
+    "SENSORS: the engine reports wantsSensors true for the original and false for the port, so the original is fed the beat120 signal and the port is not. This has NO output consequence: rendering the original with --sensors off reproduces the fed run exactly (max diff 0 on all six stat series over 120 frames), so the original binds a sensor global it never visibly uses. Noted for completeness, not weighed in the verdict.",
+    "CONTROL SURFACE: neither side exposes any settable control (both control lists empty, probe reports 'no settable controls' for both). Matching surfaces, nothing to sweep.",
+    "The cloud rig (10x10x10, --pixels 1000) tells the same story at higher pixel count: identical macro waterfall structure on both sides, with the port's version washed out to white where the original stays saturated."
+  ],
+  "dials": [],
+  "feedback": [
+    "Invert the port's white/colour radial profile. The original keeps the blob body fully saturated in colour and draws only a THIN white highlight ring at the blob's edge; the port does the opposite, flooding the blob interior with white and leaving colour as an outer fringe. Target: near-white pixels (all three channels > 200) should be ~7-8% of lit pixels, not ~40%.",
+    "Cap the output so the pattern cannot white out. Over 2220 frames the original's frame-mean brightness never exceeded 169 (max 169, hard ceiling); the port reaches 255 and sits above 200 on 12-15% of frames, producing entirely blank white panels (e.g. at t=5.4 s and t=10.8 s). Whatever value/brightness term is being summed or multiplied is roughly 1.25x too hot and is clipping.",
+    "Slow the whole timeline by ~18%. The original's blackout-to-blackout intervals are 2.15 s and 4.40 s (super-period 6.55 s); the port's are ~1.8 s and ~3.75 s (super-period 5.6 s). Both sub-intervals are short by the same factor, so a single global time scale of 0.845x on the port's clock should fix both, and would also bring the hue sweep from 6.4 s/revolution back to the original's 7.1 s.",
+    "Also make the short beat metronomic. The original's short interval is a rock-steady 2.15 s every cycle; the port's varies between 1.7 s and 2.15 s while its long interval stays near 3.75 s, so the two-beat rhythm reads as slightly unsteady where the original is exact.",
+    "Warm the palette. The original's time-averaged colour is red-dominant and green-starved - mean R:G:B 93:70:75, identical to within a few counts across four independent windows including t=120-150 s - and its lit-pixel hue histogram spends 34% of its time in red/magenta against 16% in green/cyan. The port averages a perfectly neutral 98:99:98 with an almost flat hue histogram. It is sweeping the whole wheel at even speed where the original lingers in the reds; a non-linear hue mapping or a warm palette lookup is missing, not just a hue offset.",
+    "Everything else is already right and should not be touched: blob geometry, size, wrap-around behaviour, resolution independence (identical at 8x8 / 16x16 / 48x48), the two-beat black-pulse structure, hue sweep direction, determinism, and time-based (fps-invariant) animation all match the original."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "sens-off",
+    "cycle-20",
+    "late-120",
+    "dump-grid",
+    "dump-wide",
+    "grid8",
+    "grid48",
+    "cloud-base",
+    "cloud-survey",
+    "fps5",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

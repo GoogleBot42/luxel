@@ -1,0 +1,57 @@
+{
+  "slug": "mandelbrot-2d",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same idea and look in the wide-view phase — a rainbow escape-time Mandelbrot that zooms in and resets — but the port's zoom dives into the set's interior about twice as early in each cycle, so it sits at pure black roughly 29% of the time (original never goes fully black) at half the original's mean brightness, on a 12.0 s cycle instead of 13.1 s.",
+  "observations": [
+    "Rig is a 16x16 grid (256 px). Both sides compile and run clean, no runtime errors, no sensor use. Seeds 1, 7 and 1234 give byte-identical stats on both sides, so the pattern is fully deterministic — no RNG caveat applies.",
+    "Genre matches: at --grid 48x48 both sides plainly render an escape-time Mandelbrot — a black in-set region with a fractal boundary, surrounded by cyclic rainbow escape bands — and both continuously zoom IN (grid48-zoomin filmstrip: features grow smoothly outward frame to frame on both sides) before snapping back to a wide view.",
+    "Cycle length differs. Autocorrelation of meanBrightness over 1200 frames @5 fps (survey-240): the port peaks at lag 60 frames and at every exact multiple (120, 180, 240, ...) => period exactly 12.0 s. The original peaks at lag 131 with 65 and 66 nearly tied => period ~65.5 frames = 13.1 s. Original is ~9% slower per cycle.",
+    "Brightness is the headline divergence. Over the same 240 s window: orig meanBrightness avg 87, min 12, and ZERO frames at mean 0; port avg 44, min 0, and 351 of 1200 frames (29%) at exactly mean 0. Frames below mean 20: orig 137 (11%), port 557 (46%). The port is black or near-black for about half of every cycle; the original always keeps a lit fractal fringe on screen.",
+    "The port falls into the interior about twice as fast. Black-pixel fraction of the 16x16 frame during the first zoom leg (dump-cycle, --dump 0..5): orig 0%, 4%, 5%, 41%, 60%, 87% at t=0,1,2,3,4,5; port 0%, 7%, 63%, 83%, 98%, 100%. The port crosses 60% black at t~2.0 s, the original not until t~4.0 s.",
+    "Once the port is inside the set the boundary leaves the frame entirely: at 48x48, port frames at 4.6 s, 7.0 s, 16.4 s and 18.8 s are completely black, while the original at the same times still shows a black fractal chain with a full rainbow fringe (grid48 sheet).",
+    "The port DOES draw genuine Mandelbrot detail while the boundary is still in frame — grid48-zoomin at 0.7 s and 1.1 s shows a chain of bulbs with filaments and spikes, and at 1.5-1.8 s a scalloped cardioid edge, all of the right character. Comparing like times, the port's view at t resembles the original's at roughly t+1 s early in the cycle, and the lead widens; the port's zoom target ends up inside the set while the original's stays on the boundary.",
+    "Cycle SHAPE is otherwise the same, just attenuated. The original's 13.1 s cycle has deep dark minima at t~5.0-5.6 s and t~7.2-8.2 s separated by a brief full-brightness wide view at t~6.2-6.6 s (mean 121, 2% black pixels). The port has the same mid-dark blip at t~5.8 s but it only reaches mean 26 and stays 84% black — the flash never opens up.",
+    "Colour family matches: both use a full 360-degree hue ramp for escape bands (all 12 hue octants occupied in wide-view frames on both sides), fully saturated, value pinned at max on lit pixels. Absolute hue phase differs (orig's t=0 wide view is orange, port's is yellow-green) — expected and not counted against the port.",
+    "In the bright wide-view regime the two are very close: late-cycle (--skip 20) shows both drawing richly coloured multi-band fractal views of comparable density and saturation; orig mean 94, port 65 there.",
+    "CONTROL NAME MISMATCH: the original exposes one slider named `sliderIterations` (label \"Iterations\"); the port exposes one slider named `sliderIterationDepth` (label \"IterationDepth\"). Same count and same kind, but the name and label do not match, so a saved-value restore or any API call by name would miss.",
+    "Both sides are resolution-adaptive in the same way: re-rendered at --grid 48x48 each shows finer boundary detail rather than the same picture upscaled, so no resolution-independence divergence."
+  ],
+  "dials": [
+    {
+      "name": "sliderIterations (orig) / sliderIterationDepth (port)",
+      "origEffect": "Live (probe maxDelta 125.2, maxDeltaLit 144.2). Sweeping 0 / 0.5 / 1 over a 26 s window: mean brightness 34 / 76 / 88. At 0 the set is a coarse blobby silhouette with only 2-3 wide colour bands and long fully-dark stretches; at 0.5 and 1 the boundary grows fine filigree, mini-brots with antennae and many narrow hue bands (grid48-iter0 vs grid48-iter1).",
+      "portEffect": "Live, same direction (probe maxDelta 78.8, maxDeltaLit 157.7). Same sweep: mean brightness 21 / 47 / 51. At 0 a coarse concave star-shaped silhouette with few bands; at 0.5 and 1 a finely scalloped boundary with many bands. Character and direction match the original, but the port is only ~55-60% of the original's brightness at every setting, and it saturates earlier (0.5 -> 1 buys it only +4 mean vs the original's +12).",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Rename the port's control to `sliderIterations` with label \"Iterations\" — the original's name is authoritative and the current `sliderIterationDepth` will not match a saved value or an API set-by-name.",
+    "Main fix: the port's zoom path ends up INSIDE the set. From about 2 s into each cycle the whole frame is interior and renders pure black (351 of 1200 frames at exact mean 0 over 240 s; the original has none). Move the zoom target back onto the set boundary so a lit fractal fringe stays in frame for the whole zoom, as the original does — its mean brightness never drops below 12 and its darkest frames still show coloured filaments.",
+    "Related magnitude: the port reaches 60% black pixels at t~2.0 s versus the original's t~4.0 s, i.e. it descends into the interior about twice as fast. Either the per-cycle magnification rate is roughly 2x too high or the zoom starts already too deep — at t=0 the port already shows filaments the original does not reach until t~0.7-1.0 s.",
+    "Cycle period is 12.0 s on the port versus 13.1 s on the original (autocorrelation of mean brightness, 1200 frames @5 fps) — stretch the reset interval by ~9%.",
+    "The original's cycle contains a brief FULL-brightness wide view mid-way through the dark stretch (t~6.2-6.6 s of each 13.1 s cycle: mean 121, only 2% black pixels). The port has a blip at the same phase but it only reaches mean 26 and stays 84% black. That mid-cycle 'pop out to the whole set' should read as a full reset, not a flicker.",
+    "Overall exposure is about half the original's at every dial setting (untouched mean 44 vs 87; at iterations 0/0.5/1: 21/47/51 vs 34/76/88). Fixing the zoom target should recover most of this; if brightness is still low afterwards, check that the escape-band colouring lights the near-boundary ring as widely as the original's does.",
+    "Do NOT change: the fractal geometry itself, the rainbow escape-band palette, the zoom-in direction and smoothness, the resolution-adaptive detail, and the iteration dial's response direction — all of these already match. The port's wide-view and early-zoom frames (0-1.8 s at 48x48) are the right pattern."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dark-phase",
+    "late-cycle",
+    "dump-cycle",
+    "ctl-iter-0",
+    "ctl-iter-0.5",
+    "ctl-iter-1",
+    "dump-iter1",
+    "grid48",
+    "grid48-iter0",
+    "grid48-iter1",
+    "grid48-zoomin",
+    "seed7",
+    "seed1234"
+  ]
+}

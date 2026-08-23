@@ -1,0 +1,86 @@
+{
+  "slug": "rainbow-v2",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same scrolling full-strip rainbow — pixel-identical to the original once dial values are compensated — but two of five control names differ and the Speed and Direction dials have entirely different transfer functions, so at MATCHED dial values the port scrolls the opposite way and can run up to 5.2x too fast.",
+  "observations": [
+    "Both sides are alive, error-free, steady and non-degenerate: meanBrightness pinned at 127 with brightnessTrend 'steady' on every run from 6 s up to 240 s, and at --skip 300 --seconds 20 (zeroMotionFrames 0 on both). No warm-up transient, no decay, no saturation.",
+    "Single regime. 60 s @ 5 fps and 240 s @ 2 fps surveys both show one uniform texture end to end — evenly spaced diagonal rainbow bands, no mode rotation, no palette walk, no long-period beat. Nothing to park a --skip in.",
+    "Seed-independent: --seed 1234 reproduces --seed 1 exactly (orig mean 127 motion 4, port mean 127 motion 5, same as baseline). No stochastic element on either side.",
+    "Both sides are TIME-BASED, not frame-stepped: pixel-0 hue rate measured by --dump is 0.1528 cyc/s (orig) and 0.1998 cyc/s (port) at --fps 10, 20 AND 40 — identical to 4 decimals across all three rates. No frame-rate coupling on either side.",
+    "UNTOUCHED DEFAULTS are spatial MIRRORS of each other. Orig t=0 runs red->orange->yellow->green->cyan->blue->magenta from pixel 0 to 59 (hue slope +0.0170/px, +1.02 cycles across the 60 px strip); port runs the reverse order (hue slope -0.0163/px, -0.98 cycles). Both draw exactly one full rainbow across the strip.",
+    "UNTOUCHED MOTION differs in direction and rate. Orig scrolls LEFT at 9.0 px/s, full hue cycle every 6.54 s (waterfall bands slope '/'). Port scrolls RIGHT at 12.25 px/s, full hue cycle every 5.01 s (bands slope '\\'). Port is 1.307x faster untouched. Visible in the survey PNGs as opposite band slopes and a visibly denser port.",
+    "CONTROL-SURFACE MISMATCH: both sides expose 5 sliders and the middle three names match exactly (sliderSpeed, sliderDirection, sliderSaturation), but the original's sliderColorMod is named sliderColorSpread on the port, and the original's sliderLightness is named sliderBrightness on the port. All 10 controls probe responsive (maxDelta 122.6-139.2, value-dependent between 0 and 1 confirmed by manual sweeps).",
+    "DIRECTION DIAL SEMANTICS DIVERGE (measured at fully matched dials: Speed/ColorMod/Sat/Light all pinned). Original: sliderDirection < 0.5 => COMPLETELY FROZEN (hue rate exactly 0.0000 at 0, 0.1, 0.2, 0.3, 0.4, 0.45); >= 0.5 => scrolls at +18.38 px/s. It is a stop/go switch, never a reverse. Port: < 0.5 => +18.38 px/s (exactly the original's 'on' branch); >= 0.5 => -18.33 px/s. It is a forward/reverse switch, never a stop. Consequence: at any given Direction value the two sides disagree — at 0 the original is still while the port scrolls, at 1 they scroll in opposite directions.",
+    "SPEED DIAL TRANSFER FUNCTION DIVERGES. Measured hue rate in cycles/s at Direction=1, fine --dump sampling at --fps 40 (coarse 1-2 s dumps alias badly here — the original exceeds 1.5 cyc/s at low slider values). Original follows an INVERSE law rate = 0.1528 / sliderSpeed: 0 -> 0.0000 (frozen), 0.1 -> 1.5275, 0.25 -> 0.6111, 0.5 -> 0.3059, 0.75 -> 0.2046, 1 -> 0.1529. Higher slider = SLOWER. Port follows an EXPONENTIAL law rate = 0.05 * 16^sliderSpeed: 0 -> 0.0497, 0.1 -> 0.0660, 0.25 -> 0.1000, 0.5 -> 0.2000, 0.75 -> 0.3993, 1 -> 0.7993. Higher slider = FASTER. The two curves cross only near sliderSpeed ~= 0.6; at 1 the port is 5.2x too fast, at 0.1 the port is 23x too slow, and at 0 the original freezes while the port still moves at 0.05 cyc/s (about 3 px/s).",
+    "ColorMod/ColorSpread MATCHES EXACTLY. Cycles of hue across the 60 px strip, orig sliderColorMod vs port sliderColorSpread: 0 -> -0.983 / -0.984; 0.1 -> -0.885 / -0.886; 0.25 -> -0.737 / -0.737; 0.5 -> -0.491 / -0.492; 0.75 -> -0.246 / -0.246; 1 -> 0.000 / 0.000 (whole strip a single hue). Agreement to 3 decimals at every point, including the sign.",
+    "Note on that dial: the ORIGINAL's untouched spatial slope is POSITIVE (+0.98 cycles) but every slider value produces a NEGATIVE slope (0 to -0.983) — i.e. the original's built-in default spread is not reachable through its own slider. The port's untouched state (-0.984) equals the original's ColorMod=0 state, which is why the untouched renders read as mirrors.",
+    "Saturation MATCHES EXACTLY: mean per-pixel HSV saturation at slider 0/0.25/0.5/0.75/1 is 0.000/0.251/0.502/0.753/1.000 on BOTH sides, with value pinned at 1.000 throughout.",
+    "Lightness (orig) / Brightness (port) MATCHES EXACTLY: mean HSV value at slider 0/0.25/0.5/0.75/1 is 0.000/0.247/0.498/0.749/1.000 on BOTH sides, flat across all 60 pixels on both. Slider 0 gives true black (0,0,0) on both.",
+    "DECISIVE EQUIVALENCE TEST: with the dial-mapping offsets compensated (orig Speed=1/Direction=1/ColorMod=0.5/Sat=0.8/Light=0.7 vs port Speed=0.4032/Direction=0/ColorSpread=0.5/Sat=0.8/Brightness=0.7), the two sides are PIXEL-IDENTICAL — meanAbsDiff 0.02 (max 1/255) at t=0, growing only to 2.23 (max 7/255) by t=29 s purely from my imperfect speed match. This proves the port reimplements the same rendering exactly; every divergence above lives in the control mapping, not in the pattern.",
+    "Conversely, at LITERALLY matched dial values (same numbers typed on both sides, Speed=1/Direction=1/ColorMod=ColorSpread=0.5/Sat=1/Light=1) the orig scrolls RIGHT at +18.38 px/s and the port scrolls LEFT at -18.33 px/s, and meanAbsDiff climbs from 15.6 at t=0 to 211 by t=18 s."
+  ],
+  "dials": [
+    {
+      "name": "sliderColorMod (orig) / sliderColorSpread (port)",
+      "origEffect": "Sets the number of hue cycles across the strip: 0 gives one full reversed rainbow (-0.983 cycles over 60 px), 1 gives a single flat hue over the whole strip (0.000 cycles), linear in between (-0.885 / -0.737 / -0.491 / -0.246 at 0.1 / 0.25 / 0.5 / 0.75).",
+      "portEffect": "Identical to 3 decimal places at every value tested (-0.984 / -0.886 / -0.737 / -0.492 / -0.246 / 0.000), same sign, same linearity.",
+      "matches": true
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "INVERSE law: hue rate = 0.1528 / value cycles/s. Higher slider = slower. 0 = completely frozen; 0.1 = 1.5275 cyc/s; 0.5 = 0.3059; 1 = 0.1529 (slowest non-zero).",
+      "portEffect": "EXPONENTIAL law: hue rate = 0.05 * 16^value cycles/s. Higher slider = faster. 0 = 0.0497 cyc/s (still moving); 0.1 = 0.0660; 0.5 = 0.2000; 1 = 0.7993. Direction of response is inverted relative to the original and the curves cross only near value 0.6.",
+      "matches": false
+    },
+    {
+      "name": "sliderDirection",
+      "origEffect": "Binary switch at 0.5 between STOP and FORWARD. Below 0.5 the pattern is completely frozen (hue rate exactly 0). At or above 0.5 it scrolls at +18.38 px/s. There is no reverse.",
+      "portEffect": "Binary switch at 0.5 between FORWARD and REVERSE. Below 0.5 it scrolls +18.38 px/s (matching the original's 'on' state exactly); at or above 0.5 it scrolls -18.33 px/s. There is no stop.",
+      "matches": false
+    },
+    {
+      "name": "sliderSaturation",
+      "origEffect": "Linear HSV saturation: 0/0.25/0.5/0.75/1 -> mean sat 0.000/0.251/0.502/0.753/1.000, value held at 1.0. At 0 the strip is pure white.",
+      "portEffect": "Byte-for-byte the same numbers at every tested value.",
+      "matches": true
+    },
+    {
+      "name": "sliderLightness (orig) / sliderBrightness (port)",
+      "origEffect": "Linear HSV value: 0/0.25/0.5/0.75/1 -> mean value 0.000/0.247/0.498/0.749/1.000, uniform across all 60 pixels. At 0 the strip is fully black.",
+      "portEffect": "Byte-for-byte the same numbers at every tested value; only the control NAME differs.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Rename two controls to match the original's surface: sliderColorSpread -> sliderColorMod (label 'ColorMod') and sliderBrightness -> sliderLightness (label 'Lightness'). Their behaviour is already exact; only the names diverge.",
+    "Fix the Speed dial's transfer function. The original is an INVERSE/period law: hue advance rate in cycles/s = 0.1528 / sliderSpeed, i.e. a full hue cycle takes about 6.545 * sliderSpeed seconds. The port currently uses an exponential rate = 0.05 * 16^sliderSpeed, which runs the dial the WRONG WAY (raising the slider speeds the port up but slows the original down) and is 5.2x too fast at slider 1 and 23x too slow at slider 0.1. Also match the endpoint: the original is COMPLETELY FROZEN at sliderSpeed = 0, whereas the port still crawls at 0.05 cyc/s (~3 px/s).",
+    "Fix the Direction dial's semantics. The original's threshold at 0.5 selects STOP (below) vs FORWARD (at/above) — it never reverses. The port's threshold selects FORWARD (below) vs REVERSE (at/above) — it never stops. Note the port's low branch already reproduces the original's forward branch exactly (+18.38 px/s at matched settings), so the fix is: make the below-0.5 branch a hard freeze (zero hue advance per frame) and the at/or-above-0.5 branch the existing forward motion; drop the reverse branch.",
+    "Fix the untouched default state, which is what a viewer sees before touching anything. Untouched the original draws +1.02 hue cycles across 60 px (red at pixel 0 ascending to magenta at pixel 59) scrolling LEFT at 9.0 px/s with a 6.54 s hue cycle; the port draws -0.98 cycles (mirrored colour order) scrolling RIGHT at 12.25 px/s with a 5.01 s cycle. Two separate corrections: (a) flip the sign of the default spatial hue slope so the untouched strip runs red->magenta left-to-right — note the original's untouched slope is POSITIVE while every ColorMod slider value yields a NEGATIVE slope, so the default must be seeded independently of the slider's mapping; (b) set the default hue rate to 0.1528 cyc/s (the original's sliderSpeed=1 value), not 0.1998 (which corresponds to the port's sliderSpeed=0.5).",
+    "Nothing else needs touching. With the dial offsets compensated the two engines render pixel-identically (meanAbsDiff 0.02/255 at t=0 over a 30 s window), so ColorMod/Saturation/Lightness mapping, the HSV colour path, the spatial layout, the time-based (fps-invariant) clock and the steady state are all already correct — do not refactor the rendering.",
+    "After fixing, re-verify with a matched-value run rather than a compensated one: set the SAME five numbers on both sides (e.g. Speed=1, Direction=1, ColorMod=0.5, Saturation=1, Lightness=1) and confirm meanAbsDiff stays near 0 over at least 30 s, plus a Direction=0 run confirming BOTH sides are frozen."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late-steady",
+    "seed1234",
+    "dump-base",
+    "fps10",
+    "fps40",
+    "dir-0", "dir-0.25", "dir-0.5", "dir-0.75", "dir-1",
+    "ds-0", "ds-0.1", "ds-0.2", "ds-0.3", "ds-0.4", "ds-0.45", "ds-0.5", "ds-0.55", "ds-0.6", "ds-0.7", "ds-0.9", "ds-1",
+    "sp-0", "sp-0.1", "sp-0.25", "sp-0.5", "sp-0.75", "sp-1",
+    "spf-0", "spf-0.1", "spf-0.25", "spf-0.5", "spf-0.75", "spf-1",
+    "cm-0", "cm-0.1", "cm-0.25", "cm-0.5", "cm-0.75", "cm-1",
+    "sat-0", "sat-0.25", "sat-0.5", "sat-0.75", "sat-1",
+    "lig-0", "lig-0.25", "lig-0.5", "lig-0.75", "lig-1",
+    "dialed-match",
+    "dialed-fine",
+    "d2-0", "d2-0.25", "d2-0.5", "d2-0.75", "d2-1",
+    "equiv"
+  ]
+}

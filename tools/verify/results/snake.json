@@ -1,0 +1,83 @@
+{
+  "slug": "snake",
+  "verdict": "match",
+  "score": 8,
+  "confidence": "high",
+  "summary": "On the default 60-px strip the port is visually indistinguishable from the original — same rainbow head hue map, same head position at every dumped time, same wrap behaviour, steady for 240 s — differing only in that its comet tail is 9 px instead of 10 (~10% dimmer); off the default rig the divergence grows because the original's tail is a FIXED 10 pixels while the port's is 15% of the pixel count.",
+  "observations": [
+    "Both sides render a single rainbow 'comet': a bright head pixel with a linearly-fading tail behind it, sweeping left-to-right along the strip and restarting at pixel 0. One regime only — a 240 s / 2 fps survey (survey-long) shows the identical sawtooth waterfall for both sides end to end, with no mode rotation, palette walk, or drift.",
+    "Head position is IDENTICAL on both sides at every time checked. dump-a (60 px, 20 fps): head index t=1 s -> 9/9, t=2 s -> 18/18, t=4 s -> 37/37, t=6 s -> 55/55, t=7.95 s -> 13/13 (orig/port). Speed 9.25 px/s, full 60-px traverse every ~6.5 s.",
+    "Phase does NOT drift: at t=120/125/130/139 s (label 'late', --skip 120) the head is still at the same index on both sides (19, wrap, 51, 13).",
+    "Both sides are time-based, not frame-stepped: head displacement measured from --dump at t=1 s and t=5 s gives 9.00 px/s at --fps 10 and 9.25 px/s at --fps 20 and --fps 40, identical on orig and port (labels fps-10/fps-20/fps-40).",
+    "TAIL LENGTH (default 60-px rig): original lights 10 px, port lights 9 px, on every frame checked over 0-140 s. Exact per-pixel values at t=4 s, head at index 37: orig 37:(0,75,252) 36:(0,90,227) 35:(0,100,201) 34:(0,105,176) 33:(0,105,150) 32:(0,100,125) 31:(0,89,99) 30:(0,74,74) 29:(0,48,43) 28:(0,23,18); port 37:(0,75,252) 36:(0,89,224) 35:(0,97,195) 34:(0,100,167) 33:(0,97,139) 32:(0,88,110) 31:(0,74,82) 30:(0,54,54) 29:(0,25,23). The head pixel is byte-identical; the fade ramp is linear on both sides but reaches zero at offset 10 on the original vs offset 9 on the port (per-pixel step 25.4 vs 28.3 out of 252).",
+    "Consequence of the short tail: meanBrightness avg 10.6 (orig) vs 9.5 (port) over the 6 s baseline, 10.5 vs 9.5 over the late window; meanR/G/B max 23 vs 21. Both sides brightnessTrend 'steady', zeroMotionFrames 1 (baseline) / 0 (late), motion avg 1.9 vs 1.9. Untouched per-channel difference: mean 1.1/255, max 25/255 across all dump-a frames.",
+    "HUE MAP IS EXACT. At every tail offset the two sides' RGB triples are the same hue with different value (e.g. px 30 orig (0,74,74) vs port (0,54,54); px 33 orig (0,105,150) G/B ratio 0.700 vs port (0,97,139) ratio 0.698). Head colour cycles red -> yellow -> green -> cyan -> blue -> magenta -> red across one traverse on both sides.",
+    "WRAP BEHAVIOUR IDENTICAL (label 'wrap', dumps 6.40-6.60 s at 20 fps): the tail does not wrap around the strip end. At t=6.55 s both sides show a fresh head at pixel 0 (orig 243/0/0, port 242/0/0) while the previous tail is still fading at pixels 51-59, and it decays in place rather than wrapping to the far end.",
+    "RIG-SCALING DIVERGENCE (structural, seen only via rig override). The original's tail is a FIXED absolute 10 pixels at every rig size; the port's is ~15% of the pixel count. Measured lit-pixel counts at t=3 s: 12 px -> orig 10, port 2; 60 px -> orig 10, port 9; 120 px -> orig 10, port 18; 300 px -> orig 10, port 45. Whole-frame mean brightness follows: 300-px strip orig 2 / port 10; 16x16 grid (256 px) orig 3 / port 9. Head SPEED does scale with pixel count on both sides identically (head at 46% of the strip at t=3 s on both 60 px and 300 px), so only the tail length obeys a different law. The two laws coincide only near 60-67 px, i.e. the default rig.",
+    "CONTROL-SURFACE MISMATCH: the original exposes NO controls at all (meta.json sides.orig.controls == []); the port adds two sliders, 'sliderSpeed' (label Speed) and 'sliderTailLength' (label TailLength). Both are live in the probe (maxDelta 17.06/53.80, maxDeltaLit 63.47/55.27) and both are value-dependent in manual sweeps.",
+    "The port's UNTOUCHED defaults already sit at the original's speed: sliderSpeed=0.25 reproduces the untouched head track exactly (heads 9,27,46 at t=1,3,5 s, same as orig), so the added speed dial does not shift the default look.",
+    "Setting sliderTailLength=0.17 (with sliderSpeed=0.25) makes the port match the original to within 5/255 per channel over a 20 s window at 10 fps (label dialed-match: meanBrightness avg 10.6 orig vs 10.8 port, motion 3.6 vs 3.6, motionLit 20.3 vs 20.0, max abs channel diff 5 at t=0/7/14/19 s). The port's tail MODEL is therefore correct; only its default length is one pixel short.",
+    "Both sides are fully deterministic and seed-independent: seeds 1, 7 and 1234 produce byte-identical frames on each side (labels seed7, seed1234).",
+    "Neither side binds sensors (wantsSensors false on both), so the --sensors machinery is a no-op here."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "n/a — the original exposes no controls at all; effect unverifiable from output because the dial does not exist on that side",
+      "portEffect": "Live and value-dependent, but it behaves as a CYCLE TIME, not a speed: higher value = slower. Measured head rate on the 60-px strip: v=0 -> extremely fast (aliases past the dump spacing), v=0.25 -> 9.25 px/s (6.5 s per traverse, == original), v=0.5 -> 4.75 px/s (~12.6 s), v=0.75 -> 3.0 px/s (~20 s), v=1 -> 2.25 px/s (~26.7 s). Period is linear in v (~26.7 s x v); untouched default lands at v~0.24.",
+      "matches": false
+    },
+    {
+      "name": "sliderTailLength",
+      "origEffect": "n/a — control absent on the original, which draws a fixed 10-px tail at every rig size",
+      "portEffect": "Live and continuous. Tail length = ~2 + 58*v pixels on the 60-px rig: v=0 -> 2 px, 0.17 -> 11 px, 0.25 -> 15 px, 0.5 -> 30 px, 0.75 -> 45 px, 1 -> 60 px (whole strip lit). Untouched default is 9 px; v=0.16-0.17 reproduces the original's 10-px tail to within 4-10/255.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Default tail is one pixel short. On the default 60-px strip the original's linear fade reaches zero at tail offset 10 (per-pixel step 252/9.92 = 25.4 counts) while the port's reaches zero at offset 9 (step 28.3). Lengthen the port's default tail by one pixel; that alone closes the whole untouched gap (mean brightness 9.5 -> 10.6, max per-channel diff 25 -> ~4).",
+    "The tail length must be an ABSOLUTE pixel count, not a fraction of the strip. The original draws exactly 10 lit pixels whether the rig is 12, 60, 120, 256 or 300 pixels; the port draws 2 / 9 / 18 / 38 / 45 respectively (~15% of pixelCount). This is invisible on the default rig but very visible on real hardware with a different strip length — on a 300-px strip the port shows a 45-px rainbow smear where the original shows a tight 10-px comet, and on a 12-px strip the port shows a 2-px stub where the original lights the whole strip. Make the tail a constant 10 pixels (or make the dial's units pixels, defaulting to 10).",
+    "Head SPEED scaling is already correct — both sides traverse the strip in ~6.5 s regardless of pixel count — so do not change it while fixing the tail.",
+    "The added 'Speed' slider is inverted with respect to its label: raising it slows the snake (period ~= 26.7 s x v, so v=1 is the slowest at 26.7 s per traverse and v->0 runs away). If the dial is kept, either invert the mapping so higher = faster, or rename it to reflect that it sets cycle time. Also keep v=0 from producing an unbounded rate.",
+    "The port adds two controls the original does not have (sliderSpeed, sliderTailLength). That is an addition rather than a loss and the untouched defaults still land on the original's look, so it is acceptable — but note it as a deliberate extension. If a strict surface match is wanted, drop both and hardcode the original's 6.5 s traverse and 10-px tail.",
+    "Everything else is already exact and should not be touched: the hue-vs-head-position map, the linear fade shape, the non-wrapping tail at the strip end (fresh head at pixel 0 while the old tail decays in place at 51-59), the fps-invariant time-based motion, and long-run phase stability out to 140 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-long",
+    "probe",
+    "late",
+    "dump-a",
+    "wrap",
+    "fps-10",
+    "fps-20",
+    "fps-40",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "tail-0",
+    "tail-0.25",
+    "tail-0.5",
+    "tail-0.75",
+    "tail-1",
+    "tailf-0.12",
+    "tailf-0.135",
+    "tailf-0.14",
+    "tailf-0.15",
+    "tailg-0.16",
+    "tailg-0.17",
+    "tailg-0.18",
+    "tailg-0.19",
+    "tailg-0.20",
+    "dialed-match",
+    "seed7",
+    "seed1234",
+    "grid16",
+    "px12",
+    "px120",
+    "px300"
+  ]
+}

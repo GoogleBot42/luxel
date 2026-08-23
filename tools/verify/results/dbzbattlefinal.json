@@ -1,0 +1,88 @@
+{
+  "slug": "dbzbattlefinal",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same duel-and-shockwave pattern with matching choreography, cadence, speed and palette, but the port draws its two fighters ~2.5x too large in linear size (~7x the lit area) at every scale setting and every grid resolution, and its motion is frame-rate coupled where the original's is not.",
+  "observations": [
+    "Both sides render without compile or runtime errors and expose the identical control surface: 4 sliders, same names and kinds (sliderSpeed, sliderScale, sliderSaiyanColor, sliderRivalColor).",
+    "Shared concept confirmed on both sides across a 60 s survey (5 fps) and 30 s runs at 10/20 fps: two coloured 'fighters' - a gold/orange one and a purple/magenta one - hover in the vertical middle band of the 16x16 grid (centroid y stays within rows ~6-9 on both), drift toward and away from each other along x, collide in a white flash, and each collision launches a white ring that expands outward and off the canvas. An occasional lone cyan dot (ki-blast) appears on both sides.",
+    "Event cadence matches at the harness default rate: over 30 s at 20 fps the original produced 13 shockwave bursts (frames with >=20 non-fighter-coloured lit pixels), the port 12. The rhythm images for that run show the same chevron/lens envelopes at the same spacing on both sides.",
+    "Fighter travel speed matches at 20 fps: measured as centroid path length on the 16x16 rig over 30 s, orig 3.68 px/s (gold) / 3.96 px/s (purple) vs port 4.63 / 3.84 px/s.",
+    "MAIN DIVERGENCE - fighter size. Quiet-frame lit-pixel counts per fighter, untouched dials: orig 1.4 gold / 1.5 purple px, port 10.6 / 10.5 px. As a fraction of grid width the equivalent-disc diameter is orig ~8-10% vs port ~20-24%, and that ratio is stable across rigs (8x8: orig 0.5 px vs port 2.0 px; 16x16: 1.4 vs 10.6; 48x48: 14.0 vs 105.5) - so both sides are resolution-independent, the port's fighter is just consistently ~2.5x too wide. Visually the original reads as two tiny sparks in a large black field; the port reads as two fat glowing orbs.",
+    "The size gap holds at every sliderScale value (both sides swept 0 / 0.25 / 0.5 / 0.75 / 1 on the same run): orig gold-px 0.0, 1.0, 1.8, 2.5, 5.0 vs port 1.8, 4.4, 10.8, 17.8, 24.5. Note the endpoint: at sliderScale=0 the original's fighters vanish entirely (0 px, and orig meanBrightness min hits 0 on some frames of the untouched 30 s runs) while the port still draws 2-3 px blobs.",
+    "Consequence of the size gap: port mean brightness is roughly double the original's on every run (baseline 9.7 vs 5.2; survey 9.1 vs 5.1; late window 8.8 vs 4.0). Peak brightness is comparable (max 25 vs 20-29), so this is extra lit area, not extra gain.",
+    "SECOND DIVERGENCE - frame-rate coupling. Tracking the gold fighter's centroid path length over the same 6 s window at 5/10/20/40/80 fps: original 5.84, 3.57, 3.99, 4.37, 3.78 px/s (fps-invariant, ~4 px/s), port 1.55, 2.98, 5.31, 4.92, 4.69 px/s (scales with fps below ~20, then saturates). At the default 20 fps the two happen to agree, but at 5-10 fps the port runs at a half to a quarter of the original's speed and fires correspondingly fewer shockwaves (30 s at 10 fps: orig 11 bursts, port 6).",
+    "Colour families match. Peak fighter RGB, untouched: orig gold [255,226,153] / purple [197,76,255]; port gold [255,219,178] / purple [226,114,255]. Shockwaves are white/grey on both. Hue histograms over 30 s agree on the two fighter hues (~30-45 deg and ~285 deg) plus white; the proportions differ only because the port's fighters occupy more pixels.",
+    "The port's rival hue sits offset from the original's: measured peak-saturation hue with sliderRivalColor at 0 / 0.5 / 1, orig 223 / 268 / 313 deg vs port 259 / 295 / 331 deg - a +36 / +27 / +18 deg shift, and a narrower total span (72 vs 90 deg). Saiyan hue tracks almost exactly (orig 0 / 32 / 65, port 0 / 29 / 58).",
+    "Steady state is healthy on both: a --skip 120 late window and seeds 7 and 1234 all give the same picture (orig meanBrightness avg ~4-4.5 volatile, port ~9-10 steady/volatile), no decay, no freeze, no saturation on either side.",
+    "The original's fighters occasionally blink out for a frame or two (0 lit fighter pixels, whole frame black in the untouched 10 fps run); the port's never do - a direct consequence of the port's much larger, brighter blobs."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Live. Raises both fighter travel speed and clash rate. 30 s at 10 fps, scale pinned 0.5: speed=0.5 gives 5.28/4.43 px/s and 11 bursts; speed=1 gives 7.00/7.09 px/s and 13 bursts. At speed=0 the fighters hover near centre with small wobble and bursts become sparse.",
+      "portEffect": "Live, same direction and similar proportional change: speed=0.5 gives 2.14/1.88 px/s and 4 bursts; speed=1 gives 3.09/3.28 px/s and 9 bursts. The absolute numbers lag the original only because that measurement was made at 10 fps, where the port's frame-rate coupling halves its speed; at 20 fps the two agree.",
+      "matches": true
+    },
+    {
+      "name": "sliderScale",
+      "origEffect": "Live. Sets fighter size. Gold-fighter lit pixels at 0 / 0.25 / 0.5 / 0.75 / 1: 0.0, 1.0, 1.8, 2.5, 5.0. At 0 the fighters disappear entirely; at 1 they are ~2x2-2x3 px blocks on the 16x16 rig.",
+      "portEffect": "Live, same direction, but the whole curve is shifted up ~5x in area: 1.8, 4.4, 10.8, 17.8, 24.5 px. At 0 the fighters are still visible (2-3 px); at 1 they are ~6x6 px blobs. No scale setting reproduces the original's default look exactly - port scale=0 is the closest match to orig scale=0.5.",
+      "matches": false
+    },
+    {
+      "name": "sliderSaiyanColor",
+      "origEffect": "Live (the 8 s probe called it inert on both sides - a false inert; confirmed by a manual 0/0.5/1 sweep over a 60 s / 5 fps window). Sets the gold fighter's hue: 0 / 32 / 65 deg at slider 0 / 0.5 / 1.",
+      "portEffect": "Live, near-identical mapping: 0 / 29 / 58 deg. Slightly compressed span (58 vs 65 deg) - not visible in practice.",
+      "matches": true
+    },
+    {
+      "name": "sliderRivalColor",
+      "origEffect": "Live (again a probe false inert, confirmed by the same 60 s manual sweep). Sets the rival fighter's hue: 223 / 268 / 313 deg at slider 0 / 0.5 / 1 - blue-violet through purple to magenta.",
+      "portEffect": "Live, same direction, but offset warmer by 18-36 deg and spanning less range: 259 / 295 / 331 deg. At slider 0 the original is clearly blue-violet while the port is already violet; at slider 1 the port is pink-magenta where the original is magenta.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Shrink the fighters. This is the one difference a viewer would notice immediately. On the default 16x16 rig with sliderScale at 0.5 the original lights ~1.8 gold and ~2.0 purple pixels per fighter; the port lights ~10.8 and ~10.0. The gap is a constant ~2.5x in linear size / ~5-7x in area at every slider value (orig 0.0/1.0/1.8/2.5/5.0 px vs port 1.8/4.4/10.8/17.8/24.5 px at scale 0/0.25/0.5/0.75/1) and at every resolution (equivalent-disc diameter ~8-10% of grid width on the original vs ~20-24% on the port, checked at 8x8, 16x16 and 48x48). Scale the fighter radius down by ~2.5x, keeping the rest of the mapping.",
+    "Fix the low end of sliderScale. At sliderScale=0 the original's fighters disappear completely (0 lit fighter pixels) - the port still draws 2-3 px blobs. The port's size-vs-scale curve needs to reach zero at slider 0, not a floor.",
+    "Decouple motion from frame rate. The original moves at a constant ~4 px/s independent of render rate (measured 5.84 / 3.57 / 3.99 / 4.37 / 3.78 px/s at 5 / 10 / 20 / 40 / 80 fps). The port instead steps per frame below ~20 fps and then saturates (1.55 / 2.98 / 5.31 / 4.92 / 4.69 px/s at the same rates), so on slower hardware it runs at half to a quarter speed and fires half as many shockwaves. Drive fighter position and the clash timer off elapsed time, not off a fixed per-frame increment, and drop whatever per-frame step clamp is flattening the 40/80 fps end.",
+    "Nudge the rival hue cooler. At the same sliderRivalColor value the port's purple fighter sits 18-36 deg warmer than the original's (orig 223/268/313 deg vs port 259/295/331 deg at slider 0/0.5/1) and covers a narrower 72 deg range against the original's 90 deg. Shift the base hue back ~35 deg toward blue and widen the sweep. The Saiyan hue needs no change (orig 0/32/65 vs port 0/29/58 deg).",
+    "Nothing needs doing to choreography, cadence, event structure or brightness envelope: at 20 fps the port matches the original on burst rate (12 vs 13 per 30 s), fighter speed (4.63/3.84 vs 3.68/3.96 px/s), vertical confinement to the centre band, ring geometry and expansion, the cyan ki-blast, and steady-state stability across seeds 1/7/1234 and a t=120-150 s late window. The port's ~2x mean brightness is entirely explained by the oversized fighters and should come back on its own once they are shrunk."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "dump-track",
+    "track20",
+    "ctl-scale-0",
+    "ctl-scale-0.5",
+    "ctl-scale-1",
+    "ctl-speed-0",
+    "ctl-speed-0.25",
+    "ctl-speed-0.75",
+    "ctl-speed-1",
+    "ctl-colors-0",
+    "ctl-colors-0.5",
+    "ctl-colors-1",
+    "dialed-s0.5",
+    "dialed-s1",
+    "sz-0",
+    "sz-0.25",
+    "sz-0.5",
+    "sz-0.75",
+    "sz-1",
+    "late",
+    "seed7",
+    "seed1234",
+    "fps5",
+    "fps10",
+    "fps40",
+    "fps80",
+    "grid8",
+    "grid48"
+  ]
+}

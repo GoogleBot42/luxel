@@ -1,0 +1,112 @@
+{
+  "slug": "stacker",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Port reproduces the Stacker mechanism pixel-for-pixel at matched dials, but its Speed slider maps 2.5-5x too fast over most of its range, its Segments slider quantizes into 6 bands instead of the original's 5 (wrong segment count on ~43% of the slider), and its untouched default look (cyan blobs + solid red stack, 1.80 s cycle) differs sharply from the original's (magenta blobs + rainbow stack, 1.05 s cycle).",
+  "observations": [
+    "Mechanism is IDENTICAL on both sides and correct: the 60 px strip is split into N equal segments; in each segment two blocks emerge from the segment CENTRE and travel outward in opposite directions; when the two blocks from adjacent segments meet at the segment BOUNDARY they are deposited as a stationary 'stack' block in the second colour; the stack grows by one block-pair per cycle until it fills the segment, then the segment clears and the cycle restarts. Verified on the default 60 px strip at dozens of dial settings and confirmed frame-by-frame from --dump ASCII renders (labels dump-mid, stackgrow, sz-*).",
+    "Control surfaces are IDENTICAL: both sides expose hsvPickerColor1 (Color1), hsvPickerColor2 (Color2), sliderSpeed (Speed), sliderSize (Size), sliderSegments (Segments), sliderColorMode (ColorMode), all with matching kinds and labels. probe.json reports all six responsive on BOTH sides (orig maxDeltaLit 56-118, port 70-119).",
+    "Colour semantics match exactly: Color2 tints the moving blocks, Color1 tints the stack. Cross-checked at three (h,s,v) triples with --controls set identically on both sides (labels pick-*): at C1=(0.33,1,1)/C2=(0,1,1) both sides emit exactly ff0000 blocks and 05ff00 stack; at C1=(0,0.5,1)/C2=(0.8,1,0.5) both emit 66007f / ff7f7f; at C1=(0.15,1,1)/C2=(0.5,1,1) both emit 00ffff / ffe500. Byte-identical hex on both sides at both dumped times.",
+    "SPEED SLIDER MAPPING IS THE BIGGEST DIVERGENCE. Measured stack-deposit cadence (Size=0.5, Segments=0.5, ColorMode=0, 60 px, 20 fps, counted from --dump red-onset transitions over 16 s, label spdp-*): Speed=0 orig 4.00 s / port 3.75 s (1.07x); Speed=0.25 orig 3.20 s / port 2.13 s (1.50x); Speed=0.50 orig 2.40 s / port 0.98 s (2.45x); Speed=0.75 orig 1.60 s / port 0.29 s (5.5x); Speed=1.0 orig 0.80 s / port 0.30 s (2.67x). The original's period is exactly LINEAR in the slider: 4.00 - 3.2*Speed seconds (80, 64, 48, 32, 16 frames at 20 fps, r=1.00 normalized autocorrelation on meanR at every point). The port's period collapses roughly exponentially (~ 3.75 * 0.08^Speed) and then FLOORS at ~0.30 s / 6 frames, so Speed 0.75 and Speed 1.0 render at the same rate on the port.",
+    "Both sides are FRAME-STEPPED (frame-rate coupled) in the SAME way, so this is not a port bug: at Speed=1 the original's period is 16 frames at both --fps 20 (0.80 s) and --fps 100 (0.16 s), and the port's is 6 frames at both (0.30 s / 0.06 s). Verified by frame-self-similarity on 100-point --dump lists (labels spdfine-0.75, spdfine-1).",
+    "SEGMENTS SLIDER QUANTIZES DIFFERENTLY. Segment count read from the spatial repeat period of dumped frames, 21-point sweep at 0.05 (labels segf-*, segb-*, segr-*). Original: 1 seg for 0.00-0.20, 2 for 0.25-0.40, 3 for 0.45-0.55, 4 for 0.60-0.75, 5 for 0.80-0.95, 6 only at 1.00. Port: 1 for 0.00-0.15, 2 for 0.20-0.30, 3 for 0.35-0.50, 4 for 0.55-0.65, 5 for 0.70-0.80, 6 for 0.85-1.00 (i.e. port ~= max(1, ceil(v*6)) — six equal 1/6-wide bands). They disagree at 9 of 21 sample points (0.20, 0.35, 0.40, 0.55, 0.70, 0.75, 0.85, 0.90, 0.95) — about 43% of the slider gives a visibly different number of segments. Both agree at the endpoints (0 -> 1 segment, 1 -> 6 segments) and at 0.25/0.30/0.45/0.50/0.60/0.65/0.80.",
+    "SIZE SLIDER is nearly right: block width (total lit blue pixels at peak, 3 segments, 60 px, label sz-*) orig 6/6/6/18/18/30/42/42/54/54/60 vs port 6/6/18/18/30/30/42/42/54/54/60 for Size 0.0..1.0 in 0.1 steps. Identical band VALUES and identical band count; the port only crosses one band boundary early at Size=0.20 and Size=0.40 (and 0.15). Top half of the slider (0.5-1.0) is an exact match.",
+    "STACK BLOCK PARITY differs by one pixel, consistently: the original's stack is always an ODD width centred ON the boundary pixel, the port's is always EVEN and straddles it. At Size=0.5, Segments=0.5 (20 px segments) the original stacks 11 px per segment (33 total) and the port 10 px (30 total). At Size=0.15 the growth series per segment is orig 3,7,11,15 -> reset and port 4,8,12,16 -> reset (label stackgrow) — same +4 growth step, same reset-when-full rule, port always one pixel wider on the first deposit.",
+    "COLORMODE has three modes and both sides implement all three. 13-point sweep 0..1 (label cm-*): mode A = stack painted solid Color1 (v <= ~0.35 both sides); mode B = stack painted as a rainbow palindrome (v ~0.42-0.58 both sides); mode C = stack painted as a 3-hue blend of Color1/Color2 (hues 216/223/85 on both). Only one boundary differs: at v=0.667 the original is already in mode C while the port is still in mode B; the port switches at ~0.70-0.75. Modes A and C are byte-identical between sides at matched dials.",
+    "MODE-B RAINBOW MATCHES precisely, including its slow hue walk. At ColorMode=0.5, Speed=0, the original's segment-0 stack hues at t=3.2 s are 55,91,127,163,199,235,199,163,127,91,55 (11 px, palindrome, peak at centre) and the port's are 55,91,127,163,199,199,163,127,91,55 (10 px, palindrome with doubled centre). The 36-degree per-pixel hue step is identical, and both sides advance the rainbow phase at the same rate (55 -> 68 -> 80 -> 93 over t=3.2/7.2/11.2/15.2 s on the original; the port matches at the two times where its phase still lines up). Label cmB-long.",
+    "UNTOUCHED DEFAULTS DIVERGE ON THREE AXES (both sides compile clean, no controls applied). Original: 3 segments, magenta ff0099 moving blocks, RAINBOW stack (ColorMode mode B), geometric cycle 1.05 s. Port: 3 segments, cyan 00b2ff moving blocks, SOLID RED ff0000 stack (ColorMode mode A), geometric cycle 1.80 s. The original's untouched meanG max is 127 (rainbow) vs the port's 53 (constant, blocks only) over a 240 s window. Segment count is the only untouched thing that agrees.",
+    "NO REGIMES, NO DECAY, NO RNG. 240 s / 5 fps survey plus a --skip 200 late window: both sides brightnessTrend 'steady', zeroMotionFrames 0-1, meanBrightness avg 63/57 (survey240) and 64/61 (late), with the same repeating cycle from t=0 to t=240 s. Seeds 1, 7 and 1234 render byte-identically on both sides (stats identical to the digit), so the pattern is fully deterministic and non-stochastic.",
+    "Untouched whole-rig motion stat: orig 32, port 82 (baseline, 6 s / 20 fps); this gap is the untouched cycle-rate difference (1.05 s vs 1.80 s) plus the rainbow-vs-solid colour churn, not a port that is 'more chaotic'.",
+    "OFF-DEFAULT RIGS (override, Speed=0, Size=0.5, Segments=0.5): at --pixels 45 (15 px segments) the two sides are structurally identical (5 px blocks, 11 px stack, only a phase offset from the 6% speed gap). At --pixels 300 both give 3 segments of 100 px with a FIXED 5 px block — block size is absolute pixels, not a strip fraction, on both sides. At --pixels 30 (10 px segments) the original cycles through 3 distinct block positions (period 3.0 s) while the port cycles through 5 (period 5.0 s). At --pixels 24 (8 px segments) the original still opens gaps between blocks while the port is a solid fully-lit wall on every frame. So the port's block/segment clipping diverges once the segment gets short relative to the block; the default 60 px rig is unaffected.",
+    "Both sides report wantsSensors: false; no sensor path involved."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerColor1",
+      "origEffect": "Sets the stack (deposited block) colour. Exact HSV->RGB match at (0.33,1,1)->05ff00, (0,0.5,1)->ff7f7f, (0.15,1,1)->ffe500.",
+      "portEffect": "Identical: same hex on every pixel at all three tested triples.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerColor2",
+      "origEffect": "Sets the moving-block colour. (0,1,1)->ff0000, (0.8,1,0.5)->66007f, (0.5,1,1)->00ffff.",
+      "portEffect": "Identical hex at all three tested triples.",
+      "matches": true
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Linear: cycle period = 4.00 - 3.2*v seconds (80/64/48/32/16 frames at 20 fps for v=0/0.25/0.5/0.75/1). Fastest setting is 0.80 s per stack deposit.",
+      "portEffect": "Non-linear and much too fast above v~0.2: 3.75/2.13/0.98/0.29/0.30 s. Roughly exponential (~3.75*0.08^v) and FLOORS at ~0.30 s, so v=0.75 and v=1.0 are indistinguishable. 2.45x too fast at mid-slider, 5.5x at v=0.75.",
+      "matches": false
+    },
+    {
+      "name": "sliderSize",
+      "origEffect": "Quantized block width, 6 levels + full: 1,1,1,3,3,5,7,7,9,9,10 px per block for v=0.0..1.0 in 0.1 steps (per 20 px segment). Larger blocks fill the segment in fewer deposits.",
+      "portEffect": "Same levels and same count, but crosses one band boundary ~0.1 early in the lower half (v=0.15/0.20/0.40 give the next size up). v>=0.5 matches exactly.",
+      "matches": false
+    },
+    {
+      "name": "sliderSegments",
+      "origEffect": "1..6 segments; five 0.2-wide bands give 1,2,3,4,5 with 6 reached only at v=1.0. Boundaries observed between 0.20/0.25, 0.40/0.45, 0.55/0.60, 0.75/0.80, 0.95/1.00.",
+      "portEffect": "1..6 segments in six equal 1/6-wide bands (~max(1,ceil(v*6))): boundaries at ~0.175, 0.325, 0.525, 0.675, 0.825. Disagrees with the original on 9 of 21 sampled slider positions.",
+      "matches": false
+    },
+    {
+      "name": "sliderColorMode",
+      "origEffect": "Three modes: solid-Color1 stack (v<~0.4), rainbow-palindrome stack (v ~0.42-0.62), 3-hue Color1/Color2 blend stack (v>~0.62). Moving blocks stay Color2 in all modes.",
+      "portEffect": "Same three modes with the same rendering in each; only the mode-B/mode-C boundary sits higher (port switches at ~0.70-0.75, original at ~0.60-0.667), so v=0.667 gives rainbow on the port and blend on the original.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "PRIORITY 1 - Speed slider mapping. The original's cycle period is LINEAR in the slider: period_seconds = 4.00 - 3.2*Speed on a 60 px strip with Segments=0.5, Size=0.5 (equivalently 80 - 64*Speed rendered frames; the pattern is frame-stepped on both sides, so match it in frames). Measured targets to hit: Speed 0 -> 80 frames, 0.25 -> 64, 0.5 -> 48, 0.75 -> 32, 1.0 -> 16. The port currently gives 75, 43, 20, ~6, 6 frames — it is exponential rather than linear AND it saturates at 6 frames, so the top quarter of the slider is dead. Even at Speed=0 the port is 6% fast (75 vs 80 frames).",
+    "PRIORITY 2 - Segments quantization. The original maps the slider onto FIVE 0.2-wide bands producing 1,2,3,4,5 segments, with 6 segments reached only at the very top of the slider; the port maps it onto SIX 1/6-wide bands (ceil(v*6)). Re-quantize so that v=0.20 gives 1 segment (not 2), v=0.35-0.40 gives 2 (not 3), v=0.55 gives 3 (not 4), v=0.70-0.75 gives 4 (not 5), v=0.85-0.95 gives 5 (not 6).",
+    "PRIORITY 3 - Untouched defaults. Loaded with no dials touched, the original shows MAGENTA (ff0099) moving blocks over a RAINBOW stack cycling every 1.05 s; the port shows CYAN (00b2ff) blocks over a SOLID RED (ff0000) stack cycling every 1.80 s. Three separate default values are wrong: the untouched Color2 hue (should be ~0.9 / ff0099, port has ~0.55), the untouched ColorMode (should land in the rainbow mode, port lands in the solid-Color1 mode), and the untouched Speed (should give a 1.05 s cycle, port gives 1.80 s). This is what a viewer sees on load, so it is worth fixing even though every dialed comparison is otherwise good.",
+    "Stack block parity: the original's deposited stack is always an ODD number of pixels centred on the segment-boundary pixel (11 px at Size=0.5; growth series 3,7,11,15 at Size=0.15), the port's is always EVEN and straddles the boundary (10 px; 4,8,12,16). The growth step (+4) and the fill-then-reset rule already match — only the initial/centre pixel is off by one. Symptom to check against: at ColorMode in rainbow mode the original's stack hue ramp has a single peak hue at the centre (…163,199,235,199,163…) while the port's has a doubled peak (…163,199,199,163…).",
+    "Size slider: only the lower half is off, by one quantization band. Original band edges land so that Size 0.15/0.20 still give a 1 px block and 0.40 still gives a 3 px block; the port promotes those to 3 px and 5 px respectively. Everything from Size 0.5 upward is already exact.",
+    "ColorMode: shift the rainbow-mode / blend-mode boundary DOWN slightly. The original is already in blend mode at v=0.667; the port needs v>=0.70-0.75. The three mode renderings themselves are correct and need no change.",
+    "Short-segment clipping (only visible on non-default rigs, so lowest priority): with 8-10 px segments (--pixels 24 or 30 at Segments=0.5, Size=0.5) the original still leaves dark gaps between the moving blocks and completes its position cycle in 3 steps, while the port lights every pixel on every frame (24 px) or takes 5 steps (30 px). Suggests the port clamps or wraps the block extent differently when the block is a large fraction of the segment. The default 60 px rig does not exercise this."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "probe",
+    "late",
+    "late-dump",
+    "dial-mid",
+    "dump-mid",
+    "dump-default",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "spdfine-0.75",
+    "spdfine-1",
+    "spdp-0",
+    "spdp-0.25",
+    "spdp-0.5",
+    "spdp-0.75",
+    "spdp-1",
+    "seg-0 .. seg-1 (6 values)",
+    "segb-0 .. segb-1 (11 values)",
+    "segf-0.00 .. segf-1.00 (21 values)",
+    "segr-0.80 .. segr-0.95 (4 values)",
+    "sz-0.00 .. sz-1.00 (11 values)",
+    "stackgrow",
+    "cm-0.000 .. cm-1.000 (13 values)",
+    "cmB-long",
+    "pick-0.33,1,1-0.0,1,1",
+    "pick-0.0,0.5,1-0.8,1,0.5",
+    "pick-0.15,1,1-0.5,1,1",
+    "seed7",
+    "seed1234",
+    "px24",
+    "px30",
+    "px36",
+    "px45",
+    "px300"
+  ]
+}

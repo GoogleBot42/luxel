@@ -1,0 +1,48 @@
+{
+  "slug": "sierpinski-rainbow-2d",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Pixel-for-pixel the same rainbow Sierpinski fractal — geometry, palette and brightness all match — but the port's animation clock runs exactly 2.00x too fast, so orig(t) equals port(t/2) over the whole 120 s timeline tested.",
+  "observations": [
+    "Rig: grid 16x16 (256 px), both sides. Both compile and run clean — no compileError/runtimeError on either side in any of the 14 runs. wantsSensors=false both sides; sensors feed irrelevant.",
+    "Both sides draw the same thing: a blocky Sierpinski / bit-AND fractal on the grid (large solid quadrants subdividing into the classic half-scale triangular self-similar blocks), coloured by a rainbow that walks continuously. Per-frame distinct-colour count is identical at matched phase (14/14 at t=0, 15/15, 12/12, 15/15, 15/15, 14/14 at orig t=0,2,4,6,8,10).",
+    "HEADLINE: the port runs at exactly double speed. A time-rescale fit corr(orig[t], port[a*t+b]) over 241 dumped frames (0-12 s @ 20 fps, default rig) peaks at a=0.500, b=-0.025 s with MEAN correlation 0.9967 across the whole window; per-frame best-match port times track orig/2 to the dump resolution (orig 1.0->port 0.45, 2.0->0.95, 4.0->1.95, 8.0->4.00, 12.0->5.95).",
+    "Matched-phase agreement is essentially exact: mean absolute per-channel pixel difference between orig(t) and port(t/2 - 0.025 s) is 2.43/255 over 12 s (worst frame 9.37, which is time-quantisation residual at a 2x rate). Same-time (unshifted) difference is 67.99/255 — i.e. the sides look completely unrelated frame-by-frame purely because of the speed error.",
+    "The 2x factor is constant, not drifting: at orig t=100 s the best-matching port frame is t=49.95 s (mean|diff| 3.14) and at orig t=120 s it is t=59.95 s (mean|diff| 4.73). Same-time diffs there are 96.79 and 69.81.",
+    "Independent confirmation from period autocorrelation of meanBrightness over a 125 s / 20 fps run: orig's first strong non-trivial peak is at lag 131 frames = 6.55 s; port's is at lag 65-66 frames = 3.25-3.30 s (and its harmonic at 197 frames). Ratio 2.00.",
+    "motion stat ratio is a constant ~2.08x at every frame rate tested: 5 fps orig 18.5 / port 35.1; 10 fps orig 9 / port 19; 20 fps orig 4.5 / port 9.4; 40 fps orig 2 / port 5; 2 fps orig 43 / port 66. motionLit tracks motion (dense pattern, ~50% duty) so no sparseness correction needed.",
+    "NEITHER side is frame-rate coupled — this is a pure speed-constant bug, not an fps/delta-time bug. Rendering the same side at 10 fps and 40 fps and comparing at absolute times gives mean|diff| 0.00 for BOTH orig and port once a constant 0.075 s frame-grid offset is applied (scan: off=+0.075 -> orig 0.00, port 0.00; off=0 -> orig 7.02, port 13.68). The port/orig factor fit is 0.495 at 10 fps and 0.495 at 40 fps — identical to the 20 fps fit.",
+    "No modes or regimes on either side. A 240 s / 2 fps survey rhythm image is homogeneous top-to-bottom for both sides — continuous hue walk plus fractal subdivision, no boundaries, no dark gaps, no super-cycle. The port's rhythm image has the same texture with visibly finer horizontal banding (2x rate), which is the only difference visible at survey scale.",
+    "Steady state is healthy on both sides. --skip 120 --seconds 12 @ 20 fps: orig brightnessTrend steady, zeroMotionFrames 0, meanBrightness avg 47.8 (min 15 max 109); port steady, zeroMotionFrames 0, avg 50.5 (min 13 max 103). --seconds 30 --fps 4: orig avg 54.1 / port 51.6, both steady. No decay, no freeze, no saturation on either side.",
+    "Brightness envelopes are statistically identical over a long window despite the speed error: baseline (6 s @ 20 fps) orig meanBrightness avg 54.1 min 14 max 104, port avg 54.4 min 14 max 104. The port is not brighter or dimmer, just faster.",
+    "Resolution behaviour matches: re-rendered at --grid 8x8 and --grid 48x48, both sides rasterize at native grid resolution (48x48 shows many more, finer self-similar blocks than 16x16 on BOTH sides) rather than drawing into a fixed logical canvas. The motion ratio stays 5:9 at 8x8, 5:9 at 48x48 — the 2x is a global time constant, not resolution-dependent.",
+    "Both sides are fully deterministic and seed-independent: --seed 1234 produces byte-identical per-frame stats series to --seed 1 on both orig and port.",
+    "Frame-to-frame filmstrips (baseline, 3.00-3.55 s) show the same character of motion on both sides — a Sierpinski block growing/subdividing smoothly with a simultaneous hue slide, no jitter or jumping on either side. The port simply covers about twice as much of that evolution in the same 12 frames.",
+    "CONTROL SURFACE: both sides expose ZERO settable controls (probe table reports '(no settable controls)' for orig and for port). No control-surface mismatch."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port's animation is exactly 2.00x too fast — halve whatever time/phase increment drives the pattern. This is the only defect found; fix it and the port should be indistinguishable. Concretely: orig(t) == port(t/2) to within 2.4/255 mean absolute pixel error across a 12 s window, and the relation still holds exactly at t=100 s and t=120 s, so it is a single constant, not a drift or an accumulator error.",
+    "Target numbers to verify a fix against (default 16x16 grid rig, seed 1, 20 fps): the original's meanBrightness autocorrelation has its first strong peak at lag 131 frames = 6.55 s; the port currently peaks at 65-66 frames = 3.27 s. After the fix the port's peak should land at 131 frames.",
+    "Second check for a fix: the `motion` stat at 20 fps should drop from ~9.4 to ~4.5 (5 fps: 35.1 -> 18.5; 40 fps: 5 -> 2), and the same-time mean absolute pixel difference against the original over 0-12 s should drop from ~68/255 to near 0.",
+    "Do NOT change anything else. Geometry (the bit-AND Sierpinski subdivision), the rainbow palette, per-frame colour count, brightness min/avg/max, resolution-dependent rasterization, steady-state stability and seed-independence all already match the original exactly at matched phase.",
+    "This is not a delta-time/frame-rate bug — both sides are already perfectly fps-invariant (10 fps and 40 fps renders of each side are byte-identical at equal absolute times). So the fix belongs in a literal speed constant, not in how elapsed time is accumulated."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "dump-base",
+    "sr2d-dense12",
+    "sr2d-fps10",
+    "sr2d-fps40",
+    "sr2d-late",
+    "steady-long",
+    "late-skip120",
+    "grid8",
+    "grid48",
+    "seed1234"
+  ]
+}

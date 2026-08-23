@@ -1,0 +1,36 @@
+{
+  "slug": "an-intro-to-pixelblaze-code",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same pattern — a red/green/blue chase of three 2-px blocks sweeping right along a black strip and clipping at the ends — but the port runs the loop 6.7% faster and packs its trail one pixel tighter (3-px block pitch vs the original's 4-px).",
+  "observations": [
+    "Both sides: exactly three lit blocks on an otherwise black 60-px strip, each 2 px wide, pure saturated primaries at full value (255,0,0 / 0,255,0 / 0,0,255), red leading, green next, blue trailing; everything else is exact black (0,0,0). No fades, no dimming, no palette drift anywhere in a 240 s window.",
+    "Motion on both sides: the group slides monotonically toward increasing pixel index and wraps at the end; the trail does NOT wrap with the head — when the head re-enters at index 0 the green and blue blocks are clipped off the left end and reappear as the head advances (orig t=11.0 s: G at 2/3, R at 6/7, blue absent; port t=10.0 s: G at 0, R at 2/3, blue absent). Identical behaviour on both sides.",
+    "SPEED DIFFERENCE: original's loop period is ~5.24 s (measured head-return-to-index-0 at t=5.25 s and t=10.5 s; ~11.44 px/s); port's is ~4.92 s (~12.2 px/s). Verified by --dump at 0.25 s spacing over 13 s and again by absolute head positions at t=5,10,...,35 s. The port is 6.7% (ratio ~16:15) faster and visibly drifts ahead: both start with the head at pixel 0/1 at t=0, but by t=35 s the original's head is at 41/42 while the port's is at 7/8 — a full extra lap plus change.",
+    "TRAIL SPACING DIFFERENCE: original's block pitch is 4 px (2 lit + 2 dark), e.g. t=8 s orig B@24/25, G@28/29, R@32/33 — total footprint 10 px. Port's pitch is 3 px (2 lit + 1 dark), e.g. t=8 s port B@32/33, G@35/36, R@38/39 — total footprint 8 px. Same at every dumped time; the port's comet is 20% shorter and its gaps are half as wide.",
+    "Neither side is frame-rate coupled: head positions at t=0..11 s are within one pixel of each other at --fps 10 and --fps 40 on both sides, so both integrate real elapsed time. The 6.7% speed gap is a constant-rate error, not an fps artefact.",
+    "Neither side uses randomness: --seed 7 reproduces the seed-1 frames exactly (orig and port each byte-identical to their seed-1 dumps at t=0/2/4 s).",
+    "No modes or long-period structure on either side: a 60 s @ 5 fps survey and a 240 s @ 2 fps survey both show one uniform regime of evenly spaced diagonal R/G/B traces, no banding, no regime boundaries. brightnessTrend is 'steady' on both, zeroMotionFrames 1 on both, meanBrightness avg 8.4 (orig) vs 8.5 (port) — the port reads marginally brighter, consistent with its shorter trail spending slightly more time fully on-strip.",
+    "Control surface matches: the engine reports zero settable controls on BOTH sides, and --probe-controls confirms 'no settable controls' for each. No control-surface mismatch.",
+    "Neither side binds sensor globals (wantsSensors false on both), no compile or runtime errors on either side."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the port down by a factor of 15/16: the original's full-strip loop takes ~5.243 s (head at 11.44 px/s on a 60-px strip); the port's takes ~4.915 s (12.21 px/s). Both are time-based, so this is a single rate constant that is 6.7% too large.",
+    "Widen the gaps in the trail: the original spaces the three blocks 4 px apart (2 lit px then 2 dark px, red head at p, green head at p-4, blue head at p-8, total footprint 10 px). The port spaces them 3 px apart (2 lit, 1 dark; green at p-3, blue at p-6, footprint 8 px). Block width (2 px) and colour order (red leading, blue trailing) are already correct — only the inter-block offset needs to go from 3 to 4.",
+    "Everything else already matches and should not be touched: pure-primary full-brightness colours, exact-black background, rightward direction, wrap at the strip end with the trail clipping (not wrapping) at index 0, fps-independent timing, and the absence of any controls."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-a",
+    "dump-b",
+    "dump-fine",
+    "fps10",
+    "fps40",
+    "seed7"
+  ]
+}

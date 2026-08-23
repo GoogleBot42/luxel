@@ -1,0 +1,36 @@
+{
+  "slug": "rainbow",
+  "verdict": "match",
+  "score": 10,
+  "confidence": "high",
+  "summary": "Port is byte-identical to the original on every run performed — same rendered PNGs, same per-frame stat series, same per-pixel dumps across seeds, frame rates, rigs and a 220 s timeline.",
+  "observations": [
+    "Both sides render a single continuous regime for the whole 60 s survey (5 fps, 300 frames): a full hue wheel mapped once across the 60-px strip, scrolling smoothly with no modes, no events, no palette walk, no dark gaps. Extended checks out to t=219 s show the same regime.",
+    "Waterfall geometry is identical on both sides: uniformly sloped diagonal hue bands. Hue advances +0.153 turns/s at pixel 0 on BOTH sides (measured from --dump: px0 hue 0.0072 at t=0 -> 0.1601 at t=1.0 s), i.e. a ~6.54 s full-wheel period, and the crest travels toward index 0 at ~9.2 px/s. Spatial gradient: px0 hue 0.007 vs px30 hue 0.51 at t=0 — exactly half a wheel over half the strip.",
+    "Exact colours agree to the byte at every sampled instant. Sample (orig vs port, px0 / px30): t=0 (255,11,0)/(0,243,255) both sides; t=0.35 (255,93,0)/(0,161,255); t=1.0 (255,245,0)/(0,9,255); t=5.5 (255,0,233)/(0,255,21); t=12.3 (255,0,176)/(0,255,78); t=29.9 (0,146,255)/(255,108,0). Max per-channel diff = 0 at all 8 dump times (360 channels each).",
+    "statsSummary is identical on both sides in every run: meanBrightness avg/min/max/first/last all 127 (and meanR = meanG = meanB = 127, i.e. a perfectly balanced full-wheel strip at every frame), brightnessTrend 'steady', zeroMotionFrames 1 (the unavoidable first captured frame). Full per-frame series comparison over baseline (120 frames), survey (300) and a 30 s / 20 fps run (600) found 0 mismatches across all six series (meanBrightness, meanR/G/B, motion, motionLit).",
+    "Rendered PNGs are hash-identical orig vs port in every run: baseline 59f5f1d87b44, survey d94aee74e957, 30 s dump run 945c43e5571b, late window (--skip 200) 1f5b35ff48bd, and the 8x8 grid override c356bdfb187e (plus identical -motion.png 7344a602eb34 and -rhythm.png 39c227e14c64).",
+    "Frame-rate coupling: neither side is frame-coupled and both behave identically. Hue rate at px0 is +0.153 turns/s at 10 fps (0.0150 -> 0.1680 over 1 s), at 20 fps (0.0072 -> 0.1601) and at 40 fps (0.0033 -> 0.1562). Whole-rig 'motion' scales inversely with fps exactly as expected for a time-based pattern (16 @5 fps, 8 @10 fps, 4 @20 fps, 2 @40 fps) and matches on both sides at every rate.",
+    "Steady state confirmed: a --skip 200 --seconds 20 --fps 10 run (t = 200-219 s) is still the same scrolling rainbow at the same rate, PNG-identical between sides, with dumps at t=200/210/219 s matching to the byte (540 channels, 0 mismatches). No decay, freeze, saturation or drift on either side.",
+    "Seed independence: seeds 7 and 1234 both produce byte-identical orig/port dumps at t=0 and t=3 s. The pattern is deterministic and non-stochastic; no RNG divergence risk.",
+    "Rig behaviour: re-rendered on an 8x8 grid (64 px). Both sides map hue off the FLAT pixel index (grid row 0 at t=0 reads (255,11,0),(255,35,0),(255,59,0),(255,83,0),(255,107,0),(255,131,0),(255,155,0),(255,179,0) on both sides — a linear hue ramp of 1/64 turn per index step, continuing across rows), so the pattern is index-only rather than (x,y)-driven, and the port reproduces that indexing choice exactly.",
+    "Neither side reports a compile error or runtime error; wantsSensors is false on both, so no sensor feed is involved (sensors: 'off' on both, which is correct here)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing to fix. The port is bit-exact against the original on the default 60-px strip and on an 8x8 grid override, across 10/20/40 fps, seeds 1/7/1234, and t=0 through t=219 s. No structural, motion, colour or timing divergence exists to describe.",
+    "Both engines report zero settable controls for this pattern, so the control surfaces match (empty == empty); there is no dial for a fixer to add or align."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-a",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "late",
+    "grid8"
+  ]
+}

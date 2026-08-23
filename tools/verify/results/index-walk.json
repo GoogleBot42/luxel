@@ -1,0 +1,49 @@
+{
+  "slug": "index-walk",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides draw the same thing — a single full-brightness rainbow pixel marching left-to-right along the strip and wrapping, with an identically time-locked hue cycle — but the original's walk speed is frame-stepped (a fixed 0.200 px/frame at every fps) while the port's is time-based (~4.5 px/s at every fps), so they agree only near the default 20 fps and diverge by up to 5x elsewhere; the port also adds a Speed slider the original does not have.",
+  "observations": [
+    "Structure is the same on both sides at every window I looked at: exactly ONE lit pixel per frame, every other pixel exactly 0,0,0 (confirmed by --dump on frames at t=0..126 s), walking monotonically from index 0 toward index 59 and wrapping back to 0. No trail, no fade, no second feature. meanBrightness avg 2.2 and motionLit avg ~56-59 on both (baseline).",
+    "Color matches essentially exactly. The lit pixel is a fully-saturated, full-value hue that advances at ~550 deg/s on BOTH sides, and that rate is fps-invariant on both (measured 550 deg/s at 10 fps, ~552 at 40 fps, ~550 at 20 fps). Sampled RGBs are identical wherever the two sides happen to be on the same pixel: t=0 both 255,116,0; t=0.05 both 255,233,0; t=0.25 both 0,255,217; t=0.5 both 255,0,192. Even 120 s in the hues are still nearly in phase (orig hue 191 deg vs port 203 deg at t=120 s).",
+    "MOTION IS FRAME-RATE COUPLED ON THE ORIGINAL AND TIME-BASED ON THE PORT. Same dump times (0,1,2,3,4 s), lit-pixel index: at --fps 10 orig 0,2,4,6,8 (2.0 px/s) vs port 0,4,9,13,18 (~4.5 px/s); at --fps 20 orig 0,4,8,12,16 (4.0 px/s) vs port 0,4,9,13,18 (~4.5 px/s); at --fps 40 orig 0,8,16,24,32 (8.0 px/s) vs port 0,4,9,13,18 (~4.5 px/s). The original is a constant 0.200 px/frame; the port is a constant ~0.225 px/s-per-frame-independent 4.5 px/s.",
+    "Consequence on the survey rig: at --fps 5 over 300 s the original completes 5 traverses of the 60 px strip (~60 s each) while the port completes ~22 (~13.3 s each) — the waterfalls are five slow diagonals vs twenty-two steep ones. At the harness default 20 fps the same 300 s would give the original ~15 traverses vs the port's ~22, i.e. the port is ~12% fast even at the fps where the two are closest.",
+    "CONTROL-SURFACE MISMATCH: the original exposes NO controls at all (meta.json sides.orig.controls == []); the port exposes one, sliderSpeed (kind slider, label \"Speed\"). The probe calls it responsive on the port (maxDelta 4.16, maxDeltaLit 126.69) and there is nothing on the original for it to correspond to.",
+    "No modes or regimes on either side. A 300 s / 5 fps survey and a --skip 120 late window both show the same uniform repeating walk; brightnessTrend is 'steady' on both, zeroMotionFrames 0 in the late window on both. Neither side decays, freezes, saturates or errors (compileError/runtimeError null on both).",
+    "Neither side reads sensors (wantsSensors false on both) and neither is seed-driven: seed 1234 reproduced seed 1's lit indices and RGBs byte-for-byte on both sides."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "absent — the original exposes no controls at all, so there is no dial to compare against",
+      "portEffect": "live and strong: it scales walk speed over a very wide range. At 20 fps, lit-pixel index at t=0,2,4,6 s reads 0,1,2,3 at sliderSpeed=0 (~0.5 px/s, nearly frozen), 0,13,27,40 at 0.25 (~6.7 px/s), and aliases past one traverse per 2 s at 0.5 and above (~26+ px/s). Untouched default sits at ~4.5 px/s, i.e. roughly what sliderSpeed=0.18 would give.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Decouple the walk from wall-clock time: the original advances the lit index by a FIXED 0.200 pixels per rendered frame regardless of frame rate (2.0 px/s at 10 fps, 4.0 px/s at 20 fps, 8.0 px/s at 40 fps — measured by dumping the lit index at t=0..4 s on all three rates). The port instead advances ~4.5 px/s at every frame rate. Make the per-frame step constant rather than the per-second speed.",
+    "Even at the frame rate where the two are closest (20 fps) the port is ~12% too fast: original 4.0 px/s exactly (indices 0,4,8,12,16 at t=0,1,2,3,4 s), port ~4.5 px/s (0,4,9,13,18). After the frame-step fix, target 0.200 px per frame exactly.",
+    "The port's Speed slider has no counterpart on the original, which exposes no controls whatsoever. If the slider is kept as a deliberate enhancement, its neutral/default position should reproduce the original's 0.200 px/frame rather than the current ~4.5 px/s; note also that sliderSpeed=0 leaves the port essentially frozen (~0.5 px/s), which the original never does.",
+    "Nothing to change in appearance: single-pixel-wide, no trail, everything else hard black, and the hue sweep (~550 deg/s, fully saturated, full value) already matches the original exactly at every frame rate tested. Do not touch the color path while fixing the speed."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-300",
+    "late",
+    "fps10",
+    "fps20",
+    "fps40",
+    "colors",
+    "hue10",
+    "hue40",
+    "spd0",
+    "spd0.25",
+    "spd0.5",
+    "spd0.75",
+    "spd1",
+    "seed1234"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "slug": "bouncing-rgb-balls-2d",
+  "verdict": "match",
+  "score": 9,
+  "confidence": "high",
+  "summary": "Both sides draw three soft additive R/G/B blobs of the same size and speed bouncing around the panel, with matching statistics over 240 s and three seeds; only the exact trajectories decorrelate after ~8-10 s (chaotic bounce sensitivity) and the port's blob brightness/size excursion is ~11% narrower.",
+  "observations": [
+    "Both sides: exactly three soft radially-falling-off balls, one pure red, one pure green, one pure blue, additively blended (overlaps read white/yellow/magenta). No cross-channel tint on either side — a --dump of the 16x16 grid at t=3 s shows every cell lit in a single channel except where two balls overlap.",
+    "Both start identically: at t=0 all three balls sit on top of each other at the panel centre as one white blob. Per-channel centroids at t=0 agree to 0.02 px (16x16) and the radial profiles agree cell-for-cell to within 1/16 of full scale.",
+    "Trajectories track closely then chaotically decorrelate. Per-channel centroid separation on the 16x16 rig (seed 1): <0.5 px through t=3 s, 1.4-2.2 px at t=4-10 s, 2.7-4.9 px at t=12-15 s, 8+ px (fully unrelated) by t=25-29 s. The 48x48 contact sheets are visually indistinguishable through ~8 s and clearly differently arranged by 10.8 s. Divergence jumps at wall bounces, which is the expected sensitivity of a bouncing-ball sim to tiny float differences, not a behavioural difference.",
+    "Ball speed matches. On a clean interior crossing (green ball, 48x48 rig, t=3.5->4.0 s) the original travels 13.23 px and the port 13.18 px — 26.5 vs 26.4 px/s, 0.4% apart. Whole-window motion stat over 240 s: orig 14.08 avg, port 14.41 (2% apart); motionLit 21.1 vs 21.6.",
+    "Both are time-based, not frame-stepped. Rendering the same 3.0->3.4 s stretch at --fps 10/20/40, the green ball's speed is 6.6/6.3/6.1 px/s on the original and 6.3/6.0/5.8 px/s on the port — the same mild convergence with step size on both sides, no fps scaling.",
+    "Both are resolution-independent in the same way: at --grid 8x8, 16x16 and 48x48 the same three blobs occupy the same fraction of the panel, just coarser or finer. No feature-count or size change with the rig on either side.",
+    "Blue is the brightest ball on both sides (meanB avg 45.2 orig / 45.7 port vs meanR 26.0 / 26.6 over 240 s), and blue's peak pixel saturates at 254-255 while red/green peak around 230-250 — identical on both.",
+    "Steady state is healthy on both: 240 s runs give brightnessTrend steady, zeroMotionFrames 1, no compile or runtime error, and the t=200-212 s window still shows three well-formed bouncing balls on both sides.",
+    "Reproducible statistical difference: the port's per-channel frame-mean distribution is ~11% narrower. Over 240 s at three well-separated seeds (1, 7, 1234) the original's meanR sd is 10.3-10.7 with max 51-58 and min 8-11, the port's is 9.5-9.7 with max 53-54 and min 9; meanB sd 18.8-18.9 (max 105, min 14) vs 16.9 (max 97, min 15). Means agree to 2.5%. The balls visibly breathe in apparent size/brightness on both sides (blue ball's half-max radius on 48x48 swings roughly 8 to 17 px), and the original's swing reaches slightly further at both ends than the port's.",
+    "Control surface matches: the engine reports zero settable controls on BOTH sides, and --probe-controls found nothing to sweep. No missing or extra dial.",
+    "Both sides report wantsSensors: false — this is not a sensor pattern."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing structural to fix. Three pure R/G/B soft balls, their radius, their brightness ordering (blue brightest), their speed (within 0.5% on an interior crossing), their wall-bounce behaviour, their resolution independence and their frame-rate independence all match the original.",
+    "Do NOT chase the position divergence after ~10 s. It starts from sub-0.1 px agreement at t=0 and grows only at bounces; the statistical character (motion 14.1 vs 14.4, brightness distribution, blob count, blob size) is identical over 240 s at three seeds. Exact trajectory alignment is not achievable and not visible to a viewer.",
+    "The one measurable, reproducible gap: the port's apparent per-ball size/brightness excursion is compressed by about 11%. Over 240 s the original's per-channel frame-mean ranges wider at both ends (meanR 8..58, sd 10.7; meanB 14..105, sd 18.8) than the port's (meanR 9..54, sd 9.5; meanB 15..97, sd 16.9) while the averages agree. In pictures: the original's blobs occasionally swell larger/brighter and occasionally shrink tighter than the port's ever do. If a fixer wants the last point of fidelity, widen whatever modulates the blob's apparent radius/amplitude so its extremes reach ~7% further out; the mid-range is already correct."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-b1",
+    "dump-vel",
+    "fps10",
+    "fps20",
+    "fps40",
+    "grid8",
+    "grid48",
+    "size48",
+    "late-200",
+    "seed7",
+    "seed1234",
+    "survey240-s7",
+    "survey240-s1234",
+    "peaks"
+  ]
+}

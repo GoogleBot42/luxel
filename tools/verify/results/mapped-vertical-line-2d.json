@@ -1,0 +1,93 @@
+{
+  "slug": "mapped-vertical-line-2d",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — a full-height vertical bar sweeping right and wrapping on a dim tinted field, with width/line-hue/background-hue dials reproduced exactly — but the port's lineSpeed slider runs BACKWARDS relative to the original (and ~12% slow), and the port's untouched defaults render an animated line where the original renders a frozen, line-less field.",
+  "observations": [
+    "Structure matches exactly: both sides draw one perfectly vertical bar spanning all 16 rows (every row byte-identical, brightest-column index the same in all 16 rows at every dumped time, on both sides) over a uniform dim background. No kinks, no forking — confirmed by --dump, not by the contact sheet.",
+    "Motion character matches: at dialed lineSpeed=0.5 both sweep rightward (positive px/s) and wrap; the survey-dialed rhythm images show the same slope and the same trace count over 60 s.",
+    "Both sides are time-based, not frame-stepped: line velocity measured by centroid tracking at lineSpeed=0.5 is orig 3.754 / 3.717 / 3.684 px/s and port 3.301 / 3.338 / 3.283 px/s at --fps 10 / 20 / 40. No frame-rate coupling on either side.",
+    "MAJOR: the lineSpeed slider is INVERTED on the port. Measured line velocity (16x16 default rig, other dials pinned 0.5, unwrapped centroid fit over 3 s at 20 fps) — orig: 24.43, 6.90, 3.74, 2.58, 1.94 px/s at slider 0/0.25/0.5/0.75/1 (monotonically DECREASING); port: 1.72, 2.28, 3.37, 6.00, 20.32 px/s over the same values (monotonically INCREASING). The two curves cross near 0.5, so a mid-slider comparison alone looks like a match; at the endpoints they differ by ~14x.",
+    "Secondary speed error: even after mirroring, the port is consistently ~10-15% slow — port(v) is about 0.88x orig(1-v) at every value tested (0.5: 3.37 vs 3.74; 1 vs 0: 20.32 vs 24.43; 0 vs 1: 1.72 vs 1.94). Visible over a long window: at t=120-140 s the original completes 6 wraps where the port completes 5.",
+    "UNTOUCHED DEFAULTS DIVERGE. Original untouched is degenerate: a uniform (25,0,0) dark-red field with NO line anywhere and zero motion — 300/300 zero-motion frames over 60 s at 5 fps and mean brightness pinned at 8 over a 240 s / 2 fps survey. Port untouched draws a 3-4 px (255,0,0) red line sweeping right at ~3.2 px/s over a (0,0,25) dark-BLUE field.",
+    "The untouched divergence decomposes into three separate default-value differences visible from output: (a) default line width — orig 0 (invisible; setting only lineWidth=0.5 makes a red line appear), port ~0.45-0.5 equivalent; (b) default speed — orig frozen at 0 px/s (a line dialed in by width alone never moves), port ~3.2 px/s; (c) default background hue — orig red (25,0,0), port blue (0,0,25). Default LINE hue is red on both, and the background dim level is exactly 25 on both.",
+    "CONTROL-SURFACE MISMATCH (naming): the original exposes sliderlineSpeed / sliderlineWidth / sliderlineColor / sliderBackgroundColor (labels lineSpeed, lineWidth, lineColor, BackgroundColor); the port exposes sliderLineSpeed / sliderLineWidth / sliderLineColor / sliderBackgroundColor (labels LineSpeed, LineWidth, LineColor, BackgroundColor). Three of four names differ by the capitalisation of 'line'. All four are kind slider on both sides, and the counts match.",
+    "Colour reproduction is exact. At matched dial values the RGB is byte-identical: lineColor 0/0.25/0.5/0.75/1 gives (255,0,0)/(127,255,0)/(0,255,255)/(127,0,255)/(255,0,0) on BOTH sides, and BackgroundColor gives (25,0,0)/(12,25,0)/(0,25,25)/(12,0,25)/(25,0,0) on both.",
+    "Resolution independence matches: the bar is a constant FRACTION of the canvas on both sides, not a fixed pixel count — at lineWidth=0.5 it is 2/8 at --grid 8x8, 3-4/16 at 16x16, 12/48 at 48x48 and 17/64 at 64x64, the same on orig and port. Sweep speed is likewise ~0.23 canvas-widths/s on both at every grid size.",
+    "No mode structure: 60 s dialed and 240 s untouched surveys show one uniform regime on each side (a steady periodic sweep for the port and the dialed pair; permanent stasis for the untouched original). Steady state at t=120-140 s is unchanged from t=0-6 s on both sides; brightnessTrend steady on both. Output is seed-independent (seed 1 and seed 1234 render the same).",
+    "Neither side binds sensor globals (wantsSensors false on both), no compile or runtime errors on either side."
+  ],
+  "dials": [
+    {
+      "name": "lineSpeed (orig sliderlineSpeed / port sliderLineSpeed)",
+      "origEffect": "Slider UP = SLOWER. 24.4 px/s at 0, 6.9 at 0.25, 3.74 at 0.5, 2.58 at 0.75, 1.94 at 1 (16x16 default rig); direction always rightward. Reads like a period/interval knob, not a rate knob (1/speed is close to linear in the slider).",
+      "portEffect": "Slider UP = FASTER. 1.72 px/s at 0, 2.28 at 0.25, 3.37 at 0.5, 6.00 at 0.75, 20.32 at 1; direction always rightward. Same 1/speed-linear shape but with the slider reversed, and ~12% slow in magnitude.",
+      "matches": false
+    },
+    {
+      "name": "lineWidth (orig sliderlineWidth / port sliderLineWidth)",
+      "origEffect": "Widens the bar as a fraction of the canvas: 1/64, 9/64, 17/64, 21/64, 25/64 of the grid width at 0/0.25/0.5/0.75/1 (measured at --grid 64x64). At 0 the bar is sub-pixel and only intermittently lights a single column.",
+      "portEffect": "Identical curve: 1/64, 9/64, 17/64, 20/64, 24/64 at the same values — at most one column narrower at the top end.",
+      "matches": true
+    },
+    {
+      "name": "lineColor (orig sliderlineColor / port sliderLineColor)",
+      "origEffect": "Full hue wheel for the bar at full value, wrapping at 0 and 1: red / chartreuse (127,255,0) / cyan / violet (127,0,255) / red at 0/0.25/0.5/0.75/1. Background untouched.",
+      "portEffect": "Byte-identical RGB at every value tested. (The probe called this dial inert on the ORIGINAL at 4 s; that was a false inert caused by the untouched line width being 0 — with lineWidth pinned it is plainly live on both sides.)",
+      "matches": true
+    },
+    {
+      "name": "BackgroundColor (sliderBackgroundColor on both)",
+      "origEffect": "Hue of the dim background field at a fixed value of 25/255: (25,0,0) / (12,25,0) / (0,25,25) / (12,0,25) / (25,0,0) at 0/0.25/0.5/0.75/1. Bar untouched.",
+      "portEffect": "Byte-identical RGB at every value tested.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "PRIMARY FIX — invert the lineSpeed slider. On the original, raising the slider SLOWS the bar (24.4 px/s at 0 down to 1.94 px/s at 1 on a 16-wide grid); the port does the opposite (1.72 px/s at 0 up to 20.3 px/s at 1). The two curves happen to cross near 0.5, so a mid-slider check will not catch this — verify at the endpoints. Target: slider 0 must give the FASTEST sweep, slider 1 the slowest.",
+    "The speed curve shape is already right — reciprocal, i.e. 1/velocity is near-linear in the slider on both sides — so this is a mapping-direction bug, not a curve-shape bug. After inverting, trim a residual ~12% shortfall: the port's speed at slider v is about 0.88x the original's at slider (1-v). Reference targets on a 16x16 grid with the other dials at 0.5: 24.4 px/s at slider 0, 3.74 px/s at 0.5, 1.94 px/s at 1.",
+    "Fix the untouched defaults, which currently give a completely different first impression. The original with no dials touched is a STATIC, line-less uniform dark-red field (25,0,0 everywhere, zero motion across 240 s); the port shows a moving red bar on a dark blue field. Three default values need to change to match: line width from ~0.45-0.5-equivalent to 0 (no visible bar), sweep speed from ~3.2 px/s to 0 (frozen), and background hue from blue to red. Note the original's untouched speed is 0 px/s, which is NOT what slider=0 produces (that is the fast end) — the original's speed variable simply starts at zero and only the slider handler gives it a value.",
+    "Rename three controls to match the original's spelling exactly: lineSpeed, lineWidth, lineColor (lower-case 'l'), not LineSpeed / LineWidth / LineColor. BackgroundColor is already correct. The kinds and count are right; only the capitalisation is wrong.",
+    "Nothing else needs touching: bar geometry (perfectly vertical, row-uniform, no wrap artefacts), sweep direction (rightward), wrap behaviour, resolution independence (bar width is a fixed fraction of the canvas at 8x8 through 64x64), time-based rather than frame-stepped motion, the background's fixed 25/255 dim level, and both hue mappings are already byte-exact matches."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-untouched",
+    "survey-untouched-240",
+    "ctl-width-only",
+    "dial-mid",
+    "survey-dialed",
+    "steady-late",
+    "seed-1234",
+    "ctl-lineSpeed-0",
+    "ctl-lineSpeed-1",
+    "ctl-lineWidth-0",
+    "ctl-lineWidth-1",
+    "ctl-lineColor-0",
+    "ctl-lineColor-1",
+    "ctl-BackgroundColor-0",
+    "ctl-BackgroundColor-1",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "fps-10",
+    "fps-20",
+    "fps-40",
+    "grid-8x8",
+    "grid-48x48",
+    "hue-lineColor-0.25",
+    "hue-lineColor-0.75",
+    "hue-BackgroundColor-0.25",
+    "hue-BackgroundColor-0.75",
+    "wid-0",
+    "wid-0.25",
+    "wid-0.5",
+    "wid-0.75",
+    "wid-1"
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "slug": "spring-colors",
+  "verdict": "close",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Port reproduces the pattern's structure, event rate, decay envelope and 4-slot hue-picker behaviour essentially exactly; the only real gaps are two wrong untouched default hues (tertiary 28.7 deg vs 21.5 deg, quaternary 50.3 deg vs 39.5 deg) and the fact that the original locks up completely for 32.8 s on a long repeating cycle while the port never stalls.",
+  "observations": [
+    "Both sides are the same visual idea on a 60 px strip: independent per-pixel twinkles. A pixel snaps instantly to full brightness (no attack ramp - the peak is always the event's first frame) then decays smoothly. Measured aligned envelopes (0.1 s bins, dump-a, 60 px, 20 fps) are near-identical: orig 107,100,95,88,82,77,74,71,69,65,62,61,58,57,55,52,50,48,45,42; port 106,100,94,89,82,78,75,72,68,65,62,61,58,56,54,52,48,46,43,42. No lateral motion on either side - the waterfalls are strictly vertical bars.",
+    "Event statistics match: at 60 px / 20 fps over 15 s, orig 220 events, 0.244 events/px/s, median duration 2.00 s, median peak value 89; port 226 events, 0.251 events/px/s, median duration 2.10 s, median peak 95. Lit fraction (value>8) orig 0.649 vs port 0.662.",
+    "Pixels are spatially independent on both sides: adjacent-pixel temporal correlation orig -0.046, port +0.034. Lit-run widths are dominated by 1 px on both (orig 1356x1px / 593x2px / 242x3px; port 1134 / 592 / 235); the port has slightly more 5-6 px runs (109 vs 56 in the same window), consistent with its ~2% higher density, not a structural difference.",
+    "COLOUR SLOT SHARES MATCH. Over a 60 s / 20 fps window with all four pickers dialed to distinct hues (0/120/240/300 deg), event counts per slot were orig 985 events at 29.7/30.1/37.4/2.8 % and port 973 events at 28.6/29.0/39.8/2.7 %. Across seeds 1/7/1234 the orig itself ranged 26.4-31.7 % on primary and 35.1-39.9 % on tertiary, so the two sides are indistinguishable. (An earlier 10-15 s window suggested the port over-picked tertiary 44 % vs 34 % - that was small-sample noise and did NOT survive the 60 s / 3-seed check.)",
+    "DEFAULT HUES DIVERGE (untouched run, measured from bright pixels r>=150 as 60*g/r): orig's four colours sit at 0.0, 10.6, 21.5, 39.5 deg (PB hue units ~0, 0.03, 0.06, 0.11); port's at 0.0, 10.6, 28.7, 50.3 deg (~0, 0.03, 0.08, 0.14). Slots 1 and 2 agree exactly; slots 3 and 4 are 7 deg and 11 deg too far toward yellow on the port. Visible effect: over 60 s at 20 fps untouched, meanG orig 8.5 vs port 10.9 (+28%) with meanR essentially equal (41.9 vs 42.1) and meanB 0 on both - the port's strip reads slightly more golden/amber, the original more pure red-orange.",
+    "ORIGINAL PERIODICALLY FREEZES SOLID; PORT NEVER DOES. At the default 20 fps over 400 s the orig is byte-identical frame to frame for 32.8 s starting at t=81.8 s, again at 196.4 s and again at 311.1 s (period 114.65 s, 28.6% of the time frozen); the port had zero stalls of any length >=1 s in the same 400 s. At 10 fps over 300 s the orig stalls at 46.7 / 126.3 / 205.8 / 285.4 s, again 32.8 s each (period 79.6 s, 37.7% of frames zero-motion); port again zero stalls. Stall onset also seen at 38.4 s (5 fps) and 35.7 s (3 fps). Stall duration is a fixed 32.8 s of simulated time at every rate; onset time and cycle period scale with fps, so the trigger is a mix of frame count and elapsed time. Not wall-clock driven: identical onset at --wall-clock 1700000000 and 1799999999. Confirmed visually - a --skip 85 --seconds 20 run at 20 fps gives the orig 400/400 zero-motion frames with meanBrightness min==max==14, a perfectly static striped strip, while the port animates normally through the same window.",
+    "The 5 fps survey's apparent 'orig dies at t=38 s' is that same stall, not a low-fps artefact: it is present and permanent-looking at 3/5/10 fps and present-but-recovering at 20 fps.",
+    "Outside the stall the two sides are statistically identical: a --skip 130 --seconds 20 --fps 20 window gives orig meanBrightness 17.8 / motion avg 1.5 / motionLit 1.5 / 0 zero-motion frames and port 16.9 / 1.5 / 1.5 / 17.",
+    "Control surface matches exactly: both sides expose hsvPickerPrimary/Secondary/Tertiary/Quaternary, all kind hsvPicker, labels Primary/Secondary/Tertiary/Quaternary. Probe called all four responsive on both sides (orig maxDeltaLit 16.18/10.66/11.27/4.11; port 15.31/12.77/16.24/1.17).",
+    "Per-pixel density law is rig-size independent and matches: event rate per pixel per second at 12 / 60 / 300 px is orig 0.225 / 0.244 / 0.234 and port 0.267 / 0.251 / 0.240, with lit fractions 0.442 / 0.649 / 0.494 (orig) vs 0.365 / 0.662 / 0.490 (port).",
+    "Neither side is frame-rate coupled in its event rate: rendering at 10 / 20 / 40 fps gives orig 0.251 / 0.244 / 0.207 events/px/s and port 0.252 / 0.251 / 0.250. The orig's mild droop at 40 fps is the stall machinery bleeding in, not a per-frame stepper.",
+    "Colours are fully saturated on both sides (mean saturation 1.000 over all lit pixels); blue channel is exactly 0 on both untouched, and peak values top out at 253 on both."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerPrimary",
+      "origEffect": "Sets the hue of colour slot 1. Hue is honoured exactly - dialing 0.1/0.25/0.5/0.75/0.9 produces measured hues of 36/90/180/270/324 deg. Slot 1 accounts for ~30% of twinkle events. Saturation and value components are IGNORED (v=0.25 vs v=1.0, s=0 vs s=0.5 vs s=1 all render byte-identically). Untouched default hue 0.0 deg.",
+      "portEffect": "Identical: same exact hue mapping (36/90/180/270/324 deg), same ~29% event share, S and V likewise ignored, same untouched default hue 0.0 deg.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerSecondary",
+      "origEffect": "Hue of colour slot 2, ~30% of events. Setting it to 0.66 moves exactly the 10.6 deg population to 240 deg, leaving 0/21.5/39.5 deg untouched. S/V ignored. Untouched default hue 10.6 deg.",
+      "portEffect": "Identical mapping and share (setting 0.66 moves exactly the 10.6 deg population to 240 deg); untouched default hue also 10.6 deg. S/V ignored.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerTertiary",
+      "origEffect": "Hue of colour slot 3, ~37% of events. Setting 0.66 moves exactly the 21.5 deg population to 240 deg. S/V ignored. Untouched default hue 21.5 deg.",
+      "portEffect": "Correct slot wiring and identical share (~40%), but the UNTOUCHED DEFAULT is 28.7 deg instead of 21.5 deg. Once dialed, behaviour is indistinguishable.",
+      "matches": false
+    },
+    {
+      "name": "hsvPickerQuaternary",
+      "origEffect": "Hue of the rare colour slot 4 - only ~2.8% of events, which is why its probe delta is the smallest (maxDeltaLit 4.11). Setting 0.66 moves exactly the 39.5 deg population to 240 deg. S/V ignored. Untouched default hue 39.5 deg.",
+      "portEffect": "Correct slot wiring, same rarity (~2.7% of events, probe maxDeltaLit 1.17), but the UNTOUCHED DEFAULT is 50.3 deg instead of 39.5 deg. Once dialed, behaviour is indistinguishable.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Fix the two wrong default hues. The port's built-in colour set is 0 / 10.6 / 28.7 / 50.3 deg; the original's is 0 / 10.6 / 21.5 / 39.5 deg. In Pixel Blaze hue units (0..1) that is port 0, 0.03, 0.08, 0.14 vs original 0, 0.03, 0.06, 0.11 - i.e. the tertiary and quaternary default hues should be lowered from ~0.08 to ~0.06 and from ~0.14 to ~0.11. Verify with an untouched 15 s dump at 20 fps: bright pixels (r>=150) should cluster at 60*g/r = 0.0, 10.6, 21.5, 39.5 deg, and 60 s meanG should drop from ~10.9 to ~8.5 with meanR unchanged at ~42.",
+    "Everything else about the colour system is already right and should not be touched: the hue mapping is exact across the full 0..1 range, the S and V components of each picker are ignored on both sides, each control drives the correct slot, and the four slots are selected with matching probabilities (~30/30/37/3 %, verified over 970+ events on each of seeds 1/7/1234).",
+    "Do NOT try to make the port faster/slower or change its decay. Event rate (0.25 per pixel per second), instant attack, ~2 s decay envelope (107 -> 42 over 2.0 s), 1-px-dominant feature width and spatial independence all match the original to within seed noise, and the per-pixel rate is correctly independent of strip length (checked at 12 / 60 / 300 px).",
+    "The largest long-window difference is NOT a port defect to copy: the original goes completely static for 32.8 s on a repeating cycle (at 20 fps: freezes at t=81.8, 196.4, 311.1 s, i.e. 28.6% of the time; at 10 fps every 79.6 s, 37.7% of frames). The port animates continuously and looks healthier. Before deciding, someone should check whether the original's freeze is genuine Pixel Blaze behaviour or an engine-side numeric/accumulator limit in how the harness runs the .epe - the stall duration is a suspiciously round 32.8 s (~2^15 ms) and its onset scales with frame rate while the stall length does not. If it turns out to be an engine bug, file it as an engine issue, not a port fix.",
+    "If the freeze IS genuine original behaviour and fidelity is wanted, the port would need the same cadence: animate for ~82 s at 20 fps, hold the last frame perfectly still for 32.8 s, resume, repeat with a 114.65 s period (79.6 s period at 10 fps)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "dump-a",
+    "dialed-4hue",
+    "fps10",
+    "fps40",
+    "freeze-fps3",
+    "freeze-fps10",
+    "freeze-fps20",
+    "freeze-fps40",
+    "stall-fps10-300",
+    "stall-fps20-400",
+    "regime-stall",
+    "regime-active",
+    "ctl-Primary-blue",
+    "ctl-Secondary-blue",
+    "ctl-Tertiary-blue",
+    "ctl-Quaternary-blue",
+    "ctl-pv25",
+    "ctl-pv100",
+    "ctl-ps0",
+    "ctl-ps50",
+    "hue-0.1",
+    "hue-0.25",
+    "hue-0.5",
+    "hue-0.75",
+    "hue-0.9",
+    "seed1-4hue",
+    "seed7-4hue",
+    "seed1234-4hue",
+    "px12",
+    "px300",
+    "wc1700000000",
+    "wc1799999999"
+  ]
+}

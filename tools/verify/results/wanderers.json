@@ -1,0 +1,48 @@
+{
+  "slug": "wanderers",
+  "verdict": "broken",
+  "score": 2,
+  "confidence": "high",
+  "summary": "Original is a steady population of ~45 single-pixel rainbow dots random-walking one flat-index step at a time on a black field; the port renders a solid RED field on which ~20 coordinate-space walkers paint permanent trails that never erase, growing into large static blobs that fill the whole grid within ~3 minutes.",
+  "observations": [
+    "Both sides compile and run with no compile/runtime error; both are seed-dependent (seeds 1 / 7 / 1234 give different pixel layouts on both sides), so judgment is on statistical character, not per-pixel alignment. The character diverges identically at every seed.",
+    "BACKGROUND COLOR. Original's unlit field is exactly (0,0,0): at t=3 s on the 16x16 grid, 207 of 256 pixels are pure black. Port's field is exactly (255,0,0) — 234 of 256 pixels at t=0, i.e. hsv(0,1,1) — plus exactly ONE pure-black pixel at flat index 0 in every frame dumped (t=0, 0.05, 0.5, 3, 5.95). Whole-window means: orig meanR/G/B 22.2/22.5/23.4 (neutral); port 219/34/33 at 6 s (red-dominated).",
+    "POPULATION vs ACCUMULATION. Original's lit count is self-limiting and stable: 46, 47, 47, 47, 46, 46, 46, 47, 47, 46, 47 over 11 consecutive 20 fps frames (t=2.0..2.5 s), and still 43-46 at t=180-240 s. Port's non-background count only ever grows: 55 -> 58 over the same half second, 55 -> 134 from t=2 s to t=12 s, and by t=180 s the grid is fully painted (meanBrightness 126, meanR/G/B 125/122/129).",
+    "ERASURE. Frame-to-frame on/off event lists (20 fps) show the original turning pixels OFF as well as ON in matched pairs — e.g. t=2.25 s on=[79,216] off=[80,215]; t=2.3 s on=[12,64,165] off=[13,63,154]. The port over the same 0.5 s produced on=[4], on=[38], on=[73] and ZERO off events. The port never clears a pixel.",
+    "WALK GEOMETRY. Original's on/off pairs are +/-1 in FLAT PIXEL INDEX (80<->81, 124<->123, 216<->215, 63<->64), i.e. a 1D random walk along the pixel index. Re-rendering on 16x16 vs 32x8 (same 256 px) gives the original a BYTE-IDENTICAL flat frame at t=3 s (sha 11fc96eda2ec71e4 both) — it is index-only. The port's t=3 s flat frame differs between those two grid shapes (63633c407bb9 vs 899a128ec031) — it walks in (x,y). That is why the port's trails read as connected diagonal staircases and merge into 2D blobs (component sizes 17,8,7,5,5,4,3,2 at t=2 s) while the original stays ~30 separate 1-3 px components.",
+    "MOTION RATE. At 20 fps the original changes 2-10 pixels per frame (~50 walker steps/s) and posts motion avg 1.6 / motionLit avg 8.9 with 28/120 zero-motion frames. The port changes 0-1 pixels per frame, motion avg 0.5 / motionLit avg 0.5, 69/120 zero-motion frames — roughly 8 new pixels/s and falling. Over 60 s at 5 fps the port has 192/300 zero-motion frames vs the original's 55/300.",
+    "FRAME-RATE COUPLING. Original's lit population is fps-invariant: non-background count at t=2 s and t=12 s is 43->45 at 10 fps, 46->46 at 20 fps, 46->44 at 40 fps (net growth ~0/s at every rate). The port's fill rate scales with fps: +5.96 px/s at 10 fps, +7.94 at 20 fps, +11.53 at 40 fps (sub-linear only because the 256-px grid is saturating). The port's walkers step per rendered frame; the original's do not.",
+    "STEADY STATE (the decisive axis). At t=180-240 s the original is unchanged in character — sparse rainbow dots on black, meanBrightness 22.5, motion avg 1.7, motionLit 8.8, brightnessTrend steady. The port at the same window is a near-frozen filled rainbow mosaic: meanBrightness 126, motion avg 0.3, 210/300 zero-motion frames. A viewer watching all evening sees two unrelated things.",
+    "PALETTE. Both use fully-saturated, full-value rainbow hues (same family). The original's hues are continuous (e.g. 112,0,255 / 255,0,153 / 0,193,255 / 173,255,0 — 42-49 distinct colors, essentially one per lit pixel). The port's are quantized to a 24-step wheel (only 23-24 distinct colors ever appear: 255,0,0 / 255,63,0 / 255,127,0 / ... / 255,0,63). Minor next to the other issues, but real.",
+    "CONTROLS. --probe-controls reports 'no settable controls' on BOTH sides; meta.json control lists are empty on both. No control-surface mismatch.",
+    "Survey (60 s @ 5 fps) and an extended late window (t=180-240 s @ 5 fps) show the ORIGINAL has no regime structure at all — one uniform regime of sparse twinkling dots from t=0 to t=240 s. The PORT has a single monotone regime: progressive fill from red toward a full mosaic. Both were inspected at 20 fps as well to rule out low-fps survey artefacts."
+  ],
+  "dials": [],
+  "feedback": [
+    "Blocking bug 1 — the background is painted, not cleared. Every pixel the port has not visited renders as (255,0,0), which is hsv(hue=0, s=1, v=1): the port is emitting a hue-0 colour for unvisited cells instead of black. The original's untouched field is exactly (0,0,0), 207/256 pixels at t=3 s. Unvisited cells must be black.",
+    "Blocking bug 2 — trails are permanent. Across 11 consecutive 20 fps frames the port produced 3 pixel-ON events and ZERO pixel-OFF events; its non-background count climbs 55 -> 134 between t=2 s and t=12 s and the grid is completely painted by t=180 s. The original erases as it walks (matched on/off pairs every frame) and holds a constant ~46 lit pixels forever. A wanderer must occupy exactly one pixel at a time — clear its previous cell (or the whole field) each frame.",
+    "Blocking bug 3 — the walk is in the wrong space. The original steps +/-1 along the FLAT PIXEL INDEX (verified: its 16x16 and 32x8 renders of the same 256 px are byte-identical, and its on/off pairs are index-adjacent: 80<->81, 216<->215, 63<->64). The port walks in (x,y) — its 16x16 and 32x8 renders differ, and its trails are 2D diagonal staircases that merge into blobs. Drive the walkers off the flat index, not off x/y.",
+    "Speed and population: the original runs ~45 walkers making ~50 steps/second in aggregate (2-10 pixels change per 20 fps frame). The port has only ~20-24 walkers and lands ~2-8 new pixels/second — roughly 6-20x too slow depending on rate. Raise the walker count to ~45 and the step rate to ~1 step per walker per second-ish so the field visibly twinkles.",
+    "Frame-rate coupling: the port's step rate scales with fps (fill 5.96 / 7.94 / 11.53 px/s at 10/20/40 fps) while the original's population and step rate are fps-invariant (net growth ~0/s at all three rates). Drive the walk off elapsed time, not off the render-frame count.",
+    "Palette nitpick (fix last): the original draws continuous hues — 42-49 lit pixels carry 42-49 distinct colours. The port quantizes to a 24-step wheel (only 23-24 distinct RGB values ever appear). Use a continuous hue per walker.",
+    "Cosmetic: the port leaves flat index 0 pure black in every frame dumped, while every other unvisited cell is red — an off-by-one/initialisation artefact that will disappear once the background is correctly cleared."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "late-240",
+    "dump-wnd1",
+    "dump-wnd2",
+    "seed7",
+    "seed1234",
+    "fps10",
+    "fps20",
+    "fps40",
+    "fpsd10",
+    "fpsd20",
+    "fpsd40",
+    "rig-strip256",
+    "rig-grid32x8"
+  ]
+}
