@@ -290,24 +290,35 @@ spend effort:
 
 ## Procedure
 
-### Untouched defaults are weak evidence (patterns WITH controls)
+### Untouched defaults are real, but dialed comparisons decide (patterns WITH controls)
 
 The harness applies NO control values unless you pass them, and neither side's
 control functions are called at init — both patterns run on whatever their code
-sets up internally. Some originals render degenerate in that state: a real case
-was a spiral drawing zero arms untouched, and spiralling perfectly the moment
-any Arms value was set.
+sets up internally. **This matches the real Pixel Blaze** (oracle-verified,
+fw 3.67): on load it calls no control function of any kind, and control-backed
+globals keep whatever top-level code assigned. So untouched-default state is
+genuine hardware behaviour, not a harness artefact, and an untouched divergence
+between original and port is REAL evidence of different behaviour — report it in
+`observations` at normal confidence, no caveat needed.
 
-Policy until further notice: for a pattern WITH controls, base the verdict
-primarily on explicitly-dialed comparisons — set the SAME values on both sides
+It still should not decide the verdict, for a different reason. Some originals
+render degenerate untouched — a real case was a spiral drawing zero arms
+untouched and spiralling perfectly the moment any Arms value was set — which
+tells you the author expected dial interaction; and whether PB replays saved
+values when a user runs a SAVED pattern (the normal way patterns are run) is
+UNVERIFIED. So the "intended look" is the dialed one.
+
+Policy: for a pattern WITH controls, base the verdict primarily on
+explicitly-dialed comparisons — set the SAME values on both sides
 (`--controls-orig` / `--controls-port`) and judge there. Compare the untouched
-defaults too, but treat untouched-default divergence as LOW-CONFIDENCE
-evidence: report it in `observations` with the caveat that neither side had
-controls applied, and never let it alone drive the verdict or the score. For a
-pattern with no controls, nothing changes.
+defaults too and weigh any divergence, but cap how far it drags the score: a
+port that matches at every explicitly-dialed setting while differing untouched
+still belongs in `close`-or-better territory, with the difference spelled out in
+`observations` and `feedback`. For a pattern with no controls, nothing changes.
 
 Related artefact: on some patterns merely SETTING a control perturbs the output
 even when the value is irrelevant (the setter call itself reseeds something).
+This too mirrors PB, where setting a control always invokes the control function.
 So a probe `responsive` verdict needs value-dependence confirmed — 0 and 1 must
 differ from EACH OTHER, not just from untouched — before you call a dial live.
 
