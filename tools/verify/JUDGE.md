@@ -428,7 +428,13 @@ Pair it with a SMALL rig. Re-rendering at `--pixels 12` (or `--rig grid --grid
 line and you can read the repeat directly instead of inferring it. Watch for
 the rig-content caveat above: on some patterns feature sizes are fractions of
 the strip and change with the pixel count, so confirm any headline number on
-the default rig, with a `--dump` there too.
+the default rig, with a `--dump` there too. The OPPOSITE move exists too: a
+pattern whose spatial frequency runs to tens of cycles per strip aliases into
+unrelated noise on small rigs — de-alias those with a LARGER rig
+(`--pixels 600`) instead.
+
+(Environment note: `python3` is not on PATH inside `nix develop` — do
+frames.json/stats.json post-processing with `node -e`.)
 
 ### Dial triage: `--probe-controls`
 
@@ -529,7 +535,11 @@ each mode before recording any of them as inert.
 For a translating 1D pattern, the honest speed measurement is circular
 cross-correlation of two `--dump`ed frames (find the shift that best aligns
 them, divide by dt) — the `motion` stat exaggerates or compresses speed ratios
-on smooth gradients and sparse dots alike.
+on smooth gradients and sparse dots alike. Caveat: on a pattern with a strong
+REPEATING spatial period, plain cross-correlation degenerates (any multiple of
+the period aligns equally well) — track the PHASE of the dominant spatial-DFT
+component per frame instead; it also separates two superimposed waves moving
+in different directions, which cross-correlation blurs into one bogus answer.
 
 1. Baseline AND survey — **two runs, both required, before anything else.**
 

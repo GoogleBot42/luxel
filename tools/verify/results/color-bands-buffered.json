@@ -1,0 +1,48 @@
+{
+  "slug": "color-bands-buffered",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Port reproduces the original's exact spatial skeleton — a fixed double rainbow hue ramp with stationary ~5-6 px bands — but renders it ~6x dimmer with bands ~2x narrower and a per-band envelope that pulses in 1-2 s instead of holding near full brightness for seconds.",
+  "observations": [
+    "Neither side exposes any controls (probe: 'no settable controls' on orig and port), so there are no dials to compare.",
+    "Both sides draw the SAME hue geometry: a hue ramp that runs 0-360 deg twice across the 60 px strip. Per-pixel hues at t=0 agree almost exactly (orig 0,12,24,36,60,72,84,96,108,120,133,143,...,348 then repeating; port 0,11,24,45,60,87,95,120,...,338). The hue at a given pixel index is fixed in time on both sides; what animates is the brightness envelope.",
+    "Both sides' bands are STATIONARY, not translating: circular cross-correlation of the luminance profile against t=0 peaks at shift 0 for lags up to 1 s on the original. The diagonal stripes in the 5 fps and 2 fps surveys are aliasing of the amplitude modulation, and they appear with the same slope on both sides.",
+    "Band spacing matches: peak-to-peak spacing 3.7-6.1 px on the original, 5.0-8.2 px on the port; run counts per frame agree (orig 8-13 lit runs, port 8-14) across a 20 s window.",
+    "Brightness is the headline divergence and it is constant across every window tried: mean 75 (orig) vs 12 (port) at 6 s/20 fps, 60 s/5 fps, 240 s/2 fps, 30 s at seeds 1/7/1234, and in a skip-60 late window. Ratio ~6x everywhere.",
+    "Band WIDTH also diverges after normalizing for gain: measured at 25% of each frame's own max, the original's lit runs are 3-4 px wide (avg 3.2-3.4 px at t=0, 10, 19.5 s) while the port's are 1-2 px (avg 1.0-2.0 px at the same times). The port draws thin spikes where the original draws broad glowing bands.",
+    "Lit fraction: original lights 41-47 of 60 px (~72%); port lights 25-31 of 60 px (~45%), sampled at 22 times across 20 s.",
+    "Peak amplitudes: the original's band peaks are near-uniform and near-saturation (t=10 s peaks: 249,191,161,251,250,249,251,251,85,250,154,250) while the port's are uneven and far below (same instant: 92,27,21,27,60,34,33,69,109,21,120).",
+    "Per-pixel envelope speed differs ~3-5x. Original px16 holds lum 153 unchanged from t=0 to t=1.0 s; px2 ramps 220->209->197->186->174 over 1 s (a multi-second decay). Port px16 falls 46->41->24->9->2 over the same 1 s; port px2 rises 30->50 and is back to 0 by t=2 s. The port's bands are short pulses; the original's are slow ramps that dwell near full brightness.",
+    "Whole-strip output level: the original is essentially constant (meanBrightness 72-82 over 400 frames, brightnessTrend 'steady'), while the port's mean swings 8-20 with a ~120-frame (6 s at 20 fps) autocorrelation peak (r=0.40) — a global pulsing the original does not have.",
+    "Relative agitation: orig motion 1.9 on a mean of 75 (~2.5%); port motion 1.2 on a mean of 12 (~10%). motionLit tells the same story (2.3 vs 1.8 on lit means of ~100 vs ~27). The port twinkles roughly 3-4x harder relative to its own brightness.",
+    "No frame-rate coupling difference: motion scales as 1/fps identically on both sides (10/20/40 fps -> orig 4/2/1, port 2/1/1) and mean brightness is unchanged at every rate, so both are time-based.",
+    "Seed-independent on both sides: seeds 1, 7 and 1234 give identical mean/motion summaries for each side (orig 75/4, port 12/2 at 30 s/10 fps), so the brightness gap is not a one-seed fluke.",
+    "No mode structure: the 240 s / 2 fps survey shows one homogeneous regime on both sides, and a skip-60 late window is statistically identical to the opening window on both sides, so neither side warms up, dies, or switches modes.",
+    "Neither side binds sensors (wantsSensors false on both); no compile or runtime errors on either side."
+  ],
+  "dials": [],
+  "feedback": [
+    "The hue layout is already correct — do not touch it. The strip's hue ramp (two full 0-360 deg sweeps across 60 px, fixed per pixel index) and the ~5-6 px band spacing both match the original exactly at every time sampled.",
+    "Raise the overall output level by roughly 6x: the original holds meanBrightness 72-82 across 400 frames while the port sits at 8-20. Target band peaks that reach ~250 routinely (the original's peaks at a given instant are typically 190-255 across nearly every band); the port's peaks are 20-120.",
+    "Widen each band's spatial falloff about 2x. Measured at 25% of the frame's own peak, the original's bands are 3-4 px wide and the port's are 1-2 px — this is a shape difference that survives any global gain change, so scaling brightness alone will not fix it. It should also bring the lit fraction from ~45% up to ~72% of the strip.",
+    "Slow the per-band brightness envelope by about 3-5x and give it a hold near full brightness. Original: a band sits at lum 153 unchanged for a full second, and another decays 220->174 over 1 s (multi-second ramp). Port: a band goes 46->2 in 1 s and 30->50->0 in 2 s. The port reads as fast twinkle where the original reads as slow breathing.",
+    "Remove the port's global brightness pulsing. The original's total output is flat (72-82, trend 'steady'); the port's swings 8-20 with a ~6 s period (autocorrelation peak r=0.40 at lag 120 frames at 20 fps). The original keeps the whole strip at a steady total level while individual bands fade in and out against each other.",
+    "As a whole-look check after fixing: at 20 fps over 6 s the original's waterfall is a dense, near-saturated rainbow of wide vertical bars with narrow black gaps; the port's is thin dim wisps on mostly black. Aim for the former.",
+    "Nothing to do on controls, motion direction, rig scaling or timing: neither side has dials, bands are stationary on both, and both sides are already time-based (fps-invariant) and seed-independent."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "dump-base",
+    "dump-drift",
+    "dump-grid",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "slug": "color-bands",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Port reproduces the static double-rainbow hue map and overall brightness exactly, but draws ~5 wide bands where the original draws ~9 narrow ones, and its band wave travels the opposite way at ~1.8x the speed.",
+  "observations": [
+    "Rig is a 60-px strip; neither side exposes any control (probe: 'no settable controls' on both), no compile or runtime errors, both alive and steady over 240 s.",
+    "Hue is FIXED per pixel on both sides and never changes with time: measured hue at every pixel over a 60 s window is 0,12,24,...,348 repeating twice across the strip (two full rainbows), identical orig vs port to within 1 degree. Colour reproduction is exact — the animation is purely a brightness envelope over that static rainbow.",
+    "STRUCTURE (main finding): dominant spatial frequency of the brightness envelope, measured per-frame by spatial DFT, is 9 bands/strip on the original and 5 (occasionally 6) on the port, stable on every frame across the whole 60 s window. Band pitch is therefore ~6.7 px (orig) vs ~11-12 px (port) — the port's bright bands and its black gaps are ~1.6x too wide and there are ~1.8x too few of them. Visible directly in the luminance profiles: at t=0 the original's dark gaps sit near px 4-5, 12-13, 18-20, 25-27, 33-34, 39-40, 47-49, 53-55 (8 gaps), the port's near px 6-11, 18-21, 28-33, 39-44, 52-55 (5 wide gaps).",
+    "The band count scales with pixel count on BOTH sides the same way — bands are a fixed number of PIXELS, not a fixed fraction of the strip: orig 4 / 9 / 17 bands at 30 / 60 / 120 px (pitch ~7 px), port 3 / 5.5 / 11 bands (pitch ~11 px). So the ratio is a constant ~1.6x error, not a resolution-handling difference. The hue map by contrast IS normalised on both (always exactly two rainbows across the strip at 30, 60 and 120 px).",
+    "MOTION (second main finding): tracking the phase of the dominant spatial component frame by frame over 60 s, the original's band wave advances monotonically toward INCREASING pixel index at +0.68 px/s (+37.3 px in 55 s); the port's advances monotonically toward DECREASING pixel index at -1.20 px/s (-65.8 px in 55 s). Directions are opposite and the port is ~1.8x faster in px/s.",
+    "The temporal band-to-band cycle is nearly identical on both — one full band pitch takes 9.88 s on the original and 10.0 s on the port — so the speed difference is entirely a consequence of the wider band pitch, not a different time constant.",
+    "In the waterfalls this reads as: original = clean, evenly spaced diagonal streaks all leaning the SAME way for the whole 240 s survey; port = a zigzag / chevron weave, because a weaker rightward 9-band component (measured at +0.66 px/s, i.e. the original's wave, present in the port at ~40% of the dominant amplitude) interferes with the dominant leftward 5-band wave the original does not have.",
+    "GLOBAL PERIOD: full-frame autocorrelation over 60 s gives an exact recurrence at 49.2 s for the original (mean abs diff 1.9/255, with weaker near-repeats every 9.84 s) and at 30.0 s for the port (diff 2.6/255, near-repeats every 10.0 s). The original's loop is ~5 sub-cycles long, the port's only ~3 — the port repeats itself 1.6x sooner.",
+    "Whole-strip brightness averages match (orig meanBrightness avg 74.7, port 75.8) and motion energy matches exactly (both avg 7.6, max 10-11 at 5 fps), but the port's strip mean swings wider: 59-93 vs the original's 68-83 over 60 s — the expected consequence of fewer, wider bands.",
+    "Both sides are fps-invariant (time-based, not frame-stepped): cumulative drift measured at 2, 5, 20 and 40 fps agrees to within 0.2 px over 50 s on each side, and the `motion` stat scales as 1/fps on both. No frame-rate coupling on either side.",
+    "Both sides are fully deterministic: seed 1234 produces byte-identical statsSummary to seed 1 on both. No RNG character to compare.",
+    "Steady state is fine on both: a --skip 120 window is statistically indistinguishable from the opening window (orig mean 74.2, port 75.8, both brightnessTrend steady, zeroMotionFrames 0). Nothing dies or saturates."
+  ],
+  "dials": [],
+  "feedback": [
+    "Colour is already perfect — the static per-pixel hue map (two full rainbows across the strip, hue = 12 deg per pixel at 60 px, never varying with time) matches the original exactly. Do not touch it.",
+    "Fix the band pitch: the original packs 9 bright bands into a 60-px strip (~6.7 px pitch, and 4 bands at 30 px / 17 at 120 px, so the pitch is in PIXELS not in strip fractions). The port packs 5 (~11-12 px pitch, 3 at 30 px / 11 at 120 px). The port's spatial frequency of the brightness envelope is ~0.6x what it should be — scale it up by ~1.65x so the dominant spatial DFT bin reads 9 on a 60-px strip.",
+    "Reverse the band wave's direction: the original's bands crawl toward increasing pixel index, the port's toward decreasing. Flip the sign of whatever advances the brightness envelope's spatial phase.",
+    "Do NOT change the time constant while fixing the above: both sides already take ~10 s for a band to advance one full band pitch (orig 9.88 s, port 10.0 s). Once the pitch is corrected to ~6.7 px the px/s speed drops from 1.20 to ~0.68 automatically, which is the original's value.",
+    "The port carries a second, weaker brightness component at the ORIGINAL's spatial frequency (9 bands/strip) travelling at the original's +0.66 px/s, at about 40% of its dominant amplitude. The original has no counterpart travelling the other way. The zigzag/chevron weave visible in the port's 60 s and 240 s waterfalls is these two counter-travelling waves beating; the original's waterfall is a single family of parallel diagonals. Removing or correcting the spurious wide leftward wave should remove the chevrons.",
+    "Lengthen the overall loop: the original repeats exactly every 49.2 s (about five 9.84 s sub-cycles), the port every 30.0 s (three 10.0 s sub-cycles). Whatever secondary modulation sets how many sub-cycles pass before the frame repeats is one step short of the original's — target a 5:1 ratio of global period to band-cycle period, not 3:1.",
+    "Verified as already correct and not needing attention: mean brightness (74.7 vs 75.8), motion energy (7.6 both), fps-invariance, determinism across seeds, steady state out to 240 s, and the absence of controls on both sides. The port's slightly wider strip-mean brightness swing (59-93 vs 68-83) should self-correct once the band count is fixed."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "cycle-a",
+    "cycle-b",
+    "late",
+    "track240",
+    "track60fine",
+    "track60-fps2",
+    "track60-fps5",
+    "track60-fps40",
+    "track12-dense",
+    "px-phase",
+    "px30",
+    "px120",
+    "bc30",
+    "bc60",
+    "bc120",
+    "seed1234"
+  ]
+}

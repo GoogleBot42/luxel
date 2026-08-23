@@ -1,0 +1,119 @@
+{
+  "slug": "color-blend",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides draw the same idea — three independently-scrolling R/G/B sine stripe fields with a shared spread dial and per-channel on/off toggles — but the port's speed-dial mapping is a different function entirely (opposite direction, and live where the original is dead), so at default dials the original shows stationary magenta stripes with green sliding through them while the port shows a full drifting rainbow.",
+  "observations": [
+    "Single regime: a 60 s / 5 fps survey shows one steady texture on both sides, no modes, no events, no drift (both sides brightnessTrend steady, meanBrightness pinned at 95 with meanR=meanG=meanB=95 for the whole window). Seeds 1 and 7 render byte-for-byte identical stats on both sides, so the pattern is not stochastic.",
+    "UNTOUCHED DEFAULTS (60 px strip, 6 s at 20 fps) look completely different: original = green diagonal stripes sliding leftward across STATIONARY magenta (R+B) stripes, i.e. only the green channel moves; port = red, green and blue all drifting at three different rates and two different directions, producing a full-spectrum rainbow (red/yellow/green/cyan/blue/magenta/white). Measured at 600 px untouched: original R and B peaks are frozen at pixel 17 across t=0/0.5/1 s while G walks 16→10→4 (-12 px/s); port's R walks -8 px/s, G -10 px/s, B +6 px/s.",
+    "Untouched stripe density differs slightly: at 600 px the original lays down 9 full cycles across the strip (period 66.6 px), the port 10 (period 60.0 px).",
+    "SPREAD MAPPING is scaled wrong. Measuring cycles across a 600 px strip at fixed equal speeds: spread 0 -> orig 50 cycles / port 40; 0.25 -> 37.5 / 30; 0.5 -> 25.5 / 20.3; 0.75 -> 13.2 / 10.7; 1.0 -> 1 / 1. Original tracks ~1+49*(1-spread) cycles, port ~1+39*(1-spread) — a constant 1.25x ratio everywhere except spread=1, where the two sides are byte-identical. Confirmed on the default 60 px rig at spread 0.9 (green only): orig 5.9 cycles, port 4.9.",
+    "SPEED MAPPING is a different function. Red-only, spread=1, 600 px, peak tracked at 0.05 s spacing. Original: slider 0 -> -513 px/s, 0.125 -> -347, 0.25 -> -227, 0.375 -> -113, 0.5 -> 0, and 0.55/0.6/0.7/0.75/0.9/1.0 -> 0 px/s (completely frozen; re-checked at 7, 20 and 40 fps). So the original is a one-directional (leftward) ramp that is linear in (0.5 - slider) and DEAD over the whole upper half of the dial. Port: 0.125 -> +240 px/s, 0.25 -> +120, 0.375 -> +80, 0.5 -> 0, 0.625 -> -80, 0.75 -> -120, 0.875 -> -240, with 0 and 1 running away to absurd speeds (>5000 px/s, aliased) — i.e. bidirectional, sign-flipping at 0.5, magnitude ~3 px/frame divided by the distance to the nearest dial end.",
+    "DIRECTION IS REVERSED over the dial's lower half. Confirmed on the default 60 px rig (red only, spread=1, RedSpeed=0.25, 6 s waterfall): the original's band slopes leftward through time, the port's slopes rightward.",
+    "Same 60 px rig, spread=1, RedSpeed=0.9: original motion stat 0 over an 8 s window (visibly frozen bar), port motion 4 (visibly scrolling). The original's speed dial does nothing above 0.5; the port's does.",
+    "Matched-dial headline comparison (60 px, 12 s, spread=1, RedSpeed=0.2 / GreenSpeed=0.5 / BlueSpeed=0.8, all toggles on): original renders a two-colour scene — one red band scrolling left over a stationary cyan (G+B) band, because green and blue are both frozen at those dial values. Port renders a rainbow crosshatch — red scrolling right, blue scrolling left, green frozen — with orange/magenta/green/white crossing points. Same mean brightness (95 both), completely different picture.",
+    "CONTROL-SURFACE MISMATCH: the original's toggles are named toggleRed / toggleGreen / toggleBlue; the port's are toggleRedOn / toggleGreenOn / toggleBlueOn. The declaration ORDER also differs — original interleaves per channel (Spread, Red, RedSpeed, Green, GreenSpeed, Blue, BlueSpeed), port groups by type (Spread, RedSpeed, GreenSpeed, BlueSpeed, RedOn, GreenOn, BlueOn), so the UI panel is laid out differently.",
+    "Things that DO match: all 7 controls are live on both sides per --probe-controls; toggle semantics are identical (a toggle at 0 zeroes exactly its own channel and leaves the others untouched — dumped at spread 0.9 with R and B off, both sides give sumR=0, sumB=0 and a clean green wave); both sides are fps-invariant / time-based (identical px/s at 10, 20 and 40 fps, so no frame-rate coupling bug); both hold mean brightness 95 with equal R/G/B means; at spread=1 with all speeds 0.5 the two sides are byte-identical.",
+    "The pattern binds no sensors on either side (wantsSensors false), so sensor behaviour is not in play."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpread",
+      "origEffect": "Sets stripe count across the strip: ~1+49*(1-spread) cycles — 50 cycles (period 12 px at 600 px) at 0, down to exactly 1 smooth cycle at 1.",
+      "portEffect": "Same shape but a smaller range: ~1+39*(1-spread) cycles — 40 cycles at 0 down to 1 at 1. Consistently 20% fewer stripes than the original at every value below 1; identical only at spread=1.",
+      "matches": false
+    },
+    {
+      "name": "sliderRedSpeed",
+      "origEffect": "Leftward-only scroll, linear in (0.5-slider): -513 px/s at 0, -227 at 0.25, 0 at 0.5, and exactly 0 for every value from 0.5 to 1 (dial dead over its upper half). Verified frozen at 7, 20 and 40 fps.",
+      "portEffect": "Bidirectional, zero at 0.5, rightward below 0.5 and leftward above, with magnitude blowing up as the slider approaches either end (+120 px/s at 0.25, +240 at 0.125, >5000 px/s at 0; -120 at 0.75, -240 at 0.875, >5000 at 1). Wrong direction over the lower half and alive over the upper half where the original is frozen.",
+      "matches": false
+    },
+    {
+      "name": "sliderGreenSpeed",
+      "origEffect": "Same mapping as RedSpeed on the green channel; green is the only channel that moves at untouched defaults (-12 px/s at 600 px).",
+      "portEffect": "Same mapping as the port's RedSpeed on the green channel; green is one of three moving channels at untouched defaults.",
+      "matches": false
+    },
+    {
+      "name": "sliderBlueSpeed",
+      "origEffect": "Same mapping as RedSpeed on the blue channel; blue is frozen at untouched defaults and at every value >= 0.5.",
+      "portEffect": "Same mapping as the port's RedSpeed on the blue channel; blue drifts rightward at untouched defaults and reverses direction across 0.5.",
+      "matches": false
+    },
+    {
+      "name": "toggleRed (port: toggleRedOn)",
+      "origEffect": "0 zeroes the red channel entirely, 1 enables it; other channels untouched.",
+      "portEffect": "Identical gating behaviour — but the control is named toggleRedOn, not toggleRed.",
+      "matches": true
+    },
+    {
+      "name": "toggleGreen (port: toggleGreenOn)",
+      "origEffect": "0 zeroes the green channel entirely, 1 enables it.",
+      "portEffect": "Identical gating behaviour; name differs (toggleGreenOn).",
+      "matches": true
+    },
+    {
+      "name": "toggleBlue (port: toggleBlueOn)",
+      "origEffect": "0 zeroes the blue channel entirely, 1 enables it.",
+      "portEffect": "Identical gating behaviour; name differs (toggleBlueOn).",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Fix the speed-dial curve first — it is the whole visual difference. Target, measured red-only at spread=1 on a 600 px strip: slider 0 -> -513 px/s, 0.125 -> -347, 0.25 -> -227, 0.375 -> -113, 0.5 -> 0, and 0.55 through 1.0 -> exactly 0 px/s. That is a single leftward ramp linear in (0.5 - slider) with the entire upper half of the dial inert. The port currently produces 0 at 0.5, RIGHTWARD motion below 0.5 (+120 px/s at 0.25 where the original does -227), LEFTWARD motion above 0.5 (where the original is frozen), and runaway speeds (>5000 px/s) at 0 and 1. Both the direction and the upper-half deadness are wrong.",
+    "The 'dead above 0.5' behaviour is not a bug in the original — it is what makes the default look: with red and blue speeds sitting at/above 0.5 they are stationary, so the original reads as fixed magenta stripes with a single green wave sliding leftward through them. Until the port reproduces that, its default render will keep being a three-way rainbow drift instead.",
+    "Rescale the Spread dial by 1.25x in stripe count: at spread 0 the original packs 50 cycles across the strip and the port only 40; at 0.25 it is 37.5 vs 30, at 0.5 25.5 vs 20.3, at 0.75 13.2 vs 10.7. The endpoint at spread=1 (exactly 1 cycle) is already correct, so the fix is the coefficient on the (1-spread) term (original ~1+49*(1-spread) cycles, port ~1+39*(1-spread)).",
+    "Untouched default spread is also slightly off: the original lays 9 cycles across a 600 px strip, the port 10. Fixing the spread coefficient may or may not fix this depending on the default slider value — re-check the untouched cycle count after the rescale.",
+    "Rename the three toggles to match the original's control surface exactly: toggleRed / toggleGreen / toggleBlue, not toggleRedOn / toggleGreenOn / toggleBlueOn. Their behaviour is already correct.",
+    "Match the original's control declaration order so the UI panel matches: Spread, Red, RedSpeed, Green, GreenSpeed, Blue, BlueSpeed (interleaved per channel), rather than the port's Spread, RedSpeed, GreenSpeed, BlueSpeed, RedOn, GreenOn, BlueOn.",
+    "Nothing else needs touching: brightness envelope, per-channel means, toggle gating, time-based (fps-invariant) motion and the spread=1 waveform are already byte-identical to the original."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dial-equal",
+    "dial-split",
+    "dial-clean",
+    "dump-equal",
+    "dump-equal60",
+    "spread-0",
+    "spread-0.1",
+    "spread-0.25",
+    "spread-0.75",
+    "spread-1",
+    "hires-0",
+    "hires-0.25",
+    "hires-0.5",
+    "hires-0.75",
+    "hires-1",
+    "hires-default",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "spdf-0",
+    "spdf-0.125",
+    "spdf-0.25",
+    "spdf-0.375",
+    "spdf-0.5",
+    "spdf-0.625",
+    "spdf-0.75",
+    "spdf-0.875",
+    "spdf-1",
+    "fps10",
+    "fps40",
+    "orighi-0.55",
+    "orighi-0.6",
+    "orighi-0.7",
+    "orighi-0.9",
+    "orighi-1",
+    "dir60",
+    "toggles-off",
+    "ctl-speed-high",
+    "seed7"
+  ]
+}

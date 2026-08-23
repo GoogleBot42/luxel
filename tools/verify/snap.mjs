@@ -1243,5 +1243,10 @@ const brief = (k) => {
 console.log(`${slug} [${kind}, ${rig.pixels}px, ${captured} frames] → ${path.relative(ROOT, outDir)}`);
 console.log(`  ${brief("orig")}`);
 console.log(`  ${brief("port")}`);
-if (dumpTimes) console.log(`  dump: frames.json at ${dumpTimes.join("s, ")}s`);
+if (dumpTimes)
+  console.log(
+    dumpTimes.length <= 12
+      ? `  dump: frames.json at ${dumpTimes.join("s, ")}s`
+      : `  dump: frames.json — ${dumpTimes.length} times, ${dumpTimes[0]}s .. ${dumpTimes[dumpTimes.length - 1]}s (full list in frames.json requestedTimes)`,
+  );
 if (probe) printProbeTable(probe);
