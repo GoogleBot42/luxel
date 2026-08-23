@@ -112,15 +112,18 @@ jobs:
           OTA_MAX=$((0x100000))   # 1 MiB OTA slot (firmware/partitions.csv)
           ASSETS_OFF=$((0x310000))
           mkdir -p elfs
-          # s3-devkit/c6-devkit are UNTESTED ON METAL (no bench hardware) —
-          # they ship as build artifacts only; see docs/boards.md.
-          for board in c3-devkit pixelblaze-v3 athom-music esp32-generic s3-devkit c6-devkit; do
+          # s3-devkit/c6-devkit/s3-hub75 are UNTESTED ON METAL (no bench
+          # hardware) — they ship as build artifacts only; see docs/boards.md.
+          for board in c3-devkit pixelblaze-v3 athom-music esp32-generic s3-devkit c6-devkit s3-hub75; do
             echo "::group::luxel-fw-$board"
+            # extra cargo features per variant, for image-check's
+            # feature-gated markers
+            EXTRAS=""; [ "$board" = s3-hub75 ] && EXTRAS="hub75"
             nix build ".#luxel-fw-$board" --print-build-logs --out-link "result-$board"
             SZ=$(stat -c%s "result-$board/luxel-fw-ota.bin")
             [ "$SZ" -le "$OTA_MAX" ] || { echo "::error::$board OTA image ($SZ B) exceeds the 1 MiB OTA slot"; exit 1; }
             # load-bearing features must be linked (the //SIZETEST guard)
-            tools/image-check.sh "result-$board/luxel-fw-ota.bin" \
+            EXPECT_FEATURES="$EXTRAS" tools/image-check.sh "result-$board/luxel-fw-ota.bin" \
               || { echo "::error::$board image is missing load-bearing features (see tools/image-check.sh)"; exit 1; }
             cp "result-$board/luxel-fw-ota.bin" "dist/luxel-$board-$V-ota.bin"
             # full image = merged (bootloader + partitions + app, 0xFF-padded

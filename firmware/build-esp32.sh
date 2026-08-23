@@ -139,4 +139,4 @@ fi
 # Load-bearing features must actually be linked (the //SIZETEST guard —
 # see tools/image-check.sh). Runs for every command that produced an ELF.
 ELF=target/$TARGET/release/luxel-fw
-[ -f "$ELF" ] && ../tools/image-check.sh "$ELF"
+[ -f "$ELF" ] && EXPECT_FEATURES="$FEATURES" ../tools/image-check.sh "$ELF"

@@ -36,6 +36,7 @@ caveats.
 | `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
 | `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
 | `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
+| `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, see src/hub75.rs + main.rs wiring) | HUB75 64x64 panel, 2048 px (cap-clamped — #74 lifts to 4096) | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's; strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
 
 All six build clean as of v0.1.39 (verified compile + image-size check +
 `tools/image-check.sh` + `tools/stack-check.sh`). "Untested on hardware"
@@ -71,6 +72,7 @@ WiFi stack and reads ~1.5 KB smaller, which is what CI measures):
 | `board-athom-music` | 944,720 B | 103,856 B |
 | `board-esp32-generic` | 944,688 B | 103,888 B |
 | `board-s3-devkit` | 885,840 B | 162,736 B |
+| `board-s3-devkit` + `hub75` | 884,320 B | 164,256 B |
 | `board-c6-devkit` | 987,600 B | **60,976 B** |
 
 The three classic-ESP32 variants differ only by a few hundred bytes (same
@@ -90,7 +92,9 @@ espflash save-image --chip esp32c6 \
 
 `.stack` (the leftover-DRAM main-task stack, `tools/stack-check.sh`) at
 the same revision: pixelblaze-v3 29,412 B · c3-devkit 39,632 B ·
-s3-devkit 51,172 B · c6-devkit 141,320 B — all above the 24 KB floor. The
+s3-devkit 51,172 B (50,548 B with `hub75` — the DMA descriptor static;
+the two ~28 KB framebuffers are heap-leaked at boot, not statics) ·
+c6-devkit 141,320 B — all above the 24 KB floor. The
 S3/C6 numbers come from reusing the C3's 160 KB heap on chips with more
 DRAM; when hardware exists, the right follow-up is to spend some of that
 slack on heap (pattern capacity) rather than leave it as stack.

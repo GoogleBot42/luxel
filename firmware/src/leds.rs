@@ -55,6 +55,7 @@ impl Protocol {
         }
     }
 
+    #[cfg(not(feature = "hub75"))]
     pub fn buf_len(self, pixels: usize) -> usize {
         match self {
             // 4B start + 4B/px + 4B SK9822 reset + px/16 end-clock bytes
@@ -65,6 +66,7 @@ impl Protocol {
         }
     }
 
+    #[cfg(not(feature = "hub75"))]
     pub fn encode(self, rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
         match self {
             Protocol::Sk9822 => encode_sk9822(rgb, brightness5, out),
@@ -74,12 +76,13 @@ impl Protocol {
 }
 
 /// Scale an 8-bit channel by a 0–31 brightness level (31 = unchanged). Used
-/// for WS2812, which has no hardware current field like SK9822's.
+/// for WS2812 and HUB75, which have no hardware current field like SK9822's.
 #[inline]
-fn scale5(channel: u8, brightness5: u8) -> u8 {
+pub(crate) fn scale5(channel: u8, brightness5: u8) -> u8 {
     ((channel as u16 * (brightness5 & 0x1F) as u16) / 31) as u8
 }
 
+#[cfg(not(feature = "hub75"))]
 fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
     let mut i = 4; // leading zeros already in place
     for px in rgb {
@@ -95,6 +98,7 @@ fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
 /// Expand one byte into 24 SPI bits (3 per LED bit): `1` → `110`, `0` → `100`.
 /// `brightness5` (0–31) scales each channel in software — WS2812 has no
 /// hardware brightness field.
+#[cfg(not(feature = "hub75"))]
 fn encode_ws2812(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
     let mut o = 0;
     for px in rgb {

@@ -13,19 +13,29 @@
 //! contract a new driver must satisfy, not a vtable — there is no `dyn`
 //! in the frame path.
 
+#[cfg(not(feature = "hub75"))]
 use esp_hal::spi::master::{Config as SpiConfig, ConfigError, SpiDma};
+#[cfg(not(feature = "hub75"))]
 use esp_hal::spi::Mode;
+#[cfg(not(feature = "hub75"))]
 use esp_hal::time::Rate;
+#[cfg(not(feature = "hub75"))]
 use esp_hal::Blocking;
+#[cfg(not(feature = "hub75"))]
 use esp_println::println;
 
 use crate::leds::Protocol;
+#[cfg(not(feature = "hub75"))]
 use crate::shared::PROTOCOL;
+#[cfg(not(feature = "hub75"))]
 use core::sync::atomic::Ordering;
 
 /// The board's output driver — the concrete type behind `render_task`.
-/// Boards with a non-strip output will switch this alias per feature.
+/// Boards with a non-strip output switch this alias per feature.
+#[cfg(not(feature = "hub75"))]
 pub type BoardOutput = SpiStripOutput;
+#[cfg(feature = "hub75")]
+pub type BoardOutput = crate::hub75::Hub75Output;
 
 /// One frame sink. Contract notes for implementors:
 ///
@@ -56,6 +66,7 @@ pub trait OutputDriver {
 }
 
 /// SPI config for a protocol (only the clock rate differs; mode 0 for both).
+#[cfg(not(feature = "hub75"))]
 fn spi_cfg(p: Protocol) -> SpiConfig {
     SpiConfig::default()
         .with_frequency(Rate::from_hz(p.spi_hz()))
@@ -69,8 +80,10 @@ fn spi_cfg(p: Protocol) -> SpiConfig {
 /// exact WS2812 corruption DMA is here to prevent). The ≤3 pad bytes
 /// stay zero — harmless on both protocols (SK9822 end clocks / WS2812
 /// latch tail).
+#[cfg(not(feature = "hub75"))]
 struct EncodeBuf(alloc::vec::Vec<u32>);
 
+#[cfg(not(feature = "hub75"))]
 impl EncodeBuf {
     const fn new() -> Self {
         Self(alloc::vec::Vec::new())
@@ -93,6 +106,7 @@ impl EncodeBuf {
 /// allocation which must not coexist with the old buffer on a tight heap).
 /// Fallible: on false the buffer is left empty and the encode paths (which
 /// check the length) skip SPI output rather than indexing out of bounds.
+#[cfg(not(feature = "hub75"))]
 fn realloc_buf(buf: &mut EncodeBuf, len: usize) -> bool {
     buf.0 = alloc::vec::Vec::new(); // free the old allocation first
     let words = len.div_ceil(4);
@@ -107,11 +121,13 @@ fn realloc_buf(buf: &mut EncodeBuf, len: usize) -> bool {
 /// SPI peripheral and the encode buffer; reads `shared::PROTOCOL` for the
 /// active encoding exactly like the pre-trait render task did (the render
 /// task remains that atomic's sole writer).
+#[cfg(not(feature = "hub75"))]
 pub struct SpiStripOutput {
     spi: SpiDma<'static, Blocking>,
     buf: EncodeBuf,
 }
 
+#[cfg(not(feature = "hub75"))]
 impl SpiStripOutput {
     pub fn new(spi: SpiDma<'static, Blocking>) -> Self {
         Self { spi, buf: EncodeBuf::new() }
@@ -122,6 +138,7 @@ impl SpiStripOutput {
     }
 }
 
+#[cfg(not(feature = "hub75"))]
 impl OutputDriver for SpiStripOutput {
     type Error = ConfigError;
 

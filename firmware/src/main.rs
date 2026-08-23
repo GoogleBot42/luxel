@@ -39,8 +39,11 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::rng::Rng;
+#[cfg(not(feature = "hub75"))]
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
+#[cfg(not(feature = "hub75"))]
 use esp_hal::spi::Mode;
+#[cfg(not(feature = "hub75"))]
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_println::println;
@@ -53,6 +56,8 @@ mod assets;
 mod board;
 mod config;
 mod devicemap;
+#[cfg(feature = "hub75")]
+mod hub75;
 mod leds;
 mod mqtt;
 mod netin;
@@ -248,41 +253,71 @@ async fn main(spawner: Spawner) -> ! {
         esp_hal::gpio::OutputConfig::default(),
     );
 
-    let spi = Spi::new(
-        p.SPI2,
-        SpiConfig::default()
-            .with_frequency(Rate::from_hz(DEFAULT_PROTOCOL.spi_hz()))
-            .with_mode(Mode::_0),
-    )
-    .expect("spi init");
-    #[cfg(feature = "board-c3-devkit")]
-    let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
-    #[cfg(feature = "board-athom-music")]
-    let spi = spi.with_sck(p.GPIO5).with_mosi(p.GPIO18);
-    #[cfg(feature = "board-pixelblaze-v3")]
-    let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
-    // generic classic-ESP32: VSPI defaults — most WROOM boards break these out
-    #[cfg(feature = "board-esp32-generic")]
-    let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
-    // S3/C6 devkits: the chip's SPI2 (FSPI) IO_MUX pins. UNTESTED ON METAL.
-    #[cfg(feature = "board-s3-devkit")]
-    let spi = spi.with_sck(p.GPIO12).with_mosi(p.GPIO11);
-    #[cfg(feature = "board-c6-devkit")]
-    let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
-    // ---- end board wiring ----
+    #[cfg(not(feature = "hub75"))]
+    let out = {
+        let spi = Spi::new(
+            p.SPI2,
+            SpiConfig::default()
+                .with_frequency(Rate::from_hz(DEFAULT_PROTOCOL.spi_hz()))
+                .with_mode(Mode::_0),
+        )
+        .expect("spi init");
+        #[cfg(feature = "board-c3-devkit")]
+        let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
+        #[cfg(feature = "board-athom-music")]
+        let spi = spi.with_sck(p.GPIO5).with_mosi(p.GPIO18);
+        #[cfg(feature = "board-pixelblaze-v3")]
+        let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
+        // generic classic-ESP32: VSPI defaults — most WROOM boards break these out
+        #[cfg(feature = "board-esp32-generic")]
+        let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
+        // S3/C6 devkits: the chip's SPI2 (FSPI) IO_MUX pins. UNTESTED ON METAL.
+        #[cfg(feature = "board-s3-devkit")]
+        let spi = spi.with_sck(p.GPIO12).with_mosi(p.GPIO11);
+        #[cfg(feature = "board-c6-devkit")]
+        let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
 
-    // DMA, so each frame is ONE continuous transfer. The FIFO path splits
-    // writes into 64-byte transactions with a CPU busy-wait between them;
-    // 64 B = 512 SPI bits, not divisible by WS2812's 3-bits-per-bit, so
-    // every chunk boundary corrupts a bit mid-symbol — and a WiFi interrupt
-    // in the gap stretches it past the strip's latch time (partial-frame
-    // latch). SK9822 is clocked and never noticed.
-    // GDMA chips (C3/S3/C6) take a numbered channel; the classic ESP32's
-    // older DMA is bound to the peripheral instead.
-    #[cfg(not(feature = "esp32"))]
-    let spi = spi.with_dma(p.DMA_CH0);
-    #[cfg(feature = "esp32")]
-    let spi = spi.with_dma(p.DMA_SPI2);
+        // DMA, so each frame is ONE continuous transfer. The FIFO path splits
+        // writes into 64-byte transactions with a CPU busy-wait between them;
+        // 64 B = 512 SPI bits, not divisible by WS2812's 3-bits-per-bit, so
+        // every chunk boundary corrupts a bit mid-symbol — and a WiFi interrupt
+        // in the gap stretches it past the strip's latch time (partial-frame
+        // latch). SK9822 is clocked and never noticed.
+        // GDMA chips (C3/S3/C6) take a numbered channel; the classic ESP32's
+        // older DMA is bound to the peripheral instead.
+        #[cfg(not(feature = "esp32"))]
+        let spi = spi.with_dma(p.DMA_CH0);
+        #[cfg(feature = "esp32")]
+        let spi = spi.with_dma(p.DMA_SPI2);
+        output::SpiStripOutput::new(spi)
+    };
+    // HUB75 panel over LCD_CAM (S3 only): the strip SPI is not wired at
+    // all — DMA_CH0 feeds the panel's circular rescan instead. Pin map =
+    // the esp-hub75 S3 example's (clear of octal-PSRAM GPIO33-37; GPIO46
+    // is input-strapping at reset, safe as an address output after boot).
+    // UNTESTED ON METAL until the Seengreat board arrives (#73/#75).
+    #[cfg(feature = "hub75")]
+    let out = {
+        use esp_hal::gpio::Pin;
+        let pins = esp_hub75::Hub75Pins16 {
+            red1: p.GPIO38.degrade(),
+            grn1: p.GPIO42.degrade(),
+            blu1: p.GPIO48.degrade(),
+            red2: p.GPIO47.degrade(),
+            grn2: p.GPIO2.degrade(),
+            blu2: p.GPIO21.degrade(),
+            addr0: p.GPIO14.degrade(),
+            addr1: p.GPIO46.degrade(),
+            addr2: p.GPIO13.degrade(),
+            addr3: p.GPIO9.degrade(),
+            addr4: p.GPIO3.degrade(),
+            blank: p.GPIO11.degrade(),
+            clock: p.GPIO12.degrade(),
+            latch: p.GPIO10.degrade(),
+        };
+        hub75::Hub75Output::new(p.LCD_CAM, pins, p.DMA_CH0)
+    };
+    // ---- end board wiring ----
 
     // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —
     // no esp-storage FlashStorage construction, no boot-time partition
@@ -365,7 +400,7 @@ async fn main(spawner: Spawner) -> ! {
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
     // whether it interacts with the esp32 radio crashes.
     if option_env!("LUXEL_QUIET").is_none() {
-        spawner.spawn(render_task(output::SpiStripOutput::new(spi)).unwrap());
+        spawner.spawn(render_task(out).unwrap());
         spawner.spawn(playlist::playlist_task().unwrap());
     } else {
         println!("LUXEL_QUIET: render task disabled");
@@ -562,7 +597,14 @@ fn apply_outpipe<'a>(
     gamma_cache: &mut (u8, Option<alloc::boxed::Box<[u8; 256]>>),
     brightness5: u8,
 ) -> &'a [[u8; 3]] {
-    use luxel_core::outpipe::{self, ColorOrder};
+    use luxel_core::outpipe::{self, ColorOrder, PowerModel};
+    // The power cap models the output stage: strips conduct every pixel at
+    // once; a HUB75 panel time-multiplexes rows (see outpipe::PowerModel).
+    #[cfg(not(feature = "hub75"))]
+    const POWER_MODEL: PowerModel = PowerModel::Strip;
+    #[cfg(feature = "hub75")]
+    const POWER_MODEL: PowerModel =
+        PowerModel::Hub75 { scan: (crate::hub75::PANEL_ROWS / 2) as u16 };
     let order = shared::COLOR_ORDER.load(Ordering::Relaxed);
     let gamma = shared::GAMMA_TENTHS.load(Ordering::Relaxed);
     let cap = shared::CAP_MA.load(Ordering::Relaxed);
@@ -581,6 +623,7 @@ fn apply_outpipe<'a>(
         if gamma_on { gamma_cache.1.as_deref() } else { None },
         cap,
         brightness5,
+        POWER_MODEL,
     );
     pipe_buf
 }
@@ -735,7 +778,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     // Apply the seeded protocol — flash may specify one different from the
     // boot-time default the SPI was constructed with.
     if let Err(e) = out.set_protocol(cur_protocol()) {
-        println!("spi config error: {:?}", e);
+        // expected on fixed-format drivers (HUB75): the wire ignores the
+        // protocol setting entirely
+        println!("output: protocol config not applied: {:?}", e);
     }
     if !out.resize(PIXEL_COUNT.load(Ordering::Relaxed) as usize) {
         // the driver retries lazily per frame once heap frees up
@@ -872,7 +917,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     let p = Protocol::from_u8(code);
                     if let Err(e) = out.set_protocol(p) {
                         println!(
-                            "spi config error: {:?} — staying on {}",
+                            "output: protocol switch rejected: {:?} — staying on {}",
                             e,
                             cur_protocol().name()
                         );

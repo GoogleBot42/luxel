@@ -40,12 +40,26 @@ mod def {
 
 // UNTESTED ON METAL: no S3 on the bench. Wiring is reviewed against the
 // ESP32-S3-DevKitC-1 pinout (SPI2/FSPI IO_MUX pins), never lit up.
+// With `hub75` the output is a matrix panel instead of a strip: the
+// default pixel count becomes the panel area (clamped to the runtime cap
+// — 2048 until the per-board cap of Gitea #74 lands, so the lower half
+// of a 64x64 panel stays dark) and DEFAULT_PROTOCOL is vestigial (the
+// driver's wire format is fixed; protocol switches are rejected).
 #[cfg(feature = "board-s3-devkit")]
 mod def {
     use super::*;
+    #[cfg(not(feature = "hub75"))]
     pub const NAME: &str = "ESP32-S3 devkit (untested)";
+    #[cfg(feature = "hub75")]
+    pub const NAME: &str = "ESP32-S3 devkit + HUB75 panel (untested)";
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
+    #[cfg(not(feature = "hub75"))]
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
+    #[cfg(feature = "hub75")]
+    pub const DEFAULT_PIXEL_COUNT: u32 = {
+        let area = (crate::hub75::PANEL_COLS * crate::hub75::PANEL_ROWS) as u32;
+        if area > crate::shared::MAX_PIXELS { crate::shared::MAX_PIXELS } else { area }
+    };
 }
 
 // UNTESTED ON METAL: no C6 on the bench. Wiring is reviewed against the
@@ -57,6 +71,12 @@ mod def {
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
 }
+
+// The HUB75 driver is LCD_CAM code — only the S3 has the peripheral
+// (C3/S2 have no parallel output at all; classic-ESP32/C6 would need the
+// I2S/PARLIO paths of esp-hub75, not wired up here).
+#[cfg(all(feature = "hub75", not(feature = "esp32s3")))]
+compile_error!("feature `hub75` requires an ESP32-S3 board (LCD_CAM)");
 
 #[cfg(not(any(
     feature = "board-c3-devkit",
