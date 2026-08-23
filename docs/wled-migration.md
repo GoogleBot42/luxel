@@ -25,7 +25,15 @@ flash read on devices already running the Luxel layout).
    - guards: flash chip must fit the new table; the copy destination must
      not overlap the running image;
    - **inheritance**: mount WLED's littlefs read-only (`wledfs.rs`) and
-     lift WiFi SSID (cfg.json) + password (wsec.json);
+     lift WiFi SSID (cfg.json) + password (wsec.json), plus the LED wiring
+     and defaults from the same cfg.json (`hw.led.ins[0]` len/type/order,
+     `hw.led.maxpwr`, `def.bri`, `light.gc.col`) — so a converted device
+     comes up with the right pixel count, protocol, color order,
+     brightness, power cap and gamma instead of board defaults. Field-wise
+     best-effort: WLED bus types Luxel can't drive (RGBW, WS2801,
+     analog/PWM, matrix, virtual) keep the board default with a serial
+     note, and WLED's data *pin* is only logged — Luxel pins are
+     compile-time per board;
    - locate self by comparing its own `esp_app_desc` (image offset 0x20)
      against each app slot; copy itself to ota_0 @0x10000 if not already
      there (sector-wise erase+write+verify);

@@ -31,6 +31,14 @@ fn main() {
         None => println!("wifi: none (factory-fresh or unreadable)"),
     }
 
+    match wledfs::extract_wiring(&mut read, len) {
+        Some(w) => println!(
+            "wiring: pixels={:?} pin={:?} type={:?} order={:?} bri={:?} cap_ma={:?} gamma_tenths={:?}",
+            w.pixels, w.pin, w.strip_type, w.order, w.bri, w.cap_ma, w.gamma_tenths
+        ),
+        None => println!("wiring: none (unreadable)"),
+    }
+
     for name in args {
         let mut read = |off: u32, buf: &mut [u8]| {
             let o = off as usize;
