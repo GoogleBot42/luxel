@@ -1,0 +1,39 @@
+{
+  "slug": "policelights",
+  "verdict": "match",
+  "score": 9,
+  "confidence": "high",
+  "summary": "Port reproduces the original exactly — same 10-px red/blue block alternation, same 0.21 s flip tick, same exact RGB values, frame-identical transitions even 300 s in; the only differences are a missing one-tick all-red opening frame and a constant 180-degree colour-phase inversion, neither visible in normal viewing.",
+  "observations": [
+    "Both sides render a 1D strip (default rig 60 px) as six 10-pixel blocks alternating between red (255,0,0) and violet-blue (50,0,255); the whole strip flips colours in place — no translation, no fade, no ramp. Exact RGB values are byte-identical on both sides at every dumped time (dump-a, late, px300, px13, seed1234).",
+    "Block size is a FIXED 10-pixel stride on both sides, not a fraction of the strip: at --pixels 300 both draw 30 blocks of 10 px, at --pixels 13 both draw 10 px + a 3 px remainder. The pattern is index-only and rig-size-independent, identically so on both sides.",
+    "Flip cadence: transitions occur every 0.21 s on BOTH sides. Measured by counting non-zero `motion` frames: 100 fps -> gap 21 frames (0.210 s) on both; 40 fps -> 9 frames (0.225 s); 20 fps -> 5 frames (0.250 s); 10 fps -> 3 frames (0.300 s). The gap grows only because the tick is quantised up to the frame grid — the underlying period is time-based (~0.21 s) and identical on both sides, so neither side is frame-rate coupled relative to the other.",
+    "Transition timing is frame-exact even after 300 s of simulated time: in the --skip 300 run at 100 fps, the set of frames with non-zero motion is byte-identical between orig and port (29 transitions, indices 8,29,50,71,...). No accumulated drift.",
+    "PHASE INVERSION (only steady-state difference): from t=0.21 s onward the two sides are exactly one tick out of phase. At t=0.21 s orig draws red-first (R,B,R,B,R,B) while port draws blue-first (B,R,B,R,B,R); this relationship is unchanged at t=5.25 s and at t=300.63 s. Because the pattern flips every 0.21 s, both sides show the same alternating look — only the absolute colour assignment at a given instant differs.",
+    "STARTUP TRANSIENT (the other difference): the original's very first tick (t=0 .. 0.20 s) is the WHOLE strip solid red — meanR 255, meanB 0, one frame at survey/baseline rate; confirmed at --pixels 300 (300 px all red) and at --pixels 13. The port never shows this state: it is already in the alternating red-first layout at t=0. This is exactly one 0.21 s tick of difference and does not recur.",
+    "Statistics agree to rounding over both windows. Baseline (6 s / 20 fps): orig meanBrightness avg 92.7 (min 85 from the all-red opening frame), port 93.0 flat; motion avg 30.0 vs 30.6; zeroMotionFrames 96/120 on both; brightnessTrend steady on both. Survey (60 s / 5 fps): motion avg 76.2 vs 76.5, zeroMotionFrames 150/300 on both, meanR 153 / meanB 128 constant on both apart from the orig's opening frame.",
+    "Survey (60 s @ 5 fps) waterfalls show a single uniform regime for the whole window on both sides — no mode rotation, no palette walk, no long-period beat. The 300 s late run confirms the same texture with identical stats (motion avg 7.4, meanBrightness 93 flat, brightnessTrend steady on both sides), so there is no decay, freeze or saturation in steady state.",
+    "No controls on either side: meta.json reports `controls: []` for both orig and port, and --probe-controls prints '(no settable controls)' for both. Control surfaces match (both empty).",
+    "Neither side binds sensor globals (wantsSensors false on both), so no --sensors work was needed.",
+    "Seed-independent: --seed 1234 renders byte-identically to --seed 1 on both sides (same dumps at t=0, 0.21, 0.42), consistent with a purely deterministic time-driven pattern."
+  ],
+  "dials": [],
+  "feedback": [
+    "Only two nits, both cosmetic and both at t=0. (1) The original opens with one full tick (0 .. 0.21 s) of the ENTIRE strip solid red (255,0,0) before the alternation starts — its block-toggle state starts 'all one colour' and the first flip creates the stripes. The port starts already striped. If exactness at load is wanted, initialise the port so its first 0.21 s renders every pixel red.",
+    "(2) After startup the port runs exactly one tick out of phase with the original: at t=0.21 s the original is red,blue,red,blue,red,blue across the six 10-px blocks and the port is blue,red,blue,red,blue,red. Flipping the port's initial toggle polarity fixes both nits at once (it would also produce the all-red opening if the initial state is 'both halves red' rather than 'already alternating'). Cosmetic only — the steady-state animation is otherwise indistinguishable.",
+    "Do NOT change the tick rate, block size, or colours: the flip period (0.21 s, time-based, verified fps-invariant from 10 to 100 fps), the fixed 10-pixel block stride (verified at 13, 60 and 300 px), and the exact RGB pair (255,0,0) / (50,0,255) already match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "fps100",
+    "fps40",
+    "fps10",
+    "dump-a",
+    "late",
+    "px300",
+    "px13",
+    "seed1234"
+  ]
+}

@@ -132,6 +132,14 @@ side's correlation of frame(t) with frame(t+lag) as a function of lag, and
 read off how long each side takes to decorrelate to the same level (e.g.
 corr 0.34 at 0.5 s on one side vs 8 s on the other = 16x). A time-rescale
 scan — corr(orig[t], port[k·t]) maximized over k — pins an exact factor.
+Two follow-ons once a speed factor exists: (1) `--skip` applies to BOTH
+sides, so a single run compares the sides at DIFFERENT phases of their own
+cycles — a fast port can look "frozen late" purely because its quiet point
+arrives earlier; pair runs with per-side-appropriate skips (orig at its
+event time, port at event×k) before reporting a late-window divergence.
+(2) A slow hue-walk/super-cycle pattern may not repeat within 240 s — extend
+the survey (500 s at 2 fps is cheap) until you have seen the cycle land at
+least twice per side, or the period ratio is a guess.
 
 If `--strip-at`/`--strip-frames` don't fit the window they are silently
 clamped — except the harness now says so, on stderr and in meta.json's

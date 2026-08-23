@@ -1,0 +1,58 @@
+{
+  "slug": "radiant-pulse-3",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — a slowly rotating/pulsing 6-fold radial sunburst on a very slow full-spectrum hue walk — with matching color, brightness and global rhythm, but the port splits every one of the original's 6 broad smooth rays into a doublet of two narrow spikes (12 visible spokes instead of 6) and runs its whole timeline ~8.7% fast.",
+
+  "observations": [
+    "Default rig is grid 16x16 (256 px). Both sides compile and run clean over a 500 s window: no compileError, no runtimeError, brightnessTrend 'steady' on both, zeroMotionFrames 5/480 (orig) and 4/480 (port). Neither side dies, freezes, blacks out or saturates at any point checked.",
+    "Both sides exhibit the same top-level motif: a radial 'sunburst' centred on the grid centre (~x=7.5, y=7.5 at 16x16), mirror-symmetric about the horizontal axis, whose rays slowly swing and whose amplitude pulses (the k=6 angular DFT magnitude on both sides rises and collapses repeatedly, e.g. orig m=86 at t=7 s down to m=1 at t=6 s at r=18 on a 48x48 render).",
+    "Color: both sides walk the ENTIRE hue wheel very slowly and in near-lockstep phase. Frame-mean hue over the 240 s survey — orig 67 deg (t=0) -> 199 (t=120) -> 319 (t=230); port 68 -> 209 -> 341. Orig ~1.10 deg/s (full wheel ~327 s), port ~1.19 deg/s (~306 s). Both traverse yellow -> green -> teal -> cyan -> blue -> purple -> magenta -> red in the same order, and both start at essentially the same hue. Frame-mean brightness matches over long windows (survey-500 avg 49.3 on both; 240 s survey avg 48.4 vs 48.2).",
+    "TIMING: the port's entire timeline is compressed. A time-rescale fit over 400 s of the smoothed motion series (corr(orig[t], port[k*t]) maximised over k) gives best k = 0.920 with corr 0.9992, versus corr 0.676 at k = 1.0. Confirmed by the pattern's global 'quiet points' where motion nearly stops: orig minima at t = 81, 245, 409 s (period ~164 s); port minima at t = 75, 226, 376.5 s (period ~151 s). 81*0.92=74.5, 245*0.92=225.4, 409*0.92=376.3. Direct check: --skip 245 gives orig motion 1 while port is at 8; --skip 225 gives port motion 2. So the port is ~1.087x too fast, uniformly, with otherwise near-perfect temporal correspondence.",
+    "STRUCTURE (the main divergence): the original draws 6 rays; the port draws 12, arranged as 6 close doublets. Peak count on the angular brightness profile at r=18 of a 48x48 render, sampled at 5 deg, at six times across 0-10.8 s — orig: 6 peaks at 30/90/150/210/270/330 deg (t=0), 6 at 40/100/160/220/280/340 (t=2.2), 6 at 45/105/170/225/290/345 (t=4.3), 6 at 5/55/125/175/245/300 (t=8.7) — i.e. one ray every 60 deg. Port at the SAME times: always 12 peaks, in pairs ~20 deg apart whose pair-centres sit 60 deg apart — 20/40, 80/100, 140/160, 200/220, 260/280, 320/340 (t=0); 35/55, 95/115, 155/175, 215/235, 275/295, 335/355 (t=2.2). The 6-fold fundamental is right on both sides; the port additionally splits each lobe.",
+    "The split shows in the angular spectrum as a non-decaying harmonic stack. At r=16 on 48x48, t=0 — orig: k=6 amp 57, k=12 amp 30, k=18 amp 15, k=24 amp 9 (clean decaying series, i.e. a smooth bell-shaped lobe); port: k=18 amp 39, k=12 amp 34, k=6 amp 33, k=24 amp 12 (flat/inverted series, i.e. a narrow spiky lobe). Angular spectral centroid across the sampled window: orig 7.5-12.8, port 15.5-16.6 — the port carries roughly 40% more angular high-frequency content at every time checked. Corroborated on the DEFAULT 16x16 rig, where the dominant angular harmonic at r=6 is k=6 or k=3 on the original at 20 of 22 sampled times but is k=12 or k=15 on the port at 7 of 22.",
+    "Raw angular profile at r=16, 48x48, t=0, 5 deg steps — orig: '0 0 1 6 23 60 140 135 59 24 7 1 0 0 2 10 28 63 136 87 37 13 2 0 ...' (single smooth ~40 deg-wide lobe per 60 deg period). Port: '1 3 18 67 176 41 5 50 150 46 8 0 0 0 3 30 134 54 6 19 99 77 19 4 ...' (two ~15 deg spikes per 60 deg period with a near-zero notch between them).",
+    "Downstream visual consequence: in the later regimes where the sunburst has folded into a maze-like texture (t ~ 40-70 s and t ~ 190-250 s), the original draws smooth rounded loops and closed 'petal' curves while the port draws blockier, broken-up, higher-frequency zigzag segments in the same color and at the same density. Compare orig at t=245 s against port at t=225 s (the phase-aligned quiet points): identical magenta/purple/red-on-black palette and identical swirl density, but the orig's loops are continuous and the port's are chopped into more pieces.",
+    "The motion stat is consistently ~25-35% higher on the port at every window and rate (baseline 6 s/20 fps: 6 vs 8; 60 s/5 fps: 17 vs 22; 240 s/2 fps: 29 vs 36; 500 s/2 fps: 28.9 vs 38.6). This is explained by the two findings above combined — extra high-frequency angular detail changes more per frame, plus the 8.7% speedup — not by a separate motion defect; after the k=0.920 rescale the two motion envelopes match at corr 0.9992.",
+    "Both sides are FPS-INVARIANT (time-based, not frame-stepped). Rendering 10/20/40 fps and dumping at absolute t=0/5/9 s gives orig hue 66.4/71.9/77.4, 66.6/71.7/77.3, 66.6/71.6/77.1 and port 65.9/72.2/76.6, 65.5/72.1/76.5, 65.4/72.0/76.3 — unchanged across rates on both sides. No frame-rate coupling on either side.",
+    "Both sides are seed-independent: seeds 1, 7 and 1234 produce identical stats (12 s/10 fps: orig mean 54 motion 12, port mean 52 motion 16 for all three). The pattern is deterministic on both sides, so per-pixel comparison is fair.",
+    "Neither side has any settable control (meta.json controls [] on both; --probe-controls reports '(no settable controls)' for orig and port). Control surfaces match — nothing added, nothing dropped.",
+    "Instantaneous brightness can diverge noticeably even though the long-window means agree: at t=5 s the port's frame-mean brightness is 54.3 vs the original's 37.6 (+44%). This is a phase effect of the ray-amplitude pulse plus the time compression, not a gain error — over 500 s both average 49.3.",
+    "The port's near-centre core is brighter at some phases (16x16 angle-averaged radial profile at t=0: orig 12/12/13/15/18 at r=0..2, port 48/48/58/67/63), but this reverses at other phases (t=8.7 s on 48x48: orig centre 81, port 53), so it tracks the pulse phase rather than being a systematic offset. Angle-averaged and angle-max radial profiles otherwise agree closely (both flat at ~36-42 mean / ~170-190 max from r=8 outward)."
+  ],
+
+  "dials": [],
+
+  "feedback": [
+    "PRIMARY FIX — ray doubling. The port emits two narrow spokes where the original emits one broad one. The 6-fold fundamental and its angular phase are correct; what is wrong is the shape of each lobe. Target: at radius 16 of a 48x48 grid the angular profile should be ONE smooth bell per 60 deg (peak ~140, ~40 deg full width, falling to 0 between lobes), with the harmonic amplitudes decaying as roughly k=6:57, k=12:30, k=18:15, k=24:9. The port currently produces two ~15 deg spikes per 60 deg with a near-zero notch between them and a flat harmonic stack (k=18:39, k=12:34, k=6:33). Symptom to check against: peak count on the r=18 angular profile must be 6 (not 12) at t=0, 2.2, 4.3 and 8.7 s. A likely shape of the bug is an absolute value / folded or squared term applied to the angular waveform where the original keeps it signed (abs() of a sinusoid halves the period and sharpens the peaks — exactly the observed doubling-plus-spiking signature).",
+    "SECONDARY FIX — global speed is ~8.7% fast. Divide the port's master time scale by 1.087 (equivalently multiply by 0.920). Verification target: the pattern's near-freeze 'quiet points' must land at t = 81, 245 and 409 s (they currently land at 75, 226 and 376.5 s), and the frame-mean hue must advance at 1.10 deg/s, completing the wheel in ~327 s (it currently advances at 1.19 deg/s, ~306 s). This single scalar accounts for the whole timing gap — after correcting it the two motion envelopes agree at corr 0.999 over 400 s, so no per-term retiming is needed.",
+    "Do NOT change palette, hue start phase, hue direction, brightness gain, radial falloff, rotation direction, symmetry order, or the pulse envelope shape — all of these already match closely and are easy to break while chasing the two fixes above.",
+    "Verify the fix on a 48x48 grid render, not only the default 16x16 rig: at 16 px across, a 12-spoke and a 6-spoke sunburst both read as a chunky star and the defect is easy to miss. Use --grid 48x48 --seconds 12 --fps 10 and count spokes on the contact sheet, then confirm the numbers on the default rig.",
+    "Neither side has controls, so there is no dial work to do; keep the port control-free."
+  ],
+
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "survey-500",
+    "probe",
+    "dump-base",
+    "dump-long",
+    "grid48",
+    "dump48",
+    "dumprot",
+    "dumprot2",
+    "fps10",
+    "fps20",
+    "fps40",
+    "regime-45",
+    "regime-150",
+    "regime-220",
+    "regime-245",
+    "regime-225",
+    "seed7",
+    "seed1234"
+  ]
+}
