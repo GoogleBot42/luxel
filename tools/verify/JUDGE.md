@@ -106,6 +106,19 @@ second. If the per-second displacement scales with fps, the pattern is
 frame-stepped; if it holds, it is time-based. Only report frame-rate coupling
 once the `--dump` positions say so.
 
+Checkerboard/alternating-sublattice fields (a value living on only one
+parity of pixels per frame, as in pond/wave sims) MOIRÉ badly under the
+PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
+or ring structure that is pure display artefact. Verify any structural
+claim on such a pattern from `--dump` numbers, never from the images.
+
+Centroid tracking is INVALID near canvas edges: a feature that slides
+in/out of frame gets its visible centroid dragged toward the canvas
+interior, which reads as slow-fast-slow "easing" when the true motion is
+linear. For anything that enters or leaves the rig, fit the feature's known
+kernel shape (taken from a fully-on-canvas frame) over a search range
+extending PAST the edges instead of using the centroid.
+
 To tell whether a side is INDEX-ONLY (drives pixels off the flat pixel
 index) vs (x,y)-DRIVEN: re-render at a second grid size and diff the FLAT
 pixel sequences — an index-only pattern's flat sequence is byte-identical
@@ -350,11 +363,13 @@ numbers:
   `motion` (not `motionLit`). A high count on one side and not the other is a
   frozen port (note: with `--skip 0` the very first captured frame always
   scores motion 0, so expect a count of 1).
-  **Dim, sparse, and SLOW patterns false-read as frozen.** `motion` is computed
-  on the QUANTIZED 8-bit output and then rounded to an integer, so a pattern
-  animating at low brightness, over few pixels, or very slowly (sub-quantum
-  change per frame — several buggy ports crawl 15-20x under the original's
-  rate) can post `zeroMotionFrames` near 100% while genuinely moving. Check
+  **Dim, sparse, SLOW, and LOW-AMPLITUDE patterns false-read as frozen.**
+  `motion` is computed on the QUANTIZED 8-bit output and then rounded to an
+  integer, so a pattern animating at low brightness, over few pixels, very
+  slowly (sub-quantum change per frame — several buggy ports crawl 15-20x
+  under the original's rate), or densely but by only a few counts per pixel
+  (a calm ember flicker) can post `zeroMotionFrames` near 100% while
+  genuinely moving. Check
   `meanBrightness` and `motionLit` before concluding "frozen": if brightness
   is low (say under ~10) or `motionLit` is non-zero while `motion` is not,
   confirm with a `--dump` at widening lags (0.05 s up to seconds apart) and
@@ -478,7 +493,11 @@ a second show it standing still, and a hair off that, running backwards. Read
 the feature's period off the rhythm/waterfall image first, then space dumps
 well under half of it — 0.1–0.2 s apart when measuring rotation or oscillation
 direction. A direction claim from sparse dumps is an aliasing artefact until
-you have re-dumped it densely. Rotational symmetry tightens this further: an
+you have re-dumped it densely. The SPATIAL twin of this trap: a side whose
+texture period is only ~2 pixels on the default rig can read as moving the
+WRONG DIRECTION from profile cross-correlation or DFT phase — de-alias on a
+larger grid before claiming a direction disagreement between the sides.
+Rotational symmetry tightens this further: an
 N-fold-symmetric figure repeats every 360/N degrees, so the unambiguous
 tracking range shrinks by the symmetry order — a 12-arm asterisk spinning past
 ~300 deg/s already aliases at 0.05 s spacing. Rotation that is fps-invariant
