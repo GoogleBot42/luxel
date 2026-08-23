@@ -56,6 +56,7 @@ async function main() {
   const webUI = await (await fetch(`http://${ip}/`)).text();
   const compile = buildCompiler(webUI);
   const pb = await PB.connect(ip);
+  const restoreId = (await pb.getConfig()).seq?.activeProgram?.activeProgramId;
   try {
     // P1: fractional array() length
     {
@@ -175,6 +176,10 @@ export function render(index) {
       }
     }
   } finally {
+    // put the device back on its saved pattern — live-coded probe patterns
+    // otherwise stay on the LEDs and read as a wedged/broken oracle
+    // (run.mjs and todo-probes.mjs already follow this convention)
+    if (restoreId) await pb.setActivePattern(restoreId).catch(() => {});
     await pb.close();
   }
 }
