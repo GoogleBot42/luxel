@@ -1,0 +1,46 @@
+{
+  "slug": "firework-rocket-sparks",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — a red/yellow rocket flying right-to-left at the same speed with white sparks trailing behind it — but the port's rocket is ~2.4x wider, its red-to-yellow colour ramp cycles 5x too slowly (smooth gradient instead of the original's rapid per-pixel flicker), and it emits ~40% fewer sparks.",
+  "observations": [
+    "Rig: strip, 60 px. Neither side exposes any controls (meta.json 'controls' empty on orig and port; probe reports '(no settable controls)' for both) — control surfaces match.",
+    "Both sides are alive with no compile/runtime errors, over a 240 s / 2 fps survey and a --skip 120 late window; neither shows any regime or mode change — one uniform behaviour throughout.",
+    "Motion matches exactly. --dump position tracking at 10, 20 and 40 fps gives orig -18.0 px/s and port -18.5 px/s (rocket travelling toward index 0, wrapping at 0 back to 59, ~3.3 s per lap). Both sides are fps-invariant, so neither is frame-rate coupled.",
+    "Rocket WIDTH differs. At the default 60 px rig, --dump over 120 consecutive frames: orig lights exactly 1 rocket pixel per frame (106 rocket pixels / 120 frames), port lights 2-3 (290-291 / 120 frames) — port is ~2.4x wider. Confirmed on a --pixels 300 re-render (orig ~5 px, port ~12 px), so both sides scale the rocket as a fraction of the strip; only the fraction differs.",
+    "Rocket COLOUR CYCLE differs by 5x. Both use the identical hue span, red (255,0,0) through orange to yellow / faint yellow-green, and both derive it from the rocket's pixel index. Orig steps a full red->yellow ramp every 4 pixels (measured hues 0.00, 0.05, 0.10, 0.15 repeating; at 20 fps that is a 5 Hz red/orange/yellow strobe of a single pixel). Port steps the same span over 20 pixels (hue +0.01/px; a ~1.1 s smooth gradient sweep). Visually: orig reads as a flickering ember, port as a smooth colour-ramped dash.",
+    "The port's colour period also scales with strip length while the original's does not: on --pixels 300 the orig ramp still repeats every 4 pixels, the port's stretches to every 100 pixels (a third of the strip).",
+    "Port's palette overshoots slightly: it reaches yellow-green (204,255,0 / 219,255,0, hue ~0.19-0.20) which the original never shows — orig's yellow-most sample is (255,229,0), hue 0.15.",
+    "SPARKS match in character on both sides: near-white single-frame flashes (min channel > 200, peak 243-255), almost all lasting exactly 1 captured frame, appearing 6-14 px BEHIND the rocket (modulo the wrap), spread across the whole strip as the rocket laps it. Measured spark-minus-rocket offsets: orig 6-14, port 7-13.",
+    "Spark RATE is lower on the port: two independent 6 s / 20 fps dumps (t=0-6 s and t=100-106 s) counted 50+59=109 spark pixels on orig vs 30+37=67 on port (~0.61x). The blue-channel mean agrees, sparks being the only blue source: survey meanB avg orig 2.0 vs port 1.3.",
+    "Overall brightness: port is ~1.9x brighter (survey meanBrightness avg orig 3.9, port 6.7), consistent with the wider always-on rocket. Orig's meanG avg 3.8 vs port 7.4, again from the wider bar plus more time spent at the yellow end.",
+    "Orig's 1-px rocket momentarily blanks on ~1 frame in 11 (11 all-dark frames per 120 at 20 fps, and its meanBrightness min is 0); the port's wider rocket is never absent (0 dark frames, min brightness 3). This is why statsSummary reports brightnessTrend 'volatile' on orig and 'steady' on port — it is a flicker artefact of the 1-px feature at 0.9 px/frame, not a decay or a dying port.",
+    "Seed-independent: seeds 1, 7 and 1234 over 30 s / 4 fps give the same per-side statistics (orig mean 3.1-3.6, port 6.5-6.8) and the same relationships, so none of the above is a one-seed fluke."
+  ],
+  "dials": [],
+  "feedback": [
+    "Rocket colour is the biggest visible gap: the original ramps its full red->yellow hue span every 4 PIXELS of rocket travel (hue steps of 0.05 per pixel index, a 5 Hz strobe at 20 fps), while the port ramps the same span over 20 pixels (0.01 per index). Multiply the port's hue-per-pixel rate by 5 so the rocket flickers red/orange/yellow rather than gliding smoothly through the ramp.",
+    "The original's colour period is tied to the absolute pixel index (4 px on a 60 px strip AND on a 300 px strip); the port's is a fraction of the strip (20 px at 60, 100 px at 300). Make the port's ramp index-absolute so it does not stretch out on longer strips.",
+    "Clamp the top of the port's hue span: the original never goes past yellow (max observed hue ~0.15, always r=255), the port reaches yellow-green (204,255,0). Cap the ramp at pure yellow.",
+    "Rocket is ~2.4x too wide: at 60 px the original lights exactly one pixel per frame, the port lights 2-3. Narrow the rocket to a single pixel at the default rig (equivalently ~1/60 of the strip) — this also fixes the ~1.9x overall brightness excess.",
+    "Spark emission rate is ~40% low: over matched 6 s windows the original produced ~9.1 spark flashes/s and the port ~5.6/s. Raise the port's spark spawn probability by ~1.6x. Everything else about the sparks — near-white colour, single-frame lifetime, and the 6-14 px trailing offset behind the rocket — already matches and should not be touched.",
+    "Rocket speed (18 px/s leftward with wrap), fps-invariance, spark placement and the empty control surface are all correct; no changes needed there."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "dump-a",
+    "dump-dense",
+    "dump-spark",
+    "dump-late",
+    "fps10",
+    "fps40",
+    "px300",
+    "seed7",
+    "seed1234"
+  ]
+}

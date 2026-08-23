@@ -1,0 +1,66 @@
+{
+  "slug": "geometry-morphing-demo-2d",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same idea and same shape vocabulary — a centred polygon morphing between circle/triangle/square/pentagram/hexagon/hexagram/cross with a radial rainbow fill — but the port's colour cycle is ~4x too slow, its figure is ~40% too small at matched dials, its morph cycle is 12.0 s against the original's 14.4 s, and its untouched defaults render 15x dimmer (small unfilled outline vs large filled shape).",
+  "observations": [
+    "Control surface matches exactly on both sides: sliderSize (slider, 'Size'), sliderFilled (slider, 'Filled'), sliderLineWidth (slider, 'LineWidth'). No missing/extra/renamed/retyped control.",
+    "Both sides are alive and error-free (no compileError/runtimeError), neither binds sensors (wantsSensors false), and both are seed-independent (seed 1 and seed 1234 give byte-identical stats on both sides).",
+    "Untouched defaults (survey, 60 s @ 5 fps): original meanBrightness avg 52.8 (min 23 / max 86), port avg 3.5 (min 1 / max 9) — a ~15x gap. Dumping t=0 untouched on the 16x16 grid: original lights 136 px, max radius 6.5, peak channel 255, solid fill; port lights 12 px, max radius 2.5, peak 157, a thin single-hue outline. The port's internal defaults behave like Size ~0.3 / Filled 0 / a narrow LineWidth, the original's like Size ~1 / Filled 1.",
+    "COLOUR RATE (the biggest divergence). At matched dials (Filled=1, Size=1, LineWidth=0.5) the circular-mean hue of the lit pixels, dumped every 0.6 s over 30 s: original returns to its starting hue at t=6.6, 13.2, 19.8, 26.4 s — a full 360-degree rainbow every ~6.6 s. The port takes ~27 s for one revolution (338 deg at t=0, back to 0 deg at t=27). Autocorrelation of meanR/meanG/meanB over the 60 s dialed survey agrees: original first peak at lag 33 frames @5fps = 6.6 s, port at lag ~122 frames = 24.4 s. The port's hue advance is roughly 4x too slow.",
+    "SIZE. At the same Size=1, Filled=1, the original's figure has max radius 6.5-8.7 px (lit area 72-184 of 256 px) across a 30 s window; the port's has max radius 3.8-7.9 px (lit area 34-122 px). The port sits at radius ~3.8-4.5 for most of its cycle and only briefly touches the original's size at the peak of its pulse — so the port's size PULSE is also much deeper (2.1x swing vs the original's 1.34x). Whole-window mean brightness at these dials: original 53-54, port 29-33.",
+    "MORPH CYCLE. The lit-area series repeats exactly every 14.4 s on the original and every 12.0 s on the port (verified by comparing the 0.6 s-spaced dump samples at t and t+period, and by meanBrightness/motionLit autocorrelation: original peaks at 14.4/21.6/28.8 s, port at 12.0/18.0/24.0 s). Radial-spikiness (max-radius-vs-angle amplitude) confirms it: the shape passes through its round, low-amplitude phase at t=0, ~12.6, ~26.5 s on the original and t=0, ~12.6, ~24.3 s on the port. The port's morph is ~20% fast, so the two sides agree on the shape sequence for the first ~11 s (both: circle -> star -> square -> triangle -> hexagon) and then drift apart.",
+    "The radial rainbow gradient itself is correct. Hue-vs-radius is linear on both sides at ~20 deg per pixel of radius at 16x16 and ~6.4 deg/px at 48x48 — i.e. both map hue to NORMALISED radius identically. The port's shapes only look flatter-coloured because they are smaller: total centre-to-rim hue span at Size=1 is 133 deg (orig) vs 74 deg (port) at t=0, and 91 vs 41 deg at t=3.",
+    "Resolution independence matches: re-rendered at --grid 48x48 both sides draw the same logical figure with finer detail (identical hue spans, proportionally identical radii) — no rasterisation-vs-canvas divergence.",
+    "Steady state is fine on both: --skip 120 --seconds 12 @10fps gives orig mean 55 / port mean 27, brightnessTrend steady on both sides throughout, zeroMotionFrames 1 on the original. The port's untouched zeroMotionFrames of 35/300 is the sparse-and-dim false freeze (motionLit avg 26.9), not a frozen port."
+  ],
+  "dials": [
+    {
+      "name": "sliderSize",
+      "origEffect": "0 = fully black; 0.5 = figure occupies roughly the central half of the grid; 1 = figure fills the grid, max radius 6.5-8.7 px, mean brightness 53.",
+      "portEffect": "Same direction and same 0 = black endpoint, but every setting draws a smaller figure: at 1 the max radius is 3.8-7.9 px (typically ~4) and mean brightness is 33. Roughly 0.6x the original's radius over most of the cycle.",
+      "matches": false
+    },
+    {
+      "name": "sliderFilled",
+      "origEffect": "0 = hollow outline with a dark core; 1 = solid figure filled with the radial rainbow. Continuous in between (mean brightness 10 -> 15 at Size=0.5).",
+      "portEffect": "Same: 0 = hollow outline, 1 = solid radial-gradient fill (mean 4 -> 11 at Size=0.5). Qualitative behaviour matches; only the absolute brightness differs because of the size gap.",
+      "matches": true
+    },
+    {
+      "name": "sliderLineWidth",
+      "origEffect": "With Filled=0: 0 degenerates to 3-5 isolated bright vertex dots (mean 1); 1 draws a very thick rainbow annulus that spans most of the radius with only a small dark core (mean 69).",
+      "portEffect": "0 degenerates to a ring of ~8 dim dots (mean 2) — more dots and dimmer than the original's vertices; 1 draws only a thin ~2 px, near-single-hue outline with a large dark core (mean 23). The dial's top end is far narrower than the original's.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Colour is the headline fix: at matched dials the original walks a full 360-degree hue rotation every ~6.6 s (verified at t=6.6/13.2/19.8/26.4 s), while the port takes ~27 s. Speed the port's time-driven hue advance up by ~4x.",
+    "The port's figure is too small. At Size=1 the original's max radius stays in the 6.5-8.7 px band on a 16x16 grid (lit area 72-184 px); the port's sits at ~3.8-4.5 px most of the time and only spikes to ~7.9 px once per cycle. Raise the port's base radius so Size=1 fills the grid, and reduce the depth of its size pulsation (original swings 1.34x peak-to-trough, port swings 2.1x).",
+    "The morph cycle is ~20% fast: the original's shape/area series repeats exactly every 14.4 s, the port's every 12.0 s. Slow the port's morph clock to a 14.4 s period so the two stop drifting apart after ~11 s.",
+    "Untouched defaults are wrong. Loaded with no controls set, the original renders a large solid figure (136 lit px, radius 6.5, peak channel 255, mean brightness 53); the port renders a 12-px thin outline (radius 2.5, peak 157, mean brightness 3.5). Set the port's initial Size high (~1) and Filled on so an unconfigured load looks like the original's.",
+    "LineWidth's top end is too narrow. With Filled=0 and LineWidth=1 the original draws a thick rainbow annulus covering most of the radius (mean brightness 69); the port draws a ~2 px single-hue ring (mean 23). Scale the port's line width so 1 nearly closes the figure.",
+    "Not broken: the shape vocabulary (circle, triangle, square, pentagram, hexagon, hexagram, plus-cross), the hue-vs-normalised-radius gradient (~20 deg per px at 16x16 on both sides), resolution independence at 48x48, seed independence, and the Filled dial all already match — do not change those."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-filled",
+    "ctl-filled0",
+    "ctl-filled1",
+    "ctl-size0",
+    "ctl-size05",
+    "ctl-size1",
+    "ctl-lw0",
+    "ctl-lw1",
+    "dump-size1",
+    "dump-shape30",
+    "dump-untouched",
+    "grid48",
+    "dump48",
+    "late",
+    "seed1234"
+  ]
+}
