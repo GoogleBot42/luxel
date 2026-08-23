@@ -8,6 +8,9 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 ## Toolchain
 - Everything runs inside `nix develop` — cargo, node, and chromium are only on PATH there.
 - New toolchains/deps must be Nix flake derivations, never imperative run-once setup scripts.
+- Third-party crate fixes are carried as PATCH FILES (`firmware/patches/` + a flake
+  derivation materializing the patched source), never vendored source trees
+  (Jeremy's preference, 2026-08-22; see firmware/patches/README.md for the mechanism).
 - Rust over C unless genuinely blocked; strict TypeScript in `web/`; prefer established
   crates over hand-rolling.
 
