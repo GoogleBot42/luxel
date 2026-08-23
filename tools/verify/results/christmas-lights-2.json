@@ -1,0 +1,55 @@
+{
+  "slug": "christmas-lights-2",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same concept and same ~5 s tick cadence, but the port draws 1-px red/green/white dots separated by black gaps and advances 1 px per tick, where the original draws gapless 3-px red/green/gray candy-stripes and advances a full 3-px band per tick.",
+  "observations": [
+    "Both sides are strictly step-wise animations on a 60 px strip: totally static between instantaneous whole-strip rearrangements. Survey (60 s @ 5 fps) shows zeroMotionFrames 289/300 (orig) and 288/300 (port); every non-zero motion frame is a single large spike.",
+    "Tick cadence matches almost exactly: orig ticks at 5.00, 10.05, 15.10, 20.15, 25.20 s (period ~5.03 s), port at 4.95, 9.95, 14.95, 19.95, 24.95 s (period 5.00 s). Both are time-based, not frame-stepped: the same tick times come out at --fps 10, 20 and 40 (labels rate10/rate20/rate40).",
+    "STRUCTURE (exact, from --dump at 7/12/17/22/27/32 s on the default 60 px rig): orig frame is [green x3 | red x3 | gray x3] repeating — spatial period 9 px, every pixel lit, no dark gaps. Port frame is [black | red | black | green | black | white] repeating — spatial period 6 px, only every other pixel lit.",
+    "COLOR: orig palette is red (255,0,0), a slightly yellow green (51,255,0) and a mid GRAY (114,114,114). Port palette is red (255,0,0), pure green (0,255,0) and full WHITE (255,255,255), plus black. Red matches; the port's green is a purer hue and its third colour is white at full brightness where the original's is a ~45% gray.",
+    "BRIGHTNESS: orig meanBrightness ~99 (steady, all pixels lit); port ~71 and pinned exactly constant (meanR/G/B = 85/85/43 on every single frame of the 240 s survey) because half its pixels are always black.",
+    "MOTION per tick: orig shifts the whole pattern RIGHT by 3 px = exactly one band = 1/3 of its 9-px period, so its visual cycle repeats every 3 ticks (~15 s) and it reads as the three colours rotating in place within fixed 3-px cells. Port shifts RIGHT by 1 px = 1/6 of its 6-px period, so its cycle repeats every 6 ticks (~30 s) and it reads as a thin dotted chain crawling one pixel at a time, with lit dots alternately landing on former gap positions. Direction (rightward) agrees; per-tick displacement and perceived character do not.",
+    "STARTUP TRANSIENT: the original renders the strip SOLID RED (255,0,0 on all 60 px) for the first 5.0 s, then enters the banded regime at the first tick and never returns to solid red in a 240 s window. The port is in its banded regime from t=0. Visible on the baseline waterfall as a full red block over the top 5/6 of the orig image.",
+    "CONTROL SURFACE MISMATCH: meta.json reports the original exposes NO controls at all (controls: []); the port exposes one slider, sliderTicks (label \"Ticks\"). A dial the original does not have.",
+    "No other regimes exist on either side: a 240 s / 2 fps survey shows one uniform regime throughout after the original's opening red block, on both sides.",
+    "Both sides are fully deterministic and seed-independent: seed 1234 produces byte-identical frame content and the same tick times as seed 1 on both sides.",
+    "Both sides index in absolute pixels, not fractions of the strip: at --pixels 24 and --pixels 120 the orig keeps 3-px bands and the port keeps 1-px dots with 1-px gaps. Resolution behaviour agrees.",
+    "PAIRING CAVEAT: the manifest flagged this pairing ambiguous (two corpus patterns share the display name \"Christmas Lights\"). The two sides are NOT unrelated concepts — both are rightward-stepping red/green Christmas-light chases on a ~5 s tick — so this is a genuine comparison, but the systematic structural differences (1-px dots + black gaps + white vs gapless 3-px bands + gray) are the kind of difference that would also result from the port having been written against the other same-named corpus pattern. Weigh the feedback below accordingly."
+  ],
+  "dials": [
+    {
+      "name": "sliderTicks",
+      "origEffect": "not present — the original exposes no controls; its step interval is hard-fixed at ~5.03 s",
+      "portEffect": "live and value-dependent (probe maxDelta 99.5 / maxDeltaLit 132.7); sets the step interval: 0 -> a step every 0.1 s (a fast 10 Hz chase), 0.25 -> ~2.56 s, 0.5 -> ~5.03 s, 0.75 -> ~7.5 s, 1 -> ~9.95 s. Untouched default behaves as 0.5, i.e. it lands on the original's cadence.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Band geometry is the biggest gap. The original fills the strip with contiguous 3-pixel blocks in a 9-pixel repeat (green, red, gray) and never leaves a pixel dark; the port lights single pixels in a 6-pixel repeat with a black pixel between every lit one. Widen the port's elements to 3 px each and remove the black spacers so the whole strip is lit.",
+    "Third colour: the original's third element is a mid gray, exactly (114,114,114) — not white. The port uses full white (255,255,255). Also the original's green is (51,255,0), a slightly yellow-shifted green, where the port uses pure (0,255,0). Red (255,0,0) already matches.",
+    "Step size: on each tick the original advances by a whole band (3 px), so its picture repeats after 3 ticks (~15 s). The port advances 1 px, repeating after 6 ticks (~30 s). Once the port's bands are 3 px wide, it should advance 3 px per tick, not 1.",
+    "Tick timing is essentially right — keep it. Original ~5.03 s, port 5.00 s; both are wall-time driven and fps-invariant, so no frame-rate coupling bug exists on either side.",
+    "Startup: the original holds the strip SOLID RED for the first 5.0 s before its first tick, then never shows that state again. The port begins already banded. Reproducing that opening red frame would close a visible first-impression difference.",
+    "Control surface: the original has no controls. The port's added sliderTicks slider is an extra dial the original lacks; its default matches the original's ~5 s cadence, so nothing about the default look depends on it, but it should be removed (or documented as a deliberate addition) to match the original's dial-free surface."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "dump-ticks",
+    "rate10",
+    "rate20",
+    "rate40",
+    "ctl-ticks-0",
+    "ctl-ticks-0.25",
+    "ctl-ticks-0.5",
+    "ctl-ticks-0.75",
+    "ctl-ticks-1",
+    "seed1234",
+    "px120",
+    "px24"
+  ]
+}

@@ -519,6 +519,18 @@ This too mirrors PB, where setting a control always invokes the control function
 So a probe `responsive` verdict needs value-dependence confirmed — 0 and 1 must
 differ from EACH OTHER, not just from untouched — before you call a dial live.
 
+Two more probe blind spots: `inputNumber` controls are often integer MODE
+selectors — the probe's 0/0.5/1 sweep reaches at most two modes, so sweep them
+manually over whole integers (0,1,2,…) until the output stops changing. And
+mode-gated sliders (live only inside one mode) probe inert from the untouched
+mode — when a pattern has a mode selector, re-sweep the secondary dials INSIDE
+each mode before recording any of them as inert.
+
+For a translating 1D pattern, the honest speed measurement is circular
+cross-correlation of two `--dump`ed frames (find the shift that best aligns
+them, divide by dt) — the `motion` stat exaggerates or compresses speed ratios
+on smooth gradients and sparse dots alike.
+
 1. Baseline AND survey — **two runs, both required, before anything else.**
 
        snap.mjs <slug> --label baseline
