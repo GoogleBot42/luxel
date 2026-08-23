@@ -1,5 +1,25 @@
 # Update log
 
+## 2026-08-24 — Clean-room port verification sweep COMPLETE: all 293
+## pairs judged (tools/verify/results/ + FINDINGS.md)
+
+Every corpus/library pair now has an output-only verdict from an
+independent Opus judge (5 parallel judges per batch, ~59 batches):
+**24 match · 119 close · 123 divergent · 17 broken · 10
+orig-unrenderable**, mean score 5.42/10. Each
+`tools/verify/results/<slug>.json` carries measured observations,
+per-dial comparisons and concrete acceptance numbers for a fix pass;
+`tools/verify/FINDINGS.md` synthesizes the systemic defect families
+(PB time-base constants, frame-vs-time coupling, missing lifecycle
+management, control-surface drift, coordinate/units errors, colour
+constant families incl. the Christmas template, direction flips) plus
+the engine gaps the sweep surfaced (time-of-day builtins pinned —
+confirmed; init-random constant; out-of-range write intolerance; the
+32.768 s freeze family; silent-null originals) — tracked in Gitea #84
+and #99. JUDGE.md grew ~30 measurement-trap notes contributed by the
+judges as they hit them; snap.mjs gained `--wall-clock` and a
+false-clamp-warning fix along the way.
+
 ## 2026-08-22 — The DEFAULT build takes the mild WiFi RX trim too
 ## (+6.4 KB idle, soaked with serial attached — Gitea #60)
 
