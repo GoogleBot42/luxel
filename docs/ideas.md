@@ -114,19 +114,27 @@ bytecode execution is being worked on now; the rest are queued:
   9.6 KB, allocated in `esp_wifi_init` and never freed). The dynamic
   pools and the AMPDU block-ack buffers are on-demand — capping them
   bounds the worst case but reclaims ~nothing at idle. Full small-chip
-  profile vs the default build is now +27.1 KB (98,352 → 125,460).
+  profile vs the then-default build was +27.1 KB (98,352 → 125,460); see
+  the paragraph below — the default moved, so it is +20.6 KB today.
   Soaked clean: 321/322 hw-bench (the one failure is the same
   pattern-side OOB the default build has), 44 k DDP frames at 245 pkt/s
   × 300 px alongside 6-way API hammering, a 629 KB streaming asset
   upload, 18/20 cold loads — no panic, no rollback, `heap_free` floor
   99 KB. Going below static 4 is NOT recommended without fresh soak
   evidence: the blob doesn't null-check, so an undersized pool is a
-  StoreProhibited crash, not an error. Whether the DEFAULT build should
-  take a milder trim is untested — tracked as a Gitea issue.
+  StoreProhibited crash, not an error. **The DEFAULT build took the mild
+  half of the trim on 2026-08-22 too** (Gitea #60): `static_rx_buf_num`
+  10→6 alone, AMPDU RX and the dynamic pool left stock, A/B'd at
+  **98,352 → 104,832 (+6,480 B)** on the Athom and soaked with serial
+  attached (hw-bench 321/322, 44 k DDP frames + 6-way API hammer, cold
+  loads at parity, no panic, slot held). So the default build's floor is
+  the higher number now, and the small-chip profile is worth +20.6 KB
+  over it rather than +27.1 KB.
 - ~~Web pool 3→2 (make the webui tolerant first)~~ — RESOLVED 2026-08-15
   (UPDATES.md entry has the full story): the web tolerance shipped
-  (fetchgate.ts + coldload.mjs acceptance harness, 10/10 clean on the
-  Athom), the verification gauntlet surfaced and fixed a pattern-store
+  (fetchgate.ts + coldload.mjs acceptance harness, then 10/10 clean on the
+  Athom — **no longer true on master, see Gitea #92**), the verification
+  gauntlet surfaced and fixed a pattern-store
   OOM-on-read panic and the picoserve shutdown slot-wedge
   (QuickCloseSocket) — but Chromium needs ~3 sockets at cold NAVIGATION
   (preconnect + nav, pre-page, unfixable client-side), so the default

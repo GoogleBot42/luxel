@@ -1,5 +1,77 @@
 # Update log
 
+## 2026-08-22 — The DEFAULT build takes the mild WiFi RX trim too
+## (+6.4 KB idle, soaked with serial attached — Gitea #60)
+
+Follow-up to the same day's small-chip WiFi tuning, and the first soak on
+the Athom with `/dev/ttyUSB0` actually present — which is the whole reason
+#60 was left open. `static_rx_buf_num` 10→6 on the **default** build; that
+is the entire diff. AMPDU RX stays on and `dynamic_rx_buf_num` stays at
+32, deliberately: `static_rx_buf_num` is the only knob that reclaims
+anything at idle (those buffers are allocated in `esp_wifi_init` and never
+freed), while the dynamic pool and the block-ack buffers are on-demand, so
+trimming them would bound the worst case and cost RX throughput on a busy
+network for no idle gain. `rx_ba_win` stays 6 and still validates
+(6 < 32 dynamic, 6 < 2 × 6 static). `small-chip` keeps its harder 4/16/off.
+
+**A/B on the Athom rig (v0.1.39, 60 px WS2812, idle `heap_free`, 20
+samples each, both immediately post-OTA):**
+
+| build | idle heap_free | Δ |
+|---|---:|---:|
+| default, stock pools (master) | 98,352 | — |
+| default, `static_rx_buf_num` 6 | **104,832** | **+6,480 B** |
+
+Exactly 4 × ~1,620 B, i.e. the arithmetic the small-chip session
+predicted, with none of the estimate error that entry warned about. App
+image is byte-identical in size (946,288 B both builds), so the 1 MiB slot
+margin is untouched. `.stack` 29,396 B (athom) / 29,372 B (pixelblaze-v3),
+clear of the 24 KB floor, no frame over 12 KB.
+
+**Soak, all on the trimmed build, with a live serial capture the whole
+time** (the thing the small-chip session could not do):
+
+- `tools/hw-bench.mjs`: **321/322**, ~45 min. The one failure is the
+  long-standing pattern-side array OOB in "sound - spectromatrix
+  render2D", present on every prior soak. Lowest `heap_free` across the
+  churn 78,408 B; fps-vs-pixels curve unremarkable (123 @ 60 px … 5 @
+  2048 px). Serial shows exactly one boot in the whole run — the OTA's own
+  reboot — and no panic, no `rst:` other than that, no boot-guard trip.
+- **RX-pool stress**, A/B'd rather than just run (new `tools/rx-stress.mjs`,
+  docs/tools.md): 180 s of DDP at ~244 pkt/s × 300 px (~217 KB/s inbound
+  UDP) concurrent with a 6-worker HTTP API hammer.
+
+  | build | DDP frames | HTTP served / refused | min heap_free |
+  |---|---:|---|---:|
+  | default, stock pools | 44,096 | 617 / 2,346 | 78,352 |
+  | default, static RX 6 | 44,104 | 641 / 2,238 | 84,844 |
+
+  The trimmed build served *more* requests under identical load, so the
+  smaller pool costs nothing measurable here, and its heap floor under
+  load is ~6.5 KB higher. Every watchdog sample during the run reported
+  `live: "ddp"` — the frames were being received, not silently dropped
+  (the harness fails if that count is zero, precisely so a dropping RX
+  path can't read as a clean pass). Slot held `ota_0`, no vmerr, nothing
+  on serial. Then a **640,026 B streaming asset upload** succeeded.
+- `web/tools/coldload.mjs`: **at parity, and the parity is the finding.**
+  Trimmed and stock-pool builds both score 0/10 clean at 300 px (1 refused
+  sub-resource per load) and 0/5 clean at 60 px (2 per load), with
+  identical timings; every load still boots fully (`boot ok`, editor
+  populated, 0 page errors). So today's master does not hit the 10/10
+  docs/ideas.md records for the 3-slot pool — that is a pre-existing
+  regression on master, unrelated to the RX pools (an undersized esp-radio
+  pool presents as a crash or dropped frames, never as a clean
+  `ERR_CONNECTION_REFUSED` before any body). Filed as **Gitea #92**.
+
+New tool: **`tools/rx-stress.mjs`** — the DDP+HTTP RX gate, written
+because this stress has now been hand-rolled twice; it also watches
+`slot` for the silent boot-loop rollback. Builds verified for
+athom-music, pixelblaze-v3, c3-devkit, c6-devkit and athom+small-chip.
+The post-rebase merged build was re-OTA'd and reproduces the same
+104,832 B idle figure plus a clean 60 s stress, so the number survives
+the day's other merges. Device left as found: 60 px WS2812, brightness 4,
+playlist empty and stopped, running the merged build.
+
 ## 2026-08-22 — Perlin family fitted to the oracle and matched bit-for-bit
 ## (Gitea #65)
 
@@ -82,6 +154,7 @@ builds, image-check ok, app 946,432 B (90.26% of slot), stack-check ok.
 Follow-up: the output-verifier sweep (#84 filing) should re-judge the two
 pairs as renderable once it lands/reruns.
 
+## 2026-08-22 — Hygiene sweep: stale wasm goldens, the clippy deny that
 ## couldn't hold, and an indexed library sweep (#85, #79, #67)
 
 Three small things that had each been quietly blocking a gate.
