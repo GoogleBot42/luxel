@@ -1,0 +1,70 @@
+{
+  "slug": "scrolling-text-marquee-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides scroll a right-to-left text marquee on the same 8-cell character pitch and the same 96-cell loop, but the port draws its glyphs at half the original's size (2 chars across the panel vs 1), drops the 'E' entirely so it reads \"HLLO?!?\" instead of \"Hello?!?\", uses a thin uppercase-only font instead of the original's bold mixed-case one, defaults to a washed-out peach instead of saturated orange, and is time-based where the original is frame-stepped.",
+  "observations": [
+    "Default rig is grid 16x16. Both sides render, no compile or runtime errors, no sensor binding (wantsSensors false on both), fully deterministic: seeds 1, 7 and 1234 produce identical stats on both sides.",
+    "TEXT CONTENT. Reconstructed each side's message bitmap by stitching the rightmost font column frame-by-frame (orig: --grid 8x8 --fps 20, where it advances exactly 1 font cell/frame; port: --grid 16x16 --fps 48 dumped every 1/24 s, where it advances exactly 1 font cell/dump). ORIGINAL message = 8 glyphs 'H','e','l','l','o','?','!','?' = \"Hello?!?\". PORT message = 7 glyphs 'H','L','L','O','?','!','?' = \"HLLO?!?\" — the E/e is not blank, it is absent: the glyph slot is not reserved, so every later glyph shifts one 8-cell slot to the left.",
+    "FONT CASE + WEIGHT. Original renders true mixed case (uppercase H, lowercase e/l/l/o) with 2-cell-thick strokes: its 'H' is `##..##` x3 / `######` / `##..##` x3 in a 6x7 box, its 'l' is a 4-wide serif'd lowercase l, its '!' is 4 wide. Port renders uppercase-only with 1-cell strokes: 'H' is `#....#` x3 / `######` / `#....#` x3, 'L' is a 6-wide uppercase L, '!' is 2 wide. Glyph pitch is 8 cells and the loop is 96 cells on BOTH sides, so the font metrics agree in cell units — only the glyph artwork and the cell-to-panel scale differ.",
+    "GLYPH SCALE (the headline structural gap). Both sides are resolution-independent, but onto different logical canvases: the ORIGINAL maps 8 font cells across the panel width and 8 down (16x16 rig -> 2x2 device px per font cell; 64x64 rig -> 8x8 device px; verified by dump: profiles quantize into exact 2-px and 8-px blocks). The PORT maps 16 font cells across and 16 down (16x16 rig -> 1x1 device px; 64x64 rig -> 4x4 device px). Net effect on the default 16x16 rig: original shows ~1 character at a time, 14 px tall, top-aligned in rows 0-13 of 16; port shows ~2 characters at a time, 7 px tall, vertically centred in rows 4-10 of 16. Port lit-pixel count is ~30 vs the original's ~104 on a matched frame (t=6 s, 16x16).",
+    "COLOR. Exact dumped RGB, constant over the whole run on both sides (no palette walk, no gradient): original text pixels are (255,94,25) — HSV h~0.05, s~0.90, v=1.0, a saturated orange. Port text pixels are (255,208,165) — HSV h~0.08, s~0.35, v=1.0, a pale peach that reads almost white. Background is exact (0,0,0) on both. Mean brightness over 120 s at 20 fps: orig 23, port 13 (both from smaller lit area and the lower saturation).",
+    "MOTION / DIRECTION. Both scroll right-to-left. Measured by frame-to-frame column-profile cross-correlation on a 64x64 rig: original moves exactly -8 device px (= 1 font cell) per rendered frame; port moves -96 device px/s (= 24 font cells/s) regardless of frame rate.",
+    "FRAME-RATE COUPLING (real port bug, opposite of the usual direction). Original is FRAME-STEPPED: 80 px/s at --fps 10, 160 px/s at --fps 20, ~320 px/s at --fps 40, and its full message loop is 96 FRAMES at every rate (19.2 s at 5 fps, 4.8 s at 20 fps). Port is TIME-BASED: 96 px/s at 10, 20 and 40 fps, and its loop is 4.0 s at every rate (20 frames at 5 fps, 80 frames at 20 fps). The two rates coincide only near 24 fps. Consequence: at the survey rate (5 fps) the original takes 19.2 s per pass and the port 4.0 s — a 4.8x apparent speed gap; at the default 20 fps the gap narrows to 4.8 s vs 4.0 s (20%).",
+    "CYCLE STRUCTURE at 20 fps over 120 s (2400 frames): original = 70 frames of visible text + 26 frames fully dark, repeating on an exact 96-frame period, unchanged from frame 0 to 2400. Port = 59 frames text + 21 frames dark on an exact 80-frame period, likewise unchanged. Neither side decays, freezes or drifts — both brightnessTrend 'volatile' purely from the text/gap alternation; steady state confirmed at --skip 120 and over 240 s.",
+    "ORIGINAL-ONLY LOW-FPS ARTEFACT. In the 240 s / 5 fps survey the original twice froze on a single half-glyph (a static 'le') for exactly 164 frames (32.8 s) at t=115.4 and t=189.6, and once went fully dark for 190 frames (38.0 s) at t=36.4 — motion exactly 0 across those stretches (verified with --skip 120 and --skip 50 renders). None of this happens at --fps 20 over 2400 frames, so it is an artefact of the original's frame-coupled scroll accumulator at low frame rates, not a port defect; the port cycles normally throughout those windows.",
+    "CONTROL SURFACE MISMATCH. The original exposes NO controls at all (meta.json sides.orig.controls = []). The port invents two: 'sliderSpeed' (slider, label Speed) and 'hsvPickerTextColor' (hsvPicker, label TextColor). Both probe responsive (maxDeltaLit 209.3 and 124.3 respectively).",
+    "The port's added TextColor dial can reproduce the original exactly: with --controls-port \"hsvPickerTextColor=0.05,0.9,1\" the port's text pixels dump as (255,94,25), byte-identical to the original's colour. So only the port's DEFAULT colour is wrong, not its colour path.",
+    "The port's untouched default speed sits below its own slider range's low end in period terms: untouched loop = 80 frames at 20 fps, while sliderSpeed=0.25 gives 44 frames, 0.5 gives 23, 0.75 gives 15-16, 1.0 gives 11-12, and 0.0 is near-frozen (one 1-frame step every ~5 frames). Period scales as ~11/v frames, so the untouched default corresponds to v~0.14 and the original's 96-frame loop would need v~0.115."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "control does not exist on the original — the original has no controls; its scroll rate is fixed at exactly 1 font cell per rendered frame",
+      "portEffect": "live continuous speed control on the port only. Message-loop period at 20 fps: v=0 near-frozen (1-frame step every ~5 frames), v=0.25 -> 44 frames, v=0.5 -> 23, v=0.75 -> 15.5, v=1.0 -> 11.5; period ~ 11/v. Untouched default = 80 frames. v~0.115 reproduces the original's 96-frame loop at 20 fps (but not at other frame rates, since the original is frame-stepped and the port is time-based).",
+      "matches": false
+    },
+    {
+      "name": "hsvPickerTextColor",
+      "origEffect": "control does not exist on the original — its text colour is hard-fixed at RGB (255,94,25) for the whole run",
+      "portEffect": "live HSV text-colour control on the port only; sets the single flat text colour. Setting 0.05,0.9,1 makes the port's text exactly (255,94,25), matching the original. The port's untouched default is (255,208,165) = h~0.08 s~0.35 v=1.0.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Restore the missing 'E' glyph. The original scrolls \"Hello?!?\"; the port scrolls \"HLLO?!?\" — the E/e is dropped from the glyph table and its 8-cell slot is not even reserved, so all later glyphs shift one slot left. Verify by stitching the rightmost font column per frame: the port should show 8 glyphs per 96-cell loop, not 7.",
+    "Double the glyph scale. The original maps 8 font cells across the panel and 8 down (one character fills the display, 14 of 16 rows tall on the default 16x16 rig, top-aligned in rows 0-13). The port maps 16x16 font cells, so its text is exactly half-size: ~2 characters visible, only 7 of 16 rows tall, vertically centred in rows 4-10. Halve the port's logical canvas to 8x8 font cells and top-align the 7-row glyph box so rows 0-13 are used on a 16x16 panel.",
+    "Use the original's bolder mixed-case font, not a thin uppercase one. Original strokes are 2 font cells thick ('H' = `##..##`/`######`/`##..##` in a 6x7 box) and it renders true lowercase (e, l, l, o); its 'l' is 4 cells wide and its '!' is 4 cells wide. The port uses 1-cell strokes, all-caps substitutes, and a 2-cell-wide '!'. Glyph pitch (8 cells) and loop length (96 cells) are already correct — do not change those.",
+    "Fix the default text colour. Original text is exactly RGB (255,94,25) = HSV (0.05, 0.90, 1.0), a saturated orange; the port defaults to (255,208,165) = HSV (~0.08, 0.35, 1.0), a near-white peach. The port's own hsvPickerTextColor set to 0.05,0.9,1 already reproduces the original byte-for-byte, so only the default/initial value needs changing (saturation is the big miss: 0.35 vs 0.90).",
+    "Match the original's time model. The original advances exactly ONE font cell per RENDERED FRAME (80 px/s at 10 fps, 160 at 20, 320 at 40 on a 64-wide grid; loop = 96 frames at every rate). The port advances 24 font cells per SECOND (96 px/s, loop = 4.0 s) at every rate. If the port keeps its time-based scroll it will only agree with the original near 24 fps; to match, step one cell per frame (and note the original's per-frame step is what makes its 5 fps behaviour so much slower than the port's).",
+    "Consider dropping the two invented controls, or at least defaulting them to the original's fixed behaviour. The original exposes NO controls; the port adds sliderSpeed and hsvPickerTextColor. If they are kept for usability, set the defaults so the untouched render equals the original: text colour HSV (0.05,0.90,1.0), and a speed whose untouched loop is 96 frames at 20 fps (roughly sliderSpeed 0.115 on the port's current curve).",
+    "No action needed on: scroll direction (both right-to-left), character pitch (8 cells both), loop length (96 cells both), background black (exact 0,0,0 both), determinism/seed independence (both), or steady state (both stable and periodic over 240 s with no decay or freeze). The original's 32.8 s freezes and 38 s blackout seen only in 5 fps surveys are an artefact of its own frame-coupled accumulator at low frame rates — do not reproduce them."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "dark50",
+    "frozen120",
+    "long20",
+    "probe",
+    "grid64",
+    "dump64",
+    "dump16",
+    "speed64",
+    "fps10",
+    "fps40",
+    "msg-orig",
+    "msg-port",
+    "ctl-color-orange",
+    "ctl-speed-0",
+    "ctl-speed-0.25",
+    "ctl-speed-0.5",
+    "ctl-speed-0.75",
+    "ctl-speed-1",
+    "ctl-bestmatch",
+    "seed7",
+    "seed1234"
+  ]
+}

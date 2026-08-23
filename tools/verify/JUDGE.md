@@ -82,8 +82,12 @@ how much simulated time you actually bought. Two consequences:
   `feedback`.
 - The low-fps survey can make a frame-stepped pattern look degenerate: when its
   per-frame step lands on an exact cycle at 5 fps, the rhythm image collapses
-  to flat bands and it reads as frozen when it is not. Before calling either
-  side broken from a survey-rate run, re-check that stretch at `--fps 20`.
+  to flat bands and it reads as frozen when it is not. Worse, it can INVENT
+  whole regime structure on a healthy pattern — a frame-coupled scroll
+  accumulator at 5 fps produced two 33 s "freezes" and a 38 s "blackout"
+  that simply do not exist at 20 fps. Before calling either side broken OR
+  chasing a regime from a survey-rate run, re-check that stretch at
+  `--fps 20`.
 - TICK-QUANTISED patterns (a cursor/step that advances on a fixed sub-second
   tick rather than moving continuously) collapse onto the survey's frame grid:
   at 5 fps a 0.30 s tick and a 0.35 s tick BOTH round to 0.4 s, so the survey
@@ -122,6 +126,13 @@ parity of pixels per frame, as in pond/wave sims) MOIRÉ badly under the
 PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
 or ring structure that is pure display artefact. Verify any structural
 claim on such a pattern from `--dump` numbers, never from the images.
+
+Cross-correlation shift scans SATURATE at their search bound: a scan over
+±6 px that returns exactly -6 every frame is pinned, not measuring — the
+true shift may be larger. A flat result exactly at the bound means widen
+the radius, never report it as a constant step. And glyph/text patterns
+must be measured from `--dump`s, never from contact sheets — sheet cells
+are narrow enough that one glyph spanning cells reads as a whole word.
 
 Centroid tracking is INVALID near canvas edges: a feature that slides
 in/out of frame gets its visible centroid dragged toward the canvas
