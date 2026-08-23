@@ -91,3 +91,7 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - `BUILTINS` in `crates/luxel-core/src/vm.rs` is append-only; never reorder.
 - A serial flash leaves the assets partition stale → follow with
   `tools/deploy.sh <ip> --assets-only`.
+- `compile failed: unknown identifier` from `web/tools/lxp.mjs` = stale
+  build artifacts: the main checkout's `web/public/luxel.wasm` and
+  `target/*/luxel` lag master (nobody rebuilds them). `npm run wasm` /
+  rebuild in your worktree; don't debug the pattern.
