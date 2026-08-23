@@ -1,0 +1,98 @@
+{
+  "slug": "perlin-fire-wind-tunnel",
+  "verdict": "close",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same log-spiral 'wind tunnel' warp with Perlin noise flowing through it — geometry, motion, dial set and dial directions all match — but the port's palette desaturates far too aggressively (sepia/cream instead of saturated fire orange), its Mode slider is quantized into 4 equal quarters where the original uses thirds, and its untouched default lands on a different mode than the original's.",
+  "observations": [
+    "RIG: default is grid 16x16 / 256 px. Both sides compile and run clean (no compileError/runtimeError), neither binds sensors (wantsSensors false on both), and both are fully deterministic — seeds 1, 7 and 1234 produced byte-identical stats on both sides (mode 0.1, 20 s @ 5 fps).",
+    "STRUCTURE (matched modes): at --grid 48x48, orig mode 2 (sliderMode=0.8) and port mode 2 (sliderMode=0.6) draw the same logarithmic spiral with the same fine detailed core, same arm curvature and the same handedness; the '2-centre vs 1-centre spiral' impression from the 16x16 contact sheet is a downsampling artefact that disappears at 48x48. Both sides rasterize at native grid resolution (feature count constant, detail scales with the grid) — resolution behaviour matches.",
+    "MOTION: the 12-frame filmstrip at t=22.00-22.55 s (20 fps, sliderMode=0.1 both sides) shows the same rotation rate, direction and smoothness on both. Both sides are TIME-based, not frame-stepped: rendering mode 0.1 at 5/10/20/40/80 fps left mean brightness pinned at orig 31 / port 15 while motion halved with each doubling of fps on both sides. No frame-rate coupling on either side.",
+    "COLOR — the dominant defect. Measured over 4 dumped frames per mode at 48x48, saturation vs value: ORIG holds sat = 1.00 for V <= 0.5 and falls only to 0.76 at V = 1.0 (i.e. sat ~= min(1, 1.25 - 0.5*V)); PORT starts at sat 0.84 at V ~= 0.05 and falls roughly linearly to 0.25 at V = 1.0. Identical curves in all four modes. Net effect: the original is black-to-saturated-amber fire; the port is black-to-cream/sepia, and everything above mid brightness washes to near-white.",
+    "COLOR: whole-frame mean saturation (pixels with V > 0.15, mode 0.1, 3 dump times) is orig 0.93 vs port 0.48 at every sliderHue setting tested (0, 0.25, 0.5, 0.75) — the desaturation is a constant of the palette, not hue-dependent.",
+    "COLOR: the hue-with-brightness ramp is compressed on the port. Orig hue runs 14 deg (dark) -> 25 -> 31 -> 36 deg (bright); port runs 13 -> 20 -> 25 -> 28 deg. Same direction and same red-orange family, but ~15 deg of span instead of ~22 deg.",
+    "MODE SLIDER MAPPING DIVERGES. Original quantizes at thirds: mode 0 for [0, 0.333), mode 1 for [0.333, 0.667), mode 2 for [0.667, 1.0), and a distinct 4th look ONLY at exactly sliderMode=1.0 (0.99 still renders mode 2). Port quantizes at quarters, boundaries confirmed at exactly 0.25, 0.50 and 0.75 (0.24 -> mode 0, 0.26 -> mode 1; 0.49 -> mode 1, 0.51 -> mode 2; 0.74 -> mode 2, 0.76 -> mode 3). Consequence: at any mid-slider setting the two sides show DIFFERENT modes — e.g. sliderMode=0.5 gives the original its bright inverted mode 1 (mean brightness 157) and the port its dark mode 2 (mean 16).",
+    "UNTOUCHED DEFAULTS DIVERGE, and the difference is large. Untouched orig is byte-for-byte its mode 1: 60 s @ 5 fps stats are identical (meanBrightness avg 160.4, min 110, max 165, trend steady, zeroMotionFrames 54, motion avg 6.8) to a run with sliderMode=0.5 — a full-screen saturated orange field (255,178,63 clipped over most of the frame) with thin dark curl tendrils. Untouched port is byte-for-byte its mode 0 (meanBrightness avg 42.7, volatile, zeroMotionFrames 1, motion avg 18.4) — a dark field with a brown/cream spiral. Out of the box the two look like different patterns.",
+    "BRIGHTNESS per matched mode pair (60 s @ 5 fps, meanBrightness avg): mode 0 orig 27.6 / port 42.7; mode 1 orig 160.4 / port 181.7; mode 2 orig 19.8 / port 28.4; mode 3 (orig sliderMode=1.0 vs port 0.9) orig 27.7 / port 16.6. Modes 0-2 are in the right ballpark (the port reads brighter mostly because its washed-out palette pushes G and B up); mode 3 is the one real level mismatch — the port's top mode is roughly half as bright and half as active (motion avg 9.6 vs 20.9) as the original's.",
+    "MODE 1 CLIPPING: the original's inverted mode saturates hard — meanBrightness min 110 / max 165 with 54 of 300 captured frames posting motion 0, because most of the frame sits clipped at 255,178,63. The port's equivalent (mean 181.7, max 222, only 3 zero-motion frames) does not clip the same way; its bright field is a paler cream that keeps varying. Same look family, different ceiling behaviour.",
+    "TEMPORAL RATE: whole-field spatial-autocorrelation vs lag (mean over 120 dumped frames, 16x16, mode 0.1) gives half-decorrelation times of orig 0.4 s / port 0.5 s at sliderSpeed=0.25, orig 0.3 s / port 0.4 s at 0.5, and 0.1 s on both at 1.0. The port's field therefore evolves ~25-30% slower than the original at low and mid Speed, converging at maximum Speed. Visible as a slightly lazier flow, not as a wrong pattern.",
+    "NOISE REALIZATION differs (expected). A time-rescale scan corr(orig[t], port[k*t]) over k = 0.30..3.00 on the value field never exceeds 0.11, and lag-0 correlation is -0.01: the two sides run different Perlin fields, so pixel-level alignment is meaningless. Judged on statistical character instead — feature scale, contrast distribution and flow rate all agree.",
+    "STEADY STATE is healthy on both: a --skip 200 --seconds 20 --fps 20 window (mode 0.1) gives orig mean 29.1 / port 37.9, both volatile, neither decaying, neither frozen (orig zeroMotionFrames 8/400, port 37/400 — the port's slightly higher count matches its slower evolution). A 240 s @ 2 fps survey shows no long-period regime or mode rotation on either side beyond the noise flow itself; the pattern has no timed mode cycle, so the mode is purely dial-selected.",
+    "CONTROL SURFACE: both sides expose 6 controls in the same order with the same kinds (5 sliders + 1 showNumber). One NAME mismatch: the original's density slider is named 'sliderdensity' (label 'density'), the port's is 'sliderDensity' (label 'Density'). Same effect, but the identifier and label differ, so saved-value restore and any /api/vars-style access by name will not line up."
+  ],
+  "dials": [
+    {
+      "name": "sliderHue",
+      "origEffect": "Rotates the whole palette. Mean hue over lit pixels (V>0.15) at slider 0 / 0.25 / 0.5 / 0.75 = 27.6 / 118.0 / 207.8 / 297.8 deg — a clean full 360 deg over the slider range, 0 and 1 identical (wraps). Colour stays deeply saturated (mean sat 0.93) at every setting.",
+      "portEffect": "Same rotation, same rate: 22.3 / 112.4 / 202.4 / 292.3 deg at the same settings, i.e. a constant ~5 deg offset from the original and the same wrap at 0/1. But mean saturation is 0.48 at every setting, so where the original goes deep blue at 0.5 the port goes pale ice-blue/white.",
+      "matches": true
+    },
+    {
+      "name": "sliderMode",
+      "origEffect": "Discrete mode selector quantized at THIRDS: mode 0 (dark spiral, amber) for [0, 0.333); mode 1 (bright saturated orange field with thin dark curl tendrils, mean brightness ~160) for [0.333, 0.667); mode 2 (darker higher-contrast spiral, mean ~20) for [0.667, 1.0); a fourth, finer-cored bright spiral (mean ~28) reachable ONLY at exactly 1.0.",
+      "portEffect": "Same four looks exist, but quantized at QUARTERS with boundaries measured at exactly 0.25 / 0.50 / 0.75, so all four are evenly reachable and every mid-slider value selects a different mode than the original does. The port's 4th mode (>=0.75) is also notably dimmer/slower than the original's (mean brightness 16.6 vs 27.7, motion 9.6 vs 20.9 over 60 s @ 5 fps).",
+      "matches": false
+    },
+    {
+      "name": "sliderdensity (orig) / sliderDensity (port)",
+      "origEffect": "Sets spiral turn count / spatial frequency. At 0 the field is one smooth broad spiral arm that pulses bright-to-black; at 1 it becomes a tight multi-turn maze of thin arms. Motion avg rises 19 -> 19 -> 25 across 0 / 0.5 / 1 (20 s @ 5 fps, mode pinned to 0.1).",
+      "portEffect": "Identical character and direction — smooth single arm at 0, dense multi-turn maze at 1 — with motion avg 15 -> 23 -> 30 across the same settings. Slightly stronger response than the original at the top end, but the same knob.",
+      "matches": true
+    },
+    {
+      "name": "sliderWind",
+      "origEffect": "Subtle field warp; no effect on brightness level (mean 29 at wind 0, 0.5 and 1) but a real, monotonic change in the image. Mean absolute pixel difference against wind=0, measured at three dump times: 9.1 / 22.4 / 29.4 at wind 0.25 / 0.75 / 1 (t=2 s), 3.0 / 8.0 / 10.1 (t=6 s), 3.4 / 8.9 / 11.6 (t=10 s). Live in every mode.",
+      "portEffect": "Same behaviour: brightness-neutral, monotonic warp. Diffs against wind=0 are 1.8 / 4.4 / 5.3 (t=2 s), 6.3 / 16.3 / 20.5 (t=6 s), 4.5 / 12.9 / 16.3 (t=10 s) — same order of magnitude, same monotonicity, timing of the strongest response differs only because the two noise fields differ.",
+      "matches": true
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Monotonically speeds up field evolution. Motion avg 4 / 4 / 5 / 5 / 5 / 7 / 13 / 20 across sliderSpeed 0 / 0.1 / 0.4 / 0.5 / 0.6 / 0.75 / 0.9 / 1 (12 s @ 20 fps, mode 0.1). Field half-decorrelation time 0.4 s / 0.3 s / 0.1 s at speed 0.25 / 0.5 / 1.",
+      "portEffect": "Same monotonic curve, motion avg 2 / 2 / 3 / 3 / 4 / 5 / 10 / 27 across the same settings; half-decorrelation 0.5 s / 0.4 s / 0.1 s. So the port runs ~25-30% slower at low and mid Speed and slightly faster at full Speed — the knob works, the response curve is a little steeper.",
+      "matches": true
+    },
+    {
+      "name": "showNumberMode",
+      "origEffect": "Display-only numeric readout of the current mode; present, not probed (display kind).",
+      "portEffect": "Present with the same name and kind.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "PALETTE SATURATION is the single biggest visible gap and should be fixed first. The original's saturation is flat at 1.0 for the lower half of the value range and then falls only gently, hitting 0.76 at full brightness (measured curve, sat at V = 0.05,0.15,...,0.95: 1.00 1.00 1.00 1.00 0.99 0.94 0.89 0.84 0.81 0.76 — i.e. sat ~= min(1, 1.25 - 0.5*V)). The port's curve is 0.84 0.74 0.62 0.55 0.49 0.43 0.38 0.34 0.30 0.25 — it never reaches full saturation even in the shadows and washes to near-white at the top. Reshape the port's saturation-vs-value ramp to hold 1.0 up to V ~ 0.5 and bottom out around 0.75, and the sepia/cream cast becomes fire orange.",
+    "HUE RAMP: the original's hue climbs ~22 deg from dark to bright (14 deg -> 36 deg); the port's climbs only ~15 deg (13 deg -> 28 deg). Widen the port's brightness-driven hue shift by roughly 1.5x so its hot pixels reach amber/yellow-orange rather than stopping at orange. The base hue itself is right (both start ~13-14 deg) and the Hue dial's 360 deg rotation is already exact.",
+    "MODE SLIDER QUANTIZATION: the port splits sliderMode into four equal quarters (boundaries at 0.25/0.50/0.75). The original splits it into THIRDS (boundaries at 1/3 and 2/3) and reaches its fourth look only at exactly sliderMode = 1.0. Whether or not that is a quirk of the original, the port must reproduce it — as it stands, every mid-slider value selects a different mode on the two sides (sliderMode=0.5 is the original's bright inverted mode and the port's dark mode 2). Match the original's thirds mapping including the exactly-1.0 edge case.",
+    "UNTOUCHED DEFAULT MODE: the original's default state renders its mode 1 — a full-screen saturated orange field (most pixels clipped at 255,178,63) with thin dark curl tendrils, mean brightness 160, brightnessTrend steady. The port's default renders its mode 0 — a dark field with a brown spiral, mean brightness 43, volatile. Set the port's mode-backed global so that an untouched load produces the bright inverted look, not the dark spiral.",
+    "MODE 1 CEILING: with the saturation fix in place, check that the port's inverted mode clips the way the original's does. The original spends most of that mode pinned at its palette's top colour (meanBrightness min 110 / max 165, 54 of 300 frames with zero motion at 5 fps); the port's equivalent tops out at 222 with only 3 zero-motion frames, i.e. it keeps modulating where the original is flat-out saturated.",
+    "TOP MODE LEVEL: the port's highest mode (sliderMode >= 0.75) is about half as bright and half as active as the original's fourth look (mean brightness 16.6 vs 27.7, motion avg 9.6 vs 20.9 over 60 s @ 5 fps). Once the mode mapping is corrected, re-check this mode's brightness/contrast against the original at sliderMode = 1.0.",
+    "SPEED RESPONSE: the port's field evolves ~25-30% slower than the original at low-to-mid Speed (half-decorrelation 0.5 s vs 0.4 s at Speed 0.25; 0.4 s vs 0.3 s at Speed 0.5) while matching at Speed 1.0. Scale the low end of the Speed mapping up by ~1.3x so the whole range lines up rather than only the top.",
+    "CONTROL NAME: rename the port's 'sliderDensity' to the original's exact identifier 'sliderdensity' (lowercase d, label 'density'). Everything else in the control surface — order, kinds, the other four names — already matches.",
+    "NOT a defect, do not chase: the two sides run different Perlin realizations (best time-rescale correlation over k = 0.30..3.00 is only 0.11), so per-pixel or per-frame alignment will never match and should not be a fix target. Feature scale, contrast distribution and flow character already agree.",
+    "ALSO already correct, leave alone: fps-invariance (both time-based, verified at 5/10/20/40/80 fps), seed-independence (seeds 1/7/1234 identical), resolution behaviour (both rasterize at native grid resolution; verified at 16x16 and 48x48), steady state (no decay or freeze out to t = 240 s), and the Hue, density, Wind and Speed dials' directions."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "mode-0.0", "mode-0.1", "mode-0.2", "mode-0.3", "mode-0.4", "mode-0.5", "mode-0.6", "mode-0.7", "mode-0.8", "mode-0.9", "mode-1.0",
+    "fmode-0.05", "fmode-0.15", "fmode-0.25", "fmode-0.32", "fmode-0.34", "fmode-0.36", "fmode-0.45", "fmode-0.55", "fmode-0.62", "fmode-0.65", "fmode-0.68", "fmode-0.72", "fmode-0.75", "fmode-0.78", "fmode-0.85", "fmode-0.95", "fmode-0.99",
+    "pb-0.24", "pb-0.26", "pb-0.28", "pb-0.30", "pb-0.49", "pb-0.51", "pb-0.53", "pb-0.74", "pb-0.76",
+    "pair-m0", "pair-m1", "pair-m2", "pair-m3",
+    "motion-m0",
+    "dump-mode0", "dumpcol-m0",
+    "fps5-m0", "fps10-m0", "fps20-m0", "fps40-m0", "fps80-m0",
+    "detail", "d1", "d2", "d3",
+    "ctl-hue-0", "ctl-hue-0.5", "ctl-hue-1",
+    "hdump-0", "hdump-0.25", "hdump-0.5", "hdump-0.75",
+    "ctl-speed-0", "ctl-speed-0.5", "ctl-speed-1",
+    "spd-0", "spd-0.1", "spd-0.25", "spd-0.4", "spd-0.5", "spd-0.6", "spd-0.75", "spd-0.9", "spd-1",
+    "ctl-wind-0", "ctl-wind-0.5", "ctl-wind-1",
+    "ctl-wind-m1-0", "ctl-wind-m1-1", "ctl-wind-m2-0", "ctl-wind-m2-1", "ctl-wind-m3-0", "ctl-wind-m3-1",
+    "wdump-0", "wdump-0.25", "wdump-0.75", "wdump-1",
+    "ctl-dens-0", "ctl-dens-0.5", "ctl-dens-1",
+    "vseries-m0", "vsp-0.25", "vsp-0.5", "vsp-1",
+    "seed1", "seed7", "seed1234",
+    "late-m0"
+  ]
+}

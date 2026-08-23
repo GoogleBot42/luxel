@@ -1,0 +1,93 @@
+{
+  "slug": "perlin-fire",
+  "verdict": "broken",
+  "score": 2,
+  "confidence": "high",
+  "summary": "The port renders a recognizable perlin fire whose noise field lines up remarkably well with the original's, but it hard-fails at absolute frame 512 with 'array element budget exceeded (arrays are never freed)' and then freezes on a single frame forever; even before that it is ~3-4x too cold (never reaches the white-hot top of the palette), rises ~3x too fast at mid dial, defaults to the wrong mode, and quantizes the Mode dial into 4 bands of which two are byte-identical.",
+  "observations": [
+    "FATAL: port throws a runtime error 'array element budget exceeded (arrays are never freed)' at port source line 43 col 3 (fn 6). The failure is FRAME-COUNTED, not time-based: it fires at absolute frame 512 at --fps 20 (25.6 s), --fps 40 (12.8 s) and --fps 100 (5.1 s), and at warmup frame 512 in a --skip 90 run. The original never errors (checked out to 2000 frames).",
+    "After the error the port is permanently frozen: in leak-s60-f20 (1200 frames @20 fps) the port's meanBrightness last changes at frame 508 and is then pinned at exactly 9 with motion summing to 0 over frames 512-1199, while the original keeps animating to the last frame (orig last brightness change at frame 1198, motion sum 3560 over the same range). Same result with dials set (leak-dialed, sliderMode=0.3): port last change frame 509, orig frame 899. A viewer watching this on hardware sees a frozen fire within seconds.",
+    "Control SURFACE matches exactly on both sides: sliderMode (slider), showNumberMode (showNumber), sliderScale, sliderRisingSpeed, sliderMorphSpeed. No missing or invented dials.",
+    "MODE QUANTIZATION DIFFERS. Orig switches at sliderMode = 1/6, 1/2, 5/6 (bracketed to 0.16/0.17, 0.49/0.51, 0.83/0.84 by byte-identical frame hashes) = round(v*3), giving 4 distinct modes. Port switches at 0.25 / 0.50 / 0.75 = floor(v*4). So the two sides select different modes over most of the dial's travel (e.g. at v=0.2 orig is in mode 1, port still in mode 0; at v=0.8 orig is in mode 2, port in mode 3).",
+    "PORT COLLAPSES TWO MODES. Port bands [0,0.25) and [0.50,0.75) render BYTE-IDENTICAL (frame hash 1970d3f3 at every sampled value, and again 'b04fd031' with all other dials untouched) - so the port has only 3 distinct looks where the original has 4. The original's modes 0 and 2 are genuinely distinct (hashes 8c2c4a98 vs 84ddd1e5) though similar in character: same mean brightness (33) and same palette, mode 2 flickers a little faster (12 s motion 5 vs 3; shape autocorr at 0.5 s lag 0.69 vs 0.74).",
+    "UNTOUCHED DEFAULT MODE IS WRONG. With only sliderMode set and everything else untouched, the original's untouched render is byte-identical to sliderMode=0.3 (mode index 1) - the big white-hot flame. The port's untouched render is byte-identical to sliderMode=0.1 AND 0.6 (its mode index 0/2) - dim smooth red blobs. So out of the box the two sides are showing different modes of the pattern.",
+    "HEADLINE COLOR/BRIGHTNESS GAP. Untouched baseline: orig meanBrightness 110 (R137 G113 B79), port 10 (R27 G3 B0), i.e. ~11x dimmer at default. Port's blue channel is 0 in every default and per-mode render; the original's is 79-85. Across all 62 dumped runs the original's max RGB is (255,255,255) while the port's is (224,224,91) - the port essentially never reaches the white-hot tip of the fire ramp.",
+    "The PALETTE CURVE ITSELF is nearly right; only the heat DISTRIBUTION is wrong. Binning pixels by R and reading mean G: orig R64-95 -> G15, R96-127 -> G44, R128-159 -> G88, R160-191 -> G136; port R64-95 -> G10, R96-127 -> G28, R128-159 -> G61, R160-191 -> G109. Same black->red->orange->yellow family, port slightly less yellow. The difference is that the port's heat never populates the high bins: in mode 1 (3 frames, 768 px) the original puts 257 px (33%) in R224-255 with B~244, while the port's highest occupied bin is R160-191 with only 10 px and B=0.",
+    "R quantiles per mode (3 dumped frames each, dials at 0.5) - port sits at roughly 0.25-0.55x the original at every quantile: mode0 orig p50/p75/p90/p99/max 49/98/153/255/255 vs port 12/46/80/135/168; mode1 orig 135/255/255/255/255 vs port 2/26/86/164/185; mode3 orig 19/67/114/227/255 vs port 1/11/37/92/130. Lit-pixel fraction also drops: mode1 orig 92% lit vs port 62%.",
+    "MODE 1 (the default mode) is the worst structural mismatch. Orig mode 1 is a single huge saturated white-hot flame body filling most of the 16x16 grid with amber fringes (mean 111, median luminance 70, p90 255). Port mode 1 is a sparse fine-grained dark-red speckle with a handful of yellow pixels (mean 9, median luminance 1, p90 33) - a visibly different texture, not just a dimmer version.",
+    "NOISE FIELD MATCHES WELL. Re-rendered on --grid 48x48 at sliderMode=0.1 the two sides draw the SAME cellular blob layout in the same places with the same envelope (fire concentrated in a centre column, dark at the left/right edges). Spatial half-correlation width: orig 8.8 px vs port 9.8 px at Scale 0.5. This says the underlying perlin generation and spatial mapping are essentially correct and the damage is in the heat->color mapping, the mode dispatch and the time scaling.",
+    "RESOLUTION INDEPENDENCE MATCHES. Feature half-width scales with the grid on both sides: ~2.7 px at 16x16 and ~9 px at 48x48 (ratio ~3 = 48/16) for orig and port alike. Neither side rasterizes at native resolution.",
+    "MOTION IS ~3x TOO FAST ON THE PORT. Vertical drift measured by sub-pixel whole-frame correlation (mode 0, all dials 0.5, 20 fps): orig -4.0 rows/s (lag 1) / -5.4 (lag 2); port -16.4 / -16.1. Lag-by-lag the orig accumulates linearly at -0.25 rows/frame out to lag 20 (corr still 0.82), while the port accumulates at ~-0.8 rows/frame and has fully decorrelated by lag 7.",
+    "NO FRAME-RATE COUPLING ON EITHER SIDE. Rise speed measured at 10 / 20 / 40 fps: orig ~-5 to -6.7 rows/s at all three; port ~-16.7 / -16 / -13 to -20 rows/s at all three. Both are time-based; the port is simply 3x fast. (Note the port's low `motion` stat - 1-2 vs the orig's 12 - is an artefact of its dimness, not slowness; motion/meanBrightness is 0.2 for the port vs 0.09 for the orig.)",
+    "Survey (60 s @5 fps) and a 120 s @4 fps run show NO regime/mode rotation on either side - both are single-regime flicker with a static centre-bright, edge-dark column envelope, confirmed on the rhythm images. No long-period structure was missed.",
+    "Seeds 1, 7 and 1234 give the same statistics on both sides (orig mean 111 motion 12; port mean 10 motion 0) - neither side is seed-sensitive, so no one-seed fluke.",
+    "Rising=0 + Morph=0 freezes BOTH sides correctly (motion 1 orig / 0 port), so the port's frame-512 freeze is a genuine fault, not a legitimate still mode."
+  ],
+  "dials": [
+    {
+      "name": "sliderMode",
+      "origEffect": "4 distinct modes selected by round(v*3), boundaries at 1/6, 1/2, 5/6. Mode 0 (mean 33): mottled amber fire with white sparks. Mode 1 (mean 111): huge saturated white-hot flame body - this is also the untouched default. Mode 2 (mean 33): like mode 0 but flickering faster (12 s motion 5 vs 3). Mode 3 (mean 21): dimmer, sparklier, finer texture with occasional white pixels.",
+      "portEffect": "4 bands selected by floor(v*4), boundaries at 0.25/0.50/0.75 - so boundaries do not line up with the original's. Bands 0 and 2 are byte-identical, giving only 3 distinct looks. Band 0/2 (mean 10) is a dim smooth red blob field and is the untouched default. Band 1 (mean 9) is a fine dark-red speckle, nothing like the orig's white-hot mode 1. Band 3 (mean 4) is a very dark coarse blocky red.",
+      "matches": false
+    },
+    {
+      "name": "sliderScale",
+      "origEffect": "Mainly a temporal-rate effect on a 16x16 grid: rise speed -21.1 rows/s at 0, -4.0 at 0.5, -1.0 at 1 (lower Scale = faster apparent motion). Feature size changes only mildly - 48x48 spatial half-width 10.2 px at 0, 8.8 at 0.5, 8.7 at 1. Mean brightness essentially flat (29-33).",
+      "portEffect": "Same direction and same weak feature-size trend (48x48 half-width 10.6 / 9.8 / 9.3 at 0 / 0.5 / 1), but every resulting speed is 2.4-6.6x the original's: -50.5 rows/s at 0, -16.4 at 0.5, -6.7 at 1. Mean brightness flat at 9-10.6, i.e. ~3x too dim throughout.",
+      "matches": true
+    },
+    {
+      "name": "sliderRisingSpeed",
+      "origEffect": "Monotonic, strongly accelerating (convex) rise-speed curve. Measured sub-pixel drift at Morph=0, Scale=0.5, 20 fps: v=0 -> -1.36 rows/s, 0.2 -> -1.58, 0.4 -> -2.60, 0.6 -> -6.50, 0.8 -> -18.66, 1.0 -> -37.18 rows/s.",
+      "portEffect": "Monotonic and same direction, but the response curve is front-loaded rather than convex, so the port is too fast everywhere and worst in mid-travel: v=0 -> -1.95 rows/s (1.4x), 0.2 -> -3.45 (2.2x), 0.4 -> -11.16 (4.3x), 0.6 -> -21.50 (3.3x), 0.8 -> -37.43 (2.0x), 1.0 -> -56.88 (1.5x). The port at 0.4 already moves as fast as the original at ~0.7.",
+      "matches": false
+    },
+    {
+      "name": "sliderMorphSpeed",
+      "origEffect": "Controls how fast the noise field reshapes in place with no effect on rise speed (rise stays -4.0 to -4.1 rows/s across 0/0.5/1). With rise pinned to 0, time for whole-frame autocorrelation to fall below 0.9: 0.7 s at v=0, 0.5 s at 0.25, 0.5 s at 0.5, 0.3 s at 0.75, 0.2 s at 1.",
+      "portEffect": "Same behaviour and closely matching magnitude: rise unchanged (-16.4/-16.4/-16.4 rows/s across 0/0.5/1), and t(corr<0.9) = 0.6 / 0.5 / 0.3 / 0.2 / 0.2 s at v = 0 / 0.25 / 0.5 / 0.75 / 1. The best-matching dial of the four.",
+      "matches": true
+    },
+    {
+      "name": "showNumberMode",
+      "origEffect": "Display-only readout of the mode index; present on both sides, not probeable from rendered output.",
+      "portEffect": "Present with the same name and kind. Given the port's mode index is computed as floor(v*4) rather than round(v*3), the number this displays will disagree with the original's over most of the dial.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "CRITICAL, fix first: the port allocates an array inside a per-frame code path (reported at port line 43, col 3, in fn 6) and never frees it, so it dies at exactly frame 512 with 'array element budget exceeded' and then renders one frozen frame forever. This is frame-counted, so on hardware at 50-100 fps the pattern freezes in 5-10 seconds. Hoist the array allocation to module/init scope and reuse the buffer across frames. Nothing else in this list matters until this is fixed - verify with `--seconds 60 --fps 20` (1200 frames) and confirm meanBrightness is still changing at the last frame.",
+    "The heat->color mapping is far too cold. The palette CURVE is already right (G-vs-R tracks the original closely) but the heat value feeding it only reaches about 0.25-0.55 of the original's at every quantile, so the top of the ramp is never used: the original puts 20-33% of the grid at R224-255 with the blue channel at ~210-244 (white-hot), while the port's blue channel is 0 in all four default modes and its max R is 165-185. Raise the heat/intensity gain so the hottest cells saturate to white; target untouched-default meanRGB of about (137,113,79) with meanBrightness ~110, against the port's current (27,3,0)/10.",
+    "Fix the Mode quantization: the original maps the slider with round(v*3) - boundaries at 1/6, 1/2, 5/6 - giving 4 modes. The port uses floor(v*4) with boundaries at 0.25/0.50/0.75. Change the mapping so the mode index and the showNumberMode readout agree with the original across the whole dial.",
+    "The port only has 3 distinct modes: its bands 0 and 2 render byte-identically. The original's modes 0 and 2 differ - same mean brightness (33) and palette, but mode 2 flickers noticeably faster (shape autocorrelation at 0.5 s: 0.69 for mode 2 vs 0.74 for mode 0; 12 s motion stat 5 vs 3). Implement mode 2 as its own faster-flickering variant rather than aliasing it onto mode 0.",
+    "The untouched default lands in the wrong mode. With no controls set the original renders its mode 1 (byte-identical to sliderMode=0.3) - a large saturated white-hot flame filling most of the grid. The port's untouched render is its mode 0. Set the port's initial mode variable so the out-of-the-box look is mode 1.",
+    "Port mode 1 is not a dim version of the original's mode 1, it is a different texture: the original draws one big smooth white-hot flame body (median pixel luminance 70, 92% of pixels lit, p90 luminance 255), the port draws a sparse fine speckle (median luminance 1, 62% lit, p90 33). After the brightness fix, re-check mode 1 specifically - it likely needs a lower noise frequency / larger blob scale as well as more gain.",
+    "Rising speed is roughly 3x too fast at the default/mid dial and the response curve has the wrong shape. Target rise speeds on a 16x16 grid at Scale=0.5, Morph=0, 20 fps: sliderRisingSpeed 0 -> 1.4 rows/s, 0.2 -> 1.6, 0.4 -> 2.6, 0.6 -> 6.5, 0.8 -> 18.7, 1.0 -> 37.2. The port currently gives 2.0 / 3.5 / 11.2 / 21.5 / 37.4 / 56.9 - it ramps up far too early. The original's curve is convex (nearly flat until ~0.4, then accelerating hard); the port's is front-loaded and saturating.",
+    "Do NOT touch the noise generation or the spatial mapping - they are the best part of the port. At 48x48 both sides draw the same cellular blob layout in the same positions with the same centre-bright / edge-dark column envelope, both are resolution-independent (feature half-width scales 2.7 px at 16x16 -> ~9 px at 48x48 on both), and both are correctly time-based rather than frame-stepped (rise speed unchanged across 10/20/40 fps).",
+    "sliderMorphSpeed already matches well (t(autocorr<0.9) of 0.6/0.5/0.3/0.2/0.2 s across v=0/0.25/0.5/0.75/1 vs the original's 0.7/0.5/0.5/0.3/0.2 s, and neither side lets Morph leak into rise speed). Leave it alone.",
+    "sliderScale's direction and its feature-size trend are correct on the port; once the global rise-speed scaling above is fixed the Scale-driven speeds should fall into line too (the port is currently a uniform ~3x fast at Scale 0.5, 2.4x at Scale 0 and 6.6x at Scale 1)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "mode-0", "mode-0.125", "mode-0.25", "mode-0.375", "mode-0.5", "mode-0.625", "mode-0.75", "mode-0.875", "mode-1",
+    "msweep-0 .. msweep-1 (21 values at 0.05 steps, frame-hash clustering to find mode boundaries)",
+    "mfine-0.16", "mfine-0.17", "mfine-0.49", "mfine-0.51", "mfine-0.83", "mfine-0.84",
+    "modeidx-0", "modeidx-1", "modeidx-2", "modeidx-3",
+    "dumpmode-0", "dumpmode-1", "dumpmode-2", "dumpmode-3",
+    "origmode-0", "origmode-2",
+    "unt-base", "untmode-0.1", "untmode-0.3", "untmode-0.6", "untmode-0.9",
+    "rise-m0", "fps10-m0", "fps40-m0",
+    "ctl-Scale-0", "ctl-Scale-0.5", "ctl-Scale-1",
+    "ctl-RisingSpeed-0", "ctl-RisingSpeed-0.5", "ctl-RisingSpeed-1",
+    "ctl-MorphSpeed-0", "ctl-MorphSpeed-0.5", "ctl-MorphSpeed-1",
+    "rs-0", "rs-0.2", "rs-0.4", "rs-0.6", "rs-0.8", "rs-1",
+    "morphonly-0", "morphonly-0.25", "morphonly-0.5", "morphonly-0.75", "morphonly-1",
+    "freeze",
+    "scale48-0", "scale48-0.5", "scale48-1",
+    "steady-long", "steady-late",
+    "seed-7", "seed-1234",
+    "leak-s60-f20", "leak-s70-f20", "leak-s40-f40", "leak-s20-f100", "leak-dialed"
+  ]
+}

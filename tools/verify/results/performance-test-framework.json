@@ -1,0 +1,47 @@
+{
+  "slug": "performance-test-framework",
+  "verdict": "orig-unrenderable",
+  "score": 0,
+  "confidence": "high",
+  "summary": "The original ('Performance test framework') compiles and runs on our engine with NO compile or runtime error but emits exactly 0,0,0 on every pixel of every frame under every configuration tried, so no output-level comparison with the port is obtainable; the score of 0 records 'no comparison obtainable', not port quality (the port renders a healthy, well-behaved animation described below).",
+  "observations": [
+    "ORIGINAL IS SILENTLY BLACK, NOT ERRORED. meta.json for every run reports orig compileError: null, runtimeError: null, wantsSensors: false, controls: [] — yet statsSummary is meanBrightness {avg 0, min 0, max 0}, motion {avg 0, max 0}, zeroMotionFrames = 100% of captured frames. A --dump at t = 0, 0.05, 0.5, 1, 2, 5, 10, 19 s confirms every one of the 60 pixels is literally [0,0,0] (max channel value 0), so this is not a dim-pattern false-freeze — there is no signal at all to compare.",
+    "The blackness survives every axis I could vary: 6 s @20 fps (baseline), 60 s @5 fps (survey), 600 s @2 fps / 1200 frames (survey-600), 120 s @60 fps / 7200 frames (orig-manyframes, to rule out a frame-count-gated warm-up), 3600 s @1 fps / 3600 frames (fps1-long, to rule out a large-delta or long-elapsed trigger), --skip 300 (late-steady), seed 7 (seed7), --wall-clock 1756043200 (wallclock-alt), and rig overrides --rig grid --grid 16x16 (rig-grid16) and --rig cloud --pixels 125 (rig-cloud, to rule out a 2D/3D-only render entrypoint). Orig mean brightness was 0 and motion 0 in all ten.",
+    "The harness itself is fine: a control run of an unrelated slug (1-white-fade, label sanity-check-ptf) rendered orig mean 193 / motion 1 in the same worktree and nix shell, so the orig side of snap.mjs works and the all-zero output is specific to this pattern.",
+    "Neither side exposes any control (--probe-controls prints '(no settable controls)' for orig AND port), so there is no dial that could be hiding the original's output and nothing to sweep. Control surfaces therefore match trivially.",
+    "Most likely cause (unverifiable from output, since I may not read the source): this is a benchmarking/instrumentation artefact rather than a visual pattern. Its visible result plausibly depends either on measured REAL elapsed time (which the harness pins — the wall clock never advances and the frame delta is synthetic, so any measured 'ms per iteration' is 0 and any result bar has zero length) or on console/log output that the renderer does not surface. Both would make it unjudgeable here without being a port bug. I could not distinguish a genuine engine gap from 'black by design on any deterministic simulator', which is why the verdict is orig-unrenderable rather than a port score.",
+    "PORT (for the record, judged solo — no reference to compare against): a left-anchored progress bar on a dim same-hue background. It fills from pixel 0 rightward at a measured 60 px/s (barEnd 3 -> 18 -> 33 -> 48 at t = 0, 0.25, 0.50, 0.75 s on the 60 px strip), resets to 0 at ~0.95 s, and repeats with a 1.0 s period.",
+    "Port colour cycle: the bar steps through three hues, one per 1 s sweep — red [255,38,38], yellow-green [107,255,38], cyan-blue [38,176,255] — giving a 3.0 s super-cycle. Unlit pixels are not black but a ~12%-brightness tint of the current hue ([30,4,4] under red, [12,30,4] under green, [4,21,30] under blue).",
+    "Port periodicity confirmed by autocorrelation of sides.port.meanBrightness (not eyeballing): baseline 20 fps top lag 60 frames = 3.0 s with a strong secondary at 20 frames = 1.0 s; survey 5 fps peaks at every multiple of 15 frames = 3.0 s. The two agree in SECONDS, not frames.",
+    "Port is fps-invariant / time-based, confirmed by position tracking rather than the motion stat: bar fill rate measured from --dump at t = 2.0/2.2/2.4/2.6 s is (42-6)/0.6 = 60 px/s at 10 fps, (39-3)/0.6 = 60 px/s at 20 fps, (37-1)/0.6 = 60 px/s at 40 fps. Only the sub-frame phase offset differs.",
+    "Port steady state is healthy and drift-free: --skip 300 --seconds 6 --fps 20 reproduces the baseline window's statsSummary essentially exactly (meanBrightness avg 73.4, min 14, max 152; motion avg 11.5, max 140; zeroMotionFrames 0), i.e. the pattern is still doing the same thing after 5 simulated minutes. brightnessTrend reads 'rising' on both windows only because the 6 s window ends mid-sweep, not because of any drift.",
+    "Port behaves identically on seed 1 and seed 7 (mean 70 / motion 22 in both 20 s @10 fps runs) — it is deterministic and not random-driven, so a seed sweep proves nothing about it either way."
+  ],
+  "dials": [],
+  "feedback": [
+    "This pair cannot be judged from rendered output until the ORIGINAL produces something non-zero on our engine. That is a harness/engine question, not a port fix: someone with source access should determine why 'Performance test framework' renders identically 0 on all pixels — the two leading candidates from the output side are (a) its result display is driven by measured real elapsed time, which the harness pins to a constant so every measurement is 0, and (b) it reports only through console/log output that the renderer never shows.",
+    "If (a) is the cause, the fixable thing is the harness/engine, not the port: a benchmark pattern needs a non-degenerate elapsed-time source (or an explicit note in the manifest that this slug is unjudgeable by output).",
+    "If the original is genuinely intended to render nothing on the LEDs, then this slug should be marked unjudgeable/excluded from the output-verification sweep rather than scored, since 'the port should also render pure black' is not a useful fidelity target.",
+    "Do NOT read this verdict as a criticism of the port. Solo, the port is well-formed: fps-invariant (60 px/s fill at 10/20/40 fps), exactly periodic (1.0 s bar sweep, 3.0 s three-hue cycle), no drift or decay at t = 300 s, no runtime error. If a future pass establishes what the original actually draws, re-verify against these concrete port numbers — bar fill rate 60 px/s, reset at ~0.95 s, hues [255,38,38] / [107,255,38] / [38,176,255], background at ~12% of the bar colour — rather than re-deriving them.",
+    "Control surfaces agree (both sides expose zero controls), so nothing is owed on the dial axis whichever way the original question resolves."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-600",
+    "probe",
+    "dump-orig-early",
+    "orig-manyframes",
+    "rig-grid16",
+    "rig-cloud",
+    "seed7",
+    "wallclock-alt",
+    "fps1-long",
+    "dump-port",
+    "fpsdiag-10",
+    "fpsdiag-20",
+    "fpsdiag-40",
+    "late-steady",
+    "sanity-check-ptf (control run on slug 1-white-fade, harness sanity check)"
+  ]
+}

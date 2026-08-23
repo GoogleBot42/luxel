@@ -342,13 +342,18 @@ numbers:
   `motion` (not `motionLit`). A high count on one side and not the other is a
   frozen port (note: with `--skip 0` the very first captured frame always
   scores motion 0, so expect a count of 1).
-  **Dim and sparse patterns false-read as frozen.** `motion` is computed on the
-  QUANTIZED 8-bit output and then rounded to an integer, so a pattern animating
-  at low brightness, or over few pixels, can post `zeroMotionFrames` near 100%
-  while genuinely moving. Check `meanBrightness` and `motionLit` before
-  concluding "frozen": if brightness is low (say under ~10) or `motionLit` is
-  non-zero while `motion` is not, confirm with a `--dump` of two consecutive
-  frames (`--dump "3,3.05"` at 20 fps) and compare values directly.
+  **Dim, sparse, and SLOW patterns false-read as frozen.** `motion` is computed
+  on the QUANTIZED 8-bit output and then rounded to an integer, so a pattern
+  animating at low brightness, over few pixels, or very slowly (sub-quantum
+  change per frame — several buggy ports crawl 15-20x under the original's
+  rate) can post `zeroMotionFrames` near 100% while genuinely moving. Check
+  `meanBrightness` and `motionLit` before concluding "frozen": if brightness
+  is low (say under ~10) or `motionLit` is non-zero while `motion` is not,
+  confirm with a `--dump` at widening lags (0.05 s up to seconds apart) and
+  compare values directly — a slow port shows real change only at long lags.
+  Related trap: a SLOW port read over a short window can also false-read as
+  "too dim" simply because it hasn't visited a bright phase yet — check
+  integrated brightness over a long window before reporting a brightness gap.
 - `brightnessTrend` — `steady` | `decaying` | `rising` | `volatile`, from the
   first quarter of the window against the last (±20%), with `volatile` when the
   series swings more than 60% of its own mean. `decaying` on the port and
@@ -590,7 +595,12 @@ discrete modes (e.g. six modes with boundaries at k/6) — are undersampled by
 the probe's 0/0.5/1 sweep, which reaches at most two or three of the modes.
 When a control snaps the output between distinct looks rather than varying
 it continuously, sweep it finely (a dozen or more points across its range)
-to find every mode boundary, and judge each mode on both sides. And
+to find every mode boundary, and judge each mode on both sides. The cheap
+decisive recipe: render ONE short deterministic window at many dial values,
+hash each frame dump (or the PNG), and cluster — hash changes mark the exact
+boundaries (two decimal places for ~20 two-second runs), and byte-identical
+hashes prove two "modes" are actually the same look. Much stronger than
+reading stats: it distinguishes round(v*3) from floor(v*4) directly. And
 mode-gated sliders (live only inside one mode) probe inert from the untouched
 mode — when a pattern has a mode selector, re-sweep the secondary dials INSIDE
 each mode before recording any of them as inert.
@@ -793,11 +803,17 @@ recognizably related but wrong in a major axis (structure/motion/color);
 `broken` = port errors, renders black/garbage, or bears no resemblance;
 `orig-unrenderable` = the ORIGINAL fails on our engine so no comparison is
 possible (report the error — usually an engine-gap finding, not a port bug).
-Two cause subtypes, and the observations must say which: (a) a real engine
+Three cause subtypes, and the observations must say which: (a) a real engine
 gap — the original would run on a Pixel Blaze but not on us; (b) an artefact
 unrunnable BY DESIGN — e.g. an author-planted sentinel line whose identifier
 tells the user to delete it ("REMOVE_THIS_INVALID_LINE_…"); that fails on
-real PB firmware too and needs a corpus-prep fix, not an engine fix.
+real PB firmware too and needs a corpus-prep fix, not an engine fix;
+(c) SILENT NULL OUTPUT — compiles and runs with no error but emits exactly
+0,0,0 on every pixel under every configuration (rule out dim/sparse and
+warm-up first: dump pixels, long windows, rig/seed/wall-clock sweeps).
+Benchmark/instrumentation-flavoured slugs are prone to (c) — their display
+may depend on measured real elapsed time, which the deterministic harness
+pins — so suspect it early on such names rather than burning ten runs.
 Score for this verdict is always 0 with an explicit note in `summary` that
 the score records "no comparison obtainable", not port quality — never score
 the port's solo render.

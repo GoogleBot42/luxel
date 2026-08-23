@@ -1,0 +1,52 @@
+{
+  "slug": "perlin-fire-wind",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Port reproduces the original's fire imagery — same upward orange/white plume, same spatial envelope, same palette family — but runs its whole time evolution roughly 15-20x too slow, so at normal frame rates it reads as a near-still image instead of a crackling fire.",
+  "observations": [
+    "Rig: grid 16x16 (256 px) by default; both sides compile and run clean (no compileError/runtimeError) over 300 s, neither binds sensors (wantsSensors false on both).",
+    "STILL-FRAME STRUCTURE MATCHES WELL. Time-averaged column profile over t=10..76 s (16x16, label 'rescale'): orig 0.0,0.3,1.6,4.5,8.0,11.0,13.7,18.6,20.2,19.1,13.8,8.6,4.2,1.2,0.2,0.0 vs port 0.0,0.3,1.3,3.0,4.9,8.4,17.5,27.3,31.9,29.3,18.9,7.7,4.0,1.9,0.4,0.0 — both peak at column 8 and fall to 0 at both edges, but the port's plume is ~30% narrower (orig half-max spans roughly cols 4-11, port cols 6-10) and correspondingly hotter at the core.",
+    "Row profile (same window): orig 0.0,0.0,0.1,0.4,1.1,2.0,3.0,4.1,5.4,7.1,9.4,12.3,15.6,18.5,21.4,24.7 vs port 0.0,0.0,0.1,0.4,0.8,1.6,2.5,3.4,4.6,6.6,9.9,14.5,19.0,25.0,31.9,36.6 — both are monotonic hot-at-the-bottom fire gradients; the port's is steeper, i.e. its heat is more compressed toward the base and its upper wisps are fainter.",
+    "MOTION IS THE HEADLINE DIVERGENCE. Mean-abs-pixel-diff vs lag, averaged over 4 reference times (t=10/30/50/70, 16x16, fps 20): orig 0.05s->3.76, 0.1s->5.54, 0.2s->6.06, then plateaus ~6-8 (fully decorrelated by ~0.15-0.2 s). Port: 0.05s->0.22, 0.1s->0.46, 0.2s->0.92, 0.4s->1.76, 0.8s->3.50, 1.6s->5.68, 2.4s->7.58. Matching equal diff levels gives a slowdown factor of 15-17x; matching equal spatial correlation (orig 0.839@0.05s vs port 0.839@~1.0s; orig 0.675@0.1s vs port 0.675@~2.2s) gives 20-22x.",
+    "Independent confirmation by optical flow on the DEFAULT 16x16 rig (label 'flow16', fps 60, 2D shift maximizing correlation): orig rises at dy=-1 px per 0.033 s = ~30 px/s = ~1.9 grid-heights/s (corr 0.986); port rises at ~1.3-2.5 px/s = ~0.08-0.16 grid-heights/s. Ratio ~12-20x. Same result on a 32x32 rig (orig ~50-60 px/s, port ~2.5-3.8 px/s).",
+    "Direction is CORRECT on both: flame content translates upward (toward row 0) with near-zero net horizontal drift at short lags on the original and a small leftward component on the port; both wander horizontally over tens of seconds (centroid-x range orig 6.0-9.0, port 5.7-9.3 sampled every 4 s over 300 s), so the 'wind' sway amplitude is comparable.",
+    "The slowdown makes the port look FROZEN at real frame rates. Late-window check (label 'late-skip250', --skip 250 --seconds 12 --fps 20, 32x32): orig motion avg 4.0 / motionLit 6.7, zeroMotionFrames 0/240; port motion avg 0 (max 1) / motionLit 0.4, zeroMotionFrames 238/240. Same at the 6 s baseline (16x16): orig motion 4.1 / motionLit 7.1 with 1 zero-motion frame; port motion 0.0 / motionLit 0.3 with 120/120 zero-motion frames. The port is not dead (motionLit is non-zero and dumps confirm sub-quantum change), it is just crawling.",
+    "The original also carries a per-frame 'crackle' the port has none of: at one 20 fps frame (0.05 s) the original's mean abs pixel diff is 3.76 and spatial autocorrelation has already fallen to 0.84, while the port's are 0.22 and 0.999.",
+    "BOTH SIDES ARE TIME-BASED, NOT FRAME-STEPPED — this is not frame-rate coupling. Spatial autocorrelation vs ABSOLUTE lag is nearly identical across --fps 10/20/40: port 0.4s -> 0.931/0.937/0.940 and 1.6s -> 0.662/-/0.682; orig 0.2s -> 0.831/0.801/0.847 and 0.4s -> 0.417/0.432/0.504. The port's slowness is a time-scale constant, not a dt bug.",
+    "Steady state is healthy on both: over 300 s at 4 fps orig brightnessTrend steady (meanBrightness avg 8.5, min 2, max 28) and port steady (avg 7.4, min 1, max 24). No decay, no saturation, no lockup on either side out to 300 s.",
+    "COLOR: same fire ramp black -> deep red -> orange -> yellow/white on both. Over t=10..76 s, mean RGB orig 17.7/5.4/0.3 vs port 19.2/7.7/2.5; lit fraction orig 54.3% vs port 52.4%; both saturate R at 255. Difference: the port's hot core goes whiter — max G 229 / max B 140 (port) vs 203 / 76 (orig), and for pixels with R>60 the mean G/R is 0.44 vs 0.39 and B/R is 0.11 vs 0.02. Minor, but the port's hottest pixels are noticeably less saturated (more cream, less amber).",
+    "Instantaneous brightness swings are larger on the original: over 60 s at 5 fps orig meanBrightness min 2 / max 34, port min 1 / max 15. Over 300 s the gap narrows (orig 2/28, port 1/24), so this is mostly a consequence of the port's slow evolution not visiting extremes within a short window rather than a separate brightness bug. Integrated brightness over a long window is comparable (port even slightly brighter in t=10..76 s).",
+    "CONTROL SURFACE MISMATCH: the original exposes one control, {name: 'showNumberMode', kind: 'showNumber', label: 'Mode'}; the port exposes none. It is display-only so it is not probed and its value is not visible in rendered output, but it is a missing element of the original's UI surface. Note that despite the name 'Mode', neither side showed any regime/mode switching in a 300 s survey — one continuous fire regime throughout on both.",
+    "No settable controls on either side (probe: 'no settable controls' for orig and port), so there is no dialed comparison to make and dials is empty.",
+    "Seed-independent: seeds 1, 7 and 1234 all reproduce the same picture — at 5 fps orig motion 9 / port 1, at 20 fps orig motion 4 / port 0. The divergence is not a one-seed fluke.",
+    "Resolution behaviour matches: re-rendered at 32x32 both sides draw the same picture with finer detail rather than more/smaller features, so both are resolution-independent in the same way."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY FIX: speed up the port's time evolution by roughly 15-20x (best single estimate ~17x). Measured targets on the default 16x16 rig: the original's flame content rises at ~1.9 grid-heights per second and its frame fully decorrelates in ~0.15-0.2 s; the port currently rises at ~0.1 grid-heights per second and takes ~2.5-3 s to decorrelate the same amount. Whatever scalar multiplies elapsed time into the noise field's advection/animation term is about 17x too small.",
+    "Verify the fix with the same measurement, not by eye: mean abs pixel diff between frames 0.05 s apart should be ~3.8 (currently 0.22), and at 20 fps the `motion` stat should sit around 4 with zero frozen frames (currently 0 with 238/240 frames scoring zero motion).",
+    "SECONDARY: the port's plume is ~30% too narrow and too concentrated at the base. Target time-averaged column profile peaks at ~20 with meaningful energy out to columns 3 and 12 on a 16-wide grid; the port peaks at ~32 and dies by columns 5 and 11. Widen the horizontal extent of the noise domain (or reduce the horizontal falloff) and soften the vertical gradient so the upper rows keep more of the heat — the original's row profile ratio bottom:middle is 24.7:9.4, the port's is 36.6:9.9.",
+    "SECONDARY: the port's hottest pixels are too desaturated. Original's brightest fire tops out near RGB (255,203,76) — amber/gold — while the port reaches (255,229,140), a cream white. Pull the top of the color ramp back toward more red/less blue: for pixels with R>60 the original averages G/R 0.39 and B/R 0.02, the port 0.44 and 0.11. The blue channel in particular should be near zero throughout (original mean B over the whole rig is 0.3, port's is 2.5).",
+    "Do NOT change the direction, the overall envelope, or the palette family — upward rise, hot-at-the-base gradient, horizontal centroid sway amplitude and black/red/orange/yellow ramp are all already right. Once the time scale is corrected the two should read as the same pattern.",
+    "Cosmetic/completeness: the original exposes a display-only `showNumber` control labelled 'Mode' that the port does not have. Adding an equivalent readout would close the control-surface gap; it has no effect on rendered pixels."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-300",
+    "late-skip250",
+    "decorr",
+    "decorr2",
+    "rescale",
+    "fps10",
+    "fps40",
+    "grid32",
+    "flow",
+    "flow16",
+    "wander",
+    "seed7",
+    "seed1234"
+  ]
+}

@@ -19,6 +19,14 @@ Cleared entries move to Gitea or the aggregate report.
   fps-dependent onset; chill-confetti delta clamp ~100 ms; single-set
   control interaction anomaly; seed 2-5 collisions.
 
+## Manifest rig fixes needed (pairs.json), tied to the out-of-range-writes gap
+- nano-orbital: original writes a fixed 144-px canvas → rig must be ≥144 px
+  (default 60-px strip errors at frame 0).
+- nyan-lights: original is an index-only 60x5 = 300-px sprite LUT → rig
+  should be 300 px (16x16 renders it as mosaic; errors ≥324 px).
+- orv-christmas-tree: original renders only at pixelCount multiples of 20 →
+  rig should be grid 20x20 (default 16x16 errors at frame 0).
+
 ## Harness nits (unfixed, low priority)
 - `--dump` duplicate-time entries waste runs (no dedupe/warning).
 - `--dump` landing on the LAST frame of a window may report a slightly wrong
