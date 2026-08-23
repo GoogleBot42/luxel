@@ -922,7 +922,11 @@ the port's solo render.
 
 The mirror image also exists: some ORIGINALS have a long warm-up transient
 (one ran railed-at-full-brightness for ~1000 rendered frames — frame-counted,
-so it outlasts any low-fps survey) before settling. When the two sides' mean
+so it outlasts any low-fps survey) before settling. A frame-counted
+transient's DURATION moves with fps (~450 frames = 45 s at 10 fps but 11 s
+at 40 fps), so a settle time read off one rate is invalid at another —
+re-measure the settle point at whatever fps you compare at, and remember
+the whole default 6 s baseline can sit inside the transient. When the two sides' mean
 brightness differs wildly from t=0, run a settle check (`--skip 60`+ at 20 fps,
 or `--seconds 120`) and judge the SETTLED regimes against each other; the
 transient difference is then its own separate finding.
