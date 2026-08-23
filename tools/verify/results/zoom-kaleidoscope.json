@@ -1,0 +1,99 @@
+{
+  "slug": "zoom-kaleidoscope",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same family — both sides are fully-saturated, full-value D4 (mirror + 90-degree) kaleidoscopes that breathe in and out and walk the hue slowly — but the port draws the motif at roughly 2x the original's spatial frequency at matched dials (5x at untouched defaults, because the untouched ZoomSpeed defaults differ: orig 0.9, port 0.5), and its zoom-breathing period barely responds to ZoomSpeed where the original's halves from 6.0 s to 3.0 s.",
+  "observations": [
+    "Rig: grid 16x16 default, 256 px. Both sides compile and run clean (no compile/runtime errors), both steady over 300 s (brightnessTrend 'steady' on both, zeroMotionFrames 1 = the free first frame, meanBrightness ~127-129 on both). Neither side reads sensors (wantsSensors false both).",
+    "Both sides are pure-hue patterns: every dumped pixel on both sides has saturation 1.000 and value 1.000 (except a brief Smooth=1 startup fade). All differences live in the hue field, so hue-space measures are the right lens here and value/saturation deltas are a no-op.",
+    "GEOMETRY SYMMETRY MATCHES EXACTLY. Comparing mirrored PIXEL PAIRS in HSV on 9 dumped frames (t=0..10 s, matched dials): both sides post mirror-X, mirror-Y and 90-degree-rotation hue deltas of 0.0001-0.0023 and saturation/value deltas of 0.0000. Both are true 4-fold kaleidoscopes with the same symmetry group; there is no geometry or hue asymmetry difference.",
+    "HEADLINE STRUCTURE GAP — the port tiles the motif far more finely. Mean nearest-neighbour hue gradient over the whole frame (48x48 grid, ZoomSpeed=0.5 matched on both, 75 dumps over 75 s): orig 0.0297, port 0.0584 = 1.97x. Same measurement across the ZoomSpeed range (48x48, dumps at t=1,3,5,9,15): ZS=0 orig 0.047 / port 0.077; ZS=0.25 orig 0.033 / port 0.058; ZS=0.5 orig 0.024 / port 0.044; ZS=0.75 orig 0.017 / port 0.022; ZS=0.9 orig 0.0125 / port 0.0155; ZS=1.0 orig 0.0062 / port 0.0044. So the port is 1.6-1.8x too busy for ZS <= 0.5, converging only near ZS=1.",
+    "The same gap read off the spatial DFT of the centre row's hue phasor (48x48, ZS=0.5, 20 samples over 60 s): the original is dominated by k=1 (one half-cycle across the canvas, amplitude 0.11-0.19 against DC 0.96-0.98); the port is dominated by k=2-3 with a strong 3/6/9/12 harmonic ladder (amplitude 0.21-0.45 against DC 0.82-0.89). On the DEFAULT 16x16 rig the port's centre row is visibly periodic with a 5-px repeat (e.g. t=0.5 s hue 0.56 0.26 0.17 0.17 0.20 | 0.56 0.26 0.17 0.17 0.26 | 0.56 0.20 0.17 0.17 0.26 | 0.56) while the original's is a single smooth edge-to-centre ramp (t=2 s hue 0.31 0.40 0.41 0.45 0.54 0.63 0.62 0.71 | mirrored).",
+    "UNTOUCHED DEFAULTS, DEFAULT RIG — this is what a user sees on load, and it is the largest gap. Whole-frame hue gradient over 40 dumps across 45 s: orig mean 0.0229 (range 0.014-0.037), port mean 0.1158 (range 0.079-0.147) = 5.1x. Visually the original is a soft low-contrast wash — the whole 16x16 grid sits inside a narrow hue band (green -> cyan -> blue) with a faint cross/diamond motif — while the port shows magenta, red, blue and green simultaneously in hard-edged tiles.",
+    "UNTOUCHED ZOOMSPEED DEFAULTS DIFFER, pinned by byte-identical dial matching (dump at t=3 s, sweep 0..1.0 in 0.1 steps, compared against the untouched render): the ORIGINAL's untouched sliderZoomSpeed is exactly 0.9 (byte-identical; every other value differs by mean-abs 45-148), the PORT's is exactly 0.5 (byte-identical; every other value differs by 70-120). This accounts for part — but not all — of the default-look gap: even at matched ZS=0.5 the port is still 2.0x too busy.",
+    "ZOOM-BREATHING RATE MISMATCH. The kaleidoscope's detail level oscillates (the 'zoom' in/out). Autocorrelation of the whole-frame hue-gradient series (75 dumps at 1 s spacing over 75 s, 48x48, 20 fps): at ZoomSpeed=0.5 the ORIGINAL breathes with a clean 6.0 s period (autocorr 0.84 at 6 s, 0.71 at 12 s, 0.61 at 18 s; swing 0.024 <-> 0.037, 54%) while the PORT shows no 6 s structure at all (best lag 3 s at only 0.60; series flat at 0.058 +/- 0.005, 22% swing). At ZoomSpeed=0.9 the ORIGINAL's period drops to 3.0 s (0.56 at 3 s and 6 s) and the PORT sits at ~3.3 s (0.78 at 3 s, 0.81 at 10 s, 0.80 at 13 s). So the original's breathing period halves as ZoomSpeed goes 0.5 -> 0.9; the port's moves only 3.0 -> 3.3 s. On the default 16x16 rig untouched, the original breathes at 3 s (autocorr 0.76/0.68/0.50 at 3/6/9 s) and the port at 2 s (0.77).",
+    "FPS COUPLING IS THE SAME ON BOTH SIDES — not a port bug. Rendering the identical window (48x48, ZS=0.5) at 10/20/40 fps gives orig hue-gradient 0.0239 / 0.0295 / 0.0368 and port 0.0435 / 0.0575 / 0.0711: both are frame-coupled in the same direction and by the same factor, and the port/orig ratio stays 1.82 / 1.95 / 1.93. The original's 6-6.5 s breathing period is present at all three rates.",
+    "TOGGLES BEHAVE CORRECTLY IN KIND ON BOTH SIDES. Rotate on (ZS=0.5, 48x48, 7 dumps over 18 s): mirror-X and mirror-Y hue deltas rise to 0.029-0.090 (orig) and 0.045-0.167 (port) while 90-degree rotational symmetry stays intact at <= 0.0010 on both — the textbook signature of a rotated 4-fold kaleidoscope. Neither side rotates at a constant rate: tracking the m=4 angular-harmonic phase on a r=14 ring at 0.1 s spacing (well inside Nyquist for a 4-fold figure), both wander back and forth by about +/-30 degrees over 2 s rather than drifting monotonically. MoveAround on: ALL THREE symmetries break on both sides (mirror-X 0.038-0.219, mirror-Y 0.078-0.226, rot90 0.089-0.217) — the centre translates off-rig on both.",
+    "CONTROL-SURFACE MISMATCH (names): the original exposes toggleDoRotate (label 'DoRotate') and toggleDoMoveAround (label 'DoMoveAround'); the port names them toggleRotate ('Rotate') and toggleMoveAround ('MoveAround'). The four sliders (sliderExtraGeometry, sliderZoomSpeed, sliderSmooth, sliderContrast) match in name, label, kind and order on both sides, and both toggles default OFF on both sides (probe delta exactly 0.00 at value 0).",
+    "DIAL-GATING, IDENTICAL ON BOTH SIDES: setting sliderSmooth, sliderContrast or sliderExtraGeometry ALONE, at 11 values from 0 to 1.0, produces a byte-identical frame to the untouched render on BOTH sides (t=3 s dump). Those three only take effect once another control is also set — the same setter-interaction structure on both, and not a port defect.",
+    "Both sides are fully deterministic and seed-independent: a 45 s / 40-dump run at seed 1234 is byte-identical to the seed-1 run on BOTH sides (same sha256 for orig and for port).",
+    "Steady state is healthy on both. A --skip 60 late window (20 s, 20 fps) shows orig meanBrightness 127.1 / motion 4.7 / zeroMotionFrames 0 and port 127.2 / 7.7 / 0, both 'steady'. Nothing decays, freezes or saturates. The original's whole-rig mean brightness swings wider over 300 s (63-165) than the port's (105-147) — a direct consequence of the original being more spatially uniform, so the rig mean follows the hue, while the port's finer tiling averages the swing away.",
+    "The survey found NO discrete modes or regimes: one continuous regime throughout, a slow global hue walk on top of the zoom breathing. The whole-rig hue master cycle (autocorrelation of meanBrightness over 300 s at 2 fps, untouched) is ~86.5 s on the original and ~98.5 s on the port (~14% slow), but at untouched defaults the two sides are at different ZoomSpeed values, so this is downstream of the default gap rather than a separate finding.",
+    "The port matches WELL at ZoomSpeed=0.9-1.0. At matched ZS=0.9 (48x48, 5 dumps over 27 s) whole-frame hue dispersion is orig 0.074/0.071/0.041/0.053/0.053 vs port 0.078/0.113/0.025/0.052/0.083 and hue gradient orig 0.0113-0.0144 vs port 0.0123-0.0204 — close enough that the contact sheets read as the same pattern with the same hue timeline (orange -> cyan -> green -> magenta -> blue -> red). The divergence is concentrated in the lower half of the ZoomSpeed range."
+  ],
+  "dials": [
+    {
+      "name": "sliderZoomSpeed",
+      "origEffect": "Untouched default is exactly 0.9. Raising it smooths the figure (whole-frame hue gradient 0.047 at 0 -> 0.024 at 0.5 -> 0.0125 at 0.9 -> 0.0062 at 1.0) AND speeds up the zoom breathing (period 6.0 s at ZS=0.5, 3.0 s at ZS=0.9, measured by autocorrelation of a 75-sample/75 s gradient series). Whole-rig motion stat falls 8.0 -> 4.3 across 0 -> 1.",
+      "portEffect": "Untouched default is exactly 0.5. Same direction on the detail axis but consistently 1.6-1.8x busier below ZS=0.9 (0.077 at 0 -> 0.044 at 0.5 -> 0.0155 at 0.9 -> 0.0044 at 1.0). The breathing period barely responds: ~3.0 s at ZS=0.5 and ~3.3 s at ZS=0.9, where the original goes 6.0 -> 3.0 s. Motion stat is flat across the sweep (9.3 / 9.4 / 8.9 / 9.3 / 10.4).",
+      "matches": false
+    },
+    {
+      "name": "sliderSmooth",
+      "origEffect": "Inert when set alone for values <= 0.8 (byte-identical to untouched at t=0.25/0.5/1/2 s). At 1.0 it introduces a very short startup fade: the frame differs at t=0.25 s and is byte-identical again from t=0.5 s onward. With all controls set, the 48x48 sheet is black at 0.0 s and fully recovered by 1.8 s.",
+      "portEffect": "Same inert-below-0.8 behaviour, and the same direction at 1.0, but the fade lasts roughly an order of magnitude longer: frames still differ from untouched at t=0.25, 0.5, 1 and 2 s, and the contact sheet is black at 0.0 s, still nearly black at 1.8 s, and only normal from ~3.6 s. Probe maxDelta at value 1: orig 8.54, port 39.79.",
+      "matches": false
+    },
+    {
+      "name": "sliderContrast",
+      "origEffect": "Effectively inert from output. Byte-identical to untouched at all 11 values 0..1.0 when set alone; with all six controls set, sweeping 0/0.5/1 leaves the hue spectrum unchanged to two decimals and moves only mean value (1.000 / 1.000 / 1.000, with a 0.98 dip at one sample when Contrast=0). Probe maxDelta 0.56. Dial effect unverifiable from output.",
+      "portEffect": "Same: byte-identical to untouched at all 11 values when set alone; hue spectrum unchanged across 0/0.5/1 with all controls set; probe maxDelta 0.14. Matches the original's (non-)behaviour.",
+      "matches": true
+    },
+    {
+      "name": "sliderExtraGeometry",
+      "origEffect": "Near-inert. Probe maxDelta 0.23. Byte-identical to untouched at all 11 values when set alone. With all six controls set, values 0/0.25/0.5/0.75/1.0 give five different frame hashes but identical centre-row hue spectra to two decimals — a sub-1-count perturbation only. Dial effect unverifiable from output.",
+      "portEffect": "Identical character: probe maxDelta 0.20, byte-identical to untouched when set alone, five different hashes but identical spectra with all controls set.",
+      "matches": true
+    },
+    {
+      "name": "toggleDoRotate (port: toggleRotate)",
+      "origEffect": "Defaults OFF (probe delta exactly 0.00 at value 0). Turning it on breaks mirror symmetry (mirror-X/Y hue delta 0.029-0.090 over 18 s) while leaving 90-degree rotational symmetry intact (<= 0.0010) — the figure rotates as a rigid 4-fold kaleidoscope. The angle wanders back and forth (m=4 ring-harmonic phase swings ~+/-30 degrees over 2 s) rather than spinning at a constant rate. Probe maxDelta 23.87.",
+      "portEffect": "Same default (OFF), same signature: mirror symmetry breaks (0.045-0.167), rot90 preserved (<= 0.0010), angle wanders rather than spins. Breakage magnitude runs somewhat larger and more variable, consistent with sitting at a different angle at any instant. Probe maxDelta 57.65. NAME DIFFERS: original 'toggleDoRotate'/'DoRotate' vs port 'toggleRotate'/'Rotate'.",
+      "matches": true
+    },
+    {
+      "name": "toggleDoMoveAround (port: toggleMoveAround)",
+      "origEffect": "Defaults OFF (probe delta exactly 0.00 at value 0). Turning it on breaks ALL THREE symmetries — mirror-X 0.038-0.190, mirror-Y 0.078-0.168, rot90 0.089-0.191 — i.e. the kaleidoscope centre translates off-rig. Probe maxDelta 32.47.",
+      "portEffect": "Same default and same signature: mirror-X 0.113-0.218, mirror-Y 0.145-0.226, rot90 0.135-0.214. Probe maxDelta 95.48. NAME DIFFERS: original 'toggleDoMoveAround'/'DoMoveAround' vs port 'toggleMoveAround'/'MoveAround'.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Biggest fix, worth the most: the port draws the kaleidoscope at about twice the original's spatial frequency. At matched ZoomSpeed=0.5 on a 48x48 grid the port's mean nearest-neighbour hue gradient is 0.0584 against the original's 0.0297 (1.97x); on the default 16x16 rig the port's centre row repeats its motif every 5 pixels (three tiles across) while the original shows a single smooth edge-to-centre ramp (spatial DFT: original dominated by k=1, port by k=2-3 with a 3/6/9/12 harmonic ladder). Halving the port's zoom/coordinate scale factor is the single change that would close most of the visible gap. Target: hue gradient 0.047 / 0.033 / 0.024 / 0.017 / 0.0125 / 0.0062 at ZoomSpeed 0 / 0.25 / 0.5 / 0.75 / 0.9 / 1.0 on a 48x48 grid.",
+    "Fix the untouched ZoomSpeed default: the original's untouched sliderZoomSpeed is exactly 0.9 (pinned by byte-identical dial matching), the port's is exactly 0.5. Because the pattern gets busier as ZoomSpeed falls, this default alone makes the port 5x busier than the original out of the box (hue gradient 0.116 vs 0.023 on the default rig) — a user loading the pattern sees a hard-edged full-rainbow tiling where the original shows a soft wash sitting inside a narrow hue band. The other three slider defaults could not be identified from output (setting any of them alone is byte-identical to untouched on both sides), so ZoomSpeed is the one to correct.",
+    "Make ZoomSpeed drive the breathing RATE, not just the detail level. The original's zoom in/out cycle has a 6.0 s period at ZoomSpeed=0.5 and a 3.0 s period at ZoomSpeed=0.9 — the period roughly halves as the dial goes up, which is what makes the dial read as a 'speed'. The port's period is stuck near 3.0-3.3 s across that whole range, so its ZoomSpeed reads as a detail/zoom-depth knob instead. Measure with autocorrelation of a whole-frame hue-gradient series sampled at 1 s over 75 s; the original scores 0.84 at lag 6 s at ZS=0.5, the port only 0.60 at lag 3 s.",
+    "The original's breathing amplitude is also bigger relative to its mean: at ZoomSpeed=0.5 the original's gradient swings 0.024 <-> 0.037 (54% of mean) while the port's swings only 0.053 <-> 0.066 (22%). Once the scale and rate are fixed, check that the zoom still visibly pulses rather than sitting at a near-constant detail level.",
+    "Rename the two toggles to match the original's control surface: the original exposes 'toggleDoRotate' (label 'DoRotate') and 'toggleDoMoveAround' (label 'DoMoveAround'); the port has 'toggleRotate'/'Rotate' and 'toggleMoveAround'/'MoveAround'. Their behaviour is right — both default OFF, Rotate breaks mirror symmetry while preserving 90-degree rotation, MoveAround breaks all three — only the names are wrong.",
+    "Shorten the Smooth=1 startup fade. On the original, Smooth=1 changes only the first quarter second (frames are byte-identical to untouched from t=0.5 s onward); on the port the fade is still visible at t=2 s and the grid is not back to normal until about t=3.6 s. Aim for a smoothing time constant roughly 10x shorter.",
+    "Nothing needs doing on symmetry, palette, brightness, seed handling, fps behaviour or steady state: both sides render fully-saturated full-value hue-only fields, both are exactly D4-symmetric (mirrored-pixel hue/sat/value deltas 0.0000-0.0023), both are byte-identical across seeds 1 and 1234, both are frame-coupled by the same factor across 10/20/40 fps, and neither decays or freezes over 300 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-300",
+    "probe",
+    "dial-mid",
+    "dump-mid",
+    "grid48",
+    "grid48-long",
+    "untouched-g48",
+    "untouched-def16",
+    "eg-0", "eg-0.25", "eg-0.5", "eg-0.75", "eg-1",
+    "ct-0", "ct-0.5", "ct-1",
+    "sm-0", "sm-0.5", "sm-1",
+    "zs-0", "zs-0.25", "zs-0.75", "zs-1",
+    "zs09-def", "zs09-g48",
+    "zsdef-ref", "zsdef-0", "zsdef-0.1", "zsdef-0.2", "zsdef-0.3", "zsdef-0.4", "zsdef-0.5", "zsdef-0.6", "zsdef-0.7", "zsdef-0.8", "zsdef-0.9", "zsdef-1.0",
+    "smdef-0", "smdef-0.1", "smdef-0.2", "smdef-0.3", "smdef-0.4", "smdef-0.5", "smdef-0.6", "smdef-0.7", "smdef-0.8", "smdef-0.9", "smdef-1.0",
+    "ctdef-0", "ctdef-0.1", "ctdef-0.2", "ctdef-0.3", "ctdef-0.4", "ctdef-0.5", "ctdef-0.6", "ctdef-0.7", "ctdef-0.8", "ctdef-0.9", "ctdef-1.0",
+    "egdef-0", "egdef-0.1", "egdef-0.2", "egdef-0.3", "egdef-0.4", "egdef-0.5", "egdef-0.6", "egdef-0.7", "egdef-0.8", "egdef-0.9", "egdef-1.0",
+    "smt-ref", "smt-0", "smt-0.2", "smt-0.4", "smt-0.6", "smt-0.8", "smt-1.0",
+    "zoomosc", "zoomosc-def16", "zoomosc-f10", "zoomosc-f40",
+    "breath80", "breath80-zs09",
+    "rot-on", "mov-on",
+    "seed1234",
+    "late-skip60"
+  ]
+}
