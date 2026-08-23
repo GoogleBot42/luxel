@@ -1,0 +1,89 @@
+{
+  "slug": "cylon",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides draw the same thing — a single red eye bouncing end-to-end on the strip with an exponentially decaying trail, all three dials live and pointing the same way — but the port runs 1.63x slower at untouched defaults and its Fade dial produces trails ~2.4x longer than the original's at every setting.",
+  "observations": [
+    "Structure matches exactly on both sides: exactly ONE lit head pixel per frame, bouncing between pixel 0 and pixel 59 and reversing at each end, trailed by an exponentially decaying tail of previously-visited pixels. Confirmed by --dump of full 60-px frames at 20/50/100 fps (labels trail20, trail50, trail100): e.g. orig at t=2.0s/20fps lights only indices 4,9,...,59 with values 2,4,8,12,18,25,34,44,219,187,158,132 — head 219 at index 44, decaying trail either side.",
+    "MOTION SPEED (untouched defaults) is the headline divergence: original sweeps the strip 1.63 times per second (full bounce period ~1.23 s, 100 px/s on the 60-px rig); port sweeps 1.00 times per second (period 2.00 s, ~60 px/s). Measured by tracking the peak-pixel index over 200 dumps at 100 fps (label dump-track100) — orig reaches pixel 59 at t=0.59 s and returns to 0 at t=1.19 s; port reaches 59 at t=0.98 s and returns to 0 at t=1.96 s.",
+    "That speed ratio is rig-independent, so it is a genuine rate difference and not a pixel-indexing artefact: re-rendered at --pixels 30 and --pixels 120 (labels rig-30, rig-120) the original holds 1.62-1.64 sweeps/s and the port holds 0.99-1.00 sweeps/s. Both sides express speed in strip-fractions per second, i.e. both scale with pixel count identically.",
+    "Both sides are frame-rate INVARIANT in motion — no frame-rate coupling on either side. Peak-position tracking at 10/20/50/100 fps (labels fpsdiag-10/20/50, dump-track100) gives orig 100 px/s and port ~60 px/s at every rate (orig steps 10/5/2/1 px per frame at 10/20/50/100 fps; port 6/3/1.2/0.667).",
+    "Both sides' trail decay is also time-based, not per-frame: orig's per-frame decay factor is 0.855 at 20 fps, 0.94 at 50 fps and 0.972 at 100 fps (label trail20/trail50/trail100) — i.e. a constant per-second decay. Port behaves the same way. Neither side has a frame-coupled fade.",
+    "At UNTOUCHED defaults the trails match well: median decay measured over a 0.1 s gap at 100 fps gives a half-life of 0.171 s (orig) vs 0.194 s (port) — 13% apart (label untouched-fadecheck).",
+    "HEAD BRIGHTNESS differs slightly: the original's head pixel is always one fade-step below full (219/255 at 20 fps, 240 at 50 fps, 247 at 100 fps — it renders the eye then fades), while the port's head is pinned at exactly 255 at every frame rate. On the default 20 fps rig that makes the port's eye ~16% brighter than the original's, and it is why untouched mean brightness reads 7 (port) vs 5 (orig) at 20 fps.",
+    "CONTROL NAME MISMATCH: the original exposes the fade slider as `sliderfade` (label \"fade\", lowercase f); the port exposes it as `sliderFade` (label \"Fade\"). Same kind (slider), different name — anything setting the control by name (saved-value restore, API) would miss it. `hsvPickerColor` and `sliderSpeed` match exactly in name and kind on both sides.",
+    "Colour handling matches: the untouched default on both sides is pure red. With hsvPickerColor dialed, both sides honour hue and saturation identically (0.33,1,1 -> orig [4,247,0] / port [5,255,0]; 0.66,1,1 -> [0,9,247] / [0,10,255]; 0.5,0.4,1 -> [148,247,247] / [153,255,255]) and both IGNORE the picker's V component (0,1,0.3 still renders a full-brightness head on both). Green channel bleed at hue 0.33 is identical on both. Labels col-green, col-blue, col-pastel, col-dim.",
+    "Neither side is random-driven: seed 7 renders byte-for-byte the same stats as seed 1 on both sides (label seed7 vs fast100, identical statsSummary).",
+    "No mode/regime structure: the 60 s survey at 5 fps shows one uniform texture from t=0 to t=60 on both sides, and a late window at t=120-123 s (label late-window) is still steady on both (orig meanBrightness avg 29.3 trend steady, port 20.1 trend steady, zeroMotionFrames 0 on both). The port does not decay, freeze or saturate.",
+    "The default 20 fps waterfall on BOTH sides shows a dotted/aliased eye rather than a continuous streak, because the head jumps 5 px (orig) / 3 px (port) per frame and intermediate pixels are never drawn. That is shared behaviour, not a port bug; the 100 fps render (label fast100) is the unaliased view."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerColor",
+      "origEffect": "sets the eye and trail hue+saturation; V component ignored (head stays full brightness at v=0.3). Untouched default is red. probe maxDeltaLit 75.34",
+      "portEffect": "identical: hue and saturation applied the same way, V likewise ignored, default red. probe maxDeltaLit 81.44",
+      "matches": true
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "linear bounce-speed control, ~10 px/s at 0 rising to ~157 px/s at 1 on the 60-px rig (measured: 0->10, 0.1->25, 0.2->39.5, 0.3->55, 0.4->69, 0.5->84, 0.6->98, 0.8->127, 1->157.5)",
+      "portEffect": "same direction, nearly the same slope, but shifted down by ~10 px/s across the range (0->3, 0.1->17, 0.2->31.5, 0.3->45.5, 0.4->59, 0.5->73, 0.6->87, 0.8->116, 1->144). That is 32% slow at the bottom of the range and 8.6% slow at the top. Separately, the port's UNTOUCHED default corresponds to ~0.40 on this curve while the original's corresponds to ~0.61",
+      "matches": false
+    },
+    {
+      "name": "sliderfade / sliderFade",
+      "origEffect": "raising it shortens the trail. Trail half-life (100 fps, sliderSpeed pinned 0.5): 0 -> 0.398 s, 0.1 -> 0.114 s, 0.15 -> 0.083 s, 0.25 -> 0.051 s, 0.5 -> 0.024 s, 0.75/1 -> too short to measure (only 7 and 5 pixels above value 10)",
+      "portEffect": "same direction and same curve shape, but ~2.3-2.6x too long at every setting: 0 -> 1.053 s, 0.1 -> 0.278 s, 0.15 -> 0.186 s, 0.25 -> 0.119 s, 0.5 -> 0.060 s, 0.75 -> 0.037 s, 1 -> 0.029 s. Visible as a distinctly fatter comet tail in the dialed side-by-side (label dialed-mid). Note the control is also NAMED differently on the two sides",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Untouched-default speed is the most visible gap: the original bounces 1.63 times across the strip per second (full out-and-back period 1.23 s); the port bounces 1.00 times per second (period 2.00 s). Speed up the port's default by ~1.63x. On the port's own sliderSpeed curve this means its untouched default sits near 0.40 where the original's sits near 0.61.",
+    "The sliderSpeed response curve is close but offset low by a near-constant ~10 px/s on a 60-px strip: at slider 0 the original still creeps at ~10 px/s (0.17 sweeps/s) while the port nearly stops at ~3 px/s, and at slider 1 the original does ~157 px/s vs the port's ~144. Raise the port's floor (slider 0) and its top end by that offset; the slope is already within 4%.",
+    "The fade dial is mapped too weakly on the port — its trail half-life is ~2.4x the original's at every setting tested (orig 0.398/0.114/0.051/0.024 s at fade 0/0.1/0.25/0.5, port 1.053/0.278/0.119/0.060 s). Roughly 2.4x the port's decay rate at a given dial value. Do NOT re-tune this from the untouched render — untouched the two already agree (half-life 0.171 s orig vs 0.194 s port); the error only shows up once the dial is set.",
+    "The port's eye head is always exactly 255 while the original's head is one fade-step dimmer (219 at 20 fps, 240 at 50 fps, 247 at 100 fps) — the original applies its fade after drawing the head, the port before. Minor, but it makes the port's default render ~16% brighter overall at 20 fps.",
+    "Rename the port's fade control from `sliderFade` to `sliderfade` (lowercase f, label \"fade\") to match the original's exported control name exactly; the other two control names already match.",
+    "Everything else is right and should not be touched: single-pixel bouncing head with exponential trail, reversal at both strip ends, time-based (frame-rate-invariant) motion AND fade, hue+saturation from the picker with the V component ignored, red default, no randomness, and a steady state that is still healthy at t=120 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "fast100",
+    "late-window",
+    "seed7",
+    "dump-track100",
+    "fpsdiag-10",
+    "fpsdiag-20",
+    "fpsdiag-50",
+    "trail20",
+    "trail50",
+    "trail100",
+    "spd-0",
+    "spd-0.1",
+    "spd-0.2",
+    "spd-0.3",
+    "spd-0.4",
+    "spd-05",
+    "spd-0.6",
+    "spd-0.8",
+    "spd-1",
+    "fade-0",
+    "fade-0.1",
+    "fade-0.15",
+    "fade-0.25",
+    "fade-0.5",
+    "fade-0.75",
+    "fade-1",
+    "untouched-fadecheck",
+    "spdonly-fadecheck",
+    "col-green",
+    "col-blue",
+    "col-pastel",
+    "col-dim",
+    "dialed-mid",
+    "rig-30",
+    "rig-120"
+  ]
+}
