@@ -1,0 +1,58 @@
+{
+  "slug": "holiday-diagonal-stripes",
+  "verdict": "match",
+  "score": 9,
+  "confidence": "high",
+  "summary": "Port is bit-for-bit identical to the original at every explicitly-dialed Slope setting; the only divergence is the untouched built-in default (orig 0.4, port 0.5), which tilts the stripes ~5 deg steeper and, on the default 16x16 rig, makes the panel pulse near-solid red/green as the 45-degree stripes align with the grid.",
+  "observations": [
+    "Both sides draw the same thing: scrolling candy-cane diagonal stripes in pure red (255,0,0), pure green (0,255,0) and pure white (255,255,255), no other colors anywhere. Dumped rows on the 48x48 grid at t=0 are character-for-character identical (W GGG W RRR W ... with 1-px white separators between 3-px color runs).",
+    "Both are resolution-independent in the same way: a 2D DFT of the R-G field gives a dominant horizontal spatial frequency of exactly 6 cycles per panel width at BOTH 16x16 and 48x48, on both sides. Neither rasterizes at native resolution.",
+    "Untouched, the stripe wavevector differs only in its vertical component: original k=(6,5) cycles/panel, port k=(6,6). The port's stripes are therefore exactly 45 degrees; the original's are steeper (~39.8 degrees from horizontal). This holds at t=0 and still holds at t=50-59 s (untouched-late), so it is a constant geometric offset, not a drift.",
+    "That offset is exactly one control default. Sweeping sliderSlope on both sides gives ky = 12 x slope on BOTH (slope 0 -> k=(6,0), 0.25 -> (6,3), 0.5 -> (6,6), 0.75 -> (6,9), 1 -> (6,12)). Fractional-frequency scan of the untouched originals puts orig at ky~4.8 (slope 0.4) and port at ky=6 (slope 0.5).",
+    "Confirmed directly: rendering the PORT with sliderSlope=0.4 against the UNTOUCHED original on a 48x48 grid gives meanAbsDiff 0.00 at t=0.05, 1 and 2 s, and 0.22 (6 channels of 6912, a single boundary pixel) at t=0. The port's default is the whole difference.",
+    "With the SAME slope dialed on both sides, the renders are byte-identical: meanAbsDiff exactly 0.00 at every dumped time at slope 0, 0.25, 0.5, 0.75 and 1 (48x48, 3 dump times each, 6912 channels each).",
+    "Baseline (16x16, untouched) statsSummary flags a fake divergence: port zeroMotionFrames 55/120 with motion alternating 0,68,0,68 while orig posts 1/120 and motion ~25-37 every frame. This is NOT a port bug - it is the 45-degree stripe field landing on the same 16-px quantization for pairs of frames. Dialing BOTH sides to slope=0.5 reproduces it on the original exactly (orig zm 55, port zm 55, motion avg 31.2/31.2); dialing both to 0.4 clears it on both (zm 1/1, motion 31.1/31.1).",
+    "Same root cause for the port's untouched rhythm image showing periodic bright red/green rows the original lacks (port meanR max 204 vs orig 166 at 16x16): at slope 0.5 on a 16-px panel the stripes periodically align with the columns and the whole panel goes near-solid. dial05-16px reproduces those bright rows on the ORIGINAL, pixel-for-pixel matching the port's untouched rhythm image.",
+    "Motion is identical on both sides and fps-invariant. Tracking the phase of the dominant spatial component at 10, 20 and 40 fps gives a per-0.5 s phase advance of -3.409 / -3.404 / -3.409 rad on the original and -3.415 / -3.407 / -3.403 rad on the port - same speed, same direction, no frame-rate coupling on either side.",
+    "No modes or regimes. Rhythm images over 60 s at 5 fps and 240 s at 2 fps are homogeneous on both sides from top to bottom; mean brightness holds at 122 with brightnessTrend 'steady' on both, and a --skip 50 window looks like the t=0 window. Single steady scrolling regime, whole run.",
+    "Deterministic, no RNG: seed 1234 renders byte-identical to seed 1 (meanAbsDiff 0.00) on both sides.",
+    "Control surfaces match exactly: one control on each side, name 'sliderSlope', kind 'slider', label 'Slope'. Neither side binds sensor globals (wantsSensors false on both). No compile or runtime errors on either side.",
+    "Probe called sliderSlope responsive on both (orig maxDelta 107.90, port 102.02), and value-dependence is confirmed - 0 and 1 differ from each other and from untouched on both sides."
+  ],
+  "dials": [
+    {
+      "name": "sliderSlope",
+      "origEffect": "Sets the stripe tilt continuously: vertical spatial frequency = 12 x slope cycles/panel with horizontal fixed at 6, so 0 gives vertical stripes, 0.5 gives exact 45-degree diagonals, 1 gives steep ~63-degree diagonals. Scroll speed and colors unchanged across the sweep. Built-in default (untouched) behaves as 0.4.",
+      "portEffect": "Identical - byte-identical renders to the original at slope 0, 0.25, 0.5, 0.75 and 1. Only the built-in default differs: untouched the port behaves as 0.5, not 0.4.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "One-line fix, and it is the only fix needed: the port's built-in default for the Slope control is 0.5 where the original's is 0.4. Change the initial value so an untouched load renders a stripe field with 6 horizontal and 4.8 vertical cycles per panel (k=(6,4.8)) instead of 6 and 6. Verified: port at sliderSlope=0.4 matches the untouched original to 0.00 mean absolute difference over a 48x48 grid at t=0.05/1/2 s.",
+    "Do not chase the 'port freezes every other frame' signal in the default 16x16 stats (zeroMotionFrames 55/120, motion alternating 0/68) or the periodic near-solid red/green flashes in the port's rhythm image. Both are consequences of the 0.5 default landing the stripes at exactly 45 degrees on a 16-px grid; the original produces the identical artefact when dialed to 0.5, and both disappear once the default is corrected to 0.4.",
+    "Nothing else needs touching. Stripe colors (pure 255,0,0 / 0,255,0 / 255,255,255), stripe widths and duty cycle (3-px color runs separated by 1-px white at 48-px width, i.e. 6 cycles/panel), scroll direction and speed (-3.41 rad of spatial phase per 0.5 s, fps-invariant at 10/20/40), control name/kind/label, determinism across seeds, and steady-state behaviour out to 240 s all already match exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "untouched-late",
+    "grid48",
+    "g48-dump",
+    "d16",
+    "slope-0",
+    "slope-0.25",
+    "slope-0.5",
+    "slope-0.75",
+    "slope-1",
+    "port-slope-match",
+    "port04-vs-origdefault",
+    "dial05-16px",
+    "dial04-16px",
+    "seed1234",
+    "fps10",
+    "fps20",
+    "fps40"
+  ]
+}
