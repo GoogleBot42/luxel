@@ -46,7 +46,8 @@ Options: `--seconds N` (default 6), `--fps N` (default 20), `--skip N`
 `--label NAME` (names the output subdir — use a fresh label per experiment).
 For 2D rigs also: `--strip-frames N` (default 12) and `--strip-at S` (seconds
 into the captured window where the filmstrip starts; default midpoint).
-Also `--probe-controls` (+ `--probe-seconds N`, default 4) — see below.
+Also `--probe-controls` (+ `--probe-seconds N`, default 4) and
+`--dump "t1,t2,..."` — see below.
 
 **`--skip` preserves the timeline.** Both sides run one deterministic clock
 (same seed, same pinned wall clock, same fixed frame delta), and `--skip N`
@@ -123,6 +124,8 @@ Output lands in `tools/verify/out/<slug>/<label>/`:
   before trusting your eyes — but read `meta.json`'s summaries first and only
   come here when one of them flags something.
 - `probe.json` — **only when you passed `--probe-controls`.** See below.
+- `frames.json` — **only when you passed `--dump`.** Exact per-pixel values at
+  the moments you asked for. See below.
 
 ### Reading meta.json
 
@@ -145,9 +148,10 @@ Only drop into the full series in `stats.json` when the summary flags something
 Each series prints on ONE line, so reading one is cheap — but a summary
 comparison usually settles the question.
 
-Top-level `warnings` collects run-level complaints (currently: a `--strip-at`
-or `--strip-frames` you asked for that had to be clamped to fit the window).
-Non-empty means one of your arguments did not take effect as written.
+Top-level `warnings` collects run-level complaints (currently: a `--strip-at`,
+`--strip-frames` or `--dump` time you asked for that had to be clamped to fit
+the window). Non-empty means one of your arguments did not take effect as
+written.
 
 `sheetTimesSeconds` and `stripTimesSeconds` are TOP-LEVEL, not per side: both
 sides sample identical frame indices by construction.
@@ -162,6 +166,50 @@ different provenance in one verdict.
 
 View the PNGs with the Read tool. Both sides always render on the same rig,
 same seed, same clock — differences you see are real differences.
+
+### Exact numbers: `--dump`
+
+The PNGs are nearest-neighbour upscaled, so every pixel is a block several
+output pixels wide, and a waterfall row is one or two pixels tall. Counting
+stripe widths, locating a feature's pixel index, or naming an exact colour off
+those images is guesswork — and a judge who guesses "the port's stripes look a
+bit wider" writes weaker feedback than one who says "orig: 3-px stripes with
+3-px gaps; port: 4-px stripes, no gaps".
+
+    snap.mjs <slug> --label dump-mid --dump "0,3,5.5"
+
+Times are seconds INTO THE CAPTURED WINDOW (so with `--skip 14`, `--dump 0` is
+t=14 s on the timeline). For each one the nearest captured frame is taken and
+written to `frames.json`:
+
+```json
+{ "times": [0, 3, 5.5], "frameIndices": [0, 60, 110],
+  "orig": [ [[255,0,0], [255,0,0], [0,0,0], ...] ],
+  "port": [ ... ] }
+```
+
+(plus `slug`, `label`, `rig`, `pixels`, `grid` and `requestedTimes`, so a dump
+carries its own settings). `times` are the ABSOLUTE times actually dumped (`skip + index/fps`, the same
+convention as `sheetTimesSeconds`), so they tell you which moment you really
+got; a time past the end of the window is clamped and warned about in
+`meta.json`'s `warnings`. Each side is one entry per time. A strip/cloud frame
+is a flat array of `[r,g,b]` triples, one per pixel, in pixel-index order; a
+GRID frame is nested as `gridH` rows of `gridW` triples, one row per line, so
+the spatial layout reads straight off the page. A side that failed to compile
+is omitted.
+
+Use it whenever exact layout matters: stripe/band widths and duty cycle, the
+pixel index of a feature's leading edge (compare the same dump time on both
+sides to get a per-frame speed in pixels), exact palette RGB, whether "black"
+is really 0 or a dim 6, or whether an off-by-one in indexing mirrors or shifts
+the pattern. It costs one extra file and no extra render.
+
+Pair it with a SMALL rig. Re-rendering at `--pixels 12` (or `--rig grid --grid
+8x8`) makes period and duty structure unambiguous — a whole frame fits on one
+line and you can read the repeat directly instead of inferring it. Watch for
+the rig-content caveat above: on some patterns feature sizes are fractions of
+the strip and change with the pixel count, so confirm any headline number on
+the default rig, with a `--dump` there too.
 
 ### Dial triage: `--probe-controls`
 
@@ -180,12 +228,19 @@ spend effort:
   you HOW a dial changes the output — for every dial the probe calls
   responsive, still do the manual low/mid/high sweep on BOTH sides and
   describe the change (faster? denser? bluer?) in `dials`.
-- A dial the probe calls inert may just be slower than the probe window. The
-  window is `--probe-seconds` (default 4 s). A mode/regime dial on a longer
-  timer will read as inert; re-probe with a bigger `--probe-seconds`, or at a
-  later `--skip`, before you believe it. Conversely, a dial with a large
-  delta at only ONE of 0/0.5/1 is usually a threshold or mode switch, not a
-  continuous knob — worth a manual sweep at intermediate values.
+- **Inert-in-probe is a HINT, never a conclusion — the probe reports false
+  inerts.** The window is `--probe-seconds` (default 4 s), and if it lands
+  inside a single long event, mode or dark gap, a perfectly live dial shows
+  nothing: a real case was a palette dial that only takes effect on the NEXT
+  event, several seconds after the probe ended. Before you record "inert" for
+  a dial on EITHER side, confirm it with a manual low/mid/high sweep over a
+  window long enough to contain several events/cycles (as the survey measured
+  them) — e.g. `--seconds 60 --fps 5` per setting, or re-probe with a much
+  bigger `--probe-seconds` and a `--skip` that lands elsewhere in the cycle.
+  Only after that manual check may "inert" appear in your verdict, and say
+  which window you checked over. Conversely, a dial with a large delta at only
+  ONE of 0/0.5/1 is usually a threshold or mode switch, not a continuous knob
+  — worth a manual sweep at intermediate values.
 - **An inert dial on the ORIGINAL is a caveat, not a licence.** Record it as
   "dial effect unverifiable from output" and move on; it is not evidence that
   the port may drop the control. Control-SURFACE mismatches stay reportable
@@ -204,6 +259,16 @@ spend effort:
    `baseline` (6 s, 20 fps) is the fine-detail view. `survey` is 300 frames of
    coarse time — cheap, and the only thing that shows you the pattern's FULL
    cycle.
+
+   **60 s is a MINIMUM, not the survey length.** It is where you start; the
+   survey is finished only when you have seen several full events or cycles.
+   If the 60 s survey shows sparse events — long dark or static gaps, only one
+   or two events in the whole window, a cycle that is still unfinished at the
+   end — extend it (`--label survey-240 --seconds 240 --fps 2`) and read that
+   instead. One judge needed 240 s before an aurora pattern's true event
+   cadence was visible; at 60 s the cadence it would have reported was an
+   artefact of the window. Sparse-event patterns are exactly the ones where a
+   short survey produces a confident wrong answer, so spend the extra run.
 
    **Read the survey first**, and read its rhythm/waterfall images before its
    sheets. Regime structure shows up there as horizontal banding: a stretch of
@@ -225,7 +290,8 @@ spend effort:
    never did.
 
 2. Dial triage: `snap.mjs <slug> --probe-controls --label probe` (see above).
-   Do this before any manual dial work so you sweep only the live dials.
+   Do this before any manual dial work so you sweep only the live dials — but
+   treat an inert result as a hint to check by hand, not as a finding.
 3. If a side is black or static, don't conclude yet: try `--skip 2`
    (some patterns warm up), a longer window (`--seconds 12`), and a lower
    or higher fps. Patterns that react only to dials may need a control set.
@@ -252,7 +318,9 @@ spend effort:
 7. Compare on these axes, in order of importance:
    - **Alive vs dead**: does the port render at all, without runtime errors?
    - **Structure**: spatial layout — number/shape/size of features (bands,
-     blobs, waves, sparkles), 1D vs 2D character.
+     blobs, waves, sparkles), 1D vs 2D character. When the claim is a WIDTH, a
+     COUNT, a POSITION or an exact COLOUR, get it from `--dump` (and/or a
+     `--pixels 12` re-render), not from the upscaled image.
    - **Motion**: direction, speed, rhythm, smoothness. For 1D/3D rigs read
      the waterfall slope. For 2D rigs, motion claims MUST come from
      `*-motion.png` (frame-to-frame) and `*-rhythm.png` (whole-window
@@ -265,11 +333,15 @@ spend effort:
      each control name the sides share (or that obviously correspond), set it
      low/mid/high on BOTH sides (`--label ctl-<name>-low` etc.) and check the
      response direction and magnitude match: the probe gives you magnitude,
-     the manual sweep gives you the character of the change. A dial that
-     visibly does something on the original and nothing on the port is a
-     finding. A dial that does nothing on the ORIGINAL is a caveat — record
-     "dial effect unverifiable from output" and do not treat it as permission
-     for the port to drop the control.
+     the manual sweep gives you the character of the change. Sweep the dials
+     the probe called INERT too, at least once each over a multi-event window
+     — that is where the probe's false inerts turn up. A dial that visibly
+     does something on the original and nothing on the port is a finding —
+     but only after the port has been swept over a window long enough to
+     contain several events, since "nothing" from a short window is exactly
+     the false inert described above. A dial that does nothing on the ORIGINAL
+     is a caveat — record "dial effect unverifiable from output" and do not
+     treat it as permission for the port to drop the control.
 
      Controls semantics: the harness enumerates each side's controls FROM THE
      ENGINE, so the lists in meta.json are what the patterns actually expose —

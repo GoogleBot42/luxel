@@ -27,6 +27,8 @@
 //   --probe-controls     additionally sweep every settable control, one at a
 //                        time, and write probe.json (see below)
 //   --probe-seconds N    probe window length (default 4)
+//   --dump "t1,t2,..."   write frames.json with the exact per-pixel values of
+//                        the captured frames nearest those times (see below)
 //   --out-root DIR       output root (default tools/verify/out)
 //
 // Writes <out-root>/<slug>/<label>/{orig.png,port.png,meta.json,stats.json}.
@@ -65,6 +67,19 @@
 // window — raise --probe-seconds (or probe at a later --skip) before believing
 // it. Any --controls-orig/--controls-port on the run form the untouched
 // baseline; the probed dial is overridden on top of them.
+//
+// --dump "t1,t2,..." answers "what are the ACTUAL numbers?" — the PNGs are
+// nearest-neighbour upscaled and alias fine structure away, so stripe widths,
+// feature pixel indices and exact RGB values are guesswork when read off an
+// image. Each listed time is seconds INTO THE CAPTURED WINDOW (t=0 is the first
+// captured frame, i.e. --skip seconds on the run's timeline); the nearest
+// captured frame is taken and clamped into the window (clamping warns). It
+// writes frames.json: `{times, frameIndices, orig, port}` where `times` are the
+// ABSOLUTE times of the frames actually dumped (skip + index/fps, the same
+// convention as meta.json's sheetTimesSeconds) and each side is one entry per
+// time. A strip/cloud frame is a flat array of `pixels` [r,g,b] triples; a grid
+// frame is nested as gridH rows of gridW triples, so the layout reads directly.
+// A side that failed to compile is omitted.
 //
 // Exit status is 0 whenever the harness ran — a pattern that fails to compile
 // or throws at runtime is a valid verification result, recorded in meta.json.
@@ -133,6 +148,7 @@ function parseArgs(argv) {
     stripAt: null, // null → window midpoint
     probeControls: false,
     probeSeconds: PROBE_SECONDS,
+    dump: null, // null → no frames.json
     outRoot: path.join(HERE, "out"),
   };
   const FLAGS = { "--probe-controls": "probeControls" };
@@ -151,6 +167,7 @@ function parseArgs(argv) {
     "--strip-frames": ["stripFrames", Number],
     "--strip-at": ["stripAt", Number],
     "--probe-seconds": ["probeSeconds", Number],
+    "--dump": ["dump", parseTimes],
     "--out-root": ["outRoot", String],
   };
   let slug = null;
@@ -179,6 +196,18 @@ function parseArgs(argv) {
   if (!(opts.probeSeconds > 0)) die("--probe-seconds must be > 0");
   if (opts.rig && !["strip", "grid", "cloud"].includes(opts.rig)) die(`bad --rig ${opts.rig}`);
   return { slug, opts };
+}
+
+/** --dump "0,3,7.5" → [0, 3, 7.5]: times in seconds into the captured window. */
+function parseTimes(spec) {
+  const times = String(spec)
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t !== "")
+    .map(Number);
+  if (!times.length) die(`--dump needs at least one time (e.g. --dump "0,3")`);
+  if (times.some((t) => !Number.isFinite(t) || t < 0)) die(`bad --dump "${spec}" (want times >= 0)`);
+  return times;
 }
 
 /** "name=1;other=0.2,0.3,0.4" → { name: [1], other: [0.2,0.3,0.4] } */
@@ -548,6 +577,26 @@ function rhythmWaterfall(frames, gw, gh, rowsPerPixel) {
   return encodePNG(up.width, up.height, up.rgb);
 }
 
+// ---- frame dumps -----------------------------------------------------------
+
+/** Index of the captured frame nearest `t` seconds into the window, clamped. */
+function nearestFrame(t, fps, captured) {
+  return Math.max(0, Math.min(captured - 1, Math.round(t * fps)));
+}
+
+/** One captured frame as [r,g,b] triples: flat for 1D/3D rigs, nested as
+ *  `gridH` rows of `gridW` triples for the grid rig so the layout reads. */
+function dumpFrame(frame, rig, kind) {
+  const px = [];
+  for (let i = 0; i < rig.pixels; i++) {
+    px.push([frame[i * 3], frame[i * 3 + 1], frame[i * 3 + 2]]);
+  }
+  if (kind !== "grid") return px;
+  const rows = [];
+  for (let y = 0; y < rig.gridH; y++) rows.push(px.slice(y * rig.gridW, (y + 1) * rig.gridW));
+  return rows;
+}
+
 // ---- meta serialization ----------------------------------------------------
 
 /** Width past which a one-line leaf object is broken up again. */
@@ -563,6 +612,11 @@ function stringifyMeta(value, indent = "") {
   if (Array.isArray(value)) {
     if (value.length === 0) return "[]";
     if (value.every((v) => typeof v === "number")) return `[${value.join(", ")}]`;
+    // Pixel data (a run of [r,g,b] triples: one dumped strip frame, or one grid
+    // row) stays on ONE line — read by position, not element, same as a series.
+    if (value.every((v) => Array.isArray(v) && v.every((n) => typeof n === "number"))) {
+      return `[${value.map((v) => `[${v.join(", ")}]`).join(", ")}]`;
+    }
     return `[\n${value.map((v) => pad + stringifyMeta(v, pad)).join(",\n")}\n${indent}]`;
   }
   const keys = Object.keys(value).filter((k) => value[k] !== undefined);
@@ -690,6 +744,22 @@ if (stripPicks) {
   }
 }
 
+// --dump: pick the captured frame nearest each requested time. A time past the
+// end of the window is clamped to the last captured frame — say so, since the
+// numbers a judge then reads are not from the moment they asked for.
+const dumpPicks = opts.dump ? opts.dump.map((t) => nearestFrame(t, opts.fps, captured)) : null;
+if (dumpPicks) {
+  opts.dump.forEach((t, i) => {
+    const eff = +(dumpPicks[i] / opts.fps).toFixed(3);
+    if (Math.abs(eff - t) > 0.5 / opts.fps) {
+      warn(
+        `--dump time ${t}s clamped to ${eff}s — outside the ${opts.seconds}s ` +
+          `captured window (${captured} frames @ ${opts.fps}fps)`,
+      );
+    }
+  });
+}
+
 const sheetLabels = picks ? stampsFor(picks, opts.skip, opts.fps) : null;
 const stripLabels = stripPicks ? stampsFor(stripPicks, opts.skip, opts.fps) : null;
 
@@ -777,6 +847,35 @@ const statsFile = {
 };
 fs.writeFileSync(path.join(outDir, "stats.json"), stringifyMeta(statsFile) + "\n");
 
+// ---- optional frame dump ---------------------------------------------------
+
+// Exact per-pixel values at the requested moments — what the upscaled PNGs
+// alias away. Both sides are dumped from the same frame indices.
+const framesPath = path.join(outDir, "frames.json");
+let dumpTimes = null;
+if (dumpPicks) {
+  const framesFile = {
+    slug,
+    label: opts.label,
+    rig: kind,
+    pixels: rig.pixels,
+    grid: kind === "grid" ? `${rig.gridW}x${rig.gridH}` : null,
+    requestedTimes: opts.dump,
+    // absolute times on the run's timeline, like meta.json's sheetTimesSeconds
+    times: dumpPicks.map((i) => +(opts.skip + i / opts.fps).toFixed(3)),
+    frameIndices: dumpPicks,
+    ...Object.fromEntries(
+      Object.entries(sides)
+        .filter(([, s]) => s.frames)
+        .map(([k, s]) => [k, dumpPicks.map((i) => dumpFrame(s.frames[i], rig, kind))]),
+    ),
+  };
+  fs.writeFileSync(framesPath, stringifyMeta(framesFile) + "\n");
+  dumpTimes = framesFile.times;
+} else {
+  fs.rmSync(framesPath, { force: true }); // stale dump from a previous run
+}
+
 // ---- optional control probe ------------------------------------------------
 
 const probeFile = path.join(outDir, "probe.json");
@@ -830,4 +929,5 @@ const brief = (k) => {
 console.log(`${slug} [${kind}, ${rig.pixels}px, ${captured} frames] → ${path.relative(ROOT, outDir)}`);
 console.log(`  ${brief("orig")}`);
 console.log(`  ${brief("port")}`);
+if (dumpTimes) console.log(`  dump: frames.json at ${dumpTimes.join("s, ")}s`);
 if (probe) printProbeTable(probe);
