@@ -1,0 +1,47 @@
+{
+  "slug": "wichmannhill-prng",
+  "verdict": "match",
+  "score": 9,
+  "confidence": "high",
+  "summary": "Both sides render full-rig per-frame RGB noise from a Wichmann-Hill generator and are byte-identical for the first ~55 frames (drifting only by isolated 1-LSB rounding) before the chaotic recurrence decorrelates them; after that their statistical character — uniform hue, uniform value, saturation pinned at 1, zero spatial/temporal/serial correlation, no lattice structure — is indistinguishable out to t = 607 s.",
+  "observations": [
+    "Rig/settings: strip, 60 px, no controls on EITHER side (probe reports '(no settable controls)' for orig and port), sensors not bound (wantsSensors false both sides), no compile or runtime errors.",
+    "Visual character (baseline 6 s @ 20 fps waterfall, and survey 60 s @ 5 fps): both sides are dense full-strip confetti — every pixel a fresh fully-saturated random hue at a random value, resampled every frame. No spatial features, no motion direction, no regimes. The survey waterfall shows uniform texture top to bottom on both sides with no banding, so this pattern has exactly ONE regime; there is no mode rotation to sample.",
+    "Aggregate stats agree closely at every window checked. baseline: orig meanBrightness avg 62.7 / motion avg 77.2, port 62.7 / 77.5. survey (60 s): orig 63.3 / 78.5, port 62.9 / 78.1. Late window skip 300 s (20 s @ 20 fps): orig mean 63 motion 79, port 64 motion 79. skip 600 s: orig 63/79, port 64/80. brightnessTrend 'steady' and zeroMotionFrames = 1 (the unavoidable first frame) on both sides in every run — neither side freezes, decays, or saturates.",
+    "STRONGEST FINDING — the port reproduces the original's exact generator, not merely a similar one. At seed 1 the dumped frames are BYTE-IDENTICAL (all 180 channels) at t = 0, 0.05, 0.1, 0.5, 1.0, 2.0, 2.2 ... 2.7 s. Per-frame diff over the whole 0-6 s window at 20 fps: frames 0-54 differ in at most ONE channel by at most ONE count (frames 7, 9, 17, 21, 29, 37, 39, 42, 43 each show a single 1-LSB difference; all other frames are exactly equal).",
+    "Decorrelation is abrupt and total, exactly as a chaotic PRNG recurrence should behave: frame 55 (t = 2.75 s) jumps from a 1-channel/1-count difference to 140/180 channels differing with max delta 227, and every frame after that is fully decorrelated (152-160 of 180 channels differing, max deltas 231-253). The accumulated sub-LSB arithmetic difference eventually flips a state value and the two streams separate permanently. This is inherent to the pattern class, not a port defect.",
+    "The same signature reproduces on other rigs and at other seeds, which rules out a one-seed fluke. --pixels 7: byte-identical at t = 0, 0.5, 1.0. --fps 10 and --fps 40: byte-identical at t = 0, 0.5, 1.0 (so no frame-rate coupling difference). --rig grid --grid 16x16: 1 channel differing by 1 at t = 0, byte-identical at t = 0.5, fully decorrelated (665/768 channels) by t = 1.0 — decorrelation arrives sooner because 256 px consumes ~4x the draws per frame, which is the expected scaling. --seed 1234: orig and port byte-identical at t = 0 and t = 1; seed 1 and seed 1234 produce different streams on both sides (so both seed their WH state the same way from the harness clock/seed, and neither ignores the seed).",
+    "Post-divergence statistical comparison (34,200 hue and 34,200 value samples per side, pooled from t = 3-6 s, t = 100-115 s and t = 600-607 s). Hue: orig mean 0.4947, port mean 0.4923; deciles orig 10.1/9.8/10.4/10.8/9.4/11.1/10.1/8.8/9.6/10.0, port 10.5/9.9/9.6/11.3/9.5/9.8/9.8/10.5/9.4/9.7. Value: orig mean 0.4949, port 0.4975, both flat to within ~1% per decile. Saturation is 1.0 on 99.8% of pixels on orig and 99.7% on port (the remainder are near-black pixels where saturation is undefined) — i.e. both draw hsv(random, 1, random).",
+    "Two-sample KS between the sides over the pooled samples: hue D = 0.0101 (p ~ 0.06), value D = 0.0118 (p ~ 0.017). At n = 34,200 these are visually meaningless offsets; both sides also show the SAME mild 20-bin chi-square inflation (hue 99.8 orig vs 109.1 port, value 53.7 vs 52.5 on 19 df), which is the 8-bit RGB quantization of hue showing through on both sides equally rather than a defect in either generator.",
+    "Independence tests come out identically white on both sides. Spatial correlation along the strip at lag 1/2/3: orig value -0.006/-0.017/+0.017, hue -0.007/-0.007/+0.035; port value -0.017/+0.007/-0.036, hue -0.016/+0.010/-0.012. Temporal (same pixel, lag 1 and 2 frames): orig +0.009/-0.003, port -0.009/+0.012. Hue-vs-value on the same pixel: orig +0.007, port +0.018.",
+    "PRNG-quality tests on the flattened draw sequence (54,000 consecutive draws per side): lag-1 serial correlation orig +0.0095, port +0.0074. 16x16 consecutive-pair lattice occupancy: orig min 167 / max 388 / chi2 492 on 255 df, port min 170 / max 364 / chi2 436 — no empty cells, no planes or lattice striping on either side, and the residual inflation is the same on both (again the hue-quantization artefact).",
+    "No degeneracy or cycle collapse at long run times: in the 150-frame dump starting at t = 600 s neither side repeats a frame (0 duplicate frames each) and unique pixel colours are 8,513/9,000 on orig and 8,535/9,000 on port — the small shortfall on both is the birthday collision rate expected from a ~16-bit effective colour space, not a shrinking PRNG period.",
+    "Engine note relevant to the task brief: this pattern is NOT hit by the init-time-randomness-returns-constant gap. Neither side emits degenerate constant output; both are alive and stochastic from frame 0 on every rig, fps, seed and window tested."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing to fix. The port matches the original bit-for-bit for the first ~55 frames at 60 px (and the first ~20 frames on a 16x16 grid), which is the strongest possible output-level evidence that it implements the same Wichmann-Hill recurrence with the same seeding path and the same hsv(random, 1, random) render.",
+    "Do NOT chase the eventual divergence. Sub-LSB rounding differences between two formulations of the same modular recurrence are amplified to complete decorrelation within a few tens of frames by construction; that is what a PRNG does. The correct acceptance criterion for this slug is the statistical one, and the port passes it (uniform hue and value, saturation 1, near-zero spatial/temporal/serial correlation, no pair-lattice structure, stable out to t = 607 s).",
+    "If a future fixer wants to close even the residual 1-LSB gap, the target is the arithmetic ORDER inside the modular step, not the algorithm: the first differences are single-channel, single-count, and appear as early as frame 7, so one intermediate is being rounded differently before the state values themselves ever disagree.",
+    "Neither side exposes any control, so there is no control-surface gap to report; the pattern is meant to be watched, not dialed."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-a",
+    "dump-fine",
+    "whp-stat1",
+    "whp-bulk",
+    "whp-late",
+    "whp-late2",
+    "whp-seed7",
+    "whp-seed1234",
+    "whp-s1d",
+    "whp-s1234d",
+    "whp-grid",
+    "whp-px7",
+    "whp-fps10",
+    "whp-fps40"
+  ]
+}

@@ -138,6 +138,20 @@ PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
 or ring structure that is pure display artefact. Verify any structural
 claim on such a pattern from `--dump` numbers, never from the images.
 
+SPATIAL period detection: a "smallest shift with mean abs diff < threshold"
+exact-repeat test is fragile (sub-threshold dither fakes a shorter period)
+— use normalized CIRCULAR autocorrelation of the profile instead, same as
+for temporal periods. And on a strongly spatially-periodic pattern both
+cross-correlation shift scans (every multiple aligns) and DFT phase (locks
+to a dither harmonic) can fail — tracking the feature's ARGMAX (e.g. the
+comet head's brightest pixel) frame by frame on a large rig is the robust
+fallback.
+
+Displacement measured from a HIGH spatial harmonic aliases modulo that
+harmonic's own period (a k=4 brightness component unwraps mod width/4 and
+invents plateaus once the true swing exceeds it) — disambiguate with a
+k=1-range estimator, e.g. a hue field making exactly one turn per row.
+
 On a small grid, cap any angular-harmonic scan at roughly gridWidth/2 —
 harmonics above that are aliased garbage (a NumArcs sweep read k=15,16
 noise above the cap but an exact per-dial match below it).
@@ -608,6 +622,13 @@ A stopping rule for the no-divergence case: once dumps come back
 BYTE-IDENTICAL, byte-identity held across a rig sweep, an fps sweep, a seed
 check, and one late window is sufficient for `match` at high confidence —
 further experiments are confirmation, not discrimination; stop there.
+EXCEPTION — chaotic/PRNG slugs: byte-identity can hold for tens of frames
+and then vanish permanently (sub-LSB drift amplified by the recurrence).
+There, verify the break is PRECEDED by isolated 1-LSB differences rather
+than starting large (same algorithm, different rounding order = match),
+and judge everything after the break on distributions and correlations
+only — neither the early identity nor the late decorrelation alone is the
+right verdict basis.
 And when probing feature-count/rounding behaviour, include a pixel count
 that does NOT divide the pattern's feature count (e.g. `--pixels 7` against
 3 dots) — matching the rounding artefact there is far stronger evidence

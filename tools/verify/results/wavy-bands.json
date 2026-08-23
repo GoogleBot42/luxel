@@ -1,0 +1,63 @@
+{
+  "slug": "wavy-bands",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — four stationary rainbow bands undulating under a vertical travelling wave — but the port's undulation is only ~59% as deep, travels UP the grid where the original's travels DOWN, cycles ~25% faster, and the port adds a 'Columns' slider the original does not have.",
+  "observations": [
+    "Rig is 2D grid 16x16 (default). Both sides compile and run clean, no runtime errors, on every window tried (6 s, 24 s, 60 s, 300 s, and a late window at t=120-132 s). Neither side decays, freezes or saturates: brightnessTrend 'steady' on both, zeroMotionFrames 1 (the unavoidable first frame) on both.",
+    "STRUCTURE (identical on both sides): four bright vertical bands separated by dark gaps (dominant spatial brightness harmonic k=4 across the width on both), with hue making exactly ONE full rainbow turn across the width (measured hue turns per row: orig 1.07, port 1.08 at 16x16; 1.02 vs 1.04 at 32x32). Band order left-to-right red -> yellow/green -> cyan -> blue/purple on both. Neither side scrolls horizontally: the DC term of the band offset sits at -1.45 px (orig) / -1.53 px (port) and stays there over 24 s.",
+    "MOTION AXIS (the divergence): each row's bands are displaced horizontally by an amount that varies sinusoidally with y, and that y-wave travels vertically. Tracking the wave crest's row index at 16x16, 0.25 s apart: ORIG 5.9 -> 6.6 -> 7.4 -> 8.5 -> 9.7 -> 10.8 -> 11.9 -> 12.9 -> ... -> 15, wraps to 0 and climbs again (crest moves DOWNWARD, top to bottom, ~3.5 rows/s). PORT 4.8 -> 4.2 -> 3.4 -> 2.1 -> 1.0 -> 0, wraps to 15 and keeps descending (crest moves UPWARD, bottom to top, ~3.6 rows/s). Reconfirmed independently at 32x32 (orig crest y 12 -> 20 -> 28 -> 30 over t=0..3 s; port crest y 10 -> 2 -> 30 -> 24 over the same times). The travel SPEED magnitude matches (~0.22-0.25 rig-heights/s on both); only the sign is flipped.",
+    "AMPLITUDE: the peak-to-peak horizontal displacement of the bands is much smaller on the port. At 16x16 over a 24 s / 96-frame track the median peak-to-peak swing is orig 5.19 px vs port 3.03 px. At 32x32 (t=0..3 s) orig spans -8.9..+2.0 = 10.9 px (34% of the width) vs port -6.7..-0.3 = 6.4 px (20%). Ratio orig:port = 1.70 at both sizes, i.e. the port's bands are ~41% straighter. This is plainly visible in the 32x32 contact sheets: the original draws bold S-curves, the port draws gentle wiggles.",
+    "TEMPORAL PERIOD: autocorrelation of the row-0 band displacement gives orig 6.25-6.50 s and port 5.00 s, identically at --fps 10, 20 and 40. Correspondingly the y-wavelength of the undulation is ~1.4 x grid height on the original and ~1.2 x grid height on the port (sinusoid fits: orig lambda_y median ~23 rows, port ~19 rows at 16x16).",
+    "COLOR/BRIGHTNESS: same palette family and same saturation ballpark, port marginally darker and crisper. meanBrightness 62 (orig) vs 56 (port) on every window; mean per-pixel max-channel value 114.6 vs 105.1; fraction of near-black pixels (V<16) 10.8% vs 13.9%; fraction of near-saturated pixels (V>200) 17.5% vs 14.5%; mean saturation 0.905 vs 0.925. Value histograms otherwise have the same continuous shape - no clipping or collapse on either side.",
+    "CONTROL SURFACE MISMATCH: the original exposes NO controls at all (meta.json sides.orig.controls == []). The port exposes one: sliderColumns, kind 'slider', label 'Columns'. The probe rates it strongly responsive (maxDelta 66.7, maxDeltaLit 67.0).",
+    "The port's untouched default render is BYTE-IDENTICAL to sliderColumns=0.5, and that setting produces 4 bands - i.e. the invented dial's default does reproduce the original's band count, so the untouched comparison is fair.",
+    "FPS INVARIANCE: both sides are time-based, not frame-stepped. The 6.4 s (orig) / 5.0 s (port) cycle and the ~5.2 px / ~3.0 px swings are unchanged at --fps 10, 20 and 40. No frame-rate coupling bug on either side.",
+    "SEED INDEPENDENCE: t=0 frames are byte-identical across --seed 1, 7 and 1234 on BOTH sides. The pattern is fully deterministic; no stochastic element to judge.",
+    "RESOLUTION INDEPENDENCE: both sides behave the same way under rig overrides - hue still makes 1 turn per row and the band count stays 4 at 8x8, 16x16, 32x8 and 32x32, and the wave swing stays a fixed FRACTION of the width on each side (orig 27.6/28.8/28.4%, port 19.9/19.7/19.1% at 8x8 / 32x32 / 32x8). So the amplitude gap is a property of the port, not of the lens.",
+    "NO REGIME STRUCTURE: a 300 s / 4 fps survey shows a homogeneous rhythm image on both sides - no mode rotation, no palette walk, no long super-cycle. The 60 s survey and the t=120-132 s late window show the same amplitudes and the same travel directions as t=0, so the steady state matches the opening seconds on both sides."
+  ],
+  "dials": [
+    {
+      "name": "sliderColumns",
+      "origEffect": "control does not exist on the original (original exposes zero controls)",
+      "portEffect": "live and strongly value-dependent: sets the number of bright bands across the width in unit steps. Frame-hash clustering over 0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1 gives 7 distinct looks with dominant spatial harmonic k = 1, 1, 2, 3, 4, 5, 6, 7, 7 (0 and 0.125 byte-identical; 0.875 and 1 byte-identical). Hue still makes exactly one rainbow turn across the width at every setting, and the wave amplitude is unaffected (swing 2.95-3.17 px across the whole sweep). Default = 0.5 = 4 bands = the original's geometry.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Reverse the vertical travel direction of the undulation. The original's wave crest migrates from the top of the grid toward the bottom (crest row 5.9 -> 15 over ~3.5 s at 16x16, then wraps); the port's migrates bottom-to-top (crest row 4.8 -> 0 over ~1.25 s, then wraps to 15). Flipping the sign of the time term (or of the y term) inside the wave argument is the whole fix - the travel SPEED is already right (~0.22-0.25 rig-heights per second on both sides).",
+    "Increase the undulation amplitude by ~1.7x. The horizontal displacement of the bands should span ~34% of the rig width peak-to-peak (measured 10.9 px on a 32-wide grid, 5.2 px median on a 16-wide grid); the port currently spans ~20% (6.4 px / 3.0 px). Visually the original's bands are bold S-curves and the port's are shallow wiggles.",
+    "Slow the vertical cycle by ~25%. The original repeats every 6.25-6.50 s at a fixed row; the port repeats every 5.00 s (both measured by autocorrelation, and both stable across --fps 10/20/40). Equivalently, the y-wavelength of the undulation should be ~1.4 grid-heights, not ~1.2.",
+    "Remove the invented 'Columns' (sliderColumns) control, or confirm it is a deliberate addition. The original has no controls at all. The dial's default value (0.5) happens to reproduce the original's 4-band geometry, so it does not break the default look, but it is a control-surface mismatch: a user changing it (to 1-3 or 5-7 bands) leaves the original's design entirely.",
+    "Minor: the port renders ~10% dimmer and slightly crisper - mean brightness 56 vs 62, mean pixel value 105 vs 115, near-black pixel fraction 13.9% vs 10.8%, near-saturated fraction 14.5% vs 17.5%, saturation 0.925 vs 0.905. The band brightness envelope is a touch narrower/deeper than the original's; widening the lit part of each band slightly (or reducing the sharpness of the gap between bands) would close it. Palette family, band order and hue span are already exact.",
+    "Everything else is right and should not be touched: 4 bands with one full rainbow turn across the width, no horizontal scroll, time-based (fps-invariant) animation, deterministic/seed-independent, resolution-independent (feature counts fixed, feature sizes scale with the rig at 8x8 / 16x16 / 32x8 / 32x32), and a steady state at t=120 s identical in character to t=0."
+  ],
+  "experiments": [
+    "wb-baseline",
+    "wb-survey",
+    "wb-probe",
+    "wb-survey300",
+    "wb-dump1",
+    "wb-dense",
+    "wb-track",
+    "wb-fps10",
+    "wb-fps40",
+    "wb-grid8",
+    "wb-grid32",
+    "wb-grid32x8",
+    "wb-seed7",
+    "wb-seed1234",
+    "wb-late",
+    "wb-col-0",
+    "wb-col-0.125",
+    "wb-col-0.25",
+    "wb-col-0.375",
+    "wb-col-0.5",
+    "wb-col-0.625",
+    "wb-col-0.75",
+    "wb-col-0.875",
+    "wb-col-1"
+  ]
+}
