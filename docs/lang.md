@@ -352,9 +352,27 @@ feedback(buf, 0.92)
 
 ### Noise
 
-`perlin(x, y, z, seed)` and the fractal variants `perlinFbm`,
-`perlinRidge`, `perlinTurbulence`; `setPerlinWrap(x, y, z)` makes the
-lattice tile.
+`perlin(x, y, z, seed)` and the fractal variants `perlinFbm(x, y, z,
+lacunarity, gain, octaves)`, `perlinRidge(x, y, z, lacunarity, gain,
+offset, octaves)`, `perlinTurbulence(x, y, z, lacunarity, gain,
+octaves)`; `setPerlinWrap(x, y, z)` makes the lattice tile (2..256 per
+axis, 256 by default) and applies to all four.
+
+These are **bit-compatible with Pixel Blaze** — fitted from captured
+oracle sweeps and reproduced exactly (see
+docs/research/04-oracle-findings.md). Practical consequences:
+
+- `perlin` returns roughly [-1, 1]; the fractal variants are **not**
+  normalized, so `perlinFbm` with `gain` 0.5 and 3 octaves spans about
+  ±1.75 and `perlinRidge` is non-negative and can exceed 1. Scale to
+  taste rather than assuming [0, 1].
+- `seed` picks one of **256** fields; it truncates to an integer and
+  wraps mod 256, so `perlin(x, y, z, 5)` and `perlin(x, y, z, 261)` are
+  the same field.
+- `octaves` truncates toward zero; ≤ 0 yields 0, and the loop is capped
+  at 32 so a runaway argument can't stall a frame.
+- Each octave of the fractal variants uses a *different* field (the
+  octave index is its seed), so layers never share lattice lines.
 
 **Luxel extensions**: `simplex2(x, y, seed = 0)` and `simplex3(x, y, z,
 seed = 0)` — simplex noise in roughly [-1, 1]: smoother than perlin with

@@ -1,5 +1,52 @@
 # Update log
 
+## 2026-08-22 — Perlin family fitted to the oracle and matched bit-for-bit
+## (Gitea #65)
+
+Offline fit of the 3,320 raw samples the 2026-08-22 oracle session
+captured into `tools/oracle/sweeps/`. **PB's `perlin`/`perlinFbm`/
+`perlinRidge`/`perlinTurbulence`/`setPerlinWrap` are a float32 port of
+Sean Barrett's `stb_perlin.h`, using its non-power-of-two wrap variant**
+(`stb_perlin_noise3_wrap_nonpow2`). `crates/luxel-core/src/noise.rs` now
+reproduces it; the previous implementation was an invented stand-in.
+
+How it was pinned down, from captured input/output only (no firmware
+reversed) — full derivation in docs/research/04-oracle-findings.md:
+per-cell polynomial fits of the fine sweep collapse at *exactly* degree 6
+(⇒ gradient noise × quintic fade — value noise would be 5, simplex 8);
+the recovered per-corner gradients all fall in the ±1/±1/0 basis; and the
+lattice byte at every sampled cell is `randtab[randtab[floor(x) mod wrap]
++ seed]` against stb's own tables — the *double* lookup that distinguishes
+the nonpow2 variant from plain `noise3_internal`, which fits no seed at
+all. Arithmetic is f32 because that is what PB does: a careful 16.16
+re-derivation sits ±5 raw units off, while f32 + truncate-toward-zero into
+16.16 is bit-exact on 99.5% of the samples and within 1 LSB on 100%.
+
+`compare-sweeps.mjs` before → after, all ten noise sweeps: 0% exact (max
+error ~1.0 in value) → perlin1d_fine, perlin_seed, perlin_wrap4,
+fbm_arg4/5/6 and ridge1d **100% bit-exact**; perlin1d, fbm1d, turb1d 99.0
+–99.5% exact and **100% within one raw LSB** (1/65536). That harness had
+been silently dropping each sweep's `setup` line, so `perlin_wrap4` was
+being compared without its `setPerlinWrap(4,4,4)` — fixed here too.
+
+**Existing patterns' noise visuals change** — that is the point: they now
+look like they do on a Pixel Blaze. Behaviours worth knowing: the fractal
+variants are *not* normalized (fbm at gain 0.5 spans ~±1.75, ridge is
+non-negative and can exceed 1); each octave uses the octave index as its
+seed, so layers never share lattice lines; `seed` wraps mod 256; ridge
+starts at amplitude 0.5 and weights each octave by the previous octave's
+value. `octaves` truncates toward zero (≤ 0 → 0) and is capped at 32 so a
+runaway argument can't stall a frame.
+
+New host tests lock the behaviour against subsampled device fixtures
+(`matches_pixelblaze_perlin`, `matches_pixelblaze_fractals`, ±1 raw
+tolerance) plus octave-count and seamless-wrap tests. Verified:
+luxel-core 69/69, `cargo test --workspace` green, clippy clean in
+noise.rs, stack-check ok (no frame over 12,288 B, `.stack` 29,372 B).
+Flash cost on the tightest board (c6-devkit) +1,472 B → 993,648 B app
+image, 54,928 B of slot margin. `web/public/luxel.wasm` in the main
+checkout lags master as always — rebuild in your own worktree.
+
 ## 2026-08-22 — Runtime-error blast radius now matches PB: an error kills
 ## the handler call, not the frame (Gitea #84)
 

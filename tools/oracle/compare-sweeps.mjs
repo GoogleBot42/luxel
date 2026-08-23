@@ -37,7 +37,9 @@ for (const [name, def] of Object.entries(SWEEPS)) {
   const ours = [];
   for (let off = 0; off < def.inputs.length; off += BATCH) {
     const batch = def.inputs.slice(off, off + BATCH);
-    const vars = luxelVars(buildBatchSource(def.expr, batch));
+    // `def.setup` (e.g. setPerlinWrap) is part of the probe — dropping it
+    // silently compares a different function than the device ran.
+    const vars = luxelVars(buildBatchSource(def.expr, batch, def.setup));
     if (!Array.isArray(vars.ys) || vars.ys.length !== batch.length) {
       throw new Error(`${name}: luxel ys missing`);
     }

@@ -294,14 +294,75 @@ Divergences found and FIXED in luxel-core:
   compile). `null` is. Luxel keeps `undefined` = 0 as a documented
   leniency (same class as 1-arg `square`).
 
-Noise sweeps captured for offline fitting (algorithm still unmatched —
-ours remains a visually-plausible stand-in): `sweeps/perlin1d*.json`,
+Noise sweeps captured for offline fitting: `sweeps/perlin1d*.json`,
 `perlin_seed`, `perlin_wrap4` (setPerlinWrap(4,4,4) periodicity),
 `fbm1d` + per-arg sweeps `fbm_arg4/5/6`, `ridge1d`, `turb1d` — 3,320
-samples total. Fitting is tracked as a Gitea ticket.
+samples total. Fitted and matched the same day; see the next section.
+
+## Perlin family fitted 2026-08-22 (fw 3.67 — Gitea #65, bit-exact)
+
+The 3,320 captured samples pin PB's noise down completely. **PB's perlin
+family is a float32 port of Sean Barrett's `stb_perlin.h`**, using its
+*non-power-of-two* wrap variant:
+
+| pattern language | stb_perlin.h |
+|---|---|
+| `perlin(x, y, z, seed)` | `stb_perlin_noise3_wrap_nonpow2` |
+| `perlinFbm(x,y,z,lac,gain,oct)` | `stb_perlin_fbm_noise3` |
+| `perlinRidge(x,y,z,lac,gain,off,oct)` | `stb_perlin_ridge_noise3` |
+| `perlinTurbulence(x,y,z,lac,gain,oct)` | `stb_perlin_turbulence_noise3` |
+| `setPerlinWrap(x,y,z)` | the wrap arguments (default 256) |
+
+How each piece was established, purely from the captured input/output
+pairs (no firmware was reversed):
+
+1. **Noise class + interpolation curve.** Least-squares polynomial fits
+   of `perlin1d_fine` (400 samples inside the single lattice cell
+   x ∈ [0,1]) collapse to *exactly* degree 6: residual RMS 2005 raw at
+   degree 2, 51 at degree 5, **0.30 at degree 6**, and no further
+   improvement at 7–9. Degree 6 = a quintic fade (`6t⁵−15t⁴+10t³`)
+   multiplying a gradient term that is itself linear in t. Value noise
+   with the same fade would be degree 5; simplex's `(r²−d²)⁴` falloff
+   would be degree 8. So: classic gradient noise, quintic fade, lattice
+   on the integers.
+2. **Gradient set.** Writing each cell's fit as
+   `n(t) = (1−u)(Pt+Q) + u(R(t−1)+S)` recovers per-cell constants; the
+   t² coefficient is 0 to within noise (as the form demands), and
+   `R,S` of cell *i* equal `P,Q` of cell *i+1* across all 12 sampled
+   cells. Every recovered `P` decomposes into the fixed y/z fade weights
+   times gradient x-components drawn from {−1, 0, +1} — i.e. the
+   ±1/±1/0 basis, not normalized random directions.
+3. **The hash.** With y,z fixed, every lattice x depends on a single
+   permutation byte. Solving for that byte at each x reproduces
+   `randtab[randtab[floor(x) mod wrap] + seed]` using **stb's own
+   randtab and grad-index tables**, at all 12 cells. That double lookup
+   is the signature of `noise3_internal`'s *nonpow2* sibling — the plain
+   `noise3_internal` chain (`randtab[x0+seed]`) does not fit any seed.
+4. **Arithmetic.** A careful 16.16 re-derivation lands ±5 raw units off.
+   Evaluating in **float32** and truncating the result toward zero into
+   16.16 reproduces PB's raws **exactly on 99.5%** of all 3,320 samples
+   and within one LSB (1/65536) on 100% of them. Rounding to nearest
+   instead of truncating halves the exact-match rate, so the truncation
+   is real.
+5. **Fractal loops.** `fbm`/`ridge`/`turbulence` are stb's verbatim,
+   including the details that matter visually: the **octave index is
+   used as the noise seed** (every octave is a different field), ridge
+   starts at amplitude 0.5 and weights each octave by the *previous*
+   octave's value, and none of the three normalizes its sum. `octaves`
+   truncates toward zero, and PB's docs confirm `setPerlinWrap` applies
+   to all four functions.
+
+`tools/oracle/compare-sweeps.mjs` after the port: perlin1d 99.0% exact /
+100% ±1, perlin1d_fine · perlin_seed · perlin_wrap4 · fbm_arg4/5/6 ·
+ridge1d all **100% exact**, fbm1d and turb1d 99.5% exact / 100% ±1.
+Before the port, all ten sweeps were 0% exact with max errors near a
+full unit of output.
+
+(That harness had been silently dropping each sweep's `setup` line, so
+`perlin_wrap4` was compared without its `setPerlinWrap(4,4,4)` — fixed
+in the same change.)
 
 Still open, and why: **1D transform coords** (this oracle can never be
 mapless again — see the maps section above); **sensor-board accel/light
-scaling** (needs the physical PB sensor board); **PB's exact noise
-algorithm** (sweeps captured, fitting pending); **no-time clock behavior**
+scaling** (needs the physical PB sensor board); **no-time clock behavior**
 (untestable on a configured device).
