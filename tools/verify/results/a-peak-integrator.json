@@ -1,0 +1,43 @@
+{
+  "slug": "a-peak-integrator",
+  "verdict": "match",
+  "score": 5,
+  "confidence": "low",
+  "summary": "Both sides render exact black (all pixels 0,0,0) under every window, dial setting, seed and rig tested, and expose an identical control surface — indistinguishable in every observable respect, but the pattern appears sound-driven and the harness feeds no sensor data, so its real behaviour is unverifiable here.",
+  "observations": [
+    "Original renders without compile or runtime error; port likewise. Neither side is broken in the 'errors out' sense.",
+    "Both sides produce exactly zero output at every moment sampled: meanBrightness avg/min/max = 0, motion avg/min/max = 0, zeroMotionFrames = every captured frame, brightnessTrend 'steady' on both, across a 6 s/20 fps baseline, a 60 s/5 fps survey and a 240 s/2 fps extended survey.",
+    "This is NOT the dim-pattern false-freeze described in JUDGE.md: a --dump at t=0, 3, 3.05, 10, 20 and 29 s (12-px rig, dial at 0.5) returns literal [0,0,0] for all 12 pixels on both sides at all six times — the zeros are exact, not rounding.",
+    "Control surface matches exactly: both sides expose one control, name 'sliderIntegrationTime', kind 'slider', label 'IntegrationTime'. No missing, extra, renamed or re-kinded control.",
+    "The survey revealed no regime structure at all — a single uniform all-black regime for the whole 240 s window, with no events, cycles or mode boundaries to park a --skip run inside. A late-window run (--skip 120, dial at 1) is likewise black, so there is no warm-up that eventually fires.",
+    "Not seed-dependent (seed 7 identical to seed 1) and not rig-dependent (re-rendered on an 8x8 grid; sheet, motion filmstrip and rhythm images all black on both sides).",
+    "The pattern name and the 'IntegrationTime' dial suggest an audio peak-integrator (a sound-reactive envelope follower). The harness feeds no sensor/sound data to either side, so both engines see identical absent input — the all-black result is consistent with a sound-reactive pattern that has no signal to integrate, on BOTH sides."
+  ],
+  "dials": [
+    {
+      "name": "sliderIntegrationTime",
+      "origEffect": "No observable effect. --probe-controls reports maxDelta 0.00 / not responsive; confirmed by manual sweep at 0, 0.5 and 1 over 60 s / 5 fps windows each (300 frames per setting), all rendering exact black. meta.json confirms the value was actually applied (controlsApplied sliderIntegrationTime=[1]) with no warnings, so the dial was genuinely set. Effect unverifiable from output — almost certainly because the dial scales an audio integration window and there is no audio.",
+      "portEffect": "Identical: probe maxDelta 0.00 / not responsive, and the same manual 0 / 0.5 / 1 sweep over 60 s windows renders exact black, with the value confirmed applied. Effect unverifiable from output for the same reason.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Nothing actionable is visible from rendered output: the port matches the original exactly (bit-for-bit black) at every setting, window, seed and rig tested, so there is no divergence to fix from this evidence.",
+    "This pattern cannot be meaningfully verified by the current harness. Its output depends on sound/sensor globals that the harness never populates, so both engines correctly sit at zero and the comparison surface is empty. Re-verification needs a harness that injects a synthetic audio envelope (e.g. a driven level/peak signal with a known beat cadence) into both sides identically; only then can the integrator's attack/decay shape, the meaning of 'IntegrationTime', and the port's fidelity actually be judged.",
+    "The one thing that IS confirmed and worth keeping: the control surface is exactly right (single slider, matching name, kind and label), and the port has no compile or runtime error on our engine.",
+    "A future fixer should treat the score of 5 as 'unverified', not as 'partially wrong' — no defect was found, but near-zero behaviour was observable, so the port should not be assumed correct either."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "ctl-integrationtime-0",
+    "ctl-integrationtime-0.5",
+    "ctl-integrationtime-1",
+    "dump-check",
+    "seed7",
+    "grid8-recheck",
+    "late-window"
+  ]
+}

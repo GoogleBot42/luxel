@@ -1,0 +1,50 @@
+{
+  "slug": "accelerometer-level-example",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "medium",
+  "summary": "With no sensor data fed to either side both render the same completely static horizontal rainbow level bar with identical hue-vs-x mapping and identical centering; the port's vertical glow is visibly narrower and slightly dimmer, and it exposes an extra toggleFlip control the original does not have.",
+  "observations": [
+    "SENSOR CAVEAT: the pattern is accelerometer-driven and the harness feeds no sensor data, so both sides see identical (absent) input and both render a perfectly frozen image. zeroMotionFrames = 300/300 on BOTH sides over the 60 s survey, and 120/120 on both in the 6 s baseline and in a --skip 120 --seconds 30 late window. Everything below is about the static resting frame; the actual tilt-reactive behaviour is UNVERIFIABLE in this harness.",
+    "Both sides draw one horizontal band across the middle of the 16x16 grid, on an otherwise pure-black field (0,0,0 everywhere outside the band on both sides). Both bands are exactly centred: the two brightest rows are rows 7 and 8 on 16x16, rows 23 and 24 on 48x48, on both sides.",
+    "Hue mapping across x is identical on both sides and is a full 360-degree sweep left to right: at 16 columns both go ff0000-ish red at x=0 through green at x=5, cyan/blue at x=10, magenta at x=13, back to red at x=15. Sampled values match hue-for-hue (orig row 7 x=1 = b14600, port row 7 x=1 = a34100 — same hue, different value). No hue offset, no mirroring, no index shift.",
+    "GLOW WIDTH DIFFERS. On the default 16x16 rig the original lights 6 rows (5-10) with peaks 07 / 3f / b1 / b1 / 3f / 07; the port lights 4 rows (6-9) with peaks 28 / a3 / a3 / 28. The original's vertical falloff has longer tails, so its bar reads noticeably thicker.",
+    "The same gap holds at 48x48: original lights rows 15-32 (18 of 48 rows, ~37% of the height, peak 228); port lights rows 17-30 (14 of 48 rows, ~29%, peak 223). Both sides are therefore resolution-scaling the same way — the glow is a fraction of the grid height, not a fixed pixel count — so this is a falloff-profile difference, not a resolution-independence difference.",
+    "Whole-frame brightness: orig meanBrightness 15 (flat, steady) vs port 12 (flat, steady) at 16x16; 16 vs 14 at 48x48. Entirely explained by the narrower/dimmer port glow.",
+    "CONTROL SURFACE MISMATCH: the original exposes exactly one control, gaugeLevel (kind gauge, label \"Level\"). The port exposes gaugeLevel (same name, same kind, same label) PLUS an extra toggleFlip (kind toggle, label \"Flip\") that the original does not have. Extra control on the port is a fidelity gap regardless of its effect.",
+    "The survey rhythm images for both sides are perfectly flat vertical stripes over the whole 60 s — same stripe positions and same hue sequence on both, the port's uniformly darker. No beats, modes, drift or regimes exist to compare: the pattern has exactly one (frozen) regime without sensor input."
+  ],
+  "dials": [
+    {
+      "name": "gaugeLevel",
+      "origEffect": "Display-only gauge (not settable, not probed); readout value not observable from rendered output.",
+      "portEffect": "Display-only gauge with identical name, kind and label; not settable, not probed.",
+      "matches": true
+    },
+    {
+      "name": "toggleFlip",
+      "origEffect": "ABSENT — the original exposes no such control at all.",
+      "portEffect": "Inert under this harness: probe delta 0.00 at 0/0.5/1, and manual sweeps at 0 and at 1 over 60 s / 300-frame windows both post mean 12, motion 0. Per-pixel dumps at t=0 with toggleFlip=0, toggleFlip=1 and untouched are byte-identical. Presumably it inverts an accelerometer axis, which cannot express itself with no sensor input.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Widen the port's vertical glow falloff. On 16x16 the original lights 6 rows with per-row peaks 0x07, 0x3f, 0xb1, 0xb1, 0x3f, 0x07 while the port lights only 4 with 0x28, 0xa3, 0xa3, 0x28; on 48x48 the original spans 18 rows (~37% of grid height) against the port's 14 (~29%). The port needs longer, dimmer tails: the original's profile falls off more gradually and reaches further, rather than the port's tighter, harder-edged bar.",
+    "Nudge the port's core slightly brighter: original peak row value is 0xb1 (177) vs the port's 0xa3 (163) on 16x16, which is most of the mean-brightness gap (15 vs 12).",
+    "Drop the extra toggleFlip toggle, or confirm the original genuinely has an equivalent under a different mechanism. The original's engine-enumerated control list is just [gaugeLevel: gauge]; the port adds [toggleFlip: toggle] on top of a correctly-matching gaugeLevel.",
+    "Nothing else needs changing from what is observable: centring, hue-vs-x mapping (full 360 sweep, red at x=0, no offset or mirroring), black background, and the way the bar scales with grid height are all already exact matches.",
+    "The tilt response itself was never exercised — no sensor data reaches either side in this harness, so both are frozen. If accelerometer behaviour matters, it needs a rig that can inject sensor globals; do not read this verdict as evidence the reactive part is correct."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "grid48",
+    "late",
+    "ctl-flip-0",
+    "ctl-flip-1",
+    "ctl-flip-dump0",
+    "ctl-flip-dump1"
+  ]
+}
