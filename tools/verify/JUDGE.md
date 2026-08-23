@@ -108,7 +108,11 @@ fps-invariance on such a pattern. Confirm coupling by tracking POSITION instead:
 period, per the Nyquist note below) and read how far it actually travelled per
 second. If the per-second displacement scales with fps, the pattern is
 frame-stepped; if it holds, it is time-based. Only report frame-rate coupling
-once the `--dump` positions say so.
+once the `--dump` positions say so. For STOCHASTIC/event patterns (twinkles,
+sparks) the analogue is the distribution of an OFF-STATE interval measured
+in seconds across fps: a per-frame retrigger probability gives dark-gap
+medians scaling exactly as 1/fps, while a time-based one holds them constant
+— the motion triple is uninformative on both sides of such patterns.
 
 STATIC FIELDS: if both sides post motion 0 with min==max brightness across a
 long window (and dumps confirm byte-identical frames over time), the pattern
@@ -210,6 +214,16 @@ side's correlation of frame(t) with frame(t+lag) as a function of lag, and
 read off how long each side takes to decorrelate to the same level (e.g.
 corr 0.34 at 0.5 s on one side vs 8 s on the other = 16x). A time-rescale
 scan — corr(orig[t], port[k·t]) maximized over k — pins an exact factor.
+CAVEAT: a rescale fit run on meanR/G/B series measures ONLY the palette
+walk on a hue-cycling pattern and says nothing about spatial motion — a
+clean k can be purely the colour timer while the geometry diverges. Always
+follow up with a phase-matched FRAME dump (orig at t vs port at k·t): if
+the spatial structure doesn't improve under the rescale, the factor belongs
+to the colour channel alone.
+Recovering an untouched DEFAULT by dial-matching is precise and cheap:
+sweep the dial and diff dumps against the untouched render — a byte-
+identical hit pins the default exactly (dump at t>0; at t=0 phase is
+identical regardless of a speed dial, so only geometry dials identify).
 Two follow-ons once a speed factor exists: (1) `--skip` applies to BOTH
 sides, so a single run compares the sides at DIFFERENT phases of their own
 cycles — a fast port can look "frozen late" purely because its quiet point
@@ -642,8 +656,10 @@ shell is fish, but the Bash tool runs bash.)
 `snap.mjs <slug> --probe-controls --label probe` does the normal run AND, for
 each side, sweeps every settable control ONE AT A TIME (others left untouched)
 at 0, 0.5 and 1, comparing each setting's short render against the untouched
-one. It prints a table and writes `probe.json`: per side, per control,
-`{kind, deltas: {"0":d,"0.5":d,"1":d}, deltasLit: {…}, responsive}`, where `d`
+one. It prints a table and writes `probe.json`, nested as
+`sides.<side>.controls.<name>` -> `{kind, deltas: {"0":d,"0.5":d,"1":d},
+deltasLit: {…}, responsive}` (with a `sides.<side>.compileError` sibling
+that is null on success — guard for it when walking the object), where `d`
 is the mean absolute pixel difference and `responsive` means some setting
 cleared a threshold. One command replaces a dozen manual low/mid/high runs.
 

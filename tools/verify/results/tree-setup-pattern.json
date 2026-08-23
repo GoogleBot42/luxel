@@ -1,0 +1,70 @@
+{
+  "slug": "tree-setup-pattern",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Static four-arrow orientation/calibration field: the port reproduces the original's geometry and stripe mask byte-for-byte at every dial setting and grid size, but every region's hue is rotated exactly half a turn, so the up/down and left/right colour codes are swapped.",
+  "observations": [
+    "STATIC FIELD on both sides. baseline (6 s @ 20 fps) and survey (60 s @ 5 fps) both report, per side, meanBrightness {avg 52, min 52, max 52}, motion {avg 0, max 0}, motionLit 0, zeroMotionFrames 120/120 and 300/300, brightnessTrend steady. Dumps at t=0, 3, 5.9, 120 and 127.9 s hash identically per side (orig 44a7914f1d, port a49ebfbf46), so the temporal machinery (regimes, autocorrelation, fps coupling) is a no-op and I pivoted to rig-geometry and dial sweeps per JUDGE.md.",
+    "Seed- and clock-independent: --seed 1234 and --wall-clock 1600000000 produce frames byte-identical to the defaults on BOTH sides (same hashes as above).",
+    "STRUCTURE (default 16x16 grid, untouched): four wedges/arrows converging on the centre — a downward-tapering wedge occupying the top ~third, an upward-tapering wedge in the bottom ~third, and left- and right-pointing wedges meeting at the middle rows — cut by a diagonal stripe mask that leaves ~59% of the rig black (152/256 black pixels on both sides).",
+    "COLOUR IS THE ONLY DEFECT, and it is a uniform half-turn hue rotation. Original: top wedge chartreuse (127,255,0), bottom wedge violet (127,0,255), left wedge red (255,0,0), right wedge cyan (0,255,255). Port: top violet, bottom chartreuse, left cyan, right red. Up reads as down and left reads as right.",
+    "I verified the half-turn hue claim numerically, not by eye: converting each original pixel to HSV, adding 0.5 to hue and converting back reproduces the port EXACTLY (max per-channel error 1 count, i.e. HSV round-trip rounding) at every dial value from 0.09 to 0.91, and on 16x16, 15x15, 32x8 and 48x48 grids and a 4x4x4 cloud. Saturation and value are untouched — same 4 fully-saturated colours, same census counts (e.g. 26 pixels of each colour untouched on 16x16, both sides).",
+    "The offset lives in the ANGLE-to-hue mapping, not in a blanket hue constant: on odd lattices the exact-centre pixel (x=y=0.5) renders 255,0,0 on BOTH sides — 15x15 grid idx 112 (r7 c7) and all five z-layers of the 5x5x5 cloud at (x2,y2) — i.e. the degenerate r=0 case agrees while every off-centre pixel is offset. Both sides use the same rotational SENSE (mapping direction theta measured CCW from +x, orig hue = 180-theta deg, port hue = -theta deg); only the origin differs by 180 deg.",
+    "GEOMETRY IS EXACT. Black-pixel counts match to the pixel on every rig tried: 16x16 152/152, 32x8 152/152, 15x15 132/132, 48x48 1352/1352, 4x4x4 cloud 32/32, 5x5x5 cloud 80/80. After the hue-shift correction the mismatch count is 0 on 16x16/32x8/48x48/4x4x4 and 1 (the centre pixel) on 15x15, 5 (the centre column) on 5x5x5.",
+    "RESOLUTION BEHAVIOUR MATCHES: both sides draw the same logical picture at 15x15, 16x16 and 48x48 — feature proportions scale with the grid rather than staying a fixed pixel count — and both handle the non-square 32x8 grid the same way, so the port is not index-only where the original is (x,y)-driven or vice versa.",
+    "EDGE CASE at Stripyness exactly 0 (tsp-stripe-0): the stripe mask vanishes and the original fills 254/256 pixels (only 2 black, at r9c6 and r10c5). The port leaves 22 black — it keeps the same 2 plus 20 extra along the exact 45-degree quadrant boundaries (the anti-diagonal r+c=15 except its two central cells, and the main diagonal from r8c8 down to r15c15). So the port's quadrant test excludes its boundary where the original includes it, but ONLY in the zero-stripe-width limit: at 0.01, 0.02, 0.04, 0.06 and every value up to 0.91 the black counts are identical (32/32 at the low end) and the hue-corrected mismatch is 0.",
+    "At Stripyness = 1 both sides go completely black (256/256 black) and are BYTE-IDENTICAL — the one dial setting where the port matches exactly.",
+    "STRIP-RIG DIVERGENCE (non-default lens, --rig strip --pixels 60): here the two sides differ structurally, not just in hue — 41 of 60 pixels are unexplained by the hue shift. The original lays out three colour zones along the index (chartreuse 0-23, interleaved red/cyan 24-39, violet 40-59) with a period-8 stripe mask giving 2-3 px runs and 37/60 dark; the port lays out four equal 15-px quarters (red 4-11, chartreuse 19-26, cyan 34-41, violet 49-56) with 8-px unstriped blocks and 28/60 dark. Naming the rig as required: this is an override lens on a pattern whose manifest rig is a 16x16 grid, and it does not contradict the exact grid agreement above.",
+    "CONTROL SURFACE MATCHES: both sides expose exactly one control, sliderStripyness, kind slider, label \"Stripyness\". No missing, extra or renamed dials, no kind mismatch.",
+    "Untouched defaults are NOT degenerate and correspond to Stripyness ~= 0.5 on both sides (both give the 152-black / 26-per-colour census that the 0.5 sweep point gives), so the untouched comparison and the dialed comparison agree: geometry identical, hue rotated."
+  ],
+  "dials": [
+    {
+      "name": "sliderStripyness",
+      "origEffect": "Live (probe maxDelta 74.33, maxDeltaLit 127.42; confirmed value-dependent over a 13-point manual sweep). Monotonic duty-cycle knob on the diagonal stripe mask: black-pixel count on the 16x16 grid climbs 2 -> 32 -> 64 -> 88 -> 120 -> 136 -> 152 -> 160 -> 184 -> 200 -> 224 -> 248 -> 256 as the value goes 0, 0.09, 0.18, 0.27, 0.36, 0.45, 0.5, 0.55, 0.64, 0.73, 0.82, 0.91, 1. At 0 the field is nearly solid; at 1 the rig is entirely black. Colours and wedge geometry are unaffected by the dial.",
+      "portEffect": "Live (probe maxDelta 64.87, maxDeltaLit 127.42). Identical black-pixel counts at all 13 settings (32, 64, 88, 120, 136, 152, 160, 184, 200, 224, 248, 256 from 0.09 up; 256 at 1), and the hue-corrected pixel mismatch is 0 at every one of them. Only exception is the endpoint Stripyness = 0, where the port reports 22 black pixels against the original's 2 (see the boundary observation).",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "PRIMARY FIX: rotate the whole colour code by half a turn. Every lit pixel in the port is exactly the original's colour with hue + 0.5. Concretely, on the default 16x16 grid the top wedge must be chartreuse (127,255,0) and the bottom wedge violet (127,0,255) — the port has them the other way round — and the left wedge must be red (255,0,0) with the right wedge cyan (0,255,255), which the port also has reversed. Saturation, value, wedge shapes, stripe mask and dial response are already perfect; do not touch them.",
+    "This is a SETUP/calibration pattern, so the hue offset is a functional bug, not just a cosmetic one: a user reading the arrows to determine their tree's physical orientation would map it 180 degrees wrong in both axes. Treat it as high priority despite the geometry being byte-exact.",
+    "The offset is in the direction-to-hue mapping's ORIGIN, not its sense: both sides already sweep hue the same way around the figure (original hue = 180 deg - theta, port hue = -theta, where theta is measured CCW from +x), and both already collapse to the same degenerate red at the exact centre. So a single half-turn added to the angle-derived hue fixes every rig and every dial setting at once — no need to flip a sign or mirror any coordinate.",
+    "SECONDARY, minor: at Stripyness exactly 0 the port darkens 20 extra pixels lying on the precise 45-degree quadrant boundaries (the anti-diagonal r+c=15 minus its two central cells, plus the main diagonal r8c8..r15c15 on a 16x16 grid), where the original lights them. The original lights only 2 black pixels at that setting. Make the zero-width-stripe case boundary-inclusive; every other dial value already matches exactly.",
+    "SECONDARY, low priority (non-default rig): on --rig strip --pixels 60 the two sides lay the pattern out differently — the original produces three index zones (chartreuse / interleaved red+cyan / violet) with a period-8 stripe mask and 37/60 pixels dark, the port produces four equal 15-px quarters of 8-px unstriped colour with 28/60 dark. The pattern's manifest rig is a 16x16 grid where the two agree perfectly, so this only matters if the pattern is expected to degrade sensibly on a 1D strip.",
+    "No temporal work needed: the pattern is genuinely static on both sides (motion 0 over 300 survey frames, identical dumps at t=0 and t=127.9 s) and both are seed- and wall-clock-independent. A fixer should not introduce any animation."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "tsp-stripe-0",
+    "tsp-stripe-0.09",
+    "tsp-stripe-0.18",
+    "tsp-stripe-0.27",
+    "tsp-stripe-0.36",
+    "tsp-stripe-0.45",
+    "tsp-stripe-0.5",
+    "tsp-stripe-0.55",
+    "tsp-stripe-0.64",
+    "tsp-stripe-0.73",
+    "tsp-stripe-0.82",
+    "tsp-stripe-0.91",
+    "tsp-stripe-1",
+    "tsp-lowv-0.01",
+    "tsp-lowv-0.02",
+    "tsp-lowv-0.04",
+    "tsp-lowv-0.06",
+    "tsp-rig-strip",
+    "tsp-rig-cloud5",
+    "tsp-rig-cloud4",
+    "tsp-grid15",
+    "tsp-grid32x8",
+    "tsp-grid48",
+    "tsp-seed1234",
+    "tsp-clock2",
+    "tsp-late"
+  ]
+}
