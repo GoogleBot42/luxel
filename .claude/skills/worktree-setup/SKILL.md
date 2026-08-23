@@ -28,6 +28,13 @@ these before trusting any build/test failure as a real regression.
 3b. `firmware/creds.env` (gitignored WiFi creds) — required by any firmware build
    (`build-esp32.sh` reads it). Copy it from the main checkout:
    `cp /home/googlebot/workspace/pixler/firmware/creds.env firmware/creds.env`.
+3c. Device flash dumps (gitignored `*.bin` in the repo root: `athom-wled-*.bin`,
+   `pb-v3-stock.bin`) — required by the QEMU suite (`tools/qemu/run-all.py`
+   autodetects them in the repo ROOT of the tree it runs from;
+   `takeover-test.py` takes them via `--stock`/`--fs`) and by
+   `tools/wledfs-check` runs against real filesystems. Copy them in before
+   running either: `cp /home/googlebot/workspace/pixler/*.bin .` — they stay
+   untracked, so nothing to clean before committing.
 4. `cargo` and `node` are only on `PATH` inside `nix develop`. If you need
    ImageMagick or similar one-off tools not in the flake, `nix-shell -p <pkg>` alongside
    it rather than assuming it's present.
