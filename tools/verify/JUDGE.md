@@ -165,7 +165,10 @@ To tell whether a side is INDEX-ONLY (drives pixels off the flat pixel
 index) vs (x,y)-DRIVEN: re-render at a second grid size and diff the FLAT
 pixel sequences — an index-only pattern's flat sequence is byte-identical
 across grid shapes (and often across grid-vs-strip), while a coordinate-
-driven one changes completely. Corroborate with the i-vs-i+1 versus
+driven one changes completely. Include a NON-SQUARE grid (e.g. 32x8) in the
+comparison: a coordinate-driven side's square-grid output can coincide with
+its strip output, so grid-vs-strip alone can read "index-only" on both
+sides when one is not. Corroborate with the i-vs-i+1 versus
 i-vs-i+gridWidth diff ratio (index-only patterns are much smoother along
 the flat index than along columns). Index-only originals may also have a
 NATIVE geometry (motifs recurring at a fixed index stride; errors above a
@@ -571,6 +574,16 @@ the default rig, with a `--dump` there too. The OPPOSITE move exists too: a
 pattern whose spatial frequency runs to tens of cycles per strip aliases into
 unrelated noise on small rigs — de-alias those with a LARGER rig
 (`--pixels 600`) instead.
+
+For any ACCUMULATOR/heat-sim slug (fire, sparks, decay fields), an fps
+sweep (2/3/5/10/20/40) plus a pixel sweep are the two decisive, cheap
+experiments — such patterns can be frame-coupled hard enough that a side
+(even the ORIGINAL) saturates to a frozen railed strip at the harness
+default, and their injection budgets can scale oppositely with pixel count
+(fixed total vs per-pixel), making one rig size agree while every other
+diverges. Also note clipping: a side railed at 255 over part of the rig
+invalidates profile/decay/palette comparisons there — re-render both sides
+at a size where neither clips.
 
 For any pattern with a size-dependent feature (tail length, block stride,
 spot width), run at least one off-default `--pixels` size on BOTH sides and

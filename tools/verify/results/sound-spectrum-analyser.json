@@ -1,0 +1,53 @@
+{
+  "slug": "sound-spectrum-analyser",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides are beat-locked 16x16 rainbow spectrum-bar displays with identical hue-per-column gradients, but the port adds a white peak-hold dot in every column (the original draws none), drops the original's permanent 3-row rainbow floor band, maps the spectrum onto a compressed/left-shifted column range that leaves 5 of 16 columns dead, and rotates its rainbow ~1.5x too slowly.",
+  "observations": [
+    "Rig: grid 16x16 (256 px). Both sides compile and run clean, both report wantsSensors:true and were fed the beat120 synth feed on every run. Neither side exposes any control (meta.json controls [] on both).",
+    "Shared correct core: both draw vertical bars rising from the bottom row, each bar a single fully-saturated hue at value 255, hue advancing +6.67 hue-units per column (exactly one rainbow across the 15-column span) on BOTH sides, and both fire on every 2 Hz beat. Steady-state mean brightness matches closely (240 s run: orig avg 36.3, port avg 36.1); motion 31.7 vs 27.7.",
+    "PEAK-HOLD DOTS — the biggest visible difference. Scan of 30 frames spread over 30 s: orig contains 0 desaturated/white pixels and 0 columns with a vertical gap; port contains 470 white pixels and 135 gapped columns. A 120-frame profile over t=20..35.45 s shows the port emits EXACTLY 1 white dot per column per frame (120/120 in all 16 columns) while the original emits 0 in all 16. The port's dots fall at ~1 row per 0.1 s (10 rows/s, measured identically at 10, 20 and 40 fps, so time-based not frame-coupled). Visually the port's panel is permanently speckled with white dots the original never shows.",
+    "FLOOR BAND. In steady state the original lights EVERY column to at least 3 rows (a continuous 3-row scrolling rainbow band across the whole bottom of the panel, visible in every filmstrip cell); the port's floor is 0-1 rows and many columns go fully dark. Per-column mean bar height over t=20..35.45 s — orig: [6.6, 8.0, 6.6, 4.0, 3.0, 3.0, 3.0, 4.5, 4.5, 5.8, 5.7, 3.5, 3.0, 3.0, 3.0, 3.0]; port: [5.8, 7.3, 0.7, 0.0, 0.1, 2.8, 4.7, 3.1, 0.1, 0.0, 0.1, 0.5, 0.9, 2.0, 2.0, 1.5]. The original never has a column mean below 3.0; the port has five columns (3, 4, 8, 9, 10) at essentially 0.",
+    "FREQUENCY AXIS MAPPING. Same 120-frame window, per-column MAX bar height — orig reaches 16 in columns 0,1,2,7,8,9,10,11; port reaches 15 in columns 0,1,5,6,7 only. Tracking the synthetic melody staircase beat-by-beat (dump at t=4.05..11.55, one frame 0.03 s after each beat): the original's melody peak walks columns 7 -> 8 -> 9 -> 10 -> 11 and resets every 4 s; the port's walks only columns 5 -> 6 -> 7 and resets on the same 4 s cycle. The original's bass hump spans columns 0-3 (heights 16,16,16,7 at t=30.10 s); the port's spans columns 0-2 (15,15,2). Net: the port packs the audible content into roughly the left 8 columns with holes in it, where the original spreads it over columns 0-11 continuously.",
+    "HIGH-FREQUENCY BIN. The port shows a persistent small bump at columns 13-14 (mean bar height 2.0 each, max 7) tracking the beat120 HF shimmer near band 28; the original shows nothing above its 3-row floor there (mean exactly 3.0, max 3 in columns 12-15).",
+    "TOP ROW. The original's bars reach the full 16 rows (max bar height 16); the port's bars cap at 15 rows — its top row is only ever occupied by a white peak dot, never by a coloured bar.",
+    "HUE ROTATION RATE. Measured by de-trending the per-column gradient and tracking the column-0 hue phase across a 40 fps dump (t=4.000..4.600, 0.025 s spacing, no aliasing): original advances +153.4 hue-units/s (1.534 rainbow cycles/s), port advances +101.7 (1.017 cycles/s) — port is ~1.51x too slow. Direction is the same on both sides (increasing hue -> rainbow drifts right). Both rates are identical at 20 fps and 40 fps, so both sides are time-based; this is a rate error, not frame coupling. (A 2 Hz-sampled measurement aliases the original's rate into an apparent NEGATIVE drift — dumps must be spaced well under 0.3 s here.)",
+    "BEAT RESPONSE. Fine 40 fps dump across one beat interval (t=4.00-4.60): the original's bass column jumps 1 -> 16 rows within one frame of the beat and decays 16,11,8,7,6,4,3,3,3,1 over the following 0.5 s, back to its floor exactly at the next beat. The port's bass column does the same 1 -> 15 attack and decays 15,15,13,10,8,6,4,2,2,1,1 over the same interval. Attack timing and decay shape are a good match; motion autocorrelation over the 240 s / 10 fps survey puts the original's strongest lag at 5 frames (0.5 s = the beat) and the port's at 40 frames (4 s = the melody cycle) with 10 and 20 also strong, i.e. both are locked to the feed, the port's colour alternation just makes the 4 s harmonic dominate.",
+    "STARTUP TRANSIENT. The original opens with a full-height, full-brightness rainbow (mean brightness 130 at frame 0) that decays over ~3 s, and its overall gain keeps ramping for ~5-8 s (bass columns only reach 16 rows after ~5 s, floor rises from 1 to 3 rows) — an auto-gain settling. The port opens BLACK (mean brightness 0 at frame 0), reaches its first bars within ~0.1 s, and its 10 s block-mean brightness runs 25.6 then 35.1 then steady 36.6, i.e. ~15 s to settle. First-10 s means: orig 41.9 (too bright), port 25.6 (too dim); both converge to ~36 thereafter.",
+    "NO LONG-PERIOD MODES. A 240 s / 10 fps survey shows both sides stationary after their startup transients — same texture from ~15 s to 240 s on both rhythm images, no regime boundaries, no palette super-cycle beyond the ~0.65 s (orig) / ~1.0 s (port) rainbow rotation.",
+    "SEED INDEPENDENCE. seed 1234 reproduces the seed-1 statistics on both sides (orig mean 34, port mean 26 over an 8 s / 20 fps window) — the pattern is driven entirely by the deterministic sensor feed.",
+    "DEAD-SENSOR DEGRADATION (--sensors off, 8 s / 20 fps): the original still renders a dim scrolling rainbow base line (mean brightness 8, motion 2); the port goes completely black (mean 0, motion 0). Minor, but it confirms the missing floor band is drawn unconditionally by the original and gated on signal in the port."
+  ],
+  "dials": [],
+  "feedback": [
+    "Remove the white peak-hold dots, or recolour them. The original draws NO peak marker at all: across 30 frames sampled over 30 s it contains zero desaturated pixels, while the port emits exactly one white dot per column per frame (16 per frame, falling at ~10 rows/s). This is the single most conspicuous difference — the port looks like a snowfield of white specks over the bars, the original is pure rainbow.",
+    "Restore the always-on floor band. The original lights every one of the 16 columns to at least 3 rows at all times in steady state (a continuous scrolling rainbow strip along the bottom edge), and even with dead sensors it still draws a dim rainbow base line. The port lets columns fall to 0 rows and goes fully black with no signal. Target: per-column mean bar height should never drop below ~3.0 rows; the port currently posts 0.0-0.1 in columns 3, 4, 8, 9 and 10.",
+    "Fix the spectrum-bin -> column mapping; it is compressed by roughly 1.5x and shifted left. The synthetic melody peak that the original walks across columns 7,8,9,10,11 (one column per beat pair, resetting every 4 s) the port walks across only columns 5,6,7. The original's bass hump covers columns 0-3 with heights 16,16,16,7; the port's covers columns 0-2 with 15,15,2. Aim to spread the 32 input bins so the same content lands in the same columns as the original, and so columns 3-4 and 8-11 carry real content instead of nothing.",
+    "The port shows a high-frequency bump at columns 13-14 (mean height 2.0, max 7) that the original does not show at all (its columns 12-15 sit flat at exactly the 3-row floor). Either the port's HF gain is too high or the original's per-band normalisation suppresses that region — after the mapping fix, check that the top few columns stay at floor level.",
+    "Slow-hue bug: the port's rainbow rotates at 1.017 cycles/s, the original's at 1.534 cycles/s (measured on the column-0 hue phase from a 40 fps dump). Speed the port's hue rotation up by ~1.51x. Direction and the per-column gradient (one full rainbow across the 15-column span, +6.67 hue-units per column) are already correct — do not change those.",
+    "The port's bars cap at 15 rows; the original's reach the full 16. The port appears to reserve the top row for the peak dot. Once the dots go, let bars occupy row 0.",
+    "Startup: the original blasts a full-height full-brightness rainbow at t=0 (mean brightness 130) and its gain settles over ~5-8 s; the port starts black and takes ~15 s to reach steady mean brightness. Low priority next to the above, but if an auto-gain is being modelled, matching the original's initial 'railed' frame and its ~5 s ramp would remove the remaining first-10 s brightness gap (orig 41.9 vs port 25.6).",
+    "Not a bug — do not chase these: attack/decay timing per beat, the 4 s melody reset cadence, full saturation at value 255, hue direction, per-column hue gradient, fps-invariance (both sides identical at 10/20/40 fps) and seed-independence all already match."
+  ],
+  "experiments": [
+    "ssa-baseline",
+    "ssa-survey",
+    "ssa-survey240",
+    "ssa-probe",
+    "ssa-dump1",
+    "ssa-beat",
+    "ssa-melody",
+    "ssa-scan",
+    "ssa-prof",
+    "ssa-late",
+    "ssa-fps10",
+    "ssa-fps20",
+    "ssa-fps40",
+    "ssa-lfps10",
+    "ssa-lfps20",
+    "ssa-lfps40",
+    "ssa-seed1234",
+    "ssa-sensoff"
+  ]
+}
