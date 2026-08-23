@@ -1,0 +1,49 @@
+{
+  "slug": "coolaura",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — a blue field with green auroral swells that sweep along the strip on a shared ~8 s cycle, with feature positions tracking almost pixel-for-pixel — but the port is a smoothed, higher-contrast version: it never reproduces the original's frequent hard cuts to bare background, and its blue/green ramp spans a wider gamut.",
+  "observations": [
+    "Both sides render cleanly, no compile or runtime errors, on the default 60 px strip rig; neither has any controls (meta.json controls list empty on both), so the control surfaces match.",
+    "Both are a strictly two-channel ramp: R is exactly 0 on every pixel of every frame sampled, and colour runs along a single blue->green ramp. Original ramp endpoints: background (0,72,255), peak (0,163,18). Port ramp endpoints: background (0,40,255), peak (0,206,22). The port's background blue is therefore deeper/purer and its green peaks noticeably brighter — a wider dynamic range than the original's more pastel/teal ramp.",
+    "Shared cycle: the port returns to a completely uniform background frame at t=0.0-0.75, 7.70-8.25, 15.70-16.25, 23.70-24.25 s — an exact 8.00 s period (autocorrelation of meanG peaks at 159 frames @20fps = 7.95 s, and again at 317 = 15.85 s). The original blanks at 0.0-0.6, 7.8-8.1, 15.7-16.2 and 23.4-24.15 too, so the master cycle matches; its meanG autocorrelation peaks at 147 frames (7.35 s) and 327 (16.35 s), i.e. the same ~8/16 s skeleton but noisier.",
+    "Main divergence — intermittency. The original additionally drops to bare background MANY extra times per cycle (30 s @20fps: extra full-strip blanks at 4.10-4.45, 8.60-8.90, 13.05-14.35, 18.50-19.45 and 27.95-28.25 s), and the transitions are single-frame hard cuts, not fades: at 40 fps the strip goes from a fully lit frame (peak G 124) to uniform (0,72,255) in one 25 ms step at t=18.45->18.50, holds flat ~0.95 s, then cuts back to a fully lit frame at 19.50. The port never does this mid-cycle — it only fades out at the 8 s boundary, and its motion stat never exceeds 4 (@20fps) against the original's 89.",
+    "The original also strobes: at 40 fps a full green blob (peak G 128) appears for exactly two frames at 14.300-14.325 s and is gone again at 14.350. Sub-strip regions blink too — at t=10.10-10.275 pixels 10 and 24 sit at exactly background (72) for 8 consecutive 40 fps frames while pixel 44 stays lit at 105-112, i.e. part of the strip drops out while the rest continues.",
+    "Coverage numbers (120 dumps over 30 s, default rig, seed 1): pixel-samples sitting at exactly background — original 35.0%, port 17.0%; fully-uniform frames — original 20/120 (17%), port 4/120 (3%); pixel-samples at the ramp ceiling — original 3.7%, port 6.9%; mean normalised green (0 = background, 1 = peak) — original 0.238, port 0.295. So the port's aura is present roughly twice as much of the time and runs ~24% hotter on average.",
+    "Spatial layout and motion match well. Dumping one full cycle (t=8-16 s) at 0.125 s spacing, the brightest-pixel index tracks together on both sides: ~24-27 at t=9.0-9.9, ~44-48 at t=10.0-11.5, ~11-19 at t=11.65-13.0, ~21-22 at t=14.4-15.4. ASCII profiles at t=2.5, 5.0, 9.5, 10.5, 11.5, 21.5, 26.5 s show the same blob positions and widths on both sides, with the port simply higher-amplitude inside the same envelope.",
+    "Both sides clip. In the t=8-16 s cycle the original pins at its ceiling G=163 from 11.90 to 13.00 s (1.1 s); the port pins at G=206 from 11.75 to 13.90 s (2.15 s). The port therefore spends longer saturated and the original spends longer floored.",
+    "Both are time-based, not frame-stepped: the port's blank onsets sit at 7.70/15.70/23.70 s at 10, 20 and 40 fps alike, and the original's sit at ~0, 4.1, 7.8, 8.6, 13.0, 15.7, 18.4, 23.5, 27.8 s at all three rates. No frame-rate coupling on either side. (The 5 fps survey misses two of the original's long blanks — a coarse-simulation artefact, not coupling.)",
+    "Both sides are seed-dependent but the character is stable across seeds: at seeds 1, 7 and 1234 (30 s @10fps) the original posts motion max 90/80/79 with 58/37/48 zero-motion frames while the port posts 8/7/7 with 13/17/18. The seed-7 waterfalls show the same blob placement and timing agreement plus the same hard blue cut-bands on the original only.",
+    "Steady state is fine on both: a --skip 60 --seconds 30 window has brightnessTrend steady on both sides, original meanBrightness avg 91.7 and port 85.2, with the same motion-max split (70 vs 7). Neither side dies, freezes or saturates late."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port is too continuous. The original repeatedly drops the whole strip (or a region of it) to bare background and back with single-frame hard transitions — five extra full-strip blanks in 30 s beyond the 8 s cycle boundary, two of them lasting ~1.0 and ~1.4 s (t=13.05-14.35 and 18.50-19.45 at seed 1), plus 2-frame flashes such as t=14.30-14.325 @40fps. The port shows none of these: its motion stat maxes at 4 where the original's hits 89. Whatever drives the aura's intensity in the port is being kept above the floor; the original's evidently swings below zero (or wraps) and gets clamped to the background colour for long stretches.",
+    "Match the ON/OFF coverage: the original leaves 35% of pixel-samples at exactly background and 17% of frames fully uniform; the port leaves only 17% and 3%. The port's aura needs to be absent about twice as often as it currently is.",
+    "Narrow the colour ramp to the original's. Background should be (0,72,255) — a slightly cyan-tinted blue — not the port's deeper (0,40,255); peak green should top out at (0,163,18), not (0,206,22). The port's greens read materially brighter than anything the original ever produces (the port's per-frame mean green reaches 167, above the original's brightest single pixel).",
+    "The port over-saturates at the ceiling: it holds its peak value for 2.15 s in the t=8-16 s cycle where the original holds for 1.1 s. Reducing the peak (per the ramp fix above) should also shorten that plateau.",
+    "Everything else is right and should not be disturbed: the 8.00 s master cycle, the blank at the cycle boundary, the pure blue->green two-channel ramp with R=0, and the spatial trajectory (blob centres passing ~px 24 -> ~px 45 -> ~px 12 -> ~px 21 over one cycle) all already match the original closely at seeds 1, 7 and 1234."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "fps10",
+    "fps40",
+    "cycle-a",
+    "cycle-b",
+    "cycle-c",
+    "dump-jump",
+    "jump18",
+    "palette",
+    "envb",
+    "edge13",
+    "dense10",
+    "cover30",
+    "seed7",
+    "seed1234",
+    "late"
+  ]
+}

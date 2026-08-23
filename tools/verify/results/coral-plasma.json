@@ -1,0 +1,42 @@
+{
+  "slug": "coral-plasma",
+  "verdict": "orig-unrenderable",
+  "score": 0,
+  "confidence": "high",
+  "summary": "The original renders as a permanent, essentially uniform white-out on our engine (mean RGB 255/255/255, motion 0) on every rig, seed and window tried out to 10 minutes, so no fidelity comparison against the port is possible; the score is an artefact of that, not a judgement of the port.",
+  "observations": [
+    "ORIGINAL, default rig (grid 16x16), 6 s @ 20 fps: meanBrightness avg/min/max = 255/255/255, motion avg 0 max 0, zeroMotionFrames 120/120, brightnessTrend steady. compileError and runtimeError are both null - it does not throw, it just renders white.",
+    "The white-out is present from the very first captured frame, so it is not a runaway/accumulating state: --dump at t=0 on a 48x48 grid gives 2300/2304 pixels at exactly [255,255,255] and the darkest pixel is [245,255,250].",
+    "It never resolves. 120 s @ 20 fps (2400 rendered frames) - orig meanBrightness avg 254.9, min 252, motion avg 0.1 max 2, zeroMotionFrames 2265/2400. 600 s @ 2 fps (1200 frames) - meanBrightness avg 254.9 min 252, motion avg 0.3 max 3, zeroMotionFrames 925/1200. There is no warm-up transient that ends.",
+    "The white-out is rig- and seed-independent: identical stats (mean 255, motion 0) on strip/120 px, grid 8x8, grid 16x16 and grid 48x48, and at seeds 1, 7 and 1234.",
+    "Faint structure does survive the clipping: the 600 s orig rhythm image shows sporadic pale blue/cyan horizontal streaks against white, and per-frame minima dip to ~[215,216,255] / [237,214,255], so something is animating underneath but every channel is clipped at or near 1.0 essentially everywhere. Nothing usable for comparison can be read from it.",
+    "PORT (same runs, all rigs): alive and animating - grid 16x16 baseline meanBrightness avg 191 (min 188 max 193), meanR 135, meanG 190, meanB 247, motion avg 28 max 30, zeroMotionFrames 1/120, brightnessTrend steady. Stable over 600 s (meanBrightness avg 190.9, motion avg 28.5).",
+    "The port's image is per-pixel static, not a smooth field. On a 48x48 grid at t=3 s the horizontal nearest-neighbour luminance correlation is 0.017 and the vertical is -0.014; frame-to-frame correlation of the same pixels is 0.002 at dt=0.05 s, -0.005 at 0.10 s, -0.028 at 0.50 s. Every pixel is an independent draw every frame - visually pastel TV snow, with no blobs, bands, fronts or gradients at any of the four rig sizes tested.",
+    "The port's colour set is narrow and fixed in form: sampled frames contain only colours whose channel triple has one channel at 255 and the lowest at 127 (e.g. [127,255,182], [127,209,255], [152,127,255]) - i.e. full value with a constant half-saturation, random hue per pixel. The hue distribution is biased to cyan/blue/violet/magenta (meanB pinned at ~247-251 while meanR/meanG swing 130-205); there is no coral/orange/pink-warm end in any frame examined.",
+    "The port's only temporal structure is a slow global hue walk: the 600 s rhythm image is a clean stack of alternating cyan-dominant and magenta-dominant bands, and autocorrelation of sides.port.meanR from the 600 s @ 2 fps run peaks at lag 118 frames = 59 s, with harmonics at 236/354/590 frames. So the whole-rig colour balance cycles about once a minute while the texture itself stays uncorrelated static.",
+    "Neither side exposes any controls: meta.json sides.orig.controls and sides.port.controls are both [], and --probe-controls reports '(no settable controls)' for both. That part of the surface matches.",
+    "Neither side binds sensors (wantsSensors false on both), so the synthetic beat120 feed is irrelevant here."
+  ],
+  "dials": [],
+  "feedback": [
+    "This is primarily an ENGINE-GAP report, not a port-bug report: the original clips to solid white from frame 0 on our engine on every rig and seed, so whoever picks this up must first find out why. The signature - clipped everywhere, tiny sub-1% dips, no error thrown - is what you get when the pattern's per-pixel colour expression is being handed values well above 1.0 (or the wrong argument scale) rather than when it fails outright. Until the original renders something, no fidelity feedback about the port can be trusted.",
+    "The port cannot be scored against the original, but two things about it are worth checking independently once the original renders. First, its texture is uncorrelated per-pixel noise in space AND time (neighbour correlation ~0.02, frame-to-frame correlation ~0.00 at dt=0.05 s) - i.e. it re-randomises every pixel every frame. A plasma is by construction a smooth, spatially coherent field that drifts and morphs; nothing in the port's output has any spatial coherence at 8x8, 16x16, 48x48 or on a 120 px strip. If the intended look is a plasma, the port is almost certainly sampling a hash/random per pixel instead of evaluating a smooth spatial function of x, y and time.",
+    "Second, the port's palette is fixed-saturation (~0.5) full-value random hue in the cyan-violet-magenta arc, with the blue channel effectively pinned near 250 the whole time; the only motion of any kind over 10 minutes is a ~59 s cycle of the global hue centre between cyan-dominant and magenta-dominant. There is no warm/coral end of the palette present at any point in any window examined.",
+    "If the original turns out to be genuinely unrenderable rather than merely clipped, this slug needs a re-verify after the engine fix rather than a port fix; re-run baseline plus the 600 s @ 2 fps survey and confirm orig meanBrightness comes off 255 before judging anything."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-600",
+    "warmup-long",
+    "dump-base",
+    "dump48",
+    "dump-consec",
+    "rig-strip",
+    "grid8",
+    "grid48",
+    "seed7",
+    "seed1234"
+  ]
+}

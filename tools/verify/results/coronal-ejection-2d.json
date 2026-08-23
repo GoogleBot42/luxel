@@ -1,0 +1,92 @@
+{
+  "slug": "coronal-ejection-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same idea and identical 13.1 s color cycle, but the port draws a fuzzy halo confined to the inner half of the grid instead of long filaments reaching the edges, evolves 3-5x too slowly, drops two of the original's dials, and its Mirror toggle imposes no symmetry.",
+  "observations": [
+    "Both sides alive, no compile/runtime errors, both steady over 240 s; both are fully seed-independent (seed 1 and seed 1234 render byte-identical PNGs on both sides), and no mode/regime structure exists — the 240 s / 2 fps survey shows one continuous hue walk with no boundaries.",
+    "COLOR MATCHES EXACTLY: hue-angle unwrapping of the meanR/G/B series over the 240 s survey gives 18.29 turns on the original and 18.28 on the port, both in the same direction — a 13.1 s hue cycle on both sides, phase-aligned to within ~0.5 s across the whole window.",
+    "STRUCTURE — the headline divergence. Radial mean-luminance profile in 8 rings from center to corner, default 16x16 rig, from --dump (run 'decorr'): original t=3 s = 193 48 13 16 26 31 64 105 and t=4 s = 208 39 12 16 31 38 47 35 — brightness DIPS in the near-mid rings then RISES again toward the frame edge, i.e. ejecta are thrown out to and past the rim. Port t=3 s = 255 139 106 48 26 9 5 1 and t=4 s = 255 129 58 69 25 10 3 1 — monotonic decay with the outer two rings essentially black. Confirmed at --grid 48x48 (run 'nomirror48'): orig 165 68 50 40 31 32 27 3 / 168 38 16 17 24 34 70 109, port 230 136 71 40 28 11 3 0.",
+    "Visually at 48x48 (run 'grid48'): the original is a white core with ~6 long smooth curved petal-like filaments sweeping out to the frame edges over a mostly black field; the port is a white core wrapped in a dense turbulent 'brain-coral' tangle of short fine tendrils that stops around half the frame radius, with black corners. The port's core is also blown out (saturated 255 in the center ring vs the original's 193-220) and its whole-frame mean brightness runs higher (25.9 vs 20.3 over 240 s).",
+    "MOTION — the port is far too sluggish. motion stat, same runs: 20 fps orig 5.5 / port 1.2; 5 fps orig 16.4 / port 1.7; 2 fps orig 25 / port 2. Measured directly from --dump pairs at 20 fps, mean abs RGB diff over a 0.1 s gap is orig 13.93 vs port 2.74, and over 0.2 s orig 22.82 vs port 5.30. Even after normalizing for the port's ~1.85x lower spatial contrast, the port takes ~0.38 s to reach half-decorrelation where the original takes ~0.11 s, and the original is fully re-drawn by dt ~0.3 s while the port needs dt ~4 s.",
+    "The frame-to-frame filmstrips make it plain (baseline and grid48 orig-motion.png/port-motion.png, t=3.00-3.55 s): the original's arms sweep and reconfigure completely across those 12 consecutive frames while the port's tendril cloud barely crawls.",
+    "FRAME-RATE COUPLING, port only. Same absolute 0.1 s gap dumped at 10 / 20 / 40 fps (runs fpsd10/fpsd20/fpsd40): original 13.20 / 13.93 / 14.90 — fps-invariant, time-based. Port 1.26 / 2.74 / 2.72 — it evolves at half speed at 10 fps and then plateaus. Position-level dumps, not the saturating motion stat.",
+    "CONTROL SURFACE MISMATCH: the original exposes sliderDensity, showNumberDensity, toggleMirror, sliderFractalGain, sliderIterations, showNumberIterations, sliderCutoff. The port exposes only sliderDensity, showNumberDensity, toggleMirror, sliderCutoff — sliderFractalGain, sliderIterations and showNumberIterations are missing entirely.",
+    "The port's toggleMirror is not a mirror and appears cross-wired to Density: rendering the port with 'toggleMirror=1' (alone, or with sliderDensity=0.5) produces a PNG byte-identical to rendering it with 'sliderDensity=1' (sha256 prefix adee196edd69 for all three). Symmetry check on 48x48 dumps: with Mirror on, the original's left-right and up-down mean-abs asymmetry become exactly equal (50.42/50.42, 45.76/45.76, 42.90/42.90 at t=1/3/5 s) — a symmetry constraint has been imposed — while the port's stay unequal and unchanged from Mirror-off (28.87/20.76 vs 23.80/28.66).",
+    "The port's Cutoff dial covers a far narrower range: window-mean brightness on the default rig goes 77 -> 20 (untouched) -> 4 as the original's Cutoff sweeps 0 -> default -> 1 (a ~20x span, from a full-frame color flood with dark rays as negative space, down to nothing but the tiny core). The port goes 32 -> 26 -> 15 (a ~2x span) and its picture stays a compact clump at every setting.",
+    "Untouched-default and explicitly-dialed comparisons tell the same story: with sliderDensity=0.5, toggleMirror=0, sliderCutoff=0.5 set identically on both sides (run 'dialed-mid'), the original still throws long bright rays to the frame edges while the port still draws a compact central clump.",
+    "Late-window check (--skip 60, 12 s at 20 fps): both sides still alive and steady, neither decays or freezes; the port's rhythm image is a narrow smooth vertical band with almost no horizontal spread, the original's is textured across the full width."
+  ],
+  "dials": [
+    {
+      "name": "sliderDensity",
+      "origEffect": "Sets the number of ejecta arms: at 0 a single broad curved spiral arm sweeping around the core; at 1 roughly a dozen thin straight rays radiating to the frame edges. Default (0.5) sits in between at ~5-6 arms.",
+      "portEffect": "Same direction and roughly the same count trend: at 0 one broad annular swirl hugging the core; at 1 many short radial spokes. But every setting stays confined to the inner half of the grid — no arm reaches the rim at any density.",
+      "matches": false
+    },
+    {
+      "name": "toggleMirror",
+      "origEffect": "Imposes a symmetry on the figure — the arms become a regular rotationally/diagonally symmetric flower (left-right and up-down asymmetry measures become exactly equal), still reaching the frame edges.",
+      "portEffect": "No symmetry is imposed; the asymmetry measures are unchanged from Mirror-off. Worse, the toggle appears cross-wired to Density: mirror-on renders byte-identically to sliderDensity=1.",
+      "matches": false
+    },
+    {
+      "name": "sliderCutoff",
+      "origEffect": "A brightness/coverage threshold with a very wide range: at 0 the whole frame floods with saturated color and the arms read as dark negative space (mean 77); at 1 everything but the ~2 px core is cut away (mean 4).",
+      "portEffect": "Correct direction but a much weaker knob (mean 32 at 0, 15 at 1). Never floods the frame at 0 and never collapses to just the core at 1 — the compact clump survives at every setting.",
+      "matches": false
+    },
+    {
+      "name": "sliderFractalGain",
+      "origEffect": "Controls detail amplitude / turbulence of the arms. At 0 the pattern collapses to a few smooth broad glowing petals (48x48 window mean 43); at 1 it becomes many fine bright blown-out shards with high contrast (mean 57, motion 18 vs 5 at default). Live and strong (probe maxDeltaLit 68.46, the largest of any dial on either side).",
+      "portEffect": "Control absent from the port entirely.",
+      "matches": false
+    },
+    {
+      "name": "sliderIterations",
+      "origEffect": "Number of fractal octaves. At 0 it renders identically to FractalGain=0 (same PNG hash) — smooth broad petals, no filamentary detail; at 1 it is close to the untouched default (mean 19 vs 20), so the default already sits near the top of the range. Live but with most of its effect on the low half of the slider (probe deltasLit 35.51 / 0 / 2.45 at 0 / 0.5 / 1).",
+      "portEffect": "Control absent from the port entirely (along with its showNumberIterations readout).",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The single biggest fix is radial reach. The original is a coronal EJECTION: material leaves the core and lights the frame edge, so its radial profile dips in the middle rings and rises again at the rim (193 48 13 16 26 31 64 105 on a 16x16 grid). The port's profile decays monotonically to black by ring 6 of 8 (255 139 106 48 26 9 5 1). Whatever attenuates the port's field with distance from center is far too aggressive — the arms must survive out to and past the frame corner, and the field between the core and the arms must be near-black, not a filled halo.",
+    "Don't blow out the core. The original's central ring averages ~193-220 with a small hot spot; the port's is pinned at 255 across a visibly wider disc, which is a large part of why its mean brightness runs 26 vs 20.",
+    "The port evolves 3-5x too slowly. At 20 fps a 0.1 s gap changes the original's frame by 13.9 (mean abs RGB) and the port's by 2.7; the original completely re-draws itself in ~0.3 s, the port needs ~4 s. Speed the arm motion / noise-field advance up by roughly 4x. Note the hue cycle is already perfect (13.1 s on both sides) — do NOT touch that when speeding up the motion; the two rates are decoupled in the original.",
+    "The port's evolution rate halves at 10 fps (0.1 s change of 1.26 at 10 fps vs 2.74 at 20 and 40 fps) while the original's is flat across all three rates. Something in the port advances per frame rather than per elapsed second at low frame rates; make the animation purely a function of elapsed time so it looks the same on a slow rig.",
+    "Texture: the port's default look is a dense fine-grained turbulent tangle, closest to the ORIGINAL's appearance at FractalGain near 1. The original's default is a handful of smooth broad curved petals. Reduce the port's default detail amplitude/octave count so the untouched render reads as ~6 smooth sweeping filaments, not coral.",
+    "Add the two missing dials: FractalGain (0 = a few smooth broad petals, 1 = many fine bright blown-out shards; the strongest dial in the original) and Iterations (0 = identical to FractalGain 0, i.e. no fractal detail at all; default already near the top of its range), plus the Iterations showNumber readout that pairs with it.",
+    "Fix Mirror. On the port it currently renders byte-identically to Density=1 — it looks cross-wired to the density value. It should instead impose a symmetry on the figure (the original's left-right and up-down asymmetry measures become exactly equal when it is on, so the figure becomes symmetric under swapping the two axes) while leaving the arm count alone.",
+    "Widen Cutoff's range by roughly 10x. On the original, Cutoff=0 floods the entire frame with saturated color (window mean 77) and the arms invert into dark negative space, while Cutoff=1 cuts everything but the core (mean 4). The port only spans 32 to 15 and keeps the same compact clump throughout."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "grid48",
+    "decorr",
+    "fps10",
+    "fps40",
+    "fpsd10",
+    "fpsd20",
+    "fpsd40",
+    "late-skip60",
+    "seed1234",
+    "dialed-mid",
+    "ctl-density-low",
+    "ctl-density-high",
+    "ctl-mirror-on",
+    "ctl-mirror-only",
+    "ctl-mirror-dens0",
+    "ctl-cutoff-low",
+    "ctl-cutoff-high",
+    "ctl-fractalgain-low",
+    "ctl-fractalgain-high",
+    "ctl-iterations-low",
+    "ctl-iterations-high",
+    "mirror48",
+    "nomirror48"
+  ]
+}
