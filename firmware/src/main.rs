@@ -488,21 +488,34 @@ async fn main(spawner: Spawner) -> ! {
     // consumer left on classic ESP32.
     //
     // `small-chip` (the RAM-constrained profile — docs/boards.md tiers)
-    // trims it: static RX 10 -> 4 reclaims ~9.6 KB outright, AMPDU RX off
-    // drops the block-ack reassembly buffers, and the dynamic RX cap
+    // trims it hard: static RX 10 -> 4 reclaims ~9.6 KB outright, AMPDU RX
+    // off drops the block-ack reassembly buffers, and the dynamic RX cap
     // 32 -> 16 bounds the on-demand pool's worst case. TX counts are left
     // at the defaults on purpose: dynamic TX buffers are allocated on
     // demand, so lowering the cap reclaims nothing at idle and only buys
     // TX starvation under load.
     //
+    // The DEFAULT build takes a milder version of the same trim: static RX
+    // 10 -> 6 (+6.4 KB idle, measured on the Athom), and *only* that knob —
+    // AMPDU RX stays on and the dynamic pool stays at 32, so RX throughput
+    // on a busy network is untouched and only the never-freed idle
+    // reservation shrinks. static_rx_buf_num is in any case the only knob
+    // that reclaims anything at idle; the dynamic pool and the block-ack
+    // buffers are on-demand allocations.
+    //
     // Deliberately conservative, because the blob's allocations do NOT
     // null-check — an undersized pool under load is a StoreProhibited
     // panic, not a clean error. rx_ba_win stays at its default 6, which
-    // still satisfies ControllerConfig::validate() against the trimmed
-    // pools (6 < 16 dynamic, 6 < 2 x 4 static) so the pairing remains
-    // legal if AMPDU RX is ever switched back on. The default build keeps
-    // esp-radio's own numbers until a soak says otherwise.
+    // still satisfies ControllerConfig::validate() against both trims
+    // (6 < 32 and 6 < 2 x 6 for the default; 6 < 16 dynamic and 6 < 2 x 4
+    // static for small-chip, so the pairing stays legal there too if AMPDU
+    // RX is ever switched back on).
+    //
+    // Both settings are soak-backed on the Athom rig, not estimates — see
+    // the 2026-08-22 UPDATES.md entries (small-chip) and Gitea #60 (default).
     let wifi_cfg = ControllerConfig::default().with_initial_config(config);
+    #[cfg(not(feature = "small-chip"))]
+    let wifi_cfg = wifi_cfg.with_static_rx_buf_num(6);
     #[cfg(feature = "small-chip")]
     let wifi_cfg = wifi_cfg
         .with_static_rx_buf_num(4)

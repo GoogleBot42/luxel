@@ -149,17 +149,30 @@ unaffected:
 |---|---|---|---|
 | `server::WEB_TASK_POOL_SIZE` | 3 | 2 | each slot is ~8.6 KB of static task arena (picoserve's whole response-path future) |
 | esp32 `heap_allocator!` | 80 KB | 88 KB | banks the freed arena as heap; keeps `.stack` in the measured ~30 KB zone |
-| `ControllerConfig` RX pools | static 10 / dynamic 32 / AMPDU RX on | static 4 / dynamic 16 / AMPDU RX off | the WiFi blob's static RX buffers are ~1.6 KB each, allocated in `esp_wifi_init` and never freed |
+| `ControllerConfig` RX pools | static **6** / dynamic 32 / AMPDU RX on | static 4 / dynamic 16 / AMPDU RX off | the WiFi blob's static RX buffers are ~1.6 KB each, allocated in `esp_wifi_init` and never freed |
 
 **Measured on the Athom rig (idle `heap_free`, v0.1.39, 2026-08-22):**
-default 98,352 → small-chip 115,548 → small-chip + WiFi tuning **125,460**
-(+27.1 KB total, of which **+9.9 KB is the WiFi tuning** — an A/B of the two
-small-chip builds). Nearly all of the WiFi share is `static_rx_buf_num`
-10→4; the dynamic pools and AMPDU buffers are on-demand, so capping them
-bounds the worst case but reclaims almost nothing at idle. Don't push
-`static_rx_buf_num` below 4 without a fresh soak — the blob's allocations
-do not null-check, so an undersized pool under load is a StoreProhibited
-crash, not a clean error.
+stock-pool default 98,352 → small-chip 115,548 → small-chip + WiFi tuning
+**125,460** (+27.1 KB total, of which **+9.9 KB is the WiFi tuning** — an
+A/B of the two small-chip builds). Nearly all of the WiFi share is
+`static_rx_buf_num` 10→4; the dynamic pools and AMPDU buffers are
+on-demand, so capping them bounds the worst case but reclaims almost
+nothing at idle. Don't push `static_rx_buf_num` below 4 without a fresh
+soak — the blob's allocations do not null-check, so an undersized pool
+under load is a StoreProhibited crash, not a clean error.
+
+**The default build now takes the mild half of that trim too**
+(`static_rx_buf_num` 10→6 and nothing else — AMPDU RX stays on and the
+dynamic pool stays at 32, so RX behavior on a busy network is unchanged
+and only the never-freed idle reservation shrinks). A/B on the Athom,
+same day: **98,352 → 104,832 idle `heap_free`, +6,480 B**, which is
+exactly 4 × ~1.62 KB. Soak evidence in the UPDATES.md entry (hw-bench
+321/322, 44 k DDP frames alongside a 6-way API hammer with serial
+attached, cold loads at parity). Two consequences for the numbers above:
+the whole profile is now worth **+20.6 KB over the default** (104,832 →
+125,460) rather than +27.1 KB, and the WiFi part of that is down to the
+last two static buffers (~3.2 KB) — the rest moved into the baseline.
+Re-run `tools/rx-stress.mjs` before changing either number.
 
 **Accepted costs**, both measured on the Athom under this profile:
 
