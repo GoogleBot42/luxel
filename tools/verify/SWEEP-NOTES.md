@@ -9,6 +9,10 @@ Cleared entries move to Gitea or the aggregate report.
   `array index out of bounds` at frame 0 on any rig under 144 px (bisected:
   fails ≤128, fails at frame 13 @140, clean ≥144). Either clamp/ignore
   out-of-range writes engine-side or bump that slug's manifest rig ≥144.
+  More instances: `rainbow-comet` ORIGINAL throws the same error exactly
+  once at frame 982 (line 32 col 7) on runs >~49 s and keeps rendering
+  normally after; `orv-christmas-tree` original errors at frame 0 unless
+  pixelCount % 20 == 0. All three would presumably run clean on real PB.
 - **Wall-clock builtins NOT wired — CONFIRMED** (upgraded from suspected):
   `pixelclock` (a pattern that exists to display time) renders byte-identical
   output at ELEVEN wall clocks spanning epoch 0..2000000000, on BOTH sides;

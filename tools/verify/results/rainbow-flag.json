@@ -1,0 +1,46 @@
+{
+  "slug": "rainbow-flag",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Both sides draw the same completely static 6-band pride flag with identical band order, widths and index mapping, but the port replaces the original's exact official flag hex colours with full-saturation/full-value hue approximations (neon green and neon magenta instead of deep green #008026 and violet #750787) and omits the 1-px black band separators the original draws on any strip whose length is divisible by 6.",
+  "observations": [
+    "Both sides are COMPLETELY STATIC. motion 0 and motionLit 0 on every captured frame, zeroMotionFrames = 120/120 at 6 s/20 fps, 300/300 at 60 s/5 fps, 480/480 at 240 s/2 fps, and 200/200 in a late window (--skip 300 --seconds 10 --fps 20). brightnessTrend 'steady' on both. Frame dumps at t=0 and t=3 s are byte-identical on both sides. There is exactly one regime; no mode rotation, no drift, no slow palette walk.",
+    "Both sides are index-driven and rig-independent: renders at --pixels 12/30/60/61/64/66/120/300, --seed 1234, and --wall-clock 1700000000 all produce byte-identical output to the default run on their respective rigs, and on --rig grid --grid 16x16 both sides paint the bands across rows in flat-index order (rows uniform, boundaries at the same rows on both sides: transitions inside rows 2, 5, 10, 13 on BOTH sides). Structural mapping matches exactly.",
+    "Band order matches exactly on both sides: violet at pixel 0 -> blue -> green -> yellow -> orange -> red at pixel 59 (i.e. the flag drawn reversed, red at the far end). Band widths on the default 60-px strip: orig 10/9/9/9/9/9 px separated by 1 black px; port 10/10/10/10/10/10 px with no separators.",
+    "ORIGINAL PALETTE (exact --dump RGB, 60-px strip): violet [117,7,135] = #750787; blue [0,76,255] ~ #004DFF; green [0,127,35] ~ #008026; yellow [255,237,0] = #FFED00; orange [255,140,0] = #FF8C00; red [226,2,2] ~ #E40303. These are the six official 2018 pride-flag hex values, reproduced essentially exactly (within 1-2 counts of quantisation).",
+    "PORT PALETTE (same dump): violet [203,0,255]; blue [0,71,255]; green [5,255,0]; yellow [255,244,0]; orange [255,107,0]; red [255,0,0]. Every entry is at (or within 2% of) full HSV saturation AND full value - the port looks like hsv(h,1,1) over an approximate hue table rather than the flag's literal hex colours.",
+    "Per-band RGB distance orig->port: violet 148 (worst), green 133 (second worst), orange 33, red 29, yellow 7, blue 5. So four of six bands are visually fine; VIOLET and GREEN are the two that read wrong - the original's deep aubergine purple becomes neon magenta and the original's forest green becomes neon lime.",
+    "Hue angles (0..1) orig vs port: violet 0.810/0.799, blue 0.616/0.620, green 0.383/0.330, yellow 0.155/0.160, orange 0.0915/0.070, red 0.002/0.000. Hue is close on four bands; the port's GREEN hue is 0.053 too low (pure green instead of the flag's slightly cyan-leaning green) and its ORANGE hue is 0.022 too low (too red). The bigger error on violet and green is VALUE/SATURATION, not hue: orig violet V=0.53, port V=1.00; orig green V=0.50, port V=1.00.",
+    "Mean brightness over the whole window: orig 95, port 120 (+26%). Channel means orig R130 G88 B66 vs port R162 G113 B85. The port is uniformly brighter because it maxes value on every band and has no black separator pixels.",
+    "BLACK SEPARATORS: the original inserts one fully black pixel (0,0,0) at each of the 5 internal band boundaries whenever the strip length is divisible by 6 - confirmed at 12 px (idx 2,4,6,8,10), 30 px (5,10,15,20,25), 60 px (10,20,30,40,50), 66 px (11,22,33,44,55), 120 px (20,40,60,80,100), 300 px (50,100,150,200,250). At 61 px, 64 px and on the 256-px grid the original has NO black pixels, so this is a boundary/rounding artefact of the original's band math rather than a deliberately-sized gap - but on the default 60-px rig (and on every typical 6-divisible strip) it is plainly visible as thin black rules between the bands. The port never produces one at any pixel count tested.",
+    "Neither side exposes ANY controls: meta.json sides.orig.controls and sides.port.controls are both empty, and --probe-controls reports '(no settable controls)' for both. Control surfaces match. No dialed comparison is applicable.",
+    "Neither side binds sensors (wantsSensors false on both), so the run is unaffected by the synthetic feed; no compile or runtime errors on either side in any run."
+  ],
+  "dials": [],
+  "feedback": [
+    "Palette is the main fix. The original uses the literal official 2018 pride-flag hex values, not hue-wheel colours: red #E40303 (226,2,2 as rendered), orange #FF8C00 (255,140,0), yellow #FFED00 (255,237,0), green #008026 (0,127,35), blue #004DFF (0,76,255), violet #750787 (117,7,135). The port should emit those RGB triples directly instead of deriving hsv(h,1,1) from a hue table.",
+    "The two bands that actually read as wrong to a viewer are VIOLET and GREEN, and the error is brightness/saturation, not hue: the port draws violet [203,0,255] where the original draws [117,7,135] (roughly half the value), and green [5,255,0] where the original draws [0,127,35] (again roughly half the value, and slightly too far from cyan). Fixing just these two bands recovers most of the flag's character.",
+    "Two smaller colour nits once the above is done: the port's orange [255,107,0] is too red - it should be [255,140,0]; and the port's red [255,0,0] should be the flag's slightly-darker [226,2,2]/#E40303. The port's blue and yellow are already correct within 7 counts.",
+    "Reproduce the original's 1-px black separator at each internal band boundary. The original blanks the pixel that sits exactly on a boundary, which manifests only when the pixel count divides evenly by 6 (verified: separators present at 12/30/60/66/120/300 px, absent at 61/64/256 px, always at indices k*(n/6) for k=1..5 and never at index 0). Whatever band-index expression produces that edge case on the original, the port should reproduce it - it is visible on the default 60-px rig as thin black rules and it accounts for part of the +26% mean-brightness gap.",
+    "No timing, motion, structural or control work is needed: band order (violet at index 0 through red at the last pixel), band widths, flat-index mapping, rig/pixel-count independence, seed independence, wall-clock independence and the fully-static character already match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "dump-base",
+    "px12",
+    "px30",
+    "px300",
+    "px61",
+    "px64",
+    "px66",
+    "px120",
+    "grid16",
+    "wc-a",
+    "seed7"
+  ]
+}
