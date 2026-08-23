@@ -170,6 +170,15 @@ What this means for judging:
   each side does with dead sensors (a well-written pattern degrades gracefully;
   one that errors or goes black is worth noting) — but judge the pattern on
   the fed run.
+- **`--sensors off` is also a DIAGNOSTIC, not just a legacy view.** Rendering
+  the same window fed and unfed localizes WHICH input path drives a divergence:
+  whatever survives `off` unchanged is not sensor-driven, and whatever appears
+  only when fed is. A real case separated two very different findings that
+  looked identical on the fed run — "the port ignores audio entirely" versus
+  "the port reacts to audio but its accelerometer term swamps it" — because the
+  `off` render showed the port still moving on its own while the original went
+  still. Run the pair (`--label sens-on` / `--label sens-off`, same seed, same
+  window) before writing any "port doesn't react to X" claim.
 - Dial probing uses the same feed, so `--probe-controls` now works on sound
   patterns instead of comparing silence against silence.
 
@@ -251,14 +260,16 @@ Output lands in `tools/verify/out/<slug>/<label>/`:
 
       stats.json = {slug, label, capturedFrames,
                     sides: {orig: {meanBrightness: [...], meanR: [...],
-                                   meanG: [...], meanB: [...], motion: [...]},
+                                   meanG: [...], meanB: [...], motion: [...],
+                                   motionLit: [...]},
                             port: {…same keys…}}}
 
   so the port's motion series is `sides.port.motion`. `motion` is the mean abs
-  frame-to-frame diff. Each series is one line. Use these to detect black,
-  static, or strobing output numerically before trusting your eyes — but read
-  `meta.json`'s summaries first and only come here when one of them flags
-  something.
+  frame-to-frame diff over the WHOLE rig; `motionLit` is the same diff averaged
+  only over pixels lit (any channel non-zero) in either frame. Each series is
+  one line. Use these to detect black, static, or strobing output numerically
+  before trusting your eyes — but read `meta.json`'s summaries first and only
+  come here when one of them flags something.
 - `probe.json` — **only when you passed `--probe-controls`.** See below.
 - `frames.json` — **only when you passed `--dump`.** Exact per-pixel values at
   the moments you asked for. See below.
@@ -268,18 +279,33 @@ Output lands in `tools/verify/out/<slug>/<label>/`:
 Read each side's `statsSummary` FIRST — it is the whole window in a dozen
 numbers:
 
-- per series (`meanBrightness`, `meanR`, `meanG`, `meanB`, `motion`):
-  `{avg, min, max, first, last}`. `first` vs `last` catches drift the average
-  hides; `min`/`max` catch a pattern that blacks out or saturates.
-- `zeroMotionFrames` — captured frames with no change at all. A high count on
-  one side and not the other is a frozen port (note: with `--skip 0` the very
-  first captured frame always scores motion 0, so expect a count of 1).
-  **Dim patterns false-read as frozen.** `motion` is computed on the QUANTIZED
-  8-bit output, so a pattern animating at low brightness can post
-  `zeroMotionFrames` near 100% while genuinely moving — the motion is there,
-  it just doesn't survive rounding. Check `meanBrightness` before concluding
-  "frozen": if it is low (say under ~10), confirm with a `--dump` of two
-  consecutive frames (`--dump "3,3.05"` at 20 fps) and compare values directly.
+- per series (`meanBrightness`, `meanR`, `meanG`, `meanB`, `motion`,
+  `motionLit`): `{avg, min, max, first, last}`. `first` vs `last` catches drift
+  the average hides; `min`/`max` catch a pattern that blacks out or saturates.
+- **`motion` vs `motionLit` — use `motionLit` on sparse patterns.** `motion`
+  averages the frame-to-frame diff over EVERY pixel, so a pattern that lights
+  2-3% of the rig has its real motion divided by ~40 and rounds to 0: the
+  summary then reads `motion {avg 0, max 0}` and `zeroMotionFrames` at 100%
+  while the thing is plainly animating. `motionLit` is the same diff averaged
+  over the lit set only (any channel non-zero in either frame), so it measures
+  how hard the lit pixels are working and survives sparseness. Real case: a
+  star pattern's port posted `motion` 0 on all 300 captured frames while
+  `motionLit` was non-zero on 246 of them — not frozen at all. Rule of thumb:
+  if `motion.max` is 0 or 1 and `motionLit.max` is several times larger, the
+  pattern is sparse and `motionLit` is the honest number. `motion` remains the
+  like-for-like historical stat — quote it when comparing against older runs or
+  verdicts, and quote both when they disagree.
+- `zeroMotionFrames` — captured frames with no change at all, counted on
+  `motion` (not `motionLit`). A high count on one side and not the other is a
+  frozen port (note: with `--skip 0` the very first captured frame always
+  scores motion 0, so expect a count of 1).
+  **Dim and sparse patterns false-read as frozen.** `motion` is computed on the
+  QUANTIZED 8-bit output and then rounded to an integer, so a pattern animating
+  at low brightness, or over few pixels, can post `zeroMotionFrames` near 100%
+  while genuinely moving. Check `meanBrightness` and `motionLit` before
+  concluding "frozen": if brightness is low (say under ~10) or `motionLit` is
+  non-zero while `motion` is not, confirm with a `--dump` of two consecutive
+  frames (`--dump "3,3.05"` at 20 fps) and compare values directly.
 - `brightnessTrend` — `steady` | `decaying` | `rising` | `volatile`, from the
   first quarter of the window against the last (±20%), with `volatile` when the
   series swings more than 60% of its own mean. `decaying` on the port and
@@ -348,6 +374,30 @@ GRID frame is nested as `gridH` rows of `gridW` triples, one row per line, so
 the spatial layout reads straight off the page. A side that failed to compile
 is omitted.
 
+**`orig` and `port` are indexed by the SHARED `times` list.** They are not
+per-side time lists: entry `i` of `orig` and entry `i` of `port` are both the
+frame at `times[i]`, because both sides are dumped from the same frame indices.
+So a dump list that mixes "the time the original peaks" with "the time the port
+peaks" does not give you one entry per side — it gives EVERY side an entry at
+EVERY time, and reading `orig[0]` against `port[1]` because that is the order
+you wrote the times in compares two different moments. Ask for every time you
+care about, then index both sides by the same `i`.
+
+**The time list is parsed strictly, and a wrong list is worse than a rejected
+one.** Entries are trimmed (so a list piped in with newlines after the commas
+is accepted) and one trailing comma is allowed, but an empty entry or anything
+that is not a plain non-negative decimal (`1 2`, `abc`, `0x10`, `1e2`, `-1`,
+`NaN`) exits 2 naming the entry — nothing is silently skipped and there is no
+default list to fall back to. What the parser CANNOT catch is a list that is
+well-formed but not yours: if you stage a generated list in a file or shell
+variable, give it a name unique to your run — other judges run concurrently in
+the same worktree and share the scratchpad directory, and a `times.txt` written
+by one judge has been overwritten by another between the write and the `--dump`
+that read it. The run was silent because the substituted list was perfectly
+valid and fitted inside the window. Prefer passing the list inline; when you do
+stage it, check `frames.json`'s `requestedTimes` against what you meant to ask
+for before reading a single pixel.
+
 Use it whenever exact layout matters: stripe/band widths and duty cycle, the
 pixel index of a feature's leading edge (compare the same dump time on both
 sides to get a per-frame speed in pixels), exact palette RGB, whether "black"
@@ -386,9 +436,17 @@ the default rig, with a `--dump` there too.
 each side, sweeps every settable control ONE AT A TIME (others left untouched)
 at 0, 0.5 and 1, comparing each setting's short render against the untouched
 one. It prints a table and writes `probe.json`: per side, per control,
-`{kind, deltas: {"0":d,"0.5":d,"1":d}, responsive}`, where `d` is the mean
-absolute pixel difference and `responsive` means some setting cleared the
-threshold. One command replaces a dozen manual low/mid/high runs.
+`{kind, deltas: {"0":d,"0.5":d,"1":d}, deltasLit: {…}, responsive}`, where `d`
+is the mean absolute pixel difference and `responsive` means some setting
+cleared a threshold. One command replaces a dozen manual low/mid/high runs.
+
+`deltas` averages over the whole rig; `deltasLit` averages over the pixels
+either render lights — the same sparse-pattern correction as `motionLit`, and
+for the same reason: a dial that visibly redraws a pattern lighting a few
+percent of the rig posts a whole-rig delta under 1 and used to read INERT.
+`responsive` is now true when EITHER clears its bar (`settings.threshold` for
+`deltas`, `settings.thresholdLit` for `deltasLit`), and the table prints both
+maxima. Quote `maxDeltaLit` on a sparse pattern; on a dense one the two agree.
 
 Run it ONCE, early (right after the survey), and use it to decide where to
 spend effort:
@@ -410,6 +468,15 @@ spend effort:
   which window you checked over. Conversely, a dial with a large delta at only
   ONE of 0/0.5/1 is usually a threshold or mode switch, not a continuous knob
   — worth a manual sweep at intermediate values.
+- **A single-dial sweep can be flattened by setter interaction.** Setting ONE
+  control and varying it is the obvious experiment, and on some patterns it
+  produces nothing: an original was swept across four values of the only dial
+  set and all four renders came out BYTE-IDENTICAL — the dial started working
+  the moment a second control was also set, because the pattern only consumes
+  its dial state inside the other control's handler. So when a sweep looks
+  impossibly flat (identical stats, identical images, delta exactly 0.00),
+  re-run it with one other control explicitly pinned to a neutral value
+  (`--controls-orig "sliderX=0.5;sliderOther=0.5"`) before recording "inert".
 - **An inert dial on the ORIGINAL is a caveat, not a licence.** Record it as
   "dial effect unverifiable from output" and move on; it is not evidence that
   the port may drop the control. Control-SURFACE mismatches stay reportable
@@ -532,6 +599,17 @@ differ from EACH OTHER, not just from untouched — before you call a dial live.
    motion peak every N frames, a brightness ramp that never resets, motion
    pinned at 0 (frozen) or saturated (strobing). Compare the two sides' series
    shape, not just their averages.
+
+   **Get periodicity from AUTOCORRELATION of the raw series, never from
+   eyeballing or binning.** Take the series straight out of stats.json,
+   subtract its mean, and score every lag: the first strong peak is the period,
+   in frames — divide by `--fps` for seconds. Coarse bins invent structure that
+   is not there: one judge binned a series into 1 s buckets, a 1.1 s cycle beat
+   against the bin width, and the resulting envelope was reported as an 11 s
+   super-cycle that does not exist. If you must bin, bin at a width you already
+   know divides the period. State periods as "N frames at F fps", and confirm a
+   claimed period on BOTH sides with the same lag scan before calling a rhythm
+   divergence.
 7. Compare on these axes, in order of importance:
    - **Alive vs dead**: does the port render at all, without runtime errors?
    - **Structure**: spatial layout — number/shape/size of features (bands,
@@ -574,7 +652,13 @@ differ from EACH OTHER, not just from untouched — before you call a dial live.
    statistical character (density, rate, distribution), not per-pixel
    alignment, for stochastic patterns.
 9. Run at least one non-default seed if the pattern looks random-driven, to
-   avoid judging a one-seed fluke.
+   avoid judging a one-seed fluke. **Pick well-separated seeds.** Adjacent
+   small seeds can collide: on one pair, seeds 2, 3, 4 and 5 rendered
+   identically on BOTH sides, so a "seed sweep" across them proved nothing and
+   looked like seed-independence. Use something like 1 vs 7 vs 1234, and if two
+   seeds render identically treat that as a fact about the seeds, not about the
+   pattern — try a much larger one before concluding the pattern ignores its
+   seed.
 
 ## Verdict
 

@@ -32,7 +32,9 @@
 //                        time, and write probe.json (see below)
 //   --probe-seconds N    probe window length (default 4)
 //   --dump "t1,t2,..."   write frames.json with the exact per-pixel values of
-//                        the captured frames nearest those times (see below)
+//                        the captured frames nearest those times (see below;
+//                        the list is parsed strictly — a malformed entry exits
+//                        2 rather than dumping some other set of times)
 //   --out-root DIR       output root (default tools/verify/out)
 //
 // Writes <out-root>/<slug>/<label>/{orig.png,port.png,meta.json,stats.json}.
@@ -45,6 +47,12 @@
 // and `brightnessTrend`) — it is short enough to read whole. The FULL per-frame
 // series live in the sibling stats.json (one line per series, per side) and
 // only need reading when a summary flags something.
+// Two motion series are kept: `motion` (mean abs frame-to-frame channel diff
+// over the WHOLE rig — the historical, like-for-like number) and `motionLit`
+// (the same diff averaged only over pixels lit in either frame). A pattern
+// lighting a few percent of its pixels divides `motion` by the dark fraction
+// and rounds to 0, reading as frozen while it animates; `motionLit` is the
+// stat to use on sparse output. `zeroMotionFrames` still counts `motion`.
 // `sheetTimesSeconds`/`stripTimesSeconds` are top-level in meta.json (both
 // sides share them by construction). A top-level `provenance` records the
 // worktree git sha and sha256 prefixes of the port source, the .epe, and this
@@ -80,8 +88,11 @@
 // left untouched, then re-renders it at 0, 0.5 and 1 (pickers: v,v,v) with
 // every other control untouched, and records the mean absolute pixel difference
 // from the untouched render across all frames. probe.json holds, per side per
-// control, `{kind, deltas: {"0":d,"0.5":d,"1":d}, responsive}`; `responsive`
-// is true when any delta clears PROBE_THRESHOLD. A compact table also prints
+// control, `{kind, deltas: {"0":d,"0.5":d,"1":d}, deltasLit: {…}, responsive}`;
+// `deltas` averages over the whole rig, `deltasLit` over the pixels either
+// render lights (the sparse-pattern rescue — same reasoning as `motionLit`),
+// and `responsive` is true when EITHER clears its threshold
+// (PROBE_THRESHOLD / PROBE_LIT_THRESHOLD). A compact table also prints
 // to stdout. A dial the probe calls inert may simply act slower than the probe
 // window — raise --probe-seconds (or probe at a later --skip) before believing
 // it. Any --controls-orig/--controls-port on the run form the untouched
@@ -99,6 +110,13 @@
 // time. A strip/cloud frame is a flat array of `pixels` [r,g,b] triples; a grid
 // frame is nested as gridH rows of gridW triples, so the layout reads directly.
 // A side that failed to compile is omitted.
+// The list is parsed STRICTLY: entries are trimmed (so a list piped in with
+// newlines after the commas is fine) and one trailing comma is allowed, but any
+// entry that is not a plain non-negative decimal — empty, "1 2", "0x10", "1e3",
+// negative — exits 2 naming the entry. Nothing is skipped and no default list
+// exists, so a dump can never quietly cover moments other than the ones asked
+// for. (frames.json also echoes `requestedTimes`; compare it against what you
+// meant to pass when a list came from a file or a shell variable.)
 //
 // Exit status is 0 whenever the harness ran — a pattern that fails to compile
 // or throws at runtime is a valid verification result, recorded in meta.json.
@@ -134,6 +152,14 @@ const STAMP_BG = [0, 0, 0]; // 1px backing box, so the ink survives any content
 const PROBE_SECONDS = 4;
 const PROBE_VALUES = [0, 0.5, 1];
 const PROBE_THRESHOLD = 1.0;
+/** The same bar for the LIT-restricted delta (mean abs channel diff over the
+ *  pixels either render lights). It has to be higher than PROBE_THRESHOLD
+ *  because the denominator is smaller — a whole-rig delta of 1.0 on a pattern
+ *  lighting 3% of its pixels is ~33 lit. 4.0 ≈ a lit pixel shifting by 1.5% of
+ *  full scale on average: comfortably above rounding/dither churn, far below a
+ *  real dial response (measured: sparse false-inert dials land in the 20-70
+ *  range, genuinely inert dials at 0.00). */
+const PROBE_LIT_THRESHOLD = 4.0;
 const PROBE_KINDS = new Set(["slider", "toggle", "inputNumber", "hsvPicker", "rgbPicker"]);
 const PICKER_KINDS = new Set(["hsvPicker", "rgbPicker"]);
 
@@ -229,16 +255,46 @@ function parseArgs(argv) {
   return { slug, opts };
 }
 
-/** --dump "0,3,7.5" → [0, 3, 7.5]: times in seconds into the captured window. */
+/** --dump "0,3,7.5" → [0, 3, 7.5]: times in seconds into the captured window.
+ *
+ *  Strict on purpose. A dump list is usually machine-generated and piped in
+ *  through the shell, so a mangled list looks exactly like a good one — and a
+ *  run that silently dumps the WRONG moments produces numbers a judge then
+ *  reasons from. Every entry must be a plain non-negative decimal; whitespace
+ *  around an entry (newlines from a `printf`/`seq` pipeline included) is
+ *  trimmed, and a single trailing comma is tolerated because `tr '\n' ','`
+ *  leaves one. Anything else — an empty entry, "1 2", "NaN", "1e", "0x10",
+ *  "Infinity", a negative — is a hard error. There is NO default list and no
+ *  fallback: this either parses what you wrote or exits 2. */
+const TIME_RE = /^\d+(\.\d*)?$|^\.\d+$/;
 function parseTimes(spec) {
-  const times = String(spec)
-    .split(",")
-    .map((t) => t.trim())
-    .filter((t) => t !== "")
-    .map(Number);
-  if (!times.length) die(`--dump needs at least one time (e.g. --dump "0,3")`);
-  if (times.some((t) => !Number.isFinite(t) || t < 0)) die(`bad --dump "${spec}" (want times >= 0)`);
+  const raw = String(spec).trim().replace(/,$/, ""); // one trailing "," is fine
+  if (raw === "") die(`--dump needs at least one time (e.g. --dump "0,3")`);
+  const times = [];
+  const entries = raw.split(",");
+  entries.forEach((entry, i) => {
+    const t = entry.trim();
+    if (t === "") {
+      die(
+        `bad --dump: entry ${i + 1} of ${entries.length} is empty — ` +
+          `the list has a stray or doubled comma (got "${clip(spec)}")`,
+      );
+    }
+    if (!TIME_RE.test(t) || !Number.isFinite(Number(t))) {
+      die(
+        `bad --dump: entry ${i + 1} of ${entries.length} is "${t}", not a plain ` +
+          `non-negative number — want e.g. "0,3,7.5" (got "${clip(spec)}")`,
+      );
+    }
+    times.push(Number(t));
+  });
   return times;
+}
+
+/** Shorten a long argument for an error message, keeping both ends. */
+function clip(s, max = 80) {
+  const one = String(s).replace(/\s+/g, " ");
+  return one.length <= max ? one : `${one.slice(0, max / 2)}…${one.slice(-max / 2)}`;
 }
 
 /** "name=1;other=0.2,0.3,0.4" → { name: [1], other: [0.2,0.3,0.4] } */
@@ -373,15 +429,33 @@ function frameStats(cur, prev) {
   let r = 0,
     g = 0,
     b = 0,
-    motion = 0;
+    motion = 0,
+    motionLit = 0;
   for (let i = 0; i < cur.length; i += 3) {
     r += cur[i];
     g += cur[i + 1];
     b += cur[i + 2];
   }
   if (prev) {
-    for (let i = 0; i < cur.length; i++) motion += Math.abs(cur[i] - prev[i]);
+    // `motion` averages over the WHOLE rig, so a pattern lighting 2% of the
+    // pixels has its motion divided by 50 and rounds to 0 — a false freeze.
+    // `motionLit` averages over the lit set only (any channel non-zero in
+    // either frame), so it measures how hard the lit pixels are working.
+    let litSum = 0;
+    let litPixels = 0;
+    for (let i = 0; i < cur.length; i += 3) {
+      const d =
+        Math.abs(cur[i] - prev[i]) +
+        Math.abs(cur[i + 1] - prev[i + 1]) +
+        Math.abs(cur[i + 2] - prev[i + 2]);
+      motion += d;
+      if (cur[i] || cur[i + 1] || cur[i + 2] || prev[i] || prev[i + 1] || prev[i + 2]) {
+        litSum += d;
+        litPixels++;
+      }
+    }
     motion /= cur.length;
+    motionLit = litPixels ? litSum / (litPixels * 3) : 0;
   }
   return {
     meanR: Math.round(r / n),
@@ -389,6 +463,9 @@ function frameStats(cur, prev) {
     meanB: Math.round(b / n),
     meanBrightness: Math.round((r + g + b) / cur.length),
     motion: Math.round(motion),
+    // One decimal, not rounded to int like `motion`: re-quantizing a stat whose
+    // whole point is to survive sparseness would put the false freeze back.
+    motionLit: round1(motionLit),
   };
 }
 
@@ -424,7 +501,7 @@ function brightnessTrend(a) {
 /** Cheap digest of the per-frame series — read this before the full arrays. */
 function summarize(stats) {
   const out = {};
-  for (const key of ["meanBrightness", "meanR", "meanG", "meanB", "motion"]) {
+  for (const key of ["meanBrightness", "meanR", "meanG", "meanB", "motion", "motionLit"]) {
     out[key] = seriesSummary(stats[key]);
   }
   out.zeroMotionFrames = stats.motion.filter((v) => v === 0).length;
@@ -511,6 +588,7 @@ function renderSide(host, source, rig, o) {
       meanG: stats.map((s) => s.meanG),
       meanB: stats.map((s) => s.meanB),
       motion: stats.map((s) => s.motion),
+      motionLit: stats.map((s) => s.motionLit),
     };
     if (stats.length) side.statsSummary = summarize(side.stats);
   } finally {
@@ -532,6 +610,28 @@ function meanAbsDiff(a, b) {
     const len = Math.min(x.length, y.length);
     for (let i = 0; i < len; i++) sum += Math.abs(x[i] - y[i]);
     count += len;
+  }
+  return count ? sum / count : 0;
+}
+
+/** Same, but averaged over the LIT pixels only — a pixel counts when any of
+ *  its channels is non-zero in either render. The whole-rig mean divides a
+ *  sparse pattern's real response by the dark fraction and reads as inert;
+ *  this is what that response looks like where the pattern actually draws. */
+function meanAbsDiffLit(a, b) {
+  const n = Math.min(a.length, b.length);
+  let sum = 0;
+  let count = 0;
+  for (let f = 0; f < n; f++) {
+    const x = a[f];
+    const y = b[f];
+    const len = Math.min(x.length, y.length) - (Math.min(x.length, y.length) % 3);
+    for (let i = 0; i < len; i += 3) {
+      if (!(x[i] || x[i + 1] || x[i + 2] || y[i] || y[i + 1] || y[i + 2])) continue;
+      sum +=
+        Math.abs(x[i] - y[i]) + Math.abs(x[i + 1] - y[i + 1]) + Math.abs(x[i + 2] - y[i + 2]);
+      count += 3;
+    }
   }
   return count ? sum / count : 0;
 }
@@ -563,6 +663,7 @@ function probeSide(host, source, rig, o) {
     if (!PROBE_KINDS.has(c.kind)) continue;
     const picker = PICKER_KINDS.has(c.kind);
     const deltas = {};
+    const deltasLit = {};
     for (const v of PROBE_VALUES) {
       const trial = renderSide(host, source, rig, {
         ...o,
@@ -570,12 +671,20 @@ function probeSide(host, source, rig, o) {
         controls: { ...o.controls, [c.name]: picker ? [v, v, v] : [v] },
       });
       deltas[String(v)] = trial.frames ? round2(meanAbsDiff(base.frames, trial.frames)) : null;
+      deltasLit[String(v)] = trial.frames
+        ? round2(meanAbsDiffLit(base.frames, trial.frames))
+        : null;
     }
     const seen = Object.values(deltas).filter((d) => d !== null);
+    const seenLit = Object.values(deltasLit).filter((d) => d !== null);
     out.controls[c.name] = {
       kind: c.kind,
       deltas,
-      responsive: seen.some((d) => d >= PROBE_THRESHOLD),
+      deltasLit,
+      // EITHER bar counts: the whole-rig delta is the historical number, the
+      // lit-restricted one is what rescues a sparse pattern from a false inert.
+      responsive:
+        seen.some((d) => d >= PROBE_THRESHOLD) || seenLit.some((d) => d >= PROBE_LIT_THRESHOLD),
     };
   }
   return out;
@@ -583,29 +692,38 @@ function probeSide(host, source, rig, o) {
 
 /** Compact stdout table: one row per side per probed control. */
 function printProbeTable(probe) {
-  const rows = [["side", "control", "kind", "responsive", "maxDelta"]];
+  const rows = [["side", "control", "kind", "responsive", "maxDelta", "maxDeltaLit"]];
   for (const [side, s] of Object.entries(probe.sides)) {
     if (s.compileError) {
-      rows.push([side, "(compile failed)", "-", "-", "-"]);
+      rows.push([side, "(compile failed)", "-", "-", "-", "-"]);
       continue;
     }
     const names = Object.keys(s.controls);
     if (!names.length) {
-      rows.push([side, "(no settable controls)", "-", "-", "-"]);
+      rows.push([side, "(no settable controls)", "-", "-", "-", "-"]);
       continue;
     }
     for (const name of names) {
       const c = s.controls[name];
-      const seen = Object.values(c.deltas).filter((d) => d !== null);
-      const max = seen.length ? Math.max(...seen) : 0;
-      rows.push([side, name, c.kind, c.responsive ? "yes" : "NO", max.toFixed(2)]);
+      const biggest = (m) => {
+        const seen = Object.values(m).filter((d) => d !== null);
+        return (seen.length ? Math.max(...seen) : 0).toFixed(2);
+      };
+      rows.push([
+        side,
+        name,
+        c.kind,
+        c.responsive ? "yes" : "NO",
+        biggest(c.deltas),
+        biggest(c.deltasLit),
+      ]);
     }
   }
   const w = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)));
   const st = probe.settings;
   console.log(
     `  probe: ${st.seconds}s @ ${st.fps}fps, skip ${st.skip}, seed ${st.seed}, ` +
-      `responsive if maxDelta >= ${PROBE_THRESHOLD}`,
+      `responsive if maxDelta >= ${PROBE_THRESHOLD} or maxDeltaLit >= ${PROBE_LIT_THRESHOLD}`,
   );
   for (const r of rows) {
     console.log(`  ${r.map((cell, i) => cell.padEnd(w[i])).join("  ")}`.trimEnd());
@@ -1094,6 +1212,7 @@ if (opts.probeControls) {
       wallClock: WALL_CLOCK,
       values: PROBE_VALUES,
       threshold: PROBE_THRESHOLD,
+      thresholdLit: PROBE_LIT_THRESHOLD,
       probedKinds: [...PROBE_KINDS],
     },
     sides: {
