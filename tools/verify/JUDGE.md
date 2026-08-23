@@ -140,7 +140,11 @@ isolate palette.
 Cross-correlation shift scans SATURATE at their search bound: a scan over
 ±6 px that returns exactly -6 every frame is pinned, not measuring — the
 true shift may be larger. A flat result exactly at the bound means widen
-the radius, never report it as a constant step. And glyph/text patterns
+the radius, never report it as a constant step. On sparse/short-lived
+content the raw argmax also bounces frame to frame — subtract the lag
+scan's floor and take a CENTROID over lags within 50% of the peak (per
+strip sub-range if speed varies with position) instead of trusting the
+argmax. And glyph/text patterns
 must be measured from `--dump`s, never from contact sheets — sheet cells
 are narrow enough that one glyph spanning cells reads as a whole word, and
 hump/cycle COUNTS read off a sheet cell are equally untrustworthy (the
@@ -583,7 +587,11 @@ default, and their injection budgets can scale oppositely with pixel count
 (fixed total vs per-pixel), making one rig size agree while every other
 diverges. Also note clipping: a side railed at 255 over part of the rig
 invalidates profile/decay/palette comparisons there — re-render both sides
-at a size where neither clips.
+at a size where neither clips. Cheapest decisive test for a saturating
+accumulator: a whole-frame VALUE HISTOGRAM of a late dump — a healthy decay
+field has a continuous value spread; a broken one collapses to exactly
+{0,0,0} and {255,255,255}. (Motion stats can be near-identical between a
+healthy side and a railed one — don't trust them here.)
 
 For any pattern with a size-dependent feature (tail length, block stride,
 spot width), run at least one off-default `--pixels` size on BOTH sides and
@@ -701,6 +709,14 @@ set DIFFERENT values on the two sides (`--controls-orig "dial=1"
 --controls-port "dial=0"`) and test for byte-identity. Proving "orig at 1 ==
 port at 0 exactly" turns a vague colour gap into a precise "the selector is
 reversed/shifted; the looks themselves are perfect" finding.
+
+When isolating one speed/motion dial, first locate EACH SIDE'S OWN zero
+for the other motion dials — a "neutral" value like 0 can mean full-reverse
+on one side and stopped on the other (a bipolar vs one-sided mapping),
+faking a motion floor on the side where it isn't neutral. And a hue-rate
+divergence measured while the figure spins can be rotation-driven (spatial
+hue gradient × spin), not a ColorSpeed difference — freeze rotation before
+comparing hue rates.
 
 Also: an UNTOUCHED default can sit OUTSIDE the range any dial value reaches
 (e.g. an untouched slope of +0.98 when the slider spans 0..−0.98) — if no
