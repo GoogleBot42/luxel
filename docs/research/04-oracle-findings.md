@@ -42,7 +42,11 @@
       `tools/oracle/oob-probes.mjs`): only the current handler invocation
       dies. Writes made before the abort stick; after a `beforeRender`
       abort the per-pixel render pass STILL RUNS; a `render(i)` abort keeps
-      that pixel's pre-error hsv and later pixels render normally. Also:
+      that pixel's pre-error hsv and later pixels render normally. If the
+      abort lands BEFORE any hsv/rgb that invocation, the pixel shows
+      BLACK — not a stale value held from the previous frame (probed with
+      a two-phase red→green pattern; the erroring pixel went [0,0,0], so
+      PB zeroes per invocation exactly like Luxel's per-pixel reset). Also:
       `array(3.2)` truncates to 3 slots (same as Luxel) — so corpus
       patterns that OOB every frame (Nano Orbital, Orv - Christmas Tree)
       error on a real PB too, and visibly work anyway.
