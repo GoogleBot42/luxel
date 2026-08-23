@@ -1,0 +1,93 @@
+{
+  "slug": "2d-sinc-theta-theta",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same family of smoothly-drifting saturating rainbow interference waves, but at default dials the port's spatial frequency is roughly 3x too high (fine aliased rings on the 16x16 default rig vs the original's few broad lobes), and two of the five sliders behave differently.",
+  "observations": [
+    "Both sides render cleanly with no compile or runtime errors, and both are alive and unchanged in character out to t=230 s (steady-late, --skip 200 --seconds 30): brightnessTrend 'steady' on both, zeroMotionFrames 1 on both. Neither dies, freezes or saturates.",
+    "Control SURFACE matches exactly: both sides expose sliderSpeed/sliderScale/sliderSizeB/sliderSizeC/sliderGamma, all kind 'slider', same labels (Speed, Scale, SizeB, SizeC, Gamma).",
+    "Structure, default rig (grid 16x16), default dials: original draws 1-2 broad, smoothly graded rainbow lobes filling the frame with a clear in-frame centre; port draws a dense field of hard-edged blocks -- the underlying ripples are finer than the 16-px grid can sample, so the port reads as shimmering confetti rather than a picture (baseline sheets).",
+    "Frequency measured, default rig, --dump t=0, middle row (row 8 of 16): original's hue is one smooth monotone ramp with clamped plateaus (0.50 x4, then 0.44->0.02->0.99->0.85, then 0.83 x3) -- about one hue traverse across the width. Port's hue snaps around a ~7-px repeat (0.17,0.50,0.50,0.50,0.00,0.17,0.17,0.18,0.50,0.50,0.50,0.00,0.17,...) -- about 2.3 cycles across the same 16 px.",
+    "Frequency confirmed on a 48x48 lens (grid48/dump48, same defaults): original's middle-row channels each make ~1 broad excursion across 48 px (R holds 0 for 13 px then rises to 255 and stays; B dips from 255 to ~9 around x=21 and recovers by x=35). Port's make 2-3 (R has two full dips, B three), and port's G is pinned at 255 across the entire row. Visually: original ~1.5 rings per frame, port ~5-6 concentric rings.",
+    "The excess ring count is what drives the motion stat gap, not a speed difference: port motion avg 75.7 vs orig 36.5 over the 60 s survey, but the frame-to-frame filmstrips (regime-mid at t=40 s, 48x48) show both sides' bands gliding smoothly in the same diagonal direction at visually comparable per-band speed. Motion is smooth on both -- no jitter or jumping on either side.",
+    "Setting the port's Scale to ~0.10 (portscale-0.1, 48x48) brings its feature size and band count into rough agreement with the original at ITS default, and at that point the two look like the same pattern: same diagonal drift, same white/black lobes, same hard 0/255 channel clipping. So the algorithm family is right and the default scale mapping is the main structural error.",
+    "Colour: both are full-saturation additive rainbows that clip hard at 0 and 255 per channel -- same palette family. But the port's frame mean sits ~15 counts higher and far flatter (survey meanBrightness avg 168.2, min 161, max 182) than the original's (avg 153.4, min 128, max 173): the original's broad lobes let whole-frame brightness breathe, while the port's fine rings average out to a near-constant grey-white. The port never gets as dark as the original does.",
+    "Survey structure: no mode/regime rotation on either side. The 60 s survey rhythm images show one homogeneous texture throughout with a repeating ~8 s beat on the original; the 240 s survey (survey-240) confirms a single regime with no boundaries out to 4 minutes on both sides. The port shows the same repeating beat but washed out, because column-mean collapse of its fine rings desaturates them.",
+    "Seed is not a factor: seed 7 (seed7) reproduces the same relationship as seed 1 -- orig mean 154 motion 19, port mean 167 motion 41. The pattern is not stochastic on either side.",
+    "Scale range mismatch at the extremes, default rig: at Scale=0 the original still shows a full radial rainbow with several lobes and slow evolution (motion 3), while the port collapses to an almost frozen single linear diagonal gradient (motion 1); at Scale=1 the original shows moderately fine but still legible lobes (motion 36) while the port aliases into per-pixel noise (motion 103)."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Rate of evolution, monotonically increasing; window motion 16 / 25 / 113 at 0 / 0.5 / 1 (12 s @ 10 fps). Spatial structure unchanged.",
+      "portEffect": "Same: motion 15 / 26 / 109 at 0 / 0.5 / 1, spatial structure unchanged. Direction and magnitude both match closely.",
+      "matches": true
+    },
+    {
+      "name": "sliderScale",
+      "origEffect": "Spatial frequency: raising it adds lobes. At 0 a few broad radial lobes still fill the frame; at 1 the lobes are finer but still smooth and readable on the 16x16 rig.",
+      "portEffect": "Same direction but a much wider, badly-placed range: at 0 the pattern degenerates to a nearly static linear gradient with no radial structure at all, and at 1 it aliases into per-pixel noise. The port's DEFAULT sits where the original is around 0.8-1.0; port Scale ~0.10 is where it matches the original's default.",
+      "matches": false
+    },
+    {
+      "name": "sliderSizeB",
+      "origEffect": "Acts mainly as a rate/size control and moves INVERSELY with activity: 12 s window motion 58 / 31 / 5 at 0 / 0.5 / 1 (48x48). At 1 the original is nearly still, holding large slow lobes; at 0 it churns, with a circular feature visibly growing and shrinking.",
+      "portEffect": "Moves the wrong way and saturates: motion 32 / 112 / 110 at 0 / 0.5 / 1. Highest value gives the port near-maximum churn where the original is nearly frozen.",
+      "matches": false
+    },
+    {
+      "name": "sliderSizeC",
+      "origEffect": "No effect. Verified manually over a 60 s window (ctl-sizec-*, 5 fps): at 0, 0.5 and 1 the original's stats are identical (mean 153, motion 37) and the rendered contact sheets are byte-identical to the untouched survey run. Dial effect unverifiable from output -- treat as a caveat, not permission to drop the control.",
+      "portEffect": "Strongly live: motion 66 / 109 / 108 at 0 / 0.5 / 1 over the same 60 s window, and all three renders differ from each other and from the port's untouched run. The port has wired this slider into something the original leaves dead.",
+      "matches": false
+    },
+    {
+      "name": "sliderGamma",
+      "origEffect": "Brightness/contrast shaping: raising it darkens. Window mean brightness 171 / 147 / 143 at 0 / 0.5 / 1 (48x48). Structure and motion unaffected. Probe delta is 0 at 0.5, so 0.5 is the default.",
+      "portEffect": "Same: mean 175 / 149 / 146 at 0 / 0.5 / 1, same direction, near-identical magnitude, default also at 0.5.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Primary fix: the port's spatial scale at default dials is about 3x too fine. On the 16x16 default rig the original shows roughly one hue traverse across the frame width; the port shows ~2.3 cycles with a ~7-px repeat. Divide the port's effective scale factor by ~3 so that a default frame contains 1-2 broad lobes, not 5-6 rings. Empirically the port's current output at sliderScale~0.10 is where it matches the original at its own default -- that ratio is the correction to apply.",
+    "The Scale slider's mapped RANGE is too wide as well as offset. On the original, Scale=0 still yields a full radial rainbow with several lobes and Scale=1 stays smooth and legible on a 16x16 grid; on the port, Scale=0 degenerates to an almost-static linear gradient with no radial structure and Scale=1 aliases into per-pixel noise. Compress the range so the whole 0..1 sweep stays inside 'readable on 16x16', with the low end still radial rather than flat.",
+    "sliderSizeB is inverted. On the original, raising SizeB slows the pattern down (12 s motion 58 -> 31 -> 5 across 0 -> 0.5 -> 1); on the port it speeds it up and then saturates (32 -> 112 -> 110). Flip the sense of this dial and make sure the top of its range produces a nearly-still frame of large slow lobes, as the original does.",
+    "sliderSizeC does nothing at all on the original -- 0, 0.5 and 1 render byte-identically over a 60 s window -- but is a strong dial on the port. The port has connected it to a term the original doesn't use. Keep the control on the surface (the original exposes it), but its effect on output should be nil.",
+    "Do not touch Speed or Gamma: both already track the original closely in direction and magnitude (Speed motion 16/25/113 vs 15/26/109; Gamma mean brightness 171/147/143 vs 175/149/146).",
+    "Secondary, and likely to fix itself once the scale is corrected: the port's whole-frame brightness never breathes. Over 60 s the original's mean brightness ranges 128-173 while the port's is pinned to 161-182, and the port's green channel is clipped at 255 across an entire middle row. The original spends real time dark; the port is always near-white on average.",
+    "Motion character, direction and smoothness are already right, and both sides survive to 230 s without decaying or freezing -- no work needed on the time axis beyond the SizeB inversion."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "regime-mid",
+    "steady-late",
+    "seed7",
+    "grid48",
+    "dump-t0",
+    "dump48",
+    "ctl-speed-0",
+    "ctl-speed-0.5",
+    "ctl-speed-1",
+    "ctl-scale-0",
+    "ctl-scale-0.25",
+    "ctl-scale-0.5",
+    "ctl-scale-0.75",
+    "ctl-scale-1",
+    "ctl-sizeb-0",
+    "ctl-sizeb-0.5",
+    "ctl-sizeb-1",
+    "ctl-sizec-0",
+    "ctl-sizec-0.5",
+    "ctl-sizec-1",
+    "ctl-gamma-0",
+    "ctl-gamma-0.5",
+    "ctl-gamma-1",
+    "portscale-0.05",
+    "portscale-0.1",
+    "portscale-0.15"
+  ]
+}

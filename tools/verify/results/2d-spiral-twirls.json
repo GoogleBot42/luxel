@@ -1,0 +1,108 @@
+{
+  "slug": "2d-spiral-twirls",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "medium",
+  "summary": "At matched dial settings the port reproduces the original's spiral geometry, brightness envelope and rainbow palette almost exactly, but all three of its speed dials respond quadratically where the original's are linear (so mid-slider motion is 2-4x too slow, and RotationSpeed is 3x too slow even at max), and the two sides' untouched-default states look nothing alike.",
+  "observations": [
+    "Control surface matches exactly on both sides: sliderTwistSpeed/TwistSpeed, sliderRotationSpeed/RotationSpeed, sliderInitialColor/InitialColor, sliderColorSpeed/ColorSpeed, sliderArms/Arms, all kind=slider, same order (meta.json, every run).",
+    "Both sides render alive and error-free on every run (no compileError/runtimeError); over a 240 s survey at 2 fps neither side shows any mode structure or regime boundary - a single continuous regime on each side, so no multi-mode window risk.",
+    "Arm-count mapping is IDENTICAL. With twist=0, rotation=0, colorSpeed=0 (fully static frames, 32x32) both sides draw: Arms=0 -> one 180-degree half-disc; Arms=0.5 -> a 2-lobe bowtie in the same diagonal orientation; Arms=1 -> a 4-wedge pinwheel with the same up/down/left/right placement. Same geometry, same phase, same wedge boundaries (labels armcount-0/0.5/1).",
+    "Radial brightness envelope matches. 32x32 static dump at Arms=0.5, mean of the max RGB component in 10 radial bins - orig 94 85 75 65 55 45 35 25 15 6; port 98 89 79 69 59 49 39 29 19 10. Same linear falloff, port a uniform ~4/255 brighter. Peak pixel: orig 207, port 216 (label radial).",
+    "Spatial hue gradient has the same slope but a constant offset. 8x8 dump, static Arms=0.5 config: consecutive lit cells step ~0.074 in hue on BOTH sides; the port's hue sits ~0.15 (about 55 degrees, toward green/yellow) below the original's at every cell - e.g. orig (0,131,154) vs port (0,162,40); orig (0,52,127) vs port (0,136,94) (label dump-static).",
+    "SPEED-DIAL RESPONSE CURVE IS THE MAIN DIVERGENCE. Original's rates are LINEAR in slider value, port's are QUADRATIC. Hue cycles/second measured off the meanR series: ColorSpeed 0/0.25/0.5/0.75/1 -> orig 0.00/0.25/0.50/0.75/1.05, port ~0/0.075/0.23/0.575/1.00 (port ~= v^2). Rotation turns/second from per-frame angular-phase tracking of dumped frames: RotationSpeed 0.25/0.5/1 -> orig 0.387/0.768/1.539 (= 1.54*v), port 0.033/0.125/0.503 (= 0.50*v^2). Twist period (inner-vs-outer-ring phase difference wrapping): TwistSpeed 0.25/0.5/1 -> orig ~4 s/~2 s/~1 s (rate ~ v), port ~16 s/~4 s/~1 s (rate ~ v^2).",
+    "RotationSpeed is additionally too slow at full scale: at slider=1 the original turns 1.54 turns/s, the port 0.50 turns/s - 3.1x slower. TwistSpeed and ColorSpeed both land on the original's rate at slider=1 and only diverge below it.",
+    "Consequence at a normal mid setting (all five sliders 0.5, 60 s window): orig mean per-frame motion 14.9 and 30 hue cycles; port motion 8.4 and 15 hue cycles. Same look, visibly sluggish (label all-mid-survey).",
+    "UNTOUCHED DEFAULTS DIVERGE COMPLETELY. With no controls applied the original renders an isotropic radial blob with NO angular structure at all, flashing on/off at ~10-11 Hz and running a full hue cycle roughly every 0.5 s (verified at 100 fps and at 32x32, so it is not aliasing); the port renders a smooth, slow 2-3 arm spiral with a ~90 s hue walk (motion avg 1.4 vs orig 20.0 over 60 s). CAVEAT: a pattern named 'Spiral Twirls' whose Arms slider works fine once set but that draws zero arms when untouched looks like uninitialized control state on the original side, not a port rendering bug - explicitly setting any Arms value makes the original spiral correctly.",
+    "InitialColor behaves differently: on the ORIGINAL the output changes when the slider is set at all, but is byte-identical at 0, 0.5 and 1 (checked alone and with ColorSpeed=0 frozen, 6 s windows, labels ctl-initonly-*, ctl-init-cs0-*) - the value has no effect. On the PORT it cleanly selects the base hue (0 -> green/cyan, 1 -> red/magenta).",
+    "Pattern is fully deterministic - seed 7 reproduces seed 1 on both sides (label seed7-all-mid), so no RNG-character judgement is needed.",
+    "Neither side degrades: brightnessTrend 'steady' on both at matched dials, zeroMotionFrames 1 on both over 60 s; the port's default-state zeroMotionFrames of 55/300 is slowness, not freezing (it still completes rotations and a hue cycle over 240 s)."
+  ],
+  "dials": [
+    {
+      "name": "sliderTwistSpeed",
+      "origEffect": "Controls how fast the arms wind and unwind. TwistSpeed=0 holds straight, untwisted spokes; raising it makes the arms swirl faster. Twist cycle period ~4 s / ~2 s / ~1 s at 0.25 / 0.5 / 1 - rate is linear in the slider. Probe called this inert on the original, which was a false inert: from the degenerate untouched default the original has zero arms, so twist has nothing to act on.",
+      "portEffect": "Same character - 0 gives the same straight 4-spoke pinwheel, higher values swirl. But period is ~16 s / ~4 s / ~1 s at 0.25 / 0.5 / 1: rate goes as v^2, so it matches the original only at slider=1 and is up to 4x too slow below it.",
+      "matches": false
+    },
+    {
+      "name": "sliderRotationSpeed",
+      "origEffect": "Spins the whole pinwheel about the centre; rate is linear at 1.54*v turns/s (0.387 / 0.768 / 1.539 turns/s at 0.25 / 0.5 / 1). Same rotational direction as the port.",
+      "portEffect": "Spins the same way about the same centre, but at 0.50*v^2 turns/s (0.033 / 0.125 / 0.503) - quadratic AND 3.1x too slow at full scale.",
+      "matches": false
+    },
+    {
+      "name": "sliderInitialColor",
+      "origEffect": "Value-independent: 0, 0.5 and 1 produce byte-identical output (verified alone and with ColorSpeed=0 over 6 s). Merely setting the control perturbs the colour phase relative to leaving it untouched, but the value itself does nothing visible - dial effect unverifiable from output on the original.",
+      "portEffect": "Live and continuous: selects the base hue of the palette (0 -> green/cyan, 0.5 -> mid, 1 -> red/magenta) with the spatial gradient unchanged.",
+      "matches": false
+    },
+    {
+      "name": "sliderColorSpeed",
+      "origEffect": "Rate of the rainbow hue walk. 0 freezes the palette (a static blue/green spiral); rate is linear at ~1.0*v hue cycles/s (0.25 / 0.50 / 0.75 / 1.05 cyc/s at 0.25 / 0.5 / 0.75 / 1).",
+      "portEffect": "Same freeze at 0 and the same full-rainbow walk, but rate ~1.0*v^2 cyc/s (0.075 / 0.23 / 0.575 / 1.00) - matches the original at slider=1, ~2.2x too slow at 0.5, ~3.3x too slow at 0.25.",
+      "matches": false
+    },
+    {
+      "name": "sliderArms",
+      "origEffect": "Sets the number of spiral arms: 0 -> a single 180-degree half-disc, 0.5 -> 2 lobes (bowtie), 1 -> 4 wedges; intermediate values interpolate. Boundary orientation is fixed by the dial value.",
+      "portEffect": "Identical mapping and identical wedge orientation at 0, 0.5 and 1 on a static (twist=0, rotation=0, colorSpeed=0) 32x32 render. Only difference is the constant hue offset.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Highest-value fix: the port's three speed dials (TwistSpeed, RotationSpeed, ColorSpeed) map slider value to rate QUADRATICALLY where the original maps it LINEARLY. Measured targets - ColorSpeed should give hue cycles/second equal to the slider value (0.25 -> 0.25 cyc/s, 0.5 -> 0.50, 0.75 -> 0.75, 1 -> ~1.05); the port currently gives 0.075 / 0.23 / 0.575 / 1.00. TwistSpeed should give a twist period of ~4 s / ~2 s / ~1 s at 0.25 / 0.5 / 1; the port gives ~16 s / ~4 s / ~1 s. Straightening these three curves fixes the whole 'port looks sluggish at mid dials' complaint.",
+    "RotationSpeed needs a magnitude fix on top of the curve fix: the original spins at 1.54 turns/s at slider=1, the port at 0.50 turns/s. Target 1.54*v turns/s (0.387 at 0.25, 0.768 at 0.5, 1.539 at 1); the port is currently 0.50*v^2.",
+    "InitialColor: on the port it is a live base-hue selector; on the original the value provably does nothing (0, 0.5 and 1 render identically). Keep the control - do not remove it - but be aware the port's behaviour here is richer than the original's, so it is a fidelity difference only if the original's inertness is itself intended.",
+    "Minor palette-phase nit: at identical dial settings the port's hue sits a constant ~0.15 (about 55 degrees, greener) below the original's, with the spatial hue gradient slope identical. Shifting the port's base hue up by ~0.15 would align the two exactly; low priority since the palette family, gradient and cycle are already right.",
+    "Do NOT chase the untouched-default divergence until the harness question is settled: with no controls applied the original degenerates to a zero-arm radial blob strobing at ~10-11 Hz with a ~0.5 s hue cycle, while the port shows a well-formed slow spiral. The original spirals correctly as soon as any Arms value is set, which points at the original's control-derived state never being initialised in this harness (likely the .epe's saved slider values not being applied) rather than at the port. If the harness is confirmed to be applying saved control values correctly, then the port's default Arms/ColorSpeed/RotationSpeed values are the thing to revisit; if not, this whole difference is an artefact.",
+    "Nothing else needs work: arm count vs Arms, wedge orientation, radial brightness falloff (10-bin profile matches within 4/255), rotation direction, freeze-at-ColorSpeed-0, and determinism across seeds are all already exact."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "fine100",
+    "big32",
+    "all-mid",
+    "all-mid-survey",
+    "ctl-arms-low",
+    "ctl-arms-0.25",
+    "ctl-arms-0.5",
+    "ctl-arms-0.75",
+    "ctl-arms-high",
+    "ctl-twist-0",
+    "ctl-twist-1",
+    "ctl-sliderRotationSpeed-0",
+    "ctl-sliderRotationSpeed-1",
+    "ctl-sliderInitialColor-0",
+    "ctl-sliderInitialColor-1",
+    "ctl-sliderColorSpeed-0",
+    "ctl-sliderColorSpeed-1",
+    "ctl-init-cs0-0",
+    "ctl-init-cs0-0.5",
+    "ctl-init-cs0-1",
+    "ctl-initonly-0",
+    "ctl-initonly-1",
+    "cs-curve-0.25",
+    "cs-curve-0.75",
+    "armcount-0",
+    "armcount-0.25",
+    "armcount-0.5",
+    "armcount-0.75",
+    "armcount-1",
+    "dump-static",
+    "radial",
+    "rot-phase-0.25",
+    "rot-phase-0.5",
+    "rot-phase-1",
+    "rot-dense",
+    "rot-dense-0.25",
+    "rot-dense-1",
+    "twist-dense-0.25",
+    "twist-dense-0.5",
+    "twist-dense-1",
+    "seed7-all-mid"
+  ]
+}
