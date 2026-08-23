@@ -1,0 +1,46 @@
+{
+  "slug": "bouncing-balls-rgb",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same pattern — 8 single-pixel balls bouncing off pixel 0 under identical gravity, statistically indistinguishable in steady state — but the port uses a brighter full-saturation rainbow instead of the original's constant-luminance ramp, and it starts with the balls pre-fanned rather than stacked into one white dot.",
+  "observations": [
+    "Both sides: 60-px strip, 8 balls, each ball exactly ONE lit pixel (no trail, no sub-pixel antialiasing), all launched toward the far end and bouncing off pixel 0; amplitude varies per ball and per bounce, and neither side ever comes to rest (survey-240, 240 s at 10 fps).",
+    "Neither side exposes any control (probe: 'no settable controls' on orig and port) — control surfaces match.",
+    "Both sides are completely seed-independent: seeds 1, 7 and 1234 produce byte-identical per-frame stats series on each side (seed1-40 / seed7 / seed1234, 40 s at 10 fps), so this is a deterministic pattern and no stochastic caveat applies.",
+    "OPENING TRANSIENT (biggest divergence). Original: all 8 balls are exactly superimposed at pixel 0 at t=0 and stay superimposed for one full arc — 0 → 59 (apex, t=2.0 s) → 0 (t=4.0 s) — rendering as a single SATURATED WHITE dot (255,255,255, the additive sum of all 8 clipping) for the first 4 seconds; they fan into individual colours only after the first bounce (n=2 lit at t=4.25, n=4 at 4.5, n=8 by 5.25 s). Port: 8 distinctly-coloured balls already spread across pixels 2,11,18,25,32,37,42,47 at t=0, and never shows a white/stacked phase at all (traj-start, 0.25 s dumps over 0-14 s).",
+    "PALETTE. Both sides give each ball a fixed colour for the whole run, red-to-magenta in ball order, but the ramps differ. Original's 8 triples: (255,0,0), (209,48,0), (147,107,0), (0,255,0), (0,127,127), (0,0,255), (63,0,191), (191,0,63) — every one sums to ~255, a constant-luminance ramp, so the in-between hues read as dark orange, olive and dim teal. Port's 8 triples: (255,0,0), (255,127,0), (255,255,0), (0,255,0), (0,255,255), (0,0,255), (127,0,255), (255,0,127) — full-brightness HSV, channel sums 255-510, so yellow/cyan/orange/pink are vivid. Net effect: over a 30 s steady-state window the port emits 1.40x the total RGB energy of the original (mean per-frame channel sum 2769 vs 1978; meanBrightness 15 vs 11 over the 240 s survey).",
+    "PHYSICS MATCHES. At --fps 100 the port's red (fastest) ball traces the original's stacked-ball arc to within 1 px over the first second: orig 0,11,21,30,37,44 at t=0/0.2/0.4/0.6/0.8/1.0 vs port 0,11,21,30,38,44. Gravity, launch speed and bounce restitution are right.",
+    "STEADY STATE MATCHES. Over t=120-150 s (300 dumps at 0.1 s): mean number of lit pixels 7.09 orig vs 7.07 port; fraction of lit pixels sitting in the left 10 px 0.49 vs 0.48; mean of the frame's rightmost lit index 41.6 vs 40.7; both reach pixel 59. brightnessTrend 'steady' on both in the long runs, no decay-to-black or freeze on either side.",
+    "MINOR FRAME-RATE COUPLING IN THE PORT. The original is exactly fps-invariant — its ball sits at pixels 0/11/21/30/37/44 at t=0/0.2/.../1.0 identically at 10, 20, 40 and 100 fps. The port's positions shift with the frame delta and converge only as dt shrinks: its red ball is at pixel 5 (10 fps), 2 (20 fps), 1 (40 fps), 0 (100 fps) at t=0, i.e. roughly a half-step Euler lead. At the default 20 fps this is a ~2 px / ~0.1 s head start, small but systematic.",
+    "Rhythm: neither side is periodic in steady state — autocorrelation of the motion series over t=120-140 s peaks below 0.3 on both, consistent with 8 incommensurate bounce periods. The port does show a slightly stronger collective recurrence near 3.5-4.0 s in the 240 s survey (motion ACF ~0.25 at lag 35-40 frames at 10 fps) where the original's is broader and weaker (peaks ~0.22-0.25 spread over 0.4-1.9 s), i.e. the port's balls stay a little more phase-coherent; visible in the survey waterfalls as more regularly-nested right-hand excursions on the port."
+  ],
+  "dials": [],
+  "feedback": [
+    "Fix the initial condition: the original launches all 8 balls from pixel 0 with the SAME velocity, so its first 4 seconds are a single white (255,255,255) dot arcing out to pixel 59 at t=2 and back to 0 at t=4; the per-ball speed spread only appears after that first bounce (fully fanned by t~5.3 s). The port starts with the balls already scattered at pixels 2,11,18,25,32,37,42,47, so it never shows that white-arc opening. Give every ball the same starting position and starting velocity and introduce the per-ball variation at bounce time.",
+    "Fix the colour ramp: the original's ball colours are constant-luminance (r+g+b ~= 255) — exactly (255,0,0), (209,48,0), (147,107,0), (0,255,0), (0,127,127), (0,0,255), (63,0,191), (191,0,63). The port uses full-brightness HSV — (255,0,0), (255,127,0), (255,255,0), (0,255,0), (0,255,255), (0,0,255), (127,0,255), (255,0,127) — which makes the secondary hues (yellow, cyan, orange, pink) about twice as bright as they should be and pushes the whole pattern ~40% brighter overall. Only red, green and blue currently land on the right values.",
+    "Make the integration frame-rate independent: the original's ball position at a given wall-clock time is identical at 10, 20, 40 and 100 fps; the port's drifts (red ball at pixel 5 vs 0 at t=0 for 10 fps vs 100 fps) and only converges onto the original as dt -> 0. Advance position with an exact/half-step-corrected update rather than plain forward Euler, and the port's trajectory will match the original at the default 20 fps too.",
+    "Nothing else needs touching: ball count (8), single-pixel rendering with additive overlap, bounce wall at pixel 0, gravity/restitution, the long-run amplitude distribution and left-edge clustering, and the absence of any controls are all already correct."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "mode-early",
+    "mode-late",
+    "dump-early",
+    "dump-disperse",
+    "traj-start",
+    "traj-late",
+    "fps10",
+    "fps40",
+    "fpsx10",
+    "fpsx20",
+    "fpsx40",
+    "fpsx100",
+    "seed1-40",
+    "seed7",
+    "seed1234"
+  ]
+}

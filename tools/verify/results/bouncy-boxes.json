@@ -1,0 +1,106 @@
+{
+  "slug": "bouncy-boxes",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same family — rainbow-gradient boxes drifting and wrapping on black with a sparkle dial and a tear dial — but the port's boxes never squash or stretch, it draws 4 canvas-scaled squares instead of the original's pixel-native mirrored field, and its tear bars run horizontally where the original's run vertically.",
+  "observations": [
+    "Both sides render cleanly on the default 16x16 grid rig, no compile or runtime errors, at every seed tried (1, 7, 1234 give byte-identical summary stats on both sides, so this pattern appears seed-independent) and at every window checked (baseline 6 s, survey 60 s @5 fps, survey-240 240 s @2 fps, late window --skip 120). Neither side decays, freezes or saturates: brightnessTrend 'steady' on both, zeroMotionFrames 1 on both.",
+    "THE NAMESAKE BEHAVIOUR IS MISSING. Original boxes squash and stretch vertically: over track-bb1 (41 consecutive frames, 3.0-5.0 s @20 fps, --dump) the median isolated-box bounding box is 7x3 / 6x3 for most of the window and swells to 6x6 / 6x5 around t=3.90-4.15 s, then collapses back to 6x3. Across dump-series (t=0..11 s) heights run 2, 3, 5 and 6 px at different moments. The port's boxes are rigid: EVERY isolated component in every frame of both dumps is exactly 5x5 / 25 px, and the port's total lit-pixel count is pinned at 100/256 in 24 of 26 sampled frames (min 88, max 106 only when a tear overlaps). Original lit count over the same frames ranges 100-155 px (39-61%, mean ~48%).",
+    "Brightness follows from that: orig meanBrightness avg 47 (min 43 max 63) vs port avg 34 (min 32 max 47) on every run. An ASCII plot of the 240-frame 'late' window shows the original's frame brightness jittering continuously between ~44 and ~64 while the port's sits flat at ~32 apart from isolated tear bumps.",
+    "SYMMETRY. On the default rig the original's lit mask is mirror-symmetric about the vertical centerline: an exhaustive search over all 32 half-pixel mirror axes picks x=7.5 as the best axis in 26 of 26 sampled frames (dump-series t=0..11 s), with 70-100% mask agreement (100% at t=2.5, 3.0 and 9.0). The port's best axis wanders (x = 0, 1, 2, 3, 4, 5, 6, 6.5, 7 across the same 26 frames) and its centreline agreement is only 48-88%. Visually the original therefore shows mirrored box PAIRS (e.g. at t=4.5 s boxes occupy cols 2-6 and 9-13; at t=5 s cols 1-5 and 10-14); the port's four boxes are placed independently.",
+    "RESOLUTION BEHAVIOUR. Re-rendered at --rig grid --grid 48x48 the port is unchanged in character: still exactly 4 boxes, each now 15x15, lighting 900/2304 px = 39% — the same fraction as 100/256 on the default rig, i.e. it draws into a normalised canvas. The original is pixel-native: 72 separate components at t=0.5 s (vs 3 on 16x16), each only ~6-14 px wide and 1-2 px tall, and the frame repeats EXACTLY every 16 rows (row y equals row y+16 at 100% for all four dumped times) while its best mirror axis stays at x=7.5 rather than moving to the 48-px centre. Reported as a lens observation; the headline size/count numbers above are all from the default 16x16 rig.",
+    "RHYTHM. Autocorrelation of the raw meanBrightness series shows the original has a strong, exact 99-FRAME cycle at every frame rate tested — 99 frames at 2 fps (49.5 s), 99 frames at 5 fps (19.8 s) and 99 frames at 20 fps (4.95 s), normalised peak 1.00 each time. The original is therefore frame-stepped, not time-based. The port has no comparable cycle: its strongest peaks are 194f/97 s at 2 fps, 57f/11.4 s at 5 fps and 14f/0.70 s at 20 fps, all weak (0.12-0.40) and mutually inconsistent. (The 10/20/40 fps `motion` triple is saturated here — 13.5/13.7/8.9 orig and 10.0/9.9/5.1 port — so it was not used as evidence.)",
+    "The 60 s and 240 s survey rhythm images agree with that: the original's is a vertically-banded, centre-mirrored field with converging/diverging 'lens' arches and no diagonal traces; the port's is full of clean diagonal zigzags — individual boxes traversing the width and bouncing off the wrap edges over roughly 40-60 s. Neither side has distinct MODES: the same texture holds from t=0 to t=240 s on both, so there is one regime, checked again at --skip 120.",
+    "Box interior colouring is a fair match in family: both draw a per-box radial rainbow (bright saturated centre pixel, hue walking outward through the spectrum, dimmer partially-covered edge pixels) on a pure-black background, and both cycle hue continuously frame to frame. Port boxes are perfectly radially symmetric 5x5; original boxes, being 5-7 wide and 2-6 tall, show the same radial hue walk squashed into the flatter shape.",
+    "TEAR ORIENTATION IS TRANSPOSED. With TearChance=1 (--dump of the exact frames): the port's tears are full-width HORIZONTAL bars of near-white pixels occupying whole rows (at t=5.8 s rows 0, 8 and 15 are solid); the original's tears are full-height VERTICAL bars occupying whole columns (at t=5.8 s cols 7-8 are lit on all 16 rows; at t=0.1 s cols 0, 3, 7, 8, 12, 15 run top to bottom). The same orientation difference is visible untouched, in the baseline sheets and filmstrips (grey vertical column on the original at 3.3 s, grey horizontal line on the port at 3.4-3.55 s).",
+    "CONTROL SURFACE MISMATCH. Original exposes 7 sliders: GlitchRate, GlitchBrightness, GlitchSat, TearChance, TearFramesPerSec, TearBrightness, TearSat. Port exposes 6: SparkleRate, SparkleBrightness, SparkleSaturation, TearChance, TearRate, TearBrightness. TearSat is missing entirely from the port (verified live on the original: with TearChance=1, TearSat 1 -> 0 lifts orig meanBrightness 69 -> 91 and turns the coloured tear bars white; the port is byte-identical across that pair since it has no such dial). Three further names diverge from the original's: Glitch* -> Sparkle*, GlitchSat -> SparkleSaturation, TearFramesPerSec -> TearRate."
+  ],
+  "dials": [
+    {
+      "name": "sliderGlitchRate (port: sliderSparkleRate)",
+      "origEffect": "Density of random single-pixel glitch confetti sprayed over the whole grid. Probe reported 0.00 delta (a false inert caused by GlitchBrightness defaulting to 0); with Brightness pinned to 1 and Sat to 0 the sweep is strongly monotonic — white sparkle pixels per frame at t=2 s: 14 (rate 0.1), 38 (0.25), 74 (0.5), 109 (0.75), 129 (1.0) out of 256, with total lit going 144 -> 167 -> 202 -> 237 -> 256/256 and meanBrightness 61 -> 81 -> 114 -> 149 -> 182. At rate 1 the whole grid is glitch.",
+      "portEffect": "Same knob, same monotonic direction and same shape, but roughly 3x too sparse at every setting: white sparkles 3 / 9 / 15 / 34 / 45 out of 256 at the same five rates, total lit 103 -> 109 -> 115 -> 134 -> 145, meanBrightness 38 -> 45 -> 58 -> 70 -> 81. At rate 1 the port's field is still mostly black with boxes clearly readable; the original's is wall-to-wall noise.",
+      "matches": false
+    },
+    {
+      "name": "sliderGlitchBrightness (port: sliderSparkleBrightness)",
+      "origEffect": "Gates the glitch layer: 0 = no glitch at all (renders identically to untouched, mean 47 / motion 12), 1 = full-brightness confetti. Acts as the master enable for the Rate and Sat dials.",
+      "portEffect": "Identical behaviour and direction — 0 gives mean 33 / motion 10 (untouched), 1 enables the sparkle layer.",
+      "matches": true
+    },
+    {
+      "name": "sliderGlitchSat (port: sliderSparkleSaturation)",
+      "origEffect": "Saturation of the glitch pixels. Probe said inert (false inert — brightness gate again). With Rate=1, Brightness=1: Sat 1 gives fully saturated random rainbow noise (mean 114, motion 79); Sat 0 gives white noise (mean 182, motion 20).",
+      "portEffect": "Same direction and same white-at-0 result: Sat 1 -> mean 56 / motion 31, Sat 0 -> mean 80 / motion 46. Character matches; only the density (see Rate) differs.",
+      "matches": true
+    },
+    {
+      "name": "sliderTearChance",
+      "origEffect": "Strongly responsive (probe maxDelta 31.8 / maxDeltaLit 49.4). At 1 the frame is dominated by full-height vertical coloured tear columns, mean 46 -> 69, motion 10 -> 65.",
+      "portEffect": "Responsive in the same direction but weaker and in the wrong orientation: mean 33 -> 59, motion 10 -> 23, and the tears are full-width horizontal white rows.",
+      "matches": false
+    },
+    {
+      "name": "sliderTearFramesPerSec (port: sliderTearRate)",
+      "origEffect": "How often the tear re-randomises. At 0 the tear is static and persistent (mean 81, motion 14); at 0.5 and 1 it flickers (motion 53 and 56). ~4x motion swing across the sweep.",
+      "portEffect": "Same direction: 0 -> motion 11 (static), 0.5 -> 17, 1 -> 24. Only a ~2.2x swing, and the name differs from the original's.",
+      "matches": true
+    },
+    {
+      "name": "sliderTearBrightness",
+      "origEffect": "Fades the tear bars out. At 0 with TearChance=1 the tears vanish (mean 69 -> 46, motion 65 -> 38).",
+      "portEffect": "Same direction, weaker: mean 59 -> 34, motion 23 -> 13.",
+      "matches": true
+    },
+    {
+      "name": "sliderTearSat",
+      "origEffect": "Saturation of the tear bars. With TearChance=1, Sat 1 gives coloured (yellow/magenta/orange) full-height bars, mean 69 / motion 65; Sat 0 turns them white, mean 91 / motion 84.",
+      "portEffect": "ABSENT — the port has no TearSat control, and its tears are always near-white regardless.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Restore the box squash-and-stretch. On the 16x16 grid the original's boxes spend most of the cycle at about 6 wide x 3 tall and briefly balloon to about 6x6 before collapsing back; measured over 41 consecutive frames (3.0-5.0 s @20 fps) the height goes 3,3,3,3,2,3,3,3,3,3,3,3,3,3,3,3,-,6,6,6,5,-,5,...,3,3,3. The port's box is 5x5 in literally every frame sampled, so its lit-pixel count never leaves 100/256 while the original's swings 100-155. This is the single most visible gap and probably the pattern's namesake.",
+    "Make the box field pixel-native and mirrored, not four canvas-scaled squares. The original is mirror-symmetric about the vertical centreline of the 16-px lattice (best mirror axis x=7.5 in 26/26 sampled frames, 70-100% agreement; boxes appear as left/right pairs such as cols 1-6 + 9-14, or cols 2-6 + 9-13), and on a 48x48 rig it repeats exactly every 16 rows and keeps its mirror axis at x=7.5. The port draws 4 independent boxes at 5/16 of the canvas on any grid (15x15 on 48x48) with no mirror pairing.",
+    "Transpose the tear. The original's tear is a full-HEIGHT vertical column (with TearChance=1 at t=5.8 s, cols 7-8 are lit on all 16 rows); the port draws full-WIDTH horizontal rows (rows 0, 8, 15 solid at the same moment). Same is visible untouched. Rotate the tear axis by 90 degrees.",
+    "Add the missing TearSat control and colour the tears. The original's tear bars are saturated hues by default and go white as TearSat -> 0 (meanBrightness 69 -> 91 at TearChance=1); the port has no such dial and its tears are always near-white.",
+    "Raise the sparkle density about 3x. At matched settings (Brightness=1, Sat=0, TearChance=0) the original puts 14 / 38 / 74 / 109 / 129 white pixels on the 256-px grid at rates 0.1 / 0.25 / 0.5 / 0.75 / 1; the port puts 3 / 9 / 15 / 34 / 45. At rate 1 the original's grid is 256/256 lit — a total white-out — while the port is still 145/256 with the boxes plainly readable. The dial's curve shape and its saturation/brightness sub-dials are right; only the scale is off.",
+    "Rename the three drifted controls to match the original exactly: SparkleRate -> GlitchRate, SparkleBrightness -> GlitchBrightness, SparkleSaturation -> GlitchSat, TearRate -> TearFramesPerSec.",
+    "Overall brightness is ~28% low (orig meanBrightness 47 vs port 34 on every untouched run); fixing the box coverage above should close most of that on its own.",
+    "The original's global brightness cycle is exactly 99 FRAMES at every frame rate tested (49.5 s @2 fps, 19.8 s @5 fps, 4.95 s @20 fps; normalised autocorrelation 1.00) — it is frame-stepped, not time-based. The port has no equivalent cycle (best peaks 0.12-0.40, and inconsistent between rates). If the port is deliberately time-based that is arguably an improvement, but it means the pulse an original viewer sees is absent; match the 99-frame cadence if fidelity is the goal.",
+    "Not a bug: hue phase, box placement and RNG draw differ between the sides, and the pattern appears seed-independent (seeds 1, 7 and 1234 give identical summary stats on both sides). Judge the fixed version on coverage, box shape over time, symmetry and tear orientation rather than per-pixel alignment."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late",
+    "dump-a",
+    "dump-series",
+    "track-bb1",
+    "grid48",
+    "period-check",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "ctl-glitch-hi",
+    "ctl-glitch-lo",
+    "ctl-glitch-sat0",
+    "ctl-rate-0.1",
+    "ctl-rate-0.25",
+    "ctl-rate-0.5",
+    "ctl-rate-0.75",
+    "ctl-rate-1",
+    "ctl-tear-hi",
+    "ctl-tear-lo",
+    "ctl-tear-dump",
+    "ctl-tearsat0",
+    "ctl-tearbright0",
+    "ctl-tearrate-0",
+    "ctl-tearrate-0.5",
+    "ctl-tearrate-1"
+  ]
+}
