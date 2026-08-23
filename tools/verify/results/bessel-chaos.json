@@ -1,0 +1,62 @@
+{
+  "slug": "bessel-chaos",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Port reproduces the original's moiré/interference chaos and its TransitionSpeed behaviour almost exactly in structure, density and brightness, but its hue only sweeps cyan-to-violet where the original sweeps cyan all the way through magenta to red, and it churns ~30-40% faster frame to frame.",
+  "observations": [
+    "Both sides compile and run clean on the default rig (60 px strip): no compile or runtime errors, no black/frozen frames, brightnessTrend 'steady' on both over 60 s and 240 s windows, zeroMotionFrames 1 on each (the unavoidable first frame).",
+    "Control surface matches exactly: both sides expose one control, 'sliderTransitionSpeed', kind 'slider', label 'TransitionSpeed'. Neither side binds sensor globals (wantsSensors false on both).",
+    "Structure is statistically indistinguishable. Over 50 frames dumped across 120 s (label dump-bulk, 20 fps): lit-pixel fraction 0.259 orig vs 0.265 port; mean |brightness difference| between adjacent pixels 31.0 vs 31.0; spatial local maxima per frame 9.18 vs 9.22; mean contiguous lit-run length 1.61 px vs 1.70 px. Confirmed at seed 7 (0.267/10.00 vs 0.274/9.26).",
+    "Both sides alternate between the same two textures: fine per-pixel dotted chaos, and smooth low-spatial-frequency arcs/serpentine envelopes. Which texture is on screen at a given second differs between the sides (e.g. at t=30-38 the original is mostly fine chaos while the port shows wide smooth concentric arcs), but over 120 s both visit both regimes at comparable rates — a phase difference in a chaotic system, not a structural one.",
+    "Brightness matches: meanBrightness avg 9.8 (orig) vs 10.9 (port) over 60 s at 5 fps; 10.1 vs 10.9 over 240 s at 2 fps. Both sides are 100% saturated at every sampled pixel (mean HSV saturation 1.000 on both).",
+    "COLOUR IS THE HEADLINE DIVERGENCE. Pixel-level hue (only pixels with peak channel >= 25), 50 frames across 120 s: orig min 0.48 / p25 0.63 / p50 0.69 / p75 0.79 / p95 0.94 / max 1.00; port min 0.49 / p25 0.57 / p50 0.59 / p75 0.64 / p95 0.73 / max 0.75. The original sweeps cyan -> blue -> violet -> magenta -> red; the port stops dead at violet and NEVER renders magenta or red. Reproduced at seed 7 (orig max 0.99, port max 0.75).",
+    "The same split shows in the channel means at every dial setting: orig meanR 7.6-7.9 / meanG 2.4-2.5 / meanB 19.3-19.5, port meanR 0.7-0.8 / meanG 9.0-9.1 / meanB 22.1-22.5. Visually the original's waterfall is peppered with red and magenta dots over blue arcs; the port's is cyan dots over blue arcs.",
+    "Both sides map hue upward with pixel amplitude, but the original's slope is ~3x steeper. Median hue by brightness bucket (dump-bulk): orig 0.60 (val 0-31) -> 0.66 -> 0.66 -> 0.70 -> 0.70 -> 0.73 -> 0.78 (val 192-223); port 0.56 -> 0.58 -> 0.59 -> 0.58 -> 0.60 -> 0.60 -> 0.64.",
+    "There is also a slow global hue drift on both sides, and the port's is too narrow: brightness-weighted frame-mean hue sampled every 6 s over 120 s wanders 0.61-0.95 on the original (blue through violet to near-red) but only 0.56-0.72 on the port.",
+    "Motion: the port churns consistently more per frame. Untouched, 30 s at 20 fps: orig motion avg 7, port 10. 120 s at 20 fps: 8 vs 10. 60 s at 5 fps: 13.2 vs 17.7. 240 s at 2 fps: 16.9 vs 18.9. Visible in the waterfalls as the original holding long smooth vertical streaks between transitions where the port keeps twinkling.",
+    "No frame-rate-coupling difference. Rendering each side at 10/20/40 fps gives motion 10/8/6 (orig) and 14/10/7 (port) — the same proportional fall on both, consistent with a time-based pattern on each side. Neither side reproduces the identical frame at a fixed absolute time across fps rates (orig 10-vs-40 fps frame diff 4.4-6.4, port 10.0-13.4), which is expected chaotic divergence rather than a port bug.",
+    "Untouched default output is identical to sliderTransitionSpeed=1 on BOTH sides (the untouched 30 s waterfall and the ctl20-ts-1 waterfall are the same image on each side), so the untouched-defaults comparison and the dialed-to-1 comparison agree.",
+    "No long-period mode rotation: 240 s at 2 fps shows the same statistically stationary texture throughout, and frames 30 s / 60 s apart differ as much as consecutive frames do (no 60 s periodicity), so the pattern is aperiodic chaos on both sides."
+  ],
+  "dials": [
+    {
+      "name": "sliderTransitionSpeed",
+      "origEffect": "Live (probe maxDelta 14.85, and 0 vs 1 clearly differ from each other). At 0 the strip renders one continuous serpentine S-curve envelope over 30 s with no abrupt cuts; at 1 it renders 3-4 abrupt whole-strip scene changes in the same 30 s, with more held/standing structure between them. Raising the value also halves the frame-to-frame churn: motion avg 12 at value 0 -> 6 at value 1 (30 s, 20 fps).",
+      "portEffect": "Live (probe maxDelta 16.10). Same qualitative change in the same direction: value 0 gives continuous serpentine envelopes, value 1 gives 3-4 abrupt whole-strip scene cuts in 30 s. But the churn barely responds: motion avg 12 at value 0 -> 10 at value 1, where the original drops to 6. Intermediate value 0.5 sits between the endpoints on both sides.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Widen the hue excursion by roughly 2x, keeping the same floor. Measured over 50 frames across 120 s at seeds 1 and 7 and at TransitionSpeed 0/0.5/1, the original's pixel hues span 0.48-1.00 (cyan -> blue -> violet -> magenta -> red) while the port's span only 0.49-0.75 (cyan -> blue -> violet). The low end already matches; it is the top of the range that is cut off, so the original's brightest pixels land in magenta/red and the port's land in violet.",
+    "Specifically, the hue-versus-amplitude slope is about 3x too shallow. Median hue by brightness bucket: the original rises 0.60 (peak channel < 32) to 0.78 (peak channel 192-223); the port rises only 0.56 to 0.61. The original's dimmest and brightest pixels in a single frame are visibly different colours; the port's are all the same blue.",
+    "The slow global hue drift is also too narrow: the original's brightness-weighted frame-mean hue wanders across 0.61-0.95 over a 120 s window, the port's only across 0.56-0.72. Whatever slow term walks the base hue should have roughly twice the amplitude.",
+    "Frame-to-frame churn is ~30-40% too high at default dials (original motion avg 7 vs port 10 over 30 s at 20 fps; 8 vs 10 over 120 s). Concretely, between the abrupt transitions the original's bright arcs persist as long smooth vertical streaks in the waterfall for many frames, while the port's equivalent pixels twinkle on and off. Slowing the per-frame update of the fine texture (not the transition cadence, which already matches) would close this.",
+    "TransitionSpeed should damp that churn much harder than it currently does: on the original, moving the slider 0 -> 1 halves motion (12 -> 6 over 30 s at 20 fps); on the port it only falls 12 -> 10. The dial's structural effect (continuous serpentine at 0, abrupt scene cuts at 1) is already right on both sides and needs no change — it is only the temporal-smoothing side of the dial that is missing.",
+    "Nothing to fix in structure, density or brightness: lit fraction, spatial gradient, local-maxima count, run lengths and mean brightness all match the original within a few percent across 120 s, at two seeds and at all three dial settings."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "mid-30",
+    "mid-90",
+    "untouched-30",
+    "dump-a",
+    "dump-long",
+    "dump-period",
+    "dump-bulk",
+    "decorr",
+    "fps10",
+    "fps20",
+    "fps40",
+    "ctl-ts-0",
+    "ctl-ts-05",
+    "ctl-ts-1",
+    "ctl20-ts-0",
+    "ctl20-ts-1",
+    "seed7",
+    "seed7b"
+  ]
+}

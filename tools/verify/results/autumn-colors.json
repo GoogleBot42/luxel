@@ -1,0 +1,51 @@
+{
+  "slug": "autumn-colors",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Port reproduces the original's per-pixel autumn-ember twinkle — same instant ignition, same exponential decay rate, same density and spatial randomness — but its palette hues sit noticeably more orange/amber than the original's deep reds, and it never reproduces the original's periodic ~33 s total freeze.",
+  "observations": [
+    "Both sides are alive on the default rig (strip, 60 px), no compile or runtime errors, and neither binds sensors (wantsSensors false on both, sensors 'off').",
+    "Both sides expose ZERO controls (probe: 'no settable controls' on orig and port), so there are no dials to compare and no control-surface mismatch.",
+    "Mechanism matches exactly. --dump of 30 consecutive 0.1 s frames (label 'envelope', t=30.0-32.9 s) shows both sides doing the same thing per pixel: a pixel ignites instantly to a random peak (orig peaks seen 128/148/181/204/222; port 127/136/205/232), holds one fixed hue, then decays exponentially to 0 and stays dark for a few hundred ms before re-igniting with a new hue. Decay ratio per 0.1 s is ~0.952 on the original (222 -> 212 -> 203 -> 194) and ~0.957 on the port (232 -> 222 -> 213 -> 204) — effectively identical.",
+    "Ignition rate matches: ~0.3-0.4 re-ignitions per pixel per second on both, counted over the same 3 s window and 8 pixels (orig 9 ignitions, port 8).",
+    "Spatial character matches: pixels are statistically independent on both sides (spatial autocorrelation of per-pixel brightness at lags 1-4 is orig -0.07/-0.05/0.03/-0.04, port -0.02/-0.03/-0.01/-0.05 across 18 sampled frames). No travelling features, no slopes in either waterfall.",
+    "Lit density matches: over 18 frames x 60 px, pixels above max-channel 40 are orig 403/1080 (37%) vs port 377/1080 (35%).",
+    "Both palettes are fully saturated (saturation 1.00 at every quantile on both) and contain NO blue at all (meanB min=max=0 on both, in every run).",
+    "PALETTE HUE SHIFT. Both sides draw from a small discrete hue set, but the port's is stretched warmer. Bright-pixel hue histogram over 18 frames spanning t=20-73 s: orig 0 deg (123), 10.7 deg (114), 21.4 deg (158), rare 39.6 deg (8); port 0 deg (113), 12.4 deg (125), 26.9 deg (135), rare 46.5 deg (4). Same count of palette entries and same rough spacing pattern, each entry pushed ~15-25% further round toward orange/yellow.",
+    "Consequence in the aggregate stats: the port runs consistently greener. meanG avg orig 8.5 vs port 10.7 at 20 fps / 60 s; 8.2 vs 11.0 at baseline; 8.5 vs 10.8 on seed 7. meanR is essentially equal (41.9 vs 42.1). Visually the original reads as embers/deep red with orange flecks, the port as orange/amber with red flecks.",
+    "ORIGINAL FREEZES PERIODICALLY, PORT NEVER DOES. At 20 fps the original's whole strip goes completely static for 32.8 s starting at t=81.8, 196.4, 311.1 and 425.8 s — a dead-exact 114.65 s period, 28.6% duty. Verified as a true freeze, not a quantization false-read: a --dump at t=85, 90, 95 and 104 s is byte-identical on the original (mean abs diff 0.00 across a 19 s span) while the port over the same times differs by 21-24 mean abs. The port shows zero freeze frames over the whole 0-480 s timeline (0 zero-motion frames in 4800 at 20 fps for t=240-480).",
+    "The frozen phase looks like a normal mid-decay snapshot of the pattern held still (see freeze-dump/orig.png: clean vertical stripes, no fade, no black-out), so during it the original is a static striped picture while the port keeps twinkling.",
+    "The freeze's numbers smell like a clock artefact rather than intent: duration is 32.768 s exactly (= 65.536/2, i.e. a whole Pixelblaze time() unit) and the period is 114.65 s = 1.75 x 65.536 s. Its onset time also moves with fps (t=34.5 s at 2 fps, 38.4 at 5, 46.7 at 10, 81.8 at 20), which a deliberate design would not do.",
+    "Because the original spends ~29% of its time frozen, coarse-window motion averages understate it and look like a port speed error that is not there: survey (60 s, 5 fps) motion avg orig 3.3 vs port 5.4, but 3.3 / (1 - 0.36 frozen) = 5.2, and in a clean active window the two agree (baseline 20 fps: orig 1.4, port 1.5; t=40-60 s at 20 fps: orig 1.4, port 1.5).",
+    "Neither side is frame-rate-coupled in the same way as the other, and both are time-based: motion avg falls with fps on both (orig 6.9/3.3/2.0/1.4/0.4 and port 12.6/5.4/2.7/1.5/0.8 at 2/5/10/20/40 fps) and the decorrelation curve is fps-independent. Decorrelation timescale matches: mean abs diff vs t0 rises to a plateau of ~20-24 by lag 1-2 s on BOTH sides (orig 1.7/5.6/10.8/17.3/24.0 at lags 0.05/0.2/0.5/1.0/2.0 s; port 1.1/4.4/10.3/20.0/23.6).",
+    "Seed independence checked: at --seed 7 the same picture holds (orig meanG 8.5 vs port 10.8, motion 1.4 vs 1.5, both brightnessTrend steady), so none of the above is a one-seed fluke.",
+    "Neither side drifts or dies: brightnessTrend 'steady' on both in every 20 fps run, including the t=240-480 s window."
+  ],
+  "dials": [],
+  "feedback": [
+    "Palette hue is the one clearly actionable gap. The original's spark hues cluster at 0, ~10.7, ~21.4 degrees (with a rare ~39.6 deg amber); the port's cluster at 0, ~12.4, ~26.9 degrees (rare ~46.5 deg). Pull the port's non-red palette entries back toward red by roughly 15-25% of their hue angle so the strip reads as deep-red embers with orange flecks rather than orange with red flecks. Target aggregate: meanG ~8.5 against meanR ~42 on a 60 s / 20 fps strip run (the port currently posts meanG ~10.7 at the same meanR).",
+    "Everything else about the spark model is already right and should NOT be touched: instant ignition to a random peak up to ~230, fixed hue held for the whole decay, exponential decay of ~0.95 per 0.1 s (about a 2 s visible lifetime), ~0.35 re-ignitions per pixel per second, independent pixels, fully saturated, zero blue.",
+    "The original's 32.8 s total freeze every 114.65 s is the other divergence, but investigate before replicating it. The exact 32.768 s duration, the 65.536 s-multiple period, and the fps-dependent onset all point at a time() wrap / accumulator artefact in the original rather than an intended 'still' phase, and a viewer would read it as the strip hanging. If it turns out to be intentional, the port needs a phase where every pixel stops mid-decay and holds its exact colour for ~33 s before resuming; if it is an artefact, leave the port's continuous twinkle as-is and record the difference.",
+    "No control work is needed: the original exposes no controls, so the port correctly exposes none."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "fps2",
+    "fps5",
+    "fps10",
+    "fps20",
+    "fps40",
+    "late-40",
+    "late5-60",
+    "long20",
+    "long20b",
+    "freeze-dump",
+    "rate",
+    "palette",
+    "envelope",
+    "seed7"
+  ]
+}

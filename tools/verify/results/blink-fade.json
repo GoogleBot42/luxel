@@ -1,0 +1,58 @@
+{
+  "slug": "blink-fade",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same idea and same color/fade physics — random pixels ignite at a full-saturation random hue and decay exponentially to black — but at the port's untouched default the ignition rate is ~12x the original's and the fade is too fast to be visible, so the strip reads as per-frame confetti instead of the original's gentle twinkle-and-fade.",
+  "observations": [
+    "Structure/color match exactly: on both sides individual pixels ignite at a random, fully-saturated hue (mean saturation 1.000 on both, measured over 60 s of ignition events) and then decay smoothly toward black with no spatial motion — nothing travels along the strip on either side.",
+    "Hue distribution is uniform and identical: over a 60 s sample of ignition events, 12 x 30-degree hue bins hold orig 8,10,13,9,6,10,9,10,9,11,6,10 (n=111) and port 20,22,17,16,16,12,19,16,21,21,15,20 (n=215) — flat on both, no palette restriction or drift on either side.",
+    "Both sides are single-regime: a 60 s / 5 fps survey shows the same texture end to end on each, no mode rotation, no long-period cycle, no drift (both brightnessTrend steady, meanBrightness ~21-23 orig across all windows). A --skip 30 late window is identical to t=0.",
+    "Both sides are time-based, not frame-stepped: the original's per-frame decay ratio is 0.90 at 20 fps and 0.955 at 40 fps (0.955^2 = 0.912), and the port's is 0.885 at 20 fps and 0.944 at 40 fps — no frame-rate coupling mismatch.",
+    "MAIN DIVERGENCE (rate). Counting ignitions (pixel brightness rising frame-to-frame) over 40 consecutive frames on the default 60 px strip at 20 fps: original 2.41 ignitions/frame; port at its untouched default 29.41 ignitions/frame — ~12x. Motion stat: orig avg 4, port avg 49 (baseline, 6 s / 20 fps); same at seed 7 (4 vs 49).",
+    "The waterfalls show this directly: the original's orig.png is made of tall vertical streaks (each ignition persists ~15-30 frames as it fades), while the untouched port.png is one-pixel-tall speckle with no vertical continuity at all. A --dump of 8 consecutive frames confirms it: the original's pixel 6 runs 65,0,70 -> 59,0,63 -> 53,0,57 -> 47,0,51 (same hue, ~0.90/frame decay), whereas every port pixel is a completely different color on every frame.",
+    "The port's Speed dial does not reach the original anywhere in its range. At sliderSpeed=0 (bottom of range) the port becomes visually very close to the original — streaky waterfall, motion 8 vs orig 4, meanBrightness 23 vs 21 — but still runs ~2x fast: 4.90 ignitions/frame vs 2.41, and 215 vs 111 ignition events over the same 60 s sample.",
+    "Fade half-life at the port's slowest setting is also slightly short: orig ~0.90/frame at 20 fps = ~0.33 s half-life; port at sliderSpeed=0 ~0.885/frame = ~0.28 s (~15% faster). Peak-brightness distribution matches well (orig median peak 85 / max 235; port@0 median 77 / max 252) as does lit fraction (orig 0.673, port@0 0.660).",
+    "CONTROL-SURFACE MISMATCH: the original exposes NO controls at all (empty control list on every run); the port adds a slider named sliderSpeed (label \"Speed\"). Because the original has no dial, no same-value-on-both-sides comparison is possible, and the original's behaviour corresponds to the extreme bottom of the port's dial rather than to its default.",
+    "The port's untouched default is equivalent to sliderSpeed=0.5 (probe delta 0.00 at 0.5, 35.41 at 0, 44.33 at 1), so the ~12x-too-fast state is what a user sees on load.",
+    "Behaviour is seed-independent: at --seed 7 the same numbers hold (orig motion 4, port default motion 49, port@0 motion 8)."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "n/a — the original exposes no controls, so there is no corresponding dial to compare against",
+      "portEffect": "live and value-dependent (probe maxDelta 44.33; 0 and 1 differ from each other and from the 0.5 default). 0 = sparse twinkle with a clearly visible ~0.28 s fade tail, 4.90 ignitions/frame, meanBrightness 23, motion 8. 0.5 (default) = per-frame confetti, 29.4 ignitions/frame, motion 49. 1 = denser and brighter still (meanBrightness 42, motion 46), fade entirely invisible. Response is not monotonic in brightness between 0.5 and 1 but is monotonic in density.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Slow the whole thing down by roughly 12x at the default state. Target, measured on a 60 px strip at 20 fps: ~2.4 pixel ignitions per frame (~48/s, i.e. each pixel re-igniting about 0.8 times per second). The port's untouched default currently produces ~29.4 ignitions per frame, which is close to every other pixel re-rolling every single frame.",
+    "Make the fade tail visible at the default. The original's per-pixel brightness decays by a factor ~0.90 per frame at 20 fps (half-life ~0.33 s, visible tail ~1-1.5 s), which is what makes its waterfall a field of tall vertical streaks. At the port's default the decay is fast enough that no pixel keeps its color for even two frames — there is no 'fade' left in 'blink fade'.",
+    "Rescale (or drop) the Speed dial. The original has no controls, and the original's look sits at the very bottom of the port's current dial range — so the entire usable range of the port is faster than the pattern ever is. If the dial stays, re-centre it so mid-scale reproduces the original (2.4 ignitions/frame, 0.33 s fade half-life) and the ends give slower/faster around that; note also that the original's control list is empty, so a port with no dial at all would be the closer match on control surface.",
+    "After rescaling, trim ~2x off the ignition rate and ~15% off the decay speed even at the slow end: at sliderSpeed=0 the port still fires 4.90 ignitions/frame against the original's 2.41, and its half-life is ~0.28 s against ~0.33 s.",
+    "Nothing needs changing in color: hue is uniformly distributed and fully saturated on both sides, peak-brightness distribution and lit fraction already match, both sides are correctly time-based (fps-invariant), and there is no spatial motion on either side. The fix is purely the temporal rate and the dial's range."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump12",
+    "ctl-speed-low",
+    "ctl-speed-mid",
+    "ctl-speed-high",
+    "ctl-speed-0.1",
+    "ctl-speed-0.15",
+    "ctl-speed-0.2",
+    "ctl-speed-0.3",
+    "dump-speed0",
+    "survey-speed0",
+    "seed7-speed0",
+    "seed7-default",
+    "fps40",
+    "fps10",
+    "dump60-speed0",
+    "dump60-default",
+    "huesample",
+    "late-skip30"
+  ]
+}
