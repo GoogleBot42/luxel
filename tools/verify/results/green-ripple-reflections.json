@@ -1,0 +1,47 @@
+{
+  "slug": "green-ripple-reflections",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Structurally the same interfering green ripple train — same spatial periods, same wave/counter-wave amplitude ratio, same speed magnitude and same steady brightness — but the port runs the whole thing MIRRORED along the strip (every wave component travels the opposite way), its green is pure hue 0.333 where the original sits at 0.300, and its beat is 2.50 s against the original's 2.62 s.",
+  "observations": [
+    "Both sides render cleanly on the default rig (strip, 60 px): no compile or runtime errors, no black/frozen frames, brightnessTrend steady on both, zeroMotionFrames 1 of 120 at --skip 0 and 0 of 160 at --skip 30 / --skip 120. Neither side binds sensors (wantsSensors false).",
+    "Both sides show the same picture: a ~20 px-period green ripple comb (dominant spatial DFT bin k=3 on a 60 px strip) with 10 px and 6 px harmonics, deep near-black troughs, and desaturated near-white shoulders where two wave trains cross. Peak pixel value 123 (orig) vs 122 (port); meanG avg 23.6 vs 24.0; meanB avg 8.0 vs 8.2; motion avg 2.4 vs 2.5 at 20 fps.",
+    "MOTION DIRECTION IS REVERSED. A 2D space-time DFT (60 px x 120 frames at 20 fps, Hann-windowed, sign convention validated against a synthetic +10 px/s control wave) gives, for the original: k=3 (20 px) travelling toward INCREASING pixel index at +6.7 px/s (mag 6.97), k=10 (6 px) travelling toward DECREASING index at -6.0 px/s (mag 3.44), k=7 at -11.4 px/s (mag 1.67), k=6 at +6.7 px/s (mag 1.69). The port's spectrum is the exact mirror: k=3 at -6.7 px/s (mag 6.91), k=10 at +6.0 px/s (mag 3.46), k=7 at +11.4 px/s (mag 1.74), k=6 at -6.7 px/s (mag 1.73). Same magnitudes, every sign flipped.",
+    "Confirmed directly by correlation: correlating the original's frame against the port's SAME frame REVERSED gives a constant best shift (11 px, +/- the 20 px spatial period, over t=0-6 s; 17 px over t=120-125 s) at r = 0.77-0.95, while correlating against the un-reversed port frame gives a shift that slides monotonically (19 -> 16 -> 13 -> 10 -> ... -> -14 px over 0-5.75 s, i.e. ~12 px/s of relative drift). The port is a spatial mirror of the original, not a translation of it.",
+    "The reversal holds at every rate and window checked: --fps 10, 20 and 40 all give orig k=3 peak velocity +6.0/+6.7/+8.0 px/s and port -6.0/-6.7/-8.0 px/s, and the mirror-correlation test reproduces at t=120-125 s. So this is not a transient or an aliasing artefact.",
+    "HUE OFFSET. Over 450 lit pixels sampled across the 6 s window, the original's hue is 0.292-0.306 (median 0.300 -- a yellow-tinged lime green: peak pixels read like 21,95,2 and 18,85,2, i.e. R clearly above B), while the port's hue is EXACTLY 0.333 on every pixel (R == B always: 1,74,1 / 2,94,2). Median 0.300 vs 0.333 reproduces unchanged at t=120-125 s. Saturation distributions are otherwise identical (p10/p50/p90 = 0.08/0.69/1.00 orig vs 0.07/0.71/1.00 port) and so is peak value, so the only colour difference is the ~12 deg hue rotation. It is the whole reason meanR is 11.1 (orig) vs 8.2 (port) and meanBrightness 14.2 vs 13.4.",
+    "BEAT RATE. Autocorrelation of the raw meanG series over 1200 frames at 20 fps: the original's global brightness envelope peaks every 2.62 s (lags at 2.65, 5.25, 7.85, 10.45, 13.10, 15.75, 18.35, 20.95 s) with its strongest recurrence at 13.10 s (r 0.98); the port's peaks every 2.50 s (2.55, 5.05, 7.50, 9.95, 12.45, 15.00, 17.50, 20.00 s) with its strongest at 15.00 s (r 0.99). So the port's ripple beat is ~5% fast and its full loop is 15.0 s against the original's 13.1 s.",
+    "BEAT DEPTH. The port pulses harder: meanG variance over the same 60 s window is 4.94 (port) vs 3.43 (orig), and the port's autocorrelation is much more coherent (0.91 at one period vs 0.79) -- the original's envelope wanders slightly between beats, the port's repeats near-exactly.",
+    "Neither side exposes any controls (both controls lists empty; --probe-controls reports 'no settable controls' on both). That is a genuine match, not a harness failure.",
+    "Both sides are seed-independent: seeds 1, 7 and 1234 produce byte-identical statsSummary on each side, so the pattern is deterministic with no RNG to excuse per-pixel differences.",
+    "Both sides are fps-invariant (wave speed ~6-8 px/s at 10, 20 and 40 fps), so there is no frame-rate coupling on either side.",
+    "No mode structure on either side: a 60 s / 5 fps survey and a 240 s / 2 fps survey both show one uniform texture throughout, and --skip 30 and --skip 120 windows have the same stats as t=0. The longest structure is the ~13-15 s loop above.",
+    "The waterfall images alone are misleading here: at 5 fps and 2 fps the diagonal streaking aliases and both sides look like they lean the same way. Every direction claim above comes from --dump numbers, not from the PNGs."
+  ],
+  "dials": [],
+  "feedback": [
+    "Flip the propagation direction. Every wave component in the port travels the wrong way along the strip: the original's dominant 20 px-period ripple train moves toward INCREASING pixel index at ~6.7 px/s while its ~6 px-period counter-ripple ('reflection') moves toward DECREASING index at ~6 px/s; the port has them exactly the other way round. The magnitudes are already right, so this is a sign/orientation flip somewhere in how position feeds the wave phase (equivalently: the port renders the original mirrored about the strip's midpoint). Fixing that alone should also make the mirror-correlation shift collapse to zero.",
+    "Warm the green up. The original's hue is a constant 0.300 (lime / yellow-green: at full saturation its peaks read ~21,95,2) whereas the port's is a constant 0.3333 (pure green, R and B exactly equal, peaks ~2,94,2). Saturation and value envelopes already match exactly, so only the hue constant needs moving from 1/3 to ~0.30.",
+    "Slow the beat ~5%. The original's brightness envelope repeats every 2.62 s and the whole pattern loops every ~13.1 s; the port repeats every 2.50 s and loops every 15.0 s. Whatever sets the ripple's temporal frequency is running slightly off -- note the loop lengths differ by a whole beat (5 beats vs 6), so it is likely a ratio between two wave frequencies rather than a single global speed constant.",
+    "Soften the pulsation. The port's whole-strip green brightness swings ~40% wider than the original's (meanG variance 4.94 vs 3.43) and repeats far more mechanically (autocorrelation 0.91 vs 0.79 at one beat). The original's two wave trains beat slightly incommensurately, so its envelope never lands twice in quite the same place; the port's are locked. Getting the frequency ratio right (previous item) will probably fix this too.",
+    "Not broken and not worth re-architecting: spatial periods, harmonic content, wave/counter-wave amplitude ratio (~2.6:1 on both), speed magnitude, peak brightness, saturation range and the steady, non-decaying long-run behaviour all already match the original closely."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "mid-skip30",
+    "late-skip120",
+    "long-hires",
+    "dump-base",
+    "dump-seq",
+    "dump-long",
+    "dump-late",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234"
+  ]
+}

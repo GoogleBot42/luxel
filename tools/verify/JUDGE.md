@@ -547,7 +547,12 @@ each mode before recording any of them as inert.
 For a translating 1D pattern, the honest speed measurement is circular
 cross-correlation of two `--dump`ed frames (find the shift that best aligns
 them, divide by dt) — the `motion` stat exaggerates or compresses speed ratios
-on smooth gradients and sparse dots alike. Caveat: on a pattern with a strong
+on smooth gradients and sparse dots alike. For SUPERIMPOSED counter-moving
+waves (standing-wave/interference patterns) neither cross-correlation nor
+single-k phase tracking can separate the trains — use a 2D space-time DFT over
+~100+ consecutive dumped frames, and validate the sign convention against a
+synthetic wave of known velocity before trusting any direction. Caveat: on a
+pattern with a strong
 REPEATING spatial period, plain cross-correlation degenerates (any multiple of
 the period aligns equally well) — track the PHASE of the dominant spatial-DFT
 component per frame instead; it also separates two superimposed waves moving
