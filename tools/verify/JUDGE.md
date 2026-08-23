@@ -45,7 +45,10 @@ Options: `--seconds N` (default 6), `--fps N` (default 20), `--skip N`
 `--controls-orig "name=v;name2=v1,v2,v3"`, `--controls-port "..."`,
 `--label NAME` (names the output subdir — use a fresh label per experiment).
 For 2D rigs also: `--strip-frames N` (default 12) and `--strip-at S` (seconds
-into the captured window where the filmstrip starts; default midpoint).
+into the captured window where the filmstrip starts; default midpoint). Note
+`--strip-at` is the odd one out: it is WINDOW-relative (add `--skip` yourself),
+while `sheetTimesSeconds`/`stripTimesSeconds` and `--dump`'s reported `times`
+are absolute on the run timeline.
 Also `--sensors auto|synth|off` (default `auto`), `--probe-controls`
 (+ `--probe-seconds N`, default 4) and `--dump "t1,t2,..."` — see below.
 
@@ -135,7 +138,10 @@ sample can land between flashes, and a healthy beat-locked pattern reads as
 pure black or as a slow unrelated flicker. A judge was burned by exactly this
 — a 240 s / 2 fps survey reported an original as mean-brightness 0. For any
 side with `wantsSensors: true`, run the survey at `--fps 10` minimum and treat
-beat-rate structure (multiples of 0.5 s) as the thing to look for.
+beat-rate structure (multiples of 0.5 s) as the thing to look for. The same
+aliasing bites `--dump`: times spaced at whole or half seconds land at the SAME
+beat phase every time — use offset spacings (0.13, 0.27, 0.41, …) to see beat
+dynamics.
 
 `meta.json` records, per side, `wantsSensors` (does this pattern bind sensor
 globals at all?) and `sensors` — `"synth"` or `"off"`, meaning what was
@@ -361,7 +367,11 @@ a second show it standing still, and a hair off that, running backwards. Read
 the feature's period off the rhythm/waterfall image first, then space dumps
 well under half of it — 0.1–0.2 s apart when measuring rotation or oscillation
 direction. A direction claim from sparse dumps is an aliasing artefact until
-you have re-dumped it densely.
+you have re-dumped it densely. Rotational symmetry tightens this further: an
+N-fold-symmetric figure repeats every 360/N degrees, so the unambiguous
+tracking range shrinks by the symmetry order — a 12-arm asterisk spinning past
+~300 deg/s already aliases at 0.05 s spacing. Rotation that is fps-invariant
+(verify that first) can be dumped at `--fps 100` purely to buy 0.01 s spacing.
 
 Pair it with a SMALL rig. Re-rendering at `--pixels 12` (or `--rig grid --grid
 8x8`) makes period and duty structure unambiguous — a whole frame fits on one
@@ -601,6 +611,13 @@ recognizably related but wrong in a major axis (structure/motion/color);
 `broken` = port errors, renders black/garbage, or bears no resemblance;
 `orig-unrenderable` = the ORIGINAL fails on our engine so no comparison is
 possible (report the error — this is an engine-gap finding, not a port bug).
+
+The mirror image also exists: some ORIGINALS have a long warm-up transient
+(one ran railed-at-full-brightness for ~1000 rendered frames — frame-counted,
+so it outlasts any low-fps survey) before settling. When the two sides' mean
+brightness differs wildly from t=0, run a settle check (`--skip 60`+ at 20 fps,
+or `--seconds 120`) and judge the SETTLED regimes against each other; the
+transient difference is then its own separate finding.
 
 Tie-break for time-degenerate ports — right at first, then frozen, black, or
 saturated: judge the STEADY STATE. A port whose steady state is dead is

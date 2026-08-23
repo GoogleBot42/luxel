@@ -1,0 +1,39 @@
+{
+  "slug": "automap",
+  "verdict": "orig-unrenderable",
+  "score": 5,
+  "confidence": "high",
+  "summary": "The original renders identically black (every pixel exactly 0) on every rig, rate, seed, sensor feed and window I tried, so no output-level comparison is possible; the port renders a single pure-red pixel scanning the strip in ~3.2 s per sweep, which is plausible for an auto-mapping helper but unverifiable against the original.",
+  "observations": [
+    "Original: zero output everywhere. meanBrightness avg/min/max = 0 and motion = 0 in all 14 runs, with zeroMotionFrames equal to the full captured-frame count (e.g. 300/300 in the 60 s survey, 600/600 in a 600 s / 1 fps run). meta.json reports compileError null and runtimeError null on both sides, so it is not an engine error — it silently emits black.",
+    "Original blackness is not rig-dependent, despite the pattern's name suggesting map probing: black on the default strip rig (60 px), on --pixels 12 and --pixels 300 strips, on --rig grid --grid 8x8 and 16x16, and on --rig cloud --pixels 125. A --dump on the 12 px strip at t=0, 0.05, 1, 3, 5.9 s returns literal [0,0,0] for all 12 pixels at every time.",
+    "Original blackness is also not a warm-up, sampling, seed or sensor artefact: still black at --fps 40, at --skip 120 (late window), at --seed 7, at --seconds 600 --fps 1, and with --sensors synth (beat120) forced. meta reports wantsSensors false on both sides, so the synth feed is a no-op.",
+    "Port: exactly one lit pixel at any instant, full-saturation pure red [255,0,0], all other pixels exactly [0,0,0]. On the 60 px strip it steps ~18.7 px/s (dumps at 0.5 s intervals: index 0, 10, 19, 28, 37, 46, 55, then wraps to 5, 14), i.e. one full sweep every ~3.2 s, walking from low index to high index and wrapping.",
+    "Port's sweep speed is a fraction of the strip, not a fixed px/s: on a 12 px strip it advances ~3.4 px/s, so the sweep period stays ~3.2-3.4 s at both 12 and 60 pixels. On an 8x8 grid the rhythm image shows the lit pixel dwelling in one column for a run of consecutive frames before moving on, i.e. it walks pixel index in row-major order rather than doing anything grid-aware.",
+    "Port output is steady over the whole window: brightnessTrend steady, zeroMotionFrames 1 (the unavoidable first frame) in a 600 s run — no decay, freeze or saturation.",
+    "Control surfaces match: meta.json lists controls: [] for BOTH sides, and --probe-controls reports '(no settable controls)' for both. No control-surface mismatch to report."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing about the port can be scored against the original from rendered output, because the original emits literally nothing on this engine. Before any fixing pass, someone needs to establish WHY the original is black: it errors nowhere, so either an engine gap makes its output path a no-op, or the pattern only draws in response to external stimulus the harness does not supply (no controls are exported, and forcing the beat120 sensor feed changes nothing). That investigation is the blocking item, not a port tweak.",
+    "For whoever does look at the original: it is black under every rig shape I could give it (1D strip 12/60/300 px, 2D grid 8x8 and 16x16, 3D cloud 5x5x5), so a missing or unexpected pixel-map is unlikely to be the whole story.",
+    "The port's current behaviour, for the record so a fixer can diff it against whatever the original turns out to do: one pixel lit at a time, [255,0,0] exactly, low-index-to-high-index, wrapping, full sweep in ~3.2 s independent of pixel count, no fade/tail, no second colour, no per-sweep variation across 600 s.",
+    "If the original turns out to be a camera-mapping helper that codes pixel indices (e.g. binary-coded groups, sync flashes, or a colour that encodes index) rather than a plain single-pixel chase, the port's uniform red single-pixel walk would be the divergence to fix; the port currently carries no index information other than position."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-grid",
+    "survey-cloud",
+    "survey-600",
+    "probe",
+    "dump-strip",
+    "dump60",
+    "seed7",
+    "sensors-synth",
+    "hifps",
+    "px300",
+    "late",
+    "grid8"
+  ]
+}
