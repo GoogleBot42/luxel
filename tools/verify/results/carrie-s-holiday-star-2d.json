@@ -1,0 +1,58 @@
+{
+  "slug": "carrie-s-holiday-star-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both draw a centred, slowly rotating multi-point glowing star with pulsing arms, but the original walks the entire hue wheel over ~1020 frames while the port is frozen at one cyan hue, and the port's star is roughly half the radius and ~4.5x dimmer overall.",
+  "observations": [
+    "Control surface matches exactly: both sides expose one slider named sliderSpeed (label 'Speed'), and the probe calls it responsive on both (orig maxDelta 6.86 / maxDeltaLit 7.98; port 2.77 / 13.11).",
+    "COLOR (headline divergence). Original cycles the full hue wheel: peak-pixel hue dumped on the 240 s / 5 fps run reads 0 deg (t=0), 88 (t=50), 176 (t=100), 264 (t=150), 352 (t=200), 61 (t=239) -- a complete 360 deg walk in ~204 s at 5 fps, then repeating. Port's peak-pixel hue is 198 deg (cyan) at every one of those six times, and its 240 s rhythm image is a uniform teal column with no hue drift anywhere.",
+    "The original's hue walk is FRAME-STEPPED, not time-based: ~0.35 deg/frame. It travels ~210 deg in 600 frames at 10 fps (60 s), ~360 deg in ~1020 frames at 5 fps, and only ~40 deg in the 120-frame 6 s baseline at 20 fps. The port has no hue motion at all, so there is nothing to compare -- but a fix should reproduce the per-frame step rate, not a per-second one.",
+    "The hue walk is independent of the Speed slider on the original: at sliderSpeed=0, 0.5 and 1 the 60 s / 5 fps sheet walks red->green identically each time. So a Speed setting cannot explain the port's frozen hue.",
+    "SIZE / GLOW EXTENT. On the default 16x16 rig, a dump at t=0.5 s shows the original lighting 188/256 pixels with a bounding box of rows 0-15, cols 0-15 (the star reaches every edge), while the port lights 28/256 confined to rows 4-11, cols 4-11 -- exactly the central 8x8. At t=3.0 s: orig 184 lit, port 32 lit, same boxes.",
+    "Radial falloff measured on a 48x48 re-render (row 24, sampling x=24,27,30,...): orig 255,190,132,128,127,74,33,17 at t=0 versus port 242,191,132,27,8,3,1,0. The original keeps a broad halo out to the grid corners (max lit radius ~30-33 px); the port collapses within ~9 px (max lit radius 17-23 px). Lit fraction at 48x48 across four sampled times: orig 74-86%, port 17-33%.",
+    "BRIGHTNESS. meanBrightness avg over the 60 s / 5 fps survey: orig 16.1 (min 10, max 25), port 3.5 (min 0, max 8) -- about 4.5x dimmer. Both sides still peak at 255 at the star's core, so this is glow extent and falloff, not a gain/gamma issue on the centre pixel.",
+    "PULSE RHYTHM. Autocorrelation of meanBrightness over a 60 s / 10 fps run (600 frames): the original has a clear regular pulse, lag peaks at 10, 22 and 33 frames (normalised 0.82/0.76/0.68) i.e. a ~1.1 s cycle, plus a long slow structure (strong negative correlation at lag 162 frames = 16.2 s, implying a ~32 s super-cycle). The port's autocorrelation falls to ~0 by lag 6 (0.6 s) and never exceeds 0.23 at any lag out to 300 frames -- its size/brightness pulsing is aperiodic where the original's is metronomic.",
+    "STRUCTURE THAT DOES MATCH: both are a single centred star; both vary the number of spikes over time (4-point and 6-point forms appear on both at 48x48); both rotate slowly and smoothly in the frame-to-frame filmstrip with no jitter or jumping; both are resolution-independent -- re-rendered at 8x8 and 48x48 each draws the same logical figure at different detail rather than changing feature count.",
+    "Neither side binds sensors (wantsSensors false on both). Neither errors: no compileError or runtimeError on either side in any run.",
+    "Seed-independent: a 60 s / 5 fps run at --seed 1234 renders identically to --seed 1 on both sides, so none of the above is a one-seed fluke.",
+    "The port's low whole-rig motion stat (avg 0.2-0.8) is a sparseness artefact, not a freeze -- motionLit is 1.7-5.1 over the same windows and the filmstrips show continuous rotation. zeroMotionFrames 131/300 on the port versus 1/300 on the original is the same artefact.",
+    "Untouched defaults reproduce the sliderSpeed=0.5 stats exactly on both sides (orig meanR/G/B 25.6/22.0/0.6, port 0.6/4.2/5.7), so no dial setting is hiding a different default regime."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Scales rotation and pulse rate. Over 60 s at 5 fps, motionLit avg goes 1.7 (0) -> 3.2 (0.5) -> 10.5 (1), a ~6x span; zeroMotionFrames 12 -> 1 -> 1. Star size, glow extent and the hue-walk rate are unaffected -- all three settings walk red->green over the same window.",
+      "portEffect": "Same axis and same direction: motionLit avg 3.4 (0) -> 5.1 (0.5) -> 11.2 (1), a ~3.3x span; zeroMotionFrames 175 -> 131 -> 13. Star size and (frozen) cyan hue are unaffected, matching the original in that the dial touches only rate.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Restore the hue cycle. The original's star hue advances ~0.35 degrees per RENDERED FRAME (frame-stepped, not wall-clock: ~360 deg in ~1020 frames, verified at 5, 10 and 20 fps), sweeping red -> orange -> yellow -> green -> cyan -> blue -> magenta -> back to red and repeating indefinitely. The port holds hue 198 deg (cyan) forever. This is the single biggest miss -- the pattern reads as a colour-cycling holiday star and the port reads as a static blue sparkle.",
+    "Widen the glow. On a 16x16 grid the original's star lights ~185 of 256 pixels and reaches all four edges; the port lights ~30 and never leaves the central 8x8. On 48x48 the original's radial profile from the centre outward is 255,190,132,128,127,74,33,17 (sampled every 3 px) versus the port's 242,191,132,27,8,3,1,0 -- the port's falloff collapses after ~6-9 px where the original sustains a wide soft halo out to the corners. Roughly double the star's radius and flatten the falloff tail; the core peak (255) is already correct.",
+    "Overall brightness follows from the glow fix: original meanBrightness averages ~16 over a 60 s window, the port ~3.5. Do not fix this by raising the core gain -- both cores already saturate at 255.",
+    "Make the pulse periodic. The original's mean brightness oscillates on a clean ~1.1 s cycle (autocorrelation peaks at lags 10, 22, 33 frames at 10 fps) sitting inside a slower ~32 s envelope. The port's brightness is aperiodic -- autocorrelation is gone within 0.6 s and never rises above 0.23 at any lag. The port pulses, but noisily rather than on a beat.",
+    "Nothing needs changing on the Speed slider, the rotation smoothness, the varying spike count, or the resolution-independent mapping -- those already track the original."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "phase-cyan",
+    "phase-magenta",
+    "ctl-speed-0",
+    "ctl-speed-0.5",
+    "ctl-speed-1",
+    "dump-star",
+    "dump-hue",
+    "dump48",
+    "fps-10",
+    "fps-20",
+    "fps-40",
+    "grid8",
+    "grid48",
+    "rhythm60",
+    "seed1234"
+  ]
+}
