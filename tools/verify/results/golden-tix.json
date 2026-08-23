@@ -1,0 +1,79 @@
+{
+  "slug": "golden-tix",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Spatially and chromatically pixel-exact — the port's frame at time t equals the original's frame at time 10t (cross-correlation 1.000, zero shift, at every SpeedShift tested) — but its whole timeline runs exactly 10x too fast, and at SpeedShift=0 (the untouched default) the original is black while the port animates.",
+  "observations": [
+    "Both sides expose the identical control surface: hsvPickerPositiveColor (hsvPicker/'PositiveColor'), hsvPickerNegativeColor (hsvPicker/'NegativeColor'), sliderSpeedShift (slider/'SpeedShift'), sliderSlideRightToReset (slider/'SlideRightToReset'). No missing, extra, renamed or re-kinded control.",
+    "The pattern is a 60px 1D standing wave whose SPATIAL FREQUENCY ramps linearly with time forever: it starts as a single smooth gradient (whole strip one hue, pulsing in unison), then accumulates more and more alternating positive/negative bands, so the waterfall reads as curves fanning out of the top-left and steepening indefinitely. Both sides draw exactly that shape; neither has modes, and neither ever repeats or resets (checked to t=220 s).",
+    "SPEED IS THE DIVERGENCE. With identical dials (Positive=0.12,1,1; Negative=0.6,1,1; SpeedShift=0.5), the original's band-count grows ~1 sign-change per 30 s (2 crossings at t=60 s, 4 at t=119 s); the port grows ~11 per 30 s (22 at t=60 s, 44 at t=119 s). Matching frames by circular cross-correlation of the R-B profile pins the factor exactly: orig t=15 s <-> port t=1.5 s (corr 1.000), orig t=60 s <-> port t=6.0 s (corr 0.999), orig t=119 s <-> port t=11.9 s (corr 1.000) — all with shift 0.",
+    "That 10x factor is constant across the SpeedShift dial: orig t=60 s matches port t=6.0 s at SpeedShift 0.25 (corr 0.998), 0.5 (corr 0.999) and 1 (corr 1.000). So it is a single global time-scale error, not a mis-mapped dial curve.",
+    "Consequence over a short viewing window: in the first 20 s the original is a plain gold gradient slowly brightening in from the right, with NO blue and no stripes at all; the port already shows ~7 gold/blue stripe pairs curving hard (labels 'early', 'dialed-a'). By t=120 s the original has grown 4 bands while the port has ~44 and is starting to spatially alias on a 60px strip ('survey-dialed').",
+    "Untouched (no controls set), the ORIGINAL renders pure black for the whole 60 s survey (meanBrightness avg/min/max all 0, motion 0, zeroMotionFrames 120/120) while the PORT renders a bright, very fast animation (meanBrightness 60.3, motion 23.1). Isolating it: setting only the two pickers leaves the original black; setting only sliderSpeedShift=0.5 brings it to life. So both sides' SpeedShift global defaults to ~0, and the divergence is what each does AT 0.",
+    "At an explicit sliderSpeedShift=0, the original is black indefinitely (mean 0 at t=0-60 s and again at t=200-220 s) while the port renders an extremely fast, spatially-aliasing animation (mean 64-65, motion 81-82). This is the untouched-default divergence in dialed form.",
+    "Colour is an exact match. Dialed Positive=0.12,1,1 / Negative=0.6,1,1 both sides peak at [254,183,0] gold and [0,101,254] blue. Dialed Positive=0.33,1,1 / Negative=0.85,1,1 both sides render green/magenta identically. With the pickers left UNSET both sides fall back to the same built-in pair, [254,0,0] red and [0,254,254] cyan.",
+    "Indexing/geometry match: pixel 0 is exactly [0,0,0] on both sides at matched times, and the best-alignment shift between matched frames is 0 px in every correlation — no mirror, no off-by-one, no phase offset.",
+    "Neither side is frame-rate coupled. Band counts at t=5/15/30/60/90/119 s are byte-identical at --fps 10 and --fps 20 on both sides, and the motion stat halves as fps doubles on both — the port's error is a time-scale constant, not a per-frame step.",
+    "Deterministic and seed-independent: --seed 1234 reproduces --seed 1's stats exactly on both sides (orig mean 57/motion 1, port mean 65/motion 5)."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerPositiveColor",
+      "origEffect": "Sets the hue/sat/val of the positive half-cycle bands; 0.12,1,1 gives gold [254,183,0], 0.33,1,1 gives green. Unset, it falls back to red [254,0,0]. (Probe reported it inert only because a single-value picker arg zeroes S and V; with full h,s,v triples it is plainly live.)",
+      "portEffect": "Identical: same hues, same exact RGB peaks, same unset fallback to red [254,0,0].",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerNegativeColor",
+      "origEffect": "Sets the negative half-cycle bands; 0.6,1,1 gives blue [0,101,254], 0.85,1,1 gives magenta. Unset, falls back to cyan [0,254,254].",
+      "portEffect": "Identical hues, identical exact RGB peaks, identical unset fallback to cyan [0,254,254].",
+      "matches": true
+    },
+    {
+      "name": "sliderSpeedShift",
+      "origEffect": "Inverse speed control on the frequency ramp: higher = slower. Band growth ~0.068/s at 0.25, ~0.033/s at 0.5, ~0.017/s at 0.75-1 (a clean ~1/x law). At exactly 0 the original goes and stays BLACK.",
+      "portEffect": "Same inverse law and same 2x-per-halving shape (~0.75/s at 0.25, ~0.37/s at 0.5, ~0.19/s at 1) but uniformly 10x faster than the original at every setting, so no SpeedShift value makes the port as slow as the original at its FASTEST setting. At 0 the port animates extremely fast instead of going black.",
+      "matches": false
+    },
+    {
+      "name": "sliderSlideRightToReset",
+      "origEffect": "No observable effect. Probe delta 0.00; a manual 60 s dialed run at value 1 reproduced the value-0 run's stats exactly (mean 64, motion 2). Presumably it only acts on a live value CHANGE, which the harness cannot make — dial effect unverifiable from output.",
+      "portEffect": "Same: probe delta 0.00, and the value-1 60 s run reproduced the value-0 run exactly (mean 66, motion 20). Unverifiable on both sides, so no divergence detectable.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "PRIMARY FIX — the port's clock runs exactly 10x too fast. Divide whatever per-frame/per-second increment drives the accumulating phase-gradient by 10 and the port becomes frame-for-frame identical to the original: verified by circular cross-correlation of the R-B profile, port(t) == orig(10t) with correlation 0.999-1.000 and zero pixel shift at t = 1.5/6.0/11.9 s (orig 15/60/119 s), and the same factor at SpeedShift 0.25, 0.5 and 1. Nothing else about the geometry needs to move.",
+    "Concrete target after the fix: with SpeedShift=0.5 on a 60px strip, the strip should show its FIRST gold/blue sign change at about t=30 s, two at t=60 s, three at t=90 s, four at t=119 s — i.e. roughly one new band per 30 s. The port currently reaches four bands before t=11 s.",
+    "SECONDARY FIX — behaviour at SpeedShift = 0. The original outputs pure black at that setting and stays black indefinitely (confirmed at t=0-60 s and t=200-220 s); the port instead runs its fastest animation there. Since ~0 is also the value both sides hold when no control has been touched, this is what a user sees on load: original dark, port already flying. Make SpeedShift=0 collapse the output to black rather than to maximum speed.",
+    "Nothing to change in colour, geometry or indexing. The palette (dialed and default-fallback), the pixel-0 black endpoint, the band profile shape and the spatial phase are already exact matches — do not touch them while fixing the rate.",
+    "Do not try to compensate by re-mapping SpeedShift; the dial's response law already matches the original (a clean inverse curve, band rate halving as the slider doubles). The error is a single multiplicative constant outside the dial."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dialed-a",
+    "survey-dialed",
+    "early",
+    "orig-late-11x",
+    "dump-f10",
+    "dump-f20",
+    "ss-0",
+    "ss-0.25",
+    "ss-0.75",
+    "ss-1",
+    "ss0-late",
+    "pick-green",
+    "pickonly",
+    "speedonly",
+    "defcolor",
+    "reset-1",
+    "port-match",
+    "port-match2",
+    "ratio-0.25",
+    "ratio-1",
+    "seed1234"
+  ]
+}

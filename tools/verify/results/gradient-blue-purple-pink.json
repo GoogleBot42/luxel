@@ -1,0 +1,45 @@
+{
+  "slug": "gradient-blue-purple-pink",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same scrolling blue/purple/pink gradient at essentially identical speed and spatial period, but the port's palette is narrower — a thinner saturated-pink band, much less periwinkle/green content — and its slow colour-breathing cycle runs ~17% fast (4.8 s vs 5.6 s).",
+  "observations": [
+    "Both sides: one full colour cycle per 60-px strip (dominant spatial DFT component k=1), scrolling toward higher pixel index. Unwrapped k=1 phase of the red channel over 24 s: orig +367.21 px, port +366.94 px, i.e. 15.25 vs 15.29 px/s — a 0.3% speed difference, visually identical. Waterfall slopes match.",
+    "Neither side exposes any settable control (probe: 'no settable controls' on orig and port), and neither binds sensor globals (wantsSensors false on both). No compile or runtime errors on either side in any run.",
+    "Survey over 60 s @5 fps and 240 s @2 fps shows a single continuous regime on both sides — no mode rotation, no events, no drift. A late window (--skip 200, 30 s @10 fps) is indistinguishable from t=0: brightnessTrend 'steady', zeroMotionFrames 0, meanBrightness orig 139.3 / port 136.8 on both.",
+    "Band widths (default 60-px rig, from --dump): orig holds R=255 (saturated pink) over 15 px of the 60-px cycle at every sampled time and drops B below 255 over the same 15 px; port does so over only 9-10 px. So the pink band occupies ~25% of the orig's cycle vs ~16% of the port's, and the port spends correspondingly more of the cycle in mid deep-blue/violet.",
+    "Green/periwinkle content is markedly weaker on the port: window-mean G is 35.4 (orig) vs 22.8 (port) in every run (baseline, survey, survey-240, late-30s). At the greenest moment orig reaches G=121 with G>60 over 15-18 px; port reaches G=110 with G>60 over only 6-8 px. Blue is correspondingly higher on the port (meanB 246.6 vs 251.1), so the port's non-pink field reads electric violet where the orig's reads royal blue with a broad pale-periwinkle streak.",
+    "Both sides breathe: the amplitude of the k=1 red component and the green content oscillate slowly. Orig period is 5.60 s (autocorrelation of meanR/meanG: lags 28,56,84,112,140 frames @5 fps; magG minima at t=2.8, 8.4, 14.0, 19.6 s). Port period is ~4.78 s (lags 24,47,71,95,119 @5 fps; magG minima at t≈2.4, 7.2, 12.0, 16.4, 21.2 s). The port's breathing is therefore ~17% faster.",
+    "Breathing depth also differs: orig's k=1 green amplitude swings 11.1 to 54.0 over its cycle, the port's only 22.5 to 36.9 — roughly a third of the modulation depth. Orig's k=1 red amplitude swings 114 to 150, port's 103 to 134.",
+    "The port sits a constant ~15 px (a quarter of the 60-px cycle) behind the orig in spatial phase: offset 14.99 px at t=0 and 15.26 px at t=24 s, i.e. no meaningful accumulation. Cosmetic starting-phase difference only.",
+    "Both sides are frame-rate invariant (time-based, not frame-stepped): scroll speed measured by k=1 phase tracking is 15.25 px/s (orig) and 15.28-15.30 px/s (port) at 10, 20 and 40 fps alike, and the breathing amplitudes are unchanged across rates.",
+    "Both sides are resolution-independent in the same way: re-rendered at --pixels 240 the pink band scales x4 (orig 15 px to 60 px; port 9 px to 37 px) and the cycle still fits the strip exactly, so the width divergence above is a palette-shape difference, not a rig artefact.",
+    "Both sides are seed-independent: seed 1234 produces statistics identical to seed 1 (orig meanG avg 35.3, port 22.7 in both)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Widen the port's saturated-pink band: the original holds fully-saturated pink (R=255, B dipping to ~198) across ~25% of the colour cycle (15 of 60 px); the port only ~16% (9 px). The port's ramps into and out of pink are too gradual / the pink plateau too short.",
+    "The port is missing most of the original's periwinkle phase. The original's cycle includes a broad pale blue-lavender region (G above 60 across 15-18 px of 60, peaking at G=121, mean G 35); the port's equivalent region is only 6-8 px wide (peak G=110, mean G 23). Broaden that light-blue shoulder rather than raising its peak — the peak value is already about right, it is the width that is short.",
+    "Consequence of the two above: the port's overall look is more uniformly electric violet, the original's is a higher-contrast alternation of royal blue and hot pink with a distinct pale streak. Compare mean channel levels as a quick check: original settles at meanR 136 / meanG 35 / meanB 247, the port at 138 / 23 / 251.",
+    "Slow the port's colour-breathing modulation by ~17%: the original's palette-amplitude cycle repeats every 5.60 s, the port's every ~4.78 s. Verify with autocorrelation of meanG over a 60 s window at 5 fps (original peaks at lag 28 frames, port at 24).",
+    "Deepen the breathing: the original's green content swings roughly 5x between its dullest and richest moment (k=1 green amplitude 11 to 54); the port's swings less than 2x (22.5 to 37). The port's cycle never gets as green-free nor as periwinkle-rich as the original's.",
+    "Do NOT change the scroll: speed (15.25 px/s on a 60-px strip), direction, spatial period (exactly one cycle per strip), frame-rate independence, resolution independence and seed independence all already match the original to within measurement noise. The constant ~15 px (quarter-cycle) starting-phase offset is cosmetic and not worth chasing."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "regime-greenpoor",
+    "regime-greenrich",
+    "dump-base",
+    "dump-long24",
+    "fps10",
+    "fps40",
+    "big240",
+    "grid8",
+    "seed1234",
+    "late-30s"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "slug": "glitch-bands",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Same skeleton and same timing — two-level brightness bands over a saturated hue ramp whose spatial frequency breathes in phase with the original — but the port's hue frequency is ~4x too low throughout, so the original's hard 1-2 px 'glitch' texture never appears and the port reads as a smooth rainbow quilt.",
+  "observations": [
+    "Both sides render cleanly for the whole 240 s survey: no compile/runtime errors, brightnessTrend 'steady' on both, zeroMotionFrames 1 (the unavoidable first frame), meanBrightness avg 117.2 (orig) vs 117.5 (port). Neither dies, freezes, blacks out or saturates.",
+    "Shared signature, matched exactly: every dumped frame on BOTH sides uses exactly two brightness levels, 255 and 127 — no intermediate values, no zeros — and the fraction of the strip at 255 is 0.67 on both (mean over 120 frames spanning 60 s).",
+    "Band mask matches well: 2-level runs across the 60 px strip average 8.8 on the original (range 6-11) vs 7.5 on the port (range 6-9); re-rendered at --pixels 600 it is 11 vs 9. Band count is roughly constant with pixel count on both sides, i.e. both are resolution-independent (bands are fractions of the strip, not fixed pixel counts). The mask evolves slowly on both — it is essentially unchanged between frames 0.05 s apart and completely rearranged 0.5 s later, on both sides; it does not translate.",
+    "HEADLINE DIVERGENCE — spatial hue frequency. Measured de-aliased at --pixels 600 (the 60 px default rig aliases the original's finest regime), total unwrapped hue sweep across the strip, sampled once a second over 180 s: original averages 10.2 rainbow cycles/strip (min 0.3, max 26.6); port averages 2.6 (min 0.2, max 7.1). Ratio ~3.9x on the average and ~3.8x on the peaks.",
+    "What that looks like: at the original's high-frequency phase (t~13-17 s) adjacent pixels on the 60 px strip differ in hue by ~85 deg on the original — a harsh 1-2 px TV-static shimmer, which is what makes the pattern read as 'glitch' — while the port at the same instant differs by ~20-30 deg and draws smooth rounded rainbow lozenges. Mean |adjacent-pixel hue delta| over 60 s at 60 px: orig avg 45.9 deg (min 0.8, max 87.8), port avg 13.2 deg (min 0.2, max 30.6).",
+    "The port matches during the original's LOW-frequency phases. Parked at t=31-39 s (--label regime-coarse), where the original drops to 2-7 cycles/strip, the two waterfalls are near-indistinguishable in character: same lozenge lattice, same palette, same dark-seam geometry. The gap only opens as the original climbs.",
+    "TIMING MATCHES. The breathing of spatial frequency is quasi-periodic on both, ~10-13 s between peaks, and the peaks land at nearly the same absolute times: original peaks near t = 16, 28, 42, 54, 70, 82, 108, 120, 134, 148 s; port peaks near t = 14, 30, 45, 55, 70, 86, 108, 118, 134, 148 s. Autocorrelation of the cycles/strip series over 180 s gives a dominant repeat at 66 s (r 0.98) for the original and 32 s / 63 s (r 0.87 / 0.76) for the port. So the modulator's phase is right; its output gain is not.",
+    "Temporal hue rate scales with the same factor. In the fine regime (t=13-15 s) the median per-pixel hue rotation is orig 106/151/273 deg/s at pixels 0/20/40 vs port 29/65/89 deg/s — roughly 3x slower on the port, consistent with one shared gain constant being ~4x too small rather than two independent errors.",
+    "Whole-rig motion stat is correspondingly lower on the port at every rate: 22.7 vs 17.2 at 20 fps (6 s), 70.5 vs 48.0 at 5 fps (60 s), 70.7 vs 48.1 at 5 fps (240 s). motionLit tracks motion to within 0.1 on both sides (the rig is fully lit), so sparseness is not distorting the numbers.",
+    "Both sides are fps-invariant (time-based, not frame-stepped): the same absolute times dumped at 10/20/40 fps give the same frame content — original 44.7/44.1/43.9 and port 6.1/4.5/4.4 mean adjacent-hue-delta at t=2 s, and identical to 0.5 deg at t=5,8,11,14,17 s. No frame-rate coupling on either side.",
+    "Both sides are fully deterministic and seed-independent: seeds 1, 7 and 1234 produce byte-identical dumps at t=2,5,8,11,14,17 s on both sides. No randomness to judge statistically.",
+    "Control surface matches: --probe-controls reports 'no settable controls' for BOTH sides, so the pattern genuinely has no dials and no control is missing from the port.",
+    "Single regime — no mode rotation. The 240 s survey waterfall is one continuous texture on both sides with no boundaries, dark gaps or texture switches; the only structure is the slow frequency breathing described above. Regime spot-checks at t=13-21 s and t=31-39 s confirm it."
+  ],
+  "dials": [],
+  "feedback": [
+    "One number is wrong: the gain on the hue-vs-position term. Multiply the port's spatial hue frequency by about 4 and everything else already lines up. Target, measured as total hue sweep across the strip (render at --pixels 600 to avoid aliasing): the original averages 10.2 rainbow cycles across the strip and peaks at 26.6; the port currently averages 2.6 and peaks at 7.1.",
+    "The visible acceptance test is the fine regime around t=13-17 s at the default 60 px strip: the original must get down to 1-2 px stripes with ~85 deg of hue between neighbouring pixels (harsh, static-like, the thing that makes it 'glitch'). The port currently manages ~20-30 deg there and looks like smooth rainbow lozenges. Compare tools/verify/out/glitch-bands/regime-fine/orig.png against port.png.",
+    "Do NOT retune the time base or the modulator. The breathing period (~10-13 s between frequency peaks) and its absolute phase already match — orig peaks at t~16/28/42/54/70/82/108/120/134/148 s, port at t~14/30/45/55/70/86/108/118/134/148 s. Changing the timing would break something that is currently right.",
+    "Do NOT retune the brightness mask. The two-level 255/127 quantisation, the 0.67 duty cycle at full brightness, and the band count (orig 8.8 vs port 7.5 runs on 60 px; 11 vs 9 at 600 px) are already a good match. If anything the port has one band too few, but that is within the frame-to-frame spread and is not worth chasing before the hue-frequency fix.",
+    "Once the gain is raised, re-check the per-pixel hue rotation rate, which should follow automatically: in the fine regime the original turns 106/151/273 deg/s at pixels 0/20/40 of a 60 px strip against the port's 29/65/89 deg/s. If it does not scale up with the spatial fix, the port is using two separate constants where the original uses one.",
+    "Also verify the fixed port still reaches near-zero: the original's frequency swings all the way down to 0.3 cycles/strip (a near-flat single colour) at its troughs, so the fix must be a gain on an oscillating term, not an added offset."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "regime-fine",
+    "regime-coarse",
+    "dump-a",
+    "dump-many",
+    "dump-slope60",
+    "dump-drift",
+    "fps10",
+    "fps20",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "px12",
+    "px300",
+    "px600",
+    "px600-long"
+  ]
+}
