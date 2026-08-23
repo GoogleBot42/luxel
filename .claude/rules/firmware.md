@@ -19,8 +19,14 @@ paths:
   enforces a total `.stack` floor. Measure, don't estimate: v0.1.31-33
   shipped an estimated stack size that was well above the real, measured one,
   and it panicked in production.
-- Run `cargo clippy` against the default (esp32c3) target, not the Xtensa
-  build — clippy cannot drive the forked-core Xtensa `-Zbuild-std` target.
+- `cargo clippy` DOES work on the Xtensa (`-Zbuild-std`) boards — but only
+  with the esp toolchain's `bin/` PREPENDED to `PATH`. Exporting only
+  `RUSTC`/`RUSTDOC` (the `tools/stack-check.sh` recipe — sufficient for
+  builds) makes cargo pick mainline `clippy-driver` off PATH, which dies
+  compiling the forked `core` with `unrecognized intrinsic` errors that
+  look like a broken toolchain (rediscovered 2026-08-22). And run clippy
+  per board feature set, not just the default: a `large_stack_arrays`
+  error in hub75.rs was invisible except under `board-s3-devkit,hub75`.
 - Boot tasks that do multi-KB loads (e.g. playlist/pattern resume) must run
   after `stack.wait_config_up().await` — WiFi bring-up mallocs don't
   null-check, so a heavy load racing WiFi init OOM-panics the boot.
