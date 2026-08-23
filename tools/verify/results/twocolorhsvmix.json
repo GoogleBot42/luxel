@@ -1,0 +1,84 @@
+{
+  "slug": "twocolorhsvmix",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "The port's colour/spatial mixing is byte-exact with the original, but its two sliders are badly miscalibrated: the time dial runs ~3-80x too fast (~10x at mid settings) and the Envelope dial is ~8x too aggressive (port envelope == original envelope raised to the 8th power), so the port blacks out the strip ends where the original stays fully lit.",
+  "observations": [
+    "Both sides render a 1D 'two-colour HSV mix': hue sweeps back and forth between the Primary picker's hue and the Secondary picker's hue along the strip (one full up-down cycle per ~56-60 px on the 60 px default rig), with the whole hue wave drifting steadily along the strip over time. Waterfalls show clean, evenly-spaced diagonal bands on both sides, drifting in the SAME direction (toward increasing pixel index).",
+    "SPATIAL/COLOUR MIXING IS EXACT. Run `env0` (PrimaryColor=0,1,1; SecondaryColor=0.5,1,1; Period/Speed=1; Envelope=0), t=0 dump: every one of the 60 pixels agrees within 1/255 on all three channels (orig px0 127/255/0 vs port 126/255/0; px20 0/255/203 both; px44 255/2/0 both). Saturation and value interpolation also match: run `pick2` with Primary=(0.75,0.5,0.6), Secondary=(0.1,1,1) gives max abs channel difference of 1 count across the whole strip.",
+    "SPEED IS THE BIG DIVERGENCE. Measured by unwrapping the phase of the fundamental spatial-DFT component of the hue profile across dense --dump series. Hue-wave cycle period at matched slider values (orig sliderPeriod = port sliderSpeed): v=0 -> orig 0.44 s / port 0.13 s (3.3x fast); v=0.25 -> orig 5.38 s / port 0.72 s (7.5x); v=0.5 -> orig 65.5 s / port 4.10 s (16x); v=0.75 -> orig 798 s / port 23.6 s (34x); v=1 -> orig 9736 s / port 128 s (76x).",
+    "The dial's dynamic range also differs: the original's rate spans ~22,200:1 from v=0 to v=1 (rate ~= 2.27 * exp(-10.0*v) cycles/s), the port's only ~971:1 (rate ~= 7.57 * exp(-6.9*v) cycles/s). The port therefore cannot reach the original's slow end at all - the original's slowest setting is a ~2.7 hour crawl, the port's is ~2 minutes.",
+    "ENVELOPE IS ~8x TOO AGGRESSIVE. The Envelope slider imposes a static (time-invariant) spatial brightness bell peaking near px28 on both sides; Envelope=0 gives a flat V=255 on both. But the port's brightness profile equals the original's raised to the 8th power at EVERY envelope setting. Envelope=0.5 V profile (every 4th px): orig 57,128,170,200,223,239,249,254,253,247,236,218,194,161,115 vs port 0,1,10,37,88,154,216,251,246,202,137,73,28,6,0. Envelope=1: orig 13,64,113,158,195,225,244,254,... (whole strip still lit) vs port 0,0,0,5,30,93,184,248,... (~40% of the strip pinned to hard black). orig_V^8 predicts the port's numbers to within quantisation at env=0.25, 0.5, 0.75 and 1.",
+    "CONTROL-SURFACE MISMATCH: the original exposes sliderPeriod (label 'Period'); the port exposes sliderSpeed (label 'Speed'). The two picker controls (hsvPickerPrimaryColor, hsvPickerSecondaryColor) and sliderEnvelope have identical names and kinds on both sides. Note the port's dial, despite being named 'Speed', behaves like a PERIOD dial - raising it slows the pattern down on both sides - so the effect direction matches but the name is inverted in meaning.",
+    "UNTOUCHED DEFAULTS DIVERGE: with no controls set the original renders pure black on every pixel over 60 s (meanBrightness 0, motion 0) because its picker-backed globals start at value 0; the port renders a bright drifting red/blue mix (meanBrightness 115, meanR 170, meanB 175), i.e. the port's pickers come up pre-loaded with non-zero colours. Judged, per procedure, on dialed comparisons instead.",
+    "With only the two pickers set and both sliders left untouched, both sides render a full-brightness (V=255 everywhere, so Envelope defaults to 0/off on both) hue wave with the SAME spatial waveform, but the original drifts at ~0.0056 cyc/s (~178 s period) vs the port's ~0.305 cyc/s (~3.3 s period) - a ~54x speed gap at defaults. Back-solving the rate models puts the original's untouched Period default near 0.60 and the port's untouched Speed default near 0.47.",
+    "Neither side is frame-rate coupled: at Period/Speed=0.35, Envelope=0 the measured drift is 0.0684 cyc/s (orig) and 0.6803 cyc/s (port) at 10, 20 AND 40 fps - identical to 4 decimal places on both sides.",
+    "Steady state is healthy on both. A --skip 120 / 20 s window at Period/Speed=0.35, Envelope=0.3 gives the same means as the opening window (orig mean 107 motion 1; port mean 60 motion 8), brightnessTrend steady on both; nothing decays, freezes or saturates. Seed 1234 renders identically to seed 1 on both sides - the pattern is fully deterministic with no RNG component.",
+    "The brightness gap at non-zero Envelope is large and persistent: at Envelope=0.3 the original's mean brightness is ~107 and the port's ~60; at Envelope=0.5 orig ~96-98 vs port ~48."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerPrimaryColor",
+      "origEffect": "Sets one endpoint of the hue mix (and its saturation/value); probe maxDelta 63.3. Hue, saturation and value all feed through to the rendered mix.",
+      "portEffect": "Identical. Cross-checked at (0,1,1) and (0.75,0.5,0.6): per-pixel RGB agrees with the original to within 1/255.",
+      "matches": true
+    },
+    {
+      "name": "hsvPickerSecondaryColor",
+      "origEffect": "Sets the other endpoint of the hue mix; probe maxDelta 63.3.",
+      "portEffect": "Identical; verified at (0.5,1,1) and (0.1,1,1) with max 1-count channel error.",
+      "matches": true
+    },
+    {
+      "name": "sliderPeriod (orig) / sliderSpeed (port)",
+      "origEffect": "Named 'Period'. Raising it slows the hue wave's drift exponentially: cycle period 0.44 s at 0, 5.4 s at 0.25, 65 s at 0.5, 798 s at 0.75, 9736 s at 1 (rate ~= 2.27*exp(-10.0*v) cyc/s). Probe reported it INERT, which is a false inert - with the pickers left at their black default nothing is visible; it is plainly live once the pickers are set (verified over windows from 6 s to 125 s).",
+      "portEffect": "Named 'Speed' but behaves as a period dial in the same direction: 0.13 s at 0, 0.72 s at 0.25, 4.1 s at 0.5, 23.6 s at 0.75, 128 s at 1 (rate ~= 7.57*exp(-6.9*v) cyc/s). Same monotonic direction, but every setting is 3.3x-76x faster than the original's and the dial's total range is 971:1 against the original's 22,200:1.",
+      "matches": false
+    },
+    {
+      "name": "sliderEnvelope",
+      "origEffect": "Applies a static spatial brightness bell centred near px28. 0 = flat V=255 across the strip; raising it deepens the vignette gently - even at 1 the dimmest pixel is still 13/255, so the whole strip stays lit. Probe reported INERT (false inert, same black-picker cause); manual sweep at 0/0.25/0.5/0.75/1 with pickers set shows it clearly live.",
+      "portEffect": "Same shape, same centre, same direction, but ~8x too steep: the port's V profile equals the original's raised to the 8th power at every setting. At 0.25 the port already hits 0 at the strip ends where the original is at 121/255; at 1 roughly 40% of the strip is hard black.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Time mapping is the headline bug. At every value of the time slider the port drifts far faster than the original, and by a factor that itself grows with the dial: 3.3x too fast at 0, ~10x at 0.35, 16x at 0.5, 76x at 1. Fit target: the original's hue-wave rate is ~2.27*exp(-10.0*v) cycles/s (period 0.44 s at v=0 rising to ~9700 s at v=1); the port currently produces ~7.57*exp(-6.9*v) cycles/s. Both the scale factor (~3.3x too high) and the exponential falloff (needs to be steeper, ~10 per unit dial instead of ~6.9) need fixing.",
+    "Envelope curve is ~8x too aggressive. Measured exactly: port_V(x) == orig_V(x)^8 at Envelope = 0.25, 0.5, 0.75 and 1 (0 is flat on both and correct). Whatever exponent/steepness the port derives from the Envelope slider should be divided by 8. Concretely the target at Envelope=1 is a gentle vignette whose dimmest pixel is still ~13/255 with the entire strip lit; the port currently drives ~40% of the strip to hard 0 and halves the pattern's mean brightness (60 vs 107 at Envelope=0.3).",
+    "Rename the time control to match the original: the original's is `sliderPeriod` with label 'Period'. The port calls it `sliderSpeed`/'Speed' while implementing period semantics (higher = slower), so the current name is doubly wrong - a UI user turning 'Speed' up sees the pattern slow down.",
+    "Untouched-default divergence: the original comes up entirely black (both hsvPickers start at value 0) while the port comes up pre-loaded with a red/blue mix at full brightness. If the port initialises its picker-backed globals with hard-coded colours, drop them so an unconfigured load matches the original. Lower priority than the two calibration bugs.",
+    "Everything else is already right and should not be touched: the hue interpolation between the two pickers (including saturation and value interpolation), the spatial wavelength (~56-60 px on a 60 px strip), the drift direction, the envelope's peak location and its flat-at-0 behaviour, the time-based (fps-invariant) clock, and the steady state all match the original to within 1/255."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dialed-a",
+    "dialed-survey",
+    "sw-o0",
+    "sw-o0.25",
+    "sw-o0.5",
+    "sw-o0.75",
+    "sw-o1",
+    "dump25",
+    "ph0",
+    "ph0.25",
+    "ph0.5",
+    "ph0.75",
+    "phL0.75",
+    "phL1",
+    "pickonly",
+    "env0",
+    "env0.25",
+    "env0.5",
+    "env0.75",
+    "env1",
+    "pick2",
+    "fps10",
+    "fps20",
+    "fps40",
+    "seed1234",
+    "late"
+  ]
+}

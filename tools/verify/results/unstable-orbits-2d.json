@@ -1,0 +1,48 @@
+{
+  "slug": "unstable-orbits-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides draw a rainbow-hued curved orbit arc that sweeps and bounces across the 2D canvas, but the original paints it into a persistent, slowly-decaying full-canvas field (mean brightness ~46, ~82% of pixels lit, uniform full-hue-wheel palette) while the port shows only the bare instantaneous arc — ~7.7x dimmer, ~4x fewer pixels lit, no decay trail, blue/cyan/purple almost absent — and quantizes every point onto a fixed 16x16 logical lattice regardless of rig size.",
+  "observations": [
+    "Neither side exposes any controls (meta.json controls lists are empty on both; --probe-controls reports 'no settable controls' for orig and port). Control surface matches.",
+    "Both sides compile and run clean on the default rig (grid, 16x16 = 256 px); no compile or runtime errors at 8x8, 16x16, 24x24, 32x32, 32x8 or 48x48. The ORIGINAL hits an engine limit at 96x96 ('array element budget exceeded (arrays are never freed)') while the port renders fine — evidence the original allocates per-pixel arrays (a persistence canvas) and the port does not.",
+    "Brightness/density (default 16x16 rig, 240 s @ 2 fps): orig meanBrightness avg 45.7 (min 10, max 49), port avg 5.9 (min 2, max 8) — a 7.7x gap that holds at every window and fps I tried. Per-frame lit-pixel counts from --dump at t=1/5/10/20/29 s: orig 193-216 of 256 lit (~82%) with 76-142 pixels at max-channel >=64; port 47-58 lit (~20%) with only 16-20 at >=64.",
+    "The original ACCUMULATES: at t=0 it shows only a handful of dots in the lower-left, fills the grid over ~5 s, and then holds steady forever (steady from the survey through 240 s). The port never accumulates — it looks the same at t=0 as at t=240 s. brightnessTrend is 'steady' on both sides once past that transient, and zeroMotionFrames is 1 on both (the expected first-frame zero), so neither side freezes or dies.",
+    "Value histogram of max-channel over four dumps in the late window (t=100..109 s, default rig) shows the mechanism: orig has a CONTINUOUS decay spread — 39.7% dark / 15.6 / 7.5 / 6.9 / 7.9 / 4.2 / 4.9 / 13.2% across 32-wide bins. Port is 87.8% dark and its lit pixels sit at only three discrete levels (3.4% in 32-63, 3.9% in 96-127, 4.9% in 224-255) with bins 64-95, 128-191 and 192-223 at EXACTLY 0.0%. The original's fading trail field is entirely missing from the port.",
+    "RESOLUTION HANDLING IS THE BIGGEST STRUCTURAL DIFFERENCE. Re-rendered at --grid 48x48, the port's frame is BYTE-IDENTICAL to its 16x16 frame nearest-neighbour upscaled 3x (mean abs diff 0.00, max 0 at both t=1 s and t=5 s after 3x3 downsampling); at 32x32 every feature is a clean 2x2 block, at 24x24 a 1.5x block, and at the non-square 32x8 the content matches the 32x32 render sampled down to 8 rows. The port therefore rasterizes onto a fixed 16x16 logical lattice whatever the rig is. The original does the opposite: same comparison gives mean abs diff 47-49, and at 48x48 it resolves into fine single-pixel nested arcs (1009 of 2304 pixels lit) that are invisible at 16x16. Orig mean brightness falls with rig size (61 at 8x8, 40 at 16x16, 23 at 32x32, 15 at 48x48 — a roughly fixed point budget spread over more pixels) while the port's is flat (6 / 8.5 / 9 / 9).",
+    "PALETTE. Hue histogram over 5 dumps on the default rig (pixels with max-channel >= 40), 12 bins: orig is essentially uniform — 4 11 5 10 11 10 5 9 11 10 6 8 % — a full rainbow wheel. Port is badly skewed warm — 26 19 8 12 10 2 4 2 2 1 2 11 % — 65% of its lit pixels fall in red..green, and cyan/blue/violet (bins 6-10) total only 11%. Channel means over 240 s confirm it: orig R/G/B 39.7 / 47.8 / 49.7 (balanced, faintly blue-rich), port 7.4 / 7.0 / 2.6 (blue starved to a third of the other channels).",
+    "MOTION / RHYTHM. Autocorrelation of the motion, meanBrightness and meanB series over a 240-frame 20 fps late window (--skip 100) gives a clean fundamental on both sides: orig 26 frames = 1.30 s (harmonics at 52 / 79 / 105 frames, corr 0.86-0.98), port 33 frames = 1.65 s (harmonics at 66 / 98, corr 0.85). The port's cycle is ~27% slower. Both are TIME-based, not frame-stepped: the same seconds-periods reappear at 10 fps (orig 13f=1.30 s, port 33f=3.30 s = 2nd harmonic of 1.65 s) and 40 fps (orig 52f=1.30 s, port 65f=1.63 s).",
+    "The port-rhythm.png waterfall shows the shared motif clearly: a bright feature sweeping right-to-left then back, bouncing off both edges, ~1.65 s per bounce cycle. The original's rhythm image has the same sweep buried under its persistence field, plus permanently bright left (cyan/blue) and right (magenta/orange) edge columns where the orbit lingers at its turning points — the port has no such edge accumulation.",
+    "Frame-to-frame filmstrips (late-100, 0.05 s apart) confirm both sides animate the same core object: a rainbow-graded curved arc that continuously deforms and slides. The original's arc spans the whole canvas as a fine line over a dense green/multicoloured speckle; the port's is ~10-15 chunky blocks on black, accompanied by ~5 scattered isolated orange dots.",
+    "Both sides are completely SEED-INDEPENDENT: dumps at t=10 s under --seed 7 and --seed 1234 are byte-identical (mean abs diff 0.00) to --seed 1 on both orig and port. This is a deterministic chaotic map, not an RNG pattern, so per-pixel comparison is legitimate here rather than statistics-only.",
+    "The survey (60 s @ 5 fps and 240 s @ 2 fps) shows no mode rotation or regime structure on either side — one steady regime for both, the only transition being the original's 0->~5 s fill-in transient."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port is missing the original's PERSISTENCE/DECAY CANVAS. The original keeps a per-pixel buffer that the orbit paints into and that fades slowly, so after ~5 s the whole 16x16 grid carries a dense mottled field of previously-visited points (~82% of pixels lit, mean brightness ~46, a continuous spread of values from dim to saturated). The port draws only the current orbit points on black (~20% lit, mean brightness ~6, three discrete brightness levels and nothing in between). Add the accumulating buffer and its per-frame fade; that alone closes most of the 7.7x brightness gap and produces the original's smooth value histogram.",
+    "The port quantizes every point onto a fixed 16x16 logical lattice. Proof: its 48x48 render is byte-for-byte the 16x16 render upscaled 3x, and 32x32 / 24x24 / 32x8 all show the same fixed cell size. The original rasterizes at native rig resolution — at 48x48 it draws single-pixel points that resolve into fine nested arcs. Drop the hard-coded 16 and plot at the rig's actual resolution so feature size stays one pixel and the point density falls with grid size the way the original's does (orig mean brightness 61 / 40 / 23 / 15 at 8x8 / 16x16 / 32x32 / 48x48; the port sits flat at 6 / 8.5 / 9 / 9).",
+    "The port plots far too few orbit points per frame. On the same 48x48 rig the original lights ~1009 pixels (a long trajectory, hundreds to a thousand iterates) versus the port's ~42 distinct cells. Raise the per-frame iteration count substantially — the original's field is dense enough to nearly fill an 8x8 or 16x16 rig.",
+    "Palette coverage is wrong: the original's hues are distributed uniformly around the whole wheel (12-bin histogram roughly flat at 4-11% per bin, channel means R/G/B 40/48/50), while the port concentrates 65% of its lit pixels in red-through-green and almost never emits cyan/blue/violet (channel means 7.4/7.0/2.6). Whatever quantity drives hue in the port is spanning well under a full turn, or is being clamped — make it wrap the full 0..1 hue range.",
+    "The port's cycle is ~27% too slow: its sweep/bounce period is 1.65 s against the original's 1.30 s (autocorrelation fundamentals 33 vs 26 frames at 20 fps, confirmed time-based on both sides at 10 and 40 fps). Speed the port's orbit integration up by ~1.27x.",
+    "What is already right and should be preserved: the core motif (a rainbow-graded curved arc that deforms continuously and bounces edge to edge), the empty control surface, determinism/seed-independence, time-based (not frame-coupled) evolution, and a steady non-decaying steady state out to 240 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-a",
+    "late-100",
+    "grid-8x8",
+    "grid-24x24",
+    "grid-32x32",
+    "grid-32x8",
+    "grid-48x48",
+    "grid-96x96",
+    "seed-7",
+    "seed-1234",
+    "fps-10",
+    "fps-40"
+  ]
+}

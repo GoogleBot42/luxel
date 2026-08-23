@@ -1,0 +1,49 @@
+{
+  "slug": "twinkly-stars",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — single-pixel white stars flashing instantly to (255,255,255) and decaying linearly back to a solid blue field — with identical envelope shape, spatial independence and (empty) control surface, but the port twinkles ~4.6x too often with a ~2.3x shorter decay (≈2x too dense a field), is time-based where the original is frame-stepped, and omits the original's opening all-white flash.",
+  "observations": [
+    "Rig/controls: default strip, 60 px. Both sides expose ZERO settable controls (probe: 'no settable controls' on orig and port) — control surfaces match, no dialed comparison is possible.",
+    "Both sides: blue channel is pinned at 255 on every pixel of every frame (meanB avg/min/max = 255 on both). The pattern is a solid blue field on which stars appear by raising R and G to white.",
+    "Background colour differs slightly: orig's unlit pixel is exactly (0,10,255) (a faintly cyan blue); port's is (0,0,255) (pure blue). Confirmed from --dump minima over 400 frames (orig G min 10, port G min 0). This is the whole explanation for orig's meanG sitting ~9-10 above its meanR while the port's meanR and meanG are equal to within 0.1.",
+    "Event envelope shape MATCHES exactly in character: both sides attack instantly from background to (255,255,255) in one frame, then decay LINEARLY back to background. Averaged onset-aligned envelopes (ts-dump20, 20 fps): orig R = 255,249,244,239,...,10,5,0 — 51 frames, -5 counts/frame; port R = 255,255,242,229,216,...,13,0 — one held peak frame then 21 frames at ~-12.7 counts/frame. Peak is exactly 255 and decay length exactly constant on BOTH sides (meanDur == medDur == maxDur), so neither randomises peak or duration.",
+    "TWINKLE DURATION: orig event lasts 49 rendered frames (= 2.45 s at 20 fps); port lasts 1.05 s. At the harness default the port's stars die 2.3x too fast.",
+    "TWINKLE RATE (steady state, first 6 s of warm-up excluded): orig 0.080 onsets/pixel/s at 20 fps; port 0.367 onsets/pixel/s. The port fires ~4.6x too many stars.",
+    "DENSITY / duty cycle (rate x duration, the frame-rate-independent statement of the error): orig lights 19-20% of the strip at any instant; port lights 33-39%. Port is ~1.9-2.0x too dense. Confirmed at 10, 20 and 40 fps and at 12 px, 60 px and 300 px.",
+    "FRAME-COUPLING DIVERGENCE (measured per the stochastic recipe — event duration in seconds and dark-gap distribution vs fps, not the motion triple). ORIGINAL is fully frame-stepped: duration is 49 frames at 10/20/40 fps (4.90 s / 2.45 s / 1.225 s), onset probability is ~0.0040 per pixel per FRAME (0.0044 / 0.0040 / 0.0034), median per-pixel dark gap 8.9 s / 4.9 s / 2.23 s (scales as 1/fps), and lit fraction holds at 0.19-0.20 across all three rates. PORT is fully time-based: duration 1.10 / 1.05 / 1.00 s and rate 0.362 / 0.367 / 0.384 onsets/pixel/s at 10/20/40 fps, gap median ~1.0 s at every rate.",
+    "The two rate constants are not reconcilable by picking a different reference fps: the port's 1.05 s decay equals the original's 49 frames at ~47 fps, but the port's 0.367 onsets/px/s equals the original's 0.0040/px/frame only at ~92 fps. So the port genuinely over-fires relative to its own decay length — the 2x duty-cycle excess survives any fps convention.",
+    "STARTUP TRANSIENT: the original begins with EVERY pixel at full white (t=0 dump: all 60 pixels (255,255,255)) and the whole strip decays together to background over the first 2.45 s, leaving a near-empty strip (at t=3.0 s exactly 1 of 60 pixels is lit). The port starts essentially empty (t=0: 2 of 60 pixels lit) and has no such flash. Visible once per run, clearly in the top band of both waterfalls and in the ts-grid16 contact sheet (orig cell 0.0s is solid white, port's is blue).",
+    "Spatial character matches: stars are independent single pixels on both sides. Adjacent-lit run-length histogram over t>3 s: orig {1:2720, 2:289, 3:167}; port {1:3136, 2:1166, 3:459, 4:126, 5:40, 6:28, 8:3, 9:16}. The port's longer runs are mostly what 39% random density produces; there is a mild excess at length 8-9 but no evidence of a multi-pixel star kernel.",
+    "Rig-size law matches: at --pixels 12 and --pixels 300 both sides keep the same mean brightness (orig 111/114, port 122/121), so both use a per-pixel trigger probability rather than a fixed total star count. Re-rendered on --rig grid --grid 16x16 both read as scattered white sparkles on blue, same look family, port visibly busier.",
+    "Steady state is fine on both — no dying, freezing or saturating port. survey-240 (240 s) shows no regimes, modes or long-period structure on either side; a --skip 120 late window gives orig 'steady' mean 103 / port 'steady' mean 121, matching the mid-run numbers.",
+    "Sparse-pattern stats caveat honoured: orig posts motion avg 1.8 with 44/120 zeroMotionFrames at baseline, but motionLit is 2.0 and dumps confirm it is animating — the low motion is the slow -5/frame decay, not a freeze. motionLit is orig 1.1-2.0 vs port 6.2, the ~2.5x ratio expected from the decay-slope difference (-5 vs -12.7 counts/frame).",
+    "Seed independence: seeds 1, 7 and 1234 give the same statistics on both sides (orig mean 113/113/114, motion 1.6-1.8; port mean 121/121/119, motion 5.9-6.3), so the divergence is not a one-seed fluke."
+  ],
+  "dials": [],
+  "feedback": [
+    "Halve the twinkle density. The original keeps ~19-20% of the strip lit at any instant; the port keeps ~33-39%. This is the single most visible difference — the original reads as a sparse, calm starfield, the port as a busy shimmer.",
+    "Slow the decay: at 20 fps the original's star takes 2.45 s to fall from white to background (a linear -5 counts per rendered frame on R and G, 49 frames total); the port's takes 1.05 s. Keep the ramp linear and the peak at exactly 255 — those are already right.",
+    "Cut the trigger rate by ~4.6x at 20 fps: the original starts 0.080 new stars per pixel per second (0.0040 per pixel per rendered frame); the port starts 0.367. Note that fixing only the decay length would still leave the field ~2x too dense, because the port's rate is too high relative to its own decay length by about that factor.",
+    "Decide deliberately about the time base. The original is FRAME-STEPPED: its decay is a fixed 49 rendered frames and its trigger is a fixed per-frame probability, so on a real Pixel Blaze running well above 20 fps it twinkles proportionally faster. The port is time-based (1.05 s decay, 0.367/px/s trigger, identical at 10/20/40 fps). Matching the original exactly means porting the per-frame constants; keeping the time base means picking a reference frame rate — but no single reference reconciles both constants today (~47 fps for the decay, ~92 fps for the rate), so at minimum the rate must come down relative to the decay.",
+    "Add the opening flash: the original starts with all pixels at full white and lets them decay together over the first 2.45 s (i.e. every star's timer is initialised as if it had just fired). The port starts from an empty strip. It is a one-off, but it is the first thing a viewer sees.",
+    "Match the background colour: the original's unlit pixel is (0,10,255), not (0,0,255) — a small green lift that makes the field slightly cyan and shows up as a ~10-count gap between meanG and meanR.",
+    "Drop the extra held peak frame: the original goes 255 then immediately begins decaying; the port renders 255 twice before the ramp starts. Cosmetic, but free to fix."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "ts-dump20",
+    "ts-fps10",
+    "ts-fps40",
+    "ts-seed7",
+    "ts-seed1234",
+    "ts-late",
+    "ts-px12",
+    "ts-px300",
+    "ts-grid16"
+  ]
+}
