@@ -1,0 +1,41 @@
+{
+  "slug": "example-modes-and-waveforms",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "A 13-slide grayscale waveform slideshow: 11 of the 13 slides are pixel-identical to the original, but the port holds each slide 0.65 s instead of 0.60 s and slides #10 (noise) and #11 (pulse train) draw different waveforms.",
+  "observations": [
+    "Both sides are pure grayscale (R=G=B on every pixel of every frame dumped; meanR/meanG/meanB series are identical), and both are a SLIDESHOW of static frames: the `motion` series is exactly 0 on every frame except the switch frames (orig 199 non-zero frames out of 2400 at 20 fps, port 184), so each waveform is frozen for its whole dwell.",
+    "Dwell/period: original switches every 12 frames at 20 fps, 6 at 10 fps, 24 at 40 fps, 3 at 5 fps = 0.600 s at every rate. Port switches every 13 frames at 20 fps, 26 at 40 fps, alternating 6/7 at 10 fps, 3/4 at 5 fps = 0.650 s at every rate. Both sides are therefore time-based (no frame-rate coupling on either side); the port's dwell constant is simply ~8.3% too long.",
+    "Cycle length by autocorrelation of meanBrightness over a 120 s / 20 fps run: original 156 frames = 7.80 s, port 169 frames = 8.45 s, each a single clean peak (r=0.999) with a harmonic at 2x and nothing else. Both cycles contain exactly 13 slides, so the slide COUNT and ORDER match; only the dwell differs. Verified stable over 15+ cycles.",
+    "Slide-by-slide comparison (each side dumped at the midpoint of its own slide, so the timing offset is factored out): on the default 60-px strip, slides 0-9 and 12 are pixel-identical (max per-pixel diff 0-1 of 255). Re-dumped at --pixels 300 the same 11 slides are still identical (max diff <=1), so both sides are resolution-consistent in the same way.",
+    "Slide #10 diverges: both sides draw a mid-grey noise-like wave of similar character (orig mean 126.3, min 5, max 249, 25 local extrema across 300 px; port mean 127.4, min 4, max 250, 29 extrema), but it is a different realization - best circular cross-correlation between them is only 0.66, per-pixel max diff 124 at 60 px. Each side's slide #10 is byte-identical from cycle to cycle (checked at t=6.3/14.1/21.9/29.7 s orig and 6.8/15.25/23.7/32.15 s port), so this is a deterministic content difference, not RNG scatter.",
+    "Slide #11 diverges structurally. Original (300 px): spatial period ~150 px (2 repeats across the strip), each period containing a wide dim triangular bump peaking at only 49/255 (px 18-57), then a bright triangle that ramps up over ~15 px and drops sharply, peaking at 215 (px 80-101), then its MIRROR image (sharp rise, slow fall, px 120-141). Port (300 px): spatial period 75 px (4 identical repeats), each a single bright triangle peaking at 251 (ramp up ~17 px, fall ~10 px) on an otherwise black field - no dim wide bump, no alternating orientation, and a brighter peak. At 60 px the same difference reads as orig period 30 with 2 mirrored pulses + a dim bump vs port period 15 with one pulse (`regime-slides10-11` waterfall: orig's middle band is textured, port's is 4 clean bright bars on black).",
+    "No controls on either side: the harness enumerated zero settable controls for orig and for port, and --probe-controls reported '(no settable controls)' for both. So there is no control-surface mismatch.",
+    "Seed-independent on both sides: seed 1 and seed 1234 produce identical meanBrightness series (max diff 0) over a 9 s / 20 fps window.",
+    "No warm-up transient on either side; both start at meanBrightness 118 at t=0 and brightnessTrend is `steady` for both over 60 s."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slide dwell is too long: the original holds each of the 13 waveform slides for exactly 0.600 s (7.80 s per full cycle); the port holds each for 0.650 s (8.45 s per cycle). Shorten the dwell by 1/13 so the cycle lands on 7.8 s. Everything else about the timing is right - both sides are correctly time-based (dwell measured identical in seconds at 5, 10, 20 and 40 fps) and both cycle through exactly 13 slides in the same order.",
+    "Slide #11 (11th of 13, i.e. the one the original shows from t=6.6 s to 7.2 s) draws the wrong waveform. The original lays out a period of ~1/2 the strip containing three features: a wide, very dim triangular bump (peak ~19% brightness) occupying about the first quarter of the period, then a bright asymmetric triangle (slow ~15-px rise, fast fall) peaking at ~84% brightness, then its mirror image (fast rise, slow fall) - so the bright pulses ALTERNATE orientation and the strip shows 2 such periods. The port instead draws 4 identical, evenly spaced, brighter (~98%) triangular pulses on a black field with no dim bump and no alternation. Halve the port's spatial frequency for this slide, cap the pulse peak lower, mirror every second pulse, and add the dim wide bump.",
+    "Slide #10 (the noise/multi-harmonic slide, shown by the original from t=6.0 s to 6.6 s) has the right character but the wrong realization: same mean (~127/255), same full-range excursion (min ~5, max ~250) and roughly the same feature density (25 extrema across 300 px on the original vs 29 on the port), but the two profiles only cross-correlate at 0.66. Both sides repeat their own version exactly every cycle, so this is a reproducible waveform, not randomness - the underlying noise function or its frequency/offset arguments differ.",
+    "Nothing else needs touching: the other 11 slides are pixel-exact at both 60 px and 300 px, the pattern is grayscale on both sides as it should be, there are no controls to match, and the port is correctly seed-independent and frame-rate-independent."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "long120",
+    "fps10",
+    "fps40",
+    "cycle1",
+    "dump-cycle",
+    "seg-mids",
+    "seg-repeat",
+    "px300-segs",
+    "regime-slides10-11",
+    "seed1234"
+  ]
+}

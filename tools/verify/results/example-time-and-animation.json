@@ -1,0 +1,42 @@
+{
+  "slug": "example-time-and-animation",
+  "verdict": "match",
+  "score": 9,
+  "confidence": "high",
+  "summary": "Port reproduces the original's 14-segment grayscale wave demo segment-for-segment and pixel-for-pixel, but advances the segment sequence every ~0.620 s instead of 0.600 s, so its master cycle is 8.68 s against the original's 8.40 s and the two drift out of step over a minute.",
+  "observations": [
+    "Rig: 60 px strip, no controls on EITHER side (probe: '(no settable controls)' for orig and port) — control surfaces match, dials: [].",
+    "Both sides render pure grayscale (meanR == meanG == meanB on every frame of every run) with a 4-repeat spatial period across the 60 px strip; neither errors (compileError/runtimeError null in every run).",
+    "The pattern is a sequence of short sub-animations that step on a fixed grid: on the ORIGINAL every transition lands exactly on a multiple of 0.600 s (observed at 1.80, 2.40, 3.00, 3.60, 4.20, 4.80, 5.40, 6.00, 7.20, 7.80, 8.40 s), 14 steps making one 8.400 s master cycle.",
+    "Master-cycle period, from autocorrelation of meanBrightness over a 240 s / 20 fps run and confirmed at 1, 5, 10, 20 and 27 cycles: original 8.4000 s at every multiple; port 8.680 s. Step interval therefore 0.600 s (orig) vs ~0.620 s (port), i.e. the port's sequence runs ~3.3% slow.",
+    "Both sides are time-based, not frame-stepped: the same 8.40 s / 8.68 s periods come out at --fps 10, 20 and 40 (fps10: 84 f / 87 f; fine60: 168 f / 174 f; fps40: 336 f / 347 f). No frame-rate coupling on either side.",
+    "Within a segment the two sides are BIT-IDENTICAL. Dumping every 0.05 s over t=0..9 s, 120 of 180 frames had a mean absolute pixel difference of exactly 0.0; every non-zero frame sat at a segment boundary where the port had not switched yet.",
+    "The boundary lag grows linearly with elapsed time, as the 0.620 vs 0.600 s step predicts: port switches 1 frame late at t=2.40 s, 2 frames late at 3.00 and 4.20 s, 3 frames late at 4.80, 5.40 and 6.00 s, 4-5 frames late at 7.20 and 7.80 s.",
+    "Consequence in steady state: at t=200-209 s only 1 of 180 dumped frames still matched (mean abs diff 99.2 vs 32.6 early). The two sides are then showing DIFFERENT segments of the same sequence at the same instant — e.g. at t=201.0 s the original draws the fast 'comb' texture while the port is still on the 4-repeat sawtooth ramp.",
+    "The segment repertoire itself matches. Sampling each side mid-segment on its own grid (orig 0.30+0.60k, port 0.31+0.62k, k=0..13) gives the same 14 looks in the same order on both sides: 4-repeat sawtooth ramps at several speeds/directions, hard-edged square blocks, a smooth bell/pulse train, a spreading wave, and two fast interference-looking textures.",
+    "Long-run health is equal: over 240 s at 20 fps orig meanBrightness avg 116.5 (min 31, max 191), port 116.0 (min 31, max 189); motion avg 25.0 vs 24.3; zeroMotionFrames 247/4800 vs 253/4800; brightnessTrend 'steady' on both. No decay, no freeze, no saturation on either side.",
+    "Seed-independent: at --seed 1234 the periods are unchanged (orig 8.40 s, port 8.70 s), so nothing here is an RNG fluke.",
+    "In the fast 'spreading wave' segment (t=6.0-6.6 s) the sub-animation restarts at the segment boundary, so the port's late entry shows up directly as a phase lag: port at t=6.20 s looks like the original at t~6.05 s, and at t=6.00-6.15 s the port is still finishing the previous segment."
+  ],
+  "dials": [],
+  "feedback": [
+    "Only one thing is wrong: the interval that advances the sequence of sub-animations. The original holds each segment for exactly 0.600 s (14 segments = 8.400 s master cycle, measured to 0.001 s over 27 cycles); the port holds each for ~0.620 s (8.68 s cycle). Slow the port's segment clock by ~3.3% so a full cycle lasts 8.40 s and transitions land on exact 0.6 s multiples.",
+    "Nothing else needs touching: with the segment offset accounted for, the port's output is byte-identical to the original inside every segment, the 14 segments appear in the same order with the same waveforms, and the spatial 4-repeat layout, grayscale palette and brightness envelope all match.",
+    "Verification target after a fix: a dense --dump (every 0.05 s over 0..9 s) should give mean abs diff 0.0 on ALL 180 frames, not 120 of 180, and a --skip 200 window should still be matching rather than showing different segments."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "fine60",
+    "fps10",
+    "fps40",
+    "dump-a",
+    "dump-dense9",
+    "steps",
+    "regime-fast",
+    "late200",
+    "seed1234"
+  ]
+}
