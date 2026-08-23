@@ -5,8 +5,10 @@
 //
 // Usage (repo root, nix develop): node tools/hw-bench.mjs <device-ip> [report.md]
 //
-// Restores: rainbow, 300 px, the brightness it found. ~15 min for ~190
-// patterns, one after another on the actual strip.
+// Restores: rainbow, 300 px, the brightness it found. NOTE it restores 300
+// px regardless of the count it found — reset it afterwards if the device
+// was on something else. ~45 min for the current ~320-pattern gallery,
+// one pattern after another on the actual strip.
 
 import fs from "node:fs";
 // devices take LXP1 envelopes (source + LXBC bytecode), not raw source —
@@ -99,7 +101,7 @@ const lines = [];
 lines.push(`# Hardware soak + benchmark — ${new Date().toISOString().slice(0, 10)}`);
 lines.push("");
 lines.push(`*Device ${IP}, firmware v${status0.version}, ${status0.pixels} px SK9822, brightness ${bright0}.*`);
-lines.push(`*Regenerate: \`node tools/hw-bench.mjs <ip>\` (≈15 min; runs every gallery pattern on the strip).*`);
+lines.push(`*Regenerate: \`node tools/hw-bench.mjs <ip>\` (≈45 min; runs every gallery pattern on the strip).*`);
 lines.push("");
 lines.push(`## Summary`);
 lines.push("");
