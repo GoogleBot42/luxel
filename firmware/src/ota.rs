@@ -312,6 +312,13 @@ pub fn preboot_guard(flash: &mut FlashStorage<'static>) {
                 ..g
             },
         );
+        // The stack is the ONLY option here: preboot_guard runs before the
+        // `heap_allocator!` calls, so `alloc::vec!` (what every other
+        // OtaUpdater site in this file uses) would allocate from a heap that
+        // does not exist yet. PARTITION_TABLE_MAX_LEN is 3 KiB and this frame
+        // is transient and leaf-ish — well inside the 12 KiB budget that
+        // tools/stack-check.sh enforces against the whole linked image.
+        #[allow(clippy::large_stack_arrays)]
         let mut buffer = [0u8; PARTITION_TABLE_MAX_LEN];
         let rolled = match OtaUpdater::new(&mut *flash, &mut buffer) {
             Ok(mut ota) => ota.activate_next_partition().is_ok(),

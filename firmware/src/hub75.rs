@@ -80,6 +80,14 @@ pub struct Hub75Output {
 impl Hub75Output {
     pub fn new(lcd_cam: LCD_CAM<'static>, pins: Hub75Pins16<'static>, channel: DMA_CH0<'static>) -> Self {
         let dead = Self { hub75: None, back: None, pending: None };
+        // esp-hub75's macro expands to `StaticCell::uninit().write([EMPTY; N])`
+        // — the descriptor array is written straight into the static, but the
+        // literal is a value expression so clippy counts it as a stack array.
+        // It lives in a third-party macro we only carry as a patch file, and
+        // DMA descriptors must be in a fixed static anyway (the peripheral
+        // walks them), so heap is not an option. tools/stack-check.sh measures
+        // the real linked frames.
+        #[allow(clippy::large_stack_arrays)]
         let tx_descriptors = esp_hub75::hub75_dma_descriptors!(Fb);
         let (front, back) = match (alloc_fb(), alloc_fb()) {
             (Some(f), Some(b)) => (f, b),

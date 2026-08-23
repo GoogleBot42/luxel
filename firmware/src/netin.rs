@@ -40,18 +40,28 @@ fn live_write(offset: usize, data: &[u8], proto: u8) {
 
 /// Socket buffers: static, one set per call site (each task has its own
 /// macro expansion — a shared fn would double-init its StaticCells).
+///
+/// The multi-KB payload buffers use `ConstStaticCell`, not `StaticCell`:
+/// its initializer is a *const* expression stored in the static itself, so
+/// the zeroed array is materialized in `.bss` and `take()` just hands out
+/// the reference. `StaticCell::init([0; N])` instead builds the array as a
+/// value at the call site and moves it in — a multi-KB stack temporary the
+/// optimizer is only *likely* to elide (and what clippy's
+/// `large_stack_arrays` flags). The tiny metadata arrays stay `StaticCell`:
+/// `PacketMetadata::EMPTY` is not a const-constructible array element here,
+/// and they are well under the lint's 1 KB threshold anyway.
 macro_rules! bufs {
     () => {{
-        use static_cell::StaticCell;
+        use static_cell::{ConstStaticCell, StaticCell};
         static RX_META: StaticCell<[PacketMetadata; 4]> = StaticCell::new();
-        static RX_BUF: StaticCell<[u8; PKT * 2]> = StaticCell::new();
+        static RX_BUF: ConstStaticCell<[u8; PKT * 2]> = ConstStaticCell::new([0; PKT * 2]);
         static TX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
-        static TX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
+        static TX_BUF: ConstStaticCell<[u8; 16]> = ConstStaticCell::new([0; 16]);
         (
             RX_META.init([PacketMetadata::EMPTY; 4]).as_mut_slice(),
-            RX_BUF.init([0; PKT * 2]).as_mut_slice(),
+            RX_BUF.take().as_mut_slice(),
             TX_META.init([PacketMetadata::EMPTY; 1]).as_mut_slice(),
-            TX_BUF.init([0; 16]).as_mut_slice(),
+            TX_BUF.take().as_mut_slice(),
         )
     }};
 }

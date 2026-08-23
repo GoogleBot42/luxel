@@ -27,16 +27,21 @@ pub async fn dhcp_task(stack: Stack<'static>) -> ! {
     use edge_dhcp::server::{Server, ServerOptions};
     use edge_dhcp::{Options, Packet};
 
+    // Payload buffers are ConstStaticCell: the zeroed array is a const
+    // initializer living in the static (`.bss`), so nothing is built on the
+    // stack and moved in the way `StaticCell::init([0; 1600])` would.
     static RX_META: static_cell::StaticCell<[PacketMetadata; 4]> = static_cell::StaticCell::new();
-    static RX_BUF: static_cell::StaticCell<[u8; 1600]> = static_cell::StaticCell::new();
+    static RX_BUF: static_cell::ConstStaticCell<[u8; 1600]> =
+        static_cell::ConstStaticCell::new([0; 1600]);
     static TX_META: static_cell::StaticCell<[PacketMetadata; 4]> = static_cell::StaticCell::new();
-    static TX_BUF: static_cell::StaticCell<[u8; 1600]> = static_cell::StaticCell::new();
+    static TX_BUF: static_cell::ConstStaticCell<[u8; 1600]> =
+        static_cell::ConstStaticCell::new([0; 1600]);
     let mut sock = UdpSocket::new(
         stack,
         RX_META.init([PacketMetadata::EMPTY; 4]),
-        RX_BUF.init([0; 1600]),
+        RX_BUF.take(),
         TX_META.init([PacketMetadata::EMPTY; 4]),
-        TX_BUF.init([0; 1600]),
+        TX_BUF.take(),
     );
     sock.bind(67).expect("bind dhcp");
 
@@ -74,16 +79,20 @@ pub async fn dhcp_task(stack: Stack<'static>) -> ! {
 /// tries lands on the portal.
 #[embassy_executor::task]
 pub async fn dns_task(stack: Stack<'static>) -> ! {
+    // Same ConstStaticCell reasoning as dhcp_task — these sit exactly at the
+    // lint's 1 KB threshold, so keep them off the stack by construction.
     static RX_META: static_cell::StaticCell<[PacketMetadata; 4]> = static_cell::StaticCell::new();
-    static RX_BUF: static_cell::StaticCell<[u8; 1024]> = static_cell::StaticCell::new();
+    static RX_BUF: static_cell::ConstStaticCell<[u8; 1024]> =
+        static_cell::ConstStaticCell::new([0; 1024]);
     static TX_META: static_cell::StaticCell<[PacketMetadata; 4]> = static_cell::StaticCell::new();
-    static TX_BUF: static_cell::StaticCell<[u8; 1024]> = static_cell::StaticCell::new();
+    static TX_BUF: static_cell::ConstStaticCell<[u8; 1024]> =
+        static_cell::ConstStaticCell::new([0; 1024]);
     let mut sock = UdpSocket::new(
         stack,
         RX_META.init([PacketMetadata::EMPTY; 4]),
-        RX_BUF.init([0; 1024]),
+        RX_BUF.take(),
         TX_META.init([PacketMetadata::EMPTY; 4]),
-        TX_BUF.init([0; 1024]),
+        TX_BUF.take(),
     );
     sock.bind(53).expect("bind dns");
 

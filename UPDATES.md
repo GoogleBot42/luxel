@@ -1,5 +1,76 @@
 # Update log
 
+## 2026-08-22 — Hygiene sweep: stale wasm goldens, the clippy deny that
+## couldn't hold, and an indexed library sweep (#85, #79, #67)
+
+Three small things that had each been quietly blocking a gate.
+
+**#85 — `tools/wasm-smoke.mjs` goldens were stale.** The PB-exact
+floor-quantization change (`floor(v·255)`, `quantize()` in
+`crates/luxel-core/src/engine.rs`) moved the golden bytes, but only the
+native tests were updated; the JS mirror was red against a healthy build.
+Both goldens now match their native counterparts, cross-checked rather than
+copied from what the wasm happened to emit: the rainbow frame's 128s → 127
+(`tests/engine.rs::rainbow_golden_frame`), and — the one the issue missed —
+the 2D map/transform frame's 255s → 254, because grid world coords max out
+at ≈0.99998 and the quantization floors (`tests/semantics.rs::map_and_introspection`
+asserts exactly that). Comments now name the native test each golden mirrors.
+
+**#79 — `cargo clippy` failed on the firmware with 7
+`large_stack_arrays` errors** (clippy 1.96), so the deliberate
+`#![deny(clippy::large_stack_arrays)]` in `main.rs` gated nothing. Fixed
+without weakening the deny:
+
+- `netin.rs` (`bufs!`, 3 instantiations) and `provision.rs` (dhcp + dns
+  tasks) now use `static_cell::ConstStaticCell` instead of
+  `StaticCell` + `.init([0; N])`. This is a real fix, not an annotation:
+  the zeroed array becomes a *const* initializer stored in the static
+  itself (`.bss`), and `take()` just hands out the reference — no multi-KB
+  value built at the call site that the optimizer is merely *likely* to
+  elide. The 1024-byte DNS buffers were converted too; they sit exactly on
+  the lint threshold. Metadata arrays stay `StaticCell` (not
+  const-constructible here, and far under the threshold).
+- `ota.rs:315` (`preboot_guard`) keeps its 3 KiB stack array under a scoped
+  `#[allow]` with the real constraint spelled out: it runs *before* the
+  `heap_allocator!` calls, so the `alloc::vec!` every other `OtaUpdater`
+  site in that file uses would allocate from a heap that does not exist yet.
+- `hub75.rs:83` likewise — the array is inside esp-hub75's
+  `hub75_dma_descriptors!` macro (third-party, carried as a patch file),
+  and DMA descriptors must live in a fixed static anyway.
+
+Verification: `cargo clippy --release` clean (0 errors, warning count
+unchanged at 32) on **board-c3-devkit** (default), **board-c6-devkit**,
+**board-athom-music** (Xtensa/esp32) and **board-s3-devkit,hub75** — the
+last is where the 7th error lives, invisible to a default-feature run.
+`cargo build --release` still builds; `.bss` and `.data` are byte-identical
+to master (296392 / 9564), `.text` +20 B — the buffers did not move out of
+`.bss`. `tools/stack-check.sh` identical before and after: c3
+`.stack` 39616 B over 1179 functions, largest frame 8944 B; the default
+pixelblaze-v3 board `.stack` 29372 B over 1260 functions — no function over
+the 12288 B budget on either.
+
+Note for future Xtensa clippy runs: `cargo clippy` picks `clippy-driver`
+off `PATH`, so the esp toolchain's `bin/` must be *prepended* to `PATH` —
+setting `RUSTC` alone (what `stack-check.sh` does, which is enough for
+plain builds) leaves mainline clippy compiling the fork's `core` and it
+dies on intrinsic mismatches.
+
+**#67 — `tools/check-library.sh`**, the library sweep every session was
+re-deriving from prose. Builds `luxel-cli`, runs `luxel check` (compile +
+LXBC round-trip + 3-frame smoke) over every pattern in `library/` on both
+rigs the established acceptance uses — `check`'s default 10×10 and an
+explicit 16×16 — prints a per-grid pass count plus the file and engine
+stage/error for each failure, and exits non-zero if any failed. `GRIDS=`
+overrides the rig list, an optional positional arg points it at another
+directory. Indexed in `docs/tools.md`, alongside a row for
+`tools/wasm-smoke.mjs`, which turned out to be the one script in `tools/`
+the index had never listed.
+
+Verification: sweep run end to end — **322/322 on the default grid,
+322/322 on 16×16**. `cargo test -p luxel-core --release` green (163 tests,
+0 failed). `node tools/wasm-smoke.mjs` passes against a freshly built
+`luxel_wasm.wasm`.
+
 ## 2026-08-22 — Output-only port verifier: render-and-judge harness for
 ## the clean-room library (tools/verify/)
 

@@ -35,7 +35,9 @@ assert.ok(h >= 0, `compile failed: ${response()}`);
 const px = e.lx_frame(h, 0);
 const rgb = [...mem().slice(px, px + 12)];
 // must match the native golden test bytes exactly
-assert.deepStrictEqual(rgb, [255, 0, 0, 128, 255, 0, 0, 255, 255, 128, 0, 255]);
+// (crates/luxel-core/tests/engine.rs::rainbow_golden_frame — the 127s are
+// the floor-quantized, PB-exact values, not a rounding slip)
+assert.deepStrictEqual(rgb, [255, 0, 0, 127, 255, 0, 0, 255, 255, 127, 0, 255]);
 assert.strictEqual(e.lx_take_error(h), 0);
 
 // controls + vars round-trip
@@ -74,7 +76,9 @@ assert.ok(h3 >= 0, response());
 e.lx_set_map_grid(h3, 2, 2);
 const px3 = e.lx_frame(h3, 0);
 const rgb3 = [...mem().slice(px3, px3 + 12)];
-assert.deepStrictEqual(rgb3, [0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0]);
+// grid world coords max out at ≈0.99998, so the floored quantization gives
+// 254, not 255 — same golden as crates/luxel-core/tests/semantics.rs::map_and_introspection
+assert.deepStrictEqual(rgb3, [0, 0, 0, 254, 0, 0, 0, 254, 0, 254, 254, 0]);
 
 e.lx_free(h);
 e.lx_free(h2);
