@@ -28,6 +28,11 @@ these before trusting any build/test failure as a real regression.
 3b. `firmware/creds.env` (gitignored WiFi creds) — required by any firmware build
    (`build-esp32.sh` reads it). Copy it from the main checkout:
    `cp /home/googlebot/workspace/pixler/firmware/creds.env firmware/creds.env`.
+3c. `firmware/vendor/esp-hub75` (gitignored symlink to a patched-crate store
+   path) — created automatically by the devshell's shellHook, so it appears on
+   the first `nix develop` in the worktree. Only bare-`cargo`-outside-the-shell
+   builds ever see it missing; the fix is entering the devshell, not copying
+   anything. See firmware/patches/README.md.
 3c. Device flash dumps (gitignored `*.bin` in the repo root: `athom-wled-*.bin`,
    `pb-v3-stock.bin`) — required by the QEMU suite (`tools/qemu/run-all.py`
    autodetects them in the repo ROOT of the tree it runs from;
