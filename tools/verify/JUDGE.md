@@ -159,8 +159,13 @@ scan — corr(orig[t], port[k·t]) maximized over k — pins an exact factor.
 Two follow-ons once a speed factor exists: (1) `--skip` applies to BOTH
 sides, so a single run compares the sides at DIFFERENT phases of their own
 cycles — a fast port can look "frozen late" purely because its quiet point
-arrives earlier; pair runs with per-side-appropriate skips (orig at its
-event time, port at event×k) before reporting a late-window divergence.
+arrives earlier, and ANY single-moment image comparison (not just late
+windows) can invent structural differences that are pure phase (a "wedges
+vs streaks" or "two-colour vs rainbow" read can evaporate at matched
+phase). Pair runs with per-side-appropriate skips (orig at its event time,
+port at event×k — fractional --skip works) or use phase-independent
+distribution statistics before reporting any structural divergence between
+sides whose periods differ.
 (2) A slow hue-walk/super-cycle pattern may not repeat within 240 s — extend
 the survey (500 s at 2 fps is cheap) until you have seen the cycle land at
 least twice per side, or the period ratio is a guess.
@@ -623,6 +628,12 @@ And the interaction cuts BOTH ways: a dial that is live when set alone can go
 completely inert once a second control is pinned (a port gating one feature on
 another's value). When you find a dial-gating structure, re-check at least one
 RESPONSIVE dial inside each gating state too — not only the inert ones.
+A sharp tool for suspected control-mapping bugs: the CROSS-DIALED pairing —
+set DIFFERENT values on the two sides (`--controls-orig "dial=1"
+--controls-port "dial=0"`) and test for byte-identity. Proving "orig at 1 ==
+port at 0 exactly" turns a vague colour gap into a precise "the selector is
+reversed/shifted; the looks themselves are perfect" finding.
+
 Also: an UNTOUCHED default can sit OUTSIDE the range any dial value reaches
 (e.g. an untouched slope of +0.98 when the slider spans 0..−0.98) — if no
 sweep value reproduces the untouched render, that's a real property of the
