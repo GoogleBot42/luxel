@@ -1,0 +1,60 @@
+{
+  "slug": "kitt-w-color-picker",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Both sides are the same Knight-Rider scanner — one solid hard-edged bar bouncing left/right on the 60 px strip in a colour taken from an hsvPicker — but the port's sweep is 1.6x slower, its bar ~1.5x narrower and its output ~2.5x dimmer.",
+  "observations": [
+    "Structure (both, default rig 60 px, 20 fps, picker dialed 0.6,1,1): a single contiguous bar of one flat colour, hard edges, exactly 0 outside it — no fade tail at the default frame rate on either side. Original bar is 13 px wide; port bar is 8-9 px wide (--dump, ctl/dump runs).",
+    "Motion (both): a perfectly linear triangle bounce between the strip ends, no easing, identical extents (bar centroid runs ~3 px to ~55 px on both). Centroid autocorrelation over 400 consecutive dumped frames at 20 fps: original period = 10 frames = 0.500 s per full out-and-back cycle (13 px/frame, ~260 px/s); port period = 16 frames = 0.800 s (7.5 px/frame, ~150 px/s). The port is 1.6x slower.",
+    "The 13 px vs 8-9 px bar width equals each side's own per-frame travel (confirmed at 40 fps: original tiers are ~6.5 px = its 40 fps step, port tiers ~4 px = its 40 fps step), so the width gap is most likely a consequence of the speed gap rather than an independent bar-length constant.",
+    "Brightness: at the same picker value the original peaks at 32/255 and the port at 13/255 (~2.5x dimmer). Holds untouched (red: orig [32,0,0], port [13,0,0]), at every picker hue, and at every frame rate where both render. meanBrightness over a 120 s window: orig 2.7 avg, port 1.0 avg; motionLit orig 13.3 avg, port 5.0 avg.",
+    "Colour: hue tracks the picker identically on both sides — hue 0 gives [32,0,0]/[13,0,0], hue 0.33 gives [0,32,0]/[0,13,0], hue 0.6 gives [0,12,32]/[0,5,13] (same G:B ratio, 0.375 vs 0.385). Untouched default is red on both.",
+    "Control surface mismatch: original exposes hsvPicker `hsvPickerPrimaryColor` (label \"PrimaryColor\"); port exposes hsvPicker `hsvPickerColor` (label \"Color\"). Same kind and count, different name and label.",
+    "Steady state: both are exactly periodic and stable. A 120 s / 20 fps run shows a uniform waterfall with no regimes, modes or drift on either side (brightnessTrend steady, first==last); a --skip 60 dump reproduces the same 10-frame / 16-frame centroid cycles seen at t=0.",
+    "Shared (NOT a divergence): both sides are frame-rate coupled in brightness. At 5, 10 and 12 fps BOTH render completely black (verified by --dump, every pixel 0); at 15 fps the original is barely lit and the port is already black; from 20 fps up both render normally and get brighter with fps. Sweep speed itself is fps-invariant on both (orig 0.5 s cycle at 20 and 40 fps).",
+    "Shared (NOT a divergence): a multi-step decaying trail appears on both sides only at high frame rates. At 40 fps the original draws 3 tiers (107 head / 32 / 4 tail, ~6.5 px each, head leading) and the port draws 2 tiers (82 head / 13 tail, ~4 px each). At 20 fps both collapse to a single flat tier.",
+    "Not random-driven: seed 1 and seed 1234 give byte-identical stats on both sides.",
+    "Harness note: the standard 60 s / 5 fps survey is useless here — both sides render entirely black at that rate. The real survey used was 120 s at 20 fps."
+  ],
+  "dials": [
+    {
+      "name": "hsvPickerPrimaryColor (orig) / hsvPickerColor (port)",
+      "origEffect": "hsvPicker; only the HUE component is consumed — hue sets the bar colour (0 red, 0.33 green, 0.6 blue-cyan) at a fixed peak of 32/255. Saturation (swept 0.3 vs 1) and value (swept 0.05, 0.4, 1) produce byte-identical output, so s/v are ignored. Probe: responsive, maxDelta 6.29, maxDeltaLit 32.00.",
+      "portEffect": "hsvPicker; identical semantics — hue sets the bar colour with the same hue-to-RGB mapping, saturation and value ignored over the same sweeps. Only the peak level differs (13/255). Probe: responsive, maxDelta 1.81, maxDeltaLit 13.00.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Speed: the port's scanner is 1.6x too slow. Original completes a full out-and-back sweep of the 60 px strip in 0.500 s (10 frames at 20 fps, ~260 px/s); the port takes 0.800 s (16 frames, ~150 px/s). Speed it up so a full bounce cycle lands at 0.50 s on a 60 px strip.",
+    "Brightness: the port is ~2.5x too dim at every setting. At the same picker colour the original's lit pixels read 32/255 and the port's 13/255 (untouched red: 32 vs 13; hue 0.6: [0,12,32] vs [0,5,13]). Raise the port's output level by ~2.5x.",
+    "Bar width: the original's lit bar is 13 px on a 60 px strip, the port's 8-9 px. This tracks each side's per-frame travel, so fixing the speed will likely fix the width too — re-measure after the speed fix rather than widening the bar independently.",
+    "Control naming: the original's picker is named `hsvPickerPrimaryColor` with label \"PrimaryColor\"; the port names it `hsvPickerColor` / \"Color\". Rename the port's control to match the original's exposed name and label.",
+    "Everything else already matches and should not be touched: linear (non-eased) triangle bounce, identical end-to-end travel extents, hard-edged bar with no tail at 20 fps, hue-only picker semantics with saturation and value ignored, red default, and perfectly stable steady state out to 120 s."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey20",
+    "probe",
+    "dial-blue",
+    "dump-blue",
+    "dump-dense",
+    "track20",
+    "late-skip60",
+    "untouched-dump",
+    "fps10",
+    "fps40",
+    "fpsx5",
+    "fpsx12",
+    "fpsx15",
+    "fpsx25",
+    "fpsx30",
+    "ctl-hue0",
+    "ctl-hue33",
+    "ctl-sat30",
+    "ctl-val40",
+    "ctl-val05",
+    "seed1234"
+  ]
+}

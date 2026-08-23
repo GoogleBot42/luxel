@@ -1,0 +1,40 @@
+{
+  "slug": "kitt",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Both sides render the same Knight-Rider bouncing scanner with an exponentially-decaying trail, but the port sweeps at exactly half the original's speed (3.3 s round trip vs 1.65 s) and its bright trail head is orange-tinted and clipped where the original stays pure red.",
+  "observations": [
+    "Structure matches in kind: on the default 60 px strip both sides draw a single bright head that bounces end-to-end (peak index reaches 0 and 59 on both) trailing an exponentially-fading tail. Neither side has any controls (probe: 'no settable controls' on both) — the control surfaces agree.",
+    "SPEED, the headline divergence: peak-index tracking over a 161-frame dump (label dump-track20, 20 fps) gives orig ~3.7 px/frame = ~74 px/s, full traversal ~0.8 s, round trip ~1.65 s; port ~1.8 px/frame = ~36 px/s, traversal ~1.65 s, round trip ~3.3 s. Ratio is 2.0x. Over the 30 s survey20 waterfall the port completes ~9 round trips where the original completes ~18.",
+    "The 2x factor is not a rig artefact: re-rendered at --pixels 300 (label px300) the original still traverses the strip in 0.8 s and the port in ~1.6 s, so both sides express speed as a fraction of the strip per second and the 2x gap holds at any pixel count.",
+    "Both sides are frame-rate-INVARIANT in head motion: measured by --dump peak position at --fps 10, 20 and 40 (labels fps10 / dump-track20 / fps40), orig holds 74 px/s and port holds 36 px/s at all three rates. No frame-rate coupling in the sweep on either side.",
+    "COLOR: the original is strictly pure red at every brightness — meanG and meanB are 0 (min 0, max 0) across the whole 30 s survey20 window, and its brightest trail pixel is exactly (230,0,0), never reaching full scale. The port's trail is red at the dim end but warms and clips toward the head: dumped values run (41,2,0), (95,8,0), (157,18,0), (219,30,0), (255,39,0), (255,50,0) — red railed at 255 with green up to 50, i.e. an orange head. Port meanG averages 3.8 over the window, orig 0. Port mean brightness is correspondingly higher (11.4 vs 9.3).",
+    "TRAIL LENGTH: the fade time constant is similar at the default rate — both sides show ~22 frames of history above zero at 20 fps (~1.1 s of tail) — but because the port's head is half as fast, its tail covers only ~40 px of the 60 px strip while the original's covers ~80 px, i.e. more than the whole strip. Consequence in the waterfalls: the original is almost never fully dark anywhere, while the port leaves large black regions between sweeps (clearly visible in survey20 port.png vs orig.png).",
+    "FADE is frame-rate coupled on the port only. The per-frame brightness ratio along the port's trail is ~1.18 at 10, 20 AND 40 fps, so its tail lasts a fixed ~22 frames (1.7 s at 10 fps, 1.1 s at 20 fps, 0.78 s at 40 fps). The original's ratio changes with rate (~1.30/frame at 10 fps, ~1.13 at 20 fps, ~1.07 at 40 fps), holding the tail at a constant ~1.0-1.1 s of wall time at every rate. At the default 20 fps the two happen to coincide, so this is invisible in the baseline render but would change the port's look on hardware running at a different frame rate.",
+    "Both sides are stable and non-degenerate: over 30 s (survey20) both report brightnessTrend 'steady', zeroMotionFrames 1 (the unavoidable first frame), no compile or runtime errors. A --skip 60 late window (label late) is indistinguishable from the baseline on both sides. No modes or long-period regimes exist — the whole pattern is one periodic zigzag whose only cycle is the round trip, seen many times over.",
+    "Neither side uses sensors (wantsSensors false on both) and neither responds to the seed: --seed 1234 (label seed1234) produced statistics identical to --seed 1 on both sides. Nothing stochastic to judge.",
+    "Harness note for readers of the survey run: at --fps 5 the ORIGINAL aliases into five frozen vertical lines (its head moves ~14.8 px/frame at that rate, nearly a quarter strip) and posts mean brightness 2. That is sampling, not a dead pattern — at 10/20/40 fps it is fully alive. The port, being half as fast, does not alias as hard at 5 fps.",
+    "The dotted/comb texture of both trails (lit pixels separated by dark gaps) is the same mechanism on both sides — the trail is the head's per-frame position history, so gaps equal the per-frame step. It is a render-rate artefact, not a divergence; the port's gaps are simply narrower because it steps less far per frame."
+  ],
+  "dials": [],
+  "feedback": [
+    "Halve the port's sweep period: the port takes ~3.3 s per bounce round trip where the original takes ~1.65 s (traversal 1.65 s vs 0.8 s). Doubling the port's scan rate should be a single speed constant. Verify by peak-index tracking: the original's head moves at 74 px/s on a 60 px strip and at 370 px/s on a 300 px strip, i.e. 1.23 strip-lengths per second.",
+    "After doubling the speed, also double the tail's decay time so the spatial tail length ends up right. At the default 20 fps both sides currently hold ~1.1 s of history; if only the speed is fixed, the port's tail will still cover ~80 px worth. The target look is the original's: at 60 px the trail is long enough to wrap past the far end, so the strip is never fully dark — the port currently leaves a wide black gap behind the head.",
+    "Make the port's trail fade time-based rather than per-frame. The port's fade multiplies by a fixed ~0.85 every frame regardless of rate (measured identical at 10, 20 and 40 fps), while the original holds a constant ~1.0-1.1 s tail at every rate. This is invisible at 20 fps but will shorten the tail on faster hardware.",
+    "Fix the head colour. The original is pure red at every brightness — green and blue are exactly 0 in every frame of a 30 s window — and its peak is (230,0,0), never full scale. The port's head reads (255,50,0), an orange, with green appearing from about red=25 upward and growing faster than red until red clips. Drop the green component entirely and cap the peak around 230 rather than letting it rail at 255; as it stands the port's mean brightness is ~20% high and its head reads amber instead of Knight-Rider red.",
+    "No control work is needed: both sides expose zero controls and that matches."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey20",
+    "dump-track20",
+    "fps10",
+    "fps40",
+    "px300",
+    "late",
+    "seed1234"
+  ]
+}
