@@ -1,0 +1,2123 @@
+{
+  "pairs": [
+    {
+      "slug": "1-usflag-blink",
+      "libFile": "library/1-usflag-blink.js",
+      "epeFile": "corpus/S2GRkFEY8WdqeH5kd.epe",
+      "epeName": "1-USFLAG_BLINK",
+      "rig": "strip"
+    },
+    {
+      "slug": "1-white-fade",
+      "libFile": "library/1-white-fade.js",
+      "epeFile": "corpus/L8gw7T2xnNrELb3m5.epe",
+      "epeName": "1 White Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "1d-aurora-borealis",
+      "libFile": "library/1d-aurora-borealis.js",
+      "epeFile": "corpus/FyTq6qcpz7SbRLjHY.epe",
+      "epeName": "1D Aurora Borealis",
+      "rig": "strip"
+    },
+    {
+      "slug": "2-colors",
+      "libFile": "library/2-colors.js",
+      "epeFile": "corpus/XSK4WeAxNKutchHro.epe",
+      "epeName": "2 Colors",
+      "rig": "strip"
+    },
+    {
+      "slug": "2-purple-fade",
+      "libFile": "library/2-purple-fade.js",
+      "epeFile": "corpus/Xp2eZ6cxX9hQTJ6op.epe",
+      "epeName": "2 Purple Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "2d-bouncing-additive-primaries",
+      "libFile": "library/2d-bouncing-additive-primaries.js",
+      "epeFile": "corpus/kLnxBack5F9En5ZR4.epe",
+      "epeName": "2D Bouncing Additive Primaries",
+      "rig": "grid"
+    },
+    {
+      "slug": "2d-canvas-example",
+      "libFile": "library/2d-canvas-example.js",
+      "epeFile": "corpus/xhGuirrqE6LBLaD5o.epe",
+      "epeName": "2D canvas example",
+      "rig": "grid"
+    },
+    {
+      "slug": "2d-clock-with-hand-color-pickers",
+      "libFile": "library/2d-clock-with-hand-color-pickers.js",
+      "epeFile": "corpus/LKxjLSFNKYE2YWzQg.epe",
+      "epeName": "2d Clock with Hand Color Pickers",
+      "rig": "grid"
+    },
+    {
+      "slug": "2d-fireworks-fade",
+      "libFile": "library/2d-fireworks-fade.js",
+      "epeFile": "corpus/tMc8n9TTToG2pweJz.epe",
+      "epeName": "2D Fireworks Fade",
+      "rig": "grid"
+    },
+    {
+      "slug": "2d-sinc-theta-theta",
+      "libFile": "library/2d-sinc-theta-theta.js",
+      "epeFile": "corpus/LLTDH3C9FCoGf9tM2.epe",
+      "epeName": "2D sinc(theta)/theta",
+      "rig": "grid"
+    },
+    {
+      "slug": "2d-spiral-twirls",
+      "libFile": "library/2d-spiral-twirls.js",
+      "epeFile": "corpus/4NSkQiZFaDbwGwgsT.epe",
+      "epeName": "2D Spiral Twirls",
+      "rig": "grid"
+    },
+    {
+      "slug": "2d-wandering-fireball",
+      "libFile": "library/2d-wandering-fireball.js",
+      "epeFile": "corpus/3phupq8mRMWuvACxw.epe",
+      "epeName": "2D Wandering Fireball",
+      "rig": "grid"
+    },
+    {
+      "slug": "3-color-rotation",
+      "libFile": "library/3-color-rotation.js",
+      "epeFile": "corpus/jbnv2oKd3XainEAqT.epe",
+      "epeName": "3 color rotation",
+      "rig": "strip"
+    },
+    {
+      "slug": "3-violet-fade",
+      "libFile": "library/3-violet-fade.js",
+      "epeFile": "corpus/u9eAo7YHQ4iYqZhQH.epe",
+      "epeName": "3 Violet Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "3d-rotation-spotlights",
+      "libFile": "library/3d-rotation-spotlights.js",
+      "epeFile": "corpus/zHpFFNks32veypm69.epe",
+      "epeName": "3D Rotation / Spotlights",
+      "rig": "cloud"
+    },
+    {
+      "slug": "4-blue-fade",
+      "libFile": "library/4-blue-fade.js",
+      "epeFile": "corpus/xMcPGtXHZfPJHHTGS.epe",
+      "epeName": "4 Blue Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "4th",
+      "libFile": "library/4th.js",
+      "epeFile": "corpus/ghv6KpRCcSGQ6YcFy.epe",
+      "epeName": "4th",
+      "rig": "strip"
+    },
+    {
+      "slug": "5-teal-fade",
+      "libFile": "library/5-teal-fade.js",
+      "epeFile": "corpus/s9Wjw8rmLrQYubFpW.epe",
+      "epeName": "5 Teal Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "6-green-fade",
+      "libFile": "library/6-green-fade.js",
+      "epeFile": "corpus/GdWk2t6vCEYwW8aLv.epe",
+      "epeName": "6 Green Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "7-yelllow-fade",
+      "libFile": "library/7-yelllow-fade.js",
+      "epeFile": "corpus/XBMGWi4Af5GvkLH4n.epe",
+      "epeName": "7 Yelllow Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "8-red-fade",
+      "libFile": "library/8-red-fade.js",
+      "epeFile": "corpus/gAd5nfxi7QMD26yk8.epe",
+      "epeName": "8 Red Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "80s-kid-show",
+      "libFile": "library/80s-kid-show.js",
+      "epeFile": "corpus/YNbYB5x6h6BTAPexk.epe",
+      "epeName": "80s kid show",
+      "rig": "grid"
+    },
+    {
+      "slug": "9-pink-fade",
+      "libFile": "library/9-pink-fade.js",
+      "epeFile": "corpus/yFsA3Dm2cZMoBWsAs.epe",
+      "epeName": "9 Pink Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "a-peak-integrator",
+      "libFile": "library/a-peak-integrator.js",
+      "epeFile": "corpus/tno34uLKqLtBjuNRD.epe",
+      "epeName": "A Peak Integrator",
+      "rig": "strip"
+    },
+    {
+      "slug": "accelerometer-level-example",
+      "libFile": "library/accelerometer-level-example.js",
+      "epeFile": "corpus/y6HuinPz2cQzFykDG.epe",
+      "epeName": "Accelerometer level example",
+      "rig": "grid"
+    },
+    {
+      "slug": "all-lasers-fire",
+      "libFile": "library/all-lasers-fire.js",
+      "epeFile": "corpus/CFkpPy9cxyAQjtzuN.epe",
+      "epeName": "All Lasers Fire",
+      "rig": "grid"
+    },
+    {
+      "slug": "amoeba",
+      "libFile": "library/amoeba.js",
+      "epeFile": "corpus/fPTCaBDjpCMX7uq4a.epe",
+      "epeName": "amoeba",
+      "rig": "strip"
+    },
+    {
+      "slug": "an-intro-to-pixelblaze-code",
+      "libFile": "library/an-intro-to-pixelblaze-code.js",
+      "epeFile": "corpus/vkpGsR88dcJmXfevp.epe",
+      "epeName": "An Intro to Pixelblaze Code",
+      "rig": "strip"
+    },
+    {
+      "slug": "angle-and-radius-from-coordinates",
+      "libFile": "library/angle-and-radius-from-coordinates.js",
+      "epeFile": "corpus/nRYA2Bxvuje4HAWsa.epe",
+      "epeName": "angle and radius from coordinates",
+      "rig": "grid"
+    },
+    {
+      "slug": "angry-xmass-3d",
+      "libFile": "library/angry-xmass-3d.js",
+      "epeFile": "corpus/dPtrN7Qk2bC3LSa7L.epe",
+      "epeName": "Angry Xmass 3D",
+      "rig": "cloud"
+    },
+    {
+      "slug": "animated-asterisks-2d",
+      "libFile": "library/animated-asterisks-2d.js",
+      "epeFile": "corpus/WCJNmCNAMuQb6yvAA.epe",
+      "epeName": "Animated Asterisks 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "audio-volume-meter",
+      "libFile": "library/audio-volume-meter.js",
+      "epeFile": "corpus/mdfqFWvQz54YqdzQG.epe",
+      "epeName": "Audio Volume Meter",
+      "rig": "strip"
+    },
+    {
+      "slug": "aurorashivers",
+      "libFile": "library/aurorashivers.js",
+      "epeFile": "corpus/b5AiMeg6knYbyHEuZ.epe",
+      "epeName": "aurorashivers",
+      "rig": "strip"
+    },
+    {
+      "slug": "austin-fc",
+      "libFile": "library/austin-fc.js",
+      "epeFile": "corpus/hxBrWSZMjftfaTaoW.epe",
+      "epeName": "Austin FC",
+      "rig": "strip"
+    },
+    {
+      "slug": "automap",
+      "libFile": "library/automap.js",
+      "epeFile": "corpus/yyd4PrwLsai8u83Dc.epe",
+      "epeName": "Automap",
+      "rig": "strip"
+    },
+    {
+      "slug": "autumn-colors",
+      "libFile": "library/autumn-colors.js",
+      "epeFile": "corpus/WqPXx7uBwDsYwwJmx.epe",
+      "epeName": "Autumn Colors",
+      "rig": "strip"
+    },
+    {
+      "slug": "b-lightning-flashes",
+      "libFile": "library/b-lightning-flashes.js",
+      "epeFile": "corpus/9LN8AR5TjKJGfLfa3.epe",
+      "epeName": "b_lightning_flashes",
+      "rig": "strip"
+    },
+    {
+      "slug": "bessel-chaos",
+      "libFile": "library/bessel-chaos.js",
+      "epeFile": "corpus/SFawM7bofPWtYy8jy.epe",
+      "epeName": "Bessel Chaos",
+      "rig": "strip"
+    },
+    {
+      "slug": "blink-fade",
+      "libFile": "library/blink-fade.js",
+      "epeFile": "corpus/Y7fwpHpoHkfaf4NdT.epe",
+      "epeName": "blink fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "blinky-eyes-2d",
+      "libFile": "library/blinky-eyes-2d.js",
+      "epeFile": "corpus/PZgrLCEZcrup57cuB.epe",
+      "epeName": "Blinky Eyes 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "block-reflections",
+      "libFile": "library/block-reflections.js",
+      "epeFile": "corpus/QqZqNsLmk2CAvheRR.epe",
+      "epeName": "block reflections",
+      "rig": "strip"
+    },
+    {
+      "slug": "blue-holiday-candle-2d",
+      "libFile": "library/blue-holiday-candle-2d.js",
+      "epeFile": "corpus/9RaWKrtdaqsTMN8to.epe",
+      "epeName": "Blue Holiday Candle 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "blue-holiday-star-2d",
+      "libFile": "library/blue-holiday-star-2d.js",
+      "epeFile": "corpus/SCwdLkm9BfNxFncaq.epe",
+      "epeName": "Blue Holiday Star 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "bouncer3d",
+      "libFile": "library/bouncer3d.js",
+      "epeFile": "corpus/EhA8fr9WHBPTf92rZ.epe",
+      "epeName": "Bouncer3D",
+      "rig": "grid"
+    },
+    {
+      "slug": "bouncing-balls-2d",
+      "libFile": "library/bouncing-balls-2d.js",
+      "epeFile": "corpus/k6H5xvKpbuChrEcLo.epe",
+      "epeName": "Bouncing Balls 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "bouncing-balls-hsv",
+      "libFile": "library/bouncing-balls-hsv.js",
+      "epeFile": "corpus/aHtDo3qMYoKHwuqMt.epe",
+      "epeName": "bouncing balls - hsv",
+      "rig": "strip"
+    },
+    {
+      "slug": "bouncing-balls-rgb",
+      "libFile": "library/bouncing-balls-rgb.js",
+      "epeFile": "corpus/vbSQZCm7rbHWa4uNv.epe",
+      "epeName": "bouncing balls - rgb",
+      "rig": "strip"
+    },
+    {
+      "slug": "bouncing-rgb-balls-2d",
+      "libFile": "library/bouncing-rgb-balls-2d.js",
+      "epeFile": "corpus/uDifoaigT7KzmgYWE.epe",
+      "epeName": "Bouncing RGB Balls - 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "bouncy-boxes",
+      "libFile": "library/bouncy-boxes.js",
+      "epeFile": "corpus/JQd3rFSF9waCn843M.epe",
+      "epeName": "Bouncy Boxes",
+      "rig": "grid"
+    },
+    {
+      "slug": "breakout-2d",
+      "libFile": "library/breakout-2d.js",
+      "epeFile": "corpus/92wsuZDBB8juyRDFZ.epe",
+      "epeName": "Breakout 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "bubble-column",
+      "libFile": "library/bubble-column.js",
+      "epeFile": "corpus/88jB89jqQojktXgc4.epe",
+      "epeName": "Bubble Column",
+      "rig": "strip"
+    },
+    {
+      "slug": "bustle",
+      "libFile": "library/bustle.js",
+      "epeFile": "corpus/btqgH98DPPhBRGd78.epe",
+      "epeName": "bustle",
+      "rig": "strip"
+    },
+    {
+      "slug": "butterfly-2d",
+      "libFile": "library/butterfly-2d.js",
+      "epeFile": "corpus/tjRYAHpNQgyp8Bfck.epe",
+      "epeName": "Butterfly 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "carrie-s-holiday-star-2d",
+      "libFile": "library/carrie-s-holiday-star-2d.js",
+      "epeFile": "corpus/3BLyowkuhmGXkQdRr.epe",
+      "epeName": "Carrie's Holiday Star 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "cellular-automata-1d",
+      "libFile": "library/cellular-automata-1d.js",
+      "epeFile": "corpus/gyf6DBnqCp2v83LDi.epe",
+      "epeName": "Cellular Automata 1D",
+      "rig": "strip"
+    },
+    {
+      "slug": "chasing-rainbows-hsluv",
+      "libFile": "library/chasing-rainbows-hsluv.js",
+      "epeFile": "corpus/MXwTvKYeRnv5cS5oL.epe",
+      "epeName": "Chasing Rainbows & HSLuv",
+      "rig": "strip"
+    },
+    {
+      "slug": "chill-confetti",
+      "libFile": "library/chill-confetti.js",
+      "epeFile": "corpus/vm9GxbDsrmnxedBKJ.epe",
+      "epeName": "chill confetti",
+      "rig": "strip"
+    },
+    {
+      "slug": "christmas-candy-cane",
+      "libFile": "library/christmas-candy-cane.js",
+      "epeFile": "corpus/MfbKaxpjBR7B6x73k.epe",
+      "epeName": "Christmas Candy Cane",
+      "rig": "strip"
+    },
+    {
+      "slug": "christmas-lights",
+      "libFile": "library/christmas-lights.js",
+      "epeFile": "corpus/imomNYcvmaCGqSrdy.epe",
+      "epeName": "Christmas Lights",
+      "rig": "strip",
+      "ambiguous": true,
+      "epeIds": [
+        "imomNYcvmaCGqSrdy",
+        "sEnLA7DKfxKPdZS48"
+      ],
+      "epeFiles": [
+        "corpus/imomNYcvmaCGqSrdy.epe",
+        "corpus/sEnLA7DKfxKPdZS48.epe"
+      ]
+    },
+    {
+      "slug": "christmas-lights-2",
+      "libFile": "library/christmas-lights-2.js",
+      "epeFile": "corpus/imomNYcvmaCGqSrdy.epe",
+      "epeName": "Christmas Lights",
+      "rig": "strip",
+      "ambiguous": true,
+      "epeIds": [
+        "imomNYcvmaCGqSrdy",
+        "sEnLA7DKfxKPdZS48"
+      ],
+      "epeFiles": [
+        "corpus/imomNYcvmaCGqSrdy.epe",
+        "corpus/sEnLA7DKfxKPdZS48.epe"
+      ]
+    },
+    {
+      "slug": "christmas-rg-fade",
+      "libFile": "library/christmas-rg-fade.js",
+      "epeFile": "corpus/JrF3tFojCMTpmAp3q.epe",
+      "epeName": "Christmas RG Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "christmas-string-lights",
+      "libFile": "library/christmas-string-lights.js",
+      "epeFile": "corpus/eYrAmto2qZbDJ8zuG.epe",
+      "epeName": "Christmas string lights",
+      "rig": "strip"
+    },
+    {
+      "slug": "christmaslights",
+      "libFile": "library/christmaslights.js",
+      "epeFile": "corpus/mJf7XLtvd8RvfTjpX.epe",
+      "epeName": "ChristmasLights",
+      "rig": "strip",
+      "ambiguous": true,
+      "epeIds": [
+        "mJf7XLtvd8RvfTjpX",
+        "xaek4MS4DtuTJxSWq"
+      ],
+      "epeFiles": [
+        "corpus/mJf7XLtvd8RvfTjpX.epe",
+        "corpus/xaek4MS4DtuTJxSWq.epe"
+      ]
+    },
+    {
+      "slug": "christmaslights-2",
+      "libFile": "library/christmaslights-2.js",
+      "epeFile": "corpus/mJf7XLtvd8RvfTjpX.epe",
+      "epeName": "ChristmasLights",
+      "rig": "strip",
+      "ambiguous": true,
+      "epeIds": [
+        "mJf7XLtvd8RvfTjpX",
+        "xaek4MS4DtuTJxSWq"
+      ],
+      "epeFiles": [
+        "corpus/mJf7XLtvd8RvfTjpX.epe",
+        "corpus/xaek4MS4DtuTJxSWq.epe"
+      ]
+    },
+    {
+      "slug": "christmaspewpew",
+      "libFile": "library/christmaspewpew.js",
+      "epeFile": "corpus/2n93mJRCoquZQddnB.epe",
+      "epeName": "ChristmasPewPew",
+      "rig": "strip"
+    },
+    {
+      "slug": "christmasstretch",
+      "libFile": "library/christmasstretch.js",
+      "epeFile": "corpus/ZRe9SSgZwo8neirBD.epe",
+      "epeName": "ChristmasStretch",
+      "rig": "strip"
+    },
+    {
+      "slug": "color-bands",
+      "libFile": "library/color-bands.js",
+      "epeFile": "corpus/vmCXgwbox8nCBqQig.epe",
+      "epeName": "color bands",
+      "rig": "strip"
+    },
+    {
+      "slug": "color-bands-buffered",
+      "libFile": "library/color-bands-buffered.js",
+      "epeFile": "corpus/MbWh4ZKPiJtPNyjxL.epe",
+      "epeName": "color bands (buffered)",
+      "rig": "strip"
+    },
+    {
+      "slug": "color-blend",
+      "libFile": "library/color-blend.js",
+      "epeFile": "corpus/vqP8NKjgXe8YSm8jP.epe",
+      "epeName": "Color Blend",
+      "rig": "strip"
+    },
+    {
+      "slug": "color-fade-pulse",
+      "libFile": "library/color-fade-pulse.js",
+      "epeFile": "corpus/Q5WqRki8CanTF3n9s.epe",
+      "epeName": "color fade pulse",
+      "rig": "strip"
+    },
+    {
+      "slug": "color-pick-fade",
+      "libFile": "library/color-pick-fade.js",
+      "epeFile": "corpus/PtdJSnDyxy9nWejeM.epe",
+      "epeName": "Color Pick Fade",
+      "rig": "strip"
+    },
+    {
+      "slug": "color-twinkle-bounce",
+      "libFile": "library/color-twinkle-bounce.js",
+      "epeFile": "corpus/p49GpaZRpfGHPNGuX.epe",
+      "epeName": "color twinkle bounce",
+      "rig": "strip"
+    },
+    {
+      "slug": "color-twinkles",
+      "libFile": "library/color-twinkles.js",
+      "epeFile": "corpus/aabwwBMMCEHQ8yLij.epe",
+      "epeName": "color twinkles",
+      "rig": "strip"
+    },
+    {
+      "slug": "colourful-fireflies",
+      "libFile": "library/colourful-fireflies.js",
+      "epeFile": "corpus/T4CqCKQs3TahbCapL.epe",
+      "epeName": "colourful fireflies",
+      "rig": "strip"
+    },
+    {
+      "slug": "complements-3d",
+      "libFile": "library/complements-3d.js",
+      "epeFile": "corpus/Eb5ieNq4Zit92SoQb.epe",
+      "epeName": "Complements 3D",
+      "rig": "grid"
+    },
+    {
+      "slug": "continuous-cellular-automata",
+      "libFile": "library/continuous-cellular-automata.js",
+      "epeFile": "corpus/NfQfmfQb8eG5zrYCt.epe",
+      "epeName": "Continuous Cellular Automata",
+      "rig": "grid"
+    },
+    {
+      "slug": "coolaura",
+      "libFile": "library/coolaura.js",
+      "epeFile": "corpus/zg2nzjth5jF3JmnPu.epe",
+      "epeName": "coolaura",
+      "rig": "strip"
+    },
+    {
+      "slug": "coral-plasma",
+      "libFile": "library/coral-plasma.js",
+      "epeFile": "corpus/TnnAcAX9a5Xze4YqF.epe",
+      "epeName": "Coral Plasma",
+      "rig": "grid"
+    },
+    {
+      "slug": "coronal-ejection-2d",
+      "libFile": "library/coronal-ejection-2d.js",
+      "epeFile": "corpus/mq6zDHQaoDd3wqf72.epe",
+      "epeName": "Coronal Mass Ejection 2D sliders",
+      "rig": "grid"
+    },
+    {
+      "slug": "coronal-mass-ejection",
+      "libFile": "library/coronal-mass-ejection.js",
+      "epeFile": "corpus/dueoKmMJLRwQb6ZN3.epe",
+      "epeName": "Coronal Mass Ejection",
+      "rig": "grid"
+    },
+    {
+      "slug": "crawling-spider-2d",
+      "libFile": "library/crawling-spider-2d.js",
+      "epeFile": "corpus/Pdvxh3xzAtvmanwLf.epe",
+      "epeName": "Crawling Spider 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "crossfading",
+      "libFile": "library/crossfading.js",
+      "epeFile": "corpus/ojKd3TwkYk6C9JLob.epe",
+      "epeName": "Crossfading",
+      "rig": "grid"
+    },
+    {
+      "slug": "crosstown-traffic-2d",
+      "libFile": "library/crosstown-traffic-2d.js",
+      "epeFile": "corpus/53DZNdW54zdpBkAW3.epe",
+      "epeName": "Crosstown Traffic 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "cube-fire-3d",
+      "libFile": "library/cube-fire-3d.js",
+      "epeFile": "corpus/RXTXgjsj2usgsHApe.epe",
+      "epeName": "cube fire 3D",
+      "rig": "grid"
+    },
+    {
+      "slug": "custom-sequences",
+      "libFile": "library/custom-sequences.js",
+      "epeFile": "corpus/M82AkZabqsnH7rc7J.epe",
+      "epeName": "Custom Sequences",
+      "rig": "strip"
+    },
+    {
+      "slug": "cyclic-cellular-automata-2d",
+      "libFile": "library/cyclic-cellular-automata-2d.js",
+      "epeFile": "corpus/eCZZDTeyo8dukuWrw.epe",
+      "epeName": "Cyclic Cellular Automata 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "cylon",
+      "libFile": "library/cylon.js",
+      "epeFile": "corpus/kRX9qpS55KLiyziWH.epe",
+      "epeName": "Cylon",
+      "rig": "strip"
+    },
+    {
+      "slug": "daftpunk",
+      "libFile": "library/daftpunk.js",
+      "epeFile": "corpus/TJGzDkMzjJEaR5KD9.epe",
+      "epeName": "DAFTPUNK",
+      "rig": "grid"
+    },
+    {
+      "slug": "dbzbattlefinal",
+      "libFile": "library/dbzbattlefinal.js",
+      "epeFile": "corpus/6Y2XsvEn2Qn62hjJT.epe",
+      "epeName": "DBZBattleFinal",
+      "rig": "grid"
+    },
+    {
+      "slug": "dimbypixel",
+      "libFile": "library/dimbypixel.js",
+      "epeFile": "corpus/vyX4CCoTqJrZoBGh5.epe",
+      "epeName": "dimbypixel",
+      "rig": "strip"
+    },
+    {
+      "slug": "dire-spider-2d",
+      "libFile": "library/dire-spider-2d.js",
+      "epeFile": "corpus/7bqSEZdvPK42pCNyA.epe",
+      "epeName": "Dire Spider 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "distance-function-kaleidoscope-2",
+      "libFile": "library/distance-function-kaleidoscope-2.js",
+      "epeFile": "corpus/oH4GhmMnYuhJKTY2u.epe",
+      "epeName": "distance function kaleidoscope 2",
+      "rig": "grid"
+    },
+    {
+      "slug": "doom-fire",
+      "libFile": "library/doom-fire.js",
+      "epeFile": "corpus/pHgJjpwd2XwzHrzqm.epe",
+      "epeName": "Doom Fire",
+      "rig": "grid"
+    },
+    {
+      "slug": "doom-fire-2d",
+      "libFile": "library/doom-fire-2d.js",
+      "epeFile": "corpus/iQwYYKEYjnx4yFPZ5.epe",
+      "epeName": "Doom Fire (v2.0) 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "easing-library-v1-0",
+      "libFile": "library/easing-library-v1-0.js",
+      "epeFile": "corpus/rhMjHAeDazr6A9GNX.epe",
+      "epeName": "Easing Library v1.0",
+      "rig": "grid"
+    },
+    {
+      "slug": "easing-library-v1-01",
+      "libFile": "library/easing-library-v1-01.js",
+      "epeFile": "corpus/8jFuGXr68mpJsRkvg.epe",
+      "epeName": "Easing Library v1.01",
+      "rig": "grid"
+    },
+    {
+      "slug": "edgeburst",
+      "libFile": "library/edgeburst.js",
+      "epeFile": "corpus/va5hZpMQ2ni3BNJ7b.epe",
+      "epeName": "Edgeburst",
+      "rig": "strip"
+    },
+    {
+      "slug": "emoji-animation-2",
+      "libFile": "library/emoji-animation-2.js",
+      "epeFile": "corpus/dYx8hx5965T6smBq8.epe",
+      "epeName": "Emoji Animation #2",
+      "rig": "grid"
+    },
+    {
+      "slug": "example-button-w-debounce",
+      "libFile": "library/example-button-w-debounce.js",
+      "epeFile": "corpus/cGFZd6F5W8m7jqYT4.epe",
+      "epeName": "Example - Button w/ debounce",
+      "rig": "strip"
+    },
+    {
+      "slug": "example-color-hues",
+      "libFile": "library/example-color-hues.js",
+      "epeFile": "corpus/HrdcZhjotup8rx7L8.epe",
+      "epeName": "Example: color hues",
+      "rig": "strip"
+    },
+    {
+      "slug": "example-modes-and-waveforms",
+      "libFile": "library/example-modes-and-waveforms.js",
+      "epeFile": "corpus/sCyaMqsmsrdM9JbJi.epe",
+      "epeName": "Example: modes and waveforms",
+      "rig": "strip"
+    },
+    {
+      "slug": "example-smooth-speed-slider",
+      "libFile": "library/example-smooth-speed-slider.js",
+      "epeFile": "corpus/wixQKX4HfCFzT85Bu.epe",
+      "epeName": "Example: Smooth Speed Slider",
+      "rig": "strip"
+    },
+    {
+      "slug": "example-time-and-animation",
+      "libFile": "library/example-time-and-animation.js",
+      "epeFile": "corpus/HMHMSME9qxS4CzbMv.epe",
+      "epeName": "Example: time and animation",
+      "rig": "strip"
+    },
+    {
+      "slug": "eye-of-sauron",
+      "libFile": "library/eye-of-sauron.js",
+      "epeFile": "corpus/rYGzPKSFYTpESDKzu.epe",
+      "epeName": "Eye of Sauron",
+      "rig": "grid"
+    },
+    {
+      "slug": "eye-of-sauron-with-movement",
+      "libFile": "library/eye-of-sauron-with-movement.js",
+      "epeFile": "corpus/BpYvATFvRH8LbBFv3.epe",
+      "epeName": "Eye of Sauron with movement",
+      "rig": "grid"
+    },
+    {
+      "slug": "fairies",
+      "libFile": "library/fairies.js",
+      "epeFile": "corpus/Mbd5ms4DRX7wLCP8b.epe",
+      "epeName": "_Fairies",
+      "rig": "strip"
+    },
+    {
+      "slug": "fast-palette-blending",
+      "libFile": "library/fast-palette-blending.js",
+      "epeFile": "corpus/jp7dq47XpcYq2JztT.epe",
+      "epeName": "Fast Palette Blending",
+      "rig": "strip"
+    },
+    {
+      "slug": "fast-pulse",
+      "libFile": "library/fast-pulse.js",
+      "epeFile": "corpus/q8bkTDQcSskYMPWcK.epe",
+      "epeName": "fast pulse",
+      "rig": "strip"
+    },
+    {
+      "slug": "fast-pulse-3d",
+      "libFile": "library/fast-pulse-3d.js",
+      "epeFile": "corpus/5ogsMbJSD55kDP9mF.epe",
+      "epeName": "fast pulse 3d",
+      "rig": "grid"
+    },
+    {
+      "slug": "fire-blue",
+      "libFile": "library/fire-blue.js",
+      "epeFile": "corpus/duZeHjkKSnHXF5Tp8.epe",
+      "epeName": "fire - blue",
+      "rig": "strip"
+    },
+    {
+      "slug": "fire-red",
+      "libFile": "library/fire-red.js",
+      "epeFile": "corpus/DPuWouS2HrqSZ5uXj.epe",
+      "epeName": "fire - red",
+      "rig": "strip"
+    },
+    {
+      "slug": "fireblobs",
+      "libFile": "library/fireblobs.js",
+      "epeFile": "corpus/wqyWAxFkD3RHBndoJ.epe",
+      "epeName": "fireblobs",
+      "rig": "strip"
+    },
+    {
+      "slug": "fireflies",
+      "libFile": "library/fireflies.js",
+      "epeFile": "corpus/5bCF8ukXsFQfTBQgK.epe",
+      "epeName": "FireFlies",
+      "rig": "strip"
+    },
+    {
+      "slug": "firework-dust",
+      "libFile": "library/firework-dust.js",
+      "epeFile": "corpus/HEn3sPAtZez2JRJcM.epe",
+      "epeName": "firework dust",
+      "rig": "strip"
+    },
+    {
+      "slug": "firework-nova",
+      "libFile": "library/firework-nova.js",
+      "epeFile": "corpus/gmGKD4SeqvNqWg3nT.epe",
+      "epeName": "firework nova",
+      "rig": "grid"
+    },
+    {
+      "slug": "firework-rocket-sparks",
+      "libFile": "library/firework-rocket-sparks.js",
+      "epeFile": "corpus/6BMLrB7TJjFnEojKG.epe",
+      "epeName": "firework rocket sparks",
+      "rig": "strip"
+    },
+    {
+      "slug": "flash-posterize-music-sequencer-framework",
+      "libFile": "library/flash-posterize-music-sequencer-framework.js",
+      "epeFile": "corpus/4mCHB4BL4xPCENk5J.epe",
+      "epeName": "Flash Posterize + Music Sequencer framework",
+      "rig": "grid"
+    },
+    {
+      "slug": "fractal-flower",
+      "libFile": "library/fractal-flower.js",
+      "epeFile": "corpus/Z5EW5hegBqqfFCXhr.epe",
+      "epeName": "fractal flower",
+      "rig": "grid"
+    },
+    {
+      "slug": "frogger-2d",
+      "libFile": "library/frogger-2d.js",
+      "epeFile": "corpus/RfPnGJiJuqeruAFXx.epe",
+      "epeName": "Frogger 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "geometry-morphing-demo-2d",
+      "libFile": "library/geometry-morphing-demo-2d.js",
+      "epeFile": "corpus/uqcF3zfyxBXz42Zmn.epe",
+      "epeName": "Geometry Morphing Demo 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "glitch-bands",
+      "libFile": "library/glitch-bands.js",
+      "epeFile": "corpus/LR4KPE7qNStxaFMaA.epe",
+      "epeName": "glitch bands",
+      "rig": "strip"
+    },
+    {
+      "slug": "glittering-jewels",
+      "libFile": "library/glittering-jewels.js",
+      "epeFile": "corpus/5b3a4tQBuAKfRfgbk.epe",
+      "epeName": "Glittering Jewels",
+      "rig": "strip"
+    },
+    {
+      "slug": "glowflow-3d-coord-transform-api-port",
+      "libFile": "library/glowflow-3d-coord-transform-api-port.js",
+      "epeFile": "corpus/5rpavhGiY4BgXaZ8o.epe",
+      "epeName": "GlowFlow (3D coord transform API port)",
+      "rig": "grid"
+    },
+    {
+      "slug": "golden-tix",
+      "libFile": "library/golden-tix.js",
+      "epeFile": "corpus/b8SpTe9QJtgXscdZK.epe",
+      "epeName": "Golden Tix",
+      "rig": "strip"
+    },
+    {
+      "slug": "gradient-blue-purple-pink",
+      "libFile": "library/gradient-blue-purple-pink.js",
+      "epeFile": "corpus/H8DJAngXe4TA9k4p6.epe",
+      "epeName": "Gradient blue  purple pink",
+      "rig": "strip"
+    },
+    {
+      "slug": "green-ripple-reflections",
+      "libFile": "library/green-ripple-reflections.js",
+      "epeFile": "corpus/Ktjben4j36Wqxnk8N.epe",
+      "epeName": "green ripple reflections",
+      "rig": "strip"
+    },
+    {
+      "slug": "halloween-color-twinkles",
+      "libFile": "library/halloween-color-twinkles.js",
+      "epeFile": "corpus/u4KXyCHxo3Rga9Ns5.epe",
+      "epeName": "Halloween color twinkles",
+      "rig": "strip"
+    },
+    {
+      "slug": "halloween-wavy-bands",
+      "libFile": "library/halloween-wavy-bands.js",
+      "epeFile": "corpus/7caR9QAmgKTdFtNTF.epe",
+      "epeName": "Halloween Wavy Bands",
+      "rig": "grid"
+    },
+    {
+      "slug": "heart",
+      "libFile": "library/heart.js",
+      "epeFile": "corpus/ssi9FdRrLyh2LiHfH.epe",
+      "epeName": "heart",
+      "rig": "grid"
+    },
+    {
+      "slug": "heatshivers",
+      "libFile": "library/heatshivers.js",
+      "epeFile": "corpus/Nx7xbstETbKJ9X8TQ.epe",
+      "epeName": "heatshivers",
+      "rig": "strip"
+    },
+    {
+      "slug": "holiday-diagonal-stripes",
+      "libFile": "library/holiday-diagonal-stripes.js",
+      "epeFile": "corpus/3iTX69rZvzx39SA5r.epe",
+      "epeName": "Holiday_Diagonal_Stripes",
+      "rig": "grid"
+    },
+    {
+      "slug": "ice-floes-2d",
+      "libFile": "library/ice-floes-2d.js",
+      "epeFile": "corpus/w2BcxzPJYEmuwoimz.epe",
+      "epeName": "Ice Floes 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "icicleblaze",
+      "libFile": "library/icicleblaze.js",
+      "epeFile": "corpus/eAwwugh6A5jTRC7zp.epe",
+      "epeName": "Icicleblaze",
+      "rig": "grid"
+    },
+    {
+      "slug": "index-walk",
+      "libFile": "library/index-walk.js",
+      "epeFile": "corpus/5yKXqHANJYmuhpgXb.epe",
+      "epeName": "index walk",
+      "rig": "strip"
+    },
+    {
+      "slug": "infinity-flower-2d",
+      "libFile": "library/infinity-flower-2d.js",
+      "epeFile": "corpus/WFPiYhECcWdrBng6z.epe",
+      "epeName": "Infinity Flower 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "iran-solidarity",
+      "libFile": "library/iran-solidarity.js",
+      "epeFile": "corpus/6hMdH2Mo5jTS7ZF4L.epe",
+      "epeName": "Iran - Solidarity",
+      "rig": "cloud"
+    },
+    {
+      "slug": "kaleidoscope-2d",
+      "libFile": "library/kaleidoscope-2d.js",
+      "epeFile": "corpus/bEdTMdnYZvoHonkmm.epe",
+      "epeName": "Perlin Kaleidoscope 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "kitt",
+      "libFile": "library/kitt.js",
+      "epeFile": "corpus/xhyAAKfFDzaywiqDc.epe",
+      "epeName": "KITT",
+      "rig": "strip"
+    },
+    {
+      "slug": "kitt-w-color-picker",
+      "libFile": "library/kitt-w-color-picker.js",
+      "epeFile": "corpus/BxgkrQTHPkhcM6a24.epe",
+      "epeName": "KITT (w/ color picker)",
+      "rig": "strip"
+    },
+    {
+      "slug": "light-organ-2-0",
+      "libFile": "library/light-organ-2-0.js",
+      "epeFile": "corpus/mPfzL6z2mf9nACtsM.epe",
+      "epeName": "Light Organ - 2.0",
+      "rig": "strip"
+    },
+    {
+      "slug": "light-organ-sensor-board",
+      "libFile": "library/light-organ-sensor-board.js",
+      "epeFile": "corpus/YezrqhTE26wNmBRJy.epe",
+      "epeName": "Light Organ -- sensor board",
+      "rig": "strip"
+    },
+    {
+      "slug": "lightbulb-crank-hue-to-complete",
+      "libFile": "library/lightbulb-crank-hue-to-complete.js",
+      "epeFile": "corpus/pMMer2SYzSjZyi6mZ.epe",
+      "epeName": "Lightbulb - Crank Hue to Complete",
+      "rig": "strip"
+    },
+    {
+      "slug": "lightning-clouds",
+      "libFile": "library/lightning-clouds.js",
+      "epeFile": "corpus/S6u3qPhozw43c7Af9.epe",
+      "epeName": "Lightning clouds",
+      "rig": "grid"
+    },
+    {
+      "slug": "lightning-zap",
+      "libFile": "library/lightning-zap.js",
+      "epeFile": "corpus/AvayCBDKbhHvM3RJG.epe",
+      "epeName": "lightning ZAP!",
+      "rig": "strip"
+    },
+    {
+      "slug": "line-dancer-2d",
+      "libFile": "library/line-dancer-2d.js",
+      "epeFile": "corpus/b6QB2wwGTmxrDJMBd.epe",
+      "epeName": "Line Dancer 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "lissajous-curve-tracer",
+      "libFile": "library/lissajous-curve-tracer.js",
+      "epeFile": "corpus/rw9wspkrLrPEkR7dX.epe",
+      "epeName": "Lissajous curve tracer",
+      "rig": "grid"
+    },
+    {
+      "slug": "m5stack-hex-panels",
+      "libFile": "library/m5stack-hex-panels.js",
+      "epeFile": "corpus/ymFxCE3QLKB9hcxLb.epe",
+      "epeName": "M5Stack Hex panels",
+      "rig": "cloud"
+    },
+    {
+      "slug": "mandelbrot-2d",
+      "libFile": "library/mandelbrot-2d.js",
+      "epeFile": "corpus/zt7EPKbLDtvowhLcT.epe",
+      "epeName": "Mandelbrot 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "map-concentric",
+      "libFile": "library/map-concentric.js",
+      "epeFile": "corpus/dvm3pc4JxfBqXyzhy.epe",
+      "epeName": "Map - Concentric",
+      "rig": "grid"
+    },
+    {
+      "slug": "mapped-vertical-line-2d",
+      "libFile": "library/mapped-vertical-line-2d.js",
+      "epeFile": "corpus/NaTA5tfncXjkJDn4u.epe",
+      "epeName": "mapped vertical line 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "mapping-helper-single-and-10x",
+      "libFile": "library/mapping-helper-single-and-10x.js",
+      "epeFile": "corpus/isSk3S3hPJnT4drmj.epe",
+      "epeName": "Mapping Helper Single and 10x",
+      "rig": "strip"
+    },
+    {
+      "slug": "marching-rainbow",
+      "libFile": "library/marching-rainbow.js",
+      "epeFile": "corpus/7Ju7GPHN7A6STrrxL.epe",
+      "epeName": "marching rainbow",
+      "rig": "strip"
+    },
+    {
+      "slug": "marching-rainbow-buffered",
+      "libFile": "library/marching-rainbow-buffered.js",
+      "epeFile": "corpus/qkJxZBYN2w2zQh5eR.epe",
+      "epeName": "marching rainbow (buffered)",
+      "rig": "strip"
+    },
+    {
+      "slug": "matrix-2-tone-pulse",
+      "libFile": "library/matrix-2-tone-pulse.js",
+      "epeFile": "corpus/5PeeJNhpnTDsgvCpT.epe",
+      "epeName": "Matrix 2 tone pulse",
+      "rig": "strip"
+    },
+    {
+      "slug": "matrix-2d-honeycomb",
+      "libFile": "library/matrix-2d-honeycomb.js",
+      "epeFile": "corpus/f7jrdyj6MKHjGQsNZ.epe",
+      "epeName": "matrix 2D honeycomb",
+      "rig": "grid"
+    },
+    {
+      "slug": "matrix-2d-pulse-edit",
+      "libFile": "library/matrix-2d-pulse-edit.js",
+      "epeFile": "corpus/NTu3cbwyHP27AFvtv.epe",
+      "epeName": "matrix 2D pulse edit",
+      "rig": "strip"
+    },
+    {
+      "slug": "matrix-green-waterfall-2d",
+      "libFile": "library/matrix-green-waterfall-2d.js",
+      "epeFile": "corpus/7M63KwCJafiLoMWFQ.epe",
+      "epeName": "Matrix Green Waterfall 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "matrix-rain",
+      "libFile": "library/matrix-rain.js",
+      "epeFile": "corpus/YaiTChR3s8oARvGQ9.epe",
+      "epeName": "matrix rain",
+      "rig": "grid"
+    },
+    {
+      "slug": "metaballs-of-fire-2d",
+      "libFile": "library/metaballs-of-fire-2d.js",
+      "epeFile": "corpus/qqRRJY3MeyMZdgmGy.epe",
+      "epeName": "Metaballs of Fire 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "meteor-shower",
+      "libFile": "library/meteor-shower.js",
+      "epeFile": "corpus/jGD8D4fYSJuhyfThm.epe",
+      "epeName": "Meteor Shower",
+      "rig": "strip"
+    },
+    {
+      "slug": "midpointdisplacement1d",
+      "libFile": "library/midpointdisplacement1d.js",
+      "epeFile": "corpus/W54s33wayfPttiiEr.epe",
+      "epeName": "MidpointDisplacement1D",
+      "rig": "strip"
+    },
+    {
+      "slug": "millipede",
+      "libFile": "library/millipede.js",
+      "epeFile": "corpus/SDRQ9sJxxWQjCHgu6.epe",
+      "epeName": "millipede",
+      "rig": "strip"
+    },
+    {
+      "slug": "millipede-1d-2d-controls",
+      "libFile": "library/millipede-1d-2d-controls.js",
+      "epeFile": "corpus/s9BZe6XgizFXt2EfE.epe",
+      "epeName": "millipede 1d/2d controls",
+      "rig": "grid"
+    },
+    {
+      "slug": "multimap-simpledemo",
+      "libFile": "library/multimap-simpledemo.js",
+      "epeFile": "corpus/8SBk2ydut9EBoKHi7.epe",
+      "epeName": "multimap simpledemo",
+      "rig": "grid"
+    },
+    {
+      "slug": "multisegment-demo",
+      "libFile": "library/multisegment-demo.js",
+      "epeFile": "corpus/yfyrMr8XribsGinBf.epe",
+      "epeName": "Multisegment Demo",
+      "rig": "strip"
+    },
+    {
+      "slug": "music-sequencer-for-v2",
+      "libFile": "library/music-sequencer-for-v2.js",
+      "epeFile": "corpus/J9ooRXsnxuLDYvgDi.epe",
+      "epeName": "Music Sequencer for v2",
+      "rig": "grid"
+    },
+    {
+      "slug": "music-sequencer-for-v3-only",
+      "libFile": "library/music-sequencer-for-v3-only.js",
+      "epeFile": "corpus/7MuJmcy4FZbs9jGbB.epe",
+      "epeName": "Music Sequencer - for V3 ONLY",
+      "rig": "grid"
+    },
+    {
+      "slug": "nano-orbital",
+      "libFile": "library/nano-orbital.js",
+      "epeFile": "corpus/7YfuKn9oeMv6GuRx6.epe",
+      "epeName": "Nano Orbital",
+      "rig": "strip"
+    },
+    {
+      "slug": "naturallightsync",
+      "libFile": "library/naturallightsync.js",
+      "epeFile": "corpus/kRdHmgPMZBDSoh2zT.epe",
+      "epeName": "NaturalLightSync",
+      "rig": "strip"
+    },
+    {
+      "slug": "neutronorbit",
+      "libFile": "library/neutronorbit.js",
+      "epeFile": "corpus/AJxfoqDaC9avSPTH9.epe",
+      "epeName": "neutronorbit",
+      "rig": "strip"
+    },
+    {
+      "slug": "newfire",
+      "libFile": "library/newfire.js",
+      "epeFile": "corpus/9JMfKDQh58XeXFweR.epe",
+      "epeName": "Newfire",
+      "rig": "strip"
+    },
+    {
+      "slug": "novas",
+      "libFile": "library/novas.js",
+      "epeFile": "corpus/vPpuaSCSFeCLpgNbd.epe",
+      "epeName": "novas",
+      "rig": "strip"
+    },
+    {
+      "slug": "nyan-lights",
+      "libFile": "library/nyan-lights.js",
+      "epeFile": "corpus/DAQPGJGEsCyjhwiCp.epe",
+      "epeName": "Nyan Lights",
+      "rig": "grid"
+    },
+    {
+      "slug": "oasis",
+      "libFile": "library/oasis.js",
+      "epeFile": "corpus/tDydtqqnzaRZYKjLx.epe",
+      "epeName": "Oasis",
+      "rig": "strip"
+    },
+    {
+      "slug": "opposites",
+      "libFile": "library/opposites.js",
+      "epeFile": "corpus/iYDPEfGzNLkCiHdnG.epe",
+      "epeName": "opposites",
+      "rig": "strip"
+    },
+    {
+      "slug": "orv-christmas-tree",
+      "libFile": "library/orv-christmas-tree.js",
+      "epeFile": "corpus/FrKXKh3QmKNwHxBFT.epe",
+      "epeName": "Orv - Christmas Tree",
+      "rig": "grid"
+    },
+    {
+      "slug": "performance-test-framework",
+      "libFile": "library/performance-test-framework.js",
+      "epeFile": "corpus/H4eSpKjY97LtyPFFJ.epe",
+      "epeName": "Performance test framework",
+      "rig": "strip"
+    },
+    {
+      "slug": "perlin-fire",
+      "libFile": "library/perlin-fire.js",
+      "epeFile": "corpus/nqTQrm9MMG5Ge3WSg.epe",
+      "epeName": "Perlin fire",
+      "rig": "grid"
+    },
+    {
+      "slug": "perlin-fire-wind",
+      "libFile": "library/perlin-fire-wind.js",
+      "epeFile": "corpus/C7BgpG7f4zHx92hs6.epe",
+      "epeName": "perlin fire wind",
+      "rig": "grid"
+    },
+    {
+      "slug": "perlin-fire-wind-tunnel",
+      "libFile": "library/perlin-fire-wind-tunnel.js",
+      "epeFile": "corpus/gHXWPveywRt8Eo2fF.epe",
+      "epeName": "perlin fire wind tunnel",
+      "rig": "grid"
+    },
+    {
+      "slug": "perlin-simplex-noise-1d",
+      "libFile": "library/perlin-simplex-noise-1d.js",
+      "epeFile": "corpus/Bagy7kMSPPRhQLfG7.epe",
+      "epeName": "Perlin/Simplex Noise 1D",
+      "rig": "strip"
+    },
+    {
+      "slug": "perlin-simplex-noise-2d",
+      "libFile": "library/perlin-simplex-noise-2d.js",
+      "epeFile": "corpus/RtREWXYigJ2RPQNqw.epe",
+      "epeName": "Perlin/Simplex Noise 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "pew-pew-pew",
+      "libFile": "library/pew-pew-pew.js",
+      "epeFile": "corpus/hRKrNtdnFHfEpLAyp.epe",
+      "epeName": "Pew-Pew-Pew!",
+      "rig": "strip"
+    },
+    {
+      "slug": "pixelclock",
+      "libFile": "library/pixelclock.js",
+      "epeFile": "corpus/Qn8EawSjEHBTmQAuK.epe",
+      "epeName": "pixelClock",
+      "rig": "strip"
+    },
+    {
+      "slug": "polar-mapping-helper-2d-3d",
+      "libFile": "library/polar-mapping-helper-2d-3d.js",
+      "epeFile": "corpus/6aQStYh4ATmw7473d.epe",
+      "epeName": "Polar mapping helper 2D / 3D",
+      "rig": "grid"
+    },
+    {
+      "slug": "policelights",
+      "libFile": "library/policelights.js",
+      "epeFile": "corpus/2riJoFnGwt5TmWSet.epe",
+      "epeName": "policeLights",
+      "rig": "strip"
+    },
+    {
+      "slug": "portal",
+      "libFile": "library/portal.js",
+      "epeFile": "corpus/WM5MrfsWzjGP2rYbH.epe",
+      "epeName": "portal",
+      "rig": "strip"
+    },
+    {
+      "slug": "pride-progress",
+      "libFile": "library/pride-progress.js",
+      "epeFile": "corpus/p8gaewjSwJsXt68Ky.epe",
+      "epeName": "Pride Progress",
+      "rig": "strip"
+    },
+    {
+      "slug": "quiet-blinkfade",
+      "libFile": "library/quiet-blinkfade.js",
+      "epeFile": "corpus/awPktwxHMZH5WYfd3.epe",
+      "epeName": "quiet blinkfade",
+      "rig": "strip"
+    },
+    {
+      "slug": "radiant-pulse-3",
+      "libFile": "library/radiant-pulse-3.js",
+      "epeFile": "corpus/TMdwmrwodDf6ad9XY.epe",
+      "epeName": "radiant pulse 3",
+      "rig": "grid"
+    },
+    {
+      "slug": "rainbow",
+      "libFile": "library/rainbow.js",
+      "epeFile": "corpus/aaaaaaaaaaaaaaaaa.epe",
+      "epeName": "rainbow",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-comet",
+      "libFile": "library/rainbow-comet.js",
+      "epeFile": "corpus/wvCvKzC3y24NsDvWP.epe",
+      "epeName": "Rainbow Comet",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-flag",
+      "libFile": "library/rainbow-flag.js",
+      "epeFile": "corpus/ypByS8HkerBZD74J8.epe",
+      "epeName": "Rainbow Flag",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-fonts",
+      "libFile": "library/rainbow-fonts.js",
+      "epeFile": "corpus/9YNBonyhXfyFjpYzJ.epe",
+      "epeName": "rainbow fonts",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-fonts-2",
+      "libFile": "library/rainbow-fonts-2.js",
+      "epeFile": "corpus/Wcph3ddusCjpjwWkB.epe",
+      "epeName": "rainbow fonts 2",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-melt",
+      "libFile": "library/rainbow-melt.js",
+      "epeFile": "corpus/wDn9FrZh8zZfKweL4.epe",
+      "epeName": "rainbow melt",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-pinwheel",
+      "libFile": "library/rainbow-pinwheel.js",
+      "epeFile": "corpus/kSHy8gxWDjfHTL3Wt.epe",
+      "epeName": "rainbow pinwheel",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-rocket-sparks",
+      "libFile": "library/rainbow-rocket-sparks.js",
+      "epeFile": "corpus/FxwNyX6zQZAusmaKc.epe",
+      "epeName": "Rainbow rocket sparks",
+      "rig": "strip"
+    },
+    {
+      "slug": "rainbow-smiley",
+      "libFile": "library/rainbow-smiley.js",
+      "epeFile": "corpus/JhAQ36GnEHxzEFcCb.epe",
+      "epeName": "Rainbow Smiley",
+      "rig": "grid"
+    },
+    {
+      "slug": "rainbow-v2",
+      "libFile": "library/rainbow-v2.js",
+      "epeFile": "corpus/2rrBGNEDKi9xM3Gwb.epe",
+      "epeName": "Rainbow v2",
+      "rig": "strip"
+    },
+    {
+      "slug": "raindrops-2d",
+      "libFile": "library/raindrops-2d.js",
+      "epeFile": "corpus/RQp3pFEYDuRvwanPk.epe",
+      "epeName": "Raindrops 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "rainstorm",
+      "libFile": "library/rainstorm.js",
+      "epeFile": "corpus/3RHd7JN2E9Se8nSB8.epe",
+      "epeName": "Rainstorm",
+      "rig": "grid"
+    },
+    {
+      "slug": "real-world-lights",
+      "libFile": "library/real-world-lights.js",
+      "epeFile": "corpus/MRbBTYfptRQ2zesqv.epe",
+      "epeName": "Real World Lights",
+      "rig": "strip"
+    },
+    {
+      "slug": "red-green-xy-2d-sweep",
+      "libFile": "library/red-green-xy-2d-sweep.js",
+      "epeFile": "corpus/c4r72Djj8BfndgpBo.epe",
+      "epeName": "Red-Green XY 2D Sweep",
+      "rig": "grid"
+    },
+    {
+      "slug": "regenbogendrogen",
+      "libFile": "library/regenbogendrogen.js",
+      "epeFile": "corpus/7dj5kyBumrzqADX4E.epe",
+      "epeName": "regenbogendrogen",
+      "rig": "strip"
+    },
+    {
+      "slug": "rgb-test-pattern",
+      "libFile": "library/rgb-test-pattern.js",
+      "epeFile": "corpus/to7TLGBX7qspLpHzz.epe",
+      "epeName": "RGB Test Pattern",
+      "rig": "strip"
+    },
+    {
+      "slug": "rgb-xyz-3d-octants",
+      "libFile": "library/rgb-xyz-3d-octants.js",
+      "epeFile": "corpus/Dtyz7dXictnHp8yAf.epe",
+      "epeName": "RGB-XYZ 3D Octants",
+      "rig": "cloud"
+    },
+    {
+      "slug": "rgb-xyz-3d-sweep",
+      "libFile": "library/rgb-xyz-3d-sweep.js",
+      "epeFile": "corpus/FgC4c8TcEaQFYjHof.epe",
+      "epeName": "RGB-XYZ 3D Sweep",
+      "rig": "cloud"
+    },
+    {
+      "slug": "rgbclock-2d",
+      "libFile": "library/rgbclock-2d.js",
+      "epeFile": "corpus/95QZQGENL4fYwtBHy.epe",
+      "epeName": "RGBclock 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "rgbw-mapping-tester",
+      "libFile": "library/rgbw-mapping-tester.js",
+      "epeFile": "corpus/TbuZ4tqfYNB2zDbwK.epe",
+      "epeName": "RGBW Mapping Tester",
+      "rig": "strip"
+    },
+    {
+      "slug": "rgbw-mapping-tester-hsv-version",
+      "libFile": "library/rgbw-mapping-tester-hsv-version.js",
+      "epeFile": "corpus/Fa7KYLvXbYi48hEMR.epe",
+      "epeName": "RGBW Mapping Tester - HSV Version",
+      "rig": "strip"
+    },
+    {
+      "slug": "rock-sparks",
+      "libFile": "library/rock-sparks.js",
+      "epeFile": "corpus/yvWNCFdYT82BFFxom.epe",
+      "epeName": "Rock sparks",
+      "rig": "grid"
+    },
+    {
+      "slug": "rocket-by-tony-hampton",
+      "libFile": "library/rocket-by-tony-hampton.js",
+      "epeFile": "corpus/v6ndPCnzTtKL3SkLD.epe",
+      "epeName": "Rocket by Tony Hampton",
+      "rig": "strip"
+    },
+    {
+      "slug": "ryb-colors",
+      "libFile": "library/ryb-colors.js",
+      "epeFile": "corpus/bQLnSWhcA4PNjuLtK.epe",
+      "epeName": "RYB colors",
+      "rig": "grid"
+    },
+    {
+      "slug": "saberdeploy-tutorial",
+      "libFile": "library/saberdeploy-tutorial.js",
+      "epeFile": "corpus/nMZ7wMnmveDbFnsdc.epe",
+      "epeName": "SaberDeploy Tutorial",
+      "rig": "strip"
+    },
+    {
+      "slug": "scanner",
+      "libFile": "library/scanner.js",
+      "epeFile": "corpus/dE8XEG3wdfu9CeHyR.epe",
+      "epeName": "Scanner",
+      "rig": "strip"
+    },
+    {
+      "slug": "scary-pumpkin",
+      "libFile": "library/scary-pumpkin.js",
+      "epeFile": "corpus/q8oKvkD7R57DBkGKj.epe",
+      "epeName": "Scary Pumpkin",
+      "rig": "grid"
+    },
+    {
+      "slug": "scrolling-text-marquee-2d",
+      "libFile": "library/scrolling-text-marquee-2d.js",
+      "epeFile": "corpus/zsKxPZHLmNkpjqWvL.epe",
+      "epeName": "scrolling text marquee 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "scrolls",
+      "libFile": "library/scrolls.js",
+      "epeFile": "corpus/R6HanC4zso3YcNRJj.epe",
+      "epeName": "scrolls",
+      "rig": "strip"
+    },
+    {
+      "slug": "shimmer-crossfade-2d",
+      "libFile": "library/shimmer-crossfade-2d.js",
+      "epeFile": "corpus/28J9KEWXqR62JJeyK.epe",
+      "epeName": "Shimmer Crossfade 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "sierpinski-rainbow-2d",
+      "libFile": "library/sierpinski-rainbow-2d.js",
+      "epeFile": "corpus/P3sWiAgjzRh3Djnjf.epe",
+      "epeName": "Sierpinski Rainbow 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "single-color-picker-wide-or-spot",
+      "libFile": "library/single-color-picker-wide-or-spot.js",
+      "epeFile": "corpus/qzpL3CLaMP3cqae2R.epe",
+      "epeName": "Single Color Picker - wide or spot",
+      "rig": "strip"
+    },
+    {
+      "slug": "sinpulse-3d",
+      "libFile": "library/sinpulse-3d.js",
+      "epeFile": "corpus/Ba7cdYcigxF27EW64.epe",
+      "epeName": "sinpulse 3D",
+      "rig": "grid"
+    },
+    {
+      "slug": "sinus",
+      "libFile": "library/sinus.js",
+      "epeFile": "corpus/t92mezvhbR55x8Xvj.epe",
+      "epeName": "sinus",
+      "rig": "grid"
+    },
+    {
+      "slug": "skypirate-s-centered-spectrum",
+      "libFile": "library/skypirate-s-centered-spectrum.js",
+      "epeFile": "corpus/gKCGaREm8cD8gfCuY.epe",
+      "epeName": "SkyPirate's Centered Spectrum",
+      "rig": "grid"
+    },
+    {
+      "slug": "slime-mold-palette",
+      "libFile": "library/slime-mold-palette.js",
+      "epeFile": "corpus/vYzzPfsKSJHPFgE7Q.epe",
+      "epeName": "Slime mold palette",
+      "rig": "grid"
+    },
+    {
+      "slug": "slow-color-shift",
+      "libFile": "library/slow-color-shift.js",
+      "epeFile": "corpus/7XT2JNLkLaXc3erFX.epe",
+      "epeName": "slow color shift",
+      "rig": "strip"
+    },
+    {
+      "slug": "slowflies",
+      "libFile": "library/slowflies.js",
+      "epeFile": "corpus/dC9GZCCeCRErJrp3i.epe",
+      "epeName": "slowflies",
+      "rig": "strip"
+    },
+    {
+      "slug": "snake",
+      "libFile": "library/snake.js",
+      "epeFile": "corpus/vXjyvKJm3x3oAztXv.epe",
+      "epeName": "snake",
+      "rig": "strip"
+    },
+    {
+      "slug": "snake-2d",
+      "libFile": "library/snake-2d.js",
+      "epeFile": "corpus/wy96bdmQBtFu8vxev.epe",
+      "epeName": "Snake 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "solid-rainbow",
+      "libFile": "library/solid-rainbow.js",
+      "epeFile": "corpus/EHxr7dBx5LtioSQbD.epe",
+      "epeName": "Solid Rainbow",
+      "rig": "strip"
+    },
+    {
+      "slug": "sound-blinkfade",
+      "libFile": "library/sound-blinkfade.js",
+      "epeFile": "corpus/qEKGgN4vJeESmjZsN.epe",
+      "epeName": "sound - blinkfade",
+      "rig": "strip"
+    },
+    {
+      "slug": "sound-lavablob",
+      "libFile": "library/sound-lavablob.js",
+      "epeFile": "corpus/Df9Hy2gufFnaB48uq.epe",
+      "epeName": "SOUND - lavablob",
+      "rig": "grid"
+    },
+    {
+      "slug": "sound-music-spectrum-visualizer",
+      "libFile": "library/sound-music-spectrum-visualizer.js",
+      "epeFile": "corpus/c9zzTbPSHHPzcQy4H.epe",
+      "epeName": "Sound & Music Spectrum Visualizer",
+      "rig": "strip"
+    },
+    {
+      "slug": "sound-rays",
+      "libFile": "library/sound-rays.js",
+      "epeFile": "corpus/RFQ83888m35aJfJMZ.epe",
+      "epeName": "sound - rays",
+      "rig": "strip"
+    },
+    {
+      "slug": "sound-rays-frequency-bpm-reactive-1",
+      "libFile": "library/sound-rays-frequency-bpm-reactive-1.js",
+      "epeFile": "corpus/npb7eQGfzNcXbQ37g.epe",
+      "epeName": "sound - rays Frequency-BPM Reactive 1",
+      "rig": "strip"
+    },
+    {
+      "slug": "sound-reactive-color-fade",
+      "libFile": "library/sound-reactive-color-fade.js",
+      "epeFile": "corpus/QhsaiD6Kbq2LnZ54p.epe",
+      "epeName": "Sound Reactive Color Fade",
+      "rig": "grid"
+    },
+    {
+      "slug": "sound-spectro-kalidastrip",
+      "libFile": "library/sound-spectro-kalidastrip.js",
+      "epeFile": "corpus/TQMWygxoH8bnpZMWf.epe",
+      "epeName": "sound - spectro kalidastrip",
+      "rig": "strip"
+    },
+    {
+      "slug": "sound-spectroblots-pow-fade",
+      "libFile": "library/sound-spectroblots-pow-fade.js",
+      "epeFile": "corpus/vXGvYT7tqJCsCKfiD.epe",
+      "epeName": "sound - spectroblots - pow fade",
+      "rig": "grid"
+    },
+    {
+      "slug": "sound-spectrokalidamandala",
+      "libFile": "library/sound-spectrokalidamandala.js",
+      "epeFile": "corpus/FRobn9vAtgoAqNCBo.epe",
+      "epeName": "sound - spectrokalidamandala",
+      "rig": "grid"
+    },
+    {
+      "slug": "sound-spectromatrix-agc",
+      "libFile": "library/sound-spectromatrix-agc.js",
+      "epeFile": "corpus/mNoCeFheC4DPqPdGe.epe",
+      "epeName": "sound - spectromatrix agc",
+      "rig": "grid"
+    },
+    {
+      "slug": "sound-spectromatrix-render2d",
+      "libFile": "library/sound-spectromatrix-render2d.js",
+      "epeFile": "corpus/WPPz4MX96ZyfRwXWd.epe",
+      "epeName": "sound - spectromatrix render2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "sound-spectrum-analyser",
+      "libFile": "library/sound-spectrum-analyser.js",
+      "epeFile": "corpus/7nLicYxSg6nLbZfD4.epe",
+      "epeName": "Sound - Spectrum Analyser",
+      "rig": "grid"
+    },
+    {
+      "slug": "sound-starburst-2",
+      "libFile": "library/sound-starburst-2.js",
+      "epeFile": "corpus/MNA8SCYvtgLmMa7zc.epe",
+      "epeName": "sound - Starburst 2",
+      "rig": "strip"
+    },
+    {
+      "slug": "sparkfire",
+      "libFile": "library/sparkfire.js",
+      "epeFile": "corpus/FBki9iXodqFM26SfH.epe",
+      "epeName": "sparkfire",
+      "rig": "strip"
+    },
+    {
+      "slug": "sparks",
+      "libFile": "library/sparks.js",
+      "epeFile": "corpus/8gjB89jqQojktXgc4.epe",
+      "epeName": "sparks",
+      "rig": "strip"
+    },
+    {
+      "slug": "sparks-center",
+      "libFile": "library/sparks-center.js",
+      "epeFile": "corpus/FaJD9BrFGvxoSQ2Rg.epe",
+      "epeName": "sparks center",
+      "rig": "strip"
+    },
+    {
+      "slug": "spin-cycle",
+      "libFile": "library/spin-cycle.js",
+      "epeFile": "corpus/D2xuondCcLLi2jvMr.epe",
+      "epeName": "spin cycle",
+      "rig": "strip"
+    },
+    {
+      "slug": "spinwheel-2d",
+      "libFile": "library/spinwheel-2d.js",
+      "epeFile": "corpus/BLoNqhSoqdumsvibM.epe",
+      "epeName": "Spinwheel 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "spiral-twirls-star-2d",
+      "libFile": "library/spiral-twirls-star-2d.js",
+      "epeFile": "corpus/X4S9zmtj3YaTuGixJ.epe",
+      "epeName": "spiral twirls star 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "spotlights-rotation-3d",
+      "libFile": "library/spotlights-rotation-3d.js",
+      "epeFile": "corpus/Fvhhj7uo6xaDciS46.epe",
+      "epeName": "spotlights / rotation 3D",
+      "rig": "grid"
+    },
+    {
+      "slug": "spring-colors",
+      "libFile": "library/spring-colors.js",
+      "epeFile": "corpus/9LtYRa82vwe8H3K5R.epe",
+      "epeName": "Spring Colors",
+      "rig": "strip"
+    },
+    {
+      "slug": "stacker",
+      "libFile": "library/stacker.js",
+      "epeFile": "corpus/jgwzRXPmfyPz8jYJa.epe",
+      "epeName": "Stacker",
+      "rig": "strip"
+    },
+    {
+      "slug": "stairmaster-2d",
+      "libFile": "library/stairmaster-2d.js",
+      "epeFile": "corpus/qQbHfjbMeCXZCx7Cg.epe",
+      "epeName": "Stairmaster 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "stargen-polar-2d",
+      "libFile": "library/stargen-polar-2d.js",
+      "epeFile": "corpus/EWLQn3iqPKzqHBtRt.epe",
+      "epeName": "StarGen polar 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "static-christmas-lights-4-colors",
+      "libFile": "library/static-christmas-lights-4-colors.js",
+      "epeFile": "corpus/RGZGNin9LF6e9ByDB.epe",
+      "epeName": "Static Christmas Lights - 4 Colors",
+      "rig": "strip"
+    },
+    {
+      "slug": "static-random-colors",
+      "libFile": "library/static-random-colors.js",
+      "epeFile": "corpus/vrijJKhMQdpCaCCtM.epe",
+      "epeName": "static random colors",
+      "rig": "strip"
+    },
+    {
+      "slug": "sun-rays-through-trees",
+      "libFile": "library/sun-rays-through-trees.js",
+      "epeFile": "corpus/4ioyjcWvw3Mtvi6km.epe",
+      "epeName": "Sun rays through trees",
+      "rig": "grid"
+    },
+    {
+      "slug": "sunrise",
+      "libFile": "library/sunrise.js",
+      "epeFile": "corpus/GCwuPigteHfPT4nAT.epe",
+      "epeName": "Sunrise",
+      "rig": "strip"
+    },
+    {
+      "slug": "sunrise-2d",
+      "libFile": "library/sunrise-2d.js",
+      "epeFile": "corpus/7c4HhXKqqW32BG7Z9.epe",
+      "epeName": "Sunrise 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "sunrise-alarm-clock",
+      "libFile": "library/sunrise-alarm-clock.js",
+      "epeFile": "corpus/5d3WQKjDJtPwJnyqr.epe",
+      "epeName": "Sunrise Alarm Clock",
+      "rig": "strip"
+    },
+    {
+      "slug": "sunset",
+      "libFile": "library/sunset.js",
+      "epeFile": "corpus/mYLx94kRyXN3hGtkq.epe",
+      "epeName": "Sunset",
+      "rig": "strip"
+    },
+    {
+      "slug": "swirlpool-2d",
+      "libFile": "library/swirlpool-2d.js",
+      "epeFile": "corpus/DCSAhmhRewGYKo2Ci.epe",
+      "epeName": "Swirlpool 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "synchronized-random-numbers",
+      "libFile": "library/synchronized-random-numbers.js",
+      "epeFile": "corpus/YNWSzjo7urZx5JQGB.epe",
+      "epeName": "Synchronized Random Numbers",
+      "rig": "strip"
+    },
+    {
+      "slug": "the-grinch",
+      "libFile": "library/the-grinch.js",
+      "epeFile": "corpus/f33kvC94M7yLBDtvc.epe",
+      "epeName": "The Grinch",
+      "rig": "strip"
+    },
+    {
+      "slug": "three-red-pixels-array",
+      "libFile": "library/three-red-pixels-array.js",
+      "epeFile": "corpus/dSW5GmKuNqBLiXB6L.epe",
+      "epeName": "Three Red Pixels (array)",
+      "rig": "strip"
+    },
+    {
+      "slug": "three-red-pixels-mathy",
+      "libFile": "library/three-red-pixels-mathy.js",
+      "epeFile": "corpus/Ksyp3sf2v4L8HRZZq.epe",
+      "epeName": "Three Red Pixels (mathy)",
+      "rig": "strip"
+    },
+    {
+      "slug": "thunderstorm",
+      "libFile": "library/thunderstorm.js",
+      "epeFile": "corpus/zX935L9nsMdpug27m.epe",
+      "epeName": "Thunderstorm",
+      "rig": "strip"
+    },
+    {
+      "slug": "time-flies-2d",
+      "libFile": "library/time-flies-2d.js",
+      "epeFile": "corpus/PhaWecgEjTT5yC2T9.epe",
+      "epeName": "Time Flies 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "tixy",
+      "libFile": "library/tixy.js",
+      "epeFile": "corpus/bCopiZS6v878jERyS.epe",
+      "epeName": "tixy",
+      "rig": "grid"
+    },
+    {
+      "slug": "traffic",
+      "libFile": "library/traffic.js",
+      "epeFile": "corpus/bGouHYhqSp5pnBhr2.epe",
+      "epeName": "Traffic",
+      "rig": "grid"
+    },
+    {
+      "slug": "tree-setup-pattern",
+      "libFile": "library/tree-setup-pattern.js",
+      "epeFile": "corpus/2g6JZPLpq8XPFeP2s.epe",
+      "epeName": "tree setup pattern",
+      "rig": "grid"
+    },
+    {
+      "slug": "tunnel-of-squares-2d",
+      "libFile": "library/tunnel-of-squares-2d.js",
+      "epeFile": "corpus/W9XaXuW9LFhNY7Bju.epe",
+      "epeName": "Tunnel of Squares 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "twinkle",
+      "libFile": "library/twinkle.js",
+      "epeFile": "corpus/JbvEwtvph5WWdvbM5.epe",
+      "epeName": "Twinkle",
+      "rig": "strip"
+    },
+    {
+      "slug": "twinkle-2",
+      "libFile": "library/twinkle-2.js",
+      "epeFile": "corpus/mRZyfhf2YgGYP54wq.epe",
+      "epeName": "twinkle",
+      "rig": "strip"
+    },
+    {
+      "slug": "twinkling-classic-xmas-strands",
+      "libFile": "library/twinkling-classic-xmas-strands.js",
+      "epeFile": "corpus/HmcfJWiJTtXFYhrsF.epe",
+      "epeName": "Twinkling Classic Xmas Strands",
+      "rig": "strip"
+    },
+    {
+      "slug": "twinkly-stars",
+      "libFile": "library/twinkly-stars.js",
+      "epeFile": "corpus/TWpdYdkQyqTLoZyaK.epe",
+      "epeName": "twinkly stars",
+      "rig": "strip"
+    },
+    {
+      "slug": "twocolorhsvmix",
+      "libFile": "library/twocolorhsvmix.js",
+      "epeFile": "corpus/Ebr4WzbHRTaTibx2j.epe",
+      "epeName": "TwoColorHSVMix",
+      "rig": "strip"
+    },
+    {
+      "slug": "unstable-orbits-2d",
+      "libFile": "library/unstable-orbits-2d.js",
+      "epeFile": "corpus/wJBXRv3ExxS5wPsdq.epe",
+      "epeName": "Unstable Orbits",
+      "rig": "grid"
+    },
+    {
+      "slug": "upward-waves-3d-using-accelerometer",
+      "libFile": "library/upward-waves-3d-using-accelerometer.js",
+      "epeFile": "corpus/dd32bgunSTTqNRzvQ.epe",
+      "epeName": "Upward waves 3D using accelerometer",
+      "rig": "cloud"
+    },
+    {
+      "slug": "utility-palettes",
+      "libFile": "library/utility-palettes.js",
+      "epeFile": "corpus/X7BZzv8EbcxHHKZ3m.epe",
+      "epeName": "Utility: Palettes",
+      "rig": "strip"
+    },
+    {
+      "slug": "utility-perceptual-hue",
+      "libFile": "library/utility-perceptual-hue.js",
+      "epeFile": "corpus/dBynuWSboDHGQFiwv.epe",
+      "epeName": "Utility: Perceptual hue",
+      "rig": "strip"
+    },
+    {
+      "slug": "utility-scheduled-percent-on-demo",
+      "libFile": "library/utility-scheduled-percent-on-demo.js",
+      "epeFile": "corpus/FA9RGndR2ckrJmE8r.epe",
+      "epeName": "Utility: Scheduled Percent-On Demo",
+      "rig": "strip"
+    },
+    {
+      "slug": "utilitycolortemp",
+      "libFile": "library/utilitycolortemp.js",
+      "epeFile": "corpus/ZLA9jgkdWzMvjc3ya.epe",
+      "epeName": "UtilityColorTemp",
+      "rig": "strip"
+    },
+    {
+      "slug": "voronoi-2d",
+      "libFile": "library/voronoi-2d.js",
+      "epeFile": "corpus/RKuhMbPBfavML737t.epe",
+      "epeName": "Voronoi Mix 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "wanderedges",
+      "libFile": "library/wanderedges.js",
+      "epeFile": "corpus/GhHsivqRwd88Wvhfy.epe",
+      "epeName": "wanderedges",
+      "rig": "strip"
+    },
+    {
+      "slug": "wanderers",
+      "libFile": "library/wanderers.js",
+      "epeFile": "corpus/kjKedaEku25Napvnv.epe",
+      "epeName": "wanderers",
+      "rig": "grid"
+    },
+    {
+      "slug": "wavy-bands",
+      "libFile": "library/wavy-bands.js",
+      "epeFile": "corpus/bG3g3fjrxqxPtqi9d.epe",
+      "epeName": "Wavy Bands",
+      "rig": "grid"
+    },
+    {
+      "slug": "white-rainbows",
+      "libFile": "library/white-rainbows.js",
+      "epeFile": "corpus/WAz3Qc8JWw8rW3P8u.epe",
+      "epeName": "White Rainbows",
+      "rig": "strip"
+    },
+    {
+      "slug": "wichmannhill-prng",
+      "libFile": "library/wichmannhill-prng.js",
+      "epeFile": "corpus/qxWPfHcPe9fgQzqbL.epe",
+      "epeName": "Wichmann–Hill PRNG",
+      "rig": "strip"
+    },
+    {
+      "slug": "xmasflies",
+      "libFile": "library/xmasflies.js",
+      "epeFile": "corpus/ms7LJhzhWFgDTcc2J.epe",
+      "epeName": "XmasFlies",
+      "rig": "strip"
+    },
+    {
+      "slug": "xorcery-2d-3d",
+      "libFile": "library/xorcery-2d-3d.js",
+      "epeFile": "corpus/bPNT39LCkskbosCH7.epe",
+      "epeName": "xorcery 2D/3D",
+      "rig": "grid"
+    },
+    {
+      "slug": "zoom-kaleidoscope",
+      "libFile": "library/zoom-kaleidoscope.js",
+      "epeFile": "corpus/RHFKxARdW4Aeq4X3r.epe",
+      "epeName": "zoom kaleidoscope",
+      "rig": "grid"
+    }
+  ],
+  "unpairedLibrary": [
+    "aurora-2d",
+    "beat-bounce",
+    "boids-2d",
+    "breathing-gradient",
+    "chevron-2d",
+    "comets",
+    "crosshair-pulse-2d",
+    "digital-rain-2d",
+    "dna-helix-2d",
+    "drip",
+    "falling-sand-2d",
+    "flow-field-2d",
+    "glitter",
+    "interference-2d",
+    "marquee-chase",
+    "ocean",
+    "palette-fire-2d",
+    "pendulum-wave",
+    "radar-2d",
+    "reaction-diffusion-2d",
+    "ripples-2d",
+    "soap-2d",
+    "spinning-plasma-2d",
+    "spiral-2d",
+    "spirograph-2d",
+    "starfield-2d",
+    "tetrix-2d",
+    "tv-simulator",
+    "typing-heatmap-2d"
+  ],
+  "unpairedCorpus": []
+}

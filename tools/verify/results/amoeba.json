@@ -1,0 +1,38 @@
+{
+  "slug": "amoeba",
+  "verdict": "broken",
+  "score": 2,
+  "confidence": "high",
+  "summary": "The port opens with roughly the right plum/blue amoeba look but stops animating after ~1-2 s and fades to near-black, while the original churns continuously and holds steady brightness indefinitely.",
+  "observations": [
+    "Rig for both sides: strip, 60 px, seed 1, same clock; neither side reported a compile or runtime error in any run.",
+    "Original (6 s waterfall, baseline): a magenta/plum field with ~4-6 soft-edged blue blobs 8-15 px wide that drift and deform laterally, punctuated by black voids ~5-10 px wide lasting ~0.3-0.6 s each; edges are smooth gradients.",
+    "Port (same 6 s window): the same plum/blue/black color family and a similar feature scale for roughly the first 0.5-1 s, but the waterfall is then made of straight vertical streaks, i.e. every pixel holds its value — the field is frozen.",
+    "Numerically: original meanBrightness stays 43-58 across all 120 frames with motion 1-17 (avg 3, only 2 zero frames). Port meanBrightness decays 42 -> 13 by frame 47 (2.35 s), sits flat at 12-13, then drops to 3 by frame 119; motion is exactly 0 for 82 of 120 frames and never exceeds 4.",
+    "30 s window (--seconds 30 --fps 4): original is unchanged in character at t=30 s (mean 44, motion avg 13 at 0.25 s spacing) — continuously churning blue blobs on plum. Port is black over almost the whole image (mean 7, and that is dominated by the first ~2 s), with only a couple of surviving lit pixel columns at the frame edges.",
+    "Warm-up is not the explanation and it does not recover: --skip 20 (capturing t=20-26 s) gives original mean 49 / motion 4 and a full, lively blob field, while the port is mean 2 / motion 0 and visually solid black except one faint blue column at the left edge.",
+    "Not a one-seed fluke: seed 9 shows the same thing (orig mean 49, motion avg 3, 2 zero-motion frames; port mean 12, motion avg 1, 81/120 zero-motion frames, ending at brightness 2).",
+    "Not a rig artifact: on an 8x8 grid rig (2 s contact sheet) both sides show plum backgrounds with blue bands and dark voids, and the port is still recognizable there because the freeze has not fully set in yet — but even in those 2 s the port averages mean 29 vs the original's 48, and its features have hard, blocky, quantized edges where the original's are smooth gradients. A 16x13 grid gives identical numbers.",
+    "Color family matches on both sides: meanG is exactly 0 in every frame of every run, with red and blue channels only (original avg R 49 / B 95; port avg R 12 / B 40 over 6 s, i.e. same hue family, ~3x dimmer and getting dimmer)."
+  ],
+  "dials": [],
+  "feedback": [
+    "The dominant bug: the port's field stops evolving. Frame-to-frame motion falls to exactly 0 by ~2 s and stays there for the rest of a 30 s capture, whereas the original never has two consecutive still frames. Whatever advances the pattern (its time/animation driver) is running once or converging instead of running continuously — fix this before anything else, since it makes the pattern invisible in normal use.",
+    "Second bug, probably the same root cause: the port's overall brightness decays monotonically instead of holding. Original meanBrightness stays in a 43-58 band forever; the port goes 42 -> 13 in 2.3 s -> 3 at 6 s -> 2 at 20 s. The target is a steady-state mean around 45-50 with no long-term downward trend.",
+    "Target motion statistics once it is animating: at 20 fps the original's mean abs frame-diff sits around 2-4 with periodic spikes to 8-17 (blobs being born/dying). The port should land in that range rather than 0-1.",
+    "Structure/edge quality: the original's blobs and voids are smooth gradients — a blue blob ramps into the plum background over several pixels. The port's features have hard, blocky, step-like edges (clearly visible in both the strip waterfall and the 8x8 grid sheet). Soften the spatial falloff so features read as blobs, not rectangles.",
+    "Color is the one axis that already matches and should be preserved: plum/magenta background, pure blue highlights, black voids, green channel at zero throughout. Do not change the palette while fixing the motion.",
+    "Feature scale in the original, for calibration on a 60 px strip: roughly 4-6 blue blobs on screen at once, each 8-15 px wide, plus black voids 5-10 px wide that appear and vanish on a ~0.3-0.6 s timescale; lateral drift is slow (a blob shifts only a few pixels per second, so the waterfall streaks are near-vertical but visibly wandering)."
+  ],
+  "experiments": [
+    "baseline",
+    "early3",
+    "long30",
+    "skip20",
+    "gridovr (pre-existing, reused)",
+    "oddgrid (pre-existing, reused)",
+    "seed9 (pre-existing, reused)",
+    "skiptest (pre-existing, reused)",
+    "default/det1/det2 (pre-existing, reused; identical to baseline)"
+  ]
+}

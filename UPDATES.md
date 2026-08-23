@@ -1,5 +1,42 @@
 # Update log
 
+## 2026-08-22 — Output-only port verifier: render-and-judge harness for
+## the clean-room library (tools/verify/)
+
+Many clean-room ports work poorly or not at all, and nothing measured
+that. New harness verifies a port against its Pixelblaze original purely
+from rendered output — no code inspection, which also keeps it cleanly on
+the right side of the corpus firewall. `tools/verify/`:
+
+- `gen-pairs.mjs` — pairs all **293/293** corpus `.epe` with their
+  `library/` ports (provenance-comment key + slug key + 5 name-drift
+  fixups; 4 ambiguous duplicate-name cases carry candidate id lists).
+  29 library files are Luxel originals with no corpus counterpart.
+- `snap.mjs` — renders BOTH sides headlessly (node + luxel wasm, zero
+  deps) on an identical rig (strip 60 px / grid 16×16 / cloud 5×5×5),
+  same seed + pinned wall clock + fixed delta ⇒ byte-deterministic.
+  Artifacts per side: waterfalls (1D/3D), timestamped contact sheet +
+  consecutive-frame filmstrip + full-window rhythm waterfall (2D),
+  `meta.json` (controls, errors, stats summary + trend flags,
+  provenance hashes), `stats.json` (full per-frame series),
+  `--probe-controls` → per-dial responsive/inert fingerprint. Judge-
+  safe: artifacts never contain pattern source.
+- `JUDGE.md` — the judge-agent procedure: firewall rules, animations-
+  not-frames doctrine (mandatory 60 s survey run, steady-state check,
+  filmstrip/rhythm-based motion evidence), dial probing, verdict schema
+  with output-level improvement feedback for a later fixing pass.
+- `enginehost.mjs` / `png.mjs` — wasm C-ABI host and dependency-free
+  PNG encoder (+3×5 digit font for cell timestamps).
+
+Calibration verdicts (in `tools/verify/results/`): **amoeba** = broken
+2/10 (port freezes ~2 s in and decays to black; original churns at
+steady brightness indefinitely); **2d-fireworks-fade** = divergent 4/10
+(mode cycle + palette match, but bulbs→solid bars, one sweeping beam →
+always-on comb, missing blue phase, and a fully mismatched dial
+surface). Both verdicts carry fixer-ready feedback. The corpus-wide
+sweep runs next; findings so far: originals `nano-orbital` and
+`orv-christmas-tree` hit array-OOB on our engine while their ports run
+(engine gaps, ticketed separately).
 ## 2026-08-22 — HUB75 output driver: ESP32-S3 LCD_CAM via esp-hub75
 ## (Gitea #72, feature `hub75`)
 
