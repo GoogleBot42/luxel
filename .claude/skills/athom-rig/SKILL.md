@@ -39,10 +39,25 @@ it, and covers only the agent-side procedure for driving that rig.
 
 - The device node arrives root-owned after every replug — chmod it before
   use (Jeremy runs this step with `doas`).
+- **Configure the line before reading it.** A freshly hotplugged node is
+  not at 115200 raw, and a bare `cat /dev/ttyUSB0 > log` against an
+  unconfigured port produces **zero bytes** — not garbage, nothing at all,
+  straight through a device reboot. Run
+  `stty -F /dev/ttyUSB0 115200 raw -echo` first; then the same `cat`
+  works. Cost a "the serial must not be wired to this board" detour on
+  2026-08-22 with a perfectly healthy port.
 - Only one process may read the serial port at a time. A second or
   forgotten reader (e.g. a stray `cat`) silently steals bytes instead of
   erroring, and this has been mistaken for a dead port before. Kill any
   stray readers before concluding the port is broken.
+- **`pkill` for a stray reader must be its own command, mentioning the
+  port nowhere else.** `pkill -f` matches the whole command line of every
+  process — including the shell running your own compound command — so a
+  character-class pattern like `tty[U]SB0` protects you only if the
+  literal `/dev/ttyUSB0` doesn't also appear later in the same line (e.g.
+  in the `stty` you chained after it). It did, and the command killed its
+  own shell mid-run (2026-08-22). One `pkill -f "^cat /dev/ttyUSB0"`, on
+  its own, then everything else.
 - The converse trap: a background capture (`timeout N cat /dev/ttyUSB0 >
   log`) dies SILENTLY when its timeout expires, and the log's tail then
   reads as plausible-but-stale output. Before trusting a capture's tail as
