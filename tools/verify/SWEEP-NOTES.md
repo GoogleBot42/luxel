@@ -44,6 +44,12 @@ Cleared entries move to Gitea or the aggregate report.
   paths (chill-confetti's original changes with --seed). Suggests randomness
   consumed at TOP-LEVEL/init (or a pre-render table fill) gets a constant.
   Check engine init ordering vs seed installation; re-judge after fix.
+  CORROBORATION: `synchronized-random-numbers` ORIGINAL renders zero
+  randomness — an exact hue ramp with a linear drift whose RATE AND SIGN
+  depend on the frame delta (+0.103 rev/s @10fps, +0.053 @20, −0.047 @40) —
+  the fingerprint of its PRNG degenerating to a constant increment. The pair
+  was judged divergent/4 (medium) against this suspect reference; re-judge
+  after the PRNG fix.
 
 ## Manifest rig fixes needed (pairs.json), tied to the out-of-range-writes gap
 - nano-orbital: original writes a fixed 144-px canvas → rig must be ≥144 px

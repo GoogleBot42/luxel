@@ -129,6 +129,10 @@ PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
 or ring structure that is pure display artefact. Verify any structural
 claim on such a pattern from `--dump` numbers, never from the images.
 
+On a small grid, cap any angular-harmonic scan at roughly gridWidth/2 —
+harmonics above that are aliased garbage (a NumArcs sweep read k=15,16
+noise above the cap but an exact per-dial match below it).
+
 For counting RAYS/STRIPES/BEAMS (a feature-count aggregate stats can't see
 — mean brightness barely moves when a frequency dial doubles the ray
 count), count zero-crossings or local maxima along a dumped SCANLINE

@@ -1,0 +1,49 @@
+{
+  "slug": "sunset",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides are deterministic, index-driven, continuously-evolving hue fields, but the original is a smooth full-saturation full-brightness rainbow (every pixel exactly V=255, S=1.00, hue period ~25 px) while the port runs its spatial phase ~6-10x too fast (hue period 2-4.5 px, past Nyquist on a 60 px strip) and additionally modulates value/saturation down to black on a third of the rig, so it reads as dark high-frequency speckle rather than broad rainbow chevrons.",
+  "observations": [
+    "Neither side exposes any controls (--probe-controls: 'no settable controls' on orig and port). No dial work is possible or required.",
+    "Not a one-shot ramp (contrary to the sibling `sunrise` hypothesis): over a 240 s survey both sides keep evolving indefinitely, brightnessTrend `steady` on both, no settle and no blackout. Nothing about the pattern is clock-driven either (see wall-clock test below).",
+    "ORIGINAL COLOR MODEL IS DEGENERATE-SIMPLE: at every one of 24 sampled times from t=0 to t=230 s, on the 60 px strip, on a 600 px strip and on a 16x16 grid, EVERY original pixel has value exactly 255 and saturation exactly 1.00. The original is a pure hue field — hsv(h,1,1) — with no brightness or saturation term whatsoever. meanBrightness over 60 s: avg 127, min 110, max 146.",
+    "PORT MODULATES BRIGHTNESS HEAVILY: port meanBrightness avg 39 (min 5, max 73 over 60 s) — 3.3x below the original. Per-frame, 12-33 of the 60 pixels sit below V=8 (near black) at any sampled moment, and per-frame min V is 0 at 23 of the 24 sampled times. Port mean saturation ranges 0.57-1.00 across the survey vs the original's flat 1.00.",
+    "SPATIAL FREQUENCY IS ~6-10x TOO HIGH ON THE PORT. Hue DFT on the de-aliased 600 px strip: original's dominant spatial wavenumber is 22 cycles/600 px (period ~27 px), stable across t=0..4 s, with a secondary component at k=7. Port's dominant wavenumber wanders 134-275 cycles/600 px (period 2.2-4.5 px). Total unwrapped |dhue| agrees: orig 2.4-3.1 hue cycles per 60 px vs port 6.8-17.7 hue cycles per 60 px across the 240 s survey.",
+    "The port is therefore ALIASING on the default rig. Raw pixel dump at t=0, 60 px: the port is literally a period-3 pixel lattice over the first 12 pixels — idx 0,3,6,9 = (0,0,0); idx 1,4,7,10 = (1,6,0)/(1,5,0)/(1,4,0); idx 2,5,8,11 = (0,21,30)..(0,21,34) — then a different period-3 block for idx 12-23, and so on. The original's dump over the same 60 pixels is a smooth continuous gradient (e.g. idx 4-11: (0,255,35),(0,255,73),(0,255,108),(0,255,140),(0,255,173),(0,255,208),(0,255,246),(0,225,255)).",
+    "Both sides ARE index-only / raw-index-driven, and that part matches. Spatial frequency scales ~10x when the strip goes 60 px -> 600 px on BOTH sides (orig 2.4 -> 25.4 hue cycles; port 17.4 -> 156), i.e. both use a fixed per-pixel phase step rather than a normalized coordinate. On a 16x16 grid both render as horizontal bands along the flat index. Do not 'fix' the port by normalizing to pixelCount — the bug is the size of the step, not its nature.",
+    "Motion: original motion avg 3 at 20 fps / 9 at 5 fps; port 9 at 20 fps / 26 at 5 fps. The port's ~3x higher motion is a consequence of sweeping a much finer spatial texture past each pixel, not of a faster tempo — the slow envelope periods are comparable (see next).",
+    "TEMPO/ENVELOPE IS APPROXIMATELY RIGHT. The original's spatial frequency slowly breathes over the survey (2.4 -> 1.7 at t=10 s -> 3.1 at t=70 s -> 1.7 at t=80 s -> 2.6 at t=230 s hue cycles per 60 px), producing the broad chevron/lens envelope visible in the 240 s waterfall. The port shows a comparable slow breathing (9.2 -> 17.0 -> 15.3 -> 13.7 -> 13.2), and its brightest/darkest survey moments (t=80 s meanV 120; t=160 s meanV 14) fall inside the same envelope. So the time-domain machinery looks structurally similar; the failure is spatial scale plus the extra value/sat term.",
+    "Both sides are fully deterministic and input-independent: seeds 1, 7 and 1234 render BYTE-IDENTICAL on both sides (mean abs diff 0.00 at t=0 and t=3), and wall clock 1756000000 vs 1756040000 is likewise byte-identical on both sides. No RNG or time-of-day involvement, so none of the divergence is stochastic.",
+    "No frame-rate coupling divergence. Comparing the same ABSOLUTE times across 10/20/40 fps: orig mean-abs-diff 3.9-5.0 (10 vs 40) and 1.3-1.7 (20 vs 40); port 4.9-19.8 and 1.9-7.1. Both sides are approximately time-based with a small integration residual, and the port's larger absolute numbers track its larger per-pixel dynamic range. Neither side is frame-stepped.",
+    "Regime checks parked at the survey's extremes (--skip 75 and --skip 155, 20 s at 20 fps) show the same picture as the baseline in both: original = smooth wide rainbow chevrons at full value; port = dark comb-like vertical striping with wide near-black gaps. No regime exists where the port converges on the original.",
+    "Neither side reported a compile or runtime error; neither binds sensors (wantsSensors false on both)."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY: the port's per-pixel phase increment is roughly 6-10x too large. On a 600 px strip the original's hue completes 22 cycles (period ~27 px) while the port completes 134-275 (period 2.2-4.5 px). Scale the port's spatial term down by ~6-7x so the hue completes ~2.4-3.0 cycles across the default 60 px strip. This single change removes the aliased speckle appearance entirely.",
+    "SECONDARY: delete whatever value/saturation modulation the port applies. The original emits hsv(hue, 1, 1) for every pixel at every time — measured value exactly 255 and saturation exactly 1.00 on 24 samples spanning 0-230 s, on 60 px, 600 px and 16x16 grid rigs. The port instead drives 12-33 of 60 pixels below V=8 and its saturation wanders 0.57-1.00. Pinning value and saturation to full also closes the mean-brightness gap (port 39 vs orig 127) automatically.",
+    "Do NOT normalize the spatial term by pixelCount. Both sides correctly use a fixed per-pixel step (frequency scales with strip length on both when going 60 px -> 600 px); only the step size is wrong.",
+    "The slow envelope is already roughly right — the original's spatial frequency breathes between ~1.7 and ~3.1 cycles per 60 px over tens of seconds and the port breathes proportionally, so the time-evolution term needs no retuning. Verify after the scale fix by re-measuring hue cycles per 60 px at t=0/10/70/80/230 s against orig 2.4/1.7/3.1/1.7/2.6.",
+    "Target waterfall appearance on a 60 px strip at 20 fps: broad smooth rainbow bands ~25 px wide sweeping and folding into chevron/V shapes, never dark, never desaturated, mean brightness ~127. The port currently looks like a dark 2-4 px comb with black gaps at mean brightness ~39.",
+    "No controls exist on either side, so the control surface matches; nothing to add or remove there."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey240",
+    "dealias600",
+    "dump60",
+    "dump600",
+    "fps10",
+    "fps40",
+    "wc-alt",
+    "seedbase",
+    "seed7",
+    "seed1234",
+    "regime-75",
+    "regime-155",
+    "grid16"
+  ]
+}
