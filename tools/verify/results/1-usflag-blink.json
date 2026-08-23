@@ -1,0 +1,29 @@
+{
+  "slug": "1-usflag-blink",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Both render an unmistakable US-flag strip — static red/white stripes plus a 15-px blue canton whose white stars blink off together every few seconds — but the port puts the canton a quarter of the way along instead of near the start, draws 3 stars instead of 2, uses 5-px stripes instead of 6-px, and blinks ~16% too fast.",
+  "observations": [
+    "Both sides render cleanly on the default 60-px strip rig: no compile or runtime errors, and the image is completely static except for one brief blink event per cycle (survey statsSummary: orig zeroMotionFrames 274/300, port 270/300, both brightnessTrend 'steady').",
+    "Original layout (identical in every frame, every run, both seeds): red px 0-3, blue canton px 4-18 (15 px) containing 2 white star pixels at index 8 and 13, then stripes red 19-23, white 24-29, red 30-35, white 36-41, red 42-47, white 48 (a single-pixel white stripe that breaks the otherwise 6-px rhythm), red 49-53, white 54-59. Stripe width is 6 px.",
+    "Port layout (likewise fixed): red px 0-4, white 5-9, red 10-14, blue canton px 15-29 (15 px) containing 3 white star pixels at index 17, 22 and 27, then red 30-34, white 35-39, red 40-44, white 45-49, red 50-54, white 55-59. Stripe width is 5 px.",
+    "So the canton is the same size on both sides (15 px = 25% of the strip) and star spacing is the same (5 px), but the canton sits 11 px further along on the port, the port fits one extra star, and the port's stripes are one pixel narrower (9 stripes of 5 px vs the original's ~8 stripes of 6 px with the one 1-px anomaly).",
+    "Blink behaviour (blink-timing run, 30 s @ 20 fps): original blinks all its stars to full black simultaneously for ~0.45 s once every ~4.6 s (12 events, inter-event gap 4.10-4.15 s, dead stable). Port does the same for ~0.40 s once every ~3.95 s (14 events, gap 3.50-3.55 s). Duty cycle matches (~10%) but the port's cycle is ~16% shorter.",
+    "Blink magnitude tracks star count: original motion peaks at 9, port at 13 (ratio 1.44, close to 3/2 stars).",
+    "Colors are the identical pure-primary palette on both sides — 255,0,0 / 255,255,255 / 0,0,255, stars going to 0,0,0 when blinked. Port mean brightness is slightly higher (149 vs 144) purely because of the different stripe/canton pixel counts.",
+    "Steady state is fine on both: the --skip 20 late window and the 60-s survey show exactly the same layout and blink cadence as t=0, with no decay, freeze or drift.",
+    "Seed has no effect on either side (seed 7 run reproduces the same layout and the same blink phase) — this pattern is deterministic, not stochastic.",
+    "Rendered on an 8x8 grid override both sides show the same 1D-index staircase, confirming both are pure index-based 1D patterns; the grid view makes the canton offset obvious (original's blue band starts in the top row, port's starts two rows down).",
+    "Control surface: the harness reports zero settable controls on BOTH sides, and --probe-controls confirms nothing to probe. No control-surface mismatch."
+  ],
+  "dials": [],
+  "feedback": [
+    "Move the blue canton earlier: the original's canton occupies pixels 4-18 of 60 (fraction ~0.067 to ~0.317 of the strip), preceded by a single 4-px red stripe. The port starts it at pixel 15 (0.25) after a full red/white/red run of stripes — shift it back by ~11 px / ~0.18 of the strip.",
+    "Draw 2 stars, not 3. Original stars are at pixel 8 and 13 (offsets 4 and 9 inside the 15-px canton); the port has 3 at offsets 2, 7 and 12. Keep the 5-px spacing, drop the extra star, and shift the first star 2 px later.",
+    "Widen the stripes from 5 px to 6 px on a 60-px strip (0.083 -> 0.1 of the strip). The original also emits a lone 1-px white stripe at index 48, an artefact of its stripe-boundary rounding — a faithful port would reproduce that boundary math rather than a clean uniform 5-px repeat.",
+    "Slow the blink cycle: original blinks every ~4.6 s with stars dark for ~0.45 s; port blinks every ~3.95 s for ~0.40 s. Stretch the period by ~1.16x (duty cycle is already right at ~10%).",
+    "Everything else is already correct and should not be touched: palette (pure red/white/blue, stars to full black), 15-px canton width, 5-px star spacing, all stars blinking simultaneously, and the fully static background between blinks."
+  ],
+  "experiments": ["baseline", "survey", "probe", "blink-timing", "late", "seed7", "grid8"]
+}

@@ -1,0 +1,32 @@
+{
+  "slug": "1-white-fade",
+  "verdict": "match",
+  "score": 10,
+  "confidence": "high",
+  "summary": "Port and original render pixel-identical output in every experiment: a spatially uniform pure-white strip whose brightness breathes smoothly from 0 to 255 and back on a ~30 s cycle.",
+  "observations": [
+    "Both sides render without compile or runtime errors on the default strip rig (60 px).",
+    "Structure: no spatial structure at all — every pixel on the strip carries the same value in every frame, on both sides. Re-rendered on an 8x8 grid (--rig grid --grid 8x8) both sides are still a flat, uniform field, so neither side has hidden index/position dependence.",
+    "Color: pure neutral white on both sides — survey statsSummary has meanR == meanG == meanB == meanBrightness for both (avg 132.5, min 0, max 255) across all 300 captured frames.",
+    "Motion: no translation; the only animation is a global brightness envelope. The 60 s survey waterfall shows purely horizontal banding (bright bands, black bands) with no slope on either side.",
+    "Rhythm: the meanBrightness series over the 60 s survey is a smooth breathing cycle of period ~30 s — 132 rising to a 255 plateau around t=8 s, falling to a 0 floor held ~1.2 s around t=24-25 s, then rising to the next 255 plateau around t=38 s. The original's and the port's 300-sample series are byte-for-byte the same list of numbers.",
+    "Survey revealed exactly one regime (one repeating breathe cycle, no mode rotation); it repeated within the 60 s window, so the full cycle was observed. Both phases of that cycle were parked in and compared directly: bright plateau (--skip 6, mean 235 both sides) and black trough (--skip 20, mean 12 / motion 0 both sides).",
+    "Steady state is healthy and identical: --seconds 30 --fps 4 gives mean 130 / motion 4 on both sides; the --skip 20 late window is dark only because that is where the cycle's trough falls, and the survey confirms brightness returns to 255 afterwards on both sides. No decay, no freeze, no saturation divergence — statsSummary brightnessTrend is 'volatile' and zeroMotionFrames is 23 on BOTH sides in the survey.",
+    "Controls: the engine reports zero settable controls on the original AND zero on the port — the control surface matches exactly. --probe-controls confirms '(no settable controls)' for both sides, so there is nothing to sweep.",
+    "The rendered PNGs are byte-identical between orig and port in every run performed (baseline, survey, probe, steady, late, seed7, grid8-recheck including its motion and rhythm images, cycle-peak). Non-default seed 7 changes nothing on either side, as expected for a deterministic non-stochastic pattern."
+  ],
+  "dials": [],
+  "feedback": [
+    "No changes needed — the port is output-indistinguishable from the original across a full animation cycle, both cycle phases, two seeds, and an alternate rig."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "cycle-peak",
+    "late",
+    "steady",
+    "seed7",
+    "grid8-recheck"
+  ]
+}

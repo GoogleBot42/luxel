@@ -1,0 +1,77 @@
+{
+  "slug": "1d-aurora-borealis",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both render soft multi-hued aurora glows on the strip, but the original is a sparse sequence of near-stationary curtains that fade in and out with long dark gaps, while the port shows many continuously travelling waves that bounce off the strip ends and never let the strip go dark.",
+  "observations": [
+    "Motion (the headline divergence, strip rig 60px): over a 240 s / 2 fps window the original's waterfall is made of purely VERTICAL streaks — each glow sits at a fixed pixel position and only brightens/dims; the port's waterfall is a dense zigzag lattice, i.e. waves sweeping the full 60 px and reflecting at both ends. Confirmed at 20 s / 10 fps windows parked at t=20, 45, 70, 95, 190 s: original always vertical, port always diagonal-and-bouncing.",
+    "The original does show a very slight lateral sway — in the t=45 s window the purple curtain's bright core drifts about 4 px over 20 s (~0.2 px/s). The port's waves cross the whole strip in roughly 5-8 s (~8-12 px/s) at default dials, i.e. ~40-60x faster travel.",
+    "Duty cycle / density: original renders ONE glow at a time at a random position and random hue, each fading up and back down over ~10-15 s, separated by seconds of full black — 315 of 480 captured frames over 240 s had literally zero frame-to-frame change (motion avg 0.4). The port has ~4-8 waves overlapping at all times and only 1 zero-motion frame in the same 480 (motion avg 4.6).",
+    "Brightness: over the same 240 s window mean brightness is 5.4 on the original vs 19.6 on the port (~3.6x too bright), because the port never goes dark between events. brightnessTrend: original 'volatile' (events + gaps), port 'rising'/'steady'.",
+    "Color: the original's glows cycle through a wide hue set across events — violet, magenta/crimson, teal, yellow-green, green — with roughly balanced channel means (R 4.7 / G 7.8 / B 3.7 over 240 s). The port is strongly green-dominant (R 10.1 / G 34.1 / B 14.6) with only occasional purple/pink streaks. Palette family is recognisably the same, the distribution is not.",
+    "Shape: an original glow is a soft symmetric curtain with a bright narrow core and a wide dim halo, brightening and dimming in place. The port's features are ribbons of roughly constant brightness that translate; they read as beams, not curtains.",
+    "Control-surface mismatch: the original exposes sliderSpeed / sliderWidth / sliderPalette / sliderNumWaves; the port exposes sliderSpeed / sliderWidth / sliderPalette / sliderNumberOfWaves. The fourth control's name (and UI label, 'NumWaves' vs 'NumberOfWaves') differs.",
+    "Both sides compile and run with no compile or runtime errors, on every run performed.",
+    "Steady state is stable on both sides: neither freezes, blacks out permanently, nor saturates across 240 s; the divergence is present from t=0 and unchanged at t=190+.",
+    "Character holds across seeds — a seed-7, 120 s run reproduces exactly the same contrast (original sparse/stationary, port dense/bouncing), so this is not a one-seed fluke."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Barely visible from output: 0 vs 1 over a 40 s window produced near-identical renders — same event timings, same positions, at most a faint change in the core's shimmer (probe maxDelta 1.32, only just over threshold). Effect essentially unverifiable from output.",
+      "portEffect": "Strong and obvious: at 0 the waves are nearly vertical (very slow travel); at 1 they cross the strip in ~2-3 s producing a tight zigzag lattice (probe maxDelta 12.65).",
+      "matches": false
+    },
+    {
+      "name": "sliderWidth",
+      "origEffect": "Controls curtain width: at 0 each glow is a narrow ~6-8 px spike; at 1 it is a broad soft wash covering ~30+ px. Timing and position unchanged.",
+      "portEffect": "Same direction: at 0 the travelling ribbons are thin filaments; at 1 they are broad soft bands that merge into a wash. Timing and travel unchanged.",
+      "matches": true
+    },
+    {
+      "name": "sliderPalette",
+      "origEffect": "Shifts the hue assigned to each event while leaving positions and timings identical: over the same 60 s window the second event is crimson/red at 0 and teal/green at 1. (The probe called this inert — that was a 12 s window artifact; the first event is violet at every setting.)",
+      "portEffect": "Also shifts hue: at 0 the ribbon mix is pink/red-leaning, at 1 it is green/yellow-leaning. Same knob character, but applied to the port's green-dominant default mix rather than the original's balanced one.",
+      "matches": true
+    },
+    {
+      "name": "sliderNumWaves (port: sliderNumberOfWaves)",
+      "origEffect": "Sets how many curtains are alive at once: at 0 one sparse glow at a time with long gaps; at 1 many overlapping stationary curtains of different colors filling most of the strip.",
+      "portEffect": "Same direction: at 0 two or three travelling ribbons with dark gaps; at 1 a dense crosshatch of many ribbons. Response direction and rough magnitude match, but the features being counted are travelling beams rather than stationary curtains.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Kill the lateral travel. The original's aurora curtains are essentially STATIONARY: each one is pinned to a random pixel position for its whole life and only fades up and back down. In the waterfall the original is pure vertical streaks; the port is diagonals bouncing off both ends. At most add a very slow sway (~0.2 px/s, a few pixels over 20 s) — not a traverse.",
+    "Remove the end-bounce/reflection behaviour entirely — the zigzag reversals at pixel 0 and pixel 59 are the single most obvious tell and have no counterpart in the original.",
+    "Make the animation event-driven and sparse instead of continuous. At default dials the original has ONE curtain alive at a time, lifetime ~10-15 s (fade in, peak, fade out), with several seconds of complete black between events. The port never goes dark: it should spend a large fraction of the time near zero output (original: 315/480 frames with zero change over 240 s, mean brightness 5.4; port: 1/480, mean 19.6).",
+    "Overall brightness at default dials is ~3.6x too high, almost entirely because of the missing dark gaps — fixing the duty cycle should mostly fix the brightness.",
+    "Rebalance the default hue distribution. The original picks a fresh hue per event across a wide spread (violet, magenta/crimson, teal, yellow-green, green) with roughly equal long-run R/G/B means; the port sits mostly in green (G mean 34 vs R 10, B 15). Spread the per-feature hue draw over the full range rather than clustering near green.",
+    "Give each feature the original's curtain profile: a narrow bright core with a wide, soft, symmetric falloff whose overall amplitude envelopes up and down over its lifetime. The port's features are more like constant-brightness ribbons.",
+    "sliderSpeed on the port is doing a job the original's Speed does not appear to do at all (the original's 0-vs-1 renders are near-identical). Once travel is removed, Speed should probably govern the fade/lifetime rate of a curtain, and its visible effect should be subtle.",
+    "Rename the fourth control from sliderNumberOfWaves to sliderNumWaves (label 'NumWaves') so the control surface matches the original exactly. Its behaviour — number of simultaneous curtains — is already correct in direction.",
+    "Width and Palette already behave correctly in direction and rough magnitude; leave them alone."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-long",
+    "probe",
+    "mode-t20",
+    "mode-t45",
+    "mode-t70",
+    "mode-t95",
+    "mode-t190",
+    "ctl-numwaves-0",
+    "ctl-numwaves-1",
+    "ctl-width-0",
+    "ctl-width-1",
+    "ctl-speed-0",
+    "ctl-speed-1",
+    "ctl-palette-0",
+    "ctl-palette-0.5",
+    "ctl-palette-1",
+    "seed7"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "slug": "2-purple-fade",
+  "verdict": "match",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Both sides are the same pattern: a spatially uniform purple whole-strip breathe that fades to full black and back on a ~30 s cycle with an identically shaped envelope; the port's cycle is ~11% faster and its purple is a touch redder and brighter.",
+  "observations": [
+    "Alive on both sides: no compile or runtime errors in any run; meanG is exactly 0 for every captured frame on both sides, so the pattern is a pure red+blue (purple) ramp.",
+    "Structure: no spatial structure at all on either side. The 60 px strip waterfalls are flat horizontally, and an 8x8 grid re-render (grid8-recheck) shows both sides painting perfectly uniform fields in every sheet cell — every pixel takes the same colour, so there is no indexing difference to find.",
+    "Motion/rhythm: a single slow sinusoidal brightness envelope, whole-strip, with a brief hard-black bottom. Original peaks at t=8.0 s and t=41.6 s and sits at pure black t=23.6-25.2 s and t=56.4-57.8 s -> period ~33.4 s. Port peaks at t=7.2 s and t=37.4 s, black t=21.4-22.6 s and t=50.8-52.0 s -> period ~29.8 s. Port is therefore ~11% faster.",
+    "Envelope shape is essentially identical once each cycle is normalised to its own period and peak: orig 1.00/0.89/0.62/0.33/0.08/0.00/0.12/0.41/0.70/0.93/0.99 vs port 1.00/0.90/0.64/0.32/0.08/0.00/0.13/0.41/0.71/0.94/0.99 at phase 0.0-1.0. Same raised-cosine breathe, same full black-out at mid-cycle.",
+    "Colour: hue is held constant across the whole cycle on both sides. Original R/B ratio is a rock-steady 0.62 (hue ~277 deg); the port's is a rock-steady 0.68 (hue ~281 deg) — a ~4 deg shift, a slightly redder violet. Peak mean brightness is 138 (orig) vs 143 (port), ~3.5% brighter.",
+    "Both sides start the run at exactly the same phase (meanB = 128 in the first captured frame of each), so the divergence visible later is purely the accumulated period difference, not an offset start.",
+    "Steady state confirmed: a late window (--skip 120 --seconds 60) shows both sides with unchanged amplitude (orig max 138, port max 142) and unchanged periods (orig ~32.6 s, port ~29.6 s). Neither side decays, freezes or saturates; the period gap is stable rather than drifting.",
+    "Seed-independent: a --seed 7 run reproduces the seed-1 peaks and black runs to the frame on both sides, so the pattern carries no randomness.",
+    "Controls: the engine reports an empty control list for BOTH sides, and --probe-controls found no settable controls on either. No control-surface mismatch."
+  ],
+  "dials": [],
+  "feedback": [
+    "Cycle length is the one real gap: the original's full fade-out-and-back period is ~33.4 s, the port's ~29.8 s. Slow the port's breathe by ~11-12% (multiply its cycle time by ~1.12) to line the two up.",
+    "The port's purple is slightly redder than the original's: at equal blue the original holds red at ~0.62 of blue, the port at ~0.68 (hue ~277 deg vs ~281 deg). Pull a little red out to match.",
+    "Port peaks ~3.5% brighter than the original (mean 143 vs 138 at the crest). Cosmetic, but trimming the top of the envelope slightly would close it.",
+    "Everything else already matches: uniform whole-strip output, constant hue through the cycle, identical normalised envelope shape, and a genuine hard black-out at mid-cycle on both sides — do not change those."
+  ],
+  "experiments": ["baseline", "survey", "probe", "mode-peak", "mode-trough", "grid8-recheck", "late", "seed7"]
+}
