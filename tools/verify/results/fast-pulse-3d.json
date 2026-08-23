@@ -1,0 +1,47 @@
+{
+  "slug": "fast-pulse-3d",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Port reproduces the sweeping narrow rainbow band and its hue walk almost exactly, but runs the whole cycle ~25% fast and turns the signature pulse from a full-rig white-out into a dim doubled coloured flash.",
+  "observations": [
+    "Rig: manifest grid 16x16 (256 px). Neither side exposes any controls (probe: 'no settable controls' on both). Both sides report wantsSensors:false. Both sides are seed-independent: seed 1 and seed 7 produce byte-identical meanBrightness series over 240 frames on both orig and port.",
+    "Quiet regime (most of the time) is a near-perfect match on both sides: a single narrow diagonal bright band, ~2-3 px FWHM, peaking at ~250/255, sliding across the grid while its angle slowly rotates, on a soft same-hue background gradient. --dump at t=5.5/5.6/5.7 s (row 8) gives orig 5,15,36,77,148,245,137,70,33,13,... and port 3,8,17,32,56,91,143,216,203,134,85,... — same Gaussian-ish profile, same peak amplitude.",
+    "Colour: both walk hue continuously and monotonically through the full wheel in the same direction. Orig completes one full 0->360 revolution in 6.55 s; port in 5.25 s (measured by hue of mean RGB at 20 and 40 fps; autocorrelation of meanBrightness gives 131 frames @20fps for orig and 105 frames @20fps for port, and the same seconds at 10/20/40 fps).",
+    "PULSE CADENCE: both sides fire a bright pulse each time the hue crosses 0 and 180. Orig: one pulse every 3.275 s (100 fps run, 12 s: peaks at 3.27 s, 6.54 s, 9.82 s). Port: pulses arrive as a PAIR every 2.62 s (pair centres 2.6 s, 5.23 s, 7.85 s, 10.47 s). Port's tempo is ~1.25x the original's.",
+    "PULSE AMPLITUDE: at its own peak the original whites out the ENTIRE rig — --dump at t=3.25 s: whole-grid mean 252, 256/256 px above 32, 225/256 px at >=250, mean(max channel) == mean(RGB) == 252, i.e. essentially all pixels (255,255,255). At t=6.525 s: mean 239, 256/256 lit. The port never gets close: its strongest peak in 40 s at 40 fps is whole-grid mean 85, and --dump at its own peak t=5.125 s gives mean 79 with mean(max channel) 141 and only 1/256 px saturated — a mid-brightness COLOURED wash, never a white-out.",
+    "PULSE SHAPE: orig fires one flash per pulse. At the hue-180 pulse it is a smooth symmetric bell ~1 s wide with no blackout (40 fps frames 113-145: 18,...,121,164,252,169,123,...,18). At the hue-0 pulse it is black (frames 253-257 = 0-2) then a single ~1-frame spike to 239 then black again (frames 267-269 = 0-1). Port instead fires TWO flashes ~0.2-0.3 s apart with a hard black notch between them: 40 fps frames 95-113 read 43,55,66,72,56,18,4,0,0,0,0,1,7,28,63,70,62,51,40 — flash, five black frames, second flash. Same at its hue-0 pulse (79 at f205, 0 at f208-210, 78 at f212).",
+    "Consequence in the stats: orig zeroMotionFrames 1/800 and 13 blackout stretches in 40 s at 20 fps, clustered as pairs around the hue-0 pulse only; port has ~30 blackout stretches, roughly one every 52 frames (2.6 s), i.e. the port goes fully dark about 2.5x as often as the original.",
+    "Both sides are frame-rate independent: the hue period measures 6.55 s (orig) / 5.25 s (port) identically at 10, 20 and 40 fps, so the tempo error is a real speed constant, not frame-rate coupling.",
+    "Resolution independence matches: re-rendered at --grid 48x48 both sides keep the same feature sizes and the same cadence (orig peaks at 3.25/6.50/9.80 s reaching 170-239; port pairs at 2.40/2.70, 5.10/5.30, 7.65/7.95, 10.35 s reaching 61-82). The divergences above are not a grid-size artefact.",
+    "Supplementary 3D lens (--rig cloud --pixels 1000, 12 s): both waterfalls show the same 3D character — a plane sweeping the lattice as repeating comb/hook textures, rainbow hue descending, with bright horizontal flash bands at the cyan and red hue crossings. Orig shows ~1.8 hue cycles in 12 s with thick saturated white flash bands; port shows ~2.4 cycles with thinner, less blown-out bands. Same structure, same 25% tempo gap."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the whole animation by ~25%: the original's hue completes a full 0->360 revolution in 6.55 s and fires one pulse every 3.275 s; the port does 5.25 s and 2.62 s. One global rate constant scaled by 5.25/6.55 = 0.80 should line both up.",
+    "The pulse peak is roughly 3x too weak and never desaturates. At its climax the original drives EVERY pixel to full white (whole-rig mean 252 of 255, 225/256 pixels at >=250) for about one frame at 40 fps; the port's climax is a coloured wash at whole-rig mean ~79 with essentially no saturated pixels. The pulse envelope needs a much larger multiplier and needs to push the colour to white (all three channels railed), not just brighten the current hue.",
+    "The port splits each pulse into two flashes separated by a hard black notch (~0.2-0.3 s apart, 4-5 fully black frames between). The original fires a single flash per hue crossing. Something in the port's pulse envelope is being folded/rectified so it crosses zero twice per event — it should be one monotonic rise-and-fall.",
+    "The port goes fully black too often. The original blacks out only around its hue-0 pulse (once per 6.55 s hue cycle); the port blacks out roughly every 2.6 s, i.e. around every pulse. Once the doubled-flash and tempo issues are fixed, check that the hue-180 pulse rides on top of the normal band without ever dropping the whole rig to zero — on the original it does not (its hue-180 bell never dips below mean ~18).",
+    "Everything else already matches and should not be touched: the ~2-3 px band width and its ~250 peak, the band's slow rotation and sweep, the soft background gradient, the monotonic full-wheel hue walk and its direction, seed-independence and frame-rate independence."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "fps10",
+    "fps40",
+    "fps100",
+    "quiet5",
+    "evt-a",
+    "evt-b",
+    "evt-c",
+    "evt-d",
+    "dump-quiet",
+    "dump-sweep",
+    "dump-peaks",
+    "seed7",
+    "cloud",
+    "grid48"
+  ]
+}

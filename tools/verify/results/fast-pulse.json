@@ -1,0 +1,38 @@
+{
+  "slug": "fast-pulse",
+  "verdict": "match",
+  "score": 10,
+  "confidence": "high",
+  "summary": "Port is bit-identical to the original on every run I made — same pixels, same stats series, same rig behaviour, from t=0 out to t=132 s.",
+  "observations": [
+    "Default rig is a 60 px strip. Both sides draw ONE narrow pulse: a white-hot core (peak RGB ~[236,236,236]-[254,254,254], all channels equal) with a short coloured halo either side and true black (0,0,0) elsewhere; ~24 mean brightness, 'steady' brightnessTrend on both.",
+    "Motion is an oscillating sweep with wraparound, not a constant scroll. Tracking the peak index by --dump at 20 fps: 27 -> 0 over t=0.00-0.50 s (~54 px/s leftward), wraps to 57, decelerates to a turnaround at index ~30 around t=1.5-1.7 s, then runs rightward, accelerating through the 59->0 wrap (~60 px/s near t=2.6-3.8 s), decelerates and turns around again at index ~29-30 around t=4.8-5.0 s. Direction-reversal cadence ~3.3 s, so a full there-and-back cycle of ~6.6 s. Orig and port peak indices agree at every one of the 55 sampled times.",
+    "Colour is a continuous hue walk, ~3 deg per 0.05 s (~60 deg/s), so a full hue wheel about every 6 s: red -> orange -> yellow -> green -> cyan -> blue -> magenta and around. The 6 s baseline waterfall shows exactly one full wheel on both sides, and the two waterfalls are pixel-for-pixel the same image.",
+    "Single regime: a 60 s / 5 fps survey and a 240 s / 2 fps survey show uniform structure throughout with no mode rotation, palette drift, or event cadence beyond the ~6.6 s sweep and ~6 s hue cycle. Both sides' survey waterfalls are identical.",
+    "Steady state confirmed: a --skip 120 --seconds 12 --fps 20 window (t=120-132 s) is still an exact match, and dumped frames at t=120, 120.35, 122.75, 127.4 and 131.9 s are byte-identical between sides.",
+    "All per-frame stat series (meanBrightness, meanR/G/B, motion, motionLit) are numerically identical between orig and port with max diff 0.0000 on every run: baseline (120 f), survey (300 f), survey-240 (480 f), late (240 f), fps10 (60 f), fps40 (240 f), seed7 (200 f), seed1234 (200 f), grid8 (120 f).",
+    "Neither side exposes any control (probe: '(no settable controls)' for both), so the control surfaces match. Neither side binds sensor globals (wantsSensors false on both).",
+    "Frame-rate behaviour matches: rendered at 10, 20 and 40 fps the peak positions at the same absolute times shift with rate on BOTH sides equally (t=0/0.4/0.8/1.2 s gives 24,2,44,33 at 10 fps and 29,6,47,35 at 40 fps), and orig and port agree exactly at each rate. Whatever time/frame coupling the original has, the port has the same.",
+    "Seed-independent and rig-independent in the same way on both sides: seeds 1, 7 and 1234, and a --rig grid --grid 8x8 re-render, all produce identical orig/port output.",
+    "No compile or runtime errors on either side in any run; meta.json warnings empty throughout."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing to fix. Across 13 runs spanning 6 s to 240 s windows, three seeds, three frame rates and two rigs, the port's output is indistinguishable from the original at the pixel level — no divergence to describe."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "late",
+    "dump-base",
+    "track",
+    "track2",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "grid8"
+  ]
+}
