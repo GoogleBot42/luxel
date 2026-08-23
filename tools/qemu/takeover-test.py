@@ -88,6 +88,7 @@ APP0 = 0x10000
 APP1 = 0x190000
 FS_OFFSET = 0x310000
 LXCF_OFFSET = 0x9000  # config.rs RECORD_OFFSET
+LXDV_OFFSET = 0xA000  # config.rs DEV_OFFSET
 LXBG_OFFSET = 0xC000  # ota.rs GUARD_OFFSET (4th nvs sector under both layouts)
 LUXEL_OTADATA = 0xD000  # partitions.csv: otadata, 0xd000, 0x2000
 LUXEL_STORAGE = 0x210000  # partitions.csv: storage, 0x210000, 0x100000
@@ -352,6 +353,10 @@ def check_serial(log: str, slot: str, ota_len: int, c: Checks,
         c.line(boot1, "takeover: image already in place at 0x10000", "boot1")
     c.line(boot1, "takeover: wiping config/otadata sectors 0x9000..0x10000", "boot1")
     c.line(boot1, "takeover: WiFi credentials carried over", "boot1")
+    c.line(boot1, "takeover: WLED drove the strip on GPIO18", "boot1")
+    c.line(boot1,
+           "takeover: settings carried over (30 px, ws2812, order rgb, "
+           "brightness 16/31, cap 850 mA, gamma 2.8)", "boot1")
     c.ok(f"serial[boot1]: {REBOOT_LINE!r}")
 
     c.line(boot2, "booted from: ota_0", "boot2")
@@ -365,6 +370,7 @@ def check_flash(flash: bytes, expected_table: bytes, ota: bytes, fs: bytes,
               f"first differing byte at {first_diff(got, expected_table)}")
 
     check_lxcf(flash, c)
+    check_lxdv(flash, c)
 
     got = flash[APP0 : APP0 + len(ota)]
     c.require(got == ota, f"flash: ota_0 (0x10000) holds the {len(ota)} B app image byte-for-byte",
@@ -440,6 +446,40 @@ def check_lxcf(flash: bytes, c: Checks) -> None:
               f"stored {stored:#010x} want {want:#010x}")
     tail = rec[end + 4 :]
     c.require(tail == b"\xff" * len(tail), "flash: rest of the 0x9000 sector erased",
+              f"first non-0xFF at {first_diff(tail, b'\xff' * len(tail))}")
+
+
+def check_lxdv(flash: bytes, c: Checks) -> None:
+    """The inherited-wiring record written by config::write_device() —
+    values are the configured littlefs fixture's hw.led/def/light.gc
+    (30 px WS2812 GRB on GPIO18, maxpwr 850 mA, gamma 2.8, bri 128):
+    ws2812 GRB is the encoder-native order -> Luxel color_order 0, and
+    bri 128/255 rounds to brightness 16/31."""
+    rec = flash[LXDV_OFFSET : LXDV_OFFSET + SECTOR]
+    c.require(rec[0:4] == b"LXDV", "flash: LXDV device-config record at 0xA000",
+              f"got {rec[0:8].hex()}")
+    ver, bri, proto, sync = rec[4], rec[5], rec[6], rec[7]
+    c.require(ver == 6, "flash: LXDV version 6", f"ver={ver}")
+    pixels = struct.unpack("<I", rec[8:12])[0]
+    tz = struct.unpack("<h", rec[12:14])[0]
+    order, gamma = rec[14], rec[15]
+    cap = struct.unpack("<H", rec[16:18])[0]
+    c.require(pixels == 30, "flash: imported pixel count 30", f"got {pixels}")
+    c.require(proto == 1, "flash: imported protocol ws2812 (code 1)", f"got {proto}")
+    c.require(order == 0, "flash: imported color order rgb/identity (WLED GRB is ws2812-native)",
+              f"got {order}")
+    c.require(bri == 16, "flash: imported brightness 16/31 (WLED bri 128/255)", f"got {bri}")
+    c.require(cap == 850, "flash: imported power cap 850 mA (WLED maxpwr)", f"got {cap}")
+    c.require(gamma == 28, "flash: imported gamma 2.8 (WLED light.gc.col)", f"got {gamma}")
+    c.require(sync == 0 and tz == 0 and rec[18:20] == b"\x00\x00",
+              "flash: LXDV non-imported fields at defaults",
+              f"sync={sync} tz={tz} pad={rec[18:20].hex()}")
+    stored = struct.unpack("<I", rec[20:24])[0]
+    want = sum(rec[:20]) & 0xFFFFFFFF  # config.rs: wrapping u32 byte sum
+    c.require(stored == want, "flash: LXDV checksum valid",
+              f"stored {stored:#010x} want {want:#010x}")
+    tail = rec[24:]
+    c.require(tail == b"\xff" * len(tail), "flash: rest of the 0xA000 sector erased",
               f"first non-0xFF at {first_diff(tail, b'\xff' * len(tail))}")
 
 

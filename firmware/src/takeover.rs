@@ -95,19 +95,39 @@ fn app_entries(table: &[u8]) -> Vec<Part> {
     v
 }
 
-/// Best-effort WiFi inheritance from the outgoing firmware's filesystem
-/// (WLED: littlefs in its `spiffs` data partition). Read-only; any
-/// failure just returns None and the provisioning AP covers it.
-fn inherit_wifi(live_table: &[u8]) -> Option<(alloc::string::String, alloc::string::String)> {
-    let fs_part = entries(live_table)
+/// The outgoing firmware's filesystem partition (WLED: littlefs in its
+/// `spiffs` data partition), if the foreign table has one.
+fn wled_fs_part(live_table: &[u8]) -> Option<Part> {
+    entries(live_table)
         .into_iter()
-        .find(|p| p.ptype == TYPE_DATA && p.subtype == SUBTYPE_SPIFFS)?;
+        .find(|p| p.ptype == TYPE_DATA && p.subtype == SUBTYPE_SPIFFS)
+}
+
+/// Best-effort WiFi inheritance from the outgoing firmware's filesystem.
+/// Read-only; any failure just returns None and the provisioning AP covers it.
+fn inherit_wifi(live_table: &[u8]) -> Option<(alloc::string::String, alloc::string::String)> {
+    let fs_part = wled_fs_part(live_table)?;
     let base = fs_part.offset;
     let mut read = |off: u32, buf: &mut [u8]| {
         off.checked_add(base)
             .is_some_and(|abs| crate::assets::read_chunk(abs, buf))
     };
     crate::wledfs::extract_wifi(&mut read, fs_part.len)
+}
+
+/// Best-effort LED wiring + defaults inheritance from the same cfg.json
+/// (pixel count, strip type, color order, boot brightness, power cap,
+/// gamma). Same posture as [inherit_wifi]: read-only, None on any failure,
+/// and every field is individually optional — the board defaults cover
+/// whatever is missing or unmappable.
+fn inherit_wiring(live_table: &[u8]) -> Option<crate::wledfs::WledWiring> {
+    let fs_part = wled_fs_part(live_table)?;
+    let base = fs_part.offset;
+    let mut read = |off: u32, buf: &mut [u8]| {
+        off.checked_add(base)
+            .is_some_and(|abs| crate::assets::read_chunk(abs, buf))
+    };
+    crate::wledfs::extract_wiring(&mut read, fs_part.len)
 }
 
 /// This build's app descriptor as raw bytes. Every app image carries it at
@@ -308,12 +328,17 @@ pub fn maybe_takeover() {
         return;
     };
 
-    // Inherit the outgoing firmware's WiFi credentials before anything is
-    // modified; they are persisted after the config wipe below.
+    // Inherit the outgoing firmware's WiFi credentials and LED wiring
+    // before anything is modified; both are persisted after the config
+    // wipe below.
     let inherited = inherit_wifi(&live);
     match &inherited {
         Some((ssid, _)) => println!("takeover: inherited WiFi credentials for \"{}\"", ssid),
         None => println!("takeover: no WiFi credentials to inherit (provisioning AP will cover)"),
+    }
+    let wiring = inherit_wiring(&live);
+    if wiring.is_none() {
+        println!("takeover: no LED wiring to inherit (board defaults)");
     }
 
     // Candidate slots under the live (foreign) table. Destination offset
@@ -383,6 +408,63 @@ pub fn maybe_takeover() {
         match crate::config::write_wifi(&ssid, &pass) {
             Ok(()) => println!("takeover: WiFi credentials carried over"),
             Err(e) => println!("takeover: creds carry-over failed ({}) — AP fallback", e),
+        }
+    }
+
+    // Persist the inherited LED wiring the same way: build a device-config
+    // record from whatever mapped, board defaults for the rest. WLED's pin
+    // is compile-time on Luxel (board feature), so it's logged, not
+    // imported. Failure is non-fatal: defaults cover, never a retry.
+    if let Some(w) = wiring {
+        let protocol = w.strip_type.and_then(crate::wledfs::map_strip_type);
+        if let (Some(t), None) = (w.strip_type, protocol) {
+            println!(
+                "takeover: WLED strip type {} has no Luxel equivalent — keeping {}",
+                t,
+                crate::board::DEFAULT_PROTOCOL.name()
+            );
+        }
+        if let Some(pin) = w.pin {
+            println!(
+                "takeover: WLED drove the strip on GPIO{} — Luxel's data pin is fixed by the board build; rewire or rebuild if they differ",
+                pin
+            );
+        }
+        let dev = crate::config::DeviceConfig {
+            // WLED boot brightness is 0-255; Luxel's is 0-31 (>31 voids the
+            // record). Round, and floor at 1 so an imported config can
+            // never look like a dead strip.
+            brightness: w
+                .bri
+                .map(|b| (((b as u32) * 31 + 127) / 255).max(1) as u8)
+                .unwrap_or(crate::APA_BRIGHTNESS),
+            protocol: protocol.unwrap_or(crate::board::DEFAULT_PROTOCOL.as_u8()),
+            sync_mode: 0,
+            pixel_count: w
+                .pixels
+                .map(|p| p.min(crate::shared::MAX_PIXELS))
+                .unwrap_or(crate::board::DEFAULT_PIXEL_COUNT),
+            tz_minutes: 0,
+            // Only meaningful relative to a protocol we actually mapped —
+            // a guessed protocol would make the remap a color bug.
+            color_order: protocol
+                .and_then(|p| w.order.and_then(|o| crate::wledfs::map_color_order(o, p)))
+                .unwrap_or(0),
+            gamma_tenths: w.gamma_tenths.unwrap_or(0),
+            cap_ma: w.cap_ma.unwrap_or(0),
+        };
+        match crate::config::write_device(&dev) {
+            Ok(()) => println!(
+                "takeover: settings carried over ({} px, {}, order {}, brightness {}/31, cap {} mA, gamma {}.{})",
+                dev.pixel_count,
+                crate::leds::Protocol::from_u8(dev.protocol).name(),
+                luxel_core::outpipe::ColorOrder(dev.color_order).name(),
+                dev.brightness,
+                dev.cap_ma,
+                dev.gamma_tenths / 10,
+                dev.gamma_tenths % 10
+            ),
+            Err(e) => println!("takeover: settings carry-over failed ({}) — board defaults", e),
         }
     }
 

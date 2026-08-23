@@ -1,5 +1,62 @@
 # Update log
 
+## 2026-08-22 — Takeover imports WLED's LED wiring: a converted device
+## comes up configured, not defaulted (the open half of Gitea #3)
+
+The takeover already mounted WLED's littlefs and parsed cfg.json for the
+SSID — and threw the rest away, so every conversion booted 60 px ws2812
+at default brightness regardless of what the WLED install was actually
+driving. Now the same read lifts the wiring and boot defaults, and the
+takeover writes a full `LXDV` device-config record right next to the
+`LXCF` creds record it already wrote:
+
+| WLED cfg.json | Luxel field | mapping |
+|---|---|---|
+| `hw.led.ins[0].len` (fallback `total`) | pixel_count | clamped 1..=2048 |
+| `hw.led.ins[0].type` | protocol | **22** (WS281x RGB) → ws2812, **51** (APA102) → sk9822; anything else (RGBW, WS2801, analog, matrix, virtual) keeps the board default + a serial note — deliberately conservative, a wrong protocol is worse than a default one |
+| `hw.led.ins[0].order` | color_order | **relative to the chip-native order** (see below) |
+| `def.bri` 0–255 | brightness 0–31 | rounded, floored at 1 (a >31 write voids the whole LXDV record — config.rs:261) |
+| `hw.led.maxpwr` | cap_ma | 0 = limiter off stays off; clamped 20 A |
+| `light.gc.col` | gamma_tenths | 2.8 → 28; 1.0/garbage → off |
+| `hw.led.ins[0].pin` | — | logged only: Luxel pins are compile-time per board (board.rs:1-5) |
+
+**The color-order mapping is the subtle part.** WLED's `order` is the
+strip's *wire* order (COL_ORDER_*: 0=GRB…); Luxel's `ColorOrder` is a
+*pre-encoder* remap with identity 0="rgb", and the encoders already emit
+each chip's native wire order (ws2812 GRB, sk9822 BGR — leds.rs). So
+WLED "GRB" on a WS2812 maps to Luxel *identity*, not Luxel "grb": the
+import solves P in native∘P = wled_order per protocol. Pinned by a
+construction test (`wire_order_roundtrip`) that simulates both pipelines
+byte-for-byte across all 6 orders × both protocols rather than trusting
+the hand-derived tables. Order is only imported when the protocol also
+mapped — remapping against a guessed protocol would be a color bug.
+
+Mechanics: scope-aware JSON scanners in wledfs.rs (balanced-bracket
+ranges with string/escape tracking) because the interesting keys collide
+all over cfg.json — `hw.btn.ins[].type`, `ir.type`, `relay.pin` — where
+the WiFi lift's first-match-anywhere trick would grab the wrong value.
+Same best-effort posture as the creds: every field individually
+optional, any failure → board default, never a retry reboot. Import
+happens before anything is modified; the write lands after the config
+wipe, non-fatal like `write_wifi`.
+
+Verification (no hardware; the QEMU harness carries it):
+- 7 new host tests via `tools/wledfs-check` (`cargo test`), including
+  decoy-key resistance and the wire-order construction proof; the rig
+  binary now prints the wiring too, and against the real configured
+  Athom dump extracts exactly the bench ground truth: 30 px, pin 18,
+  type 22, order 0, bri 128, maxpwr 850, gamma 2.8.
+- `tools/qemu/run-all.py` all green (5/5 suites) — takeover-test.py
+  gained 13 assertions: two serial lines plus the full LXDV record at 0xA000
+  byte-for-byte (30 px, protocol 1, order 0 — GRB-is-native proven on
+  real config data — brightness 16/31 from bri 128, cap 850, gamma 28,
+  checksum, erased tail).
+- athom + c3 builds, image-check ok, stack-check clean.
+
+Not done here: WLED's multi-bus configs import bus 0 only (Luxel drives
+one output); no mic/button/IR import (no Luxel consumers yet — mic is
+docs/mic-bringup.md); `rgbwm` ignored (no RGBW support at all).
+
 ## 2026-08-22 — Event injection hardware-soaked on the Athom (v0.1.39)
 
 The deferred half of the v0.1.38/39 event work ("on-device soak when a
