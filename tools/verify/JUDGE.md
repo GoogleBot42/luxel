@@ -75,6 +75,13 @@ how much simulated time you actually bought. Two consequences:
   per-frame step lands on an exact cycle at 5 fps, the rhythm image collapses
   to flat bands and it reads as frozen when it is not. Before calling either
   side broken from a survey-rate run, re-check that stretch at `--fps 20`.
+- TICK-QUANTISED patterns (a cursor/step that advances on a fixed sub-second
+  tick rather than moving continuously) collapse onto the survey's frame grid:
+  at 5 fps a 0.30 s tick and a 0.35 s tick BOTH round to 0.4 s, so the survey
+  shows the two sides agreeing on rate when they differ by 17% — it fakes both
+  timing agreement and fps-invariance. Never measure a stepping pattern's tick
+  or cycle period from a run whose frame interval isn't several times finer
+  than the tick; use ≥20 fps dumps and read the actual transition times.
 
 **The 10/20/40 fps diagnostic is unreliable on large flat regions.** It works by
 comparing the `motion` stat across rates, and `motion` is a mean absolute
@@ -537,12 +544,24 @@ pattern failure rather than the bad argument it is. And when the two sides
 name a control differently, `--controls-orig`/`--controls-port` must carry the
 two different names — the same string on both sides silently no-ops on one.
 
-Two more probe blind spots: `inputNumber` controls are often integer MODE
-selectors — the probe's 0/0.5/1 sweep reaches at most two modes, so sweep them
-manually over whole integers (0,1,2,…) until the output stops changing. And
+Two more probe blind spots: MODE-SELECTOR controls — `inputNumber`s stepped
+over integers, but also plain `slider`s whose range is chopped into k
+discrete modes (e.g. six modes with boundaries at k/6) — are undersampled by
+the probe's 0/0.5/1 sweep, which reaches at most two or three of the modes.
+When a control snaps the output between distinct looks rather than varying
+it continuously, sweep it finely (a dozen or more points across its range)
+to find every mode boundary, and judge each mode on both sides. And
 mode-gated sliders (live only inside one mode) probe inert from the untouched
 mode — when a pattern has a mode selector, re-sweep the secondary dials INSIDE
 each mode before recording any of them as inert.
+
+Asymmetric control surfaces: when one side exposes controls the other lacks
+(usually a port that invented or dropped dials), the "dialed comparison"
+requirement is necessarily one-sided — dial the side that has them, compare
+each setting against the other side's only render, and check whether the
+dialed side's DEFAULT reproduces the fixed side. The asymmetry itself is
+always a control-surface finding for `dials`/`feedback`, even when the
+defaults happen to agree.
 
 For a translating 1D pattern, the honest speed measurement is circular
 cross-correlation of two `--dump`ed frames (find the shift that best aligns
