@@ -1,0 +1,49 @@
+{
+  "slug": "rainbow-smiley",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Identical index-driven rainbow engine (background pixels are byte-for-byte equal on both sides at every time, fps and seed), but the white smiley mask differs: the original draws a SIDEWAYS ':)' emoticon (top-bottom mirror-symmetric) in a 12 px disc, while the port draws an UPRIGHT face (left-right mirror-symmetric) in a larger 14 px disc with a much wider U-shaped mouth.",
+  "observations": [
+    "Default rig is grid 16x16 / 256 px. Both sides compile and run clean on it, no runtime errors, over windows out to t=212 s.",
+    "Both sides render the same thing structurally: a full-rig rainbow whose hue advances along the FLAT PIXEL INDEX (hue rises left-to-right and continues seamlessly onto the next row), with an opaque pure-white (255,255,255) smiley-face disc masked on top; the face's eyes/mouth are cut OUT of the white so the moving rainbow shows through them.",
+    "COLOR/MOTION ARE A PERFECT MATCH. Across 5 dump runs (t = 0, 0.35, 0.7, 1.05, 7.3, 14.6, 21.9, 29.9 s at 20 fps; 0/0.5/1.0 s at 10 and 40 fps; 200/206/211.9 s; seed 7) every non-white pixel present on both sides was EXACTLY equal (max channel diff 0 over 102 compared pixels per frame, 0 mismatches in all runs).",
+    "Hue cycle: pixel (0,0) hue advances 0.5098 cycles/s on BOTH sides -> period 1.96 s. Autocorrelation of meanR: top lag 39 frames at 20 fps (1.95 s) and 10 frames at 5 fps (2.0 s), same top-lag ordering on both sides.",
+    "Both sides are TIME-BASED, not frame-coupled: measured hue phase advance over 1.0 s is 0.5098 cyc/s at 10 fps, 0.5098 at 20 fps, 0.5092 at 40 fps, on both sides. (The whole-rig `motion` stat scales 15/8/4 with fps 10/20/40 exactly as 1/fps predicts for a time-based sweep.)",
+    "MASK ORIENTATION IS THE DIVERGENCE. Symmetry test on the white mask: ORIGINAL is perfectly top-bottom mirror-symmetric (0 cells differ under a vertical flip) and NOT left-right symmetric (16 cells differ) -> the face is a 90deg-rotated ':)' emoticon: a colon (two 2x2 dots stacked vertically at rows 5-6 and 9-10, cols 5-6) on the LEFT and a ')' arc (cols 9-11, rows 5-10) on the RIGHT. PORT is perfectly left-right mirror-symmetric (0 cells differ under a horizontal flip) and NOT top-bottom (28 differ) -> an UPRIGHT face: two 2x2 eyes side-by-side at rows 4-5 (cols 4-5 and 10-11) and a U-shaped smile sweeping from (row 9, col 3) down to row 12-13 and back up to (row 9, col 12).",
+    "FACE SIZE. Original disc occupies rows 2-13 x cols 2-13 (12 px diameter), 104 white pixels of 256 (40.6%). Port disc occupies rows 1-14 x cols 1-14 (14 px diameter), 130 white pixels (50.8%) — 25% more white area.",
+    "The size difference is the whole brightness gap: orig meanBrightness avg 179.1 (min 178 max 180), port 192.1 (min 190 max 194) — port +7.3%. Likewise orig motion avg 7.9 / motionLit 7.6 vs port motion 6.0 / motionLit 6.3: the port simply has fewer non-white (moving) pixels, not slower motion. Both sides brightnessTrend `steady`, zeroMotionFrames 1 (the unavoidable first frame) in every run.",
+    "MOUTH SHAPE. Original's ')' arc spans 6 rows and reaches 2 px inside the disc edge; the port's smile spans 10 columns (cols 3-12) and reaches 1 px from the disc bottom — a distinctly wider, deeper grin than the original's compact paren.",
+    "MASK IS STATIC on both sides. The white mask hashed to exactly 1 unique value across all 8 dump times spanning 0-30 s, and the same value again at t=200-212 s. Neither side blinks, rotates, breathes, or moves the face.",
+    "ONE REGIME ONLY. Surveys at 60 s / 5 fps and 240 s / 2 fps show uniform horizontal hue banding top to bottom with no boundary, no mode rotation, no drift; both sides' rhythm images are the same texture end-to-end (the port's central columns are visibly whiter, consistent with the bigger disc).",
+    "SEED-INDEPENDENT: seed 7 produced hue 0.0248 at t=0 and 0.5516 at t=3 s, identical to seed 1, on both sides. Neither side uses randomness.",
+    "RESOLUTION BEHAVIOUR DIFFERS. The ORIGINAL is a hard-coded 16-wide bitmap indexed by integer (x,y): at --grid 8x8 it renders only the TOP-LEFT 8x8 CROP of its 16x16 face (verified cell-by-cell against the 16x16 mask), and at --grid 32x32 it throws a runtime error on frame 0 — `array index out of bounds` (line 10, col 166) — leaving the rig black (meanBrightness 2, zeroMotionFrames 120/120). The PORT is resolution-INDEPENDENT: at 32x32 it draws its 16x16 logical design upscaled exactly 2x (every row and column duplicated, verified by 2x downsampling back to the 16x16 mask) and at 8x8 it draws a whole scaled-down face. So on any grid other than 16x16 the two sides look completely different — but the original is the one that breaks, so this is a port superset, not a port bug.",
+    "On a 1D --rig strip --pixels 64 the sides also diverge (orig mean 179 / motion 8, port mean 127 / motion 13), unsurprising given the original's fixed 2D bitmap indexing; the manifest rig is grid, so this is a lens observation only.",
+    "Neither side exposes any settable controls (probe reported `(no settable controls)` for orig and port alike), so there is no control-surface mismatch and no dialed comparison is possible."
+  ],
+  "dials": [],
+  "feedback": [
+    "The rainbow engine needs NO changes — background pixels are already byte-identical to the original at every time, fps and seed, with a matching 1.96 s hue period and the same flat-index hue ramp. Do not touch it.",
+    "ROTATE THE FACE 90deg. The original's smiley is a SIDEWAYS ':)' emoticon: the two eye-dots sit stacked VERTICALLY on the LEFT side of the disc and the mouth is a ')' arc on the RIGHT. The port draws an upright face (eyes side-by-side at the top, U-smile at the bottom). Rotating the port's current design 90deg counter-clockwise is the right direction (the original rotated 90deg CW is what the port currently looks like).",
+    "Verifiable symmetry check for the fixer: the original's white mask is EXACTLY top-bottom mirror-symmetric and NOT left-right symmetric. The port's is currently the opposite. After the fix, a vertical flip of the port's mask must be a no-op.",
+    "SHRINK THE FACE. Original disc = 12 px diameter, rows 2-13 x cols 2-13, 104 white pixels on the 16x16 rig. Port disc = 14 px diameter, rows 1-14 x cols 1-14, 130 white pixels. That extra ring is worth +13 mean brightness (179 -> 192) — matching the disc radius fixes the brightness gap for free.",
+    "NARROW THE MOUTH. The original's mouth is a compact ')' occupying only cols 9-11 over rows 5-10 (i.e. 6 rows tall, 2 px inside the disc edge). The port's smile is a wide U spanning 10 columns and reaching 1 px from the disc edge. Target mask cells (original, 16x16): eyes at (5,5),(5,6),(6,5),(6,6) and (9,5),(9,6),(10,5),(10,6); mouth at (5,9),(5,10),(6,11),(7,11),(8,11),(9,11),(10,9),(10,10).",
+    "Keep the face STATIC — the original's mask never changes over 212 s, and the port already matches this. No blink/rotate animation should be added.",
+    "The port's resolution independence (draws a correct scaled face at 8x8 and 32x32 where the original crops or crashes) is a genuine improvement — keep it. But note the original is a fixed 16x16 bitmap, so any fidelity target for the mask should be stated on the 16x16 native geometry."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-a",
+    "dump-b",
+    "late",
+    "seed7",
+    "fps10",
+    "fps40",
+    "grid8",
+    "grid32",
+    "strip64"
+  ]
+}

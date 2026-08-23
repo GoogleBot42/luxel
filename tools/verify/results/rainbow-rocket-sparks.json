@@ -1,0 +1,44 @@
+{
+  "slug": "rainbow-rocket-sparks",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Geometry, motion and sparks are frame-for-frame identical to the original, but the port's comet trail spans only hue 0.00-0.16 (red->yellow) instead of the original's full 0..1 rainbow, so the pattern's defining 'rainbow' is gone.",
+  "observations": [
+    "Rig: strip, 60 px. Neither side has any controls (probe: 'no settable controls' on orig and port) — control surfaces match, so dials are not a factor.",
+    "Both sides compile and run clean (no compileError/runtimeError) in every run; brightnessTrend 'steady' on both at 6 s, 60 s, 240 s and in a --skip 120 late window; zeroMotionFrames 0-1 on both. Nothing dies or freezes.",
+    "Shared structure: one short hard-edged comet ('rocket') sweeping toward DECREASING pixel index (~20-23 px/s, wrapping 0->59 about every 2.5-3 s), plus occasional single white [255,255,255] spark pixels dropped near the trail.",
+    "Motion is pixel-exact between the sides. Over 120 consecutive dumped frames (--label dump-dense, 20 fps) the comet's leading pixel index is IDENTICAL on orig and port on every frame (e.g. t=1.00 head 33, t=1.05 head 32, t=1.10 head 31, t=3.00 head 48, t=5.00 head 2).",
+    "Sparks are also effectively identical: white-pixel sets match on 118 of 120 dumped frames (e.g. white at px55 @0.45 s, px54 @0.55, px50 @0.75, px43 @0.90, px35 @1.20, px28 @1.65, px24 @1.70, px27 @1.75, px21+px22 @1.80 — same on both sides). Spark rate ~0.29 lit spark-pixels per frame on both (35 orig vs 33 port over 120 frames).",
+    "COLOR — the one real divergence. Over all trail pixels in 120 frames, the original's hue histogram fills all 12 twelfth-of-a-wheel bins (77/37/38/38/77/40/37/39/78/38/40/38); the port's is 343/307/0/0/0/0/0/0/0/0/0/0 — every trail pixel lies in hue 0..1/6. Not a single port trail pixel is green, cyan, blue or magenta.",
+    "Channel means confirm it and are stable across every run (baseline, 60 s survey, 240 s survey, --skip 120, seeds 7 and 1234): orig meanR/G/B ~= 11.4/11.4/11.4 (balanced = full rainbow); port ~= 24.4/12.2/1.3 (red-dominant, blue only from the white sparks). Overall meanBrightness is nearly equal (orig 11.1-11.4, port 12.4-12.7), so it is a hue-range bug, not a brightness bug.",
+    "The hue mapping is a clean scale factor of the original's. Both sides' trail hue is a pure function of pixel index with spatial period 15 px. Orig: hue(i) = frac(2*i/15), i.e. +0.1333 per pixel, a full rainbow every 7.5 px (px31..37 at t=1.1 -> 0.133, 0.267, 0.399, 0.533, 0.667, 0.799, 0.933). Port at the same indices: 0.022, 0.045, 0.067, 0.090, 0.113, 0.136, 0.158 — the same sequence multiplied by ~0.167-0.170 (~1/6).",
+    "Concrete same-frame example (t=1.80 s): orig px15..19 = 255/0/0, 255/203/0, 102/255/0, 0/255/101, 0/204/255 (red->orange->chartreuse->green->cyan); port px15..20 = 255/0/0, 255/34/0, 255/69/0, 255/103/0, 255/138/0, 255/173/0 (red->orange only). Sparks at px21, px22 white on both.",
+    "Secondary divergence: the port's trail is exactly ONE pixel longer every frame. Trail-length histogram over 120 frames (sparks excluded) — orig: 4 px on 23 frames, 5 px on 97 (mean 4.81); port: 5 px on 70, 6 px on 50 (mean 5.42). The extra pixel is always at the TRAILING (higher-index) end.",
+    "The two spark-set mismatches are a consequence of that extra pixel plus draw order: at t=1.35 s a spark at px30 and at t=4.45 s a spark at px19 are visible white on the original but are painted over by the port's longer trail (port shows trail colour 255/0/0 and 255/138/0 at those pixels). So on the port, sparks landing under the trail's tail are hidden; on the original they are drawn on top.",
+    "No mode/regime structure on either side: the 240 s / 2 fps survey shows one uniform texture start to finish, no palette walk, no periodic mode rotation, no long-period beat. The --skip 120 late window is statistically identical to the baseline on both sides.",
+    "Seed-independent: seeds 1, 7 and 1234 give the same channel means and the same character on both sides; the divergence is not a seed fluke.",
+    "Frame-rate coupling is present but SYMMETRIC, so it is not a port bug: at fps 10/20/40 the comet's head at t=1 s sits at px 32/33/34 on BOTH sides (a constant 1 px per fps doubling offset), and its displacement over t=1->2 s is -23 px at both 10 and 40 fps on both sides. Orig and port track each other exactly at every rate tested."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY FIX — restore the full hue range. The port's trail hue is the original's hue multiplied by ~1/6: measured per-pixel hue step is 0.0227 on the port vs 0.1333 on the original, and the port's trail hues never exceed 0.1582. The original cycles the whole wheel every 7.5 pixels (spatial hue period 15 px = 2 full rainbows); the port cycles only red->yellow over the same distance. Whatever term produces the trail hue is being divided by ~6 (or is being fed a 0..1 value into a 0..6 hue space, or vice versa) — remove that factor and the two sides should agree, since the underlying frac(2*i/15) progression is already correct.",
+    "Verify the fix numerically, not by eye: dump 120 frames at 20 fps and histogram trail-pixel hue into 12 bins. The original gives roughly 77/37/38/38/77/40/37/39/78/38/40/38 (all bins populated, with the ~2x peaks at bins 0, 4 and 8 from the 15-px/2-cycle spatial period). The port currently gives 343/307 in bins 0-1 and zeros elsewhere. Equivalently, whole-run meanR/meanG/meanB should land near 11.4/11.4/11.4, not 24.4/12.2/1.3.",
+    "SECONDARY FIX — the trail is one pixel too long. Original renders 4-5 lit trail pixels per frame (mean 4.81); the port renders 5-6 (mean 5.42), with the surplus always at the tail (highest index). Looks like an off-by-one in the trail-length comparison (<= vs <, or a length that is one greater than the original's).",
+    "SECONDARY FIX — spark draw order. On the original a spark drawn where the trail already is comes out white; on the port the trail overwrites it (2 of 120 dumped frames: px30 @ t=1.35 s, px19 @ t=4.45 s). Draw the sparks after the trail so a spark under the tail still reads white.",
+    "Do NOT touch motion, timing or spark generation — they are already exact. Comet head index, sweep speed (~20-23 px/s leftward, wrap 0->59), wrap timing, spark positions and spark cadence all match the original frame-for-frame at seeds 1, 7 and 1234, and the port tracks the original identically at 10, 20 and 40 fps. Any change there would be a regression."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-a",
+    "dump-dense",
+    "late-skip120",
+    "seed7",
+    "seed1234",
+    "fps10",
+    "fps40"
+  ]
+}

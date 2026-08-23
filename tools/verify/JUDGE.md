@@ -593,6 +593,10 @@ And the interaction cuts BOTH ways: a dial that is live when set alone can go
 completely inert once a second control is pinned (a port gating one feature on
 another's value). When you find a dial-gating structure, re-check at least one
 RESPONSIVE dial inside each gating state too — not only the inert ones.
+Also: an UNTOUCHED default can sit OUTSIDE the range any dial value reaches
+(e.g. an untouched slope of +0.98 when the slider spans 0..−0.98) — if no
+sweep value reproduces the untouched render, that's a real property of the
+pattern, not an analysis bug; report the default and the dial range separately.
 
 Picker footgun: an `hsvPicker`/`rgbPicker` needs ALL THREE components
 (`name=h,s,v`). Passing a single value leaves the other two at 0 — for an
