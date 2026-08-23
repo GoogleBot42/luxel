@@ -1,0 +1,89 @@
+{
+  "slug": "2d-fireworks-fade",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides run the same ~15 s multi-mode holiday-lights cycle with matching mode boundaries and a shared red/white/blue + amber palette, but the port draws the two 'string lights' modes as solid continuous bars instead of discrete bulbs (~2x too bright) and turns the single sweeping beam mode into a dense always-on comb of red stripes that never goes blue.",
+  "observations": [
+    "Alive on both sides: no compile or runtime errors, no black/frozen side, zeroMotionFrames = 1 on both at baseline (the expected first-frame artifact).",
+    "Macro structure matches: over a 60 s window at 32x32 both sides cycle sparkle -> sweeping-beam -> red/white/blue strings -> near-dark -> amber strings, with mode changes at roughly t=14/29/44/58 s on BOTH sides. The rhythm waterfalls show the mode boundaries landing at the same rows.",
+    "Mode 1 (sparkle, t=0-14 s) is a good match: sparse single-pixel sparks that pop and fade, ~25-45 lit pixels per frame on a 32x32 grid on both sides, cycling through red / white / blue tints. Phase differs (at t=6 s the original is red-dominant while the port is white-only), and the port's sparks are pure white where the original's carry a dim red halo around a brighter core.",
+    "Mode 2 (beam sweep, t=14-29 s) is structurally wrong. Original filmstrip (chase, 20 fps, 32x32): exactly ONE wide soft-glow beam with a bright white dashed core crosses the grid over ~5 frames, then the grid goes FULLY BLACK for ~6 frames before the next beam enters from the edge. Port filmstrip over the same frames: 5-10 parallel dashed stripes fill the whole grid continuously and rotate smoothly; the grid is never dark. Port motion avg 34 vs original 19 in that window.",
+    "Mode 2 colour is wrong: across the whole 15 s beam mode the original goes red -> blue (blue for ~80% of the mode) -> red, clearly visible as a blue block in orig-rhythm.png. The port stays red/pink for the entire mode at every sample I took (baseline, chase, cycle60, dial-default, seed 7) - I never saw a blue beam.",
+    "Mode 3 (red/white/blue strings, t=29-44 s) is structurally wrong and is static (motion 0) on both sides. Original: single-pixel-wide vertical strings where the colour alternates DOWN the string (red, white, blue, red, ...) with dark gaps between bulbs, giving a bulb-on-a-wire look, and dark gaps between strings. Port: triplets of ADJACENT solid columns (one solid red, one solid white, one solid blue) running unbroken top to bottom. Mean brightness 36 (orig) vs 72-75 (port) - the port is ~2x too bright because it fills the gaps.",
+    "Mode 5 (amber strings, t=58-74 s) repeats the same error: original is a diagonally-offset lattice of individual amber bulbs, port is solid vertical amber bars. Mean 26 (orig) vs 61 (port).",
+    "Mode 4 (t=44-58 s) matches: both sides are essentially black (orig mean 0, port mean 1) with only stray faint pixels.",
+    "The bulb-vs-bar and one-beam-vs-comb differences reproduce identically on the pattern's default 16x16 rig, so they are not a rig-scaling artifact.",
+    "Seed 7 reproduces every finding above; nothing here is a one-seed fluke.",
+    "CONTROL SURFACE MISMATCH (finding independent of any render): the original exposes exactly two sliders, sliderSkip (label 'Skip') and sliderStartOffset (label 'StartOffset'). The port exposes four completely different ones: sliderModeDuration, sliderCrossfade, sliderHouseSpacing, sliderHouseOffset. There is no shared name; only StartOffset/HouseOffset even loosely correspond. The port is missing both of the original's dials and adds four of its own."
+  ],
+  "dials": [
+    {
+      "name": "sliderSkip",
+      "origEffect": "none observed - output is byte-identical in stats and visually identical at 0, default and 1 across a 24 s window and inside the string mode",
+      "portEffect": "control absent from the port",
+      "matches": false
+    },
+    {
+      "name": "sliderStartOffset",
+      "origEffect": "none observed - identical output at 0, default and 1",
+      "portEffect": "no such control; nearest analogue sliderHouseOffset also produced no visible change at 1 in the string mode",
+      "matches": false
+    },
+    {
+      "name": "sliderModeDuration",
+      "origEffect": "control absent from the original",
+      "portEffect": "very live - at 0 the port flips through all modes in ~2 s each; at 1 it stays in sparkle mode for most of a 24 s window",
+      "matches": false
+    },
+    {
+      "name": "sliderCrossfade",
+      "origEffect": "control absent from the original",
+      "portEffect": "not isolated (only exercised as part of the all-dials-0 / all-dials-1 sweeps, where ModeDuration dominated)",
+      "matches": false
+    },
+    {
+      "name": "sliderHouseSpacing",
+      "origEffect": "control absent from the original",
+      "portEffect": "inert - 0, 0.9 and 1 all produce pixel-identical renders in both the beam mode and the string mode",
+      "matches": false
+    },
+    {
+      "name": "sliderHouseOffset",
+      "origEffect": "control absent from the original",
+      "portEffect": "inert - 0.85 and 1 produce identical stats and images to the default in the beam and string modes",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "String-lights modes (the red/white/blue mode ~29-44 s and the amber mode ~58-74 s): the original draws DISCRETE BULBS, not filled bars. Each string is one pixel wide and its colour alternates DOWN the string (red, white, blue, red, ...) with a dark pixel gap between bulbs, and successive strings are offset so the amber mode reads as a diagonal lattice of dots. The port currently draws unbroken solid columns and puts the colour variation ACROSS x (three adjacent solid columns: red, white, blue). Fixing this also fixes the brightness: the port measures ~2x the original's mean (72 vs 36 red/white/blue, 61 vs 26 amber) purely because it lights the gaps.",
+    "Beam mode (~14-29 s): the original shows ONE beam on screen at a time. It sweeps across in ~5 frames at 20 fps, then the grid is completely black for ~6 frames before the next beam enters from an edge. The port instead keeps 5-10 parallel stripes on screen at all times and rotates them; it never goes dark. Reduce to a single beam per sweep and insert the dark inter-sweep gap - the port's motion stat is ~1.8x the original's in this window mostly because of the extra stripes.",
+    "Beam colour: the original's beams change colour over the mode - red for the first ~1 s, then blue for roughly the next 10 s, then red again near the end. The port's beams are red/pink for the entire 15 s mode; no blue beam ever appears. Add the per-sweep (or per-mode-phase) colour rotation.",
+    "The original's beam has a soft wide glow falloff either side of a bright white core; the port's stripes are hard-edged narrow dashed lines. Widen and soften the beam profile.",
+    "Sparkle mode is close enough on density and rate. Two nitpicks: the original's sparks sit inside a dim coloured halo (visible as red fringing around white cores), the port's are bare white pixels; and the port's colour phase within the mode runs ahead of the original's (at t=6 s original is red, port is white). Phase alone is not worth chasing, the halo is.",
+    "Control surface: the port should expose the original's two dials (Skip, StartOffset) rather than its own four. Note that both of the original's dials are INERT on our grid rig - I could not detect any output change at 0 vs 1 - so their behaviour has to be matched from the source semantics, not from renders; a fixer should not assume they are no-ops on real hardware. Separately, two of the port's four dials (HouseSpacing, HouseOffset) are themselves inert at every value I tried, so they are dead controls even on the port's own terms.",
+    "What is already right and should not be disturbed: the mode sequence, the ~15 s mode duration and boundary timing, the near-black mode at ~44-58 s, the red/white/blue + amber palette family, and the sparkle mode's density."
+  ],
+  "experiments": [
+    "baseline",
+    "long30",
+    "chase",
+    "cycle60",
+    "ctl-offset-high",
+    "ctl-skip-high",
+    "ctl-spacing-high",
+    "dial-zero",
+    "dial-one",
+    "dial-default",
+    "house-def",
+    "house-sp0",
+    "house-sp1",
+    "house-off1",
+    "mode4",
+    "mode5",
+    "spark-fast",
+    "seed7",
+    "house-16",
+    "chase-16"
+  ]
+}

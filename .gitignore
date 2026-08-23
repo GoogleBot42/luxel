@@ -31,3 +31,6 @@ athom-wled-*.bin
 tools/wledfs-check/target/
 # esp-hub75 patched source — materialized by the flake (firmware/patches/README.md)
 firmware/vendor/
+
+# render-verification harness output (images, regenerable)
+tools/verify/out/
