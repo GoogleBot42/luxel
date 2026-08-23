@@ -10,6 +10,12 @@ paths:
 - An aborted pattern init leaves exported vars at 0, not at their would-be
   runtime value — a probe that doesn't pair its reads with a sentinel value
   can silently read a false 0 and report a wrong result.
+- Live-coded probe patterns stay on the device's LEDs after disconnect.
+  Every probe battery must snapshot `activeProgramId` at connect and
+  re-activate it in its `finally` block (run.mjs, todo-probes.mjs, and
+  oob-probes.mjs all do — copy that shape). A skipped restore leaves the
+  last probe frame glowing on the bench and reads as a wedged oracle
+  (happened 2026-08-22; Jeremy reported the device "broken").
 - A Pixel Blaze that has ever saved a pixel map cannot be made mapless again
   through its public API. Before any map-touching probe, snapshot the
   current map with `tools/oracle/mapdump.mjs` (bit-exact dump/restore) so it
