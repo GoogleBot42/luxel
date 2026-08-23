@@ -27,6 +27,9 @@ Cleared entries move to Gitea or the aggregate report.
   Suspect final-frame snap. Un-reproduced; check before trusting last-frame
   dumps.
 - Rhythm image is useless on axis-aligned gradients (known, documented).
+- oasis judge: promote spatial-DFT phase-drift from caveat to first-line tool
+  for 1D travelling-wave patterns (motion stat saturates in BOTH directions
+  there); probe.json could carry a per-side "identical to untouched" flag.
 
 ## Sweep-process facts
 - `orig-unrenderable` score semantics pinned 2026-08-23 (always 0 + summary

@@ -1,0 +1,51 @@
+{
+  "slug": "opposites",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Structurally a pixel-exact reproduction (brightness envelope matches within +/-2 per pixel once time is rescaled), but the port runs 11.0% fast (11.80 s cycle vs the original's 13.10 s) and its hue is rotated about -100 degrees on the dominant features, so cyan-cored events render yellow-green.",
+
+  "observations": [
+    "Rig: 60 px strip, no controls on EITHER side (probe run: 'orig (no settable controls)' / 'port (no settable controls)'). No compileError or runtimeError on either side in any run.",
+    "What the pattern draws (both sides): two lobes creep inward from the two ends of the strip, meet near the middle in a saturated (V=255) flash with concentric rainbow rings around a bright core, then retreat and fade to near-black before the next approach. In the 1D waterfall each collision reads as an elliptical 'eye' of concentric colour rings. Two collisions per cycle, at different strip positions (one around px 12-18, the next around px 28-31).",
+    "PERIOD (measured by autocorrelation of meanBrightness, raw series, no binning): original = 13.10 s, port = 11.80 s. Confirmed at three frame rates and read off high harmonics for precision: at 10 fps / 1200 frames the orig autocorr peaks at lags 131, 262, 393, 524 frames (524/4 = 131.0 fr = 13.10 s) and the port at 118, 236, 354, 472, 590 (590/5 = 118.0 fr = 11.80 s). At 5 fps: orig 65.5 fr, port 59 fr; at 20 fps: orig 262 fr, port 236 fr. Ratio port/orig = 0.9008, i.e. the PORT IS 11.0% FASTER.",
+    "The harmonic autocorrelation barely decays (orig 99.6 / 99.4 / 99.0 / 98.6 at lags 131..524), so the pattern is exactly periodic at one cycle on both sides - there is no longer super-cycle hiding inside the 120 s survey (~9 orig cycles, ~10 port cycles observed).",
+    "GLOBAL TIME-RESCALE FIT: scanning corr(orig[i], port[k*i]) over the 120 s / 10 fps meanBrightness series gives best corr 0.9844 at k = 0.900 with shift 0. At k = 1.0 (no rescale) the correlation is -0.002. So the divergence is a clean uniform speed factor, not a phase offset, a warp, or a shape change.",
+    "STRUCTURE IS ESSENTIALLY PIXEL-EXACT under that rescale. Dumping orig at t and port at 0.9t for t = 0..10 s (20 fps): identical peak pixel INDEX at every sample (3,56,50,47,46,45,45,48,53,16,8,19,14,12,12,14,3,9,43,39,33), identical lit-pixel COUNT at every sample (46,53,38,37,38,38,37,37,51,30,44,36,39,40,40,37,52,48,40,31,32), and peak VALUE agreeing to within +/-2 (e.g. 165/165, 168/167, 143/143, 255/255). Full-strip value profiles at matched times agree pixel-for-pixel to +/-2 (e.g. orig t=6.00 vs port t=5.40, px 11..25: 78/79, 156/158, 241/244, 255/255 x8, 218/218, 151/152, 88/89, 41/41).",
+    "COLOUR IS THE OTHER DIVERGENCE. At structurally matched frames the port's hue is rotated by a CONSTANT -100 degrees (delta 259-261) on the bright cores, verified at t = 0.5, 2.0, 3.5, 6.0, 9.5, 10.5, 19.5, 23.5 - i.e. the offset does not drift over 23 s, so it is a hue PHASE offset, not a hue-rate difference. Example: orig px 13-21 at t=19.50 are [0,129,255] (hue 210, sky blue); the port's matching px at t=17.55 are [47,255,0] (hue 109, yellow-green).",
+    "The hue rotation is NOT perfectly uniform across the frame. Brightness-weighted histogram of per-pixel hue delta over a full cycle (99 matched frames, pixels with V>=60) is trimodal: 48% of the weight at -102 deg, 16.5% at -25 deg, 11% at +155 deg. The secondary modes sit on specific ring/skirt pixels adjacent to cores that show the -100 mode (e.g. orig t=19.50: px 13-21 all -100, but px 10, 12, 22, 24 show -14 to -29). So the port's hue relationship BETWEEN the superimposed components differs from the original's, not just the global phase.",
+    "Visible consequence: the original's bright collision cores read CYAN/blue-white with green+magenta rings; the port's read YELLOW-GREEN with magenta+orange rings. Side by side in the 60 s survey waterfalls this is the most obvious difference between the two images.",
+    "FPS INVARIANCE MATCHES. Cross-run rescale fits give best k = 0.500 for fps40-vs-fps20 (corr 0.998 orig / 0.997 port) and k = 0.500 for fps20-vs-fps10 (0.994 / 0.990). Both sides are time-based and fps-invariant; there is no frame-rate coupling on either side, and no relative coupling bug.",
+    "SEED INDEPENDENT ON BOTH SIDES. seeds 1, 7 and 1234 give byte-identical meanBrightness series on each side (orig 4,5,6,7,7,8,8,9,10,... identical across all three; port 4,5,5,6,7,8,9,9,10,... identical across all three). Deterministic pattern, no RNG, so the randomness caveat does not apply.",
+    "STEADY STATE IS HEALTHY ON BOTH SIDES. Late window --skip 60 --seconds 20 --fps 20: orig meanBrightness avg 13.3, motion avg 4.8, motionLit 7.6, zeroMotionFrames 6/400; port avg 13.0, motion 4.7, motionLit 7.3, zeroMotionFrames 3/400. Over 120 s at 10 fps both sides post meanBrightness avg 13.3 and motion avg 8.0 with motionLit 12.4 vs 12.3. Neither side decays, freezes, or saturates; brightnessTrend is 'volatile' on both (the pattern genuinely pulses from near-black to V=255 twice a cycle).",
+    "Regime check: the survey shows only one repeating regime (approach -> collision flash -> retreat -> dark gap), and both regimes were parked in explicitly. mode-merge (--skip 5, collision) shows the same ringed 'eye' on both sides with the port's event ~11% earlier in the cycle and the hue rotated. mode-gap (--skip 11, dark handoff) shows the same pair of counter-approaching ring structures at both ends on both sides."
+  ],
+
+  "dials": [],
+
+  "feedback": [
+    "SPEED: the port's whole animation runs 11.0% too fast. Original cycle = 13.10 s, port cycle = 11.80 s (ratio 0.9008), measured by autocorrelation at 5, 10 and 20 fps and confirmed by a global time-rescale fit (corr 0.984 at k=0.900, corr -0.002 at k=1.0). Multiply whatever advances the animation clock/phase by 0.9008 (or divide the port's rate by 1.1102) and the two timelines should coincide exactly - the fit found zero phase shift, so no other timing change is needed.",
+    "HUE PHASE: the port's dominant hue is rotated by -100 degrees (-0.278 in normalized 0..1 hue units) relative to the original. Adding +0.278 (equivalently subtracting 0.722) to the port's hue term turns the port's yellow-green collision cores back into the original's cyan/blue-white ones. Concrete check: at the matched moment orig t=19.50 / port t=17.55, strip pixels 13-21 should be [0,129,255] (hue 210) but the port renders [47,255,0] (hue 109).",
+    "HUE RELATIONSHIP (secondary): after correcting the -100 deg global offset, ~28% of the brightness-weighted pixels will still be wrong - the ring/skirt pixels around each core currently sit at -25 deg and +155 deg instead of -100 deg. That means the port's several hue-carrying components are offset from each other differently than the original's, so a single global hue add will not fix everything. Re-check the per-component hue phases (the ring colours) after the global fix: the original's collision events read cyan core with green+magenta rings and, on the alternating event, a dark centre with green-outer/magenta-inner rings; the port currently reads yellow-green core with magenta+orange rings.",
+    "DO NOT touch geometry, brightness, feature widths, positions, collision timing within the cycle, or the fps behaviour - all of these are already exact. A time-rescaled dump comparison found identical peak pixel indices, identical lit-pixel counts and peak values within +/-2 at 21 sampled times across a full cycle. Only the animation rate and the colour mapping need changing.",
+    "Neither side exposes any controls, so there is nothing to add or remove on the control surface."
+  ],
+
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-long",
+    "mode-merge",
+    "mode-gap",
+    "late-window",
+    "dump-tscale",
+    "huetrack",
+    "dump-pairs2",
+    "huedelta-cycle",
+    "seed7",
+    "seed1234",
+    "fps20-long",
+    "fps40"
+  ]
+}

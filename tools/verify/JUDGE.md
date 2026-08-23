@@ -106,6 +106,25 @@ second. If the per-second displacement scales with fps, the pattern is
 frame-stepped; if it holds, it is time-based. Only report frame-rate coupling
 once the `--dump` positions say so.
 
+To tell whether a side is INDEX-ONLY (drives pixels off the flat pixel
+index) vs (x,y)-DRIVEN: re-render at a second grid size and diff the FLAT
+pixel sequences — an index-only pattern's flat sequence is byte-identical
+across grid shapes (and often across grid-vs-strip), while a coordinate-
+driven one changes completely. Corroborate with the i-vs-i+1 versus
+i-vs-i+gridWidth diff ratio (index-only patterns are much smoother along
+the flat index than along columns). Index-only originals may also have a
+NATIVE geometry (motifs recurring at a fixed index stride; errors above a
+fixed pixel count) — reshape to that geometry before describing structure.
+
+Period autocorrelation has a HARMONIC AMBIGUITY trap: the top-lag list can
+rank the second harmonic above the fundamental, and two runs at different
+fps agreeing on the same FRAME lag then reads as proof of frame-stepping
+when it isn't. The cheap decisive test is a cross-fps rescale fit — compute
+corr(series_fps40[i], series_fps20[k·i]) over a scan of k: best k = 0.5
+means time-based (the same seconds), best k = 1.0 means frame-stepped (the
+same frames). Run it before reporting frame coupling from autocorrelation
+lags alone.
+
 For measuring a SLOWDOWN/SPEEDUP FACTOR between the sides (or against fps),
 whole-frame spatial autocorrelation vs lag beats centroid tracking when
 features split, merge, or wrap: dump frames at fixed spacing, compute each
