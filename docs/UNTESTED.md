@@ -36,6 +36,10 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   `luxel/luxel-4ae0d4/event` while one of those patterns runs — the wall
   should react. Machine-verified against local mosquitto via the mirror;
   the real-HA hop is the untested bit.
+  (Firmware HTTP path hardware-soaked 2026-08-22 on the Athom —
+  tools/event-soak.mjs, 30,286/30,286 delivered, malformed rejected,
+  heap/fps stable. Still open here: the preview click-through and the
+  real-HA MQTT hop on the wall unit.)
 - [ ] **Share links with maps**: make a 2D/3D map (layout → "2D map"), share,
   open the link in a private window — geometry should arrive with the
   pattern (`#pj=` in the URL).
