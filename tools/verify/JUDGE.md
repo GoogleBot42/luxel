@@ -51,6 +51,11 @@ while `sheetTimesSeconds`/`stripTimesSeconds` and `--dump`'s reported `times`
 are absolute on the run timeline.
 Also `--sensors auto|synth|off` (default `auto`), `--probe-controls`
 (+ `--probe-seconds N`, default 4) and `--dump "t1,t2,..."` — see below.
+And `--wall-clock N` (epoch seconds, default 1756000000): sets the pinned
+wall clock BOTH sides see, for probing time-of-day/clock-driven patterns at
+different instants (e.g. sweep several times of day and compare each). The
+clock is fixed for the whole run — it never advances with simulated time, so
+`--skip 86400` does NOT move it; only this flag does.
 
 **`--skip` preserves the timeline.** Both sides run one deterministic clock
 (same seed, same pinned wall clock, same fixed frame delta), and `--skip N`
@@ -59,6 +64,10 @@ So `--skip 14` shows you t=14 s of the *same* run a `--skip 0` capture began,
 and `--skip 0 --seconds 20` and `--skip 14 --seconds 6` describe the same
 timeline. That makes regime-by-regime comparison via `--skip` sound: you can
 park both sides at whatever moment the survey flagged and compare there.
+One trap: that only holds WITHIN one fps. Different fps = different timeline
+(see below), so a regime timestamp read off a 5 fps survey is not valid as a
+`--skip` target for a 20 fps run on a frame-coupled pattern — take `--skip`
+targets from a survey at the same fps you will replay at.
 
 **`--fps` changes the SIMULATION, not just the sampling.** The frame delta
 handed to both engines is 1/fps, so a 5 fps run and a 20 fps run are different
@@ -764,7 +773,15 @@ Verdict meanings: `match` = a viewer would accept them as the same pattern;
 recognizably related but wrong in a major axis (structure/motion/color);
 `broken` = port errors, renders black/garbage, or bears no resemblance;
 `orig-unrenderable` = the ORIGINAL fails on our engine so no comparison is
-possible (report the error — this is an engine-gap finding, not a port bug).
+possible (report the error — usually an engine-gap finding, not a port bug).
+Two cause subtypes, and the observations must say which: (a) a real engine
+gap — the original would run on a Pixel Blaze but not on us; (b) an artefact
+unrunnable BY DESIGN — e.g. an author-planted sentinel line whose identifier
+tells the user to delete it ("REMOVE_THIS_INVALID_LINE_…"); that fails on
+real PB firmware too and needs a corpus-prep fix, not an engine fix.
+Score for this verdict is always 0 with an explicit note in `summary` that
+the score records "no comparison obtainable", not port quality — never score
+the port's solo render.
 
 The mirror image also exists: some ORIGINALS have a long warm-up transient
 (one ran railed-at-full-brightness for ~1000 rendered frames — frame-counted,

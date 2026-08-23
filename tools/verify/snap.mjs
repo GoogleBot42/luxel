@@ -14,6 +14,8 @@
 //   --fps N              frames per second (default 20)
 //   --skip N             seconds of warmup discarded before capture (default 0)
 //   --seed N             RNG seed handed to both sides (default 1)
+//   --wall-clock N       epoch-seconds wall clock handed to both sides (default
+//                        1756000000; fixed for the whole run — never advances)
 //   --rig strip|grid|cloud   override the rig from pairs.json
 //   --pixels N           override pixel count for the rig (snapped to a whole
 //                        grid / cubic lattice where the rig needs it, with a
@@ -135,7 +137,10 @@ const HERE = path.dirname(SELF);
 const ROOT = path.resolve(HERE, "../..");
 const PAIRS = path.join(HERE, "pairs.json");
 
-/** Pinned so time-of-day patterns are reproducible across runs and machines. */
+/** Pinned so time-of-day patterns are reproducible across runs and machines.
+ *  Overridable per run with --wall-clock <epoch-seconds> to sample a clock-driven
+ *  pattern (sunrise ramp, time-of-day palette) at other instants — the clock is
+ *  still FIXED for the whole run; it never advances with simulated time. */
 const WALL_CLOCK = 1756000000;
 const SEP = [32, 32, 36]; // contact-sheet separator colour
 const SHEET_COLS = 6;
@@ -202,6 +207,7 @@ function parseArgs(argv) {
     probeControls: false,
     probeSeconds: PROBE_SECONDS,
     dump: null, // null → no frames.json
+    wallClock: WALL_CLOCK,
     outRoot: path.join(HERE, "out"),
   };
   const FLAGS = { "--probe-controls": "probeControls" };
@@ -222,6 +228,7 @@ function parseArgs(argv) {
     "--strip-at": ["stripAt", Number],
     "--probe-seconds": ["probeSeconds", Number],
     "--dump": ["dump", parseTimes],
+    "--wall-clock": ["wallClock", Number],
     "--out-root": ["outRoot", String],
   };
   let slug = null;
@@ -532,7 +539,7 @@ function renderSide(host, source, rig, o) {
   const eng = res;
   try {
     applyRig(eng, rig);
-    eng.setWallClock(WALL_CLOCK);
+    eng.setWallClock(o.wallClock);
 
     // auto: feed only patterns that actually bind sensor globals, so every
     // non-sensor pattern renders exactly as it did before --sensors existed.
@@ -1094,7 +1101,7 @@ const meta = {
     rig: kind,
     pixels: rig.pixels,
     grid: kind === "grid" ? `${rig.gridW}x${rig.gridH}` : null,
-    wallClock: WALL_CLOCK,
+    wallClock: opts.wallClock,
     capturedFrames: captured,
   },
   warnings: runWarnings,
@@ -1209,7 +1216,7 @@ if (opts.probeControls) {
       seed: opts.seed,
       rig: kind,
       pixels: rig.pixels,
-      wallClock: WALL_CLOCK,
+      wallClock: opts.wallClock,
       values: PROBE_VALUES,
       threshold: PROBE_THRESHOLD,
       thresholdLit: PROBE_LIT_THRESHOLD,

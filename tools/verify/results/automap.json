@@ -1,9 +1,9 @@
 {
   "slug": "automap",
   "verdict": "orig-unrenderable",
-  "score": 5,
+  "score": 0,
   "confidence": "high",
-  "summary": "The original renders identically black (every pixel exactly 0) on every rig, rate, seed, sensor feed and window I tried, so no output-level comparison is possible; the port renders a single pure-red pixel scanning the strip in ~3.2 s per sweep, which is plausible for an auto-mapping helper but unverifiable against the original.",
+  "summary": "The original renders identically black (every pixel exactly 0) on every rig, rate, seed, sensor feed and window I tried, so no output-level comparison is possible; the port renders a single pure-red pixel scanning the strip in ~3.2 s per sweep, which is plausible for an auto-mapping helper but unverifiable against the original. (Score 0 records no-comparison-obtainable per the pinned orig-unrenderable semantics, not port quality.)",
   "observations": [
     "Original: zero output everywhere. meanBrightness avg/min/max = 0 and motion = 0 in all 14 runs, with zeroMotionFrames equal to the full captured-frame count (e.g. 300/300 in the 60 s survey, 600/600 in a 600 s / 1 fps run). meta.json reports compileError null and runtimeError null on both sides, so it is not an engine error — it silently emits black.",
     "Original blackness is not rig-dependent, despite the pattern's name suggesting map probing: black on the default strip rig (60 px), on --pixels 12 and --pixels 300 strips, on --rig grid --grid 8x8 and 16x16, and on --rig cloud --pixels 125. A --dump on the 12 px strip at t=0, 0.05, 1, 3, 5.9 s returns literal [0,0,0] for all 12 pixels at every time.",

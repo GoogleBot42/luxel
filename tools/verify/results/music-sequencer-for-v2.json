@@ -1,0 +1,36 @@
+{
+  "slug": "music-sequencer-for-v2",
+  "verdict": "orig-unrenderable",
+  "score": 0,
+  "confidence": "high",
+  "summary": "The original .epe (\"Music Sequencer for v2\") never compiles — it fails on the identifier `REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING`, an author-placed tripwire in the shipped source — so no side-by-side comparison is possible; the port itself renders fine and is a healthy, beat-locked, multi-mode sensor pattern. Score 0 records 'no comparison obtainable', NOT a port failure.",
+  "observations": [
+    "ORIGINAL: compile fails identically on every one of 7 runs (baseline, survey, survey-180, probe, mode-teal, mode-blocks, sens-off, fps20-cycle) with `compileError: \"unknown identifier \\`REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING\\`\"`. `orig.image` is null, `statsSummary` null, `controls` empty. No flag combination can change this — the failure is at compile time, before any render setting applies.",
+    "The failing identifier is self-documenting and is a known Pixelblaze idiom: a deliberately invalid line inserted by the pattern author so the pattern refuses to run until the user reads a warning and deletes the line. This is therefore almost certainly NOT an engine gap in our compiler — the .epe as distributed would also error on real PB firmware. Do not file this as an engine bug; it needs a corpus-prep fix (strip the sentinel line from the .epe used by the harness) before the pair is judgeable.",
+    "Because the original never compiled, `sides.orig.wantsSensors` reads `false` and `sensors: \"off\"` — that is an artefact of the compile failure (no bindings could be detected), not evidence the original ignores the sensor board. The original's control surface is likewise unknown; `controls: []` on the orig side means 'not enumerable', not 'has no dials'.",
+    "PORT (renders cleanly, no compile or runtime error; `wantsSensors: true`, fed `beat120` synth sensors): 16x16 grid rig, 256 px. Baseline 6 s / 20 fps: meanBrightness avg 19.8 (min 0, max 73), motion avg 4.7 / max 49, motionLit avg 11.6, zeroMotionFrames 16/120, brightnessTrend volatile. In the first 6 s the output is pure red — meanG and meanB are 0 across all 120 frames.",
+    "PORT is cleanly beat-locked to the synthetic 2 Hz beat. The baseline `motion` series spikes on exactly every 10th frame at 20 fps (frames 9, 19, 29, 39, 49, 59, 68, 78, 88, 98, 108, 118 → 0.5 s spacing = 120 BPM), with spike magnitudes rising 7, 13, 19, 24, 29, 34, 49 across a bar and then dropping to 28 at the reset.",
+    "PORT's opening regime is a step-sequencer/VU bar: `meanBrightness` ramps monotonically beat-by-beat (5→10→20→30→39→48→56→73) then hard-resets to 0 at frame 78 (t=3.9 s) and restarts the ramp — an 8-beat / ~4 s bar, matching the sensor model's 8-step melody scale. The contact sheet shows a solid red column/bar growing in width from the left edge of the grid over the bar, then clearing.",
+    "PORT cycles through roughly 7 visually distinct regimes per super-cycle (read off the survey rhythm image): (1) red growing sequencer bars, (2) dim red/orange horizontal striping, (3) a warm orange centred bloom, (4) yellow/orange diagonal slashes, (5) sparse multicoloured thin lines (cyan/magenta/green), (6) a bright symmetric green→teal→blue vertical bloom, (7) a blocky grid of saturated green / magenta / purple rectangles against black with a grey left-edge column. Then it returns to regime (1).",
+    "PORT super-cycle period, by autocorrelation of the raw `meanBrightness` series (mean-subtracted, full lag scan): 433 frames at 10 fps = 43.3 s (r=0.777, with the 2x harmonic at 866 f = 86.6 s, r=0.713) over a 1800-frame / 180 s survey. The 180 s rhythm image shows 4 clean repeats, so the cycle is fully characterised.",
+    "PORT shows fps-dependent mode timing: the same super-cycle measures 433 f @ 10 fps = 43.3 s but 738 f @ 20 fps = 36.9 s (r=0.719, 1800-frame / 90 s run). That is neither fps-invariant (equal seconds) nor purely frame-stepped (which would give 86.6 s vs 36.9 s), so the mode advance appears to mix a time/beat-driven term with a per-frame accumulator. Flagged for a future pass to check against the original once the original is renderable — with no original render it cannot be called a port bug.",
+    "PORT degrades gracefully with dead sensors: `--sensors off` for 12 s at 10 fps still gives mean 19 / motion 12, i.e. it keeps animating (its own timebase) rather than going black or erroring. Nothing to compare against, recorded only as port robustness."
+  ],
+  "dials": [],
+  "feedback": [
+    "BLOCKER, not a port fix: this pair cannot be judged until the original compiles. The .epe named \"Music Sequencer for v2\" ships with a deliberate tripwire line referencing `REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING`; the corpus/harness input for this slug needs that one line removed (the author's own instruction) and then the pair re-judged. Nothing in the port should be changed on the basis of this verdict.",
+    "When the original is renderable, the first things to check against it are: (a) does the original's opening regime also draw a red sequencer bar that grows over an 8-beat / ~4 s bar and hard-resets to black, or does it hold/decay instead; (b) does the original also run a ~43 s multi-mode super-cycle through ~7 distinct looks, and do the looks and their order match the port's list above; (c) the port's super-cycle length moves with frame rate (43.3 s at 10 fps vs 36.9 s at 20 fps) — verify whether the original's mode timing is fps-invariant, because if it is, the port has a frame-rate-coupled mode timer.",
+    "Also check the original's control surface once it compiles. The port exposes ZERO settable controls (`--probe-controls` reports 'no settable controls' on the port side); if the original exposes any dials at all, that is an unrecorded fidelity gap — it could not be detected here because the failed compile left the original's control list unenumerable.",
+    "Colour check for the re-judge: the port's first ~6 s are pure red with meanG = meanB = 0 exactly. If the original's opening regime carries any green or blue at all, that is an immediately measurable divergence."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-180",
+    "probe",
+    "mode-teal",
+    "mode-blocks",
+    "sens-off",
+    "fps20-cycle"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "slug": "nano-orbital",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Same spatial idea (12 rainbow dots on a 12-px lattice, identical at t=0) but the port runs its whole animation ~60x too slow and never clears the frame, so it fills to a solid full-brightness rainbow wash by t=55 s and stays there, while the original stays a sparse 12-dot field orbiting with an exact 1.00 s period.",
+  "observations": [
+    "ENGINE GAP / rig blocker: on the manifest default rig (strip, 60 px) the ORIGINAL dies immediately — meta.json sides.orig.runtimeError = {message: 'array index out of bounds', frame: 0, phase: 'capture', line 22, col 5}. It also errors at --pixels 12/16/32/100/101/110/120/128, errors at frame 13 with --pixels 140, and renders cleanly from --pixels 144 upward. Output-level cause is visible in the dumps: the original addresses a FIXED 144-pixel canvas regardless of rig size, so anything under 144 px writes out of bounds. All substantive comparison below was therefore done on a --pixels 150 strip override (both sides, same rig, same seed, same clock).",
+    "ORIGINAL @150 px: exactly 12 lit pixels at all times, on a perfectly regular 12-px lattice (indices 0,12,24,...,132 at t=0). Every other pixel is hard 0. meanBrightness pinned at 10 (avg=min=max=10) over 6 s, 60 s AND the t=120-150 s late window — perfectly steady, brightnessTrend 'steady', zeroMotionFrames 0-1.",
+    "ORIGINAL motion: the whole lattice translates toward higher pixel index at exactly 12 px/s, so it wraps onto itself with a period of exactly 1.000 s. Dense dump at 40 fps: t=0 -> idx 0, t=0.1 -> 1, t=0.2 -> 2, t=0.3 -> 3, t=0.4 -> 5, t=0.5 -> 6, t=0.6 -> 7, t=0.7 -> 8, t=0.8 -> 9, t=0.9 -> 11, t=1.000 -> back to 0 with byte-identical colour. t=6/12/24/36/48 are all identical to t=0.",
+    "ORIGINAL colour: the 12 dots span the full colour wheel, ~30 deg of hue per dot (t=0 @40fps: idx0 255,38,0; idx12 255,160,0; idx24 226,255,0; ... idx132 magenta/red). Each dot's hue also advances ~360 deg/s, phase-locked to the 1 s positional wrap — that is what makes the waterfall read as continuous rainbow diagonals. Fully saturated, no dimming, no fade tails.",
+    "ORIGINAL is time-based, not frame-stepped: at --fps 10, 20 and 40 the position at a given absolute time and the 1.000 s period are identical (only a one-frame startup offset differs). Deterministic and seed-independent (seed 1 vs 1234 gave identical stats).",
+    "PORT @150 px, t=0: essentially a MATCH — 12 lit pixels on the same 0,12,24,...,132 lattice, same ~30 deg/dot rainbow ramp (idx0 255,0,0; idx12 255,123,0; idx24 255,245,0; ...). Only the global hue phase differs slightly. A single-frame comparison would call this a match.",
+    "PORT motion is ~60x too slow. Its dots do not visibly move for the first ~5 s (idx still 0,12,24 at t=2.35 s) and its hue advances ~6.1 deg/s against the original's ~360 deg/s. The original's full 1 s orbit takes the port ~60 s. This is a pure time-scale error, not frame-rate coupling: the port's hue rate is the same 5.9-6.1 deg/s at --fps 10, 20 and 40.",
+    "PORT never clears the frame — old positions stay lit permanently. Lit-pixel count at 150 px: t=0 -> 12, t=6 -> 23, t=12 -> 35, t=24 -> 59, t=36 -> 95, t=48 -> 119, t=59.9 -> 144 (every pixel 0..143 lit). The original holds exactly 12 for the entire 240 s survey.",
+    "PORT steady state is a total loss. From ~t=55 s onward it is a fully-lit, fully-saturated rainbow gradient sliding along the strip, with no orbital/dot structure at all. Late window (--skip 120 --seconds 30): port meanBrightness avg 121.4 (min 120, max 124), motion pinned at 2.0; original meanBrightness 10.0 flat, motion pinned at 20.0. A 240 s survey confirms the port never resets back to the sparse look.",
+    "Brightness trend divergence is visible even in the 6 s baseline: orig 'steady' (10/10/10), port 'rising' (10 -> 20). Over 60 s: orig steady 10, port rising 10 -> 124.",
+    "PORT posts zeroMotionFrames 119/120 in the 6 s baseline (motion avg 0.1) while the original posts 1/120 (motion avg 13). This is genuine near-freeze, not the sparse-pattern false read: motionLit is also near zero for the port over most frames and the dumps confirm the dots do not move.",
+    "Resolution behaviour diverges structurally: at --pixels 300 the ORIGINAL still draws only 12 dots inside a fixed 144-pixel canvas (max lit index 138, second half of the strip permanently black, meanBrightness halves from 10 to 5), while the PORT scales with the rig and draws 25 dots across the whole 300 px (indices 0,12,...,288). At 60 px the port draws 5 dots where the original cannot run at all. The port is rig-adaptive; the original is fixed to 144 pixels.",
+    "Neither side exposes any settable controls (probe: 'no settable controls' on both). Control surfaces match.",
+    "Neither side binds sensors (wantsSensors false on both), so --sensors was a no-op throughout."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY BUG — time scale: the port's animation runs ~60x too slow. The original completes one full lattice wrap AND one full 360 deg hue cycle in exactly 1.000 s (12 px/s on a 12-px dot spacing, hue ~360 deg/s, phase-locked). The port takes ~60 s for the same cycle (measured hue rate ~6.1 deg/s at 10/20/40 fps). Speed up the port's time base by 60x; the ratio is consistent across fps, so it is a constant factor (smells like a seconds/minutes or 1/60 unit slip), not a frame-rate coupling issue.",
+    "PRIMARY BUG — the port never clears the pixel buffer between frames. Lit-pixel count grows monotonically 12 -> 144 over the first 60 s and the steady state is a solid rainbow wash at meanBrightness ~121 versus the original's steady 10. The original always has EXACTLY 12 lit pixels with everything else at hard 0. Whatever the port does per frame must start from black (or the previous dot positions must be actively cleared) so the lit count stays constant.",
+    "Fixing the two bugs above should be enough: the port's t=0 frame already reproduces the original's lattice (12 dots, 12-px spacing) and its 30 deg-per-dot rainbow ramp almost exactly, so structure and palette are already right.",
+    "Direction and phase-lock to verify after the fix: the original's dots translate toward INCREASING pixel index at 12 px/s, and each dot's hue advances so that after 1.000 s both position and colour are byte-identical to t=0. If the port's hue and position rates are not locked to the same 1 s period, the waterfall will show broken rather than continuous rainbow diagonals.",
+    "Resolution/canvas mismatch (lower priority, arguably a port improvement but still a fidelity gap): the original draws exactly 12 dots into a fixed 144-pixel canvas whatever the rig is (on a 300 px strip the last 156 pixels stay black); the port scales dot count with pixelCount (25 dots at 300 px, 5 at 60 px). Decide deliberately which behaviour is wanted and note it.",
+    "ENGINE GAP for the harness/engine owners, not the port author: the original cannot be rendered on the default 60 px strip rig at all — it throws 'array index out of bounds' at frame 0 because it writes into a fixed 144-pixel address space. Real Pixel Blaze tolerates out-of-range pixel writes; our engine hard-errors, which makes this original unjudgeable on any rig under 144 px. Either the manifest rig for this slug should be raised to >=144 px, or the engine should clamp/ignore out-of-range writes."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "px12", "px16", "px32", "px100", "px150", "px300",
+    "bisect101", "bisect110", "bisect120", "bisect128", "bisect140", "bisect145",
+    "long144", "long150", "long200", "long300",
+    "base150",
+    "survey150",
+    "dump150",
+    "dumplong",
+    "dense1s",
+    "late",
+    "survey240",
+    "px300chk",
+    "seed1234",
+    "fps10"
+  ]
+}

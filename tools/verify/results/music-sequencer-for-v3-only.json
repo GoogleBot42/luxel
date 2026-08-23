@@ -1,0 +1,54 @@
+{
+  "slug": "music-sequencer-for-v3-only",
+  "verdict": "orig-unrenderable",
+  "score": 0,
+  "confidence": "high",
+  "summary": "The original .epe fails to compile on every run with `unknown identifier BY_REMOVING_THESE_INVALID_LINES_I_PROMISE_THIS_IS_RUNNING_ON_A_PIXELBLAZE_V3` — an author-planted sentinel the user is meant to delete, so the file as distributed renders nowhere and no fidelity comparison is possible; the score is an artefact of that, not a judgement of the port, which is alive, beat-locked at exactly 2 Hz and multi-mode.",
+  "observations": [
+    "ORIGINAL: compile error on every single run (baseline, survey 60 s/10 fps, probe, all six dialed runs, 150 s/4 fps, --sensors off): `unknown identifier `BY_REMOVING_THESE_INVALID_LINES_I_PROMISE_THIS_IS_RUNNING_ON_A_PIXELBLAZE_V3``. meta.json shows sides.orig with image:null, controls:[], statsSummary:null, wantsSensors:false.",
+    "The failing identifier is a deliberate guard planted by the pattern author (the name spells out the instruction: delete these lines to assert you are on a V3). This is NOT an engine gap — a real Pixelblaze would reject the same undefined identifier too. The .epe as shipped cannot run on any engine until those lines are removed, so the corpus artefact itself is the blocker.",
+    "Because the original never compiles, its control list is empty in meta.json and unavailable. There is no authoritative control surface to check the port against; the port's single slider `sliderChooseManualPattern` (label 'ChooseManualPattern') can be neither confirmed nor faulted.",
+    "PORT (grid rig, 16x16, 256 px, sensors auto -> synth/beat120, wantsSensors true): renders and animates cleanly with no compile or runtime error. baseline (6 s/20 fps) statsSummary meanBrightness {avg 26.2, min 8, max 66}, motion {avg 7.3, max 49}, motionLit {avg 9.6, max 64.7}, zeroMotionFrames 1 (the mandatory first frame), brightnessTrend 'decaying' over that short window; the 150 s/4 fps run reads brightnessTrend 'volatile' with meanBrightness {avg 15.4, min 0, max 151} and zeroMotionFrames 168/600 — i.e. it holds still between steps rather than dying.",
+    "PORT beat lock is exact. Autocorrelation of the raw baseline `motion` series peaks at lag 10 frames (r=0.617) at 20 fps = 0.500 s = 2.0 Hz, with harmonics at 20/30/40; the 60 s survey at 10 fps peaks at lag 5 frames (r=0.755) = the same 0.500 s. The raw series shows a sharp spike every 10th frame (values 42, 28, 21, 11, 49, 35, 24, 8, 12, 10, 17 at frames 21, 31, 41, ... ) followed by a 2-3 frame decay, so it fires on the beat120 attack and decays across the interval, which is the correct response to the synthetic feed. Peak amplitude is itself modulated on a longer cycle (secondary autocorrelation mass at lag 40 frames = 2 s and lag 80 = 4 s), consistent with tracking the feed's 8-step / 4 s melody staircase.",
+    "PORT is genuinely multi-mode over the 60 s survey — the rhythm image shows clear horizontal regime boundaries roughly every 5-10 s. Sampled sheet cells: 0-5 s teal/cyan horizontal bars; ~10.9 s a solid blue-violet full-field flash; ~16.3 s cyan bars; ~21.8 s near-black; ~27.2 s magenta bars; ~32-38 s dark red bars; ~43.6 s a solid red full-field flash; ~49 s near-black; ~54.5 s dim green; ~59.9 s orange bars. A verdict window shorter than ~60 s would sample only one of these looks.",
+    "PORT structure in the bar regime is strictly row-wise and uniform along x. --dump at 14.15/14.20/14.35 s (grid 16x16) shows every one of the 16 rows a single flat colour across all 16 columns (rowsUniform true, exactly 2 distinct colours in the frame: black plus one lit colour). The lit-row SET changes each frame — 14.15 s lit rows {1,5,7,8,11,12,13,14}, 14.20 s {1,2,3,4,6,9,14}, 14.35 s {0,3,5,6,10,11,12,14} — and the lit value decays 242 -> 225 -> 175 across those three frames. Row colour at 14.20 s is exactly (225,0,94) magenta. So in this regime there is zero horizontal/step-column structure: it is 16 stacked bars, not a step grid.",
+    "PORT other regimes are NOT row-uniform: --dump at 41.15 s and 43.25 s gives 256 and 253 distinct colours (a full per-pixel red gradient field), 47.4 s is row-uniform again but with an 8-level amber ramp (17,8,3 / 38,24,7 / 83,65,13 / 181,146,27 ...), and 50.1 s has 81 distinct colours in a dim green field. So the port carries at least three structurally different looks and rotates through them.",
+    "PORT with dead sensors (--sensors off, 12 s/20 fps) renders PURE BLACK: meanBrightness 0, motion 0 on every frame. All of the port's output is sensor-driven with no self-running fallback. Unverifiable against the original, but worth recording — a viewer with no sensor board sees nothing at all.",
+    "PORT dial `sliderChooseManualPattern` is inert everywhere I could reach it. --probe-controls: maxDelta 0.00 / maxDeltaLit 0.00 at 0, 0.5 and 1. Manual sweep at 0, 0.15, 0.35, 0.55, 0.75, 1.0 over 30 s/10 fps produced stats series byte-identical to the untouched run (meanBrightness, meanR and motion arrays compared element-wise: identical for all six settings). Extended to 150 s/4 fps (~1.5 full mode rotations, several dozen beats), slider=1 was still byte-identical to untouched. The JUDGE.md setter-interaction workaround does not apply — this is the only control the port exposes, so there is no second control to pin."
+  ],
+  "dials": [
+    {
+      "name": "sliderChooseManualPattern",
+      "origEffect": "unknown — the original never compiles, so its control list is empty and no comparison is possible",
+      "portEffect": "inert: no measurable effect at 0/0.15/0.35/0.55/0.75/1.0 over 30 s, and none at 1.0 over a 150 s window spanning several mode changes; stats are byte-identical to the untouched render at every value",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "PRIMARY BLOCKER, not a port bug: the corpus .epe cannot compile anywhere because it contains the author's deliberate sentinel lines (`BY_REMOVING_THESE_INVALID_LINES_I_PROMISE_THIS_IS_RUNNING_ON_A_PIXELBLAZE_V3`). Before this pair can be judged at all, the harness/corpus side needs a sanctioned way to render the original with those sentinel lines stripped — e.g. a per-slug 'prelude fixups' entry in the manifest that deletes them. Do NOT ask a judge to re-run this slug until that exists; every run will return the same compile error.",
+    "The port's `sliderChooseManualPattern` does literally nothing at any value over windows up to 150 s. A pattern named 'ChooseManualPattern' should switch the sequencer out of its auto-rotation into a user-selected look; right now the mode rotation is on a timer and the slider is dead weight. Fix so that moving the slider selects a mode (and, presumably, that some value — likely 0 — means 'auto'). This is the port's one clearly actionable defect and it does not depend on getting the original to render.",
+    "The port goes completely black (mean brightness 0.0, motion 0.0 on all 240 frames of a 12 s window) when the sensor feed is absent. Whether the original degrades the same way is unverifiable, but a music pattern that shows nothing without a sensor board is worth a deliberate decision — consider a self-running idle animation, or at least confirm the original also idles black once it can be rendered.",
+    "In its magenta/cyan bar regime the port draws 16 uniform full-width rows and nothing else — a --dump at 14.20 s shows exactly two colours in the whole 16x16 frame, black and (225,0,94), with every row flat across all 16 columns. For a pattern called 'Music Sequencer' the expected shape is usually a step grid (columns = sequencer steps, rows = notes/bands) with a scanning playhead column. There is no playhead and no column structure at all here. Flag for the fixer to check once the original renders: if the original has a horizontal step axis, the port has collapsed a 2D sequencer into 1D bars.",
+    "What the port already gets right and should be preserved through any fix: its beat response is exactly locked to the beat120 feed (motion autocorrelation peaks at lag 10 frames at 20 fps and lag 5 at 10 fps — both 0.500 s = 2 Hz), with a sharp attack and a 2-3 frame decay, plus a slower amplitude modulation at 2 s / 4 s matching the feed's melody staircase.",
+    "Any future judge of this slug must survey at 60 s minimum: the port cycles through at least three structurally distinct looks (row-uniform bars, full-field solid flashes at ~10.9 s and ~43.6 s, and per-pixel gradient fields with 250+ distinct colours), plus near-black gaps at ~21.8 s and ~49 s. A 6 s window lands inside one look and would be unrepresentative."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "mode-a",
+    "mode-b",
+    "sens-off",
+    "ctl-untouched-30",
+    "ctl-manual-0",
+    "ctl-manual-0.15",
+    "ctl-manual-0.35",
+    "ctl-manual-0.55",
+    "ctl-manual-0.75",
+    "ctl-manual-1",
+    "ctl-long-untouched",
+    "ctl-long-max",
+    "dump-beat",
+    "dump-modeb"
+  ]
+}
