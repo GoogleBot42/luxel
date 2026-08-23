@@ -21,6 +21,8 @@
 //   --grid WxH           override grid dimensions (grid rig; implies pixels)
 //   --controls-orig "name=v[,v,v];name2=v"   controls for the original
 //   --controls-port "..."                    controls for the port
+//   --sensors auto|synth|off   synthetic sensor-board feed (default auto —
+//                        fed only to a side whose engine reports wants_sensors)
 //   --label NAME         output subdirectory name (default "default")
 //   --sheet-frames N     frames in the grid contact sheet (default 12)
 //   --strip-frames N     consecutive frames in the grid filmstrip (default 12)
@@ -37,7 +39,8 @@
 //
 // meta.json is written for a reader on a context budget: it holds settings,
 // provenance, run-level `warnings`, and per side `image`, `controls`,
-// `controlsApplied`, `warnings`, `compileError`, `runtimeError` and
+// `controlsApplied`, `warnings`, `compileError`, `runtimeError`,
+// `wantsSensors`, `sensors` (+ `sensorModel` when synth) and
 // `statsSummary` ({avg,min,max,first,last} per series, plus `zeroMotionFrames`
 // and `brightnessTrend`) — it is short enough to read whole. The FULL per-frame
 // series live in the sibling stats.json (one line per series, per side) and
@@ -55,6 +58,20 @@
 //                  unaliased by the sheet's even sampling)
 //   *-rhythm.png   waterfall of EVERY captured frame collapsed to one row of
 //                  per-column mean RGB (full-window rhythm: beats, cycles, drift)
+//
+// --sensors feeds the PB sensor-board surface (frequencyData, energyAverage,
+// maxFrequency(Magnitude), accelerometer, light) so sound- and motion-reactive
+// patterns render something judgeable instead of idling black. The signal is
+// SYNTHETIC and fully deterministic — derived from the frame index and fps
+// alone, never from wall time or randomness — so both sides hear exactly the
+// same input and reruns are bit-identical. Model "beat120": a 120 BPM (2 Hz)
+// beat envelope, a bass peak on the beat, a mid melody peak stepping an 8-step
+// scale (one step per beat), a small HF shimmer, an 8 s accelerometer tilt
+// circle and a constant light level. `auto` (default) feeds a side only when
+// its engine reports wants_sensors, so non-sensor patterns render exactly as
+// they did before this option existed; `synth` always feeds; `off` never does.
+// meta.json records, per side, `wantsSensors` and the `sensors` mode ACTUALLY
+// applied (plus `sensorModel` when synth) — not the flag you typed.
 //
 // --probe-controls answers "which dials are actually live?" in one command.
 // For each side and each SETTABLE control (slider, toggle, inputNumber,
@@ -92,7 +109,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { load, cubeLattice, WASM_PATH } from "./enginehost.mjs";
+import { load, cubeLattice, sensorSlots, WASM_PATH } from "./enginehost.mjs";
 import { encodePNG, upscale, drawText, textSize } from "./png.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -120,6 +137,12 @@ const PROBE_THRESHOLD = 1.0;
 const PROBE_KINDS = new Set(["slider", "toggle", "inputNumber", "hsvPicker", "rgbPicker"]);
 const PICKER_KINDS = new Set(["hsvPicker", "rgbPicker"]);
 
+/** --sensors: the modes, and the name stamped into meta.json when synth data
+ *  was actually fed. Bump the name if the signal below ever changes, so runs
+ *  made against different signals can never be compared as if they matched. */
+const SENSOR_MODES = ["auto", "synth", "off"];
+const SENSOR_MODEL = "beat120";
+
 /** Run-level warnings (clamped arguments &c). Also printed to stderr. */
 const runWarnings = [];
 function warn(msg) {
@@ -145,6 +168,7 @@ function parseArgs(argv) {
     grid: null,
     controlsOrig: "",
     controlsPort: "",
+    sensors: "auto",
     label: "default",
     sheetFrames: 12,
     stripFrames: 12,
@@ -165,6 +189,7 @@ function parseArgs(argv) {
     "--grid": ["grid", String],
     "--controls-orig": ["controlsOrig", String],
     "--controls-port": ["controlsPort", String],
+    "--sensors": ["sensors", String],
     "--label": ["label", String],
     "--sheet-frames": ["sheetFrames", Number],
     "--strip-frames": ["stripFrames", Number],
@@ -198,6 +223,9 @@ function parseArgs(argv) {
   if (opts.stripAt !== null && !(opts.stripAt >= 0)) die("--strip-at must be >= 0");
   if (!(opts.probeSeconds > 0)) die("--probe-seconds must be > 0");
   if (opts.rig && !["strip", "grid", "cloud"].includes(opts.rig)) die(`bad --rig ${opts.rig}`);
+  if (!SENSOR_MODES.includes(opts.sensors)) {
+    die(`bad --sensors ${opts.sensors} (want ${SENSOR_MODES.join("|")})`);
+  }
   return { slug, opts };
 }
 
@@ -230,6 +258,106 @@ function parseControls(spec) {
     out[name] = values;
   }
   return out;
+}
+
+// ---- synthetic sensor feed ("beat120") -------------------------------------
+//
+// A deterministic stand-in for the PB sensor expansion board. Everything is a
+// pure function of (frameIndex, fps) — no Date, no RNG — so the two sides get
+// byte-identical input and a rerun reproduces a run exactly.
+//
+// Band geometry mirrors the engine's own analyzer (crates/luxel-core/src/
+// audio.rs): 32 log-spaced bands from 37 Hz to 10 kHz, each band a fixed ratio
+// wider than the last. Levels are normalized 0..1 like parse_sensor_board's
+// u16 fields; maxFrequency is in Hz; accelerometer follows netin.rs's
+// "±0.5 = ±full-scale" convention.
+
+const BANDS = 32;
+const BAND_LO_HZ = 37;
+const BAND_HI_HZ = 10_000;
+const BAND_RATIO = (BAND_HI_HZ / BAND_LO_HZ) ** (1 / BANDS);
+
+/** Fractional band index whose centre frequency is `hz` (inverse of audio.rs's
+ *  `LO·ratio^(b+0.5)` band centres). */
+const binOfHz = (hz) => Math.log(hz / BAND_LO_HZ) / Math.log(BAND_RATIO) - 0.5;
+
+const BEAT_HZ = 2; // 120 BPM
+const BEAT_ATTACK = 0.04; // fraction of the beat spent rising: near-instant
+const BEAT_DECAY = 0.18; // exponential decay constant, in beats
+const ENERGY_BASE = 0.15;
+const ENERGY_SWING = 0.55; // → energyAverage sweeps 0.15 … 0.70
+const SPECTRUM_FLOOR = 0.02; // a hair of room tone between beats
+const BASS_BIN = 1.5; // ≈ 48 Hz
+const BASS_WIDTH = 1.8;
+const BASS_AMP = 0.7;
+const MELODY_ROOT_HZ = 330; // ≈ band 12, comfortably mid
+const MELODY_SCALE = [0, 2, 4, 5, 7, 9, 11, 12]; // semitones, one step per beat
+const MELODY_WIDTH = 1.0;
+const MELODY_AMP = 0.9; // loudest peak, so maxFrequency tracking it is honest
+const SHIMMER_BIN = 28; // ≈ 6.5 kHz
+const SHIMMER_WIDTH = 3.0;
+const SHIMMER_AMP = 0.12;
+const SHIMMER_HZ = 7; // shimmer's own slow tremolo
+const TILT_PERIOD_S = 8;
+const TILT_AMPLITUDE = 0.2;
+const TILT_Z = 0.25; // resting gravity term (±0.5 = ±full-scale)
+const LIGHT_LEVEL = 0.5;
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+/** Unit-height gaussian bump at `centre` bins, `width` bins of spread. */
+const bump = (b, centre, width) => Math.exp(-(((b - centre) / width) ** 2));
+
+/** One synthetic sensor frame for absolute frame `i` at `fps`. */
+function synthSensorFrame(i, fps) {
+  const t = i / fps;
+  const beat = t * BEAT_HZ;
+  const phase = beat - Math.floor(beat); // 0 at each downbeat
+  const env =
+    phase < BEAT_ATTACK
+      ? phase / BEAT_ATTACK
+      : Math.exp(-(phase - BEAT_ATTACK) / BEAT_DECAY);
+
+  const step = Math.floor(beat) % MELODY_SCALE.length;
+  const melodyHz = MELODY_ROOT_HZ * 2 ** (MELODY_SCALE[step] / 12);
+  const melodyBin = binOfHz(melodyHz);
+  const shimmer = SHIMMER_AMP * (0.5 + 0.5 * Math.sin(2 * Math.PI * SHIMMER_HZ * t));
+
+  const frequencyData = new Array(BANDS);
+  for (let b = 0; b < BANDS; b++) {
+    const spectrum =
+      BASS_AMP * bump(b, BASS_BIN, BASS_WIDTH) +
+      MELODY_AMP * bump(b, melodyBin, MELODY_WIDTH) +
+      shimmer * bump(b, SHIMMER_BIN, SHIMMER_WIDTH);
+    frequencyData[b] = clamp01(SPECTRUM_FLOOR + env * spectrum);
+  }
+
+  const tilt = (2 * Math.PI * t) / TILT_PERIOD_S;
+  return {
+    frequencyData,
+    energyAverage: clamp01(ENERGY_BASE + ENERGY_SWING * env),
+    maxFrequencyMagnitude: clamp01(SPECTRUM_FLOOR + env * MELODY_AMP),
+    maxFrequency: melodyHz,
+    light: LIGHT_LEVEL,
+    accelerometer: [
+      TILT_AMPLITUDE * Math.sin(tilt),
+      TILT_AMPLITUDE * Math.cos(tilt),
+      TILT_Z,
+    ],
+    analogInputs: [0, 0, 0, 0, 0],
+  };
+}
+
+/** Slot arrays are rebuilt for every frame of every render (a --probe-controls
+ *  run redoes the same window a dozen times); memoize per fps so the feed costs
+ *  nothing after the first pass — and so every render provably reuses the SAME
+ *  numbers rather than recomputing them. */
+const sensorCache = new Map();
+function sensorSlotsAt(i, fps) {
+  let byFrame = sensorCache.get(fps);
+  if (!byFrame) sensorCache.set(fps, (byFrame = new Map()));
+  let slots = byFrame.get(i);
+  if (!slots) byFrame.set(i, (slots = sensorSlots(synthSensorFrame(i, fps))));
+  return slots;
 }
 
 // ---- rendering -------------------------------------------------------------
@@ -312,6 +440,8 @@ function renderSide(host, source, rig, o) {
     warnings: [],
     compileError: null,
     runtimeError: null,
+    wantsSensors: false,
+    sensors: "off",
     stats: null,
     statsSummary: null,
     frames: null,
@@ -326,6 +456,12 @@ function renderSide(host, source, rig, o) {
   try {
     applyRig(eng, rig);
     eng.setWallClock(WALL_CLOCK);
+
+    // auto: feed only patterns that actually bind sensor globals, so every
+    // non-sensor pattern renders exactly as it did before --sensors existed.
+    side.wantsSensors = eng.wantsSensors();
+    const feedSensors = o.sensors === "synth" || (o.sensors === "auto" && side.wantsSensors);
+    side.sensors = feedSensors ? "synth" : "off";
 
     side.controls = eng.controls().map((c) => ({ name: c.name, kind: c.kind, label: c.label }));
     for (const [name, values] of Object.entries(o.controls)) {
@@ -347,6 +483,10 @@ function renderSide(host, source, rig, o) {
     let prev = null;
 
     for (let i = 0; i < warmup + capture; i++) {
+      // Fresh sensor frame BEFORE every render — warmup included, so a
+      // pattern's beat detectors and filters see the same history a capture
+      // starting at t=0 would have given them.
+      if (feedSensors) eng.setSensors(sensorSlotsAt(i, o.fps));
       const px = eng.frame(delta);
       const err = eng.takeError();
       if (err && !side.runtimeError) {
@@ -403,9 +543,22 @@ const round2 = (v) => Math.round(v * 100) / 100;
 function probeSide(host, source, rig, o) {
   const base = renderSide(host, source, rig, { ...o, seconds: o.probeSeconds });
   if (!base.frames) {
-    return { compileError: base.compileError, runtimeError: base.runtimeError, controls: {} };
+    return {
+      compileError: base.compileError,
+      runtimeError: base.runtimeError,
+      wantsSensors: base.wantsSensors,
+      sensors: base.sensors,
+      controls: {},
+    };
   }
-  const out = { compileError: null, runtimeError: base.runtimeError, controls: {} };
+  const out = {
+    compileError: null,
+    runtimeError: base.runtimeError,
+    wantsSensors: base.wantsSensors,
+    sensors: base.sensors,
+    ...(base.sensors === "synth" ? { sensorModel: SENSOR_MODEL } : {}),
+    controls: {},
+  };
   for (const c of base.controls) {
     if (!PROBE_KINDS.has(c.kind)) continue;
     const picker = PICKER_KINDS.has(c.kind);
@@ -723,6 +876,7 @@ const sides = {
     fps: opts.fps,
     skip: opts.skip,
     seconds: opts.seconds,
+    sensors: opts.sensors,
     controls: parseControls(opts.controlsOrig),
   }),
   port: renderSide(host, portSource, rig, {
@@ -730,6 +884,7 @@ const sides = {
     fps: opts.fps,
     skip: opts.skip,
     seconds: opts.seconds,
+    sensors: opts.sensors,
     controls: parseControls(opts.controlsPort),
   }),
 };
@@ -861,6 +1016,11 @@ const meta = {
         warnings: s.warnings,
         compileError: s.compileError,
         runtimeError: s.runtimeError,
+        // What this side ACTUALLY got, not what was asked for: `wantsSensors`
+        // is the pattern's own property, `sensors` is what was fed.
+        wantsSensors: s.wantsSensors,
+        sensors: s.sensors,
+        ...(s.sensors === "synth" ? { sensorModel: SENSOR_MODEL } : {}),
         statsSummary: s.statsSummary,
       },
     ]),
@@ -917,6 +1077,9 @@ if (opts.probeControls) {
     fps: opts.fps,
     skip: opts.skip,
     probeSeconds: opts.probeSeconds,
+    // Same feed as the run, so a dial on a sound pattern is probed against a
+    // signal rather than against silence.
+    sensors: opts.sensors,
   };
   probe = {
     slug,
@@ -955,7 +1118,8 @@ const brief = (k) => {
   const b = s.stats.meanBrightness;
   const m = s.stats.motion;
   const avg = (a) => Math.round(a.reduce((x, y) => x + y, 0) / a.length);
-  return `${k}: mean ${avg(b)} motion ${avg(m)}${s.runtimeError ? ` RUNTIME ERR @${s.runtimeError.frame}: ${s.runtimeError.message}` : ""}`;
+  const sensors = s.sensors === "synth" ? ` sensors ${SENSOR_MODEL}` : "";
+  return `${k}: mean ${avg(b)} motion ${avg(m)}${sensors}${s.runtimeError ? ` RUNTIME ERR @${s.runtimeError.frame}: ${s.runtimeError.message}` : ""}`;
 };
 console.log(`${slug} [${kind}, ${rig.pixels}px, ${captured} frames] → ${path.relative(ROOT, outDir)}`);
 console.log(`  ${brief("orig")}`);

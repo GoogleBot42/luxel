@@ -46,8 +46,8 @@ Options: `--seconds N` (default 6), `--fps N` (default 20), `--skip N`
 `--label NAME` (names the output subdir — use a fresh label per experiment).
 For 2D rigs also: `--strip-frames N` (default 12) and `--strip-at S` (seconds
 into the captured window where the filmstrip starts; default midpoint).
-Also `--probe-controls` (+ `--probe-seconds N`, default 4) and
-`--dump "t1,t2,..."` — see below.
+Also `--sensors auto|synth|off` (default `auto`), `--probe-controls`
+(+ `--probe-seconds N`, default 4) and `--dump "t1,t2,..."` — see below.
 
 **`--skip` preserves the timeline.** Both sides run one deterministic clock
 (same seed, same pinned wall clock, same fixed frame delta), and `--skip N`
@@ -73,10 +73,91 @@ how much simulated time you actually bought. Two consequences:
   to flat bands and it reads as frozen when it is not. Before calling either
   side broken from a survey-rate run, re-check that stretch at `--fps 20`.
 
+**The 10/20/40 fps diagnostic is unreliable on large flat regions.** It works by
+comparing the `motion` stat across rates, and `motion` is a mean absolute
+frame-to-frame diff — which SATURATES on coarse imagery. Once a feature moves
+further than its own width in one frame, every larger displacement produces the
+same diff, so a pattern made of big flat blocks, a two-colour split, or a wide
+solid bar posts nearly identical `motion` at 10, 20 and 40 fps whether it is
+frame-coupled or not. A flat `motion` triple is therefore NOT evidence of
+fps-invariance on such a pattern. Confirm coupling by tracking POSITION instead:
+`--dump` the same feature at two times on each rate (spaced well under half its
+period, per the Nyquist note below) and read how far it actually travelled per
+second. If the per-second displacement scales with fps, the pattern is
+frame-stepped; if it holds, it is time-based. Only report frame-rate coupling
+once the `--dump` positions say so.
+
 If `--strip-at`/`--strip-frames` don't fit the window they are silently
 clamped — except the harness now says so, on stderr and in meta.json's
 top-level `warnings` array. If that array is non-empty, the filmstrip is not
 where you asked for it; re-run with a longer `--seconds` before reading it.
+
+### Sound and motion patterns: `--sensors`
+
+Some patterns bind the Pixel Blaze sensor-expansion board — `frequencyData`,
+`energyAverage`, `maxFrequency`, `maxFrequencyMagnitude`, `accelerometer`,
+`light`. With no input those globals sit at zero and the pattern renders black
+or frozen on BOTH sides, which is unjudgeable: two patterns agreeing on "all
+zeros" tells you nothing.
+
+So the harness feeds a SYNTHETIC sensor signal. It is fully deterministic —
+computed from the frame index and fps alone, never from wall time or randomness
+— and both sides receive byte-identical input on every frame, warmup included.
+Model `beat120`:
+
+- **A 2 Hz beat (120 BPM).** Each beat is a near-instant attack followed by an
+  exponential decay across the 0.5 s interval. `energyAverage` rides it from
+  0.15 at rest to 0.70 on the hit.
+- **A 32-bin spectrum**, all of it scaled by that beat envelope over a small
+  floor: a bass peak near band 1–2 (~48 Hz) thumping on the beat, a mid melody
+  peak that STEPS THROUGH A REPEATING 8-STEP SCALE, one step per beat (so the
+  melody bin walks up and resets every 4 seconds), and a small high-frequency
+  shimmer around band 28 (~6.5 kHz) with its own slow tremolo.
+- **`maxFrequency` / `maxFrequencyMagnitude` track the melody peak** — so
+  `maxFrequency` is a staircase in Hz repeating every 4 s, not a constant.
+- **An 8-second accelerometer tilt circle**: x and y trace a circle of radius
+  0.2 once every 8 s, z holds a constant resting value.
+- **`light` is a constant 0.5**; `analogInputs` are zero.
+
+Modes:
+
+- `auto` (default) feeds a side ONLY when its engine reports that the pattern
+  binds sensor globals. A pattern that ignores sensors renders exactly as it
+  would have with no feed at all, so `auto` is safe everywhere and needs no
+  special-casing.
+- `synth` always feeds, even a pattern that never reads it (a no-op).
+- `off` never feeds — this is the old idle-state view, and it is how you
+  reproduce a pre-feed run or see what the pattern does with dead sensors.
+
+`meta.json` records, per side, `wantsSensors` (does this pattern bind sensor
+globals at all?) and `sensors` — `"synth"` or `"off"`, meaning what was
+ACTUALLY fed, not the flag typed — plus `sensorModel: "beat120"` when synth.
+Compare those two fields between runs before comparing anything else: a run fed
+`beat120` and a run fed nothing are not comparable, and a future change to the
+signal will change the model name.
+
+What this means for judging:
+
+- **Expect beat-locked behaviour at 2 Hz.** At the default 20 fps a beat is
+  every 10 frames; in a 6 s window there are 12 of them. In the waterfall /
+  rhythm image they read as evenly spaced horizontal bands, and in the `motion`
+  series as a peak every 10 frames. A sound pattern that does NOT show that
+  cadence — on either side — is failing to react, and that is a finding.
+- **Timing and structure comparisons are valid**, because both sides hear the
+  identical signal on identical frames. "Original flashes on every beat, port
+  flashes on every other beat", "original's segment decays over ~0.3 s, port's
+  sustains for 2 s", "original's hue steps with the melody, port's holds" are
+  all real, reportable divergences — not sensor noise.
+- **The melody's 4-second scale cycle and the 8-second tilt circle are the
+  long periods in the signal.** A window shorter than 8 s cannot show the
+  accelerometer behaviour completely; survey motion patterns over at least a
+  couple of tilt circles (`--seconds 32`).
+- `--sensors off` recovers the old idle-state view. Use it to establish what
+  each side does with dead sensors (a well-written pattern degrades gracefully;
+  one that errors or goes black is worth noting) — but judge the pattern on
+  the fed run.
+- Dial probing uses the same feed, so `--probe-controls` now works on sound
+  patterns instead of comparing silence against silence.
 
 Rig overrides — the pattern's default rig comes from the manifest, and you may
 replace it:
@@ -148,7 +229,8 @@ Output lands in `tools/verify/out/<slug>/<label>/`:
   `meta.json` `rhythmRowsPerPixel` says how many frames each row covers.
 - `meta.json` — settings, run-level `warnings`, and — under the same `sides`
   wrapper (`sides.orig` / `sides.port`) — each side's control list
-  (name + kind), any compile/runtime error, and its `statsSummary`.
+  (name + kind), any compile/runtime error, its `wantsSensors` /`sensors`
+  (/`sensorModel`) record, and its `statsSummary`.
   It no longer carries the per-frame series, so it is short: **Read it whole.**
 - `stats.json` — the FULL per-frame series, per side. Exact shape (the series
   live under a `sides` wrapper, NOT at the top level):
@@ -395,6 +477,14 @@ differ from EACH OTHER, not just from untouched — before you call a dial live.
    (dim patterns false-read as frozen), and re-render with controls dialed:
    patterns that react only to dials, and originals that render degenerate
    untouched, both need a control set before they can be judged.
+   Check `sides.*.wantsSensors` in `meta.json` too: `true` on a black or frozen
+   side means it is a sensor pattern, and it should already be getting the
+   `beat120` feed (`sensors: "synth"`). If it says `"off"` you passed
+   `--sensors off` — re-run without it. If it says `"synth"` and the side is
+   still dead while the other side is alive, the port genuinely fails to react
+   to the same signal, which IS the finding. For sensor patterns, judge the fed
+   run and read the beat cadence (2 Hz, every 10 frames at 20 fps) off the
+   rhythm/waterfall image.
 4. Long window: the survey is coarse (5 fps); when it flags a stretch whose
    rhythm you cannot read, re-render just that stretch at a middling rate —
    `--skip <t> --seconds 20 --fps 10` — with a fresh label, and read the
