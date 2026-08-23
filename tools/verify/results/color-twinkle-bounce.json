@@ -1,0 +1,46 @@
+{
+  "slug": "color-twinkle-bounce",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Structurally, chromatically and rhythmically identical to the original — same 5 twinkling rainbow bands, same 3.28 s bounce period and phase, same 6.6 s hue cycle — but the port's back-and-forth excursion is only 60% as wide (11.5 px peak-to-peak vs 19.0 px on a 60 px strip).",
+  "observations": [
+    "Both sides render cleanly with no compile or runtime errors, and neither side exposes any settable controls (probe: 'no settable controls' on orig and port alike), so there is no control-surface mismatch.",
+    "Structure matches exactly: on the default 60 px strip both draw 5 lit bands spaced 12 px apart, each ~7 px wide with 5 px of true black (0,0,0) between them. Confirmed by --dump at 11 times across 1.5 s (dump-base): e.g. at t=0 orig lights indices 0-6/11-18/24-31/36-43/49-56, port lights 0-6/12-19/24-31/37-44/49-56.",
+    "Band structure scales with rig size identically on both sides: at --pixels 600 both render ~50 bands (still one per 12 px), with the same dotted/twinkling texture along each trace.",
+    "Colour matches: --dump RGB profiles are near-superimposable once the spatial phase offset is removed (t=1 s orig band reads 0/18/6, 60/0/61, 113/71/0, 124/109/0, 81/0/25, 0/20/30 and the port's band reads 0/17/31, 83/0/19, 124/112/0, 112/65/0, 53/0/59, 0/17/4 — same amber-to-magenta ramp, same ~127 peak). Mean brightness is 17.1 orig vs 16.9 port over the 6 s baseline and 17.0 vs 16.9 over the 60 s survey.",
+    "Hue cycle period is identical: autocorrelation of the 60 s survey meanR series gives a first peak at lag 33 frames @ 5 fps = 6.6 s on BOTH sides (subsequent peaks 65/66, 98, 131 — clean and non-drifting).",
+    "Motion type matches: both are a smooth sinusoidal translation of the whole band comb back and forth (a 'bounce'), not a wrap-around scroll. Tracked by unwrapped phase of the k=5 spatial-DFT component (12 px spatial period, max step ~0.9 px per 0.05 s sample, well inside Nyquist).",
+    "Bounce period and phase match to the sample over 24 s: displacement extrema land at t = 0.8, 2.4, 4.0, 5.6, 7.4, 9.0, 10.6, 12.2, 13.8, 15.6, 17.2, 18.8, 20.4, 22.0, 23.8 s on BOTH sides (period ~3.28 s). There is no drift or beat between the two.",
+    "THE DIVERGENCE — bounce amplitude. Peak-to-peak excursion is 19.0 px on the original (swing -8.4 to +10.5) versus 11.5 px on the port (-5.1 to +6.3): the port travels 60% as far. This is constant over the whole 24 s tracked window, at every extremum, and unchanged at 10, 20 and 40 fps.",
+    "The amplitude gap shows up in the summary stats as a uniform ~0.65x motion ratio: baseline motion avg 11.3 orig / 7.4 port (motionLit 16.5 / 11.1); 60 s survey motion avg 24.4 / 19.9; --skip 30 window 11.7 / 7.7; --skip 120 window 11.8 / 7.7. Peak sweep speed is ~18 px/s orig vs ~12 px/s port.",
+    "Visually on the waterfall this reads as the port's rainbow snakes being noticeably more upright: the original's S-curves swing about 1/3 of the strip, the port's about 1/5 (clearest in late-skip120/orig.png vs port.png).",
+    "No frame-rate coupling on either side: position tracking at --fps 10, 20 and 40 gives identical 19.0 px (orig) and 11.5 px (port) peak-to-peak and identical extremum times, so both engines are time-based and the amplitude gap is not an fps artefact.",
+    "Steady state is fine on both: brightnessTrend 'steady', zeroMotionFrames 1 (the unavoidable first frame) on both sides at baseline, at --skip 30 and at --skip 120. Nothing decays, freezes or saturates.",
+    "Only one regime exists. The 60 s / 5 fps survey and a 180 s / 2 fps extended survey both show a uniform texture end to end on both sides — no mode rotation, no palette walk beyond the 6.6 s hue cycle, no sparse events.",
+    "Pattern is seed-independent: seeds 1, 7 and 1234 give byte-for-byte identical summary stats on both sides (orig mean 17 motion 11, port mean 17 motion 7 in all three), so the amplitude gap is not a one-seed fluke."
+  ],
+  "dials": [],
+  "feedback": [
+    "One thing to fix: the bounce excursion is too small. On a 60 px strip the original sweeps 19.0 px peak-to-peak (from -8.4 px to +10.5 px relative to its t=0 position); the port sweeps 11.5 px (-5.1 to +6.3). Scale the port's oscillation amplitude up by ~1.65x (port is at ~60% of target) and the two become indistinguishable.",
+    "Do NOT touch the timing: the bounce period (3.28 s), its phase (extrema at 0.8, 2.4, 4.0, 5.6, ... s), and the 6.6 s hue cycle already match the original exactly over a 24 s tracked window. Any fix that changes speed rather than amplitude will break a currently-correct axis — the port is not slow, it is short.",
+    "Everything else is already right and should be left alone: band count and spacing (5 bands, 12 px apart, ~7 px lit, black gaps), the per-band colour ramp and peak channel value (~127), mean brightness (17), resolution scaling (one band per 12 px at both 60 px and 600 px), fps-invariance, and steady-state stability over 180 s.",
+    "A quick regression check after the fix: track the k=5 spatial-DFT phase over 24 s at 20 fps and confirm peak-to-peak displacement reaches ~19 px with extrema still at 0.8/2.4/4.0/5.6 s; equivalently, the baseline motion stat should rise from ~7.4 to ~11.3 and motionLit from ~11.1 to ~16.5."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-180",
+    "probe",
+    "mid-skip30",
+    "late-skip120",
+    "dump-base",
+    "dump-phase",
+    "dump-long",
+    "fps10",
+    "fps40",
+    "pixels600",
+    "seed7",
+    "seed1234"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "slug": "colourful-fireflies",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Port reproduces the original's bouncing multi-coloured firefly trails and even its frame-locked slow activity envelope, but runs ~1.8-2x too bright, draws each trail as punctured stamps instead of a smooth continuous gradient, and over-swings the envelope into full blackouts and blazes where the original stays dim-but-continuous.",
+  "observations": [
+    "Both sides compile and render with no compile/runtime errors; neither side exposes any control (meta.json controls list empty on orig and port alike), so the control surface matches.",
+    "Shared concept confirmed on the default 60 px strip and on a 300 px override: several coloured point-like 'fireflies' travel along the strip leaving decaying trails and bounce off both ends, producing the characteristic waterfall lattice of crossing diagonals with V-shaped reflections at the strip ends. Both sides show this on seeds 1, 7 and 1234.",
+    "Feature counts are comparable on the default rig: clusters (peak >= 64, merging gaps <= 2 px) average 3.5/frame on the original vs 4.3/frame on the port over 11 dumped frames in the 0.5-5.5 s window.",
+    "Brightness is the largest scalar divergence and it is seed-independent. baseline (6 s, 20 fps, 60 px): meanBrightness avg 13.9 orig vs 22.8 port; seed 7: 11 vs 22; seed 1234: 12 vs 21; 300 px rig: 11 vs 21; 60 s / 20 fps / 1200-frame run: 5.8 vs 10.6. The port also clips far more: over 11 dumped default-rig frames, 4.7% of its lit pixels reach max-channel >= 250 vs 1.4% on the original (1.26% vs 0.30% of all channels).",
+    "The port's trails are punctured, the original's are continuous. Counting interior pixels flanked by lit (>=32) neighbours on both sides, the fraction that are dark (<8) is 5.7% on the original vs 30.6% on the port at 60 px, and 2.1% vs 25.5% at 300 px. Raw dumps show it directly: at t=1.1 s / 300 px the port renders a tail as 171,0,142,0,117,0,97,80,0,66,0,54,0,45,0,37,0,30,0,25,0,21 (a clean geometric decay stamped on alternate pixels with black between), while the original renders 255,51,41,34,28,22,18,15,45,8,6,5,4,3,3,2,2,1,1 with no gaps. On the 300 px waterfall this reads as heavy vertical hatching down every port trail against the original's clean thin smooth diagonals.",
+    "Port features are wider and cover more of the strip: average cluster width 4.6 px vs 2.3 px, and 21.1 px/frame at >= 32 brightness vs 12.7 on the original (default 60 px rig).",
+    "Both sides share a slow global activity envelope that is FRAME-indexed, not time-indexed, and identically so on both: binning meanBrightness in 50-frame bins, a 240 s/5 fps run and a 60 s/20 fps run (1200 frames each) put the peaks and troughs at the same bin indices on each side, so there is no frame-rate-coupling divergence between original and port. The envelope shapes also correlate between sides (both dip around frames 300-400 and rise around frames 400-800 and 1100-1200).",
+    "The port exaggerates that envelope badly. Over 480 frames (240 s @ 2 fps) the original's 20-frame-binned meanBrightness runs 13.5 13.6 11.2 8.3 6.3 6.0 4.7 3.0 2.0 1.6 1.4 1.0 0.9 1.2 1.1 1.0 1.0 0.7 0.3 0.2 1.4 1.4 1.0 1.0 - never extinguishing - while the port runs 41.5 41.8 32.5 21.9 15.2 9.6 7.6 3.7 2.8 1.9 1.4 0.8 0.0 0.0 0.0 0.0 0.0 0.0 0.0 3.0 11.0 15.8 21.5 19.0, i.e. exactly zero for ~140 consecutive frames and then back to near-opening brightness. Over the 1200-frame 20 fps run zeroMotionFrames is 29/1200 on the original vs 135/1200 on the port.",
+    "Regime checks at frame-matched skips confirm it: at --skip 14 (frames 280-400, 20 fps) both are dim (orig mean 4, port mean 2) and both show a handful of thin dim diagonals; at --skip 22 (frames 440-560) the original is still dim and sparse (mean 4, min 2, max 8) while the port is back to full baseline-like business (mean 15, max 33) - the two sides' long-term steady states have different amplitude, not different content.",
+    "Neither side dies: both are volatile rather than decaying over 1200 frames, and both revive after their troughs.",
+    "Colour family matches - both walk the full spectrum with highly saturated hues (mean (max-min)/max over pixels >= 80 is 0.90 orig vs 0.95 port); no palette-family divergence found.",
+    "Motion speed is in the same ballpark and hard to separate cleanly because both sides carry fireflies at a spread of speeds: per-frame cross-correlation at 300 px peaks at shift 0 on BOTH sides for dt = 1 frame (so under 1 px/frame = under 20 px/s dominant), and motion normalised by mean brightness is 0.36 (orig) vs 0.39 (port) on the baseline. Centroid tracking suggested the port's bright heads move faster (median 18.8 px/s vs 5.0 px/s at 300 px) but that measure is contaminated by the port's comb texture jittering its centroids, so I do not treat it as established."
+  ],
+  "dials": [],
+  "feedback": [
+    "Overall output level is roughly 1.8-2x too high: match the original's meanBrightness of ~14 on the default 60 px strip at 20 fps (port currently ~23), and ~5.8 vs ~10.6 averaged over a 1200-frame window. Reduce per-firefly peak amplitude rather than adding a global dimmer, since the port also clips 3x more often (4.7% of lit pixels at max-channel >= 250 vs 1.4%).",
+    "Draw each firefly's trail as a CONTINUOUS spatial falloff over neighbouring pixels, not as discrete stamps. Right now 25-31% of interior pixels that have lit neighbours on both sides are black on the port vs 2-6% on the original, which shows up as vertical picket-fence hatching along every trail on a 300 px strip where the original draws clean smooth diagonals. The port's own decay values are correct (a ~0.83 geometric ramp) - they are just being deposited on every other pixel with black in between.",
+    "Narrow the fireflies: average lit-cluster width is 4.6 px on the port vs 2.3 px on the original (60 px rig), and the port lights ~21 px/frame above brightness 32 vs the original's ~13.",
+    "Compress the slow activity envelope's dynamic range. Original and port agree on WHEN the envelope waxes and wanes (frame-locked, same bin indices at any fps), but the port swings from meanBrightness 0 to ~42 while the original swings ~0.2 to ~14. The port must never go fully dark - the original always keeps a dim residual glow (binned meanBrightness never below 0.2 over 480 frames), whereas the port renders literally nothing for ~140 consecutive frames. Raise the trough floor and lower the peak so the range is about 0.2-14 rather than 0-42.",
+    "Nothing to fix on control surface (both sides expose no controls), palette family, bounce-at-the-ends behaviour, or firefly count - those already match."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "mode-dark",
+    "mode-revive",
+    "envelope-fps5",
+    "envelope-fps20",
+    "big300",
+    "dump-early",
+    "rough60",
+    "track",
+    "track2",
+    "seed7",
+    "seed1234"
+  ]
+}

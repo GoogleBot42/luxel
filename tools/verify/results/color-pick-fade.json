@@ -1,0 +1,80 @@
+{
+  "slug": "color-pick-fade",
+  "verdict": "close",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Port reproduces the original exactly when the same dial values are set on both sides — identical 15-px gaussian-bump waveform, identical colours, same leftward drift — but its untouched default hue/speed constants differ, it renames the Sat control, and its speed dial misbehaves at the very fast (slider≈0) end where the original freezes.",
+  "observations": [
+    "Both sides render a single, unchanging regime for the whole 240 s survey (survey-240, 2 fps): a train of soft bell-shaped bumps on black, drifting steadily toward LOWER pixel index. No modes, no palette walk, no events; brightnessTrend steady and meanBrightness flat (orig 10, port 11) from t=0 to t=240 s. Seed-independent (seed 1 vs 1234 identical stats), and the late window (--skip 180) looks like the early one on both sides.",
+    "Spatial structure is an exact match. --dump at hue=0.5/sat=1/speed=0.5, t=1 s: orig green channel per pixel = 0,0,1,5,16,36,71,126,72,37,16,6,1,0,0 repeating; port = 0,0,1,6,16,37,72,126,70,36,16,5,1,0,0 repeating. Same 15-px period (4 bumps across the 60-px strip), same peak value 126, same ~11 lit px + 4 dark px duty; the one-LSB skew is just sub-pixel phase.",
+    "Motion direction and character match: both drift toward pixel 0, linearly, with no jitter, and both are fps-INVARIANT (DFT-phase speed at 10/20/40 fps: orig -1.1439/-1.1450/-1.1447 px/s, port -1.5782/-1.5789/-1.5783 px/s). Neither side is frame-rate coupled.",
+    "UNTOUCHED DEFAULT SPEED DIFFERS: original drifts 1.145 px/s, port 1.579 px/s — the port is 38% faster out of the box (measured by tracking the phase of the k=4 spatial DFT component over 0-38 s, 2 s spacing, well inside Nyquist for the ~13 s spatial period). Back-solving each side's own speed curve, the port behaves as if its default Speed slider sat at ~0.15 where the original's sits at ~0.20.",
+    "UNTOUCHED DEFAULT HUE DIFFERS: the original's untouched peak pixel is (126,22,0) — HSV hue ~0.029, a deep red — while the port's is (123,37,0) — hue ~0.050, a visibly more orange red. This shows up in the stats as meanG 4 (orig) vs 7 (port) on every run, and as the orange cast of the port's waterfalls at default dials.",
+    "CONTROL-SURFACE MISMATCH: the original exposes sliders sliderHue / sliderSat / sliderSpeed; the port exposes sliderHue / sliderSaturation / sliderSpeed. Same count, same kinds, same order, but the saturation control is renamed.",
+    "SPEED DIAL EDGE CASE: at sliderSpeed=0 the original is completely FROZEN (0.0000 px/s, motion 0, four static stripes over the whole 40 s window) while the port runs at its FASTEST — 22.9 px/s measured at 100 fps with 0.02 s dump spacing, ~20x its own default rate, which renders as dense aliased diagonals in the waterfall.",
+    "Away from that edge the speed curves nearly coincide. Both are inverted (higher slider = slower) and both are ~c/v: orig v*speed = 0.2295 constant to 3 significant figures across v = 0.02..1.0, port ~0.2538/(v+0.011). Measured px/s at v = 0.1 / 0.25 / 0.5 / 0.75 / 1.0 — orig 2.343 / 0.9152 / 0.4581 / 0.3049 / 0.2286, port 2.319 / 0.9743 / 0.4973 / 0.3339 / 0.2513 (port 1-10% fast). At the fast end the port instead lags: v=0.05 orig 4.598 vs port 4.155, v=0.02 orig 11.51 vs port 8.11 (port 30% slow).",
+    "Colour reproduction under dialed control is byte-identical. Peak pixel RGB at sat=1, speed=0.5: hue 0 (126,0,0), 0.25 (63,126,0), 0.5 (0,126,126), 0.75 (63,0,126), 1.0 (126,0,0) — same on both sides, same peak pixel index, and hue wraps identically at 0/1.",
+    "Re-rendered on an 8x8 grid (--rig grid --grid 8x8) both sides show the same horizontal banding and the same pixel-index mapping — no off-by-one, mirroring, or serpentine difference in how the port walks the rig.",
+    "Neither side binds sensor globals (wantsSensors false on both); no compile or runtime errors on either side in any of the 30 runs."
+  ],
+  "dials": [
+    {
+      "name": "sliderHue",
+      "origEffect": "Sets the bump colour directly as an HSV hue: 0 red, 0.25 yellow-green, 0.5 cyan, 0.75 violet, wrapping back to red at 1. No effect on structure, speed or brightness envelope.",
+      "portEffect": "Identical — peak RGB matches the original byte-for-byte at 0, 0.25, 0.5, 0.75 and 1, with the same wrap at 1.",
+      "matches": true
+    },
+    {
+      "name": "sliderSat",
+      "origEffect": "HSV saturation of the bumps: 0 renders them white (peak 126,126,126), rising values desaturate toward the pure hue (at hue=0.5: 94/63/31/0 in the red channel for sat 0.25/0.5/0.75/1). Mean brightness falls 25.2 -> 16.7 across the sweep.",
+      "portEffect": "Identical peak RGB and identical mean brightness at every step of the same sweep — but the control is NAMED sliderSaturation on the port, so it is not the same control surface.",
+      "matches": false
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Inverted speed: higher slider = slower drift, following speed = 0.2295/v px/s (11.51 px/s at 0.02 down to 0.229 px/s at 1.0). At exactly 0 the pattern STOPS DEAD — a hard freeze, not a maximum.",
+      "portEffect": "Same inversion and nearly the same curve over 0.1-1.0 (1-10% faster than the original), but it behaves as 0.2538/(v+0.011): it under-speeds at the fast end (8.11 vs 11.51 px/s at v=0.02) and, critically, at v=0 it runs at its maximum 22.9 px/s instead of freezing.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Rename the port's saturation control from sliderSaturation to sliderSat so the control surface matches the original exactly — the label 'Saturation' vs 'Sat' is cosmetic, but the binding name is not.",
+    "The untouched default speed is ~38% too fast: original drifts 1.145 px/s toward pixel 0 at default dials, port drifts 1.579 px/s. The port behaves as if its startup Speed value were ~0.15; the original's is ~0.20 on its own curve. Set the port's initial speed state so an untouched render drifts at 1.145 px/s on a 60-px strip.",
+    "The untouched default hue is too orange: original's peak pixel is (126,22,0) = HSV hue ~0.029, port's is (123,37,0) = hue ~0.050. Lower the port's startup hue value to ~0.03 so an untouched render is the same deep red (this also brings meanG from 7 back to the original's 4).",
+    "Fix the speed dial's fast end. The original's response is a clean speed = k/v with an explicit hard stop at v=0 (frozen, zero motion). The port has smoothed the singularity away with an offset in the denominator, so v=0 gives its FASTEST drift (22.9 px/s) instead of a full stop — the opposite of what a user dragging Speed to zero expects, and the most visible dial divergence in the pattern. Remove the offset and special-case v=0 to no motion.",
+    "After removing that offset, also trim the overall speed constant by ~10%: with the offset gone the port's k works out to ~0.254 against the original's ~0.2295, which is why the port runs 6-10% fast at every dialed value from 0.25 to 1.0.",
+    "Nothing else needs touching — waveform shape, 15-px spatial period, duty cycle, peak amplitude (126), drift direction, fps-invariance, seed-independence, rig indexing, and the Hue and Sat response curves are all already exact matches."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "late-skip180",
+    "seed1234",
+    "dump-default",
+    "dump-speed",
+    "fps10",
+    "fps40",
+    "hue0",
+    "hue025",
+    "hue05",
+    "hue075",
+    "hue1",
+    "sat0",
+    "sat025",
+    "sat05",
+    "sat075",
+    "sat1",
+    "spd0",
+    "spd0-dense",
+    "spdlow002",
+    "spdlow005",
+    "spdlow01",
+    "spd025",
+    "spd05",
+    "spd075",
+    "spd1",
+    "grid8"
+  ]
+}
