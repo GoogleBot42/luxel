@@ -92,3 +92,9 @@ origin master && git rebase origin/master`.
   "web/public/gallery.json … No such file or directory" — not a regression,
   you skipped step 5 (any `npm run build` / `gen-gallery.mjs` run fixes it).
   Bitten twice in one session; check this before reading the diff.
+- `tools/hw-bench.mjs` ENOENT on `web/public/gallery.json` or
+  `web/public/luxel.wasm` — it needs BOTH (step 5 for the gallery, steps
+  2–3 + `npm run wasm` for the wasm; it compiles patterns locally via
+  `web/tools/lxp.mjs`). Two aborted soak launches in one session
+  (2026-08-22) from doing only the gallery half. Note the wasm crash
+  still exits 0 through a `| tail` pipe — check the output, not the code.
