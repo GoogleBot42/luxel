@@ -484,7 +484,7 @@ fn no_render_function_is_dark_not_fatal() {
 }
 
 #[test]
-fn render_error_blanks_frame_and_records() {
+fn render_error_records_and_continues() {
     let src = "export function render(i) { if (i == 1) badCall()\n hsv(0, 0, 1) }";
     // badCall is unknown → compile error; use a runtime one instead
     assert!(Engine::new(src, 2, 1).is_err());
@@ -492,8 +492,8 @@ fn render_error_blanks_frame_and_records() {
     let mut e = Engine::new(src, 3, 1).unwrap();
     let px = e.frame(Fx::ZERO);
     assert_eq!(px[0], [255, 255, 255]); // rendered before the error
-    assert_eq!(px[1], [0, 0, 0]); // error pixel blanked
-    assert_eq!(px[2], [0, 0, 0]); // rest of frame blanked
+    assert_eq!(px[1], [0, 0, 0]); // errored before its hsv → stays dark
+    assert_eq!(px[2], [255, 255, 255]); // later pixels still render (#84)
     assert!(e.take_error().is_some());
     assert!(e.last_error.is_none()); // taken
 }
@@ -564,4 +564,116 @@ fn map_program_is_debuggable() {
     let (line, _, pixel) = e.debug_location().expect("a paused location");
     assert_eq!(line, 3);
     assert_eq!(pixel, Some(0));
+}
+
+// ---- Runtime-error blast radius (Gitea #84) ----
+//
+// Oracle fw 3.67 (tools/oracle/oob-probes.mjs, 2026-08-22): a pattern-level
+// runtime error aborts only the current handler invocation. After a
+// beforeRender abort the pixel pass still runs (writes made before the
+// abort stick), and a render(i) error keeps that pixel's pre-error hsv/rgb
+// while later pixels render normally. Only VM resource guards (and
+// init-time assert()) end a frame early.
+
+#[test]
+fn before_render_error_still_runs_the_pixel_pass() {
+    // Nano Orbital's shape: an OOB *write* in beforeRender every frame
+    let mut e = Engine::new(
+        "a = array(3)\n\
+         export var before, after\n\
+         export function beforeRender(delta) {\n  before = 7\n  a[5] = 1\n  after = 7\n}\n\
+         export function render(index) { rgb(0, 1, 0) }",
+        4,
+        1,
+    )
+    .unwrap();
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [0, 255, 0], "render must still run after the abort");
+    assert_eq!(px[3], [0, 255, 0]);
+    // abort is mid-body: earlier writes stick, later ones never happen
+    assert_eq!(e.var("before"), Some(Value::Num(Fx::from_int(7))));
+    assert_eq!(e.var("after"), Some(Value::Num(Fx::ZERO)));
+    let err = e.take_error().expect("the OOB is still reported");
+    assert!(err.message.contains("out of bounds"), "{}", err.message);
+}
+
+#[test]
+fn render_error_aborts_only_that_pixel() {
+    let mut e = Engine::new(
+        "a = array(3)\n\
+         export function render(index) {\n\
+           rgb(1, 0, 0)\n\
+           if (index == 2) { x = a[9] }\n\
+           rgb(0, 1, 0)\n\
+         }",
+        4,
+        1,
+    )
+    .unwrap();
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [0, 255, 0]);
+    assert_eq!(px[1], [0, 255, 0]);
+    // the erroring pixel keeps what it set before the abort
+    assert_eq!(px[2], [255, 0, 0]);
+    // and later pixels still render
+    assert_eq!(px[3], [0, 255, 0]);
+    assert!(e.take_error().is_some());
+}
+
+#[test]
+fn fractional_array_loop_renders_despite_oob() {
+    // Orv - Christmas Tree's shape: array(pixelCount/20) is truncated (3
+    // slots here, oracle-matched) but `i < 3.2` lets i reach 3 → an OOB
+    // read every frame. The pattern must still render.
+    let mut e = Engine::new(
+        "n = pixelCount / 20\n\
+         a = array(n)\n\
+         export var out\n\
+         export function beforeRender(delta) {\n\
+           for (i = 0; i < n; i++) { out = a[i] }\n\
+         }\n\
+         export function render(index) { rgb(0, 1, 0) }",
+        64,
+        1,
+    )
+    .unwrap();
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [0, 255, 0]);
+    assert_eq!(px[63], [0, 255, 0]);
+    let err = e.take_error().expect("the OOB read is reported");
+    assert!(err.message.contains("out of bounds"), "{}", err.message);
+}
+
+#[test]
+fn first_error_of_a_frame_wins() {
+    // beforeRender errors first; the per-pixel errors must not overwrite it
+    let mut e = Engine::new(
+        "a = array(3)\n\
+         export function beforeRender(delta) { a[5] = 1 }\n\
+         export function render(index) { x = a[7] }",
+        4,
+        1,
+    )
+    .unwrap();
+    e.frame(Fx::ZERO);
+    let err = e.take_error().expect("errors are recorded");
+    assert_eq!(err.line, 2, "the beforeRender error is the one kept");
+}
+
+#[test]
+fn resource_guards_still_end_the_frame() {
+    // an infinite loop in beforeRender must not re-run per pixel — the
+    // step limit ends the whole frame (watchdog economics on-device)
+    let mut e = Engine::new(
+        "export function beforeRender(delta) { while (1) { } }\n\
+         export function render(index) { rgb(0, 1, 0) }",
+        4,
+        1,
+    )
+    .unwrap();
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [0, 0, 0], "render pass is skipped on a guard trip");
+    let err = e.take_error().expect("guard trip is recorded");
+    assert!(err.message.contains("execution limit"), "{}", err.message);
+    assert!(err.is_resource_guard());
 }

@@ -103,9 +103,13 @@ n = arrayLength(a)
 
 Arrays are reference values: assigning or passing an array aliases it.
 Out-of-bounds or negative access (read or write) is a **runtime error**
-that stops the current frame's entry point — the engine reports it with
-the source location and keeps rendering. Array storage is budgeted
-(10 240 elements total by default) to protect small devices.
+that aborts only the current handler invocation — the engine reports it
+with the source location and the frame keeps going: after a
+`beforeRender` abort the per-pixel pass still runs, and a pixel whose
+`render` aborts keeps whatever `hsv`/`rgb` it set before the error while
+later pixels render normally (PB-matched blast radius, oracle fw 3.67).
+Array storage is budgeted (10 240 elements total by default) to protect
+small devices.
 
 ## The frame model
 

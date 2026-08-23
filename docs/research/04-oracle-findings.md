@@ -38,6 +38,14 @@
       (a[5]), negative reads (a[-1], a[-0.5]), OOB fractional reads, and ALL
       irregular writes — OOB, negative, and even in-bounds fractional
       (a[1.5] = 9 aborts).
+    - **Blast radius of that abort** (probed 2026-08-22 for Gitea #84,
+      `tools/oracle/oob-probes.mjs`): only the current handler invocation
+      dies. Writes made before the abort stick; after a `beforeRender`
+      abort the per-pixel render pass STILL RUNS; a `render(i)` abort keeps
+      that pixel's pre-error hsv and later pixels render normally. Also:
+      `array(3.2)` truncates to 3 slots (same as Luxel) — so corpus
+      patterns that OOB every frame (Nano Orbital, Orv - Christmas Tree)
+      error on a real PB too, and visibly work anyway.
     - Beware when probing: an aborted init leaves later exported vars at 0 —
       always pair probes with sentinels (we got fooled once).
 11. Everything already matching on first contact: two's-complement wrap
