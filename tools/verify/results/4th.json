@@ -1,0 +1,56 @@
+{
+  "slug": "4th",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same patriotic twinkle pattern — identical red/white/blue base banding and identical orange-ember/white-spark palette once Spacing is dialed — but the port lacks the original's slowly travelling twinkle-density wave, renders its blue band twice as bright, and is frame-rate invariant where the original is strongly frame-rate coupled.",
+  "observations": [
+    "Both sides compile and run clean on the 60 px strip rig; no runtime errors, no black/frozen frames, and the late window (--skip 90, 20 s @ 10 fps) is alive on both (orig motion avg 51.2, port 51.0, zeroMotionFrames 0 on both), so neither dies out.",
+    "Shared look: a dim per-pixel base colour stripe pattern (red / white / blue) with orange embers that ignite at a pixel and fade in place over ~1 s, plus instantaneous pure-white (255,255,255) sparkle flashes. Consecutive-frame dumps 0.05 s apart (label micro) show the embers do NOT move laterally on either side — they twinkle in place.",
+    "Base banding with Spacing dialed is EXACTLY the same on both sides. --dump at t=0.5 s, sliderSpacing 0 / 0.25 / 0.5 / 0.75 / 1 gives band widths 3 / 6 / 9 / 12 / 18 px on BOTH sides, with the same red-first phase (e.g. at 0.5: px 0-8 red, 9-17 white, 18-26 blue, 27-35 red, 36-44 white, 45-53 blue, 54-59 red on both). The band colour assignment is stationary in time on both sides.",
+    "UNTOUCHED defaults differ. With no controls applied the ORIGINAL renders a uniform dim-red background (38,0,0) across all 60 px at every dumped time (0.5/5/10/15/19 s) — no white or blue bands at all, i.e. a degenerate single-zone state. The PORT untouched renders 9 px red/white/blue bands, identical to sliderSpacing=0.5 (probe delta at 0.5 is exactly 0.00, confirming the port's default equals 0.5; the original's default matches none of 0/0.5/1, deltas 11.64/10.18/11.50).",
+    "Base colour levels are brighter on the port, disproportionately so for blue. Exact dumped values — original: red base 38,0,0; white base 17,17,17; blue base 0,0,25. Port: red base 50,0,0; white base 20,20,20; blue base 0,0,50. So red is 1.3x, white 1.2x, but blue is 2.0x too bright. Visibly the original's blue stripes read near-black while the port's read as distinct navy.",
+    "Ember/spark colours themselves match well: both ramp from 255,84,0 down through 255,76,0 / 244,68,0 / 224,61,0 / 205,55,0 / 188,50,0 / 160,40,0 ... toward the band base, and both use pure 255,255,255 for the sparkle flash. Inside the white/blue bands both sides simply carry the band's base offset into the ember (orig 255,102,17 and 255,84,25; port 255,105,20 and 255,84,50).",
+    "MOTION GAP: the original modulates twinkle density with a broad travelling envelope; the port does not. Over 120 s at 10 fps (label drift, spacing 0.5 on both), bucketing the strip into 10 six-pixel cells: the original's mean within-frame bucket std is 0.279 vs the port's 0.176, and the frame-to-frame (2 s apart) cross-correlation peaks at lag -1 bucket for the original (envelope sliding ~3 px/s toward pixel 0, full traverse ~20-25 s) but at lag 0 for the port (stationary). The 180 s @ 10 fps waterfall (label long-fps10) shows this directly: the original is crossed by broad bright/dark diagonal bands repeating ~12 times over the window, the port is pure vertical stripes with no diagonal structure.",
+    "FRAME-RATE COUPLING: the original is strongly fps-coupled, the port is not. Same 20 s window at 10 / 20 / 40 fps gives orig mean brightness 92 / 51 / 42 and motion 39 / 20 / 14, while the port gives 94 / 101 / 90 and 36 / 45 / 40. At 20-40 fps the original's sparkle activity collapses into a narrow drifting cluster (at 20 fps, seed 1, it stays inside px 2-25 for 30 s while the rest of the strip shows only base colour); at 2 fps over 240 s the original produces orange embers and NO white sparkles at all. The port renders full-strip twinkle at every rate tested. The two sides agree in density and brightness only near 10 fps.",
+    "Overall colour balance at a matched setting (spacing 0.5, --skip 90, 20 s @ 10 fps): orig meanR/G/B 110/96/99, port 137/101/99 — the port runs noticeably redder/warmer (R:G 1.36 vs 1.15), consistent with its higher red base and denser embers.",
+    "Stochastic character checked on a second seed (--seed 7, 20 fps): the original's activity is again one contiguous drifting cluster, the port's is several looser clusters spread over the whole strip — so the density/envelope difference is not a one-seed fluke."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpacing",
+      "origEffect": "Sets the width of each red/white/blue base band: 3 px at 0, 6 px at 0.25, 9 px at 0.5, 12 px at 0.75, 18 px at 1 (measured by --dump on the 60 px default rig). Stepwise, not continuous. Untouched (no value applied) the original is degenerate: no banding at all, uniform dim red across the whole strip.",
+      "portEffect": "Identical band widths and identical red-first phase at all five values tested (3/6/9/12/18 px). Untouched, the port defaults to the 9 px banding that spacing=0.5 produces, i.e. it does NOT reproduce the original's degenerate untouched state.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Blue band base is twice as bright as the original's: original's blue base pixel is exactly (0,0,25), the port's is (0,0,50). Halve it. For reference the other two bases are original (38,0,0) red / (17,17,17) white vs port (50,0,0) / (20,20,20) — dropping all three to the original's levels also fixes the port's overall warm/red skew (matched-setting meanR 137 vs original's 110).",
+    "The port is missing the original's travelling twinkle-density wave. In the original, the region where sparks ignite is a broad envelope that slides steadily toward pixel 0 at roughly 3 px/s, taking ~20-25 s to traverse the 60 px strip and repeating; the rest of the strip shows only base colour. The port's spark ignition is spatially uniform and stationary. Quantitatively the original's per-frame spatial contrast (std of 6 px bucket means) is 0.279 vs the port's 0.176, and its 2 s-lag spatial cross-correlation peaks one bucket to the left while the port's peaks at zero lag. Add a moving, band-limited ignition window rather than igniting uniformly across all pixels.",
+    "Frame-rate coupling differs. The original's brightness and spark density fall sharply as fps rises (mean brightness 92 -> 51 -> 42 at 10 -> 20 -> 40 fps over the same 20 s), and at 2 fps it drops white sparkles entirely; the port is flat at 94 / 101 / 90 and always sparkles. They only agree near 10 fps, so on hardware running faster the port will look roughly twice as bright and much denser than the original. Whatever the original does per-frame rather than per-second (its ember decay and/or spark ignition budget), the port is doing per-second.",
+    "Untouched-default state differs: the original with no control value applied shows NO banding at all (uniform 38,0,0 across all 60 px), while the port defaults to the spacing=0.5 look (9 px bands). If the port keeps a sensible default it should at least be documented; matching the original exactly would mean the untouched spacing value collapses every pixel into band 0.",
+    "Everything else is already right — do not touch the band geometry (3/6/9/12/18 px at spacing 0/0.25/0.5/0.75/1, red-first phase) or the ember ramp (255,84,0 fading through 244,68,0 / 224,61,0 / 205,55,0 / 188,50,0 to the band base, with pure white 255,255,255 sparkle flashes). Both match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "fps10",
+    "fps20",
+    "fps40",
+    "dump-fps10",
+    "sp0",
+    "sp0.25",
+    "sp0.5",
+    "sp0.75",
+    "sp1",
+    "env-fps20",
+    "env-fps10",
+    "micro",
+    "seed7",
+    "long-fps10",
+    "drift",
+    "late-skip90"
+  ]
+}
