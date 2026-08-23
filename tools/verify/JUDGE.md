@@ -97,6 +97,14 @@ second. If the per-second displacement scales with fps, the pattern is
 frame-stepped; if it holds, it is time-based. Only report frame-rate coupling
 once the `--dump` positions say so.
 
+For measuring a SLOWDOWN/SPEEDUP FACTOR between the sides (or against fps),
+whole-frame spatial autocorrelation vs lag beats centroid tracking when
+features split, merge, or wrap: dump frames at fixed spacing, compute each
+side's correlation of frame(t) with frame(t+lag) as a function of lag, and
+read off how long each side takes to decorrelate to the same level (e.g.
+corr 0.34 at 0.5 s on one side vs 8 s on the other = 16x). A time-rescale
+scan — corr(orig[t], port[k·t]) maximized over k — pins an exact factor.
+
 If `--strip-at`/`--strip-frames` don't fit the window they are silently
 clamped — except the harness now says so, on stderr and in meta.json's
 top-level `warnings` array. If that array is non-empty, the filmstrip is not
@@ -446,7 +454,11 @@ unrelated noise on small rigs — de-alias those with a LARGER rig
 (`--pixels 600`) instead.
 
 (Environment note: `python3` is not on PATH inside `nix develop` — do
-frames.json/stats.json post-processing with `node -e`.)
+frames.json/stats.json post-processing with `node -e`. And `node` is not on
+PATH OUTSIDE `nix develop`: every half of a compound shell line that runs
+node needs its own `nix develop -c`, including `$(...)` substitutions that
+generate `--dump` time lists. Shell loops must be bash syntax — the login
+shell is fish, but the Bash tool runs bash.)
 
 ### Dial triage: `--probe-controls`
 

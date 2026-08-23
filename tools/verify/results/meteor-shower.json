@@ -1,0 +1,53 @@
+{
+  "slug": "meteor-shower",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Port reproduces the meteor shower faithfully in structure, palette and direction, but its meteors travel 50 px/s (time-based) while the original steps exactly 1 px per rendered frame — 2.5x too fast at the harness's 20 fps — with tails ~18% shorter and half the hue gradient along each streak.",
+  "observations": [
+    "Rig: strip, 60 px. Neither side exposes any controls (meta.json `controls: []` on both; --probe-controls reports '(no settable controls)' for orig and port). No compile or runtime errors on either side, at any fps or rig tried.",
+    "Both sides draw the same primitive: a full-brightness head (max channel = 255, saturation measured at 0.502 on BOTH sides, n=205 orig / 250 port heads) with an exponentially decaying trail extending toward HIGHER pixel index, and the whole field scrolls toward index 0 (leftward in the waterfall). Direction, head brightness and head saturation match exactly.",
+    "SPEED / FRAME-RATE COUPLING — the headline divergence. Head positions dumped at t=3.0/3.2/3.4/3.6 s on four render rates: ORIGINAL moves 1 px per rendered frame at every rate (fps 5 -> 5 px/s, fps 10 -> 10 px/s, fps 20 -> 20 px/s, fps 40 -> 40 px/s: head 45->44->43->42, 30->28->26->24, 11->7->3->59, 51->43->35->27). PORT moves a constant 50 px/s at every rate (fps 5 -> 10 px/frame, fps 10 -> 5, fps 20 -> 2.5, fps 40 -> 1.25: head 42->32->22->12 at all four rates). So the original is frame-stepped and the port is time-based; they can never agree at more than one frame rate.",
+    "At the harness default (20 fps) that means the port is 2.5x too fast: orig 20 px/s (1 px/frame), port 50 px/s (2.5 px/frame). Confirmed independently on a 300 px rig (orig 240->236 px over 0.2 s = 20 px/s; port 149->139 = 50 px/s), so the speed is absolute px/s on both sides, not a fraction of the strip.",
+    "Motion stat tracks the speed gap: baseline (6 s, 20 fps) orig motion avg 16.3 / motionLit 24.7 vs port 36.6 / 42.6. At 5 fps the gap widens to orig 17 vs port 65 because the original slows with the frame rate and the port does not.",
+    "Visible consequence at 20 fps: the original's meteors glide 1 px per frame and read as smooth continuous streaks in the waterfall; the port's jump 2.5 px per frame and its streaks read as dashed/steppy (clearly visible in baseline/port.png and mtr-seed7/port.png).",
+    "TAIL DECAY: per-pixel luminance ratio along the trail (first 10 px behind each head, averaged over hundreds of heads) is orig 0.899, port 0.878 — measured identically on the 60 px rig (orig 0.8984 n=205, port 0.8757 n=250) and the 300 px rig (orig 0.8991 n=395, port 0.8784 n=556). Port trails therefore die ~18% sooner (ln0.899/ln0.878 = 0.82). Mean visible tail length on 60 px: orig 13.8 px, port 11.4 px.",
+    "TAIL HUE GRADIENT: each meteor's trail is a small rainbow, hue falling as you move away from the head. Orig -3.50 deg/px, port -1.73 deg/px (mean over the same head sets). Total hue swing across one trail: orig ~47 deg, port ~19 deg — the original's streaks are visibly more rainbow-shot, the port's read closer to single-hue.",
+    "SPATIAL DENSITY MATCHES: median inter-head gap 13 px on both sides (orig mean 18.3, port 15.9 over 100 frames of a 40 s / 20 fps run); heads on screen per frame orig 2.65 (min 1 max 5), port 3.20 (min 1 max 6). On the 300 px rig both keep absolute pixel gaps with the same shape (orig 11,17,10,17; port 11,17,10,17,7,7), so neither side scales spacing with rig size — correct on both. The port's higher head count is a consequence of its 2.5x speed (crossing time 1.2 s vs 3.0 s at the same spatial density means ~3x the spawn rate), not an independent density bug.",
+    "PALETTE WALK MATCHES: brightness-weighted circular-mean field hue drifts +437 deg over 39.6 s on the original (32.6 s per full cycle) and +455 deg on the port (31.3 s per cycle) — same direction, within 5%. Confirmed visually on the 240 s / 5 fps survey: both sides walk the full spectrum repeatedly with no mode changes.",
+    "Simultaneous meteors' head-hue spread: orig median 40 deg (mean 49), port median 19 deg (mean 55). The tighter port median is explained by its shorter on-screen dwell (1.2 s vs 3.0 s) against the same ~11 deg/s hue walk — i.e. a side effect of the speed error, not a separate colour bug.",
+    "NO MODES / REGIMES. A 240 s survey at 5 fps (mtr-survey240) shows one continuous regime on both sides: uninterrupted diagonal meteor streaks, no pauses, bursts, blackouts or look changes. Nothing needed a per-regime run beyond the late-window check.",
+    "STEADY STATE HEALTHY on both. 240 s survey statsSummary: orig brightnessTrend 'steady' (avg 57.6, zeroMotionFrames 1), port 'steady' (avg 63.0, zeroMotionFrames 1). A --skip 120 --seconds 12 --fps 20 window still shows both sides producing normal showers (orig mean 81 motion 24, port mean 60 motion 37).",
+    "Minor: the original's shower density 'breathes' over tens of seconds — 20 s buckets of the 240 s survey give mean brightness 53/43/61/57/60/53/52/66/70/78/58/39 — while the port is much flatter (60/61/63/65/67/61/61/65/64/62/62/66). The port's shower is more metronomic; the original's thickens and thins.",
+    "Minor startup difference: the strip starts empty on both and fills from the right. Orig takes ~3.0 s to fill 60 px (large black triangle at the top-left of baseline/orig.png); port takes ~1.2 s. Purely a consequence of the speed difference.",
+    "Seed robustness: seeds 1, 7 and 1234 all render the same character on both sides (orig mean/motion 57/16, 52/17, 56/18; port 55/37, 63/39, 60/38). No seed produced a degenerate or unrepresentative run on either side."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY: the port's scroll is time-based at a fixed 50 px/s; the original advances exactly ONE PIXEL PER RENDERED FRAME regardless of frame rate (verified at 5/10/20/40 fps). Make the port's meteors advance one pixel per frame instead of integrating elapsed time. Verified numbers to hit: at 20 fps the head must move 4 px per 0.2 s (20 px/s), and rendering at 10 fps must halve that to 10 px/s.",
+    "If frame-stepping is deliberately rejected in favour of a time-based port, the port is still 2.5x too fast at the harness's canonical 20 fps: divide the current 50 px/s by 2.5 to land on 20 px/s. But note this only matches at 20 fps — the fps sweep will still show the original scaling and the port not.",
+    "Tail decay is slightly too steep: the port loses 12.2% of brightness per pixel behind the head (ratio 0.878); the original loses 10.1% (ratio 0.899). Soften it to ~0.90 per pixel so trails reach ~14 px of visible length on a 60 px strip instead of ~11 px.",
+    "Each meteor's trail should sweep about twice as much hue as the port currently gives it: original -3.5 deg of hue per pixel away from the head (~47 deg across a full trail), port only -1.7 deg/px (~19 deg). Increasing the per-pixel hue step to ~3.5 deg restores the original's 'rainbow streak' look; the port's trails currently read as one colour.",
+    "Do NOT change these — they already match and a fix pass should keep them: head value 255 at saturation 0.50 exactly; trail extends toward HIGHER pixel index while the field scrolls toward index 0; median inter-meteor gap 13 px, independent of rig size; ~32 s full-spectrum hue walk of the whole field (orig 32.6 s, port 31.3 s); no controls exposed.",
+    "Lower priority: the original's shower density fluctuates over ~40-60 s windows (mean brightness swinging 39-78 across 20 s buckets of a 240 s survey) while the port stays pinned near 63. If the spawn logic has a slow randomised rate term, the port appears to be missing it — the port's shower looks metronomic next to the original's.",
+    "After a speed fix, re-check the derived quantities rather than treating them as separate bugs: on-screen head count (port 3.20 -> should fall toward the original's 2.65), simultaneous head-hue spread (port median 19 deg -> should widen toward 40 deg), and fill-in time from a cold start (port 1.2 s -> ~3.0 s). All three follow automatically from the crossing time."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "mtr-survey240",
+    "mtr-dumpfine",
+    "mtr-long40",
+    "mtr-fps5",
+    "mtr-fps10",
+    "mtr-fps20",
+    "mtr-fps40",
+    "mtr-late",
+    "mtr-settle",
+    "mtr-seed7",
+    "mtr-seed1234",
+    "mtr-px300",
+    "mtr-px300b"
+  ]
+}

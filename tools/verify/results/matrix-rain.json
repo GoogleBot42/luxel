@@ -1,0 +1,47 @@
+{
+  "slug": "matrix-rain",
+  "verdict": "broken",
+  "score": 1,
+  "confidence": "high",
+  "summary": "The original renders green/cyan/blue falling drops on a 16x16 grid; the port renders a permanently static full-brightness RED line across row 0 (columns 1-15) with essentially no animation, and only column 0 ever shows a real drop.",
+  "observations": [
+    "Rig: grid, 256 px, 16x16 (manifest default). Neither side exposes any settable controls (probe run: 'orig (no settable controls)', 'port (no settable controls)'), and neither side binds sensor globals (wantsSensors false on both, sensors 'off').",
+    "Neither side has a compile or runtime error (meta.json compileError/runtimeError null on both), so this is a behavioural divergence, not a crash.",
+    "ORIGINAL, baseline (6 s @ 20 fps): meanBrightness avg 2.4 (min 0, max 5), meanR avg 0 EXACTLY (min 0 / max 0 over the whole window), meanG avg 3.3, meanB avg 4.0; motion avg 1.5 max 7, motionLit avg 36.8 max 111.4; brightnessTrend 'rising' (from a black t=0 start).",
+    "PORT, same run: meanBrightness pinned at exactly 5 for all 120 frames (min 5, max 5, first 5, last 5); meanR avg 15 (min 15, max 15 -- constant), meanG avg 0.0, meanB avg 0.1; motion avg 0 max 1; zeroMotionFrames 117 of 120; brightnessTrend 'steady'. The port is frozen, and the frozen content is red.",
+    "Exact pixels (--dump, label dump1, t = 0.5 / 2.0 / 3.5 / 5.0 s): the port lights row y=0, columns x=1..15, at literally [255,0,0] at every dumped time. Column x=0 of row 0 is never lit. Nothing else on the grid is lit except very rare single dim pixels in column 0 (e.g. t=2.0 s, x=0 y=6 = [0,22,48]).",
+    "ORIGINAL structure (dump1/dump2): 2-8 lit rows per frame, organized as vertical 'drops' -- each drop occupies exactly 2 adjacent rows in one column, the upper row slightly brighter than the lower (e.g. x5 t=3.0 s: y6=[0,82,255], y7=[0,62,193]).",
+    "ORIGINAL palette: the red channel is ZERO on every lit pixel in every dump. Hues run green through cyan to blue: [0,255,134], [0,255,167], [0,255,205], [0,253,255], [0,29,143], [0,18,255]. Each drop keeps its hue for life and fades toward black as it descends.",
+    "ORIGINAL motion (label dump2, --skip 3, dumps 0.2 s apart at 20 fps): drops fall DOWNWARD. Column 1 tracked y=(0,1) -> (2,3) -> (4,5) -> (6,7) -> (8,9) across t=3.2..4.0 s, i.e. a steady 2 rows per 0.2 s = 10 rows/s. Other drops step 2-4 rows per 0.2 s (col 5 and col 12 each show one 4-row step), so per-drop fall speed varies roughly 10-20 rows/s.",
+    "ORIGINAL fade: a drop dims monotonically as it falls and dies near the bottom -- col 5 went [0,82,255] (y6) -> [0,46,143] (y8) -> [0,23,73] (y10) -> [0,3,12] (y14) over 0.6 s, so drop lifetime is roughly 0.8-1.5 s.",
+    "ORIGINAL spawn cadence: in the 1.0 s window t=3.0..4.0 s, new drops appeared at the top row in columns 1 (t=3.2), 12 (t=3.4) and 10 (t=3.8) -- about 3 new drops/s with 2-4 drops concurrently on screen. The 60 s survey rhythm image shows this cadence unbroken for the whole minute with no mode changes and no regime boundaries.",
+    "PORT motion: port-motion.png (12 consecutive frames, t=3.00..3.55 s) is 12 identical cells -- the red row and nothing else. The port-rhythm image for the whole 60 s survey is a uniform dark-red field (the row-0 red averaged down each column) with a black leftmost column carrying a handful of faint blue/green marks. Column 0 is the ONLY column with any drop activity anywhere in the run.",
+    "STEADY STATE (label steady-late, --skip 40 --seconds 20 --fps 10): original still healthy (mean 3, motion 2, drops throughout t=40-60 s); port identical to t=0 -- mean 5, motion 0, same red row. The port never recovers and never degrades; it is degenerate from the first frame.",
+    "SEED INDEPENDENCE: seeds 1, 7 and 1234 (labels baseline/seed7/seed1234, 30 s @ 5 fps) all give the port mean 5 / motion 0 and the original mean 2-3 / motion 2. The port's failure is not a seed fluke.",
+    "GRID INDEPENDENCE: re-rendered at --grid 8x8 (label grid8) and --grid 32x32 (label grid32). The port draws the same static full-red row 0 (columns 1..W-1) at every size; only its mean brightness scales with 1/H (mean 9 at 8x8, mean 5 at 16x16 and 32x32). The original renders correct falling drops at all three sizes, with drop count scaling with grid width. So the port bug is not a 16-wide-specific aliasing artefact.",
+    "The 'x=0 is the only live column' signature is the diagnostic detail: the port appears to keep per-column drop state but only ever advances/renders index 0, while columns 1..W-1 fall through to a default hue-0 / value-1 / row-0 render (pure red at the top row)."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port draws a permanent, full-brightness RED horizontal line across the TOP row (y=0) at every column except x=0, and it never changes across 60 s, three seeds, or three grid sizes. The original never emits a single red pixel (meanR min=max=0 over the whole window). Whatever writes that row is the first thing to remove -- it looks like un-advanced / uninitialized per-column drop state rendering at position 0 with hue 0 and value 1.",
+    "Only column x=0 ever animates in the port. Columns 1..15 are inert. The per-column drop state must be updated and rendered for EVERY column, not just index 0 -- this reads as a loop that iterates once, or a per-column array whose index is being written/read at a constant 0.",
+    "Target motion: drops fall DOWNWARD (increasing y) at ~10 rows/s on a 16-row grid (measured: 2 rows per 0.2 s, sustained; some drops up to ~20 rows/s, so a modest per-drop speed spread is correct). The port shows zero vertical motion.",
+    "Target structure: each drop is exactly 2 adjacent rows tall in a single column, upper row slightly brighter than the lower (e.g. [0,82,255] over [0,62,193]). Not a long trailing tail.",
+    "Target palette: RED CHANNEL IS ALWAYS ZERO. Hues span green -> cyan -> blue, per-drop and constant for that drop's life: measured heads include [0,255,134], [0,255,167], [0,255,205], [0,253,255], [0,18,255]. A drop fades monotonically toward black over its descent (head 255 -> ~10 over ~0.6 s of falling) and dies near the bottom row.",
+    "Target density: ~3 new drops spawn per second on a 16x16 grid with 2-4 drops visible at once, and the cadence is steady for at least 60 s with no modes or regimes. Drop lifetime ~0.8-1.5 s.",
+    "Target overall levels for a 16x16 grid at 20 fps: meanBrightness avg ~2.4 (max ~5), meanG ~3.3, meanB ~4.0, meanR 0, motion avg ~1.5 (motionLit avg ~37). The port currently sits at meanBrightness 5 / meanR 15 / motion 0.",
+    "Once drops animate, re-check that brightness does not run away: the original's meanBrightness oscillates in 0..5 and never saturates, and zeroMotionFrames on the original is 44/120 (a genuinely sparse pattern), so use motionLit rather than motion when checking the fix."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump1",
+    "dump2",
+    "steady-late",
+    "seed7",
+    "seed1234",
+    "grid8",
+    "grid32"
+  ]
+}
