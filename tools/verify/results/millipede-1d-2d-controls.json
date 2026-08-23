@@ -1,0 +1,109 @@
+{
+  "slug": "millipede-1d-2d-controls",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Port reproduces the rotating concentric-tier pinwheel and matches the original's rotation speed and X/Y centre controls exactly, but it renders at a flat, constant full brightness — losing the original's defining 3x radial/global brightness breathing — spins the opposite way, draws about twice as many legs at the same Legs setting, and uses a uniform rainbow instead of the original's green-suppressed magenta/cyan palette.",
+  "observations": [
+    "Rig: grid 16x16 (256 px) by default; both sides compile and run with no compile/runtime errors, wantsSensors=false on both. Steady state verified at --skip 120 --seconds 8: both sides identical in character to t=0, zeroMotionFrames 0, brightnessTrend steady. Neither side dies, freezes or drifts.",
+    "Regime survey: 60 s @5 fps and 240 s @2 fps (untouched) show ONE regime on both sides — no mode rotation, no long-period super-cycle. Original's meanBrightness autocorrelates at lag 33 frames @5 fps = 6.60 s with r=0.99 (and integer multiples 66/98/131). Port's meanBrightness has no comparable peak (best 36 frames, r=0.85, and its whole series only spans 45-50).",
+    "STRUCTURE — both draw a 'dartboard' pinwheel: N angular legs x M concentric tiers around a movable hub, matching in kind. At Legs=0.5 the angular-DFT of the brightness-vs-angle profile (48x48 rig, r in 0.15-0.9) peaks at k=6 on the original and k=11 on the port.",
+    "LEG COUNT MISCALIBRATED ~2x. Dominant angular harmonic across the Legs sweep (48x48, all other dials 0.5, t=2.0 s): orig 0->k3, 0.25->k3/k4, 0.5->k6, 0.75->k8/k9, 1->k11/k12 (range ~3..11 legs). Port 0->k2, 0.25->k6, 0.5->k11, 0.75->k16, 1->k21 (range ~2..21 legs). Both are monotone and roughly linear; the port's slope is about 2.4x the original's.",
+    "ROTATION SPEED MATCHES, DIRECTION IS REVERSED. Tracking the phase of the dominant angular harmonic over 40 dumps at 0.05 s spacing (48x48, Speed=0.5): orig -183.8 deg/s, port +183.3 deg/s. Speed sweep: orig 0/0.25/0.75/1 -> -7.1 / -93.7 / -270.8 / -358.2 deg/s; port -> +5.6 / +91.4 / +274.9 / (+358, the raw +/-288 at Speed=1 is a Nyquist alias of an 11-fold figure at 20 fps). Magnitudes agree to within ~2% at every setting; the sign is opposite at every setting.",
+    "Both sides are frame-rate INVARIANT (time-based, not frame-stepped): the same phase-tracking at --fps 10/20/40 gives orig -183.8 / -183.8 / -185.9 deg/s and port +183.3 / +183.7 (the fps-10 port reading of -144 is an alias, not coupling). No frame-rate coupling bug on either side.",
+    "BRIGHTNESS ANIMATION IS ENTIRELY MISSING FROM THE PORT. Measured on VALUE (max channel, hue-independent) over 20 dumps at 0.1 s spacing, 48x48: original frame-mean V swings 43 -> 139 (3.2x) at Tiers=0, 66-108 at Tiers=0.5, 64-117 at Tiers=1. Port frame-mean V is pinned at 94-96 at EVERY Tiers value and every time — a 2% range. Same story on meanBrightness across every run: orig [22-77] untouched, [32-65] dialed; port [45-50] untouched, [45-50] dialed.",
+    "TIERS ARE BRIGHTNESS RINGS ON THE ORIGINAL, HUE RINGS ON THE PORT. Original radial V profile (12 bins, Tiers=1): t=2.0 s reads 150,141,136,137,120,83,80,81,80,57,41,41 and t=3.9 s reads 52,50,57,49,68,101,100,102,101,127,145,147 — three concentric tiers whose brightnesses step down with radius and then swap, i.e. a brightness wave travelling outward. At Tiers=0.5 the two tiers are in clean antiphase (inner 140 / outer 45, later inner 50 / outer 135). At Tiers=0 the whole disc breathes uniformly. Port radial V profile is flat ~95 at every radius, every time, every Tiers value (mean radial-profile std 1.6 vs orig 1.0 at Tiers=0 rising to 12.9-13.2 at Tiers>=0.5).",
+    "The port's Tiers dial IS live, but it only segments each ray into rainbow bands: per-ray radial std of (R+G+B)/3 goes 5.7 -> 35.8 (port) and 3.3 -> 29.4 (orig) as Tiers goes 0 -> 1, yet the port's ring-averaged VALUE stays flat. So the port draws the rings; it just paints them all at full brightness instead of stepping/pulsing them.",
+    "PALETTE. Hue histogram over 10 frames x 2304 px (48x48, dialed mid, 30-degree bins, %): orig 11.6 9.5 6.0 1.9 1.9 5.3 7.4 8.4 10.2 11.9 13.7 12.1 — a deep trough through the greens (90-150 deg = 3.8% combined) and a peak in the magentas/reds (270-360 deg = 37.7%). Port 8.7 8.1 8.0 7.9 8.3 8.6 8.9 8.2 8.2 8.0 8.2 8.9 — a perfectly uniform rainbow. Both sides are fully saturated (meanSat 1.00). Channel averages are consistent across every run: orig R~60 G~24 B~60, port R=G=B=47.5.",
+    "Untouched defaults: original renders 6 legs, one uniform tier (radial V flat ~140 falling to ~50 over the breath cycle), mean 68 at t=2, 93% of pixels lit. Port renders 11 legs, flat radial V ~95, mean 47.5, 84% lit. The port's untouched render is byte-identical to its all-dials-0.5 render (identical stats, identical harmonics), so the port's internal defaults are 0.5 across the board; the original's are not (its untouched run differs from its dialed-mid run, motion 22 vs 38).",
+    "Frame-to-frame motion gap is fully explained by the leg-count error, not by any extra jitter: at default dials orig motion 22-37 vs port 57-58, but with the leg COUNTS matched (orig Legs=1 = 11 legs, port Legs=0.5 = 11 legs, Tiers=1) the two read motion 60 vs 58 and the filmstrips are near-superimposable apart from spin direction and palette.",
+    "Seed independence: --seed 1234 reproduces the baseline stats exactly on both sides (orig mean 50 motion 22, port mean 48 motion 58). Neither side is RNG-driven.",
+    "Control surface matches exactly: both expose sliderLegs, sliderSpeed, sliderPositionX, sliderPositionY, sliderTiers, all kind=slider, same labels, same order. No missing or invented dials."
+  ],
+  "dials": [
+    {
+      "name": "sliderLegs",
+      "origEffect": "Sets the number of angular legs/wedges: dominant angular harmonic k=3 at 0, k~3.5 at 0.25, k=6 at 0.5, k~8.5 at 0.75, k~11.5 at 1 (range roughly 3-11 legs).",
+      "portEffect": "Same axis and same direction, but a much wider range: k=2 at 0, k=6 at 0.25, k=11 at 0.5, k=16 at 0.75, k=21 at 1 (range roughly 2-21 legs). At any shared setting above 0 the port draws roughly twice as many legs.",
+      "matches": false
+    },
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Linear rotation-rate control: -7 deg/s at 0, -94 at 0.25, -184 at 0.5, -271 at 0.75, -358 at 1. Also drives the brightness-breath period (period ~4.0 s at Speed=0.5, i.e. two rotations; the breath stops at Speed=0).",
+      "portEffect": "Same linear rate mapping and near-identical magnitudes (+6 / +91 / +183 / +275 / +358 deg/s) but the opposite sense of rotation at every setting. Carries no brightness modulation at any speed.",
+      "matches": false
+    },
+    {
+      "name": "sliderPositionX",
+      "origEffect": "Moves the hub horizontally: at 0 the hub sits on the left edge at mid-height with the legs fanning right; at 1 it sits on the right edge fanning left.",
+      "portEffect": "Identical behaviour and identical direction — hub left at 0, hub right at 1, same fan geometry.",
+      "matches": true
+    },
+    {
+      "name": "sliderPositionY",
+      "origEffect": "Moves the hub vertically: at 0 the hub is at top-centre with legs fanning down; at 1 it is at bottom-centre fanning up.",
+      "portEffect": "Identical behaviour and identical direction.",
+      "matches": true
+    },
+    {
+      "name": "sliderTiers",
+      "origEffect": "Number of concentric tiers, drawn as radial BRIGHTNESS steps that pulse in antiphase (a wave travelling outward). Tiers=0: one uniform tier, whole disc breathing V 43<->139. Tiers=0.5: two tiers, boundary at r~0.63, inner/outer swapping between V~140 and V~45. Tiers=1: three tiers stepping 140/80/41 then 50/100/146. Ring-averaged radial-profile std rises from 1.0 to 13.2.",
+      "portEffect": "Adds concentric ring segmentation along each ray (per-ray radial std 5.7 -> 35.8) but the rings differ only in HUE — ring-averaged value stays flat at ~95 and frame-mean value stays 94-96 at every Tiers setting. No brightness stepping, no antiphase pulse, no dimming as Tiers rises (orig frame V drops with Tiers; port does not move at all).",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Biggest gap: the port has NO brightness modulation. Measured on the max-channel value, the original's frame mean swings 43 -> 139 (3.2x) on a ~4.0 s cycle at Speed=0.5 (about two rotation periods; 6.6 s at untouched defaults) while the port sits at 94-96 forever. Every pixel the port lights is at essentially full value. Restore a global/radial brightness envelope driven by the same time base as the rotation.",
+    "Tiers must modulate BRIGHTNESS, not just hue. Original at Tiers=1 shows three concentric bands whose values step 140 / 80 / 41 with radius and then invert to 50 / 100 / 146 roughly 1.9 s later — a brightness wave travelling outward through the tiers, in antiphase between adjacent rings. The port already draws the rings in the right places; it just paints them all at full value, so the ring-averaged radial profile is flat 95 at every Tiers value. Also note the original gets DIMMER overall as Tiers rises (single-frame mean 70 at Tiers=0 down to 36 at Tiers=1); the port's mean is 47 at both.",
+    "Rotation direction is inverted. Speed magnitudes are essentially perfect (orig -184 deg/s vs port +183 deg/s at Speed=0.5, and within 2% at 0.25/0.75/1), so only the sign of the angular term needs flipping. This is NOT a mirrored-canvas problem: PositionX and PositionY both move the hub in the same direction on both sides, so a global x- or y-flip would break those.",
+    "Legs slider range is ~2.4x too wide. Original spans about 3 legs at 0 to 11 legs at 1; the port spans about 2 to 21 (0->2, 0.25->6, 0.5->11, 0.75->16, 1->21). Rescale so Legs=0 gives ~3 and Legs=1 gives ~11. Once the leg counts are matched the two renders become near-superimposable (motion 60 vs 58, same tier geometry), so this single recalibration recovers a lot of fidelity.",
+    "Palette weighting is wrong. The original's hue ramp dwells in reds/magentas/purples and races through the greens: over 30-degree hue bins it puts 37.7% of lit pixels in 270-360 deg and only 3.8% in 90-150 deg, giving channel means R~60 / G~24 / B~60. The port's hue ramp is perfectly uniform (8.0-8.9% per bin, R=G=B=47.5), so it shows large green and yellow-green sectors the original essentially never displays. Apply the original's non-linear hue mapping (compressed through green, expanded through magenta) rather than a straight linear hue sweep.",
+    "Everything else is already right and should not be touched: control surface (5 sliders, same names/kinds/labels), rotation rate mapping, PositionX/PositionY behaviour, concentric-ring geometry, full saturation, frame-rate independence, and long-run stability (no decay or freeze at t=120 s)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "survey-dialed",
+    "probe",
+    "dialed-mid",
+    "dialed-mid-g32",
+    "dump-g48",
+    "mp-untouched",
+    "mp-legs-0",
+    "mp-legs-0.25",
+    "mp-legs-0.5",
+    "mp-legs-0.75",
+    "mp-legs-1",
+    "mp-tiers-0",
+    "mp-tiers-0.25",
+    "mp-tiers-0.5",
+    "mp-tiers-0.75",
+    "mp-tiers-1",
+    "ctl-tiers-0",
+    "ctl-tiers-1",
+    "ctl-speed-0",
+    "ctl-speed-0.25",
+    "ctl-speed-0.75",
+    "ctl-speed-1",
+    "ctl-posX-0",
+    "ctl-posX-1",
+    "ctl-posY-0",
+    "ctl-posY-1",
+    "ctlv-posX-0",
+    "ctlv-posX-1",
+    "ctlv-posY-0",
+    "ctlv-posY-1",
+    "mp-phase",
+    "mp-fps10",
+    "mp-fps40",
+    "mp-tierstat-0",
+    "mp-tierstat-0.5",
+    "mp-tierstat-1",
+    "cycle8",
+    "tierlook",
+    "legs-matched",
+    "late-skip120",
+    "seed1234"
+  ]
+}

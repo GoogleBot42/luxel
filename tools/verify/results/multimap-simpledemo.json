@@ -1,0 +1,49 @@
+{
+  "slug": "multimap-simpledemo",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Port reproduces the two map sections pixel-for-pixel and the blue disc's brightness animation exactly, but the green quadrant never develops the original's ever-finer hyperbolic moire (it stays a single broad band forever), pulses 25% slow, and both sections use hue 1/3 and 2/3 instead of the original's 0.30 and 0.60.",
+  "observations": [
+    "Rig is grid 16x16 (256 px) by default. Both sides render two lit regions and nothing else: a filled square occupying the top-left quadrant (rows 0-7, cols 0-7) and a filled disc centred on the grid centre (rows 5-10 / cols 5-10 on 16x16, radius ~0.2 of the grid). Union-of-lit masks over 601 dumped frames spanning t=0..60 s are IDENTICAL on both sides — 0 mismatching cells. Geometry/mapping is a perfect match.",
+    "Resolution independence matches: re-rendered at --grid 64x64 and --grid 128x128 both sides keep the same normalized layout (square = top-left quadrant, disc = centred, ~2024 lit disc pixels on each side at 128x128). Neither side rasterizes at native resolution differently from the other.",
+    "COLOR (constant, every frame): original green section is hue 0.300 (measured 0.3000-0.3016 across 7 sampled times, sat 1.0) i.e. a chartreuse/lime — RGB at full value (51,255,0); port is exactly hue 0.3333, pure green (0,255,0). Original disc is hue 0.600 (azure/dodger blue, (0,102,255) at full); port is exactly hue 0.6667, pure blue (0,0,255). Enumerating every distinct hue produced over 601 frames: orig = {0.300, 0.600} (plus 8-bit quantization spread at very dim values), port = {0.3333, 0.6667} exactly. Saturation and value are unaffected.",
+    "DISC ANIMATION IS AN EXACT MATCH. The disc is a single uniform colour across its whole area on both sides, pulsing in brightness. Sampling pixel (8,8) every 0.1 s from t=0 to t=60 s the two sides' 8-bit value series are byte-identical (157,186,211,231,246,253,254,247,233,213,189,160,130,100,71,45,24,9,1,0,6,19,...). Peak-to-peak period 1.309 s on both, 46 peaks in 60 s, no drift.",
+    "GREEN-SECTION TEMPORAL RATE IS 25% SLOW ON THE PORT. The square's corner pixel (0,0) (where the spatial term vanishes — row 0 and column 0 are flat on both sides) is a clean sinusoid 0..254. Over 60 s: original 31 peaks, mean period 1.967 s (gaps alternate 2.0/1.9 s, no drift); port 25 peaks, mean period 2.454 s (gaps 2.4/2.5 s). Ratio 1.248x, i.e. the port's green section breathes ~25% slower. Confirmed at 10 fps and 40 fps (orig 1.960 s / port 2.450 s at both) so this is not frame-rate coupling.",
+    "BOTH SIDES ARE FPS-INVARIANT (time-based, not frame-stepped): corner period is 1.960 s on the original and 2.450 s on the port at --fps 10, 20 and 40 alike. No frame-rate-coupling bug on either side.",
+    "HEADLINE STRUCTURAL DIVERGENCE: within the green square, brightness is a wave of the PRODUCT of the two normalized coordinates (value at (r,c) equals value at (c,r) on both sides; row 0 and column 0 are flat), so the bands are hyperbolas nested into the top-left corner. On the ORIGINAL the spatial frequency of those bands GROWS WITH TIME without bound — the square zooms into an ever-finer moire. On the PORT it does not grow at all. Counting local extrema along the square's bottom row at --grid 128x128: orig 8 (t=10 s), 16 (t=40), 17 (t=45), 17 (t=50), 21 (t=60), 23 (t=70), 19 (t=80), 21 (t=90), 22 (t=100), 22-25 (t=200-201.5). Port at the very same instants: 3, 0, 1, 2, 0, 3, 1, 3, 0, 1. The port's band count just wobbles 0-3 forever.",
+    "What that looks like: at t=200 s on a 64x64 grid the original's quadrant is a dense woven lattice of dozens of thin bright green hyperbolic rings (reads as a shimmering moire texture), while the port's quadrant is still ONE broad soft green band sweeping diagonally — visually indistinguishable from the port's own t=5 s frame. In the first ~2 seconds the two sides do look alike (both nearly flat, then one arc), so the divergence is entirely a steady-state one.",
+    "The 5 fps survey's contact sheet makes the original's square look like a green CHECKERBOARD from about t=16 s onward; that is aliasing of the fine hyperbolic bands by the 16x16 rig, not a separate mode. Re-rendered at 64x64 / 128x128 it resolves into concentric arcs. No discrete modes or regimes exist on either side: the 240 s / 2 fps survey shows one continuously-evolving regime, no reset, brightnessTrend steady on both.",
+    "Whole-window stats (60 s survey, 16x16): orig meanBrightness avg 18.6, port 14.8; meanR avg 5.6 vs 0.0 (the port's total absence of red is exactly the hue shift); meanG 34.5 vs 28.5; meanB identical at avg 16, min 0, max 32, first 29, last 1 (the disc, which matches). motion avg 6.9 vs 6.3, motionLit 20.2 vs 18.4, zeroMotionFrames 1 on both. Neither side errors, freezes, decays or saturates.",
+    "No randomness: --seed 1234 produces byte-identical summary stats to --seed 1 on both sides (orig mean 20 motion 2, port mean 16 motion 2). The pattern is fully deterministic, so per-pixel comparison is legitimate here.",
+    "A time-rescale scan (best-matching port frame for each of 8 original frames over a 0..60 s / 0.1 s grid, RMS over the 56 pure-green cells) finds no consistent warp factor and never gets RMS below 69/255 — so the port is NOT simply the original running at a different speed; its spatial and temporal rates diverge independently."
+  ],
+  "dials": [],
+  "feedback": [
+    "PRIMARY FIX — the green square's spatial term must scale with time. On the original the hyperbolic band density in the top-left quadrant grows continuously: ~8 extrema across the square's bottom row at t=10 s, ~16 at t=40 s, ~21-23 by t=60-100 s (measured at --grid 128x128). The port's stays at 0-3 extrema at every time from t=2 s to t=200 s. The port appears to be advancing only a phase offset while the original advances a phase that is (coordinate-product x time); the port's steady state therefore looks like a single soft blob where the original is a fine woven moire. This is the pattern's dominant visual character and is currently absent.",
+    "SECOND — the green square's pulse rate is 25% too slow. Measured at the square's corner pixel (where the spatial term is zero) over 60 s: original period 1.967 s (31 peaks), port 2.454 s (25 peaks). Speed up the green section's time term by 1.248x. (The disc's 1.309 s pulse is already exact — do not touch it.)",
+    "THIRD — both hues are wrong by the same kind of error: the port uses 1/3 and 2/3 where the original uses 0.30 and 0.60. Green section should be hue 0.30 (chartreuse/lime, (51,255,0) at full brightness, i.e. with a visible red component — the port currently emits meanR exactly 0 on every frame), and the disc should be hue 0.60 (azure/dodger blue, (0,102,255) at full), not pure blue. Saturation 1.0 and the value/brightness envelopes are already correct.",
+    "DO NOT CHANGE: the map geometry (square = top-left quadrant, disc = centred at ~0.2 radius) is pixel-exact on 16x16, 64x64 and 128x128; the disc's brightness animation is byte-identical to the original for 60 s straight; both sides are correctly time-based (fps-invariant) and deterministic."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "mms-dump1",
+    "mms-timeseries",
+    "mms-long60",
+    "mms-grid64",
+    "mms-grid64-long",
+    "mms-grid128",
+    "mms-g128-late",
+    "mms-g128-mid",
+    "late-200",
+    "steady-30",
+    "seed1234",
+    "fps10",
+    "fps40",
+    "fpschk-10",
+    "fpschk-40"
+  ]
+}
