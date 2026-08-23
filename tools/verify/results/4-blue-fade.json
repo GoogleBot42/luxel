@@ -1,0 +1,35 @@
+{
+  "slug": "4-blue-fade",
+  "verdict": "close",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Both sides are the same pattern — the entire strip held at one uniform blue-violet that breathes black-to-full on a raised-cosine envelope — differing only in cycle period (orig 32.8 s vs port 30.2 s) and a slightly redder port hue.",
+  "observations": [
+    "Structure identical: every dumped frame on both sides has exactly ONE distinct RGB value across all 60 pixels (checked at t=0/4/8/16/24/28/33 s in run `dump-cycle`), i.e. the whole strip is a single solid colour with no spatial structure at all. Re-rendering both on `--rig grid --grid 8x8` (run `grid8`) confirms it — every contact-sheet cell is a flat field on both sides, no gradient, no features.",
+    "Motion is a global brightness breathe with no spatial component. Envelope SHAPE is essentially identical: binning the 300 s survey (`survey-300`) by phase into 20 buckets gives orig 0.007 0.061 0.156 0.282 0.428 0.585 0.732 0.855 0.945 0.990 0.986 0.934 0.840 0.715 0.565 0.409 0.265 0.142 0.052 0.005 (blue/255) and port 0.008 0.058 0.151 0.277 0.423 0.578 0.723 0.848 0.941 0.989 0.990 0.944 0.855 0.730 0.584 0.429 0.278 0.148 0.054 0.006 — a symmetric sine-squared-style fade from full black to full blue on both.",
+    "PERIOD MISMATCH (the main finding): over 300 s the original's black troughs are centred at 24.25, 56.75, 89.75, 122.25, 155.25, 187.75, 220.75, 253.5, 286.25 s → 8 cycles in 262.0 s = 32.75 s/cycle. The port's are at 22.0, 52.25, 82.5, 112.5, 142.75, 172.75, 203.0, 233.0, 263.25, 293.5 s → 9 cycles in 271.5 s = 30.17 s/cycle. The port is ~8.6% fast. Both start t=0 at exactly half-blue and rising (orig 17,0,128; port 25,0,128), so the drift accumulates: by the `late-skip200` window (t=200-240 s) the two are almost exactly a half-cycle out of phase — the original waterfall opens bright and the port opens black.",
+    "COLOUR: both hold a fixed hue and scale it, green is 0 in every sample on both sides. At full brightness orig peaks at (35, 0, 255) and port at (50, 0, 255) — R/B ratio 0.137 vs 0.196, i.e. hue ~248 deg vs ~252 deg. The ratio is constant through the whole fade on each side (orig 0.133-0.139, port 0.192-0.198), so this is a fixed hue offset, not a differing fade curve. The port reads very slightly more violet; the original slightly purer blue. Consequently port mean brightness runs a few percent higher at equal blue (peak mean 101 vs 97) purely from the extra red.",
+    "Steady state is healthy on both: `late-skip200` (t=200-240 s) shows both still breathing at full black-to-full-blue amplitude with the same envelope. Neither decays, freezes or saturates. The high `zeroMotionFrames` counts in the 6 s baseline (orig 97/120, port 86/120) are the documented dim/slow false-freeze — the fade is slow enough that adjacent 20 fps frames often quantise to the same 8-bit value; `--dump` confirms both are moving.",
+    "No frame-rate coupling on either side, and they match: dumps at t=0/4/8 s are identical (within 1 LSB) at --fps 10, 20 and 40 for both sides (orig 35,0,254 and port 50,0,254 at t=8 s at every rate), so both integrate real elapsed time.",
+    "Deterministic: a --seed 7 re-run (`seed7`) reproduces the same values and the same 32.8 s / 30.2 s periods, so nothing here is RNG-driven and the one-seed result is not a fluke.",
+    "Control surfaces match: meta.json reports an empty control list for BOTH sides, and --probe-controls reports '(no settable controls)' for both. No missing, extra or renamed dial."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the port's fade cycle by ~8.6%: the original completes one full black->blue->black breathe every 32.75 s (measured over 8 consecutive cycles), the port every 30.17 s (9 cycles). Target 32.75-32.8 s per cycle. Nothing else about the timing needs to change — the envelope shape, the symmetry, and the phase at t=0 (half-brightness, rising) already match exactly.",
+    "Shift the port's hue very slightly toward pure blue. At full brightness the original renders (35, 0, 255) and the port (50, 0, 255) — the port carries ~43% more red for the same blue. Aim for a red-to-blue ratio of ~0.137 (about hue 248 deg) rather than the port's ~0.196 (~252 deg). The ratio must stay constant across the whole fade, as it already does on both sides.",
+    "Everything else is already right and should not be touched: whole-strip uniform single colour (no per-pixel variation), green pinned at 0, symmetric raised-cosine brightness envelope reaching both true black and full 255 blue, time-based (fps-invariant) animation, and no exposed controls."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-300",
+    "dump-cycle",
+    "fps10",
+    "fps40",
+    "seed7",
+    "late-skip200",
+    "grid8"
+  ]
+}
