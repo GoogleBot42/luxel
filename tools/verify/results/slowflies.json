@@ -1,0 +1,45 @@
+{
+  "slug": "slowflies",
+  "verdict": "broken",
+  "score": 1,
+  "confidence": "high",
+  "summary": "The port's flies never fade — every lit pixel accumulates to a fixed saturated (0,255,51) green and by t~8 s the whole 60-px strip is a frozen solid-green bar (motion 0 for the rest of a 240 s window), while the original is a sparse, aperiodic field of pulsing green/cyan flies drifting ~0.5-1 px/s over a dim static blue glow at mean brightness ~18-22.",
+  "observations": [
+    "Rig: strip, 60 px, no controls on either side (meta.json sides.orig.controls and sides.port.controls are both empty; --probe-controls printed '(no settable controls)' for both). wantsSensors false on both sides, so sensors are a no-op here.",
+    "ORIGINAL steady state (survey240, 240 s @ 2 fps; late, --skip 60 --seconds 30 --fps 10): meanBrightness settles at ~18-22 (avg 18.4 over 240 s), motion avg 10.1 / motionLit avg 11.0, never saturating. Autocorrelation of the original's meanBrightness over 480 frames shows NO periodic peak (top lags are 1,2,3,4 with monotonically falling scores) — the pattern is stochastic/aperiodic, not cyclic. No mode/regime structure appeared anywhere in 240 s.",
+    "PORT steady state (same runs): meanBrightness ramps monotonically 0 -> 100 and PINS at exactly 100 for the entire remainder (last 20 survey240 samples are all 100; 100 = (0+255+51)/3, the arithmetic maximum of its one colour). motion avg 0.28, and the survey/late/fps20/fps40 runs all report motion 0. --dump at t=10, 20 and 39 s shows 59 of 60 pixels holding exactly [0,255,51]; only pixel 0 flickers. The late waterfall is a featureless green rectangle.",
+    "Saturation time is TIME-based, not frame-coupled: the port reaches 90% of its final brightness at 4.6 s / 4.3 s / 4.2 s at 10 / 20 / 40 fps respectively (labels fps10, fps20, fps40). Both sides' motionLit halves per fps doubling (orig 3.65/1.98/1.02, port 1.15/0.58/0.30), i.e. both engines are time-based — frame-rate coupling is NOT the bug.",
+    "COLOUR: R is exactly 0 on both sides at all times. Over 17 dumped frames at t=30..38 s, the original's lit pixels (max channel >=20) span the full blue->cyan->green range: B/(G+B) histogram 0.2=2, 0.3=10, 0.4=77, 0.5=40, 0.6=39, 0.7=26, 0.8=23, 0.9=19, 1.0=403 — i.e. a large dim pure-blue population plus a cyan/green gradient at the fly cores (sample bright core [0,190,255], another [0,206,122]). The port's lit pixels are 1006/1007 in a single bucket at B/(G+B)=0.2 — one fixed spring green, zero hue variation.",
+    "ORIGINAL structure: a dim, spatially fixed blue glow field (typical pixel [0,1,70] to [0,2,98], visible as vertical blue lanes in the waterfall) covering ~50-90% of the strip, over which bright green 'flies' pulse. Peak tracking on the G channel (dumps 0.5 s apart, t=30..38 s) finds 0-3 concurrent peaks above G=90, each living ~1-2 s, rising to G=130-255 and fading. Their positions drift only ~0.5-1 px/s (peak at px 16 -> 16 -> 16 -> 18 -> 17 over 2 s; another 28 -> 28 -> 28 -> 27; another 37 -> 37 -> 38), which is exactly the slow near-vertical-with-slight-slope streaking the waterfall shows, in both directions. Hence 'slow flies'.",
+    "PORT structure: at t=0.2 s BOTH sides light the same two clusters (orig ~px 29-33 and ~px 55-59; port ~px 30-35 and ~px 53-58, comparable ~5-6 px width), so the spawn positions and initial sizes are plausibly right. But by t=0.6 s the port's clusters are already fully saturated (8 pixels at G>=250 at t=0.5 while the original's whole-frame max is still 28) and they only ever GROW: lit-pixel count 13 (t=0.5) -> 27 (t=2) -> 59 (t=5) -> 60 (t=10), and saturated-green count 8 -> 23 -> 54 -> 59. Nothing ever dims back down.",
+    "BRIGHTNESS ENVELOPE: the original's flies ramp in slowly (whole-frame max 28 at t=0.5, 181 at t=2, 218 at t=5) and individual flies fade back to the blue floor within ~1-2 s. The port's flies reach 255 within ~0.5 s and hold 255 forever.",
+    "Seed independence confirmed: seeds 1, 7 and 1234 (30 s @ 10 fps each) all give orig mean 20-21 / motion 3 and port mean 84-91 / motion 0. The failure is not a one-seed fluke.",
+    "The port's first ~1.5 s are a partial match (sparse dim clusters at roughly the right pixel indices); everything after ~4 s is a dead flat green bar. Judged on steady state, which is what a viewer living with the pattern sees, this is broken."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port has no decay/fade path. Every pixel it lights stays lit at maximum until the whole strip is [0,255,51]. Whatever per-frame persistence factor governs the fly bodies and their afterglow is effectively 1.0 (or the accumulation is additive with no attenuation) — it must fall back to the background level. Target: an individual fly should rise to its peak and return to the dim floor within roughly 1-2 s, and the whole-strip mean brightness must sit steady around 18-22 (out of 255) forever, never above ~30.",
+    "Clamp/attenuate the accumulation. The original's whole-frame meanBrightness over 240 s stays in the 13-23 band with no upward trend; the port's rises monotonically to its arithmetic maximum of 100 in ~4.3 s and pins there. brightnessTrend 'rising' on the port with a hard ceiling is the signature to fix first — check it with `--seconds 240 --fps 2` and require the last 20 samples to look like the first 20.",
+    "Restore the colour spread. The original spans pure blue (0,~2,~90) for the resting field, through cyan (e.g. 0,190,255), to green-dominant fly cores; measured as B/(G+B) it occupies every bucket from 0.2 to 1.0 with a big mass at 1.0 (blue). The port emits exactly ONE colour, (0,255,51), for 100% of its lit pixels. Both sides correctly keep R at 0, so the red channel is fine — the missing piece is the blue resting/afterglow colour and the intermediate cyan ramp.",
+    "Restore the dim static blue background field. The original always has a low-level blue glow on roughly half to nine-tenths of the strip (B ~60-100 on resting pixels) that the flies ride on top of; it shows in the waterfall as persistent vertical blue lanes. The port has no such floor — it is black before saturation and green after.",
+    "Keep flies sparse and slow. The original holds 0-3 simultaneous bright peaks (G>90), each ~1-2 s long, drifting only ~0.5-1 px/s (measured by G-channel peak tracking on 0.5 s-spaced dumps). Verify the fix by re-running `--skip 30 --seconds 12 --fps 20` and confirming the port's peak count and drift rate land in that range rather than filling the strip.",
+    "Do NOT touch frame-rate handling: the 10/20/40 fps comparison shows both engines are already time-based (port's saturation time 4.6/4.3/4.2 s; both sides' motionLit halves per fps doubling). The bug is purely the missing decay and the single fixed colour.",
+    "The spawn logic looks salvageable: at t=0.2 s both sides light the same two clusters at the same pixel indices with comparable ~5-6 px widths. The fix is very likely confined to the per-frame update/fade step and the palette lookup, not to fly placement or count."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "probe",
+    "late",
+    "dump-sf",
+    "dump-early",
+    "dump-orig-dyn",
+    "dump-track",
+    "seed7",
+    "seed1234",
+    "fps10",
+    "fps20",
+    "fps40"
+  ]
+}

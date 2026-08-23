@@ -1,0 +1,70 @@
+{
+  "slug": "snake-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same idea and same render style (white-headed snake with a fading colored trail, identical ~6 s hue walk, one Speed slider), but the port's snake never grows — it stays a 3-4 pixel dot (mean 8.6 lit px vs the original's 132 of 256, 15x dimmer) and crawls ~3-4x too slowly, so an evening viewer sees a wandering dot instead of a serpentine ribbon filling the panel.",
+  "observations": [
+    "Rig: grid 16x16, 256 px. Both sides compile and run with no compile/runtime errors, no sensor use (wantsSensors false on both).",
+    "Control surface MATCHES exactly: both sides expose one control, sliderSpeed / kind slider / label \"Speed\". No missing or invented dials.",
+    "Render style matches in character: both draw a pure-white head pixel (255,255,255) with a colored trail behind it that fades toward black, on a black field, with the trail hue slowly rotating.",
+    "HEADLINE STRUCTURAL GAP — trail/body length. Steady state measured over a 120 s dump (240 samples, label edge240), mean lit pixels per frame: orig 132.3 total / 58.1 above sum>30 / 22.2 above sum>120; port 8.6 / 3.7 / 2.1. That is a ~15x shortfall at every brightness threshold. Over a 300 s run (label survey-300) the original sits at 142-166 lit px at t=50/100/150/200/250/299 s while the port sits at 6-9 lit px at the same instants — the port's snake never grows, ever.",
+    "Consequent brightness gap: meanBrightness avg over 300 s is orig 9.1 vs port 0.6 (statsSummary, survey-300). Baseline 6 s window: orig avg 8.9 (min 1, max 15), port avg 2.5 (min 0, max 4). Port's brightnessTrend reads 'decaying'/'volatile' where the original reads 'rising'/'steady' — an artefact of the port's tiny sparse footprint, not of a dying port (motionLit stays healthy: port motionLit avg 16.1 over 300 s).",
+    "motion vs motionLit trap confirmed: port posts zeroMotionFrames 1864/3000 and motion avg 0.4 over 300 s while motionLit avg is 16.1 — the port is animating, just over ~3% of the rig. Do not read the port as frozen.",
+    "SPEED GAP. Head-step rate measured by tracking the pixel with the largest frame-to-frame brightness increase, 120 consecutive dumped frames at 20 fps (label dense120): orig 13.3 head-moves/s (median inter-step interval 0.05 s), port 3.4 head-moves/s (median 0.25 s). Manhattan distance per move is the same on both (orig 1.53, port 1.45 px) so the step SIZE is right; only the rate is wrong.",
+    "Newly-lit-pixels-per-second (an fps-robust speed proxy) at 10/20/40 fps: orig 23.6 / 23.2 / 18.1, port 3.7 / 4.0 / 4.4. Both sides are essentially fps-INVARIANT, so there is no frame-rate-coupling bug on either side — the ~5x rate gap is a genuine speed difference, present identically at every fps.",
+    "PLAYFIELD INSET BUG. Over a 120 s / 240-sample dump the port lights the outer ring of the 16x16 grid ZERO times out of 2058 lit-pixel samples; its bounding box is x 1-14, y 1-14 and it touched 175 distinct pixels. The original puts 8.8% of its 31,750 lit-pixel samples on the outer ring and touched 253/256 distinct pixels (bbox 0-15, 0-15). The port's snake is confined to a 14x14 interior — an off-by-one inset in the playfield bounds.",
+    "COLOR MATCHES WELL. Unwrapping the hue of the whole-frame mean RGB over a 121 s / 20 fps run gives 20.31 hue rotations for the original and 20.50 for the port, both in the same direction — a full hue cycle every 6.0 s (orig) vs 5.9 s (port). Note the contact sheets alias this badly: a 5.4 s sheet spacing against a 6.0 s hue period fakes a ~55 s cycle, so read hue period from the series, not the sheet.",
+    "Warm-up difference: the original's head is full white (255,255,255) on the very first captured frame; the port ramps in from near-black (brightest pixel sums 4 -> 74 -> 242 -> 530 -> 1010 -> 1928 over t=0..0.5 s) and only reaches full white at t~0.5 s. Minor, one-time.",
+    "Neither side ever resets/dies: over 300 s the original's lit count oscillates 85-173 without collapsing back to a seed length, and the port's oscillates 6-12. So the original's length is self-limited by trail fade, not by a game-over reset.",
+    "Seed-independence: seeds 1, 7 and 1234 all give the same picture on both sides (orig lit at t=5/10/19.9 s: 86/139/115 at seed 7, 110/140/133 at seed 1234; port 8/9/9 and 10/7/10). The divergence is not a one-seed fluke.",
+    "Grid-scaling: both sides keep a roughly constant lit FRACTION as the rig changes, so both are resolution-aware in the same way — orig ~44-75% (8x8), 52% (16x16), 30-40% (32x32); port ~3% (8x8), 3.4% (16x16), ~4% (32x32). The ~15x constant-factor gap holds at every grid size, i.e. it is not a grid-mapping bug.",
+    "At the original's slider ~0.02 the original renders roughly what the port renders untouched (orig 1.77 step-events/s, lit@4s 10 vs port 1.01 ev/s, lit@4s 8) — i.e. the port behaves like the original stuck at ~2% speed."
+  ],
+  "dials": [
+    {
+      "name": "sliderSpeed",
+      "origEffect": "Continuous, strongly non-linear speed knob with a hard OFF at 0. At exactly 0 the original renders FULLY BLACK (0 lit pixels from frame 0 onward, checked to t=20 s). Step-event rate then rises steeply: 1.77/s at 0.02, 7.09/s at 0.1, 9.62/s at 0.25, 9.11/s at 0.5, 15.95/s at 0.75, 16.71/s at 1. Snake length tracks it: lit@4 s = 0 / 10 / 37 / 65 / 74 / 131 / 155 across those settings. Untouched default behaves like slider ~0.3-0.5 (10-13 steps/s).",
+      "portEffect": "Same direction (higher = faster) but compressed into a narrow band and with no OFF: 1.01/s at 0, 1.01/s at 0.02, 1.01/s at 0.1, 1.52/s at 0.25, 2.28/s at 0.5, 3.29/s at 0.75, 3.80/s at 1 — a ~4x span against the original's 0-to-16.7x span, flat/quantized below ~0.15, and still crawling when the original is completely stopped. Snake length is unaffected by the dial: lit@4 s stays 8-12 at every setting, and lit@19.9 s stays 8-10, so speed never buys length on the port. The port's UNTOUCHED default (4.0 steps/s) sits at or slightly above its own slider maximum.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The single biggest gap is snake/trail LENGTH. On the default 16x16 rig the original holds ~132 lit pixels per frame in steady state (58 of them above an 8-bit channel-sum of 30); the port holds 8.6 (3.7 above 30). Make the trail persist roughly 15x longer — target ~130 lit px on 16x16, ~300-400 on 32x32, ~30-48 on 8x8 — so the panel shows a long serpentine ribbon that visibly coils over itself, not a dot with a 3-px tail.",
+    "Trail length must GROW with time/eating: the original goes from 5 lit px at t=0 to ~70 by t=2 s, ~120 by t=6 s and then plateaus at 130-170 for the rest of a 300 s run. The port goes 4 -> 7 -> 10 and plateaus there forever. Whatever mechanic lengthens the body (each food eaten, or a length that ramps) is missing or clamped in the port.",
+    "Step rate at untouched defaults is ~4x too slow: original head advances 13.3 cells/s (one cell per rendered frame at 20 fps), port 3.4 cells/s. Step SIZE is already correct (~1.5 px Manhattan per move on both) — only the tick rate needs raising.",
+    "Rescale the Speed slider. The original spans a hard stop at 0 (renders entirely black) up to ~16.7 steps/s at 1, with a steep knee near the bottom (already 7.1 steps/s at slider 0.1). The port spans only 1.0-3.8 steps/s, is flat/quantized for slider values below ~0.15, and never stops. Add the OFF-at-zero behaviour and stretch the top end by ~4.5x.",
+    "Fix the playfield inset: the port never lights row 0, row 15, column 0 or column 15 (0 hits in 2058 lit-pixel samples over 120 s), so its snake lives in a 14x14 interior. The original uses the full 16x16 (8.8% of its lit samples land on the outer ring, 253/256 distinct pixels visited). Extend the wrap/bounce bounds by one cell on all four sides.",
+    "Do NOT touch the color path — it already matches. Both sides walk hue in the same direction with a full rotation every ~6.0 s (orig 20.31 rotations vs port 20.50 in 121 s), both draw a pure-white head over a fading colored body, and the palette family and saturation profile are indistinguishable.",
+    "Minor: the port fades in from black over the first ~0.5 s (brightest-pixel channel sum 4 -> 1928) while the original is at full white on frame 0. Harmless but visible on restart; drop the ramp if it is not deliberate.",
+    "No frame-rate-coupling work needed: both sides are fps-invariant (new-pixel rate 23.6/23.2/18.1 per s for the original and 3.7/4.0/4.4 for the port at 10/20/40 fps)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-300",
+    "probe",
+    "dump-b1",
+    "dense120",
+    "dense-fps10",
+    "dense-fps40",
+    "fps10",
+    "fps20",
+    "fps40",
+    "long120",
+    "edge240",
+    "spd-0",
+    "spd-0.25",
+    "spd-0.5",
+    "spd-0.75",
+    "spd-1",
+    "spdlo-0.02",
+    "spdlo-0.1",
+    "seed7",
+    "seed1234",
+    "grid32",
+    "grid8",
+    "late-skip60",
+    "late-skip200"
+  ]
+}

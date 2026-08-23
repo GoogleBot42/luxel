@@ -1,0 +1,57 @@
+{
+  "slug": "slime-mold-palette",
+  "verdict": "orig-unrenderable",
+  "score": 0,
+  "confidence": "high",
+  "summary": "The ORIGINAL compiles and runs with no error but emits exactly 0,0,0 on every pixel under every configuration tried (silent null output, JUDGE subtype (c)), so no comparison is obtainable — the score of 0 records 'no comparison obtainable', NOT port quality; the port itself renders a plausible, alive, self-restarting slime-mold growth.",
+  "observations": [
+    "ORIGINAL SILENT NULL: across 18 runs the original's statsSummary is meanBrightness {avg 0, min 0, max 0}, motion 0, motionLit 0, zeroMotionFrames = 100% of captured frames, with compileError null and runtimeError null on every run. A --dump (label dump-check, times 0/1/3/5.9 s) confirms 0 of 256 pixels non-zero, max channel value 0, at every dumped time — it is true black, not a dim/sparse false-freeze.",
+    "Exhaustion of the silent-null checklist: 6 s @20 fps (baseline), 60 s @5 fps (survey), 240 s @2 fps (survey-240, 480 frames), 120 s @20 fps (long-hifps, 2400 rendered frames — rules out a frame-counted warm-up), rigs grid 16x16 / grid 8x8 / strip 60 px / cloud 5x5x5, seeds 1 and 1234, wall clocks 1756000000 and 1700000000. Original is 0 in all of them.",
+    "Dialed/triggered attempts also produce nothing: triggerDraw=1 alone; triggerDraw+triggerSeedPixel+inputNumberNumSeeds=5; triggerRemap+NumSeeds=5+SeedPixel+Draw (remap-first ordering); triggerRemap+toggleAutoRedraw=1+RedrawSeconds=2+NumSeeds=10 over 30 s; NumSeeds=1+triggerRandomPalette+triggerDraw; toggleAutoRedraw=1+RedrawSeconds=5+NumSeeds=3 over 60 s. meta.json confirms controlsApplied recorded each of these on the orig side (e.g. {\"triggerRemap\":[1],\"inputNumberNumSeeds\":[5],\"triggerSeedPixel\":[1],\"triggerDraw\":[1]}) with no warnings — the setters ran and the output stayed at 0.",
+    "Harness sanity: an unrelated slug (2-colors, label smp-harness-sanity) rendered its original at meanBrightness 43 on the same worktree/harness, so the black original is specific to this pattern, not a broken rig or a broken run.",
+    "Cause subtype: (c) SILENT NULL OUTPUT — no compile error, no runtime error, exactly zero output. From rendered output alone I cannot rule out that an underlying engine gap (e.g. a builtin our VM accepts but no-ops, or a mapper/neighbour-map construction path that silently yields nothing) is the mechanism; what is certain is that nothing surfaces as an error. This is worth an engine-side investigation on the original rather than a port fix.",
+    "PORT IS ALIVE AND PLAUSIBLE (solo, uncomparable): from a handful of lit seed pixels (7 non-zero at t=0 on the 16x16 grid) it grows a branching, cell-by-cell aggregation that reaches 87/256 lit at t=1 s, 247/256 at t=3 s and 256/256 by t=5.9 s at 20 fps. Growth reads as slime-mold / diffusion-limited-aggregation: irregular dendritic fingers from each seed that merge into a full fill.",
+    "PORT COLOUR: each drawing cycle uses one palette, and the palette changes at every restart. Observed over 240 s: cycle 1 orange/red on magenta (meanR peak 180), cycle 2 cyan/teal, cycle 3 full rainbow (green through blue to pink), cycle 4 magenta/violet. Colour appears to track growth order/distance rather than position, giving the fingers a ramp along their length.",
+    "PORT CYCLE: the drawing clears and restarts periodically. Restart times (meanBrightness drop >20 between adjacent frames) are 62.0 / 124.5 / 187.0 s at --fps 2 (period ~62.5 s) and 33.2 / 66.5 / 99.7 s at --fps 20 (period ~33.2 s).",
+    "PORT FRAME-RATE COUPLING (port-only finding, unverifiable against the original): the cycle period is not fps-invariant, and not proportional either. Decomposing it, the growth phase is frame-stepped (a fixed number of cells added per rendered frame — a full 16x16 fill takes roughly the same ~60 frames at both rates, hence ~3 s at 20 fps and ~30 s at 2 fps) while the post-fill redraw delay is time-based at roughly 30 s. 30 s growth + 30 s delay = ~62.5 s at 2 fps; ~3 s growth + 30 s delay = ~33.2 s at 20 fps. Whether the original also frame-steps its growth cannot be determined, since the original never draws anything.",
+    "CONTROL-SURFACE MISMATCH (reportable regardless of renderability): both sides expose 8 controls with matching kinds in a matching order-of-role, but 5 of the 8 names differ. orig inputNumberNumSeeds -> port inputNumberInitialSeedCount; orig triggerSeedPixel -> port triggerSeedAPixel; orig triggerDraw -> port triggerNewDrawing; orig triggerRemap -> port triggerRebuildNeighborMap; orig inputNumberRedrawSeconds -> port inputNumberRedrawDelaySeconds. Only toggleAutoRedraw, triggerRandomPalette and showNumberPalette match exactly. On real Pixel Blaze the control name is both the UI label source and the saved-value key, so these renames are a genuine fidelity gap.",
+    "PROBE: all settable controls on BOTH sides came back NO/responsive with maxDelta 0.00 and maxDeltaLit 0.00 over the default 4 s window. On the original that is meaningless (it renders black). On the port it is a false inert caused by the probe window: the port's own cycle is ~33 s at 20 fps, so a 4 s probe sits entirely inside one growth phase whose seeding already happened before the setter ran. Manual sweeps of the port's dials over multi-cycle windows were not carried further because there is no original render to compare any of them against."
+  ],
+  "dials": [
+    {"name": "inputNumberNumSeeds (port: inputNumberInitialSeedCount)", "origEffect": "unverifiable — original renders 0,0,0 at every value tried (0, 1, 3, 5, 10)", "portEffect": "not separately characterizable against a black original; probe reported 0.00 delta over a 4 s window, which is a false inert given the port's ~33 s cycle", "matches": false},
+    {"name": "toggleAutoRedraw", "origEffect": "unverifiable — original stays black with the toggle at 0 and at 1 over 60 s", "portEffect": "port auto-redraws untouched (restarts every ~33 s at 20 fps), so the toggle's default-on behaviour is at least present", "matches": false},
+    {"name": "inputNumberRedrawSeconds (port: inputNumberRedrawDelaySeconds)", "origEffect": "unverifiable — original black at RedrawSeconds 2 and 5", "portEffect": "port's untouched post-fill delay measures ~30 s; dial response not comparable", "matches": false},
+    {"name": "triggerDraw (port: triggerNewDrawing)", "origEffect": "unverifiable — firing it produces no pixels", "portEffect": "not comparable", "matches": false},
+    {"name": "triggerSeedPixel (port: triggerSeedAPixel)", "origEffect": "unverifiable — firing it produces no pixels", "portEffect": "not comparable", "matches": false},
+    {"name": "triggerRemap (port: triggerRebuildNeighborMap)", "origEffect": "unverifiable — firing it, alone or before Draw, produces no pixels", "portEffect": "not comparable", "matches": false},
+    {"name": "triggerRandomPalette", "origEffect": "unverifiable — original black", "portEffect": "port changes palette at each restart untouched (orange -> cyan -> rainbow -> magenta over 240 s), so palette selection exists", "matches": false},
+    {"name": "showNumberPalette", "origEffect": "display-only, not probed", "portEffect": "display-only, not probed; name and kind match the original", "matches": true}
+  ],
+  "feedback": [
+    "PRIMARY: this is not a port-fix task yet. The original emits exactly 0,0,0 forever on our engine with no compile or runtime error. Someone with source access should find out why — the most likely shapes given the control set (Remap / SeedPixel / Draw / neighbour map) are a neighbour-map or index-array construction that silently yields an empty/zero structure on our engine, or a draw loop whose iteration budget is derived from measured real elapsed time (which the deterministic harness pins) so it never executes a step. Until the original renders, no fidelity verdict on the port is possible.",
+    "Do NOT read this verdict's score of 0 as a statement about the port. The port renders a coherent, alive slime-mold growth with per-cycle palettes and a working auto-redraw; on its own merits it looks like a reasonable realisation of the name.",
+    "Rename the port's controls to match the original exactly: inputNumberInitialSeedCount -> inputNumberNumSeeds, triggerSeedAPixel -> triggerSeedPixel, triggerNewDrawing -> triggerDraw, triggerRebuildNeighborMap -> triggerRemap, inputNumberRedrawDelaySeconds -> inputNumberRedrawSeconds. toggleAutoRedraw, triggerRandomPalette and showNumberPalette are already correct. This is fixable now and independent of the renderability problem.",
+    "Once the original renders, the first things to compare are: (1) growth rate — cells added per frame vs per second (the port's growth is frame-stepped: a 16x16 fill takes ~60 frames regardless of fps, i.e. ~3 s at 20 fps and ~30 s at 2 fps); (2) the redraw cadence — the port's post-fill delay is ~30 s of real time with AutoRedraw untouched; (3) seed count and seed placement at t=0 (port lights 7 pixels of 256 on the default grid before growth starts); (4) whether colour ramps along growth order/branch distance (what the port does) or along position/palette-of-index.",
+    "For whoever re-verifies after an engine fix: the port's own cycle is ~33 s at 20 fps, so any probe or dial sweep needs --probe-seconds well over 35 (or --seconds 90+ manual sweeps) — a 4 s probe window reports every dial on both sides as inert and that result is worthless here."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-check",
+    "long-hifps",
+    "orig-trig-draw",
+    "orig-auto",
+    "orig-remap-first",
+    "orig-remap-auto",
+    "orig-palette-draw",
+    "orig-draw-only",
+    "rig-strip",
+    "grid-8",
+    "rig-cloud",
+    "seed-1234",
+    "wall-alt",
+    "smp-harness-sanity (run on slug 2-colors, harness control)"
+  ]
+}

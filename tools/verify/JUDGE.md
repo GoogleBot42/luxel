@@ -137,7 +137,14 @@ must be measured from `--dump`s, never from contact sheets — sheet cells
 are narrow enough that one glyph spanning cells reads as a whole word, and
 hump/cycle COUNTS read off a sheet cell are equally untrustworthy (the
 nearest-neighbour upscale invents extra humps; a wave pinned at 3.0 cycles
-by DFT "breathed" between 3 and 6 on the sheet).
+by DFT "breathed" between 3 and 6 on the sheet). HUE/PALETTE periods read
+off a sheet alias the same way motion does: a 5.4 s sheet spacing against a
+6.0 s hue cycle beats into a fake ~55 s super-cycle and can make matching
+sides look like they cycle at different rates — read hue period from an
+unwrapped hue series over many cycles instead. And any rate metric whose
+CEILING is the frame rate (e.g. head-moves counted per rendered frame maxes
+at fps moves/s) will fake a frame-coupling finding at low fps — cross-check
+with an fps-unbounded proxy like newly-lit pixels per second.
 
 Centroid tracking is INVALID near canvas edges: a feature that slides
 in/out of frame gets its visible centroid dragged toward the canvas
@@ -545,9 +552,21 @@ pattern whose spatial frequency runs to tens of cycles per strip aliases into
 unrelated noise on small rigs — de-alias those with a LARGER rig
 (`--pixels 600`) instead.
 
-(Environment note: `python3` is not on PATH inside `nix develop` — do
-frames.json/stats.json post-processing with `node -e`. And `node` is not on
-PATH OUTSIDE `nix develop`: every half of a compound shell line that runs
+For any pattern with a size-dependent feature (tail length, block stride,
+spot width), run at least one off-default `--pixels` size on BOTH sides and
+compare the feature's absolute pixel size vs strip-fraction law. Two
+different laws can INTERSECT at the default rig — a fixed-10-px tail and a
+15%-of-strip tail agree at 60 px and diverge wildly at 12 or 300 px — so a
+default-rig-only judgment can miss a real structural bug entirely.
+
+(Environment note: `python3` and `bc` are not on PATH inside `nix develop`
+— do frames.json/stats.json post-processing with `node -e`. A bash loop
+using `$(... | bc)` fails half-silently: printf still emits 0.00 per entry,
+producing a well-formed all-zeros `--dump` list the parser accepts — check
+the run's echoed time range ("240 times, 0s .. 0s" is the giveaway). Use
+`fs.readFileSync` with ABSOLUTE paths in `node -e` snippets — `require()`
+with relative paths fails confusingly across the shell's cwd resets. And
+`node` is not on PATH OUTSIDE `nix develop`: every half of a compound shell line that runs
 node needs its own `nix develop -c`, including `$(...)` substitutions that
 generate `--dump` time lists. Shell loops must be bash syntax — the login
 shell is fish, but the Bash tool runs bash.)
@@ -891,6 +910,12 @@ warm-up first: dump pixels, long windows, rig/seed/wall-clock sweeps).
 Benchmark/instrumentation-flavoured slugs are prone to (c) — their display
 may depend on measured real elapsed time, which the deterministic harness
 pins — so suspect it early on such names rather than burning ten runs.
+For a TRIGGER-heavy original that looks entry-gated (`--controls-*` accepts
+`trigger` controls and records them in `controlsApplied`), give it ONE
+combined fire-everything-in-dependency-order run, then conclude (c) — don't
+burn runs on trigger orderings. And before any orig-unrenderable call, run
+one unrelated slug as a harness-sanity control (use a unique label so you
+don't collide with a concurrent judge in that slug's out/ directory).
 Score for this verdict is always 0 with an explicit note in `summary` that
 the score records "no comparison obtainable", not port quality — never score
 the port's solo render.

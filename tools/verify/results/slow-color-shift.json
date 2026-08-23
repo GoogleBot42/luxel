@@ -1,0 +1,48 @@
+{
+  "slug": "slow-color-shift",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same pattern — a static-wavelength train of sharp rainbow pulses on the strip that sways side-to-side on a 9.82 s sinusoid while the hue rotates once every 6.55 s — with the port matching every period and phase exactly but under-driving two amplitudes: its sway excursion is only ~55% of the original's and its within-pulse hue spread is ~1/5 of the original's.",
+  "observations": [
+    "Both sides render, no compile or runtime errors, on every run from t=0 to t=500 s. brightnessTrend 'steady' on both; zeroMotionFrames 1 (the mandatory first frame) on both over 1000 captured frames.",
+    "STRUCTURE — pulse train. Both draw a periodic train of sharp bright pulses separated by hard-black gaps. On the default 60 px strip, parabolic-interpolated peak positions give a spatial period of 12.566 px on the ORIGINAL (constant to +/-0.005 px across all peaks and all times; 12.566 px = 4*pi px, i.e. exactly 0.500 rad of wave phase per pixel) and 12.083 px on the PORT (0.520 rad/px). That is 4.777 waves across the strip on the original vs 4.967 on the port — the port is ~4.0% denser. Confirmed at --pixels 300, where 24 peaks give mean spacing 12.566 (orig) / 12.083 (port); the wavelength is fixed in PIXELS on both sides, not a fraction of the strip, so both are pixel-index driven.",
+    "PULSE SHAPE matches closely. At t=0 the leading pulse reads orig 28,107,214,253,179,73,14,1 and port 22,98,210,253,175,66,11,0 (max-channel per pixel) — nearly identical profiles. FWHM is 3.3 px on the orig and 3.2 px on the port, i.e. 0.263 vs 0.265 of a wavelength: identical duty cycle. Lit runs are ~8 px with ~4 px of true black (0,0,0) between them on both sides.",
+    "MOTION — sway period and phase are EXACT. Tracking the spatial-DFT phase of the k~4.8 component over 240 dumps across 60 s and sinusoid-fitting gives a sway period of 9.821 s on BOTH sides, with the same sign and the same phase (both reach their leftmost extreme at t~2.5 s and their rightmost at t~7.5 s). Fit residual rms is 0.83 px against 7.05 px signal (orig) and 0.47 vs 3.89 (port): the sway is essentially a pure sinusoid on both.",
+    "MOTION AMPLITUDE — the headline divergence. Sway amplitude is +/-9.98 px (19.96 px peak-to-peak, = +/-0.79 wavelength, +/-5.0 rad of wave phase) on the ORIGINAL and only +/-5.50 px (11.00 px pk-pk, +/-0.46 wavelength, +/-2.86 rad) on the PORT. The port swings 55% as far — a ratio of 1.81. Direct peak tracking corroborates: over t=0..12 s the original's leading peak traverses -6.9 px .. +13.1 px while the port's traverses -2.8 px .. +8.8 px. This shows up in the waterfalls as noticeably deeper S-curves on the original, and in the stats as motion 9-10 (orig) vs 6 (port) at 10 fps and 5 vs 3 at 20 fps, consistently at t=20, 100, 240 and 460 s.",
+    "A slow linear drift rides on top of the sway, also under-scaled by the same factor: -0.047 px/s on the orig vs -0.026 px/s on the port (about -24 px vs -13 px over the 500 s survey).",
+    "COLOR — the hue rotation is a near-perfect match. Brightness-weighted circular-mean hue unwrapped over the 500 s survey gives 76.237 turns (orig) vs 76.252 turns (port): 6.5520 s vs 6.5506 s per full hue cycle, a 0.02% difference, same direction (+). Rate is flat across the window (first half 0.15277 vs second half 0.15248 turns/s on the orig; 0.15279 / 0.15253 on the port) — no drift, no divergence.",
+    "COLOR — the hue gradient ALONG the strip also matches: linear fit of unwrapped hue vs pixel index averages 0.417%/px on the orig and 0.419%/px on the port (5.24% vs 5.06% of the hue circle per wavelength).",
+    "COLOR — within-pulse hue spread is the second divergence. After removing that linear-in-x trend, the hue residual between the brightest and dimmest lit pixel averages 15.95% of the hue circle (~57 deg) on the ORIGINAL, range 14.1-17.8% over 240 frames, versus 3.00% (~11 deg), range 2.0-4.0%, on the PORT. Concretely at t=0 the orig's leading pulse runs hue 4-13-20-22-19-12 (%) across its 6 lit pixels while the port's runs 1-3-5-6-6-5; at t=10 s orig 66-72-74-71-64 vs port 55-57-58-58-58-56. The original's pulse is visibly polychromatic across its own width (core hue-shifted ~1/6 of the wheel from its edges); the port's pulse is close to single-hued at any instant, carrying only the slow gradient. Reproduced on a 12 px strip too (orig within-pulse span 23%, humped at the core; port 12%, monotonic).",
+    "The port's spatial spectrum shows a stronger 2nd harmonic than the original at t=0 (k=10 magnitude 15.2 vs 7.5) — consistent with its slightly narrower/denser wave, not with a different waveform.",
+    "NO FRAME-RATE COUPLING on either side. Rendering the same window at 10, 20 and 40 fps and reading the leading peak's position at t=0,2,...,18 s gives the same trajectory on each side to within ~0.3 px (e.g. orig at t=14 s: 11.7 / 11.4 / 11.2 px; port at t=8 s: 8.2 / 8.2 / 8.3 px). Both engines are time-based, so the fps mismatch class of bug is absent.",
+    "SEED-INDEPENDENT on both sides: seed 1234 renders byte-identical frames to seed 1 at t=0 for both orig and port. The pattern has no stochastic component.",
+    "NO REGIMES / NO MODES. The 500 s survey waterfall is one homogeneous zigzag texture on both sides, and --skip runs parked at t=20, 100, 240 and 460 s all show the same structure and the same stats. The full repeat is ~19.66 s (3 hue cycles = 2 sway cycles), matching the survey's autocorrelation peaks at lag 98-99 frames @ 5 fps on both sides.",
+    "CONTROL SURFACE: --probe-controls reports '(no settable controls)' on BOTH sides — the control surfaces match (both empty). No dial work was possible or needed."
+  ],
+  "dials": [],
+  "feedback": [
+    "Main fix: the port's side-to-side sway is under-scaled. On a 60 px strip the original's wave train slides +/-9.98 px (a full 19.96 px peak-to-peak, +/-0.79 of its own 12.57 px wavelength) on a 9.82 s sinusoid; the port slides only +/-5.50 px (11.0 px pk-pk). The period and phase are already exact — only the excursion needs multiplying by ~1.81. Equivalently, express it in wave-phase radians: the original's shift term has amplitude 5.0 rad, the port's 2.86 rad.",
+    "The same under-scaling shows in the slow linear drift that rides under the sway: original -0.047 px/s, port -0.026 px/s (same 1.8x). If the shift comes from one accumulator, fixing its gain should correct both at once.",
+    "Second fix: the port's pulses are nearly single-hued. The original shifts hue by ~16% of the hue wheel (~57 deg) between a pulse's dim edge and its bright core — the pulse reads as a small rainbow across its own 6-8 lit pixels (e.g. hue 4% at the edge rising to 22% at the core, then falling to 12%). The port only manages ~3% (~11 deg), so its pulses read as one colour. Increase the brightness/wave-amplitude-coupled hue term by roughly 5x. Do NOT touch the linear hue-vs-position gradient (0.417%/px) or the hue-vs-time rotation (6.552 s/turn) — both are already correct to within 0.5%.",
+    "Third, cosmetic: the port's spatial wavelength is 12.083 px where the original's is 12.566 px (exactly 4*pi px, i.e. 0.500 rad of phase per pixel; the port is using 0.520 rad/px). Change the per-pixel phase step from 0.520 to 0.500 to get 4.777 waves on a 60 px strip instead of 4.967. This is a ~4% effect and the least visible of the three.",
+    "Nothing else needs touching: pulse width/duty (FWHM 0.264 of a wavelength), black-gap depth (true 0,0,0), peak brightness, mean brightness (34.3 vs 34.6), hue rotation rate and direction, sway period and phase, fps-invariance, seed-independence and pixel-index-driven (not normalized-coordinate) geometry all already match the original."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-500",
+    "probe",
+    "sxs-dump60",
+    "late-20",
+    "late-100",
+    "late-240",
+    "late-460",
+    "fps10",
+    "fps20",
+    "fps40",
+    "px300",
+    "px12",
+    "seed1234"
+  ]
+}
