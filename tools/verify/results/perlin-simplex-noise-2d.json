@@ -1,0 +1,165 @@
+{
+  "slug": "perlin-simplex-noise-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same 2D noise-field-through-a-3-colour-palette pattern with matching spatial scale and a complete 12-slider control surface, but the port animates ~3.0x too slowly, uses a 90-degree-spaced palette triad where the original uses 120 degrees, has a Motion slider that never changes its animation rate, and silently drops the stripe overlay whenever AutoColor is off.",
+  "observations": [
+    "Both sides compile and run clean (no compileError/runtimeError), both report wantsSensors:true and were fed the beat120 synthetic sensor signal on every run. Default rig is grid 16x16 / 256 px.",
+    "STRUCTURE MATCHES. Both draw a 2D value-noise field mapped through a discrete 3-colour palette plus a dark/black level. Spatial autocorrelation measured on a 48x48 re-render along x: orig lag1 0.65, lag2 0.29, lag3 -0.06; port lag1 0.65, lag2 0.30, lag3 -0.05 — identical feature scale. Time-averaged column/row brightness profiles over a 100 s window are flat on both (orig cols 37-58, port cols 37-46), i.e. neither has a stuck bright/dark region.",
+    "SPEED: port is ~3.0x too slow. With AutoColor=0 (monotone fire palette, so luminance tracks the noise value), whole-frame Pearson correlation against t=0 crosses zero at t=0.108 s on the original and t=0.306 s on the port; the first correlation minimum is -0.84 at 0.20 s (orig) vs -0.80 at 0.60 s (port). Ratio 2.8-3.0x at every match point. `motion` avg at 20 fps baseline: orig 23.9, port 9.3 (untouched); orig 20.3, port 7.9 (AutoColor=0).",
+    "The slowdown is NOT frame-rate coupling. Rendering each side at 10/20/40 fps: orig motion 35/20/11, port 15/8/4 — per-frame motion halves as fps doubles on BOTH sides, and the decorrelation curves are identical in SECONDS across all three rates (orig 0.1 s -> 0.13/0.07/-0.01; port 0.1 s -> 0.86/0.85/0.85). Both sides are time-based; the port simply has a ~3x smaller time constant on its noise-field time term.",
+    "PALETTE GEOMETRY IS WRONG. The original always renders exactly three hues spaced 120 degrees apart, rotated by the palette dial: offset 0 -> 0/120/240, 0.15 -> 65/185/305, 0.3 -> 10/130/250, 0.5 -> 60/180/300, 0.7 -> 105/225/345, 0.85 -> 50/170/290. The port's three hues are 90 degrees apart at offset 0 (0/90/180) and irregular elsewhere (0.15 -> 50/140/230, 0.3 -> 105/195/285, 0.5 -> 0/180/265). Untouched defaults: orig hues ~96 (chartreuse) / ~216 (azure) / ~336 (rose), e.g. RGB (90,225,0), (0,51,129), (110,0,44); port hues 0 (red) / 90 (chartreuse) / 180 (cyan), e.g. RGB (248,0,0), (98,197,0), (0,80,80).",
+    "Port is also darker/greyer in the palette: at PaletteOffset=0, 24.4% of pixels are near-black on the port vs 17.6% on the original. Channel means at untouched default over 6 s: orig R/G/B 39.7/38.2/40.9 (balanced), port 44.3/54.1/26.0 (green-biased, blue-starved).",
+    "STRIPE OVERLAY IS DROPPED IN THE AutoColor=0 MODE ON THE PORT. With sliderAutoColor=0 and sliderNumberOfStripes swept over 0.05/0.3/0.6/0.92, the port produced FOUR BYTE-IDENTICAL renders (md5 d222d1..), identical to the no-stripes render; the original produced four distinct renders. Confirmed on brightness too: AutoColor=0 + StripeWeight=0.8 gives orig meanBrightness 17 (stripes cut ~half the light) and port 35 (unchanged from no stripes). With AutoColor left at its default (=on) the port's NumberOfStripes works normally, so the stripe layer is gated on the wrong condition.",
+    "Visually at AutoColor=0 + stripes the original overlays broad soft glowing bars that sweep across the noise; the port at the same settings is bare noise.",
+    "RESOLUTION BEHAVIOUR DIFFERS (invisible on the default rig). Re-rendered at --grid 48x48, the port's contact sheet is BYTE-IDENTICAL to its 16x16 render (md5 064dda00 both) — every 3x3 block is uniform (256/256 blocks), i.e. the port quantizes BOTH x and y to 16 steps. The original quantizes only x (100% of horizontally adjacent pixels inside a 3-block are equal, ~14.8 distinct colours per 48-px row) while y stays continuous (only 10% of vertically adjacent pixels equal, ~41.1 distinct colours per 48-px column). So the original gains real detail on a taller grid and the port does not.",
+    "STEADY STATE IS FINE ON BOTH. --skip 120 --seconds 12 --fps 20 reproduces the baseline exactly (orig mean 39 motion 24; port mean 42 motion 9); brightnessTrend 'steady' on both, zeroMotionFrames 1 (the unavoidable first frame). Nothing decays, freezes, or saturates.",
+    "Both sides are completely seed-independent: seeds 1, 7 and 1234 render byte-identically on each side.",
+    "60 s / 10 fps and 240 s / 5 fps surveys show a single homogeneous regime on both sides — no mode rotation, no slow palette walk, no long-period beat. The only distinct 'regimes' are the ones the mode dials select (NoiseType 0/1, AutoColor 0/1, BassThreshold 0 vs >0), each of which was inspected separately.",
+    "CONTROL-SURFACE MISMATCH: both sides expose 12 sliders and the probe calls all 24 responsive, but 5 names differ — orig sliderPerlinOrSimplex / sliderScale / sliderAutoColorPalette / sliderX_Offset / sliderY_Offset vs port sliderNoiseType / sliderZoom / sliderPaletteOffset / sliderXOffset / sliderYOffset.",
+    "BassThreshold semantics differ. On the original it is effectively binary: v=0 gives motion 23.9, and EVERY value from 0.02 to 1.0 gives a byte-identical render with motion 46.4 (measured over a 12 s / 20 fps window). On the port it is continuous: motion 9.5 at 0, 58.9 at 0.02-0.1, 39.2 at 0.5, 29.3 at 0.95-1.0.",
+    "In bass-reactive mode (BassThreshold=0.1) both sides show beat-locked horizontal banding in the rhythm image, but the motion-series autocorrelation combs differ: the original peaks at lags 4, 8, 19, 23, 27, 31 (dominant 4-frame / 0.20 s comb at 20 fps) while the port peaks at 9, 17-18, 26-27, 35-36 (~8.9-frame / 0.45 s comb)."
+  ],
+  "dials": [
+    {
+      "name": "PerlinOrSimplex (orig sliderPerlinOrSimplex) / NoiseType (port sliderNoiseType)",
+      "origEffect": "Two-mode switch selecting the noise kernel; boundary is v > 0.5 (v=0.5 still renders mode 0). Modes are visibly different noise textures at the same scale.",
+      "portEffect": "Same two-mode switch, but the boundary is v >= 0.5 (v=0.5 already renders mode 1). Renamed from sliderPerlinOrSimplex.",
+      "matches": false
+    },
+    {
+      "name": "Scale (orig sliderScale) / Zoom (port sliderZoom)",
+      "origEffect": "Continuous; all 11 sweep values 0..1 render distinctly. Larger values give finer noise (spatial coherence measured on a 16x16 fire-palette render drops from 0.31 at v=0 to ~0.00 at v>=0.4).",
+      "portEffect": "Continuous and live in the same direction and roughly the same magnitude; all 11 values distinct. Renamed from sliderScale.",
+      "matches": true
+    },
+    {
+      "name": "Motion (sliderMotion)",
+      "origEffect": "Raises frame-to-frame motion from 20.3 (v=0) to 26.4 (v=1), and — more importantly — changes the temporal CHARACTER: at v=0 the field is periodic (self-correlation recovers to +0.79 at 0.4 s and keeps oscillating); at v>=0.25 it becomes non-repeating (correlation collapses to ~0 by 0.1 s and never recovers).",
+      "portEffect": "Reshuffles the field (all five sweep values render distinctly) but the animation rate is PINNED: motion avg 7.9-8.0 at v=0, 0.25, 0.5, 0.75, 1.0, and the self-correlation zero-crossing sits at 0.306-0.328 s at every setting. The port stays periodic at every Motion value (correlation recovers to +0.84 at 1.2 s even at v=1).",
+      "matches": false
+    },
+    {
+      "name": "AutoColor (sliderAutoColor)",
+      "origEffect": "Two-mode switch (palette-cycling colour vs a fixed monotone fire ramp); boundary v > 0.5. Mean brightness 33.6 in the fire mode vs 39.6 in the colour mode.",
+      "portEffect": "Same two modes but boundary v >= 0.5. ADDITIONALLY, turning it to 0 disables the port's stripe overlay entirely (see NumberOfStripes) — the original keeps its stripes in this mode.",
+      "matches": false
+    },
+    {
+      "name": "AutoColorPalette (orig sliderAutoColorPalette) / PaletteOffset (port sliderPaletteOffset)",
+      "origEffect": "Continuous palette rotation; all 21 sweep values distinct, v=0 and v=1 render identically (clean wrap). The three palette hues stay exactly 120 degrees apart at every offset.",
+      "portEffect": "Continuous, all 21 values distinct, v=0/v=1 also wrap cleanly — but the three hues are 90 degrees apart at offset 0 and irregularly spaced at other offsets. Renamed from sliderAutoColorPalette.",
+      "matches": false
+    },
+    {
+      "name": "NumberOfStripes (sliderNumberOfStripes)",
+      "origEffect": "Quantised into 5 levels with boundaries at exactly 0.25 / 0.50 / 0.75 / 1.00 (i.e. floor(v*4)), verified with a 41-point hash-cluster sweep at 0.025 spacing. Higher levels move the column-profile DFT energy from k=1 to k=2/k=3 (more, narrower stripes). Works in every mode, including AutoColor=0.",
+      "portEffect": "Quantised into 6 levels with boundaries at 0.1667 / 0.3333 / 0.5000 / 0.6667 / 0.8333 (i.e. floor(v*6)) — so the same dial value picks a different stripe count over almost the whole range. Worse: with sliderAutoColor=0 the dial is completely inert (four sweep values byte-identical, and identical to the no-stripes render).",
+      "matches": false
+    },
+    {
+      "name": "StripeSpeed (sliderStripeSpeed)",
+      "origEffect": "Continuous; all 11 values distinct. v=0 freezes the stripe layer (NumberOfStripes then has no visible effect on either side).",
+      "portEffect": "Continuous, all 11 values distinct, and v=0 likewise freezes the stripes. Same character.",
+      "matches": true
+    },
+    {
+      "name": "StripeWeight (sliderStripeWeight)",
+      "origEffect": "Quantised into 5 levels via floor(v*4) (0.1-step sweep groups: [0,0.2],[0.3,0.4],[0.5,0.7],[0.8,0.9],[1.0]). Acts as an overall weight on the noise layer: meanBrightness 7 at v=0, 11 at 0.5, 34 at 1.0.",
+      "portEffect": "Same quantisation but the top level is missing — [0.8,0.9,1.0] all collapse to one level, giving 4 levels instead of 5. Brightness response is close but slightly brighter: 9 / 18 / 35 at v=0/0.5/1.0 vs orig 7 / 11 / 34.",
+      "matches": false
+    },
+    {
+      "name": "X_Offset (orig sliderX_Offset) / XOffset (port sliderXOffset)",
+      "origEffect": "Continuous pan of the noise field along x; all 11 values distinct, v=0 equals the untouched default.",
+      "portEffect": "Continuous, all 11 values distinct, v=0 equals its untouched default. Same character. Renamed.",
+      "matches": true
+    },
+    {
+      "name": "Y_Offset (orig sliderY_Offset) / YOffset (port sliderYOffset)",
+      "origEffect": "Continuous pan along y; all 11 values distinct, v=0 equals the untouched default.",
+      "portEffect": "Continuous, all 11 values distinct, v=0 equals its untouched default. Same character. Renamed.",
+      "matches": true
+    },
+    {
+      "name": "ShowProgress (sliderShowProgress)",
+      "origEffect": "Two-mode switch with a small effect (probe maxDelta 1.03) — a low-amplitude indicator overlay. Boundary v > 0.5.",
+      "portEffect": "Same small two-mode overlay (probe maxDelta 1.28) but boundary v >= 0.5.",
+      "matches": false
+    },
+    {
+      "name": "BassThreshold (sliderBassThreshold)",
+      "origEffect": "Effectively binary against the beat120 feed: v=0 leaves the pattern non-reactive (motion 23.9 over 12 s at 20 fps); every value from 0.02 to 1.0 gives an identical bass-reactive render with motion 46.4. Reaction shows a 4-frame (0.20 s) comb in the motion autocorrelation.",
+      "portEffect": "Continuous rather than binary: motion 9.5 at v=0, 58.9 at v=0.02-0.1, 39.2 at v=0.5, 29.3 at v=0.95-1.0. Its reaction comb is ~8.9 frames (0.45 s), not 4 frames. So the port both over-reacts at low thresholds and under-reacts at high ones relative to the original's flat 46.4.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Speed: the port's noise-field time term is ~3.0x too small. Measured on the fire-palette (AutoColor=0) render, the original's frame self-correlation crosses zero at 0.108 s and bottoms at -0.84 at 0.20 s; the port does the same at 0.306 s and 0.60 s. Multiply the port's time advance into the noise field by 3.0 and re-check that zero-crossing lands at ~0.11 s and that `motion` avg at 20 fps rises from 9.3 to ~24 at untouched defaults.",
+    "Palette: the original's three palette colours are always exactly 120 degrees apart in hue (a full RGB triad) and the palette dial rotates all three together — verified at offsets 0, 0.15, 0.3, 0.5, 0.7, 0.85 giving 0/120/240, 65/185/305, 10/130/250, 60/180/300, 105/225/345, 50/170/290. The port produces 0/90/180 at offset 0 and irregular spacings elsewhere. Rebuild the palette as three evenly spaced hues (offset, offset+120, offset+240) rather than whatever 90-degree/4-stop table is in there now.",
+    "Palette phase at default: untouched, the original renders chartreuse (~96 deg) / azure (~216 deg) / rose (~336 deg); the port renders red (0) / chartreuse (90) / cyan (180). After fixing the 120-degree spacing, set the default offset so the triad lands near 96/216/336.",
+    "Palette darkness: the port leaves 24.4% of pixels near-black vs the original's 17.6% at PaletteOffset=0, and its channel balance at defaults is green-heavy (R/G/B 44/54/26 vs the original's balanced 40/38/41). Check the value/brightness curve applied to the noise value, not just the hues.",
+    "Stripes are gated on the wrong condition: with sliderAutoColor=0 the port drops the stripe overlay entirely (four NumberOfStripes values render byte-identically, and meanBrightness stays 35 where the original's falls 34 -> 17 at StripeWeight=0.8). The original draws its stripes in BOTH colour modes. Un-gate the stripe layer from AutoColor.",
+    "NumberOfStripes quantisation: the original snaps the slider with floor(v*4) — boundaries at exactly 0.25 / 0.50 / 0.75 / 1.00, five distinct looks. The port uses floor(v*6) — boundaries at 0.1667 / 0.3333 / 0.5000 / 0.6667 / 0.8333, six distinct looks. Change the port to 5 levels with quarter boundaries; a 0.025-step hash sweep is the cheap regression check.",
+    "StripeWeight quantisation: the original has five levels (floor(v*4), v=1.0 being its own top level); the port merges [0.8,1.0] into one, so it only has four. Restore the fifth level.",
+    "Binary-mode boundaries are off by one hair on all three switch dials (NoiseType, AutoColor, ShowProgress): the original flips only for v > 0.5, the port flips at v >= 0.5. Only the exact value 0.5 is affected, but it is trivially fixable and it is the same off-by-one in three places.",
+    "Motion slider is functionally dead on the port: `motion` sits at 7.9-8.0 for v = 0, 0.25, 0.5, 0.75, 1.0 and the self-correlation zero-crossing never moves off 0.31 s. On the original the dial both speeds the field up (motion 20.3 -> 26.4) and, from v>=0.25, converts it from a repeating loop (correlation recovers to +0.79 at 0.4 s) into a non-repeating drift (correlation collapses to ~0 and stays). The port must gain that drift term.",
+    "BassThreshold: the original treats any non-zero value identically (all values 0.02..1.0 render byte-identically, motion 46.4) — it is an on/off enable, not a level. The port scales its reaction with the value (motion 58.9 -> 29.3 across 0.02 -> 1.0). Also the port's bass reaction cycles at ~0.45 s where the original's cycles at ~0.20 s.",
+    "Control names: rename the port's sliders to match the original exactly — sliderNoiseType -> sliderPerlinOrSimplex, sliderZoom -> sliderScale, sliderPaletteOffset -> sliderAutoColorPalette, sliderXOffset -> sliderX_Offset, sliderYOffset -> sliderY_Offset. The other seven already match.",
+    "Resolution: the port quantizes the y coordinate to 16 steps (its --grid 48x48 render is byte-identical to its 16x16 render, every 3x3 block uniform), while the original's y is continuous with the rig height. Invisible on the default 16x16 grid but wrong on any taller panel — sample the noise at the real y, not a 16-step index.",
+    "No regression needed on: spatial feature scale (identical autocorrelation out to lag 3 at 48x48), steady-state stability (both flat at t=120 s), seed independence (both byte-identical across seeds 1/7/1234), fps independence (both time-based at 10/20/40 fps), and the Scale/Zoom, StripeSpeed and X/Y offset dials (continuous and matching on both sides)."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dumpA",
+    "decorr",
+    "fire-decorr",
+    "steady-late",
+    "seed7",
+    "seed1234",
+    "grid48",
+    "g48d",
+    "gq-32x32",
+    "gq-24x24",
+    "gq-16x48",
+    "gq-48x16",
+    "colprof",
+    "fps-10",
+    "fps-20",
+    "fps-40",
+    "ac-0",
+    "ac-0.5",
+    "ac-1",
+    "sc-0",
+    "sc-0.5",
+    "sc-1",
+    "scale-0",
+    "scale-0.25",
+    "scale-0.5",
+    "scale-0.75",
+    "scale-1",
+    "zoom-0",
+    "zoom-0.2",
+    "zoom-0.4",
+    "zoom-0.6",
+    "zoom-0.8",
+    "zoom-1",
+    "ms-nt-0 .. ms-nt-1 (21-point NoiseType/PerlinOrSimplex hash sweep)",
+    "ms-acx-0 .. ms-acx-1 (21-point AutoColor hash sweep)",
+    "ms-pal-0 .. ms-pal-1 (21-point palette hash sweep)",
+    "pq-0, pq-0.15, pq-0.3, pq-0.5, pq-0.7, pq-0.85 (palette hue-triple dumps)",
+    "mot-0, mot-0.25, mot-0.5, mot-0.75, mot-1",
+    "str-0, str-0.25, str-0.5, str-0.75, str-1",
+    "sw-0, sw-0.5, sw-1",
+    "nsA-0 .. nsA-1 (41-point NumberOfStripes boundary sweep at 0.025 spacing)",
+    "sw2-scale-*, sw2-sspeed-*, sw2-sweight-* (11-point sweeps)",
+    "sw3-xoff-*, sw3-yoff-*, sw3-prog-*, sw3-bass-* (11-point sweeps)",
+    "bassL-0, bassL-0.02, bassL-0.05, bassL-0.1, bassL-0.5, bassL-0.95, bassL-1",
+    "stO-*, stB-*, stC-* (stripe-structure runs on a 64x8 grid)",
+    "ix-ac0-*, ix-ac1-*, ix-ss-*, ix-mo-* (control-interaction matrix for NumberOfStripes)"
+  ]
+}

@@ -581,6 +581,10 @@ even when the value is irrelevant (the setter call itself reseeds something).
 This too mirrors PB, where setting a control always invokes the control function.
 So a probe `responsive` verdict needs value-dependence confirmed — 0 and 1 must
 differ from EACH OTHER, not just from untouched — before you call a dial live.
+And the interaction cuts BOTH ways: a dial that is live when set alone can go
+completely inert once a second control is pinned (a port gating one feature on
+another's value). When you find a dial-gating structure, re-check at least one
+RESPONSIVE dial inside each gating state too — not only the inert ones.
 
 Picker footgun: an `hsvPicker`/`rgbPicker` needs ALL THREE components
 (`name=h,s,v`). Passing a single value leaves the other two at 0 — for an
@@ -600,7 +604,11 @@ decisive recipe: render ONE short deterministic window at many dial values,
 hash each frame dump (or the PNG), and cluster — hash changes mark the exact
 boundaries (two decimal places for ~20 two-second runs), and byte-identical
 hashes prove two "modes" are actually the same look. Much stronger than
-reading stats: it distinguishes round(v*3) from floor(v*4) directly. And
+reading stats: it distinguishes round(v*3) from floor(v*4) directly.
+One caution: hash-clustering runs are tempting to do at very low fps for
+speed, but on a sensor-fed side that aliases the 2 Hz beat away and fakes
+"this dial only works near v=X" — keep them at ≥10 fps (20 for beat-locked
+dials) just like surveys. And
 mode-gated sliders (live only inside one mode) probe inert from the untouched
 mode — when a pattern has a mode selector, re-sweep the secondary dials INSIDE
 each mode before recording any of them as inert.

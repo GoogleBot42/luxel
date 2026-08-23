@@ -9,11 +9,13 @@ Cleared entries move to Gitea or the aggregate report.
   `array index out of bounds` at frame 0 on any rig under 144 px (bisected:
   fails ≤128, fails at frame 13 @140, clean ≥144). Either clamp/ignore
   out-of-range writes engine-side or bump that slug's manifest rig ≥144.
-- **Wall-clock builtins may not be wired** — `--wall-clock` sweeps across a
-  full simulated day (4 instants) changed NOTHING on either side of
-  `naturallightsync` (a pattern whose premise is time-of-day sync). Either
-  both sides ignore the clock or engine clock builtins return constants
-  regardless of `lx_set_wall_clock`. Check engine wiring during the fix pass.
+- **Wall-clock builtins NOT wired — CONFIRMED** (upgraded from suspected):
+  `pixelclock` (a pattern that exists to display time) renders byte-identical
+  output at ELEVEN wall clocks spanning epoch 0..2000000000, on BOTH sides;
+  `naturallightsync` corroborates across a simulated day. Engine clock
+  builtins return constants regardless of `lx_set_wall_clock`. Every clock
+  pattern's core behaviour is unjudgeable until fixed; re-judge pixelclock
+  and naturallightsync after the engine fix.
 - (previously queued, from batches ≤30): fast-palette-blending silent
   all-black original; fire-blue/fire-red exact-32.768s freezes with
   fps-dependent onset; chill-confetti delta clamp ~100 ms; single-set
