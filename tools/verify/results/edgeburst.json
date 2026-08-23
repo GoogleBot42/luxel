@@ -1,0 +1,40 @@
+{
+  "slug": "edgeburst",
+  "verdict": "match",
+  "score": 8,
+  "confidence": "high",
+  "summary": "Port reproduces the pattern exactly — same expanding two-sided rainbow wavefront, same palette, phase-aligned frames are byte-identical — but its whole timeline runs ~11% fast (burst period 2.950 s vs the original's 3.277 s, a clean 0.900x scale).",
+  "observations": [
+    "Both sides: single-regime, perfectly periodic pattern on the 60 px strip. A symmetric wave is born at the strip centre (pixel 30), expands outward to both ends, and is followed by a trailing edge that also sweeps outward, so the lit region becomes a widening annulus that finally exits at both ends; then the strip is fully dark until the next burst. Survey (60 s @ 5 fps) shows ~18 identical chevrons on each side — no modes, no drift, no per-burst variation.",
+    "Timing, measured from brightness on/off transitions over 40 s @ 20 fps: original bursts every 3.277 s (11 intervals, alternating 3.30/3.25 frame-quantised), lit for 1.50-1.55 s, dark gap 1.73-1.78 s. Port bursts every 2.950 s (13 intervals, dead constant), lit for 1.40 s, dark gap 1.55 s.",
+    "The offset is a pure global time scale, not a shape change: original onsets 0.85 / 4.15 / 7.40 / 10.70 s multiplied by 0.900 give 0.765 / 3.74 / 6.66 / 9.63 s, versus the port's measured 0.75 / 3.70 / 6.65 / 9.60 s; the original's 1.50-1.55 s lit duration scaled by 0.900 gives 1.35-1.40 s, versus the port's measured 1.35-1.40 s. Every phase of the animation is compressed by the same 0.900 factor.",
+    "Phase-aligned per-pixel dump (original at burst-phase t, port at the same phase 0.10 s earlier) shows the two frames are IDENTICAL at phase 0.10 s (mean abs diff 0.00, max channel diff 0) and near-identical at phases 0.00-0.20 (max diff 7-8). Divergence after that is purely the accumulating 11% speed difference, not a different drawing.",
+    "Wavefront speed on the default 60 px rig: original half-width grows ~3.65 px per 0.1 s (~36.5 px/s), port ~3.93 px per 0.1 s (~39.3 px/s); the original's front reaches the strip ends ~0.75-0.80 s after onset, the port's ~0.65-0.70 s.",
+    "Palette is the same on both and identical burst to burst: black -> deep purple/magenta -> magenta -> red -> orange -> yellow -> green at the wave core. Per-burst peak channel means are R98 G53 B41, brightness 64, on EVERY burst of both sides across 40 s (one port burst read R99, i.e. rounding).",
+    "Spatial symmetry matches: both are mirror-symmetric about pixel 30 with no off-by-one, mirroring or index-direction difference.",
+    "Both sides are fps-invariant (time-based, not frame-stepped): burst period is 3.28 s on the original and 2.95 s on the port at 5, 20 and 40 fps alike.",
+    "Both sides are resolution-independent: re-rendered at --pixels 300, onsets and durations are unchanged (orig 0.85/4.15/7.40/10.70 s, 1.50-1.55 s lit; port 0.75/3.70/6.65/9.60 s, 1.40 s lit) and the waterfall shows the same chevron geometry, just finer.",
+    "Steady state is healthy on both: at --skip 120 s the original is still bursting every 3.25-3.30 s and the port every 2.95 s, with the same brightness and colour as at t=0. No decay, no freeze, no saturation; brightnessTrend reads 'volatile' on both simply because the pattern alternates bursts with full-black gaps (zeroMotionFrames 58 orig / 62 port out of 120 in the 6 s baseline).",
+    "Seed-independent: seed 1234 reproduces the same onsets and intervals as seed 1 on both sides; no stochastic element in either.",
+    "Control surface matches: --probe-controls reports NO settable controls on either side, so there is no dial-surface gap."
+  ],
+  "dials": [],
+  "feedback": [
+    "Only one thing is wrong: the port's global animation rate. Its whole timeline is compressed by a factor of 0.900 — burst period 2.950 s where the original is 3.277 s, lit phase 1.40 s where the original is 1.50-1.55 s, dark gap 1.55 s where the original is ~1.77 s. Slowing the port's time advance by 10% (multiply its rate by 0.900, equivalently divide its period-setting constant by 0.900) should make it match on every axis at once; do not adjust the wavefront speed and the gap length separately, they are the same single scale error.",
+    "Cross-check after the fix: burst onsets on the default 60 px strip should land at 0.85, 4.15, 7.40, 10.70, 13.95 s (20 fps, seed 1), with the strip lit for 1.50-1.55 s each time and fully dark for ~1.77 s between bursts.",
+    "Nothing else needs touching: palette, wave profile, centre-out geometry, symmetry about pixel 30, per-burst invariance, fps-invariance and resolution-independence are already exact — a phase-aligned frame comparison came out byte-identical."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "long20",
+    "dump1",
+    "dump2",
+    "dump3",
+    "seed1234",
+    "fps40",
+    "late-skip120",
+    "px300"
+  ]
+}

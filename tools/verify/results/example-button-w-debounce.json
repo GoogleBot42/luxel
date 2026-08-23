@@ -1,0 +1,41 @@
+{
+  "slug": "example-button-w-debounce",
+  "verdict": "match",
+  "score": 8,
+  "confidence": "medium",
+  "summary": "Both sides render an identical solid full-brightness green strip for the entire idle run (byte-identical over 240 s); the only divergence is the length of the initial red settling flash — 50 ms on the original vs 30 ms on the port — and the button press itself can never be exercised by the harness, so the pressed branch is unverified.",
+  "observations": [
+    "Neither side exposes any control (meta.json controls list empty on both) and neither binds sensor globals (wantsSensors false on both), so there is no harness-side way to press the button this pattern is built around; everything below is the idle/never-pressed state.",
+    "Steady state, both sides: every one of the 60 pixels is exactly (0,255,0) pure green, meanBrightness 85, motion 0 and motionLit 0 on every captured frame. Confirmed identical over 6 s @ 20 fps, 60 s @ 5 fps, and 240 s @ 2 fps (480 frames, all series single-valued: R 0, G 255, B 0). There is no animation, no cycle and no second regime — the pattern is genuinely static while the button is unpressed.",
+    "Startup transient: BOTH sides begin with the whole strip pure red (255,0,0) and switch once to pure green. This is the pattern's debounce settling, and it is time-based (not frame-stepped) on both sides — the transition lands at the same simulated time at 10/20/40/100/500 fps.",
+    "The transient DURATION differs: at --fps 500 the original's last red frame is at t=0.048 s and the first green at t=0.050 s, while the port's last red is at t=0.028 s and first green at t=0.030 s. So the original holds the initial state for ~50 ms and the port for ~30 ms — a ~1.7x shorter settle on the port.",
+    "That difference is sub-frame at ordinary rates: at --fps 20 the original shows exactly one red frame (zeroMotionFrames 119/120, motion max 170) while the port shows none (zeroMotionFrames 120/120); at --fps 10 neither shows any red; at --fps 40 and above both show red, the original for one frame longer. Nobody watching at a normal frame rate would see the difference.",
+    "No spatial structure to compare: the strip is uniform (a --dump at t=0/0.05/0.1/0.5/1/2 s has exactly one distinct RGB triple across all 60 pixels on both sides), and re-rendering on --rig grid --grid 8x8 reproduces the same solid field with the same single-frame red opener on the original only.",
+    "Seed-independent: --seed 7 and --seed 1234 (20 s @ 10 fps each) give the same static green on both sides, so nothing here is RNG-driven.",
+    "--sensors synth (beat120 fed to both) changes nothing on either side, consistent with wantsSensors false — the button is not routed through any sensor global the harness can drive."
+  ],
+  "dials": [],
+  "feedback": [
+    "The only measurable divergence is the debounce interval itself, which is this pattern's whole subject: the original settles out of its initial state after ~50 ms, the port after ~30 ms. Lengthen the port's debounce window to ~50 ms so the settle time matches (measurable with --fps 500: original's last red frame is t=0.048 s, port's is t=0.028 s).",
+    "No other change is warranted from rendered output: idle colour (pure 0,255,0), brightness (mean 85), uniformity across the strip, staticness, and the time-based (fps-invariant) nature of the settle all already match exactly, over windows up to 240 s.",
+    "UNVERIFIED and untestable from this harness: everything behind an actual button press — the pressed-state colour, whether a press toggles/latches or is momentary, and whether bounces inside the debounce window are correctly rejected. The harness exposes no control and no sensor global that reaches this pattern's input, so both sides sit in the never-pressed branch forever. If a future fixer touches the press path, it needs hardware or a harness input-injection capability to verify, not a snap run."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-early",
+    "late",
+    "sens-synth",
+    "seed7",
+    "seed1234",
+    "fps10",
+    "fps40",
+    "dfps10",
+    "dfps40",
+    "dfps100",
+    "fine500",
+    "grid8"
+  ]
+}
