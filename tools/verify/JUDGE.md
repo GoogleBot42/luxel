@@ -411,6 +411,11 @@ actually draws a straight line. Before reporting "the port bends/breaks the
 feature", confirm with a `--dump` (e.g. brightest-row-per-column monotonicity)
 that the geometry really differs.
 
+**`--dump` times snap to the nearest CAPTURED frame.** Dump spacing finer than
+1/fps silently collapses onto the frame grid (only out-of-window clamps warn) —
+a 0.05 s-spaced list at `--fps 10` really samples every 0.1 s and aliases.
+Match dump spacing to the run's fps, or raise `--fps` for fine sampling.
+
 **Mind Nyquist when tracking phase.** Your dump times ARE the sampling rate for
 the feature you are following: dumps 1 s apart on something rotating about once
 a second show it standing still, and a hair off that, running backwards. Read

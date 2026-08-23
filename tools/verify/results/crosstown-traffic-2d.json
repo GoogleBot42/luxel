@@ -1,0 +1,69 @@
+{
+  "slug": "crosstown-traffic-2d",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Same idea — saturated-hue horizontal/vertical 1-px 'street' bars drawn on black — but the port draws far too many, far too thick, and its bars almost never expire, so the grid saturates into a near-frozen plaid instead of the original's sparse, constantly-turning-over traffic.",
+  "observations": [
+    "Both sides expose the identical control surface: sliderLineWidth, sliderLineSpeed, sliderColorSpeed, all kind 'slider'. No control-surface mismatch.",
+    "Shared vocabulary is right: both draw axis-aligned single-colour bars (some horizontal, some vertical, of varying length) on a pure-black field, in fully-saturated spectrum hues that shift over time. A viewer would recognise the family.",
+    "DENSITY: at untouched defaults on the 16x16 default rig, orig meanBrightness avg 5 (max 9) vs port 18.4 (max 36); over the 60 s survey orig 5 vs port 27. Contact sheets show orig holding ~2-6 bars on screen at any moment for the whole 60 s, while the port packs 15-25.",
+    "DENSITY, exact: --dump on a 48x48 re-render at LineWidth=0.5/LineSpeed=0.5/ColorSpeed=0.5 (label grid48-dump, t=22 s) gives orig 490/2304 pixels lit (21.3%) vs port 2017/2304 (87.5%) — the port is very nearly a solid field.",
+    "THICKNESS: orig bars are exactly 1 px wide at every setting and every grid size measured (16x16 dumps at LineWidth 0/0.5/1; 48x48 dump). Port bars are 2 px at 16x16 and ~3 px at 48x48 untouched/mid-dial — so port thickness scales with the grid while the original's does not (resolution-dependence mismatch, checked at --grid 16x16 and --grid 48x48).",
+    "PERSISTENCE/MOTION is the biggest gap: orig-motion.png filmstrips (12 consecutive frames, 0.55 s) show the original's bars visibly growing, retracting and being wholly replaced — one full scene turnover inside that half-second. The port's filmstrip over the identical frames is essentially a still image repeated 12 times.",
+    "Whole-window rhythm images say the same thing over 12 s (ctl-width-0.5): the original's rhythm is dense short-lived colour blocks — everything transient; the port's is unbroken vertical stripes running the full height of the window with only slow colour drift, i.e. bars that are placed once and never removed.",
+    "With ColorSpeed forced to 0 (ctl-color-0, LineSpeed 0.5), the port's contact sheet from t=20 s to t=31.9 s is near-identical cell to cell — with colour animation removed there is almost no remaining animation at all. The original turns its scene over completely between every one of those cells.",
+    "motion stat across the LineSpeed sweep (LineWidth 0.5, ColorSpeed 0.5, skip 20, 12 s @20 fps): orig 2 / 3 / 5 / 14 at LineSpeed 0 / 0.25 / 0.5 / 1; port 1 / 1 / 1 / 9. The port only starts turning bars over near LineSpeed 1, where the original is already at ~3x that motion. motionLit at untouched defaults: orig avg 15.1, port avg 5.0.",
+    "Startup: the port begins black and ACCUMULATES to its saturated state over the first ~2-3 s and then stays saturated (confirmed at --skip 100: orig sparse, port still packed, meanBrightness 5 vs 23). The original has no such fill-up transient — it is sparse from the first bar onward and stays sparse for the whole 60 s survey.",
+    "sliderLineWidth=0 renders the original completely black (0 lit pixels at t=25 s) — no bars at all — while the port still draws a full set of 1-px bars (52 lit pixels). The port floors the width instead of extinguishing the pattern.",
+    "Not a seed fluke: seed 1234 at the same dialed settings reproduces the same split (orig mean 11 / motion 5, port mean 45 / motion 1).",
+    "Both sides: wantsSensors false, no compile or runtime errors, no harness warnings."
+  ],
+  "dials": [
+    {
+      "name": "sliderLineWidth",
+      "origEffect": "Acts as a density/enable knob, not a thickness knob: at 0 the grid is entirely black, at 0.5 ~5 bars are present (53/256 px lit), at 1 ~9 bars (89/256 px lit). Bar thickness stays 1 px throughout.",
+      "portEffect": "Acts as both density AND thickness, and never turns off: at 0 it still draws a full set of 1-px bars (52/256 lit), at 0.5 it fills 178/256 (70%) with 2-px bars, at 1 it fills 226/256 (88%). Direction of change is right; magnitude and floor are wrong.",
+      "matches": false
+    },
+    {
+      "name": "sliderLineSpeed",
+      "origEffect": "Sets bar turnover/growth rate; motion stat rises 2 -> 3 -> 5 -> 14 across 0 / 0.25 / 0.5 / 1 while mean brightness stays flat at ~11-12, i.e. faster churn at constant on-screen density.",
+      "portEffect": "Same direction but far weaker and coupled to density: motion 1 / 1 / 1 / 9 across the same values, and mean brightness falls 49 -> 48 -> 37 -> 35 as speed rises, i.e. the port only clears its backlog by running fast. At 0-0.5 the port is visually frozen.",
+      "matches": false
+    },
+    {
+      "name": "sliderColorSpeed",
+      "origEffect": "Rate of hue change on the bars; motion 5 at 0 vs 7 at 1 with brightness unchanged (12 both). Small effect because the original's motion is dominated by bar turnover.",
+      "portEffect": "Same character (hue-change rate, motion 1 at 0 vs 3 at 1, brightness 38 both) but it carries almost all of the port's visible animation: with ColorSpeed=0 the port is nearly a still frame over 12 s.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "Cut on-screen bar density by roughly 4-5x. On the 16x16 default rig at mid dials the original holds ~5 bars / ~20% of pixels lit; the port holds ~15-20 bars / ~70%. On 48x48 the gap is 21% lit vs 87% lit.",
+    "Bars must be exactly 1 pixel wide, at every LineWidth setting and every grid size. The port draws 2 px at 16x16 and ~3 px at 48x48 — its width is being computed as a fraction of the grid; the original's is a fixed 1 px.",
+    "Give bars a finite lifetime. The original replaces its entire on-screen set roughly every half second at LineSpeed=0.5; the port's bars persist for the whole 12 s window and only their colour changes. This is the single most visible difference: the port reads as a static plaid wallpaper, the original as flowing traffic.",
+    "Decouple density from LineSpeed. In the original, raising LineSpeed speeds up turnover while on-screen density stays constant (mean brightness ~11-12 at every speed). In the port, density is a backlog that only drains at high speed (mean 49 at speed 0 down to 35 at speed 1).",
+    "LineWidth=0 should extinguish the pattern entirely (the original renders a fully black grid there). The port floors the width at 1 px and keeps drawing.",
+    "Remove the fill-up transient: the port starts black and takes ~2-3 s to reach its (over-)saturated steady state. The original is at its steady density from the first bars onward.",
+    "Bar LENGTHS should vary — the original draws partial runs (e.g. 8, 10, 16 and 27 px long on a 48-wide row) as well as full spans. Port bars are mostly full-span, which contributes to the solid look.",
+    "Palette and hue behaviour need no work: saturated full-spectrum hues on black, and the ColorSpeed response matches in character and direction."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "late",
+    "ctl-width-0",
+    "ctl-width-0.5",
+    "ctl-width-1",
+    "ctl-speed-0",
+    "ctl-speed-0.25",
+    "ctl-speed-1",
+    "ctl-color-0",
+    "ctl-color-1",
+    "grid48",
+    "grid48-dump",
+    "seed1234"
+  ]
+}
