@@ -1,0 +1,47 @@
+{
+  "slug": "fire-red",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same 1D red-fire idea on both sides — hot source at pixel 0, embers streaming right, black past the flame tip — but the port's fire settles about half as bright, roughly a third shorter, markedly redder (thin yellow core vs the original's wide one), spikier in texture, and ~1.7x faster at the default 20 fps.",
+  "observations": [
+    "Neither side exposes any settable control (probe: 'no settable controls' on orig and port) — control surfaces match, so there is nothing to dial.",
+    "Structure matches in family: on the 60 px strip both draw a saturated hot source at pixel 0 with heat/embers advecting rightward and decaying to black, palette black -> deep red -> orange -> yellow -> white-hot flecks at the base. Waterfalls (baseline, scan20, seed7) read as the same pattern idea on both sides.",
+    "Brightness, settled state: over 60 s at 20 fps the original ramps from mean brightness ~56 (first 5 s) to a steady ~100-120 and holds there (avg 95.6, max 133); the port is flat at ~50-60 the whole time (avg 53.5, max 99, brightnessTrend 'steady'). Same gap at seed 7 (orig 98 / port 56) and seed 1234 (orig 99 / port 58) over 40 s.",
+    "Because the original's warm-up is frame-COUNT driven, the two sides look nearly identical over a short window and diverge later: the 6 s baseline is orig mean 55 vs port 54, while 60 s at 20 fps is 96 vs 53. A 6-second judgement on this pair would have called it a match.",
+    "Flame length: in the original's hot regime (skip 30, 10 s, 20 fps) the mean-luminance half-max sits at pixel 31 on the original and pixel 22 on the port; mean luminance at pixel 40 is 59 (orig) vs 20 (port), at pixel 50 it is 30 (orig) vs 5 (port). The original keeps the far end of the strip faintly lit (mean R 27 at px 59); the port is effectively black past ~px 52.",
+    "Colour distribution: the original is much yellower. Over 60 s at 20 fps meanG is 86.5 (orig) vs 37.5 (port) and meanB is 14.6 vs 3.1, while meanR is 186 vs 120. In the hot regime the yellow core (mean G > 100) spans pixels 0-26 on the original but only 0-8 on the port. The gap is present from the start, not only after warm-up: over t=2-12 s, mean G at pixel 10 is 143 (orig) vs 87 (port) and at pixel 20 is 78 vs 25.",
+    "White-hot flecks: mean B at the base peaks around 109-142 (px 0-3) on the original versus 38-52 on the port in the same hot window — the original's fire root reads white/near-white far more often.",
+    "Texture: the original's waterfall streaks are broad, smooth, overlapping slabs; the port's are thinner, higher-frequency individual ember trails with more black between them (visible at every window: baseline, scan20, seed7, hot-regime).",
+    "Motion direction and character agree (both advect strictly rightward from px 0, no bounce, no reversal), but speed differs at the default rate. Normalised template-matching of a fixed 26 px window between frames 0.1 s apart gives: original 19.9 / 33.1 / 67.3 px/s at 10 / 20 / 40 fps, port 57.3 / 55.5 / 57.6 px/s at the same rates. The original is FRAME-STEPPED at ~1.7-2 px/frame; the port is time-based and fps-invariant. At the default 20 fps the port is ~1.7x too fast; the two would coincide near 34 fps.",
+    "Caution for a fixer: the `motion` stat is useless for this diagnosis here — it reads 12 / 12 / 12 for the original and 16 / 12 / 8 for the port across 10 / 20 / 40 fps, i.e. exactly inverted from the truth. Only position tracking settles it.",
+    "The original freezes solid for long stretches on our engine (zero motion 36.2-60.0 s in the 5 fps survey, 54.5-60.0 s at 20 fps; the 120 s survey shows the freezes are ~33 s long and alternate with active stretches). This is the known engine clock artefact seen on the sibling fire-blue, not a port defect, and is not scored. The port never freezes (1 zero-motion frame out of 1200, the unavoidable first frame).",
+    "Both sides are alive with no compile or runtime errors, both ignore sensors (wantsSensors false), and both start black and light up within the first second."
+  ],
+  "dials": [],
+  "feedback": [
+    "Raise the port's overall heat. In its settled state the original sits at mean brightness ~100-120 over the whole strip while the port sits at ~53-58 — roughly a factor of two. Caveat before chasing an exact number: the original's climb to that level is frame-count driven on our engine (60 s at 5 fps leaves it at mean 60, the same 60 s at 20 fps reaches 96), so target the hot settled look rather than a literal multiplier.",
+    "Extend the flame. Mean-luminance half-max should land near pixel 31 of 60, not pixel 22, and the far third of the strip should stay faintly ember-lit (mean R ~27 at pixel 59) instead of going fully black past ~pixel 52.",
+    "Add yellow through the mid-strip. The original's mean G stays above 100 out to about pixel 26 and above 20 out to pixel 38; the port drops below 100 by pixel 9 and below 20 by pixel 27. The result is that the port reads as a red fire with a small yellow tip while the original reads as a yellow-cored fire with red edges. Mean G over the strip should roughly double (37 -> 86) without moving mean R much (120 -> 186).",
+    "Make the base hotter/whiter: the original's first few pixels average B ~110-140 in its hot regime versus the port's ~40-50, i.e. noticeably more white-hot flicker at the fire root.",
+    "Soften and thicken the ember texture. The original's rightward trails are broad overlapping slabs; the port's are thin, sparse, high-contrast streaks with a lot of black between them. Wider/longer-lived heat cells (or more inter-pixel diffusion) would close this.",
+    "Speed: the port advects at a constant ~56 px/s at every frame rate while the original moves ~1.7-2 px per FRAME (33 px/s at our default 20 fps). Slowing the port to ~33 px/s would match at 20 fps, but note the original's speed is frame-coupled on our engine, so the honest fix is a per-second speed the fixer is willing to defend rather than a match at one rate — flag it as needing a hardware check.",
+    "Do not try to reproduce the original's ~33 s dead-freeze stretches; those are an engine clock artefact, and the port's uninterrupted animation is the correct behaviour."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-120",
+    "probe",
+    "scan20",
+    "dump-mid",
+    "dump-track",
+    "fps10",
+    "fps20",
+    "fps40",
+    "hot-regime",
+    "late-regime",
+    "seed7",
+    "seed1234"
+  ]
+}

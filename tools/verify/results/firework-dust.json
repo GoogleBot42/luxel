@@ -1,0 +1,44 @@
+{
+  "slug": "firework-dust",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides draw the same thing — single-frame, single-pixel, fully-saturated random-hue sparks scattered uniformly over the strip with no decay tail and no cycle — but the port spawns them about 24% less often, so its dust is measurably thinner.",
+  "observations": [
+    "Neither side exposes any controls: probe run reports '(no settable controls)' for orig and port alike, so the control surface matches exactly (dials: []).",
+    "Both sides render the identical primitive: isolated pixels lit for EXACTLY ONE frame then gone. A 0.05 s-spaced dump at 20 fps (dump-fine, 60 consecutive frames) shows a spark at t=0.10 and nothing at that index at t=0.15 on the original, same on the port — no fade, no tail, no movement, no multi-pixel spark on either side.",
+    "Spark colour is identical in character: over 1200 exactly-dumped frames per side (ratebig-0/20/40) every lit pixel on BOTH sides has V=255 and S=1.000 (max channel 255, min channel 0). Hue is uniform over the full wheel on both — orig 12x30-degree bins 33,29,40,34,32,29,31,26,30,36,34,27 (n=381); port 29,26,26,24,21,21,18,27,18,30,27,22 (n=289). No palette restriction or hue drift on either side.",
+    "Spark POSITION is uniform along the strip on both sides: over the same 1200 frames, orig per-10px decile 67,79,62,64,52,57 and port 55,50,39,53,52,40 — flat within Poisson noise, no edge bias or indexing offset.",
+    "PORT IS SPARSER — the one real divergence. Exact spark counts over 1200 dumped frames on the default 60 px strip: orig 381 sparks (0.3175 per frame, ~6.4/s at 20 fps), port 289 (0.2408 per frame, ~4.8/s). Ratio 0.76, roughly 3.5 sigma on Poisson counting, and it reproduces at every seed: mean-brightness-per-frame orig/port = 0.694/0.523 (seed 1), 0.671/0.592 (seed 7), 0.667/0.508 (seed 1234), i.e. port at 0.76-0.88x throughout. It also shows in every 100-frame window of the seed-1 run (orig 0.52-0.85, port 0.37-0.74) — a steady rate deficit, not a transient.",
+    "Per-frame spark count is Poisson-like on both sides, differing only in the mean: orig {0:864, 1:295, 2:37, 3:4}, port {0:951, 1:212, 2:34, 3:3} over 1200 frames. Brightness per lit frame is the same on both (~2.5 mean-brightness units), so the deficit is fewer sparks, not dimmer ones.",
+    "BOTH sides are frame-stepped identically (spawn rate is per frame, not per second): mean brightness per frame is orig 0.677 / 0.694 / 0.694 and port 0.473 / 0.523 / 0.523 at 10 / 20 / 40 fps (fps10, rate-seed1, fps40). Neither side is time-based, and the port has no frame-rate-coupling divergence from the original.",
+    "Spark count scales with pixel count in the same way on both sides — estimated sparks/frame orig 0.065 / 0.327 / 1.455 and port 0.054 / 0.246 / 1.133 at 12 / 60 / 300 px (px12, rate-seed1, px300). Density-per-pixel is the invariant on both, with the same ~0.78x port offset at every size, so the deficit is a rate constant, not a pixel-count-dependent bug.",
+    "No modes, cycles or long-period structure on either side. A 240 s / 5 fps survey (1200 frames) shows one continuous stationary sparkle texture end to end on both, and autocorrelation of the raw meanBrightness series (1200 frames at 20 fps, lags 1-400) peaks at only 0.090 (orig, lag 82) and 0.082 (port, lag 294) — noise floor, no periodicity. brightnessTrend is 'volatile' on both, with matching statsSummary shape (orig motionLit avg 59.2, port 43.2 on the 60 s survey — the same ~0.75 ratio again).",
+    "The high zeroMotionFrames counts (survey: orig 165/300, port 198/300) are the expected sparse-pattern artefact, not a frozen port: motionLit is non-zero and large (up to ~168 on both) on the frames that do have sparks.",
+    "Neither side binds sensors (wantsSensors false on both), and neither side reports a compile or runtime error in any run."
+  ],
+  "dials": [],
+  "feedback": [
+    "The port's spark spawn rate is ~24% too low. Raise it by roughly 1.3x: on the default 60 px strip at 20 fps the original averages 0.318 sparks per frame (~6.4/s), the port 0.241 (~4.8/s), measured by exact per-pixel dumps over 1200 frames each. The rate is per-frame and proportional to pixel count on both sides, so the fix is a single spawn-probability/threshold constant, not a structural change.",
+    "Everything else already matches and should not be touched: one-frame spark lifetime with no fade tail, single lit pixel per spark, full saturation and full value, hue uniform over the whole wheel, position uniform along the strip, Poisson-like per-frame counts, frame-stepped (not time-based) spawning, and rate proportional to strip length.",
+    "There is nothing to fix in the control surface — the original genuinely exposes no controls and the port matches."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-fine",
+    "dump-count",
+    "ratebig-0",
+    "ratebig-20",
+    "ratebig-40",
+    "rate-seed1",
+    "rate-seed7",
+    "rate-seed1234",
+    "fps10",
+    "fps40",
+    "px12",
+    "px300"
+  ]
+}
