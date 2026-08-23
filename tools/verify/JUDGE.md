@@ -178,6 +178,12 @@ the flat index than along columns). Index-only originals may also have a
 NATIVE geometry (motifs recurring at a fixed index stride; errors above a
 fixed pixel count) — reshape to that geometry before describing structure.
 
+For DEPOSIT/STEP patterns (stackers, counters, discrete-event builds),
+autocorrelation of mean-channel series can lock onto exact-repeat
+super-cycles driven by fractional per-frame steps and miss the real visual
+cycle entirely — count the discrete events (deposit onsets, resets) from
+dump transitions instead of trusting autocorrelation lags.
+
 Period autocorrelation has a HARMONIC AMBIGUITY trap: the top-lag list can
 rank the second harmonic above the fundamental, and two runs at different
 fps agreeing on the same FRAME lag then reads as proof of frame-stepping

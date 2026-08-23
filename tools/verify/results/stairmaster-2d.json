@@ -1,0 +1,50 @@
+{
+  "slug": "stairmaster-2d",
+  "verdict": "divergent",
+  "score": 5,
+  "confidence": "high",
+  "summary": "Port nails the rainbow staircase's geometry, hue mapping and ramp slope exactly, but runs 1.33x too fast, sits ~47% too bright (its tallest column overflows the grid and saturates at the base), and — the big one — parks the bouncing ball ~10 rows too low so it spends about half of every cycle off the bottom edge instead of arcing brightly over the stairs.",
+  "observations": [
+    "Rig: 16x16 grid, 256 px, no controls on either side (probe.json: 'no settable controls' for orig and port). Both sides compile and run clean, no runtime errors, seed-independent (seed 1 vs 1234 give identical stats), sensors not bound.",
+    "Shared structure (correct on both sides): a 4-step staircase, each step exactly 4 columns wide, tallest at the left, descending left-to-right; step-to-step height difference measured at 3.74 rows on BOTH sides (orig bar tops at rows 3.65/7.41/11.12/14.88 at t=0; port 2.12/5.82/9.59/13.35 — diffs 3.70-3.77 on both).",
+    "Shared colour law (exact match): hue is a pure function of column index, 24 deg per column (hue = col/15 of the wheel). Measured from the t=0 bottom row on both sides: col0 0deg, col1 24, col2 48, col3 72, col4 96, col5 120, col6 144, col7 168, col8 192(.7), col9 216, col10 240, col11 264. Identical to within rounding.",
+    "Shared vertical ramp slope (exact match): within a column, brightness steps by exactly 17 counts per row on both sides (= 255/15), rising toward the bottom of the grid; the ramp scrolls upward and wraps by one stair step.",
+    "SPEED: the port's animation cycle is 1.33x too fast. Measured from the col-0 sawtooth reset times: orig period 1.305 s (resets at 1.30/2.60/3.90/5.20/6.60/7.90/9.20/10.50 s), port 0.980 s (1.00/2.00/2.90/3.90/4.90/5.90/6.90/7.90 s). Ratio 1.332.",
+    "Both sides are FPS-INVARIANT (time-based, not frame-stepped): the same periods come out at 10, 20 and 40 fps (orig 1.300/1.313/1.308 s; port 0.980/0.982/0.980 s). So the speed gap is a real rate error, not frame coupling.",
+    "BRIGHTNESS: port mean brightness 32.3 vs orig 21.9 (+47%), stable across every window tested (6 s, 30 s, 60 s, 240 s, and a --skip 120 late window). Both sides brightnessTrend 'steady', zeroMotionFrames 0-1.",
+    "Cause of the brightness gap: the port's stair ramp is offset ~25 counts (~1.5 rows) higher than the original's at every phase. Orig col-0 bottom-row value cycles over [191, 254] and the top 1-2 rows of the grid stay black; port cycles over [216, 283-clipped-to-255], fills all 16 rows, and its bottom 1-2 pixels SATURATE at 255 for ~0.4 s of every 0.98 s cycle (~40% duty). Example t=0.9 col0 top-to-bottom: orig 0,0,16,33,...,220,237 (row0 dark, peak 237); port 23,40,57,...,244,255,255 (row0 lit, base railed).",
+    "SATURATION: at equal brightness the port's pixels are about half as saturated. Both sides follow (1-s) = v/256 - c with identical slope, but c = 0.257 on the original vs 0.106 on the port. Concretely, orig's peak red base pixel is (252,126,126) (s=0.50) where the port's is (255,191,191) (s=0.25) — the port's stairs read visibly washed-out/pastel at the base.",
+    "THE BALL — the headline divergence. Original: a soft ~4x4 px cyan blob centred exactly on column 7.5 (x centroid 7.50-7.61 in every one of 121 dumped frames, no horizontal motion), bouncing VERTICALLY in the upper half of the grid. Its y centroid oscillates 2.21 <-> 7.03 (rows 1..8 of 16) sinusoidally with period 1.305 s, peak pixel value a steady 168-187, total residual energy 880-948 every single frame — it is never absent and always sits against black, well clear of the staircase.",
+    "Port's ball: same column (x 7.5-8.0), same size and same peak brightness, but its y centroid oscillates 11.55 <-> off-grid. It is only visible rows ~11.5-15; extrapolating its speed (max 18 rows/s) the sinusoid is centred near row 14.4 with amplitude ~2.9, i.e. it dives to about row 17 — 2 rows BELOW the bottom of the grid. In the 121-frame dump the port's ball is completely absent from the render in 5 of every 10 frames (e.g. t=0.5-0.8, 1.5-1.9, 2.5-2.8), and when present it is buried inside the bright staircase rather than silhouetted against black. Residual energy 144-430 vs the original's steady ~900.",
+    "Ball size and shape are NOT the problem: on a 32x32 re-render the original's ball at t=0 spans cols 12-19 / rows 7-14 with peak 219, the port's spans cols ~13-18 / rows 26-30 with peak 210 — same soft radial kernel, same peak, just ~10 rows (2/3 of the grid height) lower.",
+    "Ball period tracks its own side's staircase: orig ball apexes every 1.30 s, port's every ~1.0 s — so the 1.33x speed error is global, not a separate ball bug.",
+    "RESOLUTION INDEPENDENCE: both sides are resolution-independent and agree on that. Re-rendered at 8x8 and 32x32 the picture is the same, just coarser/finer (orig mean 23/21.9/21, port 34/32.3/31 at 8x8/16x16/32x32), and normalized feature positions carry over (orig ball centre 5.17/15 = 0.34 at 16x16 vs 11/31 = 0.35 at 32x32; port 0.91 vs 0.90).",
+    "NO REGIMES: a 240 s / 2 fps survey shows a completely uniform rhythm image on both sides — no mode rotation, no slow palette walk, no drift. meanBrightness min/max over 480 frames is 20-23 (orig) and 31-34 (port). Steady state at t=120-126 s is identical to t=0-6 s on both sides.",
+    "Visible signature difference in the whole-window rhythm images: the original shows a distinct bright teal stripe at ~47% of the width (the ball's column-mean contribution at cols 7-8); on the port that stripe is faint and intermittent."
+  ],
+  "dials": [],
+  "feedback": [
+    "Slow the whole animation down by a factor of 1.332: the port's master cycle is 0.980 s where the original's is 1.305 s. Both the stair scroll and the ball bounce share that one rate, so a single speed constant fixes both. Verify by the col-0 sawtooth reset spacing (should be 1.30 s at any fps).",
+    "Move the bouncing ball up by about 10 rows (0.65 of the grid height). Target: on a 16-row grid the ball's centre should oscillate between row 2.2 and row 7.0 (normalized y 0.15 to 0.47) — i.e. entirely in the TOP half, above the staircase, against black. The port currently oscillates around row ~14.4 with amplitude ~2.9 rows, so it clips through the bottom edge and is completely off-screen for about half of every cycle. This is the pattern's most visible element and right now a viewer barely sees it.",
+    "Reduce the ball's oscillation amplitude slightly once it is repositioned: original peak-to-peak centroid travel is 4.8 rows (amplitude ~2.4 rows on a 16-row grid); the port's fitted amplitude is ~2.9 rows.",
+    "Everything else about the ball is already correct — keep it: column 7.5 with no horizontal motion, ~4 px soft radial kernel, peak value ~180-220, sinusoidal (not gravity-arc) easing, and the same period as the staircase.",
+    "Lower the stair ramp's overall offset by ~25 counts (~1.5 rows). The original's tallest column peaks at a bottom-row value of 252-254 and never saturates, leaving the top 1-2 rows of the grid black at all times; the port reaches an effective 283, so it fills the full column height and rails its bottom 1-2 pixels at 255 for ~40% of each cycle. Fixing this offset should bring mean brightness from 32 down to the original's 22.",
+    "The same offset fix should also correct the saturation: at the same brightness the port is about half as saturated as the original (orig peak base pixel (252,126,126), port (255,191,191)). Both sides use the same (1-s) vs v slope, so this is one shared offset error, not a separate colour bug — but re-check it after the brightness fix rather than tuning saturation separately.",
+    "Do NOT touch: the hue-per-column mapping (24 deg/column, verified exact for cols 0-12), the 17-counts-per-row ramp slope, the 4x4-column stair layout, the 3.74-row step height, the upward scroll direction and sawtooth wrap, resolution independence, or fps-invariance — all of these already match the original exactly."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dumpA",
+    "dumpSeq",
+    "fps10",
+    "fps40",
+    "late",
+    "steady30",
+    "grid32",
+    "grid8",
+    "seed1234"
+  ]
+}

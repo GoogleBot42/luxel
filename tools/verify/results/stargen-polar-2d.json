@@ -1,0 +1,113 @@
+{
+  "slug": "stargen-polar-2d",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Same 12-mode polar star-generator architecture with an identical ModeOverride quantisation and the same mode order, but the port's carousel runs exactly 2.5x too fast, its lines are far too thin (invented LineWidth dial defaulted way too low), and several individual modes draw a much smaller / differently-scaled figure than the original.",
+
+  "observations": [
+    "Both sides compile and render on the default 16x16 grid rig with no compile or runtime errors, and both stay alive indefinitely (900 s run at 1 fps: orig mean 32 / motion 27, port mean 39 / motion 20; neither decays, freezes or rails). brightnessTrend 'steady' (orig) vs 'volatile' (port) over the 60 s survey is a consequence of the port's faster mode carousel, not of a dying port.",
+
+    "CONTROL SURFACE MISMATCH. Original exposes 3 sliders: sliderModeOverride (ModeOverride), sliderMinutesPerMode (MinutesPerMode), sliderOffsetAngle (OffsetAngle). Port exposes 4: sliderModeOverride (ModeOverride), sliderDwellTime (DwellTime), sliderRotationOffset (RotationOffset), sliderLineWidth (LineWidth). Two dials are RENAMED and one (LineWidth) is INVENTED — the original has no line-width control at all.",
+
+    "MODE SELECTOR IS EXACTLY RIGHT. Fine hash-cluster sweep of sliderModeOverride at 0.01-0.02 resolution over 0..1 (55 sampled values, one 20 fps frame dumped and hashed per value) gives 12 distinct clusters on EACH side with boundaries at IDENTICAL values: 0.167, 0.25, 0.333, 0.417, 0.5, 0.583, 0.667, 0.75, 0.833, 0.917 (i.e. floor(v*12); modes 0 and 1 render identically on both sides, so no boundary is visible at 0.083). Both sides therefore implement the same 12-mode index map.",
+
+    "MODE CAROUSEL 2.5x TOO FAST AT DEFAULT. Autocorrelation of meanBrightness over a 900 s / 1 fps untouched run: original's full mode cycle = 240 s (lag 240 s, normalised 1.00, next peaks 239/241); port's = 96 s (lag 96 s 1.00, harmonics 192/288/384). Confirmed independently at 2 fps (port 96.0 s) and by the left-edge mode-indicator column: the original's indicator goes full white (255,255,255) at t=120-136 s, the port's at t=48-52 s and again at 144-148 s — exactly 240/96 = 2.5x compressed with a 96 s repeat. With 12 modes that is 20 s/mode on the original vs 8 s/mode on the port.",
+
+    "MODE ORDER IS PRESERVED. A time-rescale fit corr(orig[t], port[t/k]) on the (meanBrightness, meanR, meanG, meanB) tuples from the 900 s run peaks at corr 0.865 for k ~ 2.5-2.8, i.e. the port visits the same modes in the same sequence, just 2.5x faster.",
+
+    "DEFAULT LINE WIDTH FAR TOO NARROW. Untouched baseline (6 s, 20 fps): orig meanBrightness avg 25.3, port 15.6. Per-mode lit-pixel fraction (threshold sum>8, sampled mid-window, 16x16): orig 47/55/38/4/71/44/78/31/23/29/8 % vs port 26/25/21/20/34/19/73/31/19/19/25 % for modes at ModeOverride 0.00/0.20/0.25/0.35/0.45/0.50/0.60/0.70/0.75/0.85/0.95. Pixel dump at mode 0.25, t=2.0 s, grid row 0: orig ramps 12,38,79,133,202,226,153,94,50 across x=7..15 (a broad soft glow); port has a 3-px spike 78,212,36 at x=11..13. Setting the port's sliderLineWidth=1.0 reproduces the orig row-0 profile almost exactly (10,42,97,173,237,146,76,29); sliderLineWidth~0.75 matches the original's mean brightness and lit fraction in modes 0.00 (47% vs 44%), 0.20 (55% vs 50%) and 0.25 (38% vs 39%). So the port's default line width is roughly a quarter of what the original draws.",
+
+    "SEVERAL MODES DRAW A DIFFERENTLY SCALED/PLACED FIGURE (not fixable by LineWidth). Union of lit columns over 12 s (16 columns, '#'=ever lit): mode 0.25 orig [...#############] (13 cols) vs port [..........######] (6 cols, and still only cols 8-15 at LineWidth 0.75); mode 0.50 orig [..##############] vs port [.##########.....]; mode 0.75 orig 16 cols vs port [##########......]; mode 0.35 orig [##........######] vs port [...#######......] (roughly a 5/16-turn rotation apart). At 48x48 the same defect is obvious: in mode 0.25 the original fills the whole 48-px width with horizontal ray bands while the port confines the identical striping to x~8..24.",
+
+    "MODE 1.00 EDGE CASE DIVERGES COMPLETELY. At sliderModeOverride=1 (index 12, out of the 0..11 range) the original renders pure black (mean 0, 0% lit) while the port renders a near-full-brightness pale blue-white wash (mean 173 over 12 s, 87% lit, rgb ~ (188,206,222)).",
+
+    "PER-MODE ANIMATION RATES DIVERGE, in both directions. Half-decorrelation lag (whole-frame mean abs diff vs lag, 0.15 s dump grid over 12 s), orig vs port: mode 0.20 0.45 s vs 0.15 s (port ~3x faster); mode 0.60 0.90 s vs 2.40 s (port ~2.7x slower); mode 0.50 0.45 s vs 0.75 s; mode 0.45 0.75 s vs 1.20 s; mode 0.95 0.90 s vs 0.45 s. Modes 0.00, 0.25, 0.35, 0.70, 0.75, 0.85 are within ~2x.",
+
+    "MODE 0.25 MOTION IS QUALITATIVELY WRONG. Tracking the circular centroid of grid row 0: the original glides smoothly back and forth, 15.00 -> 8.13 -> 15.00, amplitude ~6.9 px, period exactly 3.00 s, with ~1.4 px of change per 0.1 s. The port jitters between only three positions (10.81 / 11.84 / 13.41), amplitude ~2.6 px, exact self-repeat period 0.500 s, and jumps ~39 grey levels per 0.1 s — a 6x-fast, low-amplitude, stepped wobble instead of a smooth wide oscillation.",
+
+    "NEITHER SIDE IS FRAME-COUPLED. Rendering mode 0.25 at 10/20/40 fps: the original's row-0 centroid trajectory is byte-comparable at all three rates (period 3.000 s at 10 fps, 30 frames; identical values at t=0,0.5,...,3.0) and the port's exact self-repeat is 5/10/20 frames at 10/20/40 fps = 0.500 s at every rate. Both are time-based. (Minor: the port's initial phase at t=0 does shift with fps — row-0 centroid 11.06 / 11.87 / 13.15 at 10/20/40 fps — while the original's is 15.00 at all rates.)",
+
+    "COLOURS: right family, port drifts pale. Mode-mid RGB means, orig vs port: auto mode (48,20,5) vs (21,18,3) — the original holds a saturated amber/orange for the whole 12 s while the port walks orange -> yellow -> desaturated white by ~6.5 s (visible at 48x48). Mode 0.45 orig (80,62,22) gold vs port (30,21,14) dark brown-orange. Mode 0.85 orig (21,6,1) vs port (18,7,2) — good. Mode 0.75 orig pure saturated red (24,0,0) vs port pink/washed (19,9,9). Mode 0.60 orig (128,128,128) vs port (123,123,123) — good. Mode 0.95 both are multicolour confetti fields, orig sparser (8% lit, larger blobs on diagonals) vs port denser (25% lit, fills the grid).",
+
+    "MODES THAT DO MATCH WELL: 0.70 (dense vertical zigzag lattice — near-identical position, width, density and colour at both 16x16 and 48x48; orig mean 29 / 31% lit vs port 29 / 31%), 0.85 (large orange 'C' arc plus a detached blob bottom-right — same geometry and palette, port slightly thinner/blockier), 0.60 (bright white banded field, orig 128 / 78% lit vs port 123 / 73%, though the port's bands are more blocky and tilt slightly and it moves ~2.7x slower).",
+
+    "SEED-INDEPENDENT ON BOTH SIDES. Seeds 1, 7 and 1234 give byte-identical summary stats on both sides (orig mean 25 motion 8, port mean 20 motion 12 at 12 s / 10 fps), so nothing here is RNG-driven and per-pixel comparison is fair.",
+
+    "The original shows no long warm-up transient (first sheet cell at t=0 already draws the finished figure); the port opens mode 0 with a nearly straight vertical bar for ~2.5 s before the wave amplitude develops, which the original does not."
+  ],
+
+  "dials": [
+    {
+      "name": "sliderModeOverride",
+      "origEffect": "Selects one of 12 fixed modes via floor(v*12); boundaries measured at 0.167/0.25/0.333/0.417/0.5/0.583/0.667/0.75/0.833/0.917. v>=0.917..0.99 is the confetti mode; v=1.0 (index 12) renders pure black. Probe maxDelta 47.8 / maxDeltaLit 71.2.",
+      "portEffect": "Identical 12-cluster quantisation with the same boundaries to 0.01 resolution, and the modes appear in the same order. Only difference: v=1.0 gives a full-brightness pale blue wash instead of black. Probe maxDelta 107.4 / maxDeltaLit 174.4.",
+      "matches": true
+    },
+    {
+      "name": "sliderMinutesPerMode (orig) / sliderDwellTime (port)",
+      "origEffect": "Sets how long each mode is held. Full 12-mode cycle: 24 s at v=0, 240 s untouched, 360 s at v=0.5, >600 s at v=1 (unmeasurable in a 1200 s window). Probe called it inert only because its 4 s window is far shorter than any dwell.",
+      "portEffect": "Same role, different name and a different mapping. Full cycle: 18 s at v=0, 96 s untouched, 184 s at v=0.5. The untouched cycle is exactly 2.5x too fast; the ratio is not constant across the dial (1.33x at v=0, 2.5x untouched, 1.96x at v=0.5), so the curve shape differs too. Probe maxDelta 34.5.",
+      "matches": false
+    },
+    {
+      "name": "sliderOffsetAngle (orig) / sliderRotationOffset (port)",
+      "origEffect": "Rotates the figure; wraps at a full turn (v=1 reproduces v=0 to within 0.03 mean abs pixel diff, v=0.33/0.66 give 45.5/52.1 mean abs diff from v=0). Probe reported INERT — a false inert, since the untouched mode barely moves the figure; confirmed live by a manual sweep at ModeOverride=0.25.",
+      "portEffect": "Same rotating role, same wrap at v=1 (diff 0.00 vs v=0), but a much smaller absolute effect (14.2/21.6 mean abs diff at v=0.33/0.66) simply because the port lights ~half as many pixels. Also probe-inert (false inert), confirmed live manually.",
+      "matches": true
+    },
+    {
+      "name": "sliderLineWidth (port only)",
+      "origEffect": "Control does not exist on the original.",
+      "portEffect": "Sets the radial thickness/softness of the drawn line. v=0 leaves a single dim 1-px trace (row-0 peak 53); v=0.25 a 3-px spike; v=1.0 a broad glow spanning 9 px that matches the original's untouched profile almost exactly. The port's DEFAULT sits near v~0.2, i.e. about a quarter of the original's width. Probe maxDelta 18.3 / maxDeltaLit 35.0.",
+      "matches": false
+    }
+  ],
+
+  "feedback": [
+    "Mode dwell is 2.5x too short. The original's untouched full 12-mode cycle is 240 s (20 s per mode); the port's is 96 s (8 s per mode). Multiply the port's default dwell by 2.5. Also re-map the dwell dial: at dial=0 the original cycles in 24 s and the port in 18 s, at dial=0.5 the original in 360 s and the port in 184 s — the curve is compressed, not just offset.",
+
+    "The port's default line width is roughly 4x too thin, and this is the single most visible defect. The original draws broad, soft, antialiased rays whose glow fills most of the canvas; the port draws 1-3 px hard-edged traces. Setting the port's sliderLineWidth to ~0.75-1.0 restores the original's row profile (orig row0 at mode 0.25 t=2.0 s: 12,38,79,133,202,226,153,94,50 across x=7..15; port at LineWidth 1.0: 10,42,97,173,237,146,76,29). Move the default to ~0.75. Better still, drop the invented LineWidth control entirely (the original has no such dial) and bake in the original's width — an extra slider the original lacks is itself a fidelity gap.",
+
+    "Rename the two renamed dials back: sliderDwellTime -> sliderMinutesPerMode (and express it in minutes, matching the original's scale), sliderRotationOffset -> sliderOffsetAngle. The rotation semantics themselves are correct (both rotate and both wrap at v=1), so only the names/labels need fixing.",
+
+    "Fix the figure's radial extent in modes 2 (ModeOverride~0.20), 3 (~0.25), 6 (~0.50) and 9 (~0.75). In these the original's rays reach the full canvas width while the port confines them to a narrow band: at mode 0.25 the original lights columns 3-15 of 16 (48x48: the whole 48-px width) but the port only columns 10-15 (48x48: x~8..24) and raising LineWidth to 0.75 still leaves it at columns 8-15. Mode 0.50: original spans columns 2-15, port draws two narrow dashed columns at 1-10. Mode 0.75: original draws a broad 2-hump red zigzag across the full width, the port a tight high-frequency squiggle confined to columns 0-9. Something is scaling the radius (or the per-ray angular span) down by roughly 2-3x in these modes.",
+
+    "Mode 3 (ModeOverride~0.25) has the wrong motion law. The original's figure glides smoothly, with row-0 centroid tracing 15.0 -> 8.1 -> 15.0 (amplitude ~6.9 px) on an exact 3.00 s period, ~1.4 px of travel per 0.1 s. The port snaps between three positions (10.8/11.8/13.4, amplitude ~2.6 px) on an exact 0.500 s period with ~39 grey levels of change per 0.1 s. Slow the port's oscillator 6x and make it continuous rather than stepped.",
+
+    "Per-mode animation rates need a pass in both directions: measured half-decorrelation lags (orig vs port) are 0.45 vs 0.15 s in mode 2 (port ~3x too fast), 0.90 vs 2.40 s in mode 7 (~0.60, port ~2.7x too slow), 0.45 vs 0.75 s in mode 6 (~0.50), 0.75 vs 1.20 s in mode 5 (~0.45), and 0.90 vs 0.45 s in mode 11 (~0.95, port ~2x too fast).",
+
+    "Colour: the port desaturates toward white where the original stays saturated. In auto mode the original holds a saturated amber (mid-frame mean rgb 48,20,5) for the whole 12 s while the port walks orange -> yellow -> pale white by ~6.5 s (mean 21,18,3). Mode 9 (~0.75) is pure saturated red on the original (24,0,0) and washed pink on the port (19,9,9). Mode 5 (~0.45) is bright gold on the original (80,62,22) and dark brown-orange on the port (30,21,14) — the port is also only 52% as bright there even with LineWidth raised.",
+
+    "Mode 11 (ModeOverride~0.95, the multicolour confetti field) is ~3x too dense on the port: original lights 8% of pixels as scattered larger blobs along diagonals, port lights 25% covering the whole grid.",
+
+    "ModeOverride=1.0 (index 12, past the last mode) must render black as the original does; the port instead outputs a near-full-brightness pale blue-white wash (mean 173, 87% lit). Clamp or wrap the mode index the way the original does.",
+
+    "Mode 0 opens differently: the original already draws its full-amplitude wave at t=0, while the port starts as an almost straight vertical bar and takes ~2.5 s to develop amplitude. Initialise the port's phase/amplitude the way the original does.",
+
+    "Already correct, do not disturb: the 12-mode floor(v*12) ModeOverride quantisation (boundaries match to 0.01), the mode ORDER in the auto carousel, the rotation dial's wrap-at-one semantics, time-based (fps-invariant) animation on both sides, seed-independence, and modes ~0.70 (dense zigzag lattice), ~0.85 (orange 'C' arc plus detached blob) and ~0.60 (bright banded field) which already read as the same picture."
+  ],
+
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey240",
+    "probe",
+    "sg2d-long900",
+    "sg2d-col0",
+    "sg2d-late",
+    "sg2d-mo-0.00 .. sg2d-mo-1.00 (21-point ModeOverride hash sweep, 0.05 steps)",
+    "sg2d-fm-0.16 .. sg2d-fm-0.98 (37-point ModeOverride hash sweep, 0.02 steps)",
+    "sg2d-mode-0.00, sg2d-mode-0.20, sg2d-mode-0.25, sg2d-mode-0.35, sg2d-mode-0.45, sg2d-mode-0.50, sg2d-mode-0.60, sg2d-mode-0.70, sg2d-mode-0.75, sg2d-mode-0.85, sg2d-mode-0.95, sg2d-mode-1.00 (12 s / 10 fps per-regime runs, one per mode)",
+    "sg2d-per-0.00 .. sg2d-per-1.00 (12 modes, 80-frame dumps for period / lit-fraction / colour)",
+    "sg2d-g48-0.00, sg2d-g48-0.25, sg2d-g48-0.60, sg2d-g48-0.70 (48x48 resolution recheck)",
+    "sg2d-dump025",
+    "sg2d-lw-0.0, sg2d-lw-0.25, sg2d-lw-0.5, sg2d-lw-0.75, sg2d-lw-1.0 (port LineWidth sweep)",
+    "sg2d-lw75-0.00, sg2d-lw75-0.20, sg2d-lw75-0.25, sg2d-lw75-0.45, sg2d-lw75-0.50, sg2d-lw75-0.60 (per-mode recheck with port LineWidth=0.75)",
+    "sg2d-phase025 (60-frame phase cross-match at mode 0.25)",
+    "sg2d-off-0, sg2d-off-0.33, sg2d-off-0.66, sg2d-off-1 (manual OffsetAngle / RotationOffset sweep)",
+    "sg2d-fps10, sg2d-fps20, sg2d-fps40, sg2d-fine10, sg2d-fine20, sg2d-fine40 (frame-coupling diagnostic)",
+    "sg2d-dwell-0, sg2d-dwell-0.5, sg2d-dwell-1, sg2d-dwell05-long, sg2d-dwell1-long (dwell dial mapping, up to 1200 s)",
+    "sg2d-seed7, sg2d-seed1234"
+  ]
+}

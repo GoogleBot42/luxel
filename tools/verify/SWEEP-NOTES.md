@@ -31,6 +31,12 @@ Cleared entries move to Gitea or the aggregate report.
   all-black original; fire-blue/fire-red exact-32.768s freezes with
   fps-dependent onset; chill-confetti delta clamp ~100 ms; single-set
   control interaction anomaly; seed 2-5 collisions.
+- **32.768 s freeze family grows**: `spring-colors` ORIGINAL freezes
+  byte-identical for exactly 32.8 s on a repeating cycle (period 114.65 s
+  at 20 fps, 79.6 s at 10 fps — onset scales with fps, duration fixed;
+  wall-clock independent). Third+ member with fire-blue/fire-red. 2^15 ms
+  points at a 16.16 time wraparound in an engine accumulator; the affected
+  ORIGINALS presumably run clean on real PB. Re-judge after fix.
 
 ## Manifest rig fixes needed (pairs.json), tied to the out-of-range-writes gap
 - nano-orbital: original writes a fixed 144-px canvas → rig must be ≥144 px
