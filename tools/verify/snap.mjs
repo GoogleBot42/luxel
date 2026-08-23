@@ -1054,7 +1054,11 @@ const dumpPicks = opts.dump ? opts.dump.map((t) => nearestFrame(t, opts.fps, cap
 if (dumpPicks) {
   opts.dump.forEach((t, i) => {
     const eff = +(dumpPicks[i] / opts.fps).toFixed(3);
-    if (Math.abs(eff - t) > 0.5 / opts.fps) {
+    // Only a time genuinely past the window is a clamp worth warning about;
+    // in-window times snapping to the frame grid are expected and silent
+    // (the epsilon guards float noise from making exact half-interval times
+    // read as out-of-window).
+    if (t > opts.seconds + 1e-9 && Math.abs(eff - t) > 0.5 / opts.fps + 1e-9) {
       warn(
         `--dump time ${t}s clamped to ${eff}s — outside the ${opts.seconds}s ` +
           `captured window (${captured} frames @ ${opts.fps}fps)`,

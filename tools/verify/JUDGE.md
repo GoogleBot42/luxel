@@ -107,7 +107,12 @@ fps-invariance on such a pattern. Confirm coupling by tracking POSITION instead:
 `--dump` the same feature at two times on each rate (spaced well under half its
 period, per the Nyquist note below) and read how far it actually travelled per
 second. If the per-second displacement scales with fps, the pattern is
-frame-stepped; if it holds, it is time-based. Only report frame-rate coupling
+frame-stepped; if it holds, it is time-based — but HYBRID models exist: a
+port clamping its per-frame step (e.g. delta capped at ~0.05 s) is
+frame-stepped below the clamp's rate and time-based above it, so the
+10/20/40 triple can give a three-way-inconsistent answer (10 agrees with 20
+in frames, 20 agrees with 40 in seconds). Report the clamp, not a binary.
+Only report frame-rate coupling
 once the `--dump` positions say so. For STOCHASTIC/event patterns (twinkles,
 sparks) the analogue is the distribution of an OFF-STATE interval measured
 in seconds across fps: a per-frame retrigger probability gives dark-gap
