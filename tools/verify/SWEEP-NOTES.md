@@ -20,6 +20,13 @@ Cleared entries move to Gitea or the aggregate report.
   builtins return constants regardless of `lx_set_wall_clock`. Every clock
   pattern's core behaviour is unjudgeable until fixed; re-judge pixelclock
   and naturallightsync after the engine fix.
+  REFINEMENT (rgbclock-2d, batch 42): the SECONDS-level time source DOES
+  advance — the rgbclock-2d original's red seconds hand rotates at exactly
+  6°/s. So the gap is specifically the time-of-day/date base (hour/minute/
+  day builtins pinned), not all clock functions. rgbclock-2d's port is
+  separately broken (fully frozen, no angular term) — its verdict tells the
+  fixer to check whether the port reads a pinned builtin while the original
+  reads an advancing one.
 - (previously queued, from batches ≤30): fast-palette-blending silent
   all-black original; fire-blue/fire-red exact-32.768s freezes with
   fps-dependent onset; chill-confetti delta clamp ~100 ms; single-set

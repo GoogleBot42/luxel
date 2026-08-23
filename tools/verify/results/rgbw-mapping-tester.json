@@ -1,0 +1,46 @@
+{
+  "slug": "rgbw-mapping-tester",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Both sides are the identical whole-strip solid-colour R→G→B→W test cycle in the same order and starting on red at t=0, but the port dwells ~33% longer on each colour (2.18 s vs 1.638 s; full cycle 8.72 s vs 6.554 s).",
+  "observations": [
+    "Structure: on BOTH sides every frame is a single uniform colour across the entire rig — --dump at 60 px, 600 px and an 8x8 grid returned exactly 1 unique RGB value per frame on both sides at every sampled time. No spatial structure, no gradient, no per-pixel variation; the pattern is rig- and resolution-independent on both sides.",
+    "Sequence: both sides cycle R (255,0,0) → G (0,255,0) → B (0,0,255) → W (grey) → R …, with the same phase origin (both are red at t=0). Order and cycle composition match exactly.",
+    "TIMING IS THE ONE REAL DIVERGENCE. Transition times (motion spikes) at 20 fps: orig 1.60, 3.25, 4.90, 6.55, 8.15, 9.80, 11.45, 13.10 s → 1.638 s per colour, 6.550 s per full cycle. Port 2.15, 4.35, 6.50, 8.70, 10.85, 13.05, 15.25, 17.40 s → 2.179 s per colour, 8.72 s per full cycle. Port/orig ratio = 1.330 (port ~33% slower). Measured over a 240 s / 2 fps survey the periods were orig 6.5556 s (146 transitions) and port 8.7222 s (110 transitions).",
+    "The original's 6.5536 s cycle is exactly one Pixel Blaze time() unit (0.1 * 65.536 s), i.e. 4 phases of 1.6384 s. The port's 8.72 s cycle is not a multiple of that unit — it looks like an independently chosen constant rather than a time()-derived period.",
+    "All four phases are EQUAL length on both sides — the port does not merely stretch the white phase; every phase is scaled by the same 1.33 factor. So the duty cycle of the white/RGBW phase is correct (25%), only the absolute rate is wrong.",
+    "White phase colour: orig renders (84,84,86) — a 2/255 blue lift; port renders (84,84,84) — neutral grey. mean brightness 85 vs 84 respectively. Visually indistinguishable, but it is a reproducible per-frame difference.",
+    "Both sides are time-based, NOT frame-coupled: rendering at 10, 20 and 40 fps gave orig mean phase 1.6391 / 1.6382 / 1.6380 s and port 2.1824 / 2.1792 / 2.1779 s — flat to within the frame quantum. Both agree on fps-invariance; no frame-rate coupling bug on either side.",
+    "Steady state is healthy on both. --skip 120 --seconds 20 shows the same cadence and the same four colours; brightnessTrend is 'steady' on both sides in every run; the only meanBrightness values seen across a 240 s survey were 85 (orig) and {84,85} (port). No decay, no freeze, no saturation.",
+    "zeroMotionFrames is high on both (117/120 orig, 118/120 port at baseline) purely because the pattern holds a flat colour between transitions — that is correct behaviour here, not a frozen port. motion and motionLit are identical on both sides (the rig is 100% lit at all times).",
+    "Deterministic: --seed 1234 with --wall-clock 1700000000 produced transition times byte-identical to the default seed-1 / default-clock run on both sides. Neither side uses randomness or wall-clock time.",
+    "Control surface: --probe-controls reports '(no settable controls)' for BOTH sides. No control-surface mismatch; the pattern genuinely has no dials.",
+    "No mode structure beyond the 4-colour rotation: a 240 s / 2 fps survey shows only the one repeating regime on both sides, with no slow palette walk, brightness drift, or super-cycle."
+  ],
+  "dials": [],
+  "feedback": [
+    "Only fix needed: the port's cycle rate. Speed the port up by a factor of ~1.330 so each colour holds 1.6384 s instead of 2.179 s and the full R/G/B/W cycle takes 6.5536 s instead of 8.72 s. The original's period is exactly one Pixel Blaze time() unit at 0.1 (0.1 * 65.536 = 6.5536 s) split into four equal quarters — matching that constant reproduces the original exactly.",
+    "Do NOT change the phase split: all four phases are already equal-length and in the right order (R, G, B, W) with the correct t=0 origin. Only the absolute duration is off; scaling the single period constant fixes every transition at once.",
+    "Cosmetic, optional: the original's white/4th phase is (84,84,86) — very slightly blue-lifted — while the port emits neutral (84,84,84). A 2/255 difference in the blue channel only; ignore unless exact-match fidelity is wanted.",
+    "Everything else already matches: full-strip uniform output, rig/resolution independence (verified at 60 px, 600 px and 8x8 grid), fps-invariant time-based stepping, seed- and wall-clock-independence, and correct steady state out to t=140 s. No structural or colour work is needed."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "long20",
+    "fps10",
+    "fps40",
+    "dumpA",
+    "grid8",
+    "wide600",
+    "late-skip120",
+    "seed1234-clock",
+    "phase-red",
+    "phase-green",
+    "phase-blue",
+    "phase-white"
+  ]
+}

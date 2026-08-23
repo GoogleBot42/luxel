@@ -106,6 +106,17 @@ second. If the per-second displacement scales with fps, the pattern is
 frame-stepped; if it holds, it is time-based. Only report frame-rate coupling
 once the `--dump` positions say so.
 
+STATIC FIELDS: if both sides post motion 0 with min==max brightness across a
+long window (and dumps confirm byte-identical frames over time), the pattern
+is a static test field — the temporal machinery (surveys, regimes,
+autocorrelation, fps coupling) is a no-op. Pivot to RIG-GEOMETRY sweeps
+instead: --pixels lattice sweeps (odd vs even cube sides sample the exact
+0.5 midplane differently — decisive for threshold strictness), grid sizes,
+and strip vs grid. Note the harness pins z = 0.5 EXACTLY on flat rigs
+(grid/strip), which turns a 3D pattern's midplane handling into a
+whole-channel difference — a useful lens, but recognize it as the same root
+cause, not a separate "port adds a channel" finding.
+
 Checkerboard/alternating-sublattice fields (a value living on only one
 parity of pixels per frame, as in pond/wave sims) MOIRÉ badly under the
 PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
