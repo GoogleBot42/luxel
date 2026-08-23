@@ -38,6 +38,13 @@ Cleared entries move to Gitea or the aggregate report.
   points at a 16.16 time wraparound in an engine accumulator; the affected
   ORIGINALS presumably run clean on real PB. Re-judge after fix.
 
+- **Init-time random() returns constant 0 (suspected)**: `static-random-colors`
+  ORIGINAL renders solid 255,0,0 = hsv(0,1,1) everywhere, invariant to seed/
+  rig/clock/warm-up — while the seeded RNG demonstrably works in per-frame
+  paths (chill-confetti's original changes with --seed). Suggests randomness
+  consumed at TOP-LEVEL/init (or a pre-render table fill) gets a constant.
+  Check engine init ordering vs seed installation; re-judge after fix.
+
 ## Manifest rig fixes needed (pairs.json), tied to the out-of-range-writes gap
 - nano-orbital: original writes a fixed 144-px canvas → rig must be ≥144 px
   (default 60-px strip errors at frame 0).

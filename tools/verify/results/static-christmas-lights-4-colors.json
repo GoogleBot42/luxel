@@ -1,0 +1,56 @@
+{
+  "slug": "static-christmas-lights-4-colors",
+  "verdict": "match",
+  "score": 9,
+  "confidence": "high",
+  "summary": "Both sides render the identical static 4-colour repeating strip (red/green/blue/yellow, 1 px per colour) on every rig, pixel count, seed and clock tested; the only pixel-level difference is a 1/255 rounding on the yellow, and the port's sole real fault is its control surface — it invents two sliders the original does not expose, one of which (BlockSize) is completely inert.",
+  "observations": [
+    "STATIC FIELD confirmed on both sides: motion avg/min/max = 0 and meanBrightness pinned at 106 with min==max over 6 s @20 fps, 60 s @5 fps and 240 s @2 fps (480/480 zeroMotionFrames on each side). A --dump at t=600 s (--skip 600) is byte-identical to the t=0 dump on both sides, so the temporal machinery (regimes, autocorrelation, fps coupling) is a no-op here; I pivoted to rig-geometry and per-setting sweeps per JUDGE.md.",
+    "Structure, default 60 px strip, exact from --dump: a period-4 repeat with ONE pixel per colour, phase-aligned at index 0. orig: [255,0,0] [0,255,0] [0,0,255] [254,255,0] repeating; port: [255,0,0] [0,255,0] [0,0,255] [255,254,0] repeating. Red, green and blue are byte-identical on all 45 of those pixels.",
+    "The ONLY pixel difference anywhere is the yellow slot: orig (254,255,0) vs port (255,254,0) — max channel delta 1, i.e. the original's yellow sits a hair on the green side of hue 1/6 and the port's a hair on the red side. Visually indistinguishable; it shows up in the summaries only as meanR/meanG swapping 127/128 between the sides.",
+    "Rig-geometry sweep: identical structure on both sides at --pixels 12, 13, 30, 61, 100 and 300 (RGBY... truncated wherever the count is not a multiple of 4 — orig and port truncate at exactly the same index, e.g. n=13 both end '...RGBYR'), and on --rig grid --grid 16x16, --rig grid --grid 32x8, --rig cloud 5x5x5 (125 px) and --rig cloud 6x6x6 (216 px). In every one of those runs the max channel delta between sides was 1 and the only differing pixels were the yellow ones, so there is no geometry, threshold or midplane divergence at all.",
+    "Both sides are INDEX-ONLY: the flat pixel sequence is the same RGBY cycle on a 16x16 grid, a non-square 32x8 grid, a 3D cloud and a plain strip, and block size stays 1 px regardless of pixel count (no strip-fraction scaling on either side). The two sides therefore agree on the size law as well as the default-rig size.",
+    "No time-of-day dependence: re-rendering with --wall-clock 1766620800 (Christmas Day) produced frames byte-identical to the default clock on both sides. Seed 1234 (240 s survey) gave identical stats to seed 1 — the pattern is deterministic and seedless, as its name implies.",
+    "CONTROL-SURFACE MISMATCH (the main finding): the original exposes NO controls at all (meta.json sides.orig.controls == []), while the port exposes two sliders the original lacks — sliderBlockSize (label 'BlockSize') and sliderBrightness (label 'Brightness').",
+    "sliderBlockSize is INERT on the port. A 12-point fine sweep (0, 0.1 ... 1.0) produced byte-identical frames at every value, and it stayed byte-identical when re-swept with a second control pinned (sliderBrightness=1 and sliderBrightness=0.5), which rules out the setter-interaction false-inert case in JUDGE.md. On a static pattern the 4 s probe window cannot produce a false inert for a different reason either — there are no events to miss. It is a dead dial.",
+    "sliderBrightness is live and well-behaved on the port: a clean linear multiplier on all three channels (0 -> all black, 0.25 -> 63, 0.5 -> 127, 0.75 -> 191, 1 -> 255) and its value 1 reproduces the untouched default exactly, so the port's default render is the original's render. Every value below 1 makes the port strictly dimmer than the original, which has no such dial.",
+    "Palette check against the Christmas-family template traits flagged for this corpus: NEITHER side uses green (51,255,0) or grey (114,114,114) here. Both use pure primaries — green is exactly (0,255,0), blue exactly (0,0,255), red exactly (255,0,0) — and there is no grey/warm-white slot in the 4-colour cycle. Since the two sides agree exactly, there is nothing for the port to have missed on this slug.",
+    "Waterfall PNGs for both sides show the same unchanging vertical RGBY stripe field top to bottom over the whole 6 s window; no drift, no phase offset, no mirror or off-by-one in indexing."
+  ],
+  "dials": [
+    {
+      "name": "sliderBlockSize",
+      "origEffect": "control does not exist on the original (original exposes no controls at all)",
+      "portEffect": "inert — byte-identical output at 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, and still inert with sliderBrightness pinned at 1 and at 0.5; block size stays 1 px at every value and every pixel count",
+      "matches": false
+    },
+    {
+      "name": "sliderBrightness",
+      "origEffect": "control does not exist on the original; the original always renders at full brightness",
+      "portEffect": "live, linear global brightness multiplier (0 -> black, 0.5 -> half-value channels, 1 -> full = the untouched default that matches the original)",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "Output fidelity is already essentially perfect — do not touch the colour sequence, the 1-px block size, the index-driven mapping or the phase; they match the original byte-for-byte on strips (12/13/30/60/61/100/300 px), square and non-square grids, and 3D clouds.",
+    "Only pixel-level nit: the port's yellow renders (255,254,0) where the original renders (254,255,0). The original's yellow sits fractionally on the GREEN side of hue 1/6, the port's fractionally on the RED side. A 1-count difference in one channel — cosmetically irrelevant, but if an exact-match score is wanted, nudge the yellow hue up by one quantisation step so R rounds to 254 and G to 255.",
+    "Control surface: the original exposes ZERO controls. The port adds two sliders (BlockSize, Brightness) that the original does not have. Unless there is a deliberate house policy of adding a brightness dial, both should be removed to match the original's surface; at minimum, sliderBlockSize must go.",
+    "sliderBlockSize does literally nothing: swept across 0..1 in 0.1 steps (and again with Brightness pinned at 1 and 0.5) every frame came out byte-identical, block size stuck at 1 px. Either wire it up so it actually widens the per-colour run (e.g. block size N pixels per colour, period 4N) or delete it — shipping a dial that never changes the output is worse than not having one.",
+    "sliderBrightness itself is implemented correctly (clean linear multiplier, default 1 reproduces the original). If it is kept, note that any value below 1 makes the port dimmer than the original, which cannot be dimmed at all."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump0",
+    "bs-0", "bs-0.1", "bs-0.2", "bs-0.3", "bs-0.4", "bs-0.5", "bs-0.6", "bs-0.7", "bs-0.8", "bs-0.9", "bs-1.0",
+    "bsp-0", "bsp-0.25", "bsp-0.5", "bsp-0.75", "bsp-1.0",
+    "bsq-0", "bsq-0.25", "bsq-0.5", "bsq-0.75", "bsq-1.0",
+    "br-0", "br-0.25", "br-0.5", "br-0.75", "br-1",
+    "px-12", "px-13", "px-30", "px-61", "px-100", "px-300",
+    "grid16", "grid32x8", "cloud5", "cloud6",
+    "xmas-clock",
+    "late"
+  ]
+}

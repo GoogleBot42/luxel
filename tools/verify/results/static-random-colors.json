@@ -1,0 +1,46 @@
+{
+  "slug": "static-random-colors",
+  "verdict": "orig-unrenderable",
+  "score": 0,
+  "confidence": "high",
+  "summary": "The original compiles and runs without error but emits a single constant colour — pure red (255,0,0) on EVERY pixel, under every rig, pixel count, seed, wall clock and time offset tested — so the pattern's defining feature (per-pixel random colours) never appears and no comparison with the port is obtainable; the score of 0 records 'no comparison obtainable', not port quality (the port's solo render looks like a sane static random-colour field).",
+  "observations": [
+    "Both sides are STATIC fields: motion 0 and motionLit 0 on all 120 captured frames at 20 fps, zeroMotionFrames 120/120, brightnessTrend steady on both; --dump comparisons at t=0 vs t=0.5 s and at t=120 s vs t=125 s are byte-identical on both sides, so the temporal machinery (regimes, autocorrelation, fps coupling) is a no-op here and I pivoted to rig-geometry sweeps per JUDGE.md.",
+    "ORIGINAL (baseline, strip 60 px): every pixel is exactly [255,0,0]. statsSummary meanR 255 / meanG 0 / meanB 0, meanBrightness 85 constant. Unique colours in a frame: 1. Rendered as a waterfall it is a featureless solid red rectangle. No compileError and no runtimeError are reported.",
+    "The original's solid red is invariant to EVERYTHING the harness can vary: --pixels 12 / 30 / 60 / 300 / 600, --rig grid --grid 8x8, --rig cloud (5x5x5), --seed 1 / 7 / 1234 / 987654, --wall-clock 1756000000 vs 1700003333, and --skip 120 (2400 warm-up frames). origAllRed=true and origUniqueColours=1 in all 12 dumps. There is no warm-up transient and no late regime.",
+    "255,0,0 is exactly hsv(0, 1, 1), i.e. hue collapsed to 0 with full saturation and value — the signature of the pattern's random hue source returning a constant 0 in our engine rather than of a pattern that means to draw red.",
+    "Harness-sanity control (unrelated slug chill-confetti, labels srccheck-judge-src / seedchk-judge-src-a / seedchk-judge-src-b): its ORIGINAL renders varied, moving content (mean 13, motion 3) and its dumped frame hash CHANGES between --seed 1 (a397ad63bd39) and --seed 987654 (a1a233e7faf4). So the harness, the engine and the seeded RNG are all healthy, and --seed genuinely reaches the original engine — the failure is specific to this pattern (plausibly randomness consumed at init/top-level rather than inside render, but that is inference, not output evidence).",
+    "PORT (baseline, strip 60 px): a static field of per-pixel fully-saturated-ish colours — meanR 154 / meanG 152 / meanB 155, meanBrightness 154 constant. The waterfall is a set of vertical rainbow stripes, one colour per pixel, unchanging in time. This is what the slug name describes, so on its own the port looks correct.",
+    "Port colour statistics over 600 px (--pixels 600, HSV): value is exactly 1.0 on 600/600 pixels (every pixel has one channel at 255); hue is uniform over [0,1) (deciles 57,55,67,45,56,56,73,54,58,79); saturation spans 0.004..1.0 with avg 0.742 and a heavy mass in the top decile (276/600) over a mildly rising spread below it. So: uniform random hue, non-uniform saturation weighted toward saturated, constant full value.",
+    "The port's colour sequence is a FIXED sequence in pixel-index order: the first 6/12/60 pixel colours are byte-identical across strip 12 px, strip 60 px, strip 300 px and the 8x8 grid, and identical across seeds 1/7/1234/987654 and across wall clocks. Given that --seed demonstrably perturbs other patterns' port RNG (confetti control above), the port's field is not drawn from the harness-seeded RNG — it is a deterministic function of pixel index (or an internally re-seeded constant RNG), so it shows the same 'random' field on every run/boot.",
+    "Control surface: --probe-controls reports '(no settable controls)' on BOTH sides, and meta.json's controls list is empty for orig and port. No control-surface mismatch; dials are genuinely absent.",
+    "Neither side binds sensor globals (wantsSensors false on both), so the beat120 feed is irrelevant here."
+  ],
+  "dials": [],
+  "feedback": [
+    "This pair cannot be judged until the ORIGINAL renders something other than uniform red. The original's output is a single constant colour under every configuration I could vary, which is the exact hsv(0,1,1) point — the engine is producing hue 0 where the original expects random hues. Since the seeded RNG demonstrably works on other slugs' originals (chill-confetti's original changes with --seed), suspect randomness that is consumed OUTSIDE the per-frame render path (top-level/init code, or a per-pixel table filled once before rendering starts) rather than a dead random() builtin. Fix that engine gap, then re-run this slug before scoring the port.",
+    "Do NOT treat this verdict as evidence against the port. On its own the port produces exactly what the slug name implies: an unchanging per-pixel random-colour field, full value, uniform hue, mostly-saturated.",
+    "One port property worth checking once the original is comparable: the port's field is bit-identical across seeds 1/7/1234/987654 and across rig sizes, i.e. the same 'random' colours in the same pixel order every time. If the original re-randomizes per load (as a Pixel Blaze random() at init would), the port should consume the seeded RNG too rather than a fixed index-derived sequence; a viewer reloading the pattern would expect a different field, not the identical one.",
+    "Second port property to verify later: the port's saturation distribution is not uniform — avg 0.742 with ~46% of pixels in the top decile and a rising ramp below — while value is pinned at exactly 1.0 for every pixel. If the original turns out to draw hsv(random, 1, 1) (uniform hue, saturation exactly 1), the port is adding a saturation spread that should not be there; if the original spreads saturation, check the shape matches."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump0",
+    "seed-7",
+    "seed-1234",
+    "seed-987654",
+    "px-12",
+    "px-30",
+    "px-300",
+    "px-600",
+    "grid8-judge",
+    "cloud-judge",
+    "wc-judge",
+    "late-judge",
+    "chill-confetti/srccheck-judge-src (harness-sanity control)",
+    "chill-confetti/seedchk-judge-src-a (harness-sanity control)",
+    "chill-confetti/seedchk-judge-src-b (harness-sanity control)"
+  ]
+}

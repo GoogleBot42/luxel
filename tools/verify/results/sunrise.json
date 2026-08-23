@@ -1,0 +1,49 @@
+{
+  "slug": "sunrise",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Same one-shot sunrise animation with pixel-exact geometry, timing and lifecycle, but the port's warm phase is orange (255,68,0) where the original's is red (255,30,0) — a systematic ~2.3x green-channel excess that also makes the whitening transition amber instead of salmon.",
+  "observations": [
+    "Both sides render, no compile or runtime errors, no controls on either side (probe: 'no settable controls' for orig AND port — control surfaces match).",
+    "Shape (both sides, 60 px strip): a warm glow is born at the strip centre and expands symmetrically outward at ~20 px/s. Lit span (orig): t=0.2 [26,34], t=0.6 [18,42], t=1.0 [10,50], t=1.4 [2,58], full strip by t=1.6. Port is identical to within 1 px at every one of those times ([27,33], [19,41], [11,49], [3,57]).",
+    "Lifecycle is a ONE-SHOT ramp, not a loop: black -> expanding warm wedge (0-1.6 s) -> a red/orange saturation front expanding from centre at ~20 px/s (orig R=255 span t=1.8 [23,37], t=2.2 [15,45], t=2.6 [7,53], whole strip by t=3.0; port trails by 1-2 px) -> ~0.4 s hold at the plateau colour -> a white front expanding from centre at ~20 px/s (orig white span t=4.6 [27,33], t=5.0 [19,41], t=5.4 [11,49], t=5.8 [3,57]; port [29,32], [21,40], [13,48], [5,56]) -> full white from ~t=6.2 onward, forever. Confirmed over a 500 s / 2 fps survey: no reset, no repeat, no second event on either side.",
+    "COLOUR, phase 1 (headline difference). Binned R->G over all pixels/times while R<255: orig G = 0.118*R (plateau 255,30,0, hue ~7 deg, fire-engine red); port G = 0.267*R (plateau 255,68,0, hue ~16 deg, vermillion/safety orange). The multiplier is constant over the whole ramp: orig R=64->G=8, 128->15, 192->23, 240->28; port R=64->G=17, 128->35, 192->51, 240->65. Plainly visible side-by-side in the waterfalls: the original's mid-window band is pure red, the port's is orange.",
+    "COLOUR, phase 2. Once R is railed at 255 the blue channel follows green with an offset, and the port's offset is much larger: orig B starts rising at G~32 and holds G-B ~27 falling to 0 (G=64->B=38, 128->111, 192->183, 240->236); port B starts rising only at G~64 and holds G-B ~50 (G=96->B=38, 128->81, 192->169, 240->233). So the original whitens through salmon/pink and the port whitens through amber/peach. Both converge on pure white.",
+    "Aggregate effect on the 6 s baseline: meanR 192.3 (orig) vs 190.1 (port), meanB 64.8 vs 62.6 — essentially equal — while meanG is 79.9 vs 96.6, +21% on the port. The whole divergence lives in green.",
+    "TIMING: brightness envelopes are near-identical. Orig meanBrightness at 0/1/2/3/4/5 s = 0/23/76/95/134/223; port = 0/24/84/108/140/222. The port lags by a constant ~0.05-0.10 s (1-2 frames at 20 fps), visible as its fronts trailing the original's by 1-2 px throughout. Nothing a viewer could see.",
+    "FRAME-RATE COUPLING (mild, and it is the ORIGINAL that is coupled): the port is byte-identical at 10, 20 and 40 fps when dumped at the same absolute times (t=1 p15 = 255-scale 42,11,0 at all three rates; t=4 p15 = 255,99,42 at all three). The original is not: t=1 p15 = 59 (10 fps) / 51 (20 fps) / 46 (40 fps), t=2 p0 = 102/93/89. The offset scales as exactly 1/fps, i.e. the original runs a constant ONE FRAME ahead of the pure time function while the port evaluates absolute elapsed time. Rates and total duration are identical at every fps, so this is a fixed one-frame phase, not a speed divergence, and it is the source of the 1-2 px front lag above.",
+    "STEADY STATE: after ~6.2 s all 60 pixels are 255,255,255 on both sides except pixel 0. The original keeps creeping asymptotically toward white there (p0 = 255,248,247 at t=6, 255,254,254 at t=200 and t=204), while the port freezes at 255,248,246 and never moves again (checked to t=500). Mean-channel over the long survey: orig 255/243/241 at 20 s drifting to 255/253/253 at 480 s; port pinned at 255/244/241 for the whole 500 s. One pixel, <10 counts — imperceptible, but it means the original's ramp is asymptotic while the port's terminates.",
+    "The lit wedge is asymmetric by one pixel on BOTH sides (centre sits at flat index 30, not 29.5, so pixel 0 always trails pixel 59) — the port reproduces this quirk correctly.",
+    "NOT clock-driven: byte-identical dumps on both sides at --wall-clock 1756000000 / +6 h / +12 h / +18 h. The known time-of-day engine gap is therefore irrelevant to this slug — neither side reads it, and nothing about the comparison is blocked by it.",
+    "NOT seed-driven: seed 1234 reproduces seed 1 exactly on both sides (orig t=1 centre 178,21,0; port 169,45,0 at both seeds). Fully deterministic, no RNG.",
+    "Both sides are INDEX-ONLY and resolution-independent in the same way: at --pixels 12, 60 and 300 the wedge occupies the same FRACTION of the strip at the same times (t=0.6 lit span 28.7-71.3% at 300 px vs 30-70% at 60 px), and an 8x8 grid re-render is just the 64-pixel flat ramp reshaped, symmetric about the flat-index midpoint, on both sides. No index-mapping divergence."
+  ],
+  "dials": [],
+  "feedback": [
+    "The single fix that closes most of the gap: the port's green channel is ~2.3x too strong through the warm phase. The original's warm ramp keeps G = 0.118*R (railing at 255,30,0, hue ~7 deg); the port keeps G = 0.267*R (railing at 255,68,0, hue ~16 deg). Scale the port's green contribution during the pre-white phase down by ~0.44 so the held plateau colour lands on 255,30,0 instead of 255,68,0. Everything else about the ramp — its speed, its expansion rate, its hold, its endpoints — is already correct.",
+    "Second colour fix: during the whitening phase the port's blue lags green too far. The original begins lifting blue once green reaches ~32/255 and keeps a G-B gap of about 27 that shrinks to 0 as it whitens; the port waits until green reaches ~64/255 and keeps a gap of about 50. Result: the original transitions red -> salmon/pink -> white, the port transitions orange -> amber/peach -> white. Start blue's rise earlier and narrow the gap to roughly half its current value.",
+    "Optional, cosmetic: the port trails the original by exactly one rendered frame (~0.05 s at 20 fps, showing up as its expansion fronts sitting 1-2 px behind). The original advances its ramp accumulator BEFORE rendering, so at frame k it shows the state for time (k+1)/fps; the port shows k/fps. Advancing the port's time by one frame delta before evaluating would make the two coincide. Note the tradeoff: the port as it stands is exactly frame-rate-invariant and the original is not, so this only matters if bit-matching the original is the goal.",
+    "Optional, near-invisible: the original's approach to full white is asymptotic and never quite finishes — pixel 0 is still climbing (255,254,254) at t=200 s and t=500 s. The port's ramp terminates and freezes pixel 0 at 255,248,246 by ~t=12 s. If the port clamps or completes its ramp at a finite time, letting it keep approaching white instead would match; the visible difference is under 10 counts on one pixel."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-500",
+    "dump-ramp",
+    "palette",
+    "regime-whiten",
+    "late200",
+    "fps10",
+    "fps40",
+    "wc1756000000",
+    "wc1756021600",
+    "wc1756043200",
+    "wc1756064800",
+    "seed1234",
+    "px300",
+    "px12",
+    "grid8"
+  ]
+}

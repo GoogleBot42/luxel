@@ -129,6 +129,12 @@ PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
 or ring structure that is pure display artefact. Verify any structural
 claim on such a pattern from `--dump` numbers, never from the images.
 
+For counting RAYS/STRIPES/BEAMS (a feature-count aggregate stats can't see
+— mean brightness barely moves when a frequency dial doubles the ray
+count), count zero-crossings or local maxima along a dumped SCANLINE
+(a row/column/arc crossing the features) on a de-aliased grid. It turns
+"the fan looks denser" into orig 10→21→32 vs port 2→2→2 across a dial.
+
 Radial-shell analysis caveat: binning pixels by round(hypot(dx,dy)) on a
 thin-ring pattern INVENTS angular variance (ring edges straddle bins) — a
 "breaks the rings angularly" read from shell bins is an artefact until an
@@ -959,9 +965,11 @@ gap — the original would run on a Pixel Blaze but not on us; (b) an artefact
 unrunnable BY DESIGN — e.g. an author-planted sentinel line whose identifier
 tells the user to delete it ("REMOVE_THIS_INVALID_LINE_…"); that fails on
 real PB firmware too and needs a corpus-prep fix, not an engine fix;
-(c) SILENT NULL OUTPUT — compiles and runs with no error but emits exactly
-0,0,0 on every pixel under every configuration (rule out dim/sparse and
-warm-up first: dump pixels, long windows, rig/seed/wall-clock sweeps).
+(c) DEGENERATE CONSTANT OUTPUT — compiles and runs with no error but emits
+a single information-free constant on every pixel under every configuration
+(usually 0,0,0; but also e.g. solid 255,0,0 = hsv(0,1,1), the signature of
+an init-time random() returning constant 0). Rule out dim/sparse and
+warm-up first: dump pixels, long windows, rig/seed/wall-clock sweeps.
 Benchmark/instrumentation-flavoured slugs are prone to (c) — their display
 may depend on measured real elapsed time, which the deterministic harness
 pins — so suspect it early on such names rather than burning ten runs.

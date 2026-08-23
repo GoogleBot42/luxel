@@ -1,0 +1,71 @@
+{
+  "slug": "sunrise-2d",
+  "verdict": "divergent",
+  "score": 3,
+  "confidence": "high",
+  "summary": "Both sides rise a warm sun from the bottom edge to grid centre inside an ember halo at matching radii, but the port's sun is a tiny, dim, perfectly static blob (peak 77, radius ~2 px) where the original's is a large, textured, hollow-cored disc (peak ~250, radius ~5 px) that flares and rotates on a ~4.4 s cycle.",
+  "observations": [
+    "Rig: 16x16 grid, 256 px. Neither side has a compile or runtime error on the default rig; neither side binds sensors (wantsSensors false on both). Both sides are completely wall-clock independent: --wall-clock sweeps at 1755978000 / 1756000000 / 1756021200 / 1756042800 produced identical stats on both sides, so the known time-of-day engine gap does NOT apply to this pair and everything below is directly comparable.",
+    "SHARED, CORRECT BEHAVIOUR — the sunrise itself. Both sides start black, a warm disc appears near the bottom edge and translates upward to grid centre, then holds. Core centroid (radius<=5.5 weighted, 16x16): orig (8.1, 11.0) at t=1 -> (8.0, 5.9) at t=3; port (7.3, 11.7) at t=3 -> (7.3, 7.3) at t=6. Same start position, same final height, same direction. Port's rise starts ~2 s later and takes ~2x as long (orig fully risen by t~2-3 s, port by t~6 s).",
+    "SHARED, CORRECT — the ember/spark halo. Sparse orange dots orbit outside the sun on both sides at the SAME radii: mean spark radius 7.05 px on both, range r=6.0..9.9 (orig) vs 6.0..9.3 (port), measured over 15 dumps in the 100-128 s steady window. Palette family matches: meanB is exactly 0 on both sides in every run; spark R/G ratio 4.67 (orig) vs 4.02 (port).",
+    "DIVERGENCE 1 — sun size and shape. Steady-state radial profile (mean max-channel per integer radius, 16x16, r=1..8): orig peaks at r=3-5 with a HOLLOW core, e.g. t=106 s [r1=5, r2=7, r3=35, r4=79, r5=56, r6=8]; port is a solid centred gaussian [r1=46, r2=20, r3=6, r4=1, r5~0]. Orig's disc spans cols 3-12 / rows 3-12 (diameter ~10 px); port's spans cols 6-8 / rows 6-8 (diameter ~3 px). Confirmed resolution-independent: re-rendered at --grid 48x48 the same normalised profiles hold (orig peak at r/W ~0.25 with a dim core; port peak at r=0), so this is a real shape difference, not a rig/aliasing artefact.",
+    "DIVERGENCE 2 — the sun body is frozen on the port. Over 15 dumps spanning 100-128 s the port's core radial profile is [46,20,6,1] on EVERY frame (peak pixel pinned at exactly 77 every single time), while the orig's core mean swings 18->92 and its peak pixel swings 127->252. A 5 s / 20 fps dump at t=120-125 s isolates this: orig core mean 52.8 -> 92.4 -> 35.3 -> 70.0 within 5 s; port core mean stays 6.7-8.5 the whole time, and every non-zero pixel delta on the port comes from sparks passing through the core radius, not from the disc.",
+    "DIVERGENCE 3 — no flare rhythm on the port. Autocorrelation of meanBrightness over the 100-130 s window at 10 fps: orig has a strong peak at lag 44 frames = 4.4 s (r=0.90) with std 2.71 on mean 10.83 (~25% swing) — the disc's bright limb sweeps around the ring on that period; port's best non-trivial lag is 12 frames = 1.2 s at only r=0.47 with std 0.44 on mean 2.88, which is just spark churn. Visually (ASCII/dump inspection at 4 s spacing) the orig's disc has moving bright arcs, dark spots and a rotating hot limb; the port's is a smooth, texture-free gaussian.",
+    "DIVERGENCE 4 — overall brightness. 500 s / 2 fps survey: orig meanBrightness avg 11 (range 5-16 after settling), port avg 3 (range 2-4). Peak pixel: orig 127-252 across the steady window, port pinned at 77. The port is roughly 3.5-4x too dim overall and 3x too dim at peak.",
+    "DIVERGENCE 5 — spark density. Steady window, pixels at r>5.8 with max-channel >=20: orig 7.7 per frame (median value 86, max 127), port 15.1 per frame (median 53, max 77). The port has about twice as many embers and each is about 40% dimmer. Combined with the tiny sun, the sparks are the dominant visual element on the port whereas the sun dominates on the original.",
+    "CONTROL SURFACE MISMATCH: the original exposes one slider named 'sliderMakeTheSunRise' (label 'MakeTheSunRise'); the port exposes one slider named 'sliderMakeTheSunRiseAgain' (label 'MakeTheSunRiseAgain'). Same count and same kind, but the NAME differs, so a saved-value restore or any external control by name would not reach the port's dial.",
+    "Off-default-rig note (not a headline): at --grid 8x8 the ORIGINAL dies with 'array index out of bounds' (runtime error, renders black) while the port renders fine. That is an original-side limitation on a rig it was never given, recorded only for completeness; all judging above is on the default 16x16 grid, cross-checked at 48x48.",
+    "Seed independence: --seed 7 and --seed 1234 over the 100-120 s window reproduce the same stats as seed 1 on BOTH sides (orig mean 11, port mean 3-4), so none of the above is a one-seed fluke.",
+    "Untouched-default divergence is the same divergence as the dialed one — every dialed run reproduces the observations above unchanged."
+  ],
+  "dials": [
+    {
+      "name": "sliderMakeTheSunRise (orig) / sliderMakeTheSunRiseAgain (port)",
+      "origEffect": "Value-inert but setter-sensitive. An 8-value sweep (0, 0.1, 0.25, 0.4, 0.6, 0.75, 0.9, 1) over a 8 s / 10 fps window at --skip 60 produced BYTE-IDENTICAL frame dumps for all eight values (same sha256, same pixel sum 28518). Merely calling the setter does perturb the pattern — the untouched render over the same window hashes differently (sum 27872), matching the probe's uniform maxDelta of 8.49 at all three probe values — so setting the slider restarts/reseeds something, but the VALUE has no effect. Dial effect therefore unverifiable from output.",
+      "portEffect": "Fully inert: the same 8-value sweep AND the untouched render all hash identically (sum 5541) — neither the value nor the setter call changes anything. Probe maxDelta 0.00 at 0/0.5/1, confirmed by hand over an 8 s multi-flare window at t=60 s and by 60 s / 5 fps runs at 0/0.5/1 (mean 2 in all three).",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "The sun disc is far too small. On a 16x16 grid the original's disc spans ~10 px across (radial brightness peaks at r=3-5 and reaches r=6); the port's reaches only r=2 and is essentially gone by r=4. Scale the disc radius up by roughly 2.5x. The size law is in normalised coordinates on both sides (verified at 48x48), so fix the radius constant, not the rasterisation.",
+    "The original's disc is HOLLOW/annular, not a filled gaussian: its radial profile dips at the centre (r=1 as low as 5 while r=4 is 79) at least half the time. The port draws a monotonically-decaying centred blob (46, 20, 6, 1). Give the disc a bright rim/limb with a darker interior rather than a peak-at-centre falloff.",
+    "The port's sun body is completely static once risen — its radial profile is bit-identical on every frame from t=6 s to t=500 s and its peak pixel is pinned at exactly 77. The original's disc is turbulent: bright arcs, dark spots, and a hot limb that sweeps around, driving a ~4.4 s brightness cycle (autocorr r=0.90 at lag 44 frames @10 fps) with the whole-rig mean swinging 5-16. Whatever noise/turbulence/rotation term drives that on the original is missing or has zero amplitude on the port.",
+    "Brightness is ~3.5-4x too low. Target whole-rig meanBrightness ~11 in steady state (port currently 3) and a peak pixel around 220-250 (port currently capped at 77). The port never produces a yellow highlight: the original's hottest pixels run to [225,152,0] and [218,227,0] (yellow/white-hot), the port's hottest is [60,12,0] / value 77 (deep orange). Extend the palette's top end into yellow.",
+    "Ember halo density is about 2x too high and each ember ~40% too dim: original averages 7.7 sparks per frame with median brightness 86, port averages 15.1 with median 53 (measured at r>5.8, threshold 20, over the 100-128 s steady window on the default 16x16 rig). The halo RADIUS distribution is already correct (mean r=7.05 on both) — only count and brightness need adjusting.",
+    "The rise transient is ~2x too slow and starts ~2 s late: the original's sun is off the bottom edge by t~1 s and fully risen by t~2-3 s; the port's first appears at t~3 s and settles at t~6 s. Same path and same final height, so only the ramp rate/onset delay needs changing.",
+    "Rename the port's control from 'sliderMakeTheSunRiseAgain' to the original's 'sliderMakeTheSunRise' — same kind and count, but the differing name breaks name-keyed control restore.",
+    "Neither side's slider is value-responsive from output (all values byte-identical on both), so no dial behaviour can be verified here; this is a caveat, not permission to change the control surface."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-500",
+    "probe",
+    "dial-0",
+    "dial-0.5",
+    "dial-1",
+    "b6-0",
+    "b6-1",
+    "b6-untouched",
+    "rise",
+    "steady100",
+    "fine120",
+    "dsw-none",
+    "dsw-0",
+    "dsw-0.1",
+    "dsw-0.25",
+    "dsw-0.4",
+    "dsw-0.6",
+    "dsw-0.75",
+    "dsw-0.9",
+    "dsw-1",
+    "grid48",
+    "grid8",
+    "seed7",
+    "seed1234",
+    "wc-1755978000",
+    "wc-1756000000",
+    "wc-1756021200",
+    "wc-1756042800"
+  ]
+}
