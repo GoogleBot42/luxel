@@ -119,7 +119,9 @@ instead: --pixels lattice sweeps (odd vs even cube sides sample the exact
 and strip vs grid. Note the harness pins z = 0.5 EXACTLY on flat rigs
 (grid/strip), which turns a 3D pattern's midplane handling into a
 whole-channel difference — a useful lens, but recognize it as the same root
-cause, not a separate "port adds a channel" finding.
+cause, not a separate "port adds a channel" finding. Per-setting probes on a
+static slug are extremely cheap: `--seconds 1 --fps 20 --dump "0"` per dial
+value makes a 12-point fine sweep or a 3x3 saturation/value grid practical.
 
 Checkerboard/alternating-sublattice fields (a value living on only one
 parity of pixels per frame, as in pond/wave sims) MOIRÉ badly under the
@@ -132,7 +134,10 @@ Cross-correlation shift scans SATURATE at their search bound: a scan over
 true shift may be larger. A flat result exactly at the bound means widen
 the radius, never report it as a constant step. And glyph/text patterns
 must be measured from `--dump`s, never from contact sheets — sheet cells
-are narrow enough that one glyph spanning cells reads as a whole word.
+are narrow enough that one glyph spanning cells reads as a whole word, and
+hump/cycle COUNTS read off a sheet cell are equally untrustworthy (the
+nearest-neighbour upscale invents extra humps; a wave pinned at 3.0 cycles
+by DFT "breathed" between 3 and 6 on the sheet).
 
 Centroid tracking is INVALID near canvas edges: a feature that slides
 in/out of frame gets its visible centroid dragged toward the canvas

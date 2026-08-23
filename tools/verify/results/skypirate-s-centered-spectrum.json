@@ -1,0 +1,70 @@
+{
+  "slug": "skypirate-s-centered-spectrum",
+  "verdict": "orig-unrenderable",
+  "score": 0,
+  "confidence": "high",
+  "summary": "The ORIGINAL emits exactly 0,0,0 on every pixel in every frame under every configuration tried (silent null output, subtype (c)) — no comparison against the port is obtainable, so the score 0 records 'no comparison', not port quality; the port itself renders a lively, beat-locked centered spectrum with all three dials live.",
+  "observations": [
+    "Original side: compileError null, runtimeError null, wantsSensors true, sensors 'synth' (beat120) — it compiles, runs, binds sensor globals, and still outputs nothing. statsSummary over the 60 s / 10 fps survey: meanBrightness {avg 0, min 0, max 0}, motion {avg 0, max 0}, zeroMotionFrames 600/600.",
+    "Confirmed as exact zeros, not sub-quantum dimness rounding to 0: a --dump at 8 beat-offset times (0.15, 0.25, 0.40, 1.15, 2.35, 5.70, 8.10, 11.55 s) over a 12 s / 20 fps run gives the original 0 non-zero pixels out of 256 at every one of the 8 times, max channel 0, channel sum 0. The port at the same 8 frames has 20-176 lit pixels with max channel 255.",
+    "Original stays black across: default rig (16x16 grid), --rig strip --pixels 60, --rig grid --grid 8x8; --sensors synth and --sensors off; --seed 1 and --seed 1234; --wall-clock 1756000000 and 1756040000; --fps 20 and --fps 40; --skip 0, 30 and 200 (i.e. 4000 rendered frames of warm-up at 20 fps, ruling out a long frame-counted transient).",
+    "Original stays black at every dial setting tried: --probe-controls reports maxDelta 0.00 / maxDeltaLit 0.00 for all three sliders (byte-identical renders at 0, 0.5 and 1); a 10-point manual sweep of sliderSilenceLevel (0, 0.05, 0.15, 0.25, 0.35, 0.5, 0.65, 0.8, 0.95, 1) is black at every point; and four all-three-dials-pinned combinations (SilenceLevel/Fill/PeakDropSpeed = 0/0.5/0.5, 0.5/0.5/0.5, 1/1/0.5, 0/1/0) are black too — so this is not the known 'dial only works once a second control is set' setter-interaction artefact.",
+    "Harness sanity: other slugs' baseline runs in tools/verify/out have healthy original meanBrightness (1d-aurora-borealis 19.2, 1-usflag-blink 144.3, 1-white-fade 193, 2-colors 43, 2d-bouncing-additive-primaries 21.8, 2d-canvas-example 14.9), so the dead original is specific to this pattern, not a broken orig-side pipeline.",
+    "Control SURFACES match exactly on both sides: sliderSilenceLevel, sliderFill, sliderPeakDropSpeed, all kind 'slider', same order, same labels (SilenceLevel / Fill / PeakDropSpeed). No missing, extra, renamed or retyped control.",
+    "PORT (solo description, no reference to compare against): a horizontally-mirrored 'centered spectrum'. On the 16x16 grid each row is a frequency band and a bar grows symmetrically left and right from the grid's horizontal centre; the innermost/loudest region is saturated red, and outer/peak cells are magenta-violet (meanR avg 60.7 vs meanG 2.4 / meanB 11.2 at baseline — a red-dominant palette with a purple accent, no green).",
+    "PORT temporal behaviour is correctly beat-locked to the synthetic beat120 feed: port-rhythm.png shows ~12 evenly spaced horizontal bands across the 6 s baseline window = 2.0 Hz, matching the feed's 120 BPM, with a fast attack and visible exponential decay between hits. The 60 s survey rhythm shows the same cadence uniformly end-to-end with no regime/mode structure and no drift, so there are no separate regimes to park a --skip run in.",
+    "PORT steady state is healthy, not decaying: over 60 s at 10 fps meanBrightness avg 31.9 (baseline 6 s avg 24.9), zeroMotionFrames 1/600 (the unavoidable first frame), brightnessTrend 'volatile' (which is the correct reading for a 2 Hz strobing spectrum, not instability). A --skip 200 s late window is brighter still (mean 48), so nothing dies over time.",
+    "PORT goes fully black with --sensors off (mean 0, motion 0) — it is entirely sensor-driven with no free-running fallback. Whether that matches the original is unknowable here since the original is black fed OR unfed."
+  ],
+  "dials": [
+    {
+      "name": "sliderSilenceLevel",
+      "origEffect": "unverifiable from output — original renders exactly black at every value; probe maxDelta 0.00 and a 10-point manual sweep (0 to 1) all produce identical all-zero frames",
+      "portEffect": "live and monotonic: raises the noise-gate floor, so more of the spectrum is suppressed as it rises. 10 s / 20 fps runs give port meanBrightness 36 at 0, 17 at 0.5, 12 at 1 (motion 19 / 17 / 12). Strongest of the three dials (probe maxDelta 23.76, maxDeltaLit 79.44).",
+      "matches": false
+    },
+    {
+      "name": "sliderFill",
+      "origEffect": "unverifiable from output — original black at 0, 0.5 and 1 (probe maxDelta 0.00)",
+      "portEffect": "live and monotonic: controls how solidly each band's bar is filled in from the centre. At 0 the bars read as thin segments with a gap at the centre column; at 1 they are solid blocks spanning centre-outwards. 10 s / 20 fps port meanBrightness 15 / 22 / 28 at 0 / 0.5 / 1 (motion 10 / 17 / 20). Probe maxDelta 21.41, maxDeltaLit 71.01.",
+      "matches": false
+    },
+    {
+      "name": "sliderPeakDropSpeed",
+      "origEffect": "unverifiable from output — original black at 0, 0.5 and 1 (probe maxDelta 0.00)",
+      "portEffect": "live: governs how fast the magenta peak markers fall back after a beat. Faster drop = less lingering lit area, so mean brightness falls as the dial rises: 10 s / 20 fps port meanBrightness 28 / 24 / 20 at 0 / 0.5 / 1. Weakest of the three (probe maxDelta 13.25, maxDeltaLit 41.53) since it only affects the peak-marker cells, not the bars.",
+      "matches": false
+    }
+  ],
+  "feedback": [
+    "This is an ORIGINAL-side blocker, not a port defect. Nothing about the port can be scored until the original renders something: it compiles and runs clean but writes exactly 0,0,0 to all 256 pixels on all 600 frames of a 60 s survey, in every rig / seed / clock / fps / skip / dial configuration probed. Classify as orig-unrenderable subtype (c), silent null output.",
+    "Likely engine-gap direction to investigate (not a port fix): the original is flagged wantsSensors:true and is fed the identical beat120 signal the port reacts to, so the zeroing happens downstream of the sensor bind. Suspect a sensor-derived expression that evaluates to 0 or NaN on our engine — e.g. a normalisation by maxFrequencyMagnitude/energyAverage, a log/sqrt of a value our feed leaves at 0, an unsupported array builtin over frequencyData silently yielding zeros, or an hsv/rgb call whose value term collapses. Instrumenting the original's per-band bar height on the engine would localise it in one step.",
+    "Re-run this slug's verification once the original renders. The port is a plausible, healthy implementation and deserves a real comparison: it draws a centre-mirrored per-row spectrum, locks cleanly to the 2 Hz beat, exposes exactly the original's three sliders with the same names/kinds, and each slider moves the output in an intuitive direction (SilenceLevel gates, Fill solidifies, PeakDropSpeed shortens peak decay).",
+    "Specific things to check against the original once it is renderable, since they are the port's most characterisable properties: (1) the palette — the port is red-dominant with magenta-violet peak markers and essentially zero green (meanG avg 2.4 vs meanR 60.7); (2) the mirror axis — the port mirrors LEFT/RIGHT about the grid's horizontal centre with one frequency band per row; (3) the beat response — the port's bars attack instantly and decay across the ~0.5 s beat interval; (4) the dead-sensor fallback — the port renders fully black with sensors off rather than idling on anything."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "tmpdial (four all-three-dials-pinned combinations on both sides: 0/0.5/0.5, 0.5/0.5/0.5, 1/1/0.5, 0/1/0)",
+    "t-off",
+    "t-strip",
+    "t-late",
+    "t-seed",
+    "t-clock",
+    "t-fps40",
+    "t-g8",
+    "t-warm",
+    "dump-orig",
+    "tmpsweep-sil (10-point sliderSilenceLevel sweep on the original)",
+    "ctl-sliderSilenceLevel-0",
+    "ctl-sliderSilenceLevel-0.5",
+    "ctl-sliderSilenceLevel-1",
+    "ctl-sliderFill-0",
+    "ctl-sliderFill-0.5",
+    "ctl-sliderFill-1",
+    "ctl-sliderPeakDropSpeed-0",
+    "ctl-sliderPeakDropSpeed-0.5",
+    "ctl-sliderPeakDropSpeed-1"
+  ]
+}
