@@ -57,6 +57,22 @@ and `--skip 0 --seconds 20` and `--skip 14 --seconds 6` describe the same
 timeline. That makes regime-by-regime comparison via `--skip` sound: you can
 park both sides at whatever moment the survey flagged and compare there.
 
+**`--fps` changes the SIMULATION, not just the sampling.** The frame delta
+handed to both engines is 1/fps, so a 5 fps run and a 20 fps run are different
+timelines — not one timeline sampled coarsely — and `--seconds` × `--fps` is
+how much simulated time you actually bought. Two consequences:
+
+- A pattern that integrates real elapsed time and one that steps a fixed amount
+  per frame agree at exactly ONE fps. Rendering the SAME side at 10, 20 and
+  40 fps is the diagnostic: unchanged speed means time-based, speed scaling
+  with fps means frame-stepped. Original fps-invariant and port not (or the
+  reverse) is a real port bug — frame-rate coupling — for `observations` and
+  `feedback`.
+- The low-fps survey can make a frame-stepped pattern look degenerate: when its
+  per-frame step lands on an exact cycle at 5 fps, the rhythm image collapses
+  to flat bands and it reads as frozen when it is not. Before calling either
+  side broken from a survey-rate run, re-check that stretch at `--fps 20`.
+
 If `--strip-at`/`--strip-frames` don't fit the window they are silently
 clamped — except the harness now says so, on stderr and in meta.json's
 top-level `warnings` array. If that array is non-empty, the filmstrip is not
@@ -76,6 +92,15 @@ the original will show it immediately. Both sides always get the SAME rig,
 whatever you pass, so an override never makes the comparison unfair — it just
 changes the lens. A rig override is a legitimate experiment, not a workaround;
 label it (`--label grid8-recheck`) like any other.
+
+**Resolution independence (2D patterns).** The same trick applied to a grid
+pattern — re-render at `--grid 8x8` and again at `--grid 48x48` — says how it
+maps onto the rig. One drawing into a fixed logical canvas shows the same
+picture at both sizes, just coarser or finer; one rasterizing at native
+resolution changes feature counts, sizes and detail with the grid. Whichever
+the original does, the port should do too: original resolution-independent and
+port not (or the reverse) is a structural finding, not a lens artefact — report
+it with both grid sizes named.
 
 **Rig-content caveat.** A rig override changes the lens, but for
 pixel-count-dependent patterns it also changes the CONTENT: spark/particle
@@ -138,6 +163,12 @@ numbers:
 - `zeroMotionFrames` — captured frames with no change at all. A high count on
   one side and not the other is a frozen port (note: with `--skip 0` the very
   first captured frame always scores motion 0, so expect a count of 1).
+  **Dim patterns false-read as frozen.** `motion` is computed on the QUANTIZED
+  8-bit output, so a pattern animating at low brightness can post
+  `zeroMotionFrames` near 100% while genuinely moving — the motion is there,
+  it just doesn't survive rounding. Check `meanBrightness` before concluding
+  "frozen": if it is low (say under ~10), confirm with a `--dump` of two
+  consecutive frames (`--dump "3,3.05"` at 20 fps) and compare values directly.
 - `brightnessTrend` — `steady` | `decaying` | `rising` | `volatile`, from the
   first quarter of the window against the last (±20%), with `volatile` when the
   series swings more than 60% of its own mean. `decaying` on the port and
@@ -204,6 +235,14 @@ sides to get a per-frame speed in pixels), exact palette RGB, whether "black"
 is really 0 or a dim 6, or whether an off-by-one in indexing mirrors or shifts
 the pattern. It costs one extra file and no extra render.
 
+**Mind Nyquist when tracking phase.** Your dump times ARE the sampling rate for
+the feature you are following: dumps 1 s apart on something rotating about once
+a second show it standing still, and a hair off that, running backwards. Read
+the feature's period off the rhythm/waterfall image first, then space dumps
+well under half of it — 0.1–0.2 s apart when measuring rotation or oscillation
+direction. A direction claim from sparse dumps is an aliasing artefact until
+you have re-dumped it densely.
+
 Pair it with a SMALL rig. Re-rendering at `--pixels 12` (or `--rig grid --grid
 8x8`) makes period and duty structure unambiguous — a whole frame fits on one
 line and you can read the repeat directly instead of inferring it. Watch for
@@ -251,6 +290,27 @@ spend effort:
 
 ## Procedure
 
+### Untouched defaults are weak evidence (patterns WITH controls)
+
+The harness applies NO control values unless you pass them, and neither side's
+control functions are called at init — both patterns run on whatever their code
+sets up internally. Some originals render degenerate in that state: a real case
+was a spiral drawing zero arms untouched, and spiralling perfectly the moment
+any Arms value was set.
+
+Policy until further notice: for a pattern WITH controls, base the verdict
+primarily on explicitly-dialed comparisons — set the SAME values on both sides
+(`--controls-orig` / `--controls-port`) and judge there. Compare the untouched
+defaults too, but treat untouched-default divergence as LOW-CONFIDENCE
+evidence: report it in `observations` with the caveat that neither side had
+controls applied, and never let it alone drive the verdict or the score. For a
+pattern with no controls, nothing changes.
+
+Related artefact: on some patterns merely SETTING a control perturbs the output
+even when the value is irrelevant (the setter call itself reseeds something).
+So a probe `responsive` verdict needs value-dependence confirmed — 0 and 1 must
+differ from EACH OTHER, not just from untouched — before you call a dial live.
+
 1. Baseline AND survey — **two runs, both required, before anything else.**
 
        snap.mjs <slug> --label baseline
@@ -291,10 +351,16 @@ spend effort:
 
 2. Dial triage: `snap.mjs <slug> --probe-controls --label probe` (see above).
    Do this before any manual dial work so you sweep only the live dials — but
-   treat an inert result as a hint to check by hand, not as a finding.
+   treat an inert result as a hint to check by hand, not as a finding, and a
+   `responsive` result as live only once 0 and 1 differ from each other.
 3. If a side is black or static, don't conclude yet: try `--skip 2`
    (some patterns warm up), a longer window (`--seconds 12`), and a lower
-   or higher fps. Patterns that react only to dials may need a control set.
+   or higher fps — remembering that changing fps changes the simulation, so a
+   pattern that looks degenerate at survey rate may be fine at `--fps 20`.
+   Check `meanBrightness` before believing a frozen-looking `motion` series
+   (dim patterns false-read as frozen), and re-render with controls dialed:
+   patterns that react only to dials, and originals that render degenerate
+   untouched, both need a control set before they can be judged.
 4. Long window: the survey is coarse (5 fps); when it flags a stretch whose
    rhythm you cannot read, re-render just that stretch at a middling rate —
    `--skip <t> --seconds 20 --fps 10` — with a fresh label, and read the
@@ -309,7 +375,9 @@ spend effort:
    flatters it). `brightnessTrend` and `zeroMotionFrames` in `statsSummary`
    flag this for free: port `decaying` against original `steady`, or a
    `zeroMotionFrames` count that climbs with the window length, means the port
-   dies and you must look at the late window before scoring it.
+   dies and you must look at the late window before scoring it — unless
+   `meanBrightness` is low there, in which case rule out the dim-pattern false
+   freeze with a `--dump` first.
 6. Always consult the `motion` and `meanBrightness` series in stats.json.
    The eye misses periodicity and trends the numbers make obvious: a repeating
    motion peak every N frames, a brightness ramp that never resets, motion
@@ -383,9 +451,10 @@ Write `tools/verify/results/<slug>.json`:
 }
 ```
 
-`experiments` must include `baseline`, `survey`, `probe`, and one label per
-regime the survey revealed. If it doesn't, you skipped a mandatory step and
-the verdict is not yet defensible.
+`experiments` must include `baseline`, `survey`, `probe`, one label per regime
+the survey revealed, and — for any pattern with controls — at least one
+explicitly-dialed comparison run. If it doesn't, you skipped a mandatory step
+and the verdict is not yet defensible.
 
 Verdict meanings: `match` = a viewer would accept them as the same pattern;
 `close` = same pattern, minor visible differences (list them); `divergent` =
