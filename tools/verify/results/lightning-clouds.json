@@ -1,0 +1,45 @@
+{
+  "slug": "lightning-clouds",
+  "verdict": "close",
+  "score": 6,
+  "confidence": "high",
+  "summary": "Same pattern — dark blue-grey cloud noise lit by localised white lightning flashes with identical background colour, texture and flash envelope — but the port fires roughly twice as often at the default 20 fps, its flashes never reach the original's saturated-white core (half of them are barely-visible dim glows), and it never has the original's long quiet lulls.",
+  "observations": [
+    "Both sides render alive with no compile or runtime errors, on the default 16x16 grid rig, and both expose ZERO controls (probe: 'no settable controls' on both) — control surfaces match.",
+    "Single regime, no modes: a 240 s / 10 fps survey shows both sides stationary — per-30 s flash counts on the original are 6,6,10,8,12,8,6,8 and mean peak brightness 18.8-24.8 with no trend; the port is 27,22,32,28,26,27,30,28 with mean peak 11.4-12.9. Neither side has a slow palette walk, storm envelope or long-period cycle.",
+    "Background between flashes is an excellent match. At t=4.4 s both sides sit at frame-mean value 2.6-2.7 with a maximum pixel of 7-8, and the same blue-dominant balance (orig mean R/G/B 1.10/1.35/2.68, port 0.92/1.37/2.60). Neither background translates: a 2D circular-shift search over dx,dy in [-4,4] on eight consecutive dumps 0.05 s apart returns best shift (0,0) on both sides, so both clouds evolve in place rather than drifting. The port's cloud churns ~3x faster (per-0.05 s mean abs diff 0.33 vs 0.09) but at these values it is below visual threshold.",
+    "FLASH RATE — the original is FRAME-COUPLED, the port is TIME-BASED. Counting brightness events over 60 s windows: original 0.10 / 0.20 / 0.48 / 0.80 flashes per second at 5 / 10 / 20 / 40 fps — i.e. a flat 0.020-0.024 flashes per RENDERED FRAME at every rate. The port posts 0.85 / 0.82 / 0.85 / 0.88 per second at the same four rates — flat in TIME, not in frames. The two agree only near ~45 fps; at the harness default of 20 fps the port flashes 1.9x too often, at 10 fps 4.1x, at 5 fps 8.5x. This is a real frame-rate-coupling divergence, not a windowing artefact (counts are direct event counts, not the saturating `motion` stat).",
+    "FLASH AMPLITUDE — the port's flashes are much weaker and never saturate. Dumping each side's own 10 peak frames at 20 fps: the original's brightest pixel is 219-255 on all 10 events (255 on 8 of them, pure white), with ~30 px at or above 50, ~15 px above 100 and ~4 px above 200. The port's brightest pixel ranges 38-188 (mean 106) and NEVER reaches 200; only ~7.5 px reach 50, ~2 px reach 100, none reach 200, and on 3 of 10 events no pixel anywhere exceeds 50.",
+    "FLASH SHAPE — the port's flash is flatter, not smaller. Above a value of 20 the port actually lights MORE of the grid than the original (mean 82 px vs 56 px of 256), while above 50 it lights far fewer (7.5 vs 30). So the original draws a tight saturated hot core with a modest halo; the port draws a broad dim wash with a weak core.",
+    "FLASH TIMING DISTRIBUTION — over 240 s the original's inter-flash gaps are p10 0.80 s / p50 2.60 s / p90 8.10 s / max 12.20 s (bursty, with long suspenseful dark stretches), while the port's are p10 0.50 s / p50 0.90 s / p90 2.00 s / max 3.80 s — a near-continuous flicker that never goes quiet. Frame-mean peak brightness over the same window: original p10 17 / p50 21 / p90 25 / max 30; port p10 9 / p50 11 / p90 16 / max 19.",
+    "FLASH ENVELOPE matches well: both have a one-frame attack and a smooth near-linear decay of ~0.36-0.45 s (orig mean 0.44 s, port 0.36 s across three seeds at 20 fps), and both fade in place — the lit region does not move while decaying.",
+    "COLOUR matches: original flash cores are pure white (255,255,255) fading through blue-white (66,68,80); port cores are white (172,172,172) fading through (103,106,114). Same white/blue-white family over the same blue-grey cloud base.",
+    "SEED-INDEPENDENT: at seeds 1, 7 and 1234 (60 s, 20 fps) the original posts 0.483 / 0.417 / 0.533 flashes/s with mean peak 22.2 / 23.2 / 23.3, and the port 0.850 / 0.933 / 0.917 with mean peak 12.1 / 11.9 / 12.1 — the divergence is not a one-seed fluke.",
+    "RESOLUTION: re-rendered at 8x8 and 48x48 both sides scale the same way — cloud feature size grows with the grid on both, and the flash stays a localised patch on both. At 48x48 the original's flash shows several saturated-white nodes within one lit region; the port's is a single small bright blob or, more often, a diffuse grey glow. No resolution-independence mismatch."
+  ],
+  "dials": [],
+  "feedback": [
+    "Flash rate is driven off elapsed TIME in the port but off RENDERED FRAMES in the original. Make the strike trigger a per-frame probability, not a per-second rate: the original fires with probability ~0.02 per rendered frame at every rate tested (5/10/20/40 fps), so its flashes per second scale linearly with frame rate. The port currently sits at a fixed ~0.87 flashes/second regardless of fps.",
+    "At the harness default 20 fps that makes the port ~1.9x too busy (0.85/s vs 0.48/s). Once the rate is made per-frame, target the original's 0.020-0.024 strikes per frame.",
+    "Flash intensity is roughly half too low and never saturates. The original's brightest pixel hits 219-255 on EVERY strike (255 on most); the port tops out at 38-188 and averages 106. Raise the peak so the flash core clips to white — and tighten the amplitude distribution: the original's strikes are consistently strong (frame-mean peak p10 17, p50 21), whereas the port's range from barely-visible (3 of 10 sampled strikes had no pixel above 50) to moderate.",
+    "The flash profile is too flat: the port spreads brightness over ~82 px above value 20 but only ~7.5 px above 50, while the original concentrates ~30 px above 50 and ~15 px above 100 inside a slightly smaller halo (~56 px above 20). Steepen the falloff from the strike centre rather than widening it — the target is a hard bright core with a soft edge, not an even wash.",
+    "Restore the long lulls. The original's inter-flash gap distribution has a long tail (p90 8.1 s, max 12.2 s over 240 s); the port's caps at 3.8 s. Whatever draws the wait between strikes needs a heavier tail, not a near-uniform ~1 s gap.",
+    "Background clouds, their colour balance, the fact that they evolve in place rather than drifting, the flash colour, the one-frame attack and ~0.4 s decay, and the empty control surface are all already correct — do not change them while fixing the strike statistics."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "survey-240",
+    "long20",
+    "fps10",
+    "fps40",
+    "seed7",
+    "seed1234",
+    "grid8",
+    "grid48",
+    "dump-flash",
+    "dump-bg",
+    "dump-peaks"
+  ]
+}
