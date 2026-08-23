@@ -1,0 +1,41 @@
+{
+  "slug": "three-red-pixels-array",
+  "verdict": "broken",
+  "score": 1,
+  "confidence": "high",
+  "summary": "Original is a blue strip with three pure-red markers spaced pixelCount/3 apart marching right at a steady 10 px/s; the port renders a solid RED strip with a single blue pixel pinned at index 0 that only blinks off momentarily — foreground/background colours swapped, marker count 3 to 1, and all motion gone.",
+  "observations": [
+    "Both sides compile and run with no compile/runtime error, and both post identical mean brightness (85 on every frame, min==max) because both fill the whole rig with one saturated channel per pixel. Mean brightness agreement is therefore meaningless here; the channel split is the tell: orig meanR 13 / meanB 242, port meanR 251 / meanB 4 (baseline, 60 px, 20 fps).",
+    "ORIGINAL structure (--dump, 60 px): background is exactly (0,0,255) on 57 pixels, with exactly 3 pixels at (255,0,0) spaced 20 apart (pixelCount/3). At t=0 they sit at indices [0,20,40]; t=0.5 [5,25,45]; t=1 [10,30,50]; t=5.9 [19,39,59].",
+    "ORIGINAL motion: the marker triple advances +1 index every 0.1 s — a steady 10 px/s to the right, wrapping every 20 px, i.e. a 2.0 s visual cycle on a 60 px strip. The survey waterfall is three clean red diagonal dashed traces on solid blue, unbroken over 60 s.",
+    "ORIGINAL is fps-invariant / time-based, not frame-stepped: at 10, 20 and 40 fps the markers are at index ~10 (mod 20) at t=1 s and back near 0 at t=2 s in all three runs (fps10 / baseline / fps40 dumps). Speed is an ABSOLUTE 10 px/s, independent of rig size: 60 px and 300 px both advance 10 px/s (300 px: [0,100,200] at t=0 -> [30,130,230] at t=3), while spacing scales as pixelCount/3, so the wrap period is 2 s at 60 px, 0.4 s at 12 px, 10 s at 300 px.",
+    "PORT structure (--dump, 60 px): 59 pixels at (255,0,0) plus ONE pixel at (0,0,255) at index 0. The colours are exactly the original's two colours, but their roles are swapped (red is now the field, blue is now the single marker).",
+    "PORT motion: essentially none. zeroMotionFrames 114/120 at baseline and 241/300 over the 60 s survey; motion avg 0.2 vs the original's 8.5, motionLit 0.1 vs 8.5. The only change is that the lone blue pixel at index 0 vanishes (whole strip goes solid red) for exactly 2 frames every 40 frames at 20 fps — a 0.1 s blink every 2.0 s. The blue pixel never appears at any index other than 0, checked out to t=29.5 s (late30 dump at t = 0.5, 2.5, 4.5, 7.3, 11.7, 17.1, 23.9, 29.5 s: always blue=[0]).",
+    "The port's blink cadence is NOT random: it coincides exactly with the moments the original's marker set includes index 0. 60 px: original wraps every 2.0 s, port blinks every 2.0 s. 12 px: original wraps every 0.4 s, port's blue pixel is absent at t=0 and t=2.0 (both multiples of 0.4) and present at t=0.5, 1.0, 3.0. 300 px: original wraps every 10 s, port is absent at t=0 and present at t=0.5/1/2/3. So the port appears to compute the correct marching-marker timing but only ever evaluates/renders it at pixel index 0, and paints the marker in the background colour and vice versa.",
+    "Rig-independence: the port's output is identical in character at 12 px, 60 px, 300 px and on an 8x8 grid — always one blue pixel at flat index 0 on a red field. The original scales correctly everywhere (8x8 grid: red at flat indices [0,21,43] at t=0, [10,31,53] at t=1 — three markers at 64/3 spacing still marching 10 px/s).",
+    "Seed-independent on both sides: seed 1234 reproduces seed 1's frames exactly at t=0/1/2 for both sides. No stochastic element to judge.",
+    "Neither side exposes any controls (meta.json controls: [] on both, --probe-controls reports 'no settable controls' for orig and port). Control surfaces match; there is nothing to dial.",
+    "Steady state confirmed over 30 s at 20 fps: the original keeps marching with no drift or decay (brightnessTrend steady, motion pinned at 17 every frame in the survey), and the port stays frozen at its single-blue-pixel state — it is not a transient, and the port never warms up into the right look."
+  ],
+  "dials": [],
+  "feedback": [
+    "The two colours are swapped. The original paints the WHOLE strip blue (0,0,255) and only the three marker pixels red (255,0,0). The port does the opposite: red field, blue marker. Exchange the field colour and the marker colour.",
+    "The port draws only ONE marker, and only ever at pixel index 0. The original draws THREE markers simultaneously, at index p, p + pixelCount/3 and p + 2*pixelCount/3 (verified: [0,20,40] on 60 px, [0,4,8] on 12 px, [0,100,200] on 300 px, [0,21,43] on a 64-px 8x8 grid). Whatever holds the three marker positions is being collapsed to a single value, and that value is being compared against something that only ever matches pixel 0 — most likely a normalized 0..1 position tested against a raw integer pixel index.",
+    "The port has no motion. The original's marker set advances +1 pixel index every 0.1 s (10 px/s to the right, absolute — the SAME 10 px/s at 12, 60 and 300 pixels, so the speed is in pixels per second, not strip-fractions per second) and wraps at pixelCount/3, giving a 2.0 s cycle on the default 60 px rig. The port's timing machinery is already correct — its blue pixel blinks off exactly on the original's wrap beat (2.0 s at 60 px, 0.4 s at 12 px, 10 s at 300 px) — so the position term is being computed but not fed into the per-pixel marker test.",
+    "Target for a fixed port on the default rig: statsSummary meanR ~13, meanB ~242, motion ~17 on every frame after the first, zeroMotionFrames ~1, and a --dump showing exactly 3 pixels at (255,0,0) and 57 at (0,0,255). Current port posts meanR 251 / meanB 4 / motion 0.2 / zeroMotionFrames 114.",
+    "Keep the original's fps-invariance: it is time-based (same 10 px/s at 10, 20 and 40 fps), so do not step the position by a fixed amount per frame."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "probe",
+    "dump-base",
+    "px12",
+    "px300",
+    "late30",
+    "fps10",
+    "fps40",
+    "grid8",
+    "seed1234"
+  ]
+}

@@ -13,6 +13,10 @@ Cleared entries move to Gitea or the aggregate report.
   once at frame 982 (line 32 col 7) on runs >~49 s and keeps rendering
   normally after; `orv-christmas-tree` original errors at frame 0 unless
   pixelCount % 20 == 0. All three would presumably run clean on real PB.
+  Related: `tixy` ORIGINAL throws 'call of a non-function value' (line 158)
+  and goes permanently black after exactly ~46 mini-modes (mode-count-
+  driven, not time-driven) — walking off its formula table; unknown whether
+  real PB tolerates it. Candidate for the same tolerance discussion.
 - **Wall-clock builtins NOT wired — CONFIRMED** (upgraded from suspected):
   `pixelclock` (a pattern that exists to display time) renders byte-identical
   output at ELEVEN wall clocks spanning epoch 0..2000000000, on BOTH sides;

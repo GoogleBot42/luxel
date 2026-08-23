@@ -585,6 +585,15 @@ tracking range shrinks by the symmetry order — a 12-arm asterisk spinning past
 ~300 deg/s already aliases at 0.05 s spacing. Rotation that is fps-invariant
 (verify that first) can be dumped at `--fps 100` purely to buy 0.01 s spacing.
 
+A stopping rule for the no-divergence case: once dumps come back
+BYTE-IDENTICAL, byte-identity held across a rig sweep, an fps sweep, a seed
+check, and one late window is sufficient for `match` at high confidence —
+further experiments are confirmation, not discrimination; stop there.
+And when probing feature-count/rounding behaviour, include a pixel count
+that does NOT divide the pattern's feature count (e.g. `--pixels 7` against
+3 dots) — matching the rounding artefact there is far stronger evidence
+than matching a clean division.
+
 Pair it with a SMALL rig. Re-rendering at `--pixels 12` (or `--rig grid --grid
 8x8`) makes period and duty structure unambiguous — a whole frame fits on one
 line and you can read the repeat directly instead of inferring it. Watch for
