@@ -10,9 +10,8 @@
 //! public docs were silent have been settled by black-box differential
 //! testing against real hardware — results and remaining deliberate
 //! divergences live in docs/research/04-oracle-findings.md. The few still-
-//! open questions (1D transform coords, sensor-board scaling, the exact
-//! noise algorithm) are blocked on hardware, not on probing effort, and are
-//! tracked as Gitea tickets.
+//! open questions (1D transform coords, sensor-board scaling) are blocked
+//! on hardware, not on probing effort, and are tracked as Gitea tickets.
 
 #![cfg_attr(not(test), no_std)]
 
