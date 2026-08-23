@@ -129,6 +129,14 @@ Modes:
 - `off` never feeds — this is the old idle-state view, and it is how you
   reproduce a pre-feed run or see what the pattern does with dead sensors.
 
+**Survey sensor patterns at 10 fps or better.** The standard low-fps survey
+(5 fps, or 2 fps extended) samples a 2 Hz beat at or below its own rate: every
+sample can land between flashes, and a healthy beat-locked pattern reads as
+pure black or as a slow unrelated flicker. A judge was burned by exactly this
+— a 240 s / 2 fps survey reported an original as mean-brightness 0. For any
+side with `wantsSensors: true`, run the survey at `--fps 10` minimum and treat
+beat-rate structure (multiples of 0.5 s) as the thing to look for.
+
 `meta.json` records, per side, `wantsSensors` (does this pattern bind sensor
 globals at all?) and `sensors` — `"synth"` or `"off"`, meaning what was
 ACTUALLY fed, not the flag typed — plus `sensorModel: "beat120"` when synth.
@@ -339,6 +347,13 @@ pixel index of a feature's leading edge (compare the same dump time on both
 sides to get a per-frame speed in pixels), exact palette RGB, whether "black"
 is really 0 or a dim 6, or whether an off-by-one in indexing mirrors or shifts
 the pattern. It costs one extra file and no extra render.
+
+**Thin diagonal features alias into fake kinks on contact sheets.** A 1-2 px
+bar near vertical renders in a 16-px cell as two half-segments at opposite
+corners — it reads convincingly as a bent or forked shape when the pattern
+actually draws a straight line. Before reporting "the port bends/breaks the
+feature", confirm with a `--dump` (e.g. brightest-row-per-column monotonicity)
+that the geometry really differs.
 
 **Mind Nyquist when tracking phase.** Your dump times ARE the sampling rate for
 the feature you are following: dumps 1 s apart on something rotating about once

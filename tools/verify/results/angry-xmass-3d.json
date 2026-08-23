@@ -1,0 +1,39 @@
+{
+  "slug": "angry-xmass-3d",
+  "verdict": "match",
+  "score": 10,
+  "confidence": "high",
+  "summary": "Port and original are pixel-identical on every lens and window I rendered — same frantic red/green Christmas strobe, same ~3 Hz pulse, same white flash cadence — with one single frame out of ~1800 differing where a red/green boundary lands exactly on a threshold tie.",
+  "observations": [
+    "Both sides compile and run clean: no compileError, no runtimeError, wantsSensors false on both, controls list empty on both (probe: 'no settable controls' for orig and port alike).",
+    "Pattern character (default cloud rig, 5x5x5, 125 px waterfall): a fast, high-contrast red/green churn with no dark or quiet stretch anywhere in 240 s. Fine vertical striping in the waterfall means adjacent lattice indices alternate red/green; horizontal white/grey streaks punch through periodically.",
+    "Motion/rhythm (baseline, 6 s @ 20 fps): meanR and meanG oscillate out of phase with a ~6-7 frame period (~3 Hz pulse); meanB sits at 0 most frames and spikes to ~80 roughly every 32 frames (~1.6 s) — those are the white/desaturated flash lines. motion avg 56, max 107 on BOTH sides, identical series (max element-wise difference 0 across all 5 series x 120 frames).",
+    "Grid-rig lens (--rig grid --grid 16x16, z-plane slice): contact sheet shows whole-panel washes flipping between saturated red and saturated green, with a curved/diagonal boundary sweeping across, plus occasional full-width white bars. The consecutive-frame filmstrip (4.00-4.55 s) shows the panel changing completely every 1-3 frames — a genuine strobe, not aliasing. Orig and port filmstrips and rhythm images are indistinguishable.",
+    "Finer lattice (--pixels 1000, 10x10x10): same structure resolved more finely on both sides; series differ by at most 1 unit on exactly one frame out of 160 (rounding).",
+    "Steady state is fine: brightnessTrend 'steady' on both sides in every run including --seconds 240, zeroMotionFrames = 1 (the unavoidable first frame) on both. No decay, no freeze, no saturation late.",
+    "Long survey (240 s @ 2 fps) shows NO mode/regime structure — the texture is uniform end to end on both sides, so there is no hidden second look for the port to get wrong. Max element-wise series difference over those 480 frames: 1.",
+    "Exact-value check (--dump at 0/7.5/15/22/29 s on a 30 s window): all 1875 colour channels identical between orig and port at every dumped time, e.g. t=15 s px0-7 = [2,112,0],[112,0,0],[112,0,0],[2,112,0],[2,112,0],[2,112,0],[112,0,0],[112,0,0] on both.",
+    "ONE divergence found, in the late window (--skip 40): at t=40.75 s exactly, 80 of 125 pixels differ — orig paints them red where port paints them green (e.g. px2 orig [78,0,0] vs port [1,78,0]). The frames 0.05 s either side (t=40.70 and t=40.80) are bit-identical on both sides. This is a red/green flip landing on an exact threshold tie for one frame, not a behavioural difference; it is invisible at 20 fps.",
+    "Frame-rate behaviour matches: rendering both sides at 10, 20 and 40 fps gives orig and port identical motion averages at each rate (68.8/56.2/45.6), so whatever time-vs-frame coupling the original has, the port has the same. Non-default seed (--seed 7, 10 s) is also bit-identical, so this is not a one-seed fluke.",
+    "The 'angry' character is genuine and matched: at default dials this pattern is a near-full-brightness red/green strobe with no calm phase, on both sides."
+  ],
+  "dials": [],
+  "feedback": [
+    "Nothing to fix. Structure, colour, pulse rate, white-flash cadence, brightness envelope and steady state are pixel-identical to the original on the default cloud rig, on a 10x10x10 lattice, on a 16x16 grid slice, at 10/20/40 fps, on two seeds, and out to 240 s.",
+    "If a future pass wants absolute bit-parity: the only mismatch found in ~1800 rendered frames is a single frame at t=40.75 s where a red/green boundary resolves to the opposite colour for 80 of 125 pixels. Neighbouring frames at +/-0.05 s agree exactly, so this is a floating-point tie at a comparison boundary rather than a wrong formula — not worth chasing unless bit-parity is the goal, since it is unobservable at any playback rate."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "fine1000",
+    "grid-slice",
+    "dump-mid",
+    "late",
+    "late-dump",
+    "seed7",
+    "fps10",
+    "fps40"
+  ]
+}

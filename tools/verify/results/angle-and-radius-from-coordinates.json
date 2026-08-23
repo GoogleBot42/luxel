@@ -1,0 +1,46 @@
+{
+  "slug": "angle-and-radius-from-coordinates",
+  "verdict": "close",
+  "score": 7,
+  "confidence": "high",
+  "summary": "Port reproduces the original's rainbow two-lobed sweep pixel-for-pixel at matched phase, but its beam rotates in the OPPOSITE direction and ~9% faster (4.50 s/rev vs the original's ~4.92 s/rev).",
+  "observations": [
+    "Both sides alive, no compile or runtime errors, on every run (default 16x16 grid, 8x8, 48x48, seeds 1 and 7, windows from 6 s to 240 s).",
+    "Shared structure at 48x48: a narrow two-lobed beam (a bowtie/spike through the grid centre), hue mapped along the radius - deep red at the centre, through yellow/green/cyan, to blue/violet at the tips - rotating smoothly about the centre. Identical on both sides.",
+    "MOTION DIRECTION IS REVERSED. Tracking the lit beam's brightness-centroid angle over a 60 s window (dumps every 0.25 s, unwrapped): original +73.21 deg/s (clockwise on screen, row 0 = top), port -80.00 deg/s (counter-clockwise). Confirmed at 0.05 s dump spacing (orig +~3.4 deg/frame, port -~4.6 deg/frame at 20 fps), so this is not a Nyquist artefact, and it still holds at t=200 s.",
+    "SPEED IS ~9% FAST. Original's revolution period is ~4.917 s; the port's is 4.500 s (exactly 80 deg/s). Ratio port/orig = 1.093.",
+    "Apart from the sweep, the render is byte-identical. Comparing frames where the two sides' beams sit at the SAME angle (matched-phase pairs at 136.2, -4.5, -142.0, 73.3 and -61.2 degrees, spanning the full circle), the max per-channel difference over the whole 16x16 grid was 1-5 of 255 and the mean 0.03-0.25 - i.e. the residue of a fraction of a degree of phase mismatch, nothing else. Same beam width, same lobe count, same radius-to-hue map, same brightness envelope.",
+    "Same-time comparison is meaningless because of the direction/rate difference: at t=11.5 s the two grids differ by a mean of 24 per channel (max 253) purely because the beams point different ways.",
+    "Starting phase also differs: at t=0 the original's beam centroid sits at 94.6 deg, the port's at 175.0 deg.",
+    "Both sides are TIME-based, not frame-stepped: measured rotation rate is unchanged at 10, 20 and 40 fps (orig 73.21/73.21/73.21 deg/s, port -79.99/-80.00/-80.02). No frame-rate coupling on either side.",
+    "Both sides are resolution-independent: the same picture, coarser or finer, at 8x8 and 48x48 - the beam is a fixed fraction of the canvas on both, feature count unchanged.",
+    "No modes or regimes. A 240 s survey rhythm image is a uniform repeating sawtooth on both sides from end to end - no palette walk, no long-period beat, no drift. The port's bands are visibly denser, which is just the shorter period.",
+    "No degeneration: statsSummary brightnessTrend is 'steady' on both, meanBrightness ~11.8 on both, zeroMotionFrames 1 (the unavoidable first frame) on both, and a --skip 200 window is indistinguishable in health from t=0.",
+    "Control surface matches: the engine reports ZERO settable controls on both sides, and --probe-controls confirms '(no settable controls)' for each. Seed has no effect (seed 7 stats identical to seed 1) - the pattern is fully deterministic.",
+    "Colour statistics are effectively identical over 60 s: meanR 4.1/4.1, meanG 19.3/19.3, meanB 11.7/11.8 (orig/port)."
+  ],
+  "dials": [],
+  "feedback": [
+    "Reverse the sign of the beam's rotation. The original sweeps CLOCKWISE on the rendered grid (centroid angle increasing when measured as atan2(y-down, x)); the port sweeps counter-clockwise. Everything else about the port is already exact, so negating the angular term is the whole fix.",
+    "Slow the rotation by a factor of 1.093. The port completes a revolution in exactly 4.500 s (80 deg/s); the original takes ~4.917 s (73.21 deg/s). Note 4.917 s is 65.536 x 0.075 - i.e. the original's rate looks like a Pixelblaze time(0.075) sweep, whereas the port appears to use a hand-rounded 4.5 s / 80 deg-per-second constant.",
+    "Nothing else needs touching. At matched phase the port's 16x16 output is identical to the original's to within 1-5 of 255 across five different beam angles - beam width, lobe geometry, radius-to-hue mapping and brightness envelope are all already correct, as are the time-based (fps-invariant) clock and the resolution-independent canvas mapping.",
+    "Optional nitpick, only if the fixer wants a per-frame match: the port's beam starts at a different orientation (175 deg vs 94.6 deg at t=0). Cosmetic on hardware, but a starting-phase offset would close the last gap."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "t20",
+    "dump-rot",
+    "dump-dense",
+    "dump-long",
+    "fps10",
+    "fps20",
+    "fps40",
+    "grid8",
+    "grid48",
+    "seed7",
+    "late-skip200"
+  ]
+}
