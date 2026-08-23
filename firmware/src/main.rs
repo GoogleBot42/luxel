@@ -39,11 +39,10 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::rng::Rng;
-use esp_hal::spi::master::{Config as SpiConfig, Spi, SpiDma};
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::Blocking;
 use esp_println::println;
 use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{Config as WifiConfig, ControllerConfig, Interface, WifiController};
@@ -58,6 +57,7 @@ mod leds;
 mod mqtt;
 mod netin;
 mod ota;
+mod output;
 mod patterns;
 mod playlist;
 mod provision;
@@ -71,6 +71,7 @@ mod wledfs;
 
 use leds::Protocol;
 use luxel_core::jsonview;
+use output::OutputDriver;
 use shared::{
     publish, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE,
     PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
@@ -364,7 +365,7 @@ async fn main(spawner: Spawner) -> ! {
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
     // whether it interacts with the esp32 radio crashes.
     if option_env!("LUXEL_QUIET").is_none() {
-        spawner.spawn(render_task(spi).unwrap());
+        spawner.spawn(render_task(output::SpiStripOutput::new(spi)).unwrap());
         spawner.spawn(playlist::playlist_task().unwrap());
     } else {
         println!("LUXEL_QUIET: render task disabled");
@@ -584,54 +585,6 @@ fn apply_outpipe<'a>(
     pipe_buf
 }
 
-/// SPI config for a protocol (only the clock rate differs; mode 0 for both).
-fn spi_cfg(p: Protocol) -> SpiConfig {
-    SpiConfig::default()
-        .with_frequency(Rate::from_hz(p.spi_hz()))
-        .with_mode(Mode::_0)
-}
-
-/// SPI encode buffer, u32-backed: the DMA driver only streams a slice
-/// zero-copy when its base is 4-byte-aligned and its length a multiple
-/// of 4 (classic-ESP32 DMA rule) — a Vec<u8> guarantees neither, and the
-/// fallback re-chunks the frame through a bounce buffer (wire gaps: the
-/// exact WS2812 corruption DMA is here to prevent). The ≤3 pad bytes
-/// stay zero — harmless on both protocols (SK9822 end clocks / WS2812
-/// latch tail).
-struct EncodeBuf(alloc::vec::Vec<u32>);
-
-impl EncodeBuf {
-    const fn new() -> Self {
-        Self(alloc::vec::Vec::new())
-    }
-    fn len(&self) -> usize {
-        self.0.len() * 4
-    }
-    fn bytes(&self) -> &[u8] {
-        // u32 → u8 reinterpret: alignment only loosens, length is exact
-        unsafe { core::slice::from_raw_parts(self.0.as_ptr().cast(), self.0.len() * 4) }
-    }
-    fn bytes_mut(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.0.as_mut_ptr().cast(), self.0.len() * 4) }
-    }
-}
-
-/// Resize the SPI encode buffer, releasing the old allocation BEFORE
-/// reserving the new one — a protocol switch can more than double it
-/// (WS2812 is 9 B/px vs SK9822's ~4 B/px; at 2048 px that's an 18 KB
-/// allocation which must not coexist with the old buffer on a tight heap).
-/// Fallible: on false the buffer is left empty and the encode paths (which
-/// check the length) skip SPI output rather than indexing out of bounds.
-fn realloc_buf(buf: &mut EncodeBuf, len: usize) -> bool {
-    buf.0 = alloc::vec::Vec::new(); // free the old allocation first
-    let words = len.div_ceil(4);
-    if buf.0.try_reserve_exact(words).is_err() {
-        return false;
-    }
-    buf.0.resize(words, 0);
-    true
-}
-
 // `RUNTIME_FLOOR` and the array-budget arithmetic live in
 // `luxel_core::budget` — that module carries the full rationale for both
 // numbers. They are shared rather than local because the web editor imports
@@ -709,8 +662,13 @@ async fn persist_current_pattern(src: &str, bc: &[u8], id: &str) {
 }
 
 /// frames. Yields to the network tasks after every frame.
+///
+/// Output-agnostic: everything wire-specific (encode buffers, DMA, clock
+/// reconfiguration) lives behind [`output::OutputDriver`]; this task only
+/// decides WHEN to reconfigure/resize and keeps the engine-freeing retry
+/// policy on tight-heap failures.
 #[embassy_executor::task]
-async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
+async fn render_task(mut out: output::BoardOutput) -> ! {
     let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
     // master power (HA light switch): off = encode at brightness 0 (black on
     // both protocols) while the engine keeps ticking, so ON resumes mid-motion
@@ -776,15 +734,11 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
 
     // Apply the seeded protocol — flash may specify one different from the
     // boot-time default the SPI was constructed with.
-    if let Err(e) = spi.apply_config(&spi_cfg(cur_protocol())) {
+    if let Err(e) = out.set_protocol(cur_protocol()) {
         println!("spi config error: {:?}", e);
     }
-    let mut buf = EncodeBuf::new();
-    if !realloc_buf(
-        &mut buf,
-        cur_protocol().buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize),
-    ) {
-        // the encode paths retry lazily once heap frees up
+    if !out.resize(PIXEL_COUNT.load(Ordering::Relaxed) as usize) {
+        // the driver retries lazily per frame once heap frees up
         println!("encode buffer alloc failed at boot — output paused");
     }
     // crossfade: the outgoing engine + blend timing + a reusable blend buffer
@@ -879,9 +833,9 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                         eng.set_var(&name, value);
                     }
                 }
-                // Live pixel-count change (no reboot): resize the SPI buffer
-                // and rebuild the engine at the new count from the current
-                // source. This task is the sole writer of PIXEL_COUNT.
+                // Live pixel-count change (no reboot): resize the output
+                // buffers and rebuild the engine at the new count from the
+                // current source. This task is the sole writer of PIXEL_COUNT.
                 Msg::Config(count) => {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
@@ -889,7 +843,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                     prev = None;
                     // resize AFTER freeing the engines — at 2048 px the new
                     // buffer is a multi-KB alloc that wants the peak heap too
-                    if !realloc_buf(&mut buf, cur_protocol().buf_len(count as usize)) {
+                    if !out.resize(count as usize) {
                         println!("encode buffer alloc failed ({} px) — output paused", count);
                     }
                     if let Some(e) = rebuild() {
@@ -916,7 +870,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                 //   out entirely in one protocol at one clock.
                 Msg::Protocol(code) => {
                     let p = Protocol::from_u8(code);
-                    if let Err(e) = spi.apply_config(&spi_cfg(p)) {
+                    if let Err(e) = out.set_protocol(p) {
                         println!(
                             "spi config error: {:?} — staying on {}",
                             e,
@@ -924,18 +878,18 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                         );
                     } else {
                         PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
-                        let need = p.buf_len(PIXEL_COUNT.load(Ordering::Relaxed) as usize);
-                        if !realloc_buf(&mut buf, need) {
+                        let count = PIXEL_COUNT.load(Ordering::Relaxed);
+                        if !out.resize(count as usize) {
                             // heap too tight for the bigger encoding: free the
                             // engines (Freeze semantics — the strip holds its
                             // last frame) and retry; the next Code/Crossfade
                             // revives rendering
                             engine = None;
                             prev = None;
-                            if !realloc_buf(&mut buf, need) {
+                            if !out.resize(count as usize) {
                                 println!(
-                                    "encode buffer alloc failed ({} B) — output paused",
-                                    need
+                                    "encode buffer alloc failed ({} px) — output paused",
+                                    count
                                 );
                             }
                         }
@@ -1047,16 +1001,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
             set_pixels(&blend_buf);
             let b5 = out_brightness();
             let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, b5);
-            let proto = cur_protocol();
-            // the buffer is empty after a failed realloc — retry it lazily
-            // (heap may have freed up); never index out of bounds
-            let need = proto.buf_len(wire.len());
-            if buf.len() >= need || realloc_buf(&mut buf, need) {
-                proto.encode(wire, b5, buf.bytes_mut());
-                if let Err(e) = spi.write(buf.bytes()) {
-                    println!("spi write error: {:?}", e);
-                }
-            }
+            out.write_frame(wire, b5);
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() {
             let now = Instant::now();
@@ -1090,7 +1035,7 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
             } else {
                 65536
             };
-            let out: &[[u8; 3]] = if prev.is_some() && t < 65536 {
+            let frame: &[[u8; 3]] = if prev.is_some() && t < 65536 {
                 // copy the incoming frame, then blend the outgoing on top
                 blend_buf.clear();
                 blend_buf.extend_from_slice(engine.as_mut().unwrap().frame(delta));
@@ -1103,19 +1048,10 @@ async fn render_task(mut spi: SpiDma<'static, Blocking>) -> ! {
                 prev = None; // fade finished
                 engine.as_mut().unwrap().frame(delta)
             };
-            set_pixels(out);
+            set_pixels(frame);
             let b5 = out_brightness();
-            let wire = apply_outpipe(out, &mut pipe_buf, &mut gamma_cache, b5);
-            let proto = cur_protocol();
-            // the buffer is empty after a failed realloc — retry it lazily
-            // (heap may have freed up); never index out of bounds
-            let need = proto.buf_len(wire.len());
-            if buf.len() >= need || realloc_buf(&mut buf, need) {
-                proto.encode(wire, b5, buf.bytes_mut());
-                if let Err(e) = spi.write(buf.bytes()) {
-                    println!("spi write error: {:?}", e);
-                }
-            }
+            let wire = apply_outpipe(frame, &mut pipe_buf, &mut gamma_cache, b5);
+            out.write_frame(wire, b5);
             if let Some(e) = engine.as_mut().unwrap().take_error() {
                 // report each distinct error site once, not per frame — an
                 // erroring pattern at 120 fps floods serial and churns the
