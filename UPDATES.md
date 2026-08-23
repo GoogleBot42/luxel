@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-08-22 — HUB75 output driver: ESP32-S3 LCD_CAM via esp-hub75
+## (Gitea #72, feature `hub75`)
+
+The first non-strip `OutputDriver`: `firmware/src/hub75.rs` composes each
+post-outpipe RGB888 frame into a bitplane BCM framebuffer that a circular
+DMA chain rescans autonomously (esp-hub75 0.14 `circular-dma` +
+`skip-black-pixels`) — refresh is decoupled from engine rate and costs no
+ISR work. Two heap-leaked framebuffers (~28 KB each, 64x64 x 7 planes,
+allocated at wiring time while the heap is fresh — alloc failure disables
+output, never panics) double-buffer via esp-hub75's atomic descriptor
+swap; the swap is waited at the *next* frame's start, so it's free at
+engine rates. Compile-time geometry (const-generic DMA statics): 64x64,
+7 bitplanes (~77 Hz at the 20 MHz example clock; 8 planes would halve
+that — depth/clock tuning is on-metal work, #75). Brightness scales in
+software like WS2812; `set_protocol` returns `Err` per the output.rs
+fixed-wire-format contract (render task keeps the old protocol).
+`PowerModel` branch in `luxel_core::outpipe`: HUB75 divides the strip
+estimate by the scan ratio (1/32 for 64-row panels) — host-tested,
+deliberately ~2x conservative vs typical rated panel draw.
+
+esp-hub75 targets release esp-hal 1.1.0 and our stack pins esp-hal git
+main; the drift (two renamed DMA APIs) is carried as a **patch file**
+(`firmware/patches/`, per Jeremy's preference over vendoring) — the flake
+materializes the patched source into gitignored `firmware/vendor/` (devshell
+symlink + hermetic copy-in), `[patch.crates-io]` points at it. New nix
+variant `luxel-fw-s3-hub75` is in the release board loop; image-check
+gained feature-gated markers (`EXPECT_FEATURES`) with a `hub75:` marker.
+Default pixel count on hub75 builds = 2048 (cap-clamped half panel) until
+#74 lifts `MAX_PIXELS` per-board.
+
+Verified: builds clean for s3+hub75, c3-devkit, athom-music, c6-devkit;
+luxel-core host tests 65/65; hermetic `nix build .#luxel-fw-s3-hub75`
+works (app image 884,320 B creds-baked → 164,256 B slot margin — smaller
+than plain s3-devkit, the strip encoders drop out); stack-check ok (no
+frame over the 12,288 B budget, `.stack` 50,548 B ≥ 24 KB floor — the
+framebuffers are heap, only the ~600 B descriptor static lands in .bss).
+UNTESTED ON METAL — no S3 on the bench; hardware bring-up is #75 (QEMU
+can't model LCD_CAM, and the harness-isolation rule forbids faking it).
+
 ## 2026-08-22 — Output-driver abstraction: the render loop no longer
 ## knows it's talking SPI (Gitea #71, HUB75 prereq)
 

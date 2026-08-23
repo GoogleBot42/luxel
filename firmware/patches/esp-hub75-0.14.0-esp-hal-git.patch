@@ -1,0 +1,70 @@
+--- a/src/bcm/mod.rs	2006-07-23 19:21:28.000000000 -0600
++++ b/src/bcm/mod.rs	2026-08-22 19:39:02.642526666 -0600
+@@ -12,7 +12,6 @@
+ #[cfg(any(feature = "full-chain-dma", feature = "circular-dma"))]
+ use esp_hal::dma::Owner;
+ use esp_hal::dma::Preparation;
+-use esp_hal::dma::TransferDirection;
+ 
+ use crate::framebuffer::FrameBuffer;
+ #[cfg(any(feature = "full-chain-dma", feature = "circular-dma"))]
+@@ -52,7 +51,8 @@
+     let mut empty = EmptyBuf;
+     let mut prep: Preparation = empty.prepare();
+     prep.start = descriptors.as_mut_ptr();
+-    prep.direction = TransferDirection::Out;
++    // Luxel local patch: esp-hal git main dropped `Preparation.direction` —
++    // direction is implied by the DmaTxBuffer trait (firmware/patches/README.md).
+     prep.burst_transfer = BurstConfig::default();
+     prep.check_owner = Some(false);
+     prep.auto_write_back = false;
+--- a/src/lcd_cam.rs	2006-07-23 19:21:28.000000000 -0600
++++ b/src/lcd_cam.rs	2026-08-22 19:39:00.838515417 -0600
+@@ -30,7 +30,10 @@
+ //! ```
+ 
+ use esp_hal::dma::DmaDescriptor;
+-use esp_hal::dma::TxChannelFor;
++// Luxel local patch: esp-hal git main (rev 7c7f372) replaced
++// `dma::TxChannelFor<LCD_CAM>` with `lcd_cam::LcdDmaTxChannel` — see
++// firmware/patches/README.md.
++use esp_hal::lcd_cam::LcdDmaTxChannel;
+ use esp_hal::gpio::NoPin;
+ use esp_hal::lcd_cam::lcd::i8080;
+ use esp_hal::lcd_cam::lcd::i8080::I8080;
+@@ -65,7 +68,7 @@
+     fn new_internal<P: Hub75Pins<'static, Word = FB::Word>>(
+         lcd_cam: LCD_CAM<'static>,
+         hub75_pins: P,
+-        channel: impl TxChannelFor<LCD_CAM<'static>> + crate::GdmaChannelNum,
++        channel: impl LcdDmaTxChannel<'static> + crate::GdmaChannelNum,
+         tx_descriptors: &'static mut [DmaDescriptor],
+         frequency: Rate,
+         fb: &'static FB,
+@@ -114,7 +117,7 @@
+     fn new_internal<P: Hub75Pins<'static, Word = FB::Word>>(
+         lcd_cam: LCD_CAM<'static>,
+         hub75_pins: P,
+-        channel: impl TxChannelFor<LCD_CAM<'static>> + crate::GdmaChannelNum,
++        channel: impl LcdDmaTxChannel<'static> + crate::GdmaChannelNum,
+         tx_descriptors: &'static mut [DmaDescriptor],
+         frequency: Rate,
+         fb: &'static FB,
+@@ -248,7 +251,7 @@
+     pub fn new<P: Hub75Pins<'static, Word = FB::Word>>(
+         lcd_cam: LCD_CAM<'static>,
+         hub75_pins: P,
+-        channel: impl TxChannelFor<LCD_CAM<'static>> + crate::GdmaChannelNum,
++        channel: impl LcdDmaTxChannel<'static> + crate::GdmaChannelNum,
+         tx_descriptors: &'static mut [DmaDescriptor],
+         frequency: Rate,
+         fb: &'static FB,
+@@ -281,7 +284,7 @@
+     pub fn new_async<P: Hub75Pins<'static, Word = FB::Word>>(
+         lcd_cam: LCD_CAM<'static>,
+         hub75_pins: P,
+-        channel: impl TxChannelFor<LCD_CAM<'static>> + crate::GdmaChannelNum,
++        channel: impl LcdDmaTxChannel<'static> + crate::GdmaChannelNum,
+         tx_descriptors: &'static mut [DmaDescriptor],
+         frequency: Rate,
+         fb: &'static FB,

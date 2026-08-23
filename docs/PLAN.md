@@ -140,7 +140,9 @@ The defining move stands: **one portable core, three hosts** — now in Rust.
   for APA102/SK9822. Output-driver trait from day one so parallel drivers (I2S/LCD_CAM)
   and the expander driver slot in later without touching the render loop. *(As built:
   both protocols went SPI+DMA, no RMT; the trait arrived late rather than day one —
-  `firmware/src/output.rs`, 2026-08-22, Gitea #71. HUB75/expander series: #72–#75.)*
+  `firmware/src/output.rs`, 2026-08-22, Gitea #71. HUB75/expander series: #72–#75;
+  the LCD_CAM HUB75 driver itself landed the same day — `firmware/src/hub75.rs`,
+  feature `hub75`, S3-only, via a patched esp-hub75 (`firmware/patches/`), #72.)*
 - **Contingency, explicitly scoped:** if a blocker surfaces in the no_std stack (most
   likely candidates: OTA robustness, WiFi provisioning corner cases, TLS for MQTT), the
   fallback is **std Rust on ESP-IDF** (`esp-idf-svc`) — same language, same core crate,

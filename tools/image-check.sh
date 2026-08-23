@@ -29,6 +29,15 @@ MARKERS=(
   "boot guard:|boot-loop guard is not linked — a bad OTA would wedge devices instead of self-healing"
 )
 
+# Feature-gated markers: asserted only when the caller declares the cargo
+# feature was requested (EXPECT_FEATURES, space-separated — build-esp32.sh
+# passes its feature list; release.yml passes the variant's extras).
+if [[ " ${EXPECT_FEATURES:-} " == *" hub75 "* ]]; then
+  MARKERS+=(
+    "hub75: |the HUB75 panel driver (src/hub75.rs) is not linked — a hub75 build would boot with dead output"
+  )
+fi
+
 fail=0
 for m in "${MARKERS[@]}"; do
   s=${m%%|*}

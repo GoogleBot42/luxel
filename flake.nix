@@ -85,11 +85,31 @@
       # image and in the world-readable nix store — don't build cred-baked
       # images on shared machines or share the resulting .bin.
       envOr = name: let v = builtins.getEnv name; in if v == "" then null else v;
+      # esp-hub75 with a local patch for the esp-hal git pin's API drift
+      # (firmware/patches/README.md). The patch file is what's in git;
+      # firmware/vendor/esp-hub75 (gitignored) is materialized from this
+      # derivation — symlinked by the devshell for cargo builds, copied in
+      # by mkFirmware for hermetic builds — and Cargo.toml's
+      # [patch.crates-io] points at that path.
+      mkEspHub75Src = pkgs: pkgs.stdenv.mkDerivation {
+        pname = "esp-hub75-src";
+        version = "0.14.0";
+        src = pkgs.fetchurl {
+          name = "esp-hub75-0.14.0.tar.gz";
+          url = "https://crates.io/api/v1/crates/esp-hub75/0.14.0/download";
+          hash = "sha256-+4wQGC3EyQUcV07zZ/95SAfD3C/gzwhpXAw7mNk4BtY=";
+        };
+        patches = [ ./firmware/patches/esp-hub75-0.14.0-esp-hal-git.patch ];
+        dontBuild = true;
+        installPhase = "cp -r . $out";
+      };
+
       mkFirmware = pkgs:
         lib.makeOverridable
           ({ board
            , chip
            , target
+           , extraFeatures ? [ ]
            , buildStd ? false
            , ssid ? envOr "LUXEL_SSID"
            , pass ? envOr "LUXEL_PASS"
@@ -104,11 +124,20 @@
               stdFlags = lib.optionalString buildStd " -Zbuild-std=core,alloc";
             in
             pkgs.stdenv.mkDerivation {
-              pname = "luxel-fw-${board}";
+              # extras in the name so `luxel-fw-board-s3-devkit` (strip) and
+              # the hub75 variant are distinguishable in logs/store paths
+              pname = "luxel-fw-${board}${lib.concatMapStrings (f: "-${f}") extraFeatures}";
               version = "0.1.0";
               src = lib.cleanSource ./.;
 
               cargoRoot = "firmware";
+              # esp-hub75 path dep: the dev tree's gitignored symlink never
+              # enters the flake source, so materialize it here (before the
+              # cargoSetupHook's configurePhase runs cargo).
+              postPatch = ''
+                mkdir -p firmware/vendor
+                cp -r ${mkEspHub75Src pkgs} firmware/vendor/esp-hub75
+              '';
               # -Zbuild-std additionally resolves the std workspace's own
               # crates.io deps; firmware/rust-std.Cargo.lock is a pinned copy
               # of the toolchain's library/Cargo.lock (re-copy from
@@ -148,7 +177,7 @@
                 runHook preBuild
                 cd firmware
                 ${if buildStd then "${xtensaRust}/bin/cargo" else "cargo"} build --release --offline \
-                  --no-default-features --features ${board} \
+                  --no-default-features --features ${lib.concatStringsSep "," ([ board ] ++ extraFeatures)} \
                   --target ${target}${stdFlags}
                 runHook postBuild
               '';
@@ -208,6 +237,15 @@
           chip = "esp32c6";
           target = "riscv32imac-unknown-none-elf";
         };
+        # HUB75 panel output on the S3 (LCD_CAM, Gitea #72). Same board
+        # feature as the devkit plus the hub75 driver feature.
+        luxel-fw-s3-hub75 = {
+          board = "board-s3-devkit";
+          extraFeatures = [ "hub75" ];
+          chip = "esp32s3";
+          target = "xtensa-esp32s3-none-elf";
+          buildStd = true;
+        };
       };
     in
     {
@@ -246,7 +284,16 @@
             # Classic-ESP32 (Xtensa) firmware toolchain; firmware/build-esp32.sh
             # picks it up via XTENSA_RUST_HOME + the gcc on PATH.
             ++ lib.optional isX86Linux (mkXtensaGcc pkgs);
-            shellHook = lib.optionalString isX86Linux ''
+            shellHook = ''
+              # esp-hub75 is carried as a patch file (firmware/patches/):
+              # link the patched source into the tree for cargo's
+              # [patch.crates-io] path dep. Worktrees get it on first
+              # `nix develop` like every other missing build input.
+              if [ -f firmware/Cargo.toml ]; then
+                mkdir -p firmware/vendor
+                ln -sfT ${mkEspHub75Src pkgs} firmware/vendor/esp-hub75
+              fi
+            '' + lib.optionalString isX86Linux ''
               export XTENSA_RUST_HOME=${mkXtensaRust pkgs}
             '';
           };

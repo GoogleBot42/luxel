@@ -24,6 +24,14 @@ embedded-storage-async = "0.4"
 # default-features = false drops the "frontend" (lexer/parser/compiler):
 # the device only executes LXBC bytecode compiled by the browser/CLI.
 luxel-core = { path = "../crates/luxel-core", default-features = false }
+# HUB75 matrix panels (S3 LCD_CAM, DMA BCM rescan; patched, see the
+# [patch.crates-io] note below). circular-dma: the descriptor chain loops
+# in hardware — refresh costs no ISR work; swaps repoint buffer pointers
+# atomically. skip-black-pixels: set_pixel early-outs on black, and the
+# compose path erases to black first. No `log` feature: it force-enables
+# esp-println/colors, which would ANSI-color the whole serial console.
+esp-hub75 = { version = "0.14", optional = true, features = ["esp32s3", "circular-dma", "skip-black-pixels"] }
+embedded-graphics = { version = "0.8", default-features = false, optional = true }
 
 # networking (WiFi station + async TCP + HTTP server)
 esp-rtos = { version = "0.3", features = ["esp-radio", "embassy", "log-04"] }
@@ -68,6 +76,13 @@ board-c6-devkit = ["esp32c6"]
 # (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
 # browser navigation — Chromium preconnect wants 3 sockets at cold nav.
 small-chip = []
+# HUB75 panel output (ESP32-S3 LCD_CAM only — C3/S2 have no parallel-output
+# peripheral; classic-ESP32/C6 support exists in esp-hub75 but is not wired
+# up here yet). Compose-per-frame into a DMA framebuffer that autonomously
+# rescans the panel. Combine with board-s3-devkit (src/board.rs guards the
+# chip). embedded-graphics: just for Point/Rgb888 — already in the tree
+# transitively via hub75-framebuffer.
+hub75 = ["dep:esp-hub75", "dep:embedded-graphics"]
 
 # Chip features (selected via a board feature, not directly).
 esp32c3 = [
@@ -130,6 +145,12 @@ codegen-units = 1
 # "pair combo-module PHY init with Wi-Fi RX toggle" #5776, both June 2026).
 # All crates must move together — same repo, same rev.
 [patch.crates-io]
+# esp-hub75 0.14.0 targets release esp-hal 1.1.0, whose DMA-channel traits
+# drifted on git main. Patched via firmware/patches/ (the patch file is
+# what's tracked); vendor/esp-hub75 is a gitignored symlink the devshell
+# materializes from the flake's patched-source derivation — if this path
+# is missing, re-enter `nix develop`. See firmware/patches/README.md.
+esp-hub75 = { path = "vendor/esp-hub75" }
 esp-hal = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
 esp-radio = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
 esp-rtos = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
@@ -138,3 +159,7 @@ esp-println = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1cc
 esp-backtrace = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
 esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
 esp-storage = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
+# esp-hub75's build.rs dep; without this patch the lock carries BOTH the
+# crates.io and the git copy at the same version, which importCargoLock's
+# vendor dir can't represent (same-name collision).
+esp-metadata-generated = { git = "https://github.com/esp-rs/esp-hal", rev = "7c7f3726b7f1ccb784e0ca5ced06f96f0baf90b7" }
