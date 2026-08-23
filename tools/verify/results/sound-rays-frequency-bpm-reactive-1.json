@@ -1,0 +1,77 @@
+{
+  "slug": "sound-rays-frequency-bpm-reactive-1",
+  "verdict": "divergent",
+  "score": 4,
+  "confidence": "high",
+  "summary": "Both sides fire one hue-latched ray per 0.5 s beat travelling the same direction with the same 8-step melody hue staircase, but the port's ray amplitude has no equilibrium (invisible for the first ~15 s, then ramps ~x1.19 per beat until it rails at 255 and the saturated head keeps widening), it runs ~1.7x too fast (20 px/s vs the original's ~12 px/s), its hues are ~1.26x too yellow, it lacks the original's slow bright/dim regime cycle, and its BpmSpeedFactor slider is completely dead while the original's is the pattern's main control.",
+  "observations": [
+    "Rig/control surface: 60 px strip, both sides wantsSensors=true and both fed the beat120 synth model on every run; no compile or runtime errors on either side. Controls match except a cosmetic case difference in a display-only name: orig 'showNumberbpmSpeedFactor' vs port 'showNumberBpmSpeedFactor'. Both expose sliderBeatSensitivity and sliderBpmSpeedFactor as sliders.",
+    "SHARED, CORRECT BEHAVIOUR: both sides spawn exactly one new ray per beat (every 0.500 s = every 10 frames at 20 fps), rays travel toward increasing pixel index and wrap around the strip, each ray's colour is latched at birth and never changes as it travels, and B is always 0 (pure red->yellow ramp). Both step the head hue through an 8-value staircase that repeats every 4 s, i.e. locked to the synthetic melody's 8-step scale (one step per beat).",
+    "SPEED: original's steady-state ray speed is ~12 px/s (ray-to-ray spacing exactly 6 px, 10 rays alive on 60 px; dumps at t=120.05/120.55 put one head at 6 then 12). Port's is a constant 20 px/s (spacing exactly 10 px, 6 rays alive; 1 px per frame at 20 fps). Port is ~1.67x too fast, so it shows 6 rays where the original shows 10, and the waterfall slope is visibly shallower.",
+    "Both sides are TIME-based, not frame-coupled: ray spacing stays 6 px (orig) / 10 px (port) at --fps 10 and --fps 40 as well as 20. No frame-rate coupling bug on either side. (Caveat: the original renders all-black across the whole t=120..126 s window at --fps 40 — a different timeline lands in its dim phase, see the regime observation; that is an original property, not a port issue.)",
+    "AMPLITUDE / ENVELOPE is the biggest divergence. Original ray heads are pinned at exactly (255,G,0) in its bright regime, from the very first beat: t=0.00 the first head is already (255,100,0). Port heads start essentially invisible and grow: birth values (3,1,0) at t=0.05, then 4, 6, 9, 15, 19, 24, 30, 36, 44, 52, 62 at successive beats -- a ~x1.19-per-beat exponential ramp. Consequence: the port's baseline 6 s / 20 fps render is mean brightness 1 / motion 1 against the original's mean 9 / motion 12, and the 60 s / 10 fps survey is port mean 5.3 vs orig 33.7 (port zeroMotionFrames 111/600 vs orig 1/600).",
+    "The port's amplitude never stops growing. It rails at 255 by roughly t=20 s and then the SATURATED HEAD WIDENS: 2 px at full white-hot at t=30 s and t=60 s, 3 px at t=90..200 s, 4 px at t=280 s; total lit pixels climb 24 -> 30 -> 36 -> 42 over the same span and mean brightness climbs monotonically 31 -> 40 -> 47 -> 52 -> 57 -> 62 at t=30/60/90/150/200/280 s. There is no steady state. The original's lit count stays at 20-30 px throughout.",
+    "RAY PROFILE at t=120 s. Original ray = one head pixel at 255 plus a 2 px tail: e.g. indices 4,5,6 = (1,1,0),(8,6,0),(255,201,0). Port ray = a 6 px comet with a 3 px railed head: indices 4..9 = (2,2,0),(13,12,0),(80,79,0),(255,252,0),(255,252,0),(255,252,0). The per-pixel trail DECAY RATIO matches well (orig 8/36 approx 0.22, 1/8 approx 0.13; port 13/80 = 0.16, 2/13 = 0.15) -- the trail law is right, the amplitude feeding it is not.",
+    "HUE. Both sides hold R=255, B=0 and vary G through an 8-value cycle, but the port's G is uniformly ~1.257x the original's. Original G set = {100,113,127,134,151,169,190,201} (hue 23.5 deg .. 47.3 deg, deep orange to amber). Port G set = {126,141,159,168,189,212,238,252} (hue 29.6 deg .. 59.3 deg, orange to almost pure yellow). The port's top step (255,252,0) is a colour the original never produces.",
+    "ORIGINAL HAS A SLOW REGIME CYCLE THE PORT LACKS. Over the 240 s survey the original alternates between a bright phase (all ray heads at 255; mean brightness ~23-25 at t=90, 120, 280 s) and a dim phase (identical geometry -- same 6 px spacing, same ~10-12 px/s -- but every head is only 36/255, i.e. ~7x dimmer; mean brightness 3-4 at t=30 and t=200 s). Dumps confirm the dim-phase rays are still moving (positions 0,6,12,... -> 1,7,13,... -> 2,8,14,... at 20 fps). The port shows no such modulation at all: its brightness only ever ramps upward.",
+    "TEMPORAL TEXTURE at t=120 s. Original motion autocorrelation peaks at lag 5 frames (0.25 s) and its multiples, and its motionLit series stutters 67,4,67,0,67,67,0,... -- the rays advance in visible steps because 12 px/s is 0.6 px/frame (zeroMotionFrames 45/120). The port's motion autocorrelation is monotonically decaying with NO periodic peak and its motionLit is dead flat at 42-44 every frame (zeroMotionFrames 0) -- a perfectly smooth metronomic conveyor with no visible rhythm.",
+    "--sensors off diagnostic (30 s / 10 fps): with dead sensors the ORIGINAL nearly goes quiet (mean 34 -> 5) while the PORT gets BRIGHTER than it is when fed (mean 1 -> 15). So the port's amplitude is driven by something that grows with elapsed time / frame count rather than by the audio energy, and the audio feed actually suppresses it early on. That is the opposite of the original's dependence.",
+    "Both sides are seed-independent (seeds 1, 7, 1234 give identical mean/motion at t=120) and index-only (identical numbers on --rig grid --grid 8x8). Both scale identically with strip length: ray spacing and head/tail widths are ABSOLUTE pixel counts, not strip fractions (at --pixels 300 the orig still spaces heads 6 px and the port still 10 px; at --pixels 12 the orig shows heads at 0,6 and the port at 7,8,9,11). No structural divergence in the size law -- only in the constants."
+  ],
+  "dials": [
+    {
+      "name": "sliderBpmSpeedFactor",
+      "origEffect": "Strongly live and the pattern's main control. Swept at t=120 s (8 s window, 20 fps, BeatSensitivity pinned 0.5): v=0 freezes the strip completely (mean 2, motion 0, only 2 lit px); v=0.25 crawls (mean 12, motion 4, heads bunched at 0,2,5,8); v=0.5 gives dense 3 px ray spacing (~6 px/s, mean 44, motion 27); v=0.75 gives 9 px spacing (~18 px/s, mean 18, motion 16); v=1 gives 6 px spacing (~12 px/s, mean 23, motion 27) and reproduces the untouched default. The response is not monotonic in v -- it reads as a BPM multiplier interacting with the beat estimate -- but every value produces a visibly different ray density/speed.",
+      "portEffect": "COMPLETELY DEAD. Every value of the slider produces byte-identical output: mean 50 / motion 29-30 at v=0, 0.25, 0.5, 0.75, 1 at t=120 s, and mean 28 / motion 29 at both v=0 and v=1 over a separate 20 s window at t=20 s (single-dial run, no other control pinned). The probe agreed (maxDelta 0.00, maxDeltaLit 0.00 over 8 s). Confirmed by hand over windows containing 40+ beats, so this is not a probe false-inert.",
+      "matches": false
+    },
+    {
+      "name": "sliderBeatSensitivity",
+      "origEffect": "No visible effect. Probe reported maxDelta 0.00 / maxDeltaLit 0.00 over 8 s, and a manual sweep at 0 / 0.5 / 1 over a 60 s window at t=60..120 s (10 fps, BpmSpeedFactor pinned 0.5, ~120 beats) gave identical mean 2 / motion 3 for all three values. Dial effect unverifiable from output.",
+      "portEffect": "No visible effect either -- the same manual 0 / 0.5 / 1 sweep over the same 60 s window gave identical mean 22 / motion 42 for all three values. Matches the original's (non-)behaviour, but only in the sense that neither side shows a response.",
+      "matches": true
+    }
+  ],
+  "feedback": [
+    "AMPLITUDE IS THE HEADLINE BUG. The original's ray head is a flat, full-value 255 from the very first beat -- the head brightness is LATCHED at birth at full value and never depends on how long the pattern has been running. The port instead accumulates: its first ray head is (3,1,0), and each successive beat's head is ~1.19x brighter than the last, so the pattern is effectively invisible for the first ~15 s, reaches parity around t=20 s, then rails at 255 and keeps growing internally so the clipped head widens from 2 px (t=30 s) to 3 px (t=90 s) to 4 px (t=280 s) and mean brightness climbs 31 -> 62 with no ceiling. Whatever running level the port multiplies its head brightness by needs to be normalised (or removed) so head amplitude is constant over the whole run.",
+    "SPEED: the port's rays travel at a constant 20 px/s; the original's steady-state is ~12 px/s. Fix the constant so consecutive rays sit 6 px apart on a 60 px strip (10 rays alive) rather than 10 px apart (6 rays alive). Note the original's speed is genuinely constant in time too (12 px/s at t=30, 120, 200 and 280 s), so this is a single wrong scale factor, not a missing time dependence.",
+    "sliderBpmSpeedFactor MUST BECOME LIVE. On the original it is the whole point of the pattern: v=0 freezes the strip dead, v=0.25 crawls, and mid/high values change ray spacing between roughly 3 px and 9 px per beat. On the port the slider is a complete no-op at every value (byte-identical renders at 0, 0.25, 0.5, 0.75, 1). The port's default speed corresponds to nothing the original reaches -- 20 px/s is faster than any of the original's swept values except v=0.75 (18 px/s) -- so wiring the slider up will also need the base speed recalibrated so that the untouched default lands on the original's ~12 px/s / 6 px spacing.",
+    "HUE SCALE: the port's green channel is uniformly ~1.257x the original's at every step of the 8-value staircase (orig G = 100,113,127,134,151,169,190,201; port G = 126,141,159,168,189,212,238,252). The staircase itself, its 8-step length, its one-step-per-beat cadence and its latch-at-birth behaviour are all correct -- only the hue span is stretched, from the original's 23.5-47.3 deg (deep orange to amber) to 29.6-59.3 deg (orange to near-pure yellow). Scale the hue that maxFrequency maps to by ~0.8, or clamp the top of the range so the brightest step lands near (255,201,0) rather than (255,252,0).",
+    "MISSING SLOW REGIME CYCLE: the original alternates, on a multi-minute period, between a bright phase where every ray head is 255 and a dim phase where the identical geometry runs at 36/255 (~7x dimmer) -- mean brightness 23-25 at t=90/120/280 s versus 3-4 at t=30/200 s. The port has no such modulation; it just ramps upward forever. Once the amplitude accumulator is fixed, check whether whatever drives the port's growth should instead be producing this bright/dim breathing.",
+    "SENSOR DEPENDENCE IS INVERTED IN CHARACTER: with --sensors off the original nearly goes dark (mean 34 -> 5 over 30 s) while the port gets BRIGHTER than its fed render (mean 1 -> 15). The port's head brightness is therefore not really coming from the audio energy at all -- it is coming from an elapsed-time/frame accumulator that the audio feed happens to hold down early. Tie head amplitude to the per-beat energy the way the original does.",
+    "WHAT IS ALREADY RIGHT (do not regress): one ray per 0.5 s beat, birth on the beat, travel direction toward increasing index with wrap, colour latched at birth and constant for the ray's life, the 8-step melody-locked hue staircase resetting every 4 s, B always 0, the ~0.15x-per-pixel trail decay ratio, absolute-pixel (not strip-fraction) feature sizing, seed independence, index-only pixel addressing, and time-based (fps-invariant) motion."
+  ],
+  "experiments": [
+    "baseline",
+    "survey",
+    "survey-240",
+    "probe",
+    "dump-early",
+    "late-120",
+    "steady-30",
+    "steady-60",
+    "steady-90",
+    "steady-150",
+    "steady-200",
+    "steady-280",
+    "ctl-speed-0",
+    "ctl-speed-0.25",
+    "ctl-speed-0.5",
+    "ctl-speed-0.75",
+    "ctl-speed-1",
+    "ctl-sens-0",
+    "ctl-sens-0.5",
+    "ctl-sens-1",
+    "portonly-speed-0",
+    "portonly-speed-1",
+    "fps-10",
+    "fps-40",
+    "seed-7",
+    "seed-1234",
+    "grid8",
+    "px-12",
+    "px-300",
+    "sens-off",
+    "sens-on"
+  ]
+}

@@ -129,6 +129,14 @@ PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
 or ring structure that is pure display artefact. Verify any structural
 claim on such a pattern from `--dump` numbers, never from the images.
 
+Radial-shell analysis caveat: binning pixels by round(hypot(dx,dy)) on a
+thin-ring pattern INVENTS angular variance (ring edges straddle bins) — a
+"breaks the rings angularly" read from shell bins is an artefact until an
+angular DFT on |r−R| ≤ 0.5 confirms it. And to separate HUE asymmetry from
+GEOMETRY asymmetry on a mirrored/kaleidoscope pattern, compare mirrored
+PIXEL PAIRS in HSV: value/saturation deltas isolate shape, hue deltas
+isolate palette.
+
 Cross-correlation shift scans SATURATE at their search bound: a scan over
 ±6 px that returns exactly -6 every frame is pinned, not measuring — the
 true shift may be larger. A flat result exactly at the bound means widen
@@ -240,7 +248,10 @@ Modes:
 sample can land between flashes, and a healthy beat-locked pattern reads as
 pure black or as a slow unrelated flicker. A judge was burned by exactly this
 — a 240 s / 2 fps survey reported an original as mean-brightness 0. For any
-side with `wantsSensors: true`, run the survey at `--fps 10` minimum and treat
+side with `wantsSensors: true`, run the survey at `--fps 10` minimum — and
+measure RHYTHM (attack/decay periods, autocorrelation) at 20 fps or better:
+10 fps is only 5 samples per 2 Hz beat and has reported pure-artefact
+periods of 3+ s on patterns whose true cycles were 0.5 and 1.0 s. Treat
 beat-rate structure (multiples of 0.5 s) as the thing to look for. The same
 aliasing bites `--dump`: times spaced at whole or half seconds land at the SAME
 beat phase every time — use offset spacings (0.13, 0.27, 0.41, …) to see beat
@@ -255,6 +266,15 @@ signal will change the model name.
 
 What this means for judging:
 
+- A sensor side that fails to react at the default 20 fps may simply need
+  MORE frames per beat: one port's beat detector kept its history in render
+  frames (~12) and produced nothing below a 24 fps cutover while matching
+  the original perfectly above it. Sweep fps UPWARD (25/30/40) as well as
+  downward before calling a non-reacting side broken — the cutover location
+  is itself the diagnostic (frames-per-beat at cutover ≈ the buffer size).
+- For a spatially-UNIFORM pattern (whole rig one colour), `motion` and
+  `motionLit` are both useless — derive a hue series from meanR/meanG/meanB
+  in stats.json and count its discontinuities/drift instead.
 - **Expect beat-locked behaviour at 2 Hz.** At the default 20 fps a beat is
   every 10 frames; in a 6 s window there are 12 of them. In the waterfall /
   rhythm image they read as evenly spaced horizontal bands, and in the `motion`
