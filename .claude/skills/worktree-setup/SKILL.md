@@ -9,6 +9,13 @@ these before trusting any build/test failure as a real regression.
 
 ## Procedure
 
+0. Cut the branch from **`origin/master`, not the local `master`** — the main
+   checkout's `master` is only as fresh as its last `git pull`, and with sessions
+   merging PRs continuously it is routinely several merges behind (seen 4 behind on
+   2026-08-24). `git worktree add -b <branch> <path> master` silently starts you on
+   that stale tree. Do `git fetch origin master` first and branch from `origin/master`
+   (or `git reset --hard origin/master` in the new worktree).
+
 1. `corpus/` (scraped pattern exports, gitignored) — only needed for the local-only
    "PixelBlaze Library" tab and `pixelblaze-library.json` generation; the main
    `gallery.json` and its e2e tile-count check are built from the tracked `library/`

@@ -48,6 +48,20 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    `page.evaluate` shortcuts that bypass the actual UI), and take `page.screenshot()`
    at each key state. The Read tool renders PNG screenshots directly — read the file
    back to actually look at it before reporting success.
+
+   Two gotchas when the harness script lives OUTSIDE `web/` (e.g. scratch verification
+   for a tool that serves its own UI, like `tools/verify/review.mjs`):
+   - `NODE_PATH=…/web/node_modules` does **not** work — ESM ignores it. Symlink
+     instead: `ln -s /home/googlebot/workspace/pixler/web/node_modules <scriptdir>/node_modules`.
+   - `executablePath: "chromium"` fails with "Browser was not found at the configured
+     executablePath" — puppeteer wants an absolute path, and PATH lookup is not done.
+     Resolve it inside the shell:
+     `nix develop -c bash -c 'CHROMIUM=$(command -v chromium) node harness.mjs'`.
+
+   Also: the nix chromium ships **no emoji font**, so 🗑 ✅ 🔀 🔧 and even ⏸ render as
+   tofu boxes in screenshots — and in any UI you build for it. ✕ ✓ ✗ ⟳ ▶ ‖ ⋔ ⚙ ⚠ ★ »
+   are all covered. Boxes in a screenshot are the font, not your markup; prefer the
+   covered glyphs so the UI reads correctly in this browser too.
 5. Watch `PIPESTATUS` when piping build output: `npm run build | tail` masks a failing
    `wasm`/`gen-gallery`/`svelte-check`/`vite build` step behind `tail`'s own success exit
    code. Either don't pipe, or check `${PIPESTATUS[0]}` explicitly.
