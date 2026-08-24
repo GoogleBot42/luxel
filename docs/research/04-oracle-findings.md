@@ -166,6 +166,16 @@ errors in raw 16.16 units unless noted:
   returned 0. Luxel now returns `Fx::MIN` — the identical bit pattern, the
   closest an i32 can get (+2³¹ is unrepresentable). `log2(0)`/`log2(neg)`
   = raw i32::MIN verified exact on both.
+- **`pow` overflow SATURATES on PB** (probed 2026-08-23, fw 3.67; fixed in
+  Luxel same day, Gitea #112): pow(2,16), pow(2,20), pow(2,15),
+  pow(2,15.5), pow(10,10) all return raw `0x7FFFFFFF` exactly (pinned via
+  raw-wrap subtraction: `pow(2,16) - 32768` reads −1 raw), and
+  pow(−2,17) returns raw `0x80000000` exactly (equality against a
+  runtime-computed MIN). This is the one place PB arithmetic does NOT
+  two's-complement wrap — general arithmetic wraps, pow/exp2 saturate.
+  Load-bearing for corpus PRNGs that compute `% pow(2,16)`
+  (synchronized-random-numbers): the old wrap made the modulus 0 and the
+  LCG stuck at 0.
 - Transcendentals: ±1–5 raw as before. Largest remaining numeric gaps:
   `asin/acos` ~167 raw (~0.0025) and `atan(100)` 128 raw — fine for LEDs,
   but the place to look if we ever chase exactness.
