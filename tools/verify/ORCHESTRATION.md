@@ -79,9 +79,14 @@ FEEDS judges, reconstructed so a re-judge session (queued in Gitea #84 /
   hand it to a judge again; the harness is deterministic and the
   provenance hashes in meta.json will show whether harness/port/epe
   changed since the prior verdict.
-- Slugs currently awaiting re-judge after engine fixes: pixelclock,
-  naturallightsync, sunrise-alarm-clock, utility-scheduled-percent-on-demo
-  (wall clock); static-random-colors, synchronized-random-numbers
-  (init-random); fire-blue, fire-red, spring-colors (32.768 s freeze);
-  both music-sequencers (#99 sentinel strip); the silent-null six if the
-  cause turns out engine-side.
+- Slugs currently awaiting re-judge after engine fixes: fire-blue,
+  fire-red, spring-colors (32.768 s freeze, Gitea #106); both
+  music-sequencers (#99 sentinel strip); the silent-null six if the cause
+  turns out engine-side (#108); synchronized-random-numbers again once
+  pow-overflow saturation (#112) lands — its original's LCG needs
+  `pow(2,16)` to saturate, and the 2026-08-23 re-judge (divergent, 4)
+  measured the original still random-free for that reason.
+- Re-judged 2026-08-23 after the #104/#105 fixes: pixelclock (close 6),
+  naturallightsync (close 5), sunrise-alarm-clock (close 6),
+  utility-scheduled-percent-on-demo (close 7), static-random-colors
+  (close 6), synchronized-random-numbers (divergent 4, see above).

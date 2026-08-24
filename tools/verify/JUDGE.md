@@ -132,6 +132,18 @@ cause, not a separate "port adds a channel" finding. Per-setting probes on a
 static slug are extremely cheap: `--seconds 1 --fps 20 --dump "0"` per dial
 value makes a 12-point fine sweep or a 3x3 saturation/value grid practical.
 
+CLOCK-DRIVEN STATIC SLUGS (time-of-day patterns): the decisive axis is a
+dense `--wall-clock` sweep, not longer `--seconds` or rig sweeps — the
+harness pins the clock per run, so the "survey" for these is 24 hourly
+points minimum, 10-minute resolution across transitions, and 1-minute
+resolution at window edges (all cheap at `--seconds 1`). Exhaustive sweeps
+pay off: a full 60-value second/minute sweep is what separates "+1 shift"
+from "i/60·60 fixed-point law with dropouts at 14/29/44/59" (pixelclock,
+2026-08-23). Trap: `--probe-controls` runs at ONE fixed clock — a dial that
+probes inert (or two sides probing mirror-image responsive) may just mean
+the probe's clock sits outside that side's active window; re-probe dials at
+several wall clocks before reporting a dead dial on a clock pattern.
+
 Checkerboard/alternating-sublattice fields (a value living on only one
 parity of pixels per frame, as in pond/wave sims) MOIRÉ badly under the
 PNG's nearest-neighbour upscale — contact sheets can show convincing arcs
