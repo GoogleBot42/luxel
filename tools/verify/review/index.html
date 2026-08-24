@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- Interactive review UI for the port-verification sweep. Served by
+     tools/verify/review.mjs — see that file's header for the endpoints.
+     SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Luxel port review</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header id="bar">
+      <h1>Luxel port review</h1>
+      <span class="progress" id="progress">loading…</span>
+
+      <span class="group">
+        <button id="playPause" class="btn" title="Pause / resume every engine">‖ pause</button>
+        <button id="resetAll" class="btn" title="Recompile every live engine from t=0">
+          ⟳ reset
+        </button>
+      </span>
+
+      <label class="group fps">
+        fps <input id="fps" type="range" min="1" max="60" step="1" value="20" />
+        <span class="mono" id="fpsOut">20</span>
+      </label>
+
+      <span class="group chips" id="verdictFilters" title="filter by sweep verdict"></span>
+      <span class="group chips" id="decisionFilters" title="filter by decision status"></span>
+
+      <input id="q" type="search" placeholder="search slug or name…" />
+      <span class="shown mono" id="shown"></span>
+    </header>
+
+    <main id="list" aria-live="polite">
+      <p class="loading" id="loading">loading pairs…</p>
+    </main>
+
+    <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-back" id="modalBack"></div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

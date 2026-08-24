@@ -1,0 +1,26 @@
+{
+  "music-sequencer-for-v2": {
+    "stripLinesMatching": ["REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING"],
+    "note": "Author-planted tripwire: the shipped .epe contains a deliberately invalid line the user is instructed to delete before running. Without stripping it the ORIGINAL fails to compile on every rig (`unknown identifier REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING`), so no side-by-side comparison is possible. See tools/verify/results/music-sequencer-for-v2.json."
+  },
+  "music-sequencer-for-v3-only": {
+    "stripLinesMatching": [
+      "BY_REMOVING_THESE_INVALID_LINES_I_PROMISE_THIS_IS_RUNNING_ON_A_PIXELBLAZE_V3",
+      "I_UNDERSTAND_THIS_PATTERN_CAN_BRICK_A_PIXELBLAZE_VERSION_2"
+    ],
+    "note": "Same author tripwire, v3 flavour: the .epe ships deliberately invalid sentinel LINES (plural — the verdict JSON only names the first; the second surfaces once the first is gone) that the user must delete. Unstripped, the ORIGINAL never compiles. See tools/verify/results/music-sequencer-for-v3-only.json."
+  },
+  "nano-orbital": {
+    "pixels": 144,
+    "note": "SWEEP-NOTES.md 'Manifest rig fixes needed': the original writes a fixed 144-px canvas and throws `array index out of bounds` at frame 0 on any rig under 144 px (bisected: fails <=128, fails at frame 13 @140, clean >=144)."
+  },
+  "nyan-lights": {
+    "rig": "strip",
+    "pixels": 300,
+    "note": "SWEEP-NOTES.md 'Manifest rig fixes needed': the original is an index-only 60x5 = 300-px sprite LUT, so the rig should be 300 px (16x16 renders it as a mosaic; it errors at >=324 px). 300 is not a whole multiple of a 16-wide grid, so the rig kind moves to strip as well."
+  },
+  "orv-christmas-tree": {
+    "grid": [20, 20],
+    "note": "SWEEP-NOTES.md 'Manifest rig fixes needed': the original renders only at pixelCount multiples of 20, so the rig should be grid 20x20 (the default 16x16 errors at frame 0)."
+  }
+}

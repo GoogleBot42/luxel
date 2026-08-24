@@ -31,6 +31,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots } from "./enginehost.mjs";
 import { synthSensorFrame } from "./sensormodel.mjs";
+import { applySourceFixups, resolveRig } from "./fixups.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../..");
@@ -279,18 +280,18 @@ function blit(rgb, canvasW, x0, y0, cw, ch, src, si) {
 // ---- rendering --------------------------------------------------------------
 
 function rigFor(pair) {
-  const kind = pair.rig;
-  if (kind === "grid") return { kind, gridW: 16, gridH: 16, pixels: 256 };
-  if (kind === "cloud") {
-    const points = cubeLattice(CLOUD_SIDE);
-    return { kind, points, pixels: points.length };
-  }
-  return { kind: "strip", pixels: 60 };
+  // Shared with snap.mjs and review.mjs, fixups.json overrides included.
+  const rig = resolveRig(pair, { cloudSide: CLOUD_SIDE });
+  if (rig.kind === "cloud") rig.points = cubeLattice(rig.cloudSide);
+  return rig;
 }
 
 /** Render one side into gif frames. Returns {frames, error} — a compile
  *  failure yields a single placeholder frame plus the error string. */
 function renderSide(host, source, rig, layout) {
+  // Before compile: top-level init runs inside compile(), and clock-driven
+  // patterns may read time-of-day there (Gitea #104). Same order as snap.mjs.
+  host.setDefaultWallClock(WALL_CLOCK);
   const res = host.compile(source, rig.pixels, 1);
   const mk = () => {
     const rgb = new Uint8Array(layout.w * layout.h * 3);
@@ -512,7 +513,10 @@ for (const f of verdictFiles.sort()) {
   const rig = rigFor(pair);
   const layout = makeLayout(rig);
   const sources = {
-    orig: JSON.parse(fs.readFileSync(path.join(ROOT, pair.epeFile), "utf8"))?.sources?.main,
+    orig: applySourceFixups(
+      slug,
+      JSON.parse(fs.readFileSync(path.join(ROOT, pair.epeFile), "utf8"))?.sources?.main,
+    ).source,
     port: fs.readFileSync(path.join(ROOT, pair.libFile), "utf8"),
   };
   for (const side of ["orig", "port"]) {

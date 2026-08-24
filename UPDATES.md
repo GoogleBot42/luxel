@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-08-24 — Interactive port review UI: both sides of all 293 pairs
+## live in a browser, with per-pattern decisions that persist
+
+`tools/verify/review.mjs` turns the finished verification sweep into
+something a human can actually work through. It's a zero-dependency
+local server (`node tools/verify/review.mjs`, default port 4183) that
+serves the engine wasm and a plain-ES-module UI which compiles and runs
+**both** sides of every pair live in the page — the corpus original and
+its clean-room port, on the same engine, same rig, seed 1, the same
+pinned wall clock and the same beat120 synthetic sensor feed the judges
+saw. So what you watch is what was judged, except you can drive it.
+
+List view is one card per pair: two live canvases (strip bar, pixelated
+grid, or cloud z-slices), rig/verdict/decision badges, the judge's
+summary, and a compact decision bar. The sticky top bar carries a global
+fps slider (1–60), pause/reset-all, verdict and decision-status filters,
+and slug/name search. Clicking a card opens a detail modal with bigger
+canvases, per-side control panels (sliders honouring `//#` bounds hints —
+including the line-above placement `library/` files use — plus hsv/rgb
+channel sliders, toggles, triggers and polled showNumber/gauge
+readouts), a per-side reset, and the full verdict: summary,
+observations, a per-dial match table, feedback. 293 × 2 engines would
+melt the tab, so an IntersectionObserver keeps only visible cards live,
+capped at ~40 engines, with a single rAF loop round-robining a fixed
+step budget — the same shape as the playground's Gallery.
+
+The point of the tool is the **decision**: delete / good / fork (with an
+optional new name) / needs-work, each with an optional feedback note
+that goes verbatim to the agent doing the fix pass. A decision POSTs
+immediately and lands in the tracked `tools/verify/decisions.json` via an
+atomic tmp+rename write, so a review survives restarts and spans as many
+sittings as it takes. Everything else is assembled at request time —
+edit a `library/*.js` and reload.
+
+Alongside it, `tools/verify/fixups.json` + `fixups.mjs`: a declared
+per-slug fixup manifest shared by snap.mjs, report.mjs and review.mjs.
+It strips author-planted tripwire lines from **originals** (the
+deliberately-invalid sentinels a pattern's README tells the user to
+delete — both `music-sequencer-*` originals were scored
+`orig-unrenderable` purely because of these, and now compile and render
+on both sides), and overrides the rig for **both** sides where an
+original only renders on a specific geometry: `nano-orbital` ≥144 px,
+`nyan-lights` a 300-px strip, `orv-christmas-tree` grid 20×20 — the
+three manifest fixes SWEEP-NOTES.md had been carrying as a to-do. Fixups
+in force are stamped into snap.mjs's `provenance.fixups`, and the
+manifest is folded into `harnessSha256` so editing it correctly
+invalidates cached runs. It is deliberately not a place to patch
+patterns into working.
+
+Verified in real chromium: 293 cards, canvases animating, both
+music-sequencer originals rendering with no compile error, modal
+controls rendering and a slider drag causing no runtime error, and a
+needs-work decision plus feedback surviving a server restart and a fresh
+page load. `docs/tools.md` gains rows for review.mjs and the fixup
+manifest; the report.mjs row now says it's superseded for triage.
+
 ## 2026-08-23 — pow/exp2 overflow now saturates, PB-exact (Gitea #112)
 
 Follow-on from the re-judge batch: PB's `pow` saturates on overflow —

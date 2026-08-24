@@ -59,7 +59,11 @@
 // sides share them by construction). A top-level `provenance` records the
 // worktree git sha and sha256 prefixes of the port source, the .epe, and this
 // harness — a cached run whose provenance differs from a fresh one is stale
-// and must be discarded rather than reused.
+// and must be discarded rather than reused. `provenance.fixups` records any
+// per-slug fixup in force (tools/verify/fixups.json — author tripwire lines
+// stripped from the ORIGINAL, rig overrides applied to both sides); the
+// manifest itself is folded into `harnessSha256`, so editing it invalidates
+// cached runs. An explicit --rig/--pixels/--grid still overrides a fixup rig.
 // Strip/cloud rigs render a waterfall (one row per frame, x = pixel index);
 // the grid rig renders a contact sheet of evenly spaced frames (each cell
 // stamped with its absolute timestamp), plus two extra pairs that make
@@ -132,6 +136,7 @@ import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots, WASM_PATH } from "./enginehost.mjs";
 import { synthSensorFrame, SENSOR_MODEL } from "./sensormodel.mjs";
 import { encodePNG, upscale, drawText, textSize } from "./png.mjs";
+import { applySourceFixups, rigOverride, FIXUPS_PATH } from "./fixups.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const HERE = path.dirname(SELF);
@@ -862,11 +867,27 @@ const epePath = path.join(ROOT, pair.epeFile);
 const libPath = path.join(ROOT, pair.libFile);
 if (!fs.existsSync(epePath)) die(`corpus file missing: ${pair.epeFile}`);
 if (!fs.existsSync(libPath)) die(`library file missing: ${pair.libFile}`);
-const origSource = JSON.parse(fs.readFileSync(epePath, "utf8"))?.sources?.main;
-if (typeof origSource !== "string") die(`${pair.epeFile} has no sources.main`);
+const rawOrigSource = JSON.parse(fs.readFileSync(epePath, "utf8"))?.sources?.main;
+if (typeof rawOrigSource !== "string") die(`${pair.epeFile} has no sources.main`);
+// Declared per-slug fixups (tools/verify/fixups.json): author tripwire lines
+// stripped from the ORIGINAL, rig overrides applied to BOTH sides. Recorded in
+// provenance below, because they change what a run means.
+const { source: origSource, applied: sourceFixups } = applySourceFixups(slug, rawOrigSource);
+if (sourceFixups)
+  warn(
+    `fixups.json: stripped ${sourceFixups.removed} line(s) from the ORIGINAL ` +
+      `matching ${sourceFixups.stripLinesMatching.map((s) => `\`${s}\``).join(", ")}`,
+  );
 const portSource = fs.readFileSync(libPath, "utf8");
 
-// rig geometry — identical for both sides, always
+// rig geometry — identical for both sides, always. A fixups.json rig override
+// is a DEFAULT: an explicit CLI flag still wins.
+const rigFix = rigOverride(slug);
+if (rigFix) {
+  if (rigFix.rig && !opts.rig) opts.rig = rigFix.rig;
+  if (rigFix.grid && !opts.grid) opts.grid = `${rigFix.grid[0]}x${rigFix.grid[1]}`;
+  if (rigFix.pixels != null && opts.pixels === null && !opts.grid) opts.pixels = rigFix.pixels;
+}
 const kind = opts.rig ?? pair.rig;
 const rig = { kind };
 if (kind === "grid") {
@@ -1037,6 +1058,10 @@ const meta = {
     gitSha: gitSha12(),
     portSha256: sha12(fs.readFileSync(libPath)),
     epeSha256: sha12(fs.readFileSync(epePath)),
+    // Declared per-slug fixups actually in force for this run (null when the
+    // slug has none) — see tools/verify/fixups.mjs.
+    fixups:
+      sourceFixups || rigFix ? { source: sourceFixups, rig: rigFix ?? null } : null,
     // Covers every input that shapes a render: this file, its sibling
     // modules, and the engine wasm itself — not just snap.mjs.
     harnessSha256: sha12(
@@ -1046,6 +1071,8 @@ const meta = {
           path.join(HERE, "enginehost.mjs"),
           path.join(HERE, "png.mjs"),
           path.join(HERE, "sensormodel.mjs"),
+          path.join(HERE, "fixups.mjs"),
+          FIXUPS_PATH,
           WASM_PATH,
         ].map((p) => fs.readFileSync(p)),
       ),
