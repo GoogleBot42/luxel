@@ -166,6 +166,13 @@ errors in raw 16.16 units unless noted:
   returned 0. Luxel now returns `Fx::MIN` — the identical bit pattern, the
   closest an i32 can get (+2³¹ is unrepresentable). `log2(0)`/`log2(neg)`
   = raw i32::MIN verified exact on both.
+- **`random(max)` with a NEGATIVE max draws the whole signed range on PB**
+  (probed 2026-08-23, fw 3.67; matched in Luxel same day, Gitea #105):
+  `random(0xffff)` — the literal wraps to −1.0 on both engines — and
+  `random(-5)` both measured min/max ≈ ±32760 over a few thousand draws.
+  Consistent with an unsigned multiply-and-keep-high-word with no clamp;
+  Luxel's `scale_random` now mirrors it (max's raw word taken unsigned).
+  Corpus patterns use `random(0xffff)` for full-width PRNG seeds.
 - **`pow` overflow SATURATES on PB** (probed 2026-08-23, fw 3.67; fixed in
   Luxel same day, Gitea #112): pow(2,16), pow(2,20), pow(2,15),
   pow(2,15.5), pow(10,10) all return raw `0x7FFFFFFF` exactly (pinned via

@@ -13,6 +13,9 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   (Jeremy's preference, 2026-08-22; see firmware/patches/README.md for the mechanism).
 - Rust over C unless genuinely blocked; strict TypeScript in `web/`; prefer established
   crates over hand-rolling.
+- The repo is NOT `cargo fmt --all` clean under the devshell toolchain (diffs in files
+  no one touched), and CI has no fmt gate — format your own hunks by hand and never
+  mass-reformat (2026-08-23).
 
 ## Environment boundaries
 - Serial flashing of the DEV UNIT is Jeremy-only (needs a physical button hold), and its

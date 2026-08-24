@@ -187,7 +187,7 @@ where PB compile-errors on arity).
 | `mod(x, y)` | floored modulo (sign of `y`); `%` is truncated (sign of `x`) |
 | `sqrt(x)` | sign-preserving |
 | `sin cos tan asin acos atan` `atan2(y, x)` | radians |
-| `pow(b, e)` `exp(x)` `log(x)` `log2(x)` | negative bases: integer exponents follow the sign rule, fractional yield 0 |
+| `pow(b, e)` `exp(x)` `log(x)` `log2(x)` | negative bases: integer exponents follow the sign rule, fractional yield −32768 (raw MIN, PB-exact); overflow saturates to ±32768, never wraps (PB-exact — the one non-wrapping corner of the arithmetic) |
 | `hypot(a, b)` `hypot3(a, b, c)` | wraps like all arithmetic |
 
 ### Waveforms, time, randomness
