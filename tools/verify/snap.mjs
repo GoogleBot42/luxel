@@ -448,6 +448,9 @@ function renderSide(host, source, rig, o) {
     frames: null,
   };
 
+  // Before compile: top-level init runs inside compile(), and clock-driven
+  // patterns may read time-of-day there (Gitea #104).
+  host.setDefaultWallClock(o.wallClock);
   const res = host.compile(source, rig.pixels, o.seed);
   if (res.compileError) {
     side.compileError = res.compileError;
@@ -919,6 +922,7 @@ const sides = {
     skip: opts.skip,
     seconds: opts.seconds,
     sensors: opts.sensors,
+    wallClock: opts.wallClock,
     controls: parseControls(opts.controlsOrig),
   }),
   port: renderSide(host, portSource, rig, {
@@ -927,6 +931,7 @@ const sides = {
     skip: opts.skip,
     seconds: opts.seconds,
     sensors: opts.sensors,
+    wallClock: opts.wallClock,
     controls: parseControls(opts.controlsPort),
   }),
 };
@@ -1130,6 +1135,7 @@ if (opts.probeControls) {
     // Same feed as the run, so a dial on a sound pattern is probed against a
     // signal rather than against silence.
     sensors: opts.sensors,
+    wallClock: opts.wallClock,
   };
   probe = {
     slug,

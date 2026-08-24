@@ -148,6 +148,29 @@ impl Engine {
         Ok(Engine::from_program(compile(src)?, pixel_count, seed))
     }
 
+    /// [`new`], but with the wall clock (unix seconds, timezone already
+    /// applied) available DURING top-level init. PB patterns may read
+    /// `clockHour()`-family builtins at top level — on a real device the
+    /// RTC is set by the time a pattern loads, so init sees real time,
+    /// never 0. Hosts that know the time should prefer this over pairing
+    /// [`new`] with a later [`set_wall_clock`], which reaches only
+    /// `beforeRender`/`render` (Gitea #104). `None` = no time source.
+    #[cfg(feature = "frontend")]
+    pub fn new_at(
+        src: &str,
+        pixel_count: u32,
+        seed: u64,
+        wall_unix: Option<i64>,
+    ) -> Result<Engine, Diagnostic> {
+        Ok(Engine::from_program_budgeted_at(
+            compile(src)?,
+            pixel_count,
+            seed,
+            usize::MAX,
+            wall_unix,
+        ))
+    }
+
     /// Initialize from an already-compiled program (deserialized LXBC
     /// bytecode, or a fresh `compile()` result). Infallible: like `new`
     /// after its compile step, init-time runtime errors land in
@@ -168,8 +191,20 @@ impl Engine {
         seed: u64,
         array_byte_budget: usize,
     ) -> Engine {
+        Engine::from_program_budgeted_at(prog, pixel_count, seed, array_byte_budget, None)
+    }
+
+    /// [`from_program_budgeted`] + the wall clock for init, per [`new_at`].
+    pub fn from_program_budgeted_at(
+        prog: Program,
+        pixel_count: u32,
+        seed: u64,
+        array_byte_budget: usize,
+        wall_unix: Option<i64>,
+    ) -> Engine {
         let mut vm = Vm::new(&prog, seed);
         vm.array_byte_budget = array_byte_budget;
+        vm.wall_unix = wall_unix;
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
         // Sensor-board bindings: exported sensor arrays start zero-filled so

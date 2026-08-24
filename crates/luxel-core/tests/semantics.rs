@@ -480,6 +480,64 @@ fn clock_builtins() {
 }
 
 #[test]
+fn clock_builtins_readable_at_init() {
+    // PB patterns read time-of-day at TOP LEVEL (the device's RTC is set by
+    // pattern-load time), so the wall clock must be visible during init —
+    // a post-construction set_wall_clock only reaches beforeRender/render
+    // (Gitea #104; pixelclock and friends were byte-identical across wall
+    // clocks because init always saw 0).
+    let src = "export var ih\nih = clockHour() * 100 + clockMinute()\n\
+               export function render(index) { }";
+    // 86400·31 + 3661 = 1970-02-01 01:01:01
+    let mut e = Engine::new_at(src, 1, 1, Some(86_400 * 31 + 3661)).unwrap();
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("ih"), Some(Value::Num(Fx::from_int(101))));
+    // no clock at construction keeps the documented no-time-source 0
+    let mut e = Engine::new_at(src, 1, 1, None).unwrap();
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("ih"), Some(Value::Num(Fx::ZERO)));
+}
+
+#[test]
+fn random_negative_max_spans_signed_range() {
+    // random(max) with a NEGATIVE max — e.g. random(0xffff), whose literal
+    // wraps to -1.0 in 16.16 on PB exactly as here — draws over the whole
+    // signed range on a real PB (fw 3.67, oracle-probed 2026-08-23:
+    // min/max ≈ ±32760 for both random(0xffff) and random(-5)). Corpus
+    // patterns seed hand-rolled PRNGs with it; a 0-clamp collapses them
+    // (Gitea #105). With randomSeed pinned the draws are deterministic, so
+    // assert the shape: full-range spread, both signs, never all-zero.
+    let src = "randomSeed(7)\n\
+               export var lit\nlit = 0xffff\n\
+               export var neg\nexport var pos\nexport var zero\nexport var big\n\
+               neg = 0\npos = 0\nzero = 0\nbig = 0\n\
+               for (i = 0; i < 64; i++) {\n\
+                 r = random(0xffff)\n\
+                 if (r < 0) { neg += 1 }\n\
+                 if (r > 0) { pos += 1 }\n\
+                 if (r == 0) { zero += 1 }\n\
+                 if (abs(r) > 1000) { big += 1 }\n\
+               }\n\
+               export var inrange\ninrange = 1\n\
+               for (i = 0; i < 64; i++) {\n\
+                 q = random(0.5)\n\
+                 if (q < 0 || q >= 0.5) { inrange = 0 }\n\
+               }\n\
+               export function render(index) { }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("lit"), Some(Value::Num(Fx::from_int(-1)))); // PB-exact wrap
+    let n = |name: &str| match e.var(name) {
+        Some(Value::Num(v)) => v.raw() >> 16,
+        other => panic!("{name}: {other:?}"),
+    };
+    assert_eq!(n("zero"), 0, "old clamp behavior: every draw was 0");
+    assert!(n("neg") > 10 && n("pos") > 10, "both signs expected");
+    assert!(n("big") > 32, "draws should span far beyond ±1");
+    assert_eq!(n("inrange"), 1, "positive max keeps plain [0, max)");
+}
+
+#[test]
 fn map_and_introspection() {
     let src = "export var dims\nexport var h2\n\
                export function beforeRender(delta) { dims = pixelMapDimensions()\n h2 = has2DMap() }\n\

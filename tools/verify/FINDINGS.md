@@ -218,6 +218,33 @@ via the half-turn), `rainbow-v2` Direction semantics.
    patterns at large rigs (`unstable-orbits-2d` original at 96×96) and
    kills the `perlin-fire` port.
 
+### Addendum 2026-08-23 — gaps 1 & 2 root-caused and fixed (Gitea #104, #105)
+
+Gap 1 was TWO stacked bugs, both fixed:
+- **Harness**: snap.mjs's main render (and `--probe-controls`) built its
+  per-side options without `wallClock`, so `--wall-clock` was recorded in
+  meta.json but never applied — every render in the whole sweep ran at
+  epoch 0 (`setWallClock(undefined)` → NaN → 0 through the f64→i64 cast).
+  This is why output was "byte-identical across 11 wall clocks". The
+  hosts now throw on a non-finite clock instead of rendering 1970.
+- **Engine**: the wall clock could not reach top-level init at all (init
+  runs inside engine construction; `set_wall_clock` only lands before the
+  first frame). All hosts now hand the clock to the engine constructor
+  (`Engine::new_at` / `lx_set_default_wall_clock`), so top-level
+  `clockHour()`-family reads see real time-of-day, like on a PB with RTC.
+Cross-clock renders of `pixelclock` now differ on both sides. Wall-clock
+verdict observations from the sweep describe epoch-0 renders; only the
+four flagged clock patterns need re-judging on that account.
+
+Gap 2 was not init-specific: `random(max)` clamped a NEGATIVE `max` to 0,
+and `random(0xffff)` is `random(-1.0)` — 16.16 literals wrap identically
+on PB (documented in 04-oracle-findings.md). Oracle probe (fw 3.67,
+2026-08-23): PB draws over the whole signed range for negative `max`
+(measured ±32760 for both `0xffff` and `-5`). `scale_random` now takes
+the max's raw word unsigned, PB-exact; positive `max` is unchanged.
+`static-random-colors` renders 59 distinct colors (was solid hue-0);
+`synchronized-random-numbers` shows real motion on both sides.
+
 ## Recommended fix-pass order
 
 1. Engine gaps 1-4 first — they block ~12 re-judges and taint several
