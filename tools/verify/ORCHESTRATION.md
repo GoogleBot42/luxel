@@ -82,11 +82,11 @@ FEEDS judges, reconstructed so a re-judge session (queued in Gitea #84 /
 - Slugs currently awaiting re-judge after engine fixes: fire-blue,
   fire-red, spring-colors (32.768 s freeze, Gitea #106); both
   music-sequencers (#99 sentinel strip); the silent-null six if the cause
-  turns out engine-side (#108); synchronized-random-numbers again once
-  pow-overflow saturation (#112) lands — its original's LCG needs
-  `pow(2,16)` to saturate, and the 2026-08-23 re-judge (divergent, 4)
-  measured the original still random-free for that reason.
+  turns out engine-side (#108).
 - Re-judged 2026-08-23 after the #104/#105 fixes: pixelclock (close 6),
   naturallightsync (close 5), sunrise-alarm-clock (close 6),
   utility-scheduled-percent-on-demo (close 7), static-random-colors
-  (close 6), synchronized-random-numbers (divergent 4, see above).
+  (close 6), synchronized-random-numbers (divergent 4 → re-judged again
+  after the #112 pow-saturation fix → divergent 5: engine side settled,
+  remaining defects are the port's 5/3 scroll speed and its
+  periodic-bounded jitter where the original random-walks unboundedly).
