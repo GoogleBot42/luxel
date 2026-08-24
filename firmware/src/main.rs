@@ -656,7 +656,11 @@ fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
     // big array isn't taxed for overhead only swarms of tiny ones pay.
     // See luxel_core::budget::array_budget for the slack + minimum rules.
     let budget = luxel_core::budget::array_budget(esp_alloc::HEAP.free() as usize);
-    Engine::from_program_budgeted(prog, count, 1, budget)
+    // Wall clock at CONSTRUCTION so top-level clockHour()-family reads see
+    // real time (SNTP may not have synced yet on early boot -> None -> 0,
+    // same as a PB with no time source). The render loop keeps it fresh
+    // per frame afterwards.
+    Engine::from_program_budgeted_at(prog, count, 1, budget, shared::wall_now_local())
 }
 
 /// [`budgeted_engine`] + post-build floor check: a pattern that fits its

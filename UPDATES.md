@@ -1,5 +1,38 @@
 # Update log
 
+## 2026-08-23 — Engine gaps #104/#105 fixed: wall clock reaches init,
+## random(negative) is PB-exact; sweep's wall clock was never applied
+
+The verify sweep's two front engine gaps are root-caused and fixed
+(Gitea #104, #105), plus a harness bug the sweep itself hid behind:
+
+- **#104 time-of-day builtins.** Two stacked bugs. (1) snap.mjs recorded
+  `--wall-clock` in meta.json but never passed it to `renderSide` — every
+  render of the entire 293-pair sweep ran at epoch 0 via
+  `setWallClock(undefined)` → NaN → 0. (2) The engine ran top-level init
+  inside construction, before any host could hand it the clock, so
+  init-time `clockHour()` reads were always 0 — on device and CLI too, not
+  just the harness. New: `Engine::new_at`/`from_program_budgeted_at`
+  (clock at construction), `lx_set_default_wall_clock` in the wasm ABI,
+  and every host (firmware, serve, CLI, playground, enginehost) now
+  supplies the clock at build time; the verify hosts throw on a
+  non-finite clock. `pixelclock` renders now differ across wall clocks on
+  both sides.
+- **#105 init-time randomness.** Not init-specific: `random(max)` clamped
+  negative `max` to 0, and `random(0xffff)` is `random(-1.0)` (16.16
+  literal wrap, PB-identical). Oracle probe (fw 3.67): PB draws the whole
+  signed range for negative max — `scale_random` now multiplies by the
+  raw word unsigned, PB-exact; positive max unchanged.
+  `static-random-colors` goes solid-red → 59/60 distinct colors;
+  `synchronized-random-numbers` regains motion.
+
+Filed the remaining untracked sweep gaps as Gitea #106 (2^15 ms freeze),
+#107 (OOB-write tolerance residual), #108 (silent-null originals), #109
+(array element budget). Tests: init-clock + negative-random semantics
+tests added; workspace suite, wasm smoke, firmware build, web
+typecheck+build all green. FINDINGS.md carries a dated addendum — sweep
+verdict observations involving wall clocks describe epoch-0 renders.
+
 ## 2026-08-24 — Clean-room port verification sweep COMPLETE: all 293
 ## pairs judged (tools/verify/results/ + FINDINGS.md)
 

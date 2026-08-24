@@ -727,6 +727,18 @@ fn apply_map(state: &State, engine: &mut Engine) {
     }
 }
 
+/// Engine construction with the host wall clock (+ configured tz) already
+/// visible to top-level init — a post-build `set_wall_clock` reaches only
+/// `beforeRender`/`render`, so clock builtins read at top level would see 0
+/// (Gitea #104). The render loop keeps the clock fresh per frame afterwards.
+fn engine_now(state: &State, prog: luxel_core::vm::Program, pixel_count: u32) -> Engine {
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64 + state.tz_minutes.load(Ordering::Relaxed) as i64 * 60);
+    Engine::from_program_budgeted_at(prog, pixel_count, 1, usize::MAX, wall)
+}
+
 /// Load playlist item `i`: build its stored bytecode into an engine (the
 /// device execution path), apply its saved control values, and publish the
 /// source/controls snapshots. Returns the engine + source + bytecode on
@@ -739,7 +751,7 @@ fn enter_item(state: &State, i: usize) -> Option<(Engine, String, Vec<u8>)> {
     let sp = pattern_by_id(state, &item.pattern_id)?;
     *state.current_pattern_id.lock().unwrap() = item.pattern_id.clone();
     let prog = luxel_core::bytecode::deserialize(&sp.bc).ok()?;
-    let mut eng = Engine::from_program(prog, state.pixel_count.load(Ordering::Relaxed), 1);
+    let mut eng = engine_now(state, prog, state.pixel_count.load(Ordering::Relaxed));
     for (name, raw) in &item.controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         eng.set_control(name, &vals);
@@ -762,7 +774,7 @@ fn render_loop(state: Arc<State>) {
         .unwrap_or_default();
     let mut engine = luxel_core::bytecode::deserialize(&current_bc)
         .ok()
-        .map(|p| Engine::from_program(p, count(), 1));
+        .map(|p| engine_now(&state, p, count()));
     *state.pattern_src.lock().unwrap() = DEFAULT_PATTERN.to_string();
     *state.pattern_bc.lock().unwrap() = current_bc.clone();
     if let Some(eng) = engine.as_ref() {
@@ -797,7 +809,7 @@ fn render_loop(state: Arc<State>) {
                     // a manual code push takes over from the playlist
                     state.pl_playing.store(false, Ordering::Relaxed);
                     if let Ok(p) = luxel_core::bytecode::deserialize(&bc) {
-                        let e = Engine::from_program(p, count(), 1);
+                        let e = engine_now(&state, p, count());
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
                         engine = Some(e);
                         *state.pattern_src.lock().unwrap() = src;
@@ -823,7 +835,7 @@ fn render_loop(state: Arc<State>) {
                     let n = n.clamp(1, MAX_PIXELS);
                     state.pixel_count.store(n, Ordering::Relaxed);
                     if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
-                        let e = Engine::from_program(p, n, 1);
+                        let e = engine_now(&state, p, n);
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
                         engine = Some(e);
                         *state.vmerr.lock().unwrap() = None;
@@ -898,7 +910,7 @@ fn render_loop(state: Arc<State>) {
                 }
             } else if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
                 // cleared → rebuild without a map
-                engine = Some(Engine::from_program(p, count(), 1));
+                engine = Some(engine_now(&state, p, count()));
             }
         }
 

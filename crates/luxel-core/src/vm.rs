@@ -1466,9 +1466,18 @@ impl Vm {
         x
     }
 
+    /// Scale a 32-bit draw into `[0, max)` by multiply-and-keep-high-word,
+    /// with max's RAW 16.16 word taken UNSIGNED and the result
+    /// reinterpreted signed — PB-exact, oracle-verified (fw 3.67,
+    /// 2026-08-23). For max > 0 this is plain uniform `[0, max)`. A
+    /// NEGATIVE max (e.g. `random(0xffff)` — 0xffff wraps to -1.0 in
+    /// 16.16, on PB too) becomes a huge unsigned word, so draws span the
+    /// whole signed range: measured [-32764, 32766] on the oracle. Corpus
+    /// patterns lean on that for full-width PRNG seeds; clamping the max
+    /// to 0 here made them collapse to a constant 0 (Gitea #105).
     fn scale_random(r: u32, max: Fx) -> Value {
-        let m = max.raw().max(0) as u64;
-        Value::Num(Fx::from_raw(((r as u64 * m) >> 32) as i32))
+        let m = max.raw() as u32 as u64;
+        Value::Num(Fx::from_raw(((r as u64 * m) >> 32) as u32 as i32))
     }
 
     fn call_builtin(&mut self, prog: &Program, id: u16, argc: usize) -> Result<Value, VmError> {

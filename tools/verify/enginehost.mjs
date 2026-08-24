@@ -62,6 +62,18 @@ class Host {
     return Buffer.from(this.e.memory.buffer, ptr, len).toString("utf8");
   }
 
+  /** Wall clock handed to engines created by FUTURE compile() calls, so
+   *  top-level init sees time-of-day — a post-compile setWallClock() is
+   *  too late for init-time clockHour() reads (Gitea #104). Non-finite
+   *  values throw: an undefined clock silently rendered every clock
+   *  pattern at epoch 0 through the whole 2026-08 sweep. */
+  setDefaultWallClock(unixSeconds) {
+    if (!Number.isFinite(unixSeconds)) {
+      throw new Error(`setDefaultWallClock: non-finite wall clock ${unixSeconds}`);
+    }
+    this.e.lx_set_default_wall_clock(unixSeconds);
+  }
+
   /** Compile a pattern. Returns an Engine, or `{ compileError, diagnostic }`. */
   compile(source, pixelCount, seed = 1) {
     const s = this.putStr(source);
@@ -176,8 +188,12 @@ export class Engine {
     this.setMap(points.map((p) => [p[0], p[1], p[2] ?? 0]));
   }
 
-  /** Pin the wall clock so time-of-day patterns render deterministically. */
+  /** Pin the wall clock so time-of-day patterns render deterministically.
+   *  Non-finite values throw (NaN casts to epoch 0 in the wasm, silently). */
   setWallClock(unixSeconds) {
+    if (!Number.isFinite(unixSeconds)) {
+      throw new Error(`setWallClock: non-finite wall clock ${unixSeconds}`);
+    }
     this.e.lx_set_wall_clock(this.h, unixSeconds);
   }
 

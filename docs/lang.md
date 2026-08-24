@@ -220,8 +220,13 @@ several devices running the same pattern from the same seed pick the same
 | unseeded | host seed at pattern start — differs per device | host seed at pattern start |
 
 Both are scaled to the requested range the same way: `(r · max) >> 32`
-over the raw 16.16 word, so the result is in `[0, max)` and `max <= 0`
-gives 0. Fractional seeds are distinct states (`randomSeed(1)` and
+with `max`'s raw 16.16 word taken **unsigned**, so a positive `max` gives
+plain `[0, max)` while a *negative* `max` — most often via a wrapped
+literal like `random(0xffff)`, since `0xffff` is `-1.0` in 16.16 — draws
+over the **whole signed range** (≈ ±32768). That is PB-exact
+(oracle-verified, fw 3.67), and community patterns rely on it to seed
+hand-rolled PRNGs with full-width values. Fractional seeds are distinct
+states (`randomSeed(1)` and
 `randomSeed(1.5)` start different streams). The two streams are
 independent — seeding one never disturbs the other.
 
@@ -391,7 +396,10 @@ no axis-aligned artifacts (the classic choice for organic motion; feed
 
 GPIO (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`,
 `touchRead`) — stubs until a board wires them. Clock (`clockYear` …
-`clockWeekday`) — needs wall time from the host. Sequencer/playlist
+`clockWeekday`) — needs wall time from the host; every host supplies it
+at engine construction too, so top-level reads see real time-of-day
+(PB patterns do this — the device RTC is set by pattern-load time). No
+time source reads as 0. Sequencer/playlist
 (`sequencerNext`, `playlistGetPosition`, …) and `nodeId()`.
 
 ### Sensor bindings

@@ -105,6 +105,7 @@ interface Exports {
   lx_map_count(h: number): number;
   lx_map_coords(h: number): number;
   lx_set_wall_clock(h: number, unixSeconds: number): void;
+  lx_set_default_wall_clock(unixSeconds: number): void;
   lx_wants_sensors(h: number): number;
   lx_set_sensors(h: number, ptr: number, len: number): void;
   lx_push_event(h: number, t: number, x: number, y: number, v: number): void;
@@ -157,6 +158,10 @@ export class Luxel {
   }
 
   compile(source: string, pixelCount: number, seed = 1): Engine | Diagnostic {
+    // Wall clock BEFORE lx_new so top-level clockHour()-family reads see
+    // real time during init, matching a device with RTC set (Gitea #104).
+    // Same UTC convention as the per-frame setWallClock callers.
+    this.e.lx_set_default_wall_clock(Date.now() / 1000);
     const s = this.putStr(source);
     const h = this.e.lx_new(s.ptr, s.len, pixelCount, seed);
     s.free();

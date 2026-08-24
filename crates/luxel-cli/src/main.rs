@@ -45,6 +45,15 @@ fn main() -> ExitCode {
     }
 }
 
+/// Host wall clock for engine construction (UTC; no tz handling yet) so
+/// top-level clock builtins see real time during init (Gitea #104).
+fn now_unix() -> Option<i64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64)
+}
+
 /// Compile + smoke-run a pattern (.js source or .epe export) and report one
 /// JSON line: {"file", "stage": "ok"|"epe"|"compile"|"init"|"frame", "error"?}.
 /// The corpus report tooling drives this. Optional: --grid WxH (default
@@ -118,8 +127,8 @@ fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
         Ok(_) => return report("bytecode", Some("re-encode not byte-identical".into())),
         Err(e) => return report("bytecode", Some(e.to_string())),
     }
-    let mut engine = Engine::from_program(prog, pixels, 1);
-    let mut engine_bc = Engine::from_program(prog_bc, pixels, 1);
+    let mut engine = Engine::from_program_budgeted_at(prog, pixels, 1, usize::MAX, now_unix());
+    let mut engine_bc = Engine::from_program_budgeted_at(prog_bc, pixels, 1, usize::MAX, now_unix());
     if let Some(e) = engine.take_error() {
         return report("init", Some(e.message));
     }
@@ -171,7 +180,7 @@ fn pixels_cmd(path: &str, rest: &[String]) -> ExitCode {
         [] => 60,
         _ => return usage(),
     };
-    let mut engine = match Engine::new(&src, pixels, 1) {
+    let mut engine = match Engine::new_at(&src, pixels, 1, now_unix()) {
         Ok(e) => e,
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);
@@ -209,7 +218,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
         [] => 60,
         _ => return usage(),
     };
-    let mut engine = match Engine::new(&src, pixels, 1) {
+    let mut engine = match Engine::new_at(&src, pixels, 1, now_unix()) {
         Ok(e) => e,
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);
@@ -432,7 +441,7 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
     }
     let o = o;
 
-    let mut engine = match Engine::new(&src, o.pixels, o.seed) {
+    let mut engine = match Engine::new_at(&src, o.pixels, o.seed, now_unix()) {
         Ok(e) => e,
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);

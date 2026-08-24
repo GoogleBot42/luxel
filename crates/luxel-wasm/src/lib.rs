@@ -14,7 +14,7 @@
 //!   quantization.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use luxel_core::diag::line_col;
@@ -60,6 +60,17 @@ unsafe impl GlobalAlloc for Counting {
 static ALLOC: Counting = Counting;
 
 static ENGINES: Mutex<Vec<Option<EngineSlot>>> = Mutex::new(Vec::new());
+// Wall clock handed to engines at CREATION so top-level init sees
+// time-of-day (Gitea #104); i64::MIN = never set. `lx_set_wall_clock`
+// still updates a live engine after creation.
+static DEFAULT_WALL_CLOCK: AtomicI64 = AtomicI64::new(i64::MIN);
+
+fn default_wall_clock() -> Option<i64> {
+    match DEFAULT_WALL_CLOCK.load(Ordering::Relaxed) {
+        i64::MIN => None,
+        v => Some(v),
+    }
+}
 static RESPONSE: Mutex<String> = Mutex::new(String::new());
 
 struct EngineSlot {
@@ -135,7 +146,7 @@ pub unsafe extern "C" fn lx_new(
     seed: u32,
 ) -> i32 {
     let src = str_arg(src_ptr, src_len);
-    match Engine::new(src, pixel_count, seed as u64) {
+    match Engine::new_at(src, pixel_count, seed as u64, default_wall_clock()) {
         Ok(engine) => {
             let slot = EngineSlot {
                 engine,
@@ -270,7 +281,8 @@ pub unsafe extern "C" fn lx_device_model(
             }
         };
         drop(env);
-        let mut eng = Engine::from_program_budgeted(prog, pixel_count, 1, arena);
+        let mut eng =
+            Engine::from_program_budgeted_at(prog, pixel_count, 1, arena, default_wall_clock());
         // Take the INIT error before rendering: top-level `array(...)` calls
         // are where the arena runs out, and the frames that follow would
         // overwrite that with the downstream "not an array" confusion.
@@ -499,6 +511,14 @@ pub extern "C" fn lx_set_map_grid(h: i32, w: u32, grid_h: u32) {
 #[no_mangle]
 pub extern "C" fn lx_set_wall_clock(h: i32, unix_seconds: f64) {
     with_engine(h, |s| s.engine.set_wall_clock(unix_seconds as i64));
+}
+
+/// Wall clock (unix seconds, timezone already applied) for engines created
+/// by FUTURE `lx_new` calls — top-level init reads it, which a post-`lx_new`
+/// `lx_set_wall_clock` is too late for (Gitea #104). Call before compiling.
+#[no_mangle]
+pub extern "C" fn lx_set_default_wall_clock(unix_seconds: f64) {
+    DEFAULT_WALL_CLOCK.store(unix_seconds as i64, Ordering::Relaxed);
 }
 
 /// 1 if the pattern binds any sensor-board variable (frequencyData,
