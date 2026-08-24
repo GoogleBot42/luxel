@@ -33,6 +33,26 @@ tests added; workspace suite, wasm smoke, firmware build, web
 typecheck+build all green. FINDINGS.md carries a dated addendum — sweep
 verdict observations involving wall clocks describe epoch-0 renders.
 
+**Re-judge batch (same day, post-fix):** all six unblocked pairs
+re-judged by fresh Opus judges — pixelclock close/6 (port's real defect:
+an i/60·60 16.16 round-trip that floors to i−1 except at 0/15/30/45 →
++1-shifted markers, 4/5/6-px hour bar, second-dot dropouts at
+14/29/44/59), naturallightsync close/5 (port too white at noon, pale
+night, sunset an hour early, ramp law off), sunrise-alarm-clock close/6
+(neither side reads the wall clock — it's a 1 h/s time-lapse; port's
+Cloudiness dial inverted+weak, pixel 0 dead, clock origin +5.7 h),
+utility-scheduled-percent-on-demo close/7 (prior "total collapse" was
+purely the harness bug; real defects: hour quantizer one LSB low at
+exact k/24 sliders, invented 08:00–20:00 default schedule),
+static-random-colors close/6 (fully-saturated pixel mass 16% vs 58%),
+synchronized-random-numbers divergent/4. That last judge caught a NEW
+engine gap: the original's BSD-rand LCG needs pow(2,16), and our
+pow/exp2 WRAPS on overflow where PB SATURATES — oracle-pinned to raw
+0x7FFFFFFF (pos) / 0x80000000 (neg) exactly. Filed as Gitea #112.
+JUDGE.md gained a clock-driven-static-slug section (dense --wall-clock
+sweeps; --probe-controls at one fixed clock can fake dead/mirror-image
+dials); ORCHESTRATION.md re-judge queue updated.
+
 ## 2026-08-24 — Clean-room port verification sweep COMPLETE: all 293
 ## pairs judged (tools/verify/results/ + FINDINGS.md)
 
