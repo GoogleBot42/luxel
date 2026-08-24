@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-08-23 — pow/exp2 overflow now saturates, PB-exact (Gitea #112)
+
+Follow-on from the re-judge batch: PB's `pow` saturates on overflow —
+positive to raw `0x7FFFFFFF`, negative-odd to raw `0x80000000`, both
+oracle-pinned exactly (fw 3.67) — while our `exp2` wrapped
+(`pow(2,16)` = 0, `pow(2,15)` = −32768). This is the one non-wrapping
+corner of PB arithmetic found so far; documented in
+docs/research/04-oracle-findings.md. Fix in `fmath::exp2` (saturating
+integer shift) + `pow`'s negative-odd path (MIN, not −MAX). Unit tests
+pin all seven probed values. With it, `synchronized-random-numbers`'s
+original BSD-rand LCG (`% pow(2,16)`) comes alive — prng_state now
+walks [0, 32768) like the oracle's. Workspace tests + wasm smoke green.
+
 ## 2026-08-23 — Engine gaps #104/#105 fixed: wall clock reaches init,
 ## random(negative) is PB-exact; sweep's wall clock was never applied
 

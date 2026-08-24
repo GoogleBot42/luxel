@@ -124,11 +124,17 @@ fn hypot_raw(vs: &[Fx]) -> Fx {
     sqrt(Fx::from_raw(sum as i32))
 }
 
-/// 2^x. Integer part is an exact shift (wrapping past the top like all
-/// arithmetic); fraction via series on f·ln2, evaluated in 32-frac so the
-/// 16-frac mantissa comes out correctly rounded (the sweep comparison put
-/// the old 16-frac evaluation at ~7e-5 relative error, dominated by
-/// truncation in the series terms).
+/// 2^x. Integer part is an exact shift; fraction via series on f·ln2,
+/// evaluated in 32-frac so the 16-frac mantissa comes out correctly rounded
+/// (the sweep comparison put the old 16-frac evaluation at ~7e-5 relative
+/// error, dominated by truncation in the series terms).
+///
+/// Overflow SATURATES to `Fx::MAX` — unlike ordinary arithmetic, which
+/// wraps. PB-exact: oracle-probed 2026-08-23 (fw 3.67), pow(2,16),
+/// pow(2,20), pow(2,15), pow(2,15.5) and pow(10,10) all return raw
+/// 0x7FFFFFFF exactly (pinned via raw-wrap subtraction, not display
+/// rounding). The old wrap made pow(2,16) = 0, which zeroed `% pow(2,16)`
+/// idioms in corpus PRNGs (Gitea #112).
 pub fn exp2(x: Fx) -> Fx {
     let n = x.to_int_floor();
     let f = (x - Fx::from_int(n)).raw() as i64; // [0, 1) as 16-frac
@@ -145,7 +151,17 @@ pub fn exp2(x: Fx) -> Fx {
         (1i64 << 32) + y + y2 / 2 + y3 / 6 + y4 / 24 + y5 / 120 + y6 / 720 + y7 / 5040;
     let m = ((m32 + (1 << 15)) >> 16) as i32; // round to 16-frac, [1, 2]
     if n >= 0 {
-        Fx::from_raw(m.wrapping_shl(n as u32 & 31))
+        // m >= 2^16, so any n >= 15 lands at or past 2^31; check the rest
+        // in i64. Saturate, per the doc comment above.
+        if n >= 15 {
+            return Fx::MAX;
+        }
+        let r = (m as i64) << n;
+        if r > i32::MAX as i64 {
+            Fx::MAX
+        } else {
+            Fx::from_raw(r as i32)
+        }
     } else {
         let s = (-n) as u32;
         Fx::from_raw(if s >= 32 { 0 } else { m >> s })
@@ -210,6 +226,12 @@ pub fn pow(base: Fx, e: Fx) -> Fx {
             return Fx::MIN;
         }
         let mag = exp2(e * log2(-base));
+        // Saturated magnitude with an odd exponent lands on Fx::MIN, not
+        // -Fx::MAX: oracle-pinned (2026-08-23) pow(-2, 17) == raw
+        // 0x80000000 exactly.
+        if mag == Fx::MAX && e.to_int_trunc() & 1 == 1 {
+            return Fx::MIN;
+        }
         return if e.to_int_trunc() & 1 == 1 { -mag } else { mag };
     }
     exp2(e * log2(base))
@@ -359,6 +381,15 @@ mod tests {
         // negative base, fractional exponent: raw 0x80000000, like the PB
         // (whose float path shows it as +32768; oracle pow_neg2_half)
         assert_eq!(pow(Fx::from_int(-2), Fx::from_f64(2.5)), Fx::MIN);
+        // Overflow saturates, PB-exact (oracle 2026-08-23, fw 3.67):
+        // positive to raw 0x7FFFFFFF, negative-odd to raw 0x80000000.
+        assert_eq!(pow(Fx::from_int(2), Fx::from_int(16)), Fx::MAX);
+        assert_eq!(pow(Fx::from_int(2), Fx::from_int(15)), Fx::MAX);
+        assert_eq!(pow(Fx::from_int(2), Fx::from_f64(15.5)), Fx::MAX);
+        assert_eq!(pow(Fx::from_int(10), Fx::from_int(10)), Fx::MAX);
+        assert_eq!(exp2(Fx::from_int(20)), Fx::MAX);
+        assert_eq!(pow(Fx::from_int(-2), Fx::from_int(17)), Fx::MIN);
+        assert_eq!(pow(Fx::from_int(-2), Fx::from_int(16)), Fx::MAX);
         assert_eq!(pow(Fx::from_int(5), Fx::ZERO), Fx::ONE);
         assert_eq!(pow(Fx::ZERO, Fx::ZERO), Fx::ONE); // oracle: pow_0_0
     }
