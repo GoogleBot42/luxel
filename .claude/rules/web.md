@@ -12,6 +12,16 @@ paths:
   called function's body. Write `$: { a; b; fn(); }`, not `$: fn()` if `fn`
   closes over `a`/`b` — the latter silently stops re-running when `a`/`b`
   change.
+- The device serves the UI from a tiny connection pool (3 sockets default,
+  2 small-chip) and browser-NATIVE requests (script/stylesheet/preload
+  tags) can't go through fetchgate — vite is deliberately configured with
+  `cssCodeSplit: false` + `modulePreload: false` so a cold load's native
+  burst stays at 2 concurrent sockets. Any change to `web/vite.config.ts`,
+  an entry HTML, or anything else that alters the emitted
+  `<script>`/`<link>` set of `dist/*.html` must re-run
+  `web/tools/coldload.mjs` against a real device before merging — the
+  installer page's second rollup entry silently grew the burst to 4 and
+  every device cold load ate a TCP RST for two weeks (Gitea #92).
 - Set `E2E_PORT` when running e2e concurrently with another session — a
   concurrent `vite preview` can hold the default port and puppeteer will
   silently test the wrong app. Current defaults: `web/tools/e2e.mjs` uses
