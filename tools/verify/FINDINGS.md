@@ -260,3 +260,47 @@ the max's raw word unsigned, PB-exact; positive `max` is unchanged.
 Every verdict file carries concrete acceptance numbers (target periods,
 px/s, RGB triples, histograms) so fixes can be validated with the same
 harness (`tools/verify/snap.mjs`) without re-deriving anything.
+
+### Addendum 2026-08-29 — gaps 4, 5, 7 settled (Gitea #106, #108, #109)
+
+Gap 4 (32.768 s freeze family) is **authentic PB behavior, not an engine
+gap**: plain add/subtract/`+=` WRAP at the 16.16 range ends on real
+hardware (oracle-probed: var-operand `32000+1000` = −32536, and a
+post-wrap `>= delay` gate reads false — `tools/oracle/overflow-probes.mjs`).
+The fire-blue/fire-red/spring-colors originals freeze identically on a
+real PB. Re-judge with the freeze accepted as reference behavior.
+
+Gap 5 (silent-null originals), per slug:
+- `coral-plasma` — MISREAD: the original renders; the PORT was black
+  from a 6-vs-7-arg `perlinRidge` call (fixed in library/).
+- `fast-palette-blending` — engine gap, FIXED: `setPalette` now holds a
+  live reference like PB (oracle-confirmed) instead of snapshotting.
+- `slime-mold-palette` — engine gap, FIXED: a render function assigned
+  to `export var render2D` at runtime now dispatches (oracle-confirmed,
+  re-resolved each frame).
+- `skypirate-s-centered-spectrum` — wrong rig: hard-coded to its
+  author's 1800-px 3-column install; fixups.json now pins grid 3×600.
+- `automap` — needs a driven exported var (`pixel`); harness has no
+  --vars flag yet (ticketed).
+- `performance-test-framework` — renders nothing BY DESIGN (CPU
+  benchmark; PB also shows black). Non-visual; needs a pairs decision.
+
+Gap 7 (array element budget) is **PB-faithful by design and now
+PB-exact in its numbers**: the oracle never frees arrays either and
+dies identically under per-frame allocation (frame 98 of
+`array(100)`/frame). The measured ledger — 10,236 units, each array
+costing len+4 — is bisected in `tools/oracle/budget-bisect.mjs` and now
+implemented. `perlin-fire`/`eye-of-sauron` crashed at frame 512 from
+per-frame `setPalette([...])` literals (ports fixed: palette installed
+once); `unstable-orbits-2d` at 96×96 needs 18,432 live elements and
+would fail on a real PB too — an authentic limitation, not a defect.
+
+New defect family found while fixing: **ports orphaned by the perlin
+octave refit**. The old noise API clamped octave counts to ≥1; the
+stb/PB-exact refit runs 0 octaves as an empty sum, so old-signature
+calls (extra leading argument, or bare 3-arg ridge) froze into
+constants on master AFTER the sweep judged them. De-orphaned with
+explicit single-octave calls: `perlin-fire` (fbm/ridge/turbulence),
+`eye-of-sauron`, `coronal-mass-ejection`,
+`distance-function-kaleidoscope-2`. Their port-quality defects (§3
+lifecycle, §5 verdicts) still stand for the #101 fix pass.

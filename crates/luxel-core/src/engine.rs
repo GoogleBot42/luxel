@@ -32,6 +32,18 @@ enum RenderKind {
     R3(u16),
 }
 
+/// A render entry candidate. PB also dispatches `render`/`render2D`/
+/// `render3D` through a plain GLOBAL of that name when a pattern assigns
+/// it a function at runtime (`export var render2D` + `render2D = fn` in
+/// `beforeRender` — oracle-confirmed 2026-08-29, tools/oracle/
+/// alias-probes.mjs, incl. live re-assignment between frames). A Global
+/// candidate only wins selection while it currently holds a function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderTarget {
+    Fn(u16),
+    Global(u16),
+}
+
 /// Where a debug-paused frame pipeline is suspended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunStage {
@@ -103,6 +115,9 @@ pub struct Engine {
     vm: Vm,
     pixel_count: u32,
     before: Option<u16>,
+    /// Entry candidates for render/render2D/render3D (fixed at load).
+    render_tgt: [Option<RenderTarget>; 3],
+    /// The resolved entry for the current frame (see [`resolve_render`]).
     render: Option<RenderKind>,
     controls: Vec<Control>,
     pixels: Vec<[u8; 3]>,
@@ -238,7 +253,8 @@ impl Engine {
 
         vm.pixel_count = pixel_count;
         let before = if violated { None } else { prog.exported_fn("beforeRender") };
-        let render = if violated { None } else { pick_render(&prog, 0) };
+        let render_tgt = if violated { [None; 3] } else { render_targets(&prog) };
+        let render = resolve_render(&render_tgt, &vm.globals, 0);
 
         let mut controls = Vec::new();
         for (name, idx) in &prog.exported_fns {
@@ -263,6 +279,7 @@ impl Engine {
             vm,
             pixel_count,
             before,
+            render_tgt,
             render,
             controls,
             time_acc: 0,
@@ -290,9 +307,8 @@ impl Engine {
         // `sqrt(pixelCount)`-grid patterns depend on that. A host-installed
         // map replaces this (set_map), exactly like saving a map on a PB.
         if !violated
-            && engine.prog.exported_fn("render").is_none()
-            && (engine.prog.exported_fn("render2D").is_some()
-                || engine.prog.exported_fn("render3D").is_some())
+            && engine.render_tgt[0].is_none()
+            && (engine.render_tgt[1].is_some() || engine.render_tgt[2].is_some())
         {
             engine.set_default_grid_map();
         }
@@ -527,8 +543,14 @@ impl Engine {
         }
         self.vm.map = Some(MapData { dims, coords });
         if !self.requires_violated {
-            self.render = pick_render(&self.prog, dims);
+            self.render = self.resolve_render_now();
         }
+    }
+
+    /// [`resolve_render`] against the current map dims and global values.
+    fn resolve_render_now(&self) -> Option<RenderKind> {
+        let dims = self.vm.map.as_ref().map_or(0, |m| m.dims);
+        resolve_render(&self.render_tgt, &self.vm.globals, dims)
     }
 
     /// Provide wall-clock time (unix seconds, timezone already applied) for
@@ -820,6 +842,9 @@ impl Engine {
                 Ok(Outcome::Paused) => return,
                 Ok(Outcome::Done(_)) => match stage {
                     RunStage::Before => {
+                        // Late-bound entries (`export var render2D` assigned
+                        // inside beforeRender) resolve now, each frame.
+                        self.render = self.resolve_render_now();
                         if self.render.is_none() {
                             self.pixels.iter_mut().for_each(|p| *p = [0; 3]);
                             self.run_stage = None;
@@ -950,13 +975,43 @@ fn quantize(v: Fx) -> u8 {
     ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255) >> 16) as u8
 }
 
+/// The three render entry candidates by name (`render`, `render2D`,
+/// `render3D`): an exported function wins; otherwise a global of that name
+/// is a late-binding candidate (see [`RenderTarget`]).
+fn render_targets(prog: &Program) -> [Option<RenderTarget>; 3] {
+    let tgt = |name: &str| {
+        prog.exported_fn(name)
+            .map(RenderTarget::Fn)
+            .or_else(|| prog.global_index(name).map(RenderTarget::Global))
+    };
+    [tgt("render"), tgt("render2D"), tgt("render3D")]
+}
+
 /// Render-function selection priority by map dimensionality (documented PB
 /// behavior): no/1D map → render, render3D, render2D; 2D map → render2D,
-/// render3D, render; 3D map → render3D, render2D, render.
-fn pick_render(prog: &Program, dims: u8) -> Option<RenderKind> {
-    let r1 = || prog.exported_fn("render").map(RenderKind::R1);
-    let r2 = || prog.exported_fn("render2D").map(RenderKind::R2);
-    let r3 = || prog.exported_fn("render3D").map(RenderKind::R3);
+/// render3D, render; 3D map → render3D, render2D, render. Re-run each
+/// frame after `beforeRender` so a runtime-assigned entry takes effect; a
+/// Global candidate resolves only while its slot holds a function.
+fn resolve_render(
+    tgt: &[Option<RenderTarget>; 3],
+    globals: &[Value],
+    dims: u8,
+) -> Option<RenderKind> {
+    let get = |slot: usize| {
+        let f = match tgt[slot]? {
+            RenderTarget::Fn(f) => f,
+            RenderTarget::Global(g) => match globals.get(g as usize) {
+                Some(Value::Fun(f)) => *f,
+                _ => return None,
+            },
+        };
+        Some(match slot {
+            0 => RenderKind::R1(f),
+            1 => RenderKind::R2(f),
+            _ => RenderKind::R3(f),
+        })
+    };
+    let (r1, r2, r3) = (|| get(0), || get(1), || get(2));
     match dims {
         2 => r2().or_else(r3).or_else(r1),
         3 => r3().or_else(r2).or_else(r1),

@@ -1,5 +1,51 @@
 # Update log
 
+## 2026-08-29 — Engine gaps 4/5/7 settled against the oracle: wrap is
+## authentic, setPalette aliases live, render late-binds, the array
+## ledger is PB-exact (Gitea #106, #108, #109)
+
+Three oracle probe batteries (fw 3.67; `tools/oracle/overflow-probes.mjs`,
+`budget-bisect.mjs`, `alias-probes.mjs`) settled the remaining verify-sweep
+engine gaps, and two of the four answers flipped the issue's premise:
+
+- **#106 closed as authentic**: plain add/subtract/`+=` WRAP on real PB
+  (`32000+1000` reads −32536 via exported vars; a post-wrap `>= delay`
+  gate reads false), so the fire-blue/fire-red/spring-colors 32.768 s
+  freeze family happens on real hardware too. No engine change — docs
+  now say so (spec/vm.md, oracle findings), re-judges queued.
+- **#109 reframed**: PB never frees arrays either — per-frame
+  `array(100)` kills the pattern on the oracle at exactly frame 98. The
+  actionable half was PRECISION: bisecting the real ledger gave
+  **10,236 units with every array costing len+4** (single max 10,232;
+  5113+5113 ok / 5116+5116 abort; all boundary points check). Engine now
+  charges that exact model (was flat 10,240, no per-array cost), with
+  boundary + exhaustion tests pinning the device numbers.
+- **#108, the six silent-null originals**: two were real engine gaps,
+  both oracle-confirmed and fixed — `setPalette(arr)` holds a LIVE
+  reference (in-place writes re-cook the palette; snapshot dropped) and
+  a render function assigned to `export var render`/`render2D` at
+  runtime now dispatches (entry re-resolved each frame through the
+  global; slime-mold-palette renders, and live re-assignment swaps
+  entries like the oracle does). The other four: coral-plasma was a port
+  arity bug (6-arg `perlinRidge`, fixed), skypirate needs its author's
+  1800-px 3-column rig (fixups.json pins grid 3×600),
+  performance-test-framework is non-visual BY DESIGN, automap needs a
+  harness `--vars` flag (ticketed).
+- **Bonus family**: the perlin octave refit (b37df0a) silently orphaned
+  four ports written against the old min-1-octave clamp — their calls
+  now ran 0 octaves and froze into constants (perlin-fire's "fire" was a
+  static smear on current master, distinct from its frame-512 crash).
+  De-orphaned with explicit single-octave calls (perlin-fire,
+  eye-of-sauron, coronal-mass-ejection, distance-function-kaleidoscope-2)
+  and killed the frame-512 crashes (perlin-fire + eye-of-sauron
+  installed their setPalette literal per frame; hoisted to init).
+
+Verified: workspace tests green (5 new engine tests pin the oracle
+boundary numbers, palette aliasing, and late-bound dispatch);
+snap.mjs re-runs show all four fixable silent-null sides rendering with
+motion; FINDINGS.md carries the full addendum. The PB oracle was left on
+its original pattern (restore-in-finally per probe).
+
 ## 2026-08-29 — Cold loads back to 10/10: the installer page's second
 ## vite entry was overflowing the device's 3-socket pool (Gitea #92)
 

@@ -383,6 +383,41 @@ full unit of output.
 `perlin_wrap4` was compared without its `setPerlinWrap(4,4,4)` — fixed
 in the same change.)
 
+## Overflow, allocation, and late binding (probed 2026-08-29, fw 3.67)
+
+Batteries: `tools/oracle/overflow-probes.mjs`, `budget-bisect.mjs`,
+`alias-probes.mjs`. Four findings, all now matched by the engine:
+
+1. **Plain add/subtract (and `+=`) WRAP** at the 16.16 range ends:
+   var-operand `32000 + 1000` reads **−32536**, `−32000 − 1000` reads
+   `+32536`, and a post-wrap `x >= 20` comparison is false. So the
+   `timer += delta` idiom (fire-blue / fire-red / spring-colors) really
+   does freeze for exactly 2^15 ms on a real PB once the accumulator
+   crosses +32767.9998 — the 32.768 s freeze family is AUTHENTIC device
+   behavior, not an engine artifact (closes the engine half of Gitea
+   #106; pow/exp2 saturating remains the documented exception).
+2. **Array ledger, exact model**: every array costs its length **+ 4
+   units** against a **10,236-unit** budget (equivalently a 40 KiB pool
+   of 4-byte elements with 16-byte headers, 16 bytes pre-consumed).
+   Boundary probes: `array(10232)` ok / `array(10233)` aborts init;
+   `array(5113)+array(5113)` ok / `array(5116)+array(5116)` aborts;
+   3×`array(3403)` ok. Engine's `DEFAULT_ARRAY_BUDGET` now mirrors this
+   (was a flat 10,240 with no per-array cost).
+3. **Arrays are never freed on PB either**: a pattern allocating
+   `array(100)` per frame updates its frame counter exactly **98**
+   times, then its `beforeRender` aborts every frame (98·104 = 10,192 ≤
+   10,236 < 99·104). Per-frame allocation is a pattern bug on both
+   engines; free-on-rebind would be a deliberate divergence (Gitea #109).
+4. **Late binding is live on PB**:
+   - `setPalette(arr)` holds a LIVE reference — in-place writes through
+     `arr` changed `paint()`'s rendered output (red → blue) with no
+     second `setPalette` call.
+   - A pattern with NO exported render function renders through
+     `export var render` holding a function, and re-assigning the var
+     swaps the entry between frames (red ↔ green observed live).
+   Both semantics are now implemented (palette re-cooks on backing-array
+   mutation; the render entry re-resolves each frame through the global).
+
 Still open, and why: **1D transform coords** (this oracle can never be
 mapless again — see the maps section above); **sensor-board accel/light
 scaling** (needs the physical PB sensor board); **no-time clock behavior**

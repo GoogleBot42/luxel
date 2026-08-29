@@ -65,7 +65,9 @@ export function render2D(index, x, y) {
   var sym = interf + 0.5 * triangle(3 * angle + angPhase)
   // ridge noise peaks low (~0.33) and is flat near the lattice origin, so
   // spread the sample coordinate and keep the slow axes off-origin, then gain
-  var nb = perlinRidge(sym * 4 + 0.5, slow2 + 1.3, slow3 + 2.7) * 4 - 0.05
+  // Explicit single octave, offset 0 → noise² — the bare 3-arg call's old
+  // behavior under the min-1 octave clamp (stb/PB-exact would run zero).
+  var nb = perlinRidge(sym * 4 + 0.5, slow2 + 1.3, slow3 + 2.7, 2, 0.5, 0, 1) * 4 - 0.05
   bMem[i] = bMem[i] + 0.33 * (nb - bMem[i])
 
   var bv = smoothstep(0.0, 0.6, bMem[i])

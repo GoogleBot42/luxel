@@ -56,7 +56,9 @@ export function render3D(index, x, y, z) {
   px = t
 
   // Dense fine-veined ridge field, squared to sharpen ridges.
-  var r = perlinRidge(px, py, pz, 1.3, 0.75, 5)
+  // 7-arg form: (x, y, z, lacunarity, gain, offset, octaves) — the 6-arg
+  // call shifted every parameter and left octaves 0, rendering black.
+  var r = perlinRidge(px, py, pz, 2, 1.3, 0.75, 5)
   r = r * r
 
   // Hue: banded along the filaments (noise + position), spanning about a
