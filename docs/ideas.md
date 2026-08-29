@@ -133,7 +133,9 @@ bytecode execution is being worked on now; the rest are queued:
 - ~~Web pool 3→2 (make the webui tolerant first)~~ — RESOLVED 2026-08-15
   (UPDATES.md entry has the full story): the web tolerance shipped
   (fetchgate.ts + coldload.mjs acceptance harness, then 10/10 clean on the
-  Athom — **no longer true on master, see Gitea #92**), the verification
+  Athom — briefly regressed to 0/10 when the installer page's second vite
+  entry grew the native request burst to 4, re-fixed 2026-08-29 and back
+  to 10/10; Gitea #92), the verification
   gauntlet surfaced and fixed a pattern-store
   OOM-on-read panic and the picoserve shutdown slot-wedge
   (QuickCloseSocket) — but Chromium needs ~3 sockets at cold NAVIGATION
