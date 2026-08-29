@@ -96,6 +96,16 @@ if (!fs.existsSync(WASM)) {
   );
   process.exit(1);
 }
+// A wasm built before the wall-clock ABI landed (#111) is missing exports the
+// UI calls unconditionally — the page dies with a TypeError instead of telling
+// anyone to rebuild. Refuse to start on a stale binary.
+if (!fs.readFileSync(WASM).includes("lx_set_default_wall_clock")) {
+  console.error(
+    `engine wasm at ${WASM} is STALE (predates the wall-clock ABI, missing lx_set_default_wall_clock)\n` +
+      `rebuild it: nix develop -c cargo build --release --target wasm32-unknown-unknown -p luxel-wasm`,
+  );
+  process.exit(1);
+}
 
 const manifest = JSON.parse(fs.readFileSync(PAIRS, "utf8"));
 const slugs = new Set(manifest.pairs.map((p) => p.slug));
