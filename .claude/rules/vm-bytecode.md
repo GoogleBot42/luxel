@@ -18,3 +18,18 @@ paths:
 - Format depth (blob layout, import-table encoding, decode/validate rules)
   lives in docs/spec/bytecode.md; VM semantics (opcodes, builtin dispatch)
   live in docs/spec/vm.md. Read those before changing either file.
+- Builtin calls with the wrong argument count DON'T error — missing args
+  read as 0, extra args are dropped. So changing a builtin's signature or
+  argument semantics silently breaks existing callers: the 2026-08-29
+  session found four library/ ports frozen into constants because the
+  perlin refit (b37df0a) made 0 octaves an empty sum and their
+  old-signature calls fell into it, weeks after the change, with zero
+  errors. When you change any builtin's signature/parameter meaning,
+  grep library/ (and tools/) for its call sites and check every arity —
+  and re-run tools/verify/snap.mjs on pairs that use it.
+- An engine-vs-PB semantics question in an issue or FINDINGS entry
+  ("presumably runs clean on real PB") is usually decidable in minutes
+  against the oracle — probe before building an engine change on the
+  presumption (two of the three 2026-08-29 engine-gap issues had wrong
+  premises). Probe batteries: tools/oracle/*.mjs, conventions in
+  .claude/rules/oracle.md.
