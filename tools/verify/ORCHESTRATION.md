@@ -79,10 +79,25 @@ FEEDS judges, reconstructed so a re-judge session (queued in Gitea #84 /
   hand it to a judge again; the harness is deterministic and the
   provenance hashes in meta.json will show whether harness/port/epe
   changed since the prior verdict.
-- Slugs currently awaiting re-judge after engine fixes: fire-blue,
-  fire-red, spring-colors (32.768 s freeze, Gitea #106); both
-  music-sequencers (#99 sentinel strip); the silent-null six if the cause
-  turns out engine-side (#108).
+- Re-judged 2026-08-29 after the #106/#108/#109 settlements (PR #126), 15
+  slugs in three batches: fire-blue (divergent 4), fire-red (divergent 5),
+  spring-colors (close 6) — the authentic freeze now scores against the
+  ports; music-sequencer-for-v2 and -v3-only (both divergent 4, first-ever
+  judgeable renders post sentinel-strip); fast-palette-blending (close 6)
+  and slime-mold-palette (close 6) — both engine fixes confirmed;
+  coral-plasma (divergent 2), skypirate-s-centered-spectrum (divergent 4),
+  nano-orbital (broken 2), orv-christmas-tree (divergent 5) — fixup rigs
+  all confirmed working; perlin-fire (divergent 4), coronal-mass-ejection
+  (divergent 4), eye-of-sauron (broken 1), distance-function-kaleidoscope-2
+  (broken 0). Still blocked: automap (#122 harness --vars),
+  performance-test-framework (#123 non-visual decision).
+- CAUTION for fix-pass work: sweep-era verdicts predating the perlin
+  refit (b37df0a) can describe a STALE original render — the refit changed
+  how perlin-using ORIGINALS draw (two 2026-08-29 judges measured the same
+  .epe rendering very differently from its sweep-era description). Where a
+  2026-08-29 re-judge exists it supersedes the old reference description;
+  for other perlin-heavy pairs, re-render the original before trusting the
+  old verdict's colors/brightness numbers.
 - Re-judged 2026-08-23 after the #104/#105 fixes: pixelclock (close 6),
   naturallightsync (close 5), sunrise-alarm-clock (close 6),
   utility-scheduled-percent-on-demo (close 7), static-random-colors
