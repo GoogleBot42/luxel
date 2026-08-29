@@ -266,7 +266,11 @@ vector 1 to vector 2 in radians (counter-clockwise positive, like `atan2`).
 
 `hsv(h, s, v)` (hue wraps), `hsv24`, `rgb(r, g, b)`; palette:
 `setPalette([pos, r, g, b, …])` then `paint(t, brightness)`. With no
-palette installed `paint(t)` is a grayscale ramp. Outside the stops the
+palette installed `paint(t)` is a grayscale ramp. `setPalette(arr)`
+holds a LIVE reference (hardware-confirmed): later writes through `arr`
+change what `paint()` renders with no second call — but install the
+palette ONCE, not per frame, or the array literal allocates every frame
+and exhausts the element budget (arrays are never freed). Outside the stops the
 ends are asymmetric (hardware-confirmed PB behavior): below the first stop
 clamps to the first color, past the last stop paints **black** — end a
 palette at position 1.0 unless you want the cutoff.

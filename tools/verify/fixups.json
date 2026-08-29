@@ -22,5 +22,10 @@
   "orv-christmas-tree": {
     "grid": [20, 20],
     "note": "SWEEP-NOTES.md 'Manifest rig fixes needed': the original renders only at pixelCount multiples of 20, so the rig should be grid 20x20 (the default 16x16 errors at frame 0)."
+  },
+  "skypirate-s-centered-spectrum": {
+    "rig": "grid",
+    "grid": [3, 600],
+    "note": "Gitea #108 diagnosis (2026-08-29): the original hard-codes its author's 1800-px 3-column install (yPCache half-height 300 = pixelCount/width/2 with width=3); on the manifest's 256-px grid every yPixel lands in 215..299 and no column test ever passes, so it renders uniformly black. At 3x600 it renders and moves (orig mean 47.0, motion 8.4)."
   }
 }

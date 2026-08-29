@@ -677,3 +677,110 @@ fn resource_guards_still_end_the_frame() {
     assert!(err.message.contains("execution limit"), "{}", err.message);
     assert!(err.is_resource_guard());
 }
+
+// ---- PB array element ledger (oracle-bisected 2026-08-29, fw 3.67):
+// 10,236-unit budget, every array costs its length + a 4-unit header.
+// Boundary numbers below are the measured device answers, not derivations.
+
+#[test]
+fn array_budget_pb_boundaries() {
+    let ok = |src: &str| {
+        let e = Engine::new(src, 1, 1).unwrap();
+        assert!(e.last_error.is_none(), "{src}: {:?}", e.last_error);
+    };
+    let over = |src: &str| {
+        let e = Engine::new(src, 1, 1).unwrap();
+        let m = &e.last_error.as_ref().expect("expected budget error").message;
+        assert!(m.contains("array element budget"), "{src}: {m}");
+    };
+    // largest single array a real PB accepts is 10,232
+    ok("a = array(10232)\nexport function render(i) { rgb(0,0,0) }");
+    over("a = array(10233)\nexport function render(i) { rgb(0,0,0) }");
+    // per-array headers: 5113+5113 fits while 5116+5116 aborts on PB,
+    // even though both sums are under the single-array maximum
+    ok("a = array(5113)\nb = array(5113)\nexport function render(i) { rgb(0,0,0) }");
+    over("a = array(5116)\nb = array(5116)\nexport function render(i) { rgb(0,0,0) }");
+}
+
+#[test]
+fn per_frame_allocation_exhausts_like_pb() {
+    // array(100) per frame: the oracle survived exactly 98 frames
+    // (98·104 = 10,192 ≤ 10,236 < 99·104); ours must die on the same frame
+    let src = "export var frames\n\
+               c = 0\n\
+               export function beforeRender(delta) { t = array(100)\n c = c + 1\n frames = c }\n\
+               export function render(i) { rgb(0,0,0) }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    for _ in 0..120 {
+        e.frame(Fx::from_int(10));
+    }
+    assert_eq!(e.var("frames"), Some(Value::Num(Fx::from_int(98))));
+    let err = e.take_error().expect("budget error recorded");
+    assert!(err.message.contains("array element budget"), "{}", err.message);
+}
+
+// ---- setPalette live-aliasing (oracle-confirmed 2026-08-29,
+// tools/oracle/alias-probes.mjs: in-place writes through the installed
+// array changed paint()'s output with no second setPalette call) ----
+
+#[test]
+fn set_palette_live_aliases_the_array() {
+    let src = "export var f\n\
+               p = array(8)\n\
+               p[1] = 1\n\
+               p[4] = 1\n\
+               p[5] = 1\n\
+               setPalette(p)\n\
+               f = 0\n\
+               export function beforeRender(delta) {\n\
+                 f = f + 1\n\
+                 if (f > 1) {\n\
+                   p[1] = 0\n\
+                   p[3] = 1\n\
+                   p[5] = 0\n\
+                   p[7] = 1\n\
+                 }\n\
+               }\n\
+               export function render(index) { paint(0.5, 1) }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    let px = e.frame(Fx::from_int(10));
+    assert_eq!(px[0], [255, 0, 0], "initial palette is red");
+    let px = e.frame(Fx::from_int(10));
+    assert_eq!(px[0], [0, 0, 255], "in-place writes turn it blue, no re-call");
+    assert!(e.last_error.is_none());
+}
+
+// ---- late-bound render dispatch (oracle-confirmed 2026-08-29, same
+// probe battery: a pattern with NO exported render function renders via
+// `export var render`, and re-assigning it swaps live) ----
+
+#[test]
+fn render_via_export_var_dispatches_and_reswaps() {
+    let src = "export var f, render\n\
+               function red(index) { rgb(1, 0, 0) }\n\
+               function green(index) { rgb(0, 1, 0) }\n\
+               f = 0\n\
+               export function beforeRender(delta) {\n\
+                 f = f + 1\n\
+                 if (f % 2 == 1) { render = red } else { render = green }\n\
+               }";
+    let mut e = Engine::new(src, 2, 1).unwrap();
+    let px = e.frame(Fx::from_int(10));
+    assert_eq!(px[0], [255, 0, 0]);
+    let px = e.frame(Fx::from_int(10));
+    assert_eq!(px[0], [0, 255, 0], "re-assignment swaps the entry live");
+    assert!(e.last_error.is_none());
+}
+
+#[test]
+fn render2d_via_export_var_gets_default_grid_map() {
+    // slime-mold-palette's shape: only a runtime-assigned render2D — it
+    // must still get the default grid map a static render2D would get
+    let src = "export var render2D\n\
+               function pix(index, x, y) { rgb(1, 1, 1) }\n\
+               export function beforeRender(delta) { render2D = pix }";
+    let mut e = Engine::new(src, 4, 1).unwrap();
+    let px = e.frame(Fx::from_int(10));
+    assert_eq!(px[0], [255, 255, 255]);
+    assert!(e.last_error.is_none());
+}

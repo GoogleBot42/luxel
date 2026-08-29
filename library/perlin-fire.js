@@ -38,15 +38,19 @@ export function sliderMorphSpeed(v) { //# min=0 max=1 step=0.01 default=0.5
   morphSpeed = 0.4 + s * 9.6
 }
 
+// Palette installed ONCE: an array literal inside beforeRender allocates a
+// fresh arena entry every frame, and arrays are never freed (PB-faithful) —
+// per-frame setPalette([...]) exhausts the element budget at frame ~426.
+setPalette([
+  0.0,  0, 0, 0,     // black embers
+  0.2,  1, 0, 0,     // deep red
+  0.55, 1, 0.4, 0,   // orange
+  0.8,  1, 1, 0,     // yellow
+  1.0,  1, 1, 1      // white-hot
+])
+
 export function beforeRender(delta) {
   setPerlinWrap(WRAP, WRAP, WRAP)
-  setPalette([
-    0.0,  0, 0, 0,     // black embers
-    0.2,  1, 0, 0,     // deep red
-    0.55, 1, 0.4, 0,   // orange
-    0.8,  1, 1, 0,     // yellow
-    1.0,  1, 1, 1      // white-hot
-  ])
   // Sawtooths over exactly the repeat-period so the loop is seamless. Rise
   // completes its full period in ~1-2 min / riseSpeed; morph is several times
   // slower.
@@ -54,11 +58,17 @@ export function beforeRender(delta) {
   morphOff  = time(600 / 65.536 / morphSpeed) * WRAP
 }
 
+// Single-octave calls: these were authored against the old noise API whose
+// octave count clamped to a minimum of 1, so the extra leading argument and
+// fractional octave counts silently ran ONE octave at amp 1. The current
+// stb/PB-exact signatures (fbm/turbulence: x,y,z,lacunarity,gain,octaves;
+// ridge: +offset before octaves) treat 0 octaves as an empty sum — the old
+// calls froze into constants. One explicit octave reproduces the judged look.
 function sampleNoise(x, y, z) {
   if (mode <= 1) return perlin(x, y, z, 0) * 0.5 + 0.5             // billowing
-  if (mode == 2) return saturate((perlinRidge(x, y, z, 0, 4, 0.5, 2) - 1.0) * 4) // tendrils
-  if (mode == 3) return perlinFbm(x, y, z, 0, 4, 0.5, 2) * 0.5 + 0.5             // layered fbm
-  return saturate(perlinTurbulence(x, y, z, 0, 4, 0.5, 2) * 1.16)  // rolling fireball
+  if (mode == 2) return saturate((perlinRidge(x, y, z, 2, 0.5, 0.5, 1) - 1.0) * 4) // tendrils
+  if (mode == 3) return perlinFbm(x, y, z, 2, 0.5, 1) * 0.5 + 0.5             // layered fbm
+  return saturate(perlinTurbulence(x, y, z, 2, 0.5, 1) * 1.16)  // rolling fireball
 }
 
 export function render2D(index, x, y) {

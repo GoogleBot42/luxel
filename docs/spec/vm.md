@@ -23,7 +23,12 @@ A value (`Value`) is one of:
 - Two's-complement `i32` raw, value = raw / 65536. Range ±32768 (exclusive),
   resolution 1/65536.
 - **All arithmetic wraps** on overflow (hardware-confirmed against Pixel
-  Blaze: `hypot` and large products wrap, they don't saturate).
+  Blaze: `hypot`, large products, and plain add/subtract/`+=` all wrap —
+  var-operand `32000 + 1000` reads −32536 on fw 3.67; `pow`/`exp2` are
+  the saturating exceptions). Visible consequence, also authentic on
+  real PB: a `timer += delta` accumulator that only ever grows freezes
+  its pattern for exactly 2^15 ms once it wraps negative (the
+  fire-blue/fire-red/spring-colors 32.768 s freeze family, Gitea #106).
 - Source literals are quantized as **16.15**: parse as binary64, truncate
   toward zero to 16.16, then clear the LSB (`raw & !1`). Applies to every
   literal including predefined constants (`PI` = raw 205886, not 205887).
@@ -37,8 +42,12 @@ A value (`Value`) is one of:
 
 - Arena of `Vec<Value>` owned by the VM; `Arr(u32)` is an arena index.
   Arrays are reference values (aliasing is visible, as in PB).
-- Allocation is budgeted: total elements across all arrays ≤
-  `array_budget` (default 10 240); exceeding it is a runtime error.
+- Allocation is budgeted with PB's measured ledger (oracle-bisected
+  2026-08-29, fw 3.67): every array costs its element count **plus a
+  4-unit header** against a 10,236-unit budget; exceeding it is a
+  runtime error. Arrays are never freed (PB-faithful — a real PB
+  exhausts identically under per-frame allocation), so re-binding a
+  variable orphans its old array's charge permanently.
 - Indexing truncates fractional indices toward zero — for reads **and**
   writes. Any out-of-bounds or negative index (read or write) raises a
   runtime error that aborts the current entry point. (PB divergence, on
@@ -82,6 +91,13 @@ GlobalDef { name, export: bool, init: Fx, predefined: bool }
   `exported_fns` are the host-callable entry points. Frontends decide what
   to export; the engine looks for `render`, `render2D`, `render3D`,
   `beforeRender` and control functions by name.
+- **Late-bound render entries** (oracle-confirmed 2026-08-29): when no
+  exported function of the name exists, a plain GLOBAL named `render`/
+  `render2D`/`render3D` is a dispatch candidate. The entry is re-resolved
+  every frame after `beforeRender`, using the global only while it holds
+  a function value — so `export var render2D` assigned (and re-assigned)
+  at runtime renders exactly as on a real PB, and a global of that name
+  merely counts as "renders in 2D/3D" for default-map selection.
 
 ## 3. Execution model
 

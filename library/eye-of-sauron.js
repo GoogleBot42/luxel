@@ -17,19 +17,23 @@ var radialClock = 0      // faster radial scroll -> outward streaming
 var SCALE = 3            // magnification; boundary radius = SCALE - 1
 var YSTRETCH = 1.4       // vertical scaled ~40% more -> wide flattened almond
 
+// Palette installed ONCE: an array literal inside beforeRender allocates a
+// fresh arena entry every frame, and arrays are never freed (PB-faithful) —
+// per-frame setPalette([...]) exhausts the element budget at frame ~426.
+setPalette([
+  0.00, 0, 0, 0,
+  0.20, 0.6, 0, 0,
+  0.55, 1, 0.35, 0,
+  0.80, 1, 0.9, 0,
+  1.00, 1, 1, 1
+])
+
 export function beforeRender(delta) {
   // both clocks sweep 0..WRAP so the noise tiles seamlessly in time
   morphClock = time(6.4) * WRAP    // ~7 min of unique noise
   radialClock = time(3.0) * WRAP   // ~3 min, subtracted -> streaming
   // tile noise around the full circle on the angular axis
   setPerlinWrap(angDensity, WRAP, WRAP)
-  setPalette([
-    0.00, 0, 0, 0,
-    0.20, 0.6, 0, 0,
-    0.55, 1, 0.35, 0,
-    0.80, 1, 0.9, 0,
-    1.00, 1, 1, 1
-  ])
 }
 
 //# min=2 max=18 step=1 default=8
@@ -60,7 +64,10 @@ export function render2D(index, x, y) {
   var radius = hypot(cx, cy)
   var angle = atan2(cy, cx) / PI2 + 0.5   // 0..1 around the circle
 
-  var n = perlinRidge(angle * angDensity, radius * radDensity - radialClock, morphClock)
+  // Explicit single octave, offset 0 → (0 − |noise|)² = noise²: what the
+  // bare 3-arg call produced under the old noise API (octaves clamped to a
+  // minimum of 1); the stb/PB-exact signature runs 0 octaves for it.
+  var n = perlinRidge(angle * angDensity, radius * radDensity - radialClock, morphClock, 2, 0.5, 0, 1)
 
   // oval edge fade: square of inwardness from the outer boundary
   var boundary = SCALE - 1

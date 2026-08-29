@@ -40,7 +40,9 @@ export function render2D(index, x, y) {
 
   // multi-octave turbulence, inverted; radius minus a scroll phase makes
   // the field stream outward, the third axis evolves the shapes
-  var n = 1 - perlinTurbulence(angle, radius * RSCALE - scroll1, scroll2, 0)
+  // Explicit single octave (= |noise| at amp 1): the old 4-arg call ran one
+  // octave under the min-1 clamp; the stb/PB-exact signature would run zero.
+  var n = 1 - perlinTurbulence(angle, radius * RSCALE - scroll1, scroll2, 2, 0.5, 1)
 
   // flares: keep only the strongest ridges (top ~third) with soft edges
   var flare = smoothstep(0.66, 1, n)

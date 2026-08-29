@@ -6,7 +6,7 @@
 //!   as 0 (oracle-verified 2026-07-07: refs act as 0 in math on PB too).
 //! - Arrays live in an arena and are never freed — re-binding a variable
 //!   orphans the old array permanently, exactly like PB. Total element
-//!   budget defaults to PB's 10,240.
+//!   budget defaults to PB's 10,236 units (len+4 per array).
 //! - Runtime errors never panic or halt the engine: the first error per
 //!   call is recorded (message + function + pc, `vmerr` style) and the
 //!   callback aborts; the frame pipeline keeps running.
@@ -510,7 +510,14 @@ const CONST_ENTRY_COST: usize = 32;
 const MAX_DEPTH: usize = 48;
 const MAX_STACK: usize = 1024;
 const MAX_ARGS: usize = 16;
-pub const DEFAULT_ARRAY_BUDGET: usize = 10_240;
+/// PB's element ledger, oracle-bisected (fw 3.67, 2026-08-29): every array
+/// costs its length plus a 4-unit header against a 10,236-unit budget —
+/// equivalently a 40 KiB pool of 4-byte elements with 16-byte headers, 16
+/// bytes pre-consumed. Pinned by the boundary probes in
+/// docs/research/04-oracle-findings.md (single max 10,232; 5113+5113 ok,
+/// 5116+5116 abort; 98 frames of per-frame `array(100)`).
+pub const DEFAULT_ARRAY_BUDGET: usize = 10_236;
+pub const ARRAY_HEADER_UNITS: usize = 4;
 const FUEL: u32 = 8_000_000;
 
 /// One arena array: owned storage, or an index into the program's
@@ -544,7 +551,8 @@ pub struct Vm {
     pub globals: Vec<Value>,
     arrays: Vec<ArrRepr>,
     array_elems: usize,
-    /// PB-compat element budget (10,240 — arrays are never freed).
+    /// PB-compat element budget (10,236 units, each array costing len+4 —
+    /// arrays are never freed; see DEFAULT_ARRAY_BUDGET).
     pub array_budget: usize,
     /// Actual bytes charged so far (elements × 8 + per-array overhead).
     array_bytes: usize,
@@ -598,6 +606,13 @@ pub struct Vm {
     /// Engine-set; used by mapPixels and the no-map 1D fallback.
     pub pixel_count: u32,
     palette: Vec<(Fx, [Fx; 3])>,
+    /// Arena id backing the palette. On PB `setPalette(arr)` holds a LIVE
+    /// reference: later writes through `arr` change what `paint()` looks
+    /// up, with no second `setPalette` call (oracle-probed via
+    /// fast-palette-blending, 2026-08-29). We keep the id and rebuild the
+    /// cooked stops lazily when the backing array is mutated.
+    palette_src: Option<u32>,
+    palette_dirty: bool,
     perlin_wrap: [i32; 3],
     /// Wall-clock unix seconds (timezone-adjusted by the host); None → the
     /// clock builtins return 0. With-time civil conversion is oracle-exact
@@ -656,6 +671,8 @@ impl Vm {
             map: None,
             pixel_count: 0,
             palette: Vec::new(),
+            palette_src: None,
+            palette_dirty: false,
             perlin_wrap: [256; 3],
             wall_unix: None,
             post_gamma: Fx::ZERO,
@@ -695,6 +712,9 @@ impl Vm {
     /// Mutable storage by id, materializing const-backed arrays
     /// (copy-on-write). Fails only if the copy can't be allocated.
     fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut Vec<Value>, &'static str> {
+        if self.palette_src == Some(id) {
+            self.palette_dirty = true;
+        }
         let slot = &mut self.arrays[id as usize];
         if let ArrRepr::Const(d) = slot {
             let data: &[Value] = &prog.data_arrays[*d as usize];
@@ -1393,7 +1413,7 @@ impl Vm {
     }
 
     fn charge_array(&mut self, len: usize, bytes: usize) -> Result<(), &'static str> {
-        if self.array_elems + len > self.array_budget {
+        if self.array_elems + len + ARRAY_HEADER_UNITS > self.array_budget {
             return Err("array element budget exceeded (arrays are never freed)");
         }
         if self.array_bytes + bytes > self.array_byte_budget {
@@ -1404,7 +1424,7 @@ impl Vm {
 
     pub fn alloc_array(&mut self, elems: Vec<Value>) -> Result<Value, &'static str> {
         self.charge_array(elems.len(), Self::array_cost(elems.len()))?;
-        self.array_elems += elems.len();
+        self.array_elems += elems.len() + ARRAY_HEADER_UNITS;
         self.array_bytes += Self::array_cost(elems.len());
         self.arrays.push(ArrRepr::Owned(elems));
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
@@ -1415,7 +1435,7 @@ impl Vm {
     /// the entry itself — the data is shared with the program.
     fn alloc_const_array(&mut self, d: u32, len: usize) -> Result<Value, &'static str> {
         self.charge_array(len, CONST_ENTRY_COST)?;
-        self.array_elems += len;
+        self.array_elems += len + ARRAY_HEADER_UNITS;
         self.array_bytes += CONST_ENTRY_COST;
         self.arrays.push(ArrRepr::Const(d));
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
@@ -1432,7 +1452,7 @@ impl Vm {
             return Err("out of memory for array");
         }
         elems.resize(len, Value::default());
-        self.array_elems += len;
+        self.array_elems += len + ARRAY_HEADER_UNITS;
         self.array_bytes += Self::array_cost(len);
         self.arrays.push(ArrRepr::Owned(elems));
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
@@ -2019,17 +2039,9 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("setPalette needs an array".into()));
                 };
-                let data = self.arr(prog, arr);
-                let mut pal = Vec::new();
-                let mut i = 0;
-                while i + 3 < data.len() {
-                    pal.push((
-                        data[i].num(),
-                        [data[i + 1].num(), data[i + 2].num(), data[i + 3].num()],
-                    ));
-                    i += 4;
-                }
-                self.palette = pal;
+                self.palette_src = Some(arr);
+                self.palette_dirty = false;
+                self.rebuild_palette(prog, arr);
                 Ok(Value::default())
             }
             Paint => {
@@ -2051,7 +2063,7 @@ impl Vm {
                     frac
                 };
                 let b = if argc >= 2 { n(1) } else { Fx::ONE };
-                let rgb = self.palette_lookup(v);
+                let rgb = self.palette_lookup(prog, v);
                 let b = b.clamp(Fx::ZERO, Fx::ONE);
                 self.pixel = [rgb[0] * b, rgb[1] * b, rgb[2] * b];
                 self.pixel_written = true;
@@ -2494,7 +2506,32 @@ impl Vm {
         out
     }
 
-    fn palette_lookup(&self, v: Fx) -> [Fx; 3] {
+    /// Re-cook `self.palette` from the backing array. Called by setPalette
+    /// and again whenever the array was mutated since the last lookup.
+    fn rebuild_palette(&mut self, prog: &Program, arr: u32) {
+        let data = self.arr(prog, arr);
+        let mut pal = Vec::new();
+        let mut i = 0;
+        while i + 3 < data.len() {
+            pal.push((
+                data[i].num(),
+                [data[i + 1].num(), data[i + 2].num(), data[i + 3].num()],
+            ));
+            i += 4;
+        }
+        self.palette = pal;
+    }
+
+    fn palette_lookup(&mut self, prog: &Program, v: Fx) -> [Fx; 3] {
+        // setPalette holds a LIVE reference on PB (oracle, 2026-08-29):
+        // writes through the installed array change later lookups with no
+        // second setPalette call. arr_mut flags the mutation; re-cook here.
+        if self.palette_dirty {
+            self.palette_dirty = false;
+            if let Some(arr) = self.palette_src {
+                self.rebuild_palette(prog, arr);
+            }
+        }
         // No palette installed → grayscale ramp. Oracle-verified (fw 3.67,
         // 2026-08-22): a freshly live-coded pattern with no setPalette
         // paints exactly [v,v,v], and palette state does NOT leak across
