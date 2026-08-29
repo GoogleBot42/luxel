@@ -1,5 +1,41 @@
 # Update log
 
+## 2026-08-29 — Cold loads back to 10/10: the installer page's second
+## vite entry was overflowing the device's 3-socket pool (Gitea #92)
+
+Root cause of the 0/10 cold-load regression: commit `0b651c4` (the
+WLED→Luxel installer page, 2026-08-15) added `flash.html` as a second
+rollup input — 97 minutes *after* the 10/10 baseline was recorded on the
+single-entry bundle. Vite then hoists the modules shared by the two
+pages into an `app-*.js` chunk (injected as `<link rel="modulepreload">`)
+and, with the default `cssCodeSplit: true`, emits a separate `app-*.css`
+for it — so the browser-native burst right after `index.html` parses
+went from 2 requests to 4. Native loads can't go through fetchgate, the
+default pool is 3 sockets (`server.rs` `WEB_TASK_POOL_SIZE`), and a
+`web_task` only listens while parked in `accept()` — smoltcp answers the
+4th SYN with a RST, which Chromium reports as `ERR_CONNECTION_REFUSED`.
+The refused victim (`/assets/app-*.css`, 758 bytes) didn't even exist at
+baseline. The pool-churn from that burst also knocked over one *gated*
+fetch (`/luxel.wasm`, refused then retried clean by fetchgate ~200 ms
+later) — the second per-load failure the issue recorded at 60 px.
+
+Fix is two lines of vite config, no firmware change and no new
+dependency: `build.cssCodeSplit: false` (one shared stylesheet instead
+of per-entry files) and `build.modulePreload: false` (the shared chunk
+is fetched via its static import after the entry chunk arrives, instead
+of preloaded in parallel). Native burst is now html → entry js +
+stylesheet, 2 concurrent sockets worst case, and the second-wave
+`app-*.js` lands after the first sockets close.
+
+Verified on the Athom (v0.1.39, default build, assets pushed with
+`deploy.sh --assets-only`): before-fix repro 0/3 with the exact issue
+signature, after-fix **10/10 clean cold loads, 0 failed requests
+total**, load times unchanged (3.6–4.3 s vs 3.9–4.4 s dirty). Playground
+e2e and flash-e2e both pass (the installer page shares the merged
+stylesheet), and the settled device UI screenshots clean. Docs touched:
+ideas.md's stale "10/10 clean" claim now records the regression window;
+tools.md's coldload row no longer calls the default pool 2-socket.
+
 ## 2026-08-24 — Interactive port review UI: both sides of all 293 pairs
 ## live in a browser, with per-pattern decisions that persist
 
