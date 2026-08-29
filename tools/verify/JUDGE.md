@@ -210,6 +210,15 @@ linear. For anything that enters or leaves the rig, fit the feature's known
 kernel shape (taken from a fully-on-canvas frame) over a search range
 extending PAST the edges instead of using the centroid.
 
+A side that reads as PURE PER-PIXEL NOISE on the default grid may be the
+CORRECT field at the wrong spatial frequency: re-render both sides on a
+much larger grid (e.g. `--grid 160x160`) and compare neighbour-correlation
+vs lag — one pair's port read as hash noise at 16x16 but was visibly the
+same filamentary plasma at 1/40 scale at 160x160, which changes the verdict
+word AND the fix guidance. Likewise a side that decorrelates within one
+frame at 20/40 fps needs `--fps 400` to measure its decorrelation time at
+all (raising fps to buy fine dump spacing works for this too).
+
 To tell whether a side is INDEX-ONLY (drives pixels off the flat pixel
 index) vs (x,y)-DRIVEN: re-render at a second grid size and diff the FLAT
 pixel sequences — an index-only pattern's flat sequence is byte-identical
@@ -326,7 +335,11 @@ periods of 3+ s on patterns whose true cycles were 0.5 and 1.0 s. Treat
 beat-rate structure (multiples of 0.5 s) as the thing to look for. The same
 aliasing bites `--dump`: times spaced at whole or half seconds land at the SAME
 beat phase every time — use offset spacings (0.13, 0.27, 0.41, …) to see beat
-dynamics. Two more beat-aliasing traps from the 2026-08-29 re-judge batch:
+dynamics. Whole-second dump lists are the single worst default for any
+pattern with an exact 1 s cycle — one original's 1.000 s orbit returned
+byte-identical frames at dumps 5/10/15/20 s and read as "frozen" until
+offset spacings caught it. Two more beat-aliasing traps from the
+2026-08-29 re-judge batch:
 a `--fps 2` or `--fps 4` survey can report a beat-gated ONSET 16x early
 (one sequencer's 180.4 s black opening read as 11.5 s — every fps from 3
 to 40 except 2 and 4 agreed on 180.4), so never headline an onset/phase
@@ -738,7 +751,12 @@ spend effort:
   Only after that manual check may "inert" appear in your verdict, and say
   which window you checked over. Conversely, a dial with a large delta at only
   ONE of 0/0.5/1 is usually a threshold or mode switch, not a continuous knob
-  — worth a manual sweep at intermediate values.
+  — worth a manual sweep at intermediate values. Two calibration points from
+  the 2026-08-29 batches: a slow-cycle original (81 s cycle at 5 fps) needed
+  ~200 s probe windows before ANY of its three live dials read responsive;
+  and a MARKER-ONLY dial that moves 2 pixels out of 1800 lands under both
+  probe thresholds forever — a live-but-tiny dial is indistinguishable from
+  dead in the probe table and needs a manual sweep + `--dump` to call.
 - **A single-dial sweep can be flattened by setter interaction.** Setting ONE
   control and varying it is the obvious experiment, and on some patterns it
   produces nothing: an original was swept across four values of the only dial
