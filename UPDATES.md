@@ -1,5 +1,62 @@
 # Update log
 
+## 2026-08-29 — Re-judge queue cleared: 15 pairs, three judge batches
+## (closes the re-judge halves of #99 and the #126 follow-ups)
+
+All pairs unblocked by the engine-gap settlements got fresh output-only
+verdicts, run per tools/verify/ORCHESTRATION.md (5 parallel Opus judges
+per batch, one commit per batch):
+
+- **Freeze family** — the oracle-confirmed 32.768 s freeze now scores
+  AGAINST the ports (none reproduces it): fire-blue divergent/4,
+  fire-red divergent/5, spring-colors close/6 (its active phase is
+  near-exact). New reference detail: the freeze onset is fps-dependent
+  and vanishes entirely at 40 fps on spring-colors.
+- **Music-sequencers (#99)** — both sentinel strips work; the originals
+  compile and render for the FIRST time, superseding orig-unrenderable:
+  both divergent/4. Shared headline defect: the ports are
+  x-coordinate-driven where the originals are index-only (vertical
+  stripes vs index runs on the default grid); v2's sequencer-grid
+  lattice is otherwise bit-exact, v3's macro schedule misses the
+  original's 181 s dark phases.
+- **Fixed silent-nulls** — both engine fixes confirmed working in
+  anger: fast-palette-blending close/6 (setPalette live-alias; port's
+  sweep is triangle-wave at 0.48 amplitude vs the original's full-strip
+  sine) and slime-mold-palette close/6 (late-bound render2D; port grows
+  4x too fast and lacks the original's remap startup animation).
+  coral-plasma divergent/2 (port field ~40x too fine spatially, ~30x
+  too fast — one shared scale constant suspected).
+  skypirate-s-centered-spectrum divergent/4 on its 3x600 fixup rig
+  (index-only original with hard-coded 300-px meter centres vs a
+  normalized-coordinate port).
+- **Fixup-rig pairs** — nano-orbital broken/2 (original: 12 dots at
+  exactly 12 px/s; port ~60x slow and accumulates arcs into a frozen
+  wash), orv-christmas-tree divergent/5 (byte-identical tree silhouette;
+  port's snow is 2x2-snapped, smears instead of drifting, dwells 3x
+  long; ornaments confetti vs red/blue garlands).
+- **De-orphaned perlin ports** — perlin-fire divergent/4 (up from
+  broken/2: crash gone, noise field now correlates 0.69-0.96 with the
+  original; stays cold, one Mode band pure black),
+  coronal-mass-ejection divergent/4 (improved but rings-vs-rays
+  topology stands), eye-of-sauron broken/1 and
+  distance-function-kaleidoscope-2 broken/0 (both ports still
+  near-black — full fix-pass targets with precise numeric targets in
+  their verdicts).
+
+Cross-cutting finding, recorded in ORCHESTRATION.md: sweep-era verdicts
+predating the perlin refit can describe a STALE original render (the
+refit changed how perlin-using ORIGINALS draw). The 2026-08-29 verdicts
+supersede those references; other perlin-heavy pairs deserve a
+re-render before their old verdicts are trusted in the #101 fix pass.
+JUDGE.md gained nine trap notes from judge friction (beat-aliasing
+onsets, sensors-off at ≥20 fps, gradient-dominated cross-correlation,
+whole-second dump lists, large-grid noise-vs-scale lens, fps-400
+decorrelation, slow-cycle and marker-only probe false-inerts, rj-label
+convention). Verdict distribution over the 15: 0 match, 3 close, 8
+divergent, 4 broken — mean score 3.7, and every pair now has a current,
+actionable verdict for the #101 fix pass and for review in the
+tools/verify/review.mjs UI.
+
 ## 2026-08-29 — Engine gaps 4/5/7 settled against the oracle: wrap is
 ## authentic, setPalette aliases live, render late-binds, the array
 ## ledger is PB-exact (Gitea #106, #108, #109)
