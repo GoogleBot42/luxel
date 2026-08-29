@@ -222,6 +222,9 @@ i-vs-i+gridWidth diff ratio (index-only patterns are much smoother along
 the flat index than along columns). Index-only originals may also have a
 NATIVE geometry (motifs recurring at a fixed index stride; errors above a
 fixed pixel count) — reshape to that geometry before describing structure.
+For an index-only side, do the structural judging on `--rig strip` renders:
+the 2D grid's rhythm image collapses column means and can render an
+index-only pattern's structure unreadable (bands where there are runs).
 
 For DEPOSIT/STEP patterns (stackers, counters, discrete-event builds),
 autocorrelation of mean-channel series can lock onto exact-repeat
@@ -323,7 +326,14 @@ periods of 3+ s on patterns whose true cycles were 0.5 and 1.0 s. Treat
 beat-rate structure (multiples of 0.5 s) as the thing to look for. The same
 aliasing bites `--dump`: times spaced at whole or half seconds land at the SAME
 beat phase every time — use offset spacings (0.13, 0.27, 0.41, …) to see beat
-dynamics.
+dynamics. Two more beat-aliasing traps from the 2026-08-29 re-judge batch:
+a `--fps 2` or `--fps 4` survey can report a beat-gated ONSET 16x early
+(one sequencer's 180.4 s black opening read as 11.5 s — every fps from 3
+to 40 except 2 and 4 agreed on 180.4), so never headline an onset/phase
+number from a survey rate that divides the 2 Hz beat; and the
+`--sensors off` A/B itself needs ≥20 fps — one port's audio path was
+frame-coupled such that at 10 fps it was byte-identical with the feed off
+(a false "ignores audio") while 20 fps showed heavy dependence.
 
 `meta.json` records, per side, `wantsSensors` (does this pattern bind sensor
 globals at all?) and `sensors` — `"synth"` or `"off"`, meaning what was
@@ -840,7 +850,12 @@ defaults happen to agree.
 For a translating 1D pattern, the honest speed measurement is circular
 cross-correlation of two `--dump`ed frames (find the shift that best aligns
 them, divide by dt) — the `motion` stat exaggerates or compresses speed ratios
-on smooth gradients and sparse dots alike. For SUPERIMPOSED counter-moving
+on smooth gradients and sparse dots alike. On a GRADIENT-DOMINATED field
+(e.g. a fire whose base→tip brightness ramp dwarfs the moving texture),
+subtract each side's TIME-MEAN per-pixel profile before correlating, or the
+static ramp pins the shift at 0; and use a SYMMETRIC lag range — an
+asymmetric scan that returns its own lower bound on every frame pair is the
+saturation failure, not a measurement. For SUPERIMPOSED counter-moving
 waves (standing-wave/interference patterns) neither cross-correlation nor
 single-k phase tracking can separate the trains — use a 2D space-time DFT over
 ~100+ consecutive dumped frames, and validate the sign convention against a
@@ -1016,7 +1031,9 @@ Write `tools/verify/results/<slug>.json`:
 }
 ```
 
-`experiments` must include `baseline`, `survey`, `probe`, one label per regime
+`experiments` must include a baseline, a survey, and a probe run (a unique
+prefix like `rj-baseline` satisfies this — concurrent judges share `out/`,
+so never use the bare label names), one label per regime
 the survey revealed, and — for any pattern with controls — at least one
 explicitly-dialed comparison run. If it doesn't, you skipped a mandatory step
 and the verdict is not yet defensible.
