@@ -12,6 +12,14 @@
 //! stale baked network. This is what ends the credless-image lockout
 //! class: once a creds record is written, ANY future image — even one
 //! built without env creds — joins the network.
+//!
+//! **The nvs partition is FULL.** Its four 4 KiB sectors are all spoken
+//! for — 0x9000 WiFi (here), 0xA000 device settings (here), 0xB000 MQTT
+//! (here), 0xC000 the boot-loop guard (`ota::GUARD_OFFSET`, rewritten on
+//! every boot, so anything else parked there is erased at once). A new
+//! persisted setting goes in the pattern store's reserved-key blob space
+//! instead (`patterns::store_blob` — the device map, playlist, resume
+//! record and output palette all live there), not in a fifth sector.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -59,6 +67,35 @@ pub struct DeviceConfig {
     pub blur_pct: u8,
     /// Post-process light-bleed glow, 0..=100 % (0 = off).
     pub glow_pct: u8,
+}
+
+/// Write one nvs record: pad to a word, stage word-aligned, erase the
+/// sector, write. Word-aligned staging keeps esp-storage on its direct path
+/// (`assets::read_chunk` documents why the unaligned paths are off limits:
+/// they put a 4 KiB bounce buffer on the caller's stack). An empty record
+/// is just the erase — that is how the optional MQTT record clears itself.
+/// One helper for every record: each duplicate of this was ~200 bytes of
+/// image on the tightest board.
+fn write_record(offset: u32, rec: &[u8]) -> Result<(), &'static str> {
+    let mut padded: Vec<u8> = Vec::from(rec);
+    while padded.len() % 4 != 0 {
+        padded.push(0xFF);
+    }
+    let mut stage = alloc::vec![0u32; padded.len() / 4];
+    let stage_bytes =
+        unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), padded.len()) };
+    stage_bytes.copy_from_slice(&padded);
+    let ok = crate::ota::with_flash(|f| {
+        use embedded_storage::nor_flash::NorFlash;
+        NorFlash::erase(f, offset, offset + 4096).is_ok()
+            && (padded.is_empty() || NorFlash::write(f, offset, stage_bytes).is_ok())
+    })
+    .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err("flash write failed (update in progress?)")
+    }
 }
 
 fn checksum(bytes: &[u8]) -> u32 {
@@ -113,26 +150,7 @@ pub fn write_wifi(ssid: &str, pass: &str) -> Result<(), &'static str> {
     rec.extend_from_slice(pass.as_bytes());
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());
-    while rec.len() % 4 != 0 {
-        rec.push(0xFF);
-    }
-    // word-aligned staging so write_nor takes the direct path
-    let mut stage = alloc::vec![0u32; rec.len() / 4];
-    let stage_bytes = unsafe {
-        core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), rec.len())
-    };
-    stage_bytes.copy_from_slice(&rec);
-    let ok = crate::ota::with_flash(|f| {
-        use embedded_storage::nor_flash::NorFlash;
-        NorFlash::erase(f, RECORD_OFFSET, RECORD_OFFSET + 4096).is_ok()
-            && NorFlash::write(f, RECORD_OFFSET, stage_bytes).is_ok()
-    })
-    .unwrap_or(false);
-    if ok {
-        Ok(())
-    } else {
-        Err("flash write failed (update in progress?)")
-    }
+    write_record(RECORD_OFFSET, &rec)
 }
 
 /// MQTT broker settings live in the third nvs sector. Record (v1):
@@ -206,27 +224,8 @@ pub fn write_mqtt(cfg: Option<&MqttConfig>) -> Result<(), &'static str> {
         rec.extend_from_slice(c.pass.as_bytes());
         let ck = checksum(&rec);
         rec.extend_from_slice(&ck.to_le_bytes());
-        while rec.len() % 4 != 0 {
-            rec.push(0xFF);
-        }
     }
-    // word-aligned staging (same rationale as write_wifi); an empty record
-    // is just the erase
-    let mut stage = alloc::vec![0u32; rec.len() / 4];
-    let stage_bytes =
-        unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), rec.len()) };
-    stage_bytes.copy_from_slice(&rec);
-    let ok = crate::ota::with_flash(|f| {
-        use embedded_storage::nor_flash::NorFlash;
-        NorFlash::erase(f, MQTT_OFFSET, MQTT_OFFSET + 4096).is_ok()
-            && (rec.is_empty() || NorFlash::write(f, MQTT_OFFSET, stage_bytes).is_ok())
-    })
-    .unwrap_or(false);
-    if ok {
-        Ok(())
-    } else {
-        Err("flash write failed (update in progress?)")
-    }
+    write_record(MQTT_OFFSET, &rec)
 }
 
 /// Read the persisted device settings, if a valid record exists.
@@ -320,20 +319,5 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     rec.extend_from_slice(&[0, 0, 0]);
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());
-    // word-aligned staging (same rationale as write_wifi)
-    let mut stage = alloc::vec![0u32; rec.len() / 4];
-    let stage_bytes =
-        unsafe { core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), rec.len()) };
-    stage_bytes.copy_from_slice(&rec);
-    let ok = crate::ota::with_flash(|f| {
-        use embedded_storage::nor_flash::NorFlash;
-        NorFlash::erase(f, DEV_OFFSET, DEV_OFFSET + 4096).is_ok()
-            && NorFlash::write(f, DEV_OFFSET, stage_bytes).is_ok()
-    })
-    .unwrap_or(false);
-    if ok {
-        Ok(())
-    } else {
-        Err("flash write failed (update in progress?)")
-    }
+    write_record(DEV_OFFSET, &rec)
 }

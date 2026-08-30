@@ -267,8 +267,9 @@ export class DeviceSession {
 
   /**
    * Output pipeline: wire color order, gamma (×10), power cap (mA), master-
-   * dimmer curve (×10), blur % and glow %. The last three are absent on
-   * firmware older than the post-process chain.
+   * dimmer curve (×10), blur %, glow %, and the device output palette
+   * (flat `[pos,r,g,b,…]`, 0..=255 each, with its blend %). Everything after
+   * `capMa` is absent on firmware older than the post-process chain.
    */
   async output(): Promise<{
     order: string;
@@ -277,6 +278,8 @@ export class DeviceSession {
     brightCurve?: number;
     blur?: number;
     glow?: number;
+    palette?: number[];
+    paletteAmount?: number;
   }> {
     return (await (await this.fetch("/api/output")).json()) as {
       order: string;
@@ -285,6 +288,8 @@ export class DeviceSession {
       brightCurve?: number;
       blur?: number;
       glow?: number;
+      palette?: number[];
+      paletteAmount?: number;
     };
   }
 
@@ -303,6 +308,29 @@ export class DeviceSession {
         `${order} ${Math.round(gammaTenths)} ${Math.round(capMa)}` +
         ` ${Math.round(brightCurveTenths)} ${Math.round(blurPct)} ${Math.round(glowPct)}`,
     });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
+  /**
+   * Install the device output palette: `stops` is the flat `[pos,r,g,b,…]`
+   * form (0..=255 each, positions ascending, at most 32 stops) and `amount`
+   * is the blend percentage. Applied live + persisted in its own flash
+   * record; it composes with a pattern's own `setOutputPalette`.
+   */
+  async setPalette(
+    stops: readonly number[],
+    amountPct: number,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.fetch("/api/output/palette", {
+      method: "POST",
+      body: [Math.round(amountPct), ...stops.map((n) => Math.round(n))].join(" "),
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
+  /** Clear the device output palette (record erased, stage off). */
+  async clearPalette(): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.fetch("/api/output/palette", { method: "DELETE" });
     return (await res.json()) as { ok: boolean; error?: string };
   }
 

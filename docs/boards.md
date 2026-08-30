@@ -92,6 +92,30 @@ left) and +2,208 B on `board-pixelblaze-v3` (949,712 → 951,920 B). The grid
 itself is six bytes — the image cost is the two extra kernels plus the map
 detector. `.stack` on pixelblaze-v3: 29,244 → 29,228 B.
 
+2026-08-30, device output palette (Gitea #139): +5,120 B on
+`board-c6-devkit` (999,584 → 1,004,704 B against its own merge base,
+**43,872 B** of slot left) and +4,256 B on `board-pixelblaze-v3`
+(951,936 → 956,192 B). Whole-fleet re-measure at that revision:
+
+| board | app image | slot margin |
+|---|---:|---:|
+| `board-c3-devkit` | 912,784 B | 135,792 B |
+| `board-pixelblaze-v3` | 956,192 B | 92,384 B |
+| `board-athom-music` | 956,048 B | 92,528 B |
+| `board-esp32-generic` | 956,032 B | 92,544 B |
+| `board-s3-devkit` | 896,688 B | 151,888 B |
+| `board-s3-devkit` + `hub75` | 891,952 B | 156,624 B |
+| `board-seengreat-hub75` | 891,968 B | 156,608 B |
+| `board-c6-devkit` | 1,004,704 B | **43,872 B** |
+
+The cost is the palette blob (serialize + validate + boot load), the wire
+parser, the cooked-LUT cache in `apply_outpipe`, and the two new routes;
+factoring the three nvs writers onto one `config::write_record` helper paid
+about 600 B of it back. The C6 is now at 4.2 % margin — see the ceiling
+note below. `.stack` on pixelblaze-v3: 29,228 → 29,196 B; the largest new
+frame is `apply_outpipe` at 1,120 B (the cooked LUT is a heap `Box`, not a
+stack array).
+
 The three classic-ESP32 variants differ only by a few hundred bytes (same
 chip feature set; only board.rs strings and the wiring lines change), so
 checking one of them per release is enough — but the *chips* are not

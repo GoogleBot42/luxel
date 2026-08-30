@@ -239,10 +239,72 @@
     };
   }
 
+  // ---- device output palette (Gitea #139) ----
+  /** One editable stop: byte position along the luma ramp + an #rrggbb color. */
+  type PaletteStop = { pos: number; hex: string };
+  const MAX_PALETTE_STOPS = 32;
+  let paletteStops: PaletteStop[] = [];
+  let paletteAmount = 100;
+  /** True once the device answered with palette fields (newer firmware). */
+  let paletteSupported = false;
+  /** Last device rejection, shown under the editor (cleared on success). */
+  let paletteNote = "";
+
+  const byteToHexPair = (n: number): string =>
+    Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+
+  /** Flat [pos,r,g,b,…] (the wire form) → editable stops. */
+  function stopsFromFlat(flat: readonly number[]): PaletteStop[] {
+    const out: PaletteStop[] = [];
+    for (let i = 0; i + 3 < flat.length; i += 4) {
+      out.push({
+        pos: flat[i] ?? 0,
+        hex: `#${byteToHexPair(flat[i + 1] ?? 0)}${byteToHexPair(flat[i + 2] ?? 0)}${byteToHexPair(flat[i + 3] ?? 0)}`,
+      });
+    }
+    return out;
+  }
+
+  /** Editable stops → the flat wire form, sorted (the device requires it). */
+  function flatFromStops(stops: readonly PaletteStop[]): number[] {
+    return [...stops]
+      .sort((a, b) => a.pos - b.pos)
+      .flatMap((s) => {
+        const v = Number.parseInt(s.hex.slice(1), 16);
+        return [
+          Math.max(0, Math.min(255, Math.round(s.pos))),
+          (v >> 16) & 0xff,
+          (v >> 8) & 0xff,
+          v & 0xff,
+        ];
+      });
+  }
+
+  /**
+   * CSS preview of the ramp the device will build from these stops —
+   * including the asymmetric ends the engine's `sample_palette` has:
+   * below the first stop clamps to its color, past the last stop is BLACK.
+   */
+  function paletteCss(stops: readonly PaletteStop[]): string {
+    if (stops.length === 0) return "transparent";
+    const sorted = [...stops].sort((a, b) => a.pos - b.pos);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    if (!first || !last) return "transparent";
+    const pct = (s: PaletteStop): string => `${((s.pos / 255) * 100).toFixed(1)}%`;
+    const parts = [`${first.hex} 0%`, ...sorted.map((s) => `${s.hex} ${pct(s)}`)];
+    if (last.pos < 255) parts.push(`#000000 ${pct(last)}`, "#000000 100%");
+    return `linear-gradient(90deg, ${parts.join(", ")})`;
+  }
+
   async function refreshOutput(): Promise<void> {
     if (!device) return;
     try {
-      outputStatus = normalizeOutput(await device.output());
+      const o = await device.output();
+      outputStatus = normalizeOutput(o);
+      paletteSupported = o.palette !== undefined;
+      paletteStops = stopsFromFlat(o.palette ?? []);
+      paletteAmount = o.paletteAmount ?? 100;
     } catch {
       /* older firmware without /api/output */
     }
@@ -255,6 +317,41 @@
       await device?.setOutput(o.order, o.gamma, o.capMa, o.brightCurve, o.blur, o.glow);
       void refreshOutput();
     })();
+  }
+
+  /** Push the edited palette (or clear it when there are no stops left). */
+  function onPaletteChange(): void {
+    void (async () => {
+      if (!device) return;
+      const flat = flatFromStops(paletteStops);
+      const res =
+        flat.length === 0
+          ? await device.clearPalette()
+          : await device.setPalette(flat, paletteAmount);
+      paletteNote = res.ok ? "" : (res.error ?? "rejected");
+      void refreshOutput();
+    })();
+  }
+
+  function addPaletteStop(): void {
+    if (paletteStops.length >= MAX_PALETTE_STOPS) return;
+    // seed a new stop past the last one so the list stays ascending
+    const last = paletteStops[paletteStops.length - 1];
+    paletteStops = [
+      ...paletteStops,
+      { pos: last ? Math.min(255, last.pos + 64) : 0, hex: last ? "#ffffff" : "#000000" },
+    ];
+    onPaletteChange();
+  }
+
+  function removePaletteStop(i: number): void {
+    paletteStops = paletteStops.filter((_, n) => n !== i);
+    onPaletteChange();
+  }
+
+  function clearPalette(): void {
+    paletteStops = [];
+    onPaletteChange();
   }
 
   // ---- wall clock / timezone (device mode) ----
@@ -830,7 +927,11 @@
         /* older firmware without /api/mqtt — leave defaults */
       }
       try {
-        outputStatus = normalizeOutput(await session.output());
+        const o = await session.output();
+        outputStatus = normalizeOutput(o);
+        paletteSupported = o.palette !== undefined;
+        paletteStops = stopsFromFlat(o.palette ?? []);
+        paletteAmount = o.paletteAmount ?? 100;
       } catch {
         /* older firmware without /api/output — card shows unavailable */
       }
@@ -2689,6 +2790,78 @@ export function render(index) {
               />
               <span class="dim">% — bright pixels bleed into their neighbours</span>
             </div>
+            {#if paletteSupported}
+              <div class="field">
+                <span class="flabel">Palette</span>
+                <div class="palette-edit">
+                  <div
+                    class="palette-preview"
+                    data-role="out-palette-preview"
+                    style="background: {paletteCss(paletteStops)}"
+                  >
+                    {#if paletteStops.length === 0}<span class="dim">no device palette</span>{/if}
+                  </div>
+                  {#each paletteStops as stop, i (i)}
+                    <div class="palette-stop">
+                      <input
+                        type="color"
+                        data-role="out-palette-color"
+                        bind:value={stop.hex}
+                        on:change={onPaletteChange}
+                      />
+                      <input
+                        class="num"
+                        type="number"
+                        data-role="out-palette-pos"
+                        min="0"
+                        max="255"
+                        bind:value={stop.pos}
+                        on:change={onPaletteChange}
+                      />
+                      <button
+                        data-role="out-palette-remove"
+                        title="remove this stop"
+                        on:click={() => removePaletteStop(i)}>remove</button
+                      >
+                    </div>
+                  {/each}
+                  <div class="palette-stop">
+                    <button
+                      data-role="out-palette-add"
+                      disabled={paletteStops.length >= MAX_PALETTE_STOPS}
+                      on:click={addPaletteStop}>add stop</button
+                    >
+                    <button
+                      data-role="out-palette-clear"
+                      disabled={paletteStops.length === 0}
+                      on:click={clearPalette}>clear</button
+                    >
+                    <label class="dim">
+                      amount
+                      <input
+                        class="num"
+                        type="number"
+                        data-role="out-palette-amount"
+                        min="0"
+                        max="100"
+                        step="5"
+                        bind:value={paletteAmount}
+                        on:change={onPaletteChange}
+                      />
+                      %
+                    </label>
+                  </div>
+                  {#if paletteNote}
+                    <span class="dim" data-role="out-palette-note">{paletteNote}</span>
+                  {/if}
+                </div>
+                <span class="dim">
+                  recolors every frame by brightness through these stops — persisted on the device
+                  and stacked on top of whatever the pattern's own setOutputPalette did (max 32
+                  stops)
+                </span>
+              </div>
+            {/if}
           {:else}
             <p class="dim hint">not available on this firmware</p>
           {/if}
@@ -3219,6 +3392,45 @@ export function render(index) {
   .grow {
     flex: 1;
     min-width: 160px;
+  }
+
+  /* device output palette editor (Output card) */
+  .palette-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 240px;
+  }
+
+  .palette-preview {
+    height: 26px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+
+  .palette-stop {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .palette-stop input[type="color"] {
+    width: 36px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .palette-stop .num {
+    width: 64px;
   }
 
   .link {
