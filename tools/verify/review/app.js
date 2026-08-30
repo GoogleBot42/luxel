@@ -20,7 +20,11 @@ const MAX_LIVE_CARDS = 20; // ×2 sides = ~40 live engines
 const STEP_BUDGET = 18; // engine steps per animation frame
 const GAP_RGB = [16, 16, 20]; // cloud slice separator
 
-const VERDICTS = ["match", "close", "divergent", "broken", "orig-unrenderable"];
+// "non-visual" is not a judgement — it is a manifest exclusion (fixups.json
+// `nonVisual`, Gitea #123): the ORIGINAL is not a visual pattern, so the pair
+// carries no score. It gets a filter chip so those pairs can be found (or
+// filtered away) rather than silently vanishing from every chip.
+const VERDICTS = ["match", "close", "divergent", "broken", "orig-unrenderable", "non-visual"];
 const DECISIONS = ["delete", "good", "fork", "needs-work"];
 // Deliberately NOT emoji: the nix chromium in this repo's dev shell ships no
 // emoji font, so 🗑/✅/🔀/🔧 render as tofu boxes. These glyphs are in the
@@ -352,7 +356,10 @@ function makeDecisionBar(pair, { compact = false } = {}) {
 function verdictBadge(pair) {
   const v = pair.verdict?.verdict;
   if (!v) return el("span", "badge v-orig-unrenderable", "unjudged");
-  const b = el("span", `badge v-${v}`, pair.verdict.score == null ? v : `${v} ${pair.verdict.score}/10`);
+  // A non-visual pair is excluded, not scored — showing "0/10" would read as
+  // a failing port.
+  const scored = pair.verdict.score != null && v !== "non-visual";
+  const b = el("span", `badge v-${v}`, scored ? `${v} ${pair.verdict.score}/10` : v);
   b.title = pair.verdict.confidence ? `confidence: ${pair.verdict.confidence}` : v;
   return b;
 }

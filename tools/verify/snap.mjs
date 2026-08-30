@@ -66,7 +66,9 @@
 // and must be discarded rather than reused. `provenance.fixups` records any
 // per-slug fixup in force (tools/verify/fixups.json — author tripwire lines
 // stripped from the ORIGINAL, rig overrides applied to both sides, per-side
-// exported-var pins pushed in after init); the
+// exported-var pins pushed in after init, and a `nonVisual` reason marking a
+// pair whose ORIGINAL is not a visual pattern and so is excluded from the
+// scored population — Gitea #123); the
 // manifest itself is folded into `harnessSha256`, so editing it invalidates
 // cached runs. An explicit --rig/--pixels/--grid still overrides a fixup rig,
 // and an explicit --vars-orig/--vars-port entry overrides a fixup var of the
@@ -167,7 +169,13 @@ import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots, WASM_PATH } from "./enginehost.mjs";
 import { synthSensorFrame, SENSOR_MODEL } from "./sensormodel.mjs";
 import { encodePNG, upscale, drawText, textSize } from "./png.mjs";
-import { applySourceFixups, rigOverride, varsOverride, FIXUPS_PATH } from "./fixups.mjs";
+import {
+  applySourceFixups,
+  rigOverride,
+  varsOverride,
+  nonVisualReason,
+  FIXUPS_PATH,
+} from "./fixups.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const HERE = path.dirname(SELF);
@@ -954,6 +962,12 @@ if (sourceFixups)
     `fixups.json: stripped ${sourceFixups.removed} line(s) from the ORIGINAL ` +
       `matching ${sourceFixups.stripLinesMatching.map((s) => `\`${s}\``).join(", ")}`,
   );
+// Pairs whose ORIGINAL is not a visual pattern at all are excluded from the
+// scored population (Gitea #123). Rendering still works — you may want to look
+// at either side — but say so before a judge spends a batch proving the
+// original is black.
+const nonVisual = nonVisualReason(slug);
+if (nonVisual) warn(`fixups.json: ${slug} is NON-VISUAL and not scoreable — ${nonVisual}`);
 const portSource = fs.readFileSync(libPath, "utf8");
 
 // rig geometry — identical for both sides, always. A fixups.json rig override
@@ -1156,8 +1170,13 @@ const meta = {
     // Declared per-slug fixups actually in force for this run (null when the
     // slug has none) — see tools/verify/fixups.mjs.
     fixups:
-      sourceFixups || rigFix || varsFix
-        ? { source: sourceFixups, rig: rigFix ?? null, vars: varsFix ?? null }
+      sourceFixups || rigFix || varsFix || nonVisual
+        ? {
+            source: sourceFixups,
+            rig: rigFix ?? null,
+            vars: varsFix ?? null,
+            ...(nonVisual ? { nonVisual } : {}),
+          }
         : null,
     // Covers every input that shapes a render: this file, its sibling
     // modules, and the engine wasm itself — not just snap.mjs.

@@ -10,17 +10,42 @@ instead of pair-by-pair.
 
 ## Headline numbers
 
+Current as of 2026-08-30, counted from `results/*.json` (293 files, one per
+pair). These are NOT the original 2026-08 sweep numbers: the re-judges that
+followed the #104/#105/#106/#108/#109/#122 settlements moved a lot of pairs,
+and every `orig-unrenderable` has now been re-bucketed. Recount rather than
+trust this table if verdict files have changed since:
+
+```
+node -e 'const fs=require("fs"),d="tools/verify/results",c={};
+for(const f of fs.readdirSync(d).filter(f=>f.endsWith(".json")))
+  {const v=JSON.parse(fs.readFileSync(d+"/"+f,"utf8")).verdict;c[v]=(c[v]||0)+1}
+console.log(c)'
+```
+
 | verdict | count | share |
 |---|---|---|
 | match | 24 | 8% |
-| close | 119 | 41% |
-| divergent | 123 | 42% |
-| broken | 17 | 6% |
-| orig-unrenderable | 10 | 3% |
+| close | 122 | 42% |
+| divergent | 128 | 44% |
+| broken | 18 | 6% |
+| orig-unrenderable | 0 | — |
+| non-visual | 1 | <1% |
 
-Mean score 5.42/10 (excluding orig-unrenderable). Score histogram peaks at
+Mean score 5.38/10 over the 292 scored pairs. Score histogram peaks at
 4-7: most ports get the pattern's *identity* right and fail on constants,
 lifecycle, or control mapping.
+
+`orig-unrenderable` is empty for the first time: the sweep's ten were all
+diagnosed and re-judged (Gitea #99 sentinel-strip, #106 wrap freeze, #108
+silent-nulls, #109 array budget, #122 var-driven `automap`), and the last
+one — `performance-test-framework` — turned out never to have been broken at
+all. Its original is a CPU benchmark read through Vars Watch whose render
+body is `//sorry, no blinkenlights!`, so black is its correct output on real
+PB too. It is now declared `nonVisual` in `fixups.json` and excluded from the
+scored population rather than scored (Gitea #123); see ORCHESTRATION.md.
+The historical sweep-era table, for comparison: match 24, close 119,
+divergent 123, broken 17, orig-unrenderable 10, mean 5.42.
 
 Perfect/near-perfect ports (byte-identical or LSB-level): `rainbow`,
 `rainbow-melt`, `rainbow-pinwheel`, `marching-rainbow`,
@@ -299,7 +324,12 @@ Gap 5 (silent-null originals), per slug:
   two sides name the variable differently), and the pair was re-judged
   off a driven render.
 - `performance-test-framework` — renders nothing BY DESIGN (CPU
-  benchmark; PB also shows black). Non-visual; needs a pairs decision.
+  benchmark; PB also shows black). SETTLED 2026-08-30 (Gitea #123):
+  declared `nonVisual` in `fixups.json`, excluded from the scored
+  population, verdict re-bucketed `orig-unrenderable` → `non-visual`.
+  The pair stays in pairs.json (gen-pairs.mjs regenerates that file and
+  would re-add it); the port's phase/progress readout is a documented
+  deliberate deviation for the playground, not a scored defect.
 
 Gap 7 (array element budget) is **PB-faithful by design and now
 PB-exact in its numbers**: the oracle never frees arrays either and

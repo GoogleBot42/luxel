@@ -1098,7 +1098,7 @@ Write `tools/verify/results/<slug>.json`:
 ```json
 {
   "slug": "...",
-  "verdict": "match | close | divergent | broken | orig-unrenderable",
+  "verdict": "match | close | divergent | broken | orig-unrenderable | non-visual",
   "score": 0-10,
   "confidence": "high | medium | low",
   "summary": "one sentence",
@@ -1150,6 +1150,16 @@ don't collide with a concurrent judge in that slug's out/ directory).
 Score for this verdict is always 0 with an explicit note in `summary` that
 the score records "no comparison obtainable", not port quality — never score
 the port's solo render.
+
+`non-visual` = the ORIGINAL is not an animation at all (a CPU benchmark, an
+instrumentation harness) so pixel fidelity is not a fidelity target and no
+score is meaningful. This is a MANIFEST decision, not a judgement you make on
+your own: it is declared as a `nonVisual` reason in `tools/verify/fixups.json`
+and snap.mjs prints it on every run of such a slug. If you see that warning,
+stop — the pair is excluded from the scored population; do not spend a batch
+proving the original is black. Score stays 0 and records exclusion, not port
+quality. (Distinguishing note: subtype (c) above is "we cannot get output out
+of it"; `non-visual` is "it correctly has no output, on real PB too".)
 
 The mirror image also exists: some ORIGINALS have a long warm-up transient
 (one ran railed-at-full-brightness for ~1000 rendered frames — frame-counted,

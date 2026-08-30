@@ -28,6 +28,19 @@
 //                       at their default value — without a pinned var the
 //                       original is black and the pair is unjudgeable.
 //
+//   nonVisual           A one-string REASON marking the pair as excluded from
+//                       the output-verification sweep: the ORIGINAL is not a
+//                       visual pattern at all, so "the port should render the
+//                       same pixels" is not a fidelity target and no score is
+//                       meaningful. Unlike the keys above this changes nothing
+//                       about a render — snap.mjs still renders both sides on
+//                       demand, it just says loudly that the pair is not
+//                       scoreable, and report.mjs files it under its own
+//                       `non-visual` heading instead of a verdict bucket.
+//                       (Gitea #123. Note the annotation lives HERE and not in
+//                       pairs.json: gen-pairs.mjs regenerates pairs.json from
+//                       library/ + corpus/ and would drop it.)
+//
 // Every entry carries a `note` explaining why, usually citing SWEEP-NOTES.md
 // or the slug's verdict in results/.
 //
@@ -41,6 +54,7 @@
 //                 "pixels": <n>, "grid": [w, h],
 //                 "vars": { "orig": {"<name>": <number>, ...},
 //                           "port": {"<name>": <number>, ...} },
+//                 "nonVisual": "<reason the pair is not scoreable>",
 //                 "note": "why" } }
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -91,6 +105,22 @@ export function applySourceFixups(slug, source) {
     source: kept.join("\n"),
     applied: { stripLinesMatching: [...matched], removed },
   };
+}
+
+/** Why this pair is excluded from the sweep, or null.
+ *
+ *  A non-empty string means the ORIGINAL is not a visual pattern, so pixel
+ *  fidelity is not a target and no verdict/score applies (Gitea #123).
+ *  Anything other than a non-empty string throws: a silently-ignored
+ *  exclusion marker would put the pair back in the scored population without
+ *  anyone noticing. */
+export function nonVisualReason(slug) {
+  const reason = fixupFor(slug)?.nonVisual;
+  if (reason == null) return null;
+  if (typeof reason !== "string" || reason.trim() === "") {
+    throw new Error(`fixups.json: ${slug}.nonVisual must be a non-empty reason string`);
+  }
+  return reason;
 }
 
 /** This slug's rig override, or null: `{ rig?, pixels?, grid? }`. */

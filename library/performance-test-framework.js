@@ -5,6 +5,10 @@
 // overhead, control, experiment) against each other and publishes a
 // speedup ratio via watched vars. The original keeps the LEDs dark; this
 // port adds a minimal visible readout so it renders something inspectable.
+// That readout is a DELIBERATE deviation, kept because the playground has no
+// Vars Watch and a permanently black gallery tile reads as a broken pattern.
+// It is why the verification pair is excluded from the fidelity sweep rather
+// than scored — see tools/verify/fixups.json `nonVisual` (Gitea #123).
 
 // --- benchmark configuration ---
 var ITER = 100          // iterations per timed call (the workload size)

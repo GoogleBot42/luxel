@@ -1,5 +1,83 @@
 # Update log
 
+## 2026-08-30 — `orig-unrenderable` reaches zero: the last one was never
+## broken, it was non-visual (#123), plus a tracker sweep
+
+**`performance-test-framework` is excluded, not scored (Gitea #123).** The
+original is a CPU benchmark whose render body is the comment
+`//sorry, no blinkenlights!` — it reports through PB's Vars Watch, and
+all-black is its correct output on real hardware too. The 2026-08 sweep
+filed it `orig-unrenderable` after ten runs (every rig, fps, seed, wall
+clock and skip) proving the original is black: right observation, wrong
+bucket. The original does not *fail* on our engine; it succeeds at drawing
+nothing.
+
+The mechanism is a fourth fixup kind, `nonVisual`, a one-string reason in
+`tools/verify/fixups.json`:
+
+- `fixups.mjs` gains `nonVisualReason(slug)` — a malformed marker throws
+  rather than silently putting the pair back in the scored population.
+- `snap.mjs` warns on **every** run of such a slug and records the reason in
+  `meta.json`'s `provenance.fixups`, so the next judge stops instead of
+  spending a batch re-proving the original is black.
+- `report.mjs` and the review UI file it under its own `non-visual`
+  heading/badge with **no score** — "0/10" on an excluded pair reads as a
+  failing port.
+- `JUDGE.md` documents `non-visual` as a manifest decision, not a judgement
+  a judge makes on its own, and distinguishes it from the
+  degenerate-constant-output subtype ("we cannot get output out of it" vs
+  "it correctly has no output, on real PB too").
+
+The annotation lives in `fixups.json` and **not** `pairs.json` because
+`gen-pairs.mjs` regenerates `pairs.json` from `library/` + `corpus/` — it
+would silently drop either an annotation or a deletion. The port's
+phase/progress readout stays: the playground has no Vars Watch and a
+permanently black gallery tile reads as broken, so it is now a documented
+deliberate deviation rather than an unscored defect.
+
+**Sweep headline numbers refreshed** in `tools/verify/FINDINGS.md`, which
+still carried the original 2026-08 table long after the re-judges moved
+things. Recounted from `results/*.json` (293 files): match 24, close
+**122** (was 119), divergent **128** (was 123), broken **18** (was 17),
+orig-unrenderable **0** (was 10), non-visual 1; mean 5.38/10 over the 292
+scored pairs. `orig-unrenderable` is empty for the first time — the sweep's
+ten were all diagnosed and re-judged (#99 sentinel-strip, #106 wrap freeze,
+#108 silent-nulls, #109 array budget, #122 var-driven `automap`) and this
+was the last. The table now carries the one-liner that recounts it, so the
+next reader doesn't have to trust a stale number.
+
+Verified in real chromium against the live review UI: the `non-visual`
+filter chip appears, the pair badges as `non-visual` with no score, its
+card shows the exclusion summary, original renders black and port renders
+its bar. `snap.mjs` re-run confirms the warning and the provenance stamp.
+
+**Tracker hygiene** — five stale issues closed against evidence, two new
+ones filed for the pieces that were actually still open:
+
+- **#4 "Improve UI"** — the docs/webui.md redesign backlog is done; the
+  live backlog moved to numbered issues long ago. The one genuinely open
+  thing in that document was its "v0.1.29 hardware-verification checklist",
+  untracked anywhere → filed as **#155**.
+- **#3 "Board presets"** — shipped: seven board features, the
+  "Adding a board (a five-minute diff)" recipe, the installer board picker,
+  and WLED cfg.json import on takeover (PR #76). The remaining piece, a
+  runtime LED data-pin picker (pins are esp-hal *types*, so today the pin
+  is fixed by the board build and takeover only *logs* WLED's), → **#154**.
+  Mic enablement was already #119, the untested S3/C6 boards #56/#57.
+- **#5 "less space"** — docs/boards.md already records the decision: A/B
+  OTA alone is 2 MB and `storage` became load-bearing in v0.1.34, so 2 MB
+  variants are out. Dropping the webui wouldn't help anyway: assets live in
+  their own partition, not in the app image.
+- **#143 "16 MB partitions"** — none of its own three revisit triggers has
+  fired (shipped asset bundle ~615-641 KB of 983,040 B; `storage` manages
+  512 KiB of its 1 MB and caps at 24 patterns; no bulk-storage consumer
+  exists). Closed won't-do, as its text says is legitimate.
+- **#147 "6-arg arrayReplace hangs the oracle"** — oracle-only research
+  with no Luxel correctness gap, and probing further costs a hang.
+  Closed answered/wontfix; `tools/oracle/oob-probes.mjs`'s Q8 preamble
+  refreshed, since it still described the pre-#107 engine behaviour that
+  783978f settled the other way.
+
 ## 2026-08-30 — `//#` control hints now bind from the line above the export
 ## too (#146), which is how 112 of 130 library patterns write them
 
