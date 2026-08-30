@@ -1,5 +1,33 @@
 # Update log
 
+## 2026-08-30 — v0.1.29 protocol-re-init checklist closed out on the Athom (#155)
+
+The two never-verified items of the v0.1.29 hardware checklist
+(docs/webui.md) ran on the Athom rig (v0.1.39, ota_0, serial captured
+throughout — zero panic/reset lines):
+
+- **Item 2, encode-buffer realloc at 2048 px under heap pressure**: with
+  the heaviest allowed pattern loaded (~24 KB of arrays, heap_free
+  ~34 KB), 3× sk9822↔ws2812 round-trips — every switch clean, the ~10 KB
+  encode-buffer delta visible in heap_free each way, no reboot, no slot
+  rollback. An over-budget 6-array variant (vmerr "array memory budget
+  exceeded") switched just as cleanly. Notably the "output paused"
+  fallback path is unreachable via patterns alone — the VM array budget
+  keeps enough headroom that the realloc always succeeds — so that branch
+  stays QEMU/review-verified only.
+- **Item 4, switch under live traffic**: 6 protocol switches under a
+  ~60 fps DDP stream (`live:"ddp"` held throughout) and 6 more
+  mid-crossfade (4 s blend, playlist auto-advancing) — all clean, no
+  vmerr, no reboot. Visual no-tearing confirmation remains the one
+  eyes-on residue (tracked in #155).
+
+Items 1/3/5 turned out to have been hardware-verified back on 2026-07-19
+(v0.1.30 session) with the checklist never updated — docs/webui.md now
+records per-item status. Device restored to as-found (60 px ws2812,
+brightness 4). Also fixed two stale README claims: "195-pattern gallery"
+(now 322) and "ESP32/ESP32-C3" (release images now cover ESP32, C3, C6,
+S3, and the HUB75-panel boards).
+
 ## 2026-08-30 — A device with no web UI now links to one (#11, first slice)
 
 A device whose assets partition is empty served a dead end: a dark page
