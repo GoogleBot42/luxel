@@ -10,19 +10,23 @@ import path from "node:path";
 
 const LUXEL = "target/release/luxel";
 const DIR = "corpus";
+const VM_RS = "crates/luxel-core/src/vm.rs";
 
-// not-yet-implemented builtins (mirror of the Todo list in vm.rs)
-const TODO_BUILTINS = [
-  "perlin", "perlinFbm", "perlinRidge", "perlinTurbulence", "setPerlinWrap",
-  "resetTransform", "transform", "translate", "scale", "rotate",
-  "translate3D", "scale3D", "rotateX", "rotateY", "rotateZ",
-  "pixelMapDimensions", "has2DMap", "has3DMap", "mapPixels",
-  "setPalette", "paint", "pinMode", "digitalWrite", "digitalRead",
-  "analogRead", "touchRead", "clockYear", "clockMonth", "clockDay",
-  "clockHour", "clockMinute", "clockSecond", "clockWeekday",
-  "sequencerNext", "sequencerGetMode", "playlistGetPosition",
-  "playlistSetPosition", "playlistGetLength", "nodeId",
-];
+// Not-yet-implemented builtins, DERIVED from the BUILTINS table in vm.rs —
+// never hardcode this list, it went 100% stale once already (every name in
+// the old hardcoded copy had shipped). In the table, `b!("name", Variant)`
+// is implemented and the one-argument `b!("name")` is BKind::Todo.
+function todoBuiltins() {
+  const src = fs.readFileSync(VM_RS, "utf8");
+  const start = src.indexOf("pub static BUILTINS");
+  const end = src.indexOf("pub fn lookup_builtin", start);
+  if (start < 0 || end < 0) throw new Error(`${VM_RS}: BUILTINS table not found`);
+  const table = src.slice(start, end);
+  const impl = [...table.matchAll(/b!\("([^"]+)",/g)].map((m) => m[1]);
+  if (!impl.length) throw new Error(`${VM_RS}: BUILTINS table parsed empty — did its shape change?`);
+  return [...table.matchAll(/b!\("([^"]+)"\)/g)].map((m) => m[1]);
+}
+const TODO_BUILTINS = todoBuiltins();
 const SENSOR_VARS = [
   "frequencyData", "energyAverage", "maxFrequency", "maxFrequencyMagnitude",
   "accelerometer", "light", "analogInputs",
@@ -106,11 +110,17 @@ for (const r of realRuntimeErrs) {
 }
 
 // static usage counts across the whole corpus (what to build next)
-const todoUse = new Map();
-for (const r of results) for (const b of r.uses.todo) todoUse.set(b, (todoUse.get(b) ?? 0) + 1);
-console.log(`\nUsage of recently-implemented builtins across corpus (patterns referencing):`);
-for (const [b, n] of [...todoUse.entries()].sort((a, b) => b[1] - a[1])) {
-  console.log(`  ${String(n).padStart(3)}× ${b}`);
+if (!TODO_BUILTINS.length) {
+  console.log(`\nunimplemented builtins: none — every name in the vm.rs BUILTINS table is implemented`);
+} else {
+  const todoUse = new Map();
+  for (const r of results) for (const b of r.uses.todo) todoUse.set(b, (todoUse.get(b) ?? 0) + 1);
+  console.log(`\nUsage of unimplemented builtins across corpus (patterns referencing):`);
+  for (const [b, n] of [...todoUse.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${String(n).padStart(3)}× ${b}`);
+  }
+  const unused = TODO_BUILTINS.filter((b) => !todoUse.has(b));
+  if (unused.length) console.log(`  (unreferenced by any pattern: ${unused.join(", ")})`);
 }
 console.log(`\nfeature usage: render2D=${results.filter((r) => r.uses.render2D).length}, render3D=${results.filter((r) => r.uses.render3D).length}, sensors=${results.filter((r) => r.uses.sensors.length).length}`);
 

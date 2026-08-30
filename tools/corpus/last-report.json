@@ -17,11 +17,7 @@
   "id": "2g6JZPLpq8XPFeP2s",
   "name": "tree setup pattern",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate3D",
-    "rotateZ"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": true,
    "sensors": []
@@ -69,12 +65,7 @@
   "id": "3BLyowkuhmGXkQdRr",
   "name": "Carrie's Holiday Star 2D",
   "uses": {
-   "todo": [
-    "perlin",
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
@@ -88,13 +79,7 @@
   "id": "3RHd7JN2E9Se8nSB8",
   "name": "Rainstorm",
   "uses": {
-   "todo": [
-    "perlin",
-    "resetTransform",
-    "translate",
-    "scale",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -142,12 +127,7 @@
   "id": "4ioyjcWvw3Mtvi6km",
   "name": "Sun rays through trees",
   "uses": {
-   "todo": [
-    "perlinTurbulence",
-    "setPerlinWrap",
-    "resetTransform",
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -201,9 +181,7 @@
   "id": "5b3a4tQBuAKfRfgbk",
   "name": "Glittering Jewels",
   "uses": {
-   "todo": [
-    "clockWeekday"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": []
@@ -227,14 +205,7 @@
   "id": "5d3WQKjDJtPwJnyqr",
   "name": "Sunrise Alarm Clock",
   "uses": {
-   "todo": [
-    "perlin",
-    "scale",
-    "clockHour",
-    "clockMinute",
-    "clockSecond",
-    "clockWeekday"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": [
@@ -260,13 +231,7 @@
   "id": "5rpavhGiY4BgXaZ8o",
   "name": "GlowFlow (3D coord transform API port)",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate3D",
-    "rotateX",
-    "rotateY",
-    "rotateZ"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": true,
    "sensors": [
@@ -411,13 +376,7 @@
   "id": "7bqSEZdvPK42pCNyA",
   "name": "Dire Spider 2D",
   "uses": {
-   "todo": [
-    "perlinRidge",
-    "setPerlinWrap",
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -443,9 +402,7 @@
   "id": "7caR9QAmgKTdFtNTF",
   "name": "Halloween Wavy Bands",
   "uses": {
-   "todo": [
-    "perlin"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -483,9 +440,7 @@
   "id": "88jB89jqQojktXgc4",
   "name": "Bubble Column",
   "uses": {
-   "todo": [
-    "perlin"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": []
@@ -547,11 +502,7 @@
   "id": "95QZQGENL4fYwtBHy",
   "name": "RGBclock 2D",
   "uses": {
-   "todo": [
-    "clockHour",
-    "clockMinute",
-    "clockSecond"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
@@ -601,10 +552,7 @@
   "id": "9RaWKrtdaqsTMN8to",
   "name": "Blue Holiday Candle 2D",
   "uses": {
-   "todo": [
-    "translate",
-    "scale"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
@@ -692,15 +640,7 @@
   "id": "BpYvATFvRH8LbBFv3",
   "name": "Eye of Sauron with movement",
   "uses": {
-   "todo": [
-    "perlinRidge",
-    "setPerlinWrap",
-    "resetTransform",
-    "translate",
-    "scale",
-    "setPalette",
-    "paint"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -724,17 +664,7 @@
   "id": "C7BgpG7f4zHx92hs6",
   "name": "perlin fire wind",
   "uses": {
-   "todo": [
-    "perlin",
-    "perlinFbm",
-    "perlinRidge",
-    "perlinTurbulence",
-    "resetTransform",
-    "translate",
-    "scale",
-    "setPalette",
-    "paint"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -893,11 +823,7 @@
   "id": "FA9RGndR2ckrJmE8r",
   "name": "Utility: Scheduled Percent-On Demo",
   "uses": {
-   "todo": [
-    "clockHour",
-    "clockMinute",
-    "clockSecond"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": [
@@ -923,11 +849,7 @@
   "id": "FRobn9vAtgoAqNCBo",
   "name": "sound - spectrokalidamandala",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate3D",
-    "scale3D"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
@@ -980,9 +902,7 @@
   "id": "FrKXKh3QmKNwHxBFT",
   "name": "Orv - Christmas Tree",
   "uses": {
-   "todo": [
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": true,
    "sensors": [
@@ -1032,10 +952,7 @@
   "id": "GCwuPigteHfPT4nAT",
   "name": "Sunrise",
   "uses": {
-   "todo": [
-    "pinMode",
-    "digitalRead"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": []
@@ -1246,11 +1163,7 @@
   "id": "LKxjLSFNKYE2YWzQg",
   "name": "2d Clock with Hand Color Pickers",
   "uses": {
-   "todo": [
-    "clockHour",
-    "clockMinute",
-    "clockSecond"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -1447,11 +1360,7 @@
   "id": "Pdvxh3xzAtvmanwLf",
   "name": "Crawling Spider 2D",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -1514,11 +1423,7 @@
   "id": "Qn8EawSjEHBTmQAuK",
   "name": "pixelClock",
   "uses": {
-   "todo": [
-    "clockHour",
-    "clockMinute",
-    "clockSecond"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": []
@@ -1582,14 +1487,7 @@
   "id": "RHFKxARdW4Aeq4X3r",
   "name": "zoom kaleidoscope",
   "uses": {
-   "todo": [
-    "perlin",
-    "perlinRidge",
-    "resetTransform",
-    "translate",
-    "scale",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -1678,11 +1576,7 @@
   "id": "S6u3qPhozw43c7Af9",
   "name": "Lightning clouds",
   "uses": {
-   "todo": [
-    "perlinTurbulence",
-    "translate",
-    "scale"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -1694,12 +1588,7 @@
   "id": "SCwdLkm9BfNxFncaq",
   "name": "Blue Holiday Star 2D",
   "uses": {
-   "todo": [
-    "perlin",
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
@@ -1761,9 +1650,7 @@
   "id": "TMdwmrwodDf6ad9XY",
   "name": "radiant pulse 3",
   "uses": {
-   "todo": [
-    "translate"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": true,
    "sensors": []
@@ -1815,15 +1702,7 @@
   "id": "TnnAcAX9a5Xze4YqF",
   "name": "Coral Plasma",
   "uses": {
-   "todo": [
-    "perlinRidge",
-    "resetTransform",
-    "translate3D",
-    "scale3D",
-    "rotateX",
-    "rotateY",
-    "rotateZ"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": true,
    "sensors": []
@@ -1847,9 +1726,7 @@
   "id": "W9XaXuW9LFhNY7Bju",
   "name": "Tunnel of Squares 2D",
   "uses": {
-   "todo": [
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -1947,12 +1824,7 @@
   "id": "X4S9zmtj3YaTuGixJ",
   "name": "spiral twirls star 2D",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "scale",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": true,
    "sensors": []
@@ -2036,11 +1908,7 @@
   "id": "YNbYB5x6h6BTAPexk",
   "name": "80s kid show",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2177,9 +2045,7 @@
   "id": "b6QB2wwGTmxrDJMBd",
   "name": "Line Dancer 2D",
   "uses": {
-   "todo": [
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2215,10 +2081,7 @@
   "id": "bEdTMdnYZvoHonkmm",
   "name": "Perlin Kaleidoscope 2D",
   "uses": {
-   "todo": [
-    "perlinFbm",
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2230,9 +2093,7 @@
   "id": "bG3g3fjrxqxPtqi9d",
   "name": "Wavy Bands",
   "uses": {
-   "todo": [
-    "perlin"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2244,11 +2105,7 @@
   "id": "bGouHYhqSp5pnBhr2",
   "name": "Traffic",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "scale"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2272,11 +2129,7 @@
   "id": "bQLnSWhcA4PNjuLtK",
   "name": "RYB colors",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2327,10 +2180,7 @@
   "id": "cGFZd6F5W8m7jqYT4",
   "name": "Example - Button w/ debounce",
   "uses": {
-   "todo": [
-    "pinMode",
-    "digitalRead"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": []
@@ -2414,13 +2264,7 @@
   "id": "dd32bgunSTTqNRzvQ",
   "name": "Upward waves 3D using accelerometer",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate3D",
-    "rotateX",
-    "rotateY",
-    "rotateZ"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": true,
    "sensors": [
@@ -2447,11 +2291,7 @@
   "id": "dueoKmMJLRwQb6ZN3",
   "name": "Coronal Mass Ejection",
   "uses": {
-   "todo": [
-    "perlinTurbulence",
-    "setPerlinWrap",
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2559,15 +2399,7 @@
   "id": "gHXWPveywRt8Eo2fF",
   "name": "perlin fire wind tunnel",
   "uses": {
-   "todo": [
-    "perlin",
-    "perlinFbm",
-    "perlinRidge",
-    "perlinTurbulence",
-    "resetTransform",
-    "translate",
-    "scale"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2579,12 +2411,7 @@
   "id": "gKCGaREm8cD8gfCuY",
   "name": "SkyPirate's Centered Spectrum",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "mapPixels",
-    "nodeId"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
@@ -2744,10 +2571,7 @@
   "id": "jp7dq47XpcYq2JztT",
   "name": "Fast Palette Blending",
   "uses": {
-   "todo": [
-    "setPalette",
-    "paint"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": []
@@ -2797,11 +2621,7 @@
   "id": "kRdHmgPMZBDSoh2zT",
   "name": "NaturalLightSync",
   "uses": {
-   "todo": [
-    "clockHour",
-    "clockMinute",
-    "clockSecond"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": []
@@ -2863,10 +2683,7 @@
   "id": "mPfzL6z2mf9nACtsM",
   "name": "Light Organ - 2.0",
   "uses": {
-   "todo": [
-    "pinMode",
-    "analogRead"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": [
@@ -2925,11 +2742,7 @@
   "id": "mq6zDHQaoDd3wqf72",
   "name": "Coronal Mass Ejection 2D sliders",
   "uses": {
-   "todo": [
-    "perlinTurbulence",
-    "setPerlinWrap",
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -2953,9 +2766,7 @@
   "id": "nMZ7wMnmveDbFnsdc",
   "name": "SaberDeploy Tutorial",
   "uses": {
-   "todo": [
-    "digitalRead"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": [
@@ -2998,17 +2809,7 @@
   "id": "nqTQrm9MMG5Ge3WSg",
   "name": "Perlin fire",
   "uses": {
-   "todo": [
-    "perlin",
-    "perlinFbm",
-    "perlinRidge",
-    "perlinTurbulence",
-    "resetTransform",
-    "translate",
-    "scale",
-    "setPalette",
-    "paint"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3020,14 +2821,7 @@
   "id": "oH4GhmMnYuhJKTY2u",
   "name": "distance function kaleidoscope 2",
   "uses": {
-   "todo": [
-    "perlin",
-    "perlinRidge",
-    "resetTransform",
-    "translate",
-    "scale",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3087,11 +2881,7 @@
   "id": "pMMer2SYzSjZyi6mZ",
   "name": "Lightbulb - Crank Hue to Complete",
   "uses": {
-   "todo": [
-    "pinMode",
-    "digitalRead",
-    "nodeId"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": [
@@ -3117,10 +2907,7 @@
   "id": "q8oKvkD7R57DBkGKj",
   "name": "Scary Pumpkin",
   "uses": {
-   "todo": [
-    "perlinFbm",
-    "translate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3147,10 +2934,7 @@
   "id": "qQbHfjbMeCXZCx7Cg",
   "name": "Stairmaster 2D",
   "uses": {
-   "todo": [
-    "translate",
-    "scale"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3210,15 +2994,7 @@
   "id": "rYGzPKSFYTpESDKzu",
   "name": "Eye of Sauron",
   "uses": {
-   "todo": [
-    "perlinRidge",
-    "setPerlinWrap",
-    "resetTransform",
-    "translate",
-    "scale",
-    "setPalette",
-    "paint"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3242,11 +3018,7 @@
   "id": "rw9wspkrLrPEkR7dX",
   "name": "Lissajous curve tracer",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "scale"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3344,11 +3116,7 @@
   "id": "tMc8n9TTToG2pweJz",
   "name": "2D Fireworks Fade",
   "uses": {
-   "todo": [
-    "pinMode",
-    "digitalWrite",
-    "clockHour"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3360,12 +3128,7 @@
   "id": "tjRYAHpNQgyp8Bfck",
   "name": "Butterfly 2D",
   "uses": {
-   "todo": [
-    "perlin",
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3440,11 +3203,7 @@
   "id": "uqcF3zfyxBXz42Zmn",
   "name": "Geometry Morphing Demo 2D",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3482,13 +3241,7 @@
   "id": "vXGvYT7tqJCsCKfiD",
   "name": "sound - spectroblots - pow fade",
   "uses": {
-   "todo": [
-    "perlinFbm",
-    "resetTransform",
-    "translate3D",
-    "scale3D",
-    "nodeId"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": true,
    "sensors": [
@@ -3515,11 +3268,7 @@
   "id": "vYzzPfsKSJHPFgE7Q",
   "name": "Slime mold palette",
   "uses": {
-   "todo": [
-    "mapPixels",
-    "setPalette",
-    "paint"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": []
@@ -3555,9 +3304,7 @@
   "id": "vkpGsR88dcJmXfevp",
   "name": "An Intro to Pixelblaze Code",
   "uses": {
-   "todo": [
-    "scale"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": false,
    "sensors": [
@@ -3763,11 +3510,7 @@
   "id": "y6HuinPz2cQzFykDG",
   "name": "Accelerometer level example",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "translate",
-    "rotate"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
@@ -3807,11 +3550,7 @@
   "id": "ymFxCE3QLKB9hcxLb",
   "name": "M5Stack Hex panels",
   "uses": {
-   "todo": [
-    "resetTransform",
-    "rotate",
-    "translate3D"
-   ],
+   "todo": [],
    "render2D": false,
    "render3D": true,
    "sensors": []
@@ -3835,12 +3574,7 @@
   "id": "yvWNCFdYT82BFFxom",
   "name": "Rock sparks",
   "uses": {
-   "todo": [
-    "translate",
-    "pinMode",
-    "digitalWrite",
-    "clockHour"
-   ],
+   "todo": [],
    "render2D": true,
    "render3D": false,
    "sensors": [
