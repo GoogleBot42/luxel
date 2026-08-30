@@ -452,6 +452,10 @@ pub fn maybe_takeover() {
                 .unwrap_or(0),
             gamma_tenths: w.gamma_tenths.unwrap_or(0),
             cap_ma: w.cap_ma.unwrap_or(0),
+            // WLED has no equivalent of the post-process chain — stay off.
+            bright_curve_tenths: 0,
+            blur_pct: 0,
+            glow_pct: 0,
         };
         match crate::config::write_device(&dev) {
             Ok(()) => println!(

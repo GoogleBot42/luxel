@@ -945,8 +945,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         ),
                     }))
                 }
-                // body: "<order> <gamma_tenths> <cap_ma>" (e.g. "grb 22 1500")
-                // → the output pipeline, applied live + persisted
+                // body: "<order> <gamma_tenths> <cap_ma> [<bright_curve_tenths>
+                // <blur_pct> <glow_pct>]" (e.g. "grb 22 1500 22 20 40") → the
+                // output pipeline, applied live + persisted. The last three are
+                // optional so pre-post-process clients keep working: absent =
+                // keep the stored value. Present-but-out-of-range fails the
+                // whole request, like a bad gamma.
                 "/api/output" => {
                     let body = text(&raw);
                     let mut it = body.split_whitespace();
@@ -957,23 +961,42 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         it.next().and_then(|v| v.parse().ok()).filter(|g| *g <= 50);
                     let cap: Option<u16> =
                         it.next().and_then(|v| v.parse().ok()).filter(|c| *c <= 20_000);
-                    Some(json_response(match (order, gamma, cap) {
-                        (Some(o), Some(g), Some(c)) => {
+                    let opt = |tok: Option<&str>, cur: u8, max: u8| match tok {
+                        None => Some(cur),
+                        Some(v) => v.parse::<u8>().ok().filter(|x| *x <= max),
+                    };
+                    let curve = opt(
+                        it.next(),
+                        crate::shared::BRIGHT_CURVE.load(Ordering::Relaxed),
+                        50,
+                    );
+                    let blur =
+                        opt(it.next(), crate::shared::POST_BLUR.load(Ordering::Relaxed), 100);
+                    let glow =
+                        opt(it.next(), crate::shared::POST_GLOW.load(Ordering::Relaxed), 100);
+                    Some(json_response(match (order, gamma, cap, curve, blur, glow) {
+                        (Some(o), Some(g), Some(c), Some(bc), Some(bl), Some(gl)) => {
                             crate::shared::COLOR_ORDER.store(o.0, Ordering::Relaxed);
                             crate::shared::GAMMA_TENTHS.store(g, Ordering::Relaxed);
                             crate::shared::CAP_MA.store(c as u32, Ordering::Relaxed);
+                            crate::shared::BRIGHT_CURVE.store(bc, Ordering::Relaxed);
+                            crate::shared::POST_BLUR.store(bl, Ordering::Relaxed);
+                            crate::shared::POST_GLOW.store(gl, Ordering::Relaxed);
                             let _ = crate::config::write_device(
                                 &crate::shared::device_config_snapshot(),
                             );
                             format!(
-                                "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                                "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
                                 o.name(),
                                 g,
-                                c
+                                c,
+                                bc,
+                                bl,
+                                gl
                             )
                         }
                         _ => String::from(
-                            "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000>\"}",
+                            "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000> [<bright_curve_tenths 0-50> <blur_pct 0-100> <glow_pct 0-100>]\"}",
                         ),
                     }))
                 }
@@ -1296,13 +1319,16 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 ))),
                 // output pipeline settings
                 "/api/output" => Some(json_response(format!(
-                    "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                    "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
                     luxel_core::outpipe::ColorOrder(
                         crate::shared::COLOR_ORDER.load(Ordering::Relaxed)
                     )
                     .name(),
                     crate::shared::GAMMA_TENTHS.load(Ordering::Relaxed),
-                    crate::shared::CAP_MA.load(Ordering::Relaxed)
+                    crate::shared::CAP_MA.load(Ordering::Relaxed),
+                    crate::shared::BRIGHT_CURVE.load(Ordering::Relaxed),
+                    crate::shared::POST_BLUR.load(Ordering::Relaxed),
+                    crate::shared::POST_GLOW.load(Ordering::Relaxed)
                 ))),
                 // wall clock: NTP-synced local time + tz (clock builtins)
                 "/api/clock" => {

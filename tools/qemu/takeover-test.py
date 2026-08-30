@@ -459,7 +459,7 @@ def check_lxdv(flash: bytes, c: Checks) -> None:
     c.require(rec[0:4] == b"LXDV", "flash: LXDV device-config record at 0xA000",
               f"got {rec[0:8].hex()}")
     ver, bri, proto, sync = rec[4], rec[5], rec[6], rec[7]
-    c.require(ver == 6, "flash: LXDV version 6", f"ver={ver}")
+    c.require(ver == 7, "flash: LXDV version 7", f"ver={ver}")
     pixels = struct.unpack("<I", rec[8:12])[0]
     tz = struct.unpack("<h", rec[12:14])[0]
     order, gamma = rec[14], rec[15]
@@ -471,14 +471,18 @@ def check_lxdv(flash: bytes, c: Checks) -> None:
     c.require(bri == 16, "flash: imported brightness 16/31 (WLED bri 128/255)", f"got {bri}")
     c.require(cap == 850, "flash: imported power cap 850 mA (WLED maxpwr)", f"got {cap}")
     c.require(gamma == 28, "flash: imported gamma 2.8 (WLED light.gc.col)", f"got {gamma}")
-    c.require(sync == 0 and tz == 0 and rec[18:20] == b"\x00\x00",
+    curve, blur, glow = rec[18], rec[19], rec[20]
+    c.require(sync == 0 and tz == 0 and rec[21:24] == b"\x00\x00\x00",
               "flash: LXDV non-imported fields at defaults",
-              f"sync={sync} tz={tz} pad={rec[18:20].hex()}")
-    stored = struct.unpack("<I", rec[20:24])[0]
-    want = sum(rec[:20]) & 0xFFFFFFFF  # config.rs: wrapping u32 byte sum
+              f"sync={sync} tz={tz} pad={rec[21:24].hex()}")
+    c.require(curve == 0 and blur == 0 and glow == 0,
+              "flash: post-process chain off (WLED has no equivalent)",
+              f"curve={curve} blur={blur} glow={glow}")
+    stored = struct.unpack("<I", rec[24:28])[0]
+    want = sum(rec[:24]) & 0xFFFFFFFF  # config.rs: wrapping u32 byte sum
     c.require(stored == want, "flash: LXDV checksum valid",
               f"stored {stored:#010x} want {want:#010x}")
-    tail = rec[24:]
+    tail = rec[28:]
     c.require(tail == b"\xff" * len(tail), "flash: rest of the 0xA000 sector erased",
               f"first non-0xFF at {first_diff(tail, b'\xff' * len(tail))}")
 

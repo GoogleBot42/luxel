@@ -351,6 +351,12 @@ async fn main(spawner: Spawner) -> ! {
     shared::COLOR_ORDER.store(stored.map(|c| c.color_order).unwrap_or(0), Ordering::Relaxed);
     shared::GAMMA_TENTHS.store(stored.map(|c| c.gamma_tenths).unwrap_or(0), Ordering::Relaxed);
     shared::CAP_MA.store(stored.map(|c| c.cap_ma as u32).unwrap_or(0), Ordering::Relaxed);
+    shared::BRIGHT_CURVE.store(
+        stored.map(|c| c.bright_curve_tenths).unwrap_or(0),
+        Ordering::Relaxed,
+    );
+    shared::POST_BLUR.store(stored.map(|c| c.blur_pct).unwrap_or(0), Ordering::Relaxed);
+    shared::POST_GLOW.store(stored.map(|c| c.glow_pct).unwrap_or(0), Ordering::Relaxed);
     println!(
         "settings: {} px, {}, brightness {}/31 ({})",
         pixels,
@@ -580,10 +586,10 @@ fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
     [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
 }
 
-/// Output pipeline (Settings): color-order remap + gamma LUT + power cap,
-/// applied to a scratch copy just before protocol encoding. Returns the
-/// original frame untouched when every knob is off. The LUT is cached and
-/// rebuilt only when the gamma setting changes.
+/// Output pipeline (Settings): blur + glow + color-order remap + gamma LUT +
+/// power cap, in that order, applied to a scratch copy just before protocol
+/// encoding. Returns the original frame untouched when every knob is off. The
+/// LUT is cached and rebuilt only when the gamma setting changes.
 fn apply_outpipe<'a>(
     frame: &'a [[u8; 3]],
     pipe_buf: &'a mut alloc::vec::Vec<[u8; 3]>,
@@ -601,8 +607,10 @@ fn apply_outpipe<'a>(
     let order = shared::COLOR_ORDER.load(Ordering::Relaxed);
     let gamma = shared::GAMMA_TENTHS.load(Ordering::Relaxed);
     let cap = shared::CAP_MA.load(Ordering::Relaxed);
+    let blur_pct = shared::POST_BLUR.load(Ordering::Relaxed);
+    let glow_pct = shared::POST_GLOW.load(Ordering::Relaxed);
     let gamma_on = gamma > 0 && gamma != 10;
-    if order == 0 && !gamma_on && cap == 0 {
+    if order == 0 && !gamma_on && cap == 0 && blur_pct == 0 && glow_pct == 0 {
         return frame;
     }
     if gamma_on && gamma_cache.0 != gamma {
@@ -610,6 +618,10 @@ fn apply_outpipe<'a>(
     }
     pipe_buf.clear();
     pipe_buf.extend_from_slice(frame);
+    // Spatial stages first: they work in linear-ish pattern output, before
+    // gamma bends the values and the color order scrambles the channels.
+    outpipe::blur_frame(pipe_buf, blur_pct as u32 * 128 / 100, 1);
+    outpipe::glow_frame(pipe_buf, glow_pct as u32 * 256 / 100);
     outpipe::apply(
         pipe_buf,
         ColorOrder(order),
@@ -712,9 +724,15 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
     // master power (HA light switch): off = encode at brightness 0 (black on
     // both protocols) while the engine keeps ticking, so ON resumes mid-motion
+    // The brightness curve reshapes the dimmer here, at the single place the
+    // wire value is decided, so the power-cap estimate and the encoded frame
+    // agree on how bright the strip is actually being driven.
     let out_brightness = || {
         if shared::POWER.load(Ordering::Relaxed) {
-            BRIGHTNESS.load(Ordering::Relaxed)
+            luxel_core::outpipe::curve_brightness(
+                BRIGHTNESS.load(Ordering::Relaxed),
+                shared::BRIGHT_CURVE.load(Ordering::Relaxed),
+            )
         } else {
             0
         }

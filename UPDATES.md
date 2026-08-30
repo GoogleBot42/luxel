@@ -1,5 +1,86 @@
 # Update log
 
+## 2026-08-29 — The global post-process chain is finished: `setOutputPalette`
+## → `setBlur` → `setGlow` → `setGamma`, plus a device brightness curve
+
+`setGamma` shipped as a lone stage months ago and the docs/ideas.md entry
+has read "STARTED" ever since. The rest of it is in, as an actual *chain*:
+whole-frame stages the engine runs **once per frame** after the last
+`render()`, in one fixed order, rather than a bag of per-pixel tweaks.
+
+Order is the point. Recolor first (the remap works on the pattern's own
+luma), then spread light spatially, then apply the output transfer curve
+last — the order a display pipeline uses. That meant moving `setGamma`
+out of the per-pixel quantize step, where it was, and onto the end of the
+chain; otherwise a remapped pixel would have skipped gamma entirely and a
+blur would have averaged already-curved values.
+
+- **`setBlur(amount, passes = 1)`** — 3-tap blur along the pixel index.
+  `amount` is each neighbour's share (0.5 = the classic 1-2-1 kernel, 1 =
+  a pure neighbour average), `passes` 1–8 widens the radius. Ends clamp,
+  so light that reaches the last pixel stays on the strip. Allocation-free
+  — an in-place pass only has to remember one pixel (the previous
+  pre-blur value), which is what keeps it honest on an ESP32.
+- **`setGlow(amount)`** — light-bleed bloom: each pixel takes the brighter
+  of itself and `amount` of its brightest neighbour. Unlike blur the
+  source keeps its full value, so highlights spread without the frame
+  going dim. Also allocation-free, one pass.
+- **`setOutputPalette(pal, amount = 1)`** — recolor the finished frame by
+  luma through a `setPalette`-format stop list: the pattern's structure
+  survives, its hues are replaced. This is the "put the installation's
+  palette over any pattern" knob. The 256-entry table is cooked on
+  install (tracked by a VM epoch counter) so the per-pixel cost is a
+  3-multiply luma plus a lookup, and the stops are a snapshot — unlike
+  `setPalette`, which PB keeps live against the source array.
+- Every stage is **off by default and costs one comparison per frame when
+  unset**. An untouched pattern renders byte-identically to before.
+
+Settings-page half (the ideas entry asked for one), device config record
+**v6 → v7**, three new bytes in the reserved pad area of the `LXDV`
+record, all on `/api/output` and in Settings → Output:
+
+- **brightness curve** (`brightCurve`, gamma×10) — deliberately *not* the
+  same knob as gamma. Gamma shapes every pixel's channels (content); the
+  brightness curve shapes only how the master dimmer responds (control),
+  which is the actual fix for "everything above 20% looks the same". A
+  non-zero brightness never curves to 0 — a lit strip stays lit.
+- **blur %** and **glow %** — the same two spatial stages as an
+  installation setting, applied by the firmware after the engine's chain
+  so you can dial a soft look in without editing patterns.
+- The POST body's three new tokens are **optional** — an older client
+  still sending `<order> <gamma> <cap>` keeps the stored values, so no
+  flag day. v6 records still read (the version table gained an explicit
+  `ver == 6` arm; `ver == DEV_VER` alone would silently have stopped
+  accepting them).
+
+Index space, not map space: the spatial stages follow the pixel index, so
+on a serpentine matrix they follow the wiring path. That's documented,
+and the two follow-ups are ticketed rather than left as prose — palette
+remap as a *device* setting needs real palette storage in flash (Gitea
+#139) and a map-aware 2D pass needs a neighbour index or a grid fast path
+(Gitea #140).
+
+`library/post-process-chain.js` is a demo whose pattern deliberately draws
+nothing but hard single-pixel sparks on black — everything soft in it is
+the chain, and each slider switches one stage off so you can see what it
+was doing. Driving it in real chromium turned up a separate bug worth
+knowing about: `//#` control hints only bind as a **trailing** comment on
+the export line, so the several library patterns that put them on the
+line above have been silently running with default 0..1 sliders all along
+(Gitea #146).
+
+Sizes were re-measured on all eight board combos (docs/boards.md): the
+chain costs an even **+2.8–3.6 KB everywhere**, and the C6 still owns the
+tightest margin at 51,232 B (4.9 %). Worth noting how that number was
+nearly wrong — measuring against the table as it stood *before* the same
+day's HUB75 board work made the chain look like it cost 10 KB on RISC-V
+and 5 KB on Xtensa. It doesn't; the baseline had simply moved under us.
+Re-measure after the rebase, not before. `tools/stack-check.sh`
+is unmoved (no frame over budget, `.stack` 29,244 B), and
+`web/tools/device-e2e.mjs` grew eleven output-pipeline checks covering the
+six-key GET, the optional-token back-compat, out-of-range rejection, and
+the three new Settings fields.
+
 ## 2026-08-29 — HUB75 panel boards: `board-seengreat-hub75` + per-board
 ## MAX_PIXELS (whole 64x64 panel finally addressable) (#73, #74)
 

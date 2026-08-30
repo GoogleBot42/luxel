@@ -73,20 +73,24 @@ what CI measures):
 
 | board | app image | slot margin |
 |---|---:|---:|
-| `board-c3-devkit` | 901,744 B | 146,832 B |
-| `board-pixelblaze-v3` | 946,672 B | 101,904 B |
-| `board-athom-music` | 946,496 B | 102,080 B |
-| `board-esp32-generic` | 946,544 B | 102,032 B |
-| `board-s3-devkit` | 887,792 B | 160,784 B |
-| `board-s3-devkit` + `hub75` | 882,960 B | 165,616 B |
-| `board-seengreat-hub75` | 882,976 B | 165,600 B |
-| `board-c6-devkit` | 994,352 B | **54,224 B** |
+| `board-c3-devkit` | 905,344 B | 143,232 B |
+| `board-pixelblaze-v3` | 949,888 B | 98,688 B |
+| `board-athom-music` | 949,696 B | 98,880 B |
+| `board-esp32-generic` | 949,760 B | 98,816 B |
+| `board-s3-devkit` | 890,640 B | 157,936 B |
+| `board-s3-devkit` + `hub75` | 885,872 B | 162,704 B |
+| `board-seengreat-hub75` | 885,872 B | 162,704 B |
+| `board-c6-devkit` | 997,344 B | **51,232 B** |
+
+Re-measured again later the same day, after the global post-process chain:
++2.8–3.6 KB on every board, evenly (the engine's chain stages plus the v7
+config record and the wider `/api/output` handlers).
 
 The three classic-ESP32 variants differ only by a few hundred bytes (same
 chip feature set; only board.rs strings and the wiring lines change), so
 checking one of them per release is enough — but the *chips* are not
 interchangeable for size purposes: the C6 is ~93 KB fatter than the C3 for
-identical source (bigger radio blob / riscv32imac codegen), and at 5.2% it
+identical source (bigger radio blob / riscv32imac codegen), and at 4.9% it
 now owns the tightest margin in the fleet. It is the board that will hit
 the 1 MiB ceiling first; check `board-c6-devkit` on any release that grows
 the image. Measure with:
@@ -98,7 +102,7 @@ espflash save-image --chip esp32c6 \
 ```
 
 `.stack` (the leftover-DRAM main-task stack, `tools/stack-check.sh`) at
-the same revision: pixelblaze-v3 29,324 B · athom-music 29,348 B ·
+the same revision: pixelblaze-v3 29,244 B · athom-music 29,348 B ·
 esp32-generic 29,324 B · c3-devkit 39,568 B · s3-devkit 51,108 B
 (50,500 B with `hub75`, and the same 50,500 B for
 `board-seengreat-hub75` — the delta is the DMA descriptor static; the

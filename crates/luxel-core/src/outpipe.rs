@@ -54,6 +54,104 @@ pub fn gamma_lut(gamma_tenths: u8) -> [u8; 256] {
     lut
 }
 
+/// Perceptual brightness curve for the master dimmer: `brightness5` (0–31)
+/// reshaped by `curve_tenths`/10 so a linear slider *feels* linear. 0 and 10
+/// mean "off" (identity). γ > 1 pushes the useful range up the slider (the
+/// usual fix for "everything above 20% looks the same"); γ < 1 does the
+/// opposite. A non-zero input never curves to 0 — a lit strip must stay lit.
+///
+/// This is the *control* transfer, not the *content* one: [gamma_lut] shapes
+/// every pixel's channels, this shapes only the global dimmer.
+pub fn curve_brightness(brightness5: u8, curve_tenths: u8) -> u8 {
+    use crate::fixed::Fx;
+    let b = brightness5 & 0x1F;
+    if curve_tenths == 0 || curve_tenths == 10 || b == 0 || b >= 31 {
+        return b;
+    }
+    let g = Fx::from_raw(curve_tenths as i32 * 65536 / 10);
+    let v = Fx::from_raw(((b as i32) << 16) / 31);
+    let out = crate::fmath::pow(v, g).clamp(Fx::ZERO, Fx::ONE);
+    (((out.raw() as i64 * 31 + 32768) >> 16) as u8).max(1)
+}
+
+/// Rec.601-ish luma of a frame pixel, 0–255 — the index the palette-remap
+/// stage looks colors up by.
+pub fn luma(px: [u8; 3]) -> u8 {
+    ((px[0] as u32 * 54 + px[1] as u32 * 183 + px[2] as u32 * 19) >> 8) as u8
+}
+
+/// Recolor a finished frame through a 256-entry palette LUT indexed by
+/// [luma]: the pattern's *structure* survives, its hues are replaced.
+/// `amount` is the blend in 1/256ths (256 = full replace, 0 = no-op).
+pub fn palette_remap_frame(frame: &mut [[u8; 3]], lut: &[[u8; 3]; 256], amount: u32) {
+    if amount == 0 {
+        return;
+    }
+    let a = amount.min(256);
+    for px in frame.iter_mut() {
+        let target = lut[luma(*px) as usize];
+        if a >= 256 {
+            *px = target;
+            continue;
+        }
+        for c in 0..3 {
+            px[c] = ((px[c] as u32 * (256 - a) + target[c] as u32 * a) >> 8) as u8;
+        }
+    }
+}
+
+/// 3-tap blur along the pixel index, in place and allocation-free (the one
+/// value it needs to remember is the previous pixel's pre-blur color).
+/// `k` is each neighbor's weight in 1/256ths, 0–128: 128 is a pure neighbor
+/// average, 64 the classic 1-2-1 kernel, 0 a no-op. Ends clamp (the last
+/// pixel stands in for its own missing neighbor). `passes` widens the
+/// effective radius at O(n) each.
+///
+/// Index space, not map space: on a strip that is physical order, on a
+/// serpentine matrix it follows the wiring path.
+pub fn blur_frame(frame: &mut [[u8; 3]], k: u32, passes: u8) {
+    let k = k.min(128);
+    if k == 0 || frame.len() < 2 {
+        return;
+    }
+    let center = 256 - 2 * k;
+    let last = frame.len() - 1;
+    for _ in 0..passes.max(1) {
+        let mut prev = frame[0];
+        for i in 0..frame.len() {
+            let cur = frame[i];
+            let next = frame[(i + 1).min(last)];
+            for c in 0..3 {
+                let v = cur[c] as u32 * center + prev[c] as u32 * k + next[c] as u32 * k;
+                frame[i][c] = ((v + 128) >> 8) as u8;
+            }
+            prev = cur;
+        }
+    }
+}
+
+/// Light-bleed bloom along the pixel index: each pixel takes the brighter of
+/// itself and `g`/256 of its brightest neighbor, so highlights spread without
+/// the frame losing energy the way [blur_frame] does. `g` 0 is a no-op.
+/// Allocation-free, one pass, same index-space caveat as [blur_frame].
+pub fn glow_frame(frame: &mut [[u8; 3]], g: u32) {
+    let g = g.min(256);
+    if g == 0 || frame.len() < 2 {
+        return;
+    }
+    let last = frame.len() - 1;
+    let mut prev = frame[0];
+    for i in 0..frame.len() {
+        let cur = frame[i];
+        let next = frame[(i + 1).min(last)];
+        for c in 0..3 {
+            let bleed = ((prev[c].max(next[c]) as u32 * g) >> 8) as u8;
+            frame[i][c] = cur[c].max(bleed);
+        }
+        prev = cur;
+    }
+}
+
 /// Per-output current model for the power cap — a HUB75 matrix draws very
 /// differently from an addressable strip.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -151,6 +249,85 @@ mod tests {
         let mut f = [[128, 128, 128]];
         apply(&mut f, ColorOrder::RGB, Some(&lut), 0, 31, PowerModel::Strip);
         assert_eq!(f[0][0], lut[128]);
+    }
+
+    #[test]
+    fn blur_spreads_a_spike_and_conserves_ends() {
+        // k = 64 is the 1-2-1 kernel: 255 → 128 with 64 either side
+        let mut f = [[0u8; 3], [0; 3], [255; 3], [0; 3], [0; 3]];
+        blur_frame(&mut f, 64, 1);
+        assert_eq!(f.map(|p| p[0]), [0, 64, 128, 64, 0]);
+        // a second pass widens it further (the ends clamp, so light that
+        // reaches pixel 0 stays there rather than falling off the strip)
+        blur_frame(&mut f, 64, 1);
+        assert_eq!(f.map(|p| p[0]), [16, 64, 96, 64, 16]);
+        // k = 0 and single-pixel frames are no-ops
+        let mut g = [[7u8, 8, 9], [1, 2, 3]];
+        blur_frame(&mut g, 0, 4);
+        assert_eq!(g, [[7, 8, 9], [1, 2, 3]]);
+        // a flat frame survives a full-strength blur unchanged
+        let mut flat = [[100u8; 3]; 6];
+        blur_frame(&mut flat, 128, 3);
+        assert_eq!(flat, [[100u8; 3]; 6]);
+    }
+
+    #[test]
+    fn glow_bleeds_without_dimming() {
+        let mut f = [[0u8; 3], [0; 3], [255; 3], [0; 3], [0; 3]];
+        glow_frame(&mut f, 128); // neighbours at half strength
+        assert_eq!(f.map(|p| p[0]), [0, 127, 255, 127, 0]);
+        // unlike blur, the source pixel keeps its full value
+        let mut g = [[0u8; 3], [200; 3], [0; 3]];
+        glow_frame(&mut g, 0);
+        assert_eq!(g.map(|p| p[0]), [0, 200, 0]);
+    }
+
+    #[test]
+    fn palette_remap_recolors_by_luma() {
+        // luma of pure green = (255·183) >> 8 = 182
+        assert_eq!(luma([0, 255, 0]), 182);
+        assert_eq!(luma([255, 255, 255]), 255);
+        assert_eq!(luma([0, 0, 0]), 0);
+        // a table that turns every luma into "red at that level"
+        let mut lut = [[0u8; 3]; 256];
+        for (i, slot) in lut.iter_mut().enumerate() {
+            *slot = [i as u8, 0, 0];
+        }
+        let mut f = [[0u8, 255, 0], [255, 255, 255]];
+        palette_remap_frame(&mut f, &lut, 256);
+        assert_eq!(f, [[182, 0, 0], [255, 0, 0]]);
+        // half strength blends with the original
+        let mut h = [[0u8, 255, 0]];
+        palette_remap_frame(&mut h, &lut, 128);
+        assert_eq!(h, [[91, 127, 0]]);
+        // amount 0 is a no-op
+        let mut z = [[0u8, 255, 0]];
+        palette_remap_frame(&mut z, &lut, 0);
+        assert_eq!(z, [[0, 255, 0]]);
+    }
+
+    #[test]
+    fn brightness_curve_reshapes_the_dimmer() {
+        // off (0 and 10) is identity, and so are the endpoints
+        for b in 0..=31u8 {
+            assert_eq!(curve_brightness(b, 0), b);
+            assert_eq!(curve_brightness(b, 10), b);
+        }
+        assert_eq!(curve_brightness(0, 22), 0);
+        assert_eq!(curve_brightness(31, 22), 31);
+        // γ2.2 pushes the useful range up the slider: half-way is much dimmer
+        let mid = curve_brightness(16, 22);
+        assert!((6..=9).contains(&mid), "16/31 at γ2.2 = {mid}");
+        // monotonic, and a lit strip never curves to off
+        let mut prev = 0;
+        for b in 1..=31u8 {
+            let v = curve_brightness(b, 22);
+            assert!(v >= 1, "brightness {b} curved to 0");
+            assert!(v >= prev, "not monotonic at {b}: {prev} → {v}");
+            prev = v;
+        }
+        // γ < 1 goes the other way
+        assert!(curve_brightness(16, 5) > 16);
     }
 
     #[test]

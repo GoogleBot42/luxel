@@ -305,6 +305,11 @@ pub enum Builtin {
     RandomSeed,
     TimeScale,
     SetFrameRate,
+    // Luxel extension builtins, batch 6: the rest of the global
+    // post-process chain (setGamma is the first stage, batch 2)
+    SetBlur,
+    SetGlow,
+    SetOutputPalette,
 }
 
 pub struct BuiltinDef {
@@ -397,6 +402,10 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // `random`, in-pattern clock/frame-rate controls.
     b!("canvasAdd", CanvasAdd), b!("randomSeed", RandomSeed),
     b!("timeScale", TimeScale), b!("setFrameRate", SetFrameRate),
+    // Luxel extensions, batch 6 (appended): the global post-process chain
+    // beyond setGamma — frame stages the engine runs after render().
+    b!("setBlur", SetBlur), b!("setGlow", SetGlow),
+    b!("setOutputPalette", SetOutputPalette),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -629,9 +638,21 @@ pub struct Vm {
     /// (2026-08-22); the no-time case is UNTESTABLE on a configured PB
     /// (can't unset its clock via the public API), so 0 stays our choice.
     pub wall_unix: Option<i64>,
-    /// Output gamma set by `setGamma(g)`; ZERO/ONE = off. The engine applies
-    /// it after render, at quantization (Luxel post-process extension).
+    /// Output gamma set by `setGamma(g)`; ZERO/ONE = off. Last stage of the
+    /// post-process chain the engine runs after render (Luxel extension).
     pub post_gamma: Fx,
+    /// `setBlur(amount, passes)`: neighbor weight 0..1 (ZERO = off) and the
+    /// pass count, both applied to the finished frame in pixel-index order.
+    pub post_blur: Fx,
+    pub post_blur_passes: u8,
+    /// `setGlow(amount)`: light-bleed bloom strength 0..1 (ZERO = off).
+    pub post_glow: Fx,
+    /// `setOutputPalette(pal, amount)`: recolor the finished frame by luma.
+    /// Empty = off. `post_palette_epoch` bumps on every install so the
+    /// engine knows to rebuild its 256-entry lookup.
+    pub post_palette: Vec<(Fx, [Fx; 3])>,
+    pub post_palette_amount: Fx,
+    pub post_palette_epoch: u32,
     /// Injected external events `[type, x, y, value]`, drained FIFO by
     /// `readEvent`. The engine pushes (bounded — see `MAX_EVENTS`); a
     /// pattern switch rebuilds the VM, which clears the queue.
@@ -642,10 +663,55 @@ pub struct Vm {
 /// freshest input wins and a pattern that never reads can't leak.
 pub const MAX_EVENTS: usize = 32;
 
+/// `setBlur`'s pass ceiling. Each pass is another O(pixels) sweep of the
+/// finished frame; 8 is already a very wide blur and keeps the worst case
+/// bounded on an ESP32.
+pub const MAX_BLUR_PASSES: i32 = 8;
+
 /// Longest period `setFrameRate` can ask for, 60 s in 16.16 ms. A pattern
 /// asking for 1/3600 fps would otherwise stop rendering for an hour and
 /// look like a hang; the cap keeps the worst case explainable.
 pub const MAX_FRAME_PERIOD_RAW: u64 = 60_000 << 16;
+
+/// Sample a stop list at `v`, PB's `paint` semantics: below the first stop
+/// clamps to its color, exactly the last stop yields that color, past it is
+/// BLACK (the ends are asymmetric — oracle-verified, fw 3.67, 2026-08-22).
+/// An empty palette is the grayscale ramp `[v, v, v]` (also oracle-verified:
+/// a pattern with no `setPalette` paints exactly that).
+pub fn sample_palette(pal: &[(Fx, [Fx; 3])], v: Fx) -> [Fx; 3] {
+    if pal.is_empty() {
+        return [v, v, v];
+    }
+    let first = pal[0];
+    let last = pal[pal.len() - 1];
+    if v <= first.0 {
+        return first.1;
+    }
+    if v == last.0 {
+        return last.1;
+    }
+    if v > last.0 {
+        return [Fx::ZERO; 3];
+    }
+    for w in pal.windows(2) {
+        let (p0, c0) = w[0];
+        let (p1, c1) = w[1];
+        if v <= p1 {
+            let span = p1 - p0;
+            let t = if span == Fx::ZERO {
+                Fx::ZERO
+            } else {
+                (v - p0) / span
+            };
+            let mut out = [Fx::ZERO; 3];
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = c0[i] + (c1[i] - c0[i]) * t;
+            }
+            return out;
+        }
+    }
+    last.1
+}
 
 #[derive(Debug, Clone)]
 pub struct MapData {
@@ -686,6 +752,12 @@ impl Vm {
             perlin_wrap: [256; 3],
             wall_unix: None,
             post_gamma: Fx::ZERO,
+            post_blur: Fx::ZERO,
+            post_blur_passes: 1,
+            post_glow: Fx::ZERO,
+            post_palette: Vec::new(),
+            post_palette_amount: Fx::ONE,
+            post_palette_epoch: 0,
             events: VecDeque::new(),
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
@@ -2474,6 +2546,60 @@ impl Vm {
                 };
                 num(old)
             }
+            // ---- Luxel extensions, batch 6: post-process chain stages ----
+            // The engine runs these over the finished frame, in chain order
+            // (palette remap → blur → glow → gamma), once per frame — not
+            // per pixel. All are off by default and cost nothing unset.
+            //
+            // setBlur(amount, passes = 1): 3-tap blur along the pixel index.
+            // amount 0..1 is each neighbor's share (0.5 = the 1-2-1 kernel,
+            // 1 = pure neighbor average); passes 1..8 widens the radius.
+            SetBlur => {
+                let old = self.post_blur;
+                self.post_blur = n(0).clamp(Fx::ZERO, Fx::ONE);
+                if argc >= 2 {
+                    self.post_blur_passes = n(1).to_int_trunc().clamp(1, MAX_BLUR_PASSES) as u8;
+                }
+                num(old)
+            }
+            // setGlow(amount): light-bleed bloom — every pixel takes the
+            // brighter of itself and `amount` of its brightest neighbor, so
+            // highlights spread without the frame losing energy.
+            SetGlow => {
+                let old = self.post_glow;
+                self.post_glow = n(0).clamp(Fx::ZERO, Fx::ONE);
+                num(old)
+            }
+            // setOutputPalette(pal, amount = 1): recolor the finished frame
+            // by luma through `pal` (setPalette's flat [pos,r,g,b,…] form),
+            // blending `amount` of the way. Any non-array argument (e.g. 0)
+            // clears the stage. Snapshotted, not live like setPalette: the
+            // engine cooks a 256-entry table on install.
+            SetOutputPalette => {
+                self.post_palette_epoch = self.post_palette_epoch.wrapping_add(1);
+                self.post_palette_amount = if argc >= 2 {
+                    n(1).clamp(Fx::ZERO, Fx::ONE)
+                } else {
+                    Fx::ONE
+                };
+                match a(0) {
+                    Value::Arr(arr) => {
+                        let data = self.arr(prog, arr);
+                        let mut pal = Vec::new();
+                        let mut i = 0;
+                        while i + 3 < data.len() {
+                            pal.push((
+                                data[i].num(),
+                                [data[i + 1].num(), data[i + 2].num(), data[i + 3].num()],
+                            ));
+                            i += 4;
+                        }
+                        self.post_palette = pal;
+                    }
+                    _ => self.post_palette = Vec::new(),
+                }
+                Ok(Value::default())
+            }
         }
     }
 
@@ -2575,46 +2701,7 @@ impl Vm {
                 self.rebuild_palette(prog, arr);
             }
         }
-        // No palette installed → grayscale ramp. Oracle-verified (fw 3.67,
-        // 2026-08-22): a freshly live-coded pattern with no setPalette
-        // paints exactly [v,v,v], and palette state does NOT leak across
-        // pattern loads.
-        if self.palette.is_empty() {
-            return [v, v, v];
-        }
-        let first = self.palette[0];
-        let last = self.palette[self.palette.len() - 1];
-        if v <= first.0 {
-            return first.1;
-        }
-        // Ends are ASYMMETRIC on PB (oracle-verified, fw 3.67, 2026-08-22):
-        // below the first stop clamps to the first color, but anything past
-        // the last stop is BLACK (hard edge exactly at the stop; single-stop
-        // palettes behave the same way).
-        if v == last.0 {
-            return last.1;
-        }
-        if v > last.0 {
-            return [Fx::ZERO; 3];
-        }
-        for w in self.palette.windows(2) {
-            let (p0, c0) = w[0];
-            let (p1, c1) = w[1];
-            if v <= p1 {
-                let span = p1 - p0;
-                let t = if span == Fx::ZERO {
-                    Fx::ZERO
-                } else {
-                    (v - p0) / span
-                };
-                let mut out = [Fx::ZERO; 3];
-                for (i, o) in out.iter_mut().enumerate() {
-                    *o = c0[i] + (c1[i] - c0[i]) * t;
-                }
-                return out;
-            }
-        }
-        last.1
+        sample_palette(&self.palette, v)
     }
 
     /// Call a function value with explicit args (used by array HOFs and

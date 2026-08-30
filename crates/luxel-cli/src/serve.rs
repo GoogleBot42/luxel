@@ -181,6 +181,11 @@ struct State {
     color_order: AtomicU8,
     gamma_tenths: AtomicU8,
     cap_ma: AtomicU32,
+    /// Whole-frame post-process knobs (dimmer curve ×10, blur %, glow %) —
+    /// stored and echoed here for settings parity; the mirror drives no strip.
+    bright_curve: AtomicU8,
+    post_blur: AtomicU8,
+    post_glow: AtomicU8,
     engine_time_ms: std::sync::atomic::AtomicU64,
     sync_leader: Mutex<Option<(u32, u64, Instant)>>,
     /// Built playground directory (web/dist) served at `/` and asset paths —
@@ -1460,10 +1465,13 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         }
         ("GET", "/api/output") => {
             let body = format!(
-                "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
                 luxel_core::outpipe::ColorOrder(state.color_order.load(Ordering::Relaxed)).name(),
                 state.gamma_tenths.load(Ordering::Relaxed),
-                state.cap_ma.load(Ordering::Relaxed)
+                state.cap_ma.load(Ordering::Relaxed),
+                state.bright_curve.load(Ordering::Relaxed),
+                state.post_blur.load(Ordering::Relaxed),
+                state.post_glow.load(Ordering::Relaxed)
             );
             respond(&mut stream, 200, "application/json", body.as_bytes());
         }
@@ -1473,20 +1481,34 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             let order = it.next().and_then(luxel_core::outpipe::ColorOrder::from_name);
             let gamma: Option<u8> = it.next().and_then(|v| v.parse().ok()).filter(|g| *g <= 50);
             let cap: Option<u16> = it.next().and_then(|v| v.parse().ok()).filter(|c| *c <= 20_000);
-            let r = match (order, gamma, cap) {
-                (Some(o), Some(g), Some(c)) => {
+            // trailing three are optional: absent = keep the stored value
+            let opt = |tok: Option<&str>, cur: u8, max: u8| match tok {
+                None => Some(cur),
+                Some(v) => v.parse::<u8>().ok().filter(|x| *x <= max),
+            };
+            let curve = opt(it.next(), state.bright_curve.load(Ordering::Relaxed), 50);
+            let blur = opt(it.next(), state.post_blur.load(Ordering::Relaxed), 100);
+            let glow = opt(it.next(), state.post_glow.load(Ordering::Relaxed), 100);
+            let r = match (order, gamma, cap, curve, blur, glow) {
+                (Some(o), Some(g), Some(c), Some(bc), Some(bl), Some(gl)) => {
                     state.color_order.store(o.0, Ordering::Relaxed);
                     state.gamma_tenths.store(g, Ordering::Relaxed);
                     state.cap_ma.store(c as u32, Ordering::Relaxed);
+                    state.bright_curve.store(bc, Ordering::Relaxed);
+                    state.post_blur.store(bl, Ordering::Relaxed);
+                    state.post_glow.store(gl, Ordering::Relaxed);
                     format!(
-                        "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{}}}",
+                        "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
                         o.name(),
                         g,
-                        c
+                        c,
+                        bc,
+                        bl,
+                        gl
                     )
                 }
                 _ => String::from(
-                    "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000>\"}",
+                    "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000> [<bright_curve_tenths 0-50> <blur_pct 0-100> <glow_pct 0-100>]\"}",
                 ),
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
@@ -1845,6 +1867,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         color_order: AtomicU8::new(0),
         gamma_tenths: AtomicU8::new(0),
         cap_ma: AtomicU32::new(0),
+        bright_curve: AtomicU8::new(0),
+        post_blur: AtomicU8::new(0),
+        post_glow: AtomicU8::new(0),
         engine_time_ms: std::sync::atomic::AtomicU64::new(0),
         sync_leader: Mutex::new(None),
         web_dir: locate_web_dir(web_dir_arg),

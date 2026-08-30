@@ -295,11 +295,71 @@ export function render(index) {
 }
 ```
 
-**Luxel extension — output gamma**: `setGamma(g)` applies an output gamma
-curve after `render` (a cached 256-entry table — no per-pixel cost). LEDs
-are linear but eyes aren't; `setGamma(2.2)` makes fades and dim colors
-perceptually even. `setGamma(0)` or `setGamma(1)` turns it off. Full
-brightness always stays full.
+**Luxel extension — the post-process chain**: four whole-frame stages the
+engine runs *once per frame*, after the last `render` call, in a fixed
+order:
+
+```
+setOutputPalette  →  setBlur  →  setGlow  →  setGamma
+```
+
+Recolor first (the remap works on the pattern's own luma), then spread
+light spatially, then apply the output transfer curve last — the order a
+display pipeline uses. Every stage is off by default and costs one
+comparison per frame when unset, so a pattern that never calls them
+renders exactly as it always did. Call them anywhere (top level,
+`beforeRender`, or `render`); the value in effect when the frame finishes
+is the one that applies.
+
+- `setGamma(g)` — output gamma curve (a cached 256-entry table, so no
+  per-pixel `pow`). LEDs are linear but eyes aren't; `setGamma(2.2)`
+  makes fades and dim colors perceptually even. `setGamma(0)` or
+  `setGamma(1)` turns it off. Full brightness always stays full.
+- `setBlur(amount, passes = 1)` — 3-tap blur **along the pixel index**.
+  `amount` 0..1 is each neighbour's share: `0.5` is the classic 1-2-1
+  kernel, `1` is a pure neighbour average. `passes` (1..8) re-runs the
+  kernel to widen the radius. Ends clamp, so light that reaches the last
+  pixel stays on the strip rather than falling off it. Returns the
+  previous amount. Allocation-free — it remembers exactly one pixel.
+- `setGlow(amount)` — light-bleed bloom: every pixel takes the brighter
+  of itself and `amount` of its brightest neighbour. Unlike blur, the
+  source keeps its full value, so highlights spread without the frame
+  going dim. Returns the previous amount.
+- `setOutputPalette(pal, amount = 1)` — recolor the finished frame by
+  luma through `pal`, a stop list in `setPalette`'s flat
+  `[pos, r, g, b, …]` form. The pattern's *structure* survives and its
+  hues are replaced, which is how you put one installation's palette
+  over any pattern. `amount` blends against the original; passing a
+  non-array (e.g. `setOutputPalette(0)`) turns the stage off. Unlike
+  `setPalette`, the stops are snapshotted at the call — the engine cooks
+  a 256-entry table and rebuilds it only when you install a new one.
+
+Index space, not map space: on a strip `setBlur`/`setGlow` follow physical
+order; on a serpentine matrix they follow the wiring path. For map-aware
+2D softening use `blur2D` over a canvas array inside the pattern instead
+(a map-aware chain pass is Gitea #140).
+
+```js
+// any pattern, recolored and softened at the output
+var pal = array(12)
+pal[0] = 0   pal[1] = 0    pal[2] = 0    pal[3] = 0.2   // deep blue
+pal[4] = 0.5 pal[5] = 0.9  pal[6] = 0.1  pal[7] = 0.4   // magenta
+pal[8] = 1   pal[9] = 1    pal[10] = 0.9 pal[11] = 0.6  // warm white
+
+export function beforeRender(delta) {
+  setOutputPalette(pal)
+  setBlur(0.35)
+  setGlow(0.4)
+  setGamma(2.2)
+}
+```
+
+The same three stages exist as **device settings** (Settings → Output:
+blur %, glow %, and a brightness curve), applied by the firmware after
+the engine's chain so an installation can dial them in without editing
+patterns. The device's brightness curve is a separate knob from
+`setGamma`: gamma shapes every pixel's channels (content), the brightness
+curve shapes only how the master dimmer responds (control).
 
 ### Arrays
 

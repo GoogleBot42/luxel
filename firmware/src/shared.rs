@@ -341,6 +341,14 @@ pub static COLOR_ORDER: AtomicU8 = AtomicU8::new(0); // outpipe::ColorOrder code
 pub static GAMMA_TENTHS: AtomicU8 = AtomicU8::new(0); // 22 = γ2.2; 0/10 = off
 pub static CAP_MA: AtomicU32 = AtomicU32::new(0); // 0 = no power cap
 
+/// Whole-frame post-process knobs (Settings → output; persisted). The
+/// brightness curve reshapes the master dimmer's response (distinct from
+/// GAMMA_TENTHS, which curves per-pixel content); blur and glow are the
+/// spatial stages the render task runs before gamma.
+pub static BRIGHT_CURVE: AtomicU8 = AtomicU8::new(0); // dimmer gamma x10; 0/10 = off
+pub static POST_BLUR: AtomicU8 = AtomicU8::new(0); // percent, 0 = off
+pub static POST_GLOW: AtomicU8 = AtomicU8::new(0); // percent, 0 = off
+
 /// The persisted settings record built from the live atomics — write sites
 /// override the one field they change instead of hand-assembling the
 /// (ever-growing) struct. Pixel count and protocol come from the WANT_*
@@ -357,6 +365,9 @@ pub fn device_config_snapshot() -> crate::config::DeviceConfig {
         color_order: COLOR_ORDER.load(Ordering::Relaxed),
         gamma_tenths: GAMMA_TENTHS.load(Ordering::Relaxed),
         cap_ma: CAP_MA.load(Ordering::Relaxed) as u16,
+        bright_curve_tenths: BRIGHT_CURVE.load(Ordering::Relaxed),
+        blur_pct: POST_BLUR.load(Ordering::Relaxed),
+        glow_pct: POST_GLOW.load(Ordering::Relaxed),
     }
 }
 

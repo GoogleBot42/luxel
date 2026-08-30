@@ -1329,6 +1329,112 @@ fn set_gamma_output_curve() {
     assert_eq!(render_val("setGamma(1); rgb(0.5, 0, 0)"), linear);
 }
 
+/// A frame of five pixels' red channel, for the post-process chain tests.
+fn red_frame(body: &str, pixels: u32) -> Vec<u8> {
+    let src = format!("export function render(index) {{ {body} }}");
+    let mut e = Engine::new(&src, pixels, 1).expect("compile");
+    e.frame(Fx::ZERO).iter().map(|p| p[0]).collect()
+}
+
+#[test]
+fn post_process_blur_stage() {
+    let spike = "rgb(index == 2, 0, 0)";
+    assert_eq!(red_frame(spike, 5), vec![0, 0, 255, 0, 0]);
+    // setBlur(a): each neighbour's weight is a/2 in 1/256ths, so 0.5 is
+    // the classic 1-2-1 kernel — 255 becomes 128 with 64 either side.
+    assert_eq!(
+        red_frame(&format!("setBlur(0.5); {spike}"), 5),
+        vec![0, 64, 128, 64, 0]
+    );
+    // a second pass widens it (ends clamp, so light doesn't fall off)
+    assert_eq!(
+        red_frame(&format!("setBlur(0.5, 2); {spike}"), 5),
+        vec![16, 64, 96, 64, 16]
+    );
+    // amount 1 is a pure neighbour average: the lit pixel goes dark and
+    // both neighbours take half of it
+    assert_eq!(
+        red_frame(&format!("setBlur(1); {spike}"), 5),
+        vec![0, 128, 0, 128, 0]
+    );
+    // off by default and explicitly off at 0
+    assert_eq!(red_frame(&format!("setBlur(0); {spike}"), 5), vec![0, 0, 255, 0, 0]);
+    // the stage runs ONCE per frame, not once per pixel — two frames of a
+    // static pattern give the same answer (no compounding)
+    let src = format!("export function render(index) {{ setBlur(0.5); {spike} }}");
+    let mut e = Engine::new(&src, 5, 1).expect("compile");
+    let first: Vec<u8> = e.frame(Fx::ZERO).iter().map(|p| p[0]).collect();
+    let second: Vec<u8> = e.frame(Fx::from_int(16)).iter().map(|p| p[0]).collect();
+    assert_eq!(first, second, "blur compounded across frames");
+}
+
+#[test]
+fn post_process_glow_stage() {
+    let spike = "rgb(index == 2, 0, 0)";
+    // glow keeps the source at full and bleeds `amount` of it outward
+    assert_eq!(
+        red_frame(&format!("setGlow(0.5); {spike}"), 5),
+        vec![0, 127, 255, 127, 0]
+    );
+    assert_eq!(
+        red_frame(&format!("setGlow(1); {spike}"), 5),
+        vec![0, 255, 255, 255, 0]
+    );
+    assert_eq!(red_frame(&format!("setGlow(0); {spike}"), 5), vec![0, 0, 255, 0, 0]);
+}
+
+#[test]
+fn post_process_palette_remap_stage() {
+    // stops: black at 0, red at 1 — every luma becomes red at that level
+    let pal = "p = array(8)\np[4] = 1\np[5] = 1\n";
+    let src = format!(
+        "{pal}export function render(index) {{ setOutputPalette(p); rgb(0, 1, 0) }}"
+    );
+    let mut e = Engine::new(&src, 1, 1).expect("compile");
+    // green quantizes to [0,255,0]; luma = (255·183)>>8 = 182; the table
+    // entry for 182 is the palette sampled at 182/255, i.e. red 181/255
+    assert_eq!(e.frame(Fx::ZERO)[0], [181, 0, 0]);
+    // amount blends the remap against the original
+    let src = format!(
+        "{pal}export function render(index) {{ setOutputPalette(p, 0.5); rgb(0, 1, 0) }}"
+    );
+    let mut e = Engine::new(&src, 1, 1).expect("compile");
+    assert_eq!(e.frame(Fx::ZERO)[0], [90, 127, 0]);
+    // a non-array argument clears the stage
+    let src = format!(
+        "{pal}export function render(index) {{ setOutputPalette(p); setOutputPalette(0); rgb(0, 1, 0) }}"
+    );
+    let mut e = Engine::new(&src, 1, 1).expect("compile");
+    assert_eq!(e.frame(Fx::ZERO)[0], [0, 255, 0]);
+    // no output palette installed → untouched
+    let mut e = Engine::new("export function render(index) { rgb(0, 1, 0) }", 1, 1).expect("compile");
+    assert_eq!(e.frame(Fx::ZERO)[0], [0, 255, 0]);
+}
+
+#[test]
+fn post_process_chain_order() {
+    // gamma is the LAST stage: it curves what blur produced, so the
+    // spike's blurred 128 lands on the same value a bare 128 would
+    let spike = "rgb(index == 2, 0, 0)";
+    let curved = red_frame(&format!("setGamma(2); setBlur(0.5); {spike}"), 5);
+    // blur leaves 128 at the peak; γ2 takes (128/255)² back to 64. Were
+    // gamma applied first, the lit pixel would still be a full 255 going
+    // into the blur and the peak would come out at 128.
+    assert!((curved[2] as i32 - 64).abs() <= 1, "peak = {}", curved[2]);
+    assert!(curved[1] < 64 && curved[1] > 0, "blurred wing = {}", curved[1]);
+    // the remap feeds the blur, not the other way round: with a black→red
+    // palette the green spike comes out red, then spreads
+    let pal = "p = array(8)\np[4] = 1\np[5] = 1\n";
+    let src = format!(
+        "{pal}export function render(index) {{ setOutputPalette(p); setBlur(0.5); rgb(0, index == 2, 0) }}"
+    );
+    let mut e = Engine::new(&src, 5, 1).expect("compile");
+    let f: Vec<[u8; 3]> = e.frame(Fx::ZERO).to_vec();
+    assert_eq!(f[2], [91, 0, 0], "remap then blur: {:?}", f[2]);
+    assert_eq!(f[1], [45, 0, 0], "wing: {:?}", f[1]);
+    assert!(f.iter().all(|p| p[1] == 0), "green survived the remap");
+}
+
 #[test]
 fn exponent_operator() {
     assert_eq!(eval("2 ** 10"), fx(1024.0));

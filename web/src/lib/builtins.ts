@@ -99,6 +99,9 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "rgb2hsv", sig: "rgb2hsv(r, g, b, out)", doc: "Convert RGB to HSV into out[0..2] (returns out); hue in turns. (Luxel)" },
   { name: "mixColors", sig: "mixColors(r1,g1,b1, r2,g2,b2, t, out)", doc: "Blend two RGB colors in OKLab (perceptually even) into out[0..2]; returns out. (Luxel)" },
   { name: "setGamma", sig: "setGamma(g)", doc: "Output gamma applied after render (try 2.2 for perceptually even fades); 0 or 1 turns it off. (Luxel)" },
+  { name: "setBlur", sig: "setBlur(amount, passes)", doc: "Post-process: blur the finished frame along the pixel index. amount 0..1 is each neighbour's share (0.5 = the 1-2-1 kernel); passes 1..8 widens it. 0 turns it off. (Luxel)" },
+  { name: "setGlow", sig: "setGlow(amount)", doc: "Post-process: bright pixels bleed `amount` of themselves into their neighbours, so highlights bloom without the frame losing energy. 0 turns it off. (Luxel)" },
+  { name: "setOutputPalette", sig: "setOutputPalette(pal, amount)", doc: "Post-process: recolor the finished frame by luma through a setPalette-format stop list — the pattern's structure, your palette's hues. amount 0..1 blends (default 1); a non-array argument turns it off. (Luxel)" },
   // arrays
   { name: "array", sig: "array(length)", doc: "Create a zero-filled array." },
   { name: "arrayLength", sig: "arrayLength(arr)", doc: "Number of elements in arr." },
