@@ -34,6 +34,16 @@ follow-up than to start the wrong thing.
    each candidate, check `UPDATES.md` for a shipped entry and skim the
    relevant code/docs. Drop anything already done. This is the single most
    important step — never propose finished work.
+
+   Checking "the entry the lead came from" is not a check. Grep the
+   candidate's distinctive name/keyword across the ENTIRE `UPDATES.md` —
+   resolutions land in *later* entries under unrelated headings, and
+   reasoning forward from the lead's own entry ("conditions changed, so
+   it's probably still open") silently skips them. Real case 2026-08-29:
+   the Music Sequencer capacity holdout from the 2026-07-19 entry was
+   proposed as open because heap had grown since — a name-grep would have
+   hit the 2026-07-27 v0.1.34 entry recording it fixed and
+   hardware-verified.
 3. Rank the surviving candidates by value ÷ effort, with two hardware
    constraints:
    - Any candidate needing the physical device requires the dev unit to be
