@@ -19,6 +19,15 @@
 //                       canvas, a sprite LUT, a pixel count that must divide
 //                       by N) and error out on the sweep's default rig.
 //
+//   vars                Exported-var values pushed into a side once after init,
+//                       the way an external client writes them over PB's vars
+//                       API. Declared PER SIDE, because the two sides may name
+//                       the same variable differently. This exists for
+//                       originals that are DRIVEN by a companion app (a
+//                       mapper, a home-automation bridge) and render nothing
+//                       at their default value — without a pinned var the
+//                       original is black and the pair is unjudgeable.
+//
 // Every entry carries a `note` explaining why, usually citing SWEEP-NOTES.md
 // or the slug's verdict in results/.
 //
@@ -30,6 +39,8 @@
 //   { "<slug>": { "stripLinesMatching": ["<substring>", ...],
 //                 "rig": "strip"|"grid"|"cloud",
 //                 "pixels": <n>, "grid": [w, h],
+//                 "vars": { "orig": {"<name>": <number>, ...},
+//                           "port": {"<name>": <number>, ...} },
 //                 "note": "why" } }
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -91,6 +102,49 @@ export function rigOverride(slug) {
   if (Number.isFinite(fx.pixels)) out.pixels = fx.pixels;
   if (Array.isArray(fx.grid) && fx.grid.length === 2) out.grid = [fx.grid[0], fx.grid[1]];
   return Object.keys(out).length ? out : null;
+}
+
+/** This slug's per-side exported-var pins, or null: `{ orig: {}, port: {} }`.
+ *
+ *  Both sides are always present (empty when unpinned) so callers can spread
+ *  them without null checks. The manifest is tracked, hand-edited and small —
+ *  a malformed entry throws rather than silently pinning nothing, because a
+ *  var that quietly fails to apply looks exactly like a black pattern. */
+const SIDES = ["orig", "port"];
+export function varsOverride(slug) {
+  const fx = fixupFor(slug);
+  const spec = fx?.vars;
+  if (spec == null) return null;
+  if (typeof spec !== "object" || Array.isArray(spec)) {
+    throw new Error(`fixups.json: ${slug}.vars must be an object of {orig,port}`);
+  }
+  for (const key of Object.keys(spec)) {
+    if (!SIDES.includes(key)) {
+      throw new Error(`fixups.json: ${slug}.vars has unknown side "${key}" (want orig/port)`);
+    }
+  }
+  const out = {};
+  for (const side of SIDES) {
+    const vals = spec[side] ?? {};
+    if (typeof vals !== "object" || Array.isArray(vals)) {
+      throw new Error(`fixups.json: ${slug}.vars.${side} must be an object of name=number`);
+    }
+    out[side] = {};
+    for (const [name, v] of Object.entries(vals)) {
+      if (typeof v !== "number" || !Number.isFinite(v)) {
+        throw new Error(`fixups.json: ${slug}.vars.${side}.${name} must be a finite number`);
+      }
+      // Vars cross the engine ABI as 16.16; anything wider would wrap into an
+      // unrelated value instead of failing.
+      if (Math.abs(v) >= 32768) {
+        throw new Error(
+          `fixups.json: ${slug}.vars.${side}.${name} = ${v} is outside the 16.16 range (±32768)`,
+        );
+      }
+      out[side][name] = v;
+    }
+  }
+  return Object.keys(out.orig).length || Object.keys(out.port).length ? out : null;
 }
 
 /** The sweep's default rig geometry for a pair, with any fixup override

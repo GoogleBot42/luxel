@@ -132,6 +132,19 @@ export class Engine {
     return r === I32_MIN ? null : r / RAW;
   }
 
+  /** Push a value into an EXPORTED var — the surface an external client writes
+   *  over PB's vars API. Returns true when the pattern exports `name`; only
+   *  exported globals are settable, exactly as on hardware. */
+  setVar(name, value) {
+    if (!Number.isFinite(value)) return false;
+    const s = this.host.putStr(name);
+    try {
+      return this.e.lx_set_var(this.h, s.ptr, s.len, Math.round(value * RAW)) === 1;
+    } finally {
+      s.free();
+    }
+  }
+
   /** Row-major W×H grid map (rows implied by pixelCount/w). */
   setMapGrid(w, h) {
     this.e.lx_set_map_grid(this.h, w, h);

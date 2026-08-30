@@ -123,7 +123,7 @@ function makePainter(rig) {
 // ---- one rendered side ------------------------------------------------------
 
 class Side {
-  /** @param opts {label, source, loadError, rig, big, onReady} */
+  /** @param opts {label, source, loadError, rig, vars, big, onReady} */
   constructor(opts) {
     this.o = opts;
     this.rig = opts.rig;
@@ -199,6 +199,11 @@ class Side {
     this.wants = this.engine.wantsSensors();
     this.rigNote.textContent = `${this.rig.pixels}px${this.wants ? " · beat120" : ""}`;
     for (const [name, vals] of Object.entries(this.values)) this.engine.setControl(name, vals);
+    // Exported-var pins from tools/verify/fixups.json, pushed once after init
+    // the way an external client would — a driven original (a mapper helper, a
+    // home-automation bridge) renders nothing until something writes its var.
+    // After the controls, so a control handler cannot clobber a pinned var.
+    for (const [name, value] of Object.entries(this.o.vars ?? {})) this.engine.setVar(name, value);
     this.o.onReady?.(this);
   }
 
@@ -423,12 +428,14 @@ function activate(card) {
       source: pair.origSource,
       loadError: pair.origError,
       rig: pair.rig,
+      vars: pair.vars?.orig,
     }),
     port: new Side({
       label: "Port",
       source: pair.portSource,
       loadError: pair.portError,
       rig: pair.rig,
+      vars: pair.vars?.port,
     }),
   };
   card.sidesEl.append(card.sides.orig.el, card.sides.port.el);
@@ -689,6 +696,7 @@ function openModal(pair) {
       source,
       loadError: err,
       rig: pair.rig,
+      vars: pair.vars?.[key],
       big: true,
       onReady: () => {
         const built = controlPanel(side, source);

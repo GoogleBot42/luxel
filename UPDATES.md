@@ -1,5 +1,48 @@
 # Update log
 
+## 2026-08-29 — Verify harness learns to DRIVE a pattern: `--vars-*` pins
+## exported vars, and automap goes orig-unrenderable 0 → close 7 (#122)
+
+The last silent-null holdout from #108 was never an engine gap. `automap`
+is a mapping HELPER: an external client writes a pixel index into an
+exported var and the pattern lights exactly that pixel. At its default
+index nothing lit is the CORRECT render — the harness simply had no way
+to write to a pattern, so the judge saw black and scored the pair
+`orig-unrenderable` 0.
+
+- **`enginehost.mjs` gained `setVar()`** — wrapping the `lx_set_var` ABI
+  entry that already existed (values scale into raw 16.16; only EXPORTED
+  globals are settable, exactly as on hardware, so the wrapper returns
+  whether the name existed instead of no-oping silently).
+- **`snap.mjs` gained `--vars-orig` / `--vars-port`** (per side, because
+  the two sides of a pair may NAME the same variable differently — which
+  is exactly what automap does) and `--no-vars` (render a pinned pair
+  UNDRIVEN; an empty `--vars-*` cannot express "no value"). Values land
+  once, after init and after any `--controls-*`, before the first frame —
+  the same single write a companion app makes. meta.json now carries
+  `varsExported` + `varsApplied` per side, so a judge can see the var
+  interface and what actually landed.
+- **`fixups.json` gained a per-side `vars` key**, and automap pins both
+  sides to mid-strip index 30 declaratively. All three consumers apply it
+  (snap.mjs, report.mjs, and the live review UI — verified in real
+  chromium: both canvases light pixel 30 red).
+- **Re-judged: `orig-unrenderable` 0 → `close` 7** (high confidence, ~50
+  render experiments). Driven, the two sides are byte-identical at every
+  index tried, on strip / 32×8 grid / 5×5×5 cloud, 12–300 px, across
+  seeds, clocks and a 60 s window. Two real port defects fell out that no
+  visual diff could ever have shown: the port renames the exported var
+  (`pixelIndex` vs `pixel`), so a mapper client written for the original
+  silently fails to drive the port, and at a negative index the port runs
+  a self-scanning demo the original does not have (original: black).
+- JUDGE.md now teaches the surface (a black side that exports vars may be
+  DRIVEN, not unrenderable), plus a trap the re-judge hit: whole-rig
+  `meanBrightness` rounds to 0 on single-pixel patterns, so `mean 0` is
+  not evidence of a black render.
+
+Verified: renders on three untouched pairs are byte-identical (PNG
+sha256) to the same runs on the pre-change harness, so the no-vars path
+is provably unchanged.
+
 ## 2026-08-29 — #132: const→owned COW promotion is budget-checked
 
 `Vm::arr_mut`'s copy-on-write materialization added
