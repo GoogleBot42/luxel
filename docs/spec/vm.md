@@ -48,6 +48,12 @@ A value (`Value`) is one of:
   runtime error. Arrays are never freed (PB-faithful — a real PB
   exhausts identically under per-frame allocation), so re-binding a
   variable orphans its old array's charge permanently.
+- The 4-unit header is charged for **every** array, zero-length ones
+  included (`array(0)`, `[]`). That is what bounds the arena's slot
+  vector at 10,236 / 4 = 2,559 entries, and it is the only bound on a
+  host build, where the device byte budget (`array_byte_budget`) is
+  `usize::MAX` — see Gitea #124 and the `array0_*` tests in
+  `crates/luxel-core/tests/engine.rs`.
 - Indexing truncates fractional indices toward zero — for reads **and**
   writes. Any out-of-bounds or negative index (read or write) raises a
   runtime error that aborts the current entry point. (PB divergence, on

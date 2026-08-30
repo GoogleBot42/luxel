@@ -703,6 +703,18 @@ impl Engine {
         self.vm.array(&self.prog, id).map(|a| a.len()).unwrap_or(0)
     }
 
+    /// Live array-arena occupancy: `(slots, elements, bytes)`. Arrays are
+    /// never freed within a Vm, so all three only grow; the element ledger
+    /// (and its per-array header) is what bounds them — see
+    /// `ARRAY_HEADER_UNITS`.
+    pub fn arena_stats(&self) -> (usize, usize, usize) {
+        (
+            self.vm.arena_slots(),
+            self.vm.arena_elems(),
+            self.vm.arena_bytes(),
+        )
+    }
+
     /// Read an element of an exported array variable.
     pub fn var_array(&self, name: &str) -> Option<&[Value]> {
         match self.var(name)? {

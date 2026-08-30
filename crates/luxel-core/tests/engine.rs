@@ -719,6 +719,88 @@ fn per_frame_allocation_exhausts_like_pb() {
     assert!(err.message.contains("array element budget"), "{}", err.message);
 }
 
+// ---- zero-length arrays and the arena slot vector (Gitea #124) ----
+//
+// `array_byte_budget` is `usize::MAX` on hosts, so the ELEMENT ledger is the
+// only thing standing between `while (1) t = array(0)` and host OOM. It
+// holds because every array — length 0 included — charges
+// ARRAY_HEADER_UNITS, capping the arena at
+// DEFAULT_ARRAY_BUDGET / ARRAY_HEADER_UNITS = 2,559 slots.
+
+/// Cap implied by the header charge; the tests below must not drift from it.
+const ARENA_SLOT_CAP: usize =
+    luxel_core::vm::DEFAULT_ARRAY_BUDGET / luxel_core::vm::ARRAY_HEADER_UNITS;
+
+#[test]
+fn array0_in_a_tight_loop_cannot_grow_the_arena_unboundedly() {
+    // one frame, 10k attempted allocations: the arena must stop at the cap
+    // and report the budget error rather than growing with the loop
+    let src = "export var n\n\
+               export function beforeRender(delta) {\n\
+                 i = 0\n n = 0\n\
+                 while (i < 10000) { t = array(0)\n i = i + 1\n n = i }\n\
+               }\n\
+               export function render(i) { rgb(0,0,0) }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    e.frame(Fx::from_int(10));
+    let (slots, elems, bytes) = e.arena_stats();
+    assert_eq!(slots, ARENA_SLOT_CAP, "arena slot vector must stop at the cap");
+    assert_eq!(elems, ARENA_SLOT_CAP * luxel_core::vm::ARRAY_HEADER_UNITS);
+    assert!(bytes <= 128 * 1024, "arena bytes unbounded: {bytes}");
+    // the loop aborted at the cap, not after all 10,000 iterations
+    assert_eq!(e.var("n"), Some(Value::Num(Fx::from_int(ARENA_SLOT_CAP as i32))));
+    let err = e.take_error().expect("budget error recorded");
+    assert!(err.message.contains("array element budget"), "{}", err.message);
+}
+
+#[test]
+fn array0_per_frame_stops_growing_the_arena() {
+    // the per-frame shape from the issue: running well past the cap's worth
+    // of frames must leave the arena at the same cap a single frame reaches
+    let src = "export function beforeRender(delta) { t = array(0) }\n\
+               export function render(i) { rgb(0,0,0) }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    for _ in 0..ARENA_SLOT_CAP + 500 {
+        e.frame(Fx::from_int(10));
+    }
+    assert_eq!(e.arena_stats().0, ARENA_SLOT_CAP);
+    let err = e.take_error().expect("budget error recorded");
+    assert!(err.message.contains("array element budget"), "{}", err.message);
+}
+
+#[test]
+fn empty_array_literals_charge_the_header_too() {
+    // `[]` takes the const-pool path (CONST_ARR), a separate allocator from
+    // `array(0)`'s NEW_ARRAY — it must charge the same 4-unit header
+    let src = "export function beforeRender(delta) { t = [] }\n\
+               export function render(i) { rgb(0,0,0) }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    for _ in 0..ARENA_SLOT_CAP + 100 {
+        e.frame(Fx::from_int(10));
+    }
+    assert_eq!(e.arena_stats().0, ARENA_SLOT_CAP);
+    assert!(e
+        .take_error()
+        .expect("budget error recorded")
+        .message
+        .contains("array element budget"));
+}
+
+#[test]
+fn a_fresh_engine_starts_with_an_empty_arena() {
+    // pattern switch = new Vm: the arena a runaway pattern filled must not
+    // follow the next one (the playground reloads through Engine::new)
+    let src = "export function beforeRender(delta) { t = array(0) }\n\
+               export function render(i) { rgb(0,0,0) }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    for _ in 0..ARENA_SLOT_CAP + 10 {
+        e.frame(Fx::from_int(10));
+    }
+    assert_eq!(e.arena_stats().0, ARENA_SLOT_CAP);
+    let fresh = Engine::new(src, 1, 1).unwrap();
+    assert_eq!(fresh.arena_stats(), (0, 0, 0));
+}
+
 // ---- setPalette live-aliasing (oracle-confirmed 2026-08-29,
 // tools/oracle/alias-probes.mjs: in-place writes through the installed
 // array changed paint()'s output with no second setPalette call) ----
