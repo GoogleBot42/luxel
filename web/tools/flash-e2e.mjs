@@ -6,7 +6,8 @@
 //      opaque probe → manual board pick → auto flash → reboot →
 //      Luxel detected → assets push → done
 //   2. WLED 0.14+ (CORS on): arch is read and the board list filters
-//   3. esp8266: hard stop
+//   3. esp8266: hard stop; 3b: an ESP32 chip with release images but no
+//      takeover support (S3) stops too, pointing at the downloads
 //   4. github mode (api.github.com mocked via request interception):
 //      binaries via file picker instead of same-origin fetch
 //
@@ -168,6 +169,21 @@ try {
   );
   check("S3 no flash section offered", (await page.$('[data-role="flash-btn"]')) === null);
   await page.screenshot({ path: `${shotDir}/flash-e2e-4-esp8266.png` });
+  await page.close();
+
+  // ── scenario 3b: an ESP32 chip releases build for but the takeover can't ──
+  await startWled({ FAKE_WLED_CORS: "1", FAKE_WLED_ARCH: "esp32-s3" });
+  page = await openPage();
+  await probeAt(page, `localhost:${WLED_PORT}`);
+  await page.waitForSelector('[data-role="arch-stop"]', { timeout: 5000 });
+  const s3Stop = await page.$eval('[data-role="arch-stop"]', (e) => e.textContent);
+  check(
+    "S3b unflashable ESP32 chip points at the release downloads",
+    s3Stop.includes("esp32s3") && /untested on real hardware/.test(s3Stop),
+    s3Stop.replace(/\s+/g, " ").trim(),
+  );
+  check("S3b no flash section offered", (await page.$('[data-role="flash-btn"]')) === null);
+  await page.screenshot({ path: `${shotDir}/flash-e2e-4b-esp32s3.png` });
   await page.close();
 
   // ── scenario 4: github mode → file-picker path ──

@@ -1,5 +1,37 @@
 # Update log
 
+## 2026-08-30 — The installer stops claiming only two chips are built (#57)
+
+The installer page told anyone with an unsupported chip that "only classic
+ESP32 and ESP32-C3 are built today". That stopped being true on 2026-08-22:
+the release workflow builds eight board variants across ESP32, C3, S3 and
+C6. The images exist; what does not exist is any hardware to test the new
+ones on (#56), so they ship as artifact downloads and the takeover flow
+deliberately doesn't offer them. The copy now says that instead — the
+takeover covers the chips it covers, other ESP32 chips have release images
+that are untested on real hardware and flashed by hand. Same for the
+footer, which made the same "works on ESP32 and ESP32-C3" claim about
+Luxel as a whole rather than about the takeover.
+
+The durable part is where the chip list lives. It was written out three
+times — the `archUnsupported` predicate, the error text, the footer — so
+adding a chip meant finding all three. `releases.ts` now owns one
+`FLASHABLE_CHIPS` record; `isFlashableChip()` and the user-facing
+`FLASHABLE_CHIP_NAMES` string both come from it, and the `BOARDS` comment
+says out loud that it is a *subset* of what the pipeline builds rather than
+a mirror of it. Neither the error text nor the footer enumerates the
+release variants, so the release workflow can grow boards without dating
+this page again.
+
+`flash-e2e.mjs` grew scenario 3b for the case the old copy got wrong: a
+WLED device reporting `esp32-s3` hits the stop with the release-download
+wording and gets no flash button. The pre-existing esp8266 stop (a
+genuinely never-supported chip, not a not-yet one) is untouched. Verified
+in real chromium: 15/15 flash-e2e checks green, `svelte-check` clean.
+
+No decision was made about whether S3/C6 belong in the board list — that is
+still #57, still gated on #56.
+
 ## 2026-08-30 — The installation's palette is a device setting now (#139)
 
 `setOutputPalette(pal, amount)` shipped with the global post-process chain,

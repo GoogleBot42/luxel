@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    FLASHABLE_CHIP_NAMES,
+    isFlashableChip,
     loadFirmwareSource,
     normalizeArch,
     type BoardImage,
@@ -43,8 +45,7 @@
 
   // What the probe tells us about which chips can be right.
   $: arch = probe?.kind === "wled" ? normalizeArch(probe.arch) : null;
-  $: archUnsupported =
-    arch !== null && arch !== "esp32" && arch !== "esp32c3" ? arch : null;
+  $: archUnsupported = arch !== null && !isFlashableChip(arch) ? arch : null;
 
   // ── step 3: pick a board ──
   let boardId = "";
@@ -266,10 +267,11 @@
             This is an <strong>ESP8266</strong> device. Luxel needs an ESP32-class chip —
             ESP8266 can't run it, and never will (not enough RAM). Sorry!
           {:else}
-            Chip <code>{archUnsupported}</code> has no Luxel build yet — only classic
-            ESP32 and ESP32-C3 are built today. Watch the
-            <a href="https://github.com/GoogleBot42/luxel/releases" target="_blank" rel="noreferrer">releases</a>
-            for new targets.
+            Chip <code>{archUnsupported}</code> can't be taken over from this page — the
+            takeover covers {FLASHABLE_CHIP_NAMES} devices. Luxel builds images for more
+            ESP32 chips than that, but they're untested on real hardware, so for now
+            they're downloads you flash yourself: see the
+            <a href="https://github.com/GoogleBot42/luxel/releases" target="_blank" rel="noreferrer">releases</a>.
           {/if}
         </p>
       {/if}
@@ -432,7 +434,8 @@
   <footer>
     <a href="index.html">Luxel playground</a> ·
     <a href="https://github.com/GoogleBot42/luxel" target="_blank" rel="noreferrer">GitHub</a>
-    · Works on ESP32 and ESP32-C3 devices with at least 4 MB flash.
+    · Takes over WLED on {FLASHABLE_CHIP_NAMES} devices with at least 4 MB flash; other
+    ESP32 chips have release images, but no one-click path yet.
   </footer>
 </main>
 
