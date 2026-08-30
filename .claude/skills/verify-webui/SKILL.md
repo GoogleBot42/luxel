@@ -91,6 +91,21 @@ rolls back silently to the same version string.
 - Two sessions' `vite preview`/`e2e.mjs` runs colliding on the default port — always a
   silent wrong-app pass, never a loud error. If tile counts or UI look "off" for no
   reason, check for a stale process on the port before debugging the change itself.
+- `device-e2e.mjs` dying mid-suite with `ECONNREFUSED 127.0.0.1:8723` — its mirror port
+  is hardcoded (no `E2E_PORT` for it), so a concurrent session's `luxel serve`, or your
+  own orphan from a previous aborted run, takes it. `ss -tlnp | grep 8723` then
+  `ls -l /proc/<pid>/cwd` tells you whose it is; kill your own and re-run before
+  suspecting the change.
+- A `page.click` on a Settings-tab field throwing "Node is either not clickable or not
+  an Element" — the settings panel is rendered into the DOM even while the editor is
+  open (`hidden={editing || tab !== "settings"}`), so the element *exists* and
+  `page.$(...)` finds it, but it has no clickable box. That's why every Settings field
+  in `device-e2e.mjs` is driven with `page.$eval` + `dispatchEvent("input")` and
+  `"change"` rather than real clicks — the one place in this repo where the
+  real-clicks rule doesn't apply. (Dispatch BOTH events: Svelte `bind:value` needs
+  `input`, the `on:change` handler needs `change`.) To screenshot the panel you must
+  first leave the editor — click the "← Device Patterns" button, then
+  `[data-role="tab-settings"]`.
 - Forgetting `npm run wasm`/`gen-gallery.mjs` reran after a `library/` or corpus change —
   `e2e.mjs`/`device-e2e.mjs` serve whatever `web/dist` currently holds, which is stale
   until you rebuild.

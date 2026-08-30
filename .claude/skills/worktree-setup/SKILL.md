@@ -100,6 +100,14 @@ origin master && git rebase origin/master`.
   that overlaps them (at minimum the affected test suite / e2e) before
   force-pushing — green-before-rebase proves nothing about the merged
   result.
+- **Measurements are verification too — take them AFTER the rebase.**
+  Firmware image sizes, `.stack`, heap numbers: a pre-rebase measurement
+  compared against a table another session updated the same day gives a
+  confidently wrong delta. 2026-08-29: the post-process chain looked like
+  +10 KB on RISC-V vs +5 KB on Xtensa (an interesting-sounding codegen
+  story that would have shipped into docs/boards.md); re-measured on the
+  rebased tree it was an even +3 KB everywhere. The baseline had moved,
+  not the cost.
 - If `tea pr merge` fails with "is it still open?" right after a
   force-push, Gitea is still re-checking mergeability — wait a few
   seconds and retry before diagnosing anything.
