@@ -265,12 +265,26 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; error?: string };
   }
 
-  /** Output pipeline: wire color order, gamma (×10), power cap (mA). */
-  async output(): Promise<{ order: string; gamma: number; capMa: number }> {
+  /**
+   * Output pipeline: wire color order, gamma (×10), power cap (mA), master-
+   * dimmer curve (×10), blur % and glow %. The last three are absent on
+   * firmware older than the post-process chain.
+   */
+  async output(): Promise<{
+    order: string;
+    gamma: number;
+    capMa: number;
+    brightCurve?: number;
+    blur?: number;
+    glow?: number;
+  }> {
     return (await (await this.fetch("/api/output")).json()) as {
       order: string;
       gamma: number;
       capMa: number;
+      brightCurve?: number;
+      blur?: number;
+      glow?: number;
     };
   }
 
@@ -279,10 +293,15 @@ export class DeviceSession {
     order: string,
     gammaTenths: number,
     capMa: number,
+    brightCurveTenths: number,
+    blurPct: number,
+    glowPct: number,
   ): Promise<{ ok: boolean; error?: string }> {
     const res = await this.fetch("/api/output", {
       method: "POST",
-      body: `${order} ${Math.round(gammaTenths)} ${Math.round(capMa)}`,
+      body:
+        `${order} ${Math.round(gammaTenths)} ${Math.round(capMa)}` +
+        ` ${Math.round(brightCurveTenths)} ${Math.round(blurPct)} ${Math.round(glowPct)}`,
     });
     return (await res.json()) as { ok: boolean; error?: string };
   }

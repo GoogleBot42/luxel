@@ -196,6 +196,17 @@ A real device needs a settings surface (page/dialog). Fields:
   encode buffer. Persisted in `LXDV` (v3). Settings has a protocol dropdown.
   Shipped firmware v0.1.14. Verified on hardware (sk9822↔ws2812↔sk9822, no
   crash, SPI restores full speed).
+- **Output pipeline** ✅ — the Output card, `GET/POST /api/output`, applied
+  live to every frame and persisted in the `LXDV` record (v7). Fields:
+  **Color order** (wire channel remap), **Gamma** (per-pixel content curve,
+  ×10; 0 = off), **Power cap** (mA; 0 = off), **Brightness curve**
+  (`brightCurve`, the *master dimmer's* response ×10 — distinct from gamma;
+  2.2 makes the slider feel linear, 0 = off), **Blur** (`blur`, 0–100 %,
+  3-tap softening along the pixel index) and **Glow** (`glow`, 0–100 %,
+  light-bleed bloom that keeps the source pixel at full). Chain order:
+  blur → glow → gamma → color order → power cap. The POST body is positional
+  and whitespace-separated; the last three tokens are optional so older
+  clients keep working (absent = keep the stored value).
 - **MQTT / Home Assistant** ✅ — shipped (firmware v0.1.19 + mirror):
   broker host/port/creds + HA discovery, `/api/mqtt` + Settings form.
 - **WiFi** ✅ — Settings form shipped (Phase 3); **AP-mode** provisioning

@@ -384,7 +384,16 @@ try {
   // output pipeline: settings round-trip through the form + API
   {
     const o0 = await (await fetch(`${DEV}/api/output`)).json();
-    check("output: defaults", o0.order === "rgb" && o0.gamma === 0 && o0.capMa === 0, JSON.stringify(o0));
+    check(
+      "output: defaults",
+      o0.order === "rgb" &&
+        o0.gamma === 0 &&
+        o0.capMa === 0 &&
+        o0.brightCurve === 0 &&
+        o0.blur === 0 &&
+        o0.glow === 0,
+      JSON.stringify(o0),
+    );
     await page.select('[data-role="out-order"]', "grb");
     await sleep(400);
     const o1 = await (await fetch(`${DEV}/api/output`)).json();
@@ -393,9 +402,52 @@ try {
       await fetch(`${DEV}/api/output`, { method: "POST", body: "bgr 22 1500" })
     ).json();
     check("output: POST sets all three", r.ok === true && r.gamma === 22 && r.capMa === 1500, JSON.stringify(r));
+    // post-process chain: the three trailing tokens are optional, so the
+    // three-token POST above must have LEFT them alone
+    check(
+      "output: legacy 3-token POST keeps the post-process settings",
+      r.brightCurve === 0 && r.blur === 0 && r.glow === 0,
+      JSON.stringify(r),
+    );
     const bad = await (await fetch(`${DEV}/api/output`, { method: "POST", body: "xyz 22 0" })).json();
     check("output: bad order rejected", bad.ok === false);
-    await fetch(`${DEV}/api/output`, { method: "POST", body: "rgb 0 0" }); // restore
+    const badBlur = await (
+      await fetch(`${DEV}/api/output`, { method: "POST", body: "rgb 0 0 22 101 0" })
+    ).json();
+    check("output: out-of-range blur rejected", badBlur.ok === false, JSON.stringify(badBlur));
+    const badCurve = await (
+      await fetch(`${DEV}/api/output`, { method: "POST", body: "rgb 0 0 51 0 0" })
+    ).json();
+    check("output: out-of-range brightness curve rejected", badCurve.ok === false);
+    // the three Settings fields drive them live
+    for (const [role, value, key, want] of [
+      ["out-brightcurve", "2.2", "brightCurve", 22],
+      ["out-blur", "30", "blur", 30],
+      ["out-glow", "45", "glow", 45],
+    ]) {
+      // same drive as every other Settings number field in this suite:
+      // the Output card sits far down a scrolling panel, so a real click
+      // lands on "Node is either not clickable" — set + dispatch instead
+      await page.$eval(
+        `[data-role="${role}"]`,
+        (el, v) => {
+          el.value = v;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        value,
+      );
+      await sleep(400);
+      const o = await (await fetch(`${DEV}/api/output`)).json();
+      check(`output: ${role} field applies`, o[key] === want, JSON.stringify(o));
+    }
+    const oAll = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "output: the three post-process fields coexist",
+      oAll.brightCurve === 22 && oAll.blur === 30 && oAll.glow === 45,
+      JSON.stringify(oAll),
+    );
+    await fetch(`${DEV}/api/output`, { method: "POST", body: "rgb 0 0 0 0 0" }); // restore
   }
 
   // wall clock: tz round-trips and local time tracks the host (mirror =

@@ -22,15 +22,17 @@ pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
 /// Device settings live in the next nvs sector, so writing them never disturbs
-/// the WiFi record. Record (v6): "LXDV" u8 version=6  u8 brightness  u8 protocol
+/// the WiFi record. Record (v7): "LXDV" u8 version=7  u8 brightness  u8 protocol
 /// u8 sync_mode  u32-LE pixel_count  i16-LE tz_minutes  u8 color_order
-/// u8 gamma_tenths  u16-LE cap_ma  u16 0  u32-LE checksum (24 bytes).
-/// v5 (16-byte body: tz but no output pipe), v4/v3 (12-byte body) read
-/// compatibly with defaults for the missing fields; older versions fail the
-/// version check and read as "no record" → defaults.
+/// u8 gamma_tenths  u16-LE cap_ma  u8 bright_curve_tenths  u8 blur_pct
+/// u8 glow_pct  u8[3] 0  u32-LE checksum (28 bytes).
+/// v6 (20-byte body: output pipe but no post-process stages), v5 (16-byte
+/// body: tz but no output pipe), v4/v3 (12-byte body) read compatibly with
+/// defaults for the missing fields; older versions fail the version check and
+/// read as "no record" → defaults.
 const DEV_OFFSET: u32 = 0xA000;
 const DEV_MAGIC: &[u8; 4] = b"LXDV";
-const DEV_VER: u8 = 6;
+const DEV_VER: u8 = 7;
 
 /// Persisted device settings. All fields are written together (read-modify-
 /// write) so setting one never clobbers the others.
@@ -50,6 +52,13 @@ pub struct DeviceConfig {
     pub gamma_tenths: u8,
     /// Power cap in mA (0 = off).
     pub cap_ma: u16,
+    /// Master-dimmer response curve × 10 (22 = γ2.2; 0/10 = off). Distinct
+    /// from `gamma_tenths`, which curves per-pixel content.
+    pub bright_curve_tenths: u8,
+    /// Post-process blur along the pixel index, 0..=100 % (0 = off).
+    pub blur_pct: u8,
+    /// Post-process light-bleed glow, 0..=100 % (0 = off).
+    pub glow_pct: u8,
 }
 
 fn checksum(bytes: &[u8]) -> u32 {
@@ -222,15 +231,16 @@ pub fn write_mqtt(cfg: Option<&MqttConfig>) -> Result<(), &'static str> {
 
 /// Read the persisted device settings, if a valid record exists.
 pub fn read_device() -> Option<DeviceConfig> {
-    let mut rec = [0u8; 24]; // 20-byte v6 body + checksum (older: shorter)
+    let mut rec = [0u8; 28]; // 24-byte v7 body + checksum (older: shorter)
     if !crate::assets::read_chunk(DEV_OFFSET, &mut rec) {
         return None;
     }
     let ver = rec[4];
-    if &rec[0..4] != DEV_MAGIC || !(ver == DEV_VER || ver == 5 || ver == 4 || ver == 3) {
+    if &rec[0..4] != DEV_MAGIC || !(ver == DEV_VER || ver == 6 || ver == 5 || ver == 4 || ver == 3) {
         return None;
     }
     let body = match ver {
+        7 => 24,
         6 => 20,
         5 => 16,
         _ => 12,
@@ -258,7 +268,12 @@ pub fn read_device() -> Option<DeviceConfig> {
     } else {
         (0, 0, 0)
     };
-    if brightness > 31 {
+    let (bright_curve_tenths, blur_pct, glow_pct) = if ver >= 7 {
+        (rec[18], rec[19], rec[20])
+    } else {
+        (0, 0, 0)
+    };
+    if brightness > 31 || bright_curve_tenths > 50 || blur_pct > 100 || glow_pct > 100 {
         return None;
     }
     Some(DeviceConfig {
@@ -270,6 +285,9 @@ pub fn read_device() -> Option<DeviceConfig> {
         color_order,
         gamma_tenths,
         cap_ma,
+        bright_curve_tenths,
+        blur_pct,
+        glow_pct,
     })
 }
 
@@ -279,7 +297,13 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     if cfg.brightness > 31 {
         return Err("brightness must be 0..=31");
     }
-    let mut rec: Vec<u8> = Vec::with_capacity(20);
+    if cfg.bright_curve_tenths > 50 {
+        return Err("brightness curve must be 0..=50 (gamma x10)");
+    }
+    if cfg.blur_pct > 100 || cfg.glow_pct > 100 {
+        return Err("blur/glow must be 0..=100 percent");
+    }
+    let mut rec: Vec<u8> = Vec::with_capacity(24);
     rec.extend_from_slice(DEV_MAGIC);
     rec.push(DEV_VER);
     rec.push(cfg.brightness);
@@ -290,7 +314,10 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     rec.push(cfg.color_order);
     rec.push(cfg.gamma_tenths);
     rec.extend_from_slice(&cfg.cap_ma.to_le_bytes());
-    rec.extend_from_slice(&[0, 0]);
+    rec.push(cfg.bright_curve_tenths);
+    rec.push(cfg.blur_pct);
+    rec.push(cfg.glow_pct);
+    rec.extend_from_slice(&[0, 0, 0]);
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());
     // word-aligned staging (same rationale as write_wifi)

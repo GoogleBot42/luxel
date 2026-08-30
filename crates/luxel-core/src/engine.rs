@@ -143,6 +143,11 @@ pub struct Engine {
     /// changes, so the per-pixel cost is one table lookup, not a pow().
     gamma_lut: Option<alloc::boxed::Box<[u8; 256]>>,
     gamma_lut_for: Fx,
+    /// 256-entry luma → color table for `setOutputPalette`, rebuilt only
+    /// when the installed palette changes (tracked by the VM's epoch), so
+    /// the per-pixel cost is a luma dot product and one table lookup.
+    remap_lut: Option<alloc::boxed::Box<[[u8; 3]; 256]>>,
+    remap_lut_for: u32,
     /// Map mode: this engine runs a *map program* (per-pixel `plot(x, y[, z])`)
     /// and collects coordinates instead of colors. Set via `enable_map_mode`.
     is_map: bool,
@@ -292,6 +297,8 @@ impl Engine {
             cur_delta: Fx::ZERO,
             gamma_lut: None,
             gamma_lut_for: Fx::ZERO,
+            remap_lut: None,
+            remap_lut_for: 0,
             is_map: false,
             map_coords: Vec::new(),
             map_dims: 0,
@@ -877,15 +884,12 @@ impl Engine {
                             self.map_dims = self.map_dims.max(self.vm.plot_dims);
                         } else {
                             let [r, g, b] = self.vm.pixel;
-                            let mut px = [quantize(r), quantize(g), quantize(b)];
-                            if let Some(lut) = self.gamma_lut() {
-                                px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
-                            }
-                            self.pixels[i as usize] = px;
+                            self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
                         }
                         if i + 1 < self.pixel_count {
                             self.run_stage = Some(RunStage::Pixel(i + 1));
                         } else {
+                            self.post_chain();
                             self.run_stage = None;
                             return;
                         }
@@ -921,14 +925,74 @@ impl Engine {
         &self.pixels
     }
 
+    /// The global post-process chain: whole-frame stages the engine runs
+    /// once, after the last `render()` call of a frame, in a fixed order —
+    ///
+    ///   `setOutputPalette` → `setBlur` → `setGlow` → `setGamma`
+    ///
+    /// Recolor first (it works on the pattern's own luma), then spread light
+    /// spatially, then apply the output transfer curve last, the way a
+    /// display pipeline does. Every stage is off by default and each costs
+    /// one comparison per frame when unset — an untouched pattern renders
+    /// exactly as it did before the chain existed.
+    ///
+    /// Cost when on, per frame: the palette remap is a 3-multiply luma plus
+    /// a table lookup per pixel (the 256-entry table is rebuilt only when
+    /// the palette changes), blur is 6 multiply-adds per pixel per pass,
+    /// glow is 3 compares plus 3 multiplies, gamma is 3 table lookups.
+    fn post_chain(&mut self) {
+        if self.is_map {
+            return;
+        }
+        if !self.vm.post_palette.is_empty() && self.vm.post_palette_amount != Fx::ZERO {
+            self.ensure_remap_lut();
+            if let Some(lut) = self.remap_lut.as_deref() {
+                let amount = fx_to_256(self.vm.post_palette_amount);
+                crate::outpipe::palette_remap_frame(&mut self.pixels, lut, amount);
+            }
+        }
+        // amount 0..1 → each neighbour's weight in 1/256ths, max 128
+        let k = fx_to_256(self.vm.post_blur) / 2;
+        if k > 0 {
+            crate::outpipe::blur_frame(&mut self.pixels, k, self.vm.post_blur_passes);
+        }
+        let glow = fx_to_256(self.vm.post_glow);
+        if glow > 0 {
+            crate::outpipe::glow_frame(&mut self.pixels, glow);
+        }
+        self.ensure_gamma_lut();
+        if let Some(lut) = self.gamma_lut.as_deref() {
+            for px in self.pixels.iter_mut() {
+                *px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
+            }
+        }
+    }
+
+    /// Cook the luma → color table for the installed `setOutputPalette`
+    /// stops, but only when the VM says they changed.
+    fn ensure_remap_lut(&mut self) {
+        let epoch = self.vm.post_palette_epoch;
+        if self.remap_lut.is_some() && self.remap_lut_for == epoch {
+            return;
+        }
+        let mut lut = alloc::boxed::Box::new([[0u8; 3]; 256]);
+        for (i, slot) in lut.iter_mut().enumerate() {
+            let v = Fx::from_raw(((i as i32) << 16) / 255);
+            let c = crate::vm::sample_palette(&self.vm.post_palette, v);
+            *slot = [quantize(c[0]), quantize(c[1]), quantize(c[2])];
+        }
+        self.remap_lut = Some(lut);
+        self.remap_lut_for = epoch;
+    }
+
     /// The output curve for the current `setGamma` value (rebuilt on change;
     /// gamma 0/1 disables). 255 always maps to 255.
-    fn gamma_lut(&mut self) -> Option<&[u8; 256]> {
+    fn ensure_gamma_lut(&mut self) {
         let g = self.vm.post_gamma;
         if g == Fx::ZERO || g == Fx::ONE {
             self.gamma_lut = None;
             self.gamma_lut_for = g;
-            return None;
+            return;
         }
         if self.gamma_lut.is_none() || self.gamma_lut_for != g {
             let mut lut = alloc::boxed::Box::new([0u8; 256]);
@@ -940,7 +1004,6 @@ impl Engine {
             self.gamma_lut = Some(lut);
             self.gamma_lut_for = g;
         }
-        self.gamma_lut.as_deref()
     }
 
     /// Take and clear the recorded error (hosts poll this per frame).
@@ -985,6 +1048,12 @@ pub fn check_asserts(
 /// frames diff bit-identical against previewFrame captures.
 fn quantize(v: Fx) -> u8 {
     ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255) >> 16) as u8
+}
+
+/// A post-process amount (Fx 0..1) as the 0..256 integer weight the
+/// `outpipe` frame stages take.
+fn fx_to_256(v: Fx) -> u32 {
+    ((v.raw().max(0) as u32) >> 8).min(256)
 }
 
 /// The three render entry candidates by name (`render`, `render2D`,

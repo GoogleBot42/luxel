@@ -211,12 +211,38 @@
   }
 
   // ---- output pipeline (device mode) ----
-  let outputStatus: { order: string; gamma: number; capMa: number } | null = null;
+  let outputStatus: {
+    order: string;
+    gamma: number;
+    capMa: number;
+    brightCurve: number;
+    blur: number;
+    glow: number;
+  } | null = null;
+
+  /** Fill in the post-process fields firmware older than the chain omits. */
+  function normalizeOutput(o: {
+    order: string;
+    gamma: number;
+    capMa: number;
+    brightCurve?: number;
+    blur?: number;
+    glow?: number;
+  }): NonNullable<typeof outputStatus> {
+    return {
+      order: o.order,
+      gamma: o.gamma,
+      capMa: o.capMa,
+      brightCurve: o.brightCurve ?? 0,
+      blur: o.blur ?? 0,
+      glow: o.glow ?? 0,
+    };
+  }
 
   async function refreshOutput(): Promise<void> {
     if (!device) return;
     try {
-      outputStatus = await device.output();
+      outputStatus = normalizeOutput(await device.output());
     } catch {
       /* older firmware without /api/output */
     }
@@ -226,7 +252,7 @@
     void (async () => {
       const o = outputStatus;
       if (!o) return;
-      await device?.setOutput(o.order, o.gamma, o.capMa);
+      await device?.setOutput(o.order, o.gamma, o.capMa, o.brightCurve, o.blur, o.glow);
       void refreshOutput();
     })();
   }
@@ -804,7 +830,7 @@
         /* older firmware without /api/mqtt — leave defaults */
       }
       try {
-        outputStatus = await session.output();
+        outputStatus = normalizeOutput(await session.output());
       } catch {
         /* older firmware without /api/output — card shows unavailable */
       }
@@ -2616,6 +2642,52 @@ export function render(index) {
                 on:change={onOutputChange}
               />
               <span class="dim">mA — frames estimated above this get scaled down; 0 = off</span>
+            </div>
+            <div class="field">
+              <span class="flabel">Brightness curve</span>
+              <input
+                class="num"
+                data-role="out-brightcurve"
+                type="number"
+                min="0"
+                max="5"
+                step="0.1"
+                value={outputStatus.brightCurve / 10}
+                on:change={(e) => {
+                  if (outputStatus)
+                    outputStatus.brightCurve = Math.round(Number(e.currentTarget.value) * 10);
+                  onOutputChange();
+                }}
+              />
+              <span class="dim">0 = off; 2.2 makes the dimmer feel linear</span>
+            </div>
+            <div class="field">
+              <span class="flabel">Blur</span>
+              <input
+                class="num"
+                data-role="out-blur"
+                type="number"
+                min="0"
+                max="100"
+                step="5"
+                bind:value={outputStatus.blur}
+                on:change={onOutputChange}
+              />
+              <span class="dim">% — softens the frame along the pixel index</span>
+            </div>
+            <div class="field">
+              <span class="flabel">Glow</span>
+              <input
+                class="num"
+                data-role="out-glow"
+                type="number"
+                min="0"
+                max="100"
+                step="5"
+                bind:value={outputStatus.glow}
+                on:change={onOutputChange}
+              />
+              <span class="dim">% — bright pixels bleed into their neighbours</span>
             </div>
           {:else}
             <p class="dim hint">not available on this firmware</p>
