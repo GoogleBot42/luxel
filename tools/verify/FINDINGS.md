@@ -199,11 +199,22 @@ via the half-turn), `rainbow-v2` Direction semantics.
    hsv(0,1,1); `synchronized-random-numbers`'s original renders zero
    randomness with a drift whose RATE AND SIGN depend on the frame delta.
    Per-frame randomness demonstrably works (seed changes other originals).
-3. **Out-of-range array/pixel writes hard-error** where real PB tolerates
-   them: `nano-orbital` (needs ≥144 px), `orv-christmas-tree`
-   (pixelCount%20), `rainbow-comet` (one-shot error at frame 982),
-   `rainbow-smiley` (≥32×32), `tixy` (walks off its formula table after
-   ~46 modes → 'call of a non-function value').
+3. ~~**Out-of-range array/pixel writes hard-error** where real PB tolerates
+   them~~ — **NOT AN ENGINE GAP** (Gitea #107, closed 2026-08-29). The
+   oracle was re-probed shape by shape (`tools/oracle/oob-probes.mjs`
+   Q1–Q8): a real PB errors on out-of-range reads and writes exactly like
+   Luxel, does not clamp or wrap or silently no-op, and leaves the target
+   array untouched. What made these patterns "work" on a device is the
+   error's narrow blast radius, already matched since #84. So
+   `nano-orbital` (≥144 px), `orv-christmas-tree` (pixelCount%20),
+   `rainbow-comet` (one-shot error at frame 982), `rainbow-smiley` (≥32×32)
+   and `tixy` (calls an unassigned slot of its formula table after ~46
+   modes) all behave the same way on real hardware — the errors are
+   original-side faults, which is how the judges already scored them, and
+   the `fixups.json` rig pins for the first three are correct rig data
+   rather than a workaround. One real divergence *was* found in the sibling
+   splat path (`arrayReplace`/`arrayReplaceAt` dropped out-of-range
+   elements silently instead of erroring) and is fixed.
 4. **32.768 s (2^15 ms) freeze family**: `fire-blue`, `fire-red`,
    `spring-colors` originals freeze byte-identical for exactly 32.8 s on
    repeating cycles with fps-dependent onset — a 16.16 wraparound

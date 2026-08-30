@@ -63,10 +63,14 @@ A value (`Value`) is one of:
   ordinary runtime error an over-budget `array(n)` does (it aborts the
   current entry point only; Gitea #132).
 - Indexing truncates fractional indices toward zero — for reads **and**
-  writes. Any out-of-bounds or negative index (read or write) raises a
-  runtime error that aborts the current entry point. (PB divergence, on
-  purpose: PB aborts on *literal*-index fractional writes but truncates
-  variable-index ones; we truncate uniformly. All OOB behavior matches.)
+  writes, literal and variable index alike — and the bounds check runs on
+  the truncated index, so `a[3.5]` on a 3-slot array is out of range. Any
+  out-of-bounds or negative index (read or write) raises a runtime error
+  that aborts the current entry point; the target array is left
+  **untouched** — no clamp to the last slot, no wrap modulo the length, no
+  partial write. All of this is PB-exact on fw 3.67 (Gitea #107,
+  `tools/oracle/oob-probes.mjs`); an earlier note claiming PB aborted on
+  literal-index fractional writes was re-probed and is wrong.
 
 ### 1.3 Equality
 

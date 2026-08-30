@@ -678,6 +678,128 @@ fn resource_guards_still_end_the_frame() {
     assert!(err.is_resource_guard());
 }
 
+// ---- Out-of-range writes are rejected, not tolerated (Gitea #107) ----
+//
+// Oracle fw 3.67 (tools/oracle/oob-probes.mjs Q5-Q7, 2026-08-29): PB does
+// not clamp, wrap or silently no-op an out-of-range write, the pattern
+// survives an erroring frame, and calling a never-assigned array slot is an
+// abort rather than a no-op. These pin the "tolerance" question closed:
+// anything that made an out-of-range access quietly succeed here would be a
+// divergence from the device, not a compatibility fix.
+
+#[test]
+fn rejected_out_of_range_write_leaves_the_array_untouched() {
+    // array(4) written at index 6 separates the hypotheses: clamp would
+    // land in slot 3, wrap (6 % 4) in slot 2. The oracle reports every slot
+    // still 0. The slots are read back in the NEXT invocation because the
+    // write aborts this one.
+    let mut e = Engine::new(
+        "a = array(4)\n\
+         export var phase, s0, s1, s2, s3\n\
+         export function beforeRender(delta) {\n\
+           if (phase == 0) { phase = 1\n  a[6] = 1 }\n\
+           else { s0 = a[0]\n  s1 = a[1]\n  s2 = a[2]\n  s3 = a[3] }\n\
+         }\n\
+         export function render(index) { rgb(0, 0, 0) }",
+        4,
+        1,
+    )
+    .unwrap();
+    e.frame(Fx::ZERO);
+    let err = e.take_error().expect("the out-of-range write is reported");
+    assert!(err.message.contains("out of bounds"), "{}", err.message);
+    e.frame(Fx::ZERO);
+    assert!(e.take_error().is_none(), "the read-back frame is clean");
+    for slot in ["s0", "s1", "s2", "s3"] {
+        assert_eq!(
+            e.var(slot),
+            Some(Value::Num(Fx::ZERO)),
+            "{slot} was mutated by the rejected write"
+        );
+    }
+}
+
+#[test]
+fn rejected_replace_span_leaves_the_array_untouched() {
+    // Oracle Q8f: an overrunning arrayReplaceAt writes NOTHING — not even
+    // the elements that would have landed in bounds (here slots 2 and 3
+    // before the one that runs off the end).
+    let mut e = Engine::new(
+        "b = array(4)\n\
+         export var phase, s0, s1, s2, s3\n\
+         export function beforeRender(delta) {\n\
+           if (phase == 0) { phase = 1\n  arrayReplaceAt(b, 2, 7, 8, 9) }\n\
+           else { s0 = b[0]\n  s1 = b[1]\n  s2 = b[2]\n  s3 = b[3] }\n\
+         }\n\
+         export function render(index) { rgb(0, 0, 0) }",
+        4,
+        1,
+    )
+    .unwrap();
+    e.frame(Fx::ZERO);
+    let err = e.take_error().expect("the overrun is reported");
+    assert!(err.message.contains("out of bounds"), "{}", err.message);
+    e.frame(Fx::ZERO);
+    for slot in ["s0", "s1", "s2", "s3"] {
+        assert_eq!(
+            e.var(slot),
+            Some(Value::Num(Fx::ZERO)),
+            "{slot} was written by the rejected splat"
+        );
+    }
+}
+
+#[test]
+fn pattern_survives_an_erroring_frame() {
+    // rainbow-comet's shape: it goes out of range at exactly one frame and
+    // must keep rendering afterwards. Oracle Q6: with an out-of-range write
+    // every third invocation, the frame counter keeps advancing.
+    let mut e = Engine::new(
+        "a = array(3)\n\
+         export var frames\n\
+         export function beforeRender(delta) {\n\
+           frames = frames + 1\n\
+           if (frames % 3 == 0) { a[9] = 1 }\n\
+         }\n\
+         export function render(index) { rgb(0, 1, 0) }",
+        4,
+        1,
+    )
+    .unwrap();
+    for f in 1..=9 {
+        let px = e.frame(Fx::ZERO);
+        assert_eq!(px[0], [0, 255, 0], "frame {f} must still render");
+        assert_eq!(e.take_error().is_some(), f % 3 == 0, "frame {f} error");
+    }
+    assert_eq!(e.var("frames"), Some(Value::Num(Fx::from_int(9))));
+}
+
+#[test]
+fn calling_an_unset_array_slot_aborts_only_that_invocation() {
+    // tixy's shape: the pattern walks off the end of its table of function
+    // values into a never-assigned slot, which holds 0, and calls it.
+    // Oracle Q7: PB aborts — it does not treat the 0 as a no-op — so the
+    // black frames such a pattern produces are faithful, and the pattern
+    // renders again as soon as the index comes back in range.
+    let mut e = Engine::new(
+        "t = array(4)\n\
+         t[0] = (v) => v\n\
+         export var frames\n\
+         export function beforeRender(delta) { frames = frames + 1 }\n\
+         export function render(index) { rgb(0, t[frames % 2](1), 0) }",
+        4,
+        1,
+    )
+    .unwrap();
+    let px = e.frame(Fx::ZERO); // frames == 1 → slot 1 is unset
+    assert_eq!(px[0], [0, 0, 0], "the bad slot renders black");
+    let err = e.take_error().expect("calling 0 is an error");
+    assert!(err.message.contains("non-function"), "{}", err.message);
+    let px = e.frame(Fx::ZERO); // frames == 2 → back to slot 0
+    assert_eq!(px[0], [0, 255, 0], "the next frame renders normally");
+    assert!(e.take_error().is_none());
+}
+
 // ---- PB array element ledger (oracle-bisected 2026-08-29, fw 3.67):
 // 10,236-unit budget, every array costs its length + a 4-unit header.
 // Boundary numbers below are the measured device answers, not derivations.

@@ -1,5 +1,69 @@
 # Update log
 
+## 2026-08-29 — Out-of-range writes: the oracle says PB does NOT tolerate
+## them either (#107 closed), and the splat builtins were the real gap
+
+The verify sweep's engine gap 3 held that "real Pixel Blaze tolerates
+out-of-range array/pixel writes where Luxel hard-errors", blocking a
+re-judge of five pairs. **The premise is false.** `tools/oracle/oob-probes.mjs`
+grew a second battery (Q1–Q8, fw 3.67) that asks the question shape by
+shape instead of inferring it from patterns that "visibly work":
+
+| probe | source (`a = array(3)`) | PB |
+|---|---|---|
+| Q1 / Q2 | `a[5] = 1` / `a[-1] = 1` | **aborts** |
+| Q3a / Q3b | `v = a[5]` / `v = a[-1]` | **aborts** |
+| Q4a | `v = a[1.5]` | tolerated, truncates |
+| Q4b | `v = a[3.5]` | **aborts** — truncate first, then bounds-check |
+| Q4c/d/e/f | fractional write: variable index, literal index, array literal, init scope | tolerated, truncates — **all four** |
+| Q5 | `array(4)`, `a[6] = 1`, read every slot back | untouched: no clamp, no wrap, no partial write |
+| Q6 | out-of-range write every 3rd invocation | frames 21 → 138 in 1.5 s — the pattern survives |
+| Q7 | `t = array(4); t[0](1, 2)` | **aborts** — calling an unassigned slot is not a no-op |
+
+So PB errors on exactly what Luxel errors on. What made `nano-orbital` and
+friends look tolerant on a device is the error's narrow blast radius — one
+handler invocation, not the pattern — which #84/PR #88 already matched.
+`rainbow-comet`'s one-shot frame-982 error and `tixy` walking off its
+formula table after ~46 modes happen on real hardware too; both are
+original-side faults, which is how the judges had already scored them, and
+the three `fixups.json` rig pins are correct rig data, not workarounds.
+**No fixup removed, no verdict changed** (rainbow-comet 4, tixy 4,
+nano-orbital 2, orv-christmas-tree 5, rainbow-smiley 6 — all re-rendered,
+stats unchanged).
+
+Two things did come out of it:
+
+- **A real divergence in the sibling splat path.**
+  `arrayReplace`/`arrayReplaceAt` were silently dropping every element that
+  fell outside the array and clamping a negative offset to slot 0 — the
+  opposite of what `a[i] = v` does. The oracle validates the span up front:
+  `offset + count > length` is a runtime error leaving the array
+  **completely** untouched (not even the in-bounds prefix lands, Q8f),
+  `offset + count == length` is the accepted boundary, and a negative
+  offset shifts rather than clamps. `vm.rs` now does exactly that, pinned
+  by `array_replace_span_is_bounds_checked` and
+  `rejected_replace_span_leaves_the_array_untouched`. No library or corpus
+  pattern uses either builtin, so nothing rendered changed.
+- **A VM panic found on the way in.** `arrayReplaceAt(b)` — the offset form
+  with nothing to splat — indexed `args[2..1]`, an inverted slice range, so
+  ordinary pattern source could panic the VM (on device: a reboot). It is
+  now the PB-shaped no-op, with the three too-few-args spellings pinned.
+- **A stale "deliberate divergence" retired.** A 2026-07 note claimed PB
+  aborts on a literal-index fractional write (`a[1.5] = 9`) and that
+  Luxel's uniform truncation diverged on purpose. Q4d/Q4e/Q4f say
+  otherwise in every form — it is an exact match. `vm.rs`, `docs/spec/vm.md`
+  and `docs/research/04-oracle-findings.md` corrected.
+
+Also filed: **#147**, two 6-argument `arrayReplace*` shapes that
+reproducibly HANG the oracle (websocket stops acking, device off WiFi for
+~a minute, recovers on its own — and explains two mystery dropouts during
+this session). Four-arg versions of both error cleanly, so the bounds rule
+was settled without them; `oob-probes.mjs`'s header names both and says not
+to add them back.
+
+Gates: `cargo test --workspace` green, `tools/check-library.sh` 322/322 on
+both grids, `tools/wasm-smoke.mjs` native ↔ wasm bit-identical.
+
 ## 2026-08-29 — The global post-process chain is finished: `setOutputPalette`
 ## → `setBlur` → `setGlow` → `setGamma`, plus a device brightness curve
 

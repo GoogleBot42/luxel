@@ -35,9 +35,14 @@
     - In-bounds integer read/write: normal.
     - In-bounds **fractional read truncates** (a[1.5] → a[1]).
     - **Everything else is a runtime error that aborts execution**: OOB reads
-      (a[5]), negative reads (a[-1], a[-0.5]), OOB fractional reads, and ALL
-      irregular writes — OOB, negative, and even in-bounds fractional
-      (a[1.5] = 9 aborts).
+      (a[5]), negative reads (a[-1], a[-0.5]), OOB fractional reads, and OOB
+      or negative writes.
+    - **CORRECTION 2026-08-29 (Gitea #107)**: this entry used to also list
+      "in-bounds fractional writes (a[1.5] = 9 aborts)". It does not — the
+      re-probe found `a[1.5] = 9` **tolerated and truncating** in every form
+      (literal index, `array(n)` target, array-literal target, and top-level
+      init scope). Luxel's uniform truncation is an exact match, not the
+      deliberate divergence the old note described.
     - **Blast radius of that abort** (probed 2026-08-22 for Gitea #84,
       `tools/oracle/oob-probes.mjs`): only the current handler invocation
       dies. Writes made before the abort stick; after a `beforeRender`
@@ -422,3 +427,93 @@ Still open, and why: **1D transform coords** (this oracle can never be
 mapless again — see the maps section above); **sensor-board accel/light
 scaling** (needs the physical PB sensor board); **no-time clock behavior**
 (untestable on a configured device).
+
+## Out-of-range index tolerance settled (probed 2026-08-29, fw 3.67 — Gitea #107)
+
+`tools/oracle/oob-probes.mjs` grew a second battery (Q1–Q7) to answer the
+question #84 left open: is an out-of-range array access an *error* on PB at
+all, or does PB tolerate it (clamp / wrap / silent no-op)? The verify sweep
+had inferred tolerance from corpus patterns that go out of range every frame
+and visibly work on a real device.
+
+**The premise is false.** PB errors on exactly the shapes Luxel errors on.
+What made those patterns "work" is the narrow blast radius already fixed in
+#84 (the abort kills one handler invocation, not the pattern), not tolerance.
+
+Measured, `a = array(3)` unless noted, `before`/`after` sentinels bracketing
+the statement inside `beforeRender`:
+
+| probe | source | result |
+|---|---|---|
+| Q1 | `a[5] = 1` | **aborts** at the statement |
+| Q2 | `a[-1] = 1` | **aborts** |
+| Q3a | `v = a[5]` | **aborts** |
+| Q3b | `v = a[-1]` | **aborts** |
+| Q4a | `a[1] = 11; v = a[1.5]` | tolerated, truncates → 11 |
+| Q4b | `v = a[3.5]` | **aborts** (truncate first, then bounds-check) |
+| Q4c | `i = 1.5; a[i] = 9` | tolerated, truncates → `a[1] == 9` |
+| Q4d | `a[1.5] = 9` (literal index) | tolerated, truncates → `a[1] == 9` |
+| Q4e | `b = [10,20,30]; b[1.5] = 9` | tolerated, truncates |
+| Q4f | same, in top-level init scope | tolerated, truncates |
+| Q5 | `a = array(4); a[6] = 1` then read every slot next frame | array **untouched** — no clamp (slot 3), no wrap (slot 2), no partial write |
+| Q6 | out-of-range write every 3rd invocation | frame counter kept advancing 21 → 138 in 1.5 s: the pattern **survives** erroring frames |
+| Q7 | `t = array(4); t[0](1, 2)` | **aborts** — calling a never-assigned slot is an error, not a no-op |
+
+The **sibling splat path** was the one real divergence (`b = array(4)` unless
+noted; Luxel used to silently drop every element that fell outside the array
+and to clamp a negative offset to slot 0):
+
+| probe | source | result |
+|---|---|---|
+| Q8a | `arrayReplaceAt(b, 3, 7, 8, 9)` | **aborts** (would write 3,4,5) |
+| Q8b | `arrayReplaceAt(b, 9, 7)` | **aborts** |
+| Q8e | `arrayReplace(array(2), 1, 2, 3)` | **aborts** — the offset-0 form checks too |
+| Q8g | `arrayReplaceAt(b, 2, 7, 8)` | tolerated — `off + count == length` is the accepted boundary, `b[3] == 8` |
+| Q8f | `arrayReplaceAt(b, 2, 7, 8, 9)` then read back | **nothing written** — all-or-nothing, not even the in-bounds prefix |
+| Q8c | `arrayReplaceAt(b, -1, 7)` | tolerated, `b[0]` untouched |
+| Q8d | `arrayReplaceAt(b, -1, 7, 8)` | tolerated, `b[0] == 8` — a negative offset **shifts**, it does not clamp |
+
+So the rule is: the span is validated up front (`offset + count > length` →
+runtime error, array untouched), and a negative offset is not validated at
+all. PB gets the Q8c/Q8d behavior by storing through a negative index —
+memory-unsafe, and it is how the hazard below arises. Luxel matches the
+observable in-range half and skips the rest.
+
+**DEVICE HAZARD.** Two shapes reproducibly hang the oracle's engine (the
+websocket stops acking `setCode`, and it drops off WiFi for a minute or so
+before recovering on its own — four identical reproductions, plus two
+unexplained dropouts before the pattern was spotted):
+
+    arrayReplace(array(4), 1, 2, 3, 4, 5)       // 6-arg call, overruns
+    arrayReplaceAt(array(4), -3, 1, 2, 3, 4)    // 6-arg call, 3 negative
+
+Both are 6-argument calls, and 4-argument versions of both shapes error
+cleanly (Q8e, Q8c) — so the bounds rule above is probe-able without the
+hang, and `oob-probes.mjs` deliberately contains neither. Whether the
+trigger is the argument count or the number of unchecked negative stores is
+unresolved and deliberately not probed further.
+
+Consequences:
+
+- **The tolerance premise needed no engine change at all.** Luxel already
+  matched every Q1–Q7 row; they are now pinned by
+  `crates/luxel-core/tests/semantics.rs` (`array_bounds_are_runtime_errors`)
+  and three tests in `crates/luxel-core/tests/engine.rs` (untouched-array,
+  survives-an-erroring-frame, unset-array-slot-call).
+- **The Q8 splat divergence was fixed** in `vm.rs`'s
+  `ArrayReplace | ArrayReplaceAt` arm, pinned by
+  `array_replace_span_is_bounds_checked` and
+  `rejected_replace_span_leaves_the_array_untouched`. No library or corpus
+  pattern uses either builtin, so nothing rendered changed.
+- **Q4d/Q4e/Q4f retire a documented divergence.** The 2026-07 note that PB
+  aborts on a *literal*-index fractional write does not reproduce; every
+  fractional-write form truncates. See the correction in item 10 above.
+- **The `tools/verify/fixups.json` rig overrides stay.** nano-orbital,
+  nyan-lights and orv-christmas-tree go out of range on the sweep's default
+  rig because their authors wrote them for a specific fixture — a real PB
+  errors there too. The overrides are correct rig data, not a workaround for
+  an engine gap.
+- **rainbow-comet and tixy are faithful.** rainbow-comet's original glitches
+  one frame (Q6 shape) and recovers; tixy's original calls an unset slot of
+  its 100-entry formula table once its mode counter walks past the last
+  assigned formula and goes black (Q7 shape). A real PB does both.

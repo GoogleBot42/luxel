@@ -261,13 +261,23 @@ fn prng_is_seeded_and_deterministic() {
 #[test]
 fn array_bounds_are_runtime_errors() {
     // oracle-confirmed: out-of-range access aborts execution — OOB reads
-    // and writes and negative indices
+    // and writes and negative indices. Re-probed for Gitea #107 on fw 3.67
+    // (tools/oracle/oob-probes.mjs Q1-Q4): PB does NOT tolerate these. It
+    // does not clamp, wrap or silently no-op — every shape below aborts the
+    // handler invocation exactly as Luxel does. The "PB tolerates
+    // out-of-range writes" premise came from the abort's narrow blast
+    // radius (Gitea #84), not from tolerance.
     for src in [
         "a = [1]\nout = a[5]",
         "a = [1]\na[5] = 9",
         "a = [1, 2]\nout = a[-1]",
         "a = [1, 2]\ni = -0.5\nout = a[i]",
         "a = [1, 2]\ni = -1\na[i] = 9",
+        // the index truncates FIRST, then the bounds check runs, so an
+        // out-of-range fractional index is an error too (oracle Q4b)
+        "a = [1, 2]\nout = a[2.5]",
+        "a = [1, 2]\na[2.5] = 9",
+        "a = [1, 2]\ni = 2.5\nout = a[i]",
     ] {
         let e = Engine::new(src, 10, 1).unwrap();
         let err = e
@@ -289,6 +299,77 @@ fn array_bounds_are_runtime_errors() {
         eval_prog("a = [10, 20, 30]\ni = 1.5\na[i] += 9\nexport var out = a[1]"),
         Fx::from_int(29)
     );
+    // …in EVERY form. A 2026-07 note claimed PB aborted on a *literal*
+    // fractional index write (`a[1.5] = 9`) and that Luxel's uniform
+    // truncation was a deliberate divergence. Re-probed for #107 on fw 3.67
+    // (oob-probes.mjs Q4d/Q4e/Q4f): the literal-index form, the
+    // array-literal target and top-level init scope are all tolerated and
+    // all truncate. There is no divergence — this is an exact match.
+    assert_eq!(
+        eval_prog("a = [10, 20, 30]\na[1.5] = 9\nexport var out = a[1]"),
+        Fx::from_int(9)
+    );
+    assert_eq!(
+        eval_prog("a = array(3)\na[1.5] = 9\nexport var out = a[1]"),
+        Fx::from_int(9)
+    );
+}
+
+#[test]
+fn array_replace_span_is_bounds_checked() {
+    // Oracle #107 (fw 3.67, oob-probes.mjs Q8): the splat forms are checked
+    // as a whole span. `offset + count > length` is a runtime error — the
+    // engine used to silently drop the overflowing elements, which was the
+    // opposite of what `a[i] = v` does.
+    for src in [
+        "b = array(4)\narrayReplaceAt(b, 3, 7, 8, 9)",
+        "b = array(4)\narrayReplaceAt(b, 9, 7)",
+        "b = array(2)\narrayReplace(b, 1, 2, 3)",
+    ] {
+        let e = Engine::new(src, 10, 1).unwrap();
+        let err = e
+            .last_error
+            .unwrap_or_else(|| panic!("expected error for {src:?}"));
+        assert!(
+            err.message.contains("out of bounds"),
+            "{src:?}: {}",
+            err.message
+        );
+    }
+    // `offset + count == length` is the accepted boundary (Q8g)
+    assert_eq!(
+        eval_prog("b = array(4)\narrayReplaceAt(b, 2, 7, 8)\nexport var out = b[3]"),
+        Fx::from_int(8)
+    );
+    // a NEGATIVE offset neither errors nor clamps to slot 0: the splat
+    // shifts, and only the values landing at a valid index are stored, so
+    // one value at offset −1 writes nothing (Q8c) while two write b[0] (Q8d)
+    assert_eq!(
+        eval_prog("b = array(4)\narrayReplaceAt(b, -1, 7)\nexport var out = b[0]"),
+        Fx::ZERO
+    );
+    assert_eq!(
+        eval_prog("b = array(4)\narrayReplaceAt(b, -1, 7, 8)\nexport var out = b[0]"),
+        Fx::from_int(8)
+    );
+    // the method form is the offset-0 builtin (oracle 2026-08-22), unchanged
+    assert_eq!(
+        eval_prog("b = array(4)\nb.replace(2, 9)\nexport var out = b[0] * 10 + b[1]"),
+        Fx::from_int(29)
+    );
+    // …and with nothing to splat there is nothing to do. This used to PANIC
+    // the VM (`args[2..1]` is an inverted slice range) — on device a panic
+    // is a reboot, so a pattern typo could take the fixture down. PB drops
+    // the call, missing args being nothing to write.
+    for src in [
+        "b = array(4)\narrayReplaceAt(b)\nexport var out = b[0]",
+        "b = array(4)\narrayReplaceAt(b, 1)\nexport var out = b[0]",
+        "b = array(4)\narrayReplace(b)\nexport var out = b[0]",
+    ] {
+        let e = Engine::new(src, 10, 1).unwrap();
+        assert!(e.last_error.is_none(), "{src:?}: {:?}", e.last_error);
+        assert_eq!(e.var("out"), Some(Value::Num(Fx::ZERO)), "{src:?}");
+    }
 }
 
 #[test]
