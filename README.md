@@ -28,13 +28,13 @@ patterns compile and run.
 
 **The playground** (`web/`) — a Svelte + TypeScript IDE served from device
 flash (or any static host): CodeMirror editor with live recompile, a
-195-pattern gallery with animated tiles (1D bars, 2D grids, rotating 3D
+322-pattern gallery with animated tiles (1D bars, 2D grids, rotating 3D
 clouds), step debugger with breakpoints, map editor (a debuggable map
 *program*), auto-generated controls, var watcher, shareable pattern URLs
 (maps included), `.epe` import/export, and a **sound toggle** that drives
 sound-reactive patterns from your microphone — locally and on the device.
 
-**The firmware** (`firmware/`, esp-hal + embassy on ESP32/ESP32-C3):
+**The firmware** (`firmware/`, esp-hal + embassy; release images for ESP32, C3, C6, S3, and HUB75-panel boards):
 
 - Live coding over WiFi: type in the browser, the strip follows.
 - SK9822/APA102 + WS281x over SPI; runtime pixel count, protocol, color

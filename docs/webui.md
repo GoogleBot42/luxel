@@ -299,35 +299,38 @@ while a playlist churns flash and after the in-page burst.
 
 ## v0.1.29 hardware-verification checklist (protocol re-init + resume)
 
-Code-level fixes verified only by compile/review — they need an
-eyes-on-LEDs pass:
+All five items are now verified on hardware (items 1/3/5 on 2026-07-19
+during the v0.1.30 session, items 2/4 on the Athom rig 2026-08-30 — see
+Gitea #155 for the full transcript). The only residue is a purely visual
+one: nobody has *watched* the strip during a protocol switch under a live
+stream/crossfade to confirm the expected absence of tearing.
 
-1. **SPI-first commit ordering**: `Msg::Protocol` now applies the SPI clock
-   *before* committing the protocol (atomic + encode buffer); a failed
-   `apply_config` keeps the old protocol entirely, so encode format and wire
-   clock can't disagree. Verify the happy path didn't regress:
-   sk9822↔ws2812↔sk9822 live switches still render correctly at full rate.
-2. **Encode-buffer realloc discipline**: the old buffer is freed *before*
-   the new one is allocated (ws2812 at 2048 px ≈ 18 KB), the reserve is
-   fallible, and on failure the engines are frozen and the alloc retried;
-   both encode paths length-check the buffer (lazily re-allocating once heap
-   frees up, else skipping SPI output) instead of indexing out of bounds
-   (= panic + reboot). Verify: at 2048 px with a
-   heap-heavy pattern, switch sk9822→ws2812 — expect a clean switch or an
-   "output paused" serial line, never a reboot.
-3. **Requested-vs-applied persistence** (`WANT_PIXEL_COUNT`/`WANT_PROTOCOL`):
-   back-to-back `POST /api/config` + `POST /api/protocol` (either order, no
-   delay) must persist BOTH new values across a reboot — previously the
-   second write could persist the first setting's stale value.
-4. **Switch under DDP/E1.31 and mid-crossfade**: switching protocol while a
-   stream is live (or a playlist crossfade is blending) resizes the buffer
-   between frames; frames go out whole (blocking SPI), so no tearing is
-   expected. Verify visually in both situations.
-5. **Single-pattern reboot resume**: activate a saved pattern, move sliders,
-   wait >3 s (debounce), power-cycle → the same pattern + slider values come
-   back; a playlist that was playing still wins over the record; an ad-hoc
-   editor push must NOT change what resumes (the last *saved* state
-   returns); stopping a playing playlist then rebooting resumes the item
-   that was showing.
+1. ✅ **SPI-first commit ordering** (verified 2026-07-19): `Msg::Protocol`
+   applies the SPI clock *before* committing the protocol (atomic + encode
+   buffer); a failed `apply_config` keeps the old protocol entirely, so
+   encode format and wire clock can't disagree. Live sk9822↔ws2812↔sk9822
+   switches at 300 px rendered correctly at full rate.
+2. ✅ **Encode-buffer realloc discipline** (verified 2026-08-30, Athom,
+   v0.1.39): at 2048 px with the heaviest-allowed pattern (~24 KB of
+   arrays, heap_free down to ~34 KB), 3× sk9822↔ws2812 round-trips — every
+   switch clean (the ~10 KB encode-buffer delta visible in heap_free each
+   way), no "output paused", no reboot, serial free of panics. A 6-array
+   variant that tripped the VM's array-budget guard (`vmerr` set) switched
+   just as cleanly. Never reached the alloc-failure/"output paused" path:
+   the array budget keeps enough heap headroom that the realloc always
+   succeeds — that path remains QEMU/review-verified only.
+3. ✅ **Requested-vs-applied persistence** (verified 2026-07-19):
+   back-to-back `POST /api/config` + `POST /api/protocol` persisted both
+   values across a reboot.
+4. ✅ **Switch under DDP/E1.31 and mid-crossfade** (machine-verified
+   2026-08-30, Athom, v0.1.39): 6 protocol switches under a live ~60 fps
+   DDP stream (`live:"ddp"` throughout, stream never dropped) and 6 more
+   mid-crossfade (4 s blend, playlist advancing) — all clean, no vmerr, no
+   reboot, no slot rollback. *Visual* no-tearing confirmation is the one
+   thing still outstanding (frames go out whole over blocking SPI, so none
+   is expected).
+5. ✅ **Single-pattern reboot resume** (verified 2026-07-19): pattern +
+   slider values survive a power-cycle; playlist-wins and ad-hoc-push
+   rules behaved as specified.
 </content>
 </invoke>
