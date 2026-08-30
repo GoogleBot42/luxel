@@ -1,5 +1,40 @@
 # Update log
 
+## 2026-08-30 — automap port fix: exported var renamed to `pixel`, invented idle scan removed (#136)
+
+Two non-visual defects from the #122 re-judge of `library/automap.js`
+(clean-room port of the community mapping helper), both fixed with minimal
+edits to our own file:
+
+1. **The port renamed the interface.** It exported `pixelIndex` where the
+   original exports `pixel`. For a pattern whose entire purpose is to be
+   driven over the vars API by a mapper/companion client, the NAME *is* the
+   interface — a client that writes `pixel` drove the original and silently
+   failed to drive the port, leaving it in its scan state. The export (and
+   its only reference, in `render`) is now `pixel`.
+2. **The port invented an idle self-scan.** At a negative index it swept one
+   red pixel along the strip every ~3.3 s; the original is completely inert
+   when undriven (measured with `--no-vars`: 1200/1200 zero-motion frames,
+   still black at t=320 s). The sweep and its `target` indirection are gone —
+   `render` is now the single line `hsv(0, 1, index == pixel)`, so an
+   unset/negative/out-of-range index renders black, as the original does.
+
+Acceptance checks from the issue, run in-worktree with `tools/verify/snap.mjs`:
+
+| check | result |
+|---|---|
+| (a) `sides.*.varsExported` reads the same name on both sides | both `["pixel"]`; `varsApplied` `{pixel: 30}` on both, no warnings |
+| (b) `--no-vars` posts meanBrightness 0 and zero lit pixels on BOTH sides | 60 s @ 5 fps: mean/R/G/B/motion all max 0, `zeroMotionFrames` 300/300 both sides; `--dump` at t = 0.6/20/40/59 s → 0 lit of 60 px on both |
+
+No visual cost: a driven `--dump` (pin `pixel=30`) is still byte-identical
+between the sides at t = 0.5/2/3.9 s — one `[255,0,0]` pixel at index 30,
+everything else black.
+
+Also updated: `tools/verify/fixups.json` pins the port side to `pixel` (the
+per-side form stays, since pairs may still name a var differently), and the
+matching sentence in `docs/tools.md`. The judge verdict in
+`tools/verify/results/automap.json` is left as the historical record.
+
 ## 2026-08-29 — Out-of-range writes: the oracle says PB does NOT tolerate
 ## them either (#107 closed), and the splat builtins were the real gap
 
