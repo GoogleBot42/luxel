@@ -1,5 +1,43 @@
 # Update log
 
+## 2026-08-30 — `//#` control hints now bind from the line above the export
+## too (#146), which is how 112 of 130 library patterns write them
+
+`parseControlHints` (`web/src/lib/hints.ts`) only ever matched a **trailing**
+`//#` directive on the export line — its `[^\n]*?` can't cross a newline. Most
+of `library/` puts the directive on its own line above the export, so those
+controls silently fell back to the default 0..1 / step 0.001 / value 0.5
+slider instead of the bounds they declare. Nothing errored; the patterns just
+came up wrong.
+
+**Decision: widen the parser, don't normalize the library.** The own-line form
+is the one pattern authors actually reach for (it reads better above a long
+function body), `docs/lang.md` already told them to use it, and the review UI's
+own copy of the parser (`tools/verify/review/engine.js`) had accepted both
+placements since it shipped. So the fix is two regexes — trailing, plus
+`^[ \t]*//#…\n[ \t]*export function …` — merged per control name, own-line
+winning on shared keys. No `library/*.js` was touched.
+
+- **Docs**: `docs/lang.md` gains a *Control bounds* section under Luxel
+  extensions spelling out both placements, the four keys, that a blank line
+  between directive and export breaks the association, and that `default` is a
+  UI starting position, not a variable initializer. The frame-model bullet and
+  the PB-divergence bullet now link to it instead of describing one placement.
+- **Tests**: `web/` had no test runner; it does now — `npm test` runs node's
+  built-in runner with type stripping (`--experimental-strip-types`), so
+  `web/tests/hints.test.mjs` imports `hints.ts` directly with zero new
+  dependencies. 11 cases: both placements, indentation, negatives/fractions,
+  multi-line bodies not stealing the next control's directive, merge
+  precedence, unknown keys, blank-line separation, non-export functions.
+- **Verified in real chromium** (not just `svelte-check`): `library/eye-of-sauron.js`,
+  `1d-aurora-borealis.js`, and `2d-fireworks-fade.js` opened in the playground.
+  Before, all twelve sliders read min 0 / max 1 / step 0.001 / value 0.5; after,
+  each shows its declared bounds (e.g. Eye of Sauron's AngularDensity 2..18
+  step 1 at 8, Dilation 0.15..0.6 step 0.01 at 0.35). `tools/e2e.mjs` all-green.
+
+The three consumers (`App.svelte` ×3, `PlaylistRow.svelte`) call the same
+function and needed no change.
+
 ## 2026-08-30 — automap port fix: exported var renamed to `pixel`, invented idle scan removed (#136)
 
 Two non-visual defects from the #122 re-judge of `library/automap.js`

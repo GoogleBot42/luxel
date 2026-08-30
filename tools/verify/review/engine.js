@@ -250,8 +250,8 @@ export function cubeLattice(n) {
 }
 
 /** Script-specified control bounds — the `//#` directive, ported from
- *  web/src/lib/hints.ts with one addition: library/*.js files often put the
- *  directive on the line ABOVE the export, so both placements are accepted. */
+ *  web/src/lib/hints.ts (keep the two in sync). Both placements are accepted:
+ *  trailing on the export line, or on its own line directly above it. */
 export function parseControlHints(source) {
   const hints = new Map();
   const put = (name, body) => {

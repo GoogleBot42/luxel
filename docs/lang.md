@@ -127,7 +127,8 @@ small devices.
    `slider`, `toggle`, `trigger`, `inputNumber`, `hsvPicker`, `rgbPicker`
    (inputs) and `showNumber`, `gauge` (readouts — return the value to
    display). Luxel extension: a `//# min=0 max=5 step=0.5 default=2`
-   comment on the line above bounds the control in the UI (PB ignores it).
+   comment bounds the control in the UI (PB ignores it) — see [Control
+   bounds](#control-bounds).
 
 ### Timing controls (Luxel extension)
 
@@ -536,7 +537,8 @@ differ, it is deliberate:
   (PB rejects e.g. one-arg `square(x)` at compile time; we default duty).
 - **Builtins are first-class values** in Luxel (`f = floor` works); PB
   rejects referencing a builtin without calling it ("Undefined symbol").
-- `//#` control-bound comments are a Luxel extension; PB ignores them.
+- `//#` control-bound comments are a Luxel extension; PB ignores them
+  (see [Control bounds](#control-bounds)).
 
 ## Luxel extensions
 
@@ -597,3 +599,39 @@ assert(pixelCount >= 100, "needs at least 100 pixels")
   Luxel-only by choice.
 
 More conservative JS conveniences may follow (see the roadmap).
+
+### Control bounds
+
+A `//#` comment attached to an exported control function bounds that
+control in the UI. Pixel Blaze parses it as an ordinary comment and
+ignores it — its sliders always send 0..1 — so a pattern carrying these
+directives stays valid PB source.
+
+Keys: `min`, `max`, `step`, `default` (all optional, all plain numbers;
+negative and fractional values are fine). Anything the parser doesn't
+recognize is ignored. Without a directive a slider is 0..1.
+
+**Both placements work and mean the same thing** — trailing on the
+export line, or on a line of its own directly above the export:
+
+```js
+// trailing
+export function sliderSpeed(v) { speed = v }      //# min=0 max=5 step=0.5 default=2
+export function toggleMirror(on) { mirror = on }  //# default=1
+
+// own line
+//# min=1 max=100 step=1 default=10
+export function inputNumberCount(v) { count = v }
+```
+
+The own-line form is what most of `library/` uses; it reads better when
+the function body is long. If a control carries both, the directives are
+merged and the own-line one wins on any key they share. The own-line
+directive must sit immediately above the `export` — a blank line or an
+intervening comment between them breaks the association.
+
+The bounds are UI-only: the engine receives whatever value the control
+sends, and `default` is where the UI starts the control, not an
+initializer for your pattern's variables. Give the variable a sensible
+top-level value too, so the pattern looks right before anyone touches a
+control.
