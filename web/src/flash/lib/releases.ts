@@ -14,8 +14,24 @@
 
 export const GITHUB_REPO = "GoogleBot42/luxel";
 
-/** Chip architectures Luxel ships images for. */
+/** Chip architectures this installer can flash. */
 export type Chip = "esp32" | "esp32c3";
+
+/** Chips the WLED takeover supports. Releases build images for more chips
+ * than these (docs/boards.md, docs/releases.md): those are untested on real
+ * hardware, so they ship as artifact downloads only and are not offered here.
+ * Adding one is a deliberate call — see Gitea #57 / #56. */
+const FLASHABLE_CHIPS: Record<Chip, string> = {
+  esp32: "ESP32",
+  esp32c3: "ESP32-C3",
+};
+
+/** User-facing name list, e.g. "ESP32 and ESP32-C3". */
+export const FLASHABLE_CHIP_NAMES = Object.values(FLASHABLE_CHIPS).join(" and ");
+
+export function isFlashableChip(arch: string): arch is Chip {
+  return Object.hasOwn(FLASHABLE_CHIPS, arch);
+}
 
 export interface BoardInfo {
   id: string;
@@ -23,8 +39,9 @@ export interface BoardInfo {
   chip: Chip;
 }
 
-/** Boards the release pipeline builds, in UI order. Keep in sync with the
- * board list in .github/workflows/release.yml / flake.nix. */
+/** Boards offered by the takeover, in UI order — a subset of what the release
+ * pipeline builds (.github/workflows/release.yml / flake.nix), limited to
+ * FLASHABLE_CHIPS. Manifest entries with an id missing here are skipped. */
 export const BOARDS: BoardInfo[] = [
   { id: "athom-music", name: "Athom music controller (LS8P family)", chip: "esp32" },
   { id: "esp32-generic", name: "Generic ESP32 board", chip: "esp32" },
