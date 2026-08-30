@@ -130,6 +130,119 @@ pub fn blur_frame(frame: &mut [[u8; 3]], k: u32, passes: u8) {
     }
 }
 
+/// A regular W×H grid recovered from an installed pixel map, so the spatial
+/// stages can spread light in *map* space instead of along the wiring. Six
+/// bytes and `Copy`: the layout is fully described by its dimensions plus
+/// whether alternate rows run backwards, so there is no per-pixel neighbour
+/// table to build, keep, or invalidate — and nothing to allocate per frame.
+///
+/// "Row" is whichever axis the pixel indices walk first; a column-wired panel
+/// is the same structure transposed, and a separable blur treats both axes
+/// alike, so the distinction never reaches the kernels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GridMap {
+    /// Pixels per row (the run the index walks before the other axis moves).
+    pub w: u16,
+    /// Number of rows.
+    pub h: u16,
+    /// Serpentine wiring: odd rows run backwards along the row axis.
+    pub serpentine: bool,
+}
+
+impl GridMap {
+    pub fn len(&self) -> usize {
+        self.w as usize * self.h as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.w == 0 || self.h == 0
+    }
+
+    /// Pixel index of grid cell (`row`, `col`). Both must be in range.
+    #[inline]
+    pub fn index(&self, row: usize, col: usize) -> usize {
+        let w = self.w as usize;
+        let col = if self.serpentine && row & 1 == 1 {
+            w - 1 - col
+        } else {
+            col
+        };
+        row * w + col
+    }
+}
+
+/// Recover a [GridMap] from an installed 2D pixel map, or `None` when the
+/// layout isn't a regular grid walked row by row (then the callers keep their
+/// index-space behavior).
+///
+/// Accepts any monotonic coordinate values — raw pattern units or the
+/// engine's per-axis normalized ones, since only equality and ordering are
+/// compared. What it requires is that the map really is a grid: contiguous
+/// runs of pixels sharing one coordinate on the slow axis, every run the same
+/// length and carrying the same fast-axis values (forwards, or backwards for
+/// every other run), with both axes' values strictly monotonic so that
+/// "neighbouring cell" means "neighbouring in space".
+///
+/// A globally mirrored or flipped grid needs no special case: the blur kernels
+/// are symmetric and clamp at the edges, so mirroring the column or row
+/// numbering describes the same neighbourhood. That is why `serpentine` is one
+/// bit rather than "which rows are reversed".
+pub fn detect_grid(dims: u8, coords: &[[crate::fixed::Fx; 3]]) -> Option<GridMap> {
+    let n = coords.len();
+    if dims != 2 || n < 4 || n > u16::MAX as usize {
+        return None;
+    }
+    let at = |i: usize, axis: usize| coords[i][axis].raw();
+    // Which axis moves between the first two pixels? That one runs along a
+    // row; the other one only changes when a row ends.
+    let (fast, slow) = if at(1, 1) == at(0, 1) && at(1, 0) != at(0, 0) {
+        (0usize, 1usize)
+    } else if at(1, 0) == at(0, 0) && at(1, 1) != at(0, 1) {
+        (1usize, 0usize)
+    } else {
+        return None;
+    };
+    let w = (1..n).find(|&i| at(i, slow) != at(0, slow))?;
+    let h = n / w;
+    if w < 2 || h < 2 || w * h != n {
+        return None;
+    }
+    // Row 0 defines the column coordinates; they must be strictly monotonic.
+    let cols_ascend = at(1, fast) > at(0, fast);
+    for c in 1..w {
+        if (at(c, fast) > at(c - 1, fast)) != cols_ascend || at(c, fast) == at(c - 1, fast) {
+            return None;
+        }
+    }
+    let rows_ascend = at(w, slow) > at(0, slow);
+    // Row 1 decides the wiring; every later row has to agree. Row 0 is the
+    // reference direction by construction, which is what factors the mirror
+    // out: a panel wired entirely backwards reads as progressive.
+    let serpentine = at(w, fast) == at(w - 1, fast);
+    for r in 0..h {
+        let base = r * w;
+        let row_slow = at(base, slow);
+        if r > 0 {
+            let prev = at(base - w, slow);
+            if row_slow == prev || (row_slow > prev) != rows_ascend {
+                return None; // rows out of spatial order
+            }
+        }
+        let reversed = serpentine && r & 1 == 1;
+        for c in 0..w {
+            let want = if reversed { w - 1 - c } else { c };
+            if at(base + c, fast) != at(want, fast) || at(base + c, slow) != row_slow {
+                return None;
+            }
+        }
+    }
+    Some(GridMap {
+        w: w as u16,
+        h: h as u16,
+        serpentine,
+    })
+}
+
 /// Light-bleed bloom along the pixel index: each pixel takes the brighter of
 /// itself and `g`/256 of its brightest neighbor, so highlights spread without
 /// the frame losing energy the way [blur_frame] does. `g` 0 is a no-op.
@@ -149,6 +262,106 @@ pub fn glow_frame(frame: &mut [[u8; 3]], g: u32) {
             frame[i][c] = cur[c].max(bleed);
         }
         prev = cur;
+    }
+}
+
+/// Grid cell → pixel index for a sweep along rows (`along_rows`) or down
+/// columns: `line` picks the line, `i` the position along it. One helper for
+/// both axes so the kernels compile to a single copy of their inner loop
+/// rather than one per axis — 370 B of image, measured.
+#[inline]
+fn cell(grid: &GridMap, along_rows: bool, line: usize, i: usize) -> usize {
+    if along_rows {
+        grid.index(line, i)
+    } else {
+        grid.index(i, line)
+    }
+}
+
+/// Line count and length for a sweep along rows or down columns.
+#[inline]
+fn sweep(grid: &GridMap, along_rows: bool) -> (usize, usize) {
+    let (w, h) = (grid.w as usize, grid.h as usize);
+    if along_rows {
+        (h, w)
+    } else {
+        (w, h)
+    }
+}
+
+/// One 3-tap blur sweep over every row (or column) of the grid.
+/// Allocation-free: the only state is the previous cell's pre-blur color,
+/// exactly as in [blur_frame].
+fn blur_axis(frame: &mut [[u8; 3]], grid: &GridMap, along_rows: bool, k: u32) {
+    let (lines, len) = sweep(grid, along_rows);
+    if len < 2 {
+        return;
+    }
+    let center = 256 - 2 * k;
+    for line in 0..lines {
+        let mut prev = frame[cell(grid, along_rows, line, 0)];
+        for i in 0..len {
+            let idx = cell(grid, along_rows, line, i);
+            let cur = frame[idx];
+            let next = frame[cell(grid, along_rows, line, (i + 1).min(len - 1))];
+            for c in 0..3 {
+                let v = cur[c] as u32 * center + prev[c] as u32 * k + next[c] as u32 * k;
+                frame[idx][c] = ((v + 128) >> 8) as u8;
+            }
+            prev = cur;
+        }
+    }
+}
+
+/// [blur_frame] in map space: a separable 2D blur over an installed grid,
+/// rows then columns, so a spike spreads into a soft disc instead of smearing
+/// along the wiring and folding back at every row end. Same `k`/`passes`
+/// meaning as [blur_frame] — one pass is one row sweep plus one column sweep,
+/// so the 2D kernel is the 1D one squared. Allocation-free; the caller must
+/// have checked `grid.len() == frame.len()`.
+pub fn blur_frame_grid(frame: &mut [[u8; 3]], grid: &GridMap, k: u32, passes: u8) {
+    let k = k.min(128);
+    if k == 0 || frame.len() < 2 || grid.len() != frame.len() {
+        return;
+    }
+    for _ in 0..passes.max(1) {
+        blur_axis(frame, grid, true, k);
+        blur_axis(frame, grid, false, k);
+    }
+}
+
+/// [glow_frame] in map space: the same brightest-neighbour bleed run along
+/// rows and then columns, so a highlight blooms in both axes (the corner
+/// cells pick it up at `g`²/256, a natural round falloff). Allocation-free;
+/// the caller must have checked `grid.len() == frame.len()`.
+pub fn glow_frame_grid(frame: &mut [[u8; 3]], grid: &GridMap, g: u32) {
+    let g = g.min(256);
+    if g == 0 || frame.len() < 2 || grid.len() != frame.len() {
+        return;
+    }
+    glow_axis(frame, grid, true, g);
+    glow_axis(frame, grid, false, g);
+}
+
+/// One bleed sweep over every row (or column) — [glow_frame]'s inner loop
+/// with the index taken through the grid.
+fn glow_axis(frame: &mut [[u8; 3]], grid: &GridMap, along_rows: bool, g: u32) {
+    let (lines, len) = sweep(grid, along_rows);
+    if len < 2 {
+        return;
+    }
+    for line in 0..lines {
+        let mut prev = frame[cell(grid, along_rows, line, 0)];
+        for i in 0..len {
+            let idx = cell(grid, along_rows, line, i);
+            let cur = frame[idx];
+            let next = frame[cell(grid, along_rows, line, (i + 1).min(len - 1))];
+            for c in 0..3 {
+                let bleed = ((prev[c].max(next[c]) as u32 * g) >> 8) as u8;
+                frame[idx][c] = cur[c].max(bleed);
+            }
+            prev = cur;
+        }
     }
 }
 
@@ -280,6 +493,187 @@ mod tests {
         let mut g = [[0u8; 3], [200; 3], [0; 3]];
         glow_frame(&mut g, 0);
         assert_eq!(g.map(|p| p[0]), [0, 200, 0]);
+    }
+
+    /// A W×H map wired row by row, optionally serpentine, in the coordinate
+    /// units `lx_set_map_grid` / the device map wire format produce.
+    fn grid_coords(w: usize, h: usize, serpentine: bool) -> alloc::vec::Vec<[crate::fixed::Fx; 3]> {
+        use crate::fixed::Fx;
+        let mut v = alloc::vec::Vec::new();
+        for r in 0..h {
+            for c in 0..w {
+                let x = if serpentine && r % 2 == 1 { w - 1 - c } else { c };
+                v.push([Fx::from_int(x as i32), Fx::from_int(r as i32), Fx::ZERO]);
+            }
+        }
+        v
+    }
+
+    fn red(frame: &[[u8; 3]], g: &GridMap, row: usize, col: usize) -> u8 {
+        frame[g.index(row, col)][0]
+    }
+
+    #[test]
+    fn detect_grid_reads_the_wiring() {
+        let prog = detect_grid(2, &grid_coords(8, 4, false)).expect("progressive grid");
+        assert_eq!(prog, GridMap { w: 8, h: 4, serpentine: false });
+        let snake = detect_grid(2, &grid_coords(8, 4, true)).expect("serpentine grid");
+        assert_eq!(snake, GridMap { w: 8, h: 4, serpentine: true });
+        // the two disagree about where index 8 sits, and agree about index 0
+        assert_eq!(prog.index(1, 0), 8);
+        assert_eq!(snake.index(1, 0), 15);
+        assert_eq!(prog.index(0, 0), snake.index(0, 0));
+        // a column-wired panel is the same grid transposed (a separable blur
+        // treats both axes alike, so nothing downstream cares which is which)
+        let mut colwise = grid_coords(4, 8, false);
+        for c in colwise.iter_mut() {
+            c.swap(0, 1);
+        }
+        assert_eq!(
+            detect_grid(2, &colwise),
+            Some(GridMap { w: 4, h: 8, serpentine: false })
+        );
+        // an entirely backwards panel is a mirror, not a third wiring
+        let mut mirrored = grid_coords(4, 4, false);
+        for c in mirrored.iter_mut() {
+            c[0] = crate::fixed::Fx::from_int(3) - c[0];
+        }
+        assert_eq!(
+            detect_grid(2, &mirrored),
+            Some(GridMap { w: 4, h: 4, serpentine: false })
+        );
+    }
+
+    #[test]
+    fn detect_grid_rejects_non_grids() {
+        use crate::fixed::Fx;
+        // a strip: one row, nothing to blur in a second axis
+        let strip: alloc::vec::Vec<[Fx; 3]> = (0..16)
+            .map(|i| [Fx::from_int(i), Fx::ZERO, Fx::ZERO])
+            .collect();
+        assert_eq!(detect_grid(2, &strip), None);
+        // ragged: 10 pixels over a 4-wide layout
+        let mut ragged = grid_coords(4, 3, false);
+        ragged.truncate(10);
+        assert_eq!(detect_grid(2, &ragged), None);
+        // rows out of spatial order (0, 2, 1, 3) — index-adjacent rows that
+        // aren't neighbours would blur the wrong cells together
+        let src = grid_coords(4, 4, false);
+        let mut scrambled = alloc::vec::Vec::new();
+        for r in [0usize, 2, 1, 3] {
+            scrambled.extend_from_slice(&src[r * 4..r * 4 + 4]);
+        }
+        assert_eq!(detect_grid(2, &scrambled), None);
+        // a duplicated column value isn't a grid either
+        let mut dup = grid_coords(4, 4, false);
+        for r in 0..4 {
+            dup[r * 4 + 2][0] = dup[r * 4 + 1][0];
+        }
+        assert_eq!(detect_grid(2, &dup), None);
+        // 3D maps and degenerate sizes stay index-space
+        assert_eq!(detect_grid(3, &grid_coords(4, 4, false)), None);
+        assert_eq!(detect_grid(2, &grid_coords(2, 1, false)), None);
+        // an arbitrary scatter (a circle-ish map) is not a grid
+        let ring: alloc::vec::Vec<[Fx; 3]> = (0..12)
+            .map(|i| [Fx::from_int(i % 5), Fx::from_int((i * 7) % 11), Fx::ZERO])
+            .collect();
+        assert_eq!(detect_grid(2, &ring), None);
+    }
+
+    #[test]
+    fn grid_blur_spreads_in_both_axes() {
+        let g = detect_grid(2, &grid_coords(5, 5, false)).unwrap();
+        let mut f = alloc::vec![[0u8; 3]; 25];
+        f[g.index(2, 2)] = [255; 3];
+        blur_frame_grid(&mut f, &g, 64, 1);
+        // rows then columns with the 1-2-1 kernel: the peak keeps a quarter,
+        // the four orthogonal neighbours an eighth, the diagonals a sixteenth
+        assert_eq!(red(&f, &g, 2, 2), 64);
+        for (r, c) in [(1, 2), (3, 2), (2, 1), (2, 3)] {
+            assert_eq!(red(&f, &g, r, c), 32, "orthogonal ({r},{c})");
+        }
+        for (r, c) in [(1, 1), (1, 3), (3, 1), (3, 3)] {
+            assert_eq!(red(&f, &g, r, c), 16, "diagonal ({r},{c})");
+        }
+        // nothing two cells away, and a flat frame survives untouched
+        assert_eq!(red(&f, &g, 0, 2), 0);
+        let mut flat = alloc::vec![[100u8; 3]; 25];
+        blur_frame_grid(&mut flat, &g, 128, 3);
+        assert_eq!(flat, alloc::vec![[100u8; 3]; 25]);
+    }
+
+    #[test]
+    fn grid_blur_has_no_row_end_seam() {
+        // Progressive wiring: pixel 3 (end of row 0) and pixel 4 (start of
+        // row 1) are index-adjacent but at opposite edges of the panel.
+        let g = detect_grid(2, &grid_coords(4, 4, false)).unwrap();
+        let mut f = alloc::vec![[0u8; 3]; 16];
+        f[3] = [255; 3];
+        blur_frame_grid(&mut f, &g, 64, 1);
+        assert_eq!(red(&f, &g, 1, 0), 0, "light jumped the fold to the far edge");
+        assert!(red(&f, &g, 1, 3) > 0, "light didn't spread down the column");
+        // the index-space blur is exactly what does jump the fold
+        let mut idx = alloc::vec![[0u8; 3]; 16];
+        idx[3] = [255; 3];
+        blur_frame(&mut idx, 64, 1);
+        assert!(idx[4][0] > 0, "index-space blur is supposed to smear across");
+    }
+
+    #[test]
+    fn grid_blur_is_symmetric_on_serpentine_wiring() {
+        let g = detect_grid(2, &grid_coords(6, 6, true)).unwrap();
+        let mut f = alloc::vec![[0u8; 3]; 36];
+        f[g.index(3, 3)] = [255; 3];
+        blur_frame_grid(&mut f, &g, 64, 2);
+        // every mirror of the spike gets the same light regardless of which
+        // direction its row happens to be wired
+        for d in 1..=2usize {
+            let up = red(&f, &g, 3 - d, 3);
+            let down = red(&f, &g, 3 + d, 3);
+            let left = red(&f, &g, 3, 3 - d);
+            let right = red(&f, &g, 3, 3 + d);
+            assert_eq!(up, down, "vertical asymmetry at distance {d}");
+            assert_eq!(left, right, "horizontal asymmetry at distance {d}");
+            assert_eq!(up, left, "axis asymmetry at distance {d}");
+            assert!(up > 0, "no spread at distance {d}");
+        }
+        // and the same frame blurred in index space is nothing like it: the
+        // wiring path spreads within a row and folds back at the row ends
+        let mut idx = alloc::vec![[0u8; 3]; 36];
+        idx[g.index(3, 3)] = [255; 3];
+        blur_frame(&mut idx, 64, 2);
+        assert_eq!(idx[g.index(1, 3)][0], 0, "index blur reached two rows up");
+    }
+
+    #[test]
+    fn grid_glow_blooms_in_both_axes() {
+        let g = detect_grid(2, &grid_coords(5, 5, false)).unwrap();
+        let mut f = alloc::vec![[0u8; 3]; 25];
+        f[g.index(2, 2)] = [255; 3];
+        glow_frame_grid(&mut f, &g, 128);
+        assert_eq!(red(&f, &g, 2, 2), 255, "glow must not dim its source");
+        for (r, c) in [(1, 2), (3, 2), (2, 1), (2, 3)] {
+            assert_eq!(red(&f, &g, r, c), 127, "orthogonal ({r},{c})");
+        }
+        for (r, c) in [(1, 1), (3, 3)] {
+            assert_eq!(red(&f, &g, r, c), 63, "diagonal ({r},{c})");
+        }
+        // 0 is a no-op
+        let before = f.clone();
+        glow_frame_grid(&mut f, &g, 0);
+        assert_eq!(f, before);
+    }
+
+    #[test]
+    fn grid_stages_ignore_a_mismatched_frame() {
+        // the grid describes a different pixel count than the frame has
+        let g = GridMap { w: 8, h: 8, serpentine: false };
+        let mut f = alloc::vec![[0u8; 3]; 25];
+        f[12] = [255; 3];
+        let before = f.clone();
+        blur_frame_grid(&mut f, &g, 64, 1);
+        glow_frame_grid(&mut f, &g, 128);
+        assert_eq!(f, before, "kernels must bail rather than index out of range");
     }
 
     #[test]

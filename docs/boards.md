@@ -86,6 +86,12 @@ Re-measured again later the same day, after the global post-process chain:
 +2.8–3.6 KB on every board, evenly (the engine's chain stages plus the v7
 config record and the wider `/api/output` handlers).
 
+2026-08-30, map-aware blur/glow (Gitea #140): +2,272 B on `board-c6-devkit`
+(997,328 → 999,600 B measured against that same revision, 48,976 B of slot
+left) and +2,208 B on `board-pixelblaze-v3` (949,712 → 951,920 B). The grid
+itself is six bytes — the image cost is the two extra kernels plus the map
+detector. `.stack` on pixelblaze-v3: 29,244 → 29,228 B.
+
 The three classic-ESP32 variants differ only by a few hundred bytes (same
 chip feature set; only board.rs strings and the wiring lines change), so
 checking one of them per release is enough — but the *chips* are not

@@ -1,5 +1,56 @@
 # Update log
 
+## 2026-08-30 — The post-process blur follows the panel, not the wire (#140)
+
+`setBlur`/`setGlow` — and the `/api/output` blur/glow device settings —
+worked along the pixel index. On a strip that is physical order and the
+result is right; on a matrix it followed the wiring, so a serpentine panel
+got a horizontal smear that folded back at every row end and never spread
+vertically at all. The chain now recognizes a grid and sweeps it in two
+dimensions.
+
+**The grid is six bytes, not a neighbour table.** `outpipe::detect_grid`
+runs once per `Engine::set_map` and answers one question: is this map a
+regular matrix walked row by row? It reads the coordinates as contiguous
+runs — equal length, same fast-axis values forwards or backwards, both axes
+strictly monotonic — and returns `GridMap { w, h, serpentine }`. Cell →
+pixel index is then arithmetic (`row * w + col`, mirrored on odd rows when
+serpentine), so the per-frame cost of map awareness is *zero* allocation,
+zero cached indices, and one branch per lookup. That mattered more than
+generality: a 4096-pixel neighbour table would have been 8–16 KB of ESP32
+heap held forever for a stage that is off by default.
+
+Two wirings cover the space because mirroring is free: the kernels are
+symmetric and clamp at the edges, so a panel wired entirely backwards, or
+one whose rows run right-to-left first, describes the same neighbourhoods
+as its mirror. Column-wired panels fall out as the transpose. Anything
+else — a ring, a scatter, a ragged last row, a 3D map — returns `None` and
+keeps the exact index-space behaviour it had, which the tests pin.
+
+`blur_frame_grid`/`glow_frame_grid` are separable: one sweep along the
+rows, one down the columns, sharing a single inner loop between the two
+axes (an `along_rows` flag rather than a closure per axis — worth ~370 B of
+image on the tightest board). One `passes` is one row sweep plus one column
+sweep, so the 2D kernel is the 1D one squared, and glow's corner cells pick
+up `g²/256` — a naturally round falloff.
+
+Firmware: `apply_outpipe` takes the engine's `GridMap` (`Engine::grid()`,
+`Copy`, read before the frame borrow) and uses the grid kernels when it
+matches the frame length. The live DDP/E1.31 path gets it too whenever a
+pattern engine is loaded.
+
+Measured, not estimated: app image +2,272 B on `board-c6-devkit` (997,328 →
+999,600 B, the fleet's tightest margin, still 48,976 B free) and +2,208 B on
+`board-pixelblaze-v3`; `.stack` 29,244 → 29,228 B, no function frame near
+the 12 KB budget. 206 core tests green including eight new ones — detection
+across four wirings and seven rejections, no row-end seam, symmetric spread
+on serpentine, and the index-space fallback byte-for-byte unchanged.
+
+Docs: docs/lang.md's "Index space, not map space" note is now "map space
+when the map is a grid", with the fallbacks spelled out; ideas.md, webui.md
+and the editor's builtin help follow. **The visual check needs the 64×64
+HUB75 panel, which hasn't arrived** — tracked on #75 and docs/UNTESTED.md.
+
 ## 2026-08-30 — Language gap-fill: `switch`, `**=`, and the ternary /
 ## compound-member audit (docs/ideas.md "Language" batch)
 

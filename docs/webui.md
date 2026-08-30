@@ -202,7 +202,8 @@ A real device needs a settings surface (page/dialog). Fields:
   ×10; 0 = off), **Power cap** (mA; 0 = off), **Brightness curve**
   (`brightCurve`, the *master dimmer's* response ×10 — distinct from gamma;
   2.2 makes the slider feel linear, 0 = off), **Blur** (`blur`, 0–100 %,
-  3-tap softening along the pixel index) and **Glow** (`glow`, 0–100 %,
+  3-tap softening — 2D over rows and columns when a matrix map is
+  installed, along the pixel index otherwise) and **Glow** (`glow`, 0–100 %,
   light-bleed bloom that keeps the source pixel at full). Chain order:
   blur → glow → gamma → color order → power cap. The POST body is positional
   and whitespace-separated; the last three tokens are optional so older

@@ -589,12 +589,15 @@ fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
 /// Output pipeline (Settings): blur + glow + color-order remap + gamma LUT +
 /// power cap, in that order, applied to a scratch copy just before protocol
 /// encoding. Returns the original frame untouched when every knob is off. The
-/// LUT is cached and rebuilt only when the gamma setting changes.
+/// LUT is cached and rebuilt only when the gamma setting changes. `grid` is
+/// the engine's view of the installed map (`Engine::grid`) — `Some` only when
+/// the map is a regular matrix, which makes blur/glow two-dimensional.
 fn apply_outpipe<'a>(
     frame: &'a [[u8; 3]],
     pipe_buf: &'a mut alloc::vec::Vec<[u8; 3]>,
     gamma_cache: &mut (u8, Option<alloc::boxed::Box<[u8; 256]>>),
     brightness5: u8,
+    grid: Option<luxel_core::outpipe::GridMap>,
 ) -> &'a [[u8; 3]] {
     use luxel_core::outpipe::{self, ColorOrder, PowerModel};
     // The power cap models the output stage: strips conduct every pixel at
@@ -620,8 +623,20 @@ fn apply_outpipe<'a>(
     pipe_buf.extend_from_slice(frame);
     // Spatial stages first: they work in linear-ish pattern output, before
     // gamma bends the values and the color order scrambles the channels.
-    outpipe::blur_frame(pipe_buf, blur_pct as u32 * 128 / 100, 1);
-    outpipe::glow_frame(pipe_buf, glow_pct as u32 * 256 / 100);
+    // With a grid map installed they run in map space (rows then columns);
+    // otherwise along the pixel index, as a strip wants (Gitea #140).
+    let blur_k = blur_pct as u32 * 128 / 100;
+    let glow_g = glow_pct as u32 * 256 / 100;
+    match grid.filter(|g| g.len() == pipe_buf.len()) {
+        Some(g) => {
+            outpipe::blur_frame_grid(pipe_buf, &g, blur_k, 1);
+            outpipe::glow_frame_grid(pipe_buf, &g, glow_g);
+        }
+        None => {
+            outpipe::blur_frame(pipe_buf, blur_k, 1);
+            outpipe::glow_frame(pipe_buf, glow_g);
+        }
+    }
     outpipe::apply(
         pipe_buf,
         ColorOrder(order),
@@ -1060,7 +1075,8 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             });
             set_pixels(&blend_buf);
             let b5 = out_brightness();
-            let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, b5);
+            let grid = engine.as_ref().and_then(|e| e.grid());
+            let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, b5, grid);
             out.write_frame(wire, b5);
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() {
@@ -1095,6 +1111,8 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             } else {
                 65536
             };
+            // read before the frame borrow: `grid` is a Copy descriptor
+            let grid = engine.as_ref().and_then(|e| e.grid());
             let frame: &[[u8; 3]] = if prev.is_some() && t < 65536 {
                 // copy the incoming frame, then blend the outgoing on top
                 blend_buf.clear();
@@ -1110,7 +1128,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             };
             set_pixels(frame);
             let b5 = out_brightness();
-            let wire = apply_outpipe(frame, &mut pipe_buf, &mut gamma_cache, b5);
+            let wire = apply_outpipe(frame, &mut pipe_buf, &mut gamma_cache, b5, grid);
             out.write_frame(wire, b5);
             if let Some(e) = engine.as_mut().unwrap().take_error() {
                 // report each distinct error site once, not per frame — an

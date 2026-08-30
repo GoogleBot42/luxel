@@ -87,6 +87,12 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   need the mic's type + pins probed.
 - [ ] **PB sensor board** (only if you own one): plugs into the expansion
   header RX0; sound-reactive patterns should react with zero config.
+- [ ] **Map-aware 2D blur/glow on a real matrix** (Gitea #140, needs the
+  64×64 HUB75 panel — #75): install the grid map, run a pattern with a
+  bright point, then raise Settings → Output → Blur and Glow. It should
+  soften into a round halo in both axes with no smear along the wiring and
+  no bright/dark seam at the row folds. Unit-tested only — the kernels are
+  exact on the host, but nobody has watched them on a panel.
 - [ ] **WLED→Luxel installer page against real WLED** — the page
   (`flash.html` in the web dist, or the GitHub Pages site once enabled)
   is e2e-verified against a fake WLED only; the next time the Athom is

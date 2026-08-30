@@ -153,6 +153,12 @@ pub struct Engine {
     is_map: bool,
     map_coords: Vec<[Fx; 3]>,
     map_dims: u8,
+    /// The installed map read as a regular W×H grid, when it is one — the
+    /// post-process chain's spatial stages use it to blur in map space
+    /// instead of along the wiring (Gitea #140). Six bytes, recomputed only
+    /// on [`set_map`]; `None` means "not a grid", and the stages keep their
+    /// index-space behavior.
+    grid: Option<crate::outpipe::GridMap>,
     /// An `assert()` invariant failed during init: rendering is blocked
     /// for this engine's lifetime (map installs must not resurrect it —
     /// the fix is a config change, which rebuilds the engine).
@@ -302,6 +308,7 @@ impl Engine {
             is_map: false,
             map_coords: Vec::new(),
             map_dims: 0,
+            grid: None,
             requires_violated: violated,
         };
 
@@ -519,6 +526,13 @@ impl Engine {
         self.pixel_count
     }
 
+    /// The installed map read as a regular W×H grid, when it is one (see
+    /// [`crate::outpipe::detect_grid`]). Hosts that run their own spatial
+    /// output stages use this to match the chain's map-aware behavior.
+    pub fn grid(&self) -> Option<crate::outpipe::GridMap> {
+        self.grid
+    }
+
     /// The compiled program this engine runs (e.g. for [`crate::bytecode::serialize`]).
     pub fn program(&self) -> &Program {
         &self.prog
@@ -548,6 +562,7 @@ impl Engine {
                 coords[i][axis] = Fx::from_raw(v as i32);
             }
         }
+        self.grid = crate::outpipe::detect_grid(dims, &raw[..n]);
         self.vm.map = Some(MapData { dims, coords });
         if !self.requires_violated {
             self.render = self.resolve_render_now();
@@ -940,6 +955,9 @@ impl Engine {
     /// a table lookup per pixel (the 256-entry table is rebuilt only when
     /// the palette changes), blur is 6 multiply-adds per pixel per pass,
     /// glow is 3 compares plus 3 multiplies, gamma is 3 table lookups.
+    /// On a grid map the two spatial stages run twice (rows, then columns)
+    /// for the same per-cell cost and no extra memory — the grid is six
+    /// bytes recovered once at map install, not a neighbour table.
     fn post_chain(&mut self) {
         if self.is_map {
             return;
@@ -951,14 +969,26 @@ impl Engine {
                 crate::outpipe::palette_remap_frame(&mut self.pixels, lut, amount);
             }
         }
+        // Map-aware when the installed map is a regular grid: rows then
+        // columns, so a matrix softens in 2D instead of smearing along the
+        // wiring. Otherwise (strip, irregular map, no map) index space.
+        let grid = self.grid.filter(|g| g.len() == self.pixels.len());
         // amount 0..1 → each neighbour's weight in 1/256ths, max 128
         let k = fx_to_256(self.vm.post_blur) / 2;
         if k > 0 {
-            crate::outpipe::blur_frame(&mut self.pixels, k, self.vm.post_blur_passes);
+            match &grid {
+                Some(g) => {
+                    crate::outpipe::blur_frame_grid(&mut self.pixels, g, k, self.vm.post_blur_passes)
+                }
+                None => crate::outpipe::blur_frame(&mut self.pixels, k, self.vm.post_blur_passes),
+            }
         }
         let glow = fx_to_256(self.vm.post_glow);
         if glow > 0 {
-            crate::outpipe::glow_frame(&mut self.pixels, glow);
+            match &grid {
+                Some(g) => crate::outpipe::glow_frame_grid(&mut self.pixels, g, glow),
+                None => crate::outpipe::glow_frame(&mut self.pixels, glow),
+            }
         }
         self.ensure_gamma_lut();
         if let Some(lut) = self.gamma_lut.as_deref() {

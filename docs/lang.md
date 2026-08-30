@@ -383,10 +383,21 @@ is the one that applies.
   `setPalette`, the stops are snapshotted at the call — the engine cooks
   a 256-entry table and rebuilds it only when you install a new one.
 
-Index space, not map space: on a strip `setBlur`/`setGlow` follow physical
-order; on a serpentine matrix they follow the wiring path. For map-aware
-2D softening use `blur2D` over a canvas array inside the pattern instead
-(a map-aware chain pass is Gitea #140).
+Map space when the map is a grid, index space otherwise. With a 2D map
+installed that reads as a regular W×H matrix — row-major or serpentine,
+which is what the playground's grid map and the usual device maps produce
+— `setBlur`/`setGlow` spread in *two dimensions*: one sweep along the
+rows, one down the columns, so a spike becomes a soft disc and nothing
+folds back at a row end. The device-level blur/glow settings
+(`/api/output`) follow the same rule.
+
+Everywhere else — a strip, a 3D map, a ring or any other layout that isn't
+a grid, or no map at all — they follow the pixel index, which on a strip is
+physical order and on an unrecognized matrix is the wiring path. (A pattern
+that renders only in 2D falls back to the engine's default √n grid map, so
+when the pixel count is a perfect square its output blurs in the same
+geometry it was drawn in.) For softening a layout the chain can't
+recognize, use `blur2D` over a canvas array inside the pattern.
 
 ```js
 // any pattern, recolored and softened at the output
