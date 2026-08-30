@@ -1806,6 +1806,62 @@ fn post_process_glow_stage() {
     assert_eq!(red_frame(&format!("setGlow(0); {spike}"), 5), vec![0, 0, 255, 0, 0]);
 }
 
+/// A W×H row-major (or serpentine) map in the coordinate units a host sends.
+fn grid_map(w: usize, h: usize, serpentine: bool) -> Vec<[Fx; 3]> {
+    let mut v = Vec::new();
+    for r in 0..h {
+        for c in 0..w {
+            let x = if serpentine && r % 2 == 1 { w - 1 - c } else { c };
+            v.push([Fx::from_int(x as i32), Fx::from_int(r as i32), Fx::ZERO]);
+        }
+    }
+    v
+}
+
+#[test]
+fn post_process_spatial_stages_follow_an_installed_grid() {
+    // A 4x4 panel wired row by row: pixel 3 ends row 0 and pixel 4 starts
+    // row 1, at the opposite edge. Blur must follow the panel, not the wire.
+    let spike = "rgb(index == 3, 0, 0)";
+    let src = format!("export function render(index) {{ setBlur(0.5); {spike} }}");
+    let mut e = Engine::new(&src, 16, 1).expect("compile");
+    e.set_map(2, &grid_map(4, 4, false));
+    let g = e.grid().expect("a 4x4 row-major map is a grid");
+    assert_eq!((g.w, g.h, g.serpentine), (4, 4, false));
+    let f: Vec<u8> = e.frame(Fx::ZERO).iter().map(|p| p[0]).collect();
+    assert_eq!(f[g.index(1, 0)], 0, "light jumped the fold to the far edge");
+    assert!(f[g.index(1, 3)] > 0, "no vertical spread");
+
+    // Same pattern, no map: the index-space behaviour is exactly unchanged.
+    let mut e = Engine::new(&src, 16, 1).expect("compile");
+    assert!(e.grid().is_none());
+    let f: Vec<u8> = e.frame(Fx::ZERO).iter().map(|p| p[0]).collect();
+    assert_eq!(&f[..6], &[0, 0, 64, 128, 64, 0]);
+
+    // Serpentine wiring blooms symmetrically about the lit cell.
+    let src = "export function render(index) { setGlow(0.5); rgb(index == 20, 0, 0) }";
+    let mut e = Engine::new(src, 36, 1).expect("compile");
+    e.set_map(2, &grid_map(6, 6, true));
+    let g = e.grid().expect("a 6x6 serpentine map is a grid");
+    assert!(g.serpentine);
+    assert_eq!(g.index(3, 3), 20);
+    let f: Vec<u8> = e.frame(Fx::ZERO).iter().map(|p| p[0]).collect();
+    assert_eq!(f[g.index(3, 3)], 255);
+    for (r, c) in [(2, 3), (4, 3), (3, 2), (3, 4)] {
+        assert_eq!(f[g.index(r, c)], 127, "neighbour ({r},{c})");
+    }
+
+    // A map that isn't a grid keeps index space (nothing to be aware of).
+    let mut e = Engine::new(&src.replace("index == 20", "index == 2"), 5, 1).expect("compile");
+    let ring: Vec<[Fx; 3]> = (0..5)
+        .map(|i| [Fx::from_int(i % 3), Fx::from_int((i * 2) % 5), Fx::ZERO])
+        .collect();
+    e.set_map(2, &ring);
+    assert!(e.grid().is_none());
+    let f: Vec<u8> = e.frame(Fx::ZERO).iter().map(|p| p[0]).collect();
+    assert_eq!(f, vec![0, 127, 255, 127, 0]);
+}
+
 #[test]
 fn post_process_palette_remap_stage() {
     // stops: black at 0, red at 1 — every luma becomes red at that level

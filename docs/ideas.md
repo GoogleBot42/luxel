@@ -207,16 +207,17 @@ bytecode execution is being worked on now; the rest are queued:
 - **Global post-process chain** [M] ★★ — DONE. Four whole-frame stages the
   engine runs once per frame after the last `render`, in a fixed order:
   `setOutputPalette` (recolor by luma through a stop list) → `setBlur`
-  (3-tap blur along the pixel index, 1–8 passes) → `setGlow` (light-bleed
-  bloom that keeps the source at full) → `setGamma` (the original LUT
-  gamma). Off by default and one comparison per frame when unset; the
+  (3-tap blur, 1–8 passes) → `setGlow` (light-bleed bloom that keeps the
+  source at full) → `setGamma` (the original LUT gamma). Off by default and one comparison per frame when unset; the
   spatial stages are allocation-free and the two table stages rebuild only
   on change. Settings-page half: blur %, glow %, and a **brightness
   curve** (the dimmer's response, distinct from gamma's per-pixel content
-  curve) are persisted device settings on `/api/output`. Two follow-ups
-  are ticketed: palette remap as a *device* setting needs palette storage
-  in flash (Gitea #139), and the spatial stages are index-space, so a
-  serpentine matrix wants a map-aware pass (Gitea #140).
+  curve) are persisted device settings on `/api/output`. The spatial stages
+  are map-aware (Gitea #140): with a 2D map that reads as a regular W×H
+  matrix — row-major or serpentine — blur and glow sweep rows then columns;
+  every other layout keeps index-space behaviour. One follow-up is still
+  ticketed: palette remap as a *device* setting needs palette storage in
+  flash (Gitea #139).
 - **Per-pixel persistent state buffer** [M] ★★ — a sanctioned scratch array
   the engine double-buffers, for feedback effects without manual bookkeeping.
 - **Deterministic seedable `prng` matching a documented algorithm** [S] ★ —
