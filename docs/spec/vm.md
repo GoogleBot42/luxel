@@ -195,6 +195,12 @@ the one bitwise op that zeros the fractional bits of its result).
 | `Ret` | | pops return value, unwinds frame |
 | `RetNull` | | returns 0 |
 
+Source-level `switch` adds no instruction: it lowers to a chain of
+`Dup`/`<label>`/`Ne`/`JmpIfFalse` tests over the discriminant, a `Pop` +
+`Jmp` for the no-match path, and one `Pop`/`Jmp` trampoline per matching
+label, so every case body starts on a stack with the discriminant
+already dropped.
+
 ### Builtins
 
 The builtin table (`vm::BUILTINS`) is part of this specification: a

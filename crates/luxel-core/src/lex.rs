@@ -46,6 +46,14 @@ pub enum Tok {
     For,
     #[token("while")]
     While,
+    /// `switch`/`case`/`default` — Luxel extension (the Pixel Blaze compiler
+    /// rejects a SwitchStatement outright, oracle-probed 2026-08-30).
+    #[token("switch")]
+    Switch,
+    #[token("case")]
+    Case,
+    #[token("default")]
+    Default,
     #[token("break")]
     Break,
     #[token("continue")]
@@ -114,6 +122,9 @@ pub enum Tok {
     SlashAssign,
     #[token("%=")]
     PercentAssign,
+    /// `**=` — Luxel extension, matching the `**` operator.
+    #[token("**=")]
+    StarStarAssign,
     #[token("<<=")]
     ShlAssign,
     #[token(">>=")]
@@ -263,6 +274,23 @@ mod tests {
         assert_eq!(
             toks("i++ +j"),
             [Tok::Ident, Tok::PlusPlus, Tok::Plus, Tok::Ident]
+        );
+        // `**=` must win over `**` + `=`
+        assert_eq!(toks("a**=b"), [Tok::Ident, Tok::StarStarAssign, Tok::Ident]);
+        assert_eq!(toks("a**b"), [Tok::Ident, Tok::StarStar, Tok::Ident]);
+        assert_eq!(toks("a*=b"), [Tok::Ident, Tok::StarAssign, Tok::Ident]);
+    }
+
+    #[test]
+    fn switch_keywords() {
+        assert_eq!(
+            toks("switch case default"),
+            [Tok::Switch, Tok::Case, Tok::Default]
+        );
+        // ...but only as whole words
+        assert_eq!(
+            toks("switcher caseless defaults"),
+            [Tok::Ident, Tok::Ident, Tok::Ident]
         );
     }
 

@@ -1,5 +1,78 @@
 # Update log
 
+## 2026-08-30 — Language gap-fill: `switch`, `**=`, and the ternary /
+## compound-member audit (docs/ideas.md "Language" batch)
+
+Three queued language items closed in one pass. Two of them turned out to
+be documentation-and-tests work, not fixes.
+
+**Ternary chains — already correct, now pinned and documented.** `?:`
+parses right-associatively (`a ? 1 : b ? 2 : c ? 3 : 4` is a run of
+else-ifs), a ternary in the *then* slot is closed by its own `:`, each
+branch is a full assignment expression, and only the taken branch is
+evaluated. All of that already worked; nothing was broken. The gap was
+that docs/lang.md mentioned `?:` in a single operator-list clause. It now
+has a **The conditional operator** section covering associativity, the
+then-slot nesting rule, the parentheses requirement in the condition
+slot, and single-branch evaluation — with tests for each claim
+(`ternary_chains_are_right_associative` in tests/semantics.rs, plus an
+AST-shape test in parse.rs).
+
+**Compound member ops — one real gap, `**=`.** Audited the whole family
+against array elements: `+= -= *= /= %= <<= >>= &= |= ^=` and
+prefix/postfix `++`/`--` all worked, with correct JS result values
+(`a[i]++` yields the old value), correct copy-on-write on const-pooled
+literal arrays, and — the thing worth checking — the array and index
+sub-expressions evaluated exactly **once** (`a[idx()] += 3` calls `idx`
+once; the codegen already used `Dup2`/`LoadIdx`). The one missing member
+of the family was `**=`, which the `**` extension never got: it lexed as
+`**` followed by a stray `=` and died with "expected an expression". Now
+a lexer token + one match arm, working on variables and elements alike.
+
+**`switch` — implemented, no new opcodes.** JS semantics: the
+discriminant is evaluated once, labels are compared with the language's
+`==` in source order (only up to the match), bodies fall through until a
+`break`, and `default` may sit anywhere — including in the middle, where
+it is still the no-match target *and* still falls through into the arm
+below it. `break` binds to the innermost switch-or-loop; `continue`
+skips past a switch to the enclosing loop. It lowers onto instructions
+that already existed:
+
+```
+<disc>
+Dup; <label_i>; Ne; JmpIfFalse T_i     one per `case`, in order
+Pop; Jmp default|end                   nothing matched
+T_i: Pop; Jmp body_i                   trampoline drops the discriminant
+body_0 … body_n                        source order ⇒ fall-through is free
+```
+
+Every path pops the discriminant *before* entering a body, so arms run on
+an ordinary statement-context stack and `break`/`return` out of them need
+no unwinding. `BUILTINS` untouched, LXBC format version untouched;
+docs/spec/vm.md gains a note on the lowering. Compiler-side, the old
+`LoopFrame` became `BreakFrame` with an `is_loop` flag — that flag is
+what routes `continue` past a switch to the loop that owns it.
+
+`switch`/`case`/`default` become reserved words. Nothing in `library/`
+used them as identifiers, and they are reserved on PB too (its compiler
+is JS-based), so PB-source compatibility is unaffected.
+
+**PB compatibility, probed compile-only** (`tools/oracle/compiler.mjs`
+runs PB's own compiler locally — no websocket, so no oracle-wedge risk):
+PB **rejects** `switch` ("Unsupported type SwitchStatement") and `**`, so
+both are documented as Luxel extensions. PB's ternary and `arr[i] +=`
+accept the same shapes we do.
+
+**Verification.** 7 new test functions and ~90 new assertions across `parse.rs`,
+`lex.rs` and `tests/semantics.rs` (fall-through, default-in-the-middle,
+nested switch, switch-in-a-loop with `break` vs `continue`, `return` out
+of an arm, `var` hoisting out of an arm, per-pixel dispatch in `render`,
+single evaluation of the discriminant and of the labels past the match).
+`cargo test --workspace` green; `tools/check-library.sh` 323/323 on both
+grids; `tools/wasm-smoke.mjs` native↔wasm identical; firmware builds
+(no_std clean); `web/tools/e2e.mjs` green; and a real-chromium check that
+a `switch` pattern compiles and renders its 1-bright/2-dim dispatch in the
+playground, with `switch` in the editor's autocomplete.
 ## 2026-08-30 — `orig-unrenderable` reaches zero: the last one was never
 ## broken, it was non-visual (#123), plus a tracker sweep
 

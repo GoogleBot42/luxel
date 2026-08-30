@@ -52,10 +52,20 @@ and the autocomplete/docs pipeline, and can't break existing code.
   `*`; Insn::Pow; unary-lhs divergence from JS documented).
 - **Array literals `[1, 2, 3]`** [M] ★★★ — DONE (lexer/parser/compiler
   `NewArray`; semantics tests pin `[1,2,3].length/.sum()`).
-- **Ternary chains / already have `?:`** — verify and document.
-- **`switch`** [M] ★ — occasionally nice; low priority.
-- **Compound member ops on arrays** — `arr[i] += x` already works; audit
-  for gaps.
+- **Ternary chains / already have `?:`** — DONE (verified: right-assoc,
+  chains, nesting in either slot, single-branch evaluation, assignment
+  in a branch — all already correct; the gap was documentation, now a
+  section in docs/lang.md plus compiler/VM tests).
+- **`switch`** [M] ★ — DONE. JS semantics (single discriminant eval,
+  source-order `==` label tests, fall-through, `break`, `default`
+  anywhere). No new opcodes: it lowers to `Dup`/`Ne`/`JmpIfFalse` +
+  `Pop`/`Jmp` trampolines. A Luxel extension — PB's compiler rejects
+  SwitchStatement outright.
+- **Compound member ops on arrays** — DONE. Audit found the whole family
+  (`+= -= *= /= %= <<= >>= &= |= ^=`, prefix/postfix `++`/`--`) already
+  correct on elements, including single evaluation of the array/index
+  sub-expressions and JS result values; the one gap was `**=`, now
+  added. Pinned by tests.
 - **Block-scoped `let`** [L] ★ — true TDZ/block scoping; correctness nicety
   over today's function-scoping. Low value for the LED domain.
 - **A real string type** [L] ★★ — currently only labels; strings would

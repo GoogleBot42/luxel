@@ -92,6 +92,348 @@ fn ternary_and_chains() {
     assert_eq!(eval("0 ? 10 : 0 ? 20 : 30"), Fx::from_int(30));
 }
 
+/// `?:` is right-associative, so a chain reads as a run of else-ifs. Each
+/// arm is a full assignment expression, and only the taken arm runs.
+#[test]
+fn ternary_chains_are_right_associative() {
+    // else-if chain: exactly one arm is selected, in order
+    for (i, want) in [(0, 100), (1, 101), (2, 102), (7, 199)] {
+        assert_eq!(
+            eval_prog(&format!(
+                "n = {i}\nexport var out = n == 0 ? 100 : n == 1 ? 101 : n == 2 ? 102 : 199"
+            )),
+            Fx::from_int(want),
+            "chain arm for n = {i}"
+        );
+    }
+    // the tail groups to the right: `1 ? 2 : (1 ? 3 : 4)`
+    assert_eq!(eval("1 ? 2 : 1 ? 3 : 4"), Fx::from_int(2));
+    assert_eq!(eval("0 ? 2 : 1 ? 3 : 4"), Fx::from_int(3));
+    assert_eq!(eval("0 ? 2 : 0 ? 3 : 4"), Fx::from_int(4));
+    assert_eq!(eval("0 ? 1 : 0 ? 2 : 0 ? 3 : 4"), Fx::from_int(4));
+    // a ternary nested in the THEN slot is closed by its own `:`
+    assert_eq!(eval("1 ? 0 ? 5 : 6 : 7"), Fx::from_int(6));
+    assert_eq!(eval("1 ? 1 ? 5 : 6 : 7"), Fx::from_int(5));
+    assert_eq!(eval("0 ? 1 ? 5 : 6 : 7"), Fx::from_int(7));
+    // a ternary as the CONDITION of another
+    assert_eq!(eval("(0 ? 1 : 0) ? 10 : 20"), Fx::from_int(20));
+    assert_eq!(eval("(0 ? 1 : 5) ? 10 : 20"), Fx::from_int(10));
+    // only the taken branch is evaluated (no side effects from the other)
+    assert_eq!(
+        eval_prog(
+            "n = 0\n\
+             function bump() { n = n + 1; return 9 }\n\
+             x = 1 ? 1 : bump()\n\
+             y = 0 ? bump() : 2\n\
+             export var out = n"
+        ),
+        Fx::ZERO
+    );
+    // assignment is legal inside a branch and the ternary yields its value
+    assert_eq!(
+        eval_prog("a = 0\nb = 0\nexport var out = (1 ? a = 5 : b = 6) + a + b"),
+        Fx::from_int(10)
+    );
+    // ternaries compose with the rest of the grammar
+    assert_eq!(eval("1 + (1 ? 2 : 3) * 10"), Fx::from_int(21));
+    assert_eq!(
+        eval_prog("a = [1, 2, 3]\nexport var out = a[0 ? 0 : 2]"),
+        Fx::from_int(3)
+    );
+    assert_eq!(
+        eval_prog("f = c => c ? 1 : c == 0 ? 2 : 3\nexport var out = f(0) * 10 + f(1)"),
+        Fx::from_int(21)
+    );
+}
+
+/// `arr[i] op= x` for the whole compound-operator family, plus `++`/`--`
+/// on elements. The element is read once and written once, and the index
+/// and array expressions are evaluated exactly once.
+#[test]
+fn compound_assignment_on_array_members() {
+    let cases: &[(&str, f64)] = &[
+        ("a[1] += 10", 12.0),
+        ("a[1] -= 10", -8.0),
+        ("a[1] *= 10", 20.0),
+        ("a[1] /= 4", 0.5),
+        ("a[1] %= 1.5", 0.5),
+        ("a[1] <<= 2", 8.0),
+        ("a[1] >>= 1", 1.0),
+        ("a[1] &= 3", 2.0),
+        ("a[1] |= 5", 7.0),
+        ("a[1] ^= 3", 1.0),
+        ("a[1] **= 3", 8.0),
+        ("a[1]++", 3.0),
+        ("a[1]--", 1.0),
+        ("++a[1]", 3.0),
+        ("--a[1]", 1.0),
+    ];
+    for (op, want) in cases {
+        assert_eq!(
+            eval_prog(&format!("a = [1, 2, 3]\n{op}\nexport var out = a[1]")),
+            fx(*want),
+            "after `{op}`"
+        );
+        // neighbours untouched
+        assert_eq!(
+            eval_prog(&format!(
+                "a = [1, 2, 3]\n{op}\nexport var out = a[0] * 10 + a[2]"
+            )),
+            Fx::from_int(13),
+            "`{op}` disturbed a neighbouring element"
+        );
+    }
+
+    // the compound assignment is an expression yielding the NEW value
+    assert_eq!(
+        eval_prog("a = [1]\nexport var out = (a[0] += 5) * 10 + a[0]"),
+        Fx::from_int(66)
+    );
+    // ++/-- keep JS's prefix/postfix result values on elements
+    assert_eq!(
+        eval_prog("a = [7]\nexport var out = a[0]++ * 10 + a[0]"),
+        Fx::from_int(78)
+    );
+    assert_eq!(
+        eval_prog("a = [7]\nexport var out = ++a[0] * 10 + a[0]"),
+        Fx::from_int(88)
+    );
+    assert_eq!(
+        eval_prog("a = [7]\nexport var out = a[0]-- * 10 + a[0]"),
+        Fx::from_int(76)
+    );
+
+    // the array and index sub-expressions run ONCE, not twice
+    assert_eq!(
+        eval_prog(
+            "n = 0\n\
+             a = [5, 5]\n\
+             function idx() { n = n + 1; return 1 }\n\
+             a[idx()] += 3\n\
+             export var out = n * 100 + a[1]"
+        ),
+        Fx::from_int(108)
+    );
+    // rhs is evaluated after the element is read (JS order), and once
+    assert_eq!(
+        eval_prog(
+            "n = 0\n\
+             a = [5]\n\
+             function rhs() { n = n + 1; return 2 }\n\
+             a[0] *= rhs()\n\
+             export var out = n * 100 + a[0]"
+        ),
+        Fx::from_int(110)
+    );
+
+    // nested arrays and array-valued expressions as the target's object
+    assert_eq!(
+        eval_prog("m = [[1, 2], [3, 4]]\nm[1][0] += 10\nexport var out = m[1][0]"),
+        Fx::from_int(13)
+    );
+    assert_eq!(
+        eval_prog(
+            "m = [[1, 2]]\nfunction row() { return m[0] }\nrow()[1] *= 4\nexport var out = m[0][1]"
+        ),
+        Fx::from_int(8)
+    );
+    // const-pooled literal arrays copy-on-write before the first mutation
+    assert_eq!(
+        eval_prog("a = [1, 2, 3]\nb = [1, 2, 3]\na[0] += 100\nexport var out = a[0] * 1000 + b[0]"),
+        Fx::from_int(101_001)
+    );
+    // inside a loop, on a global array, from inside a function
+    assert_eq!(
+        eval_prog(
+            "acc = array(4)\n\
+             function fill() { for (var i = 0; i < 4; i++) acc[i] += i * 2 }\n\
+             fill()\n\
+             fill()\n\
+             export var out = acc[3]"
+        ),
+        Fx::from_int(12)
+    );
+    // `**=` on a plain variable too (the operator family is uniform)
+    assert_eq!(eval_prog("x = 3\nx **= 2\nexport var out = x"), fx(9.0));
+    // properties are still not assignable
+    assert!(Engine::new("a = [1]\na.length += 1", 10, 1).is_err());
+    assert!(Engine::new("a = [1]\nf() += 1", 10, 1).is_err());
+}
+
+#[test]
+fn switch_statement() {
+    let sw = |n: i32| {
+        eval_prog(&format!(
+            "n = {n}\n\
+             export var out = 0\n\
+             switch (n) {{\n\
+               case 0: out = 10; break\n\
+               case 1: out = 11; break\n\
+               default: out = 99\n\
+             }}"
+        ))
+    };
+    assert_eq!(sw(0), Fx::from_int(10));
+    assert_eq!(sw(1), Fx::from_int(11));
+    assert_eq!(sw(7), Fx::from_int(99));
+
+    // fall-through: no `break` means the next arm's body runs too
+    let ft = |n: i32| {
+        eval_prog(&format!(
+            "n = {n}\n\
+             export var out = 0\n\
+             switch (n) {{\n\
+               case 0: out = out + 1\n\
+               case 1: out = out + 10\n\
+               case 2: out = out + 100; break\n\
+               case 3: out = out + 1000\n\
+             }}"
+        ))
+    };
+    assert_eq!(ft(0), Fx::from_int(111));
+    assert_eq!(ft(1), Fx::from_int(110));
+    assert_eq!(ft(2), Fx::from_int(100));
+    assert_eq!(ft(3), Fx::from_int(1000));
+    assert_eq!(ft(4), Fx::ZERO, "no match, no default ⇒ nothing runs");
+
+    // empty labels stack onto the following body
+    let stacked = |n: i32| {
+        eval_prog(&format!(
+            "n = {n}\nexport var out = 0\nswitch (n) {{ case 1: case 2: out = 5; break\ndefault: out = 6 }}"
+        ))
+    };
+    assert_eq!(stacked(1), Fx::from_int(5));
+    assert_eq!(stacked(2), Fx::from_int(5));
+    assert_eq!(stacked(3), Fx::from_int(6));
+
+    // `default` in the MIDDLE: still the no-match target, and still falls
+    // through into the arm that follows it in source order
+    let mid = |n: i32| {
+        eval_prog(&format!(
+            "n = {n}\n\
+             export var out = 0\n\
+             switch (n) {{\n\
+               case 0: out = 1; break\n\
+               default: out = out + 2\n\
+               case 9: out = out + 4\n\
+             }}"
+        ))
+    };
+    assert_eq!(mid(0), Fx::from_int(1));
+    assert_eq!(mid(9), Fx::from_int(4));
+    assert_eq!(mid(5), Fx::from_int(6), "default falls into `case 9`");
+
+    // the discriminant is evaluated exactly once, before any label
+    assert_eq!(
+        eval_prog(
+            "n = 0\n\
+             function disc() { n = n + 1; return 1 }\n\
+             switch (disc()) { case 0: case 1: case 2: break }\n\
+             export var out = n"
+        ),
+        Fx::ONE
+    );
+    // labels are arbitrary expressions, tested in order until one matches
+    assert_eq!(
+        eval_prog(
+            "k = 2\n\
+             export var out = 0\n\
+             switch (k * 3) { case 1 + 1: out = 1; break\ncase 2 * 3: out = 2; break }"
+        ),
+        Fx::from_int(2)
+    );
+    // ...and only up to the match: later labels don't run
+    assert_eq!(
+        eval_prog(
+            "n = 0\n\
+             function label(v) { n = n + 1; return v }\n\
+             switch (1) { case label(1): break\ncase label(2): break }\n\
+             export var out = n"
+        ),
+        Fx::ONE
+    );
+    // equality is the language's `==` (one numeric domain, so `===` too);
+    // fixed-point values compare exactly
+    assert_eq!(
+        eval_prog("export var out = 0\nswitch (0.5) { case 1/2: out = 1; break }"),
+        Fx::ONE
+    );
+
+    // nested switch, with the inner `break` binding to the inner switch
+    assert_eq!(
+        eval_prog(
+            "export var out = 0\n\
+             switch (1) {\n\
+               case 1:\n\
+                 switch (2) { case 2: out = out + 1; break\ndefault: out = out + 8 }\n\
+                 out = out + 10\n\
+                 break\n\
+               case 2: out = out + 100\n\
+             }"
+        ),
+        Fx::from_int(11)
+    );
+
+    // `break` inside a switch inside a loop leaves the SWITCH, not the loop;
+    // `continue` skips past the switch to the enclosing loop
+    assert_eq!(
+        eval_prog(
+            "total = 0\n\
+             for (var i = 0; i < 5; i++) {\n\
+               switch (i) {\n\
+                 case 1: break\n\
+                 case 3: continue\n\
+                 default: total = total + 1000\n\
+               }\n\
+               total = total + 1\n\
+             }\n\
+             export var out = total"
+        ),
+        // i=0,2,4 → default (+1000) then +1; i=1 → break out of switch, +1;
+        // i=3 → continue skips the trailing +1
+        Fx::from_int(3004)
+    );
+    // a `return` out of a switch body unwinds cleanly
+    assert_eq!(
+        eval_prog(
+            "function pick(n) { switch (n) { case 0: return 5\ndefault: return 6 } }\n\
+             export var out = pick(0) * 10 + pick(1)"
+        ),
+        Fx::from_int(56)
+    );
+
+    // `var` inside a switch arm hoists to the function scope like everywhere
+    assert_eq!(
+        eval_prog(
+            "function f(n) { switch (n) { case 0: var v = 3 }\nreturn v == 0 ? 7 : v }\n\
+             export var out = f(0) * 10 + f(1)"
+        ),
+        Fx::from_int(37)
+    );
+
+    // switch in the render path: per-pixel dispatch over a mode variable
+    let mut e = engine(
+        "export function render(index) {\n\
+           var v = 0\n\
+           switch (index % 3) {\n\
+             case 0: v = 1; break\n\
+             case 1:\n\
+             case 2: v = 0.5; break\n\
+           }\n\
+           hsv(0, 0, v)\n\
+         }",
+    );
+    let px = e.frame(Fx::ZERO);
+    assert_eq!(px[0], [255, 255, 255], "index 0 full white");
+    assert!(px[1][0] > 100 && px[1][0] < 220, "index 1 dim: {:?}", px[1]);
+    assert_eq!(px[1], px[2], "indices 1 and 2 share a body");
+    assert_eq!(px[3], px[0], "the dispatch repeats every 3 pixels");
+
+    // `break`/`continue` still need an enclosing construct
+    assert!(Engine::new("switch (1) { case 1: continue }", 10, 1).is_err());
+    assert!(Engine::new("break", 10, 1).is_err());
+}
+
 #[test]
 fn functions_and_recursion() {
     assert_eq!(

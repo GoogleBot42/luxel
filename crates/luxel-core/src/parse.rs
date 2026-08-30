@@ -191,6 +191,7 @@ impl<'s> Parser<'s> {
             Some(Tok::If) => self.if_stmt(),
             Some(Tok::While) => self.while_stmt(),
             Some(Tok::For) => self.for_stmt(),
+            Some(Tok::Switch) => self.switch_stmt(),
             Some(Tok::Return) => {
                 self.bump();
                 let value = if self.return_value_follows() {
@@ -444,6 +445,60 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// `switch (disc) { case e: stmts… default: stmts… }`. Labels may appear
+    /// in any order and `default` may sit anywhere (or be absent); at most
+    /// one `default` is allowed. A label with an empty body falls straight
+    /// through to the next one, as in JS.
+    fn switch_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        let start = self.span_here();
+        self.bump(); // `switch`
+        self.expect(Tok::LParen, "`(` after `switch`")?;
+        let disc = self.expr()?;
+        self.expect(Tok::RParen, "`)`")?;
+        self.expect(Tok::LBrace, "`{` after `switch (…)`")?;
+        let mut cases: Vec<SwitchCase> = Vec::new();
+        let mut default_span: Option<Span> = None;
+        while !self.at(Tok::RBrace) {
+            if self.at_eof() {
+                return Err(self.err_here("expected `}` to close `switch`".into()));
+            }
+            let case_start = self.span_here();
+            let test = if self.eat(Tok::Case) {
+                Some(self.expr()?)
+            } else if self.at(Tok::Default) {
+                let d = self.bump();
+                if default_span.is_some() {
+                    return Err(Diagnostic::new(
+                        d.span,
+                        "duplicate `default` label in `switch`".to_string(),
+                    ));
+                }
+                default_span = Some(d.span);
+                None
+            } else {
+                return Err(self.err_here("expected `case`, `default`, or `}`".into()));
+            };
+            self.expect(Tok::Colon, "`:` after a `switch` label")?;
+            let mut body = Vec::new();
+            while !matches!(
+                self.peek(),
+                None | Some(Tok::RBrace) | Some(Tok::Case) | Some(Tok::Default)
+            ) {
+                body.push(self.stmt()?);
+            }
+            cases.push(SwitchCase {
+                test,
+                body,
+                span: case_start.to(self.prev_span),
+            });
+        }
+        self.bump(); // `}`
+        Ok(Stmt {
+            kind: StmtKind::Switch { disc, cases },
+            span: start.to(self.prev_span),
+        })
+    }
+
     // ---- expressions ----
 
     fn expr(&mut self) -> Result<Expr, Diagnostic> {
@@ -472,6 +527,7 @@ impl<'s> Parser<'s> {
             Some(Tok::StarAssign) => Some(Some(BinOp::Mul)),
             Some(Tok::SlashAssign) => Some(Some(BinOp::Div)),
             Some(Tok::PercentAssign) => Some(Some(BinOp::Rem)),
+            Some(Tok::StarStarAssign) => Some(Some(BinOp::Pow)),
             Some(Tok::ShlAssign) => Some(Some(BinOp::Shl)),
             Some(Tok::ShrAssign) => Some(Some(BinOp::Shr)),
             Some(Tok::AmpAssign) => Some(Some(BinOp::BitAnd)),
@@ -1032,6 +1088,109 @@ mod tests {
         // ternary + assignment right-assoc
         parse("x = a ? b : c ? d : e");
         parse("a = b = c");
+    }
+
+    /// `?:` groups to the RIGHT, so `a ? b : c ? d : e` is
+    /// `a ? b : (c ? d : e)` — a chain of else-ifs, not a nested condition.
+    #[test]
+    fn ternary_is_right_associative() {
+        let stmts = parse("x = a ? b : c ? d : e");
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Assign { value, .. },
+            ..
+        }) = &stmts[0].kind
+        else {
+            panic!()
+        };
+        let ExprKind::Ternary { cond, then, els } = &value.kind else {
+            panic!("expected a ternary")
+        };
+        assert!(matches!(cond.kind, ExprKind::Ident(_)), "cond is `a`");
+        assert!(matches!(then.kind, ExprKind::Ident(_)), "then is `b`");
+        // the tail is the nested one
+        assert!(matches!(els.kind, ExprKind::Ternary { .. }));
+
+        // a ternary in the THEN slot is bounded by the `:` that closes it
+        let stmts = parse("x = a ? b ? c : d : e");
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Assign { value, .. },
+            ..
+        }) = &stmts[0].kind
+        else {
+            panic!()
+        };
+        let ExprKind::Ternary { then, els, .. } = &value.kind else {
+            panic!()
+        };
+        assert!(matches!(then.kind, ExprKind::Ternary { .. }));
+        assert!(matches!(els.kind, ExprKind::Ident(_)), "els is `e`");
+
+        // assignment is allowed inside a branch (it's an assign_expr)
+        parse("a ? x = 1 : y = 2");
+        // and a ternary condition can itself be parenthesized/complex
+        parse("x = (a ? b : c) ? d : e");
+    }
+
+    #[test]
+    fn compound_assign_operators() {
+        for op in [
+            "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "|=", "^=", "**=",
+        ] {
+            parse(&format!("a {op} 2"));
+            parse(&format!("a[i] {op} 2"));
+        }
+        // `**=` carries the Pow op
+        let stmts = parse("a **= 2");
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Assign { op, .. },
+            ..
+        }) = &stmts[0].kind
+        else {
+            panic!()
+        };
+        assert_eq!(*op, Some(BinOp::Pow));
+        // still an invalid target on a property
+        assert!(parse_program("a.length += 1").is_err());
+    }
+
+    #[test]
+    fn switch_shapes() {
+        let stmts = parse(
+            "switch (mode) {\n\
+               case 0:\n\
+                 h = 0\n\
+                 break\n\
+               case 1:\n\
+               case 2:\n\
+                 h = 0.5\n\
+                 break\n\
+               default:\n\
+                 h = 1\n\
+             }",
+        );
+        let StmtKind::Switch { cases, .. } = &stmts[0].kind else {
+            panic!("expected a switch")
+        };
+        assert_eq!(cases.len(), 4);
+        assert!(cases[1].body.is_empty(), "empty `case 1:` falls through");
+        assert!(cases[3].test.is_none(), "last arm is `default`");
+
+        // `default` may come first or in the middle; `case` takes any expr
+        parse("switch (x) { default: y = 1\ncase f(1) + 2: y = 2 }");
+        // a label is not a statement terminator — the usual `;`/newline rule
+        // applies to the last statement of an arm (JS agrees)
+        assert!(parse_program("switch (x) { default: y = 1 case 2: }").is_err());
+        // an empty switch and a switch with only a default are both legal
+        parse("switch (x) {}");
+        parse("switch (x) { default: }");
+        // semicolons optional inside arms, as everywhere else
+        parse("switch (x) { case 1: a = 1; b = 2; break; }");
+
+        assert!(parse_program("switch (x) { default: default: }").is_err());
+        assert!(parse_program("switch (x) { y = 1 }").is_err());
+        assert!(parse_program("switch (x) { case 1 y = 1 }").is_err());
+        assert!(parse_program("switch x { case 1: }").is_err());
+        assert!(parse_program("switch (x) { case 1:").is_err());
     }
 
     #[test]

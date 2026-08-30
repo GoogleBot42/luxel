@@ -528,6 +528,16 @@ impl<'s> Compiler<'s> {
                 }
                 self.scan_stmt(body, locals, top)
             }
+            StmtKind::Switch { disc, cases } => {
+                self.scan_expr(disc, locals)?;
+                for c in cases {
+                    if let Some(t) = &c.test {
+                        self.scan_expr(t, locals)?;
+                    }
+                    self.scan_stmts(&c.body, locals, top)?;
+                }
+                Ok(())
+            }
             StmtKind::Block(b) => self.scan_stmts(b, locals, top),
             StmtKind::Assert { cond, .. } => self.scan_expr(cond, locals),
             StmtKind::Return(Some(e)) => self.scan_expr(e, locals),
@@ -805,7 +815,7 @@ impl<'s> Compiler<'s> {
                 let start = ctx.here();
                 self.emit_expr(ctx, cond)?;
                 let jf = ctx.emit_placeholder();
-                ctx.loops.push(LoopFrame::default());
+                ctx.loops.push(BreakFrame::loop_frame());
                 self.emit_stmt(ctx, body)?;
                 ctx.push(Insn::Jmp(start));
                 let frame = ctx.loops.pop().unwrap();
@@ -835,7 +845,7 @@ impl<'s> Compiler<'s> {
                 } else {
                     None
                 };
-                ctx.loops.push(LoopFrame::default());
+                ctx.loops.push(BreakFrame::loop_frame());
                 self.emit_stmt(ctx, body)?;
                 let frame = ctx.loops.pop().unwrap();
                 let cont = ctx.here();
@@ -856,6 +866,76 @@ impl<'s> Compiler<'s> {
                 }
                 Ok(())
             }
+            // `switch` needs no opcodes of its own — it lowers to the same
+            // Dup/Ne/JmpIfFalse/Jmp shapes `if` already uses:
+            //
+            //   <disc>                       discriminant, kept on the stack
+            //   Dup; <test_i>; Ne; JmpIfFalse T_i    (one per `case`, in order)
+            //   Pop; Jmp default|end                 (no label matched)
+            //   T_i: Pop; Jmp body_i                 (trampolines drop the disc)
+            //   body_0 … body_n                      (source order ⇒ fall-through)
+            //   end:
+            //
+            // Every path pops the discriminant exactly once *before* entering
+            // a body, so the bodies — and any `break`/`return` out of them —
+            // run on a stack that looks like plain statement context.
+            StmtKind::Switch { disc, cases } => {
+                self.emit_expr(ctx, disc)?;
+                // test chain: one comparison per `case`, `default` skipped
+                let mut tests: Vec<Option<usize>> = Vec::with_capacity(cases.len());
+                for c in cases {
+                    match &c.test {
+                        Some(t) => {
+                            ctx.push(Insn::Dup);
+                            self.emit_expr(ctx, t)?;
+                            ctx.push(Insn::Ne);
+                            tests.push(Some(ctx.emit_placeholder()));
+                        }
+                        None => tests.push(None),
+                    }
+                }
+                // fell off the end of the tests: nothing matched
+                ctx.push(Insn::Pop);
+                let j_nomatch = ctx.emit_placeholder();
+                // trampolines
+                let mut tramps: Vec<(usize, usize)> = Vec::new();
+                for (i, t) in tests.iter().enumerate() {
+                    if let Some(p) = *t {
+                        let here = ctx.here();
+                        ctx.patch(p, Insn::JmpIfFalse(here));
+                        ctx.push(Insn::Pop);
+                        tramps.push((i, ctx.emit_placeholder()));
+                    }
+                }
+                // bodies, in source order so fall-through is just "no jump"
+                ctx.loops.push(BreakFrame::switch_frame());
+                let mut body_start: Vec<u32> = Vec::with_capacity(cases.len());
+                for c in cases {
+                    body_start.push(ctx.here());
+                    for s in &c.body {
+                        self.emit_stmt(ctx, s)?;
+                    }
+                }
+                let frame = ctx.loops.pop().unwrap();
+                let end = ctx.here();
+                for (i, p) in tramps {
+                    ctx.patch(p, Insn::Jmp(body_start[i]));
+                }
+                let no_match = cases
+                    .iter()
+                    .position(|c| c.test.is_none())
+                    .map(|i| body_start[i])
+                    .unwrap_or(end);
+                ctx.patch(j_nomatch, Insn::Jmp(no_match));
+                for b in frame.breaks {
+                    ctx.patch(b, Insn::Jmp(end));
+                }
+                debug_assert!(
+                    frame.continues.is_empty(),
+                    "switch frames take no continues"
+                );
+                Ok(())
+            }
             StmtKind::Block(body) => {
                 for s in body {
                     self.emit_stmt(ctx, s)?;
@@ -874,6 +954,7 @@ impl<'s> Compiler<'s> {
             }
             StmtKind::Break => {
                 let p = ctx.emit_placeholder();
+                // innermost breakable construct — a loop OR a switch
                 match ctx.loops.last_mut() {
                     Some(f) => {
                         f.breaks.push(p);
@@ -881,13 +962,15 @@ impl<'s> Compiler<'s> {
                     }
                     None => Err(Diagnostic::new(
                         s.span,
-                        "`break` outside a loop".to_string(),
+                        "`break` outside a loop or `switch`".to_string(),
                     )),
                 }
             }
             StmtKind::Continue => {
                 let p = ctx.emit_placeholder();
-                match ctx.loops.last_mut() {
+                // a `switch` is breakable but not continuable: skip past it
+                // to the enclosing loop, like JS
+                match ctx.loops.iter_mut().rev().find(|f| f.is_loop) {
                     Some(f) => {
                         f.continues.push(p);
                         Ok(())
@@ -1314,17 +1397,37 @@ struct FnCtx {
     /// (line, col) per emitted instruction — statement granularity.
     pos: Vec<(u32, u32)>,
     cur_pos: (u32, u32),
-    loops: Vec<LoopFrame>,
+    loops: Vec<BreakFrame>,
     /// Local slots declared `const` in this function.
     const_locals: BTreeSet<u8>,
     /// This is fn 0 (top-level init) — where `assert()` is legal.
     is_top: bool,
 }
 
-#[derive(Default)]
-struct LoopFrame {
+/// A `break`/`continue` target. Loops answer both; a `switch` answers only
+/// `break`, so `continue` inside one still belongs to the enclosing loop.
+struct BreakFrame {
     breaks: Vec<usize>,
     continues: Vec<usize>,
+    is_loop: bool,
+}
+
+impl BreakFrame {
+    fn loop_frame() -> BreakFrame {
+        BreakFrame {
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            is_loop: true,
+        }
+    }
+
+    fn switch_frame() -> BreakFrame {
+        BreakFrame {
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            is_loop: false,
+        }
+    }
 }
 
 impl FnCtx {
@@ -1395,6 +1498,11 @@ fn walk_fns<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                 }
                 walk_fns(core::slice::from_ref(body), f);
             }
+            StmtKind::Switch { cases, .. } => {
+                for c in cases {
+                    walk_fns(&c.body, f);
+                }
+            }
             StmtKind::Block(b) => walk_fns(b, f),
             _ => {}
         }
@@ -1450,6 +1558,11 @@ fn hoist(stmts: &[Stmt], out: &mut Vec<String>) {
                     hoist(core::slice::from_ref(i), out);
                 }
                 hoist(core::slice::from_ref(body), out);
+            }
+            StmtKind::Switch { cases, .. } => {
+                for c in cases {
+                    hoist(&c.body, out);
+                }
             }
             StmtKind::Block(b) => hoist(b, out),
             _ => {}
