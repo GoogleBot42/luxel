@@ -63,7 +63,7 @@ mod def {
 // (16 MB flash / 8 MB octal PSRAM) with two HUB75 outputs (ribbon +
 // direct plug-in header), an ES7210/ES8311 codec, microSD and an RTC.
 // Luxel uses the HUB75 side only — the codec, SD and RTC are unwired
-// (sound-reactive work on this board gets its own ticket). PSRAM is not
+// (sound-reactive work on this board is Gitea #142). PSRAM is not
 // initialised: nothing here needs it, and DMA framebuffers must live in
 // internal SRAM anyway; using it as a pattern-array arena is a future
 // idea (docs/boards.md).
