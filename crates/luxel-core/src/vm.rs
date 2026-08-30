@@ -741,18 +741,26 @@ impl Vm {
         if self.palette_src == Some(id) {
             self.palette_dirty = true;
         }
-        let slot = &mut self.arrays[id as usize];
-        if let ArrRepr::Const(d) = slot {
-            let data: &[Value] = &prog.data_arrays[*d as usize];
+        if let ArrRepr::Const(d) = self.arrays[id as usize] {
+            let data: &[Value] = &prog.data_arrays[d as usize];
+            // The const data was never on the byte ledger (it is shared with
+            // the program); the owned copy joins it now, replacing the
+            // entry's CONST_ENTRY_COST. The ELEMENTS are already charged —
+            // `alloc_const_array` counted them — so only the byte half is
+            // checked here, and it is checked BEFORE anything is reserved: a
+            // promotion at the cap must error, not overshoot the budget
+            // (Gitea #132). The error is a plain pattern-level runtime error
+            // like the OOM below, so the blast radius stays PB-shaped
+            // (Gitea #84): the current handler invocation aborts, nothing more.
+            let delta = Self::array_cost(data.len()) - CONST_ENTRY_COST;
+            self.charge_array_bytes(delta)?;
             let mut owned: Vec<Value> = Vec::new();
             if owned.try_reserve_exact(data.len()).is_err() {
                 return Err("out of memory for array");
             }
             owned.extend_from_slice(data);
-            // the shared bytes stop being charged... they were never
-            // charged; the owned copy joins the byte ledger now
-            self.array_bytes += Self::array_cost(owned.len()) - CONST_ENTRY_COST;
-            *slot = ArrRepr::Owned(owned);
+            self.array_bytes += delta;
+            self.arrays[id as usize] = ArrRepr::Owned(owned);
         }
         match &mut self.arrays[id as usize] {
             ArrRepr::Owned(v) => Ok(v),
@@ -1442,6 +1450,15 @@ impl Vm {
         if self.array_elems + len + ARRAY_HEADER_UNITS > self.array_budget {
             return Err("array element budget exceeded (arrays are never freed)");
         }
+        self.charge_array_bytes(bytes)
+    }
+
+    /// The byte half of [`Vm::charge_array`], for bytes added to an arena
+    /// entry whose elements are already on the element ledger — i.e. the
+    /// const→owned copy-on-write promotion in [`Vm::arr_mut`] (Gitea #132).
+    /// Re-checking the element budget there would demand a spurious extra
+    /// header's worth of headroom for an entry that allocates no new slot.
+    fn charge_array_bytes(&mut self, bytes: usize) -> Result<(), &'static str> {
         if self.array_bytes + bytes > self.array_byte_budget {
             return Err("array memory budget exceeded (pattern too large for this device)");
         }

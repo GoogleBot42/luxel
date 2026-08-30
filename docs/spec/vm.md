@@ -54,6 +54,14 @@ A value (`Value`) is one of:
   host build, where the device byte budget (`array_byte_budget`) is
   `usize::MAX` — see Gitea #124 and the `array0_*` tests in
   `crates/luxel-core/tests/engine.rs`.
+- A `[…]` literal starts out sharing the program's const pool and pays
+  only a fixed per-entry cost on the device byte ledger; its **elements**
+  are on the element ledger from the start. The first write materializes
+  an owned copy (copy-on-write), and that copy's element bytes are
+  charged then — checked against `array_byte_budget` **before** the copy
+  is made, so a promotion that would exceed the budget raises the same
+  ordinary runtime error an over-budget `array(n)` does (it aborts the
+  current entry point only; Gitea #132).
 - Indexing truncates fractional indices toward zero — for reads **and**
   writes. Any out-of-bounds or negative index (read or write) raises a
   runtime error that aborts the current entry point. (PB divergence, on

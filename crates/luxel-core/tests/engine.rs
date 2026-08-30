@@ -801,6 +801,66 @@ fn a_fresh_engine_starts_with_an_empty_arena() {
     assert_eq!(fresh.arena_stats(), (0, 0, 0));
 }
 
+// ---- const→owned copy-on-write promotion and the byte ledger (Gitea #132) ----
+//
+// A `[…]` literal shares the program's data until the first write, so it only
+// charges CONST_ENTRY_COST bytes. Materializing it adds the element bytes, and
+// that delta has to clear `array_byte_budget` BEFORE the copy is made — on a
+// device-budgeted VM the unchecked add used to push the ledger past its cap.
+
+const COW_SRC: &str = "a = [1, 2, 3, 4, 5, 6, 7, 8]\n\
+                       export var v\n\
+                       export function beforeRender(delta) {\n  a[0] = 5\n  v = a[0]\n}\n\
+                       export function render(index) { rgb(0, 1, 0) }";
+
+fn cow_engine(array_byte_budget: usize) -> Engine {
+    let prog = luxel_core::compile::compile(COW_SRC).unwrap();
+    Engine::from_program_budgeted(prog, 2, 1, array_byte_budget)
+}
+
+#[test]
+fn cow_promotion_within_budget_charges_the_delta() {
+    let mut e = cow_engine(usize::MAX);
+    let at_init = e.arena_stats().2;
+    e.frame(Fx::from_int(10));
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+    let promoted = e.arena_stats().2;
+    assert!(promoted > at_init, "the owned copy must join the byte ledger");
+    assert_eq!(e.var("v"), Some(Value::Num(Fx::from_int(5))));
+
+    // an exactly-sufficient budget behaves identically
+    let mut tight = cow_engine(promoted);
+    tight.frame(Fx::from_int(10));
+    assert!(tight.last_error.is_none(), "{:?}", tight.last_error);
+    assert_eq!(tight.arena_stats().2, promoted, "same delta charged");
+    assert_eq!(tight.var("v"), Some(Value::Num(Fx::from_int(5))));
+}
+
+#[test]
+fn cow_promotion_at_the_budget_edge_errors_instead_of_overshooting() {
+    let mut probe = cow_engine(usize::MAX);
+    let at_init = probe.arena_stats().2;
+    probe.frame(Fx::from_int(10));
+    let promoted = probe.arena_stats().2;
+
+    // one byte short of what materializing the copy needs
+    let budget = promoted - 1;
+    let mut e = cow_engine(budget);
+    assert_eq!(e.arena_stats().2, at_init, "the const entry itself still fits");
+    let px0 = e.frame(Fx::from_int(10))[0];
+    let err = e.take_error().expect("the refused promotion is reported");
+    assert!(err.message.contains("array memory budget"), "{}", err.message);
+    // the ledger stayed inside its cap — the bug was a silent overshoot
+    let bytes = e.arena_stats().2;
+    assert!(bytes <= budget, "byte ledger overshot the budget: {bytes} > {budget}");
+    assert_eq!(bytes, at_init, "a refused promotion charges nothing");
+    // the write never landed, and the blast radius is PB-shaped (#84): the
+    // handler invocation aborts, the pixel pass still runs
+    assert_eq!(e.var("v"), Some(Value::Num(Fx::ZERO)));
+    assert_eq!(px0, [0, 255, 0]);
+    assert!(!err.is_resource_guard());
+}
+
 // ---- setPalette live-aliasing (oracle-confirmed 2026-08-29,
 // tools/oracle/alias-probes.mjs: in-place writes through the installed
 // array changed paint()'s output with no second setPalette call) ----
