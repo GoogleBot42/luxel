@@ -51,6 +51,7 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 
 | tool | what it does |
 |---|---|
+| `npm test` (from `web/`) | Pure unit tests for `web/src/lib/*.ts`, no browser and no build step: node's built-in runner over `web/tests/*.test.mjs`, with `--experimental-strip-types` so the `.ts` modules are imported directly (zero test dependencies). Currently covers the `//#` control-hint parser (`hints.ts`) — both directive placements, merge precedence, malformed input. Add pure-logic cases here rather than growing the chromium e2e. |
 | `web/tools/e2e.mjs` | Playground-only e2e in real chromium (puppeteer-core, nix-provided): gallery, editor, compile. |
 | `web/tools/device-e2e.mjs` | Device-mode e2e: builds `luxel-cli`, starts the mirror, points the UI at it via `?device=` — connect, live push, library CRUD, playlist, map install, controls. The pattern-flow gate. |
 | `web/tools/maxpixels-e2e.mjs` | Per-board pixel cap (#74): asserts the mirror's `/api/status` carries `max_pixels` and that the playground's Pixels control clamps to it — once for the real 2048 strip cap, once against an intercepted status impersonating a 4096-px HUB75 panel board. The only way to drive the 4096 path without the panel (#75). |

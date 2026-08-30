@@ -8,7 +8,8 @@
     "wasm": "cd .. && cargo build --release --target wasm32-unknown-unknown -p luxel-wasm && mkdir -p web/public && cp target/wasm32-unknown-unknown/release/luxel_wasm.wasm web/public/luxel.wasm",
     "dev": "npm run wasm && node tools/gen-gallery.mjs && vite",
     "build": "npm run wasm && node tools/gen-gallery.mjs && svelte-check --tsconfig ./tsconfig.json && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\""
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.2",
