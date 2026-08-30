@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-08-30 — A device with no web UI now links to one (#11, first slice)
+
+A device whose assets partition is empty served a dead end: a dark page
+saying "the web UI isn't installed" and a `tools/deploy.sh` line, which
+assumes you have the repo, a checkout, and `nix develop`. Everything
+needed to do better was already in place and simply never wired up — the
+playground has honoured `?device=<base>` since device mode existed, the
+firmware answers every route with `Access-Control-Allow-Origin: *`
+precisely so a foreign origin can drive it, and CI has published the web
+dist to `https://googlebot42.github.io/luxel/` since 2026-08-15. The
+embedded page now closes the loop: one anchor, its `?device=` filled in
+client-side from `location.host`, so the device tells the hosted UI its
+own address. `tools/deploy.sh` stays as the second paragraph.
+
+**Cost, because this lives in the app image.** `firmware/src/index.html`
+is `include_str!`'d into the binary (`server.rs`, and the native mirror
+in `luxel-cli/src/serve.rs` embeds the same file), so every byte is
+1 MiB-OTA-slot budget — see #160. Source +275 B; measured `.text` on
+riscv32imc +272 B, `.data`/`.bss` unchanged. The whole feature is one
+`<a>` and a 44-character `<script>`; no framework, no fetch, nothing to
+go stale.
+
+**The part that isn't done, and why it's a separate ticket (#162).** The
+Pages copy is https and devices are http, so the playground's calls to
+the device are mixed-content / Local-Network-Access requests.
+`web/src/flash/lib/device.ts` already handles exactly this for the WLED
+installer — it passes `targetAddressSpace: "local"` when the page is
+https and the target is genuinely local-space — but the playground's
+`gatedFetch` has no equivalent, so it rides on Chromium's auto-detection
+alone and has no browser-blocked message when that fails. Filed as #162
+with the measured constraints from docs/wled-migration.md; the link is
+unambiguously right on a plain-http host today, and #11 stays open for
+the device-side build mode that omits the assets entirely.
+
+Verified: `cargo build --release` (riscv32imc) before/after for the size
+delta, `tools/serve-e2e.mjs` green (`/` fallback + `/min` routing), and
+the page rendered in real chromium against a stand-in host — the anchor
+resolves to `https://googlebot42.github.io/luxel/?device=http://<host>`.
+
 ## 2026-08-30 — The installer stops claiming only two chips are built (#57)
 
 The installer page told anyone with an unsupported chip that "only classic

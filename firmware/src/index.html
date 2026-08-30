@@ -12,6 +12,7 @@
   main { max-width: 34rem; }
   h1 { font-size: 1rem; letter-spacing: .18em; color: #8b8fa3; margin: 0 0 1.4rem; }
   p { margin: 0 0 1rem; color: #b9bccb; }
+  a { color: #7fd6ff; }
   code { background: #0f1014; border: 1px solid #2a2d39; border-radius: 6px;
          padding: .7rem .8rem; display: block; font: 13px/1.4 ui-monospace, monospace;
          color: #e6e6ea; overflow-x: auto; white-space: nowrap; }
@@ -20,9 +21,13 @@
 <body>
 <main>
   <h1>LUXEL</h1>
-  <p>The web UI isn't installed on this device. Install it from the Luxel repo
-     (inside <code style="display:inline;padding:.1em .35em">nix develop</code>):</p>
+  <p>The web UI isn't installed on this device.
+     <a id=h href="https://googlebot42.github.io/luxel/">Open the hosted playground</a>,
+     which runs in your browser and drives this device over the network.</p>
+  <p>Or install the UI onto the device from the Luxel repo (inside
+     <code style="display:inline;padding:.1em .35em">nix develop</code>):</p>
   <code>tools/deploy.sh &lt;device-ip&gt; --assets-only</code>
 </main>
+<script>h.href+="?device=http://"+location.host</script>
 </body>
 </html>
