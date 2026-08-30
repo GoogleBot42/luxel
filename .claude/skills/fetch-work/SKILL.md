@@ -30,7 +30,11 @@ follow-up than to start the wrong thing.
    work lives, and pull candidates from the sources relevant to the
    requested kind (or all of them, if no kind was specified).
 2. **Dedupe against reality before ranking anything.** Docs and memory
-   drift stale — something on a backlog list may already be shipped. For
+   drift stale — something on a backlog list may already be shipped. First
+   `git fetch origin` and read every source (docs, UPDATES.md, code) from
+   `origin/master`, NOT the main checkout — nobody rebases the main
+   checkout, and on 2026-08-30 it was 41 commits behind with backlog docs
+   still listing work that had shipped the day before. For
    each candidate, check `UPDATES.md` for a shipped entry and skim the
    relevant code/docs. Drop anything already done. This is the single most
    important step — never propose finished work.
