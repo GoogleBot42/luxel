@@ -8,6 +8,12 @@ import { gatedFetch } from "./fetchgate";
 export interface DeviceStatus {
   fps: number;
   pixels: number;
+  /** The device's hard pixel-count cap, which is PER BOARD (a 64x64 HUB75
+   *  panel board reports 4096, strip boards 2048). Absent on firmware older
+   *  than the field — fall back to GET /api/config's `max`, and only then to
+   *  a built-in default. Never assume a constant: the whole point of the
+   *  field is that the UI clamps to the connected board, not to 2048. */
+  max_pixels?: number;
   vmerr: string | null;
   /** Network input currently driving the strip (DDP/E1.31), if any. */
   live?: "ddp" | "e131" | null;

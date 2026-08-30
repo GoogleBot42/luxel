@@ -246,6 +246,14 @@
           target = "xtensa-esp32s3-none-elf";
           buildStd = true;
         };
+        # Seengreat RGB Matrix HUB75 S3 panel driver board (Gitea #73). The
+        # board feature turns `hub75` on itself — no extraFeatures needed.
+        luxel-fw-seengreat-hub75 = {
+          board = "board-seengreat-hub75";
+          chip = "esp32s3";
+          target = "xtensa-esp32s3-none-elf";
+          buildStd = true;
+        };
       };
     in
     {

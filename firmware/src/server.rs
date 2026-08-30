@@ -124,11 +124,16 @@ fn status_json() -> String {
         }
         s
     };
+    // max_pixels: this board's cap (per-board since #74 — a HUB75 panel
+    // board allows 4096). The playground polls status continuously, so
+    // carrying the cap here keeps its pixel control clamped to the real
+    // device even if the one-shot /api/config probe at connect failed.
     match get_vmerr() {
         Some(e) => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":\"{}\"}}",
+            "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":\"{}\"}}",
             fps,
             pixels,
+            MAX_PIXELS,
             slot,
             version,
             heap,
@@ -139,8 +144,8 @@ fn status_json() -> String {
             json_escape(&e)
         ),
         None => format!(
-            "{{\"fps\":{},\"pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":null}}",
-            fps, pixels, slot, version, heap, live, src, bc, web
+            "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":null}}",
+            fps, pixels, MAX_PIXELS, slot, version, heap, live, src, bc, web
         ),
     }
 }

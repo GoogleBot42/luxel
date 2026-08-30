@@ -292,31 +292,11 @@ async fn main(spawner: Spawner) -> ! {
         output::SpiStripOutput::new(spi)
     };
     // HUB75 panel over LCD_CAM (S3 only): the strip SPI is not wired at
-    // all — DMA_CH0 feeds the panel's circular rescan instead. Pin map =
-    // the esp-hub75 S3 example's (clear of octal-PSRAM GPIO33-37; GPIO46
-    // is input-strapping at reset, safe as an address output after boot).
-    // UNTESTED ON METAL until the Seengreat board arrives (#73/#75).
+    // all — DMA_CH0 feeds the panel's circular rescan instead. The pin map
+    // is per-board and lives in board.rs with the rest of the board
+    // identity. UNTESTED ON METAL on either panel board (#75).
     #[cfg(feature = "hub75")]
-    let out = {
-        use esp_hal::gpio::Pin;
-        let pins = esp_hub75::Hub75Pins16 {
-            red1: p.GPIO38.degrade(),
-            grn1: p.GPIO42.degrade(),
-            blu1: p.GPIO48.degrade(),
-            red2: p.GPIO47.degrade(),
-            grn2: p.GPIO2.degrade(),
-            blu2: p.GPIO21.degrade(),
-            addr0: p.GPIO14.degrade(),
-            addr1: p.GPIO46.degrade(),
-            addr2: p.GPIO13.degrade(),
-            addr3: p.GPIO9.degrade(),
-            addr4: p.GPIO3.degrade(),
-            blank: p.GPIO11.degrade(),
-            clock: p.GPIO12.degrade(),
-            latch: p.GPIO10.degrade(),
-        };
-        hub75::Hub75Output::new(p.LCD_CAM, pins, p.DMA_CH0)
-    };
+    let out = hub75::Hub75Output::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0);
     // ---- end board wiring ----
 
     // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —

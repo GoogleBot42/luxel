@@ -14,7 +14,7 @@ board_target() {
   case "$1" in
     board-pixelblaze-v3|board-athom-music|board-esp32-generic)
       CHIP=esp32;    TARGET=xtensa-esp32-none-elf;      XTENSA=1 ;;
-    board-s3-devkit)
+    board-s3-devkit|board-seengreat-hub75)
       CHIP=esp32s3;  TARGET=xtensa-esp32s3-none-elf;    XTENSA=1 ;;
     board-c3-devkit)
       CHIP=esp32c3;  TARGET=riscv32imc-unknown-none-elf;  XTENSA=0 ;;

@@ -72,6 +72,10 @@ board-esp32-generic = ["esp32"]
 # Untested on metal (no bench hardware) — reviewed wiring only; see docs/boards.md.
 board-s3-devkit = ["esp32s3"]
 board-c6-devkit = ["esp32c6"]
+# Seengreat "RGB Matrix HUB75 S3" panel driver board — a panel board, so it
+# turns `hub75` on itself (unlike board-s3-devkit, where the panel is an
+# optional add-on and `hub75` is passed separately). Pin map in board.rs.
+board-seengreat-hub75 = ["esp32s3", "hub75"]
 # RAM-constrained profile (S2/C2 tier, see docs/boards.md): web pool 3→2
 # (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
 # browser navigation — Chromium preconnect wants 3 sockets at cold nav.

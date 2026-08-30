@@ -1,5 +1,68 @@
 # Update log
 
+## 2026-08-29 — HUB75 panel boards: `board-seengreat-hub75` + per-board
+## MAX_PIXELS (whole 64x64 panel finally addressable) (#73, #74)
+
+Code-side prep so the Seengreat RGB Matrix HUB75 S3 and its 64x64 panel
+can be brought up the day they arrive (#75). **No hardware was touched —
+every number below is a build/link measurement, not a panel.**
+
+- **`board-seengreat-hub75`** joins the board features. Real pin map,
+  transcribed by signal name from the [vendor wiki](https://seengreat.com/wiki/214/):
+  R1 IO5 · G1 IO4 · B1 IO6 · R2 IO15 · G2 IO7 · B2 IO17 · A IO8 · B IO18 ·
+  C IO10 · D IO9 · **E IO16** (64 rows need it) · CLK IO12 · LAT IO11 ·
+  OE IO13. Both panel outputs (ribbon connector and plug-in header) share
+  those pins. The vendor's table is *not* in R1,G1,B1,R2,G2,B2 pin order —
+  transcribe by name or you get a colour-swapped panel.
+- **The HUB75 pin map moved out of main.rs into `board::hub75_pins!`**
+  (#73's scope note). Pins are esp-hal types, so it's a macro rather than
+  a const table, but it lives beside the `def` blocks: a second panel
+  board is now a def-block + macro-arm diff, and main.rs keeps exactly one
+  wiring line for all panel boards. Being a panel board, the feature
+  enables `hub75` itself (`["esp32s3", "hub75"]`) instead of needing it
+  passed at build time.
+- **`MAX_PIXELS` is per board** (#74), moved from `shared` to `board.rs`
+  and re-exported: **4096** with `hub75`, **2048** everywhere else. Before
+  this, a 64x64 panel was clamped to half its area and the bottom 32 rows
+  rendered black. It is deliberately not a global raise: at 4096 px the
+  classic ESP32's WS2812 encode buffer alone would be ~36 KB against an
+  80 KB heap. The panel path never builds that buffer at all — the driver
+  owns two ~28 KB bitplane framebuffers allocated once at boot — so the
+  extra pixels only cost the ~12 KB-each per-frame buffers. A `const`
+  assertion now fails the build if a panel's area ever exceeds its board's
+  cap, so the half-dark panel cannot come back silently.
+- **The cap reaches the editor.** `/api/status` (firmware *and* the native
+  mirror) now carries `max_pixels`, and the playground takes its pixel
+  clamp from there on every poll, falling back to `/api/config`'s `max`
+  for older firmware. Status wins over config when both answer — the
+  precedence matters, and getting it backwards is exactly what the first
+  cut did (caught in chromium, not review). New regression check:
+  `web/tools/maxpixels-e2e.mjs`, which drives the 4096 path by
+  intercepting status to impersonate a panel board — the only way to
+  exercise it without the panel.
+- **Partition decision (#73): the standard 4 MB table stays**, even though
+  the module is 16 MB. OTA slots are 1 MiB-capped either way, storage is
+  nowhere near full, and the assets partition holds a 641 KB bundle in
+  983,040 B. A second table would have to be threaded through
+  build-esp32.sh, flake.nix, the release workflow, build.rs and
+  `takeover.rs` — real complexity for space nothing needs yet. PSRAM stays
+  uninitialised for the same reason (DMA buffers must be internal SRAM
+  regardless); the array-arena idea is unchanged and still future work.
+- **Verification (all eight board/feature combos):** every one builds,
+  links its load-bearing features (`tools/image-check.sh`) and fits the
+  1 MiB OTA slot — tightest is still the C6 at 994,352 B / 54,224 B
+  margin; the new board is 882,976 B / 165,600 B. Existing boards moved
+  by 80–550 B, all of it the new status field and codegen noise.
+  `tools/stack-check.sh` on all eight: no frame over the 12 KB budget,
+  `.stack` from 29,324 B (classic ESP32) to 141,256 B (C6), the new board
+  at 50,500 B — identical to `board-s3-devkit` + `hub75`, as expected.
+  `cargo test --workspace` green; device-mode e2e green. Sizes and stack
+  figures refreshed in docs/boards.md.
+
+Still open, and deliberately so: **FPS at 4096 px, real `heap_free` under
+load, and whether the panel's driver IC is even a shift-register type**
+all need the hardware and ride on #75.
+
 ## 2026-08-29 — Verify harness learns to DRIVE a pattern: `--vars-*` pins
 ## exported vars, and automap goes orig-unrenderable 0 → close 7 (#122)
 
