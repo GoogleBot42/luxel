@@ -183,7 +183,11 @@ A real device needs a settings surface (page/dialog). Fields:
 - **Pixel count** ✅ — `GET/POST /api/config` resizes the strip **live, no
   reboot**: the render task rebuilds the engine + SPI buffer on a `Msg::Config`
   (feasible because the SPI is Blocking, no DMA, and the encode buffer is a plain
-  heap Vec). Persisted in the `LXDV` nvs record; capped at `MAX_PIXELS` (2048).
+  heap Vec). Persisted in the `LXDV` nvs record; capped at the board's
+  `MAX_PIXELS` — 2048 on strip boards, 4096 on 64x64 HUB75 panel boards
+  (docs/boards.md, "Pixel caps are per board"). The UI reads that cap from
+  `/api/status`'s `max_pixels` on every poll, falling back to
+  `/api/config`'s `max`, so the Pixels field clamps to the connected board.
   Shipped firmware v0.1.13. The Settings Pixels field is editable and re-anchors
   the local preview.
 - **LED protocol** ✅ — `GET/POST /api/protocol` (sk9822/ws2812 + aliases)

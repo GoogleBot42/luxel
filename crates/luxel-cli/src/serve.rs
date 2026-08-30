@@ -675,10 +675,13 @@ fn status_json(state: &State) -> String {
         Some(p) => format!("\"{p}\""),
         None => String::from("null"),
     };
+    // max_pixels mirrors the firmware's per-board cap field (#74); the
+    // mirror is a strip device, so it reports the strip cap.
     format!(
-        "{{\"fps\":{},\"pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":{}}}",
+        "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":{}}}",
         fps,
         state.pixel_count.load(Ordering::Relaxed),
+        MAX_PIXELS,
         env!("CARGO_PKG_VERSION"),
         state.heap_free.load(Ordering::Relaxed),
         live,

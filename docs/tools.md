@@ -53,6 +53,7 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 |---|---|
 | `web/tools/e2e.mjs` | Playground-only e2e in real chromium (puppeteer-core, nix-provided): gallery, editor, compile. |
 | `web/tools/device-e2e.mjs` | Device-mode e2e: builds `luxel-cli`, starts the mirror, points the UI at it via `?device=` — connect, live push, library CRUD, playlist, map install, controls. The pattern-flow gate. |
+| `web/tools/maxpixels-e2e.mjs` | Per-board pixel cap (#74): asserts the mirror's `/api/status` carries `max_pixels` and that the playground's Pixels control clamps to it — once for the real 2048 strip cap, once against an intercepted status impersonating a 4096-px HUB75 panel board. The only way to drive the 4096 path without the panel (#75). |
 | `web/tools/sync-e2e.mjs` | Two mirrors over loopback UDP: leader/follower clock convergence, sensor relay, pattern adoption via `/api/pattern.lxp`. |
 | `web/tools/coldload.mjs` | Cold-load soak against a REAL device: `node tools/coldload.mjs <url> [N]` launches N fresh-profile chromiums (cache off) and requires full device-mode boot with zero failed requests — the acceptance check for the device web pool (3 sockets default, 2 small-chip). `TRACE=1` prints per-request timelines on clean loads too. |
 | `web/tools/lxp.mjs` | Node-side pattern compiler for scripts: loads the built `luxel.wasm`, exports `compile()` / `envelope()` / `lxpBody()` — how anything outside a browser produces the LXP1 envelopes the device API takes. |

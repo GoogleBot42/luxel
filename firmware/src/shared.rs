@@ -62,8 +62,11 @@ pub static BRIGHTNESS: AtomicU8 = AtomicU8::new(4);
 pub static PIXEL_COUNT: AtomicU32 = AtomicU32::new(300);
 
 /// Hard cap on a runtime pixel count, to bound heap use (engine buffers + the
-/// SPI encode buffer). 2048 leaves ample headroom on the ESP32.
-pub const MAX_PIXELS: u32 = 2048;
+/// SPI encode buffer). Per-board since Gitea #74 — 2048 on strip boards,
+/// 4096 where a 64x64 HUB75 panel needs it — and defined next to the rest of
+/// the board identity; re-exported here because every consumer (`/api/config`
+/// validation, `/api/status`, the render task's clamp) reads it from `shared`.
+pub use crate::board::MAX_PIXELS;
 
 /// Active LED protocol as a code (0 = SK9822, 1 = WS2812; leds::Protocol
 /// from_u8/as_u8). Runtime-configurable (`/api/protocol`): only the render task

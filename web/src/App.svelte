@@ -181,7 +181,11 @@
   /** Device output brightness (0–brightnessMax), from GET /api/brightness. */
   let brightness = 4;
   let brightnessMax = 31;
-  /** Max pixel count the device firmware accepts (GET /api/config). */
+  /** Max pixel count the device firmware accepts. Per BOARD, not a
+   *  constant — a 64x64 HUB75 panel board caps at 4096, strip boards at
+   *  2048 (Gitea #74). Sourced from `/api/status`'s `max_pixels` (kept
+   *  current by every status poll), falling back to GET /api/config's
+   *  `max`, and only then to the strip default for pre-#74 firmware. */
   let pixelMax = 2048;
   /** LED protocol the device is driving + the selectable options. */
   let deviceProtocol = "sk9822";
@@ -746,6 +750,12 @@
       device = session;
       deviceBase = base;
       devicePixels = st.pixels; // hardware pixel count (fixed; layout only rearranges)
+      // Per-board cap (#74). Status is authoritative and keeps being
+      // refreshed by every later poll; /api/config's `max` is only the
+      // fallback for firmware that predates the field — so remember which
+      // one we got and don't let the older source overwrite the newer.
+      const capFromStatus = st.max_pixels ?? 0;
+      if (capFromStatus) pixelMax = capFromStatus;
       deviceHeapFree = st.heap_free ?? 0; // 0 on a mirror / older firmware
       deviceVmerr = st.vmerr;
       layout = { kind: "strip", pixels: st.pixels };
@@ -766,7 +776,7 @@
       }
       try {
         const c = await session.config();
-        pixelMax = c.max || 2048;
+        pixelMax = capFromStatus || c.max || 2048;
         if (c.protocol) deviceProtocol = c.protocol;
       } catch {
         /* older firmware without /api/config — pixel count stays read-only */
@@ -838,6 +848,7 @@
     try {
       const st = await device.status();
       deviceHeapFree = st.heap_free ?? 0;
+      if (st.max_pixels) pixelMax = st.max_pixels; // per-board cap (#74)
       deviceVmerr = st.vmerr;
       if (!compileError) checkCapacity(); // fresh headroom → fresh verdict
     } catch {

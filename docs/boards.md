@@ -23,29 +23,34 @@ cargo build --release --no-default-features --features board-c3-devkit
 Hermetic images (no devshell needed) come from the flake — one package per
 board: `nix build .#luxel-fw-pixelblaze-v3` (also `luxel-fw-c3-devkit`,
 `luxel-fw-athom-music`, `luxel-fw-esp32-generic`, `luxel-fw-s3-devkit`,
-`luxel-fw-c6-devkit`); see docs/firmware.md for the credential-baking
-caveats.
+`luxel-fw-c6-devkit`, `luxel-fw-s3-hub75`,
+`luxel-fw-seengreat-hub75`); see docs/firmware.md for the
+credential-baking caveats.
 
 ## Supported boards
 
-| feature | chip | strip pins | defaults | status | notes |
-|---|---|---|---|---|---|
-| `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | supported (hardware-verified) | bare devkit |
-| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
-| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18 | WS2812, 60 px | builds, untested on hardware | Athom music-reactive WLED controller — demoted from bench hardware, config stays maintained; strip-VCC relay on GPIO2 must be driven high or the strip stays dark; channel 2 + mic + IR unused for now |
-| `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
-| `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
-| `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
-| `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, see src/hub75.rs + main.rs wiring) | HUB75 64x64 panel, 2048 px (cap-clamped — #74 lifts to 4096) | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's; strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
+| feature | chip | strip pins | defaults | pixel cap | status | notes |
+|---|---|---|---|---|---|---|
+| `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | 2048 | supported (hardware-verified) | bare devkit |
+| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | 2048 | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
+| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18 | WS2812, 60 px | 2048 | builds, untested on hardware | Athom music-reactive WLED controller — demoted from bench hardware, config stays maintained; strip-VCC relay on GPIO2 must be driven high or the strip stays dark; channel 2 + mic + IR unused for now |
+| `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | 2048 | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
+| `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
+| `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
+| `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's (a panel on jumper wires); strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
+| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **builds, UNTESTED ON METAL** | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics, microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
 
-All six build clean as of v0.1.39 (verified compile + image-size check +
+All eight combos build clean (verified compile + image-size check +
 `tools/image-check.sh` + `tools/stack-check.sh`). "Untested on hardware"
 means the wiring is reviewed against the vendor pinout but the board has
 never been lit up; the S3/C6 rows go further — **no S3 or C6 exists on the
 bench at all**, so nothing beyond "it compiles, links, fits the OTA slot
 and keeps a sane stack" has been established. Treat their pin choices,
 heap sizing and radio behaviour as unverified — hardware bring-up is
-tracked in Gitea #56. Both protocols run over
+tracked in Gitea #56, and the Seengreat board plus its 64x64 panel in
+Gitea #75 (which also owns the first real FPS and heap-floor numbers at
+4096 px; nothing in this file has been measured on a panel). Both
+protocols run over
 SPI: SK9822/APA102 uses CLK+DATA; WS281x uses DATA only (encoded
 bitstream), so a WS2812 board simply leaves CLK unconnected — the pin
 still gets claimed.
@@ -61,25 +66,27 @@ The partition table (firmware/partitions.csv) is pure A/B with 1 MiB
 (1,048,576-byte) app slots, so the app image — what `espflash save-image`
 emits and `/api/ota` writes — must stay under that or OTA rejects it
 (crossed once at v0.1.17; opt-level "s" bought it back — history and diet
-options in docs/size-report.md). Per-board app images at v0.1.39
-(devshell builds with WiFi creds baked in — a credless build strips the
-WiFi stack and reads ~1.5 KB smaller, which is what CI measures):
+options in docs/size-report.md). Per-board app images at v0.1.39,
+remeasured 2026-08-29 (devshell builds with WiFi creds baked in — a
+credless build strips the WiFi stack and reads ~1.5 KB smaller, which is
+what CI measures):
 
 | board | app image | slot margin |
 |---|---:|---:|
-| `board-c3-devkit` | 894,496 B | 154,080 B |
-| `board-pixelblaze-v3` | 944,832 B | 103,744 B |
-| `board-athom-music` | 944,720 B | 103,856 B |
-| `board-esp32-generic` | 944,688 B | 103,888 B |
-| `board-s3-devkit` | 885,840 B | 162,736 B |
-| `board-s3-devkit` + `hub75` | 884,320 B | 164,256 B |
-| `board-c6-devkit` | 987,600 B | **60,976 B** |
+| `board-c3-devkit` | 901,744 B | 146,832 B |
+| `board-pixelblaze-v3` | 946,672 B | 101,904 B |
+| `board-athom-music` | 946,496 B | 102,080 B |
+| `board-esp32-generic` | 946,544 B | 102,032 B |
+| `board-s3-devkit` | 887,792 B | 160,784 B |
+| `board-s3-devkit` + `hub75` | 882,960 B | 165,616 B |
+| `board-seengreat-hub75` | 882,976 B | 165,600 B |
+| `board-c6-devkit` | 994,352 B | **54,224 B** |
 
 The three classic-ESP32 variants differ only by a few hundred bytes (same
 chip feature set; only board.rs strings and the wiring lines change), so
 checking one of them per release is enough — but the *chips* are not
 interchangeable for size purposes: the C6 is ~93 KB fatter than the C3 for
-identical source (bigger radio blob / riscv32imac codegen), and at 5.8% it
+identical source (bigger radio blob / riscv32imac codegen), and at 5.2% it
 now owns the tightest margin in the fleet. It is the board that will hit
 the 1 MiB ceiling first; check `board-c6-devkit` on any release that grows
 the image. Measure with:
@@ -91,13 +98,84 @@ espflash save-image --chip esp32c6 \
 ```
 
 `.stack` (the leftover-DRAM main-task stack, `tools/stack-check.sh`) at
-the same revision: pixelblaze-v3 29,412 B · c3-devkit 39,632 B ·
-s3-devkit 51,172 B (50,548 B with `hub75` — the DMA descriptor static;
-the two ~28 KB framebuffers are heap-leaked at boot, not statics) ·
-c6-devkit 141,320 B — all above the 24 KB floor. The
+the same revision: pixelblaze-v3 29,324 B · athom-music 29,348 B ·
+esp32-generic 29,324 B · c3-devkit 39,568 B · s3-devkit 51,108 B
+(50,500 B with `hub75`, and the same 50,500 B for
+`board-seengreat-hub75` — the delta is the DMA descriptor static; the
+two ~28 KB framebuffers are heap-leaked at boot, not statics) ·
+c6-devkit 141,256 B — all above the 24 KB floor, and no function frame
+over the 12 KB budget on any of them. The
 S3/C6 numbers come from reusing the C3's 160 KB heap on chips with more
 DRAM; when hardware exists, the right follow-up is to spend some of that
-slack on heap (pattern capacity) rather than leave it as stack.
+slack on heap (pattern capacity) rather than leave it as stack. That is
+now more than a nicety on the panel boards: at 4096 px the per-frame
+buffers alone are ~48 KB of heap (see the pixel-cap section), so the S3's
+~26 KB of surplus stack is the obvious place to find it — measured on
+metal in #75, not guessed at here.
+
+## Pixel caps are per board
+
+`board::MAX_PIXELS` is the hard ceiling on a runtime pixel count — what
+`/api/config` validates against, what `/api/status` reports as
+`max_pixels`, and what the render task clamps to. It is **per board**
+(Gitea #74), not one global constant:
+
+- **strip boards: 2048.** A 4096-px WS2812 encode buffer alone is ~36 KB,
+  which the classic ESP32's 80 KB heap cannot carry alongside the WiFi
+  blob. Raising it globally would turn a clean "pixels must be 1..=N"
+  rejection into a heap-exhaustion crash.
+- **HUB75 panel boards: 4096**, because a 64x64 panel *is* 4096 pixels and
+  anything less renders the bottom rows black. The panel path never builds
+  an encode buffer at all — the driver owns two bitplane framebuffers,
+  allocated once at boot — so the extra 2048 pixels cost only the
+  per-frame RGB buffers.
+
+A `const` assertion in board.rs fails the build if a panel's area ever
+exceeds its board's cap, so the half-dark panel that shipped between #72
+and #74 cannot come back silently.
+
+Heap cost at 4096 px, by inspection (each buffer is 3 B/px and grows to
+the active pixel count): the engine's frame buffer, the crossfade blend
+buffer, the outpipe wire buffer and the `/api/pixels` snapshot — ~12 KB
+each, ~48 KB together — on top of the panel's two ~28 KB framebuffers.
+Against the S3's 224 KB of configured heap that leaves roughly 70 KB for
+WiFi plus pattern arrays, which the budgeted-engine machinery
+(`luxel_core::budget`) polices exactly as it does on a strip: a pattern
+that doesn't fit is rejected with a vmerr, never a panic. **These are
+arithmetic, not measurements** — real `heap_free` and FPS at 4096 px are
+#75's job.
+
+The playground reads the cap from `/api/status`'s `max_pixels` on every
+poll (falling back to `/api/config`'s `max` for older firmware), so the
+editor's pixel control clamps to whatever board is actually connected.
+`web/tools/maxpixels-e2e.mjs` is the regression check.
+
+## Big-flash and PSRAM modules (the Seengreat board)
+
+The Seengreat board carries an ESP32-S3-WROOM-1-**N16R8**: 16 MB of flash
+and 8 MB of octal PSRAM. Luxel uses neither, deliberately.
+
+**Flash: the standard 4 MB `firmware/partitions.csv` stays** (decision for
+Gitea #73). A 16 MB module runs it fine — the last 12 MB is simply
+unallocated. Growing the table would buy nothing today and cost real
+complexity: the OTA app slots are capped at 1 MiB by the tripwire above
+either way, the storage partition (1 MB) is nowhere near full, and the
+assets partition (0xF0000 = 983,040 B) currently holds a 641 KB bundle
+with ~35% headroom. Against that, a second table would need a per-board
+partition file threaded through `build-esp32.sh`, `flake.nix`, the
+release workflow, `build.rs`'s `esp-idf-part` serialization *and*
+`src/takeover.rs` (which writes the table during a WLED takeover) — and
+would fork the "one image, one layout" property that makes OTA and the
+installer page simple. Revisit only when something actually needs the
+space; the follow-up is tracked on Gitea, not here.
+
+**PSRAM is not initialised.** Nothing in the current firmware wants it:
+DMA framebuffers must live in internal SRAM regardless, and the engine's
+hot per-frame buffers would be slower on PSRAM than in DRAM. Its one
+plausible use is the same one already noted for WROVER modules — a
+dedicated arena for large pattern arrays, letting the array budget grow
+without touching the DRAM heap. That stays a future idea (docs/ideas.md),
+not a v1 requirement.
 
 ## Beyond the current boards: chip-support assessment (2026-07-29)
 
@@ -246,6 +324,13 @@ shared by build-esp32.sh and tools/stack-check.sh):
    );
    ```
 
+   A **HUB75 panel board** skips step 3 entirely: main.rs has one wiring
+   line for every panel board (`board::hub75_pins!(p)`) and the pin map is
+   an arm of that macro back in board.rs, next to the def block. Such a
+   board also enables the driver from its own feature —
+   `board-my-panel = ["esp32s3", "hub75"]` — so nothing has to be passed
+   at build time.
+
 Then build it (`BOARD=board-my-thing ./build-esp32.sh`, whatever the chip)
 and add a row to the table above. If the board should also get a hermetic
 `nix build` image and a release artifact, add a `luxel-fw-my-thing` entry
@@ -261,8 +346,13 @@ boards there that correspond to real WLED products, and re-run
 `web/tools/flash-e2e.mjs`. Unknown board ids in a release manifest are
 skipped by the page on purpose, so leaving a board out is safe.
 
+If the board's output has a different pixel ceiling than a 2048-px strip
+(a panel, say), give it a `MAX_PIXELS` arm in board.rs too — see "Pixel
+caps are per board" above.
+
 Pins are esp-hal *types*, not data — that's why wiring lives in code behind
-`cfg` rather than in the `def` table. Defaults only seed the first boot;
+`cfg` rather than in the `def` table (the HUB75 map is a macro for the same
+reason). Defaults only seed the first boot;
 after that the persisted settings win, so picking the "wrong" default
 protocol or count is harmless.
 
