@@ -41,7 +41,10 @@
 // origError string; the UI shows that side as unavailable. Corpus source is
 // read at REQUEST time and never written anywhere — see the clean-room rule in
 // CLAUDE.md. Per-slug fixups (tools/verify/fixups.json) are applied to the
-// original before it is served, exactly as snap.mjs and report.mjs apply them.
+// original before it is served, exactly as snap.mjs and report.mjs apply them —
+// including the per-side `vars` pins, which the UI pushes into each side's
+// engine once after init (a client-driven original is black until it is
+// written to, which reads as a dead pattern).
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,7 +52,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applySourceFixups, resolveRig } from "./fixups.mjs";
+import { applySourceFixups, resolveRig, varsOverride } from "./fixups.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../..");
@@ -193,6 +196,10 @@ function buildData() {
       epeFiles: pair.epeFiles ?? null,
       rig,
       fixups: fixups ?? null,
+      // Per-side exported-var pins (tools/verify/fixups.json): the UI pushes
+      // them into each engine after init, so a client-driven original renders
+      // what it renders under the judge harness instead of sitting dark.
+      vars: varsOverride(pair.slug),
       verdict: readVerdict(pair.slug),
       origSource,
       origError,

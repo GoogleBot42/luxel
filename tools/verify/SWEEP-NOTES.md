@@ -83,3 +83,11 @@ Cleared entries move to Gitea or the aggregate report.
   fix + re-judge; NOT engine gaps.
 - `--wall-clock N` flag added to snap.mjs 2026-08-23 (fixed for the run;
   never advances with simulated time).
+- `--vars-orig`/`--vars-port` added to snap.mjs 2026-08-29 (Gitea #122):
+  pushes values into a side's EXPORTED vars once after init, the way a
+  companion app drives a pattern over PB's vars API. Per side, because
+  the two sides of a pair may name the same variable differently.
+  fixups.json carries the same thing as a declarative `vars` pin, and
+  meta.json now reports `varsExported`/`varsApplied` per side. Judge
+  consequence: a black original that exports vars may be DRIVEN, not
+  unrenderable — check `varsExported` before scoring it 0.

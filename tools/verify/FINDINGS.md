@@ -280,8 +280,13 @@ Gap 5 (silent-null originals), per slug:
   re-resolved each frame).
 - `skypirate-s-centered-spectrum` — wrong rig: hard-coded to its
   author's 1800-px 3-column install; fixups.json now pins grid 3×600.
-- `automap` — needs a driven exported var (`pixel`); harness has no
-  --vars flag yet (ticketed).
+- `automap` — not a gap: a CLIENT-DRIVEN pattern. It lights only the
+  pixel index an external app writes into its exported var, and at the
+  default index nothing lit IS the correct render. Settled 2026-08-29
+  (Gitea #122): snap.mjs gained `--vars-orig`/`--vars-port`, fixups.json
+  gained a per-side `vars` pin (both sides pinned to mid-strip 30 — the
+  two sides name the variable differently), and the pair was re-judged
+  off a driven render.
 - `performance-test-framework` — renders nothing BY DESIGN (CPU
   benchmark; PB also shows black). Non-visual; needs a pairs decision.
 

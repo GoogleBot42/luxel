@@ -23,6 +23,10 @@
 //   --grid WxH           override grid dimensions (grid rig; implies pixels)
 //   --controls-orig "name=v[,v,v];name2=v"   controls for the original
 //   --controls-port "..."                    controls for the port
+//   --vars-orig "name=v;name2=v"   exported-var values pushed into the original
+//   --vars-port "..."              the same for the port (names may differ)
+//   --no-vars            ignore this slug's fixups.json var pins entirely (see
+//                        below) — the only way to render a pinned pair UNDRIVEN
 //   --sensors auto|synth|off   synthetic sensor-board feed (default auto —
 //                        fed only to a side whose engine reports wants_sensors)
 //   --label NAME         output subdirectory name (default "default")
@@ -43,8 +47,8 @@
 //
 // meta.json is written for a reader on a context budget: it holds settings,
 // provenance, run-level `warnings`, and per side `image`, `controls`,
-// `controlsApplied`, `warnings`, `compileError`, `runtimeError`,
-// `wantsSensors`, `sensors` (+ `sensorModel` when synth) and
+// `controlsApplied`, `varsExported`, `varsApplied`, `warnings`, `compileError`,
+// `runtimeError`, `wantsSensors`, `sensors` (+ `sensorModel` when synth) and
 // `statsSummary` ({avg,min,max,first,last} per series, plus `zeroMotionFrames`
 // and `brightnessTrend`) — it is short enough to read whole. The FULL per-frame
 // series live in the sibling stats.json (one line per series, per side) and
@@ -61,9 +65,12 @@
 // harness — a cached run whose provenance differs from a fresh one is stale
 // and must be discarded rather than reused. `provenance.fixups` records any
 // per-slug fixup in force (tools/verify/fixups.json — author tripwire lines
-// stripped from the ORIGINAL, rig overrides applied to both sides); the
+// stripped from the ORIGINAL, rig overrides applied to both sides, per-side
+// exported-var pins pushed in after init); the
 // manifest itself is folded into `harnessSha256`, so editing it invalidates
-// cached runs. An explicit --rig/--pixels/--grid still overrides a fixup rig.
+// cached runs. An explicit --rig/--pixels/--grid still overrides a fixup rig,
+// and an explicit --vars-orig/--vars-port entry overrides a fixup var of the
+// same name.
 // Strip/cloud rigs render a waterfall (one row per frame, x = pixel index);
 // the grid rig renders a contact sheet of evenly spaced frames (each cell
 // stamped with its absolute timestamp), plus two extra pairs that make
@@ -86,6 +93,30 @@
 // they did before this option existed; `synth` always feeds; `off` never does.
 // meta.json records, per side, `wantsSensors` and the `sensors` mode ACTUALLY
 // applied (plus `sensorModel` when synth) — not the flag you typed.
+//
+// --vars-orig / --vars-port push EXPORTED VAR values into a side, the way a
+// companion app writes them over a Pixelblaze's vars API. Some originals are
+// driven rather than decorative — a mapper or a home-automation bridge pokes an
+// exported variable and the pattern draws what it was told — and at their
+// default value they render nothing at all, which is correct behaviour that
+// reads as a dead pattern. The values are applied ONCE, after init and any
+// --controls-*, before the first (warmup) frame; nothing re-pushes them per
+// frame, so a pattern that overwrites the var in beforeRender still wins.
+// The flags are per side because the two sides may name the same variable
+// differently (that naming divergence is itself a port finding). Spec is
+// "name=v" pairs separated by ";" or "," — one scalar per name. Only EXPORTED
+// vars are settable, exactly as on hardware; an unknown name is recorded as a
+// side warning instead of silently doing nothing. meta.json records, per side,
+// `varsExported` (every exported var name the engine reports) and `varsApplied`
+// (what actually landed). A `vars` key in fixups.json pins the same values
+// declaratively for every run of a slug; a CLI value for the same NAME wins
+// over the fixup's, while other pinned names still apply. An empty
+// --vars-orig "" does NOT unpin anything (there is nothing to say "no value"
+// with) — to see a pinned pair in its genuinely UNDRIVEN state, the state a
+// user with no companion app gets, pass --no-vars, which drops every fixup pin
+// on both sides and warns (in stderr and meta.json's `warnings`) that it did.
+// --no-vars composes with the flags: `--no-vars --vars-port name=5` drives only
+// the port.
 //
 // --probe-controls answers "which dials are actually live?" in one command.
 // For each side and each SETTABLE control (slider, toggle, inputNumber,
@@ -136,7 +167,7 @@ import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots, WASM_PATH } from "./enginehost.mjs";
 import { synthSensorFrame, SENSOR_MODEL } from "./sensormodel.mjs";
 import { encodePNG, upscale, drawText, textSize } from "./png.mjs";
-import { applySourceFixups, rigOverride, FIXUPS_PATH } from "./fixups.mjs";
+import { applySourceFixups, rigOverride, varsOverride, FIXUPS_PATH } from "./fixups.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const HERE = path.dirname(SELF);
@@ -204,6 +235,9 @@ function parseArgs(argv) {
     grid: null,
     controlsOrig: "",
     controlsPort: "",
+    varsOrig: "",
+    varsPort: "",
+    noVars: false,
     sensors: "auto",
     label: "default",
     sheetFrames: 12,
@@ -215,7 +249,7 @@ function parseArgs(argv) {
     wallClock: WALL_CLOCK,
     outRoot: path.join(HERE, "out"),
   };
-  const FLAGS = { "--probe-controls": "probeControls" };
+  const FLAGS = { "--probe-controls": "probeControls", "--no-vars": "noVars" };
   const KEYS = {
     "--seconds": ["seconds", Number],
     "--fps": ["fps", Number],
@@ -226,6 +260,8 @@ function parseArgs(argv) {
     "--grid": ["grid", String],
     "--controls-orig": ["controlsOrig", String],
     "--controls-port": ["controlsPort", String],
+    "--vars-orig": ["varsOrig", String],
+    "--vars-port": ["varsPort", String],
     "--sensors": ["sensors", String],
     "--label": ["label", String],
     "--sheet-frames": ["sheetFrames", Number],
@@ -326,6 +362,34 @@ function parseControls(spec) {
     out[name] = values;
   }
   return out;
+}
+
+/** "pixel=30;speed=0.5" (or comma-separated) → { pixel: 30, speed: 0.5 }.
+ *  One scalar per name — an exported var is a single number, unlike a control's
+ *  up-to-three components, so "," is a separator here rather than a value list. */
+function parseVars(spec) {
+  const out = {};
+  for (const part of String(spec).split(/[;,]/)) {
+    const s = part.trim();
+    if (!s) continue;
+    const eq = s.indexOf("=");
+    if (eq < 0) die(`bad var spec "${s}" (want name=value)`);
+    const name = s.slice(0, eq).trim();
+    const value = Number(s.slice(eq + 1).trim());
+    if (!name || !Number.isFinite(value)) die(`bad var spec "${s}" (want name=<number>)`);
+    // Vars cross the ABI as 16.16 — a value outside that range would wrap into
+    // some unrelated number rather than being rejected. Catch it here, where
+    // the message can name the argument.
+    if (Math.abs(value) >= 32768) die(`var "${name}": ${value} is outside the 16.16 range (±32768)`);
+    out[name] = value;
+  }
+  return out;
+}
+
+/** Fixup-pinned vars for one side, with CLI values layered on top: a --vars-*
+ *  entry beats the manifest for that NAME, other pinned names still apply. */
+function mergeVars(fixVars, cliSpec) {
+  return { ...(fixVars ?? {}), ...parseVars(cliSpec) };
 }
 
 // ---- synthetic sensor feed ("beat120") -------------------------------------
@@ -443,6 +507,8 @@ function renderSide(host, source, rig, o) {
   const side = {
     controls: [],
     controlsApplied: {},
+    varsExported: [],
+    varsApplied: {},
     warnings: [],
     compileError: null,
     runtimeError: null,
@@ -478,6 +544,16 @@ function renderSide(host, source, rig, o) {
       if (shown === null) side.warnings.push(`unknown control "${name}" — not applied`);
       else side.controlsApplied[name] = values;
     }
+    // The var surface an external client sees, and the pins pushed into it.
+    // AFTER the controls, so a control handler's side effects can't clobber a
+    // deliberately pinned var; once only, before the first frame — the same
+    // single write a companion app makes (see the header).
+    side.varsExported = Object.keys(eng.vars()).sort();
+    for (const [name, value] of Object.entries(o.vars ?? {})) {
+      if (eng.setVar(name, value)) side.varsApplied[name] = value;
+      else side.warnings.push(`unknown or non-exported var "${name}" — not applied`);
+    }
+
     // A control handler can itself throw; don't blame the first render frame.
     const ctlErr = eng.takeError();
     if (ctlErr && !side.runtimeError) {
@@ -935,6 +1011,23 @@ if (kind === "grid") {
 }
 if (!(rig.pixels > 0)) die("--pixels must be > 0");
 
+// Exported-var pins: fixups.json first, --vars-orig/--vars-port layered on top.
+// --no-vars drops the manifest's pins so a driven pair can be seen UNDRIVEN —
+// loudly, because "no pins" and "pins that failed to apply" look identical in
+// the render (both are usually black).
+const varsPinned = varsOverride(slug);
+const varsFix = opts.noVars ? null : varsPinned;
+if (opts.noVars && varsPinned) {
+  const names = ["orig", "port"]
+    .map((s) => `${s}: ${Object.keys(varsPinned[s]).join(", ") || "none"}`)
+    .join("; ");
+  warn(`--no-vars: fixups.json var pins NOT applied (${names})`);
+}
+const vars = {
+  orig: mergeVars(varsFix?.orig, opts.varsOrig),
+  port: mergeVars(varsFix?.port, opts.varsPort),
+};
+
 const host = await load();
 const sides = {
   orig: renderSide(host, origSource, rig, {
@@ -945,6 +1038,7 @@ const sides = {
     sensors: opts.sensors,
     wallClock: opts.wallClock,
     controls: parseControls(opts.controlsOrig),
+    vars: vars.orig,
   }),
   port: renderSide(host, portSource, rig, {
     seed: opts.seed,
@@ -954,6 +1048,7 @@ const sides = {
     sensors: opts.sensors,
     wallClock: opts.wallClock,
     controls: parseControls(opts.controlsPort),
+    vars: vars.port,
   }),
 };
 
@@ -1061,7 +1156,9 @@ const meta = {
     // Declared per-slug fixups actually in force for this run (null when the
     // slug has none) — see tools/verify/fixups.mjs.
     fixups:
-      sourceFixups || rigFix ? { source: sourceFixups, rig: rigFix ?? null } : null,
+      sourceFixups || rigFix || varsFix
+        ? { source: sourceFixups, rig: rigFix ?? null, vars: varsFix ?? null }
+        : null,
     // Covers every input that shapes a render: this file, its sibling
     // modules, and the engine wasm itself — not just snap.mjs.
     harnessSha256: sha12(
@@ -1095,6 +1192,9 @@ const meta = {
         image: s.frames ? `${k}.png` : null,
         controls: s.controls,
         controlsApplied: s.controlsApplied,
+        // The pattern's exported-var surface, and what was pushed into it.
+        varsExported: s.varsExported,
+        varsApplied: s.varsApplied,
         warnings: s.warnings,
         compileError: s.compileError,
         runtimeError: s.runtimeError,
@@ -1184,10 +1284,14 @@ if (opts.probeControls) {
       orig: probeSide(host, origSource, rig, {
         ...probeOpts,
         controls: parseControls(opts.controlsOrig),
+        // Same pins as the run, so a var-driven pattern is probed while it is
+        // actually drawing rather than against its idle (often black) default.
+        vars: vars.orig,
       }),
       port: probeSide(host, portSource, rig, {
         ...probeOpts,
         controls: parseControls(opts.controlsPort),
+        vars: vars.port,
       }),
     },
   };

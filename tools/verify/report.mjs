@@ -31,7 +31,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots } from "./enginehost.mjs";
 import { synthSensorFrame } from "./sensormodel.mjs";
-import { applySourceFixups, resolveRig } from "./fixups.mjs";
+import { applySourceFixups, resolveRig, varsOverride } from "./fixups.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../..");
@@ -288,7 +288,7 @@ function rigFor(pair) {
 
 /** Render one side into gif frames. Returns {frames, error} — a compile
  *  failure yields a single placeholder frame plus the error string. */
-function renderSide(host, source, rig, layout) {
+function renderSide(host, source, rig, layout, vars) {
   // Before compile: top-level init runs inside compile(), and clock-driven
   // patterns may read time-of-day there (Gitea #104). Same order as snap.mjs.
   host.setDefaultWallClock(WALL_CLOCK);
@@ -314,6 +314,9 @@ function renderSide(host, source, rig, layout) {
     if (rig.kind === "grid") eng.setMapGrid(rig.gridW, rig.gridH);
     else if (rig.kind === "cloud") eng.setMap3D(rig.points);
     eng.setWallClock(WALL_CLOCK);
+    // Exported-var pins from fixups.json, pushed once after init the way an
+    // external client would — some originals draw nothing until driven.
+    for (const [name, value] of Object.entries(vars ?? {})) eng.setVar(name, value);
     const wants = eng.wantsSensors();
     const delta = 1000 / opts.fps;
     const warm = Math.round(opts.skip * opts.fps);
@@ -511,6 +514,7 @@ for (const f of verdictFiles.sort()) {
 
   host ??= await load();
   const rig = rigFor(pair);
+  const fixVars = varsOverride(slug);
   const layout = makeLayout(rig);
   const sources = {
     orig: applySourceFixups(
@@ -520,7 +524,7 @@ for (const f of verdictFiles.sort()) {
     port: fs.readFileSync(path.join(ROOT, pair.libFile), "utf8"),
   };
   for (const side of ["orig", "port"]) {
-    const { frames, error } = renderSide(host, sources[side], rig, layout);
+    const { frames, error } = renderSide(host, sources[side], rig, layout, fixVars?.[side]);
     fs.writeFileSync(
       sidePaths[side],
       encodeGif(layout.w, layout.h, frames, Math.round(100 / opts.gifFps)),

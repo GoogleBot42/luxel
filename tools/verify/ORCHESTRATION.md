@@ -89,8 +89,16 @@ FEEDS judges, reconstructed so a re-judge session (queued in Gitea #84 /
   nano-orbital (broken 2), orv-christmas-tree (divergent 5) — fixup rigs
   all confirmed working; perlin-fire (divergent 4), coronal-mass-ejection
   (divergent 4), eye-of-sauron (broken 1), distance-function-kaleidoscope-2
-  (broken 0). Still blocked: automap (#122 harness --vars),
-  performance-test-framework (#123 non-visual decision).
+  (broken 0). Still blocked: performance-test-framework (#123 non-visual
+  decision).
+- Re-judged 2026-08-29 after the `--vars-orig`/`--vars-port` harness work
+  (Gitea #122): automap, orig-unrenderable 0 → **close 7**. It was never
+  unrenderable — it is a client-DRIVEN mapper helper, and fixups.json now
+  pins its exported var on both sides (they name it differently, which is
+  the port's headline defect). Priming a judge for a var-driven pair: point
+  it at JUDGE.md's "Var-driven patterns" section, tell it to judge the
+  driven state AND the undriven one (`--no-vars`), and let it discover the
+  var names from `meta.json`'s `varsExported` rather than naming them.
 - CAUTION for fix-pass work: sweep-era verdicts predating the perlin
   refit (b37df0a) can describe a STALE original render — the refit changed
   how perlin-using ORIGINALS draw (two 2026-08-29 judges measured the same

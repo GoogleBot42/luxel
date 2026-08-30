@@ -1,4 +1,11 @@
 {
+  "automap": {
+    "vars": {
+      "orig": { "pixel": 30 },
+      "port": { "pixelIndex": 30 }
+    },
+    "note": "Gitea #122 (from the #108 silent-null diagnosis): this pair is a mapping HELPER driven by an external client — it lights the one pixel whose index the client wrote into an exported var, and at the default index (-1, deliberately impossible) black is the CORRECT output. Unpinned, the original renders nothing on every rig and the pair is unjudgeable. Both sides are pinned to mid-strip index 30 of the 60-px default rig so the judge sees the driven behaviour; the two sides name the variable differently, hence the per-side pins. Re-render at a smaller --pixels and both sides go black together (30 is off the strip) — that is faithful, not a fixup failure."
+  },
   "music-sequencer-for-v2": {
     "stripLinesMatching": ["REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING"],
     "note": "Author-planted tripwire: the shipped .epe contains a deliberately invalid line the user is instructed to delete before running. Without stripping it the ORIGINAL fails to compile on every rig (`unknown identifier REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING`), so no side-by-side comparison is possible. See tools/verify/results/music-sequencer-for-v2.json."

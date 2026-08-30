@@ -11,6 +11,7 @@
 //        const eng = lx.compile(source, 60, 1);   // → Engine | {compileError}
 //        eng.setWallClock(1756000000);
 //        if (eng.wantsSensors()) eng.setSensors(sensorSlots({ light: 0.5 }));
+//        eng.setVar("pixel", 30);                 // as an external client would
 //        const rgb = eng.frame(50);               // Uint8Array(pixelCount*3)
 //        eng.free();
 
@@ -158,6 +159,29 @@ export class Engine {
       out[k] = Array.isArray(v) ? v.map((x) => x / RAW) : v === null ? null : v / RAW;
     }
     return out;
+  }
+
+  /** Push a value into an EXPORTED var — the same surface an external client
+   *  writes over PB's `/api/vars` (raw 16.16 on the wire; this scales for you).
+   *  Only exported globals are settable, exactly as on a real Pixelblaze, so
+   *  this returns true when the pattern exports `name` and false when it does
+   *  not (a non-exported or misspelled name is otherwise a silent no-op).
+   *  Non-finite or out-of-range values throw rather than wrapping through the
+   *  i32 ABI into some unrelated number. */
+  setVar(name, value) {
+    if (!Number.isFinite(value)) {
+      throw new Error(`setVar ${name}: non-finite value ${value}`);
+    }
+    const raw = Math.round(value * RAW);
+    if (raw < I32_MIN || raw > 2147483647) {
+      throw new Error(`setVar ${name}: ${value} is outside the 16.16 range (±32768)`);
+    }
+    const s = this.host.putStr(name);
+    try {
+      return this.e.lx_set_var(this.h, s.ptr, s.len, raw) === 1;
+    } finally {
+      s.free();
+    }
   }
 
   /** Row-major W×H grid map (rows implied by pixelCount/w). */

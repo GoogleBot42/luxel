@@ -49,8 +49,12 @@ into the captured window where the filmstrip starts; default midpoint). Note
 `--strip-at` is the odd one out: it is WINDOW-relative (add `--skip` yourself),
 while `sheetTimesSeconds`/`stripTimesSeconds` and `--dump`'s reported `times`
 are absolute on the run timeline.
-Also `--sensors auto|synth|off` (default `auto`), `--probe-controls`
-(+ `--probe-seconds N`, default 4) and `--dump "t1,t2,..."` — see below.
+Also `--vars-orig "name=v;name2=v"` / `--vars-port "..."` (push values into a
+side's EXPORTED VARS, the way a companion app drives a pattern — see
+"Var-driven patterns" below) and `--no-vars` (render a var-pinned pair
+UNDRIVEN), `--sensors auto|synth|off` (default `auto`),
+`--probe-controls` (+ `--probe-seconds N`, default 4) and
+`--dump "t1,t2,..."` — see below.
 And `--wall-clock N` (epoch seconds, default 1756000000): sets the pinned
 wall clock BOTH sides see, for probing time-of-day/clock-driven patterns at
 different instants (e.g. sweep several times of day and compare each). The
@@ -466,8 +470,9 @@ Output lands in `tools/verify/out/<slug>/<label>/`:
   `meta.json` `rhythmRowsPerPixel` says how many frames each row covers.
 - `meta.json` — settings, run-level `warnings`, and — under the same `sides`
   wrapper (`sides.orig` / `sides.port`) — each side's control list
-  (name + kind), any compile/runtime error, its `wantsSensors` /`sensors`
-  (/`sensorModel`) record, and its `statsSummary`.
+  (name + kind), its exported-var surface (`varsExported`) and the values
+  pushed into it (`varsApplied`), any compile/runtime error, its
+  `wantsSensors` /`sensors` (/`sensorModel`) record, and its `statsSummary`.
   It no longer carries the per-frame series, so it is short: **Read it whole.**
 - `stats.json` — the FULL per-frame series, per side. Exact shape (the series
   live under a `sides` wrapper, NOT at the top level):
@@ -509,6 +514,14 @@ numbers:
   pattern is sparse and `motionLit` is the honest number. `motion` remains the
   like-for-like historical stat — quote it when comparing against older runs or
   verdicts, and quote both when they disagree.
+- **`meanBrightness` goes to 0 on a very sparse pattern too**, for the same
+  reason `motion` does: it is a whole-rig mean, so one fully-lit pixel in 300
+  averages to 255/300 ≈ 0.85 and prints as `mean 0` — including in the
+  one-line stdout summary. A run of `mean 0 / mean 0` lines is NOT proof of a
+  black render on a pattern that lights a handful of pixels; confirm with
+  `--dump` (or `motionLit`, or the waterfall image) before writing "black"
+  anywhere. Real case: eleven correct single-pixel renders all reported
+  `mean 0` on a 300-px strip.
 - `zeroMotionFrames` — captured frames with no change at all, counted on
   `motion` (not `motionLit`). A high count on one side and not the other is a
   frozen port (note: with `--skip 0` the very first captured frame always
@@ -865,6 +878,55 @@ dialed side's DEFAULT reproduces the fixed side. The asymmetry itself is
 always a control-surface finding for `dials`/`feedback`, even when the
 defaults happen to agree.
 
+### Var-driven patterns (`--vars-orig` / `--vars-port`)
+
+Controls are not a pattern's only input. A Pixelblaze also exposes every
+EXPORTED VARIABLE over its vars API, and some patterns are DRIVEN through it
+rather than being decorative: a mapper, a phone app or a home-automation
+bridge writes a variable and the pattern draws what it was told. At the
+default value such a pattern often renders nothing — which is correct
+behaviour, not a dead pattern, and it will fool you into an
+`orig-unrenderable` verdict if you never write to it.
+
+`meta.json` tells you which pairs those are, per side:
+
+- `varsExported` — every exported var name the ENGINE reports for that side.
+  An empty list means the pattern has no var interface and this section does
+  not apply.
+- `varsApplied` — the values actually pushed in for this run (from
+  `--vars-*`, and/or from a `vars` pin in the harness's fixup manifest, which
+  some slugs carry so the default run is judgeable at all).
+
+Push values with `--vars-orig "name=v;name2=v"` and `--vars-port "..."`. One
+scalar per name; entries separate on `;` or `,`. They are applied ONCE, after
+init and after any `--controls-*`, before the first frame — so a pattern that
+rewrites the variable every frame ignores them, and that is itself a finding.
+An unknown or non-exported name is NOT silently dropped: it lands in that
+side's `warnings` as `unknown or non-exported var "x" — not applied`. Check
+`varsApplied` matches what you asked for before reading anything into the
+render.
+
+Two traps, both the var analogue of a control trap:
+
+- **The sides may NAME the variable differently.** `varsExported` is the only
+  place you will see this; passing the same string to both flags silently
+  no-ops on one side and you compare a driven pattern against an idle one. A
+  divergent var NAME is a real port finding (a client written for the
+  original cannot drive the port) — report it in `feedback` even when the two
+  render identically once each is driven under its own name.
+- **A port may invent idle behaviour the original does not have.** Judge the
+  DRIVEN state first (both sides pinned to the same value, several values),
+  then compare the UNDRIVEN default explicitly: an original that is black
+  until written to and a port that entertains itself with an animation are
+  divergent in a way no pinned run will show you.
+
+An empty `--vars-orig ""` does NOT unpin a manifest pin — there is no "no
+value" to pass. Use **`--no-vars`**, which drops every pinned var on both
+sides (and says so in `warnings`) and gives you the state a user with no
+companion app sees. It composes with the flags, so `--no-vars --vars-port
+"name=5"` drives one side only — the cleanest way to isolate which side's
+idle behaviour is the invented one.
+
 For a translating 1D pattern, the honest speed measurement is circular
 cross-correlation of two `--dump`ed frames (find the shift that best aligns
 them, divide by dt) — the `motion` stat exaggerates or compresses speed ratios
@@ -934,6 +996,10 @@ in different directions, which cross-correlation blurs into one bogus answer.
    (dim patterns false-read as frozen), and re-render with controls dialed:
    patterns that react only to dials, and originals that render degenerate
    untouched, both need a control set before they can be judged.
+   Check `sides.*.varsExported` in `meta.json` as well: a black side that
+   exports vars may be a DRIVEN pattern that draws only what a client tells it
+   to — write to it with `--vars-*` before calling it unrenderable (see
+   "Var-driven patterns").
    Check `sides.*.wantsSensors` in `meta.json` too: `true` on a black or frozen
    side means it is a sensor pattern, and it should already be getting the
    `beat120` feed (`sensors: "synth"`). If it says `"off"` you passed
