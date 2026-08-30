@@ -1,5 +1,46 @@
 # Update log
 
+## 2026-08-30 — CI now fails on a thin OTA slot, not just a full one (#160)
+
+The release workflow only ever asked "does the app image fit the 1 MiB OTA
+slot?", which is the wrong question one release too late. `board-c6-devkit`
+lost ~7 KB of headroom in two days (map-aware blur/glow, then the device
+output palette) and sits at 43,872 B / 4.18 % free — and it is the one
+board nobody here can serial-recover (#56), so the failure mode is a device
+that `/api/ota` refuses to update.
+
+`tools/image-check.sh` grew a second gate beside the //SIZETEST marker
+check: for app images it computes the slot margin, **fails below 3 %**
+(31,458 B) and **warns below 6 %** (62,915 B). All eight board variants go
+through it in `.github/workflows/release.yml`, which drops its own
+duplicate ceiling check — one place owns the size rule now. The math is
+integer-only shell (no bc/python on a minimal runner) and the thresholds
+are env-overridable (`MIN_MARGIN_PCT` / `WARN_MARGIN_PCT` / `OTA_MAX`).
+ELF inputs skip the size half, since build-esp32.sh's local call hands it
+an ELF and an ELF is not the artifact that has to fit.
+
+Why 3 %: it is ~12 KB under today's tightest board, so master stays green
+today, but roughly two more medium features trip it — which is the point at
+which the diet in docs/size-report.md stops being optional. Verified
+against stubbed images at all eight recorded board sizes plus the
+threshold edges (31,458 B passes with a warning, 31,457 B fails, the exact
+ceiling fails, one byte over fails with the "EXCEEDS" message), and against
+the real credless C6 flake build: 1,003,824 B → warns at 4.26 %, and
+`MIN_MARGIN_PCT=5` on the same image exits 1.
+
+**Where the C6's bytes actually go.** Profiling both RISC-V boards with
+`tools/size-report.py` killed the standing guess. The 91,616-byte gap
+between the C3 (912,208 B) and the C6 (1,003,824 B) is almost entirely
+Espressif's radio blob — ~51 KB of blob symbols plus ~11 KB of
+`.rodata.wifi`, with `.rwtext.wifi` going 33,768 → 55,060 B. Our Rust is
+chip-independent to within a rounding error: `luxel-core` is byte-identical
+at 76,628 B on both chips and `picoserve` at 32,948 B. So there is no
+C6-specific diet to write; every win is fleet-wide, and the only C6-only
+lever is dropping a feature from that board's profile. The candidate list
+(picoserve's 22 `IntoResponse::write_to` monomorphizations at 20,478 B,
+the 24,434 B routing table, core::fmt at 23,550 B, MQTT at 29,383 B) is on
+Gitea #160; nothing was optimized in this pass on purpose.
+
 ## 2026-08-30 — v0.1.29 protocol-re-init checklist closed out on the Athom (#155)
 
 The two never-verified items of the v0.1.29 hardware checklist

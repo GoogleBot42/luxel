@@ -111,7 +111,7 @@ detector. `.stack` on pixelblaze-v3: 29,244 → 29,228 B.
 The cost is the palette blob (serialize + validate + boot load), the wire
 parser, the cooked-LUT cache in `apply_outpipe`, and the two new routes;
 factoring the three nvs writers onto one `config::write_record` helper paid
-about 600 B of it back. The C6 is now at 4.2 % margin — see the ceiling
+about 600 B of it back. The C6 is now at 4.18 % margin — see the ceiling
 note below. `.stack` on pixelblaze-v3: 29,228 → 29,196 B; the largest new
 frame is `apply_outpipe` at 1,120 B (the cooked LUT is a heap `Box`, not a
 stack array).
@@ -119,17 +119,51 @@ stack array).
 The three classic-ESP32 variants differ only by a few hundred bytes (same
 chip feature set; only board.rs strings and the wiring lines change), so
 checking one of them per release is enough — but the *chips* are not
-interchangeable for size purposes: the C6 is ~93 KB fatter than the C3 for
-identical source (bigger radio blob / riscv32imac codegen), and at 4.9% it
-now owns the tightest margin in the fleet. It is the board that will hit
-the 1 MiB ceiling first; check `board-c6-devkit` on any release that grows
-the image. Measure with:
+interchangeable for size purposes: the C6 is ~90 KB fatter than the C3 for
+identical source, and at
+**43,872 B / 4.18 %** it owns the tightest margin in the fleet by a wide
+gap (the next tightest, `board-pixelblaze-v3`, has 92,384 B / 8.81 %). It
+is the board that will hit the 1 MiB ceiling first; check
+`board-c6-devkit` on any release that grows the image. Measure with:
 
 ```sh
 # chip/target for $BOARD come from firmware/board-target.sh
 espflash save-image --chip esp32c6 \
   target/riscv32imac-unknown-none-elf/release/luxel-fw /tmp/ota.bin && stat -c %s /tmp/ota.bin
 ```
+
+**CI enforces a margin floor, not just the ceiling** (Gitea #160).
+`tools/image-check.sh` now also takes the app image's size: it FAILS below
+**3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).
+The release workflow runs it for all eight board variants, so an image
+that would leave a device un-updatable red-lights a release build instead
+of being discovered by `/api/ota` on a C6 that nobody here can serial-
+recover (#56). The floor sits ~12 KB under today's tightest board, which
+is deliberate: it costs roughly two more medium features before the gate
+trips, and by then the diet in docs/size-report.md is genuinely overdue.
+Both thresholds and the slot size are env-overridable
+(`MIN_MARGIN_PCT` / `WARN_MARGIN_PCT` / `OTA_MAX`) — raise them for a
+one-off, but changing the default is a decision to record here. The size
+half is skipped for ELF inputs (build-esp32.sh's local call), since an ELF
+is not the artifact that has to fit.
+
+**The C6 penalty is the vendor radio blob, not our codegen** (profiled
+2026-08-30 with `tools/size-report.py` on credless flake builds of
+`board-c3-devkit` 912,208 B and `board-c6-devkit` 1,003,824 B — same
+source, same opt settings). Of the 91,616-byte gap, ~51 KB is Espressif
+blob symbols and another ~11 KB is `.rodata.wifi`; `.rwtext.wifi` alone
+goes 33,768 → 55,060 B. Our Rust is essentially chip-independent:
+`luxel-core` is byte-identical at 76,628 B on both, `picoserve` identical
+at 32,948 B, `luxel-fw` differs by 3,644 B. The consequence is that
+**there is no C6-specific diet** — every byte we can win is a fleet-wide
+win, and the only C6-only lever is dropping a feature from that board's
+profile. (The "riscv32imac codegen" explanation that used to sit here was
+a guess; the measurement does not support it.)
+
+Also note: the big NOBITS alignment holes (`.text_gap`, ~58 KB on the C6;
+`.rotext_dummy`, 128 KB on the C3) and `.eh_frame` (~63 KB) are *not* in
+the app image — the PROGBITS sections plus headers account for the image
+size to within ~700 B on both chips. Don't chase them.
 
 `.stack` (the leftover-DRAM main-task stack, `tools/stack-check.sh`) at
 the same revision: pixelblaze-v3 29,244 B · athom-music 29,348 B ·

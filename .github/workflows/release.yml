@@ -109,7 +109,6 @@ jobs:
         # Sequential in one job so the Xtensa toolchain downloads once.
         run: |
           V=${{ steps.ver.outputs.version }}
-          OTA_MAX=$((0x100000))   # 1 MiB OTA slot (firmware/partitions.csv)
           ASSETS_OFF=$((0x310000))
           mkdir -p elfs
           # s3-devkit/c6-devkit/s3-hub75/seengreat-hub75 are UNTESTED ON METAL
@@ -122,11 +121,11 @@ jobs:
             # own board feature, but image-check still has to expect it.
             EXTRAS=""; case "$board" in *hub75) EXTRAS="hub75";; esac
             nix build ".#luxel-fw-$board" --print-build-logs --out-link "result-$board"
-            SZ=$(stat -c%s "result-$board/luxel-fw-ota.bin")
-            [ "$SZ" -le "$OTA_MAX" ] || { echo "::error::$board OTA image ($SZ B) exceeds the 1 MiB OTA slot"; exit 1; }
-            # load-bearing features must be linked (the //SIZETEST guard)
+            # load-bearing features must be linked (the //SIZETEST guard) AND
+            # the app image must keep a margin in the 1 MiB OTA slot — both
+            # live in image-check.sh; the margin floor is Gitea #160.
             EXPECT_FEATURES="$EXTRAS" tools/image-check.sh "result-$board/luxel-fw-ota.bin" \
-              || { echo "::error::$board image is missing load-bearing features (see tools/image-check.sh)"; exit 1; }
+              || { echo "::error::$board image failed tools/image-check.sh (missing load-bearing feature, or too little OTA-slot margin — see its output above)"; exit 1; }
             cp "result-$board/luxel-fw-ota.bin" "dist/luxel-$board-$V-ota.bin"
             # full image = merged (bootloader + partitions + app, 0xFF-padded
             # to 4 MB) with the web assets written into their partition —
