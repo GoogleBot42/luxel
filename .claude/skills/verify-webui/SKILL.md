@@ -41,6 +41,13 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    *target* URL that collides with someone else's server, puppeteer silently drives the
    wrong app (wrong tile count, unexpected UI) with no error at all. Pick an unused port
    per session.
+
+   Address the preview server as **`localhost`, never `127.0.0.1`**. `vite preview`
+   binds the name, which resolves to `::1` here, so a `127.0.0.1:<port>` target gets
+   `ERR_CONNECTION_REFUSED` while the server is plainly up and logging
+   `➜ Local: http://localhost:<port>/` (cost two debug cycles on 2026-08-29 —
+   it reads exactly like "the server didn't start"). The mirror (`luxel serve`)
+   is the opposite: it binds `127.0.0.1`, which is what `?device=` should say.
 4. For manual/ad-hoc checks beyond the scripted harnesses, real chromium is on `PATH`
    inside `nix develop` (`command -v chromium`) and `puppeteer-core` is available in
    `web/` (`optionalDependencies`) — drive it over CDP the same way `e2e.mjs` does:
