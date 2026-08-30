@@ -4,19 +4,21 @@ Queued items discovered mid-sweep, to be posted/filed at the next milestone.
 Cleared entries move to Gitea or the aggregate report.
 
 ## Queued for the next Gitea #84 (engine gaps) comment
-- **Out-of-range pixel writes hard-error** — real PB tolerates them. The
-  `nano-orbital` original writes a fixed 144-px canvas and throws
-  `array index out of bounds` at frame 0 on any rig under 144 px (bisected:
-  fails ≤128, fails at frame 13 @140, clean ≥144). Either clamp/ignore
-  out-of-range writes engine-side or bump that slug's manifest rig ≥144.
-  More instances: `rainbow-comet` ORIGINAL throws the same error exactly
-  once at frame 982 (line 32 col 7) on runs >~49 s and keeps rendering
-  normally after; `orv-christmas-tree` original errors at frame 0 unless
-  pixelCount % 20 == 0. All three would presumably run clean on real PB.
-  Related: `tixy` ORIGINAL throws 'call of a non-function value' (line 158)
-  and goes permanently black after exactly ~46 mini-modes (mode-count-
-  driven, not time-driven) — walking off its formula table; unknown whether
-  real PB tolerates it. Candidate for the same tolerance discussion.
+- ~~**Out-of-range pixel writes hard-error** — real PB tolerates them.~~
+  **SETTLED, premise was wrong** (Gitea #107, 2026-08-29). Re-probed on the
+  oracle shape by shape (`tools/oracle/oob-probes.mjs` Q1–Q8, fw 3.67): a
+  real PB throws on out-of-range reads and writes exactly like Luxel — no
+  clamp, no wrap, no silent no-op, and the target array is left untouched.
+  The "PB tolerates it" impression came from the error's narrow blast
+  radius (one handler invocation, not the pattern), which #84 already
+  matched. So the `nano-orbital` (≥144 px), `orv-christmas-tree`
+  (pixelCount % 20) and `rainbow-comet` (one-shot frame-982) errors, and
+  `tixy`'s 'call of a non-function value' after ~46 mini-modes, all happen
+  on real hardware too: they are original-side faults, not port bugs and
+  not engine gaps. The three `fixups.json` rig pins are therefore correct
+  rig data and stay. Fallout fixed under #107: the sibling splat builtins
+  (`arrayReplace`/`arrayReplaceAt`) were silently dropping out-of-range
+  elements where PB errors.
 - **Wall-clock builtins NOT wired — CONFIRMED** (upgraded from suspected):
   `pixelclock` (a pattern that exists to display time) renders byte-identical
   output at ELEVEN wall clocks spanning epoch 0..2000000000, on BOTH sides;

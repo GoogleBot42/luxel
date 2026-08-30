@@ -1211,12 +1211,16 @@ impl Vm {
                     push!(v);
                 }
                 // Index semantics oracle-confirmed on fw 3.67: fractional
-                // indices truncate (reads and variable-index writes — stock
-                // patterns like sparks depend on it); anything out of range
-                // (negative or ≥ length) is a runtime error that aborts
-                // execution. Known divergence: PB aborts on a fractional
-                // *literal* index write (`a[1.5] = 9`), a compiler-path
-                // quirk we deliberately don't copy — we truncate uniformly.
+                // indices truncate (reads and writes alike, literal and
+                // variable index — stock patterns like sparks depend on
+                // it), and the bounds check runs on the TRUNCATED index, so
+                // `a[3.5]` on a 3-slot array is out of range. Anything out
+                // of range (negative or ≥ length) is a runtime error that
+                // aborts execution, leaving the array untouched: PB does
+                // not clamp, wrap or silently no-op (Gitea #107, re-probed
+                // 2026-08-29 with tools/oracle/oob-probes.mjs — that probe
+                // also retired the old "PB aborts on a fractional *literal*
+                // index write" note, which does not reproduce).
                 op::LOAD_IDX => {
                     set_pc!(at as u32);
                     let idx = pop!().num();
@@ -1955,16 +1959,42 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arrayReplace of a non-array".into()));
                 };
+                // Oracle #107 (fw 3.67, tools/oracle/oob-probes.mjs Q8):
+                // this splat is bounds-checked as a WHOLE SPAN, unlike the
+                // silent per-element drop this used to do. If
+                // `offset + count` runs past the end it is an ordinary
+                // runtime error and the array is left completely untouched —
+                // not even the in-bounds prefix lands (Q8a/Q8b/Q8e/Q8f);
+                // `offset + count == length` is the accepted boundary (Q8g).
+                // A NEGATIVE offset does not error and does not clamp to
+                // slot 0: the whole splat shifts down, so only the values
+                // that land at a valid index are stored (Q8c/Q8d). PB
+                // reaches that state by storing through a negative index —
+                // memory-unsafe, and it hangs outright once several values
+                // fall below zero — so we match the observable in-range half
+                // and simply skip the rest.
                 let (off, first) = if builtin == ArrayReplaceAt {
-                    (n(1).to_int_trunc().max(0) as usize, 2)
+                    (n(1).to_int_trunc() as isize, 2)
                 } else {
                     (0, 1)
                 };
+                // `get` rather than `args[first..argc]`: with fewer args than
+                // the offset form's arity (`arrayReplaceAt(b)`) that range is
+                // inverted and indexing panics — a VM panic on ordinary
+                // pattern source, which on device is a reboot. PB drops the
+                // call as a no-op instead (missing args are nothing to
+                // splat), so an empty slice is the PB-shaped answer.
+                let vals = args.get(first..argc).unwrap_or(&[]);
                 {
                     let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
-                    for (j, arg) in args[first..argc].iter().enumerate() {
-                        if let Some(slot) = slots.get_mut(off + j) {
-                            *slot = *arg;
+                    let count = vals.len() as isize;
+                    if off.saturating_add(count) > slots.len() as isize {
+                        return Err(no_site("array index out of bounds".into()));
+                    }
+                    for (j, arg) in vals.iter().enumerate() {
+                        let i = off + j as isize;
+                        if i >= 0 {
+                            slots[i as usize] = *arg;
                         }
                     }
                 }

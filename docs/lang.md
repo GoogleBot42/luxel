@@ -368,6 +368,14 @@ curve shapes only how the master dimmer responds (control).
 `arrayReduce(a, fn, init)`, `arrayReplace(a, v)`,
 `arrayReplaceAt(a, i, v)`, `arraySort(a)`, `arraySortBy(a, cmp)`.
 
+Both `replace` forms take any number of values and store them from the
+offset onwards (`arrayReplace` starts at 0; `a.replace(…)` is that form).
+The span is checked as a whole: if `offset + count` runs past the end it is
+a runtime error and **nothing** is written, not even the elements that
+would have fit. A negative offset is not an error — the splat shifts down
+and only the values landing at a valid index are stored. Both PB-matched
+(oracle fw 3.67).
+
 **Luxel extensions**: `blur1D(arr, radius)` box-blurs the array in place
 (window `2·radius + 1`, edges clamped) and returns it; `feedback(arr,
 decay)` multiplies every element by `decay` in place — the trails/glow
