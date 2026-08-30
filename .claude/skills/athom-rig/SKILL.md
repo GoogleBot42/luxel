@@ -140,6 +140,17 @@ the leading suspect: stop and reassess rather than repeating the flash.
 The serial now prints `preboot guard: … rolling back to the other OTA
 slot` when the rollback fires.
 
+## Power-cycle testing and the OTA boot-loop guard
+
+Rapid power cycles — cycling again before the firmware reaches `boot_ok` —
+trip the OTA boot-loop guard, which **silently rolls back to the other OTA
+slot**: the board comes up healthy-looking but running the previous build
+(bit a persistence test on 2026-08-30; the "surviving" behavior under test
+was actually the old firmware's). After any power-cycle sequence, check
+`slot` in `/api/status` (or the `booted from:` serial line) matches the
+build you deployed before trusting the results, and leave time for
+`boot_ok` between deliberate cycles.
+
 ## Failure modes
 
 - **Board doesn't respond on the network after a restore/flash**: check
