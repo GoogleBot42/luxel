@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-08-29 — #132: const→owned COW promotion is budget-checked
+
+`Vm::arr_mut`'s copy-on-write materialization added
+`array_cost(len) - CONST_ENTRY_COST` to `array_bytes` with no check, so on
+a device-budgeted VM the first write to a `[…]` literal could push the
+byte ledger past `array_byte_budget` (bounded by the element budget, so an
+overshoot rather than a leak). The delta now goes through a new
+`charge_array_bytes` — the byte half of `charge_array`, split out because
+re-checking the element budget at the promotion site would demand a
+spurious extra header's worth of headroom for an entry that allocates no
+new arena slot — and it is checked *before* the copy is reserved. Error
+semantics are unchanged from the OOM path already at that site: an
+ordinary pattern-level runtime error, not a resource guard, so the PB
+blast radius from #84 holds (the handler invocation aborts, the pixel pass
+still runs). Two regression tests (`cow_promotion_*` in
+`crates/luxel-core/tests/engine.rs`) pin the budget edge and the
+within-budget delta; the edge one fails against the old code. docs/spec/vm.md
+§1.2 documents the promotion charge. Workspace tests green.
+
 ## 2026-08-29 — Small-items batch: MSv3 300 px re-test clean on v0.1.39,
 ## playlist pre-flight dedup (#125), truthful corpus report, #124 pinned
 
