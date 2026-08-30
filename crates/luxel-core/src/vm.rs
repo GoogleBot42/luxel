@@ -518,6 +518,16 @@ const MAX_ARGS: usize = 16;
 /// 5116+5116 abort; 98 frames of per-frame `array(100)`).
 pub const DEFAULT_ARRAY_BUDGET: usize = 10_236;
 pub const ARRAY_HEADER_UNITS: usize = 4;
+
+/// The per-array header is what bounds the arena *slot* vector: a
+/// zero-length array still charges `ARRAY_HEADER_UNITS`, so no pattern can
+/// push more than `array_budget / ARRAY_HEADER_UNITS` entries no matter how
+/// many `array(0)` / `[]` values it allocates per frame. Dropping the header
+/// to 0 would make `while (1) t = array(0)` grow `Vm::arrays` until the host
+/// OOMs — the element budget is the only cap on hosts, where
+/// `array_byte_budget` is `usize::MAX` (Gitea #124).
+const _: () = assert!(ARRAY_HEADER_UNITS > 0);
+
 const FUEL: u32 = 8_000_000;
 
 /// One arena array: owned storage, or an index into the program's
@@ -689,6 +699,22 @@ impl Vm {
             plot_dims: 0,
             plot_written: false,
         }
+    }
+
+    /// Number of live arena entries. Never freed, so this only grows within
+    /// a Vm — bounded by `array_budget / ARRAY_HEADER_UNITS`.
+    pub fn arena_slots(&self) -> usize {
+        self.arrays.len()
+    }
+
+    /// Units charged against `array_budget` (PB's element ledger).
+    pub fn arena_elems(&self) -> usize {
+        self.array_elems
+    }
+
+    /// Bytes charged against `array_byte_budget`.
+    pub fn arena_bytes(&self) -> usize {
+        self.array_bytes
     }
 
     pub fn array<'a>(&'a self, prog: &'a Program, id: u32) -> Option<&'a [Value]> {
