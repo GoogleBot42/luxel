@@ -383,6 +383,13 @@ is the one that applies.
   `setPalette`, the stops are snapshotted at the call — the engine cooks
   a 256-entry table and rebuilds it only when you install a new one.
 
+  There is a *device-level* palette too — Settings → Output, persisted in
+  flash, `POST /api/output/palette` (Gitea #139). The two compose: the
+  pattern's stage recolors the frame, then the device's stage recolors the
+  result, the same way device blur stacks on pattern blur. A pattern that
+  wants the device's look untouched simply doesn't call
+  `setOutputPalette`.
+
 Map space when the map is a grid, index space otherwise. With a 2D map
 installed that reads as a regular W×H matrix — row-major or serpentine,
 which is what the playground's grid map and the usual device maps produce

@@ -186,6 +186,10 @@ struct State {
     bright_curve: AtomicU8,
     post_blur: AtomicU8,
     post_glow: AtomicU8,
+    /// Device output palette (flat stops + blend %) — persisted in flash on
+    /// a device, in-memory here; stored and echoed for settings parity.
+    post_palette: Mutex<Vec<(u8, [u8; 3])>>,
+    post_palette_amount: AtomicU8,
     engine_time_ms: std::sync::atomic::AtomicU64,
     sync_leader: Mutex<Option<(u32, u64, Instant)>>,
     /// Built playground directory (web/dist) served at `/` and asset paths —
@@ -193,6 +197,17 @@ struct State {
     /// it isn't built; then `/` falls back to the embedded minimal page,
     /// exactly like a device with no assets installed.
     web_dir: Option<std::path::PathBuf>,
+}
+
+/// The stored device palette as the flat `[pos,r,g,b,…]` JSON array the
+/// POST body speaks (see the firmware's `palette_json`).
+fn palette_json(state: &State) -> String {
+    let stops = state.post_palette.lock().unwrap();
+    let flat: Vec<String> = stops
+        .iter()
+        .map(|(p, c)| format!("{},{},{},{}", p, c[0], c[1], c[2]))
+        .collect();
+    format!("[{}]", flat.join(","))
 }
 
 fn sync_mode_name(m: u8) -> &'static str {
@@ -1465,13 +1480,15 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         }
         ("GET", "/api/output") => {
             let body = format!(
-                "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
+                "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{},\"palette\":{},\"paletteAmount\":{}}}",
                 luxel_core::outpipe::ColorOrder(state.color_order.load(Ordering::Relaxed)).name(),
                 state.gamma_tenths.load(Ordering::Relaxed),
                 state.cap_ma.load(Ordering::Relaxed),
                 state.bright_curve.load(Ordering::Relaxed),
                 state.post_blur.load(Ordering::Relaxed),
-                state.post_glow.load(Ordering::Relaxed)
+                state.post_glow.load(Ordering::Relaxed),
+                palette_json(&state),
+                state.post_palette_amount.load(Ordering::Relaxed)
             );
             respond(&mut stream, 200, "application/json", body.as_bytes());
         }
@@ -1512,6 +1529,27 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 ),
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("POST", "/api/output/palette") => {
+            let body = String::from_utf8_lossy(&req.body).into_owned();
+            let r = match luxel_core::outpipe::parse_palette_stops(&body) {
+                Ok((amount, stops)) => {
+                    *state.post_palette.lock().unwrap() = stops;
+                    state.post_palette_amount.store(amount, Ordering::Relaxed);
+                    format!(
+                        "{{\"ok\":true,\"palette\":{},\"paletteAmount\":{}}}",
+                        palette_json(&state),
+                        amount
+                    )
+                }
+                Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e)),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("DELETE", "/api/output/palette") => {
+            state.post_palette.lock().unwrap().clear();
+            state.post_palette_amount.store(0, Ordering::Relaxed);
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
         }
         ("GET", "/api/clock") => {
             // the mirror's clock is the host's (always "synced")
@@ -1870,6 +1908,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         bright_curve: AtomicU8::new(0),
         post_blur: AtomicU8::new(0),
         post_glow: AtomicU8::new(0),
+        post_palette: Mutex::new(Vec::new()),
+        post_palette_amount: AtomicU8::new(0),
         engine_time_ms: std::sync::atomic::AtomicU64::new(0),
         sync_leader: Mutex::new(None),
         web_dir: locate_web_dir(web_dir_arg),

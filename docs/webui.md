@@ -205,9 +205,24 @@ A real device needs a settings surface (page/dialog). Fields:
   3-tap softening — 2D over rows and columns when a matrix map is
   installed, along the pixel index otherwise) and **Glow** (`glow`, 0–100 %,
   light-bleed bloom that keeps the source pixel at full). Chain order:
-  blur → glow → gamma → color order → power cap. The POST body is positional
-  and whitespace-separated; the last three tokens are optional so older
-  clients keep working (absent = keep the stored value).
+  palette → blur → glow → gamma → color order → power cap. The POST body is
+  positional and whitespace-separated; the last three tokens are optional so
+  older clients keep working (absent = keep the stored value).
+- **Device output palette** ✅ — the Output card's **Palette** editor
+  (Gitea #139): a gradient preview plus one row per stop (color swatch +
+  0–255 position), `add stop` / `remove` / `clear`, and a blend `amount` %.
+  It recolors every finished frame by luma through the stops, exactly like
+  a pattern's `setOutputPalette`, and it *composes* with the pattern's own
+  stage rather than overriding it — the device setting is the
+  installation's look. Its own API and its own storage (variable length, so
+  it can't ride in the fixed-size `LXDV` record):
+  `POST /api/output/palette` with the flat
+  `"<amount_pct> <pos> <r> <g> <b> …"` body (0..=255 each, positions
+  ascending, ≤32 stops), `DELETE /api/output/palette` to clear, and
+  `GET /api/output` echoes `palette` (flat array) + `paletteAmount`.
+  Persisted as a reserved-key blob in the pattern store (the mechanism the
+  device map, playlist and resume records use — the nvs partition's four
+  sectors are full) and applied at boot.
 - **MQTT / Home Assistant** ✅ — shipped (firmware v0.1.19 + mirror):
   broker host/port/creds + HA discovery, `/api/mqtt` + Settings form.
 - **WiFi** ✅ — Settings form shipped (Phase 3); **AP-mode** provisioning

@@ -215,9 +215,13 @@ bytecode execution is being worked on now; the rest are queued:
   curve) are persisted device settings on `/api/output`. The spatial stages
   are map-aware (Gitea #140): with a 2D map that reads as a regular W×H
   matrix — row-major or serpentine — blur and glow sweep rows then columns;
-  every other layout keeps index-space behaviour. One follow-up is still
-  ticketed: palette remap as a *device* setting needs palette storage in
-  flash (Gitea #139).
+  every other layout keeps index-space behaviour. The device-settings half
+  is now complete: palette remap is a persisted device setting too, stored
+  as a reserved-key blob in the pattern store, with
+  `POST`/`DELETE /api/output/palette` and a stop editor in the Output card
+  (Gitea #139). Device and pattern palettes
+  compose — the device stage runs on the frame the pattern already
+  recolored.
 - **Per-pixel persistent state buffer** [M] ★★ — a sanctioned scratch array
   the engine double-buffers, for feedback effects without manual bookkeeping.
 - **Deterministic seedable `prng` matching a documented algorithm** [S] ★ —

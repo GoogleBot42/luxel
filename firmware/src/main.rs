@@ -62,6 +62,7 @@ mod leds;
 mod mqtt;
 mod netin;
 mod ota;
+mod outpal;
 mod output;
 mod patterns;
 mod playlist;
@@ -323,6 +324,7 @@ async fn main(spawner: Spawner) -> ! {
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)
     devicemap::init();
+    outpal::init(); // device output palette (also a reserved-key blob)
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }
@@ -586,16 +588,25 @@ fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
     [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
 }
 
-/// Output pipeline (Settings): blur + glow + color-order remap + gamma LUT +
-/// power cap, in that order, applied to a scratch copy just before protocol
-/// encoding. Returns the original frame untouched when every knob is off. The
-/// LUT is cached and rebuilt only when the gamma setting changes. `grid` is
-/// the engine's view of the installed map (`Engine::grid`) — `Some` only when
-/// the map is a regular matrix, which makes blur/glow two-dimensional.
+/// Output pipeline (Settings): palette remap + blur + glow + color-order
+/// remap + gamma LUT + power cap, in that order, applied to a scratch copy
+/// just before protocol encoding. Returns the original frame untouched when
+/// every knob is off. Both LUTs are cached and rebuilt only when their
+/// setting changes. `grid` is the engine's view of the installed map
+/// (`Engine::grid`) — `Some` only when the map is a regular matrix, which
+/// makes blur/glow two-dimensional.
+///
+/// Stage order mirrors the engine's own post-process chain (recolor, then
+/// spread light, then the output transfer) — and the two chains *compose*:
+/// a pattern's `setOutputPalette` has already recolored this frame, and the
+/// device palette recolors the result, exactly as device blur stacks on top
+/// of pattern blur. The device setting is the installation's look, not an
+/// override of the pattern's (Gitea #139).
 fn apply_outpipe<'a>(
     frame: &'a [[u8; 3]],
     pipe_buf: &'a mut alloc::vec::Vec<[u8; 3]>,
     gamma_cache: &mut (u8, Option<alloc::boxed::Box<[u8; 256]>>),
+    pal_cache: &mut (u32, Option<alloc::boxed::Box<[[u8; 3]; 256]>>),
     brightness5: u8,
     grid: Option<luxel_core::outpipe::GridMap>,
 ) -> &'a [[u8; 3]] {
@@ -612,16 +623,49 @@ fn apply_outpipe<'a>(
     let cap = shared::CAP_MA.load(Ordering::Relaxed);
     let blur_pct = shared::POST_BLUR.load(Ordering::Relaxed);
     let glow_pct = shared::POST_GLOW.load(Ordering::Relaxed);
+    let pal_pct = shared::POST_PALETTE_AMOUNT.load(Ordering::Relaxed);
+    let pal_epoch = shared::POST_PALETTE_EPOCH.load(Ordering::Relaxed);
     let gamma_on = gamma > 0 && gamma != 10;
-    if order == 0 && !gamma_on && cap == 0 && blur_pct == 0 && glow_pct == 0 {
+    let pal_on = pal_pct > 0;
+    if order == 0 && !gamma_on && cap == 0 && blur_pct == 0 && glow_pct == 0 && !pal_on {
         return frame;
     }
     if gamma_on && gamma_cache.0 != gamma {
         *gamma_cache = (gamma, Some(alloc::boxed::Box::new(outpipe::gamma_lut(gamma))));
     }
+    // Cook the luma → color table once per palette change, off the hot path
+    // (an unchanged palette costs one atomic compare per frame). The cached
+    // epoch is updated even when the result is None — an empty stop list
+    // must not re-cook every frame. `pal_cache.0` starts at u32::MAX, which
+    // no epoch reaches, so the first frame always cooks.
+    if pal_on && pal_cache.0 != pal_epoch {
+        let stops = shared::post_palette_stops();
+        pal_cache.0 = pal_epoch;
+        pal_cache.1 = if stops.is_empty() {
+            None
+        } else {
+            // byte domain → 16.16 0..1, the same i32 scaling the LUT index
+            // uses (no fixed-point divide on a per-boot path)
+            let b = |v: u8| Fx::from_raw(((v as i32) << 16) / 255);
+            let pal: alloc::vec::Vec<(Fx, [Fx; 3])> = stops
+                .iter()
+                .map(|(p, c)| (b(*p), [b(c[0]), b(c[1]), b(c[2])]))
+                .collect();
+            let mut lut = alloc::boxed::Box::new([[0u8; 3]; 256]);
+            outpipe::fill_palette_lut(&pal, &mut lut);
+            Some(lut)
+        };
+    }
     pipe_buf.clear();
     pipe_buf.extend_from_slice(frame);
-    // Spatial stages first: they work in linear-ish pattern output, before
+    // Recolor before the spatial stages, the way the engine's chain does —
+    // blur/glow should smear the palette's colors, not the pattern's.
+    if pal_on {
+        if let Some(lut) = pal_cache.1.as_deref() {
+            outpipe::palette_remap_frame(pipe_buf, lut, pal_pct as u32 * 256 / 100);
+        }
+    }
+    // Spatial stages next: they work in linear-ish pattern output, before
     // gamma bends the values and the color order scrambles the channels.
     // With a grid map installed they run in map space (rows then columns);
     // otherwise along the pixel index, as a strip wants (Gitea #140).
@@ -831,6 +875,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     // output-pipeline scratch (heap: the main-stack rule for task futures)
     let mut pipe_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
     let mut gamma_cache: (u8, Option<alloc::boxed::Box<[u8; 256]>>) = (0, None);
+    // (cooked-for epoch, luma → color table) for the device output palette.
+    // u32::MAX is the "never cooked" sentinel — no epoch reaches it.
+    let mut pal_cache: (u32, Option<alloc::boxed::Box<[[u8; 3]; 256]>>) = (u32::MAX, None);
 
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
@@ -1076,7 +1123,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             set_pixels(&blend_buf);
             let b5 = out_brightness();
             let grid = engine.as_ref().and_then(|e| e.grid());
-            let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, b5, grid);
+            let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, &mut pal_cache, b5, grid);
             out.write_frame(wire, b5);
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() {
@@ -1128,7 +1175,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             };
             set_pixels(frame);
             let b5 = out_brightness();
-            let wire = apply_outpipe(frame, &mut pipe_buf, &mut gamma_cache, b5, grid);
+            let wire = apply_outpipe(frame, &mut pipe_buf, &mut gamma_cache, &mut pal_cache, b5, grid);
             out.write_frame(wire, b5);
             if let Some(e) = engine.as_mut().unwrap().take_error() {
                 // report each distinct error site once, not per frame — an

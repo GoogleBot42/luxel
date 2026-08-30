@@ -1006,11 +1006,7 @@ impl Engine {
             return;
         }
         let mut lut = alloc::boxed::Box::new([[0u8; 3]; 256]);
-        for (i, slot) in lut.iter_mut().enumerate() {
-            let v = Fx::from_raw(((i as i32) << 16) / 255);
-            let c = crate::vm::sample_palette(&self.vm.post_palette, v);
-            *slot = [quantize(c[0]), quantize(c[1]), quantize(c[2])];
-        }
+        crate::outpipe::fill_palette_lut(&self.vm.post_palette, &mut lut);
         self.remap_lut = Some(lut);
         self.remap_lut_for = epoch;
     }

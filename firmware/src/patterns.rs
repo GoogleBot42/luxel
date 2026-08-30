@@ -577,6 +577,9 @@ pub const PLAYSTATE_KEY: u32 = 0x7FFF_FFFD;
 pub const MAP_KEY: u32 = 0x7FFF_FFFC;
 /// Single-pattern resume record (see resume.rs).
 pub const RESUME_KEY: u32 = 0x7FFF_FFFB;
+/// Device output palette (see outpal.rs) — variable-length, so it lives
+/// here rather than in the fixed-size nvs device record.
+pub const PALETTE_KEY: u32 = 0x7FFF_FFFA;
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.

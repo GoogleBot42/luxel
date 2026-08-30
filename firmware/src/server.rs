@@ -23,6 +23,11 @@
 //!   POST /api/config    body = pixel count → live resize + persisted {"ok":true,"pixels":N}
 //!   GET  /api/protocol  {"protocol":"sk9822","options":["sk9822","ws2812"]}
 //!   POST /api/protocol  body = name → live SPI reconfig + persisted {"ok":true,"protocol":"…"}
+//!   GET  /api/output    {"order","gamma","capMa","brightCurve","blur","glow",
+//!                        "palette":[pos,r,g,b,…],"paletteAmount":0..100}
+//!   POST /api/output    body = "<order> <gamma_tenths> <cap_ma> [<bright_curve_tenths> <blur_pct> <glow_pct>]"
+//!   POST   /api/output/palette  body = "<amount_pct> <pos> <r> <g> <b> …" (0..=255 each)
+//!   DELETE /api/output/palette  clears the device palette → {"ok":true}
 //!   GET  /api/playlist  {"defaultSec":N,"playing":bool,"index":N,"items":[{"id","name","sec","controls"}]}
 //!   POST /api/playlist  body = D/I/C lines → stores + applies live
 //!   POST /api/playlist/{play,stop,next,prev}  play body = start index
@@ -63,6 +68,31 @@ type ApiResponse = ((&'static str, &'static str), (&'static str, &'static str), 
 
 fn json_response(body: String) -> ApiResponse {
     (CORS, JSON, body)
+}
+
+/// `{"ok":false,"error":…}` for a static message. Static because every
+/// caller's message is a literal — no escaping needed, and one shared
+/// formatter instead of one per call site.
+fn api_error(msg: &'static str) -> String {
+    let mut out = String::from("{\"ok\":false,\"error\":\"");
+    out.push_str(msg);
+    out.push_str("\"}");
+    out
+}
+
+/// The installed device output palette as the flat `[pos,r,g,b,…]` JSON
+/// array the POST body and the `setOutputPalette` builtin both speak —
+/// 0..=255 per component. `[]` = no device palette.
+fn palette_json() -> String {
+    use core::fmt::Write as _;
+    let stops = crate::shared::post_palette_stops();
+    let mut out = String::from("[");
+    for (i, (pos, c)) in stops.iter().enumerate() {
+        let sep = if i > 0 { "," } else { "" };
+        let _ = write!(out, "{}{},{},{},{}", sep, pos, c[0], c[1], c[2]);
+    }
+    out.push(']');
+    out
 }
 
 /// Cache policy for a flash asset. Content-hashed bundle files
@@ -1000,6 +1030,26 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         ),
                     }))
                 }
+                // body: "<amount_pct> <pos> <r> <g> <b> …" (0..=255 each) →
+                // the device output palette, applied live + persisted in its
+                // own flash record. Composes with a pattern's own
+                // setOutputPalette rather than replacing it (Gitea #139).
+                "/api/output/palette" => {
+                    // clients re-read GET /api/output for the echo, so the
+                    // success body stays minimal (image bytes are scarce)
+                    Some(json_response(
+                        match luxel_core::outpipe::parse_palette_stops(&text(&raw)) {
+                            Ok((amount, stops)) => {
+                                if crate::outpal::store(stops, amount) {
+                                    String::from("{\"ok\":true}")
+                                } else {
+                                    api_error("applied live, but the store refused to persist it")
+                                }
+                            }
+                            Err(e) => api_error(e),
+                        },
+                    ))
+                }
                 // body: "off" | "leader" | "follower" → applied live +
                 // persisted (Luxel-to-Luxel sync role)
                 "/api/sync" => {
@@ -1205,6 +1255,17 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 return response.write_to(conn, response_writer).await;
             }
         } else if method.eq_ignore_ascii_case("DELETE") {
+            // clear the device output palette (record erased, stage off)
+            if route == "/api/output/palette" {
+                let body = if crate::outpal::clear() {
+                    String::from("{\"ok\":true}")
+                } else {
+                    api_error("cleared live, but the store refused to persist it")
+                };
+                let response = json_response(body);
+                let conn = request.body_connection.finalize().await?;
+                return response.write_to(conn, response_writer).await;
+            }
             if let Some(id) = route.strip_prefix("/api/patterns/") {
                 crate::playlist::preflight_mark_dirty();
                 let response = json_response(crate::patterns::delete(id));
@@ -1317,9 +1378,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     "{{\"ap\":{}}}",
                     crate::provision::AP_MODE.load(Ordering::Relaxed)
                 ))),
-                // output pipeline settings
+                // output pipeline settings (palette included: one fetch
+                // backs the whole Output card)
                 "/api/output" => Some(json_response(format!(
-                    "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
+                    "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{},\"palette\":{},\"paletteAmount\":{}}}",
                     luxel_core::outpipe::ColorOrder(
                         crate::shared::COLOR_ORDER.load(Ordering::Relaxed)
                     )
@@ -1328,7 +1390,9 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     crate::shared::CAP_MA.load(Ordering::Relaxed),
                     crate::shared::BRIGHT_CURVE.load(Ordering::Relaxed),
                     crate::shared::POST_BLUR.load(Ordering::Relaxed),
-                    crate::shared::POST_GLOW.load(Ordering::Relaxed)
+                    crate::shared::POST_GLOW.load(Ordering::Relaxed),
+                    palette_json(),
+                    crate::shared::POST_PALETTE_AMOUNT.load(Ordering::Relaxed)
                 ))),
                 // wall clock: NTP-synced local time + tz (clock builtins)
                 "/api/clock" => {

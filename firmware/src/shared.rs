@@ -349,6 +349,37 @@ pub static BRIGHT_CURVE: AtomicU8 = AtomicU8::new(0); // dimmer gamma x10; 0/10 
 pub static POST_BLUR: AtomicU8 = AtomicU8::new(0); // percent, 0 = off
 pub static POST_GLOW: AtomicU8 = AtomicU8::new(0); // percent, 0 = off
 
+/// Device output palette (Settings → output; persisted as a pattern-store
+/// blob — see outpal.rs). The stop list is read only when it
+/// changes: the render task caches a cooked 256-entry LUT behind
+/// POST_PALETTE_EPOCH, exactly like the gamma LUT, so the frame path never
+/// takes this critical section.
+pub static POST_PALETTE: Shared<Vec<(u8, [u8; 3])>> = BlockingMutex::new(RefCell::new(Vec::new()));
+pub static POST_PALETTE_AMOUNT: AtomicU8 = AtomicU8::new(0); // percent, 0 = off
+pub static POST_PALETTE_EPOCH: AtomicU32 = AtomicU32::new(0);
+
+/// Install a device palette (empty stops = clear). Bumps the epoch so the
+/// render task rebuilds its LUT on the next frame; the amount is stored
+/// separately because changing only the blend needs no rebuild.
+pub fn set_post_palette(stops: Vec<(u8, [u8; 3])>, amount_pct: u8) {
+    use core::sync::atomic::Ordering;
+    // The epoch bump rides inside the same critical section as the swap —
+    // the C3 (riscv32imc) has no atomic read-modify-write, so `fetch_add`
+    // doesn't exist there; the lock is what makes this indivisible anyway.
+    POST_PALETTE.lock(|c| {
+        *c.borrow_mut() = stops;
+        let next = POST_PALETTE_EPOCH.load(Ordering::Relaxed).wrapping_add(1);
+        POST_PALETTE_EPOCH.store(next, Ordering::Relaxed);
+    });
+    POST_PALETTE_AMOUNT.store(amount_pct, Ordering::Relaxed);
+}
+
+/// The installed device palette stops (a clone — callers are the LUT cook
+/// and the API, both off the per-frame path).
+pub fn post_palette_stops() -> Vec<(u8, [u8; 3])> {
+    share_get(&POST_PALETTE)
+}
+
 /// The persisted settings record built from the live atomics — write sites
 /// override the one field they change instead of hand-assembling the
 /// (ever-growing) struct. Pixel count and protocol come from the WANT_*

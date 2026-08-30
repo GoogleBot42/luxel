@@ -80,6 +80,71 @@ pub fn luma(px: [u8; 3]) -> u8 {
     ((px[0] as u32 * 54 + px[1] as u32 * 183 + px[2] as u32 * 19) >> 8) as u8
 }
 
+/// Stop cap for a *device-level* output palette (the persisted one, not a
+/// pattern's `setOutputPalette`, which is bounded by the pattern's own
+/// array budget). The cooked table has 256 entries, so 32 stops is already
+/// finer than the output can show, and it keeps the flash record small.
+/// Defined here so the firmware, the native mirror and the web UI can't
+/// disagree about the limit.
+pub const MAX_OUTPUT_PALETTE_STOPS: usize = 32;
+
+/// Parse the device-palette wire form both servers accept: whitespace-
+/// separated integers, `<amount_pct> <pos> <r> <g> <b> …`, components
+/// 0..=255 and amount 0..=100 — the flat `[pos,r,g,b,…]` shape the
+/// `setOutputPalette` builtin takes, in the byte domain the flash record
+/// stores. Returns `(amount_pct, stops)` or the message to report.
+#[allow(clippy::type_complexity)]
+pub fn parse_palette_stops(body: &str) -> Result<(u8, alloc::vec::Vec<(u8, [u8; 3])>), &'static str> {
+    let mut it = body.split_whitespace();
+    let amount_pct: u8 = it
+        .next()
+        .and_then(|v| v.parse().ok())
+        .filter(|a| *a <= 100)
+        .ok_or("first token must be the blend amount, 0..=100 percent")?;
+    // one pass, no intermediate Vec: the firmware pays for every extra
+    // iterator/collect shape in image bytes
+    let mut stops: alloc::vec::Vec<(u8, [u8; 3])> = alloc::vec::Vec::new();
+    let mut group = [0u8; 4];
+    let mut n = 0usize;
+    for tok in it {
+        group[n] = tok
+            .parse::<u8>()
+            .map_err(|_| "palette components must be integers 0..=255")?;
+        n += 1;
+        if n == 4 {
+            if stops.len() == MAX_OUTPUT_PALETTE_STOPS {
+                return Err("too many palette stops (max 32)");
+            }
+            stops.push((group[0], [group[1], group[2], group[3]]));
+            n = 0;
+        }
+    }
+    if n != 0 || stops.is_empty() {
+        return Err("expected groups of 4: <pos> <r> <g> <b>");
+    }
+    // sample_palette walks the list in order — an unsorted one would sample
+    // nonsense rather than fail, so reject it at the door
+    if stops.windows(2).any(|w| w[0].0 > w[1].0) {
+        return Err("palette stops must be in ascending position order");
+    }
+    Ok((amount_pct, stops))
+}
+
+/// Cook the luma → color table [palette_remap_frame] indexes: entry `i` is
+/// the stop list sampled at `i/255`, quantized the way the engine quantizes
+/// pixels. Filled in place so neither caller puts 768 bytes on its stack —
+/// the engine caches one behind its palette epoch, the firmware one behind
+/// the device-palette epoch.
+pub fn fill_palette_lut(pal: &[(crate::fixed::Fx, [crate::fixed::Fx; 3])], lut: &mut [[u8; 3]; 256]) {
+    use crate::fixed::Fx;
+    // floor(v·255), matching engine::quantize (PB-exact, oracle-checked)
+    let q = |v: Fx| ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255) >> 16) as u8;
+    for (i, slot) in lut.iter_mut().enumerate() {
+        let c = crate::vm::sample_palette(pal, Fx::from_raw(((i as i32) << 16) / 255));
+        *slot = [q(c[0]), q(c[1]), q(c[2])];
+    }
+}
+
 /// Recolor a finished frame through a 256-entry palette LUT indexed by
 /// [luma]: the pattern's *structure* survives, its hues are replaced.
 /// `amount` is the blend in 1/256ths (256 = full replace, 0 = no-op).
@@ -698,6 +763,47 @@ mod tests {
         let mut z = [[0u8, 255, 0]];
         palette_remap_frame(&mut z, &lut, 0);
         assert_eq!(z, [[0, 255, 0]]);
+    }
+
+    #[test]
+    fn palette_lut_matches_stop_sampling() {
+        use crate::fixed::Fx;
+        let b = |v: u8| Fx::from_raw(((v as i32) << 16) / 255);
+        // black → red ramp
+        let pal = [(b(0), [Fx::ZERO; 3]), (b(255), [Fx::ONE, Fx::ZERO, Fx::ZERO])];
+        let mut lut = [[0u8; 3]; 256];
+        fill_palette_lut(&pal, &mut lut);
+        assert_eq!(lut[0], [0, 0, 0]);
+        assert_eq!(lut[255], [255, 0, 0]);
+        assert_eq!(lut[128][1..], [0, 0]);
+        assert!(lut[128][0] > 120 && lut[128][0] < 136);
+        // monotone in the ramp direction
+        assert!(lut.windows(2).all(|w| w[0][0] <= w[1][0]));
+    }
+
+    #[test]
+    fn device_palette_body_parses_and_validates() {
+        let (amount, stops) = parse_palette_stops("50 0 255 0 0 128 0 0 255").unwrap();
+        assert_eq!(amount, 50);
+        assert_eq!(stops, alloc::vec![(0, [255, 0, 0]), (128, [0, 0, 255])]);
+        // leading/inner whitespace is free-form
+        assert!(parse_palette_stops("  100\n0 1 2 3\n").is_ok());
+        // rejects: bad amount, ragged groups, empty list, unsorted, overflow,
+        // and out-of-range components
+        assert!(parse_palette_stops("101 0 1 2 3").is_err());
+        assert!(parse_palette_stops("50 0 1 2").is_err());
+        assert!(parse_palette_stops("50").is_err());
+        assert!(parse_palette_stops("50 200 1 2 3 10 4 5 6").is_err());
+        assert!(parse_palette_stops("50 0 1 2 300").is_err());
+        let too_many = (0..=MAX_OUTPUT_PALETTE_STOPS)
+            .map(|_| String::from(" 0 1 2 3"))
+            .collect::<String>();
+        assert!(parse_palette_stops(&alloc::format!("50{}", too_many)).is_err());
+        // exactly at the cap is fine
+        let at_cap = (0..MAX_OUTPUT_PALETTE_STOPS)
+            .map(|_| String::from(" 0 1 2 3"))
+            .collect::<String>();
+        assert!(parse_palette_stops(&alloc::format!("50{}", at_cap)).is_ok());
     }
 
     #[test]

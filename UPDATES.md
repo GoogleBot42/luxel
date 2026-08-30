@@ -1,5 +1,87 @@
 # Update log
 
+## 2026-08-30 — The installation's palette is a device setting now (#139)
+
+`setOutputPalette(pal, amount)` shipped with the global post-process chain,
+but only as a *pattern-side* builtin: the device-settings half landed for
+brightness curve, blur and glow and stopped there. The reason was storage,
+not plumbing — those three are one byte each in the fixed-size `LXDV`
+record, and a palette is a variable-length stop list. It now has its own
+storage, its own routes, and an editor in the Output card.
+
+**Where a variable-length setting actually goes.** The obvious home was a
+fifth nvs record, and that is what the first cut did — until the Athom rig
+answered a power cycle with an empty palette. The nvs partition is four
+4 KiB sectors and all four are taken: WiFi, device settings, MQTT, and —
+this was the collision — `ota::GUARD_OFFSET` at 0xC000, the boot-loop
+guard, which rewrites (and therefore erases) its sector on *every boot*.
+A record parked there is gone before anything can read it. The fix is the
+mechanism the device map, playlist and resume record already use: a
+reserved-key blob in the pattern store (`patterns::store_blob`,
+`PALETTE_KEY`), which is variable-length by construction and CRC-checked by
+sequential-storage. `config.rs` now carries a header comment saying the nvs
+partition is full and where the next setting goes, so nobody rediscovers
+0xC000 the same way.
+
+The blob is `u8 version=1  u8 amount_pct  u8 count` then `count` stops of
+`(pos, r, g, b)`. `outpal::deserialize` validates the count against the
+cap before reserving — the rule a torn pattern-store TOC taught this
+codebase the hard way — and rejects an unsorted stop list as corrupt rather
+than sampling nonsense from it. Clearing writes a zero-count record, the
+same way the device map clears itself.
+
+Adding a fourth persisted setting was still the moment to stop
+copy-pasting the nvs writer: `config::write_record(offset, rec)` now does
+the pad-to-word, word-aligned staging, erase and write for all three nvs
+records. That deleted three duplicates of the `unsafe` staging block and
+paid back about 600 B of image on the tightest board.
+
+**Composition, not override.** A device palette does not replace a
+pattern's. `apply_outpipe` runs the device stage on the frame the engine
+already finished — which may already have been recolored by the pattern's
+own `setOutputPalette` — exactly the way device blur stacks on top of
+pattern blur. The device setting is the installation's look; the pattern
+keeps its own voice. Stage order inside `apply_outpipe` mirrors the
+engine's chain: recolor, then spread light, then the output transfer.
+
+The 256-entry lookup is cooked off the hot path. `shared::set_post_palette`
+bumps an epoch inside the same critical section that swaps the stop list,
+and the render task caches `(cooked-for epoch, Box<[[u8;3];256]>)` beside
+its gamma LUT — an unchanged palette costs one atomic compare per frame,
+and the cache updates its epoch even when the result is "no palette" so an
+empty list can't re-cook forever. (The epoch bump is a load/store under the
+lock, not `fetch_add`: the C3's riscv32imc has no atomic read-modify-write,
+which the build found before hardware did.)
+
+`outpipe::fill_palette_lut` and `outpipe::parse_palette_stops` are the
+shared halves — the engine's `ensure_remap_lut` and the firmware's cache
+cook through the same function, and the firmware, the native mirror and the
+tests all parse the wire form through the same parser, with
+`MAX_OUTPUT_PALETTE_STOPS` defined once.
+
+API: `POST /api/output/palette` takes `"<amount_pct> <pos> <r> <g> <b> …"`,
+all 0..=255, positions ascending, at most 32 stops; `DELETE` clears it;
+`GET /api/output` echoes `palette` (the flat array) and `paletteAmount`
+alongside the existing fields. Boot reads the blob before WiFi — a few
+hundred bytes, unlike the multi-KB pattern/playlist resume that has to wait
+for `wait_config_up()`.
+
+Verified on the Athom rig (60 px WS2812): set a three-stop palette, power
+cycle, palette still there and applied at boot; `DELETE`, power cycle,
+still gone. That the stage really reaches the wire — `/api/pixels` shows
+the pre-outpipe frame, so it can't answer this — was measured at the wall
+plug at brightness 31: 11.4 W with no palette, **4.5 W** with an all-black
+palette, 11.4 W with an all-white one, 11.4 W again after `DELETE`.
+
+UI: the Output card grows a Palette editor — a gradient preview that models
+the engine's asymmetric ends (below the first stop clamps, past the last is
+black), one row per stop with a color swatch and a 0–255 position, and
+add/remove/clear plus the blend amount. Covered end-to-end in
+`device-e2e.mjs` against the native mirror.
+
+Size: +5,120 B on `board-c6-devkit` (1,004,704 B, 43,872 B of slot left)
+and +4,256 B on `board-pixelblaze-v3`; `.stack` 29,228 → 29,196 B.
+
 ## 2026-08-30 — The post-process blur follows the panel, not the wire (#140)
 
 `setBlur`/`setGlow` — and the `/api/output` blur/glow device settings —

@@ -71,6 +71,15 @@ const ARRAY_TIGHT = arrayPattern(1000); // ~9.5 KB modelled — inside 10 KB, pa
 const ARRAY_OVER = arrayPattern(1400); // ~12.7 KB modelled — past the runtime floor
 const ARRAY_ARENA = arrayPattern(2100); // 16.8 KB of arrays — past the 16 KB arena
 
+/** A real mouse click on a Settings control, scrolled into view first — the
+ * Output card sits far down a scrolling panel, where a bare `page.click`
+ * fails with "Node is either not clickable or not an HTMLElement". */
+async function clickRole(page, role) {
+  const sel = `[data-role="${role}"]`;
+  await page.$eval(sel, (el) => el.scrollIntoView({ block: "center" }));
+  await page.click(sel);
+}
+
 async function setEditor(page, text) {
   await page.click(".cm-content");
   await page.keyboard.down("Control");
@@ -619,6 +628,80 @@ try {
     .catch(() => null);
   const thumbSpin = await page.$$eval('[data-role="thumb-spinner"]', (els) => els.length);
   check("library: thumb spinner clears after first frame", thumbSpin === 0, `${thumbSpin} left`);
+
+  // ---- device output palette (Gitea #139) ----
+  // Driven here rather than beside the other Output checks because the
+  // editor hides the settings panel: real clicks need the Settings tab open.
+  await page.click('[data-role="tab-settings"]');
+  await sleep(400);
+  // device output palette (Gitea #139): the Output card's editor drives
+  // POST/DELETE /api/output/palette, and GET /api/output echoes it back
+  {
+    const p0 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: absent by default",
+      Array.isArray(p0.palette) && p0.palette.length === 0 && p0.paletteAmount === 0,
+      JSON.stringify(p0.palette),
+    );
+    // "add stop" twice, then recolor the second one — real clicks on real
+    // controls, the way a user builds a ramp
+    await clickRole(page, "out-palette-add");
+    await sleep(300);
+    await clickRole(page, "out-palette-add");
+    await sleep(400);
+    const p1 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: two stops installed from the editor",
+      p1.palette.length === 8 && p1.palette[0] === 0 && p1.palette[4] === 64,
+      JSON.stringify(p1.palette),
+    );
+    await page.$$eval('[data-role="out-palette-color"]', (els) => {
+      const el = els[0];
+      el.value = "#ff0000";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(400);
+    const p2 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: color picker writes the stop",
+      p2.palette[1] === 255 && p2.palette[2] === 0 && p2.palette[3] === 0,
+      JSON.stringify(p2.palette),
+    );
+    await page.$eval('[data-role="out-palette-amount"]', (el) => {
+      el.value = "60";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(400);
+    const p3 = await (await fetch(`${DEV}/api/output`)).json();
+    check("palette: amount field applies", p3.paletteAmount === 60, JSON.stringify(p3));
+    await page.screenshot({ path: `${shotDir}/device-e2e-output-palette.png` });
+    // the API rejects the shapes the record can't hold
+    for (const [name, body] of [
+      ["ragged group", "50 0 1 2"],
+      ["unsorted stops", "50 200 1 2 3 10 4 5 6"],
+      ["bad amount", "101 0 1 2 3"],
+      ["empty stop list", "50"],
+    ]) {
+      const bad = await (
+        await fetch(`${DEV}/api/output/palette`, { method: "POST", body })
+      ).json();
+      check(`palette: rejects ${name}`, bad.ok === false, JSON.stringify(bad));
+    }
+    // clear button → DELETE
+    await clickRole(page, "out-palette-clear");
+    await sleep(400);
+    const p4 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: clear removes it",
+      p4.palette.length === 0 && p4.paletteAmount === 0,
+      JSON.stringify(p4),
+    );
+  }
+  await page.click('[data-role="tab-device"]');
+  await sleep(400);
+
   // clicking it opens the editor and activates it on the device
   const seenReqs = [];
   page.on("request", (r) => {
