@@ -73,16 +73,64 @@ The rules are JavaScript's (PB's compiler is JS-based):
 
 ## Statements and expressions
 
-Supported: `if`/`else`, `while`, `for(;;)`, `break`, `continue`,
-`return`, blocks, and expression statements. Semicolons are optional
-(JS automatic semicolon insertion rules). Comments: `//` and `/* */`.
+Supported: `if`/`else`, `while`, `for(;;)`, `switch` (a [Luxel
+extension](#switch-luxel-extension)), `break`, `continue`, `return`,
+blocks, and expression statements. Semicolons are optional (JS automatic
+semicolon insertion rules). Comments: `//` and `/* */`.
 
 Expressions: arithmetic `+ - * / %`, comparisons `< <= > >= == !=`
 (`===`/`!==` are accepted and identical to `==`/`!=`), logical `&& || !`
 (short-circuiting, returning the deciding value like JS), bitwise
 `& | ^ ~ << >>` (operating on the raw 16.16 bits — `1 >> 16` is the
 smallest positive value; `~` additionally clears the result's fraction
-bits), ternary `?:`, and compound assignment `+= -= *= /= %=` etc.
+bits), the [conditional operator](#the-conditional-operator) `?:`,
+and compound assignment.
+
+### The conditional operator
+
+`cond ? a : b` evaluates `cond`, then **only** the selected branch — the
+other one never runs, so it is safe to guard a division or an array read
+with it:
+
+```js
+v = n != 0 ? total / n : 0
+c = i < a.length ? a[i] : 0
+```
+
+It is **right-associative**, exactly like JS, which is what makes a
+chain read as a run of else-ifs:
+
+```js
+// a ? 1 : (b ? 2 : (c ? 3 : 4))
+level = a ? 1 : b ? 2 : c ? 3 : 4
+```
+
+A ternary in the *then* slot is closed by its own `:`, so
+`a ? b ? 1 : 2 : 3` means `a ? (b ? 1 : 2) : 3`. Nesting in the
+*condition* needs parentheses (`(a ? b : c) ? d : e`), since `?` binds
+looser than every binary operator. Each branch is a full assignment
+expression, so `a ? x = 1 : y = 2` works and the whole thing is itself an
+expression — usable as a call argument, an array index, or the body of a
+lambda (`c => c ? 1 : 0`).
+
+### Compound assignment
+
+Every binary operator has an `op=` form: `+= -= *= /= %= <<= >>= &= |=
+^=`, plus `**=` (matching the [`**` extension](#luxel-extensions)). All
+of them work on plain variables **and on array elements**:
+
+```js
+buf[i] += delta          // read-modify-write one element
+buf[i] *= 0.9            // decay in place
+buf[i]++                 // and ++ / -- , prefix or postfix
+```
+
+For `arr[i] op= x` the array and index sub-expressions are evaluated
+**once** (so `buf[nextSlot()] += 1` advances the slot once, not twice),
+the element is read, then the right-hand side runs — JS's order. The
+result of the whole expression is the *new* value; `arr[i]++` yields the
+old one and `++arr[i]` the new one, as in JS. Properties are not
+assignable, so `a.length += 1` is a compile error.
 
 Functions are first-class: lambdas (`(a, b) => a + b`) and function
 expressions can be stored in variables, passed to the array HOFs
@@ -562,7 +610,44 @@ speed = 2
 - **`**` (exponent)** — `x ** 2` = `pow(x, 2)`. Right-associative
   (`2 ** 3 ** 2` = 512), binds tighter than `*`. One divergence from JS:
   a unary minus on the left is allowed and binds first (`-x ** 2` means
-  `(-x) ** 2`; JS makes it a syntax error).
+  `(-x) ** 2`; JS makes it a syntax error). The compound form `x **= 2`
+  comes with it, on variables and array elements alike.
+- <a id="switch-luxel-extension"></a>**`switch`** — JS semantics, no
+  surprises:
+
+```js
+switch (mode) {
+  case 0:
+    h = 0
+    break
+  case 1:
+  case 2:            // empty label ⇒ falls into the next body
+    h = 0.5
+    break
+  default:
+    h = time(.1)
+}
+```
+
+  The discriminant is evaluated **once**, then labels are compared
+  against it with the language's `==` in **source order** until one
+  matches (`===` is the same operator here — there is one value domain).
+  A label can be any expression, and only the labels up to the match are
+  evaluated. Control then falls through from body to body until a
+  `break` or the end of the switch — including *into and out of*
+  `default`, which may sit anywhere among the cases and is simply the
+  target when nothing matched. At most one `default` per switch.
+
+  `break` inside a switch leaves the **switch**, not an enclosing loop;
+  `continue` skips past the switch to the enclosing loop, as in JS.
+  `var` in an arm hoists to the function scope like anywhere else (there
+  is no block scoping yet), and `return` out of an arm works normally.
+
+  `switch` needs no new bytecode: it compiles to the same
+  compare-and-jump instructions `if` uses, so the cost is one comparison
+  per label tested rather than a jump table. For a hot per-pixel
+  dispatch over many modes, an array of lambdas indexed by the mode is
+  still faster.
 
 - **`assert(cond[, "message"])` — configuration invariants.** A pattern
   can declare what it needs from the rig; if the condition is falsy the
@@ -594,9 +679,11 @@ assert(pixelCount >= 100, "needs at least 100 pixels")
   A runtime error *inside* the condition (e.g. indexing out of bounds)
   is an ordinary vmerr, not a violation.
 
-  This is the one extension that breaks PB-source compatibility when
-  used: a real Pixel Blaze has no `assert`, so patterns using it are
-  Luxel-only by choice.
+  Like `switch` and `**`, using it makes the pattern Luxel-only by
+  choice: a real Pixel Blaze has no `assert` (its compiler rejects
+  `switch` outright — "Unsupported type SwitchStatement" — and `**` as
+  well; oracle-probed 2026-08-30). The compatibility guarantee runs the
+  other way: every valid PB pattern still compiles here.
 
 More conservative JS conveniences may follow (see the roadmap).
 

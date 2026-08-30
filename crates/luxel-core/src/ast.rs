@@ -145,6 +145,14 @@ pub enum StmtKind {
         update: Option<Expr>,
         body: Box<Stmt>,
     },
+    /// `switch (disc) { case a: … default: … }` — Luxel extension with JS
+    /// semantics: the discriminant is evaluated once, labels are compared
+    /// with `==` in source order, and control falls through between cases
+    /// until a `break`.
+    Switch {
+        disc: Expr,
+        cases: Vec<SwitchCase>,
+    },
     Block(Vec<Stmt>),
     Return(Option<Expr>),
     Break,
@@ -158,6 +166,16 @@ pub enum StmtKind {
         cond: Expr,
         message: Option<String>,
     },
+}
+
+/// One `case`/`default` arm of a [`StmtKind::Switch`]. `test: None` is the
+/// `default` arm; its position in `cases` is its position in the source, so
+/// fall-through into and out of it works like any other arm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    pub test: Option<Expr>,
+    pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
 /// How a variable was declared. `Var` and `Let` are semantically identical
