@@ -1,5 +1,40 @@
 # Update log
 
+## 2026-08-29 — Small-items batch: MSv3 300 px re-test clean on v0.1.39,
+## playlist pre-flight dedup (#125), truthful corpus report, #124 pinned
+
+Four picked from a fetch-work sweep, three landed by parallel worktree
+agents (PRs #129/#130/#131), one run live on the Athom:
+
+- **"Music Sequencer - for V3 ONLY" re-test at 300 px** (Athom, v0.1.39):
+  the 2026-07-19 soak's one capacity holdout, fixed by v0.1.34's
+  flash-resident pattern — reconfirmed on current firmware. Push accepted,
+  120 s run, no vmerr, no reboot, min heap_free 71,260 B (matches the
+  v0.1.34-era ~70 KB figure); fps swings 20–63 with the pattern's phases
+  (some phases sit below the 30 fps SLOW line — capacity fine, some phases
+  are just heavy). Rig restored exactly as found (60 px, brightness 4,
+  prior pattern; post-restore /api/status byte-identical to the snapshot).
+- **#125 → PR #129**: the playlist pre-flight in firmware main.rs now
+  calls `budget::array_budget` instead of open-coding the same
+  floor/headroom arithmetic. The inline constants matched the helper
+  exactly, so this is pure dedup — the two paths can no longer drift.
+- **Stale `TODO_BUILTINS` → PR #130**: all 39 hardcoded "not yet
+  implemented" names in `tools/corpus/report.mjs` were long since
+  implemented (BUILTINS has 138 impls, zero Todo entries), so the corpus
+  report's headline gap column was pure fiction. The set is now derived
+  from vm.rs at run time (loud failure if the table can't be parsed),
+  `tools/corpus/last-report.json` regenerated (326 stale `uses.todo`
+  lines dropped), derivation documented in docs/tools.md.
+- **#124 → PR #131**: the `array(0)`-in-a-loop unbounded arena growth was
+  already fixed as a side effect of #109's ledger alignment (zero-length
+  arrays charge `ARRAY_HEADER_UNITS`, capping the arena at 2,559 slots) —
+  verified by measurement plus a negative control, then pinned: 4
+  regression tests, a compile-time `ARRAY_HEADER_UNITS > 0` assert,
+  `Engine::arena_stats()`, and a docs/spec/vm.md §1.2 note. Adjacent
+  finding filed as **#132**: `arr_mut`'s const→owned COW promotion adds
+  to `array_bytes` without a `charge_array` check (budget overshoot,
+  not a leak).
+
 ## 2026-08-29 — Re-judge queue cleared: 15 pairs, three judge batches
 ## (closes the re-judge halves of #99 and the #126 follow-ups)
 
