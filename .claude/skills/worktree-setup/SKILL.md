@@ -47,9 +47,12 @@ these before trusting any build/test failure as a real regression.
    `tools/wledfs-check` runs against real filesystems. Copy them in before
    running either: `cp /home/googlebot/workspace/pixler/*.bin .` — they stay
    untracked, so nothing to clean before committing.
-4. `cargo` and `node` are only on `PATH` inside `nix develop`. If you need
-   ImageMagick or similar one-off tools not in the flake, `nix-shell -p <pkg>` alongside
-   it rather than assuming it's present.
+4. `cargo`, `node` AND `python3` are only on `PATH` inside `nix develop` — the bare
+   shell has none of them, so a one-liner that pipes API JSON through `python3`/`node`
+   dies with "command not found" (`tools/stack-check.sh` uses python3 and is fine
+   because it runs inside the shell). Outside it, parse with `grep`/`sed` or dump the
+   response to a file and read it. If you need ImageMagick or similar one-off tools not
+   in the flake, `nix-shell -p <pkg>` alongside it rather than assuming it's present.
 5. Regenerate the gallery after the above: `node web/tools/gen-gallery.mjs` (or just run
    `npm run build`/`npm run dev`, which call it as a step). It writes
    `web/public/gallery.json` from `library/*.js` unconditionally, and
