@@ -77,3 +77,9 @@ Docs and memory drift out of date. Before proposing *any* candidate,
 confirm it's still open: check whether `UPDATES.md` already records it as
 shipped, whether the code already does it, and whether a memory entry
 supersedes it. Never propose something already done.
+
+Verify against `origin/master` (after a `git fetch`), not the main
+checkout's HEAD — the checkout routinely sits days behind while sessions
+merge PRs continuously. On 2026-08-30 a sweep run against a six-day-stale
+detached HEAD listed the post-process chain (blur/glow/palette) as open
+work when it had already shipped.
