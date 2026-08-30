@@ -92,6 +92,20 @@ firmware binaries same-origin — see docs/wled-migration.md. The site
 lands at `https://googlebot42.github.io/luxel/` (installer at
 `/flash.html`).
 
+That URL is also hardcoded in the firmware's embedded fallback page
+(`firmware/src/index.html`, served at `/` when no assets are installed
+and always at `/min`): it links to
+`https://googlebot42.github.io/luxel/?device=http://<this device's
+host>`, built client-side from `location.host`, so a device with no
+on-flash UI is still one click from a working console (the playground
+honours `?device=` and the firmware serves `Access-Control-Allow-Origin:
+*`). If the Pages URL ever moves, that anchor moves with it. Caveat: the
+Pages copy is https and devices are http — Chromium exempts
+recognised-local targets (RFC1918 / `.local`) from mixed content and
+prompts for Local Network Access, but the playground's `gatedFetch` does
+not yet send the `targetAddressSpace: "local"` hint the installer page
+uses (Gitea #162).
+
 ## One-time infrastructure (state as of 2026-08-15)
 
 - Push mirror Gitea → GitHub: **already configured and syncing** (the
