@@ -1156,16 +1156,16 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
         // playlist pre-flight: one queued item per frame — run its
         // assert() invariants against the CURRENT config in a throwaway
         // VM (free for assert-less patterns; the message table gates it).
-        // Same headroom math as budgeted_engine so a check can't starve
-        // the live engine; a stale-format blob reports its decode error
+        // Budgeted through the same `budget::array_budget` as
+        // `budgeted_engine` so a check can't starve the live engine — and
+        // so the two can't drift; a stale-format blob reports its decode error
         // (the fix — recompile — is the same user action either way).
         if let Some(id) = playlist::preflight_next() {
             let violation = match patterns::bytecode_of(&id) {
                 Some(bc) => match luxel_core::bytecode::deserialize_lean(&bc) {
                     Ok(p) => {
-                        let budget = (esp_alloc::HEAP.free() as usize)
-                            .saturating_sub(RUNTIME_FLOOR + 4 * 1024)
-                            .max(16 * 1024);
+                        let budget =
+                            luxel_core::budget::array_budget(esp_alloc::HEAP.free() as usize);
                         luxel_core::engine::check_asserts(
                             &p,
                             PIXEL_COUNT.load(Ordering::Relaxed),
