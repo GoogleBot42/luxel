@@ -262,10 +262,12 @@ export function render(index) { hsv(0, 0, 0) }`;
     await verdict("Q7 call slot   t[0](1,2)", "t = array(4)\n  v = t[0](1, 2) + 1", ", v", ["v"]);
 
     // Q8: the sibling write path. `arrayReplace`/`arrayReplaceAt` splat N
-    // values from an offset; Luxel silently drops the elements that fall off
-    // the end (`slots.get_mut(off + j)`) and clamps a negative offset to 0,
-    // both the opposite of what `a[i] = v` does. Only the in-bounds case had
-    // ever been probed (2026-08-22).
+    // values from an offset; Luxel USED to silently drop the elements that
+    // fell off the end and clamp a negative offset to 0, both the opposite of
+    // what `a[i] = v` does — these probes settled it the other way and the
+    // engine now matches (783978f, #107): an overrun is a whole-span error
+    // that leaves the array untouched, and a negative offset shifts rather
+    // than clamps. Re-run them as a regression check, not as an open question.
     //
     // DEVICE HAZARD — do not add these back. Two shapes reproducibly hang
     // the oracle's engine (websocket stops acking `setCode`; it recovers on

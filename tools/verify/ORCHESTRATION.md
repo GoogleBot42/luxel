@@ -89,8 +89,16 @@ FEEDS judges, reconstructed so a re-judge session (queued in Gitea #84 /
   nano-orbital (broken 2), orv-christmas-tree (divergent 5) — fixup rigs
   all confirmed working; perlin-fire (divergent 4), coronal-mass-ejection
   (divergent 4), eye-of-sauron (broken 1), distance-function-kaleidoscope-2
-  (broken 0). Still blocked: performance-test-framework (#123 non-visual
-  decision).
+  (broken 0). Still blocked at the time: performance-test-framework (#123
+  non-visual decision) — settled 2026-08-30, see below.
+- `performance-test-framework` settled 2026-08-30 (Gitea #123): it is a CPU
+  benchmark read through Vars Watch and black is its correct render on real
+  PB too, so it is EXCLUDED rather than scored. fixups.json gained a
+  `nonVisual` reason string, snap.mjs warns on every run of such a slug, and
+  report.mjs files it under its own `non-visual` heading. Never assign a
+  `nonVisual` slug to a judge. The annotation lives in fixups.json and not
+  pairs.json because gen-pairs.mjs regenerates pairs.json from library/ +
+  corpus/ and would silently drop either an annotation or a deletion.
 - Re-judged 2026-08-29 after the `--vars-orig`/`--vars-port` harness work
   (Gitea #122): automap, orig-unrenderable 0 → **close 7**. It was never
   unrenderable — it is a client-DRIVEN mapper helper, and fixups.json now

@@ -218,7 +218,8 @@ main#list {
   background: #7f1d1d;
   color: #ffdcdc;
 }
-.badge.v-orig-unrenderable {
+.badge.v-orig-unrenderable,
+.badge.v-non-visual {
   background: #3b3b46;
   color: #cfcfdc;
 }

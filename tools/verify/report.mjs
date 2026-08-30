@@ -31,7 +31,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots } from "./enginehost.mjs";
 import { synthSensorFrame } from "./sensormodel.mjs";
-import { applySourceFixups, resolveRig, varsOverride } from "./fixups.mjs";
+import { applySourceFixups, resolveRig, varsOverride, nonVisualReason } from "./fixups.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../..");
@@ -341,13 +341,22 @@ function renderSide(host, source, rig, layout, vars) {
 
 // ---- HTML -------------------------------------------------------------------
 
-const VERDICT_ORDER = ["match", "close", "divergent", "broken", "orig-unrenderable"];
+const VERDICT_ORDER = [
+  "match",
+  "close",
+  "divergent",
+  "broken",
+  "orig-unrenderable",
+  "non-visual",
+];
 const VERDICT_BLURB = {
   match: "a viewer would accept them as the same pattern",
   close: "same pattern, minor visible differences",
   divergent: "recognizably related but wrong in a major axis",
   broken: "port errors, dies, or bears no resemblance",
   "orig-unrenderable": "the ORIGINAL fails on our engine — no comparison possible (not a port score)",
+  "non-visual":
+    "the ORIGINAL is not a visual pattern (declared in fixups.json) — excluded from the sweep, not a port score",
 };
 const esc = (s) =>
   String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -380,7 +389,7 @@ function buildHtml(entries) {
         <div class="head">
           <a class="slug" href="#${e.slug}">${e.slug}</a>
           <span class="badges">
-            <span class="score s${e.score}">${e.score}/10</span>
+            ${e.verdict === "non-visual" ? "" : `<span class="score s${e.score}">${e.score}/10</span>`}
             <span class="conf">${esc(e.confidence ?? "")}</span>
           </span>
         </div>
@@ -479,9 +488,13 @@ let done = 0;
 for (const f of verdictFiles.sort()) {
   const slug = f.replace(/\.json$/, "");
   const verdict = JSON.parse(fs.readFileSync(path.join(RESULTS, f), "utf8"));
+  // fixups.json is the authority on exclusion (Gitea #123): a pair declared
+  // non-visual there files under `non-visual` whatever its verdict file says,
+  // so the manifest and the report can't drift apart.
+  const nonVisual = nonVisualReason(slug);
   const entry = {
     slug,
-    verdict: verdict.verdict,
+    verdict: nonVisual ? "non-visual" : verdict.verdict,
     score: verdict.score ?? 0,
     confidence: verdict.confidence,
     summary: verdict.summary ?? "",

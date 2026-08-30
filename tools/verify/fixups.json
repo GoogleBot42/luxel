@@ -30,6 +30,10 @@
     "grid": [20, 20],
     "note": "SWEEP-NOTES.md 'Manifest rig fixes needed': the original renders only at pixelCount multiples of 20, so the rig should be grid 20x20 (the default 16x16 errors at frame 0)."
   },
+  "performance-test-framework": {
+    "nonVisual": "The ORIGINAL is a CPU benchmark, not an animation: its render body is the comment `//sorry, no blinkenlights!` and its results are read through PB's Vars Watch, so all-black is the correct output on a real Pixel Blaze too. Pixel fidelity is therefore not a target and no verdict/score is meaningful — the pair stays in pairs.json (gen-pairs.mjs would re-add it anyway) but is excluded from the scored population.",
+    "note": "Gitea #123, from the #108 silent-null diagnosis. The 2026-08 sweep filed this as `orig-unrenderable` after ten runs proving the original is black on every rig, fps, seed, wall clock and skip — correct observation, wrong bucket: the original does not FAIL on our engine, it succeeds at drawing nothing. The port deliberately adds a phase/progress readout the original never had (see the header of library/performance-test-framework.js); that is a documented deviation for the playground, not a scored defect, because there is nothing to be faithful to. Do not hand this slug to a judge."
+  },
   "skypirate-s-centered-spectrum": {
     "rig": "grid",
     "grid": [3, 600],
