@@ -15,6 +15,33 @@
 
   const dispatch = createEventDispatcher<{ set: { name: string; values: number[] } }>();
 
+  const READONLY_KINDS: ReadonlySet<Control["kind"]> = new Set(["showNumber", "gauge"]);
+
+  /** An UNTOUCHED control is running whatever the pattern's own top-level code
+   *  put in the variable, and the engine offers no way to read that back
+   *  (`lx_set_control` with no args INVOKES the handler, which would overwrite
+   *  it). Only a `//# default=` declares it. Without one, the position drawn is
+   *  a GUESS, so say so — a slider parked at a fabricated 0.5 reads as the
+   *  pattern's real value when the engine actually holds something else.
+   *  First user input writes `values[name]`, which clears the flag.
+   *  NOTE: `cur`/`dflt` are passed in (not read off `values`/`hints` inside)
+   *  so the template expression depends on them directly — Svelte's dependency
+   *  tracking is static and would otherwise never re-run this. */
+  function isGuess(
+    cur: number[] | undefined,
+    dflt: number | undefined,
+    kind: Control["kind"],
+  ): boolean {
+    return (
+      cur === undefined && dflt === undefined && kind !== "trigger" && !READONLY_KINDS.has(kind)
+    );
+  }
+
+  const GUESS_TIP =
+    "No //# default declared, and a control's live value cannot be read back from " +
+    "the engine. The position shown is a PLACEHOLDER, not the running value — the " +
+    "pattern's own top-level initialiser is what is rendering. Move it to take control.";
+
   function set(name: string, vals: number[]): void {
     values = { ...values, [name]: vals };
     dispatch("set", { name, values: vals });
@@ -44,8 +71,12 @@
   <div class="panel">
     {#each controls as c (c.name)}
       {@const h = hints.get(c.name) ?? {}}
-      <div class="control">
+      {@const guess = isGuess(values[c.name], h.default, c.kind)}
+      <div class="control" class:guess>
         <span class="label" title={c.name}>{c.label}</span>
+        {#if guess}
+          <span class="guessflag" title={GUESS_TIP}>?</span>
+        {/if}
         {#if c.kind === "slider"}
           <input
             type="range"
@@ -102,8 +133,10 @@
             {/each}
           </div>
         {:else if c.kind === "toggle"}
+          <!-- native tri-state says "unknown" better than any badge can -->
           <input
             type="checkbox"
+            indeterminate={guess}
             checked={(values[c.name]?.[0] ?? h.default ?? 0) > 0.5}
             on:change={(e) => toggle(c.name, e)}
           />
@@ -169,6 +202,21 @@
   .dim {
     color: var(--text-dim);
     font-size: 12px;
+  }
+
+  /* an untouched, undeclared control draws a placeholder position, not a real
+     value — dim the widget and flag it (see isGuess) */
+  .control.guess input[type="range"],
+  .control.guess input[type="number"] {
+    opacity: 0.4;
+  }
+
+  .guessflag {
+    width: 12px;
+    text-align: center;
+    color: var(--warn);
+    font-weight: 700;
+    cursor: help;
   }
 
   .readout {

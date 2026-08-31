@@ -74,6 +74,35 @@ too-short Tap / DebounceMs / Modes) pending real GPIO.
 Deferred items are on Gitea (GPIO input stubs, the playground's copy of
 the fabricated-slider bug, a `//#`-placement lint, probe-controls
 ignoring bounds, minor fidelity residue).
+
+## 2026-08-30 — The playground stops fabricating untouched control values (#178)
+
+The review UI's fabricated-slider fix, ported to `web/src/components/Controls.svelte`.
+An untouched control is running whatever the pattern's own top-level code
+put in the variable, and the engine cannot hand that back — `lx_set_control`
+with no args *invokes* the handler. Only a `//# default=` declares it. The
+playground was nonetheless drawing `?? 0.5` (or `?? 0` / `?? 1` per kind)
+and presenting it as the running value, which is exactly what hid the
+orig-0.4 / port-0.5 Slope gap in holiday-diagonal-stripes on the review side.
+
+Untouched controls with no `//#` default now render as placeholders: the
+slider/number widgets dim to 0.4, an amber `?` badge carries a tooltip
+explaining the position is a guess, and toggles go **indeterminate** (the
+native tri-state says "unknown" better than any badge). Triggers, gauges
+and showNumbers are exempt — nothing to guess. First user interaction
+writes `values[name]` and the row settles to a normal control. Controls
+*with* a `//#` default are seeded into `controlValues` at compile, so they
+were never guesses and are untouched by this change.
+
+Verified in real chromium (puppeteer-core): Blink Fade's undeclared
+`sliderSpeed` renders dimmed + badged, a real mouse drag settles it to
+0.831 at full opacity; Audio Volume Meter's 7 `//#`-defaulted sliders and
+its gauge render exactly as before while both undeclared toggles show
+indeterminate, and clicking one settles only that one. `svelte-check` 0
+errors, 11/11 `npm test`, full `web/tools/e2e.mjs` suite green (69 checks,
+including the pre-existing `//# default applied` and slider/number
+round-trip assertions).
+
 ## 2026-08-30 — fmt diet: JSON builders off core::fmt; C6 margin 4.24 → 4.49 % (#168, #169)
 
 Converted every `format!`-built JSON/response body — `server.rs` (41
