@@ -74,9 +74,10 @@ assignColors()
 
 // ---- controls ----------------------------------------------------------------
 var cycleSec = 15
-//# min=0 max=1 step=0.01 default=0.45
+// Seconds for one full trip through the three palette moods.
+//# min=3 max=30 step=0.5 default=15
 export function sliderCycleTime(v) {
-  cycleSec = 3 + v * 27          // several seconds up to about half a minute
+  cycleSec = max(1, v)
 }
 
 var twinkles = 0.5

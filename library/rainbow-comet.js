@@ -23,13 +23,15 @@ var decay = 0.9
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderSpeed(v) {
   speed = v
-  headInterval = 0.13 - v * 0.11   // ~8.5 s .. ~1.3 s per full bounce
+  // centered on the shipped 0.09 (~5.9 s per full bounce); ~9.8 s .. ~2.0 s
+  headInterval = 0.09 - (v - 0.5) * 0.12
 }
 
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderFade(v) {
   fade = v
-  decay = 0.97 - v * 0.15          // higher slider => lower decay => faster fade
+  // centered on the shipped 0.9; higher slider => lower decay => faster fade
+  decay = 0.9 - (v - 0.5) * 0.14
 }
 
 export function beforeRender(delta) {

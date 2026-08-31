@@ -66,9 +66,10 @@ export function sliderTearChance(v) {
   tearChance = v
 }
 var tearHz = 3
-//# min=0 max=1 step=0.01 default=0.3
+// Tearing-band re-rolls per second.
+//# min=0.2 max=10 step=0.1 default=3
 export function sliderTearRate(v) {
-  tearHz = 0.2 + v * 9.8            // up to about ten re-rolls per second
+  tearHz = max(0.2, v)
 }
 var tearBright = 0.5
 //# min=0 max=1 step=0.01 default=0.5

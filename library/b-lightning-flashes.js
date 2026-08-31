@@ -19,10 +19,13 @@ var halfWidth = 8        // segment half-width in pixels
 var speed = 0.5          // flash snappiness / gap stretch
 var gapMaxMs = 1000      // max random dark gap
 
-//# min=0 max=1 step=0.01 default=0.3
+// Half-width in PIXELS — the unit the rest of the pattern works in (`halfWidth`
+// is compared against `abs(index - center)`), and the unit the described control
+// uses: "a single pixel up to a few dozen". newStrike() caps it at half the
+// strip, so an over-wide setting degrades gracefully on a short one.
+//# min=1 max=30 step=1 default=8
 export function sliderLightningLength(v) {
-  // 1 pixel up to ~15% of the strip (spec suggests fraction-of-strip, not absolute)
-  halfWidth = 1 + v * pixelCount * 0.15
+  halfWidth = max(1, v)
 }
 
 //# min=0 max=1 step=0.01 default=0.5
@@ -30,9 +33,10 @@ export function sliderSpeed(v) {
   speed = v
 }
 
-//# min=0 max=1 step=0.01 default=0.5
+// Longest possible dark gap between strikes, in SECONDS.
+//# min=0.1 max=2 step=0.05 default=1
 export function sliderOffDurationRandomness(v) {
-  gapMaxMs = 100 + v * 1900   // up to ~2 s of darkness
+  gapMaxMs = max(0.05, v) * 1000
 }
 
 function newStrike() {

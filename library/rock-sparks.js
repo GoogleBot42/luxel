@@ -153,17 +153,19 @@ export function hsvPickerEdgeBeamColor(h, s, v) {
 export function sliderWidth(v) {
   beamWidth = 0.02 + v * 0.8
 }
-//# min=0 max=1 step=0.01 default=0.3
+//# min=0 max=1 step=0.01 default=0.25
 export function sliderFocus(v) {
-  beamFocus = 0.005 + v * 0.1
+  beamFocus = 0.03 + (v - 0.25) * 0.1           // centered on the shipped 0.03
 }
-//# min=0 max=1 step=0.01 default=0.4
+// Overdrive ceiling the beam intensity is clamped to; 4 is the described look.
+//# min=1 max=10 step=0.1 default=4
 export function sliderDrive(v) {
-  beamDrive = 1 + v * v * 9                    // unity up to ~10, quadratic
+  beamDrive = max(1, v)
 }
-//# min=0 max=1 step=0.01 default=0.3
+// Sweep rate multiplier; 1x is the pattern's native pace.
+//# min=0.25 max=3 step=0.05 default=1
 export function sliderSpeed(v) {
-  speedScale = 1 + v * 2                        // ~factor-of-three range
+  speedScale = max(0.05, v)
 }
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderVerticalSweep(v) {
