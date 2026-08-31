@@ -1,5 +1,15 @@
 # Update log
 
+## 2026-08-30 — Fix pages/release CI: crates.io API 403 on esp-hub75 fetch
+
+GitHub pages (and release) builds were dying in `nix develop`: the
+esp-hub75 source fetch hit `crates.io/api/v1/.../download`, which now
+returns 403 to non-browser clients. Swapped the fetchurl to the
+`static.crates.io` CDN URL (same bytes, hash unchanged — verified by
+sha256 before the swap). Also added `flake.nix`/`flake.lock` to
+pages.yml's push path filter, since devshell changes can break the site
+build.
+
 ## 2026-08-31 — The review verdict lands: 110 pattern decisions acted on
 
 Jeremy sat down with the review UI and decided all ~139 judged pairs

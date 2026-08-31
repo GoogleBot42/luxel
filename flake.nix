@@ -96,7 +96,9 @@
         version = "0.14.0";
         src = pkgs.fetchurl {
           name = "esp-hub75-0.14.0.tar.gz";
-          url = "https://crates.io/api/v1/crates/esp-hub75/0.14.0/download";
+          # static.crates.io is the CDN the API endpoint redirects to; the
+          # API URL itself 403s non-browser clients (broke CI 2026-08-30).
+          url = "https://static.crates.io/crates/esp-hub75/esp-hub75-0.14.0.crate";
           hash = "sha256-+4wQGC3EyQUcV07zZ/95SAfD3C/gzwhpXAw7mNk4BtY=";
         };
         patches = [ ./firmware/patches/esp-hub75-0.14.0-esp-hal-git.patch ];
