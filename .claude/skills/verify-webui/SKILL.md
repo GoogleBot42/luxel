@@ -40,7 +40,10 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    `--strictPort` fail loudly for the harness's own server, but if it's puppeteer's
    *target* URL that collides with someone else's server, puppeteer silently drives the
    wrong app (wrong tile count, unexpected UI) with no error at all. Pick an unused port
-   per session.
+   per session. This applies to EVERY locally served page, not just vite —
+   `tools/verify/review.mjs` too: on 2026-08-30 a session's chromium silently drove
+   another session's review server on the default port and a working change looked
+   broken (404s on a file only the new server had).
 
    Address the preview server as **`localhost`, never `127.0.0.1`**. `vite preview`
    binds the name, which resolves to `::1` here, so a `127.0.0.1:<port>` target gets
