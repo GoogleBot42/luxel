@@ -82,7 +82,19 @@ shows no new lints; `cargo test --workspace` 223/223; the full QEMU harness
 (`tools/qemu/run-all.py` — takeover app1/app0/fault, heap-regions
 selfheal/rollback) passes on the athom image built from this change;
 `tools/serve-e2e.mjs` green. The firmware's HTTP surface has no hardware-free
-e2e, so the response-header changes above still want a device pass.
+e2e, so the wire contract was verified on the Athom rig after an OTA of this
+build (slot ota_1 → ota_0, same 0.1.39 version string — slot is the
+discriminator): every response family checked with raw curl — single
+`Content-Type` on JSON/octet/HTML, `Content-Length` == body bytes everywhere
+including the flash-streamed `/api/pattern`/`/api/pattern.lxp`, asset 200 with
+ETag+Cache-Control+gzip, body-less 304 revalidation carrying the would-be-200
+`Content-Type`/`Content-Length` and the same ETag, all four OPTIONS preflight
+headers, text/plain 404, captive-portal shape untouched. Then a full
+`tools/hw-bench.mjs` soak: 302/303 patterns clean through the new reply path
+(the one error, an `array index out of bounds` in sound-spectromatrix-render2d
+at 300 px, does not reproduce natively under snap.mjs and is a VM/sensor-env
+issue unrelated to this change — filed as #193), pixel-count curve unchanged,
+device healthy after (vmerr null, heap ~86 KB free at 60 px).
 
 ## 2026-08-30 — Lint detached `//#` directives; sweep 13 library patterns
 
