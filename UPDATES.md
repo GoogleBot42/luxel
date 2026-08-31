@@ -47,6 +47,13 @@ Verified on the Athom rig at its real 60 px: the pre-fix source pushed via
 `/api/code` reports `vmerr: "array index out of bounds"`, the fixed source
 reports `vmerr: null` at the same fps and heap.
 
+`tools/hw-bench.mjs` got three fixes for the misdirection it caused. Its
+summary line hardcoded *"fps at 300 px"* and its header hardcoded *"SK9822"*,
+so every report described a rig the sweep hadn't run on — both now come from
+`/api/status` and `/api/config`. And the restore hardcoded 300 px instead of
+the count it found, quietly reconfiguring the rig on every run (documented as
+a gotcha to work around; now just fixed).
+
 ## 2026-08-30 — One `Reply` type for the whole device API: −24 KB of firmware
 
 `firmware/src/server.rs` returned **thirteen different response shapes** —

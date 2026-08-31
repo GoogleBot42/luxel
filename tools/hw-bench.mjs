@@ -5,10 +5,10 @@
 //
 // Usage (repo root, nix develop): node tools/hw-bench.mjs <device-ip> [report.md]
 //
-// Restores: rainbow, 300 px, the brightness it found. NOTE it restores 300
-// px regardless of the count it found — reset it afterwards if the device
-// was on something else. ~45 min for the current ~320-pattern gallery,
-// one pattern after another on the actual strip.
+// Restores: rainbow, and the pixel count + brightness it FOUND (it used to
+// hardcode a 300 px restore regardless, which quietly reconfigured the rig).
+// ~45 min for the current ~320-pattern gallery, one pattern after another on
+// the actual strip.
 
 import fs from "node:fs";
 // devices take LXP1 envelopes (source + LXBC bytecode), not raw source —
@@ -48,6 +48,9 @@ const gallery = JSON.parse(fs.readFileSync("web/public/gallery.json", "utf8"));
 const rainbow = fs.readFileSync("library/rainbow.js", "utf8");
 const status0 = await api("/api/status");
 const bright0 = (await api("/api/brightness")).brightness;
+// the LED protocol is not in /api/status — the header used to hardcode
+// "SK9822" and mislabelled the ws2812 Athom rig on every report it wrote
+const proto0 = (await api("/api/config")).protocol ?? "unknown";
 console.log(`device ${IP}: v${status0.version}, ${status0.pixels}px, brightness ${bright0} — soaking ${gallery.length} patterns`);
 
 const rows = [];
@@ -85,8 +88,9 @@ for (const n of [60, 150, 300, 600, 1024, 2048]) {
   console.log(`${n} px → ${st.fps} fps`);
 }
 
-// restore
-await api("/api/config", "300");
+// restore exactly what we found — the sweep ran at status0.pixels, and the
+// curve above left the device on 2048
+await api("/api/config", String(status0.pixels));
 await api("/api/brightness", String(bright0));
 await api("/api/code", rainbowBody);
 
@@ -100,13 +104,16 @@ const minHeap = Math.min(...ok.map((r) => r.heap));
 const lines = [];
 lines.push(`# Hardware soak + benchmark — ${new Date().toISOString().slice(0, 10)}`);
 lines.push("");
-lines.push(`*Device ${IP}, firmware v${status0.version}, ${status0.pixels} px SK9822, brightness ${bright0}.*`);
+lines.push(`*Device ${IP}, firmware v${status0.version}, ${status0.pixels} px ${proto0}, brightness ${bright0}.*`);
 lines.push(`*Regenerate: \`node tools/hw-bench.mjs <ip>\` (≈45 min; runs every gallery pattern on the strip).*`);
 lines.push("");
 lines.push(`## Summary`);
 lines.push("");
 lines.push(`- ${gallery.length} patterns: **${ok.length} clean**, ${errs.length} with errors, ${slow.length} under 30 fps.`);
-lines.push(`- fps at 300 px: median **${pct(0.5)}**, p10 ${pct(0.1)}, p90 ${pct(0.9)}.`);
+// The sweep runs at whatever count the device was ALREADY on, which is not
+// necessarily 300 — a hardcoded "at 300 px" here sent Gitea #193 chasing a
+// 300 px repro for a bug that only bites at the 60 px the run actually used.
+lines.push(`- fps at ${status0.pixels} px (the count the sweep ran at): median **${pct(0.5)}**, p10 ${pct(0.1)}, p90 ${pct(0.9)}.`);
 lines.push(`- lowest heap_free seen while soaking: ${minHeap} bytes.`);
 lines.push("");
 lines.push(`## fps vs pixel count (rainbow reference)`);
@@ -124,7 +131,7 @@ if (errs.length) {
   lines.push("");
 }
 if (slow.length) {
-  lines.push(`## Slowest (< 30 fps at 300 px)`);
+  lines.push(`## Slowest (< 30 fps at ${status0.pixels} px)`);
   lines.push("");
   lines.push(`| pattern | kind | fps |`);
   lines.push(`|---|---|---:|`);
