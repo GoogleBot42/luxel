@@ -40,6 +40,13 @@ these before trusting any build/test failure as a real regression.
    the first `nix develop` in the worktree. Only bare-`cargo`-outside-the-shell
    builds ever see it missing; the fix is entering the devshell, not copying
    anything. See firmware/patches/README.md.
+   **The shellHook writes that path relative to the shell's cwd**, so entering
+   the devshell from inside `firmware/` does NOT create it where cargo looks:
+   `cd firmware && nix develop /path/to/worktree --command ./build-esp32.sh`
+   dies with `unable to update …/firmware/vendor/esp-hub75` /
+   `failed to read …/Cargo.toml` on a perfectly healthy tree (2026-08-31).
+   Enter the shell from the worktree ROOT and `cd` inside it:
+   `nix develop --command bash -c 'cd firmware && ./build-esp32.sh'`.
 3c. Device flash dumps (gitignored `*.bin` in the repo root: `athom-wled-*.bin`,
    `pb-v3-stock.bin`) — required by the QEMU suite (`tools/qemu/run-all.py`
    autodetects them in the repo ROOT of the tree it runs from;

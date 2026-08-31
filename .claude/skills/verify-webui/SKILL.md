@@ -87,6 +87,27 @@ per load. Watch `/api/status`'s `"web"` slot stages and (if wired)
 serial while it runs; check `slot` afterwards — a crash-looping build
 rolls back silently to the same version string.
 
+### The hosted https copy can NOT be driven headless
+
+Verifying `https://googlebot42.github.io/luxel/?device=http://<lan-ip>` — the
+URL a `hosted-ui` device's fallback page hands the user — is **not possible
+from this container**, and the failure looks like a product bug. Chromium 150
+blocks every request from that https origin to a plain-http LAN device with
+`blocked by CORS policy: Permission was denied for this request to access the
+'local' address space`, and the page shows "cannot reach device: TypeError:
+Failed to fetch". Three escapes were tried on 2026-08-31 and none work:
+a CDP `Browser.grantPermissions(["localNetworkAccess"])` is accepted but
+changes nothing; an explicit `targetAddressSpace: "local"`/`"private"` on the
+fetch is blocked identically; and `--disable-features=LocalNetworkAccessChecks,…`
+only swaps the LNA denial for a plain mixed-content block. Headless has no
+permission prompt to answer, so this leg needs Jeremy in a headful browser
+(Gitea #162).
+
+What you CAN verify, and what actually exercises the device's CORS + fetch
+gate: serve the same built app from a plain-**http** origin (`vite preview` on
+localhost) and point it at `?device=http://<lan-ip>`. Cross-origin http→http
+has neither gate, and it drives a real device fully.
+
 ## Failure modes
 
 - Reporting success off `npm run build` alone — it doesn't execute the app; a
