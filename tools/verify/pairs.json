@@ -1,13 +1,6 @@
 {
   "pairs": [
     {
-      "slug": "1-usflag-blink",
-      "libFile": "library/1-usflag-blink.js",
-      "epeFile": "corpus/S2GRkFEY8WdqeH5kd.epe",
-      "epeName": "1-USFLAG_BLINK",
-      "rig": "strip"
-    },
-    {
       "slug": "1-white-fade",
       "libFile": "library/1-white-fade.js",
       "epeFile": "corpus/L8gw7T2xnNrELb3m5.epe",
@@ -1719,7 +1712,7 @@
       "libFile": "library/the-grinch.js",
       "epeFile": "corpus/f33kvC94M7yLBDtvc.epe",
       "epeName": "The Grinch",
-      "rig": "strip"
+      "rig": "grid"
     },
     {
       "slug": "three-red-pixels-array",
@@ -1908,6 +1901,7 @@
     "aurora-2d",
     "beat-bounce",
     "boids-2d",
+    "bouncing-balls-rgb-2d",
     "breathing-gradient",
     "chevron-2d",
     "comets",
@@ -1916,10 +1910,13 @@
     "dna-helix-2d",
     "drip",
     "falling-sand-2d",
+    "fireworks-finale",
     "flow-field-2d",
     "glitter",
     "interference-2d",
+    "lightning-strike",
     "marquee-chase",
+    "matrix-green-waterfall-1d",
     "ocean",
     "palette-fire-2d",
     "pendulum-wave",
@@ -1934,7 +1931,9 @@
     "starfield-2d",
     "tetrix-2d",
     "tv-simulator",
-    "typing-heatmap-2d"
+    "typing-heatmap-2d",
+    "us-flag-2d",
+    "us-flag"
   ],
   "unpairedCorpus": [
     {
@@ -1964,6 +1963,10 @@
     {
       "epeFile": "corpus/NaTA5tfncXjkJDn4u.epe",
       "epeName": "mapped vertical line 2D"
+    },
+    {
+      "epeFile": "corpus/S2GRkFEY8WdqeH5kd.epe",
+      "epeName": "1-USFLAG_BLINK"
     },
     {
       "epeFile": "corpus/TJGzDkMzjJEaR5KD9.epe",
