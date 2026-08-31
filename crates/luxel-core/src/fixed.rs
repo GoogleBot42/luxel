@@ -337,36 +337,60 @@ impl fmt::Debug for Fx {
     }
 }
 
-impl fmt::Display for Fx {
-    /// Prints the exact decimal value, without going through f64: routing
-    /// this through `{}` on f64 pulled ~8 KB of flt2dec machinery into the
-    /// firmware (measured; these strings only feed diagnostics). 16.16 is
-    /// exactly representable in ≤ 16 fractional decimal digits; trailing
-    /// zeros are trimmed, so integers print as "3", halves as "3.5".
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Fx {
+    /// Prints the exact decimal value into `buf`, without going through f64
+    /// *or* `core::fmt`: routing this through `{}` on f64 pulled ~8 KB of
+    /// flt2dec machinery into the firmware, and every `format!` call site
+    /// drags in fmt's own (measured; these strings only feed diagnostics and
+    /// JSON bodies). 16.16 is exactly representable in ≤ 16 fractional
+    /// decimal digits; trailing zeros are trimmed, so integers print as "3",
+    /// halves as "3.5". At most 23 bytes: sign + 5 integer digits + '.' + 16
+    /// fractional digits.
+    pub fn dec_str(self, buf: &mut [u8; 24]) -> &str {
         let raw = self.0;
+        let mut n = 0;
         if raw < 0 {
-            f.write_str("-")?;
+            buf[0] = b'-';
+            n = 1;
         }
         // unsigned magnitude avoids i32::MIN overflow
         let mag = (raw as i64).unsigned_abs();
-        write!(f, "{}", mag >> 16)?;
+        let mut int = mag >> 16;
+        let mut rev = [0u8; 5];
+        let mut d = 0;
+        loop {
+            rev[d] = b'0' + (int % 10) as u8;
+            int /= 10;
+            d += 1;
+            if int == 0 {
+                break;
+            }
+        }
+        while d > 0 {
+            d -= 1;
+            buf[n] = rev[d];
+            n += 1;
+        }
         let mut frac = mag & 0xFFFF;
         if frac != 0 {
-            f.write_str(".")?;
-            let mut digits = [0u8; 16];
-            let mut n = 0;
+            buf[n] = b'.';
+            n += 1;
             while frac != 0 {
                 frac *= 10;
-                digits[n] = b'0' + (frac >> 16) as u8;
+                buf[n] = b'0' + (frac >> 16) as u8;
                 frac &= 0xFFFF;
                 n += 1;
             }
-            for &d in &digits[..n] {
-                fmt::Write::write_char(f, d as char)?;
-            }
         }
-        Ok(())
+        core::str::from_utf8(&buf[..n]).unwrap()
+    }
+}
+
+impl fmt::Display for Fx {
+    /// Exact decimal, shared with [`Fx::dec_str`] so the two can't diverge.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut b = [0u8; 24];
+        f.write_str(self.dec_str(&mut b))
     }
 }
 
@@ -391,6 +415,32 @@ mod tests {
             let v = Fx::from_raw(raw);
             let s = alloc::format!("{}", v);
             assert_eq!(Fx::from_f64(s.parse::<f64>().unwrap()), v, "{s}");
+        }
+    }
+
+    #[test]
+    fn dec_str_matches_display() {
+        let mut b = [0u8; 24];
+        assert_eq!(Fx::ZERO.dec_str(&mut b), "0");
+        assert_eq!(Fx::from_int(3).dec_str(&mut b), "3");
+        assert_eq!(fx(3.5).dec_str(&mut b), "3.5");
+        assert_eq!(fx(-3.5).dec_str(&mut b), "-3.5");
+        assert_eq!(Fx::from_raw(i32::MIN).dec_str(&mut b), "-32768");
+        assert_eq!(Fx::from_raw(1).dec_str(&mut b), "0.0000152587890625");
+        for raw in [
+            0,
+            1,
+            -1,
+            i32::MIN,
+            i32::MAX,
+            12345,
+            -98765,
+            0x1_0000,
+            -0x1_0000,
+            0x7fff_0000u32 as i32,
+        ] {
+            let v = Fx::from_raw(raw);
+            assert_eq!(v.dec_str(&mut b), alloc::format!("{}", v), "raw {raw}");
         }
     }
 

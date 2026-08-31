@@ -6,7 +6,6 @@
 //! publishes state. Topic names and payloads are shared with the native
 //! mirror via luxel_core::hamqtt.
 
-use alloc::format;
 use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -17,6 +16,7 @@ use embassy_net::{IpAddress, Ipv4Address, Stack};
 use embassy_time::{Duration, Timer};
 use esp_println::println;
 use luxel_core::hamqtt;
+use luxel_core::jsonview::{push_hex, push_piece};
 use rust_mqtt::client::client::MqttClient;
 use rust_mqtt::client::client_config::{ClientConfig, MqttVersion};
 use rust_mqtt::packet::v5::publish_packet::QualityOfService;
@@ -70,7 +70,12 @@ impl embedded_io_async::Write for Io<'_> {
 fn device_id() -> String {
     let mac = esp_hal::efuse::base_mac_address();
     let m = mac.as_bytes();
-    format!("luxel-{:02x}{:02x}{:02x}", m[3], m[4], m[5])
+    let mut id = String::new();
+    push_piece(&mut id, "luxel-");
+    push_hex(&mut id, m[3] as u32, 2);
+    push_hex(&mut id, m[4] as u32, 2);
+    push_hex(&mut id, m[5] as u32, 2);
+    id
 }
 
 #[embassy_executor::task]

@@ -1,5 +1,37 @@
 # Update log
 
+## 2026-08-30 — fmt diet: JSON builders off core::fmt; C6 margin 4.24 → 4.49 % (#168, #169)
+
+Converted every `format!`-built JSON/response body — `server.rs` (41
+sites), `playlist.rs`, `patterns.rs`, `resume.rs`, `devicemap.rs`,
+`mqtt.rs`, `main.rs`'s vmerr strings, and luxel-core's shared
+`jsonview.rs` — to `push_str`-style building with new non-fmt printers:
+`Fx::dec_str` (the exact 16.16 decimal printer, now shared with `Display`
+so they can't diverge) and `jsonview::{push_u32, push_i32, push_u64,
+push_i64, push_hex}`, all pinned against `format!` output by unit tests.
+
+**The headline is the lesson, not the number.** `core::fmt` never leaves
+the image — `println!` and `Debug` keep it linked, so the measured
+23.5 KB fmt bucket was never reclaimable and only dropped ~0.6 KB
+(23,550 → 22,922 B by #160's measure). Worse, the naive conversion GREW the C6 image by
+8,592 B: `String::push_str` inlines a reserve-and-copy at every call
+site, and the builders have hundreds. The fix that turned it around is
+`#[inline(never)] jsonview::push_piece` — one shared append function
+every literal goes through. Net: `board-c6-devkit` 1,004,112 →
+**1,001,472 B** (−2,640 B, margin 44,464 → 47,104 B / 4.49 %),
+`board-athom-music` 955,376 → 954,016 B (−1,360 B). #168's 5–10 KB
+estimate was wrong for the structural reason above; the remaining diet
+lever is the picoserve monomorphization collapse (#167).
+
+Verified: byte-identical bodies (mechanical literal-sequence comparison
+over all 236 append sites, plus a live before/after capture of 18 GET
+endpoints on the Athom — only volatile fields differ), 219 luxel-core
+tests green, both toolchains build clean, all 5 QEMU harness tests pass,
+stack-check clean, OTA'd to the Athom (ota_1) and 300-poll status soak
+with stable heap. Also refreshed `docs/size-report.md` per #169 (the
+f64-parsing bucket it listed as deliberate is no longer linked at all)
+and recorded the new margins in docs/boards.md.
+
 ## 2026-08-30 — WLED takeover validated on metal; installer sheds its beta banner (#53)
 
 Second full bench conversion on the Athom, this time with the

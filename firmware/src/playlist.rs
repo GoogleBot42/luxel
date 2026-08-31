@@ -11,7 +11,6 @@
 //!   `I <patternId> <sec|-1>`     item; -1 = inherit default
 //!   `C <name> <raw...>`          a control for the last item (raw 16.16)
 
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -24,7 +23,7 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use esp_println::println;
 use luxel_core::fixed::Fx;
-use luxel_core::jsonview::json_escape;
+use luxel_core::jsonview::{json_escape, push_i32, push_piece, push_u32};
 
 use crate::patterns;
 use crate::shared::{Msg, MSG_QUEUE};
@@ -182,50 +181,61 @@ fn parse(body: &str) -> Playlist {
 pub fn to_json() -> String {
     PLAYLIST.lock(|c| {
         let pl = c.borrow();
-        let items: Vec<String> = pl
-            .items
-            .iter()
-            .map(|it| {
-                let name = patterns::name_of(&it.pattern_id).unwrap_or_default();
-                let sec = it
-                    .override_sec
-                    .map(|s| format!("{}", s))
-                    .unwrap_or_else(|| String::from("null"));
-                let controls: Vec<String> = it
-                    .controls
-                    .iter()
-                    .map(|(n, raw)| {
-                        // Fx's Display, not f64's: `r as f64 / 65536.0` was the
-                        // last user of core's ~8 KB flt2dec printing machinery
-                        let vals: Vec<String> =
-                            raw.iter().map(|&r| format!("{}", Fx::from_raw(r))).collect();
-                        format!("\"{}\":[{}]", json_escape(n), vals.join(","))
-                    })
-                    .collect();
-                // pre-flight verdict: the item's assert() invariants vs the
-                // CURRENT config (absent = fine / still checking)
-                let invalid = match preflight_violation(&it.pattern_id) {
-                    Some(m) => format!(",\"invalid\":\"{}\"", json_escape(&m)),
-                    None => String::new(),
-                };
-                format!(
-                    "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}}}",
-                    it.pattern_id,
-                    json_escape(&name),
-                    sec,
-                    controls.join(","),
-                    invalid
-                )
-            })
-            .collect();
-        format!(
-            "{{\"defaultSec\":{},\"crossfadeMs\":{},\"playing\":{},\"index\":{},\"items\":[{}]}}",
-            pl.default_sec,
-            pl.crossfade_ms,
-            PLAYING.load(Ordering::Relaxed),
-            INDEX.load(Ordering::Relaxed),
-            items.join(",")
-        )
+        let mut out = String::new();
+        push_piece(&mut out, "{\"defaultSec\":");
+        push_i32(&mut out, pl.default_sec);
+        push_piece(&mut out, ",\"crossfadeMs\":");
+        push_i32(&mut out, pl.crossfade_ms);
+        push_piece(&mut out, ",\"playing\":");
+        push_piece(&mut out, if PLAYING.load(Ordering::Relaxed) { "true" } else { "false" });
+        push_piece(&mut out, ",\"index\":");
+        push_u32(&mut out, INDEX.load(Ordering::Relaxed) as u32);
+        push_piece(&mut out, ",\"items\":[");
+        for (i, it) in pl.items.iter().enumerate() {
+            if i > 0 {
+                push_piece(&mut out, ",");
+            }
+            let name = patterns::name_of(&it.pattern_id).unwrap_or_default();
+            push_piece(&mut out, "{\"id\":\"");
+            push_piece(&mut out, &it.pattern_id);
+            push_piece(&mut out, "\",\"name\":\"");
+            push_piece(&mut out, &json_escape(&name));
+            push_piece(&mut out, "\",\"sec\":");
+            match it.override_sec {
+                Some(s) => push_i32(&mut out, s),
+                None => push_piece(&mut out, "null"),
+            }
+            push_piece(&mut out, ",\"controls\":{");
+            for (ci, (n, raw)) in it.controls.iter().enumerate() {
+                if ci > 0 {
+                    push_piece(&mut out, ",");
+                }
+                push_piece(&mut out, "\"");
+                push_piece(&mut out, &json_escape(n));
+                push_piece(&mut out, "\":[");
+                // Fx's Display, not f64's: `r as f64 / 65536.0` was the
+                // last user of core's ~8 KB flt2dec printing machinery
+                for (vi, &r) in raw.iter().enumerate() {
+                    if vi > 0 {
+                        push_piece(&mut out, ",");
+                    }
+                    let mut b = [0u8; 24];
+                    push_piece(&mut out, Fx::from_raw(r).dec_str(&mut b));
+                }
+                push_piece(&mut out, "]");
+            }
+            push_piece(&mut out, "}");
+            // pre-flight verdict: the item's assert() invariants vs the
+            // CURRENT config (absent = fine / still checking)
+            if let Some(m) = preflight_violation(&it.pattern_id) {
+                push_piece(&mut out, ",\"invalid\":\"");
+                push_piece(&mut out, &json_escape(&m));
+                push_piece(&mut out, "\"");
+            }
+            push_piece(&mut out, "}");
+        }
+        push_piece(&mut out, "]}");
+        out
     })
 }
 

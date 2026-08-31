@@ -923,11 +923,15 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                                     last = Instant::now();
                                     devicemap::mark_dirty(); // re-apply the installed map
                                 }
-                                Err(left) => set_vmerr(Some(alloc::format!(
-                                    "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
-                                    left / 1024,
-                                    RUNTIME_FLOOR / 1024
-                                ))),
+                                Err(left) => {
+                                    let mut m = alloc::string::String::new();
+                                    jsonview::push_piece(&mut m, "pattern too large for this device — it left only ");
+                                    jsonview::push_u32(&mut m, (left / 1024) as u32);
+                                    jsonview::push_piece(&mut m, " KB of heap free (the firmware needs ");
+                                    jsonview::push_u32(&mut m, (RUNTIME_FLOOR / 1024) as u32);
+                                    jsonview::push_piece(&mut m, " KB to keep running)");
+                                    set_vmerr(Some(m));
+                                }
                             }
                         }
                         Err(Some(e)) => {
@@ -1059,11 +1063,15 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                                     last = Instant::now();
                                     devicemap::mark_dirty();
                                 }
-                                Err(left) => set_vmerr(Some(alloc::format!(
-                                    "pattern too large for this device — it left only {} KB of heap free (the firmware needs {} KB to keep running)",
-                                    left / 1024,
-                                    RUNTIME_FLOOR / 1024
-                                ))),
+                                Err(left) => {
+                                    let mut m = alloc::string::String::new();
+                                    jsonview::push_piece(&mut m, "pattern too large for this device — it left only ");
+                                    jsonview::push_u32(&mut m, (left / 1024) as u32);
+                                    jsonview::push_piece(&mut m, " KB of heap free (the firmware needs ");
+                                    jsonview::push_u32(&mut m, (RUNTIME_FLOOR / 1024) as u32);
+                                    jsonview::push_piece(&mut m, " KB to keep running)");
+                                    set_vmerr(Some(m));
+                                }
                             }
                         }
                         Err(Some(e)) => {
@@ -1188,7 +1196,14 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     let msg = if e.line == 0 && e.col == 0 {
                         e.message
                     } else {
-                        alloc::format!("line {}:{}: {}", e.line, e.col, e.message)
+                        let mut m = alloc::string::String::new();
+                        jsonview::push_piece(&mut m, "line ");
+                        jsonview::push_u32(&mut m, e.line);
+                        jsonview::push_piece(&mut m, ":");
+                        jsonview::push_u32(&mut m, e.col);
+                        jsonview::push_piece(&mut m, ": ");
+                        jsonview::push_piece(&mut m, &e.message);
+                        m
                     };
                     println!("vmerr: {}", msg);
                     set_vmerr(Some(msg));

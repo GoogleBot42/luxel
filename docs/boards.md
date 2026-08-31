@@ -116,12 +116,26 @@ note below. `.stack` on pixelblaze-v3: 29,228 → 29,196 B; the largest new
 frame is `apply_outpipe` at 1,120 B (the cooked LUT is a heap `Box`, not a
 stack array).
 
+2026-08-30, fmt diet in the JSON builders (Gitea #168): **−2,640 B** on
+`board-c6-devkit` (1,004,112 → 1,001,472 B against its merge base,
+**47,104 B** of slot left) and −1,360 B on `board-athom-music`
+(955,376 → 954,016 B; the classic-ESP32 variants track within a few
+hundred bytes). First negative entry in this table. The win is smaller
+than #168's 5–10 KB estimate for a structural reason recorded in
+docs/size-report.md: `core::fmt` itself never leaves the image
+(`println!` and `Debug` keep it linked — the fmt bucket only dropped
+~0.6 KB), and a naive `format!`→`push_str` conversion actually GREW the
+image by 8.6 KB because `push_str` inlines a reserve-and-copy at every
+call site. The savings come from routing every literal append through
+one `#[inline(never)]` `jsonview::push_piece` funnel. No static or
+buffer changes; stack-check clean.
+
 The three classic-ESP32 variants differ only by a few hundred bytes (same
 chip feature set; only board.rs strings and the wiring lines change), so
 checking one of them per release is enough — but the *chips* are not
 interchangeable for size purposes: the C6 is ~90 KB fatter than the C3 for
 identical source, and at
-**43,872 B / 4.18 %** it owns the tightest margin in the fleet by a wide
+**47,104 B / 4.49 %** it owns the tightest margin in the fleet by a wide
 gap (the next tightest, `board-pixelblaze-v3`, has 92,384 B / 8.81 %). It
 is the board that will hit the 1 MiB ceiling first; check
 `board-c6-devkit` on any release that grows the image. Measure with:

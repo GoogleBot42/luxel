@@ -671,7 +671,10 @@ mod tests {
     #[test]
     fn gamma_off_and_garbage_filtered() {
         let g = |col: &str| {
-            let cfg = alloc::format!(r#"{{"light":{{"gc":{{"bri":1,"col":{col}}}}}}}"#);
+            let mut cfg = alloc::string::String::new();
+            cfg.push_str(r#"{"light":{"gc":{"bri":1,"col":"#);
+            cfg.push_str(col);
+            cfg.push_str("}}}");
             parse_wiring(cfg.as_bytes()).gamma_tenths
         };
         assert_eq!(g("2.8"), Some(28));

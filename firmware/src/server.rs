@@ -41,7 +41,6 @@
 //!   POST /api/events    body = "EV1\0" frame (netin::parse_events) → queues
 //!                       [type,x,y,value] events for readEvent() patterns
 
-use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -49,7 +48,7 @@ use core::sync::atomic::Ordering;
 
 use embassy_net::Stack;
 use luxel_core::fixed::Fx;
-use luxel_core::jsonview::json_escape;
+use luxel_core::jsonview::{json_escape, push_i32, push_i64, push_piece, push_u32, push_u64};
 use picoserve::routing::RequestHandlerService as _;
 
 use crate::shared::{
@@ -75,23 +74,45 @@ fn json_response(body: String) -> ApiResponse {
 /// formatter instead of one per call site.
 fn api_error(msg: &'static str) -> String {
     let mut out = String::from("{\"ok\":false,\"error\":\"");
-    out.push_str(msg);
-    out.push_str("\"}");
+    push_piece(&mut out, msg);
+    push_piece(&mut out, "\"}");
     out
+}
+
+/// [api_error]'s twin for a runtime-built message (a driver's error text, a
+/// compiler diagnostic) — escapes it into the same body shape.
+fn api_error_esc(msg: &str) -> String {
+    let mut out = String::from("{\"ok\":false,\"error\":\"");
+    push_piece(&mut out, &json_escape(msg));
+    push_piece(&mut out, "\"}");
+    out
+}
+
+/// Closes an `{"ok":true,…` settings body whose flash write failed — the
+/// value is applied live regardless, so only the note reports the failure.
+fn push_not_persisted(out: &mut String, e: &str) {
+    push_piece(out, ",\"note\":\"not persisted: ");
+    push_piece(out, &json_escape(e));
+    push_piece(out, "\"}");
 }
 
 /// The installed device output palette as the flat `[pos,r,g,b,…]` JSON
 /// array the POST body and the `setOutputPalette` builtin both speak —
 /// 0..=255 per component. `[]` = no device palette.
 fn palette_json() -> String {
-    use core::fmt::Write as _;
     let stops = crate::shared::post_palette_stops();
     let mut out = String::from("[");
     for (i, (pos, c)) in stops.iter().enumerate() {
-        let sep = if i > 0 { "," } else { "" };
-        let _ = write!(out, "{}{},{},{},{}", sep, pos, c[0], c[1], c[2]);
+        if i > 0 {
+            push_piece(&mut out, ",");
+        }
+        push_u32(&mut out, *pos as u32);
+        for v in c {
+            push_piece(&mut out, ",");
+            push_u32(&mut out, *v as u32);
+        }
     }
-    out.push(']');
+    push_piece(&mut out, "]");
     out
 }
 
@@ -132,10 +153,7 @@ fn status_json() -> String {
     let slot = crate::ota::booted_slot();
     let version = env!("CARGO_PKG_VERSION");
     let heap = esp_alloc::HEAP.free();
-    let live = match crate::shared::live_proto(embassy_time::Instant::now().as_millis() as u32) {
-        Some(p) => format!("\"{p}\""),
-        None => String::from("null"),
-    };
+    let live = crate::shared::live_proto(embassy_time::Instant::now().as_millis() as u32);
     // Read-back availability: the running pattern's source + blob now live in
     // flash (see patterns::store_current). True = serveable (rodata default or
     // a good flash write); false = a swap's flash write shed the copy — the
@@ -148,9 +166,9 @@ fn status_json() -> String {
         let mut s = String::new();
         for (i, st) in SLOT_STAGE.iter().take(WEB_TASK_POOL_SIZE).enumerate() {
             if i > 0 {
-                s.push(',');
+                push_piece(&mut s, ",");
             }
-            s.push_str(&format!("{}", st.load(Ordering::Relaxed)));
+            push_u32(&mut s, st.load(Ordering::Relaxed) as u32);
         }
         s
     };
@@ -158,26 +176,44 @@ fn status_json() -> String {
     // board allows 4096). The playground polls status continuously, so
     // carrying the cap here keeps its pixel control clamped to the real
     // device even if the one-shot /api/config probe at connect failed.
-    match get_vmerr() {
-        Some(e) => format!(
-            "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":\"{}\"}}",
-            fps,
-            pixels,
-            MAX_PIXELS,
-            slot,
-            version,
-            heap,
-            live,
-            src,
-            bc,
-            web,
-            json_escape(&e)
-        ),
-        None => format!(
-            "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"{}\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"src\":{},\"bc\":{},\"web\":[{}],\"vmerr\":null}}",
-            fps, pixels, MAX_PIXELS, slot, version, heap, live, src, bc, web
-        ),
+    let mut out = String::from("{\"fps\":");
+    push_u32(&mut out, fps);
+    push_piece(&mut out, ",\"pixels\":");
+    push_u32(&mut out, pixels);
+    push_piece(&mut out, ",\"max_pixels\":");
+    push_u32(&mut out, MAX_PIXELS);
+    push_piece(&mut out, ",\"slot\":\"");
+    push_piece(&mut out, slot);
+    push_piece(&mut out, "\",\"version\":\"");
+    push_piece(&mut out, version);
+    push_piece(&mut out, "\",\"heap_free\":");
+    push_u32(&mut out, heap as u32);
+    push_piece(&mut out, ",\"live\":");
+    match live {
+        Some(p) => {
+            push_piece(&mut out, "\"");
+            push_piece(&mut out, p);
+            push_piece(&mut out, "\"");
+        }
+        None => push_piece(&mut out, "null"),
     }
+    push_piece(&mut out, ",\"src\":");
+    push_piece(&mut out, if src { "true" } else { "false" });
+    push_piece(&mut out, ",\"bc\":");
+    push_piece(&mut out, if bc { "true" } else { "false" });
+    push_piece(&mut out, ",\"web\":[");
+    push_piece(&mut out, &web);
+    push_piece(&mut out, "],\"vmerr\":");
+    match get_vmerr() {
+        Some(e) => {
+            push_piece(&mut out, "\"");
+            push_piece(&mut out, &json_escape(&e));
+            push_piece(&mut out, "\"");
+        }
+        None => push_piece(&mut out, "null"),
+    }
+    push_piece(&mut out, "}");
+    out
 }
 
 async fn api_status() -> ApiResponse {
@@ -498,11 +534,16 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
         let body = match &result {
             Ok(n) => {
                 esp_println::println!("assets: {} bytes installed", n);
-                format!("{{\"ok\":true,\"bytes\":{},\"files\":{}}}", n, crate::assets::count())
+                let mut out = String::from("{\"ok\":true,\"bytes\":");
+                push_u32(&mut out, *n);
+                push_piece(&mut out, ",\"files\":");
+                push_u32(&mut out, crate::assets::count() as u32);
+                push_piece(&mut out, "}");
+                out
             }
             Err(e) => {
                 esp_println::println!("assets install failed: {}", e);
-                format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e))
+                api_error_esc(e)
             }
         };
         use picoserve::response::IntoResponse as _;
@@ -550,11 +591,13 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                 );
             }
             if expected > MAX_UPLOAD {
-                break 'resp format!(
-                    "{{\"ok\":false,\"error\":\"pattern upload too large ({} KB; this device accepts up to {} KB)\"}}",
-                    expected / 1024,
-                    MAX_UPLOAD / 1024
-                );
+                let mut out =
+                    String::from("{\"ok\":false,\"error\":\"pattern upload too large (");
+                push_u32(&mut out, (expected / 1024) as u32);
+                push_piece(&mut out, " KB; this device accepts up to ");
+                push_u32(&mut out, (MAX_UPLOAD / 1024) as u32);
+                push_piece(&mut out, " KB)\"}");
+                break 'resp out;
             }
             let mut env: Vec<u8> = Vec::new();
             if env.try_reserve_exact(expected).is_err() {
@@ -564,11 +607,14 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                 MSG_QUEUE.send(Msg::Freeze).await;
                 embassy_time::Timer::after(embassy_time::Duration::from_millis(60)).await;
                 if env.try_reserve_exact(expected).is_err() {
-                    break 'resp format!(
-                        "{{\"ok\":false,\"error\":\"not enough free memory on the device for this {} KB upload (about {} KB free) — it is too large to run here\"}}",
-                        expected / 1024,
-                        esp_alloc::HEAP.free() as usize / 1024
+                    let mut out = String::from(
+                        "{\"ok\":false,\"error\":\"not enough free memory on the device for this ",
                     );
+                    push_u32(&mut out, (expected / 1024) as u32);
+                    push_piece(&mut out, " KB upload (about ");
+                    push_u32(&mut out, (esp_alloc::HEAP.free() as usize / 1024) as u32);
+                    push_piece(&mut out, " KB free) — it is too large to run here\"}");
+                    break 'resp out;
                 }
             }
             env.resize(expected, 0);
@@ -671,11 +717,14 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
         let body = match &result {
             Ok(n) => {
                 esp_println::println!("ota: {} bytes written, activating + rebooting", n);
-                format!("{{\"ok\":true,\"bytes\":{}}}", n)
+                let mut out = String::from("{\"ok\":true,\"bytes\":");
+                push_u32(&mut out, *n);
+                push_piece(&mut out, "}");
+                out
             }
             Err(e) => {
                 esp_println::println!("ota failed: {}", e);
-                format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e))
+                api_error_esc(e)
             }
         };
         use picoserve::response::IntoResponse as _;
@@ -714,21 +763,19 @@ async fn api_readouts() -> ApiResponse {
 /// `"code":"bc-version"` so clients know to recompile from source.
 fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, String> {
     use luxel_core::bytecode::{decode_envelope, validate, BcError};
-    let env = decode_envelope(raw)
-        .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
+    let env = decode_envelope(raw).map_err(|e| api_error_esc(&e.to_string()))?;
     // validate() checks everything deserialize() would but allocates nothing —
     // the full Program is only ever materialized once, by the render task
     // (building it here too OOM'd the heap under soak-speed pattern churn).
     match validate(env.bytecode) {
         Ok(_) => Ok(env),
-        Err(e @ BcError::Version { .. }) => Err(format!(
-            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
-            json_escape(&e.to_string())
-        )),
-        Err(e) => Err(format!(
-            "{{\"ok\":false,\"error\":\"{}\"}}",
-            json_escape(&e.to_string())
-        )),
+        Err(e @ BcError::Version { .. }) => {
+            let mut out = String::from("{\"ok\":false,\"code\":\"bc-version\",\"error\":\"");
+            push_piece(&mut out, &json_escape(&e.to_string()));
+            push_piece(&mut out, "\"}");
+            Err(out)
+        }
+        Err(e) => Err(api_error_esc(&e.to_string())),
     }
 }
 
@@ -788,14 +835,13 @@ async fn api_patterns_activate(id: &str) -> String {
             crate::resume::mark_dirty(); // debounced single-pattern persist
             String::from("{\"ok\":true}")
         }
-        Err(e @ BcError::Version { .. }) => format!(
-            "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
-            json_escape(&e.to_string())
-        ),
-        Err(e) => format!(
-            "{{\"ok\":false,\"error\":\"{}\"}}",
-            json_escape(&e.to_string())
-        ),
+        Err(e @ BcError::Version { .. }) => {
+            let mut out = String::from("{\"ok\":false,\"code\":\"bc-version\",\"error\":\"");
+            push_piece(&mut out, &json_escape(&e.to_string()));
+            push_piece(&mut out, "\"}");
+            out
+        }
+        Err(e) => api_error_esc(&e.to_string()),
     }
 }
 
@@ -917,9 +963,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let response = json_response(match &result {
                         Ok(()) => {
                             esp_println::println!("wifi creds stored (ssid \"{}\"); rebooting", ssid);
-                            format!("{{\"ok\":true,\"ssid\":\"{}\",\"note\":\"rebooting to apply\"}}", json_escape(ssid))
+                            let mut out = String::from("{\"ok\":true,\"ssid\":\"");
+                            push_piece(&mut out, &json_escape(ssid));
+                            push_piece(&mut out, "\",\"note\":\"rebooting to apply\"}");
+                            out
                         }
-                        Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e)),
+                        Err(e) => api_error_esc(e),
                     });
                     let conn = request.body_connection.finalize().await?;
                     let sent = response.write_to(conn, response_writer).await?;
@@ -968,7 +1017,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             crate::shared::TZ_MINUTES.store(tz as i32, Ordering::Relaxed);
                             let cfg = DeviceConfig { tz_minutes: tz, ..crate::shared::device_config_snapshot() };
                             let _ = crate::config::write_device(&cfg);
-                            format!("{{\"ok\":true,\"tzMinutes\":{}}}", tz)
+                            let mut out = String::from("{\"ok\":true,\"tzMinutes\":");
+                            push_i32(&mut out, tz as i32);
+                            push_piece(&mut out, "}");
+                            out
                         }
                         _ => String::from(
                             "{\"ok\":false,\"error\":\"tz must be minutes in -840..=840\"}",
@@ -1015,15 +1067,20 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             let _ = crate::config::write_device(
                                 &crate::shared::device_config_snapshot(),
                             );
-                            format!(
-                                "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
-                                o.name(),
-                                g,
-                                c,
-                                bc,
-                                bl,
-                                gl
-                            )
+                            let mut out = String::from("{\"ok\":true,\"order\":\"");
+                            push_piece(&mut out, o.name());
+                            push_piece(&mut out, "\",\"gamma\":");
+                            push_u32(&mut out, g as u32);
+                            push_piece(&mut out, ",\"capMa\":");
+                            push_u32(&mut out, c as u32);
+                            push_piece(&mut out, ",\"brightCurve\":");
+                            push_u32(&mut out, bc as u32);
+                            push_piece(&mut out, ",\"blur\":");
+                            push_u32(&mut out, bl as u32);
+                            push_piece(&mut out, ",\"glow\":");
+                            push_u32(&mut out, gl as u32);
+                            push_piece(&mut out, "}");
+                            out
                         }
                         _ => String::from(
                             "{\"ok\":false,\"error\":\"expected: <rgb|rbg|grb|gbr|brg|bgr> <gamma_tenths 0-50> <cap_ma 0-20000> [<bright_curve_tenths 0-50> <blur_pct 0-100> <glow_pct 0-100>]\"}",
@@ -1068,7 +1125,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             }
                             let cfg = DeviceConfig { sync_mode: m, ..crate::shared::device_config_snapshot() };
                             let _ = crate::config::write_device(&cfg);
-                            format!("{{\"ok\":true,\"mode\":\"{}\"}}", sync_mode_name(m))
+                            let mut out = String::from("{\"ok\":true,\"mode\":\"");
+                            push_piece(&mut out, sync_mode_name(m));
+                            push_piece(&mut out, "\"}");
+                            out
                         }
                         None => String::from(
                             "{\"ok\":false,\"error\":\"mode must be off, leader, or follower\"}",
@@ -1123,12 +1183,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Some(json_response(match &result {
                         Ok(()) => {
                             crate::shared::MQTT_POKE.signal(());
-                            format!(
-                                "{{\"ok\":true,\"enabled\":{}}}",
-                                if host.is_empty() { "false" } else { "true" }
-                            )
+                            let mut out = String::from("{\"ok\":true,\"enabled\":");
+                            push_piece(&mut out, if host.is_empty() { "false" } else { "true" });
+                            push_piece(&mut out, "}");
+                            out
                         }
-                        Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(e)),
+                        Err(e) => api_error_esc(e),
                     }))
                 }
                 // POST /api/brightness — body is a number 0..=31. Applied live
@@ -1140,15 +1200,14 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             BRIGHTNESS.store(b, Ordering::Relaxed);
                             // read-modify-write so we don't clobber the others
                             let cfg = DeviceConfig { brightness: b, ..crate::shared::device_config_snapshot() };
+                            let mut out = String::from("{\"ok\":true,\"brightness\":");
+                            push_u32(&mut out, b as u32);
                             match crate::config::write_device(&cfg) {
-                                Ok(()) => format!("{{\"ok\":true,\"brightness\":{}}}", b),
+                                Ok(()) => push_piece(&mut out, "}"),
                                 // applied live even if the flash write failed
-                                Err(e) => format!(
-                                    "{{\"ok\":true,\"brightness\":{},\"note\":\"not persisted: {}\"}}",
-                                    b,
-                                    json_escape(e)
-                                ),
+                                Err(e) => push_not_persisted(&mut out, e),
                             }
+                            out
                         }
                         _ => String::from("{\"ok\":false,\"error\":\"brightness must be 0..=31\"}"),
                     }))
@@ -1166,19 +1225,21 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             crate::shared::WANT_PIXEL_COUNT.store(n, Ordering::Relaxed);
                             MSG_QUEUE.send(Msg::Config(n)).await;
                             let cfg = DeviceConfig { pixel_count: n, ..crate::shared::device_config_snapshot() };
+                            let mut out = String::from("{\"ok\":true,\"pixels\":");
+                            push_u32(&mut out, n);
                             match crate::config::write_device(&cfg) {
-                                Ok(()) => format!("{{\"ok\":true,\"pixels\":{}}}", n),
-                                Err(e) => format!(
-                                    "{{\"ok\":true,\"pixels\":{},\"note\":\"not persisted: {}\"}}",
-                                    n,
-                                    json_escape(e)
-                                ),
+                                Ok(()) => push_piece(&mut out, "}"),
+                                Err(e) => push_not_persisted(&mut out, e),
                             }
+                            out
                         }
-                        _ => format!(
-                            "{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}",
-                            MAX_PIXELS
-                        ),
+                        _ => {
+                            let mut out =
+                                String::from("{\"ok\":false,\"error\":\"pixels must be 1..=");
+                            push_u32(&mut out, MAX_PIXELS);
+                            push_piece(&mut out, "\"}");
+                            out
+                        }
                     }))
                 }
                 // POST /api/protocol — body is a protocol name (sk9822/ws2812
@@ -1192,14 +1253,14 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             crate::shared::WANT_PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
                             MSG_QUEUE.send(Msg::Protocol(p.as_u8())).await;
                             let cfg = DeviceConfig { protocol: p.as_u8(), ..crate::shared::device_config_snapshot() };
+                            let mut out = String::from("{\"ok\":true,\"protocol\":\"");
+                            push_piece(&mut out, p.name());
+                            push_piece(&mut out, "\"");
                             match crate::config::write_device(&cfg) {
-                                Ok(()) => format!("{{\"ok\":true,\"protocol\":\"{}\"}}", p.name()),
-                                Err(e) => format!(
-                                    "{{\"ok\":true,\"protocol\":\"{}\",\"note\":\"not persisted: {}\"}}",
-                                    p.name(),
-                                    json_escape(e)
-                                ),
+                                Ok(()) => push_piece(&mut out, "}"),
+                                Err(e) => push_not_persisted(&mut out, e),
                             }
+                            out
                         }
                         None => {
                             String::from("{\"ok\":false,\"error\":\"protocol must be sk9822 or ws2812\"}")
@@ -1210,10 +1271,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // Empty/invalid body clears it. Applied live + persisted.
                 "/api/map" => {
                     let (installed, count) = crate::devicemap::set_from_wire(&text(&raw));
-                    Some(json_response(format!(
-                        "{{\"ok\":true,\"installed\":{},\"count\":{}}}",
-                        installed, count
-                    )))
+                    let mut out = String::from("{\"ok\":true,\"installed\":");
+                    push_piece(&mut out, if installed { "true" } else { "false" });
+                    push_piece(&mut out, ",\"count\":");
+                    push_u32(&mut out, count as u32);
+                    push_piece(&mut out, "}");
+                    Some(json_response(out))
                 }
                 // POST /api/playlist — line-format definition (D/I/C lines).
                 // Persisted to flash; applied live if already playing.
@@ -1354,105 +1417,153 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/status" => Some(api_status().await),
                 // which network the NEXT boot will join (never the password)
                 "/api/wifi" => {
+                    let ssid_body = |ssid: &str, source: &str| {
+                        let mut out = String::from("{\"ssid\":\"");
+                        push_piece(&mut out, &json_escape(ssid));
+                        push_piece(&mut out, "\",\"source\":\"");
+                        push_piece(&mut out, source);
+                        push_piece(&mut out, "\"}");
+                        out
+                    };
                     let body = match crate::config::read_wifi() {
-                        Some((ssid, _)) => format!(
-                            "{{\"ssid\":\"{}\",\"source\":\"flash\"}}",
-                            json_escape(&ssid)
-                        ),
+                        Some((ssid, _)) => ssid_body(&ssid, "flash"),
                         None => match option_env!("LUXEL_SSID") {
-                            Some(s) if !s.is_empty() => format!(
-                                "{{\"ssid\":\"{}\",\"source\":\"builtin\"}}",
-                                json_escape(s)
-                            ),
+                            Some(s) if !s.is_empty() => ssid_body(s, "builtin"),
                             _ => String::from("{\"ssid\":null,\"source\":\"none\"}"),
                         },
                     };
                     Some(json_response(body))
                 }
-                "/api/brightness" => Some(json_response(format!(
-                    "{{\"brightness\":{},\"max\":31}}",
-                    BRIGHTNESS.load(Ordering::Relaxed)
-                ))),
+                "/api/brightness" => {
+                    let mut out = String::from("{\"brightness\":");
+                    push_u32(&mut out, BRIGHTNESS.load(Ordering::Relaxed) as u32);
+                    push_piece(&mut out, ",\"max\":31}");
+                    Some(json_response(out))
+                }
                 // whether we're currently the provisioning AP
-                "/api/apmode" => Some(json_response(format!(
-                    "{{\"ap\":{}}}",
-                    crate::provision::AP_MODE.load(Ordering::Relaxed)
-                ))),
+                "/api/apmode" => {
+                    let mut out = String::from("{\"ap\":");
+                    push_piece(&mut out, if crate::provision::AP_MODE.load(Ordering::Relaxed) {
+                        "true"
+                    } else {
+                        "false"
+                    });
+                    push_piece(&mut out, "}");
+                    Some(json_response(out))
+                }
                 // output pipeline settings (palette included: one fetch
                 // backs the whole Output card)
-                "/api/output" => Some(json_response(format!(
-                    "{{\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{},\"palette\":{},\"paletteAmount\":{}}}",
-                    luxel_core::outpipe::ColorOrder(
-                        crate::shared::COLOR_ORDER.load(Ordering::Relaxed)
-                    )
-                    .name(),
-                    crate::shared::GAMMA_TENTHS.load(Ordering::Relaxed),
-                    crate::shared::CAP_MA.load(Ordering::Relaxed),
-                    crate::shared::BRIGHT_CURVE.load(Ordering::Relaxed),
-                    crate::shared::POST_BLUR.load(Ordering::Relaxed),
-                    crate::shared::POST_GLOW.load(Ordering::Relaxed),
-                    palette_json(),
-                    crate::shared::POST_PALETTE_AMOUNT.load(Ordering::Relaxed)
-                ))),
+                "/api/output" => {
+                    let mut out = String::from("{\"order\":\"");
+                    push_piece(&mut out, 
+                        luxel_core::outpipe::ColorOrder(
+                            crate::shared::COLOR_ORDER.load(Ordering::Relaxed),
+                        )
+                        .name(),
+                    );
+                    push_piece(&mut out, "\",\"gamma\":");
+                    push_u32(&mut out, crate::shared::GAMMA_TENTHS.load(Ordering::Relaxed) as u32);
+                    push_piece(&mut out, ",\"capMa\":");
+                    push_u32(&mut out, crate::shared::CAP_MA.load(Ordering::Relaxed));
+                    push_piece(&mut out, ",\"brightCurve\":");
+                    push_u32(&mut out, crate::shared::BRIGHT_CURVE.load(Ordering::Relaxed) as u32);
+                    push_piece(&mut out, ",\"blur\":");
+                    push_u32(&mut out, crate::shared::POST_BLUR.load(Ordering::Relaxed) as u32);
+                    push_piece(&mut out, ",\"glow\":");
+                    push_u32(&mut out, crate::shared::POST_GLOW.load(Ordering::Relaxed) as u32);
+                    push_piece(&mut out, ",\"palette\":");
+                    push_piece(&mut out, &palette_json());
+                    push_piece(&mut out, ",\"paletteAmount\":");
+                    push_u32(
+                        &mut out,
+                        crate::shared::POST_PALETTE_AMOUNT.load(Ordering::Relaxed) as u32,
+                    );
+                    push_piece(&mut out, "}");
+                    Some(json_response(out))
+                }
                 // wall clock: NTP-synced local time + tz (clock builtins)
                 "/api/clock" => {
                     let local = crate::shared::wall_now_local();
-                    Some(json_response(format!(
-                        "{{\"synced\":{},\"local\":{},\"tzMinutes\":{}}}",
-                        local.is_some(),
-                        local.unwrap_or(0),
-                        crate::shared::TZ_MINUTES.load(Ordering::Relaxed)
-                    )))
+                    let mut out = String::from("{\"synced\":");
+                    push_piece(&mut out, if local.is_some() { "true" } else { "false" });
+                    push_piece(&mut out, ",\"local\":");
+                    push_i64(&mut out, local.unwrap_or(0));
+                    push_piece(&mut out, ",\"tzMinutes\":");
+                    push_i32(&mut out, crate::shared::TZ_MINUTES.load(Ordering::Relaxed));
+                    push_piece(&mut out, "}");
+                    Some(json_response(out))
                 }
                 // sync role + engine clock + last leader beacon heard
                 "/api/sync" => {
                     let mode = sync_mode_name(crate::shared::SYNC_MODE.load(Ordering::Relaxed));
                     let time_ms = crate::shared::engine_time_ms();
-                    let leader = match crate::shared::sync_leader() {
+                    let mut out = String::from("{\"mode\":\"");
+                    push_piece(&mut out, mode);
+                    push_piece(&mut out, "\",\"timeMs\":");
+                    push_u64(&mut out, time_ms);
+                    push_piece(&mut out, ",\"leader\":");
+                    match crate::shared::sync_leader() {
                         Some((boot, lt, at)) => {
                             let age = at.elapsed().as_millis();
                             let offset = (lt + age) as i64 - time_ms as i64;
-                            format!(
-                                "{{\"bootId\":{},\"ageMs\":{},\"offsetMs\":{}}}",
-                                boot, age, offset
-                            )
+                            push_piece(&mut out, "{\"bootId\":");
+                            push_u32(&mut out, boot);
+                            push_piece(&mut out, ",\"ageMs\":");
+                            push_u64(&mut out, age);
+                            push_piece(&mut out, ",\"offsetMs\":");
+                            push_i64(&mut out, offset);
+                            push_piece(&mut out, "}");
                         }
-                        None => String::from("null"),
-                    };
-                    Some(json_response(format!(
-                        "{{\"mode\":\"{}\",\"timeMs\":{},\"leader\":{}}}",
-                        mode, time_ms, leader
-                    )))
+                        None => push_piece(&mut out, "null"),
+                    }
+                    push_piece(&mut out, "}");
+                    Some(json_response(out))
                 }
                 // broker settings (never the password) + connection state
                 "/api/mqtt" => {
                     let body = match crate::config::read_mqtt() {
-                        Some(c) => format!(
-                            "{{\"enabled\":true,\"host\":\"{}\",\"port\":{},\"user\":\"{}\",\"hasPass\":{},\"connected\":{}}}",
-                            json_escape(&c.host),
-                            c.port,
-                            json_escape(&c.user),
-                            !c.pass.is_empty(),
-                            crate::mqtt::CONNECTED.load(Ordering::Relaxed)
-                        ),
+                        Some(c) => {
+                            let mut out = String::from("{\"enabled\":true,\"host\":\"");
+                            push_piece(&mut out, &json_escape(&c.host));
+                            push_piece(&mut out, "\",\"port\":");
+                            push_u32(&mut out, c.port as u32);
+                            push_piece(&mut out, ",\"user\":\"");
+                            push_piece(&mut out, &json_escape(&c.user));
+                            push_piece(&mut out, "\",\"hasPass\":");
+                            push_piece(&mut out, if c.pass.is_empty() { "false" } else { "true" });
+                            push_piece(&mut out, ",\"connected\":");
+                            push_piece(&mut out, if crate::mqtt::CONNECTED.load(Ordering::Relaxed) {
+                                "true"
+                            } else {
+                                "false"
+                            });
+                            push_piece(&mut out, "}");
+                            out
+                        }
                         None => String::from(
                             "{\"enabled\":false,\"host\":\"\",\"port\":1883,\"user\":\"\",\"hasPass\":false,\"connected\":false}",
                         ),
                     };
                     Some(json_response(body))
                 }
-                "/api/config" => Some(json_response(format!(
-                    "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
-                    PIXEL_COUNT.load(Ordering::Relaxed),
-                    MAX_PIXELS,
-                    Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
-                ))),
+                "/api/config" => {
+                    let mut out = String::from("{\"pixels\":");
+                    push_u32(&mut out, PIXEL_COUNT.load(Ordering::Relaxed));
+                    push_piece(&mut out, ",\"max\":");
+                    push_u32(&mut out, MAX_PIXELS);
+                    push_piece(&mut out, ",\"protocol\":\"");
+                    push_piece(&mut out, Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name());
+                    push_piece(&mut out, "\"}");
+                    Some(json_response(out))
+                }
                 "/api/playlist" => Some(json_response(crate::playlist::to_json())),
                 "/api/map" => Some(json_response(crate::devicemap::to_json())),
-                "/api/protocol" => Some(json_response(format!(
-                    "{{\"protocol\":\"{}\",\"options\":[\"sk9822\",\"ws2812\"]}}",
-                    Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name()
-                ))),
+                "/api/protocol" => {
+                    let mut out = String::from("{\"protocol\":\"");
+                    push_piece(&mut out, Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name());
+                    push_piece(&mut out, "\",\"options\":[\"sk9822\",\"ws2812\"]}");
+                    Some(json_response(out))
+                }
                 "/api/pixels" => respond!(api_pixels().await),
                 // running pattern source, streamed from flash (no RAM copy)
                 "/api/pattern" => respond!((CORS, CurrentSource(crate::shared::current_src()))),

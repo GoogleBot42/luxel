@@ -53,7 +53,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 use esp_storage::FlashStorage;
-use luxel_core::jsonview::json_escape;
+use luxel_core::jsonview::{json_escape, push_hex, push_piece, push_u32};
 use sequential_storage::cache::NoCache;
 use sequential_storage::map;
 
@@ -157,7 +157,9 @@ fn bc_chunk_key(seq: u32, gen: u8, c: u8) -> u32 {
 }
 
 fn id_hex(seq: u32) -> String {
-    alloc::format!("{:08x}", seq ^ ID_MASK)
+    let mut out = String::new();
+    push_hex(&mut out, seq ^ ID_MASK, 8);
+    out
 }
 fn seq_of(id: &str) -> Option<u32> {
     u32::from_str_radix(id, 16).ok().map(|v| v ^ ID_MASK)
@@ -444,15 +446,22 @@ pub fn init() {
 
 /// `GET /api/patterns` → `{"patterns":[{"id","name"},…]}` (from RAM index).
 pub fn list_json() -> String {
-    let items: Vec<String> = INDEX.lock(|c| {
-        c.borrow()
-            .iter()
-            .map(|e| {
-                alloc::format!("{{\"id\":\"{}\",\"name\":\"{}\"}}", id_hex(e.seq), json_escape(&e.name))
-            })
-            .collect()
+    let mut out = String::new();
+    push_piece(&mut out, "{\"patterns\":[");
+    INDEX.lock(|c| {
+        for (i, e) in c.borrow().iter().enumerate() {
+            if i > 0 {
+                push_piece(&mut out, ",");
+            }
+            push_piece(&mut out, "{\"id\":\"");
+            push_piece(&mut out, &id_hex(e.seq));
+            push_piece(&mut out, "\",\"name\":\"");
+            push_piece(&mut out, &json_escape(&e.name));
+            push_piece(&mut out, "\"}");
+        }
     });
-    alloc::format!("{{\"patterns\":[{}]}}", items.join(","))
+    push_piece(&mut out, "]}");
+    out
 }
 
 /// (id, name) of every stored pattern, from the RAM index (for the MQTT
@@ -492,12 +501,15 @@ fn lookup(id: &str) -> Option<(u32, u8, u8, u8, String)> {
 fn escape_into(out: &mut String, s: &str) {
     for c in s.chars() {
         match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&alloc::format!("\\u{:04x}", c as u32)),
+            '"' => push_piece(out, "\\\""),
+            '\\' => push_piece(out, "\\\\"),
+            '\n' => push_piece(out, "\\n"),
+            '\r' => push_piece(out, "\\r"),
+            '\t' => push_piece(out, "\\t"),
+            c if (c as u32) < 0x20 => {
+                push_piece(out, "\\u");
+                push_hex(out, c as u32, 4);
+            }
             c => out.push(c),
         }
     }
@@ -519,13 +531,13 @@ pub fn get_json(id: &str) -> Option<String> {
     // an ~11 KB intermediate plus a doubling result buffer — request a ~22 KB
     // contiguous block and OOM on a fragmented heap.
     let mut out = String::with_capacity(source.len() + source.len() / 8 + name.len() + 48);
-    out.push_str("{\"id\":\"");
-    out.push_str(id);
-    out.push_str("\",\"name\":\"");
+    push_piece(&mut out, "{\"id\":\"");
+    push_piece(&mut out, id);
+    push_piece(&mut out, "\",\"name\":\"");
     escape_into(&mut out, &name);
-    out.push_str("\",\"source\":\"");
+    push_piece(&mut out, "\",\"source\":\"");
     escape_into(&mut out, &source);
-    out.push_str("\"}");
+    push_piece(&mut out, "\"}");
     Some(out)
 }
 
@@ -779,18 +791,22 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
         return String::from("{\"ok\":false,\"error\":\"name must be 1..=64 bytes\"}");
     }
     if source.is_empty() || source.len() > MAX_SOURCE {
-        return alloc::format!(
-            "{{\"ok\":false,\"error\":\"this pattern's source is too large for the on-device library ({} KB; the device stores up to {} KB)\"}}",
-            source.len() / 1024,
-            MAX_SOURCE / 1024
-        );
+        let mut out = String::new();
+        push_piece(&mut out, "{\"ok\":false,\"error\":\"this pattern's source is too large for the on-device library (");
+        push_u32(&mut out, (source.len() / 1024) as u32);
+        push_piece(&mut out, " KB; the device stores up to ");
+        push_u32(&mut out, (MAX_SOURCE / 1024) as u32);
+        push_piece(&mut out, " KB)\"}");
+        return out;
     }
     if bc.is_empty() || bc.len() > MAX_BC {
-        return alloc::format!(
-            "{{\"ok\":false,\"error\":\"this pattern's compiled code is too large for the on-device library ({} KB; the device stores up to {} KB)\"}}",
-            bc.len() / 1024,
-            MAX_BC / 1024
-        );
+        let mut out = String::new();
+        push_piece(&mut out, "{\"ok\":false,\"error\":\"this pattern's compiled code is too large for the on-device library (");
+        push_u32(&mut out, (bc.len() / 1024) as u32);
+        push_piece(&mut out, " KB; the device stores up to ");
+        push_u32(&mut out, (MAX_BC / 1024) as u32);
+        push_piece(&mut out, " KB)\"}");
+        return out;
     }
     let start = REGION.load(Ordering::Relaxed);
     if start == 0 {
@@ -823,10 +839,11 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
     });
     let (seq, new_gen, old_gen, old_count, old_bc, is_new) = match plan {
         Plan::Full => {
-            return alloc::format!(
-                "{{\"ok\":false,\"error\":\"the device library is full ({} patterns) — delete one first\"}}",
-                MAX_PATTERNS
-            )
+            let mut out = String::new();
+            push_piece(&mut out, "{\"ok\":false,\"error\":\"the device library is full (");
+            push_u32(&mut out, MAX_PATTERNS as u32);
+            push_piece(&mut out, " patterns) — delete one first\"}");
+            return out;
         }
         Plan::New { seq } => (seq, 0u8, 0u8, 0u8, 0u8, true),
         Plan::Update { seq, new_gen, old_gen, old_count, old_bc } => {
@@ -871,7 +888,11 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
     if is_new {
         NEXT_SEQ.store(seq.wrapping_add(1), Ordering::Relaxed);
     }
-    alloc::format!("{{\"ok\":true,\"id\":\"{}\"}}", id_hex(seq))
+    let mut out = String::new();
+    push_piece(&mut out, "{\"ok\":true,\"id\":\"");
+    push_piece(&mut out, &id_hex(seq));
+    push_piece(&mut out, "\"}");
+    out
 }
 
 /// `DELETE /api/patterns/<id>` → `{"ok":true}` | `{"ok":false,…}`.
