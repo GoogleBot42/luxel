@@ -757,3 +757,11 @@ sends, and `default` is where the UI starts the control, not an
 initializer for your pattern's variables. Give the variable a sensible
 top-level value too, so the pattern looks right before anyone touches a
 control.
+
+Without a `default=`, the playground has no way to know that top-level
+value (a control's live value can't be read back from the engine —
+calling the handler would overwrite it), so it draws the untouched
+control dimmed with a `?` badge to say the position shown is a
+placeholder, not the running value. Toggles render indeterminate. The
+control becomes normal on first interaction. Declaring a `default=`
+avoids the placeholder state entirely.
