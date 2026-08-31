@@ -29,9 +29,13 @@ paths:
   global brightness setting (Jeremy removes these on sight).
 - Fix-pass verification gotchas: snap's meta.json nests per-side data under
   `sides.port`; `--controls-port` matches the display label (export name
-  minus prefix, no spaces) or the full export name; `--probe-controls`
-  ignores `//#` bounds (Gitea #180) — use directed `--controls-port` runs
-  at min/mid/max for real evidence.
+  minus prefix, no spaces) or the full export name; `--probe-controls` now
+  DOES honour `//#` bounds (Gitea #180 closed 2026-08-30 — it probes each
+  control's min/mid/max and marks those rows `*`), so its responsive/NO
+  verdict and maxDelta/maxDeltaLit numbers are usable evidence on their own,
+  and comparing the port's row against the original's is the fastest way to
+  size a dial-authority defect. Directed `--controls-*` runs are still what
+  you want for a response CURVE rather than a yes/no.
 - When a fix pass acts on a review decision, stamp `addressedAt` on its
   tools/verify/decisions.json entry — the review UI's "addressed" chip is
   how Jeremy finds patterns awaiting re-review. Re-deciding clears the

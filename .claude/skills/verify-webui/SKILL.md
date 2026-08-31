@@ -91,6 +91,12 @@ rolls back silently to the same version string.
 
 - Reporting success off `npm run build` alone — it doesn't execute the app; a
   runtime-only regression (like the read-only editor) won't show up there.
+- `e2e.mjs` dying instantly on `net::ERR_CONNECTION_REFUSED at http://localhost:<port>/`
+  when nothing else is on the port — you ran it from the repo ROOT. It spawns
+  `npx vite preview` with no `cwd`, so outside `web/` vite finds no config and never
+  serves; the symptom is identical to the port-collision case below, which sends you
+  hunting the wrong thing. Always `cd web && node tools/e2e.mjs …` (the script's own
+  header says "from web/"; the failure does not).
 - Two sessions' `vite preview`/`e2e.mjs` runs colliding on the default port — always a
   silent wrong-app pass, never a loud error. If tile counts or UI look "off" for no
   reason, check for a stale process on the port before debugging the change itself.

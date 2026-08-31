@@ -50,6 +50,26 @@ conversation.
    itself, run it through the playground (`verify-webui` skill) or `luxel check` on the
    single file.
 
+## Measuring an original is not reading it
+
+The firewall is about SOURCE, not behaviour. Running the original through the
+verify harness and reading numbers back out is explicitly fine, and it is how
+fidelity work should be settled — `tools/verify/snap.mjs` already renders both
+sides for exactly this reason. The same licence covers the original's **exported
+var values**: a throwaway script that loads the `.epe`, compiles it via
+`tools/verify/enginehost.mjs`, calls `setControl(name, v)` and prints `vars()`
+reports only the public vars surface a client sees over PB's `/api/vars` — no
+source ever enters your context. Keep the script's output to values only.
+
+This is the definitive answer to "does my dial map the way the original's does?",
+and it is much better than guessing from pixels. 2026-08-30, Gitea #181 item 5:
+line-dancer-2d was filed as a Speed *authority-model* mismatch ("the original
+trims a large baseline, the port is a master multiplier from standstill"). One
+sweep of the original's exported `speed` var showed it is exactly `1 + 9v` —
+identical to the port. The real defects were the slider DEFAULTS and a different
+Twist range, which the same sweep handed over directly. Reach for this before
+theorising about a control difference.
+
 ## Failure modes
 
 - Reading the `.epe` "just to understand it" in the same context you'll write
