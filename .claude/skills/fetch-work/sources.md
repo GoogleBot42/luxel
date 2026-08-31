@@ -71,6 +71,14 @@ grep -rnE 'TODO|FIXME|XXX' --include='*.rs' --include='*.ts' --include='*.tsx' .
 Treat hits the same as `UPDATES.md` markers: verify still-open before
 proposing.
 
+Note (2026-08-30): this vein is currently DRY — a full sweep (including
+`HACK`/`WIP`/`todo!()`/`#[ignore]`/`it.skip` variants and the
+`tools/corpus/report.mjs` TODO_BUILTINS derivation, which is empty) found
+zero actionable code markers; every raw hit was a placeholder
+(`luxel-XXXX`), prose, or history. Keep the grep as a cheap first pass,
+but expect nothing — the productive sources are the UPDATES.md marker
+grep, docs/UNTESTED.md, and the Gitea tracker.
+
 ## Honesty rule (applies everywhere above)
 
 Docs and memory drift out of date. Before proposing *any* candidate,

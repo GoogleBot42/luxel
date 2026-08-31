@@ -105,7 +105,14 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
 - For any change touching LED output (protocol, timing, buffer handling),
   run the hardware soak: `tools/hw-bench.mjs <ip> [report.md]` (see
   docs/tools.md) — it churns the full pattern gallery on the real device
-  and writes `docs/bench-report.md`. Watch `firmware/serial.log` alongside
+  and writes `docs/bench-report.md`. It "restores" the device to **300 px**
+  (its own header says so), NOT the count it found — on the Athom rig
+  (as-found state: 60 px) follow with `POST /api/config` body `60`.
+- For a change touching the HTTP response path (`firmware/src/server.rs`),
+  run `tools/wire-check.sh <ip>` after the OTA — curl-level contract check
+  of every response family (single Content-Type, Content-Length == body
+  bytes incl. streamed routes, asset 200/304 caching headers, all four
+  OPTIONS preflight headers, 404 shape). Watch `firmware/serial.log` alongside
   it for panics if it's reachable; it's fed from outside the container and
   can go stale, so check its mtime before trusting what it shows.
 
