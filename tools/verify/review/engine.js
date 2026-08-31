@@ -145,6 +145,21 @@ export class Engine {
     }
   }
 
+  /** Drive a digital input pin so `digitalRead(pin)` reports `level` instead
+   *  of the pin's idle level — the pin-injection ABI (Gitea #177). `level` is
+   *  a boolean, or null to release the pin back to its `pinMode` idle level.
+   *  Returns true when it landed (false = pin outside the 0..63 window).
+   *  Kept verbatim in step with tools/verify/enginehost.mjs. */
+  setPin(pin, level) {
+    if (!Number.isInteger(pin)) return false;
+    return this.e.lx_set_pin(this.h, pin, level === null ? -1 : level ? 1 : 0) === 1;
+  }
+
+  /** What `digitalRead(pin)` reports right now (injected level, else idle). */
+  pinRead(pin) {
+    return this.e.lx_pin_read(this.h, pin) === 1;
+  }
+
   /** Row-major W×H grid map (rows implied by pixelCount/w). */
   setMapGrid(w, h) {
     this.e.lx_set_map_grid(this.h, w, h);

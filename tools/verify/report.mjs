@@ -31,7 +31,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots } from "./enginehost.mjs";
 import { synthSensorFrame } from "./sensormodel.mjs";
-import { applySourceFixups, resolveRig, varsOverride, nonVisualReason } from "./fixups.mjs";
+import {
+  applySourceFixups,
+  resolveRig,
+  varsOverride,
+  controlsOverride,
+  pinsOverride,
+  nonVisualReason,
+} from "./fixups.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../..");
@@ -288,7 +295,7 @@ function rigFor(pair) {
 
 /** Render one side into gif frames. Returns {frames, error} — a compile
  *  failure yields a single placeholder frame plus the error string. */
-function renderSide(host, source, rig, layout, vars) {
+function renderSide(host, source, rig, layout, drive) {
   // Before compile: top-level init runs inside compile(), and clock-driven
   // patterns may read time-of-day there (Gitea #104). Same order as snap.mjs.
   host.setDefaultWallClock(WALL_CLOCK);
@@ -314,9 +321,15 @@ function renderSide(host, source, rig, layout, vars) {
     if (rig.kind === "grid") eng.setMapGrid(rig.gridW, rig.gridH);
     else if (rig.kind === "cloud") eng.setMap3D(rig.points);
     eng.setWallClock(WALL_CLOCK);
-    // Exported-var pins from fixups.json, pushed once after init the way an
-    // external client would — some originals draw nothing until driven.
-    for (const [name, value] of Object.entries(vars ?? {})) eng.setVar(name, value);
+    // Per-side pins from fixups.json, applied once after init the way an
+    // external client (or a finger on a button) would — some originals draw
+    // nothing, or nothing but their idle state, until driven. Same order and
+    // same surfaces as snap.mjs: controls, then vars, then digital pins.
+    for (const [name, values] of Object.entries(drive?.controls ?? {})) {
+      eng.setControl(name, values);
+    }
+    for (const [name, value] of Object.entries(drive?.vars ?? {})) eng.setVar(name, value);
+    for (const [pin, level] of Object.entries(drive?.pins ?? {})) eng.setPin(Number(pin), level);
     const wants = eng.wantsSensors();
     const delta = 1000 / opts.fps;
     const warm = Math.round(opts.skip * opts.fps);
@@ -528,6 +541,8 @@ for (const f of verdictFiles.sort()) {
   host ??= await load();
   const rig = rigFor(pair);
   const fixVars = varsOverride(slug);
+  const fixControls = controlsOverride(slug);
+  const fixPins = pinsOverride(slug);
   const layout = makeLayout(rig);
   const sources = {
     orig: applySourceFixups(
@@ -537,7 +552,11 @@ for (const f of verdictFiles.sort()) {
     port: fs.readFileSync(path.join(ROOT, pair.libFile), "utf8"),
   };
   for (const side of ["orig", "port"]) {
-    const { frames, error } = renderSide(host, sources[side], rig, layout, fixVars?.[side]);
+    const { frames, error } = renderSide(host, sources[side], rig, layout, {
+      vars: fixVars?.[side],
+      controls: fixControls?.[side],
+      pins: fixPins?.[side],
+    });
     fs.writeFileSync(
       sidePaths[side],
       encodeGif(layout.w, layout.h, frames, Math.round(100 / opts.gifFps)),

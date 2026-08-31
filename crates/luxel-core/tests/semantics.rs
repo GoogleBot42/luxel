@@ -1058,6 +1058,88 @@ fn digital_read_honours_pin_mode_pullup() {
     assert_eq!(e.var("out"), zero);
 }
 
+/// Gitea #177 item 2: a host can DRIVE a digital pin, and the pattern sees it
+/// through `digitalRead` — the injection ABI the playground, the port-review
+/// harness and snap.mjs use to press a button deterministically.
+#[test]
+fn set_pin_drives_digital_read() {
+    let one = Some(Value::Num(Fx::ONE));
+    let zero = Some(Value::Num(Fx::ZERO));
+
+    // A button-to-ground pattern: samples the pin every frame, so the test
+    // observes injection through a RUNNING pattern, not just at init.
+    let src = "pinMode(26, INPUT_PULLUP)\n\
+               export var pressed = 0\n\
+               export function beforeRender(delta) { pressed = digitalRead(26) == LOW }\n\
+               export function render(index) { hsv(0, 0, pressed) }";
+    let mut e = Engine::new(src, 10, 1).expect("compile error");
+
+    // idle: pulled up, so "not pressed" — the #177 item 1 behaviour
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("pressed"), zero);
+
+    // driven LOW: the button is held, and stays held across frames (the
+    // injection is a level, not a one-frame pulse)
+    assert!(e.set_pin(26, Some(false)));
+    for _ in 0..3 {
+        e.frame(Fx::from_int(16));
+        assert_eq!(e.var("pressed"), one);
+    }
+    assert_eq!(e.frame(Fx::ZERO)[0], [255, 255, 255], "lit while held");
+
+    // driven HIGH beats the pin's own bias too (a pull-DOWN pin held high)
+    assert!(e.set_pin(26, Some(true)));
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.var("pressed"), zero);
+
+    // released: back to the pinMode idle level, not to LOW
+    assert!(e.set_pin(26, None));
+    assert!(e.pin_read(26), "released pull-up pin idles HIGH again");
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.var("pressed"), zero);
+
+    // injection is per pin: 27 is untouched and still idles LOW (no pinMode)
+    assert!(e.set_pin(26, Some(false)));
+    assert!(!e.pin_read(27));
+
+    // out-of-window pins are REJECTED rather than silently aliasing pin 0 —
+    // a typo'd pin number must not look like a stuck input
+    assert!(!e.set_pin(64, Some(true)));
+    assert!(!e.set_pin(-1, Some(true)));
+    assert!(!e.pin_read(64));
+    assert!(!e.pin_read(26), "pin 26 still driven LOW");
+}
+
+/// The pin-mode bit and the injection are independent state: driving a pin
+/// then reconfiguring it keeps the driven level, and releasing it falls back
+/// to whatever `pinMode` last asked for.
+#[test]
+fn pin_injection_and_pin_mode_compose() {
+    let mut e = engine("pinMode(26, INPUT)\nexport var out = 0");
+    assert!(!e.pin_read(26)); // plain INPUT idles LOW
+    assert!(e.set_pin(26, Some(true)));
+    assert!(e.pin_read(26));
+    assert!(e.set_pin(26, None));
+    assert!(!e.pin_read(26)); // released → back to the INPUT idle level
+
+    let mut e = engine("pinMode(26, INPUT_PULLUP)\nexport var out = 0");
+    assert!(e.pin_read(26));
+    assert!(e.set_pin(26, Some(false)));
+    assert!(!e.pin_read(26)); // injection beats the pull-up
+    assert!(e.set_pin(26, None));
+    assert!(e.pin_read(26)); // released → back to the pull-up idle level
+
+    // A `pinMode` the pattern runs LATER does not knock the injection loose:
+    // the host is standing in for a wire, and a wire does not come off
+    // because the pattern reconfigured the pad.
+    let src = "export var out = 0\n\
+               export function beforeRender(delta) { pinMode(26, INPUT); out = digitalRead(26) }";
+    let mut e = Engine::new(src, 10, 1).expect("compile error");
+    assert!(e.set_pin(26, Some(true)));
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::ONE)));
+}
+
 #[test]
 fn sensor_vars_are_stubbed() {
     let e = engine(

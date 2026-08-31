@@ -91,6 +91,29 @@ check("events: event drives pixels red", pxLit[0] === 255 && pxLit[1] === 0, `fi
 const evBad = await (await fetch(`${base}/api/events`, { method: "POST", body: "junk" })).json();
 check("events: junk body rejected", evBad.ok === false, JSON.stringify(evBad));
 
+// ---- digital pin injection (POST /api/pins → digitalRead builtin, #177) ----
+const pinSrc =
+  "pinMode(4, INPUT_PULLUP)\n" +
+  "export function render(index) { hsv(0, 0, digitalRead(4) == LOW) }";
+const pinUp = await (await fetch(`${base}/api/code`, { method: "POST", body: await lxpBody("", pinSrc) })).json();
+check("pins: digitalRead pattern accepted", pinUp.ok === true, JSON.stringify(pinUp));
+const pins = (body) => fetch(`${base}/api/pins`, { method: "POST", body }).then((r) => r.json());
+const firstPx = async () => [...new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer()).slice(0, 3)];
+await sleep(300);
+check("pins: dark at idle (pulled-up pin reads not-pressed)", (await firstPx())[0] === 0);
+const pinRes = await pins("4 0\n");
+check("pins: level accepted", pinRes.ok === true && pinRes.pins === 1, JSON.stringify(pinRes));
+await sleep(300);
+const pxHeld = await firstPx();
+check("pins: driving pin 4 LOW lights the strip", pxHeld[0] === 255, `first px = ${pxHeld}`);
+await sleep(300);
+check("pins: the level is HELD, not a one-frame pulse", (await firstPx())[0] === 255);
+await pins("4 x\n");
+await sleep(300);
+check("pins: release returns the pin to its idle level", (await firstPx())[0] === 0);
+const pinBad = await pins("nonsense\n");
+check("pins: unparseable body rejected", pinBad.ok === false, JSON.stringify(pinBad));
+
 // restore a lit pattern (the vmerr pattern renders black: render aborts
 // before hsv) so the preview check sees light
 await fetch(`${base}/api/code`, {

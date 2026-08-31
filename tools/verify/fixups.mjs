@@ -28,6 +28,27 @@
 //                       at their default value — without a pinned var the
 //                       original is black and the pair is unjudgeable.
 //
+//   controls            UI control values invoked on a side once after init,
+//                       the way a user turning the dial would. Declared PER
+//                       SIDE, because a port routinely names (or splits) its
+//                       controls differently from the original. This is the
+//                       declarative form of --controls-orig/--controls-port,
+//                       and exists so a pair whose sides expose the SAME input
+//                       through different surfaces can still be swept
+//                       like-for-like (Gitea #177 item 3).
+//
+//   pins                Digital input pins DRIVEN into a side once after init
+//                       (the lx_set_pin injection ABI — Gitea #177 item 2).
+//                       Also per side, for the same reason: a corpus original
+//                       reads a physical button with digitalRead(26) while its
+//                       clean-room port offers a UI toggle instead. Pinning
+//                       `{"orig": {"26": 0}}` alongside
+//                       `{"port": {"toggleButton": 1}}` in `controls` presses
+//                       BOTH sides' buttons, which is the only way such a pair
+//                       is comparable at all: without it the original idles at
+//                       "not pressed" forever and the two sides are showing
+//                       different states, not different renderings.
+//
 //   nonVisual           A one-string REASON marking the pair as excluded from
 //                       the output-verification sweep: the ORIGINAL is not a
 //                       visual pattern at all, so "the port should render the
@@ -54,6 +75,10 @@
 //                 "pixels": <n>, "grid": [w, h],
 //                 "vars": { "orig": {"<name>": <number>, ...},
 //                           "port": {"<name>": <number>, ...} },
+//                 "controls": { "orig": {"<name>": <number>|[<n>,<n>,<n>], ...},
+//                               "port": { ... } },
+//                 "pins": { "orig": {"<pin 0..63>": 0|1|true|false|null, ...},
+//                           "port": { ... } },
 //                 "nonVisual": "<reason the pair is not scoreable>",
 //                 "note": "why" } }
 //
@@ -142,25 +167,12 @@ export function rigOverride(slug) {
  *  var that quietly fails to apply looks exactly like a black pattern. */
 const SIDES = ["orig", "port"];
 export function varsOverride(slug) {
-  const fx = fixupFor(slug);
-  const spec = fx?.vars;
-  if (spec == null) return null;
-  if (typeof spec !== "object" || Array.isArray(spec)) {
-    throw new Error(`fixups.json: ${slug}.vars must be an object of {orig,port}`);
-  }
-  for (const key of Object.keys(spec)) {
-    if (!SIDES.includes(key)) {
-      throw new Error(`fixups.json: ${slug}.vars has unknown side "${key}" (want orig/port)`);
-    }
-  }
+  const raw = perSide(slug, "vars", fixupFor(slug)?.vars);
+  if (!raw) return null;
   const out = {};
   for (const side of SIDES) {
-    const vals = spec[side] ?? {};
-    if (typeof vals !== "object" || Array.isArray(vals)) {
-      throw new Error(`fixups.json: ${slug}.vars.${side} must be an object of name=number`);
-    }
     out[side] = {};
-    for (const [name, v] of Object.entries(vals)) {
+    for (const [name, v] of Object.entries(raw[side])) {
       if (typeof v !== "number" || !Number.isFinite(v)) {
         throw new Error(`fixups.json: ${slug}.vars.${side}.${name} must be a finite number`);
       }
@@ -172,6 +184,107 @@ export function varsOverride(slug) {
         );
       }
       out[side][name] = v;
+    }
+  }
+  return Object.keys(out.orig).length || Object.keys(out.port).length ? out : null;
+}
+
+/** Shared shape check for the per-side blocks (`vars`, `controls`, `pins`):
+ *  an object keyed by `orig`/`port`, each holding a name→value map. Returns
+ *  `{orig, port}` of raw maps (both always present) or null when the key is
+ *  absent. Throws on anything malformed — see `varsOverride`. */
+function perSide(slug, key, spec) {
+  if (spec == null) return null;
+  if (typeof spec !== "object" || Array.isArray(spec)) {
+    throw new Error(`fixups.json: ${slug}.${key} must be an object of {orig,port}`);
+  }
+  for (const side of Object.keys(spec)) {
+    if (!SIDES.includes(side)) {
+      throw new Error(`fixups.json: ${slug}.${key} has unknown side "${side}" (want orig/port)`);
+    }
+  }
+  const out = {};
+  for (const side of SIDES) {
+    const vals = spec[side] ?? {};
+    if (typeof vals !== "object" || Array.isArray(vals)) {
+      throw new Error(`fixups.json: ${slug}.${key}.${side} must be an object`);
+    }
+    out[side] = vals;
+  }
+  return out;
+}
+
+/** This slug's per-side UI control pins, or null: `{orig, port}` of
+ *  `name → [v0, v1?, v2?]` (the shape `Engine.setControl` wants, and the same
+ *  shape `--controls-orig/--controls-port` parse to). A bare number is
+ *  accepted and wrapped, since almost every control is a one-value slider.
+ *
+ *  Values are engine-ABI 16.16 like everything else, and a control taking more
+ *  than three components does not exist — both are rejected loudly, because a
+ *  control pin that quietly fails to apply looks exactly like a dead dial. */
+export function controlsOverride(slug) {
+  const raw = perSide(slug, "controls", fixupFor(slug)?.controls);
+  if (!raw) return null;
+  const out = {};
+  for (const side of SIDES) {
+    out[side] = {};
+    for (const [name, v] of Object.entries(raw[side])) {
+      const vals = Array.isArray(v) ? v : [v];
+      if (vals.length === 0 || vals.length > 3) {
+        throw new Error(
+          `fixups.json: ${slug}.controls.${side}.${name} must be 1..3 numbers (got ${vals.length})`,
+        );
+      }
+      for (const n of vals) {
+        if (typeof n !== "number" || !Number.isFinite(n)) {
+          throw new Error(`fixups.json: ${slug}.controls.${side}.${name} must be numbers`);
+        }
+        if (Math.abs(n) >= 32768) {
+          throw new Error(
+            `fixups.json: ${slug}.controls.${side}.${name} = ${n} is outside the 16.16 range (±32768)`,
+          );
+        }
+      }
+      out[side][name] = vals;
+    }
+  }
+  return Object.keys(out.orig).length || Object.keys(out.port).length ? out : null;
+}
+
+/** Highest pin the engine tracks — mirrors `MAX_TRACKED_PIN` in
+ *  crates/luxel-core/src/vm.rs. Anything above it has nowhere to store a
+ *  level, so `setPin` would reject it at render time; catching it here names
+ *  the manifest entry instead. */
+export const MAX_PIN = 63;
+
+/** This slug's per-side digital pin pins, or null: `{orig, port}` of
+ *  `pin → true|false|null` (null = explicitly released to the pin's `pinMode`
+ *  idle level). JSON object keys are strings, so the pin number is parsed and
+ *  range-checked here; `0`/`1` are accepted alongside `false`/`true` because
+ *  patterns spell pin levels as LOW/HIGH numerics. */
+export function pinsOverride(slug) {
+  const raw = perSide(slug, "pins", fixupFor(slug)?.pins);
+  if (!raw) return null;
+  const out = {};
+  for (const side of SIDES) {
+    out[side] = {};
+    for (const [key, v] of Object.entries(raw[side])) {
+      const pin = Number(key);
+      if (!Number.isInteger(pin) || pin < 0 || pin > MAX_PIN) {
+        throw new Error(
+          `fixups.json: ${slug}.pins.${side} key "${key}" must be an integer pin 0..${MAX_PIN}`,
+        );
+      }
+      let level;
+      if (v === null) level = null;
+      else if (typeof v === "boolean") level = v;
+      else if (v === 0 || v === 1) level = v === 1;
+      else {
+        throw new Error(
+          `fixups.json: ${slug}.pins.${side}.${key} must be 0, 1, true, false or null`,
+        );
+      }
+      out[side][pin] = level;
     }
   }
   return Object.keys(out.orig).length || Object.keys(out.port).length ? out : null;

@@ -206,6 +206,12 @@ struct State {
     /// Injected events (POST /api/events) awaiting the render loop
     /// (mirrors shared::EVENTS).
     events: Mutex<Vec<[luxel_core::fixed::Fx; 4]>>,
+    /// Injected digital pin levels (POST /api/pins) awaiting the render loop:
+    /// `(pin, Some(high) | None = release)`. Stands in for the GPIO the
+    /// engine does not have yet (Gitea #177 item 2); like the event queue it
+    /// is drained between frames, and like the event queue a pattern switch
+    /// rebuilds the VM and forgets what was driven.
+    pins: Mutex<Vec<(i32, Option<bool>)>>,
     /// Luxel-to-Luxel sync: role (0 off, 1 leader, 2 follower), this
     /// process's boot id, the engine clock (published by the render loop
     /// for the leader beacon), and the last beacon heard as a follower.
@@ -1009,6 +1015,16 @@ fn render_loop(state: Arc<State>) {
             }
         }
 
+        // injected digital pin levels (POST /api/pins), same slot
+        {
+            let pins = std::mem::take(&mut *state.pins.lock().unwrap());
+            if let Some(eng) = engine.as_mut() {
+                for (pin, level) in pins {
+                    eng.set_pin(pin, level);
+                }
+            }
+        }
+
         // network input (DDP/E1.31) overrides the engine while packets flow
         if live_proto(&state).is_some() {
             let live = state.live_pixels.lock().unwrap().clone();
@@ -1670,6 +1686,23 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("POST", "/api/pins") => {
+            // text body: one "<pin> <level>" per line, level 0/1/x (release)
+            // — digital pin injection for digitalRead()-driven patterns
+            // (Gitea #177 item 2). Applied between frames by the render loop.
+            let body = String::from_utf8_lossy(&req.body);
+            let pins = luxel_core::netin::parse_pin_lines(&body);
+            let n = pins.len();
+            let r = if n == 0 {
+                String::from(
+                    "{\"ok\":false,\"error\":\"want lines of \\\"<pin> <0|1|x>\\\"\"}",
+                )
+            } else {
+                state.pins.lock().unwrap().extend(pins);
+                format!("{{\"ok\":true,\"pins\":{n}}}")
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("POST", "/api/sensors") => {
             // binary body: one raw sensor-board frame ("SB1.0\0"…"END\0") —
             // same parser the firmware runs on its UART stream
@@ -1937,6 +1970,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         sensor_frame: Mutex::new(None),
         sensor_seq: AtomicU32::new(0),
         events: Mutex::new(Vec::new()),
+        pins: Mutex::new(Vec::new()),
         sync_mode: AtomicU8::new(0),
         sync_boot_id: std::process::id() ^ 0x5a5a_5a5a,
         tz_minutes: std::sync::atomic::AtomicI32::new(0),

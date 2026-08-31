@@ -575,6 +575,28 @@ pub extern "C" fn lx_push_event(h: i32, t: i32, x: i32, y: i32, v: i32) {
     });
 }
 
+/// Drive a digital input pin so `digitalRead(pin)` reports an injected level
+/// instead of the pin's `pinMode` idle level (Gitea #177 item 2) — the
+/// stand-in for real GPIO the playground, the port-review harness and
+/// snap.mjs use to press a button deterministically.
+///
+/// `level`: 0 = LOW, > 0 = HIGH, < 0 = release (back to the idle level).
+/// Returns 1 when the pin was in range and the state was stored, 0 otherwise
+/// (unknown handle, or a pin above the tracked window) — a typo'd pin is
+/// otherwise indistinguishable from a stuck input.
+#[no_mangle]
+pub extern "C" fn lx_set_pin(h: i32, pin: i32, level: i32) -> i32 {
+    let want = if level < 0 { None } else { Some(level > 0) };
+    with_engine(h, |s| s.engine.set_pin(pin, want) as i32).unwrap_or(0)
+}
+
+/// The level `digitalRead(pin)` would report right now (1 HIGH, 0 LOW),
+/// injected or idle — lets a host show the pin state it is driving.
+#[no_mangle]
+pub extern "C" fn lx_pin_read(h: i32, pin: i32) -> i32 {
+    with_engine(h, |s| s.engine.pin_read(pin) as i32).unwrap_or(0)
+}
+
 // ---- map programs (this engine emits coordinates, not colors) ----
 
 /// Turn this engine into a map-program runner (per-pixel `plot(x, y[, z])`).

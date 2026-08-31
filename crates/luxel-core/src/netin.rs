@@ -265,9 +265,69 @@ pub fn build_events(events: &[[crate::fixed::Fx; 4]]) -> alloc::vec::Vec<u8> {
     p
 }
 
+// ---- Digital pin injection ----
+// POST /api/pins body: text, one `<pin> <level>` per line. Levels are
+// `0`/`low`, `1`/`high`, or `x`/`release`/`-` to hand the pin back to its
+// `pinMode` idle level. Text rather than a binary frame because this is a
+// hand- and script-driven surface (curl, an HA automation, a test harness),
+// not a per-frame stream like DDP or the sensor board (Gitea #177 item 2).
+
+/// Max pin writes accepted from one payload — the whole tracked window, so a
+/// batch can never say more than "every pin, once".
+pub const PIN_MAX_BATCH: usize = crate::vm::MAX_TRACKED_PIN as usize + 1;
+
+/// Parse a pin-injection payload into `(pin, level)` pairs, where `None` is
+/// "release back to idle". Blank lines, comments and lines whose pin or level
+/// does not parse are skipped, so a partly-malformed payload still applies the
+/// writes it could read (the response reports how many landed).
+pub fn parse_pin_lines(payload: &str) -> alloc::vec::Vec<(i32, Option<bool>)> {
+    let mut out = alloc::vec::Vec::new();
+    for line in payload.lines() {
+        if out.len() >= PIN_MAX_BATCH {
+            break;
+        }
+        let mut f = line.split_whitespace();
+        let (Some(pin), Some(level)) = (f.next(), f.next()) else {
+            continue; // blank line, or a pin with no level
+        };
+        let Ok(pin) = pin.parse::<i32>() else {
+            continue;
+        };
+        let level = match level.to_ascii_lowercase().as_str() {
+            "0" | "low" | "false" | "off" => Some(false),
+            "1" | "high" | "true" | "on" => Some(true),
+            "x" | "-" | "release" | "idle" => None,
+            _ => continue, // unreadable level: skip rather than guess
+        };
+        out.push((pin, level));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_lines_parse() {
+        assert_eq!(
+            parse_pin_lines("26 0\n27 HIGH\n 4  release \n"),
+            [(26, Some(false)), (27, Some(true)), (4, None)]
+        );
+        // aliases both ways
+        assert_eq!(
+            parse_pin_lines("1 low\n2 on\n3 -"),
+            [(1, Some(false)), (2, Some(true)), (3, None)]
+        );
+        // skipped: blank, level-less, non-numeric pin, unreadable level
+        assert_eq!(parse_pin_lines("\n26\nfoo 1\n26 maybe\n5 1"), [(5, Some(true))]);
+        // out-of-range pins parse here; the engine rejects them (and says so)
+        assert_eq!(parse_pin_lines("999 1"), [(999, Some(true))]);
+        // batch cap
+        let many: alloc::string::String =
+            (0..200).map(|i| alloc::format!("{i} 1\n")).collect();
+        assert_eq!(parse_pin_lines(&many).len(), PIN_MAX_BATCH);
+    }
 
     #[test]
     fn event_frame_round_trip() {
