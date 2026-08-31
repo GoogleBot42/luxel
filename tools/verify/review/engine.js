@@ -248,30 +248,3 @@ export function cubeLattice(n) {
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) coords.push([x, y, z]);
   return coords;
 }
-
-/** Script-specified control bounds — the `//#` directive, ported from
- *  web/src/lib/hints.ts (keep the two in sync). Both placements are accepted:
- *  trailing on the export line, or on its own line directly above it. */
-export function parseControlHints(source) {
-  const hints = new Map();
-  const put = (name, body) => {
-    const hint = hints.get(name) ?? {};
-    for (const kv of body.matchAll(/(\w+)\s*=\s*(-?\d*\.?\d+)/g)) {
-      const v = Number(kv[2]);
-      if (Number.isNaN(v)) continue;
-      if (["min", "max", "step", "default"].includes(kv[1])) hint[kv[1]] = v;
-    }
-    hints.set(name, hint);
-  };
-  // same line: `export function sliderX(v) { … }  //# min=0 max=5`
-  for (const m of source.matchAll(
-    /export\s+function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)[^\n]*?\/\/#([^\n]*)/g,
-  ))
-    put(m[1], m[2]);
-  // line above: `//# min=0 max=5` \n `export function sliderX(v) { … }`
-  for (const m of source.matchAll(
-    /^[ \t]*\/\/#([^\n]*)\n[ \t]*export\s+function\s+([A-Za-z_$][\w$]*)\s*\(/gm,
-  ))
-    put(m[2], m[1]);
-  return hints;
-}

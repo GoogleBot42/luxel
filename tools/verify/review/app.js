@@ -11,8 +11,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { loadEngineHost, cubeLattice, sensorSlots, parseControlHints } from "/engine.js";
+import { loadEngineHost, cubeLattice, sensorSlots } from "/engine.js";
 import { synthSensorFrame } from "/sensormodel.mjs";
+import { parseControlHints } from "/hints.mjs";
 
 const WALL_CLOCK = 1756000000; // the sweep's pin (snap.mjs / report.mjs)
 const SEED = 1;
