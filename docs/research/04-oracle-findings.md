@@ -26,7 +26,8 @@
    per-square wrap.
 6. **pow**: pow(x, 0) = 1 including 0⁰; negative bases follow the sign rule
    for integer exponents (pow(-2,3) = -8). Fractional exponent on a negative
-   base → 0 on our side (PB value unprobed — likely NaN-ish; TODO).
+   base → `Fx::MIN` (raw 0x80000000), matching PB's propagated log2(neg)
+   bit-for-bit — probed and fixed, see the TODO(oracle) resolution below.
 7. **Division/modulo by zero → 0** (x/0, 0/0, x%0, mod(x,0) all 0).
 8. **log(0) and log(negative) → MIN** (-32768.0 raw 0x80000000).
 9. **Shift counts mask to 0..31** (1<<32 = 1, 1<<33 = 2); fractional counts
