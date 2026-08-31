@@ -109,9 +109,17 @@ smoothest origin for converting a *second* device.
   covers portal-configured WLED; the provisioning AP covers the rest.
   (Client-side image patching was considered and shelved; UPDATES.md
   2026-07-26.)
-- **Open issues, why the page says "beta"** (observed on the real bench
-  conversion 2026-08-16, which otherwise ran end to end — credential
-  inheritance included):
+- **History of the "beta" label** (dropped 2026-08-30 after a second
+  full bench conversion validated the fixes below on metal — Gitea #53:
+  stock WLED 0.13.2 → Improv-serial provisioning → `/update` upload of a
+  credless master image → foreign-table detect, creds *and settings*
+  inherited (30 px/ws2812/brightness/cap/gamma carried over), clean
+  936 KiB self-copy + verify on the first attempt, table rewrite, boot
+  from ota_0, LAN rejoin on inherited creds, `boot guard: healthy` after
+  a cold power cycle; no heap-regions panic, the armed preboot_guard
+  never needed to fire; one transient RTC-WDT reset before the first
+  takeover boot self-recovered instantly). Issues observed on the first
+  bench conversion 2026-08-16, all addressed:
   - Intermittent self-copy **verify failure** (first sector, both
     in-boot retries failed) — the takeover aborts safely (WLED table
     intact); the *next* boot's re-attempt succeeded cleanly. ADDRESSED
@@ -135,9 +143,11 @@ smoothest origin for converting a *second* device.
     ever filled legitimately). It fired before the boot guard armed;
     `ota::preboot_guard` now arms before the heap allocators and rolls
     back to WLED after 3 consecutive pre-guard panics. Reproduced +
-    verified under QEMU (`tools/qemu/heap-regions-test.py`), but not yet
-    on metal — this is the remaining reason the page still says "beta";
-    drop the banner once a real via-WLED takeover confirms it.
+    verified under QEMU (`tools/qemu/heap-regions-test.py`); the
+    2026-08-30 metal conversion booted clean with the guard armed (the
+    panic itself hasn't recurred on hardware since the fix — the
+    3-consecutive-panic rollback path remains QEMU-verified only, which
+    is expected: it exists for a flake we can't summon on demand).
 
 ## Bench workflow (this repo, the Athom)
 
@@ -160,7 +170,11 @@ smoothest origin for converting a *second* device.
   the first.
 - Restore stock WLED: button-held power-up (GPIO0 = case button, power
   via `zigbee2mqtt/claude-switch`), then
-  `esptool --before no-reset --after no-reset write-flash 0x0 athom-wled-stock.bin`.
+  `esptool --before no-reset --after no-reset write-flash 0x0 athom-wled-stock.bin`
+  (espflash equivalent: `espflash write-bin 0x0 athom-wled-stock.bin
+  --before no-reset --after no-reset` — the devshell ships espflash, not
+  esptool). Provision the restored (unconfigured) WLED onto the LAN with
+  `tools/improv-provision.mjs` — no button holds, creds persist.
 - Re-takeover: `curl -F "update=@firmware/target/luxel-wled-takeover.bin"
   http://192.168.0.183/update`, watch serial at 115200.
 - Corpus for the littlefs reader: `athom-wled-fs-configured.bin` (+ NVS

@@ -175,12 +175,6 @@
     adapter. The device keeps its WiFi settings and comes back on the same address.
     <a href="https://github.com/GoogleBot42/luxel" target="_blank" rel="noreferrer">What is Luxel?</a>
   </p>
-  <p class="beta" data-role="beta-note">
-    ⚠ The takeover is <strong>beta</strong>. It has recovery built in (a failed install
-    rolls back to WLED by itself), but keep physical access to the device: in rare cases
-    the first boot panics once and needs a few extra seconds — or a power cycle — to
-    sort itself out.
-  </p>
 
   <!-- ── 1 · firmware ── -->
   <section data-role="fw-source">
@@ -466,12 +460,6 @@
   }
   .intro {
     color: var(--text-dim);
-  }
-  .beta {
-    border: 1px solid var(--warn);
-    border-radius: 8px;
-    padding: 8px 12px;
-    color: var(--warn);
   }
   .row {
     display: flex;

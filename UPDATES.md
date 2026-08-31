@@ -1,5 +1,29 @@
 # Update log
 
+## 2026-08-30 — WLED takeover validated on metal; installer sheds its beta banner (#53)
+
+Second full bench conversion on the Athom, this time with the
+preboot_guard build (the fix that was QEMU-only since 2026-08-16): stock
+WLED 0.13.2 restored over serial (button-held download mode — the one
+Jeremy step), provisioned onto the LAN via Improv-serial, then a real
+takeover from a **credless master image** (the faithful user path —
+release images never carry creds) uploaded to WLED's `/update`. Result:
+foreign table detected, WiFi **and settings** inherited (30 px, ws2812,
+brightness, power cap, gamma — all carried over from WLED), 936 KiB
+self-copy verified clean on the FIRST attempt (the 08-16 verify flake
+did not recur), table rewritten, boot from ota_0, LAN rejoin on
+inherited creds at the same address, and `boot guard: healthy` after a
+deliberate cold power cycle. No heap-regions panic; the armed
+preboot_guard never had to fire (its 3-panic rollback path stays
+QEMU-verified — it guards a flake we can't summon). One transient
+RTC-WDT reset before the first takeover boot self-recovered instantly.
+
+Shipped on the back of it: the installer's beta banner is gone
+(`Flash.svelte`), docs/wled-migration.md's "why beta" section is now a
+history section, and the Improv packet-builder the 08-16 session left
+in a scratchpad is a real tool — `tools/improv-provision.mjs`
+(docs/tools.md) — with the athom-rig skill updated to point at it.
+
 ## 2026-08-30 — CI now fails on a thin OTA slot, not just a full one (#160)
 
 The release workflow only ever asked "does the app image fit the 1 MiB OTA
