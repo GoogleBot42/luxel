@@ -93,12 +93,12 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   soften into a round halo in both axes with no smear along the wiring and
   no bright/dark seam at the row folds. Unit-tested only — the kernels are
   exact on the host, but nobody has watched them on a panel.
-- [ ] **WLED→Luxel installer page against real WLED** — the page
-  (`flash.html` in the web dist, or the GitHub Pages site once enabled)
-  is e2e-verified against a fake WLED only; the next time the Athom is
-  free and restored to stock WLED, run the page against it end to end
-  (both the automatic flow and, from an https origin, the Chrome
-  local-network permission path).
+- [x] **WLED→Luxel installer page against real WLED** — DONE 2026-08-30:
+  full stock-WLED-restore → Improv provision → credless-master takeover →
+  boot-guard-healthy cycle on the Athom (Gitea #53 closed, PR #171, beta
+  banner dropped). Only the https-origin / Chrome local-network-permission
+  path remains, tracked as Gitea #162 (hardware-confirmed blocked in
+  headless chromium; needs a headful browser).
 
 ## Verified hard by machines, low review value (FYI only)
 
