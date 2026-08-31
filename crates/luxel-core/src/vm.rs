@@ -720,12 +720,22 @@ pub struct Vm {
     /// button-to-ground pattern must read "not pressed", not "held forever"
     /// (Gitea #177 item 1). Everything else idles LOW, as before.
     pin_pullup: u64,
+    /// Bit per pin (0..63): an external host is DRIVING this pin, so
+    /// `digitalRead` reports `pin_level` for it instead of the `pinMode` idle
+    /// level — the pin-injection ABI (Gitea #177 item 2, [`Vm::set_pin`]).
+    /// A driven pin stays driven across later `pinMode` calls: the injection
+    /// stands in for a wire, and a wire does not come loose because the
+    /// pattern reconfigured the pad.
+    pin_driven: u64,
+    /// Bit per pin (0..63): the injected level, meaningful only where
+    /// `pin_driven` is set.
+    pin_level: u64,
 }
 
 /// Highest pin number `pin_pullup` can track. Above it `pinMode` is still a
 /// no-op and `digitalRead` still reads 0 — ESP32 tops out at GPIO 39, so the
 /// window covers every pin a real board exposes.
-const MAX_TRACKED_PIN: i32 = 63;
+pub const MAX_TRACKED_PIN: i32 = 63;
 
 /// Arduino/ESP32 `pinMode` pull-up bit — `INPUT_PULLUP` (5) is `INPUT` (1)
 /// with this set, so masking also honours a hand-built `INPUT | 4`.
@@ -833,6 +843,8 @@ impl Vm {
             post_palette_epoch: 0,
             events: VecDeque::new(),
             pin_pullup: 0,
+            pin_driven: 0,
+            pin_level: 0,
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             random_seed: Fx::ZERO,
@@ -872,6 +884,49 @@ impl Vm {
     /// allocation failure this returns None rather than panicking.
     pub fn array_mut(&mut self, prog: &Program, id: u32) -> Option<&mut [Value]> {
         self.arr_mut(prog, id).ok().map(|v| v.as_mut_slice())
+    }
+
+    /// Drive a digital input pin from OUTSIDE the pattern — the pin-injection
+    /// ABI (Gitea #177 item 2). `Some(true)`/`Some(false)` holds the pin HIGH
+    /// or LOW no matter what `pinMode` asked for; `None` releases it back to
+    /// its idle level (HIGH under a pull-up, LOW otherwise). Returns false for
+    /// a pin outside `0..=MAX_TRACKED_PIN`, where there is nowhere to store
+    /// the state — a silent no-op would read exactly like a stuck input.
+    ///
+    /// This is the injection surface a host uses to stand in for real GPIO
+    /// (which does not exist yet — #177 item 4): the playground, the port
+    /// review harness and the CLI mirror all drive buttons through it.
+    pub fn set_pin(&mut self, pin: i32, level: Option<bool>) -> bool {
+        if !(0..=MAX_TRACKED_PIN).contains(&pin) {
+            return false;
+        }
+        let bit = 1u64 << pin;
+        match level {
+            Some(true) => {
+                self.pin_driven |= bit;
+                self.pin_level |= bit;
+            }
+            Some(false) => {
+                self.pin_driven |= bit;
+                self.pin_level &= !bit;
+            }
+            None => {
+                self.pin_driven &= !bit;
+                self.pin_level &= !bit;
+            }
+        }
+        true
+    }
+
+    /// The level `digitalRead(pin)` reports: the injected level while a host
+    /// drives the pin, otherwise the `pinMode` idle level.
+    pub fn pin_read(&self, pin: i32) -> bool {
+        if !(0..=MAX_TRACKED_PIN).contains(&pin) {
+            return false;
+        }
+        let bit = 1u64 << pin;
+        let src = if self.pin_driven & bit != 0 { self.pin_level } else { self.pin_pullup };
+        src & bit != 0
     }
 
     /// Read view by id — arena ids come from the VM itself, so `id` is
@@ -2469,13 +2524,12 @@ impl Vm {
                 }
                 Ok(Value::default())
             }
-            // No wired signal to read, so a pin sits at whatever its
-            // configured bias holds it at: HIGH under a pull-up, LOW
-            // otherwise (plain INPUT, INPUT_PULLDOWN, outputs, unconfigured).
+            // An injected level wins (a host is standing in for the wire —
+            // `Vm::set_pin`); with nothing driving it, the pin sits at
+            // whatever its configured bias holds it at: HIGH under a pull-up,
+            // LOW otherwise (INPUT, INPUT_PULLDOWN, outputs, unconfigured).
             DigitalRead => {
-                let pin = n(0).to_int_trunc();
-                let high =
-                    (0..=MAX_TRACKED_PIN).contains(&pin) && self.pin_pullup & (1u64 << pin) != 0;
+                let high = self.pin_read(n(0).to_int_trunc());
                 num(if high { Fx::ONE } else { Fx::ZERO })
             }
             DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),

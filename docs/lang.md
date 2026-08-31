@@ -550,7 +550,12 @@ GPIO (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`,
 `digitalRead` reports the pin's *idle* level per the last `pinMode`, so
 an `INPUT_PULLUP` pin reads `HIGH` and everything else reads `LOW`. A
 button-to-ground pattern therefore idles "not pressed" instead of "held
-forever"; there is still no way to drive a pin from outside the pattern.
+forever". A host can also DRIVE a digital input from outside the pattern
+(`lx_set_pin` in the wasm ABI, `Engine::set_pin` natively, `POST
+/api/pins` on the CLI mirror, `pins` in `tools/verify/fixups.json`):
+levels are held until released, so a button pattern can be pressed
+deterministically without hardware. `analogRead`/`touchRead` still read
+0 unconditionally, and nothing drives a real pad yet.
 Clock (`clockYear` …
 `clockWeekday`) — needs wall time from the host; every host supplies it
 at engine construction too, so top-level reads see real time-of-day

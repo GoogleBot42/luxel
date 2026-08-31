@@ -50,9 +50,10 @@
 // read at REQUEST time and never written anywhere — see the clean-room rule in
 // CLAUDE.md. Per-slug fixups (tools/verify/fixups.json) are applied to the
 // original before it is served, exactly as snap.mjs and report.mjs apply them —
-// including the per-side `vars` pins, which the UI pushes into each side's
-// engine once after init (a client-driven original is black until it is
-// written to, which reads as a dead pattern).
+// including the per-side `vars`, `controls` and `pins` blocks, which the UI
+// pushes into each side's engine once after init (a client-driven original is
+// black until it is written to, and a button pattern sits at "never pressed"
+// until a pin is driven — both read as a dead pattern).
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,7 +61,13 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applySourceFixups, resolveRig, varsOverride } from "./fixups.mjs";
+import {
+  applySourceFixups,
+  resolveRig,
+  varsOverride,
+  controlsOverride,
+  pinsOverride,
+} from "./fixups.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../..");
@@ -110,12 +117,18 @@ if (!fs.existsSync(WASM)) {
 // A wasm built before the wall-clock ABI landed (#111) is missing exports the
 // UI calls unconditionally — the page dies with a TypeError instead of telling
 // anyone to rebuild. Refuse to start on a stale binary.
-if (!fs.readFileSync(WASM).includes("lx_set_default_wall_clock")) {
-  console.error(
-    `engine wasm at ${WASM} is STALE (predates the wall-clock ABI, missing lx_set_default_wall_clock)\n` +
-      `rebuild it: nix develop -c cargo build --release --target wasm32-unknown-unknown -p luxel-wasm`,
-  );
-  process.exit(1);
+// `lx_set_pin` is the same story one ABI later (#177): the UI drives it for
+// any slug with a `pins` fixup, and a wasm without it fails as a TypeError.
+{
+  const bin = fs.readFileSync(WASM);
+  const missing = ["lx_set_default_wall_clock", "lx_set_pin"].filter((e) => !bin.includes(e));
+  if (missing.length) {
+    console.error(
+      `engine wasm at ${WASM} is STALE (missing ${missing.join(", ")})\n` +
+        `rebuild it: nix develop -c cargo build --release --target wasm32-unknown-unknown -p luxel-wasm`,
+    );
+    process.exit(1);
+  }
 }
 
 const manifest = JSON.parse(fs.readFileSync(PAIRS, "utf8"));
@@ -204,10 +217,14 @@ function buildData() {
       epeFiles: pair.epeFiles ?? null,
       rig,
       fixups: fixups ?? null,
-      // Per-side exported-var pins (tools/verify/fixups.json): the UI pushes
-      // them into each engine after init, so a client-driven original renders
-      // what it renders under the judge harness instead of sitting dark.
+      // Per-side pins (tools/verify/fixups.json): the UI pushes them into
+      // each engine after init, so a client-driven original renders what it
+      // renders under the judge harness instead of sitting dark. `vars` is
+      // the exported-var surface, `controls` the UI dials, and `pins` the
+      // driven digital inputs (Gitea #177) that stand in for a real button.
       vars: varsOverride(pair.slug),
+      controlPins: controlsOverride(pair.slug),
+      pins: pinsOverride(pair.slug),
       verdict: readVerdict(pair.slug),
       origSource,
       origError,

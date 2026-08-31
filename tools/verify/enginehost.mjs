@@ -12,6 +12,7 @@
 //        eng.setWallClock(1756000000);
 //        if (eng.wantsSensors()) eng.setSensors(sensorSlots({ light: 0.5 }));
 //        eng.setVar("pixel", 30);                 // as an external client would
+//        eng.setPin(26, false);                   // hold a button-to-ground down
 //        const rgb = eng.frame(50);               // Uint8Array(pixelCount*3)
 //        eng.free();
 
@@ -182,6 +183,36 @@ export class Engine {
     } finally {
       s.free();
     }
+  }
+
+  /** Drive a digital input pin so `digitalRead(pin)` reports `level` instead
+   *  of the pin's idle level — the pin-injection ABI (Gitea #177 item 2),
+   *  the stand-in for GPIO the engine does not have yet. `level` is a
+   *  boolean, or null to RELEASE the pin back to its `pinMode` idle level
+   *  (HIGH under a pull-up, LOW otherwise).
+   *
+   *  Returns true when the level was stored; false for a pin outside the
+   *  tracked 0..63 window, which callers should surface — a typo'd pin
+   *  number otherwise looks exactly like an input stuck at idle. Injected
+   *  levels persist for the life of the engine (nothing re-pushes them per
+   *  frame), so a pattern sees a held button, not a one-frame pulse. */
+  setPin(pin, level) {
+    if (!Number.isInteger(pin)) {
+      throw new Error(`setPin: pin must be an integer, got ${pin}`);
+    }
+    if (typeof this.e.lx_set_pin !== "function") {
+      throw new Error(
+        "engine wasm predates the pin-injection ABI (no lx_set_pin) — rebuild it: " +
+          "nix develop -c cargo build --release --target wasm32-unknown-unknown -p luxel-wasm",
+      );
+    }
+    return this.e.lx_set_pin(this.h, pin, level === null ? -1 : level ? 1 : 0) === 1;
+  }
+
+  /** What `digitalRead(pin)` reports right now — injected level if driven,
+   *  otherwise the pin's `pinMode` idle level. */
+  pinRead(pin) {
+    return this.e.lx_pin_read(this.h, pin) === 1;
   }
 
   /** Row-major W×H grid map (rows implied by pixelCount/w). */

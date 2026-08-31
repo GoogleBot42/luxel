@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-08-30 — Pin injection: buttons you can press without a button
+
+Gitea #177 items 2 and 3. Item 1 (PR #187) made `digitalRead` report a pin's
+*idle* level, so an `INPUT_PULLUP` button-to-ground finally reads "not
+pressed" instead of "held forever". That fixed the wrong answer but left no
+way to give the right one: nothing outside a pattern could drive a pin, so
+every button pattern in the corpus rendered exactly one state and its two
+sides were incomparable by construction. Jeremy's review note on
+`example-button-w-debounce` says it plainly — *"I don't know how to test this
+one. I don't have a button to test with."*
+
+**The ABI.** A driven pin is a **level, not an event**, so it is modelled on
+`set_sensors` (latest-wins state) rather than `push_event` (a FIFO):
+
+```rust
+Vm::set_pin(pin: i32, level: Option<bool>) -> bool   // None = release to idle
+Vm::pin_read(pin: i32) -> bool                       // what digitalRead reports
+```
+
+mirrored by `Engine::set_pin`/`pin_read` and exported as
+`lx_set_pin(h, pin, level) -> i32` / `lx_pin_read(h, pin) -> i32`, where
+`level` is `0` LOW, `>0` HIGH, `<0` release. Two more `u64` bitmasks beside
+the existing `pin_pullup` — `pin_driven` and `pin_level` — so the whole
+0..63 window costs 16 bytes and `digitalRead` stays a mask test. Three
+deliberate choices, each locked by a test:
+
+- an injected level **beats the pin's own bias**, because the host is
+  standing in for a wire;
+- a later `pinMode` does **not** knock the injection loose, for the same
+  reason — a wire does not come off because the pattern reconfigured the pad;
+- an out-of-window pin is **rejected** (returns false / 0) rather than
+  silently aliasing pin 0, because a typo'd pin number and an input stuck at
+  idle look identical in a render.
+
+The level is held for the life of the engine — a pattern polling the pin
+every frame sees a button held down, not a one-frame blip.
+
+**Reach.** Bindings in `web/src/lib/luxel.ts` (`setPin`/`pinRead`),
+`tools/verify/enginehost.mjs` and its browser twin
+`tools/verify/review/engine.js`; the CLI mirror grows `POST /api/pins` (text
+body, one `<pin> <0|1|x>` per line — a hand- and script-driven surface, not a
+per-frame stream, so no binary frame) drained between frames exactly like
+`/api/events`. `review.mjs`'s stale-wasm guard now also refuses a binary
+without `lx_set_pin`, and `enginehost.mjs` says "rebuild the wasm" instead of
+throwing a bare TypeError.
+
+**Item 3: per-side fixups.** `tools/verify/fixups.json` grows `controls` and
+`pins` blocks alongside `vars`, all three per side, because the interesting
+pairs are exactly the ones whose two sides expose the *same* input through
+*different* surfaces. `snap.mjs` gains `--pins-orig/--pins-port` and renames
+`--no-vars` to `--undriven` (old spelling still works) now that it drops all
+three kinds of pin. Everything threads through `report.mjs`, `review.mjs` and
+the review UI, and lands in `meta.json` as `pinsApplied` +
+`provenance.fixups`.
+
+The payoff, on the pattern that prompted the issue:
+
+```json
+"example-button-w-debounce": {
+  "pins":     { "orig": { "4": 0 } },
+  "controls": { "port": { "toggleButton": 1 } }
+}
+```
+
+The original polls a real switch on pin 4; the clean-room port offers a UI
+toggle. Pressing both at t=0 makes the two sides **byte-identical GIFs** out
+of `report.mjs` — both debounce one press and settle on the same solid mode-1
+green — where undriven they sat at mode 0 forever and the debouncer, the
+entire point of the pattern, was never exercised.
+
+**Verified:** `cargo test --workspace` green; three new engine tests
+(`set_pin_drives_digital_read`, `pin_injection_and_pin_mode_compose`,
+`netin::pin_lines_parse`); `tools/wasm-smoke.mjs` drives the raw FFI through
+idle → driven → held → released; `tools/serve-e2e.mjs` gains six checks
+driving `/api/pins` into a live pattern's pixels; `snap.mjs` runs show
+driven (motion 3, red→green) vs `--undriven` (motion 0) and CLI-beats-manifest
+per pin; the review UI driven in real chromium shows both canvases at
+`rgb(0,255,0)`.
+
+Still open on #177: item 4, real firmware GPIO. Deferred and filed: a
+playground UI surface for driving pins (#205) and injection for
+`analogRead`/`touchRead` (#206).
+
 ## 2026-08-30 — `hosted-ui`: a build that ships no web app at all
 
 Gitea #11 asked for devices with less space not to store the web UI. The

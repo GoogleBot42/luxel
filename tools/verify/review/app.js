@@ -138,7 +138,7 @@ function makePainter(rig) {
 // ---- one rendered side ------------------------------------------------------
 
 class Side {
-  /** @param opts {label, source, loadError, rig, vars, big, onReady} */
+  /** @param opts {label, source, loadError, rig, vars, controlPins, pins, big, onReady} */
   constructor(opts) {
     this.o = opts;
     this.rig = opts.rig;
@@ -147,7 +147,10 @@ class Side {
     this.acc = 0;
     this.frameIndex = 0;
     this.wants = false;
-    this.values = {}; // control name → values[], survives a reset
+    // Control name → values[], survives a reset. Seeded from the slug's
+    // per-side `controls` fixup (tools/verify/fixups.json) so the control
+    // panel opens showing the value the sweep uses, not the pattern default.
+    this.values = { ...(opts.controlPins ?? {}) };
     this.el = this.build();
   }
 
@@ -219,6 +222,12 @@ class Side {
     // home-automation bridge) renders nothing until something writes its var.
     // After the controls, so a control handler cannot clobber a pinned var.
     for (const [name, value] of Object.entries(this.o.vars ?? {})) this.engine.setVar(name, value);
+    // Driven digital pins (Gitea #177): held for the life of the engine, so a
+    // button pattern shows its PRESSED state instead of idling at "never
+    // pressed" forever. Same surface and order as snap.mjs.
+    for (const [pin, level] of Object.entries(this.o.pins ?? {})) {
+      this.engine.setPin(Number(pin), level);
+    }
     this.o.onReady?.(this);
   }
 
@@ -452,6 +461,8 @@ function activate(card) {
       loadError: pair.origError,
       rig: pair.rig,
       vars: pair.vars?.orig,
+      controlPins: pair.controlPins?.orig,
+      pins: pair.pins?.orig,
     }),
     port: new Side({
       label: "Port",
@@ -459,6 +470,8 @@ function activate(card) {
       loadError: pair.portError,
       rig: pair.rig,
       vars: pair.vars?.port,
+      controlPins: pair.controlPins?.port,
+      pins: pair.pins?.port,
     }),
   };
   card.sidesEl.append(card.sides.orig.el, card.sides.port.el);
@@ -757,6 +770,8 @@ function openModal(pair) {
       loadError: err,
       rig: pair.rig,
       vars: pair.vars?.[key],
+      controlPins: pair.controlPins?.[key],
+      pins: pair.pins?.[key],
       big: true,
       onReady: () => {
         const built = controlPanel(side, source);

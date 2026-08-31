@@ -1,4 +1,9 @@
 {
+  "example-button-w-debounce": {
+    "pins": { "orig": { "4": 0 } },
+    "controls": { "port": { "toggleButton": 1 } },
+    "note": "Gitea #177 item 3. The two sides read the SAME button through different surfaces: the original polls a real switch with digitalRead(4) under INPUT_PULLUP, while the clean-room port offers a UI toggle because the engine has no GPIO. Undriven, both sides sit at mode 0 forever and the debouncer — the entire point of the pattern — is never exercised. Holding the original's pin LOW and the port's toggle ON presses both buttons at t=0, so both should debounce one press and settle on the same solid mode-1 hue."
+  },
   "music-sequencer-for-v2": {
     "stripLinesMatching": ["REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING"],
     "note": "Author-planted tripwire: the shipped .epe contains a deliberately invalid line the user is instructed to delete before running. Without stripping it the ORIGINAL fails to compile on every rig (`unknown identifier REMOVE_THIS_INVALID_LINE_IF_YOU_UNDERSTAND_THIS_WARNING`), so no side-by-side comparison is possible. See tools/verify/results/music-sequencer-for-v2.json."

@@ -109,6 +109,8 @@ interface Exports {
   lx_wants_sensors(h: number): number;
   lx_set_sensors(h: number, ptr: number, len: number): void;
   lx_push_event(h: number, t: number, x: number, y: number, v: number): void;
+  lx_set_pin(h: number, pin: number, level: number): number;
+  lx_pin_read(h: number, pin: number): number;
   lx_pixels(h: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
@@ -332,6 +334,20 @@ export class Engine {
   pushEvent(type: number, x: number, y: number, value = 1): void {
     const raw = (v: number) => Math.round(v * RAW) | 0;
     this.e.lx_push_event(this.h, raw(type), raw(x), raw(y), raw(value));
+  }
+
+  /** Drive a digital input pin so `digitalRead(pin)` reports `level` instead
+   *  of the pin's idle level — the stand-in for real GPIO (Gitea #177).
+   *  `level: null` releases the pin back to idle (HIGH under a pull-up).
+   *  Returns false when the pin is outside the tracked window (0..63). */
+  setPin(pin: number, level: boolean | null): boolean {
+    return this.e.lx_set_pin(this.h, pin | 0, level === null ? -1 : level ? 1 : 0) === 1;
+  }
+
+  /** What `digitalRead(pin)` reports right now — injected level if driven,
+   *  otherwise the pin's `pinMode` idle level. */
+  pinRead(pin: number): boolean {
+    return this.e.lx_pin_read(this.h, pin | 0) === 1;
   }
 
   // ---- map mode (this engine emits coordinates, not colors) ----

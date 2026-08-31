@@ -678,6 +678,28 @@ impl Engine {
         q.push_back(ev);
     }
 
+    /// Drive a digital input pin from outside the pattern, so `digitalRead`
+    /// reports what a host says the wire is doing instead of the pin's idle
+    /// level (Gitea #177 item 2). `Some(true)`/`Some(false)` = HIGH/LOW,
+    /// `None` releases the pin back to its `pinMode` idle level.
+    ///
+    /// Returns false for a pin outside `0..=`[`crate::vm::MAX_TRACKED_PIN`],
+    /// which has nowhere to store the state — callers surface that rather
+    /// than letting a typo'd pin look like a stuck input.
+    ///
+    /// Injected levels live on the VM, so they last until the pin is released
+    /// or the pattern is recompiled (a pattern switch rebuilds the VM and
+    /// clears them, exactly like the event queue).
+    pub fn set_pin(&mut self, pin: i32, level: Option<bool>) -> bool {
+        self.vm.set_pin(pin, level)
+    }
+
+    /// The level `digitalRead(pin)` currently reports — injected level when
+    /// the pin is driven, otherwise its `pinMode` idle level.
+    pub fn pin_read(&self, pin: i32) -> bool {
+        self.vm.pin_read(pin)
+    }
+
     /// Read an exported variable.
     pub fn var(&self, name: &str) -> Option<Value> {
         let i = self.prog.global_index(name)?;

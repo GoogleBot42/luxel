@@ -80,7 +80,34 @@ const rgb3 = [...mem().slice(px3, px3 + 12)];
 // 254, not 255 — same golden as crates/luxel-core/tests/semantics.rs::map_and_introspection
 assert.deepStrictEqual(rgb3, [0, 0, 0, 254, 0, 0, 0, 254, 0, 254, 254, 0]);
 
+// pin injection through the FFI (Gitea #177): the pattern polls a pulled-up
+// input every frame, so the strip is dark at idle and lit while the host
+// drives the pin LOW. Mirrors
+// crates/luxel-core/tests/semantics.rs::set_pin_drives_digital_read.
+const src4 = putStr(
+  "pinMode(4, INPUT_PULLUP)\nexport function render(index) { hsv(0, 0, digitalRead(4) == LOW) }",
+);
+const h4 = e.lx_new(src4.ptr, src4.len, 1, 1);
+src4.free();
+assert.ok(h4 >= 0, response());
+const pin = () => {
+  const at = e.lx_frame(h4, 0);
+  return [...mem().slice(at, at + 3)];
+};
+assert.deepStrictEqual(pin(), [0, 0, 0], "pulled-up pin idles HIGH: not pressed");
+assert.strictEqual(e.lx_pin_read(h4, 4), 1, "idle level readable");
+assert.strictEqual(e.lx_set_pin(h4, 4, 0), 1); // drive LOW
+assert.strictEqual(e.lx_pin_read(h4, 4), 0);
+assert.deepStrictEqual(pin(), [255, 255, 255], "driven LOW: pressed, and HELD");
+assert.deepStrictEqual(pin(), [255, 255, 255], "still held on the next frame");
+assert.strictEqual(e.lx_set_pin(h4, 4, -1), 1); // release
+assert.deepStrictEqual(pin(), [0, 0, 0], "released: back to the idle level");
+// out-of-window pins are rejected, not silently aliased onto a tracked one
+assert.strictEqual(e.lx_set_pin(h4, 64, 0), 0);
+assert.strictEqual(e.lx_set_pin(h4, -1, 0), 0);
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);
+e.lx_free(h4);
 console.log("wasm smoke: all golden assertions pass (native ↔ wasm bit-identical)");
