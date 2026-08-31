@@ -25,6 +25,19 @@ paths:
   constant, and give the variable that value at top level — then verify the
   untouched render is byte-identical (snap.mjs before/after, compare the
   port.png md5s). "Add controls" must not change the approved look.
+  That md5 pair is only half the check: **snap.mjs never seeds `default=`**
+  (only explicit `--controls-*`), so it is inert to any directive edit and
+  passes trivially. The check that actually tests agreement is a run driven
+  at EVERY declared default — `--controls-port "a=<default>;b=<default>;…"`
+  — whose port.png md5 must equal the undriven one (Gitea #188).
+- Prefer making the agreement structural: where the constant is a real
+  quantity (px, seconds, Hz, a multiplier), give the dial that unit so
+  `default=` IS the constant and the handler just clamps it. Where it is an
+  opaque coefficient and a 0..1 dial has to stay, center the mapping on the
+  constant — `C + (v - default) * k`, not the algebraically equal
+  `(C - default*k) + v*k`. In 16.16 the second form misses the literal by an
+  LSB (`0.97 - 0.5*0.14` ≠ `0.9`) and that is enough to move pixels; the
+  first is exact because the offset term is zero at the default.
 - NEVER add a pattern-level brightness/master-dim control — Luxel has a
   global brightness setting (Jeremy removes these on sight).
 - Fix-pass verification gotchas: snap's meta.json nests per-side data under

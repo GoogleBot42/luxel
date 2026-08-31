@@ -109,6 +109,14 @@ rolls back silently to the same version string.
   `input`, the `on:change` handler needs `change`.) To screenshot the panel you must
   first leave the editor — click the "← Device Patterns" button, then
   `[data-role="tab-settings"]`.
+- An ad-hoc script that reloads the playground in a loop finding no tiles, or a
+  `.tile` handle throwing "Node is either not clickable or not an Element" — a
+  reload **restores the last-opened pattern into the editor**, so the gallery
+  panel is hidden. Typing into `[data-role="gallery-search"]` then silently
+  no-ops (no error, no filtering) and every tile reports `!el.hidden` while
+  `el.offsetParent === null`. Click `[data-role="editor-back"]` first if it
+  exists, and gate tile picks on `offsetParent !== null`, not on `hidden`
+  (the corpus-tab tiles live in a hidden panel and are unhidden too).
 - Forgetting `npm run wasm`/`gen-gallery.mjs` reran after a `library/` or corpus change —
   `e2e.mjs`/`device-e2e.mjs` serve whatever `web/dist` currently holds, which is stale
   until you rebuild.
