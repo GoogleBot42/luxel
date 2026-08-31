@@ -38,9 +38,11 @@ function reshuffle() {
 
 reshuffle()
 
-//# min=0 max=1 step=0.05 default=0.25
+// Whole balls, in balls. The directive makes the UI send real units, so the
+// handler takes v as the count itself (no 0..1 rescaling).
+//# min=1 max=20 step=1 default=5
 export function sliderBallCount(v) {
-  numBalls = 1 + floor(v * (MAXBALLS - 1) + 0.5)
+  numBalls = clamp(floor(v), 1, MAXBALLS)
 }
 
 //# min=0 max=1 step=0.01 default=0.4

@@ -4,8 +4,11 @@
 
 // N full-span segments through the center, evenly fanned over a half-turn,
 // rotating together. Each arm gets its own hue from an evenly spaced,
-// drifting rainbow; arms fade linearly to black at their edges. Arm width
-// optionally "breathes" on a slow triangle wave.
+// drifting rainbow; arms fade linearly to black at their edges.
+//
+// Every control carries a //# directive, so the UI sends REAL units (arms,
+// panel widths, revolutions per second) and the handlers use them directly
+// rather than rescaling a 0..1 knob.
 
 var MAX_LINES = 24
 var lineCos = array(MAX_LINES)
@@ -14,57 +17,40 @@ var lineHue = array(MAX_LINES)
 
 var HALF_LEN = 0.75   // half segment length: spans the whole unit square
 
+// Whole arms, in arms.
 var numLines = 6
-//# min=0 max=1 step=0.01 default=0.22
+//# min=1 max=24 step=1 default=6
 export function sliderNumberOfLines(v) {
-  numLines = floor(1 + v * (MAX_LINES - 1))
+  numLines = clamp(floor(v), 1, MAX_LINES)
 }
 
-// Width in unit-square terms: hairline up to matrix-flooding.
-// Max per-arm width shrinks as more arms are added.
-var widthSetting = 0.5
-//# min=0 max=1 step=0.01 default=0.5
+// Arm thickness as a fraction of the panel width: 0.02 is roughly a
+// one-pixel line on a 64-wide matrix, 0.5 floods it. halfWidth is the
+// half-thickness the renderer compares distances against.
+var halfWidth = 0.01
+//# min=0.01 max=0.5 step=0.005 default=0.02
 export function sliderLineWidth(v) {
-  widthSetting = v
+  halfWidth = max(0.002, v / 2)
 }
 
-var animateWidth = 1
-//# min=0 max=1 step=1 default=1
-export function sliderAnimateWidth(v) {
-  animateWidth = v > 0.03   // on except at the very bottom of travel
-}
-
-// Rotation: inverted + quadratic-eased, ~10x range, never stops.
-// time() interval 0.03 => one revolution ~2 s.
-var rotInterval = 0.032
-//# min=0 max=1 step=0.01 default=0.7
+// Rotation in revolutions per second (time() period = interval * 65.536 s),
+// so perceived speed tracks the slider linearly.
+var rotInterval = 1 / (65.536 * 0.48)
+//# min=0.02 max=3 step=0.01 default=0.48
 export function sliderRotationSpeed(v) {
-  rotInterval = 0.06 - 0.054 * v * v   // 0.06 (slow) .. 0.006 (fast)
+  rotInterval = 1 / (65.536 * max(v, 0.005))
 }
 
-// Hue drift: same inverted/eased shape, sub-second up to tens of seconds.
-var hueInterval = 0.2
-//# min=0 max=1 step=0.01 default=0.6
+// Hue drift in full colour cycles per second, same linear treatment.
+var hueInterval = 1 / (65.536 * 0.08)
+//# min=0.01 max=1 step=0.01 default=0.08
 export function sliderColorSpeed(v) {
-  hueInterval = 0.35 - 0.34 * v * v    // ~23 s .. ~0.65 s per hue cycle
+  hueInterval = 1 / (65.536 * max(v, 0.005))
 }
-
-function widthFromSetting(v) {
-  return 0.003 + v * v * (0.9 / numLines)
-}
-
-var halfWidth = 0.05
 
 export function beforeRender(delta) {
   var angle = time(rotInterval) * PI2   // continuous rotation
   var hueBase = time(hueInterval)       // shared hue drift
-
-  if (animateWidth) {
-    // triangle wave, ~one minute per thick-thin-thick cycle
-    halfWidth = widthFromSetting(triangle(time(0.9)))
-  } else {
-    halfWidth = widthFromSetting(widthSetting)
-  }
 
   for (var i = 0; i < numLines; i++) {
     // Arms spread over a half-turn (each spans the display through center).
