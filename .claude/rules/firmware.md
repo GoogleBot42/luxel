@@ -68,3 +68,17 @@ paths:
   preflight response with CORS headers in `firmware/src/server.rs`'s
   dispatcher — GET/simple-POST traffic never exercises this path, so a
   missing preflight handler only shows up as a browser-side CORS failure.
+- Every HTTP response in `firmware/src/server.rs` goes out as the ONE
+  `Reply` type (status + `heapless::Vec<(&'static str, HVal)>` + `ApiBody`).
+  Never return a picoserve response TUPLE (`(CORS, JSON, body)`,
+  `(StatusCode, [hdr; N], "…")`) from a new handler, never add a second
+  header-value type beside `HVal`, and never hand a header a `V: Display`
+  that isn't `HVal`: picoserve monomorphizes `IntoResponse::write_to` per
+  tuple shape and `ForEachHeader::call` per value type, so each one is a
+  fresh multi-KB copy of the whole response path. Collapsing 13 shapes into
+  `Reply` was worth −24 KB of image (#167, docs/size-report.md); one new
+  tuple silently gives a chunk of it back. Same reason the dispatcher stays
+  a hand-written flat-match `PathRouterService`: picoserve's `MethodRouter`
+  wraps the writer in a private `IgnoreBody<W>` for HEAD — a second writer
+  type that duplicates every GET instantiation. A new body kind is a new
+  `ApiBody` variant; a runtime header value is `HVal::Owned`.

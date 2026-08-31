@@ -133,10 +133,10 @@ buffer changes; stack-check clean.
 The three classic-ESP32 variants differ only by a few hundred bytes (same
 chip feature set; only board.rs strings and the wiring lines change), so
 checking one of them per release is enough — but the *chips* are not
-interchangeable for size purposes: the C6 is ~90 KB fatter than the C3 for
+interchangeable for size purposes: the C6 is ~92 KB fatter than the C3 for
 identical source, and at
-**47,104 B / 4.49 %** it owns the tightest margin in the fleet by a wide
-gap (the next tightest, `board-pixelblaze-v3`, has 92,384 B / 8.81 %). It
+**67,792 B / 6.46 %** it owns the tightest margin in the fleet by a wide
+gap (the next tightest, `board-pixelblaze-v3`, has 114,064 B / 10.87 %). It
 is the board that will hit the 1 MiB ceiling first; check
 `board-c6-devkit` on any release that grows the image. Measure with:
 
@@ -152,6 +152,47 @@ review-pass follow-up): `board-c6-devkit` 1,001,472 → **1,005,488 B**
 after the #168 fmt diet, still above the 3 % CI floor but inside the 6 %
 warn band; the next feature that grows the VM should re-measure the C6
 first.
+
+2026-08-30, picoserve response collapse (Gitea #167): **−23.0 to −24.4 KB
+on every board** — the largest single reduction since the opt-level switch,
+and the one that takes the C6 back out of CI's warn band. `server.rs`'s
+thirteen response tuple shapes became one concrete `Reply` type, so
+picoserve stops monomorphizing `IntoResponse::write_to` (22 instantiations
+→ 1), its header machinery (37 symbols → 4) and a `Display` shim per
+header-value type. Whole-fleet re-measure, **credless flake builds**
+(`nix build .#luxel-fw-<board>` → `luxel-fw-ota.bin`; ~1.5 KB under a
+devshell build with creds, so these are not comparable to the tables
+above — both columns here are measured the same way):
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 913,024 | 888,688 | −24,336 | 159,888 B (15.24 %) |
+| `board-pixelblaze-v3` | 957,520 | 934,512 | −23,008 | 114,064 B (10.87 %) |
+| `board-athom-music` | 957,296 | 934,288 | −23,008 | 114,288 B (10.89 %) |
+| `board-esp32-generic` | 957,424 | 933,920 | −23,504 | 114,656 B (10.93 %) |
+| `board-s3-devkit` | 898,592 | 874,576 | −24,016 | 174,000 B (16.59 %) |
+| `board-s3-devkit` + `hub75` | 893,520 | 870,480 | −23,040 | 178,096 B (16.98 %) |
+| `board-seengreat-hub75` | 893,488 | 870,432 | −23,056 | 178,144 B (16.98 %) |
+| `board-c6-devkit` | 1,005,168 | 980,784 | −24,384 | **67,792 B (6.46 %)** |
+
+Both columns are an A/B with **only `firmware/src/server.rs` differing** — the
+right way to measure, because the image carries a **~±0.7 KB noise floor** that
+has nothing to do with your code: the flake source hash feeds rustc's
+`.Lanon.<hash>` local-symbol naming, and renaming those reshuffles
+`.L_MergedGlobals` packing. Editing only this documentation moved the same
+firmware ~600 B (twice, in both directions, while writing these entries). Hold
+everything else constant when you diet, and never read a sub-1 KB delta as
+real. See docs/size-report.md.
+
+All eight pass `tools/image-check.sh` (markers + margin). The cost is RAM,
+not flash: the single `write_to` future is the union of every body type, so
+`.stack` on `board-pixelblaze-v3` went 29,124 → **27,828 B** (3,828 B above
+the 24 KB floor) and the flat dispatcher's poll frame 2,128 → **4,928 B**
+against a 12,288 B budget. That frame is the one to watch when adding
+routes — it is why `server.rs` must keep its hand-written flat-match
+`PathRouterService` rather than picoserve's `MethodRouter` (whose HEAD arm
+introduces a second writer type and would undo the whole collapse).
+Details and symbol tables: docs/size-report.md.
 
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
