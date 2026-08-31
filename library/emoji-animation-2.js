@@ -25,6 +25,7 @@ var BGFLIP = 900              // ms between expression flips
 
 var blinking = 0
 var blinkTimer = 0
+var blinkBase = 1000          // ms; each wait is blinkBase + random(blinkBase)
 var blinkInterval = 1500
 var blinkDur = 500
 var eyeHeight = 0.13
@@ -45,9 +46,25 @@ export function sliderIrisHue(v) { irisHue = v }
 //# min=0.2 max=1 step=0.02 default=0.26
 export function sliderEyeOpen(v) { maxEyeHeight = v * 0.5 }
 
+// Ellipse width as a fraction of the panel (both eyes).
+//# min=0.12 max=0.48 step=0.01 default=0.36
+export function sliderEyeWidth(v) { maxEyeWidth = clamp(v, 0.06, 0.48) }
+
+// Iris disc radius as a fraction of the panel.
+//# min=0.02 max=0.16 step=0.005 default=0.085
+export function sliderIrisSize(v) { irisRadius = clamp(v, 0.01, 0.2) }
+
+// Base seconds between blinks; each actual wait is a random 1x..2x of this.
+//# min=0.3 max=8 step=0.1 default=1
+export function sliderBlinkInterval(v) { blinkBase = max(200, v * 1000) }
+
+// Seconds each background expression is held before flipping to the next.
+//# min=0.15 max=5 step=0.05 default=0.9
+export function sliderExpressionHold(v) { BGFLIP = max(100, v * 1000) }
+
 function initState() {
   eyeHeight = maxEyeHeight
-  blinkInterval = 1000 + random(1000)
+  blinkInterval = blinkBase + random(blinkBase)
   glanceInterval = 300 + random(700)
   inited = 1
 }
@@ -65,7 +82,7 @@ export function beforeRender(delta) {
     var p = blinkTimer / blinkDur
     if (p >= 1) {
       blinking = 0; blinkTimer = 0; eyeHeight = maxEyeHeight
-      blinkInterval = 1000 + random(1000)
+      blinkInterval = blinkBase + random(blinkBase)
     } else {
       eyeHeight = max(0.02, maxEyeHeight * (1 - 0.92 * sin(p * PI)))
     }

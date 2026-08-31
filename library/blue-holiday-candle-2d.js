@@ -19,7 +19,15 @@ var starRate = array(NSTARS)   // life units per ms (some twinkle fast, some slo
 
 var tsec = 0        // running seconds clock (wrapped hourly)
 var sway = 0        // multi-octave side-to-side sway, centered on zero
+var wobble = 0      // faster, smaller secondary shudder
 var flickPhase = 0  // fast internal-flicker phase
+
+// How far the flame tip leans, in panel widths, at full sway. 0 freezes it.
+var swayAmt = 0.22
+//# min=0 max=0.5 step=0.01 default=0.22
+export function sliderSway(v) {
+  swayAmt = clamp(v, 0, 0.5)
+}
 
 function respawnStar(k) {
   starIdx[k] = floor(random(pixelCount))
@@ -37,9 +45,16 @@ export function beforeRender(delta) {
   tsec += delta / 1000
   if (tsec > 3600) tsec -= 3600
 
-  // three sine octaves: each successive one twice as fast, half the weight
-  sway = (sin(tsec * PI2 / 7) + 0.5 * sin(tsec * PI2 / 3.5)
-          + 0.25 * sin(tsec * PI2 / 1.75)) / 1.75
+  // three sine octaves: each successive one twice as fast, half the weight.
+  // Periods shortened from 7/3.5/1.75 s to 2.6/1.3/0.65 s — at the old rate a
+  // whole breath took longer than most people watch the panel, so the flame
+  // read as frozen.
+  sway = (sin(tsec * PI2 / 2.6) + 0.5 * sin(tsec * PI2 / 1.3)
+          + 0.25 * sin(tsec * PI2 / 0.65)) / 1.75
+
+  // a faster, shallower shudder riding on top (incoherent period, so the
+  // combination never repeats on a short cycle)
+  wobble = sin(tsec * PI2 / 0.37) * 0.3 + sin(tsec * PI2 / 0.23) * 0.2
 
   flickPhase = tsec * 3.5   // a few times faster than real time
 
@@ -61,11 +76,16 @@ export function render2D(index, x, y) {
     body = (1 - abs(cx) / 0.4) * 0.6
   }
 
-  // aspect correction — flame reads tall and narrow
-  var fx = cx * 1.8
-  // sway distortion: phase depends on height times the sway signal,
-  // amplitude grows with height so the tip whips more than the root
-  fx += sin(cy * 4 + sway * 3) * (cy + 0.5) * 0.12 * sway
+  // Sway: shift the flame sideways before the aspect correction, by an
+  // amount that grows with height, so the root stays pinned on the wick and
+  // the tip whips. The old version multiplied a sine BY the sway signal as
+  // well, which squared a sub-pixel amplitude into nothing — the flame
+  // simply never moved.
+  var hFrac = clamp(cy + 0.35, 0, 1)          // 0 at the wick, ~1 at the tip
+  var lean = (sway + wobble * 0.35) * swayAmt * hFrac
+  var fx = (cx - lean) * 1.8
+  // curl: the column bows rather than sliding rigidly
+  fx += sin(cy * 5 + tsec * 1.9) * 0.35 * swayAmt * hFrac
 
   // inner core: soft radial blob stretched upward, over a narrow falloff band
   var d = sqrt(fx * fx + cy * cy)
