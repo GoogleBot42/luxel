@@ -301,9 +301,11 @@ while a playlist churns flash and after the in-page burst.
 
 All five items are now verified on hardware (items 1/3/5 on 2026-07-19
 during the v0.1.30 session, items 2/4 on the Athom rig 2026-08-30 — see
-Gitea #155 for the full transcript). The only residue is a purely visual
-one: nobody has *watched* the strip during a protocol switch under a live
-stream/crossfade to confirm the expected absence of tearing.
+Gitea #155 for the full transcript; CLOSED 2026-08-30). Mid-switch
+tearing was deliberately dropped from the acceptance bar: a protocol
+change is a setup action, so only steady-state output afterwards has to
+be tear-free — and post-switch rendering at full expected rate was
+machine-verified (Jeremy's call, 2026-08-30).
 
 1. ✅ **SPI-first commit ordering** (verified 2026-07-19): `Msg::Protocol`
    applies the SPI clock *before* committing the protocol (atomic + encode
@@ -326,9 +328,9 @@ stream/crossfade to confirm the expected absence of tearing.
    2026-08-30, Athom, v0.1.39): 6 protocol switches under a live ~60 fps
    DDP stream (`live:"ddp"` throughout, stream never dropped) and 6 more
    mid-crossfade (4 s blend, playlist advancing) — all clean, no vmerr, no
-   reboot, no slot rollback. *Visual* no-tearing confirmation is the one
-   thing still outstanding (frames go out whole over blocking SPI, so none
-   is expected).
+   reboot, no slot rollback; post-switch rendering resumed at the full
+   expected rate every time. Mid-switch visuals are explicitly out of
+   scope (setup action — Jeremy, 2026-08-30).
 5. ✅ **Single-pattern reboot resume** (verified 2026-07-19): pattern +
    slider values survive a power-cycle; playlist-wins and ad-hoc-push
    rules behaved as specified.
