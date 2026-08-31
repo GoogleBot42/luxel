@@ -1,6 +1,12 @@
 # Continuous Cellular Automata
 kind: 2D (requires a mapped matrix; concept credited to Wolfram's continuous-valued cellular automata)
 sensors: no
+status: DIVERGED (2026-08-31) — per Jeremy's review the port was reworked into a
+self-evolving live waterfall (ring topology, drifting rule offset, convergence
+watchdog). The three-parent averaging rule, value→hue mapping, hue drift and
+dark-favouring brightness curve below still apply; the hidden oversized grid,
+row re-derivation, EMA smoothing, Pan/Depth viewport, difference mode and seed
+toggle no longer describe the shipped pattern.
 
 ## What it looks like
 An ever-evolving field of nested triangular / fractal-like structures, the signature look of Wolfram-style automata rendered in continuous grayscale-turned-color. Bright filaments and dark voids form branching, self-similar shapes that shimmer and slowly morph as the automaton continuously re-derives itself. Brightness encodes cell value; hue is tied to cell value as well and additionally drifts slowly around part of the color wheel over roughly half a minute, so the whole tapestry gradually changes color family. Updates are deliberately smoothed, so instead of hard row-by-row stepping you see a gentle continuous melt.

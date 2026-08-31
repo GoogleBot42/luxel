@@ -30,15 +30,22 @@ export function hsvPickerPrimaryColor(h, s, v) {
   hue = h        // only the hue is used; saturation forced full
 }
 
-var baseLife = 3000
-//# min=0 max=1 step=0.01 default=0.4
+var BASE_LIFE = 3000   // ms: nominal fairy lifetime at speed 1
+
+// Twinkle rate multiplier — HIGHER IS FASTER. Applied to the per-frame life
+// decrement rather than to the rolled lifetimes, so a slider move takes
+// effect on the whole field immediately instead of trickling in over the
+// next respawn cycle (which is why the old 0..1 slider looked inert).
+// 1 = the nominal ~3 s fade, 6 = a frantic 0.5 s sparkle, 0.2 = ~15 s.
+var speed = 1
+//# min=0.2 max=6 step=0.1 default=1
 export function sliderSpeed(v) {
-  baseLife = 1300 + v * 5200   // ~1.3 s .. ~6.5 s; low = busier
+  speed = clamp(v, 0.05, 20)
 }
 
 function rollLifetime(i) {
-  if (i < nFairies) return baseLife * (0.8 + random(0.4))  // base ±1/5
-  return baseLife * (0.2 + random(0.2))                    // 1/5..2/5 of base
+  if (i < nFairies) return BASE_LIFE * (0.8 + random(0.4))  // base ±1/5
+  return BASE_LIFE * (0.2 + random(0.2))                    // 1/5..2/5 of base
 }
 
 // initialize with staggered ages so the field doesn't pulse in unison
@@ -52,8 +59,8 @@ for (ii = 0; ii < total; ii++) {
 export function beforeRender(delta) {
   var i = 0
   for (i = 0; i < total; i++) {
-    // life hits zero after exactly its lifetime, frame-rate independently
-    life[i] -= delta / lifetime[i]
+    // life hits zero after lifetime/speed ms, frame-rate independently
+    life[i] -= delta * speed / lifetime[i]
     if (life[i] <= 0) {
       pos[i] = floor(random(pixelCount))
       life[i] = 1

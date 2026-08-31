@@ -1,13 +1,6 @@
 {
   "pairs": [
     {
-      "slug": "1-usflag-blink",
-      "libFile": "library/1-usflag-blink.js",
-      "epeFile": "corpus/S2GRkFEY8WdqeH5kd.epe",
-      "epeName": "1-USFLAG_BLINK",
-      "rig": "strip"
-    },
-    {
       "slug": "1-white-fade",
       "libFile": "library/1-white-fade.js",
       "epeFile": "corpus/L8gw7T2xnNrELb3m5.epe",
@@ -92,25 +85,11 @@
       "rig": "strip"
     },
     {
-      "slug": "3-violet-fade",
-      "libFile": "library/3-violet-fade.js",
-      "epeFile": "corpus/u9eAo7YHQ4iYqZhQH.epe",
-      "epeName": "3 Violet Fade",
-      "rig": "strip"
-    },
-    {
       "slug": "3d-rotation-spotlights",
       "libFile": "library/3d-rotation-spotlights.js",
       "epeFile": "corpus/zHpFFNks32veypm69.epe",
       "epeName": "3D Rotation / Spotlights",
       "rig": "cloud"
-    },
-    {
-      "slug": "4-blue-fade",
-      "libFile": "library/4-blue-fade.js",
-      "epeFile": "corpus/xMcPGtXHZfPJHHTGS.epe",
-      "epeName": "4 Blue Fade",
-      "rig": "strip"
     },
     {
       "slug": "4th",
@@ -120,46 +99,11 @@
       "rig": "strip"
     },
     {
-      "slug": "5-teal-fade",
-      "libFile": "library/5-teal-fade.js",
-      "epeFile": "corpus/s9Wjw8rmLrQYubFpW.epe",
-      "epeName": "5 Teal Fade",
-      "rig": "strip"
-    },
-    {
-      "slug": "6-green-fade",
-      "libFile": "library/6-green-fade.js",
-      "epeFile": "corpus/GdWk2t6vCEYwW8aLv.epe",
-      "epeName": "6 Green Fade",
-      "rig": "strip"
-    },
-    {
-      "slug": "7-yelllow-fade",
-      "libFile": "library/7-yelllow-fade.js",
-      "epeFile": "corpus/XBMGWi4Af5GvkLH4n.epe",
-      "epeName": "7 Yelllow Fade",
-      "rig": "strip"
-    },
-    {
-      "slug": "8-red-fade",
-      "libFile": "library/8-red-fade.js",
-      "epeFile": "corpus/gAd5nfxi7QMD26yk8.epe",
-      "epeName": "8 Red Fade",
-      "rig": "strip"
-    },
-    {
       "slug": "80s-kid-show",
       "libFile": "library/80s-kid-show.js",
       "epeFile": "corpus/YNbYB5x6h6BTAPexk.epe",
       "epeName": "80s kid show",
       "rig": "grid"
-    },
-    {
-      "slug": "9-pink-fade",
-      "libFile": "library/9-pink-fade.js",
-      "epeFile": "corpus/yFsA3Dm2cZMoBWsAs.epe",
-      "epeName": "9 Pink Fade",
-      "rig": "strip"
     },
     {
       "slug": "a-peak-integrator",
@@ -187,13 +131,6 @@
       "libFile": "library/amoeba.js",
       "epeFile": "corpus/fPTCaBDjpCMX7uq4a.epe",
       "epeName": "amoeba",
-      "rig": "strip"
-    },
-    {
-      "slug": "an-intro-to-pixelblaze-code",
-      "libFile": "library/an-intro-to-pixelblaze-code.js",
-      "epeFile": "corpus/vkpGsR88dcJmXfevp.epe",
-      "epeName": "An Intro to Pixelblaze Code",
       "rig": "strip"
     },
     {
@@ -229,20 +166,6 @@
       "libFile": "library/aurorashivers.js",
       "epeFile": "corpus/b5AiMeg6knYbyHEuZ.epe",
       "epeName": "aurorashivers",
-      "rig": "strip"
-    },
-    {
-      "slug": "austin-fc",
-      "libFile": "library/austin-fc.js",
-      "epeFile": "corpus/hxBrWSZMjftfaTaoW.epe",
-      "epeName": "Austin FC",
-      "rig": "strip"
-    },
-    {
-      "slug": "automap",
-      "libFile": "library/automap.js",
-      "epeFile": "corpus/yyd4PrwLsai8u83Dc.epe",
-      "epeName": "Automap",
       "rig": "strip"
     },
     {
@@ -446,31 +369,8 @@
       "rig": "strip"
     },
     {
-      "slug": "christmas-string-lights",
-      "libFile": "library/christmas-string-lights.js",
-      "epeFile": "corpus/eYrAmto2qZbDJ8zuG.epe",
-      "epeName": "Christmas string lights",
-      "rig": "strip"
-    },
-    {
       "slug": "christmaslights",
       "libFile": "library/christmaslights.js",
-      "epeFile": "corpus/mJf7XLtvd8RvfTjpX.epe",
-      "epeName": "ChristmasLights",
-      "rig": "strip",
-      "ambiguous": true,
-      "epeIds": [
-        "mJf7XLtvd8RvfTjpX",
-        "xaek4MS4DtuTJxSWq"
-      ],
-      "epeFiles": [
-        "corpus/mJf7XLtvd8RvfTjpX.epe",
-        "corpus/xaek4MS4DtuTJxSWq.epe"
-      ]
-    },
-    {
-      "slug": "christmaslights-2",
-      "libFile": "library/christmaslights-2.js",
       "epeFile": "corpus/mJf7XLtvd8RvfTjpX.epe",
       "epeName": "ChristmasLights",
       "rig": "strip",
@@ -646,13 +546,6 @@
       "rig": "strip"
     },
     {
-      "slug": "daftpunk",
-      "libFile": "library/daftpunk.js",
-      "epeFile": "corpus/TJGzDkMzjJEaR5KD9.epe",
-      "epeName": "DAFTPUNK",
-      "rig": "grid"
-    },
-    {
       "slug": "dbzbattlefinal",
       "libFile": "library/dbzbattlefinal.js",
       "epeFile": "corpus/6Y2XsvEn2Qn62hjJT.epe",
@@ -699,13 +592,6 @@
       "libFile": "library/easing-library-v1-0.js",
       "epeFile": "corpus/rhMjHAeDazr6A9GNX.epe",
       "epeName": "Easing Library v1.0",
-      "rig": "grid"
-    },
-    {
-      "slug": "easing-library-v1-01",
-      "libFile": "library/easing-library-v1-01.js",
-      "epeFile": "corpus/8jFuGXr68mpJsRkvg.epe",
-      "epeName": "Easing Library v1.01",
       "rig": "grid"
     },
     {
@@ -968,13 +854,6 @@
       "rig": "grid"
     },
     {
-      "slug": "index-walk",
-      "libFile": "library/index-walk.js",
-      "epeFile": "corpus/5yKXqHANJYmuhpgXb.epe",
-      "epeName": "index walk",
-      "rig": "strip"
-    },
-    {
       "slug": "infinity-flower-2d",
       "libFile": "library/infinity-flower-2d.js",
       "epeFile": "corpus/WFPiYhECcWdrBng6z.epe",
@@ -1070,20 +949,6 @@
       "libFile": "library/mandelbrot-2d.js",
       "epeFile": "corpus/zt7EPKbLDtvowhLcT.epe",
       "epeName": "Mandelbrot 2D",
-      "rig": "grid"
-    },
-    {
-      "slug": "map-concentric",
-      "libFile": "library/map-concentric.js",
-      "epeFile": "corpus/dvm3pc4JxfBqXyzhy.epe",
-      "epeName": "Map - Concentric",
-      "rig": "grid"
-    },
-    {
-      "slug": "mapped-vertical-line-2d",
-      "libFile": "library/mapped-vertical-line-2d.js",
-      "epeFile": "corpus/NaTA5tfncXjkJDn4u.epe",
-      "epeName": "mapped vertical line 2D",
       "rig": "grid"
     },
     {
@@ -1395,13 +1260,6 @@
       "rig": "strip"
     },
     {
-      "slug": "rainbow-fonts-2",
-      "libFile": "library/rainbow-fonts-2.js",
-      "epeFile": "corpus/Wcph3ddusCjpjwWkB.epe",
-      "epeName": "rainbow fonts 2",
-      "rig": "strip"
-    },
-    {
       "slug": "rainbow-melt",
       "libFile": "library/rainbow-melt.js",
       "epeFile": "corpus/wDn9FrZh8zZfKweL4.epe",
@@ -1458,32 +1316,11 @@
       "rig": "strip"
     },
     {
-      "slug": "red-green-xy-2d-sweep",
-      "libFile": "library/red-green-xy-2d-sweep.js",
-      "epeFile": "corpus/c4r72Djj8BfndgpBo.epe",
-      "epeName": "Red-Green XY 2D Sweep",
-      "rig": "grid"
-    },
-    {
       "slug": "regenbogendrogen",
       "libFile": "library/regenbogendrogen.js",
       "epeFile": "corpus/7dj5kyBumrzqADX4E.epe",
       "epeName": "regenbogendrogen",
       "rig": "strip"
-    },
-    {
-      "slug": "rgb-test-pattern",
-      "libFile": "library/rgb-test-pattern.js",
-      "epeFile": "corpus/to7TLGBX7qspLpHzz.epe",
-      "epeName": "RGB Test Pattern",
-      "rig": "strip"
-    },
-    {
-      "slug": "rgb-xyz-3d-octants",
-      "libFile": "library/rgb-xyz-3d-octants.js",
-      "epeFile": "corpus/Dtyz7dXictnHp8yAf.epe",
-      "epeName": "RGB-XYZ 3D Octants",
-      "rig": "cloud"
     },
     {
       "slug": "rgb-xyz-3d-sweep",
@@ -1605,13 +1442,6 @@
       "rig": "grid"
     },
     {
-      "slug": "skypirate-s-centered-spectrum",
-      "libFile": "library/skypirate-s-centered-spectrum.js",
-      "epeFile": "corpus/gKCGaREm8cD8gfCuY.epe",
-      "epeName": "SkyPirate's Centered Spectrum",
-      "rig": "grid"
-    },
-    {
       "slug": "slime-mold-palette",
       "libFile": "library/slime-mold-palette.js",
       "epeFile": "corpus/vYzzPfsKSJHPFgE7Q.epe",
@@ -1645,13 +1475,6 @@
       "epeFile": "corpus/wy96bdmQBtFu8vxev.epe",
       "epeName": "Snake 2D",
       "rig": "grid"
-    },
-    {
-      "slug": "solid-rainbow",
-      "libFile": "library/solid-rainbow.js",
-      "epeFile": "corpus/EHxr7dBx5LtioSQbD.epe",
-      "epeName": "Solid Rainbow",
-      "rig": "strip"
     },
     {
       "slug": "sound-blinkfade",
@@ -1889,7 +1712,7 @@
       "libFile": "library/the-grinch.js",
       "epeFile": "corpus/f33kvC94M7yLBDtvc.epe",
       "epeName": "The Grinch",
-      "rig": "strip"
+      "rig": "grid"
     },
     {
       "slug": "three-red-pixels-array",
@@ -2004,20 +1827,6 @@
       "rig": "strip"
     },
     {
-      "slug": "utility-perceptual-hue",
-      "libFile": "library/utility-perceptual-hue.js",
-      "epeFile": "corpus/dBynuWSboDHGQFiwv.epe",
-      "epeName": "Utility: Perceptual hue",
-      "rig": "strip"
-    },
-    {
-      "slug": "utility-scheduled-percent-on-demo",
-      "libFile": "library/utility-scheduled-percent-on-demo.js",
-      "epeFile": "corpus/FA9RGndR2ckrJmE8r.epe",
-      "epeName": "Utility: Scheduled Percent-On Demo",
-      "rig": "strip"
-    },
-    {
       "slug": "utilitycolortemp",
       "libFile": "library/utilitycolortemp.js",
       "epeFile": "corpus/ZLA9jgkdWzMvjc3ya.epe",
@@ -2092,6 +1901,7 @@
     "aurora-2d",
     "beat-bounce",
     "boids-2d",
+    "bouncing-balls-rgb-2d",
     "breathing-gradient",
     "chevron-2d",
     "comets",
@@ -2100,13 +1910,17 @@
     "dna-helix-2d",
     "drip",
     "falling-sand-2d",
+    "fireworks-finale",
     "flow-field-2d",
     "glitter",
     "interference-2d",
+    "lightning-strike",
     "marquee-chase",
+    "matrix-green-waterfall-1d",
     "ocean",
     "palette-fire-2d",
     "pendulum-wave",
+    "post-process-chain",
     "radar-2d",
     "reaction-diffusion-2d",
     "ripples-2d",
@@ -2117,7 +1931,110 @@
     "starfield-2d",
     "tetrix-2d",
     "tv-simulator",
-    "typing-heatmap-2d"
+    "typing-heatmap-2d",
+    "us-flag-2d",
+    "us-flag"
   ],
-  "unpairedCorpus": []
+  "unpairedCorpus": [
+    {
+      "epeFile": "corpus/5yKXqHANJYmuhpgXb.epe",
+      "epeName": "index walk"
+    },
+    {
+      "epeFile": "corpus/8jFuGXr68mpJsRkvg.epe",
+      "epeName": "Easing Library v1.01"
+    },
+    {
+      "epeFile": "corpus/Dtyz7dXictnHp8yAf.epe",
+      "epeName": "RGB-XYZ 3D Octants"
+    },
+    {
+      "epeFile": "corpus/EHxr7dBx5LtioSQbD.epe",
+      "epeName": "Solid Rainbow"
+    },
+    {
+      "epeFile": "corpus/FA9RGndR2ckrJmE8r.epe",
+      "epeName": "Utility: Scheduled Percent-On Demo"
+    },
+    {
+      "epeFile": "corpus/GdWk2t6vCEYwW8aLv.epe",
+      "epeName": "6 Green Fade"
+    },
+    {
+      "epeFile": "corpus/NaTA5tfncXjkJDn4u.epe",
+      "epeName": "mapped vertical line 2D"
+    },
+    {
+      "epeFile": "corpus/S2GRkFEY8WdqeH5kd.epe",
+      "epeName": "1-USFLAG_BLINK"
+    },
+    {
+      "epeFile": "corpus/TJGzDkMzjJEaR5KD9.epe",
+      "epeName": "DAFTPUNK"
+    },
+    {
+      "epeFile": "corpus/Wcph3ddusCjpjwWkB.epe",
+      "epeName": "rainbow fonts 2"
+    },
+    {
+      "epeFile": "corpus/XBMGWi4Af5GvkLH4n.epe",
+      "epeName": "7 Yelllow Fade"
+    },
+    {
+      "epeFile": "corpus/c4r72Djj8BfndgpBo.epe",
+      "epeName": "Red-Green XY 2D Sweep"
+    },
+    {
+      "epeFile": "corpus/dBynuWSboDHGQFiwv.epe",
+      "epeName": "Utility: Perceptual hue"
+    },
+    {
+      "epeFile": "corpus/dvm3pc4JxfBqXyzhy.epe",
+      "epeName": "Map - Concentric"
+    },
+    {
+      "epeFile": "corpus/eYrAmto2qZbDJ8zuG.epe",
+      "epeName": "Christmas string lights"
+    },
+    {
+      "epeFile": "corpus/gAd5nfxi7QMD26yk8.epe",
+      "epeName": "8 Red Fade"
+    },
+    {
+      "epeFile": "corpus/gKCGaREm8cD8gfCuY.epe",
+      "epeName": "SkyPirate's Centered Spectrum"
+    },
+    {
+      "epeFile": "corpus/hxBrWSZMjftfaTaoW.epe",
+      "epeName": "Austin FC"
+    },
+    {
+      "epeFile": "corpus/s9Wjw8rmLrQYubFpW.epe",
+      "epeName": "5 Teal Fade"
+    },
+    {
+      "epeFile": "corpus/to7TLGBX7qspLpHzz.epe",
+      "epeName": "RGB Test Pattern"
+    },
+    {
+      "epeFile": "corpus/u9eAo7YHQ4iYqZhQH.epe",
+      "epeName": "3 Violet Fade"
+    },
+    {
+      "epeFile": "corpus/vkpGsR88dcJmXfevp.epe",
+      "epeName": "An Intro to Pixelblaze Code"
+    },
+    {
+      "epeFile": "corpus/xMcPGtXHZfPJHHTGS.epe",
+      "epeName": "4 Blue Fade"
+    },
+    {
+      "epeFile": "corpus/yFsA3Dm2cZMoBWsAs.epe",
+      "epeName": "9 Pink Fade"
+    },
+    {
+      "epeFile": "corpus/yyd4PrwLsai8u83Dc.epe",
+      "epeName": "Automap"
+    }
+  ]
 }

@@ -8,15 +8,21 @@
 // All floes drift upstream at slightly different rates with gentle sideways
 // wander, so the boundaries continuously shear, merge and split.
 
-var NPOINTS = 4
-var px = array(NPOINTS)
-var py = array(NPOINTS)
-var vx = array(NPOINTS)   // per-tick horizontal drift (negative = upstream)
-var vy = array(NPOINTS)   // per-tick vertical wander
+var MAXPOINTS = 8         // ceiling: the Voronoi pass costs 256 * NPOINTS
+                          // distance tests per frame, so keep the top modest
+var NPOINTS = 4           // active floes (set by slider)
+var px = array(MAXPOINTS)
+var py = array(MAXPOINTS)
+var vx = array(MAXPOINTS) // per-tick horizontal drift (negative = upstream)
+var vy = array(MAXPOINTS) // per-tick vertical wander
 
-var speed = 1             // set by slider (squared)
+var speed = 1             // drift rate, 1 = the pattern's natural flow
 var TICK = 1 / 15         // seconds per simulation step
 var acc = 0               // tick accumulator (s)
+
+var tol = 0.06            // crack tolerance (0.96 canvas cells wide)
+var hueLo = 0.55          // cell hue at a floe centre (cyan-blue)
+var hueHi = 0.66          // cell hue at the edges, and the seam hue
 
 // 16x16 virtual canvas (row-major), one channel each
 var W = 16
@@ -25,7 +31,7 @@ var sC = array(W * W)
 var vC = array(W * W)
 
 function initPoints() {
-  for (var i = 0; i < NPOINTS; i++) {
+  for (var i = 0; i < MAXPOINTS; i++) {
     px[i] = random(1)
     py[i] = random(1)
     vx[i] = -(0.012 + random(0.012))            // upstream, narrow band
@@ -34,13 +40,38 @@ function initPoints() {
 }
 initPoints()
 
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderSpeed(v) {
-  speed = v * v * 4       // frozen .. ~4x default flow
+// Downstream drift rate of the floe field: 0 = adrift (the floes still
+// wander gently sideways), 1 = the natural flow, 4 = four times as fast.
+//# min=0 max=4 step=0.05 default=1
+export function sliderFlowSpeed(v) {
+  speed = clamp(v, 0, 4)
+}
+
+// How many floes (Voronoi cells) share the display.
+//# min=2 max=8 step=1 default=4
+export function sliderFloes(v) {
+  NPOINTS = clamp(floor(v), 2, MAXPOINTS)
+}
+
+// Width of the dark seams between floes, in canvas cells (the canvas is
+// 16 cells across).
+//# min=0 max=4 step=0.02 default=0.96
+export function sliderCrackWidth(v) {
+  tol = clamp(v, 0, 4) / W
+}
+
+// Ice color at a floe's centre, as a position on the color wheel; the
+// edges and seams sit a little further round the wheel.
+//# min=0 max=1 step=0.01 default=0.55
+export function sliderIceHue(v) {
+  hueLo = clamp(v, 0, 1)
+  hueHi = hueLo + 0.11
 }
 
 function tick() {
-  for (var i = 0; i < NPOINTS; i++) {
+  // every floe keeps drifting, even the ones the count slider has parked,
+  // so raising the count never drops a stale floe into the field
+  for (var i = 0; i < MAXPOINTS; i++) {
     px[i] = mod(px[i] + vx[i] * speed, 1)       // wrap horizontally (toroidal)
     py[i] += vy[i]
     if (py[i] < 0)  { py[i] = 0; vy[i] = -vy[i] }   // bounce off both banks
@@ -58,7 +89,6 @@ export function beforeRender(delta) {
   acc += delta / 1000
   while (acc >= TICK) { tick(); acc -= TICK }
 
-  var tol = 0.06          // crack tolerance
   for (var row = 0; row < W; row++) {
     var gy = (row + 0.5) / W
     for (var col = 0; col < W; col++) {
@@ -81,11 +111,11 @@ export function beforeRender(delta) {
 
       var idx = row * W + col
       if (crack) {
-        hC[idx] = 0.66                            // deep pure blue seam
+        hC[idx] = hueHi                           // deep pure blue seam
         sC[idx] = 1
         vC[idx] = bri
       } else {
-        hC[idx] = clamp(0.55 + d1 * 0.3, 0.55, 0.66)   // cyan-blue, bluer with distance
+        hC[idx] = clamp(hueLo + d1 * 0.3, hueLo, hueHi) // bluer with distance
         sC[idx] = clamp(1.1 - bri, 0, 1)               // bright centers -> icy white
         vC[idx] = bri
       }

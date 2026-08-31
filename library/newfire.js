@@ -51,7 +51,7 @@ export function beforeRender(delta) {
 
 export function render(index) {
   // layout mode maps the pixel into the heat field (offset past the source)
-  var mode = floor(modeV * 3.99)
+  var mode = modeV
   var i
   if (mode == 0) {
     i = index + 1                                  // base at the start
@@ -95,7 +95,9 @@ export function sliderSparks(v) {
   sparkProb = v * 0.5
 }
 
-//# min=0 max=1 step=0.34 default=0
+// layout selector in real units: 0..3, one step per mode, so every mode is
+// reachable by dragging and the slider snaps mode-to-mode
+//# min=0 max=3 step=1 default=0
 export function sliderMode(v) {
-  modeV = v
+  modeV = clamp(floor(v), 0, 3)
 }

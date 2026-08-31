@@ -1,5 +1,69 @@
 # Update log
 
+## 2026-08-31 — The review verdict lands: 110 pattern decisions acted on
+
+Jeremy sat down with the review UI and decided all ~139 judged pairs
+(tools/verify/decisions.json): 29 good, 25 delete, 82 needs-work, 3 fork.
+This pass implements every one of the 110 actionable decisions, fanned out
+across ~20 subagents in one worktree.
+
+**Deleted (25)** — ports plus specs, verdicts, and their fixups entries
+(automap's vars pin, skypirate's grid rig); pairs.json regenerated (268 →
+267 pairs after the flag redesign below).
+
+**Controls pass (53 patterns)** — the big "perfect, but give me controls
+the original doesn't have" bucket. House style established: real-unit
+`//#` bounds (seconds, degrees, pixels, percent, integer counts with
+step=1) on the line above the export, handler math shaped so the declared
+default reproduces the shipped constant, untouched renders byte-identical
+(verified port.png-vs-port.png per slug), never a pattern-level brightness
+control. Two look changes were explicitly requested and made:
+color-twinkle-bounce (full-value coherent crests, four palettes) and
+rainbow-fonts (the "muted" was a 0.35 value cap).
+
+**Defect fixes (17)** — highlights: crossfading measured everything as
+the wrong canvas fraction (5 bars vs 8, braid pinned at pixel 0);
+glittering-jewels indexed 20-element arrays at 381 (real-units slider,
+0..1 handler); kitt-w-color-picker's darkness was decay-before-draw plus
+a fade shorter than one frame; line-dancer-2d's melt phase and
+millipede's backwards-walking gait were both derivative bugs (a `+1`
+floor that never collapsed; a triangle wobble whose derivative is a
+square wave); blinky-eyes-2d mixed folded and display units (aspect 0.71
+vs the original's 1.28); animated-asterisks' AnimateWidth was a ~59 s
+cycle that silently overrode the width slider (removed); ryb-colors had
+all its `//#` directives inside function bodies where the parser
+silently ignores them.
+
+**Rewrites and forks (10 new/replaced patterns)** — us-flag + us-flag-2d
+(cloth-wave redesigns replacing 1-usflag-blink, 13 crisp stripes at every
+size); fireworks-finale (full shell lifecycle, forked from 4th);
+lightning-strike (near-white restrike lightning, forked from
+lightning-zap); matrix-green-waterfall-1d; bouncing-balls-rgb-2d (true
+ballistic analog — the existing 2d one is Lissajous drift); Grinch's
+Heist (bulb-stealing story pattern) and Infinite Snake (self-playing
+snake whose Smartness dial measures 413 deaths → 9 across its range)
+replacing the-grinch and snake-2d; continuous-cellular-automata reworked
+into a self-evolving ring-topology waterfall with a convergence watchdog.
+
+**Engine: 21 easing builtins appended** (batch 7 — the full Sine/Quart/
+Quint/Expo/Circ trios plus the missing Back/Elastic/Bounce variants),
+tested against f64 references; easing-library-v1-0 now showcases the
+builtins as first-class values instead of 30 hand-rolled lambdas.
+`board-c6-devkit` re-measured post-rebase: 1,005,488 B (+4,016 B over
+the #168 fmt-diet baseline), margin 43,088 B / 4.11 % —
+above the 3 % floor, but the next VM growth should measure C6 first.
+
+**Harness** — review UI no longer fabricates untouched slider positions
+(the holiday-diagonal-stripes "sync bug": both panes drew 0.5 while the
+engines held 0.4 vs 0.5; unhinted untouched controls now show a `?`
+placeholder), and it grew an "addressed" filter chip: the fix pass stamps
+`addressedAt` on every decision entry it acts on, re-deciding clears the
+stamp. example-button-w-debounce is drivable from the UI (Button hold /
+too-short Tap / DebounceMs / Modes) pending real GPIO.
+
+Deferred items are on Gitea (GPIO input stubs, the playground's copy of
+the fabricated-slider bug, a `//#`-placement lint, probe-controls
+ignoring bounds, minor fidelity residue).
 ## 2026-08-30 — fmt diet: JSON builders off core::fmt; C6 margin 4.24 → 4.49 % (#168, #169)
 
 Converted every `format!`-built JSON/response body — `server.rs` (41

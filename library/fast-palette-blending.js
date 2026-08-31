@@ -7,9 +7,29 @@
 // cost is paid once per frame into a small fixed-size "active" palette —
 // and only during transitions — while per-pixel work is a single paint().
 
+var RES = 16         // rows in the active palette
+
+// --- controls (defaults reproduce the original constants) ---------------
 var HOLD_S = 5       // seconds to hold each palette
 var TRANS_S = 2      // seconds to cross-fade
-var RES = 16         // rows in the active palette
+var washSecs = 6.55  // seconds for one round trip of the gradient wash
+var autoCycle = 1    // 1 = walk the palettes, 0 = hold the picked one
+var pickedPal = 0    // 0 = blue/magenta, 1 = landscape, 2 = heatmap
+
+//# min=0.5 max=30 step=0.5 default=5
+export function sliderHoldSeconds(v) { HOLD_S = max(v, 0.1) }
+
+//# min=0.2 max=10 step=0.2 default=2
+export function sliderCrossfadeSeconds(v) { TRANS_S = max(v, 0.1) }
+
+//# min=1 max=60 step=0.05 default=6.55
+export function sliderWashSeconds(v) { washSecs = max(v, 0.5) }
+
+//# default=1
+export function toggleAutoCycle(v) { autoCycle = v > 0.5 }
+
+//# min=0 max=2 step=1 default=0
+export function sliderPalette(v) { pickedPal = clamp(floor(v), 0, 2) }
 
 // Gradient palettes as flat (pos, r, g, b) rows, positions ascending 0..1.
 
@@ -119,7 +139,18 @@ export function beforeRender(delta) {
   phase += delta / 1000
   if (phase > 3600) phase = 0   // paranoia wrap; phases reset far sooner
 
-  if (holding) {
+  if (!autoCycle) {
+    // hold the picked palette: settle onto it once, then leave it alone
+    if (cur != pickedPal || blend != 0) {
+      cur = pickedPal
+      nxt = (cur + 1) % 3
+      setAliases()
+      blend = 0
+      holding = 1
+      phase = 0
+      rebuildActive()
+    }
+  } else if (holding) {
     if (phase >= HOLD_S) {
       holding = 0
       phase = 0
@@ -139,7 +170,8 @@ export function beforeRender(delta) {
   }
 
   // gradient wash: triangle oscillation, ~6.5 s round trip
-  osc = triangle(time(0.1))
+  // (0.1 * ratio is exactly 0.1 at the control's default)
+  osc = triangle(time(0.1 * (washSecs / 6.55)))
 }
 
 export function render(index) {

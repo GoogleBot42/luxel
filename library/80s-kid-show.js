@@ -7,6 +7,10 @@
 // screensaver, each slowly spinning and breathing in size. Rendered per
 // pixel with 2D signed distance functions; first hit wins, so array
 // order is z-order, and pairs occasionally swap to vary stacking.
+//
+// Defaults are FILLED and FLAT — solid poster-color shapes, the way the
+// Saturday-morning title card reads. The Filled and Flat toggles switch to
+// thin outlines / distance-shaded neon glow respectively.
 
 const POOL = 18
 
@@ -29,11 +33,11 @@ var numActive = 6
 var shapeSel = 5      // 0..4 fixed shape, 5 = random mix
 var nomSize = .13
 var speedMul = .5
-var filledOn = 0
+var filledOn = 1      // solid shapes by default (outline mode is the toggle)
 var lineW = .045
 var cutoffF = 1.6
 var spinOn = 0
-var flatOn = 0
+var flatOn = 1        // flat poster color by default (glow shading is the toggle)
 
 var gPhase = 0
 var gc = 1
@@ -76,6 +80,8 @@ export function sliderSize(v) { nomSize = .03 + v * .3 }
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderSpeed(v) { speedMul = v }
 
+// Solid fill vs thin outline. Filled is the default look.
+//# default=1
 export function toggleFilled(v) { filledOn = v }
 
 //# min=0 max=1 step=0.01 default=0.3
@@ -85,6 +91,10 @@ export function sliderLineWidth(v) { lineW = .01 + v * .12 }
 export function sliderCutoff(v) { cutoffF = 1 + v * 1.5 }
 
 export function toggleSpin(v) { spinOn = v }
+
+// Flat full-brightness color vs distance-shaded neon glow. Flat is the
+// default look; turn this off for the soft-edged glow rendering.
+//# default=1
 export function toggleFlat(v) { flatOn = v }
 
 function swapObjects(a, b) {

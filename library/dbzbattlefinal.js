@@ -11,19 +11,28 @@
 // smooth while horizontal motion is chaotic.
 
 // ---- controls ----
-var speedMul = 0.8       // ~5:1 range, never zero
-var sizeMul = 1.25       // ~4:1 range
-var hue1 = 0.09          // warm fighter: red..yellow
-var hue2 = 0.8           // cool fighter: violet..magenta
+// Every control carries a //# directive, so the UI sends REAL units and each
+// handler uses v directly — no 0..1 rescaling anywhere below.
 
-//# min=0 max=1 step=0.01 default=0.55
-export function sliderSpeed(v) { speedMul = 0.25 + v }
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderScale(v) { sizeMul = 0.5 + v * 1.5 }
-//# min=0 max=1 step=0.01 default=0.55
-export function sliderSaiyanColor(v) { hue1 = v * 0.16 }
-//# min=0 max=1 step=0.01 default=0.4
-export function sliderRivalColor(v) { hue2 = 0.72 + v * 0.2 }
+// Fight speed as a plain multiplier (1 = the reference pace). Never zero:
+// at the bottom the fighters still drift, they just take their time.
+var speedMul = 0.8
+//# min=0.25 max=2.5 step=0.05 default=0.8
+export function sliderSpeed(v) { speedMul = max(0.05, v) }
+
+// Fighter/aura scale as a multiplier of the reference size.
+var sizeMul = 1.25
+//# min=0.5 max=2.5 step=0.05 default=1.25
+export function sliderScale(v) { sizeMul = max(0.1, v) }
+
+// Hues, in turns around the colour wheel (0 red, 1/3 green, 2/3 blue).
+var hue1 = 0.09         // warm fighter
+//# min=0 max=1 step=0.01 default=0.09
+export function sliderSaiyanHue(v) { hue1 = frac(v) }
+
+var hue2 = 0.8          // cool fighter
+//# min=0 max=1 step=0.01 default=0.8
+export function sliderRivalHue(v) { hue2 = frac(v) }
 
 // ---- fighter state (index 0 = left/warm, 1 = right/cool) ----
 var fx = array(2), fy = array(2), fvx = array(2), fvy = array(2)

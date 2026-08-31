@@ -16,13 +16,41 @@ export var maxFrequency
 export var maxFrequencyMagnitude
 export var light = -1                  // sentinel: stays -1 when no board
 
-const TARGET_FILL = 0.33     // desired average pixel brightness
+// The five values marked (control) are driven by the sliders below; their
+// values here are the untouched defaults. time(n) laps in n * 65.536 s,
+// hence the divisions in the seconds handlers.
+var TARGET_FILL = 0.33       // (control) desired average pixel brightness
 const AVG_WINDOW = 1500      // band moving-average window, ms
-const FADE = 0.7             // persistence kept per frame
+var FADE = 0.7               // (control) persistence kept per frame
 const ATTACK = 0.7           // novelty attack factor
-const DRIFT_T = 0.15         // ring drift, ~10 s cycle
-const BREATHE_T = 0.9        // zoom breathing, ~59 s cycle
+var DRIFT_T = 0.15           // (control) ring drift, ~10 s cycle
+var BREATHE_T = 0.9          // (control) zoom breathing, ~59 s cycle
+var folds = 1                // (control) angular mirror repeats
 const INTEGRAL_MAX = 300
+
+// --- controls -------------------------------------------------------------
+// Average brightness the auto-gain controller aims to hold, whatever the
+// room volume is doing.
+//# min=10 max=90 step=1 default=33
+export function sliderTargetFill(v) { TARGET_FILL = clamp(v, 1, 95) / 100 }
+
+// Share of a ring's brightness carried into the next frame: low values snap
+// on the beat, high values leave long glowing after-images.
+//# min=0 max=95 step=5 default=70
+export function sliderTrailPersistence(v) { FADE = clamp(v, 0, 95) / 100 }
+
+// Seconds for the rings to drift once outward through the mandala.
+//# min=1 max=60 step=0.1 default=9.8
+export function sliderRingDriftSeconds(v) { DRIFT_T = max(0.5, v) / 65.536 }
+
+// Seconds for one full zoom-out / zoom-in breath.
+//# min=2 max=180 step=1 default=59
+export function sliderBreatheSeconds(v) { BREATHE_T = max(1, v) / 65.536 }
+
+// How many times the colour wheel is mirrored around the centre: 1 is the
+// plain two-fold mandala, higher values cut it into finer petals.
+//# min=1 max=8 step=1 default=1
+export function sliderMirrorFolds(v) { folds = max(1, floor(v)) }
 
 var bandAvg = array(32)
 var persist = array(pixelCount)
@@ -129,7 +157,7 @@ export function render2D(index, x, y) {
   var b = persist[index]
 
   // hue: band fraction + mirrored angular term (up to half the wheel)
-  var hue = fi / 32 + 0.5 * triangle(atan2(y, x) / PI2)
+  var hue = fi / 32 + 0.5 * triangle(atan2(y, x) / PI2 * folds)
 
   // whiteout past full brightness
   var s = b <= 1 ? 1 : max(0, 1 - (b - 1))

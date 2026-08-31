@@ -310,6 +310,29 @@ pub enum Builtin {
     SetBlur,
     SetGlow,
     SetOutputPalette,
+    // Luxel extension builtins, batch 7: the rest of the standard thirty
+    // easings (the quad/cubic trios and the "out" springs are above).
+    EaseInSine,
+    EaseOutSine,
+    EaseInOutSine,
+    EaseInQuart,
+    EaseOutQuart,
+    EaseInOutQuart,
+    EaseInQuint,
+    EaseOutQuint,
+    EaseInOutQuint,
+    EaseInExpo,
+    EaseOutExpo,
+    EaseInOutExpo,
+    EaseInCirc,
+    EaseOutCirc,
+    EaseInOutCirc,
+    EaseInBack,
+    EaseInOutBack,
+    EaseInElastic,
+    EaseInOutElastic,
+    EaseInBounce,
+    EaseInOutBounce,
 }
 
 pub struct BuiltinDef {
@@ -406,6 +429,21 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // beyond setGamma — frame stages the engine runs after render().
     b!("setBlur", SetBlur), b!("setGlow", SetGlow),
     b!("setOutputPalette", SetOutputPalette),
+    // Luxel extensions, batch 7 (appended): the remaining easings, so the
+    // full standard thirty (ten families × in/out/in-out) are builtins.
+    b!("easeInSine", EaseInSine), b!("easeOutSine", EaseOutSine),
+    b!("easeInOutSine", EaseInOutSine),
+    b!("easeInQuart", EaseInQuart), b!("easeOutQuart", EaseOutQuart),
+    b!("easeInOutQuart", EaseInOutQuart),
+    b!("easeInQuint", EaseInQuint), b!("easeOutQuint", EaseOutQuint),
+    b!("easeInOutQuint", EaseInOutQuint),
+    b!("easeInExpo", EaseInExpo), b!("easeOutExpo", EaseOutExpo),
+    b!("easeInOutExpo", EaseInOutExpo),
+    b!("easeInCirc", EaseInCirc), b!("easeOutCirc", EaseOutCirc),
+    b!("easeInOutCirc", EaseInOutCirc),
+    b!("easeInBack", EaseInBack), b!("easeInOutBack", EaseInOutBack),
+    b!("easeInElastic", EaseInElastic), b!("easeInOutElastic", EaseInOutElastic),
+    b!("easeInBounce", EaseInBounce), b!("easeInOutBounce", EaseInOutBounce),
 ];
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
@@ -429,6 +467,25 @@ pub fn lookup_method(name: &str) -> Option<u16> {
         _ => return None,
     };
     lookup_builtin(global)
+}
+
+/// Shared by the three bounce easings: piecewise parabolas, n1 = 7.5625,
+/// d1 = 2.75 (the standard fit). "in" and "in-out" are reflections of it.
+fn ease_out_bounce(t: Fx) -> Fx {
+    let n1 = Fx::from_f64(7.5625);
+    let d1 = Fx::from_f64(2.75);
+    if t < Fx::ONE / d1 {
+        n1 * t * t
+    } else if t < Fx::from_int(2) / d1 {
+        let u = t - Fx::from_f64(1.5) / d1;
+        n1 * u * u + Fx::from_f64(0.75)
+    } else if t < Fx::from_f64(2.5) / d1 {
+        let u = t - Fx::from_f64(2.25) / d1;
+        n1 * u * u + Fx::from_f64(0.9375)
+    } else {
+        let u = t - Fx::from_f64(2.625) / d1;
+        n1 * u * u + Fx::from_f64(0.984375)
+    }
 }
 
 // ---- VM ----
@@ -1755,22 +1812,170 @@ impl Vm {
                     decay * s + Fx::ONE
                 })
             }
-            // piecewise parabolas, n1 = 7.5625, d1 = 2.75 (the standard fit)
-            EaseOutBounce => {
+            // piecewise parabolas (see ease_out_bounce)
+            EaseOutBounce => num(ease_out_bounce(n(0))),
+            // --- batch 7: the rest of the standard thirty easings. Same
+            // contract as the ones above: polynomial/analytic forms on t,
+            // no clamping except where the reference pins the endpoints.
+            // sine: 1 - cos(t·π/2) etc, in turns (π/2 rad = 1/4 turn)
+            EaseInSine => num(Fx::ONE - fmath::cos_turns(n(0) / Fx::from_int(4))),
+            EaseOutSine => num(fmath::sin_turns(n(0) / Fx::from_int(4))),
+            EaseInOutSine => {
+                let c = fmath::cos_turns(n(0) / Fx::from_int(2));
+                num((Fx::ONE - c) / Fx::from_int(2))
+            }
+            EaseInQuart => {
                 let t = n(0);
-                let n1 = Fx::from_f64(7.5625);
-                let d1 = Fx::from_f64(2.75);
-                num(if t < Fx::ONE / d1 {
-                    n1 * t * t
-                } else if t < Fx::from_int(2) / d1 {
-                    let u = t - Fx::from_f64(1.5) / d1;
-                    n1 * u * u + Fx::from_f64(0.75)
-                } else if t < Fx::from_f64(2.5) / d1 {
-                    let u = t - Fx::from_f64(2.25) / d1;
-                    n1 * u * u + Fx::from_f64(0.9375)
+                num(t * t * t * t)
+            }
+            EaseOutQuart => {
+                let u = Fx::ONE - n(0);
+                num(Fx::ONE - u * u * u * u)
+            }
+            EaseInOutQuart => {
+                let t = n(0);
+                num(if t < Fx::from_raw(1 << 15) {
+                    Fx::from_int(8) * t * t * t * t
                 } else {
-                    let u = t - Fx::from_f64(2.625) / d1;
-                    n1 * u * u + Fx::from_f64(0.984375)
+                    // 1 - (2 - 2t)⁴/2
+                    let u = Fx::from_int(2) - t - t;
+                    Fx::ONE - u * u * u * u / Fx::from_int(2)
+                })
+            }
+            EaseInQuint => {
+                let t = n(0);
+                num(t * t * t * t * t)
+            }
+            EaseOutQuint => {
+                let u = Fx::ONE - n(0);
+                num(Fx::ONE - u * u * u * u * u)
+            }
+            EaseInOutQuint => {
+                let t = n(0);
+                num(if t < Fx::from_raw(1 << 15) {
+                    Fx::from_int(16) * t * t * t * t * t
+                } else {
+                    let u = Fx::from_int(2) - t - t;
+                    Fx::ONE - u * u * u * u * u / Fx::from_int(2)
+                })
+            }
+            // exponential: 2^(10t-10) / 1 - 2^(-10t), endpoints pinned exactly
+            // so the curve starts at 0 and ends at 1
+            EaseInExpo => {
+                let t = n(0);
+                num(if t <= Fx::ZERO {
+                    Fx::ZERO
+                } else {
+                    fmath::pow(Fx::from_int(2), Fx::from_int(10) * t - Fx::from_int(10))
+                })
+            }
+            EaseOutExpo => {
+                let t = n(0);
+                num(if t >= Fx::ONE {
+                    Fx::ONE
+                } else {
+                    Fx::ONE - fmath::pow(Fx::from_int(2), -(Fx::from_int(10) * t))
+                })
+            }
+            EaseInOutExpo => {
+                let t = n(0);
+                num(if t <= Fx::ZERO {
+                    Fx::ZERO
+                } else if t >= Fx::ONE {
+                    Fx::ONE
+                } else if t < Fx::from_raw(1 << 15) {
+                    fmath::pow(Fx::from_int(2), Fx::from_int(20) * t - Fx::from_int(10))
+                        / Fx::from_int(2)
+                } else {
+                    let e = fmath::pow(
+                        Fx::from_int(2),
+                        Fx::from_int(10) - Fx::from_int(20) * t,
+                    );
+                    (Fx::from_int(2) - e) / Fx::from_int(2)
+                })
+            }
+            // circular: the unit circle's quarter arcs
+            EaseInCirc => {
+                let t = n(0);
+                num(Fx::ONE - fmath::sqrt(Fx::ONE - t * t))
+            }
+            EaseOutCirc => {
+                let u = n(0) - Fx::ONE;
+                num(fmath::sqrt(Fx::ONE - u * u))
+            }
+            EaseInOutCirc => {
+                let t = n(0);
+                num(if t < Fx::from_raw(1 << 15) {
+                    let u = t + t;
+                    (Fx::ONE - fmath::sqrt(Fx::ONE - u * u)) / Fx::from_int(2)
+                } else {
+                    let u = Fx::from_int(2) - t - t;
+                    (fmath::sqrt(Fx::ONE - u * u) + Fx::ONE) / Fx::from_int(2)
+                })
+            }
+            // back: c3·t³ - c1·t² (anticipates below 0 before pulling away),
+            // with c1 = 1.70158 as in easeOutBack; the in-out form uses the
+            // published c2 = c1·1.525
+            EaseInBack => {
+                let t = n(0);
+                let c1 = Fx::from_f64(1.70158);
+                let c3 = c1 + Fx::ONE;
+                num(c3 * t * t * t - c1 * t * t)
+            }
+            EaseInOutBack => {
+                let t = n(0);
+                let c2 = Fx::from_f64(1.70158) * Fx::from_f64(1.525);
+                num(if t < Fx::from_raw(1 << 15) {
+                    let u = t + t;
+                    u * u * ((c2 + Fx::ONE) * u - c2) / Fx::from_int(2)
+                } else {
+                    let u = t + t - Fx::from_int(2);
+                    (u * u * ((c2 + Fx::ONE) * u + c2) + Fx::from_int(2)) / Fx::from_int(2)
+                })
+            }
+            // elastic: the mirror/in-out partners of easeOutElastic, same
+            // 2π/3 and 2π/4.5 periods (in turns: /3 and /4.5)
+            EaseInElastic => {
+                let t = n(0);
+                num(if t <= Fx::ZERO {
+                    Fx::ZERO
+                } else if t >= Fx::ONE {
+                    Fx::ONE
+                } else {
+                    let ten_t = Fx::from_int(10) * t;
+                    let grow = fmath::pow(Fx::from_int(2), ten_t - Fx::from_int(10));
+                    let s = fmath::sin_turns((ten_t - Fx::from_f64(10.75)) / Fx::from_int(3));
+                    -(grow * s)
+                })
+            }
+            EaseInOutElastic => {
+                let t = n(0);
+                num(if t <= Fx::ZERO {
+                    Fx::ZERO
+                } else if t >= Fx::ONE {
+                    Fx::ONE
+                } else {
+                    let twenty_t = Fx::from_int(20) * t;
+                    let s = fmath::sin_turns(
+                        (twenty_t - Fx::from_f64(11.125)) / Fx::from_f64(4.5),
+                    );
+                    if t < Fx::from_raw(1 << 15) {
+                        let grow = fmath::pow(Fx::from_int(2), twenty_t - Fx::from_int(10));
+                        -(grow * s) / Fx::from_int(2)
+                    } else {
+                        let decay = fmath::pow(Fx::from_int(2), Fx::from_int(10) - twenty_t);
+                        decay * s / Fx::from_int(2) + Fx::ONE
+                    }
+                })
+            }
+            // bounce: the standard reflections of ease_out_bounce
+            EaseInBounce => num(Fx::ONE - ease_out_bounce(Fx::ONE - n(0))),
+            EaseInOutBounce => {
+                let t = n(0);
+                num(if t < Fx::from_raw(1 << 15) {
+                    (Fx::ONE - ease_out_bounce(Fx::ONE - t - t)) / Fx::from_int(2)
+                } else {
+                    (Fx::ONE + ease_out_bounce(t + t - Fx::ONE)) / Fx::from_int(2)
                 })
             }
             Random => {

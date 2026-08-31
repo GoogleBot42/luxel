@@ -3,121 +3,162 @@
 // community pattern "Continuous Cellular Automata"; original source never
 // consulted. Concept: Wolfram-style continuous-valued cellular automata.
 
-// A hidden grid (taller and much wider than the display) continuously
-// re-derives itself from a persistent seed row: each cell is the average of
-// its three parents plus a user offset, fractional part kept. One row is
-// recomputed per frame (round-robin), and a display-sized exponential
-// moving average hides the row scanning so structures melt smoothly.
+// The rule is the classic one: every cell is the average of its three
+// parents plus an offset, fractional part kept — the wrap is what makes
+// the fractal structure. Everything around it is rebuilt for Luxel.
+// The original derives ONE spacetime diagram and then sits frozen until a
+// dial moves; this runs the automaton live. A generation is born at the
+// bottom of the display every tick and the whole diagram rises, so the
+// familiar nested cones grow and drift upward instead of standing still.
+// The rule offset wanders slowly (Rule Drift), stray sparks nucleate new
+// cones, and a watchdog reseeds the front row whenever the ring goes flat
+// or saturates — the pattern can never freeze, black out or white out.
+// Requires a 2D map.
 
-var VIEW = 16 // displayed rows/columns (16x16 virtual canvas)
-var ROWS = 32 // hidden rows: ~2x displayed
-var COLS = VIEW + 2 * ROWS // margins as wide as the row count on each side
-var grid = array(ROWS * COLS) // the automaton
-var smooth = array(VIEW * VIEW) // display-sized EMA
-var SMOOTHING = 0.1
+var VIEW = 16             // displayed rows/columns
+var COLS = 16             // automaton width — a ring, so no edge artifacts
+var ROWS = 20             // ring buffer of generations (17 are on screen)
+var gen = array(ROWS * COLS)
+var head = 0              // ring slot holding the newest generation
 
-var offsetParam = 0.31 // rule offset, added before the fractional wrap
-var pan = 0.5
-var depth = 0.5
-var diffMode = 0
-var seedMode = 0
-var curRow = 0
-var initialized = 0
-var hueDrift = 0
+var baseOffset = 0.09     // rule offset setpoint, in rule units
+var driftAmt = 0.06       // peak-to-peak wander of the offset, rule units
+var offset = 0.09         // the offset actually used this tick
+var gensPerSec = 6
+var sparksPerMin = 24
+var baseHue = 0.02
+var sat = 1
 
-//# min=0 max=1 step=0.001 default=0.31
-export function sliderParam(v) {
-  offsetParam = v
+var tickMs = 1000 / 6
+var acc = 0               // ms accumulated toward the next generation
+var phase = 0             // 0..1 progress through the current tick
+var flatCount = 0         // consecutive generations judged converged
+var started = 0
+var ringBase = 2 * ROWS   // per-frame render helpers
+var hueNow = 0.02
+
+//# min=0.005 max=0.995 step=0.005 default=0.09
+export function sliderRuleOffset(v) {
+  baseOffset = clamp(v, 0.005, 0.995)   // 0 and 1 render a dead field
 }
 
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderPan(v) {
-  pan = v
+//# min=0 max=0.4 step=0.005 default=0.06
+export function sliderRuleDrift(v) {
+  driftAmt = v            // 0 = a single fixed rule, like the original
 }
 
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderDepth(v) {
-  depth = v
+//# min=1 max=30 step=1 default=6
+export function sliderGenerationsPerSecond(v) {
+  gensPerSec = max(1, floor(v))
+  tickMs = 1000 / gensPerSec
 }
 
-//# min=0 max=1 step=1 default=0
-export function sliderElimStripes(v) {
-  diffMode = v > 0.5
+//# min=0 max=120 step=1 default=24
+export function sliderSparksPerMinute(v) {
+  sparksPerMin = max(0, floor(v))
 }
 
-//# min=0 max=1 step=1 default=0
-export function sliderRandomSeeds(v) {
-  var mode = v > 0.5
-  if (mode != seedMode) {
-    seedMode = mode
-    seedTopRow()
-  }
+export function hsvPickerColor(h, s, v) {
+  baseHue = h
+  sat = s                 // v is ignored: brightness is a device setting
 }
 
-function seedTopRow() {
+// Fresh life for a converged ring. Only the newest generation is touched,
+// so there is no flash: the new values ride in from the bottom edge and
+// organise themselves as the diagram scrolls.
+function reseed(dst) {
   for (var c = 0; c < COLS; c++) {
-    grid[c] = seedMode ? random(1) : 0
+    gen[dst + c] = random(1)
   }
-  if (!seedMode) grid[floor(COLS / 2)] = 1 // single centered dot
+  gen[dst + floor(random(COLS))] = 1
+  flatCount = 0
 }
 
-// Row r derives from row r-1: average of the three parents, plus the
-// offset, fractional part kept. Edge columns use a 2-parent weighted
-// average (double weight straight up), no offset or wrap.
-function computeRow(r) {
-  var above = (r - 1) * COLS
-  var cur = r * COLS
-  grid[cur] = (2 * grid[above] + grid[above + 1]) / 3
-  grid[cur + COLS - 1] = (grid[above + COLS - 2] + 2 * grid[above + COLS - 1]) / 3
-  for (var c = 1; c < COLS - 1; c++) {
-    grid[cur + c] = frac(
-      (grid[above + c - 1] + grid[above + c] + grid[above + c + 1]) / 3 +
-      offsetParam)
+// One generation: three-parent average + offset, fractional part kept,
+// wrapped around the ring so no boundary rule is needed at all.
+function step() {
+  var src = head * COLS
+  head = (head + 1) % ROWS
+  var dst = head * COLS
+  var c, v
+  for (c = 0; c < COLS; c++) {
+    v = (gen[src + (c + COLS - 1) % COLS] + gen[src + c] +
+         gen[src + (c + 1) % COLS]) / 3
+    gen[dst + c] = frac(v + offset)
   }
+
+  // A spark is a maximal cell dropped into the front row; it opens a new
+  // cone that widens one cell per generation as it rises.
+  if (sparksPerMin > 0 &&
+      random(1) < sparksPerMin / (60 * gensPerSec)) {
+    gen[dst + floor(random(COLS))] = 1
+  }
+
+  // Convergence watchdog. Three ways the automaton can stop being worth
+  // looking at: no lateral texture left (a flat ring), no change from the
+  // parent generation (the picture scrolls but never differs), or the whole
+  // ring pinned dark or pinned bright. Three such generations in a row and
+  // the front row is reseeded, so it can never settle for good.
+  var energy = 0
+  var churn = 0
+  var mean = 0
+  for (c = 0; c < COLS; c++) {
+    energy += abs(gen[dst + c] - gen[dst + (c + COLS - 1) % COLS])
+    churn += abs(gen[dst + c] - gen[src + c])
+    mean += gen[dst + c]
+  }
+  energy /= COLS
+  churn /= COLS
+  mean /= COLS
+  if (energy < 0.02 || churn < 0.01 || mean < 0.02 || mean > 0.98) flatCount += 1
+  else flatCount = 0
+  if (flatCount >= 3) reseed(dst)
 }
 
 export function beforeRender(delta) {
-  if (!initialized) {
-    initialized = 1
-    seedTopRow()
-    for (var r = 1; r < ROWS; r++) computeRow(r) // one-time full derivation
+  if (!started) {
+    started = 1
+    // classic seed: one maximal cell in an otherwise empty generation, so
+    // the first cone grows into view instead of appearing all at once
+    gen[head * COLS + floor(COLS / 2)] = 1
   }
 
-  // Amortized: recompute a single row per frame, cycling 1..ROWS-1.
-  curRow += 1
-  if (curRow >= ROWS) curRow = 1
-  computeRow(curRow)
+  // Slow two-rate wander of the rule offset: the automaton family morphs
+  // (cones -> lattice -> bands -> chaos) over minutes, on its own.
+  var wander = (wave(time(1.7)) - 0.5) + 0.6 * (wave(time(0.61)) - 0.5)
+  offset = clamp(baseOffset + driftAmt * wander / 1.6, 0.005, 0.995)
 
-  hueDrift = time(0.5) // one slow hue cycle in ~33 s
-
-  // Blend the current viewport into the smoothing grid.
-  var row0 = floor(depth * (ROWS - VIEW))
-  var col0 = floor(pan * (COLS - VIEW))
-  for (var r = 0; r < VIEW; r++) {
-    var src = (row0 + r) * COLS + col0
-    var dst = r * VIEW
-    for (var c = 0; c < VIEW; c++) {
-      smooth[dst + c] += SMOOTHING * (grid[src + c] - smooth[dst + c])
-    }
+  acc += delta
+  var guard = 0
+  while (acc >= tickMs && guard < 4) {   // catch up, but never spiral
+    step()
+    acc -= tickMs
+    guard += 1
   }
+  if (acc > tickMs) acc = tickMs
+  phase = acc / tickMs
+  ringBase = head + 2 * ROWS   // keeps the render's row lookup branch-free
+  // +1 keeps the render's frac() argument positive for any picked hue
+  hueNow = 1 + baseHue + 0.06 * (wave(time(1.1)) - 0.5)
 }
 
 export function render2D(index, x, y) {
-  var col = floor(x * 15.99)
-  var row = floor(y * 15.99)
-  var i = row * VIEW + col
+  var col = floor(x * (COLS - 0.01))
+  var dr = floor(y * (VIEW - 0.01))
 
-  var v
-  if (diffMode) {
-    v = col == 0 ? 0 : abs(smooth[i] - smooth[i - 1])
-  } else {
-    v = smooth[i]
-  }
+  // Generations rise one row per tick; sample between the two nearest
+  // generations (age 0 = newest) so the scroll is continuous, not stepped.
+  var a = VIEW - phase - dr
+  var i0 = floor(a)
+  var f = a - i0
+  var v = (1 - f) * gen[((ringBase - i0) % ROWS) * COLS + col] +
+          f * gen[((ringBase - i0 - 1) % ROWS) * COLS + col]
 
-  // Hue base falls ~a third of the wheel as value rises, with a sinusoidal
-  // easing that compresses the ends of the range; the whole arc drifts.
+  // The picked colour is where the bright cells sit; dimmer cells ride up
+  // to a third of the wheel above it, with a sinusoidal easing that
+  // compresses the ends. The whole arc breathes slowly around the anchor.
   var eased = (1 - cos(PI * clamp(v, 0, 1))) / 2
-  var h = frac(hueDrift + 0.33 - eased / 3)
+  var h = frac(hueNow + (1 - eased) / 3)
 
-  hsv(h, 1, v * v)
+  hsv(h, sat, v * v * (0.3 + 0.7 * v))
 }

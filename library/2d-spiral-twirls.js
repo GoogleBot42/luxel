@@ -8,35 +8,44 @@
 // Sliders at zero deliberately freeze their motion (unlike the buggy
 // zero-guard described of the original).
 
-var twistRate = 0.04       // cycles per second
-//# min=0 max=1 step=0.01 default=0.2
+// All the rate sliders below carry //# bounds, so the UI hands the handler
+// REAL units — they are used as-is, never rescaled from 0..1.
+
+// Wind/unwind oscillations per second; 0 freezes the twist where it stands.
+var twistRate = 0.04
+//# min=0 max=1 step=0.01 default=0.04
 export function sliderTwistSpeed(v) {
-  // inverse-period feel: fully right ~1 s per oscillation; zero = frozen
-  twistRate = v * v
+  twistRate = max(0, v)
 }
 
+// Pinwheel rotation in arm-periods per second: the pattern repeats every
+// 1/arms of a turn, so at the top of the slider a 2-arm wheel spins twice
+// per second. 0 freezes it.
 var rotRate = 0.04
-//# min=0 max=1 step=0.01 default=0.2
+//# min=0 max=4 step=0.01 default=0.04
 export function sliderRotationSpeed(v) {
-  rotRate = v * v
+  rotRate = max(0, v)
 }
 
+// Hue offset of the whole palette, in turns around the colour wheel.
 var baseColor = 0
 //# min=0 max=1 step=0.01 default=0
 export function sliderInitialColor(v) {
   baseColor = v
 }
 
+// Palette drift in full colour cycles per second.
 var colRate = 0.01
-//# min=0 max=1 step=0.01 default=0.1
+//# min=0 max=1 step=0.01 default=0.01
 export function sliderColorSpeed(v) {
-  colRate = v * v
+  colRate = max(0, v)
 }
 
+// Whole arms, in arms.
 var arms = 2
-//# min=0 max=1 step=0.5 default=0.5
+//# min=1 max=8 step=1 default=2
 export function sliderArms(v) {
-  arms = 1 + floor(v * 2.999)   // snapped integer, 1..3
+  arms = clamp(floor(v), 1, 8)
 }
 
 var twistPhase = 0

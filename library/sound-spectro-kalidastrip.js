@@ -17,16 +17,38 @@ export var maxFrequencyMagnitude
 var bands = arrayLength(frequencyData)
 
 // --- tuning ---------------------------------------------------------------
-var TARGET_FILL = 0.2      // aim: ~1/5 of the strip lit
+// The four values marked (control) below are driven by the sliders further
+// down; their top-level values are the untouched defaults.
+var TARGET_FILL = 0.2      // (control) aim: ~1/5 of the strip lit
 var KP = 0.4               // proportional gain
 var KI = 0.06              // integral gain (a bit smaller than KP)
 var INTEGRAL_MAX = 300
 var AVG_WINDOW = 1500      // ms — rolling-average time window
 var AVG_EPS = 0.0002       // rolling averages never reach zero
-var SCROLL_INTERVAL = 0.035 // time() interval: fold slides over ~2.3 s
-var ATTACK_GAIN = 4        // live energy amplification before subtracting avg
-var DECAY = 0.75           // trail persistence per frame
+var SCROLL_INTERVAL = 0.035 // (control) fold slides over ~2.3 s
+var ATTACK_GAIN = 4        // (control) live energy amplification
+var DECAY = 0.75           // (control) trail persistence per frame
 var FEEDBACK_CAP = 1       // per-pixel clamp feeding the controller
+
+// --- controls -------------------------------------------------------------
+// How much of the strip the auto-gain controller tries to keep lit; the
+// loudness the room happens to be at is compensated for either way.
+//# min=5 max=80 step=5 default=20
+export function sliderTargetFill(v) { TARGET_FILL = clamp(v, 1, 95) / 100 }
+
+// Share of a spark's brightness carried into the next frame: 0 = no trail,
+// high values smear transients into long comet tails.
+//# min=0 max=95 step=5 default=75
+export function sliderTrailPersistence(v) { DECAY = clamp(v, 0, 95) / 100 }
+
+// Seconds for the kaleidoscope fold to slide once through the spectrum.
+//# min=0.5 max=30 step=0.1 default=2.3
+export function sliderFoldSeconds(v) { SCROLL_INTERVAL = max(0.25, v) / 65.536 }
+
+// How hard a band's live energy is driven against its rolling average
+// before the transient is taken; higher = snappier, punchier flares.
+//# min=1 max=12 step=0.5 default=4
+export function sliderAttackGain(v) { ATTACK_GAIN = max(0.25, v) }
 
 // --- state ----------------------------------------------------------------
 var avg = array(bands)       // per-band rolling average (sensitivity-scaled)

@@ -13,6 +13,42 @@ var SEED = 8.15
 var FLASH_MS = 500       // flash duration
 var RADIUS = 1.5         // flash glow radius in world units
 var HUE = 0.62           // deep sky blue
+var STRIKE_P = 0.0015    // strike chance per millisecond (~1.5 / s)
+var ZOOM = 4             // world units the display spans (bigger = smaller clouds)
+
+// ---- controls ------------------------------------------------------------
+// Average lightning strikes per second (a strike cannot start while
+// another is still lit, so the flashes actually seen run a little lower).
+//# min=0 max=5 step=0.1 default=1.5
+export function sliderStrikeRate(v) {
+  STRIKE_P = clamp(v, 0, 5) / 1000
+}
+
+// How long one flash lasts, in seconds.
+//# min=0.05 max=2 step=0.05 default=0.5
+export function sliderFlashTime(v) {
+  FLASH_MS = max(v, 0.05) * 1000
+}
+
+// Radius of a flash's glow, in world units — the display is ZOOM units
+// across, so the default 1.5 lights a bit over a third of the width.
+//# min=0.5 max=4 step=0.1 default=1.5
+export function sliderFlashRadius(v) {
+  RADIUS = clamp(v, 0.5, 4)
+}
+
+// How many world units of cloud the display spans: small = a close-up of
+// a few big clouds, large = a wide sky full of small ones.
+//# min=1 max=12 step=0.5 default=4
+export function sliderCloudZoom(v) {
+  ZOOM = clamp(v, 1, 12)
+}
+
+// Sky color, as a position on the color wheel (0.62 = deep night blue).
+//# min=0 max=1 step=0.01 default=0.62
+export function sliderSkyHue(v) {
+  HUE = clamp(v, 0, 1)
+}
 
 var flashMs = 0          // countdown; 0 when idle
 var flashX = 0
@@ -26,11 +62,13 @@ export function beforeRender(delta) {
   flashMs = max(0, flashMs - delta)
   if (flashMs <= 0) {
     // per-second-normalized strike chance (~1.5 strikes/s on average)
-    if (random(1) < delta * 0.0015) {
+    if (random(1) < delta * STRIKE_P) {
       flashMs = FLASH_MS
-      // uniform over a region noticeably larger than the +-2 visible window
-      flashX = -3.5 + random(7)
-      flashY = -3.5 + random(7)
+      // uniform over a region 1.5 units larger than the visible window on
+      // every side, so strikes often land partly off-screen
+      var half = ZOOM / 2 + 1.5
+      flashX = -half + random(half * 2)
+      flashY = -half + random(half * 2)
     }
   }
   flashFrac = flashMs / FLASH_MS
@@ -49,9 +87,9 @@ function cloudDensity(px, py) {
 }
 
 export function render2D(index, x, y) {
-  // recenter and zoom out: the window shows a 4-unit-wide slice, +-2
-  var px = (x - 0.5) * 4
-  var py = (y - 0.5) * 4
+  // recenter and zoom out: the window shows a ZOOM-unit-wide slice
+  var px = (x - 0.5) * ZOOM
+  var py = (y - 0.5) * ZOOM
 
   var dens = cloudDensity(px, py)
 

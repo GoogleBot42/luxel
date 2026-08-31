@@ -23,7 +23,8 @@ export function sliderWidth(v) { width = 0.02 + v * 0.2 } //# min=0 max=1 step=0
 sparkle = 0.6
 export function sliderSparkle(v) { sparkle = v } //# min=0 max=1 step=0.01 default=0.6
 count = 6
-export function sliderJewels(v) { count = 1 + floor(v * (maxJewels - 1)) } //# min=1 max=20 step=1 default=6
+// real units: the slider sends a jewel COUNT, clamped to the allocated arrays
+export function sliderJewels(v) { count = clamp(floor(v), 1, maxJewels) } //# min=1 max=20 step=1 default=6
 rainbow = 0
 export function toggleRainbow(v) { rainbow = v }
 pickH = 0.78

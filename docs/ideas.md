@@ -12,8 +12,9 @@ Legend: **[S/M/L]** effort · ★ value (1–3) · `compat` = keeps PB patterns 
 New builtins are the cheapest high-value wins — they slot into the VM table
 and the autocomplete/docs pipeline, and can't break existing code.
 
-- **Easing functions** [S] ★★★ — DONE (quad/cubic in/out/inOut +
-  `easeOutBack`/`easeOutElastic`/`easeOutBounce`; endpoint + shape tests).
+- **Easing functions** [S] ★★★ — DONE (the standard thirty: sine/quad/cubic/
+  quart/quint/expo/circ/back/elastic/bounce, each in/out/inOut; endpoint +
+  reference-value + shape tests).
 - **Color-space helpers** [M] ★★★ — DONE (`oklch`/`oklab`, value-returning
   `rgb2hsv`/`hsv2rgb`, `mixColors`).
 - **Smoothing / filters over arrays** [M] ★★ — DONE (`blur1D(arr, radius)`,

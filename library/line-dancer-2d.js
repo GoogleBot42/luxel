@@ -29,7 +29,12 @@ export function sliderReflections(v) { sides = 1 + floor(v * 6.99) }
 export function beforeRender(delta) {
   t = mod(t + delta / 1000, 600)
   clock = t * speed
-  zoom = triangle(time(0.076))       // ~5 s breathing cycle
+  // ~5 s breathing cycle. Squaring flattens the BOTTOM of the breath, so the
+  // stripe scale lingers near zero: that long, deep trough is the "distort"
+  // phase where the whole image melts into a flat dim glow before blooming
+  // back into stripes.
+  zoom = triangle(time(0.076))
+  zoom = zoom * zoom * (2 - zoom)         // 1 at the top, ~2*z^2 near 0
   spin = t * 0.15                    // slow kaleidoscope drift
 
   resetTransform()
@@ -51,8 +56,11 @@ export function render2D(index, x, y) {
   var ang = d * d * sin(d + clock)
   var tx = x * cos(ang) - y * sin(ang)
 
-  // shading: bright ribbon core carved out of black
-  var v = 1 - triangle(tx * (1 + 5 * zoom))
+  // Shading: bright ribbon core carved out of black. The stripe scale is
+  // PURELY the zoom (no floor), so when the breath bottoms out the argument
+  // collapses to zero for every pixel and the panel settles on wave(0)^2 =
+  // 0.25 — a flat, dim, featureless glow instead of a bright line.
+  var v = wave(tx * 5 * zoom)
   v = v * v
   var h = tx * zoom + zoom + ang / PI2
   hsv(h, 1, v)

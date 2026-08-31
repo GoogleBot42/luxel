@@ -16,6 +16,42 @@ var DECAY = 0.88        // tail brightness multiplier per step
 var SAT_GROW = 1.25     // tail saturation multiplier per step (clamps at 1)
 var SPAWN_P = 0.067     // ~1 in 15 chance per step of an early new head
 
+var HUE_INTERVAL = 0.45 // time() interval for the hue clock (~30 s)
+var HUE_STEP = 0.004    // hue nudge per pixel along a trail
+var REVERSE = 0         // 1 = meteors travel the other way along the strip
+
+// ---- controls ------------------------------------------------------------
+// Meteor speed in pixels per second.
+//# min=5 max=200 step=5 default=50
+export function sliderSpeed(v) {
+  STEP_MS = 1000 / clamp(v, 5, 200)
+}
+
+// Trail length in pixels: how far behind the head the trail takes to decay
+// to the 2% floor where a new meteor may be spawned.
+//# min=3 max=60 step=1 default=31
+export function sliderTailLength(v) {
+  DECAY = pow(0.02, 1 / clamp(floor(v), 3, 60))
+}
+
+// Average gap between meteor heads, in pixels.
+//# min=2 max=60 step=1 default=15
+export function sliderMeteorGap(v) {
+  SPAWN_P = 1 / clamp(floor(v), 2, 60)
+}
+
+// Seconds for the shower's color to walk the whole spectrum.
+//# min=2 max=120 step=1 default=30
+export function sliderHueCycle(v) {
+  HUE_INTERVAL = clamp(v, 2, 120) / 65.536
+}
+
+// Send the meteors the other way along the strip.
+//# default=0
+export function toggleReverse(v) {
+  REVERSE = v
+}
+
 var hBuf = array(pixelCount)
 var sBuf = array(pixelCount)
 var vBuf = array(pixelCount)
@@ -23,7 +59,7 @@ var head = 0
 var accum = 0
 
 export function beforeRender(delta) {
-  hueClock = time(0.45)              // full rainbow drift in ~30 s
+  hueClock = time(HUE_INTERVAL)      // full rainbow drift in ~30 s
   accum += delta
   while (accum >= STEP_MS) {
     accum -= STEP_MS
@@ -42,13 +78,15 @@ function step() {
     vBuf[head] = 1
   } else {
     // Tail continuation: dim, nudge hue, saturate toward vivid.
-    hBuf[head] = hBuf[prev] - 0.004
+    hBuf[head] = hBuf[prev] - HUE_STEP
     sBuf[head] = min(1, sBuf[prev] * SAT_GROW)
     vBuf[head] = vBuf[prev] * DECAY
   }
 }
 
 export function render(index) {
-  var i = (index + head) % pixelCount
+  var i = index
+  if (REVERSE) i = pixelCount - 1 - index
+  i = (i + head) % pixelCount
   hsv(hBuf[i], sBuf[i], vBuf[i])
 }

@@ -18,7 +18,15 @@ var h4 = 0.14
 
 var accum = 0
 var TICK = 40            // housekeeping runs every ~40 ms
-var FADE = 0.008         // per tick: full brightness reaches black in ~5 s
+var BASE_FADE = 0.008    // per tick: full brightness reaches black in ~5 s
+var fade = BASE_FADE     // BASE_FADE * speed
+
+// Speed multiplier: 1 = the original ~5 s fade, 5 = a ~1 s frantic shimmer,
+// 0.2 = a ~25 s slow bloom.
+//# min=0.2 max=5 step=0.05 default=1
+export function sliderSpeed(v) {
+  fade = BASE_FADE * clamp(v, 0.05, 20)
+}
 
 export function hsvPickerPrimary(h, s, v)    { h1 = h }   // only hue is used
 export function hsvPickerSecondary(h, s, v)  { h2 = h }
@@ -33,7 +41,7 @@ export function beforeRender(delta) {
     for (i = 0; i < pixelCount; i++) {
       // fixed fade rate per tick (clean version of the original's
       // frame-rate-entangled decrement)
-      bri[i] -= FADE
+      bri[i] -= fade
       if (bri[i] <= 0) {
         // weighted palette pick: ~30 / 30 / 37 / 3 percent
         var r = random(1)

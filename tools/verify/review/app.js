@@ -35,6 +35,16 @@ const DECISION_LABEL = {
   fork: "⋔ fork",
   "needs-work": "⚙ needs work",
 };
+// A fix pass stamps `addressedAt` on the decision entries it acted on; the
+// stamp survives until the slug is re-decided (the server rewrites the whole
+// entry then), so "addressed" = fixed and awaiting Jeremy's re-review. It is
+// a virtual chip, not a decision kind — a pair can be both needs-work and
+// addressed.
+const ADDRESSED = "addressed";
+const ADDRESSED_LABEL = "↻ addressed";
+
+// Polled readouts, not inputs — they have no widget position to get wrong.
+const READONLY_KINDS = new Set(["showNumber", "gauge"]);
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -381,7 +391,8 @@ function makeCard(pair) {
   if (pair.rig.overridden) rigB.title = "rig overridden by tools/verify/fixups.json";
   head.append(rigB, verdictBadge(pair));
   const decBadge = el("span", "badge hidden");
-  head.append(decBadge);
+  const addrBadge = el("span", "badge hidden");
+  head.append(decBadge, addrBadge);
   head.onclick = () => openModal(pair);
   root.append(head);
 
@@ -411,6 +422,10 @@ function makeCard(pair) {
       const d = pair.decision?.decision;
       decBadge.className = d ? `badge d-${d}` : "badge hidden";
       decBadge.textContent = d ? DECISION_LABEL[d] : "";
+      const at = pair.decision?.addressedAt;
+      addrBadge.className = at ? "badge d-addressed" : "badge hidden";
+      addrBadge.textContent = at ? ADDRESSED_LABEL : "";
+      if (at) addrBadge.title = `fix pass acted on this ${at} — re-review and re-decide`;
       root.classList.toggle("decided", !!d);
     },
   };
@@ -543,6 +558,35 @@ function controlPanel(side, source) {
     const h = hints.get(c.name) ?? {};
     const cur = (i, dflt) => side.values[c.name]?.[i] ?? dflt;
 
+    // An UNTOUCHED control is running whatever the pattern's own top-level
+    // code put in the variable, and the engine offers no way to read that back
+    // (lx_set_control with no args INVOKES the handler, which would overwrite
+    // it). Only a `//# default=` declares it. Without one, the position drawn
+    // below is a GUESS, so say so: two sides both parked at a guessed 0.5 read
+    // as "same value" while their engines hold different ones — exactly what
+    // hid the orig-0.4 / port-0.5 Slope gap in holiday-diagonal-stripes until
+    // the slider was nudged.
+    const untouched = side.values[c.name] === undefined;
+    const guessed =
+      untouched && h.default === undefined && c.kind !== "trigger" && !READONLY_KINDS.has(c.kind);
+    let flag = null;
+    if (guessed) {
+      row.classList.add("guess");
+      flag = el("span", "guessflag", "?");
+      flag.title =
+        `${c.name}: no //# default declared, and a control's live value cannot be read back ` +
+        `from the engine. The position shown is a PLACEHOLDER, not this side's actual value — ` +
+        `the pattern's own top-level initialiser is what is rendering. Move it to take control ` +
+        `(and to make both sides comparable, set the same value on each).`;
+      row.append(flag);
+    }
+    // First user input makes the widget authoritative again.
+    const settled = () => {
+      row.classList.remove("guess");
+      flag?.remove();
+      flag = null;
+    };
+
     if (c.kind === "slider" || c.kind === "inputNumber") {
       const min = h.min ?? 0;
       const max = h.max ?? 1;
@@ -556,6 +600,7 @@ function controlPanel(side, source) {
         if (Number.isNaN(v)) return;
         side.setControl(c.name, [v]);
         num.value = v;
+        settled();
       };
       if (c.kind === "slider") {
         const r = el("input");
@@ -590,6 +635,7 @@ function controlPanel(side, source) {
         r.oninput = () => {
           vals[i] = Number(r.value);
           side.setControl(c.name, vals.slice());
+          settled();
         };
         line.append(r);
         stack.append(line);
@@ -599,7 +645,13 @@ function controlPanel(side, source) {
       const cb = el("input");
       cb.type = "checkbox";
       cb.checked = cur(0, h.default ?? 0) > 0.5;
-      cb.onchange = () => side.setControl(c.name, [cb.checked ? 1 : 0]);
+      // Native tri-state says "unknown" better than any badge can.
+      cb.indeterminate = guessed;
+      cb.onchange = () => {
+        cb.indeterminate = false;
+        side.setControl(c.name, [cb.checked ? 1 : 0]);
+        settled();
+      };
       row.append(cb);
     } else if (c.kind === "trigger") {
       const b = el("button", "btn", "fire");
@@ -767,7 +819,8 @@ function matches(pair) {
   if (state.verdictFilter.size && !state.verdictFilter.has(pair.verdict?.verdict ?? "")) return false;
   if (state.decisionFilter.size) {
     const d = pair.decision?.decision ?? "undecided";
-    if (!state.decisionFilter.has(d)) return false;
+    const isAddressed = state.decisionFilter.has(ADDRESSED) && !!pair.decision?.addressedAt;
+    if (!state.decisionFilter.has(d) && !isAddressed) return false;
   }
   return true;
 }
@@ -812,7 +865,10 @@ function wireChrome() {
     for (const s of liveSides.concat(modalSides)) s.start();
   };
   chipRow($("verdictFilters"), VERDICTS, state.verdictFilter);
-  chipRow($("decisionFilters"), ["undecided", ...DECISIONS], state.decisionFilter, DECISION_LABEL);
+  chipRow($("decisionFilters"), ["undecided", ...DECISIONS, ADDRESSED], state.decisionFilter, {
+    ...DECISION_LABEL,
+    [ADDRESSED]: ADDRESSED_LABEL,
+  });
   const q = $("q");
   q.oninput = () => {
     state.query = q.value.trim().toLowerCase();

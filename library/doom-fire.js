@@ -122,6 +122,18 @@ export function render2D(index, x, y) {
   var cell = floor(y * 15.99) * W + floor(x * 15.99) + 1  // +1 skips the pad
   var heat = cur[cell]
   var v = heat * heat * heat   // cubed: only genuinely hot cells glow
-  // hotter cells slide along the wheel and wash toward white
-  hsv(baseHue + 0.07 * v, clamp(1.08 - 0.5 * v, 0, 1), v * bright)
+
+  // PSX-DOOM fire ramp: black -> dark red -> red -> orange -> yellow ->
+  // white-hot. Hue and saturation track the RAW heat, not the cubed value:
+  // driving them off the cubed value kept the whole flame pinned at red
+  // while the saturation fell away, which painted it a washed-out salmon
+  // instead of fire. Everything below a quarter heat stays pure red (Doom's
+  // palette spends its bottom third on dark reds); the top of the ramp runs
+  // out to yellow and then bleaches to white only in the hottest cells.
+  var h = clamp((heat - 0.25) / 0.75, 0, 1)
+  h = h * h * h                // cubed: the ramp lingers in the reds and only
+                               // runs out to yellow in the hottest tenth
+  hsv(baseHue + 0.16 * h,
+      1 - 0.85 * clamp((heat - 0.92) / 0.08, 0, 1),
+      v * bright)
 }

@@ -15,8 +15,45 @@ var LEN_FRACTION = 0.2    // nominal icicle length (actual: 1x..2x this)
 var SPARKLE_PROB = 0.2    // chance an icicle sparkles
 var WAVE_PROB = 0.7       // chance an icicle gets the intermittent wave tail
 var MAX_GAP_MS = 4000     // dark pause between icicles: 0..this
-var SCHEME_LIMIT = 6      // eligible color schemes 0..limit-1 (low = calmer)
+var SCHEME_LIMIT = 6      // number of color schemes
+var SCHEME_PIN = 0        // 0 = roll a scheme per icicle, 1..6 = pin one
 var WAVE_CYCLES = 12      // spatial bands across the unit height
+
+// ---- controls ------------------------------------------------------------
+// Nominal seconds for one icicle to fall the whole height (each icicle
+// rolls its own duration between this and twice this).
+//# min=0.5 max=10 step=0.1 default=3
+export function sliderFallTime(v) {
+  FALL_SECONDS = max(v, 0.5)
+}
+
+// Longest dark pause between icicles, in seconds (each gap is drawn
+// uniformly between zero and this).
+//# min=0 max=10 step=0.5 default=4
+export function sliderMaxGap(v) {
+  MAX_GAP_MS = clamp(v, 0, 10) * 1000
+}
+
+// Nominal icicle length as a fraction of the display height (each icicle
+// rolls its own length between this and twice this).
+//# min=0.05 max=0.6 step=0.01 default=0.2
+export function sliderLength(v) {
+  LEN_FRACTION = clamp(v, 0.05, 0.6)
+}
+
+// 0 = a fresh random color scheme per icicle (the original behavior),
+// 1..6 = pin one: 1 cold white, 2 fading white, 3 warm white, 4 deep blue,
+// 5 blue/white shimmer, 6 candy cane.
+//# min=0 max=6 step=1 default=0
+export function sliderColorScheme(v) {
+  SCHEME_PIN = clamp(floor(v), 0, SCHEME_LIMIT)
+}
+
+// Percent of icicles that sparkle.
+//# min=0 max=100 step=5 default=20
+export function sliderSparkleChance(v) {
+  SPARKLE_PROB = clamp(v, 0, 100) / 100
+}
 
 // ---- state ---------------------------------------------------------------
 var progress = 0          // 0..1 fall progress of the current icicle
@@ -49,6 +86,7 @@ function spawnIcicle() {
   else if (style == 2) tailPeriod = WAVE_CYCLES * 0.85
   else tailPeriod = WAVE_CYCLES * 6
   scheme = floor(random(SCHEME_LIMIT))
+  if (SCHEME_PIN > 0) scheme = SCHEME_PIN - 1   // draw either way: same rolls
   rand1 = random(1)
   rand2 = random(1)
   // reuse the global sawtooth: capture its phase now so this icicle's
