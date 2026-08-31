@@ -80,6 +80,14 @@ board-seengreat-hub75 = ["esp32s3", "hub75"]
 # (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
 # browser navigation — Chromium preconnect wants 3 sockets at cold nav.
 small-chip = []
+# Hosted-UI profile (Gitea #11): build WITHOUT the on-device playground.
+# The assets partition is never read, never written and never shipped —
+# `/` always serves the embedded fallback page, which links to the hosted
+# playground at googlebot42.github.io/luxel with `?device=` prefilled. Drops
+# the LUXA reader, the streaming asset body, the ETag/304 machinery and the
+# `POST /api/assets` installer from the app image, and drops the ~641 KB
+# bundle from what has to be flashed. See docs/boards.md.
+hosted-ui = []
 # HUB75 panel output (ESP32-S3 LCD_CAM only — C3/S2 have no parallel-output
 # peripheral; classic-ESP32/C6 support exists in esp-hub75 but is not wired
 # up here yet). Compose-per-frame into a DMA framebuffer that autonomously

@@ -24,7 +24,8 @@ Hermetic images (no devshell needed) come from the flake — one package per
 board: `nix build .#luxel-fw-pixelblaze-v3` (also `luxel-fw-c3-devkit`,
 `luxel-fw-athom-music`, `luxel-fw-esp32-generic`, `luxel-fw-s3-devkit`,
 `luxel-fw-c6-devkit`, `luxel-fw-s3-hub75`,
-`luxel-fw-seengreat-hub75`); see docs/firmware.md for the
+`luxel-fw-seengreat-hub75`, and the hosted-UI variant
+`luxel-fw-c6-devkit-hosted`); see docs/firmware.md for the
 credential-baking caveats.
 
 ## Supported boards
@@ -194,6 +195,37 @@ routes — it is why `server.rs` must keep its hand-written flat-match
 introduces a second writer type and would undo the whole collapse).
 Details and symbol tables: docs/size-report.md.
 
+2026-08-30, hosted-UI build mode (Gitea #11): **−13,936 to −14,544 B on
+every board**, and the assets partition is never written at all. Fleet
+A/B, devshell builds with creds so the absolute numbers sit ~1.5 KB above
+the credless flake column just above — both columns here were taken the
+same way, at the same revision:
+
+| board | app image | slot margin | + `hosted-ui` | margin | saved |
+|---|---:|---:|---:|---:|---:|
+| `board-c3-devkit` | 889,136 B | 159,440 B | 875,200 B | 173,376 B | 13,936 B |
+| `board-pixelblaze-v3` | 934,928 B | 113,648 B | 920,432 B | 128,144 B | 14,496 B |
+| `board-athom-music` | 934,848 B | 113,728 B | 920,336 B | 128,240 B | 14,512 B |
+| `board-esp32-generic` | 934,768 B | 113,808 B | 920,352 B | 128,224 B | 14,416 B |
+| `board-s3-devkit` | 875,424 B | 173,152 B | 860,976 B | 187,600 B | 14,448 B |
+| `board-s3-devkit` + `hub75` | 870,880 B | 177,696 B | 856,368 B | 192,208 B | 14,512 B |
+| `board-seengreat-hub75` | 870,896 B | 177,680 B | 856,352 B | 192,224 B | 14,544 B |
+| `board-c6-devkit` | 981,696 B | 66,880 B | 967,728 B | **80,848 B** | 13,968 B |
+
+The shipped variant, measured the way CI measures (credless flake build,
+`nix build .#luxel-fw-c6-devkit-hosted`): **966,832 B, 81,744 B / 7.79 % of
+the slot free** against the same board's 980,784 B / 67,792 B / 6.46 % — so
+the mode is also what takes the C6 clear of `image-check.sh`'s 6 % warn line
+with room to spare.
+
+Strikingly flat across chips (1.42–1.67 % of the image) — the code that
+leaves is plain logic with no chip-specific codegen. It also hands back
+DRAM: `.stack` on `board-pixelblaze-v3` goes **27,828 → 32,524 B**,
+because the response future the web-task arena is sized for loses its
+asset arm (largest frame 9,552 → 7,504 B). No new frame anywhere; the
+12,288 B budget is untouched. What the mode is and when to use it:
+"Hosted-UI builds" below.
+
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
 **3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).
@@ -242,6 +274,58 @@ now more than a nicety on the panel boards: at 4096 px the per-frame
 buffers alone are ~48 KB of heap (see the pixel-cap section), so the S3's
 ~26 KB of surplus stack is the obvious place to find it — measured on
 metal in #75, not guessed at here.
+
+## Hosted-UI builds (no on-device web app)
+
+`hosted-ui` is a cargo feature, not a board — combine it with a board
+feature to build a device that carries **no playground at all** and points
+at the hosted one instead (Gitea #11):
+
+```sh
+EXTRA_FEATURES=hosted-ui BOARD=board-c6-devkit firmware/build-esp32.sh
+EXTRA_FEATURES=hosted-ui BOARD=board-c6-devkit tools/stack-check.sh
+nix build .#luxel-fw-c6-devkit-hosted     # the one shipped variant
+```
+
+Normally the playground lives in the `assets` partition (0x310000, 0xF0000)
+as a LUXA archive, and `/` serves `/index.html` out of it. With `hosted-ui`:
+
+- `src/assets.rs` keeps only `read_chunk` — the tree's stack-safe flash
+  reader, which ota.rs and takeover.rs use and which is not asset-specific.
+  The TOC, the archive parser and `AssetWriter` are gone.
+- `server.rs` loses the streaming `FlashAsset` body, the ETag/`If-None-Match`
+  304 path, `HVal::Owned`, the `/assets/` cache-control policy and the
+  `POST /api/assets` installer (which answers a plain "this image has no
+  on-device web app" instead of 404ing, so `tools/deploy.sh --assets-only`
+  says something useful).
+- `/` always serves the embedded fallback page — the same one `/min` serves —
+  which links to `https://googlebot42.github.io/luxel/?device=http://<this
+  host>`, built client-side. `firmware/build.rs` swaps that page's
+  "install the UI with tools/deploy.sh" paragraph for a hosted-build one, so
+  it never advertises a route the image doesn't have.
+- `build-esp32.sh` neither packs nor writes the bundle: a `flash` leaves the
+  assets partition alone and an `image` composes a full-flash binary without
+  it. The release workflow does the same for `luxel-c6-devkit-hosted`.
+
+What it buys: **~14 KB of the 1 MiB OTA slot on every board** and ~4.7 KB of
+DRAM back into the main stack (numbers in the ceiling section above), plus
+the ~641 KB bundle never having to be written to a device at all. The
+`assets` partition's 983,040 B stays allocated-to-nothing; reclaiming it
+needs a partition-table fork and is Gitea #199, not this mode.
+
+What it costs: the device is **useless without internet** (or at least
+without a copy of the playground hosted somewhere), which is the opposite of
+the product's normal promise — hence a feature and not a default. The hosted
+copy is https and devices are http, so the browser's mixed-content / Local
+Network Access handling matters more here than anywhere else (Gitea #162).
+
+**No hosted-ui image has ever booted on hardware** — everything above is
+build-time and mirror-level evidence. The bring-up checklist is Gitea #198.
+`tools/image-check.sh` asserts the mode in both directions when
+`EXPECT_FEATURES` names it: the `assets: hosted-ui build` boot line must be
+present *and* the LUXA reader's strings must be absent, so a hosted image
+that silently kept the asset code fails the build rather than quietly giving
+back the saving.
 
 ## Pixel caps are per board
 

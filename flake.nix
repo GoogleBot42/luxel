@@ -239,6 +239,19 @@
           chip = "esp32c6";
           target = "riscv32imac-unknown-none-elf";
         };
+        # Hosted-UI image (Gitea #11): no on-device playground — `/` serves
+        # the embedded page that links to the hosted playground with
+        # `?device=` prefilled, and the assets partition is never written.
+        # The C6 is the shipped variant because it owns the tightest OTA-slot
+        # margin in the fleet (docs/boards.md); ANY board builds this way with
+        # `EXTRA_FEATURES=hosted-ui`, it just isn't worth a release artifact
+        # each.
+        luxel-fw-c6-devkit-hosted = {
+          board = "board-c6-devkit";
+          extraFeatures = [ "hosted-ui" ];
+          chip = "esp32c6";
+          target = "riscv32imac-unknown-none-elf";
+        };
         # HUB75 panel output on the S3 (LCD_CAM, Gitea #72). Same board
         # feature as the devkit plus the hub75 driver feature.
         luxel-fw-s3-hub75 = {

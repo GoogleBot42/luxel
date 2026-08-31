@@ -18,6 +18,10 @@ name: release
 #   luxel-<board>-<ver>-full.bin  full-flash image incl. bootloader,
 #                                 partition table, app AND the web assets:
 #                                 espflash write-bin 0x0 <file>
+#   luxel-c6-devkit-hosted-…      the same two images for the hosted-UI
+#                                 build (Gitea #11): no on-device web app,
+#                                 so the -full.bin leaves the assets
+#                                 partition erased. See docs/boards.md.
 #   luxel-web-assets-<ver>.luxa   the packed web app alone: POST /api/assets
 #   luxel-web-dist-<ver>.tar.gz   the playground as plain static files
 #                                 (host anywhere; playground mode needs no
@@ -114,12 +118,18 @@ jobs:
           # s3-devkit/c6-devkit/s3-hub75/seengreat-hub75 are UNTESTED ON METAL
           # (no bench hardware) — they ship as build artifacts only; see
           # docs/boards.md.
-          for board in c3-devkit pixelblaze-v3 athom-music esp32-generic s3-devkit c6-devkit s3-hub75 seengreat-hub75; do
+          for board in c3-devkit pixelblaze-v3 athom-music esp32-generic s3-devkit c6-devkit s3-hub75 seengreat-hub75 c6-devkit-hosted; do
             echo "::group::luxel-fw-$board"
             # extra cargo features per variant, for image-check's
             # feature-gated markers. seengreat-hub75 gets `hub75` from its
-            # own board feature, but image-check still has to expect it.
-            EXTRAS=""; case "$board" in *hub75) EXTRAS="hub75";; esac
+            # own board feature, but image-check still has to expect it;
+            # *-hosted asserts the asset reader is GONE (image-check's
+            # absent-marker half).
+            EXTRAS=""
+            case "$board" in
+              *hub75) EXTRAS="hub75";;
+              *-hosted) EXTRAS="hosted-ui";;
+            esac
             nix build ".#luxel-fw-$board" --print-build-logs --out-link "result-$board"
             # load-bearing features must be linked (the //SIZETEST guard) AND
             # the app image must keep a margin in the 1 MiB OTA slot — both
@@ -132,8 +142,13 @@ jobs:
             # the same composition as firmware/build-esp32.sh `image`
             cp "result-$board/luxel-fw.bin" "dist/luxel-$board-$V-full.bin"
             chmod +w "dist/luxel-$board-$V-full.bin"
-            dd if=dist-luxa/web-assets.luxa "of=dist/luxel-$board-$V-full.bin" \
-               bs=4096 seek=$((ASSETS_OFF / 4096)) conv=notrunc status=none
+            # hosted-UI images have no asset reader — leave their assets
+            # partition erased rather than shipping a bundle nothing serves
+            case "$board" in
+              *-hosted) ;;
+              *) dd if=dist-luxa/web-assets.luxa "of=dist/luxel-$board-$V-full.bin" \
+                    bs=4096 seek=$((ASSETS_OFF / 4096)) conv=notrunc status=none;;
+            esac
             cp "result-$board/luxel-fw.elf" "elfs/luxel-$board-$V.elf"
             echo "::endgroup::"
           done

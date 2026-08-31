@@ -35,6 +35,11 @@ BOARD=board-c6-devkit ./build-esp32.sh
 
 # RAM-constrained profile (docs/boards.md "The `small-chip` profile")
 EXTRA_FEATURES=small-chip BOARD=board-athom-music ./build-esp32.sh
+
+# No on-device web app; the hosted playground drives it instead
+# (docs/boards.md "Hosted-UI builds") — ~14 KB of OTA slot back, and
+# nothing is written to the assets partition
+EXTRA_FEATURES=hosted-ui BOARD=board-c6-devkit ./build-esp32.sh
 ```
 
 `EXTRA_FEATURES` adds non-board cargo features (space-separated);

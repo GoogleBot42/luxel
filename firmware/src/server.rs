@@ -59,7 +59,7 @@ use crate::config::DeviceConfig;
 use crate::leds::Protocol;
 use crate::shared::{BRIGHTNESS, MAX_PIXELS, PIXEL_COUNT, PROTOCOL};
 
-const INDEX_HTML: &str = include_str!("index.html");
+const INDEX_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/index.html"));
 
 const TEXT_PLAIN: &str = "text/plain; charset=utf-8";
 const TEXT_HTML: &str = "text/html; charset=utf-8";
@@ -74,6 +74,10 @@ const TEXT_HTML: &str = "text/html; charset=utf-8";
 /// this enum, and all responses to [Reply], leaves exactly one of each.
 enum HVal {
     Static(&'static str),
+    /// Only the asset ETag needs a runtime-built header value; a `hosted-ui`
+    /// image serves no assets, so the variant (and `String`'s Display path)
+    /// go with it.
+    #[cfg(not(feature = "hosted-ui"))]
     Owned(String),
 }
 
@@ -83,6 +87,7 @@ impl core::fmt::Display for HVal {
         // would undo the fmt diet (Gitea #168) on the hottest path we have.
         f.write_str(match self {
             HVal::Static(s) => s,
+            #[cfg(not(feature = "hosted-ui"))]
             HVal::Owned(s) => s.as_str(),
         })
     }
@@ -104,6 +109,7 @@ enum ApiBody {
     },
     /// `application/octet-stream` — `/api/pixels`.
     Bytes(Vec<u8>),
+    #[cfg(not(feature = "hosted-ui"))]
     Asset(FlashAsset),
     Source(CurrentSource),
     Envelope(CurrentEnvelope),
@@ -125,6 +131,7 @@ impl Content for ApiBody {
             ApiBody::Json(_) => "application/json",
             ApiBody::Text { ct, .. } => ct,
             ApiBody::Bytes(_) => "application/octet-stream",
+            #[cfg(not(feature = "hosted-ui"))]
             ApiBody::Asset(a) => a.content_type(),
             ApiBody::Source(s) => s.content_type(),
             ApiBody::Envelope(e) => e.content_type(),
@@ -140,6 +147,7 @@ impl Content for ApiBody {
             // exact-from-snapshot: these three compute their length from the
             // location snapshot the body will stream, so a swap landing
             // mid-response can never desync Content-Length from the wire
+            #[cfg(not(feature = "hosted-ui"))]
             ApiBody::Asset(a) => a.content_length(),
             ApiBody::Source(s) => s.content_length(),
             ApiBody::Envelope(e) => e.content_length(),
@@ -152,6 +160,7 @@ impl Content for ApiBody {
             ApiBody::Json(s) => s.write_content(writer).await,
             ApiBody::Text { s, .. } => s.write_content(writer).await,
             ApiBody::Bytes(v) => v.write_content(writer).await,
+            #[cfg(not(feature = "hosted-ui"))]
             ApiBody::Asset(a) => a.write_content(writer).await,
             ApiBody::Source(s) => s.write_content(writer).await,
             ApiBody::Envelope(e) => e.write_content(writer).await,
@@ -294,6 +303,7 @@ fn palette_json() -> String {
 /// (`/assets/index-<hash>.js`) can never change under their URL, so cache
 /// them hard and skip revalidation entirely; everything else (index.html,
 /// luxel.wasm, gallery.json) must revalidate — the ETag then yields 304s.
+#[cfg(not(feature = "hosted-ui"))]
 fn asset_cache_control(path: &str) -> (&'static str, &'static str) {
     if path.starts_with("/assets/") {
         ("Cache-Control", "public, max-age=31536000, immutable")
@@ -304,6 +314,7 @@ fn asset_cache_control(path: &str) -> (&'static str, &'static str) {
 
 /// True if one `If-None-Match` token matches our (quoted) ETag. Tolerates
 /// surrounding whitespace, a `W/` weak-validator prefix, and `*`.
+#[cfg(not(feature = "hosted-ui"))]
 fn etag_matches(token: &[u8], etag: &[u8]) -> bool {
     let t = token.trim_ascii();
     if t.len() == 1 && t[0] == b'*' {
@@ -396,11 +407,13 @@ async fn api_status() -> ApiResponse {
 
 /// A flash-resident asset (playground bundle) streamed in 2 KiB chunks —
 /// whole files don't fit the heap.
+#[cfg(not(feature = "hosted-ui"))]
 struct FlashAsset(crate::assets::AssetEntry);
 
 /// The archive's stored content type, mapped to the `&'static str` the
 /// `Content` trait wants. Free-standing so the 304 arm can report the same
 /// type its 200 would have carried, without building a [FlashAsset].
+#[cfg(not(feature = "hosted-ui"))]
 fn asset_content_type(ctype: &str) -> &'static str {
     match ctype {
         t if t.starts_with("text/html") => TEXT_HTML,
@@ -413,6 +426,7 @@ fn asset_content_type(ctype: &str) -> &'static str {
     }
 }
 
+#[cfg(not(feature = "hosted-ui"))]
 impl picoserve::response::Content for FlashAsset {
     fn content_type(&self) -> &'static str {
         asset_content_type(&self.0.ctype)
@@ -650,8 +664,10 @@ impl picoserve::response::Content for CurrentEnvelope {
 
 /// Streams a LUXA archive into the assets flash region (see src/assets.rs).
 /// Same streaming shape as OtaService; no reboot — the TOC hot-reloads.
+#[cfg(not(feature = "hosted-ui"))]
 struct AssetsService;
 
+#[cfg(not(feature = "hosted-ui"))]
 impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, PathParameters>
     for AssetsService
 {
@@ -1100,6 +1116,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     ))
                     .await;
                 }
+                #[cfg(not(feature = "hosted-ui"))]
                 "/api/assets" => {
                     return alloc::boxed::Box::pin(AssetsService.call_request_handler_service(
                         state,
@@ -1107,6 +1124,18 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         request,
                         response_writer,
                     ))
+                    .await;
+                }
+                // A hosted-ui image has no on-device web app by construction.
+                // Say so instead of 404ing: tools/deploy.sh --assets-only and
+                // the release instructions both aim here.
+                #[cfg(feature = "hosted-ui")]
+                "/api/assets" => {
+                    let conn = request.body_connection.finalize().await?;
+                    return json_response(api_error_esc(
+                        "hosted-ui build: this image has no on-device web app",
+                    ))
+                    .write_to(conn, response_writer)
                     .await;
                 }
                 // pattern uploads (LXP1 envelopes) stream into an exact-size
@@ -1551,6 +1580,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             // Serve a flash asset with a strong ETag + Cache-Control, and a
             // 304 shortcut when the client's If-None-Match still matches — so
             // an unchanged asset is never re-downloaded.
+            #[cfg(not(feature = "hosted-ui"))]
             macro_rules! serve_asset {
                 ($e:expr) => {{
                     let mut e = $e;
@@ -1599,6 +1629,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // embedded minimal page is the fallback (and stays reachable
                 // at /min for bring-up debugging)
                 "/" => {
+                    #[cfg(not(feature = "hosted-ui"))]
                     if let Some(e) = crate::assets::lookup("/index.html") {
                         serve_asset!(e);
                     }
@@ -1787,9 +1818,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Some(json_response(j))
                 }
                 other => {
+                    #[cfg(not(feature = "hosted-ui"))]
                     if let Some(e) = crate::assets::lookup(other) {
                         serve_asset!(e);
                     }
+                    #[cfg(feature = "hosted-ui")]
+                    let _ = other;
                     // captive-portal detection: as a provisioning AP, any
                     // unknown URL (a phone's connectivity probe) redirects
                     // to the portal, which pops the sign-in sheet

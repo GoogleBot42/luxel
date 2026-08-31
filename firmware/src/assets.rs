@@ -14,18 +14,35 @@
 //! Legacy "LUXA" archives (no etag field) are still read — such assets get no
 //! ETag and simply revalidate to a full 200.
 //! Offsets are relative to the region start.
+//!
+//! With the `hosted-ui` cargo feature (Gitea #11) everything below except
+//! [read_chunk] compiles out: the device never reads, serves or accepts an
+//! asset archive, `/` serves the embedded fallback page (which links to the
+//! hosted playground), and the assets partition is left unwritten. [init]
+//! stays as a one-line announcement so the mode is visible on the serial
+//! console — and so tools/image-check.sh can assert which mode an image is.
+//! [read_chunk] is NOT asset-specific: ota.rs and takeover.rs use it as the
+//! tree's stack-safe flash reader, so it is always built.
 
+#[cfg(not(feature = "hosted-ui"))]
 use alloc::string::String;
+#[cfg(not(feature = "hosted-ui"))]
 use alloc::vec::Vec;
+#[cfg(not(feature = "hosted-ui"))]
 use core::cell::RefCell;
 
+#[cfg(not(feature = "hosted-ui"))]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+#[cfg(not(feature = "hosted-ui"))]
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 
+#[cfg(not(feature = "hosted-ui"))]
 pub const REGION_START: u32 = 0x31_0000;
+#[cfg(not(feature = "hosted-ui"))]
 pub const REGION_LEN: u32 = 0x0F_0000;
 
+#[cfg(not(feature = "hosted-ui"))]
 #[derive(Clone)]
 pub struct AssetEntry {
     pub path: String,
@@ -39,13 +56,16 @@ pub struct AssetEntry {
     pub etag: String,
 }
 
+#[cfg(not(feature = "hosted-ui"))]
 static TOC: BlockingMutex<CriticalSectionRawMutex, RefCell<Vec<AssetEntry>>> =
     BlockingMutex::new(RefCell::new(Vec::new()));
 
+#[cfg(not(feature = "hosted-ui"))]
 pub fn lookup(path: &str) -> Option<AssetEntry> {
     TOC.lock(|c| c.borrow().iter().find(|e| e.path == path).cloned())
 }
 
+#[cfg(not(feature = "hosted-ui"))]
 pub fn count() -> usize {
     TOC.lock(|c| c.borrow().len())
 }
@@ -72,8 +92,16 @@ pub fn read_chunk(offset: u32, buf: &mut [u8]) -> bool {
     ok
 }
 
+/// `hosted-ui` build: no on-device playground at all. One line so the mode is
+/// unambiguous on the serial console and in the image (image-check asserts it).
+#[cfg(feature = "hosted-ui")]
+pub fn init() {
+    println!("assets: hosted-ui build, no on-device web app");
+}
+
 /// (Re)parse the archive TOC from flash into RAM. Called at boot and after
 /// an asset upload.
+#[cfg(not(feature = "hosted-ui"))]
 pub fn init() {
     let mut header = [0u8; 8];
     let magic = read_chunk(REGION_START, &mut header);
@@ -147,12 +175,14 @@ pub fn init() {
 /// Streamed upload of a new archive. Erases each sector just before writing
 /// it (interleaved with the caller's network reads — see ota.rs for why a
 /// pre-erase burst trips the watchdog); TOC re-parse on commit.
+#[cfg(not(feature = "hosted-ui"))]
 pub struct AssetWriter {
     written: u32,
     expected: u32,
     erased_end: u32,
 }
 
+#[cfg(not(feature = "hosted-ui"))]
 pub async fn begin(expected: u32) -> Result<AssetWriter, &'static str> {
     if expected == 0 || expected > REGION_LEN {
         return Err("archive larger than the assets region");
@@ -166,6 +196,7 @@ pub async fn begin(expected: u32) -> Result<AssetWriter, &'static str> {
     })
 }
 
+#[cfg(not(feature = "hosted-ui"))]
 impl AssetWriter {
     pub async fn write(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
         if self.written == 0 && !(chunk.starts_with(b"LUXA") || chunk.starts_with(b"LUX2")) {

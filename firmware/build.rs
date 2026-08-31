@@ -28,4 +28,72 @@ fn main() {
         "partition-table binary missing its MD5 row"
     );
     std::fs::write(out_dir.join("partition-table.bin"), bin).expect("write partition-table.bin");
+
+    build_index_html(&out_dir);
+}
+
+/// Resolve the embedded fallback page's build-mode blocks (src/index.html,
+/// served at `/min` and at `/` when no playground is installed).
+///
+/// The page differs by one paragraph between the normal build (the UI *can*
+/// be installed onto the device — tell the reader how) and a `hosted-ui`
+/// build (there is no `POST /api/assets` route at all, so that instruction
+/// would be a lie). Keeping ONE html file and stripping the block that does
+/// not apply avoids a second near-identical page drifting out of sync.
+///
+/// Syntax, deliberately dumber than a template engine — literal line-anchored
+/// markers, no nesting: `#if assets` … `#endif` is kept unless `hosted-ui`,
+/// `#if hosted` … `#endif` only with it (each wrapped in an html comment on a
+/// line of its own). Whole-line html comments are dropped too, so the page
+/// can carry build notes for free.
+fn build_index_html(out_dir: &std::path::Path) {
+    println!("cargo:rerun-if-changed=src/index.html");
+    let src = std::fs::read_to_string("src/index.html").expect("read src/index.html");
+    let hosted = std::env::var_os("CARGO_FEATURE_HOSTED_UI").is_some();
+
+    let mut out = String::with_capacity(src.len());
+    // None = emitting; Some(keep) = inside a block we are keeping/dropping
+    let mut block: Option<bool> = None;
+    let mut in_comment = false;
+    let mut seen = 0usize;
+    for line in src.lines() {
+        let t = line.trim();
+        if in_comment {
+            in_comment = !t.ends_with("-->");
+            continue;
+        }
+        match t {
+            "<!--#if assets-->" | "<!--#if hosted-->" => {
+                assert!(block.is_none(), "src/index.html: nested #if block");
+                seen += 1;
+                block = Some((t == "<!--#if hosted-->") == hosted);
+                continue;
+            }
+            "<!--#endif-->" => {
+                assert!(block.is_some(), "src/index.html: stray #endif");
+                block = None;
+                continue;
+            }
+            _ => {}
+        }
+        // whole-line comment (possibly multi-line) — a build-time note
+        if t.starts_with("<!--") {
+            in_comment = !t.ends_with("-->");
+            continue;
+        }
+        if block.unwrap_or(true) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    assert!(block.is_none(), "src/index.html: unterminated #if block");
+    assert!(!in_comment, "src/index.html: unterminated html comment");
+    // If the markers are ever dropped, a hosted-ui image would silently ship
+    // "install the UI with tools/deploy.sh" on a device that has no
+    // /api/assets route. Fail the build instead.
+    assert!(
+        seen >= 2,
+        "src/index.html lost its #if assets / #if hosted blocks ({seen} found)"
+    );
+    std::fs::write(out_dir.join("index.html"), out).expect("write index.html");
 }
