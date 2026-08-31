@@ -10,12 +10,16 @@ py = array(maxP)
 vx = array(maxP)
 vy = array(maxP)
 
+// The three selectors below declare real-unit bounds, so the UI hands the
+// handler the value itself — clamp rather than rescale (a stock PB still
+// sends 0..1, which lands harmlessly at the bottom of each range).
 count = 5
-export function sliderPoints(v) { count = 1 + floor(v * (maxP - 1)) } //# min=1 max=8 step=1 default=5
+export function sliderPoints(v) { count = clamp(floor(v), 1, maxP) } //# min=1 max=8 step=1 default=5
 metric = 0
-export function sliderMetric(v) { metric = floor(v * 3.99) } //# min=0 max=3 step=1 default=0
+export function sliderMetric(v) { metric = clamp(floor(v), 0, 3) } //# min=0 max=3 step=1 default=0
 mode = 1
-export function sliderStyle(v) { mode = floor(v * 3.99) } //# min=0 max=3 step=1 default=1
+export function sliderStyle(v) { mode = clamp(floor(v), 0, 3) } //# min=0 max=3 step=1 default=1
+//# min=0 max=1 step=0.01 default=0.3
 export function sliderSpeed(v) {
   for (var i = 0; i < maxP; i++) {
     px[i] = random(1)
@@ -23,7 +27,7 @@ export function sliderSpeed(v) {
     vx[i] = (random(1) - 0.5) * (0.05 + v * 0.4)
     vy[i] = (random(1) - 0.5) * (0.05 + v * 0.4)
   }
-} //# min=0 max=1 step=0.01 default=0.3
+}
 sliderSpeed(0.3)
 
 export function beforeRender(delta) {

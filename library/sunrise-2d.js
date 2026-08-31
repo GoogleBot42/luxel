@@ -49,8 +49,8 @@ var driftA, driftB
 var baseHue = 40               // flare base hue drifts very slowly
 
 var sliderSeen = 0
+//# min=0 max=1 step=0.01 default=0
 export function sliderMakeTheSunRiseAgain(v) {
-  //# min=0 max=1 step=0.01 default=0
   // value ignored; any movement (after the initial load call) restarts
   if (sliderSeen && stage != 3) { stage = 3; stageSec = 0 }
   sliderSeen = 1

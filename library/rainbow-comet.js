@@ -20,14 +20,14 @@ var fade = 0.5    // 0..1, higher = faster fade / shorter tail
 var headInterval = 0.09
 var decay = 0.9
 
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderSpeed(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   speed = v
   headInterval = 0.13 - v * 0.11   // ~8.5 s .. ~1.3 s per full bounce
 }
 
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderFade(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   fade = v
   decay = 0.97 - v * 0.15          // higher slider => lower decay => faster fade
 }

@@ -213,34 +213,34 @@ export function render(index) {
 // ---------------- Web UI controls (no-ops in automation mode) -------------
 var activeZone = 0
 
+//# min=0 max=1 step=0.01 default=0
 export function sliderActiveZone(v) {
-  //# min=0 max=1 step=0.01 default=0
   if (automationMode()) return
   activeZone = floor(v * (activeZones - 0.001))
 }
 
+//# min=0 max=1 step=1 default=1
 export function sliderZoneOnOff(v) {
-  //# min=0 max=1 step=1 default=1
   if (automationMode()) return
   var nv = floor(v + 0.5)
   if (nv != lastVal) { zones[activeZone][0] = nv; lastVal = nv }
 }
 
+//# min=0 max=1 step=0.01 default=0
 export function sliderEffect(v) {
-  //# min=0 max=1 step=0.01 default=0
   if (automationMode()) return
   zones[activeZone][4] = floor(v * (EFFECTS - 0.001))
 }
 
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderSpeed(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   if (automationMode()) return
   // Inverted: right = faster (smaller period multiplier), with a floor.
   zones[activeZone][6] = clamp(2 - v * 2, 0.05, 2)
 }
 
+//# min=0 max=1 step=0.01 default=0.25
 export function sliderZoneSize(v) {
-  //# min=0 max=1 step=0.01 default=0.25
   if (automationMode()) return
   if (activeZone == activeZones - 1) return   // last zone absorbs remainder
   zones[activeZone][5] = floor(v * pixelCount)
@@ -252,15 +252,15 @@ export function hsvPickerColor(h, s, v) {
   zr[1] = h; zr[2] = s; zr[3] = v
 }
 
+//# min=0 max=1 step=0.01 default=0.25
 export function sliderZoneCount(v) {
-  //# min=0 max=1 step=0.01 default=0.25
   if (automationMode()) return
   activeZones = clamp(floor(v * MAX_ZONES) + 1, 1, MAX_ZONES)
   initZones()
 }
 
+//# min=0 max=1 step=1 default=1
 export function sliderEnableWebUI(v) {
-  //# min=0 max=1 step=1 default=1
   // On => web-UI mode (negative sentinel); off => automation mode.
   protocolVersion = (v >= 0.5) ? -1 : 1
 }

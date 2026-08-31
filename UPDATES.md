@@ -1,5 +1,56 @@
 # Update log
 
+## 2026-08-30 — Lint detached `//#` directives; sweep 13 library patterns
+
+A `//#` control directive parses in exactly two places — trailing on the
+`export function` line, or on the line directly above it (web/src/lib/
+hints.ts). Written on the first line *inside* the handler body, which reads
+perfectly naturally, it is silently ignored: the control degrades to an
+unbounded 0..1 slider with no default. That was the whole ryb-colors defect
+in the review pass, and Gitea #179 found the same inert placement across the
+library.
+
+**The lint (the durable half).** `tools/check-library.sh` now runs a directive
+lint before it compiles anything: any line carrying a `//#` with a
+`min`/`max`/`step`/`default` key that is not in one of the two parsed
+positions fails the sweep, naming file:line. Prose that merely mentions `//#`
+is not flagged. Implemented as inline awk mirroring the two hints.ts regexes,
+so the gate has no new dependency.
+
+**The sweep.** 13 files carried 37 detached directives: b-lightning-flashes,
+bouncy-boxes, dire-spider-2d, m5stack-hex-panels, multisegment-demo,
+music-sequencer-for-v3-only, rainbow-comet, rock-sparks,
+sound-music-spectrum-visualizer, sunrise-2d, thunderstorm,
+twinkling-classic-xmas-strands, voronoi-2d. All 13 untouched renders stayed
+byte-identical (snap.mjs port.png md5, before vs after) — moving a comment is
+inert to the engine. The four "partial misses" the issue also listed
+(perlin-simplex-noise-1d, rgbclock-2d, rocket-by-tony-hampton,
+spinning-plasma-2d) turned out to be clean; the issue's scan had counted prose
+mentions of `//#`.
+
+**Two real-unit handler bugs, exposed by attaching.** A directive that
+declares non-0..1 bounds makes the UI send real units, so a handler that
+rescales as if it got 0..1 breaks. dire-spider-2d's `sliderLegWidth`
+(min=0.1 max=0.2) would have collapsed to a 0.11..0.12 dead slider; both its
+handlers now clamp instead of rescale. voronoi-2d had the same bug in three
+*already-attached* directives, i.e. live on master: `sliderPoints`
+(min=1 max=8) ran `1 + floor(v * 7)`, so the UI's own declared default of 5
+set `count = 36` against an 8-element array — the pattern went black with
+"array index out of bounds" the moment the playground seeded its defaults.
+Both fixed and verified in real chromium.
+
+**The playground seeds `default=` on load** (App.svelte), so attaching a
+directive makes it the effective default. Seven patterns' UI-default render
+now differs from their top-level initializer state, because the declared
+defaults were written while the directives were inert and nobody could see
+them: b-lightning-flashes (halfWidth 8 px → 3.7 on a 60 px strip) and
+rainbow-comet (headInterval 0.09 → 0.075) are the visible ones; bouncy-boxes,
+rock-sparks and twinkling-classic-xmas-strands drift by a few percent;
+dire-spider-2d differs by one LSB of 16.16 control quantization; voronoi-2d
+re-rolls its seed positions. Retuning the control math so each `default=`
+reproduces its shipped constant is Gitea #188, deliberately kept out of a
+placement fix.
+
 ## 2026-08-30 — snap.mjs probes dials across their real range, not 0/0.5/1
 
 `--probe-controls` swept every control at raw 0, 0.5 and 1 and ignored the

@@ -82,8 +82,8 @@ var CMD_SEEDBASS = 104
 // debugging aid: pick a mini-pattern by hand (takes effect only if the
 // manual entry below is uncommented into the script)
 var manualPattern = 0
+//# min=0 max=1 step=0.0625 default=0
 export function sliderChooseManualPattern(v) {
-  //# min=0 max=1 step=0.0625 default=0
   manualPattern = floor(v * 15.99)
   resetShared()
 }

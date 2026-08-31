@@ -19,19 +19,19 @@ var halfWidth = 8        // segment half-width in pixels
 var speed = 0.5          // flash snappiness / gap stretch
 var gapMaxMs = 1000      // max random dark gap
 
+//# min=0 max=1 step=0.01 default=0.3
 export function sliderLightningLength(v) {
-  //# min=0 max=1 step=0.01 default=0.3
   // 1 pixel up to ~15% of the strip (spec suggests fraction-of-strip, not absolute)
   halfWidth = 1 + v * pixelCount * 0.15
 }
 
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderSpeed(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   speed = v
 }
 
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderOffDurationRandomness(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   gapMaxMs = 100 + v * 1900   // up to ~2 s of darkness
 }
 

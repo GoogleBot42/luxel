@@ -15,7 +15,12 @@ paths:
   0..1, so degrade safely.
 - A directive parses ONLY trailing on the export line or on the line
   immediately above it; anywhere else it is silently ignored (web/src/lib/
-  hints.ts). Gitea #179 tracks a lint + the known-affected files.
+  hints.ts). `tools/check-library.sh` lints this and fails the sweep on a
+  detached directive (Gitea #179).
+- Attaching a directive makes it LIVE: the playground seeds each control with
+  its `default=` on load (App.svelte), so the effective default becomes
+  "handler applied at `default=`", not the top-level initializer. Check the
+  two agree before/after, and check the handler consumes the declared units.
 - Shape control math so the declared `default=` reproduces the shipped
   constant, and give the variable that value at top level — then verify the
   untouched render is byte-identical (snap.mjs before/after, compare the

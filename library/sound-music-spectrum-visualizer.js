@@ -49,18 +49,18 @@ presets[2] = 2 / 3    // blue (default, middle of the slider)
 presets[3] = 0.75     // violet-leaning blue
 presets[4] = 0.9      // pink/magenta
 
+//# min=0 max=1 step=0.01 default=1
 export function sliderRainbow(v) {
-  //# min=0 max=1 step=0.01 default=1
   rainbowOn = v > 0.2
 }
 
+//# min=0 max=1 step=0.01 default=0
 export function sliderColorShift(v) {
-  //# min=0 max=1 step=0.01 default=0
   shiftOn = v > 0.2
 }
 
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderColor(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   fixedHue = presets[floor(min(v, 0.999) * 5)]
 }
 

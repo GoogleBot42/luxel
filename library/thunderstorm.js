@@ -12,9 +12,10 @@ nextFlash = 2
 edgeT = 0
 gap = 6
 
+//# min=0 max=1 step=0.01 default=0.7
 export function sliderRainDensity(v) {
   gap = 2 + floor((1 - v) * pixelCount / 4)
-} //# min=0 max=1 step=0.01 default=0.7
+}
 
 export function beforeRender(delta) {
   dt = delta * 0.001
