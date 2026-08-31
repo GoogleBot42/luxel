@@ -53,6 +53,15 @@ these before trusting any build/test failure as a real regression.
    because it runs inside the shell). Outside it, parse with `grep`/`sed` or dump the
    response to a file and read it. If you need ImageMagick or similar one-off tools not
    in the flake, `nix-shell -p <pkg>` alongside it rather than assuming it's present.
+4b. **Bare `nix develop` can enter the MAIN checkout's devshell, not yours.** Its own
+   stderr says which: `warning: Git tree '/home/googlebot/workspace/pixler' is dirty`
+   is the main checkout, `'…/<your-worktree>' is dirty` is yours. The damage is
+   silent, not loud — a *relative* path inside
+   `nix develop --command bash -c "cd web && node …"` once resolved `web/node_modules`
+   in a THIRD session's worktree entirely, where node happily found `puppeteer-core`
+   and would have driven the wrong bindings without a word (2026-08-30). Pass the
+   worktree explicitly — `nix develop /path/to/worktree --command …` — and give every
+   command inside it ABSOLUTE paths.
 5. Regenerate the gallery after the above: `node web/tools/gen-gallery.mjs` (or just run
    `npm run build`/`npm run dev`, which call it as a step). It writes
    `web/public/gallery.json` from `library/*.js` unconditionally, and
