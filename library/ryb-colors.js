@@ -10,18 +10,20 @@ var wheelType = 1     // 0 = HSV wheel, 1 = RYB painter's wheel
 var brightness = 1
 var saturation = 1
 
+// wheel selector in real units: 0 = HSV, 1 = RYB, one step per mode, so the
+// slider snaps between the two wheel types instead of sliding continuously
+//# min=0 max=1 step=1 default=1
 export function sliderWheelType(v) {
-  //# min=0 max=1 step=1 default=1
-  wheelType = round(v)
+  wheelType = clamp(round(v), 0, 1)
 }
 
+//# min=0 max=1 step=0.01 default=1
 export function sliderBrightness(v) {
-  //# min=0 max=1 step=0.01 default=1
   brightness = v
 }
 
+//# min=0 max=1 step=0.01 default=1
 export function sliderSaturation(v) {
-  //# min=0 max=1 step=0.01 default=1
   saturation = v
 }
 

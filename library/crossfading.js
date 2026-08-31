@@ -26,16 +26,23 @@ function setHsv(h, s, v) {
 }
 
 // --- sub-pattern 0: blue-purple shimmer ------------------------------
-var sway0, pulse0
+var sway0, pulse0, focus0
 function pre0() {
   sway0 = 2.5 * sin(time(0.07) * PI2)          // slow sinusoidal wobble
+  // the ripple bands compress around a focus point that slowly wanders
+  // three-quarters of the way along the strip (fraction of the strip, so
+  // the braid lands in the same PLACE at any pixel count)
+  focus0 = 0.80 + 0.07 * sin(time(0.05) * PI2)
   pulse0 = 0.6 + 0.4 * wave(time(0.09))        // strip-wide brightness pulse
 }
 function draw0(index) {
   var p = index / pixelCount
-  // reciprocal of position compresses the ripple bands toward one end
-  var band = wave(0.35 / (p + 0.12) + sway0 / PI2)
-  setHsv(0.6 + 0.16 * band, 1, pulse0)         // blues into violets
+  // reciprocal of the distance to the focus: bands are wide at the near end,
+  // braid into a fine zone at the focus, then open back out past it
+  var d = focus0 - p
+  if (abs(d) < 0.0005) d = 0.0005              // never divide by zero
+  var band = wave(0.035 / d + sway0 / PI2)
+  setHsv(0.5 + 0.333 * band, 1, pulse0)        // cyan through blue to magenta
 }
 
 // --- sub-pattern 1: scrolling rainbow blocks -------------------------
@@ -45,7 +52,7 @@ function pre1() {
 }
 function draw1(index) {
   var p = index / pixelCount
-  if (frac(p * 5) >= 0.5) {                    // lit latter half of each of 5 segments
+  if (frac(p * 8) >= 0.5) {                    // lit latter half of each of 8 segments
     setHsv(p + scroll1, 1, 1)
   } else {
     r = 0
@@ -60,7 +67,7 @@ function pre2() {
   pos2 = triangle(time(0.06)) * (pixelCount - 1)  // ~2 s per end-to-end sweep
 }
 function draw2(index) {
-  var v = max(0, 1 - abs(index - pos2) / 4)    // 4 px linear falloff
+  var v = max(0, 1 - abs(index - pos2) / 3)    // 3 px linear falloff (~6 px lit)
   r = v
   g = 0
   b = 0
