@@ -1,5 +1,25 @@
 # Update log
 
+## 2026-08-30 — digitalRead honours pinMode: a pulled-up pin idles HIGH
+
+`digitalRead()` returned 0 unconditionally, which for the standard
+button-to-ground wiring (`pinMode(pin, INPUT_PULLUP)`) reads as "button
+held forever" — the exact opposite of idle, and the reason every button
+corpus pattern renders its pressed state on both sides of a review pair.
+The VM now remembers the pull-up bit of the last `pinMode` per pin (a
+64-bit mask, pins 0..63; ESP32 tops out at 39) and `digitalRead` reports
+the resulting idle level: 1 under `INPUT_PULLUP`, 0 for plain `INPUT`,
+`INPUT_PULLDOWN`, outputs, and unconfigured pins — so the default stays
+what it was. Masking on the pull-up bit (0x04) rather than comparing to
+`INPUT_PULLUP` (5) also covers a hand-built `INPUT | 4`.
+
+No shipped pattern changes behavior: sunrise uses plain `INPUT`,
+lightbulb-crank uses `INPUT_PULLDOWN`, and example-button-w-debounce
+drives its debouncer from a UI control (its header comment about the
+stub is updated). This is Gitea #177 item 1 only — there is still no way
+to *drive* a pin from outside the pattern, so the pin-injection ABI
+(item 2), fixups control pins (3), and real firmware GPIO (4) stay open.
+
 ## 2026-08-30 — Fix pages/release CI: crates.io API 403 on esp-hub75 fetch
 
 GitHub pages (and release) builds were dying in `nix develop`: the

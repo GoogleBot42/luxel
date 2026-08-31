@@ -166,7 +166,7 @@ export const BUILTINS: BuiltinDoc[] = [
   // GPIO (stubs until a board wires them)
   { name: "pinMode", sig: "pinMode(pin, mode)", doc: "Configure a GPIO pin." },
   { name: "digitalWrite", sig: "digitalWrite(pin, value)", doc: "Drive a GPIO pin high/low." },
-  { name: "digitalRead", sig: "digitalRead(pin)", doc: "Read a GPIO pin (0/1)." },
+  { name: "digitalRead", sig: "digitalRead(pin)", doc: "Read a GPIO pin (0/1). No real GPIO yet — reads the idle level: 1 under INPUT_PULLUP, else 0." },
   { name: "analogRead", sig: "analogRead(pin)", doc: "Read an ADC pin 0..1." },
   { name: "touchRead", sig: "touchRead(pin)", doc: "Read a capacitive touch pin 0..1." },
   // clock (needs wall time; set via the host)
