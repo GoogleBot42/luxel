@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-08-30 — Five patterns' `//# default=` now reproduces the shipped constant
+
+Fallout from #179: attaching the previously-inert `//#` directives made
+`default=` the *effective* default (the playground seeds every control with it
+on load), and in five patterns the declared default had never had to agree with
+the top-level initializer. It didn't — worst case `b-lightning-flashes`, whose
+`sliderLightningLength default=0.3` produced a 3.7 px half-width against a
+shipped `var halfWidth = 8`, halving mean brightness (Gitea #188).
+
+Fixed by making the handler produce the shipped constant *at* the declared
+default, never by moving the constant. Two shapes, chosen per control:
+
+- Where the constant is a **real quantity**, the dial now carries that unit and
+  `default=` is literally the constant — agreement is structural, not arithmetic:
+  `sliderLightningLength` px (`default=8`), `sliderOffDurationRandomness` seconds
+  (`default=1` → the shipped 1000 ms), `bouncy-boxes` `sliderTearRate` Hz
+  (`default=3`), `twinkling-…` `sliderCycleTime` seconds (`default=15`),
+  `rock-sparks` `sliderDrive` (overdrive ceiling, `default=4`) and `sliderSpeed`
+  (rate multiplier, `default=1`). Each handler guards with `max()` so a stock
+  Pixel Blaze, which always sends 0..1, still degrades to the dial's floor.
+- Where it's an opaque coefficient, the 0..1 dial stays but the mapping is
+  **centered on the constant**: `rainbow-comet` `headInterval = 0.09 - (v-0.5)*0.12`
+  and `decay = 0.9 - (v-0.5)*0.14`, `rock-sparks` `beamFocus = 0.03 + (v-0.25)*0.1`
+  (its `default=` moved 0.3 → 0.25). Ranges are preserved; the constant now
+  appears as a literal in the handler.
+
+That centering is not cosmetic. In 16.16 fixed point `0.97 - 0.5*0.14` is one
+LSB short of the literal `0.9`, which was enough to shift pixels: driving
+`rainbow-comet`/`rock-sparks` at their defaults still differed from undriven
+under the first (algebraically correct) rewrite. Writing the constant as the
+literal and zeroing the offset term at the default makes it bit-exact.
+
+`b-lightning-flashes` was the one design call. Its initializer is absolute
+pixels while the handler was fraction-of-strip, so no `default=` reproduces it
+on every rig — one model had to give, and absolute won: the pattern's own code
+is absolute throughout (`abs(index - center)`, `min(halfWidth, pixelCount/2-1)`),
+so a px dial keeps the approved look identical on *any* strip length instead of
+only on the 60 px reference, `newStrike()`'s existing cap already handles the
+short-strip case the fraction model was reaching for, and the spec describes the
+control as "a single pixel up to a few dozen pixels".
+
+Verification: for all five, `snap.mjs` `port.png` md5 is unchanged before vs
+after, **and** a run driven at every declared default now matches that same md5
+— the check the issue actually asks for. Dial ends probed with directed
+`--controls-port` runs (all responsive, no warnings/compile/runtime errors);
+`tools/check-library.sh` clean 303/303 on both grids; all five opened in real
+chromium at 60 fps with their controls seeded at the new bounds.
+
 ## 2026-08-30 — The library gate never ran a mapless strip (Gitea #193)
 
 The #167 soak turned up one error in 303 patterns: `sound - spectromatrix
