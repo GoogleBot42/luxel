@@ -319,9 +319,18 @@ the product's normal promise — hence a feature and not a default. The hosted
 copy is https and devices are http, so the browser's mixed-content / Local
 Network Access handling matters more here than anywhere else (Gitea #162).
 
-**No hosted-ui image has ever booted on hardware** — everything above is
-build-time and mirror-level evidence. The bring-up checklist is Gitea #198.
-`tools/image-check.sh` asserts the mode in both directions when
+**Hardware-verified 2026-08-31** (Gitea #198, Athom rig, `board-athom-music`,
+OTA onto a device whose assets partition still physically held the previous
+image's LUXA archive): boots to `assets: hosted-ui build, no on-device web
+app`, no panic and no boot-guard rollback across a 303-pattern soak, `/` and
+`/min` serve the embedded page while the stale on-flash bundle stays
+invisible, `/assets/…` 404s, `POST /api/assets` refuses with the explanatory
+body without wedging a socket-pool slot, and the API is at parity with the
+normal build (302/303 clean, ~16 KB more free heap). The one leg that could
+not be closed from the container is the **https** Pages copy reaching the
+http device — Gitea #162, a browser-permission gap that needs a headful
+browser, not a firmware one; the same app served over plain http drives the
+device fine. `tools/image-check.sh` asserts the mode in both directions when
 `EXPECT_FEATURES` names it: the `assets: hosted-ui build` boot line must be
 present *and* the LUXA reader's strings must be absent, so a hosted image
 that silently kept the asset code fails the build rather than quietly giving

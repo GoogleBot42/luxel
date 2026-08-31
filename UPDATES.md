@@ -1,5 +1,51 @@
 # Update log
 
+## 2026-08-31 — hosted-ui on metal: the stale bundle stayed invisible
+
+Gitea #198, the bring-up checklist that #204 could not run: `hosted-ui` had
+been built and measured on every board and exercised through the native
+mirror, but no hosted-ui image had ever *booted*. It has now, on the Athom
+rig (`board-athom-music`, 60 px ws2812, brightness 4), with serial captured
+end to end.
+
+The deliberate part of the setup is what the previous image left behind. The
+hosted-ui build went out over plain OTA onto a device that had been running a
+normal v0.1.39 out of `ota_0`, so the **assets partition still physically
+held that image's LUXA archive for the whole test** — nothing erases it, by
+construction. That is the only interesting question the mode asks: with the
+reader compiled out, is the bundle actually unreachable, or does some path
+still find it? It is unreachable. `/` and `/min` served the 1204-byte
+embedded page (uncompressed, compiled in) where the normal image had served a
+368-byte gzip body out of flash; `/assets/index-<hash>.js` 404'd with a
+complete 9-byte body; `POST /api/assets` answered
+`{"ok":false,"error":"hosted-ui build: this image has no on-device web app"}`
+and `tools/deploy.sh --assets-only` turned that into its explanatory message
+and exit 1. Five more 200 KB pushes at the same endpoint changed neither
+`heap_free` nor the `web` slot-stage array — refusing costs nothing and wedges
+nothing.
+
+The proof that the archive really was there the whole time came from the
+recovery leg. A firmware-only OTA back to a normal image — no asset push
+at all — booted straight to `assets: 8 files installed` and served the
+playground again at the **same ETag** it had before the hosted-ui push.
+
+At parity otherwise: `tools/hw-bench.mjs` ran the full 303-pattern gallery
+with **303 clean, 0 errors**, and a pixel-count curve identical at all six
+points to the normal build's (123/120/64/33/20/10 fps at 60/150/300/600/
+1024/2048 px). Idle heap is **+15,988 B** on the hosted image (105,976 vs
+89,988) — the DRAM the asset reader was holding, now measured rather than
+modelled. Exactly one `rst:0x3` in the serial capture across ~2.5 hours (the
+OTA's own reboot), no panic, no `preboot guard` line, `slot` never moved.
+
+One leg stays open and it is not the firmware's. Driven from a plain-http
+origin, the playground reads the device's config, edits its running pattern
+and round-trips a brightness write over CORS with no same-origin app at all.
+Driven from the real **https** Pages copy, every request dies on Chromium
+150's Local Network Access permission — which headless denies outright, and
+which neither a CDP `localNetworkAccess` grant nor an explicit
+`targetAddressSpace` hint got past. That is Gitea #162, now confirmed against
+hardware instead of predicted, and it needs a headful browser to close.
+
 ## 2026-08-30 — Pin injection: buttons you can press without a button
 
 Gitea #177 items 2 and 3. Item 1 (PR #187) made `digitalRead` report a pin's
