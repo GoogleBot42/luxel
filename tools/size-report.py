@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Bucket firmware symbols by crate/origin from `nm -C --size-sort` output."""
+"""Bucket firmware symbols by crate/origin from `nm -C -S --defined-only` output.
+
+Uses the ELF `st_size` of each defined symbol. Do NOT go back to
+`nm --size-sort`: for symbols that carry no size it *estimates* one from the
+next symbol's address, which on RISC-V images turns linker-script NOTYPE
+symbols (`_rwtext_len`, whose value is a length, not an address), `$d`
+mapping symbols and `.L*` locals into hundreds of megabytes of phantom
+"other C/asm" (Gitea #174). Size-less symbols are dropped here instead.
+"""
 import re
 import subprocess
 import sys
@@ -7,7 +15,7 @@ from collections import defaultdict
 
 ELF = sys.argv[1]
 out = subprocess.run(
-    ["nm", "-C", "--size-sort", ELF], capture_output=True, text=True
+    ["nm", "-C", "-S", "--defined-only", ELF], capture_output=True, text=True
 ).stdout
 
 # C-symbol prefixes from the Espressif closed blobs / ROM glue
@@ -51,21 +59,28 @@ sizes = defaultdict(int)
 counts = defaultdict(int)
 top = defaultdict(list)
 total = 0
+skipped_sizeless = 0
 for line in out.splitlines():
-    m = re.match(r"^([0-9a-f]{8})\s+([tTrRdD])\s+(.*)$", line)  # code+ro+data only, skip bss
+    # "<value> <size> <type> <name>"; code+ro+data only, skip bss.
+    # Symbols with no st_size print without the size column and are skipped.
+    m = re.match(r"^([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([tTrRdD])\s+(.*)$", line)
     if not m:
+        if re.match(r"^[0-9a-fA-F]+\s+[tTrRdD]\s", line):
+            skipped_sizeless += 1
         continue
-    size = int(m.group(1), 16)
-    if size >= 0x80000000:
+    size = int(m.group(2), 16)
+    if size == 0:
+        skipped_sizeless += 1
         continue
-    name = m.group(3)
+    name = m.group(4)
     b = bucket(name)
     sizes[b] += size
     counts[b] += 1
     top[b].append((size, name))
     total += size
 
-print(f"accounted flash bytes (text+rodata+data symbols): {total:,}\n")
+print(f"accounted flash bytes (text+rodata+data symbols): {total:,}")
+print(f"(skipped {skipped_sizeless:,} defined symbols carrying no ELF size)\n")
 print(f"{'bucket':46} {'bytes':>9} {'KB':>7}  syms")
 for b, s in sorted(sizes.items(), key=lambda kv: -kv[1]):
     print(f"{b:46} {s:9,} {s/1024:7.1f}  {counts[b]}")

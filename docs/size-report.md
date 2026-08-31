@@ -7,7 +7,7 @@ than a devshell build with WiFi creds baked in). Regenerate:*
 
 ```sh
 nix build .#luxel-fw-c6-devkit
-python3 tools/size-report.py result/luxel-fw.elf   # symbol buckets — see caveat below
+python3 tools/size-report.py result/luxel-fw.elf   # symbol buckets
 readelf -SW result/luxel-fw.elf                    # sections
 espflash save-image --chip esp32c6 result/luxel-fw.elf /tmp/ota.bin  # image total
 ```
@@ -50,8 +50,10 @@ image is header and segment padding):
 | `.trap` | 1,920 | |
 | `.data.wifi` | 480 | |
 
-Symbol-level buckets (911,877 B attributable; the rest is padding, alignment,
-and locals with no ELF size):
+Symbol-level buckets from `tools/size-report.py` (911,877 B attributable; the
+rest is padding, alignment, and symbols carrying no ELF `st_size` — the script
+prints how many it skipped, so the accounted total is a lower bound, not a
+reconciliation of the image):
 
 | bucket | bytes | KB | notes |
 |---|---:|---:|---|
@@ -71,16 +73,24 @@ and locals with no ELF size):
 | rust alloc | 7,552 | 7.4 | |
 | everything else | 35,918 | 35.1 | embassy-net, esp-bootloader, embassy-sync, edge-dhcp, OTA, esp-storage, … |
 
-**Caveat on `tools/size-report.py`.** The script reads `nm --size-sort`, which
-*estimates* a size for symbols that carry none in the ELF — and this RISC-V
-image is full of them: linker-script symbols (`_rwtext_len`, a NOTYPE symbol
-whose *value* is a length, gets an estimated "size" of 1,082,130,432 B),
-RISC-V mapping symbols (`$d`), and `.L*` locals. They all land in "other
-C/asm" and blow that row up to ~1 GB. Everything else in the script's output
-is unaffected. The table above was produced by bucketing `nm -C -S
---defined-only` instead — real `st_size`, zero-size symbols dropped — which
-reproduces every other bucket exactly. Fixing the script is a small change
-nobody has made yet; until then, ignore its "other C/asm" row.
+**Methodology note.** The script buckets `nm -C -S --defined-only` — real ELF
+`st_size`, symbols without one dropped. It used to read `nm --size-sort`,
+which *estimates* a size for size-less symbols from the next symbol's
+address, and RISC-V images are full of them: linker-script symbols
+(`_rwtext_len`, a NOTYPE symbol whose *value* is a length, got an estimated
+"size" of 1,082,130,432 B), `$d` mapping symbols, `.L*` locals. They all
+landed in "other C/asm" and blew that row up to ~1 GB. Fixed 2026-08-30
+(Gitea #174); don't reintroduce `--size-sort`.
+
+The Xtensa boards never showed the ~1 GB blow-up only because their
+`_rwtext_len` estimate landed above the script's old `>= 0x80000000` drop
+guard, but their numbers were guesses too: hand-written asm and ESP32 ROM
+stubs (`_WindowOverflow*`, `save_context`, `mktime`, `atoi`, `idle_hook_fn`,
+`g_wifi_osi_funcs`, …) carry no `.size`, so the old output over-counted a
+`board-athom-music` build by ~27 KB (99,097 → 74,949 B in "other C/asm",
+215,207 → 212,003 B in blobs). Every Rust-crate bucket is byte-identical
+before and after on both architectures. Those asm bytes are real but
+unattributable, which is the reason the accounted total is a lower bound.
 
 ## Growth history
 

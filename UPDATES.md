@@ -75,6 +75,31 @@ Deferred items are on Gitea (GPIO input stubs, the playground's copy of
 the fabricated-slider bug, a `//#`-placement lint, probe-controls
 ignoring bounds, minor fidelity residue).
 
+## 2026-08-30 — size-report reads real ELF sizes; the ~1 GB RISC-V row is gone (#174)
+
+`tools/size-report.py` bucketed `nm -C --size-sort`, which *estimates* a
+size for symbols that carry none by subtracting from the next symbol's
+address. On `board-c6-devkit` that turned linker-script NOTYPE symbols
+(`_rwtext_len`, whose value *is* a length), `$d` mapping symbols and `.L*`
+locals into a 1,082,830,941-byte "other C/asm" row. Now it buckets
+`nm -C -S --defined-only` — real `st_size`, size-less symbols dropped and
+counted — so the C6 row reads **133,402 B** and the accounted total
+915,322 B against a 1,005,024-byte OTA image.
+
+Xtensa never showed the blow-up only because its `_rwtext_len` estimate
+landed above the old `>= 0x80000000` drop guard — but its numbers were
+guesses too. On a credless `board-athom-music` build the fix moves "other
+C/asm" 99,097 → 74,949 B and the blob bucket 215,207 → 212,003 B: 87
+size-less symbols, all hand-written asm or ESP32 ROM stubs
+(`_WindowOverflow*`, `save_context`, `mktime`, `atoi`, `idle_hook_fn`,
+`g_wifi_osi_funcs`) plus pure markers like `_rwtext_end`, which the old
+script credited with 12,028 B of bytes it does not own. **Every
+Rust-crate bucket is byte-identical before and after on both
+architectures** — the deltas are exclusively size-less symbols. Those asm
+bytes are real but unattributable, so the accounted total is now an
+honest lower bound and the script says how many symbols it skipped.
+docs/size-report.md's "ignore the other C/asm row" caveat is retired.
+
 ## 2026-08-30 — The playground stops fabricating untouched control values (#178)
 
 The review UI's fabricated-slider fix, ported to `web/src/components/Controls.svelte`.
