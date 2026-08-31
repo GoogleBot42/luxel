@@ -149,23 +149,23 @@ export function hsvPickerEdgeBeamColor(h, s, v) {
   hsv2rgb(h, s, v, pc)
   eCol[0] = pc[0]; eCol[1] = pc[1]; eCol[2] = pc[2]
 }
+//# min=0 max=1 step=0.01 default=0.35
 export function sliderWidth(v) {
-  //# min=0 max=1 step=0.01 default=0.35
   beamWidth = 0.02 + v * 0.8
 }
+//# min=0 max=1 step=0.01 default=0.3
 export function sliderFocus(v) {
-  //# min=0 max=1 step=0.01 default=0.3
   beamFocus = 0.005 + v * 0.1
 }
+//# min=0 max=1 step=0.01 default=0.4
 export function sliderDrive(v) {
-  //# min=0 max=1 step=0.01 default=0.4
   beamDrive = 1 + v * v * 9                    // unity up to ~10, quadratic
 }
+//# min=0 max=1 step=0.01 default=0.3
 export function sliderSpeed(v) {
-  //# min=0 max=1 step=0.01 default=0.3
   speedScale = 1 + v * 2                        // ~factor-of-three range
 }
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderVerticalSweep(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   vSweep = v
 }

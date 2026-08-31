@@ -46,33 +46,33 @@ var hueBase = 0
 
 // ---- controls -----------------------------------------------------------------
 var sparkRate = 0
+//# min=0 max=1 step=0.01 default=0
 export function sliderSparkleRate(v) {
-  //# min=0 max=1 step=0.01 default=0
   sparkRate = v * 0.3
 }
 var sparkBright = 0
+//# min=0 max=1 step=0.01 default=0
 export function sliderSparkleBrightness(v) {
-  //# min=0 max=1 step=0.01 default=0
   sparkBright = v
 }
 var sparkSat = 1
+//# min=0 max=1 step=0.01 default=1
 export function sliderSparkleSaturation(v) {
-  //# min=0 max=1 step=0.01 default=1
   sparkSat = v
 }
 var tearChance = 0.1
+//# min=0 max=1 step=0.01 default=0.1
 export function sliderTearChance(v) {
-  //# min=0 max=1 step=0.01 default=0.1
   tearChance = v
 }
 var tearHz = 3
+//# min=0 max=1 step=0.01 default=0.3
 export function sliderTearRate(v) {
-  //# min=0 max=1 step=0.01 default=0.3
   tearHz = 0.2 + v * 9.8            // up to about ten re-rolls per second
 }
 var tearBright = 0.5
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderTearBrightness(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   tearBright = v
 }
 

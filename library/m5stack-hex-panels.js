@@ -19,8 +19,8 @@ function proximity(a, b, hw) {
   return v * v
 }
 
+//# min=0 max=1 step=0.01 default=0
 export function sliderMode(v) {
-  //# min=0 max=1 step=0.01 default=0
   // Six equal bins; slight compression keeps max position in the last bin.
   mode = floor(v * 5.999)
 }

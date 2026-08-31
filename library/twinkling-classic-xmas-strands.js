@@ -74,26 +74,26 @@ assignColors()
 
 // ---- controls ----------------------------------------------------------------
 var cycleSec = 15
+//# min=0 max=1 step=0.01 default=0.45
 export function sliderCycleTime(v) {
-  //# min=0 max=1 step=0.01 default=0.45
   cycleSec = 3 + v * 27          // several seconds up to about half a minute
 }
 
 var twinkles = 0.5
+//# min=0 max=1 step=0.01 default=0.5
 export function sliderTwinkles(v) {
-  //# min=0 max=1 step=0.01 default=0.5
   twinkles = v
 }
 
 var autoFade = 1
+//# min=0 max=1 step=1 default=1
 export function sliderAutoFadePalettes(v) {
-  //# min=0 max=1 step=1 default=1
   autoFade = v > 0.5             // acts as a toggle: on above midpoint
 }
 
 var manualSel = 0
+//# min=0 max=1 step=0.01 default=0
 export function sliderManualPaletteSelect(v) {
-  //# min=0 max=1 step=0.01 default=0
   manualSel = v
 }
 

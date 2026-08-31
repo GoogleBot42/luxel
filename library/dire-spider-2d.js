@@ -25,15 +25,17 @@ var legB_ang = 1.05, legB_len = 0.4
 var laX, laY, lbX, lbY
 
 var legWidth = 0.14
+//# min=0.1 max=0.2 step=0.01 default=0.14
 export function sliderLegWidth(v) {
-  //# min=0.1 max=0.2 step=0.01 default=0.14
-  legWidth = 0.1 + v * 0.1
+  // real units (the directive above bounds the slider); a stock PB sends
+  // 0..1, which clamps to the top of the range rather than misbehaving
+  legWidth = clamp(v, 0.1, 0.2)
 }
 
 var bgLevel = 0.02
+//# min=0 max=0.35 step=0.01 default=0.02
 export function sliderBackgroundLevel(v) {
-  //# min=0 max=0.35 step=0.01 default=0.02
-  bgLevel = v * 0.35
+  bgLevel = clamp(v, 0, 0.35)   // real units, see above
 }
 
 var mistMorph, mistScroll
