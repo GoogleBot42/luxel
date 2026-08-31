@@ -239,6 +239,10 @@ main#list {
   background: #7a5210;
   color: #ffeec6;
 }
+.badge.d-addressed {
+  background: #135e5a;
+  color: #c9fff9;
+}
 
 .sides {
   display: flex;

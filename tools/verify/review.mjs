@@ -29,6 +29,13 @@
 // decisions.json schema (tools/verify/decisions.json, TRACKED — this is the
 // persistent store Jeremy's decisions land in across sittings):
 //   { "<slug>": { "decision": "delete"|"good"|"fork"|"needs-work",
+//                 "addressedAt": "<ISO 8601>", // stamped by a FIX PASS, not
+//                                           // this server: the pattern was
+//                                           // acted on and awaits re-review.
+//                                           // Re-deciding a slug rewrites the
+//                                           // whole entry, clearing the stamp
+//                                           // — that is intended. The UI has
+//                                           // an "addressed" filter chip.
 //                 "forkName": "<string>",   // fork only, optional
 //                 "feedback": "<string>",   // fork/needs-work, goes verbatim
 //                                           // to the agent fixing the pattern

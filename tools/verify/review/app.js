@@ -35,6 +35,13 @@ const DECISION_LABEL = {
   fork: "⋔ fork",
   "needs-work": "⚙ needs work",
 };
+// A fix pass stamps `addressedAt` on the decision entries it acted on; the
+// stamp survives until the slug is re-decided (the server rewrites the whole
+// entry then), so "addressed" = fixed and awaiting Jeremy's re-review. It is
+// a virtual chip, not a decision kind — a pair can be both needs-work and
+// addressed.
+const ADDRESSED = "addressed";
+const ADDRESSED_LABEL = "↻ addressed";
 
 // Polled readouts, not inputs — they have no widget position to get wrong.
 const READONLY_KINDS = new Set(["showNumber", "gauge"]);
@@ -384,7 +391,8 @@ function makeCard(pair) {
   if (pair.rig.overridden) rigB.title = "rig overridden by tools/verify/fixups.json";
   head.append(rigB, verdictBadge(pair));
   const decBadge = el("span", "badge hidden");
-  head.append(decBadge);
+  const addrBadge = el("span", "badge hidden");
+  head.append(decBadge, addrBadge);
   head.onclick = () => openModal(pair);
   root.append(head);
 
@@ -414,6 +422,10 @@ function makeCard(pair) {
       const d = pair.decision?.decision;
       decBadge.className = d ? `badge d-${d}` : "badge hidden";
       decBadge.textContent = d ? DECISION_LABEL[d] : "";
+      const at = pair.decision?.addressedAt;
+      addrBadge.className = at ? "badge d-addressed" : "badge hidden";
+      addrBadge.textContent = at ? ADDRESSED_LABEL : "";
+      if (at) addrBadge.title = `fix pass acted on this ${at} — re-review and re-decide`;
       root.classList.toggle("decided", !!d);
     },
   };
@@ -807,7 +819,8 @@ function matches(pair) {
   if (state.verdictFilter.size && !state.verdictFilter.has(pair.verdict?.verdict ?? "")) return false;
   if (state.decisionFilter.size) {
     const d = pair.decision?.decision ?? "undecided";
-    if (!state.decisionFilter.has(d)) return false;
+    const isAddressed = state.decisionFilter.has(ADDRESSED) && !!pair.decision?.addressedAt;
+    if (!state.decisionFilter.has(d) && !isAddressed) return false;
   }
   return true;
 }
@@ -852,7 +865,10 @@ function wireChrome() {
     for (const s of liveSides.concat(modalSides)) s.start();
   };
   chipRow($("verdictFilters"), VERDICTS, state.verdictFilter);
-  chipRow($("decisionFilters"), ["undecided", ...DECISIONS], state.decisionFilter, DECISION_LABEL);
+  chipRow($("decisionFilters"), ["undecided", ...DECISIONS, ADDRESSED], state.decisionFilter, {
+    ...DECISION_LABEL,
+    [ADDRESSED]: ADDRESSED_LABEL,
+  });
   const q = $("q");
   q.oninput = () => {
     state.query = q.value.trim().toLowerCase();
