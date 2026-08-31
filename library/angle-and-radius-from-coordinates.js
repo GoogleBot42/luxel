@@ -12,6 +12,28 @@
 
 var tsec = 0   // accumulated seconds
 
+var sweepSec = 3     // seconds per revolution at the bottom of the map (z=0);
+                     // a 3D map stretches this to 2x at the top, and a flat map
+                     // renders at mid-height, i.e. 1.5x this value per lap
+var widthK = 1       // beam narrowing: 1 = the reference 24 degree wide spoke
+var colorCycles = 1  // hue cycles between the center and the far corner
+var dir = 1          // +1 = the default sweep direction, -1 = reversed
+
+//# min=0.5 max=30 step=0.5 default=3
+export function sliderSweepSeconds(v) { sweepSec = max(0.1, v) }
+
+// Beam width is the angular full-width at half brightness. The spoke is a
+// triangle ramp raised to the 10th power, which is ~24 degrees wide; narrowing
+// the ramp by 24/width scales that width directly.
+//# min=2 max=120 step=1 default=24
+export function sliderBeamWidth(v) { widthK = 24 / max(2, v) }
+
+//# min=0.25 max=4 step=0.25 default=1
+export function sliderColorCycles(v) { colorCycles = max(0, v) }
+
+//# min=0 max=1 step=1 default=0
+export function toggleReverse(on) { dir = on > 0.5 ? -1 : 1 }
+
 export function beforeRender(delta) {
   tsec += delta / 1000
 }
@@ -33,17 +55,18 @@ function radius3D(x, y, z) {
 export function render3D(index, x, y, z) {
   // Rotation phase increases steadily; its period grows with height (base a few
   // seconds per revolution, roughly doubling from one end of z to the other).
-  var period = 3 * (1 + z)                 // seconds per revolution
-  var phase = tsec / period                // turns (clockwise sweep)
+  var period = sweepSec * (1 + z)          // seconds per revolution
+  var phase = dir * tsec / period          // turns (clockwise sweep)
   var a = unitAngle(x, y) + phase
 
   // Triangle wave -> brightness ramp, raised to a high power for a thin spoke.
-  var v = triangle(a)
-  v = v * v; v = v * v                     // ^4
+  // Steepening the ramp first (widthK > 1) narrows the spoke proportionally.
+  var t = saturate(1 - (1 - triangle(a)) * widthK)
+  var v = t * t; v = v * v                 // ^4
   v = v * v                                // ^8
-  v = v * triangle(a) * triangle(a)        // ^10
+  v = v * t * t                            // ^10
 
-  var hue = radius3D(x, y, z)              // red at center, walks the wheel out
+  var hue = radius3D(x, y, z) * colorCycles // red at center, walks the wheel out
   hsv(hue, 1, v)
 }
 
