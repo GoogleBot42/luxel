@@ -6,8 +6,8 @@
 // to one of 32 frequency bands; a band spiking above its own moving average
 // flashes its rings, which fade over a few frames. Hue = band position plus a
 // mirrored angular term (the mandala). The whole image slowly breathes between
-// ~0.5x and ~3.5x zoom, rings drift radially on a ~10 s cycle, and a PI gain
-// controller holds average brightness near a target fill. With no sensor board
+// ~0.5x and ~3.5x zoom, rings drift radially on a ~10 s cycle, and a relative
+// auto-gain holds average brightness near a target fill. With no sensor board
 // (ambient-light sentinel untouched), a simulated dance loop feeds the bands.
 
 export var frequencyData = array(32)   // 32-band spectrum, low bands first
@@ -54,7 +54,7 @@ export function sliderMirrorFolds(v) { folds = max(1, floor(v)) }
 
 var bandAvg = array(32)
 var persist = array(pixelCount)
-var integral = 0
+var integral = 1        // multiplicative gain state, so it starts at unity
 var sensitivity = 1
 var feedback = 0             // brightness sum from last render pass
 var drift = 0
@@ -101,9 +101,14 @@ function simulateSound() {
 }
 
 export function beforeRender(delta) {
-  // 1. PI gain control against last frame's average brightness
+  // 1. Auto-gain against last frame's average brightness. The correction is
+  // RELATIVE — the gain is stepped by a fraction of itself — because room
+  // level spans orders of magnitude and a purely additive integrator crawls:
+  // from silence it needed the better part of a minute to reach a watchable
+  // picture, so the pattern opened nearly black and slowly brightened.
   var err = TARGET_FILL - feedback / pixelCount
-  integral = clamp(integral + err * delta * 0.001, 0, INTEGRAL_MAX)
+  var step = clamp(err * delta * 0.004, -0.1, 0.1)
+  integral = clamp(integral * (1 + step), 0.02, INTEGRAL_MAX)
   sensitivity = max(0.02, err * 2 + integral)
   feedback = 0
 

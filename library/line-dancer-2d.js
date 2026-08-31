@@ -8,8 +8,8 @@
 // widens and narrows the stripes; an optional kaleidoscope repeats the image
 // in rotating pie wedges.
 
-var speed = 3        // animation clock multiplier (~1..10)
-var twist = 1.6      // twist parameter (~1.2..2.4)
+var speed = 4.6      // animation clock multiplier (1..10)
+var twist = 1.75     // twist parameter (1.25..2)
 var sides = 1        // kaleidoscope wedge count (1 = off)
 
 var t = 0            // running time, seconds (wraps after ~10 min)
@@ -17,11 +17,13 @@ var clock = 0        // t * speed
 var zoom = 0         // 0..1 triangle, ~5 s period
 var spin = 0         // kaleidoscope rotation angle
 
-//# min=0 max=1 step=0.01 default=0.25
+// The dial trims a clock that never stops: even at 0 the twist term keeps
+// sweeping, so this is a trim over a live baseline, not an on/off master.
+//# min=0 max=1 step=0.01 default=0.4
 export function sliderSpeed(v) { speed = 1 + v * 9 }
 
-//# min=0 max=1 step=0.01 default=0.35
-export function sliderTwist(v) { twist = 1.2 + v * 1.2 }
+//# min=0 max=1 step=0.01 default=0.67
+export function sliderTwist(v) { twist = 1.25 + v * 0.75 }
 
 //# min=0 max=1 step=0.167 default=0
 export function sliderReflections(v) { sides = 1 + floor(v * 6.99) }

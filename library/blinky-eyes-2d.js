@@ -12,7 +12,7 @@
 var eyes = 2            // 1 or 2 eyes
 var eyeWidthPct = 49    // eye WIDTH as a percentage of the panel width
 var blinkRate = 30      // blinks per minute
-var irisH = 0.66        // iris hue
+var irisH = 0.60        // iris hue (measured off the original)
 var irisS = 1           // iris saturation
 
 // --- derived geometry (recomputed in beforeRender) ------------------------
@@ -27,6 +27,11 @@ var HALF_H_MIN = 0.03
 var IRIS_R = 0.11       // iris radius, display units
 var GAZE_AMP = 0.09     // max iris excursion, display units
 var EDGE = 0.05         // outline-thickness threshold
+// Half-thickness of the shut eyelid, in DISPLAY units so it survives on short
+// panels. A fully squashed ellipse is thinner than one pixel row, so its rim
+// falls between rows and the blink reads as blackout; the original holds a lit
+// lid line for the whole ~0.5 s blink. This bar is what holds it.
+var LID_T = 0.07
 
 // Gaze state machine: idle (centered) <-> moving (sine-hump glide out and
 // back). Blink state machine: open <-> blinking (wave-envelope squash).
@@ -37,6 +42,7 @@ var BLINK_LEN = 0.5
 
 var gazeX = 0       // current iris x offset from eye center
 var halfH = 0.1875  // current (animated) ellipse half-height
+var squash = 0      // 0 fully open .. 1 fully shut (drives the lid fill)
 
 //# min=4 max=60 step=1 default=30
 export function sliderBlinkRate(v) { blinkRate = v }
@@ -102,6 +108,15 @@ export function beforeRender(delta) {
       blinkT = 0
     }
   }
+
+  // How shut the eye is. Near full closure the sliver is thinner than a pixel
+  // row's worth of rim, so fill its interior: that is the lit eyelid line the
+  // original holds instead of blacking out.
+  if (HALF_H > HALF_H_MIN) {
+    squash = clamp(1 - (halfH - HALF_H_MIN) / (HALF_H - HALF_H_MIN), 0, 1)
+  } else {
+    squash = 1
+  }
 }
 
 export function render2D(index, x, y) {
@@ -122,6 +137,14 @@ export function render2D(index, x, y) {
   // ellipse metric: 1 exactly on the boundary, <1 inside
   var m = hypot(px / HALF_W, py / halfH)
 
+  // shut eyelid: a soft horizontal bar of fixed display thickness spanning the
+  // eye, faded in with the squash. Lives OUTSIDE the ellipse test so it still
+  // lights when the collapsed ellipse no longer covers any pixel row.
+  var lid = 0
+  if (squash > 0 && abs(px) < HALF_W) {
+    lid = squash * squash * squash * max(0, 1 - abs(py) / LID_T)
+  }
+
   if (!blinking && d < IRIS_R) {
     // ring-like iris: dark center brightening quadratically toward the rim
     var r = d / IRIS_R
@@ -130,7 +153,10 @@ export function render2D(index, x, y) {
     // thin soft white outline: steep power law keeps only the boundary
     var b = max(m - EDGE, EDGE)
     var v = b * b * b
-    rgb(v * v, v * v, v * v)  // ^6
+    v = max(v * v, lid)       // ^6, or the lid when the eye is shut
+    rgb(v, v, v)
+  } else if (lid > 0) {
+    rgb(lid, lid, lid)
   } else {
     rgb(0, 0, 0)
   }

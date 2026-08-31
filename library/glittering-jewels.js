@@ -52,13 +52,17 @@ export function beforeRender(delta) {
       respawn(i)
     }
   }
-  glintT = time(0.1 + sparkle * 0.3)  // stronger sparkle = slower cycle
+  // Fixed glint carousel (~3.3 s). The dial must change how MUCH sparkle there
+  // is, not merely re-phase it: tying the rate to the dial made the control
+  // measure as non-responsive because every setting looked equally glittery.
+  glintT = time(0.05)
 }
 
 export function render(index) {
   x = index / (pixelCount - 1)
   bv = 0
   bh = 0
+  bsp = 0
   for (var i = 0; i < count; i++) {
     p = jphase[i] / jvis[i]
     if (p < 1) {
@@ -71,16 +75,20 @@ export function render(index) {
       if (g > 0.01) {
         sp = 0
         if (sparkle > 0) {
-          sp = pow(max(sin((glintT + jspark[i]) * PI2), 0), 24)
-          sp *= core * core * core * sparkle * 2
+          // Wide enough a spike to be on for a visible slice of the cycle,
+          // and reaching past the very core, so the dial reads at a glance.
+          sp = pow(max(sin((glintT + jspark[i]) * PI2), 0), 10)
+          sp *= core * core * sparkle * 2
         }
-        b = g * (1 + sp)
+        b = g * (1 + sp * 0.6)
         if (b > bv) {
           bv = b
           bh = (rainbow ? jhue[i] : pickH) + sp * 0.04
+          bsp = sp
         }
       }
     }
   }
-  hsv(bh, 0.85, min(bv, 1))
+  // a glinting core whitens as well as brightens — that is what reads as glitter
+  hsv(bh, 0.85 * saturate(1 - bsp), min(bv, 1))
 }
