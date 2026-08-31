@@ -106,9 +106,9 @@ command 0x01: `[ssid_len, ssid…, pass_len, pass…]`, header `"IMPROV"`
 and WLED joins the LAN in seconds AND persists both cfg.json and
 wsec.json (verified by cold power cycle rejoin — so takeover credential
 inheritance works afterwards too). WiFi creds are in agent memory
-(luxel-dev-device). A ready packet-builder script pattern is in the
-UPDATES.md 2026-08-16 entry's session; ~20 lines of node using plain
-`fs.writeSync`. Read the response with a separate short-lived `cat`
+(luxel-dev-device). The packet builder is now a real tool:
+`node tools/improv-provision.mjs <port> <ssid> <pass>` (docs/tools.md) —
+it reads WLED's reply itself, so stop any serial capture first
 (single-reader rule — and mind that `pkill -f` patterns containing the
 port name match your own compound command's shell and kill it; use a
 character-class pattern like `tty[U]SB0`).
@@ -134,11 +134,15 @@ pre-guard panics instead of looping forever. Reproduced + verified under
 QEMU (`tools/qemu/heap-regions-test.py`); writeup in
 docs/research/qemu-emulation-spike.md.
 
-**Still QEMU-only** — no real via-WLED takeover has exercised it on metal.
-If a flash/takeover session ever loops instead of settling, this remains
-the leading suspect: stop and reassess rather than repeating the flash.
-The serial now prints `preboot guard: … rolling back to the other OTA
-slot` when the rollback fires.
+**Metal-validated 2026-08-30** (Gitea #53): a full stock-WLED → takeover
+conversion ran clean with the guard armed — no heap-regions panic
+recurred, first-attempt self-copy verify, cold-cycle rejoin, `boot
+guard: healthy`. The 3-consecutive-panic rollback path itself remains
+QEMU-verified only (it exists for a flake that can't be summoned on
+demand). If a flash/takeover session ever loops instead of settling,
+this remains the leading suspect: stop and reassess rather than
+repeating the flash. The serial prints `preboot guard: … rolling back
+to the other OTA slot` when the rollback fires.
 
 ## Power-cycle testing and the OTA boot-loop guard
 
