@@ -19,10 +19,46 @@ var ROCKET_EDGE = 0.996    // crest threshold carving the thin rocket block
 var SPARK_EDGE = 0.97      // crest threshold bounding the spark zone
 var SPARK_ODDS = 0.05      // per-pixel per-frame firing chance in the zone
 
+var lapInterval = 0.05     // time() interval for one traversal (~3.3 s)
+
+// Seconds for the rocket to travel the whole strip once.
+//# min=0.5 max=10 step=0.1 default=3.3
+export function sliderLapTime(v) {
+  lapInterval = max(v, 0.5) / 65.536
+}
+
+// Rocket length in pixels. The rocket is the part of a broad traveling
+// crest above ROCKET_EDGE, so a width w (as a fraction f = w/pixelCount of
+// the strip) corresponds to the crest threshold (1 + cos(PI*f)) / 2.
+//# min=0.5 max=8 step=0.1 default=2.4
+export function sliderRocketWidth(v) {
+  var f = clamp(v, 0.5, 8) / pixelCount
+  ROCKET_EDGE = 0.5 + 0.5 * cos(PI * f)
+}
+
+// Distance in pixels from the rocket back to the spark zone.
+//# min=1 max=30 step=1 default=10
+export function sliderTrailGap(v) {
+  SEPARATION = clamp(floor(v), 1, 30) / pixelCount
+}
+
+// Per-pixel, per-frame chance (percent) that a pixel inside the spark zone
+// flashes white.
+//# min=0 max=25 step=1 default=5
+export function sliderSparkChance(v) {
+  SPARK_ODDS = clamp(v, 0, 25) / 100
+}
+
+// How many times the red -> yellow ramp repeats along the strip.
+//# min=1 max=8 step=1 default=3
+export function sliderHueCycles(v) {
+  HUE_REPEATS = clamp(floor(v), 1, 8)
+}
+
 var t
 
 export function beforeRender(delta) {
-  t = time(0.05)           // one full traversal every ~3.3 s
+  t = time(lapInterval)    // one full traversal every ~3.3 s by default
 }
 
 export function render(index) {
