@@ -1,1 +1,643 @@
-{}
+{
+  "1-usflag-blink": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:56:17.977Z",
+    "feedback": "I know this one appears to be \"good\" but trust me it looks weird.  But that's because the src material is pretty bad too.  For example, what they chose to animate here (the stars) looks really weird and makes it look LESS like a US flag.  if anything should be animated it should be either the strips or to move things back and forth a little bit.\n\nSo I'd like you to make your own.  Don't worry about the src material.  You know what US flag looks like.  I'd like you to also split this into two patterns.  1D and 2D.  Keept in mind that what animates well will be different between them."
+  },
+  "1-white-fade": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:33:58.104Z"
+  },
+  "2-colors": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:56:55.811Z"
+  },
+  "2-purple-fade": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:34:16.332Z"
+  },
+  "2d-bouncing-additive-primaries": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:53:25.220Z",
+    "feedback": "Perfect but needs more controls.  I suggest allow configuring the number of balls."
+  },
+  "2d-spiral-twirls": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:01:35.308Z",
+    "feedback": "This is almost perfect except for the \"Arms\" control.  The unit and values don't make sense.  It only has 3 options I can set it to and I don't know what they mean (0,0.5,1)  (What is 0 arms? What is half an Arm?)\n\nAlso the max rotation speed on the slider seems too slow."
+  },
+  "2d-wandering-fireball": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-31T00:15:22.460Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "3-violet-fade": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:02:05.341Z"
+  },
+  "4-blue-fade": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:02:20.839Z"
+  },
+  "4th": {
+    "decision": "fork",
+    "decidedAt": "2026-08-30T23:03:30.107Z",
+    "feedback": "You did well but I really think that we could make a better one here than the src did.  The src is just weird.  By the title it is supposed to be fireworks but it looks nothing like it."
+  },
+  "5-teal-fade": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:03:36.072Z"
+  },
+  "6-green-fade": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:03:38.300Z"
+  },
+  "7-yelllow-fade": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:03:40.657Z"
+  },
+  "8-red-fade": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:02:25.565Z"
+  },
+  "80s-kid-show": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-31T00:12:04.279Z",
+    "feedback": "It should be filled and flat by default."
+  },
+  "9-pink-fade": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:02:28.667Z"
+  },
+  "an-intro-to-pixelblaze-code": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:03:48.139Z"
+  },
+  "angle-and-radius-from-coordinates": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:03:56.210Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "angry-xmass-3d": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:35:00.414Z"
+  },
+  "animated-asterisks-2d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:07:55.610Z",
+    "feedback": "The num lines and line width control unit makes no sense.  Rotation speed slider doesn't seem linear.  AnimateWidth seems completely broken whatever it is for.  Maybe just remove it."
+  },
+  "austin-fc": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:09:21.763Z"
+  },
+  "automap": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:09:37.813Z"
+  },
+  "autumn-colors": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:10:06.288Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "bessel-chaos": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:11:26.485Z"
+  },
+  "blinky-eyes-2d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:12:36.300Z",
+    "feedback": "This is almost perfect but I'd like so see pattern controls that the original doesn't have. The eyes are stretched vertically.  They should be wider not taller."
+  },
+  "block-reflections": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:12:22.063Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "blue-holiday-candle-2d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-31T00:15:56.764Z",
+    "feedback": "The flame doesn't wiggle."
+  },
+  "bouncer3d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:13:13.821Z",
+    "feedback": "Ball count unit should be whole numbers.  Otherwise perfect."
+  },
+  "bouncing-balls-rgb": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:13:59.668Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have.\n\nI'd also like a 2D version of this pattern too."
+  },
+  "bouncing-rgb-balls-2d": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:35:19.129Z"
+  },
+  "chill-confetti": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:14:06.988Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "christmas-candy-cane": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:14:16.562Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "christmas-lights": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:14:40.474Z",
+    "feedback": "This is perfect but I'd like so see more pattern controls."
+  },
+  "christmas-rg-fade": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:35:33.613Z"
+  },
+  "christmas-string-lights": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:14:50.703Z"
+  },
+  "christmaslights": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:14:56.041Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "christmaslights-2": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:15:25.666Z"
+  },
+  "color-fade-pulse": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:15:33.514Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "color-pick-fade": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:15:43.124Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "color-twinkle-bounce": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:16:14.932Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have.  Also, I'd like you to change the color palette.  This one is kind of depressing."
+  },
+  "color-twinkles": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:16:33.506Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "colourful-fireflies": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:16:39.779Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "continuous-cellular-automata": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:18:55.792Z",
+    "feedback": "Playing with the dials, I just don't think it is anything like the original.  The original is much more interesting.  That said... the original doesn't change at all except when the dials.  Move.  Perhaps you can improve on the original?"
+  },
+  "coolaura": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:19:06.116Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "crossfading": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:20:22.586Z",
+    "feedback": "Our port seems to be miscalculating measurements depending on the width of the canvas and that is leading to be pretty big error.  Seems very close though otherwise."
+  },
+  "cube-fire-3d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-31T00:17:53.525Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "cyclic-cellular-automata-2d": {
+    "decision": "good",
+    "decidedAt": "2026-08-31T00:16:41.232Z"
+  },
+  "cylon": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:20:45.255Z"
+  },
+  "daftpunk": {
+    "decision": "delete",
+    "decidedAt": "2026-08-31T00:18:33.760Z"
+  },
+  "dbzbattlefinal": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:21:33.454Z",
+    "feedback": "Perfect.  The controls' units/endpoints need fixing though."
+  },
+  "doom-fire": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:23:58.649Z",
+    "feedback": "The flame dynamics appear perfect.  The color difference on the other hand is surprising.  This isn't really a flame color.  Feel free to override if it actually fits the original DOOM colors better."
+  },
+  "easing-library-v1-0": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:26:25.885Z",
+    "feedback": "My critique is actually if this library is written the way we want.  Doesn't luxel already have easing builtins?  If not, we should add them.  And then we should rewrite this port to use them.  This pattern otherwise seems perfect compared to the original so won't worry about that otherwise."
+  },
+  "easing-library-v1-01": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:55:25.828Z"
+  },
+  "edgeburst": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:35:47.297Z"
+  },
+  "emoji-animation-2": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:27:05.952Z",
+    "feedback": "This is great.  I'd like some more controls like the EyeOpen though."
+  },
+  "example-button-w-debounce": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:36:40.538Z",
+    "feedback": "I don't know how to test this one.  I don't have a button to test with."
+  },
+  "example-color-hues": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:27:44.087Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "example-modes-and-waveforms": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:27:47.085Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "example-smooth-speed-slider": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:27:56.816Z"
+  },
+  "example-time-and-animation": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:37:02.867Z"
+  },
+  "fairies": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:28:57.944Z",
+    "feedback": "This is perfect but the speed slider needs readjusting to be more practical. I'm actually not sure if that slide does anything at all."
+  },
+  "fast-palette-blending": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:29:06.497Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "fast-pulse": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:37:12.706Z"
+  },
+  "fast-pulse-3d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:29:15.472Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "firework-dust": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:29:23.192Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "firework-nova": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:29:32.486Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "firework-rocket-sparks": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:30:20.249Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "glittering-jewels": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:31:55.577Z",
+    "feedback": "Has an error if I change the number of jewels.\n\nThis is sort of different from the original but I like it."
+  },
+  "gradient-blue-purple-pink": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:32:29.573Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "green-ripple-reflections": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:32:23.594Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "holiday-diagonal-stripes": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:41:43.943Z",
+    "feedback": "I think there may be an engine or harness bug here.  The left and right don't match until I touch the slope of the left.  They seem to always match after that as long as they have the same slop.  But this pattern is actually good as is.  Just identify the variable sync problem."
+  },
+  "ice-floes-2d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:32:10.913Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "icicleblaze": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:33:11.675Z",
+    "feedback": "Honestly I don't know what the original is trying to be.  But it is kind of interesting. I'd like so see pattern controls that the original doesn't have."
+  },
+  "index-walk": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:32:34.429Z"
+  },
+  "kitt-w-color-picker": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:34:06.345Z",
+    "feedback": "So dark.  I can barely see.  Don't try to mimic the original's darkness."
+  },
+  "lightning-clouds": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:34:31.468Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have.  Then I'll check again."
+  },
+  "lightning-zap": {
+    "decision": "fork",
+    "decidedAt": "2026-08-30T22:43:21.005Z",
+    "feedback": "Technically, this is spot on.  But I actually think this can be made better than the original.  Lighting doesn't quite look like this and the color/shading is wrong."
+  },
+  "line-dancer-2d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:36:31.456Z",
+    "feedback": "This is super close.  Looks pretty good.  My only critique is that the original during the distort phase distorts much stronger for longer and it is pretty cool."
+  },
+  "map-concentric": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:36:45.590Z"
+  },
+  "mapped-vertical-line-2d": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:37:08.229Z"
+  },
+  "marching-rainbow": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:44:10.643Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "matrix-green-waterfall-2d": {
+    "decision": "fork",
+    "decidedAt": "2026-08-30T23:38:05.905Z",
+    "feedback": "Original is perfect. I'd like a 1D variant too."
+  },
+  "meteor-shower": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:38:24.450Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "millipede": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:39:48.878Z",
+    "feedback": "This one slows down periodically but during this slow down, it doesn't have the perception of the strips walking backwards (making it seam like a millipede taking its next step.)  Otherwise it is very close.  I want to see more controls though."
+  },
+  "neutronorbit": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:44:28.840Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "newfire": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:40:53.065Z",
+    "feedback": "Cannot set the forth mode by dragging the slider.  Otherwise perfect."
+  },
+  "novas": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:41:06.528Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "opposites": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:41:17.152Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "perlin-fire-wind-tunnel": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:42:24.011Z"
+  },
+  "pew-pew-pew": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:42:32.041Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "pixelclock": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:42:43.450Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "policelights": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:44:49.186Z"
+  },
+  "quiet-blinkfade": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:43:07.193Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have.  Specifically for the color, fade time, etc."
+  },
+  "radiant-pulse-3": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:43:24.529Z",
+    "feedback": "I'd like so see pattern controls that the original doesn't have."
+  },
+  "rainbow": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T22:44:55.695Z"
+  },
+  "rainbow-flag": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:43:28.949Z"
+  },
+  "rainbow-fonts": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:45:59.913Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have.  Also, the colors seem strangely muted.  (Yes, the original did too)"
+  },
+  "rainbow-fonts-2": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:43:34.027Z"
+  },
+  "rainbow-melt": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:46:12.197Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "rainbow-pinwheel": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:46:22.545Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "rainbow-smiley": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:43:54.125Z"
+  },
+  "rainbow-v2": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:44:09.792Z"
+  },
+  "red-green-xy-2d-sweep": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:44:19.950Z"
+  },
+  "regenbogendrogen": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:44:26.080Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "rgb-test-pattern": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T22:46:33.417Z"
+  },
+  "rgb-xyz-3d-octants": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:44:53.025Z"
+  },
+  "rgb-xyz-3d-sweep": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:45:14.343Z"
+  },
+  "rgbw-mapping-tester": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:45:23.183Z"
+  },
+  "rgbw-mapping-tester-hsv-version": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:45:30.800Z"
+  },
+  "rock-sparks": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:46:37.574Z"
+  },
+  "ryb-colors": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:47:21.361Z",
+    "feedback": "Slider does not snap between the wheel mode types."
+  },
+  "sierpinski-rainbow-2d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:47:41.725Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "single-color-picker-wide-or-spot": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:48:01.738Z"
+  },
+  "sinpulse-3d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:48:42.951Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "sinus": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:49:01.522Z",
+    "feedback": "I'd like so see pattern controls that the original doesn't have."
+  },
+  "skypirate-s-centered-spectrum": {
+    "decision": "delete",
+    "decidedAt": "2026-08-31T00:19:24.630Z"
+  },
+  "slime-mold-palette": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:50:11.584Z"
+  },
+  "slow-color-shift": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:50:26.015Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "snake": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:47:56.645Z",
+    "feedback": "Perfect. Speed control seems backwards.  I'd like to see more controls affecting the snake color."
+  },
+  "snake-2d": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-31T00:20:54.945Z",
+    "feedback": "Ok don't try to go with the src material.  Instead, just make an infinite snake game.  There should be control options such as how \"smart\" it is (does it easily lose)."
+  },
+  "solid-rainbow": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:50:39.454Z"
+  },
+  "sound-spectro-kalidastrip": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:51:10.105Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "sound-spectrokalidamandala": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:51:00.221Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "sparks": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:51:15.777Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "spin-cycle": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:51:20.485Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "spring-colors": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:52:03.822Z",
+    "feedback": "Needs a speed slider too. Otherwise perfect."
+  },
+  "static-christmas-lights-4-colors": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:48:40.429Z",
+    "feedback": "Remove the brightness control.  Luxel already has a brightness setting."
+  },
+  "sunrise": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:52:20.566Z"
+  },
+  "the-grinch": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:49:23.779Z",
+    "feedback": "Honestly.  I don't understand what the author of this pattern had in mind.  So I'd like you to think of something completely unique instead.  Doesn't have to be a 1D pattern."
+  },
+  "three-red-pixels-mathy": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:50:23.452Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have.  That probably means renaming the pattern too."
+  },
+  "tunnel-of-squares-2d": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:52:53.491Z"
+  },
+  "twinkle": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:53:44.143Z",
+    "feedback": "I'd like to see controls"
+  },
+  "twinkly-stars": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:54:02.374Z",
+    "feedback": "I'd like to see controls"
+  },
+  "utility-perceptual-hue": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:54:23.079Z"
+  },
+  "utility-scheduled-percent-on-demo": {
+    "decision": "delete",
+    "decidedAt": "2026-08-30T23:53:23.922Z"
+  },
+  "wavy-bands": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T23:53:05.061Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "white-rainbows": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:54:58.172Z"
+  },
+  "wichmannhill-prng": {
+    "decision": "needs-work",
+    "decidedAt": "2026-08-30T22:50:53.426Z",
+    "feedback": "This is perfect but I'd like so see pattern controls that the original doesn't have."
+  },
+  "xmasflies": {
+    "decision": "good",
+    "decidedAt": "2026-08-30T23:54:49.252Z"
+  }
+}
