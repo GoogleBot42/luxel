@@ -49,14 +49,64 @@ function wichmannHill() {
 }
 
 // pattern load: independent random seeds in 1..30000
-setSeeds(1 + floor(random(30000)), 1 + floor(random(30000)), 1 + floor(random(30000)))
+function reseedRandom() {
+  setSeeds(1 + floor(random(30000)), 1 + floor(random(30000)), 1 + floor(random(30000)))
+}
+reseedRandom()
+
+// --- demo renderer -------------------------------------------------------
+// Tunables. The top-level values reproduce the renderer the port shipped
+// with (fresh full-wheel noise every frame), so an untouched pattern renders
+// exactly as before.
+var flickerPeriod = 1 / 60   // seconds between redraws (60 Hz = every frame)
+var baseHue = 0              // rotate the noise around the color wheel
+var spread = 1               // fraction of the wheel the noise covers
+
+var pxHue = array(pixelCount)
+var pxVal = array(pixelCount)
+var accum = 1        // >= the longest flicker period, so frame 1 always draws
+var redraw = 1
+
+// Seed for a reproducible sequence: 0 re-randomizes, any other value picks a
+// fixed, repeatable stream (all three published seeds derived from it).
+//# min=0 max=10000 step=1 default=0
+export function inputNumberSeed(v) {
+  var n = floor(clamp(v, 0, 10000))
+  if (n < 1) reseedRandom()
+  else setSeeds(n, n + 10007, n + 20011)
+}
+
+// How often the static is redrawn, in redraws per second. At 60 Hz every
+// frame is fresh (the original behavior); low values hold each field of
+// noise long enough to actually look at it.
+//# min=1 max=60 step=1 default=60
+export function sliderFlickerRateHz(v) { flickerPeriod = 1 / clamp(v, 1, 60) }
+
+// Where the noise's color band starts, in degrees around the color wheel.
+//# min=0 max=360 step=1 default=0
+export function sliderBaseHueDegrees(v) { baseHue = clamp(v, 0, 360) / 360 }
+
+// How much of the color wheel the noise spans: 100% is full rainbow static,
+// 0% collapses it to single-hue brightness static.
+//# min=0 max=100 step=1 default=100
+export function sliderColorSpreadPercent(v) { spread = clamp(v, 0, 100) / 100 }
 
 export function beforeRender(delta) {
   lastDraw = wichmannHill()   // one draw per frame, purely to watch it
+
+  accum += delta / 1000
+  if (accum >= flickerPeriod) {
+    accum = 0
+    redraw = 1
+  } else {
+    redraw = 0
+  }
 }
 
 export function render(index) {
-  var h = wichmannHill()
-  var v = wichmannHill()
-  hsv(h, 1, v)
+  if (redraw) {
+    pxHue[index] = wichmannHill()
+    pxVal[index] = wichmannHill()
+  }
+  hsv(baseHue + spread * pxHue[index], 1, pxVal[index])
 }
