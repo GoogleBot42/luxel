@@ -16,6 +16,7 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
+use luxel_core::jsonview::{push_piece, push_u32};
 
 use crate::patterns;
 
@@ -141,11 +142,15 @@ pub fn set_from_wire(body: &str) -> (bool, usize) {
 /// `GET /api/map` → {"installed":bool,"dims":D,"count":N}.
 pub fn to_json() -> alloc::string::String {
     MAP.lock(|c| match c.borrow().as_ref() {
-        Some(m) => alloc::format!(
-            "{{\"installed\":true,\"dims\":{},\"count\":{}}}",
-            m.dims,
-            m.coords.len()
-        ),
+        Some(m) => {
+            let mut out = alloc::string::String::new();
+            push_piece(&mut out, "{\"installed\":true,\"dims\":");
+            push_u32(&mut out, m.dims as u32);
+            push_piece(&mut out, ",\"count\":");
+            push_u32(&mut out, m.coords.len() as u32);
+            push_piece(&mut out, "}");
+            out
+        }
         None => alloc::string::String::from("{\"installed\":false,\"dims\":0,\"count\":0}"),
     })
 }

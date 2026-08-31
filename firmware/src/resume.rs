@@ -29,6 +29,7 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use esp_println::println;
 use luxel_core::fixed::Fx;
+use luxel_core::jsonview::{push_i32, push_piece};
 
 use crate::patterns;
 use crate::shared::{Msg, MSG_QUEUE};
@@ -79,16 +80,17 @@ fn snapshot_record() -> Option<String> {
         return None;
     }
     let mut out = String::new();
-    out.push_str("P ");
-    out.push_str(&id);
-    out.push('\n');
+    push_piece(&mut out, "P ");
+    push_piece(&mut out, &id);
+    push_piece(&mut out, "\n");
     for (name, raw) in crate::shared::get_current_controls() {
-        out.push_str("C ");
-        out.push_str(&name);
+        push_piece(&mut out, "C ");
+        push_piece(&mut out, &name);
         for r in raw {
-            out.push_str(&alloc::format!(" {}", r));
+            push_piece(&mut out, " ");
+            push_i32(&mut out, r);
         }
-        out.push('\n');
+        push_piece(&mut out, "\n");
     }
     Some(out)
 }
