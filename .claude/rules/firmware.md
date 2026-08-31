@@ -48,8 +48,22 @@ paths:
   multi-op ownership, and keep those short.
 - The app must fit in a 1 MiB OTA slot; `firmware/Cargo.toml` sets
   `opt-level = "s"` to stay under it (see docs/boards.md for the ceiling
-  history). Size-check WITH WiFi creds baked in — a credless build
-  dead-code-eliminates the WiFi stack and hides size regressions.
+  history). The canonical size measure is the CREDLESS flake build
+  (`nix build .#luxel-fw-<board>` — what release CI gates); a creds-baked
+  devshell build reads ~1.5 KB larger, not hugely different (AP-mode
+  provisioning keeps the WiFi stack linked either way — the old warning
+  that credless builds dead-code-eliminate WiFi stopped being true when
+  provisioning landed). Just never compare a credless number against a
+  creds-baked one.
+- JSON/response bodies are built with `luxel_core::jsonview`'s push
+  helpers (`push_piece`, `push_u32/i32/u64/i64`, `push_hex`,
+  `Fx::dec_str`), NOT `format!` — and literal appends go through
+  `push_piece`, not bare `push_str`. Two measured reasons (#168,
+  docs/size-report.md): every `format!` site carries its own Arguments
+  plumbing, and inlined `push_str` costs MORE image than the fmt it
+  replaces (a naive conversion grew the C6 image 8.6 KB). `format!` on an
+  error type that only implements `Display` is fine — `core::fmt` stays
+  linked via `println!`/`Debug` regardless.
 - Cross-origin non-simple methods (DELETE) need an explicit `OPTIONS`
   preflight response with CORS headers in `firmware/src/server.rs`'s
   dispatcher — GET/simple-POST traffic never exercises this path, so a
