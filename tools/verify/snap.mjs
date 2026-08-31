@@ -22,6 +22,8 @@
 //                        warning)
 //   --grid WxH           override grid dimensions (grid rig; implies pixels)
 //   --controls-orig "name=v[,v,v];name2=v"   controls for the original
+//                        (`name` is the export name OR the display label —
+//                        `sliderSpeed` and `Speed` both hit the same dial)
 //   --controls-port "..."                    controls for the port
 //   --vars-orig "name=v;name2=v"   exported-var values pushed into the original
 //   --vars-port "..."              the same for the port (names may differ)
@@ -45,14 +47,20 @@
 //
 // Writes <out-root>/<slug>/<label>/{orig.png,port.png,meta.json,stats.json}.
 //
-// meta.json is written for a reader on a context budget: it holds settings,
-// provenance, run-level `warnings`, and per side `image`, `controls`,
-// `controlsApplied`, `varsExported`, `varsApplied`, `warnings`, `compileError`,
-// `runtimeError`, `wantsSensors`, `sensors` (+ `sensorModel` when synth) and
+// meta.json is written for a reader on a context budget: at the top level it
+// holds settings, provenance and run-level `warnings`, and a `sides` map whose
+// `orig`/`port` blocks each hold `image`, `controls`, `controlsApplied`,
+// `varsExported`, `varsApplied`, `warnings`, `compileError`, `runtimeError`,
+// `wantsSensors`, `sensors` (+ `sensorModel` when synth) and
 // `statsSummary` ({avg,min,max,first,last} per series, plus `zeroMotionFrames`
-// and `brightnessTrend`) — it is short enough to read whole. The FULL per-frame
-// series live in the sibling stats.json (one line per series, per side) and
-// only need reading when a summary flags something.
+// and `brightnessTrend`) — it is short enough to read whole. Each `controls`
+// entry is `{name, kind, label}` plus `bounds` — the control's parsed `//#`
+// directive ({min,max,step,default}, only the keys it declared) — when it has
+// one, so a snap alone says whether a directive was seen: a control that
+// should have bounds and shows no `bounds` key has a directive that did not
+// bind (detached by a blank line, misspelled, on the wrong export).
+// The FULL per-frame series live in the sibling stats.json (one line per
+// series, per side) and only need reading when a summary flags something.
 // Two motion series are kept: `motion` (mean abs frame-to-frame channel diff
 // over the WHOLE rig — the historical, like-for-like number) and `motionLit`
 // (the same diff averaged only over pixels lit in either frame). A pattern
@@ -124,15 +132,30 @@
 // For each side and each SETTABLE control (slider, toggle, inputNumber,
 // hsvPicker, rgbPicker — display-only kinds and triggers are skipped) it
 // renders a --probe-seconds window at the run's fps/skip/seed with the control
-// left untouched, then re-renders it at 0, 0.5 and 1 (pickers: v,v,v) with
-// every other control untouched, and records the mean absolute pixel difference
-// from the untouched render across all frames. probe.json holds, per side per
-// control, `{kind, deltas: {"0":d,"0.5":d,"1":d}, deltasLit: {…}, responsive}`;
+// left untouched, then re-renders it at three values with every other control
+// untouched, and records the mean absolute pixel difference from the untouched
+// render across all frames.
+// The three values come from the control's OWN range: the min, midpoint and
+// max of its `//#` directive when it declares one (a directive naming only one
+// end takes the raw default — min 0, max 1 — for the other; the midpoint snaps
+// to `step` when that lands strictly inside the range, so an integer dial is
+// probed at an integer). Only a control with no usable bounds — none declared,
+// or max <= min — falls back to raw 0, 0.5, 1, and pickers always sweep the raw
+// values as v,v,v because their components are 0..1 colour axes, not a range.
+// This matters: a `min=1 max=60` dial swept at 0/0.5/1 moves through 1% of its
+// range and reports itself dead, and an integer dial with `min=1` clamps all
+// three fallback values to the same 1 (Gitea #180).
+// probe.json holds, per side per control, `{kind, bounds?, probedAt,
+// boundsProbed, deltas, deltasLit, responsive}`: `bounds` is the parsed
+// directive (absent when there is none), `probedAt` the three values actually
+// swept, `boundsProbed` whether they came from the directive (true) or the
+// fallback (false), and `deltas`/`deltasLit` are keyed by those values.
 // `deltas` averages over the whole rig, `deltasLit` over the pixels either
 // render lights (the sparse-pattern rescue — same reasoning as `motionLit`),
 // and `responsive` is true when EITHER clears its threshold
-// (PROBE_THRESHOLD / PROBE_LIT_THRESHOLD). A compact table also prints
-// to stdout. A dial the probe calls inert may simply act slower than the probe
+// (PROBE_THRESHOLD / PROBE_LIT_THRESHOLD). A compact table also prints to
+// stdout, with `probedAt` starred where the sweep came from the directive.
+// A dial the probe calls inert may simply act slower than the probe
 // window — raise --probe-seconds (or probe at a later --skip) before believing
 // it. Any --controls-orig/--controls-port on the run form the untouched
 // baseline; the probed dial is overridden on top of them.
@@ -168,6 +191,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { load, cubeLattice, sensorSlots, WASM_PATH } from "./enginehost.mjs";
 import { synthSensorFrame, SENSOR_MODEL } from "./sensormodel.mjs";
+import { parseControlHints, directiveRange } from "./hints.mjs";
 import { encodePNG, upscale, drawText, textSize } from "./png.mjs";
 import {
   applySourceFixups,
@@ -200,6 +224,12 @@ const STAMP_BG = [0, 0, 0]; // 1px backing box, so the ink survives any content
  *  as inert in a 2 s window because the first regime is the same either way.
  *  Raise it further with --probe-seconds for dials on an even slower clock. */
 const PROBE_SECONDS = 4;
+/** The sweep for a control with NO usable `//# min=/max=` directive — a raw
+ *  Pixel Blaze slider's whole range. A control that does declare bounds is
+ *  swept across THOSE instead (probeValues() below): poking a `min=1 max=60`
+ *  dial at 0/0.5/1 exercises 1% of its range and reads as dead, which is how
+ *  five separate fix-pass agents were sent chasing phantom inert dials
+ *  (Gitea #180). */
 const PROBE_VALUES = [0, 0.5, 1];
 const PROBE_THRESHOLD = 1.0;
 /** The same bar for the LIT-restricted delta (mean abs channel diff over the
@@ -546,7 +576,19 @@ function renderSide(host, source, rig, o) {
     const feedSensors = o.sensors === "synth" || (o.sensors === "auto" && side.wantsSensors);
     side.sensors = feedSensors ? "synth" : "off";
 
-    side.controls = eng.controls().map((c) => ({ name: c.name, kind: c.kind, label: c.label }));
+    // `bounds` is the control's own `//#` directive, parsed straight from this
+    // side's source — so a snap alone confirms a directive was seen (and, when
+    // it is absent from a control that should have one, that it did NOT bind).
+    const hints = parseControlHints(source);
+    side.controls = eng.controls().map((c) => {
+      const bounds = hints.get(c.name);
+      return {
+        name: c.name,
+        kind: c.kind,
+        label: c.label,
+        ...(bounds && Object.keys(bounds).length ? { bounds } : {}),
+      };
+    });
     for (const [name, values] of Object.entries(o.controls)) {
       const shown = eng.setControl(name, values);
       if (shown === null) side.warnings.push(`unknown control "${name}" — not applied`);
@@ -654,6 +696,24 @@ function meanAbsDiffLit(a, b) {
 
 const round2 = (v) => Math.round(v * 100) / 100;
 
+/** The three values to sweep one control across: min/mid/max of its declared
+ *  `//#` range (directiveRange, which also handles a one-sided directive and
+ *  the step-snapped midpoint) when it has a usable one, else the raw 0/0.5/1
+ *  fallback. A malformed range (max <= min) falls back rather than probing a
+ *  one-point "range" three times and calling the dial inert. Pickers are
+ *  excluded — their three components are 0..1 colour axes, not a scalar range,
+ *  whatever the directive says.
+ *
+ *  @returns {{values: number[], hinted: boolean}} `hinted` records which of the
+ *           two sources the values came from, so probe.json says so out loud. */
+function probeValues(kind, bounds) {
+  const r = PICKER_KINDS.has(kind) ? null : directiveRange(bounds);
+  // Dedupe: a range narrower than one step can put the midpoint on an end.
+  return r
+    ? { values: [...new Set([r.min, r.mid, r.max])], hinted: true }
+    : { values: PROBE_VALUES, hinted: false };
+}
+
 /** Sweep each settable control of one side, one at a time, against a render
  *  with that control left untouched. Same seed/clock/skip as the run. */
 function probeSide(host, source, rig, o) {
@@ -678,9 +738,10 @@ function probeSide(host, source, rig, o) {
   for (const c of base.controls) {
     if (!PROBE_KINDS.has(c.kind)) continue;
     const picker = PICKER_KINDS.has(c.kind);
+    const { values, hinted } = probeValues(c.kind, c.bounds);
     const deltas = {};
     const deltasLit = {};
-    for (const v of PROBE_VALUES) {
+    for (const v of values) {
       const trial = renderSide(host, source, rig, {
         ...o,
         seconds: o.probeSeconds,
@@ -695,6 +756,13 @@ function probeSide(host, source, rig, o) {
     const seenLit = Object.values(deltasLit).filter((d) => d !== null);
     out.controls[c.name] = {
       kind: c.kind,
+      // What was actually swept, and why: `bounds` is the parsed `//#`
+      // directive (absent when the control declares none), `probedAt` the
+      // three values used, `boundsProbed` whether those came from the
+      // directive or from the raw fallback.
+      ...(c.bounds ? { bounds: c.bounds } : {}),
+      probedAt: values,
+      boundsProbed: hinted,
       deltas,
       deltasLit,
       // EITHER bar counts: the whole-rig delta is the historical number, the
@@ -708,15 +776,16 @@ function probeSide(host, source, rig, o) {
 
 /** Compact stdout table: one row per side per probed control. */
 function printProbeTable(probe) {
-  const rows = [["side", "control", "kind", "responsive", "maxDelta", "maxDeltaLit"]];
+  const rows = [["side", "control", "kind", "probedAt", "responsive", "maxDelta", "maxDeltaLit"]];
+  const blank = ["-", "-", "-", "-", "-"];
   for (const [side, s] of Object.entries(probe.sides)) {
     if (s.compileError) {
-      rows.push([side, "(compile failed)", "-", "-", "-", "-"]);
+      rows.push([side, "(compile failed)", ...blank]);
       continue;
     }
     const names = Object.keys(s.controls);
     if (!names.length) {
-      rows.push([side, "(no settable controls)", "-", "-", "-", "-"]);
+      rows.push([side, "(no settable controls)", ...blank]);
       continue;
     }
     for (const name of names) {
@@ -729,6 +798,9 @@ function printProbeTable(probe) {
         side,
         name,
         c.kind,
+        // A trailing * marks a sweep taken from the control's //# bounds
+        // rather than from the raw 0/0.5/1 fallback.
+        `${c.probedAt.join("/")}${c.boundsProbed ? "*" : ""}`,
         c.responsive ? "yes" : "NO",
         biggest(c.deltas),
         biggest(c.deltasLit),
@@ -739,7 +811,8 @@ function printProbeTable(probe) {
   const st = probe.settings;
   console.log(
     `  probe: ${st.seconds}s @ ${st.fps}fps, skip ${st.skip}, seed ${st.seed}, ` +
-      `responsive if maxDelta >= ${PROBE_THRESHOLD} or maxDeltaLit >= ${PROBE_LIT_THRESHOLD}`,
+      `responsive if maxDelta >= ${PROBE_THRESHOLD} or maxDeltaLit >= ${PROBE_LIT_THRESHOLD}` +
+      `; probedAt* = the control's //# min/mid/max, else the ${st.fallbackValues.join("/")} fallback`,
   );
   for (const r of rows) {
     console.log(`  ${r.map((cell, i) => cell.padEnd(w[i])).join("  ")}`.trimEnd());
@@ -1178,8 +1251,10 @@ const meta = {
             ...(nonVisual ? { nonVisual } : {}),
           }
         : null,
-    // Covers every input that shapes a render: this file, its sibling
-    // modules, and the engine wasm itself — not just snap.mjs.
+    // Covers every input that shapes a render or what gets reported about it:
+    // this file, its sibling modules (hints.mjs decides the probe sweep and
+    // the `bounds` in this file's per-side controls), and the engine wasm
+    // itself — not just snap.mjs.
     harnessSha256: sha12(
       Buffer.concat(
         [
@@ -1187,6 +1262,7 @@ const meta = {
           path.join(HERE, "enginehost.mjs"),
           path.join(HERE, "png.mjs"),
           path.join(HERE, "sensormodel.mjs"),
+          path.join(HERE, "hints.mjs"),
           path.join(HERE, "fixups.mjs"),
           FIXUPS_PATH,
           WASM_PATH,
@@ -1294,7 +1370,9 @@ if (opts.probeControls) {
       rig: kind,
       pixels: rig.pixels,
       wallClock: opts.wallClock,
-      values: PROBE_VALUES,
+      // Only for controls with no usable //# bounds; the rest are swept at
+      // their own min/mid/max, recorded per control as `probedAt`.
+      fallbackValues: PROBE_VALUES,
       threshold: PROBE_THRESHOLD,
       thresholdLit: PROBE_LIT_THRESHOLD,
       probedKinds: [...PROBE_KINDS],

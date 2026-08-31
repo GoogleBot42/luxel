@@ -17,8 +17,9 @@
 // If a control carries both, the two are merged and the own-line directive
 // wins on any key they share.
 //
-// Keep this in sync with the copy in tools/verify/review/engine.js, which the
-// review UI needs as plain JS.
+// Keep this in sync with the plain-JS twin in tools/verify/hints.mjs, which the
+// verify harness (snap.mjs) and the review UI both use — web/tests/hints.test.mjs
+// runs every case against both and fails on any divergence.
 
 export interface ControlHint {
   min?: number;

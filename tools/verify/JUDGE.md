@@ -550,6 +550,15 @@ Only drop into the full series in `stats.json` when the summary flags something
 Each series prints on ONE line, so reading one is cheap — but a summary
 comparison usually settles the question.
 
+Each side's `controls` entry is `{name, kind, label}` plus `bounds` — the
+control's parsed `//#` directive, `{min, max, step, default}` with only the
+keys it declared — when it has one. Corpus ORIGINALS never have bounds (Pixel
+Blaze has no such directive), so this is a port-side signal: a port control
+that should carry bounds and shows no `bounds` key has a directive that did not
+bind (detached from its export by a blank line, misspelled, or sitting on the
+wrong export). That is a reportable finding on its own — the dial silently
+reverts to a raw 0..1 slider in the playground.
+
 Top-level `warnings` collects run-level complaints (currently: a `--strip-at`,
 `--strip-frames` or `--dump` time you asked for that had to be clamped to fit
 the window). Non-empty means one of your arguments did not take effect as
@@ -729,13 +738,23 @@ shell is fish, but the Bash tool runs bash.)
 
 `snap.mjs <slug> --probe-controls --label probe` does the normal run AND, for
 each side, sweeps every settable control ONE AT A TIME (others left untouched)
-at 0, 0.5 and 1, comparing each setting's short render against the untouched
-one. It prints a table and writes `probe.json`, nested as
-`sides.<side>.controls.<name>` -> `{kind, deltas: {"0":d,"0.5":d,"1":d},
-deltasLit: {…}, responsive}` (with a `sides.<side>.compileError` sibling
-that is null on success — guard for it when walking the object), where `d`
-is the mean absolute pixel difference and `responsive` means some setting
-cleared a threshold. One command replaces a dozen manual low/mid/high runs.
+across three values, comparing each setting's short render against the
+untouched one. It prints a table and writes `probe.json`, nested as
+`sides.<side>.controls.<name>` -> `{kind, bounds?, probedAt, boundsProbed,
+deltas, deltasLit, responsive}` (with a `sides.<side>.compileError` sibling
+that is null on success — guard for it when walking the object), where the
+`deltas` are mean absolute pixel differences keyed by the probed value and
+`responsive` means some setting cleared a threshold. One command replaces a
+dozen manual low/mid/high runs.
+
+**The three values are the control's OWN min/mid/max** when it declares a `//#`
+directive (`probedAt`, and `boundsProbed: true`; the table stars them). Only a
+control with no usable bounds falls back to raw 0/0.5/1, which is what every
+corpus ORIGINAL does — Pixel Blaze has no directives, so its sliders really are
+0..1. Ports on real-unit bounds are a different story: a `min=1 max=60` dial
+swept at 0/0.5/1 moves through 1% of its range and reads inert or borderline
+(Gitea #180). If you are reading an OLD probe.json with no `probedAt` key, it
+predates this and its port-side verdicts are worth redoing.
 
 `deltas` averages over the whole rig; `deltasLit` averages over the pixels
 either render lights — the same sparse-pattern correction as `motionLit`, and

@@ -1,5 +1,48 @@
 # Update log
 
+## 2026-08-30 — snap.mjs probes dials across their real range, not 0/0.5/1
+
+`--probe-controls` swept every control at raw 0, 0.5 and 1 and ignored the
+`//#` directive entirely. That was fine when ports were 0..1 sliders; with
+the library now largely on real-unit bounds (the controls pass below), it
+under-drove nearly everything — a `min=1 max=60` dial was poked across 1% of
+its range, and `clamp(floor(v), 1, 12)` collapsed all three probe points onto
+the same value — so dials reported borderline or inert while working fine.
+Five separate fix-pass agents hit this independently and fell back to hand-run
+`--controls-port` sweeps (Gitea #180).
+
+The probe now sweeps each control at the **min, midpoint and max of its own
+`//#` range**. A one-sided directive takes the raw default for the other end;
+the midpoint snaps to `step` when that lands strictly inside the range, so an
+integer dial is probed at an integer (`min=1 max=8 step=1` → 1/5/8, not
+1/4.5/8). Raw 0/0.5/1 remains the fallback for a control with no usable
+bounds — which is every corpus ORIGINAL, since Pixel Blaze has no directives —
+and for pickers, whose three components are colour axes rather than a range.
+`probe.json` gained `bounds`, `probedAt` and `boundsProbed` per control, and
+the stdout table a `probedAt` column that stars the bounds-driven sweeps.
+Measured on real ports: chill-confetti's HueJitter went from a whole-rig delta
+of 0.76 (under the bar, rescued only by the lit threshold) to 8.55;
+2d-wandering-fireball's BallSizePercent from 9.87 to 31.82.
+
+`meta.json`'s per-side `controls` entries now carry the parsed `bounds`
+alongside `{name, kind, label}`, so a snap alone confirms a directive was
+seen — and a port control with no `bounds` key has one that did NOT bind
+(detached by a blank line, misspelled, on the wrong export), which used to be
+invisible without re-reading the source.
+
+Plumbing: the `//#` parser was duplicated in `web/src/lib/hints.ts` and
+`tools/verify/review/engine.js`; rather than adding a third copy, the harness
+copy moved to `tools/verify/hints.mjs` (served to the review UI as
+`/hints.mjs`, the same way `sensormodel.mjs` already is) and now also owns
+`directiveRange()`, the min/mid/max derivation. `web/tests/hints.test.mjs`
+runs every parser case against BOTH implementations so the twins can't drift,
+and covers `directiveRange` edge cases (one-sided, step coarser than the
+range, inverted/degenerate bounds). `hints.mjs` folds into `harnessSha256`,
+so cached runs from before this invalidate correctly. Also fixed the two
+header-doc drifts #180 named: per-side blocks live under a top-level `sides`
+key, and `--controls-orig/-port` match a control by export name **or** display
+label.
+
 ## 2026-08-30 — digitalRead honours pinMode: a pulled-up pin idles HIGH
 
 `digitalRead()` returned 0 unconditionally, which for the standard

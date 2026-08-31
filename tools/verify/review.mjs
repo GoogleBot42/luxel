@@ -20,6 +20,7 @@
 //   GET  /                 the UI (tools/verify/review/index.html)
 //   GET  /app.js /engine.js /style.css   UI modules (tools/verify/review/)
 //   GET  /sensormodel.mjs  the shared beat120 sensor model, served for the UI
+//   GET  /hints.mjs        the shared `//#` control-bounds parser, ditto
 //   GET  /luxel.wasm       target/wasm32-unknown-unknown/release/luxel_wasm.wasm
 //   GET  /api/data         every pair: sources, rig, verdict, current decision
 //   GET  /api/decisions    the raw decisions.json
@@ -331,6 +332,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/decisions") return sendJson(res, 200, readDecisions());
     if (p === "/luxel.wasm") return sendFile(res, WASM);
     if (p === "/sensormodel.mjs") return sendFile(res, path.join(HERE, "sensormodel.mjs"));
+    if (p === "/hints.mjs") return sendFile(res, path.join(HERE, "hints.mjs"));
     if (p === "/favicon.ico") {
       res.writeHead(204);
       return res.end();
