@@ -97,6 +97,11 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
 
 - Sanity check `GET /api/status`: confirm `version`/`slot` match what you
   just pushed and `vmerr` is null.
+- Exercising a settings POST as a smoke test? GET the current state FIRST
+  and restore it after — multi-field bodies make it easy to clobber a
+  field you weren't testing (`POST /api/output` with a guessed `capMa 0`
+  silently wiped the Athom's 850 mA cap, 2026-08-30; caught only because
+  a pre-deploy response capture existed to diff against).
 - For any change touching LED output (protocol, timing, buffer handling),
   run the hardware soak: `tools/hw-bench.mjs <ip> [report.md]` (see
   docs/tools.md) — it churns the full pattern gallery on the real device
