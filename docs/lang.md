@@ -546,7 +546,12 @@ no axis-aligned artifacts (the classic choice for organic motion; feed
 ### Device & environment
 
 GPIO (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`,
-`touchRead`) — stubs until a board wires them. Clock (`clockYear` …
+`touchRead`) — stubs until a board wires them, with one exception:
+`digitalRead` reports the pin's *idle* level per the last `pinMode`, so
+an `INPUT_PULLUP` pin reads `HIGH` and everything else reads `LOW`. A
+button-to-ground pattern therefore idles "not pressed" instead of "held
+forever"; there is still no way to drive a pin from outside the pattern.
+Clock (`clockYear` …
 `clockWeekday`) — needs wall time from the host; every host supplies it
 at engine construction too, so top-level reads see real time-of-day
 (PB patterns do this — the device RTC is set by pattern-load time). No

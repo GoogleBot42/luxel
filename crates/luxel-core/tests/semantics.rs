@@ -1009,6 +1009,55 @@ fn gpio_and_sequencer_stubs_are_silent() {
     assert_eq!(e.var("out"), Some(Value::Num(Fx::ZERO)));
 }
 
+/// Gitea #177 item 1: with no real GPIO, `digitalRead` reports the pin's idle
+/// level, and only a pull-up biases it HIGH.
+#[test]
+fn digital_read_honours_pin_mode_pullup() {
+    let one = Some(Value::Num(Fx::ONE));
+    let zero = Some(Value::Num(Fx::ZERO));
+
+    // unconfigured pin: unchanged, idles LOW
+    let e = engine("export var out = digitalRead(26)");
+    assert_eq!(e.var("out"), zero);
+
+    // INPUT_PULLUP idles HIGH — a button-to-ground reads "not pressed"
+    let e = engine("pinMode(26, INPUT_PULLUP)\nexport var out = digitalRead(26)");
+    assert_eq!(e.var("out"), one);
+    // ...and compares equal to HIGH, which is how patterns spell it
+    let e = engine("pinMode(26, INPUT_PULLUP)\nexport var out = digitalRead(26) == HIGH");
+    assert_eq!(e.var("out"), one);
+
+    // every other mode still idles LOW
+    for mode in [
+        "INPUT",
+        "INPUT_PULLDOWN",
+        "OUTPUT",
+        "OUTPUT_OPEN_DRAIN",
+        "ANALOG",
+    ] {
+        let e = engine(&format!(
+            "pinMode(26, {mode})\nexport var out = digitalRead(26)"
+        ));
+        assert_eq!(e.var("out"), zero, "mode {mode} should idle LOW");
+    }
+
+    // the pull-up is per pin, and the LAST pinMode wins
+    let e = engine(
+        "pinMode(26, INPUT_PULLUP)\npinMode(27, INPUT)\n\
+         export var out = digitalRead(26) * 10 + digitalRead(27)",
+    );
+    assert_eq!(e.var("out"), Some(Value::Num(Fx::from_int(10))));
+    let e =
+        engine("pinMode(26, INPUT_PULLUP)\npinMode(26, INPUT)\nexport var out = digitalRead(26)");
+    assert_eq!(e.var("out"), zero);
+
+    // out-of-window pins stay stubbed rather than aliasing a tracked one
+    let e = engine("pinMode(100, INPUT_PULLUP)\nexport var out = digitalRead(100)");
+    assert_eq!(e.var("out"), zero);
+    let e = engine("pinMode(-1, INPUT_PULLUP)\nexport var out = digitalRead(-1)");
+    assert_eq!(e.var("out"), zero);
+}
+
 #[test]
 fn sensor_vars_are_stubbed() {
     let e = engine(

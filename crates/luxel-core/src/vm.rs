@@ -714,7 +714,23 @@ pub struct Vm {
     /// `readEvent`. The engine pushes (bounded — see `MAX_EVENTS`); a
     /// pattern switch rebuilds the VM, which clears the queue.
     pub events: VecDeque<[Fx; 4]>,
+    /// Bit per pin (0..63): the last `pinMode` for that pin asked for an
+    /// internal pull-up. There is no real GPIO yet, so `digitalRead` reports
+    /// the pin's *idle* level, and a pulled-up pin idles HIGH — a
+    /// button-to-ground pattern must read "not pressed", not "held forever"
+    /// (Gitea #177 item 1). Everything else idles LOW, as before.
+    pin_pullup: u64,
 }
+
+/// Highest pin number `pin_pullup` can track. Above it `pinMode` is still a
+/// no-op and `digitalRead` still reads 0 — ESP32 tops out at GPIO 39, so the
+/// window covers every pin a real board exposes.
+const MAX_TRACKED_PIN: i32 = 63;
+
+/// Arduino/ESP32 `pinMode` pull-up bit — `INPUT_PULLUP` (5) is `INPUT` (1)
+/// with this set, so masking also honours a hand-built `INPUT | 4`.
+/// Constant values are oracle-probed from PB fw 3.67 (see `compile.rs`).
+const PIN_MODE_PULLUP: i32 = 0x04;
 
 /// Event-queue capacity: when full the oldest event is dropped, so the
 /// freshest input wins and a pattern that never reads can't leak.
@@ -816,6 +832,7 @@ impl Vm {
             post_palette_amount: Fx::ONE,
             post_palette_epoch: 0,
             events: VecDeque::new(),
+            pin_pullup: 0,
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             random_seed: Fx::ZERO,
@@ -2437,9 +2454,32 @@ impl Vm {
                 }))
             }
             // ---- GPIO / sequencer / sync stubs: silent no-ops until real
-            // peripherals exist (M4/M5); inputs read 0 ----
-            PinMode | DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),
-            DigitalRead | AnalogRead | TouchRead | SequencerGetMode | PlaylistGetPosition
+            // peripherals exist (M4/M5); inputs read their idle level ----
+            // pinMode remembers only the pull-up bit — enough for
+            // `digitalRead` to report the right idle level (Gitea #177).
+            PinMode => {
+                let pin = n(0).to_int_trunc();
+                if (0..=MAX_TRACKED_PIN).contains(&pin) {
+                    let bit = 1u64 << pin;
+                    if n(1).to_int_trunc() & PIN_MODE_PULLUP != 0 {
+                        self.pin_pullup |= bit;
+                    } else {
+                        self.pin_pullup &= !bit;
+                    }
+                }
+                Ok(Value::default())
+            }
+            // No wired signal to read, so a pin sits at whatever its
+            // configured bias holds it at: HIGH under a pull-up, LOW
+            // otherwise (plain INPUT, INPUT_PULLDOWN, outputs, unconfigured).
+            DigitalRead => {
+                let pin = n(0).to_int_trunc();
+                let high =
+                    (0..=MAX_TRACKED_PIN).contains(&pin) && self.pin_pullup & (1u64 << pin) != 0;
+                num(if high { Fx::ONE } else { Fx::ZERO })
+            }
+            DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),
+            AnalogRead | TouchRead | SequencerGetMode | PlaylistGetPosition
             | PlaylistGetLength | NodeId => num(Fx::ZERO),
             // ---- Luxel extensions, batch 2 ----
             // beat(bpm): sawtooth beat phase 0..1 at `bpm` on the engine

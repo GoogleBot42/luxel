@@ -6,10 +6,11 @@
 // button. Each accepted press advances a mode counter; the whole strip shows
 // one solid hue per mode.
 //
-// The button is a UI control, not a pin: Luxel's `digitalRead()` is still an
-// engine stub that returns LOW forever (i.e. a permanently held button), so a
-// pin read here would demonstrate nothing and would let nobody without a
-// soldered-on switch try the pattern. Hold "Button" to press, and "Tap" fires
+// The button is a UI control, not a pin: Luxel's `digitalRead()` reports the
+// pin's idle level (HIGH here, since `pinMode` asked for a pull-up) and there
+// is no way to drive it from outside the pattern, so a pin read would sit at
+// "never pressed" and would let nobody without a soldered-on switch try the
+// pattern. Hold "Button" to press, and "Tap" fires
 // a press deliberately SHORTER than the debounce window so you can watch the
 // debouncer reject it — lower "DebounceMs" and the same tap gets through.
 // When Luxel grows real GPIO, the one marked line in beforeRender() becomes
