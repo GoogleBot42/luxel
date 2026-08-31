@@ -49,7 +49,8 @@ into a self-evolving ring-topology waterfall with a convergence watchdog.
 Quint/Expo/Circ trios plus the missing Back/Elastic/Bounce variants),
 tested against f64 references; easing-library-v1-0 now showcases the
 builtins as first-class values instead of 30 hand-rolled lambdas.
-`board-c6-devkit` re-measured: 1,008,208 B, margin 40,368 B / 3.85 % —
+`board-c6-devkit` re-measured post-rebase: 1,005,488 B (+4,016 B over
+the #168 fmt-diet baseline), margin 43,088 B / 4.11 % —
 above the 3 % floor, but the next VM growth should measure C6 first.
 
 **Harness** — review UI no longer fabricates untouched slider positions

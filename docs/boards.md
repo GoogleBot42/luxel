@@ -147,10 +147,11 @@ espflash save-image --chip esp32c6 \
 ```
 
 2026-08-31, easing builtins batch 7 (the 21 remaining standard easings,
-review-pass follow-up): `board-c6-devkit` 1,004,704 → **1,008,208 B**,
-margin **40,368 B / 3.85 %** — measured, still above the 3 % CI floor but
-the warn band is close; the next feature that grows the VM should
-re-measure the C6 first.
+review-pass follow-up): `board-c6-devkit` 1,001,472 → **1,005,488 B**
+(+4,016 B), margin **43,088 B / 4.11 %** — measured on the rebased tree
+after the #168 fmt diet, still above the 3 % CI floor but inside the 6 %
+warn band; the next feature that grows the VM should re-measure the C6
+first.
 
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
