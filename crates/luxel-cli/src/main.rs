@@ -57,23 +57,37 @@ fn now_unix() -> Option<i64> {
 /// Compile + smoke-run a pattern (.js source or .epe export) and report one
 /// JSON line: {"file", "stage": "ok"|"epe"|"compile"|"init"|"frame", "error"?}.
 /// The corpus report tooling drives this. Optional: --grid WxH (default
-/// 10x10; sets pixel count to W·H and installs a 2D grid map).
+/// 10x10; sets pixel count to W·H and installs a 2D grid map) or --strip N
+/// (N pixels and NO map — the mapless-strip rig most real devices run,
+/// where a 2D pattern falls back to its own `render`; Gitea #193).
 fn check_cmd(path: &str, rest: &[String]) -> ExitCode {
-    let (w, h) = match rest {
+    let rig = match rest {
         [flag, v] if flag == "--grid" => match v.split_once('x') {
             Some((a, b)) => match (num(a), num(b)) {
-                (Ok(a), Ok(b)) => (a.max(1), b.max(1)),
+                (Ok(a), Ok(b)) => Rig::Grid(a.max(1), b.max(1)),
                 _ => return usage(),
             },
             None => return usage(),
         },
-        [] => (10, 10),
+        [flag, v] if flag == "--strip" => match num(v) {
+            Ok(n) => Rig::Strip(n.max(1)),
+            Err(c) => return c,
+        },
+        [] => Rig::Grid(10, 10),
         _ => return usage(),
     };
-    check_at(path, w, h)
+    check_at(path, rig)
 }
 
-fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
+/// The rig a `check` run stands the pattern up on: a 2D grid map, or a
+/// mapless strip of N pixels.
+#[derive(Clone, Copy)]
+enum Rig {
+    Grid(u32, u32),
+    Strip(u32),
+}
+
+fn check_at(path: &str, rig: Rig) -> ExitCode {
     let report = |stage: &str, error: Option<String>| {
         let mut obj = serde_json::json!({ "file": path, "stage": stage });
         if let Some(e) = error {
@@ -103,7 +117,10 @@ fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
     };
     // grid sizes matter — patterns hardcoding rig shapes (width = 16) or
     // doing pixelCount/10 are genuinely OOB (on PB too) at other counts
-    let pixels = w * h;
+    let pixels = match rig {
+        Rig::Grid(w, h) => w * h,
+        Rig::Strip(n) => n,
+    };
     let prog = match luxel_core::compile::compile(&src) {
         Ok(p) => p,
         Err(d) => {
@@ -133,18 +150,23 @@ fn check_at(path: &str, w: u32, h: u32) -> ExitCode {
         return report("init", Some(e.message));
     }
     engine_bc.take_error();
-    // a W×H grid map so render2D patterns exercise real coordinates
-    let coords: Vec<[Fx; 3]> = (0..pixels)
-        .map(|i| {
-            [
-                Fx::from_int((i % w) as i32),
-                Fx::from_int((i / w) as i32),
-                Fx::ZERO,
-            ]
-        })
-        .collect();
-    engine.set_map(2, &coords);
-    engine_bc.set_map(2, &coords);
+    // a W×H grid map so render2D patterns exercise real coordinates. A strip
+    // rig installs NO map on purpose: that is the mapless device, where the
+    // engine picks `render` and a 2D pattern's own 1D fallback runs — code
+    // no grid rig ever executes (Gitea #193).
+    if let Rig::Grid(w, _) = rig {
+        let coords: Vec<[Fx; 3]> = (0..pixels)
+            .map(|i| {
+                [
+                    Fx::from_int((i % w) as i32),
+                    Fx::from_int((i / w) as i32),
+                    Fx::ZERO,
+                ]
+            })
+            .collect();
+        engine.set_map(2, &coords);
+        engine_bc.set_map(2, &coords);
+    }
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         engine.set_wall_clock(now.as_secs() as i64);
         engine_bc.set_wall_clock(now.as_secs() as i64);
@@ -264,7 +286,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES]"
     );
     ExitCode::from(2)
 }
