@@ -298,6 +298,18 @@ springy set — `easeOutBack(t)` (overshoots ~10% and settles),
 ball). The springy ones exceed 0..1 mid-curve by design; saturate() the
 result if you're feeding a color channel directly.
 
+**Easings, in full**: the standard thirty are all builtins — ten families,
+each with an `easeIn…`, `easeOut…`, and `easeInOut…` form, matching the
+public easings.net reference curves: `…Sine`, `…Quad`, `…Cubic`, `…Quart`,
+`…Quint`, `…Expo`, `…Circ`, `…Back`, `…Elastic`, `…Bounce` (so
+`easeInOutQuint(t)`, `easeInBounce(t)`, and so on). Steeper family = more
+of the motion crammed into the tail. `…Expo`, `…Elastic`, and `…InOutExpo`
+pin their endpoints exactly to 0 and 1; everything else is the plain
+polynomial/analytic form with no clamping, so feeding t outside 0..1
+extrapolates (the same contract as `smoothstep`). `…Back` anticipates below
+0 before it starts and `…Elastic` winds up the same way — that's the point
+of them, but saturate() before a color channel.
+
 **Luxel extensions — tempo & hashing**: `beat(bpm)` is a 0..1 sawtooth
 beat phase at `bpm` on the engine clock; `beatSin(bpm, lo = 0, hi = 1)`
 oscillates sinusoidally between `lo` and `hi` at `bpm` (FastLED-style —

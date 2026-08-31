@@ -1,58 +1,44 @@
 // name: Easing Library v1.0
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Easing Library v1.0"; original source never consulted.
-// The thirty standard easings are implemented from the public easings.net
-// reference. A self-advancing demo graphs the current curve (2D) or warps a
-// rainbow by it (1D), with a marker tracing its velocity profile.
+// The thirty standard easings are Luxel builtins (see docs/lang.md), so this
+// pattern is now just the showcase: a self-advancing demo that graphs the
+// current curve (2D) or warps a rainbow by it (1D), with a marker tracing
+// its velocity profile.
 
-var BACK1 = 1.70158
-var BACK2 = 1.70158 * 1.525
-var BACK3 = 1.70158 + 1
-var ELC4 = PI2 / 3
-var ELC5 = PI2 / 4.5
-
-function bounceOut(x) {
-  var n1 = 7.5625
-  var d1 = 2.75
-  if (x < 1 / d1) return n1 * x * x
-  if (x < 2 / d1) { x = x - 1.5 / d1; return n1 * x * x + 0.75 }
-  if (x < 2.5 / d1) { x = x - 2.25 / d1; return n1 * x * x + 0.9375 }
-  x = x - 2.625 / d1
-  return n1 * x * x + 0.984375
-}
-
-// thirty easings, families in in/out/in-out order
+// the standard thirty, families in in/out/in-out order — builtins are
+// first-class values, so the table is just references to them
 ez = array(30)
-ez[0]  = (x) => 1 - cos((x * PI) / 2)
-ez[1]  = (x) => sin((x * PI) / 2)
-ez[2]  = (x) => -(cos(PI * x) - 1) / 2
-ez[3]  = (x) => x * x
-ez[4]  = (x) => 1 - (1 - x) * (1 - x)
-ez[5]  = (x) => x < 0.5 ? 2 * x * x : 1 - pow(-2 * x + 2, 2) / 2
-ez[6]  = (x) => x * x * x
-ez[7]  = (x) => 1 - pow(1 - x, 3)
-ez[8]  = (x) => x < 0.5 ? 4 * x * x * x : 1 - pow(-2 * x + 2, 3) / 2
-ez[9]  = (x) => x * x * x * x
-ez[10] = (x) => 1 - pow(1 - x, 4)
-ez[11] = (x) => x < 0.5 ? 8 * x * x * x * x : 1 - pow(-2 * x + 2, 4) / 2
-ez[12] = (x) => x * x * x * x * x
-ez[13] = (x) => 1 - pow(1 - x, 5)
-ez[14] = (x) => x < 0.5 ? 16 * x * x * x * x * x : 1 - pow(-2 * x + 2, 5) / 2
-ez[15] = (x) => x <= 0 ? 0 : pow(2, 10 * x - 10)
-ez[16] = (x) => x >= 1 ? 1 : 1 - pow(2, -10 * x)
-ez[17] = (x) => x <= 0 ? 0 : x >= 1 ? 1 : x < 0.5 ? pow(2, 20 * x - 10) / 2 : (2 - pow(2, -20 * x + 10)) / 2
-ez[18] = (x) => 1 - sqrt(1 - x * x)
-ez[19] = (x) => sqrt(1 - (x - 1) * (x - 1))
-ez[20] = (x) => x < 0.5 ? (1 - sqrt(1 - pow(2 * x, 2))) / 2 : (sqrt(1 - pow(-2 * x + 2, 2)) + 1) / 2
-ez[21] = (x) => BACK3 * x * x * x - BACK1 * x * x
-ez[22] = (x) => 1 + BACK3 * pow(x - 1, 3) + BACK1 * pow(x - 1, 2)
-ez[23] = (x) => x < 0.5 ? (pow(2 * x, 2) * ((BACK2 + 1) * 2 * x - BACK2)) / 2 : (pow(2 * x - 2, 2) * ((BACK2 + 1) * (2 * x - 2) + BACK2) + 2) / 2
-ez[24] = (x) => x <= 0 ? 0 : x >= 1 ? 1 : -pow(2, 10 * x - 10) * sin((10 * x - 10.75) * ELC4)
-ez[25] = (x) => x <= 0 ? 0 : x >= 1 ? 1 : pow(2, -10 * x) * sin((10 * x - 0.75) * ELC4) + 1
-ez[26] = (x) => x <= 0 ? 0 : x >= 1 ? 1 : x < 0.5 ? -(pow(2, 20 * x - 10) * sin((20 * x - 11.125) * ELC5)) / 2 : (pow(2, -20 * x + 10) * sin((20 * x - 11.125) * ELC5)) / 2 + 1
-ez[27] = (x) => 1 - bounceOut(1 - x)
-ez[28] = (x) => bounceOut(x)
-ez[29] = (x) => x < 0.5 ? (1 - bounceOut(1 - 2 * x)) / 2 : (1 + bounceOut(2 * x - 1)) / 2
+ez[0]  = easeInSine
+ez[1]  = easeOutSine
+ez[2]  = easeInOutSine
+ez[3]  = easeInQuad
+ez[4]  = easeOutQuad
+ez[5]  = easeInOutQuad
+ez[6]  = easeInCubic
+ez[7]  = easeOutCubic
+ez[8]  = easeInOutCubic
+ez[9]  = easeInQuart
+ez[10] = easeOutQuart
+ez[11] = easeInOutQuart
+ez[12] = easeInQuint
+ez[13] = easeOutQuint
+ez[14] = easeInOutQuint
+ez[15] = easeInExpo
+ez[16] = easeOutExpo
+ez[17] = easeInOutExpo
+ez[18] = easeInCirc
+ez[19] = easeOutCirc
+ez[20] = easeInOutCirc
+ez[21] = easeInBack
+ez[22] = easeOutBack
+ez[23] = easeInOutBack
+ez[24] = easeInElastic
+ez[25] = easeOutElastic
+ez[26] = easeInOutElastic
+ez[27] = easeInBounce
+ez[28] = easeOutBounce
+ez[29] = easeInOutBounce
 
 // exported teaching/debug state
 export var elapsed = 0

@@ -1185,6 +1185,65 @@ fn extension_builtins() {
 }
 
 #[test]
+fn easing_library_thirty() {
+    // The rest of the standard thirty easings (ten families × in/out/in-out
+    // from the public easings.net reference). The quad/cubic trios and the
+    // "out" springs are covered by extension_builtins above.
+    let names = [
+        "easeInSine", "easeOutSine", "easeInOutSine",
+        "easeInQuart", "easeOutQuart", "easeInOutQuart",
+        "easeInQuint", "easeOutQuint", "easeInOutQuint",
+        "easeInExpo", "easeOutExpo", "easeInOutExpo",
+        "easeInCirc", "easeOutCirc", "easeInOutCirc",
+        "easeInBack", "easeInOutBack",
+        "easeInElastic", "easeInOutElastic",
+        "easeInBounce", "easeInOutBounce",
+    ];
+    // every easing pins its endpoints: ease*(0) = 0, ease*(1) = 1
+    for f in names {
+        assert!(eval(&format!("{f}(0)")).to_f64().abs() < 1e-2, "{f}(0) != 0");
+        assert!((eval(&format!("{f}(1)")).to_f64() - 1.0).abs() < 1e-2, "{f}(1) != 1");
+    }
+    // shape: reference values at t = 0.25 / 0.5 / 0.75 (f64 math on the
+    // published formulas; fixed point tracks them to well under a color step)
+    let refs: [(&str, [f64; 3]); 21] = [
+        ("easeInSine", [0.0761, 0.2929, 0.6173]),
+        ("easeOutSine", [0.3827, 0.7071, 0.9239]),
+        ("easeInOutSine", [0.1464, 0.5000, 0.8536]),
+        ("easeInQuart", [0.0039, 0.0625, 0.3164]),
+        ("easeOutQuart", [0.6836, 0.9375, 0.9961]),
+        ("easeInOutQuart", [0.0313, 0.5000, 0.9688]),
+        ("easeInQuint", [0.0010, 0.0313, 0.2373]),
+        ("easeOutQuint", [0.7627, 0.9688, 0.9990]),
+        ("easeInOutQuint", [0.0156, 0.5000, 0.9844]),
+        ("easeInExpo", [0.0055, 0.0313, 0.1768]),
+        ("easeOutExpo", [0.8232, 0.9688, 0.9945]),
+        ("easeInOutExpo", [0.0156, 0.5000, 0.9844]),
+        ("easeInCirc", [0.0318, 0.1340, 0.3386]),
+        ("easeOutCirc", [0.6614, 0.8660, 0.9682]),
+        ("easeInOutCirc", [0.0670, 0.5000, 0.9330]),
+        ("easeInBack", [-0.0641, -0.0877, 0.1826]),
+        ("easeInOutBack", [-0.0997, 0.5000, 1.0997]),
+        ("easeInElastic", [-0.0055, -0.0156, 0.0884]),
+        ("easeInOutElastic", [0.0120, 0.5000, 0.9880]),
+        ("easeInBounce", [0.0273, 0.2344, 0.5273]),
+        ("easeInOutBounce", [0.1172, 0.5000, 0.8828]),
+    ];
+    for (f, want) in refs {
+        for (t, want) in ["0.25", "0.5", "0.75"].iter().zip(want) {
+            let got = eval(&format!("{f}({t})")).to_f64();
+            assert!((got - want).abs() < 1e-2, "{f}({t}) = {got}, want {want}");
+        }
+    }
+    // the springs are deliberately out of range mid-curve: back anticipates
+    // below 0 on the way in, its in-out form overshoots past 1 on the way out
+    assert!(eval("easeInBack(0.4)").to_f64() < 0.0);
+    assert!(eval("easeInOutBack(0.8)").to_f64() > 1.0);
+    // elastic-in winds up backwards before releasing
+    assert!(eval("easeInElastic(0.6)").to_f64() < 0.0);
+}
+
+#[test]
 fn transform_semantics_match_pixelblaze() {
     // Pinned against the real PB (fw 3.67, oracle sweep 2026-07-07). Its
     // installed map put pixel 0 at world (≈1.0, 0.5); replicate that here

@@ -146,6 +146,12 @@ espflash save-image --chip esp32c6 \
   target/riscv32imac-unknown-none-elf/release/luxel-fw /tmp/ota.bin && stat -c %s /tmp/ota.bin
 ```
 
+2026-08-31, easing builtins batch 7 (the 21 remaining standard easings,
+review-pass follow-up): `board-c6-devkit` 1,004,704 → **1,008,208 B**,
+margin **40,368 B / 3.85 %** — measured, still above the 3 % CI floor but
+the warn band is close; the next feature that grows the VM should
+re-measure the C6 first.
+
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
 **3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).
