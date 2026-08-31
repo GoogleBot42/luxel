@@ -73,11 +73,16 @@ export function render2D(index, x, y) {
   hsv(band / TOPBAND * 0.5 + slowPhase, 1 - out, out)
 }
 
-// 1D fallback: synthesize a serpentine matrix sized from the pixel count
+// 1D fallback: synthesize a serpentine matrix sized from the pixel count.
+// The row count must come from ceil(pixelCount / width), not from the width:
+// on any count that isn't a perfect square the last partial row sits at
+// row >= fbWidth, and dividing it by fbWidth hands render2D a y >= 1, which
+// walks the 16x16 persist[] index past 255 (60 px: 7 wide, 9 rows).
 var fbWidth = max(1, floor(sqrt(pixelCount)))
+var fbHeight = max(1, ceil(pixelCount / fbWidth))
 export function render(index) {
   var row = floor(index / fbWidth)
   var col = index % fbWidth
   if (row % 2 == 1) col = fbWidth - 1 - col   // zigzag wiring
-  render2D(index, col / fbWidth, row / fbWidth)
+  render2D(index, col / fbWidth, row / fbHeight)
 }

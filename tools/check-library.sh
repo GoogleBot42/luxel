@@ -10,19 +10,25 @@
 # ship a directive that does nothing at all (Gitea #179). See "directive lint"
 # below for the exact rule.
 #
-# Every pattern runs on TWO rigs: `check`'s default 10x10 grid and an explicit
-# 16x16. Grid size is load-bearing — patterns that hardcode a rig width or do
-# pixelCount arithmetic go out of bounds on one shape and not the other — and
-# "322/322 clean on both the default and 16x16 grids" is the phrasing every
-# past sweep in UPDATES.md reports. This script is that loop, so nobody has to
-# re-derive it from prose again.
+# Every pattern runs on FIVE rigs: two grids (`check`'s default 10x10 and an
+# explicit 16x16) and three MAPLESS STRIPS (60, 300, 512 px). Rig shape is
+# load-bearing — patterns that hardcode a rig width or do pixelCount arithmetic
+# go out of bounds on one shape and not another.
+#
+# The strips are not redundant with the grids: with a map installed the engine
+# picks `render2D`, so a 2D pattern's own 1D fallback is code the grid rigs
+# NEVER execute. Gitea #193 was exactly that — a fallback that divided its row
+# index by the matrix WIDTH, handing render2D a y >= 1 on any pixel count that
+# isn't a perfect square. Clean on both grids, out of bounds on the 60 px strip
+# the Athom actually runs, and it took a 45-minute hardware soak to notice.
 #
 # Run in the nix devshell:
 #   nix develop -c tools/check-library.sh [dir]        (default dir: library)
-#   GRIDS="default 16x16 8x32" nix develop -c tools/check-library.sh
+#   GRIDS="default 16x16 8x32" STRIPS="60 1000" nix develop -c tools/check-library.sh
+#   STRIPS= nix develop -c tools/check-library.sh      (grids only)
 #
-# Prints a per-grid pass count, the failing file + engine stage/error for each
-# failure, and exits non-zero if anything failed. Baseline: 322/322 on both.
+# Prints a per-rig pass count, the failing file + engine stage/error for each
+# failure, and exits non-zero if anything failed. Baseline: 323/323 on every rig.
 # (corpus/ has its own richer harness — tools/corpus/report.mjs.)
 set -euo pipefail
 TOOLS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -33,6 +39,10 @@ DIR="${1:-library}"
 # Space-separated rig list; "default" means no --grid flag (luxel check's own
 # 10x10), anything else is passed through as --grid WxH.
 GRIDS="${GRIDS:-default 16x16}"
+# Space-separated mapless-strip pixel counts, each passed as --strip N. Kept
+# clear of the PB-compat 10,240-element array budget (a few patterns legitimately
+# exceed it at 2048 px, which is a budget rejection, not a bug).
+STRIPS="${STRIPS-60 300 512}"
 
 shopt -s nullglob
 files=("$DIR"/*.js "$DIR"/*.epe)
@@ -105,8 +115,24 @@ for grid in $GRIDS; do
   printf '%s grid: %d/%d ok\n' "$grid" "$pass" "$((pass + fail))"
 done
 
+for n in $STRIPS; do
+  pass=0
+  fail=0
+  for f in "${files[@]}"; do
+    out=$("$LUXEL" check "$f" --strip "$n" 2>&1) && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      total_fail=$((total_fail + 1))
+      printf 'FAIL [strip %s] %s\n  %s\n' "$n" "$f" "$out"
+    fi
+  done
+  printf '%s px strip: %d/%d ok\n' "$n" "$pass" "$((pass + fail))"
+done
+
 if [ "$total_fail" -ne 0 ]; then
   echo "check-library: $total_fail failure(s) across $DIR" >&2
   exit 1
 fi
-echo "check-library: $DIR clean on all grids ($GRIDS)"
+echo "check-library: $DIR clean on all rigs (grids: $GRIDS; strips: ${STRIPS:-none})"

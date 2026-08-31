@@ -1,5 +1,52 @@
 # Update log
 
+## 2026-08-30 — The library gate never ran a mapless strip (Gitea #193)
+
+The #167 soak turned up one error in 303 patterns: `sound - spectromatrix
+render2D` → `array index out of bounds`. The issue guessed a sensor-less
+device hands the pattern an empty `frequencyData`; that was wrong on both
+counts. `Engine::from_program_budgeted_at` declares `("frequencyData", 32)`
+unconditionally, so a sensor-less engine gets 32 zeroed bins like any other,
+and the array that actually overflowed was the pattern's own 256-slot
+`persist[]` buffer.
+
+The pattern's **1D fallback** was the bug:
+
+```js
+var fbWidth = max(1, floor(sqrt(pixelCount)))
+render2D(index, col / fbWidth, row / fbWidth)   // row count is NOT fbWidth
+```
+
+`floor(sqrt(n))` gives the width; the row count is `ceil(n / fbWidth)`, which
+is larger on every count that isn't a perfect square. At 60 px the matrix is
+7 wide and **9** rows, so the last rows normalize to `y = 8/7 = 1.14`, and
+`floor(y * 15.99) * 16` walks `persist[]` past 255. Fixed by deriving the
+height separately (`fbHeight = max(1, ceil(pixelCount / fbWidth))`), which
+also keeps `y < 1` strictly. Swept clean now on every count 1..400 plus 512 /
+600 / 1000 / 1024 / 1500 / 2048.
+
+The interesting part is why 322/322 sweeps kept missing it. `luxel check`
+**always installed a 2D grid map**, and with a map the engine picks
+`render2D` — so a 2D pattern's own `render` fallback is code the acceptance
+gate never executed, on any grid. Only a real mapless strip runs it. So
+`luxel check` gained `--strip N` (N pixels, no map) and
+`tools/check-library.sh` now sweeps five rigs: grids `default`/`16x16` plus
+**mapless strips at 60 / 300 / 512 px**. Baseline **303/303 on all five**.
+The strip counts stay under the PB-compat 10,240-element array budget, which
+a couple of patterns legitimately exceed at 2048 px; `STRIPS=` drops the
+strip half.
+
+Two secondary notes from the sweep. The soak ran at **60 px, not 300** — the
+issue's "at 300 px" came from the report's hardcoded *"fps at 300 px"* line,
+and 300 px is one of the counts where this bug happens to be benign
+(`y = 17/17 = 1.0` exactly, which still floors to slot 255). And `oasis`
+goes out of bounds above ~1450 px from 16.16 overflow in
+`(index + off) * w`, filed separately.
+
+Verified on the Athom rig at its real 60 px: the pre-fix source pushed via
+`/api/code` reports `vmerr: "array index out of bounds"`, the fixed source
+reports `vmerr: null` at the same fps and heap.
+
 ## 2026-08-30 — One `Reply` type for the whole device API: −24 KB of firmware
 
 `firmware/src/server.rs` returned **thirteen different response shapes** —
