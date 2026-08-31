@@ -1,5 +1,89 @@
 # Update log
 
+## 2026-08-30 — One `Reply` type for the whole device API: −24 KB of firmware
+
+`firmware/src/server.rs` returned **thirteen different response shapes** —
+`(CORS, JSON, String)` for the ~40 JSON routes, `(gzip, etag, cc, FlashAsset)`
+for a compressed asset, `(StatusCode, [(&str,&str); 4], &str)` for the CORS
+preflight, and so on. picoserve monomorphizes `IntoResponse::write_to` once
+per tuple *shape*, `ForEachHeader::call` once per header-*value* type, and
+`Response`/`HeadersChain`/`ContentBody` once per combination, so those
+thirteen shapes cost 22 `write_to` instantiations (20,478 B), 37
+header-machinery symbols (8,492 B), and a `core::fmt` `Display` shim per value
+type. Gitea #167 collapses all of it into one concrete type:
+
+```rust
+struct Reply { status: StatusCode, headers: heapless::Vec<(&'static str, HVal), 4>, body: ApiBody }
+enum HVal  { Static(&'static str), Owned(String) }          // the ONE header value type
+enum ApiBody { Json(String), Text{…}, Bytes(Vec<u8>), Asset(FlashAsset),
+               Source(CurrentSource), Envelope(CurrentEnvelope), Empty{…} }  // the ONE body type
+```
+
+Exactly one `Response<HeadersChain<ContentHeaders, &[(&str, HVal)]>,
+ContentBody<ApiBody>>` now exists in the image, and therefore exactly one
+`write_to`.
+
+**Measured, `board-c6-devkit` credless flake build: 1,005,168 → 980,784 B
+(−24,384), slot margin 43,408 B / 4.14 % → 67,792 B / 6.46 %.** Every other
+board came in between −23.0 and −24.4 KB (whole-fleet table in
+docs/boards.md; both columns are an A/B with only `server.rs` differing —
+which turned out to matter, because a side-finding of this work is that
+editing *only markdown* moves the C6 image ~600 B via `.Lanon` symbol
+renaming. That ~±0.7 KB noise floor is now written down in
+docs/size-report.md). This is the largest single reduction the firmware has
+taken
+since the opt-level "s" switch, and — unusually — it *beat* its ≥10 KB
+estimate rather than missing it. The C6 is out of CI's 6 % warn band for the
+first time since the board was added.
+
+Symbol-level: `write_to` 22 syms/20,478 B → 3 syms/6,882 B (one real closure
+at 6,556 B plus drop glue); header machinery 37 syms/8,492 B → 4 syms/966 B;
+the `picoserve` bucket 32,948 → 7,278 B; `rust core` 58,815 → 50,843 B (the
+per-value-type formatting shims genuinely became dead — unlike #168, where
+`core::fmt` could never leave). Our own `luxel-fw` bucket *grew* 10 KB and the
+flat dispatcher's closure went 22,050 → 26,204 B: with one response type the
+LTO boundary moves and the write path inlines into the dispatcher instead of
+standing alone 22 times. Bucket deltas lie; the image total is the number.
+
+**What had to be preserved, and was.** The pad-don't-truncate discipline in
+`stream_flash_readback`/`stream_store_readback` (a short body wedges a pool
+slot for 45 s), the exact-from-snapshot `content_length()` of
+`FlashAsset`/`CurrentSource`/`CurrentEnvelope`, the 1 ms `Timer` between 4 KiB
+flash reads, the flat-match dispatcher with a single `write_to` exit per arm,
+the reply-then-reboot ordering on `POST /api/wifi` and `/api/apmode`, and all
+four headers on the OPTIONS preflight (`MAX_HEADERS` is sized for exactly that
+arm, with a compile-time assert, because a silently dropped CORS header breaks
+cross-origin DELETE with no trace). The routing shape is now load-bearing for
+size too: picoserve's `MethodRouter` would wrap the writer in a private
+`IgnoreBody<W>` for HEAD — a second writer type that duplicates every GET
+instantiation — so the hand-written `PathRouterService` stays, and says so in
+a comment next to the existing stack warning.
+
+**Two wire changes, both fixes.** JSON/octet-stream/HTML responses used to go
+out with **two** `Content-Type` headers (picoserve's `Content` impl for
+`String`/`&str` emits `text/plain; charset=utf-8`, then our explicit header
+was appended); now there is exactly one, correct, and matching the native
+mirror in `crates/luxel-cli/src/serve.rs`. And a 304 asset revalidation now
+carries the `Content-Type`/`Content-Length` its 200 would have carried (RFC
+9110 §15.4.5) where before it carried neither — `Response::new` always emits
+both and cannot suppress them, and RFC 9112 §6.3 keeps a 304 body-less
+regardless of what Content-Length says.
+
+**RAM cost.** The single `write_to` future is the union of every body type, so
+the per-slot static task arena grew: `tools/stack-check.sh` on
+`board-pixelblaze-v3` reads `.stack` 29,124 → 27,828 B (3,828 B above the
+24 KB floor) and the dispatcher's poll frame 2,128 → 4,928 B against a
+12,288 B budget. Both within limits; the poll frame is now the one to watch
+when adding routes.
+
+**Gates.** All 8 board images build and pass `tools/image-check.sh` (markers
++ margin); `tools/stack-check.sh` clean; `cargo clippy` on the default board
+shows no new lints; `cargo test --workspace` 223/223; the full QEMU harness
+(`tools/qemu/run-all.py` — takeover app1/app0/fault, heap-regions
+selfheal/rollback) passes on the athom image built from this change;
+`tools/serve-e2e.mjs` green. The firmware's HTTP surface has no hardware-free
+e2e, so the response-header changes above still want a device pass.
+
 ## 2026-08-30 — Lint detached `//#` directives; sweep 13 library patterns
 
 A `//#` control directive parses in exactly two places — trailing on the

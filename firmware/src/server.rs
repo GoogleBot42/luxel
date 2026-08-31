@@ -49,6 +49,7 @@ use core::sync::atomic::Ordering;
 use embassy_net::Stack;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{json_escape, push_i32, push_i64, push_piece, push_u32, push_u64};
+use picoserve::response::{Content, StatusCode};
 use picoserve::routing::RequestHandlerService as _;
 
 use crate::shared::{
@@ -60,13 +61,186 @@ use crate::shared::{BRIGHTNESS, MAX_PIXELS, PIXEL_COUNT, PROTOCOL};
 
 const INDEX_HTML: &str = include_str!("index.html");
 
-const CORS: (&str, &str) = ("Access-Control-Allow-Origin", "*");
-const JSON: (&str, &str) = ("Content-Type", "application/json");
+const TEXT_PLAIN: &str = "text/plain; charset=utf-8";
+const TEXT_HTML: &str = "text/html; charset=utf-8";
 
-type ApiResponse = ((&'static str, &'static str), (&'static str, &'static str), String);
+/// The ONE header-value type in the image.
+///
+/// `picoserve::response::ForEachHeader::call<Value: Display>` is generic over
+/// the value type, so every distinct `V` handed to a header instantiates a
+/// fresh copy of picoserve's header-writing machinery — and every distinct
+/// response *tuple shape* instantiated a whole `IntoResponse::write_to`
+/// besides (22 of them, 20.5 KB, before Gitea #167). Collapsing all values to
+/// this enum, and all responses to [Reply], leaves exactly one of each.
+enum HVal {
+    Static(&'static str),
+    Owned(String),
+}
+
+impl core::fmt::Display for HVal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // write_str ONLY — never `write!`/format args: an Arguments build here
+        // would undo the fmt diet (Gitea #168) on the hottest path we have.
+        f.write_str(match self {
+            HVal::Static(s) => s,
+            HVal::Owned(s) => s.as_str(),
+        })
+    }
+}
+
+/// The ONE response-body type in the image: every route's content, behind one
+/// `Content` impl, so picoserve's `Response`/`ContentBody`/`HeadersChain`
+/// machinery is monomorphized exactly once. Variants that wrap a streaming
+/// body delegate to it verbatim — the flash-readback discipline (chunk, pad,
+/// yield) lives in those types, not here.
+enum ApiBody {
+    /// `application/json` — ~40 routes.
+    Json(String),
+    /// A `&'static str` body with an explicit content type (the embedded
+    /// index page is `text/html`, the 404 / redirect notes are `text/plain`).
+    Text {
+        ct: &'static str,
+        s: &'static str,
+    },
+    /// `application/octet-stream` — `/api/pixels`.
+    Bytes(Vec<u8>),
+    Asset(FlashAsset),
+    Source(CurrentSource),
+    Envelope(CurrentEnvelope),
+    /// A body-less response (204 preflight, 304 asset revalidation).
+    /// `Response::new` always emits Content-Type + Content-Length and there is
+    /// no way to suppress them, so both are carried explicitly: `len` is 0 for
+    /// the 204 and the would-be-200 length for the 304 (RFC 9110 §15.4.5 — a
+    /// 304 carries the metadata a 200 would have, and RFC 9112 §6.3 makes it
+    /// body-less regardless of what Content-Length says).
+    Empty {
+        ct: &'static str,
+        len: usize,
+    },
+}
+
+impl Content for ApiBody {
+    fn content_type(&self) -> &'static str {
+        match self {
+            ApiBody::Json(_) => "application/json",
+            ApiBody::Text { ct, .. } => ct,
+            ApiBody::Bytes(_) => "application/octet-stream",
+            ApiBody::Asset(a) => a.content_type(),
+            ApiBody::Source(s) => s.content_type(),
+            ApiBody::Envelope(e) => e.content_type(),
+            ApiBody::Empty { ct, .. } => ct,
+        }
+    }
+
+    fn content_length(&self) -> usize {
+        match self {
+            ApiBody::Json(s) => s.len(),
+            ApiBody::Text { s, .. } => s.len(),
+            ApiBody::Bytes(v) => v.len(),
+            // exact-from-snapshot: these three compute their length from the
+            // location snapshot the body will stream, so a swap landing
+            // mid-response can never desync Content-Length from the wire
+            ApiBody::Asset(a) => a.content_length(),
+            ApiBody::Source(s) => s.content_length(),
+            ApiBody::Envelope(e) => e.content_length(),
+            ApiBody::Empty { len, .. } => *len,
+        }
+    }
+
+    async fn write_content<W: picoserve::io::Write>(self, writer: W) -> Result<(), W::Error> {
+        match self {
+            ApiBody::Json(s) => s.write_content(writer).await,
+            ApiBody::Text { s, .. } => s.write_content(writer).await,
+            ApiBody::Bytes(v) => v.write_content(writer).await,
+            ApiBody::Asset(a) => a.write_content(writer).await,
+            ApiBody::Source(s) => s.write_content(writer).await,
+            ApiBody::Envelope(e) => e.write_content(writer).await,
+            ApiBody::Empty { .. } => Ok(()),
+        }
+    }
+}
+
+/// Widest arm: the CORS preflight's four headers. A silent push failure would
+/// drop a CORS header and break cross-origin DELETE with no trace, so the
+/// capacity is asserted here rather than discovered on a device.
+const MAX_HEADERS: usize = 4;
+const _: () = assert!(MAX_HEADERS >= 4, "the OPTIONS preflight arm needs 4 headers");
+
+/// The ONE response type in the image (Gitea #167). Status + a homogeneous
+/// header slice + [ApiBody] — which makes exactly one
+/// `Response<HeadersChain<ContentHeaders, &[(&str, HVal)]>, ContentBody<ApiBody>>`
+/// and therefore exactly one `write_to`.
+struct Reply {
+    status: StatusCode,
+    headers: heapless::Vec<(&'static str, HVal), MAX_HEADERS>,
+    body: ApiBody,
+}
+
+impl Reply {
+    fn new(status: StatusCode, body: ApiBody) -> Self {
+        Reply {
+            status,
+            headers: heapless::Vec::new(),
+            body,
+        }
+    }
+
+    fn ok(body: ApiBody) -> Self {
+        Reply::new(StatusCode::OK, body)
+    }
+
+    /// `200 application/json` + CORS — the shape ~40 routes return. The
+    /// Content-Type comes from [ApiBody::Json] via picoserve's
+    /// `ContentHeaders`; do NOT add one here or it goes out twice.
+    fn json(body: String) -> Self {
+        Reply::ok(ApiBody::Json(body)).cors()
+    }
+
+    fn hdr(mut self, name: &'static str, value: HVal) -> Self {
+        if self.headers.push((name, value)).is_err() {
+            debug_assert!(false, "Reply header overflow — raise MAX_HEADERS");
+        }
+        self
+    }
+
+    fn shdr(self, name: &'static str, value: &'static str) -> Self {
+        self.hdr(name, HVal::Static(value))
+    }
+
+    fn cors(self) -> Self {
+        self.shdr("Access-Control-Allow-Origin", "*")
+    }
+}
+
+impl picoserve::response::IntoResponse for Reply {
+    async fn write_to<
+        R: picoserve::io::Read,
+        W: picoserve::response::ResponseWriter<Error = R::Error>,
+    >(
+        self,
+        connection: picoserve::response::Connection<'_, R>,
+        response_writer: W,
+    ) -> Result<picoserve::ResponseSent, W::Error> {
+        // destructure so `body` moves into the response while `headers` stays
+        // borrowable from this frame for the duration of the write
+        let Reply {
+            status,
+            headers,
+            body,
+        } = self;
+        response_writer
+            .write_response(
+                connection,
+                picoserve::response::Response::new(status, body).with_headers(&headers[..]),
+            )
+            .await
+    }
+}
+
+type ApiResponse = Reply;
 
 fn json_response(body: String) -> ApiResponse {
-    (CORS, JSON, body)
+    Reply::json(body)
 }
 
 /// `{"ok":false,"error":…}` for a static message. Static because every
@@ -224,20 +398,24 @@ async fn api_status() -> ApiResponse {
 /// whole files don't fit the heap.
 struct FlashAsset(crate::assets::AssetEntry);
 
+/// The archive's stored content type, mapped to the `&'static str` the
+/// `Content` trait wants. Free-standing so the 304 arm can report the same
+/// type its 200 would have carried, without building a [FlashAsset].
+fn asset_content_type(ctype: &str) -> &'static str {
+    match ctype {
+        t if t.starts_with("text/html") => TEXT_HTML,
+        t if t.starts_with("application/javascript") => "application/javascript; charset=utf-8",
+        t if t.starts_with("text/css") => "text/css; charset=utf-8",
+        t if t.starts_with("application/wasm") => "application/wasm",
+        t if t.starts_with("image/svg") => "image/svg+xml",
+        t if t.starts_with("image/png") => "image/png",
+        _ => "application/octet-stream",
+    }
+}
+
 impl picoserve::response::Content for FlashAsset {
     fn content_type(&self) -> &'static str {
-        // Content trait wants &'static; map the known types
-        match self.0.ctype.as_str() {
-            t if t.starts_with("text/html") => "text/html; charset=utf-8",
-            t if t.starts_with("application/javascript") => {
-                "application/javascript; charset=utf-8"
-            }
-            t if t.starts_with("text/css") => "text/css; charset=utf-8",
-            t if t.starts_with("application/wasm") => "application/wasm",
-            t if t.starts_with("image/svg") => "image/svg+xml",
-            t if t.starts_with("image/png") => "image/png",
-            _ => "application/octet-stream",
-        }
+        asset_content_type(&self.0.ctype)
     }
 
     fn content_length(&self) -> usize {
@@ -740,8 +918,8 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
 }
 
 /// Last rendered frame as raw RGB bytes (3 per pixel) for the preview.
-async fn api_pixels() -> impl picoserve::response::IntoResponse {
-    (CORS, ("Content-Type", "application/octet-stream"), get_pixels())
+async fn api_pixels() -> ApiResponse {
+    Reply::ok(ApiBody::Bytes(get_pixels())).cors()
 }
 
 async fn api_controls() -> ApiResponse {
@@ -883,6 +1061,12 @@ async fn api_var(body: String) -> ApiResponse {
 /// blob's .bss (g_phyFuns and pm state at 0x3ffdb1xx), which surfaced as
 /// wild-pointer crashes deep inside radio code. A `match` keeps the poll
 /// frame constant no matter how many routes we add.
+///
+/// It is also why this stays a `PathRouterService` rather than picoserve's
+/// `MethodRouter`: the HEAD arm of `MethodRouter` wraps the response writer in
+/// a private `IgnoreBody<W>`, i.e. a SECOND `W` type — which would duplicate
+/// every GET instantiation in the image, undoing the response collapse this
+/// module is built around (Gitea #167).
 struct Api;
 
 impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathParameters> for Api {
@@ -897,7 +1081,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
         mut request: picoserve::request::Request<'_, R>,
         response_writer: W,
     ) -> Result<picoserve::ResponseSent, W::Error> {
-        use picoserve::response::{IntoResponse as _, StatusCode};
+        use picoserve::response::IntoResponse as _;
 
         let method = request.parts.method();
         let route = path.encoded();
@@ -1340,20 +1524,22 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             // request) sends OPTIONS first. Without these headers the
             // browser blocks the real call — the hosted playground talking
             // to a device by IP needs this.
-            use picoserve::response::{IntoResponse as _, StatusCode};
+            // All four must survive (MAX_HEADERS is sized for exactly this
+            // arm) — a dropped one breaks cross-origin DELETE silently.
             let conn = request.body_connection.finalize().await?;
-            return (
+            return Reply::new(
                 StatusCode::NO_CONTENT,
-                [
-                    ("Access-Control-Allow-Origin", "*"),
-                    ("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
-                    ("Access-Control-Allow-Headers", "Content-Type"),
-                    ("Access-Control-Max-Age", "86400"),
-                ],
-                "",
+                ApiBody::Empty {
+                    ct: TEXT_PLAIN,
+                    len: 0,
+                },
             )
-                .write_to(conn, response_writer)
-                .await;
+            .cors()
+            .shdr("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            .shdr("Access-Control-Allow-Headers", "Content-Type")
+            .shdr("Access-Control-Max-Age", "86400")
+            .write_to(conn, response_writer)
+            .await;
         } else if method.eq_ignore_ascii_case("GET") {
             macro_rules! respond {
                 ($resp:expr) => {{
@@ -1367,7 +1553,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             // an unchanged asset is never re-downloaded.
             macro_rules! serve_asset {
                 ($e:expr) => {{
-                    let e = $e;
+                    let mut e = $e;
                     let cc = asset_cache_control(&e.path);
                     let matched = !e.etag.is_empty()
                         && request
@@ -1377,26 +1563,31 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             .is_some_and(|inm| {
                                 inm.split(b',').any(|t| etag_matches(t.as_raw(), e.etag.as_bytes()))
                             });
+                    // taken (not cloned) — nothing downstream reads it, and
+                    // an empty etag means a legacy "LUXA" archive with no hash
+                    let etag = core::mem::take(&mut e.etag);
                     if matched {
-                        respond!((
+                        // 304: same ETag/Cache-Control the 200 would carry,
+                        // and the would-be-200 length (see ApiBody::Empty)
+                        respond!(Reply::new(
                             StatusCode::NOT_MODIFIED,
-                            ("ETag", e.etag),
-                            cc,
-                            picoserve::response::NoContent,
-                        ));
+                            ApiBody::Empty {
+                                ct: asset_content_type(&e.ctype),
+                                len: e.len as usize,
+                            },
+                        )
+                        .hdr("ETag", HVal::Owned(etag))
+                        .shdr(cc.0, cc.1));
                     }
-                    if e.etag.is_empty() {
-                        // legacy "LUXA" archive without hashes — still cacheable
-                        if e.gzip {
-                            respond!((("Content-Encoding", "gzip"), cc, FlashAsset(e)));
-                        }
-                        respond!((cc, FlashAsset(e)));
+                    let gzip = e.gzip;
+                    let mut reply = Reply::ok(ApiBody::Asset(FlashAsset(e))).shdr(cc.0, cc.1);
+                    if !etag.is_empty() {
+                        reply = reply.hdr("ETag", HVal::Owned(etag));
                     }
-                    let etag = ("ETag", e.etag.clone());
-                    if e.gzip {
-                        respond!((("Content-Encoding", "gzip"), etag, cc, FlashAsset(e)));
+                    if gzip {
+                        reply = reply.shdr("Content-Encoding", "gzip");
                     }
-                    respond!((etag, cc, FlashAsset(e)));
+                    respond!(reply);
                 }};
             }
             // JSON arms collect into ONE ApiResponse and exit through a
@@ -1411,9 +1602,15 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     if let Some(e) = crate::assets::lookup("/index.html") {
                         serve_asset!(e);
                     }
-                    respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML));
+                    respond!(Reply::ok(ApiBody::Text {
+                        ct: TEXT_HTML,
+                        s: INDEX_HTML
+                    }));
                 }
-                "/min" => respond!((("Content-Type", "text/html; charset=utf-8"), INDEX_HTML)),
+                "/min" => respond!(Reply::ok(ApiBody::Text {
+                    ct: TEXT_HTML,
+                    s: INDEX_HTML
+                })),
                 "/api/status" => Some(api_status().await),
                 // which network the NEXT boot will join (never the password)
                 "/api/wifi" => {
@@ -1566,17 +1763,18 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 }
                 "/api/pixels" => respond!(api_pixels().await),
                 // running pattern source, streamed from flash (no RAM copy)
-                "/api/pattern" => respond!((CORS, CurrentSource(crate::shared::current_src()))),
+                "/api/pattern" => respond!(Reply::ok(ApiBody::Source(CurrentSource(
+                    crate::shared::current_src()
+                )))
+                .cors()),
                 // running pattern as an LXP1 envelope (source + bytecode) —
                 // what a sync follower adopts (it has no compiler); streamed
                 // from flash so a big pattern needs no ~40 KB RAM residency
-                "/api/pattern.lxp" => respond!((
-                    CORS,
-                    CurrentEnvelope {
-                        src: crate::shared::current_src(),
-                        bc: crate::shared::current_bc(),
-                    },
-                )),
+                "/api/pattern.lxp" => respond!(Reply::ok(ApiBody::Envelope(CurrentEnvelope {
+                    src: crate::shared::current_src(),
+                    bc: crate::shared::current_bc(),
+                }))
+                .cors()),
                 "/api/controls" => Some(api_controls().await),
                 "/api/vars" => Some(api_vars().await),
                 "/api/readouts" => Some(api_readouts().await),
@@ -1597,16 +1795,17 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     // to the portal, which pops the sign-in sheet
                     if crate::provision::AP_MODE.load(Ordering::Relaxed) {
                         let conn = request.body_connection.finalize().await?;
-                        return (
+                        return Reply::new(
                             StatusCode::TEMPORARY_REDIRECT,
-                            [
-                                ("Location", "http://192.168.4.1/"),
-                                ("Cache-Control", "no-store"),
-                            ],
-                            "redirecting to setup",
+                            ApiBody::Text {
+                                ct: TEXT_PLAIN,
+                                s: "redirecting to setup",
+                            },
                         )
-                            .write_to(conn, response_writer)
-                            .await;
+                        .shdr("Location", "http://192.168.4.1/")
+                        .shdr("Cache-Control", "no-store")
+                        .write_to(conn, response_writer)
+                        .await;
                     }
                     None
                 }
@@ -1618,9 +1817,15 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
         }
 
         let conn = request.body_connection.finalize().await?;
-        (StatusCode::NOT_FOUND, "not found")
-            .write_to(conn, response_writer)
-            .await
+        Reply::new(
+            StatusCode::NOT_FOUND,
+            ApiBody::Text {
+                ct: TEXT_PLAIN,
+                s: "not found",
+            },
+        )
+        .write_to(conn, response_writer)
+        .await
     }
 }
 

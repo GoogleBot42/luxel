@@ -1,9 +1,10 @@
 # Firmware size report — where the ~1 MB goes
 
-*2026-08-30, against master + the #168 fmt diet, on `board-c6-devkit` — the
-tightest board in the fleet (RISC-V, opt-level "s", fat LTO, codegen-units 1,
-**credless** flake build, which is what CI measures and reads ~1.5 KB smaller
-than a devshell build with WiFi creds baked in). Regenerate:*
+*2026-08-30, against master + the #167 picoserve response collapse, on
+`board-c6-devkit` — the tightest board in the fleet (RISC-V, opt-level "s",
+fat LTO, codegen-units 1, **credless** flake build, which is what CI measures
+and reads ~1.5 KB smaller than a devshell build with WiFi creds baked in).
+Regenerate:*
 
 ```sh
 nix build .#luxel-fw-c6-devkit
@@ -18,11 +19,18 @@ release; this document does not duplicate it.*
 
 ## Headline
 
-The `board-c6-devkit` app image is **1,001,472 B — 47,104 B (4.49 %) under the
-1 MiB OTA slot**, the smallest margin in the fleet by a wide gap (next tightest
-is `board-pixelblaze-v3` at 8.81 %). CI fails a release below 3 % margin and
-warns below 6 % (`tools/image-check.sh`, Gitea #160), so the C6 currently sits
-in the warn band.
+The `board-c6-devkit` app image is **980,784 B — 67,792 B (6.46 %) under the
+1 MiB OTA slot**, still the smallest margin in the fleet by a wide gap (next
+tightest is `board-pixelblaze-v3` at 10.87 %). CI fails a release below 3 %
+margin and warns below 6 % (`tools/image-check.sh`, Gitea #160); the C6 spent
+August inside that warn band and the #167 collapse (below) is what pulled it
+back out.
+
+*The 1,001,472 B / 4.49 % this section used to quote was already stale when it
+was written: the easing-builtins batch landed on top of it and the real
+pre-#167 baseline, re-measured on the same credless flake build, was
+**1,005,168 B — 43,408 B (4.14 %)**. Both numbers are in the history table
+below so the deltas reconcile.*
 
 The shape of the image has not changed since the 2026-07-07 edition of this
 report: **roughly a third of it is Espressif's closed-source radio stack**,
@@ -36,21 +44,24 @@ C6-specific diet to write; every win is fleet-wide.**
 
 ## Where the bytes go (board-c6-devkit)
 
-Sections (`readelf -SW`, flash-resident only; 1,000,586 B, the rest of the
+Sections (`readelf -SW`, flash-resident only; 980,406 B, the rest of the
 image is header and segment padding):
 
-| section | bytes | |
-|---|---:|---|
-| `.text` | 788,586 | all code |
-| `.rodata` | 95,616 | |
-| `.rwtext.wifi` | 55,060 | blob code that must run from RAM |
-| `.rodata.wifi` | 40,696 | |
-| `.data` | 12,068 | |
-| `.rwtext` | 6,160 | |
-| `.trap` | 1,920 | |
-| `.data.wifi` | 480 | |
+| section | bytes | (pre-#167) | |
+|---|---:|---:|---|
+| `.text` | 768,174 | 791,818 | all code |
+| `.rodata` | 95,832 | 96,584 | |
+| `.rwtext.wifi` | 55,060 | 55,060 | blob code that must run from RAM |
+| `.rodata.wifi` | 40,696 | 40,696 | |
+| `.data` | 12,084 | 12,084 | |
+| `.rwtext` | 6,160 | 6,160 | |
+| `.trap` | 1,920 | 1,920 | |
+| `.data.wifi` | 480 | 480 | |
 
-Symbol-level buckets from `tools/size-report.py` (911,877 B attributable; the
+The whole −24,384 B of #167 is `.text` (−23,644) plus a little `.rodata`
+(−752); nothing else moved a byte.
+
+Symbol-level buckets from `tools/size-report.py` (891,924 B attributable; the
 rest is padding, alignment, and symbols carrying no ELF `st_size` — the script
 prints how many it skipped, so the accounted total is a lower bound, not a
 reconciliation of the image):
@@ -58,12 +69,11 @@ reconciliation of the image):
 | bucket | bytes | KB | notes |
 |---|---:|---:|---|
 | Espressif WiFi/PHY blobs (C) | 282,229 | 275.6 | closed-source: 802.11 MAC (incl. 11ax/TWT), PHY cal, WPA2/WPA3 crypto, NVS glue. Irreducible while WiFi is on. |
-| luxel-fw (our code) | 156,436 | 152.8 | biggest symbols: main task 36.0 KB, the picoserve route-table future 22.1 KB, MQTT session 16.4 KB, render task 13.0 KB, web task 11.5 KB. |
-| other C/asm | 132,911 | 129.8 | **not one thing** — ~73 KB is more blob whose names miss the prefix list (AES `Te0`/`Td0` tables, `rijndael*`, `he_*`/`itwt_*` 802.11ax handlers, radio cal), ~49 KB is Rust anonymous rodata (`.Lanon*`: string literals, tables, vtables from every crate), ~5 KB the C `printf`/`_ftoa` family, ~5 KB switch tables. |
-| luxel-core (VM/compiler) | 76,850 | 75.0 | the product: lexer→parser→compiler→VM (`call_builtin` alone is 22.4 KB — 130+ builtins), engine, fixed-point math, noise. |
-| rust core | 58,815 | 57.4 | `core::fmt` 22.9 KB (see the diet note below), future/pin poll glue, str/slice ops, sort, panic paths. |
+| luxel-fw (our code) | 166,434 | 162.5 | biggest symbols: main task 36.0 KB, the flat route dispatcher 26.2 KB, MQTT session 16.4 KB, render task 13.0 KB, web task 11.5 KB, the one `Reply::write_to` 6.6 KB. **Up 10.0 KB from #167** and that is the whole point: the response code that used to be 22 picoserve instantiations is now inlined into our dispatcher once. Read this row together with the `picoserve` one. |
+| other C/asm | 133,370 | 130.2 | **not one thing** — ~73 KB is more blob whose names miss the prefix list (AES `Te0`/`Td0` tables, `rijndael*`, `he_*`/`itwt_*` 802.11ax handlers, radio cal), ~49 KB is Rust anonymous rodata (`.Lanon*`: string literals, tables, vtables from every crate), ~5 KB the C `printf`/`_ftoa` family, ~5 KB switch tables. |
+| luxel-core (VM/compiler) | 80,082 | 78.2 | the product: lexer→parser→compiler→VM (`call_builtin` alone is 25.0 KB — 150+ builtins after the easing batches), engine, fixed-point math, noise. |
+| rust core | 50,843 | 49.7 | future/pin poll glue, str/slice ops, sort, `core::fmt`, panic paths. **Down 8.0 KB from #167**: every distinct header-value type used to drag in its own `Display`/`ForEachHeader` formatting shim. |
 | embassy_executor | 43,932 | 42.9 | misattributed label: these are OUR task state machines (`TaskStorage<…>::poll` monomorphizations). |
-| picoserve | 32,948 | 32.2 | HTTP/1.1 + WebSocket server — 22 `IntoResponse::write_to` instantiations are 20.5 KB of it. |
 | smoltcp | 21,430 | 20.9 | TCP/UDP/DHCP/DNS/IGMP. |
 | esp_hal | 16,766 | 16.4 | SPI, GPIO, clocks, efuse. |
 | esp_radio | 13,552 | 13.2 | the Rust side of the WiFi driver. |
@@ -71,6 +81,7 @@ reconciliation of the image):
 | rust_mqtt | 11,450 | 11.2 | MQTT v5 client (our session logic is inside luxel-fw). |
 | esp_rtos | 9,078 | 8.9 | |
 | rust alloc | 7,552 | 7.4 | |
+| picoserve | 7,278 | 7.1 | HTTP/1.1 + WebSocket server. **Was 32,948 B / 48 syms before #167** — one `write_to` and one `HeadersChain` instead of 22 and 37. |
 | everything else | 35,918 | 35.1 | embassy-net, esp-bootloader, embassy-sync, edge-dhcp, OTA, esp-storage, … |
 
 **Methodology note.** The script buckets `nm -C -S --defined-only` — real ELF
@@ -81,6 +92,18 @@ address, and RISC-V images are full of them: linker-script symbols
 "size" of 1,082,130,432 B), `$d` mapping symbols, `.L*` locals. They all
 landed in "other C/asm" and blew that row up to ~1 GB. Fixed 2026-08-30
 (Gitea #174); don't reintroduce `--size-sort`.
+
+**There is a ~±0.7 KB noise floor, and it is not about your code.** The flake
+source hash feeds rustc's `.Lanon.<hash>` local-symbol names, and renaming
+those reshuffles `.L_MergedGlobals` packing and occasionally re-codegens a
+function. **Editing only markdown in this repo moves the C6 image ~600 B** —
+observed twice, in both directions, while writing these #167 entries; the
+symbol diff was `.text` ±646 B of pure `.Lanon`/`.L_MergedGlobals` churn plus
+one 486 B function, with every bucket of interest byte-identical. Builds are
+reproducible for identical whole-repo content, but a headline number is only
+meaningful against the revision it was measured with. So: A/B with everything
+except the change held constant (that is how the #167 and #168 numbers here
+were taken), and never read a sub-1 KB delta as signal.
 
 The Xtensa boards never showed the ~1 GB blow-up only because their
 `_rwtext_len` estimate landed above the script's old `>= 0x80000000` drop
@@ -123,7 +146,9 @@ Credless flake builds (what CI measures, ~1.5 KB under the above):
 |---|---:|---:|
 | #160 profiling baseline (2026-08-30) | 1,003,824 | 44,752 B (4.27 %) |
 | #168 merge base | 1,004,112 | 44,464 B (4.24 %) |
-| **after the fmt diet (#168), today** | **1,001,472** | **47,104 B (4.49 %)** |
+| after the fmt diet (#168) | 1,001,472 | 47,104 B (4.49 %) |
+| + easing builtins batch 7 (#167 merge base) | 1,005,168 | 43,408 B (4.14 %) |
+| **after the picoserve collapse (#167), today** | **980,784** | **67,792 B (6.46 %)** |
 
 Features still cost what you'd expect — two medium features (#140, #139) took
 ~7 KB of C6 headroom in two days — and there is still no single mystery lump.
@@ -131,6 +156,54 @@ The baseline is dominated by the radio stack; the *margin* is dominated by
 which chip you are on.
 
 ## What we already fixed (measured)
+
+**Every HTTP response was its own monomorphization** (2026-08-30, Gitea #167)
+— **−24,384 B on `board-c6-devkit`** (1,005,168 → 980,784), −23.0 to −24.4 KB
+on every other board. The largest single win the firmware has taken since the
+opt-level switch, and the one diet item that beat its estimate (≥10 KB) rather
+than missing it.
+
+`server.rs` returned thirteen different response *shapes* — `(CORS, JSON,
+String)`, `(gzip, etag, cc, FlashAsset)`, `(StatusCode, [(&str,&str); 4],
+&str)`, … — and picoserve monomorphizes `IntoResponse::write_to` per tuple
+shape, `ForEachHeader::call` per header-*value* type, and
+`Response`/`HeadersChain`/`ContentBody` per combination. The image carried 22
+`write_to` instantiations, 37 header-machinery symbols, and a `Display` shim
+per value type. All of it is now one concrete `Reply { status, headers:
+heapless::Vec<(&'static str, HVal), 4>, body: ApiBody }`, where `HVal` is the
+single header-value enum and `ApiBody` the single `Content` enum:
+
+| symbol group (C6, `nm -C -S --defined-only`) | before | after |
+|---|---:|---:|
+| `IntoResponse::write_to` (incl. drop glue) | 20,478 B / 22 syms | 6,882 B / 3 syms |
+| …of which real closures | 19,534 B / 11 | 6,556 B / **1** |
+| `HeadersIter`/`HeadersChain`/`ContentHeaders`/`ForEachHeader` | 8,492 B / 37 | 966 B / **4** |
+| `Api::call_path_router_service` closure | 22,050 B | 26,204 B |
+| `picoserve` bucket | 32,948 B / 48 | 7,278 B / 25 |
+| `rust core` bucket | 58,815 B | 50,843 B |
+
+Three things are worth carrying forward:
+
+- **The dispatcher grew 4.2 KB and that is fine.** With one response type
+  the LTO boundary moves: the write path inlines into
+  `call_path_router_service` instead of standing alone 22 times. Bucket
+  deltas lie; only the image total counts.
+- **`core::fmt` really does shrink here** (unlike #168, where it could not):
+  the 8 KB off `rust core` is per-value-type `Display`/`ForEachHeader`
+  formatting shims that had no other caller, so they actually became dead.
+  `HVal::fmt` is a single `write_str` — no `Arguments` build, per #168.
+- **The routing shape is load-bearing.** The win depends on there being
+  exactly one `W` writer type in the image, which is why `server.rs` keeps
+  its hand-written flat-match `PathRouterService`: picoserve's `MethodRouter`
+  wraps the writer in a private `IgnoreBody<W>` for HEAD, a second `W` that
+  would duplicate every GET instantiation straight back.
+
+RAM cost, measured with `tools/stack-check.sh` on `board-pixelblaze-v3`:
+`.stack` 29,124 → 27,828 B (the single `write_to` future is the union of all
+body types, so the per-slot static task arena grew ~430 B × 3 slots). Still
+3,828 B above the 24 KB floor, and the dispatcher's own poll frame went
+2,128 → 4,928 B against a 12,288 B budget — the flat-match discipline holds,
+but this is now the frame to watch when adding routes.
 
 **`impl Display for Fx` went through `to_f64()`** (2026-07-07) — so printing
 any fixed-point value (diagnostics, playlist JSON) dragged in core's full
@@ -195,18 +268,13 @@ entry: that crate is gone from the tree.
 
 ## If we ever need more room (ranked, unimplemented)
 
-Margins live in docs/boards.md; the short version is that the C6 has ~47 KB
+Margins live in docs/boards.md; the short version is that the C6 has ~66 KB
 and CI red-lights a release under ~31 KB.
 
-1. **picoserve monomorphization collapse** (Gitea #167 — ~45 KB of surface,
-   target ≥10 KB recovered): `picoserve::routing` symbols are 24,848 B
-   (22,050 B of that is the single `Api::call_path_router_service` closure),
-   and there are **22 distinct** `IntoResponse::write_to` instantiations
-   totalling 20,478 B — one per response *tuple shape*
-   (`(StatusCode, H1, C)`, `(H1, H2, H3, C)`, …), the top six alone ~13 KB of
-   near-identical code. Funnel every handler through one response type.
-   Mechanical and wide (touches every handler signature), not a behaviour
-   change. This is the biggest remaining concrete win.
+1. ~~**picoserve monomorphization collapse**~~ — **DONE 2026-08-30 (#167),
+   −24,384 B.** See "What we already fixed" above for the measurements and
+   for the two invariants (single writer type, single header-value type) that
+   keep the win from silently unwinding.
 2. ~~**fmt trimming**~~ — **DONE 2026-08-30 (#168), −2,640 B.** See above; the
    estimate was 5–10 KB and the structural reason it could not be is recorded
    there.
@@ -220,13 +288,15 @@ and CI red-lights a release under ~31 KB.
 
 ## Verdict
 
-~1 MB is the honest cost of "ESP32-C6 + WiFi + HTTP/WS server + MQTT + a full
-language VM": ~355 KB of radio blob you can't touch (275 KB of prefixed blob
-symbols plus ~73 KB more hiding in "other C/asm"), ~130 KB network plumbing
-and executor, ~75 KB VM (the product), ~157 KB feature code, ~66 KB
-core/alloc runtime, ~49 KB of anonymous rodata spread across all of it. Both
-pieces of genuine accidental fat found so far (f64 printing, per-site fmt
-argument construction) are fixed, and the second one returned a third of its
-estimate — assume the next item does too until measured. Watch
-`espflash save-image` against the 1 MiB slot on every feature; `tools/image-check.sh`
-now enforces it in CI, but the C6 is the board that decides.
+~960 KB is the honest cost of "ESP32-C6 + WiFi + HTTP/WS server + MQTT + a
+full language VM": ~355 KB of radio blob you can't touch (275 KB of prefixed
+blob symbols plus ~73 KB more hiding in "other C/asm"), ~105 KB network
+plumbing and executor, ~78 KB VM (the product), ~163 KB feature code, ~58 KB
+core/alloc runtime, ~49 KB of anonymous rodata spread across all of it. Three
+pieces of genuine accidental fat have been found and fixed (f64 printing,
+per-site fmt argument construction, per-shape response monomorphization), and
+their estimates came in at 1×, ⅓×, and 2.4× respectively — the estimate is
+never the number, so measure the whole image before and after. Watch
+`espflash save-image` against the 1 MiB slot on every feature;
+`tools/image-check.sh` now enforces it in CI, but the C6 is the board that
+decides.
