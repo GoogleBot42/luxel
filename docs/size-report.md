@@ -278,13 +278,22 @@ and CI red-lights a release under ~31 KB.
 2. ~~**fmt trimming**~~ — **DONE 2026-08-30 (#168), −2,640 B.** See above; the
    estimate was 5–10 KB and the structural reason it could not be is recorded
    there.
-3. **MQTT behind a cargo feature** (~30 KB: `rust_mqtt` 11.5 KB + our session
+3. ~~**serve the UI from flash**~~ — **DONE 2026-08-30 (#11), −13.9 to
+   −14.6 KB** as the `hosted-ui` cargo feature: no LUXA reader, no streaming
+   asset body, no ETag/304 machinery, no `POST /api/assets`, and the ~641 KB
+   bundle never gets flashed. Same shape as the MQTT item below — an opt-in
+   profile for a tight board, not a fleet default, because the on-device UI
+   is the product's "works with no internet" story. Numbers per board and the
+   whole-mode description are in docs/boards.md.
+4. **MQTT behind a cargo feature** (~30 KB: `rust_mqtt` 11.5 KB + our session
    and HA-discovery code): only for someone who wants a non-MQTT build. It is
    a product feature, so it stays default-on — this is a C6-profile lever, not
    a fleet-wide one.
-4. **Repartition** (last resort, serial reflash): the `assets` partition is
+5. **Repartition** (last resort, serial reflash): the `assets` partition is
    0xF0000 and the web app uses a fraction of it; slots could go to 1.25 MB.
    Invasive, and it cannot be delivered by OTA — documented in docs/boards.md.
+   A `hosted-ui` build (item 3) frees that whole partition on paper, which is
+   what would make this worth doing; the table fork it needs is Gitea #199.
 
 ## Verdict
 

@@ -23,15 +23,26 @@ trap 'rm -f "$LUXA"' EXIT
 
 if [[ "$MODE" != "--assets-only" ]]; then
     echo "== firmware: build ($BOARD) + OTA =="
-    (cd firmware && ./build-esp32.sh "$BOARD")
+    # BOARD is read from the environment by build-esp32.sh — it takes a
+    # COMMAND as $1 (flash/image/log), so passing the board there silently
+    # built the script's own default board instead.
+    (cd firmware && BOARD="$BOARD" ./build-esp32.sh)
     tools/ota-push.sh "$IP"
 fi
 
 if [[ "$MODE" != "--fw-only" ]]; then
     echo "== assets: build + pack + push =="
     (cd web && npm run build >/dev/null && node tools/pack-assets.mjs "$LUXA")
-    curl -sfm 180 -X POST --data-binary "@$LUXA" "http://$IP/api/assets"
-    echo
+    resp=$(curl -sfm 180 -X POST --data-binary "@$LUXA" "http://$IP/api/assets")
+    echo "$resp"
+    # /api/assets answers 200 + {"ok":false,…} on refusal (it mirrors the
+    # rest of the API), so -f alone doesn't catch a hosted-ui device.
+    case "$resp" in
+      *'"ok":true'*) ;;
+      *) echo "assets push rejected. A hosted-ui image (docs/boards.md) has no" >&2
+         echo "on-device web app by design — use --fw-only against it." >&2
+         exit 1 ;;
+    esac
 fi
 
 echo "== deployed =="

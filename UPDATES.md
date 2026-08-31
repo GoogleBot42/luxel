@@ -1,5 +1,72 @@
 # Update log
 
+## 2026-08-30 — `hosted-ui`: a build that ships no web app at all
+
+Gitea #11 asked for devices with less space not to store the web UI. The
+first slice (#164) made a device with an empty assets partition point at the
+CI-published playground instead of dead-ending. This is the other half: a
+build mode that never carries the UI in the first place.
+
+`hosted-ui` is a cargo feature, combined with any board:
+
+```sh
+EXTRA_FEATURES=hosted-ui BOARD=board-c6-devkit firmware/build-esp32.sh
+nix build .#luxel-fw-c6-devkit-hosted          # the one shipped variant
+```
+
+What leaves the image: the LUXA archive reader and its TOC, the streaming
+`FlashAsset` body, the ETag/`If-None-Match` 304 path, `HVal::Owned`, the
+`/assets/` cache policy and the `POST /api/assets` installer. What stays is
+`assets::read_chunk` — that function is the tree's stack-safe flash reader
+and ota.rs/takeover.rs depend on it; it was only ever *filed* under assets.
+`/` then always serves the embedded fallback page, which links to
+`https://googlebot42.github.io/luxel/?device=http://<this host>`.
+
+**Measured, devshell A/B at one revision: −13,936 to −14,544 B of app image
+on every board** — `board-c6-devkit` 981,696 → 967,728 B, slot margin 66,880
+→ 80,848 B. Strikingly flat across chips (1.42–1.67 %), because what leaves
+is plain logic with no chip-specific codegen. It also hands back DRAM:
+`.stack` on `board-pixelblaze-v3` 27,828 → **32,524 B**, since the response
+future the web-task arena is sized for loses its asset arm (largest frame
+9,552 → 7,504 B). Whole-fleet table in docs/boards.md. Measured the way CI
+measures — credless flake build of the shipped `luxel-fw-c6-devkit-hosted`
+variant — it is 966,832 B, **81,744 B / 7.79 % of the slot free** against
+980,784 B / 6.46 % for the normal C6 image: the mode is what takes the
+fleet's tightest board clear of `image-check.sh`'s warn line.
+
+The bigger number is the one that isn't in the image at all: the ~641 KB
+bundle is never packed, never written, never shipped. `build-esp32.sh`
+skips the pack-and-flash step by construction, its `image` command composes
+a full-flash binary with the assets region left erased, and the release
+workflow does the same for the new `luxel-c6-devkit-hosted` artifacts. The
+`assets` partition's 983,040 B stays allocated-to-nothing — reclaiming it
+needs a partition-table fork, which is Gitea #199 and deliberately not this.
+
+**Two guards, because this is a *subtractive* mode and those fail silently.**
+`tools/image-check.sh` grew an absent-marker half: with `hosted-ui` in
+`EXPECT_FEATURES` it asserts the `assets: hosted-ui build` boot line is
+present *and* that the LUXA reader's strings are gone, so an image that kept
+the asset code — quietly giving back the entire saving — fails the build.
+(Verified in both directions against real ELFs.) And `firmware/build.rs`
+now resolves build-mode blocks in `src/index.html`, so the fallback page
+cannot advertise `tools/deploy.sh --assets-only` on an image with no
+`/api/assets` route; it asserts the markers still exist rather than silently
+emitting the wrong page. The native mirror (`luxel-cli` serve.rs) resolves
+the same blocks at startup, and `tools/serve-e2e.mjs` checks it.
+
+Verified: all eight board combos build in both modes and pass image-check;
+`nix build .#luxel-fw-c6-devkit-hosted`; `tools/stack-check.sh` clean on
+pixelblaze-v3 in both modes; `cargo test --workspace`; `tools/serve-e2e.mjs`;
+the hosted fallback page rendered in real chromium with the `?device=`
+anchor resolving. **Not verified: any of it on hardware** — no hosted-ui
+image has ever booted. The bring-up checklist (including the one assertion
+that really needs metal: `/` must ignore a leftover LUXA archive that is
+still physically in flash) is Gitea #198.
+
+Drive-by: `tools/deploy.sh` passed `$BOARD` as build-esp32.sh's *command*
+argument, which that script reads as `flash|image|log` — so `BOARD=…
+tools/deploy.sh` had been silently building the script's default board.
+
 ## 2026-08-30 — Fidelity residue swept: six library patterns, five fixed, one measured-and-left
 
 Gitea #181 parked six measured-but-unchanged fidelity findings from the PR #176

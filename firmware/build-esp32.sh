@@ -11,7 +11,8 @@
 #   (none)  build only
 #   flash   flash app + WEB ASSETS + monitor. The assets partition
 #           (0x310000) gets the freshly packed playground too, so a serial
-#           flash never leaves a stale web app (SKIP_ASSETS=1 to opt out).
+#           flash never leaves a stale web app (SKIP_ASSETS=1 to opt out;
+#           EXTRA_FEATURES=hosted-ui skips it by construction).
 #   image   write target/luxel-full.bin — a single full-flash image
 #           (bootloader + partition table + app + assets) for
 #           `espflash write-bin 0x0 target/luxel-full.bin`.
@@ -36,6 +37,11 @@ FEATURES="$BOARD"
 if [ -n "${EXTRA_FEATURES:-}" ]; then
   FEATURES="$FEATURES $EXTRA_FEATURES"
 fi
+# `hosted-ui` (Gitea #11): the image has no asset reader and no /api/assets,
+# so there is nothing to pack and nothing to write at 0x310000 — the web app
+# lives on the hosted playground instead. See docs/boards.md.
+HOSTED_UI=0
+case " $FEATURES " in *" hosted-ui "*) HOSTED_UI=1 ;; esac
 
 # Dev WiFi creds: auto-source the git-ignored creds.env so every build —
 # whoever runs it — bakes working credentials. An image without creds
@@ -67,6 +73,10 @@ if [ "${1:-}" = "image" ]; then CMD=image; fi
 # partition (0x310000 in partitions.csv, served by src/assets.rs).
 ASSETS_BIN="target/dist.luxa"
 build_assets() {
+  if [ "$HOSTED_UI" = 1 ]; then
+    echo "hosted-ui build: no on-device web app, leaving the assets partition alone"
+    return 1
+  fi
   if [ "${SKIP_ASSETS:-}" = "1" ]; then
     echo "SKIP_ASSETS=1: leaving the assets partition alone"
     return 1
@@ -119,14 +129,21 @@ elif [ "$CMD" = "image" ]; then
     --no-default-features --features "$FEATURES" \
     --target "$TARGET" \
     "${STD_FLAGS[@]}"
-  build_assets || { echo "image needs the assets (unset SKIP_ASSETS)"; exit 1; }
+  HAVE_ASSETS=1
+  build_assets || HAVE_ASSETS=0
+  if [ "$HAVE_ASSETS" = 0 ] && [ "$HOSTED_UI" != 1 ]; then
+    echo "image needs the assets (unset SKIP_ASSETS)"; exit 1
+  fi
   OUT=target/luxel-full.bin
   # merged image = bootloader + partition table + app, laid out from 0x0…
   espflash save-image --chip "$CHIP" --merge --partition-table partitions.csv \
     "target/$TARGET/release/luxel-fw" "$OUT"
   # …then the asset bundle is written INTO the image at its partition
-  # offset (espflash pads the merged image to the full 4 MB with 0xFF)
-  dd if="$ASSETS_BIN" of="$OUT" bs=4096 seek=$((0x310000 / 4096)) conv=notrunc status=none
+  # offset (espflash pads the merged image to the full 4 MB with 0xFF).
+  # A hosted-ui image skips this: the assets partition stays erased.
+  if [ "$HAVE_ASSETS" = 1 ]; then
+    dd if="$ASSETS_BIN" of="$OUT" bs=4096 seek=$((0x310000 / 4096)) conv=notrunc status=none
+  fi
   echo "full-flash image: firmware/$OUT ($(du -h "$OUT" | cut -f1)) — flash with:"
   echo "  espflash write-bin 0x0 firmware/$OUT"
 else

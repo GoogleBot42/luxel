@@ -1,4 +1,15 @@
 <!doctype html>
+<!--
+  Embedded fallback page: served at /min always, and at / when no playground
+  is installed. It is include_str!'d into the app image, so every byte counts
+  against the 1 MiB OTA slot — build.rs strips whole-line comments like this
+  one before embedding, so notes here are free.
+
+  build.rs also resolves the "#if assets" / "#if hosted" blocks below (the
+  markers must stay alone on their own line): the assets block ships in a
+  normal build, the hosted block in a `hosted-ui` build, which has no
+  /api/assets route to install a UI through. Nothing else is templated.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -21,12 +32,20 @@
 <body>
 <main>
   <h1>LUXEL</h1>
+<!--#if assets-->
   <p>The web UI isn't installed on this device.
      <a id=h href="https://googlebot42.github.io/luxel/">Open the hosted playground</a>,
      which runs in your browser and drives this device over the network.</p>
   <p>Or install the UI onto the device from the Luxel repo (inside
      <code style="display:inline;padding:.1em .35em">nix develop</code>):</p>
   <code>tools/deploy.sh &lt;device-ip&gt; --assets-only</code>
+<!--#endif-->
+<!--#if hosted-->
+  <p>This is a hosted-UI build: the console lives on the web, not in the
+     device's flash.
+     <a id=h href="https://googlebot42.github.io/luxel/">Open the hosted playground</a>,
+     which runs in your browser and drives this device over the network.</p>
+<!--#endif-->
 </main>
 <script>h.href+="?device=http://"+location.host</script>
 </body>

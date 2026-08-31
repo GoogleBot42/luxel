@@ -19,8 +19,46 @@ use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
 
-const INDEX_HTML: &str = include_str!("../../../firmware/src/index.html");
+/// The firmware's embedded fallback page, raw. It carries build-mode blocks
+/// that firmware/build.rs resolves at compile time (see the comment at the
+/// top of that file); the mirror resolves them at startup instead —
+/// [`index_html`].
+const INDEX_HTML_SRC: &str = include_str!("../../../firmware/src/index.html");
 const DEFAULT_PATTERN: &str = include_str!("../../../library/rainbow.js");
+
+/// The fallback page as a device without `hosted-ui` serves it: whole-line
+/// html comments dropped, the `#if assets` block kept, the `#if hosted` block
+/// dropped. The mirror always stands in for a normal build — it can serve a
+/// real playground out of `web/dist`, so "the UI can be installed" is the
+/// truthful half. Same three rules as firmware/build.rs; keep them in step.
+fn index_html() -> &'static str {
+    static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PAGE.get_or_init(|| {
+        let mut out = String::with_capacity(INDEX_HTML_SRC.len());
+        let mut keep = true;
+        let mut in_comment = false;
+        for line in INDEX_HTML_SRC.lines() {
+            let t = line.trim();
+            if in_comment {
+                in_comment = !t.ends_with("-->");
+                continue;
+            }
+            match t {
+                "<!--#if assets-->" => keep = true,
+                "<!--#if hosted-->" => keep = false,
+                "<!--#endif-->" => keep = true,
+                _ if t.starts_with("<!--") => in_comment = !t.ends_with("-->"),
+                _ => {
+                    if keep {
+                        out.push_str(line);
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+        out
+    })
+}
 
 enum Msg {
     /// Run this pattern: source (for read-back) + the LXBC bytecode the
@@ -1373,11 +1411,11 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         // stays reachable at /min — same shape as firmware/src/server.rs.
         ("GET", "/") => {
             if !serve_static(&mut stream, &state.web_dir, "/index.html") {
-                respond(&mut stream, 200, "text/html; charset=utf-8", INDEX_HTML.as_bytes());
+                respond(&mut stream, 200, "text/html; charset=utf-8", index_html().as_bytes());
             }
         }
         ("GET", "/min") => {
-            respond(&mut stream, 200, "text/html; charset=utf-8", INDEX_HTML.as_bytes())
+            respond(&mut stream, 200, "text/html; charset=utf-8", index_html().as_bytes())
         }
         ("GET", "/api/status") => {
             respond(&mut stream, 200, "application/json", status_json(&state).as_bytes())

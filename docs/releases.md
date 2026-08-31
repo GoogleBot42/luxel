@@ -53,6 +53,15 @@ installer page (web/flash.html) does not list them:
 | `luxel-<board>-<ver>-ota.bin` | App-only image: `POST /api/ota`, and the image WLED's `/update` page accepts for the WLED→Luxel takeover (docs/wled-migration.md). Size-guarded against the 1 MiB OTA slot. |
 | `luxel-<board>-<ver>-full.bin` | Full-flash image (bootloader + partition table + app + **web assets**): `espflash write-bin 0x0 <file>` — new-device bring-up and full restores. Composed exactly like `firmware/build-esp32.sh image`. |
 
+One extra pseudo-board, `c6-devkit-hosted`, ships the same two images built
+with the **`hosted-ui`** cargo feature (Gitea #11): no on-device playground
+at all — `/` serves the embedded page that links to the hosted playground
+with `?device=` prefilled, and its `-full.bin` leaves the assets partition
+erased. It exists because the C6 owns the fleet's tightest OTA-slot margin;
+any board can be built this way (`EXTRA_FEATURES=hosted-ui`), it just isn't
+worth an artifact each. See docs/boards.md for the mode and its numbers.
+The installer page skips it like any other board id it doesn't know.
+
 Plus, once per release:
 
 | asset | what it's for |
@@ -93,8 +102,8 @@ lands at `https://googlebot42.github.io/luxel/` (installer at
 `/flash.html`).
 
 That URL is also hardcoded in the firmware's embedded fallback page
-(`firmware/src/index.html`, served at `/` when no assets are installed
-and always at `/min`): it links to
+(`firmware/src/index.html`, served at `/` when no assets are installed —
+always, in a `hosted-ui` build — and at `/min`): it links to
 `https://googlebot42.github.io/luxel/?device=http://<this device's
 host>`, built client-side from `location.host`, so a device with no
 on-flash UI is still one click from a working console (the playground

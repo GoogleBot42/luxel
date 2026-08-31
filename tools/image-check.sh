@@ -41,6 +41,21 @@ if [[ " ${EXPECT_FEATURES:-} " == *" hub75 "* ]]; then
   )
 fi
 
+# Markers that must be ABSENT. `hosted-ui` (Gitea #11) is a subtractive mode:
+# the failure it can suffer is the opposite of //SIZETEST — the asset reader
+# still being linked, so the image ships the very code the mode exists to
+# remove and the measured saving quietly evaporates. Assert both directions.
+ABSENT_MARKERS=()
+if [[ " ${EXPECT_FEATURES:-} " == *" hosted-ui "* ]]; then
+  MARKERS+=(
+    "assets: hosted-ui build|this is not a hosted-ui image (src/assets.rs init) — the wrong feature set was built"
+  )
+  ABSENT_MARKERS+=(
+    "assets: none installed|the LUXA reader (src/assets.rs init) is still linked into a hosted-ui image"
+    "not a LUXA archive|the asset installer (src/assets.rs AssetWriter) is still linked into a hosted-ui image"
+  )
+fi
+
 fail=0
 for m in "${MARKERS[@]}"; do
   s=${m%%|*}
@@ -53,9 +68,20 @@ for m in "${MARKERS[@]}"; do
   fi
 done
 
+for m in ${ABSENT_MARKERS+"${ABSENT_MARKERS[@]}"}; do
+  s=${m%%|*}
+  what=${m#*|}
+  if grep -aq -- "$s" "$IMG"; then
+    echo "image-check: UNEXPECTED marker '$s'" >&2
+    echo "             → $what" >&2
+    fail=1
+  fi
+done
+
 if [ "$fail" != 0 ]; then
-  echo "image-check: $IMG is missing load-bearing features — a call site is" >&2
-  echo "probably commented out or feature-gated off. See tools/image-check.sh." >&2
+  echo "image-check: $IMG does not match the requested feature set — a call" >&2
+  echo "site is probably commented out, or gated on/off wrongly. See" >&2
+  echo "tools/image-check.sh." >&2
   exit 1
 fi
 echo "image-check: ok — all load-bearing features linked ($IMG)"

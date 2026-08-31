@@ -129,6 +129,15 @@ if (builtUi) {
 }
 const minBody = await (await fetch(`${base}/min`)).text();
 check("GET /min: minimal fallback page", /isn['’]t installed/.test(minBody), minBody.slice(0, 80));
+// firmware/src/index.html carries build-mode blocks that firmware/build.rs
+// resolves at compile time and the mirror resolves at startup (serve.rs
+// index_html). If that ever stops happening the raw markers — and the
+// hosted-ui paragraph, which contradicts the one above it — ship verbatim.
+check("GET /min: build-mode blocks resolved", !/#if |#endif/.test(minBody));
+check(
+  "GET /min: normal-build half only",
+  /tools\/deploy\.sh/.test(minBody) && !/hosted-UI build/.test(minBody),
+);
 check("GET /nope.js: 404 for a missing asset", (await fetch(`${base}/nope.js`)).status === 404);
 
 server.kill();
