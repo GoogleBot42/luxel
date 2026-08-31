@@ -489,6 +489,21 @@ main#list {
   font-size: 11.5px;
 }
 
+/* Untouched control with no `//# default=`: the widget position is a
+   placeholder (the engine cannot be asked what the pattern initialised the
+   variable to), so it must not look like a live reading. */
+.ctrl.guess input[type="range"],
+.ctrl.guess .num {
+  opacity: 0.4;
+}
+.ctrl .guessflag {
+  width: 12px;
+  text-align: center;
+  color: var(--bad);
+  font-weight: 700;
+  cursor: help;
+}
+
 .verdict-detail h3 {
   font-size: 13px;
   margin: 16px 0 5px;
