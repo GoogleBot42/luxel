@@ -9,7 +9,7 @@
 // editing the preFns/drawFns tables below.
 
 var numModes = 3
-var secondsPerMode = 6     // how long each sub-pattern owns the strip
+var secondsPerMode = 5     // how long each sub-pattern owns the strip
 var fadeFraction = 0.4     // last two-fifths of each slot is the dissolve
 
 // shared "current color" written by sub-renderers
@@ -33,7 +33,8 @@ function pre0() {
   // three-quarters of the way along the strip (fraction of the strip, so
   // the braid lands in the same PLACE at any pixel count)
   focus0 = 0.80 + 0.07 * sin(time(0.05) * PI2)
-  pulse0 = 0.6 + 0.4 * wave(time(0.09))        // strip-wide brightness pulse
+  // strip-wide brightness pulse: a deep ~3.25 s breath, not a shallow slow one
+  pulse0 = 0.51 + 0.49 * wave(time(0.0496))
 }
 function draw0(index) {
   var p = index / pixelCount
@@ -48,7 +49,7 @@ function draw0(index) {
 // --- sub-pattern 1: scrolling rainbow blocks -------------------------
 var scroll1
 function pre1() {
-  scroll1 = time(0.06)                         // ~4 s per revolution
+  scroll1 = time(0.0458)                       // ~3 s per revolution
 }
 function draw1(index) {
   var p = index / pixelCount
@@ -64,7 +65,7 @@ function draw1(index) {
 // --- sub-pattern 2: bouncing red pulse (low-budget KITT) -------------
 var pos2
 function pre2() {
-  pos2 = triangle(time(0.06)) * (pixelCount - 1)  // ~2 s per end-to-end sweep
+  pos2 = triangle(time(0.0458)) * (pixelCount - 1) // ~1.5 s per end-to-end sweep
 }
 function draw2(index) {
   var v = max(0, 1 - abs(index - pos2) / 3)    // 3 px linear falloff (~6 px lit)

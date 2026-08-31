@@ -1,5 +1,65 @@
 # Update log
 
+## 2026-08-30 — Fidelity residue swept: six library patterns, five fixed, one measured-and-left
+
+Gitea #181 parked six measured-but-unchanged fidelity findings from the PR #176
+review pass. Worked through all six with `tools/verify/snap.mjs` (grid/strip
+rigs, seed 1, pinned wall clock, `beat120` synthetic sensors) as the measuring
+instrument; five turned into fixes and one is deliberately left, with numbers.
+
+- **crossfading** — scene schedule was 6 s/scene (18 s cycle) against the
+  original's 5 s/15 s, and the two inner scene clocks ran 3.93 s vs 3.0 s.
+  Retimed. Autocorrelating the 60 s mean-brightness envelope: port scene cycle
+  **17.95 s → 15.45 s** (original 15.00 s), and the KITT sweep's fine period is
+  1.50 s on both sides. Scene A's breath is now a 0.51–1.0 arc at ~3.25 s
+  instead of a shallow 0.6–1.0 at 5.9 s.
+- **glittering-jewels** — the Sparkle dial measured **non-responsive**
+  (`--probe-controls` maxDelta 0.49 / maxDeltaLit 0.88, threshold 1 / 4). Cause:
+  the dial only re-phased the glint carousel, and the glint itself was a
+  `sin^24` spike clipped to `core^3`, so every setting looked equally glittery.
+  Now a fixed carousel with a wider spike that reaches past the core, and the
+  glint *whitens* as well as brightens. **maxDelta 0.49 → 4.90, maxDeltaLit
+  0.88 → 8.71** — the original measures 5.08 / 7.90.
+- **blinky-eyes-2d** — iris hue 0.66 → **0.60** (the measured original), and the
+  blink no longer passes through full blackout: a fully squashed ellipse is
+  thinner than one pixel row, so its rim fell *between* rows. Added a soft
+  eyelid bar in display units, outside the ellipse test. Port per-frame minimum
+  mean brightness **0 → 4** (original 3); the filmstrip shows a held lit lid
+  line through the shut phase.
+- **line-dancer-2d** — the issue's premise was **wrong**, and measuring said so:
+  reading the original's exported `speed` var over the dial gives exactly
+  `1 + 9v`, identical to the port, and both scale motion smoothly off a nonzero
+  baseline (orig 10.2 → 28.7, port 9.3 → 20.9 across the sweep). No authority
+  difference. The real defects were the *defaults* and the Twist range: original
+  Speed default 4.6 (port 3.25) and Twist `1.25 + 0.75v` default 1.75 (port
+  `1.2 + 1.2v` default 1.62). Matched both. Port motion at defaults **12 → 16**
+  against the original's 18.
+- **bouncer3d** — `sliderSpeed` reshuffles every ball, so a host that applies
+  control defaults at load (the playground) started on a different layout than
+  one that doesn't (snap.mjs). The reshuffle is now skipped on the first call
+  only. `BallSize` default 0.4 mapped to r2 = 0.086 against the top-level 0.08;
+  gain retuned to `0.01 + 0.175v` so the default lands on 0.08 exactly. Measured
+  untouched-vs-defaults-applied pixel divergence: **meanAbsDiff 8.89 / max 252
+  → 0.00 / 0**.
+- **sound-spectrokalidamandala** — the orig/port stats gap is **left**, but a
+  real bug behind it is fixed. The port's auto-gain was a purely *additive*
+  integrator, so from silence it crawled: sensitivity was still climbing
+  linearly at 11 s and would have taken ~a minute to reach a watchable picture
+  (`brightnessTrend` "rising" over the whole 8 s window, first frame mean 1).
+  Made the correction *relative* — the gain steps by a fraction of itself —
+  which settles in ~3 s and then holds (sensitivity 2.7–3.9 stable over 60 s).
+  Port mean **35 → 57**, min **1 → 9**, trend rising → **steady**. The residual
+  gap to the original's 183 is NOT a gain bug: the original *opens at 255* and
+  decays (first 255, last 131, trend "decaying") — it starts saturated and its
+  AGC pulls down. Sweeping the port's Target Fill to its slider maximum (90)
+  only reaches ~120, so closing the gap would mean driving the panel into
+  near-total whiteout, which contradicts the "perfect" visual verdict this
+  pattern already earned. Left deliberately; filed as Gitea #202.
+
+Verification: `luxel check` ok on all six, `cargo test --workspace` green,
+`web/tools/e2e.mjs` all checks pass, and all six driven in real chromium in the
+playground (tiles render, zero page errors).
+
 ## 2026-08-30 — Five patterns' `//# default=` now reproduces the shipped constant
 
 Fallout from #179: attaching the previously-inert `//#` directives made

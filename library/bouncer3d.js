@@ -45,18 +45,27 @@ export function sliderBallCount(v) {
   numBalls = clamp(floor(v), 1, MAXBALLS)
 }
 
+// Gain chosen so the slider's own default lands exactly on the top-level r2
+// above — otherwise a host that applies control defaults at load silently
+// starts the pattern on a different ball size than an untouched engine does.
 //# min=0 max=1 step=0.01 default=0.4
 export function sliderBallSize(v) {
-  r2 = 0.01 + v * 0.19   // up to ~a fifth of the display width
+  r2 = 0.01 + v * 0.175  // 0.4 -> 0.08; up to ~a fifth of the display width
   r3 = r2 * 4
 }
+
+var speedApplied = 0
 
 //# min=0 max=1 step=0.01 default=0.4
 export function sliderSpeed(v) {
   maxSpeed = 0.003 + v * 0.03
   // Preserved side effect from the original: moving the speed slider
-  // re-randomizes every ball (positions, velocities, hues).
-  reshuffle()
+  // re-randomizes every ball (positions, velocities, hues). Skipped on the
+  // FIRST call, because hosts that push control defaults at load would
+  // otherwise reshuffle the just-seeded layout and diverge from a host that
+  // does not — same pattern, same seed, different picture.
+  if (speedApplied) reshuffle()
+  else speedApplied = 1
 }
 
 export function beforeRender(delta) {
