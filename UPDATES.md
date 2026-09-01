@@ -1,5 +1,62 @@
 # Update log
 
+## 2026-08-31 — The playground asks for local network access, and says so when refused
+
+Gitea #162. The firmware's fallback page hands a device with no on-flash UI
+to the hosted console as
+`https://googlebot42.github.io/luxel/?device=http://<host>`. Every request
+that console then makes is an https page reaching a plain-http LAN address:
+mixed content, and a local-network request. The installer page has known how
+to ask for that since 2026-08-15 — `targetAddressSpace: "local"` — but the
+playground's own fetch gate rode on Chromium's auto-detection with no hint,
+and when the request failed it said "cannot reach device", which is exactly
+the wrong diagnosis: the device is fine and the browser never dialled.
+
+**One classifier, not two.** The rule is unforgiving in a way that makes
+duplication dangerous: a hint that DISAGREES with the target's real address
+space hard-fails the request (measured on the live site, PR #27/#28), so
+"send it everywhere" is not a safe default — it breaks working setups. The
+installer's copy is now `web/src/lib/lna.ts` and both callers share it:
+`gatedFetch` (every API call and startup asset the app fetches) and
+`src/flash/lib/device.ts`. It hints only from an https page, only to a
+genuinely local-space host — RFC1918, 169.254/16, `.local`, IPv6 ULA and
+link-local — and never to loopback or public. Same module answers "did the
+BROWSER refuse this?", which `fetch()` itself will not tell you: an https
+page asking for an http target is the only shape that gets refused that way,
+so it's decided by shape, not by error text. 29 unit cases pin the
+classification and the hint selection (`web/tests/lna.test.mjs`, `npm test`),
+including the near-misses either side of the 172.16/12 block.
+
+**The UI now names the problem.** A refused connect raises a full-width bar
+above every tab: this copy is https, the device speaks http, Chromium has to
+grant Local Network Access — then the two ways around it, with the first one
+a live link at the device itself, which serves this same console over plain
+http with no permission involved. Same code path, same failure, from an http
+origin: the ordinary unreachable error, unchanged.
+
+**Verified, and the part that isn't.** New harness `web/tools/lna-e2e.mjs`
+serves `web/dist` twice — over TLS with a throwaway self-signed cert
+(`openssl` added to the dev shell) and over plain http — because the whole
+behaviour keys on `location.protocol`, which is `[Unforgeable]`: you cannot
+fake https from inside the page. 8/8 checks, ~40 s, no hardware: the blocked
+bar and its device link on https, the plain error on http, and the un-mocked
+https→LAN request landing in the blocked state. Plus flash-e2e 18/18,
+device-e2e and e2e green, `svelte-check` 0/0. The emitted `<script>`/`<link>`
+set of `dist/index.html` is byte-for-byte the same shape — the new module
+landed in the shared `app` chunk that `index.js` already imported — so the
+cold-load burst (#92) is untouched.
+
+What could not be verified stays #162's open half. The harness also A/Bs the
+hint from the page (none / local / public) against Chromium's own errorText,
+and all three came back `net::ERR_CONNECTION_REFUSED`: this browser is not
+running the policy at all. Forcing it with
+`--enable-features=LocalNetworkAccessChecks` and
+`--ip-address-space-overrides=127.0.0.1:<port>=public` changed nothing
+(recorded in the harness header so nobody retries it hoping). So the granted
+path — permission prompt, allow, console connects — remains a headful task
+against a real device, now written down in docs/UNTESTED.md. The blocked
+path is the one a machine can prove, and it is proven.
+
 ## 2026-08-31 — the playground can press a button now (pin panel)
 
 Gitea #205. Pin injection shipped on 2026-08-30 (`Vm::set_pin`, `lx_set_pin`,

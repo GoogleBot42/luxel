@@ -93,6 +93,14 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   soften into a round halo in both axes with no smear along the wiring and
   no bright/dark seam at the row folds. Unit-tested only — the kernels are
   exact on the host, but nobody has watched them on a panel.
+- [ ] **The hosted console reaching a device over https** (Gitea #162,
+  needs a HEADFUL browser — no agent can do this one): open
+  `https://googlebot42.github.io/luxel/?device=http://<device-host>` in
+  normal Chrome on the LAN. Expect a Local Network Access permission
+  prompt; allow it and the console should connect exactly as it does when
+  served from the device. Deny it (or dismiss it) and the page should say
+  the browser blocked it and offer the manual routes — that half is
+  machine-verified (`web/tools/lna-e2e.mjs`), the granted half is not.
 - [x] **WLED→Luxel installer page against real WLED** — DONE 2026-08-30:
   full stock-WLED-restore → Improv provision → credless-master takeover →
   boot-guard-healthy cycle on the Athom (Gitea #53 closed, PR #171, beta
