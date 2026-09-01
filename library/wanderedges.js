@@ -10,8 +10,8 @@
 // bright edges.
 
 var MAX_PULSES = 10
-var LIFETIME = 3        // seconds each pulse lives
-var SPAWN_GAP = 0.45    // seconds between spawn attempts
+var LIFETIME = 2        // seconds each pulse lives
+var SPAWN_GAP = 0.6     // seconds between spawn attempts
 var FOOT = 0.2          // spatial footprint as a fraction of the strip
 
 var alive = array(MAX_PULSES)
@@ -35,8 +35,9 @@ function palGreen(t) {
 export function beforeRender(delta) {
   clock += delta / 1000
 
-  // 1. Clear the accumulator.
-  arrayReplace(intensity, 0)
+  // 1. Clear the accumulator. (arrayReplace splats its value arguments
+  //    starting at index 0 — it is NOT an array fill, so it has to be a loop.)
+  for (var c = 0; c < pixelCount; c++) intensity[c] = 0
 
   // 2. Spawn: one new pulse per elapsed spawn window, if a slot is free.
   if (clock >= nextSpawn) {

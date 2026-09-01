@@ -36,8 +36,8 @@ for (i = 0; i < NUM_LINES; i++) {
 }
 
 // --- controls ---
-var lineWidth = 0.06
-//# min=0 max=1 step=0.01 default=0.35
+var lineWidth = 0.041
+//# min=0 max=1 step=0.01 default=0.2
 export function sliderLineWidth(v) { lineWidth = 0.015 + v * 0.13 }
 
 var sweepInterval = 0.16

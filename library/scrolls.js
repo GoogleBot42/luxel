@@ -13,6 +13,8 @@ var POOL = 10
 var LIFETIME = 5           // seconds each pulse lives
 var SPAWN_GAP = 0.5        // seconds between spawns (LIFETIME / POOL: steady full pool)
 var WIDTH = 0.2            // spatial bump spans ~a fifth of the strip
+var GEN_S = 4.3            // a generation runs this long, then the field is wiped
+var BLANK_S = 0.22         // ...and the strip sits fully dark for this long
 
 var alive = array(POOL)
 var birth = array(POOL)
@@ -21,6 +23,8 @@ var field = array(pixelCount)
 
 var now = 0
 var nextSpawn = 0
+var genEnd = GEN_S         // when the current generation dies
+var blankUntil = 0         // dark hold before the next generation seeds
 
 // Gradient stops: position, r, g, b. Dead zone through the first fifth,
 // dark muted teal rising to a bright spring-green/aqua peak mid-scale,
@@ -32,13 +36,26 @@ var gg = array(GN)
 var gb = array(GN)
 gp[0] = 0;    gr[0] = 0;    gg[0] = 0;    gb[0] = 0     // black
 gp[1] = 0.2;  gr[1] = 0;    gg[1] = 0;    gb[1] = 0     // still black
-gp[2] = 0.42; gr[2] = 0;    gg[2] = 0.35; gb[2] = 0.3   // dark muted teal
-gp[3] = 0.6;  gr[3] = 0.15; gg[3] = 1;    gb[3] = 0.55  // bright spring-green/aqua
-gp[4] = 0.82; gr[4] = 0;    gg[4] = 0.4;  gb[4] = 0.55  // deep blue-teal
-gp[5] = 1;    gr[5] = 0;    gg[5] = 0.35; gb[5] = 0.55  // holds steady
+gp[2] = 0.42; gr[2] = 0;    gg[2] = 0.27; gb[2] = 0.22  // dark muted teal
+gp[3] = 0.6;  gr[3] = 0;    gg[3] = 0.82; gb[3] = 0.46  // bright spring-green/aqua
+gp[4] = 0.82; gr[4] = 0;    gg[4] = 0.31; gb[4] = 0.4   // deep blue-teal
+gp[5] = 1;    gr[5] = 0;    gg[5] = 0.266; gb[5] = 0.396 // holds steady
 
 export function beforeRender(delta) {
   now += delta / 1000
+
+  // Generations: the whole field is wiped every GEN_S seconds and the strip
+  // holds black for a beat before a fresh crop seeds.
+  if (now >= genEnd) {
+    for (var g = 0; g < POOL; g++) alive[g] = 0
+    blankUntil = now + BLANK_S
+    nextSpawn = blankUntil
+    genEnd = blankUntil + GEN_S
+  }
+  if (now < blankUntil) {
+    feedback(field, 0)
+    return
+  }
 
   // Spawn at most one pulse per frame, into any free slot, once the
   // cooldown has elapsed.
@@ -56,7 +73,7 @@ export function beforeRender(delta) {
 
   // Rebuild the intensity field: sum (temporal envelope x spatial bump)
   // for every live pulse.
-  arrayReplace(field, 0)
+  feedback(field, 0)   // clear the field (arrayReplace is a splat, not a fill)
   for (var i = 0; i < POOL; i++) {
     if (!alive[i]) continue
     var age = (now - birth[i]) / LIFETIME

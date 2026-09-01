@@ -2,10 +2,11 @@
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "bustle"; original source never consulted.
 
-// Two-way comet traffic: four pulsers (wide fast magenta / narrow slow
-// crimson, each launching from both ends) rasterized into per-pulser
-// buffers, combined with a per-channel MAX so crossings occlude instead of
-// blowing out to white.
+// Two-way comet traffic: four pulsers (faster magenta / slower crimson, each
+// launching from both ends) rasterized into per-pulser buffers, combined with
+// a per-channel MAX so crossings occlude instead of blowing out to white.
+// Every pulse draws its own speed at birth, so the streaks cross at a spread
+// of angles rather than forming a regular lattice.
 
 var SLOTS = 10          // pulse pool per pulser
 
@@ -18,6 +19,7 @@ var buf3 = array(pixelCount)
 // pulse slot state: 4 pulsers x SLOTS, flattened
 var alive = array(4 * SLOTS)
 var birth = array(4 * SLOTS)
+var dur = array(4 * SLOTS)    // this pulse's own crossing time, seconds
 var nextLaunch = array(4)     // scheduled launch time per pulser
 var clock = 0                 // shared running clock, seconds
 
@@ -31,7 +33,7 @@ function scheduleNext(p, mean) {
 // crossTime: seconds to cross; mean: mean launch interval; width: pulse
 // length as a fraction of the strip
 function runPulser(p, buf, dir, crossTime, mean, width) {
-  arrayReplace(buf, 0)
+  feedback(buf, 0)   // blank the buffer: pulses leave no permanent paint
 
   // launch if due and a slot is free
   if (clock >= nextLaunch[p]) {
@@ -40,6 +42,9 @@ function runPulser(p, buf, dir, crossTime, mean, width) {
       if (!alive[p * SLOTS + s]) {
         alive[p * SLOTS + s] = 1
         birth[p * SLOTS + s] = clock
+        // every pulse gets its own speed, so the streaks fan out into a
+        // spread of slopes instead of a regular two-slope lattice
+        dur[p * SLOTS + s] = crossTime * (0.55 + random(1.3))
         break
       }
     }
@@ -51,7 +56,7 @@ function runPulser(p, buf, dir, crossTime, mean, width) {
   var s
   for (s = 0; s < SLOTS; s++) {
     if (!alive[p * SLOTS + s]) continue
-    var prog = (clock - birth[p * SLOTS + s]) / crossTime
+    var prog = (clock - birth[p * SLOTS + s]) / dur[p * SLOTS + s]
     if (prog > 1) {               // fully exited the far end
       alive[p * SLOTS + s] = 0
       continue
@@ -82,19 +87,19 @@ function runPulser(p, buf, dir, crossTime, mean, width) {
 
 export function beforeRender(delta) {
   clock += delta / 1000
-  // wide fast magenta pulses, one from each end
-  runPulser(0, buf0, 1, 2.2, 1.5, 0.2)
-  runPulser(1, buf1, -1, 2.2, 1.5, 0.2)
-  // narrow slower crimson pulses, one from each end
-  runPulser(2, buf2, 1, 4.4, 1.0, 0.1)
-  runPulser(3, buf3, -1, 4.4, 1.0, 0.1)
+  // faster magenta comets, one stream from each end
+  runPulser(0, buf0, 1, 3.0, 2.3, 0.11)
+  runPulser(1, buf1, -1, 3.0, 2.3, 0.11)
+  // slower crimson comets, one stream from each end
+  runPulser(2, buf2, 1, 4.4, 1.6, 0.1)
+  runPulser(3, buf3, -1, 4.4, 1.6, 0.1)
 }
 
 export function render(index) {
   var wide = max(buf0[index], buf1[index])
   var narrow = max(buf2[index], buf3[index])
-  // per-channel max across pulsers; magenta = (1, 0, 0.8), crimson = (1, 0, 0.15)
+  // per-channel max across pulsers; magenta = (1, 0, 0.8), crimson = (1, 0, 0.28)
   var r = clamp(max(wide, narrow), 0, 1)
-  var b = clamp(max(wide * 0.8, narrow * 0.15), 0, 1)
+  var b = clamp(max(wide * 0.8, narrow * 0.28), 0, 1)
   rgb(r * r, 0, b * b)    // output squaring deepens the tails
 }

@@ -11,6 +11,28 @@
 var numModes = 3
 var secondsPerMode = 5     // how long each sub-pattern owns the strip
 var fadeFraction = 0.4     // last two-fifths of each slot is the dissolve
+var blocks1 = 8            // sub-pattern 1: lit blocks along the strip
+var kittWidth = 3          // sub-pattern 2: pulse falloff radius, in pixels
+
+// --- controls ---------------------------------------------------------
+// Every setter converts a real unit into the constant the pattern shipped
+// with, so the declared defaults reproduce the stock look exactly.
+
+// How long each sub-pattern owns the strip before handing over.
+//# min=1 max=60 step=0.5 default=5
+export function sliderSecondsPerMode(v) { secondsPerMode = max(v, 0.5) }
+
+// Share of each slot spent dissolving into the next sub-pattern (0 = hard cut).
+//# min=0 max=90 step=1 default=40
+export function sliderCrossfadePercent(v) { fadeFraction = clamp(v, 0, 95) / 100 }
+
+// Sub-pattern 1: how many rainbow blocks fit along the strip.
+//# min=1 max=32 step=1 default=8
+export function sliderRainbowBlocks(v) { blocks1 = max(floor(v), 1) }
+
+// Sub-pattern 2: half-width of the bouncing red pulse, in pixels.
+//# min=1 max=30 step=0.5 default=3
+export function sliderPulseWidthPixels(v) { kittWidth = max(v, 0.5) }
 
 // shared "current color" written by sub-renderers
 var r = 0
@@ -53,7 +75,7 @@ function pre1() {
 }
 function draw1(index) {
   var p = index / pixelCount
-  if (frac(p * 8) >= 0.5) {                    // lit latter half of each of 8 segments
+  if (frac(p * blocks1) >= 0.5) {              // lit latter half of each segment
     setHsv(p + scroll1, 1, 1)
   } else {
     r = 0
@@ -68,7 +90,7 @@ function pre2() {
   pos2 = triangle(time(0.0458)) * (pixelCount - 1) // ~1.5 s per end-to-end sweep
 }
 function draw2(index) {
-  var v = max(0, 1 - abs(index - pos2) / 3)    // 3 px linear falloff (~6 px lit)
+  var v = max(0, 1 - abs(index - pos2) / kittWidth) // linear falloff each side
   r = v
   g = 0
   b = 0

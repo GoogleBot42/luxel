@@ -1,4 +1,4 @@
-// name: Music Sequencer - for V3 ONLY
+// name: Main Stage
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Music Sequencer - for V3 ONLY"; original source never
 // consulted.
@@ -79,14 +79,44 @@ var OCEAN = 12, SPLOTCH = 13, ANALYZER = 14, ELASTIC = 15
 var CMD_TEMPO = 100, CMD_PHRASE = 101, CMD_THEME = 102, CMD_FLIP = 103
 var CMD_SEEDBASS = 104
 
-// debugging aid: pick a mini-pattern by hand (takes effect only if the
-// manual entry below is uncommented into the script)
-var manualPattern = 0
-//# min=0 max=1 step=0.0625 default=0
+// ---------------------------------------------------------------- controls
+var manualPattern = 0    // 0 = run the show; 1..15 solo one mini-pattern
+var bpmDialSet = 0       // once the dial is touched it outranks the show script
+var hueOffset = 0        // added to every hue the mini-patterns write, in turns
+var lenScale = 1         // multiplies every queue entry's duration
+
+// Solo one mini-pattern instead of playing the show: 0 runs the scripted show,
+// 1..15 hold a single look (PROGRESS .. ELASTIC), re-struck once a phrase. As
+// shipped this dial only did something if you uncommented the manual queue
+// entry at the bottom of the file, so it read as dead on the rig.
+//# min=0 max=15 step=1 default=0
 export function sliderChooseManualPattern(v) {
-  manualPattern = floor(v * 15.99)
-  resetShared()
+  var p = clamp(floor(v), 0, 15)
+  if (p != manualPattern) {
+    manualPattern = p
+    entrySec = 0
+    resetShared()
+  }
 }
+
+// Show tempo in BPM. The script also asks for a tempo (and can adopt one it
+// hears); moving this dial takes ownership so the script cannot stamp on it.
+//# min=40 max=200 step=1 default=120
+export function sliderTempo(v) {
+  bpmDialSet = 1
+  bpm = v
+}
+
+// Rotates the whole show's palette. The script still walks its own theme hue
+// from section to section; this offsets wherever that walk currently sits.
+//# min=0 max=360 step=1 default=0
+export function sliderThemeHue(v) { hueOffset = v / 360 }
+
+// Stretches or compresses every section of the show. 100% is as authored;
+// 25% rips through it, 400% lets each look breathe for four times as long.
+//# min=25 max=400 step=5 default=100
+export function sliderSectionLength(v) { lenScale = v / 100 }
+
 // commented-out tuning aid, as shipped:
 // export function sliderHihatThreshold(v) { hhThresh = 1.5 + v * 3 }
 
@@ -221,7 +251,8 @@ function analyzeSound(delta) {
 
 // ---------------------------------------------------------------- commands
 function doCmd(id, arg) {
-  if (id == CMD_TEMPO) bpm = arg > 0 ? arg : (tempoReliable ? detectedBpm : bpm)
+  // the Tempo dial, once touched, outranks whatever the script asks for
+  if (id == CMD_TEMPO && !bpmDialSet) bpm = arg > 0 ? arg : (tempoReliable ? detectedBpm : bpm)
   if (id == CMD_PHRASE) phraseBeats = max(1, arg)
   if (id == CMD_THEME) themeHue = arg
   if (id == CMD_FLIP) direction = !direction
@@ -576,27 +607,38 @@ export function beforeRender(delta) {
   entrySec += dt
   beatSec = 60 / max(30, bpm)
 
-  // queue management: commands run through; timed entries advance (possibly
-  // early on beat / sound), skipping slightly into the next entry
-  var guard = 0
-  while (guard < 80 && qLen > 0) {
-    guard += 1
-    var mode = qMode[qIndex]
-    var id = qPat[qIndex]
-    if (mode == 3) {
-      doCmd(id, qArg[qIndex])
-      nextEntry(0)
-      continue
+  var live = manualPattern
+  if (live > 0) {
+    // solo: the queue is bypassed and the chosen look restarts every phrase
+    curDur = phraseBeats * lenScale
+    if (entrySec / beatSec >= curDur) {
+      entrySec = 0
+      resetShared()
     }
-    curDur = qDur[qIndex]
-    if (curDur <= 0) curDur = phraseBeats
-    beatCount = entrySec / beatSec
-    var adv = beatCount >= curDur
-    if (mode == 1 && beatFired) adv = 1
-    if (mode == 2 && soundSpike) adv = 1
-    if (id == ANALYZER && !boardPresent) adv = 1  // skips without a board
-    if (!adv) break
-    nextEntry(0.04)
+  } else {
+    // queue management: commands run through; timed entries advance (possibly
+    // early on beat / sound), skipping slightly into the next entry
+    var guard = 0
+    while (guard < 80 && qLen > 0) {
+      guard += 1
+      var mode = qMode[qIndex]
+      var id = qPat[qIndex]
+      if (mode == 3) {
+        doCmd(id, qArg[qIndex])
+        nextEntry(0)
+        continue
+      }
+      curDur = qDur[qIndex] * lenScale     // Section Length stretches the show
+      if (curDur <= 0) curDur = phraseBeats * lenScale
+      beatCount = entrySec / beatSec
+      var adv = beatCount >= curDur
+      if (mode == 1 && beatFired) adv = 1
+      if (mode == 2 && soundSpike) adv = 1
+      if (id == ANALYZER && !boardPresent) adv = 1  // skips without a board
+      if (!adv) break
+      nextEntry(0.04)
+    }
+    live = qPat[qIndex]
   }
 
   // the beat clock: ramp-DOWN note timers derived from time-in-entry
@@ -609,12 +651,12 @@ export function beforeRender(delta) {
   phraseProg = frac(beatCount / phraseBeats)
   patternProg = clamp(beatCount / curDur, 0, 1)
 
-  runPattern(qPat[qIndex], dt)
+  runPattern(live, dt)
 }
 
 // all three renderers export; content is 1D — 2D/3D forward to the shared look
 export function render(index) {
-  hsv(hueA[index], satA[index], valA[index])
+  hsv(hueA[index] + hueOffset, satA[index], valA[index])
 }
 export function render2D(index, x, y) {
   render(index)

@@ -97,8 +97,17 @@ export function toggleSpin(v) { spinOn = v }
 //# default=1
 export function toggleFlat(v) { flatOn = v }
 
+// Swap two objects wholesale. This MUST move the per-frame derived cache
+// (current size and the cached sin/cos) along with the state it was derived
+// from: the swap happens after beforeRender has already filled the cache, so
+// leaving curSize/csA/snA behind draws each shape at the other's position
+// with the wrong size and rotation for exactly one frame — the single-frame
+// flicker this pattern used to show every few seconds.
 function swapObjects(a, b) {
   var t
+  t = curSize[a]; curSize[a] = curSize[b]; curSize[b] = t
+  t = csA[a]; csA[a] = csA[b]; csA[b] = t
+  t = snA[a]; snA[a] = snA[b]; snA[b] = t
   t = px[a]; px[a] = px[b]; px[b] = t
   t = py[a]; py[a] = py[b]; py[b] = t
   t = vx[a]; vx[a] = vx[b]; vx[b] = t
@@ -184,8 +193,12 @@ export function beforeRender(delta) {
     if (brPhase[i] > 1) brPhase[i] -= 1
     curSize[i] = sizeMul[i] * nomSize * (.5 + triangle(brPhase[i]))
   }
-  // occasional z-order shuffle: swap two random active objects wholesale
-  if (numActive > 1 && random(1) < .03) {
+  // occasional z-order shuffle: swap two random active objects wholesale.
+  // Rate is per SECOND (about one swap every three seconds, what the pattern
+  // is meant to do), not per frame — a flat per-frame chance fired several
+  // times a second on a fast rig, which is the other half of what read as
+  // random popping.
+  if (numActive > 1 && random(1) < dt / 3) {
     var a1 = floor(random(numActive))
     var b1 = floor(random(numActive))
     if (a1 != b1) swapObjects(a1, b1)

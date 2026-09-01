@@ -6,44 +6,48 @@
 // pixel with its own cool hue (green-cyan through blue) and fall speed.
 // Drops are bright at the top and fade to nearly nothing near the bottom;
 // when a drop passes the bottom its column frees up for a new one.
-// Improvement over the described original: the fall step is scaled by the
-// frame delta, so speed is frame-rate independent.
+// Improvement over the described original: fall speed and spawn cadence are
+// scaled by the frame delta, so both are frame-rate independent.
 
-const COLS = 16
-const ROWS = 16
+// Logical matrix, hardcoded as in the described original: a wide, short
+// grid rendered through normalized coordinates, so it letterboxes onto any
+// mapped display (on a 16x16 rig a drop is one column wide and two rows
+// tall).
+const COLS = 32
+const ROWS = 8
 
-var dropPos = array(COLS)   // row units; -1 = column empty
-var dropSpd = array(COLS)   // rows per nominal (60 fps) frame
+var dropPos = array(COLS)   // logical rows; -1 = column empty
+var dropSpd = array(COLS)   // logical rows per second
 var dropHue = array(COLS)
 
-arrayReplace(dropPos, -1)
+for (var i = 0; i < COLS; i++) dropPos[i] = -1
 
 export function beforeRender(delta) {
-  var step = delta / 16.667   // nominal-frame units, delta-scaled
+  var dt = delta / 1000
   for (var i = 0; i < COLS; i++) {
     if (dropPos[i] >= 0) {
-      dropPos[i] += dropSpd[i] * step
+      dropPos[i] += dropSpd[i] * dt
       if (dropPos[i] >= ROWS) dropPos[i] = -1   // fell off: free column
     }
   }
-  // a bit under half the frames, try to spawn in one random column
-  if (random(1) < .4) {
+  // ~8 spawn attempts a second, each into one random column
+  if (random(1) < 8 * dt) {
     var c = floor(random(COLS))
     if (dropPos[c] < 0) {
       dropPos[c] = 0
-      dropSpd[c] = .09 + random(.09)   // ~2:1 slowest-to-fastest spread
-      dropHue[c] = .38 + random(.28)   // spring green / cyan .. azure blue
+      dropSpd[c] = 5 + random(5)       // ~2:1 slowest-to-fastest spread
+      dropHue[c] = .42 + random(.26)   // spring green / cyan .. azure blue
     }
   }
 }
 
 export function render2D(index, x, y) {
-  var col = floor(x * 15.99)
-  var row = floor(y * 15.99)
+  var col = floor(x * (COLS - .01))
+  var row = floor(y * (ROWS - .01))
   var p = dropPos[col]
   if (p >= 0 && row == floor(p)) {
-    // full near the top, ~zero somewhat past full travel, eased hard
-    var b = saturate(1 - y * .85)
+    // full over the top ~third, ~zero at the bottom, eased hard
+    var b = saturate(1.4 - y)
     b = b * b
     b = b * b
     hsv(dropHue[col], 1, b)

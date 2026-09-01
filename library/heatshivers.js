@@ -11,7 +11,7 @@ var SLOTS = 4 // pulse slots per generator
 var LIFE = 2.2 // pulse lifetime, seconds
 var DRIFT = 0.4 // fraction of strip covered over a full lifetime
 var HALF_LIFE = 1.5 // afterglow half-life, seconds
-var BUMP_HALF = pixelCount / 12 // spatial triangle half-width (~1/6 total)
+var BUMP_HALF = pixelCount / 16 // spatial triangle half-width (~1/8 total)
 
 // Slot state: 2 generators x SLOTS, packed [gen * SLOTS + slot]
 var alive = array(2 * SLOTS)
@@ -44,7 +44,7 @@ function stepGen(g, buf) {
         break
       }
     }
-    nextSpawn[g] = clock + 0.7 + random(0.6) // ~one pulse per second
+    nextSpawn[g] = clock + 0.9 + random(0.6) // ~one pulse every 1.2 s
   }
 
   var dir = g == 0 ? 1 : -1
@@ -74,8 +74,8 @@ function stepGen(g, buf) {
 
 export function beforeRender(delta) {
   clock += delta / 1000
-  arrayReplace(pulseA, 0)
-  arrayReplace(pulseB, 0)
+  feedback(pulseA, 0)   // blank both pulse buffers every frame
+  feedback(pulseB, 0)
   stepGen(0, pulseA)
   stepGen(1, pulseB)
 

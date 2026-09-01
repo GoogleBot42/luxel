@@ -50,7 +50,7 @@ recomputeSpread()
 
 export function beforeRender(delta) {
   // Deliberately frame-rate dependent (faithful quirk): fixed step per frame.
-  var step = speed * 0.006
+  var step = speed * 0.12
   for (var i = 0; i < numPoints; i++) {
     px[i] += vx[i] * step
     py[i] += vy[i] * step
@@ -75,8 +75,12 @@ export function render2D(index, x, y) {
     rgb(0, 0, 0)              // background: pure black
   } else {
     var depth = CUTOFF - field            // how far inside the threshold
-    var h = depth * 0.55                  // deep red rim -> orange core
-    var v = 1.05 - wave(field * 9) * 0.45 // concentric molten banding
+    var h = depth * 0.98                  // deep red rim -> amber core
+    // Concentric molten banding: the wave covers a bit over a third of a
+    // period across the field range, giving a thin brighter rim, a dark ring
+    // just inside it, then a smooth climb to the hot core. Peaks well below
+    // 1 so nothing ever clips and most of the picture stays deep dim red.
+    var v = 1.17 - wave(field * 4.7) * 0.97
     hsv(h, 1, clamp(v, 0, 1))
   }
 }

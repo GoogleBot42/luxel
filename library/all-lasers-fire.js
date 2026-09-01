@@ -8,22 +8,26 @@
 // cores with rainbow chromatic-aberration fringes.
 
 export var speed = 0.5
-export var blastScale = 1
+export var blastScale = 2.1
 
-var interval = 0.02
+var interval = 0.1485
 
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderSpeed(v) {
   speed = v
   // Inverted and cubed: the right end is dramatically faster; a tiny floor
-  // keeps it from ever fully stopping.
+  // keeps it from ever fully stopping. time()'s unit is 65.536 s, so this
+  // spans a ~70 s volley cycle (one barrage then a long rest) at the left end
+  // through ~10 s at centre down to ~0.7 s (near-continuous fire) at the right.
   var inv = 1 - v
-  interval = 0.003 + inv * inv * inv * 0.09
+  interval = 0.011 + inv * inv * inv * 1.1
 }
 
-//# min=0 max=1 step=0.01 default=0.1
+// Feature size in tile widths: small values shatter the volley into a wide
+// fan of many fine rays, large ones collapse it to one broad beam.
+//# min=0.2 max=6 step=0.1 default=2.1
 export function sliderBlastScale(v) {
-  blastScale = 0.1 + v * 10
+  blastScale = clamp(v, 0.2, 6)
 }
 
 var ang, chaos, env0, env1, env2
@@ -51,7 +55,7 @@ function laser(x, y, d, env, phase) {
   var fy = frac(y / s)
   // Point-light falloff toward a spot slightly past the tile center; features
   // near the origin blaze hotter.
-  var v = 0.03 / hypot(fx - 0.62, fy - 0.62) / d
+  var v = 0.088 / hypot(fx - 0.62, fy - 0.62) / d
   // Cube for hard contrast: dim regions crushed, bright cores kept.
   return v * v * v
 }
@@ -77,8 +81,11 @@ export function render2D(index, x, y) {
   rgb(r, g, b)
 }
 
-// 1D fallback: the strip is a horizontal line along the field's bottom edge;
-// longer strips span a proportionally wider slice.
+// 1D fallback: the strip is a horizontal line across the lower part of the
+// field; longer strips span a proportionally wider slice. It is held clear of
+// the very bottom edge on purpose -- that edge runs straight through the
+// field's 1/d singularity AND misses every tile core, so a strip laid on it
+// shows only a smooth ramp instead of beams.
 export function render(index) {
-  render2D(index, index / (4 * sqrt(pixelCount)), 1)
+  render2D(index, index / (4 * sqrt(pixelCount)), 0.25)
 }

@@ -49,7 +49,7 @@ export function beforeRender(delta) {
   }
 
   // rebuild the flies buffer from every live pulse
-  arrayReplace(flies, 0)
+  feedback(flies, 0)   // clear the buffer (arrayReplace is a splat, not a fill)
   for (var k = 0; k < 2 * POOL; k++) {
     if (!alive[k]) continue
     var age = now - pBirth[k]
@@ -82,6 +82,6 @@ export function render(index) {
   var t = min(trail[index], 1)
   // channelwise max: pure green flies vs dim blue-violet trail (no red)
   var g = max(f, t * 0.08)
-  var b = t * 0.45
+  var b = t * 0.85
   rgb(0, g * g, b * b)   // squared channels = simple gamma; trails read faint
 }

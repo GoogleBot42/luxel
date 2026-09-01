@@ -8,8 +8,9 @@
 // dissolve with no color-space blending.
 
 const NUM_MODES = 3
-const DWELL = 6            // seconds shown per sub-pattern
-const XFADE = 0.33         // last third of each slot crossfades
+var DWELL = 6              // seconds shown per sub-pattern
+var XFADE = 0.33           // last third of each slot crossfades
+var lockMode = 0           // 0 = cycle; 1..NUM_MODES = hold that sub-pattern
 
 // parallel arrays of per-frame setups and per-pixel renderers —
 // add a pattern by registering two more entries
@@ -93,6 +94,12 @@ export function beforeRender(delta) {
   var p = slot < (1 - XFADE) ? 0 : (slot - (1 - XFADE)) / XFADE
   fadeP = easeInOutQuad(p)   // dissolve starts and ends gently
 
+  // holding one sub-pattern parks the clock: no advance, no dissolve
+  if (lockMode > 0) {
+    mode = lockMode - 1
+    fadeP = 0
+  }
+
   // run every sub-pattern's setup each frame (noted inefficiency; with
   // many patterns only run the two that can be visible)
   var i
@@ -100,6 +107,27 @@ export function beforeRender(delta) {
     var s = setups[i]
     s()
   }
+}
+
+// Seconds each sub-pattern holds the display before dissolving into the next.
+// The line sub-pattern's rotation is tied to this, so it slows down too.
+//# min=1 max=30 step=0.5 default=6
+export function sliderDwell(v) {
+  DWELL = clamp(v, 1, 30)
+}
+
+// Fraction of each slot spent dissolving: 0.05 snaps between scenes, 0.9 is
+// almost always sparkling from one into the next.
+//# min=0.05 max=0.9 step=0.01 default=0.33
+export function sliderCrossfade(v) {
+  XFADE = clamp(v, 0.05, 0.9)
+}
+
+// Hold one scene instead of cycling: 0 = cycle all three, 1 = rotating line,
+// 2 = rainbow plasma, 3 = rotating checkerboard.
+//# min=0 max=3 step=1 default=0
+export function sliderHoldScene(v) {
+  lockMode = clamp(floor(v), 0, NUM_MODES)
 }
 
 export function render2D(index, x, y) {

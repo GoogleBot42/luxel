@@ -15,9 +15,12 @@ const numBalls = 8
 // 2 = both ends toward the middle, 3 = middle toward both ends
 const mode = 0
 
-// physics in normalized height units (0 = ground, 1 = top of strip)
-const G = 8              // gravity, height-units / s^2
-const V0 = 4             // sqrt(2 * G): full-energy rebound reaches height 1
+// physics in normalized height units (0 = ground, 1 = top of strip).
+// A full-energy ball rises V0^2 / (2G) = 1 (the whole strip) and takes
+// 2 * V0 / G = 4 s for the round trip.
+const G = 0.5            // gravity, height-units / s^2
+const V0 = 1             // sqrt(2 * G): full-energy rebound reaches height 1
+const VMIN = 0.1 * V0    // relaunch once the bounce train has died down
 
 var lastStrike = array(numBalls)  // clock at last ground hit
 var vel = array(numBalls)         // rebound velocity at last hit
@@ -39,19 +42,26 @@ for (i = 0; i < numBalls; i++) {
 
 export function beforeRender(delta) {
   clock += delta / 1000
-  arrayReplace(vals, 0)
+  feedback(vals, 0)   // blank the strip: no trails, hard black background
 
   for (var i = 0; i < numBalls; i++) {
+    // Retire every bounce whose flight ended before now, advancing the strike
+    // time by the EXACT flight duration rather than snapping it to the current
+    // frame — that keeps the trajectory frame-rate invariant.
+    var flight = 2 * vel[i] / G
     var t = clock - lastStrike[i]
-    var h = vel[i] * t - 0.5 * G * t * t
-    if (h < 0) {
-      h = 0
+    while (t >= flight) {
+      lastStrike[i] = lastStrike[i] + flight
       vel[i] = vel[i] * rest[i]
-      lastStrike[i] = clock
       // relaunch when the bounce train has nearly died out
-      if (vel[i] < 0.4) vel[i] = V0
+      if (vel[i] < VMIN) vel[i] = V0
+      flight = 2 * vel[i] / G
+      t = clock - lastStrike[i]
     }
+    var h = vel[i] * t - 0.5 * G * t * t
+    if (h < 0) h = 0
     var px = floor(h * (usable - 1))
+    if (px > usable - 1) px = usable - 1
     hues[px] = i / numBalls
     vals[px] = 1
   }

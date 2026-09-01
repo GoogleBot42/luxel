@@ -80,13 +80,44 @@ rain[5] = 0.78  // violet
 // ---- two-frame GIF-style animation ----
 var acc = 0
 var shifted = 0
+var flipMs = 200      // milliseconds per animation frame (5 flips/second)
+var rainTop = 2       // first rainbow row, from the top of the canvas
+var rainCol = 5       // first column the rainbow is drawn in
+var rainGroup = 4     // columns per bobbing rainbow group
 
 export function beforeRender(delta) {
   acc += delta
-  if (acc > 200) { // flip ~5x per second
-    acc -= 200
+  if (acc > flipMs) { // flip ~5x per second
+    acc -= flipMs
     shifted = !shifted
   }
+}
+
+// Animation rate of the two-frame GIF loop, in flips per second — the cat's
+// jiggle and the rainbow's bob both ride on it.
+//# min=0.5 max=20 step=0.5 default=5
+export function sliderFlipRate(v) {
+  flipMs = 1000 / clamp(v, 0.5, 20)
+}
+
+// Vertical position of the rainbow: the row its red stripe starts on.
+//# min=0 max=10 step=1 default=2
+export function sliderRainbowRow(v) {
+  rainTop = clamp(floor(v), 0, 10)
+}
+
+// Column where the rainbow begins — raise it to tuck the rainbow behind the
+// cat, lower it to run the stripes under the pop-tart.
+//# min=0 max=15 step=1 default=5
+export function sliderRainbowStart(v) {
+  rainCol = clamp(floor(v), 0, 15)
+}
+
+// Width, in columns, of each rainbow group; neighbouring groups bob a row out
+// of phase, so narrow groups give a finer ripple.
+//# min=1 max=8 step=1 default=4
+export function sliderRainbowGroup(v) {
+  rainGroup = clamp(floor(v), 1, 8)
 }
 
 export function render2D(index, x, y) {
@@ -106,10 +137,10 @@ export function render2D(index, x, y) {
 
   // Rainbow: columns past roughly the first third, grouped in runs of four;
   // alternate groups bob one row out of phase with the flip flag.
-  if (col >= 5) {
+  if (col >= rainCol) {
     var f = shifted
-    if (floor(col / 4) % 2 == 1) f = !f
-    var band = row - 2 - f // six rows starting a couple rows from the top
+    if (floor(col / rainGroup) % 2 == 1) f = !f
+    var band = row - rainTop - f // six rows starting a couple rows from the top
     if (band >= 0 && band < 6) {
       hsv(rain[band], 1, 1)
       return

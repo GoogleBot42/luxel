@@ -18,8 +18,8 @@ var lineHue = array(MAX_LINES)
 var HALF_LEN = 0.75   // half segment length: spans the whole unit square
 
 // Whole arms, in arms.
-var numLines = 6
-//# min=1 max=24 step=1 default=6
+var numLines = 4
+//# min=1 max=24 step=1 default=4
 export function sliderNumberOfLines(v) {
   numLines = clamp(floor(v), 1, MAX_LINES)
 }
@@ -27,23 +27,23 @@ export function sliderNumberOfLines(v) {
 // Arm thickness as a fraction of the panel width: 0.02 is roughly a
 // one-pixel line on a 64-wide matrix, 0.5 floods it. halfWidth is the
 // half-thickness the renderer compares distances against.
-var halfWidth = 0.01
-//# min=0.01 max=0.5 step=0.005 default=0.02
+var halfWidth = 0.1
+//# min=0.01 max=0.5 step=0.005 default=0.2
 export function sliderLineWidth(v) {
   halfWidth = max(0.002, v / 2)
 }
 
 // Rotation in revolutions per second (time() period = interval * 65.536 s),
 // so perceived speed tracks the slider linearly.
-var rotInterval = 1 / (65.536 * 0.48)
-//# min=0.02 max=3 step=0.01 default=0.48
+var rotInterval = 1 / (65.536 * 0.5)
+//# min=0.02 max=3 step=0.01 default=0.5
 export function sliderRotationSpeed(v) {
   rotInterval = 1 / (65.536 * max(v, 0.005))
 }
 
 // Hue drift in full colour cycles per second, same linear treatment.
-var hueInterval = 1 / (65.536 * 0.08)
-//# min=0.01 max=1 step=0.01 default=0.08
+var hueInterval = 1 / (65.536 * 0.5)
+//# min=0.01 max=1 step=0.01 default=0.5
 export function sliderColorSpeed(v) {
   hueInterval = 1 / (65.536 * max(v, 0.005))
 }

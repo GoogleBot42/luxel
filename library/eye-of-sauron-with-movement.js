@@ -19,17 +19,17 @@ setPalette([
 
 // --- controls ---
 var angDen = 8      // flame tendrils around the circle (whole numbers)
-var radDen = 3      // radial stretch of the tendrils
+var radDen = 1.2    // radial stretch of the tendrils
 var dilation = 0.5  // pupil size
 var slitW = 0.14    // pupil horizontal compression (small = thin slit)
 
 //# min=0 max=1 step=0.077 default=0.5
 export function sliderAngularDensity(v) { angDen = 2 + floor(v * 12) }
-//# min=0 max=1 step=0.01 default=0.4
-export function sliderRadialDensity(v) { radDen = 1 + v * 5 }
+//# min=0 max=1 step=0.01 default=0.3
+export function sliderRadialDensity(v) { radDen = 0.3 + v * 3 }
 //# min=0 max=1 step=0.01 default=0.5
 export function sliderDilation(v) { dilation = 0.15 + v * 0.7 }
-//# min=0 max=1 step=0.01 default=0.7
+//# min=0 max=1 step=0.01 default=0.8
 export function sliderSlitness(v) { slitW = 0.5 - v * 0.45 }
 
 // --- gaze state ---
@@ -41,14 +41,16 @@ var prevDwell = 0.5   // length of the previous dwell (scales the next jump)
 // --- looping noise phases ---
 var WRAP = 16         // noise lattice repeat span on the flow/morph axes
 var morph = 0         // very slow shape morph (full cycle ~4+ minutes)
-var flow = 0          // radial outward streaming (full cycle ~2 minutes)
+var flow = 0          // radial outward streaming (full cycle ~49 s)
+var burn = 0          // seconds-scale clock: the flame licks and flickers
 
 export function beforeRender(delta) {
   var dt = delta / 1000
 
   // sawtooth clocks scaled to exactly the lattice wrap -> seamless loops
   morph = time(4) * WRAP
-  flow = time(2) * WRAP
+  flow = time(0.75) * WRAP
+  burn = time(0.09) * WRAP
 
   // tile the noise: angle axis wraps at the tendril count (no seam at 2pi),
   // flow and morph axes wrap at WRAP
@@ -90,10 +92,26 @@ export function render2D(index, x, y) {
   // slit pupil: cone of darkness at the gaze point, x compressed by slitness
   var px = (x - gx) / slitW
   var py = (y - gy) / dilation
-  var cone = dilation * (1 - hypot(px, py) / 3)
+  var pd = hypot(px, py)
+  var cone = dilation * (1 - pd / 3)
   if (cone > 0) v -= cone * 2
 
-  // clamp below the palette top so hot spots never wrap back to black
-  v = clamp(v, 0, 0.97)
+  // Everything below is a pure MULTIPLY on the post-pupil value, so it never
+  // moves the zero crossing: the slit keeps exactly the size and shape it had.
+
+  // Burning turbulence: the same ridged field at double frequency on a
+  // seconds-scale clock. It flares and gutters every filament so the fire
+  // seethes between darts instead of sitting still.
+  var lick = perlinRidge(a * 2, r * radDen * 2 - burn, burn, 2, 0.5, 1.05, 2)
+  v = v * (0.5 + 1.5 * lick)
+
+  // White-hot corona hugging the slit: the pupil's own cone footprint (radius
+  // 3 in slit units) stretched a third again, so the fire runs hottest right
+  // where it laps the pupil's edge and cools toward the rim.
+  var near = clamp(1 - pd / 4, 0, 1)
+  v = v * (1 + 2.2 * near * near)
+
+  // clamp to the palette top so hot spots never wrap back to black
+  v = clamp(v, 0, 1)
   paint(v, v)
 }

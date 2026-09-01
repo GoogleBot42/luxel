@@ -16,7 +16,7 @@ var lastH = array(pixelCount)   // per-pixel hue smoothing state
 var rotateOn = 0
 var moveOn = 0
 var spokes = 0
-var zoomScale = 1.5     // matches slider default 0.5
+var zoomScale = 0.5     // matches slider default 0.5
 var blend = 0.5         // matches slider default 0.5
 var conLo = 0.125       // matches slider default 0.5
 var conHi = 0.89
@@ -28,10 +28,12 @@ export function toggleMoveAround(v) { moveOn = v }
 //# min=0 max=1 step=0.01 default=0
 export function sliderExtraGeometry(v) { spokes = floor(v * 8.99) }
 
-// really zoom amount: higher = smaller scale factor = more magnified;
-// a tiny floor keeps it from degenerate zero scale
+// Sets how far in the zoom is parked overall: higher = smaller coordinate
+// scale = more magnified. The continuous in-and-out zoom (see beforeRender)
+// rides on top of whatever this picks; a tiny floor keeps it from degenerate
+// zero scale.
 //# min=0 max=1 step=0.01 default=0.5
-export function sliderZoomSpeed(v) { zoomScale = max(0.03, (1 - v) * 3) }
+export function sliderZoomSpeed(v) { zoomScale = max(0.02, (1 - v) * 1) }
 
 // top = tiny blend coefficient (heavy trails), bottom = near-instant
 //# min=0 max=1 step=0.01 default=0.5
@@ -49,8 +51,13 @@ var ringPhase = 0
 var driftA = 0
 var driftB = 0
 var hueT = 0
+var zoomMul = 1
 
 export function beforeRender(delta) {
+  // in-and-out zoom multiplier: 2^(-1.5) .. 2^(+1.5), i.e. a three-octave
+  // (8x) sweep, ~7.9 s for the full round trip — fast enough that the field
+  // visibly rushes outward frame to frame
+  zoomMul = pow(2, 3 * triangle(time(0.12)) - 1.5)
   // several-minute time base multiplied up so the rings visibly flow
   ringPhase = time(4) * 40
   // two very slowly drifting noise-sampling axes
@@ -72,7 +79,14 @@ export function beforeRender(delta) {
     // slow rock back and forth, a full turn out and back over ~a minute
     rotate(PI2 * triangle(time(0.9)))
   }
-  scale(zoomScale, zoomScale)
+  // THE ZOOM. The coordinate scale has to move for the lattice to rush at
+  // you: a fixed scale only ever gives the ring phase's shimmer, which is
+  // what made this read as a static plaid rather than a zoom. Sweep the
+  // scale exponentially — a constant number of octaves per second in each
+  // direction — so the whole field expands out of the centre for ~4 s, then
+  // draws back in over the next ~4 s. Exponential (not linear) is what makes
+  // the apparent speed constant while the magnification changes 8x.
+  scale(zoomScale * zoomMul, zoomScale * zoomMul)
 }
 
 export function render2D(index, x, y) {

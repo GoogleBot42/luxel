@@ -5,13 +5,13 @@
 
 // A 3D double cone (hourglass, apex at the volume center, opening along one
 // axis both ways) tumbling continuously around a wandering rotation axis.
-// On a walled cube it reads as two magenta-rimmed spotlight discs with hot
+// On a walled cube it reads as two crimson-rimmed spotlight discs with hot
 // white centers gliding across the faces. Signed distance field of the
 // double cone, rotated by a per-frame axis-angle matrix, shaded by that
 // distance: saturation linear, brightness a steep power curve.
 
 const SPEED = 1                 // divides all four clock periods
-const SCALE = 0.10132           // ~1/PI^2: how wide the cones open
+const SCALE = 0.31831           // ~1/PI: how wide the cones open
 
 // Rotation matrix, rebuilt once per frame (never per pixel).
 var m00 = 1, m01 = 0, m02 = 0
@@ -65,10 +65,10 @@ export function render3D(index, x, y, z) {
   var d = abs(rx) - radial
   d = clamp(d, -1, 1)
 
-  // Fixed magenta hue; saturation washes to white deep inside; brightness
+  // Fixed crimson hue; saturation washes to white deep inside; brightness
   // is a steep power curve giving a soft antialiased rim, black well outside.
   var bri = (1 + d)
   bri = bri * bri
   bri = bri * bri                 // (1 + d) ^ 4
-  hsv(0.83, 1 - d, bri)
+  hsv(0.97, 1 - d, bri)
 }
