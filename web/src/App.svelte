@@ -11,6 +11,7 @@
   import VarWatcher from "./components/VarWatcher.svelte";
   import { DeviceSession, lxpEnvelope } from "./lib/device";
   import { gatedFetch } from "./lib/fetchgate";
+  import { browserBlocked } from "./lib/lna";
   import type { MqttStatus, Playlist, SyncStatus } from "./lib/device";
   import { DEFAULT_PATTERN, type Layout } from "./lib/examples";
   import {
@@ -86,6 +87,14 @@
   // ---- device mode ----
   let device: DeviceSession | null = null;
   let deviceError = "";
+  /** The connect failed because the BROWSER refused to make the request, not
+   *  because the device is missing: an https-hosted copy of this app (the
+   *  Pages build, opened from the firmware's fallback page as
+   *  `?device=http://…`) reaching a plain-http LAN device is mixed content
+   *  gated behind Chromium's Local Network Access permission. Nothing the
+   *  app can retry its way out of, so it gets its own message and the manual
+   *  routes around it rather than a generic "cannot reach device" (#162). */
+  let deviceBlocked = false;
   /** The device's stored pattern library (empty on firmware without CRUD).
    *  `source` is filled lazily in the background so each row can show a live
    *  preview thumbnail. */
@@ -876,6 +885,7 @@
    *  editor; pass false to keep an in-progress edit (working copy). */
   async function connectDevice(base: string, pullPattern = true): Promise<void> {
     deviceError = "";
+    deviceBlocked = false;
     base = base.trim().replace(/\/+$/, "");
     const session = new DeviceSession(base);
     try {
@@ -951,7 +961,16 @@
       await refreshDeviceMap();
     } catch (e) {
       device = null;
-      deviceError = `cannot reach device: ${String(e)}`;
+      // fetch() reports a browser refusal as the same opaque TypeError a dead
+      // device produces, so the two are told apart by shape, not by error
+      // text: only an https page asking for an http target can be refused
+      // this way. Keep deviceError a plain sentence — the inline
+      // "device unreachable — …" hints reuse it; the full explanation and the
+      // ways around it live in the banner.
+      deviceBlocked = browserBlocked(base);
+      deviceError = deviceBlocked
+        ? "the browser blocked this page from reaching the device"
+        : `cannot reach device: ${String(e)}`;
     }
   }
 
@@ -2057,6 +2076,33 @@ export function render(index) {
 
     <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
   </header>
+
+  <!-- Browser-blocked device connection (#162). Not an error the app can
+       retry: this page is https, the device is plain http, and Chromium's
+       Local Network Access policy has to allow that combination. Say so, and
+       name the routes around it — the device serves this same console over
+       http itself. Spans every tab, so it's visible whether the user landed
+       in the editor or on a device tab. -->
+  {#if deviceBlocked}
+    <div class="blocked-bar" data-role="device-blocked" role="alert">
+      <strong>Your browser blocked this page from reaching the device.</strong>
+      This copy of the console is served over <code>https</code> and
+      {#if deviceBase}<code>{deviceBase}</code>{:else}the device{/if} speaks plain
+      <code>http</code>, so Chromium has to grant Local Network Access first. Allow it if you get
+      the prompt and reload — otherwise:
+      <ul>
+        <li>
+          {#if deviceBase}
+            <a href={deviceBase} data-role="device-blocked-link">open the console from the device</a>
+          {:else}
+            open the console from the device
+          {/if}
+          — it serves this same UI over plain http, with no permission involved.
+        </li>
+        <li>or host this UI on a plain-http LAN address, which has none of these restrictions.</li>
+      </ul>
+    </div>
+  {/if}
 
   <!-- ───────────── Editor tab ───────────── -->
   <main class="editor-view" hidden={!editing}>
@@ -3536,6 +3582,30 @@ export function render(index) {
     background: color-mix(in srgb, var(--error) 18%, transparent);
     border: 1px solid var(--error);
     color: #f2b8b8;
+  }
+
+  /* Full-width, above every tab: the device is unreachable for a reason the
+     user has to act on outside the app (#162). Wider and wordier than the
+     .banner family on purpose — it carries instructions, not a status. */
+  .blocked-bar {
+    margin: 8px 12px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--error);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--error) 14%, transparent);
+    color: #f2c4c4;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .blocked-bar code {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  .blocked-bar ul {
+    margin: 6px 0 0;
+    padding-left: 20px;
   }
 
   .banner.warn {

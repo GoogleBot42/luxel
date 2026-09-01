@@ -86,10 +86,13 @@ passphrase, and the first-boot panic; assets = `POST /api/assets` with
 the LUXA (Luxel serves CORS, so this leg is fully readable).
 
 **Browser-policy edges**: an https-hosted copy (GitHub Pages) can't
-normally touch `http://` LAN devices (mixed content) — `device.ts`
+normally touch `http://` LAN devices (mixed content) — the installer
 passes Chromium's Local-Network-Access `targetAddressSpace: "local"`
 hint when the page is https AND the target host is actually local-space
-(RFC1918 IP or `.local`). Spec facts (developer.chrome.com/blog/
+(RFC1918/link-local IP, `.local`, or an IPv6 ULA). That rule lives in
+`web/src/lib/lna.ts`, shared with the playground's fetch gate since
+Gitea #162 — one classifier, because a hint that disagrees with the
+target's real space hard-fails the request. Spec facts (developer.chrome.com/blog/
 local-network-access, checked 2026-08-15): the value is `"local"` (the
 PNA-era `"private"` was renamed), Chrome auto-detects private-IP
 literals/.local and exempts recognized-local requests from mixed

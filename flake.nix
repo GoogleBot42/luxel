@@ -303,6 +303,10 @@
               # local broker for tools/mqtt-e2e.mjs (also ships
               # mosquitto_pub/_sub, which the script drives)
               pkgs.mosquitto
+              # throwaway self-signed cert for web/tools/lna-e2e.mjs — the
+              # browser-blocked device state only exists on a genuine https
+              # origin, so that harness has to serve the app over TLS
+              pkgs.openssl
             ]
             # Classic-ESP32 (Xtensa) firmware toolchain; firmware/build-esp32.sh
             # picks it up via XTENSA_RUST_HOME + the gcc on PATH.

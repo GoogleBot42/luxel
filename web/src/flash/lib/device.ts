@@ -16,33 +16,11 @@
 //    `targetAddressSpace` (ignored where unsupported) and surface manual
 //    fallback steps when the fetch is blocked outright.
 
-/** Extra RequestInit member from Chromium's Local Network Access spec;
- * unknown dictionary members are ignored by other browsers. */
-type LnaInit = RequestInit & { targetAddressSpace?: "private" | "local" };
-
-/** The LNA hint only helps (and is only safe to send) from an https page
- * reaching down to a plain-http local-network device — the mixed-content
- * case. Per Chrome's Local Network Access spec the value is "local"
- * (the PNA-era "private" was renamed; "local" parses on old builds too),
- * and Chrome auto-detects private-IP literals and .local hosts anyway —
- * the explicit hint is what buys the mixed-content exemption. Chromium
- * fails any request whose actual address space doesn't match the hint
- * (measured against a loopback target from the live site), so send it
- * only for hosts that are genuinely local-space, and never for loopback
- * (already mixed-content-exempt). */
-function lnaHint(origin: string): LnaInit {
-  if (window.location.protocol !== "https:") return {};
-  const host = new URL(origin).hostname;
-  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return {};
-  const oct = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
-  const privateIp =
-    oct !== null &&
-    (oct[1] === "10" ||
-      (oct[1] === "192" && oct[2] === "168") ||
-      (oct[1] === "172" && Number(oct[2]) >= 16 && Number(oct[2]) <= 31));
-  if (privateIp || host.endsWith(".local")) return { targetAddressSpace: "local" };
-  return {};
-}
+// The `targetAddressSpace` hint and the browser-blocked heuristic live in
+// src/lib/lna.ts: the playground's fetch gate needs exactly the same rules
+// (Gitea #162), and since a hint that disagrees with the target's real
+// address space hard-fails the request, there is only ever one classifier.
+import { browserBlocked, lnaHint, type LnaInit } from "../../lib/lna";
 
 function lna(origin: string, init: RequestInit = {}, timeoutMs = 4000): LnaInit {
   return { signal: AbortSignal.timeout(timeoutMs), ...lnaHint(origin), ...init };
@@ -68,13 +46,6 @@ export type Probe =
   | { kind: "wled"; arch: string; version: string; name: string }
   | { kind: "reachable" } // something answered but we can't read it (CORS)
   | { kind: "unreachable"; blocked: boolean }; // blocked = fetch refused by the browser itself
-
-/** True when a fetch failure smells like the *browser* refusing to try
- * (mixed content / private-network blocking) rather than a network miss.
- * Heuristic: an https page asking for an http LAN origin. */
-function browserBlocked(origin: string): boolean {
-  return window.location.protocol === "https:" && origin.startsWith("http:");
-}
 
 export async function probeDevice(origin: string): Promise<Probe> {
   // Luxel first: its status shape (version + slot) doubles as the success

@@ -111,9 +111,14 @@ honours `?device=` and the firmware serves `Access-Control-Allow-Origin:
 *`). If the Pages URL ever moves, that anchor moves with it. Caveat: the
 Pages copy is https and devices are http — Chromium exempts
 recognised-local targets (RFC1918 / `.local`) from mixed content and
-prompts for Local Network Access, but the playground's `gatedFetch` does
-not yet send the `targetAddressSpace: "local"` hint the installer page
-uses (Gitea #162).
+prompts for Local Network Access. The playground now sends the same
+`targetAddressSpace: "local"` hint the installer page does (both go
+through `web/src/lib/lna.ts`), and when the request is refused anyway it
+says so and points at the manual routes — open the console from the
+device itself, or host the UI on a plain-http LAN address. Whether the
+*granted* path actually works end to end from the Pages URL is still
+unproven: headless chromium won't run the permission flow, so it needs a
+headful browser against a real device (Gitea #162).
 
 ## One-time infrastructure (state as of 2026-08-15)
 

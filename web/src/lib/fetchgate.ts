@@ -13,6 +13,8 @@
 // a cold load the browser's own html/css/js connections pin the device's
 // two sockets for seconds at a time, and 3 retries (~1 s) burned out
 // before a slot freed (observed on the Athom, 2-slot build).
+import { lnaHint, type LnaInit } from "./lna";
+
 const MAX_INFLIGHT = 2;
 const RETRIES = 6;
 // Overall per-attempt deadline (connect + headers + full body). A device
@@ -26,6 +28,13 @@ let inflight = 0;
 const waiters: (() => void)[] = [];
 
 export async function gatedFetch(url: string, init?: RequestInit): Promise<Response> {
+  // Local Network Access: from an https-hosted copy of the app (the Pages
+  // build, reached via `?device=http://…`), every device request is also a
+  // mixed-content / local-network request. The hint is what buys the
+  // exemption — and it must match the target's real address space, so lnaHint
+  // returns nothing for same-origin assets, loopback and public hosts. See
+  // lna.ts; the installer page shares the same classifier.
+  const hint = lnaHint(url);
   while (inflight >= MAX_INFLIGHT) {
     await new Promise<void>((wake) => waiters.push(wake));
   }
@@ -41,7 +50,8 @@ export async function gatedFetch(url: string, init?: RequestInit): Promise<Respo
         // a detached Response; a mid-body connection drop retries here too.
         const deadline = AbortSignal.timeout(ATTEMPT_MS);
         const signal = init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
-        const res = await fetch(url, { ...init, signal });
+        const opts: LnaInit = { ...init, ...hint, signal };
+        const res = await fetch(url, opts);
         const body = await res.arrayBuffer();
         const bodyless = res.status === 204 || res.status === 205 || res.status === 304;
         return new Response(bodyless ? null : body, {
