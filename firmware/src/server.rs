@@ -3,43 +3,22 @@
 //! (crates/luxel-cli/src/serve.rs) — the playground's device mode talks to
 //! both interchangeably.
 //!
-//! API (all responses carry Access-Control-Allow-Origin: * so the
-//! playground dev server can target a device directly):
-//!   GET  /              installed playground, else the minimal page (also /min)
-//!   GET  /api/status    {"fps":N,"pixels":N,"vmerr":"…"|null}
-//!   GET  /api/pixels    raw RGB bytes, 3 per pixel
-//!   GET  /api/pattern   source of the running pattern (text/plain)
-//!   GET  /api/controls  [{"kind","label","name"},…]
-//!   GET  /api/vars      {"name":raw|[raw,…],…}        (raw 16.16)
-//!   GET  /api/readouts  {"showName":raw|null,…}       (showNumber/gauge)
-//!   POST /api/code      body = source → {"ok":true} | {"ok":false,"line","col","error"}
-//!   POST /api/control   body = "name raw0 [raw1 raw2]" → {"ok":true}
-//!   POST /api/var       body = "name raw" → {"ok":true}
-//!   GET  /api/wifi      {"ssid":"…"|null,"source":"flash"|"builtin"|"none"}
-//!   POST /api/wifi      body = "ssid\npassword" → stores creds in flash + reboots
-//!   GET  /api/brightness {"brightness":0..31,"max":31}
-//!   POST /api/brightness body = "0".."31" → applied live + persisted {"ok":true,"brightness":N}
-//!   GET  /api/config    {"pixels":N,"max":2048,"protocol":"sk9822"}
-//!   POST /api/config    body = pixel count → live resize + persisted {"ok":true,"pixels":N}
-//!   GET  /api/protocol  {"protocol":"sk9822","options":["sk9822","ws2812"]}
-//!   POST /api/protocol  body = name → live SPI reconfig + persisted {"ok":true,"protocol":"…"}
-//!   GET  /api/output    {"order","gamma","capMa","brightCurve","blur","glow",
-//!                        "palette":[pos,r,g,b,…],"paletteAmount":0..100}
-//!   POST /api/output    body = "<order> <gamma_tenths> <cap_ma> [<bright_curve_tenths> <blur_pct> <glow_pct>]"
-//!   POST   /api/output/palette  body = "<amount_pct> <pos> <r> <g> <b> …" (0..=255 each)
-//!   DELETE /api/output/palette  clears the device palette → {"ok":true}
-//!   GET  /api/playlist  {"defaultSec":N,"playing":bool,"index":N,"items":[{"id","name","sec","controls"}]}
-//!   POST /api/playlist  body = D/I/C lines → stores + applies live
-//!   POST /api/playlist/{play,stop,next,prev}  play body = start index
-//!   GET  /api/map       {"installed":bool,"dims":D,"count":N}
-//!   POST /api/map       body = "<dims> <raw...>" → install (empty = clear); persisted
-//!   GET    /api/patterns              {"patterns":[{"id","name"},…]}
-//!   GET    /api/patterns/<id>         {"id","name","source"}
-//!   POST   /api/patterns              body "name\nsource" → {"ok":true,"id"}
-//!   DELETE /api/patterns/<id>         {"ok":true}
-//!   POST   /api/patterns/<id>/activate  runs it → {"ok":true} | code-error shape
-//!   POST /api/events    body = "EV1\0" frame (netin::parse_events) → queues
-//!                       [type,x,y,value] events for readEvent() patterns
+//! **The route reference is `docs/api.md`** — every route, request body,
+//! response shape, and which of the two targets serves it. It lives there
+//! rather than here because this comment went stale twice (it still claimed
+//! `/api/code` took bare source long after uploads became LXP1 envelopes,
+//! and never grew entries for /api/sensors, /api/mqtt, /api/sync, /api/clock,
+//! /api/apmode, /api/ota or /api/assets). Update docs/api.md when you add a
+//! route here.
+//!
+//! Invariants worth knowing before touching the dispatcher below:
+//!   - Every response carries Access-Control-Allow-Origin: * so the
+//!     playground dev server can target a device directly, and OPTIONS
+//!     answers a 204 preflight (cross-origin DELETE needs it).
+//!   - Errors are HTTP 200 + {"ok":false,"error":…}; 404 means unrouted.
+//!   - Request bodies are plain text or a binary frame — never JSON.
+//!   - /api/wifi and /api/apmode reboot after replying; so does a
+//!     successful /api/ota. Nothing else does.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;

@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-08-31 — docs/api.md: the HTTP surface, written down once
+
+Gitea #211. Until now the only way to learn what a Luxel device or the
+mirror answers was to grep `firmware/src/server.rs` and
+`crates/luxel-cli/src/serve.rs` side by side, and the split between them —
+which routes exist on one target and not the other — was written down
+nowhere at all. `docs/api.md` is that reference: 52 route entries grouped by
+area (status, live coding, pattern library, playlist, settings, network,
+injection, firmware maintenance, pages), each with method, request body,
+response shape, and a column saying which target serves it.
+
+Everything in it is read out of the two servers, not remembered. The parts
+that were genuinely undiscoverable:
+
+- **Three route entries are not on both sides.** `POST /api/pins` is
+  mirror-only (real device GPIO is #177 item 4); `POST /api/ota` and
+  `POST /api/assets` are firmware-only. Everything else — 49 entries —
+  matches.
+- **`ok:false` arrives with HTTP 200.** Only unrouted paths 404, so clients
+  must read the body, not the status.
+- **Raw 16.16 is not uniform.** `/api/vars`, `/api/readouts`,
+  `/api/control`, `/api/var`, `/api/map` and playlist `C` lines are raw
+  i32; but `GET /api/playlist`'s `items[].controls` come back as *decimal*.
+  You POST raw and GET decimal on the same field.
+- **Two response-shape divergences between the targets**, both documented
+  rather than silently papered over: firmware `/api/status` carries
+  `src`/`bc`/`web` that the mirror does not, and `POST /api/output/palette`
+  answers a bare `{"ok":true}` on firmware but echoes `palette` +
+  `paletteAmount` on the mirror.
+- **Exactly three routes reboot a device**: `POST /api/wifi`,
+  `POST /api/apmode`, and a successful `POST /api/ota`. Nothing else does.
+
+README.md and docs/tools.md now point at it instead of describing routes in
+passing, and `firmware/src/server.rs`'s 37-line inline route table — the
+thing everyone was grepping — is replaced by a pointer plus the invariants
+you actually need before touching the dispatcher. That table had gone stale
+twice: it still claimed `POST /api/code` took bare source long after uploads
+became LXP1 envelopes, and it never grew entries for `/api/sensors`,
+`/api/mqtt`, `/api/sync`, `/api/clock`, `/api/apmode`, `/api/ota` or
+`/api/assets`. A doc that drifts silently is worse than no doc; one file
+now owns this.
+
+The audit also found a broken harness: `tools/soak.mjs` still POSTs raw
+pattern source to `/api/code`, so every upload is rejected by the envelope
+decoder and the "soak" measures nothing. Filed as #218 (with two smaller
+finds: `event-soak.mjs` pinned to firmware v0.1.39, and `POST /api/var` +
+`GET /api/readouts` having no consumer in the repo at all).
+
 ## 2026-08-31 — hosted-ui on metal: the stale bundle stayed invisible
 
 Gitea #198, the bring-up checklist that #204 could not run: `hosted-ui` had
