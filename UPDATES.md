@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-09-01 — Review pass 2: 99 open decisions closed out; the arrayReplace fill myth falls
+
+Jeremy's second sitting with the review UI produced 166 new/updated
+decisions (tools/verify/decisions.json): 121 good, 31 delete (25 of them
+pass-1 deletions that had never been addressedAt-stamped), 61 needs-work,
+7 fork. Every actionable one is acted on in this pass, fanned out across
+20 subagents in one worktree, plus Gitea #197 folded in.
+
+**Deleted (6)** — christmas-lights-2, dimbypixel, icicleblaze,
+iran-solidarity, lightning-zap (its pass-1 fork lightning-strike stays),
+pride-progress: port + spec + verdict each; pairs.json regenerated.
+
+**The systemic find: `arrayReplace(a, 0)` is not a fill.** It splats its
+value list from index 0 — one value writes one slot — but
+web/src/lib/builtins.ts documented it as "Set every element to value",
+and 13 ports used it as a per-frame buffer clear. Buffers accumulated
+forever: sparks-center froze solid white, wanderers went solid red,
+portal/scrolls/slowflies/heatshivers/aurorashivers/bustle railed into
+static washes, matrix-rain kept one live column, amoeba decayed to
+black, nano-orbital smeared into a frozen rainbow, wanderedges died to
+one pixel, bouncing-balls-hsv never blanked. All 13 fixed
+(`feedback(buf, 0)` is the idiom); builtins.ts + docs/lang.md corrected.
+The ~8 patterns using the same idiom that Jeremy scored "good" are
+deliberately untouched — audit ticketed (#225).
+
+**Controls pass (12+)** — the "perfect, needs controls" bucket:
+blink-fade, color-bands(+buffered — whose dimness was a stray /2 before
+a 4th power; mean 12→77 vs orig 75), crossfading, fireblobs, fireflies,
+halloween-wavy-bands, nyan-lights, scary-pumpkin, shimmer-crossfade-2d,
+unstable-orbits-2d, xorcery-2d-3d, both music sequencers (renamed
+Opening Act / Main Stage). House style throughout; untouched renders
+proven byte-identical except where the feedback demanded a look change.
+
+**Defect fixes (highlights)** — 80s-kid-show's one-frame flicker was a
+stale draw cache surviving object swaps; doom-fire-2d had runaway wind
+advection plus cooling that never ended the flame; zoom-kaleidoscope had
+no time term in its scale (now an 8x exponential breathe);
+2d-sinc-theta-theta carried a spurious x3 ring frequency that aliased
+into confetti; all-lasers-fire cycled 10x too fast and 8x too dim;
+raindrops-2d injected drops into the wrong sim buffer and had a dead
+border ring; eye-of-sauron's ridge offset of 0 collapsed the eye to
+specks; rgbclock-2d froze against the harness's pinned wall clock;
+sound-music-spectrum-visualizer had a 16.16 floor() band-boundary bug
+and amplified its own squelch floor; upward-waves-3d had gravity mapped
+onto the wrong lattice axis; a-peak-integrator rebuilt to the original's
+fixed 144-px meter with per-pixel drain (beat cycle now byte-for-byte);
+3d-rotation-spotlights' cone was a hairline (SCALE 1/PI² vs 1/PI);
+oasis's speed dial's entire range sat under the visible-motion floor —
+now real px/s — and its #197 16.16 overflow (index+off*w leaving ±32767)
+is fixed and clean at 64–2048 px. matrix-rain, mandelbrot-2d,
+metaballs-of-fire-2d, perlin-simplex-noise-1d, heart, bustle,
+bouncing-balls-hsv, distance-function-kaleidoscope-2, amoeba,
+aurorashivers, accelerometer-level-example, three-red-pixels-array (now
+byte-identical to its original), sparks-center, wanderedges, wanderers,
+portal, scrolls, slowflies, heatshivers, nano-orbital all diagnosed from
+pixels + judge verdicts and brought back to their originals.
+
+**Redesigns & forks (feedback-driven, fidelity waived)** —
+2d-fireworks-fade is a real shell sim (six modes: peony/willow/crackle/
+ring/comet/finale, loop toggle walking them); kaleidoscope-2d is a
+stained-glass rosette; butterfly-2d has actual anatomy and a flap;
+frogger-2d is a full self-playing game with a validated Smartness dial;
+both spiders got exaggerated silhouettes with jointed alternating-tetrad
+gaits (dire's glow behind a dial); millipede is a segmented creature
+with peristaltic gait; both perlin fires share a proper thresholded
+flame model (wind variant gusts and leans); 4th rebuilt (crackle
+deposits outran fade → white-out; Spacing now StripeWidth in px); the
+coronal pair share a rayed-eruption engine; bouncy-boxes lost its tear;
+fractal-flower/animated-asterisks/crosstown-traffic/geometry-morphing
+got the requested defaults; orv-christmas-tree's giant stars were decay-
+buffer smears, now point sprites.
+
+**Verification** — every pattern re-rendered against its original via
+snap.mjs (motion strips, statsSummary, per-pixel dumps where it
+mattered); every new dial probe-responsive across its declared bounds;
+tools/check-library.sh 297/297 on all five rigs, directive lint clean.
+addressedAt stamped on all 99 acted decisions (incl. the 25 stale
+pass-1 deletes); pairs.json regenerated.
+
+Residue on Gitea: arrayReplace audit for the untouched "good" patterns
+(#225), pre-existing judge nits deliberately out of scope are listed in
+the PR description.
+
 ## 2026-08-31 — The playground asks for local network access, and says so when refused
 
 Gitea #162. The firmware's fallback page hands a device with no on-flash UI
