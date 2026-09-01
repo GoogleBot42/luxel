@@ -1,5 +1,47 @@
 # Update log
 
+## 2026-08-31 — snap.mjs `--vars-sweep`: reading a dial's map through the vars API
+
+Gitea #207. Fidelity work keeps asking one question the pixels answer only
+vaguely: *does the port's dial map the way the original's does?* The exact
+answer has always been available — an original's EXPORTED vars are its public
+`/api/vars` surface, so reading them costs nothing at the clean-room firewall
+— but getting it needed a throwaway script every time.
+
+`node tools/verify/snap.mjs <slug> --vars-sweep <control>` now does it in one
+command. It sets one named control across N settings (`--sweep-steps`,
+default 5) on both sides and reads back every exported var's value at each,
+plus a **baseline row** with the control untouched. Output is a
+`--probe-controls`-style table on stdout, `varsweep.json` in the pair's output
+dir, and a short `varsSweep` block in `meta.json`. Variable names and numbers
+only — never source, never an excerpt.
+
+Two decisions carry most of the value:
+
+- **Each side is swept across its own range**, not across the same raw
+  numbers. A corpus original's slider sends 0..1 (Pixel Blaze ignores the
+  `//#` comment); a port that declares `min=1 max=10` sends 1..10. The two
+  dials are comparable at the same *fraction* of travel, which is what the
+  table's `frac` column is. `--vars-sweep "NAME=0,0.5,1"` sweeps literal
+  values when you want them.
+- **The baseline row**, because a default mismatch is invisible in any
+  dialed-in comparison — the finding that first motivated the ticket
+  (line-dancer-2d's original defaults Speed to 4.6).
+
+It pays immediately. `all-lasers-fire`: the original's Speed is *inverted and
+strongly non-linear* (`speed` 1.0 → 0.42 → 0.13 → 0.016 → 0.0001 across the
+dial) where the port's is a linear identity (0 → 1), with defaults 0.3 vs 0.5
+and `blastScale` 5 vs 1. `midpointdisplacement1d`: the original's Speed runs
+0.1 → 0 (inverted, 10× narrower) against the port's 0.05 → 1.05, on top of
+different var *names* (orig `mapLifetime`/`maxLevel`, port `lifetime`/`detail`).
+Neither is legible from a render.
+
+Edge cases are explicit rather than silent: a control on neither side is a
+hard exit naming what each side does have; a control on only one side warns
+and sweeps the side that has it (that asymmetry is a finding); sides with
+different var sets get the union as columns with `-` for the absentee; a pair
+exporting nothing at all says so instead of printing an empty grid.
+
 ## 2026-08-31 — docs/api.md: the HTTP surface, written down once
 
 Gitea #211. Until now the only way to learn what a Luxel device or the

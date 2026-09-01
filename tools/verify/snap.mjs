@@ -45,6 +45,13 @@
 //   --probe-controls     additionally sweep every settable control, one at a
 //                        time, and write probe.json (see below)
 //   --probe-seconds N    probe window length (default 4)
+//   --vars-sweep NAME    sweep ONE control across its range on BOTH sides and
+//                        record every exported var's VALUE at each setting —
+//                        writes varsweep.json (see below). "NAME=v1,v2,..."
+//                        sweeps those exact values instead.
+//   --sweep-steps N      settings in a --vars-sweep range sweep (default 5)
+//   --sweep-frames N     frames rendered before each row's vars are read
+//                        (default 1; 0 reads straight after the control handler)
 //   --dump "t1,t2,..."   write frames.json with the exact per-pixel values of
 //                        the captured frames nearest those times (see below;
 //                        the list is parsed strictly — a malformed entry exits
@@ -184,6 +191,53 @@
 // it. Any --controls-orig/--controls-port on the run form the untouched
 // baseline; the probed dial is overridden on top of them.
 //
+// --vars-sweep answers "does the port's dial MAP the way the original's does?"
+// (Gitea #207). A judge can see from pixels that a dial has too much authority;
+// only the numbers say by how much. For one named control it sets that control
+// across N settings on BOTH sides and, at each setting, reads back every
+// EXPORTED var's value — the public /api/vars surface, so what lands in the
+// output is variable NAMES and numeric VALUES and nothing else. No source, no
+// excerpt: the table is safe to read across the clean-room firewall
+// (.claude/rules/corpus-cleanroom.md), which is the whole point of reading the
+// original through its vars API rather than by opening it.
+//
+// The control is named once and resolved PER SIDE by export name or display
+// label (`sliderSpeed` and `Speed` both hit the same dial), because the two
+// sides often spell it differently. A name that exists on neither side is a
+// hard error listing what each side does have; a name on only one side warns
+// and sweeps the side that has it (that asymmetry is itself a port finding).
+//
+// Each side is swept across ITS OWN range — the `//#` directive's min..max when
+// it declares one, else the raw 0..1 a Pixel Blaze slider sends — in
+// --sweep-steps settings (default 5), snapped to the directive's `step` where
+// it declares one. That is the comparison that means something: an original
+// whose slider sends 0..1 and a port whose directive says `min=1 max=10` are
+// the same dial at the same FRACTION of travel, not at the same raw number.
+// Pass "NAME=v1,v2,..." to sweep those exact values on both sides instead
+// (`--vars-sweep "sliderSpeed=0,0.25,0.5,0.75,1"`).
+//
+// Every sweep also carries a BASELINE row with the control left untouched —
+// how a default mismatch is caught, and the reason the flag exists: the
+// original defaulting Speed to 4.6 where the port defaults to 3.25 is invisible
+// in any dialed-in comparison.
+//
+// Rows are read after --sweep-frames frames (default 1, from t=0 — the run's
+// own --skip/--seconds do not apply). 1 frame is what a device's /api/vars
+// reports: a var the pattern computes in beforeRender has a value by then.
+// Pass 0 to read straight after the control handler, which isolates the
+// handler's own mapping from anything beforeRender does to it. Any
+// --controls-*/--vars-*/--pins-* on the run (and the slug's fixups) form the
+// baseline; the swept control is overridden on top of them.
+//
+// varsweep.json holds, per side: `control` (the resolved {name,kind,label,bounds}
+// or null), `range`, `boundsSwept` (whether the values came from a directive),
+// `varsExported`, and `rows` — one per setting plus the baseline, each
+// `{step, fraction, value, vars}`. An exported ARRAY var is kept whole in the
+// JSON and shown as `[len]` in the stdout table. meta.json records a short
+// `varsSweep` summary (control, steps, frames, per-side values). Like
+// --probe-controls this is an AUTHOR/DEBUG tool, deliberately outside the
+// judge-facing outputs: judges keep deciding from pixels.
+//
 // --dump "t1,t2,..." answers "what are the ACTUAL numbers?" — the PNGs are
 // nearest-neighbour upscaled and alias fine structure away, so stripe widths,
 // feature pixel indices and exact RGB values are guesswork when read off an
@@ -270,6 +324,16 @@ const PROBE_LIT_THRESHOLD = 4.0;
 const PROBE_KINDS = new Set(["slider", "toggle", "inputNumber", "hsvPicker", "rgbPicker"]);
 const PICKER_KINDS = new Set(["hsvPicker", "rgbPicker"]);
 
+/** --vars-sweep: settings per sweep, and frames rendered before each row's vars
+ *  are read. 5 settings covers a dial's ends, midpoint and quarters — enough to
+ *  see a linear map bend without a wall of rows. 1 frame, not 0, because that is
+ *  what a device's /api/vars reports: a var assigned in beforeRender rather than
+ *  in the control handler already has its value, and a var the handler sets is
+ *  unaffected by one frame unless the pattern overwrites it (which is itself
+ *  worth seeing). --sweep-frames 0 isolates the handler's own mapping. */
+const SWEEP_STEPS = 5;
+const SWEEP_FRAMES = 1;
+
 /** --sensors: the modes, and the name stamped into meta.json when synth data
  *  was actually fed. Bump the name if the signal below ever changes, so runs
  *  made against different signals can never be compared as if they matched. */
@@ -312,6 +376,9 @@ function parseArgs(argv) {
     stripAt: null, // null → window midpoint
     probeControls: false,
     probeSeconds: PROBE_SECONDS,
+    varsSweep: null, // null → no varsweep.json
+    sweepSteps: SWEEP_STEPS,
+    sweepFrames: SWEEP_FRAMES,
     dump: null, // null → no frames.json
     wallClock: WALL_CLOCK,
     outRoot: path.join(HERE, "out"),
@@ -343,6 +410,9 @@ function parseArgs(argv) {
     "--strip-frames": ["stripFrames", Number],
     "--strip-at": ["stripAt", Number],
     "--probe-seconds": ["probeSeconds", Number],
+    "--vars-sweep": ["varsSweep", parseSweep],
+    "--sweep-steps": ["sweepSteps", Number],
+    "--sweep-frames": ["sweepFrames", Number],
     "--dump": ["dump", parseTimes],
     "--wall-clock": ["wallClock", Number],
     "--out-root": ["outRoot", String],
@@ -371,6 +441,12 @@ function parseArgs(argv) {
   if (!(opts.stripFrames >= 1)) die("--strip-frames must be >= 1");
   if (opts.stripAt !== null && !(opts.stripAt >= 0)) die("--strip-at must be >= 0");
   if (!(opts.probeSeconds > 0)) die("--probe-seconds must be > 0");
+  if (!Number.isInteger(opts.sweepSteps) || opts.sweepSteps < 1) {
+    die("--sweep-steps must be an integer >= 1");
+  }
+  if (!Number.isInteger(opts.sweepFrames) || opts.sweepFrames < 0) {
+    die("--sweep-frames must be an integer >= 0");
+  }
   if (opts.rig && !["strip", "grid", "cloud"].includes(opts.rig)) die(`bad --rig ${opts.rig}`);
   if (!SENSOR_MODES.includes(opts.sensors)) {
     die(`bad --sensors ${opts.sensors} (want ${SENSOR_MODES.join("|")})`);
@@ -437,6 +513,37 @@ function parseControls(spec) {
     out[name] = values;
   }
   return out;
+}
+
+/** --vars-sweep: "sliderSpeed" → {name, values: null} (sweep the control's own
+ *  range in --sweep-steps settings), "sliderSpeed=0,0.5,1" → {name, values}
+ *  (sweep those exact values on BOTH sides). One control only: the flag answers
+ *  "how does THIS dial map", and sweeping two at once cannot say which moved a
+ *  var. Values are validated here, where the message can name the argument. */
+function parseSweep(spec) {
+  const s = String(spec).trim();
+  if (!s) die(`--vars-sweep needs a control name (e.g. --vars-sweep sliderSpeed)`);
+  const eq = s.indexOf("=");
+  if (eq < 0) return { name: s, values: null };
+  const name = s.slice(0, eq).trim();
+  if (!name) die(`bad --vars-sweep "${clip(spec)}" (want NAME or NAME=v1,v2,...)`);
+  const rest = s
+    .slice(eq + 1)
+    .trim()
+    .replace(/,$/, ""); // one trailing "," is fine
+  if (!rest) die(`bad --vars-sweep "${clip(spec)}": no values after "=" — want NAME=v1,v2,...`);
+  const entries = rest.split(",");
+  const values = entries.map((e, i) => {
+    const v = Number(e.trim());
+    if (e.trim() === "" || !Number.isFinite(v)) {
+      die(
+        `bad --vars-sweep: value ${i + 1} of ${entries.length} is "${e.trim()}", ` +
+          `not a number (got "${clip(spec)}")`,
+      );
+    }
+    return v;
+  });
+  return { name, values };
 }
 
 /** "pixel=30;speed=0.5" (or comma-separated) → { pixel: 30, speed: 0.5 }.
@@ -618,6 +725,7 @@ function renderSide(host, source, rig, o) {
     controlsApplied: {},
     varsExported: [],
     varsApplied: {},
+    varsValues: null,
     pinsApplied: {},
     warnings: [],
     compileError: null,
@@ -721,6 +829,11 @@ function renderSide(host, source, rig, o) {
       }
       prev = px;
     }
+
+    // What an external client reading /api/vars would see at the end of the
+    // run — names and numbers, no source. --vars-sweep is the only consumer;
+    // it is not written to meta.json, which reports the var NAMES instead.
+    side.varsValues = eng.vars();
 
     side.frames = frames;
     side.stats = {
@@ -900,6 +1013,208 @@ function printProbeTable(probe) {
   for (const r of rows) {
     console.log(`  ${r.map((cell, i) => cell.padEnd(w[i])).join("  ")}`.trimEnd());
   }
+}
+
+// ---- exported-var sweep (--vars-sweep) -------------------------------------
+
+const round4 = (v) => Math.round(v * 10000) / 10000;
+
+/** Find one control on a side by export name OR display label, exactly as
+ *  --controls-* resolves them, case-insensitively as a last resort. The two
+ *  sides frequently spell the same dial differently, and the flag names it
+ *  once. */
+function resolveControl(controls, name) {
+  const lower = name.toLowerCase();
+  return (
+    controls.find((c) => c.name === name) ??
+    controls.find((c) => c.label === name) ??
+    controls.find((c) => c.name.toLowerCase() === lower) ??
+    controls.find((c) => String(c.label ?? "").toLowerCase() === lower) ??
+    null
+  );
+}
+
+/** The settings to sweep one control across: `steps` values spanning its OWN
+ *  declared `//#` range (snapped to `step` where it declares one), else the raw
+ *  0..1 a Pixel Blaze slider sends. Sweeping both sides at the same raw number
+ *  compares nothing when one side declares min=1 max=10 and the other does not
+ *  — the comparable setting is the same FRACTION of each dial's travel.
+ *  Pickers take the raw range whatever the directive says: their components are
+ *  0..1 colour axes, not a scalar range (same reasoning as probeValues). */
+function sweepValues(kind, bounds, steps) {
+  const r = PICKER_KINDS.has(kind) ? null : directiveRange(bounds);
+  const min = r ? r.min : 0;
+  const max = r ? r.max : 1;
+  const step = r && Number.isFinite(bounds?.step) && bounds.step > 0 ? bounds.step : null;
+  const values = [];
+  for (let i = 0; i < steps; i++) {
+    let v = steps === 1 ? min : min + (i * (max - min)) / (steps - 1);
+    if (step) {
+      const snapped = min + Math.round((v - min) / step) * step;
+      if (snapped >= min && snapped <= max) v = snapped;
+    }
+    values.push(+v.toFixed(6));
+  }
+  // Dedupe: a step coarser than the sweep can land two settings on one value.
+  return { values: [...new Set(values)], hinted: !!r, min, max };
+}
+
+/** Exported-var values, rounded for reporting. Array vars are kept whole. */
+function roundVars(vars) {
+  const out = {};
+  for (const [k, v] of Object.entries(vars ?? {})) {
+    out[k] = Array.isArray(v) ? v.map(round4) : v === null ? null : round4(v);
+  }
+  return out;
+}
+
+/** Sweep one control on one side and read every exported var at each setting.
+ *  Row 0 is the BASELINE — the control left untouched, which is how a default
+ *  mismatch shows up. Each row is an independent compile+run at the run's
+ *  seed/clock/sensors, so nothing carries over between settings. */
+function sweepSide(host, source, rig, o) {
+  const seconds = o.sweepFrames / o.fps; // sweepFrames frames from t=0, no warmup
+  const run = (controls) =>
+    renderSide(host, source, rig, {
+      seed: o.seed,
+      fps: o.fps,
+      skip: 0,
+      seconds,
+      sensors: o.sensors,
+      wallClock: o.wallClock,
+      controls,
+      vars: o.vars,
+      pins: o.pins,
+    });
+
+  const base = run(o.controls);
+  const out = {
+    compileError: base.compileError,
+    runtimeError: base.runtimeError,
+    wantsSensors: base.wantsSensors,
+    sensors: base.sensors,
+    varsExported: base.varsExported,
+    control: null,
+    range: null,
+    boundsSwept: false,
+    warnings: [...base.warnings],
+    rows: [],
+  };
+  if (base.compileError) return out;
+
+  // The untouched row: values as the pattern's own defaults leave them.
+  out.rows.push({ step: 0, fraction: null, value: null, vars: roundVars(base.varsValues) });
+
+  const c = resolveControl(base.controls, o.sweepName);
+  if (!c) {
+    out.warnings.push(`no control "${o.sweepName}" on this side — baseline row only`);
+    return out;
+  }
+  out.control = {
+    name: c.name,
+    kind: c.kind,
+    label: c.label,
+    ...(c.bounds ? { bounds: c.bounds } : {}),
+  };
+
+  const picker = PICKER_KINDS.has(c.kind);
+  const swept = o.sweepExplicit
+    ? {
+        values: o.sweepExplicit,
+        hinted: false,
+        min: Math.min(...o.sweepExplicit),
+        max: Math.max(...o.sweepExplicit),
+      }
+    : sweepValues(c.kind, c.bounds, o.sweepSteps);
+  out.range = { min: swept.min, max: swept.max };
+  out.boundsSwept = swept.hinted;
+
+  const span = swept.max - swept.min;
+  swept.values.forEach((v, i) => {
+    const trial = run({ ...o.controls, [c.name]: picker ? [v, v, v] : [v] });
+    out.rows.push({
+      step: i + 1,
+      // Where this setting sits in the dial's travel — the axis the two sides
+      // are actually comparable on when their ranges differ.
+      fraction: span > 0 ? round4((v - swept.min) / span) : null,
+      value: v,
+      vars: trial.compileError ? null : roundVars(trial.varsValues),
+      ...(trial.runtimeError ? { runtimeError: trial.runtimeError } : {}),
+    });
+  });
+  return out;
+}
+
+/** One number as a table cell: exported arrays report their length only (the
+ *  full array is in varsweep.json), so a 32-slot frequencyData cannot blow the
+ *  table apart. */
+function fmtVar(v) {
+  if (v === undefined) return "-";
+  if (v === null) return "null";
+  if (Array.isArray(v)) return `[${v.length}]`;
+  return String(v);
+}
+
+/** Compact stdout table, in the style of --probe-controls: one row per side per
+ *  setting, one column per exported var (the UNION of both sides' names, so a
+ *  var only one side exports reads as "-" on the other). Rows interleave the
+ *  sides at each setting, which is the comparison the flag exists for. */
+function printSweepTable(sweep) {
+  const st = sweep.settings;
+  const explicit = st.values !== null;
+  console.log(
+    `  vars-sweep: control "${sweep.control}", ` +
+      (explicit
+        ? `values ${st.values.join("/")}`
+        : `${st.steps} step${st.steps === 1 ? "" : "s"} across each side's own range`) +
+      `; vars read after ${st.frames} frame${st.frames === 1 ? "" : "s"} @ ${st.fps}fps, ` +
+      `seed ${st.seed}`,
+  );
+  for (const [side, s] of Object.entries(sweep.sides)) {
+    if (s.compileError) {
+      console.log(`  ${side}: COMPILE FAILED (${s.compileError})`);
+      continue;
+    }
+    const where = s.control
+      ? `${s.control.name} (${s.control.kind}) swept ${s.range.min}..${s.range.max}` +
+        (s.boundsSwept ? "*" : explicit ? "" : " (raw 0..1 fallback)")
+      : `NO SUCH CONTROL — baseline row only`;
+    const vars = s.varsExported.length ? s.varsExported.join(", ") : "(none)";
+    console.log(`  ${side}: ${where}; exports ${vars}`);
+  }
+  // Union of both sides' var names, first side's order first — a name only one
+  // side exports is exactly the finding a reader wants to see, not hidden.
+  const names = [];
+  for (const s of Object.values(sweep.sides)) {
+    for (const r of s.rows) {
+      for (const n of Object.keys(r.vars ?? {})) if (!names.includes(n)) names.push(n);
+    }
+  }
+  if (!names.length) {
+    console.log(`  (no exported vars on either side — nothing to tabulate)`);
+    return;
+  }
+  const rows = [["side", "step", "frac", "value", ...names]];
+  const sideKeys = Object.keys(sweep.sides);
+  const maxRows = Math.max(...sideKeys.map((k) => sweep.sides[k].rows.length));
+  for (let i = 0; i < maxRows; i++) {
+    for (const side of sideKeys) {
+      const r = sweep.sides[side].rows[i];
+      if (!r) continue;
+      rows.push([
+        side,
+        r.step === 0 ? "base" : String(r.step),
+        r.fraction === null ? "-" : r.fraction.toFixed(2),
+        r.value === null ? "-" : String(r.value),
+        ...names.map((n) => fmtVar(r.vars?.[n])),
+      ]);
+    }
+  }
+  const w = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)));
+  for (const r of rows) {
+    console.log(`  ${r.map((cell, i) => cell.padEnd(w[i])).join("  ")}`.trimEnd());
+  }
+  if (!explicit) console.log(`  * = swept across the control's declared //# range`);
 }
 
 // ---- image assembly --------------------------------------------------------
@@ -1245,6 +1560,29 @@ const sides = {
   }),
 };
 
+// --vars-sweep names ONE control for both sides; fail here, before anything is
+// written, when it exists on neither — a typo'd or wrong-side dial otherwise
+// produces a table of nothing but baseline rows that reads like a real result.
+// A name only one side knows is a warning, not an error: the sweep still runs
+// (and that asymmetry is itself a port finding worth recording).
+if (opts.varsSweep) {
+  const found = Object.fromEntries(
+    Object.entries(sides).map(([k, s]) => [k, resolveControl(s.controls, opts.varsSweep.name)]),
+  );
+  const live = Object.entries(sides).filter(([, s]) => !s.compileError);
+  if (live.length && !Object.values(found).some(Boolean)) {
+    const have = live
+      .map(([k, s]) => `${k}: ${s.controls.map((c) => c.name).join(", ") || "(no controls)"}`)
+      .join("; ");
+    die(`--vars-sweep "${opts.varsSweep.name}": no such control on either side — ${have}`);
+  }
+  for (const [k, c] of Object.entries(found)) {
+    if (!c && !sides[k].compileError) {
+      warn(`--vars-sweep "${opts.varsSweep.name}": ${k} has no such control — baseline row only`);
+    }
+  }
+}
+
 const outDir = path.resolve(ROOT, opts.outRoot, slug, opts.label);
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -1324,6 +1662,61 @@ for (const [name, side] of Object.entries(sides)) {
   }
 }
 
+// ---- optional exported-var sweep (--vars-sweep) -----------------------------
+//
+// Runs before meta.json so meta can record that it happened. Values only —
+// variable NAMES and NUMBERS — never source: the table is meant to be read
+// across the clean-room firewall.
+const sweepFile = path.join(outDir, "varsweep.json");
+let sweep = null;
+if (opts.varsSweep) {
+  const sweepOpts = {
+    seed: opts.seed,
+    fps: opts.fps,
+    // Same synthetic feed as the run, so a sound pattern's vars are read while
+    // it hears something rather than in silence.
+    sensors: opts.sensors,
+    wallClock: opts.wallClock,
+    sweepName: opts.varsSweep.name,
+    sweepExplicit: opts.varsSweep.values,
+    sweepSteps: opts.sweepSteps,
+    sweepFrames: opts.sweepFrames,
+  };
+  sweep = {
+    slug,
+    label: opts.label,
+    control: opts.varsSweep.name,
+    settings: {
+      steps: opts.varsSweep.values ? opts.varsSweep.values.length : opts.sweepSteps,
+      // null unless the caller listed exact values to sweep on BOTH sides
+      values: opts.varsSweep.values,
+      frames: opts.sweepFrames,
+      fps: opts.fps,
+      seed: opts.seed,
+      rig: kind,
+      pixels: rig.pixels,
+      wallClock: opts.wallClock,
+    },
+    sides: {
+      orig: sweepSide(host, origSource, rig, {
+        ...sweepOpts,
+        controls: controls.orig,
+        vars: vars.orig,
+        pins: pins.orig,
+      }),
+      port: sweepSide(host, portSource, rig, {
+        ...sweepOpts,
+        controls: controls.port,
+        vars: vars.port,
+        pins: pins.port,
+      }),
+    },
+  };
+  fs.writeFileSync(sweepFile, stringifyMeta(sweep) + "\n");
+} else {
+  fs.rmSync(sweepFile, { force: true }); // stale sweep from a previous run
+}
+
 const meta = {
   slug,
   label: opts.label,
@@ -1386,6 +1779,28 @@ const meta = {
         stripAtSeconds: +(stripPicks[0] / opts.fps).toFixed(3),
         stripTimesSeconds: stripPicks.map((i) => +(opts.skip + i / opts.fps).toFixed(3)),
         rhythmRowsPerPixel: rowsPerPixel,
+      }
+    : {}),
+  // What --vars-sweep did, if anything: enough to know a run carries a sweep
+  // and what it swept. The table itself lives in varsweep.json.
+  ...(sweep
+    ? {
+        varsSweep: {
+          control: sweep.control,
+          steps: sweep.settings.steps,
+          frames: sweep.settings.frames,
+          file: "varsweep.json",
+          sides: Object.fromEntries(
+            Object.entries(sweep.sides).map(([k, s]) => [
+              k,
+              {
+                control: s.control?.name ?? null,
+                boundsSwept: s.boundsSwept,
+                values: s.rows.filter((r) => r.step > 0).map((r) => r.value),
+              },
+            ]),
+          ),
+        },
       }
     : {}),
   sides: Object.fromEntries(
@@ -1528,3 +1943,4 @@ if (dumpTimes)
       : `  dump: frames.json — ${dumpTimes.length} times, ${dumpTimes[0]}s .. ${dumpTimes[dumpTimes.length - 1]}s (full list in frames.json requestedTimes)`,
   );
 if (probe) printProbeTable(probe);
+if (sweep) printSweepTable(sweep);
