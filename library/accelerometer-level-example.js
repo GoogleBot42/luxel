@@ -8,22 +8,20 @@ export var accelerometer = array(3)   // [x, y, z]; engine stubs to zeros
 
 var angle = 0          // smoothed correction angle (radians), persists
 
-// Flip sign of the correction depending on sensor mounting orientation.
-var flip = 1
-export function toggleFlip(v) { flip = v ? -1 : 1 }
-
 export function beforeRender(delta) {
   var ax = accelerometer[0]
   var ay = accelerometer[1]
 
   // Guard all-zero (no sensor / idle): target angle 0 -> bar sits level.
+  // atan2(x, y) (not (y, x)) measures tilt from the "up" axis, and the bar
+  // counter-rotates against it, hence the negation.
   var target = 0
   if (ax != 0 || ay != 0) {
-    target = flip * -atan2(ay, ax)
+    target = -atan2(ax, ay)
   }
 
   // Low-pass filter: blend a couple percent toward the measurement per frame.
-  angle += (target - angle) * 0.03
+  angle += (target - angle) * 0.021
 
   // Rebuild transform each frame: origin to center, then rotate.
   // translate by -half so 0..1 coords become centered (~ -0.5 .. +0.5).
@@ -34,7 +32,7 @@ export function beforeRender(delta) {
 
 export function render2D(index, x, y) {
   // After the transform x,y are centered (~ -0.5 .. +0.5) and rotated.
-  var b = 1 - abs(y) * 6
+  var b = 1 - abs(y) * 5
   b = clamp(b, 0, 1)
   b = b * b
   // Hue undoes the centering so it runs the full wheel across the bar length.

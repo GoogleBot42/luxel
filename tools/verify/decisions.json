@@ -24,7 +24,8 @@
   "2d-bouncing-additive-primaries": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T01:15:43.591Z",
-    "feedback": "New balls don't have their own distinct colors."
+    "feedback": "New balls don't have their own distinct colors.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "2d-clock-with-hand-color-pickers": {
     "decision": "good",
@@ -33,12 +34,14 @@
   "2d-fireworks-fade": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:03:34.723Z",
-    "feedback": "This whole pattern should be redone ignoring the original because the original doesn't show fireworks either.  Just try to make it so there's a mode input which shows a bunch of different types of fireworks.  And also a loop bool toggle (on by default) which just loops the modes."
+    "feedback": "This whole pattern should be redone ignoring the original because the original doesn't show fireworks either.  Just try to make it so there's a mode input which shows a bunch of different types of fireworks.  And also a loop bool toggle (on by default) which just loops the modes.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "2d-sinc-theta-theta": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:01:41.696Z",
-    "feedback": "This looks super different from the original.  Broken."
+    "feedback": "This looks super different from the original.  Broken.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "2d-spiral-twirls": {
     "decision": "good",
@@ -56,66 +59,81 @@
   },
   "3-violet-fade": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:02:05.341Z"
+    "decidedAt": "2026-08-30T23:02:05.341Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "3d-rotation-spotlights": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:00:26.686Z"
+    "decidedAt": "2026-09-01T02:00:26.686Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "4-blue-fade": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:02:20.839Z"
+    "decidedAt": "2026-08-30T23:02:20.839Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "4th": {
     "decision": "fork",
     "decidedAt": "2026-09-01T01:20:06.816Z",
-    "feedback": "Spacing slider seems to do nothing"
+    "feedback": "Spacing slider seems to do nothing",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "5-teal-fade": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:03:36.072Z"
+    "decidedAt": "2026-08-30T23:03:36.072Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "6-green-fade": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:03:38.300Z"
+    "decidedAt": "2026-08-30T23:03:38.300Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "7-yelllow-fade": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:03:40.657Z"
+    "decidedAt": "2026-08-30T23:03:40.657Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "8-red-fade": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:02:25.565Z"
+    "decidedAt": "2026-08-30T23:02:25.565Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "80s-kid-show": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T01:19:33.140Z",
-    "feedback": "Randomly, there's flicker in the port.  Something shows up for a single frame."
+    "feedback": "Randomly, there's flicker in the port.  Something shows up for a single frame.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "9-pink-fade": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:02:28.667Z"
+    "decidedAt": "2026-08-30T23:02:28.667Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "a-peak-integrator": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:04:43.551Z"
+    "decidedAt": "2026-09-01T02:04:43.551Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "accelerometer-level-example": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:00:50.383Z"
+    "decidedAt": "2026-09-01T02:00:50.383Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "all-lasers-fire": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:00:18.589Z",
-    "feedback": "This looks very different from the original.  There's just a tiny sputter and not a proper laser beam."
+    "feedback": "This looks very different from the original.  There's just a tiny sputter and not a proper laser beam.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "amoeba": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:31.600Z"
+    "decidedAt": "2026-09-01T01:14:31.600Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "an-intro-to-pixelblaze-code": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:03:48.139Z"
+    "decidedAt": "2026-08-30T23:03:48.139Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "angle-and-radius-from-coordinates": {
     "decision": "good",
@@ -129,7 +147,8 @@
   "animated-asterisks-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T01:22:01.881Z",
-    "feedback": "Needs better defaults.  I like this, 4, 0.2, 0.5, 0.5"
+    "feedback": "Needs better defaults.  I like this, 4, 0.2, 0.5, 0.5",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "audio-volume-meter": {
     "decision": "good",
@@ -137,15 +156,18 @@
   },
   "aurorashivers": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:30.990Z"
+    "decidedAt": "2026-09-01T01:14:30.990Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "austin-fc": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:09:21.763Z"
+    "decidedAt": "2026-08-30T23:09:21.763Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "automap": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:09:37.813Z"
+    "decidedAt": "2026-08-30T23:09:37.813Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "autumn-colors": {
     "decision": "good",
@@ -163,7 +185,8 @@
   "blink-fade": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:05:48.459Z",
-    "feedback": "Good but needs more controls."
+    "feedback": "Good but needs more controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "blinky-eyes-2d": {
     "decision": "good",
@@ -178,7 +201,8 @@
   "blue-holiday-candle-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T01:23:42.560Z",
-    "feedback": "Better but the flame's general shape is still too rigid for a flame.  Candle flames to more than just sway."
+    "feedback": "Better but the flame's general shape is still too rigid for a flame.  Candle flames to more than just sway.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "bouncer3d": {
     "decision": "good",
@@ -191,7 +215,8 @@
   },
   "bouncing-balls-hsv": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:30.207Z"
+    "decidedAt": "2026-09-01T01:14:30.207Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "bouncing-balls-rgb": {
     "decision": "good",
@@ -205,7 +230,8 @@
   "bouncy-boxes": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:06:25.451Z",
-    "feedback": "I actually hate the tear from the original pattern remove it. Then it is all good."
+    "feedback": "I actually hate the tear from the original pattern remove it. Then it is all good.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "breakout-2d": {
     "decision": "good",
@@ -217,12 +243,14 @@
   },
   "bustle": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:29.198Z"
+    "decidedAt": "2026-09-01T01:14:29.198Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "butterfly-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:07:07.949Z",
-    "feedback": "Not really butterfly shaped.  Could be much better."
+    "feedback": "Not really butterfly shaped.  Could be much better.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "cellular-automata-1d": {
     "decision": "good",
@@ -245,7 +273,8 @@
   },
   "christmas-lights-2": {
     "decision": "delete",
-    "decidedAt": "2026-09-01T02:07:16.515Z"
+    "decidedAt": "2026-09-01T02:07:16.515Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "christmas-rg-fade": {
     "decision": "good",
@@ -253,7 +282,8 @@
   },
   "christmas-string-lights": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:14:50.703Z"
+    "decidedAt": "2026-08-30T23:14:50.703Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "christmaslights": {
     "decision": "good",
@@ -262,17 +292,20 @@
   },
   "christmaslights-2": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:15:25.666Z"
+    "decidedAt": "2026-08-30T23:15:25.666Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "color-bands": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:07:34.443Z",
-    "feedback": "Great. But I want more controls."
+    "feedback": "Great. But I want more controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "color-bands-buffered": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:08:25.111Z",
-    "feedback": "Good by I want controls and the colors are too dim."
+    "feedback": "Good by I want controls and the colors are too dim.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "color-blend": {
     "decision": "good",
@@ -315,27 +348,32 @@
   },
   "coronal-ejection-2d": {
     "decision": "fork",
-    "decidedAt": "2026-09-01T02:09:00.677Z"
+    "decidedAt": "2026-09-01T02:09:00.677Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "coronal-mass-ejection": {
     "decision": "fork",
     "decidedAt": "2026-09-01T02:09:42.797Z",
-    "feedback": "Also need controls"
+    "feedback": "Also need controls",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "crawling-spider-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:14:53.604Z",
-    "feedback": "Doesn't look enough like a spider.  With this low of a resolution, you have to exaggerate the spiders features somewhat to make it look more like a spider."
+    "feedback": "Doesn't look enough like a spider.  With this low of a resolution, you have to exaggerate the spiders features somewhat to make it look more like a spider.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "crossfading": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T01:56:58.226Z",
-    "feedback": "Looks good.  We should add controls."
+    "feedback": "Looks good.  We should add controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "crosstown-traffic-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:10:26.178Z",
-    "feedback": "0.2 line width should be default.  Otherwise perfect."
+    "feedback": "0.2 line width should be default.  Otherwise perfect.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "cube-fire-3d": {
     "decision": "good",
@@ -356,7 +394,8 @@
   },
   "daftpunk": {
     "decision": "delete",
-    "decidedAt": "2026-08-31T00:18:33.760Z"
+    "decidedAt": "2026-08-31T00:18:33.760Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "dbzbattlefinal": {
     "decision": "good",
@@ -365,16 +404,19 @@
   },
   "dimbypixel": {
     "decision": "delete",
-    "decidedAt": "2026-09-01T02:14:16.196Z"
+    "decidedAt": "2026-09-01T02:14:16.196Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "dire-spider-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:12:12.764Z",
-    "feedback": "Doesn't look enough like a spider.  With this low of a resolution, you have to exaggerate the spiders features somewhat to make it look more like a spider.  Also, the haunting glow/smoke/rays coming from the spider are too weak (should be a control)."
+    "feedback": "Doesn't look enough like a spider.  With this low of a resolution, you have to exaggerate the spiders features somewhat to make it look more like a spider.  Also, the haunting glow/smoke/rays coming from the spider are too weak (should be a control).",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "distance-function-kaleidoscope-2": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:28.283Z"
+    "decidedAt": "2026-09-01T01:14:28.283Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "doom-fire": {
     "decision": "good",
@@ -384,7 +426,8 @@
   "doom-fire-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:13:58.004Z",
-    "feedback": "The flame is acting very weird."
+    "feedback": "The flame is acting very weird.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "easing-library-v1-0": {
     "decision": "good",
@@ -393,7 +436,8 @@
   },
   "easing-library-v1-01": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:55:25.828Z"
+    "decidedAt": "2026-08-30T23:55:25.828Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "edgeburst": {
     "decision": "good",
@@ -429,12 +473,14 @@
   },
   "eye-of-sauron": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:40.912Z"
+    "decidedAt": "2026-09-01T01:13:40.912Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "eye-of-sauron-with-movement": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:13:33.227Z",
-    "feedback": "Sauron's eye is like a flame.  There needs to be more intensity going on around the slit of the eye.  The movement behavior seems right and the slit size too."
+    "feedback": "Sauron's eye is like a flame.  There needs to be more intensity going on around the slit of the eye.  The movement behavior seems right and the slit size too.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "fairies": {
     "decision": "good",
@@ -466,12 +512,14 @@
   "fireblobs": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:14:13.640Z",
-    "feedback": "Needs more controls."
+    "feedback": "Needs more controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "fireflies": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:16:35.665Z",
-    "feedback": "Needs more controls."
+    "feedback": "Needs more controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "firework-dust": {
     "decision": "good",
@@ -491,17 +539,20 @@
   "fractal-flower": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:16:07.725Z",
-    "feedback": "Looks good but you need to find better defaults.  Something that is very interesting."
+    "feedback": "Looks good but you need to find better defaults.  Something that is very interesting.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "frogger-2d": {
     "decision": "fork",
     "decidedAt": "2026-09-01T02:17:57.326Z",
-    "feedback": "I think you can to better than the original.  Just make a frogger game.  Look at the snake game port for inspiration.  I want it to be a full game that automatically plays by itself.  There should be a slider to configure how smart the AI is (controls how easily it looses)."
+    "feedback": "I think you can to better than the original.  Just make a frogger game.  Look at the snake game port for inspiration.  I want it to be a full game that automatically plays by itself.  There should be a slider to configure how smart the AI is (controls how easily it looses).",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "geometry-morphing-demo-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:19:59.019Z",
-    "feedback": "Does not look like the original unless I pick better slider bounds.  The control sliders needs better bounds.  And pick better defaults (should fill screen and be filled by default).  Filled should be a bool.  Otherwise looks good."
+    "feedback": "Does not look like the original unless I pick better slider bounds.  The control sliders needs better bounds.  And pick better defaults (should fill screen and be filled by default).  Filled should be a bool.  Otherwise looks good.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "glittering-jewels": {
     "decision": "good",
@@ -521,15 +572,18 @@
   "halloween-wavy-bands": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:20:18.754Z",
-    "feedback": "Needs more controls"
+    "feedback": "Needs more controls",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "heart": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:20:09.458Z"
+    "decidedAt": "2026-09-01T02:20:09.458Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "heatshivers": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:44.408Z"
+    "decidedAt": "2026-09-01T01:13:44.408Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "holiday-diagonal-stripes": {
     "decision": "good",
@@ -544,20 +598,24 @@
   "icicleblaze": {
     "decision": "delete",
     "decidedAt": "2026-09-01T01:35:36.090Z",
-    "feedback": "Honestly I don't know what the original is trying to be.  But it is kind of interesting. I'd like so see pattern controls that the original doesn't have."
+    "feedback": "Honestly I don't know what the original is trying to be.  But it is kind of interesting. I'd like so see pattern controls that the original doesn't have.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "index-walk": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:32:34.429Z"
+    "decidedAt": "2026-08-30T23:32:34.429Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "iran-solidarity": {
     "decision": "delete",
-    "decidedAt": "2026-09-01T02:34:54.482Z"
+    "decidedAt": "2026-09-01T02:34:54.482Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "kaleidoscope-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:21:12.198Z",
-    "feedback": "The port is much more boring.  Just run with the Kaleidoscope idea.  Make something cool."
+    "feedback": "The port is much more boring.  Just run with the Kaleidoscope idea.  Make something cool.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "kitt-w-color-picker": {
     "decision": "good",
@@ -572,7 +630,8 @@
   "lightning-zap": {
     "decision": "delete",
     "decidedAt": "2026-09-01T01:38:52.059Z",
-    "feedback": "Technically, this is spot on.  But I actually think this can be made better than the original.  Lighting doesn't quite look like this and the color/shading is wrong."
+    "feedback": "Technically, this is spot on.  But I actually think this can be made better than the original.  Lighting doesn't quite look like this and the color/shading is wrong.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "line-dancer-2d": {
     "decision": "good",
@@ -581,15 +640,18 @@
   },
   "mandelbrot-2d": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:21:34.120Z"
+    "decidedAt": "2026-09-01T02:21:34.120Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "map-concentric": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:36:45.590Z"
+    "decidedAt": "2026-08-30T23:36:45.590Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "mapped-vertical-line-2d": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:37:08.229Z"
+    "decidedAt": "2026-08-30T23:37:08.229Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "marching-rainbow": {
     "decision": "good",
@@ -603,11 +665,13 @@
   },
   "matrix-rain": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:46.215Z"
+    "decidedAt": "2026-09-01T01:13:46.215Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "metaballs-of-fire-2d": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:21:42.572Z"
+    "decidedAt": "2026-09-01T02:21:42.572Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "meteor-shower": {
     "decision": "good",
@@ -621,7 +685,8 @@
   },
   "millipede-1d-2d-controls": {
     "decision": "fork",
-    "decidedAt": "2026-09-01T02:24:52.311Z"
+    "decidedAt": "2026-09-01T02:24:52.311Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "multimap-simpledemo": {
     "decision": "good",
@@ -630,16 +695,19 @@
   "music-sequencer-for-v2": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:24:33.123Z",
-    "feedback": "looks good but pick a better pattern name and add controls"
+    "feedback": "looks good but pick a better pattern name and add controls",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "music-sequencer-for-v3-only": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:24:36.674Z",
-    "feedback": "looks good but pick a better pattern name and add controls"
+    "feedback": "looks good but pick a better pattern name and add controls",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "nano-orbital": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:49.640Z"
+    "decidedAt": "2026-09-01T01:13:49.640Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "naturallightsync": {
     "decision": "good",
@@ -663,12 +731,14 @@
   "nyan-lights": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:27:20.654Z",
-    "feedback": "needs controls."
+    "feedback": "needs controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "oasis": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:26:28.514Z",
-    "feedback": "speed slider is messed up.  Otherwise looks ok."
+    "feedback": "speed slider is messed up.  Otherwise looks ok.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "opposites": {
     "decision": "good",
@@ -678,16 +748,19 @@
   "orv-christmas-tree": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:25:46.340Z",
-    "feedback": "The stars behind the tree are oddly large.  Also add controls."
+    "feedback": "The stars behind the tree are oddly large.  Also add controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "perlin-fire": {
     "decision": "fork",
-    "decidedAt": "2026-09-01T02:27:53.958Z"
+    "decidedAt": "2026-09-01T02:27:53.958Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "perlin-fire-wind": {
     "decision": "fork",
     "decidedAt": "2026-09-01T02:28:15.339Z",
-    "feedback": "add controls"
+    "feedback": "add controls",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "perlin-fire-wind-tunnel": {
     "decision": "good",
@@ -695,7 +768,8 @@
   },
   "perlin-simplex-noise-1d": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:28:36.586Z"
+    "decidedAt": "2026-09-01T02:28:36.586Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "pew-pew-pew": {
     "decision": "good",
@@ -713,11 +787,13 @@
   },
   "portal": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:50.732Z"
+    "decidedAt": "2026-09-01T01:13:50.732Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "pride-progress": {
     "decision": "delete",
-    "decidedAt": "2026-09-01T02:28:21.964Z"
+    "decidedAt": "2026-09-01T02:28:21.964Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "quiet-blinkfade": {
     "decision": "good",
@@ -744,7 +820,8 @@
   },
   "rainbow-fonts-2": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:43:34.027Z"
+    "decidedAt": "2026-08-30T23:43:34.027Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "rainbow-melt": {
     "decision": "good",
@@ -767,11 +844,13 @@
   "raindrops-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:30:39.345Z",
-    "feedback": "This is great.  Feedback: the ripples appear to stick around forever.  There aren't enough controls. Maybe there should be a permanent texture overlayed on top of the simulation to give the water more texture.  The ripple should go to the very edge.  It shouldn't step one pixel before each edge."
+    "feedback": "This is great.  Feedback: the ripples appear to stick around forever.  There aren't enough controls. Maybe there should be a permanent texture overlayed on top of the simulation to give the water more texture.  The ripple should go to the very edge.  It shouldn't step one pixel before each edge.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "red-green-xy-2d-sweep": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:44:19.950Z"
+    "decidedAt": "2026-08-30T23:44:19.950Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "regenbogendrogen": {
     "decision": "good",
@@ -780,11 +859,13 @@
   },
   "rgb-test-pattern": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T22:46:33.417Z"
+    "decidedAt": "2026-08-30T22:46:33.417Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "rgb-xyz-3d-octants": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:44:53.025Z"
+    "decidedAt": "2026-08-30T23:44:53.025Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "rgb-xyz-3d-sweep": {
     "decision": "good",
@@ -792,7 +873,8 @@
   },
   "rgbclock-2d": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:58.688Z"
+    "decidedAt": "2026-09-01T01:13:58.688Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "rgbw-mapping-tester": {
     "decision": "good",
@@ -814,16 +896,19 @@
   "scary-pumpkin": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:32:05.912Z",
-    "feedback": "Great! But needs controls."
+    "feedback": "Great! But needs controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "scrolls": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:56.329Z"
+    "decidedAt": "2026-09-01T01:13:56.329Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "shimmer-crossfade-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:31:45.754Z",
-    "feedback": "Great but needs more controls."
+    "feedback": "Great but needs more controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "sierpinski-rainbow-2d": {
     "decision": "good",
@@ -846,7 +931,8 @@
   },
   "skypirate-s-centered-spectrum": {
     "decision": "delete",
-    "decidedAt": "2026-08-31T00:19:24.630Z"
+    "decidedAt": "2026-08-31T00:19:24.630Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "slime-mold-palette": {
     "decision": "good",
@@ -859,7 +945,8 @@
   },
   "slowflies": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:55.493Z"
+    "decidedAt": "2026-09-01T01:13:55.493Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "snake": {
     "decision": "good",
@@ -873,11 +960,13 @@
   },
   "solid-rainbow": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:50:39.454Z"
+    "decidedAt": "2026-08-30T23:50:39.454Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "sound-music-spectrum-visualizer": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T02:31:51.496Z"
+    "decidedAt": "2026-09-01T02:31:51.496Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "sound-spectro-kalidastrip": {
     "decision": "good",
@@ -896,7 +985,8 @@
   },
   "sparks-center": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:53.889Z"
+    "decidedAt": "2026-09-01T01:13:53.889Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "spin-cycle": {
     "decision": "good",
@@ -924,7 +1014,8 @@
   },
   "three-red-pixels-array": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:13:52.671Z"
+    "decidedAt": "2026-09-01T01:13:52.671Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "three-red-pixels-mathy": {
     "decision": "good",
@@ -948,19 +1039,23 @@
   "unstable-orbits-2d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:34:06.685Z",
-    "feedback": "Also add controls."
+    "feedback": "Also add controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "upward-waves-3d-using-accelerometer": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:02.528Z"
+    "decidedAt": "2026-09-01T01:14:02.528Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "utility-perceptual-hue": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:54:23.079Z"
+    "decidedAt": "2026-08-30T23:54:23.079Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "utility-scheduled-percent-on-demo": {
     "decision": "delete",
-    "decidedAt": "2026-08-30T23:53:23.922Z"
+    "decidedAt": "2026-08-30T23:53:23.922Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "voronoi-2d": {
     "decision": "good",
@@ -968,11 +1063,13 @@
   },
   "wanderedges": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:01.712Z"
+    "decidedAt": "2026-09-01T01:14:01.712Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "wanderers": {
     "decision": "needs-work",
-    "decidedAt": "2026-09-01T01:14:00.492Z"
+    "decidedAt": "2026-09-01T01:14:00.492Z",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "wavy-bands": {
     "decision": "good",
@@ -995,11 +1092,13 @@
   "xorcery-2d-3d": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:33:21.791Z",
-    "feedback": "Great! but needs controls."
+    "feedback": "Great! but needs controls.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "zoom-kaleidoscope": {
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:33:50.153Z",
-    "feedback": "Doesn't look like it is zooming."
+    "feedback": "Doesn't look like it is zooming.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
   }
 }

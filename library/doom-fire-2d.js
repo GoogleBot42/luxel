@@ -32,14 +32,28 @@ function step() {
   tmp = A
   A = B
   B = tmp
-  if (random(1) < windAmt * windAmt) wind = floor(random(3)) - 1
-  coolMax = 0.035 + (1 - flame) * (1 - flame) * 0.45
+  // Wind is a SMOOTH sway (~10 s out and back) whose AMPLITUDE is the slider.
+  // The old code re-rolled a full-strength +-1 cell shift no matter where the
+  // slider sat and applied it to 70% of cells per row, which sheared the whole
+  // column ~11 cells across the panel and pushed it into the dead guard
+  // columns — the flame ended up as a diagonal smear with a black wedge beside
+  // it. Now the per-row nudge probability is proportional to the wind and
+  // tapers to nothing at the source, so the total lean is at most ~4 cells
+  // over the full height and the base stays put.
+  wind = windAmt * (wave(time(0.15)) * 2 - 1)
+  windDir = wind < 0 ? -1 : 1
+  windP = abs(wind) * 0.5
+  // Cooling is sized so the column burns out after `reach` rows: FlameHeight
+  // buys height directly instead of only thinning an ever-full panel, which
+  // is what made the port a uniform orange wash from floor to ceiling.
+  reach = 0.5 + rows * flame * flame * flame
+  coolMax = 1.9 / reach
   for (var y = 0; y < rows; y++) {
-    bend = 1 - abs(y / rows - 0.5) * 2  // wind bites hardest mid-flame
+    lift = 1 - (y + 0.5) / rows          // 0 at the source, 1 at the ceiling
     cool = coolMax * (0.35 + 0.65 * (y + 1) / rows)  // harsh low, gentle high
     for (var x = 1; x <= gw; x++) {
       var sx = x
-      if (wind != 0 && random(1) < bend * 0.7) sx = x + wind
+      if (random(1) < windP * lift) sx = x + windDir
       v = B[(y + 1) * sw + sx] - random(cool)
       A[y * sw + x] = max(v, 0)
     }
@@ -53,8 +67,10 @@ function step() {
     }
   } else {
     ph = triangle(time(0.3)) * 3  // bed shimmer drifts over ~20 s
+    lean = wind * 0.5             // the bed burns hotter downwind
     for (var x = 1; x <= gw; x++) {
-      A[base + x] = 0.82 + 0.18 * wave(x * 0.13 + ph)
+      A[base + x] = (0.82 + 0.18 * wave(x * 0.13 + ph)) *
+                    (1 + lean * ((x - 0.5) / gw * 2 - 1))
     }
   }
 }

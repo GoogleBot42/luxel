@@ -12,10 +12,13 @@ var head = 0         // fractional head position, in pixels
 export function beforeRender(delta) {
   head = mod(head + SPEED * delta / 1000, pixelCount)
 
-  arrayReplace(hues, HUE_BG)
+  // Paint the background. (arrayReplace splats its value arguments starting
+  // at index 0 — it is NOT an array fill, so it has to be a loop.)
+  for (var i = 0; i < pixelCount; i++) hues[i] = HUE_BG
+
   var spacing = pixelCount / 3
-  for (var i = 0; i < 3; i++) {
-    hues[mod(floor(head + i * spacing), pixelCount)] = HUE_DOT
+  for (var d = 0; d < 3; d++) {
+    hues[mod(floor(head + d * spacing), pixelCount)] = HUE_DOT
   }
 }
 

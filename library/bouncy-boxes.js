@@ -7,8 +7,10 @@
 // speed renormalization, so they never overlap and never slow down). Rainbow
 // hues rotate slowly, offset a quarter wheel per square, with a radial hue
 // gradient inside each square. Optional "digital glitch" garnish: hashed
-// sparkles, a short streak, and up to three frozen tearing bands that shift
-// a whole row's sample position sideways.
+// sparkles plus a short streak, both off by default. The original's frozen
+// "tearing bands" (rows whose sample position jumps sideways) are
+// deliberately NOT reproduced — a reviewed decision, the artifact reads as a
+// rendering fault rather than an effect.
 //
 // Simulated on a 16x16 virtual canvas (wrapping horizontally = the cylinder);
 // render2D samples the canvas, so any mapped layout works.
@@ -37,21 +39,18 @@ bx[3] = 13; by[3] = 11; bvx[3] = -3;   bvy[3] = 5
 
 // glitch state
 var sparkAcc = 0, sparkTick = 0
-var tearAcc = 0, tearTick = 0
-var tearRow = array(3)
-var tearShift = array(3)
-var tearOn = array(3)
-var tearHueArr = array(3)
 var hueBase = 0
 
 // ---- controls -----------------------------------------------------------------
+// Sparkle Rate is the master switch for the whole glitch garnish (confetti
+// AND the streak): at 0 — the default — the boxes run clean.
 var sparkRate = 0
 //# min=0 max=1 step=0.01 default=0
 export function sliderSparkleRate(v) {
   sparkRate = v * 0.3
 }
-var sparkBright = 0
-//# min=0 max=1 step=0.01 default=0
+var sparkBright = 1
+//# min=0 max=1 step=0.01 default=1
 export function sliderSparkleBrightness(v) {
   sparkBright = v
 }
@@ -59,22 +58,6 @@ var sparkSat = 1
 //# min=0 max=1 step=0.01 default=1
 export function sliderSparkleSaturation(v) {
   sparkSat = v
-}
-var tearChance = 0.1
-//# min=0 max=1 step=0.01 default=0.1
-export function sliderTearChance(v) {
-  tearChance = v
-}
-var tearHz = 3
-// Tearing-band re-rolls per second.
-//# min=0.2 max=10 step=0.1 default=3
-export function sliderTearRate(v) {
-  tearHz = max(0.2, v)
-}
-var tearBright = 0.5
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderTearBrightness(v) {
-  tearBright = v
 }
 
 // shortest signed horizontal distance around the cylinder
@@ -155,24 +138,11 @@ export function beforeRender(delta) {
   // slow global rainbow, ~10 s per revolution
   hueBase = time(0.15)
 
-  // glitch ticks: hashed, so everything holds still between re-rolls
+  // sparkle tick: hashed, so the confetti holds still between re-rolls
   sparkAcc += delta
   if (sparkAcc > 50) {              // sparkles refresh ~20x/s
     sparkAcc = mod(sparkAcc, 50)
     sparkTick = (sparkTick + 1) % 997
-  }
-  tearAcc += delta
-  if (tearAcc > 1000 / tearHz) {
-    tearAcc = mod(tearAcc, 1000 / tearHz)
-    tearTick = (tearTick + 1) % 991
-  }
-  var b
-  for (b = 0; b < 3; b++) {
-    var seed = tearTick * 3 + b
-    tearRow[b] = floor(hash2(seed, 17) * H)
-    tearShift[b] = (hash2(seed, 29) - 0.5) * W * 2 / 3
-    tearOn[b] = hash2(seed, 43) < tearChance
-    tearHueArr[b] = hash2(seed, 61)
   }
 
   paintCanvas()
@@ -181,7 +151,7 @@ export function beforeRender(delta) {
 var HALF_DIAG = S * SQRT2 / 2
 
 function paintCanvas() {
-  var cx, cy, k, b
+  var cx, cy, k
   var streakRow = floor(hash2(sparkTick, 7) * H)
   var streakCol = hash2(sparkTick, 11) * W
   for (cy = 0; cy < H; cy++) {
@@ -189,17 +159,6 @@ function paintCanvas() {
       var idx = cy * W + cx
       var sx = cx + 0.5             // sample at the cell center
       var sy = cy + 0.5
-
-      // tearing shifts the SAMPLE position only, slicing whatever passes by
-      var inTear = 0
-      var tHue = 0
-      for (b = 0; b < 3; b++) {
-        if (tearOn[b] && tearRow[b] == cy) {
-          sx = mod(sx + tearShift[b], W)
-          inTear = 1
-          tHue = tearHueArr[b]
-        }
-      }
 
       // soft-box coverage of each square (~one pixel of edge falloff)
       var bestCov = 0
@@ -227,12 +186,8 @@ function paintCanvas() {
       if (bestCov > 0) {
         // radial two-tone gradient out from the square's center
         h = hueBase + bestK * 0.25 + bestD / HALF_DIAG * 0.55
-        v = min(totCov + inTear * 0.2, 1)
+        v = min(totCov, 1)
         s = 1
-      } else if (inTear) {
-        h = tHue                    // pale, nearly white torn row
-        s = 0.12
-        v = tearBright
       } else {
         // hashed confetti sparkles + one short horizontal streak
         if (hash2(idx, sparkTick) < sparkRate) {
@@ -240,7 +195,7 @@ function paintCanvas() {
           s = sparkSat
           v = sparkBright
         }
-        if (cy == streakRow && abs(wrapDist(cx - streakCol)) < 1.5) {
+        if (sparkRate > 0 && cy == streakRow && abs(wrapDist(cx - streakCol)) < 1.5) {
           h = hash2(sparkTick, 13)
           s = sparkSat
           v = max(v, sparkBright * 0.6)

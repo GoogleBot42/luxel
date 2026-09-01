@@ -10,20 +10,20 @@
 // control state (defaults match the //# bounds)
 var radModeV = 0
 var handModeV = 0
-var sharpV = 0.45
-var strengthV = 0.3
+var sharpV = 0.6
+var strengthV = 0
 var breatheV = 0
 var speedV = 0.3
 var zoomV = 0
-var subV = 0.6
+var subV = 0.25
 
 // derived per frame
 var radMode = 0
 var handMode = 0
-var sharpEff = 5
-var strength = 1.1
+var sharpEff = 15.4
+var strength = 1.05
 var zoom = 1
-var subBright = 0.36
+var subBright = 0.0625
 var animPhase = 0
 
 // smooth hand angles (turns, 0 = twelve o'clock)
@@ -47,7 +47,11 @@ export function beforeRender(delta) {
     lastSec = sec
     secFrac = delta / 2000
   }
-  var fs = min(secFrac, 0.999)
+  // The accumulator is NOT clamped to one second: between clock ticks it
+  // free-runs, so the sweep keeps turning even when the time source is
+  // coarse, stalled or absent entirely (an unsynced device still shows a
+  // moving clock instead of a frozen face).
+  var fs = secFrac
   var smoothSec = sec + fs
   var smoothMin = clockMinute() + smoothSec / 60
   var smoothHour = clockHour() % 12 + smoothMin / 60
@@ -106,17 +110,19 @@ export function render2D(index, x, y) {
   var fH = 1
   if (radMode == 0) {
     // equidistant rings, phase-offset per hand -> interleaved arcs;
-    // over-driven then clamped so the crests are solid
-    fW = min(1, triangle(r * 2) * 1.5)
-    fS = min(1, triangle(r * 2 + 0.25) * 1.5)
-    fM = min(1, triangle(r * 2 + 0.5) * 1.5)
-    fH = min(1, triangle(r * 2 + 0.75) * 1.5)
+    // over-driven then clamped so the crests are solid. One triangle period
+    // spans the canvas, so each hand rides a SINGLE ring crest rather than
+    // three (zoom multiplies r and packs in more).
+    fW = min(1, triangle(r) * 1.5)
+    fS = min(1, triangle(r + 0.25) * 1.5)
+    fM = min(1, triangle(r + 0.5) * 1.5)
+    fH = min(1, triangle(r + 0.75) * 1.5)
   } else if (radMode == 1) {
     // clustered rings at differing frequencies; hour strong at center,
     // sub-second confined to a narrow band near the center
     fW = clamp(1 - abs(r - 0.1) * 8, 0, 1)
-    fS = min(1, triangle(r * 3) * 1.3)
-    fM = min(1, triangle(r * 1.7) * 1.3)
+    fS = min(1, triangle(r * 1.5) * 1.3)
+    fM = min(1, triangle(r * 0.85) * 1.3)
     fH = clamp(1 - r * 2, 0, 1)
   } else if (radMode == 2) {
     // hard annuli: sub-second and hour inner, minute mid, second outer
@@ -140,10 +146,10 @@ export function sliderRadiusMode(v) { radModeV = v }
 //# min=0 max=1 step=0.25 default=0
 export function sliderHandMode(v) { handModeV = v }
 
-//# min=0 max=1 step=0.01 default=0.45
+//# min=0 max=1 step=0.01 default=0.6
 export function sliderSharpness(v) { sharpV = v }
 
-//# min=0 max=1 step=0.01 default=0.3
+//# min=0 max=1 step=0.01 default=0
 export function sliderStrength(v) { strengthV = v }
 
 //# min=0 max=1 step=0.01 default=0
@@ -155,5 +161,5 @@ export function sliderSpeed(v) { speedV = v }
 //# min=0 max=1 step=0.01 default=0
 export function sliderDistance(v) { zoomV = v }
 
-//# min=0 max=1 step=0.01 default=0.6
+//# min=0 max=1 step=0.01 default=0.25
 export function sliderSubSecondBrightness(v) { subV = v }

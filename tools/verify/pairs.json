@@ -346,22 +346,6 @@
       ]
     },
     {
-      "slug": "christmas-lights-2",
-      "libFile": "library/christmas-lights-2.js",
-      "epeFile": "corpus/imomNYcvmaCGqSrdy.epe",
-      "epeName": "Christmas Lights",
-      "rig": "strip",
-      "ambiguous": true,
-      "epeIds": [
-        "imomNYcvmaCGqSrdy",
-        "sEnLA7DKfxKPdZS48"
-      ],
-      "epeFiles": [
-        "corpus/imomNYcvmaCGqSrdy.epe",
-        "corpus/sEnLA7DKfxKPdZS48.epe"
-      ]
-    },
-    {
       "slug": "christmas-rg-fade",
       "libFile": "library/christmas-rg-fade.js",
       "epeFile": "corpus/JrF3tFojCMTpmAp3q.epe",
@@ -551,13 +535,6 @@
       "epeFile": "corpus/6Y2XsvEn2Qn62hjJT.epe",
       "epeName": "DBZBattleFinal",
       "rig": "grid"
-    },
-    {
-      "slug": "dimbypixel",
-      "libFile": "library/dimbypixel.js",
-      "epeFile": "corpus/vyX4CCoTqJrZoBGh5.epe",
-      "epeName": "dimbypixel",
-      "rig": "strip"
     },
     {
       "slug": "dire-spider-2d",
@@ -847,25 +824,11 @@
       "rig": "grid"
     },
     {
-      "slug": "icicleblaze",
-      "libFile": "library/icicleblaze.js",
-      "epeFile": "corpus/eAwwugh6A5jTRC7zp.epe",
-      "epeName": "Icicleblaze",
-      "rig": "grid"
-    },
-    {
       "slug": "infinity-flower-2d",
       "libFile": "library/infinity-flower-2d.js",
       "epeFile": "corpus/WFPiYhECcWdrBng6z.epe",
       "epeName": "Infinity Flower 2D",
       "rig": "grid"
-    },
-    {
-      "slug": "iran-solidarity",
-      "libFile": "library/iran-solidarity.js",
-      "epeFile": "corpus/6hMdH2Mo5jTS7ZF4L.epe",
-      "epeName": "Iran - Solidarity",
-      "rig": "cloud"
     },
     {
       "slug": "kaleidoscope-2d",
@@ -915,13 +878,6 @@
       "epeFile": "corpus/S6u3qPhozw43c7Af9.epe",
       "epeName": "Lightning clouds",
       "rig": "grid"
-    },
-    {
-      "slug": "lightning-zap",
-      "libFile": "library/lightning-zap.js",
-      "epeFile": "corpus/AvayCBDKbhHvM3RJG.epe",
-      "epeName": "lightning ZAP!",
-      "rig": "strip"
     },
     {
       "slug": "line-dancer-2d",
@@ -1208,13 +1164,6 @@
       "libFile": "library/portal.js",
       "epeFile": "corpus/WM5MrfsWzjGP2rYbH.epe",
       "epeName": "portal",
-      "rig": "strip"
-    },
-    {
-      "slug": "pride-progress",
-      "libFile": "library/pride-progress.js",
-      "epeFile": "corpus/p8gaewjSwJsXt68Ky.epe",
-      "epeName": "Pride Progress",
       "rig": "strip"
     },
     {
@@ -1941,8 +1890,16 @@
       "epeName": "index walk"
     },
     {
+      "epeFile": "corpus/6hMdH2Mo5jTS7ZF4L.epe",
+      "epeName": "Iran - Solidarity"
+    },
+    {
       "epeFile": "corpus/8jFuGXr68mpJsRkvg.epe",
       "epeName": "Easing Library v1.01"
+    },
+    {
+      "epeFile": "corpus/AvayCBDKbhHvM3RJG.epe",
+      "epeName": "lightning ZAP!"
     },
     {
       "epeFile": "corpus/Dtyz7dXictnHp8yAf.epe",
@@ -1993,6 +1950,10 @@
       "epeName": "Map - Concentric"
     },
     {
+      "epeFile": "corpus/eAwwugh6A5jTRC7zp.epe",
+      "epeName": "Icicleblaze"
+    },
+    {
       "epeFile": "corpus/eYrAmto2qZbDJ8zuG.epe",
       "epeName": "Christmas string lights"
     },
@@ -2009,6 +1970,10 @@
       "epeName": "Austin FC"
     },
     {
+      "epeFile": "corpus/p8gaewjSwJsXt68Ky.epe",
+      "epeName": "Pride Progress"
+    },
+    {
       "epeFile": "corpus/s9Wjw8rmLrQYubFpW.epe",
       "epeName": "5 Teal Fade"
     },
@@ -2023,6 +1988,10 @@
     {
       "epeFile": "corpus/vkpGsR88dcJmXfevp.epe",
       "epeName": "An Intro to Pixelblaze Code"
+    },
+    {
+      "epeFile": "corpus/vyX4CCoTqJrZoBGh5.epe",
+      "epeName": "dimbypixel"
     },
     {
       "epeFile": "corpus/xMcPGtXHZfPJHHTGS.epe",

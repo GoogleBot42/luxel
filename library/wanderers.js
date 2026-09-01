@@ -15,7 +15,7 @@ var W = 16
 var H = 16
 var CELLS = W * H
 
-var numWalkers = 24
+var numWalkers = 45
 // Inverse speed: each frame a walker draws one uniform number in
 // [0, SPEED); draws 0..3 pick a direction (right/left/up/down), anything
 // else stays put — so a walker steps roughly every SPEED/4 frames.
@@ -33,7 +33,9 @@ for (i = 0; i < numWalkers; i++) {
 }
 
 export function beforeRender(delta) {
-  arrayReplace(canvas, UNLIT)
+  // Blank the canvas. (arrayReplace splats its value arguments starting at
+  // index 0 — it is NOT an array fill, so it has to be a loop.)
+  for (var c = 0; c < CELLS; c++) canvas[c] = UNLIT
 
   for (var w = 0; w < numWalkers; w++) {
     var p = walkers[w]

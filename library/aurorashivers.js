@@ -9,9 +9,9 @@
 
 const SLOTS = 4          // pulse slots per instance
 const LIFE = 2           // pulse lifetime, seconds
-const DRIFT = 0.2        // total drift over a lifetime, strip fractions
+const DRIFT = 0.4        // total drift over a lifetime, strip fractions
 const HALFW = 0.075      // half-width of a blob (~15% of strip total)
-const JITTER = 0.006     // per-frame shiver amplitude
+const JITTER = 0.012     // per-frame shiver amplitude
 
 // instance A (violet, drifts +): slot state
 var aAlive = array(SLOTS)
@@ -36,6 +36,11 @@ function shiver() {
   return (random(1) + random(1) + random(1) - 1.5) * JITTER
 }
 
+// zero a whole per-pixel field (arrayReplace only writes slot 0 here)
+function clearField(buf) {
+  for (var j = 0; j < pixelCount; j++) buf[j] = 0
+}
+
 // stamp a triangle bump of height env centered at pos into buf
 function stampBump(buf, pos, env) {
   var lo = floor((pos - HALFW) * pixelCount)
@@ -53,7 +58,7 @@ export function beforeRender(delta) {
   clock += dt
 
   // afterglow first: decay + envelope last frame's pulse activity
-  var decay = exp(-0.3466 * dt)  // ~2 s half-life
+  var decay = exp(-0.6931 * dt)  // ~1 s half-life
   for (var j = 0; j < pixelCount; j++) {
     glow[j] = max(glow[j] * decay, max(pulseA[j], pulseB[j]))
   }
@@ -70,7 +75,7 @@ export function beforeRender(delta) {
       }
     }
   }
-  arrayReplace(pulseA, 0)
+  clearField(pulseA)
   for (var s = 0; s < SLOTS; s++) {
     if (aAlive[s]) {
       var age = clock - aBirth[s]
@@ -95,7 +100,7 @@ export function beforeRender(delta) {
       }
     }
   }
-  arrayReplace(pulseB, 0)
+  clearField(pulseB)
   for (var s = 0; s < SLOTS; s++) {
     if (bAlive[s]) {
       var age = clock - bBirth[s]

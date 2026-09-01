@@ -35,15 +35,15 @@ function stop(i, p, r, g, b) {
 stop(0, 0.00, 0, 0, 0)
 stop(1, 0.08, 1, 0, 0)           // red band
 stop(2, 0.10, 0.25, 0.02, 0)     // ember gap
-stop(3, 0.18, 1, 0.2, 0)         // red-orange band
-stop(4, 0.20, 0.25, 0.02, 0)
-stop(5, 0.28, 1, 0.45, 0)        // orange band
-stop(6, 0.30, 0.25, 0.02, 0)
-stop(7, 0.38, 1, 0.7, 0.08)      // amber band
-stop(8, 0.42, 0.25, 0.02, 0)
+stop(3, 0.18, 1, 0.11, 0)        // red-orange band
+stop(4, 0.20, 0.25, 0.01, 0)
+stop(5, 0.28, 1, 0.25, 0)        // orange band
+stop(6, 0.30, 0.25, 0.01, 0)
+stop(7, 0.38, 1, 0.39, 0)        // amber band (still nearly pure red)
+stop(8, 0.42, 0.25, 0.01, 0)
 stop(9, 0.50, 0, 0, 0)           // back to black at mid-range
-stop(10, 1.00, 0.5, 0.12, 0.85)  // long ramp to violet/indigo
-stop(11, 2.00, 0.5, 0.12, 0.85)  // clamp plateau for overlap overshoot
+stop(10, 1.00, 0.27, 0, 0.53)    // long ramp to a DARK indigo core
+stop(11, 2.00, 0.27, 0, 0.53)    // clamp plateau for overlap overshoot
 
 var clock = 0
 var nextSpawn = 0
@@ -93,7 +93,7 @@ export function beforeRender(delta) {
     nextSpawn = clock + SPAWN_S
   }
 
-  arrayReplace(intensity, 0)
+  feedback(intensity, 0)   // clear the field (arrayReplace is a splat, not a fill)
 
   // Update + accumulate every live pulse.
   for (var i = 0; i < POOL; i++) {

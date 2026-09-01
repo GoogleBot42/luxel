@@ -12,20 +12,21 @@ var NSHAPES = 6
 var HOLD_DUR = 1.0        // seconds per hold/morph phase
 
 // ---- controls ----
-var size = 0.15
-var filled = 0
-var lineWidth = 0.04
+// All three are in DISPLAY UNITS: the panel is one unit across, so a size of
+// 0.5 is a figure whose radius spans half the panel (i.e. edge to edge).
+var size = 0.38          // shape radius, panel widths -- fills the display
+var filled = 1           // solid fill by default
+var lineWidth = 0.05     // edge band / outline half-width, panel widths
 
-//# min=0.02 max=0.25 step=0.01 default=0.15
-export function sliderSize(v) { size = 0.02 + v * 0.23 }
+//# min=0.05 max=0.6 step=0.01 default=0.38
+export function sliderSize(v) { size = clamp(v, 0.05, 0.6) }
 
-//# min=0 max=1 step=0.01 default=0.3
-export function sliderFilled(v) { filled = (v > 0.5) ? 1 : 0 }
+// Solid fill vs thin outline. Filled is the default look.
+//# default=1
+export function toggleFilled(v) { filled = (v > 0.5) ? 1 : 0 }
 
-//# min=0 max=1 step=0.01 default=0.35
-export function sliderLineWidth(v) {
-  lineWidth = v * v * 0.12 + 0.006   // quadratic: fine control at the low end
-}
+//# min=0.01 max=0.2 step=0.005 default=0.05
+export function sliderLineWidth(v) { lineWidth = clamp(v, 0.01, 0.2) }
 
 // ---- animation state ----
 var morphClock = 0

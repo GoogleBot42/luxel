@@ -10,7 +10,7 @@
 // transforms persist across frames).
 translate(-0.5, -0.5)
 
-// Animation speed of the fire texture (watchable, not a slider).
+// Animation speed of the fire texture (also driven by sliderFireSpeed below).
 export var speed = 0.1
 
 var tb = 0        // time base, seconds
@@ -19,6 +19,8 @@ var s2 = 0
 var flash = 0     // face brightness this frame
 
 var pumpkinR = 0.48
+var flicker = 1   // face-flash rate multiplier
+var faceH = 0.33  // face hue (green)
 
 // Point-up wedge (triangle) inside-test: apex at (cx, topY), height h,
 // half-width w at the base. y grows downward.
@@ -45,7 +47,36 @@ export function beforeRender(delta) {
   // Deterministic chaotic flicker: tangent of a cosine of (time + a fast
   // sine wiggle). No random calls — smooth in time, erratic in cadence.
   // The face flash rate is independent of the fire speed.
-  flash = clamp(tan(cos(tb * 2.6 + sin(tb * 9.3) * 0.7)), 0, 1)
+  var ft = tb * flicker
+  flash = clamp(tan(cos(ft * 2.6 + sin(ft * 9.3) * 0.7)), 0, 1)
+}
+
+// How fast the fire texture inside the pumpkin scrolls and churns, in scroll
+// units per second. 0 freezes it into a still ember pattern.
+//# min=0 max=0.5 step=0.005 default=0.1
+export function sliderFireSpeed(v) {
+  speed = clamp(v, 0, 0.5)
+}
+
+// Rate of the erratic face flicker: 0 holds the face at whatever level it
+// froze on, 1 is the natural cadence, 4 is a frantic strobe.
+//# min=0 max=4 step=0.05 default=1
+export function sliderFlickerRate(v) {
+  flicker = clamp(v, 0, 4)
+}
+
+// Color of the eyes, nose and smile, as a position on the color wheel
+// (0.33 = the classic green glow, 0.08 = candle orange, 0 = blood red).
+//# min=0 max=1 step=0.01 default=0.33
+export function sliderFaceHue(v) {
+  faceH = clamp(v, 0, 1)
+}
+
+// Radius of the pumpkin as a fraction of the panel's short side; 0.5 fills the
+// panel edge to edge, smaller values leave a black border.
+//# min=0.15 max=0.7 step=0.01 default=0.48
+export function sliderPumpkinSize(v) {
+  pumpkinR = clamp(v, 0.15, 0.7)
 }
 
 export function render2D(index, x, y) {
@@ -65,7 +96,7 @@ export function render2D(index, x, y) {
 
   if (face) {
     // Vivid green, whole face flashing in unison.
-    hsv(0.33, 1, flash)
+    hsv(faceH, 1, flash)
     return
   }
 

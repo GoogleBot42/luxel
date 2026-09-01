@@ -1,4 +1,4 @@
-// name: Music Sequencer for v2
+// name: Opening Act
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "Music Sequencer for v2"; original source never consulted.
 //
@@ -25,6 +25,44 @@ var sensorPresent = 0
 var bpm = 122
 var beatsPerMeasure = 4
 var beatsPerPhrase = 16
+var curBeats = 16        // duration of the entry now playing, after Section Length
+
+// ---- controls ------------------------------------------------------------------
+var bpmDialSet = 0       // once the dial is touched it outranks the show script
+var hueOffset = 0        // added to every theme hue, in turns
+var lenScale = 1         // multiplies every entry duration
+var punchScale = 1       // scales how hard the note ramps dip the brightness
+
+// Show tempo in BPM. The demo show also asks for a tempo (and can adopt one it
+// hears); moving this dial takes ownership so the show cannot stamp on it.
+//# min=40 max=200 step=1 default=122
+export function sliderTempo(v) {
+  bpmDialSet = 1
+  bpm = v
+}
+
+// Rotates the whole show's palette. The script still steps the theme hue
+// through its own sequence; this offsets wherever that sequence sits.
+//# min=0 max=360 step=1 default=0
+export function sliderThemeHue(v) { hueOffset = v / 360 }
+
+// Stretches or compresses every section of the show. 100% is as authored;
+// 25% rips through it, 400% lets each look breathe for four times as long.
+//# min=25 max=400 step=5 default=100
+export function sliderSectionLength(v) { lenScale = v / 100 }
+
+// How hard the note ramps pump the brightness, relative to as-authored. 0%
+// holds every look steady, 100% is the scored dip, 200% slams to black between
+// hits.
+//# min=0 max=200 step=5 default=100
+export function sliderBeatPunch(v) { punchScale = v / 100 }
+
+// current theme hue including the dial offset
+function theme() { return themeHue + hueOffset }
+
+// Apply a note ramp `k` (1 at the hit, 0 just before the next) as a brightness
+// dip of authored depth `depth`, scaled by the Beat Punch dial.
+function punch(k, depth) { return clamp(1 - depth * punchScale * (1 - k), 0, 1) }
 
 // shared scratch for mini-patterns (spare slot keeps interpolation loops safe)
 var hueA = array(pixelCount + 1)
@@ -233,7 +271,7 @@ function command(fn, arg) { addEntry(fn, 0, M_CMD, arg) }
 function begin() { plPos = 0; startEntry(0) }
 
 // commands
-function cmdTempo(a) { bpm = a }
+function cmdTempo(a) { if (!bpmDialSet) bpm = a }   // the dial outranks the script
 function cmdAdoptTempo(a) { if (tempoReliable) bpm = detectedBpm }  // else keep
 function cmdPhrase(a) { beatsPerPhrase = a }
 function cmdTheme(a) { themeHue = a }
@@ -298,7 +336,7 @@ export function beforeRender(delta) {
     return
   }
 
-  var dur = plBeats[plPos]
+  var dur = plBeats[plPos] * lenScale   // Section Length stretches the whole show
   entryPct = clamp(entryBeats / dur, 0, 1)
 
   // continue-mode checks
@@ -315,6 +353,7 @@ export function beforeRender(delta) {
   if (plForce) { adv = 1; plForce = 0 }
   if (adv) advanceEntry(skip)
 
+  curBeats = plBeats[plPos] * lenScale   // duration of whatever is playing now
   var fn = plFn[plPos]
   fn()
 }
@@ -338,8 +377,8 @@ function pOff() { renderer = rBlack }
 // theme-colored bar filling over the entry, pulsing on the quarter note
 var rProgress = (i, x, y, z) => {
   var p = direction > 0 ? x : 1 - x
-  var v = p <= entryPct ? 0.35 + 0.65 * quarterRamp * quarterRamp : 0
-  hsv(themeHue, 1, v)
+  var v = p <= entryPct ? punch(quarterRamp * quarterRamp, 0.65) : 0
+  hsv(theme(), 1, v)
 }
 function pProgress() { renderer = rProgress }
 
@@ -347,20 +386,20 @@ function pProgress() { renderer = rProgress }
 var rSweep = (i, x, y, z) => {
   var pos = frac(entryBeats)
   if (direction < 0) pos = 1 - pos
-  hsv(themeHue, 1, near(x, pos, 0.15))
+  hsv(theme(), 1, near(x, pos, 0.15))
 }
 function pSweep() { renderer = rSweep }
 
 // single sweep across the whole (possibly sub-beat) entry
 var rSweepOnce = (i, x, y, z) => {
   var pos = direction > 0 ? entryPct : 1 - entryPct
-  hsv(themeHue, 1, near(x, pos, 0.15))
+  hsv(theme(), 1, near(x, pos, 0.15))
 }
 function pSweepOnce() { renderer = rSweepOnce }
 
 // whole strip breathing to the quarter note, triangle profile, slight hue tilt
 var rQuarters = (i, x, y, z) => {
-  hsv(themeHue + x * 0.08, 1, triangle(x) * quarterRamp * quarterRamp)
+  hsv(theme() + x * 0.08, 1, triangle(x) * punch(quarterRamp * quarterRamp, 1))
 }
 function pQuarters() { renderer = rQuarters }
 
@@ -368,8 +407,8 @@ function pQuarters() { renderer = rQuarters }
 var rEighths = (i, x, y, z) => {
   var seg = floor(frac(totalBeats / beatsPerMeasure) * 8)
   var here = floor(min(x, 0.999) * 8)
-  var v = here == seg ? eighthRamp * eighthRamp : 0
-  hsv(themeHue + measureRamp * 0.2, 0.7 + 0.3 * measureRamp, v)
+  var v = here == seg ? punch(eighthRamp * eighthRamp, 1) : 0
+  hsv(theme() + measureRamp * 0.2, 0.7 + 0.3 * measureRamp, v)
 }
 function pEighths() { renderer = rEighths }
 
@@ -379,7 +418,7 @@ var rBassHit = (i, x, y, z) => {
   var ph = 1 - halfRamp
   var dot = 0.5 + sin(ph * PI2 * (2 + 4 * settle)) * 0.42 * settle
   var v = near(x, dot, 0.09)
-  hsv(hueWarp(themeHue + entryPct * 0.3 + v * 0.15), 1, v)
+  hsv(hueWarp(theme() + entryPct * 0.3 + v * 0.15), 1, v)
 }
 function pBassHit() { renderer = rBassHit }
 
@@ -389,7 +428,7 @@ var rHalfSurge = (i, x, y, z) => {
   var d = abs(x - 0.5) * 2
   var band = frac(d / (0.2 + sm) + phrasePct * 2)
   var v = triangle(x) * (0.25 + 0.75 * wave(band)) * (0.25 + 0.75 * sm)
-  hsv(hueWarp(themeHue + entryPct * 0.5 + band * 0.3), 1, v)
+  hsv(hueWarp(theme() + entryPct * 0.5 + band * 0.3), 1, v)
 }
 function pHalfSurge() { renderer = rHalfSurge }
 
@@ -401,8 +440,7 @@ nat12[0] = 1; nat12[2] = 1; nat12[4] = 1; nat12[5] = 1
 nat12[7] = 1; nat12[9] = 1; nat12[11] = 1
 var naturalPulse = 0
 var rPiano = (i, x, y, z) => {
-  var dur = plBeats[plPos]
-  var env = clamp(entryBeats / 2, 0, 1) * clamp((dur - entryBeats) / 2, 0, 1)
+  var env = clamp(entryBeats / 2, 0, 1) * clamp((curBeats - entryBeats) / 2, 0, 1)
   var k = floor(min(x, 0.999) * KEYS)
   var s = k % 12
   var v = nat12[s] ? 0.05 + naturalPulse * 0.25 : 0.01

@@ -28,6 +28,32 @@ var colB = array(NLAYERS)
 lifetime[0] = 3.0;  spawnInt[0] = 0.55; colR[0] = 1.0; colG[0] = 0.5;  colB[0] = 0.0
 lifetime[1] = 4.0;  spawnInt[1] = 0.45; colR[1] = 0.5; colG[1] = 0.06; colB[1] = 0.04
 
+// --- controls ---------------------------------------------------------
+// Each setter scales the shipped per-layer constants by a ratio, so the
+// declared default leaves the tables at 1x and renders the stock look.
+var halfFrac = 0.1     // blob half-width as a fraction of the strip
+var lifeScale = 1      // multiplies lifetime[]
+var spawnScale = 1     // multiplies spawnInt[]
+var emberMix = 1       // weight of layer 1 (the dim ember red)
+
+// Half-width of one blob as a percentage of the strip.
+//# min=1 max=50 step=1 default=10
+export function sliderBlobSizePercent(v) { halfFrac = clamp(v, 0.5, 50) / 100 }
+
+// How long a blob takes to breathe in and back out (layer 1 keeps its 4:3
+// relationship to this).
+//# min=0.3 max=15 step=0.1 default=3
+export function sliderBlobLifeSeconds(v) { lifeScale = max(v, 0.2) / 3 }
+
+// Gap between spawns; smaller means a busier, denser fire.
+//# min=0.05 max=4 step=0.05 default=0.55
+export function sliderSpawnIntervalSeconds(v) { spawnScale = max(v, 0.02) / 0.55 }
+
+// Weight of the dim ember-red layer against the orange-gold one: 0 leaves a
+// clean gold flame, 200 pushes it deep red.
+//# min=0 max=200 step=5 default=100
+export function sliderEmberMixPercent(v) { emberMix = clamp(v, 0, 200) / 100 }
+
 // buffers (reallocated lazily to match pixelCount)
 var inten = array(1)     // scratch per-layer intensity
 var bufR = array(1)
@@ -71,16 +97,16 @@ export function beforeRender(delta) {
         birth[base + slot] = clock
         bpos[base + slot] = random(1)
       }
-      nextSpawn[L] = clock + spawnInt[L]
+      nextSpawn[L] = clock + spawnInt[L] * spawnScale
     }
 
-    var halfw = nbuf * 0.1          // window ~1/5 of the strip wide
+    var halfw = nbuf * halfFrac     // window ~1/5 of the strip wide by default
     if (halfw < 1) halfw = 1
 
     // update & paint every live blob
     for (var s = 0; s < MAXBLOBS; s++) {
       if (alive[base + s] < 0.5) continue
-      var af = (clock - birth[base + s]) / lifetime[L]   // age fraction
+      var af = (clock - birth[base + s]) / (lifetime[L] * lifeScale)  // age fraction
       if (af >= 1) { alive[base + s] = 0; continue }
       var env = 1 - abs(2 * af - 1)                      // triangle: peak mid-life
 
@@ -97,8 +123,9 @@ export function beforeRender(delta) {
     }
 
     // soft-limit: clamp to half scale then rescale to full (graceful plateau)
+    var gain = L == 1 ? emberMix : 1
     for (var i = 0; i < nbuf; i++) {
-      var v = min(inten[i], 0.5) * 2
+      var v = min(inten[i], 0.5) * 2 * gain
       bufR[i] += v * colR[L]
       bufG[i] += v * colG[L]
       bufB[i] += v * colB[L]

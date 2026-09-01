@@ -12,8 +12,8 @@ export var accelerometer = array(3)
 
 // --- build-specific config ---
 var SMOOTH = 0.72             // IIR low-pass factor for orientation
-var RESTG = 1.0               // sensor magnitude at 1 g after remap
-var IDLE_G = 0.7              // gentle brightness when no sensor present
+var RESTG = 0.08              // sensor magnitude at 1 g after remap
+var IDLE_G = 1.0              // gentle brightness when no sensor present
 
 // --- watched debug outputs ---
 export var gForce = 0
@@ -35,7 +35,7 @@ export function beforeRender(delta) {
   var mag = hypot3(sx, sy, sz)
   if (mag < 0.001) {
     // No live sensor: idle gently with gravity pointing straight down.
-    sx = 0; sy = 0; sz = -RESTG
+    sx = 0; sy = 0; sz = RESTG
     gForce = IDLE_G
   } else {
     gForce = mag / RESTG
@@ -46,9 +46,14 @@ export function beforeRender(delta) {
   fay = fay * SMOOTH + sy * (1 - SMOOTH)
   faz = faz * SMOOTH + sz * (1 - SMOOTH)
 
-  // spherical angles of the gravity direction (atan2 handles axis cases)
-  polar = atan2(hypot(fax, fay), faz) + PI / 2
-  azimuth = atan2(fay, fax) + PI / 2
+  // Spherical angles of the gravity direction (atan2 handles the axis cases).
+  // polar = tilt away from the map's z axis; azimuth un-rotates the gravity
+  // vector's compass bearing. rotateZ(azimuth) then rotateX(polar) re-levels
+  // the map so the bands climb along gravity. (The pair is a quarter turn
+  // off a strict "lay gravity on +z" alignment — the lean lands on the
+  // orthogonal horizontal axis — which is the original's map convention.)
+  polar = atan2(hypot(fax, fay), faz)
+  azimuth = 0 - atan2(fay, fax)
 
   // sawtooth band phase: a full rise well under a second
   phase = time(0.01)
@@ -68,7 +73,7 @@ export function render3D(index, x, y, z) {
 
   // brightness: a triangle wave in the vertical coordinate, clipped to
   // its upper half so each period leaves one bright band with dark gaps
-  var tw = triangle(z * 3 - phase)
+  var tw = triangle(z + phase)
   var band = max(0, (tw - 0.5) * 2)
   var v = band * gForce
   v = clamp(v, 0, 1)

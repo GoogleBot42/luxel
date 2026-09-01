@@ -17,16 +17,28 @@ var starIdx = array(NSTARS)    // target pixel index
 var starLife = array(NSTARS)   // 1 -> 0
 var starRate = array(NSTARS)   // life units per ms (some twinkle fast, some slow)
 
-var tsec = 0        // running seconds clock (wrapped hourly)
+var tsec = 0        // running seconds clock (wrapped every 15 min)
 var sway = 0        // multi-octave side-to-side sway, centered on zero
 var wobble = 0      // faster, smaller secondary shudder
 var flickPhase = 0  // fast internal-flicker phase
 
-// How far the flame tip leans, in panel widths, at full sway. 0 freezes it.
+// Shape state: a real flame is not a rigid blob that slides sideways, so the
+// silhouette also breathes (tall+thin <-> short+fat), licks at the tip, and
+// occasionally gutters.
+var heightF = 1     // vertical stretch of the flame body
+var widthF = 1      // girth of the flame body
+var tipLick = 0     // fast whip added to the outline near the tip
+var gutter = 0      // 0 normally, ->1 during a rare guttering duck
+var lively = 1      // overall liveliness, driven by the sway dial
+
+// How far the flame tip leans, in panel widths, at full sway. This also sets
+// how hard the flame breathes, licks and gutters, so 0 holds the silhouette
+// perfectly still (the core's burn shimmer keeps going).
 var swayAmt = 0.22
 //# min=0 max=0.5 step=0.01 default=0.22
 export function sliderSway(v) {
   swayAmt = clamp(v, 0, 0.5)
+  lively = clamp(swayAmt * 4.5, 0, 1.6)   // 1.0 at the default sway
 }
 
 function respawnStar(k) {
@@ -43,7 +55,9 @@ for (k = 0; k < NSTARS; k++) {
 
 export function beforeRender(delta) {
   tsec += delta / 1000
-  if (tsec > 3600) tsec -= 3600
+  // 900 s keeps the fastest phase term (tsec * PI2 / 0.23 ~ 27x) inside the
+  // engine's 16.16 range; an hour would overflow it.
+  if (tsec > 900) tsec -= 900
 
   // three sine octaves: each successive one twice as fast, half the weight.
   // Periods shortened from 7/3.5/1.75 s to 2.6/1.3/0.65 s — at the old rate a
@@ -57,6 +71,27 @@ export function beforeRender(delta) {
   wobble = sin(tsec * PI2 / 0.37) * 0.3 + sin(tsec * PI2 / 0.23) * 0.2
 
   flickPhase = tsec * 3.5   // a few times faster than real time
+
+  // Breath: height and girth run on separate incommensurate periods and pull
+  // in opposite directions, so the flame draws itself up thin and then squats
+  // out fat instead of holding one outline.
+  heightF = clamp(1 + (sin(tsec * PI2 / 1.9) * 0.13
+                       + sin(tsec * PI2 / 0.83) * 0.07) * lively, 0.4, 2)
+  widthF = clamp(1 - (sin(tsec * PI2 / 1.7 + 2.1) * 0.11
+                      + sin(tsec * PI2 / 0.61) * 0.06) * lively, 0.5, 2)
+
+  // Guttering: three slow humps multiplied together only spike when all three
+  // coincide, which is rare and irregular. When they do the flame ducks,
+  // spreads and loses its point, the way a real one does in a draught.
+  var g1 = 0.5 + 0.5 * sin(tsec * PI2 / 6.7)
+  var g2 = 0.5 + 0.5 * sin(tsec * PI2 / 4.3 + 1.1)
+  var g3 = 0.5 + 0.5 * sin(tsec * PI2 / 2.9 + 2.3)
+  gutter = clamp((g1 * g2 * g3 - 0.42) / 0.3, 0, 1) * lively
+  heightF = clamp(heightF * (1 - gutter * 0.4), 0.4, 2)
+  widthF = clamp(widthF * (1 + gutter * 0.3), 0.5, 2)
+
+  // the tip's own fast whip, on top of the travelling edge waves
+  tipLick = sin(tsec * 7.7) * 0.035 * lively
 
   var i
   for (i = 0; i < NSTARS; i++) {
@@ -83,20 +118,28 @@ export function render2D(index, x, y) {
   // simply never moved.
   var hFrac = clamp(cy + 0.35, 0, 1)          // 0 at the wick, ~1 at the tip
   var lean = (sway + wobble * 0.35) * swayAmt * hFrac
-  var fx = (cx - lean) * 1.8
+  // widthF > 1 fattens the flame, heightF > 1 draws it up tall
+  var fx = (cx - lean) * 1.8 / widthF
   // curl: the column bows rather than sliding rigidly
   fx += sin(cy * 5 + tsec * 1.9) * 0.35 * swayAmt * hFrac
+  var fy = cy / heightF
 
   // inner core: soft radial blob stretched upward, over a narrow falloff band
-  var d = sqrt(fx * fx + cy * cy)
-  var core = 1 - clamp((d - 0.06 - max(0, cy) * 0.18) / 0.12, 0, 1)
+  var d = sqrt(fx * fx + fy * fy)
+  var core = 1 - clamp((d - 0.06 - max(0, fy) * 0.18) / 0.12, 0, 1)
   // shimmering burn texture: triangle flicker mixing fast time phase with
   // fine spatial frequencies (different per axis), swinging roughly +-half
   var flick = triangle(frac(flickPhase + fx * 3.1 + cy * 2.3))
   core = core * (0.5 + flick)
 
-  // outer shell: soft annulus around a circle of radius ~1/3
-  var shell = 1 - clamp((abs(d - 0.3) - 0.02) / 0.08, 0, 1)
+  // outer shell: soft annulus whose radius is not constant. Two travelling
+  // waves run UP the flame (they move because their phase advances with
+  // time), plus the tip whip; all of it tapers to nothing at the wick, so the
+  // base stays anchored while the upper outline licks and reshapes.
+  var upness = clamp((fy + 0.08) / 0.38, 0, 1)
+  var lick = sin(fy * 11 - tsec * 5.7) * 0.045 + sin(fy * 17 + tsec * 3.3) * 0.025
+  var rOut = 0.3 + (lick + tipLick) * upness * lively
+  var shell = 1 - clamp((abs(d - rOut) - 0.02) / 0.08, 0, 1)
 
   // channel composition
   var r = core * 0.25 + shell * 0.9

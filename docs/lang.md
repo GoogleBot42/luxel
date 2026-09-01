@@ -231,7 +231,7 @@ where PB compile-errors on arity).
 
 | builtin | notes |
 |---|---|
-| `abs(x)` `floor(x)` `ceil(x)` `round(x)` `trunc(x)` `frac(x)` | `round(x)` = `floor(x + 0.5)` |
+| `abs(x)` `floor(x)` `ceil(x)` `round(x)` `trunc(x)` `frac(x)` | `round(x)` = `floor(x + 0.5)`; `frac` truncates toward zero (`frac(-0.25)` = `-0.25`) — for an always-positive wrap use Euclidean `mod(x, 1)` |
 | `clamp(x, lo, hi)` `min(a, b)` `max(a, b)` | |
 | `mod(x, y)` | floored modulo (sign of `y`); `%` is truncated (sign of `x`) |
 | `sqrt(x)` | sign-preserving |
@@ -444,11 +444,13 @@ curve shapes only how the master dimmer responds (control).
 
 `array(n)`, `arrayLength`, `arraySum`, `arrayForEach(a, fn)`,
 `arrayMutate(a, fn)`, `arrayMapTo(src, dst, fn)`,
-`arrayReduce(a, fn, init)`, `arrayReplace(a, v)`,
+`arrayReduce(a, fn, init)`, `arrayReplace(a, v1, v2, …)`,
 `arrayReplaceAt(a, i, v)`, `arraySort(a)`, `arraySortBy(a, cmp)`.
 
 Both `replace` forms take any number of values and store them from the
 offset onwards (`arrayReplace` starts at 0; `a.replace(…)` is that form).
+Neither is a fill: `arrayReplace(a, 0)` writes only `a[0]`. Zero a whole
+buffer with `feedback(a, 0)`.
 The span is checked as a whole: if `offset + count` runs past the end it is
 a runtime error and **nothing** is written, not even the elements that
 would have fit. A negative offset is not an error — the splat shifts down

@@ -15,18 +15,22 @@ var cIm = 0
 var hueOffset = 0   // continuously rotating global hue
 
 //# min=0 max=1 step=0.05 default=0.65
-export function sliderIterationDepth(v) {
+export function sliderIterations(v) {
   // ~5 iterations at the low end to just under 20 at the top
   cap = floor(5 + v * 14)
 }
 
 export function beforeRender(delta) {
-  // triangle sweep, ~12 s per full back-and-forth, recentered to +/-1
-  var sweep = triangle(time(0.183)) * 2 - 1
+  // triangle sweep, ~13.1 s per full back-and-forth, recentered and scaled to
+  // swing a little past +/-1
+  var sweep = (triangle(time(0.2)) * 2 - 1) * 1.2
   // base point hand-picked near the boundary (real ~ -1, small +imag); the
-  // shared sweep travels a shallow diagonal, imaginary scaled to ~40% of real
-  cRe = -0.8 + sweep
-  cIm = 0.156 + sweep * 0.4
+  // shared sweep travels a shallow diagonal, imaginary scaled to ~40% of real.
+  // The pair is tuned so the path only grazes the connected region: a lit
+  // fractal fringe stays on screen for the whole sweep and the frame never
+  // goes fully black.
+  cRe = -0.93 + sweep
+  cIm = 0.33 + sweep * 0.4
   // independent hue rotation, a few seconds per trip round the wheel
   hueOffset = time(0.05)
 }

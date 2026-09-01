@@ -3,9 +3,11 @@
 // community pattern "2D Bouncing Additive Primaries"; original source never
 // consulted.
 
-// Soft disks — pure red, green, blue, repeating — ricochet off the panel
-// edges. Overlaps simply add, so the secondaries and white emerge from mixing
-// alone. Motion is scaled by the frame delta (the spec's recommended fix for
+// Soft disks ricochet off the panel edges. Overlaps simply add, so the
+// secondaries and white emerge from mixing alone. The default three-disk
+// scene is the pure additive primaries the pattern is named for; raising the
+// disk count hands every extra disk its own hue, so no two disks ever share a
+// colour. Motion is scaled by the frame delta (the spec's recommended fix for
 // the original's frame-rate-dependent stepping), tuned to the same lively feel.
 //
 // Every control carries a //# directive, so the UI sends REAL units (balls,
@@ -16,11 +18,38 @@ var px = array(MAXBALLS)
 var py = array(MAXBALLS)
 var vx = array(MAXBALLS)   // panels per second at speed = 1
 var vy = array(MAXBALLS)
-var chan = array(MAXBALLS) // 0 = red, 1 = green, 2 = blue
+// per-disk emission colour, kept as raw RGB weights so overlaps just add
+var cr = array(MAXBALLS)
+var cg = array(MAXBALLS)
+var cb = array(MAXBALLS)
 
 var numBalls = 3
 var radius = 0.5
 var speedK = 1
+
+// full-saturation RGB weights for a hue, so every disk emits its own colour
+function hueR(h) { return clamp(abs(h * 6 - 3) - 1, 0, 1) }
+function hueG(h) { return clamp(2 - abs(h * 6 - 2), 0, 1) }
+function hueB(h) { return clamp(2 - abs(h * 6 - 4), 0, 1) }
+
+// Paint disk i. The first three are the additive primaries the pattern is
+// named for — set exactly, so the default three-disk scene is bit-for-bit
+// the pure red/green/blue it always was. Every disk past those gets its own
+// slot on the colour wheel, offset half a step so it can never land back on
+// a primary or on another disk: with the count dialled up, all twelve disks
+// are visibly different colours.
+function paint(i) {
+  if (i < 3) {
+    cr[i] = i == 0 ? 1 : 0
+    cg[i] = i == 1 ? 1 : 0
+    cb[i] = i == 2 ? 1 : 0
+  } else {
+    var h = (i - 2.5) / (MAXBALLS - 3)
+    cr[i] = hueR(h)
+    cg[i] = hueG(h)
+    cb[i] = hueB(h)
+  }
+}
 
 function scatter() {
   // stratified start: disk N somewhere in the Nth third, per axis, so the
@@ -33,13 +62,14 @@ function scatter() {
     // diagonal-biased velocities: moderate baseline plus symmetric jitter
     vx[i] = 5 + (random(2) - 1) * 3.3
     vy[i] = vx[i] + (random(2) - 1) * 3.3
-    chan[i] = lane
+    paint(i)
   }
 }
 
 scatter()
 
-// Whole balls, in balls. Colours cycle red/green/blue as the count grows.
+// Whole balls, in balls. The first three are red/green/blue; each further
+// ball gets its own distinct hue.
 //# min=1 max=12 step=1 default=3
 export function sliderBallCount(v) {
   numBalls = clamp(floor(v), 1, MAXBALLS)
@@ -84,10 +114,9 @@ export function render2D(index, x, y) {
     if (d < radius) {
       var s = 1 - d / radius   // quadratic falloff: glowing spot, not a disc
       s = s * s
-      var c = chan[i]
-      if (c == 0) r += s
-      else if (c == 1) g += s
-      else b += s
+      r += s * cr[i]
+      g += s * cg[i]
+      b += s * cb[i]
     }
   }
   rgb(r, g, b)   // overlaps sum; the engine clamps anything over full
