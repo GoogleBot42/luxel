@@ -1140,6 +1140,50 @@ fn pin_injection_and_pin_mode_compose() {
     assert_eq!(e.var("out"), Some(Value::Num(Fx::ONE)));
 }
 
+/// Gitea #205: the engine reports which pins the PATTERN touched, so a host
+/// can offer a control for exactly those (pin numbers are runtime values —
+/// there is nothing static to read) and show nothing for a pattern with no
+/// GPIO at all.
+#[test]
+fn pins_used_reports_what_the_pattern_touched() {
+    // no GPIO anywhere → an empty mask, which is what hides the pin panel
+    let e = engine("export var out = 1");
+    assert_eq!(e.pins_used(), 0);
+    assert_eq!(e.pins_idle_high(), 0);
+
+    // a top-level pinMode is visible before the first frame — the panel is up
+    // as soon as the pattern compiles
+    let mut e = engine("pinMode(26, INPUT_PULLUP)\nexport var out = 0");
+    assert_eq!(e.pins_used(), 1 << 26);
+    assert_eq!(e.pins_idle_high(), 1 << 26, "pull-up pins idle HIGH");
+
+    // a pin only ever named in digitalRead inside beforeRender shows up once
+    // the pattern has actually run — hence the host polls rather than asking once
+    let src = "export var out = 0\n\
+               export function beforeRender(delta) { out = digitalRead(4) }";
+    let mut e = Engine::new(src, 10, 1).expect("compile error");
+    assert_eq!(e.pins_used(), 0);
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.pins_used(), 1 << 4);
+    assert_eq!(e.pins_idle_high(), 0, "no pinMode → idles LOW");
+
+    // sticky: a pin read inside a branch that stops being taken stays listed,
+    // so its control doesn't flicker in and out
+    let src = "export var arm = 1\n\
+               export function beforeRender(delta) { if (arm) { pinMode(7, INPUT) } arm = 0 }";
+    let mut e = Engine::new(src, 10, 1).expect("compile error");
+    e.frame(Fx::from_int(16));
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.pins_used(), 1 << 7);
+
+    // out-of-window pins are not tracked (nowhere to store them), and host
+    // injection alone never invents a pin the pattern never mentioned
+    let mut e = engine("pinMode(64, INPUT_PULLUP)\ndigitalRead(-1)\nexport var out = 0");
+    assert_eq!(e.pins_used(), 0);
+    assert!(e.set_pin(9, Some(false)));
+    assert_eq!(e.pins_used(), 0, "driving a pin is not the pattern using it");
+}
+
 #[test]
 fn sensor_vars_are_stubbed() {
     let e = engine(

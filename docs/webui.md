@@ -247,6 +247,17 @@ existing grayed-out "dead" treatment instead. Device-pattern thumbnails
 source fetch as well. e2e covers spinner-appears / spinner-clears via CPU
 throttling + scrolling fresh tiles into view.
 
+### Pin panel [S] ✅ (2026-08-31, Gitea #205)
+A **Pins** section under Controls, shown only for patterns that actually
+name a digital pin. Pin numbers are runtime values, so the engine reports
+which pins the pattern touched (`lx_pins_used`, set on every `pinMode`/
+`digitalRead`) instead of the UI guessing from source. Each pin gets a
+momentary `press` (pointer down = driven, up = released) plus a `hold`
+latch, a live HIGH/LOW readout, and its idle level. Pressing drives the
+pin to the OPPOSITE of idle, so a pulled-up pin goes LOW — button to
+ground. Preview-only: the firmware has no GPIO injection endpoint yet
+(#177 item 4), and device mode says so rather than pretending to forward.
+
 ---
 
 ## Asset-load tolerance for 2-socket devices [M] ✅ (2026-08-15)

@@ -700,6 +700,22 @@ impl Engine {
         self.vm.pin_read(pin)
     }
 
+    /// Bit per pin (0..63): pins the pattern has actually named in a
+    /// `pinMode`/`digitalRead` so far (Gitea #205). Pin numbers are runtime
+    /// values, not statics, so this is the only way a host can tell which
+    /// pins are worth offering a control for — the playground shows its pin
+    /// panel only for these, and hides it entirely when the mask is empty.
+    pub fn pins_used(&self) -> u64 {
+        self.vm.pins_used()
+    }
+
+    /// Bit per pin (0..63): pins that idle HIGH (a `pinMode` pull-up), i.e.
+    /// what `digitalRead` reports while nothing drives them. A host uses it
+    /// to work out which direction "pressing" the pin means.
+    pub fn pins_idle_high(&self) -> u64 {
+        self.vm.pins_idle_high()
+    }
+
     /// Read an exported variable.
     pub fn var(&self, name: &str) -> Option<Value> {
         let i = self.prog.global_index(name)?;

@@ -204,9 +204,42 @@ try {
   const litAfter = await stripPx();
   check("preview click injects a readEvent event", darkBefore && litAfter, `dark=${darkBefore} lit=${litAfter}`);
   await page.screenshot({ path: `${shotDir}/e2e-2b-events.png` });
+
+  // ── 3c. pin panel: shown only for patterns that name a pin, and a press
+  // drives digitalRead (Gitea #205) ──
+  check("no pin panel for a pattern with no GPIO", (await page.$('[data-role="pin-row"]')) === null);
+  await setEditor(
+    page,
+    "pinMode(26, INPUT_PULLUP)\n" +
+      "export function render(index) { rgb(digitalRead(26) == LOW, 0, 0) }",
+  );
+  await page.waitForSelector('[data-role="pin-row"][data-pin="26"]', { timeout: 5000 });
+  const pinLevel = () =>
+    page.$eval('[data-role="pin-level"][data-pin="26"]', (e) => e.textContent.trim());
+  check("pull-up pin idles HIGH", (await pinLevel()) === "HIGH");
+  check("undriven pull-up pattern renders dark", !(await stripPx()));
+  const pressBtn = await page.$('[data-role="pin-press"][data-pin="26"]');
+  const pressBox = await pressBtn.boundingBox();
+  await page.mouse.move(pressBox.x + pressBox.width / 2, pressBox.y + pressBox.height / 2);
+  await page.mouse.down();
+  await sleep(300);
+  check("press pulls the pin LOW and lights the strip", (await pinLevel()) === "LOW" && (await stripPx()));
+  await page.screenshot({ path: `${shotDir}/e2e-2c-pins.png` });
+  await page.mouse.up();
+  await sleep(300);
+  check("releasing the press returns the pin to idle", (await pinLevel()) === "HIGH");
+  // the latch holds the same state with no pointer down
+  await page.click('[data-role="pin-latch"][data-pin="26"]');
+  await sleep(300);
+  check("latch holds the pin driven", (await pinLevel()) === "LOW" && (await stripPx()));
+  await page.click('[data-role="pin-latch"][data-pin="26"]');
+  await sleep(300);
+  check("un-latching releases the pin", (await pinLevel()) === "HIGH");
+
   // restore the rainbow the debugger section expects (render on line 1)
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
   await sleep(300);
+  check("pin panel disappears with the pin", (await page.$('[data-role="pin-row"]')) === null);
 
   // ── 4. debugger: gutter breakpoint on the render line (line 1) pauses ──
   const lineRect = await page.$$eval(".cm-line", (els) => {

@@ -6,15 +6,16 @@
 // button. Each accepted press advances a mode counter; the whole strip shows
 // one solid hue per mode.
 //
-// The button is a UI control, not a pin: Luxel's `digitalRead()` reports the
-// pin's idle level (HIGH here, since `pinMode` asked for a pull-up) and there
-// is no way to drive it from outside the pattern, so a pin read would sit at
-// "never pressed" and would let nobody without a soldered-on switch try the
-// pattern. Hold "Button" to press, and "Tap" fires
-// a press deliberately SHORTER than the debounce window so you can watch the
-// debouncer reject it — lower "DebounceMs" and the same tap gets through.
-// When Luxel grows real GPIO, the one marked line in beforeRender() becomes
-// `digitalRead(buttonPin)` again and nothing else changes.
+// The button is a UI control, not a pin: `digitalRead()` reports the pin's
+// idle level (HIGH here, since `pinMode` asked for a pull-up), and the
+// controls carry the tutorial — "Tap" fires a press deliberately SHORTER
+// than the debounce window so you can watch the debouncer reject it (lower
+// "DebounceMs" and the same tap gets through), which no real button could
+// do on cue. Hold "Button" to press.
+// The playground's Pins panel can drive GPIO 26 for real if you'd rather
+// press the wire: swap the marked line in beforeRender() for
+// `digitalRead(buttonPin)` and nothing else changes. On hardware that line
+// is what ships — real GPIO is still ahead of the firmware (Gitea #177).
 
 var buttonPin = 26      // digital input pin the button would use (to ground)
 var numModes = 3        // hues spaced evenly around the wheel
