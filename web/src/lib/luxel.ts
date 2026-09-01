@@ -111,6 +111,8 @@ interface Exports {
   lx_push_event(h: number, t: number, x: number, y: number, v: number): void;
   lx_set_pin(h: number, pin: number, level: number): number;
   lx_pin_read(h: number, pin: number): number;
+  lx_pins_used(h: number, half: number): number;
+  lx_pins_idle_high(h: number, half: number): number;
   lx_pixels(h: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
@@ -348,6 +350,30 @@ export class Engine {
    *  otherwise the pin's `pinMode` idle level. */
   pinRead(pin: number): boolean {
     return this.e.lx_pin_read(this.h, pin | 0) === 1;
+  }
+
+  /** Pins the running pattern has actually named in a `pinMode`/`digitalRead`,
+   *  ascending (Gitea #205). Pin numbers are runtime values, so this is the
+   *  only honest way to know which pins deserve a control — an empty array
+   *  means the pattern doesn't touch GPIO at all. Sticky for the life of the
+   *  engine, so a pin read inside a rare branch stays listed once seen. */
+  pinsUsed(): number[] {
+    const pins: number[] = [];
+    for (let half = 0; half < 2; half++) {
+      const bits = this.e.lx_pins_used(this.h, half) >>> 0;
+      for (let b = 0; b < 32; b++) if (bits & (1 << b)) pins.push(half * 32 + b);
+    }
+    return pins;
+  }
+
+  /** True when `pin` idles HIGH — `pinMode` asked for a pull-up, so
+   *  `digitalRead` reads HIGH until something drives it (and "pressing" the
+   *  pin means pulling it LOW, the button-to-ground wiring). */
+  pinIdleHigh(pin: number): boolean {
+    const p = pin | 0;
+    if (p < 0 || p > 63) return false;
+    const bits = this.e.lx_pins_idle_high(this.h, p >= 32 ? 1 : 0) >>> 0;
+    return (bits & (1 << p % 32)) !== 0;
   }
 
   // ---- map mode (this engine emits coordinates, not colors) ----

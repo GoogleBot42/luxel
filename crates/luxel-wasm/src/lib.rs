@@ -597,6 +597,36 @@ pub extern "C" fn lx_pin_read(h: i32, pin: i32) -> i32 {
     with_engine(h, |s| s.engine.pin_read(pin) as i32).unwrap_or(0)
 }
 
+/// Half of the 64-bit "pins this pattern touched" mask — bit `p` set means
+/// the pattern named pin `p + 32 * half` in a `pinMode` or `digitalRead`
+/// (Gitea #205). `half`: 0 = pins 0..31, 1 = pins 32..63; anything else is 0.
+/// Two i32 halves because the wasm C ABI has no u64 return.
+///
+/// Pin numbers are runtime values, so a host cannot learn this by reading the
+/// bytecode: the playground polls this to decide whether to show a pin panel
+/// at all, and which pins go in it.
+#[no_mangle]
+pub extern "C" fn lx_pins_used(h: i32, half: i32) -> i32 {
+    mask_half(with_engine(h, |s| s.engine.pins_used()).unwrap_or(0), half)
+}
+
+/// Same packing as [`lx_pins_used`], for the pins that idle HIGH (a `pinMode`
+/// pull-up) — what `digitalRead` reports while nothing drives the pin. A host
+/// needs it to know which way "press" should move a pin.
+#[no_mangle]
+pub extern "C" fn lx_pins_idle_high(h: i32, half: i32) -> i32 {
+    mask_half(with_engine(h, |s| s.engine.pins_idle_high()).unwrap_or(0), half)
+}
+
+/// Slice a 64-bit pin mask into the 32-bit half the caller asked for.
+fn mask_half(mask: u64, half: i32) -> i32 {
+    match half {
+        0 => mask as u32 as i32,
+        1 => (mask >> 32) as u32 as i32,
+        _ => 0,
+    }
+}
+
 // ---- map programs (this engine emits coordinates, not colors) ----
 
 /// Turn this engine into a map-program runner (per-pixel `plot(x, y[, z])`).

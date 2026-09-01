@@ -554,8 +554,12 @@ forever". A host can also DRIVE a digital input from outside the pattern
 (`lx_set_pin` in the wasm ABI, `Engine::set_pin` natively, `POST
 /api/pins` on the CLI mirror, `pins` in `tools/verify/fixups.json`):
 levels are held until released, so a button pattern can be pressed
-deterministically without hardware. `analogRead`/`touchRead` still read
-0 unconditionally, and nothing drives a real pad yet.
+deterministically without hardware. In the playground that surface is
+the **Pins** panel, which appears only for patterns that actually name a
+pin (`lx_pins_used` reports the mask, since pin numbers are runtime
+values) and offers a momentary press plus a latch per pin.
+`analogRead`/`touchRead` still read 0 unconditionally, and nothing
+drives a real pad yet.
 Clock (`clockYear` …
 `clockWeekday`) — needs wall time from the host; every host supplies it
 at engine construction too, so top-level reads see real time-of-day

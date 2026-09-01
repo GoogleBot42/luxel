@@ -730,6 +730,13 @@ pub struct Vm {
     /// Bit per pin (0..63): the injected level, meaningful only where
     /// `pin_driven` is set.
     pin_level: u64,
+    /// Bit per pin (0..63): the PATTERN has touched this pin — named it in a
+    /// `pinMode` or `digitalRead`. Pin numbers are runtime values, so this is
+    /// the only way a host can know which pins are worth offering a control
+    /// for; the playground gates its pin panel on it (Gitea #205). Sticky for
+    /// the life of the VM, so a pin read inside a rare branch does not make
+    /// the control flicker in and out.
+    pin_used: u64,
 }
 
 /// Highest pin number `pin_pullup` can track. Above it `pinMode` is still a
@@ -845,6 +852,7 @@ impl Vm {
             pin_pullup: 0,
             pin_driven: 0,
             pin_level: 0,
+            pin_used: 0,
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             random_seed: Fx::ZERO,
@@ -927,6 +935,20 @@ impl Vm {
         let bit = 1u64 << pin;
         let src = if self.pin_driven & bit != 0 { self.pin_level } else { self.pin_pullup };
         src & bit != 0
+    }
+
+    /// Bit per pin (0..63): the pattern has named this pin in a `pinMode` or
+    /// `digitalRead`, so a host has something real to offer a control for
+    /// (Gitea #205). Empty for a pattern that never touches GPIO.
+    pub fn pins_used(&self) -> u64 {
+        self.pin_used
+    }
+
+    /// Bit per pin (0..63): the level `digitalRead` reports for an UNDRIVEN
+    /// pin — set means the pin idles HIGH (a `pinMode` pull-up). A host uses
+    /// it to decide which way "pressing" the pin should move it.
+    pub fn pins_idle_high(&self) -> u64 {
+        self.pin_pullup
     }
 
     /// Read view by id — arena ids come from the VM itself, so `id` is
@@ -2516,6 +2538,7 @@ impl Vm {
                 let pin = n(0).to_int_trunc();
                 if (0..=MAX_TRACKED_PIN).contains(&pin) {
                     let bit = 1u64 << pin;
+                    self.pin_used |= bit;
                     if n(1).to_int_trunc() & PIN_MODE_PULLUP != 0 {
                         self.pin_pullup |= bit;
                     } else {
@@ -2529,7 +2552,11 @@ impl Vm {
             // whatever its configured bias holds it at: HIGH under a pull-up,
             // LOW otherwise (INPUT, INPUT_PULLDOWN, outputs, unconfigured).
             DigitalRead => {
-                let high = self.pin_read(n(0).to_int_trunc());
+                let pin = n(0).to_int_trunc();
+                if (0..=MAX_TRACKED_PIN).contains(&pin) {
+                    self.pin_used |= 1u64 << pin;
+                }
+                let high = self.pin_read(pin);
                 num(if high { Fx::ONE } else { Fx::ZERO })
             }
             DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),

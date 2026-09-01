@@ -1,5 +1,58 @@
 # Update log
 
+## 2026-08-31 — the playground can press a button now (pin panel)
+
+Gitea #205. Pin injection shipped on 2026-08-30 (`Vm::set_pin`, `lx_set_pin`,
+`setPin` in `web/src/lib/luxel.ts`), and every consumer of it was a script:
+the port-review harness, `snap.mjs`, `POST /api/pins` on the CLI mirror. A
+person sitting in front of the playground with a pattern that reads
+`digitalRead(4)` still had no way to change what it read. The ABI was
+reachable; the surface was not.
+
+The blocker was knowing *which* pins to offer. Pin numbers are ordinary
+runtime values — `digitalRead(buttonPin)` where `buttonPin` is a variable —
+so nothing static in the bytecode says "this pattern uses GPIO 26". The
+engine now just records it: a `pin_used` bitmask on the VM, set on every
+`pinMode` and `digitalRead` of an in-window pin, read back through a new
+`lx_pins_used(h, half)` wasm export (two i32 halves; the C ABI has no u64
+return) plus `lx_pins_idle_high` for the pull-up mask. No new builtin —
+`BUILTINS` is append-only and this is host-side introspection, not language.
+The mask is **sticky** for the life of the VM on purpose: a pin read inside a
+branch that stops being taken keeps its control instead of flickering away.
+It is also polled, not computed once, because a top-level `pinMode` is
+visible at compile time but a pin only ever named inside `beforeRender`
+isn't known until the pattern has run a frame.
+
+The panel (`web/src/components/PinPanel.svelte`) appears under Controls only
+when that mask is non-empty, so the great majority of patterns never see it.
+Per pin: a momentary `press` (pointer down drives, pointer up releases — plus
+Space/Enter, since a `<button>` would otherwise be keyboard-dead for a
+press-and-hold), a `hold` latch that keeps the pin driven with nothing held
+down, a live HIGH/LOW readout, and the idle level spelled out. Press and
+latch are independent holds on the same pin: either one drives it, neither
+releases it. Pressing drives the pin to the **opposite of its idle level**,
+which is the whole point of the driven-vs-idle model the ABI already had — a
+pulled-up pin goes LOW (button to ground), an `INPUT`/`INPUT_PULLDOWN` pin
+goes HIGH. A recompile builds a fresh VM that drives nothing, so the latch
+state is owned by `App.svelte` and cleared with it.
+
+Deliberately **not** forwarded to a device: `firmware/src/server.rs` has no
+`/api/pins` — that endpoint exists only on the CLI mirror, and real firmware
+GPIO is #177 item 4, still open. Rather than send presses into a void, device
+mode says in the panel hint that this is preview-only.
+
+Verified in real chromium against the library: `Lightbulb - Crank Hue to
+Complete` (GPIO 25, `INPUT_PULLDOWN`) shows one pin, idles LOW, and a press
+turns the strip red as the crank sensor registers a turn; `Example - Button
+w/ debounce` (GPIO 26, `INPUT_PULLUP`) idles HIGH and presses LOW. A pattern
+with no GPIO shows no panel at all. Ten checks in `web/tools/e2e.mjs` now
+cover press/latch/release and panel appear/disappear, plus a `pins_used`
+semantics test in `crates/luxel-core/tests/semantics.rs`.
+
+That button-debounce pattern's header comment claimed there was "no way to
+drive it from outside the pattern" — true when it was written, false as of
+this change; rewritten.
+
 ## 2026-08-31 — snap.mjs `--vars-sweep`: reading a dial's map through the vars API
 
 Gitea #207. Fidelity work keeps asking one question the pixels answer only
@@ -89,6 +142,7 @@ pattern source to `/api/code`, so every upload is rejected by the envelope
 decoder and the "soak" measures nothing. Filed as #218 (with two smaller
 finds: `event-soak.mjs` pinned to firmware v0.1.39, and `POST /api/var` +
 `GET /api/readouts` having no consumer in the repo at all).
+
 
 ## 2026-08-31 — hosted-ui on metal: the stale bundle stayed invisible
 

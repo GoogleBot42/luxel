@@ -5,6 +5,7 @@
   import Editor from "./components/Editor.svelte";
   import Gallery from "./components/Gallery.svelte";
   import PatternThumb from "./components/PatternThumb.svelte";
+  import PinPanel from "./components/PinPanel.svelte";
   import PlaylistRow from "./components/PlaylistRow.svelte";
   import Preview from "./components/Preview.svelte";
   import VarWatcher from "./components/VarWatcher.svelte";
@@ -49,6 +50,15 @@
   let controlValues: Record<string, number[]> = {};
   let readouts = new Map<string, number>();
   let vars: Record<string, number | number[]> = {};
+  /** Digital pins the running pattern touches — the engine can't be asked
+   *  statically (pin numbers are runtime values), so this is polled off
+   *  `lx_pins_used` and the pin panel is shown only when it's non-empty
+   *  (Gitea #205). `pinLatched` is owned here, not by the panel, because a
+   *  recompile builds a fresh VM with nothing driven. */
+  let pins: number[] = [];
+  let pinLevels: Record<number, boolean> = {};
+  let pinIdleHigh: Record<number, boolean> = {};
+  let pinLatched: Record<number, boolean> = {};
   let fps = 0;
   let targetFps = 60;
   let running = true;
@@ -1022,6 +1032,9 @@
         const saved = controlValues[c.name];
         if (saved) engine.setControl(c.name, saved);
       }
+      // a fresh VM drives nothing, so drop any latched pins with it
+      pinLatched = {};
+      refreshPins();
       preview?.clear(); // fresh program → fresh history
       // Re-model against the device on every successful compile, not just on
       // push: the warning is then already up while the 500 ms push debounce is
@@ -1671,6 +1684,40 @@ export function render(index) {
     if (device && batch.length) void device.sendEvents(batch).catch(() => {});
   }
 
+  // ---- digital pin injection (pin panel → digitalRead) ----
+
+  /** Re-read which pins the pattern touches and what they currently read.
+   *  Polled rather than computed once: a `pinMode` at top level shows up at
+   *  compile time, but a pin only ever named in `digitalRead` inside
+   *  `beforeRender` isn't known until the pattern has run a frame. */
+  function refreshPins(): void {
+    if (!engine) {
+      pins = [];
+      return;
+    }
+    const next = engine.pinsUsed();
+    // reassign only on a real change — `pins` keys an `{#each}`
+    if (next.length !== pins.length || next.some((p, i) => p !== pins[i])) pins = next;
+    const levels: Record<number, boolean> = {};
+    const idle: Record<number, boolean> = {};
+    for (const p of pins) {
+      levels[p] = engine.pinRead(p);
+      idle[p] = engine.pinIdleHigh(p);
+    }
+    pinLevels = levels;
+    pinIdleHigh = idle;
+  }
+
+  /** A press/latch from the pin panel. `level: null` releases the pin back to
+   *  its idle level (HIGH under a pull-up) — the injection ABI's driven-vs-idle
+   *  model, not a plain HIGH/LOW toggle. Preview-only: the firmware has no GPIO
+   *  injection endpoint yet (Gitea #177 item 4), so nothing is forwarded to a
+   *  bound device. */
+  function onPinDrive(e: CustomEvent<{ pin: number; level: boolean | null }>): void {
+    engine?.setPin(e.detail.pin, e.detail.level);
+    refreshPins();
+  }
+
   function toggleDebug(): void {
     debugMode = !debugMode;
     if (!engine) return;
@@ -1801,6 +1848,7 @@ export function render(index) {
         }
       }
       readouts = r;
+      refreshPins();
     }
   }
 
@@ -2336,6 +2384,22 @@ export function render(index) {
         <p class="dim hint">
           export <code>function sliderName(v)</code> to add controls — bound them with
           <code>//# min=0 max=5 step=0.5 default=2</code>
+        </p>
+      {/if}
+
+      {#if pins.length > 0}
+        <h2>Pins</h2>
+        <PinPanel
+          {pins}
+          levels={pinLevels}
+          idleHigh={pinIdleHigh}
+          bind:latched={pinLatched}
+          on:drive={onPinDrive}
+        />
+        <p class="dim hint">
+          <code>press</code> drives the pin while held; <code>hold</code> keeps it driven after you
+          let go. Releasing both returns the pin to its <code>pinMode</code> idle level.{#if device}{" "}
+            Preview only — the firmware has no GPIO injection yet, so nothing is sent to the device.{/if}
         </p>
       {/if}
 
