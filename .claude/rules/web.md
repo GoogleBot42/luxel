@@ -22,6 +22,12 @@ paths:
   `web/tools/coldload.mjs` against a real device before merging — the
   installer page's second rollup entry silently grew the burst to 4 and
   every device cold load ate a TCP RST for two weeks (Gitea #92).
+  Sharing a NEW module between the two entries does not trigger this on its
+  own: `index.js` already statically imports a shared `app` chunk, and a
+  module both entries import lands inside it, adding no tag. Confirm by
+  reading `dist/index.html` after the build (one `<script>`, one
+  `<link rel=stylesheet>`, no `modulepreload`) rather than assuming either
+  way — that check is free; a device coldload run is not.
 - Set `E2E_PORT` when running e2e concurrently with another session — a
   concurrent `vite preview` can hold the default port and puppeteer will
   silently test the wrong app. Current defaults: `web/tools/e2e.mjs` uses

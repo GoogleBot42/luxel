@@ -108,6 +108,22 @@ gate: serve the same built app from a plain-**http** origin (`vite preview` on
 localhost) and point it at `?device=http://<lan-ip>`. Cross-origin http→http
 has neither gate, and it drives a real device fully.
 
+You can also drive the app from a REAL https origin locally — `vite preview`
+only speaks http, and `location.protocol` is `[Unforgeable]`, so anything
+keyed on "am I https?" needs an actual TLS server. `web/tools/lna-e2e.mjs`
+(added with #162) is the worked example: throwaway self-signed cert from
+`openssl` (dev shell), a node https server over `web/dist`, chromium launched
+with `--ignore-certificate-errors`. That covers the browser-blocked *UI*
+state — but do not mistake it for the Pages case. **An https origin on
+loopback is a different address space from a public one**: from
+`https://localhost` Chromium 150 let requests to a LAN address straight
+through to the socket (`net::ERR_CONNECTION_REFUSED`, no LNA denial, no
+mixed-content block) with `targetAddressSpace` none/local/public alike, and
+`--enable-features=LocalNetworkAccessChecks` plus
+`--ip-address-space-overrides=127.0.0.1:<port>=public` did not make the
+policy engage (measured 2026-08-31). The policy governs public→local, and
+nothing in this container is public.
+
 ## Failure modes
 
 - Reporting success off `npm run build` alone — it doesn't execute the app; a

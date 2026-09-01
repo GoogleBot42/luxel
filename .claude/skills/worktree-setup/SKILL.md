@@ -81,6 +81,15 @@ these before trusting any build/test failure as a real regression.
 
 ## Failure modes
 
+- **Editing the MAIN checkout by accident after reading prior art from it.**
+  The classic sequence: you Read `/home/googlebot/workspace/pixler/web/src/...`
+  to study existing code *before* the worktree exists, then later Edit "that
+  file" — and the edit lands in another session's tree, silently. Nothing warns
+  you; `git status` in your worktree stays clean while the main checkout grows a
+  modification you don't own (hit 2026-08-31). Two habits: re-Read the file at
+  your worktree path before the first edit to it, and if it does happen,
+  `git -C /home/googlebot/workspace/pixler checkout -- <path>` immediately —
+  after checking `git status` there so you don't revert someone's real WIP.
 - `npm run wasm` failing with an ENOENT on the `cp` into `web/public/` — you skipped step 2.
 - e2e gallery/tile-count assertions failing — almost always a stale `web/dist` (rerun
   `npm run build` after any `library/`, `corpus/`, or `gen-gallery.mjs` change), not a
