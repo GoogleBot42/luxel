@@ -50,10 +50,9 @@ sound-reactive patterns from your microphone — locally and on the device.
 - **Luxel-to-Luxel sync**: leader broadcasts its timebase, sensor data,
   and running pattern; followers phase-lock and adopt it.
 - **Sensors**: the (open) PB sensor-board serial protocol, network
-  injection (`POST /api/sensors`), and a ready fixed-point FFT for the
-  onboard-mic bring-up.
-- **External events**: `readEvent`/`eventCount` builtins + `POST
-  /api/events` + the `luxel/<id>/event` MQTT topic — keyboards, HA
+  injection, and a ready fixed-point FFT for the onboard-mic bring-up.
+- **External events**: `readEvent`/`eventCount` builtins + an injection
+  endpoint + the `luxel/<id>/event` MQTT topic — keyboards, HA
   automations, and preview clicks drive keypress-reactive patterns.
 - NTP wall clock (+ timezone) so `clockHour()` patterns work unplugged
   from a browser.
@@ -63,7 +62,9 @@ sound-reactive patterns from your microphone — locally and on the device.
   a pattern library + maps in flash.
 
 **The mirror** (`luxel serve`) — a native replica of the device HTTP API
-so the whole UI is developed and e2e-tested without hardware.
+so the whole UI is developed and e2e-tested without hardware. Every route
+both of them serve — request/response shapes, which side serves what — is
+in [docs/api.md](docs/api.md).
 
 ## Quickstart
 
@@ -101,6 +102,7 @@ CLI extras: `luxel run pattern.js` (PPM frame strip), `bench`, `parse`,
 | `docs/` | plan, language reference, firmware notes, research, update log |
 
 Good starting docs: [docs/lang.md](docs/lang.md) (the pattern language),
+[docs/api.md](docs/api.md) (every device/mirror HTTP route),
 [UPDATES.md](UPDATES.md) (what shipped, newest first),
 [docs/PLAN.md](docs/PLAN.md) (architecture),
 [docs/tools.md](docs/tools.md) (every script/harness: soak, oracle,

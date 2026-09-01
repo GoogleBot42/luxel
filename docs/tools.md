@@ -4,6 +4,9 @@ One-page index of every script and harness in the repo. Each file carries
 its full usage in a header comment — this page exists so you know what to
 open. Everything runs inside `nix develop` from the repo root unless noted.
 
+Most of these drive a device or the mirror over HTTP; the routes they call
+are documented once in [docs/api.md](api.md), not here.
+
 ## Device operations
 
 | tool | what it does |
@@ -73,7 +76,8 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 `run` (PPM frame strip) · `bench` (VM throughput) · `parse` (AST dump) ·
 `check` (compile + bytecode round-trip + smoke, JSON line — the corpus
 report's engine) · `compile` (source → `.lxbc`) · `pixels`/`vars` (oracle
-halves) · `serve` (the native device-API mirror the web e2e runs against).
+halves) · `serve` (the native device-API mirror the web e2e runs against —
+route reference in [docs/api.md](api.md)).
 
 `serve --heap-free BYTES` makes the mirror report that much free heap from
 `/api/status` instead of the default 0 ("this host has no meaningful number")
