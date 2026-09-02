@@ -95,6 +95,8 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "dot3", sig: "dot3(x1,y1,z1, x2,y2,z2)", doc: "3D dot product. (Luxel)" },
   { name: "angleBetween", sig: "angleBetween(x1, y1, x2, y2)", doc: "Signed angle from vector 1 to vector 2, radians (CCW positive). (Luxel)" },
   { name: "simplex2", sig: "simplex2(x, y, seed = 0)", doc: "2D simplex noise ~[-1,1] — smoother than perlin, no axis artifacts. (Luxel)" },
+  { name: "curl2", sig: "curl2(x, y, out, seed = 0)", doc: "Curl of a 2D simplex potential (∂n/∂y, −∂n/∂x) into out[0..2]; returns out. Divergence-free, so advected particles swirl instead of piling up. Analytic derivatives — components run to ~±6, not ±1. (Luxel)" },
+  { name: "curl3", sig: "curl3(x, y, z, out, seed = 0)", doc: "Curl of three 3D simplex potentials (seeds seed, seed+1, seed+2) into out[0..3]; returns out. Divergence-free 3D flow; components run to ~±8. (Luxel)" },
   { name: "simplex3", sig: "simplex3(x, y, z, seed = 0)", doc: "3D simplex noise ~[-1,1]. (Luxel)" },
   // randomness
   { name: "random", sig: "random(max)", doc: "True random in [0, max)." },

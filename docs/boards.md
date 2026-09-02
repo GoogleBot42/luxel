@@ -154,6 +154,23 @@ after the #168 fmt diet, still above the 3 % CI floor but inside the 6 %
 warn band; the next feature that grows the VM should re-measure the C6
 first.
 
+2026-09-01, curl noise (`curl2`/`curl3` + analytic simplex derivatives):
+**+8,512 B** on `board-c6-devkit` (983,472 → **991,984 B**, margin
+**56,592 B / 5.40 %**) and **+8,272 B** on `board-pixelblaze-v3`
+(937,200 → 945,472 B). Devshell builds with creds, A/B against this
+branch's own merge base in the same worktree (`git checkout HEAD~1`),
+which is the only way to get a comparable baseline — master had already
+moved ~13 KB below the batch-7 numbers above. The cost is two extra
+monomorphizations of the simplex kernels: `simplex2`/`simplex3` and their
+`_grad` twins share one function parameterized by `const GRAD: bool`, so
+the value path stays bit-identical but the image carries both copies, plus
+the derivative arithmetic, the two gradient-component tables and the two
+builtin arms. `#[inline(never)]` on the `_grad` entry points was measured
+and changes the image by **0 bytes** (LLVM already declines to inline them
+into `curl2`/`curl3`), so it is not in the tree. No statics or buffers:
+`.stack` on pixelblaze-v3 is 27,484 B with no new frame in the top
+fifteen and nothing over the 12 KB budget.
+
 2026-08-30, picoserve response collapse (Gitea #167): **−23.0 to −24.4 KB
 on every board** — the largest single reduction since the opt-level switch,
 and the one that takes the C6 back out of CI's warn band. `server.rs`'s
