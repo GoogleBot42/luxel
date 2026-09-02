@@ -90,6 +90,8 @@ Docs: docs/lang.md "Device & environment", docs/api.md (`/api/datapin`,
 allow tables), docs/webui.md (pin panel note, data-pin picker),
 builtins.ts autocomplete text, docs/UNTESTED.md (#238's two legs).
 Tickets: #237 (touchRead driver), #238 (Jeremy's bench legs).
+
+Soak after the merge, on the deployed v0.1.40 (`tools/hw-bench.mjs`, 2 h, 60 px ws2812): **299/299 clean, 0 errors**, median 118 fps at 60 px, lowest heap 83,448 B, curve 122/99/52/27/16/8 fps at 60→2048 px (the committed report was an SK9822 run at 8 MHz SPI, so its curve is not comparable; ws2812 runs sit where they did). The seven patterns the previous report listed under 30 fps are at the same fps to within 1; the five new entries (fractal flower, both spiders, Butterfly 2D, Glittering Jewels) are the 2026-09-01 review-pass rewrites, not a regression — the per-frame pin sync is one mask test when no pattern names a pin. docs/bench-report.md regenerated.
 ## 2026-09-01 — curl noise: analytic simplex derivatives, `curl2`/`curl3`
 
 The half of docs/ideas.md's "Simplex noise + curl noise" that had been
