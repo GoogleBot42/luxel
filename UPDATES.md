@@ -1,5 +1,43 @@
 # Update log
 
+## 2026-09-01 — soak.mjs actually soaks again (LXP1 envelopes, device mode, loud failure); e2e mkdirs its shot dir
+
+`tools/soak.mjs` was POSTing raw pattern source to `/api/code`, which has taken
+an **LXP1 envelope** (source + LXBC bytecode) since devices stopped compiling.
+Every upload bounced with `bad envelope magic (expected LXP1 — old client?)`,
+landed in the "rejected" bucket, and the script still exited 0 — so the
+"host-side twin" of the hardware soak had been measuring the mirror's envelope
+validator, not the engine (Gitea #218, found in the #211 API audit; every other
+consumer had been moved to `lxpBody()` when the envelope landed).
+
+soak.mjs now compiles each pattern once up front via `web/tools/lxp.mjs` and
+uploads the envelope, distinguishing a *local* compile failure from a *device*
+rejection. It **exits 1** when under half the uploads are accepted, with the
+rejection reasons printed — an all-rejected run can no longer masquerade as a
+green soak. Two additions fell out of verifying it: `--device <ip|url>` runs the
+same churn against real hardware instead of spawning the mirror (with
+hw-bench's `connection: close` + retry manners), `--limit <n>` caps the pattern
+count for a short run, and the pattern source falls back to
+`web/public/gallery.json` when the gitignored `corpus/` is absent, so a fresh
+worktree can soak at all. `tools/event-soak.mjs`'s `st0.version !== "0.1.39"`
+hard-throw became a `>= 0.1.39` minimum check; it was unrunnable against any
+later build.
+
+Verified on the Athom rig (192.168.0.183, v0.1.39, 60 px ws2812, slot ota_0):
+24/24 uploads accepted over two rounds of 12 gallery patterns, `/api/pattern`
+confirming the last-pushed pattern ("2D Wandering Fireball") actually live,
+95–123 fps, `vmerr:null` throughout; 6/6 accepted again through the corpus
+loader path. Host mode against `luxel serve`: 25/25 accepted, RSS 5.5 → 6.1 MB.
+The failure path was exercised by deliberately posting non-envelope bodies —
+3/3 rejected, exit 1, which also reproduces the pre-fix #218 behaviour exactly.
+Rig left running rainbow at 123 fps, heap 104,944, `vmerr:null`.
+
+Separately, `web/tools/e2e.mjs` now `mkdirSync`s its screenshot directory
+(Gitea #224). Pointed at a non-existent dir it used to die mid-suite with a bare
+ENOENT on `e2e-1-library.png`, reading like a puppeteer fault; it cost a debug
+cycle during the #205 pin-panel work. Re-ran the full suite into a fresh nested
+path: all checks pass, nine screenshots written.
+
 ## 2026-09-01 — Review pass 2: 99 open decisions closed out; the arrayReplace fill myth falls
 
 Jeremy's second sitting with the review UI produced 166 new/updated

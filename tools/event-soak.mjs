@@ -20,6 +20,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const STEADY_MS = 12 * 60_000;
 const COOLDOWN_MS = 2 * 60_000;
+const MIN_VERSION = "0.1.39";
+
+/** Compare dotted numeric versions: <0, 0, >0. Unparseable → treated as 0. */
+function cmpVersion(a, b) {
+  const parse = (v) => String(v ?? "").split(".").map((n) => Number(n) || 0);
+  const pa = parse(a), pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+  }
+  return 0;
+}
 
 async function api(pathname, body, binary = false) {
   for (let attempt = 0; ; attempt++) {
@@ -103,7 +114,14 @@ async function sample(phase) {
 
 const st0 = await api("/api/status");
 console.log(`device ${IP}: v${st0.version} slot=${st0.slot} heap=${st0.heap_free} fps=${st0.fps}`);
-if (st0.version !== "0.1.39") throw new Error("expected v0.1.39 on the Athom");
+// Event injection (POST /api/events → readEvent) landed in v0.1.39; anything
+// newer is fine too. An exact-version pin made this script unrunnable against
+// every later build (#218).
+if (cmpVersion(st0.version, MIN_VERSION) < 0) {
+  throw new Error(
+    `event injection needs firmware >= v${MIN_VERSION}; device reports v${st0.version ?? "?"}`,
+  );
+}
 
 // push the counter pattern live (ad-hoc → never persisted, nothing on flash)
 const push = await api("/api/code", await lxpBody("", PATTERN));

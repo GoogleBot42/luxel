@@ -5,12 +5,16 @@
 // Usage (from web/): npm run build && node tools/e2e.mjs [screenshot-dir]
 
 import { execSync, spawn } from "node:child_process";
+import fs from "node:fs";
 import puppeteer from "puppeteer-core";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
 
 const shotDir = process.argv[2] ?? "/tmp";
+// A non-existent shot dir used to surface as a bare ENOENT on the first
+// screenshot write, mid-suite, looking like a puppeteer failure (#224).
+fs.mkdirSync(shotDir, { recursive: true });
 const PORT = Number(process.env.E2E_PORT ?? 4179);
 
 const server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
