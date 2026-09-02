@@ -1,5 +1,89 @@
 # Update log
 
+## 2026-09-01 — arrayReplace-as-fill: the last 15 sites fixed, and a lint so it can't come back
+
+Review pass 2 established that `arrayReplace(a, v1, v2, …)` **splats** its
+value list from index 0 — one value writes one slot — and fixed 13 ports
+that read it as a fill. Fifteen two-argument call sites across eight
+patterns were deliberately left behind because Jeremy had scored those
+patterns *good* and a blind rewrite risked changing an approved render
+(Gitea #225). This pass audits all fifteen individually, renders each
+pattern before and after, and adds the lint.
+
+All fifteen were misuses; none was a legitimate single-slot splat. The
+replacements are the pass-2 idiom, `feedback(a, 0)` to zero a buffer, plus
+`arrayMutate(a, (v) => 1)` where the intent was a fill with a non-zero
+constant.
+
+Before/after was rendered headlessly through the engine wasm at a pinned
+seed and delta (`tools/verify/snap.mjs` needs the corpus original for its
+side-by-side, so a scratch port-only harness over `tools/verify/enginehost.mjs`
+did the comparison — same engine, no corpus).
+
+**Genuinely degenerate, now animating**
+
+- `stargen-polar-2d` (mode 11) — `arrayReplace(energy, 0)` sat under the
+  comment "buffer cleared every frame" and cleared exactly one pixel. The
+  per-pixel accumulation buffer only ever grew, so `min(1, energy*6)`
+  pinned the whole strip to white within ~2 s and stayed there: avg
+  brightness 207/255 with 418 of 600 frames showing zero motion. Now 7.2
+  avg, zero frozen frames, and the drifting icy snow-sparkle the header
+  describes.
+- `cellular-automata-1d` — `reseed()` cleared `cur[0]` and `hueAge[0]`,
+  so the periodic reseed (default 20 s) did not reset anything; it dropped
+  one live cell into the running generation and the Sierpinski triangle
+  became a garbled superposition of two overlapping runs. Now each reseed
+  restarts cleanly from the centre cell.
+- `falling-sand-2d` — the post-fade clear left sub-visible dust in every
+  cell, which reads as sand: `grid[spout] != 0` and `grid[spout+gw] > 0`
+  both latch immediately, so the panel re-entered the fade at about a
+  third full, every ~8 s, forever. The pile now fills the panel over ~24 s
+  and fades as the header describes ("when the pile reaches the spout the
+  panel fades out and pours again").
+- `reaction-diffusion-2d` — `arrayReplace(A, 1)` left chemical A at zero
+  everywhere, so the seeded culture always starved, went black, and only
+  recovered via the 3-second reseed check. With A saturated the seeds bloom
+  directly. Both versions converge on the same worm attractor by ~8 s and
+  are visually indistinguishable from there on; the change is confined to
+  the startup transient, which no longer passes through a dead-black gap.
+  Per-frame motion over 30 s: 0.71 → 18.2, zero-motion frames 26 → 0.
+- `music-sequencer-for-v3-only` — `fpOff()`'s `arrayReplace(valA, 0)` meant
+  the "off" mini-pattern never turned the strip off; the previous look
+  stayed frozen on screen for the whole entry (nothing else decays `valA`
+  globally). `resetShared()` had the same problem three ways over, including
+  `arrayReplace(satA, 1)` which left the scratch desaturated instead of
+  saturated. Off entries are now actually dark.
+
+**Correct now, identical as rendered**
+
+- `lissajous-curve-tracer` — `clearTrail()` runs only from the A/B/delta
+  control handlers, so an undriven render is byte-identical before and
+  after (verified: same PNG md5 over 24 s). Driving `sliderA` mid-run
+  diverges at exactly that frame, which is the fix: changing the curve
+  shape now clears the persistence buffer instead of leaving the old figure
+  smeared under the new one.
+- `flash-posterize-music-sequencer-framework` and `music-sequencer-for-v2`
+  — the per-entry "fresh canvas" clears (and v2's one-shot keyboard clear).
+  60 s under the deterministic beat120 sensor synth is byte-identical
+  before and after, because these entries repaint every pixel each frame;
+  the fix is latent correctness for entries that do not.
+
+**Lint** — `tools/check-library.sh` now fails the sweep on any
+two-argument `arrayReplace(` in `library/*.js`, before any pattern is
+compiled, naming file:line and the three replacements (`feedback(a, 0)`,
+`arrayMutate(a, (v) => c)`, `arrayReplaceAt(a, i, v)`). It counts
+top-level commas inside the call, so three-argument splats,
+`arrayReplaceAt`, longer identifiers and mentions inside `//` comments are
+not flagged — the fixed sites all cite the old idiom in their comments. A
+deliberate single-slot splat opts out with a trailing
+`// arrayReplace-2arg-ok`; no site in `library/` needs one today.
+
+Verification: `tools/check-library.sh` 297/297 on all five rigs (both
+lints clean), `cargo test --workspace` green, `gen-gallery.mjs` 297
+patterns, `web/tools/lxp.mjs compile` on all eight touched patterns. The
+sweep's stale 323/323 baseline is corrected to 297/297 in the script header
+and docs/tools.md. Closes #225.
+
 ## 2026-09-01 — soak.mjs actually soaks again (LXP1 envelopes, device mode, loud failure); e2e mkdirs its shot dir
 
 `tools/soak.mjs` was POSTing raw pattern source to `/api/code`, which has taken

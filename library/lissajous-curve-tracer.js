@@ -41,7 +41,7 @@ function retimeHue(newInterval) {
 }
 
 function clearTrail() {
-  arrayReplace(bri, 0)
+  feedback(bri, 0)   // clear the trail (arrayReplace is a splat, not a fill)
 }
 
 // --- controls -------------------------------------------------------------

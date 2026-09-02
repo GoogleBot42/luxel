@@ -16,8 +16,8 @@ k = 0.06    // kill: f/k in the "mitosis" regime
 seedT = 0
 
 function seed() {
-  arrayReplace(A, 1)
-  arrayReplace(B, 0)
+  arrayMutate(A, (v) => 1)   // A saturated everywhere: arrayReplace(a, 1) is a
+  feedback(B, 0)             // splat at slot 0, not a fill; feedback(b, 0) zeroes
   for (var s = 0; s < 3; s++) {
     var cx = 3 + floor(random(gw - 6))
     var cy = 3 + floor(random(gw - 6))

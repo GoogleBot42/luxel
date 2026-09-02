@@ -42,7 +42,7 @@ export function beforeRender(delta) {
   if (fading) {
     feedback(grid, pow(0.85, delta * 0.06))
     if (arraySum(grid) < 0.5) {
-      arrayReplace(grid, 0)
+      feedback(grid, 0)   // clear the dust (arrayReplace is a splat, not a fill)
       fading = 0
     }
   } else {

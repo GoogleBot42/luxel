@@ -296,9 +296,9 @@ function startEntry(skipSec) {
   onKick = noop
   onClap = noop
   onHihat = noop
-  arrayReplace(hueA, 0)
-  arrayReplace(satA, 0)
-  arrayReplace(valA, 0)
+  feedback(hueA, 0)   // blank the scratch (arrayReplace is a splat, not a fill)
+  feedback(satA, 0)
+  feedback(valA, 0)
   renderer = rBlack
 }
 
@@ -465,7 +465,7 @@ function pPiano() {
   }
   if (!onceLatch) {
     onceLatch = 1
-    arrayReplace(keyVal, 0)
+    feedback(keyVal, 0)   // clear the keyboard (arrayReplace is a splat, not a fill)
     onClap = () => { naturalPulse = 1 }
     onHihat = () => { naturalPulse = 1 }
   }

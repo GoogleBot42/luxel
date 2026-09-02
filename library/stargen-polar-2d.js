@@ -294,7 +294,7 @@ while (_si < SPARKN) {
 function setup11() {
   var t = dt * 0.1                          // time step slowed 10x on purpose
   var friction = 600 / pixelCount           // friction ~ 1/pixelCount
-  arrayReplace(energy, 0)                   // buffer cleared every frame
+  feedback(energy, 0)                       // buffer cleared every frame
   for (var i = 0; i < SPARKN; i++) {
     spkVel[i] = spkVel[i] * (1 - friction * t)
     spkPos[i] = spkPos[i] + spkVel[i] * t
