@@ -122,9 +122,9 @@ export function sliderSectionLength(v) { lenScale = v / 100 }
 
 // ---------------------------------------------------------------- helpers
 function resetShared() {
-  arrayReplace(hueA, 0)
-  arrayReplace(satA, 1)
-  arrayReplace(valA, 0)
+  feedback(hueA, 0)            // blank the scratch: arrayReplace(a, v) splats at
+  arrayMutate(satA, (v) => 1)  // slot 0, it is not a fill
+  feedback(valA, 0)
   setupDone = 0
   edgeLatch = 0
   beatFired = 0
@@ -270,7 +270,7 @@ function nextEntry(skipSec) {
 // the exported renderers just read them (2D/3D forward to the same 1D look).
 
 function fpOff() {
-  arrayReplace(valA, 0)
+  feedback(valA, 0)   // strip dark (arrayReplace is a splat, not a fill)
 }
 
 function fpProgress(dt, perMeasure) {

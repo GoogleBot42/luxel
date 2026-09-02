@@ -27,8 +27,9 @@ var palWidth = 1          // fraction of the hue wheel spanned
 var palOffset = 0         // starting hue
 
 function reseed() {
-  arrayReplace(cur, 0)
-  arrayReplace(hueAge, 0)
+  // arrayReplace(a, 0) writes ONE value at slot 0 — it is not a fill.
+  feedback(cur, 0)      // blank the live generation
+  feedback(hueAge, 0)   // and its age/hue history
   maxAge = 1
   lifeAcc = 0
   if (seeds <= 1) {

@@ -252,9 +252,9 @@ function addWait(pred, maxBeats) {
 
 function enterEntry(preroll) {
   // fresh canvas & hooks for every entry
-  arrayReplace(shHue, 0)
-  arrayReplace(shSat, 0)
-  arrayReplace(shVal, 0)
+  feedback(shHue, 0)   // blank the canvas (arrayReplace is a splat, not a fill)
+  feedback(shSat, 0)
+  feedback(shVal, 0)
   setupDone = 0
   edgeArmed = 0
   onBeat = noop
