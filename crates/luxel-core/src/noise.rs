@@ -280,19 +280,118 @@ fn grad2(h: u32, fx: i64, fy: i64) -> i64 {
     }
 }
 
-/// One simplex corner's contribution: (t² · t²) · grad, t = cap − d².
+/// The same eight directions as component pairs. [`grad2`] only ever
+/// returns the dot product `g·d`; the analytic derivative also needs the
+/// components of `g` themselves.
 #[inline]
-fn corner(t: i64, g: i64) -> i64 {
-    if t <= 0 {
-        return 0;
+fn grad2_vec(h: u32) -> (i64, i64) {
+    match h & 7 {
+        0 => (ONE, ONE),
+        1 => (-ONE, ONE),
+        2 => (ONE, -ONE),
+        3 => (-ONE, -ONE),
+        4 => (ONE, 0),
+        5 => (-ONE, 0),
+        6 => (0, ONE),
+        _ => (0, -ONE),
     }
-    let t2 = fmul(t, t);
-    fmul(fmul(t2, t2), g)
 }
 
-/// 2D simplex noise, roughly in [-1, 1]. Deterministic (seed included in
-/// the corner hash, like perlin's).
-pub fn simplex2(x: Fx, y: Fx, seed: Fx) -> Fx {
+/// [`grad`]'s 12 directions as component triples — the `u`/`v` axis pick
+/// and the two sign bits, read out as a vector instead of a dot product.
+#[inline]
+fn grad3_vec(h: u32) -> (i64, i64, i64) {
+    let h = h & 15;
+    let su = if h & 1 == 0 { ONE } else { -ONE };
+    let sv = if h & 2 == 0 { ONE } else { -ONE };
+    let (mut gx, mut gy, mut gz) = (0i64, 0i64, 0i64);
+    // u = fx for h < 8 else fy
+    if h < 8 {
+        gx += su;
+    } else {
+        gy += su;
+    }
+    // v = fy for h < 4, fx for h == 12/14, else fz
+    if h < 4 {
+        gy += sv;
+    } else if h == 12 || h == 14 {
+        gx += sv;
+    } else {
+        gz += sv;
+    }
+    (gx, gy, gz)
+}
+
+// ---- per-corner falloff and its analytic derivative ----
+//
+// A corner contributes (t² · t²) · (g·d) with t = cap − |d|².
+//
+// With per-corner offset d (components dᵢ), t = cap − |d|², g the corner
+// gradient and n = S·Σ t⁴·(g·d), the exact partial is
+//
+//   ∂n/∂xᵢ = S·Σ [ t⁴·g_i − 8·t³·dᵢ·(g·d) ]
+//
+// over the corners with t > 0, because ∂d/∂x = 1 and ∂t/∂xᵢ = −2·dᵢ. The
+// `GRAD` const parameter switches the derivative accumulation on: with it
+// false every derivative line is dead code, so the plain-value path is
+// *the same arithmetic in the same order* it always was and the noise value
+// is bit-identical by construction rather than by convention (pinned anyway
+// by `simplex_grad_value_matches_plain`).
+
+/// Extra fraction bits the derivative terms carry (16.24 instead of
+/// 16.16). t⁴ and t³ are small numbers — 0.0625 and 0.125 at most in 2D —
+/// so truncating their products at 16.16 costs a whole percent of the
+/// result, which a finite-difference divergence check sees immediately.
+/// `SUBBITS` more bits makes that a rounding detail; the sums are still
+/// nowhere near overflowing i64.
+const SUBBITS: u32 = 8;
+
+/// One 2D corner: `(t⁴·(g·d) as 16.16, ∂/∂x, ∂/∂y as 16.24)`.
+#[inline]
+fn corner2<const GRAD: bool>(t: i64, h: u32, dx: i64, dy: i64) -> (i64, i64, i64) {
+    if t <= 0 {
+        return (0, 0, 0);
+    }
+    let g = grad2(h, dx, dy);
+    let t2 = fmul(t, t);
+    let n = fmul(fmul(t2, t2), g);
+    if !GRAD {
+        return (n, 0, 0);
+    }
+    let t4 = (t2 * t2) >> (16 - SUBBITS);
+    let k = 8 * ((((t2 * t) >> (16 - SUBBITS)) * g) >> 16); // 8·t³·(g·d)
+    let (gx, gy) = grad2_vec(h);
+    (
+        n,
+        ((t4 * gx) >> 16) - ((k * dx) >> 16),
+        ((t4 * gy) >> 16) - ((k * dy) >> 16),
+    )
+}
+
+/// One 3D corner: `(t⁴·(g·d) as 16.16, ∂/∂x, ∂/∂y, ∂/∂z as 16.24)`.
+#[inline]
+fn corner3<const GRAD: bool>(t: i64, h: u32, dx: i64, dy: i64, dz: i64) -> (i64, i64, i64, i64) {
+    if t <= 0 {
+        return (0, 0, 0, 0);
+    }
+    let g = grad(h, dx, dy, dz);
+    let t2 = fmul(t, t);
+    let n = fmul(fmul(t2, t2), g);
+    if !GRAD {
+        return (n, 0, 0, 0);
+    }
+    let t4 = (t2 * t2) >> (16 - SUBBITS);
+    let k = 8 * ((((t2 * t) >> (16 - SUBBITS)) * g) >> 16);
+    let (gx, gy, gz) = grad3_vec(h);
+    (
+        n,
+        ((t4 * gx) >> 16) - ((k * dx) >> 16),
+        ((t4 * gy) >> 16) - ((k * dy) >> 16),
+        ((t4 * gz) >> 16) - ((k * dz) >> 16),
+    )
+}
+
+fn simplex2_inner<const GRAD: bool>(x: Fx, y: Fx, seed: Fx) -> (Fx, Fx, Fx) {
     let (xr, yr) = (x.raw() as i64, y.raw() as i64);
     let s = fmul(xr + yr, F2);
     let i = ((xr + s) >> 16) as i32;
@@ -310,21 +409,77 @@ pub fn simplex2(x: Fx, y: Fx, seed: Fx) -> Fx {
 
     let sd = seed.raw();
     let half = ONE / 2;
-    let n0 = corner(half - fmul(x0, x0) - fmul(y0, y0), grad2(hash(i, j, 0, sd), x0, y0));
-    let n1 = corner(
-        half - fmul(x1, x1) - fmul(y1, y1),
-        grad2(hash(i + i1, j + j1, 0, sd), x1, y1),
+    let c0 = corner2::<GRAD>(
+        half - fmul(x0, x0) - fmul(y0, y0),
+        hash(i, j, 0, sd),
+        x0,
+        y0,
     );
-    let n2 = corner(
+    let c1 = corner2::<GRAD>(
+        half - fmul(x1, x1) - fmul(y1, y1),
+        hash(i + i1, j + j1, 0, sd),
+        x1,
+        y1,
+    );
+    let c2 = corner2::<GRAD>(
         half - fmul(x2, x2) - fmul(y2, y2),
-        grad2(hash(i + 1, j + 1, 0, sd), x2, y2),
+        hash(i + 1, j + 1, 0, sd),
+        x2,
+        y2,
     );
     // 70× puts the sum in ~[-1, 1] (Gustavson's constant)
-    Fx::from_raw((70 * (n0 + n1 + n2)) as i32)
+    (
+        Fx::from_raw((70 * (c0.0 + c1.0 + c2.0)) as i32),
+        Fx::from_raw(((70 * (c0.1 + c1.1 + c2.1)) >> SUBBITS) as i32),
+        Fx::from_raw(((70 * (c0.2 + c1.2 + c2.2)) >> SUBBITS) as i32),
+    )
+}
+
+/// 2D simplex noise, roughly in [-1, 1]. Deterministic (seed included in
+/// the corner hash, like perlin's).
+pub fn simplex2(x: Fx, y: Fx, seed: Fx) -> Fx {
+    simplex2_inner::<false>(x, y, seed).0
+}
+
+/// 2D simplex noise together with its **analytic** gradient:
+/// `(n, ∂n/∂x, ∂n/∂y)`. `n` is bit-identical to [`simplex2`].
+pub fn simplex2_grad(x: Fx, y: Fx, seed: Fx) -> (Fx, Fx, Fx) {
+    simplex2_inner::<true>(x, y, seed)
 }
 
 /// 3D simplex noise, roughly in [-1, 1].
 pub fn simplex3(x: Fx, y: Fx, z: Fx, seed: Fx) -> Fx {
+    simplex3_inner::<false>(x, y, z, seed).0
+}
+
+/// 3D simplex noise together with its **analytic** gradient:
+/// `(n, ∂n/∂x, ∂n/∂y, ∂n/∂z)`. `n` is bit-identical to [`simplex3`].
+pub fn simplex3_grad(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, Fx, Fx) {
+    simplex3_inner::<true>(x, y, z, seed)
+}
+
+/// Curl of a single 2D simplex potential: `(∂n/∂y, −∂n/∂x)`. The
+/// divergence of that is `∂²n/∂x∂y − ∂²n/∂y∂x = 0` identically, so the
+/// field has no sources or sinks — particles advected by it swirl along
+/// closed streamlines instead of piling up in the noise's maxima, which is
+/// the whole point of curl noise.
+pub fn curl2(x: Fx, y: Fx, seed: Fx) -> (Fx, Fx) {
+    let (_, dx, dy) = simplex2_grad(x, y, seed);
+    (dy, -dx)
+}
+
+/// Curl of three 3D simplex potentials P1/P2/P3, drawn from seeds `seed`,
+/// `seed + 1` and `seed + 2` (pattern units — the seed reaches the corner
+/// hash as raw 16.16, so the three fields are unrelated):
+/// `(∂P3/∂y − ∂P2/∂z, ∂P1/∂z − ∂P3/∂x, ∂P2/∂x − ∂P1/∂y)`.
+pub fn curl3(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, Fx) {
+    let (_, _, p1y, p1z) = simplex3_grad(x, y, z, seed);
+    let (_, p2x, _, p2z) = simplex3_grad(x, y, z, seed + Fx::ONE);
+    let (_, p3x, p3y, _) = simplex3_grad(x, y, z, seed + Fx::from_int(2));
+    (p3y - p2z, p1z - p3x, p2x - p1y)
+}
+
+fn simplex3_inner<const GRAD: bool>(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, Fx, Fx) {
     const F3: i64 = ONE / 3;
     const G3: i64 = ONE / 6;
     let (xr, yr, zr) = (x.raw() as i64, y.raw() as i64, z.raw() as i64);
@@ -367,20 +522,34 @@ pub fn simplex3(x: Fx, y: Fx, z: Fx, seed: Fx) -> Fx {
     let sd = seed.raw();
     let cap = (ONE * 6) / 10; // 0.6, the classic 3D falloff radius²
     let d = |xx: i64, yy: i64, zz: i64| cap - fmul(xx, xx) - fmul(yy, yy) - fmul(zz, zz);
-    let n0 = corner(d(x0, y0, z0), grad(hash(i, j, k, sd), x0, y0, z0));
-    let n1 = corner(
+    let c0 = corner3::<GRAD>(d(x0, y0, z0), hash(i, j, k, sd), x0, y0, z0);
+    let c1 = corner3::<GRAD>(
         d(x1, y1, z1),
-        grad(hash(i + i1, j + j1, k + k1, sd), x1, y1, z1),
+        hash(i + i1, j + j1, k + k1, sd),
+        x1,
+        y1,
+        z1,
     );
-    let n2 = corner(
+    let c2 = corner3::<GRAD>(
         d(x2, y2, z2),
-        grad(hash(i + i2, j + j2, k + k2, sd), x2, y2, z2),
+        hash(i + i2, j + j2, k + k2, sd),
+        x2,
+        y2,
+        z2,
     );
-    let n3 = corner(
+    let c3 = corner3::<GRAD>(
         d(x3, y3, z3),
-        grad(hash(i + 1, j + 1, k + 1, sd), x3, y3, z3),
+        hash(i + 1, j + 1, k + 1, sd),
+        x3,
+        y3,
+        z3,
     );
-    Fx::from_raw((32 * (n0 + n1 + n2 + n3)) as i32)
+    (
+        Fx::from_raw((32 * (c0.0 + c1.0 + c2.0 + c3.0)) as i32),
+        Fx::from_raw(((32 * (c0.1 + c1.1 + c2.1 + c3.1)) >> SUBBITS) as i32),
+        Fx::from_raw(((32 * (c0.2 + c1.2 + c2.2 + c3.2)) >> SUBBITS) as i32),
+        Fx::from_raw(((32 * (c0.3 + c1.3 + c2.3 + c3.3)) >> SUBBITS) as i32),
+    )
 }
 
 /// Octave count: truncated toward zero (`(int)` in stb), non-positive means
@@ -551,6 +720,146 @@ mod tests {
             simplex3(fx(1.5), fx(2.5), fx(3.5), fx(7.0)),
             simplex3(fx(1.5), fx(2.5), fx(3.5), fx(8.0))
         );
+    }
+
+    /// The `*_grad` variants must return exactly the noise value the plain
+    /// entry points do — existing patterns cannot be allowed to shift by an
+    /// LSB. Swept over negatives, cell boundaries and several seeds.
+    #[test]
+    fn simplex_grad_value_matches_plain() {
+        for si in 0..4 {
+            let seed = fx(si as f64 * 3.0 - 4.0);
+            for i in -120i32..120 {
+                let x = fx(i as f64 * 0.131);
+                let y = fx(i as f64 * -0.077 + 0.5);
+                let z = fx(i as f64 * 0.211 - 3.0);
+                assert_eq!(simplex2_grad(x, y, seed).0, simplex2(x, y, seed));
+                assert_eq!(simplex3_grad(x, y, z, seed).0, simplex3(x, y, z, seed));
+                // exact multiples of the lattice too (the skew/floor edges)
+                let (u, v) = (Fx::from_int(i / 7), Fx::from_int(-i / 5));
+                assert_eq!(simplex2_grad(u, v, seed).0, simplex2(u, v, seed));
+                assert_eq!(simplex3_grad(u, v, u, seed).0, simplex3(u, v, u, seed));
+            }
+        }
+    }
+
+    /// The analytic gradient against a central finite difference of the
+    /// fixed-point noise itself. The FD is not a clean reference from
+    /// either side: its own O(h²) truncation error blows up as h grows,
+    /// while shrinking h amplifies the 16.16 quantization of `simplex2`
+    /// by 1/2h. h = 1/32 sits at the crossover — measured max |error| over
+    /// this sweep is **0.085** (2D) and **0.168** (3D) against gradients
+    /// that peak at **6.39**, i.e. 1.3 % / 2.6 % of full scale. The error
+    /// is FD noise, not derivative error: over h = 1/8 … 1/64 it falls
+    /// as h² (0.94 → 0.25 → 0.085 in 2D) exactly as a correct analytic
+    /// gradient predicts, and only turns back up at 1/128 where
+    /// quantization takes over.
+    #[test]
+    fn simplex_grad_matches_finite_difference() {
+        let h = 1.0 / 32.0;
+        let hx = fx(h);
+        let mut worst2 = 0.0f64;
+        let mut worst3 = 0.0f64;
+        let mut peak = 0.0f64;
+        for i in -60i32..60 {
+            for j in -20i32..20 {
+                let (x, y) = (fx(i as f64 * 0.113), fx(j as f64 * 0.171 - 1.0));
+                let z = fx(i as f64 * 0.037 + 0.25);
+                let seed = fx(j as f64);
+
+                let (_, gx, gy) = simplex2_grad(x, y, seed);
+                let fdx = (simplex2(x + hx, y, seed).to_f64()
+                    - simplex2(x - hx, y, seed).to_f64())
+                    / (2.0 * h);
+                let fdy = (simplex2(x, y + hx, seed).to_f64()
+                    - simplex2(x, y - hx, seed).to_f64())
+                    / (2.0 * h);
+                worst2 = worst2.max((gx.to_f64() - fdx).abs());
+                worst2 = worst2.max((gy.to_f64() - fdy).abs());
+                peak = peak.max(gx.to_f64().abs()).max(gy.to_f64().abs());
+
+                let (_, ax, ay, az) = simplex3_grad(x, y, z, seed);
+                for (g, fd) in [
+                    (ax, simplex3(x + hx, y, z, seed).to_f64() - simplex3(x - hx, y, z, seed).to_f64()),
+                    (ay, simplex3(x, y + hx, z, seed).to_f64() - simplex3(x, y - hx, z, seed).to_f64()),
+                    (az, simplex3(x, y, z + hx, seed).to_f64() - simplex3(x, y, z - hx, seed).to_f64()),
+                ] {
+                    worst3 = worst3.max((g.to_f64() - fd / (2.0 * h)).abs());
+                }
+            }
+        }
+        assert!(peak > 1.0, "gradient never got large: {peak}");
+        assert!(worst2 < 0.12, "2D gradient vs FD: {worst2}");
+        assert!(worst3 < 0.22, "3D gradient vs FD: {worst3}");
+    }
+
+    /// Curl noise's defining property: no sources or sinks. The analytic
+    /// divergence ∂²n/∂x∂y − ∂²n/∂y∂x is identically zero, so what a
+    /// finite difference measures here is purely its own error: max |div|
+    /// over this sweep is **0.095** at h = 1/64, against components that
+    /// reach 6.39. It too falls as h² (3.20 at 1/8, 0.95 at 1/16, 0.28 at
+    /// 1/32, 0.095 at 1/64) and floors at 0.077 by 1/128.
+    #[test]
+    fn curl2_is_divergence_free() {
+        let h = 1.0 / 64.0;
+        let hx = fx(h);
+        let mut worst = 0.0f64;
+        let mut peak = 0.0f64;
+        for i in -80i32..80 {
+            for j in -30i32..30 {
+                let (x, y) = (fx(i as f64 * 0.091), fx(j as f64 * 0.137 - 2.0));
+                let seed = fx((i % 5) as f64);
+                let dudx = (curl2(x + hx, y, seed).0.to_f64() - curl2(x - hx, y, seed).0.to_f64())
+                    / (2.0 * h);
+                let dvdy = (curl2(x, y + hx, seed).1.to_f64() - curl2(x, y - hx, seed).1.to_f64())
+                    / (2.0 * h);
+                worst = worst.max((dudx + dvdy).abs());
+                let (u, v) = curl2(x, y, seed);
+                peak = peak.max(u.to_f64().abs()).max(v.to_f64().abs());
+            }
+        }
+        assert!(peak > 1.0, "curl2 never got large: {peak}");
+        assert!(worst < 0.15, "curl2 divergence: {worst}");
+    }
+
+    /// Determinism, seed sensitivity and rough magnitude, mirroring
+    /// `simplex_range_and_smoothness`.
+    #[test]
+    fn curl_determinism_and_range() {
+        assert_eq!(curl2(fx(1.5), fx(2.5), fx(7.0)), curl2(fx(1.5), fx(2.5), fx(7.0)));
+        assert_ne!(curl2(fx(1.5), fx(2.5), fx(7.0)), curl2(fx(1.5), fx(2.5), fx(8.0)));
+        assert_eq!(
+            curl3(fx(1.5), fx(2.5), fx(3.5), fx(7.0)),
+            curl3(fx(1.5), fx(2.5), fx(3.5), fx(7.0))
+        );
+        assert_ne!(
+            curl3(fx(1.5), fx(2.5), fx(3.5), fx(7.0)),
+            curl3(fx(1.5), fx(2.5), fx(3.5), fx(8.0))
+        );
+        // curl3's three potentials must be genuinely different fields: an
+        // off-by-one in the seed offsets would make components collapse
+        let (a, b, c) = curl3(fx(0.37), fx(1.21), fx(2.03), Fx::ZERO);
+        assert!(a != b && b != c, "curl3 components collapsed: {a:?} {b:?} {c:?}");
+
+        // magnitude: the gradient of ~[-1,1] noise over a ~1-unit lattice
+        let mut max2 = 0.0f64;
+        let mut max3 = 0.0f64;
+        let mut prev = curl2(Fx::ZERO, Fx::ZERO, Fx::ZERO).0.to_f64();
+        for i in 1..3000 {
+            let p = fx(i as f64 * 0.01);
+            let (u, v) = curl2(p, p * fx(0.7), Fx::ZERO);
+            max2 = max2.max(u.to_f64().abs()).max(v.to_f64().abs());
+            let (a, b, c) = curl3(p, p * fx(0.7), p * fx(1.3), Fx::ZERO);
+            for w in [a, b, c] {
+                max3 = max3.max(w.to_f64().abs());
+            }
+            // continuity: no jumps at 0.01 steps
+            let u = u.to_f64();
+            assert!((u - prev).abs() < 1.0, "curl2 jump at {i}: {prev} → {u}");
+            prev = u;
+        }
+        assert!((1.0..12.0).contains(&max2), "curl2 magnitude {max2}");
+        assert!((1.0..12.0).contains(&max3), "curl3 magnitude {max3}");
     }
 
     #[test]
@@ -927,3 +1236,4 @@ mod tests {
         }
     }
 }
+

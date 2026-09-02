@@ -337,6 +337,10 @@ pub enum Builtin {
     // buffer (double-buffered feedback without hand-rolled arrays).
     PixelState,
     SetPixelState,
+    // Luxel extension builtins, batch 9: curl noise (analytic-derivative
+    // simplex — see noise::simplex2_grad).
+    Curl2,
+    Curl3,
 }
 
 pub struct BuiltinDef {
@@ -450,6 +454,8 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("easeInBounce", EaseInBounce), b!("easeInOutBounce", EaseInOutBounce),
     // Luxel extensions, batch 8 (appended): the per-pixel state buffer.
     b!("pixelState", PixelState), b!("setPixelState", SetPixelState),
+    // Luxel extensions, batch 9 (appended): curl noise.
+    b!("curl2", Curl2), b!("curl3", Curl3),
 ];
 
 /// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
@@ -2835,6 +2841,24 @@ impl Vm {
             // artifacts. The lattice does not wrap (setPerlinWrap N/A).
             Simplex2 => num(crate::noise::simplex2(n(0), n(1), n(2))),
             Simplex3 => num(crate::noise::simplex3(n(0), n(1), n(2), n(3))),
+            // curl2(x, y, out, seed = 0) / curl3(x, y, z, out, seed = 0):
+            // the curl of a simplex potential, written into out[0..2] /
+            // out[0..3] and returned (in place, like arrayAdd/mixColors).
+            // Divergence-free by construction, so advecting particles along
+            // it gives swirling flow with no sources or sinks. Components
+            // are noise DERIVATIVES: they run to about +/-6.4, not +/-1.
+            Curl2 => {
+                let (u, v) = crate::noise::curl2(n(0), n(1), n(3));
+                self.write2(prog, a(2), [u, v])
+                    .map_err(|m| no_site(format!("curl2: {m}")))?;
+                Ok(a(2))
+            }
+            Curl3 => {
+                let (u, v, w) = crate::noise::curl3(n(0), n(1), n(2), n(4));
+                self.write3(prog, a(3), [u, v, w])
+                    .map_err(|m| no_site(format!("curl3: {m}")))?;
+                Ok(a(3))
+            }
             // setGamma(g): output gamma applied after render (2.0–2.8 makes
             // LED fades perceptually even). g <= 0 or g == 1 turns it off.
             SetGamma => {
@@ -3192,6 +3216,21 @@ impl Vm {
         // quotient are exactly the fractional beat
         let phase = (self.time_ms as u128 * bpm.raw().max(0) as u128 / 60_000) & 0xFFFF;
         Fx::from_raw(phase as i32)
+    }
+
+    /// Write two numbers into the first two slots of `out`.
+    fn write2(&mut self, prog: &Program, out: Value, vals: [Fx; 2]) -> Result<(), &'static str> {
+        let Value::Arr(arr) = out else {
+            return Err("`out` must be an array");
+        };
+        let slots = self.arr_mut(prog, arr)?;
+        if slots.len() < 2 {
+            return Err("`out` array needs length >= 2");
+        }
+        for (slot, v) in slots.iter_mut().zip(vals) {
+            *slot = Value::Num(v);
+        }
+        Ok(())
     }
 
     /// Write three numbers into the first three slots of `out`.

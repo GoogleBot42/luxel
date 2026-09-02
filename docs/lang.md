@@ -540,6 +540,43 @@ no axis-aligned artifacts (the classic choice for organic motion; feed
 `time(...)` into one axis). The simplex lattice does not wrap —
 `setPerlinWrap` doesn't apply.
 
+**Curl noise**: `curl2(x, y, out, seed = 0)` and `curl3(x, y, z, out,
+seed = 0)` write the curl of a simplex potential into `out[0..2]` /
+`out[0..3]` and return `out` (in place, like `arrayAdd` and `mixColors`,
+so a render loop reuses one array). `out` shorter than the vector — or
+not an array — is a clean runtime error.
+
+- `curl2` is `(∂n/∂y, −∂n/∂x)` of one 2D simplex field. Its divergence is
+  `∂²n/∂x∂y − ∂²n/∂y∂x`, identically zero, so the field has **no sources
+  or sinks**: particles advected along it circulate forever instead of
+  collecting in the noise's peaks, which is what a naive "sample the
+  noise, use it as a heading" flow field does. That is the whole reason
+  to use curl noise.
+- `curl3` builds three potentials P1, P2, P3 from seeds `seed`,
+  `seed + 1` and `seed + 2` (pattern units — the seed reaches the corner
+  hash as raw 16.16, so the three fields are unrelated) and returns
+  `(∂P3/∂y − ∂P2/∂z, ∂P1/∂z − ∂P3/∂x, ∂P2/∂x − ∂P1/∂y)`.
+- The derivatives are **analytic**, not finite differences — the simplex
+  corner sum is differentiated in closed form, so there is no
+  quantization noise to tune an `h` against (`simplex2`/`simplex3` return
+  bit-identical values to what they always did; the derivative rides
+  along).
+- **Magnitude**: these are derivatives of ~[-1, 1] noise over a ~1-unit
+  lattice, so they are *not* unit vectors and *not* in [-1, 1]. Measured
+  over a 4,000-sample sweep: `curl2` components peak at **6.2** with a
+  mean vector length of **2.7**; `curl3` peaks at **8.3**, mean length
+  **4.0**. Scale by your step size (`p += v[0] * speed * dt` with
+  `speed` around 0.1 for normalized coordinates), or normalize with
+  `hypot` if you want a constant-speed field.
+
+```js
+// advect a speck along the flow (see library/curl-flow-2d.js)
+v = array(2)
+curl2(x * 2.6 + drift, y * 2.6, v, 9)
+x = mod(x + v[0] * 0.09 * dt, 1)
+y = mod(y + v[1] * 0.09 * dt, 1)
+```
+
 ### Mapped coordinates
 
 `resetTransform`, `translate(x, y)`, `scale(x, y)`, `rotate(θ)`,

@@ -2039,6 +2039,79 @@ fn simplex_builtins() {
 }
 
 #[test]
+fn curl_builtins() {
+    // curl2(x, y, out, seed = 0) writes out[0..2] IN PLACE and returns out
+    assert_eq!(
+        eval_prog("o = array(2)\nexport var out = curl2(0.37, 1.21, o)[0]"),
+        eval_prog("o = array(2)\ncurl2(0.37, 1.21, o)\nexport var out = o[0]")
+    );
+    // pinned values — these are the VM/bytecode contract, not just the math
+    assert_eq!(
+        eval_prog("o = array(2)\ncurl2(0.37, 1.21, o)\nexport var out = o[0]").to_f64(),
+        2.1656646728515625
+    );
+    assert_eq!(
+        eval_prog("o = array(2)\ncurl2(0.37, 1.21, o)\nexport var out = o[1]").to_f64(),
+        -3.6150360107421875
+    );
+    // the omitted seed reads as 0, exactly like simplex2's
+    assert_eq!(
+        eval_prog("o = array(2)\ncurl2(0.37, 1.21, o)\nexport var out = o[1]"),
+        eval_prog("o = array(2)\ncurl2(0.37, 1.21, o, 0)\nexport var out = o[1]")
+    );
+    assert_ne!(
+        eval_prog("o = array(2)\ncurl2(0.37, 1.21, o)\nexport var out = o[1]"),
+        eval_prog("o = array(2)\ncurl2(0.37, 1.21, o, 3)\nexport var out = o[1]")
+    );
+    // curl3 writes three components; pinned at seed 4
+    for (i, want) in [
+        (0, 0.393768310546875),
+        (1, 3.483795166015625),
+        (2, 0.10076904296875),
+    ] {
+        assert_eq!(
+            eval_prog(&format!(
+                "o = array(3)\ncurl3(0.37, 1.21, 2.03, o, 4)\nexport var out = o[{i}]"
+            ))
+            .to_f64(),
+            want,
+            "curl3 component {i}"
+        );
+    }
+    // extra slots past the vector are left alone
+    assert_eq!(
+        eval_prog("o = [0, 0, 7]\ncurl2(0.37, 1.21, o)\nexport var out = o[2]"),
+        fx(7.0)
+    );
+    // a divergence-free field: the components are noise DERIVATIVES, so
+    // they run well past +/-1 (this is the magnitude patterns must scale)
+    let m = eval_prog(
+        "o = array(2)\nm = 0\nfor (i = 0; i < 400; i++) {\n  curl2(i * 0.0173, i * -0.0211 + 3, o)\n  m = max(m, hypot(o[0], o[1]))\n}\nexport var out = m",
+    )
+    .to_f64();
+    assert!((1.0..12.0).contains(&m), "curl2 magnitude {m}");
+    // an `out` too short for the vector is a clean runtime error
+    for (src, what) in [
+        ("o = array(1)\ncurl2(1, 2, o)", "curl2"),
+        ("o = array(2)\ncurl3(1, 2, 3, o)", "curl3"),
+    ] {
+        let e = luxel_core::engine::Engine::new(src, 10, 1).expect("compiles");
+        let msg = e.last_error.expect("expected error").message;
+        assert!(
+            msg.contains(what) && msg.contains("length"),
+            "{what} undersized out should error, got {msg:?}"
+        );
+    }
+    // ... and so is a non-array `out`
+    let e = luxel_core::engine::Engine::new("curl2(1, 2, 5)", 10, 1).expect("compiles");
+    assert!(e
+        .last_error
+        .expect("expected error")
+        .message
+        .contains("must be an array"));
+}
+
+#[test]
 fn set_gamma_output_curve() {
     fn render_val(body: &str) -> u8 {
         let src = format!("export function render(index) {{ {body} }}");

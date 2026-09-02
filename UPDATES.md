@@ -1,5 +1,59 @@
 # Update log
 
+## 2026-09-01 — curl noise: analytic simplex derivatives, `curl2`/`curl3`
+
+The half of docs/ideas.md's "Simplex noise + curl noise" that had been
+deferred since the simplex landed. The deferral was specific and correct —
+"a finite-difference curl on 16.16 noise is too quantization-noisy to be
+pretty; do it when the noise gets analytic derivatives" — so this change
+gives the noise analytic derivatives first and the curl falls out of them.
+
+**Derivatives.** `noise::simplex2_grad` / `simplex3_grad` return
+`(n, ∂n/∂x, ∂n/∂y[, ∂n/∂z])`, differentiating the corner sum in closed
+form: with per-corner offset d, t = cap − |d|² and n = S·Σ t⁴(g·d),
+the exact partial is `S·Σ [ t⁴·gᵢ − 8·t³·dᵢ·(g·d) ]` over the corners
+with t > 0. `grad2`/`grad` only ever returned the dot product, so
+`grad2_vec`/`grad3_vec` read the same eight and twelve basis directions out
+as components. The value path is untouched *structurally*, not just by
+convention: `simplex2`/`simplex3` and their `_grad` twins are one function
+with a `const GRAD: bool`, so with GRAD off every derivative line is dead
+code and the noise value is bit-identical by construction (pinned anyway by
+a sweep test over negatives, lattice points and four seeds). The derivative
+terms carry 8 extra fraction bits (16.24) — t³ and t⁴ are small enough
+that truncating their products at 16.16 costs about a percent, which the
+divergence check sees immediately.
+
+**Builtins (appended, batch 9).** `curl2(x, y, out, seed = 0)` writes
+`(∂n/∂y, -∂n/∂x)` into `out[0..2]`; `curl3(x, y, z, out, seed = 0)` builds
+three potentials from seeds `seed`, `seed+1`, `seed+2` and writes
+`(∂P3/∂y - ∂P2/∂z, ∂P1/∂z - ∂P3/∂x, ∂P2/∂x - ∂P1/∂y)` into `out[0..3]`.
+Both write in place and return `out`, the arrayAdd/mixColors convention, so
+a render loop reuses one array; an `out` too short (or not an array) is a
+clean runtime error naming the builtin. Missing `seed` reads as 0 the same
+way `simplex2`'s does.
+
+**Numbers.** Gradient vs a central finite difference at h = 1/32: max
+|error| **0.085** (2D) and **0.168** (3D) against gradients peaking at
+**6.39** — and it falls as h² over h = 1/8 … 1/64 (0.94 → 0.25 →
+0.085 in 2D), which is what a *correct* analytic gradient looks like
+against an FD that is itself the approximation. `curl2`'s finite-difference
+divergence is **0.095** at h = 1/64, same h² fall-off, flooring at 0.077
+by 1/128 where 16.16 quantization takes over; analytically it is
+identically zero. Output magnitude (these are noise *derivatives*, not unit
+vectors): `curl2` components peak at **6.2**, mean vector length **2.7**;
+`curl3` peaks at **8.3**, mean length **4.0**.
+
+**Pattern.** `library/curl-flow-2d.js` — specks advected along the field,
+trails on a canvas, three sliders, and a 1D fallback that flies a horizon
+line across the same canvas so a bare strip still shows the flow.
+
+**Verified:** `cargo test --workspace` green; `tools/check-library.sh`
+299/299 on all five rigs; the pattern driven in real chromium (60 fps, no
+page errors). Firmware +8,512 B on `board-c6-devkit` (991,984 B, 5.40 %
+of the OTA slot left) and +8,272 B on `board-pixelblaze-v3` — two extra
+monomorphizations of the simplex kernels; `.stack` unchanged at 27,484 B
+with no new frames. Details in docs/boards.md.
+
 ## 2026-09-01 — `analogRead`/`touchRead` get an injection path
 
 Gitea #206, the analog half of the pin-injection work #177 started. Both

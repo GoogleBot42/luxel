@@ -23,10 +23,15 @@ and the autocomplete/docs pipeline, and can't break existing code.
   `angleBetween`, `length`/`length3`).
 - **`map(x, inLo, inHi, outLo, outHi)`** [S] ★★★ — DONE.
 - **`fract`/`step`/`sign`/`saturate`** [S] ★★ — DONE.
-- **Simplex noise + curl noise** [M] ★★ — simplex DONE (`simplex2`/
-  `simplex3`, hash-based fixed point, tested). Curl noise deferred: a
-  finite-difference curl on 16.16 noise is too quantization-noisy to be
-  pretty; do it when the noise gets analytic derivatives.
+- **Simplex noise + curl noise** [M] ★★ — DONE. Simplex first
+  (`simplex2`/`simplex3`, hash-based fixed point, tested); curl noise
+  followed 2026-09-01 once the noise grew **analytic** derivatives
+  (`simplex2_grad`/`simplex3_grad` differentiate the corner sum in closed
+  form, bit-identical `n`), which is exactly what the old deferral was
+  waiting for — a finite-difference curl on 16.16 noise really is too
+  quantization-noisy. `curl2(x, y, out, seed = 0)` and `curl3(x, y, z,
+  out, seed = 0)` write the vector in place and return `out`; divergence
+  pinned by test; `library/curl-flow-2d.js` is the demo.
 - **`beatSin`/`beat`(bpm, lo, hi)** [S] ★★ — DONE.
 - **Deterministic `hash(x)` / `hash2(x,y)`** [S] ★★ — DONE (lowbias32,
   sequence pinned by test).
