@@ -71,6 +71,9 @@ these before trusting any build/test failure as a real regression.
    because it runs inside the shell). Outside it, parse with `grep`/`sed` or dump the
    response to a file and read it. If you need ImageMagick or similar one-off tools not
    in the flake, `nix-shell -p <pkg>` alongside it rather than assuming it's present.
+   A `python3 -c '…'` one-liner inside `nix develop … --command bash -c '…'`
+   dies on any apostrophe in the script text — write the script to the
+   scratchpad and run it by path (2026-09-01).
 4b. **Bare `nix develop` can enter the MAIN checkout's devshell, not yours.** Its own
    stderr says which: `warning: Git tree '/home/googlebot/workspace/pixler' is dirty`
    is the main checkout, `'…/<your-worktree>' is dirty` is yours. The damage is

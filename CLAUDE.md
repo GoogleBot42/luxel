@@ -99,8 +99,14 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `tools/check-library.sh` on all five rigs. Bare 0..1 dials are the most
   common review complaint and a reflect pass caught a fresh one on 2026-09-01.
 
+- Before opening any PR run the exact CI gate locally: `nix develop --command
+  tools/ci.sh` (web build+tests, cargo test, library sweep, firmware build +
+  OTA-slot margin). Every PR then gets a `gate` check on Gitea — one build at a
+  time, a newer push cancels the older run; not yet a required check (Gitea #246).
+
 ## Tripwires
-- Firmware app must fit the 1 MiB OTA slot — docs/boards.md tracks per-board margin.
+- Firmware app must fit the 1 MiB OTA slot — docs/boards.md tracks per-board margin;
+  `tools/ci.sh` measures it on every run (`build-esp32.sh` alone only checks the ELF).
 - Boot-time multi-KB loads wait for `wait_config_up()` — WiFi mallocs don't null-check.
 - `BUILTINS` in `crates/luxel-core/src/vm.rs` is append-only; never reorder.
 - A serial flash leaves the assets partition stale → follow with
