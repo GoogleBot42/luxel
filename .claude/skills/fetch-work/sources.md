@@ -9,12 +9,18 @@ add it here once.
 - `docs/ideas.md` — extension ideas: builtins, language, engine,
   integration. Items are tagged effort `[S/M/L]` and value `★`–`★★★`, and
   many are already marked DONE. Only propose items that are *not* marked
-  DONE.
+  DONE. Known stale-open as of 2026-09-01 (Gitea #247): gallery search,
+  render3D tiles and sync pattern distribution are listed as remaining but
+  shipped; only the 1D waterfall tile and playlist distribution are real.
 - `docs/pattern-ideas.md` — research backlog for example patterns (effects
   from WLED, FastLED, Aurora, etc. not yet reimplemented in the corpus).
+  **Exhausted as of 2026-09-01** — every shortlist and stretch item exists in
+  `library/`; only the header says so, the tiers still read as open.
 - `docs/webui.md` — the web UI redesign backlog. Organized into phases;
   many entries are already checked off (✅) or struck through. Only
   unchecked, non-struck items are open.
+  **Exhausted as of 2026-09-01** — every item ✅, Gitea #4 closed; skip it
+  unless it has grown.
 - `docs/UNTESTED.md` — untested-risk journal: machine-verified work
   Jeremy hasn't personally clicked through on the wall unit yet. Items are
   checkboxes; unchecked = still open. This is human-verification work, not
