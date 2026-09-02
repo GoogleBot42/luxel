@@ -170,6 +170,11 @@ nothing in this container is public.
   `el.offsetParent === null`. Click `[data-role="editor-back"]` first if it
   exists, and gate tile picks on `offsetParent !== null`, not on `hidden`
   (the corpus-tab tiles live in a hidden panel and are unhidden too).
+  Device mode (`?device=`) boots straight into the editor too, so the tabs
+  (`tab-settings` etc.) don't exist until that click — and the click no-ops
+  if fired the instant the button appears (still loading the running
+  pattern): wait ~3 s after `editor-back` shows, then click (2026-09-02, two
+  timeouts on `tab-settings` before the settle delay).
 - A puppeteer click on an `<input type=range>` at exactly `box.x + box.width`
   doing nothing (value stays at min, no error) — the right edge is outside the
   control's hit box. To reach max, press on the thumb and *drag past* the end:
