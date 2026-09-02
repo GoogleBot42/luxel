@@ -2318,3 +2318,48 @@ fn familiar_builtin_aliases() {
     assert_eq!(eval("length3(2, 3, 6)"), fx(7.0));
     assert_eq!(eval("length(3, 4)"), eval("hypot(3, 4)"));
 }
+
+/// Gitea #177 item 4: the engine keeps the pattern's pin MODES and
+/// `digitalWrite` levels for a host (the firmware) to copy onto real pads —
+/// it records, it never drives. Modes are the verbatim Arduino/ESP32 bits.
+#[test]
+fn pin_modes_and_digital_write_are_recorded_for_the_host() {
+    let src = "pinMode(26, INPUT_PULLUP)\n\
+               pinMode(27, OUTPUT)\n\
+               pinMode(13, INPUT_PULLDOWN)\n\
+               pinMode(14, OUTPUT_OPEN_DRAIN)\n\
+               digitalWrite(27, HIGH)\n\
+               export var t = 0\n\
+               export function beforeRender(delta) { t += delta; digitalWrite(27, t < 100) }\n\
+               export function render(index) { hsv(0, 0, 0) }";
+    let mut e = Engine::new(src, 4, 1).expect("compile error");
+
+    // modes come through verbatim; an unconfigured pin reads 0
+    assert_eq!(e.pin_mode(26), 5, "INPUT_PULLUP");
+    assert_eq!(e.pin_mode(27), 2, "OUTPUT");
+    assert_eq!(e.pin_mode(13), 9, "INPUT_PULLDOWN");
+    assert_eq!(e.pin_mode(14), 18, "OUTPUT_OPEN_DRAIN");
+    assert_eq!(e.pin_mode(5), 0);
+    assert_eq!(e.pin_mode(64), 0, "out of window reads 0, no panic");
+
+    // every configured or written pin shows up in the host's used mask
+    let used = e.pins_used();
+    for pin in [26, 27, 13, 14] {
+        assert!(used & (1 << pin) != 0, "pin {pin} in pins_used");
+    }
+    assert!(e.pins_idle_high() == 1 << 26, "only the pull-up pin idles HIGH");
+
+    // digitalWrite is a level the pattern can change frame to frame
+    assert!(e.pins_out_high() & (1 << 27) != 0, "written HIGH at init");
+    e.frame(Fx::from_int(50));
+    assert!(e.pins_out_high() & (1 << 27) != 0, "still HIGH at t=50");
+    e.frame(Fx::from_int(100));
+    assert!(e.pins_out_high() & (1 << 27) == 0, "LOW once t >= 100");
+    assert!(e.pins_out_high() & (1 << 26) == 0, "never-written pins are LOW");
+
+    // the engine records a write but never treats it as the wire: a host
+    // still owns what digitalRead reports on that pin
+    assert!(!e.pin_read(27), "OUTPUT pin idles LOW until a host reads it back");
+    assert!(e.set_pin(27, Some(true)));
+    assert!(e.pin_read(27));
+}

@@ -30,17 +30,19 @@ pub const MAX_SSID: usize = 32;
 pub const MAX_PASS: usize = 64;
 
 /// Device settings live in the next nvs sector, so writing them never disturbs
-/// the WiFi record. Record (v7): "LXDV" u8 version=7  u8 brightness  u8 protocol
+/// the WiFi record. Record (v8): "LXDV" u8 version=8  u8 brightness  u8 protocol
 /// u8 sync_mode  u32-LE pixel_count  i16-LE tz_minutes  u8 color_order
 /// u8 gamma_tenths  u16-LE cap_ma  u8 bright_curve_tenths  u8 blur_pct
-/// u8 glow_pct  u8[3] 0  u32-LE checksum (28 bytes).
+/// u8 glow_pct  u8 data_pin+1 (0 = board default)  u8[2] 0  u32-LE checksum
+/// (28 bytes). v8 took one of v7's three pad bytes for the data pin, so the
+/// body length is unchanged and a v7 record reads as "board default".
 /// v6 (20-byte body: output pipe but no post-process stages), v5 (16-byte
 /// body: tz but no output pipe), v4/v3 (12-byte body) read compatibly with
 /// defaults for the missing fields; older versions fail the version check and
 /// read as "no record" → defaults.
 const DEV_OFFSET: u32 = 0xA000;
 const DEV_MAGIC: &[u8; 4] = b"LXDV";
-const DEV_VER: u8 = 7;
+const DEV_VER: u8 = 8;
 
 /// Persisted device settings. All fields are written together (read-modify-
 /// write) so setting one never clobbers the others.
@@ -67,6 +69,10 @@ pub struct DeviceConfig {
     pub blur_pct: u8,
     /// Post-process light-bleed glow, 0..=100 % (0 = off).
     pub glow_pct: u8,
+    /// Strip DATA GPIO override (Gitea #154); `None` = the board default.
+    /// Applied at boot only — the SPI driver binds its pin once — so a
+    /// change persists here and `/api/datapin` reboots to apply it.
+    pub data_pin: Option<u8>,
 }
 
 /// Write one nvs record: pad to a word, stage word-aligned, erase the
@@ -230,16 +236,16 @@ pub fn write_mqtt(cfg: Option<&MqttConfig>) -> Result<(), &'static str> {
 
 /// Read the persisted device settings, if a valid record exists.
 pub fn read_device() -> Option<DeviceConfig> {
-    let mut rec = [0u8; 28]; // 24-byte v7 body + checksum (older: shorter)
+    let mut rec = [0u8; 28]; // 24-byte v7/v8 body + checksum (older: shorter)
     if !crate::assets::read_chunk(DEV_OFFSET, &mut rec) {
         return None;
     }
     let ver = rec[4];
-    if &rec[0..4] != DEV_MAGIC || !(ver == DEV_VER || ver == 6 || ver == 5 || ver == 4 || ver == 3) {
+    if &rec[0..4] != DEV_MAGIC || !(ver == DEV_VER || (3..=7).contains(&ver)) {
         return None;
     }
     let body = match ver {
-        7 => 24,
+        7 | 8 => 24,
         6 => 20,
         5 => 16,
         _ => 12,
@@ -275,6 +281,11 @@ pub fn read_device() -> Option<DeviceConfig> {
     if brightness > 31 || bright_curve_tenths > 50 || blur_pct > 100 || glow_pct > 100 {
         return None;
     }
+    // v8: data pin stored +1 so a v7 pad byte (0) reads as "board default".
+    // A stored pin the board no longer allows (a rebuild changed the
+    // reserved set) falls back to the default rather than voiding the whole
+    // record — main.rs logs the fallback.
+    let data_pin = if ver >= 8 { rec[21].checked_sub(1) } else { None };
     Some(DeviceConfig {
         brightness,
         protocol,
@@ -287,6 +298,7 @@ pub fn read_device() -> Option<DeviceConfig> {
         bright_curve_tenths,
         blur_pct,
         glow_pct,
+        data_pin,
     })
 }
 
@@ -302,6 +314,11 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     if cfg.blur_pct > 100 || cfg.glow_pct > 100 {
         return Err("blur/glow must be 0..=100 percent");
     }
+    if let Some(p) = cfg.data_pin {
+        if !crate::board::data_pin_ok(p) {
+            return Err("data pin is reserved or not an output on this board");
+        }
+    }
     let mut rec: Vec<u8> = Vec::with_capacity(24);
     rec.extend_from_slice(DEV_MAGIC);
     rec.push(DEV_VER);
@@ -316,7 +333,8 @@ pub fn write_device(cfg: &DeviceConfig) -> Result<(), &'static str> {
     rec.push(cfg.bright_curve_tenths);
     rec.push(cfg.blur_pct);
     rec.push(cfg.glow_pct);
-    rec.extend_from_slice(&[0, 0, 0]);
+    rec.push(cfg.data_pin.map_or(0, |p| p + 1));
+    rec.extend_from_slice(&[0, 0]);
     let ck = checksum(&rec);
     rec.extend_from_slice(&ck.to_le_bytes());
     write_record(DEV_OFFSET, &rec)

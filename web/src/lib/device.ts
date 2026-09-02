@@ -62,6 +62,21 @@ export function lxpEnvelope(
 }
 
 /** Luxel-to-Luxel sync state (GET /api/sync). */
+/** GET /api/config. The `data_pin*` fields exist only on strip-board
+ *  firmware from 2026-09 on (Gitea #154). */
+export interface DeviceConfig {
+  pixels: number;
+  max: number;
+  protocol: string;
+  /** GPIO the strip driver is bound to right now. */
+  data_pin?: number;
+  data_pin_default?: number;
+  /** A stored pin that differs from `data_pin` — takes effect on reboot. */
+  data_pin_next?: number | null;
+  /** Every pin the picker accepts on this board. */
+  data_pins?: number[];
+}
+
 export interface SyncStatus {
   mode: "off" | "leader" | "follower";
   timeMs: number;
@@ -123,13 +138,21 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; brightness?: number };
   }
 
-  /** Device config: pixel count, its max, and the LED protocol. */
-  async config(): Promise<{ pixels: number; max: number; protocol: string }> {
-    return (await (await this.fetch("/api/config")).json()) as {
-      pixels: number;
-      max: number;
-      protocol: string;
-    };
+  /** Device config: pixel count, its max, the LED protocol, and — on strip
+   *  boards (Gitea #154) — the DATA pin: the one the driver is bound to,
+   *  the board default, a stored value waiting for a reboot (else null),
+   *  and every pin the picker accepts. Panel boards and older firmware omit
+   *  the pin fields. */
+  async config(): Promise<DeviceConfig> {
+    return (await (await this.fetch("/api/config")).json()) as DeviceConfig;
+  }
+
+  /** Move the strip DATA line to `pin` (or back to the board default). The
+   *  device persists it and REBOOTS to apply — the SPI driver binds its pin
+   *  once, at boot. A rejected pin changes nothing and does not reboot. */
+  async setDataPin(pin: number | "default"): Promise<{ ok: boolean; data_pin?: number; note?: string; error?: string }> {
+    const res = await this.fetch("/api/datapin", { method: "POST", body: String(pin) });
+    return (await res.json()) as { ok: boolean; data_pin?: number; note?: string; error?: string };
   }
 
   /** Set the pixel count; the device resizes its strip live (no reboot). */

@@ -719,6 +719,20 @@ impl Engine {
         self.vm.pins_idle_high()
     }
 
+    /// The last `pinMode` value for `pin` (Arduino/ESP32 bits: 1 INPUT,
+    /// 2 OUTPUT, 4 pull-up, 8 pull-down, 16 open-drain; 0 = never
+    /// configured). What the firmware configures the real pad from
+    /// (Gitea #177 item 4).
+    pub fn pin_mode(&self, pin: i32) -> u8 {
+        self.vm.pin_mode(pin)
+    }
+
+    /// Bit per pin (0..63): the level the pattern last `digitalWrite`d. The
+    /// engine records it; a host drives the pad. Pins never written are LOW.
+    pub fn pins_out_high(&self) -> u64 {
+        self.vm.pins_out_high()
+    }
+
     /// Drive an analog input pin from outside the pattern, so
     /// `analogRead(pin)` / `touchRead(pin)` report an injected value instead
     /// of the flat 0 they read while nothing drives them (Gitea #206).

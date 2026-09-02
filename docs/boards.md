@@ -596,4 +596,48 @@ reason). Defaults only seed the first boot;
 after that the persisted settings win, so picking the "wrong" default
 protocol or count is harmless.
 
+## Runtime pins: the data-pin picker and pattern GPIO
+
+Two things erase the pin *type* at runtime (`esp_hal::gpio::AnyPin::
+steal(n)`), and both are gated by per-chip and per-board tables in
+`firmware/src/board.rs` so the "one owner per pad" rule holds by
+construction:
+
+- **The strip DATA pin is a setting** (Gitea #154). `board::DEFAULT_DATA_PIN`
+  is the board's wiring; `POST /api/datapin <n|default>` stores an
+  override (settings record v8) and reboots, because the SPI driver binds
+  its MOSI pin once at boot. `GET /api/config` reports `data_pin` (bound
+  now), `data_pin_default`, `data_pin_next` (stored, waiting for the
+  reboot) and `data_pins` (every pin the picker accepts). CLK stays a
+  typed board constant. A WLED takeover imports WLED's LED pin when this
+  board can drive it, and says so on serial either way. Panel boards
+  have no strip SPI and omit all of it.
+- **Pattern GPIO is real** (Gitea #177): `firmware/src/gpio.rs` syncs
+  the pads a pattern names with the engine between frames (see
+  docs/lang.md "Device & environment"). ADC1 is wired on ESP32, C3 and
+  S3; the C6 has no ADC channel map in esp-hal 1.1, so `analogRead` reads
+  0 there. `touchRead` has no device driver.
+
+Which pins are allowed, in `board.rs`:
+
+| layer | what it excludes |
+|---|---|
+| `chip::gpio_exists` / `gpio_can_output` | numbers the silicon lacks; input-only pads (classic ESP32 34–39) for OUTPUT and DATA |
+| `chip::SYSTEM_PINS` | SPI flash, octal PSRAM (S3 33–37), USB-serial-JTAG, UART0 |
+| `def::RESERVED_PINS` (per board) | what Luxel drives: strip CLK, the Athom relay (2), the PB v3 status LED (12), the C6 onboard LED (8), the 14 HUB75 pins |
+| `shared::DATA_PIN` (runtime) | the configured strip DATA pin, kept off the pattern surface by `gpio::pin_is_free` |
+
+Everything else is a pattern's to use — on the Athom that includes the
+case button (0), the IR receiver (25) and the mic pins (32/15/36); on the
+PB v3 the button (32) and the expansion header (0, 25, 26). A pattern
+naming a pin outside the free set is ignored on that pin with one serial
+line (`gpio: pattern named GPIO2 — reserved on this board`); the picker
+refuses such a pin outright. A new board adds `DEFAULT_DATA_PIN` and
+`RESERVED_PINS` to its def block (a `const` assert checks the default
+passes its own tables), and a new chip adds a `chip` module.
+
+Cost: the runtime pin plumbing is ~7 KB of image (esp-hal's per-pin
+dispatch tables), which put the C6 at 5.55 % OTA-slot margin — under the
+6 % warn line of `tools/image-check.sh`, above the 3 % floor.
+
 [esp-hal]: https://github.com/esp-rs/esp-hal

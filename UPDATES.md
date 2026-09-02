@@ -1,5 +1,95 @@
 # Update log
 
+## 2026-09-02 — Real GPIO behind the pin builtins (#177 closed) and a runtime strip data pin (#154 closed)
+
+Two of the three items Jeremy picked from the 2026-09-01 fetch-work list
+(the third, "push master to the Athom and soak", is their deploy step).
+v0.1.40.
+
+**Pattern GPIO is real (Gitea #177 item 4).** `pinMode` / `digitalWrite` /
+`digitalRead` / `analogRead` now reach the pads on a device. The engine
+still never touches hardware — it gained the two things a host was missing
+(`Vm::pin_mode`, the verbatim Arduino/ESP32 mode byte per pin, and
+`pins_out_high`, the last `digitalWrite` level per pin; `DigitalWrite` was a
+no-op builtin) — and the new `firmware/src/gpio.rs` is that host: between
+frames the render task syncs every pin the pattern named (configure the pad
+from its mode, copy written levels out, read the pad back in through the
+same `Engine::set_pin` injection ABI the playground's Pins panel uses).
+Pins are esp-hal *types*, so this is the one place the firmware erases the
+type at runtime (`AnyPin::steal` → `Flex`), gated by new per-chip and
+per-board pin tables in `board.rs`: what exists, what is input-only,
+flash/PSRAM/console pins, and what Luxel itself drives (strip CLK, the
+Athom relay, the PB v3 status LED, the HUB75 bus, plus the runtime DATA
+pin). A pattern naming a reserved pin is ignored on that pin with one
+serial line; nothing else changes. ADC1 is wired on ESP32/C3/S3 through a
+per-chip typed `slots!` table (esp-hal's ADC API is typed per GPIO; the
+bank is rebuilt when the sampled set changes, 11 dB, 12-bit → 0..1); the C6
+has no ADC channel map in esp-hal 1.1 and reads 0. `touchRead` has no
+driver — #237. Cost when unused: one mask test per frame.
+
+Two esp-hal facts cost a deploy each and are now in code comments:
+switching a pad to its analog function (`set_analog`) drops the pulls and
+output enable esp-hal finds there — a pot on `INPUT_PULLUP` read 0.08, not
+1.0, until the digital config was re-applied on top (the RTC pull
+resistors work in analog mode); and on Xtensa the RTC mux that analog mode
+switched in has to be routed back by hand (`rtc_set_config(…, Digital)`)
+when the pad leaves the ADC set, or the next pattern's `digitalRead` of it
+reads 0 forever (`teardown_analog`).
+
+**Verified on the Athom (v0.1.40, 60 px), no wiring, via `/api/vars`:**
+`INPUT_PULLUP` idles HIGH and `INPUT_PULLDOWN`/`INPUT` LOW on real pads
+(GPIO33/26/27); the case button on GPIO0 reads unpressed under its pull-up;
+a 1 s square wave `digitalWrite`n to GPIO27 reads back through the pad's
+input buffer in step; `analogRead(33)` reads **1.000 under the internal
+pull-up and 0 under the pull-down** (full scale / floor), a floating ADC pad
+~0.06; alternating analog and digital patterns on the same pad keep
+working after the teardown fix; a pattern naming the relay (2), CLK (5),
+DATA (18) and a flash pin (6) is refused per pin, the strip keeps
+rendering, 100–120 fps and `vmerr:null` throughout. What no headless
+session can see — pixels on a moved data pin, a finger on the button —
+is #238 for Jeremy.
+
+**The strip DATA pin is a setting (Gitea #154).** `board::DEFAULT_DATA_PIN`
+per board; settings record v8 stores an override (`data_pin+1` in a v7 pad
+byte, so v7 records read as "default" and the body length is unchanged);
+`POST /api/datapin <n|default>` validates against the pin tables,
+persists, and **reboots** — the SPI driver binds its MOSI pin once at boot
+(`with_mosi(AnyPin::steal(pin))`, CLK stays a typed board constant). `GET
+/api/config` gains `data_pin` / `data_pin_default` / `data_pin_next` /
+`data_pins`; Settings → Device gains a **Data pin** select with an
+"apply & reboot" button behind a confirm (deliberately not live: a
+mis-click darkens the strip); a WLED takeover now IMPORTS WLED's LED pin
+when the board can drive it instead of logging that it can't. Panel boards
+have no strip SPI and omit all of it.
+
+One boot-order bug found on the rig: the settings record was first read
+BEFORE `ota::init`, which installs the flash driver `assets::read_chunk`
+reads through — the read silently answered "no record" and the device
+booted on the default pin after a successful apply (UI said "rebooting
+with data on GPIO33", the device came back on 18). Moved the strip wiring
+after flash init; the stored 33 then took effect on the very next boot,
+which also proved the write had been fine all along.
+
+**Verified:** `cargo test --workspace` green (new engine test
+`pin_modes_and_digital_write_are_recorded_for_the_host`),
+`tools/check-library.sh` 298/298 on all rigs, svelte-check clean, firmware
+builds for athom-music / pixelblaze-v3 / c6-devkit. Measured after the
+change: PB v3 `.stack` 27,484 → 26,860 B (the `PinHost` lives in the
+render task's future; floor is 24 KB), app image 937,600 → 947,776 B;
+**C6 983,264 → 990,400 B = 5.55 % OTA-slot margin, under the 6 % warn
+line of `tools/image-check.sh` for the first time (floor 3 %)** — the cost
+is esp-hal's per-pin dispatch tables, and it is documented in
+docs/boards.md "Runtime pins". Data-pin picker driven in real chromium
+against the Athom: pick → confirm → "rebooting with data on GPIO33" →
+device back on 33, reload shows 33 driving, back to the default the same
+way; the API refuses the relay pin (2) and an input-only pad (34) without
+rebooting; the API round trip (POST 33 → back on 33 → POST default → back on 18, slot unchanged, `data_pin_next` null after each boot) matches, and input-only (34) and non-existent (99) pins are refused the same way.
+
+Docs: docs/lang.md "Device & environment", docs/api.md (`/api/datapin`,
+`/api/config`, the `/api/pins` note), docs/boards.md "Runtime pins" (the
+allow tables), docs/webui.md (pin panel note, data-pin picker),
+builtins.ts autocomplete text, docs/UNTESTED.md (#238's two legs).
+Tickets: #237 (touchRead driver), #238 (Jeremy's bench legs).
 ## 2026-09-01 — curl noise: analytic simplex derivatives, `curl2`/`curl3`
 
 The half of docs/ideas.md's "Simplex noise + curl noise" that had been

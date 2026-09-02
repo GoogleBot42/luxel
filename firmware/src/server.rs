@@ -1434,6 +1434,51 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         }
                     }))
                 }
+                // POST /api/datapin — body is a GPIO number or `default`
+                // (Gitea #154). Persisted, then the device REBOOTS to apply
+                // it: the SPI driver binds its MOSI pin once, at boot. A
+                // rejected pin changes nothing and does not reboot. Panel
+                // boards have no strip SPI, so no route.
+                #[cfg(not(feature = "hub75"))]
+                "/api/datapin" => {
+                    let body = text(&raw);
+                    let body = body.trim();
+                    let want = if body.eq_ignore_ascii_case("default") {
+                        Ok(None)
+                    } else {
+                        match body.parse::<u8>() {
+                            Ok(p) if crate::board::data_pin_ok(p) => Ok(Some(p)),
+                            _ => Err(()),
+                        }
+                    };
+                    // persist first; the reboot is conditional on the write
+                    let stored: Result<u8, &'static str> = match want {
+                        Ok(want) => {
+                            crate::shared::set_want_data_pin(want);
+                            let cfg = DeviceConfig { data_pin: want, ..crate::shared::device_config_snapshot() };
+                            crate::config::write_device(&cfg)
+                                .map(|()| want.unwrap_or(crate::board::DEFAULT_DATA_PIN))
+                        }
+                        Err(()) => Err("pin must be one of data_pins (GET /api/config) or default"),
+                    };
+                    let response = json_response(match stored {
+                        Ok(pin) => {
+                            esp_println::println!("data pin → GPIO{} stored; rebooting to apply", pin);
+                            let mut out = String::from("{\"ok\":true,\"data_pin\":");
+                            push_u32(&mut out, pin as u32);
+                            push_piece(&mut out, ",\"note\":\"rebooting to apply\"}");
+                            out
+                        }
+                        Err(e) => api_error(e),
+                    });
+                    let ok = stored.is_ok();
+                    let conn = request.body_connection.finalize().await?;
+                    let sent = response.write_to(conn, response_writer).await?;
+                    if ok {
+                        crate::REBOOT.signal(());
+                    }
+                    return Ok(sent);
+                }
                 // POST /api/protocol — body is a protocol name (sk9822/ws2812
                 // + aliases). Reconfigures SPI + resizes the buffer live, and
                 // persists. No reboot.
@@ -1760,7 +1805,37 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     push_u32(&mut out, MAX_PIXELS);
                     push_piece(&mut out, ",\"protocol\":\"");
                     push_piece(&mut out, Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed)).name());
-                    push_piece(&mut out, "\"}");
+                    push_piece(&mut out, "\"");
+                    // Strip DATA pin (Gitea #154): the pin the SPI is bound
+                    // to, the board default, a stored value waiting for a
+                    // reboot (or null), and every pin the picker accepts.
+                    // Absent on panel boards — no strip SPI to move.
+                    #[cfg(not(feature = "hub75"))]
+                    {
+                        let active = crate::shared::DATA_PIN.load(Ordering::Relaxed);
+                        push_piece(&mut out, ",\"data_pin\":");
+                        push_u32(&mut out, active as u32);
+                        push_piece(&mut out, ",\"data_pin_default\":");
+                        push_u32(&mut out, crate::board::DEFAULT_DATA_PIN as u32);
+                        push_piece(&mut out, ",\"data_pin_next\":");
+                        match crate::shared::want_data_pin() {
+                            Some(p) if p != active => push_u32(&mut out, p as u32),
+                            _ => push_piece(&mut out, "null"),
+                        }
+                        push_piece(&mut out, ",\"data_pins\":[");
+                        let mut first = true;
+                        for pin in 0..64u8 {
+                            if crate::board::data_pin_ok(pin) {
+                                if !first {
+                                    push_piece(&mut out, ",");
+                                }
+                                first = false;
+                                push_u32(&mut out, pin as u32);
+                            }
+                        }
+                        push_piece(&mut out, "]");
+                    }
+                    push_piece(&mut out, "}");
                     Some(json_response(out))
                 }
                 "/api/playlist" => Some(json_response(crate::playlist::to_json())),

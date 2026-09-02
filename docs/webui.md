@@ -261,9 +261,19 @@ press/latch — a pot has a position, not a pressed state — with the value
 shown alongside. Both builtins share one value per pin, and an undriven
 analog pin reads 0, so there is nothing to "release": the slider at 0 IS
 the undriven state. The panel appears for an analog-only pattern that
-never calls `pinMode`. Preview-only: the firmware has no GPIO injection
-endpoint yet (#177 item 4), and device mode says so rather than
-pretending to forward.
+never calls `pinMode`. Preview-only by design: on a device the same pins
+are real pads the firmware syncs every frame (#177 item 4, 2026-09-02),
+so the panel drives the local preview and device mode says so.
+
+### Data pin picker [S] ✅ (2026-09-02, Gitea #154)
+Settings → Device gains a **Data pin** select (`data-role="cfg-datapin"`)
+listing every GPIO the board's pin tables allow for the strip DATA line,
+with the board default marked, plus an **apply & reboot** button
+(`cfg-datapin-apply`): the driver binds its pin at boot, so unlike the
+protocol/pixel fields the pick is deliberate and two-step, behind a
+confirm. The note under it shows the pin being driven and, after an
+apply, the stored pin waiting for the reboot. Hidden on panel boards and
+older firmware (no `data_pins` in `GET /api/config`).
 
 ---
 

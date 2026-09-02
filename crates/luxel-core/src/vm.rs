@@ -782,6 +782,16 @@ pub struct Vm {
     /// the life of the VM, so a pin read inside a rare branch does not make
     /// the control flicker in and out.
     pin_used: u64,
+    /// The last `pinMode` value per pin (0..63), verbatim — Arduino/ESP32
+    /// bits: 1 INPUT, 2 OUTPUT, 4 pull-up, 8 pull-down, 16 open-drain. Zero
+    /// = never configured. The firmware reads this to configure the real
+    /// pad (Gitea #177 item 4); `pin_pullup` stays the fast idle-level mask.
+    pin_mode: [u8; MAX_TRACKED_PIN as usize + 1],
+    /// Bit per pin (0..63): the level the pattern last `digitalWrite`d. The
+    /// engine never drives anything itself — a host (the firmware) copies
+    /// these onto pads the pattern configured as OUTPUT. LOW until written,
+    /// which is also what Arduino leaves a freshly-OUTPUT pin at.
+    pin_out_level: u64,
     /// Bit per pin (0..63): the PATTERN has read this pin with `analogRead` or
     /// `touchRead`. Same purpose as `pin_used` on the digital surface — a host
     /// cannot know which analog pins a pattern samples without watching it run
@@ -913,6 +923,8 @@ impl Vm {
             pin_driven: 0,
             pin_level: 0,
             pin_used: 0,
+            pin_mode: [0; MAX_TRACKED_PIN as usize + 1],
+            pin_out_level: 0,
             analog_used: 0,
             analog_level: [0; MAX_TRACKED_PIN as usize + 1],
             rng: seed | 1,
@@ -1092,6 +1104,22 @@ impl Vm {
     /// it to decide which way "pressing" the pin should move it.
     pub fn pins_idle_high(&self) -> u64 {
         self.pin_pullup
+    }
+
+    /// The last `pinMode` value for `pin`, verbatim (1 INPUT, 2 OUTPUT,
+    /// 5 INPUT_PULLUP, 9 INPUT_PULLDOWN, 18 OUTPUT_OPEN_DRAIN), or 0 if the
+    /// pattern never configured it. Out-of-window pins read 0.
+    pub fn pin_mode(&self, pin: i32) -> u8 {
+        if !(0..=MAX_TRACKED_PIN).contains(&pin) {
+            return 0;
+        }
+        self.pin_mode[pin as usize]
+    }
+
+    /// Bit per pin (0..63): the level the pattern last `digitalWrite`d —
+    /// what a host copies onto the real pad for pins configured OUTPUT.
+    pub fn pins_out_high(&self) -> u64 {
+        self.pin_out_level
     }
 
     /// Drive an analog input pin from OUTSIDE the pattern, so
@@ -2710,19 +2738,40 @@ impl Vm {
                     _ => c.weekday_sun1,
                 }))
             }
-            // ---- GPIO / sequencer / sync stubs: silent no-ops until real
-            // peripherals exist (M4/M5); inputs read their idle level ----
-            // pinMode remembers only the pull-up bit — enough for
-            // `digitalRead` to report the right idle level (Gitea #177).
+            // ---- GPIO: the engine keeps the pattern's view of every pin
+            // (mode, written level, injected/read level) and never touches
+            // a pad itself. A host syncs it with real silicon between frames
+            // (the firmware, Gitea #177 item 4) or drives it by hand (the
+            // playground / verify harness). Sequencer / sync stubs stay
+            // silent no-ops. ----
+            // pinMode records the mode byte (for the firmware) and the
+            // pull-up bit (for `digitalRead`'s idle level, Gitea #177).
             PinMode => {
                 let pin = n(0).to_int_trunc();
                 if (0..=MAX_TRACKED_PIN).contains(&pin) {
                     let bit = 1u64 << pin;
+                    let mode = n(1).to_int_trunc();
                     self.pin_used |= bit;
-                    if n(1).to_int_trunc() & PIN_MODE_PULLUP != 0 {
+                    self.pin_mode[pin as usize] = mode.clamp(0, 255) as u8;
+                    if mode & PIN_MODE_PULLUP != 0 {
                         self.pin_pullup |= bit;
                     } else {
                         self.pin_pullup &= !bit;
+                    }
+                }
+                Ok(Value::default())
+            }
+            // digitalWrite(pin, level): remembered per pin for a host to copy
+            // onto the pad. Any non-zero level is HIGH (PB: `HIGH` is 1).
+            DigitalWrite => {
+                let pin = n(0).to_int_trunc();
+                if (0..=MAX_TRACKED_PIN).contains(&pin) {
+                    let bit = 1u64 << pin;
+                    self.pin_used |= bit;
+                    if n(1) != Fx::ZERO {
+                        self.pin_out_level |= bit;
+                    } else {
+                        self.pin_out_level &= !bit;
                     }
                 }
                 Ok(Value::default())
@@ -2739,7 +2788,7 @@ impl Vm {
                 let high = self.pin_read(pin);
                 num(if high { Fx::ONE } else { Fx::ZERO })
             }
-            DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),
+            PlaylistSetPosition | SequencerNext => Ok(Value::default()),
             // Analog inputs read whatever a host injected for the pin, and 0
             // while nothing has (Gitea #206) — the same shape as
             // `DigitalRead`, minus the pull-up idle level: an undriven

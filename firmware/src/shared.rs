@@ -84,6 +84,24 @@ pub static PROTOCOL: AtomicU8 = AtomicU8::new(0);
 pub static WANT_PIXEL_COUNT: AtomicU32 = AtomicU32::new(300);
 pub static WANT_PROTOCOL: AtomicU8 = AtomicU8::new(0);
 
+/// The GPIO the strip's DATA line is actually on — bound once at boot when
+/// main.rs builds the SPI driver (a stored override, else the board
+/// default). Read by `/api/config` and by `gpio::pin_is_free`, which keeps
+/// patterns off it. Gitea #154.
+pub static DATA_PIN: AtomicU8 = AtomicU8::new(0);
+/// The *stored* override, +1 (0 = board default) — the requested value the
+/// settings record must reflect, and what `/api/datapin` changes. Differs
+/// from `DATA_PIN` only between a POST and the reboot that applies it.
+pub static WANT_DATA_PIN: AtomicU8 = AtomicU8::new(0);
+
+pub fn want_data_pin() -> Option<u8> {
+    WANT_DATA_PIN.load(core::sync::atomic::Ordering::Relaxed).checked_sub(1)
+}
+
+pub fn set_want_data_pin(p: Option<u8>) {
+    WANT_DATA_PIN.store(p.map_or(0, |p| p + 1), core::sync::atomic::Ordering::Relaxed);
+}
+
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 
 fn share_get<T: Clone>(cell: &Shared<T>) -> T {
@@ -399,6 +417,7 @@ pub fn device_config_snapshot() -> crate::config::DeviceConfig {
         bright_curve_tenths: BRIGHT_CURVE.load(Ordering::Relaxed),
         blur_pct: POST_BLUR.load(Ordering::Relaxed),
         glow_pct: POST_GLOW.load(Ordering::Relaxed),
+        data_pin: want_data_pin(),
     }
 }
 
