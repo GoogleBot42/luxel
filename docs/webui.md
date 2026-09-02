@@ -247,7 +247,7 @@ existing grayed-out "dead" treatment instead. Device-pattern thumbnails
 source fetch as well. e2e covers spinner-appears / spinner-clears via CPU
 throttling + scrolling fresh tiles into view.
 
-### Pin panel [S] ✅ (2026-08-31, Gitea #205)
+### Pin panel [S] ✅ (2026-08-31, Gitea #205; analog 2026-09-01, #206)
 A **Pins** section under Controls, shown only for patterns that actually
 name a digital pin. Pin numbers are runtime values, so the engine reports
 which pins the pattern touched (`lx_pins_used`, set on every `pinMode`/
@@ -255,8 +255,15 @@ which pins the pattern touched (`lx_pins_used`, set on every `pinMode`/
 momentary `press` (pointer down = driven, up = released) plus a `hold`
 latch, a live HIGH/LOW readout, and its idle level. Pressing drives the
 pin to the OPPOSITE of idle, so a pulled-up pin goes LOW — button to
-ground. Preview-only: the firmware has no GPIO injection endpoint yet
-(#177 item 4), and device mode says so rather than pretending to forward.
+ground. Pins the pattern reads with `analogRead`/`touchRead` are listed the same
+way (`lx_analog_pins_used`) and get a **0..1 slider** instead of
+press/latch — a pot has a position, not a pressed state — with the value
+shown alongside. Both builtins share one value per pin, and an undriven
+analog pin reads 0, so there is nothing to "release": the slider at 0 IS
+the undriven state. The panel appears for an analog-only pattern that
+never calls `pinMode`. Preview-only: the firmware has no GPIO injection
+endpoint yet (#177 item 4), and device mode says so rather than
+pretending to forward.
 
 ---
 

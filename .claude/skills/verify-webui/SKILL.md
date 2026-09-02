@@ -170,6 +170,12 @@ nothing in this container is public.
   `el.offsetParent === null`. Click `[data-role="editor-back"]` first if it
   exists, and gate tile picks on `offsetParent !== null`, not on `hidden`
   (the corpus-tab tiles live in a hidden panel and are unhidden too).
+- A puppeteer click on an `<input type=range>` at exactly `box.x + box.width`
+  doing nothing (value stays at min, no error) — the right edge is outside the
+  control's hit box. To reach max, press on the thumb and *drag past* the end:
+  `mouse.move(centre)` → `down()` → `mouse.move(box.x + box.width * 1.1, y)` →
+  `up()`. Range inputs clamp during a drag, so overshooting is the reliable way
+  to land on the endpoint (cost a cycle on the #206 analog-pin sliders).
 - Forgetting `npm run wasm`/`gen-gallery.mjs` reran after a `library/` or corpus change —
   `e2e.mjs`/`device-e2e.mjs` serve whatever `web/dist` currently holds, which is stale
   until you rebuild.

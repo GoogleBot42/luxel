@@ -139,7 +139,12 @@ origin master && git rebase origin/master`.
 - **Measurements are verification too — take them AFTER the rebase.**
   Firmware image sizes, `.stack`, heap numbers: a pre-rebase measurement
   compared against a table another session updated the same day gives a
-  confidently wrong delta. 2026-08-29: the post-process chain looked like
+  confidently wrong delta. The cheap way to get the matching BASELINE is
+  `git checkout HEAD~1` in the SAME worktree, re-measure, then check the
+  branch back out — `target/` is shared, so only the changed crates rebuild
+  (~40 s for firmware + `tools/stack-check.sh`); a second worktree pays for a
+  cold build of every dependency instead.
+  2026-08-29: the post-process chain looked like
   +10 KB on RISC-V vs +5 KB on Xtensa (an interesting-sounding codegen
   story that would have shipped into docs/boards.md); re-measured on the
   rebased tree it was an even +3 KB everywhere. The baseline had moved,
