@@ -91,6 +91,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - Firmware change touching statics or buffers → run `tools/stack-check.sh`.
   Measure, don't estimate.
 - "Works on device" claims → `tools/hw-bench.mjs` soak (docs/tools.md).
+- New/edited `library/` pattern → read .claude/rules/library.md FIRST (house
+  style: real-unit `//#` controls, default= == the top-level constant), then
+  `tools/check-library.sh` on all five rigs. Bare 0..1 dials are the most
+  common review complaint and a reflect pass caught a fresh one on 2026-09-01.
 
 ## Tripwires
 - Firmware app must fit the 1 MiB OTA slot — docs/boards.md tracks per-board margin.
