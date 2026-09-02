@@ -56,19 +56,64 @@ docs/tools.md still have to be run by hand.
 **One build at a time.** The workflow takes a `concurrency` group named
 `luxel-ci` — deliberately global, not per-ref — with `cancel-in-progress:
 true`. A new build therefore cancels whatever is in flight rather than
-queueing behind it, and two Xtensa `-Zbuild-std` builds never fight over the
-runner's shared `target/`.
+queueing behind it. That matters twice over: sessions merge PRs
+continuously, and the runner is shared with every other repo on the server,
+so a superseded build is somebody else's queue time.
 
-**Runner.** `runs-on: nixos`, the host-mode runner: a NixOS container sharing
-the host nix-daemon and `/nix/store`, with a persistent
-`/var/lib/gitea-runner` home. The persistence is the point — the flake's
-toolchain closures stay in the store and the checkout's `target/` and
-`web/node_modules` survive between runs, so warm runs are incremental.
-(`nixos-podman` discards the workspace per job; `ubuntu-latest` has no nix.)
-The workflow-level `env: PATH: /run/current-system/sw/bin/` is required on
-this runner — without it not even `nix` or `git` are found.
+**Runner.** `runs-on: nixos` — the host-mode runner (label `nixos:host`): a
+NixOS container that shares the host nix-daemon and `/nix/store` and keeps a
+persistent `/var/lib/gitea-runner` home. That persistence is the point. The
+flake's toolchain closures stay in the store, and the checkout's cargo
+`target/` and `web/node_modules` survive between jobs, so a warm run is a
+fraction of a cold one. The workflow-level `env: PATH:
+/run/current-system/sw/bin/` is required here — without it the job's PATH has
+neither `nix` nor `git` and even `actions/checkout` fails. (`ubuntu-latest`
+exists on the same server but has no nix.)
 
-Measured: RUNTIMES
+**This runner is legacy and is being retired.** The replacement is
+`nixos-podman`, which was broken as of 2026-09-01. When the switch happens:
+
+- Delete the `PATH:` env — the podman job image has its own `PATH=/bin`, and
+  overriding it hides even `bash`.
+- Expect **every run to be cold**. Each job gets a fresh
+  `localhost/gitea-runner-nix` container with the host `/nix` mounted
+  read-only under a throwaway overlay and no persistent workspace: no
+  `target/`, no `node_modules`, and nothing the job realizes survives.
+- The container ships no `/usr/bin`, so the repo's `#!/usr/bin/env bash`
+  shebangs need a `ln -s "$(command -v env)" /usr/bin/env` step, and it
+  starts with `HOME` unset (nix then computes a *relative* cache dir and
+  dies with `not an absolute path: ".cache/nix"`) and with no build-users
+  group (`the group 'nixbld' ... does not exist` on the first derivation it
+  has to realize).
+
+A rehearsal on `nixos-podman` did pass end to end on 2026-09-01 (run 1441):
+10 min 45 s wall, of which ~8 min was realizing the devshell — the gate
+itself was 125 s.
+
+The lever against that cold start is Jeremy's **attic** binary cache, the
+same one nix-config's `build-and-cache.sh` uses. The workflow's two attic
+steps are conditional: with no `ATTIC_TOKEN` they print "attic not
+configured … running uncached" and skip; with credentials they
+`attic login` + `attic use` before the gate, and afterwards push the devshell
+closure (realized into a profile, since a `mkShell` derivation can't be
+`nix build`-ed directly). Turning it on is two repo settings — an
+`ATTIC_ENDPOINT` Actions **variable** and an `ATTIC_TOKEN` Actions
+**secret** on `zuckerberg/luxel` (Gitea #246, which also tracks the podman
+migration and making this check required on master).
+
+**Measured** on the `nixos` runner, 2026-09-02 (run 1443, the first ever for
+this repo, so the runner's checkout and `target/` were empty):
+
+| | wall | of which `nix develop` | of which the gate |
+|---|---|---|---|
+| cold (fresh workspace) | 5 min 43 s | 3 min 44 s | 110 s |
+| warm (workspace reused) | WARMTOTAL | WARMSHELL | WARMGATE |
+
+Per-step, cold: web 27 s · cargo 23 s · library 14 s · firmware 46 s. The
+runner is single-slot and shared with every other repo on the server, so
+**queue time dwarfs run time** — run 1443 waited 27 minutes behind a
+nix-config flake check before it started. Read the job's own duration, not
+the wall clock from your push.
 
 No guard is needed on this file. Gitea Actions also picks up
 `.github/workflows/`, which is why release.yml and pages.yml carry
