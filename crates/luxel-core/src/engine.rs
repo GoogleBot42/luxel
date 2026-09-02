@@ -261,6 +261,9 @@ impl Engine {
             last_error = Some(e);
         }
         let violated = last_error.as_ref().is_some_and(|e| e.is_assert);
+        // State seeded at top level (`setPixelState` in init) is "the frame
+        // before the first frame": hand it over so frame 1 reads it.
+        vm.pixel_state_commit();
 
         vm.pixel_count = pixel_count;
         let before = if violated { None } else { prog.exported_fn("beforeRender") };
@@ -919,11 +922,11 @@ impl Engine {
                         self.render = self.resolve_render_now();
                         if self.render.is_none() {
                             self.pixels.iter_mut().for_each(|p| *p = [0; 3]);
-                            self.run_stage = None;
+                            self.finish_frame();
                             return;
                         }
                         if self.pixel_count == 0 {
-                            self.run_stage = None;
+                            self.finish_frame();
                             return;
                         }
                         self.run_stage = Some(RunStage::Pixel(0));
@@ -943,13 +946,27 @@ impl Engine {
                             self.run_stage = Some(RunStage::Pixel(i + 1));
                         } else {
                             self.post_chain();
-                            self.run_stage = None;
+                            self.finish_frame();
                             return;
                         }
                     }
                 },
             }
         }
+    }
+
+    /// A frame ran to completion (not a fatal-error blank, not a debug
+    /// pause): hand this frame's `setPixelState` writes over as next frame's
+    /// `pixelState` reads and leave the pipeline idle.
+    fn finish_frame(&mut self) {
+        self.vm.pixel_state_commit();
+        self.run_stage = None;
+    }
+
+    /// Bytes the `pixelState` buffer holds — 0 for any pattern that never
+    /// calls `setPixelState` (it is allocated on first write, not up front).
+    pub fn pixel_state_bytes(&self) -> usize {
+        self.vm.pixel_state_bytes()
     }
 
     fn render_args(&self, render: RenderKind, i: u32) -> (u16, [Value; 4], usize) {

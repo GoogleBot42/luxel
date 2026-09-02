@@ -223,8 +223,14 @@ bytecode execution is being worked on now; the rest are queued:
   (Gitea #139). Device and pattern palettes
   compose — the device stage runs on the frame the pattern already
   recolored.
-- **Per-pixel persistent state buffer** [M] ★★ — a sanctioned scratch array
-  the engine double-buffers, for feedback effects without manual bookkeeping.
+- **Per-pixel persistent state buffer** [M] ★★ — DONE. `pixelState(i[, ch])`
+  / `setPixelState(i[, ch], v)`: an engine-owned, double-buffered per-pixel
+  buffer (up to 4 channels) — reads see last frame's snapshot, writes land
+  next frame, unwritten pixels carry over. Allocated on the first write
+  only, charged to the array byte budget, half the RAM of the `array(
+  pixelCount)` idiom (Fx, not Value) and off the PB element ledger. See
+  docs/lang.md "Per-pixel state"; `library/ember-diffusion.js` is the
+  neighbour-reading showcase.
 - **Deterministic seedable `prng` matching a documented algorithm** [S] ★ —
   DONE. Both generators are now pinned by test and spelled out in
   docs/lang.md ("Determinism and seeding"): `random()` = splitmix64,

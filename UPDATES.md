@@ -1,5 +1,58 @@
 # Update log
 
+## 2026-09-01 — Builtins batch 8: the per-pixel state buffer (`pixelState` / `setPixelState`)
+
+The last engine idea in docs/ideas.md with no partial credit: a sanctioned
+scratch buffer the engine double-buffers, so feedback effects stop
+hand-rolling `array(pixelCount)` pairs and swap loops. Jeremy's one
+condition — it must cost nothing unless a pattern actually uses it — is
+the design's spine.
+
+**API.** `pixelState(index[, ch])` reads the value committed for that
+pixel LAST frame; `setPixelState(index[, ch], v)` writes the value for
+NEXT frame and returns `v`. Up to four channels (a colour plus a scalar).
+Every read in a frame sees the same snapshot no matter which pixels have
+already rendered — the property a single user array can't give a
+neighbour tap inside `render()` — and a pixel nobody writes keeps its
+value (the commit swaps the buffers, then copies the new front over the
+new back). Out-of-range indices and channels read 0 and write nothing,
+so `pixelState(index - 1)` at the strip's end needs no clamp; a channel
+outside 0..3 is the one runtime error. The handoff happens once per
+completed frame (`beforeRender` writes included); a frame held by
+`setFrameRate` runs no pattern code and doesn't hand off; state seeded at
+top-level init is committed once so frame 1 reads it.
+
+**Memory only when used.** `Vm.pixel_state` is `Option<Box<…>>`, `None`
+until the first `setPixelState`. Reads never allocate — a read-only
+pattern gets 0 and the buffer stays absent (`Engine::pixel_state_bytes()`
+= 0, asserted). The first write allocates `pixelCount × channels × 4 B ×
+2` with fallible reservations and charges it to the same array byte
+budget the arena uses, so on the device an oversized buffer is the
+familiar "memory budget exceeded" vmerr, never an allocator panic
+(asserted: 2048 px against a 4 KB budget rejects and allocates nothing;
+against 16 KB it takes exactly 16,384 B). A later, higher channel grows
+the buffer in place (channel-major layout, so growth is an append that
+keeps existing values). Versus two swapped `array(pixelCount)` buffers
+this is half the RAM (4-byte Fx, not 8-byte Value) and stays off the
+PB-compatible 10,240-element ledger.
+
+**Where it lives.** `Builtin::{PixelState, SetPixelState}` appended to
+the table (ids stay stable); `PixelState` struct + `pixel_state_ensure`
+/ `pixel_state_commit` in vm.rs; the engine commits through a new
+`finish_frame()` at the three normal end-of-frame exits (last pixel, no
+render entry, zero pixels) and once after init. Eight engine tests cover
+laziness, read-last/write-next, neighbour consistency, carry-over,
+init seeding, channel growth, out-of-range behaviour, and the budget.
+
+**Docs + showcase.** docs/lang.md gets a "Per-pixel state" section;
+builtins.ts carries both entries for autocomplete; docs/ideas.md marks
+the item DONE. `library/ember-diffusion.js` is the neighbour-reading
+showcase (3-tap heat diffusion + random sparks, no arrays at all) —
+check-library 298/298 on the default grid and the 60/512 px strips;
+driven in real chromium (gallery search → tile → editor: the preview
+lights and varies frame to frame, no compile banner, autocomplete
+offers `setPixelState`). Firmware builds for `board-pixelblaze-v3`; the
+change is heap-only (no new statics), image delta recorded in the PR.
 ## 2026-09-01 — arrayReplace-as-fill: the last 15 sites fixed, and a lint so it can't come back
 
 Review pass 2 established that `arrayReplace(a, v1, v2, …)` **splats** its

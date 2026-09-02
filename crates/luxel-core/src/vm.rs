@@ -333,6 +333,10 @@ pub enum Builtin {
     EaseInOutElastic,
     EaseInBounce,
     EaseInOutBounce,
+    // Luxel extension builtins, batch 8: the engine-owned per-pixel state
+    // buffer (double-buffered feedback without hand-rolled arrays).
+    PixelState,
+    SetPixelState,
 }
 
 pub struct BuiltinDef {
@@ -444,7 +448,39 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("easeInBack", EaseInBack), b!("easeInOutBack", EaseInOutBack),
     b!("easeInElastic", EaseInElastic), b!("easeInOutElastic", EaseInOutElastic),
     b!("easeInBounce", EaseInBounce), b!("easeInOutBounce", EaseInOutBounce),
+    // Luxel extensions, batch 8 (appended): the per-pixel state buffer.
+    b!("pixelState", PixelState), b!("setPixelState", SetPixelState),
 ];
+
+/// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
+/// with `ch` in `0..MAX_STATE_CHANNELS`) — enough for a colour plus one
+/// scalar; the cap bounds what a pattern can lazily allocate.
+pub const MAX_STATE_CHANNELS: usize = 4;
+
+/// The engine-owned per-pixel state buffer behind `pixelState` /
+/// `setPixelState`: `channels × n` fixed-point values, double-buffered.
+/// Reads come from `front` (last frame's committed values, so every read in
+/// a frame sees the same consistent snapshot — neighbours included); writes
+/// land in `back`; [`Vm::pixel_state_commit`] swaps them at the end of each
+/// frame and copies the new front over the new back so unwritten pixels
+/// carry over. Channel-major layout (`ch * n + i`) so adding a channel is
+/// an append, not a re-interleave.
+///
+/// Exists only after the first `setPixelState` call — a pattern that never
+/// writes state pays nothing (reads return 0 without allocating).
+struct PixelState {
+    n: usize,
+    channels: usize,
+    front: Vec<Fx>,
+    back: Vec<Fx>,
+}
+
+impl PixelState {
+    /// Bytes the two buffers hold (what's charged to the arena byte budget).
+    fn bytes(n: usize, channels: usize) -> usize {
+        2 * n * channels * core::mem::size_of::<Fx>()
+    }
+}
 
 pub fn lookup_builtin(name: &str) -> Option<u16> {
     BUILTINS
@@ -681,6 +717,9 @@ pub struct Vm {
     pub map: Option<MapData>,
     /// Engine-set; used by mapPixels and the no-map 1D fallback.
     pub pixel_count: u32,
+    /// `pixelState`/`setPixelState` storage — `None` until a pattern's
+    /// first write allocates it (see [`PixelState`]).
+    pixel_state: Option<alloc::boxed::Box<PixelState>>,
     palette: Vec<(Fx, [Fx; 3])>,
     /// Arena id backing the palette. On PB `setPalette(arr)` holds a LIVE
     /// reference: later writes through `arr` change what `paint()` looks
@@ -836,6 +875,7 @@ impl Vm {
             transform_ops: 0,
             map: None,
             pixel_count: 0,
+            pixel_state: None,
             palette: Vec::new(),
             palette_src: None,
             palette_dirty: false,
@@ -881,6 +921,87 @@ impl Vm {
     /// Bytes charged against `array_byte_budget`.
     pub fn arena_bytes(&self) -> usize {
         self.array_bytes
+    }
+
+    /// Bytes the per-pixel state buffer currently holds — 0 until a pattern
+    /// calls `setPixelState`, and included in [`arena_bytes`].
+    pub fn pixel_state_bytes(&self) -> usize {
+        self.pixel_state
+            .as_ref()
+            .map_or(0, |s| PixelState::bytes(s.n, s.channels))
+    }
+
+    /// The pixel count the state buffer is sized to. `pixel_count` is
+    /// engine-set only after top-level init has run (mapPixels is a no-op
+    /// during init by design), but a pattern may legitimately seed state
+    /// at top level — so fall back to the `pixelCount` global then.
+    fn state_pixel_count(&self, prog: &Program) -> usize {
+        if self.pixel_count > 0 {
+            self.pixel_count as usize
+        } else {
+            self.globals[prog.pixel_count_g as usize]
+                .num()
+                .to_int_trunc()
+                .max(0) as usize
+        }
+    }
+
+    /// Make sure the state buffer exists and holds channel `ch`, growing it
+    /// (or creating it) on demand. Budget-checked BEFORE reserving and with
+    /// fallible reservations, like `alloc_array_zeroed`: on a small-heap
+    /// device an oversized buffer is a recorded runtime error, never an
+    /// allocator panic. Growth keeps every existing channel's values —
+    /// channel-major layout makes the new channels a plain append.
+    fn pixel_state_ensure(&mut self, prog: &Program, ch: usize) -> Result<(), &'static str> {
+        let want = ch + 1;
+        let (n, have) = match &self.pixel_state {
+            Some(s) if s.channels >= want => return Ok(()),
+            Some(s) => (s.n, s.channels),
+            None => (self.state_pixel_count(prog), 0),
+        };
+        let delta = PixelState::bytes(n, want) - PixelState::bytes(n, have);
+        self.charge_array_bytes(delta)?;
+        let extra = n * (want - have);
+        match &mut self.pixel_state {
+            Some(s) => {
+                if s.front.try_reserve_exact(extra).is_err()
+                    || s.back.try_reserve_exact(extra).is_err()
+                {
+                    return Err("out of memory for pixel state");
+                }
+                s.front.resize(n * want, Fx::ZERO);
+                s.back.resize(n * want, Fx::ZERO);
+                s.channels = want;
+            }
+            None => {
+                let mut front: Vec<Fx> = Vec::new();
+                let mut back: Vec<Fx> = Vec::new();
+                if front.try_reserve_exact(extra).is_err() || back.try_reserve_exact(extra).is_err()
+                {
+                    return Err("out of memory for pixel state");
+                }
+                front.resize(extra, Fx::ZERO);
+                back.resize(extra, Fx::ZERO);
+                self.pixel_state = Some(alloc::boxed::Box::new(PixelState {
+                    n,
+                    channels: want,
+                    front,
+                    back,
+                }));
+            }
+        }
+        self.array_bytes += delta;
+        Ok(())
+    }
+
+    /// End-of-frame handoff for the state buffer: this frame's writes
+    /// become next frame's reads, and pixels nobody wrote keep their value.
+    /// A no-op (one branch) when no pattern has allocated state.
+    pub fn pixel_state_commit(&mut self) {
+        if let Some(s) = &mut self.pixel_state {
+            core::mem::swap(&mut s.front, &mut s.back);
+            s.back.copy_from_slice(&s.front);
+        }
     }
 
     pub fn array<'a>(&'a self, prog: &'a Program, id: u32) -> Option<&'a [Value]> {
@@ -2856,6 +2977,49 @@ impl Vm {
                         let sum = data[i].num() + v;
                         data[i] = Value::Num(sum);
                         return num(sum);
+                    }
+                }
+                num(v)
+            }
+            // ---- Luxel extensions, batch 8 ----
+            // pixelState(index[, ch]): last frame's committed state for a
+            // pixel. Reads never allocate — a pattern that only reads gets
+            // 0 and pays nothing — and out-of-range indices/channels read
+            // 0 so neighbour taps at the strip's ends need no clamping.
+            PixelState => {
+                let i = n(0).to_int_trunc();
+                let ch = if argc >= 2 { n(1).to_int_trunc() } else { 0 };
+                let v = match &self.pixel_state {
+                    Some(s) if i >= 0 && (i as usize) < s.n && ch >= 0 && (ch as usize) < s.channels => {
+                        s.front[ch as usize * s.n + i as usize]
+                    }
+                    _ => Fx::ZERO,
+                };
+                num(v)
+            }
+            // setPixelState(index, v) / setPixelState(index, ch, v): write
+            // next frame's state. The first call allocates the buffer
+            // (budget-checked); an out-of-range index writes nothing; a
+            // channel outside 0..MAX_STATE_CHANNELS is a runtime error.
+            // Returns v, like an assignment.
+            SetPixelState => {
+                let i = n(0).to_int_trunc();
+                let (ch, v) = if argc >= 3 {
+                    (n(1).to_int_trunc(), n(2))
+                } else {
+                    (0, n(1))
+                };
+                if ch < 0 || ch as usize >= MAX_STATE_CHANNELS {
+                    return Err(no_site(format!(
+                        "setPixelState channel {ch} out of range (0..{})",
+                        MAX_STATE_CHANNELS - 1
+                    )));
+                }
+                let ch = ch as usize;
+                self.pixel_state_ensure(prog, ch).map_err(|m| no_site(m.into()))?;
+                if let Some(s) = &mut self.pixel_state {
+                    if i >= 0 && (i as usize) < s.n {
+                        s.back[ch * s.n + i as usize] = v;
                     }
                 }
                 num(v)
