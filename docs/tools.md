@@ -7,6 +7,12 @@ open. Everything runs inside `nix develop` from the repo root unless noted.
 Most of these drive a device or the mirror over HTTP; the routes they call
 are documented once in [docs/api.md](api.md), not here.
 
+## CI
+
+| tool | what it does |
+|---|---|
+| `tools/ci.sh` | **The CI gate** — the exact sequence `.gitea/workflows/ci.yml` runs on every push to master and every PR, in one script so you can run the same thing locally: `nix develop --command tools/ci.sh`. Four steps in a load-bearing order: the web build + `npm test`, `cargo test --workspace`, `tools/check-library.sh`, then a `board-pixelblaze-v3` firmware build via `firmware/build-esp32.sh` plus `tools/image-check.sh` over both the ELF (linked-feature markers) and an `espflash save-image` app image (the 1 MiB OTA-slot margin, which the ELF run cannot check — image-check only does the margin half for app images). Web first because `luxel-cli`'s `heapstat` test reads `web/public/gallery.json`, which the web build writes. Must run from inside the devshell, entered at the repo ROOT (the shellHook materializes `firmware/vendor/esp-hub75` relative to the shell's cwd). `CI_SKIP="web cargo library firmware"` drops steps while iterating; `CI_BOARD` picks a different board. Not a device tool and no substitute for the hardware gates below — it has no device, no browser e2e and no soak. |
+
 ## Device operations
 
 | tool | what it does |
