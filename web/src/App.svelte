@@ -214,6 +214,16 @@
   /** LED protocol the device is driving + the selectable options. */
   let deviceProtocol = "sk9822";
   let protocolOptions: string[] = ["sk9822", "ws2812"];
+  /** Strip DATA pin (Gitea #154): the GPIO the driver is bound to, the
+   *  board default, the pins the picker accepts (empty = panel board or
+   *  older firmware → no picker), a stored pin waiting for a reboot, and
+   *  the one selected in the form but not yet applied. */
+  let dataPin = 0;
+  let dataPinDefault = 0;
+  let dataPins: number[] = [];
+  let dataPinNext: number | null = null;
+  let dataPinChoice: number | null = null;
+  let dataPinNote = "";
   /** WiFi: the network the device will join next boot (never the password). */
   let wifiSsid: string | null = null;
   let wifiSource = "none";
@@ -926,6 +936,14 @@
         const c = await session.config();
         pixelMax = capFromStatus || c.max || 2048;
         if (c.protocol) deviceProtocol = c.protocol;
+        if (typeof c.data_pin === "number" && c.data_pins?.length) {
+          dataPin = c.data_pin;
+          dataPinDefault = c.data_pin_default ?? c.data_pin;
+          dataPins = c.data_pins;
+          dataPinNext = c.data_pin_next ?? null;
+          dataPinChoice = null;
+          dataPinNote = "";
+        }
       } catch {
         /* older firmware without /api/config — pixel count stays read-only */
       }
@@ -1608,6 +1626,38 @@ export function render(index) {
     })();
   }
 
+  /** Strip DATA pin picker (Gitea #154). Unlike the protocol/pixel fields
+   *  this is NOT live: the pick sits in the form until "apply & reboot",
+   *  because the device reboots to rebind its SPI driver, and a mis-click
+   *  that darkens the strip should take a deliberate second step. */
+  function onDataPinPick(e: Event): void {
+    const v = Number((e.target as HTMLSelectElement).value);
+    dataPinChoice = v === dataPin && dataPinNext === null ? null : v;
+    dataPinNote = "";
+  }
+
+  function applyDataPin(): void {
+    const pin = dataPinChoice ?? dataPinNext;
+    if (pin === null) return;
+    if (
+      !window.confirm(
+        `Move the strip data line to GPIO${pin}${pin === dataPinDefault ? " (board default)" : ""} and reboot the device? The strip goes dark until it is wired to that pin.`,
+      )
+    )
+      return;
+    void (async () => {
+      dataPinNote = "saving…";
+      const r = await device?.setDataPin(pin === dataPinDefault ? "default" : pin);
+      if (r?.ok) {
+        dataPinNote = `saved — the device is rebooting with data on GPIO${r.data_pin ?? pin}`;
+        dataPinNext = pin;
+        dataPinChoice = null;
+      } else {
+        dataPinNote = r?.error ? `failed: ${r.error}` : "save failed";
+      }
+    })();
+  }
+
   /** Live pixel-count change: the device resizes its strip (no reboot); we
    *  re-anchor the local preview to the new count. */
   function onPixelCountChange(e: Event): void {
@@ -1750,9 +1800,9 @@ export function render(index) {
 
   /** A press/latch from the pin panel. `level: null` releases the pin back to
    *  its idle level (HIGH under a pull-up) — the injection ABI's driven-vs-idle
-   *  model, not a plain HIGH/LOW toggle. Preview-only: the firmware has no GPIO
-   *  injection endpoint yet (Gitea #177 item 4), so nothing is forwarded to a
-   *  bound device. */
+   *  model, not a plain HIGH/LOW toggle. Preview-only by design: on a device
+   *  the same pins are real pads the firmware syncs every frame (Gitea #177
+   *  item 4), so an injected level would be overwritten by the wire. */
   function onPinDrive(e: CustomEvent<{ pin: number; level: boolean | null }>): void {
     engine?.setPin(e.detail.pin, e.detail.level);
     refreshPins();
@@ -2480,7 +2530,8 @@ export function render(index) {
             <code>pinMode</code> idle level.{/if}{#if analogPins.length > 0}{" "}
             An analog slider is what <code>analogRead</code>/<code>touchRead</code> read on that pin,
             0..1 — it stays where you leave it.{/if}{#if device}{" "}
-            Preview only — the firmware has no GPIO injection yet, so nothing is sent to the device.{/if}
+            Drives the local preview only: on the device these pins are real GPIO, read from and
+            written to the pads every frame.{/if}
         </p>
       {/if}
 
@@ -2738,6 +2789,36 @@ export function render(index) {
             </select>
             <span class="dim">match your strip — switched live (no reboot)</span>
           </div>
+          {#if dataPins.length}
+            <div class="field">
+              <span class="flabel">Data pin</span>
+              <select
+                data-role="cfg-datapin"
+                value={String(dataPinChoice ?? dataPinNext ?? dataPin)}
+                on:change={onDataPinPick}
+              >
+                {#each dataPins as pin}
+                  <option value={String(pin)}>GPIO{pin}{pin === dataPinDefault ? " (board default)" : ""}</option>
+                {/each}
+              </select>
+              <button
+                data-role="cfg-datapin-apply"
+                disabled={!device || (dataPinChoice === null && dataPinNext === null)}
+                on:click={applyDataPin}
+              >
+                apply &amp; reboot
+              </button>
+              <span class="dim" data-role="cfg-datapin-note">
+                {#if dataPinNote}
+                  {dataPinNote}
+                {:else if dataPinNext !== null}
+                  stored GPIO{dataPinNext}, driving GPIO{dataPin} until the next reboot
+                {:else}
+                  driving GPIO{dataPin} — where the strip's DATA wire goes; applied on reboot
+                {/if}
+              </span>
+            </div>
+          {/if}
           <div class="field">
             <span class="flabel">Status</span>
             <span class="mono dim">

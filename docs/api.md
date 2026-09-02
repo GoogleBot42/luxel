@@ -183,8 +183,9 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 |---|---|---|---|---|
 | `/api/brightness` | GET | — | `{"brightness":0..31,"max":31}` | both |
 | `/api/brightness` | POST | `0`..`31` | `{"ok":true,"brightness":N}` | both |
-| `/api/config` | GET | — | `{"pixels":N,"max":N,"protocol":"sk9822"}` | both |
+| `/api/config` | GET | — | `{"pixels":N,"max":N,"protocol":"sk9822"}` + on strip-board firmware `"data_pin":N,"data_pin_default":N,"data_pin_next":N\|null,"data_pins":[…]` | both (pin fields firmware only) |
 | `/api/config` | POST | pixel count `1..=max` | `{"ok":true,"pixels":N}` | both |
+| `/api/datapin` | POST | GPIO number from `data_pins`, or `default` | `{"ok":true,"data_pin":N,"note":"rebooting to apply"}` — **firmware reboots**; a rejected pin answers `{"ok":false,…}` and does not | firmware only (strip boards) |
 | `/api/protocol` | GET | — | `{"protocol":"sk9822","options":["sk9822","ws2812"]}` | both |
 | `/api/protocol` | POST | protocol name | `{"ok":true,"protocol":"…"}` | both |
 | `/api/output` | GET | — | see below | both |
@@ -198,6 +199,11 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 
 - `POST /api/config` `max` is the board cap (2048, or 4096 on HUB75 boards);
   the mirror is always 2048.
+- `/api/datapin` is the one setting here that is NOT live (Gitea #154): the
+  strip driver binds its DATA pin at boot, so the value is persisted and the
+  device reboots. `data_pin_next` in `GET /api/config` is non-null only
+  between a POST and that reboot. See docs/boards.md "Runtime pins" for
+  which pins a board allows and why.
 - Protocol names accepted: `sk9822`/`apa102`, and
   `ws2812`/`ws2811`/`ws2815`/`ws281x`. The reply always echoes the canonical
   `sk9822` or `ws2812`.
@@ -309,8 +315,11 @@ writes actually landed (`"pins":N`); a body that yields zero writes answers
 `{"ok":false,"error":"want lines of \"<pin> <0|1|x>\" or \"a <pin> <0..1>\""}`.
 At most `PIN_MAX_BATCH` writes per request.
 
-> **`/api/pins` is mirror-only today.** The firmware has no such route — real
-> device GPIO is open as Gitea #177 item 4. A POST to it on a device 404s.
+> **`/api/pins` is mirror-only, by design.** On a device the pins a pattern
+> names are real pads, synced with the engine every frame (Gitea #177 item 4,
+> `firmware/src/gpio.rs`) — an injected level would be overwritten by the wire
+> on the next frame, so there is nothing for the route to do. A POST to it on
+> a device 404s.
 
 ## Firmware maintenance (device only)
 

@@ -587,11 +587,25 @@ y = mod(y + v[1] * 0.09 * dt, 1)
 ### Device & environment
 
 GPIO (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`,
-`touchRead`) — stubs until a board wires them, with one exception:
-`digitalRead` reports the pin's *idle* level per the last `pinMode`, so
-an `INPUT_PULLUP` pin reads `HIGH` and everything else reads `LOW`. A
-button-to-ground pattern therefore idles "not pressed" instead of "held
-forever". A host can also DRIVE a digital input from outside the pattern
+`touchRead`). **On a device these are real pads** (Gitea #177): between
+frames the firmware configures every pin the pattern named (`pinMode`
+modes `INPUT`, `OUTPUT`, `INPUT_PULLUP`, `INPUT_PULLDOWN`,
+`OUTPUT_OPEN_DRAIN`; a pin read or written without a `pinMode` is an
+input), copies `digitalWrite` levels out, and reads inputs and ADC1
+samples (`analogRead`, 0..1 over ≈0–3.3 V, 12-bit) back in. Pins the
+board reserves — the strip DATA/CLK lines, a relay or status LED, flash,
+PSRAM and the serial console — are ignored with one serial log line;
+`docs/boards.md` lists them per board. `digitalRead` of an `OUTPUT` pin
+reports the pad, and a pad sampled with `analogRead` belongs to the ADC
+(its `digitalRead` reads 0, an `OUTPUT` on it does not drive).
+`touchRead` has no device driver yet and reads 0 there.
+
+The engine itself never touches hardware; it keeps the pattern's view of
+each pin and lets a host sync it. Without a host, `digitalRead` reports
+the pin's *idle* level per the last `pinMode`, so an `INPUT_PULLUP` pin
+reads `HIGH` and everything else reads `LOW`. A button-to-ground pattern
+therefore idles "not pressed" instead of "held forever". A host can also
+DRIVE a digital input from outside the pattern
 (`lx_set_pin` in the wasm ABI, `Engine::set_pin` natively, `POST
 /api/pins` on the CLI mirror, `pins` in `tools/verify/fixups.json`):
 levels are held until released, so a button pattern can be pressed
@@ -607,8 +621,8 @@ host drives a 0..1 value per pin with `lx_set_analog_pin` /
 or an `analogPins` block in `tools/verify/fixups.json`. Both builtins
 share one per-pin value (no board wires an ADC and a touch pad to the
 same pad), `lx_analog_pins_used` reports which pins the pattern
-sampled, and the playground gives each of those a 0..1 slider.
-Nothing drives a real pad yet.
+sampled, and the playground gives each of those a 0..1 slider. On a
+device the firmware is that host, and the pads win.
 Clock (`clockYear` …
 `clockWeekday`) — needs wall time from the host; every host supplies it
 at engine construction too, so top-level reads see real time-of-day

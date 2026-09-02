@@ -168,12 +168,13 @@ export const BUILTINS: BuiltinDoc[] = [
   // palettes
   { name: "setPalette", sig: "setPalette(arr)", doc: "Install a gradient palette: [pos, r, g, b, …] stops." },
   { name: "paint", sig: "paint(t, brightness)", doc: "Set the current pixel from the palette at t." },
-  // GPIO (stubs until a board wires them)
-  { name: "pinMode", sig: "pinMode(pin, mode)", doc: "Configure a GPIO pin." },
-  { name: "digitalWrite", sig: "digitalWrite(pin, value)", doc: "Drive a GPIO pin high/low." },
-  { name: "digitalRead", sig: "digitalRead(pin)", doc: "Read a GPIO pin (0/1). No real GPIO yet — reads the idle level: 1 under INPUT_PULLUP, else 0." },
-  { name: "analogRead", sig: "analogRead(pin)", doc: "Read an ADC pin 0..1." },
-  { name: "touchRead", sig: "touchRead(pin)", doc: "Read a capacitive touch pin 0..1." },
+  // GPIO — real pads on a device (pins the board reserves are ignored);
+  // the Pins panel in the preview
+  { name: "pinMode", sig: "pinMode(pin, mode)", doc: "Configure a GPIO pin: INPUT, OUTPUT, INPUT_PULLUP, INPUT_PULLDOWN, OUTPUT_OPEN_DRAIN." },
+  { name: "digitalWrite", sig: "digitalWrite(pin, value)", doc: "Drive an OUTPUT pin high (non-zero) or low." },
+  { name: "digitalRead", sig: "digitalRead(pin)", doc: "Read a GPIO pin (0/1). On a device: the pad. In the preview: the Pins panel, else the pinMode idle level (1 under INPUT_PULLUP)." },
+  { name: "analogRead", sig: "analogRead(pin)", doc: "Read an ADC1 pin 0..1 (full scale ≈ 3.3 V). In the preview: the Pins panel slider." },
+  { name: "touchRead", sig: "touchRead(pin)", doc: "Read a capacitive touch pin 0..1. Preview slider only — no device driver yet." },
   // clock (needs wall time; set via the host)
   { name: "clockYear", sig: "clockYear()", doc: "Current year." },
   { name: "clockMonth", sig: "clockMonth()", doc: "Month 1–12." },

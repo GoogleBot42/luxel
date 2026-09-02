@@ -56,6 +56,7 @@ mod assets;
 mod board;
 mod config;
 mod devicemap;
+mod gpio;
 #[cfg(feature = "hub75")]
 mod hub75;
 mod leds;
@@ -253,52 +254,8 @@ async fn main(spawner: Spawner) -> ! {
         esp_hal::gpio::Level::High,
         esp_hal::gpio::OutputConfig::default(),
     );
-
-    #[cfg(not(feature = "hub75"))]
-    let out = {
-        let spi = Spi::new(
-            p.SPI2,
-            SpiConfig::default()
-                .with_frequency(Rate::from_hz(DEFAULT_PROTOCOL.spi_hz()))
-                .with_mode(Mode::_0),
-        )
-        .expect("spi init");
-        #[cfg(feature = "board-c3-devkit")]
-        let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
-        #[cfg(feature = "board-athom-music")]
-        let spi = spi.with_sck(p.GPIO5).with_mosi(p.GPIO18);
-        #[cfg(feature = "board-pixelblaze-v3")]
-        let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
-        // generic classic-ESP32: VSPI defaults — most WROOM boards break these out
-        #[cfg(feature = "board-esp32-generic")]
-        let spi = spi.with_sck(p.GPIO18).with_mosi(p.GPIO23);
-        // S3/C6 devkits: the chip's SPI2 (FSPI) IO_MUX pins. UNTESTED ON METAL.
-        #[cfg(feature = "board-s3-devkit")]
-        let spi = spi.with_sck(p.GPIO12).with_mosi(p.GPIO11);
-        #[cfg(feature = "board-c6-devkit")]
-        let spi = spi.with_sck(p.GPIO6).with_mosi(p.GPIO7);
-
-        // DMA, so each frame is ONE continuous transfer. The FIFO path splits
-        // writes into 64-byte transactions with a CPU busy-wait between them;
-        // 64 B = 512 SPI bits, not divisible by WS2812's 3-bits-per-bit, so
-        // every chunk boundary corrupts a bit mid-symbol — and a WiFi interrupt
-        // in the gap stretches it past the strip's latch time (partial-frame
-        // latch). SK9822 is clocked and never noticed.
-        // GDMA chips (C3/S3/C6) take a numbered channel; the classic ESP32's
-        // older DMA is bound to the peripheral instead.
-        #[cfg(not(feature = "esp32"))]
-        let spi = spi.with_dma(p.DMA_CH0);
-        #[cfg(feature = "esp32")]
-        let spi = spi.with_dma(p.DMA_SPI2);
-        output::SpiStripOutput::new(spi)
-    };
-    // HUB75 panel over LCD_CAM (S3 only): the strip SPI is not wired at
-    // all — DMA_CH0 feeds the panel's circular rescan instead. The pin map
-    // is per-board and lives in board.rs with the rest of the board
-    // identity. UNTESTED ON METAL on either panel board (#75).
-    #[cfg(feature = "hub75")]
-    let out = hub75::Hub75Output::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0);
-    // ---- end board wiring ----
+    // (The strip output itself is wired further down, after the flash
+    // driver is up: its DATA pin is a stored setting — Gitea #154.)
 
     // Bisect knob: LUXEL_NO_OTA=1 at build time skips OTA init entirely —
     // no esp-storage FlashStorage construction, no boot-time partition
@@ -329,10 +286,91 @@ async fn main(spawner: Spawner) -> ! {
         println!("LUXEL_NO_OTA: ota disabled");
     }
 
+    // The persisted settings record, read once here — AFTER ota::init, which
+    // installs the flash driver `assets::read_chunk` reads through (before
+    // it the read silently answers "no record" and every setting boots at
+    // its default; that cost one debug cycle on 2026-09-02). The strip DATA
+    // pin is the one setting the wiring below needs (Gitea #154); the rest
+    // seed the runtime atomics further down.
+    let stored = config::read_device();
+
+    #[cfg(not(feature = "hub75"))]
+    let out = {
+        let spi = Spi::new(
+            p.SPI2,
+            SpiConfig::default()
+                .with_frequency(Rate::from_hz(DEFAULT_PROTOCOL.spi_hz()))
+                .with_mode(Mode::_0),
+        )
+        .expect("spi init");
+        // CLK is a typed board constant (SK9822 only; WS2812 boards leave it
+        // unconnected). DATA is runtime data: a stored override that passes
+        // the board's pin tables (board.rs) wins, else the board default.
+        #[cfg(feature = "board-c3-devkit")]
+        let spi = spi.with_sck(p.GPIO6);
+        #[cfg(feature = "board-athom-music")]
+        let spi = spi.with_sck(p.GPIO5);
+        #[cfg(feature = "board-pixelblaze-v3")]
+        let spi = spi.with_sck(p.GPIO18);
+        // generic classic-ESP32: VSPI defaults — most WROOM boards break these out
+        #[cfg(feature = "board-esp32-generic")]
+        let spi = spi.with_sck(p.GPIO18);
+        // S3/C6 devkits: the chip's SPI2 (FSPI) IO_MUX pins. UNTESTED ON METAL.
+        #[cfg(feature = "board-s3-devkit")]
+        let spi = spi.with_sck(p.GPIO12);
+        #[cfg(feature = "board-c6-devkit")]
+        let spi = spi.with_sck(p.GPIO6);
+        let want = stored.and_then(|c| c.data_pin);
+        let data_pin = match want {
+            Some(pin) if board::data_pin_ok(pin) => pin,
+            Some(pin) => {
+                println!(
+                    "settings: stored data pin GPIO{} is not usable on this board — using GPIO{}",
+                    pin,
+                    board::DEFAULT_DATA_PIN
+                );
+                board::DEFAULT_DATA_PIN
+            }
+            None => board::DEFAULT_DATA_PIN,
+        };
+        shared::DATA_PIN.store(data_pin, Ordering::Relaxed);
+        shared::set_want_data_pin(want);
+        println!(
+            "strip data pin: GPIO{} ({})",
+            data_pin,
+            if want.is_some() { "configured" } else { "board default" }
+        );
+        // SAFETY: `data_pin_ok` excludes every pin the firmware names by type
+        // (this section, board::RESERVED_PINS) and pattern GPIO (gpio.rs)
+        // excludes DATA_PIN in turn, so this is the pad's only owner. The
+        // typed default (e.g. `p.GPIO18`) is simply never used.
+        let spi = spi.with_mosi(unsafe { esp_hal::gpio::AnyPin::steal(data_pin) });
+
+        // DMA, so each frame is ONE continuous transfer. The FIFO path splits
+        // writes into 64-byte transactions with a CPU busy-wait between them;
+        // 64 B = 512 SPI bits, not divisible by WS2812's 3-bits-per-bit, so
+        // every chunk boundary corrupts a bit mid-symbol — and a WiFi interrupt
+        // in the gap stretches it past the strip's latch time (partial-frame
+        // latch). SK9822 is clocked and never noticed.
+        // GDMA chips (C3/S3/C6) take a numbered channel; the classic ESP32's
+        // older DMA is bound to the peripheral instead.
+        #[cfg(not(feature = "esp32"))]
+        let spi = spi.with_dma(p.DMA_CH0);
+        #[cfg(feature = "esp32")]
+        let spi = spi.with_dma(p.DMA_SPI2);
+        output::SpiStripOutput::new(spi)
+    };
+    // HUB75 panel over LCD_CAM (S3 only): the strip SPI is not wired at
+    // all — DMA_CH0 feeds the panel's circular rescan instead. The pin map
+    // is per-board and lives in board.rs with the rest of the board
+    // identity. UNTESTED ON METAL on either panel board (#75).
+    #[cfg(feature = "hub75")]
+    let out = hub75::Hub75Output::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0);
+    // ---- end board wiring ----
+
     // Seed runtime settings from flash (else compile-time defaults) BEFORE the
     // render task spawns — it reads these once when it builds the engine and
-    // configures SPI.
-    let stored = config::read_device();
+    // configures SPI. (`stored` was read above, with the strip wiring.)
     let brightness = stored.map(|c| c.brightness).unwrap_or(APA_BRIGHTNESS);
     let pixels = stored
         .map(|c| c.pixel_count)
@@ -865,6 +903,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     let mut blend_start = Instant::now();
     let mut blend_ms: u32 = 0;
     let mut blend_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
+    // Real GPIO behind the pattern's pin builtins (Gitea #177 item 4):
+    // synced with the running engine between frames, see gpio.rs.
+    let mut pins = gpio::PinHost::new();
     let mut last = Instant::now();
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
@@ -1166,6 +1207,10 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             } else {
                 65536
             };
+            // pads ↔ pattern pin state, before the frame reads them (the
+            // outgoing crossfade engine keeps its last view — it is on its
+            // way out and must not fight the incoming one for a pad)
+            pins.sync(engine.as_mut().unwrap());
             // read before the frame borrow: `grid` is a Copy descriptor
             let grid = engine.as_ref().and_then(|e| e.grid());
             let frame: &[[u8; 3]] = if prev.is_some() && t < 65536 {

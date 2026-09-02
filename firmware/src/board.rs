@@ -12,6 +12,9 @@ mod def {
     pub const NAME: &str = "ESP32-C3 devkit";
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Sk9822;
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
+    pub const DEFAULT_DATA_PIN: u8 = 7;
+    /// SPI CLK.
+    pub const RESERVED_PINS: &[u8] = &[6];
 }
 
 #[cfg(feature = "board-pixelblaze-v3")]
@@ -20,6 +23,10 @@ mod def {
     pub const NAME: &str = "Pixelblaze v3 Standard";
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Sk9822;
     pub const DEFAULT_PIXEL_COUNT: u32 = 300;
+    pub const DEFAULT_DATA_PIN: u8 = 23;
+    /// SPI CLK (18), status LED (12). The button (32) and the expansion
+    /// header (0, 25, 26) stay free for patterns.
+    pub const RESERVED_PINS: &[u8] = &[18, 12];
 }
 
 #[cfg(feature = "board-athom-music")]
@@ -28,6 +35,11 @@ mod def {
     pub const NAME: &str = "Athom music-reactive WLED controller";
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
+    pub const DEFAULT_DATA_PIN: u8 = 18;
+    /// CLK1 (5), strip-power relay (2). The case button (0), IR receiver
+    /// (25) and mic pins (32/15/36) are NOT reserved: Luxel leaves them
+    /// idle, so a pattern may read them (`digitalRead(0)` is the button).
+    pub const RESERVED_PINS: &[u8] = &[5, 2];
 }
 
 #[cfg(feature = "board-esp32-generic")]
@@ -36,6 +48,9 @@ mod def {
     pub const NAME: &str = "generic ESP32 (VSPI: CLK 18, DATA 23)";
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
+    pub const DEFAULT_DATA_PIN: u8 = 23;
+    /// SPI CLK.
+    pub const RESERVED_PINS: &[u8] = &[18];
 }
 
 // UNTESTED ON METAL: no S3 on the bench. Wiring is reviewed against the
@@ -56,6 +71,12 @@ mod def {
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
     #[cfg(feature = "hub75")]
     pub const DEFAULT_PIXEL_COUNT: u32 = super::PANEL_PIXELS;
+    pub const DEFAULT_DATA_PIN: u8 = 11;
+    /// SPI CLK (12); with `hub75`, the 14 panel pins from `hub75_pins!`.
+    #[cfg(not(feature = "hub75"))]
+    pub const RESERVED_PINS: &[u8] = &[12];
+    #[cfg(feature = "hub75")]
+    pub const RESERVED_PINS: &[u8] = &[38, 42, 48, 47, 2, 21, 14, 46, 13, 9, 3, 11, 12, 10];
 }
 
 // UNTESTED ON METAL: ordered 2026-08-22, bring-up tracked in Gitea #75.
@@ -76,6 +97,10 @@ mod def {
     // the persisted device config on every board.
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
     pub const DEFAULT_PIXEL_COUNT: u32 = super::PANEL_PIXELS;
+    /// Vestigial too: the strip SPI is not wired on a panel board.
+    pub const DEFAULT_DATA_PIN: u8 = 11;
+    /// The 14 HUB75 panel pins (see `hub75_pins!`).
+    pub const RESERVED_PINS: &[u8] = &[5, 4, 6, 15, 7, 17, 8, 18, 10, 9, 16, 12, 11, 13];
 }
 
 // UNTESTED ON METAL: no C6 on the bench. Wiring is reviewed against the
@@ -86,6 +111,9 @@ mod def {
     pub const NAME: &str = "ESP32-C6 devkit (untested)";
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
+    pub const DEFAULT_DATA_PIN: u8 = 7;
+    /// SPI CLK (6), onboard RGB LED (8).
+    pub const RESERVED_PINS: &[u8] = &[6, 8];
 }
 
 /// Hard cap on a runtime pixel count, per board — it bounds heap use
@@ -205,3 +233,113 @@ compile_error!(
     feature = "board-seengreat-hub75",
 ))]
 pub use def::*;
+
+// ---- Runtime pin tables (Gitea #154 data-pin picker, #177 pattern GPIO) ----
+//
+// Pin NUMBERS are data even though pins are types: `esp_hal::gpio::AnyPin::
+// steal(n)` erases the type at runtime, and these tables say which numbers
+// are safe to hand it. Three layers, all `const`:
+//
+// - `chip`: what the silicon has — which GPIO numbers exist, which are
+//   input-only, which carry the SPI flash / PSRAM (touching those hangs the
+//   chip), which are the USB-serial / UART0 console, which reach ADC1.
+// - `def::RESERVED_PINS` (per board, above): what Luxel itself drives —
+//   the strip CLK, a relay, a status LED, the HUB75 bus.
+// - the configured strip DATA pin (`shared::DATA_PIN`), reserved at runtime
+//   by `gpio::pin_is_free`.
+//
+// A pattern naming a pin outside the free set is ignored on that pin
+// (logged once); the data-pin picker refuses such a pin outright.
+
+#[cfg(feature = "esp32")]
+mod chip {
+    /// Classic ESP32: GPIO 20, 24, 28–31 do not exist; 34–39 are input-only.
+    pub const fn gpio_exists(n: u8) -> bool {
+        matches!(n, 0..=5 | 12..=19 | 21..=23 | 25..=27 | 32..=39)
+    }
+    pub const fn gpio_can_output(n: u8) -> bool {
+        gpio_exists(n) && n < 34
+    }
+    /// SPI flash (6–11), UART0 console (1, 3).
+    pub const SYSTEM_PINS: &[u8] = &[6, 7, 8, 9, 10, 11, 1, 3];
+    /// ADC1 channels (ADC2 is unusable while WiFi runs).
+    pub const ADC1_PINS: &[u8] = &[32, 33, 34, 35, 36, 37, 38, 39];
+}
+
+#[cfg(feature = "esp32c3")]
+mod chip {
+    pub const fn gpio_exists(n: u8) -> bool {
+        n <= 21
+    }
+    pub const fn gpio_can_output(n: u8) -> bool {
+        gpio_exists(n)
+    }
+    /// SPI flash (11–17), USB-serial-JTAG (18, 19), UART0 (20, 21).
+    pub const SYSTEM_PINS: &[u8] = &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
+    pub const ADC1_PINS: &[u8] = &[0, 1, 2, 3, 4];
+}
+
+#[cfg(feature = "esp32s3")]
+mod chip {
+    /// GPIO 22–25 do not exist.
+    pub const fn gpio_exists(n: u8) -> bool {
+        matches!(n, 0..=21 | 26..=48)
+    }
+    pub const fn gpio_can_output(n: u8) -> bool {
+        gpio_exists(n)
+    }
+    /// SPI flash (26–32), octal PSRAM (33–37), USB (19, 20), UART0 (43, 44).
+    pub const SYSTEM_PINS: &[u8] = &[26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 19, 20, 43, 44];
+    pub const ADC1_PINS: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+}
+
+#[cfg(feature = "esp32c6")]
+mod chip {
+    pub const fn gpio_exists(n: u8) -> bool {
+        n <= 30
+    }
+    pub const fn gpio_can_output(n: u8) -> bool {
+        gpio_exists(n)
+    }
+    /// SPI flash (24–30), USB-serial-JTAG (12, 13), UART0 (16, 17).
+    pub const SYSTEM_PINS: &[u8] = &[24, 25, 26, 27, 28, 29, 30, 12, 13, 16, 17];
+    /// esp-hal 1.1 carries no ADC channel map for the C6, so `analogRead`
+    /// stays at 0 there (gpio.rs logs it once).
+    pub const ADC1_PINS: &[u8] = &[];
+}
+
+pub use chip::*;
+
+const fn in_list(list: &[u8], n: u8) -> bool {
+    let mut i = 0;
+    while i < list.len() {
+        if list[i] == n {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// A GPIO number that exists on this chip and is neither a system pin
+/// (flash, PSRAM, console) nor one the board itself drives. Does NOT
+/// account for the runtime strip DATA pin — `gpio::pin_is_free` does.
+pub const fn pin_is_board_free(n: u8) -> bool {
+    gpio_exists(n) && !in_list(SYSTEM_PINS, n) && !in_list(RESERVED_PINS, n)
+}
+
+/// Whether `n` may carry the strip DATA line: board-free AND able to
+/// drive an output (the classic ESP32's 34–39 cannot).
+pub const fn data_pin_ok(n: u8) -> bool {
+    pin_is_board_free(n) && gpio_can_output(n)
+}
+
+/// Whether `n` reaches ADC1 on this chip (still subject to `pin_is_free`).
+pub const fn adc_pin(n: u8) -> bool {
+    in_list(ADC1_PINS, n)
+}
+
+// Every board's default DATA pin must pass its own picker check — a board
+// whose default is "reserved" would boot with the strip dark and no way
+// to select it back.
+const _: () = assert!(data_pin_ok(DEFAULT_DATA_PIN) || cfg!(feature = "hub75"));

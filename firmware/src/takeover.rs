@@ -412,9 +412,10 @@ pub fn maybe_takeover() {
     }
 
     // Persist the inherited LED wiring the same way: build a device-config
-    // record from whatever mapped, board defaults for the rest. WLED's pin
-    // is compile-time on Luxel (board feature), so it's logged, not
-    // imported. Failure is non-fatal: defaults cover, never a retry.
+    // record from whatever mapped, board defaults for the rest. WLED's data
+    // pin is imported when this board can drive it (Gitea #154) — the
+    // takeover reboots anyway, so the first Luxel boot binds the SPI to it.
+    // Failure is non-fatal: defaults cover, never a retry.
     if let Some(w) = wiring {
         let protocol = w.strip_type.and_then(crate::wledfs::map_strip_type);
         if let (Some(t), None) = (w.strip_type, protocol) {
@@ -424,12 +425,22 @@ pub fn maybe_takeover() {
                 crate::board::DEFAULT_PROTOCOL.name()
             );
         }
-        if let Some(pin) = w.pin {
-            println!(
-                "takeover: WLED drove the strip on GPIO{} — Luxel's data pin is fixed by the board build; rewire or rebuild if they differ",
-                pin
-            );
-        }
+        let data_pin = match w.pin {
+            Some(pin) if pin == crate::board::DEFAULT_DATA_PIN as i32 => None,
+            Some(pin) if (0..64).contains(&pin) && crate::board::data_pin_ok(pin as u8) => {
+                println!("takeover: WLED drove the strip on GPIO{} — importing as Luxel's data pin", pin);
+                Some(pin as u8)
+            }
+            Some(pin) => {
+                println!(
+                    "takeover: WLED drove the strip on GPIO{}, which this board reserves — keeping GPIO{}; rewire or pick another pin in Settings",
+                    pin,
+                    crate::board::DEFAULT_DATA_PIN
+                );
+                None
+            }
+            None => None,
+        };
         let dev = crate::config::DeviceConfig {
             // WLED boot brightness is 0-255; Luxel's is 0-31 (>31 voids the
             // record). Round, and floor at 1 so an imported config can
@@ -456,6 +467,7 @@ pub fn maybe_takeover() {
             bright_curve_tenths: 0,
             blur_pct: 0,
             glow_pct: 0,
+            data_pin,
         };
         match crate::config::write_device(&dev) {
             Ok(()) => println!(

@@ -87,6 +87,15 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   need the mic's type + pins probed.
 - [ ] **PB sensor board** (only if you own one): plugs into the expansion
   header RX0; sound-reactive patterns should react with zero config.
+- [ ] **Strip on a moved data pin** (Gitea #238, #154): Settings → Device →
+  "Data pin", pick a free output pin (Athom: GPIO33), apply & reboot, move
+  the strip's DATA wire there — it should light; pick the board default to
+  put it back. Headless-verified: the setting persists across the reboot and
+  `/api/config` reports the bound pin; nobody has seen pixels on the new pin.
+- [ ] **A real button through `digitalRead`** (Gitea #238, #177): the pattern
+  in #238 on the Athom's case button (GPIO0) — dim strip, bright while held.
+  Headless-verified up to the press: the pull-up idles the pad HIGH, and a
+  written level reads back on the same pad.
 - [ ] **Map-aware 2D blur/glow on a real matrix** (Gitea #140, needs the
   64×64 HUB75 panel — #75): install the grid map, run a pattern with a
   bright point, then raise Settings → Output → Blur and Glow. It should
