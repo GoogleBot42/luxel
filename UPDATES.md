@@ -134,8 +134,10 @@ vectors): `curl2` components peak at **6.2**, mean vector length **2.7**;
 `curl3` peaks at **8.3**, mean length **4.0**.
 
 **Pattern.** `library/curl-flow-2d.js` — specks advected along the field,
-trails on a canvas, three sliders, and a 1D fallback that flies a horizon
-line across the same canvas so a bare strip still shows the flow.
+trails on a canvas, three real-unit sliders (display widths/second, trail
+half-life in seconds, vortices across the display), and a 1D fallback that
+flies a horizon line across the same canvas so a bare strip still shows the
+flow.
 
 **Verified:** `cargo test --workspace` green; `tools/check-library.sh`
 299/299 on all five rigs; the pattern driven in real chromium (60 fps, no

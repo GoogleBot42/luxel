@@ -31,7 +31,7 @@
 #   STRIPS= nix develop -c tools/check-library.sh      (grids only)
 #
 # Prints a per-rig pass count, the failing file + engine stage/error for each
-# failure, and exits non-zero if anything failed. Baseline: 297/297 on every rig.
+# failure, and exits non-zero if anything failed. Baseline: 299/299 on every rig.
 # (corpus/ has its own richer harness — tools/corpus/report.mjs.)
 set -euo pipefail
 TOOLS_DIR="$(cd "$(dirname "$0")" && pwd)"
