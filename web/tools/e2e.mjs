@@ -240,10 +240,72 @@ try {
   await sleep(300);
   check("un-latching releases the pin", (await pinLevel()) === "HIGH");
 
+  // ── 3d. analog pins: a pattern that samples analogRead/touchRead gets a
+  // 0..1 slider instead of press/latch, and dragging it moves the render
+  // (Gitea #206) ──
+  check(
+    "no analog row for a pattern with no analog reads",
+    (await page.$('[data-role="analog-row"]')) === null,
+  );
+  await setEditor(
+    page,
+    "export function render(index) { rgb(analogRead(33), 0, touchRead(4)) }",
+  );
+  await page.waitForSelector('[data-role="analog-row"][data-pin="33"]', { timeout: 5000 });
+  check(
+    "touchRead pins get a row too",
+    (await page.$('[data-role="analog-row"][data-pin="4"]')) !== null,
+  );
+  check(
+    "an analog-only pattern gets no digital press/latch row",
+    (await page.$('[data-role="pin-row"]')) === null,
+  );
+  const analogText = (pin) =>
+    page.$eval(`[data-role="analog-value"][data-pin="${pin}"]`, (e) => e.textContent.trim());
+  // max red channel of the strip's first row — the value analogRead(33) fed
+  // into rgb(), read back off the real canvas
+  const stripRed = () =>
+    page.$eval(".strip", (c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, 1).data;
+      let m = 0;
+      for (let i = 0; i < d.length; i += 4) m = Math.max(m, d[i]);
+      return m;
+    });
+  check("undriven analog pin reads 0", (await analogText(33)) === "0.00" && !(await stripPx()));
+  // drag the slider to full scale with a real pointer, not a synthetic event
+  const slider = await page.$('[data-role="analog-slider"][data-pin="33"]');
+  const sBox = await slider.boundingBox();
+  // press on the thumb and drag: a click at exactly the right edge lands
+  // outside the control and does nothing, so past-the-end is how you reach max
+  const dragTo = async (frac) => {
+    const y = sBox.y + sBox.height / 2;
+    await page.mouse.move(sBox.x + sBox.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(sBox.x + sBox.width * frac, y, { steps: 5 });
+    await page.mouse.up();
+    await sleep(300);
+  };
+  await dragTo(1.1);
+  const full = await stripRed();
+  check("slider at full scale drives analogRead to 1", (await analogText(33)) === "1.00" && full > 250, `red=${full}`);
+  await page.screenshot({ path: `${shotDir}/e2e-2d-analog.png` });
+  await dragTo(0.25);
+  const quarter = Number(await analogText(33));
+  const dim = await stripRed();
+  check(
+    "dragging the slider down dims the render proportionally",
+    quarter > 0 && quarter < 1 && dim > 0 && dim < full,
+    `value=${quarter} red=${dim} full=${full}`,
+  );
+
   // restore the rainbow the debugger section expects (render on line 1)
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
   await sleep(300);
   check("pin panel disappears with the pin", (await page.$('[data-role="pin-row"]')) === null);
+  check(
+    "analog rows disappear with the pattern",
+    (await page.$('[data-role="analog-row"]')) === null,
+  );
 
   // ── 4. debugger: gutter breakpoint on the render line (line 1) pauses ──
   const lineRect = await page.$$eval(".cm-line", (els) => {

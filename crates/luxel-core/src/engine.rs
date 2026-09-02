@@ -719,6 +719,31 @@ impl Engine {
         self.vm.pins_idle_high()
     }
 
+    /// Drive an analog input pin from outside the pattern, so
+    /// `analogRead(pin)` / `touchRead(pin)` report an injected value instead
+    /// of the flat 0 they read while nothing drives them (Gitea #206).
+    /// `value` is clamped to 0..1, the range both builtins report; writing
+    /// [`Fx::ZERO`] releases the pin back to its undriven reading.
+    ///
+    /// Returns false for a pin outside `0..=`[`crate::vm::MAX_TRACKED_PIN`],
+    /// the same out-of-window contract as [`Engine::set_pin`]. Injected
+    /// values live on the VM, so a pattern switch clears them.
+    pub fn set_analog_pin(&mut self, pin: i32, value: Fx) -> bool {
+        self.vm.set_analog_pin(pin, value)
+    }
+
+    /// The value `analogRead(pin)` / `touchRead(pin)` currently report.
+    pub fn analog_read(&self, pin: i32) -> Fx {
+        self.vm.analog_read(pin)
+    }
+
+    /// Bit per pin (0..63): pins the pattern has actually named in an
+    /// `analogRead`/`touchRead` so far (Gitea #206) — the analog counterpart
+    /// of [`Engine::pins_used`], and what a host gates an analog slider on.
+    pub fn analog_pins_used(&self) -> u64 {
+        self.vm.analog_pins_used()
+    }
+
     /// Read an exported variable.
     pub fn var(&self, name: &str) -> Option<Value> {
         let i = self.prog.global_index(name)?;

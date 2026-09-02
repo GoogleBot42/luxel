@@ -114,6 +114,26 @@ check("pins: release returns the pin to its idle level", (await firstPx())[0] ==
 const pinBad = await pins("nonsense\n");
 check("pins: unparseable body rejected", pinBad.ok === false, JSON.stringify(pinBad));
 
+// ---- analog pin injection (POST /api/pins "a <pin> <0..1>" → analogRead, #206)
+const potSrc = "export function render(index) { hsv(0, 0, analogRead(33)) }";
+const potUp = await (await fetch(`${base}/api/code`, { method: "POST", body: await lxpBody("", potSrc) })).json();
+check("pins: analogRead pattern accepted", potUp.ok === true, JSON.stringify(potUp));
+await sleep(300);
+check("pins: an undriven analog pin reads 0 (dark)", (await firstPx())[0] === 0);
+const potRes = await pins("a 33 0.5\n");
+check("pins: analog value accepted", potRes.ok === true && potRes.pins === 1, JSON.stringify(potRes));
+await sleep(300);
+const pxPot = await firstPx();
+check("pins: driving analog pin 33 to 0.5 half-lights the strip", pxPot[0] > 100 && pxPot[0] < 160, `first px = ${pxPot}`);
+await sleep(300);
+check("pins: the analog value is HELD too", (await firstPx())[0] === pxPot[0]);
+await pins("analog 33 1\n");
+await sleep(300);
+check("pins: the spelled-out kind word works and drives full scale", (await firstPx())[0] === 255);
+await pins("a 33 x\n");
+await sleep(300);
+check("pins: releasing an analog pin returns it to 0", (await firstPx())[0] === 0);
+
 // restore a lit pattern (the vmerr pattern renders black: render aborts
 // before hsv) so the preview check sees light
 await fetch(`${base}/api/code`, {

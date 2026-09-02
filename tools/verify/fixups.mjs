@@ -49,6 +49,16 @@
 //                       "not pressed" forever and the two sides are showing
 //                       different states, not different renderings.
 //
+//   analogPins          Analog input pin values DRIVEN into a side once after
+//                       init (the lx_set_analog_pin injection ABI — Gitea
+//                       #206), feeding analogRead()/touchRead(). Same per-side
+//                       shape and same reason as `pins`, one surface over: a
+//                       corpus original sweeping a physical pot with
+//                       analogRead(33) renders one frozen state at the 0 an
+//                       undriven pad reads, so parking the pot with
+//                       `{"orig": {"33": 0.5}}` is what makes it comparable to
+//                       a port that offers the same knob as a UI control.
+//
 //   nonVisual           A one-string REASON marking the pair as excluded from
 //                       the output-verification sweep: the ORIGINAL is not a
 //                       visual pattern at all, so "the port should render the
@@ -79,6 +89,8 @@
 //                               "port": { ... } },
 //                 "pins": { "orig": {"<pin 0..63>": 0|1|true|false|null, ...},
 //                           "port": { ... } },
+//                 "analogPins": { "orig": {"<pin 0..63>": <0..1>, ...},
+//                                 "port": { ... } },
 //                 "nonVisual": "<reason the pair is not scoreable>",
 //                 "note": "why" } }
 //
@@ -189,7 +201,8 @@ export function varsOverride(slug) {
   return Object.keys(out.orig).length || Object.keys(out.port).length ? out : null;
 }
 
-/** Shared shape check for the per-side blocks (`vars`, `controls`, `pins`):
+/** Shared shape check for the per-side blocks (`vars`, `controls`, `pins`,
+ *  `analogPins`):
  *  an object keyed by `orig`/`port`, each holding a name→value map. Returns
  *  `{orig, port}` of raw maps (both always present) or null when the key is
  *  absent. Throws on anything malformed — see `varsOverride`. */
@@ -285,6 +298,39 @@ export function pinsOverride(slug) {
         );
       }
       out[side][pin] = level;
+    }
+  }
+  return Object.keys(out.orig).length || Object.keys(out.port).length ? out : null;
+}
+
+/** This slug's per-side ANALOG pin pins, or null: `{orig, port}` of
+ *  `pin → 0..1` (Gitea #206). Pin keys are range-checked like `pinsOverride`;
+ *  values must be finite numbers in 0..1, the range analogRead()/touchRead()
+ *  report — a value outside it would be silently clamped at render time and
+ *  read as a dial that does nothing, so it is rejected here where the
+ *  manifest entry can be named.
+ *
+ *  There is no `null` release here: an undriven analog pin reads 0, so 0 IS
+ *  the released state. */
+export function analogPinsOverride(slug) {
+  const raw = perSide(slug, "analogPins", fixupFor(slug)?.analogPins);
+  if (!raw) return null;
+  const out = {};
+  for (const side of SIDES) {
+    out[side] = {};
+    for (const [key, v] of Object.entries(raw[side])) {
+      const pin = Number(key);
+      if (!Number.isInteger(pin) || pin < 0 || pin > MAX_PIN) {
+        throw new Error(
+          `fixups.json: ${slug}.analogPins.${side} key "${key}" must be an integer pin 0..${MAX_PIN}`,
+        );
+      }
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
+        throw new Error(
+          `fixups.json: ${slug}.analogPins.${side}.${key} must be a number 0..1 (got ${v})`,
+        );
+      }
+      out[side][pin] = v;
     }
   }
   return Object.keys(out.orig).length || Object.keys(out.port).length ? out : null;

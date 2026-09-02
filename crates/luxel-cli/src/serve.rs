@@ -206,12 +206,13 @@ struct State {
     /// Injected events (POST /api/events) awaiting the render loop
     /// (mirrors shared::EVENTS).
     events: Mutex<Vec<[luxel_core::fixed::Fx; 4]>>,
-    /// Injected digital pin levels (POST /api/pins) awaiting the render loop:
-    /// `(pin, Some(high) | None = release)`. Stands in for the GPIO the
-    /// engine does not have yet (Gitea #177 item 2); like the event queue it
-    /// is drained between frames, and like the event queue a pattern switch
-    /// rebuilds the VM and forgets what was driven.
-    pins: Mutex<Vec<(i32, Option<bool>)>>,
+    /// Injected pin writes (POST /api/pins) awaiting the render loop: digital
+    /// levels for `digitalRead` (Gitea #177 item 2) and analog values for
+    /// `analogRead`/`touchRead` (Gitea #206). Stands in for the GPIO the
+    /// engine does not have yet; like the event queue it is drained between
+    /// frames, and like the event queue a pattern switch rebuilds the VM and
+    /// forgets what was driven.
+    pins: Mutex<Vec<luxel_core::netin::PinWrite>>,
     /// Luxel-to-Luxel sync: role (0 off, 1 leader, 2 follower), this
     /// process's boot id, the engine clock (published by the render loop
     /// for the leader beacon), and the last beacon heard as a follower.
@@ -1015,12 +1016,20 @@ fn render_loop(state: Arc<State>) {
             }
         }
 
-        // injected digital pin levels (POST /api/pins), same slot
+        // injected pin writes (POST /api/pins), same slot — digital levels
+        // and analog values share the route and the queue
         {
             let pins = std::mem::take(&mut *state.pins.lock().unwrap());
             if let Some(eng) = engine.as_mut() {
-                for (pin, level) in pins {
-                    eng.set_pin(pin, level);
+                for w in pins {
+                    match w {
+                        luxel_core::netin::PinWrite::Digital(pin, level) => {
+                            eng.set_pin(pin, level);
+                        }
+                        luxel_core::netin::PinWrite::Analog(pin, value) => {
+                            eng.set_analog_pin(pin, value);
+                        }
+                    }
                 }
             }
         }
@@ -1687,15 +1696,16 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         ("POST", "/api/pins") => {
-            // text body: one "<pin> <level>" per line, level 0/1/x (release)
-            // — digital pin injection for digitalRead()-driven patterns
-            // (Gitea #177 item 2). Applied between frames by the render loop.
+            // text body: one write per line — "<pin> <level>" (level 0/1/x)
+            // for digitalRead()-driven patterns (Gitea #177 item 2), or
+            // "a <pin> <0..1>" for analogRead()/touchRead() ones (Gitea
+            // #206). Applied between frames by the render loop.
             let body = String::from_utf8_lossy(&req.body);
             let pins = luxel_core::netin::parse_pin_lines(&body);
             let n = pins.len();
             let r = if n == 0 {
                 String::from(
-                    "{\"ok\":false,\"error\":\"want lines of \\\"<pin> <0|1|x>\\\"\"}",
+                    "{\"ok\":false,\"error\":\"want lines of \\\"<pin> <0|1|x>\\\" or \\\"a <pin> <0..1>\\\"\"}",
                 )
             } else {
                 state.pins.lock().unwrap().extend(pins);
