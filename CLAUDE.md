@@ -90,7 +90,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   calling it done — .claude/skills/verify-webui. Build/typecheck alone is not verification.
 - Firmware change touching statics or buffers → run `tools/stack-check.sh`.
   Measure, don't estimate.
-- "Works on device" claims → `tools/hw-bench.mjs` soak (docs/tools.md).
+- "Works on device" claims → `tools/hw-bench.mjs` soak (docs/tools.md). It runs
+  ~2 h on the Athom; launch it detached (`setsid nohup … > log 2>&1 < /dev/null &`)
+  — the Bash tool's background mode is killed at its 10-minute timeout cap
+  (2026-09-02: a soak died at pattern 20 that way).
 - New/edited `library/` pattern → read .claude/rules/library.md FIRST (house
   style: real-unit `//#` controls, default= == the top-level constant), then
   `tools/check-library.sh` on all five rigs. Bare 0..1 dials are the most

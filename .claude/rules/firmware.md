@@ -30,6 +30,12 @@ paths:
 - Boot tasks that do multi-KB loads (e.g. playlist/pattern resume) must run
   after `stack.wait_config_up().await` — WiFi bring-up mallocs don't
   null-check, so a heavy load racing WiFi init OOM-panics the boot.
+- Every flash read in main.rs (`config::read_device`, `read_wifi`,
+  `assets::read_chunk`, the pattern store) goes through `ota::with_flash`,
+  which is `None` until `ota::init(flash)` runs — before that a read answers
+  "no record" SILENTLY (no panic, no log), so a setting read too early boots
+  at its default with no clue why. Keep boot-time settings reads after
+  `ota::init` (2026-09-02: the data-pin picker "applied" but never took).
 - Never size an infallible allocation from a length/count field read out of
   flash or any stored record — a corrupt record becomes an OOM panic-reboot
   loop (a torn pattern-store TOC record with chunk-count 32 crash-rebooted
