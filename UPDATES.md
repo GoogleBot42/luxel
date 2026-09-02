@@ -1,5 +1,67 @@
 # Update log
 
+## 2026-09-02 — CI: the test gate runs on Gitea now
+
+Gitea #233. Until today nothing ran the test suite except a human
+remembering to. `.gitea/workflows/ci.yml` now runs the standing acceptance
+gates on every push to `master` and every pull request.
+
+**The gate is a script, not YAML.** All four steps live in `tools/ci.sh`, so
+`nix develop --command tools/ci.sh` runs byte-for-byte what CI runs: the web
+build + `npm test`, `cargo test --workspace`, `tools/check-library.sh`, then
+a `board-pixelblaze-v3` firmware build. The order is load-bearing — the web
+build writes `web/public/gallery.json`, which `luxel-cli`'s `heapstat` test
+reads, so a cargo-first gate fails on a fresh checkout for reasons that have
+nothing to do with the change under test (the same trap fresh worktrees fall
+into).
+
+**The OTA-slot gate needed one extra step.** `build-esp32.sh` already ends in
+`tools/image-check.sh`, but it hands it the ELF, and image-check's
+size-margin half only applies to app images (magic 0xE9). So the tripwire
+CLAUDE.md advertises — the app must fit the 1 MiB OTA slot — was not actually
+being checked by any build anyone runs day to day, only by the release
+workflow. ci.sh now makes an app image with `espflash save-image` (the same
+call the flake makes) and runs image-check over that too. Current
+pixelblaze-v3 margin: CI prints it every run (957,040 B used, 91,536 B
+free, 8.72 % of the slot as of this commit).
+
+**One build at a time.** A workflow-level `concurrency` group named
+`luxel-ci` — global, not per-ref — with `cancel-in-progress: true`, so a new
+build cancels whatever is in flight instead of queueing behind it. With
+sessions merging PRs continuously that matters, and the single-slot runner is
+shared with every other repo on the server — a superseded build is somebody
+else's queue time.
+
+**Runner: `nixos`,** the legacy host-mode runner — it shares the host nix
+store, so the flake toolchain closures are already there and entering the
+devshell is nearly free on a second run. It is slated for retirement in
+favour of `nixos-podman`, which was broken on 2026-09-01;
+a rehearsal there did pass end to end (run 1441, 10 min 45 s, ~8 min of it
+realizing the devshell) and taught the workflow three things worth writing
+down for whoever flips the switch: that container has no `/usr/bin/env`, no
+`HOME` (nix then computes a *relative* cache dir and refuses it), and no
+build-users group. All three, plus "drop the `PATH:` env" and "every run is
+cold there", are recorded on the `runs-on:` line and in docs/releases.md.
+The optional attic steps — no-ops until an `ATTIC_TOKEN` secret exists — are
+the lever that buys some of that cold start back. CI writes a placeholder
+`firmware/creds.env`; real credentials never reach it, and it never
+publishes an image.
+
+**Measured** on the `nixos` runner: 5 min 43 s for the first ever run (1443)
+and 2 min 58 s for the next one (1448). The whole warm saving is the nix
+store — entering the devshell goes 3 min 44 s → 21 s — and *none* of it is
+the build tree: `actions/checkout` cleans (`git clean -ffdx`) the gitignored
+`target/` and `web/node_modules` away at the top of every job, so the gate
+itself is ~110–145 s either way. Left that way on purpose; a correctness gate
+should not be able to go green on stale artifacts. Queue time dwarfs both
+numbers — the runner is single-slot and shared with every repo on the
+server, and both runs waited half an hour behind a nix-config flake check.
+
+Docs: a "CI (the test gate)" section in docs/releases.md, `tools/ci.sh` in
+docs/tools.md. Making the check *required* on master needs repo-admin
+rights the bot doesn't have — filed as Gitea #246, together with the
+podman migration and the attic switch-on.
+
 ## 2026-09-02 — Real GPIO behind the pin builtins (#177 closed) and a runtime strip data pin (#154 closed)
 
 Two of the three items Jeremy picked from the 2026-09-01 fetch-work list

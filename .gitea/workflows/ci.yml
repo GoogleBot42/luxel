@@ -1,0 +1,106 @@
+name: ci
+
+# The test gate: every push to master and every pull request runs the whole
+# standing acceptance suite (web build + web tests, cargo test --workspace,
+# the library sweep, and a firmware build with its image checks).
+#
+# The steps themselves live in tools/ci.sh, not here, so a developer can run
+# byte-for-byte what CI runs:  nix develop --command tools/ci.sh
+#
+# This file is under .gitea/workflows/, which GitHub ignores entirely — so
+# unlike .github/workflows/release.yml and pages.yml (which Gitea Actions
+# ALSO picks up, hence their `github.server_url == 'https://github.com'`
+# guards) it needs no guard: it can only ever run on Gitea.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# ONE build at a time, repo-wide, and a new build cancels whatever is in
+# flight. The group name is deliberately GLOBAL (not per-ref): with sessions
+# merging PRs continuously a superseded build is wasted runner time, and the
+# single-slot runner is shared with every other repo on the server — queue
+# time here dwarfs run time.
+concurrency:
+  group: luxel-ci
+  cancel-in-progress: true
+
+env:
+  # Required by the `nixos` runner: without it the job's PATH has neither
+  # `nix` nor `git` and even actions/checkout fails. Same line nix-config's
+  # workflows carry. It MUST GO when this moves to nixos-podman, whose job
+  # image has its own PATH=/bin.
+  PATH: /run/current-system/sw/bin/
+  # Optional Nix binary cache (Jeremy's attic, as used by nix-config's
+  # build-and-cache.sh). Neither is set on this repo today, and both steps
+  # below no-op when ATTIC_TOKEN is empty — see docs/releases.md.
+  ATTIC_ENDPOINT: ${{ vars.ATTIC_ENDPOINT }}
+  ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
+
+jobs:
+  gate:
+    # `nixos` is the LEGACY host-mode runner (label `nixos:host`) and is
+    # slated for retirement: a NixOS container that shares the host
+    # nix-daemon and /nix/store, which is what makes a second run cheap —
+    # entering the devshell went 3 min 44 s -> 21 s between the first two
+    # runs. The build tree does NOT carry over despite the persistent home:
+    # actions/checkout cleans (git clean -ffdx) the gitignored target/ and
+    # web/node_modules away at the top of every job. Deliberate — a
+    # correctness gate should not be able to go green on stale artifacts.
+    #
+    # MIGRATE to `nixos-podman` once that runner is fixed (it was broken as
+    # of 2026-09-01, though a rehearsal there did pass end to end). When you
+    # do: drop the `PATH:` env above; give the job a HOME (nix computes a
+    # RELATIVE cache dir without one and refuses it), `build-users-group =`
+    # (no nixbld group in the container), and a /usr/bin/env symlink (the
+    # image has no /usr/bin, so every `#!/usr/bin/env bash` script dies);
+    # and expect the nix store to stop being free too. The attic steps below
+    # are what buys that back. Tracked in Gitea #246 with branch protection.
+    runs-on: nixos
+    # Generous: a cold run builds the Xtensa firmware with -Zbuild-std from
+    # scratch, and the runner is shared with the other repos on the server.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Placeholder WiFi credentials
+        # firmware/build-esp32.sh sources the gitignored firmware/creds.env
+        # so dev images bake working credentials. CI has none and needs
+        # none — it never flashes or publishes an image — but a build
+        # without the file warns loudly, so write an obvious placeholder.
+        # Real credentials must never reach CI (docs/releases.md: release
+        # images are credential-free by construction).
+        run: |
+          cat > firmware/creds.env <<'EOF'
+          # placeholder — CI images are never flashed or published
+          LUXEL_SSID='ci-placeholder'
+          LUXEL_PASS='ci-placeholder'
+          export LUXEL_SSID LUXEL_PASS
+          EOF
+
+      - name: Use the attic cache (optional)
+        # nix-config's build-and-cache.sh pattern, made conditional: this
+        # repo has no attic credentials, and CI must work without them.
+        run: |
+          if [ -z "${ATTIC_TOKEN:-}" ]; then
+            echo "attic not configured (no ATTIC_TOKEN secret) — running uncached"
+            exit 0
+          fi
+          attic login local "$ATTIC_ENDPOINT" "$ATTIC_TOKEN"
+          attic use local:nixos
+
+      - name: Run the gate
+        run: nix develop --command tools/ci.sh
+
+      - name: Push the devshell closure to attic (optional)
+        if: always()
+        run: |
+          if [ -z "${ATTIC_TOKEN:-}" ]; then
+            echo "attic not configured — nothing to push"
+            exit 0
+          fi
+          # A mkShell derivation can't be `nix build`-ed, so realize the
+          # devshell into a profile to get one pushable closure root.
+          nix develop --profile "${RUNNER_TEMP:-/tmp}/luxel-devshell" --command true
+          attic push -j 8 local:nixos "$(readlink -f "${RUNNER_TEMP:-/tmp}/luxel-devshell")"
