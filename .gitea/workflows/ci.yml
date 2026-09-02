@@ -19,9 +19,9 @@ on:
 
 # ONE build at a time, repo-wide, and a new build cancels whatever is in
 # flight. The group name is deliberately GLOBAL (not per-ref): with sessions
-# merging PRs continuously a superseded build is wasted runner time, the
-# runner is shared with every other repo on the server, and two concurrent
-# Xtensa builds would fight over the persistent checkout's cargo target/.
+# merging PRs continuously a superseded build is wasted runner time, and the
+# single-slot runner is shared with every other repo on the server — queue
+# time here dwarfs run time.
 concurrency:
   group: luxel-ci
   cancel-in-progress: true
@@ -42,19 +42,21 @@ jobs:
   gate:
     # `nixos` is the LEGACY host-mode runner (label `nixos:host`) and is
     # slated for retirement: a NixOS container that shares the host
-    # nix-daemon and /nix/store and keeps a persistent
-    # /var/lib/gitea-runner home, so the flake's toolchain closures stay in
-    # the store AND the checkout's cargo `target/` + `web/node_modules`
-    # survive between jobs — which is why warm runs here are a fraction of a
-    # cold one.
+    # nix-daemon and /nix/store, which is what makes a second run cheap —
+    # entering the devshell went 3 min 44 s -> 21 s between the first two
+    # runs. The build tree does NOT carry over despite the persistent home:
+    # actions/checkout cleans (git clean -ffdx) the gitignored target/ and
+    # web/node_modules away at the top of every job. Deliberate — a
+    # correctness gate should not be able to go green on stale artifacts.
     #
     # MIGRATE to `nixos-podman` once that runner is fixed (it was broken as
-    # of 2026-09-01). When you do: drop the `PATH:` env above, and expect
-    # EVERY run to be cold — the podman job container mounts the host /nix
-    # read-only under a throwaway overlay and keeps no workspace, so there is
-    # no `target/`, no `node_modules` and no warm number. The attic steps
-    # below are what buys some of it back. Tracked for Jeremy alongside
-    # branch protection.
+    # of 2026-09-01, though a rehearsal there did pass end to end). When you
+    # do: drop the `PATH:` env above; give the job a HOME (nix computes a
+    # RELATIVE cache dir without one and refuses it), `build-users-group =`
+    # (no nixbld group in the container), and a /usr/bin/env symlink (the
+    # image has no /usr/bin, so every `#!/usr/bin/env bash` script dies);
+    # and expect the nix store to stop being free too. The attic steps below
+    # are what buys that back. Tracked in Gitea #246 with branch protection.
     runs-on: nixos
     # Generous: a cold run builds the Xtensa firmware with -Zbuild-std from
     # scratch, and the runner is shared with the other repos on the server.

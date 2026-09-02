@@ -62,10 +62,9 @@ so a superseded build is somebody else's queue time.
 
 **Runner.** `runs-on: nixos` — the host-mode runner (label `nixos:host`): a
 NixOS container that shares the host nix-daemon and `/nix/store` and keeps a
-persistent `/var/lib/gitea-runner` home. That persistence is the point. The
-flake's toolchain closures stay in the store, and the checkout's cargo
-`target/` and `web/node_modules` survive between jobs, so a warm run is a
-fraction of a cold one. The workflow-level `env: PATH:
+persistent `/var/lib/gitea-runner` home. The shared store is what makes a
+second run cheap (see the numbers below); the build tree is *not* carried
+over, because `actions/checkout` cleans it. The workflow-level `env: PATH:
 /run/current-system/sw/bin/` is required here — without it the job's PATH has
 neither `nix` nor `git` and even `actions/checkout` fails. (`ubuntu-latest`
 exists on the same server but has no nix.)
@@ -78,7 +77,9 @@ exists on the same server but has no nix.)
 - Expect **every run to be cold**. Each job gets a fresh
   `localhost/gitea-runner-nix` container with the host `/nix` mounted
   read-only under a throwaway overlay and no persistent workspace: no
-  `target/`, no `node_modules`, and nothing the job realizes survives.
+  `target/`, no `node_modules` (the `nixos` runner does not really carry
+  those either), and nothing the job realizes survives — the nix store is
+  the part that stops being free.
 - The container ships no `/usr/bin`, so the repo's `#!/usr/bin/env bash`
   shebangs need a `ln -s "$(command -v env)" /usr/bin/env` step, and it
   starts with `HOME` unset (nix then computes a *relative* cache dir and
@@ -101,18 +102,29 @@ closure (realized into a profile, since a `mkShell` derivation can't be
 **secret** on `zuckerberg/luxel` (Gitea #246, which also tracks the podman
 migration and making this check required on master).
 
-**Measured** on the `nixos` runner, 2026-09-02 (run 1443, the first ever for
-this repo, so the runner's checkout and `target/` were empty):
+**Measured** on the `nixos` runner, 2026-09-02 — run 1443 (the first ever
+for this repo) and run 1448 straight after it:
 
-| | wall | of which `nix develop` | of which the gate |
+| | wall | `nix develop` | the gate |
 |---|---|---|---|
-| cold (fresh workspace) | 5 min 43 s | 3 min 44 s | 110 s |
-| warm (workspace reused) | WARMTOTAL | WARMSHELL | WARMGATE |
+| 1443, cold | 5 min 43 s | 3 min 44 s | 110 s |
+| 1448, warm | 2 min 58 s | 21 s | 143 s |
 
-Per-step, cold: web 27 s · cargo 23 s · library 14 s · firmware 46 s. The
-runner is single-slot and shared with every other repo on the server, so
-**queue time dwarfs run time** — run 1443 waited 27 minutes behind a
-nix-config flake check before it started. Read the job's own duration, not
+Read that carefully: **the warm saving is entirely the nix store, not the
+build tree.** Entering the devshell drops from 3 min 44 s to 21 s because the
+closures stay in the host store — but the gate itself does not speed up at
+all (it re-`npm ci`'d 177 packages and recompiled everything both times),
+because `actions/checkout` defaults to `clean: true`, i.e. `git clean -ffdx`,
+which deletes the gitignored `target/` and `web/node_modules` at the top of
+every job. That is left as is on purpose: two and a half minutes of honest
+rebuild beats a correctness gate that can go green on stale artifacts (the
+repo has been bitten by stale `web/public` and `target/` more than once —
+see CLAUDE.md's tripwires). Per-step on the warm run: web 32 s · cargo 25 s ·
+library 19 s · firmware 67 s.
+
+The runner is single-slot and shared with every other repo on the server, so
+**queue time dwarfs run time** — 1443 waited 27 minutes and 1448 waited 46,
+both behind the same nix-config flake check. Read the job's own duration, not
 the wall clock from your push.
 
 No guard is needed on this file. Gitea Actions also picks up
