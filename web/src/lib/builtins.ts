@@ -83,6 +83,9 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "blur1D", sig: "blur1D(arr, radius)", doc: "In-place box blur over arr (window 2·radius+1, edges clamped); returns arr. (Luxel)" },
   { name: "blur2D", sig: "blur2D(arr, w, h, radius)", doc: "In-place separable box blur over a row-major w×h canvas (edges clamped); returns arr. The diffusion loop of buffer-based 2D patterns as one call. (Luxel)" },
   { name: "feedback", sig: "feedback(arr, decay)", doc: "Multiply every element by decay in place (trails/glow); returns arr. (Luxel)" },
+  // per-pixel state buffer (engine-owned, double-buffered, allocated on first write)
+  { name: "pixelState", sig: "pixelState(index, ch = 0)", doc: "Last frame's committed state for a pixel — every read in a frame sees the same snapshot, neighbours included. Out-of-range index/channel reads 0; never allocates. (Luxel)" },
+  { name: "setPixelState", sig: "setPixelState(index, [ch,] v)", doc: "Write next frame's state for a pixel (channels 0–3); unwritten pixels carry over. The first call allocates the buffer (pixelCount × channels × 8 B, budget-checked) — feedback effects without hand-rolled arrays. Returns v. (Luxel)" },
   { name: "canvasSet", sig: "canvasSet(buf, w, x, y, v)", doc: "Write v at normalized (x, y) on a row-major w-wide canvas (h = length/w). Coordinates clamp to the edges — no OOB, no *15.99 fudge. Returns v. (Luxel)" },
   { name: "canvasGet", sig: "canvasGet(buf, w, x, y)", doc: "Bilinear sample of a row-major w-wide canvas at normalized (x, y); texel centers at (i+0.5)/w, edges clamped. Smooth upscaling on larger maps for free. (Luxel)" },
   { name: "canvasAdd", sig: "canvasAdd(buf, w, x, y, v)", doc: "Add v into the cell canvasSet would write at normalized (x, y) — particle deposits without a manual read-modify-write. Same edge-clamped floor(x·w) addressing; returns the cell's new value. (Luxel)" },

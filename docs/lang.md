@@ -604,6 +604,53 @@ event per line as whitespace-separated decimals `type [x [y [value]]]`
 when full, and events land between frames. `type`/`value` meanings
 beyond the pointer convention are yours to define.
 
+### Per-pixel state (Luxel extension)
+
+A sanctioned scratch buffer the engine double-buffers for you — feedback
+effects (trails, diffusion, cellular automata, heat) without the
+`array(pixelCount)` bookkeeping, and without the pitfall that idiom has
+in `render()`: a neighbour tap on a single array sees a mix of this
+frame's and last frame's values depending on render order.
+
+- `pixelState(index[, ch])` — the value committed for that pixel **last
+  frame** (channel `ch`, default 0). Every read in a frame sees the same
+  snapshot, whichever pixels have already rendered. Out-of-range indices
+  and channels read 0, so `pixelState(index - 1)` at the strip's end
+  needs no clamping.
+- `setPixelState(index, v)` / `setPixelState(index, ch, v)` — write the
+  value for **next frame**. Last write wins; a pixel nobody writes keeps
+  its value. Returns `v`, like an assignment. Channels are `0..3`
+  (outside that is a runtime error); an out-of-range index writes
+  nothing.
+
+```js
+export function render(index) {
+  // heat diffusion: average last frame's neighbours, cool, ignite
+  h = (pixelState(index - 1) + 2 * pixelState(index) + pixelState(index + 1)) / 4
+  h *= 0.97
+  if (random(1) < 0.01) h = 1
+  setPixelState(index, h)
+  hsv(0.02 + h * 0.06, 1, h * h)
+}
+```
+
+The handoff happens once per frame, after the last `render()`: writes
+made anywhere in the frame (`beforeRender` included) become the next
+frame's reads. Frames held by `setFrameRate` don't run pattern code and
+don't hand off. Reading what you wrote *this* frame is what locals are
+for.
+
+Cost: the buffer exists only once a pattern has called `setPixelState`
+— reads never allocate, and a pattern that doesn't use the feature pays
+nothing. On first write the engine allocates `pixelCount × channels ×
+8 bytes` (two 16.16 buffers), charged to the same byte budget arrays
+draw from, so an oversized buffer on a small-heap device is the usual
+"pattern too large" error rather than a crash. A higher channel used
+later grows the buffer in place, keeping existing values. Compared with
+two `array(pixelCount)` buffers swapped by hand this is half the RAM
+(4-byte fixed point, not 8-byte values) and stays off the PB-compatible
+10,240-element ledger.
+
 ### Predefined globals
 
 `pixelCount`; math constants `PI PI2 PI3_4 PISQ E SQRT2 SQRT1_2 LN2 LN10

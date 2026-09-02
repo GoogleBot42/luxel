@@ -1048,3 +1048,163 @@ fn render2d_via_export_var_gets_default_grid_map() {
     assert_eq!(px[0], [255, 255, 255]);
     assert!(e.last_error.is_none());
 }
+
+// ---- pixelState / setPixelState: the engine-owned per-pixel state buffer ----
+//
+// Double-buffered feedback without hand-rolled arrays: reads see LAST frame's
+// committed values (frame-consistent, neighbours included), writes land in
+// next frame's buffer, unwritten pixels carry over. The buffer exists only
+// after the first write — an untouched pattern pays nothing.
+
+#[test]
+fn pixel_state_costs_nothing_until_written() {
+    let mut e = Engine::new(RAINBOW, 8, 1).unwrap();
+    e.frame(Fx::from_int(10));
+    assert_eq!(e.pixel_state_bytes(), 0, "no state → no buffer");
+
+    // a read-only pattern gets 0 and still allocates nothing
+    let mut r = Engine::new(
+        "export var got\nexport function render(index) { got = pixelState(index) + pixelState(index, 3) }",
+        8,
+        1,
+    )
+    .unwrap();
+    r.frame(Fx::from_int(10));
+    assert_eq!(r.var("got"), Some(Value::Num(Fx::ZERO)));
+    assert_eq!(r.pixel_state_bytes(), 0, "reads never allocate");
+    assert!(r.last_error.is_none(), "{:?}", r.last_error);
+}
+
+#[test]
+fn pixel_state_reads_last_frame_and_writes_next() {
+    let src = "export var got\n\
+               export function render(index) {\n\
+                 got = pixelState(0)\n\
+                 setPixelState(0, pixelState(0) + 1)\n\
+               }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    for expect in 0..4 {
+        e.frame(Fx::from_int(10));
+        assert_eq!(e.var("got"), Some(Value::Num(Fx::from_int(expect))));
+    }
+    // 1 px × 1 channel × 4 B × 2 buffers, and it sits on the arena byte ledger
+    assert_eq!(e.pixel_state_bytes(), 8);
+    assert!(e.arena_stats().2 >= 8);
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+}
+
+#[test]
+fn pixel_state_reads_are_frame_consistent_across_neighbours() {
+    // frame 1 writes state[i] = i + 1. In frame 2, render(1) runs AFTER
+    // render(0) has already written a new value for pixel 0 — but must still
+    // read pixel 0's frame-1 value (the front buffer is a snapshot).
+    let src = "export var a, b\n\
+               export function render(index) {\n\
+                 if (index == 0) { a = pixelState(1) } else { b = pixelState(0) }\n\
+                 setPixelState(index, index + 1 + 10 * pixelState(index))\n\
+               }";
+    let mut e = Engine::new(src, 2, 1).unwrap();
+    e.frame(Fx::from_int(10)); // state → [1, 2]
+    e.frame(Fx::from_int(10)); // reads see [1, 2]; state → [11, 22]
+    assert_eq!(e.var("a"), Some(Value::Num(Fx::from_int(2))));
+    assert_eq!(e.var("b"), Some(Value::Num(Fx::from_int(1))));
+    e.frame(Fx::from_int(10));
+    assert_eq!(e.var("a"), Some(Value::Num(Fx::from_int(22))));
+    assert_eq!(e.var("b"), Some(Value::Num(Fx::from_int(11))));
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+}
+
+#[test]
+fn pixel_state_carries_over_unwritten_pixels() {
+    // only the first frame writes (from beforeRender); later frames read the
+    // same value back for as long as nobody overwrites it
+    let src = "export var f = 0, got\n\
+               export function beforeRender(delta) {\n\
+                 f += 1\n  if (f == 1) setPixelState(1, 5)\n\
+               }\n\
+               export function render(index) { if (index == 1) got = pixelState(1) }";
+    let mut e = Engine::new(src, 2, 1).unwrap();
+    e.frame(Fx::from_int(10));
+    for _ in 0..3 {
+        e.frame(Fx::from_int(10));
+        assert_eq!(e.var("got"), Some(Value::Num(Fx::from_int(5))));
+    }
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+}
+
+#[test]
+fn pixel_state_seeded_at_init_is_visible_in_the_first_frame() {
+    // top-level init runs before the engine sets vm.pixel_count — the buffer
+    // must still be sized from pixelCount, and the seed must survive
+    let src = "for (i = 0; i < pixelCount; i++) setPixelState(i, i * 2)\n\
+               export var got\n\
+               export function render(index) { if (index == 3) got = pixelState(3) }";
+    let mut e = Engine::new(src, 4, 1).unwrap();
+    assert_eq!(e.pixel_state_bytes(), 4 * 4 * 2);
+    e.frame(Fx::from_int(10));
+    assert_eq!(e.var("got"), Some(Value::Num(Fx::from_int(6))));
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+}
+
+#[test]
+fn pixel_state_channels_grow_on_demand_and_keep_existing_values() {
+    let src = "export var f = 0, c0, c1\n\
+               export function beforeRender(delta) {\n\
+                 f += 1\n\
+                 if (f == 1) setPixelState(0, 7)\n\
+                 if (f == 2) setPixelState(0, 2, 9)\n\
+                 c0 = pixelState(0)\n  c1 = pixelState(0, 2)\n\
+               }\n\
+               export function render(index) { rgb(0, 0, 0) }";
+    let mut e = Engine::new(src, 3, 1).unwrap();
+    e.frame(Fx::from_int(10));
+    assert_eq!(e.pixel_state_bytes(), 3 * 1 * 4 * 2, "one channel");
+    e.frame(Fx::from_int(10));
+    assert_eq!(e.pixel_state_bytes(), 3 * 3 * 4 * 2, "grown to channels 0..2");
+    e.frame(Fx::from_int(10));
+    assert_eq!(e.var("c0"), Some(Value::Num(Fx::from_int(7))), "channel 0 survives growth");
+    assert_eq!(e.var("c1"), Some(Value::Num(Fx::from_int(9))));
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+}
+
+#[test]
+fn pixel_state_out_of_range_index_is_harmless_but_bad_channel_errors() {
+    let src = "export var lo, hi, ret\n\
+               export function render(index) {\n\
+                 ret = setPixelState(99, 3)\n  setPixelState(-1, 3)\n\
+                 lo = pixelState(-1)\n  hi = pixelState(99)\n\
+               }";
+    let mut e = Engine::new(src, 2, 1).unwrap();
+    e.frame(Fx::from_int(10));
+    e.frame(Fx::from_int(10));
+    assert_eq!(e.var("lo"), Some(Value::Num(Fx::ZERO)));
+    assert_eq!(e.var("hi"), Some(Value::Num(Fx::ZERO)));
+    assert_eq!(e.var("ret"), Some(Value::Num(Fx::from_int(3))), "returns v like an assignment");
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+
+    let mut bad = Engine::new("export function render(index) { setPixelState(0, 4, 1) }", 2, 1)
+        .unwrap();
+    bad.frame(Fx::from_int(10));
+    let msg = bad.last_error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+    assert!(msg.contains("channel 4 out of range"), "{msg}");
+    assert_eq!(bad.pixel_state_bytes(), 0, "a rejected channel allocates nothing");
+}
+
+#[test]
+fn pixel_state_respects_the_device_byte_budget() {
+    // 2048 px × 4 B × 2 = 16 KB; a 4 KB budget must reject with a recorded
+    // error and allocate nothing — never panic (= reboot) on the device
+    let src = "export function render(index) { setPixelState(index, 1) }";
+    let prog = luxel_core::compile::compile(src).unwrap();
+    let mut e = Engine::from_program_budgeted(prog, 2048, 1, 4 * 1024);
+    e.frame(Fx::from_int(10));
+    let msg = e.last_error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+    assert!(msg.contains("budget"), "{msg}");
+    assert_eq!(e.pixel_state_bytes(), 0);
+
+    let prog = luxel_core::compile::compile(src).unwrap();
+    let mut ok = Engine::from_program_budgeted(prog, 2048, 1, 16 * 1024);
+    ok.frame(Fx::from_int(10));
+    assert!(ok.last_error.is_none(), "{:?}", ok.last_error);
+    assert_eq!(ok.pixel_state_bytes(), 16 * 1024);
+}
