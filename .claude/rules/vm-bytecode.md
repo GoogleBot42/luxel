@@ -27,6 +27,15 @@ paths:
   errors. When you change any builtin's signature/parameter meaning,
   grep library/ (and tools/) for its call sites and check every arity —
   and re-run tools/verify/snap.mjs on pairs that use it.
+- `Vm.pixel_count` is 0 while top-level init runs — the engine sets it only
+  AFTER `vm.call(init)` (so `mapPixels` at top level is a deliberate no-op).
+  A builtin that needs the strip length during init must read the
+  `pixelCount` global instead (`Vm::state_pixel_count` does exactly this
+  for `setPixelState`; the 2026-09-01 batch-8 work lost a test cycle to
+  seeding a buffer of length 0). Engine-owned per-frame state
+  (`pixel_state_commit` today) is handed over in `Engine::finish_frame()`
+  — route any new normal end-of-frame exit through it, not a bare
+  `run_stage = None`.
 - An engine-vs-PB semantics question in an issue or FINDINGS entry
   ("presumably runs clean on real PB") is usually decidable in minutes
   against the oracle — probe before building an engine change on the

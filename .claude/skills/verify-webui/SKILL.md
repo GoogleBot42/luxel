@@ -58,6 +58,16 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    `page.evaluate` shortcuts that bypass the actual UI), and take `page.screenshot()`
    at each key state. The Read tool renders PNG screenshots directly — read the file
    back to actually look at it before reporting success.
+   Ad-hoc script mechanics that each cost a debug cycle on 2026-09-01: the script
+   must live under `web/` (e.g. `web/tools/_scratch.mjs`, deleted before commit) —
+   an ESM `import puppeteer from "puppeteer-core"` from the scratchpad fails with
+   `ERR_MODULE_NOT_FOUND` and `NODE_PATH` does not rescue ESM; resolve the browser
+   with `execSync("command -v chromium")` like e2e.mjs (a bare `"chromium"`
+   executablePath is rejected); and spawn `vite preview` with `stdio: "ignore"` plus
+   a fixed sleep — waiting for a "Local:" line on its stdout hangs until timeout.
+   Clean up with `pkill -f 'vite preview --port 419[3]'` (bracket one character):
+   a plain `pkill -f '<text>'` matches your own `bash -c` command line and kills the
+   shell mid-command.
 
    Two gotchas when the harness script lives OUTSIDE `web/` (e.g. scratch verification
    for a tool that serves its own UI, like `tools/verify/review.mjs`):
