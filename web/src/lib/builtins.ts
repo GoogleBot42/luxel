@@ -131,7 +131,7 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "arrayMutate", sig: "arrayMutate(arr, fn(v, i))", doc: "Replace each element with fn's result." },
   { name: "arrayMapTo", sig: "arrayMapTo(src, dest, fn(v, i))", doc: "Map src through fn into dest." },
   { name: "arrayReduce", sig: "arrayReduce(arr, fn(acc, v, i), initial)", doc: "Fold the array into one value." },
-  { name: "arrayReplace", sig: "arrayReplace(arr, v1, v2, …)", doc: "Write the listed values into arr starting at index 0 — NOT a fill; arrayReplace(a, 0) sets only a[0]. Zero a whole buffer with feedback(a, 0)." },
+  { name: "arrayReplace", sig: "arrayReplace(arr, v1, v2, …)", doc: "Write the listed values into arr starting at index 0 — NOT a fill; arrayReplace(a, 0) sets only a[0]. Zero a whole buffer with feedback(a, 0), or fill it with arrayMutate(a, (v) => c)." },
   { name: "arrayReplaceAt", sig: "arrayReplaceAt(arr, index, value)", doc: "Set one element." },
   { name: "arraySort", sig: "arraySort(arr)", doc: "Sort ascending in place." },
   { name: "arraySortBy", sig: "arraySortBy(arr, fn(a, b))", doc: "Sort by comparator in place." },

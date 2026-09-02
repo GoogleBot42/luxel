@@ -16,10 +16,21 @@ these before trusting any build/test failure as a real regression.
    that stale tree. Do `git fetch origin master` first and branch from `origin/master`
    (or `git reset --hard origin/master` in the new worktree).
 
-1. `corpus/` (scraped pattern exports, gitignored) — only needed for the local-only
-   "PixelBlaze Library" tab and `pixelblaze-library.json` generation; the main
-   `gallery.json` and its e2e tile-count check are built from the tracked `library/`
-   directory alone (well over the e2e threshold) and do NOT require `corpus/` to pass.
+1. `corpus/` (scraped pattern exports, gitignored) — needed by the **verify
+   harness** (`tools/verify/snap.mjs`, `report.mjs`, `review.mjs`) for the
+   *original* half of every judged pair, and by the local-only "PixelBlaze
+   Library" tab / `pixelblaze-library.json`. The main `gallery.json` and its
+   e2e tile-count check are built from the tracked `library/` directory alone
+   (well over the e2e threshold) and do NOT require `corpus/` to pass.
+   **snap.mjs cannot render a `library/` pattern on its own**: a paired slug
+   dies with `corpus file missing: <…>.epe`, and a curated original (one in
+   pairs.json's `originals` list rather than `pairs`) dies with `unknown slug`.
+   So "render before/after with snap.mjs" is not available in a corpus-free
+   worktree. Either symlink corpus, or — when the comparison is library-vs-
+   library and corpus would only be a liability — drive `tools/verify/
+   enginehost.mjs` + `png.mjs` directly from a scratch script: same engine
+   wasm, same pinned seed/delta, no corpus, ~60 lines (done 2026-09-01 for the
+   Gitea #225 fix pass).
    If you need the corpus tab or are doing
    corpus-related work (see `cleanroom-port`), symlink it from the main checkout:
    `ln -s /home/googlebot/workspace/pixler/corpus corpus`. **Remove the symlink before

@@ -450,7 +450,9 @@ curve shapes only how the master dimmer responds (control).
 Both `replace` forms take any number of values and store them from the
 offset onwards (`arrayReplace` starts at 0; `a.replace(…)` is that form).
 Neither is a fill: `arrayReplace(a, 0)` writes only `a[0]`. Zero a whole
-buffer with `feedback(a, 0)`.
+buffer with `feedback(a, 0)`, and fill one with a non-zero constant using
+`arrayMutate(a, (v) => c)`. `tools/check-library.sh` fails on any two-argument
+`arrayReplace` in `library/` for this reason (Gitea #225).
 The span is checked as a whole: if `offset + count` runs past the end it is
 a runtime error and **nothing** is written, not even the elements that
 would have fit. A negative offset is not an error — the splat shifts down
