@@ -1184,6 +1184,77 @@ fn pins_used_reports_what_the_pattern_touched() {
     assert_eq!(e.pins_used(), 0, "driving a pin is not the pattern using it");
 }
 
+/// Gitea #206: `analogRead`/`touchRead` read what a host injects for the pin,
+/// the analog half of the pin-injection ABI. Undriven they still read 0 (see
+/// `gpio_and_sequencer_stubs_are_silent`), which is the resting state of an
+/// unconnected ADC pad — so unlike the digital surface there is no idle level
+/// to release back to, and releasing IS writing 0.
+#[test]
+fn set_analog_pin_drives_analog_read() {
+    let half = Fx::parse_literal("0.5").unwrap();
+
+    // a pot on 33 read every frame, and a touch pad on 4 sharing the surface
+    let src = "export var pot = 0\n\
+               export var pad = 0\n\
+               export function beforeRender(delta) { pot = analogRead(33)\n pad = touchRead(4) }";
+    let mut e = Engine::new(src, 10, 1).expect("compile error");
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.var("pot"), Some(Value::Num(Fx::ZERO)), "undriven reads 0");
+
+    assert!(e.set_analog_pin(33, half));
+    assert!(e.set_analog_pin(4, Fx::ONE));
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.var("pot"), Some(Value::Num(half)));
+    assert_eq!(e.var("pad"), Some(Value::Num(Fx::ONE)), "1.0 survives the u16 table");
+    assert_eq!(e.analog_read(33), half, "read-back matches what was driven");
+
+    // out of the 0..1 range both builtins report, values clamp rather than wrap
+    assert!(e.set_analog_pin(33, Fx::from_int(9)));
+    assert_eq!(e.analog_read(33), Fx::ONE);
+    assert!(e.set_analog_pin(33, Fx::from_int(-3)));
+    assert_eq!(e.analog_read(33), Fx::ZERO);
+
+    // digital and analog surfaces are independent on the same pin number
+    assert!(e.set_pin(33, Some(true)));
+    assert!(e.set_analog_pin(33, half));
+    assert!(e.pin_read(33));
+    assert_eq!(e.analog_read(33), half);
+
+    // out-of-window pins are refused (nowhere to store the value) and read 0
+    assert!(!e.set_analog_pin(64, Fx::ONE));
+    assert!(!e.set_analog_pin(-1, Fx::ONE));
+    assert_eq!(e.analog_read(64), Fx::ZERO);
+}
+
+/// Gitea #206: the analog counterpart of `pins_used` — which pins the pattern
+/// has actually sampled, so a host knows where to offer a slider.
+#[test]
+fn analog_pins_used_reports_what_the_pattern_read() {
+    // no analog reads → empty mask, and a digital-only pattern stays empty
+    let e = engine("pinMode(26, INPUT_PULLUP)\nexport var out = digitalRead(26)");
+    assert_eq!(e.analog_pins_used(), 0);
+    assert_eq!(e.pins_used(), 1 << 26);
+
+    // top-level reads are visible before the first frame
+    let e = engine("export var out = analogRead(33) + touchRead(4)");
+    assert_eq!(e.analog_pins_used(), (1 << 33) | (1 << 4));
+    assert_eq!(e.pins_used(), 0, "analog reads are not the digital surface");
+
+    // and a read inside beforeRender shows up once the pattern has run
+    let src = "export var out = 0\n\
+               export function beforeRender(delta) { out = analogRead(7) }";
+    let mut e = Engine::new(src, 10, 1).expect("compile error");
+    assert_eq!(e.analog_pins_used(), 0);
+    e.frame(Fx::from_int(16));
+    assert_eq!(e.analog_pins_used(), 1 << 7);
+
+    // out-of-window pins are not tracked, and injection alone invents nothing
+    let mut e = engine("export var out = analogRead(64) + analogRead(-1)");
+    assert_eq!(e.analog_pins_used(), 0);
+    assert!(e.set_analog_pin(9, Fx::ONE));
+    assert_eq!(e.analog_pins_used(), 0, "driving a pin is not the pattern reading it");
+}
+
 #[test]
 fn sensor_vars_are_stubbed() {
     let e = engine(

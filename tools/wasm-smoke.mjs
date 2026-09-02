@@ -106,8 +106,39 @@ assert.deepStrictEqual(pin(), [0, 0, 0], "released: back to the idle level");
 assert.strictEqual(e.lx_set_pin(h4, 64, 0), 0);
 assert.strictEqual(e.lx_set_pin(h4, -1, 0), 0);
 
+// analog pin injection through the FFI (Gitea #206): a pot on pin 33 sets the
+// strip's brightness, dark undriven. Mirrors
+// crates/luxel-core/tests/semantics.rs::set_analog_pin_drives_analog_read.
+const src5 = putStr(
+  "export function render(index) { hsv(0, 0, analogRead(33)) }",
+);
+const h5 = e.lx_new(src5.ptr, src5.len, 1, 1);
+src5.free();
+assert.ok(h5 >= 0, response());
+const pot = () => {
+  const at = e.lx_frame(h5, 0);
+  return [...mem().slice(at, at + 3)];
+};
+assert.deepStrictEqual(pot(), [0, 0, 0], "undriven analog pin reads 0");
+assert.strictEqual(e.lx_analog_pins_used(h5, 1), 1 << 1, "pin 33 is in the used mask");
+assert.strictEqual(e.lx_set_analog_pin(h5, 33, 65536), 1); // 1.0
+assert.strictEqual(e.lx_analog_read(h5, 33), 65536, "1.0 survives the u16 table");
+assert.deepStrictEqual(pot(), [255, 255, 255], "driven full scale, and HELD");
+assert.deepStrictEqual(pot(), [255, 255, 255], "still held on the next frame");
+assert.strictEqual(e.lx_set_analog_pin(h5, 33, 32768), 1); // 0.5
+assert.strictEqual(e.lx_analog_read(h5, 33), 32768);
+assert.deepStrictEqual(pot(), [127, 127, 127], "half scale");
+assert.strictEqual(e.lx_set_analog_pin(h5, 33, 0), 1); // release
+assert.deepStrictEqual(pot(), [0, 0, 0], "released: back to 0");
+// clamped to 0..1, and out-of-window pins rejected like the digital surface
+assert.strictEqual(e.lx_set_analog_pin(h5, 33, 9 * 65536), 1);
+assert.strictEqual(e.lx_analog_read(h5, 33), 65536, "values above 1 clamp");
+assert.strictEqual(e.lx_set_analog_pin(h5, 64, 65536), 0);
+assert.strictEqual(e.lx_set_analog_pin(h5, -1, 65536), 0);
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);
 e.lx_free(h4);
+e.lx_free(h5);
 console.log("wasm smoke: all golden assertions pass (native ↔ wasm bit-identical)");

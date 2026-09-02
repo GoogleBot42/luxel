@@ -37,6 +37,7 @@ import {
   varsOverride,
   controlsOverride,
   pinsOverride,
+  analogPinsOverride,
   nonVisualReason,
 } from "./fixups.mjs";
 
@@ -324,12 +325,16 @@ function renderSide(host, source, rig, layout, drive) {
     // Per-side pins from fixups.json, applied once after init the way an
     // external client (or a finger on a button) would — some originals draw
     // nothing, or nothing but their idle state, until driven. Same order and
-    // same surfaces as snap.mjs: controls, then vars, then digital pins.
+    // same surfaces as snap.mjs: controls, then vars, then digital pins,
+    // then analog pins (Gitea #206).
     for (const [name, values] of Object.entries(drive?.controls ?? {})) {
       eng.setControl(name, values);
     }
     for (const [name, value] of Object.entries(drive?.vars ?? {})) eng.setVar(name, value);
     for (const [pin, level] of Object.entries(drive?.pins ?? {})) eng.setPin(Number(pin), level);
+    for (const [pin, v] of Object.entries(drive?.analogPins ?? {})) {
+      eng.setAnalogPin(Number(pin), v);
+    }
     const wants = eng.wantsSensors();
     const delta = 1000 / opts.fps;
     const warm = Math.round(opts.skip * opts.fps);
@@ -543,6 +548,7 @@ for (const f of verdictFiles.sort()) {
   const fixVars = varsOverride(slug);
   const fixControls = controlsOverride(slug);
   const fixPins = pinsOverride(slug);
+  const fixAnalogPins = analogPinsOverride(slug);
   const layout = makeLayout(rig);
   const sources = {
     orig: applySourceFixups(
@@ -556,6 +562,7 @@ for (const f of verdictFiles.sort()) {
       vars: fixVars?.[side],
       controls: fixControls?.[side],
       pins: fixPins?.[side],
+      analogPins: fixAnalogPins?.[side],
     });
     fs.writeFileSync(
       sidePaths[side],

@@ -618,6 +618,33 @@ pub extern "C" fn lx_pins_idle_high(h: i32, half: i32) -> i32 {
     mask_half(with_engine(h, |s| s.engine.pins_idle_high()).unwrap_or(0), half)
 }
 
+/// Drive an analog input pin so `analogRead(pin)` / `touchRead(pin)` report
+/// an injected value instead of 0 (Gitea #206) — the analog half of the
+/// pin-injection ABI, used by the playground's pin sliders and by the
+/// port-review harness to sweep a pot.
+///
+/// `value` is a raw 16.16 fixed-point number, clamped to 0..1 (the range both
+/// builtins report); 0 releases the pin back to its undriven reading. Returns
+/// 1 when the pin was in range and the value was stored, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn lx_set_analog_pin(h: i32, pin: i32, value: i32) -> i32 {
+    with_engine(h, |s| s.engine.set_analog_pin(pin, Fx::from_raw(value)) as i32).unwrap_or(0)
+}
+
+/// The value `analogRead(pin)` / `touchRead(pin)` would report right now, as
+/// a raw 16.16 number — lets a host show back the value it is driving.
+#[no_mangle]
+pub extern "C" fn lx_analog_read(h: i32, pin: i32) -> i32 {
+    with_engine(h, |s| s.engine.analog_read(pin).raw()).unwrap_or(0)
+}
+
+/// Same packing as [`lx_pins_used`], for the pins the pattern has read with
+/// `analogRead`/`touchRead` (Gitea #206) — which pins deserve a slider.
+#[no_mangle]
+pub extern "C" fn lx_analog_pins_used(h: i32, half: i32) -> i32 {
+    mask_half(with_engine(h, |s| s.engine.analog_pins_used()).unwrap_or(0), half)
+}
+
 /// Slice a 64-bit pin mask into the 32-bit half the caller asked for.
 fn mask_half(mask: u64, half: i32) -> i32 {
     match half {

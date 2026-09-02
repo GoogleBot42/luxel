@@ -264,7 +264,7 @@ answer `{"ok":true}` on acceptance.
 |---|---|---|---|---|
 | `/api/events` | POST | binary `EV1\0` frame | `{"ok":true}` / `{"ok":false,"error":"not an event frame"}` | both |
 | `/api/sensors` | POST | binary sensor-board frame | `{"ok":true}` / `{"ok":false,"error":"not a sensor-board frame"}` | both |
-| `/api/pins` | POST | text, one `<pin> <level>` per line | `{"ok":true,"pins":N}` | **mirror only** |
+| `/api/pins` | POST | text, one `<pin> <level>` or `a <pin> <0..1>` per line | `{"ok":true,"pins":N}` | **mirror only** |
 
 **`/api/events`** — feeds `readEvent()` / `eventCount()`.
 `luxel_core::netin::parse_events`:
@@ -286,13 +286,28 @@ streams (`luxel_core::netin::parse_sensor_board`): 98 bytes,
 u16 maxFreqHz + 3×s16 accel + u16 light + 5×u16 analog + `"END\0"`, all
 little-endian. u16 fields are raw 16.16 fractions in 0..1.
 
-**`/api/pins`** — feeds `digitalRead()`. Text, one `<pin> <level>` per line;
-level is `0`/`low`/`false`/`off`, `1`/`high`/`true`/`on`, or
-`x`/`-`/`release`/`idle` to hand the pin back to its `pinMode` idle level.
+**`/api/pins`** — feeds `digitalRead()` and `analogRead()`/`touchRead()`. Text,
+one write per line.
+
+```
+26 0            digital: pin 26 LOW
+27 high         digital: pin 27 HIGH
+4 x             digital: release pin 4 to its pinMode idle level
+a 33 0.42       analog:  analogRead(33)/touchRead(33) read 0.42
+analog 33 x     analog:  release pin 33 (an undriven analog pin reads 0)
+```
+
+A digital level is `0`/`low`/`false`/`off`, `1`/`high`/`true`/`on`, or
+`x`/`-`/`release`/`idle` to hand the pin back to its `pinMode` idle level. A
+leading `a` (`analog`/`touch` also accepted) marks an **analog** write (Gitea
+#206), whose value is a 0..1 number clamped by the engine; `x`/`release` there
+means 0, because an undriven analog pin reads 0 and there is no idle level to
+return to. Both builtins share one value per pin.
+
 Blank/comment/unparseable lines are skipped and the response reports how many
 writes actually landed (`"pins":N`); a body that yields zero writes answers
-`{"ok":false,"error":"want lines of \"<pin> <0|1|x>\""}`. At most
-`PIN_MAX_BATCH` writes per request.
+`{"ok":false,"error":"want lines of \"<pin> <0|1|x>\" or \"a <pin> <0..1>\""}`.
+At most `PIN_MAX_BATCH` writes per request.
 
 > **`/api/pins` is mirror-only today.** The firmware has no such route — real
 > device GPIO is open as Gitea #177 item 4. A POST to it on a device 404s.

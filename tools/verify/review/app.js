@@ -138,7 +138,7 @@ function makePainter(rig) {
 // ---- one rendered side ------------------------------------------------------
 
 class Side {
-  /** @param opts {label, source, loadError, rig, vars, controlPins, pins, big, onReady} */
+  /** @param opts {label, source, loadError, rig, vars, controlPins, pins, analogPins, big, onReady} */
   constructor(opts) {
     this.o = opts;
     this.rig = opts.rig;
@@ -227,6 +227,9 @@ class Side {
     // pressed" forever. Same surface and order as snap.mjs.
     for (const [pin, level] of Object.entries(this.o.pins ?? {})) {
       this.engine.setPin(Number(pin), level);
+    }
+    for (const [pin, v] of Object.entries(this.o.analogPins ?? {})) {
+      this.engine.setAnalogPin(Number(pin), v);
     }
     this.o.onReady?.(this);
   }
@@ -463,6 +466,7 @@ function activate(card) {
       vars: pair.vars?.orig,
       controlPins: pair.controlPins?.orig,
       pins: pair.pins?.orig,
+      analogPins: pair.analogPins?.orig,
     }),
     port: new Side({
       label: "Port",
@@ -472,6 +476,7 @@ function activate(card) {
       vars: pair.vars?.port,
       controlPins: pair.controlPins?.port,
       pins: pair.pins?.port,
+      analogPins: pair.analogPins?.port,
     }),
   };
   card.sidesEl.append(card.sides.orig.el, card.sides.port.el);
@@ -772,6 +777,7 @@ function openModal(pair) {
       vars: pair.vars?.[key],
       controlPins: pair.controlPins?.[key],
       pins: pair.pins?.[key],
+      analogPins: pair.analogPins?.[key],
       big: true,
       onReady: () => {
         const built = controlPanel(side, source);

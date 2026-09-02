@@ -1,5 +1,63 @@
 # Update log
 
+## 2026-09-01 — `analogRead`/`touchRead` get an injection path
+
+Gitea #206, the analog half of the pin-injection work #177 started. Both
+builtins returned a flat 0 no matter what, so any pattern riding a
+potentiometer or a capacitive pad rendered exactly one state — the same
+unjudgeable position digital buttons were in before #177.
+
+**Engine.** `Vm` grows a `[u16; 64]` table of injected 0..1 values plus an
+`analog_used` mask — 136 bytes, no allocation. Values are stored as 16.15
+codes (`Fx` raw >> 1) so the whole range *including exactly 1.0* fits a
+`u16` and round-trips bit-exactly for anything a pattern literal can
+express. `Vm`/`Engine::set_analog_pin` clamps to 0..1, `analog_read` reads
+back, `analog_pins_used` reports which pins the pattern sampled. Unlike the
+digital surface there is **no driven bit and no release**: an undriven ADC
+or touch pad reading 0 is a defensible resting state (an undriven pulled-up
+button reading LOW was not), so releasing a pin is just writing 0. Both
+builtins share one value per pin — different peripherals on real silicon,
+but no board wires an ADC and a touch pad to the same pad, and one "what
+does this pin read" value is all a host has to offer either way.
+`BUILTINS` is untouched: `analogRead`/`touchRead` were always in it.
+
+**Surfaces.** wasm ABI gains `lx_set_analog_pin` / `lx_analog_read` /
+`lx_analog_pins_used`. `POST /api/pins` keeps its digital grammar and adds
+a leading kind word for the analog form — `a 33 0.42` (`analog`/`touch`
+also accepted), with `x`/`release` meaning 0; `parse_pin_lines` now returns
+a `PinWrite` enum rather than `(pin, level)` pairs. The verify harness
+gains `--analog-orig`/`--analog-port` on snap.mjs, an `analogPins` fixup
+block (seventh kind), `analogPinsApplied` in `meta.json`, and the
+pass-throughs in report.mjs / review.mjs / the review UI.
+
+**Playground.** The Pins panel (#205) now also lists pins the pattern reads
+with `analogRead`/`touchRead` and gives each a 0..1 slider — no press/latch,
+because a pot has a position, not a pressed state. The panel appears for an
+analog-only pattern that never calls `pinMode`.
+
+**Verified:** `cargo test --workspace` green (238 tests) with two new engine
+tests (`set_analog_pin_drives_analog_read`,
+`analog_pins_used_reports_what_the_pattern_read`) and
+`netin::analog_pin_lines_parse`; `tools/wasm-smoke.mjs` drives the raw FFI
+undriven → full scale → half → released and checks the clamp;
+`tools/serve-e2e.mjs` gains seven checks pushing `a 33 0.5` into a live
+pattern's pixels through the mirror (127,127,127 at half scale);
+`web/tools/e2e.mjs` drags the slider with a real pointer in chromium and
+reads the strip back (full scale → red 255, quarter → dimmer, rows appear
+and disappear with the pattern). No corpus original reads analog live —
+the one hit is a commented-out line in `light-organ-2-0` — so the harness
+plumbing was proven on a scratch pair instead: fixup-driven 0.7 renders
+mean 60 on both sides, `--undriven` renders mean 0 with the warning, and
+`--analog-orig 33=0.25 --analog-port 33=1` renders 21 vs 87. Firmware
+builds; measured with `tools/stack-check.sh` on pixelblaze-v3, `.stack`
+(leftover-DRAM main-task stack) goes 27,756 → 27,484 B and the
+`budgeted_engine` frame 1,264 → 1,536 B — 272 B either way, two `Engine`
+values' worth of the 136-byte table — still far under the 12 KB per-frame
+budget and the 24 KB stack floor.
+
+Real firmware GPIO (#177 item 4) is still open — the playground says so,
+and nothing is forwarded to a bound device.
+
 ## 2026-09-01 — Builtins batch 8: the per-pixel state buffer (`pixelState` / `setPixelState`)
 
 The last engine idea in docs/ideas.md with no partial credit: a sanctioned
@@ -174,6 +232,7 @@ Separately, `web/tools/e2e.mjs` now `mkdirSync`s its screenshot directory
 ENOENT on `e2e-1-library.png`, reading like a puppeteer fault; it cost a debug
 cycle during the #205 pin-panel work. Re-ran the full suite into a fresh nested
 path: all checks pass, nine screenshots written.
+
 
 ## 2026-09-01 — Review pass 2: 99 open decisions closed out; the arrayReplace fill myth falls
 

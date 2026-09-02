@@ -31,6 +31,10 @@
 //                        (0 = LOW, 1 = HIGH, x = release to the pin's idle
 //                        level) — the stand-in for GPIO the engine lacks
 //   --pins-port "..."              the same for the port (pins may differ)
+//   --analog-orig "33=0.5;4=1"     ANALOG input pins driven into the original
+//                        (0..1, what analogRead()/touchRead() report; 0 or x
+//                        = undriven) — Gitea #206
+//   --analog-port "..."            the same for the port
 //   --undriven           ignore this slug's fixups.json var/control/pin pins
 //                        entirely (see below) — the only way to render a
 //                        pinned pair UNDRIVEN. `--no-vars` is the old name
@@ -63,7 +67,8 @@
 // meta.json is written for a reader on a context budget: at the top level it
 // holds settings, provenance and run-level `warnings`, and a `sides` map whose
 // `orig`/`port` blocks each hold `image`, `controls`, `controlsApplied`,
-// `varsExported`, `varsApplied`, `pinsApplied`, `warnings`, `compileError`, `runtimeError`,
+// `varsExported`, `varsApplied`, `pinsApplied`, `analogPinsApplied`, `warnings`,
+// `compileError`, `runtimeError`,
 // `wantsSensors`, `sensors` (+ `sensorModel` when synth) and
 // `statsSummary` ({avg,min,max,first,last} per series, plus `zeroMotionFrames`
 // and `brightnessTrend`) — it is short enough to read whole. Each `controls`
@@ -90,7 +95,8 @@
 // exported-var pins pushed in after init, and a `nonVisual` reason marking a
 // pair whose ORIGINAL is not a visual pattern and so is excluded from the
 // scored population — Gitea #123, per-side UI control values and per-side
-// driven digital pins — Gitea #177); the
+// driven digital pins — Gitea #177, and per-side driven ANALOG pins —
+// Gitea #206); the
 // manifest itself is folded into `harnessSha256`, so editing it invalidates
 // cached runs. An explicit --rig/--pixels/--grid still overrides a fixup rig,
 // and an explicit --vars-orig/--vars-port entry overrides a fixup var of the
@@ -153,11 +159,23 @@
 // and are HELD for the whole run — a level, not a pulse — so a pattern that
 // polls the pin every frame sees a button held down. Pins outside the
 // engine's 0..63 window are recorded as a side warning rather than silently
-// doing nothing. meta.json records `pinsApplied` per side. A `pins` key in
+// doing nothing. meta.json records `pinsApplied` (and `analogPinsApplied`)
+// per side. A `pins` key in
 // fixups.json pins the same levels declaratively for every run of a slug,
 // per side, because the two sides rarely read the same pin — the usual case
 // is an original polling a real button while its clean-room port offers a UI
 // toggle, which is what the per-side `controls` fixup key is for.
+//
+// --analog-orig / --analog-port do the same for ANALOG inputs (Gitea #206):
+// `analogRead(pin)` and `touchRead(pin)` read 0 while nothing drives them, so
+// a pattern whose brightness or hue rides a potentiometer renders one frozen
+// state and cannot be compared against a port that exposes the same knob as a
+// UI control. Spec is "pin=value" pairs separated by ";" or ",", value 0..1
+// (`x`/`release` is 0 — an undriven analog pin reads 0, there is no idle level
+// to hand it back to). Applied and held exactly like driven digital pins,
+// recorded as `analogPinsApplied` per side, and pinnable declaratively per
+// side with an `analogPins` key in fixups.json. Both builtins share one value
+// per pin.
 //
 // --probe-controls answers "which dials are actually live?" in one command.
 // For each side and each SETTABLE control (slider, toggle, inputNumber,
@@ -277,6 +295,7 @@ import {
   varsOverride,
   controlsOverride,
   pinsOverride,
+  analogPinsOverride,
   MAX_PIN,
   nonVisualReason,
   FIXUPS_PATH,
@@ -368,6 +387,8 @@ function parseArgs(argv) {
     varsPort: "",
     pinsOrig: "",
     pinsPort: "",
+    analogOrig: "",
+    analogPort: "",
     noVars: false,
     sensors: "auto",
     label: "default",
@@ -404,6 +425,8 @@ function parseArgs(argv) {
     "--vars-port": ["varsPort", String],
     "--pins-orig": ["pinsOrig", String],
     "--pins-port": ["pinsPort", String],
+    "--analog-orig": ["analogOrig", String],
+    "--analog-port": ["analogPort", String],
     "--sensors": ["sensors", String],
     "--label": ["label", String],
     "--sheet-frames": ["sheetFrames", Number],
@@ -593,6 +616,35 @@ function parsePins(spec) {
   return out;
 }
 
+/** --analog-orig/--analog-port: "pin=0..1" pairs. `x`/`release` is 0, since an
+ *  undriven analog pin reads 0 and has no idle level to hand back to. Out-of-
+ *  range pins and values die here rather than being silently clamped — a dial
+ *  that quietly does nothing is the exact failure this flag exists to fix. */
+function parseAnalogPins(spec) {
+  const out = {};
+  for (const part of String(spec).split(/[;,]/)) {
+    const s = part.trim();
+    if (!s) continue;
+    const eq = s.indexOf("=");
+    if (eq < 0) die(`bad analog pin spec "${s}" (want pin=0..1)`);
+    const pin = Number(s.slice(0, eq).trim());
+    const raw = s.slice(eq + 1).trim().toLowerCase();
+    if (!Number.isInteger(pin) || pin < 0 || pin > MAX_PIN) {
+      die(`bad analog pin spec "${s}": pin must be an integer 0..${MAX_PIN}`);
+    }
+    if (raw === "x" || raw === "-" || raw === "release") {
+      out[pin] = 0;
+      continue;
+    }
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < 0 || v > 1) {
+      die(`bad analog pin spec "${s}" (value must be a number 0..1, or x/release)`);
+    }
+    out[pin] = v;
+  }
+  return out;
+}
+
 /** Fixup-pinned vars for one side, with CLI values layered on top: a --vars-*
  *  entry beats the manifest for that NAME, other pinned names still apply. */
 function mergeVars(fixVars, cliSpec) {
@@ -606,6 +658,9 @@ function mergeControls(fixControls, cliSpec) {
 }
 function mergePins(fixPins, cliSpec) {
   return { ...(fixPins ?? {}), ...parsePins(cliSpec) };
+}
+function mergeAnalogPins(fixPins, cliSpec) {
+  return { ...(fixPins ?? {}), ...parseAnalogPins(cliSpec) };
 }
 
 // ---- synthetic sensor feed ("beat120") -------------------------------------
@@ -727,6 +782,7 @@ function renderSide(host, source, rig, o) {
     varsApplied: {},
     varsValues: null,
     pinsApplied: {},
+    analogPinsApplied: {},
     warnings: [],
     compileError: null,
     runtimeError: null,
@@ -793,6 +849,19 @@ function renderSide(host, source, rig, o) {
       const n = Number(pin);
       if (eng.setPin(n, level)) side.pinsApplied[n] = level;
       else side.warnings.push(`pin ${pin} outside the engine's 0..${MAX_PIN} window — not driven`);
+    }
+
+    // Driven analog pins (the lx_set_analog_pin injection ABI, Gitea #206) —
+    // the same "set once, held for the whole run" contract, feeding both
+    // analogRead() and touchRead(), which share one value per pin.
+    for (const [pin, value] of Object.entries(o.analogPins ?? {})) {
+      const n = Number(pin);
+      if (eng.setAnalogPin(n, value)) side.analogPinsApplied[n] = value;
+      else {
+        side.warnings.push(
+          `analog pin ${pin} outside the engine's 0..${MAX_PIN} window — not driven`,
+        );
+      }
     }
 
     // A control handler can itself throw; don't blame the first render frame.
@@ -1085,6 +1154,7 @@ function sweepSide(host, source, rig, o) {
       controls,
       vars: o.vars,
       pins: o.pins,
+      analogPins: o.analogPins,
     });
 
   const base = run(o.controls);
@@ -1503,14 +1573,17 @@ if (!(rig.pixels > 0)) die("--pixels must be > 0");
 const varsPinned = varsOverride(slug);
 const controlsPinned = controlsOverride(slug);
 const pinsPinned = pinsOverride(slug);
+const analogPinsPinned = analogPinsOverride(slug);
 const varsFix = opts.noVars ? null : varsPinned;
 const controlsFix = opts.noVars ? null : controlsPinned;
 const pinsFix = opts.noVars ? null : pinsPinned;
+const analogPinsFix = opts.noVars ? null : analogPinsPinned;
 if (opts.noVars) {
   for (const [kind, pinned] of [
     ["var", varsPinned],
     ["control", controlsPinned],
     ["pin", pinsPinned],
+    ["analog pin", analogPinsPinned],
   ]) {
     if (!pinned) continue;
     const names = ["orig", "port"]
@@ -1533,6 +1606,10 @@ const pins = {
   orig: mergePins(pinsFix?.orig, opts.pinsOrig),
   port: mergePins(pinsFix?.port, opts.pinsPort),
 };
+const analogPins = {
+  orig: mergeAnalogPins(analogPinsFix?.orig, opts.analogOrig),
+  port: mergeAnalogPins(analogPinsFix?.port, opts.analogPort),
+};
 
 const host = await load();
 const sides = {
@@ -1546,6 +1623,7 @@ const sides = {
     controls: controls.orig,
     vars: vars.orig,
     pins: pins.orig,
+    analogPins: analogPins.orig,
   }),
   port: renderSide(host, portSource, rig, {
     seed: opts.seed,
@@ -1557,6 +1635,7 @@ const sides = {
     controls: controls.port,
     vars: vars.port,
     pins: pins.port,
+    analogPins: analogPins.port,
   }),
 };
 
@@ -1703,12 +1782,14 @@ if (opts.varsSweep) {
         controls: controls.orig,
         vars: vars.orig,
         pins: pins.orig,
+        analogPins: analogPins.orig,
       }),
       port: sweepSide(host, portSource, rig, {
         ...sweepOpts,
         controls: controls.port,
         vars: vars.port,
         pins: pins.port,
+        analogPins: analogPins.port,
       }),
     },
   };
@@ -1742,13 +1823,20 @@ const meta = {
     // Declared per-slug fixups actually in force for this run (null when the
     // slug has none) — see tools/verify/fixups.mjs.
     fixups:
-      sourceFixups || rigFix || varsFix || controlsFix || pinsFix || nonVisual
+      sourceFixups ||
+      rigFix ||
+      varsFix ||
+      controlsFix ||
+      pinsFix ||
+      analogPinsFix ||
+      nonVisual
         ? {
             source: sourceFixups,
             rig: rigFix ?? null,
             vars: varsFix ?? null,
             controls: controlsFix ?? null,
             pins: pinsFix ?? null,
+            analogPins: analogPinsFix ?? null,
             ...(nonVisual ? { nonVisual } : {}),
           }
         : null,
@@ -1813,8 +1901,10 @@ const meta = {
         // The pattern's exported-var surface, and what was pushed into it.
         varsExported: s.varsExported,
         varsApplied: s.varsApplied,
-        // Digital input pins driven into this side (true/false/null=released).
+        // Digital input pins driven into this side (true/false/null=released),
+        // and analog pins parked at a 0..1 value (Gitea #206).
         pinsApplied: s.pinsApplied,
+        analogPinsApplied: s.analogPinsApplied,
         warnings: s.warnings,
         compileError: s.compileError,
         runtimeError: s.runtimeError,
@@ -1910,12 +2000,14 @@ if (opts.probeControls) {
         // actually drawing rather than against its idle (often black) default.
         vars: vars.orig,
         pins: pins.orig,
+        analogPins: analogPins.orig,
       }),
       port: probeSide(host, portSource, rig, {
         ...probeOpts,
         controls: controls.port,
         vars: vars.port,
         pins: pins.port,
+        analogPins: analogPins.port,
       }),
     },
   };

@@ -562,8 +562,16 @@ deterministically without hardware. In the playground that surface is
 the **Pins** panel, which appears only for patterns that actually name a
 pin (`lx_pins_used` reports the mask, since pin numbers are runtime
 values) and offers a momentary press plus a latch per pin.
-`analogRead`/`touchRead` still read 0 unconditionally, and nothing
-drives a real pad yet.
+`analogRead`/`touchRead` have the same injection path (Gitea #206):
+they read 0 while nothing drives them — the resting state of an
+unconnected pad, so there is no idle level to release back to — and a
+host drives a 0..1 value per pin with `lx_set_analog_pin` /
+`Engine::set_analog_pin`, `a <pin> <0..1>` lines on `POST /api/pins`,
+or an `analogPins` block in `tools/verify/fixups.json`. Both builtins
+share one per-pin value (no board wires an ADC and a touch pad to the
+same pad), `lx_analog_pins_used` reports which pins the pattern
+sampled, and the playground gives each of those a 0..1 slider.
+Nothing drives a real pad yet.
 Clock (`clockYear` …
 `clockWeekday`) — needs wall time from the host; every host supplies it
 at engine construction too, so top-level reads see real time-of-day

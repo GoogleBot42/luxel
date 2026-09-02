@@ -60,6 +60,11 @@
   let pinLevels: Record<number, boolean> = {};
   let pinIdleHigh: Record<number, boolean> = {};
   let pinLatched: Record<number, boolean> = {};
+  /** Analog pins the pattern samples (`analogRead`/`touchRead`) and the value
+   *  each slider is parked at, 0..1 (Gitea #206). Polled the same way, and
+   *  cleared on recompile for the same reason: a fresh VM reads 0 everywhere. */
+  let analogPins: number[] = [];
+  let analogValues: Record<number, number> = {};
   let fps = 0;
   let targetFps = 60;
   let running = true;
@@ -1051,8 +1056,10 @@
         const saved = controlValues[c.name];
         if (saved) engine.setControl(c.name, saved);
       }
-      // a fresh VM drives nothing, so drop any latched pins with it
+      // a fresh VM drives nothing, so drop any latched pins and parked
+      // analog values with it
       pinLatched = {};
+      analogValues = {};
       refreshPins();
       preview?.clear(); // fresh program → fresh history
       // Re-model against the device on every successful compile, not just on
@@ -1703,7 +1710,7 @@ export function render(index) {
     if (device && batch.length) void device.sendEvents(batch).catch(() => {});
   }
 
-  // ---- digital pin injection (pin panel → digitalRead) ----
+  // ---- pin injection (pin panel → digitalRead / analogRead) ----
 
   /** Re-read which pins the pattern touches and what they currently read.
    *  Polled rather than computed once: a `pinMode` at top level shows up at
@@ -1725,6 +1732,20 @@ export function render(index) {
     }
     pinLevels = levels;
     pinIdleHigh = idle;
+
+    const nextAnalog = engine.analogPinsUsed();
+    if (
+      nextAnalog.length !== analogPins.length ||
+      nextAnalog.some((p, i) => p !== analogPins[i])
+    ) {
+      analogPins = nextAnalog;
+    }
+    // The engine is the source of truth for a slider's position too — a pin
+    // the pattern only just started sampling has never been driven, so it
+    // reads 0 and the slider must show 0 rather than a stale value.
+    const analog: Record<number, number> = {};
+    for (const p of analogPins) analog[p] = engine.analogRead(p);
+    analogValues = analog;
   }
 
   /** A press/latch from the pin panel. `level: null` releases the pin back to
@@ -1734,6 +1755,14 @@ export function render(index) {
    *  bound device. */
   function onPinDrive(e: CustomEvent<{ pin: number; level: boolean | null }>): void {
     engine?.setPin(e.detail.pin, e.detail.level);
+    refreshPins();
+  }
+
+  /** A slider move from the pin panel: park the analog pin at `value` (0..1),
+   *  which is what `analogRead`/`touchRead` then report until it is moved
+   *  again (Gitea #206). Preview-only for the same reason as `onPinDrive`. */
+  function onAnalogDrive(e: CustomEvent<{ pin: number; value: number }>): void {
+    engine?.setAnalogPin(e.detail.pin, e.detail.value);
     refreshPins();
   }
 
@@ -2433,18 +2462,24 @@ export function render(index) {
         </p>
       {/if}
 
-      {#if pins.length > 0}
+      {#if pins.length > 0 || analogPins.length > 0}
         <h2>Pins</h2>
         <PinPanel
           {pins}
+          {analogPins}
           levels={pinLevels}
           idleHigh={pinIdleHigh}
           bind:latched={pinLatched}
+          bind:analogValues
           on:drive={onPinDrive}
+          on:analog={onAnalogDrive}
         />
         <p class="dim hint">
-          <code>press</code> drives the pin while held; <code>hold</code> keeps it driven after you
-          let go. Releasing both returns the pin to its <code>pinMode</code> idle level.{#if device}{" "}
+          {#if pins.length > 0}<code>press</code> drives the pin while held; <code>hold</code> keeps
+            it driven after you let go. Releasing both returns the pin to its
+            <code>pinMode</code> idle level.{/if}{#if analogPins.length > 0}{" "}
+            An analog slider is what <code>analogRead</code>/<code>touchRead</code> read on that pin,
+            0..1 — it stays where you leave it.{/if}{#if device}{" "}
             Preview only — the firmware has no GPIO injection yet, so nothing is sent to the device.{/if}
         </p>
       {/if}

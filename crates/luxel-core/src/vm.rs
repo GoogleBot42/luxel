@@ -776,6 +776,20 @@ pub struct Vm {
     /// the life of the VM, so a pin read inside a rare branch does not make
     /// the control flicker in and out.
     pin_used: u64,
+    /// Bit per pin (0..63): the PATTERN has read this pin with `analogRead` or
+    /// `touchRead`. Same purpose as `pin_used` on the digital surface — a host
+    /// cannot know which analog pins a pattern samples without watching it run
+    /// (Gitea #206). Sticky for the life of the VM.
+    analog_used: u64,
+    /// Injected `analogRead`/`touchRead` value per pin, as a **16.15 code**
+    /// (`Fx` raw >> 1) so the whole 0..1 range including exactly 1.0 fits a
+    /// `u16`: 128 bytes of VM state, no allocation. Both builtins share one
+    /// table — they are distinct peripherals on real silicon, but no board
+    /// wires an ADC and a touch pad to the same pad, and one injected "what
+    /// does this pin read" value is all a host has to offer either way.
+    /// Zero (the default) is what an undriven analog pin reads, so releasing
+    /// a pin is simply writing 0 — there is no separate driven bit.
+    analog_level: [u16; MAX_TRACKED_PIN as usize + 1],
 }
 
 /// Highest pin number `pin_pullup` can track. Above it `pinMode` is still a
@@ -893,6 +907,8 @@ impl Vm {
             pin_driven: 0,
             pin_level: 0,
             pin_used: 0,
+            analog_used: 0,
+            analog_level: [0; MAX_TRACKED_PIN as usize + 1],
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             random_seed: Fx::ZERO,
@@ -1070,6 +1086,43 @@ impl Vm {
     /// it to decide which way "pressing" the pin should move it.
     pub fn pins_idle_high(&self) -> u64 {
         self.pin_pullup
+    }
+
+    /// Drive an analog input pin from OUTSIDE the pattern, so
+    /// `analogRead(pin)` / `touchRead(pin)` report `value` instead of 0 — the
+    /// analog half of the pin-injection ABI (Gitea #206). `value` is clamped
+    /// to the 0..1 range both builtins are documented to return and stored as
+    /// a 16.15 code, so it round-trips exactly for every value a pattern
+    /// literal can express. Writing [`Fx::ZERO`] releases the pin: an
+    /// undriven analog pin reads 0.
+    ///
+    /// Returns false for a pin outside `0..=MAX_TRACKED_PIN`, where there is
+    /// nowhere to store the value — the same "a typo'd pin must not look like
+    /// a stuck input" contract as [`Vm::set_pin`].
+    pub fn set_analog_pin(&mut self, pin: i32, value: Fx) -> bool {
+        if !(0..=MAX_TRACKED_PIN).contains(&pin) {
+            return false;
+        }
+        let raw = value.raw().clamp(0, Fx::ONE.raw());
+        self.analog_level[pin as usize] = (raw >> 1) as u16;
+        true
+    }
+
+    /// The value `analogRead(pin)` / `touchRead(pin)` report: the injected
+    /// value, or [`Fx::ZERO`] while nothing has driven the pin.
+    pub fn analog_read(&self, pin: i32) -> Fx {
+        if !(0..=MAX_TRACKED_PIN).contains(&pin) {
+            return Fx::ZERO;
+        }
+        Fx::from_raw((self.analog_level[pin as usize] as i32) << 1)
+    }
+
+    /// Bit per pin (0..63): the pattern has named this pin in an `analogRead`
+    /// or `touchRead`, so a host has something real to offer a slider for
+    /// (Gitea #206). Separate from [`Vm::pins_used`], though a pin shows up in
+    /// both if a pattern reads it through both surfaces.
+    pub fn analog_pins_used(&self) -> u64 {
+        self.analog_used
     }
 
     /// Read view by id — arena ids come from the VM itself, so `id` is
@@ -2681,8 +2734,18 @@ impl Vm {
                 num(if high { Fx::ONE } else { Fx::ZERO })
             }
             DigitalWrite | PlaylistSetPosition | SequencerNext => Ok(Value::default()),
-            AnalogRead | TouchRead | SequencerGetMode | PlaylistGetPosition
-            | PlaylistGetLength | NodeId => num(Fx::ZERO),
+            // Analog inputs read whatever a host injected for the pin, and 0
+            // while nothing has (Gitea #206) — the same shape as
+            // `DigitalRead`, minus the pull-up idle level: an undriven
+            // ADC/touch pad resting at 0 is a defensible reading.
+            AnalogRead | TouchRead => {
+                let pin = n(0).to_int_trunc();
+                if (0..=MAX_TRACKED_PIN).contains(&pin) {
+                    self.analog_used |= 1u64 << pin;
+                }
+                num(self.analog_read(pin))
+            }
+            SequencerGetMode | PlaylistGetPosition | PlaylistGetLength | NodeId => num(Fx::ZERO),
             // ---- Luxel extensions, batch 2 ----
             // beat(bpm): sawtooth beat phase 0..1 at `bpm` on the engine
             // clock — FastLED-style tempo without real audio

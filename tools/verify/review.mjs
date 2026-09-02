@@ -50,7 +50,8 @@
 // read at REQUEST time and never written anywhere — see the clean-room rule in
 // CLAUDE.md. Per-slug fixups (tools/verify/fixups.json) are applied to the
 // original before it is served, exactly as snap.mjs and report.mjs apply them —
-// including the per-side `vars`, `controls` and `pins` blocks, which the UI
+// including the per-side `vars`, `controls`, `pins` and `analogPins` blocks,
+// which the UI
 // pushes into each side's engine once after init (a client-driven original is
 // black until it is written to, and a button pattern sits at "never pressed"
 // until a pin is driven — both read as a dead pattern).
@@ -67,6 +68,7 @@ import {
   varsOverride,
   controlsOverride,
   pinsOverride,
+  analogPinsOverride,
 } from "./fixups.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -119,9 +121,12 @@ if (!fs.existsSync(WASM)) {
 // anyone to rebuild. Refuse to start on a stale binary.
 // `lx_set_pin` is the same story one ABI later (#177): the UI drives it for
 // any slug with a `pins` fixup, and a wasm without it fails as a TypeError.
+// `lx_set_analog_pin` likewise for an `analogPins` fixup (#206).
 {
   const bin = fs.readFileSync(WASM);
-  const missing = ["lx_set_default_wall_clock", "lx_set_pin"].filter((e) => !bin.includes(e));
+  const missing = ["lx_set_default_wall_clock", "lx_set_pin", "lx_set_analog_pin"].filter(
+    (e) => !bin.includes(e),
+  );
   if (missing.length) {
     console.error(
       `engine wasm at ${WASM} is STALE (missing ${missing.join(", ")})\n` +
@@ -221,10 +226,13 @@ function buildData() {
       // each engine after init, so a client-driven original renders what it
       // renders under the judge harness instead of sitting dark. `vars` is
       // the exported-var surface, `controls` the UI dials, and `pins` the
-      // driven digital inputs (Gitea #177) that stand in for a real button.
+      // driven digital inputs (Gitea #177) that stand in for a real button,
+      // and `analogPins` the driven analog inputs (Gitea #206) that stand in
+      // for a pot or a touch pad.
       vars: varsOverride(pair.slug),
       controlPins: controlsOverride(pair.slug),
       pins: pinsOverride(pair.slug),
+      analogPins: analogPinsOverride(pair.slug),
       verdict: readVerdict(pair.slug),
       origSource,
       origError,

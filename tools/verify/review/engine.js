@@ -160,6 +160,20 @@ export class Engine {
     return this.e.lx_pin_read(this.h, pin) === 1;
   }
 
+  /** Drive an analog input pin so `analogRead(pin)`/`touchRead(pin)` report
+   *  `value` (0..1) instead of 0 — the analog half of the pin-injection ABI
+   *  (Gitea #206). Returns true when it landed (false = pin outside 0..63). */
+  setAnalogPin(pin, value) {
+    if (!Number.isInteger(pin) || !Number.isFinite(value)) return false;
+    const raw = Math.round(Math.min(1, Math.max(0, value)) * 65536);
+    return this.e.lx_set_analog_pin(this.h, pin, raw) === 1;
+  }
+
+  /** What `analogRead(pin)`/`touchRead(pin)` report right now, 0..1. */
+  analogRead(pin) {
+    return this.e.lx_analog_read(this.h, pin) / 65536;
+  }
+
   /** Row-major W×H grid map (rows implied by pixelCount/w). */
   setMapGrid(w, h) {
     this.e.lx_set_map_grid(this.h, w, h);

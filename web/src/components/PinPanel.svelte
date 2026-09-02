@@ -2,9 +2,18 @@
   import { createEventDispatcher } from "svelte";
 
   /** Digital pins the running pattern actually touches, ascending. The parent
-   *  hides the whole section when this is empty — a pattern that never calls
-   *  `pinMode`/`digitalRead` gets no pin panel at all (Gitea #205). */
+   *  hides the whole section when this and `analogPins` are both empty — a
+   *  pattern that never calls `pinMode`/`digitalRead` gets no pin panel at all
+   *  (Gitea #205). */
   export let pins: number[] = [];
+  /** Analog pins the pattern samples with `analogRead`/`touchRead`, ascending
+   *  (Gitea #206). They get a 0..1 slider rather than a press/latch pair:
+   *  there is no "pressed" state for a pot, only a position. */
+  export let analogPins: number[] = [];
+  /** Slider position per analog pin, 0..1 — what `analogRead`/`touchRead`
+   *  report. Bound, like `latched`: the parent clears it on recompile, since a
+   *  fresh engine reads 0 on every pin. */
+  export let analogValues: Record<number, number> = {};
   /** What `digitalRead(pin)` reports right now, per pin. */
   export let levels: Record<number, boolean> = {};
   /** Pins whose IDLE level is HIGH (`pinMode` asked for a pull-up). Pressing
@@ -14,7 +23,10 @@
    *  engine starts with nothing driven). */
   export let latched: Record<number, boolean> = {};
 
-  const dispatch = createEventDispatcher<{ drive: { pin: number; level: boolean | null } }>();
+  const dispatch = createEventDispatcher<{
+    drive: { pin: number; level: boolean | null };
+    analog: { pin: number; value: number };
+  }>();
 
   /** Pointer/key currently held on the momentary button, per pin. */
   let held: Record<number, boolean> = {};
@@ -48,6 +60,14 @@
   function toggleLatch(pin: number): void {
     latched = { ...latched, [pin]: !latched[pin] };
     apply(pin);
+  }
+
+  /** Drag an analog pin's slider: the value goes straight into the engine, no
+   *  press/release model — a pot sits where it is left. */
+  function setAnalog(pin: number, e: Event): void {
+    const value = Number((e.currentTarget as HTMLInputElement).value);
+    analogValues = { ...analogValues, [pin]: value };
+    dispatch("analog", { pin, value });
   }
 
   /** Space/Enter on the momentary button behaves like the pointer: down =
@@ -103,6 +123,27 @@
       <span class="dim idle">idle {idleHigh[pin] ? "HIGH (pull-up)" : "LOW"}</span>
     </div>
   {/each}
+  {#each analogPins as pin (pin)}
+    <div class="pin" data-role="analog-row" data-pin={pin}>
+      <span class="label mono">GPIO {pin}</span>
+      <input
+        class="slider"
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        data-role="analog-slider"
+        data-pin={pin}
+        title="what analogRead({pin}) / touchRead({pin}) reads"
+        value={analogValues[pin] ?? 0}
+        on:input={(e) => setAnalog(pin, e)}
+      />
+      <span class="level mono" data-role="analog-value" data-pin={pin}>
+        {(analogValues[pin] ?? 0).toFixed(2)}
+      </span>
+      <span class="dim idle">analog in (0..1)</span>
+    </div>
+  {/each}
 </div>
 
 <style>
@@ -143,6 +184,13 @@
 
   .latch {
     min-width: 48px;
+  }
+
+  .slider {
+    flex: 1;
+    min-width: 120px;
+    max-width: 240px;
+    accent-color: var(--accent);
   }
 
   .level {

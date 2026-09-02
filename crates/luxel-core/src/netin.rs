@@ -265,41 +265,79 @@ pub fn build_events(events: &[[crate::fixed::Fx; 4]]) -> alloc::vec::Vec<u8> {
     p
 }
 
-// ---- Digital pin injection ----
-// POST /api/pins body: text, one `<pin> <level>` per line. Levels are
-// `0`/`low`, `1`/`high`, or `x`/`release`/`-` to hand the pin back to its
-// `pinMode` idle level. Text rather than a binary frame because this is a
-// hand- and script-driven surface (curl, an HA automation, a test harness),
+// ---- Pin injection ----
+// POST /api/pins body: text, one write per line. A digital write is
+// `<pin> <level>`, where the level is `0`/`low`, `1`/`high`, or
+// `x`/`release`/`-` to hand the pin back to its `pinMode` idle level. An
+// ANALOG write (Gitea #206) is the same line with a leading kind word:
+// `a <pin> <0..1>` (`analog` and `touch` are accepted spellings), feeding
+// `analogRead`/`touchRead`; there `x`/`release` means 0, the value an
+// undriven analog pin reads. Text rather than a binary frame because this is
+// a hand- and script-driven surface (curl, an HA automation, a test harness),
 // not a per-frame stream like DDP or the sensor board (Gitea #177 item 2).
+
+/// One parsed line of a `/api/pins` payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinWrite {
+    /// `digitalRead` level: `Some(high)`, or `None` to release the pin back
+    /// to its `pinMode` idle level.
+    Digital(i32, Option<bool>),
+    /// `analogRead`/`touchRead` value, already clamped to 0..1 by the engine
+    /// on the way in. 0 is "undriven".
+    Analog(i32, crate::fixed::Fx),
+}
 
 /// Max pin writes accepted from one payload — the whole tracked window, so a
 /// batch can never say more than "every pin, once".
 pub const PIN_MAX_BATCH: usize = crate::vm::MAX_TRACKED_PIN as usize + 1;
 
-/// Parse a pin-injection payload into `(pin, level)` pairs, where `None` is
-/// "release back to idle". Blank lines, comments and lines whose pin or level
-/// does not parse are skipped, so a partly-malformed payload still applies the
-/// writes it could read (the response reports how many landed).
-pub fn parse_pin_lines(payload: &str) -> alloc::vec::Vec<(i32, Option<bool>)> {
+/// Parse a pin-injection payload into [`PinWrite`]s. Blank lines, comments and
+/// lines whose pin or value does not parse are skipped, so a partly-malformed
+/// payload still applies the writes it could read (the response reports how
+/// many landed).
+pub fn parse_pin_lines(payload: &str) -> alloc::vec::Vec<PinWrite> {
     let mut out = alloc::vec::Vec::new();
     for line in payload.lines() {
         if out.len() >= PIN_MAX_BATCH {
             break;
         }
         let mut f = line.split_whitespace();
-        let (Some(pin), Some(level)) = (f.next(), f.next()) else {
-            continue; // blank line, or a pin with no level
+        let Some(head) = f.next() else {
+            continue; // blank line
+        };
+        // A leading kind word marks the analog surface; anything else is the
+        // original two-field digital form, unchanged.
+        let analog = matches!(head.to_ascii_lowercase().as_str(), "a" | "analog" | "touch");
+        let (Some(pin), Some(value)) = (if analog { f.next() } else { Some(head) }, f.next())
+        else {
+            continue; // a pin with no value
         };
         let Ok(pin) = pin.parse::<i32>() else {
             continue;
         };
-        let level = match level.to_ascii_lowercase().as_str() {
+        let value = value.to_ascii_lowercase();
+        let released = matches!(value.as_str(), "x" | "-" | "release" | "idle");
+        if analog {
+            // "release" is 0 here: an undriven analog pin reads 0, so there
+            // is no separate idle level to hand it back to.
+            let v = if released {
+                crate::fixed::Fx::ZERO
+            } else {
+                match crate::fixed::Fx::parse_literal(&value) {
+                    Some(v) => v,
+                    None => continue, // unreadable value: skip rather than guess
+                }
+            };
+            out.push(PinWrite::Analog(pin, v));
+            continue;
+        }
+        let level = match value.as_str() {
             "0" | "low" | "false" | "off" => Some(false),
             "1" | "high" | "true" | "on" => Some(true),
-            "x" | "-" | "release" | "idle" => None,
+            _ if released => None,
             _ => continue, // unreadable level: skip rather than guess
         };
-        out.push((pin, level));
+        out.push(PinWrite::Digital(pin, level));
     }
     out
 }
@@ -310,23 +348,49 @@ mod tests {
 
     #[test]
     fn pin_lines_parse() {
+        use PinWrite::Digital;
         assert_eq!(
             parse_pin_lines("26 0\n27 HIGH\n 4  release \n"),
-            [(26, Some(false)), (27, Some(true)), (4, None)]
+            [Digital(26, Some(false)), Digital(27, Some(true)), Digital(4, None)]
         );
         // aliases both ways
         assert_eq!(
             parse_pin_lines("1 low\n2 on\n3 -"),
-            [(1, Some(false)), (2, Some(true)), (3, None)]
+            [Digital(1, Some(false)), Digital(2, Some(true)), Digital(3, None)]
         );
         // skipped: blank, level-less, non-numeric pin, unreadable level
-        assert_eq!(parse_pin_lines("\n26\nfoo 1\n26 maybe\n5 1"), [(5, Some(true))]);
+        assert_eq!(parse_pin_lines("\n26\nfoo 1\n26 maybe\n5 1"), [Digital(5, Some(true))]);
         // out-of-range pins parse here; the engine rejects them (and says so)
-        assert_eq!(parse_pin_lines("999 1"), [(999, Some(true))]);
+        assert_eq!(parse_pin_lines("999 1"), [Digital(999, Some(true))]);
         // batch cap
         let many: alloc::string::String =
             (0..200).map(|i| alloc::format!("{i} 1\n")).collect();
         assert_eq!(parse_pin_lines(&many).len(), PIN_MAX_BATCH);
+    }
+
+    #[test]
+    fn analog_pin_lines_parse() {
+        use crate::fixed::Fx;
+        use PinWrite::{Analog, Digital};
+        // every spelling of the kind word, and the digital form still wins
+        // when there is no kind word at all
+        assert_eq!(
+            parse_pin_lines("a 33 0.5\nANALOG 34 1\ntouch 4 .25\n26 0"),
+            [
+                Analog(33, Fx::parse_literal("0.5").unwrap()),
+                Analog(34, Fx::ONE),
+                Analog(4, Fx::parse_literal(".25").unwrap()),
+                Digital(26, Some(false)),
+            ]
+        );
+        // release means 0 on the analog surface (no idle level to return to)
+        assert_eq!(parse_pin_lines("a 33 x\nanalog 34 release"), [Analog(33, Fx::ZERO), Analog(34, Fx::ZERO)]);
+        // skipped: no value, non-numeric pin, unreadable value. Out-of-range
+        // values parse; the engine clamps them.
+        assert_eq!(
+            parse_pin_lines("a 33\na foo 1\na 33 high\na 7 9"),
+            [Analog(7, Fx::from_int(9))]
+        );
     }
 
     #[test]

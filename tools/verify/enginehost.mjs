@@ -13,6 +13,7 @@
 //        if (eng.wantsSensors()) eng.setSensors(sensorSlots({ light: 0.5 }));
 //        eng.setVar("pixel", 30);                 // as an external client would
 //        eng.setPin(26, false);                   // hold a button-to-ground down
+//        eng.setAnalogPin(33, 0.42);              // park a pot at 42%
 //        const rgb = eng.frame(50);               // Uint8Array(pixelCount*3)
 //        eng.free();
 
@@ -213,6 +214,38 @@ export class Engine {
    *  otherwise the pin's `pinMode` idle level. */
   pinRead(pin) {
     return this.e.lx_pin_read(this.h, pin) === 1;
+  }
+
+  /** Drive an ANALOG input pin so `analogRead(pin)` / `touchRead(pin)` report
+   *  `value` (0..1) instead of the 0 they read undriven — the analog half of
+   *  the pin-injection ABI (Gitea #206). Both builtins share one value per
+   *  pin; 0 releases it, since an undriven analog pin reads 0 and there is no
+   *  idle level to return to. Values out of 0..1 are clamped by the engine.
+   *
+   *  Returns true when the value was stored; false for a pin outside the
+   *  tracked 0..63 window, which callers should surface — a typo'd pin
+   *  otherwise looks exactly like a pot sitting at zero. Like a driven
+   *  digital level it persists for the life of the engine. */
+  setAnalogPin(pin, value) {
+    if (!Number.isInteger(pin)) {
+      throw new Error(`setAnalogPin: pin must be an integer, got ${pin}`);
+    }
+    if (!Number.isFinite(value)) {
+      throw new Error(`setAnalogPin ${pin}: non-finite value ${value}`);
+    }
+    if (typeof this.e.lx_set_analog_pin !== "function") {
+      throw new Error(
+        "engine wasm predates the analog pin-injection ABI (no lx_set_analog_pin) — rebuild it: " +
+          "nix develop -c cargo build --release --target wasm32-unknown-unknown -p luxel-wasm",
+      );
+    }
+    const raw = Math.round(Math.min(1, Math.max(0, value)) * RAW);
+    return this.e.lx_set_analog_pin(this.h, pin, raw) === 1;
+  }
+
+  /** What `analogRead(pin)` / `touchRead(pin)` report right now, 0..1. */
+  analogRead(pin) {
+    return this.e.lx_analog_read(this.h, pin) / RAW;
   }
 
   /** Row-major W×H grid map (rows implied by pixelCount/w). */

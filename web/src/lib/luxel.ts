@@ -113,6 +113,9 @@ interface Exports {
   lx_pin_read(h: number, pin: number): number;
   lx_pins_used(h: number, half: number): number;
   lx_pins_idle_high(h: number, half: number): number;
+  lx_set_analog_pin(h: number, pin: number, value: number): number;
+  lx_analog_read(h: number, pin: number): number;
+  lx_analog_pins_used(h: number, half: number): number;
   lx_pixels(h: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
@@ -374,6 +377,33 @@ export class Engine {
     if (p < 0 || p > 63) return false;
     const bits = this.e.lx_pins_idle_high(this.h, p >= 32 ? 1 : 0) >>> 0;
     return (bits & (1 << p % 32)) !== 0;
+  }
+
+  /** Drive an analog input pin so `analogRead(pin)`/`touchRead(pin)` report
+   *  `value` (0..1) instead of the 0 they read undriven — the analog half of
+   *  the pin-injection ABI (Gitea #206). Both builtins share one value per
+   *  pin, and 0 is the undriven reading, so there is no separate release.
+   *  Returns false when the pin is outside the tracked window (0..63). */
+  setAnalogPin(pin: number, value: number): boolean {
+    const v = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+    return this.e.lx_set_analog_pin(this.h, pin | 0, Math.round(v * RAW) | 0) === 1;
+  }
+
+  /** What `analogRead(pin)`/`touchRead(pin)` report right now, 0..1. */
+  analogRead(pin: number): number {
+    return this.e.lx_analog_read(this.h, pin | 0) / RAW;
+  }
+
+  /** Pins the running pattern has actually sampled with `analogRead`/
+   *  `touchRead`, ascending (Gitea #206) — the analog counterpart of
+   *  `pinsUsed`, and what gates the panel's sliders. */
+  analogPinsUsed(): number[] {
+    const pins: number[] = [];
+    for (let half = 0; half < 2; half++) {
+      const bits = this.e.lx_analog_pins_used(this.h, half) >>> 0;
+      for (let b = 0; b < 32; b++) if (bits & (1 << b)) pins.push(half * 32 + b);
+    }
+    return pins;
   }
 
   // ---- map mode (this engine emits coordinates, not colors) ----
