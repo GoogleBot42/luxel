@@ -18,3 +18,11 @@ depth-probe = []
 # --profile`, tools/profile-library.mjs). Host tooling only: the firmware
 # never enables it, so no device image carries a counter or a branch.
 profile = []
+# Gitea #312 experiment knobs: place the interpreter's hot functions in
+# `.rwtext` (internal SRAM) instead of letting them execute from the
+# cache-mapped flash text. Device-only — a host build must never enable
+# them. Enabled from the firmware through its own `iram-vm` /
+# `iram-builtins` features (firmware/Cargo.toml), i.e.
+#   EXTRA_FEATURES=iram-vm BOARD=board-seengreat-hub75 ./build-esp32.sh
+iram-vm = []
+iram-builtins = []

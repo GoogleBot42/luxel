@@ -77,6 +77,33 @@ paths:
   empty-render case would. Watch for `callx8` (each is an `entry`/`retw`
   window transition) and for ROM `memcpy`/`memset` calls, which
   `copy_from_slice`/`resize` emit for even one or two words.
+- **Judge an engine change on ops/px × cycles/op, never on ops/px alone.**
+  Fewer, fatter operations are not automatically faster: a superinstruction
+  that dispatches more expensively, or that costs `Vm::run` a register, can
+  lose. Report both halves for every candidate — ops/px from `luxel bench
+  --profile` (or `tools/opbench.mjs`, which measures it itself), cycles/op
+  from `tools/opbench.mjs` on the device — and keep the faster variant, not
+  the shorter stream. We have one instance each way already: on x86 the
+  fused stream was a wash-to-slower (register pressure), while on the S3
+  fusing was −14 % / −18 % vm (#298).
+- **Host benchmarks and the device disagree, routinely and by sign.** The
+  in-place `binnum!`/`replace_top!` rewrite in #312 was +9 % SLOWER on x86
+  and −2.3 % faster on the S3. Xtensa is the target that matters for engine
+  work; use the host only for fast iteration, and never land or reject a
+  dispatch change on a host number alone.
+- **`Value`'s payload widths decide the discriminant's width, and that is
+  hot.** With any `u16` payload rustc lays the tag out as a `u16`, so every
+  `match` on a `Value` — including the `Option<Value>` niche test left by
+  `Vec::pop` — needs `l32r 0xffff; and` before the compare, and Xtensa has
+  no 32-bit immediate, so the mask is a literal-pool LOAD that register
+  pressure re-issues at every use. Keep every `Value` payload 32-bit
+  (#312: −12.5 % cycles/op, `Vm::run` −1.5 KB).
+- Per-instruction bookkeeping in FIELDS of `Vm` is expensive out of all
+  proportion to its instruction count: `fuel` (load/compare/decrement/store)
+  and `insn_start` (a store) together cost ~7 cycles of a ~94-cycle op on the
+  S3. They live in locals now; anything that must survive a `return` or a
+  re-entry into the VM (`call_builtin` can call back through an array
+  callback) has to be published at that boundary. Don't add a new one.
 - Appending a new builtin does NOT require a bytecode format-version bump.
   Only format changes do. A version mismatch makes the device reply with
   `"code":"bc-version"`, and the web UI auto-recompiles from source in

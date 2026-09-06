@@ -1339,7 +1339,7 @@ fn resolve_render(
         let f = match tgt[slot]? {
             RenderTarget::Fn(f) => f,
             RenderTarget::Global(g) => match globals.get(g as usize) {
-                Some(Value::Fun(f)) => *f,
+                Some(Value::Fun(f)) => *f as u16,
                 _ => return None,
             },
         };

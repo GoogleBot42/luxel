@@ -1,5 +1,92 @@
 # Update log
 
+## 2026-09-06 — Where the S3's ~110 cycles per bytecode op go, and 18 % of them back (#312)
+
+#312 asked for the ~50 cycles/op the instruction-count model could not explain.
+The answer is that **the model was right about the instruction count and wrong
+about the cycles per instruction**: the dispatch loop really is ~55 Xtensa
+instructions per bytecode op, and an LX7 runs that branchy, load-dependent code
+at roughly 2 cycles per instruction, not one. Nothing exotic — no cache
+pathology — was hiding in there:
+
+| suspect | test | result |
+|---|---|---|
+| 1. words executed from the flash mapping | the same K-sweep on a pattern pushed live (`deserialize_lean` → DRAM heap) vs saved + activated (`deserialize_lean_static` → the mapped code arena) | **0.0 %.** 4.322 vs 4.323 µs/iteration. A live `/api/code` push was *already* running from DRAM, so the baseline never had this cost, and the mapped path does not either. **No DRAM code cache is needed** — that closes the #260 RAM-budget question. |
+| 2. instruction-cache pressure | `Vm::run` (15.7 KB) moved into `.rwtext` (IRAM) behind a new `iram-vm` feature | **−1.0 %** (110.3 → 109.2 cycles/op) for 16 KB of the scarcest memory on the board. Not the cause. Jitter did drop sharply (K=200 sample spread 4,700 → 790 µs), so the cache is *doing* something — just not costing throughput. |
+| 3. per-op overheads outside the instruction count | a throwaway image with the `fuel` and `insn_start` bookkeeping deleted outright | **−7.6 %** (94.3 → 87.1 cycles/op). Real, and mostly recoverable. |
+| 4. Xtensa pipeline effects | objdump of the taken path: ~20-instruction dispatch preamble + ~34-instruction `Add` arm, ~4 taken control transfers per op including a load-dependent `jx` | the residue. ~55 instructions in ~110 cycles ⇒ ~2 cycles/instruction. |
+
+`tools/opbench.mjs` is the measurement (docs/tools.md): it pushes the loop
+pattern for each K, fits the slope of `vm_us` against K — which cancels the wire,
+the per-pixel entry and `beforeRender` — and prints µs and cycles per iteration
+and per op, taking ops/iteration from the host profiler on the same sources
+rather than hardcoding it.
+
+**What landed**, in the order it was found, each measured on the panel:
+
+1. **`Value`'s discriminant was a `u16`** because `Fun`/`Builtin` carried `u16`
+   payloads. Every `match` on a `Value` — including the `Option<Value>` niche
+   test `Vec::pop` leaves behind — therefore needed `l32r 0xffff; and` before the
+   compare, and since Xtensa has no 32-bit immediate that mask is a literal-pool
+   *load*, re-issued at each use under register pressure: the `Add` arm alone
+   carried four. All payloads 32-bit ⇒ a `u32` tag ⇒ mask and literal gone.
+   `Add` arm 34 → 22 instructions, `Vm::run` 15,670 → 14,123 B. **−12.5 %.**
+2. **Binary ops and `StoreL`/`StoreG`/`ConstOp` in place.** `pop; pop; push` writes
+   the Vec's length three times and checks `MAX_STACK` on a shape that shrinks the
+   stack; rewriting the top slots and truncating once does it with one write and no
+   check. **−2.3 %** (and +9 % *slower* on x86 — see the rule below).
+3. **`fuel` and `insn_start` out of `Vm` and into locals.** A load/compare/
+   decrement/store and a store on every single dispatch, for two values only the
+   error paths read. They are published at each `return` and at the two sites that
+   can re-enter the VM through an array callback. **−1.5 %.**
+4. **Instruction fetch and the jump table.** `at` now advances unconditionally so
+   the fell-off-the-end arm merges on a *value* instead of on control flow (−1 `j`,
+   −1 `mov`), and naming opcode 0 in the match makes the jump table's range start
+   at 0, dropping the `addi -1` that rebased it. **−2.5 %.** Preamble 20 → 16
+   instructions.
+
+**Net on the Seengreat panel** (4096 px, `board-seengreat-hub75`), with ops/pixel
+unchanged at 11.00 per loop iteration throughout — the whole win is cycles/op:
+
+| | master 7b0c2d5 | this branch | |
+|---|---:|---:|---|
+| loop bench, µs/iteration | 5.055 | 4.147 | −18.0 % |
+| loop bench, cycles/op | 110.3 | **90.5** | (Pixelblaze ≈ 90) |
+| rainbow `vm_us` | 22,034 | 21,479 | −2.5 % |
+| snake 1D `vm_us` | 55,682 | 51,481 | −7.5 % (17 → 18 fps) |
+| snake 2D `vm_us` | 95,392 | 84,788 | −11.1 % (10 → 11 fps) |
+| empty render `vm_us` | 5,409 | 5,409 | unchanged — it executes no ops |
+
+Rainbow moves least because it is dominated by `call_builtin` (`hsv`), which this
+work did not touch; the more op-bound the pattern, the bigger the win. #312 stays
+open at 90.5 vs the Pixelblaze's ~90 (or ~76 if its VM dispatches literal words as
+their own pushes, #313) — the remaining leads are the ~21 KB `call_builtin`
+itself, the second jump table `binop` dispatches through for the fused
+constant-argument forms, and the register pressure that keeps `code.ptr`/`code.len`
+spilled across the loop.
+
+One more suspect-2 probe, prompted by the observation that the dispatch jump
+table lives in flash-mapped DROM so every `jx` does a data-cache read from
+flash: building with `-C llvm-args=--min-jump-table-entries=200`, which
+removes the tables entirely and lowers the dispatch to a compare tree, made
+it **21 % WORSE** (90.5 → 109.3 cycles/op, rainbow `vm_us` 21,479 → 24,088).
+Together with the 0.0 % from suspect 1 — where the *bytecode words* come from
+DROM in one arm and DRAM in the other — that settles it on the S3: a
+flash-mapped data read on this chip is a data-cache hit and costs nothing
+measurable, and the table load plus one `jx` is much cheaper than six or
+seven unpredicted compares.
+
+**Sizes: every board shrinks** (docs/boards.md) — −1,072 B on the C3, −3,088 B
+on the classic-ESP32 boards, −3,104 B on the Seengreat, −7,600 B on the C6
+(the one board not built at `CORE_O3`, so its dispatch loop pays per arm).
+That matters most for the classic-ESP32 boards: with dev creds baked in they
+were *below* `image-check.sh`'s 3 % floor on master (2.97 %) and are back over
+it at 3.27 %. `.stack` unchanged; `tools/stack-check.sh` passes.
+
+Also here: `iram-vm` / `iram-builtins` cargo features (off everywhere, kept because
+they are how suspect 2 gets re-tested on a future board), and the S3's OTA wedge
+**#294 closed** — 3/3 clean pushes of current master, which carries #309's fence fix.
+
 ## 2026-09-06 — Counting the Pixelblaze compiler's ops: `tools/oracle/opcount.mjs` (#312)
 
 #312 measured that one iteration of `x += i * 0.5` costs **4.1 µs** on the

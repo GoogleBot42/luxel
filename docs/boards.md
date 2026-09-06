@@ -448,6 +448,34 @@ sides before believing either:
 `.stack` unchanged; `tools/stack-check.sh` clean on pixelblaze-v3,
 s3-devkit and c6-devkit.
 
+2026-09-06, **the #312 dispatch work gives some of that back — every board
+shrinks.** Widening `Value`'s payloads to 32 bits (which drops a
+literal-pool load and a mask from every `match` on a `Value`), the in-place
+binary/store arms, and `fuel`/`insn_start` moving out of `Vm` into locals
+take ~1.5 KB out of `Vm::run` alone. Devshell builds, same `creds.env` both
+sides, `origin/master` 1b1ed45 vs the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 962,704 | 961,632 | −1,072 | 86,944 B (8.29 %) |
+| `board-pixelblaze-v3` | 1,017,360 | 1,014,272 | −3,088 | 34,304 B (3.27 %) |
+| `board-athom-music` | 1,017,472 | 1,014,384 | −3,088 | 34,192 B (3.26 %) |
+| `board-seengreat-hub75` | 952,224 | 949,120 | −3,104 | 99,456 B (9.48 %) |
+| `board-c6-devkit` (not shipped) | 1,031,072 | 1,023,472 | −7,600 | 25,104 B (2.39 %) |
+| `board-c6-devkit` + `hosted-ui` | 1,014,560 | 1,006,960 | −7,600 | 41,616 B (3.96 %) |
+
+Worth knowing why the C6 gains twice what anyone else does: it is the one
+board `board-target.sh` does NOT build luxel-core at `CORE_O3`, so its
+`Vm::run` is opt-level "s" and every instruction removed from the dispatch
+loop is removed once per arm instead of being folded away. The classic-ESP32
+boards mattered most here — measured with dev creds baked in they were
+**below** `image-check.sh`'s 3 % floor on master (2.97 %/2.96 %) and are back
+over it at 3.27 %/3.26 %. `.stack` unchanged (46,572 B on the Seengreat,
+25,484 B on pixelblaze-v3); `tools/stack-check.sh` passes on both, and the
+worst frames are still the picoserve response future and the embassy main
+task, not anything in the VM.
+
+
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
 **3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).
