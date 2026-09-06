@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-09-06 — Athom hardware pass on the stacked master: the second core's flash fence wedges the board (#292)
+
+Hardware verification of what master had stacked without ever running it together
+on metal — #274 (cache-MMU flash mapping), #276/#293 (pattern code arena), #278
+(LXBC v5), #300 (borrowed mapped words), #302 (superinstructions) and #280
+(second-core render executor) — on the Athom rig (classic ESP32, 60 px WS2812).
+No serial: `/dev/ttyUSB0` was absent all session, so everything rests on
+`/api/status`, the API and a 1 Hz poller. Every build was pinned from
+`/api/status` rather than assumed.
+
+**The headline is a blocker.** Any build carrying the second core wedges the
+ProCpu *inside* a fenced flash op once fence traffic is sustained; the RTC
+watchdog PR #280 added reboots the board 20 s later, so the symptom reads as a
+network failure. `POST /api/assets` died 5 times out of 5 after 60–70 KB of a
+728 KB archive — on `8b478f0`, on `0f83975`, and identically with
+`EXTRA_FEATURES=flashmap-off`, while single-core `731ce81` installs the same
+archive in 17.1 s through the same code with the mapping live. Black box every
+time: ProCpu fence phase 3, `fences begun − completed == 1`, park-ack timeouts 0.
+The rate is what predicts it — the asset writer takes ~46,800 fences a minute,
+against 600–2,500 on an idle boot. Filed as **Gitea #292**, with the decoded
+black boxes, the bisect, and a candidate fix that was implemented, flashed and
+**disproved** (disabling the parked core's cache via the ROM helpers, which a
+comment in `core1.rs` claims is already done and is not).
+
+Twice in 25 minutes the board silently **rolled back to the other slot** — three
+watchdog resets burn the OTA boot guard's three lives, and with both slots
+reporting `v0.1.40` nothing but `slot` shows it. Collateral: an **interrupted
+asset install leaves the partition corrupt but parseable** — the TOC is written
+early, so afterwards `assets_mapped` is `true`, every `/assets/…` returns 200
+with a plausible length and ETag, and 6 of 8 bodies failed `gunzip -t`. Nothing
+in `/api/status` says the on-device playground is broken.
+
+**What did verify.** On `731ce81` (mapping + arena, pre-v5, single-core):
+`assets_mapped`/`code_mapped` true and `arena [0,7]` from boot; the 228,553 B
+bundle in 2.13 s at 60 px and 20.77 s at 2048 px, reproducing the second-core
+"before" column to within noise; a 728 KB asset install in 17.1 s with all eight
+files verifying; seven clean OTAs; `core1.fence_timeouts` 0 all session. The
+7-slot arena filled from *saving* ten patterns before any of them ran —
+`cache_code` claims a slot on save, so with only 7 slots the eighth and later
+stored patterns could never become mapped, since activation never evicts (#293's
+87-slot extent arena is the answer to that).
+
+On `0f83975` the engine and store improvements are real and measurable, when the
+board stays up long enough to measure them. Main Stage's resident heap cost fell
+**21,452 → 12,096 B (−44 %)** and Frogger 2D's **18,584 → 11,416 B (−39 %)**;
+activation went from 2.6 s cold / 2.7 s warm to **394 ms / 72 ms**; rainbow's
+`vm_us` at 60 px went 836 (`731ce81`) → 675 (`8b478f0`, v5) → **631**
+(`0f83975`, superinstructions). The v5 version guard was exercised in both
+directions and refuses cleanly with `{"ok":false,"code":"bc-version",...}`.
+
+Results are on Gitea #259, #260, #271, #277 and in `docs/research/flash-mmap.md`
+"Hardware follow-up". #271 and #277 stay open: their arena-eviction and swap-soak
+halves are exactly the fence traffic #292 breaks. The rig is parked on `731ce81`
+(single-core) with a current asset bundle built from `0f83975`, because that is
+the only build on it that can install one; `0f83975` sits on the other slot.
+
 ## 2026-09-06 — Master on the Seengreat panel: the #260/#259 numbers, the O3 A/B, and two bugs
 
 A hardware session on the 64x64 HUB75 panel (`board-seengreat-hub75`,
