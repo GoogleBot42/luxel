@@ -53,7 +53,30 @@ paths:
   several opcodes into one arm with an inner `match opcode`: that cost
   another ~14 % when it was tried on `LoadIdx`/`CallBuiltin`. And measure
   BOTH sides (`luxel bench` with and without `--no-fuse`) before believing
-  a dispatch change helped.
+  a dispatch change helped. The same tax applies to a new live VARIABLE, not
+  just new arms: seeding `Vm::run`'s frame context from the caller (to skip
+  its prologue) cost 16–21 % on x86 in 2026-09-06's #260 work, because the
+  seed stays live across the whole loop. `Vm::run` should come out of a
+  perf change byte-identical unless the change IS the loop — diff its
+  disassembly to prove it.
+- The per-pixel entry is `Vm::begin_pixel_pass` + `Vm::render_pixel`
+  (Gitea #260), NOT `start()`: `start`/`resume` stay for the debugger and
+  map mode, which is why `Engine::render_pixels` runs only when
+  `!debug_enabled && !is_map`. `render_pixel` must stay semantically equal
+  to `start(prog, fn_idx, &args[..argc], false)` — defaults for local slots
+  past the argument count, `clear_run` on error — and folding it back into
+  `start` costs ~28 % of the Xtensa entry path.
+- **Engine/VM perf work needs an Xtensa instruction count, not a host
+  benchmark.** x86 is out-of-order and hides windowed calls; the device is
+  dispatch-bound. Build the panel image (`cd firmware && BOARD=board-
+  seengreat-hub75 ./build-esp32.sh`), `xtensa-esp32s3-elf-objdump -d
+  firmware/target/xtensa-esp32s3-none-elf/release/luxel-fw`, then walk the
+  hot path by hand — `Engine::frame`'s pixel loop inlines `render_pixels`,
+  so find its back edge (`j` to an address inside `Engine::frame`) and
+  count instructions on the TAKEN path only, following each branch as the
+  empty-render case would. Watch for `callx8` (each is an `entry`/`retw`
+  window transition) and for ROM `memcpy`/`memset` calls, which
+  `copy_from_slice`/`resize` emit for even one or two words.
 - Appending a new builtin does NOT require a bytecode format-version bump.
   Only format changes do. A version mismatch makes the device reply with
   `"code":"bc-version"`, and the web UI auto-recompiles from source in
