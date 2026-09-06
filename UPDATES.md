@@ -13,13 +13,13 @@ Every one is measured on both axes, because fewer ops is not automatically
 faster (Jeremy's rule): the dynamic count from `luxel bench --profile`, and
 the Xtensa instruction count of the ops involved, walked out of the S3
 disassembly (`xtensa-esp32s3-elf-objdump -d` of the `board-seengreat-hub75`
-image — the dispatch floor every op pays is **23 instructions**).
+image — the dispatch floor every op pays is **21 instructions** after #314).
 
 | transformation | sites in `library/` | ops/px | Xtensa instructions, per site |
 |---|---|---|---|
-| postfix `x++` whose value is discarded emits no old-value recovery | 470 (all of them — the library contains no prefix and no value-using inc/dec) | 69.27 → 67.40 (−2.7 %) | `StoreL` 58 + `ConstOp(SUB)` 68+26 + `Pop` 33 = **185** → `StoreLPop` **47** |
-| literal arithmetic folded (`1/3`, `-1`) | 192 negated literals + 69 binary sites | 67.40 → 67.15 (−0.4 %) | `CONST_NUM` 43 + `NEG` 47 = **90** → **43** |
-| reads of never-written predefined globals become constants, and a constant operand of a commutative operator moves to the right where it fuses | 311 frozen reads (270 in operand position, 219 of them `*`) + 137 literal-left multiplies | 67.15 → 66.37 (−1.2 %) | `x * PI2`: `LoadLG` 63 + `MUL` 71 = **134** → `LoadLConstOp` 75 + `binop MUL` 30 = **105**; `2 * x`: **161** → **105** |
+| postfix `x++` whose value is discarded emits no old-value recovery | 470 (all of them — the library contains no prefix and no value-using inc/dec) | 69.27 → 67.40 (−2.7 %) | `StoreL` 42 + `ConstOp(SUB)` 62 + `Pop` 27 = **131** → `StoreLPop` **42** (−68 %) |
+| literal arithmetic folded (`1/3`, `-1`) | 192 negated literals + 69 binary sites | 67.40 → 67.15 (−0.4 %) | `CONST_NUM` 41 + `NEG` 39 = **80** → **41** (−49 %) |
+| reads of never-written predefined globals become constants, and a constant operand of a commutative operator moves to the right where it fuses | 311 frozen reads (270 in operand position, 219 of them `*`) + 137 literal-left multiplies | 67.15 → 66.37 (−1.2 %) | `x * PI2`: `LoadLG` 62 + `MUL` 50 = **112** → `LoadLConstOp` 56 + `binop MUL` 20 = **76** (−32 %); `2 * x`: **137** → **76** (−45 %) |
 
 The loop microbench, op by op — `for (i=0;i<K;i++){ x += i*0.5 }` was eleven
 operations per iteration and is now nine. The two that went were the
@@ -29,14 +29,15 @@ which also unblocked `StoreL; Pop` → `StoreLPop`.
 **Considered and rejected: strength-reducing `x * 2^n` to a shift** (606
 sites). It is bit-exact — `Fx::mul` is `(a·b) >> 16` on the full 64-bit
 product, so multiplying by `2^-k` *is* `raw >> k`, and `Fx::shr` shifts the
-raw word arithmetically — but it is **slower**. Both forms are one fused
-`LOAD_L_CONST_OP`, and inside `binop` the S3's hardware multiplier does
-`Fx::mul` in 5 instructions (`mull`/`mulsh`/`ssl`/`src`) while `Fx::shl/shr`
-must first `to_int_trunc()` the 16.16 shift count and mask it to 0..31 — 9.
-Per op: `x * 2` 105 instructions, `x << 1` 108. `x / 2^n → x >> n` is the
-one variant that might still pay (110 → 108 statically, and `quos` is an
-iterative divide whose *cycle* cost the instruction count does not show) —
-filed as its own ticket rather than guessed at.
+raw word arithmetically — but it is **slower**. All four forms are one fused
+`LOAD_L_CONST_OP` differing only in the sub-opcode, and inside `binop` the
+S3's hardware multiplier does `Fx::mul` in 5 instructions
+(`mull`/`mulsh`/`ssl`/`src`) while `Fx::shl/shr` must first `to_int_trunc()`
+the 16.16 shift count and mask it to 0..31 — 9. Per op: `x * 2` **76**
+instructions, `x / 2` 78, `x << 1` and `x >> 1` 79. So the divide variant is
+not a static win either; the only argument left for it is that `quos` is an
+iterative divide whose *cycle* cost the instruction count does not show, and
+that needs the device — Gitea #319.
 
 The passes live in `compile::const_fold`, ahead of the #261 peephole, and
 obey its two contracts: never fold across a jump target, never across a
