@@ -215,52 +215,54 @@ The mapping is page-granular, so a consumer's *region* must be page-aligned
 beyond what the consumer's own reads want: the VM will execute a
 fixed-width instruction stream and index a constant pool as `&[u32]`
 / `&[Value]`, so each pattern's executable blob must be **contiguous and
-4-byte aligned** in flash. Today's store gives that for exactly one
-pattern:
+4-byte aligned** in flash. That single property is what rules out every
+off-the-shelf flash filesystem — littlefs, ekv and sequential-storage all
+store a file as linked or GC-moved blocks, none of which has a stable
+address to execute from.
 
-- The **current-pattern read-back slot** (`patterns.rs` `CUR_BC_OFF`,
-  `0x290000 + 0x1000 + 0x18000` = `0x2A9000`, 96 KiB, written by
-  `store_current` on ad-hoc pushes) is raw pages at a fixed, page-aligned
-  offset — mappable as-is. `read_current_bc` (the 38 KB transient Vec the
-  engine rebuild allocates) becomes a slice into the mapping.
+- The **current-pattern read-back slot** (`patterns.rs` `CUR_SRC_OFF` /
+  `CUR_BC_OFF`, written by `store_current` on ad-hoc pushes) is raw pages
+  at a fixed, page-aligned offset — mappable as-is. `read_current_bc` (the
+  38 KB transient Vec the engine rebuild allocates) becomes a slice into
+  the mapping.
 - **Library patterns** live as ≤3,840-byte sequential-storage chunk items
   scattered across the wear-leveled map — not contiguous, not aligned, and
   moved by GC. Mapping the map region is possible but pointless for XIP.
-  The change the VM consumer needs is a **code arena** in the raw upper
-  half of `storage`: `N` fixed slots of `S` bytes each, 4 KiB-aligned
-  (e.g. 8 × 48 KiB in the 512 KiB the raw half has after the read-back
-  slot's 193 KiB — or trim the read-back source side, which never needs
-  96 KiB), with a tiny slot table (pattern seq → slot, generation, length,
-  hash). `save()` writes the cache file into a free slot with the existing
-  `write_raw` discipline (erase + word-aligned page writes, one op per
-  `with_flash`, yields between), then commits by updating the meta item;
-  activation maps nothing new (the arena is mapped once at boot) and hands
-  the engine `&arena[slot_off..slot_off + len]`. Eviction is LRU by
-  activation; a library pattern without a slot falls back to today's
-  decode-from-chunks path. The sequential-storage chunks stay the source of
-  truth for the source text and for the API's `/api/patterns/:id` body.
-  Flash wear: the arena is written once per save, never per activation —
-  the same shape as the 2026-08-15 wear fix.
+  What they need is a **code arena** in the raw upper half of `storage`
+  with a tiny allocator of its own, filled by `save()` and by an activation
+  that found no extent, and never written per activation (the 2026-08-15
+  wear rule). The sequential-storage chunks stay the source of truth for
+  the source text and for the API's `/api/patterns/:id` body.
 
-**Implemented (second PR, same day): the store side, decoupled from the
+**Implemented (second PR, 2026-09-05): the store side, decoupled from the
 instruction format.** `patterns.rs` maps the whole raw half (`0x290000`,
 512 KiB, 8 pages) at boot with the same self-check discipline, gives the
-ad-hoc slot two 64 KiB bytecode sides (a swap writes the side the engine
-is not executing from), and carves the rest into the arena: **7 slots ×
-40 KiB** (`ARENA_OFF = 0xB9000` partition-relative; the source side kept
-its 96 KiB, which is what limits the count — 8 slots would need 32 KiB
-more). The slot table (seq, bytecode generation, length, FNV-1a) is a
-reserved-key map item (`0x7FFF_FFF9`), verified at boot against both the
-index and the mapped bytes. Filling: `save()`'s caller with eviction
-(LRU by activation tick, never the running pattern), an activation
-without a slot with free/stale slots only (bounded flash writes per
-library state — the wear rule). `patterns::current_code()` is the
-contract's slice; `Msg::Library { id, ms }` replaced the envelope-carrying
-library swaps so no source/blob/envelope Vec exists in a library
-activation at all. docs/firmware.md "The pattern store's mapped half and
-the code arena" has the rules; what the VM format work still owns is
-making `Program` borrow the slice instead of `deserialize_lean` copying
-it.
+ad-hoc slot two 64 KiB bytecode sides (a swap writes the side the engine is
+not executing from), and carves the rest into the arena.
+`patterns::current_code()` is the contract's slice; `Msg::Library { id, ms }`
+replaced the envelope-carrying library swaps so no source/blob/envelope Vec
+exists in a library activation at all.
+
+**Arena v2 (2026-09-06, Gitea #281): page extents, not fixed slots.** The
+first cut was 7 fixed 40 KiB slots with LRU eviction — it cached seven
+patterns and wasted ~90 % of the region, since the median library blob is
+under 1 KB. It is now a **page-granular extent allocator**: the allocation
+unit is the 4 KiB erase page, a pattern's blob occupies a contiguous
+first-fit run of them, and the directory (seq → start page, byte length,
+bytecode generation, FNV-1a) persists under the same reserved map key the
+slot table used. Trimming the ad-hoc source region from 96 KiB to 32 KiB
+(`MAX_SOURCE` is 30 KB — read-back never needed more) grew the pool to
+`0xA9000..0x100000` = **348 KiB / 87 pages**, enough for every pattern a
+device can store (`MAX_PATTERNS` = 24) many times over. Eviction is gone;
+a save that finds no contiguous hole compacts instead, sliding live
+extents toward page 0 one page-copy per `with_flash` op, never touching
+the running pattern's extent. The planning half (bitmap, first-fit,
+compaction plan, directory format) is `firmware/src/extents.rs` — pure,
+`no_std`, allocation-free and host-tested via `tools/extent-check`.
+docs/firmware.md "The pattern store's mapped half and the code arena" has
+the layout table and the full rule set; what the VM format work still owns
+is making `Program` borrow the slice instead of `deserialize_lean`
+copying it.
 
 ## RAM accounting
 
@@ -398,10 +400,10 @@ mapping?".
 Store side (second PR): `patterns.rs` — `current_code() -> Option<&'static
 [u8]>` (the contract's slice), `code_of(id)`, `with_code(id, f)`,
 `validate_stored(id)`, `source_stat(id) -> (len, fnv1a)`,
-`cache_code(id, bc, evict).await`, `current_slot_code(len)` /
+`cache_code(id, bc, may_compact).await`, `current_slot_code(len)` /
 `current_slot_src(len)`, `raw()`, `arena_stats()`; `shared::Msg::Library {
 id, ms }` and `shared::set_pattern_hash_raw`. `/api/status` reports
-`code_mapped` and `arena: [used, total]`.
+`code_mapped` and `arena: [used_pages, total_pages]`.
 
 Consumer wired: `assets.rs` maps `0x310000+0xF0000` at boot
 (`map_region`, after `ota::init` and the takeover check), self-checks it,

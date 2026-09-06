@@ -1,5 +1,78 @@
 # Update log
 
+## 2026-09-06 — The code arena grows a real allocator: page extents, not 7 slots (#281)
+
+The arena PR #276 shipped the day before was seven fixed 40 KiB slots in
+the mapped raw half of `storage`. Jeremy called it "very temporary unless
+you can explain why this is better" — and it wasn't: it cached seven
+patterns out of a possible twenty-four, wasted ~90 % of its 280 KiB (the
+median library blob is under 1 KB, the largest ~26 KB), and made saving a
+pattern quietly evict someone else's cached one.
+
+It is now a **page-granular extent allocator**. The unit is the 4 KiB erase
+page; a stored pattern's LXBC occupies a contiguous first-fit run of them;
+the directory (seq → start page, byte length, bytecode generation, FNV-1a)
+persists under the same reserved map key the slot table used. Trimming the
+ad-hoc source region from 96 KiB to 32 KiB — `MAX_SOURCE` is 30 KB, so
+read-back never needed more — grew the pool to **87 pages / 348 KiB**,
+which holds every pattern a device can store many times over. There is no
+eviction any more, and no LRU bookkeeping to go with it.
+
+The rules the flash side keeps:
+
+- **The running pattern's extent is never written, freed or moved.** A
+  re-save allocates a new extent, writes, invalidates, hash-checks and
+  publishes it, and only then frees the superseded one — so a power cut
+  never loses both. Re-saving the *running* pattern leaves its old
+  generation in the directory (those pages are executing) to be swept once
+  something else is on the strip.
+- **Compaction**, only when a save finds no contiguous hole *and* the
+  planner says packing would open one. Live extents slide toward page 0 one
+  at a time; the running one stays put and splits the free space rather
+  than blocking the pass. Each move un-publishes the extent first, copies
+  one page per `ota::with_flash` op with yields between (the destination is
+  strictly below the source, so ascending order is a safe overlapping
+  move), then invalidates, hash-checks and re-publishes — a power cut costs
+  at most the extent in flight, which re-caches from its chunks.
+- Activation-time fills never compact and never evict, so playlist churn
+  still writes flash at most once per pattern and then never (the
+  2026-08-15 wear rule). One transaction at a time (`ArenaGuard`).
+- Boot rebuilds the bitmap from the directory and drops any extent the
+  index, the mapped bytes' hash, or the current layout doesn't vouch for.
+
+The planning half — bitmap, first-fit, compaction plan, directory format —
+is a new `firmware/src/extents.rs`: pure, `no_std`, allocation-free, and
+**host-tested**. `tools/extent-check` is a workspace member that
+`#[path]`-includes it (the `tools/wledfs-check` trick, but in the
+workspace) so `cargo test --workspace` runs its 18 cases: fragmentation and
+reuse, pool and table exhaustion, an exhaustive sweep proving
+`compacted_free_run()` predicts exactly what compaction opens — with and
+without a pinned running extent — re-save ordering, directory round-trips,
+torn/foreign/overlapping directories dropped on load, and a 4,000-step
+churn fuzz that re-checks the bitmap against the extents every step.
+
+`/api/status` now reports `arena: [used_pages, total_pages]` (`[0, 0]` when
+the mapping is off); `code_mapped` is unchanged. The QEMU flashmap test
+asserts the new boot line (`patterns: code arena 87 pages, 0 extents valid
+(0 dropped), 0 pages used` on an empty library). The RAM picture is
+untouched by construction — nothing under `crates/` changed; heapstat on
+the rebased tree reads 0 of 299 patterns over the 45 KB swap line under
+XIP, avg saving 7,391 B / 53.7 % (that figure moved because master got
+LXBC v5 back, not because of this PR).
+
+**Cost: +4.1 to +5.3 KB of app image on every board** (docs/boards.md has
+the table and the symbol breakdown), and that is what finally spends the
+C6's margin: `board-c6-devkit` with the on-device playground drops from
+3.15 % to **2.65 %** of the OTA slot free, under `image-check.sh`'s 3 %
+floor. So the lever docs/boards.md had recorded for exactly this moment is
+pulled — **the C6 ships as `luxel-fw-c6-devkit-hosted` only** (4.22 %
+margin); the full-UI C6 build still compiles and is still what you develop
+against, it just isn't a release artifact. Getting it back over the floor
+is #291. Hardware verification of the write/compaction paths (an N > 7
+playlist all cached, re-save churn, compaction under a running pattern, a
+power cut mid-write) went onto #271's checklist — none of it can be
+exercised under QEMU.
+
 ## 2026-09-06 — LXBC v5 restored: PR #280's merge had silently reverted it
 
 PR #278 (LXBC v5, merged 2026-09-05 21:52) was **undone the same evening** by

@@ -411,10 +411,10 @@ fn status_json() -> String {
     push_piece(&mut out, ",\"assets_mapped\":");
     push_piece(&mut out, if assets_mapped { "true" } else { "false" });
     // The running pattern's bytecode is mapped memory (rodata default, the
-    // ad-hoc slot, or an arena slot) — the engine builds from it without a
-    // blob Vec. `arena` = [slots in use, slots total] of the library code
-    // arena (patterns.rs); [0, 7] with an empty library, [0, 0] never —
-    // a total of 7 with no mapping means the arena is off.
+    // ad-hoc slot, or its arena extent) — the engine builds from it without
+    // a blob Vec. `arena` = [pages in use, pages total] of the library code
+    // arena's page-granular extent allocator (patterns.rs / extents.rs);
+    // [0, 87] with an empty library, [0, 0] only when the arena is off.
     push_piece(&mut out, ",\"code_mapped\":");
     push_piece(&mut out, if crate::patterns::current_code().is_some() { "true" } else { "false" });
     let (used, total) = crate::patterns::arena_stats();
@@ -1088,9 +1088,11 @@ async fn api_patterns_save(raw: &[u8]) -> String {
             let r = crate::patterns::save(env.name, env.source, env.bytecode);
             // content changed — re-validate any playlist entries using it
             crate::playlist::preflight_mark_dirty();
-            // and give the new bytecode an arena slot (may evict the
-            // least-recently-activated one — a save is a user action) so
-            // its next activation executes from the mapping
+            // and give the new bytecode an arena extent so its next
+            // activation executes from the mapping. A save is a user
+            // action, so it may compact the arena to open a contiguous run
+            // (it still never evicts, and never touches the running
+            // pattern's extent).
             if let Some(id) = crate::patterns::id_by_name(env.name.trim()) {
                 crate::patterns::cache_code(&id, env.bytecode, true).await;
             }

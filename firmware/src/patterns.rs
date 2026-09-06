@@ -669,15 +669,20 @@ pub fn read_blob(key: u32) -> Option<Vec<u8>> {
 //   CUR_BC_OFF       ad-hoc LXBC bytes, TWO sides of CUR_BC_MAX: a swap
 //                    writes the side the running engine is NOT executing
 //                    from, so a mapped engine never sees its code change
-//   ARENA_OFF        the library code arena: ARENA_SLOTS page-aligned slots
-//                    of ARENA_SLOT bytes, one stored pattern's bytecode
-//                    each, contiguous and 4-byte aligned for the VM; the
-//                    slot table lives under ARENA_KEY in the map
+//   ARENA_OFF        the library code arena: ARENA_PAGES 4 KiB pages carved
+//                    into contiguous, 4-byte-aligned EXTENTS by the
+//                    page-granular allocator in extents.rs, one stored
+//                    pattern's bytecode each; the directory lives under
+//                    ARENA_KEY in the map
 const RAW_OFF: u32 = STORE_LEN;
 const RAW_LEN: u32 = PAT_LEN - STORE_LEN;
 const CUR_OFF: u32 = RAW_OFF;
 const PAGE: u32 = 4096;
-const CUR_SRC_MAX: u32 = 24 * PAGE; // 96 KiB, past every upload cap
+/// 32 KiB — one page past MAX_SOURCE (30 KB), which is the hard cap on a
+/// stored source and therefore on anything read-back can ever want. It was
+/// 96 KiB until 2026-09-06; the 64 KiB that freed went to the arena
+/// (Gitea #281 — the ad-hoc region is one pattern, the arena is all of them).
+const CUR_SRC_MAX: u32 = 8 * PAGE;
 const CUR_BC_MAX: u32 = 16 * PAGE; // 64 KiB per side
 const CUR_SRC_OFF: u32 = CUR_OFF + PAGE;
 const CUR_BC_OFF: u32 = CUR_SRC_OFF + CUR_SRC_MAX;
@@ -685,13 +690,19 @@ const CUR_MAGIC: u32 = 0x4C58_4350; // "LXCP"
 /// The bc side holding the RUNNING ad-hoc blob (the last successful
 /// store_current); the next store writes the other one.
 static CUR_BC_SIDE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// The arena: everything left in the raw half after the ad-hoc regions.
+/// 0xA9000..0x100000 = 348 KiB = 87 pages, enough for every pattern a
+/// device can hold (MAX_PATTERNS = 24) many times over at the ~1 KB the
+/// median library blob actually costs.
 const ARENA_OFF: u32 = CUR_BC_OFF + 2 * CUR_BC_MAX;
-const ARENA_SLOT: u32 = 10 * PAGE; // 40 KiB, >= MAX_BC
-const ARENA_SLOTS: usize = 7;
-/// Arena slot table (reserved-key map item, see the blobs above).
+const ARENA_PAGES: usize = ((RAW_OFF + RAW_LEN - ARENA_OFF) / PAGE) as usize;
+/// Extent directory (reserved-key map item, see the blobs above).
 const ARENA_KEY: u32 = 0x7FFF_FFF9;
-const _: () = assert!(ARENA_OFF + ARENA_SLOTS as u32 * ARENA_SLOT <= RAW_OFF + RAW_LEN);
-const _: () = assert!(ARENA_SLOT as usize >= MAX_BC);
+const _: () = assert!(CUR_SRC_MAX as usize >= MAX_SOURCE);
+const _: () = assert!(ARENA_OFF + (ARENA_PAGES as u32) * PAGE <= RAW_OFF + RAW_LEN);
+const _: () = assert!(ARENA_PAGES <= crate::extents::MAX_PAGES);
+const _: () = assert!(ARENA_PAGES * crate::extents::PAGE >= MAX_BC);
+const _: () = assert!(PAGE as usize == crate::extents::PAGE);
 
 fn cur_bc_off(side: u8) -> u32 {
     CUR_BC_OFF + side as u32 * CUR_BC_MAX
@@ -1056,41 +1067,77 @@ pub fn current_slot_src(len: usize) -> Option<&'static [u8]> {
 
 // --- the library code arena ---
 //
-// One stored pattern's LXBC per slot, contiguous and page-aligned, so a
-// library activation hands the engine a mapped slice instead of
-// reassembling ≤3,840-byte chunk items into a Vec. Filled by save() (may
-// evict the least-recently-activated slot — a user action) and by an
-// activation that found no slot (free or stale slots only: playlist churn
-// writes flash at most ARENA_SLOTS times per library state, then never —
-// the 2026-08-15 wear rule). The running pattern's slot is never written.
-// The table (seq, bc generation, length, FNV-1a of the bytes per slot) is
-// a reserved-key map item; at boot every entry is checked against the
-// index AND the mapped bytes, so a torn write or a stale generation is
-// dropped, never executed.
+// A page-granular EXTENT allocator over the arena region: one stored
+// pattern's LXBC per extent, a contiguous run of 4 KiB erase pages,
+// contiguous and 4-byte aligned so a library activation hands the engine a
+// mapped slice instead of reassembling <=3,840-byte chunk items into a Vec.
+// The planning half (bitmap, first-fit, compaction plan, directory format)
+// is `extents.rs` -- pure, allocation-free and host-tested
+// (tools/extent-check); everything below is the flash half.
+//
+// Why not fixed slots (what PR #276 shipped, replaced 2026-09-06, #281):
+// seven 40 KiB slots cached seven patterns and wasted ~90 % of the region,
+// because the median library blob is under 1 KB. Page extents cache every
+// pattern a device can hold (MAX_PATTERNS = 24) in a fraction of the same
+// space, so eviction -- and with it the LRU bookkeeping and the "a save may
+// throw out someone else's cache" surprise -- is gone entirely.
+//
+// Rules the code enforces:
+//   * Never write, free or move the RUNNING pattern's extent. A re-save of
+//     the running pattern publishes a new extent and leaves the old
+//     generation's in the directory; it is swept once something else runs.
+//   * A save allocates a new extent, writes it, invalidates, hash-checks
+//     the mapped bytes, publishes the directory, and only then frees the
+//     superseded extent -- never in place.
+//   * Compaction only when no contiguous hole fits a SAVE (a user action).
+//     An activation-time fill never compacts and never evicts: playlist
+//     churn writes flash at most once per pattern, then never (the
+//     2026-08-15 wear rule). A save's compaction slides live extents
+//     toward page 0, one at a time, each with the same
+//     write/invalidate/hash discipline and the directory updated per move,
+//     so a power cut mid-compaction costs at most the extent in flight
+//     (re-cached from its chunks on its next activation).
+//   * Boot rebuilds the bitmap from the persisted directory and drops any
+//     extent the pattern index or the mapped bytes do not vouch for.
 
-#[derive(Clone, Copy)]
-struct Slot {
-    seq: u32,
-    gen: u8,
-    /// 0 = empty
-    len: u32,
-    hash: u32,
-    /// activation tick, for LRU (session-local)
-    last_use: u32,
+use crate::extents;
+
+/// Zero pages until [arena_init] installs the real size — an all-zero
+/// initializer keeps the ~470-byte directory in .bss instead of .data (it
+/// is image bytes otherwise, and the OTA slot is the scarce resource). A
+/// 0-page directory refuses every allocation and reports `[0, 0]`, which is
+/// exactly what a device whose arena never came up should say.
+static ARENA: BlockingMutex<CriticalSectionRawMutex, RefCell<extents::Dir>> =
+    BlockingMutex::new(RefCell::new(extents::Dir::new(0)));
+/// One allocator transaction at a time. `cache_code` is reachable from the
+/// render task and from an HTTP task, and a compaction move leaves the
+/// directory and the flash briefly out of step -- two of them interleaving
+/// at an `.await` could hand the same pages to both.
+static ARENA_BUSY: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+struct ArenaGuard;
+
+impl ArenaGuard {
+    /// None when another transaction is in flight (the caller degrades to
+    /// the chunk path, never blocks).
+    fn take() -> Option<ArenaGuard> {
+        // ARENA.lock is the critical section that makes this test-and-set
+        // atomic -- no extra primitive needed.
+        ARENA.lock(|_| {
+            if ARENA_BUSY.load(Ordering::Relaxed) {
+                return None;
+            }
+            ARENA_BUSY.store(true, Ordering::Relaxed);
+            Some(ArenaGuard)
+        })
+    }
 }
 
-const EMPTY: Slot = Slot { seq: 0, gen: 0, len: 0, hash: 0, last_use: 0 };
-
-static ARENA: BlockingMutex<CriticalSectionRawMutex, RefCell<[Slot; ARENA_SLOTS]>> =
-    BlockingMutex::new(RefCell::new([EMPTY; ARENA_SLOTS]));
-static ARENA_TICK: AtomicU32 = AtomicU32::new(1);
-
-/// Next LRU tick. load+store, not fetch_add: the C3's riscv32imc has no
-/// atomic RMW and every caller runs on the one executor thread anyway.
-fn arena_tick() -> u32 {
-    let t = ARENA_TICK.load(Ordering::Relaxed).wrapping_add(1);
-    ARENA_TICK.store(t, Ordering::Relaxed);
-    t
+impl Drop for ArenaGuard {
+    fn drop(&mut self) {
+        ARENA_BUSY.store(false, Ordering::Relaxed);
+    }
 }
 
 /// The arena only exists through the mapping — that is its whole point.
@@ -1098,12 +1145,14 @@ fn arena_on() -> bool {
     raw().is_some()
 }
 
-fn slot_off(i: usize) -> u32 {
-    ARENA_OFF + i as u32 * ARENA_SLOT
+/// Partition-relative offset of an arena page.
+fn arena_off(page: u16) -> u32 {
+    ARENA_OFF + page as u32 * PAGE
 }
 
-fn slot_bytes(i: usize, len: u32) -> Option<&'static [u8]> {
-    raw_slice(slot_off(i), len as usize)
+/// An extent's bytes, mapped.
+fn extent_bytes(e: &extents::Extent) -> Option<&'static [u8]> {
+    raw_slice(arena_off(e.start), e.len as usize)
 }
 
 const FNV_INIT: u32 = 0x811c_9dc5;
@@ -1120,93 +1169,56 @@ fn fnv1a(bytes: &[u8]) -> u32 {
     fnv1a_update(FNV_INIT, bytes)
 }
 
-const ARENA_TABLE_VER: u8 = 1;
-
-fn serialize_arena(slots: &[Slot; ARENA_SLOTS]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(2 + ARENA_SLOTS * 13);
-    v.push(ARENA_TABLE_VER);
-    v.push(ARENA_SLOTS as u8);
-    for s in slots {
-        v.extend_from_slice(&s.seq.to_le_bytes());
-        v.push(s.gen);
-        v.extend_from_slice(&s.len.to_le_bytes());
-        v.extend_from_slice(&s.hash.to_le_bytes());
-    }
-    v
-}
-
-fn deserialize_arena(b: &[u8]) -> Option<[Slot; ARENA_SLOTS]> {
-    if b.len() < 2 || b[0] != ARENA_TABLE_VER {
-        return None;
-    }
-    let n = (b[1] as usize).min(ARENA_SLOTS);
-    if b.len() < 2 + n * 13 {
-        return None;
-    }
-    let mut out = [EMPTY; ARENA_SLOTS];
-    for (i, s) in out.iter_mut().enumerate().take(n) {
-        let r = &b[2 + i * 13..2 + i * 13 + 13];
-        *s = Slot {
-            seq: u32::from_le_bytes([r[0], r[1], r[2], r[3]]),
-            gen: r[4],
-            len: u32::from_le_bytes([r[5], r[6], r[7], r[8]]),
-            hash: u32::from_le_bytes([r[9], r[10], r[11], r[12]]),
-            last_use: 0,
-        };
-    }
-    Some(out)
-}
-
+/// Write the directory to its reserved map key. The staging buffer is a
+/// heap Vec, never a stack array: this runs at picoserve depth on the
+/// shared main-task stack.
 fn persist_arena() -> bool {
-    let slots = ARENA.lock(|c| *c.borrow());
-    store_blob(ARENA_KEY, &serialize_arena(&slots))
+    let mut buf = alloc::vec![0u8; extents::SER_MAX];
+    let n = ARENA.lock(|c| c.borrow().to_bytes(&mut buf));
+    n > 0 && store_blob(ARENA_KEY, &buf[..n])
 }
 
-/// Boot: load the slot table and keep only entries the index and the mapped
-/// bytes both vouch for.
+/// The (seq, bytecode generation) pairs the index currently knows.
+fn live_gens() -> Vec<(u32, u8)> {
+    INDEX.lock(|c| {
+        c.borrow().iter().filter(|e| e.bc_count > 0).map(|e| (e.seq, e.gen)).collect()
+    })
+}
+
+/// Boot: load the directory, rebuild the bitmap, and keep only extents the
+/// index AND the mapped bytes both vouch for. A torn write, a stale
+/// generation or a layout change is dropped, never executed.
 #[inline(never)]
 fn arena_init() {
     if !arena_on() {
         println!("patterns: code arena off (raw half not mapped)");
         return;
     }
-    let mut slots = read_blob(ARENA_KEY)
-        .and_then(|b| deserialize_arena(&b))
-        .unwrap_or([EMPTY; ARENA_SLOTS]);
-    let (mut valid, mut dropped) = (0u32, 0u32);
-    for (i, s) in slots.iter_mut().enumerate() {
-        if s.len == 0 {
-            continue;
-        }
-        let indexed = INDEX.lock(|c| {
-            c.borrow().iter().any(|e| e.seq == s.seq && e.gen == s.gen && e.bc_count > 0)
-        });
-        let ok = s.len <= ARENA_SLOT
-            && indexed
-            && slot_bytes(i, s.len).is_some_and(|b| fnv1a(b) == s.hash);
-        if ok {
-            valid += 1;
-        } else {
-            *s = EMPTY;
-            dropped += 1;
-        }
-    }
-    ARENA.lock(|c| *c.borrow_mut() = slots);
+    let stored = read_blob(ARENA_KEY);
+    let (mut dir, mut dropped) = match stored.as_deref() {
+        Some(b) => extents::Dir::from_bytes(b, ARENA_PAGES as u16),
+        None => (extents::Dir::new(ARENA_PAGES as u16), 0),
+    };
+    let live = live_gens();
+    dropped += dir.retain(|e| {
+        e.len as usize <= MAX_BC
+            && live.contains(&(e.seq, e.gen))
+            && extent_bytes(e).is_some_and(|b| fnv1a(b) == e.hash)
+    }) as u32;
+    let (valid, used) = (dir.count(), dir.used_pages());
+    ARENA.lock(|c| *c.borrow_mut() = dir);
     println!(
-        "patterns: code arena {}/{} slots valid ({} dropped), {} KiB each",
-        valid,
-        ARENA_SLOTS,
-        dropped,
-        ARENA_SLOT / 1024
+        "patterns: code arena {} pages, {} extents valid ({} dropped), {} pages used",
+        ARENA_PAGES, valid, dropped, used
     );
     if dropped > 0 {
         persist_arena();
     }
 }
 
-/// A stored pattern's executable bytes, mapped — if an arena slot holds its
-/// CURRENT bytecode generation. Bumps the slot's LRU tick. Valid until the
-/// store overwrites the slot, which it never does for the running pattern.
+/// A stored pattern's executable bytes, mapped — if an extent holds its
+/// CURRENT bytecode generation. Valid until the store frees the extent,
+/// which it never does for the running pattern.
 pub fn code_of(id: &str) -> Option<&'static [u8]> {
     if !arena_on() {
         return None;
@@ -1215,16 +1227,9 @@ pub fn code_of(id: &str) -> Option<&'static [u8]> {
     if bc_count == 0 {
         return None;
     }
-    let tick = arena_tick();
-    let (i, len) = ARENA.lock(|c| {
-        let mut a = c.borrow_mut();
-        let i = a.iter().position(|s| s.len > 0 && s.seq == seq && s.gen == gen)?;
-        a[i].last_use = tick;
-        Some((i, a[i].len))
-    })?;
-    slot_bytes(i, len)
+    let e = ARENA.lock(|c| c.borrow().find(seq, gen).map(|(_, e)| e))?;
+    extent_bytes(&e)
 }
-
 /// Run `f` over a stored pattern's bytecode: the mapped slot when there is
 /// one (no copy), else a transient Vec from the chunk store.
 pub fn with_code<R>(id: &str, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
@@ -1270,110 +1275,191 @@ pub fn source_stat(id: &str) -> Option<(usize, u32)> {
     .flatten()
 }
 
-/// The running pattern's seq — its slot is never written or evicted.
+/// The running pattern's seq — its extent is never written, freed or moved.
 fn running_seq() -> Option<u32> {
     seq_of(&crate::shared::get_current_pattern_id())
 }
 
-/// Put a stored pattern's bytecode into an arena slot so its next
-/// activation executes in place. `evict`: may reclaim the least-recently-
-/// activated slot (save(): a user action). `!evict`: free or stale slots
-/// only — an activation-time fill, bounded by ARENA_SLOTS writes per
-/// library state, so playlist churn is wear-free. Best-effort; false
-/// leaves the pattern on the chunk path (never a panic).
-pub async fn cache_code(id: &str, bc: &[u8], evict: bool) -> bool {
-    if !arena_on() || bc.is_empty() || bc.len() > ARENA_SLOT as usize {
+/// One compaction step: slide an extent down to `mv.to` so the free pages
+/// coalesce. The extent is UNPUBLISHED first (which is also what frees the
+/// destination when the two ranges overlap), so a power cut anywhere in
+/// here costs exactly this one extent — never a torn one handed to the
+/// engine — and its pattern re-caches from its chunks on the next
+/// activation. Pages are copied one at a time, each an
+/// `ota::with_flash` erase + write with yields between (the same door and
+/// the same fence stall as every other write here), so the render task
+/// never waits on a whole extent.
+#[inline(never)]
+async fn compact_move(mv: extents::Move, region: u32) -> bool {
+    let Some(e) = ARENA.lock(|c| c.borrow().get(mv.idx).copied()) else {
+        return false;
+    };
+    if Some(e.seq) == running_seq() {
+        return false; // the running pattern moves at the next swap, not now
+    }
+    ARENA.lock(|c| {
+        c.borrow_mut().remove(mv.idx);
+    });
+    persist_arena();
+    let (src, dst) = (arena_off(e.start), arena_off(mv.to));
+    let mut buf = alloc::vec![0u8; PAGE as usize];
+    let mut at = 0u32;
+    let mut ok = true;
+    while at < e.len {
+        let n = (e.len - at).min(PAGE) as usize;
+        // Ascending page order with dst strictly below src: page k is read
+        // before the erase of destination page k could reach it, so an
+        // overlapping downward move is safe one page at a time (memmove).
+        ok = crate::assets::read_chunk(region + src + at, &mut buf[..n])
+            && write_raw(region + dst + at, &buf[..n]).await;
+        if !ok {
+            break;
+        }
+        at += PAGE;
+    }
+    drop(buf);
+    if ok {
+        raw_invalidate(dst, e.len as usize);
+        ok = raw_slice(dst, e.len as usize).is_some_and(|b| fnv1a(b) == e.hash);
+    }
+    if !ok {
+        println!("patterns: arena compaction dropped seq {} (page {} -> {})", e.seq, e.start, mv.to);
+        return false;
+    }
+    let placed =
+        ARENA.lock(|c| c.borrow_mut().insert(extents::Extent { start: mv.to, ..e }).is_some());
+    persist_arena();
+    placed
+}
+
+/// Put a stored pattern's bytecode into an arena extent so its next
+/// activation executes in place. `may_compact`: a SAVE (a user action) may
+/// slide other extents down to open a run; an activation-time fill takes
+/// what already fits or gives up — bounded to one write per pattern per
+/// library state, so playlist churn is wear-free. Never evicts anything.
+/// Best-effort; false leaves the pattern on the chunk path (never a panic).
+pub async fn cache_code(id: &str, bc: &[u8], may_compact: bool) -> bool {
+    if !arena_on() || bc.is_empty() || bc.len() > MAX_BC {
         return false;
     }
     let Some((seq, gen, _, bc_count, _)) = lookup(id) else {
         return false;
     };
-    let start = REGION.load(Ordering::Relaxed);
-    if bc_count == 0 || start == 0 || crate::ota::ota_active() {
+    let region = REGION.load(Ordering::Relaxed);
+    if bc_count == 0 || region == 0 || crate::ota::ota_active() {
         return false;
     }
-    let hash = fnv1a(bc);
-    let running = running_seq();
-    let tick = arena_tick();
-    let live: Vec<(u32, u8)> =
-        INDEX.lock(|c| c.borrow().iter().map(|e| (e.seq, e.gen)).collect());
-    let pick: Result<usize, bool> = ARENA.lock(|c| {
-        let mut a = c.borrow_mut();
-        if a.iter().any(|s| {
-            s.len as usize == bc.len() && s.seq == seq && s.gen == gen && s.hash == hash
-        }) {
-            return Err(true); // already cached
-        }
-        let not_running = |s: &Slot| Some(s.seq) != running;
-        let stale = |s: &Slot| s.len > 0 && !live.contains(&(s.seq, s.gen));
-        let i = a
-            .iter()
-            .position(|s| s.len == 0)
-            .or_else(|| a.iter().position(|s| stale(s) && not_running(s)))
-            .or_else(|| {
-                if !evict {
-                    return None;
-                }
-                a.iter()
-                    .enumerate()
-                    .filter(|(_, s)| not_running(s))
-                    .min_by_key(|(_, s)| s.last_use)
-                    .map(|(i, _)| i)
-            });
-        let Some(i) = i else {
-            return Err(false);
-        };
-        a[i] = EMPTY; // unpublish before the bytes change under it
-        Ok(i)
-    });
-    let i = match pick {
-        Ok(i) => i,
-        Err(r) => return r,
+    let Some(_guard) = ArenaGuard::take() else {
+        return false; // another save/compaction is in flight
     };
-    let rel = slot_off(i);
-    let ok = write_raw(start + rel, bc).await;
+    let hash = fnv1a(bc);
+    let need = extents::pages_for(bc.len() as u32);
+    let running = running_seq();
+
+    // Reclaim extents the index no longer knows (deleted or superseded
+    // patterns), except the running pattern's — it may still be executing
+    // from a generation the store has already replaced. THIS pattern's own
+    // stale generation is spared here and freed after the new extent is
+    // published, so a power cut never loses both.
+    let live = live_gens();
+    let swept = ARENA.lock(|c| {
+        c.borrow_mut()
+            .retain(|e| e.seq == seq || Some(e.seq) == running || live.contains(&(e.seq, e.gen)))
+    });
+    if swept > 0 {
+        persist_arena();
+    }
+    // already cached at this generation?
+    if ARENA.lock(|c| {
+        c.borrow()
+            .find(seq, gen)
+            .is_some_and(|(_, e)| e.len as usize == bc.len() && e.hash == hash)
+    }) {
+        return true;
+    }
+
+    let mut start_page = ARENA.lock(|c| c.borrow().first_fit(need));
+    if start_page.is_none() && may_compact {
+        let (reachable, hole, used) = ARENA.lock(|c| {
+            let d = c.borrow();
+            (d.compacted_free_run(running), d.largest_hole(), d.used_pages())
+        });
+        if reachable < need {
+            println!(
+                "patterns: code arena full — {} needs {} pages, {} used, best hole {}",
+                id, need, used, hole
+            );
+            return false;
+        }
+        println!("patterns: code arena compacting for {} ({} pages)", id, need);
+        for _ in 0..2 * extents::MAX_EXTENTS {
+            let Some(mv) = ARENA.lock(|c| c.borrow().next_move(running)) else {
+                break;
+            };
+            if !compact_move(mv, region).await {
+                break;
+            }
+            start_page = ARENA.lock(|c| c.borrow().first_fit(need));
+            if start_page.is_some() {
+                break;
+            }
+        }
+        start_page = start_page.or_else(|| ARENA.lock(|c| c.borrow().first_fit(need)));
+    }
+    let Some(start_page) = start_page else {
+        return false;
+    };
+
+    let rel = arena_off(start_page);
+    let ok = write_raw(region + rel, bc).await;
     if ok {
         raw_invalidate(rel, bc.len());
     }
-    let verified = ok && slot_bytes(i, bc.len() as u32).is_some_and(|b| fnv1a(b) == hash);
+    let verified = ok && raw_slice(rel, bc.len()).is_some_and(|b| fnv1a(b) == hash);
     if !verified {
-        println!("patterns: code arena write of {} failed (slot {})", id, i);
+        println!("patterns: code arena write of {} failed (page {})", id, start_page);
         return false;
     }
-    ARENA.lock(|c| {
-        c.borrow_mut()[i] = Slot { seq, gen, len: bc.len() as u32, hash, last_use: tick }
-    });
-    if !persist_arena() {
-        println!("patterns: code arena table write failed — slot {} lives this session only", i);
+    let e = extents::Extent { seq, gen, start: start_page, len: bc.len() as u32, hash };
+    if !ARENA.lock(|c| c.borrow_mut().insert(e).is_some()) {
+        println!("patterns: code arena directory full — {} stays on the chunk path", id);
+        return false;
     }
-    println!("patterns: code arena slot {} <- {} ({} B)", i, id, bc.len());
+    if !persist_arena() {
+        println!("patterns: code arena directory write failed — {} lives this session only", id);
+    }
+    // published; now the superseded generation may go (unless the engine
+    // is still executing from it)
+    if running_seq() != Some(seq) {
+        if let Some((i, _)) = ARENA.lock(|c| c.borrow().find_other_gen(seq, gen)) {
+            ARENA.lock(|c| {
+                c.borrow_mut().remove(i);
+            });
+            persist_arena();
+        }
+    }
+    println!("patterns: code arena page {} <- {} ({} B)", start_page, id, bc.len());
     true
 }
 
-/// Forget any slot holding `seq` (delete).
+/// Forget every extent of `seq` (delete).
 fn arena_forget(seq: u32) {
-    let changed = ARENA.lock(|c| {
-        let mut a = c.borrow_mut();
-        let mut changed = false;
-        for s in a.iter_mut() {
-            if s.len > 0 && s.seq == seq {
-                *s = EMPTY;
-                changed = true;
-            }
-        }
-        changed
-    });
-    if changed {
+    let n = ARENA.lock(|c| c.borrow_mut().remove_seq(seq));
+    if n > 0 {
         persist_arena();
     }
 }
 
-/// (slots in use, slots total) for /api/status.
+/// (arena pages in use, arena pages total) for /api/status. `[0, 0]` means
+/// the arena is off (no mapping) — there is no other way to see a zero
+/// total.
 pub fn arena_stats() -> (u32, u32) {
-    let used = ARENA.lock(|c| c.borrow().iter().filter(|s| s.len > 0).count());
-    (used as u32, ARENA_SLOTS as u32)
+    let (used, total) = ARENA.lock(|c| {
+        let d = c.borrow();
+        (d.used_pages(), d.total_pages())
+    });
+    (used as u32, total as u32)
 }
-
 /// The running pattern's executable bytes as mapped memory, per the VM
 /// consumer contract (docs/research/flash-mmap.md): rodata for the built-in
 /// default (the bootloader's own mapping), the ad-hoc slot side the last
