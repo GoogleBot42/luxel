@@ -23,7 +23,7 @@ use crate::compile::compile;
 #[cfg(feature = "frontend")]
 use crate::diag::Diagnostic;
 use crate::fixed::Fx;
-use crate::vm::{DebugState, MapData, Outcome, Program, StepKind, Value, Vm, VmError};
+use crate::vm::{ArrView, DebugState, MapData, Outcome, Program, StepKind, Value, Vm, VmError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RenderKind {
@@ -448,7 +448,7 @@ impl Engine {
         let mut resolved = Vec::new();
         for &line in lines {
             // nearest executable line >= requested (pos entries are runs
-            // keyed by fn-relative byte offset)
+            // keyed by fn-relative word index)
             let mut target: Option<u32> = None;
             for f in &self.prog.fns {
                 for &(_, l, _) in &f.pos {
@@ -863,7 +863,7 @@ impl Engine {
     }
 
     /// Read an element of an exported array variable.
-    pub fn var_array(&self, name: &str) -> Option<&[Value]> {
+    pub fn var_array(&self, name: &str) -> Option<ArrView<'_>> {
         match self.var(name)? {
             Value::Arr(id) => self.vm.array(&self.prog, id),
             _ => None,

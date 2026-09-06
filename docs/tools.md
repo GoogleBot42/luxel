@@ -97,6 +97,6 @@ starved device without hardware.
 
 | tool | what it does |
 |---|---|
-| `cargo test -p luxel-cli --release --test heapstat -- --nocapture` | Counting-allocator model of the device pattern lifecycle (decode → engine → frames) over the whole gallery; prints per-pattern blob/program/engine/peak and a device-model column. How the OOM hunt and the const-array win were measured. |
+| `cargo test -p luxel-cli --release --test heapstat -- --nocapture` | Counting-allocator model of the device pattern lifecycle (decode → engine → frames) over the whole gallery; prints per-pattern blob/program/engine/peak, a `mapped` column (the lean `Program` borrowing an aligned `'static` blob via `deserialize_lean_static` — the XIP device's resident cost) and two device-model columns (`device` = copying lifecycle with source + blob resident; `device-xip` = the borrowing lifecycle with neither). How the OOM hunt and the const-array win were measured. |
 | `/api/status` `heap_free` | Live heap margin on the device; `docs/bench-report.md` records the soak's lowest observed value. |
 | `/api/status` `frame_us` / `vm_us` / `pipe_us` / `out_us` | Per-stage frame timing (Gitea #260): average µs per rendered *pattern* frame over the last second — whole engine branch, VM `Engine::frame`, preview copy + output pipeline, and driver `write_frame` respectively. `tools/hw-bench.mjs` records all four next to `fps`. Only pattern frames are averaged, so all four read 0 while DDP/E1.31 live input drives the strip. |

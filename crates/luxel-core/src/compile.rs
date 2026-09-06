@@ -19,12 +19,12 @@ use crate::bytecode::op;
 use crate::diag::{line_col, Diagnostic, Span};
 use crate::fixed::Fx;
 use crate::parse::parse_program;
-use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, Program, Value};
+use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, PoolEntry, Program, Value, Words};
 
 /// Compiler IR: one virtual instruction, jump targets as INSTRUCTION
-/// INDICES. This never reaches the VM — [`assemble`] lowers it to the flat
-/// LXBC byte encoding (byte-offset jumps) that `Program.code` holds and the
-/// interpreter executes in place.
+/// INDICES. This never reaches the VM — [`assemble`] lowers it to the
+/// fixed-width LXBC word encoding (word-index jumps) that `Program.words`
+/// holds and the interpreter executes in place.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Insn {
     Const(Value),
@@ -100,21 +100,23 @@ const MAX_DATA_ARRAYS: usize = 4096;
 const MAX_DATA_ELEMS: usize = 65_536;
 const MAX_ASSERT_MSGS: usize = 4096;
 
-/// Lower the compiler IR to the flat byte encoding the VM executes in
-/// place: two passes per function — measure each instruction's byte offset,
-/// then emit with jump targets mapped from instruction indices to byte
-/// offsets. Per-instruction positions collapse to offset-keyed runs.
+/// Lower the compiler IR to the fixed-width word encoding the VM executes
+/// in place: two passes per function — measure each instruction's word
+/// index (`CONST_NUM` is two words, everything else one), then emit with
+/// jump targets mapped from instruction indices to word indices. The
+/// const-array pool follows the code in the same word region.
+/// Per-instruction positions collapse to word-index-keyed runs.
 fn assemble(
     fns: Vec<FnIr>,
     globals: Vec<GlobalDef>,
     exported_fns: Vec<(String, u16)>,
-    data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+    data_arrays: Vec<Vec<i32>>,
     assert_msgs: Vec<String>,
 ) -> Program {
-    let mut code: Vec<u8> = Vec::new();
+    let mut code: Vec<u32> = Vec::new();
     let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
     for f in fns {
-        // pass 1: byte offset of each instruction (+ end)
+        // pass 1: word index of each instruction (+ end)
         let mut offsets: Vec<u32> = Vec::with_capacity(f.code.len() + 1);
         let mut at = 0u32;
         for insn in &f.code {
@@ -128,7 +130,7 @@ fn assemble(
             emit_insn(&mut code, insn, &offsets);
         }
         let code_len = code.len() as u32 - code_start;
-        // positions → offset-keyed runs (statement granularity ⇒ few runs)
+        // positions → word-keyed runs (statement granularity ⇒ few runs)
         let mut pos: Vec<(u32, u32, u32)> = Vec::new();
         for (i, &(line, col)) in f.pos.iter().enumerate() {
             match pos.last() {
@@ -146,9 +148,18 @@ fn assemble(
             local_names: f.local_names,
         });
     }
+    // const pool: raw words appended after the code
+    let mut pool: Vec<PoolEntry> = Vec::with_capacity(data_arrays.len());
+    for d in &data_arrays {
+        pool.push(PoolEntry {
+            start: code.len() as u32,
+            len: d.len() as u32,
+        });
+        code.extend(d.iter().map(|&r| r as u32));
+    }
     Program {
-        code,
-        data_arrays,
+        words: Words::Owned(code),
+        pool,
         fns: defs,
         globals,
         exported_fns,
@@ -157,129 +168,75 @@ fn assemble(
     }
 }
 
-/// Encoded byte length of one IR instruction.
+/// Encoded length of one IR instruction in words.
 fn insn_len(insn: &Insn) -> u32 {
     use Insn::*;
     match insn {
-        Const(Value::Num(_)) | Const(Value::Arr(_)) => 5,
-        Const(Value::Fun(_)) | Const(Value::Builtin(_)) => 3,
-        LoadG(_) | StoreG(_) | NewArray(_) | ConstArr(_) | Assert(_) => 3,
-        LoadL(_) | StoreL(_) => 2,
-        Jmp(_) | JmpIfFalse(_) | JmpIfTruePeek(_) | JmpIfFalsePeek(_) => 5,
-        CallFn { .. } | CallBuiltin { .. } => 4,
-        CallValue { .. } => 2,
+        Const(Value::Num(_)) | Const(Value::Arr(_)) => 2,
         _ => 1,
     }
 }
 
-fn emit_insn(out: &mut Vec<u8>, insn: &Insn, offsets: &[u32]) {
+fn emit_insn(out: &mut Vec<u32>, insn: &Insn, offsets: &[u32]) {
+    use crate::bytecode::enc;
     use Insn::*;
     let target = |t: u32| offsets.get(t as usize).copied().unwrap_or(*offsets.last().unwrap());
-    match insn {
+    let w = match insn {
         Const(Value::Num(v)) => {
-            out.push(op::CONST_NUM);
-            out.extend_from_slice(&v.raw().to_le_bytes());
+            out.push(enc::bare(op::CONST_NUM));
+            v.raw() as u32
         }
         // Arr constants don't exist in compiler output; encode zero.
         Const(Value::Arr(_)) => {
-            out.push(op::CONST_NUM);
-            out.extend_from_slice(&0i32.to_le_bytes());
+            out.push(enc::bare(op::CONST_NUM));
+            0
         }
-        Const(Value::Fun(i)) => {
-            out.push(op::CONST_FUN);
-            out.extend_from_slice(&i.to_le_bytes());
-        }
-        Const(Value::Builtin(b)) => {
-            out.push(op::CONST_BUILTIN);
-            out.extend_from_slice(&b.to_le_bytes());
-        }
-        LoadG(i) => {
-            out.push(op::LOAD_G);
-            out.extend_from_slice(&i.to_le_bytes());
-        }
-        StoreG(i) => {
-            out.push(op::STORE_G);
-            out.extend_from_slice(&i.to_le_bytes());
-        }
-        LoadL(i) => {
-            out.push(op::LOAD_L);
-            out.push(*i);
-        }
-        StoreL(i) => {
-            out.push(op::STORE_L);
-            out.push(*i);
-        }
-        LoadIdx => out.push(op::LOAD_IDX),
-        StoreIdx => out.push(op::STORE_IDX),
-        ArrLen => out.push(op::ARR_LEN),
-        NewArray(n) => {
-            out.push(op::NEW_ARRAY);
-            out.extend_from_slice(&n.to_le_bytes());
-        }
-        ConstArr(d) => {
-            out.push(op::CONST_ARR);
-            out.extend_from_slice(&d.to_le_bytes());
-        }
-        Assert(m) => {
-            out.push(op::ASSERT);
-            out.extend_from_slice(&m.to_le_bytes());
-        }
-        Dup => out.push(op::DUP),
-        Dup2 => out.push(op::DUP2),
-        Pop => out.push(op::POP),
-        Add => out.push(op::ADD),
-        Sub => out.push(op::SUB),
-        Mul => out.push(op::MUL),
-        Div => out.push(op::DIV),
-        Rem => out.push(op::REM),
-        Pow => out.push(op::POW),
-        Neg => out.push(op::NEG),
-        Not => out.push(op::NOT),
-        BitNot => out.push(op::BIT_NOT),
-        BitAnd => out.push(op::BIT_AND),
-        BitOr => out.push(op::BIT_OR),
-        BitXor => out.push(op::BIT_XOR),
-        Shl => out.push(op::SHL),
-        Shr => out.push(op::SHR),
-        Lt => out.push(op::LT),
-        Le => out.push(op::LE),
-        Gt => out.push(op::GT),
-        Ge => out.push(op::GE),
-        Eq => out.push(op::EQ),
-        Ne => out.push(op::NE),
-        Jmp(t) => {
-            out.push(op::JMP);
-            out.extend_from_slice(&target(*t).to_le_bytes());
-        }
-        JmpIfFalse(t) => {
-            out.push(op::JMP_IF_FALSE);
-            out.extend_from_slice(&target(*t).to_le_bytes());
-        }
-        JmpIfTruePeek(t) => {
-            out.push(op::JMP_IF_TRUE_PEEK);
-            out.extend_from_slice(&target(*t).to_le_bytes());
-        }
-        JmpIfFalsePeek(t) => {
-            out.push(op::JMP_IF_FALSE_PEEK);
-            out.extend_from_slice(&target(*t).to_le_bytes());
-        }
-        CallFn { fn_idx, argc } => {
-            out.push(op::CALL_FN);
-            out.extend_from_slice(&fn_idx.to_le_bytes());
-            out.push(*argc);
-        }
-        CallBuiltin { b, argc } => {
-            out.push(op::CALL_BUILTIN);
-            out.extend_from_slice(&b.to_le_bytes());
-            out.push(*argc);
-        }
-        CallValue { argc } => {
-            out.push(op::CALL_VALUE);
-            out.push(*argc);
-        }
-        Ret => out.push(op::RET),
-        RetNull => out.push(op::RET_NULL),
-    }
+        Const(Value::Fun(i)) => enc::with_u16(op::CONST_FUN, *i),
+        Const(Value::Builtin(b)) => enc::with_u16(op::CONST_BUILTIN, *b),
+        LoadG(i) => enc::with_u16(op::LOAD_G, *i),
+        StoreG(i) => enc::with_u16(op::STORE_G, *i),
+        LoadL(i) => enc::with_u8(op::LOAD_L, *i),
+        StoreL(i) => enc::with_u8(op::STORE_L, *i),
+        LoadIdx => enc::bare(op::LOAD_IDX),
+        StoreIdx => enc::bare(op::STORE_IDX),
+        ArrLen => enc::bare(op::ARR_LEN),
+        NewArray(n) => enc::with_u16(op::NEW_ARRAY, *n),
+        ConstArr(d) => enc::with_u16(op::CONST_ARR, *d),
+        Assert(m) => enc::with_u16(op::ASSERT, *m),
+        Dup => enc::bare(op::DUP),
+        Dup2 => enc::bare(op::DUP2),
+        Pop => enc::bare(op::POP),
+        Add => enc::bare(op::ADD),
+        Sub => enc::bare(op::SUB),
+        Mul => enc::bare(op::MUL),
+        Div => enc::bare(op::DIV),
+        Rem => enc::bare(op::REM),
+        Pow => enc::bare(op::POW),
+        Neg => enc::bare(op::NEG),
+        Not => enc::bare(op::NOT),
+        BitNot => enc::bare(op::BIT_NOT),
+        BitAnd => enc::bare(op::BIT_AND),
+        BitOr => enc::bare(op::BIT_OR),
+        BitXor => enc::bare(op::BIT_XOR),
+        Shl => enc::bare(op::SHL),
+        Shr => enc::bare(op::SHR),
+        Lt => enc::bare(op::LT),
+        Le => enc::bare(op::LE),
+        Gt => enc::bare(op::GT),
+        Ge => enc::bare(op::GE),
+        Eq => enc::bare(op::EQ),
+        Ne => enc::bare(op::NE),
+        Jmp(t) => enc::with_u24(op::JMP, target(*t)),
+        JmpIfFalse(t) => enc::with_u24(op::JMP_IF_FALSE, target(*t)),
+        JmpIfTruePeek(t) => enc::with_u24(op::JMP_IF_TRUE_PEEK, target(*t)),
+        JmpIfFalsePeek(t) => enc::with_u24(op::JMP_IF_FALSE_PEEK, target(*t)),
+        CallFn { fn_idx, argc } => enc::call(op::CALL_FN, *fn_idx, *argc),
+        CallBuiltin { b, argc } => enc::call(op::CALL_BUILTIN, *b, *argc),
+        CallValue { argc } => enc::with_u8(op::CALL_VALUE, *argc),
+        Ret => enc::bare(op::RET),
+        RetNull => enc::bare(op::RET_NULL),
+    };
+    out.push(w);
 }
 
 /// Predefined constants (name, value). `pixelCount` is global 0, written by
@@ -360,7 +317,8 @@ struct Compiler<'s> {
     fns: Vec<FnIr>,
     /// Const-array pool: all-numeric array literals, deduplicated by
     /// content (pixel-art patterns repeat the same rows hundreds of times).
-    data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+    /// Const-array pool contents (raw 16.16 words), deduplicated via `data_map`.
+    data_arrays: Vec<Vec<i32>>,
     data_map: BTreeMap<Vec<i32>, u16>,
     /// `assert()` message pool, deduplicated.
     assert_msgs: Vec<String>,
@@ -1360,9 +1318,8 @@ impl<'s> Compiler<'s> {
         if self.data_arrays.len() >= MAX_DATA_ARRAYS || total + raws.len() > MAX_DATA_ELEMS {
             return None;
         }
-        let values: Vec<Value> = raws.iter().map(|&r| Value::Num(Fx::from_raw(r))).collect();
         let d = self.data_arrays.len() as u16;
-        self.data_arrays.push(values.into());
+        self.data_arrays.push(raws.clone());
         self.data_map.insert(raws, d);
         Some(d)
     }

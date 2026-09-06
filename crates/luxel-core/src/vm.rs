@@ -72,13 +72,14 @@ pub struct FnDef {
     pub params: u8,
     /// Total local slots including params.
     pub locals: u8,
-    /// This function's bytecode: `Program.code[code_start..code_start+code_len]`.
-    /// `pc` and jump operands are byte offsets relative to `code_start`.
+    /// This function's code: `Program.words[code_start..code_start+code_len]`
+    /// (WORD indices). `pc` and jump operands are word indices relative to
+    /// `code_start`.
     pub code_start: u32,
     pub code_len: u32,
-    /// Debug info: source-position RUNS keyed by fn-relative byte offset —
-    /// (start_offset, line, col), sorted by offset, each run extending to
-    /// the next. Statement-granular, so a handful of entries per function.
+    /// Debug info: source-position RUNS keyed by fn-relative word index —
+    /// (start_pc, line, col), sorted by pc, each run extending to the
+    /// next. Statement-granular, so a handful of entries per function.
     /// Empty in lean decodes (device) — pos_at then reports (0, 0).
     pub pos: Vec<(u32, u32, u32)>,
     /// Debug info: name per local slot (params first).
@@ -86,7 +87,7 @@ pub struct FnDef {
 }
 
 impl FnDef {
-    /// (line, col) at a byte offset, if known.
+    /// (line, col) at a fn-relative word index, if known.
     pub fn pos_at(&self, pc: u32) -> (u32, u32) {
         match self.pos.partition_point(|&(off, _, _)| off <= pc) {
             0 => (0, 0),
@@ -108,18 +109,50 @@ pub struct GlobalDef {
     pub predefined: bool,
 }
 
+/// The program's word region: every function's instruction words plus the
+/// constant pool, exactly as the LXBC blob stores them (little-endian
+/// `u32`s). Owned by a host that decoded a blob into RAM, or BORROWED from
+/// a `'static` blob — a memory-mapped flash slot on the device — in which
+/// case the code and constants cost no RAM at all. Both deref to `[u32]`;
+/// nothing downstream cares which.
+#[derive(Debug, Clone)]
+pub enum Words {
+    Owned(Vec<u32>),
+    Static(&'static [u32]),
+}
+
+impl core::ops::Deref for Words {
+    type Target = [u32];
+    #[inline(always)]
+    fn deref(&self) -> &[u32] {
+        match self {
+            Words::Owned(v) => v,
+            Words::Static(s) => s,
+        }
+    }
+}
+
+/// One constant-pool array: `len` raw 16.16 words at `Program.words[start..]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolEntry {
+    pub start: u32,
+    pub len: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Program {
-    /// Every function's bytecode, concatenated (see `FnDef.code_start`).
-    /// Builtin operands hold RUNTIME builtin ids (the wire format's
-    /// import-table slots are resolved by the decoder).
-    pub code: Vec<u8>,
+    /// Code + constant pool, one 4-aligned region of u32 words (see
+    /// `FnDef.code_start` and [`PoolEntry`]). Instruction words carry
+    /// RUNTIME builtin ids; the decoder proved every id against the blob's
+    /// by-name import table.
+    pub words: Words,
     /// Constant-array pool (the blob's "data section"): every all-numeric
     /// array literal, DEDUPLICATED by content — pixel-art patterns repeat
-    /// the same rows/triplets hundreds of times. `ConstArr` instructions
-    /// allocate arena entries that INDEX into this pool until first
-    /// mutation (copy-on-write in [`Vm::arr_mut`]).
-    pub data_arrays: Vec<alloc::boxed::Box<[Value]>>,
+    /// the same rows/triplets hundreds of times. Each entry is a range of
+    /// raw `Fx` words in `words`; `ConstArr` instructions allocate arena
+    /// entries that INDEX into this pool until first mutation
+    /// (copy-on-write in [`Vm::arr_mut`]).
+    pub pool: Vec<PoolEntry>,
     /// `fns[0]` is top-level initialization code.
     pub fns: Vec<FnDef>,
     pub globals: Vec<GlobalDef>,
@@ -134,6 +167,13 @@ pub struct Program {
 }
 
 impl Program {
+    /// The raw words of const-pool entry `d` (decoder-validated range).
+    #[inline]
+    pub fn pool_words(&self, d: u32) -> &[u32] {
+        let p = self.pool[d as usize];
+        &self.words[p.start as usize..(p.start + p.len) as usize]
+    }
+
     pub fn exported_fn(&self, name: &str) -> Option<u16> {
         self.exported_fns
             .iter()
@@ -659,11 +699,68 @@ impl Default for ArrRepr {
 
 impl ArrRepr {
     #[inline]
-    fn slice<'a>(&'a self, prog: &'a Program) -> &'a [Value] {
+    fn view<'a>(&'a self, prog: &'a Program) -> ArrView<'a> {
         match self {
-            ArrRepr::Owned(v) => v,
-            ArrRepr::Const(d) => &prog.data_arrays[*d as usize],
+            ArrRepr::Owned(v) => ArrView::Owned(v),
+            ArrRepr::Const(d) => ArrView::Const(prog.pool_words(*d)),
         }
+    }
+}
+
+/// Read-only view of an arena array: owned `Value`s, or the raw 16.16
+/// words of a const-pool entry (every element a `Num`) read straight from
+/// the program's word region — which on the device is flash.
+#[derive(Clone, Copy)]
+pub enum ArrView<'a> {
+    Owned(&'a [Value]),
+    Const(&'a [u32]),
+}
+
+impl<'a> ArrView<'a> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            ArrView::Owned(v) => v.len(),
+            ArrView::Const(w) => w.len(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    pub fn get(&self, i: usize) -> Option<Value> {
+        match self {
+            ArrView::Owned(v) => v.get(i).copied(),
+            ArrView::Const(w) => w.get(i).map(|&x| Value::Num(Fx::from_raw(x as i32))),
+        }
+    }
+
+    /// Element `i`; panics past the end like slice indexing.
+    #[inline]
+    pub fn at(&self, i: usize) -> Value {
+        match self {
+            ArrView::Owned(v) => v[i],
+            ArrView::Const(w) => Value::Num(Fx::from_raw(w[i] as i32)),
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = Value> + 'a {
+        let (o, c) = match self {
+            ArrView::Owned(v) => (Some(v.iter()), None),
+            ArrView::Const(w) => (None, Some(w.iter())),
+        };
+        o.into_iter()
+            .flatten()
+            .copied()
+            .chain(c.into_iter().flatten().map(|&x| Value::Num(Fx::from_raw(x as i32))))
+    }
+
+    /// Materialize as owned `Value`s (a const entry decodes its words).
+    pub fn to_vec(&self) -> Vec<Value> {
+        self.iter().collect()
     }
 }
 
@@ -686,7 +783,7 @@ pub struct Vm {
     /// Debugger state; None disables all checks (the fast path).
     pub dbg: Option<DebugState>,
     fuel: u32,
-    /// Byte offset (fn-relative) of the instruction currently executing in
+    /// Word index (fn-relative) of the instruction currently executing in
     /// the top frame — error attribution (the frame's own pc has already
     /// advanced past it).
     insn_start: u32,
@@ -1087,8 +1184,8 @@ impl Vm {
         }
     }
 
-    pub fn array<'a>(&'a self, prog: &'a Program, id: u32) -> Option<&'a [Value]> {
-        self.arrays.get(id as usize).map(|a| a.slice(prog))
+    pub fn array<'a>(&'a self, prog: &'a Program, id: u32) -> Option<ArrView<'a>> {
+        self.arrays.get(id as usize).map(|a| a.view(prog))
     }
 
     /// Mutable view of an array (sensor-frame injection writes in place).
@@ -1215,8 +1312,8 @@ impl Vm {
     /// Read view by id — arena ids come from the VM itself, so `id` is
     /// always valid at these call sites (matches the old direct indexing).
     #[inline]
-    fn arr<'a>(&'a self, prog: &'a Program, id: u32) -> &'a [Value] {
-        self.arrays[id as usize].slice(prog)
+    fn arr<'a>(&'a self, prog: &'a Program, id: u32) -> ArrView<'a> {
+        self.arrays[id as usize].view(prog)
     }
 
     /// Mutable storage by id, materializing const-backed arrays
@@ -1226,7 +1323,7 @@ impl Vm {
             self.palette_dirty = true;
         }
         if let ArrRepr::Const(d) = self.arrays[id as usize] {
-            let data: &[Value] = &prog.data_arrays[d as usize];
+            let data: &[u32] = prog.pool_words(d);
             // The const data was never on the byte ledger (it is shared with
             // the program); the owned copy joins it now, replacing the
             // entry's CONST_ENTRY_COST. The ELEMENTS are already charged —
@@ -1242,7 +1339,7 @@ impl Vm {
             if owned.try_reserve_exact(data.len()).is_err() {
                 return Err("out of memory for array");
             }
-            owned.extend_from_slice(data);
+            owned.extend(data.iter().map(|&w| Value::Num(Fx::from_raw(w as i32))));
             self.array_bytes += delta;
             self.arrays[id as usize] = ArrRepr::Owned(owned);
         }
@@ -1261,7 +1358,7 @@ impl Vm {
         prog: &'a Program,
         dst: u32,
         src: u32,
-    ) -> Result<(&'a mut [Value], &'a [Value]), &'static str> {
+    ) -> Result<(&'a mut [Value], ArrView<'a>), &'static str> {
         debug_assert_ne!(dst, src);
         self.arr_mut(prog, dst)?;
         let (d, s) = (dst as usize, src as usize);
@@ -1275,7 +1372,7 @@ impl Vm {
         let ArrRepr::Owned(dv) = dslot else {
             unreachable!("materialized above")
         };
-        Ok((dv.as_mut_slice(), sslot.slice(prog)))
+        Ok((dv.as_mut_slice(), sslot.view(prog)))
     }
 
     /// Read-only view of the (possibly suspended) call stack.
@@ -1484,8 +1581,6 @@ impl Vm {
     /// stack unwinds back to `base` frames (Done) or a debug stop fires
     /// (Paused — only when `debug`). Frames/locals/stack stay intact while
     /// paused so the debugger can inspect and resume.
-    // the operand macros advance `at` past a jump target that then replaces it
-    #[allow(unused_assignments)]
     fn run(&mut self, prog: &Program, base: usize, debug: bool) -> Result<Outcome, VmError> {
         macro_rules! fail {
             ($msg:expr) => {
@@ -1523,7 +1618,7 @@ impl Vm {
             }};
         }
 
-        use crate::bytecode::op;
+        use crate::bytecode::{enc, op};
         // Two-level loop: the outer level (re)loads the frame context —
         // function, code slice, locals base, pc — and the inner level
         // dispatches instructions against those locals. The frame's `pc`
@@ -1538,8 +1633,8 @@ impl Vm {
                 (f.fn_idx, f.pc, f.locals_base as usize)
             };
             let fdef = &prog.fns[fi as usize];
-            let code =
-                &prog.code[fdef.code_start as usize..(fdef.code_start + fdef.code_len) as usize];
+            let code: &[u32] =
+                &prog.words[fdef.code_start as usize..(fdef.code_start + fdef.code_len) as usize];
             let mut at = pc as usize;
             loop {
                 if debug {
@@ -1549,81 +1644,50 @@ impl Vm {
                     }
                 }
                 self.insn_start = at as u32;
-                // Byte-decode the instruction in place. The decoder validated
-                // every operand and jump target, so the unwrap_or(0) fallbacks
-                // are unreachable; they exist so a logic bug degrades to a
+                // One word per instruction: opcode in the low byte, operand
+                // field above it (see bytecode::enc). The decoder validated
+                // every operand and jump target, so the fallbacks here are
+                // unreachable; they exist so a logic bug degrades to a
                 // runtime error instead of a panic.
-                macro_rules! op_u8 {
-                    () => {{
-                        let v = code.get(at).copied().unwrap_or(0);
+                let w = match code.get(at) {
+                    Some(&w) => {
                         at += 1;
-                        v
-                    }};
-                }
-                macro_rules! op_u16 {
-                    () => {{
-                        let v = u16::from_le_bytes([
-                            code.get(at).copied().unwrap_or(0),
-                            code.get(at + 1).copied().unwrap_or(0),
-                        ]);
-                        at += 2;
-                        v
-                    }};
-                }
-                macro_rules! op_u32 {
-                    () => {{
-                        let v = u32::from_le_bytes([
-                            code.get(at).copied().unwrap_or(0),
-                            code.get(at + 1).copied().unwrap_or(0),
-                            code.get(at + 2).copied().unwrap_or(0),
-                            code.get(at + 3).copied().unwrap_or(0),
-                        ]);
-                        at += 4;
-                        v
-                    }};
-                }
-                let opcode = match code.get(at) {
-                    Some(&b) => {
-                        at += 1;
-                        b
+                        w
                     }
-                    None => op::RET_NULL, // fell off the end
+                    None => enc::bare(op::RET_NULL), // fell off the end
                 };
+                let opcode = enc::opcode(w);
                 if self.fuel == 0 {
                     fail!(ERR_EXEC_LIMIT);
                 }
                 self.fuel -= 1;
                 match opcode {
                     op::CONST_NUM => {
-                        let v = Value::Num(Fx::from_raw(op_u32!() as i32));
-                        push!(v)
+                        // the immediate is the next word
+                        let raw = code.get(at).copied().unwrap_or(0);
+                        at += 1;
+                        push!(Value::Num(Fx::from_raw(raw as i32)))
                     }
                     op::CONST_FUN => {
-                        let v = Value::Fun(op_u16!());
-                        push!(v)
+                        push!(Value::Fun(enc::imm16(w)))
                     }
                     op::CONST_BUILTIN => {
-                        let v = Value::Builtin(op_u16!());
-                        push!(v)
+                        push!(Value::Builtin(enc::imm16(w)))
                     }
                     op::LOAD_G => {
-                        let i = op_u16!();
-                        push!(self.globals[i as usize])
+                        push!(self.globals[enc::imm16(w) as usize])
                     }
                     op::STORE_G => {
-                        let i = op_u16!();
                         let v = pop!();
-                        self.globals[i as usize] = v;
+                        self.globals[enc::imm16(w) as usize] = v;
                         push!(v);
                     }
                     op::LOAD_L => {
-                        let i = op_u8!();
-                        push!(self.locals[lbase + i as usize])
+                        push!(self.locals[lbase + enc::imm8(w) as usize])
                     }
                     op::STORE_L => {
-                        let i = op_u8!();
                         let v = pop!();
-                        self.locals[lbase + i as usize] = v;
+                        self.locals[lbase + enc::imm8(w) as usize] = v;
                         push!(v);
                     }
                     // Index semantics oracle-confirmed on fw 3.67: fractional
@@ -1648,7 +1712,7 @@ impl Vm {
                         }
                         let i = idx.to_int_trunc() as usize;
                         match self.arr(prog, a).get(i) {
-                            Some(v) => push!(*v),
+                            Some(v) => push!(v),
                             None => fail!("array index out of bounds"),
                         }
                     }
@@ -1680,7 +1744,7 @@ impl Vm {
                         push!(Value::Num(Fx::from_int(self.arr(prog, a).len() as i32)));
                     }
                     op::NEW_ARRAY => {
-                        let n = op_u16!() as usize;
+                        let n = enc::imm16(w) as usize;
                         // budget-first: the elements are popped into the slot
                         // only once the (fallible) allocation succeeded
                         match self.alloc_array_zeroed(n) {
@@ -1699,16 +1763,16 @@ impl Vm {
                         }
                     }
                     op::CONST_ARR => {
-                        let d = op_u16!() as u32;
-                        // decoder-validated: d < data_arrays.len()
-                        let len = prog.data_arrays[d as usize].len();
+                        let d = enc::imm16(w) as u32;
+                        // decoder-validated: d < pool.len()
+                        let len = prog.pool[d as usize].len as usize;
                         match self.alloc_const_array(d, len) {
                             Ok(v) => push!(v),
                             Err(m) => fail!(m),
                         }
                     }
                     op::ASSERT => {
-                        let m = op_u16!();
+                        let m = enc::imm16(w);
                         if !pop!().truthy() {
                             // decoder-validated: m < assert_msgs.len()
                             let px = self.globals[prog.pixel_count_g as usize]
@@ -1812,32 +1876,28 @@ impl Vm {
                         push!(Value::Num(if value_eq(a, b) { Fx::ZERO } else { Fx::ONE }));
                     }
                     op::JMP => {
-                        let t = op_u32!();
-                        at = t as usize;
+                        at = enc::imm24(w) as usize;
                     }
                     op::JMP_IF_FALSE => {
-                        let t = op_u32!();
                         if !pop!().truthy() {
-                            at = t as usize;
+                            at = enc::imm24(w) as usize;
                         }
                     }
                     op::JMP_IF_TRUE_PEEK => {
-                        let t = op_u32!();
                         let v = *self.stack.last().unwrap_or(&Value::default());
                         if v.truthy() {
-                            at = t as usize;
+                            at = enc::imm24(w) as usize;
                         }
                     }
                     op::JMP_IF_FALSE_PEEK => {
-                        let t = op_u32!();
                         let v = *self.stack.last().unwrap_or(&Value::default());
                         if !v.truthy() {
-                            at = t as usize;
+                            at = enc::imm24(w) as usize;
                         }
                     }
                     op::CALL_FN => {
-                        let f = op_u16!();
-                        let argc = op_u8!();
+                        let f = enc::imm16(w);
+                        let argc = enc::argc(w);
                         // the return lands after this instruction
                         self.frames.last_mut().expect("frame").pc = at as u32;
                         let mut args = [Value::default(); MAX_ARGS];
@@ -1846,8 +1906,8 @@ impl Vm {
                         continue 'frame;
                     }
                     op::CALL_BUILTIN => {
-                        let b = op_u16!();
-                        let argc = op_u8!() as usize;
+                        let b = enc::imm16(w);
+                        let argc = enc::argc(w) as usize;
                         // hot builtins straight off the stack (see builtin_fast)
                         if argc <= FAST_ARGS {
                             if let BKind::Impl(bi) = BUILTINS[b as usize].kind {
@@ -1875,7 +1935,7 @@ impl Vm {
                         }
                     }
                     op::CALL_VALUE => {
-                        let argc = op_u8!() as usize;
+                        let argc = enc::imm8(w) as usize;
                         let n = self.stack.len();
                         if n < argc + 1 {
                             fail!(ERR_STACK_UNDERFLOW);
@@ -2456,7 +2516,7 @@ impl Vm {
                     return Err(no_site("arraySum of a non-array".into()));
                 };
                 let mut sum = Fx::ZERO;
-                for v in self.arr(prog, arr) {
+                for v in self.arr(prog, arr).iter() {
                     sum = sum + v.num();
                 }
                 num(sum)
@@ -2469,7 +2529,7 @@ impl Vm {
                 let mutate = builtin == ArrayMutate;
                 let mut i = 0usize;
                 while i < self.arr(prog, arr).len() {
-                    let v = self.arr(prog, arr)[i];
+                    let v = self.arr(prog, arr).at(i);
                     let r = self.dispatch_direct(
                         prog,
                         f,
@@ -2495,7 +2555,7 @@ impl Vm {
                 let f = a(2);
                 let mut i = 0usize;
                 while i < self.arr(prog, src).len() && i < self.arr(prog, dst).len() {
-                    let v = self.arr(prog, src)[i];
+                    let v = self.arr(prog, src).at(i);
                     let r = self.dispatch_direct(
                         prog,
                         f,
@@ -2520,7 +2580,7 @@ impl Vm {
                 let mut acc = a(2);
                 let mut i = 0usize;
                 while i < self.arr(prog, arr).len() {
-                    let v = self.arr(prog, arr)[i];
+                    let v = self.arr(prog, arr).at(i);
                     acc = self.dispatch_direct(
                         prog,
                         f,
@@ -3157,7 +3217,7 @@ impl Vm {
                 }
                 let (c0, c1, tx) = sample_axis(n(2), w);
                 let (r0, r1, ty) = sample_axis(n(3), h);
-                let at = |r: usize, c: usize| data[r * w + c].num().raw() as i64;
+                let at = |r: usize, c: usize| data.at(r * w + c).num().raw() as i64;
                 let lerp = |a: i64, b: i64, t: i64| a + (((b - a) * t) >> 16);
                 let top = lerp(at(r0, c0), at(r0, c1), tx);
                 let bot = lerp(at(r1, c0), at(r1, c1), tx);
@@ -3324,8 +3384,8 @@ impl Vm {
                         let mut i = 0;
                         while i + 3 < data.len() {
                             pal.push((
-                                data[i].num(),
-                                [data[i + 1].num(), data[i + 2].num(), data[i + 3].num()],
+                                data.at(i).num(),
+                                [data.at(i + 1).num(), data.at(i + 2).num(), data.at(i + 3).num()],
                             ));
                             i += 4;
                         }
@@ -3440,8 +3500,8 @@ impl Vm {
         let mut i = 0;
         while i + 3 < data.len() {
             pal.push((
-                data[i].num(),
-                [data[i + 1].num(), data[i + 2].num(), data[i + 3].num()],
+                data.at(i).num(),
+                [data.at(i + 1).num(), data.at(i + 2).num(), data.at(i + 3).num()],
             ));
             i += 4;
         }
