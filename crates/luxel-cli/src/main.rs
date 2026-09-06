@@ -12,6 +12,11 @@
 //!   --out PATH     PPM output path           (default out.ppm; "-" = none)
 //!   --seed S       RNG seed                  (default 1)
 //!   --control NAME=V[,V,V]   invoke a UI control before rendering
+//!   --no-fuse      compile without the superinstruction peephole (#261 A/B)
+//!
+//! bench-only options:
+//!   --profile      dump dynamic opcode/pair/triple/builtin counts for the run
+//!   --json         emit that profile as one JSON line (tools/profile-library.mjs)
 //!
 //! The PPM is one row per frame (like PB's preview strips): width = pixels,
 //! height = frames.
@@ -381,6 +386,15 @@ struct Opts {
     controls: Vec<(String, Vec<Fx>)>,
     /// 2D grid map dimensions (cols, rows); overrides --pixels.
     grid: Option<(u32, u32)>,
+    /// `bench --profile`: dump dynamic opcode/bigram/builtin counts for
+    /// the render pass (Gitea #261).
+    profile: bool,
+    /// `--json`: machine-readable profile on stdout (tools/profile-library.mjs).
+    json: bool,
+    /// `--no-fuse`: compile WITHOUT the superinstruction peephole — the
+    /// A/B lever for Gitea #261 (and the way to prove a fused stream
+    /// renders identically to the unfused one).
+    no_fuse: bool,
 }
 
 fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
@@ -392,6 +406,9 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
         seed: 1,
         controls: Vec::new(),
         grid: None,
+        profile: false,
+        json: false,
+        no_fuse: false,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -415,6 +432,9 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
                 };
                 o.grid = Some((num(w)?.max(1), num(h)?.max(1)));
             }
+            "--profile" if bench => o.profile = true,
+            "--json" if bench => o.json = true,
+            "--no-fuse" => o.no_fuse = true,
             "--control" => {
                 let v = val()?;
                 let Some((name, vals)) = v.split_once('=') else {
@@ -463,8 +483,14 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
     }
     let o = o;
 
-    let mut engine = match Engine::new_at(&src, o.pixels, o.seed, now_unix()) {
-        Ok(e) => e,
+    let compiled = luxel_core::compile::compile_with(
+        &src,
+        luxel_core::compile::CompileOpts {
+            superinstructions: !o.no_fuse,
+        },
+    );
+    let mut engine = match compiled {
+        Ok(p) => Engine::from_program_budgeted_at(p, o.pixels, o.seed, usize::MAX, now_unix()),
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);
             eprintln!("{path}:{line}:{col}: error: {}", d.message);
@@ -503,6 +529,12 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
     let mut strip: Vec<u8> = Vec::with_capacity((o.pixels * o.frames * 3) as usize);
     let mut first_err = None;
 
+    // Counters describe the RENDER pass: init (and its top-level loops,
+    // which can dwarf a frame in table-building patterns) is excluded.
+    #[cfg(feature = "profile")]
+    if o.profile {
+        engine.profile_reset();
+    }
     let t0 = Instant::now();
     for _ in 0..o.frames {
         let frame = engine.frame(delta);
@@ -534,6 +566,16 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
         );
     }
 
+    if o.profile {
+        #[cfg(feature = "profile")]
+        report_profile(path, &engine, o.pixels as u64 * o.frames as u64, o.json);
+        #[cfg(not(feature = "profile"))]
+        {
+            eprintln!("error: this luxel was built without the `profile` feature");
+            return ExitCode::FAILURE;
+        }
+    }
+
     if !bench && o.out != "-" {
         let header = format!("P6\n{} {}\n255\n", o.pixels, o.frames);
         let write_result = std::fs::File::create(&o.out).and_then(|mut f| {
@@ -549,4 +591,95 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// `luxel bench <pattern> --profile` — what the interpreter actually
+/// executed during the render pass: per-opcode counts, the statically
+/// adjacent opcode pairs and triples by dynamic weight (the shapes a
+/// compiler-side peephole can fuse into a superinstruction), and per-
+/// builtin call counts. `--json` emits the same thing for
+/// tools/profile-library.mjs to aggregate over the library.
+///
+/// Counting costs time, so the px/s line printed above it is NOT a
+/// throughput measurement — run `bench` without `--profile` for that.
+#[cfg(feature = "profile")]
+fn report_profile(path: &str, engine: &Engine, pixels: u64, json: bool) {
+    use luxel_core::bytecode::op_name;
+    use luxel_core::vm::BUILTINS;
+    let p = engine.profile();
+    let per_px = p.insns as f64 / pixels.max(1) as f64;
+
+    let mut ops: Vec<(u8, u64)> = (0u16..256)
+        .filter(|&i| p.ops[i as usize] > 0)
+        .map(|i| (i as u8, p.ops[i as usize]))
+        .collect();
+    ops.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut bi: Vec<((u8, u8), u64)> = p.bigrams.iter().map(|(k, v)| (*k, *v)).collect();
+    bi.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut tri: Vec<((u8, u8, u8), u64)> = p.trigrams.iter().map(|(k, v)| (*k, *v)).collect();
+    tri.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut bl: Vec<(u16, u64)> = p.builtins.iter().map(|(k, v)| (*k, *v)).collect();
+    bl.sort_by(|a, b| b.1.cmp(&a.1));
+    let bname = |b: u16| {
+        BUILTINS
+            .get(b as usize)
+            .map(|d| d.name)
+            .unwrap_or("?")
+            .to_string()
+    };
+
+    if json {
+        let obj = serde_json::json!({
+            "file": path,
+            "pixels": pixels,
+            "insns": p.insns,
+            "insns_per_px": per_px,
+            "ops": ops.iter().map(|(o, n)| serde_json::json!([op_name(*o), n])).collect::<Vec<_>>(),
+            "bigrams": bi.iter().map(|((a, b), n)|
+                serde_json::json!([format!("{} {}", op_name(*a), op_name(*b)), n])).collect::<Vec<_>>(),
+            "trigrams": tri.iter().take(200).map(|((a, b, c), n)|
+                serde_json::json!([format!("{} {} {}", op_name(*a), op_name(*b), op_name(*c)), n])).collect::<Vec<_>>(),
+            "builtins": bl.iter().map(|(b, n)| serde_json::json!([bname(*b), n])).collect::<Vec<_>>(),
+        });
+        println!("{obj}");
+        return;
+    }
+
+    let pct = |n: u64| 100.0 * n as f64 / p.insns.max(1) as f64;
+    println!("profile: {path}");
+    println!(
+        "  {} instructions over {pixels} pixel renders — {per_px:.1} insns/px",
+        p.insns
+    );
+    println!("\n  opcode                     count      %");
+    for (o, n) in ops.iter().take(30) {
+        println!("  {:<20} {:>10}  {:>5.1}", op_name(*o), n, pct(*n));
+    }
+    println!("\n  adjacent pair                                  count      %");
+    for ((a, b), n) in bi.iter().take(25) {
+        println!(
+            "  {:<40} {:>10}  {:>5.1}",
+            format!("{} {}", op_name(*a), op_name(*b)),
+            n,
+            pct(*n)
+        );
+    }
+    println!("\n  adjacent triple                                            count      %");
+    for ((a, b, c), n) in tri.iter().take(25) {
+        println!(
+            "  {:<52} {:>10}  {:>5.1}",
+            format!("{} {} {}", op_name(*a), op_name(*b), op_name(*c)),
+            n,
+            pct(*n)
+        );
+    }
+    println!("\n  builtin                    calls   per px");
+    for (b, n) in bl.iter().take(25) {
+        println!(
+            "  {:<20} {:>10}  {:>7.3}",
+            bname(*b),
+            n,
+            *n as f64 / pixels.max(1) as f64
+        );
+    }
 }

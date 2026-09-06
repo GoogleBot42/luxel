@@ -168,7 +168,8 @@ proves every jump lands on an instruction boundary (i.e. never on a
 | 0x3E | Ret | |
 | 0x3F | RetNull | |
 | 0x40 | Assert | u16 msg-table index |
-| 0x41–0xFF | *reserved* | superinstructions (Gitea #261) go here |
+| 0x41–0x4E | superinstructions | fused sequences — see below |
+| 0x4F–0xFF | *reserved* | |
 
 `Assert` pops the condition; falsy aborts the run with an `is_assert`
 error carrying the message (plus pixelCount context). The compiler only
@@ -182,6 +183,68 @@ instruction on the library versus 2.6 B for v4's byte encoding. That is the
 price of fixed-width dispatch and of executing without a RAM copy; on the
 device the blob lives in flash either way.
 
+
+## Superinstructions
+
+Opcodes `0x41..0x4E` are **fused sequences**: each one does exactly what a
+run of two or three base instructions did, in one dispatch. The compiler's
+peephole (`compile::peephole`) emits them; nothing else in the language,
+the VM's semantics or the container changes, so **the format version does
+not move** — a v5 blob that contains none of them (an older producer's, or
+`luxel bench --no-fuse`'s) validates and runs exactly as before, and every
+decoder that reads v5 must accept these opcodes.
+
+They were chosen from dynamic execution counts over all 299 library
+patterns (`tools/profile-library.mjs`, see docs/tools.md), not from
+inspection: the ranked adjacent-pair and adjacent-triple tables are the
+selection criterion.
+
+| op | insn | operand field | replaces |
+|----|------|---------------|----------|
+| 0x41 | StoreLPop | u8 local | `StoreL n; Pop` |
+| 0x42 | StoreGPop | u16 global | `StoreG n; Pop` |
+| 0x43 | LoadLL | u8 (8..16), u8 (16..24) | `LoadL a; LoadL b` |
+| 0x44 | LoadLG | u8 (8..16), u16 (16..32) | `LoadL a; LoadG g` |
+| 0x45 | LoadGL | u16 (8..24), u8 (24..32) | `LoadG g; LoadL a` |
+| 0x46 | LoadLIdx | u8 local | `LoadL a; LoadIdx` |
+| 0x47 | LoadGLIdx | u16 (8..24), u8 (24..32) | `LoadG g; LoadL a; LoadIdx` |
+| 0x48 | ConstOp | u8 sub-opcode (+ 1 immediate word) | `Const c; <binop>` |
+| 0x49 | LoadLConstOp | u8 local, u8 sub-opcode (+ 1 immediate word) | `LoadL a; Const c; <binop>` |
+| 0x4A | LoadGConstOp | u16 global, u8 sub-opcode (+ 1 immediate word) | `LoadG g; Const c; <binop>` |
+| 0x4B | CallBuiltinC | u16 builtin, u8 argc (+ 1 immediate word) | `Const c; CallBuiltin b, argc` |
+| 0x4C | CallBuiltinCC | u16 builtin, u8 argc (+ 2 immediate words) | `Const c1; Const c2; CallBuiltin b, argc` |
+| 0x4D | CmpJf | u8 sub-opcode (+ 1 word: target) | `<cmp>; JmpIfFalse t` |
+| 0x4E | PopRetNull | — | `Pop; RetNull` |
+
+`0x4F..0xFF` stay free.
+
+**Sub-opcodes** are the base opcode bytes of the operation they stand for.
+`ConstOp` / `LoadLConstOp` / `LoadGConstOp` accept the two-operand value
+ops (`Add Sub Mul Div Rem Pow BitAnd BitOr BitXor Shl Shr Lt Le Gt Ge Eq
+Ne`); `CmpJf` accepts only the comparisons (`Lt Le Gt Ge Eq Ne`). Anything
+else is a decode error.
+
+**`CmpJf` is the one instruction whose jump target is not in the operand
+field** — the field is spoken for by the sub-opcode, so the target word
+index is the FOLLOWING word. It is validated like any other target
+(on an instruction boundary, or `== code_len` for "fall off the end").
+
+Everything the decoder proves for a base opcode it proves for the fused
+form: local and global slots (both of `LoadLL`'s), builtin ids against the
+import table, argc caps, jump targets, reserved bits zero.
+
+Two rules in the peephole keep fusion invisible to everything but the
+dispatch count, and they are the reason the debugger and error reporting
+do not change:
+
+- **Never fuse across a jump target.** Any instruction a branch can land
+  on stays addressable.
+- **Never fuse across a source position.** Positions are set per statement,
+  so a fused run always lies inside one statement, the position runs are
+  identical, and a breakpoint or a runtime error still names the same line.
+
+The one deliberate difference is FUEL: a fused instruction costs 1 unit
+instead of 2 or 3, so the runaway-loop budget stretches slightly further.
 ## Decoding
 
 Three entry points, one validator:
@@ -239,6 +302,8 @@ present. Producers always emit debug info.
 - v5: fixed-width u32 words in one aligned region shared with the pool;
   word-index pcs; runtime builtin ids checked against the import table
   instead of rewritten; the borrowing decoder for memory-mapped stores.
+- v5 (no version bump): superinstructions `0x41..0x4E`, appended. Old v5
+  blobs keep running; producers that do not emit them stay valid.
 
 ## What LXBC is not
 

@@ -14,3 +14,7 @@ default = ["frontend"]
 # patterns arrive as LXBC bytecode and the frontend never gets linked.
 frontend = ["dep:logos"]
 depth-probe = []
+# Dynamic opcode/bigram/builtin counters in the VM loop (`luxel bench
+# --profile`, tools/profile-library.mjs). Host tooling only: the firmware
+# never enables it, so no device image carries a counter or a branch.
+profile = []

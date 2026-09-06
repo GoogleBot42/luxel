@@ -398,6 +398,56 @@ trimmed once — its spin-waits out of line — after an inlined first cut cost
 heap-allocated, not a static, so the main-task stack does not pay for it;
 idle `heap_free` pays the 20 KB instead: 105,456 → 84,960 B).
 
+
+2026-09-06, **superinstructions** (Gitea #261 — fourteen fused opcodes at
+`0x41..0x4E`, arms in `Vm::run`; the compiler-side peephole is host code
+and costs the image nothing): **+5.5 to +7.6 KB on every board.** Devshell
+builds with the same `creds.env` on both sides, `origin/master` df0b547 vs
+the branch — same methodology as the entry above, so its "after" column is
+this one's "before":
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 951,616 | 959,248 | +7,632 | 89,328 B (8.52 %) |
+| `board-pixelblaze-v3` | 1,007,632 | 1,013,216 | +5,584 | 35,360 B (3.37 %) |
+| `board-athom-music` | 1,007,632 | 1,013,216 | +5,584 | 35,360 B (3.37 %) |
+| `board-esp32-generic` | 1,007,536 | 1,013,104 | +5,568 | 35,472 B (3.38 %) |
+| `board-s3-devkit` | 950,160 | 955,664 | +5,504 | 92,912 B (8.86 %) |
+| `board-seengreat-hub75` | 942,816 | 948,320 | +5,504 | 100,256 B (9.56 %) |
+| `board-c6-devkit` (not shipped) | 1,021,392 | 1,027,552 | +6,160 | 21,024 B (2.01 %) |
+| `board-c6-devkit` + `hosted-ui` | 1,004,912 | 1,011,088 | +6,176 | 37,488 B (3.58 %) |
+
+The release gate is the credless flake build, which runs ~2.5 KB lighter:
+`luxel-fw-c6-devkit-hosted` (the C6's shipped image since the entry above)
+**1,009,696 B, 38,880 B / 3.70 % free** and `luxel-fw-pixelblaze-v3`
+**1,012,272 B, 36,304 B / 3.46 %** — both over the 3 % floor,
+`tools/ci.sh` green. **The three classic-ESP32 boards are now the tightest
+shipped images in the fleet** (3.4–3.5 % credless, ~5 KB over the floor),
+which is a change: the C6 held that title until it went hosted-UI. They
+have no equivalent lever left — `hosted-ui` on a Pixelblaze v3 would take
+away the on-device playground on the one board people actually own — so the
+next feature that grows the VM has to bring its own diet
+(docs/size-report.md).
+
+Two dispatch-loop lessons from getting +8.5 KB (the first cut) down to
++5.5, both of them the SAME trade in opposite directions, so measure both
+sides before believing either:
+
+- Merging several opcodes into ONE match arm with an inner `match opcode`
+  saves ~4 KB and costs ~14 % of interpreter throughput, because the two
+  candidates were `LoadIdx` and `CallBuiltin` — the hottest opcodes there
+  are.
+- Moving a shared BODY out of line into an `#[inline(never)]` helper saves
+  nearly as much for free: `index_read`, `call_builtin_slow`, and
+  `err_static` for the ~45 `fail!` sites, whose inlined `String`
+  construction had been quietly bloating the loop since long before this
+  change. The exception is `builtin_fast` — taking the in-loop hot-builtin
+  path out of line with `call_builtin_slow` cost 15 %, so that half stays
+  in the loop as a macro.
+
+`.stack` unchanged; `tools/stack-check.sh` clean on pixelblaze-v3,
+s3-devkit and c6-devkit.
+
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
 **3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).

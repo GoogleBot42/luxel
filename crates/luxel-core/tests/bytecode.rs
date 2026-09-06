@@ -287,8 +287,11 @@ export function render(index) {
 fn builtin_id_outside_import_table_is_rejected() {
     // an instruction word calling a builtin the import table does not
     // list must fail validation even when the id itself is in range: the
-    // by-name check is what makes ids trustworthy
-    let prog = compile("export function render(i) { hsv(0,0,0) }").unwrap();
+    // by-name check is what makes ids trustworthy.
+    // `hsv(i,i,i)`, not `hsv(0,0,0)`: constant trailing arguments fuse into
+    // the CALL_BUILTIN_CC superinstruction (Gitea #261) and there would be
+    // no plain 0x39 word left to corrupt.
+    let prog = compile("export function render(i) { hsv(i,i,i) }").unwrap();
     let blob = serialize(&prog).unwrap();
     let hsv = luxel_core::vm::lookup_builtin("hsv").unwrap();
     let other = luxel_core::vm::lookup_builtin("rgb").unwrap();

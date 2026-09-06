@@ -905,6 +905,19 @@ pub struct Vm {
     /// Zero (the default) is what an undriven analog pin reads, so releasing
     /// a pin is simply writing 0 — there is no separate driven bit.
     analog_level: [u16; MAX_TRACKED_PIN as usize + 1],
+    /// Dynamic opcode counters — `profile` feature only (host tooling;
+    /// see the `prof` module at the bottom of this file).
+    #[cfg(feature = "profile")]
+    prof: prof::Profile,
+    /// (fn, end word index, opcode) of the previously executed
+    /// instruction, for the statically-adjacent bigram/trigram counts.
+    #[cfg(feature = "profile")]
+    prof_prev: Option<(u16, u32, u8)>,
+    #[cfg(feature = "profile")]
+    prof_prev2: Option<(u16, u32, u8)>,
+    /// Was `prof_prev` itself statically adjacent to `prof_prev2`?
+    #[cfg(feature = "profile")]
+    prof_prev_seq: bool,
 }
 
 /// Highest pin number `pin_pullup` can track. Above it `pinMode` is still a
@@ -1073,6 +1086,14 @@ impl Vm {
             pin_out_level: 0,
             analog_used: 0,
             analog_level: [0; MAX_TRACKED_PIN as usize + 1],
+            #[cfg(feature = "profile")]
+            prof: prof::Profile::default(),
+            #[cfg(feature = "profile")]
+            prof_prev: None,
+            #[cfg(feature = "profile")]
+            prof_prev2: None,
+            #[cfg(feature = "profile")]
+            prof_prev_seq: false,
             rng: seed | 1,
             prng_state: 0xC0FFEE ^ (seed as u32) | 1,
             random_seed: Fx::ZERO,
@@ -1393,6 +1414,14 @@ impl Vm {
         self.locals.clear();
     }
 
+    /// [`Vm::err_at`] for a static message, out of line and cold — see the
+    /// `fail!` macro in [`Vm::run`].
+    #[inline(never)]
+    #[cold]
+    fn err_static(&self, prog: &Program, message: &str) -> VmError {
+        self.err_at(prog, message.into())
+    }
+
     fn err_at(&self, prog: &Program, message: String) -> VmError {
         match self.frames.last() {
             Some(f) => {
@@ -1566,6 +1595,44 @@ impl Vm {
         false
     }
 
+    /// The body of `LoadIdx`, shared with its two fused forms (Gitea #261).
+    /// One function so the arena read is written once; the compiler is free
+    /// to inline it into all three arms, which it does.
+    #[inline]
+    fn index_read(&mut self, prog: &Program, arr: Value, idx: Fx) -> Result<Value, &'static str> {
+        let Value::Arr(a) = arr else {
+            return Err("indexing a non-array value");
+        };
+        if idx.raw() < 0 {
+            return Err("array index out of bounds");
+        }
+        let i = idx.to_int_trunc() as usize;
+        match self.arr(prog, a).get(i) {
+            Some(v) => Ok(v),
+            None => Err("array index out of bounds"),
+        }
+    }
+
+    /// The out-of-line half of `CallBuiltin` (and its constant-argument
+    /// fusions, Gitea #261): everything `builtin_fast` could not answer in
+    /// the loop, plus the error attribution. Kept out of line so the two
+    /// dispatch arms stay small — it is the cold path by construction.
+    #[inline(never)]
+    fn call_builtin_slow(
+        &mut self,
+        prog: &Program,
+        b: u16,
+        argc: usize,
+    ) -> Result<Value, VmError> {
+        self.call_builtin(prog, b, argc).map_err(|mut e| {
+            // attribute to the call site if the builtin did not
+            if e.pc == u32::MAX {
+                e = self.err_at(prog, core::mem::take(&mut e.message));
+            }
+            e
+        })
+    }
+
     /// Pop `argc` values into the caller's buffer (no 128-byte array
     /// returned by value); returns how many slots are meaningful.
     #[inline(always)]
@@ -1582,9 +1649,13 @@ impl Vm {
     /// (Paused — only when `debug`). Frames/locals/stack stay intact while
     /// paused so the debugger can inspect and resume.
     fn run(&mut self, prog: &Program, base: usize, debug: bool) -> Result<Outcome, VmError> {
+        // Every failure site goes through ONE cold, out-of-line helper: the
+        // `String` construction inlined at ~45 sites otherwise bloats the
+        // dispatch loop and costs the hot path registers (Gitea #261 — the
+        // superinstruction arms added another twenty of them).
         macro_rules! fail {
             ($msg:expr) => {
-                return Err(self.err_at(prog, $msg.into()))
+                return Err(self.err_static(prog, $msg))
             };
         }
         macro_rules! push {
@@ -1615,6 +1686,38 @@ impl Vm {
                 let b = pop!().num();
                 let a = pop!().num();
                 push!(Value::Num(if a $op b { Fx::ONE } else { Fx::ZERO }));
+            }};
+        }
+        // One builtin call: the hot-builtin fast path stays INSIDE the loop
+        // (that is the whole point of `builtin_fast` — Gitea #260), the rest
+        // goes out of line. A macro, not a method, because the fused
+        // constant-argument forms (Gitea #261) need the same fast path and
+        // calling through a function costs ~15 % of interpreter throughput.
+        macro_rules! call_builtin {
+            ($b:expr, $argc:expr) => {{
+                let b: u16 = $b;
+                let argc: usize = $argc;
+                let mut fast = None;
+                if argc <= FAST_ARGS {
+                    if let BKind::Impl(bi) = BUILTINS[b as usize].kind {
+                        let len = self.stack.len();
+                        if len >= argc {
+                            let mut a = [Value::default(); FAST_ARGS];
+                            a[..argc].copy_from_slice(&self.stack[len - argc..]);
+                            if let Some(v) = self.builtin_fast(bi, &a[..argc], argc) {
+                                self.stack.truncate(len - argc);
+                                fast = Some(v);
+                            }
+                        }
+                    }
+                }
+                match fast {
+                    Some(v) => push!(v),
+                    None => match self.call_builtin_slow(prog, b, argc) {
+                        Ok(v) => push!(v),
+                        Err(e) => return Err(e),
+                    },
+                }
             }};
         }
 
@@ -1657,6 +1760,8 @@ impl Vm {
                     None => enc::bare(op::RET_NULL), // fell off the end
                 };
                 let opcode = enc::opcode(w);
+                #[cfg(feature = "profile")]
+                self.prof_record(fi, self.insn_start, opcode);
                 if self.fuel == 0 {
                     fail!(ERR_EXEC_LIMIT);
                 }
@@ -1704,16 +1809,9 @@ impl Vm {
                     op::LOAD_IDX => {
                         let idx = pop!().num();
                         let arr = pop!();
-                        let Value::Arr(a) = arr else {
-                            fail!("indexing a non-array value")
-                        };
-                        if idx.raw() < 0 {
-                            fail!("array index out of bounds");
-                        }
-                        let i = idx.to_int_trunc() as usize;
-                        match self.arr(prog, a).get(i) {
-                            Some(v) => push!(v),
-                            None => fail!("array index out of bounds"),
+                        match self.index_read(prog, arr, idx) {
+                            Ok(v) => push!(v),
+                            Err(m) => fail!(m),
                         }
                     }
                     op::STORE_IDX => {
@@ -1908,31 +2006,9 @@ impl Vm {
                     op::CALL_BUILTIN => {
                         let b = enc::imm16(w);
                         let argc = enc::argc(w) as usize;
-                        // hot builtins straight off the stack (see builtin_fast)
-                        if argc <= FAST_ARGS {
-                            if let BKind::Impl(bi) = BUILTINS[b as usize].kind {
-                                let len = self.stack.len();
-                                if len >= argc {
-                                    let mut a = [Value::default(); FAST_ARGS];
-                                    a[..argc].copy_from_slice(&self.stack[len - argc..]);
-                                    if let Some(v) = self.builtin_fast(bi, &a[..argc], argc) {
-                                        self.stack.truncate(len - argc);
-                                        push!(v);
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                        match self.call_builtin(prog, b, argc) {
-                            Ok(v) => push!(v),
-                            Err(mut e) => {
-                                // attribute to this site if the builtin didn't
-                                if e.pc == u32::MAX {
-                                    e = self.err_at(prog, core::mem::take(&mut e.message));
-                                }
-                                return Err(e);
-                            }
-                        }
+                        #[cfg(feature = "profile")]
+                        self.prof_builtin(b);
+                        call_builtin!(b, argc);
                     }
                     op::CALL_VALUE => {
                         let argc = enc::imm8(w) as usize;
@@ -1949,7 +2025,11 @@ impl Vm {
                                 self.push_frame(prog, f, &args[..n])?;
                                 continue 'frame;
                             }
-                            Value::Builtin(b) => match self.call_builtin(prog, b, argc) {
+                            Value::Builtin(b) => match {
+                                #[cfg(feature = "profile")]
+                                self.prof_builtin(b);
+                                self.call_builtin(prog, b, argc)
+                            } {
                                 Ok(v) => push!(v),
                                 Err(mut e) => {
                                     if e.pc == u32::MAX {
@@ -1972,6 +2052,151 @@ impl Vm {
                             return Ok(Outcome::Done(v));
                         }
                         push!(v);
+                        continue 'frame;
+                    }
+                    // ---- superinstructions (Gitea #261) ----
+                    //
+                    // Each arm is EXACTLY the base sequence named in
+                    // bytecode::op, executed in the same order with the
+                    // same error messages; the compiler's peephole only
+                    // ever emits one where the base sequence was
+                    // statically adjacent, inside one statement, with no
+                    // branch landing in the middle. The only difference
+                    // is that the whole thing costs one dispatch and one
+                    // unit of fuel.
+                    //
+                    // Stack-limit note: the base sequence's intermediate
+                    // pushes are elided, so the peak depth is one or two
+                    // slots lower. The arms below re-check MAX_STACK
+                    // against that same peak, so a pattern that would
+                    // have overflowed still overflows, with the same
+                    // message.
+                    op::STORE_L_POP => {
+                        // StoreL n; Pop
+                        let v = pop!();
+                        self.locals[lbase + enc::imm8(w) as usize] = v;
+                    }
+                    op::STORE_G_POP => {
+                        // StoreG n; Pop
+                        let v = pop!();
+                        self.globals[enc::imm16(w) as usize] = v;
+                    }
+                    op::LOAD_LL => {
+                        // LoadL a; LoadL b
+                        if self.stack.len() + 1 >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        self.stack.push(self.locals[lbase + enc::imm8(w) as usize]);
+                        self.stack.push(self.locals[lbase + enc::imm8b(w) as usize]);
+                    }
+                    op::LOAD_LG => {
+                        // LoadL a; LoadG g
+                        if self.stack.len() + 1 >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        self.stack.push(self.locals[lbase + enc::imm8(w) as usize]);
+                        self.stack.push(self.globals[enc::imm16hi(w) as usize]);
+                    }
+                    op::LOAD_GL => {
+                        // LoadG g; LoadL a
+                        if self.stack.len() + 1 >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        self.stack.push(self.globals[enc::imm16(w) as usize]);
+                        self.stack.push(self.locals[lbase + enc::argc(w) as usize]);
+                    }
+                    op::LOAD_L_IDX => {
+                        // LoadL a; LoadIdx — the elided LoadL push still
+                        // has to hit the same stack limit
+                        if self.stack.len() >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        let idx = self.locals[lbase + enc::imm8(w) as usize].num();
+                        let arr = pop!();
+                        match self.index_read(prog, arr, idx) {
+                            Ok(v) => push!(v),
+                            Err(m) => fail!(m),
+                        }
+                    }
+                    op::LOAD_G_L_IDX => {
+                        // LoadG g; LoadL a; LoadIdx
+                        if self.stack.len() + 1 >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        let arr = self.globals[enc::imm16(w) as usize];
+                        let idx = self.locals[lbase + enc::argc(w) as usize].num();
+                        match self.index_read(prog, arr, idx) {
+                            Ok(v) => push!(v),
+                            Err(m) => fail!(m),
+                        }
+                    }
+                    op::CALL_BUILTIN_C | op::CALL_BUILTIN_CC => {
+                        // Const c[, Const c2]; CallBuiltin b, argc — the
+                        // base sequence's Const pushes, elided into the
+                        // instruction's trailing immediate words
+                        let nconst = if opcode == op::CALL_BUILTIN_C { 1 } else { 2 };
+                        if self.stack.len() + nconst > MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        for _ in 0..nconst {
+                            let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
+                            at += 1;
+                            self.stack.push(Value::Num(c));
+                        }
+                        let b = enc::imm16(w);
+                        let argc = enc::argc(w) as usize;
+                        #[cfg(feature = "profile")]
+                        self.prof_builtin(b);
+                        call_builtin!(b, argc);
+                    }
+                    op::CONST_OP => {
+                        // Const c; <binop>
+                        if self.stack.len() >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
+                        at += 1;
+                        let a = pop!();
+                        push!(binop(enc::imm8(w), a, Value::Num(c)));
+                    }
+                    op::LOAD_L_CONST_OP => {
+                        // LoadL a; Const c; <binop>
+                        if self.stack.len() + 1 >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
+                        at += 1;
+                        let a = self.locals[lbase + enc::imm8(w) as usize];
+                        push!(binop(enc::imm8b(w), a, Value::Num(c)));
+                    }
+                    op::LOAD_G_CONST_OP => {
+                        // LoadG g; Const c; <binop>
+                        if self.stack.len() + 1 >= MAX_STACK {
+                            fail!(ERR_STACK_OVERFLOW);
+                        }
+                        let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
+                        at += 1;
+                        let a = self.globals[enc::imm16(w) as usize];
+                        push!(binop(enc::argc(w), a, Value::Num(c)));
+                    }
+                    op::CMP_JF => {
+                        // <cmp>; JmpIfFalse t  (target in the next word)
+                        let t = code.get(at).copied().unwrap_or(0) as usize;
+                        at += 1;
+                        let b = pop!();
+                        let a = pop!();
+                        if !binop(enc::imm8(w), a, b).truthy() {
+                            at = t;
+                        }
+                    }
+                    op::POP_RET_NULL => {
+                        // Pop; RetNull
+                        pop!();
+                        self.pop_frame();
+                        if self.frames.len() == base {
+                            return Ok(Outcome::Done(Value::default()));
+                        }
+                        push!(Value::default());
                         continue 'frame;
                     }
                     _ => fail!("unknown opcode (corrupt bytecode?)"),
@@ -3550,6 +3775,39 @@ impl Vm {
     }
 }
 
+/// One two-operand value op, by its base opcode — the arithmetic and
+/// comparison arms of [`Vm::run`] factored out so the fused
+/// `Const c; <op>` and `<cmp>; JmpIfFalse` superinstructions (Gitea #261)
+/// cannot drift from the sequence they replace. `a` is the deeper operand
+/// (pushed first), `b` the shallower, exactly as the base pair pops them.
+/// The decoder rejects any sub-opcode outside this set.
+#[inline]
+fn binop(sub: u8, a: Value, b: Value) -> Value {
+    use crate::bytecode::op;
+    let t = |c: bool| Value::Num(if c { Fx::ONE } else { Fx::ZERO });
+    match sub {
+        op::ADD => Value::Num(a.num() + b.num()),
+        op::SUB => Value::Num(a.num() - b.num()),
+        op::MUL => Value::Num(a.num() * b.num()),
+        op::DIV => Value::Num(a.num() / b.num()),
+        op::REM => Value::Num(a.num() % b.num()),
+        op::POW => Value::Num(fmath::pow(a.num(), b.num())),
+        op::BIT_AND => Value::Num(a.num() & b.num()),
+        op::BIT_OR => Value::Num(a.num() | b.num()),
+        op::BIT_XOR => Value::Num(a.num() ^ b.num()),
+        op::SHL => Value::Num(a.num() << b.num()),
+        op::SHR => Value::Num(a.num() >> b.num()),
+        op::LT => t(a.num() < b.num()),
+        op::LE => t(a.num() <= b.num()),
+        op::GT => t(a.num() > b.num()),
+        op::GE => t(a.num() >= b.num()),
+        op::EQ => t(value_eq(a, b)),
+        op::NE => t(!value_eq(a, b)),
+        // unreachable: bytecode::walk_word rejects every other sub-opcode
+        _ => Value::Num(Fx::ZERO),
+    }
+}
+
 fn value_eq(a: Value, b: Value) -> bool {
     match (a, b) {
         (Value::Num(x), Value::Num(y)) => x == y,
@@ -3723,5 +3981,114 @@ pub fn hsv_to_rgb(h: Fx, s: Fx, v: Fx) -> [Fx; 3] {
         3 => [p, q, v],
         4 => [t, p, v],
         _ => [v, p, q],
+    }
+}
+
+// ---- dynamic opcode profiler (host tooling only) ----
+//
+// Gated behind the `profile` cargo feature, which nothing on the device
+// path enables: firmware depends on luxel-core with `default-features =
+// false` and never names `profile`, so not one counter, field or branch of
+// this exists in an ESP32 image. The CLI turns it on (see luxel-cli's
+// `profile` feature) so `luxel bench --profile` can rank what the
+// interpreter actually executes — the input for choosing superinstructions
+// (Gitea #261).
+#[cfg(feature = "profile")]
+pub mod prof {
+    use alloc::collections::BTreeMap;
+
+    /// Dynamic execution counts for one run.
+    #[derive(Clone)]
+    pub struct Profile {
+        /// Executions per opcode.
+        pub ops: [u64; 256],
+        /// Executions of a **statically adjacent** opcode pair — the
+        /// second instruction is the first's fall-through successor, in
+        /// the same function, reached without a jump. That is exactly the
+        /// adjacency a compiler-side peephole can fuse.
+        pub bigrams: BTreeMap<(u8, u8), u64>,
+        pub trigrams: BTreeMap<(u8, u8, u8), u64>,
+        /// Calls per builtin runtime id (`BUILTINS` index).
+        pub builtins: BTreeMap<u16, u64>,
+        /// Total instructions executed.
+        pub insns: u64,
+    }
+
+    impl Default for Profile {
+        fn default() -> Self {
+            Profile {
+                ops: [0; 256],
+                bigrams: BTreeMap::new(),
+                trigrams: BTreeMap::new(),
+                builtins: BTreeMap::new(),
+                insns: 0,
+            }
+        }
+    }
+
+    impl Profile {
+        pub fn merge(&mut self, other: &Profile) {
+            for (a, b) in self.ops.iter_mut().zip(other.ops.iter()) {
+                *a += b;
+            }
+            for (k, v) in &other.bigrams {
+                *self.bigrams.entry(*k).or_insert(0) += v;
+            }
+            for (k, v) in &other.trigrams {
+                *self.trigrams.entry(*k).or_insert(0) += v;
+            }
+            for (k, v) in &other.builtins {
+                *self.builtins.entry(*k).or_insert(0) += v;
+            }
+            self.insns += other.insns;
+        }
+    }
+}
+
+#[cfg(feature = "profile")]
+impl Vm {
+    /// The counters accumulated so far.
+    pub fn profile(&self) -> &prof::Profile {
+        &self.prof
+    }
+
+    /// Zero the counters (the CLI drops init/first-frame noise this way).
+    pub fn profile_reset(&mut self) {
+        self.prof = prof::Profile::default();
+        self.prof_prev = None;
+        self.prof_prev2 = None;
+        self.prof_prev_seq = false;
+    }
+
+    /// Record one instruction. `pc` is its fn-relative word index.
+    #[inline]
+    fn prof_record(&mut self, fi: u16, pc: u32, opcode: u8) {
+        let len = if opcode == crate::bytecode::op::CONST_NUM {
+            2
+        } else {
+            1
+        };
+        self.prof.ops[opcode as usize] += 1;
+        self.prof.insns += 1;
+        // Statically adjacent iff the previous instruction ended exactly
+        // where this one starts, in the same function.
+        let seq = matches!(self.prof_prev, Some((f, end, _)) if f == fi && end == pc);
+        if seq {
+            let (_, _, p) = self.prof_prev.expect("seq implies prev");
+            *self.prof.bigrams.entry((p, opcode)).or_insert(0) += 1;
+            if self.prof_prev_seq {
+                if let Some((_, _, p2)) = self.prof_prev2 {
+                    *self.prof.trigrams.entry((p2, p, opcode)).or_insert(0) += 1;
+                }
+            }
+        }
+        self.prof_prev2 = self.prof_prev;
+        self.prof_prev_seq = seq;
+        self.prof_prev = Some((fi, pc + len, opcode));
+    }
+
+    #[inline]
+    fn prof_builtin(&mut self, b: u16) {
+        *self.prof.builtins.entry(b).or_insert(0) += 1;
     }
 }
