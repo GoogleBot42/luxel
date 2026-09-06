@@ -362,6 +362,36 @@ fn status_json() -> String {
     push_piece(&mut out, version);
     push_piece(&mut out, "\",\"heap_free\":");
     push_u32(&mut out, heap as u32);
+    // Dual-core boards (core1.rs): AppCpu (render core) stack high-water
+    // `[used, total]`, plus the flash fence's park-ack timeouts (nonzero =
+    // investigate) and its longest park wait in µs. null on single-core.
+    push_piece(&mut out, ",\"core1\":");
+    match crate::core1::stack_high_water() {
+        Some((used, total)) => {
+            let (timeouts, wait_us) = crate::core1::fence_stats();
+            push_piece(&mut out, "{\"stack\":[");
+            push_u32(&mut out, used);
+            push_piece(&mut out, ",");
+            push_u32(&mut out, total);
+            push_piece(&mut out, "],\"fence_timeouts\":");
+            push_u32(&mut out, timeouts);
+            push_piece(&mut out, ",\"fence_wait_us\":");
+            push_u32(&mut out, wait_us);
+            // previous run's reset reason + fence black box (core1.rs)
+            let (reason, bb) = crate::core1::last_run();
+            push_piece(&mut out, ",\"last\":{\"reset\":\"");
+            push_piece(&mut out, reason);
+            push_piece(&mut out, "\",\"bb\":[");
+            for (i, v) in bb.iter().enumerate() {
+                if i > 0 {
+                    push_piece(&mut out, ",");
+                }
+                push_u32(&mut out, *v);
+            }
+            push_piece(&mut out, "]}}");
+        }
+        None => push_piece(&mut out, "null"),
+    }
     push_piece(&mut out, ",\"live\":");
     match live {
         Some(p) => {

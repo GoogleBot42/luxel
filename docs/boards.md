@@ -171,22 +171,6 @@ into `curl2`/`curl3`), so it is not in the tree. No statics or buffers:
 `.stack` on pixelblaze-v3 is 27,484 B with no new frame in the top
 fifteen and nothing over the 12 KB budget.
 
-2026-09-05 (later), LXBC v5 — the fixed-width word bytecode the VM
-executes in place (docs/spec/bytecode.md; Gitea #260): the decoder lost
-its byte walker, its pre-pass and the import-slot rewrite. Same-day A/B
-of devshell builds WITH creds (so ~6–7 KB above the credless flake rows
-elsewhere in this section; compare the deltas, not the absolutes):
-**−2,160 B** on `board-c6-devkit` (1,005,200 → 1,003,040 B, margin
-45,536 B / **4.34 %** — up from 4.13 % on the same-methodology
-baseline), −2,000 B on `board-c3-devkit`, −2,128 B on the C6 hosted-ui
-image; Xtensa +368…+752 B (`board-pixelblaze-v3` 983,392 → 983,792 B,
-`board-athom-music` +400 B, `board-s3-devkit` +752 B, both HUB75 images
-+512/+528 B) — inside the ±0.7 KB noise floor. `.stack` on
-`board-pixelblaze-v3` 26,732 → 26,764 B; every flake variant passes
-`tools/image-check.sh` (sizes taken with firmware/src untouched; the
-three one-line `deserialize_lean_static` switches in main.rs that
-followed were re-built on pixelblaze-v3, C6 and the Seengreat S3).
-
 2026-09-05, cache-MMU flash mapping of the assets partition
 (`firmware/src/flashmap.rs`, docs/research/flash-mmap.md): **−1,392 B** on
 `board-c6-devkit` (1,000,512 → **999,120 B**, margin **49,456 B /
@@ -302,6 +286,32 @@ Measured on the same tree, devshell builds: +17,584 B on
 have been +20,320 B (50,800 → 30,480 B, under the 3 % floor), so the C6
 variants build with `CORE_O3=0` / `coreO3 = false` and keep the profile
 default. Adding a board means choosing this flag against its margin.
+
+**The render task runs on the second core on dual-core boards** (Gitea
+#259/#260, 2026-09-05; docs/firmware.md "Cores & tasks"). Cost is the
+second-core bring-up, the cross-core flash fence, the RTC watchdog and the
+RTC-memory black box, and it only exists where `multi_core` is set (esp32,
+esp32s3) — the C3/C6 deltas are the ±0.7 KB noise floor. Fleet A/B on the
+same base (master 731ce81, devshell builds with creds, CORE_O3 as shipped):
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 945,200 | 945,184 | −16 | 103,392 B (9.86 %) |
+| `board-pixelblaze-v3` | 992,128 | 1,000,512 | +8,384 | 48,064 B (4.58 %) |
+| `board-athom-music` | 992,240 | 1,000,496 | +8,256 | 48,080 B (4.59 %) |
+| `board-esp32-generic` | 991,744 | 1,000,272 | +8,528 | 48,304 B (4.61 %) |
+| `board-s3-devkit` | 933,600 | 942,416 | +8,816 | 106,160 B (10.12 %) |
+| `board-s3-devkit` + `hub75` | 926,464 | 934,864 | +8,400 | 113,712 B (10.84 %) |
+| `board-seengreat-hub75` | 926,384 | 934,912 | +8,528 | 113,664 B (10.84 %) |
+| `board-c6-devkit` | 1,015,040 | 1,014,416 | −624 | **34,160 B (3.26 %)** |
+
+The classic-ESP32 boards are now under the 6 % warn line (they crossed it
+with the flash mapping + code arena the same day; the fence was already
+trimmed once — its spin-waits out of line — after an inlined first cut cost
+25 KB), and the C6 sits 2.7 KB above the 3 % floor on master's own account.
+`.stack` on `board-athom-music`: 26,044 → 26,396 B (the AppCpu stack is
+heap-allocated, not a static, so the main-task stack does not pay for it;
+idle `heap_free` pays the 20 KB instead: 105,456 → 84,960 B).
 
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below

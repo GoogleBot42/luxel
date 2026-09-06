@@ -192,13 +192,16 @@ pub fn invalidate_slice(bytes: &[u8]) {
 /// AppCpu runs (the silicon DPORT-read hazard esp-idf wraps every
 /// `cache_flash_mmu_set` in `DPORT_STALL_OTHER_CPU` for) and a whole-cache
 /// flush must not race a core executing from flash. That is exactly what
-/// core1.rs' flash fence does for esp-storage ops; when the second-core
-/// executor lands, route this through `core1::fenced` (Gitea #272). Until
-/// then the AppCpu is halted and
-/// a critical section is the whole story.
+/// core1.rs' flash fence does for esp-storage ops, so on dual-core boards
+/// every table operation runs inside it (Gitea #272): the other core is
+/// parked in an IRAM spin — no DPORT reads racing ours, no code or mapped
+/// fetch under the flush — and the critical section on THIS core still
+/// keeps its own ISRs out. Fence outside, critical section inside, same
+/// order as `ota::with_flash` (the fence's spin-waits need interrupts
+/// enabled). Single-core builds: `fenced` is the identity.
 #[inline(always)]
 fn quiesced<R>(f: impl FnOnce() -> R) -> R {
-    critical_section::with(|_| f())
+    crate::core1::fenced(|| critical_section::with(|_| f()))
 }
 
 // ---------------------------------------------------------------------------

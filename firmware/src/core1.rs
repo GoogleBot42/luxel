@@ -1,0 +1,484 @@
+//! Second-core bring-up and the cross-core flash fence (Gitea #259, #260).
+//!
+//! On dual-core chips (classic ESP32, ESP32-S3) the render task runs on the
+//! AppCpu under its own esp-rtos scheduler and a thread-mode embassy
+//! executor of its own, while WiFi, the network stack, the web pool and
+//! every other task stay on the ProCpu. Single-core chips (C3/C6/S2/C2)
+//! compile this module down to no-ops: [`fenced`] is the identity and
+//! [`start`] does not exist. The `multi_core` cfg comes from build.rs
+//! (features `esp32` / `esp32s3`) and mirrors esp-hal's private cfg of the
+//! same name.
+//!
+//! ## Why the flash fence exists
+//!
+//! SPI flash is shared between the cache (SPI0 — every instruction fetch
+//! from flash-resident code, on EITHER core) and the flash driver (SPI1 —
+//! esp-storage's ROM calls). While an SPI1 op runs the other core must not
+//! fetch from flash: during an erase/program the chip serves garbage, and
+//! even a plain SPI1 read contends for the bus. ESP-IDF stalls the other
+//! CPU for every op, reads included (`spi_flash_disable_interrupts_caches_
+//! and_other_cpu`). esp-storage knows this too: its default multicore
+//! strategy makes every write FAIL while the other core runs, and its
+//! `multicore_auto_park` alternative hard-stalls the other core at a random
+//! instruction — which can be inside a spinlock (scheduler, heap, any
+//! critical section); the flash-writing core's next interrupt then spins on
+//! that lock forever. That deadlock is why the hard park was not used.
+//!
+//! The fence is the cooperative version of ESP-IDF's stall. `fenced(op)`
+//! asks the other core to park itself by raising that core's park software
+//! interrupt (SWI2 parks the ProCpu, SWI3 the AppCpu — SWI0/1 belong to
+//! esp-rtos). The park handler runs at the highest vectored priority, lives
+//! in IRAM, and spins on a DRAM flag. Because every esp-sync critical
+//! section masks interrupts, the handler can only run once its core holds
+//! no spinlock — so the parked core holds nothing the flash op could need.
+//! The fence itself is taken OUTSIDE the flash driver's critical section,
+//! with interrupts enabled, so two cores fencing at once resolve through
+//! the park handler (the loser gets parked mid-spin, then proceeds) instead
+//! of deadlocking; a fence spinning with interrupts masked parks itself
+//! inline for the same reason.
+//!
+//! Every flash op goes through one of four fenced doors: `ota::with_flash`
+//! (borrow-per-op, the normal path), `patterns::AsyncFlash` (the
+//! sequential-storage adapter over a leased driver), `ota::begin`'s
+//! partition-table reads on the taken driver, and `flashmap::quiesced`
+//! (cache-MMU table programming + the whole-cache flush — Gitea #272: the
+//! ESP32's DPORT MMU registers must not be read while the other core runs,
+//! and a flush must not race a core executing from flash or reading a
+//! mapping). A new flash path must use one of them or wrap itself in
+//! [`fenced`] — .claude/rules/firmware.md. Mapped READS need nothing: a
+//! task-context load on the other core either completed before the park
+//! interrupt was taken or happens after the release.
+//!
+//! A fence *timeout* (the other core did not park within 100 ms; the op
+//! proceeds anyway, `FENCE_TIMEOUTS`) risks a garbage code fetch AND a
+//! garbage mapped read on that core — `/api/status` `core1.fence_timeouts`
+//! is the tell for both, and must stay 0.
+//!
+//! What it took to make the park safe on the classic ESP32 (2026-09-05,
+//! black-boxed hangs): the park handler runs at Priority1, not 3 (a
+//! level-3 park landing inside a level-1 handler's DPORT/APB register
+//! reads wedged the bus); the AppCpu never touches RTC memory inside the
+//! park (its RTC access wedged the ProCpu's next one); and the fence waits
+//! for the strip's SPI2 DMA transfer to finish before the SPI1 op (the SPI
+//! hosts share the DMA engine — a flash op during an in-flight transfer
+//! hangs the ProCpu, which single-core builds could never do because the
+//! blocking DMA write held the only core). An RTC watchdog fed from the
+//! ProCpu executor plus the RTC-memory black box (`core1.last` in
+//! `/api/status`) turn any future wedge into a reboot with a diagnosis.
+
+#[cfg(multi_core)]
+mod imp {
+    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+
+    use embassy_executor::Spawner;
+    use esp_hal::interrupt::software::SoftwareInterrupt;
+    use esp_hal::interrupt::{InterruptHandler, Priority};
+    use esp_hal::peripherals::CPU_CTRL;
+    use esp_hal::system::Cpu;
+    use esp_hal::time::{Duration, Instant};
+    use esp_println::println;
+    use static_cell::StaticCell;
+
+    const PRO: usize = 0;
+    const APP: usize = 1;
+
+    /// Per-core "please park" request and "I am parked" acknowledgement,
+    /// indexed by `Cpu as usize` (0 = ProCpu, 1 = AppCpu). Plain DRAM
+    /// atomics: the park handler spins on them from IRAM.
+    static PARK_REQ: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+    static PARKED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+    /// That core's park handler is installed (set by the core itself).
+    static PARKER_READY: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+    /// Serializes fences from both cores.
+    static FENCE: AtomicBool = AtomicBool::new(false);
+    /// Times the other core failed to acknowledge a park within
+    /// [`PARK_TIMEOUT`] (the op proceeded anyway). Nonzero = investigate.
+    pub static FENCE_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+    /// Longest a fence has waited for the park acknowledgement, in µs —
+    /// the render-side latency cost of a flash op.
+    pub static FENCE_MAX_WAIT_US: AtomicU32 = AtomicU32::new(0);
+
+    /// Black box in RTC SLOW memory (both CPUs can reach it; RTC fast is
+    /// ProCpu-only on the ESP32): persists across software and watchdog
+    /// resets, so when the watchdog below catches a wedge, the boot after
+    /// it can report what the fence was doing. Layout: [0] magic,
+    /// [1] ProCpu fence phase, [2] AppCpu fence phase, [3] fences begun,
+    /// [4] ProCpu parks, [5] AppCpu parks, [6] park-ack timeouts,
+    /// [7] fences completed. Phases: 0 idle, 1 waiting for the fence lock,
+    /// 2 waiting for the park ack, 3 inside the flash op, 4 waiting for
+    /// the release ack.
+    #[esp_hal::ram(unstable(rtc_slow, persistent))]
+    static mut BLACKBOX: [u32; 8] = [0; 8];
+    const BB_MAGIC: u32 = 0x5EED_C0DE;
+
+    #[inline(always)]
+    fn bb_write(i: usize, v: u32) {
+        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(BLACKBOX).cast::<u32>().add(i), v) }
+    }
+    #[inline(always)]
+    fn bb_read(i: usize) -> u32 {
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(BLACKBOX).cast::<u32>().add(i)) }
+    }
+    #[inline(always)]
+    fn bb_bump(i: usize) {
+        bb_write(i, bb_read(i).wrapping_add(1));
+    }
+
+    /// What the black box held at boot (copied out before it is re-armed)
+    /// plus the reset reason — `/api/status` `core1.last`.
+    static LAST: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
+    static LAST_RESET: static_cell::StaticCell<alloc::string::String> = static_cell::StaticCell::new();
+    static LAST_RESET_STR: core::sync::atomic::AtomicPtr<alloc::string::String> =
+        core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+    /// Snapshot the black box from the previous run and re-arm it. Call
+    /// once, early, on the ProCpu (heap up).
+    pub fn boot_blackbox() {
+        let reason = alloc::format!("{:?}", esp_hal::system::reset_reason());
+        let valid = bb_read(0) == BB_MAGIC;
+        for i in 0..8 {
+            LAST[i].store(if valid { bb_read(i) } else { 0 }, Ordering::Relaxed);
+        }
+        for i in 1..8 {
+            bb_write(i, 0);
+        }
+        bb_write(0, BB_MAGIC);
+        let s = LAST_RESET.init(reason);
+        LAST_RESET_STR.store(s as *mut _, Ordering::Release);
+        println!(
+            "core1: last reset {} — fence phases pro {} app {}, fences {}/{}, parks {}/{}, timeouts {}",
+            unsafe { &*LAST_RESET_STR.load(Ordering::Acquire) },
+            LAST[1].load(Ordering::Relaxed),
+            LAST[2].load(Ordering::Relaxed),
+            LAST[7].load(Ordering::Relaxed),
+            LAST[3].load(Ordering::Relaxed),
+            LAST[4].load(Ordering::Relaxed),
+            LAST[5].load(Ordering::Relaxed),
+            LAST[6].load(Ordering::Relaxed),
+        );
+    }
+
+    /// `(reset reason, black box of the previous run)` for `/api/status`.
+    pub fn last_run() -> (&'static str, [u32; 8]) {
+        let p = LAST_RESET_STR.load(Ordering::Acquire);
+        let reason = if p.is_null() { "?" } else { unsafe { (*p).as_str() } };
+        let mut bb = [0u32; 8];
+        for (i, v) in bb.iter_mut().enumerate() {
+            *v = LAST[i].load(Ordering::Relaxed);
+        }
+        (reason, bb)
+    }
+
+    /// RTC watchdog fed from the ProCpu executor: a wedged ProCpu (a fence
+    /// that never releases, a web task spinning) resets the system instead
+    /// of stranding the device, and the black box says what it was doing.
+    pub const WATCHDOG_SECS: u64 = 20;
+    pub fn arm_watchdog(rtc_timer: esp_hal::peripherals::RTC_TIMER<'static>) -> esp_hal::rtc_cntl::Rtc<'static> {
+        use esp_hal::rtc_cntl::{Rtc, RwdtStage, RwdtStageAction};
+        let mut rtc = Rtc::new(rtc_timer);
+        rtc.rwdt.set_timeout(RwdtStage::Stage0, Duration::from_secs(WATCHDOG_SECS));
+        rtc.rwdt.set_stage_action(RwdtStage::Stage0, RwdtStageAction::ResetSystem);
+        rtc.rwdt.enable();
+        rtc
+    }
+
+    #[embassy_executor::task]
+    pub async fn watchdog_task(mut rtc: esp_hal::rtc_cntl::Rtc<'static>) -> ! {
+        loop {
+            rtc.rwdt.feed();
+            embassy_time::Timer::after_secs(3).await;
+        }
+    }
+
+    /// A core that cannot park within this window is presumed wedged; the
+    /// flash op proceeds rather than hanging the requesting core forever.
+    /// A healthy core answers in microseconds (interrupt latency plus at
+    /// most one critical section).
+    const PARK_TIMEOUT: Duration = Duration::from_millis(100);
+
+    /// Spin, parked, until the request clears. IRAM (`#[ram]` implies
+    /// `#[inline(never)]`, so a flash-resident caller can't absorb it):
+    /// nothing may fetch from flash while parked.
+    #[esp_hal::ram]
+    fn park(core: usize) {
+        // Mask the vectored levels while parked (the handler itself runs at
+        // level 1 — see install_*_parker for why not 3) so nothing on this
+        // core can run flash-resident code until the fence is released.
+        let mask = esp_hal::xtensa_lx::interrupt::disable();
+        // The black box lives in RTC memory, which the AppCpu must not
+        // touch here: an AppCpu RTC-memory access inside the park wedged the
+        // ProCpu's next RTC access (black-boxed, mode-isolated 2026-09-05).
+        if core == PRO {
+            bb_bump(4);
+        }
+        PARKED[core].store(true, Ordering::SeqCst);
+        while PARK_REQ[core].load(Ordering::SeqCst) {}
+        PARKED[core].store(false, Ordering::SeqCst);
+        unsafe { esp_hal::xtensa_lx::interrupt::set_mask(mask) };
+    }
+
+    #[esp_hal::ram]
+    extern "C" fn park_pro_handler() {
+        unsafe { SoftwareInterrupt::<'static, 2>::steal() }.reset();
+        park(PRO);
+    }
+
+    #[esp_hal::ram]
+    extern "C" fn park_app_handler() {
+        unsafe { SoftwareInterrupt::<'static, 3>::steal() }.reset();
+        park(APP);
+    }
+
+    /// Install the ProCpu's park handler. Call from the ProCpu, after
+    /// `esp_rtos::start`, before the second core starts.
+    pub fn install_pro_parker(mut irq: SoftwareInterrupt<'static, 2>) {
+        debug_assert_eq!(Cpu::current(), Cpu::ProCpu);
+        // Priority1, not 3: a level-3 park can land inside a level-1
+        // handler mid-way through its DPORT/APB register reads (esp-rtos's
+        // task switch, esp-hal's interrupt dispatcher), and the ESP32's
+        // interrupted-peripheral-read errata then wedge the bus bridge
+        // for BOTH cores (measured: a hang within a minute under a heavy
+        // pattern, black-boxed as "ProCpu inside the op"). At level 1 the
+        // park can only preempt thread-mode code; park() raises the mask
+        // itself once inside.
+        irq.set_interrupt_handler(InterruptHandler::new(park_pro_handler, Priority::Priority1));
+        PARKER_READY[PRO].store(true, Ordering::SeqCst);
+    }
+
+    fn install_app_parker(mut irq: SoftwareInterrupt<'static, 3>) {
+        debug_assert_eq!(Cpu::current(), Cpu::AppCpu);
+        irq.set_interrupt_handler(InterruptHandler::new(park_app_handler, Priority::Priority1));
+        PARKER_READY[APP].store(true, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    fn raise_park(core: usize) {
+        if core == PRO {
+            unsafe { SoftwareInterrupt::<'static, 2>::steal() }.raise();
+        } else {
+            unsafe { SoftwareInterrupt::<'static, 3>::steal() }.raise();
+        }
+    }
+
+    /// Cooperative park while we wait inside a fence: if the other core's
+    /// fence asked us to park and our interrupts are masked (a caller
+    /// fencing from inside a critical section), the handler can't run — so
+    /// honor the request here instead of deadlocking on it.
+    #[inline(always)]
+    fn park_if_asked(me: usize) {
+        if PARK_REQ[me].load(Ordering::SeqCst) {
+            park(me);
+        }
+    }
+
+    /// A held fence: the other core is parked (or was found not running).
+    /// Out-of-line on purpose — `fenced` is instantiated at every
+    /// `with_flash` call site, and inlining the spin-waits there cost
+    /// ~1 KB of image per site (measured: +25 KB on the Athom).
+    struct Fence {
+        /// Index of the core we parked; `None` = nothing to release.
+        parked: Option<usize>,
+    }
+
+    impl Fence {
+        #[inline(never)]
+        fn acquire() -> Fence {
+            let me = Cpu::current() as usize;
+            let other = 1 - me;
+            // No `is_running()` check here on purpose: it is a DPORT read on
+            // every fence, and the ESP32's DPORT-read erratum makes a racing
+            // read from the other core return garbage — a wrong "not
+            // running" answer would silently skip the park. The parker
+            // flag is our own DRAM state and the second core never stops.
+            if !PARKER_READY[other].load(Ordering::Acquire) {
+                return Fence { parked: None };
+            }
+            bb_write(1 + me, 1);
+            while FENCE
+                .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                park_if_asked(me);
+            }
+            bb_bump(3);
+            bb_write(1 + me, 2);
+            PARK_REQ[other].store(true, Ordering::SeqCst);
+            raise_park(other);
+            let t0 = Instant::now();
+            let mut acked = true;
+            while !PARKED[other].load(Ordering::SeqCst) {
+                park_if_asked(me);
+                if t0.elapsed() > PARK_TIMEOUT {
+                    acked = false;
+                    break;
+                }
+            }
+            let waited = t0.elapsed().as_micros() as u32;
+            if acked {
+                FENCE_MAX_WAIT_US.fetch_max(waited, Ordering::Relaxed);
+            } else {
+                FENCE_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+                bb_bump(6);
+            }
+            // The parked core executes nothing, but its cache controller can
+            // still have a fill in flight from the instruction it was
+            // interrupted on; ESP-IDF waits for that cache to go idle and
+            // disables it before touching SPI1 (spi_flash_disable_cache),
+            // and so do we, via the ROM helper. Re-enabled (with a flush) in
+            // Drop before the core is released.
+            // The render core may have been parked mid-frame with the strip's
+            // SPI2 DMA transfer still running. On the classic ESP32 the SPI
+            // hosts share the SPI DMA engine, and a ROM SPI1 flash op issued
+            // while that transfer is in flight wedges the ProCpu (hard hang,
+            // black-boxed 6/6 as "ProCpu inside the op"; a fence that only
+            // parks — no flash op — ran clean, and this wait made the same
+            // trigger run clean). Single-core builds never hit it because the
+            // blocking DMA write held the only core. Wait for the output
+            // driver's transfer to finish (bounded — a frame at most).
+            if acked && other == APP {
+                let t = Instant::now();
+                while crate::output::transfer_busy() {
+                    if t.elapsed() > PARK_TIMEOUT {
+                        FENCE_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+                        bb_bump(6);
+                        break;
+                    }
+                }
+            }
+            bb_write(1 + me, 3);
+            Fence { parked: Some(other) }
+        }
+    }
+
+    impl Drop for Fence {
+        #[inline(never)]
+        fn drop(&mut self) {
+            let Some(other) = self.parked else { return };
+            let me = 1 - other;
+            bb_write(1 + me, 4);
+            PARK_REQ[other].store(false, Ordering::SeqCst);
+            // Wait for the release: the next fence's raise must not land
+            // while this handler is still on its way out (its reset() would
+            // eat it).
+            let t1 = Instant::now();
+            while PARKED[other].load(Ordering::SeqCst) {
+                if t1.elapsed() > PARK_TIMEOUT {
+                    break;
+                }
+            }
+            FENCE.store(false, Ordering::Release);
+            bb_write(1 + me, 0);
+            bb_bump(7);
+        }
+    }
+
+    /// Run `f` (a flash driver operation) with the other core parked. No-op
+    /// until the second core runs its park handler, so boot-time flash ops
+    /// before [`start`] need nothing.
+    #[inline(always)]
+    pub fn fenced<R>(f: impl FnOnce() -> R) -> R {
+        let fence = Fence::acquire();
+        let r = f();
+        drop(fence);
+        r
+    }
+
+    /// The AppCpu main-thread stack. Heap-leaked at boot rather than a
+    /// static: a static would come straight out of the leftover-DRAM main
+    /// stack (docs/firmware.md "Stack & heap invariants"), and every board
+    /// would need its own heap arithmetic to compensate. The render path
+    /// it carries measures ~11 KB deep at worst (render_task frame 4.1 KB +
+    /// esp-storage's 4 KB read bounce under a pattern-store load, per
+    /// tools/stack-check.sh) plus interrupt frames; the AppCpu takes no
+    /// WiFi NMIs. `/api/status` reports the high-water mark (`core1_stack`).
+    pub const STACK_BYTES: usize = 20 * 1024;
+    type CoreStack = esp_hal::system::Stack<STACK_BYTES>;
+    /// Fill pattern for the high-water scan.
+    const FILL: u8 = 0xA5;
+    /// Bytes at the bottom the scan skips: esp-hal's stack guard word and
+    /// the entry closure it copies just above it.
+    const SKIP: usize = 256;
+    static STACK_BASE: AtomicUsize = AtomicUsize::new(0);
+
+    /// Start the scheduler on the AppCpu and run `init` on a thread-mode
+    /// executor pinned there. `Err(init)` hands the closure back if the
+    /// stack can't be allocated, so the caller can spawn on the ProCpu
+    /// instead. Returns once the second core's park handler is armed, so
+    /// no flash op on the ProCpu can race the core's flash-resident startup.
+    pub fn start<F>(
+        cpu_ctrl: CPU_CTRL<'static>,
+        rtos_irq: SoftwareInterrupt<'static, 1>,
+        park_irq: SoftwareInterrupt<'static, 3>,
+        init: F,
+    ) -> Result<(), F>
+    where
+        F: FnOnce(Spawner) + Send + 'static,
+    {
+        // alloc + cast, never Box::new(Stack::new()): that would build the
+        // 20 KB value on the (main) stack first.
+        let layout = core::alloc::Layout::new::<CoreStack>();
+        let p = unsafe { alloc::alloc::alloc(layout) }.cast::<CoreStack>();
+        if p.is_null() {
+            return Err(init);
+        }
+        unsafe { core::ptr::write_bytes(p.cast::<u8>(), FILL, STACK_BYTES) };
+        STACK_BASE.store(p as usize, Ordering::Release);
+        let stack: &'static mut CoreStack = unsafe { &mut *p };
+
+        esp_rtos::start_second_core(cpu_ctrl, rtos_irq, stack, move || {
+            install_app_parker(park_irq);
+            static EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+            let executor = EXECUTOR.init(esp_rtos::embassy::Executor::new());
+            executor.run(init)
+        });
+        while !PARKER_READY[APP].load(Ordering::Acquire) {}
+        println!("core1: AppCpu scheduler up, {} B stack, flash fence armed", STACK_BYTES);
+        Ok(())
+    }
+
+    /// `(park-ack timeouts, longest park wait in µs)` for `/api/status`.
+    pub fn fence_stats() -> (u32, u32) {
+        (
+            FENCE_TIMEOUTS.load(Ordering::Relaxed),
+            FENCE_MAX_WAIT_US.load(Ordering::Relaxed),
+        )
+    }
+
+    /// `(used, total)` bytes of the AppCpu stack, from the fill-pattern
+    /// high-water mark (a lower bound: the bottom [`SKIP`] bytes are not
+    /// scanned). `None` before [`start`] / on a single-core build.
+    pub fn stack_high_water() -> Option<(u32, u32)> {
+        let base = STACK_BASE.load(Ordering::Acquire);
+        if base == 0 {
+            return None;
+        }
+        let s = unsafe { core::slice::from_raw_parts(base as *const u8, STACK_BYTES) };
+        let untouched = s[SKIP..].iter().take_while(|&&b| b == FILL).count();
+        Some(((STACK_BYTES - SKIP - untouched) as u32, STACK_BYTES as u32))
+    }
+}
+
+#[cfg(multi_core)]
+pub use imp::*;
+
+/// Single-core: no second core, nothing to fence.
+#[cfg(not(multi_core))]
+#[inline(always)]
+pub fn fenced<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
+#[cfg(not(multi_core))]
+pub fn stack_high_water() -> Option<(u32, u32)> {
+    None
+}
+
+#[cfg(not(multi_core))]
+pub fn fence_stats() -> (u32, u32) {
+    (0, 0)
+}
+
+#[cfg(not(multi_core))]
+pub fn last_run() -> (&'static str, [u32; 8]) {
+    ("", [0; 8])
+}

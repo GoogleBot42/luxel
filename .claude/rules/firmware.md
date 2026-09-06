@@ -53,6 +53,29 @@ paths:
   Validate the count against the writer's own cap and `try_reserve`; see
   `patterns::read_source`. This is the same class v0.1.25's "fallible
   everything" sweep fixed elsewhere — check for it in any new read path.
+- Dual-core boards (esp32, esp32s3 — cfg `multi_core` from build.rs) run
+  the render task on the AppCpu (`firmware/src/core1.rs`), and every flash
+  op must run inside the cross-core flash fence: the other core is parked
+  in IRAM for the op, because an SPI1 flash op while the other core fetches
+  instructions from flash returns garbage (erase/program) or contends for
+  the bus. The fenced doors are `ota::with_flash`, the `patterns::AsyncFlash`
+  adapter and `ota::begin`'s reads on the taken driver — a new flash path
+  goes through one of them or wraps itself in `core1::fenced`, NEVER a
+  bare op on a taken `FlashStorage`. The fence must sit OUTSIDE any
+  critical section (its spin-waits need interrupts enabled so the other
+  core can park us in turn). Do not switch esp-storage to
+  `multicore_auto_park`: the hard park stalls the other core at an
+  arbitrary instruction, possibly inside a spinlock the flash op's next
+  interrupt then waits on forever. Three park rules are load-bearing and
+  each was a black-boxed hard hang (docs/firmware.md "Cores & tasks"): the
+  park interrupt is Priority1 (a level-3 park inside a level-1 handler's
+  DPORT reads wedges the bus), the AppCpu never touches RTC memory inside
+  the park, and the fence waits for the strip's SPI2 DMA transfer to end
+  before the SPI1 op (`output::transfer_busy`). A new output driver on a
+  dual-core chip must answer `transfer_busy()` honestly. `/api/status`
+  `core1.fence_timeouts` must stay 0, and `core1.last.reset` ==
+  `SysRtcWdt` after a session means the watchdog caught a wedge — read
+  `core1.last.bb` before anything else.
 - Never take the flash driver out of the global (`ota::take_flash`) for a
   long burst of ops — every `with_flash` user reads busy for the whole
   window, and the failure shows up as UNRELATED symptoms (asset pushes

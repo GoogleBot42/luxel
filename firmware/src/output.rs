@@ -138,6 +138,28 @@ impl SpiStripOutput {
     }
 }
 
+/// Is the strip's SPI2 transfer still running? Read by the flash fence on
+/// the OTHER core (core1.rs) before a flash op: on the classic ESP32 an SPI1
+/// flash op during an in-flight SPI2 DMA transfer hangs the CPU (the SPI
+/// hosts share the DMA engine), so the fence waits for the transaction to
+/// end. Reads the `SPI_CMD.usr` bit straight from the register — the driver
+/// owns the peripheral, and the flag must reflect hardware, not a software
+/// marker the parked core could never clear.
+#[cfg(all(not(feature = "hub75"), feature = "esp32"))]
+pub fn transfer_busy() -> bool {
+    // HSPI (SPI2) on the classic ESP32: base 0x3FF6_4000, CMD register at
+    // +0, `usr` = bit 18 (transaction in progress).
+    unsafe { core::ptr::read_volatile(0x3FF6_4000 as *const u32) & (1 << 18) != 0 }
+}
+
+/// HUB75 (circular DMA, never idle by design) and the other chips: no
+/// shared-DMA hazard known; the fence does not wait. The S3 strip build is
+/// unverified on metal (Gitea #266).
+#[cfg(not(all(not(feature = "hub75"), feature = "esp32")))]
+pub fn transfer_busy() -> bool {
+    false
+}
+
 #[cfg(not(feature = "hub75"))]
 impl OutputDriver for SpiStripOutput {
     type Error = ConfigError;

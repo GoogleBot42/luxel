@@ -270,8 +270,8 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
             Some(luxel_core::vm::Value::Arr(_)) => {
                 let vals: Vec<String> = engine
                     .var_array(name)
-                    .into_iter()
-                    .flat_map(|a| a.iter())
+                    .unwrap_or(&[])
+                    .iter()
                     .map(|v| v.num().raw().to_string())
                     .collect();
                 out.push_str(&format!("[{}]", vals.join(",")));
