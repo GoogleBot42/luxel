@@ -183,9 +183,9 @@ image; Xtensa +368…+752 B (`board-pixelblaze-v3` 983,392 → 983,792 B,
 `board-athom-music` +400 B, `board-s3-devkit` +752 B, both HUB75 images
 +512/+528 B) — inside the ±0.7 KB noise floor. `.stack` on
 `board-pixelblaze-v3` 26,732 → 26,764 B; every flake variant passes
-`tools/image-check.sh`. Firmware source untouched (it still calls the
-copying `deserialize_lean`; the borrowing path is the store side's
-switch).
+`tools/image-check.sh` (sizes taken with firmware/src untouched; the
+three one-line `deserialize_lean_static` switches in main.rs that
+followed were re-built on pixelblaze-v3, C6 and the Seengreat S3).
 
 2026-09-05, cache-MMU flash mapping of the assets partition
 (`firmware/src/flashmap.rs`, docs/research/flash-mmap.md): **−1,392 B** on

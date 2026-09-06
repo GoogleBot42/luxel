@@ -319,9 +319,10 @@ Across all 299: Σ swap(xip) = 2,594,892 B (was 2,870,875 B with the v4
 copying decode above), an average of 5,900 B (40.5 %) less per
 activation than swap(vec); still 0 patterns over 45 KB under the arena.
 The word format is ~1.8× the byte format's size, so the copying paths
-(swap(vec), and the device until it calls `deserialize_lean_static`) are
-costlier than the v4 table above; on the borrowing path the resident
-program is the header tables alone.
+(swap(vec); on the device the chunk-store fallback and the playlist
+pre-flight) are costlier than the v4 table above; on the borrowing path
+— library activation from an arena slot, the ad-hoc slot, rebuilds —
+the resident program is the header tables alone.
 
 For the assets consumer the saving is smaller but immediate: the 4 KiB
 `read_chunk` staging Vec plus the 4 KiB response buffer per in-flight

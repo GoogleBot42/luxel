@@ -892,7 +892,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             // a transient read through the flash controller
             shared::BcLoc::Flash(len) => {
                 let p = match crate::patterns::current_slot_code(len) {
-                    Some(code) => luxel_core::bytecode::deserialize_lean(code).ok()?,
+                    Some(code) => luxel_core::bytecode::deserialize_lean_static(code).ok()?,
                     None => {
                         let bc = crate::patterns::read_current_bc(len)?;
                         luxel_core::bytecode::deserialize_lean(&bc).ok()?
@@ -904,9 +904,15 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             // length — a re-save may have changed it, and the store's copy
             // is the truth), from its mapped arena slot when it has one
             shared::BcLoc::Library(_) => {
-                let p = crate::patterns::with_code(&shared::get_current_pattern_id(), |bc| {
-                    luxel_core::bytecode::deserialize_lean(bc).ok()
-                })??;
+                let id = shared::get_current_pattern_id();
+                // borrow the mapped slot's words (no RAM copy of the code)
+                // when the pattern has one; the chunk-store fallback copies
+                let p = match crate::patterns::code_of(&id) {
+                    Some(code) => luxel_core::bytecode::deserialize_lean_static(code).ok()?,
+                    None => crate::patterns::with_code(&id, |bc| {
+                        luxel_core::bytecode::deserialize_lean(bc).ok()
+                    })??,
+                };
                 try_budgeted_engine(p, count).ok()
             }
             shared::BcLoc::Gone => None,
@@ -1111,7 +1117,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     let decoded = match crate::patterns::code_of(&id) {
                         Some(code) => {
                             bc_len = code.len();
-                            luxel_core::bytecode::deserialize_lean(code).map_err(Some)
+                            luxel_core::bytecode::deserialize_lean_static(code).map_err(Some)
                         }
                         None => match crate::patterns::bytecode_of(&id) {
                             Some(bc) => {

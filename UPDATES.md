@@ -85,16 +85,23 @@ against the master binary, the one wall-clock pattern re-run back-to-back;
 web `npm run build` + `npm test` + a real-chromium compile/run/debug pass
 (breakpoints, step over/into/out, error line/col) — pcs cross the wasm
 boundary and the unit change is invisible there because breakpoints are
-resolved by line inside the engine; all ten firmware variants build with
-firmware/src untouched (it only calls `deserialize_lean`) and pass
-image-check — the simpler decoder is −2.0…−2.2 KB on RISC-V (C6 margin
+resolved by line inside the engine; all ten firmware variants build (firmware/src
+compiled untouched against the new API; the three `deserialize_lean_static`
+switches came after, re-verified on pixelblaze-v3, C6 and the Seengreat
+S3) and pass image-check — the simpler decoder is −2.0…−2.2 KB on RISC-V (C6 margin
 4.13 → 4.34 % same-methodology) and +0.4…+0.75 KB on Xtensa (noise
 floor), `.stack` 26,732 → 26,764 B (docs/boards.md); `tools/ci.sh`
 green.
 
-Store side (patterns.rs/main.rs handing the engine a mapped, 4-aligned
-`&'static [u8]` and calling `deserialize_lean_static`) is the other
-subagent's PR; until it lands the device copies words like before.
+Store side: the code arena (PR #276, merged mid-flight) already hands
+the engine `&'static [u8]` slices of the mapped slots, so the three
+main.rs sites that receive one — library activation (`code_of`), the
+ad-hoc slot (`current_slot_code`) and the library rebuild path — now
+call `deserialize_lean_static` and BORROW; the chunk-store fallback
+(`with_code` over a Vec) and the playlist pre-flight keep the copying
+decoder. On-device confirmation (`heap_free` dropping by the running
+pattern's code + constant bytes, hw-bench px/s on the word format) is
+Gitea #277.
 
 ## 2026-09-05 — Pattern code arena: library patterns execute from the flash mapping (#260 store side)
 
