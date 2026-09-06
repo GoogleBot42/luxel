@@ -195,7 +195,81 @@ pub(crate) mod op {
     pub const RET_NULL: u8 = 0x3F;
     /// v4: pop the condition; falsy aborts with message-table entry (u16).
     pub const ASSERT: u8 = 0x40;
-    // 0x41..=0xFF: free — superinstructions (Gitea #261) go here.
+
+    // ---- superinstructions (v5, Gitea #261) ----
+    //
+    // Each one is EXACTLY the sequence of base opcodes named in its
+    // comment, fused by the compiler's peephole (compile::peephole) so the
+    // interpreter dispatches once instead of two or three times. Chosen
+    // from `luxel bench --profile` counts over all 299 library patterns.
+    // Appending them does not change the format version: a v5 blob that
+    // uses none of them decodes and runs exactly as before.
+
+    /// `StoreL n; Pop` — a local assignment in statement context.
+    pub const STORE_L_POP: u8 = 0x41;
+    /// `StoreG n; Pop` — a global assignment in statement context.
+    pub const STORE_G_POP: u8 = 0x42;
+    /// `LoadL a; LoadL b` (u8 a, u8 b).
+    pub const LOAD_LL: u8 = 0x43;
+    /// `LoadL a; LoadG g` (u8 a, u16 g).
+    pub const LOAD_LG: u8 = 0x44;
+    /// `LoadG g; LoadL a` (u16 g, u8 a).
+    pub const LOAD_GL: u8 = 0x45;
+    /// `LoadL a; LoadIdx` — `arr[i]` with the index in a local.
+    pub const LOAD_L_IDX: u8 = 0x46;
+    /// `LoadG g; LoadL a; LoadIdx` — the global-array read idiom.
+    pub const LOAD_G_L_IDX: u8 = 0x47;
+    /// `Const c; <binop>` — u8 sub-opcode, immediate in the next word.
+    pub const CONST_OP: u8 = 0x48;
+    /// `LoadL a; Const c; <binop>` — u8 local, u8 sub-opcode, immediate next.
+    pub const LOAD_L_CONST_OP: u8 = 0x49;
+    /// `LoadG g; Const c; <binop>` — u16 global, u8 sub-opcode, immediate next.
+    pub const LOAD_G_CONST_OP: u8 = 0x4A;
+    /// `Const c; CallBuiltin b, argc` — u16 b, u8 argc, immediate next.
+    pub const CALL_BUILTIN_C: u8 = 0x4B;
+    /// `Const c1; Const c2; CallBuiltin b, argc` — u16 b, u8 argc, two
+    /// immediates in the next two words (`hsv(h, 1, 1)`).
+    pub const CALL_BUILTIN_CC: u8 = 0x4C;
+    /// `<cmp>; JmpIfFalse t` — u8 sub-opcode, target word index in the
+    /// next word (loop and `if` headers).
+    pub const CMP_JF: u8 = 0x4D;
+    /// `Pop; RetNull` — the tail of every void function body.
+    pub const POP_RET_NULL: u8 = 0x4E;
+    // 0x4F..=0xFF: free for further superinstructions.
+}
+
+/// Sub-opcodes accepted by [`op::CONST_OP`] / [`op::LOAD_L_CONST_OP`] /
+/// [`op::LOAD_G_CONST_OP`]: the two-operand value ops, which are exactly
+/// the base opcodes they stand for.
+pub(crate) fn is_binop_sub(o: u8) -> bool {
+    matches!(
+        o,
+        op::ADD
+            | op::SUB
+            | op::MUL
+            | op::DIV
+            | op::REM
+            | op::POW
+            | op::BIT_AND
+            | op::BIT_OR
+            | op::BIT_XOR
+            | op::SHL
+            | op::SHR
+            | op::LT
+            | op::LE
+            | op::GT
+            | op::GE
+            | op::EQ
+            | op::NE
+    )
+}
+
+/// Sub-opcodes accepted by [`op::CMP_JF`].
+pub(crate) fn is_cmp_sub(o: u8) -> bool {
+    matches!(
+        o,
+        op::LT | op::LE | op::GT | op::GE | op::EQ | op::NE
+    )
 }
 
 /// Instruction-word field layout (v5). One `u32` per instruction:
@@ -241,6 +315,31 @@ pub(crate) mod enc {
     pub const fn call(op: u8, idx: u16, argc: u8) -> u32 {
         op as u32 | (idx as u32) << 8 | (argc as u32) << 24
     }
+
+    // ---- superinstruction operand layouts (Gitea #261) ----
+    // A second u8 in bits 16..24, or a u16 in bits 16..32 — the halves the
+    // base encoding leaves unused. `with_u16_u8` is `call` under a name
+    // that says what it holds.
+
+    /// Second u8 operand (bits 16..24).
+    #[inline(always)]
+    pub const fn imm8b(w: u32) -> u8 {
+        (w >> 16) as u8
+    }
+    /// u16 operand in the high half (bits 16..32).
+    #[inline(always)]
+    pub const fn imm16hi(w: u32) -> u16 {
+        (w >> 16) as u16
+    }
+    pub const fn with_u8_u8(op: u8, a: u8, b: u8) -> u32 {
+        op as u32 | (a as u32) << 8 | (b as u32) << 16
+    }
+    pub const fn with_u8_u16(op: u8, a: u8, b: u16) -> u32 {
+        op as u32 | (a as u32) << 8 | (b as u32) << 16
+    }
+    pub const fn with_u16_u8(op: u8, a: u16, b: u8) -> u32 {
+        op as u32 | (a as u32) << 8 | (b as u32) << 24
+    }
 }
 
 // ---- serialize ----
@@ -283,12 +382,17 @@ struct Walk {
     fn_ref: Option<u16>,
     global_ref: Option<u16>,
     local_ref: Option<u8>,
+    /// Second local operand (LoadLL).
+    local_ref2: Option<u8>,
     /// Const-pool index (ConstArr).
     data_ref: Option<u16>,
     /// Assert-message-table index (Assert).
     msg_ref: Option<u16>,
     /// Function-relative word index (Jmp*).
     jump: Option<u32>,
+    /// CmpJf: the word FOLLOWING the opcode word is a jump target (the
+    /// 24-bit field is spoken for by the sub-opcode).
+    jump_next: bool,
     argc: Option<u8>,
 }
 
@@ -302,9 +406,11 @@ fn walk_word(w: u32) -> Result<Walk, BcError> {
         fn_ref: None,
         global_ref: None,
         local_ref: None,
+        local_ref2: None,
         data_ref: None,
         msg_ref: None,
         jump: None,
+        jump_next: false,
         argc: None,
     };
     // operand-width masks: the bits an opcode may carry
@@ -360,6 +466,77 @@ fn walk_word(w: u32) -> Result<Walk, BcError> {
             k.argc = Some(enc::imm8(w));
             U8
         }
+        // ---- superinstructions (Gitea #261) ----
+        op::STORE_L_POP => {
+            k.local_ref = Some(enc::imm8(w));
+            U8
+        }
+        op::STORE_G_POP => {
+            k.global_ref = Some(enc::imm16(w));
+            U16
+        }
+        op::LOAD_LL => {
+            k.local_ref = Some(enc::imm8(w));
+            k.local_ref2 = Some(enc::imm8b(w));
+            U16
+        }
+        op::LOAD_LG => {
+            k.local_ref = Some(enc::imm8(w));
+            k.global_ref = Some(enc::imm16hi(w));
+            ALL
+        }
+        op::LOAD_GL | op::LOAD_G_L_IDX => {
+            k.global_ref = Some(enc::imm16(w));
+            k.local_ref = Some(enc::argc(w));
+            ALL
+        }
+        op::LOAD_L_IDX => {
+            k.local_ref = Some(enc::imm8(w));
+            U8
+        }
+        op::CONST_OP => {
+            if !is_binop_sub(enc::imm8(w)) {
+                return err("bad sub-opcode");
+            }
+            k.len = 2;
+            U8
+        }
+        op::LOAD_L_CONST_OP => {
+            k.local_ref = Some(enc::imm8(w));
+            if !is_binop_sub(enc::imm8b(w)) {
+                return err("bad sub-opcode");
+            }
+            k.len = 2;
+            U16
+        }
+        op::LOAD_G_CONST_OP => {
+            k.global_ref = Some(enc::imm16(w));
+            if !is_binop_sub(enc::argc(w)) {
+                return err("bad sub-opcode");
+            }
+            k.len = 2;
+            ALL
+        }
+        op::CALL_BUILTIN_C | op::CALL_BUILTIN_CC => {
+            k.builtin = Some(enc::imm16(w));
+            k.argc = Some(enc::argc(w));
+            k.len = if enc::opcode(w) == op::CALL_BUILTIN_C {
+                2
+            } else {
+                3
+            };
+            ALL
+        }
+        op::CMP_JF => {
+            if !is_cmp_sub(enc::imm8(w)) {
+                return err("bad sub-opcode");
+            }
+            // the branch target is the FOLLOWING word, not an operand field
+            k.len = 2;
+            k.jump_next = true;
+            U8
+        }
+        op::POP_RET_NULL => NONE,
         op::LOAD_IDX | op::STORE_IDX | op::ARR_LEN | op::DUP | op::DUP2 | op::POP | op::ADD
         | op::SUB | op::MUL | op::DIV | op::REM | op::POW | op::NEG | op::NOT | op::BIT_NOT
         | op::BIT_AND | op::BIT_OR | op::BIT_XOR | op::SHL | op::SHR | op::LT | op::LE
@@ -786,6 +963,11 @@ fn decode(
                     return err("local slot out of range");
                 }
             }
+            if let Some(i) = k.local_ref2 {
+                if i as usize >= locals {
+                    return err("local slot out of range");
+                }
+            }
             if let Some(d) = k.data_ref {
                 if d as usize >= n_data {
                     return err("const-array index out of range");
@@ -801,7 +983,9 @@ fn decode(
                     return err("argc too large");
                 }
             }
-            if let Some(t) = k.jump {
+            // CmpJf carries its target in the following word.
+            let jump = k.jump.or_else(|| k.jump_next.then(|| word(at + 1)));
+            if let Some(t) = jump {
                 let t = t as usize;
                 // == code_len is a valid "fall off the end" target
                 if t > code_len || (t < code_len && bits[t / 64] & (1u64 << (t % 64)) == 0) {
@@ -925,4 +1109,72 @@ fn decode(
         assert_msgs,
         pixel_count_g,
     }))
+}
+
+/// Mnemonic for an opcode byte — host tooling only (`luxel bench
+/// --profile`; Gitea #261). Gated so no device image carries the strings.
+#[cfg(feature = "profile")]
+pub fn op_name(o: u8) -> &'static str {
+    match o {
+        op::CONST_NUM => "CONST_NUM",
+        op::CONST_FUN => "CONST_FUN",
+        op::CONST_BUILTIN => "CONST_BUILTIN",
+        op::LOAD_G => "LOAD_G",
+        op::STORE_G => "STORE_G",
+        op::LOAD_L => "LOAD_L",
+        op::STORE_L => "STORE_L",
+        op::LOAD_IDX => "LOAD_IDX",
+        op::STORE_IDX => "STORE_IDX",
+        op::ARR_LEN => "ARR_LEN",
+        op::NEW_ARRAY => "NEW_ARRAY",
+        op::CONST_ARR => "CONST_ARR",
+        op::DUP => "DUP",
+        op::DUP2 => "DUP2",
+        op::POP => "POP",
+        op::ADD => "ADD",
+        op::SUB => "SUB",
+        op::MUL => "MUL",
+        op::DIV => "DIV",
+        op::REM => "REM",
+        op::POW => "POW",
+        op::NEG => "NEG",
+        op::NOT => "NOT",
+        op::BIT_NOT => "BIT_NOT",
+        op::BIT_AND => "BIT_AND",
+        op::BIT_OR => "BIT_OR",
+        op::BIT_XOR => "BIT_XOR",
+        op::SHL => "SHL",
+        op::SHR => "SHR",
+        op::LT => "LT",
+        op::LE => "LE",
+        op::GT => "GT",
+        op::GE => "GE",
+        op::EQ => "EQ",
+        op::NE => "NE",
+        op::JMP => "JMP",
+        op::JMP_IF_FALSE => "JMP_IF_FALSE",
+        op::JMP_IF_TRUE_PEEK => "JMP_IF_TRUE_PEEK",
+        op::JMP_IF_FALSE_PEEK => "JMP_IF_FALSE_PEEK",
+        op::CALL_FN => "CALL_FN",
+        op::CALL_BUILTIN => "CALL_BUILTIN",
+        op::CALL_VALUE => "CALL_VALUE",
+        op::RET => "RET",
+        op::RET_NULL => "RET_NULL",
+        op::ASSERT => "ASSERT",
+        op::STORE_L_POP => "STORE_L_POP",
+        op::STORE_G_POP => "STORE_G_POP",
+        op::LOAD_LL => "LOAD_LL",
+        op::LOAD_LG => "LOAD_LG",
+        op::LOAD_GL => "LOAD_GL",
+        op::LOAD_L_IDX => "LOAD_L_IDX",
+        op::LOAD_G_L_IDX => "LOAD_G_L_IDX",
+        op::CONST_OP => "CONST_OP",
+        op::LOAD_L_CONST_OP => "LOAD_L_CONST_OP",
+        op::LOAD_G_CONST_OP => "LOAD_G_CONST_OP",
+        op::CALL_BUILTIN_C => "CALL_BUILTIN_C",
+        op::CALL_BUILTIN_CC => "CALL_BUILTIN_CC",
+        op::CMP_JF => "CMP_JF",
+        op::POP_RET_NULL => "POP_RET_NULL",
+        _ => "?",
+    }
 }

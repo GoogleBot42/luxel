@@ -564,6 +564,20 @@ impl Engine {
         &self.prog
     }
 
+    /// Dynamic opcode counters for everything this engine has executed
+    /// (`profile` feature; host tooling — see `luxel bench --profile`).
+    #[cfg(feature = "profile")]
+    pub fn profile(&self) -> &crate::vm::prof::Profile {
+        self.vm.profile()
+    }
+
+    /// Zero the counters — the CLI calls it after init so the numbers
+    /// describe the render pass.
+    #[cfg(feature = "profile")]
+    pub fn profile_reset(&mut self) {
+        self.vm.profile_reset();
+    }
+
     /// Install a pixel map: one coordinate tuple per pixel, any units.
     /// Coordinates normalize per-axis into world units 0..1 (exclusive —
     /// quantized to u16/65536 like PB's map binary). Render selection

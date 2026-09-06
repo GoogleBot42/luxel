@@ -1,5 +1,159 @@
 # Update log
 
+## 2026-09-06 — Superinstructions: 14 fused opcodes chosen by a dynamic profiler (#261)
+
+Jeremy's #260 ask is another 2× on per-pixel cost on the S3 at 4096 px. The
+interpreter's remaining lever is **instructions executed per pixel**, so this
+pass built the instrument first and let it pick the work.
+
+**The instrument** — `luxel bench <pattern> --profile [--json]` (Gitea #261)
+counts what the VM actually *executed*: per opcode, per builtin, and per
+**statically adjacent** opcode pair/triple — where "adjacent" means the second
+instruction is the first's fall-through successor in the same function,
+reached without a jump, i.e. exactly what a compiler peephole may fuse.
+`tools/profile-library.mjs` runs it over all 299 library patterns and sums
+the counters into one ranked report. Counters live behind luxel-core's
+non-default `profile` cargo feature; the firmware takes luxel-core with
+`default-features = false` and never names it, so no device image carries a
+counter, and the plain `luxel bench` binary stays a throughput measurement
+(with counters on it is ~2× slower — the profile output says so).
+
+**What the library actually runs** (299 patterns, 256 px on a 16×16 grid ×
+20 frames, 163.7 M instructions over 1.53 M pixel renders — **106.9
+insns/px** average). Top of the ranked tables, as % of all instructions
+executed:
+
+| opcode | % | adjacent pair | % | adjacent triple | % |
+|---|---:|---|---:|---|---:|
+| `LOAD_L` | 20.46 | `STORE_L POP` | 6.52 | `STORE_L POP LOAD_L` | 4.41 |
+| `CONST_NUM` | 12.08 | `POP LOAD_L` | 5.20 | `LOAD_G LOAD_L LOAD_IDX` | 2.61 |
+| `LOAD_G` | 11.92 | `LOAD_L CONST_NUM` | 4.29 | `POP LOAD_L CONST_NUM` | 1.71 |
+| `POP` | 10.18 | `LOAD_L LOAD_G` | 4.26 | `CALL_BUILTIN STORE_L POP` | 1.68 |
+| `STORE_L` | 7.38 | `LOAD_G LOAD_L` | 3.85 | `POP LOAD_L LOAD_L` | 1.56 |
+| `MUL` | 6.25 | `LOAD_L LOAD_L` | 3.69 | `POP LOAD_L LOAD_G` | 1.48 |
+| `CALL_BUILTIN` | 5.37 | `LOAD_L LOAD_IDX` | 2.63 | `LOAD_L LOAD_G LOAD_L` | 1.20 |
+| `ADD` | 4.21 | `POP LOAD_G` | 1.84 | `LOAD_L CONST_NUM ADD` | 1.06 |
+| `SUB` | 4.10 | `LOAD_G MUL` | 1.82 | `LOAD_G LT JMP_IF_FALSE` | 1.00 |
+| `JMP_IF_FALSE` | 3.71 | `ADD STORE_L` | 1.82 | `LOAD_L LOAD_G LT` | 0.99 |
+| `LOAD_IDX` | 3.25 | `LOAD_L MUL` | 1.73 | `CONST_NUM ADD STORE_L` | 0.97 |
+| `LT` | 1.85 | `CALL_BUILTIN STORE_L` | 1.68 | `ADD STORE_L POP` | 0.97 |
+| `JMP` | 1.51 | `CONST_NUM MUL` | 1.61 | `LOAD_L LOAD_L MUL` | 0.92 |
+| `DIV` | 1.34 | `LT JMP_IF_FALSE` | 1.61 | `CONST_NUM CONST_NUM CALL_BUILTIN` | 0.70 |
+
+The statement-context store (`STORE_L POP`, 6.5 %) is the single biggest
+shape, the paired loads together are 11.8 %, and `hsv(h, 1, 1)` /
+`time(.1)` show up as `CONST_NUM CONST_NUM CALL_BUILTIN`. Nothing here was
+guessed.
+
+**Fourteen fused opcodes**, appended at `0x41..0x4E` (`0x4F..0xFF` still
+free), emitted by a peephole in `compile.rs`, validated in `bytecode.rs`,
+executed in `vm.rs` — `StoreLPop`, `StoreGPop`, `LoadLL`, `LoadLG`,
+`LoadGL`, `LoadLIdx`, `LoadGLIdx`, `ConstOp`, `LoadLConstOp`,
+`LoadGConstOp`, `CallBuiltinC`, `CallBuiltinCC`, `CmpJf`, `PopRetNull`.
+Full table with operand layouts: docs/spec/bytecode.md.
+
+**`FORMAT_VERSION` stays at 5.** Appending opcodes keeps every stored blob
+readable, which is the only compatibility direction that matters (a device
+never reads a blob a newer host has not produced), and a v5 blob that uses
+none of them still validates and runs — test-pinned. The rule file said a
+new opcode needs a bump; it was wrong, and now says so.
+
+**Equivalence is the whole design.** Each arm does exactly what its base
+sequence did, in the same order, with the same error messages and the same
+`insn_start` attribution — including the `MAX_STACK` limits that the elided
+intermediate pushes would have hit. Two peephole rules carry the rest:
+never fuse across a JUMP TARGET (so every branch still lands on an
+instruction boundary, where it landed before), and never fuse across a
+SOURCE POSITION (positions are per statement, so a fused run lies inside
+one statement, the position runs are unchanged, and the debugger stops on
+exactly the same lines). Fuel is the one deliberate difference: a fused
+instruction costs 1 unit instead of 2–3.
+
+**Instructions per pixel, at 4096 px** — the metric the change targets:
+
+| bench | before | after | Δ |
+|---|---:|---:|---:|
+| `library/rainbow.js` | 11.0 | **6.0** | −45 % |
+| `library/snake.js` | 42.2 | **26.7** | −37 % |
+| `library/snake-2d.js` (mapless) | 35.9 | **22.6** | −37 % |
+| `library/snake-2d.js --map-grid 64x64` | 55.9 | **34.6** | −38 % |
+| whole library (299 patterns) | 106.9 | **69.3** | −35 % |
+
+Rainbow's render is now six instructions: `CallBuiltinC time`, `LoadLG`,
+`Div`, `Add`, `CallBuiltinCC hsv`, `PopRetNull`.
+
+**Host throughput is a wash, and that is the honest headline.** `luxel
+bench` at 4096 px, best of 5, x86-64, against `origin/master` df0b547:
+
+| bench | master | this branch | Δ | same binary, `--no-fuse` |
+|---|---:|---:|---:|---:|
+| rainbow | 29.26 M px/s | 28.47 M | −2.7 % | 27.91 M (−4.6 %) |
+| snake | 13.88 M | 14.37 M | +3.5 % | 12.18 M (−12.2 %) |
+| snake-2d (mapless) | 13.06 M | 13.06 M | ±0 % | 11.26 M (−13.7 %) |
+| snake-2d 64×64 | 8.85 M | 8.94 M | +0.9 % | 8.01 M (−9.5 %) |
+
+The `--no-fuse` column is the same binary compiling the same patterns
+WITHOUT the peephole — byte-for-byte the opcode streams master runs. It is
+5–14 % SLOWER than master, which is the price of a bigger dispatch loop on
+an out-of-order x86: fourteen more arms cost registers and code locality
+even for programs that never execute one. The fused stream buys that back
+and lands within ±3 % of master. So on the host, cutting instructions by
+37 % is worth about nothing: **x86 is not dispatch-bound** — rainbow's cost
+there is the `hsv`/`time` arithmetic, not the interpreter.
+
+The device is the opposite, which is the whole bet: #260 measured 3,200
+cycles for an 11-instruction rainbow pixel on the S3 — ≈ 290 cycles per
+instruction, nearly all of it dispatch. Going 11 → 6 there should show up
+close to in full, and the loop-size tax is multiplicative on a far larger
+per-instruction cost. **That is a prediction, not a measurement**: no
+hardware was touched (both panel and Athom were in use). The on-device A/B
+is Gitea #298 and carries an explicit revert criterion — if `vm_us` on the
+S3 at 4096 px does not improve by ~15 %, turn the peephole off by default.
+Reverting is a one-line `CompileOpts` change plus a host recompile; nothing
+on any device has to change, because the fusion happens in the host
+compiler and the device only ever runs the blob.
+
+Two dispatch-loop lessons, both measured, both now in
+`.claude/rules/vm-bytecode.md` and docs/boards.md: merging several opcodes
+into ONE arm with an inner `match opcode` saves ~4 KB of image and costs
+~14 % of throughput (the candidates were `LoadIdx` and `CallBuiltin` — the
+hottest opcodes there are); moving a shared BODY out of line
+(`index_read`, `call_builtin_slow`, and `err_static` for the ~45 `fail!`
+sites, whose inlined `String` construction had been bloating the loop since
+long before this change) saves nearly as much for free — except that
+taking the in-loop `builtin_fast` fast path out with it costs 15 %, so that
+half stays inline as a macro.
+
+**Image cost** +5.5 to +7.6 KB per board (devshell builds, same creds both
+sides). Nothing needed a lever: #281 had already made the C6 ship as
+`luxel-fw-c6-devkit-hosted` earlier the same day, and that image is at
+1,009,696 B / **3.70 %** free credless, over the 3 % floor. What did change
+hands is who is tightest: **the three classic-ESP32 boards are now the
+fleet's tightest shipped images** (`luxel-fw-pixelblaze-v3` 1,012,272 B /
+3.46 %), and they have no `hosted-ui` lever available — taking the
+playground off a Pixelblaze v3 is not a trade anyone wants. The next
+feature that grows the VM brings its own diet. Per-board table in
+docs/boards.md.
+
+**Verification.** `cargo test --workspace` green including a new
+`tests/superinsns.rs` (fused vs unfused render identically across six
+sources covering every fusion family; byte-identical LXBC round-trip; an
+unfused v5 blob still validates and runs; runtime errors inside a fused op
+report the same message AND line/col; the debugger stops on the same lines;
+the decoder rejects bad sub-opcodes, a `CmpJf` target off an instruction
+boundary, reserved bits, and out-of-range slots in BOTH halves of a paired
+load). `tools/check-library.sh` 1495/1495. **All 299 library patterns
+rendered to PPM by the master binary and by this one are byte-identical**
+(8×8 map, 25 frames, fixed seed). Web: `npm run build`, `npm test` 29/29,
+`tools/e2e.mjs` all green in real chromium, plus a scripted breakpoint +
+step-into through a four-statement pattern where every line compiles to a
+fused op — it stops on lines 2, 3, 4, 5 exactly as the unfused build does.
+All seven boards build; `tools/stack-check.sh` clean on pixelblaze-v3 /
+s3-devkit / c6-devkit; `tools/ci.sh` green.
+
+Not done: per-frame hoisting of loop-invariant expressions out of `render`
+(item 2 of #261) — Gitea #299, gated on #298.
+
 ## 2026-09-06 — The firmware BORROWS the mapped program words (#260)
 
 LXBC v5 (PR #278) gave `luxel_core::bytecode` a `deserialize_lean_static`
@@ -94,7 +248,6 @@ The on-device confirmation — idle `heap_free` should rise by roughly the
 running pattern's code + constant bytes — is on the #271 hardware
 checklist; no hardware was touched here.
 
-
 ## 2026-09-06 — The code arena grows a real allocator: page extents, not 7 slots (#281)
 
 The arena PR #276 shipped the day before was seven fixed 40 KiB slots in
@@ -167,7 +320,6 @@ is #291. Hardware verification of the write/compaction paths (an N > 7
 playlist all cached, re-save churn, compaction under a running pattern, a
 power cut mid-write) went onto #271's checklist — none of it can be
 exercised under QEMU.
-
 ## 2026-09-06 — LXBC v5 restored: PR #280's merge had silently reverted it
 
 PR #278 (LXBC v5, merged 2026-09-05 21:52) was **undone the same evening** by

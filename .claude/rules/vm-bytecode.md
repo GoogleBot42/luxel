@@ -26,8 +26,34 @@ paths:
 - Bumping `FORMAT_VERSION` is deliberate and rare: the recompile path
   (device replies `bc-version`, the web UI recompiles from source) already
   exists, so a bump costs users one recompile, but every stored blob on
-  every device goes stale at once. Adding an opcode (superinstructions,
-  #261) needs a bump; adding a builtin does not.
+  every device goes stale at once. **APPENDING an opcode does not need a
+  bump** — a decoder that knows the new opcode still accepts every old
+  blob, which is the only compatibility direction that matters here
+  (devices never read blobs a newer host has not produced). The
+  superinstructions (#261) went in at `0x41..0x4E` with `FORMAT_VERSION`
+  left at 5, and `tests/superinsns.rs` pins that an unfused blob still
+  validates and runs. Adding a builtin does not need a bump either.
+  CHANGING the meaning or encoding of an existing opcode does.
+- Superinstructions (`0x41..0x4E`, docs/spec/bytecode.md) are fused base
+  sequences, emitted only by `compile::peephole` and executed by arms that
+  must stay byte-for-byte equivalent to the sequence they replace —
+  including error messages, `insn_start` attribution and the MAX_STACK
+  limits the elided intermediate pushes would have hit. Two peephole rules
+  make that hold and must survive any new template: never fuse across a
+  JUMP TARGET, and never fuse across a SOURCE POSITION (the second is what
+  keeps the debugger stopping per source line). `compile_with(src,
+  CompileOpts { superinstructions: false })` / `luxel bench --no-fuse` is
+  the A/B lever; `tests/superinsns.rs` compares the two directly.
+- The dispatch loop's size is load-bearing. Adding arms is not free even
+  for programs that never execute them: the #261 arms cost ~10–16 % of
+  host throughput on the unfused path (measured `--no-fuse` vs master),
+  which the fused instruction count then has to earn back. Keep new arms
+  small — big shared bodies belong in `#[inline(never)]` helpers
+  (`index_read`, `call_builtin_slow`, `err_static`) — but do NOT merge
+  several opcodes into one arm with an inner `match opcode`: that cost
+  another ~14 % when it was tried on `LoadIdx`/`CallBuiltin`. And measure
+  BOTH sides (`luxel bench` with and without `--no-fuse`) before believing
+  a dispatch change helped.
 - Appending a new builtin does NOT require a bytecode format-version bump.
   Only format changes do. A version mismatch makes the device reply with
   `"code":"bc-version"`, and the web UI auto-recompiles from source in

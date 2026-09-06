@@ -74,6 +74,26 @@ pub(crate) enum Insn {
     CallValue { argc: u8 },
     Ret,
     RetNull,
+
+    // ---- superinstructions (Gitea #261) ----
+    //
+    // Produced ONLY by [`peephole`], after the whole function is emitted.
+    // Each is exactly the base sequence in its comment; nothing else in
+    // the compiler creates or inspects them.
+    StoreLPop(u8),         // StoreL n; Pop
+    StoreGPop(u16),        // StoreG n; Pop
+    LoadLL(u8, u8),        // LoadL a; LoadL b
+    LoadLG(u8, u16),       // LoadL a; LoadG g
+    LoadGL(u16, u8),       // LoadG g; LoadL a
+    LoadLIdx(u8),          // LoadL a; LoadIdx
+    LoadGLIdx(u16, u8),    // LoadG g; LoadL a; LoadIdx
+    ConstOp(u8, Fx),       // Const c; <binop>
+    LoadLConstOp(u8, u8, Fx),  // LoadL a; Const c; <binop>
+    LoadGConstOp(u16, u8, Fx), // LoadG g; Const c; <binop>
+    CallBuiltinC { b: u16, argc: u8, c: Fx }, // Const c; CallBuiltin
+    CallBuiltinCC { b: u16, argc: u8, c1: Fx, c2: Fx }, // Const; Const; CallBuiltin
+    CmpJf(u8, u32),        // <cmp>; JmpIfFalse t   (t = instruction index)
+    PopRetNull,            // Pop; RetNull
 }
 
 const MAX_GLOBALS: usize = 256;
@@ -81,7 +101,29 @@ const MAX_GLOBALS: usize = 256;
 // it to 0) and LoadL/StoreL operands are u8 slot indices.
 const MAX_LOCALS: usize = 255;
 
+/// Knobs on the lowering pass. The only one so far is a switch for the
+/// superinstruction peephole (Gitea #261): every host wants it on, but
+/// `luxel bench --no-fuse` and the equivalence tests need a way to get the
+/// unfused stream out of the same binary, and a decoder bug in the fused
+/// arms is then one flag away from being bisected.
+#[derive(Clone, Copy, Debug)]
+pub struct CompileOpts {
+    pub superinstructions: bool,
+}
+
+impl Default for CompileOpts {
+    fn default() -> Self {
+        CompileOpts {
+            superinstructions: true,
+        }
+    }
+}
+
 pub fn compile(src: &str) -> Result<Program, Diagnostic> {
+    compile_with(src, CompileOpts::default())
+}
+
+pub fn compile_with(src: &str, opts: CompileOpts) -> Result<Program, Diagnostic> {
     let ast = parse_program(src)?;
     let mut c = Compiler::new(src);
     c.collect(&ast)?;
@@ -92,6 +134,7 @@ pub fn compile(src: &str) -> Result<Program, Diagnostic> {
         c.exported_fns,
         c.data_arrays,
         c.assert_msgs,
+        opts,
     ))
 }
 
@@ -112,10 +155,18 @@ fn assemble(
     exported_fns: Vec<(String, u16)>,
     data_arrays: Vec<Vec<i32>>,
     assert_msgs: Vec<String>,
+    opts: CompileOpts,
 ) -> Program {
     let mut code: Vec<u32> = Vec::new();
     let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
-    for f in fns {
+    for mut f in fns {
+        // pass 0: fuse the hot sequences into superinstructions
+        if opts.superinstructions {
+            let (fcode, fpos) =
+                peephole(core::mem::take(&mut f.code), core::mem::take(&mut f.pos));
+            f.code = fcode;
+            f.pos = fpos;
+        }
         // pass 1: word index of each instruction (+ end)
         let mut offsets: Vec<u32> = Vec::with_capacity(f.code.len() + 1);
         let mut at = 0u32;
@@ -168,11 +219,167 @@ fn assemble(
     }
 }
 
+/// Fuse the hot instruction sequences into superinstructions (Gitea #261).
+///
+/// A greedy leftmost-longest match over the templates below, run once per
+/// function on the finished IR. The candidates and their order come from
+/// `luxel bench --profile` counts over all 299 library patterns
+/// (tools/profile-library.mjs) — the pairs and triples ranked by how often
+/// they actually EXECUTE, not how often they appear.
+///
+/// Two rules make the fusion invisible to everything but the dispatch count:
+///
+/// * **Never fuse across a jump target.** An instruction some branch can
+///   land on stays addressable, so every jump still targets an instruction
+///   boundary and lands where it did.
+/// * **Never fuse across a source position.** Positions are set per
+///   statement, so a fused run always lies inside one statement and the
+///   position runs `assemble` builds are unchanged — the debugger stops on
+///   exactly the same source lines, and a runtime error inside a fused op
+///   reports the same (line, col) as the base sequence would.
+///
+/// Semantics are otherwise identical by construction: each arm of the VM
+/// does exactly what the sequence it replaces did, in the same order, with
+/// the same error messages. The one deliberate difference is FUEL: a fused
+/// instruction costs 1, not 2 or 3, so a pattern's execution-limit budget
+/// stretches slightly further (`FUEL` is a runaway-loop guard, not a
+/// semantic quantity).
+fn peephole(code: Vec<Insn>, pos: Vec<(u32, u32)>) -> (Vec<Insn>, Vec<(u32, u32)>) {
+    use Insn::*;
+    let n = code.len();
+    // Positions are parallel to the code; without them the "never fuse
+    // across a source position" rule cannot be checked, so fuse nothing.
+    if pos.len() != n {
+        return (code, pos);
+    }
+    let mut is_target = alloc::vec![false; n + 1];
+    for insn in &code {
+        match insn {
+            Jmp(t) | JmpIfFalse(t) | JmpIfTruePeek(t) | JmpIfFalsePeek(t) => {
+                if (*t as usize) <= n {
+                    is_target[*t as usize] = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    // May instructions i..i+len fuse into one? (i itself may be a target.)
+    let joinable = |i: usize, len: usize| {
+        i + len <= n
+            && (1..len).all(|k| !is_target[i + k] && pos[i + k] == pos[i])
+    };
+    let sub = |insn: &Insn| -> Option<u8> {
+        Some(match insn {
+            Add => op::ADD,
+            Sub => op::SUB,
+            Mul => op::MUL,
+            Div => op::DIV,
+            Rem => op::REM,
+            Pow => op::POW,
+            BitAnd => op::BIT_AND,
+            BitOr => op::BIT_OR,
+            BitXor => op::BIT_XOR,
+            Shl => op::SHL,
+            Shr => op::SHR,
+            Lt => op::LT,
+            Le => op::LE,
+            Gt => op::GT,
+            Ge => op::GE,
+            Eq => op::EQ,
+            Ne => op::NE,
+            _ => return None,
+        })
+    };
+    let cmp = |insn: &Insn| -> Option<u8> {
+        match sub(insn) {
+            Some(o) if crate::bytecode::is_cmp_sub(o) => Some(o),
+            _ => None,
+        }
+    };
+
+    let mut out: Vec<Insn> = Vec::with_capacity(n);
+    let mut outpos: Vec<(u32, u32)> = Vec::with_capacity(n);
+    // old instruction index → new instruction index. Only indices that are
+    // jump targets are ever read, and those are never fused away.
+    let mut map = alloc::vec![0u32; n + 1];
+    let mut i = 0usize;
+    while i < n {
+        let at = out.len() as u32;
+        let (fused, len) = match &code[i..] {
+            // 3-instruction templates first (leftmost-longest).
+            [LoadG(g), LoadL(a), LoadIdx, ..] if joinable(i, 3) => (LoadGLIdx(*g, *a), 3),
+            [Const(Value::Num(c1)), Const(Value::Num(c2)), CallBuiltin { b, argc }, ..]
+                if joinable(i, 3) && *argc >= 2 =>
+            {
+                (
+                    CallBuiltinCC {
+                        b: *b,
+                        argc: *argc,
+                        c1: *c1,
+                        c2: *c2,
+                    },
+                    3,
+                )
+            }
+            [LoadL(a), Const(Value::Num(c)), o, ..] if joinable(i, 3) && sub(o).is_some() => {
+                (LoadLConstOp(*a, sub(o).unwrap(), *c), 3)
+            }
+            [LoadG(g), Const(Value::Num(c)), o, ..] if joinable(i, 3) && sub(o).is_some() => {
+                (LoadGConstOp(*g, sub(o).unwrap(), *c), 3)
+            }
+            // 2-instruction templates.
+            [StoreL(a), Pop, ..] if joinable(i, 2) => (StoreLPop(*a), 2),
+            [StoreG(g), Pop, ..] if joinable(i, 2) => (StoreGPop(*g), 2),
+            [LoadL(a), LoadIdx, ..] if joinable(i, 2) => (LoadLIdx(*a), 2),
+            [LoadL(a), LoadL(b), ..] if joinable(i, 2) => (LoadLL(*a, *b), 2),
+            [LoadL(a), LoadG(g), ..] if joinable(i, 2) => (LoadLG(*a, *g), 2),
+            [LoadG(g), LoadL(a), ..] if joinable(i, 2) => (LoadGL(*g, *a), 2),
+            [Const(Value::Num(c)), o, ..] if joinable(i, 2) && sub(o).is_some() => {
+                (ConstOp(sub(o).unwrap(), *c), 2)
+            }
+            [Const(Value::Num(c)), CallBuiltin { b, argc }, ..] if joinable(i, 2) && *argc >= 1 => {
+                (
+                    CallBuiltinC {
+                        b: *b,
+                        argc: *argc,
+                        c: *c,
+                    },
+                    2,
+                )
+            }
+            [o, JmpIfFalse(t), ..] if joinable(i, 2) && cmp(o).is_some() => {
+                (CmpJf(cmp(o).unwrap(), *t), 2)
+            }
+            [Pop, RetNull, ..] if joinable(i, 2) => (PopRetNull, 2),
+            _ => (code[i], 1),
+        };
+        for k in 0..len {
+            map[i + k] = at;
+        }
+        out.push(fused);
+        outpos.push(pos[i]);
+        i += len;
+    }
+    map[n] = out.len() as u32;
+    // Jump operands were instruction indices into the old code.
+    for insn in &mut out {
+        match insn {
+            Jmp(t) | JmpIfFalse(t) | JmpIfTruePeek(t) | JmpIfFalsePeek(t) | CmpJf(_, t) => {
+                *t = map[(*t as usize).min(n)];
+            }
+            _ => {}
+        }
+    }
+    (out, outpos)
+}
+
 /// Encoded length of one IR instruction in words.
 fn insn_len(insn: &Insn) -> u32 {
     use Insn::*;
     match insn {
         Const(Value::Num(_)) | Const(Value::Arr(_)) => 2,
+        ConstOp(..) | LoadLConstOp(..) | LoadGConstOp(..) | CallBuiltinC { .. } | CmpJf(..) => 2,
+        CallBuiltinCC { .. } => 3,
         _ => 1,
     }
 }
@@ -235,6 +442,42 @@ fn emit_insn(out: &mut Vec<u32>, insn: &Insn, offsets: &[u32]) {
         CallValue { argc } => enc::with_u8(op::CALL_VALUE, *argc),
         Ret => enc::bare(op::RET),
         RetNull => enc::bare(op::RET_NULL),
+
+        // superinstructions — the trailing immediate/target word (where
+        // there is one) is pushed after the opcode word, like Const.
+        StoreLPop(n) => enc::with_u8(op::STORE_L_POP, *n),
+        StoreGPop(n) => enc::with_u16(op::STORE_G_POP, *n),
+        LoadLL(a, b) => enc::with_u8_u8(op::LOAD_LL, *a, *b),
+        LoadLG(a, g) => enc::with_u8_u16(op::LOAD_LG, *a, *g),
+        LoadGL(g, a) => enc::with_u16_u8(op::LOAD_GL, *g, *a),
+        LoadLIdx(a) => enc::with_u8(op::LOAD_L_IDX, *a),
+        LoadGLIdx(g, a) => enc::with_u16_u8(op::LOAD_G_L_IDX, *g, *a),
+        ConstOp(sub, c) => {
+            out.push(enc::with_u8(op::CONST_OP, *sub));
+            c.raw() as u32
+        }
+        LoadLConstOp(a, sub, c) => {
+            out.push(enc::with_u8_u8(op::LOAD_L_CONST_OP, *a, *sub));
+            c.raw() as u32
+        }
+        LoadGConstOp(g, sub, c) => {
+            out.push(enc::with_u16_u8(op::LOAD_G_CONST_OP, *g, *sub));
+            c.raw() as u32
+        }
+        CallBuiltinC { b, argc, c } => {
+            out.push(enc::call(op::CALL_BUILTIN_C, *b, *argc));
+            c.raw() as u32
+        }
+        CallBuiltinCC { b, argc, c1, c2 } => {
+            out.push(enc::call(op::CALL_BUILTIN_CC, *b, *argc));
+            out.push(c1.raw() as u32);
+            c2.raw() as u32
+        }
+        CmpJf(sub, t) => {
+            out.push(enc::with_u8(op::CMP_JF, *sub));
+            target(*t)
+        }
+        PopRetNull => enc::bare(op::POP_RET_NULL),
     };
     out.push(w);
 }
