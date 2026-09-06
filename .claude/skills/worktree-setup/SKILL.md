@@ -140,6 +140,19 @@ origin master && git rebase origin/master`.
   a file that still contains conflict markers, and the rebase commits it
   without complaint (this has happened; the markers shipped into a
   commit and needed an amend).
+- **A conflict in a file your branch did not deliberately change is a
+  signal, not a chore: take THEIRS.** Resolving it "your way" silently
+  DELETES another session's merged work, and nothing catches it — on
+  2026-09-05 a branch cut before LXBC v5 merged after it and took its own
+  pre-v5 side of `bytecode.rs`, `compile.rs`, `vm.rs`, the tests and the
+  spec, reverting the whole of merged PR #278. Producer, consumer, tests
+  and docs went back together, so the tree built, `cargo test --workspace`
+  passed, `tools/ci.sh` was green, and it was found ~12 hours later by the
+  next session (restored in PR #288; a guard for the class is Gitea #289).
+  Before `git rebase --continue`, read `git diff origin/master -- <each
+  conflicted file>` and check that everything it REMOVES is something you
+  meant to remove; `git log --oneline origin/master -- <file>` names whose
+  work you would be dropping.
 - After any rebase over real upstream changes, re-run the verification
   that overlaps them (at minimum the affected test suite / e2e) before
   force-pushing — green-before-rebase proves nothing about the merged
