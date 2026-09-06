@@ -1111,6 +1111,31 @@ fn decode(
     }))
 }
 
+/// How many INSTRUCTIONS a function's code words hold — multi-word
+/// instructions (`CONST_NUM`, the fused `*_CONST_OP`/`CALL_BUILTIN_C*`
+/// forms, `CMP_JF`) count once, so this is the number of dispatches the VM
+/// would make walking the range straight through, not `FnDef::code_len`.
+///
+/// `code` is `Program.words[code_start..code_start + code_len]`. Errors on
+/// an undecodable word or an instruction that overruns the range — the same
+/// checks [`validate`] makes, so any blob that validated counts cleanly.
+///
+/// Host tooling only (`luxel compile --stats`, `tools/oracle/opcount.mjs`);
+/// the static count is what the Pixelblaze's own compiler output is compared
+/// against (Gitea #312).
+pub fn insn_count(code: &[u32]) -> Result<u32, BcError> {
+    let mut at = 0usize;
+    let mut n = 0u32;
+    while at < code.len() {
+        at += walk_word(code[at])?.len;
+        n += 1;
+    }
+    if at != code.len() {
+        return err("instruction overruns function end");
+    }
+    Ok(n)
+}
+
 /// Mnemonic for an opcode byte — host tooling only (`luxel bench
 /// --profile`; Gitea #261). Gated so no device image carries the strings.
 #[cfg(feature = "profile")]
