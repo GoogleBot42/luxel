@@ -104,6 +104,12 @@ paths:
   S3. They live in locals now; anything that must survive a `return` or a
   re-entry into the VM (`call_builtin` can call back through an array
   callback) has to be published at that boundary. Don't add a new one.
+- `Vm::run`'s `fail!`/`push!`/`pop!` are `macro_rules!`, so anything their
+  bodies name must be in scope where the MACRO IS DEFINED, not where it is
+  used: a local declared later in the function is invisible to them, and a
+  loop LABEL is invisible full stop (`break 'frame` inside a macro body does
+  not compile). Declare a new loop-carried local ahead of the macro block,
+  and exit through `return`, not a labelled break.
 - Appending a new builtin does NOT require a bytecode format-version bump.
   Only format changes do. A version mismatch makes the device reply with
   `"code":"bc-version"`, and the web UI auto-recompiles from source in

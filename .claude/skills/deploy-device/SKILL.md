@@ -39,17 +39,23 @@ memory (athom-flash-rig.md / jeremy-ha-broker.md memory files) and in
   unit it has remote power control (see the athom-rig skill) so its
   up/down state is more controllable.
 - **Seengreat HUB75 S3 + 64x64 panel** — 192.168.0.238, DHCP hostname
-  `luxel-f6b0a8`, `BOARD=board-seengreat-hub75` (an S3: `ota-push.sh`'s
-  default ELF path is the classic-ESP32 one, so pass the image explicitly:
-  `espflash save-image --chip esp32s3 firmware/target/xtensa-esp32s3-none-elf/release/luxel-fw x.bin && tools/ota-push.sh 192.168.0.238 x.bin`).
-  Its USB is the S3's native USB-Serial/JTAG at `/dev/ttyACM0` — **opening
-  that port from the host RESETS the board** (docs/boards.md "First light"),
-  so never leave a serial reader loop on it; use `/api/status` polling
-  instead. The flip side is a REMOTE RESET for a hung board with no Jeremy
-  action: `timeout 3 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT` (verified
-  2026-09-05 on a 4-minute hard hang; `doas chmod 666 /dev/ttyACM0` first
-  if the node came back 660). tools/hw-bench.mjs takes it as
-  `HW_BENCH_RESET_CMD`. Physical EN/BOOT presses are Jeremy's.
+  `luxel-f6b0a8`, 64x64 matrix at 4096 px. Push it with
+  `BOARD=board-seengreat-hub75 tools/ota-push.sh 192.168.0.238` — the script
+  takes the ELF path AND the espflash `--chip` from `$BOARD` (since
+  2026-09-06; the older advice to pass a hand-made image explicitly is
+  obsolete). Leave it on 4096 px / rainbow / brightness 4 / empty playlist.
+  Its OTA used to wedge ~44 % of pushes (#294) — #309's flash-fence fix cured
+  that (13/13 clean in one session, 2026-09-06), so a failed push there is
+  now a real failure, not the known flake.
+  Its USB is the S3's native USB-Serial/JTAG at `/dev/ttyACM0`, and a plain
+  open is **not** a reliable reset (it is often passive): the recipe that
+  works is one long-lived `socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT`
+  reader plus a SECOND short socat open, which resets the chip while the
+  first reader captures the whole boot log. `doas chmod 666 /dev/ttyACM0`
+  first if the node came back 660. tools/hw-bench.mjs takes the short open as
+  `HW_BENCH_RESET_CMD`. **Never touch serial in the 60 s after an OTA
+  reboot** — the reset lands inside the pending-verify window and the
+  bootloader rolls the new slot back. Physical EN/BOOT presses are Jeremy's.
 
 **Autonomy**: OTA / live-coding / soak testing on the devices above is
 pre-authorized per CLAUDE.md — no need to ask before pushing.
