@@ -118,6 +118,30 @@ paths:
   out of `Vm::run`) while costing the host ~20 % on array-heavy patterns.
   Only pull a body out of line if the ARM count drops, not just the
   function size.
+- **…and `#[inline(always)]` on one is a worse trap, for the opposite
+  reason.** `Vm::run` (~13 KB) and `Vm::call_builtin` (~21 KB) compete for
+  the flash instruction cache, and on any pattern that calls a builtin that
+  competition is worth FAR more than anything inside the dispatch loop.
+  #318: inlining `binop_const` into the three `Const c; <op>` arms is
+  **−7.5 % on the loop microbenchmark and +38 % on a noise-heavy pattern**;
+  the one-arm variant is *smaller* and worse still (+57 %). Running the
+  other way, #325 taking 1.3 KB out of `Vm::run` read −4.5 % on the loop and
+  **−46.5 %** on that pattern. It is layout, not size — non-monotonic, tens
+  of percent per kilobyte moved. Treat `Vm::run`'s footprint as a first-class
+  cost.
+- **Never judge a `luxel-core` change on `tools/opbench.mjs` alone.** Its
+  K-sweep loop executes no builtin, so it is blind to the term above; run
+  `tools/patbench.mjs` on a builtin-heavy pattern as well and report BOTH
+  (#312/#318). The probe pattern must be **stateless**: `perlin-fire-wind-
+  tunnel` is a pure function of time and coordinates and repeats to ±0.3 %,
+  while `snake-2d` carries game state whose per-frame work varies — it swung
+  74 % between two builds a kilobyte apart and is useless as an A/B probe.
+- **`opbench.mjs` counts ops with a freshly built host `luxel` but pushes
+  bytecode built from `web/public/luxel.wasm`.** After a rebase over any
+  compiler change, a stale wasm has the device running the OLD op stream
+  while the profiler counts the NEW one — #312 read 138.7 cycles/op for a
+  build that was actually 115.7, a 20 % phantom regression. Run
+  `npm run wasm` before any post-rebase measurement.
 - **Host `luxel bench` on this box has 6–19 % run-to-run spread.** A single
   run, or even median-of-3, will invent double-digit regressions that
   vanish on re-measurement (#312 chased three of them). Interleave the two

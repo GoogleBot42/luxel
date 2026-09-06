@@ -102,6 +102,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `out_us` split in `/api/status` on the target board (docs/firmware.md). Host
   `luxel bench` is only a smoke test: the Xtensa costs that matter (ROM libgcc
   64-bit divides, opt-level "s") don't exist on x86 (2026-09-05, #260).
+- Engine (`luxel-core`) change → measure it TWICE on device: `tools/opbench.mjs`
+  (dispatch loop) AND `tools/patbench.mjs` (a real, stateless, builtin-heavy
+  pattern). They routinely disagree, and the pattern number is the one that
+  matters — `Vm::run`'s footprint against `call_builtin` in the flash
+  instruction cache outweighs anything inside the loop (2026-09-06, #312/#318).
 - "Works on device" claims → `tools/hw-bench.mjs` soak (docs/tools.md). It runs
   ~2 h on the Athom; launch it detached (`setsid nohup … > log 2>&1 < /dev/null &`)
   — the Bash tool's background mode is killed at its 10-minute timeout cap

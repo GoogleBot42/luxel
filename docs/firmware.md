@@ -421,6 +421,30 @@ per frame; no formatting, allocation, or float work happens inside the loop.
 the WiFi/network tasks — compare stages against each other, not against a
 theoretical cycle budget.
 
+### `vm_us` is dominated by instruction-cache layout, not by dispatch
+
+On the flash-cached Xtensa parts the largest single term in `vm_us`, for any
+pattern that calls a builtin, is whether `Vm::run` (~13 KB) and
+`Vm::call_builtin` (~21 KB) both stay resident in the flash instruction
+cache. It is worth far more than anything inside the dispatch loop, and it is
+**not monotonic in code size** — a kilobyte of movement in `luxel-core` is
+worth tens of percent in either direction (Gitea #312/#318, measured on the
+Athom):
+
+| change | loop microbench | `perlin-fire-wind-tunnel` |
+|---|---|---|
+| `debug_stop` out of `Vm::run` (−1.3 KB) | −4.5 % | **−46.5 %** (270.8 → 144.8 µs/px) |
+| `binop_const` inlined into the fused arms (+1.3 KB) | −7.5 % | **+38 %** |
+| the same, one arm only (+0.5 KB) | −3.1 % | **+57 %** |
+
+So measure an engine change **twice**: `tools/opbench.mjs` for the dispatch
+loop and `tools/patbench.mjs` for a real pattern (docs/tools.md). The loop
+microbenchmark executes no builtin and therefore cannot see this term at all,
+and the two routinely point in opposite directions. Use a *stateless* probe
+pattern — `perlin-fire-wind-tunnel` repeats to ±0.3 %, while `snake-2d`'s
+per-frame work depends on game state and swung 74 % between two builds a
+kilobyte apart.
+
 ## Cores & tasks: the render task runs on the second core
 
 Classic ESP32 and ESP32-S3 are dual-core; the C3/C6/S2/C2 are not. Until
