@@ -20,6 +20,11 @@
 //!   --profile      dump dynamic opcode/pair/triple/builtin counts for the run
 //!   --json         emit that profile as one JSON line (tools/profile-library.mjs)
 //!
+//! compile-only options:
+//!   --stats        one JSON line of the blob's STATIC shape (per-function
+//!                  instruction counts); writes no .lxbc unless --out is given
+//!                  (tools/oracle/opcount.mjs, Gitea #312)
+//!
 //! The PPM is one row per frame (like PB's preview strips): width = pixels,
 //! height = frames.
 
@@ -293,7 +298,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--stats]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES]"
     );
     ExitCode::from(2)
 }
@@ -313,12 +318,20 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     let mut rest: Vec<String> = rest.to_vec();
     let no_fuse = rest.iter().any(|a| a == "--no-fuse");
     rest.retain(|a| a != "--no-fuse");
+    // `--stats`: report the STATIC shape of the blob (per-function
+    // instruction counts) as one JSON line — the Luxel half of the
+    // Pixelblaze op-count comparison (tools/oracle/opcount.mjs, Gitea #312).
+    // On its own it writes no file, so it can be pointed at library/ without
+    // littering .lxbc next to the sources.
+    let stats = rest.iter().any(|a| a == "--stats");
+    rest.retain(|a| a != "--stats");
     let rest = &rest[..];
     let out_path = match rest {
-        [flag, p] if flag == "--out" => p.clone(),
+        [flag, p] if flag == "--out" => Some(p.clone()),
+        [] if stats => None,
         [] => {
             let stem = path.rsplit_once('.').map(|(s, _)| s).unwrap_or(path);
-            format!("{stem}.lxbc")
+            Some(format!("{stem}.lxbc"))
         }
         _ => return usage(),
     };
@@ -359,6 +372,48 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
+    };
+    if stats {
+        let mut fns = Vec::new();
+        let mut total = 0u32;
+        for (i, f) in prog.fns.iter().enumerate() {
+            let s = f.code_start as usize;
+            let code = &prog.words[s..s + f.code_len as usize];
+            let insns = match luxel_core::bytecode::insn_count(code) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("error: {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            total += insns;
+            fns.push(serde_json::json!({
+                // fns[0] is top-level init code and has no source name.
+                "name": if i == 0 { "(init)" } else { f.name.as_str() },
+                "params": f.params,
+                "locals": f.locals,
+                "words": f.code_len,
+                "insns": insns,
+            }));
+        }
+        println!(
+            "{}",
+            serde_json::json!({
+                "file": path,
+                "fused": !no_fuse,
+                "bytes": blob.len(),
+                "words": prog.words.len(),
+                "insns": total,
+                "globals": prog.globals.len(),
+                "fns": fns,
+                "exported": prog.exported_fns.iter()
+                    .map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            })
+        );
+    }
+
+    let Some(out_path) = out_path else {
+        return ExitCode::SUCCESS;
     };
     match std::fs::write(&out_path, &blob) {
         Ok(()) => {

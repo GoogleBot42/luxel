@@ -319,3 +319,46 @@ fn builtin_id_outside_import_table_is_rejected() {
     evil2[n - 4..n].copy_from_slice(&ret_null.to_le_bytes());
     assert!(validate(&evil2).is_err());
 }
+
+/// `insn_count` walks a function's words the same way `validate` does, so
+/// every function of a compiled program counts cleanly, an instruction is
+/// never wider than the range it sits in, and the fused build never needs
+/// MORE instructions than the unfused one (Gitea #312 — the static half of
+/// the Pixelblaze op-count comparison, `tools/oracle/opcount.mjs`).
+#[test]
+fn insn_count_walks_every_function() {
+    use luxel_core::bytecode::insn_count;
+    use luxel_core::compile::{compile_with, CompileOpts};
+
+    let mut totals = Vec::new();
+    for superinstructions in [true, false] {
+        let prog = compile_with(PATTERN, CompileOpts { superinstructions }).unwrap();
+        let mut total = 0u32;
+        for f in &prog.fns {
+            let s = f.code_start as usize;
+            let code = &prog.words[s..s + f.code_len as usize];
+            let n = insn_count(code).expect("counts cleanly");
+            assert!(n as usize <= code.len(), "more instructions than words");
+            assert_eq!(n == 0, code.is_empty());
+            total += n;
+        }
+        assert!(total > 0);
+        totals.push(total);
+    }
+    let (fused, unfused) = (totals[0], totals[1]);
+    assert!(fused <= unfused, "fusing grew the instruction count: {fused} > {unfused}");
+
+    // An undecodable word is an error, not a silent miscount.
+    assert!(insn_count(&[0x0000_00FF]).is_err());
+
+    // So is a range that ends inside a multi-word instruction: `render` holds
+    // literals, so some prefix of it must cut a CONST_NUM in half.
+    let prog = compile(PATTERN).unwrap();
+    let f = prog.fns.iter().find(|f| f.name == "render").unwrap();
+    let s = f.code_start as usize;
+    let code = &prog.words[s..s + f.code_len as usize];
+    assert!(
+        (1..code.len()).any(|n| insn_count(&code[..n]).is_err()),
+        "no prefix of render cut an instruction — is it all single-word?",
+    );
+}

@@ -1,5 +1,69 @@
 # Update log
 
+## 2026-09-06 — Counting the Pixelblaze compiler's ops: `tools/oracle/opcount.mjs` (#312)
+
+#312 measured that one iteration of `x += i * 0.5` costs **4.1 µs** on the
+Pixelblaze and 5.0 µs (S3) / 6.2 µs (Athom) on ours, but its cycles-per-*operation*
+row was a guess: nobody had counted what the PB's compiler emits for that source.
+Now we count it.
+
+`tools/oracle/opcount.mjs` compiles a pattern with the **Pixelblaze's own
+compiler** — the existing `tools/oracle/compiler.mjs` sandbox, so the only thing
+that touches the oracle is one read-only HTTP GET of its web UI page: no
+websocket, no `setCode`, nothing to restore (`--cache` skips even that). It then
+decodes the emitted word stream using *client-side* facts only — the compiler's
+opcode table is read out of the served page and evaluated at run time rather than
+transcribed into this repo, and the word encoding is the one its own encoder
+states (bit 0 tags an instruction word `inline<<16 | stack<<8 | opcode<<1 | 1`
+against a data word — a 16.16 literal or `addr<<1`; every instruction is exactly
+one 32-bit word). Function boundaries fall out of the `<fn address>; gstore
+<global>` pairs the init block emits, cross-referenced with the export table, so
+init / beforeRender / render / render2D / each control handler are counted
+separately, and loops come from backward branches.
+
+**The answer for the microbench: 13 words per iteration — 11 instruction words
+plus 2 literal pushes.** The K=16 and K=64 blobs are word-identical (the PB
+compiler does not unroll), so the count is the loop span, not a K difference.
+Luxel's dynamic profiler says 11.0 fused ops per iteration for the same source.
+
+| device | µs/iter | cycles/iter | ops/iter | cycles/op |
+|---|---:|---:|---|---:|
+| Pixelblaze oracle (ESP32, fw 3.67) | 4.11 | ~986 | 11 insn words (13 with literals) | **~90** (~76) |
+| Luxel, Athom (classic ESP32), master | 6.20 | ~1,488 | 11.0 | **~135** |
+| Luxel, Seengreat S3, d267836 | 5.02 | ~1,205 | 11.0 | **~110** |
+
+So #312's ~90 cycles/op for the PB was right, and the gap it describes is real
+and like-for-like: the two compilers emit **the same 11 operations** for that
+loop body, and ours costs 20–50 % more per operation. What we still cannot say —
+and the tool says so rather than guessing — is what any of it *costs* on the PB:
+cycles/op there are only ever inferred from a wall-clock measurement divided by a
+counted op count, and whether its VM dispatches a literal word as its own push is
+firmware behaviour we do not look at, so both figures are reported.
+
+Whole-pattern static counts, same rig for both sides:
+
+| pattern | PB words | PB insn-words | Lx static fused ops | Lx dyn ops/px |
+|---|---:|---:|---:|---:|
+| `library/rainbow.js` | 16 | 12 | 7 | 6.0 |
+| `library/snake.js` | 197 | 162 | 113 | 26.9 |
+| `library/snake-2d.js` | 1366 | 1152 | 909 | 39.7 |
+| `library/perlin-fire.js` | rejected (`const`) | — | 290 | 102.6 |
+| `library/perlin-fire-wind-tunnel.js` | 308 | 245 | 180 | 81.1 |
+
+`perlin-fire.js` is the one benchmark the PB compiler will not take — its parser
+rejects `const` declarations, nothing to do with builtins — so
+`perlin-fire-wind-tunnel.js` (the same clean-room noise model, written without
+`const`) stands in as the builtin-heavy case; the rejected row keeps its Luxel
+columns rather than going blank.
+
+Supporting change: `luxel compile --stats` prints one JSON line of a blob's
+static shape (bytes, words, globals, per-function instruction counts, where a
+multi-word instruction counts once), writing no `.lxbc` unless `--out` is given;
+`--no-fuse` alongside it gives the unfused baseline. It is backed by a new
+`luxel_core::bytecode::insn_count`, which walks a function's words exactly as
+`validate` does.
+
+
 ## 2026-09-06 — The per-pixel VM entry: 323 → 231 Xtensa instructions for an empty render (#260)
 
 An `export function render(index) {}` cost **7,591 µs of VM time per frame** at
