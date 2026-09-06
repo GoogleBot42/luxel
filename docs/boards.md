@@ -171,6 +171,22 @@ into `curl2`/`curl3`), so it is not in the tree. No statics or buffers:
 `.stack` on pixelblaze-v3 is 27,484 B with no new frame in the top
 fifteen and nothing over the 12 KB budget.
 
+2026-09-05 (later), LXBC v5 — the fixed-width word bytecode the VM
+executes in place (docs/spec/bytecode.md; Gitea #260): the decoder lost
+its byte walker, its pre-pass and the import-slot rewrite. Same-day A/B
+of devshell builds WITH creds (so ~6–7 KB above the credless flake rows
+elsewhere in this section; compare the deltas, not the absolutes):
+**−2,160 B** on `board-c6-devkit` (1,005,200 → 1,003,040 B, margin
+45,536 B / **4.34 %** — up from 4.13 % on the same-methodology
+baseline), −2,000 B on `board-c3-devkit`, −2,128 B on the C6 hosted-ui
+image; Xtensa +368…+752 B (`board-pixelblaze-v3` 983,392 → 983,792 B,
+`board-athom-music` +400 B, `board-s3-devkit` +752 B, both HUB75 images
++512/+528 B) — inside the ±0.7 KB noise floor. `.stack` on
+`board-pixelblaze-v3` 26,732 → 26,764 B; every flake variant passes
+`tools/image-check.sh`. Firmware source untouched (it still calls the
+copying `deserialize_lean`; the borrowing path is the store side's
+switch).
+
 2026-09-05, cache-MMU flash mapping of the assets partition
 (`firmware/src/flashmap.rs`, docs/research/flash-mmap.md): **−1,392 B** on
 `board-c6-devkit` (1,000,512 → **999,120 B**, margin **49,456 B /

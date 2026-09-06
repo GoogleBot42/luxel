@@ -1,15 +1,23 @@
 //! LXBC — the serialized form of a compiled [`Program`].
 //!
-//! See docs/spec/bytecode.md for the wire format. Two properties matter
+//! See docs/spec/bytecode.md for the wire format. Three properties matter
 //! here:
 //!
 //! - The decoder fully validates untrusted bytes. The VM indexes functions,
 //!   globals, locals, and builtins without bounds checks (it trusts
 //!   `Program`), so everything the VM would trust is proven at decode time —
 //!   a hostile or corrupt blob is a `BcError`, never a device panic.
-//! - Builtins are referenced by *name* through a per-blob import table and
-//!   resolved to runtime ids at load, so growing the builtin table never
-//!   invalidates existing blobs.
+//! - The blob is **execution-ready**: the code and constant pool are one
+//!   4-byte-aligned region of little-endian `u32` words that the VM runs
+//!   exactly as stored. A device that memory-maps its pattern store
+//!   ([`deserialize_lean_static`]) executes straight from flash — no RAM
+//!   copy of the code or the constants, ever. Nothing in the word region is
+//!   rewritten at load (v4 patched builtin ids into its RAM copy; v5 emits
+//!   the runtime ids and *checks* them instead).
+//! - Builtins are referenced by their runtime id (`BUILTINS` is append-only)
+//!   and every id a blob uses is also listed by NAME in its import table, so
+//!   a blob that names a builtin this build lacks fails with the name, not a
+//!   bare index.
 //!
 //! `serialize` → `deserialize` → `serialize` is byte-identical; the corpus
 //! round-trip test relies on that to prove decode fidelity.
@@ -19,7 +27,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::fixed::Fx;
-use crate::vm::{lookup_builtin, FnDef, GlobalDef, Program, Value, BUILTINS};
+use crate::vm::{lookup_builtin, FnDef, GlobalDef, PoolEntry, Program, Words, BUILTINS};
 
 pub const MAGIC: [u8; 4] = *b"LXBC";
 /// v2: jump operands are function-relative BYTE offsets (v1 used
@@ -29,7 +37,14 @@ pub const MAGIC: [u8; 4] = *b"LXBC";
 /// the `ConstArr` opcode — a pattern's `.rodata`.
 /// v4: assert-message table + the `Assert` opcode (`assert()` invariants
 /// run inline in init; the message must survive to compiler-less devices).
-pub const FORMAT_VERSION: u16 = 4;
+/// v5: fixed-width **u32 word** instructions in one 4-aligned word region
+/// shared with the constant pool; pcs, jump targets and debug offsets are
+/// word indices; builtin operands are runtime ids (import table kept for
+/// validation only). Executable in place from memory-mapped flash.
+pub const FORMAT_VERSION: u16 = 5;
+
+/// Fixed header size (bytes) before the variable-length tables.
+const HEADER_LEN: usize = 30;
 
 /// Decoder hard limits — bound allocations before trusting any count field.
 const MAX_BLOB: usize = 256 * 1024;
@@ -38,11 +53,14 @@ const MAX_EXPORTS: usize = 1024;
 const MAX_IMPORTS: usize = 512;
 const MAX_GLOBALS: usize = 256;
 const MAX_LOCALS: usize = 255;
-const MAX_CODE: usize = 65_536;
+/// Per-function code limit in WORDS — the same 64 KiB byte budget v4 had.
+const MAX_CODE: usize = 65_536 / 4;
 const MAX_ARGC: u8 = 16;
 const MAX_DATA_ARRAYS: usize = 4096;
 const MAX_DATA_ELEMS: usize = 65_536;
 const MAX_ASSERT_MSGS: usize = 4096;
+/// Whole word region (code + pool); the blob cap already implies it.
+const MAX_WORDS: usize = MAX_BLOB / 4;
 
 const FLAG_DEBUG: u16 = 1;
 
@@ -141,7 +159,7 @@ pub(crate) mod op {
     pub const ARR_LEN: u8 = 0x0A;
     pub const NEW_ARRAY: u8 = 0x0B;
     /// v3: allocate an arena array sharing a const-pool entry (u16 index
-    /// into the data section) — copy-on-write on first mutation.
+    /// into the pool table) — copy-on-write on first mutation.
     pub const CONST_ARR: u8 = 0x0F;
     pub const DUP: u8 = 0x0C;
     pub const DUP2: u8 = 0x0D;
@@ -177,6 +195,52 @@ pub(crate) mod op {
     pub const RET_NULL: u8 = 0x3F;
     /// v4: pop the condition; falsy aborts with message-table entry (u16).
     pub const ASSERT: u8 = 0x40;
+    // 0x41..=0xFF: free — superinstructions (Gitea #261) go here.
+}
+
+/// Instruction-word field layout (v5). One `u32` per instruction:
+/// bits 0..8 opcode, bits 8..32 a 24-bit operand field, which is a u8 in
+/// bits 8..16, a u16 in bits 8..24, a `u16 index + u8 argc` pair (bits
+/// 8..24 / 24..32) or a 24-bit word index depending on the opcode.
+/// `CONST_NUM` is the only two-word instruction: its immediate (raw
+/// 16.16 `i32`) is the following word.
+pub(crate) mod enc {
+    #[inline(always)]
+    pub const fn opcode(w: u32) -> u8 {
+        w as u8
+    }
+    #[inline(always)]
+    pub const fn imm8(w: u32) -> u8 {
+        (w >> 8) as u8
+    }
+    #[inline(always)]
+    pub const fn imm16(w: u32) -> u16 {
+        (w >> 8) as u16
+    }
+    #[inline(always)]
+    pub const fn imm24(w: u32) -> u32 {
+        w >> 8
+    }
+    #[inline(always)]
+    pub const fn argc(w: u32) -> u8 {
+        (w >> 24) as u8
+    }
+    /// Opcode with no operand.
+    pub const fn bare(op: u8) -> u32 {
+        op as u32
+    }
+    pub const fn with_u8(op: u8, v: u8) -> u32 {
+        op as u32 | (v as u32) << 8
+    }
+    pub const fn with_u16(op: u8, v: u16) -> u32 {
+        op as u32 | (v as u32) << 8
+    }
+    pub const fn with_u24(op: u8, v: u32) -> u32 {
+        op as u32 | (v & 0x00FF_FFFF) << 8
+    }
+    pub const fn call(op: u8, idx: u16, argc: u8) -> u32 {
+        op as u32 | (idx as u32) << 8 | (argc as u32) << 24
+    }
 }
 
 // ---- serialize ----
@@ -208,15 +272,14 @@ impl Writer {
     }
 }
 
-/// One instruction, walked in its byte encoding: where it ends and which
-/// operands need validation or import-slot translation. Shared by the
-/// serializer (runtime builtin id → import slot) and the decoder (the
-/// reverse, plus full validation).
+/// One instruction, decoded from its opcode word: how many words it spans
+/// and which operands need validation. Shared by the serializer (import
+/// table collection) and the decoder (full validation).
 struct Walk {
-    /// Offset just past this instruction.
-    next: usize,
-    /// Offset of a u16 builtin operand (Const Builtin / CallBuiltin).
-    builtin_at: Option<usize>,
+    /// Words this instruction occupies (1, or 2 for `CONST_NUM`).
+    len: usize,
+    /// Runtime builtin id operand (Const Builtin / CallBuiltin).
+    builtin: Option<u16>,
     fn_ref: Option<u16>,
     global_ref: Option<u16>,
     local_ref: Option<u8>,
@@ -224,16 +287,18 @@ struct Walk {
     data_ref: Option<u16>,
     /// Assert-message-table index (Assert).
     msg_ref: Option<u16>,
+    /// Function-relative word index (Jmp*).
     jump: Option<u32>,
     argc: Option<u8>,
 }
 
-/// Walk the instruction starting at `at`. Errors on an unknown opcode or an
-/// instruction truncated by the end of `code`.
-fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
-    let mut w = Walk {
-        next: at + 1,
-        builtin_at: None,
+/// Decode one opcode word. Errors on an unknown opcode or on operand bits
+/// the opcode does not use being set (the encoding is canonical: a blob
+/// re-encodes byte-identically, and the VM masks nothing it need not).
+fn walk_word(w: u32) -> Result<Walk, BcError> {
+    let mut k = Walk {
+        len: 1,
+        builtin: None,
         fn_ref: None,
         global_ref: None,
         local_ref: None,
@@ -242,85 +307,69 @@ fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
         jump: None,
         argc: None,
     };
-    let need = |n: usize| -> Result<(), BcError> {
-        if at + 1 + n <= code.len() {
-            Ok(())
-        } else {
-            err("truncated instruction")
-        }
-    };
-    let u16_at = |p: usize| u16::from_le_bytes([code[p], code[p + 1]]);
-    let u32_at = |p: usize| {
-        u32::from_le_bytes([code[p], code[p + 1], code[p + 2], code[p + 3]])
-    };
-    match *code.get(at).ok_or_else(|| BcError::Malformed("truncated instruction".to_string()))? {
+    // operand-width masks: the bits an opcode may carry
+    const NONE: u32 = 0x0000_00FF;
+    const U8: u32 = 0x0000_FFFF;
+    const U16: u32 = 0x00FF_FFFF;
+    const ALL: u32 = 0xFFFF_FFFF;
+    let used = match enc::opcode(w) {
         op::CONST_NUM => {
-            need(4)?;
-            w.next = at + 5;
+            k.len = 2;
+            NONE
         }
         op::CONST_FUN => {
-            need(2)?;
-            w.fn_ref = Some(u16_at(at + 1));
-            w.next = at + 3;
+            k.fn_ref = Some(enc::imm16(w));
+            U16
         }
         op::CONST_BUILTIN => {
-            need(2)?;
-            w.builtin_at = Some(at + 1);
-            w.next = at + 3;
+            k.builtin = Some(enc::imm16(w));
+            U16
         }
         op::LOAD_G | op::STORE_G => {
-            need(2)?;
-            w.global_ref = Some(u16_at(at + 1));
-            w.next = at + 3;
+            k.global_ref = Some(enc::imm16(w));
+            U16
         }
         op::LOAD_L | op::STORE_L => {
-            need(1)?;
-            w.local_ref = Some(code[at + 1]);
-            w.next = at + 2;
+            k.local_ref = Some(enc::imm8(w));
+            U8
         }
-        op::NEW_ARRAY => {
-            need(2)?;
-            w.next = at + 3;
-        }
+        op::NEW_ARRAY => U16,
         op::CONST_ARR => {
-            need(2)?;
-            w.data_ref = Some(u16_at(at + 1));
-            w.next = at + 3;
+            k.data_ref = Some(enc::imm16(w));
+            U16
         }
         op::ASSERT => {
-            need(2)?;
-            w.msg_ref = Some(u16_at(at + 1));
-            w.next = at + 3;
+            k.msg_ref = Some(enc::imm16(w));
+            U16
         }
         op::JMP | op::JMP_IF_FALSE | op::JMP_IF_TRUE_PEEK | op::JMP_IF_FALSE_PEEK => {
-            need(4)?;
-            w.jump = Some(u32_at(at + 1));
-            w.next = at + 5;
+            k.jump = Some(enc::imm24(w));
+            ALL
         }
         op::CALL_FN => {
-            need(3)?;
-            w.fn_ref = Some(u16_at(at + 1));
-            w.argc = Some(code[at + 3]);
-            w.next = at + 4;
+            k.fn_ref = Some(enc::imm16(w));
+            k.argc = Some(enc::argc(w));
+            ALL
         }
         op::CALL_BUILTIN => {
-            need(3)?;
-            w.builtin_at = Some(at + 1);
-            w.argc = Some(code[at + 3]);
-            w.next = at + 4;
+            k.builtin = Some(enc::imm16(w));
+            k.argc = Some(enc::argc(w));
+            ALL
         }
         op::CALL_VALUE => {
-            need(1)?;
-            w.argc = Some(code[at + 1]);
-            w.next = at + 2;
+            k.argc = Some(enc::imm8(w));
+            U8
         }
         op::LOAD_IDX | op::STORE_IDX | op::ARR_LEN | op::DUP | op::DUP2 | op::POP | op::ADD
         | op::SUB | op::MUL | op::DIV | op::REM | op::POW | op::NEG | op::NOT | op::BIT_NOT
         | op::BIT_AND | op::BIT_OR | op::BIT_XOR | op::SHL | op::SHR | op::LT | op::LE
-        | op::GT | op::GE | op::EQ | op::NE | op::RET | op::RET_NULL => {}
+        | op::GT | op::GE | op::EQ | op::NE | op::RET | op::RET_NULL => NONE,
         _ => return err("unknown opcode"),
+    };
+    if w & !used != 0 {
+        return err("reserved operand bits set");
     }
-    Ok(w)
+    Ok(k)
 }
 
 /// Serialize a compiled program (with debug info — positions + local names).
@@ -328,25 +377,23 @@ fn walk_insn(code: &[u8], at: usize) -> Result<Walk, BcError> {
 /// Fails only on a `Program` the compiler could not have produced (e.g. a
 /// hand-built one referencing a builtin id past the table).
 pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
-    let fn_code = |f: &FnDef| -> Result<core::ops::Range<usize>, BcError> {
+    let words: &[u32] = &prog.words;
+    let fn_code = |f: &FnDef| -> Result<&[u32], BcError> {
         let s = f.code_start as usize;
-        let e = s + f.code_len as usize;
-        if e <= prog.code.len() && s <= e {
-            Ok(s..e)
-        } else {
-            err("function code range out of bounds")
+        match s.checked_add(f.code_len as usize) {
+            Some(e) if e <= words.len() => Ok(&words[s..e]),
+            _ => err("function code range out of bounds"),
         }
     };
 
     // Builtin import table: unique RUNTIME ids in first-appearance order.
     let mut imports: Vec<u16> = Vec::new();
     for f in &prog.fns {
-        let code = &prog.code[fn_code(f)?];
+        let code = fn_code(f)?;
         let mut at = 0;
         while at < code.len() {
-            let w = walk_insn(code, at)?;
-            if let Some(p) = w.builtin_at {
-                let b = u16::from_le_bytes([code[p], code[p + 1]]);
+            let k = walk_word(code[at])?;
+            if let Some(b) = k.builtin {
                 if b as usize >= BUILTINS.len() {
                     return Err(BcError::Malformed(format!("builtin id {b} out of range")));
                 }
@@ -354,7 +401,13 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
                     imports.push(b);
                 }
             }
-            at = w.next;
+            at += k.len;
+        }
+    }
+    for p in &prog.pool {
+        let s = p.start as usize;
+        if s.checked_add(p.len as usize).is_none_or(|e| e > words.len()) {
+            return err("const-pool range out of bounds");
         }
     }
 
@@ -367,11 +420,16 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
     w.u16(prog.fns.len() as u16);
     w.u16(prog.exported_fns.len() as u16);
     w.u16(imports.len() as u16);
-    w.u16(prog.data_arrays.len() as u16); // n_data (was reserved pre-v3)
-    w.u16(prog.assert_msgs.len() as u16); // n_msgs (v4)
+    w.u16(prog.pool.len() as u16);
+    w.u16(prog.assert_msgs.len() as u16);
+    let words_off_at = w.out.len();
+    w.u32(0); // words_off, patched below
+    w.u32(words.len() as u32);
+    debug_assert_eq!(w.out.len(), HEADER_LEN);
 
     for &b in &imports {
         w.str8(BUILTINS[b as usize].name)?;
+        w.u16(b);
     }
 
     for g in &prog.globals {
@@ -380,12 +438,11 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
         w.i32(g.init.raw());
     }
 
-    // const-array data section (the pattern's .rodata, deduplicated)
-    for d in &prog.data_arrays {
-        w.u16(d.len() as u16);
-        for v in d.iter() {
-            w.i32(v.num().raw());
-        }
+    // const-pool table: (word offset, len) per array — the words themselves
+    // live in the word region
+    for p in &prog.pool {
+        w.u32(p.start);
+        w.u16(p.len as u16);
     }
 
     // assert-message table (user-facing invariant text, deduplicated)
@@ -397,23 +454,9 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
         w.str8(&f.name)?;
         w.u8(f.params);
         w.u16(f.locals as u16);
+        w.u32(f.code_start);
         w.u32(f.code_len);
-        // code bytes verbatim, then builtin operands rewritten to slots
-        let out_base = w.out.len();
-        let range = fn_code(f)?;
-        w.out.extend_from_slice(&prog.code[range.clone()]);
-        let code = &prog.code[range];
-        let mut at = 0;
-        while at < code.len() {
-            let walk = walk_insn(code, at)?;
-            if let Some(p) = walk.builtin_at {
-                let b = u16::from_le_bytes([code[p], code[p + 1]]);
-                let slot = imports.iter().position(|&x| x == b).unwrap() as u16;
-                w.out[out_base + p..out_base + p + 2].copy_from_slice(&slot.to_le_bytes());
-            }
-            at = walk.next;
-        }
-        // debug: offset-keyed source-position runs
+        // debug: word-index-keyed source-position runs
         w.u32(f.pos.len() as u32);
         for &(off, line, col) in &f.pos {
             w.u32(off);
@@ -430,9 +473,19 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
         w.u16(*idx);
     }
 
+    // pad to a word boundary, then the word region verbatim
+    while !w.out.len().is_multiple_of(4) {
+        w.u8(0);
+    }
+    let words_off = w.out.len() as u32;
+    w.out[words_off_at..words_off_at + 4].copy_from_slice(&words_off.to_le_bytes());
+    w.out.reserve(words.len() * 4);
+    for &x in words {
+        w.u32(x);
+    }
+
     Ok(w.out)
 }
-
 
 // ---- deserialize ----
 
@@ -478,18 +531,28 @@ impl<'a> Reader<'a> {
 }
 
 /// Decode and fully validate a blob. The returned `Program` upholds every
-/// invariant the VM trusts (see module docs).
+/// invariant the VM trusts (see module docs). Copies the word region.
 pub fn deserialize(bytes: &[u8]) -> Result<Program, BcError> {
-    Ok(decode(bytes, Mode::Full)?.expect("collecting mode returns a program"))
+    Ok(decode(bytes, Mode::Full, None)?.expect("collecting mode returns a program"))
 }
 
 /// Like [`deserialize`] but skips debug info (per-instruction source
-/// positions + local names) — roughly HALF the decoded `Program`'s RAM.
-/// Small-heap devices run on this: runtime errors keep the function name
-/// and pc but report line/col (0, 0); by-name vars/controls/exports are
-/// unaffected (those names are not debug info).
+/// positions + local names). Small-heap devices run on this: runtime
+/// errors keep the function name and pc but report line/col (0, 0);
+/// by-name vars/controls/exports are unaffected (those names are not
+/// debug info). Copies the word region — see [`deserialize_lean_static`]
+/// for the zero-copy path.
 pub fn deserialize_lean(bytes: &[u8]) -> Result<Program, BcError> {
-    Ok(decode(bytes, Mode::Lean)?.expect("collecting mode returns a program"))
+    Ok(decode(bytes, Mode::Lean, None)?.expect("collecting mode returns a program"))
+}
+
+/// [`deserialize_lean`] over a blob that lives forever — a memory-mapped
+/// flash slot, or a leaked Vec. Validates in place and, when the blob's
+/// word region is 4-byte aligned in memory, BORROWS it: the `Program`'s
+/// code and constant pool are then the caller's bytes and cost no RAM.
+/// An unaligned input silently takes the copying path (never an error).
+pub fn deserialize_lean_static(bytes: &'static [u8]) -> Result<Program, BcError> {
+    Ok(decode(bytes, Mode::Lean, Some(bytes))?.expect("collecting mode returns a program"))
 }
 
 /// Validate a blob without materializing the `Program` — same checks as
@@ -497,7 +560,7 @@ pub fn deserialize_lean(bytes: &[u8]) -> Result<Program, BcError> {
 /// (HTTP upload, MQTT activate, sync adopt) call on small-heap devices:
 /// a full `Program` is only ever built once, by the render task.
 pub fn validate(bytes: &[u8]) -> Result<(), BcError> {
-    decode(bytes, Mode::Validate).map(|_| ())
+    decode(bytes, Mode::Validate, None).map(|_| ())
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -514,7 +577,25 @@ fn reserve<T>(v: &mut Vec<T>, n: usize) -> Result<(), BcError> {
         .map_err(|_| BcError::Malformed("not enough memory for this pattern".to_string()))
 }
 
-fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
+/// The word region as read from the raw bytes — no alignment requirement,
+/// no allocation; validation runs over this in every mode.
+#[derive(Clone, Copy)]
+struct WordBytes<'a>(&'a [u8]);
+
+impl WordBytes<'_> {
+    #[inline]
+    fn get(&self, i: usize) -> u32 {
+        u32::from_le_bytes(self.0[i * 4..i * 4 + 4].try_into().unwrap())
+    }
+}
+
+/// `borrow`: the same bytes with a `'static` lifetime, when the caller can
+/// promise them — the word region is then referenced in place if aligned.
+fn decode(
+    bytes: &[u8],
+    mode: Mode,
+    borrow: Option<&'static [u8]>,
+) -> Result<Option<Program>, BcError> {
     let collect = mode != Mode::Validate;
     let keep_debug = mode == Mode::Full;
     if bytes.len() > MAX_BLOB {
@@ -537,8 +618,18 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
     let n_imports = r.u16()? as usize;
     let n_data = r.u16()? as usize;
     let n_msgs = r.u16()? as usize;
+    let words_off = r.u32()? as usize;
+    let n_words = r.u32()? as usize;
+    debug_assert_eq!(r.at, HEADER_LEN);
 
-    if n_globals > MAX_GLOBALS || n_fns > MAX_FNS || n_exports > MAX_EXPORTS || n_imports > MAX_IMPORTS || n_data > MAX_DATA_ARRAYS || n_msgs > MAX_ASSERT_MSGS {
+    if n_globals > MAX_GLOBALS
+        || n_fns > MAX_FNS
+        || n_exports > MAX_EXPORTS
+        || n_imports > MAX_IMPORTS
+        || n_data > MAX_DATA_ARRAYS
+        || n_msgs > MAX_ASSERT_MSGS
+        || n_words > MAX_WORDS
+    {
         return err("section count over limit");
     }
     if n_fns == 0 {
@@ -547,17 +638,35 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
     if pixel_count_g as usize >= n_globals {
         return err("pixel_count_g out of range");
     }
+    // the word region is the tail of the blob, 4-aligned within it
+    if !words_off.is_multiple_of(4) || words_off < HEADER_LEN {
+        return err("word region misaligned");
+    }
+    if words_off.checked_add(n_words * 4) != Some(bytes.len()) {
+        return err("word region does not end the blob");
+    }
+    let wb = WordBytes(&bytes[words_off..]);
+    // the tables may not run into the word region
+    r.buf = &bytes[..words_off];
 
-    // builtin imports, resolved by name to runtime ids
+    // builtin import table: (name, runtime id) — every id must be exactly
+    // what this build's BUILTINS gives the name, so a blob from a newer
+    // compiler fails by NAME here rather than as a bare index below
     let mut imports: Vec<u16> = Vec::new();
     reserve(&mut imports, n_imports)?;
     for _ in 0..n_imports {
         let name = r.str8()?;
+        let id = r.u16()?;
         match lookup_builtin(name) {
-            Some(b) => imports.push(b),
+            Some(b) if b == id => imports.push(id),
+            Some(b) => {
+                return Err(BcError::Malformed(format!(
+                    "builtin `{name}` is id {b} on this firmware, the pattern expects {id} — recompile the pattern"
+                )))
+            }
             None => {
                 return Err(BcError::Malformed(format!(
-                    "unknown builtin `{name}` (pattern compiled by a newer compiler?)"
+                    "builtin `{name}` is not available on this firmware — recompile the pattern"
                 )))
             }
         }
@@ -581,27 +690,27 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         }
     }
 
-    // const-array data section (deduped all-numeric literals)
-    let mut data_arrays: Vec<alloc::boxed::Box<[Value]>> = Vec::new();
+    // const-pool table: (word offset, len) into the word region
+    let mut pool: Vec<PoolEntry> = Vec::new();
     if collect {
-        reserve(&mut data_arrays, n_data)?;
+        reserve(&mut pool, n_data)?;
     }
     let mut data_total = 0usize;
     for _ in 0..n_data {
+        let start = r.u32()? as usize;
         let len = r.u16()? as usize;
         data_total += len;
         if data_total > MAX_DATA_ELEMS {
             return err("const-array data section over limit");
         }
+        if start.checked_add(len).is_none_or(|e| e > n_words) {
+            return err("const-array range out of bounds");
+        }
         if collect {
-            let mut values: Vec<Value> = Vec::new();
-            reserve(&mut values, len)?;
-            for _ in 0..len {
-                values.push(Value::Num(Fx::from_raw(r.i32()?)));
-            }
-            data_arrays.push(values.into());
-        } else {
-            r.take(len * 4)?;
+            pool.push(PoolEntry {
+                start: start as u32,
+                len: len as u32,
+            });
         }
     }
 
@@ -618,53 +727,9 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         }
     }
 
-    let mut prog_code: Vec<u8> = Vec::new();
     let mut fns: Vec<FnDef> = Vec::new();
     if collect {
         reserve(&mut fns, n_fns)?;
-
-        // Pre-pass: sum every function's code_len so `prog_code` is reserved
-        // exactly ONCE, up front. Reserving per function instead (exact, so it
-        // never over-allocates) reallocs and copies the whole buffer-so-far on
-        // each of up to MAX_FNS functions — O(n²) churn that, on the device's
-        // ~188 KB heap, fragments the free space enough to later starve the
-        // 17–22 KB contiguous reservations a pattern swap needs. Functions are
-        // laid out header + code (+ debug info when the blob carries it), so to
-        // reach the next code_len we read the header and step over both the
-        // code section and any trailing debug runs/local names with take(); the
-        // main pass below re-reads from this same point. Bounds/overflow-safe:
-        // the blob is already <= MAX_BLOB, each code_len is held to MAX_CODE and
-        // n_runs to code_len+1 (as the main pass does, so the byte skips can't
-        // wrap), and code_total is accumulated with checked_add.
-        let mut pre = Reader { buf: r.buf, at: r.at };
-        let mut code_total = 0usize;
-        for _ in 0..n_fns {
-            pre.str8()?; // name
-            pre.u8()?; // params
-            let locals = pre.u16()? as usize;
-            if locals > MAX_LOCALS {
-                return err("too many locals");
-            }
-            let code_len = pre.u32()? as usize;
-            if code_len > MAX_CODE {
-                return err("function too long");
-            }
-            pre.take(code_len)?; // skip the code section
-            code_total = code_total.checked_add(code_len).ok_or_else(|| {
-                BcError::Malformed("not enough memory for this pattern".to_string())
-            })?;
-            if debug {
-                let n_runs = pre.u32()? as usize;
-                if n_runs > code_len + 1 {
-                    return err("bad debug runs");
-                }
-                pre.take(n_runs * 12)?; // off/line/col u32 triples
-                for _ in 0..locals {
-                    pre.str8()?; // local name
-                }
-            }
-        }
-        reserve(&mut prog_code, code_total)?;
     }
     // instruction-boundary bitmap, reused across functions (transient)
     let mut bits: Vec<u64> = Vec::new();
@@ -678,90 +743,82 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         if params as usize > locals {
             return err("params exceed locals");
         }
+        let code_start = r.u32()? as usize;
         let code_len = r.u32()? as usize;
         if code_len > MAX_CODE {
             return err("function too long");
         }
-        let sect = r.take(code_len)?;
+        if code_start.checked_add(code_len).is_none_or(|e| e > n_words) {
+            return err("function code range out of bounds");
+        }
+        let word = |i: usize| wb.get(code_start + i);
 
         // walk 1: instruction boundaries (also proves decodability)
-        let words = code_len / 64 + 1;
+        let nbits = code_len / 64 + 1;
         bits.clear();
-        reserve(&mut bits, words)?;
-        bits.resize(words, 0);
+        reserve(&mut bits, nbits)?;
+        bits.resize(nbits, 0);
         let mut at = 0usize;
         while at < code_len {
             bits[at / 64] |= 1u64 << (at % 64);
-            at = walk_insn(sect, at)?.next;
+            at += walk_word(word(at))?.len;
         }
         if at != code_len {
             return err("instruction overruns function end");
         }
 
-        // collect: append the section now; builtin operands are patched in
-        // the copy during walk 2
-        let code_start = prog_code.len();
-        if collect {
-            // Capacity for the whole code section was reserved up front by the
-            // pre-pass above, so this extend never reallocs (no churn).
-            prog_code.extend_from_slice(sect);
-        }
-
-        // walk 2: operand validation (+ builtin slot → runtime id rewrite)
+        // walk 2: operand validation
         let mut at = 0usize;
         while at < code_len {
-            let w = walk_insn(sect, at)?;
-            if let Some(i) = w.fn_ref {
+            let k = walk_word(word(at))?;
+            if let Some(i) = k.fn_ref {
                 if i as usize >= n_fns {
                     return err("function index out of range");
                 }
             }
-            if let Some(i) = w.global_ref {
+            if let Some(i) = k.global_ref {
                 if i as usize >= n_globals {
                     return err("global index out of range");
                 }
             }
-            if let Some(i) = w.local_ref {
+            if let Some(i) = k.local_ref {
                 if i as usize >= locals {
                     return err("local slot out of range");
                 }
             }
-            if let Some(d) = w.data_ref {
+            if let Some(d) = k.data_ref {
                 if d as usize >= n_data {
                     return err("const-array index out of range");
                 }
             }
-            if let Some(m) = w.msg_ref {
+            if let Some(m) = k.msg_ref {
                 if m as usize >= n_msgs {
                     return err("assert message index out of range");
                 }
             }
-            if let Some(a) = w.argc {
+            if let Some(a) = k.argc {
                 if a > MAX_ARGC {
                     return err("argc too large");
                 }
             }
-            if let Some(t) = w.jump {
+            if let Some(t) = k.jump {
                 let t = t as usize;
                 // == code_len is a valid "fall off the end" target
                 if t > code_len || (t < code_len && bits[t / 64] & (1u64 << (t % 64)) == 0) {
                     return err("jump target not on an instruction boundary");
                 }
             }
-            if let Some(p) = w.builtin_at {
-                let slot = u16::from_le_bytes([sect[p], sect[p + 1]]) as usize;
-                let Some(&b) = imports.get(slot) else {
-                    return err("builtin import slot out of range");
-                };
-                if collect {
-                    prog_code[code_start + p..code_start + p + 2]
-                        .copy_from_slice(&b.to_le_bytes());
+            if let Some(b) = k.builtin {
+                // proven by name above: the import table lists every id the
+                // code may use, and each resolved to itself on this build
+                if !imports.contains(&b) {
+                    return err("builtin id not in the import table");
                 }
             }
-            at = w.next;
+            at += k.len;
         }
 
-        // debug info: offset-keyed source-position runs + local names
+        // debug info: word-index-keyed source-position runs + local names
         let mut pos: Vec<(u32, u32, u32)> = Vec::new();
         let mut local_names: Vec<String> = Vec::new();
         if debug {
@@ -823,13 +880,45 @@ fn decode(bytes: &[u8], mode: Mode) -> Result<Option<Program>, BcError> {
         }
     }
 
-    if r.at != bytes.len() {
+    // only zero padding (< 4 bytes) may separate the tables from the words
+    if words_off - r.at >= 4 || bytes[r.at..words_off].iter().any(|&b| b != 0) {
         return err("trailing bytes");
     }
 
-    Ok(collect.then(|| Program {
-        code: prog_code,
-        data_arrays,
+    if !collect {
+        return Ok(None);
+    }
+
+    // The word region: borrowed in place when the caller owns it forever
+    // and it is 4-byte aligned in memory (a mapped flash slot is), else
+    // copied. The in-place view assumes the host is little-endian, like
+    // every target Luxel runs on; a big-endian host copies.
+    let words = match borrow {
+        Some(src)
+            if cfg!(target_endian = "little")
+                && (src.as_ptr() as usize + words_off).is_multiple_of(4) =>
+        {
+            let tail = &src[words_off..];
+            debug_assert_eq!(tail.len(), n_words * 4);
+            // SAFETY: `tail` is a `'static` byte slice of exactly
+            // `n_words * 4` bytes whose start is 4-byte aligned (checked
+            // above); `u32` has no invalid bit patterns; the slice is
+            // shared-only, so no aliasing rule is violated.
+            let s: &'static [u32] =
+                unsafe { core::slice::from_raw_parts(tail.as_ptr() as *const u32, n_words) };
+            Words::Static(s)
+        }
+        _ => {
+            let mut v: Vec<u32> = Vec::new();
+            reserve(&mut v, n_words)?;
+            v.extend((0..n_words).map(|i| wb.get(i)));
+            Words::Owned(v)
+        }
+    };
+
+    Ok(Some(Program {
+        words,
+        pool,
         fns,
         globals,
         exported_fns,
