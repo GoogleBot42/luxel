@@ -617,6 +617,20 @@ pub struct Frame {
     pub stack_base: u32,
 }
 
+/// Argument slots a render entry can take: `index, x, y, z`.
+pub const PIXEL_ARGS: usize = 4;
+
+/// The loop-invariant half of a per-pixel `render` pass: which function, how
+/// many local slots its frame needs, and how many of them the caller's
+/// argument array fills. Built once per frame by [`Vm::begin_pixel_pass`]
+/// and consumed by [`Vm::render_pixel`] (Gitea #260).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelPlan {
+    fn_idx: u16,
+    nlocals: u32,
+    nargs: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepKind {
     Continue,
@@ -1524,6 +1538,79 @@ impl Vm {
         self.clear_run();
         self.push_frame(prog, fn_idx, args)?;
         self.run_unwinding(prog, debug)
+    }
+
+    /// Hoist the loop-invariant half of a per-pixel `render` pass out of the
+    /// pixel loop, and size the frame storage so no pixel allocates. Drops
+    /// any suspended run, exactly as the [`Vm::start`] it replaces did.
+    ///
+    /// `argc` is how many of the caller's argument slots are live for this
+    /// entry (2 for `render(index, x)`, 3 for `render2D`, 4 for `render3D`).
+    pub fn begin_pixel_pass(&mut self, prog: &Program, fn_idx: u16, argc: usize) -> PixelPlan {
+        self.clear_run();
+        let (params, locals) = match prog.fns.get(fn_idx as usize) {
+            Some(f) => (f.params as usize, f.locals as usize),
+            None => (0, 0),
+        };
+        // `push_frame` filled `locals` slots and pushed one `Frame`; reserve
+        // both once so `render_pixel` never grows a Vec (Gitea #260).
+        self.locals.reserve(locals);
+        self.frames.reserve(1);
+        PixelPlan {
+            fn_idx,
+            nlocals: locals as u32,
+            // push_frame fills slot i from `args.get(i)` while i < params and
+            // defaults the rest, so exactly this many slots come from args.
+            nargs: params.min(argc).min(locals) as u32,
+        }
+    }
+
+    /// One pixel's `render` call. Semantically identical to
+    /// `start(prog, plan.fn_idx, &args[..argc], false)` for the plan's
+    /// function — same fuel reset, same locals (args first, defaults after),
+    /// same `clear_run` on error — with the per-call work that
+    /// [`Vm::begin_pixel_pass`] resolved once hoisted out of the loop. The
+    /// debugger and map mode keep using `start`/`resume`.
+    ///
+    /// An empty `render(index)` cost ~430 Xtensa cycles of pure entry before
+    /// this: most of it `render_args`, `push_frame` and a `Result<Outcome,
+    /// VmError>` travelling through memory once per pixel (Gitea #260).
+    #[inline]
+    pub fn render_pixel(
+        &mut self,
+        prog: &Program,
+        plan: &PixelPlan,
+        args: &[Value; PIXEL_ARGS],
+    ) -> Result<(), VmError> {
+        self.fuel = FUEL;
+        let n = plan.nlocals as usize;
+        let k = (plan.nargs as usize).min(PIXEL_ARGS);
+        self.stack.clear();
+        self.locals.clear();
+        // `push_frame`'s locals loop, minus its per-call re-derivation of the
+        // shape. Written as one pass rather than `resize` + `copy_from_slice`
+        // because those compile to a ROM `memset` and a ROM `memcpy` call for
+        // the one or two words a render frame actually holds.
+        #[allow(clippy::needless_range_loop)] // indexing IS the point: slots
+        // past `k` take the default, not an argument
+        for i in 0..n {
+            self.locals
+                .push(if i < k { args[i] } else { Value::default() });
+        }
+        self.frames.clear();
+        self.frames.push(Frame {
+            fn_idx: plan.fn_idx,
+            pc: 0,
+            locals_base: 0,
+            stack_base: 0,
+        });
+        match self.run(prog, 0, false) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                self.clear_run();
+                Err(e)
+            }
+        }
     }
 
     /// Resume a paused run, optionally with a stepping plan.
@@ -3714,6 +3801,7 @@ impl Vm {
     }
 
     /// Apply the current transform to a point (affine 4×4, w ignored).
+    #[inline(never)]
     pub fn apply_transform(&self, p: [Fx; 3]) -> [Fx; 3] {
         if !self.transform_active {
             return p;

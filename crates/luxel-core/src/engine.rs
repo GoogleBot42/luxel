@@ -1066,11 +1066,46 @@ impl Engine {
     /// blank the rest of the frame, non-fatal ones keep the pre-error color),
     /// minus the per-pixel outcome plumbing. Only for non-debug, non-map runs.
     fn render_pixels(&mut self, render: RenderKind, from: u32) {
+        // Everything about the call that does not change per pixel is
+        // resolved once here: the entry, its argument count, whether the
+        // coordinate work is needed at all, and the callee's frame shape
+        // (Gitea #260 — for an empty render this was the whole frame cost).
+        let (fn_idx, argc) = match render {
+            RenderKind::R1(f) => (f, 2),
+            RenderKind::R2(f) => (f, 3),
+            RenderKind::R3(f) => (f, 4),
+        };
+        let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
+        // a plain render(index) never reads x: skip the per-pixel coordinate
+        // divide (it is a ROM call on Xtensa) entirely
+        let index_only = match render {
+            RenderKind::R1(f) => self.prog.fns[f as usize].params < 2,
+            _ => false,
+        };
+        let plan = self.vm.begin_pixel_pass(&self.prog, fn_idx, argc);
+        let mut args = [
+            Value::Num(Fx::ZERO),
+            Value::Num(mid),
+            Value::Num(mid),
+            Value::Num(mid),
+        ];
         for i in from..self.pixel_count {
             self.vm.pixel = [Fx::ZERO; 3];
             self.vm.pixel_written = false;
-            let (fn_idx, args, argc) = self.render_args(render, i);
-            if let Err(e) = self.vm.start(&self.prog, fn_idx, &args[..argc], false) {
+            args[0] = Value::Num(Fx::from_int(i as i32));
+            if !index_only {
+                // transforms apply to 2D/3D coordinates (1D x: unverifiable
+                // on our oracle — its installed map can never be removed;
+                // keeping 1D raw)
+                let p = match render {
+                    RenderKind::R1(_) => self.vm.pixel_coords(i, [mid; 3]),
+                    _ => self.vm.apply_transform(self.vm.pixel_coords(i, [mid; 3])),
+                };
+                args[1] = Value::Num(p[0]);
+                args[2] = Value::Num(p[1]);
+                args[3] = Value::Num(p[2]);
+            }
+            if let Err(e) = self.vm.render_pixel(&self.prog, &plan, &args) {
                 let fatal = e.is_assert || e.is_resource_guard();
                 if self.last_error.is_none() || fatal {
                     self.last_error = Some(e);

@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-09-06 — The per-pixel VM entry: 323 → 231 Xtensa instructions for an empty render (#260)
+
+An `export function render(index) {}` cost **7,591 µs of VM time per frame** at
+4096 px on the Seengreat panel — 1.85 µs ≈ 440 cycles per pixel before a single
+pattern instruction runs, a third of rainbow's frame and a hard ~77 fps cap on
+every pattern. The dispatch loop was already tuned (#263/#268/#278/#302); this
+is everything *around* one pixel's run.
+
+**Counted, not estimated** — `xtensa-esp32s3-elf-objdump` over the
+`board-seengreat-hub75` image, walking the empty-render path by hand
+(`Engine::frame`'s pixel loop → `render_args` → `push_frame` → `run` → RET →
+return), instructions on the taken path only:
+
+| stage | master | this |
+|---|---:|---:|
+| `Engine::frame` pixel loop body | 95 | **111** |
+| `Engine::render_args` (windowed call) | 33 | — |
+| `Vm::push_frame` (windowed call) | 75 | — |
+| `Vm::run` (windowed call) | 120 | 120 |
+| **total per pixel** | **323** | **231** (−28 %) |
+| `callx8` per pixel | 3 | **1** |
+
+`Vm::run` is byte-identical before and after — the dispatch loop was not
+touched. What changed:
+
+- **`Vm::begin_pixel_pass(prog, fn_idx, argc) -> PixelPlan`** resolves the
+  callee's frame shape once per frame (local-slot count, how many of them come
+  from arguments) and reserves the locals/frame storage so no pixel allocates.
+- **`Vm::render_pixel(prog, &plan, &args)`** replaces `start()` in the color
+  pass: fuel reset, one pass filling the locals, one `Frame`, `run`. It is
+  semantically `start(prog, fn_idx, &args[..argc], false)` — same defaults for
+  slots past the argument count, same `clear_run` on error — and returns
+  `Result<(), VmError>` so the hot return is a discriminant, not an `Outcome`.
+  `start`/`resume` are untouched, so the debugger and map mode are unaffected
+  (`render_pixels` only runs when `!debug_enabled && !is_map`).
+- **`Engine::render_pixels` hoists the argument build.** The entry, its
+  argument count, the mid-space fill and the "a plain `render(index)` never
+  reads x" test are loop-invariant; only `args[0]` changes per pixel for a 1D
+  entry. That removes `render_args`' 40-byte return travelling through memory
+  (a 19-instruction copy) once per pixel.
+- `Vm::apply_transform` is `#[inline(never)]`: it was being inlined into
+  `Engine::frame` twice (the hoisted loop and `render_args`), which is where
+  most of the image growth came from.
+
+Two variants were measured and dropped: `resize` + `copy_from_slice` for the
+locals (compiles to ROM `memset` + `memcpy` calls for the one word a
+`render(index)` frame holds) and seeding `run`'s frame context from the plan to
+skip its 63-instruction prologue — the latter costs 16–21 % on x86 because the
+live seed adds register pressure to the whole dispatch loop, the same effect
+#302 documented for extra opcode arms.
+
+**Host** (`luxel bench`, 4096 px, best of 9, x86-64 — the Xtensa gain should be
+larger, since x86 hides windowed calls and is not dispatch-bound):
+
+| bench | master | this | Δ |
+|---|---:|---:|---:|
+| empty `render` | 76.29 M px/s | **99.56 M** | **+30.5 %** |
+| one `rgb()` | 40.43 M | **50.85 M** | **+25.8 %** |
+| rainbow | 26.70 M | **33.21 M** | **+24.4 %** |
+| `snake.js` | 14.49 M | 14.91 M | +2.9 % |
+| `snake-2d.js` | 13.28 M | 14.02 M | +5.5 % |
+| `snake-2d.js --map-grid 64x64` | 9.36 M | 10.04 M | +7.3 % |
+
+**Image cost**: +192 B on the Xtensa boards (`board-pixelblaze-v3` free
+33,312 → 33,120 B, 3.17 % → 3.15 %, floor 3 %), +176 B on
+`board-seengreat-hub75`, +528 B on the C6, and −16 B on the C3. Not the
+shrink the ticket hoped for: the hoisted argument build and the inlined frame
+setup are new code in `Engine::frame`, while `push_frame`/`render_args`
+remain for the debugger, map and nested-call paths. `apply_transform` going
+out of line clawed back 400 of the original 592 B.
+
+**Verified**: `cargo test --workspace` 278/278 (incl. the `tests/engine.rs`
+error-semantics pins — first error wins, fatal blanks the rest, non-fatal keeps
+the pre-error color — and the debugger step tests); `tools/check-library.sh`
+1495/1495; **all 299 library patterns render byte-identically** to the master
+binary on two rigs (120 px strip and a 16×16 map, 12 frames each — 598/598
+PPMs `cmp`-clean); wasm rebuild + `npm test` 29/29 + `web/tools/e2e.mjs` in
+real chromium; nine firmware variants build with image-check; `tools/stack-check.sh`
+clean; `tools/ci.sh` green.
+
+**Not measured on hardware** — both devices were in use. The on-device check
+(empty-render `vm_us` at 4096 px, expected well under 7.6 ms) is on #266.
+
 ## 2026-09-06 — The panel re-measured on today's master: superinstructions are 14–18 % on Xtensa
 
 Master moved four times during the Seengreat session (#288 LXBC v5 restored,
