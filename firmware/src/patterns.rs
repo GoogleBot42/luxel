@@ -44,7 +44,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::ops::Range;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -1217,8 +1217,12 @@ fn arena_init() {
 }
 
 /// A stored pattern's executable bytes, mapped — if an extent holds its
-/// CURRENT bytecode generation. Valid until the store frees the extent,
-/// which it never does for the running pattern.
+/// CURRENT bytecode generation. The engine executes these IN PLACE
+/// (`deserialize_lean_static`), so the slice must stay valid for as long as
+/// the `Program` does: pin the pattern ([pin_code] / [pin_running] /
+/// [pin_prev_from_running]) before taking one and hold the pin until the
+/// engine is dropped. The store never writes, moves or frees a pinned
+/// extent.
 pub fn code_of(id: &str) -> Option<&'static [u8]> {
     if !arena_on() {
         return None;
@@ -1275,9 +1279,96 @@ pub fn source_stat(id: &str) -> Option<(usize, u32)> {
     .flatten()
 }
 
-/// The running pattern's seq — its extent is never written, freed or moved.
-fn running_seq() -> Option<u32> {
-    seq_of(&crate::shared::get_current_pattern_id())
+// --- the engine pin set (Gitea #260) ---
+//
+// The engine executes a library pattern's LXBC **in place** from its arena
+// extent: `deserialize_lean_static` makes the `Program`'s code and constant
+// pool a `&'static [u32]` INTO THE MAPPING, not a heap copy. So an extent an
+// engine still holds must never be written, moved (compaction) or freed
+// while it holds it — the render task would be executing erased flash, and
+// on a dual-core board the store runs on the OTHER core, in parallel.
+//
+// `shared::get_current_pattern_id()` is not enough on its own: it names ONE
+// pattern, and there are two windows where an engine is executing something
+// else.
+//   * a swap decodes the INCOMING pattern's mapped bytes before it becomes
+//     the current pattern (`code_of` .. `set_current_pattern_id`), and
+//   * a CROSSFADE keeps the outgoing engine alive as the blend source for
+//     up to several seconds after the current pattern has moved on
+//     (main.rs' `prev`).
+// A compaction in either window is a use-after-free, so the render task
+// publishes the seqs it is actually executing here. Slots:
+//   [0] `pin_code`      — what a decode is about to borrow
+//   [1] `pin_running`   — what the LIVE engine borrows
+//   [2] `pin_prev`      — what the crossfade's OUTGOING engine borrows
+// The current pattern id stays in the set as well: belt and braces, so a
+// path that forgets to pin is still covered for the running pattern. Pins
+// are conservative by construction (a stale one wastes arena pages until
+// the next swap overwrites it; it can never free something live).
+static PINS: BlockingMutex<CriticalSectionRawMutex, Cell<[Option<u32>; 3]>> =
+    BlockingMutex::new(Cell::new([None; 3]));
+
+fn set_pin(slot: usize, seq: Option<u32>) {
+    PINS.lock(|c| {
+        let mut p = c.get();
+        p[slot] = seq;
+        c.set(p);
+    });
+}
+
+/// Slot 0: the pattern a decode is about to borrow. Call it BEFORE
+/// [code_of] on a swap — until it returns, nothing stops a save on the
+/// other core from compacting that extent out from under the decode.
+pub fn pin_code(id: &str) {
+    set_pin(0, seq_of(id));
+}
+
+/// Slot 1: the pattern the live engine borrows. Call it when the new engine
+/// is installed, with the id its code came from (the empty id — an ad-hoc
+/// push — clears it: those Programs own their words).
+pub fn pin_running(id: &str) {
+    set_pin(1, seq_of(id));
+}
+
+/// Slot 2 := slot 1: the engine that was live becomes the crossfade's
+/// outgoing blend source and keeps executing its extent. Call it at the
+/// same moment main.rs does `prev = engine.take()`.
+pub fn pin_prev_from_running() {
+    PINS.lock(|c| {
+        let mut p = c.get();
+        p[2] = p[1];
+        c.set(p);
+    });
+}
+
+/// Slot 2 released — the outgoing engine has been dropped.
+pub fn unpin_prev() {
+    set_pin(2, None);
+}
+
+/// Every seq an engine may be executing from, as a slice-able buffer.
+fn pins() -> ([u32; 4], usize) {
+    let mut out = [0u32; 4];
+    let mut n = 0;
+    let mut push = |s: Option<u32>| {
+        if let Some(s) = s {
+            if !out[..n].contains(&s) {
+                out[n] = s;
+                n += 1;
+            }
+        }
+    };
+    push(seq_of(&crate::shared::get_current_pattern_id()));
+    for p in PINS.lock(|c| c.get()) {
+        push(p);
+    }
+    (out, n)
+}
+
+/// Is this pattern's extent held by an engine right now?
+fn pinned(seq: u32) -> bool {
+    let (buf, n) = pins();
+    buf[..n].contains(&seq)
 }
 
 /// One compaction step: slide an extent down to `mv.to` so the free pages
@@ -1294,8 +1385,8 @@ async fn compact_move(mv: extents::Move, region: u32) -> bool {
     let Some(e) = ARENA.lock(|c| c.borrow().get(mv.idx).copied()) else {
         return false;
     };
-    if Some(e.seq) == running_seq() {
-        return false; // the running pattern moves at the next swap, not now
+    if pinned(e.seq) {
+        return false; // an engine is executing it; it moves at the next swap
     }
     ARENA.lock(|c| {
         c.borrow_mut().remove(mv.idx);
@@ -1354,17 +1445,19 @@ pub async fn cache_code(id: &str, bc: &[u8], may_compact: bool) -> bool {
     };
     let hash = fnv1a(bc);
     let need = extents::pages_for(bc.len() as u32);
-    let running = running_seq();
+    let (pin_buf, pin_n) = pins();
+    let held = &pin_buf[..pin_n]; // seqs an engine is executing from
 
     // Reclaim extents the index no longer knows (deleted or superseded
-    // patterns), except the running pattern's — it may still be executing
-    // from a generation the store has already replaced. THIS pattern's own
-    // stale generation is spared here and freed after the new extent is
-    // published, so a power cut never loses both.
+    // patterns), except any an engine is still executing from — it may hold
+    // a generation the store has already replaced, or a pattern that has
+    // been deleted mid-crossfade. THIS pattern's own stale generation is
+    // spared here and freed after the new extent is published, so a power
+    // cut never loses both.
     let live = live_gens();
     let swept = ARENA.lock(|c| {
         c.borrow_mut()
-            .retain(|e| e.seq == seq || Some(e.seq) == running || live.contains(&(e.seq, e.gen)))
+            .retain(|e| e.seq == seq || held.contains(&e.seq) || live.contains(&(e.seq, e.gen)))
     });
     if swept > 0 {
         persist_arena();
@@ -1382,7 +1475,7 @@ pub async fn cache_code(id: &str, bc: &[u8], may_compact: bool) -> bool {
     if start_page.is_none() && may_compact {
         let (reachable, hole, used) = ARENA.lock(|c| {
             let d = c.borrow();
-            (d.compacted_free_run(running), d.largest_hole(), d.used_pages())
+            (d.compacted_free_run(held), d.largest_hole(), d.used_pages())
         });
         if reachable < need {
             println!(
@@ -1393,7 +1486,7 @@ pub async fn cache_code(id: &str, bc: &[u8], may_compact: bool) -> bool {
         }
         println!("patterns: code arena compacting for {} ({} pages)", id, need);
         for _ in 0..2 * extents::MAX_EXTENTS {
-            let Some(mv) = ARENA.lock(|c| c.borrow().next_move(running)) else {
+            let Some(mv) = ARENA.lock(|c| c.borrow().next_move(held)) else {
                 break;
             };
             if !compact_move(mv, region).await {
@@ -1428,9 +1521,9 @@ pub async fn cache_code(id: &str, bc: &[u8], may_compact: bool) -> bool {
     if !persist_arena() {
         println!("patterns: code arena directory write failed — {} lives this session only", id);
     }
-    // published; now the superseded generation may go (unless the engine
+    // published; now the superseded generation may go (unless an engine
     // is still executing from it)
-    if running_seq() != Some(seq) {
+    if !pinned(seq) {
         if let Some((i, _)) = ARENA.lock(|c| c.borrow().find_other_gen(seq, gen)) {
             ARENA.lock(|c| {
                 c.borrow_mut().remove(i);
@@ -1442,8 +1535,16 @@ pub async fn cache_code(id: &str, bc: &[u8], may_compact: bool) -> bool {
     true
 }
 
-/// Forget every extent of `seq` (delete).
+/// Forget every extent of `seq` (delete). A pattern an engine is still
+/// executing from KEEPS its extent: dropping it here would hand its pages
+/// to the next save, which would erase them under the running VM. The
+/// pattern is gone from the index, so `cache_code`'s sweep reclaims the
+/// extent as soon as the engine lets go of it.
 fn arena_forget(seq: u32) {
+    if pinned(seq) {
+        println!("patterns: extent of {} kept — an engine is executing it", id_hex(seq));
+        return;
+    }
     let n = ARENA.lock(|c| c.borrow_mut().remove_seq(seq));
     if n > 0 {
         persist_arena();

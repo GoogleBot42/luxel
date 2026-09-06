@@ -290,18 +290,22 @@ Rules the code enforces:
   path exactly as before. Identity and read-back lengths come from
   `source_stat(id)`, which streams the source out of its chunks (no source
   Vec, no envelope Vec anywhere in a library activation).
-- **The running pattern's extent is never written, freed or moved.** A
-  re-save allocates a NEW extent, writes it, invalidates, hash-checks,
-  publishes the directory, and only then frees the superseded one — so a
-  power cut never loses both. When the re-saved pattern is the running one
-  the old extent stays in the directory (its pages are still executing) as
-  a stale generation, and is swept the next time the allocator runs with
-  something else on the strip.
+- **An extent an engine is executing from is never written, freed or
+  moved** — the borrowing invariant, below. A re-save allocates a NEW
+  extent, writes it, invalidates, hash-checks, publishes the directory, and
+  only then frees the superseded one — so a power cut never loses both.
+  When the re-saved pattern is the running one the old extent stays in the
+  directory (its pages are still executing) as a stale generation, and is
+  swept the next time the allocator runs with something else on the strip.
+  `delete` is the same: `arena_forget` KEEPS a pinned pattern's extent
+  (dropping it would hand its pages to the next save, which would erase
+  them under the live VM) and the sweep reclaims it once the engine lets
+  go.
 - **Compaction** runs only when a save finds no contiguous hole and
   `compacted_free_run()` says packing would open one (no wasted erases
-  otherwise). It slides live extents toward page 0 one at a time; the
-  running pattern's extent stays put and splits the free space instead of
-  blocking the pass. Each move un-publishes the extent, copies **one page
+  otherwise). It slides live extents toward page 0 one at a time; a pinned
+  extent stays put and splits the free space instead of blocking the
+  pass. Each move un-publishes the extent, copies **one page
   per `ota::with_flash` op with yields between** — the destination is
   strictly below the source, so ascending page order is a safe overlapping
   move — invalidates, hash-checks and re-publishes. A power cut mid-pass
@@ -322,6 +326,68 @@ Rules the code enforces:
 - Without the mapping (`flashmap-off`, refused self-check) the arena is off
   (`patterns: code arena off`), `arena` reads `[0, 0]`, `current_code()` is
   `None`, and every path reads through a Vec exactly as before.
+
+#### The borrowing invariant and the pin set (Gitea #260)
+
+The engine decodes a mapped pattern with
+`luxel_core::bytecode::deserialize_lean_static`, so a running `Program`'s
+`words` — its code AND its constant pool — are a `&'static [u32]` **into
+the mapping**, not a heap copy. That is where the RAM saving comes from
+(the resident program is its header tables: 4–11 KB instead of 12–35 KB
+for the big patterns, see docs/research/flash-mmap.md "RAM accounting"),
+and it is also a lifetime contract:
+
+> **A `Program` must never outlive the flash it borrows.** No extent an
+> engine is executing from may be written, moved or freed while it holds
+> it.
+
+`shared::get_current_pattern_id()` alone does NOT express that — it names
+one pattern, and there are two windows where an engine executes something
+else:
+
+- a swap decodes the **incoming** pattern's mapped bytes *before* it
+  becomes the current pattern (between `code_of` and
+  `set_current_pattern_id`), and
+- a **crossfade** keeps the outgoing engine alive as the blend source
+  (`prev` in `render_task`) for up to several seconds *after* the current
+  pattern id has moved on.
+
+A save that compacts the arena in either window is a use-after-free, and on
+a dual-core board the store runs on the OTHER core — this is not even an
+`await`-granularity race, so "no yield point in between" proves nothing.
+
+So `patterns.rs` keeps an explicit **pin set** that the render task
+publishes, three slots plus the current pattern id as belt and braces:
+
+| slot | set by | holds |
+|---|---|---|
+| 0 | `pin_code(id)` — **before** `code_of` | what a decode is about to borrow |
+| 1 | `pin_running(id)` — when the new engine is installed | what the live engine borrows |
+| 2 | `pin_prev_from_running()` — where `prev = engine.take()` | what the crossfade's outgoing engine borrows |
+
+Slot 2 is released by `unpin_prev`, and `render_task` never writes
+`prev = None` directly: every drop goes through `drop_prev`, which drops
+the engine and then releases the pin. An ad-hoc push (`Msg::Code` /
+`Msg::Crossfade`) decodes a transient envelope `Vec`, so its `Program` owns
+its words and `pin_running("")` clears slot 1.
+
+`compact_move`, `cache_code`'s stale-generation sweep, the
+superseded-generation free and `arena_forget` all consult the set;
+`extents.rs`' `next_move`/`compacted_free_run` take a pin *slice* and each
+pinned extent splits the free space. Pins are conservative by
+construction — a stale one wastes arena pages until the next swap
+overwrites it, and can never free something live.
+
+The ad-hoc read-back slot upholds the same contract by its two-sided
+layout: `store_current` writes the side `CUR_BC_SIDE` does not point at,
+and `render_task` drops the outgoing engine (`drop_prev`) before
+`persist_current_pattern` runs, so no engine ever borrows the side being
+erased.
+
+The **rodata default** is borrowed too, which is why `PATTERN_BC` goes
+through a `#[repr(C)]` wrapper with a zero-sized `[u32; 0]` field:
+`include_bytes!` has alignment 1 and `deserialize_lean_static` silently
+copies a blob whose word region is not 4-aligned in memory.
 
 ## Render-loop timing counters
 
