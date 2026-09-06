@@ -513,6 +513,52 @@ touched one). What to look at, per board:
 6. `tools/hw-bench.mjs` soak with assets traffic mixed in, watching
    `heap_free` (should be flat — the mapping allocates nothing).
 
+### Results — Athom (classic ESP32), 2026-09-06
+
+Steps 1 and the arena steps could not be observed: `/dev/ttyUSB0` was absent
+from the container, so nothing below rests on a boot line. Builds were pinned
+from `/api/status` (`core1` present = the second-core build, `assets_mapped` /
+`code_mapped` / `arena` = this facility).
+
+On master `731ce81` — the mapping and the code arena **without** the second
+core (PR #280):
+
+| step | result |
+|---|---|
+| 2. `assets_mapped` | `true`; `code_mapped` `true` and `arena [0,7]` on a fresh boot |
+| 3. bundle download (228,553 B) | **2.13 s** at 60 px (baseline 2.1 s), **20.77 s** at 2048 px — table on Gitea #259 |
+| 4. write under the mapping | **pass** — 728,437 B installed in **17.1 s**, all 8 files verify with `gunzip -t`, no panic, `heap_free` unchanged at 104,984 B idle |
+| 5. OTA with assets installed, then a download from the new slot | pass, five OTAs |
+| `flashmap-off` | boots, `assets_mapped:false`, `arena:[0,7]`, device fully functional — the fallback works as documented |
+
+The arena filled to `[7,7]` from **saving** ten patterns, before any of them
+ran: `cache_code` claims a slot on save, so the eighth and later stored
+patterns can never become mapped (activation never evicts). With the arena
+full, a pattern without a slot takes the copying path — `"code_mapped":false`,
+`heap_free` 83,532 B for Main Stage against 104,984 B for one that owns a slot,
+and 1.3–2.7 s to activate against 0.14 s.
+
+On master `0f83975` (v5 + the 87-slot extent arena + borrowed words + the second
+core) the consumer side of the contract works as designed when the board stays
+up: `"code_mapped":true` for a stored library pattern, `arena [6,87]` for Main
+Stage and `[11,87]` for Frogger 2D, activation **394 ms cold / 72 ms warm**
+against 1.6–2.7 s on the copying path, and the pattern's resident heap cost down
+44 % / 39 % (table on Gitea #277).
+
+**Step 6 and the arena-eviction steps are blocked on Gitea #292**: on any build
+carrying the second core, sustained fenced flash traffic wedges the ProCpu inside
+the op and the RTC watchdog reboots the board — 5/5 on a `POST /api/assets`, and
+twice inside 25 minutes it burned the boot guard and rolled the slot back.
+`EXTRA_FEATURES=flashmap-off` wedges identically and the single-core build does
+not wedge at all, so this facility is cleared — the fence is the variable.
+
+One trap this exercise turned up, worth designing against here: an
+**interrupted asset install leaves the region corrupt but parseable**. The TOC
+is written near the start of the archive, so after a reboot `assets_mapped` is
+`true`, every `/assets/…` returns 200 with a plausible length and ETag, and 6
+of 8 bodies were nonetheless garbage. Nothing in `/api/status` reports it.
+Verifying an install means reading the bodies back, not reading status.
+
 ## Open risks
 
 - **S3/C3/C6 register paths are untested on silicon.** They are transcribed

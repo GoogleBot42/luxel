@@ -162,6 +162,42 @@ after the reboot (the guard rolled back), the black box is still intact —
 the old build never touches RTC memory — so re-installing the diagnosing
 build and reading `core1.last` still works.
 
+## Flash writes on second-core builds wedge the board (Gitea #292)
+
+As of 2026-09-06 **any build carrying the second-core render executor (PR
+#280) wedges the ProCpu inside a fenced flash op** on this board as soon as
+flash work comes in bursts. `POST /api/assets` dies after 60–70 KB of a 728 KB
+archive (4/4), and activating a stored library pattern took 98.6 s. The RTC
+watchdog reboots the board 20 s in, so it self-recovers — but a client that
+retries burns the boot guard's three lives and the board silently rolls back
+to the other slot.
+
+Working around it while the issue is open:
+
+- `tools/deploy.sh <ip>` (firmware **and** assets) cannot complete here. The
+  firmware OTA half is fine; only the asset install wedges.
+- To install assets, put a single-core build on a slot first — master
+  `731ce81` or earlier builds for `board-athom-music` — push the bundle
+  (17 s, reliable), then OTA the build you actually want.
+- `EXTRA_FEATURES=flashmap-off` does **not** help; the flash mapping is not
+  the variable.
+- After any write-heavy step, read `slot` **and** `core1.last` from
+  `/api/status`: `reset` of `SysRtcWdt` with `bb[1] == 3` and
+  `bb[3] - bb[7] == 1` is this wedge (ProCpu inside the flash op holding the
+  fence). `fence_timeouts` stays 0 through it — it is not a park-ack timeout.
+
+**An interrupted asset install looks installed.** The archive TOC is written
+early, so after the reboot `/api/status` says `assets_mapped:true`, every
+`/assets/…` returns 200 with a plausible length and ETag, and the bundle is
+still garbage — 6 of 8 files failed `gunzip -t` after one interrupted install.
+Verify an asset push by reading the bodies back, not by reading status:
+
+```sh
+for f in /index.html /assets/index-*.js /gallery.json; do
+  curl -s "http://192.168.0.183$f" | gunzip -t && echo "$f ok"
+done
+```
+
 ## Power-cycle testing and the OTA boot-loop guard
 
 Rapid power cycles — cycling again before the firmware reaches `boot_ok` —
