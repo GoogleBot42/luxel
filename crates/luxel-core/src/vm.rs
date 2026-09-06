@@ -34,12 +34,22 @@ use crate::fmath;
 
 // ---- program ----
 
+/// A VM value. Eight bytes either way, but the payload widths decide the
+/// DISCRIMINANT's width, and that is load-bearing on Xtensa (Gitea #312):
+/// with `u16` payloads rustc lays the tag out as a `u16`, so every `match`
+/// on a `Value` — and every `Option<Value>` niche test that `Vec::pop`
+/// leaves behind — compiles to `l32i; l32r 0xffff; and; b*i` instead of
+/// `l32i; b*i`. Xtensa has no 32-bit immediate form, so the mask costs a
+/// literal-pool LOAD, and the register pressure in `Vm::run` means it is
+/// re-loaded at every use: the `Add` arm alone carried four of them. All
+/// payloads 32-bit ⇒ a `u32` tag ⇒ the mask and the literal disappear.
+/// Keep them 32-bit; `fn_idx`/builtin ids stay `u16` everywhere else.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
     Num(Fx),
     Arr(u32),
-    Fun(u16),
-    Builtin(u16),
+    Fun(u32),
+    Builtin(u32),
 }
 
 impl Default for Value {
@@ -1735,15 +1745,39 @@ impl Vm {
     /// stack unwinds back to `base` frames (Done) or a debug stop fires
     /// (Paused — only when `debug`). Frames/locals/stack stay intact while
     /// paused so the debugger can inspect and resume.
+    ///
+    /// `iram-vm` (Gitea #312) puts this function in the Xtensa/RISC-V
+    /// chips' `.rwtext` — internal SRAM, executed without going through the
+    /// flash cache. It is what `esp_hal::ram` expands to, spelled by hand
+    /// because luxel-core does not (and must not) depend on esp-hal. The
+    /// feature is off by default and MUST stay that way for hosts: on a
+    /// host target `.rwtext` is just a stray section name, and on a device
+    /// it spends ~16 KB of the scarcest memory there is.
+    #[cfg_attr(feature = "iram-vm", link_section = ".rwtext")]
+    #[cfg_attr(feature = "iram-vm", inline(never))]
     fn run(&mut self, prog: &Program, base: usize, debug: bool) -> Result<Outcome, VmError> {
+        // Two pieces of per-instruction bookkeeping that used to be FIELDS of
+        // `self`, written on every single dispatch (Gitea #312). `fuel` cost a
+        // load, a compare, a decrement and a store; `insn_start` cost a store;
+        // together ~7 cycles of a ~94-cycle op on the S3, and only the error
+        // paths ever read either. As locals they stay in registers, and the
+        // handful of exits publish them: every `return` inside the loop, plus
+        // the two sites that can re-enter the VM through an array callback.
+        // Declared here, ahead of the macros, because a `macro_rules!` body
+        // resolves its identifiers in the scope of its DEFINITION.
+        let mut fuel = self.fuel;
+        #[allow(unused_assignments)] // the seed is never read; the loop writes it first
+        let mut insn_at: u32 = 0;
         // Every failure site goes through ONE cold, out-of-line helper: the
         // `String` construction inlined at ~45 sites otherwise bloats the
         // dispatch loop and costs the hot path registers (Gitea #261 — the
         // superinstruction arms added another twenty of them).
         macro_rules! fail {
-            ($msg:expr) => {
-                return Err(self.err_static(prog, $msg))
-            };
+            ($msg:expr) => {{
+                self.insn_start = insn_at;
+                self.fuel = fuel;
+                return Err(self.err_static(prog, $msg));
+            }};
         }
         macro_rules! push {
             ($v:expr) => {{
@@ -1761,18 +1795,58 @@ impl Vm {
                 }
             };
         }
+        // Binary arithmetic in place (Gitea #312). `pop; pop; push` costs
+        // THREE writes of the Vec's length field plus a `MAX_STACK` check
+        // the shape cannot need — the stack shrinks by one, so it cannot
+        // overflow. Rewriting the top two slots and truncating once is the
+        // same operation with one length write and no check: −4 Xtensa
+        // instructions and a branch out of the ~25-instruction `Add` arm.
         macro_rules! binnum {
             ($op:tt) => {{
-                let b = pop!().num();
-                let a = pop!().num();
-                push!(Value::Num(a $op b));
+                let n = self.stack.len();
+                if n < 2 {
+                    fail!(ERR_STACK_UNDERFLOW);
+                }
+                let b = self.stack[n - 1].num();
+                let a = self.stack[n - 2].num();
+                self.stack[n - 2] = Value::Num(a $op b);
+                self.stack.truncate(n - 1);
             }};
         }
         macro_rules! bincmp {
             ($op:tt) => {{
-                let b = pop!().num();
-                let a = pop!().num();
-                push!(Value::Num(if a $op b { Fx::ONE } else { Fx::ZERO }));
+                let n = self.stack.len();
+                if n < 2 {
+                    fail!(ERR_STACK_UNDERFLOW);
+                }
+                let b = self.stack[n - 1].num();
+                let a = self.stack[n - 2].num();
+                self.stack[n - 2] = Value::Num(if a $op b { Fx::ONE } else { Fx::ZERO });
+                self.stack.truncate(n - 1);
+            }};
+        }
+        /// Replace the top of the stack in place — the `pop; …; push` shape
+        /// with no net depth change (Gitea #312). Same reasoning as
+        /// `binnum!`: no length write, no `MAX_STACK` check.
+        macro_rules! replace_top {
+            (|$v:ident| $new:expr) => {{
+                let n = self.stack.len();
+                if n == 0 {
+                    fail!(ERR_STACK_UNDERFLOW);
+                }
+                let $v = self.stack[n - 1];
+                self.stack[n - 1] = $new;
+            }};
+        }
+        /// Read the top of the stack without removing it, for the arms that
+        /// leave it there (`StoreL`, `StoreG`).
+        macro_rules! peek_top {
+            () => {{
+                let n = self.stack.len();
+                if n == 0 {
+                    fail!(ERR_STACK_UNDERFLOW);
+                }
+                self.stack[n - 1]
             }};
         }
         // One builtin call: the hot-builtin fast path stays INSIDE the loop
@@ -1800,10 +1874,19 @@ impl Vm {
                 }
                 match fast {
                     Some(v) => push!(v),
-                    None => match self.call_builtin_slow(prog, b, argc) {
-                        Ok(v) => push!(v),
-                        Err(e) => return Err(e),
-                    },
+                    None => {
+                        // `call_builtin` can re-enter the VM through an array
+                        // callback, and attributes its own errors from
+                        // `insn_start`: publish both, then take the fuel back.
+                        self.insn_start = insn_at;
+                        self.fuel = fuel;
+                        let r = self.call_builtin_slow(prog, b, argc);
+                        fuel = self.fuel;
+                        match r {
+                            Ok(v) => push!(v),
+                            Err(e) => return Err(e),
+                        }
+                    }
                 }
             }};
         }
@@ -1830,30 +1913,39 @@ impl Vm {
                 if debug {
                     self.frames.last_mut().expect("frame").pc = at as u32;
                     if self.debug_stop(prog, fi, at as u32) {
+                        self.fuel = fuel;
                         return Ok(Outcome::Paused);
                     }
                 }
-                self.insn_start = at as u32;
+                insn_at = at as u32;
                 // One word per instruction: opcode in the low byte, operand
                 // field above it (see bytecode::enc). The decoder validated
                 // every operand and jump target, so the fallbacks here are
                 // unreachable; they exist so a logic bug degrades to a
                 // runtime error instead of a panic.
-                let w = match code.get(at) {
-                    Some(&w) => {
-                        at += 1;
-                        w
-                    }
-                    None => enc::bare(op::RET_NULL), // fell off the end
+                // `at` advances unconditionally so the two arms MERGE on a
+                // value, not on control flow: the `match … { Some => {at+=1;
+                // w} None => … }` shape cost an extra `j` and a `mov` per
+                // dispatch on Xtensa (Gitea #312). Overshooting `at` in the
+                // fell-off-the-end case is harmless — `RetNull` returns.
+                let w = if at < code.len() {
+                    code[at]
+                } else {
+                    enc::bare(op::RET_NULL)
                 };
+                at += 1;
                 let opcode = enc::opcode(w);
                 #[cfg(feature = "profile")]
-                self.prof_record(fi, self.insn_start, opcode);
-                if self.fuel == 0 {
+                self.prof_record(fi, insn_at, opcode);
+                if fuel == 0 {
                     fail!(ERR_EXEC_LIMIT);
                 }
-                self.fuel -= 1;
+                fuel -= 1;
                 match opcode {
+                    // Opcode 0 is not emitted by any compiler, but naming it
+                    // makes the match's range start at 0 and saves the
+                    // `addi -1` that rebases the jump table (Gitea #312).
+                    0 => fail!("unknown opcode (corrupt bytecode?)"),
                     op::CONST_NUM => {
                         // the immediate is the next word
                         let raw = code.get(at).copied().unwrap_or(0);
@@ -1861,26 +1953,24 @@ impl Vm {
                         push!(Value::Num(Fx::from_raw(raw as i32)))
                     }
                     op::CONST_FUN => {
-                        push!(Value::Fun(enc::imm16(w)))
+                        push!(Value::Fun(enc::imm16(w) as u32))
                     }
                     op::CONST_BUILTIN => {
-                        push!(Value::Builtin(enc::imm16(w)))
+                        push!(Value::Builtin(enc::imm16(w) as u32))
                     }
                     op::LOAD_G => {
                         push!(self.globals[enc::imm16(w) as usize])
                     }
                     op::STORE_G => {
-                        let v = pop!();
-                        self.globals[enc::imm16(w) as usize] = v;
-                        push!(v);
+                        // Assignment is an expression: the value stays on the
+                        // stack, so this is a peek, not pop+push (Gitea #312).
+                        self.globals[enc::imm16(w) as usize] = peek_top!();
                     }
                     op::LOAD_L => {
                         push!(self.locals[lbase + enc::imm8(w) as usize])
                     }
                     op::STORE_L => {
-                        let v = pop!();
-                        self.locals[lbase + enc::imm8(w) as usize] = v;
-                        push!(v);
+                        self.locals[lbase + enc::imm8(w) as usize] = peek_top!();
                     }
                     // Index semantics oracle-confirmed on fw 3.67: fractional
                     // indices truncate (reads and writes alike, literal and
@@ -1963,6 +2053,8 @@ impl Vm {
                             let px = self.globals[prog.pixel_count_g as usize]
                                 .num()
                                 .to_int_trunc();
+                            self.insn_start = insn_at;
+                            self.fuel = fuel;
                             let mut e = self.err_at(
                                 prog,
                                 alloc::format!(
@@ -2109,22 +2201,26 @@ impl Vm {
                                 self.frames.last_mut().expect("frame").pc = at as u32;
                                 let mut args = [Value::default(); MAX_ARGS];
                                 let n = self.pop_args_into(&mut args, argc);
-                                self.push_frame(prog, f, &args[..n])?;
+                                self.push_frame(prog, f as u16, &args[..n])?;
                                 continue 'frame;
                             }
-                            Value::Builtin(b) => match {
+                            Value::Builtin(b) => {
                                 #[cfg(feature = "profile")]
-                                self.prof_builtin(b);
-                                self.call_builtin(prog, b, argc)
-                            } {
-                                Ok(v) => push!(v),
-                                Err(mut e) => {
-                                    if e.pc == u32::MAX {
-                                        e = self.err_at(prog, core::mem::take(&mut e.message));
+                                self.prof_builtin(b as u16);
+                                self.insn_start = insn_at;
+                                self.fuel = fuel;
+                                let r = self.call_builtin(prog, b as u16, argc);
+                                fuel = self.fuel;
+                                match r {
+                                    Ok(v) => push!(v),
+                                    Err(mut e) => {
+                                        if e.pc == u32::MAX {
+                                            e = self.err_at(prog, core::mem::take(&mut e.message));
+                                        }
+                                        return Err(e);
                                     }
-                                    return Err(e);
                                 }
-                            },
+                            }
                             _ => fail!("call of a non-function value"),
                         }
                     }
@@ -2136,6 +2232,7 @@ impl Vm {
                         };
                         self.pop_frame();
                         if self.frames.len() == base {
+                            self.fuel = fuel;
                             return Ok(Outcome::Done(v));
                         }
                         push!(v);
@@ -2237,14 +2334,11 @@ impl Vm {
                         call_builtin!(b, argc);
                     }
                     op::CONST_OP => {
-                        // Const c; <binop>
-                        if self.stack.len() >= MAX_STACK {
-                            fail!(ERR_STACK_OVERFLOW);
-                        }
+                        // Const c; <binop> — net stack change 0, so it is a
+                        // top replacement, not pop+push (Gitea #312).
                         let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
                         at += 1;
-                        let a = pop!();
-                        push!(binop(enc::imm8(w), a, Value::Num(c)));
+                        replace_top!(|a| binop(enc::imm8(w), a, Value::Num(c)));
                     }
                     op::LOAD_L_CONST_OP => {
                         // LoadL a; Const c; <binop>
@@ -2281,6 +2375,7 @@ impl Vm {
                         pop!();
                         self.pop_frame();
                         if self.frames.len() == base {
+                            self.fuel = fuel;
                             return Ok(Outcome::Done(Value::default()));
                         }
                         push!(Value::default());
@@ -2482,6 +2577,12 @@ impl Vm {
         }
     }
 
+    /// `iram-builtins` (Gitea #312): the same `.rwtext` placement as
+    /// `run`, for the 21 KB out-of-line builtin dispatcher. Separate
+    /// feature because it is the bigger half of the IRAM bill and the
+    /// colder half of the hot path.
+    #[cfg_attr(feature = "iram-builtins", link_section = ".rwtext")]
+    #[cfg_attr(feature = "iram-builtins", inline(never))]
     fn call_builtin(&mut self, prog: &Program, id: u16, argc: usize) -> Result<Value, VmError> {
         let no_site = |message: String| VmError {
             message,
@@ -3853,12 +3954,12 @@ impl Vm {
         args: &[Value],
     ) -> Result<Value, VmError> {
         match callee {
-            Value::Fun(f) => self.run_on_top(prog, f, args),
+            Value::Fun(f) => self.run_on_top(prog, f as u16, args),
             Value::Builtin(b) => {
                 for v in args {
                     self.stack.push(*v);
                 }
-                self.call_builtin(prog, b, args.len())
+                self.call_builtin(prog, b as u16, args.len())
             }
             _ => Err(VmError {
                 message: "callback is not a function".into(),

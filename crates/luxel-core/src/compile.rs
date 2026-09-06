@@ -398,8 +398,8 @@ fn emit_insn(out: &mut Vec<u32>, insn: &Insn, offsets: &[u32]) {
             out.push(enc::bare(op::CONST_NUM));
             0
         }
-        Const(Value::Fun(i)) => enc::with_u16(op::CONST_FUN, *i),
-        Const(Value::Builtin(b)) => enc::with_u16(op::CONST_BUILTIN, *b),
+        Const(Value::Fun(i)) => enc::with_u16(op::CONST_FUN, *i as u16),
+        Const(Value::Builtin(b)) => enc::with_u16(op::CONST_BUILTIN, *b as u16),
         LoadG(i) => enc::with_u16(op::LOAD_G, *i),
         StoreG(i) => enc::with_u16(op::STORE_G, *i),
         LoadL(i) => enc::with_u8(op::LOAD_L, *i),
@@ -866,7 +866,7 @@ impl<'s> Compiler<'s> {
                 .map(|&(_, i, _)| i)
                 .expect("demoted implies registered");
             let g = self.ensure_global(&name, false, Span::default())?;
-            ctx.push(Insn::Const(Value::Fun(idx)));
+            ctx.push(Insn::Const(Value::Fun(idx as u32)));
             ctx.push(Insn::StoreG(g));
             ctx.push(Insn::Pop);
         }
@@ -1288,8 +1288,8 @@ impl<'s> Compiler<'s> {
                 match self.resolve(ctx, name, e.span)? {
                     Place::Local(i) => ctx.push(Insn::LoadL(i)),
                     Place::Global(i) => ctx.push(Insn::LoadG(i)),
-                    Place::Func(i) => ctx.push(Insn::Const(Value::Fun(i))),
-                    Place::Builtin(b) => ctx.push(Insn::Const(Value::Builtin(b))),
+                    Place::Func(i) => ctx.push(Insn::Const(Value::Fun(i as u32))),
+                    Place::Builtin(b) => ctx.push(Insn::Const(Value::Builtin(b as u32))),
                 }
                 Ok(())
             }
@@ -1499,7 +1499,7 @@ impl<'s> Compiler<'s> {
             }
             ExprKind::Lambda { params, body } => {
                 let idx = self.emit_lambda(params, body, e.span)?;
-                ctx.push(Insn::Const(Value::Fun(idx)));
+                ctx.push(Insn::Const(Value::Fun(idx as u32)));
                 Ok(())
             }
         }

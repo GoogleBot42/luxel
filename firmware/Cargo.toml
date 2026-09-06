@@ -93,6 +93,12 @@ hosted-ui = []
 # mapping is absent, so this is the "old behaviour" build — see
 # docs/research/flash-mmap.md. Not a board profile; combine with any board.
 flashmap-off = []
+# Gitea #312 experiment knobs: run the interpreter's hot functions from
+# internal SRAM (.rwtext) instead of the cache-mapped flash text. Costs
+# ~16 KB (iram-vm) / ~21 KB (iram-builtins) of IRAM; measure with
+# tools/opbench.mjs before shipping either on a board.
+iram-vm = ["luxel-core/iram-vm"]
+iram-builtins = ["luxel-core/iram-builtins"]
 # HUB75 panel output (ESP32-S3 LCD_CAM only — C3/S2 have no parallel-output
 # peripheral; classic-ESP32/C6 support exists in esp-hub75 but is not wired
 # up here yet). Compose-per-frame into a DMA framebuffer that autonomously
