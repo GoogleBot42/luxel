@@ -204,7 +204,12 @@ try {
 
 // ---- perf-only report: one row per pattern, sorted by vm µs (worst first)
 if (PERF) {
-  const timed = rows.filter((r) => !r.fail && r.vm_us !== undefined);
+  // Only rows that actually rendered: a pattern the engine refused (fail) or
+  // that faulted (vmerr) reports fps from the last good pattern and 0 µs
+  // timers — counting those would drag the median toward zero.
+  const timed = rows.filter(
+    (r) => !r.fail && !r.vmerr && r.vm_us !== undefined && r.frame_us > 0,
+  );
   const by = (f) => timed.map(f).sort((x, y) => x - y);
   const q = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))] ?? 0;
   const vms = by((r) => r.vm_us);

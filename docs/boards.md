@@ -39,7 +39,7 @@ credential-baking caveats.
 | `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
 | `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
 | `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's (a panel on jumper wires); strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
-| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **on metal 2026-09-05** (first light, OTA, soak — see "First light" below) | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
+| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **on metal** (first light 2026-09-05; master re-verified 2026-09-06 — see "First light" & "Second light" below) | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
 
 All eight combos build clean (verified compile + image-size check +
 `tools/image-check.sh` + `tools/stack-check.sh`). "Untested on hardware"
@@ -686,6 +686,79 @@ dedicated arena for large pattern arrays, letting the array budget grow
 without touching the DRAM heap. That stays a future idea (docs/ideas.md),
 not a v1 requirement.
 
+
+## Second light: master on the panel (2026-09-06)
+
+Gitea #75 / #260 / #266 / #271. The bring-up build was v0.1.40; this run put
+**master e5935e6** on the board — the cache-MMU flash mapping (#274), the
+pattern code arena (#276), LXBC v5 (#278), the second-core render executor
+plus cross-core flash fence (#280), the procedural grid map (#284) and the
+pass-1/2a interpreter work (#263/#268, `CORE_O3=1`). What changed on metal:
+
+- **Per-frame cost, 4096 px** (`/api/status` per-stage timers, µs/frame):
+
+  | pattern | fps (v0.1.40 → now) | frame | vm | pipe | out |
+  |---|---|---:|---:|---:|---:|
+  | empty `render(index) {}` | 56 → **77** | 12,900 | 7,372 | 45 | 5,469 |
+  | one `rgb()` per pixel | 29 → **45** | 22,268 | 16,778 | 38 | 5,446 |
+  | rainbow (default) | 18 → **30** | 33,961 | 28,379 | 43 | 5,528 |
+  | `library/snake.js` | 8 → **12** | 83,681 | 77,928 | 53 | 5,680 |
+  | `library/snake-2d.js` | 4 → **8** | 125,731 | 120,006 | 65 | 5,629 |
+
+  The VM is now ~96 % of a heavy frame; the HUB75 compose (`out`) is a flat
+  **5.4–6.3 ms** whatever runs, and the output pipeline (`pipe`) is noise.
+  An empty render still costs 12.9 ms — 7.4 ms of that is per-pixel dispatch
+  around a `render` with no body (1.8 µs/px), which is what #261/#265 target.
+- **`CORE_O3` is worth its 19 KB on this board.** Same tree, `CORE_O3=0`
+  (918,496 B) vs `=1` (937,680 B): rainbow 26 → 30 fps (vm 32,732 →
+  28,379 µs), empty render 74 → 77 (vm 9,803 → 7,372), snake-2d 8 → 8
+  (vm 130,737 → 120,006). The win is 7–33 % of VM time, largest where
+  dispatch dominates.
+- **Web serving is fixed** (#259): the 228 KB playground bundle downloads in
+  **1.2–2.7 s** instead of 31 s (rainbow) / 62 s (2D snake), and the running
+  pattern no longer changes the rate — the render loop is on the AppCpu and
+  the asset reader streams out of the mapping. `hosted-ui` is no longer the
+  recommended variant for this board.
+- **The flash mapping works on the S3** (#271): `flashmap: assets
+  0x310000+0xf0000 -> 0x3c0e0000 (15 x 64 KiB pages from entry 14),
+  self-check ok` and `pattern code 0x290000+0x80000 -> 0x3c1d0000 (8 x
+  64 KiB pages from entry 29), self-check ok` on every boot, from both OTA
+  slots. Predicted entries were 16/31; the app's rodata/text is two pages
+  shorter, and the vaddr arithmetic (window base + entry × 64 KiB) holds.
+  Code-arena lifecycle — fill, wrap-on-save, never-evict-on-activate,
+  re-save into a new slot, delete, survive a power cycle — all behave as
+  specified.
+- **The second core is live** (#266): `core1: AppCpu scheduler up, 20480 B
+  stack, flash fence armed` + `render task: AppCpu`; AppCpu stack peak
+  10,848 / 20,480 B under the pattern sweep; `fence_timeouts` 0 across
+  ~340 pattern pushes, 9 OTAs and 3 asset installs. Note the park latency:
+  `fence_wait_us` peaks at **3,171 µs** here, not the tens of µs seen on a
+  strip — a HUB75 compose can hold the render core for milliseconds before
+  it takes the park interrupt.
+- **OTA is a coin flip on this board — #294.** Four of nine `POST /api/ota`
+  pushes wedged the ProCpu *inside* a flash op (`core1.last` =
+  `SysRtcWdt` with ProCpu fence phase 3, fences begun = completed + 1,
+  `fence_timeouts` 0, and no serial output at all between `ota: writing
+  ota_0 …` and the reset). The RTC watchdog recovers it every time and the
+  board comes back on the old slot, so pushing is safe — it just has to be
+  retried. It is **not OTA-specific**: the 299-pattern sweep (~33 k fences
+  over 90 min) wedged once the same way, silently — the probability tracks
+  how many flash ops you do. Read `core1.last` after any long session on
+  this board; a watchdog reset mid-soak leaves no other trace, and if the
+  two slots hold different builds it also moves you onto the other one
+  (push the same image to both before measuring anything).
+- **Pattern performance sweep**: `docs/perf-sweep-s3.md` (299 gallery
+  patterns at 4096 px with the per-stage timers, sorted by VM time) is the
+  baseline the interpreter work is measured against; regenerate with
+  `node tools/hw-bench.mjs <ip> docs/perf-sweep-s3.md --perf-only`.
+  **224 of 299 patterns render** at this pixel count (the other 75 are
+  refused or fault on their arrays); of those, vm µs/frame is median
+  **128,437**, p90 468,966, max 2.38 s, and fps is median **8**, p10 3,
+  p90 20 — i.e. the panel is an interpreter benchmark, not a driver one.
+- Bug found and fixed on the way: `blur1D`'s infallible 32 KiB prefix-sum
+  allocation aborted the firmware at 4096 px (#295); `library/comets.js` in
+  a playlist crash-looped the board five times until the boot guard rolled
+  the slot back.
 ## Beyond the current boards: chip-support assessment (2026-07-29)
 
 What a chip actually needs to run Luxel, derived from the v0.1.34
