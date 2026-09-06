@@ -494,17 +494,9 @@ pub extern "C" fn lx_set_map_grid(h: i32, w: u32, grid_h: u32) {
     with_engine(h, |s| {
         let n = s.engine.pixel_count();
         let w = w.max(1);
-        let _ = grid_h;
-        let coords: Vec<[Fx; 3]> = (0..n)
-            .map(|i| {
-                [
-                    Fx::from_int((i % w) as i32),
-                    Fx::from_int((i / w) as i32),
-                    Fx::ZERO,
-                ]
-            })
-            .collect();
-        s.engine.set_map_vec(2, coords);
+        // rows: what the caller says, else enough to cover the strip
+        let rows = if grid_h >= 1 { grid_h } else { n.div_ceil(w) };
+        s.engine.set_grid_map(w.min(u16::MAX as u32) as u16, rows.min(u16::MAX as u32) as u16);
     });
 }
 

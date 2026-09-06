@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-09-05 — Procedural grid map: panels are grids, not 48 KB of coordinates (#258)
+
+Jeremy installed "DNA Helix 2D" on the Seengreat panel and it rendered as a
+wrapped strip. The engine's default map for 2D-only patterns was a
+ceil(√n)-wide grid **materialised per pixel** — 4096 × 12 B = 48 KB,
+allocated (fallibly, since #275) while the outgoing engine was still alive.
+It fit the panel's idle heap by a hair until the second-core render task
+took its 20 KB stack, and then it failed on every swap; nothing said so.
+
+`MapData` now has a procedural form, `grid: Option<(w, h)>`: coordinates
+are computed on read, nothing is stored, and `Engine::set_grid_map` installs
+it — plus the outpipe's `GridMap`, so 2D blur/glow see the geometry — without
+allocating. The default grid, the wasm `lx_set_map_grid` and the firmware
+all use it. A frame rendered through the procedural grid is byte-identical
+to one rendered through the explicit coordinates (test-pinned across
+several sizes).
+
+On the device: `POST /api/map` takes `grid <w> <h>` (a 5-byte flash blob),
+`GET /api/map` reports `kind`/`w`/`h`, and a **HUB75 panel board installs
+its own `PANEL_COLS`×`PANEL_ROWS` grid at boot** when nothing is stored (and
+falls back to it on clear) — so patterns that also export a 1D `render()`
+(the snake game) see the panel as a matrix too, which the engine default
+never did. The playground gets an "install grid on device" button beside
+the grid size inputs; the native mirror accepts the grid form. Verified in
+chromium against the panel and on the panel itself (DNA Helix 2D renders as
+a helix again).
+
 ## 2026-09-05 — Render task on the second core (dual-core boards) + the cross-core flash fence (#259, #260, #272)
 
 On the classic ESP32 and the ESP32-S3 the render task now runs on the
