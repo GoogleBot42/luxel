@@ -240,6 +240,13 @@
           target = "xtensa-esp32s3-none-elf";
           buildStd = true;
         };
+        # NOT a release artifact since 2026-09-06: the extent allocator
+        # (Gitea #281) took this build under image-check's 3 % OTA-slot
+        # floor (3.15 % → 2.65 %), so the C6's shipped image is
+        # `luxel-fw-c6-devkit-hosted` below — the lever docs/boards.md
+        # recorded for exactly this moment. It still builds and is still
+        # the C6 build to develop against; getting it back over the floor
+        # with the on-device playground is Gitea #291.
         luxel-fw-c6-devkit = {
           board = "board-c6-devkit";
           chip = "esp32c6";

@@ -21,11 +21,14 @@ serial narration that:
      (`flashmap: pattern code 0x290000+0x80000 -> 0x3f4xxxxx (8 x 64 KiB
      pages from entry M), self-check ok`) into the entries right after the
      assets mapping, and brought its code arena up on it (`patterns: code
-     arena 0/7 slots valid (0 dropped), 40 KiB each` — an empty library, so
-     no slot can be valid; a non-zero "dropped" would mean the table parser
-     accepted garbage). No pattern activation runs under QEMU (it needs a
-     sequential-storage map image or the network), so the arena's write
-     path stays a hardware item (Gitea #271).
+     arena 87 pages, 0 extents valid (0 dropped), 0 pages used` — an empty
+     library and no persisted directory, so no extent can be valid; a
+     non-zero "dropped" or "used" would mean the directory parser accepted
+     garbage). No pattern activation runs under QEMU (it needs a
+     sequential-storage map image or the network), so the extent
+     allocator's write, compaction and re-save paths stay hardware items
+     (Gitea #271); the allocator's own logic is host-tested in
+     `tools/extent-check` (`cargo test --workspace`).
 
 What QEMU models (hw/misc/esp32_dport.c): the per-core DROM0/IRAM0 MMU
 tables, cache enable/mask bits, and Cache_Flush — a flush re-reads every
@@ -59,6 +62,10 @@ ASSETS_OFFSET = 0x310000  # partitions.csv: assets, 0x310000, 0xF0000
 ASSETS_LEN = 0xF0000
 DROM_BASE = 0x3F400000
 PAGE = 0x10000
+# The code arena is everything left in the raw half after the ad-hoc
+# regions: 0xA9000..0x100000 partition-relative, in 4 KiB pages
+# (firmware/src/patterns.rs ARENA_OFF / ARENA_PAGES).
+ARENA_PAGES = (0x100000 - 0xA9000) // 0x1000
 
 MAP_LINE = re.compile(
     r"flashmap: assets 0x310000\+0xf0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
@@ -67,7 +74,9 @@ TOC_LINE = "assets: 2 files installed"
 CODE_LINE = re.compile(
     r"flashmap: pattern code 0x290000\+0x80000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
 )
-ARENA_LINE = re.compile(r"patterns: code arena (\d+)/(\d+) slots valid \((\d+) dropped\), (\d+) KiB each")
+ARENA_LINE = re.compile(
+    r"patterns: code arena (\d+) pages, (\d+) extents valid \((\d+) dropped\), (\d+) pages used"
+)
 ABORT_MARKERS = (
     "flashmap: assets not mapped",
     "flashmap: assets self-check FAILED",
@@ -249,11 +258,17 @@ def check(text: str, image_len: int) -> list[str]:
     passed.append(f"pattern code: entry {centry} = assets entry {entry} + {pages} pages, vaddr 0x{cvaddr:x}")
     a = ARENA_LINE.search(text)
     if not a:
-        raise Fail("serial: no 'patterns: code arena N/M slots valid' line — the arena did not come up on the mapping")
-    valid, total, dropped, kib = (int(a.group(i)) for i in range(1, 5))
-    if (valid, dropped) != (0, 0) or total != 7 or kib != 40:
-        raise Fail(f"arena reported {valid}/{total} valid, {dropped} dropped, {kib} KiB — expected 0/7, 0 dropped, 40 KiB on an empty library")
-    passed.append(f"serial: {a.group(0)!r} (arena up on the mapping, empty library)")
+        raise Fail(
+            "serial: no 'patterns: code arena N pages, M extents valid' line "
+            "— the extent allocator did not come up on the mapping"
+        )
+    pages, valid, dropped, used = (int(a.group(i)) for i in range(1, 5))
+    if (valid, dropped, used) != (0, 0, 0) or pages != ARENA_PAGES:
+        raise Fail(
+            f"arena reported {pages} pages, {valid} extents valid, {dropped} dropped, "
+            f"{used} used — expected {ARENA_PAGES} pages and 0/0/0 with an empty directory"
+        )
+    passed.append(f"serial: {a.group(0)!r} (extent allocator up on the mapping, empty directory)")
     return passed
 
 

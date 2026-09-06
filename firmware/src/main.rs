@@ -57,6 +57,7 @@ mod board;
 mod config;
 mod core1;
 mod devicemap;
+mod extents;
 mod flashmap;
 mod gpio;
 #[cfg(feature = "hub75")]
@@ -1136,12 +1137,13 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                 Msg::Library { id, ms } => {
                     // A library swap (playlist, activate, MQTT, resume):
                     // nothing travelled but the id. Decode straight from
-                    // the pattern's mapped arena slot — no envelope, no
+                    // the pattern's mapped arena extent — no envelope, no
                     // blob Vec, no source Vec anywhere in the lifecycle
                     // (docs/research/flash-mmap.md "The VM consumer") —
-                    // or, for a pattern without a slot, from a transient
-                    // chunk-store read that is then offered to a FREE
-                    // slot so the next activation is in place.
+                    // or, for a pattern without one, from a transient
+                    // chunk-store read that is then offered an extent
+                    // (never compacting, never evicting: the wear rule)
+                    // so the next activation is in place.
                     if ms == 0 {
                         engine = None;
                     }

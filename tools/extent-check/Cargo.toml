@@ -1,0 +1,19 @@
+# Host test rig for firmware/src/extents.rs — the pattern code arena's
+# page-granular extent allocator (bitmap, first-fit, compaction planning,
+# the persisted directory format). It compiles the exact on-device source
+# file for the host so its unit tests run under `cargo test --workspace`;
+# it is a workspace member for exactly that reason (unlike wledfs-check,
+# which needs real filesystem dumps and stays standalone).
+#
+#   cargo test -p extent-check
+[package]
+name = "extent-check"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

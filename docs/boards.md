@@ -198,6 +198,45 @@ lost its per-field `read_chunk` calls. No statics beyond two
 `AtomicUsize`s; `.stack` on pixelblaze-v3 26,732 B (devshell build,
 −48 B), stack-check clean on pixelblaze-v3, s3-devkit and c6-devkit.
 
+2026-09-06, pattern extent allocator (Gitea #281 — the arena's 7 fixed
+40 KiB slots became a page-granular extent allocator; `patterns.rs` +
+`extents.rs`, docs/firmware.md "The pattern store's mapped half and the
+code arena"): **+4.1 to +5.3 KB on every board.** Devshell builds with the
+same `creds.env` on both sides, `origin/master` 8b478f0 vs the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 946,256 | 951,568 | +5,312 | 97,008 B (9.25 %) |
+| `board-pixelblaze-v3` | 1,003,424 | 1,007,600 | +4,176 | 40,976 B (3.90 %) |
+| `board-athom-music` | 1,003,424 | 1,007,584 | +4,160 | 40,992 B (3.90 %) |
+| `board-esp32-generic` | 1,003,248 | 1,007,488 | +4,240 | 41,088 B (3.91 %) |
+| `board-s3-devkit` | 946,016 | 950,128 | +4,112 | 98,448 B (9.38 %) |
+| `board-seengreat-hub75` | 938,592 | 942,768 | +4,176 | 105,808 B (10.09 %) |
+| `board-c6-devkit` | 1,015,488 | 1,020,736 | +5,248 | **27,840 B (2.65 %) — FAILS** |
+| `board-c6-devkit` + `hosted-ui` | — | 1,004,256 | — | **44,320 B (4.22 %)** |
+
+Where it goes (`nm -S` diff on the C3 ELF, +5,031 B of named symbols, of
+which 328 B is the directory static and lives in `.bss`, not the image):
+`cache_code` +2,132 B (it now allocates, compacts and re-publishes instead
+of picking one of seven slots), the `extents.rs` planning code ~742 B
+(`order` 262, `insert` 230, `remove` 152, `first_fit` 98 — the rest
+inlines), `Mutex::lock` +610 B from the extra `ARENA.lock` closure types,
+`live_gens` +380 B, `cache_code`'s print machinery +354 B, the render task
++208 B. Two trims were taken before landing: the directory static is
+initialized all-zero so it sits in `.bss` instead of `.data` (−472 B of
+image; the real page count is installed by `arena_init`), and the
+boot/full/write log lines lost their surplus format arguments.
+
+**This is what spends the C6's margin.** The lever the 2026-09-05 entry
+below recorded is now pulled: `board-c6-devkit` with the on-device
+playground is **under image-check's 3 % floor** (3.15 % → 2.65 %) and is no
+longer a release artifact. The C6 ships as `luxel-fw-c6-devkit-hosted` only
+(.github/workflows/release.yml, flake.nix, docs/releases.md); the full-UI
+build still compiles and is still the C6 build to develop against.
+Restoring it as an artifact is **Gitea #291**. stack-check clean on
+pixelblaze-v3 / s3-devkit / c6-devkit; the largest new frame is
+`arena_init` at 1,520 B, at boot on the main task, well under the 12 KB
+per-function budget.
 2026-09-05, pattern code arena (library patterns execute from the flash
 mapping; `patterns.rs`, docs/firmware.md "The pattern store's mapped half
 and the code arena"): **+10,528 B** on `board-c6-devkit` (1,002,720 →
@@ -215,6 +254,7 @@ is `EXTRA_FEATURES=hosted-ui` for the C6 variant (`luxel-fw-c6-devkit-
 hosted` already exists; −14 KB), not shrinking the store. `.stack` on
 pixelblaze-v3 26,396 B (−336 B: the render task future grew by the new
 arm); stack-check clean on pixelblaze-v3 / s3-devkit / c6-devkit.
+(The lever was pulled on 2026-09-06 — see the entry above.)
 
 2026-08-30, picoserve response collapse (Gitea #167): **−23.0 to −24.4 KB
 on every board** — the largest single reduction since the opt-level switch,

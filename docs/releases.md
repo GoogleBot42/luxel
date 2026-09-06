@@ -159,8 +159,12 @@ transient failure — it upserts the release and re-uploads missing assets.
 
 Per board (`c3-devkit`, `pixelblaze-v3`, `athom-music`, `esp32-generic`,
 and — **untested on metal**, see docs/boards.md — `s3-devkit`,
-`c6-devkit`). The untested boards are published as artifacts only; the
-installer page (web/flash.html) does not list them:
+`s3-hub75`, `seengreat-hub75`). The untested boards are published as
+artifacts only; the installer page (web/flash.html) does not list them.
+The C6 is the exception: since 2026-09-06 it ships **only** as
+`c6-devkit-hosted` (below) — the on-device-UI build fell under the 3 %
+OTA-slot floor with the pattern extent allocator (Gitea #281), and
+restoring it is Gitea #291:
 
 | asset | what it's for |
 |---|---|
@@ -171,9 +175,10 @@ One extra pseudo-board, `c6-devkit-hosted`, ships the same two images built
 with the **`hosted-ui`** cargo feature (Gitea #11): no on-device playground
 at all — `/` serves the embedded page that links to the hosted playground
 with `?device=` prefilled, and its `-full.bin` leaves the assets partition
-erased. It exists because the C6 owns the fleet's tightest OTA-slot margin;
-any board can be built this way (`EXTRA_FEATURES=hosted-ui`), it just isn't
-worth an artifact each. See docs/boards.md for the mode and its numbers.
+erased. It exists because the C6 owns the fleet's tightest OTA-slot margin,
+and since 2026-09-06 it is the *only* C6 artifact; any board can be built
+this way (`EXTRA_FEATURES=hosted-ui`), it just isn't worth an artifact
+each. See docs/boards.md for the mode and its numbers.
 The installer page skips it like any other board id it doesn't know.
 
 Plus, once per release:
