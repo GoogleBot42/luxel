@@ -196,6 +196,19 @@ the one bitwise op that zeros the fractional bits of its result).
 | `Ret` | | pops return value, unwinds frame |
 | `RetNull` | | returns 0 |
 
+### Superinstructions
+
+Fourteen more opcodes (`0x41..0x4E`, Gitea #261) each stand for a run of
+two or three of the instructions above — `StoreL; Pop`, `LoadL; LoadG`,
+`LoadG; LoadL; LoadIdx`, `Const; <binop>`, `<cmp>; JmpIfFalse`, and so on.
+They add **no semantics**: each one's stack effect, error messages and
+error attribution are exactly the sequence it replaces, so nothing in this
+document changes because of them. A compiler-side peephole emits them and
+the interpreter dispatches once instead of two or three times. The list,
+the operand layouts and the two rules that keep fusion invisible (never
+across a jump target, never across a source position) are in
+[bytecode.md](bytecode.md).
+
 Source-level `switch` adds no instruction: it lowers to a chain of
 `Dup`/`<label>`/`Ne`/`JmpIfFalse` tests over the discriminant, a `Pop` +
 `Jmp` for the no-match path, and one `Pop`/`Jmp` trampoline per matching
