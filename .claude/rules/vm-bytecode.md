@@ -2,6 +2,7 @@
 paths:
   - "crates/luxel-core/src/vm.rs"
   - "crates/luxel-core/src/bytecode.rs"
+  - "crates/luxel-core/src/compile.rs"
 ---
 
 - The `BUILTINS` table in `vm.rs` is APPEND-ONLY: the array index IS the
@@ -142,3 +143,24 @@ paths:
   presumption (two of the three 2026-08-29 engine-gap issues had wrong
   premises). Probe batteries: tools/oracle/*.mjs, conventions in
   .claude/rules/oracle.md.
+- A COMPILER-side change (`compile.rs`: the #261 peephole, the #312
+  `const_fold` passes) must not be judged by host `luxel bench` throughput
+  at all — not even directionally. #312's compiler pass moved it by ±17 % on
+  patterns whose dynamic opcode histogram was IDENTICAL and whose `Vm::run`,
+  `Engine::frame` and `call_builtin` disassembled instruction-for-instruction
+  identically: the compiler is not on the hot path, so the number is pure x86
+  code placement (`rainbow`'s blob is byte-identical between the binaries and
+  still measured +8 %). The two numbers that mean something are dynamic
+  **ops/px** (`luxel bench --profile`, `tools/profile-library.mjs`) and the
+  **Xtensa instruction count** of the ops involved, from the S3 disassembly —
+  fewer ops is not automatically faster, so quote both. Prove a compiler change
+  did not touch the runtime by diffing the two binaries' `Vm::run`
+  disassembly, and prove it changed nothing observable with byte-identical
+  PPMs (`luxel run --out x.ppm`) across all 299 library patterns.
+- Both compiler rewrite passes obey the same two contracts — never across a
+  JUMP TARGET, never across a SOURCE POSITION — and `docs/spec/bytecode.md`
+  ("Superinstructions", "Constant folding") is the reference for what a blob
+  reader may therefore assume. A pass that wants to move a value ACROSS a
+  statement boundary (Gitea #320) is outside that argument and needs its own:
+  stepping, the variable inspector, `clear_run` on error, and `MAX_STACK`
+  all see the deeper stack.
