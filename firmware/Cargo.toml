@@ -88,6 +88,11 @@ small-chip = []
 # `POST /api/assets` installer from the app image, and drops the ~641 KB
 # bundle from what has to be flashed. See docs/boards.md.
 hosted-ui = []
+# Bisect knob: never map flash through the cache MMU (src/flashmap.rs).
+# Every consumer keeps its esp-storage read_nor path and takes it when the
+# mapping is absent, so this is the "old behaviour" build — see
+# docs/research/flash-mmap.md. Not a board profile; combine with any board.
+flashmap-off = []
 # HUB75 panel output (ESP32-S3 LCD_CAM only — C3/S2 have no parallel-output
 # peripheral; classic-ESP32/C6 support exists in esp-hub75 but is not wired
 # up here yet). Compose-per-frame into a DMA framebuffer that autonomously

@@ -56,6 +56,7 @@ mod assets;
 mod board;
 mod config;
 mod devicemap;
+mod flashmap;
 mod gpio;
 #[cfg(feature = "hub75")]
 mod hub75;
@@ -277,6 +278,11 @@ async fn main(spawner: Spawner) -> ! {
     // nobody noticed until a real via-WLED install (2026-08-16). Don't
     // disable it outside a local experiment, and never commit that.
     takeover::maybe_takeover();
+    // Map the assets partition through the cache MMU (flashmap.rs) before
+    // the TOC parse so init() and every asset response read it as memory.
+    // After takeover (the region is ours only under our table) and after
+    // ota::init (the self-check's read_nor half needs the driver).
+    assets::map_region();
     assets::init();
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)

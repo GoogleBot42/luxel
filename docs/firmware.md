@@ -200,6 +200,45 @@ stack lints declared at the top of `main.rs`
 are board-independent, so running clippy on the C3 build still covers the
 Xtensa boards' source.
 
+## Flash-mapped regions
+
+`firmware/src/flashmap.rs` maps page-aligned flash ranges read-only into the
+CPU's data bus through the cache MMU — the same page table the bootloader
+programs for the app's own rodata — so large immutable data is read as
+memory instead of copied through esp-storage's flash controller (Jeremy's
+decision, 2026-09-05; design and per-chip page arithmetic in
+docs/research/flash-mmap.md). The web assets partition is mapped at boot
+(`assets::map_region`, 15 × 64 KiB pages; `/api/status` reports
+`assets_mapped`), and the pattern engine's execution-ready bytecode is the
+next consumer (Gitea #260). What a consumer must and must not do:
+
+- **Read it from task context only, never from an interrupt handler.** A
+  mapped read is a cache miss to SPI0, and no SPI0 fill may happen while an
+  esp-storage op (SPI1) is in flight. In task context that is guaranteed:
+  the op's critical section keeps this core busy, and on dual-core builds
+  the flash fence parks the other core. An ISR is the one thing a critical
+  section does not stop.
+- **Invalidate after writing flash under a mapping.** Cache lines do not
+  watch SPI1. A writer (the assets upload, the pattern store's raw-slot
+  writer) calls `flashmap::invalidate` / `invalidate_slice` on the range
+  before anyone reads it back through the mapping; on the classic ESP32
+  that is a whole-cache flush of both cores, elsewhere an address-range
+  invalidate.
+- **Never map an app slot, never unmap a region something may still
+  read.** A load from an invalid MMU entry is a cache-error fault, not a
+  recoverable error. Mappings are normally made once at boot and leaked.
+- **Page-aligned offsets only** (64 KiB on the ESP32/S3/C3; the C6's page
+  size is a register, 64 KiB by default). `partitions.csv` keeps every
+  mappable region aligned; lengths round up to whole pages.
+- **Keep the read_nor fallback.** `map` can fail (`flashmap-off` build, no
+  free entries, or the boot self-check refusing a mapping that does not
+  present the page asked for), and every consumer answers that with the
+  path it had before — slower, never broken. `assets::mapped()` returning
+  `None` is that signal for the assets consumer.
+- The cross-core half (`flashmap::quiesced` → `core1::fenced`) is wired
+  when the second-core render executor lands; until then the AppCpu is
+  halted and a critical section is the whole story.
+
 ## Render-loop timing counters
 
 `render_task` publishes `FPS` — frames rendered in the last full second —

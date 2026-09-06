@@ -107,6 +107,9 @@ def main() -> int:
         ("takeover-fault", "takeover-test.py", dump_args + ["--slot", "app1", "--inject-fault"], True),
         ("heap-regions-selfheal", "heap-regions-test.py", dump_args + ["--mode", "selfheal"], True),
         ("heap-regions-rollback", "heap-regions-test.py", dump_args + ["--mode", "rollback"], True),
+        # cache-MMU flash mapping (firmware/src/flashmap.rs) — stock merged
+        # image + a synthetic LUX2 archive, no dumps needed
+        ("flashmap", "flashmap-test.py", [], False),
     ]
 
     results: list[tuple[str, str, float]] = []

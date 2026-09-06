@@ -36,6 +36,16 @@ paths:
   "no record" SILENTLY (no panic, no log), so a setting read too early boots
   at its default with no clue why. Keep boot-time settings reads after
   `ota::init` (2026-09-02: the data-pin picker "applied" but never took).
+- Flash-mapped regions (`firmware/src/flashmap.rs`, the assets partition
+  today, the VM's code stream next — docs/firmware.md "Flash-mapped
+  regions"): read them from task context only, never from an ISR; after
+  writing flash under one, `flashmap::invalidate`/`invalidate_slice` the
+  range before anything reads it back through the mapping; never map an
+  app slot; never `unmap` something another task may still read (an
+  invalid-entry load is a cache-error fault, not a catchable error); keep
+  the read_nor fallback — `map` can fail and the consumer must degrade,
+  not break. Map/unmap go through `flashmap::quiesced`, which the
+  second-core branch must route through `core1::fenced`.
 - Never size an infallible allocation from a length/count field read out of
   flash or any stored record — a corrupt record becomes an OOM panic-reboot
   loop (a torn pattern-store TOC record with chunk-count 32 crash-rebooted

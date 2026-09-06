@@ -171,6 +171,19 @@ into `curl2`/`curl3`), so it is not in the tree. No statics or buffers:
 `.stack` on pixelblaze-v3 is 27,484 B with no new frame in the top
 fifteen and nothing over the 12 KB budget.
 
+2026-09-05, cache-MMU flash mapping of the assets partition
+(`firmware/src/flashmap.rs`, docs/research/flash-mmap.md): **−1,392 B** on
+`board-c6-devkit` (1,000,512 → **999,120 B**, margin **49,456 B /
+4.72 %**), −2,720 B on `board-pixelblaze-v3` (979,312 → 976,592 B) and
+−2,224 B on `board-athom-music` (979,152 → 976,928 B) — credless flake
+builds of `origin/master` vs this branch, same day. Negative despite a new
+module with four per-chip register drivers: the asset response body no
+longer carries a `Timer::after` future and a staging `Vec` on its hot
+path (the mapped slice goes straight to the socket), and the TOC parse
+lost its per-field `read_chunk` calls. No statics beyond two
+`AtomicUsize`s; `.stack` on pixelblaze-v3 26,732 B (devshell build,
+−48 B), stack-check clean on pixelblaze-v3, s3-devkit and c6-devkit.
+
 2026-08-30, picoserve response collapse (Gitea #167): **−23.0 to −24.4 KB
 on every board** — the largest single reduction since the opt-level switch,
 and the one that takes the C6 back out of CI's warn band. `server.rs`'s
