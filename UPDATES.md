@@ -65,6 +65,24 @@ itself, the second jump table `binop` dispatches through for the fused
 constant-argument forms, and the register pressure that keeps `code.ptr`/`code.len`
 spilled across the loop.
 
+One more suspect-2 probe, prompted by the observation that the dispatch jump
+table lives in flash-mapped DROM so every `jx` does a data-cache read from
+flash: building with `-C llvm-args=--min-jump-table-entries=200`, which
+removes the tables entirely and lowers the dispatch to a compare tree, made
+it **21 % WORSE** (90.5 → 109.3 cycles/op, rainbow `vm_us` 21,479 → 24,088).
+Together with the 0.0 % from suspect 1 — where the *bytecode words* come from
+DROM in one arm and DRAM in the other — that settles it on the S3: a
+flash-mapped data read on this chip is a data-cache hit and costs nothing
+measurable, and the table load plus one `jx` is much cheaper than six or
+seven unpredicted compares.
+
+**Sizes: every board shrinks** (docs/boards.md) — −1,072 B on the C3, −3,088 B
+on the classic-ESP32 boards, −3,104 B on the Seengreat, −7,600 B on the C6
+(the one board not built at `CORE_O3`, so its dispatch loop pays per arm).
+That matters most for the classic-ESP32 boards: with dev creds baked in they
+were *below* `image-check.sh`'s 3 % floor on master (2.97 %) and are back over
+it at 3.27 %. `.stack` unchanged; `tools/stack-check.sh` passes.
+
 Also here: `iram-vm` / `iram-builtins` cargo features (off everywhere, kept because
 they are how suspect 2 gets re-tested on a future board), and the S3's OTA wedge
 **#294 closed** — 3/3 clean pushes of current master, which carries #309's fence fix.
