@@ -95,6 +95,20 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   `firmware/build-esp32.sh` first or you push a stale image with no
   warning; both images can even report the same version string
   (2026-08-15: an A/B test silently pushed the wrong build this way).
+  Worse, **every board on the same chip shares that ELF path**
+  (`firmware/target/xtensa-esp32-none-elf/release/luxel-fw` is
+  board-pixelblaze-v3's, board-athom-music's AND board-esp32-generic's), so
+  `BOARD=…` on the push does not protect you: anything that built a
+  different board in between — `tools/ci.sh` (which builds `CI_BOARD`,
+  default board-pixelblaze-v3), an image-size probe, another session's
+  build in the same worktree — leaves ITS image there and you OTA the wrong
+  board's firmware onto the device. It boots and serves HTTP, so nothing
+  errors; the strip just goes dark on the wrong pin. Tells in
+  `GET /api/config` / `/api/status`: a `data_pin_default` that isn't the
+  board's (23 = pixelblaze-v3, 18 = athom), or board-conditional status
+  fields missing. Rebuild the board you mean **immediately** before
+  pushing, and check `data_pin_default` after (2026-09-06, cost a bad
+  flash on the Athom).
 - **Stop a playing playlist before any flash-touching push — ONLY on
   v0.1.34–v0.1.35**: those builds' per-swap flash persist took the driver
   for the whole burst, so asset pushes failed ("flash write failed"),
