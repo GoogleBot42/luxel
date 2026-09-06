@@ -84,7 +84,11 @@ pub fn booted_slot() -> &'static str {
 /// Borrow the flash driver briefly (reads, or writes outside an OTA).
 /// Returns None while an OTA holds the driver.
 pub fn with_flash<T>(f: impl FnOnce(&mut FlashStorage<'static>) -> T) -> Option<T> {
-    FLASH.lock(|c| c.borrow_mut().as_mut().map(f))
+    // The flash fence (dual-core: park the other core for the op) sits
+    // OUTSIDE the critical section on purpose — its spin-waits must run
+    // with interrupts enabled so the other core can park us in turn. See
+    // core1.rs.
+    crate::core1::fenced(|| FLASH.lock(|c| c.borrow_mut().as_mut().map(f)))
 }
 
 /// Take the flash driver out for a self-contained multi-op transaction (the
@@ -436,29 +440,32 @@ pub fn begin() -> Result<OtaWriter, &'static str> {
     let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> =
         alloc::vec![0u8; PARTITION_TABLE_MAX_LEN].into_boxed_slice().try_into().unwrap();
 
-    // which slot is next?
+    // which slot is next? (reads on the taken driver: fenced by hand, since
+    // they bypass with_flash — core1.rs)
     let next = {
-        let mut ota = match OtaUpdater::new(&mut flash, &mut *buffer) {
-            Ok(o) => o,
-            Err(_) => {
+        let opened = crate::core1::fenced(|| {
+            let mut ota = OtaUpdater::new(&mut flash, &mut *buffer)
+                .map_err(|_| "no OTA partitions (old partition table? reflash serially)")?;
+            ota.next_partition()
+                .map(|(_, sub)| sub)
+                .map_err(|_| "cannot determine next OTA slot")
+        });
+        match opened {
+            Ok(sub) => sub,
+            Err(msg) => {
                 FLASH.lock(|c| *c.borrow_mut() = Some(flash));
-                return Err("no OTA partitions (old partition table? reflash serially)");
-            }
-        };
-        match ota.next_partition() {
-            Ok((_, sub)) => sub,
-            Err(_) => {
-                FLASH.lock(|c| *c.borrow_mut() = Some(flash));
-                return Err("cannot determine next OTA slot");
+                return Err(msg);
             }
         }
     };
 
     // raw offset/size of that slot, so chunks write at absolute addresses
-    let entry = partitions::read_partition_table(&mut flash, &mut *buffer)
-        .ok()
-        .and_then(|pt| pt.find_partition(PartitionType::App(next)).ok().flatten())
-        .map(|p| (p.offset(), p.len()));
+    let entry = crate::core1::fenced(|| {
+        partitions::read_partition_table(&mut flash, &mut *buffer)
+            .ok()
+            .and_then(|pt| pt.find_partition(PartitionType::App(next)).ok().flatten())
+            .map(|p| (p.offset(), p.len()))
+    });
     let Some((offset, capacity)) = entry else {
         FLASH.lock(|c| *c.borrow_mut() = Some(flash));
         return Err("next OTA slot missing from partition table");

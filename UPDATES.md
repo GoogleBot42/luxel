@@ -1,5 +1,280 @@
 # Update log
 
+## 2026-09-05 — Render task on the second core (dual-core boards) + the cross-core flash fence (#259, #260, #272)
+
+On the classic ESP32 and the ESP32-S3 the render task now runs on the
+AppCpu under its own esp-rtos scheduler and thread-mode embassy executor
+(`firmware/src/core1.rs`, cfg `multi_core` from build.rs); WiFi, the network
+stack, the web pool and every other task stay on the ProCpu. Single-core
+boards are untouched (the module compiles to no-ops). Measured on the Athom
+(60 px WS2812, same master either side, `tools/render-bench.mjs` — new,
+docs/tools.md): the playground bundle (228 KB) downloads in 0.9–1.2 s at 2048 px instead of 20.7–34.8 s, in 1.0–1.1 s at 60 px instead of 1.7–2.1 s, with fps during the download equal to fps without it (96→120 at 60 px rainbow); fps itself is wire-bound at 2048 px (12/9/9, `out_us` 68 ms) and `vm_us` drops 7–8 % for want of WiFi preemption. Idle heap pays the AppCpu's 20 KB stack (105,456 → 84,960 B; high-water 10,896 B through 2048 px snake-2d). Full tables in docs/firmware.md "Cores & tasks".
+
+The one real piece of multicore machinery is the **flash fence**: SPI flash
+is shared between the cache (every code fetch and now every mapped read, on
+either core) and esp-storage's SPI1 ops, so `core1::fenced(op)` parks the
+other core in an IRAM spin (its park software interrupt — SWI2 for the
+ProCpu, SWI3 for the AppCpu) for the duration. esp-storage's own multicore
+strategies were rejected: the default makes every write fail while the
+second core runs, and `auto_park` hard-stalls the other core at an arbitrary
+instruction — possibly inside a spinlock the flash op's next interrupt then
+spins on forever. Four doors carry every flash op (`ota::with_flash`,
+`patterns::AsyncFlash`, `ota::begin`'s partition reads, `flashmap::quiesced`
+— #272 closed) and `FlashStorage` is constructed `multicore_ignore()`.
+
+Getting the park right on the ESP32 cost the evening: three distinct hard
+hangs (no panic, no reboot), each reproduced within a minute of snake-2d +
+a bundle download and isolated with an RTC-memory black box plus an RTC
+watchdog — both of which stay in the firmware (`/api/status` `core1.last`,
+`core1.fence_timeouts`). (1) A Priority3 park landing inside a level-1
+handler's DPORT reads wedges the bus → the park is Priority1 and masks
+INTENABLE itself. (2) An AppCpu RTC-memory access inside the park wedges
+the ProCpu's next one → only the ProCpu writes the black box. (3) A ROM
+SPI1 flash op while the strip's SPI2 DMA transfer is still in flight hangs
+the CPU (shared SPI DMA engine; impossible on single core, where the
+blocking DMA write held the only core) → the fence waits for
+`output::transfer_busy()` to clear. Full story: docs/firmware.md "Cores &
+tasks". Image cost: +8.3–8.8 KB on the classic-ESP32 boards; the AppCpu's
+20 KB stack is heap-allocated (high-water 10,896 B), `.stack` unchanged.
+Unverified on metal: the S3/HUB75 boards (build green; Gitea #266). The
+two-VM pixel split is Gitea #265; single-core yield-in-frame is #267.
+
+## 2026-09-05 — Pattern code arena: library patterns execute from the flash mapping (#260 store side)
+
+The store half of the VM consumer contract in docs/research/flash-mmap.md,
+landed independently of the instruction format so the two can merge in
+either order. `patterns.rs` now maps the raw upper half of `storage`
+(`0x290000`, 512 KiB, 8 pages) at boot with the same self-check as the
+assets partition, and `patterns::current_code() -> Option<&'static [u8]>`
+hands the engine the running pattern's bytecode as mapped memory: rodata
+for the built-in default, the ad-hoc read-back slot (now TWO 64 KiB
+bytecode sides — a swap writes the side the engine is not executing
+from), or the pattern's slot in the new **code arena**: 7 × 40 KiB
+page-aligned slots holding one stored pattern's contiguous LXBC each,
+with a slot table (seq, bytecode generation, length, FNV-1a) under a
+reserved map key that boot verifies against the index AND the mapped
+bytes before trusting a slot.
+
+**Library swaps carry only the id.** `Msg::Library { id, ms }` replaced
+the envelope-carrying `Msg::Code`/`Crossfade` for playlist, activate,
+MQTT and resume: the render task decodes from `code_of(id)` (mapped) or,
+for a pattern without a slot, from a transient chunk-store Vec that it
+then offers to a FREE or stale slot — so playlist churn writes flash at
+most 7 times per library state, then never (the wear rule). Saves fill
+with eviction (LRU by activation, never the running pattern); deletes
+forget the slot. Identity/read-back lengths come from `source_stat(id)`,
+which streams the source out of its chunks. Every arena write is the
+existing `write_raw` discipline (one `ota::with_flash` per op — the same
+quiesce path as the assets writer, so #272's fence hook lands in one
+place) followed by `flashmap::invalidate_slice` and a hash check of the
+mapped bytes. Rebuilds and the playlist pre-flight read the mapped slot
+too; `/api/pattern` read-back streams from the mapping; `/api/status`
+gains `code_mapped` and `arena: [used, total]`.
+
+**Measured (heapstat, counting allocator, whole gallery).** The
+library-activation peak — source Vec + blob Vec + envelope Vec, then
+Program + engine — vs the arena lifecycle (blob in flash, Program +
+engine): Main Stage 85,389 → 31,819 B, Frogger 2D 68,271 → 22,272,
+Opening Act 63,763 → 28,715, 2D Fireworks Fade 57,153 → 33,514,
+Infinite Snake 32,795 → 24,995, novas 18,359 → 17,417; over all 299
+patterns 3,568 B (27.1 %) less per activation on average, and **5
+patterns over 45 KB at swap → 0**. Resident cost is unchanged until the
+fixed-width format lets `Program` borrow the slice (`deserialize_lean`
+still copies) — that is the parent's half of the contract.
+
+**Verified without hardware:** every board + `c6 hosted-ui` +
+`athom flashmap-off` build; stack-check clean on pixelblaze-v3 / s3 / c6
+(`.stack` 26,396 B on the PB); QEMU `flashmap-test.py` extended and
+green — the store's mapping lands on entry 18 (assets entry 3 + 15
+pages, `0x3f520000`) with its self-check ok and `code arena 0/7 slots
+valid (0 dropped), 40 KiB each` on an empty library (no activation runs
+under QEMU: that needs a sequential-storage image or the network, so the
+write path is a #271 item); `tools/ci.sh` green. **Image cost:** credless
+flake builds vs `origin/master` (0f84707): C6 1,002,720 → 1,013,248 B
+(+10,528; margin **35,328 B / 3.37 %** — above the 3 % floor, inside the
+6 % warn band), PB v3 981,952 → 991,184 (+9,232), Athom 982,016 →
+991,424. About 6.7 KB of that is named symbols (the `Library` swap arm,
+`cache_code`, the arena table code, `check_asserts` no longer inlined);
+the rest is alignment. Deduplicating the three "pattern too large"
+vmerr builders into `engine_or_vmerr` clawed ~1 KB back. The next ~4 KB
+on the C6 trips the release gate: the accepted lever is
+`EXTRA_FEATURES=hosted-ui` for that variant (docs/boards.md).
+
+Hardware steps for the arena (activate twice, re-save the running one,
+an 8-item playlist against 7 slots, ad-hoc pushes, a power cycle) are
+appended to #271.
+
+## 2026-09-05 — Flash memory-mapping through the cache MMU (assets first, the VM next; #259/#260)
+
+Jeremy's decision for #260: the pattern engine will execute a fixed-width
+instruction stream *directly out of flash* through the cache/MMU, so a
+loaded pattern costs ~zero heap for its code and constants — decoding into
+RAM was overruled. esp-hal exposes no mapping API; this is the facility,
+designed per chip and landed with one consumer wired end-to-end.
+
+**Design: docs/research/flash-mmap.md.** Every chip's MMU page table is a
+register block the bootloader fills with the app's own pages and otherwise
+leaves invalid: the classic ESP32's DPORT tables (one per core, 64 DROM0
+entries, the app uses 3), the S3/C3's shared I/D table at `0x600C5000`
+(512/128 entries, the app uses 16/14), the C6's indexed `SPI_MEM0` item
+registers (256 entries, page size from a register, the app uses 15). A
+4 MiB flash needs 64; we map 15 (assets) now and ≤16 more (the pattern
+store's raw half) next. The whole thing is register pokes mirrored from
+esp-idf's `mmu_ll.h` and esp-storage's private `mmu.rs`, plus ROM cache
+maintenance (`Cache_Flush_rom` on the ESP32 — also what Espressif's QEMU
+needs to re-sync a page; suspend/resume + `Cache_Invalidate_Addr`
+elsewhere). No esp-hal patch. The doc works through the SPI0/SPI1
+contention rule (a mapped read is a cache miss; none may happen during an
+esp-storage op on another core — the second-core branch's flash fence
+already gives that; the one thing it must add is routing `flashmap`'s
+table ops through the fence, #272), WiFi (esp-radio never touches flash
+at runtime), OTA (the slot is never mapped), writes under a mapping
+(invalidate before reading back), the store changes the VM needs (a
+page-aligned code arena in `storage`'s raw half; library chunks are not
+contiguous), and the RAM accounting from the heapstat model (Infinite
+Snake: 7.7 KB blob + most of 12.4 KB program off the device; Main Stage:
+18.5 KB + most of 28.5 KB).
+
+**Facility: `firmware/src/flashmap.rs`** — `map(offset, len) ->
+Result<Mapped, Error>` (page-aligned offset, first-fit run of invalid
+entries above the app's), `unmap`, `invalidate`/`invalidate_slice`,
+`Mapped::bytes`/`leak`. Per-chip `chip` modules behind the existing chip
+features; the programming functions are `#[esp_hal::ram]` with inlined
+table accessors because the S3/C3/C6 sequence suspends the caches. A
+`flashmap-off` cargo feature makes `map` fail so every consumer's
+read_nor path can be forced.
+
+**Consumer: the web assets partition.** `assets::map_region` maps
+`0x310000+0xF0000` at boot (after `ota::init` and the takeover check),
+reads the first 4 KiB both ways and refuses the mapping on any
+disagreement, then leaks it; `init()` parses the TOC through it;
+`FlashAsset::write_content` hands the socket 4 KiB slices of the mapping
+with a `yield_now` between them — no staging Vec, no critical section per
+chunk, and the 1 ms `Timer::after` that existed only to give WiFi
+airtime between cache-off windows is gone from that path;
+`AssetWriter::commit` invalidates the region before re-parsing.
+`/api/status` gains `assets_mapped`; `tools/image-check.sh` asserts the
+mapping is linked into every non-hosted image.
+
+**Verified without hardware** (the S3 was soaking, the Athom in use —
+nothing here touched a device): all six boards plus `c6-devkit +
+hosted-ui` and `athom-music + flashmap-off` build; stack-check clean on
+pixelblaze-v3 / s3-devkit / c6-devkit (`.stack` 26,732 B on the PB,
+−48 B); credless flake images **shrink** — C6 1,000,512 → 999,120 B
+(margin 49,456 B / 4.72 %), PB v3 979,312 → 976,592 B, Athom 979,152 →
+976,928 B (docs/boards.md); `tools/ci.sh` green. **QEMU proves the
+ESP32 path**: new `tools/qemu/flashmap-test.py` (in `run-all.py`, needs
+no dumps — espflash's merged image + a synthetic LUX2 archive) sees
+`flashmap: assets 0x310000+0xf0000 -> 0x3f430000 (15 x 64 KiB pages from
+entry 3), self-check ok` — entry 3 is exactly the app's three DROM pages
+— and `assets: 2 files installed` parsed through the mapping. The same
+line shows up in boot 2 of the takeover test over WLED's littlefs
+(real data, self-check ok). The three takeover tests fail on a pristine
+`origin/master` build identically (a boot-1 pin-import marker that never
+appears — #273, pre-existing).
+
+**Follow-ups filed:** #271 hardware bring-up (Athom then the Seengreat
+S3: the serial line to expect per chip, `assets_mapped`, re-measuring
+#259's 2.1 s / 31–62 s bundle download, upload-while-serving, OTA with
+assets, soak), #272 the fence hook for the second-core branch, #273 the
+stale takeover assertion. The VM consumer contract (who maps, who
+invalidates, what the engine may do with the slice) is written down in
+the doc's "The VM consumer" section for the parallel #260 format work.
+
+## 2026-09-05 — Engine: per-pixel performance pass 2a — hot builtins in the loop, batched pixel pass (#260)
+
+Two structural costs pass 1 left alone, both device-free to fix:
+
+- **Hot builtins straight off the stack.** `hsv`/`rgb`/`time`/`wave`/
+  `square`/`triangle`/`sin`/`cos`/`sqrt`/`abs`/`floor`/`ceil`/`round`/
+  `trunc`/`frac`/`clamp`/`min`/`max`/`mod`/`mix`/`random`/`prng` now live
+  in `Vm::builtin_fast`, an `#[inline(always)]` match the dispatch loop
+  calls with the top-of-stack values in place: no 16-slot args array to
+  zero, no `Result<Value, VmError>` through memory, no `call8` into the
+  20 KB `call_builtin` (which still delegates to the same function first,
+  so the semantics exist exactly once). On Xtensa a call into a function
+  that size costs a register-window spill each way on top of the
+  bookkeeping; the empty-render → rgb-only delta on the panel (#260:
+  ~940 cycles for five ops and one call) is the number this is aimed at.
+- **Batched pixel pass.** `Engine::render_pixels` runs every pixel of a
+  non-debug, non-map frame in one tight loop — reset pixel, args, `start`,
+  quantize — instead of one trip per pixel through the resumable
+  `drive()` state machine (stage/outcome matching, `run_stage` updates).
+  Error semantics are unchanged: first error wins, asserts/resource
+  guards blank the rest of the frame, a non-fatal error keeps the
+  pre-error color. The debugger and map programs keep the old path.
+
+Host `luxel bench` at 4096 px (x86 hides most of the call overhead, so
+these understate the Xtensa gain): rainbow 26.2 → 28.4 M px/s, snake-2d
+on a 64×64 map 7.1 → 8.5 M px/s. All 245 luxel-core tests pass unchanged.
+
+Next in the queue for #260: the execution-ready instruction-word format
+executed directly from a memory-mapped flash region (Jeremy's decision
+2026-09-05 — RAM is the constraint; design + facility in progress on
+agent/luxel/flash-mmap), superinstructions on top of that format (#261),
+and the two-core pixel split once the core-1 executor (#259) has landed.
+
+
+## 2026-09-05 — Engine: per-pixel rendering performance, pass 1 (#260)
+
+Jeremy's ask after the HUB75 panel's first evening: 4096 px at 18 fps for
+the default rainbow (~3,200 cycles per pixel on a 240 MHz S3) and 4 fps
+for the 2D snake. This is the interpreter-level pass — measure first, no
+code generation; the second-core work runs in parallel (#259).
+
+**What the S3 image told us before touching anything.** The
+disassembly has no local 64-bit division at all: every `i64 /` is a call
+into the mask ROM's libgcc (`__divdi3` at 0x4000225c and friends), and
+rainbow was doing four of them per pixel — `index / pixelCount`
+(`Fx::div`), the 1D `x` coordinate the engine computed for a
+`render(index)` that never reads it, and two inside `time()`
+(`time_ms % period`, `(t << 16) / period`). Multiplies are fine
+(`mull` + `muluh`, the S3 has MUL32_HIGH).
+
+**Changes, all bit-exact with the old arithmetic** (new tests pin each
+one against the 64-bit form, edges included):
+
+- `Fx::div`: two 32-bit shortcuts — integer divisor (`a / B` exactly) and
+  small dividend (`|a| < 0.5`, `a << 16` fits) — hit the hardware `quos`;
+  the i64 form stays for the rest.
+- `time()`: u32 remainder/divide while the period is ≤ 65536 ms (every
+  interval ≤ 1.0) and the clock is under 49 days.
+- The 1D pixel coordinate uses a u32 divide below 32768 px and is not
+  computed at all for a one-parameter `render(index)`.
+- `quantize` and `hsv_to_rgb` lose their i64 intermediates (they fit i32).
+- The dispatch loop is now two-level: function, code slice, locals base
+  and pc live in locals for the whole frame and the frame's `pc` is
+  written back only before a call and at a debug stop, instead of
+  `frames.last_mut().pc = …` plus re-deriving `prog.fns[..]`/the slice on
+  every instruction. Builtin/user-call args are popped into a
+  caller-provided buffer (the by-value 128-byte return was measurably
+  worse on the host).
+- Firmware: luxel-core is compiled at **opt-level 3** inside the
+  opt-level-"s" image on boards whose OTA margin allows it (`CORE_O3` in
+  board-target.sh, `coreO3` in flake.nix; the C6 keeps "s" — +20 KB would
+  cross the 3 % floor). docs/boards.md has the measured sizes.
+- Firmware: **per-stage frame timers** in `/api/status` — `frame_us`,
+  `vm_us`, `pipe_us`, `out_us` (average µs per pattern frame over the
+  last second; docs/firmware.md), reported by tools/hw-bench.mjs. The
+  empty-render floor measured in #260 (18 ms/frame outside the VM) needs
+  this split before anyone touches the HUB75 compose. `set_pixels` copies
+  the frame in one memcpy instead of a 3-byte extend per pixel.
+
+**Host (x86, `luxel bench`, 4096 px, pixels/s)** — the only numbers
+available while the panel was busy soaking; the on-device table follows
+once it is free:
+
+| pattern | before | after |
+|---|---:|---:|
+| rainbow | 21.3 M | 26.2 M (+23 %) |
+| snake (1D) | 7.6 M | 11.8 M (+55 %) |
+| snake-2d, bare strip | 7.5 M | 11.0 M (+46 %) |
+| snake-2d, 64×64 map | 5.4 M | 7.1 M (+32 %) |
+
+The Xtensa gain should be larger than the host's: the ROM divides and the
+opt-level switch don't exist on x86. Superinstructions / per-frame
+hoisting are the next interpreter-level step if the panel numbers still
+fall short (Gitea #261); AOT/JIT stays the last resort.
 ## 2026-09-05 — Seengreat HUB75 S3 on metal: first S3, first panel (Gitea #75)
 
 The Seengreat RGB Matrix HUB75 S3 and its 64x64 panel arrived and were

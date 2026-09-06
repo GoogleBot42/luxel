@@ -12,10 +12,10 @@
 // Seengreat panel hard-hung at pattern 75 and the run died with no report):
 // an unreachable device after a push becomes a `crashed` row, the harness
 // waits for it to come back (RECOVER_MS), and if it doesn't, runs
-// HW_BENCH_RESET_CMD (e.g. a USB port open, which resets an S3's native
-// USB-Serial/JTAG) before giving up on that pattern. HW_BENCH_FROM=<n>
-// resumes at gallery index n (1-based). The report is written even if the
-// curve/restore phase fails.
+// HW_BENCH_RESET_CMD (e.g. `timeout 3 socat -u /dev/ttyACM0,raw,echo=0,b115200
+// STDOUT` — the termios setup resets an S3's native USB-Serial/JTAG) before
+// giving up on that pattern. HW_BENCH_FROM=<n> resumes at gallery index n
+// (1-based). The report is written even if the curve/restore phase fails.
 // ~45 min for the current ~320-pattern gallery, one pattern after another on
 // the actual strip.
 
@@ -56,6 +56,14 @@ async function api(path, body) {
     }
   }
 }
+
+/** Per-stage frame timing from /api/status, as a compact console field.
+ *  Empty string on firmware that predates the counters (Gitea #260) or on
+ *  the native mirror, which does not report them. */
+const stages = (st) =>
+  st.frame_us === undefined
+    ? ""
+    : `[${st.frame_us}µs vm ${st.vm_us} pipe ${st.pipe_us} out ${st.out_us}]`;
 
 // one quick probe, no retries — for "is it back yet?" polling
 async function probe() {
@@ -143,9 +151,23 @@ for (const p of gallery) {
     }
     continue;
   }
-  rows.push({ name: p.name, kind: p.kind, fps: st.fps, heap: st.heap_free, vmerr: st.vmerr });
+  rows.push({
+    name: p.name,
+    kind: p.kind,
+    fps: st.fps,
+    heap: st.heap_free,
+    vmerr: st.vmerr,
+    // per-stage frame timing (µs/frame), firmware ≥ the /api/status
+    // frame_us field — undefined on older firmware and on the mirror
+    frame_us: st.frame_us,
+    vm_us: st.vm_us,
+    pipe_us: st.pipe_us,
+    out_us: st.out_us,
+  });
   const flag = st.vmerr ? `VMERR ${st.vmerr}` : st.fps < 30 ? "SLOW" : "";
-  console.log(`${String(i).padStart(3)}/${gallery.length} ${String(st.fps).padStart(3)} fps  ${p.name} ${flag}`);
+  console.log(
+    `${String(i).padStart(3)}/${gallery.length} ${String(st.fps).padStart(3)} fps ${stages(st)} ${p.name} ${flag}`,
+  );
 }
 
 // fps vs pixel count with the reference pattern. Wrapped so a device that
@@ -221,8 +243,16 @@ if (slow.length) {
 }
 lines.push(`## All results`);
 lines.push("");
-lines.push(`| pattern | kind | fps |`);
-lines.push(`|---|---|---:|`);
-for (const r of rows) lines.push(`| ${r.name} | ${r.kind} | ${r.fail ? "—" : r.fps} |`);
+// the µs columns only exist on firmware that reports the per-stage timers
+const timed = rows.some((r) => r.frame_us !== undefined);
+const us = (v) => (v === undefined ? "—" : v);
+lines.push(timed ? `| pattern | kind | fps | frame µs | vm µs | pipe µs | out µs |` : `| pattern | kind | fps |`);
+lines.push(timed ? `|---|---|---:|---:|---:|---:|---:|` : `|---|---|---:|`);
+for (const r of rows) {
+  const head = `| ${r.name} | ${r.kind} | ${r.fail ? "—" : r.fps} |`;
+  lines.push(
+    timed ? `${head} ${us(r.frame_us)} | ${us(r.vm_us)} | ${us(r.pipe_us)} | ${us(r.out_us)} |` : head,
+  );
+}
 fs.writeFileSync(OUT, lines.join("\n") + "\n");
 console.log(`wrote ${OUT}: ${ok.length} ok, ${errs.length} errors, ${slow.length} slow`);

@@ -9,6 +9,11 @@ these before trusting any build/test failure as a real regression.
 
 ## Procedure
 
+0a. Read and grep files in YOUR worktree, never in the main checkout: it sits
+   on whatever commit its last session left (detached at c18f1f3, well behind
+   master, on 2026-09-05), so line numbers and even function bodies differ.
+   An Edit planned from a main-checkout read fails or, worse, lands on the
+   wrong lines.
 0. Cut the branch from **`origin/master`, not the local `master`** — the main
    checkout's `master` is only as fresh as its last `git pull`, and with sessions
    merging PRs continuously it is routinely several merges behind (seen 4 behind on
@@ -152,6 +157,18 @@ origin master && git rebase origin/master`.
   story that would have shipped into docs/boards.md); re-measured on the
   rebased tree it was an even +3 KB everywhere. The baseline had moved,
   not the cost.
+- **A pristine baseline without touching any tree:** the flake builds
+  straight from a git ref, so `nix build
+  "git+file:///home/googlebot/workspace/pixler?ref=refs/remotes/origin/master#luxel-fw-c6-devkit"
+  --out-link <scratch>/master-c6` gives a credless master image to diff
+  sizes against, or to run a QEMU test against, with no `git checkout
+  HEAD~1` in your worktree (2026-09-05). Use `ref=`, not `rev=<short
+  hash>` — `rev=` needs the full 40-char id and fails with "object not
+  found" on a short one.
+- `tools/qemu/run-all.py`'s three takeover tests are RED on master as of
+  2026-09-05 (a boot-1 pin-import marker never appears — Gitea #273);
+  heap-regions and flashmap pass. Before blaming your change, run the
+  same test against a pristine master build (the trick above).
 - If `tea pr merge` fails with "is it still open?" right after a
   force-push, Gitea is still re-checking mergeability — wait a few
   seconds and retry before diagnosing anything.

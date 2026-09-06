@@ -169,6 +169,37 @@ into `curl2`/`curl3`), so it is not in the tree. No statics or buffers:
 `.stack` on pixelblaze-v3 is 27,484 B with no new frame in the top
 fifteen and nothing over the 12 KB budget.
 
+2026-09-05, cache-MMU flash mapping of the assets partition
+(`firmware/src/flashmap.rs`, docs/research/flash-mmap.md): **−1,392 B** on
+`board-c6-devkit` (1,000,512 → **999,120 B**, margin **49,456 B /
+4.72 %**), −2,720 B on `board-pixelblaze-v3` (979,312 → 976,592 B) and
+−2,224 B on `board-athom-music` (979,152 → 976,928 B) — credless flake
+builds of `origin/master` vs this branch, same day. Negative despite a new
+module with four per-chip register drivers: the asset response body no
+longer carries a `Timer::after` future and a staging `Vec` on its hot
+path (the mapped slice goes straight to the socket), and the TOC parse
+lost its per-field `read_chunk` calls. No statics beyond two
+`AtomicUsize`s; `.stack` on pixelblaze-v3 26,732 B (devshell build,
+−48 B), stack-check clean on pixelblaze-v3, s3-devkit and c6-devkit.
+
+2026-09-05, pattern code arena (library patterns execute from the flash
+mapping; `patterns.rs`, docs/firmware.md "The pattern store's mapped half
+and the code arena"): **+10,528 B** on `board-c6-devkit` (1,002,720 →
+**1,013,248 B**, margin **35,328 B / 3.37 %**), +9,232 B on
+`board-pixelblaze-v3` (981,952 → 991,184 B), +9,408 B on
+`board-athom-music` — credless flake builds vs `origin/master` 0f84707,
+same day. Named-symbol growth is 6.7 KB (`nm -S` diff on the PB ELF: the
+`Msg::Library` swap arm +1.9 KB in the render task, `cache_code` 1.2 KB,
+the arena table/verify/persist code ~1 KB, `check_asserts` +0.6 KB now
+outlined behind `with_code`, small new accessors), the rest alignment;
+`encode_envelope` and the four envelope-building activation sites
+disappeared (−1.9 KB) but did not cover it. **The C6 is now 3.9 KB above
+the 3 % release floor.** The accepted lever when the next feature lands
+is `EXTRA_FEATURES=hosted-ui` for the C6 variant (`luxel-fw-c6-devkit-
+hosted` already exists; −14 KB), not shrinking the store. `.stack` on
+pixelblaze-v3 26,396 B (−336 B: the render task future grew by the new
+arm); stack-check clean on pixelblaze-v3 / s3-devkit / c6-devkit.
+
 2026-08-30, picoserve response collapse (Gitea #167): **−23.0 to −24.4 KB
 on every board** — the largest single reduction since the opt-level switch,
 and the one that takes the C6 back out of CI's warn band. `server.rs`'s
@@ -240,6 +271,45 @@ because the response future the web-task arena is sized for loses its
 asset arm (largest frame 9,552 → 7,504 B). No new frame anywhere; the
 12,288 B budget is untouched. What the mode is and when to use it:
 "Hosted-UI builds" below.
+
+**The VM is compiled at opt-level 3 where the slot allows** (Gitea #260,
+2026-09-05). The image is opt-level "s" for the ceiling above, but at 4096
+px the interpreter (crates/luxel-core) *is* the frame time, so
+`firmware/board-target.sh` carries a per-board `CORE_O3` flag and
+build-esp32.sh / tools/stack-check.sh / flake.nix (`coreO3`) pass
+`--config profile.release.package.luxel-core.opt-level=3` when it is set.
+Measured on the same tree, devshell builds: +17,584 B on
+`board-seengreat-hub75` (margin 158,208 → 140,624 B) and +17,920 B on
+`board-pixelblaze-v3` (91,840 → 73,920 B); on `board-c6-devkit` it would
+have been +20,320 B (50,800 → 30,480 B, under the 3 % floor), so the C6
+variants build with `CORE_O3=0` / `coreO3 = false` and keep the profile
+default. Adding a board means choosing this flag against its margin.
+
+**The render task runs on the second core on dual-core boards** (Gitea
+#259/#260, 2026-09-05; docs/firmware.md "Cores & tasks"). Cost is the
+second-core bring-up, the cross-core flash fence, the RTC watchdog and the
+RTC-memory black box, and it only exists where `multi_core` is set (esp32,
+esp32s3) — the C3/C6 deltas are the ±0.7 KB noise floor. Fleet A/B on the
+same base (master 731ce81, devshell builds with creds, CORE_O3 as shipped):
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 945,200 | 945,184 | −16 | 103,392 B (9.86 %) |
+| `board-pixelblaze-v3` | 992,128 | 1,000,512 | +8,384 | 48,064 B (4.58 %) |
+| `board-athom-music` | 992,240 | 1,000,496 | +8,256 | 48,080 B (4.59 %) |
+| `board-esp32-generic` | 991,744 | 1,000,272 | +8,528 | 48,304 B (4.61 %) |
+| `board-s3-devkit` | 933,600 | 942,416 | +8,816 | 106,160 B (10.12 %) |
+| `board-s3-devkit` + `hub75` | 926,464 | 934,864 | +8,400 | 113,712 B (10.84 %) |
+| `board-seengreat-hub75` | 926,384 | 934,912 | +8,528 | 113,664 B (10.84 %) |
+| `board-c6-devkit` | 1,015,040 | 1,014,416 | −624 | **34,160 B (3.26 %)** |
+
+The classic-ESP32 boards are now under the 6 % warn line (they crossed it
+with the flash mapping + code arena the same day; the fence was already
+trimmed once — its spin-waits out of line — after an inlined first cut cost
+25 KB), and the C6 sits 2.7 KB above the 3 % floor on master's own account.
+`.stack` on `board-athom-music`: 26,044 → 26,396 B (the AppCpu stack is
+heap-allocated, not a static, so the main-task stack does not pay for it;
+idle `heap_free` pays the 20 KB instead: 105,456 → 84,960 B).
 
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
@@ -576,7 +646,9 @@ small-chip profile, documented just above.)
 Three files, no other code paths involved — plus a one-line case in
 `firmware/board-target.sh` if the board is a chip we don't build yet
 (that file is the single board → chip / rust target / toolchain map,
-shared by build-esp32.sh and tools/stack-check.sh):
+shared by build-esp32.sh and tools/stack-check.sh; its `CORE_O3` flag
+decides whether the VM crate gets opt-level 3 — see "The 1 MiB OTA-slot
+ceiling" — and flake.nix's `firmwareVariants` entry must say the same):
 
 1. **`firmware/Cargo.toml`** — add the feature, selecting the chip:
 

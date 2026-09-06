@@ -43,11 +43,17 @@ else
 fi
 [ -f creds.env ] && . ./creds.env || true
 
-echo "building with -Z emit-stack-sizes (features: $FEATURES, target $TARGET)…"
+# same per-board luxel-core opt-level as build-esp32.sh (CORE_O3, #260):
+# the VM's stack frames are what this tool measures, so the flags must match
+OPT_FLAGS=()
+if [ "${CORE_O3:-0}" = 1 ]; then
+  OPT_FLAGS=(--config 'profile.release.package.luxel-core.opt-level=3')
+fi
+echo "building with -Z emit-stack-sizes (features: $FEATURES, target $TARGET, core O3=${CORE_O3:-0})…"
 "$CARGO" build --release \
   --no-default-features --features "$FEATURES" \
   --target "$TARGET" \
-  "${STD_FLAGS[@]}"
+  "${STD_FLAGS[@]}" "${OPT_FLAGS[@]}"
 
 ELF=target/$TARGET/release/luxel-fw
 

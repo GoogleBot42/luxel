@@ -48,6 +48,9 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   saves Fable token usage, which is the scarce resource. Sonnet is fine for the
   simplest lookups. Reserve Fable for the main loop and subagent tasks that
   genuinely need top-tier reasoning (Jeremy's standing instruction, 2026-08-16).
+- Subagents share YOUR scratchpad directory. Give each one its own subdirectory
+  for scratch scripts/outputs — a parent and a child both writing
+  `scratchpad/measure.sh` silently invalidated a measurement run (2026-09-05).
 
 ## Autonomy
 - Be decisive on routine engineering safeguards (tests, lints, guards, docs): add them
@@ -93,6 +96,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   calling it done — .claude/skills/verify-webui. Build/typecheck alone is not verification.
 - Firmware change touching statics or buffers → run `tools/stack-check.sh`.
   Measure, don't estimate.
+- Per-pixel / frame-time performance claims → the `frame_us`/`vm_us`/`pipe_us`/
+  `out_us` split in `/api/status` on the target board (docs/firmware.md). Host
+  `luxel bench` is only a smoke test: the Xtensa costs that matter (ROM libgcc
+  64-bit divides, opt-level "s") don't exist on x86 (2026-09-05, #260).
 - "Works on device" claims → `tools/hw-bench.mjs` soak (docs/tools.md). It runs
   ~2 h on the Athom; launch it detached (`setsid nohup … > log 2>&1 < /dev/null &`)
   — the Bash tool's background mode is killed at its 10-minute timeout cap

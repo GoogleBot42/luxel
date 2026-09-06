@@ -24,6 +24,16 @@ export interface DeviceStatus {
    *  without `--heap-free`, or firmware older than the field): treat as
    *  unknown and don't guess at capacity. */
   heap_free?: number;
+  /** Per-stage frame timing: average microseconds per rendered pattern frame
+   *  over the last second. `frame_us` is the whole engine branch, `vm_us` the
+   *  pattern evaluation, `pipe_us` the preview copy + output pipeline (gamma /
+   *  palette / blur), `out_us` the LED/HUB75 driver write. Absent on firmware
+   *  older than the fields and on the native mirror; the window averages only
+   *  pattern frames, so all four read 0 while live input drives the strip. */
+  frame_us?: number;
+  vm_us?: number;
+  pipe_us?: number;
+  out_us?: number;
 }
 
 export type RunResult =

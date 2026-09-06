@@ -36,6 +36,16 @@ paths:
   "no record" SILENTLY (no panic, no log), so a setting read too early boots
   at its default with no clue why. Keep boot-time settings reads after
   `ota::init` (2026-09-02: the data-pin picker "applied" but never took).
+- Flash-mapped regions (`firmware/src/flashmap.rs`, the assets partition
+  today, the VM's code stream next — docs/firmware.md "Flash-mapped
+  regions"): read them from task context only, never from an ISR; after
+  writing flash under one, `flashmap::invalidate`/`invalidate_slice` the
+  range before anything reads it back through the mapping; never map an
+  app slot; never `unmap` something another task may still read (an
+  invalid-entry load is a cache-error fault, not a catchable error); keep
+  the read_nor fallback — `map` can fail and the consumer must degrade,
+  not break. Map/unmap go through `flashmap::quiesced`, which the
+  second-core branch must route through `core1::fenced`.
 - Never size an infallible allocation from a length/count field read out of
   flash or any stored record — a corrupt record becomes an OOM panic-reboot
   loop (a torn pattern-store TOC record with chunk-count 32 crash-rebooted
@@ -43,6 +53,29 @@ paths:
   Validate the count against the writer's own cap and `try_reserve`; see
   `patterns::read_source`. This is the same class v0.1.25's "fallible
   everything" sweep fixed elsewhere — check for it in any new read path.
+- Dual-core boards (esp32, esp32s3 — cfg `multi_core` from build.rs) run
+  the render task on the AppCpu (`firmware/src/core1.rs`), and every flash
+  op must run inside the cross-core flash fence: the other core is parked
+  in IRAM for the op, because an SPI1 flash op while the other core fetches
+  instructions from flash returns garbage (erase/program) or contends for
+  the bus. The fenced doors are `ota::with_flash`, the `patterns::AsyncFlash`
+  adapter and `ota::begin`'s reads on the taken driver — a new flash path
+  goes through one of them or wraps itself in `core1::fenced`, NEVER a
+  bare op on a taken `FlashStorage`. The fence must sit OUTSIDE any
+  critical section (its spin-waits need interrupts enabled so the other
+  core can park us in turn). Do not switch esp-storage to
+  `multicore_auto_park`: the hard park stalls the other core at an
+  arbitrary instruction, possibly inside a spinlock the flash op's next
+  interrupt then waits on forever. Three park rules are load-bearing and
+  each was a black-boxed hard hang (docs/firmware.md "Cores & tasks"): the
+  park interrupt is Priority1 (a level-3 park inside a level-1 handler's
+  DPORT reads wedges the bus), the AppCpu never touches RTC memory inside
+  the park, and the fence waits for the strip's SPI2 DMA transfer to end
+  before the SPI1 op (`output::transfer_busy`). A new output driver on a
+  dual-core chip must answer `transfer_busy()` honestly. `/api/status`
+  `core1.fence_timeouts` must stay 0, and `core1.last.reset` ==
+  `SysRtcWdt` after a session means the watchdog caught a wedge — read
+  `core1.last.bb` before anything else.
 - Never take the flash driver out of the global (`ota::take_flash`) for a
   long burst of ops — every `with_flash` user reads busy for the whole
   window, and the failure shows up as UNRELATED symptoms (asset pushes
@@ -88,3 +121,10 @@ paths:
   wraps the writer in a private `IgnoreBody<W>` for HEAD — a second writer
   type that duplicates every GET instantiation. A new body kind is a new
   `ApiBody` variant; a runtime header value is `HVal::Owned`.
+- No 64-bit division on the per-pixel path. Xtensa has a hardware 32-bit
+  divide (`quos`) but every `i64`/`u64` `/` or `%` compiles to a call into
+  the mask ROM's libgcc (`__divdi3`/`__udivmoddi4`, ~100+ cycles), and the
+  ELF shows no local symbol for it — count them with `objdump -t | grep
+  divdi`, not from the disassembly. `Fx::div`, `time()` and the 1D pixel
+  coordinate carry 32-bit fast paths with bit-exact tests (#260); keep new
+  hot-path arithmetic in i32/u32 and add the same kind of test.

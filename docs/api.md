@@ -46,11 +46,19 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 `GET /api/status` on **firmware**:
 
 ```json
-{"fps":42,"pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
- "heap_free":104832,"live":null,"src":true,"bc":true,"web":[0,1,0],
- "vmerr":null}
+{"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,
+ "pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
+ "heap_free":104832,"live":null,"assets_mapped":true,"code_mapped":true,
+ "arena":[3,7],"src":true,"bc":true,"web":[0,1,0],"vmerr":null}
 ```
 
+- `frame_us` / `vm_us` / `pipe_us` / `out_us` — per-stage frame timing, the
+  average microseconds per rendered frame over the last second: the whole
+  engine branch, `Engine::frame` (the VM), the preview copy + output pipeline
+  (gamma / palette / blur), and the LED/HUB75 driver's `write_frame`. The
+  stages nest — `frame_us` ≈ the other three plus per-frame bookkeeping.
+  Only *pattern* frames are timed, so all four read 0 in a second where live
+  input drove the strip or no engine was loaded.
 - `max_pixels` — this board's cap: 4096 on HUB75-panel boards, 2048 otherwise.
 - `slot` — `factory` / `ota_0` / `ota_1` / `ota_?` / `unknown` (which app
   partition booted). Check this after a power-cycle test: a rollback shows up
@@ -58,6 +66,19 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 - `heap_free` — bytes, `esp_alloc::HEAP.free()`.
 - `live` — `"ddp"` / `"e131"` while a live pixel stream is driving the strip,
   else `null`.
+- `assets_mapped` — `true` when the web assets partition is memory-mapped
+  through the cache MMU (docs/firmware.md "Flash-mapped regions") and asset
+  bodies are served straight from it; `false` means the boot-time mapping
+  failed its self-check, the image was built with `flashmap-off`, or it is a
+  hosted-ui build — assets (if any) then stream via flash-controller reads.
+- `code_mapped` — `true` when the running pattern's bytecode is mapped
+  memory the engine builds from without a blob copy (the built-in default's
+  rodata, the ad-hoc read-back slot, or a library code-arena slot); `false`
+  means the store's mapping is off or the library pattern has no arena slot
+  yet (its next activation gets one if a slot is free).
+- `arena` — `[used, total]` slots of the library code arena (7 × 40 KiB in
+  the `storage` partition; docs/firmware.md "The pattern store's mapped
+  half and the code arena").
 - `src` / `bc` — whether the running pattern's source / bytecode are still
   readable back (`GET /api/pattern`); `false` means a flash write shed the copy.
 - `web` — per-HTTP-slot lifecycle stage, one entry per connection slot
@@ -68,7 +89,7 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 
 `GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`
 (always 2048), `slot` (always `"native"`), `version`, `heap_free` (0 unless
-`--heap-free N` was passed), `live`, `vmerr` — **no `src`, `bc`, or `web`.**
+`--heap-free N` was passed), `live`, `vmerr` — **no `src`, `bc`, `web`, or the `*_us` stage timers.**
 
 ## Live coding and the running pattern
 

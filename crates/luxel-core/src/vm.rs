@@ -25,9 +25,9 @@
 //! jump targets on instruction boundaries, argc capped.
 
 use alloc::collections::VecDeque;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::format;
 
 use crate::fixed::Fx;
 use crate::fmath;
@@ -618,6 +618,8 @@ const CONST_ENTRY_COST: usize = 32;
 const MAX_DEPTH: usize = 48;
 const MAX_STACK: usize = 1024;
 const MAX_ARGS: usize = 16;
+/// Arg slots for the in-loop builtin fast path (the hot builtins take ≤ 3).
+const FAST_ARGS: usize = 4;
 /// PB's element ledger, oracle-bisected (fw 3.67, 2026-08-29): every array
 /// costs its length plus a 4-unit header against a 10,236-unit budget —
 /// equivalently a 40 KiB pool of 4-byte elements with 16-byte headers, 16
@@ -1088,7 +1090,11 @@ impl Vm {
             return false;
         }
         let bit = 1u64 << pin;
-        let src = if self.pin_driven & bit != 0 { self.pin_level } else { self.pin_pullup };
+        let src = if self.pin_driven & bit != 0 {
+            self.pin_level
+        } else {
+            self.pin_pullup
+        };
         src & bit != 0
     }
 
@@ -1416,19 +1422,23 @@ impl Vm {
         false
     }
 
-    fn pop_args(&mut self, argc: usize) -> ([Value; MAX_ARGS], usize) {
-        let mut args = [Value::default(); MAX_ARGS];
+    /// Pop `argc` values into the caller's buffer (no 128-byte array
+    /// returned by value); returns how many slots are meaningful.
+    #[inline(always)]
+    fn pop_args_into(&mut self, args: &mut [Value; MAX_ARGS], argc: usize) -> usize {
         let n = argc.min(MAX_ARGS);
         for i in (0..n).rev() {
             args[i] = self.stack.pop().unwrap_or_default();
         }
-        (args, n)
+        n
     }
 
     /// The interpreter loop over the explicit frame stack. Returns when the
     /// stack unwinds back to `base` frames (Done) or a debug stop fires
     /// (Paused — only when `debug`). Frames/locals/stack stay intact while
     /// paused so the debugger can inspect and resume.
+    // the operand macros advance `at` past a jump target that then replaces it
+    #[allow(unused_assignments)]
     fn run(&mut self, prog: &Program, base: usize, debug: bool) -> Result<Outcome, VmError> {
         macro_rules! fail {
             ($msg:expr) => {
@@ -1465,412 +1475,400 @@ impl Vm {
                 push!(Value::Num(if a $op b { Fx::ONE } else { Fx::ZERO }));
             }};
         }
-        macro_rules! set_pc {
-            ($t:expr) => {
-                self.frames.last_mut().expect("frame").pc = $t
-            };
-        }
 
         use crate::bytecode::op;
-        loop {
+        // Two-level loop: the outer level (re)loads the frame context —
+        // function, code slice, locals base, pc — and the inner level
+        // dispatches instructions against those locals. The frame's `pc`
+        // field is written back only where something else can observe it:
+        // before a call (so the return lands after it) and at a debug stop.
+        // Re-deriving `prog.fns[..]`, the code slice and the frame pc on
+        // every instruction was a sizeable share of dispatch on Xtensa
+        // (Gitea #260).
+        'frame: loop {
             let (fi, pc, lbase) = {
                 let f = self.frames.last().expect("frame");
                 (f.fn_idx, f.pc, f.locals_base as usize)
             };
-            if debug && self.debug_stop(prog, fi, pc) {
-                return Ok(Outcome::Paused);
-            }
             let fdef = &prog.fns[fi as usize];
-            let code = &prog.code
-                [fdef.code_start as usize..(fdef.code_start + fdef.code_len) as usize];
-            self.insn_start = pc;
-            // Byte-decode the instruction in place. The decoder validated
-            // every operand and jump target, so the unwrap_or(0) fallbacks
-            // are unreachable; they exist so a logic bug degrades to a
-            // runtime error instead of a panic.
+            let code =
+                &prog.code[fdef.code_start as usize..(fdef.code_start + fdef.code_len) as usize];
             let mut at = pc as usize;
-            macro_rules! op_u8 {
-                () => {{
-                    let v = code.get(at).copied().unwrap_or(0);
-                    at += 1;
-                    v
-                }};
-            }
-            macro_rules! op_u16 {
-                () => {{
-                    let v = u16::from_le_bytes([
-                        code.get(at).copied().unwrap_or(0),
-                        code.get(at + 1).copied().unwrap_or(0),
-                    ]);
-                    at += 2;
-                    v
-                }};
-            }
-            macro_rules! op_u32 {
-                () => {{
-                    let v = u32::from_le_bytes([
-                        code.get(at).copied().unwrap_or(0),
-                        code.get(at + 1).copied().unwrap_or(0),
-                        code.get(at + 2).copied().unwrap_or(0),
-                        code.get(at + 3).copied().unwrap_or(0),
-                    ]);
-                    at += 4;
-                    v
-                }};
-            }
-            let opcode = match code.get(at) {
-                Some(&b) => {
-                    at += 1;
-                    b
-                }
-                None => op::RET_NULL, // fell off the end
-            };
-            if self.fuel == 0 {
-                fail!(ERR_EXEC_LIMIT);
-            }
-            self.fuel -= 1;
-            match opcode {
-                op::CONST_NUM => {
-                    let v = Value::Num(Fx::from_raw(op_u32!() as i32));
-                    set_pc!(at as u32);
-                    push!(v)
-                }
-                op::CONST_FUN => {
-                    let v = Value::Fun(op_u16!());
-                    set_pc!(at as u32);
-                    push!(v)
-                }
-                op::CONST_BUILTIN => {
-                    let v = Value::Builtin(op_u16!());
-                    set_pc!(at as u32);
-                    push!(v)
-                }
-                op::LOAD_G => {
-                    let i = op_u16!();
-                    set_pc!(at as u32);
-                    push!(self.globals[i as usize])
-                }
-                op::STORE_G => {
-                    let i = op_u16!();
-                    set_pc!(at as u32);
-                    let v = pop!();
-                    self.globals[i as usize] = v;
-                    push!(v);
-                }
-                op::LOAD_L => {
-                    let i = op_u8!();
-                    set_pc!(at as u32);
-                    push!(self.locals[lbase + i as usize])
-                }
-                op::STORE_L => {
-                    let i = op_u8!();
-                    set_pc!(at as u32);
-                    let v = pop!();
-                    self.locals[lbase + i as usize] = v;
-                    push!(v);
-                }
-                // Index semantics oracle-confirmed on fw 3.67: fractional
-                // indices truncate (reads and writes alike, literal and
-                // variable index — stock patterns like sparks depend on
-                // it), and the bounds check runs on the TRUNCATED index, so
-                // `a[3.5]` on a 3-slot array is out of range. Anything out
-                // of range (negative or ≥ length) is a runtime error that
-                // aborts execution, leaving the array untouched: PB does
-                // not clamp, wrap or silently no-op (Gitea #107, re-probed
-                // 2026-08-29 with tools/oracle/oob-probes.mjs — that probe
-                // also retired the old "PB aborts on a fractional *literal*
-                // index write" note, which does not reproduce).
-                op::LOAD_IDX => {
-                    set_pc!(at as u32);
-                    let idx = pop!().num();
-                    let arr = pop!();
-                    let Value::Arr(a) = arr else {
-                        fail!("indexing a non-array value")
-                    };
-                    if idx.raw() < 0 {
-                        fail!("array index out of bounds");
-                    }
-                    let i = idx.to_int_trunc() as usize;
-                    match self.arr(prog, a).get(i) {
-                        Some(v) => push!(*v),
-                        None => fail!("array index out of bounds"),
+            loop {
+                if debug {
+                    self.frames.last_mut().expect("frame").pc = at as u32;
+                    if self.debug_stop(prog, fi, at as u32) {
+                        return Ok(Outcome::Paused);
                     }
                 }
-                op::STORE_IDX => {
-                    set_pc!(at as u32);
-                    let val = pop!();
-                    let idx = pop!().num();
-                    let arr = pop!();
-                    let Value::Arr(a) = arr else {
-                        fail!("indexing a non-array value")
-                    };
-                    if idx.raw() < 0 {
-                        fail!("array index out of bounds");
-                    }
-                    let i = idx.to_int_trunc() as usize;
-                    match self.arr_mut(prog, a) {
-                        Ok(v) => match v.get_mut(i) {
-                            Some(slot) => *slot = val,
-                            None => fail!("array index out of bounds"),
-                        },
-                        Err(m) => fail!(m),
-                    }
-                    push!(val);
+                self.insn_start = at as u32;
+                // Byte-decode the instruction in place. The decoder validated
+                // every operand and jump target, so the unwrap_or(0) fallbacks
+                // are unreachable; they exist so a logic bug degrades to a
+                // runtime error instead of a panic.
+                macro_rules! op_u8 {
+                    () => {{
+                        let v = code.get(at).copied().unwrap_or(0);
+                        at += 1;
+                        v
+                    }};
                 }
-                op::ARR_LEN => {
-                    set_pc!(at as u32);
-                    let arr = pop!();
-                    let Value::Arr(a) = arr else {
-                        fail!(".length of a non-array value")
-                    };
-                    push!(Value::Num(Fx::from_int(self.arr(prog, a).len() as i32)));
+                macro_rules! op_u16 {
+                    () => {{
+                        let v = u16::from_le_bytes([
+                            code.get(at).copied().unwrap_or(0),
+                            code.get(at + 1).copied().unwrap_or(0),
+                        ]);
+                        at += 2;
+                        v
+                    }};
                 }
-                op::NEW_ARRAY => {
-                    let n = op_u16!() as usize;
-                    set_pc!(at as u32);
-                    // budget-first: the elements are popped into the slot
-                    // only once the (fallible) allocation succeeded
-                    match self.alloc_array_zeroed(n) {
-                        Ok(v) => {
-                            let Value::Arr(id) = v else { unreachable!() };
-                            for i in (0..n).rev() {
-                                let e = pop!();
-                                // freshly allocated ⇒ always Owned
-                                if let ArrRepr::Owned(vs) = &mut self.arrays[id as usize] {
-                                    vs[i] = e;
-                                }
-                            }
-                            push!(v);
+                macro_rules! op_u32 {
+                    () => {{
+                        let v = u32::from_le_bytes([
+                            code.get(at).copied().unwrap_or(0),
+                            code.get(at + 1).copied().unwrap_or(0),
+                            code.get(at + 2).copied().unwrap_or(0),
+                            code.get(at + 3).copied().unwrap_or(0),
+                        ]);
+                        at += 4;
+                        v
+                    }};
+                }
+                let opcode = match code.get(at) {
+                    Some(&b) => {
+                        at += 1;
+                        b
+                    }
+                    None => op::RET_NULL, // fell off the end
+                };
+                if self.fuel == 0 {
+                    fail!(ERR_EXEC_LIMIT);
+                }
+                self.fuel -= 1;
+                match opcode {
+                    op::CONST_NUM => {
+                        let v = Value::Num(Fx::from_raw(op_u32!() as i32));
+                        push!(v)
+                    }
+                    op::CONST_FUN => {
+                        let v = Value::Fun(op_u16!());
+                        push!(v)
+                    }
+                    op::CONST_BUILTIN => {
+                        let v = Value::Builtin(op_u16!());
+                        push!(v)
+                    }
+                    op::LOAD_G => {
+                        let i = op_u16!();
+                        push!(self.globals[i as usize])
+                    }
+                    op::STORE_G => {
+                        let i = op_u16!();
+                        let v = pop!();
+                        self.globals[i as usize] = v;
+                        push!(v);
+                    }
+                    op::LOAD_L => {
+                        let i = op_u8!();
+                        push!(self.locals[lbase + i as usize])
+                    }
+                    op::STORE_L => {
+                        let i = op_u8!();
+                        let v = pop!();
+                        self.locals[lbase + i as usize] = v;
+                        push!(v);
+                    }
+                    // Index semantics oracle-confirmed on fw 3.67: fractional
+                    // indices truncate (reads and writes alike, literal and
+                    // variable index — stock patterns like sparks depend on
+                    // it), and the bounds check runs on the TRUNCATED index, so
+                    // `a[3.5]` on a 3-slot array is out of range. Anything out
+                    // of range (negative or ≥ length) is a runtime error that
+                    // aborts execution, leaving the array untouched: PB does
+                    // not clamp, wrap or silently no-op (Gitea #107, re-probed
+                    // 2026-08-29 with tools/oracle/oob-probes.mjs — that probe
+                    // also retired the old "PB aborts on a fractional *literal*
+                    // index write" note, which does not reproduce).
+                    op::LOAD_IDX => {
+                        let idx = pop!().num();
+                        let arr = pop!();
+                        let Value::Arr(a) = arr else {
+                            fail!("indexing a non-array value")
+                        };
+                        if idx.raw() < 0 {
+                            fail!("array index out of bounds");
                         }
-                        Err(m) => fail!(m),
+                        let i = idx.to_int_trunc() as usize;
+                        match self.arr(prog, a).get(i) {
+                            Some(v) => push!(*v),
+                            None => fail!("array index out of bounds"),
+                        }
                     }
-                }
-                op::CONST_ARR => {
-                    let d = op_u16!() as u32;
-                    set_pc!(at as u32);
-                    // decoder-validated: d < data_arrays.len()
-                    let len = prog.data_arrays[d as usize].len();
-                    match self.alloc_const_array(d, len) {
-                        Ok(v) => push!(v),
-                        Err(m) => fail!(m),
+                    op::STORE_IDX => {
+                        let val = pop!();
+                        let idx = pop!().num();
+                        let arr = pop!();
+                        let Value::Arr(a) = arr else {
+                            fail!("indexing a non-array value")
+                        };
+                        if idx.raw() < 0 {
+                            fail!("array index out of bounds");
+                        }
+                        let i = idx.to_int_trunc() as usize;
+                        match self.arr_mut(prog, a) {
+                            Ok(v) => match v.get_mut(i) {
+                                Some(slot) => *slot = val,
+                                None => fail!("array index out of bounds"),
+                            },
+                            Err(m) => fail!(m),
+                        }
+                        push!(val);
                     }
-                }
-                op::ASSERT => {
-                    let m = op_u16!();
-                    set_pc!(at as u32);
-                    if !pop!().truthy() {
-                        // decoder-validated: m < assert_msgs.len()
-                        let px = self.globals[prog.pixel_count_g as usize]
-                            .num()
-                            .to_int_trunc();
-                        let mut e = self.err_at(
-                            prog,
-                            alloc::format!(
-                                "pattern requires: {} (pixelCount = {px})",
-                                prog.assert_msgs[m as usize]
-                            ),
-                        );
-                        e.is_assert = true;
-                        return Err(e);
+                    op::ARR_LEN => {
+                        let arr = pop!();
+                        let Value::Arr(a) = arr else {
+                            fail!(".length of a non-array value")
+                        };
+                        push!(Value::Num(Fx::from_int(self.arr(prog, a).len() as i32)));
                     }
-                }
-                op::DUP => {
-                    set_pc!(at as u32);
-                    let v = *self.stack.last().unwrap_or(&Value::default());
-                    push!(v);
-                }
-                op::DUP2 => {
-                    set_pc!(at as u32);
-                    let n = self.stack.len();
-                    if n < 2 {
-                        fail!(ERR_STACK_UNDERFLOW);
-                    }
-                    let a = self.stack[n - 2];
-                    let b = self.stack[n - 1];
-                    push!(a);
-                    push!(b);
-                }
-                op::POP => {
-                    set_pc!(at as u32);
-                    pop!();
-                }
-                op::ADD => {
-                    set_pc!(at as u32);
-                    binnum!(+)
-                }
-                op::SUB => {
-                    set_pc!(at as u32);
-                    binnum!(-)
-                }
-                op::MUL => {
-                    set_pc!(at as u32);
-                    binnum!(*)
-                }
-                op::DIV => {
-                    set_pc!(at as u32);
-                    binnum!(/)
-                }
-                op::REM => {
-                    set_pc!(at as u32);
-                    binnum!(%)
-                }
-                op::POW => {
-                    set_pc!(at as u32);
-                    let b = pop!().num();
-                    let a = pop!().num();
-                    push!(Value::Num(fmath::pow(a, b)));
-                }
-                op::NEG => {
-                    set_pc!(at as u32);
-                    let v = pop!().num();
-                    push!(Value::Num(-v));
-                }
-                op::NOT => {
-                    set_pc!(at as u32);
-                    let v = pop!();
-                    push!(Value::Num(if v.truthy() { Fx::ZERO } else { Fx::ONE }));
-                }
-                op::BIT_NOT => {
-                    set_pc!(at as u32);
-                    let v = pop!().num();
-                    push!(Value::Num(!v));
-                }
-                op::BIT_AND => {
-                    set_pc!(at as u32);
-                    binnum!(&)
-                }
-                op::BIT_OR => {
-                    set_pc!(at as u32);
-                    binnum!(|)
-                }
-                op::BIT_XOR => {
-                    set_pc!(at as u32);
-                    binnum!(^)
-                }
-                op::SHL => {
-                    set_pc!(at as u32);
-                    binnum!(<<)
-                }
-                op::SHR => {
-                    set_pc!(at as u32);
-                    binnum!(>>)
-                }
-                op::LT => {
-                    set_pc!(at as u32);
-                    bincmp!(<)
-                }
-                op::LE => {
-                    set_pc!(at as u32);
-                    bincmp!(<=)
-                }
-                op::GT => {
-                    set_pc!(at as u32);
-                    bincmp!(>)
-                }
-                op::GE => {
-                    set_pc!(at as u32);
-                    bincmp!(>=)
-                }
-                op::EQ => {
-                    set_pc!(at as u32);
-                    let b = pop!();
-                    let a = pop!();
-                    push!(Value::Num(if value_eq(a, b) { Fx::ONE } else { Fx::ZERO }));
-                }
-                op::NE => {
-                    set_pc!(at as u32);
-                    let b = pop!();
-                    let a = pop!();
-                    push!(Value::Num(if value_eq(a, b) { Fx::ZERO } else { Fx::ONE }));
-                }
-                op::JMP => {
-                    let t = op_u32!();
-                    set_pc!(t);
-                }
-                op::JMP_IF_FALSE => {
-                    let t = op_u32!();
-                    set_pc!(at as u32);
-                    if !pop!().truthy() {
-                        set_pc!(t);
-                    }
-                }
-                op::JMP_IF_TRUE_PEEK => {
-                    let t = op_u32!();
-                    set_pc!(at as u32);
-                    let v = *self.stack.last().unwrap_or(&Value::default());
-                    if v.truthy() {
-                        set_pc!(t);
-                    }
-                }
-                op::JMP_IF_FALSE_PEEK => {
-                    let t = op_u32!();
-                    set_pc!(at as u32);
-                    let v = *self.stack.last().unwrap_or(&Value::default());
-                    if !v.truthy() {
-                        set_pc!(t);
-                    }
-                }
-                op::CALL_FN => {
-                    let f = op_u16!();
-                    let argc = op_u8!();
-                    set_pc!(at as u32);
-                    let (args, n) = self.pop_args(argc as usize);
-                    self.push_frame(prog, f, &args[..n])?;
-                }
-                op::CALL_BUILTIN => {
-                    let b = op_u16!();
-                    let argc = op_u8!();
-                    set_pc!(at as u32);
-                    match self.call_builtin(prog, b, argc as usize) {
-                        Ok(v) => push!(v),
-                        Err(mut e) => {
-                            // attribute to this site if the builtin didn't
-                            if e.pc == u32::MAX {
-                                e = self.err_at(prog, core::mem::take(&mut e.message));
+                    op::NEW_ARRAY => {
+                        let n = op_u16!() as usize;
+                        // budget-first: the elements are popped into the slot
+                        // only once the (fallible) allocation succeeded
+                        match self.alloc_array_zeroed(n) {
+                            Ok(v) => {
+                                let Value::Arr(id) = v else { unreachable!() };
+                                for i in (0..n).rev() {
+                                    let e = pop!();
+                                    // freshly allocated ⇒ always Owned
+                                    if let ArrRepr::Owned(vs) = &mut self.arrays[id as usize] {
+                                        vs[i] = e;
+                                    }
+                                }
+                                push!(v);
                             }
+                            Err(m) => fail!(m),
+                        }
+                    }
+                    op::CONST_ARR => {
+                        let d = op_u16!() as u32;
+                        // decoder-validated: d < data_arrays.len()
+                        let len = prog.data_arrays[d as usize].len();
+                        match self.alloc_const_array(d, len) {
+                            Ok(v) => push!(v),
+                            Err(m) => fail!(m),
+                        }
+                    }
+                    op::ASSERT => {
+                        let m = op_u16!();
+                        if !pop!().truthy() {
+                            // decoder-validated: m < assert_msgs.len()
+                            let px = self.globals[prog.pixel_count_g as usize]
+                                .num()
+                                .to_int_trunc();
+                            let mut e = self.err_at(
+                                prog,
+                                alloc::format!(
+                                    "pattern requires: {} (pixelCount = {px})",
+                                    prog.assert_msgs[m as usize]
+                                ),
+                            );
+                            e.is_assert = true;
                             return Err(e);
                         }
                     }
-                }
-                op::CALL_VALUE => {
-                    let argc = op_u8!() as usize;
-                    set_pc!(at as u32);
-                    let n = self.stack.len();
-                    if n < argc + 1 {
-                        fail!(ERR_STACK_UNDERFLOW);
+                    op::DUP => {
+                        let v = *self.stack.last().unwrap_or(&Value::default());
+                        push!(v);
                     }
-                    let callee = self.stack.remove(n - argc - 1);
-                    match callee {
-                        Value::Fun(f) => {
-                            let (args, n) = self.pop_args(argc);
-                            self.push_frame(prog, f, &args[..n])?;
+                    op::DUP2 => {
+                        let n = self.stack.len();
+                        if n < 2 {
+                            fail!(ERR_STACK_UNDERFLOW);
                         }
-                        Value::Builtin(b) => match self.call_builtin(prog, b, argc) {
+                        let a = self.stack[n - 2];
+                        let b = self.stack[n - 1];
+                        push!(a);
+                        push!(b);
+                    }
+                    op::POP => {
+                        pop!();
+                    }
+                    op::ADD => {
+                        binnum!(+)
+                    }
+                    op::SUB => {
+                        binnum!(-)
+                    }
+                    op::MUL => {
+                        binnum!(*)
+                    }
+                    op::DIV => {
+                        binnum!(/)
+                    }
+                    op::REM => {
+                        binnum!(%)
+                    }
+                    op::POW => {
+                        let b = pop!().num();
+                        let a = pop!().num();
+                        push!(Value::Num(fmath::pow(a, b)));
+                    }
+                    op::NEG => {
+                        let v = pop!().num();
+                        push!(Value::Num(-v));
+                    }
+                    op::NOT => {
+                        let v = pop!();
+                        push!(Value::Num(if v.truthy() { Fx::ZERO } else { Fx::ONE }));
+                    }
+                    op::BIT_NOT => {
+                        let v = pop!().num();
+                        push!(Value::Num(!v));
+                    }
+                    op::BIT_AND => {
+                        binnum!(&)
+                    }
+                    op::BIT_OR => {
+                        binnum!(|)
+                    }
+                    op::BIT_XOR => {
+                        binnum!(^)
+                    }
+                    op::SHL => {
+                        binnum!(<<)
+                    }
+                    op::SHR => {
+                        binnum!(>>)
+                    }
+                    op::LT => {
+                        bincmp!(<)
+                    }
+                    op::LE => {
+                        bincmp!(<=)
+                    }
+                    op::GT => {
+                        bincmp!(>)
+                    }
+                    op::GE => {
+                        bincmp!(>=)
+                    }
+                    op::EQ => {
+                        let b = pop!();
+                        let a = pop!();
+                        push!(Value::Num(if value_eq(a, b) { Fx::ONE } else { Fx::ZERO }));
+                    }
+                    op::NE => {
+                        let b = pop!();
+                        let a = pop!();
+                        push!(Value::Num(if value_eq(a, b) { Fx::ZERO } else { Fx::ONE }));
+                    }
+                    op::JMP => {
+                        let t = op_u32!();
+                        at = t as usize;
+                    }
+                    op::JMP_IF_FALSE => {
+                        let t = op_u32!();
+                        if !pop!().truthy() {
+                            at = t as usize;
+                        }
+                    }
+                    op::JMP_IF_TRUE_PEEK => {
+                        let t = op_u32!();
+                        let v = *self.stack.last().unwrap_or(&Value::default());
+                        if v.truthy() {
+                            at = t as usize;
+                        }
+                    }
+                    op::JMP_IF_FALSE_PEEK => {
+                        let t = op_u32!();
+                        let v = *self.stack.last().unwrap_or(&Value::default());
+                        if !v.truthy() {
+                            at = t as usize;
+                        }
+                    }
+                    op::CALL_FN => {
+                        let f = op_u16!();
+                        let argc = op_u8!();
+                        // the return lands after this instruction
+                        self.frames.last_mut().expect("frame").pc = at as u32;
+                        let mut args = [Value::default(); MAX_ARGS];
+                        let n = self.pop_args_into(&mut args, argc as usize);
+                        self.push_frame(prog, f, &args[..n])?;
+                        continue 'frame;
+                    }
+                    op::CALL_BUILTIN => {
+                        let b = op_u16!();
+                        let argc = op_u8!() as usize;
+                        // hot builtins straight off the stack (see builtin_fast)
+                        if argc <= FAST_ARGS {
+                            if let BKind::Impl(bi) = BUILTINS[b as usize].kind {
+                                let len = self.stack.len();
+                                if len >= argc {
+                                    let mut a = [Value::default(); FAST_ARGS];
+                                    a[..argc].copy_from_slice(&self.stack[len - argc..]);
+                                    if let Some(v) = self.builtin_fast(bi, &a[..argc], argc) {
+                                        self.stack.truncate(len - argc);
+                                        push!(v);
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        match self.call_builtin(prog, b, argc) {
                             Ok(v) => push!(v),
                             Err(mut e) => {
+                                // attribute to this site if the builtin didn't
                                 if e.pc == u32::MAX {
                                     e = self.err_at(prog, core::mem::take(&mut e.message));
                                 }
                                 return Err(e);
                             }
-                        },
-                        _ => fail!("call of a non-function value"),
+                        }
                     }
-                }
-                op::RET | op::RET_NULL => {
-                    set_pc!(at as u32);
-                    let v = if opcode == op::RET {
-                        pop!()
-                    } else {
-                        Value::default()
-                    };
-                    self.pop_frame();
-                    if self.frames.len() == base {
-                        return Ok(Outcome::Done(v));
+                    op::CALL_VALUE => {
+                        let argc = op_u8!() as usize;
+                        let n = self.stack.len();
+                        if n < argc + 1 {
+                            fail!(ERR_STACK_UNDERFLOW);
+                        }
+                        let callee = self.stack.remove(n - argc - 1);
+                        match callee {
+                            Value::Fun(f) => {
+                                self.frames.last_mut().expect("frame").pc = at as u32;
+                                let mut args = [Value::default(); MAX_ARGS];
+                                let n = self.pop_args_into(&mut args, argc);
+                                self.push_frame(prog, f, &args[..n])?;
+                                continue 'frame;
+                            }
+                            Value::Builtin(b) => match self.call_builtin(prog, b, argc) {
+                                Ok(v) => push!(v),
+                                Err(mut e) => {
+                                    if e.pc == u32::MAX {
+                                        e = self.err_at(prog, core::mem::take(&mut e.message));
+                                    }
+                                    return Err(e);
+                                }
+                            },
+                            _ => fail!("call of a non-function value"),
+                        }
                     }
-                    push!(v);
+                    op::RET | op::RET_NULL => {
+                        let v = if opcode == op::RET {
+                            pop!()
+                        } else {
+                            Value::default()
+                        };
+                        self.pop_frame();
+                        if self.frames.len() == base {
+                            return Ok(Outcome::Done(v));
+                        }
+                        push!(v);
+                        continue 'frame;
+                    }
+                    _ => fail!("unknown opcode (corrupt bytecode?)"),
                 }
-                _ => fail!("unknown opcode (corrupt bytecode?)"),
             }
         }
     }
@@ -1978,6 +1976,93 @@ impl Vm {
         Value::Num(Fx::from_raw(((r as u64 * m) >> 32) as u32 as i32))
     }
 
+    /// The hot, infallible builtins — everything a per-pixel `render` calls
+    /// in a typical pattern. The dispatch loop calls this straight from the
+    /// stack (no 16-slot args array, no `Result`, no jump into the 20 KB
+    /// [`Vm::call_builtin`]); `call_builtin` delegates here first so the
+    /// semantics live in exactly one place. `None` = not a fast builtin.
+    #[inline(always)]
+    fn builtin_fast(&mut self, builtin: Builtin, args: &[Value], argc: usize) -> Option<Value> {
+        let n = |i: usize| args.get(i).copied().unwrap_or_default().num();
+        use Builtin::*;
+        match builtin {
+            Abs => Some(Value::Num(n(0).abs())),
+            Floor => Some(Value::Num(n(0).floor())),
+            Ceil => Some(Value::Num(n(0).ceil())),
+            Round => Some(Value::Num(n(0).round())),
+            Trunc => Some(Value::Num(n(0).trunc())),
+            Frac => Some(Value::Num(n(0).frac())),
+            Clamp => Some(Value::Num(n(0).clamp(n(1), n(2)))),
+            Min => Some(Value::Num(n(0).min(n(1)))),
+            Max => Some(Value::Num(n(0).max(n(1)))),
+            Mod => Some(Value::Num(n(0).mod_floor(n(1)))),
+            Sqrt => Some(Value::Num(fmath::sqrt(n(0)))),
+            Sin => Some(Value::Num(fmath::sin(n(0)))),
+            Cos => Some(Value::Num(fmath::cos(n(0)))),
+            Random => {
+                let r = self.next_random();
+                Some(Self::scale_random(r, n(0)))
+            }
+            Prng => {
+                let r = self.next_prng();
+                Some(Self::scale_random(r, n(0)))
+            }
+            Time => {
+                // period in ms happens to equal the interval's raw value:
+                // 65.536 s · interval = 65536 ms · interval.
+                let period = n(0).raw().max(0) as u64;
+                if period == 0 {
+                    return Some(Value::Num(Fx::ZERO));
+                }
+                // 32-bit fast path (hardware divide on Xtensa/RISC-V; the
+                // u64 form is two ROM calls per invocation, and `time()` is
+                // called per pixel by most patterns): intervals ≤ 1.0 have
+                // period ≤ 65536, so `t < period` keeps `t << 16` in u32;
+                // the clock stays below 2^32 ms for 49 days.
+                if period <= 1 << 16 && self.time_ms <= u32::MAX as u64 {
+                    let period = period as u32;
+                    let t = self.time_ms as u32 % period;
+                    return Some(Value::Num(Fx::from_raw(((t << 16) / period) as i32)));
+                }
+                let t = self.time_ms % period;
+                Some(Value::Num(Fx::from_raw(((t << 16) / period) as i32)))
+            }
+            Wave => Some(Value::Num(Fx::from_raw(
+                (fmath::sin_turns(n(0)).raw() + Fx::ONE.raw()) >> 1,
+            ))),
+            Square => {
+                let duty = if argc >= 2 { n(1) } else { Fx::from_f64(0.5) };
+                let t = n(0).mod_floor(Fx::ONE);
+                Some(Value::Num(if t < duty { Fx::ONE } else { Fx::ZERO }))
+            }
+            Triangle => {
+                let t = n(0).mod_floor(Fx::ONE);
+                let half = Fx::from_raw(1 << 15);
+                Some(Value::Num(if t < half {
+                    t + t
+                } else {
+                    (Fx::ONE - t) + (Fx::ONE - t)
+                }))
+            }
+            Mix => Some(Value::Num(n(0) + (n(1) - n(0)) * n(2))),
+            Hsv => {
+                self.pixel = hsv_to_rgb(n(0), n(1), n(2));
+                self.pixel_written = true;
+                Some(Value::default())
+            }
+            Rgb => {
+                self.pixel = [
+                    n(0).clamp(Fx::ZERO, Fx::ONE),
+                    n(1).clamp(Fx::ZERO, Fx::ONE),
+                    n(2).clamp(Fx::ZERO, Fx::ONE),
+                ];
+                self.pixel_written = true;
+                Some(Value::default())
+            }
+            _ => None,
+        }
+    }
+
     fn call_builtin(&mut self, prog: &Program, id: u16, argc: usize) -> Result<Value, VmError> {
         let no_site = |message: String| VmError {
             message,
@@ -2002,28 +2087,15 @@ impl Vm {
             }
         };
         let mut args = [Value::default(); MAX_ARGS];
-        let argc = argc.min(MAX_ARGS);
-        for i in (0..argc).rev() {
-            args[i] = self.stack.pop().unwrap_or_default();
+        let argc = self.pop_args_into(&mut args, argc);
+        if let Some(v) = self.builtin_fast(builtin, &args[..argc], argc) {
+            return Ok(v);
         }
         let a = |i: usize| args.get(i).copied().unwrap_or_default();
         let n = |i: usize| a(i).num();
         use Builtin::*;
         let num = |v: Fx| Ok(Value::Num(v));
         match builtin {
-            Abs => num(n(0).abs()),
-            Floor => num(n(0).floor()),
-            Ceil => num(n(0).ceil()),
-            Round => num(n(0).round()),
-            Trunc => num(n(0).trunc()),
-            Frac => num(n(0).frac()),
-            Clamp => num(n(0).clamp(n(1), n(2))),
-            Min => num(n(0).min(n(1))),
-            Max => num(n(0).max(n(1))),
-            Mod => num(n(0).mod_floor(n(1))),
-            Sqrt => num(fmath::sqrt(n(0))),
-            Sin => num(fmath::sin(n(0))),
-            Cos => num(fmath::cos(n(0))),
             Tan => num(fmath::tan(n(0))),
             Asin => num(fmath::asin(n(0))),
             Acos => num(fmath::acos(n(0))),
@@ -2189,10 +2261,7 @@ impl Vm {
                     fmath::pow(Fx::from_int(2), Fx::from_int(20) * t - Fx::from_int(10))
                         / Fx::from_int(2)
                 } else {
-                    let e = fmath::pow(
-                        Fx::from_int(2),
-                        Fx::from_int(10) - Fx::from_int(20) * t,
-                    );
+                    let e = fmath::pow(Fx::from_int(2), Fx::from_int(10) - Fx::from_int(20) * t);
                     (Fx::from_int(2) - e) / Fx::from_int(2)
                 })
             }
@@ -2258,9 +2327,7 @@ impl Vm {
                     Fx::ONE
                 } else {
                     let twenty_t = Fx::from_int(20) * t;
-                    let s = fmath::sin_turns(
-                        (twenty_t - Fx::from_f64(11.125)) / Fx::from_f64(4.5),
-                    );
+                    let s = fmath::sin_turns((twenty_t - Fx::from_f64(11.125)) / Fx::from_f64(4.5));
                     if t < Fx::from_raw(1 << 15) {
                         let grow = fmath::pow(Fx::from_int(2), twenty_t - Fx::from_int(10));
                         -(grow * s) / Fx::from_int(2)
@@ -2280,48 +2347,12 @@ impl Vm {
                     (Fx::ONE + ease_out_bounce(t + t - Fx::ONE)) / Fx::from_int(2)
                 })
             }
-            Random => {
-                let r = self.next_random();
-                Ok(Self::scale_random(r, n(0)))
-            }
-            Prng => {
-                let r = self.next_prng();
-                Ok(Self::scale_random(r, n(0)))
-            }
             PrngSeed => {
                 let old = self.prng_state;
                 let s = n(0).raw() as u32;
                 self.prng_state = if s == 0 { 1 } else { s };
                 num(Fx::from_raw(old as i32))
             }
-            Time => {
-                // period in ms happens to equal the interval's raw value:
-                // 65.536 s · interval = 65536 ms · interval.
-                let period = n(0).raw().max(0) as u64;
-                if period == 0 {
-                    return num(Fx::ZERO);
-                }
-                let t = self.time_ms % period;
-                num(Fx::from_raw(((t << 16) / period) as i32))
-            }
-            Wave => num(Fx::from_raw(
-                (fmath::sin_turns(n(0)).raw() + Fx::ONE.raw()) >> 1,
-            )),
-            Square => {
-                let duty = if argc >= 2 { n(1) } else { Fx::from_f64(0.5) };
-                let t = n(0).mod_floor(Fx::ONE);
-                num(if t < duty { Fx::ONE } else { Fx::ZERO })
-            }
-            Triangle => {
-                let t = n(0).mod_floor(Fx::ONE);
-                let half = Fx::from_raw(1 << 15);
-                num(if t < half {
-                    t + t
-                } else {
-                    (Fx::ONE - t) + (Fx::ONE - t)
-                })
-            }
-            Mix => num(n(0) + (n(1) - n(0)) * n(2)),
             Smoothstep => {
                 let (lo, hi, v) = (n(0), n(1), n(2));
                 let d = hi - lo;
@@ -2344,20 +2375,6 @@ impl Vm {
                     + Fx::from_int(3) * u * u * t * p1
                     + Fx::from_int(3) * u * t * t * p2
                     + t * t * t * p3)
-            }
-            Hsv => {
-                self.pixel = hsv_to_rgb(n(0), n(1), n(2));
-                self.pixel_written = true;
-                Ok(Value::default())
-            }
-            Rgb => {
-                self.pixel = [
-                    n(0).clamp(Fx::ZERO, Fx::ONE),
-                    n(1).clamp(Fx::ZERO, Fx::ONE),
-                    n(2).clamp(Fx::ZERO, Fx::ONE),
-                ];
-                self.pixel_written = true;
-                Ok(Value::default())
             }
             // plot(x, y) or plot(x, y, z): map programs emit one coordinate
             // per pixel; the engine (map mode) reads plot_coord after the call.
@@ -2412,8 +2429,10 @@ impl Vm {
                         &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
                     )?;
                     if mutate {
-                        if let Some(slot) =
-                            self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?.get_mut(i)
+                        if let Some(slot) = self
+                            .arr_mut(prog, arr)
+                            .map_err(|m| no_site(m.into()))?
+                            .get_mut(i)
                         {
                             *slot = r;
                         }
@@ -2435,8 +2454,10 @@ impl Vm {
                         f,
                         &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
                     )?;
-                    if let Some(slot) =
-                        self.arr_mut(prog, dst).map_err(|m| no_site(m.into()))?.get_mut(i)
+                    if let Some(slot) = self
+                        .arr_mut(prog, dst)
+                        .map_err(|m| no_site(m.into()))?
+                        .get_mut(i)
                     {
                         *slot = r;
                     }
@@ -2514,8 +2535,7 @@ impl Vm {
                 let cmp = a(1);
                 let by = builtin == ArraySortBy;
                 self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?; // materialize (CoW)
-                let ArrRepr::Owned(mut data) =
-                    core::mem::take(&mut self.arrays[arr as usize])
+                let ArrRepr::Owned(mut data) = core::mem::take(&mut self.arrays[arr as usize])
                 else {
                     unreachable!("materialized above")
                 };
@@ -2877,12 +2897,14 @@ impl Vm {
             // reuse one array, so render loops don't grow the arena.
             Hsv2Rgb => {
                 let rgb = hsv_to_rgb(n(0), n(1), n(2));
-                self.write3(prog, a(3), rgb).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(3), rgb)
+                    .map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
             Rgb2Hsv => {
                 let hsv = rgb_to_hsv(n(0), n(1), n(2));
-                self.write3(prog, a(3), hsv).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(3), hsv)
+                    .map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
             // simplex2(x, y, seed = 0) / simplex3(x, y, z, seed = 0):
@@ -2954,7 +2976,11 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("blur2D of a non-array".into()));
                 };
-                let (w, h, r) = (n(1).to_int_trunc(), n(2).to_int_trunc(), n(3).to_int_trunc());
+                let (w, h, r) = (
+                    n(1).to_int_trunc(),
+                    n(2).to_int_trunc(),
+                    n(3).to_int_trunc(),
+                );
                 if w >= 1 && h >= 1 && r >= 1 {
                     let (w, h, r) = (w as usize, h as usize, r as usize);
                     let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
@@ -3126,7 +3152,12 @@ impl Vm {
                 let i = n(0).to_int_trunc();
                 let ch = if argc >= 2 { n(1).to_int_trunc() } else { 0 };
                 let v = match &self.pixel_state {
-                    Some(s) if i >= 0 && (i as usize) < s.n && ch >= 0 && (ch as usize) < s.channels => {
+                    Some(s)
+                        if i >= 0
+                            && (i as usize) < s.n
+                            && ch >= 0
+                            && (ch as usize) < s.channels =>
+                    {
                         s.front[ch as usize * s.n + i as usize]
                     }
                     _ => Fx::ZERO,
@@ -3152,7 +3183,8 @@ impl Vm {
                     )));
                 }
                 let ch = ch as usize;
-                self.pixel_state_ensure(prog, ch).map_err(|m| no_site(m.into()))?;
+                self.pixel_state_ensure(prog, ch)
+                    .map_err(|m| no_site(m.into()))?;
                 if let Some(s) = &mut self.pixel_state {
                     if i >= 0 && (i as usize) < s.n {
                         s.back[ch * s.n + i as usize] = v;
@@ -3256,6 +3288,7 @@ impl Vm {
                 }
                 Ok(Value::default())
             }
+            _ => unreachable!("handled by builtin_fast"),
         }
     }
 
@@ -3326,8 +3359,14 @@ impl Vm {
                 }
             }
             None => {
-                let x =
-                    Fx::from_raw((((i as i64) << 16) / (self.pixel_count.max(1) as i64)) as i32);
+                let n = self.pixel_count.max(1);
+                // 32-bit divide while `i << 16` fits (every real strip):
+                // the i64 form is a ROM call per pixel on Xtensa
+                let x = if i < 1 << 15 {
+                    Fx::from_raw(((i << 16) / n) as i32)
+                } else {
+                    Fx::from_raw((((i as i64) << 16) / (n as i64)) as i32)
+                };
                 [x, fill[1], fill[2]]
             }
         }
@@ -3531,7 +3570,11 @@ fn sample_axis(x: Fx, n: usize) -> (usize, usize, i64) {
     let pos = x.raw() as i64 * n as i64 - (1i64 << 15); // 16.16
     let (i, t) = (pos >> 16, pos & 0xFFFF);
     let last = n as i64 - 1;
-    (i.clamp(0, last) as usize, (i + 1).clamp(0, last) as usize, t)
+    (
+        i.clamp(0, last) as usize,
+        (i + 1).clamp(0, last) as usize,
+        t,
+    )
 }
 
 /// Inverse of [hsv_to_rgb]: gamma-sRGB → [h, s, v], hue in turns (0..1).
@@ -3560,9 +3603,9 @@ pub fn rgb_to_hsv(r: Fx, g: Fx, b: Fx) -> [Fx; 3] {
 pub fn hsv_to_rgb(h: Fx, s: Fx, v: Fx) -> [Fx; 3] {
     let s = s.clamp(Fx::ZERO, Fx::ONE);
     let v = v.clamp(Fx::ZERO, Fx::ONE);
-    let h6 = h.mod_floor(Fx::ONE).raw() as i64 * 6; // [0, 6) in 16-frac
-    let sector = (h6 >> 16) as i32; // 0..5
-    let f = Fx::from_raw((h6 & 0xFFFF) as i32);
+    let h6 = h.mod_floor(Fx::ONE).raw() * 6; // [0, 6) in 16-frac; < 2^19, fits i32
+    let sector = h6 >> 16; // 0..5
+    let f = Fx::from_raw(h6 & 0xFFFF);
     let p = v * (Fx::ONE - s);
     let q = v * (Fx::ONE - s * f);
     let t = v * (Fx::ONE - s * (Fx::ONE - f));

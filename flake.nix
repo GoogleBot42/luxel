@@ -113,6 +113,10 @@
            , target
            , extraFeatures ? [ ]
            , buildStd ? false
+             # luxel-core (the VM hot path) at opt-level 3 inside the
+             # size-optimized image — firmware/board-target.sh CORE_O3 is
+             # the same per-board flag for devshell builds (Gitea #260)
+           , coreO3 ? true
            , ssid ? envOr "LUXEL_SSID"
            , pass ? envOr "LUXEL_PASS"
            }:
@@ -124,6 +128,8 @@
                 targets = [ "riscv32imc-unknown-none-elf" "riscv32imac-unknown-none-elf" ];
               };
               stdFlags = lib.optionalString buildStd " -Zbuild-std=core,alloc";
+              optFlags = lib.optionalString coreO3
+                " --config profile.release.package.luxel-core.opt-level=3";
             in
             pkgs.stdenv.mkDerivation {
               # extras in the name so `luxel-fw-board-s3-devkit` (strip) and
@@ -180,7 +186,7 @@
                 cd firmware
                 ${if buildStd then "${xtensaRust}/bin/cargo" else "cargo"} build --release --offline \
                   --no-default-features --features ${lib.concatStringsSep "," ([ board ] ++ extraFeatures)} \
-                  --target ${target}${stdFlags}
+                  --target ${target}${stdFlags}${optFlags}
                 runHook postBuild
               '';
 
@@ -238,6 +244,7 @@
           board = "board-c6-devkit";
           chip = "esp32c6";
           target = "riscv32imac-unknown-none-elf";
+          coreO3 = false; # slot margin (board-target.sh)
         };
         # Hosted-UI image (Gitea #11): no on-device playground — `/` serves
         # the embedded page that links to the hosted playground with
@@ -251,6 +258,7 @@
           extraFeatures = [ "hosted-ui" ];
           chip = "esp32c6";
           target = "riscv32imac-unknown-none-elf";
+          coreO3 = false;
         };
         # HUB75 panel output on the S3 (LCD_CAM, Gitea #72). Same board
         # feature as the devkit plus the hub75 driver feature.
