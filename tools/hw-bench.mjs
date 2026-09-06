@@ -5,6 +5,13 @@
 //
 // Usage (repo root, nix develop): node tools/hw-bench.mjs <device-ip> [report.md]
 //
+// --perf-only turns the same sweep into a PERFORMANCE sweep: no pixel-count
+// curve, and the report is one row per pattern (fps + the per-stage frame
+// timers from Gitea #260) sorted by vm µs, worst first, plus the median/p90
+// of the distribution. That table is the baseline the interpreter work
+// (#261 superinstructions, #265 two-core split) gets measured against — run
+// it when the engine changes; it is not a stability check.
+//
 // Restores: rainbow, and the pixel count + brightness it FOUND (it used to
 // hardcode a 300 px restore regardless, which quietly reconfigured the rig).
 //
@@ -24,10 +31,12 @@ import fs from "node:fs";
 // compile locally via the built playground wasm (needs `npm run wasm` once)
 import { lxpBody } from "../web/tools/lxp.mjs";
 
-const IP = process.argv[2] ?? "192.168.0.205";
-const OUT = process.argv[3] ?? "docs/bench-report.md";
+const PERF = process.argv.includes("--perf-only");
+const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const IP = POS[0] ?? "192.168.0.205";
+const OUT = POS[1] ?? (PERF ? "docs/perf-sweep.md" : "docs/bench-report.md");
 const DEV = `http://${IP}`;
-const DWELL_MS = 2500; // per pattern: settle + let the fps counter refill
+const DWELL_MS = PERF ? 3000 : 2500; // per pattern: settle + let the fps counter refill
 const RECOVER_MS = 180_000; // how long to wait for a crashed device to return
 const RESET_AFTER_MS = 90_000; // ...before trying HW_BENCH_RESET_CMD (if set)
 const RESET_CMD = process.env.HW_BENCH_RESET_CMD;
@@ -108,7 +117,7 @@ const bright0 = (await api("/api/brightness")).brightness;
 // the LED protocol is not in /api/status — the header used to hardcode
 // "SK9822" and mislabelled the ws2812 Athom rig on every report it wrote
 const proto0 = (await api("/api/config")).protocol ?? "unknown";
-console.log(`device ${IP}: v${status0.version}, ${status0.pixels}px, brightness ${bright0} — soaking ${gallery.length} patterns`);
+console.log(`device ${IP}: v${status0.version}, ${status0.pixels}px, brightness ${bright0} — ${PERF ? "perf sweep over" : "soaking"} ${gallery.length} patterns`);
 
 const rows = [];
 const crashes = []; // { after: name, downSecs, reset }
@@ -175,9 +184,9 @@ for (const p of gallery) {
 const curve = [];
 const rainbowBody = await lxpBody("", rainbow);
 try {
-  console.log("-- pixel-count curve --");
+  if (!PERF) console.log("-- pixel-count curve --");
   await api("/api/code", rainbowBody);
-  for (const n of [60, 150, 300, 600, 1024, 2048]) {
+  for (const n of PERF ? [] : [60, 150, 300, 600, 1024, 2048]) {
     await api("/api/config", String(n));
     await sleep(3500);
     const st = await api("/api/status");
@@ -191,6 +200,42 @@ try {
   await api("/api/code", rainbowBody);
 } catch (e) {
   console.log(`curve/restore aborted: ${String(e).slice(0, 80)} — device may need a manual restore`);
+}
+
+// ---- perf-only report: one row per pattern, sorted by vm µs (worst first)
+if (PERF) {
+  const timed = rows.filter((r) => !r.fail && r.vm_us !== undefined);
+  const by = (f) => timed.map(f).sort((x, y) => x - y);
+  const q = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))] ?? 0;
+  const vms = by((r) => r.vm_us);
+  const frames = by((r) => r.frame_us);
+  const fpsv = by((r) => r.fps);
+  const out = [];
+  out.push(`# Pattern performance sweep \u2014 ${new Date().toISOString().slice(0, 10)}`);
+  out.push("");
+  out.push(`*Device ${IP}, firmware v${status0.version}, ${status0.pixels} px ${proto0}, brightness ${bright0}.*`);
+  out.push("*Regenerate: `node tools/hw-bench.mjs <ip> <report.md> --perf-only`.*");
+  out.push("");
+  out.push(`- ${timed.length} of ${gallery.length} gallery patterns measured (${rows.length - timed.length} rejected, crashed or untimed).`);
+  out.push(`- vm \u00b5s/frame: median **${q(vms, 0.5)}**, p90 **${q(vms, 0.9)}**, max ${vms[vms.length - 1] ?? 0}.`);
+  out.push(`- frame \u00b5s: median ${q(frames, 0.5)}, p90 ${q(frames, 0.9)}. fps: median **${q(fpsv, 0.5)}**, p10 ${q(fpsv, 0.1)}.`);
+  out.push("");
+  out.push("| # | pattern | kind | fps | frame \u00b5s | vm \u00b5s | pipe \u00b5s | out \u00b5s | heap free |");
+  out.push("|---:|---|---|---:|---:|---:|---:|---:|---:|");
+  const sorted = [...timed].sort((x, y) => y.vm_us - x.vm_us);
+  sorted.forEach((r, i) => out.push(`| ${i + 1} | ${r.name} | ${r.kind} | ${r.fps} | ${r.frame_us} | ${r.vm_us} | ${r.pipe_us} | ${r.out_us} | ${r.heap} |`));
+  const bad = rows.filter((r) => r.fail || r.vmerr);
+  if (bad.length) {
+    out.push("");
+    out.push("## Not measured");
+    out.push("");
+    out.push("| pattern | kind | why |");
+    out.push("|---|---|---|");
+    for (const r of bad) out.push(`| ${r.name} | ${r.kind} | ${r.fail ?? r.vmerr} |`);
+  }
+  fs.writeFileSync(OUT, out.join("\n") + "\n");
+  console.log(`wrote ${OUT}: ${timed.length} measured, ${bad.length} not measured`);
+  process.exit(0);
 }
 
 // report

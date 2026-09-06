@@ -3183,8 +3183,17 @@ impl Vm {
                 let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
                 let len = data.len();
                 if r > 0 && len > 0 {
-                    // prefix sums in raw i64 — exact, no overflow at 10K els
-                    let mut pre = alloc::vec::Vec::with_capacity(len + 1);
+                    // prefix sums in raw i64 — exact, no overflow at 10K els.
+                    // Fallible like blur2D's: this is 8 bytes per element, so
+                    // a pixelCount-sized array on a 64x64 panel wants 32 KiB
+                    // of transient heap, more than a loaded device has spare
+                    // — an infallible Vec aborted the firmware there (a
+                    // 4096-element blur1D panicked the Seengreat panel with
+                    // "memory allocation of 32776 bytes failed", 2026-09-06).
+                    let mut pre: alloc::vec::Vec<i64> = alloc::vec::Vec::new();
+                    if pre.try_reserve_exact(len + 1).is_err() {
+                        return Err(no_site("out of memory for blur1D".into()));
+                    }
                     pre.push(0i64);
                     for v in data.iter() {
                         pre.push(pre.last().unwrap() + v.num().raw() as i64);
