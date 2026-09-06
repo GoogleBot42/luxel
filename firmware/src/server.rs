@@ -380,6 +380,19 @@ fn status_json() -> String {
     let assets_mapped = false;
     push_piece(&mut out, ",\"assets_mapped\":");
     push_piece(&mut out, if assets_mapped { "true" } else { "false" });
+    // The running pattern's bytecode is mapped memory (rodata default, the
+    // ad-hoc slot, or an arena slot) — the engine builds from it without a
+    // blob Vec. `arena` = [slots in use, slots total] of the library code
+    // arena (patterns.rs); [0, 7] with an empty library, [0, 0] never —
+    // a total of 7 with no mapping means the arena is off.
+    push_piece(&mut out, ",\"code_mapped\":");
+    push_piece(&mut out, if crate::patterns::current_code().is_some() { "true" } else { "false" });
+    let (used, total) = crate::patterns::arena_stats();
+    push_piece(&mut out, ",\"arena\":[");
+    push_u32(&mut out, used);
+    push_piece(&mut out, ",");
+    push_u32(&mut out, total);
+    push_piece(&mut out, "]");
     push_piece(&mut out, ",\"src\":");
     push_piece(&mut out, if src { "true" } else { "false" });
     push_piece(&mut out, ",\"bc\":");
@@ -469,6 +482,18 @@ impl picoserve::response::Content for FlashAsset {
         }
         Ok(())
     }
+}
+
+/// Stream a flash-MAPPED read-back body (patterns::current_slot_*, code_of):
+/// plain memory, written in 4 KiB slices with a yield between them so the
+/// pool slot stays cooperative — no flash-controller op, no padding logic
+/// (the mapping cannot be "busy").
+async fn stream_mapped<W: picoserve::io::Write>(writer: &mut W, bytes: &[u8]) -> Result<(), W::Error> {
+    for slice in bytes.chunks(4096) {
+        writer.write_all(slice).await?;
+        embassy_futures::yield_now().await;
+    }
+    Ok(())
 }
 
 /// Stream a flash-resident read-back blob (the running pattern's source or
@@ -650,8 +675,12 @@ impl picoserve::response::Content for CurrentEnvelope {
         match self.src {
             crate::shared::SrcLoc::Default(s) => writer.write_all(s.as_bytes()).await?,
             crate::shared::SrcLoc::Flash(len) => {
-                let abs = crate::patterns::current_slot_abs().map(|(s, _)| s);
-                stream_flash_readback(&mut writer, abs, len, "src").await?
+                if let Some(src) = crate::patterns::current_slot_src(len) {
+                    stream_mapped(&mut writer, src).await?
+                } else {
+                    let abs = crate::patterns::current_slot_abs().map(|(s, _)| s);
+                    stream_flash_readback(&mut writer, abs, len, "src").await?
+                }
             }
             crate::shared::SrcLoc::Library(len) => {
                 let src = crate::patterns::source_of(&crate::shared::get_current_pattern_id());
@@ -663,12 +692,25 @@ impl picoserve::response::Content for CurrentEnvelope {
         match self.bc {
             crate::shared::BcLoc::Default(b) => writer.write_all(b).await?,
             crate::shared::BcLoc::Flash(len) => {
-                let abs = crate::patterns::current_slot_abs().map(|(_, b)| b);
-                stream_flash_readback(&mut writer, abs, len, "bc").await?
+                if let Some(bc) = crate::patterns::current_slot_code(len) {
+                    stream_mapped(&mut writer, bc).await?
+                } else {
+                    let abs = crate::patterns::current_slot_abs().map(|(_, b)| b);
+                    stream_flash_readback(&mut writer, abs, len, "bc").await?
+                }
             }
             crate::shared::BcLoc::Library(len) => {
-                let bc = crate::patterns::bytecode_of(&crate::shared::get_current_pattern_id());
-                stream_store_readback(&mut writer, bc, len, "bc").await?
+                let id = crate::shared::get_current_pattern_id();
+                if let Some(bc) = crate::patterns::code_of(&id) {
+                    // the arena slot: exactly the bytes the engine runs
+                    stream_mapped(&mut writer, &bc[..bc.len().min(len)]).await?;
+                    for _ in bc.len()..len {
+                        writer.write_all(&[0u8]).await?; // keep the framing
+                    }
+                } else {
+                    let bc = crate::patterns::bytecode_of(&id);
+                    stream_store_readback(&mut writer, bc, len, "bc").await?
+                }
             }
             crate::shared::BcLoc::Gone => {}
         }
@@ -839,7 +881,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                 break 'resp String::from("{\"ok\":false,\"error\":\"upload truncated\"}");
             }
             if self.save {
-                api_patterns_save(&env)
+                api_patterns_save(&env).await
             } else {
                 api_code(env).await
             }
@@ -1007,7 +1049,7 @@ async fn api_code(raw: Vec<u8>) -> String {
 /// POST /api/patterns — LXP1 envelope (name + source + bytecode) → persist
 /// via the pattern library. The blob is decode-validated so the store never
 /// holds bytecode this firmware can't run. Mirrors serve.rs `patterns_save`.
-fn api_patterns_save(raw: &[u8]) -> String {
+async fn api_patterns_save(raw: &[u8]) -> String {
     match decode_upload(raw) {
         Ok(env) if env.name.is_empty() => {
             String::from("{\"ok\":false,\"error\":\"pattern name required\"}")
@@ -1016,6 +1058,12 @@ fn api_patterns_save(raw: &[u8]) -> String {
             let r = crate::patterns::save(env.name, env.source, env.bytecode);
             // content changed — re-validate any playlist entries using it
             crate::playlist::preflight_mark_dirty();
+            // and give the new bytecode an arena slot (may evict the
+            // least-recently-activated one — a save is a user action) so
+            // its next activation executes from the mapping
+            if let Some(id) = crate::patterns::id_by_name(env.name.trim()) {
+                crate::patterns::cache_code(&id, env.bytecode, true).await;
+            }
             r
         }
         Err(e) => e,
@@ -1026,18 +1074,15 @@ fn api_patterns_save(raw: &[u8]) -> String {
 /// (same swap path as /api/code). A stored blob that no longer decodes
 /// (format bump via OTA) reports `bc-version` so the client re-saves.
 async fn api_patterns_activate(id: &str) -> String {
-    use luxel_core::bytecode::{validate, BcError};
-    let Some(bc) = crate::patterns::bytecode_of(id) else {
+    use luxel_core::bytecode::BcError;
+    // validated in place (the mapped arena slot when there is one); only
+    // the id travels — the render task decodes from the slot itself
+    let Some(checked) = crate::patterns::validate_stored(id) else {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     };
-    let Some(source) = crate::patterns::source_of(id) else {
-        return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
-    };
-    match validate(&bc) {
-        Ok(_) => {
-            let env = luxel_core::bytecode::encode_envelope("", &source, &bc);
-            drop((source, bc));
-            MSG_QUEUE.send(Msg::Code { env, id: String::from(id) }).await;
+    match checked {
+        Ok(()) => {
+            MSG_QUEUE.send(Msg::Library { id: String::from(id), ms: 0 }).await;
             // controls reset to the pattern's defaults on activation
             crate::shared::set_current_controls(Vec::new());
             crate::resume::mark_dirty(); // debounced single-pattern persist

@@ -1,5 +1,70 @@
 # Update log
 
+## 2026-09-05 — Pattern code arena: library patterns execute from the flash mapping (#260 store side)
+
+The store half of the VM consumer contract in docs/research/flash-mmap.md,
+landed independently of the instruction format so the two can merge in
+either order. `patterns.rs` now maps the raw upper half of `storage`
+(`0x290000`, 512 KiB, 8 pages) at boot with the same self-check as the
+assets partition, and `patterns::current_code() -> Option<&'static [u8]>`
+hands the engine the running pattern's bytecode as mapped memory: rodata
+for the built-in default, the ad-hoc read-back slot (now TWO 64 KiB
+bytecode sides — a swap writes the side the engine is not executing
+from), or the pattern's slot in the new **code arena**: 7 × 40 KiB
+page-aligned slots holding one stored pattern's contiguous LXBC each,
+with a slot table (seq, bytecode generation, length, FNV-1a) under a
+reserved map key that boot verifies against the index AND the mapped
+bytes before trusting a slot.
+
+**Library swaps carry only the id.** `Msg::Library { id, ms }` replaced
+the envelope-carrying `Msg::Code`/`Crossfade` for playlist, activate,
+MQTT and resume: the render task decodes from `code_of(id)` (mapped) or,
+for a pattern without a slot, from a transient chunk-store Vec that it
+then offers to a FREE or stale slot — so playlist churn writes flash at
+most 7 times per library state, then never (the wear rule). Saves fill
+with eviction (LRU by activation, never the running pattern); deletes
+forget the slot. Identity/read-back lengths come from `source_stat(id)`,
+which streams the source out of its chunks. Every arena write is the
+existing `write_raw` discipline (one `ota::with_flash` per op — the same
+quiesce path as the assets writer, so #272's fence hook lands in one
+place) followed by `flashmap::invalidate_slice` and a hash check of the
+mapped bytes. Rebuilds and the playlist pre-flight read the mapped slot
+too; `/api/pattern` read-back streams from the mapping; `/api/status`
+gains `code_mapped` and `arena: [used, total]`.
+
+**Measured (heapstat, counting allocator, whole gallery).** The
+library-activation peak — source Vec + blob Vec + envelope Vec, then
+Program + engine — vs the arena lifecycle (blob in flash, Program +
+engine): Main Stage 85,389 → 31,819 B, Frogger 2D 68,271 → 22,272,
+Opening Act 63,763 → 28,715, 2D Fireworks Fade 57,153 → 33,514,
+Infinite Snake 32,795 → 24,995, novas 18,359 → 17,417; over all 299
+patterns 3,568 B (27.1 %) less per activation on average, and **5
+patterns over 45 KB at swap → 0**. Resident cost is unchanged until the
+fixed-width format lets `Program` borrow the slice (`deserialize_lean`
+still copies) — that is the parent's half of the contract.
+
+**Verified without hardware:** every board + `c6 hosted-ui` +
+`athom flashmap-off` build; stack-check clean on pixelblaze-v3 / s3 / c6
+(`.stack` 26,396 B on the PB); QEMU `flashmap-test.py` extended and
+green — the store's mapping lands on entry 18 (assets entry 3 + 15
+pages, `0x3f520000`) with its self-check ok and `code arena 0/7 slots
+valid (0 dropped), 40 KiB each` on an empty library (no activation runs
+under QEMU: that needs a sequential-storage image or the network, so the
+write path is a #271 item); `tools/ci.sh` green. **Image cost:** credless
+flake builds vs `origin/master` (0f84707): C6 1,002,720 → 1,013,248 B
+(+10,528; margin **35,328 B / 3.37 %** — above the 3 % floor, inside the
+6 % warn band), PB v3 981,952 → 991,184 (+9,232), Athom 982,016 →
+991,424. About 6.7 KB of that is named symbols (the `Library` swap arm,
+`cache_code`, the arena table code, `check_asserts` no longer inlined);
+the rest is alignment. Deduplicating the three "pattern too large"
+vmerr builders into `engine_or_vmerr` clawed ~1 KB back. The next ~4 KB
+on the C6 trips the release gate: the accepted lever is
+`EXTRA_FEATURES=hosted-ui` for that variant (docs/boards.md).
+
+Hardware steps for the arena (activate twice, re-save the running one,
+an 8-item playlist against 7 slots, ad-hoc pushes, a power cycle) are
+appended to #271.
+
 ## 2026-09-05 — Flash memory-mapping through the cache MMU (assets first, the VM next; #259/#260)
 
 Jeremy's decision for #260: the pattern engine will execute a fixed-width

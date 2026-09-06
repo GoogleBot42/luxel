@@ -239,6 +239,47 @@ next consumer (Gitea #260). What a consumer must and must not do:
   when the second-core render executor lands; until then the AppCpu is
   halted and a critical section is the whole story.
 
+### The pattern store's mapped half and the code arena
+
+`patterns.rs` maps the raw upper half of the `storage` partition
+(`0x290000`, 512 KiB, 8 pages) at boot the same way (`map_raw`, self-check
+on the header page, leaked) and executes the running pattern from it —
+`patterns::current_code()` is the VM consumer contract's slice: rodata for
+the built-in default, the ad-hoc read-back slot for a pushed pattern, or the
+pattern's **code arena** slot for a library pattern. Layout of the raw half
+(partition-relative): header page at `0x80000`; ad-hoc source (96 KiB) at
+`0x81000`; ad-hoc bytecode as TWO 64 KiB sides at `0x99000` / `0xA9000` —
+`store_current` writes the side the running engine is not executing from
+and flips `CUR_BC_SIDE`, so a mapped engine never sees its code change; the
+arena at `0xB9000`: 7 slots × 40 KiB (≥ the 38 KB library bytecode cap),
+one stored pattern's contiguous, 4-byte-aligned LXBC each, with the slot
+table (seq, bytecode generation, length, FNV-1a) under the reserved map key
+`ARENA_KEY`. Rules the code enforces:
+
+- A **library swap carries only the id** (`Msg::Library { id, ms }`): the
+  render task decodes from `code_of(id)` (mapped) or, without a slot, from a
+  transient `bytecode_of` Vec that it then offers to a FREE or stale slot
+  (`cache_code(.., evict = false)`), so playlist churn writes flash at most
+  7 times per library state and then never. `save()`'s caller
+  (`POST /api/patterns`) fills with `evict = true` — a user action may
+  reclaim the least-recently-activated slot. Identity and read-back lengths
+  come from `source_stat(id)`, which streams the source out of its chunks
+  (no source Vec, no envelope Vec anywhere in a library activation).
+- **The running pattern's slot is never written or evicted** (eviction
+  skips `running_seq()`); a re-save of the running pattern goes to another
+  slot and the old one becomes stale (generation mismatch) — reclaimable
+  once something else is running.
+- Every arena write is `write_raw` (erase + word-aligned page writes, one
+  `ota::with_flash` per op with yields — the same quiesce path as the assets
+  writer, so the second-core fence hook lands in one place), then
+  `flashmap::invalidate_slice`, then a hash check of the mapped bytes, then
+  the RAM table, then the persisted table. Boot drops any table entry whose
+  pattern/generation is not in the index or whose mapped bytes do not hash
+  to the recorded value — a torn slot is never handed to the engine.
+- Without the mapping (`flashmap-off`, refused self-check) the arena is off
+  (`patterns: code arena off`), `current_code()` is `None`, and every path
+  reads through a Vec exactly as before.
+
 ## Render-loop timing counters
 
 `render_task` publishes `FPS` — frames rendered in the last full second —

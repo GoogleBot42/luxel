@@ -242,47 +242,64 @@ pattern:
   Flash wear: the arena is written once per save, never per activation —
   the same shape as the 2026-08-15 wear fix.
 
-None of that is implemented here (the format it stores does not exist
-yet); it is the store side of #260 and is written up in that issue.
+**Implemented (second PR, same day): the store side, decoupled from the
+instruction format.** `patterns.rs` maps the whole raw half (`0x290000`,
+512 KiB, 8 pages) at boot with the same self-check discipline, gives the
+ad-hoc slot two 64 KiB bytecode sides (a swap writes the side the engine
+is not executing from), and carves the rest into the arena: **7 slots ×
+40 KiB** (`ARENA_OFF = 0xB9000` partition-relative; the source side kept
+its 96 KiB, which is what limits the count — 8 slots would need 32 KiB
+more). The slot table (seq, bytecode generation, length, FNV-1a) is a
+reserved-key map item (`0x7FFF_FFF9`), verified at boot against both the
+index and the mapped bytes. Filling: `save()`'s caller with eviction
+(LRU by activation tick, never the running pattern), an activation
+without a slot with free/stale slots only (bounded flash writes per
+library state — the wear rule). `patterns::current_code()` is the
+contract's slice; `Msg::Library { id, ms }` replaced the envelope-carrying
+library swaps so no source/blob/envelope Vec exists in a library
+activation at all. docs/firmware.md "The pattern store's mapped half and
+the code arena" has the rules; what the VM format work still owns is
+making `Program` borrow the slice instead of `deserialize_lean` copying
+it.
 
 ## RAM accounting
 
 `cargo test -p luxel-cli --release --test heapstat -- --nocapture`
 (the counting-allocator model of the device lifecycle) on the gallery at
-this revision, bytes, the five biggest and three typical patterns:
+this revision. `swap(vec)` is the library-activation lifecycle the
+firmware had until the code arena: source Vec + blob Vec read from the
+chunk store, the envelope Vec built from them, the two dropped, the
+Program decoded from the envelope, the envelope dropped, the budgeted
+engine built and run three frames — measured as one peak. `swap(xip)` is
+the arena lifecycle: the blob is mapped flash (not heap), `deserialize_lean`
+copies it into the Program, engine, three frames. Bytes; the biggest
+offenders and three typical patterns:
 
-| pattern | blob (LXBC Vec) | program (decoded) | engine | run-peak | device model |
-|---|---:|---:|---:|---:|---:|
-| Main Stage | 18,459 | 28,512 | 41,678 | 42,030 | 74,507 |
-| 2D Fireworks Fade | 12,666 | 17,785 | 36,838 | 40,438 | 62,084 |
-| Opening Act | 13,293 | 23,810 | 36,524 | 36,652 | 60,590 |
-| Frogger 2D | 14,878 | 21,821 | 30,045 | 30,461 | 56,401 |
-| Infinite Snake | 7,728 | 12,386 | 29,186 | 29,570 | 41,386 |
-| Chasing Rainbows & HSLuv | 6,098 | 10,370 | 21,031 | 21,031 | 30,565 |
-| novas | 3,916 | 7,040 | 19,364 | 19,748 | 26,590 |
+| pattern | blob | program (decoded) | engine | run-peak | swap(vec) | swap(xip) |
+|---|---:|---:|---:|---:|---:|---:|
+| Main Stage | 18,459 | 28,512 | 41,678 | 42,030 | **85,389** | **31,819** |
+| Frogger 2D | 14,878 | 21,821 | 30,045 | 30,461 | 68,271 | 22,272 |
+| Opening Act | 13,293 | 23,810 | 36,524 | 36,652 | 63,763 | 28,715 |
+| 2D Fireworks Fade | 12,666 | 17,785 | 36,838 | 40,438 | 57,153 | 33,514 |
+| Flash Posterize + Music Sequencer | 9,143 | 15,674 | 32,318 | 32,670 | 46,055 | 27,955 |
+| Infinite Snake | 7,728 | 12,386 | 29,186 | 29,570 | 32,795 | 24,995 |
+| Chasing Rainbows & HSLuv | 6,098 | 10,370 | 21,031 | 21,031 | 26,279 | 17,432 |
+| novas | 3,916 | 7,040 | 19,364 | 19,748 | 18,359 | 17,417 |
 
-Today a pattern costs, resident: `program` (the decoded `Program` — its
-`code: Vec<u8>`, the `data_arrays` constant pool as `Box<[Value]>` at
-8 B/element, fn/global tables, names) plus the engine's own state; and
-transiently during the swap: the `blob` Vec (`read_current_bc` /
-`bytecode_of` / the HTTP body) held while decoding. Because the firmware
-builds the new engine before dropping the old one, the swap peak is
-**old engine + blob + new program + new engine**.
-
-With the VM executing from the mapping, the blob Vec never exists on the
-device (the code stream *is* the flash bytes), `Program.code` is a slice
-into it, and the constant pool is referenced in place instead of decoded
-into boxed `Value`s — so the resident cost drops by the code bytes and the
-constant bytes, and the swap peak drops by the blob on top of that. For
-Infinite Snake that is ≥ 7.7 KB off the peak and most of the 12.4 KB
-program off the resident figure; for Main Stage ≥ 18.5 KB and most of
-28.5 KB. Against a ~50 KB idle heap on the classic ESP32, that is the
-difference between "5 of 299 gallery patterns don't fit" and "all of them
-do", before the second core's stack and executor take their share. The
-exact split of `program` into code/constants/tables is a property of the
-fixed-width format (#260) and gets measured when it exists; the
-mapping's own RAM cost is **zero** — no buffers, no allocations, two
-`AtomicUsize`s in `assets.rs` for the region base/len.
+Across all 299 gallery patterns: Σ swap(vec) = 3,937,961 B, Σ swap(xip)
+= 2,870,875 B, an average of 3,568 B (27.1 %) less per activation; **5
+patterns exceed 45 KB at swap under the old lifecycle, 0 under the arena
+one** (the new worst case is 2D Fireworks Fade at 33.5 KB; Main Stage
+alone sheds 53.6 KB). The old figure was dominated by the three transient
+Vecs (source + blob + envelope ≈ 2 × (source + blob)) that the envelope-
+carrying `Msg::Code` needed for a library swap; with `Msg::Library` only
+the id travels and none of them exist. Resident cost is unchanged at this
+step — `deserialize_lean` still copies the code and constant pool into
+the `Program` — and drops by the code + constant bytes once the fixed-
+width format lets `Program` borrow the slice (#260): for Infinite Snake
+most of its 12.4 KB program, for Main Stage most of 28.5 KB. The mapping's
+own RAM cost is **zero** — no buffers, no allocations; four `AtomicUsize`s
+for the two region base/len pairs and a 7-entry slot table in `.bss`.
 
 For the assets consumer the saving is smaller but immediate: the 4 KiB
 `read_chunk` staging Vec plus the 4 KiB response buffer per in-flight
@@ -356,6 +373,14 @@ Dropping a `Mapped` does not unmap (leaking is the normal case). The
 consumer answers with its read_nor path — the bisect build for "is it the
 mapping?".
 
+Store side (second PR): `patterns.rs` — `current_code() -> Option<&'static
+[u8]>` (the contract's slice), `code_of(id)`, `with_code(id, f)`,
+`validate_stored(id)`, `source_stat(id) -> (len, fnv1a)`,
+`cache_code(id, bc, evict).await`, `current_slot_code(len)` /
+`current_slot_src(len)`, `raw()`, `arena_stats()`; `shared::Msg::Library {
+id, ms }` and `shared::set_pattern_hash_raw`. `/api/status` reports
+`code_mapped` and `arena: [used, total]`.
+
 Consumer wired: `assets.rs` maps `0x310000+0xF0000` at boot
 (`map_region`, after `ota::init` and the takeover check), self-checks it,
 and leaks it; `init()` parses the TOC through it; `FlashAsset::write_content`
@@ -368,7 +393,9 @@ asserts the mapping code is linked into every non-hosted-ui image.
 ## The VM consumer (agreed shape for #260)
 
 The parent session's fixed-width format work builds on this API as
-follows — this is the contract, not a proposal:
+follows — this is the contract, not a proposal. Items 1, 2, 4, 5 and 6 are
+implemented by the store-side PR (the code arena); item 3's "Program
+borrows the slice" half is the format work's:
 
 1. **Where the bytes live.** The engine receives `&'static [u8]` (or a
    `&'static [u32]` view; the arena is 4-byte aligned) obtained from a
