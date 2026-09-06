@@ -475,6 +475,43 @@ over it at 3.27 %/3.26 %. `.stack` unchanged (46,572 B on the Seengreat,
 worst frames are still the picoserve response future and the embassy main
 task, not anything in the VM.
 
+2026-09-06, **the debugger check leaves the dispatch loop (#312) — every
+Xtensa board gets ~580 B back.** `debug_stop` and the `pos_at` binary search
+it calls were being inlined between the loop head and the instruction fetch;
+moving them behind one `#[cold]` call is worth −4.5 % per loop iteration on
+the Athom, and removes the register pressure that was making LLVM tail-
+duplicate inside `Vm::run`. Two more things shrink with it:
+`jsonview::push_u64` (LLVM was unrolling all twenty digit positions of a
+`u64` decimal formatter around an inline 64-bit magic multiply: 1,909 B →
+~370 B) and the two 128-byte `[Value; MAX_ARGS]` call buffers, which leave
+`Vm::run`'s stack frame entirely (432 → 256 B). Devshell builds, same
+`creds.env` both sides, `origin/master` 66a94f7 vs the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-pixelblaze-v3` | 1,006,704 | 1,006,112 | −592 | 42,464 B (4.05 %) |
+| `board-athom-music` | 1,006,800 | 1,006,208 | −592 | 42,368 B (4.04 %) |
+| `board-esp32-generic` | 1,006,528 | 1,005,952 | −576 | 42,624 B (4.06 %) |
+| `board-s3-devkit` | 949,056 | 948,480 | −576 | 100,096 B (9.55 %) |
+| `board-seengreat-hub75` | 941,648 | 941,072 | −576 | 107,504 B (10.25 %) |
+| `board-c3-devkit` | 953,248 | 953,664 | **+416** | 94,912 B (9.05 %) |
+| `board-c6-devkit` (not shipped) | 1,020,816 | 1,020,784 | −32 | 27,792 B (2.65 %) |
+| `board-c6-devkit` + `hosted-ui` | 1,004,272 | 1,004,240 | −32 | 44,336 B (4.23 %) |
+
+The C3 is the one board that grows: it and the C6 are RISC-V, where the
+inlined debug blob was not costing the dispatch loop registers in the first
+place, so the out-of-line call is a small net add. Everything passes
+`tools/image-check.sh` except the C6 full-UI build, which already failed and
+is not shipped (the released C6 variant is `+ hosted-ui`, at 4.23 %).
+`.stack` unchanged; `tools/stack-check.sh` clean.
+
+**There is a 3.0 KB size lever on this code that was measured and
+deliberately not taken**: merging the 93 `fail!` sites in `Vm::run` into one
+`break 'frame <msg>` epilogue removes 2.5 KB of tail-duplicated prologues
+and costs **5 % of dispatch throughput**, because LLVM then hoists the
+commonest message's pointer and length into the hot preamble to feed the
+phi. See the #312 comment before trying it again.
+
 2026-09-06, **the #312 op-body work takes another ~7.5 KB off every board**
 (PR #323). Not the dispatch this time but what each instruction *does*:
 `fmath`'s transcendentals rewritten from `i64`/`i128` to 32-bit widening

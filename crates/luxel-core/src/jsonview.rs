@@ -47,14 +47,26 @@ pub fn push_i32(out: &mut String, v: i32) {
     push_u32(out, v.unsigned_abs());
 }
 
+/// `(v / 10, v % 10)`, deliberately opaque to the optimiser. Dividing a
+/// `u64` by the literal 10 makes LLVM emit a 64-bit magic multiply AND
+/// unroll all twenty digit positions: 1,909 B of Xtensa for a formatter
+/// that runs a handful of times per HTTP request (Gitea #312). Behind a
+/// call the sequence is emitted once and the digit loop stays a loop.
+#[inline(never)]
+fn divmod10_u64(v: u64) -> (u64, u8) {
+    let q = v / 10;
+    (q, (v - q * 10) as u8)
+}
+
 /// [push_u32] for the wide values (millisecond clocks, epoch seconds).
 pub fn push_u64(out: &mut String, v: u64) {
     let mut rev = [0u8; 20];
     let mut n = 0;
     let mut x = v;
     loop {
-        rev[n] = b'0' + (x % 10) as u8;
-        x /= 10;
+        let (q, d) = divmod10_u64(x);
+        rev[n] = b'0' + d;
+        x = q;
         n += 1;
         if x == 0 {
             break;
