@@ -1,5 +1,105 @@
 # Update log
 
+## 2026-09-06 — The debugger check was inlined into every dispatch (#312)
+
+#312's remaining lead on the dispatch loop's own scaffolding: the shared
+per-instruction preamble was reloading `code.ptr`, `code.len` and the `debug`
+flag itself from stack spill slots on every dispatch. The cause was one line.
+
+`if debug { … self.debug_stop(…) }` sat at the top of the inner loop, and LLVM
+inlined `debug_stop` **and** the `pos_at` binary search it calls — some 300 bytes —
+straight between the loop head and the instruction fetch. Two consequences on
+the classic ESP32, both invisible in the source:
+
+- the not-taken `debug` test became a **taken** branch on every instruction (it
+  had to jump over the blob), and
+- the blob's register demand pushed `debug`, `code.len` and `code.ptr` out into
+  the 432-byte frame, so the preamble paid three extra loads per dispatch.
+
+One `#[cold] #[inline(never)] debug_step` — publish the frame pc, ask whether to
+pause — moves all of it out of the loop. Athom rig (classic ESP32 @ 240 MHz),
+`tools/opbench.mjs` at 256 px, matched pair on `origin/master` **66a94f7** (i.e.
+after #314, #317 and #323), each side rebuilt and reflashed:
+
+| build | ops / iteration | µs / iteration | cycles / op | app image (athom) |
+|---|---|---|---|---|
+| master `66a94f7` | 9.00 | 4.120 | **109.9** | 1,006,800 B |
+| this branch | 9.00 | **3.935** | **104.9** | **1,006,208 B** |
+
+**−4.5 % of the time a loop iteration costs, and −592 B of image** — better on
+both axes. Ops per iteration are identical on both sides, so this is entirely
+cycles/op and `ops/px × cycles/op` moves by exactly that factor. (3.935 repeated
+exactly on a second run.)
+
+The ladder below was measured earlier the same day against `a3cac71`, before
+#317 changed the microbench's op count and before #323 took the 64-bit ROM
+libcalls off the render path. Read its µs/iteration column, not its cycles/op
+column, against the table above — and note the win was larger there (−10.8 %):
+#323 removed part of the same bottleneck, and on top of a cheaper `fmath` the
+freed registers buy less.
+
+| build (base `a3cac71`) | µs / iteration | cycles / op | app image (athom) |
+|---|---|---|---|
+| master `a3cac71` | 5.203 | 113.5 | 1,014,416 B |
+| `debug_step` out of line | 4.698 | 102.5 | 1,017,344 B |
+| + `fi` read inside `debug_step` | 4.671 | 101.9 | 1,016,816 B |
+| + `assert_failed` / `enter_call` out of line | 4.640 | 101.2 | 1,016,704 B |
+| + `push_u64` un-unrolled | 4.638 | 101.2 | 1,015,744 B |
+
+That +1.3 KB is also gone on the post-#323 tree: `Vm::run` is 13,170 B here,
+smaller than master's, because LLVM no longer has the register pressure that
+made it tail-duplicate.
+
+The rest:
+
+- **`fi` is no longer an argument.** `debug_step` reads the running function off
+  the top frame itself, which is where the loop got it from — one fewer value
+  live across the whole dispatch loop.
+- **`assert_failed` and `enter_call` out of line.** `format!` drags the whole
+  formatting machinery in with it for a path that fires once per pattern; and
+  `CallFn` and `CallValue`'s `Fun` arm each inlined a 128-byte
+  `[Value::default(); MAX_ARGS]` **and its `memset`** into the dispatch loop.
+  `Vm::run`'s stack frame: **432 → 256 B**.
+- **`jsonview::push_u64` was 1,909 B of Xtensa** — dividing a `u64` by the
+  literal 10 makes LLVM emit a 64-bit magic multiply and then unroll all twenty
+  digit positions. An `#[inline(never)] divmod10_u64` makes it ~370 B. Nothing
+  hot; it pays for the loop change.
+- **Fixed a latent regression from #314**: `CallFn`/`CallValue` reached
+  `push_frame` without publishing `insn_start`, so a "call depth exceeded" error
+  was attributed to whatever instruction last wrote the field.
+
+### Two things that measured worse than they read
+
+- **Block alignment is not where the missing cycles are.** Every hot block in
+  `Vm::run` is 4-byte-misaligned, including the `jx` targets;
+  `-C llvm-args=--align-all-nofallthru-blocks=2` fixes that for **2.0 %** and
+  **+13,232 B**. Dropped — 0.15 %/KB against the debug change's 3.7 %/KB.
+- **Merging the 93 `fail!` sites saves 3.0 KB and costs 5 %.** LLVM tail-
+  duplicates the publish-and-build prologue into every site (41 byte-identical
+  copies of the stack-underflow one, 22 of the overflow one — 2.5 KB of a 16 KB
+  function). Replacing `return Err(…)` with `break 'frame <msg>` and one
+  epilogue reclaims it, and then LLVM hoists the most common message's pointer
+  and length into the **hot preamble** to feed the phi: 101.2 → 106.4 cycles/op.
+  Dropped. (It also needs the macro block moved inside the labelled loop — a
+  loop label is not visible inside a `macro_rules!` body defined before it.)
+
+Two measurement notes for anyone repeating this. The Athom rig repeats to ±0.1 %
+on the same image, but **unrelated code motion moves the number ~2.6 %** — the
+same source change measured 102.5 and 105.1 cycles/op depending only on what else
+had shifted around it. Compare rebuilt A against rebuilt B, never against a
+remembered number. And **`tools/opbench.mjs` takes ops/iteration from a freshly
+built host `luxel` but the bytecode it pushes from `web/public/luxel.wasm`**: with
+a stale wasm after a rebase over a compiler change, the device runs the OLD op
+stream while the profiler counts the NEW one, and cycles/op comes out ~20 % high
+(115.7 read as 138.7 here). Run `npm run wasm` first.
+
+Verified: `cargo test --workspace`, `tools/check-library.sh` (299/299 on every
+rig), 40 library patterns rendered to PPMs against `origin/master` — all
+byte-identical except `2d-clock-with-hand-color-pickers`, which reads the wall
+clock and differs against itself — `tools/stack-check.sh` clean,
+`tools/ci.sh` green, all eight board images built and checked with
+`tools/image-check.sh`.
+
 ## 2026-09-06 — reflect: Xtensa-shaped code is not free on the host (#312)
 
 Three things #312's op-body pass learned the hard way, now in

@@ -1652,6 +1652,25 @@ impl Vm {
         }
     }
 
+    /// The debugger's whole per-instruction obligation in one call:
+    /// publish the frame pc (so an inspector sees where execution is) and
+    /// decide whether to pause. `#[cold]` + `#[inline(never)]` keeps it and
+    /// everything it reaches OUT of [`Vm::run`]'s dispatch loop — see the
+    /// call site.
+    #[cold]
+    #[inline(never)]
+    fn debug_step(&mut self, prog: &Program, pc: u32) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        f.pc = pc;
+        // the running function IS the top frame's — reading it here rather
+        // than taking it as an argument keeps one more value out of the
+        // dispatch loop's register set (Gitea #312)
+        let fi = f.fn_idx;
+        self.debug_stop(prog, fi, pc)
+    }
+
     /// Should the debugger pause before executing (fi, pc)?
     fn debug_stop(&mut self, prog: &Program, fi: u16, pc: u32) -> bool {
         let depth = self.frames.len();
@@ -1716,6 +1735,27 @@ impl Vm {
         }
     }
 
+    /// A failed `assert()`, built out of line: `format!` drags the whole
+    /// formatting machinery in with it, and an assertion fires at most once
+    /// per pattern (Gitea #312).
+    #[cold]
+    #[inline(never)]
+    fn assert_failed(&mut self, prog: &Program, m: u16) -> VmError {
+        // decoder-validated: m < assert_msgs.len()
+        let px = self.globals[prog.pixel_count_g as usize]
+            .num()
+            .to_int_trunc();
+        let mut e = self.err_at(
+            prog,
+            alloc::format!(
+                "pattern requires: {} (pixelCount = {px})",
+                prog.assert_msgs[m as usize]
+            ),
+        );
+        e.is_assert = true;
+        e
+    }
+
     /// The out-of-line half of `CallBuiltin` (and its constant-argument
     /// fusions, Gitea #261): everything `builtin_fast` could not answer in
     /// the loop, plus the error attribution. Kept out of line so the two
@@ -1734,6 +1774,17 @@ impl Vm {
             }
             e
         })
+    }
+
+    /// A user-function call: pop the arguments and push the callee's frame.
+    /// Out of line (Gitea #312) — the 128-byte `[Value; MAX_ARGS]` buffer and
+    /// its zero-init lived in [`Vm::run`]'s stack frame and were emitted
+    /// twice, for a step that happens once per CALL, never per instruction.
+    #[inline(never)]
+    fn enter_call(&mut self, prog: &Program, f: u16, argc: usize) -> Result<(), VmError> {
+        let mut args = [Value::default(); MAX_ARGS];
+        let n = self.pop_args_into(&mut args, argc);
+        self.push_frame(prog, f, &args[..n])
     }
 
     /// Pop `argc` values into the caller's buffer (no 128-byte array
@@ -1923,17 +1974,23 @@ impl Vm {
                 let f = self.frames.last().expect("frame");
                 (f.fn_idx, f.pc, f.locals_base as usize)
             };
+            #[cfg(not(feature = "profile"))]
+            let _ = fi; // only the profiler still needs it per instruction
             let fdef = &prog.fns[fi as usize];
             let code: &[u32] =
                 &prog.words[fdef.code_start as usize..(fdef.code_start + fdef.code_len) as usize];
             let mut at = pc as usize;
             loop {
-                if debug {
-                    self.frames.last_mut().expect("frame").pc = at as u32;
-                    if self.debug_stop(prog, fi, at as u32) {
-                        self.fuel = fuel;
-                        return Ok(Outcome::Paused);
-                    }
+                // ONE cold, out-of-line call (Gitea #312). Inlined, this
+                // dragged `debug_stop` AND the `pos_at` binary search it
+                // calls — some 300 bytes — in between the loop head and the
+                // fetch, so the not-taken `debug` test was a taken branch on
+                // every dispatch and the register pressure spilled `debug`
+                // itself to the frame. A paused-at-every-instruction session
+                // is not a throughput path; the fast path is.
+                if debug && self.debug_step(prog, at as u32) {
+                    self.fuel = fuel;
+                    return Ok(Outcome::Paused);
                 }
                 insn_at = at as u32;
                 // One word per instruction: opcode in the low byte, operand
@@ -2067,21 +2124,9 @@ impl Vm {
                     op::ASSERT => {
                         let m = enc::imm16(w);
                         if !pop!().truthy() {
-                            // decoder-validated: m < assert_msgs.len()
-                            let px = self.globals[prog.pixel_count_g as usize]
-                                .num()
-                                .to_int_trunc();
                             self.insn_start = insn_at;
                             self.fuel = fuel;
-                            let mut e = self.err_at(
-                                prog,
-                                alloc::format!(
-                                    "pattern requires: {} (pixelCount = {px})",
-                                    prog.assert_msgs[m as usize]
-                                ),
-                            );
-                            e.is_assert = true;
-                            return Err(e);
+                            return Err(self.assert_failed(prog, m));
                         }
                     }
                     op::DUP => {
@@ -2195,9 +2240,11 @@ impl Vm {
                         let argc = enc::argc(w);
                         // the return lands after this instruction
                         self.frames.last_mut().expect("frame").pc = at as u32;
-                        let mut args = [Value::default(); MAX_ARGS];
-                        let n = self.pop_args_into(&mut args, argc as usize);
-                        self.push_frame(prog, f, &args[..n])?;
+                        // `push_frame` attributes "call depth exceeded" from
+                        // `insn_start`, and cannot see the local copies
+                        self.insn_start = insn_at;
+                        self.fuel = fuel;
+                        self.enter_call(prog, f, argc as usize)?;
                         continue 'frame;
                     }
                     op::CALL_BUILTIN => {
@@ -2217,9 +2264,9 @@ impl Vm {
                         match callee {
                             Value::Fun(f) => {
                                 self.frames.last_mut().expect("frame").pc = at as u32;
-                                let mut args = [Value::default(); MAX_ARGS];
-                                let n = self.pop_args_into(&mut args, argc);
-                                self.push_frame(prog, f as u16, &args[..n])?;
+                                self.insn_start = insn_at;
+                                self.fuel = fuel;
+                                self.enter_call(prog, f as u16, argc)?;
                                 continue 'frame;
                             }
                             Value::Builtin(b) => {
