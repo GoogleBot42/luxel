@@ -72,10 +72,34 @@ paths:
   DPORT reads wedges the bus), the AppCpu never touches RTC memory inside
   the park, and the fence waits for the strip's SPI2 DMA transfer to end
   before the SPI1 op (`output::transfer_busy`). A new output driver on a
-  dual-core chip must answer `transfer_busy()` honestly. `/api/status`
-  `core1.fence_timeouts` must stay 0, and `core1.last.reset` ==
-  `SysRtcWdt` after a session means the watchdog caught a wedge — read
-  `core1.last.bb` before anything else.
+  dual-core chip must answer `transfer_busy()` honestly. A fourth rule
+  joined them 2026-09-06 (Gitea #292): the fencing core holds its OWN
+  interrupts masked from the park ack until past the release, because the
+  interrupts that queue up behind a 45 ms sector erase all fire on the
+  instruction where esp-storage's critical section drops back to level 0 —
+  while the other core is still parked — and one of them never returns.
+  `/api/status` `core1.fence_timeouts` must stay 0, and `core1.last.reset`
+  == `SysRtcWdt` after a session means the watchdog caught a wedge — read
+  `core1.last.bb` before anything else (`bb[1]` 6 = inside the ROM op,
+  7 = it returned, `bb[8]` = which call site took the fence).
+- **One fence per page, never per field.** A fence is expensive — an
+  interrupt on the other core, a park round-trip, and this core's
+  interrupts held off for the op — so a fenced read/write must carry a
+  page's worth of work, not a header's. Anything that walks flash a few
+  bytes at a time needs a cache: sequential-storage gets ONE
+  `PageStateCache` shared across every call (`patterns::store_cache`) and
+  the raw-region writers erase+program a whole 4 KiB page per fence. When
+  this rule was broken, one 650-byte `POST /api/patterns` cost 81,143
+  individually fenced reads and ~13 s, and the RTC watchdog rebooted the
+  board mid-save (Gitea #292); with the shared cache it is ~930 and 0.5 s.
+  Measure it: `/api/status` `core1.fences` is `[begun, completed]` for this
+  boot, so a before/after delta around one operation is two curls.
+- **A long flash burst must feed the RTC watchdog.** It blocks the ProCpu
+  executor, and the watchdog task lives there: a 728 KB asset install is
+  ~15 s of erases and a garbage-collecting pattern save was measured at
+  25 s, both against a 20 s timeout. `core1::fenced` feeds every 64 fences
+  — taking a fence IS proof of progress, so the watchdog keeps catching a
+  core that STOPPED without punishing one that is merely slow.
 - Never take the flash driver out of the global (`ota::take_flash`) for a
   long burst of ops — every `with_flash` user reads busy for the whole
   window, and the failure shows up as UNRELATED symptoms (asset pushes

@@ -162,29 +162,28 @@ after the reboot (the guard rolled back), the black box is still intact —
 the old build never touches RTC memory — so re-installing the diagnosing
 build and reading `core1.last` still works.
 
-## Flash writes on second-core builds wedge the board (Gitea #292)
+## Flash writes on second-core builds (Gitea #292 — FIXED 2026-09-06)
 
-As of 2026-09-06 **any build carrying the second-core render executor (PR
-#280) wedges the ProCpu inside a fenced flash op** on this board as soon as
-flash work comes in bursts. `POST /api/assets` dies after 60–70 KB of a 728 KB
-archive (4/4), and activating a stored library pattern took 98.6 s. The RTC
-watchdog reboots the board 20 s in, so it self-recovers — but a client that
-retries burns the boot guard's three lives and the board silently rolls back
-to the other slot.
+Between PR #280 and 2026-09-06, any build carrying the second-core render
+executor wedged the ProCpu inside a fenced flash op on this board as soon as
+flash work came in bursts: `POST /api/assets` died after 60–70 KB of a 728 KB
+archive, 5/5. Root-caused and fixed here the same day (interrupts stay masked
+on the fencing core until past the fence release, plus one shared
+sequential-storage cache so a save is ~930 fenced reads instead of 81,143 —
+docs/firmware.md "Cores & tasks"). `tools/deploy.sh <ip>` works again;
+the single-core-build workaround is gone.
 
-Working around it while the issue is open:
-
-- `tools/deploy.sh <ip>` (firmware **and** assets) cannot complete here. The
-  firmware OTA half is fine; only the asset install wedges.
-- To install assets, put a single-core build on a slot first — master
-  `731ce81` or earlier builds for `board-athom-music` — push the bundle
-  (17 s, reliable), then OTA the build you actually want.
-- `EXTRA_FEATURES=flashmap-off` does **not** help; the flash mapping is not
-  the variable.
-- After any write-heavy step, read `slot` **and** `core1.last` from
-  `/api/status`: `reset` of `SysRtcWdt` with `bb[1] == 3` and
-  `bb[3] - bb[7] == 1` is this wedge (ProCpu inside the flash op holding the
-  fence). `fence_timeouts` stays 0 through it — it is not a park-ack timeout.
+**What to check after any write-heavy session**, because this class of bug
+is silent: read `slot` **and** `core1.last` from `/api/status`. A `reset` of
+`SysRtcWdt` with `bb[3] - bb[7] == 1` means a fence was taken and never
+released, i.e. a fresh wedge — `bb[1]` says where (3 = in the fenced window,
+6 = inside esp-storage and the ROM SPI1 routine, 7 = the op returned) and
+`bb[8]` says which call site held it (`core1::tag` order: 0 other,
+1/2/3 asset erase/write/read, 4/5 ota erase/write, 6/7/8 store
+read/erase/write, 9/10 raw erase/write, 11 flash map). `fence_timeouts`
+stays 0 through a wedge of this class — it is not a park-ack timeout.
+`core1.fences` is `[begun, completed]` live, so the fence cost of any
+operation is a before/after delta.
 
 **An interrupted asset install looks installed.** The archive TOC is written
 early, so after the reboot `/api/status` says `assets_mapped:true`, every

@@ -264,8 +264,8 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(multi_core)]
     {
         core1::boot_blackbox();
-        let rtc = core1::arm_watchdog(p.RTC_TIMER);
-        spawner.spawn(core1::watchdog_task(rtc).unwrap());
+        core1::arm_watchdog(p.RTC_TIMER);
+        spawner.spawn(core1::watchdog_task().unwrap());
     }
 
     println!(

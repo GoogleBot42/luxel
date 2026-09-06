@@ -84,11 +84,27 @@ pub fn booted_slot() -> &'static str {
 /// Borrow the flash driver briefly (reads, or writes outside an OTA).
 /// Returns None while an OTA holds the driver.
 pub fn with_flash<T>(f: impl FnOnce(&mut FlashStorage<'static>) -> T) -> Option<T> {
+    with_flash_as(crate::core1::tag::OTHER, f)
+}
+
+/// [with_flash], attributing the fence it takes to a call site
+/// (`core1::tag`) so `/api/status` can report the per-writer fence rate —
+/// the variable that predicts the #292 wedge.
+pub fn with_flash_as<T>(tag: usize, f: impl FnOnce(&mut FlashStorage<'static>) -> T) -> Option<T> {
     // The flash fence (dual-core: park the other core for the op) sits
     // OUTSIDE the critical section on purpose — its spin-waits must run
     // with interrupts enabled so the other core can park us in turn. See
     // core1.rs.
-    crate::core1::fenced(|| FLASH.lock(|c| c.borrow_mut().as_mut().map(f)))
+    crate::core1::fenced_as(tag, || {
+        FLASH.lock(|c| {
+            c.borrow_mut().as_mut().map(|fl| {
+                crate::core1::bb_phase(6);
+                let r = f(fl);
+                crate::core1::bb_phase(7);
+                r
+            })
+        })
+    })
 }
 
 /// Take the flash driver out for a self-contained multi-op transaction (the
@@ -523,7 +539,7 @@ impl OtaWriter {
         // via with_flash, byte-for-byte the assets writer's shape
         let mut s = self.erased_end.max(at & !(SECTOR - 1));
         while s < end {
-            let ok = with_flash(|f| {
+            let ok = with_flash_as(crate::core1::tag::OTA_ERASE, |f| {
                 embedded_storage::nor_flash::NorFlash::erase(f, s, s + SECTOR).is_ok()
             })
             .unwrap_or(false);
@@ -536,7 +552,7 @@ impl OtaWriter {
         }
         let whole = chunk.len() & !3;
         if whole > 0 {
-            let ok = with_flash(|f| {
+            let ok = with_flash_as(crate::core1::tag::OTA_WRITE, |f| {
                 embedded_storage::nor_flash::NorFlash::write(f, at, &chunk[..whole]).is_ok()
             })
             .unwrap_or(false);
@@ -547,7 +563,7 @@ impl OtaWriter {
         if whole < chunk.len() {
             let mut tail = [0xFFu8; 4];
             tail[..chunk.len() - whole].copy_from_slice(&chunk[whole..]);
-            let ok = with_flash(|f| {
+            let ok = with_flash_as(crate::core1::tag::OTA_WRITE, |f| {
                 embedded_storage::nor_flash::NorFlash::write(f, at + whole as u32, &tail).is_ok()
             })
             .unwrap_or(false);

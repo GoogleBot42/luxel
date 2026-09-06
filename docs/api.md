@@ -89,6 +89,30 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
   entered · `3` FIN sent · `4` discard done · `5` flush done · `9` abort. A slot
   parked at 3–5 is wedged on a client that won't close.
 - `vmerr` — last VM error string, or `null`.
+- `core1` — dual-core boards only (`esp32`, `esp32s3`); `null` elsewhere.
+  The second core and the cross-core flash fence (docs/firmware.md
+  "Cores & tasks"):
+  `{"stack":[used,total],"fence_timeouts":0,"fence_wait_us":68,`
+  `"fences":[begun,completed],"last":{"reset":"…","bb":[…]}}`.
+  - `stack` — AppCpu stack high-water / allocated, bytes.
+  - `fence_timeouts` — park requests the other core did not acknowledge
+    within 100 ms (the flash op proceeded anyway). **Must stay 0.**
+  - `fence_wait_us` — longest park wait seen, the render-side cost of one
+    flash op.
+  - `fences` — `[begun, completed]` this boot. A difference of 1 in
+    `last.bb` is a fence that was taken and never released; live, the delta
+    around an operation is its fence cost (Gitea #292).
+  - `last` — the PREVIOUS run, from a black box in RTC memory that survives
+    a reset: `reset` is the reset reason (`SysRtcWdt` = the RTC watchdog
+    caught a wedge) and `bb` is
+    `[magic, ProCpu phase, AppCpu phase, fences begun, ProCpu parks,
+    AppCpu parks, park-ack timeouts, fences completed, call-site tag,
+    AppCpu park count at the last fence]`. Phases: 0 idle, 1 waiting for
+    the fence lock, 2 waiting for the park ack, 3 inside the fenced window,
+    4 waiting for the release ack, 6 inside esp-storage/the ROM SPI1
+    routine, 7 that call returned. Call-site tags: 0 other, 1/2/3 asset
+    erase/write/read, 4/5 OTA erase/write, 6/7/8 pattern-store
+    read/erase/write, 9/10 raw-region erase/write, 11 flash map.
 
 `GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`
 (always 2048), `slot` (always `"native"`), `version`, `heap_free` (0 unless

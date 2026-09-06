@@ -377,6 +377,15 @@ fn status_json() -> String {
             push_u32(&mut out, timeouts);
             push_piece(&mut out, ",\"fence_wait_us\":");
             push_u32(&mut out, wait_us);
+            // live fence counters: [begun, completed] this run, then the
+            // per-call-site breakdown (core1::tag order) — the fence RATE
+            // and whose it is (Gitea #292).
+            let (begun, done) = crate::core1::live_counters();
+            push_piece(&mut out, ",\"fences\":[");
+            push_u32(&mut out, begun);
+            push_piece(&mut out, ",");
+            push_u32(&mut out, done);
+            push_piece(&mut out, "]");
             // previous run's reset reason + fence black box (core1.rs)
             let (reason, bb) = crate::core1::last_run();
             push_piece(&mut out, ",\"last\":{\"reset\":\"");
