@@ -1,5 +1,29 @@
 # Update log
 
+## 2026-09-06 — reflect: Xtensa-shaped code is not free on the host (#312)
+
+Three things #312's op-body pass learned the hard way, now in
+`.claude/rules/vm-bytecode.md` so the next engine change doesn't re-derive
+them:
+
+- **"Xtensa is the target that matters" does not license host slowdowns in
+  `luxel-core`** — the wasm playground renders every browser preview from
+  the same code. A rewrite that is only a win because the target lacks a
+  64-bit ALU (a 32-bit restoring loop replacing one wide divide) cost −31 %
+  on x86 for a `dist`-heavy pattern. The fix is the `NARROW_WORD` pattern in
+  `fmath.rs`: a `cfg!()` **value**, both forms compiled everywhere, and host
+  tests asserting `narrow == wide == reference` three ways — which is what
+  keeps the device's path proven by a host `cargo test`.
+- **`#[inline(never)]` on a shared arm body to shrink the dispatch loop is a
+  trap.** It only moves bytes out of `Vm::run`; the arms come out the same
+  length or longer, and the host pays ~20 % on array-heavy patterns.
+- **Host `luxel bench` on this box has 6–19 % run-to-run spread.** Median-of-3
+  invented three double-digit "regressions" that vanished on re-measurement.
+  Interleave the binaries, ≥ 200 frames, best of 5–11, and treat ±3 % as noise.
+
+`docs/boards.md` gets the #323 whole-fleet size row (every board −7.5 KB;
+the classic-ESP32 boards 3.26 % → 3.99 % OTA margin).
+
 ## 2026-09-06 — Op bodies: every 64-bit ROM libcall out of the render path (#312)
 
 The sibling pass on #312 fixed the *dispatch*; this one is the other half of the

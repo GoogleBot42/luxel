@@ -92,6 +92,38 @@ paths:
   and −2.3 % faster on the S3. Xtensa is the target that matters for engine
   work; use the host only for fast iteration, and never land or reject a
   dispatch change on a host number alone.
+- **…but "the host" includes the wasm PLAYGROUND, so a device win that
+  costs the host is a user-visible regression, not a free trade.** The rule
+  above is about *dispatch* shape, where the host number is just noise. It
+  does NOT license arbitrary host slowdowns in `luxel-core`: the same code
+  renders every preview in the browser. #312's first fmath cut replaced one
+  wide machine divide with a 16-step 32-bit loop — right on Xtensa, where
+  the wide form is a ROM `__divdi3` call, and **−31 % on x86** for a
+  `dist`-heavy pattern. When a rewrite is only a win because the target
+  lacks a 64-bit ALU, keep BOTH forms and select on the `NARROW_WORD`
+  pattern in `fmath.rs`:
+  `const NARROW_WORD: bool = cfg!(any(target_arch = "xtensa", target_arch =
+  "riscv32"));` then `if NARROW_WORD { narrow(..) } else { wide(..) }`.
+  A `cfg!()` **value**, never `#[cfg]` on the definitions — that keeps both
+  forms compiled and type-checked on every target, so a host `cargo test`
+  can assert `narrow == wide == reference` three ways and prove the
+  device's path bit-exact. It const-folds: the Xtensa output is
+  byte-identical to the ungated version. Leave a narrowing UNconditional
+  only when it is neutral-or-better on both (i32 intermediates that were
+  never 64-bit-wide anyway); gating those too doubles the code for noise.
+- **`#[inline(never)]` on a shared arm body to shrink the dispatch loop is
+  a trap.** It reads like the right lever and #312 measured it as a pure
+  loss: `index_read` marked `#[inline(never)]` left the three indexing arms
+  the same length or two instructions LONGER on Xtensa (it only moved bytes
+  out of `Vm::run`) while costing the host ~20 % on array-heavy patterns.
+  Only pull a body out of line if the ARM count drops, not just the
+  function size.
+- **Host `luxel bench` on this box has 6–19 % run-to-run spread.** A single
+  run, or even median-of-3, will invent double-digit regressions that
+  vanish on re-measurement (#312 chased three of them). Interleave the two
+  binaries inside the loop, use ≥ 200 frames, and take the BEST of 5–11
+  rounds — throughput noise only ever costs time, so the max is the least
+  biased estimator. Treat anything inside ±3 % as noise.
 - **`Value`'s payload widths decide the discriminant's width, and that is
   hot.** With any `u16` payload rustc lays the tag out as a `u16`, so every
   `match` on a `Value` — including the `Option<Value>` niche test left by
@@ -99,6 +131,16 @@ paths:
   no 32-bit immediate, so the mask is a literal-pool LOAD that register
   pressure re-issues at every use. Keep every `Value` payload 32-bit
   (#312: −12.5 % cycles/op, `Vm::run` −1.5 KB).
+- **64-bit arithmetic in `fixed.rs`/`fmath.rs` is a ROM call, and the ROM
+  call is invisible in the source.** Xtensa has a 32×32→64 widening
+  multiply (`mull`+`muluh`) and a 32-bit divide, and nothing wider: an
+  `i64`/`i128` divide — including a *constant* divisor, which on any 64-bit
+  host is a free magic-multiply — becomes `l32r` + `callx8` to
+  `__udivdi3`/`__divdi3`/`__umoddi3`/`__multi3` at `0x4000xxxx`. #312 found
+  141 such sites in `luxel-core` and removed 93 of them; `fmath` alone was
+  19 × `__udivdi3` + 22 × `__divdi3`. Audit any new fixed-point code with
+  `xtensa-esp32s3-elf-objdump -d … | grep -E "__(u?div|u?mod|mul)di3"` and
+  narrow to 32 bits with the bound proved in a comment.
 - Per-instruction bookkeeping in FIELDS of `Vm` is expensive out of all
   proportion to its instruction count: `fuel` (load/compare/decrement/store)
   and `insn_start` (a store) together cost ~7 cycles of a ~94-cycle op on the

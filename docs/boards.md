@@ -475,6 +475,34 @@ over it at 3.27 %/3.26 %. `.stack` unchanged (46,572 B on the Seengreat,
 worst frames are still the picoserve response future and the embassy main
 task, not anything in the VM.
 
+2026-09-06, **the #312 op-body work takes another ~7.5 KB off every board**
+(PR #323). Not the dispatch this time but what each instruction *does*:
+`fmath`'s transcendentals rewritten from `i64`/`i128` to 32-bit widening
+multiplies, `time()`'s scaled divide moved into 32-bit registers, and
+`builtin_fast`'s argument array passed by value. That removed 93 of the 141
+ROM 64-bit libcall sites in `luxel-core` — `fmath` alone went from 19 ×
+`__udivdi3` + 22 × `__divdi3` to zero — which is where most of the bytes
+came from (`fmath` 3,248 → 2,102 Xtensa instructions, `Vm::run` 5,446 →
+5,111, `Vm::call_builtin` 7,742 → 6,951). Devshell builds, same
+`creds.env` both sides, `origin/master` 96f9833 vs the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 961,712 | 953,232 | −8,480 | 95,344 B (9.09 %) |
+| `board-pixelblaze-v3` | 1,014,352 | 1,006,688 | −7,664 | 41,888 B (3.99 %) |
+| `board-athom-music` | 1,014,448 | 1,006,784 | −7,664 | 41,792 B (3.98 %) |
+| `board-esp32-generic` | 1,014,160 | 1,006,496 | −7,664 | 42,080 B (4.01 %) |
+| `board-s3-devkit` | 956,592 | 949,040 | −7,552 | 99,536 B (9.49 %) |
+| `board-seengreat-hub75` | 949,184 | 941,632 | −7,552 | 106,944 B (10.19 %) |
+| `board-c6-devkit` (not shipped) | 1,023,728 | 1,020,800 | −2,928 | 27,776 B (2.64 %) |
+| `board-c6-devkit` + `hosted-ui` | 1,007,168 | 1,004,256 | −2,912 | 44,320 B (4.22 %) |
+
+The three classic-ESP32 boards move from just over `image-check.sh`'s 3 %
+floor to just under 4 %; the C6's un-shipped full-UI build is still below
+the floor (#291), improved by 0.28 pp. `.stack` and the largest frames are
+byte-identical to master on both the default board and the panel
+(25,484 B / 46,572 B), and `tools/ci.sh` is green.
+
 
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
