@@ -46,6 +46,14 @@ fi
 # still being linked, so the image ships the very code the mode exists to
 # remove and the measured saving quietly evaporates. Assert both directions.
 ABSENT_MARKERS=()
+if [[ " ${EXPECT_FEATURES:-} " != *" hosted-ui "* ]]; then
+  # The cache-MMU mapping of the assets partition (src/flashmap.rs, Gitea
+  # #259): its absence would silently put every asset response back on the
+  # flash-controller path. hosted-ui images map nothing, hence the guard.
+  MARKERS+=(
+    "flashmap: assets |the assets flash mapping (src/assets.rs map_region) is not linked — assets would stream via flash-controller reads"
+  )
+fi
 if [[ " ${EXPECT_FEATURES:-} " == *" hosted-ui "* ]]; then
   MARKERS+=(
     "assets: hosted-ui build|this is not a hosted-ui image (src/assets.rs init) — the wrong feature set was built"

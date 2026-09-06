@@ -1,5 +1,82 @@
 # Update log
 
+## 2026-09-05 — Flash memory-mapping through the cache MMU (assets first, the VM next; #259/#260)
+
+Jeremy's decision for #260: the pattern engine will execute a fixed-width
+instruction stream *directly out of flash* through the cache/MMU, so a
+loaded pattern costs ~zero heap for its code and constants — decoding into
+RAM was overruled. esp-hal exposes no mapping API; this is the facility,
+designed per chip and landed with one consumer wired end-to-end.
+
+**Design: docs/research/flash-mmap.md.** Every chip's MMU page table is a
+register block the bootloader fills with the app's own pages and otherwise
+leaves invalid: the classic ESP32's DPORT tables (one per core, 64 DROM0
+entries, the app uses 3), the S3/C3's shared I/D table at `0x600C5000`
+(512/128 entries, the app uses 16/14), the C6's indexed `SPI_MEM0` item
+registers (256 entries, page size from a register, the app uses 15). A
+4 MiB flash needs 64; we map 15 (assets) now and ≤16 more (the pattern
+store's raw half) next. The whole thing is register pokes mirrored from
+esp-idf's `mmu_ll.h` and esp-storage's private `mmu.rs`, plus ROM cache
+maintenance (`Cache_Flush_rom` on the ESP32 — also what Espressif's QEMU
+needs to re-sync a page; suspend/resume + `Cache_Invalidate_Addr`
+elsewhere). No esp-hal patch. The doc works through the SPI0/SPI1
+contention rule (a mapped read is a cache miss; none may happen during an
+esp-storage op on another core — the second-core branch's flash fence
+already gives that; the one thing it must add is routing `flashmap`'s
+table ops through the fence, #272), WiFi (esp-radio never touches flash
+at runtime), OTA (the slot is never mapped), writes under a mapping
+(invalidate before reading back), the store changes the VM needs (a
+page-aligned code arena in `storage`'s raw half; library chunks are not
+contiguous), and the RAM accounting from the heapstat model (Infinite
+Snake: 7.7 KB blob + most of 12.4 KB program off the device; Main Stage:
+18.5 KB + most of 28.5 KB).
+
+**Facility: `firmware/src/flashmap.rs`** — `map(offset, len) ->
+Result<Mapped, Error>` (page-aligned offset, first-fit run of invalid
+entries above the app's), `unmap`, `invalidate`/`invalidate_slice`,
+`Mapped::bytes`/`leak`. Per-chip `chip` modules behind the existing chip
+features; the programming functions are `#[esp_hal::ram]` with inlined
+table accessors because the S3/C3/C6 sequence suspends the caches. A
+`flashmap-off` cargo feature makes `map` fail so every consumer's
+read_nor path can be forced.
+
+**Consumer: the web assets partition.** `assets::map_region` maps
+`0x310000+0xF0000` at boot (after `ota::init` and the takeover check),
+reads the first 4 KiB both ways and refuses the mapping on any
+disagreement, then leaks it; `init()` parses the TOC through it;
+`FlashAsset::write_content` hands the socket 4 KiB slices of the mapping
+with a `yield_now` between them — no staging Vec, no critical section per
+chunk, and the 1 ms `Timer::after` that existed only to give WiFi
+airtime between cache-off windows is gone from that path;
+`AssetWriter::commit` invalidates the region before re-parsing.
+`/api/status` gains `assets_mapped`; `tools/image-check.sh` asserts the
+mapping is linked into every non-hosted image.
+
+**Verified without hardware** (the S3 was soaking, the Athom in use —
+nothing here touched a device): all six boards plus `c6-devkit +
+hosted-ui` and `athom-music + flashmap-off` build; stack-check clean on
+pixelblaze-v3 / s3-devkit / c6-devkit (`.stack` 26,732 B on the PB,
+−48 B); credless flake images **shrink** — C6 1,000,512 → 999,120 B
+(margin 49,456 B / 4.72 %), PB v3 979,312 → 976,592 B, Athom 979,152 →
+976,928 B (docs/boards.md); `tools/ci.sh` green. **QEMU proves the
+ESP32 path**: new `tools/qemu/flashmap-test.py` (in `run-all.py`, needs
+no dumps — espflash's merged image + a synthetic LUX2 archive) sees
+`flashmap: assets 0x310000+0xf0000 -> 0x3f430000 (15 x 64 KiB pages from
+entry 3), self-check ok` — entry 3 is exactly the app's three DROM pages
+— and `assets: 2 files installed` parsed through the mapping. The same
+line shows up in boot 2 of the takeover test over WLED's littlefs
+(real data, self-check ok). The three takeover tests fail on a pristine
+`origin/master` build identically (a boot-1 pin-import marker that never
+appears — #273, pre-existing).
+
+**Follow-ups filed:** #271 hardware bring-up (Athom then the Seengreat
+S3: the serial line to expect per chip, `assets_mapped`, re-measuring
+#259's 2.1 s / 31–62 s bundle download, upload-while-serving, OTA with
+assets, soak), #272 the fence hook for the second-core branch, #273 the
+stale takeover assertion. The VM consumer contract (who maps, who
+invalidates, what the engine may do with the slice) is written down in
+the doc's "The VM consumer" section for the parallel #260 format work.
+
 ## 2026-09-05 — Engine: per-pixel performance pass 2a — hot builtins in the loop, batched pixel pass (#260)
 
 Two structural costs pass 1 left alone, both device-free to fix:
@@ -32,6 +109,7 @@ executed directly from a memory-mapped flash region (Jeremy's decision
 2026-09-05 — RAM is the constraint; design + facility in progress on
 agent/luxel/flash-mmap), superinstructions on top of that format (#261),
 and the two-core pixel split once the core-1 executor (#259) has landed.
+
 
 ## 2026-09-05 — Engine: per-pixel rendering performance, pass 1 (#260)
 

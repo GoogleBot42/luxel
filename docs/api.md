@@ -48,8 +48,8 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 ```json
 {"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,
  "pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
- "heap_free":104832,"live":null,"src":true,"bc":true,"web":[0,1,0],
- "vmerr":null}
+ "heap_free":104832,"live":null,"assets_mapped":true,"src":true,"bc":true,
+ "web":[0,1,0],"vmerr":null}
 ```
 
 - `frame_us` / `vm_us` / `pipe_us` / `out_us` — per-stage frame timing, the
@@ -66,6 +66,11 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 - `heap_free` — bytes, `esp_alloc::HEAP.free()`.
 - `live` — `"ddp"` / `"e131"` while a live pixel stream is driving the strip,
   else `null`.
+- `assets_mapped` — `true` when the web assets partition is memory-mapped
+  through the cache MMU (docs/firmware.md "Flash-mapped regions") and asset
+  bodies are served straight from it; `false` means the boot-time mapping
+  failed its self-check, the image was built with `flashmap-off`, or it is a
+  hosted-ui build — assets (if any) then stream via flash-controller reads.
 - `src` / `bc` — whether the running pattern's source / bytecode are still
   readable back (`GET /api/pattern`); `false` means a flash write shed the copy.
 - `web` — per-HTTP-slot lifecycle stage, one entry per connection slot

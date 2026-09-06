@@ -371,6 +371,15 @@ fn status_json() -> String {
         }
         None => push_piece(&mut out, "null"),
     }
+    // The assets partition is served through the cache MMU (flashmap.rs);
+    // false = the boot-time mapping failed its self-check or was built out
+    // (`flashmap-off`) and assets stream via flash-controller reads.
+    #[cfg(not(feature = "hosted-ui"))]
+    let assets_mapped = crate::assets::mapped().is_some();
+    #[cfg(feature = "hosted-ui")]
+    let assets_mapped = false;
+    push_piece(&mut out, ",\"assets_mapped\":");
+    push_piece(&mut out, if assets_mapped { "true" } else { "false" });
     push_piece(&mut out, ",\"src\":");
     push_piece(&mut out, if src { "true" } else { "false" });
     push_piece(&mut out, ",\"bc\":");
@@ -426,11 +435,27 @@ impl picoserve::response::Content for FlashAsset {
     }
 
     async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
-        // Each esp-storage flash read briefly disables the cache and starves
+        // Mapped region (flashmap.rs): the body is a slice of cached flash,
+        // handed to the socket straight from the mapping — no staging
+        // buffer, no flash-controller op, no critical section. 4 KiB
+        // slices with a yield between them keep the pool slot cooperative
+        // with the other web tasks and the render loop (#259).
+        if let Some(all) = crate::assets::mapped() {
+            let start = (self.0.offset - crate::assets::REGION_START) as usize;
+            if let Some(body) = all.get(start..start + self.0.len as usize) {
+                for slice in body.chunks(4096) {
+                    writer.write_all(slice).await?;
+                    embassy_futures::yield_now().await;
+                }
+                return Ok(());
+            }
+        }
+        // Flash-controller path (no mapping, or `flashmap-off`): each
+        // esp-storage flash read runs in a critical section and starves
         // WiFi/the executor. yield_now wasn't enough for multi-chunk files
         // (the second write_all hung): a real Timer::after cedes wall-clock
         // time so the WiFi task actually runs between flash reads. 4 KiB
-        // chunks keep each cache-off window short.
+        // chunks keep each window short.
         let mut buf = alloc::vec![0u8; 4096];
         let mut at = 0u32;
         while at < self.0.len {

@@ -60,6 +60,81 @@ pub struct AssetEntry {
 static TOC: BlockingMutex<CriticalSectionRawMutex, RefCell<Vec<AssetEntry>>> =
     BlockingMutex::new(RefCell::new(Vec::new()));
 
+/// The whole region memory-mapped through the cache MMU (flashmap.rs) —
+/// `(base, len)` of a `&'static [u8]`, or base 0 when the mapping failed or
+/// was refused at boot. Set once by [map_region] before any task runs.
+#[cfg(not(feature = "hosted-ui"))]
+static MAP_BASE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+#[cfg(not(feature = "hosted-ui"))]
+static MAP_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The mapped assets region, if the boot-time mapping succeeded. Reads
+/// through it are plain loads — no flash-controller op, no critical
+/// section, no WiFi starvation (UPDATES.md 2026-07-06, Gitea #259).
+#[cfg(not(feature = "hosted-ui"))]
+pub fn mapped() -> Option<&'static [u8]> {
+    use core::sync::atomic::Ordering;
+    let base = MAP_BASE.load(Ordering::Acquire);
+    if base == 0 {
+        return None;
+    }
+    let len = MAP_LEN.load(Ordering::Acquire);
+    // SAFETY: base/len come from a flashmap::Mapped that was leaked (never
+    // unmapped) in map_region.
+    Some(unsafe { core::slice::from_raw_parts(base as *const u8, len) })
+}
+
+/// Map the assets partition read-only into the data bus (flashmap.rs) and
+/// prove it: the first sector is read both ways and must agree. Runs once
+/// at boot, after `ota::init` (the read_nor half needs the flash driver)
+/// and before [init] (which parses the TOC through the mapping when it
+/// exists). A failed or mismatching mapping is logged and dropped — every
+/// reader then takes the read_nor path it always had, so `flashmap-off`
+/// and a chip where mapping misbehaves both degrade to today's behaviour.
+#[cfg(not(feature = "hosted-ui"))]
+pub fn map_region() {
+    use core::sync::atomic::Ordering;
+    let m = match crate::flashmap::map(REGION_START, REGION_LEN) {
+        Ok(m) => m,
+        Err(e) => {
+            println!("flashmap: assets not mapped ({:?}) — flash-controller reads", e);
+            return;
+        }
+    };
+    // Self-check: the first 4 KiB via the flash controller vs via the
+    // cache. Any disagreement means the MMU entry does not present the
+    // page we asked for (wrong table, wrong page arithmetic, an emulator
+    // that does not model the cache) — refuse the mapping rather than
+    // serve garbage.
+    const CHECK: usize = 4096;
+    let mut via_nor = alloc::vec![0u8; CHECK];
+    let ok = read_chunk(REGION_START, &mut via_nor) && via_nor[..] == m.bytes()[..CHECK];
+    drop(via_nor);
+    if !ok {
+        println!(
+            "flashmap: assets self-check FAILED at 0x{:x} — unmapping, flash-controller reads",
+            m.vaddr()
+        );
+        crate::flashmap::unmap(m);
+        return;
+    }
+    println!(
+        "flashmap: assets 0x{:x}+0x{:x} -> 0x{:x} ({} x {} KiB pages from entry {}), self-check ok",
+        m.phys(),
+        REGION_LEN,
+        m.vaddr(),
+        m.pages(),
+        crate::flashmap::page_size() / 1024,
+        m.first_entry()
+    );
+    let bytes = m.leak();
+    MAP_LEN.store(bytes.len(), Ordering::Release);
+    MAP_BASE.store(bytes.as_ptr() as usize, Ordering::Release);
+}
+
+#[cfg(feature = "hosted-ui")]
+pub fn map_region() {}
+
 #[cfg(not(feature = "hosted-ui"))]
 pub fn lookup(path: &str) -> Option<AssetEntry> {
     TOC.lock(|c| c.borrow().iter().find(|e| e.path == path).cloned())
@@ -103,6 +178,24 @@ pub fn init() {
 /// an asset upload.
 #[cfg(not(feature = "hosted-ui"))]
 pub fn init() {
+    // Through the mapping when there is one (a few dozen plain loads),
+    // else the read_nor path (a few dozen flash-controller ops).
+    let mapped = mapped();
+    let read_chunk = |at: u32, buf: &mut [u8]| -> bool {
+        match mapped {
+            Some(m) => {
+                let s = (at - REGION_START) as usize;
+                match m.get(s..s + buf.len()) {
+                    Some(src) => {
+                        buf.copy_from_slice(src);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            None => read_chunk(at, buf),
+        }
+    };
     let mut header = [0u8; 8];
     let magic = read_chunk(REGION_START, &mut header);
     let has_etag = &header[0..4] == b"LUX2";
@@ -247,6 +340,13 @@ impl AssetWriter {
     pub fn commit(self) -> Result<u32, &'static str> {
         if self.written != self.expected {
             return Err("incomplete archive; not installing");
+        }
+        // The writes above went through the flash controller; cache lines
+        // holding the OLD archive are still valid as far as the cache
+        // knows. Drop them before anything (init's parse included) reads
+        // the region through the mapping.
+        if let Some(m) = mapped() {
+            crate::flashmap::invalidate_slice(m);
         }
         init();
         if count() == 0 {
