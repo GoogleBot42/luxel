@@ -356,7 +356,8 @@ impl Engine {
                 Fx::ZERO,
             ]);
         }
-        self.set_map(2, &coords);
+        // in place: the grid IS the buffer — no second 48 KB copy (Gitea #275)
+        self.set_map_vec(2, coords);
     }
 
     /// Turn this engine into a *map program* runner: [`run_map`] executes its
@@ -545,31 +546,53 @@ impl Engine {
     /// Coordinates normalize per-axis into world units 0..1 (exclusive —
     /// quantized to u16/65536 like PB's map binary). Render selection
     /// re-picks by map dimensionality.
-    pub fn set_map(&mut self, dims: u8, raw: &[[Fx; 3]]) {
+    ///
+    /// Returns `false` — and leaves the engine's map untouched — when the
+    /// per-pixel buffer cannot be allocated. At 4096 px a map is 48 KB, and
+    /// a new engine is built while the outgoing pattern still holds its
+    /// heap: an infallible `vec!` here panicked (reboot) on every pattern
+    /// swap after a heavy pattern on the 64x64 panel (Gitea #275).
+    pub fn set_map(&mut self, dims: u8, raw: &[[Fx; 3]]) -> bool {
         let n = (self.pixel_count as usize).min(raw.len());
-        let mut coords = alloc::vec![[Fx::ZERO; 3]; n];
+        let mut coords: Vec<[Fx; 3]> = Vec::new();
+        if coords.try_reserve_exact(n).is_err() {
+            return false;
+        }
+        coords.extend_from_slice(&raw[..n]);
+        self.set_map_vec(dims, coords)
+    }
+
+    /// [`set_map`] for a caller that already owns the buffer: normalizes in
+    /// place, so installing a map costs one per-pixel allocation instead of
+    /// two (the raw copy plus the normalized one). This is what the default
+    /// grid map uses. Never allocates; always returns `true`.
+    pub fn set_map_vec(&mut self, dims: u8, mut coords: Vec<[Fx; 3]>) -> bool {
+        let n = (self.pixel_count as usize).min(coords.len());
+        coords.truncate(n);
+        // grid detection wants the raw (pattern-unit) coordinates
+        self.grid = crate::outpipe::detect_grid(dims, &coords);
         for axis in 0..(dims as usize).min(3) {
             let mut min = i64::MAX;
             let mut max = i64::MIN;
-            for c in raw[..n].iter() {
+            for c in coords.iter() {
                 min = min.min(c[axis].raw() as i64);
                 max = max.max(c[axis].raw() as i64);
             }
             let span = max - min;
-            for (i, c) in raw[..n].iter().enumerate() {
+            for c in coords.iter_mut() {
                 let v = if span == 0 {
                     0
                 } else {
                     ((c[axis].raw() as i64 - min) * 65_535 + span / 2) / span
                 };
-                coords[i][axis] = Fx::from_raw(v as i32);
+                c[axis] = Fx::from_raw(v as i32);
             }
         }
-        self.grid = crate::outpipe::detect_grid(dims, &raw[..n]);
         self.vm.map = Some(MapData { dims, coords });
         if !self.requires_violated {
             self.render = self.resolve_render_now();
         }
+        true
     }
 
     /// [`resolve_render`] against the current map dims and global values.

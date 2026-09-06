@@ -484,7 +484,7 @@ pub unsafe extern "C" fn lx_set_map(h: i32, dims: u32, ptr: *const i32, count: u
                 ]
             })
             .collect();
-        s.engine.set_map(dims, &coords);
+        s.engine.set_map_vec(dims, coords);
     });
 }
 
@@ -504,7 +504,7 @@ pub extern "C" fn lx_set_map_grid(h: i32, w: u32, grid_h: u32) {
                 ]
             })
             .collect();
-        s.engine.set_map(2, &coords);
+        s.engine.set_map_vec(2, coords);
     });
 }
 

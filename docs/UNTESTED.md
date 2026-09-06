@@ -101,7 +101,9 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   bright point, then raise Settings → Output → Blur and Glow. It should
   soften into a round halo in both axes with no smear along the wiring and
   no bright/dark seam at the row folds. Unit-tested only — the kernels are
-  exact on the host, but nobody has watched them on a panel.
+  exact on the host, but nobody has watched them on a panel. Blocked as of
+  2026-09-05 even with the panel on the bench: a 64x64 map cannot be
+  installed on the device yet (Gitea #258) — do this once #258 lands.
 - [ ] **The hosted console reaching a device over https** (Gitea #162,
   needs a HEADFUL browser — no agent can do this one): open
   `https://googlebot42.github.io/luxel/?device=http://<device-host>` in

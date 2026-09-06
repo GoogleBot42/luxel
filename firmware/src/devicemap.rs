@@ -55,7 +55,9 @@ pub fn mark_dirty() {
 pub fn apply(engine: &mut Engine) {
     MAP.lock(|c| {
         if let Some(m) = c.borrow().as_ref() {
-            engine.set_map(m.dims, &m.coords);
+            if !engine.set_map(m.dims, &m.coords) {
+                println!("map: not applied — out of memory for {} px (pattern runs 1D)", m.coords.len());
+            }
         }
     });
 }

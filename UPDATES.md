@@ -1,5 +1,72 @@
 # Update log
 
+## 2026-09-05 — Seengreat HUB75 S3 on metal: first S3, first panel (Gitea #75)
+
+The Seengreat RGB Matrix HUB75 S3 and its 64x64 panel arrived and were
+brought up in one evening. This is the first ESP32-S3 and the first HUB75
+panel Luxel has run on real hardware; everything S3-side had been
+"builds, untested" since #56.
+
+**Bring-up.** Panel driver IC read as FM6124EJ (plain shift-register, so
+esp-hub75 works as-is). The stock XiaoZhi 2.2.6 firmware was dumped in
+full (16 MB, two sha256-identical reads) before the first flash — a
+WLED-style OTA takeover path is #256. Flashed over the S3's native
+USB-Serial/JTAG (303a:1001, `/dev/ttyACM0` once passed into the
+container); the first boot needed Jeremy's EN press because espflash's
+reset cannot leave download mode with BOOT held. WiFi, OTA baseline
+(ota_0 → ota_1 and back), the on-device web app and the panel all worked
+first time — Jeremy confirmed all 64 rows and correct colours, so the
+vendor-wiki pin map transcription is verified.
+
+**What the panel taught us (all ticketed, numbers in docs/boards.md
+"First light"):**
+
+- **Opening the USB port from the host resets the chip** — the S3's
+  USB-Serial/JTAG treats the open's DTR/RTS toggle as a reset request, so
+  there is no passive serial tap; a reader loop reboots the board on every
+  reopen (it did, for a few minutes, before this was understood). The
+  upside is a free remote reset for a hung board, which the soak harness
+  now uses (`HW_BENCH_RESET_CMD`).
+- **Per-pixel cost is the ceiling at 4096 px**: rainbow 18 fps, the 2D
+  snake game 4 fps, an EMPTY `render` 56 fps (18 ms/frame of overhead
+  outside the VM). #260 (profile → interpreter fast paths → host-side AOT →
+  second core).
+- **The render loop starves the web server** at this frame time: the 228 KB
+  playground bundle takes 2 s from the Athom and 31–62 s from the panel.
+  #259; `hosted-ui` is the practical variant for this board meanwhile.
+- **No 2D map by default for patterns with a 1D fallback**, and a 64x64
+  map can neither be POSTed (4 KB request buffers) nor afforded (48 KB
+  per-pixel storage on a ~46 KB heap). #258 — the fix is a procedural grid.
+- **E1.31 multicast joins fail past group 4** on the S3 (`GroupTableFull`),
+  so 21 of a 4096-px board's 25 universes are dead over multicast. #257.
+- Occasional tearing on some patterns — swap atomicity to verify, #269.
+- The board's other peripherals (thumb-wheel, RTC, microSD, audio out,
+  PSRAM, I2C header, panel chaining) are #249–#255; the mics were #142.
+
+**The soak found a real bug (#275, fixed here).** The first hw-bench run
+crash-looped three times and then went unreachable for four minutes.
+Reproduced with a serial reader attached: `memory allocation of 49152 bytes failed` inside
+`Engine::set_map`, called from the pattern swap. At 4096 px the default
+ceil(√n) grid map that 2D-only patterns get is 48 KB; the map installer
+copied it into a SECOND 48 KB buffer with an infallible `vec!`, while the
+outgoing pattern still held its heap (25 KB free after a heavy one) →
+panic → reboot, and the boot guard's slot flips on top. `set_map` is now
+fallible (`try_reserve_exact`, returns `bool`, the engine stays on 1D
+fallback and the firmware logs it), and a new in-place `set_map_vec`
+normalises an owned buffer so the default grid costs one allocation, not
+two. Regression test in `crates/luxel-core/tests/engine.rs`. Verified on
+the panel: the same two pushes now end in a clean "pattern too large for
+this device — it left only 9 KB of heap free" with the board still
+serving. The four-minute "hang" turned out to be #259 at its extreme —
+a pattern at 1–2 fps makes `/api/status` take 11 s, so every client
+timeout reads the board as dead while serial shows it rendering.
+
+**Tooling.** `tools/hw-bench.mjs` no longer dies when the device does: an
+unreachable device after a push is a `crashed` row, it waits for the
+reboot (or runs the reset command), the report is written even if the
+restore phase fails, and `HW_BENCH_FROM` resumes a run. The soak report
+for this board is `docs/bench-report-seengreat-hub75.md`.
+
 ## 2026-09-02 — CI: the test gate runs on Gitea now
 
 Gitea #233. Until today nothing ran the test suite except a human

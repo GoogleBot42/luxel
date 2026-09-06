@@ -38,8 +38,20 @@ memory (athom-flash-rig.md / jeremy-ha-broker.md memory files) and in
   ota-push.sh are the normal (non-recovery) path to it, and unlike the dev
   unit it has remote power control (see the athom-rig skill) so its
   up/down state is more controllable.
+- **Seengreat HUB75 S3 + 64x64 panel** — 192.168.0.238, DHCP hostname
+  `luxel-f6b0a8`, `BOARD=board-seengreat-hub75` (an S3: `ota-push.sh`'s
+  default ELF path is the classic-ESP32 one, so pass the image explicitly:
+  `espflash save-image --chip esp32s3 firmware/target/xtensa-esp32s3-none-elf/release/luxel-fw x.bin && tools/ota-push.sh 192.168.0.238 x.bin`).
+  Its USB is the S3's native USB-Serial/JTAG at `/dev/ttyACM0` — **opening
+  that port from the host RESETS the board** (docs/boards.md "First light"),
+  so never leave a serial reader loop on it; use `/api/status` polling
+  instead. The flip side is a REMOTE RESET for a hung board with no Jeremy
+  action: `timeout 3 socat -u /dev/ttyACM0,raw,echo=0 STDOUT` (verified
+  2026-09-05 on a 4-minute hard hang; `doas chmod 666 /dev/ttyACM0` first
+  if the node came back 660). tools/hw-bench.mjs takes it as
+  `HW_BENCH_RESET_CMD`. Physical EN/BOOT presses are Jeremy's.
 
-**Autonomy**: OTA / live-coding / soak testing on both devices above is
+**Autonomy**: OTA / live-coding / soak testing on the devices above is
 pre-authorized per CLAUDE.md — no need to ask before pushing.
 
 ## 3. Gotchas
