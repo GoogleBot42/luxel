@@ -342,6 +342,16 @@ fn status_json() -> String {
     // device even if the one-shot /api/config probe at connect failed.
     let mut out = String::from("{\"fps\":");
     push_u32(&mut out, fps);
+    // per-stage frame timing, average µs per rendered pattern frame over the
+    // last second (Gitea #260) — see shared::FRAME_US for what each covers
+    push_piece(&mut out, ",\"frame_us\":");
+    push_u32(&mut out, crate::shared::FRAME_US.load(Ordering::Relaxed));
+    push_piece(&mut out, ",\"vm_us\":");
+    push_u32(&mut out, crate::shared::VM_US.load(Ordering::Relaxed));
+    push_piece(&mut out, ",\"pipe_us\":");
+    push_u32(&mut out, crate::shared::PIPE_US.load(Ordering::Relaxed));
+    push_piece(&mut out, ",\"out_us\":");
+    push_u32(&mut out, crate::shared::OUT_US.load(Ordering::Relaxed));
     push_piece(&mut out, ",\"pixels\":");
     push_u32(&mut out, pixels);
     push_piece(&mut out, ",\"max_pixels\":");

@@ -256,6 +256,19 @@ impl Div for Fx {
         if rhs.0 == 0 {
             return Fx::ZERO;
         }
+        // Xtensa/RISC-V have a hardware 32-bit divide but no 64-bit one: the
+        // i64 form below is a ROM/libgcc call (~100+ cycles on an ESP32) and
+        // `index / pixelCount` runs once per pixel. Two exact 32-bit
+        // shortcuts cover the common shapes; both wrap like the i64 form
+        // (wrapping_div: MIN / -1 == MIN, the same word the i64 path yields).
+        if rhs.0 & FRAC_MASK == 0 {
+            // integer divisor: (a·2^16) / (B·2^16) == a / B exactly
+            return Fx(self.0.wrapping_div(rhs.0 >> FRAC_BITS));
+        }
+        if self.0 as i16 as i32 == self.0 {
+            // small dividend (|a| < 0.5): a << 16 fits in i32
+            return Fx((self.0 << FRAC_BITS).wrapping_div(rhs.0));
+        }
         Fx((((self.0 as i64) << FRAC_BITS) / rhs.0 as i64) as i32)
     }
 }
@@ -515,6 +528,50 @@ mod tests {
         assert_eq!(Fx::from_int(5) & Fx::from_int(3), Fx::from_int(1));
     }
 
+    /// Gitea #260: the two 32-bit shortcuts in `Div` (integer divisor,
+    /// small dividend) must be bit-exact with the i64 form, edges included.
+    #[test]
+    fn division_fast_paths_match_the_i64_form() {
+        fn reference(a: i32, b: i32) -> i32 {
+            if b == 0 {
+                return 0;
+            }
+            (((a as i64) << FRAC_BITS) / b as i64) as i32
+        }
+        let edges: [i32; 14] = [
+            0,
+            1,
+            -1,
+            0x7FFF,
+            0x8000,
+            -0x8000,
+            -0x8001,
+            0xFFFF,
+            0x10000,
+            -0x10000,
+            0x30000,
+            -0x30000,
+            i32::MAX,
+            i32::MIN,
+        ];
+        let mut seed = 0x9E37_79B9u32;
+        let mut vals: alloc::vec::Vec<i32> = edges.to_vec();
+        for _ in 0..400 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            vals.push(seed as i32);
+            vals.push((seed >> 16) as i32 - 0x8000); // small dividends
+            vals.push(((seed >> 20) as i32) << 16); // integer divisors
+        }
+        for &a in &vals {
+            for &b in &vals {
+                assert_eq!(
+                    (Fx::from_raw(a) / Fx::from_raw(b)).raw(),
+                    reference(a, b),
+                    "{a} / {b}"
+                );
+            }
+        }
+    }
     #[test]
     fn division() {
         assert_eq!(Fx::from_int(1) / Fx::from_int(2), fx(0.5));

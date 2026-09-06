@@ -1,5 +1,66 @@
 # Update log
 
+## 2026-09-05 — Engine: per-pixel rendering performance, pass 1 (#260)
+
+Jeremy's ask after the HUB75 panel's first evening: 4096 px at 18 fps for
+the default rainbow (~3,200 cycles per pixel on a 240 MHz S3) and 4 fps
+for the 2D snake. This is the interpreter-level pass — measure first, no
+code generation; the second-core work runs in parallel (#259).
+
+**What the S3 image told us before touching anything.** The
+disassembly has no local 64-bit division at all: every `i64 /` is a call
+into the mask ROM's libgcc (`__divdi3` at 0x4000225c and friends), and
+rainbow was doing four of them per pixel — `index / pixelCount`
+(`Fx::div`), the 1D `x` coordinate the engine computed for a
+`render(index)` that never reads it, and two inside `time()`
+(`time_ms % period`, `(t << 16) / period`). Multiplies are fine
+(`mull` + `muluh`, the S3 has MUL32_HIGH).
+
+**Changes, all bit-exact with the old arithmetic** (new tests pin each
+one against the 64-bit form, edges included):
+
+- `Fx::div`: two 32-bit shortcuts — integer divisor (`a / B` exactly) and
+  small dividend (`|a| < 0.5`, `a << 16` fits) — hit the hardware `quos`;
+  the i64 form stays for the rest.
+- `time()`: u32 remainder/divide while the period is ≤ 65536 ms (every
+  interval ≤ 1.0) and the clock is under 49 days.
+- The 1D pixel coordinate uses a u32 divide below 32768 px and is not
+  computed at all for a one-parameter `render(index)`.
+- `quantize` and `hsv_to_rgb` lose their i64 intermediates (they fit i32).
+- The dispatch loop is now two-level: function, code slice, locals base
+  and pc live in locals for the whole frame and the frame's `pc` is
+  written back only before a call and at a debug stop, instead of
+  `frames.last_mut().pc = …` plus re-deriving `prog.fns[..]`/the slice on
+  every instruction. Builtin/user-call args are popped into a
+  caller-provided buffer (the by-value 128-byte return was measurably
+  worse on the host).
+- Firmware: luxel-core is compiled at **opt-level 3** inside the
+  opt-level-"s" image on boards whose OTA margin allows it (`CORE_O3` in
+  board-target.sh, `coreO3` in flake.nix; the C6 keeps "s" — +20 KB would
+  cross the 3 % floor). docs/boards.md has the measured sizes.
+- Firmware: **per-stage frame timers** in `/api/status` — `frame_us`,
+  `vm_us`, `pipe_us`, `out_us` (average µs per pattern frame over the
+  last second; docs/firmware.md), reported by tools/hw-bench.mjs. The
+  empty-render floor measured in #260 (18 ms/frame outside the VM) needs
+  this split before anyone touches the HUB75 compose. `set_pixels` copies
+  the frame in one memcpy instead of a 3-byte extend per pixel.
+
+**Host (x86, `luxel bench`, 4096 px, pixels/s)** — the only numbers
+available while the panel was busy soaking; the on-device table follows
+once it is free:
+
+| pattern | before | after |
+|---|---:|---:|
+| rainbow | 21.3 M | 26.2 M (+23 %) |
+| snake (1D) | 7.6 M | 11.8 M (+55 %) |
+| snake-2d, bare strip | 7.5 M | 11.0 M (+46 %) |
+| snake-2d, 64×64 map | 5.4 M | 7.1 M (+32 %) |
+
+The Xtensa gain should be larger than the host's: the ROM divides and the
+opt-level switch don't exist on x86. Superinstructions / per-frame
+hoisting are the next interpreter-level step if the panel numbers still
+fall short (Gitea #261); AOT/JIT stays the last resort.
+
 ## 2026-09-02 — CI: the test gate runs on Gitea now
 
 Gitea #233. Until today nothing ran the test suite except a human

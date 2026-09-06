@@ -266,8 +266,16 @@ impl Engine {
         vm.pixel_state_commit();
 
         vm.pixel_count = pixel_count;
-        let before = if violated { None } else { prog.exported_fn("beforeRender") };
-        let render_tgt = if violated { [None; 3] } else { render_targets(&prog) };
+        let before = if violated {
+            None
+        } else {
+            prog.exported_fn("beforeRender")
+        };
+        let render_tgt = if violated {
+            [None; 3]
+        } else {
+            render_targets(&prog)
+        };
         let render = resolve_render(&render_tgt, &vm.globals, 0);
 
         let mut controls = Vec::new();
@@ -400,7 +408,10 @@ impl Engine {
     /// The collected map: dimensionality (2 or 3) and one coordinate per pixel
     /// (pattern units — the consumer's [`set_map`] normalizes them).
     pub fn map(&self) -> (u8, &[[Fx; 3]]) {
-        (if self.map_dims == 0 { 2 } else { self.map_dims }, &self.map_coords)
+        (
+            if self.map_dims == 0 { 2 } else { self.map_dims },
+            &self.map_coords,
+        )
     }
 
     // ---- debugger ----
@@ -1010,12 +1021,14 @@ impl Engine {
 
     fn render_args(&self, render: RenderKind, i: u32) -> (u16, [Value; 4], usize) {
         let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
-        let p = self.vm.pixel_coords(i, [mid; 3]);
-        // transforms apply to 2D/3D coordinates (1D x: unverifiable on our
-        // oracle — its installed map can never be removed; keeping 1D raw)
+                                         // transforms apply to 2D/3D coordinates (1D x: unverifiable on our
+                                         // oracle — its installed map can never be removed; keeping 1D raw)
         let p = match render {
-            RenderKind::R1(_) => p,
-            _ => self.vm.apply_transform(p),
+            // a plain render(index) never reads x: skip the per-pixel
+            // coordinate divide (it is a ROM call on Xtensa) entirely
+            RenderKind::R1(f) if self.prog.fns[f as usize].params < 2 => [mid; 3],
+            RenderKind::R1(_) => self.vm.pixel_coords(i, [mid; 3]),
+            _ => self.vm.apply_transform(self.vm.pixel_coords(i, [mid; 3])),
         };
         let args = [
             Value::Num(Fx::from_int(i as i32)),
@@ -1071,9 +1084,12 @@ impl Engine {
         let k = fx_to_256(self.vm.post_blur) / 2;
         if k > 0 {
             match &grid {
-                Some(g) => {
-                    crate::outpipe::blur_frame_grid(&mut self.pixels, g, k, self.vm.post_blur_passes)
-                }
+                Some(g) => crate::outpipe::blur_frame_grid(
+                    &mut self.pixels,
+                    g,
+                    k,
+                    self.vm.post_blur_passes,
+                ),
                 None => crate::outpipe::blur_frame(&mut self.pixels, k, self.vm.post_blur_passes),
             }
         }
@@ -1087,7 +1103,11 @@ impl Engine {
         self.ensure_gamma_lut();
         if let Some(lut) = self.gamma_lut.as_deref() {
             for px in self.pixels.iter_mut() {
-                *px = [lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize]];
+                *px = [
+                    lut[px[0] as usize],
+                    lut[px[1] as usize],
+                    lut[px[2] as usize],
+                ];
             }
         }
     }
@@ -1146,11 +1166,7 @@ impl Engine {
 /// anything). Runtime errors that aren't asserts return None — "would
 /// error" is not "declares itself incompatible", and hosts must not badge
 /// patterns for OOMs caused by the pre-flight's own tighter budget.
-pub fn check_asserts(
-    prog: &Program,
-    pixel_count: u32,
-    array_byte_budget: usize,
-) -> Option<String> {
+pub fn check_asserts(prog: &Program, pixel_count: u32, array_byte_budget: usize) -> Option<String> {
     if prog.assert_msgs.is_empty() {
         return None;
     }
@@ -1167,7 +1183,8 @@ pub fn check_asserts(
 /// 0.5 → 127, 1−ε → 254). We used to round to nearest; floor makes whole
 /// frames diff bit-identical against previewFrame captures.
 fn quantize(v: Fx) -> u8 {
-    ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255) >> 16) as u8
+    // raw ≤ 65536 so the product fits i32: no 64-bit arithmetic per channel
+    ((v.clamp(Fx::ZERO, Fx::ONE).raw() * 255) >> 16) as u8
 }
 
 /// A post-process amount (Fx 0..1) as the 0..256 integer weight the

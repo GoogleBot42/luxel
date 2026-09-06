@@ -104,8 +104,12 @@ fn time_scale_scales_the_pattern_clock() {
     assert_eq!(n.time_ms(), 0);
 
     // >1 speeds up, and the call returns the previous scale
-    let mut f = Engine::new(&format!("export var prev\n{COUNTER}\nprev = timeScale(3)"), 1, 1)
-        .unwrap();
+    let mut f = Engine::new(
+        &format!("export var prev\n{COUNTER}\nprev = timeScale(3)"),
+        1,
+        1,
+    )
+    .unwrap();
     f.frame(Fx::from_int(10));
     assert_eq!(f.time_ms(), 30);
     assert_eq!(num(&f, "prev"), 1.0);
@@ -170,8 +174,8 @@ fn set_frame_rate_caps_pattern_evaluation() {
 
     // capping is real-time, so it survives a frozen clock (an interactive
     // pattern with timeScale(0) keeps being evaluated)
-    let mut frozen = Engine::new(&format!("timeScale(0)\nsetFrameRate(50)\n{COUNTER}"), 1, 1)
-        .unwrap();
+    let mut frozen =
+        Engine::new(&format!("timeScale(0)\nsetFrameRate(50)\n{COUNTER}"), 1, 1).unwrap();
     for _ in 0..5 {
         frozen.frame(Fx::from_int(10));
     }
@@ -217,7 +221,11 @@ fn assert_gates_the_pattern() {
     );
     assert!(bad.requires_violated());
     assert_eq!(bad.var("before"), Some(Value::Num(Fx::ONE)));
-    assert_eq!(bad.var("after"), Some(Value::Num(Fx::ZERO)), "init must stop at the assert");
+    assert_eq!(
+        bad.var("after"),
+        Some(Value::Num(Fx::ZERO)),
+        "init must stop at the assert"
+    );
     let frame = bad.frame(Fx::ZERO).to_vec();
     assert!(frame.iter().all(|px| *px == [0, 0, 0]), "must render black");
 
@@ -225,20 +233,22 @@ fn assert_gates_the_pattern() {
     let src2 = "assert(pixelCount % 2 == 0)\nexport function render(i) { hsv(0,0,1) }";
     let mut odd = Engine::new(src2, 7, 1).unwrap();
     let err = odd.take_error().expect("odd count must fail");
-    assert!(err.message.contains("pixelCount % 2 == 0"), "{}", err.message);
-    // and the message survives the wire format's LEAN decode (devices)
-    let blob = luxel_core::bytecode::serialize(
-        &luxel_core::compile::compile(src2).unwrap(),
-    )
-    .unwrap();
-    let mut e = Engine::from_program(
-        luxel_core::bytecode::deserialize_lean(&blob).unwrap(),
-        7,
-        1,
+    assert!(
+        err.message.contains("pixelCount % 2 == 0"),
+        "{}",
+        err.message
     );
+    // and the message survives the wire format's LEAN decode (devices)
+    let blob =
+        luxel_core::bytecode::serialize(&luxel_core::compile::compile(src2).unwrap()).unwrap();
+    let mut e = Engine::from_program(luxel_core::bytecode::deserialize_lean(&blob).unwrap(), 7, 1);
     let err = e.take_error().expect("invariant survives lean decode");
     assert!(err.is_assert);
-    assert!(err.message.contains("pixelCount % 2 == 0"), "{}", err.message);
+    assert!(
+        err.message.contains("pixelCount % 2 == 0"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -254,7 +264,11 @@ fn assert_sees_vars_and_functions() {
     let mut bad = Engine::new(src, 300, 1).unwrap();
     let err = bad.take_error().expect("must fail at 300");
     assert!(err.is_assert);
-    assert!(err.message.contains("width must be a whole number"), "{}", err.message);
+    assert!(
+        err.message.contains("width must be a whole number"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -524,12 +538,7 @@ fn map_program_collects_2d_coords() {
 
 #[test]
 fn map_program_3d_when_plot_has_three_args() {
-    let mut e = Engine::new(
-        "export function render(index) { plot(index, 0, 1) }",
-        3,
-        1,
-    )
-    .unwrap();
+    let mut e = Engine::new("export function render(index) { plot(index, 0, 1) }", 3, 1).unwrap();
     e.enable_map_mode();
     e.run_map();
     let (dims, coords) = e.map();
@@ -812,7 +821,11 @@ fn array_budget_pb_boundaries() {
     };
     let over = |src: &str| {
         let e = Engine::new(src, 1, 1).unwrap();
-        let m = &e.last_error.as_ref().expect("expected budget error").message;
+        let m = &e
+            .last_error
+            .as_ref()
+            .expect("expected budget error")
+            .message;
         assert!(m.contains("array element budget"), "{src}: {m}");
     };
     // largest single array a real PB accepts is 10,232
@@ -838,7 +851,11 @@ fn per_frame_allocation_exhausts_like_pb() {
     }
     assert_eq!(e.var("frames"), Some(Value::Num(Fx::from_int(98))));
     let err = e.take_error().expect("budget error recorded");
-    assert!(err.message.contains("array element budget"), "{}", err.message);
+    assert!(
+        err.message.contains("array element budget"),
+        "{}",
+        err.message
+    );
 }
 
 // ---- zero-length arrays and the arena slot vector (Gitea #124) ----
@@ -866,13 +883,23 @@ fn array0_in_a_tight_loop_cannot_grow_the_arena_unboundedly() {
     let mut e = Engine::new(src, 1, 1).unwrap();
     e.frame(Fx::from_int(10));
     let (slots, elems, bytes) = e.arena_stats();
-    assert_eq!(slots, ARENA_SLOT_CAP, "arena slot vector must stop at the cap");
+    assert_eq!(
+        slots, ARENA_SLOT_CAP,
+        "arena slot vector must stop at the cap"
+    );
     assert_eq!(elems, ARENA_SLOT_CAP * luxel_core::vm::ARRAY_HEADER_UNITS);
     assert!(bytes <= 128 * 1024, "arena bytes unbounded: {bytes}");
     // the loop aborted at the cap, not after all 10,000 iterations
-    assert_eq!(e.var("n"), Some(Value::Num(Fx::from_int(ARENA_SLOT_CAP as i32))));
+    assert_eq!(
+        e.var("n"),
+        Some(Value::Num(Fx::from_int(ARENA_SLOT_CAP as i32)))
+    );
     let err = e.take_error().expect("budget error recorded");
-    assert!(err.message.contains("array element budget"), "{}", err.message);
+    assert!(
+        err.message.contains("array element budget"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -887,7 +914,11 @@ fn array0_per_frame_stops_growing_the_arena() {
     }
     assert_eq!(e.arena_stats().0, ARENA_SLOT_CAP);
     let err = e.take_error().expect("budget error recorded");
-    assert!(err.message.contains("array element budget"), "{}", err.message);
+    assert!(
+        err.message.contains("array element budget"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -947,7 +978,10 @@ fn cow_promotion_within_budget_charges_the_delta() {
     e.frame(Fx::from_int(10));
     assert!(e.last_error.is_none(), "{:?}", e.last_error);
     let promoted = e.arena_stats().2;
-    assert!(promoted > at_init, "the owned copy must join the byte ledger");
+    assert!(
+        promoted > at_init,
+        "the owned copy must join the byte ledger"
+    );
     assert_eq!(e.var("v"), Some(Value::Num(Fx::from_int(5))));
 
     // an exactly-sufficient budget behaves identically
@@ -968,13 +1002,24 @@ fn cow_promotion_at_the_budget_edge_errors_instead_of_overshooting() {
     // one byte short of what materializing the copy needs
     let budget = promoted - 1;
     let mut e = cow_engine(budget);
-    assert_eq!(e.arena_stats().2, at_init, "the const entry itself still fits");
+    assert_eq!(
+        e.arena_stats().2,
+        at_init,
+        "the const entry itself still fits"
+    );
     let px0 = e.frame(Fx::from_int(10))[0];
     let err = e.take_error().expect("the refused promotion is reported");
-    assert!(err.message.contains("array memory budget"), "{}", err.message);
+    assert!(
+        err.message.contains("array memory budget"),
+        "{}",
+        err.message
+    );
     // the ledger stayed inside its cap — the bug was a silent overshoot
     let bytes = e.arena_stats().2;
-    assert!(bytes <= budget, "byte ledger overshot the budget: {bytes} > {budget}");
+    assert!(
+        bytes <= budget,
+        "byte ledger overshot the budget: {bytes} > {budget}"
+    );
     assert_eq!(bytes, at_init, "a refused promotion charges nothing");
     // the write never landed, and the blast radius is PB-shaped (#84): the
     // handler invocation aborts, the pixel pass still runs
@@ -1010,7 +1055,11 @@ fn set_palette_live_aliases_the_array() {
     let px = e.frame(Fx::from_int(10));
     assert_eq!(px[0], [255, 0, 0], "initial palette is red");
     let px = e.frame(Fx::from_int(10));
-    assert_eq!(px[0], [0, 0, 255], "in-place writes turn it blue, no re-call");
+    assert_eq!(
+        px[0],
+        [0, 0, 255],
+        "in-place writes turn it blue, no re-call"
+    );
     assert!(e.last_error.is_none());
 }
 
@@ -1160,9 +1209,17 @@ fn pixel_state_channels_grow_on_demand_and_keep_existing_values() {
     e.frame(Fx::from_int(10));
     assert_eq!(e.pixel_state_bytes(), 3 * 1 * 4 * 2, "one channel");
     e.frame(Fx::from_int(10));
-    assert_eq!(e.pixel_state_bytes(), 3 * 3 * 4 * 2, "grown to channels 0..2");
+    assert_eq!(
+        e.pixel_state_bytes(),
+        3 * 3 * 4 * 2,
+        "grown to channels 0..2"
+    );
     e.frame(Fx::from_int(10));
-    assert_eq!(e.var("c0"), Some(Value::Num(Fx::from_int(7))), "channel 0 survives growth");
+    assert_eq!(
+        e.var("c0"),
+        Some(Value::Num(Fx::from_int(7))),
+        "channel 0 survives growth"
+    );
     assert_eq!(e.var("c1"), Some(Value::Num(Fx::from_int(9))));
     assert!(e.last_error.is_none(), "{:?}", e.last_error);
 }
@@ -1179,15 +1236,31 @@ fn pixel_state_out_of_range_index_is_harmless_but_bad_channel_errors() {
     e.frame(Fx::from_int(10));
     assert_eq!(e.var("lo"), Some(Value::Num(Fx::ZERO)));
     assert_eq!(e.var("hi"), Some(Value::Num(Fx::ZERO)));
-    assert_eq!(e.var("ret"), Some(Value::Num(Fx::from_int(3))), "returns v like an assignment");
+    assert_eq!(
+        e.var("ret"),
+        Some(Value::Num(Fx::from_int(3))),
+        "returns v like an assignment"
+    );
     assert!(e.last_error.is_none(), "{:?}", e.last_error);
 
-    let mut bad = Engine::new("export function render(index) { setPixelState(0, 4, 1) }", 2, 1)
-        .unwrap();
+    let mut bad = Engine::new(
+        "export function render(index) { setPixelState(0, 4, 1) }",
+        2,
+        1,
+    )
+    .unwrap();
     bad.frame(Fx::from_int(10));
-    let msg = bad.last_error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+    let msg = bad
+        .last_error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
     assert!(msg.contains("channel 4 out of range"), "{msg}");
-    assert_eq!(bad.pixel_state_bytes(), 0, "a rejected channel allocates nothing");
+    assert_eq!(
+        bad.pixel_state_bytes(),
+        0,
+        "a rejected channel allocates nothing"
+    );
 }
 
 #[test]
@@ -1198,7 +1271,11 @@ fn pixel_state_respects_the_device_byte_budget() {
     let prog = luxel_core::compile::compile(src).unwrap();
     let mut e = Engine::from_program_budgeted(prog, 2048, 1, 4 * 1024);
     e.frame(Fx::from_int(10));
-    let msg = e.last_error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+    let msg = e
+        .last_error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
     assert!(msg.contains("budget"), "{msg}");
     assert_eq!(e.pixel_state_bytes(), 0);
 
@@ -1207,4 +1284,82 @@ fn pixel_state_respects_the_device_byte_budget() {
     ok.frame(Fx::from_int(10));
     assert!(ok.last_error.is_none(), "{:?}", ok.last_error);
     assert_eq!(ok.pixel_state_bytes(), 16 * 1024);
+}
+
+// ---- Gitea #260: 32-bit fast paths must be bit-exact with the 64-bit forms ----
+
+/// `time()`'s u32 shortcut (period ≤ 65536, clock < 2^32 ms) against the
+/// u64 formula, on both sides of each boundary.
+#[test]
+fn time_fast_path_matches_the_u64_form() {
+    let src = "export var a\nexport var b\n\
+               export function beforeRender(delta) { a = time(.1)\n b = time(2) }\n\
+               export function render(i) { rgb(0, 0, 0) }";
+    let mut e = Engine::new(src, 1, 1).unwrap();
+    // interval .1 → literal raw 6552 → period 6552 ms (fast path);
+    // interval 2 → period 131072 ms (> 65536: u64 path)
+    for ms in [
+        0u64,
+        1,
+        6551,
+        6552,
+        100_000,
+        131_071,
+        u32::MAX as u64,
+        1 << 33,
+        (1 << 33) + 4321,
+    ] {
+        e.set_time_ms(ms);
+        e.frame(Fx::ZERO);
+        let Some(Value::Num(a)) = e.var("a") else {
+            panic!()
+        };
+        let Some(Value::Num(b)) = e.var("b") else {
+            panic!()
+        };
+        assert_eq!(
+            a.raw(),
+            (((ms % 6552) << 16) / 6552) as i32,
+            "time(.1) at {ms} ms"
+        );
+        assert_eq!(
+            b.raw(),
+            (((ms % 131_072) << 16) / 131_072) as i32,
+            "time(2) at {ms} ms"
+        );
+    }
+}
+
+/// The 1D coordinate handed to `render(index, x)`: the u32 divide below
+/// 32768 pixels and the i64 one above it agree with the reference formula,
+/// and a plain `render(index)` (coordinate skipped) renders identically.
+#[test]
+fn pixel_x_fast_path_matches_the_i64_form() {
+    for n in [1u32, 4, 4096, 40_000] {
+        let mut e = Engine::new(
+            "export var got\nexport function render(index, x) { got = x\n rgb(x, 0, 0) }",
+            n,
+            1,
+        )
+        .unwrap();
+        let px = e.frame(Fx::ZERO).to_vec();
+        for (i, p) in px.iter().enumerate() {
+            let x = Fx::from_raw((((i as i64) << 16) / n as i64) as i32);
+            let want = ((x.raw() as i64 * 255) >> 16) as u8;
+            assert_eq!(p[0], want, "pixel {i} of {n}");
+        }
+        let last = n as usize - 1;
+        let x = Fx::from_raw((((last as i64) << 16) / n as i64) as i32);
+        assert_eq!(e.var("got"), Some(Value::Num(x)));
+    }
+    // one-parameter render: the coordinate is never computed, and the
+    // frame is byte-identical to the same body reading nothing
+    let mut a = Engine::new(RAINBOW, 300, 1).unwrap();
+    let mut b = Engine::new(
+        "export function render(index, x) {\n  hsv(time(.1) + index / pixelCount, 1, 1)\n}",
+        300,
+        1,
+    )
+    .unwrap();
+    assert_eq!(a.frame(Fx::from_int(17)), b.frame(Fx::from_int(17)));
 }

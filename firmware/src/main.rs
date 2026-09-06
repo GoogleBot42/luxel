@@ -908,6 +908,16 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     let mut pins = gpio::PinHost::new();
     let mut last = Instant::now();
     let mut frames: u32 = 0;
+    // Per-stage frame timing (Gitea #260): µs accumulated over the current
+    // one-second window, averaged into shared::{FRAME,VM,PIPE,OUT}_US on the
+    // same tick that publishes FPS. `timed_frames` is the divisor and is NOT
+    // `frames` — the latter counts every loop iteration (live input, idle
+    // with no engine); only the pattern branch below is instrumented.
+    let mut timed_frames: u32 = 0;
+    let mut frame_sum: u64 = 0;
+    let mut vm_sum: u64 = 0;
+    let mut pipe_sum: u64 = 0;
+    let mut out_sum: u64 = 0;
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
     let mut sensor_seen: u32 = 0;
@@ -1213,6 +1223,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             pins.sync(engine.as_mut().unwrap());
             // read before the frame borrow: `grid` is a Copy descriptor
             let grid = engine.as_ref().and_then(|e| e.grid());
+            let vm_t0 = Instant::now();
             let frame: &[[u8; 3]] = if prev.is_some() && t < 65536 {
                 // copy the incoming frame, then blend the outgoing on top
                 blend_buf.clear();
@@ -1226,10 +1237,20 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                 prev = None; // fade finished
                 engine.as_mut().unwrap().frame(delta)
             };
+            let pipe_t0 = Instant::now();
             set_pixels(frame);
             let b5 = out_brightness();
             let wire = apply_outpipe(frame, &mut pipe_buf, &mut gamma_cache, &mut pal_cache, b5, grid);
+            let out_t0 = Instant::now();
             out.write_frame(wire, b5);
+            // stage timing — three Instant reads and four integer adds; no
+            // formatting, allocation or float work on the hot path
+            let out_t1 = Instant::now();
+            vm_sum += (pipe_t0 - vm_t0).as_micros();
+            pipe_sum += (out_t0 - pipe_t0).as_micros();
+            out_sum += (out_t1 - out_t0).as_micros();
+            frame_sum += (out_t1 - now).as_micros();
+            timed_frames += 1;
             if let Some(e) = engine.as_mut().unwrap().take_error() {
                 // report each distinct error site once, not per frame — an
                 // erroring pattern at 120 fps floods serial and churns the
@@ -1261,7 +1282,20 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
         frames += 1;
         if (Instant::now() - fps_mark).as_millis() >= 1000 {
             FPS.store(frames, Ordering::Relaxed);
+            // averages over the window; 0 when no pattern frame ran (live
+            // input drove the strip, or there is no engine)
+            let n = timed_frames as u64;
+            let avg = |sum: u64| if n == 0 { 0 } else { (sum / n) as u32 };
+            shared::FRAME_US.store(avg(frame_sum), Ordering::Relaxed);
+            shared::VM_US.store(avg(vm_sum), Ordering::Relaxed);
+            shared::PIPE_US.store(avg(pipe_sum), Ordering::Relaxed);
+            shared::OUT_US.store(avg(out_sum), Ordering::Relaxed);
             frames = 0;
+            timed_frames = 0;
+            frame_sum = 0;
+            vm_sum = 0;
+            pipe_sum = 0;
+            out_sum = 0;
             fps_mark = Instant::now();
         }
         if (Instant::now() - vars_mark).as_millis() >= 250 {

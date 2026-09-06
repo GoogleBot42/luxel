@@ -44,6 +44,14 @@ async function api(path, body) {
   }
 }
 
+/** Per-stage frame timing from /api/status, as a compact console field.
+ *  Empty string on firmware that predates the counters (Gitea #260) or on
+ *  the native mirror, which does not report them. */
+const stages = (st) =>
+  st.frame_us === undefined
+    ? ""
+    : `[${st.frame_us}µs vm ${st.vm_us} pipe ${st.pipe_us} out ${st.out_us}]`;
+
 const gallery = JSON.parse(fs.readFileSync("web/public/gallery.json", "utf8"));
 const rainbow = fs.readFileSync("library/rainbow.js", "utf8");
 const status0 = await api("/api/status");
@@ -70,9 +78,23 @@ for (const p of gallery) {
   }
   await sleep(DWELL_MS);
   const st = await api("/api/status");
-  rows.push({ name: p.name, kind: p.kind, fps: st.fps, heap: st.heap_free, vmerr: st.vmerr });
+  rows.push({
+    name: p.name,
+    kind: p.kind,
+    fps: st.fps,
+    heap: st.heap_free,
+    vmerr: st.vmerr,
+    // per-stage frame timing (µs/frame), firmware ≥ the /api/status
+    // frame_us field — undefined on older firmware and on the mirror
+    frame_us: st.frame_us,
+    vm_us: st.vm_us,
+    pipe_us: st.pipe_us,
+    out_us: st.out_us,
+  });
   const flag = st.vmerr ? `VMERR ${st.vmerr}` : st.fps < 30 ? "SLOW" : "";
-  console.log(`${String(i).padStart(3)}/${gallery.length} ${String(st.fps).padStart(3)} fps  ${p.name} ${flag}`);
+  console.log(
+    `${String(i).padStart(3)}/${gallery.length} ${String(st.fps).padStart(3)} fps ${stages(st)} ${p.name} ${flag}`,
+  );
 }
 
 // fps vs pixel count with the reference pattern
@@ -140,8 +162,16 @@ if (slow.length) {
 }
 lines.push(`## All results`);
 lines.push("");
-lines.push(`| pattern | kind | fps |`);
-lines.push(`|---|---|---:|`);
-for (const r of rows) lines.push(`| ${r.name} | ${r.kind} | ${r.fail ? "—" : r.fps} |`);
+// the µs columns only exist on firmware that reports the per-stage timers
+const timed = rows.some((r) => r.frame_us !== undefined);
+const us = (v) => (v === undefined ? "—" : v);
+lines.push(timed ? `| pattern | kind | fps | frame µs | vm µs | pipe µs | out µs |` : `| pattern | kind | fps |`);
+lines.push(timed ? `|---|---|---:|---:|---:|---:|---:|` : `|---|---|---:|`);
+for (const r of rows) {
+  const head = `| ${r.name} | ${r.kind} | ${r.fail ? "—" : r.fps} |`;
+  lines.push(
+    timed ? `${head} ${us(r.frame_us)} | ${us(r.vm_us)} | ${us(r.pipe_us)} | ${us(r.out_us)} |` : head,
+  );
+}
 fs.writeFileSync(OUT, lines.join("\n") + "\n");
 console.log(`wrote ${OUT}: ${ok.length} ok, ${errs.length} errors, ${slow.length} slow`);
