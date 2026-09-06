@@ -920,6 +920,14 @@ impl Engine {
                             self.run_stage = None;
                             return;
                         };
+                        if !self.debug_enabled && !self.is_map {
+                            // the common case: no debugger, a color frame —
+                            // run every remaining pixel in one tight loop
+                            // instead of one trip through this state machine
+                            // per pixel (Gitea #260)
+                            self.render_pixels(render, i);
+                            return;
+                        }
                         self.vm.pixel = [Fx::ZERO; 3];
                         self.vm.pixel_written = false;
                         self.vm.plot_coord = [Fx::ZERO; 3];
@@ -1003,6 +1011,35 @@ impl Engine {
                 },
             }
         }
+    }
+
+    /// The per-pixel pass without the resumable state machine: same
+    /// semantics as [`drive`]'s `Pixel` stage (first error wins, fatal errors
+    /// blank the rest of the frame, non-fatal ones keep the pre-error color),
+    /// minus the per-pixel outcome plumbing. Only for non-debug, non-map runs.
+    fn render_pixels(&mut self, render: RenderKind, from: u32) {
+        for i in from..self.pixel_count {
+            self.vm.pixel = [Fx::ZERO; 3];
+            self.vm.pixel_written = false;
+            let (fn_idx, args, argc) = self.render_args(render, i);
+            if let Err(e) = self.vm.start(&self.prog, fn_idx, &args[..argc], false) {
+                let fatal = e.is_assert || e.is_resource_guard();
+                if self.last_error.is_none() || fatal {
+                    self.last_error = Some(e);
+                }
+                if fatal {
+                    for p in i as usize..self.pixel_count as usize {
+                        self.pixels[p] = [0; 3];
+                    }
+                    self.run_stage = None;
+                    return;
+                }
+            }
+            let [r, g, b] = self.vm.pixel;
+            self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+        }
+        self.post_chain();
+        self.finish_frame();
     }
 
     /// A frame ran to completion (not a fatal-error blank, not a debug

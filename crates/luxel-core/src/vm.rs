@@ -618,6 +618,8 @@ const CONST_ENTRY_COST: usize = 32;
 const MAX_DEPTH: usize = 48;
 const MAX_STACK: usize = 1024;
 const MAX_ARGS: usize = 16;
+/// Arg slots for the in-loop builtin fast path (the hot builtins take ≤ 3).
+const FAST_ARGS: usize = 4;
 /// PB's element ledger, oracle-bisected (fw 3.67, 2026-08-29): every array
 /// costs its length plus a 4-unit header against a 10,236-unit budget —
 /// equivalently a 40 KiB pool of 4-byte elements with 16-byte headers, 16
@@ -1798,8 +1800,23 @@ impl Vm {
                     }
                     op::CALL_BUILTIN => {
                         let b = op_u16!();
-                        let argc = op_u8!();
-                        match self.call_builtin(prog, b, argc as usize) {
+                        let argc = op_u8!() as usize;
+                        // hot builtins straight off the stack (see builtin_fast)
+                        if argc <= FAST_ARGS {
+                            if let BKind::Impl(bi) = BUILTINS[b as usize].kind {
+                                let len = self.stack.len();
+                                if len >= argc {
+                                    let mut a = [Value::default(); FAST_ARGS];
+                                    a[..argc].copy_from_slice(&self.stack[len - argc..]);
+                                    if let Some(v) = self.builtin_fast(bi, &a[..argc], argc) {
+                                        self.stack.truncate(len - argc);
+                                        push!(v);
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        match self.call_builtin(prog, b, argc) {
                             Ok(v) => push!(v),
                             Err(mut e) => {
                                 // attribute to this site if the builtin didn't
@@ -1959,6 +1976,93 @@ impl Vm {
         Value::Num(Fx::from_raw(((r as u64 * m) >> 32) as u32 as i32))
     }
 
+    /// The hot, infallible builtins — everything a per-pixel `render` calls
+    /// in a typical pattern. The dispatch loop calls this straight from the
+    /// stack (no 16-slot args array, no `Result`, no jump into the 20 KB
+    /// [`Vm::call_builtin`]); `call_builtin` delegates here first so the
+    /// semantics live in exactly one place. `None` = not a fast builtin.
+    #[inline(always)]
+    fn builtin_fast(&mut self, builtin: Builtin, args: &[Value], argc: usize) -> Option<Value> {
+        let n = |i: usize| args.get(i).copied().unwrap_or_default().num();
+        use Builtin::*;
+        match builtin {
+            Abs => Some(Value::Num(n(0).abs())),
+            Floor => Some(Value::Num(n(0).floor())),
+            Ceil => Some(Value::Num(n(0).ceil())),
+            Round => Some(Value::Num(n(0).round())),
+            Trunc => Some(Value::Num(n(0).trunc())),
+            Frac => Some(Value::Num(n(0).frac())),
+            Clamp => Some(Value::Num(n(0).clamp(n(1), n(2)))),
+            Min => Some(Value::Num(n(0).min(n(1)))),
+            Max => Some(Value::Num(n(0).max(n(1)))),
+            Mod => Some(Value::Num(n(0).mod_floor(n(1)))),
+            Sqrt => Some(Value::Num(fmath::sqrt(n(0)))),
+            Sin => Some(Value::Num(fmath::sin(n(0)))),
+            Cos => Some(Value::Num(fmath::cos(n(0)))),
+            Random => {
+                let r = self.next_random();
+                Some(Self::scale_random(r, n(0)))
+            }
+            Prng => {
+                let r = self.next_prng();
+                Some(Self::scale_random(r, n(0)))
+            }
+            Time => {
+                // period in ms happens to equal the interval's raw value:
+                // 65.536 s · interval = 65536 ms · interval.
+                let period = n(0).raw().max(0) as u64;
+                if period == 0 {
+                    return Some(Value::Num(Fx::ZERO));
+                }
+                // 32-bit fast path (hardware divide on Xtensa/RISC-V; the
+                // u64 form is two ROM calls per invocation, and `time()` is
+                // called per pixel by most patterns): intervals ≤ 1.0 have
+                // period ≤ 65536, so `t < period` keeps `t << 16` in u32;
+                // the clock stays below 2^32 ms for 49 days.
+                if period <= 1 << 16 && self.time_ms <= u32::MAX as u64 {
+                    let period = period as u32;
+                    let t = self.time_ms as u32 % period;
+                    return Some(Value::Num(Fx::from_raw(((t << 16) / period) as i32)));
+                }
+                let t = self.time_ms % period;
+                Some(Value::Num(Fx::from_raw(((t << 16) / period) as i32)))
+            }
+            Wave => Some(Value::Num(Fx::from_raw(
+                (fmath::sin_turns(n(0)).raw() + Fx::ONE.raw()) >> 1,
+            ))),
+            Square => {
+                let duty = if argc >= 2 { n(1) } else { Fx::from_f64(0.5) };
+                let t = n(0).mod_floor(Fx::ONE);
+                Some(Value::Num(if t < duty { Fx::ONE } else { Fx::ZERO }))
+            }
+            Triangle => {
+                let t = n(0).mod_floor(Fx::ONE);
+                let half = Fx::from_raw(1 << 15);
+                Some(Value::Num(if t < half {
+                    t + t
+                } else {
+                    (Fx::ONE - t) + (Fx::ONE - t)
+                }))
+            }
+            Mix => Some(Value::Num(n(0) + (n(1) - n(0)) * n(2))),
+            Hsv => {
+                self.pixel = hsv_to_rgb(n(0), n(1), n(2));
+                self.pixel_written = true;
+                Some(Value::default())
+            }
+            Rgb => {
+                self.pixel = [
+                    n(0).clamp(Fx::ZERO, Fx::ONE),
+                    n(1).clamp(Fx::ZERO, Fx::ONE),
+                    n(2).clamp(Fx::ZERO, Fx::ONE),
+                ];
+                self.pixel_written = true;
+                Some(Value::default())
+            }
+            _ => None,
+        }
+    }
+
     fn call_builtin(&mut self, prog: &Program, id: u16, argc: usize) -> Result<Value, VmError> {
         let no_site = |message: String| VmError {
             message,
@@ -1984,24 +2088,14 @@ impl Vm {
         };
         let mut args = [Value::default(); MAX_ARGS];
         let argc = self.pop_args_into(&mut args, argc);
+        if let Some(v) = self.builtin_fast(builtin, &args[..argc], argc) {
+            return Ok(v);
+        }
         let a = |i: usize| args.get(i).copied().unwrap_or_default();
         let n = |i: usize| a(i).num();
         use Builtin::*;
         let num = |v: Fx| Ok(Value::Num(v));
         match builtin {
-            Abs => num(n(0).abs()),
-            Floor => num(n(0).floor()),
-            Ceil => num(n(0).ceil()),
-            Round => num(n(0).round()),
-            Trunc => num(n(0).trunc()),
-            Frac => num(n(0).frac()),
-            Clamp => num(n(0).clamp(n(1), n(2))),
-            Min => num(n(0).min(n(1))),
-            Max => num(n(0).max(n(1))),
-            Mod => num(n(0).mod_floor(n(1))),
-            Sqrt => num(fmath::sqrt(n(0))),
-            Sin => num(fmath::sin(n(0))),
-            Cos => num(fmath::cos(n(0))),
             Tan => num(fmath::tan(n(0))),
             Asin => num(fmath::asin(n(0))),
             Acos => num(fmath::acos(n(0))),
@@ -2253,58 +2347,12 @@ impl Vm {
                     (Fx::ONE + ease_out_bounce(t + t - Fx::ONE)) / Fx::from_int(2)
                 })
             }
-            Random => {
-                let r = self.next_random();
-                Ok(Self::scale_random(r, n(0)))
-            }
-            Prng => {
-                let r = self.next_prng();
-                Ok(Self::scale_random(r, n(0)))
-            }
             PrngSeed => {
                 let old = self.prng_state;
                 let s = n(0).raw() as u32;
                 self.prng_state = if s == 0 { 1 } else { s };
                 num(Fx::from_raw(old as i32))
             }
-            Time => {
-                // period in ms happens to equal the interval's raw value:
-                // 65.536 s · interval = 65536 ms · interval.
-                let period = n(0).raw().max(0) as u64;
-                if period == 0 {
-                    return num(Fx::ZERO);
-                }
-                // 32-bit fast path (hardware divide on Xtensa/RISC-V; the
-                // u64 form is two ROM calls per invocation, and `time()` is
-                // called per pixel by most patterns): intervals ≤ 1.0 have
-                // period ≤ 65536, so `t < period` keeps `t << 16` in u32;
-                // the clock stays below 2^32 ms for 49 days.
-                if period <= 1 << 16 && self.time_ms <= u32::MAX as u64 {
-                    let period = period as u32;
-                    let t = self.time_ms as u32 % period;
-                    return num(Fx::from_raw(((t << 16) / period) as i32));
-                }
-                let t = self.time_ms % period;
-                num(Fx::from_raw(((t << 16) / period) as i32))
-            }
-            Wave => num(Fx::from_raw(
-                (fmath::sin_turns(n(0)).raw() + Fx::ONE.raw()) >> 1,
-            )),
-            Square => {
-                let duty = if argc >= 2 { n(1) } else { Fx::from_f64(0.5) };
-                let t = n(0).mod_floor(Fx::ONE);
-                num(if t < duty { Fx::ONE } else { Fx::ZERO })
-            }
-            Triangle => {
-                let t = n(0).mod_floor(Fx::ONE);
-                let half = Fx::from_raw(1 << 15);
-                num(if t < half {
-                    t + t
-                } else {
-                    (Fx::ONE - t) + (Fx::ONE - t)
-                })
-            }
-            Mix => num(n(0) + (n(1) - n(0)) * n(2)),
             Smoothstep => {
                 let (lo, hi, v) = (n(0), n(1), n(2));
                 let d = hi - lo;
@@ -2327,20 +2375,6 @@ impl Vm {
                     + Fx::from_int(3) * u * u * t * p1
                     + Fx::from_int(3) * u * t * t * p2
                     + t * t * t * p3)
-            }
-            Hsv => {
-                self.pixel = hsv_to_rgb(n(0), n(1), n(2));
-                self.pixel_written = true;
-                Ok(Value::default())
-            }
-            Rgb => {
-                self.pixel = [
-                    n(0).clamp(Fx::ZERO, Fx::ONE),
-                    n(1).clamp(Fx::ZERO, Fx::ONE),
-                    n(2).clamp(Fx::ZERO, Fx::ONE),
-                ];
-                self.pixel_written = true;
-                Ok(Value::default())
             }
             // plot(x, y) or plot(x, y, z): map programs emit one coordinate
             // per pixel; the engine (map mode) reads plot_coord after the call.
@@ -3254,6 +3288,7 @@ impl Vm {
                 }
                 Ok(Value::default())
             }
+            _ => unreachable!("handled by builtin_fast"),
         }
     }
 

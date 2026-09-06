@@ -1,5 +1,38 @@
 # Update log
 
+## 2026-09-05 — Engine: per-pixel performance pass 2a — hot builtins in the loop, batched pixel pass (#260)
+
+Two structural costs pass 1 left alone, both device-free to fix:
+
+- **Hot builtins straight off the stack.** `hsv`/`rgb`/`time`/`wave`/
+  `square`/`triangle`/`sin`/`cos`/`sqrt`/`abs`/`floor`/`ceil`/`round`/
+  `trunc`/`frac`/`clamp`/`min`/`max`/`mod`/`mix`/`random`/`prng` now live
+  in `Vm::builtin_fast`, an `#[inline(always)]` match the dispatch loop
+  calls with the top-of-stack values in place: no 16-slot args array to
+  zero, no `Result<Value, VmError>` through memory, no `call8` into the
+  20 KB `call_builtin` (which still delegates to the same function first,
+  so the semantics exist exactly once). On Xtensa a call into a function
+  that size costs a register-window spill each way on top of the
+  bookkeeping; the empty-render → rgb-only delta on the panel (#260:
+  ~940 cycles for five ops and one call) is the number this is aimed at.
+- **Batched pixel pass.** `Engine::render_pixels` runs every pixel of a
+  non-debug, non-map frame in one tight loop — reset pixel, args, `start`,
+  quantize — instead of one trip per pixel through the resumable
+  `drive()` state machine (stage/outcome matching, `run_stage` updates).
+  Error semantics are unchanged: first error wins, asserts/resource
+  guards blank the rest of the frame, a non-fatal error keeps the
+  pre-error color. The debugger and map programs keep the old path.
+
+Host `luxel bench` at 4096 px (x86 hides most of the call overhead, so
+these understate the Xtensa gain): rainbow 26.2 → 28.4 M px/s, snake-2d
+on a 64×64 map 7.1 → 8.5 M px/s. All 245 luxel-core tests pass unchanged.
+
+Next in the queue for #260: the execution-ready instruction-word format
+executed directly from a memory-mapped flash region (Jeremy's decision
+2026-09-05 — RAM is the constraint; design + facility in progress on
+agent/luxel/flash-mmap), superinstructions on top of that format (#261),
+and the two-core pixel split once the core-1 executor (#259) has landed.
+
 ## 2026-09-05 — Engine: per-pixel rendering performance, pass 1 (#260)
 
 Jeremy's ask after the HUB75 panel's first evening: 4096 px at 18 fps for
