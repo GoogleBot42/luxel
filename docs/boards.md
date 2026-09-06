@@ -39,19 +39,17 @@ credential-baking caveats.
 | `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
 | `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
 | `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's (a panel on jumper wires); strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
-| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **builds, UNTESTED ON METAL** | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
+| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **on metal 2026-09-05** (first light, OTA, soak — see "First light" below) | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
 
 All eight combos build clean (verified compile + image-size check +
 `tools/image-check.sh` + `tools/stack-check.sh`). "Untested on hardware"
 means the wiring is reviewed against the vendor pinout but the board has
-never been lit up; the S3/C6 rows go further — **no S3 or C6 exists on the
-bench at all**, so nothing beyond "it compiles, links, fits the OTA slot
-and keeps a sane stack" has been established. Treat their pin choices,
-heap sizing and radio behaviour as unverified — hardware bring-up is
-tracked in Gitea #56, and the Seengreat board plus its 64x64 panel in
-Gitea #75 (which also owns the first real FPS and heap-floor numbers at
-4096 px; nothing in this file has been measured on a panel). Both
-protocols run over
+never been lit up. The **S3 is on the bench since 2026-09-05** (the
+Seengreat panel board, "First light" below — the first metal validation of
+the S3 codegen, WiFi, OTA and the HUB75 driver); `board-s3-devkit` itself
+is still only reviewed, and **no C6 exists on the bench**, so its pin
+choices, heap sizing and radio behaviour stay unverified — Gitea #56.
+Both protocols run over
 SPI: SK9822/APA102 uses CLK+DATA; WS281x uses DATA only (encoded
 bitstream), so a WS2812 board simply leaves CLK unconnected — the pin
 still gets claimed.
@@ -478,6 +476,66 @@ release workflow, `build.rs`'s `esp-idf-part` serialization *and*
 would fork the "one image, one layout" property that makes OTA and the
 installer page simple. Revisit only when something actually needs the
 space — Gitea #143 records the conditions that would justify it.
+
+## First light: the Seengreat board on metal (2026-09-05)
+
+Gitea #75. What the first evening established, so nobody re-derives it:
+
+- **Panel**: a 64x64 with **FM6124EJ** drivers (plain shift-register — no
+  FM6126A init, esp-hub75 drives it as-is). The vendor pin map above is
+  right: all 64 rows light and the colours are correct, so both the E line
+  and the by-name transcription are verified.
+- **USB**: the board's data USB-C is the S3's **native USB-Serial/JTAG
+  (303a:1001)**, not a bridge chip. It enumerates as `/dev/ttyACM0` once the
+  container is given that id (it is a different id from the Athom's FTDI).
+  Two things bite: (1) **opening the port from the host resets the chip** —
+  the peripheral treats the line-state change of a termios setup (a baud rate — `stty`, `b115200`; a bare `open()` alone does NOT do it, verified 2026-09-05) as a reset request
+  (`rst:0x15 USB_UART_CHIP_RESET`), so a `cat`/`stty`/`socat` loop that
+  reopens the port reboots the board on every reopen (and repeated fast
+  resets risk the boot guard's slot rollback). One long-lived reader costs
+  exactly one reset at open; there is no passive tap. Prefer `/api/status`
+  for anything that must not disturb the device. The upside: a port open
+  is a **remote reset** for an unresponsive board (used on 2026-09-05
+  during the soak, when a 1–2 fps pattern made `/api/status` take 11 s and
+  every client timeout read the board as dead — #259) —
+  `HW_BENCH_RESET_CMD` in hw-bench. (2) A chip reset
+  re-creates the node with `root:dialout 660` — `doas chmod 666` again.
+- **Flashing**: `espflash write-bin --chip esp32s3 -p /dev/ttyACM0 0x0
+  firmware/target/luxel-full.bin` (from `BOARD=board-seengreat-hub75
+  ./build-esp32.sh image`) — 30 s. Reads are slow: ~12 KB/s with espflash
+  4.4, so a full 16 MB dump is ~24 min. espflash's own post-flash reset
+  cannot leave download mode if BOOT is held; a physical EN press with
+  BOOT released was needed for the first boot.
+- **Stock firmware**: XiaoZhi 2.2.6 (IDF 5.5.3, 16 MB layout: two 4032 KB
+  OTA slots + 8 MB spiffs). Dumped in full before the first flash
+  (`seengreat-stock.bin`, gitignored, two reads sha256-identical); the
+  OTA-takeover install path is Gitea #256. No secure boot, no flash
+  encryption.
+- **Numbers** (v0.1.40, 4096 px, WiFi up, one idle client): boot heap
+  100,240 B free, idle with rainbow 68,044 B, with the 2D snake game
+  46,008 B. **fps: rainbow 18, 1D snake 8, 2D snake 4; an empty `render`
+  56 (18 ms of per-frame overhead outside the VM), one `rgb()` call per
+  pixel 29.** The 8 ms frame pacing in main.rs caps everything at 125.
+- **Soak** (`docs/bench-report-seengreat-hub75.md`, hw-bench on the #275
+  build, ~35 min): 299 gallery patterns, **184 clean, 115 with errors**
+  (VM errors plus "pattern too large for this device" rejections — at
+  4096 px many 2D patterns can't fit their arrays next to a 48 KB map),
+  184 under 30 fps; **median 7 fps at 4096 px, p10 2, p90 17**; heap floor
+  17,984 B; one "crash" row (after "Synchronized Random Numbers", back in
+  106 s via the reset hook) that serial showed was NOT a crash — the
+  pattern runs at 1 fps and starves the web task (#259). No panic in the
+  whole run. Rainbow curve: 125 fps to 300 px, 116 at 600,
+  68 at 1024, 35 at 2048, 18 at 4096.
+- **Consequences ticketed**: the render loop starves the web server at this
+  pixel count (228 KB bundle: 2 s from the Athom, 31–62 s here — #259;
+  `hosted-ui` is the practical variant for this board until then);
+  per-pixel cost / codegen (#260); no 2D map by default and a 64x64 map
+  can neither be POSTed (4 KB request buffers) nor afforded (48 KB per-pixel
+  storage on a 46 KB heap) — #258; E1.31 multicast joins past group 4 fail
+  with `GroupTableFull`, so 21 of a 4096-px board's 25 universes are dead
+  over multicast (#257). The board's other peripherals are #249–#255
+  (thumb-wheel, RTC, microSD, audio out, PSRAM, I2C header, chaining) and
+  #142 (mics).
 
 **PSRAM is not initialised.** Nothing in the current firmware wants it:
 DMA framebuffers must live in internal SRAM regardless, and the engine's

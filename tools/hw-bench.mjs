@@ -7,6 +7,15 @@
 //
 // Restores: rainbow, and the pixel count + brightness it FOUND (it used to
 // hardcode a 300 px restore regardless, which quietly reconfigured the rig).
+//
+// A device that crashes mid-soak is a FINDING, not an abort (2026-09-05: the
+// Seengreat panel hard-hung at pattern 75 and the run died with no report):
+// an unreachable device after a push becomes a `crashed` row, the harness
+// waits for it to come back (RECOVER_MS), and if it doesn't, runs
+// HW_BENCH_RESET_CMD (e.g. `timeout 3 socat -u /dev/ttyACM0,raw,echo=0,b115200
+// STDOUT` — the termios setup resets an S3's native USB-Serial/JTAG) before
+// giving up on that pattern. HW_BENCH_FROM=<n> resumes at gallery index n
+// (1-based). The report is written even if the curve/restore phase fails.
 // ~45 min for the current ~320-pattern gallery, one pattern after another on
 // the actual strip.
 
@@ -19,6 +28,10 @@ const IP = process.argv[2] ?? "192.168.0.205";
 const OUT = process.argv[3] ?? "docs/bench-report.md";
 const DEV = `http://${IP}`;
 const DWELL_MS = 2500; // per pattern: settle + let the fps counter refill
+const RECOVER_MS = 180_000; // how long to wait for a crashed device to return
+const RESET_AFTER_MS = 90_000; // ...before trying HW_BENCH_RESET_CMD (if set)
+const RESET_CMD = process.env.HW_BENCH_RESET_CMD;
+const FROM = Number(process.env.HW_BENCH_FROM ?? 1);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function api(path, body) {
   // node's fetch pools connections; picoserve closes idle ones after 1s —
@@ -52,6 +65,42 @@ const stages = (st) =>
     ? ""
     : `[${st.frame_us}µs vm ${st.vm_us} pipe ${st.pipe_us} out ${st.out_us}]`;
 
+// one quick probe, no retries — for "is it back yet?" polling
+async function probe() {
+  try {
+    const r = await fetch(DEV + "/api/status", {
+      headers: { connection: "close" },
+      // a starved device (1–2 fps pattern, #259) answers in ~10–20 s
+      signal: AbortSignal.timeout(20_000),
+    });
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+// Wait for a crashed device to come back; returns the status or null.
+async function recover(why) {
+  const t0 = Date.now();
+  let reset = false;
+  console.log(`   device unreachable (${why}) — waiting up to ${RECOVER_MS / 1000}s`);
+  while (Date.now() - t0 < RECOVER_MS) {
+    await sleep(5_000);
+    const st = await probe();
+    if (st) {
+      console.log(`   back after ${Math.round((Date.now() - t0) / 1000)}s on ${st.slot}${reset ? " (after reset cmd)" : ""}`);
+      return { st, reset, secs: Math.round((Date.now() - t0) / 1000) };
+    }
+    if (!reset && RESET_CMD && Date.now() - t0 > RESET_AFTER_MS) {
+      console.log(`   running HW_BENCH_RESET_CMD`);
+      try {
+        (await import("node:child_process")).execSync(RESET_CMD, { stdio: "ignore", timeout: 30_000 });
+      } catch {}
+      reset = true;
+    }
+  }
+  return null;
+}
+
 const gallery = JSON.parse(fs.readFileSync("web/public/gallery.json", "utf8"));
 const rainbow = fs.readFileSync("library/rainbow.js", "utf8");
 const status0 = await api("/api/status");
@@ -62,9 +111,11 @@ const proto0 = (await api("/api/config")).protocol ?? "unknown";
 console.log(`device ${IP}: v${status0.version}, ${status0.pixels}px, brightness ${bright0} — soaking ${gallery.length} patterns`);
 
 const rows = [];
+const crashes = []; // { after: name, downSecs, reset }
 let i = 0;
 for (const p of gallery) {
   i++;
+  if (i < FROM) continue;
   let res;
   try {
     res = await api("/api/code", await lxpBody("", p.source));
@@ -77,7 +128,29 @@ for (const p of gallery) {
     continue;
   }
   await sleep(DWELL_MS);
-  const st = await api("/api/status");
+  let st;
+  try {
+    st = await api("/api/status");
+  } catch (e) {
+    // the device went away after accepting the pattern — a crash. Record it,
+    // wait for it to reboot (or reset it), and carry on with the next one.
+    let back = await recover(String(e).slice(0, 60));
+    if (!back) {
+      // last try with the patient api() (30 s × 3) before giving up on the run
+      try {
+        const st2 = await api("/api/status");
+        back = { st: st2, reset: true, secs: Math.round(RECOVER_MS / 1000) };
+      } catch {}
+    }
+    crashes.push({ after: p.name, downSecs: back?.secs ?? null, reset: back?.reset ?? false });
+    rows.push({ name: p.name, kind: p.kind, fail: back ? `crashed (device back after ${back.secs}s)` : "crashed (device did not come back)" });
+    console.log(`${String(i).padStart(3)}/${gallery.length}  -- fps  ${p.name} CRASHED`);
+    if (!back) {
+      console.log("device did not come back — stopping the sweep, writing what we have");
+      break;
+    }
+    continue;
+  }
   rows.push({
     name: p.name,
     kind: p.kind,
@@ -97,24 +170,28 @@ for (const p of gallery) {
   );
 }
 
-// fps vs pixel count with the reference pattern
-console.log("-- pixel-count curve --");
-const rainbowBody = await lxpBody("", rainbow);
-await api("/api/code", rainbowBody);
+// fps vs pixel count with the reference pattern. Wrapped so a device that
+// dies here still gets the soak table written below.
 const curve = [];
-for (const n of [60, 150, 300, 600, 1024, 2048]) {
-  await api("/api/config", String(n));
-  await sleep(3500);
-  const st = await api("/api/status");
-  curve.push({ pixels: n, fps: st.fps });
-  console.log(`${n} px → ${st.fps} fps`);
+const rainbowBody = await lxpBody("", rainbow);
+try {
+  console.log("-- pixel-count curve --");
+  await api("/api/code", rainbowBody);
+  for (const n of [60, 150, 300, 600, 1024, 2048]) {
+    await api("/api/config", String(n));
+    await sleep(3500);
+    const st = await api("/api/status");
+    curve.push({ pixels: n, fps: st.fps });
+    console.log(`${n} px → ${st.fps} fps`);
+  }
+  // restore exactly what we found — the sweep ran at status0.pixels, and the
+  // curve above left the device on 2048
+  await api("/api/config", String(status0.pixels));
+  await api("/api/brightness", String(bright0));
+  await api("/api/code", rainbowBody);
+} catch (e) {
+  console.log(`curve/restore aborted: ${String(e).slice(0, 80)} — device may need a manual restore`);
 }
-
-// restore exactly what we found — the sweep ran at status0.pixels, and the
-// curve above left the device on 2048
-await api("/api/config", String(status0.pixels));
-await api("/api/brightness", String(bright0));
-await api("/api/code", rainbowBody);
 
 // report
 const errs = rows.filter((r) => r.fail || r.vmerr);
@@ -137,6 +214,10 @@ lines.push(`- ${gallery.length} patterns: **${ok.length} clean**, ${errs.length}
 // 300 px repro for a bug that only bites at the 60 px the run actually used.
 lines.push(`- fps at ${status0.pixels} px (the count the sweep ran at): median **${pct(0.5)}**, p10 ${pct(0.1)}, p90 ${pct(0.9)}.`);
 lines.push(`- lowest heap_free seen while soaking: ${minHeap} bytes.`);
+if (crashes.length) {
+  lines.push(`- **${crashes.length} device crash${crashes.length === 1 ? "" : "es"}** (unreachable after a push): ` + crashes.map((c) => `after \"${c.after}\" (${c.downSecs === null ? "did not return" : `back in ${c.downSecs}s${c.reset ? ", needed the reset cmd" : ""}`})`).join("; ") + ".");
+}
+if (FROM > 1) lines.push(`- resumed at pattern ${FROM} (HW_BENCH_FROM) — earlier rows are not in this report.`);
 lines.push("");
 lines.push(`## fps vs pixel count (rainbow reference)`);
 lines.push("");

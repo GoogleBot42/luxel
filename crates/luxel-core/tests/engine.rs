@@ -1286,6 +1286,35 @@ fn pixel_state_respects_the_device_byte_budget() {
     assert_eq!(ok.pixel_state_bytes(), 16 * 1024);
 }
 
+// ---- set_map / set_map_vec (Gitea #275) ----
+//
+// The in-place installer must produce exactly what the copying one did:
+// same normalized coordinates, same grid detection, same frames. And both
+// truncate a longer buffer to the pixel count instead of indexing past it.
+#[test]
+fn set_map_vec_matches_set_map() {
+    let src = "export function render2D(index, x, y) { rgb(x, y, 0) }";
+    let coords: Vec<[Fx; 3]> = (0..16)
+        .map(|i| [Fx::from_int((i % 4) * 7), Fx::from_int((i / 4) * 3 + 2), Fx::ZERO])
+        .collect();
+    let mut a = Engine::new(src, 16, 1).unwrap();
+    assert!(a.set_map(2, &coords));
+    let mut b = Engine::new(src, 16, 1).unwrap();
+    assert!(b.set_map_vec(2, coords.clone()));
+    assert_eq!(a.frame(Fx::from_int(10)), b.frame(Fx::from_int(10)));
+    // x normalizes to 0..1 across the 4 columns: pixel 3 is the last column
+    let fa = a.frame(Fx::from_int(10));
+    assert_eq!(fa[0][0], 0);
+    assert!(fa[3][0] > 250, "last column should normalize to ~1: {:?}", fa[3]);
+
+    // a buffer longer than the strip is truncated, not an out-of-bounds read
+    let mut long = coords.clone();
+    long.extend_from_slice(&coords);
+    let mut c = Engine::new(src, 16, 1).unwrap();
+    assert!(c.set_map_vec(2, long));
+    assert_eq!(c.frame(Fx::from_int(10)), fa);
+}
+
 // ---- Gitea #260: 32-bit fast paths must be bit-exact with the 64-bit forms ----
 
 /// `time()`'s u32 shortcut (period ≤ 65536, clock < 2^32 ms) against the

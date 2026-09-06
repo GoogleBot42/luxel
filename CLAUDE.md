@@ -26,13 +26,18 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   2026-08-15) — check it exists before planning around it, and fall back to polling
   `/api/status` for panic/reboot detection. Only the replug is a Jeremy action —
   `doas chmod 666 /dev/ttyUSB0` works passwordless in-container (verified
-  2026-08-22), so fix the perms yourself once the node exists.
+  2026-08-22), so fix the perms yourself once the node exists. The SEENGREAT S3
+  (192.168.0.238) is native USB-Serial/JTAG at `/dev/ttyACM0` (303a:1001) — opening
+  that port from the host RESETS the chip, so no passive serial monitoring there;
+  poll `/api/status` instead (docs/boards.md "First light").
 - The GitHub repo (github.com/GoogleBot42/luxel) is a READ-ONLY downstream mirror for
   releases/CI only — never push, PR, or file issues there; everything happens on Gitea.
   See docs/releases.md.
 - OTA deploys and real-chromium browser testing DO work from inside the container.
-- There is ONE Luxel dev device and ONE Pixel Blaze oracle — never parallelize
-  device-touching work across subagents.
+- Each bench device is a single shared unit (dev unit, Athom rig, Seengreat panel —
+  .claude/skills/deploy-device lists them) and there is ONE Pixel Blaze oracle —
+  never parallelize device-touching work across subagents or sessions; a soak or
+  bring-up owns its device until it says otherwise.
 - Other Claude instances may be working in this checkout concurrently. ALWAYS do your
   work in a fresh git worktree (.claude/skills/worktree-setup), never in the main
   checkout directly. Treat uncommitted changes in the main checkout as another live

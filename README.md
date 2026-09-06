@@ -39,6 +39,8 @@ sound-reactive patterns from your microphone — locally and on the device.
 - Live coding over WiFi: type in the browser, the strip follows.
 - SK9822/APA102 + WS281x over SPI; runtime pixel count, protocol, color
   order, gamma, and power-cap settings — all changed live, all persisted.
+- HUB75 matrix panels on the ESP32-S3 (LCD_CAM + DMA; a 64x64 panel is
+  4096 px) — see docs/boards.md for the Seengreat panel board.
 - **Playlists** with per-item parameters, durations, and crossfades;
   survive reboots.
 - **Home Assistant** via MQTT discovery: light (power + brightness),

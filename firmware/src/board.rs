@@ -79,7 +79,7 @@ mod def {
     pub const RESERVED_PINS: &[u8] = &[38, 42, 48, 47, 2, 21, 14, 46, 13, 9, 3, 11, 12, 10];
 }
 
-// UNTESTED ON METAL: ordered 2026-08-22, bring-up tracked in Gitea #75.
+// On metal since 2026-09-05 (Gitea #75; docs/boards.md "First light").
 // Seengreat "RGB Matrix HUB75 S3" panel driver board: ESP32-S3-WROOM-1
 // (16 MB flash / 8 MB octal PSRAM) with two HUB75 outputs (ribbon +
 // direct plug-in header), an ES7210/ES8311 codec, microSD and an RTC.
@@ -91,7 +91,7 @@ mod def {
 #[cfg(feature = "board-seengreat-hub75")]
 mod def {
     use super::*;
-    pub const NAME: &str = "Seengreat RGB Matrix HUB75 S3 (untested)";
+    pub const NAME: &str = "Seengreat RGB Matrix HUB75 S3";
     // Vestigial: the panel driver's wire format is fixed and
     // set_protocol() rejects switches. Kept because the field is part of
     // the persisted device config on every board.
