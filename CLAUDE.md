@@ -34,8 +34,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   releases/CI only — never push, PR, or file issues there; everything happens on Gitea.
   See docs/releases.md.
 - OTA deploys and real-chromium browser testing DO work from inside the container.
-- There is ONE Luxel dev device and ONE Pixel Blaze oracle — never parallelize
-  device-touching work across subagents.
+- Each bench device is a single shared unit (dev unit, Athom rig, Seengreat panel —
+  .claude/skills/deploy-device lists them) and there is ONE Pixel Blaze oracle —
+  never parallelize device-touching work across subagents or sessions; a soak or
+  bring-up owns its device until it says otherwise.
 - Other Claude instances may be working in this checkout concurrently. ALWAYS do your
   work in a fresh git worktree (.claude/skills/worktree-setup), never in the main
   checkout directly. Treat uncommitted changes in the main checkout as another live
