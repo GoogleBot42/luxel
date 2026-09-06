@@ -1,5 +1,100 @@
 # Update log
 
+## 2026-09-06 — The firmware BORROWS the mapped program words (#260)
+
+LXBC v5 (PR #278) gave `luxel_core::bytecode` a `deserialize_lean_static`
+that validates a `&'static [u8]` in place and lets `Program.words` point
+straight at it; PR #276/#293 made the pattern store hand the engine
+`&'static [u8]` slices out of the flash mapping. The device was still
+calling the copying `deserialize_lean` at every one of those sites, so the
+whole point of executing from the mapping — the code and constant pool
+costing **no RAM at all** — was never realized on metal. It is now.
+
+Switched to `deserialize_lean_static`: the boot default (`PATTERN_BC`, plus
+a 4-byte alignment wrapper around the `include_bytes!` so the borrow can
+actually happen — `include_bytes!` has alignment 1 and the decoder silently
+copies an unaligned blob), the `Msg::Library` swap arm (`patterns::code_of`),
+and all three mapped branches of the engine `rebuild()` closure
+(`BcLoc::Default`, the ad-hoc slot via `current_slot_code`, and a library
+pattern's arena extent — the rebuild path matters most, since a
+pixel-count or map change installs an engine that then lives as long as
+any swap's). The transient-`Vec` sites keep the copying decode, because
+their bytes do not outlive the call: the `Msg::Code`/`Msg::Crossfade`
+envelope, the chunk-store fallbacks, the playlist `check_asserts`
+pre-flight, and the HTTP upload's `validate`.
+
+From the model (`cargo test -p luxel-cli --release --test heapstat`), the
+resident cost of a running pattern on the device — what it now pays
+instead of the `program (copy)` column:
+
+| pattern | blob | program (copy) | **mapped** |
+|---|---:|---:|---:|
+| Main Stage | 25,688 | 35,540 | **8,933** |
+| Opening Act | 17,556 | 27,798 | **10,577** |
+| Frogger 2D | 20,488 | 27,274 | **6,421** |
+| 2D Fireworks Fade | 18,028 | 23,037 | **4,713** |
+| Infinite Snake | 10,528 | 15,075 | **4,280** |
+| Chasing Rainbows & HSLuv | 8,492 | 12,657 | **4,038** |
+
+### The bug this exposed: a crossfade's outgoing engine
+
+A borrowed `Program`'s code **is** the mapped flash, so an extent an
+engine still executes from must never be written, moved or freed. The
+store's rule for that was "never touch the RUNNING pattern's extent", with
+"running" read from `shared::get_current_pattern_id()` — a single pattern.
+Two windows have an engine executing something else:
+
+- a swap decodes the **incoming** pattern's mapped bytes before it becomes
+  the current pattern (between `code_of` and `set_current_pattern_id`), and
+- a **crossfade** keeps the outgoing engine alive as the blend source
+  (`prev` in the render loop) for up to several seconds *after* the current
+  pattern id has moved on.
+
+In both, a `POST /api/patterns` save that compacts the arena is free to
+slide that extent out from under a live VM — and on a dual-core board the
+store runs on the *other* core, in parallel, so this is not even an
+`await`-granularity race. `delete` had the same shape: `arena_forget` drops
+the extent from the directory, handing its pages to the next save, which
+erases them under the running engine.
+
+Fixed with an explicit **pin set** in `patterns.rs`: three slots the render
+task publishes — what a decode is about to borrow (`pin_code`, set *before*
+`code_of`), what the live engine borrows (`pin_running`), what the
+crossfade's outgoing engine borrows (`pin_prev_from_running`, released by
+`unpin_prev`) — plus the current pattern id as belt and braces. Compaction,
+the stale-generation sweep, the superseded-generation free and
+`arena_forget` all consult the set instead of one seq; `extents.rs`'
+`next_move`/`compacted_free_run` take a pin *slice* and each pinned extent
+splits the free space rather than blocking the pass. `prev = None` is gone
+from the render task — every drop goes through a `drop_prev` helper that
+releases the pin with it. Pins are conservative by construction: a stale
+one wastes arena pages until the next swap overwrites it, and can never
+free something live.
+
+Two host tests cover the planning half (`cargo test -p extent-check`): a
+crossfade layout where both pinned extents must stay put while the others
+pack down, and the exhaustive compaction-vs-prediction sweep now runs over
+all eight pin *sets* of three extents instead of the four single pins.
+
+Cost: **+1.7 to +2.0 KB of app image** on every board (the pin plumbing and
+the `Words::Static` construction path, which nothing linked before).
+`board-c6-devkit`'s full-UI build, already under image-check's 3 % floor
+and not a release artifact since #293, goes 2.66 % → 2.47 %; the shipped
+`luxel-fw-c6-devkit-hosted` is 4.23 % → 4.04 %. Everything else passes.
+`.stack` on pixelblaze-v3 25,644 B, stack-check clean. QEMU flashmap and
+both heap-regions cases pass (the takeover trio is the known-red #273).
+
+Drive-by: `main.rs` had two doc comments spliced into each other —
+`persist_current_pattern`'s "Stamp the just-swapped pattern's identity"
+block was sitting on `engine_or_vmerr`, and the sentence about the raw
+slot's sectors being "erased on EVERY playlist advance" had lost its first
+half. Both are back on their own functions.
+
+The on-device confirmation — idle `heap_free` should rise by roughly the
+running pattern's code + constant bytes — is on the #271 hardware
+checklist; no hardware was touched here.
+
+
 ## 2026-09-06 — The code arena grows a real allocator: page extents, not 7 slots (#281)
 
 The arena PR #276 shipped the day before was seven fixed 40 KiB slots in

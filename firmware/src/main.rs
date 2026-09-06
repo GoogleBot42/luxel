@@ -141,7 +141,22 @@ const PASSWORD: Option<&str> = option_env!("LUXEL_PASS");
 /// Built-in default pattern: source for `GET /api/pattern`, bytecode (built
 /// by build.rs — the firmware links no compiler) for execution.
 const PATTERN: &str = include_str!("../../library/rainbow.js");
-const PATTERN_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default.lxbc"));
+
+/// `include_bytes!` gives alignment 1, and `deserialize_lean_static` only
+/// BORROWS a blob whose word region is 4-aligned in memory (it silently
+/// copies otherwise). The zero-sized `[u32; 0]` raises the struct's
+/// alignment to 4 without adding a byte, so the boot default executes from
+/// rodata like every other mapped pattern (Gitea #260).
+#[repr(C)]
+struct Aligned4<T: ?Sized> {
+    _align: [u32; 0],
+    bytes: T,
+}
+static PATTERN_BC_ALIGNED: &Aligned4<[u8]> = &Aligned4 {
+    _align: [],
+    bytes: *include_bytes!(concat!(env!("OUT_DIR"), "/default.lxbc")),
+};
+const PATTERN_BC: &[u8] = &PATTERN_BC_ALIGNED.bytes;
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -818,15 +833,15 @@ fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engi
     Ok(e)
 }
 
-/// Stamp the just-swapped pattern's identity + read-back location. Runs on
-/// the render task at the swap, so id / hash / location can never disagree
-/// with the running content (senders used to stamp the id after queueing —
-/// racy).
-///
-/// LIBRARY swaps (`id` non-empty: playlist advance, activate, MQTT select,
-/// boot resume) write NOTHING: their source + blob already live in the
-/// pattern store, and read-back serves from there (shared::*Loc::Library).
-/// This is the flash-WEAR fix — the raw slot's fixed sectors used to be
+/// Drop the crossfade's outgoing engine AND release the arena pin that kept
+/// its extent from being moved or freed while it was still executing from it
+/// (patterns.rs' pin set, Gitea #260). Order matters — the engine goes
+/// first, the pin second; never `prev = None` on its own.
+fn drop_prev(prev: &mut Option<Engine>) {
+    *prev = None;
+    patterns::unpin_prev();
+}
+
 /// [try_budgeted_engine] plus the user-facing "too large" vmerr on failure.
 fn engine_or_vmerr(p: luxel_core::vm::Program) -> Option<Engine> {
     match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
@@ -844,6 +859,15 @@ fn engine_or_vmerr(p: luxel_core::vm::Program) -> Option<Engine> {
     }
 }
 
+/// Stamp the just-swapped pattern's identity + read-back location. Runs on
+/// the render task at the swap, so id / hash / location can never disagree
+/// with the running content (senders used to stamp the id after queueing —
+/// racy).
+///
+/// LIBRARY swaps (`id` non-empty: playlist advance, activate, MQTT select,
+/// boot resume) write NOTHING: their source + blob already live in the
+/// pattern store, and read-back serves from there (shared::*Loc::Library).
+/// This is the flash-WEAR fix — the raw slot's fixed sectors used to be
 /// erased on EVERY playlist advance (~17k cycles/day at 5 s items).
 ///
 /// AD-HOC swaps (`id` empty: /api/code, sync adoption) still persist to the
@@ -904,8 +928,11 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     // (Programs with debug info are several times their blob size). That blob
     // no longer sits in RAM either — it lives in the flash read-back slot
     // (shared::current_bc), read into a TRANSIENT Vec only for the rebuild.
-    // deserialize_lean: no debug info on-device — halves a Program's RAM
-    let mut engine = match luxel_core::bytecode::deserialize_lean(PATTERN_BC) {
+    // deserialize_lean: no debug info on-device — halves a Program's RAM.
+    // _static: PATTERN_BC is rodata the bootloader already maps, so the
+    // built-in default's code and constant pool cost NO heap at all — the
+    // Program is its header tables (Gitea #260).
+    let mut engine = match luxel_core::bytecode::deserialize_lean_static(PATTERN_BC) {
         Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
         Err(e) => {
             println!("embedded pattern bytecode error (build bug?): {}", e);
@@ -922,17 +949,22 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     // as soon as the Program is built. A flash-busy read (or a library
     // pattern deleted mid-session) yields None and the engine stays paused
     // until the next swap — never a panic.
+    // Every mapped source is decoded with `deserialize_lean_static`: the
+    // rebuilt Program BORROWS its code and constant pool out of flash and
+    // costs only its header tables (Gitea #260). A rebuild's engine is as
+    // long-lived as a swap's, so this is where a copy would hurt most.
+    // Only the flash-controller fallbacks (a transient Vec) copy.
     let rebuild = || {
         let count = PIXEL_COUNT.load(Ordering::Relaxed);
         match shared::current_bc() {
-            shared::BcLoc::Default(b) => luxel_core::bytecode::deserialize_lean(b)
+            shared::BcLoc::Default(b) => luxel_core::bytecode::deserialize_lean_static(b)
                 .ok()
                 .and_then(|p| try_budgeted_engine(p, count).ok()),
             // the ad-hoc slot: mapped (no Vec) when the raw half is, else
             // a transient read through the flash controller
             shared::BcLoc::Flash(len) => {
                 let p = match crate::patterns::current_slot_code(len) {
-                    Some(code) => luxel_core::bytecode::deserialize_lean(code).ok()?,
+                    Some(code) => luxel_core::bytecode::deserialize_lean_static(code).ok()?,
                     None => {
                         let bc = crate::patterns::read_current_bc(len)?;
                         luxel_core::bytecode::deserialize_lean(&bc).ok()?
@@ -942,11 +974,16 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             }
             // library pattern: the store's CURRENT blob (not the snapshot
             // length — a re-save may have changed it, and the store's copy
-            // is the truth), from its mapped arena slot when it has one
+            // is the truth), from its mapped arena extent when it has one.
+            // The pattern is the running one, so it is already pinned.
             shared::BcLoc::Library(_) => {
-                let p = crate::patterns::with_code(&shared::get_current_pattern_id(), |bc| {
-                    luxel_core::bytecode::deserialize_lean(bc).ok()
-                })??;
+                let id = shared::get_current_pattern_id();
+                let p = match crate::patterns::code_of(&id) {
+                    Some(code) => luxel_core::bytecode::deserialize_lean_static(code).ok()?,
+                    None => crate::patterns::with_code(&id, |bc| {
+                        luxel_core::bytecode::deserialize_lean(bc).ok()
+                    })??,
+                };
                 try_budgeted_engine(p, count).ok()
             }
             shared::BcLoc::Gone => None,
@@ -1007,7 +1044,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     // engine BEFORE decoding the new program — peak heap
                     // lands here, where the most is free.
                     engine = None;
-                    prev = None;
+                    drop_prev(&mut prev);
                     // The Program owns its bytes, so once it's decoded and the
                     // envelope is persisted to the flash read-back slot, the
                     // ~envelope-sized buffer can be DROPPED before the engine
@@ -1037,6 +1074,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                             if let Some(e) = engine_or_vmerr(p) {
                                 publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                                 engine = Some(e);
+                                // this Program owns its words (the envelope
+                                // was a Vec) — an empty id clears the pin
+                                patterns::pin_running(&id);
                                 set_vmerr(None);
                                 vmerr_seen = None;
                                 last = Instant::now();
@@ -1055,7 +1095,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     // phase, or a pattern upload that couldn't allocate);
                     // the next Code/Crossfade revives rendering
                     engine = None;
-                    prev = None;
+                    drop_prev(&mut prev);
                     println!("engine frozen (heap released)");
                 }
                 Msg::Control(name, values) => {
@@ -1075,7 +1115,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
                     engine = None; // free before re-decoding (peak heap)
-                    prev = None;
+                    drop_prev(&mut prev);
                     // resize AFTER freeing the engines — at 2048 px the new
                     // buffer is a multi-KB alloc that wants the peak heap too
                     if !out.resize(count as usize) {
@@ -1120,7 +1160,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                             // last frame) and retry; the next Code/Crossfade
                             // revives rendering
                             engine = None;
-                            prev = None;
+                            drop_prev(&mut prev);
                             if !out.resize(count as usize) {
                                 println!(
                                     "encode buffer alloc failed ({} px) — output paused",
@@ -1147,12 +1187,21 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     if ms == 0 {
                         engine = None;
                     }
-                    prev = None;
+                    drop_prev(&mut prev);
+                    // Pin BEFORE reading the mapping: the Program borrows
+                    // these bytes in place, and a save on the other core
+                    // compacts the arena without asking (Gitea #260). The
+                    // outgoing engine's extent is pinned too, for as long
+                    // as the crossfade renders from it.
+                    if ms > 0 && engine.is_some() {
+                        patterns::pin_prev_from_running();
+                    }
+                    patterns::pin_code(&id);
                     let mut bc_len = 0usize;
                     let decoded = match crate::patterns::code_of(&id) {
                         Some(code) => {
                             bc_len = code.len();
-                            luxel_core::bytecode::deserialize_lean(code).map_err(Some)
+                            luxel_core::bytecode::deserialize_lean_static(code).map_err(Some)
                         }
                         None => match crate::patterns::bytecode_of(&id) {
                             Some(bc) => {
@@ -1189,6 +1238,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                                     blend_ms = ms;
                                 }
                                 engine = Some(e);
+                                patterns::pin_running(&id);
                                 set_vmerr(None);
                                 vmerr_seen = None;
                                 last = Instant::now();
@@ -1201,12 +1251,26 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                         }
                         Err(None) => {}
                     }
+                    // no fade started (ms == 0, nothing was running, or the
+                    // decode/build failed): the old engine is either gone or
+                    // still `engine`, and slot 1 still names what it borrows
+                    if prev.is_none() {
+                        patterns::unpin_prev();
+                    }
                 }
                 Msg::Crossfade { env, ms, id } => {
                     // the outgoing engine stays alive on purpose (it's the
                     // blend source) — this is the one path where two
                     // programs coexist, bounded by the crossfade duration
-                    prev = None; // but never THREE (a fade still in flight)
+                    drop_prev(&mut prev); // but never THREE (a fade in flight)
+                    // The outgoing engine may be a LIBRARY pattern executing
+                    // in place from its arena extent, and persist_current_pattern
+                    // below moves the current-pattern id off it — pin the
+                    // extent here or a save on the other core may compact it
+                    // out from under the blend source (Gitea #260).
+                    if ms > 0 && engine.is_some() {
+                        patterns::pin_prev_from_running();
+                    }
                     // Same envelope-drop-before-engine-build discipline as
                     // Msg::Code above — doubly important here, where the
                     // outgoing engine also stays alive as the blend source.
@@ -1234,6 +1298,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                                     blend_ms = ms;
                                 }
                                 engine = Some(e);
+                                patterns::pin_running(&id);
                                 set_vmerr(None);
                                 vmerr_seen = None;
                                 last = Instant::now();
@@ -1245,6 +1310,11 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                             set_vmerr(Some(alloc::format!("{}", e)));
                         }
                         Err(None) => {}
+                    }
+                    // no fade started: whatever the old engine borrows is
+                    // still named by slot 1 (or it is gone entirely)
+                    if prev.is_none() {
+                        patterns::unpin_prev();
                     }
                 }
             }
@@ -1349,7 +1419,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                 }
                 &blend_buf
             } else {
-                prev = None; // fade finished
+                drop_prev(&mut prev); // fade finished
                 engine.as_mut().unwrap().frame(delta)
             };
             let pipe_t0 = Instant::now();

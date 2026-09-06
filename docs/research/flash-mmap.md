@@ -313,17 +313,34 @@ that program's resident RAM as `mapped`:
 | Main Stage | 25,688 | 35,540 | 99,847 | 22,451 | 8,933 |
 | Frogger 2D | 20,488 | 27,274 | 79,491 | 15,061 | 6,421 |
 | Opening Act | 17,556 | 27,798 | 72,289 | 23,419 | 10,577 |
-| 2D Fireworks Fade | 18,028 | 23,037 | 67,877 | 27,366 | 4,713 |
+| 2D Fireworks Fade | 18,028 | 23,037 | 67,877 | 20,934 | 4,713 |
 | Infinite Snake | 10,528 | 15,075 | 38,395 | 21,464 | 4,280 |
 | Chasing Rainbows & HSLuv | 8,492 | 12,657 | 31,067 | 14,699 | 4,038 |
 
-Across all 299: Σ swap(xip) = 2,594,892 B (was 2,870,875 B with the v4
-copying decode above), an average of 5,900 B (40.5 %) less per
-activation than swap(vec); still 0 patterns over 45 KB under the arena.
-The word format is ~1.8× the byte format's size, so the copying paths
-(swap(vec), and the device until it calls `deserialize_lean_static`) are
-costlier than the v4 table above; on the borrowing path the resident
-program is the header tables alone.
+Across all 299 (re-measured 2026-09-06 at the extent allocator, #293):
+Σ swap(vec) = 4,113,080 B, Σ swap(xip) = 1,902,964 B — an average of
+7,391 B (53.7 %) less per activation; 6 patterns exceed 45 KB at swap
+under swap(vec), **0** under the arena lifecycle. The word format is
+~1.8× the byte format's size, so the copying paths are costlier than the
+v4 table above; on the borrowing path the resident program is the header
+tables alone.
+
+**Now borrowed on the device** (2026-09-06, Gitea #260, UPDATES.md). The
+firmware called the copying `deserialize_lean` at every mapped site until
+this date, so `mapped` modelled something the device did not actually do.
+It does now: the boot default (`PATTERN_BC`, 4-aligned so the borrow can
+happen at all — `include_bytes!` has alignment 1), the `Msg::Library` swap
+arm (`patterns::code_of`) and all three mapped branches of the engine
+`rebuild()` closure decode with `deserialize_lean_static`, so the running
+pattern's resident cost on metal is the `mapped` column. Only the
+transient-`Vec` sites still copy — the `Msg::Code`/`Msg::Crossfade`
+envelope, the chunk-store fallbacks, the playlist `check_asserts`
+pre-flight, the HTTP upload's `validate` — because their bytes do not
+outlive the call. The lifetime contract that comes with borrowing (no
+extent an engine executes from may be written, moved or freed — including
+a crossfade's OUTGOING engine, which the store's old one-pattern
+“running” notion did not cover) is the pin set documented in
+docs/firmware.md, “The borrowing invariant and the pin set”.
 
 For the assets consumer the saving is smaller but immediate: the 4 KiB
 `read_chunk` staging Vec plus the 4 KiB response buffer per in-flight

@@ -262,14 +262,15 @@ impl Dir {
     }
 
     /// The next compaction step, or None when nothing more can slide down.
-    /// `pinned` (the running pattern's seq) never moves; it splits the free
-    /// space in two rather than blocking compaction.
-    pub fn next_move(&self, pinned: Option<u32>) -> Option<Move> {
+    /// A `pinned` seq — a pattern some engine is executing from, see
+    /// patterns.rs' pin set — never moves; each one splits the free space
+    /// rather than blocking compaction.
+    pub fn next_move(&self, pinned: &[u32]) -> Option<Move> {
         let (ord, n) = self.order();
         let mut cursor = 0u16;
         for k in 0..n {
             let e = self.ents[ord[k]];
-            if Some(e.seq) == pinned {
+            if pinned.contains(&e.seq) {
                 cursor = e.end();
                 continue;
             }
@@ -283,14 +284,14 @@ impl Dir {
 
     /// The largest free run compaction could produce, without doing any of
     /// it — the "is it worth erasing anything?" test before a save
-    /// compacts. A pinned extent leaves at most one hole below it, so the
-    /// answer is the larger of that hole and the tail.
-    pub fn compacted_free_run(&self, pinned: Option<u32>) -> u16 {
+    /// compacts. Each pinned extent leaves at most one hole below it, so
+    /// the answer is the largest of those holes and the tail.
+    pub fn compacted_free_run(&self, pinned: &[u32]) -> u16 {
         let (ord, n) = self.order();
         let (mut cursor, mut best) = (0u16, 0u16);
         for k in 0..n {
             let e = self.ents[ord[k]];
-            if Some(e.seq) == pinned {
+            if pinned.contains(&e.seq) {
                 if e.start > cursor && e.start - cursor > best {
                     best = e.start - cursor;
                 }
@@ -383,7 +384,7 @@ mod tests {
     /// un-publish the extent, copy, re-publish at the new start. (The
     /// un-publish is what bounds a power cut mid-move to one extent, and
     /// it is also what frees the destination when the ranges overlap.)
-    fn compact(d: &mut Dir, pinned: Option<u32>) -> usize {
+    fn compact(d: &mut Dir, pinned: &[u32]) -> usize {
         let mut moves = 0;
         while let Some(mv) = d.next_move(pinned) {
             assert!(mv.to < mv.from, "a move must go downward");
@@ -475,15 +476,15 @@ mod tests {
         d.insert(ext(3, 14, 4)).unwrap();
         // holes: 0..3, 5..9, 10..14, 18..20 — 13 free pages, best run 4
         assert_eq!(d.largest_hole(), 4);
-        assert_eq!(d.compacted_free_run(None), 13);
-        let moves = compact(&mut d, None);
+        assert_eq!(d.compacted_free_run(&[]), 13);
+        let moves = compact(&mut d, &[]);
         assert_eq!(moves, 3);
         assert_eq!(d.find(1, 1).unwrap().1.start, 0);
         assert_eq!(d.find(2, 1).unwrap().1.start, 2);
         assert_eq!(d.find(3, 1).unwrap().1.start, 3);
         assert_eq!(d.largest_hole(), 13);
         assert_eq!(d.used_pages(), 7);
-        assert_eq!(d.next_move(None), None, "idempotent once compact");
+        assert_eq!(d.next_move(&[]), None, "idempotent once compact");
     }
 
     #[test]
@@ -492,8 +493,8 @@ mod tests {
         d.insert(ext(1, 3, 2)).unwrap();
         d.insert(ext(2, 9, 1)).unwrap(); // pinned: the running pattern
         d.insert(ext(3, 14, 4)).unwrap();
-        let predicted = d.compacted_free_run(Some(2));
-        compact(&mut d, Some(2));
+        let predicted = d.compacted_free_run(&[2]);
+        compact(&mut d, &[2]);
         assert_eq!(d.find(2, 1).unwrap().1.start, 9, "pinned extent stayed put");
         assert_eq!(d.find(1, 1).unwrap().1.start, 0);
         assert_eq!(d.find(3, 1).unwrap().1.start, 10);
@@ -508,7 +509,20 @@ mod tests {
         for a in 0..6u16 {
             for b in a + 2..9u16 {
                 for c in b + 1..12u16 {
-                    for pin in [None, Some(1u32), Some(2), Some(3)] {
+                    // pin SETS, not one pin: a crossfade holds the
+                    // outgoing pattern's extent as well as the incoming
+                    // one's (patterns.rs' pin set, Gitea #260).
+                    let pins: [&[u32]; 8] = [
+                        &[],
+                        &[1],
+                        &[2],
+                        &[3],
+                        &[1, 2],
+                        &[2, 3],
+                        &[1, 3],
+                        &[1, 2, 3],
+                    ];
+                    for pin in pins {
                         let mut d = Dir::new(12);
                         d.insert(ext(1, a, 2)).unwrap();
                         d.insert(ext(2, b, 1)).unwrap();
@@ -521,7 +535,7 @@ mod tests {
                             "layout {a},{b},{c} pin {pin:?}"
                         );
                         assert_eq!(d.used_pages(), 4);
-                        if let Some(p) = pin {
+                        for &p in pin {
                             let orig = [a, b, c][p as usize - 1];
                             assert_eq!(d.find(p, 1).unwrap().1.start, orig, "pin moved");
                         }
@@ -529,6 +543,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A crossfade pins TWO patterns — the incoming one and the outgoing
+    /// engine's blend source. Both extents must survive a compaction that
+    /// runs while the fade is in flight (Gitea #260: a borrowed Program's
+    /// code IS the mapped flash).
+    #[test]
+    fn a_crossfade_pins_both_engines_extents() {
+        let mut d = Dir::new(20);
+        d.insert(ext(1, 2, 2)).unwrap(); // free to slide
+        d.insert(ext(2, 8, 1)).unwrap(); // pinned: the outgoing engine
+        d.insert(ext(3, 12, 1)).unwrap(); // pinned: the incoming engine
+        d.insert(ext(4, 16, 2)).unwrap(); // free to slide
+        compact(&mut d, &[2, 3]);
+        assert_eq!(d.find(2, 1).unwrap().1.start, 8, "outgoing extent moved");
+        assert_eq!(d.find(3, 1).unwrap().1.start, 12, "incoming extent moved");
+        assert_eq!(d.find(1, 1).unwrap().1.start, 0);
+        assert_eq!(d.find(4, 1).unwrap().1.start, 13);
+        // holes now: 2..8 (6), 9..12 (3), 15..20 (5) — the largest is 6
+        assert_eq!(d.largest_hole(), 6);
+        assert_eq!(d.compacted_free_run(&[2, 3]), 6);
     }
 
     #[test]
@@ -540,8 +575,8 @@ mod tests {
         d.insert(ext(2, 5, 2)).unwrap();
         d.insert(ext(3, 10, 2)).unwrap();
         assert_eq!(d.first_fit(5), None);
-        assert!(d.compacted_free_run(None) >= 5);
-        compact(&mut d, None);
+        assert!(d.compacted_free_run(&[]) >= 5);
+        compact(&mut d, &[]);
         assert_eq!(d.first_fit(5), Some(6));
     }
 
@@ -553,8 +588,8 @@ mod tests {
         d.insert(ext(3, 10, 2)).unwrap();
         // packed: #1 at 0..2, the pin stays at 5..7, #3 slides to 7..9 —
         // two 3-page holes (2..5 and 9..12), so a 4-page save still fails
-        assert_eq!(d.compacted_free_run(Some(2)), 3);
-        compact(&mut d, Some(2));
+        assert_eq!(d.compacted_free_run(&[2]), 3);
+        compact(&mut d, &[2]);
         assert_eq!(d.find(3, 1).unwrap().1.start, 7);
         assert_eq!(d.largest_hole(), 3);
         assert_eq!(d.first_fit(4), None);
@@ -682,7 +717,7 @@ mod tests {
             match next(&mut rng) % 3 {
                 0 => {
                     let len = (next(&mut rng) % 9 + 1) * PAGE as u32;
-                    let pinned = Some(1u32);
+                    let pinned: &[u32] = &[1];
                     if d.first_fit(pages_for(len)).is_none()
                         && d.compacted_free_run(pinned) >= pages_for(len)
                     {
@@ -694,7 +729,7 @@ mod tests {
                     d.remove_seq(seq);
                 }
                 _ => {
-                    compact(&mut d, Some(1));
+                    compact(&mut d, &[1]);
                 }
             }
             // invariants

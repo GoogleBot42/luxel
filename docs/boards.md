@@ -198,6 +198,37 @@ lost its per-field `read_chunk` calls. No statics beyond two
 `AtomicUsize`s; `.stack` on pixelblaze-v3 26,732 B (devshell build,
 −48 B), stack-check clean on pixelblaze-v3, s3-devkit and c6-devkit.
 
+2026-09-06, borrowed program words (Gitea #260 — the firmware decodes
+mapped patterns with `deserialize_lean_static`, so a running `Program`'s
+code and constant pool are flash, not heap; the lifetime contract this
+creates is the pin set in docs/firmware.md, "The borrowing invariant and
+the pin set"): **+1.6 to +2.0 KB on every board.** Devshell builds with
+the same `creds.env` on both sides, `origin/master` df0b547 vs the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 951,648 | 953,328 | +1,680 | 95,248 B (9.08 %) |
+| `board-pixelblaze-v3` | 1,007,648 | 1,009,504 | +1,856 | 39,072 B (3.72 %) |
+| `board-athom-music` | 1,007,664 | 1,009,488 | +1,824 | 39,088 B (3.72 %) |
+| `board-esp32-generic` | 1,007,552 | 1,009,328 | +1,776 | 39,248 B (3.74 %) |
+| `board-s3-devkit` | 950,192 | 951,872 | +1,680 | 96,704 B (9.22 %) |
+| `board-s3-devkit` + `hub75` | 942,800 | 944,416 | +1,616 | 104,160 B (9.93 %) |
+| `board-seengreat-hub75` | 942,832 | 944,448 | +1,616 | 104,128 B (9.93 %) |
+| `board-c6-devkit` | 1,020,624 | 1,022,608 | +1,984 | **25,968 B (2.47 %) — FAILS, already did** |
+| `board-c6-devkit` + `hosted-ui` | 1,004,192 | 1,006,128 | +1,936 | **42,448 B (4.04 %)** |
+
+The image cost is the pin plumbing (`pins`/`pinned` and the extra
+`ARENA.lock` closures, the `contains` in `next_move`/`compacted_free_run`)
+plus the `Words::Static` construction path in `bytecode::decode`, which
+nothing linked before — the firmware only ever called the copying
+`deserialize_lean`. What it buys is RAM, not flash: the resident cost of a
+running pattern drops from the decoded `Program` (12–35 KB for the big
+gallery patterns) to its header tables (4–11 KB) — docs/research/
+flash-mmap.md "RAM accounting". `.stack` on pixelblaze-v3 25,644 B,
+stack-check clean; QEMU flashmap + both heap-regions cases pass. The C6
+full-UI build was already under the 3 % floor and not a release artifact
+(#291); the shipped hosted variant keeps 4 %.
+
 2026-09-06, pattern extent allocator (Gitea #281 — the arena's 7 fixed
 40 KiB slots became a page-granular extent allocator; `patterns.rs` +
 `extents.rs`, docs/firmware.md "The pattern store's mapped half and the
