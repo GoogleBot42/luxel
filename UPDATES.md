@@ -1,5 +1,69 @@
 # Update log
 
+## 2026-09-06 — What the COMPILER wastes: constant folding + the `i++` recovery (#312)
+
+#312 is about the ~110 cycles our interpreter spends per bytecode operation.
+This is the other half of `time/pixel = ops/px × cycles/op`: four things the
+compiler emitted that the VM then had to execute. Library-wide **69.27 →
+66.37 dynamic ops/px** (−4.2 %, 213 of 299 patterns improved, none
+regressed), and the #312 loop microbench itself **11.0 → 9.0 ops per
+iteration (−18 %)**.
+
+Every one is measured on both axes, because fewer ops is not automatically
+faster (Jeremy's rule): the dynamic count from `luxel bench --profile`, and
+the Xtensa instruction count of the ops involved, walked out of the S3
+disassembly (`xtensa-esp32s3-elf-objdump -d` of the `board-seengreat-hub75`
+image — the dispatch floor every op pays is **23 instructions**).
+
+| transformation | sites in `library/` | ops/px | Xtensa instructions, per site |
+|---|---|---|---|
+| postfix `x++` whose value is discarded emits no old-value recovery | 470 (all of them — the library contains no prefix and no value-using inc/dec) | 69.27 → 67.40 (−2.7 %) | `StoreL` 58 + `ConstOp(SUB)` 68+26 + `Pop` 33 = **185** → `StoreLPop` **47** |
+| literal arithmetic folded (`1/3`, `-1`) | 192 negated literals + 69 binary sites | 67.40 → 67.15 (−0.4 %) | `CONST_NUM` 43 + `NEG` 47 = **90** → **43** |
+| reads of never-written predefined globals become constants, and a constant operand of a commutative operator moves to the right where it fuses | 311 frozen reads (270 in operand position, 219 of them `*`) + 137 literal-left multiplies | 67.15 → 66.37 (−1.2 %) | `x * PI2`: `LoadLG` 63 + `MUL` 71 = **134** → `LoadLConstOp` 75 + `binop MUL` 30 = **105**; `2 * x`: **161** → **105** |
+
+The loop microbench, op by op — `for (i=0;i<K;i++){ x += i*0.5 }` was eleven
+operations per iteration and is now nine. The two that went were the
+`Const 1; Sub` that recovers the pre-increment value of `i` nobody reads,
+which also unblocked `StoreL; Pop` → `StoreLPop`.
+
+**Considered and rejected: strength-reducing `x * 2^n` to a shift** (606
+sites). It is bit-exact — `Fx::mul` is `(a·b) >> 16` on the full 64-bit
+product, so multiplying by `2^-k` *is* `raw >> k`, and `Fx::shr` shifts the
+raw word arithmetically — but it is **slower**. Both forms are one fused
+`LOAD_L_CONST_OP`, and inside `binop` the S3's hardware multiplier does
+`Fx::mul` in 5 instructions (`mull`/`mulsh`/`ssl`/`src`) while `Fx::shl/shr`
+must first `to_int_trunc()` the 16.16 shift count and mask it to 0..31 — 9.
+Per op: `x * 2` 105 instructions, `x << 1` 108. `x / 2^n → x >> n` is the
+one variant that might still pay (110 → 108 statically, and `quos` is an
+iterative divide whose *cycle* cost the instruction count does not show) —
+filed as its own ticket rather than guessed at.
+
+The passes live in `compile::const_fold`, ahead of the #261 peephole, and
+obey its two contracts: never fold across a jump target, never across a
+source position. The folded value comes from `vm::binop` and the same `Fx`
+operators the interpreter's arms use, so it cannot drift from the word the
+VM would have pushed — pinned by a unit test over all 17 foldable operators
+× 100 edge-word pairs. A global is "frozen" only when it is predefined,
+never `StoreG`-ed anywhere in the program, and not exported (only exported
+globals are host-settable); `pixelCount` is excluded by name because the
+engine writes it without a `StoreG`. `luxel run|bench|compile --no-fold` is
+the A/B lever, independent of `--no-fuse`.
+
+Verification: `cargo test --workspace` (15 new codegen pins in `compile.rs`,
+8 new equivalence tests in `tests/constfold.rs`); `tools/check-library.sh`
+1495/1495; **all 299 library patterns render byte-identically to the master
+binary**, on both a 256-px strip and a 16×16 grid (598 PPMs); web build +
+`npm test` 29/29 + `web/tools/e2e.mjs` (which steps the debugger);
+all seven boards build and the firmware images are **unchanged** — the
+device drops luxel-core's frontend, and the one thing the host compiler
+puts in the image, the built-in `library/rainbow.js` blob, is byte-identical.
+
+Host `luxel bench` throughput is **not** a usable signal for this change and
+is not quoted: `rainbow`'s compiled blob is byte-identical between the two
+binaries and `Vm::run`, `Engine::frame` and `call_builtin` disassemble
+instruction-for-instruction identically, yet it measures +8 % — the x86
+code-placement lottery #261 already recorded.
+
 ## 2026-09-06 — Where the S3's ~110 cycles per bytecode op go, and 18 % of them back (#312)
 
 #312 asked for the ~50 cycles/op the instruction-count model could not explain.
@@ -268,7 +332,6 @@ that. The #260 table at 4096 px, per-stage µs from `/api/status`:
   deterministic trigger on the Athom — ran 3/3 clean at 727 KB on the S3,
   and the S3 never performs the esp32-only SPI2-DMA wait, so that wait is
   not the common cause.
-=======
 ## 2026-09-06 (later) — the second core's flash fence: root-caused, fixed, and 100x fewer fences (#292)
 
 Follow-up to the entry below, on the same Athom rig. The blocker it filed is
@@ -353,7 +416,6 @@ no watchdog reset, render 121 fps. Image cost on `board-pixelblaze-v3`:
 the new work out of `fenced_as` (which is `#[inline(always)]` at ~20 flash call
 sites — 2.6 KB of image) and `PageStateCache` rather than `PagePointerCache`
 (3.3 KB more, and measurably no faster here).
->>>>>>> theirs
 
 
 

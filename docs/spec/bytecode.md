@@ -245,6 +245,57 @@ do not change:
 
 The one deliberate difference is FUEL: a fused instruction costs 1 unit
 instead of 2 or 3, so the runaway-loop budget stretches slightly further.
+
+## Constant folding
+
+Before the peephole runs, the compiler evaluates what it can (Gitea #312,
+`compile::const_fold`). This produces no new opcodes and changes nothing
+about the format — it only means fewer instructions reach the VM — but it
+is a **codegen guarantee** a reader of a blob can rely on: an emitted
+`Const` word may be a value the source never wrote down.
+
+Three rewrites, applied to a fixed point:
+
+1. **Literal arithmetic.** `Const a; Const b; <binop>` → `Const (a⊕b)`, and
+   `Const a; Neg|Not|BitNot` → `Const (⊕a)`. The value is computed by
+   `vm::binop` and the `Fx` operators the interpreter's own arms use, so
+   the folded word is the exact word the VM would have pushed — including
+   `Fx`'s truncation, wrapping, and divide-by-zero-is-zero. `-1` is worth
+   folding on its own: the parser hands the compiler `Neg(Num(1))`, never
+   `Num(-1)`.
+2. **Frozen globals.** A **predefined** global (`PI`, `PI2`, `LN2`, `LOW`,
+   … — the `predefined()` table) that the program never assigns and never
+   exports cannot change: no `StoreG` targets it, and `Engine::set_var`
+   refuses a non-exported global. Reads of one become `Const`. `pixelCount`
+   is excluded by name — the engine writes it straight into `vm.globals`,
+   with no `StoreG` for the scan to find. A pattern that writes `PI = 3`,
+   or exports the name, simply takes it out of the frozen set.
+   The substitution is made only where the constant lowers to fewer or
+   cheaper instructions than the load: a `LoadG` is one word and fuses
+   with a following `LoadL`, while a `Const` is two words and fuses with
+   nothing on its left, so substituting blindly would make `PI * arr[i]`
+   *longer*.
+3. **Operand order.** `Const c; <load>; <op>` → `<load>; Const c; <op>`
+   where the operator is commutative on `Fx` (`+ * & | ^`) or has a mirror
+   (`2 < x` → `x > 2`), so the constant lands where the peephole can fuse
+   it. Only two single pushes (`Const`, `LoadL`, `LoadG`) are ever
+   reordered; neither can fail or have an effect, so their order is
+   unobservable.
+
+Folding obeys the peephole's two rules — never across a jump target, never
+across a source position — for the same reasons, so the debugger still
+stops once per source line and errors still name the same line and column.
+
+`luxel run|bench --no-fold` compiles with the passes off; that plus
+`--no-fuse` is the A/B lever, and `crates/luxel-core/tests/constfold.rs`
+compares every combination.
+
+One more codegen guarantee, from the same issue and not switchable: a
+POSTFIX `x++` / `x--` whose value is immediately discarded (an expression
+statement, or a `for` header's update clause) does **not** emit the
+`Const 1; Sub` that recovers the old value. Nothing can observe the
+difference, and leaving it out is what lets `StoreL; Pop` fuse.
+
 ## Decoding
 
 Three entry points, one validator:

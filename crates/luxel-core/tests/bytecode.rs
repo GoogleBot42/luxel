@@ -332,7 +332,10 @@ fn insn_count_walks_every_function() {
 
     let mut totals = Vec::new();
     for superinstructions in [true, false] {
-        let prog = compile_with(PATTERN, CompileOpts { superinstructions }).unwrap();
+        let prog = compile_with(PATTERN, CompileOpts {
+            superinstructions,
+            const_folding: true,
+        }).unwrap();
         let mut total = 0u32;
         for f in &prog.fns {
             let s = f.code_start as usize;

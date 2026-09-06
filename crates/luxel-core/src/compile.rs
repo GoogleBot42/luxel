@@ -109,12 +109,19 @@ const MAX_LOCALS: usize = 255;
 #[derive(Clone, Copy, Debug)]
 pub struct CompileOpts {
     pub superinstructions: bool,
+    /// Compile-time evaluation of literal arithmetic and of reads of the
+    /// predefined globals a pattern never writes (Gitea #312). Unlike the
+    /// peephole this changes the *unfused* stream too, so it gets its own
+    /// switch: `tests/constfold.rs` renders folded and unfolded and
+    /// compares them, exactly as `tests/superinsns.rs` does for fusion.
+    pub const_folding: bool,
 }
 
 impl Default for CompileOpts {
     fn default() -> Self {
         CompileOpts {
             superinstructions: true,
+            const_folding: true,
         }
     }
 }
@@ -159,8 +166,21 @@ fn assemble(
 ) -> Program {
     let mut code: Vec<u32> = Vec::new();
     let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
+    // Which globals can never change over the whole run? A whole-program
+    // question, so it is answered once, before any function is lowered
+    // (Gitea #312).
+    let frozen = frozen_globals(&fns, &globals);
     for mut f in fns {
-        // pass 0: fuse the hot sequences into superinstructions
+        // pass 0a: constant folding — literal arithmetic the source wrote
+        // out, and reads of the frozen globals wherever a constant fuses
+        // better than the load does (Gitea #312).
+        if opts.const_folding {
+            let (fcode, fpos) =
+                const_fold(core::mem::take(&mut f.code), core::mem::take(&mut f.pos), &frozen);
+            f.code = fcode;
+            f.pos = fpos;
+        }
+        // pass 0b: fuse the hot sequences into superinstructions
         if opts.superinstructions {
             let (fcode, fpos) =
                 peephole(core::mem::take(&mut f.code), core::mem::take(&mut f.pos));
@@ -244,6 +264,377 @@ fn assemble(
 /// instruction costs 1, not 2 or 3, so a pattern's execution-limit budget
 /// stretches slightly further (`FUEL` is a runaway-loop guard, not a
 /// semantic quantity).
+/// `is_target[i]` ⇔ some jump in `code` lands on instruction `i`. Both
+/// rewrite passes need it: an instruction a jump can land on may never be
+/// folded away or fused into its predecessor, or control would arrive in
+/// the middle of what used to be several instructions.
+fn jump_targets(code: &[Insn]) -> Vec<bool> {
+    use Insn::*;
+    let n = code.len();
+    let mut is_target = alloc::vec![false; n + 1];
+    for insn in code {
+        match insn {
+            Jmp(t) | JmpIfFalse(t) | JmpIfTruePeek(t) | JmpIfFalsePeek(t) | CmpJf(_, t) => {
+                if (*t as usize) <= n {
+                    is_target[*t as usize] = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    is_target
+}
+
+/// The base opcode of an IR instruction that [`crate::vm::binop`] can
+/// evaluate — the fusable/foldable two-operand set. `None` for everything
+/// else.
+fn binop_sub(insn: &Insn) -> Option<u8> {
+    use Insn::*;
+    Some(match insn {
+        Add => op::ADD,
+        Sub => op::SUB,
+        Mul => op::MUL,
+        Div => op::DIV,
+        Rem => op::REM,
+        Pow => op::POW,
+        BitAnd => op::BIT_AND,
+        BitOr => op::BIT_OR,
+        BitXor => op::BIT_XOR,
+        Shl => op::SHL,
+        Shr => op::SHR,
+        Lt => op::LT,
+        Le => op::LE,
+        Gt => op::GT,
+        Ge => op::GE,
+        Eq => op::EQ,
+        Ne => op::NE,
+        _ => return None,
+    })
+}
+
+/// Globals whose value is fixed for the whole run, as `Some(value)`.
+///
+/// A global qualifies when it is **predefined** (so its value is the
+/// `GlobalDef.init` the engine installs, not something init computes),
+/// **never the target of a `StoreG`** anywhere in the program, and **not
+/// exported** — `Engine::set_var` and the `vars` API refuse a
+/// non-exported global, so the host cannot write it either. `pixelCount`
+/// is excluded by name: the engine writes it straight into `vm.globals`
+/// without any `StoreG`, so the `StoreG` scan would not catch it.
+///
+/// Assigning to a predefined name is legal (`PI = 3` compiles) — it just
+/// disqualifies that name here, for that pattern.
+fn frozen_globals(fns: &[FnIr], globals: &[GlobalDef]) -> Vec<Option<Fx>> {
+    let mut out: Vec<Option<Fx>> = globals
+        .iter()
+        .map(|g| {
+            if g.predefined && !g.export && g.name != "pixelCount" {
+                Some(g.init)
+            } else {
+                None
+            }
+        })
+        .collect();
+    for f in fns {
+        for insn in &f.code {
+            if let Insn::StoreG(i) = insn {
+                if let Some(slot) = out.get_mut(*i as usize) {
+                    *slot = None;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Constant folding (Gitea #312), run before the superinstruction
+/// peephole. Two rewrites, applied to a fixed point:
+///
+/// 1. **Literal arithmetic.** `Const a; Const b; <binop>` → `Const (a⊕b)`
+///    and `Const a; <unop>` → `Const (⊕a)`. The value comes from
+///    [`crate::vm::binop`] and the same `Fx` operators the interpreter's
+///    own arms use, so the folded word is bit-identical to the one the VM
+///    would have pushed. `2 * PI / 3`, `1 / 2` and `-1` are the everyday
+///    shapes — `-1` alone is worth an instruction, since the parser hands
+///    the compiler `Neg(Num(1))`, not `Num(-1)`.
+///
+/// 2. **Frozen-global reads**, `LoadG g` → `Const v`, but ONLY where the
+///    constant lowers to fewer or cheaper instructions than the load.
+///    That is not automatic: `LoadG` is a one-word instruction that fuses
+///    with a following `LoadL` (`LoadGL`), while a `Const` is two words
+///    and fuses with nothing on its left — substituting blindly turns
+///    `PI * x` (`LoadG; LoadL; Mul` ⇒ `LoadGL; Mul`, 2 ops) into 3 ops.
+///    The profitable successors are exactly:
+///      * a binop        — `Const; <binop>` fuses to `ConstOp`, and a
+///                         preceding `LoadL` to `LoadLConstOp`: 2 ops → 1.
+///      * `CallBuiltin`  — `Const; CallBuiltin` fuses to `CallBuiltinC`:
+///                         2 ops → 1.
+///      * `Const c; <binop>` — rule 1 then collapses all three into one
+///                         `Const`: the same op count and word count as
+///                         the `LoadGConstOp` it replaces, but a plain
+///                         push instead of an arithmetic op, and the fold
+///                         can keep travelling up the expression.
+///
+/// 3. **Operand order**, `Const c; <load>; <commutative op>` →
+///    `<load>; Const c; <commutative op>`, so that the constant is where
+///    the peephole can fuse it. See [`commute_consts`].
+///
+/// All three rewrites obey the peephole's two contracts (see
+/// `.claude/rules/vm-bytecode.md`): nothing folds across a JUMP TARGET,
+/// and nothing folds across a SOURCE POSITION, so the debugger still
+/// stops once per source line.
+fn const_fold(
+    mut code: Vec<Insn>,
+    mut pos: Vec<(u32, u32)>,
+    frozen: &[Option<Fx>],
+) -> (Vec<Insn>, Vec<(u32, u32)>) {
+    if pos.len() != code.len() {
+        return (code, pos);
+    }
+    // A substitution can expose a fold and a fold can expose a
+    // substitution (`PI * PI2`), so iterate; every round either shrinks
+    // the code or turns a `LoadG` into a `Const`, so this terminates.
+    for _ in 0..4 {
+        let subst = subst_frozen_globals(&mut code, &pos, frozen);
+        let swapped = commute_consts(&mut code, &pos);
+        let (c, p, folded) = fold_literals(code, pos);
+        code = c;
+        pos = p;
+        if !subst && !swapped && !folded {
+            break;
+        }
+    }
+    (code, pos)
+}
+
+/// Rewrite rule 2 of [`const_fold`]. In place: no instruction is added or
+/// removed, so positions and jump targets are untouched. Returns whether
+/// anything changed.
+fn subst_frozen_globals(code: &mut [Insn], pos: &[(u32, u32)], frozen: &[Option<Fx>]) -> bool {
+    use Insn::*;
+    let is_target = jump_targets(code);
+    let n = code.len();
+    let mut changed = false;
+    for i in 0..n {
+        let LoadG(g) = code[i] else { continue };
+        let Some(Some(v)) = frozen.get(g as usize).copied() else {
+            continue;
+        };
+        // the successor must be this statement's fall-through successor,
+        // or the peephole would not have fused with it anyway
+        if !(i + 1 < n && !is_target[i + 1] && pos[i + 1] == pos[i]) {
+            continue;
+        }
+        let profitable = match &code[i + 1] {
+            insn if binop_sub(insn).is_some() => true,
+            CallBuiltin { argc, .. } => *argc >= 1,
+            // `PI2 * x`: the constant is on the WRONG side to fuse, but
+            // `commute_consts` moves it over as soon as it is a `Const`,
+            // so check that pass's guards here rather than its result.
+            next if push_kind(next).is_some() => {
+                i + 2 < n
+                    && !is_target[i + 1]
+                    && !is_target[i + 2]
+                    && pos[i + 1] == pos[i]
+                    && pos[i + 2] == pos[i]
+                    && (binop_sub(&code[i + 2]).is_some() && matches!(code[i + 1], Const(Value::Num(_)))
+                        || mirror_op(&code[i + 2]).is_some())
+            }
+            _ => false,
+        };
+        if profitable {
+            code[i] = Const(Value::Num(v));
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Rewrite rule 1 of [`const_fold`]: evaluate literal arithmetic.
+///
+/// Instructions fold into the *output* as it is built, so a chain like
+/// `Const 1; Const 2; Add; Const 3; Mul` collapses in one sweep.
+/// `origin[k]` is the old index of the first instruction that produced
+/// `out[k]`, and it is what the position and jump-target checks are made
+/// against: the interior indices of an earlier fold were checked when
+/// that fold happened, and all of them carried that same position.
+fn fold_literals(code: Vec<Insn>, pos: Vec<(u32, u32)>) -> (Vec<Insn>, Vec<(u32, u32)>, bool) {
+    use Insn::*;
+    let n = code.len();
+    let is_target = jump_targets(&code);
+    let mut out: Vec<Insn> = Vec::with_capacity(n);
+    let mut outpos: Vec<(u32, u32)> = Vec::with_capacity(n);
+    let mut origin: Vec<usize> = Vec::with_capacity(n);
+    // old instruction index → new instruction index (jump retargeting)
+    let mut map = alloc::vec![0u32; n + 1];
+    let mut changed = false;
+    for i in 0..n {
+        let insn = code[i];
+        let mut folded = false;
+        // an instruction a jump lands on can never vanish into its
+        // predecessor
+        if !is_target[i] {
+            if matches!(insn, Neg | Not | BitNot) {
+                if let Some(&Const(Value::Num(a))) = out.last() {
+                    let k = *origin.last().unwrap();
+                    if pos[i] == pos[k] {
+                        // exactly the VM's own arms
+                        let v = match insn {
+                            Neg => -a,
+                            Not => {
+                                if Value::Num(a).truthy() {
+                                    Fx::ZERO
+                                } else {
+                                    Fx::ONE
+                                }
+                            }
+                            _ => !a,
+                        };
+                        let at = out.len() - 1;
+                        out[at] = Const(Value::Num(v));
+                        folded = true;
+                    }
+                }
+            } else if let Some(sub) = binop_sub(&insn) {
+                if out.len() >= 2 {
+                    let hi = out.len() - 1;
+                    if let (Const(Value::Num(a)), Const(Value::Num(b))) = (out[hi - 1], out[hi]) {
+                        let ka = origin[hi - 1];
+                        let kb = origin[hi];
+                        if pos[i] == pos[ka] && pos[kb] == pos[ka] && !is_target[kb] {
+                            // the interpreter's own evaluator, so the
+                            // folded word cannot drift from the executed one
+                            let v = crate::vm::binop(sub, Value::Num(a), Value::Num(b));
+                            out.pop();
+                            outpos.pop();
+                            origin.pop();
+                            let at = out.len() - 1;
+                            out[at] = Const(v);
+                            folded = true;
+                        }
+                    }
+                }
+            }
+        }
+        if folded {
+            let at = (out.len() - 1) as u32;
+            // every old index absorbed into this constant now maps to it;
+            // only jump targets are ever read back, and none of the
+            // absorbed indices is one
+            let from = origin[out.len() - 1];
+            for slot in map.iter_mut().take(i + 1).skip(from) {
+                *slot = at;
+            }
+            changed = true;
+        } else {
+            map[i] = out.len() as u32;
+            out.push(insn);
+            outpos.push(pos[i]);
+            origin.push(i);
+        }
+    }
+    map[n] = out.len() as u32;
+    for insn in &mut out {
+        match insn {
+            Jmp(t) | JmpIfFalse(t) | JmpIfTruePeek(t) | JmpIfFalsePeek(t) | CmpJf(_, t) => {
+                *t = map[(*t as usize).min(n)];
+            }
+            _ => {}
+        }
+    }
+    (out, outpos, changed)
+}
+
+/// Rewrite rule 3 of [`const_fold`]: put the constant operand of a
+/// commutative binary operation on the RIGHT, where the peephole can fuse
+/// it. `2 * x` and `PI2 * x` are written that way all over `library/` and
+/// cost three instructions (`Const; LoadL; Mul` — a `Const` fuses with
+/// what follows it, never with what follows the load) where `x * 2` costs
+/// one (`LoadLConstOp`).
+///
+/// Only ever swaps two SINGLE PUSHES — `Const`, `LoadL`, `LoadG` — none of
+/// which can fail or have an effect, so their evaluation order is
+/// unobservable. The operator is either commutative on `Fx` (`+ * & | ^`,
+/// all of which the VM evaluates as `a.num() ⊕ b.num()`) or a relational
+/// one replaced by its MIRROR (`2 < x` → `x > 2`), which is the same
+/// predicate on the total order of a 16.16 word.
+fn commute_consts(code: &mut [Insn], pos: &[(u32, u32)]) -> bool {
+    let is_target = jump_targets(code);
+    let n = code.len();
+    let mut changed = false;
+    for i in 2..n {
+        let Some(mirrored) = mirror_op(&code[i]) else { continue };
+        // A jump landing on the operator would skip the swap but still run
+        // the mirrored opcode; one landing on the second push would run it
+        // against a stack the swap has reordered. Landing on the FIRST push
+        // is fine — both pushes then run, in either order, to the same
+        // stack. Fusion also needs all three in one statement.
+        if is_target[i] || is_target[i - 1] {
+            continue;
+        }
+        if pos[i] != pos[i - 2] || pos[i - 1] != pos[i - 2] {
+            continue;
+        }
+        let (Some(a), Some(b)) = (push_kind(&code[i - 2]), push_kind(&code[i - 1])) else {
+            continue;
+        };
+        if fused_ops(b, a) < fused_ops(a, b) {
+            code.swap(i - 2, i - 1);
+            code[i] = mirrored;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// The instruction to use when this operator's two operands are swapped,
+/// or `None` if swapping them is not an identity. `Div`, `Sub`, `Rem`,
+/// `Pow` and the shifts have no mirror; `Eq`/`Ne` are left out because
+/// `value_eq` is only defined here for numbers and this saves nothing
+/// (three sites in the whole library).
+fn mirror_op(insn: &Insn) -> Option<Insn> {
+    use Insn::*;
+    Some(match insn {
+        Add => Add,
+        Mul => Mul,
+        BitAnd => BitAnd,
+        BitOr => BitOr,
+        BitXor => BitXor,
+        Lt => Gt,
+        Gt => Lt,
+        Le => Ge,
+        Ge => Le,
+        _ => return None,
+    })
+}
+
+/// A push with no operand evaluation of its own: `0` a constant, `1` a
+/// local read, `2` a global read. Anything else disqualifies the operand
+/// from being reordered.
+fn push_kind(insn: &Insn) -> Option<u8> {
+    match insn {
+        Insn::Const(Value::Num(_)) => Some(0),
+        Insn::LoadL(_) => Some(1),
+        Insn::LoadG(_) => Some(2),
+        _ => None,
+    }
+}
+
+/// How many instructions `[first, second, <binop>]` lowers to once
+/// [`fold_literals`] and [`peephole`] have run — the whole point of the
+/// swap. `Const` fuses with the operator (`ConstOp`) and with a load in
+/// front of it (`LoadLConstOp`/`LoadGConstOp`); two loads fuse with each
+/// other (`LoadLL`/`LoadLG`/`LoadGL`) but not with the operator, and two
+/// global reads fuse with nothing at all.
+fn fused_ops(first: u8, second: u8) -> u8 {
+    match (first, second) {
+        (_, 0) => 1,          // <push>; Const; op  → *ConstOp (or folded)
+        (0, _) => 3,          // Const; <load>; op  → nothing fuses
+        (2, 2) => 3,          // LoadG; LoadG; op   → no LoadGG template
+        _ => 2,               // LoadLL / LoadLG / LoadGL, then the op
+    }
+}
+
 fn peephole(code: Vec<Insn>, pos: Vec<(u32, u32)>) -> (Vec<Insn>, Vec<(u32, u32)>) {
     use Insn::*;
     let n = code.len();
@@ -252,44 +643,13 @@ fn peephole(code: Vec<Insn>, pos: Vec<(u32, u32)>) -> (Vec<Insn>, Vec<(u32, u32)
     if pos.len() != n {
         return (code, pos);
     }
-    let mut is_target = alloc::vec![false; n + 1];
-    for insn in &code {
-        match insn {
-            Jmp(t) | JmpIfFalse(t) | JmpIfTruePeek(t) | JmpIfFalsePeek(t) => {
-                if (*t as usize) <= n {
-                    is_target[*t as usize] = true;
-                }
-            }
-            _ => {}
-        }
-    }
+    let is_target = jump_targets(&code);
     // May instructions i..i+len fuse into one? (i itself may be a target.)
     let joinable = |i: usize, len: usize| {
         i + len <= n
             && (1..len).all(|k| !is_target[i + k] && pos[i + k] == pos[i])
     };
-    let sub = |insn: &Insn| -> Option<u8> {
-        Some(match insn {
-            Add => op::ADD,
-            Sub => op::SUB,
-            Mul => op::MUL,
-            Div => op::DIV,
-            Rem => op::REM,
-            Pow => op::POW,
-            BitAnd => op::BIT_AND,
-            BitOr => op::BIT_OR,
-            BitXor => op::BIT_XOR,
-            Shl => op::SHL,
-            Shr => op::SHR,
-            Lt => op::LT,
-            Le => op::LE,
-            Gt => op::GT,
-            Ge => op::GE,
-            Eq => op::EQ,
-            Ne => op::NE,
-            _ => return None,
-        })
-    };
+    let sub = binop_sub;
     let cmp = |insn: &Insn| -> Option<u8> {
         match sub(insn) {
             Some(o) if crate::bytecode::is_cmp_sub(o) => Some(o),
@@ -994,7 +1354,7 @@ impl<'s> Compiler<'s> {
                 Ok(())
             }
             StmtKind::Expr(e) => {
-                self.emit_expr(ctx, e)?;
+                self.emit_expr_discard(ctx, e)?;
                 ctx.push(Insn::Pop);
                 Ok(())
             }
@@ -1051,7 +1411,7 @@ impl<'s> Compiler<'s> {
                 let frame = ctx.loops.pop().unwrap();
                 let cont = ctx.here();
                 if let Some(u) = update {
-                    self.emit_expr(ctx, u)?;
+                    self.emit_expr_discard(ctx, u)?;
                     ctx.push(Insn::Pop);
                 }
                 ctx.push(Insn::Jmp(start));
@@ -1267,6 +1627,82 @@ impl<'s> Compiler<'s> {
         Ok(())
     }
 
+    /// Emit an expression whose value the caller pops immediately.
+    ///
+    /// The only shape that differs from [`emit_expr`] is a POSTFIX
+    /// `x++` / `x--` (Gitea #312): its value is defined to be the *old*
+    /// one, which the compiler recovers by applying the inverse operation
+    /// to the new value (`Const 1; Sub` after an `x++`). When the caller
+    /// is about to `Pop` that value, nothing can observe the difference,
+    /// so the recovery is not emitted and the statement is two
+    /// instructions shorter — three fewer per `for` iteration once the
+    /// peephole folds `StoreL; Pop` into `StoreLPop`, which the recovery
+    /// was preventing.
+    ///
+    /// The value is still LEFT ON THE STACK; the caller pops it, exactly
+    /// as with `emit_expr`.
+    fn emit_expr_discard(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
+        let ExprKind::IncDec { inc, target, .. } = &e.kind else {
+            return self.emit_expr(ctx, e);
+        };
+        self.depth += 1;
+        if self.depth > MAX_EMIT_DEPTH {
+            self.depth -= 1;
+            return Err(Diagnostic::new(e.span, "expression nesting too deep"));
+        }
+        let r = self.emit_incdec(ctx, *inc, target, false);
+        self.depth -= 1;
+        r
+    }
+
+    /// `x++` / `++x` / `x--` / `--x`. `keep_old` asks for the postfix
+    /// value (the value BEFORE the update); prefix — and any context that
+    /// discards the result — passes `false` and gets the new value.
+    fn emit_incdec(
+        &mut self,
+        ctx: &mut FnCtx,
+        inc: bool,
+        target: &Expr,
+        keep_old: bool,
+    ) -> Result<(), Diagnostic> {
+        let one = Insn::Const(Value::Num(Fx::ONE));
+        let (fwd, inv) = if inc {
+            (Insn::Add, Insn::Sub)
+        } else {
+            (Insn::Sub, Insn::Add)
+        };
+        match &target.kind {
+            ExprKind::Ident(name) => {
+                self.emit_expr(ctx, target)?;
+                ctx.push(one);
+                ctx.push(fwd);
+                self.emit_store(ctx, name, target.span)?;
+            }
+            ExprKind::Index { obj, index } => {
+                self.emit_expr(ctx, obj)?;
+                self.emit_expr(ctx, index)?;
+                ctx.push(Insn::Dup2);
+                ctx.push(Insn::LoadIdx);
+                ctx.push(one);
+                ctx.push(fwd);
+                ctx.push(Insn::StoreIdx);
+            }
+            _ => {
+                return Err(Diagnostic::new(
+                    target.span,
+                    "invalid increment target".to_string(),
+                ))
+            }
+        }
+        if keep_old {
+            // stack holds the NEW value; recover the old one (exact
+            // inverse under wrapping arithmetic)
+            ctx.push(one);
+            ctx.push(inv);
+        }
+        Ok(())
+    }
+
     fn emit_expr(&mut self, ctx: &mut FnCtx, e: &Expr) -> Result<(), Diagnostic> {
         self.depth += 1;
         if self.depth > MAX_EMIT_DEPTH {
@@ -1384,44 +1820,7 @@ impl<'s> Compiler<'s> {
                 inc,
                 prefix,
                 target,
-            } => {
-                let one = Insn::Const(Value::Num(Fx::ONE));
-                let (fwd, inv) = if *inc {
-                    (Insn::Add, Insn::Sub)
-                } else {
-                    (Insn::Sub, Insn::Add)
-                };
-                match &target.kind {
-                    ExprKind::Ident(name) => {
-                        self.emit_expr(ctx, target)?;
-                        ctx.push(one);
-                        ctx.push(fwd);
-                        self.emit_store(ctx, name, target.span)?;
-                    }
-                    ExprKind::Index { obj, index } => {
-                        self.emit_expr(ctx, obj)?;
-                        self.emit_expr(ctx, index)?;
-                        ctx.push(Insn::Dup2);
-                        ctx.push(Insn::LoadIdx);
-                        ctx.push(one);
-                        ctx.push(fwd);
-                        ctx.push(Insn::StoreIdx);
-                    }
-                    _ => {
-                        return Err(Diagnostic::new(
-                            target.span,
-                            "invalid increment target".to_string(),
-                        ))
-                    }
-                }
-                if !prefix {
-                    // stack holds the NEW value; recover the old one (exact
-                    // inverse under wrapping arithmetic)
-                    ctx.push(one);
-                    ctx.push(inv);
-                }
-                Ok(())
-            }
+            } => self.emit_incdec(ctx, *inc, target, !*prefix),
             ExprKind::Ternary { cond, then, els } => {
                 self.emit_expr(ctx, cond)?;
                 let jf = ctx.emit_placeholder();
@@ -1767,5 +2166,343 @@ fn hoist(stmts: &[Stmt], out: &mut Vec<String>) {
             StmtKind::Block(b) => hoist(b, out),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod const_fold_tests {
+    //! Per-rule codegen pins for the Gitea #312 passes: one test per
+    //! rewrite, each stating the source it fires on and the exact
+    //! instruction sequence the function must lower to. A rule that
+    //! silently stops matching fails here rather than quietly costing
+    //! instructions on the device.
+    use super::*;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    /// The IR of one function after both #312 passes and the #261
+    /// peephole — i.e. exactly the instruction stream [`assemble`]
+    /// encodes.
+    fn ir(src: &str, fname: &str) -> Vec<Insn> {
+        let ast = parse_program(src).expect("parses");
+        let mut c = Compiler::new(src);
+        c.collect(&ast).expect("collects");
+        c.emit_program(&ast).expect("compiles");
+        let frozen = frozen_globals(&c.fns, &c.globals);
+        let f = c
+            .fns
+            .iter()
+            .find(|f| f.name == fname)
+            .unwrap_or_else(|| panic!("no function `{fname}`"));
+        let (code, pos) = const_fold(f.code.clone(), f.pos.clone(), &frozen);
+        peephole(code, pos).0
+    }
+
+    /// Variant names only — the operand values are asserted separately
+    /// where they carry the point of the test.
+    fn ops(src: &str, fname: &str) -> Vec<String> {
+        ir(src, fname)
+            .iter()
+            .map(|i| {
+                let s = format!("{i:?}");
+                s.split(['(', ' ']).next().unwrap_or("?").into()
+            })
+            .collect()
+    }
+
+    fn same_ir(src: &str, fname: &str) -> Vec<String> {
+        ir(src, fname).iter().map(|i| format!("{i:?}")).collect()
+    }
+
+    // ---- rule: postfix inc/dec whose value is discarded ----
+
+    #[test]
+    fn a_for_headers_increment_does_not_recover_the_old_value() {
+        // `i++` as a for-update: the four instructions of the update are
+        // LoadL/Const/Add/StoreL, and the discarded old value used to cost
+        // a `Const 1; Sub` on top — which also blocked `StoreL; Pop` from
+        // fusing. Nine instructions per iteration, not eleven.
+        let src = "export function render(index) {
+  var x = 0
+  for (var i = 0; i < 16; i++) {
+    x += i * 0.5
+  }
+  hsv(x, 1, 1)
+}";
+        assert_eq!(
+            ops(src, "render"),
+            [
+                "Const",           // x = 0
+                "StoreLPop",
+                "Const",           // i = 0
+                "StoreLPop",
+                "LoadLConstOp",    // i < 16
+                "JmpIfFalse",
+                "LoadLL",          // x += i * 0.5
+                "ConstOp",
+                "Add",
+                "StoreLPop",
+                "LoadLConstOp",    // i++  (no old-value recovery)
+                "StoreLPop",
+                "Jmp",
+                "LoadL",           // hsv(x, 1, 1)
+                "CallBuiltinCC",
+                "PopRetNull",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bare_increment_statement_loses_the_recovery_too() {
+        let src = "export function render(index) {
+  var i = index
+  i++
+  hsv(i, 1, 1)
+}";
+        assert_eq!(
+            ops(src, "render"),
+            [
+                "LoadL",
+                "StoreLPop",
+                "LoadLConstOp",
+                "StoreLPop",
+                "LoadL",
+                "CallBuiltinCC",
+                "PopRetNull"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_postfix_increment_whose_value_is_used_still_recovers_it() {
+        // The rewrite is only legal where the value is popped. Used as a
+        // value, `i++` must still yield the OLD one.
+        let src = "export function render(index) {
+  var i = 0
+  var a = i++
+  hsv(a, 1, 1)
+}";
+        let o = ops(src, "render");
+        assert!(
+            o.windows(2).any(|w| w[0] == "StoreL" && w[1] == "ConstOp"),
+            "the old-value recovery is gone from a value context: {o:?}"
+        );
+    }
+
+    // ---- rule: literal constant folding ----
+
+    #[test]
+    fn a_negated_literal_is_one_instruction() {
+        // The parser hands the compiler `Neg(Num(1))`, never `Num(-1)`.
+        let src = "export function render(index) { hsv(index + -1, 1, 1) }";
+        let o = ops(src, "render");
+        assert!(!o.contains(&String::from("Neg")), "{o:?}");
+        assert_eq!(o, ["LoadLConstOp", "CallBuiltinCC", "PopRetNull"]);
+        // …and it is the right constant
+        assert!(
+            same_ir(src, "render")[0].contains("-1"),
+            "{:?}",
+            same_ir(src, "render")
+        );
+    }
+
+    #[test]
+    fn literal_arithmetic_collapses_to_one_constant() {
+        let src = "export function render(index) { hsv(index * (1 / 3), 1, 1) }";
+        assert_eq!(
+            ops(src, "render"),
+            ["LoadLConstOp", "CallBuiltinCC", "PopRetNull"]
+        );
+        // 1/3 in 16.16 is 21845 raw — the same word `Fx::div` computes
+        assert_eq!(
+            ir(src, "render")[0],
+            Insn::LoadLConstOp(0, op::MUL, Fx::from_raw(21845))
+        );
+    }
+
+    #[test]
+    fn a_folded_chain_matches_the_interpreters_own_arithmetic() {
+        // Every foldable operator, over the edge words of the format, must
+        // give exactly what `vm::binop` gives — that is the whole
+        // bit-exactness claim, so it is checked directly rather than
+        // inferred from a render.
+        let edges = [
+            Fx::from_raw(i32::MIN),
+            Fx::from_raw(i32::MIN + 1),
+            Fx::from_raw(-65536),
+            Fx::from_raw(-32768),
+            Fx::from_raw(-1),
+            Fx::ZERO,
+            Fx::from_raw(1),
+            Fx::from_raw(32768),
+            Fx::ONE,
+            Fx::from_raw(i32::MAX),
+        ];
+        let subs = [
+            op::ADD, op::SUB, op::MUL, op::DIV, op::REM, op::POW,
+            op::BIT_AND, op::BIT_OR, op::BIT_XOR, op::SHL, op::SHR,
+            op::LT, op::LE, op::GT, op::GE, op::EQ, op::NE,
+        ];
+        for &sub in &subs {
+            for &a in &edges {
+                for &b in &edges {
+                    let code = alloc::vec![
+                        Insn::Const(Value::Num(a)),
+                        Insn::Const(Value::Num(b)),
+                        insn_for_sub(sub),
+                    ];
+                    let pos = alloc::vec![(1u32, 1u32); 3];
+                    let (out, _) = const_fold(code, pos, &[]);
+                    assert_eq!(out.len(), 1, "{sub} {a:?} {b:?} did not fold");
+                    let want = crate::vm::binop(sub, Value::Num(a), Value::Num(b));
+                    assert_eq!(
+                        out[0],
+                        Insn::Const(want),
+                        "fold of {sub} on {a:?}, {b:?} drifted from vm::binop"
+                    );
+                }
+            }
+        }
+        // and the unary set
+        for &a in &edges {
+            for (insn, want) in [
+                (Insn::Neg, Value::Num(-a)),
+                (Insn::BitNot, Value::Num(!a)),
+                (
+                    Insn::Not,
+                    Value::Num(if Value::Num(a).truthy() { Fx::ZERO } else { Fx::ONE }),
+                ),
+            ] {
+                let code = alloc::vec![Insn::Const(Value::Num(a)), insn];
+                let (out, _) = const_fold(code, alloc::vec![(1, 1); 2], &[]);
+                assert_eq!(out, alloc::vec![Insn::Const(want)], "unary {insn:?} on {a:?}");
+            }
+        }
+    }
+
+    fn insn_for_sub(sub: u8) -> Insn {
+        match sub {
+            op::ADD => Insn::Add,
+            op::SUB => Insn::Sub,
+            op::MUL => Insn::Mul,
+            op::DIV => Insn::Div,
+            op::REM => Insn::Rem,
+            op::POW => Insn::Pow,
+            op::BIT_AND => Insn::BitAnd,
+            op::BIT_OR => Insn::BitOr,
+            op::BIT_XOR => Insn::BitXor,
+            op::SHL => Insn::Shl,
+            op::SHR => Insn::Shr,
+            op::LT => Insn::Lt,
+            op::LE => Insn::Le,
+            op::GT => Insn::Gt,
+            op::GE => Insn::Ge,
+            op::EQ => Insn::Eq,
+            _ => Insn::Ne,
+        }
+    }
+
+    // ---- rule: frozen-global substitution ----
+
+    #[test]
+    fn pi2_times_a_local_becomes_one_instruction() {
+        let src = "export function render(index) { hsv(index * PI2, 1, 1) }";
+        assert_eq!(
+            ops(src, "render"),
+            ["LoadLConstOp", "CallBuiltinCC", "PopRetNull"]
+        );
+    }
+
+    #[test]
+    fn a_frozen_global_is_not_substituted_where_it_would_cost_a_word() {
+        // `PI * arr[0]` — the load's successor is neither an operator the
+        // constant can fuse with nor a reorderable push, so `LoadG` stays.
+        let src = "var arr = array(4)
+export function render(index) { hsv(PI * arr[index], 1, 1) }";
+        let o = ops(src, "render");
+        assert!(o.contains(&String::from("LoadG")), "{o:?}");
+    }
+
+    #[test]
+    fn assigning_to_a_predefined_name_unfreezes_it() {
+        // `PI = 3` is legal; the pattern below must then read the global,
+        // not the compile-time constant.
+        let src = "PI = 3
+export function render(index) { hsv(index * PI, 1, 1) }";
+        let o = ops(src, "render");
+        assert!(
+            o.contains(&String::from("LoadLG")),
+            "a written global was folded into a constant: {o:?}"
+        );
+    }
+
+    #[test]
+    fn an_exported_predefined_name_is_not_frozen() {
+        // Only exported globals are settable from the host, so exporting
+        // one has to take it out of the frozen set.
+        let src = "export var PI = 3.5
+export function render(index) { hsv(index * PI, 1, 1) }";
+        let o = ops(src, "render");
+        assert!(o.contains(&String::from("LoadLG")), "{o:?}");
+    }
+
+    #[test]
+    fn pixel_count_is_never_frozen() {
+        // The engine writes it straight into `vm.globals`; no `StoreG`
+        // ever appears, so the `StoreG` scan cannot catch it.
+        let src = "export function render(index) { hsv(index / pixelCount, 1, 1) }";
+        let o = ops(src, "render");
+        assert!(o.contains(&String::from("LoadLG")), "{o:?}");
+    }
+
+    // ---- rule: operand commute ----
+
+    #[test]
+    fn a_constant_on_the_left_of_a_commutative_op_moves_right() {
+        let src = "export function render(index) { hsv(2 * index, 1, 1) }";
+        assert_eq!(
+            ops(src, "render"),
+            ["LoadLConstOp", "CallBuiltinCC", "PopRetNull"]
+        );
+        assert_eq!(
+            ir(src, "render")[0],
+            Insn::LoadLConstOp(0, op::MUL, Fx::from_int(2))
+        );
+    }
+
+    #[test]
+    fn a_constant_on_the_left_of_a_comparison_mirrors_the_operator() {
+        // `2 < index` is `index > 2`, the same predicate on the 16.16
+        // total order — and one instruction instead of three.
+        let src = "export function render(index) { hsv(2 < index, 1, 1) }";
+        assert_eq!(
+            ir(src, "render")[0],
+            Insn::LoadLConstOp(0, op::GT, Fx::from_int(2))
+        );
+    }
+
+    #[test]
+    fn a_non_commutative_operator_is_left_alone() {
+        // `2 / index` is not `index / 2`.
+        let src = "export function render(index) { hsv(2 / index, 1, 1) }";
+        let o = ops(src, "render");
+        assert_eq!(o[0], "Const");
+        assert_eq!(o[1], "LoadL");
+        assert_eq!(o[2], "Div");
+    }
+
+    #[test]
+    fn a_jump_target_between_the_operands_blocks_the_swap() {
+        // The `&&` short-circuit lands its jump on the second operand, so
+        // reordering it would change what the jumped-to path sees.
+        let src = "export function render(index) {
+  var v = 2 * (index > 1 && index)
+  hsv(v, 1, 1)
+}";
+        // still renders; the point is that it compiles without the swap
+        // corrupting the jump target — the equivalence tests in
+        // tests/constfold.rs check the pixels.
+        let o = ops(src, "render");
+        assert!(o.iter().any(|s| s == "JmpIfTruePeek" || s == "JmpIfFalsePeek"), "{o:?}");
     }
 }
