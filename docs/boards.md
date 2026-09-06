@@ -521,8 +521,10 @@ Gitea #75. What the first evening established, so nobody re-derives it:
   (VM errors plus "pattern too large for this device" rejections — at
   4096 px many 2D patterns can't fit their arrays next to a 48 KB map),
   184 under 30 fps; **median 7 fps at 4096 px, p10 2, p90 17**; heap floor
-  17,984 B; one device crash (after "Synchronized Random Numbers", back in
-  106 s via the reset hook). Rainbow curve: 125 fps to 300 px, 116 at 600,
+  17,984 B; one "crash" row (after "Synchronized Random Numbers", back in
+  106 s via the reset hook) that serial showed was NOT a crash — the
+  pattern runs at 1 fps and starves the web task (#259). No panic in the
+  whole run. Rainbow curve: 125 fps to 300 px, 116 at 600,
   68 at 1024, 35 at 2048, 18 at 4096.
 - **Consequences ticketed**: the render loop starves the web server at this
   pixel count (228 KB bundle: 2 s from the Athom, 31–62 s here — #259;
