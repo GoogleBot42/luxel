@@ -489,6 +489,21 @@
     })();
   }
 
+  /** Install the current grid layout on the device as a procedural grid —
+   *  no coordinates cross the wire, nothing is allocated on the device. */
+  function installDeviceGrid(): void {
+    if (!device || layout.kind !== "grid") return;
+    const { w, h } = layout;
+    void (async () => {
+      const r = await device?.setGridMap(w, h);
+      if (r?.ok) {
+        deviceMap = { installed: true, dims: 2, count: r.count ?? w * h };
+        saveNote = `${w}×${h} grid installed on the device`;
+        setTimeout(() => (saveNote = ""), 2500);
+      }
+    })();
+  }
+
   function clearDeviceMap(): void {
     void (async () => {
       await device?.clearMap();
@@ -2357,6 +2372,18 @@ export function render(index) {
             value={layout.h}
             on:change={(e) => setLayoutNum("h", e)}
           />
+          {#if device}
+            <button
+              data-role="grid-install"
+              title="tell the device it is a {layout.w}×{layout.h} grid so its patterns render in 2D (no coordinates uploaded, nothing allocated on the device)"
+              on:click={installDeviceGrid}
+            >
+              install grid on device
+            </button>
+            {#if deviceMap.installed}
+              <span class="dim mono" data-role="map-installed">{deviceMap.count}px {deviceMap.dims}D on device</span>
+            {/if}
+          {/if}
         {:else}
           <span class="dim mono" data-role="map-badge">{layout.coords.length} px mapped</span>
         {/if}

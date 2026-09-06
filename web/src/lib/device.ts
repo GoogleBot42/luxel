@@ -256,7 +256,15 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; count?: number };
   }
 
-  /** Remove the installed map (patterns render 1D again). */
+  /** Install a procedural row-major grid (`grid W H`): no per-pixel body, and
+   *  zero heap on the device — the form a matrix/panel wants (Gitea #258). */
+  async setGridMap(w: number, h: number): Promise<{ ok: boolean; count?: number }> {
+    const res = await this.fetch("/api/map", { method: "POST", body: `grid ${w} ${h}` });
+    return (await res.json()) as { ok: boolean; count?: number };
+  }
+
+  /** Remove the installed map (patterns render 1D again; a panel board
+   *  falls back to its own grid). */
   async clearMap(): Promise<void> {
     await this.fetch("/api/map", { method: "POST", body: "" });
   }

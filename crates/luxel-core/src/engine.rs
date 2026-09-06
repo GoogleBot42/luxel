@@ -353,19 +353,24 @@ impl Engine {
         while w * w < n {
             w += 1;
         }
-        let mut coords: Vec<[Fx; 3]> = Vec::new();
-        if coords.try_reserve_exact(n).is_err() {
-            return; // starved heap: keep the 1D fallback rather than fail
+        let h = n.div_ceil(w);
+        // procedural: zero heap, so it can never fail on a starved device
+        // the way the 48 KB per-pixel form did on the 64x64 panel (#275/#258)
+        self.set_grid_map(w.min(u16::MAX as usize) as u16, h.min(u16::MAX as usize) as u16);
+    }
+
+    /// Install a procedural `w`×`h` row-major 2D grid map: coordinates are
+    /// computed per pixel, nothing is allocated, and the outpipe's grid-aware
+    /// stages (2D blur/glow) see the geometry directly. This is what a
+    /// matrix/panel board wants — the rig IS a grid — and what the default
+    /// map uses (Gitea #258).
+    pub fn set_grid_map(&mut self, w: u16, h: u16) {
+        let (w, h) = (w.max(1), h.max(1));
+        self.grid = Some(crate::outpipe::GridMap { w, h, serpentine: false });
+        self.vm.map = Some(MapData::grid(w, h));
+        if !self.requires_violated {
+            self.render = self.resolve_render_now();
         }
-        for i in 0..n {
-            coords.push([
-                Fx::from_int((i % w) as i32),
-                Fx::from_int((i / w) as i32),
-                Fx::ZERO,
-            ]);
-        }
-        // in place: the grid IS the buffer — no second 48 KB copy (Gitea #275)
-        self.set_map_vec(2, coords);
     }
 
     /// Turn this engine into a *map program* runner: [`run_map`] executes its
@@ -544,6 +549,12 @@ impl Engine {
     /// The installed map read as a regular W×H grid, when it is one (see
     /// [`crate::outpipe::detect_grid`]). Hosts that run their own spatial
     /// output stages use this to match the chain's map-aware behavior.
+    /// The map currently installed in the VM (a host map, the board grid or
+    /// the default grid), if any.
+    pub fn installed_map(&self) -> Option<&MapData> {
+        self.vm.map.as_ref()
+    }
+
     pub fn grid(&self) -> Option<crate::outpipe::GridMap> {
         self.grid
     }
@@ -599,7 +610,7 @@ impl Engine {
                 c[axis] = Fx::from_raw(v as i32);
             }
         }
-        self.vm.map = Some(MapData { dims, coords });
+        self.vm.map = Some(MapData { dims, coords, grid: None });
         if !self.requires_violated {
             self.render = self.resolve_render_now();
         }

@@ -1392,3 +1392,41 @@ fn pixel_x_fast_path_matches_the_i64_form() {
     .unwrap();
     assert_eq!(a.frame(Fx::from_int(17)), b.frame(Fx::from_int(17)));
 }
+
+// ---- procedural grid map (Gitea #258) ----
+//
+// `set_grid_map` stores no coordinates; it must render exactly what an
+// explicit row-major grid installed through `set_map_vec` renders, and the
+// default map for 2D-only patterns must now be this zero-heap form.
+#[test]
+fn grid_map_matches_explicit_coords() {
+    let src = "export function render2D(index, x, y) { rgb(x, y, 0) }";
+    for (w, h) in [(4u16, 4u16), (5, 3), (1, 7), (16, 16)] {
+        let n = w as u32 * h as u32;
+        let coords: Vec<[Fx; 3]> = (0..n)
+            .map(|i| [Fx::from_int((i % w as u32) as i32), Fx::from_int((i / w as u32) as i32), Fx::ZERO])
+            .collect();
+        let mut a = Engine::new(src, n, 1).unwrap();
+        assert!(a.set_map_vec(2, coords));
+        let mut b = Engine::new(src, n, 1).unwrap();
+        b.set_grid_map(w, h);
+        assert_eq!(a.frame(Fx::from_int(10)), b.frame(Fx::from_int(10)), "{w}x{h}");
+    }
+}
+
+#[test]
+fn default_grid_is_procedural_and_covers_a_64x64_panel() {
+    let src = "export function render2D(index, x, y) { rgb(x, y, 0) }";
+    let mut e = Engine::new(src, 4096, 1).unwrap();
+    let m = e.installed_map().expect("2D-only pattern gets the default grid");
+    assert_eq!(m.grid, Some((64, 64)));
+    assert!(m.coords.is_empty(), "procedural grid must not store coordinates");
+    assert_eq!(m.len(), 4096);
+    // last pixel is the bottom-right corner, first the top-left
+    let px = e.frame(Fx::from_int(10));
+    assert_eq!(px[0], [0, 0, 0]);
+    assert!(px[4095][0] > 250 && px[4095][1] > 250, "{:?}", px[4095]);
+    // and the outpipe sees the geometry (2D blur/glow use it)
+    let g = e.grid().expect("grid detected");
+    assert_eq!((g.w, g.h, g.serpentine), (64, 64, false));
+}

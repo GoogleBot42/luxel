@@ -877,7 +877,54 @@ pub fn sample_palette(pal: &[(Fx, [Fx; 3])], v: Fx) -> [Fx; 3] {
 #[derive(Debug, Clone)]
 pub struct MapData {
     pub dims: u8,
+    /// Per-pixel normalized coordinates — empty when `grid` is set.
     pub coords: Vec<[Fx; 3]>,
+    /// Procedural row-major grid, `(w, h)`: coordinates are computed per
+    /// pixel on read and nothing is stored. A 64x64 panel's map is 48 KB as
+    /// `coords` — the whole idle heap on the S3 panel board — and zero bytes
+    /// here (Gitea #258). Normalization matches [`Engine::set_map`] exactly
+    /// (0..65535/65536 per axis, `(v·65535 + span/2)/span`).
+    pub grid: Option<(u16, u16)>,
+}
+
+impl MapData {
+    /// A procedural `w`×`h` row-major grid (2D).
+    pub fn grid(w: u16, h: u16) -> MapData {
+        MapData { dims: 2, coords: Vec::new(), grid: Some((w.max(1), h.max(1))) }
+    }
+
+    /// Number of pixels the map covers.
+    pub fn len(&self) -> usize {
+        match self.grid {
+            Some((w, h)) => w as usize * h as usize,
+            None => self.coords.len(),
+        }
+    }
+
+    /// Normalized coordinate of pixel `i`; zeros past the end of the map.
+    #[inline]
+    pub fn coord(&self, i: usize) -> [Fx; 3] {
+        match self.grid {
+            Some((w, h)) => {
+                let (w, h) = (w as usize, h as usize);
+                let (col, row) = (i % w, i / w);
+                if row >= h {
+                    return [Fx::ZERO; 3];
+                }
+                #[inline]
+                fn norm(v: usize, n: usize) -> Fx {
+                    if n <= 1 {
+                        Fx::ZERO
+                    } else {
+                        let span = n as i64 - 1;
+                        Fx::from_raw(((v as i64 * 65_535 + span / 2) / span) as i32)
+                    }
+                }
+                [norm(col, w), norm(row, h), Fx::ZERO]
+            }
+            None => self.coords.get(i).copied().unwrap_or([Fx::ZERO; 3]),
+        }
+    }
 }
 
 pub const IDENTITY: [[Fx; 4]; 4] = {
@@ -3351,7 +3398,7 @@ impl Vm {
     pub fn pixel_coords(&self, i: u32, fill: [Fx; 3]) -> [Fx; 3] {
         match &self.map {
             Some(m) => {
-                let c = m.coords.get(i as usize).copied().unwrap_or([Fx::ZERO; 3]);
+                let c = m.coord(i as usize);
                 match m.dims {
                     1 => [c[0], fill[1], fill[2]],
                     2 => [c[0], c[1], fill[2]],

@@ -213,8 +213,8 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 | `/api/output` | POST | `<order> <gamma_tenths> <cap_ma> [<bright_curve_tenths> <blur_pct> <glow_pct>]` | `{"ok":true,"order","gamma","capMa","brightCurve","blur","glow"}` | both |
 | `/api/output/palette` | POST | `<amount_pct> <pos> <r> <g> <b> …` | firmware `{"ok":true}`; mirror `{"ok":true,"palette":[…],"paletteAmount":N}` | both |
 | `/api/output/palette` | DELETE | — | `{"ok":true}` | both |
-| `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N}` | both |
-| `/api/map` | POST | `<dims> <raw…>` | `{"ok":true,"installed":bool,"count":N}` | both |
+| `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` (firmware; the mirror omits `kind`) | both |
+| `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` | `{"ok":true,"installed":bool,"count":N}` | both |
 | `/api/clock` | GET | — | `{"synced":bool,"local":<unix secs, local>,"tzMinutes":N}` | both |
 | `/api/clock` | POST | tz offset from UTC in minutes | `{"ok":true,"tzMinutes":N}` | both |
 
@@ -241,8 +241,15 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 - The device palette **composes with** a pattern's own `setOutputPalette`
   rather than replacing it.
 - `POST /api/map` takes `dims` (2 or 3) followed by `dims` raw 16.16 coordinates
-  per pixel. An empty or unparseable body **clears** the map and answers
-  `"installed":false`.
+  per pixel, **or `grid <w> <h>`** for a procedural row-major grid — no
+  per-pixel body, and zero heap on the device (a 64x64 panel's map is 48 KB
+  as coordinates, 5 bytes as a grid; Gitea #258). An empty or unparseable
+  body **clears** the map and answers `"installed":false` — except on a
+  HUB75 panel board, which falls back to its own `PANEL_COLS`×`PANEL_ROWS`
+  grid (installed at boot when nothing is stored) and stays `installed:true`.
+  Firmware request bodies are read into 4 KB buffers: a large coordinate
+  map that does not arrive intact is treated as "clear", so prefer the grid
+  form for matrices.
 - `POST /api/clock` accepts −840..=840 minutes.
 - Firmware settings whose flash write fails still apply live and add
   `"note":"not persisted: …"` to the `{"ok":true,…}` body (`/api/brightness`,

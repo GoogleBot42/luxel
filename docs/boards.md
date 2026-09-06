@@ -526,6 +526,10 @@ Gitea #75. What the first evening established, so nobody re-derives it:
   pattern runs at 1 fps and starves the web task (#259). No panic in the
   whole run. Rainbow curve: 125 fps to 300 px, 116 at 600,
   68 at 1024, 35 at 2048, 18 at 4096.
+- **Map**: the board installs a 64x64 grid map at boot (`POST /api/map`
+  `grid W H`, docs/api.md) — procedural, zero heap — so every pattern
+  renders 2D; before #258 landed, 2D-only patterns depended on the engine's
+  48 KB default grid, which the panel's idle heap can no longer afford.
 - **Consequences ticketed**: the render loop starves the web server at this
   pixel count (228 KB bundle: 2 s from the Athom, 31–62 s here — #259;
   `hosted-ui` is the practical variant for this board until then);

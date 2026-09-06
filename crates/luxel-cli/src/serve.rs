@@ -763,11 +763,25 @@ fn controls_json(state: &State) -> String {
     }
 }
 
-/// Parse a `POST /api/map` body: `<dims> <raw...>` (raw 16.16, dims per pixel).
-/// None = clear.
+/// Parse a `POST /api/map` body: `<dims> <raw...>` (raw 16.16, dims per pixel)
+/// or `grid <w> <h>` (a procedural row-major grid — the firmware stores it as
+/// 5 bytes and computes coordinates on the fly, Gitea #258; the mirror has
+/// heap to spare, so it just expands it). None = clear.
 fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>)> {
     let mut it = body.split_whitespace();
-    let dims: u8 = it.next()?.parse().ok()?;
+    let first = it.next()?;
+    if first == "grid" {
+        let w: u32 = it.next()?.parse().ok()?;
+        let h: u32 = it.next()?.parse().ok()?;
+        if w == 0 || h == 0 || w > u16::MAX as u32 || h > u16::MAX as u32 {
+            return None;
+        }
+        let coords: Vec<[Fx; 3]> = (0..w * h)
+            .map(|i| [Fx::from_int((i % w) as i32), Fx::from_int((i / w) as i32), Fx::ZERO])
+            .collect();
+        return Some((2, coords));
+    }
+    let dims: u8 = first.parse().ok()?;
     if !(2..=3).contains(&dims) {
         return None;
     }
