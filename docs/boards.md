@@ -184,6 +184,24 @@ lost its per-field `read_chunk` calls. No statics beyond two
 `AtomicUsize`s; `.stack` on pixelblaze-v3 26,732 B (devshell build,
 −48 B), stack-check clean on pixelblaze-v3, s3-devkit and c6-devkit.
 
+2026-09-05, pattern code arena (library patterns execute from the flash
+mapping; `patterns.rs`, docs/firmware.md "The pattern store's mapped half
+and the code arena"): **+10,528 B** on `board-c6-devkit` (1,002,720 →
+**1,013,248 B**, margin **35,328 B / 3.37 %**), +9,232 B on
+`board-pixelblaze-v3` (981,952 → 991,184 B), +9,408 B on
+`board-athom-music` — credless flake builds vs `origin/master` 0f84707,
+same day. Named-symbol growth is 6.7 KB (`nm -S` diff on the PB ELF: the
+`Msg::Library` swap arm +1.9 KB in the render task, `cache_code` 1.2 KB,
+the arena table/verify/persist code ~1 KB, `check_asserts` +0.6 KB now
+outlined behind `with_code`, small new accessors), the rest alignment;
+`encode_envelope` and the four envelope-building activation sites
+disappeared (−1.9 KB) but did not cover it. **The C6 is now 3.9 KB above
+the 3 % release floor.** The accepted lever when the next feature lands
+is `EXTRA_FEATURES=hosted-ui` for the C6 variant (`luxel-fw-c6-devkit-
+hosted` already exists; −14 KB), not shrinking the store. `.stack` on
+pixelblaze-v3 26,396 B (−336 B: the render task future grew by the new
+arm); stack-check clean on pixelblaze-v3 / s3-devkit / c6-devkit.
+
 2026-08-30, picoserve response collapse (Gitea #167): **−23.0 to −24.4 KB
 on every board** — the largest single reduction since the opt-level switch,
 and the one that takes the C6 back out of CI's warn band. `server.rs`'s

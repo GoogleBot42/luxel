@@ -389,6 +389,7 @@ pub fn init() {
         println!("patterns: storage @ {:#x}, expected {:#x} (csv drift?)", start, PAT_START);
     }
     REGION.store(start, Ordering::Relaxed);
+    map_raw(start);
 
     let entries = with_store!(start, |af, range, buf| {
         // Format check: wipe storage if the on-flash layout isn't ours.
@@ -442,6 +443,7 @@ pub fn init() {
     NEXT_SEQ.store(next, Ordering::Relaxed);
     println!("patterns: {} stored (storage @ {:#x})", entries.len(), start);
     INDEX.lock(|c| *c.borrow_mut() = entries);
+    arena_init();
 }
 
 /// `GET /api/patterns` → `{"patterns":[{"id","name"},…]}` (from RAM index).
@@ -648,20 +650,49 @@ pub fn read_blob(key: u32) -> Option<Vec<u8>> {
 // discipline assets.rs::read_chunk + FlashAsset have soak-proven -- and
 // writes skip the map's GC entirely.
 //
+// The whole raw half is memory-mapped read-only through the cache MMU at
+// boot (flashmap.rs, docs/research/flash-mmap.md "The VM consumer"): the
+// engine executes the running pattern's bytecode IN PLACE from these pages
+// (`current_code`), so no blob Vec exists on the device for a swap or a
+// rebuild. Every writer below invalidates what it wrote before publishing
+// it (cache lines do not watch the flash controller).
+//
 // Layout (offsets relative to the partition base):
-//   CUR_OFF          header page: [magic u32][src_len u32][bc_len u32],
-//                    written LAST so a power loss mid-store leaves a stale
-//                    magic/len pair at worst (the slot is ignored at boot
-//                    anyway -- RAM meta rules within a session)
-//   CUR_SRC_OFF      source bytes (up to CUR_MAX)
-//   CUR_BC_OFF       LXBC bytes (fixed offset -- independent of src_len, so
-//                    readers need no coupling between the two lengths)
-const CUR_OFF: u32 = STORE_LEN;
+//   CUR_OFF          header page: [magic u32][src_len u32][bc_len u32]
+//                    [bc_side u32], written LAST so a power loss mid-store
+//                    leaves a stale header at worst (the slot is ignored at
+//                    boot anyway -- RAM meta rules within a session)
+//   CUR_SRC_OFF      ad-hoc source bytes (up to CUR_SRC_MAX)
+//   CUR_BC_OFF       ad-hoc LXBC bytes, TWO sides of CUR_BC_MAX: a swap
+//                    writes the side the running engine is NOT executing
+//                    from, so a mapped engine never sees its code change
+//   ARENA_OFF        the library code arena: ARENA_SLOTS page-aligned slots
+//                    of ARENA_SLOT bytes, one stored pattern's bytecode
+//                    each, contiguous and 4-byte aligned for the VM; the
+//                    slot table lives under ARENA_KEY in the map
+const RAW_OFF: u32 = STORE_LEN;
+const RAW_LEN: u32 = PAT_LEN - STORE_LEN;
+const CUR_OFF: u32 = RAW_OFF;
 const PAGE: u32 = 4096;
-const CUR_MAX: u32 = 24 * PAGE; // 96 KiB per side, past every upload cap
+const CUR_SRC_MAX: u32 = 24 * PAGE; // 96 KiB, past every upload cap
+const CUR_BC_MAX: u32 = 16 * PAGE; // 64 KiB per side
 const CUR_SRC_OFF: u32 = CUR_OFF + PAGE;
-const CUR_BC_OFF: u32 = CUR_SRC_OFF + CUR_MAX;
+const CUR_BC_OFF: u32 = CUR_SRC_OFF + CUR_SRC_MAX;
 const CUR_MAGIC: u32 = 0x4C58_4350; // "LXCP"
+/// The bc side holding the RUNNING ad-hoc blob (the last successful
+/// store_current); the next store writes the other one.
+static CUR_BC_SIDE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+const ARENA_OFF: u32 = CUR_BC_OFF + 2 * CUR_BC_MAX;
+const ARENA_SLOT: u32 = 10 * PAGE; // 40 KiB, >= MAX_BC
+const ARENA_SLOTS: usize = 7;
+/// Arena slot table (reserved-key map item, see the blobs above).
+const ARENA_KEY: u32 = 0x7FFF_FFF9;
+const _: () = assert!(ARENA_OFF + ARENA_SLOTS as u32 * ARENA_SLOT <= RAW_OFF + RAW_LEN);
+const _: () = assert!(ARENA_SLOT as usize >= MAX_BC);
+
+fn cur_bc_off(side: u8) -> u32 {
+    CUR_BC_OFF + side as u32 * CUR_BC_MAX
+}
 
 /// Absolute flash offsets of the slot's (src, bc) data, or None when the
 /// storage partition is absent. Lengths come from the RAM meta
@@ -671,7 +702,8 @@ pub fn current_slot_abs() -> Option<(u32, u32)> {
     if start == 0 {
         return None;
     }
-    Some((start + CUR_SRC_OFF, start + CUR_BC_OFF))
+    let side = CUR_BC_SIDE.load(Ordering::Relaxed);
+    Some((start + CUR_SRC_OFF, start + cur_bc_off(side)))
 }
 
 /// Write one raw region (erase + word-aligned page writes). Every flash op
@@ -737,7 +769,7 @@ pub async fn store_current(src: &str, bc: &[u8]) -> bool {
     if start == 0 {
         return false;
     }
-    if src.len() > CUR_MAX as usize || bc.len() > CUR_MAX as usize {
+    if src.len() > CUR_SRC_MAX as usize || bc.len() > CUR_BC_MAX as usize {
         return false;
     }
     if crate::ota::ota_active() {
@@ -746,14 +778,23 @@ pub async fn store_current(src: &str, bc: &[u8]) -> bool {
     // ad-hoc swaps only — if this line shows up on every playlist advance,
     // the flash-wear fix regressed (library swaps must not reach here)
     println!("current-pattern: slot write (ad-hoc, src {} B + bc {} B)", src.len(), bc.len());
+    // the OTHER bc side: the running engine may be executing the current one
+    let side = 1 - CUR_BC_SIDE.load(Ordering::Relaxed);
     let mut ok = write_raw(start + CUR_SRC_OFF, src.as_bytes()).await
-        && write_raw(start + CUR_BC_OFF, bc).await;
+        && write_raw(start + cur_bc_off(side), bc).await;
     if ok {
-        let mut hdr = [0u8; 12];
+        let mut hdr = [0u8; 16];
         hdr[0..4].copy_from_slice(&CUR_MAGIC.to_le_bytes());
         hdr[4..8].copy_from_slice(&(src.len() as u32).to_le_bytes());
         hdr[8..12].copy_from_slice(&(bc.len() as u32).to_le_bytes());
+        hdr[12..16].copy_from_slice(&(side as u32).to_le_bytes());
         ok = write_raw(start + CUR_OFF, &hdr).await;
+    }
+    if ok {
+        // the mapping's cache lines still hold what was there before
+        raw_invalidate(CUR_SRC_OFF, src.len());
+        raw_invalidate(cur_bc_off(side), bc.len());
+        CUR_BC_SIDE.store(side, Ordering::Relaxed);
     }
     ok
 }
@@ -919,5 +960,429 @@ pub fn delete(id: &str) -> String {
         return String::from("{\"ok\":false,\"error\":\"flash error\"}");
     }
     INDEX.lock(|c| c.borrow_mut().retain(|e| e.seq != seq));
+    arena_forget(seq);
     String::from("{\"ok\":true}")
+}
+
+// --- the mapped raw half (flashmap.rs) ---
+
+static RAW_BASE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static RAW_MAPPED_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The raw half of the partition as memory, if the boot-time mapping
+/// succeeded; None = every reader takes the read_nor path it always had
+/// (and the code arena is off).
+pub fn raw() -> Option<&'static [u8]> {
+    let base = RAW_BASE.load(Ordering::Acquire);
+    if base == 0 {
+        return None;
+    }
+    let len = RAW_MAPPED_LEN.load(Ordering::Acquire);
+    // SAFETY: base/len come from a flashmap::Mapped leaked in map_raw.
+    Some(unsafe { core::slice::from_raw_parts(base as *const u8, len) })
+}
+
+/// Map the raw half read-only through the cache MMU and prove it (the
+/// header page read both ways must agree) — same discipline as
+/// assets::map_region. Once, from init, right after REGION resolves.
+#[inline(never)]
+fn map_raw(start: u32) {
+    let m = match crate::flashmap::map(start + RAW_OFF, RAW_LEN) {
+        Ok(m) => m,
+        Err(e) => {
+            println!("flashmap: pattern code not mapped ({:?}) — flash-controller reads", e);
+            return;
+        }
+    };
+    let mut via_nor = alloc::vec![0u8; PAGE as usize];
+    let ok = crate::assets::read_chunk(start + RAW_OFF, &mut via_nor)
+        && via_nor[..] == m.bytes()[..PAGE as usize];
+    drop(via_nor);
+    if !ok {
+        println!(
+            "flashmap: pattern code self-check FAILED at 0x{:x} — unmapping, flash-controller reads",
+            m.vaddr()
+        );
+        crate::flashmap::unmap(m);
+        return;
+    }
+    println!(
+        "flashmap: pattern code 0x{:x}+0x{:x} -> 0x{:x} ({} x {} KiB pages from entry {}), self-check ok",
+        m.phys(),
+        RAW_LEN,
+        m.vaddr(),
+        m.pages(),
+        crate::flashmap::page_size() / 1024,
+        m.first_entry()
+    );
+    let b = m.leak();
+    RAW_MAPPED_LEN.store(b.len(), Ordering::Release);
+    RAW_BASE.store(b.as_ptr() as usize, Ordering::Release);
+}
+
+/// `len` bytes at partition-relative `rel` (inside the raw half) as mapped
+/// memory.
+fn raw_slice(rel: u32, len: usize) -> Option<&'static [u8]> {
+    let r = raw()?;
+    let s = rel.checked_sub(RAW_OFF)? as usize;
+    r.get(s..s.checked_add(len)?)
+}
+
+/// After a raw write: drop the cache lines the write made stale.
+fn raw_invalidate(rel: u32, len: usize) {
+    if let Some(s) = raw_slice(rel, len) {
+        crate::flashmap::invalidate_slice(s);
+    }
+}
+
+/// The ad-hoc read-back slot's running bytecode side, mapped.
+pub fn current_slot_code(len: usize) -> Option<&'static [u8]> {
+    if len == 0 || len > CUR_BC_MAX as usize || REGION.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    raw_slice(cur_bc_off(CUR_BC_SIDE.load(Ordering::Relaxed)), len)
+}
+
+/// The ad-hoc read-back slot's source, mapped.
+pub fn current_slot_src(len: usize) -> Option<&'static [u8]> {
+    if len == 0 || len > CUR_SRC_MAX as usize || REGION.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    raw_slice(CUR_SRC_OFF, len)
+}
+
+// --- the library code arena ---
+//
+// One stored pattern's LXBC per slot, contiguous and page-aligned, so a
+// library activation hands the engine a mapped slice instead of
+// reassembling ≤3,840-byte chunk items into a Vec. Filled by save() (may
+// evict the least-recently-activated slot — a user action) and by an
+// activation that found no slot (free or stale slots only: playlist churn
+// writes flash at most ARENA_SLOTS times per library state, then never —
+// the 2026-08-15 wear rule). The running pattern's slot is never written.
+// The table (seq, bc generation, length, FNV-1a of the bytes per slot) is
+// a reserved-key map item; at boot every entry is checked against the
+// index AND the mapped bytes, so a torn write or a stale generation is
+// dropped, never executed.
+
+#[derive(Clone, Copy)]
+struct Slot {
+    seq: u32,
+    gen: u8,
+    /// 0 = empty
+    len: u32,
+    hash: u32,
+    /// activation tick, for LRU (session-local)
+    last_use: u32,
+}
+
+const EMPTY: Slot = Slot { seq: 0, gen: 0, len: 0, hash: 0, last_use: 0 };
+
+static ARENA: BlockingMutex<CriticalSectionRawMutex, RefCell<[Slot; ARENA_SLOTS]>> =
+    BlockingMutex::new(RefCell::new([EMPTY; ARENA_SLOTS]));
+static ARENA_TICK: AtomicU32 = AtomicU32::new(1);
+
+/// Next LRU tick. load+store, not fetch_add: the C3's riscv32imc has no
+/// atomic RMW and every caller runs on the one executor thread anyway.
+fn arena_tick() -> u32 {
+    let t = ARENA_TICK.load(Ordering::Relaxed).wrapping_add(1);
+    ARENA_TICK.store(t, Ordering::Relaxed);
+    t
+}
+
+/// The arena only exists through the mapping — that is its whole point.
+fn arena_on() -> bool {
+    raw().is_some()
+}
+
+fn slot_off(i: usize) -> u32 {
+    ARENA_OFF + i as u32 * ARENA_SLOT
+}
+
+fn slot_bytes(i: usize, len: u32) -> Option<&'static [u8]> {
+    raw_slice(slot_off(i), len as usize)
+}
+
+const FNV_INIT: u32 = 0x811c_9dc5;
+
+/// Incremental FNV-1a (same function as luxel_core::netin::fnv1a).
+fn fnv1a_update(mut h: u32, bytes: &[u8]) -> u32 {
+    for &b in bytes {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+fn fnv1a(bytes: &[u8]) -> u32 {
+    fnv1a_update(FNV_INIT, bytes)
+}
+
+const ARENA_TABLE_VER: u8 = 1;
+
+fn serialize_arena(slots: &[Slot; ARENA_SLOTS]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(2 + ARENA_SLOTS * 13);
+    v.push(ARENA_TABLE_VER);
+    v.push(ARENA_SLOTS as u8);
+    for s in slots {
+        v.extend_from_slice(&s.seq.to_le_bytes());
+        v.push(s.gen);
+        v.extend_from_slice(&s.len.to_le_bytes());
+        v.extend_from_slice(&s.hash.to_le_bytes());
+    }
+    v
+}
+
+fn deserialize_arena(b: &[u8]) -> Option<[Slot; ARENA_SLOTS]> {
+    if b.len() < 2 || b[0] != ARENA_TABLE_VER {
+        return None;
+    }
+    let n = (b[1] as usize).min(ARENA_SLOTS);
+    if b.len() < 2 + n * 13 {
+        return None;
+    }
+    let mut out = [EMPTY; ARENA_SLOTS];
+    for (i, s) in out.iter_mut().enumerate().take(n) {
+        let r = &b[2 + i * 13..2 + i * 13 + 13];
+        *s = Slot {
+            seq: u32::from_le_bytes([r[0], r[1], r[2], r[3]]),
+            gen: r[4],
+            len: u32::from_le_bytes([r[5], r[6], r[7], r[8]]),
+            hash: u32::from_le_bytes([r[9], r[10], r[11], r[12]]),
+            last_use: 0,
+        };
+    }
+    Some(out)
+}
+
+fn persist_arena() -> bool {
+    let slots = ARENA.lock(|c| *c.borrow());
+    store_blob(ARENA_KEY, &serialize_arena(&slots))
+}
+
+/// Boot: load the slot table and keep only entries the index and the mapped
+/// bytes both vouch for.
+#[inline(never)]
+fn arena_init() {
+    if !arena_on() {
+        println!("patterns: code arena off (raw half not mapped)");
+        return;
+    }
+    let mut slots = read_blob(ARENA_KEY)
+        .and_then(|b| deserialize_arena(&b))
+        .unwrap_or([EMPTY; ARENA_SLOTS]);
+    let (mut valid, mut dropped) = (0u32, 0u32);
+    for (i, s) in slots.iter_mut().enumerate() {
+        if s.len == 0 {
+            continue;
+        }
+        let indexed = INDEX.lock(|c| {
+            c.borrow().iter().any(|e| e.seq == s.seq && e.gen == s.gen && e.bc_count > 0)
+        });
+        let ok = s.len <= ARENA_SLOT
+            && indexed
+            && slot_bytes(i, s.len).is_some_and(|b| fnv1a(b) == s.hash);
+        if ok {
+            valid += 1;
+        } else {
+            *s = EMPTY;
+            dropped += 1;
+        }
+    }
+    ARENA.lock(|c| *c.borrow_mut() = slots);
+    println!(
+        "patterns: code arena {}/{} slots valid ({} dropped), {} KiB each",
+        valid,
+        ARENA_SLOTS,
+        dropped,
+        ARENA_SLOT / 1024
+    );
+    if dropped > 0 {
+        persist_arena();
+    }
+}
+
+/// A stored pattern's executable bytes, mapped — if an arena slot holds its
+/// CURRENT bytecode generation. Bumps the slot's LRU tick. Valid until the
+/// store overwrites the slot, which it never does for the running pattern.
+pub fn code_of(id: &str) -> Option<&'static [u8]> {
+    if !arena_on() {
+        return None;
+    }
+    let (seq, gen, _, bc_count, _) = lookup(id)?;
+    if bc_count == 0 {
+        return None;
+    }
+    let tick = arena_tick();
+    let (i, len) = ARENA.lock(|c| {
+        let mut a = c.borrow_mut();
+        let i = a.iter().position(|s| s.len > 0 && s.seq == seq && s.gen == gen)?;
+        a[i].last_use = tick;
+        Some((i, a[i].len))
+    })?;
+    slot_bytes(i, len)
+}
+
+/// Run `f` over a stored pattern's bytecode: the mapped slot when there is
+/// one (no copy), else a transient Vec from the chunk store.
+pub fn with_code<R>(id: &str, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+    if let Some(c) = code_of(id) {
+        return Some(f(c));
+    }
+    bytecode_of(id).map(|v| f(&v))
+}
+
+/// Does a stored pattern's bytecode still decode on this firmware?
+/// None = no such pattern / no bytecode.
+pub fn validate_stored(id: &str) -> Option<Result<(), luxel_core::bytecode::BcError>> {
+    with_code(id, |bc| luxel_core::bytecode::validate(bc).map(|_| ()))
+}
+
+/// (source length, FNV-1a of the source) streamed chunk by chunk — the
+/// identity hash + Content-Length a library swap stamps, without ever
+/// materializing the source.
+pub fn source_stat(id: &str) -> Option<(usize, u32)> {
+    let (seq, gen, count, _, _) = lookup(id)?;
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 || count > MC {
+        return None;
+    }
+    with_store!(start, |af, range, buf| {
+        let mut cache = NoCache::new();
+        let mut len = 0usize;
+        let mut h = FNV_INIT;
+        for c in 0..count {
+            let key = chunk_key(seq, gen, c);
+            match map::fetch_item::<u32, &[u8], _>(&mut af, range.clone(), &mut cache, buf, &key)
+                .await
+            {
+                Ok(Some(b)) => {
+                    len += b.len();
+                    h = fnv1a_update(h, b);
+                }
+                _ => return None,
+            }
+        }
+        Some((len, h))
+    })
+    .flatten()
+}
+
+/// The running pattern's seq — its slot is never written or evicted.
+fn running_seq() -> Option<u32> {
+    seq_of(&crate::shared::get_current_pattern_id())
+}
+
+/// Put a stored pattern's bytecode into an arena slot so its next
+/// activation executes in place. `evict`: may reclaim the least-recently-
+/// activated slot (save(): a user action). `!evict`: free or stale slots
+/// only — an activation-time fill, bounded by ARENA_SLOTS writes per
+/// library state, so playlist churn is wear-free. Best-effort; false
+/// leaves the pattern on the chunk path (never a panic).
+pub async fn cache_code(id: &str, bc: &[u8], evict: bool) -> bool {
+    if !arena_on() || bc.is_empty() || bc.len() > ARENA_SLOT as usize {
+        return false;
+    }
+    let Some((seq, gen, _, bc_count, _)) = lookup(id) else {
+        return false;
+    };
+    let start = REGION.load(Ordering::Relaxed);
+    if bc_count == 0 || start == 0 || crate::ota::ota_active() {
+        return false;
+    }
+    let hash = fnv1a(bc);
+    let running = running_seq();
+    let tick = arena_tick();
+    let live: Vec<(u32, u8)> =
+        INDEX.lock(|c| c.borrow().iter().map(|e| (e.seq, e.gen)).collect());
+    let pick: Result<usize, bool> = ARENA.lock(|c| {
+        let mut a = c.borrow_mut();
+        if a.iter().any(|s| {
+            s.len as usize == bc.len() && s.seq == seq && s.gen == gen && s.hash == hash
+        }) {
+            return Err(true); // already cached
+        }
+        let not_running = |s: &Slot| Some(s.seq) != running;
+        let stale = |s: &Slot| s.len > 0 && !live.contains(&(s.seq, s.gen));
+        let i = a
+            .iter()
+            .position(|s| s.len == 0)
+            .or_else(|| a.iter().position(|s| stale(s) && not_running(s)))
+            .or_else(|| {
+                if !evict {
+                    return None;
+                }
+                a.iter()
+                    .enumerate()
+                    .filter(|(_, s)| not_running(s))
+                    .min_by_key(|(_, s)| s.last_use)
+                    .map(|(i, _)| i)
+            });
+        let Some(i) = i else {
+            return Err(false);
+        };
+        a[i] = EMPTY; // unpublish before the bytes change under it
+        Ok(i)
+    });
+    let i = match pick {
+        Ok(i) => i,
+        Err(r) => return r,
+    };
+    let rel = slot_off(i);
+    let ok = write_raw(start + rel, bc).await;
+    if ok {
+        raw_invalidate(rel, bc.len());
+    }
+    let verified = ok && slot_bytes(i, bc.len() as u32).is_some_and(|b| fnv1a(b) == hash);
+    if !verified {
+        println!("patterns: code arena write of {} failed (slot {})", id, i);
+        return false;
+    }
+    ARENA.lock(|c| {
+        c.borrow_mut()[i] = Slot { seq, gen, len: bc.len() as u32, hash, last_use: tick }
+    });
+    if !persist_arena() {
+        println!("patterns: code arena table write failed — slot {} lives this session only", i);
+    }
+    println!("patterns: code arena slot {} <- {} ({} B)", i, id, bc.len());
+    true
+}
+
+/// Forget any slot holding `seq` (delete).
+fn arena_forget(seq: u32) {
+    let changed = ARENA.lock(|c| {
+        let mut a = c.borrow_mut();
+        let mut changed = false;
+        for s in a.iter_mut() {
+            if s.len > 0 && s.seq == seq {
+                *s = EMPTY;
+                changed = true;
+            }
+        }
+        changed
+    });
+    if changed {
+        persist_arena();
+    }
+}
+
+/// (slots in use, slots total) for /api/status.
+pub fn arena_stats() -> (u32, u32) {
+    let used = ARENA.lock(|c| c.borrow().iter().filter(|s| s.len > 0).count());
+    (used as u32, ARENA_SLOTS as u32)
+}
+
+/// The running pattern's executable bytes as mapped memory, per the VM
+/// consumer contract (docs/research/flash-mmap.md): rodata for the built-in
+/// default (the bootloader's own mapping), the ad-hoc slot side the last
+/// store_current wrote, or the library pattern's arena slot. None = read it
+/// through a Vec (read_current_bc / bytecode_of) — the fallback when the
+/// mapping is absent or the pattern has no slot.
+pub fn current_code() -> Option<&'static [u8]> {
+    use crate::shared::BcLoc;
+    match crate::shared::current_bc() {
+        BcLoc::Default(b) => Some(b),
+        BcLoc::Flash(len) => current_slot_code(len),
+        BcLoc::Library(_) => code_of(&crate::shared::get_current_pattern_id()),
+        BcLoc::Gone => None,
+    }
 }

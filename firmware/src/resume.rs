@@ -146,17 +146,18 @@ async fn apply_stored() {
         Timer::after(Duration::from_secs(2)).await;
         waited += 2;
     }
-    let (Some(src), Some(bc)) = (patterns::source_of(&id), patterns::bytecode_of(&id)) else {
-        println!("resume: stored pattern {} is gone — skipping", id);
-        return;
-    };
-    if let Err(e) = luxel_core::bytecode::validate(&bc) {
-        println!("resume: stored bytecode for {} unusable ({}) — skipping", id, e);
-        return;
+    match patterns::validate_stored(&id) {
+        None => {
+            println!("resume: stored pattern {} is gone — skipping", id);
+            return;
+        }
+        Some(Err(e)) => {
+            println!("resume: stored bytecode for {} unusable ({}) — skipping", id, e);
+            return;
+        }
+        Some(Ok(())) => {}
     }
-    let env = luxel_core::bytecode::encode_envelope("", &src, &bc);
-    drop((src, bc));
-    MSG_QUEUE.send(Msg::Code { env, id: id.clone() }).await;
+    MSG_QUEUE.send(Msg::Library { id: id.clone(), ms: 0 }).await;
     crate::shared::set_current_controls(controls.clone());
     for (name, raw) in controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();

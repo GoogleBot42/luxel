@@ -313,21 +313,19 @@ async fn activate_by_name(name: &str) {
         println!("mqtt: no pattern named \"{}\"", name);
         return;
     };
-    let Some(source) = patterns::source_of(&id) else {
-        return;
-    };
-    let Some(bc) = patterns::bytecode_of(&id) else {
-        println!("mqtt: pattern \"{}\" has no stored bytecode", name);
-        return;
-    };
-    if luxel_core::bytecode::validate(&bc).is_err() {
-        println!("mqtt: stored bytecode for \"{}\" is stale (re-save from the app)", name);
-        return;
+    match patterns::validate_stored(&id) {
+        None => {
+            println!("mqtt: pattern \"{}\" has no stored bytecode", name);
+            return;
+        }
+        Some(Err(_)) => {
+            println!("mqtt: stored bytecode for \"{}\" is stale (re-save from the app)", name);
+            return;
+        }
+        Some(Ok(())) => {}
     }
     crate::playlist::stop();
-    let env = luxel_core::bytecode::encode_envelope("", &source, &bc);
-    drop((source, bc));
-    MSG_QUEUE.send(Msg::Code { env, id }).await;
+    MSG_QUEUE.send(Msg::Library { id, ms: 0 }).await;
     // same single-pattern resume bookkeeping as the HTTP activate
     crate::shared::set_current_controls(alloc::vec::Vec::new());
     crate::resume::mark_dirty();

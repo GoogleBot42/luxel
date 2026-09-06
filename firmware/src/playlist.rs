@@ -316,30 +316,18 @@ async fn enter_item(i: usize) {
     let Some(item) = item else {
         return;
     };
-    let Some(src) = patterns::source_of(&item.pattern_id) else {
+    if patterns::name_of(&item.pattern_id).is_none() {
         println!("playlist: item {} missing pattern {}", i, item.pattern_id);
         return;
-    };
-    let Some(bc) = patterns::bytecode_of(&item.pattern_id) else {
-        println!("playlist: item {} pattern {} has no bytecode", i, item.pattern_id);
-        return;
-    };
-    let env = luxel_core::bytecode::encode_envelope("", &src, &bc);
-    drop((src, bc));
-    // the library id rides in the message: the render task stamps identity
-    // + library read-back at the swap (and writes NOTHING to flash — the
-    // wear fix), so no post-send set_current_pattern_id race here
-    if crossfade > 0 {
-        MSG_QUEUE
-            .send(Msg::Crossfade {
-                env,
-                ms: crossfade as u32,
-                id: item.pattern_id.clone(),
-            })
-            .await;
-    } else {
-        MSG_QUEUE.send(Msg::Code { env, id: item.pattern_id.clone() }).await;
     }
+    // Only the id rides in the message: the render task decodes from the
+    // pattern's mapped arena slot (or the chunk store) and stamps identity
+    // + library read-back at the swap — no source/blob/envelope Vecs here,
+    // and NO slot write for a library swap (the wear fix), so no post-send
+    // set_current_pattern_id race either
+    MSG_QUEUE
+        .send(Msg::Library { id: item.pattern_id.clone(), ms: crossfade as u32 })
+        .await;
     // seed the resume-controls set with the item's saved values, so stopping
     // the playlist persists exactly what's showing (resume.rs)
     crate::shared::set_current_controls(item.controls.clone());

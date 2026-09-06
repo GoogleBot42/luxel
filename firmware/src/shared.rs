@@ -42,6 +42,12 @@ pub enum Msg {
     /// Like Code, but crossfade from the current pattern over `ms` (playlist
     /// transitions): the render task keeps the outgoing engine and blends.
     Crossfade { env: Vec<u8>, ms: u32, id: String },
+    /// Run a LIBRARY pattern by id, crossfading over `ms` (0 = cut). No
+    /// envelope travels: the render task decodes straight from the
+    /// pattern's mapped arena slot (patterns::code_of — no blob Vec, no
+    /// source Vec, no envelope Vec) or, without a slot, from a transient
+    /// chunk-store read. Identity/read-back come from patterns::source_stat.
+    Library { id: String, ms: u32 },
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
@@ -220,8 +226,14 @@ pub static PATTERN_HASH: AtomicU32 = AtomicU32::new(0);
 
 /// Restamp the sync pattern-identity hash from the running source.
 pub fn set_pattern_hash(src: &str) {
+    set_pattern_hash_raw(luxel_core::netin::fnv1a(src.as_bytes()));
+}
+
+/// Same, from a hash computed elsewhere (patterns::source_stat streams the
+/// source out of flash without materializing it).
+pub fn set_pattern_hash_raw(h: u32) {
     use core::sync::atomic::Ordering;
-    PATTERN_HASH.store(luxel_core::netin::fnv1a(src.as_bytes()), Ordering::Relaxed);
+    PATTERN_HASH.store(h, Ordering::Relaxed);
 }
 
 /// Boot / built-in default: source + blob are compile-time `&'static` rodata,

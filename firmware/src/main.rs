@@ -787,6 +787,23 @@ fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engi
 /// boot resume) write NOTHING: their source + blob already live in the
 /// pattern store, and read-back serves from there (shared::*Loc::Library).
 /// This is the flash-WEAR fix — the raw slot's fixed sectors used to be
+/// [try_budgeted_engine] plus the user-facing "too large" vmerr on failure.
+fn engine_or_vmerr(p: luxel_core::vm::Program) -> Option<Engine> {
+    match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
+        Ok(e) => Some(e),
+        Err(left) => {
+            let mut m = alloc::string::String::new();
+            jsonview::push_piece(&mut m, "pattern too large for this device — it left only ");
+            jsonview::push_u32(&mut m, (left / 1024) as u32);
+            jsonview::push_piece(&mut m, " KB of heap free (the firmware needs ");
+            jsonview::push_u32(&mut m, (RUNTIME_FLOOR / 1024) as u32);
+            jsonview::push_piece(&mut m, " KB to keep running)");
+            set_vmerr(Some(m));
+            None
+        }
+    }
+}
+
 /// erased on EVERY playlist advance (~17k cycles/day at 5 s items).
 ///
 /// AD-HOC swaps (`id` empty: /api/code, sync adoption) still persist to the
@@ -871,20 +888,26 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             shared::BcLoc::Default(b) => luxel_core::bytecode::deserialize_lean(b)
                 .ok()
                 .and_then(|p| try_budgeted_engine(p, count).ok()),
+            // the ad-hoc slot: mapped (no Vec) when the raw half is, else
+            // a transient read through the flash controller
             shared::BcLoc::Flash(len) => {
-                let bc = crate::patterns::read_current_bc(len)?;
-                luxel_core::bytecode::deserialize_lean(&bc)
-                    .ok()
-                    .and_then(|p| try_budgeted_engine(p, count).ok())
+                let p = match crate::patterns::current_slot_code(len) {
+                    Some(code) => luxel_core::bytecode::deserialize_lean(code).ok()?,
+                    None => {
+                        let bc = crate::patterns::read_current_bc(len)?;
+                        luxel_core::bytecode::deserialize_lean(&bc).ok()?
+                    }
+                };
+                try_budgeted_engine(p, count).ok()
             }
-            // library pattern: fetch the store's CURRENT blob (not the
-            // snapshot length — a re-save may have changed it, and the
-            // store's copy is the truth)
+            // library pattern: the store's CURRENT blob (not the snapshot
+            // length — a re-save may have changed it, and the store's copy
+            // is the truth), from its mapped arena slot when it has one
             shared::BcLoc::Library(_) => {
-                let bc = crate::patterns::bytecode_of(&shared::get_current_pattern_id())?;
-                luxel_core::bytecode::deserialize_lean(&bc)
-                    .ok()
-                    .and_then(|p| try_budgeted_engine(p, count).ok())
+                let p = crate::patterns::with_code(&shared::get_current_pattern_id(), |bc| {
+                    luxel_core::bytecode::deserialize_lean(bc).ok()
+                })??;
+                try_budgeted_engine(p, count).ok()
             }
             shared::BcLoc::Gone => None,
         }
@@ -971,24 +994,13 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     drop(env);
                     match decoded {
                         Ok(p) => {
-                            match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
-                                Ok(e) => {
-                                    publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                    engine = Some(e);
-                                    set_vmerr(None);
-                                    vmerr_seen = None;
-                                    last = Instant::now();
-                                    devicemap::mark_dirty(); // re-apply the installed map
-                                }
-                                Err(left) => {
-                                    let mut m = alloc::string::String::new();
-                                    jsonview::push_piece(&mut m, "pattern too large for this device — it left only ");
-                                    jsonview::push_u32(&mut m, (left / 1024) as u32);
-                                    jsonview::push_piece(&mut m, " KB of heap free (the firmware needs ");
-                                    jsonview::push_u32(&mut m, (RUNTIME_FLOOR / 1024) as u32);
-                                    jsonview::push_piece(&mut m, " KB to keep running)");
-                                    set_vmerr(Some(m));
-                                }
+                            if let Some(e) = engine_or_vmerr(p) {
+                                publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                engine = Some(e);
+                                set_vmerr(None);
+                                vmerr_seen = None;
+                                last = Instant::now();
+                                devicemap::mark_dirty(); // re-apply the installed map
                             }
                         }
                         Err(Some(e)) => {
@@ -1082,6 +1094,73 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                 }
                 // Crossfade to a new pattern (playlist transition): keep the
                 // outgoing engine and blend over `ms`.
+                Msg::Library { id, ms } => {
+                    // A library swap (playlist, activate, MQTT, resume):
+                    // nothing travelled but the id. Decode straight from
+                    // the pattern's mapped arena slot — no envelope, no
+                    // blob Vec, no source Vec anywhere in the lifecycle
+                    // (docs/research/flash-mmap.md "The VM consumer") —
+                    // or, for a pattern without a slot, from a transient
+                    // chunk-store read that is then offered to a FREE
+                    // slot so the next activation is in place.
+                    if ms == 0 {
+                        engine = None;
+                    }
+                    prev = None;
+                    let mut bc_len = 0usize;
+                    let decoded = match crate::patterns::code_of(&id) {
+                        Some(code) => {
+                            bc_len = code.len();
+                            luxel_core::bytecode::deserialize_lean(code).map_err(Some)
+                        }
+                        None => match crate::patterns::bytecode_of(&id) {
+                            Some(bc) => {
+                                bc_len = bc.len();
+                                match luxel_core::bytecode::deserialize_lean(&bc) {
+                                    Ok(p) => {
+                                        crate::patterns::cache_code(&id, &bc, false).await;
+                                        Ok(p)
+                                    }
+                                    Err(e) => Err(Some(e)),
+                                }
+                            }
+                            None => {
+                                println!("library: pattern {} is gone — swap dropped", id);
+                                Err(None)
+                            }
+                        },
+                    };
+                    if decoded.is_ok() {
+                        // identity + read-back: hash and length streamed
+                        // out of the source chunks, never materialized
+                        let (src_len, hash) = crate::patterns::source_stat(&id).unwrap_or((0, 0));
+                        shared::set_pattern_hash_raw(hash);
+                        shared::set_current_pattern_id(&id);
+                        shared::set_current_library(src_len, bc_len);
+                    }
+                    match decoded {
+                        Ok(p) => {
+                            if let Some(e) = engine_or_vmerr(p) {
+                                publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                if ms > 0 && engine.is_some() {
+                                    prev = engine.take();
+                                    blend_start = Instant::now();
+                                    blend_ms = ms;
+                                }
+                                engine = Some(e);
+                                set_vmerr(None);
+                                vmerr_seen = None;
+                                last = Instant::now();
+                                devicemap::mark_dirty();
+                            }
+                        }
+                        Err(Some(e)) => {
+                            println!("library bytecode decode failed: {}", e);
+                            set_vmerr(Some(alloc::format!("{}", e)));
+                        }
+                        Err(None) => {}
+                    }
+                }
                 Msg::Crossfade { env, ms, id } => {
                     // the outgoing engine stays alive on purpose (it's the
                     // blend source) — this is the one path where two
@@ -1106,29 +1185,18 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     drop(env);
                     match decoded {
                         Ok(p) => {
-                            match try_budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed)) {
-                                Ok(e) => {
-                                    publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                    if ms > 0 && engine.is_some() {
-                                        prev = engine.take();
-                                        blend_start = Instant::now();
-                                        blend_ms = ms;
-                                    }
-                                    engine = Some(e);
-                                    set_vmerr(None);
-                                    vmerr_seen = None;
-                                    last = Instant::now();
-                                    devicemap::mark_dirty();
+                            if let Some(e) = engine_or_vmerr(p) {
+                                publish(&CONTROLS_JSON, jsonview::controls_json(&e));
+                                if ms > 0 && engine.is_some() {
+                                    prev = engine.take();
+                                    blend_start = Instant::now();
+                                    blend_ms = ms;
                                 }
-                                Err(left) => {
-                                    let mut m = alloc::string::String::new();
-                                    jsonview::push_piece(&mut m, "pattern too large for this device — it left only ");
-                                    jsonview::push_u32(&mut m, (left / 1024) as u32);
-                                    jsonview::push_piece(&mut m, " KB of heap free (the firmware needs ");
-                                    jsonview::push_u32(&mut m, (RUNTIME_FLOOR / 1024) as u32);
-                                    jsonview::push_piece(&mut m, " KB to keep running)");
-                                    set_vmerr(Some(m));
-                                }
+                                engine = Some(e);
+                                set_vmerr(None);
+                                vmerr_seen = None;
+                                last = Instant::now();
+                                devicemap::mark_dirty();
                             }
                         }
                         Err(Some(e)) => {
@@ -1324,8 +1392,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
         // so the two can't drift; a stale-format blob reports its decode error
         // (the fix — recompile — is the same user action either way).
         if let Some(id) = playlist::preflight_next() {
-            let violation = match patterns::bytecode_of(&id) {
-                Some(bc) => match luxel_core::bytecode::deserialize_lean(&bc) {
+            // (from the mapped arena slot when the pattern has one)
+            let violation = match patterns::with_code(&id, |bc| {
+                match luxel_core::bytecode::deserialize_lean(bc) {
                     Ok(p) => {
                         let budget =
                             luxel_core::budget::array_budget(esp_alloc::HEAP.free() as usize);
@@ -1336,7 +1405,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                         )
                     }
                     Err(e) => Some(alloc::format!("{}", e)),
-                },
+                }
+            }) {
+                Some(v) => v,
                 None => None, // deleted pattern; the scheduler logs it
             };
             if let Some(m) = &violation {

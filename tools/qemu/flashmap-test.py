@@ -16,7 +16,16 @@ serial narration that:
      (0x3F400000 + entry * 64 KiB) and the entry sits above the app's own
      DROM pages;
   3. the archive parsed THROUGH the mapping (`assets: 2 files installed`)
-     — the TOC bytes came out of the mapped window, not read_nor.
+     — the TOC bytes came out of the mapped window, not read_nor;
+  4. the pattern store mapped the raw half of `storage` the same way
+     (`flashmap: pattern code 0x290000+0x80000 -> 0x3f4xxxxx (8 x 64 KiB
+     pages from entry M), self-check ok`) into the entries right after the
+     assets mapping, and brought its code arena up on it (`patterns: code
+     arena 0/7 slots valid (0 dropped), 40 KiB each` — an empty library, so
+     no slot can be valid; a non-zero "dropped" would mean the table parser
+     accepted garbage). No pattern activation runs under QEMU (it needs a
+     sequential-storage map image or the network), so the arena's write
+     path stays a hardware item (Gitea #271).
 
 What QEMU models (hw/misc/esp32_dport.c): the per-core DROM0/IRAM0 MMU
 tables, cache enable/mask bits, and Cache_Flush — a flush re-reads every
@@ -55,9 +64,16 @@ MAP_LINE = re.compile(
     r"flashmap: assets 0x310000\+0xf0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
 )
 TOC_LINE = "assets: 2 files installed"
+CODE_LINE = re.compile(
+    r"flashmap: pattern code 0x290000\+0x80000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
+)
+ARENA_LINE = re.compile(r"patterns: code arena (\d+)/(\d+) slots valid \((\d+) dropped\), (\d+) KiB each")
 ABORT_MARKERS = (
     "flashmap: assets not mapped",
     "flashmap: assets self-check FAILED",
+    "flashmap: pattern code not mapped",
+    "flashmap: pattern code self-check FAILED",
+    "patterns: code arena off",
     "assets: none installed",
     "assets: implausible entry count",
     "====================== PANIC ======================",
@@ -155,7 +171,7 @@ def boot(qemu: str, flash: str, efuse: str, log: str, timeout: float) -> tuple[s
             while True:
                 with open(log, "rb") as f:
                     text = f.read().decode("utf-8", "replace")
-                if MAP_LINE.search(text) and TOC_LINE in text:
+                if MAP_LINE.search(text) and TOC_LINE in text and ARENA_LINE.search(text):
                     outcome = "marker"
                     break
                 for m in ABORT_MARKERS:
@@ -218,6 +234,26 @@ def check(text: str, image_len: int) -> list[str]:
     if text.index(m.group(0)) > text.index(TOC_LINE):
         raise Fail("mapping line came AFTER the TOC line — init() cannot have used the mapping")
     passed.append("order: mapping established before the TOC parse")
+    # the pattern store's mapping of storage's raw half (patterns.rs)
+    c = CODE_LINE.search(text)
+    if not c:
+        raise Fail("serial: no 'flashmap: pattern code … self-check ok' line")
+    cvaddr, cpages, centry = int(c.group(1), 16), int(c.group(2)), int(c.group(3))
+    passed.append(f"serial: {c.group(0)!r}")
+    if cpages != 0x80000 // PAGE:
+        raise Fail(f"pattern code mapped {cpages} pages, expected {0x80000 // PAGE}")
+    if cvaddr != DROM_BASE + centry * PAGE:
+        raise Fail(f"pattern code vaddr 0x{cvaddr:x} != 0x3F400000 + entry {centry} × 64 KiB")
+    if centry != entry + pages:
+        raise Fail(f"pattern code landed on entry {centry}, expected {entry + pages} (first fit after the assets mapping)")
+    passed.append(f"pattern code: entry {centry} = assets entry {entry} + {pages} pages, vaddr 0x{cvaddr:x}")
+    a = ARENA_LINE.search(text)
+    if not a:
+        raise Fail("serial: no 'patterns: code arena N/M slots valid' line — the arena did not come up on the mapping")
+    valid, total, dropped, kib = (int(a.group(i)) for i in range(1, 5))
+    if (valid, dropped) != (0, 0) or total != 7 or kib != 40:
+        raise Fail(f"arena reported {valid}/{total} valid, {dropped} dropped, {kib} KiB — expected 0/7, 0 dropped, 40 KiB on an empty library")
+    passed.append(f"serial: {a.group(0)!r} (arena up on the mapping, empty library)")
     return passed
 
 

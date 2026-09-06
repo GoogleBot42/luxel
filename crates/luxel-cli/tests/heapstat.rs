@@ -5,8 +5,15 @@
 //!   cargo test -p luxel-cli --test heapstat -- --nocapture
 //!
 //! Written for the soak-v5 OOM hunt (v0.1.24/25): the ESP32 has ~50 KB of
-//! free heap at idle, so any pattern whose resident-or-peak footprint nears
-//! that OOMs the device. This prints the offenders and the breakdown.
+//! free heap at idle, so any pattern whose peak footprint nears that OOMs the
+//! device. This prints the offenders and the breakdown.
+//!
+//! The two `swap(...)` columns are the pattern-swap peak measured the same way
+//! (counting allocator, lean decode, budgeted engine, 3 frames), differing only
+//! in where the bytecode lives: `swap(vec)` models today's library activation,
+//! where the store's source and blob are read onto the heap and re-encoded into
+//! an envelope before decoding; `swap(xip)` models executing straight out of a
+//! flash mapping, where the blob bytes are never heap at all.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -63,9 +70,12 @@ fn gallery_heap_model() {
         prog: usize,
         engine: usize,
         frames_peak: usize,
-        /// The device picture: lean decode (no debug info), 4096-element
-        /// array budget, PLUS the resident source + blob (PATTERN_SRC/_BC).
-        device_peak: usize,
+        /// Today's library-activation swap peak: heap copies of the store's
+        /// source and blob, envelope encode, then lean decode + budgeted engine.
+        swap_vec: usize,
+        /// The mapped-flash (XIP) swap peak: lean decode straight off the
+        /// mapping + budgeted engine; the blob bytes are not heap at all.
+        swap_xip: usize,
     }
     let mut rows: Vec<Row> = Vec::new();
 
@@ -88,15 +98,35 @@ fn gallery_heap_model() {
         let frames_peak = peak() - base;
         drop(eng);
 
-        // device model: lean program, budgeted arrays, residents included
+        // swap(vec): today's library activation — the store reads land on the
+        // heap as String/Vec, get re-encoded into an envelope, and only then
+        // are decoded into a program.
         let base = live();
-        let prog = bytecode::deserialize_lean(&blob).unwrap();
         reset_peak();
+        let s: String = src.clone();
+        let b: Vec<u8> = blob.clone();
+        let env = bytecode::encode_envelope("", &s, &b);
+        drop((s, b));
+        let le = bytecode::decode_envelope(&env).unwrap();
+        let prog = bytecode::deserialize_lean(le.bytecode).unwrap();
+        drop(env);
         let mut eng = Engine::from_program_budgeted(prog, 300, 1, 32 * 1024);
         for _ in 0..3 {
             eng.frame(Fx::from_f64(16.7));
         }
-        let device_peak = peak() - base + src.len() + blob.len();
+        let swap_vec = peak() - base;
+        drop(eng);
+
+        // swap(xip): bytecode executed from a flash mapping — no heap copy of
+        // the blob, no source, no envelope.
+        let base = live();
+        reset_peak();
+        let prog = bytecode::deserialize_lean(&blob).unwrap();
+        let mut eng = Engine::from_program_budgeted(prog, 300, 1, 32 * 1024);
+        for _ in 0..3 {
+            eng.frame(Fx::from_f64(16.7));
+        }
+        let swap_xip = peak() - base;
         drop(eng);
 
         rows.push(Row {
@@ -105,33 +135,58 @@ fn gallery_heap_model() {
             prog: prog_bytes,
             engine: engine_bytes,
             frames_peak,
-            device_peak,
+            swap_vec,
+            swap_xip,
         });
     }
 
-    rows.sort_by_key(|r| std::cmp::Reverse(r.device_peak));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.swap_vec));
     println!(
-        "\n{:<40} {:>7} {:>8} {:>8} {:>9} {:>9}",
-        "pattern", "blob", "program", "engine", "run-peak", "device"
+        "\n{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9}",
+        "pattern", "blob", "program", "engine", "run-peak", "swap(vec)", "swap(xip)"
     );
     for r in rows.iter().take(25) {
         println!(
-            "{:<40} {:>7} {:>8} {:>8} {:>9} {:>9}",
+            "{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9}",
             &r.name[..r.name.len().min(40)],
             r.blob,
             r.prog,
             r.engine,
             r.frames_peak,
-            r.device_peak
+            r.swap_vec,
+            r.swap_xip
         );
     }
-    let over: Vec<_> = rows.iter().filter(|r| r.device_peak > 45_000).collect();
+
+    let over_vec = rows.iter().filter(|r| r.swap_vec > 45_000).count();
     println!(
-        "\n{} of {} patterns model over 45 KB on-device (free heap ≈ 50 KB at idle):",
-        over.len(),
+        "\n{} of {} patterns exceed 45 KB at swap under swap(vec) (free heap ≈ 50 KB at idle)",
+        over_vec,
         rows.len()
     );
-    for r in &over {
-        println!("  {} ({} B)", r.name, r.device_peak);
+    let over_xip: Vec<_> = rows.iter().filter(|r| r.swap_xip > 45_000).collect();
+    println!(
+        "{} of {} patterns exceed 45 KB at swap under swap(xip):",
+        over_xip.len(),
+        rows.len()
+    );
+    for r in &over_xip {
+        println!("  {} ({} B)", r.name, r.swap_xip);
     }
+
+    let sum_vec: usize = rows.iter().map(|r| r.swap_vec).sum();
+    let sum_xip: usize = rows.iter().map(|r| r.swap_xip).sum();
+    let n = rows.len().max(1);
+    let saved = sum_vec.saturating_sub(sum_xip);
+    println!(
+        "\ntotals: sum(swap_vec)={} B  sum(swap_xip)={} B  avg saving={} B ({:.1}%)",
+        sum_vec,
+        sum_xip,
+        saved / n,
+        if sum_vec > 0 {
+            100.0 * saved as f64 / sum_vec as f64
+        } else {
+            0.0
+        }
+    );
 }
