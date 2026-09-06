@@ -243,6 +243,19 @@ asset arm (largest frame 9,552 → 7,504 B). No new frame anywhere; the
 12,288 B budget is untouched. What the mode is and when to use it:
 "Hosted-UI builds" below.
 
+**The VM is compiled at opt-level 3 where the slot allows** (Gitea #260,
+2026-09-05). The image is opt-level "s" for the ceiling above, but at 4096
+px the interpreter (crates/luxel-core) *is* the frame time, so
+`firmware/board-target.sh` carries a per-board `CORE_O3` flag and
+build-esp32.sh / tools/stack-check.sh / flake.nix (`coreO3`) pass
+`--config profile.release.package.luxel-core.opt-level=3` when it is set.
+Measured on the same tree, devshell builds: +17,584 B on
+`board-seengreat-hub75` (margin 158,208 → 140,624 B) and +17,920 B on
+`board-pixelblaze-v3` (91,840 → 73,920 B); on `board-c6-devkit` it would
+have been +20,320 B (50,800 → 30,480 B, under the 3 % floor), so the C6
+variants build with `CORE_O3=0` / `coreO3 = false` and keep the profile
+default. Adding a board means choosing this flag against its margin.
+
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
 **3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).
@@ -520,7 +533,9 @@ small-chip profile, documented just above.)
 Three files, no other code paths involved — plus a one-line case in
 `firmware/board-target.sh` if the board is a chip we don't build yet
 (that file is the single board → chip / rust target / toolchain map,
-shared by build-esp32.sh and tools/stack-check.sh):
+shared by build-esp32.sh and tools/stack-check.sh; its `CORE_O3` flag
+decides whether the VM crate gets opt-level 3 — see "The 1 MiB OTA-slot
+ceiling" — and flake.nix's `firmwareVariants` entry must say the same):
 
 1. **`firmware/Cargo.toml`** — add the feature, selecting the chip:
 

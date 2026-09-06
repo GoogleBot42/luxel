@@ -141,8 +141,10 @@ esp32c6 = [
 ]
 
 # opt-level "s" (size), not 3: the app crossed the 1 MiB OTA-slot boundary at
-# v0.1.17 (crossfade). "s" reclaims ~5% with no visible render-rate hit — the
-# VM eval loop is not the bottleneck (SPI/embassy pacing dominate frame time).
+# v0.1.17 (crossfade). "s" reclaims ~5%. The VM hot path (luxel-core) is the
+# exception: build-esp32.sh / flake.nix compile it at opt-level 3 on boards
+# whose slot margin allows (CORE_O3 in board-target.sh, Gitea #260 — at 4096
+# px the interpreter IS the frame time).
 [profile.release]
 opt-level = "s"
 lto = "fat"

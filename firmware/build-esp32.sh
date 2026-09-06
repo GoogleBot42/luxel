@@ -109,6 +109,13 @@ if [ "$XTENSA" = 1 ]; then
   CARGO="$TC/bin/cargo"
   STD_FLAGS=(-Zbuild-std=core,alloc)
 fi
+# Per-board luxel-core opt-level (CORE_O3 from board-target.sh, Gitea #260):
+# the VM hot path at opt-level 3 inside the size-optimized image. Cargo
+# profiles can't be conditional in Cargo.toml, hence the CLI override.
+OPT_FLAGS=()
+if [ "${CORE_O3:-0}" = 1 ]; then
+  OPT_FLAGS=(--config 'profile.release.package.luxel-core.opt-level=3')
+fi
 
 echo "board: $BOARD (chip $CHIP, target $TARGET)"
 if [ "$CMD" = "run" ]; then
@@ -123,12 +130,12 @@ if [ "$CMD" = "run" ]; then
   "$CARGO" run --release \
     --no-default-features --features "$FEATURES" \
     --target "$TARGET" \
-    "${STD_FLAGS[@]}" 2>&1 | tee -a serial.log
+    "${STD_FLAGS[@]}" "${OPT_FLAGS[@]}" 2>&1 | tee -a serial.log
 elif [ "$CMD" = "image" ]; then
   "$CARGO" build --release \
     --no-default-features --features "$FEATURES" \
     --target "$TARGET" \
-    "${STD_FLAGS[@]}"
+    "${STD_FLAGS[@]}" "${OPT_FLAGS[@]}"
   HAVE_ASSETS=1
   build_assets || HAVE_ASSETS=0
   if [ "$HAVE_ASSETS" = 0 ] && [ "$HOSTED_UI" != 1 ]; then
@@ -150,7 +157,7 @@ else
   "$CARGO" build --release \
     --no-default-features --features "$FEATURES" \
     --target "$TARGET" \
-    "${STD_FLAGS[@]}"
+    "${STD_FLAGS[@]}" "${OPT_FLAGS[@]}"
 fi
 
 # Load-bearing features must actually be linked (the //SIZETEST guard —

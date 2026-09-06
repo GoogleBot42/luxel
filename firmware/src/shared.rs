@@ -49,6 +49,27 @@ pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
 /// Frames rendered in the last full second, updated by the render task.
 pub static FPS: AtomicU32 = AtomicU32::new(0);
 
+/// Per-stage frame timing: average microseconds per rendered frame over the
+/// last full second (Gitea #260 — profiling groundwork). Written by the render
+/// task on the same once-a-second tick as [FPS], read back by `/api/status`.
+///
+/// Only PATTERN frames are timed: the live-input (DDP/E1.31) path and idle
+/// loops with no engine are skipped, so the divisor is the number of *timed*
+/// frames in the window, not [FPS]. A window with no pattern frames stores 0.
+///
+/// The stages nest: `FRAME_US` ≈ `VM_US` + `PIPE_US` + `OUT_US`, plus the small
+/// per-frame bookkeeping between them (delta math, crossfade blend, vmerr).
+///
+/// Whole engine branch: the delta math through `write_frame` returning.
+pub static FRAME_US: AtomicU32 = AtomicU32::new(0);
+/// `Engine::frame` only — the VM evaluating the pattern (plus the outgoing
+/// engine's frame and the blend while a crossfade is running).
+pub static VM_US: AtomicU32 = AtomicU32::new(0);
+/// Preview copy (`set_pixels`) + `apply_outpipe` (gamma / palette / blur).
+pub static PIPE_US: AtomicU32 = AtomicU32::new(0);
+/// `BoardOutput::write_frame` only — the LED / HUB75 driver.
+pub static OUT_US: AtomicU32 = AtomicU32::new(0);
+
 /// Global output brightness, 0–31. The render task reads it every frame and
 /// feeds it to the encoder (SK9822's 5-bit current field; a software scale for
 /// WS2812). HTTP `/api/brightness` writes it; boot seeds it from flash (else
@@ -128,9 +149,9 @@ pub fn set_pixels(rgb: &[[u8; 3]]) {
     PIXELS.lock(|c| {
         let mut v = c.borrow_mut();
         v.clear();
-        for px in rgb {
-            v.extend_from_slice(px);
-        }
+        // one memcpy of the whole frame, not one bounds-checked 3-byte
+        // extend per pixel — this runs on every rendered frame
+        v.extend_from_slice(rgb.as_flattened());
     });
 }
 

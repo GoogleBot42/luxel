@@ -200,6 +200,38 @@ stack lints declared at the top of `main.rs`
 are board-independent, so running clippy on the C3 build still covers the
 Xtensa boards' source.
 
+## Render-loop timing counters
+
+`render_task` publishes `FPS` — frames rendered in the last full second —
+once a second, and since Gitea #260 it publishes four per-stage timers on the
+same tick: `FRAME_US`, `VM_US`, `PIPE_US`, `OUT_US` in `firmware/src/shared.rs`,
+served as `frame_us` / `vm_us` / `pipe_us` / `out_us` by `/api/status`. Each is
+the **average microseconds per rendered frame** over that window.
+
+- `vm_us` — `Engine::frame`: the VM evaluating the pattern, plus the outgoing
+  engine's frame and the blend while a crossfade runs. Normally the dominant
+  term, and the one a pattern's own cost shows up in.
+- `pipe_us` — the `/api/pixels` preview copy (`set_pixels`) plus
+  `apply_outpipe` (gamma, output palette, blur).
+- `out_us` — `BoardOutput::write_frame`: the SPI/RMT or HUB75 driver. Rises
+  with pixel count and falls with DMA; a large value here is a wire-format or
+  driver problem, not a pattern problem.
+- `frame_us` — the whole engine branch, from the delta math through
+  `write_frame` returning. The stages nest, so `frame_us` ≈ the other three
+  plus the small per-frame bookkeeping between them (delta/sync math, pin
+  sync, vmerr drain).
+
+Only the **pattern** branch is instrumented. Frames driven by live input
+(DDP/E1.31) and idle loops with no engine are not timed, and the divisor is
+the count of timed frames in the window — not `FPS`, which counts every loop
+iteration. A second with no pattern frame stores 0 in all four.
+
+The hot path costs three extra `Instant::now()` reads and four integer adds
+per frame; no formatting, allocation, or float work happens inside the loop.
+`frame_us` is wall time inside the branch, so it includes any preemption by
+the WiFi/network tasks — compare stages against each other, not against a
+theoretical cycle budget.
+
 ## Board: Pixelblaze v3 Standard (preferred dev target)
 
 Jeremy has two identical v3s: one stays the untouched compatibility oracle,

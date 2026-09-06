@@ -7,19 +7,27 @@
 #   TARGET      rustc target triple
 #   XTENSA      1 → Espressif's rustc fork + -Zbuild-std (no prebuilt core);
 #               0 → mainline Rust with the target installed via rustup/nix
+#   CORE_O3     1 → the luxel-core crate (VM + engine, the per-pixel hot
+#               path) is compiled at opt-level 3 inside the otherwise
+#               size-optimized image (Gitea #260: ~18-20 KB of app image
+#               for a faster interpreter); 0 → profile default ("s"), for
+#               boards whose OTA-slot margin can't carry it (docs/boards.md).
+#               flake.nix's firmwareVariants carry the same flag (coreO3).
 #
 # Adding a board? Add its case here as well as the three files in
 # docs/boards.md ("Adding a board").
 board_target() {
   case "$1" in
     board-pixelblaze-v3|board-athom-music|board-esp32-generic)
-      CHIP=esp32;    TARGET=xtensa-esp32-none-elf;      XTENSA=1 ;;
+      CHIP=esp32;    TARGET=xtensa-esp32-none-elf;      XTENSA=1; CORE_O3=1 ;;
     board-s3-devkit|board-seengreat-hub75)
-      CHIP=esp32s3;  TARGET=xtensa-esp32s3-none-elf;    XTENSA=1 ;;
+      CHIP=esp32s3;  TARGET=xtensa-esp32s3-none-elf;    XTENSA=1; CORE_O3=1 ;;
     board-c3-devkit)
-      CHIP=esp32c3;  TARGET=riscv32imc-unknown-none-elf;  XTENSA=0 ;;
+      CHIP=esp32c3;  TARGET=riscv32imc-unknown-none-elf;  XTENSA=0; CORE_O3=1 ;;
     board-c6-devkit)
-      CHIP=esp32c6;  TARGET=riscv32imac-unknown-none-elf; XTENSA=0 ;;
+      # tightest slot margin in the fleet: opt-level 3 on luxel-core would
+      # put it under the 3 % CI floor (measured 2026-09-05: 50.8 → 30.5 KB)
+      CHIP=esp32c6;  TARGET=riscv32imac-unknown-none-elf; XTENSA=0; CORE_O3=0 ;;
     *)
       echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
   esac
