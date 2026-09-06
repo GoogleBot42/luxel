@@ -163,7 +163,7 @@ pub fn vars_json(engine: &Engine) -> String {
             Some(Value::Num(v)) => push_i32(&mut out, v.raw()),
             Some(Value::Arr(_)) => {
                 push_piece(&mut out, "[");
-                for (j, v) in engine.var_array(name).unwrap_or(&[]).iter().enumerate() {
+                for (j, v) in engine.var_array(name).into_iter().flat_map(|a| a.iter()).enumerate() {
                     if j > 0 {
                         push_piece(&mut out, ",");
                     }
