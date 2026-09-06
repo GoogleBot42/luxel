@@ -13,6 +13,8 @@
 //!   --seed S       RNG seed                  (default 1)
 //!   --control NAME=V[,V,V]   invoke a UI control before rendering
 //!   --no-fuse      compile without the superinstruction peephole (#261 A/B)
+//!                  (also on `luxel compile`, so a device can be handed an
+//!                  unfused blob against unchanged firmware)
 //!
 //! bench-only options:
 //!   --profile      dump dynamic opcode/pair/triple/builtin counts for the run
@@ -306,6 +308,12 @@ fn read(path: &str) -> Result<String, ExitCode> {
 /// Compile a pattern to LXBC bytecode (what devices execute — they carry no
 /// compiler). Default output: the input path with an .lxbc extension.
 fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
+    // `--no-fuse` here (not just on run/bench) is what makes the #261 A/B
+    // runnable on a DEVICE: same firmware, two blobs, one fused and one not.
+    let mut rest: Vec<String> = rest.to_vec();
+    let no_fuse = rest.iter().any(|a| a == "--no-fuse");
+    rest.retain(|a| a != "--no-fuse");
+    let rest = &rest[..];
     let out_path = match rest {
         [flag, p] if flag == "--out" => p.clone(),
         [] => {
@@ -332,7 +340,12 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     } else {
         raw
     };
-    let prog = match luxel_core::compile::compile(&src) {
+    let prog = match luxel_core::compile::compile_with(
+        &src,
+        luxel_core::compile::CompileOpts {
+            superinstructions: !no_fuse,
+        },
+    ) {
         Ok(p) => p,
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);

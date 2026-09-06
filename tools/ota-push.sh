@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Push a firmware update over the air and verify the device comes back on
 # the new slot. Usage:
-#   tools/ota-push.sh <host> [image]
-# Default image: the devshell Xtensa build (run build-esp32.sh first), or
-# pass a nix-built result/luxel-fw-ota.bin explicitly.
+#   [BOARD=board-...] tools/ota-push.sh <host> [image]
+# Default image: the devshell build for $BOARD (run build-esp32.sh first),
+# or pass a nix-built result/luxel-fw-ota.bin explicitly.
+#
+# $BOARD picks the ELF path and the espflash --chip, through the same
+# board-target.sh map build-esp32.sh uses — it used to be hardcoded to the
+# classic ESP32, so `BOARD=board-seengreat-hub75 tools/deploy.sh <ip>`
+# (deploy.sh calls this) died on a missing xtensa-esp32-none-elf ELF while
+# a perfectly good S3 build sat in the tree (2026-09-06).
 set -euo pipefail
 
 HOST="${1:?usage: ota-push.sh <host> [app-image.bin]}"
@@ -12,11 +18,15 @@ IMAGE="${2:-}"
 cd "$(dirname "$0")/.."
 
 if [ -z "$IMAGE" ]; then
-  ELF=firmware/target/xtensa-esp32-none-elf/release/luxel-fw
-  [ -f "$ELF" ] || { echo "no $ELF — run firmware/build-esp32.sh first (or pass an image)"; exit 1; }
+  BOARD="${BOARD:-board-pixelblaze-v3}"
+  # shellcheck source=../firmware/board-target.sh
+  . firmware/board-target.sh
+  board_target "$BOARD"
+  ELF=firmware/target/$TARGET/release/luxel-fw
+  [ -f "$ELF" ] || { echo "no $ELF — run BOARD=$BOARD firmware/build-esp32.sh first (or pass an image)"; exit 1; }
   IMAGE=$(mktemp --suffix=.bin)
   trap 'rm -f "$IMAGE"' EXIT
-  espflash save-image --chip esp32 "$ELF" "$IMAGE"
+  espflash save-image --chip "$CHIP" "$ELF" "$IMAGE"
 fi
 
 # Guard (hard lesson, twice): an image without baked WiFi creds boots

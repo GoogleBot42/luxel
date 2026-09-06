@@ -22,9 +22,26 @@ Consequences:
 - **No passive monitoring.** A reader loop that reopens the port reboots the
   board on every reopen (it did, for minutes, on 2026-09-05). Never leave one
   running; use `/api/status` polling for liveness during soaks.
-- **Free remote reset** for a starved or hung board, no Jeremy needed:
-  `timeout 3 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT`. The node does
-  NOT re-enumerate on this reset (it does on EN/flash resets).
+- **The reset is not reliable on a plain open** (2026-09-06, several hours of
+  it): a single `socat …,b115200` open often attaches *passively* — no reset,
+  and no output at all until the firmware prints something. What resets the
+  chip every time is a **second, short socat open while a long-lived reader is
+  already attached**; the long reader then captures the whole boot log:
+  ```sh
+  setsid nohup timeout 3600 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT > boot.log &
+  sleep 4
+  timeout 2 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT > /dev/null   # the reset
+  ```
+  `espflash monitor` is NOT an option while the app runs — it insists on
+  connecting to a bootloader and fails with "Error while connecting to device".
+- **A watchdog reset or panic RE-ENUMERATES the USB node** (a USB-triggered
+  reset does not): the reader dies, the node comes back `root:dialout 660`,
+  and you need `doas chmod 666` again. So a serial capture that stops
+  mid-session is itself evidence the board reset.
+- **Never touch serial in the 60 s after an OTA reboot.** The new slot is in
+  the bootloader's pending-verify window until the firmware's boot_ok; a reset
+  inside it rolls the slot straight back (lost a good OTA that way on
+  2026-09-06 by restarting a reader three seconds after the reboot).
 - **Boot-guard arithmetic still applies**: a reset counts as a boot; three
   boots that don't reach the 60 s "healthy" mark flip the OTA slot.
 
@@ -68,5 +85,13 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   → `espflash write-bin --chip esp32s3 -p /dev/ttyACM0 0x0 firmware/target/luxel-full.bin`.
   If it comes up `boot:0x3 (DOWNLOAD…)` after espflash's reset, BOOT is held —
   Jeremy presses EN. Stock-restore image: `seengreat-stock.bin` (repo root, gitignored).
+- **OTA to this board wedges the ProCpu inside a flash op about 44 % of the
+  time (#294)** — silent, no serial, RTC-watchdog recovered, and the board
+  comes back on the OLD slot. Push in a retry loop and check `slot` after each
+  attempt. Before taking any measurement, **push the same image to BOTH slots**
+  so a rollback can't move you onto a different build mid-run, and read
+  `core1.last` afterwards (`SysRtcWdt` + ProCpu fence phase 3 = it happened).
+- The OTA half of `tools/deploy.sh`/`ota-push.sh` needs `BOARD=board-seengreat-hub75`
+  in the environment (they read the board map for the ELF path and `--chip`).
 - Physical EN/BOOT presses and re-plugging are Jeremy's; everything else here
   is pre-authorized like the Athom rig.

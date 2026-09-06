@@ -1,5 +1,40 @@
 # Update log
 
+## 2026-09-06 — The panel re-measured on today's master: superinstructions are 14–18 % on Xtensa
+
+Master moved four times during the Seengreat session (#288 LXBC v5 restored,
+#293 extent allocator, #300 borrowed program words, #302 superinstructions),
+so the panel was re-flashed with **0f83975** and everything re-measured on
+that. The #260 table at 4096 px, per-stage µs from `/api/status`:
+
+| pattern | v0.1.40 | e5935e6 | **0f83975** | vm µs |
+|---|---:|---:|---:|---:|
+| empty `render` | 56 | 77 | **77** | 7,591 |
+| one `rgb()` | 29 | 45 | **50** | 14,021 |
+| rainbow | 18 | 30 | **33** | 24,079 |
+| `snake.js` | 8 | 12 | **16** | 59,112 |
+| `snake-2d.js` | 4 | 8 | **10** | 96,061 |
+
+- **#298 answered on hardware**: same firmware, two blobs from
+  `luxel compile [--no-fuse]` — rainbow vm −13.9 %, snake-2d vm −18.2 %.
+  Xtensa is dispatch-bound in a way x86 is not, which is exactly the bet
+  #261 made. `--no-fuse` now works on `luxel compile` (it only existed on
+  `run`/`bench`), which is what makes a device-side A/B possible without
+  building a second firmware.
+- **Heap**: a 2D pattern costs ~800 B beyond its arrays now that the program
+  words are borrowed from the flash mapping (#300) — 51,192 B free with
+  rainbow, 50,412 B with `aurora-2d`.
+- `tools/ota-push.sh` reads `$BOARD` (through `firmware/board-target.sh`) for
+  the ELF path and `espflash --chip`, so `BOARD=board-seengreat-hub75
+  tools/deploy.sh <ip>` finally works end to end on an S3; it used to look
+  for a classic-ESP32 ELF that an S3 build never produces.
+- The S3 reproduces the **#292 fence wedge** (filed as #294 before the two
+  were connected): 4 of 9 OTAs and once in 33 k fences, same
+  `SysRtcWdt` + ProCpu phase 3 black box. Notably, `POST /api/assets` — the
+  deterministic trigger on the Athom — ran 3/3 clean at 727 KB on the S3,
+  and the S3 never performs the esp32-only SPI2-DMA wait, so that wait is
+  not the common cause.
+
 ## 2026-09-06 — Athom hardware pass on the stacked master: the second core's flash fence wedges the board (#292)
 
 Hardware verification of what master had stacked without ever running it together
