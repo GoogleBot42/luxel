@@ -488,15 +488,38 @@ without touching flash, park without touching RTC memory, or skip parking:
    second core, and it is why a heavy pattern (more of the frame spent
    mid-transfer when the park lands) hung sooner than rainbow.
 
+4. **The fencing core masks its OWN interrupts for the whole fenced
+   window** — from the park acknowledgement until after the other core is
+   released (`Gitea #292`, 2026-09-06). This is the half of ESP-IDF's
+   `spi_flash_disable_interrupts_caches_and_other_cpu()` the fence was
+   missing, and without it a 728 KB `POST /api/assets` wedged the ProCpu
+   5/5 after 60–70 KB. The black box put the wedge AFTER the ROM erase
+   returned, on the instruction where esp-storage's own critical section
+   (`rsil 5`) drops back to level 0 and every interrupt that queued up
+   behind a ~45 ms sector erase fires at once — with the other core still
+   parked. One of those handlers never returns. Masking until past the
+   release defers them to a point where both cores are running, and the
+   same install then ran 5/5 clean in 13–15 s. The cost is this core's
+   interrupt latency for one flash op; esp-storage already masked levels
+   1–5 for the ROM call, so the new exposure is level 6+ across the op and
+   every level across the microsecond release. Diagnosing this needed one
+   thing the black box did not have: which side of the driver call the
+   wedge was on, now recorded as ProCpu phase 6 (inside esp-storage and
+   the ROM routine) vs 7 (it returned).
+
 Because a wedge of this class is a silent hang, dual-core builds also arm
 the **RTC watchdog** (20 s, fed every 3 s by a task on the ProCpu
-executor — `core1::watchdog_task`; a wedged executor or a permanently
-parked ProCpu reboots instead of stranding the device) and keep a **black
-box in RTC slow memory** that survives the reset: `/api/status`
-`core1.last` reports the previous run's reset reason and the fence's phase
-per core, fence/park counts and timeouts (`core1.rs` documents the
-layout). A `last.reset` of `SysRtcWdt` with a ProCpu phase of 3 is the
-signature of the three hangs above.
+executor — `core1::watchdog_task` — AND every 64 fences from
+`core1::fenced` itself, because a long flash burst blocks that executor:
+a 728 KB asset install is ~15 s of erases and a garbage-collecting pattern
+save was measured at 25 s. Taking a fence is proof of progress, so the
+watchdog still catches a core that stopped) and keep a **black box in RTC
+slow memory** that survives the reset: `/api/status` `core1.last` reports
+the previous run's reset reason, the fence's phase per core, fence/park
+counts and timeouts, and which call site
+(`core1::tag`) held the fence in flight (`core1.rs` documents the layout).
+A `last.reset` of `SysRtcWdt` with a ProCpu phase of 3, 6 or 7 is the
+signature of the hangs above.
 
 **The flash fence** is the one piece of real multicore machinery. SPI flash
 is shared between the cache (every instruction fetch from flash-resident
@@ -526,8 +549,30 @@ mapping; mapped *reads* need nothing, see docs/research/flash-mmap.md
 the fence supplies the guarantee it asks for. `/api/status` `core1.
 fence_timeouts` counts park requests the other core did not acknowledge
 within 100 ms (the op proceeds; nonzero means something is wedged — it
-stayed 0 through every bench and OTA below), and `core1.fence_wait_us` is the longest
-park wait seen — the render-side cost of one flash op (≤ 2.1 ms seen; typically 40–800 µs — it includes waiting out an in-flight strip transfer).
+stayed 0 through every bench and OTA below), `core1.fence_wait_us` is the longest
+park wait seen — the render-side cost of one flash op (≤ 2.1 ms seen; typically 40–800 µs — it includes waiting out an in-flight strip transfer), and
+`core1.fences` is `[begun, completed]` for this boot, so the fence rate of
+any one operation is a before/after delta.
+
+**A fence is expensive, so a fenced op must be page-sized.** Each one costs
+an interrupt and a park round-trip on the other core plus this core's
+interrupt latency for the op — of the order of half a millisecond, against
+about ten microseconds for the flash read itself. The raw-region writers
+were always shaped that way (one fence per 4 KiB: erase, then one program
+pass — `assets::AssetWriter`, `ota::OtaWriter`, `patterns::write_raw`), but
+the pattern store was not: `map::fetch_item`/`store_item` were each handed
+a fresh `NoCache`, so every call re-scanned all 128 pages and every item
+header in them, one fenced 8-byte read at a time. Measured on the Athom
+(Gitea #292): **81,143 fenced reads, ~13 s, for one 650-byte POST
+/api/patterns** — long enough that the RTC watchdog rebooted the board
+mid-save. There is now ONE `PageStateCache` for the store region
+(`patterns::store_cache`), kept across transactions and passed to every
+call; the flash LEASE (`ota::take_flash` hands the driver to one caller at
+a time, across both cores) is what makes a single shared `&mut` sound, and
+anything that writes inside the range around sequential-storage's back —
+the format wipe in `patterns::init` — resets it. Same save: **929 fences,
+0.5 s**. A 46 KB save is 5–25 s and 5,000–33,000 fences depending on
+whether it garbage-collects.
 
 **Measured on the Athom** (classic ESP32, 60 px WS2812 strip, same tree
 either side of the change, `tools/render-bench.mjs`):

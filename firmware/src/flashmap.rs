@@ -201,7 +201,7 @@ pub fn invalidate_slice(bytes: &[u8]) {
 /// enabled). Single-core builds: `fenced` is the identity.
 #[inline(always)]
 fn quiesced<R>(f: impl FnOnce() -> R) -> R {
-    crate::core1::fenced(|| critical_section::with(|_| f()))
+    crate::core1::fenced_as(crate::core1::tag::MAP, || critical_section::with(|_| f()))
 }
 
 // ---------------------------------------------------------------------------

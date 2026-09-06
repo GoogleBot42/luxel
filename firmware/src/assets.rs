@@ -160,7 +160,10 @@ pub fn read_chunk(offset: u32, buf: &mut [u8]) -> bool {
     let stage_bytes = unsafe {
         core::slice::from_raw_parts_mut(stage.as_mut_ptr().cast::<u8>(), aligned_len)
     };
-    let ok = crate::ota::with_flash(|f| f.read_nor(start, stage_bytes).is_ok()).unwrap_or(false);
+    let ok = crate::ota::with_flash_as(crate::core1::tag::ASSET_READ, |f| {
+        f.read_nor(start, stage_bytes).is_ok()
+    })
+    .unwrap_or(false);
     if ok {
         buf.copy_from_slice(&stage_bytes[head..head + buf.len()]);
     }
@@ -303,7 +306,7 @@ impl AssetWriter {
         let end = at + chunk.len() as u32;
         let mut s = self.erased_end.max(at & !(SECTOR - 1));
         while s < end {
-            let ok = crate::ota::with_flash(|f| {
+            let ok = crate::ota::with_flash_as(crate::core1::tag::ASSET_ERASE, |f| {
                 embedded_storage::nor_flash::NorFlash::erase(f, s, s + SECTOR).is_ok()
             })
             .unwrap_or(false);
@@ -315,7 +318,7 @@ impl AssetWriter {
             embassy_futures::yield_now().await;
         }
         let whole = chunk.len() & !3;
-        let ok = crate::ota::with_flash(|f| {
+        let ok = crate::ota::with_flash_as(crate::core1::tag::ASSET_WRITE, |f| {
             use embedded_storage::nor_flash::NorFlash;
             if whole > 0 && NorFlash::write(f, at, &chunk[..whole]).is_err() {
                 return false;

@@ -758,7 +758,11 @@ which. What changed on metal:
   `fence_wait_us` peaks at **3,171 µs** here, not the tens of µs seen on a
   strip — a HUB75 compose can hold the render core for milliseconds before
   it takes the park interrupt. AppCpu stack peak 10,848 of 20,480 B.
-- **OTA is a coin flip on this board — #294.** Four of nine `POST /api/ota`
+- **OTA is a coin flip on this board — #294** (measured 2026-09-05; the
+  cause was found on the Athom the next day and fixed — see Gitea #292 and
+  docs/firmware.md "Cores & tasks" rule 4 — but this board has not been
+  re-measured since, so treat the numbers below as the pre-fix state).
+  Four of nine `POST /api/ota`
   pushes wedged the ProCpu *inside* a flash op (`core1.last` =
   `SysRtcWdt` with ProCpu fence phase 3, fences begun = completed + 1,
   `fence_timeouts` 0, and no serial output at all between `ota: writing

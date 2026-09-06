@@ -117,6 +117,94 @@ that. The #260 table at 4096 px, per-stage µs from `/api/status`:
   deterministic trigger on the Athom — ran 3/3 clean at 727 KB on the S3,
   and the S3 never performs the esp32-only SPI2-DMA wait, so that wait is
   not the common cause.
+=======
+## 2026-09-06 (later) — the second core's flash fence: root-caused, fixed, and 100x fewer fences (#292)
+
+Follow-up to the entry below, on the same Athom rig. The blocker it filed is
+fixed, and the fence traffic that made it fatal is gone.
+
+**Root cause: the fencing core re-enabled its own interrupts while the other
+core was still parked.** The fence did half of ESP-IDF's
+`spi_flash_disable_interrupts_caches_and_other_cpu()` — it parked the other
+core — and none of the other half. It is not the "garbage instruction fetch"
+story the code comments assumed: a black box extended to record which side of
+the driver call the ProCpu was on put both wedges *after* the flash work, on
+the instruction where this core re-enables interrupts. Everything that queued
+up behind a ~45 ms sector erase (esp-storage masks only levels 1-5, and only
+for the ROM call) then fires at once with the other core still parked, and one
+of those handlers never returns. Two windows, found one after the other:
+esp-storage's own critical section dropping back to level 0 (ProCpu phase 7),
+and the wait for the park acknowledgement (phase 2). `core1::fenced` now holds
+interrupts masked from the moment it takes the fence lock until after the
+other core is released; `park_if_asked` in the spin-waits is what keeps that
+safe. Fix confirmed by A/B on metal — the same build with and without the mask,
+728 KB `POST /api/assets` 5/5 wedged vs 5/5 clean.
+
+The bisect that got there, all on this rig, all read out of the RTC black box
+(no serial this session either):
+
+| experiment | result |
+|---|---|
+| 10 × single fenced sector erase (`POST /api/brightness`) | 10/10 clean — it is not "erases are broken" |
+| same, under sustained WiFi RX (48 KB rejected uploads in a loop) | 25/25 clean — not RX pressure alone |
+| 1 MB `POST /api/ota` (~500 fences, same erase+write shape) | clean, 3/3 |
+| 728 KB `POST /api/assets`, strip cut to 1 px | wedges — not the SPI2 DMA hazard |
+| same, `EXTRA_FEATURES=flashmap-off` | wedges — not the cache mapping (confirms #292's report) |
+| same, interrupts masked across the fence | **installs, 14.9 s** |
+
+Also disproved a premise carried from the issue: the asset writer is NOT taking
+a fence per ~16 bytes. Per-call-site fence counters showed the install spending
+2 fences per 4 KiB page (one erase, one program), 358 for the whole archive, and
+the board wedging **5 fences in** — the "46,800 fences/minute" figure was a
+boot-time pattern-store scan, not the install.
+
+**But that scan was the second bug.** `map::fetch_item`/`store_item` were each
+handed a fresh `NoCache`, so every call re-scanned all 128 pages and every item
+header in them, one fenced 8-byte read at a time. A fence costs ~0.5 ms (an
+interrupt and a park round-trip on the other core, plus this core's interrupt
+latency); the flash read costs ~10 µs. Measured: **one 650-byte `POST
+/api/patterns` = 81,143 fenced reads, ~13 s** — long enough that the RTC
+watchdog rebooted the board mid-save, which is exactly the "intermittent large
+pattern saves" half of #292. There is now ONE `PageStateCache` for the store
+region, kept across transactions and passed to every call (`patterns::store_cache`);
+the flash lease is what makes a single shared `&mut` sound. Same save:
+**929 fenced reads, 0.5 s.**
+
+| operation | fenced flash ops before → after | wall time |
+|---|---|---|
+| 650 B `POST /api/patterns` | 81,143 → **929** | 6.0 s → 0.5 s |
+| 8 KB `POST /api/patterns` | 54,678 → **1,895** | 15.3 s → 1.0 s |
+| boot: pattern-store scan | 23,957 → ~4,100 | — |
+| 728 KB `POST /api/assets` | 358 (unchanged — already one fence per page) | 13–15 s |
+
+Third fix, and the one that made the save soak green: **a long flash burst now
+feeds the RTC watchdog.** The watchdog task lives on the ProCpu executor, which
+a store transaction blocks — a 728 KB asset install is ~15 s of erases and a
+garbage-collecting 46 KB save was measured at 25 s, both against a 20 s timeout.
+`core1::fenced` feeds every 64 fences: taking a fence is proof of progress, so
+the watchdog still catches a core that stopped without rebooting one that is
+merely slow.
+
+Two smaller things worth keeping. The black box grew to 10 words — the two new
+ones are the call site that holds the fence in flight (`core1::tag`) and the
+AppCpu park count the ProCpu saw, and `/api/status` now reports live
+`core1.fences` `[begun, completed]`, so the fence cost of any operation is a
+before/after delta (`docs/api.md` documents the whole `core1` object, which it
+never did). And a 4 KiB page cache in front of the store's reads was measured
+and **rejected**: the store's reads jump between pages, so nearly every one
+missed and paid a full 4 KiB read — that build could not finish a save at all.
+
+Verified on the Athom, 60 px WS2812, second-core build: 728 KB asset install
+5/5 with all 8 files `gunzip -t` clean on read-back, 15 consecutive 46 KB
+pattern saves, firmware OTA + assets via `tools/deploy.sh`, `fence_timeouts` 0,
+no watchdog reset, render 121 fps. Image cost on `board-pixelblaze-v3`:
+1,015,264 → 1,016,592 B, OTA-slot margin 3.18 % → 3.05 %. Getting there needed
+the new work out of `fenced_as` (which is `#[inline(always)]` at ~20 flash call
+sites — 2.6 KB of image) and `PageStateCache` rather than `PagePointerCache`
+(3.3 KB more, and measurably no faster here).
+>>>>>>> theirs
+
+
 
 ## 2026-09-06 — Athom hardware pass on the stacked master: the second core's flash fence wedges the board (#292)
 

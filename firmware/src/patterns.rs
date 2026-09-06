@@ -54,7 +54,7 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 use esp_storage::FlashStorage;
 use luxel_core::jsonview::{json_escape, push_hex, push_piece, push_u32};
-use sequential_storage::cache::NoCache;
+use sequential_storage::cache::PageStateCache;
 use sequential_storage::map;
 
 // --- blocking → async flash adapter ---
@@ -70,7 +70,13 @@ use embedded_storage::nor_flash::ErrorType as BlockingErrorType;
 use embedded_storage::nor_flash::{NorFlash as BlockingNorFlash, ReadNorFlash as BlockingRead};
 use embedded_storage_async::nor_flash as anf;
 
-struct AsyncFlash<'a>(&'a mut FlashStorage<'static>);
+struct AsyncFlash<'a> {
+    flash: &'a mut FlashStorage<'static>,
+}
+impl<'a> AsyncFlash<'a> {
+    fn new(flash: &'a mut FlashStorage<'static>) -> Self { Self { flash } }
+    fn invalidate(&mut self) {}
+}
 
 impl anf::ErrorType for AsyncFlash<'_> {
     type Error = <FlashStorage<'static> as BlockingErrorType>::Error;
@@ -79,22 +85,32 @@ impl anf::ReadNorFlash for AsyncFlash<'_> {
     const READ_SIZE: usize = <FlashStorage<'static> as BlockingRead>::READ_SIZE;
     // Every op is fenced individually (dual-core: the other core parks for
     // the op — core1.rs): this adapter drives a LEASED driver, outside
-    // ota::with_flash's fence.
+    // ota::with_flash's fence. Hence the page cache: a fence is expensive
+    // (an interrupt on the other core, and this core's interrupts held off
+    // for the op), so reads that fit a cached page must not take one.
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        crate::core1::fenced(|| BlockingRead::read(self.0, offset, bytes))
+        crate::core1::fenced_as(crate::core1::tag::STORE_READ, || {
+            BlockingRead::read(self.flash, offset, bytes)
+        })
     }
     fn capacity(&self) -> usize {
-        BlockingRead::capacity(self.0)
+        BlockingRead::capacity(self.flash)
     }
 }
 impl anf::NorFlash for AsyncFlash<'_> {
     const WRITE_SIZE: usize = <FlashStorage<'static> as BlockingNorFlash>::WRITE_SIZE;
     const ERASE_SIZE: usize = <FlashStorage<'static> as BlockingNorFlash>::ERASE_SIZE;
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
-        crate::core1::fenced(|| BlockingNorFlash::erase(self.0, from, to))
+        self.invalidate();
+        crate::core1::fenced_as(crate::core1::tag::STORE_ERASE, || {
+            BlockingNorFlash::erase(self.flash, from, to)
+        })
     }
     async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        crate::core1::fenced(|| BlockingNorFlash::write(self.0, offset, bytes))
+        self.invalidate();
+        crate::core1::fenced_as(crate::core1::tag::STORE_WRITE, || {
+            BlockingNorFlash::write(self.flash, offset, bytes)
+        })
     }
 }
 impl anf::MultiwriteNorFlash for AsyncFlash<'_> {}
@@ -203,6 +219,43 @@ fn serialize_meta(gen: u8, count: u8, bc_count: u8, name: &str) -> Vec<u8> {
     v
 }
 
+/// Pages sequential-storage manages — the const the cache below is sized
+/// by; wrong and the crate panics at some point.
+const PAGES: usize = (STORE_LEN / PAGE) as usize;
+
+/// The ONE sequential-storage cache for the store region, kept alive
+/// across transactions.
+///
+/// sequential-storage wants exactly one live cache per region, passed to
+/// every call. Building a fresh `NoCache` per call — which is what this
+/// did — meant every `fetch_item`/`store_item` re-scanned all
+/// [PAGES] pages and every item header in them, and on a dual-core board
+/// each of those reads is an individually FENCED flash op. Measured on the
+/// Athom (Gitea #292): **81,143 fenced reads for one 650-byte POST
+/// /api/patterns**, ~13 s of them, which blocked the ProCpu executor past
+/// the 20 s RTC watchdog and rebooted the board mid-save.
+///
+/// Sound because of the LEASE: a transaction owns the flash driver
+/// ([crate::ota::take_flash] hands it out to one caller at a time, across
+/// both cores), so the `&mut` below is exclusive for exactly as long as
+/// the driver is out, and nothing else writes this range (the raw region —
+/// current-slot + code arena — starts at [RAW_OFF] = `STORE_LEN`, past the
+/// map's range). Any write that goes AROUND sequential-storage inside the
+/// range (the format wipe in [init]) must call `invalidate_cache_state()`.
+struct StoreCache(core::cell::UnsafeCell<PageStateCache<PAGES>>);
+// SAFETY: only reachable through `store_cache`, whose caller holds the
+// exclusive flash lease (see above).
+unsafe impl Sync for StoreCache {}
+static STORE_CACHE: StoreCache = StoreCache(core::cell::UnsafeCell::new(PageStateCache::new()));
+
+/// The shared cache. Call only from inside a `with_store!` body or a
+/// helper it calls — i.e. while the flash lease is held.
+#[allow(clippy::mut_from_ref)]
+fn store_cache() -> &'static mut PageStateCache<PAGES> {
+    // SAFETY: the flash lease makes this borrow exclusive; see StoreCache.
+    unsafe { &mut *STORE_CACHE.0.get() }
+}
+
 /// Leases the flash driver out of the OTA module and returns it on drop.
 struct FlashLease(Option<FlashStorage<'static>>);
 impl Drop for FlashLease {
@@ -223,7 +276,7 @@ macro_rules! with_store {
             None => None,
             Some(flash) => {
                 #[allow(unused_mut)]
-                let mut $af = AsyncFlash(flash);
+                let mut $af = AsyncFlash::new(flash);
                 let $range: Range<u32> = $start..($start + STORE_LEN);
                 let mut buf_vec = alloc::vec![0u8; BUF];
                 let $buf: &mut [u8] = buf_vec.as_mut_slice();
@@ -241,8 +294,8 @@ async fn read_meta(
     buf: &mut [u8],
     seq: u32,
 ) -> Option<(u8, u8, u8, String)> {
-    let mut cache = NoCache::new();
-    match map::fetch_item::<u32, &[u8], _>(af, range, &mut cache, buf, &meta_key(seq)).await {
+    let cache = store_cache();
+    match map::fetch_item::<u32, &[u8], _>(af, range, cache, buf, &meta_key(seq)).await {
         Ok(Some(bytes)) => deserialize_meta(bytes),
         _ => None,
     }
@@ -256,7 +309,7 @@ async fn read_source(
     gen: u8,
     count: u8,
 ) -> Option<String> {
-    let mut cache = NoCache::new();
+    let cache = store_cache();
     // The count comes from a stored TOC record — never trust it with an
     // infallible alloc. A corrupt record on the Athom claimed 32 chunks
     // (120 KB: 4× the writer's own MC cap) and the with_capacity here
@@ -273,7 +326,7 @@ async fn read_source(
     }
     for c in 0..count {
         let key = chunk_key(seq, gen, c);
-        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), &mut cache, buf, &key).await {
+        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), cache, buf, &key).await {
             Ok(Some(bytes)) => out.extend_from_slice(bytes),
             _ => return None,
         }
@@ -290,7 +343,7 @@ async fn read_bc(
     gen: u8,
     bc_count: u8,
 ) -> Option<Vec<u8>> {
-    let mut cache = NoCache::new();
+    let cache = store_cache();
     // Same defense as read_source: bc_count is untrusted stored data.
     if bc_count > MC_BC {
         return None;
@@ -301,7 +354,7 @@ async fn read_bc(
     }
     for c in 0..bc_count {
         let key = bc_chunk_key(seq, gen, c);
-        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), &mut cache, buf, &key).await {
+        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), cache, buf, &key).await {
             Ok(Some(bytes)) => out.extend_from_slice(bytes),
             _ => return None,
         }
@@ -322,14 +375,14 @@ async fn write_pattern(
     source: &str,
     bc: &[u8],
 ) -> Result<(), ()> {
-    let mut cache = NoCache::new();
+    let cache = store_cache();
     let bytes = source.as_bytes();
     for c in 0..count {
         let s = c as usize * CHUNK;
         let e = (s + CHUNK).min(bytes.len());
         let chunk: &[u8] = &bytes[s..e];
         let key = chunk_key(seq, gen, c);
-        if map::store_item(af, range.clone(), &mut cache, buf, &key, &chunk).await.is_err() {
+        if map::store_item(af, range.clone(), cache, buf, &key, &chunk).await.is_err() {
             return Err(());
         }
     }
@@ -338,13 +391,13 @@ async fn write_pattern(
         let e = (s + CHUNK).min(bc.len());
         let chunk: &[u8] = &bc[s..e];
         let key = bc_chunk_key(seq, gen, c);
-        if map::store_item(af, range.clone(), &mut cache, buf, &key, &chunk).await.is_err() {
+        if map::store_item(af, range.clone(), cache, buf, &key, &chunk).await.is_err() {
             return Err(());
         }
     }
     let meta = serialize_meta(gen, count, bc_count, name);
     let mslice: &[u8] = &meta;
-    if map::store_item(af, range.clone(), &mut cache, buf, &meta_key(seq), &mslice).await.is_err() {
+    if map::store_item(af, range.clone(), cache, buf, &meta_key(seq), &mslice).await.is_err() {
         return Err(());
     }
     Ok(())
@@ -361,14 +414,14 @@ async fn remove_chunks(
     count: u8,
     bc_count: u8,
 ) {
-    let mut cache = NoCache::new();
+    let cache = store_cache();
     for c in 0..count {
         let key = chunk_key(seq, gen, c);
-        let _ = map::remove_item::<u32, _>(af, range.clone(), &mut cache, buf, &key).await;
+        let _ = map::remove_item::<u32, _>(af, range.clone(), cache, buf, &key).await;
     }
     for c in 0..bc_count {
         let key = bc_chunk_key(seq, gen, c);
-        let _ = map::remove_item::<u32, _>(af, range.clone(), &mut cache, buf, &key).await;
+        let _ = map::remove_item::<u32, _>(af, range.clone(), cache, buf, &key).await;
     }
 }
 
@@ -396,9 +449,9 @@ pub fn init() {
 
     let entries = with_store!(start, |af, range, buf| {
         // Format check: wipe storage if the on-flash layout isn't ours.
-        let mut cache = NoCache::new();
+        let cache = store_cache();
         let fmt = match map::fetch_item::<u32, &[u8], _>(
-            &mut af, range.clone(), &mut cache, buf, &FORMAT_KEY,
+            &mut af, range.clone(), cache, buf, &FORMAT_KEY,
         )
         .await
         {
@@ -408,18 +461,21 @@ pub fn init() {
         if fmt != FORMAT_VERSION {
             println!("patterns: format {} != {}, wiping storage", fmt, FORMAT_VERSION);
             let _ = anf::NorFlash::erase(&mut af, range.start, range.end).await;
+            // erased behind sequential-storage's back — the shared cache
+            // still describes the old contents
+            *store_cache() = PageStateCache::new();
             let ver = FORMAT_VERSION.to_le_bytes();
             let vslice: &[u8] = &ver;
-            let mut c2 = NoCache::new();
-            let _ = map::store_item(&mut af, range.clone(), &mut c2, buf, &FORMAT_KEY, &vslice).await;
+            let c2 = store_cache();
+            let _ = map::store_item(&mut af, range.clone(), c2, buf, &FORMAT_KEY, &vslice).await;
             return Vec::new();
         }
 
         // Discover meta seqs by scanning, then read each authoritative meta.
         let mut seqs: Vec<u32> = Vec::new();
-        let mut cache = NoCache::new();
+        let cache = store_cache();
         if let Ok(mut iter) =
-            map::fetch_all_items::<u32, _, _>(&mut af, range.clone(), &mut cache, buf).await
+            map::fetch_all_items::<u32, _, _>(&mut af, range.clone(), cache, buf).await
         {
             while let Ok(Some((key, _))) = iter.next::<u32, &[u8]>(buf).await {
                 if key & CHUNK_FLAG == 0 && key != FORMAT_KEY && !seqs.contains(&key) {
@@ -609,9 +665,9 @@ pub fn store_blob(key: u32, bytes: &[u8]) -> bool {
         return false;
     }
     with_store!(start, |af, range, buf| {
-        let mut cache = NoCache::new();
+        let cache = store_cache();
         let b: &[u8] = bytes;
-        map::store_item(&mut af, range.clone(), &mut cache, buf, &key, &b)
+        map::store_item(&mut af, range.clone(), cache, buf, &key, &b)
             .await
             .is_ok()
     })
@@ -625,8 +681,8 @@ pub fn read_blob(key: u32) -> Option<Vec<u8>> {
         return None;
     }
     with_store!(start, |af, range, buf| {
-        let mut cache = NoCache::new();
-        match map::fetch_item::<u32, &[u8], _>(&mut af, range, &mut cache, buf, &key).await {
+        let cache = store_cache();
+        match map::fetch_item::<u32, &[u8], _>(&mut af, range, cache, buf, &key).await {
             Ok(Some(b)) => Some(b.to_vec()),
             _ => None,
         }
@@ -737,7 +793,9 @@ async fn write_raw(abs: u32, data: &[u8]) -> bool {
     let end = abs + (data.len() as u32).div_ceil(PAGE) * PAGE;
     let mut at = abs;
     while at < end {
-        let r = crate::ota::with_flash(|f| BlockingNorFlash::erase(f, at, at + PAGE).is_ok());
+        let r = crate::ota::with_flash_as(crate::core1::tag::RAW_ERASE, |f| {
+            BlockingNorFlash::erase(f, at, at + PAGE).is_ok()
+        });
         if !op_ok(r) {
             return false;
         }
@@ -756,7 +814,7 @@ async fn write_raw(abs: u32, data: &[u8]) -> bool {
         };
         bytes[words * 4 - 4..].fill(0xFF); // pad the tail word with erased-state bytes
         bytes[..n].copy_from_slice(&data[at..at + n]);
-        let r = crate::ota::with_flash(|f| {
+        let r = crate::ota::with_flash_as(crate::core1::tag::RAW_WRITE, |f| {
             BlockingNorFlash::write(f, abs + at as u32, &bytes[..words * 4]).is_ok()
         });
         if !op_ok(r) {
@@ -960,9 +1018,9 @@ pub fn delete(id: &str) -> String {
         return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
     }
     let ok = with_store!(start, |af, range, buf| {
-        let mut cache = NoCache::new();
+        let cache = store_cache();
         let meta_ok =
-            map::remove_item::<u32, _>(&mut af, range.clone(), &mut cache, buf, &meta_key(seq))
+            map::remove_item::<u32, _>(&mut af, range.clone(), cache, buf, &meta_key(seq))
                 .await
                 .is_ok();
         remove_chunks(&mut af, range, buf, seq, gen, count, bc_count).await;
@@ -1259,12 +1317,12 @@ pub fn source_stat(id: &str) -> Option<(usize, u32)> {
         return None;
     }
     with_store!(start, |af, range, buf| {
-        let mut cache = NoCache::new();
+        let cache = store_cache();
         let mut len = 0usize;
         let mut h = FNV_INIT;
         for c in 0..count {
             let key = chunk_key(seq, gen, c);
-            match map::fetch_item::<u32, &[u8], _>(&mut af, range.clone(), &mut cache, buf, &key)
+            match map::fetch_item::<u32, &[u8], _>(&mut af, range.clone(), cache, buf, &key)
                 .await
             {
                 Ok(Some(b)) => {
