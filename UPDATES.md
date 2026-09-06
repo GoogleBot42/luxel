@@ -1,5 +1,57 @@
 # Update log
 
+## 2026-09-06 — The loop microbenchmark is not the judge: #318's fix is a 38 % regression (#312, #318)
+
+#318 asked whether the `Const c; <op>` fused arms should stop calling
+`binop_const` out of line — 3 of the 9 operations the loop microbenchmark
+executes per iteration pay an Xtensa window transition (`entry`/`retw`) plus a
+second jump table, and the ticket said explicitly that a disassembly cannot
+judge it. It cannot, and neither can `tools/opbench.mjs`. Measured on the Athom
+(classic ESP32 @ 240 MHz), against `origin/master` 579082a:
+
+| build | loop µs/iteration | `perlin-fire-wind-tunnel` µs/px | `Vm::run` | app image |
+|---|---|---|---|---|
+| master | 3.935 | **144.8** | 13,170 B | 1,006,208 B |
+| `binop_const` `#[inline(always)]`, all three arms | **3.638** (−7.5 %) | **199.4 (+38 %)** | 14,424 B | 1,007,440 B |
+| the same, one arm only | 3.813 (−3.1 %) | **227.7 (+57 %)** | 13,717 B | 1,006,944 B |
+
+Both rejected. The window transition really is worth 7.5 % of pure dispatch —
+and it is dwarfed by what `Vm::run`'s footprint does to the 21 KB
+`call_builtin` sharing the flash instruction cache with it. Note the one-arm
+variant is **smaller than the three-arm one and slower on both patterns**: this
+is not a size law, it is layout, and it is violent — tens of percent from a
+kilobyte of movement in `luxel-core`.
+
+**Which means the same instrument, pointed at the change that shipped this
+afternoon, says something much better than we reported.** PR #325 (the debugger
+check out of the dispatch loop) read −4.5 % on the loop microbenchmark. On
+`perlin-fire-wind-tunnel` at 256 px it is:
+
+| build | µs/px | fps |
+|---|---|---|
+| `66a94f7` (pre-#325) | 270.8 | 13 |
+| `579082a` (post-#325) | **144.8** | **22** |
+
+**1.87× faster on a real, noise-heavy pattern** — ten times the effect the loop
+bench could see, and it came from the same 300 bytes of inlined `debug_stop`,
+which had been costing `call_builtin` its cache residency rather than costing
+the dispatch loop its registers. Both readings repeat to ±0.3 %.
+
+`tools/patbench.mjs` (docs/tools.md) is that measurement as a tool: push one
+`library/` pattern, settle, report the median `vm_us` and `vm_us/px`. **Run it
+alongside `opbench.mjs` for any luxel-core change** — they can point in opposite
+directions, and the pattern number is the one that matters. Pick a *stateless*
+pattern: `snake-2d` and friends carry game state whose per-frame work varies,
+which makes them useless as an A/B probe (it swung 74 % between two builds that
+differed by a kilobyte); `perlin-fire-wind-tunnel` is a pure function of time and
+coordinates and repeats to ±0.3 %.
+
+#318 stays open with the numbers. Its remaining candidate is the one that does
+NOT grow the loop: give the peephole a per-operation opcode (`ConstOpAdd`,
+`ConstOpMul`, `ConstOpLt`…) so the fused arms dispatch once instead of twice and
+there is no call to inline in the first place. That needs `compile.rs`'s peephole
+and `bytecode::walk_word`, and it must be judged on `patbench.mjs` too.
+
 ## 2026-09-06 — The debugger check was inlined into every dispatch (#312)
 
 #312's remaining lead on the dispatch loop's own scaffolding: the shared
