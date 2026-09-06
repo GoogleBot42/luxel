@@ -716,6 +716,12 @@ two `array(pixelCount)` buffers swapped by hand this is half the RAM
 LOG2E LOG10E`; GPIO constants `LOW HIGH INPUT OUTPUT INPUT_PULLUP
 INPUT_PULLDOWN OUTPUT_OPEN_DRAIN ANALOG`; `null`/`undefined` (= 0).
 
+All of them except `pixelCount` are **compile-time constants**: unless your
+pattern assigns to the name or exports it, `x * PI2` costs exactly what
+`x * 6.28318` costs, and `2 * PI / 3` is folded to a single number before the
+pattern ever runs. Assigning to one (`PI = 3`) is still legal and still
+works — it just turns that name back into an ordinary global.
+
 ## Known divergences from Pixel Blaze
 
 Bit-exactness with real PB hardware is verified by a differential test

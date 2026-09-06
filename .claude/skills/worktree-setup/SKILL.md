@@ -63,6 +63,12 @@ these before trusting any build/test failure as a real regression.
    `failed to read …/Cargo.toml` on a perfectly healthy tree (2026-08-31).
    Enter the shell from the worktree ROOT and `cd` inside it:
    `nix develop --command bash -c 'cd firmware && ./build-esp32.sh'`.
+   **Passing the flake path is not enough** — `nix develop /path/to/other
+   --command …` run from worktree A materializes the symlink under A, so a
+   firmware build in worktree B (a baseline build for an A/B, say) still
+   dies. The SHELL'S CWD has to be that worktree's root:
+   `cd /path/to/B && nix develop . --command bash -c 'cd /path/to/B/firmware && …'`
+   (2026-09-06).
 3c. Device flash dumps (gitignored `*.bin` in the repo root: `athom-wled-*.bin`,
    `pb-v3-stock.bin`) — required by the QEMU suite (`tools/qemu/run-all.py`
    autodetects them in the repo ROOT of the tree it runs from;
@@ -135,6 +141,11 @@ origin master && git rebase origin/master`.
 - An `UPDATES.md` conflict is the NORMAL case (every session prepends an
   entry under `# Update log`). Resolution is always: keep BOTH entries,
   yours on top (newest first), markers removed.
+- Grep the WHOLE file, not just the hunk you resolved: markers have
+  already reached `master` this way, so a conflict you are resolving can
+  contain someone else's stray `=======` / `>>>>>>> theirs` with no opening
+  marker (seen 2026-09-06; fixed in PR #317). If you find them, delete them
+  as part of your PR and say so in the description.
 - After resolving, `grep -c '^<<<<<<<\|^=======$\|^>>>>>>>' UPDATES.md`
   must print 0 BEFORE `git rebase --continue` — `git add` happily stages
   a file that still contains conflict markers, and the rebase commits it
