@@ -88,3 +88,10 @@ paths:
   wraps the writer in a private `IgnoreBody<W>` for HEAD — a second writer
   type that duplicates every GET instantiation. A new body kind is a new
   `ApiBody` variant; a runtime header value is `HVal::Owned`.
+- No 64-bit division on the per-pixel path. Xtensa has a hardware 32-bit
+  divide (`quos`) but every `i64`/`u64` `/` or `%` compiles to a call into
+  the mask ROM's libgcc (`__divdi3`/`__udivmoddi4`, ~100+ cycles), and the
+  ELF shows no local symbol for it — count them with `objdump -t | grep
+  divdi`, not from the disassembly. `Fx::div`, `time()` and the 1D pixel
+  coordinate carry 32-bit fast paths with bit-exact tests (#260); keep new
+  hot-path arithmetic in i32/u32 and add the same kind of test.
