@@ -62,7 +62,8 @@ async function probe() {
   try {
     const r = await fetch(DEV + "/api/status", {
       headers: { connection: "close" },
-      signal: AbortSignal.timeout(4_000),
+      // a starved device (1–2 fps pattern, #259) answers in ~10–20 s
+      signal: AbortSignal.timeout(20_000),
     });
     return await r.json();
   } catch {
@@ -125,11 +126,21 @@ for (const p of gallery) {
   } catch (e) {
     // the device went away after accepting the pattern — a crash. Record it,
     // wait for it to reboot (or reset it), and carry on with the next one.
-    const back = await recover(String(e).slice(0, 60));
+    let back = await recover(String(e).slice(0, 60));
+    if (!back) {
+      // last try with the patient api() (30 s × 3) before giving up on the run
+      try {
+        const st2 = await api("/api/status");
+        back = { st: st2, reset: true, secs: Math.round(RECOVER_MS / 1000) };
+      } catch {}
+    }
     crashes.push({ after: p.name, downSecs: back?.secs ?? null, reset: back?.reset ?? false });
     rows.push({ name: p.name, kind: p.kind, fail: back ? `crashed (device back after ${back.secs}s)` : "crashed (device did not come back)" });
     console.log(`${String(i).padStart(3)}/${gallery.length}  -- fps  ${p.name} CRASHED`);
-    if (!back) break;
+    if (!back) {
+      console.log("device did not come back — stopping the sweep, writing what we have");
+      break;
+    }
     continue;
   }
   rows.push({ name: p.name, kind: p.kind, fps: st.fps, heap: st.heap_free, vmerr: st.vmerr });

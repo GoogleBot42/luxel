@@ -46,7 +46,7 @@ memory (athom-flash-rig.md / jeremy-ha-broker.md memory files) and in
   that port from the host RESETS the board** (docs/boards.md "First light"),
   so never leave a serial reader loop on it; use `/api/status` polling
   instead. The flip side is a REMOTE RESET for a hung board with no Jeremy
-  action: `timeout 3 socat -u /dev/ttyACM0,raw,echo=0 STDOUT` (verified
+  action: `timeout 3 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT` (verified
   2026-09-05 on a 4-minute hard hang; `doas chmod 666 /dev/ttyACM0` first
   if the node came back 660). tools/hw-bench.mjs takes it as
   `HW_BENCH_RESET_CMD`. Physical EN/BOOT presses are Jeremy's.

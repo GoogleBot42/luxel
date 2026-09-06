@@ -65,7 +65,12 @@ timeout reads the board as dead while serial shows it rendering.
 unreachable device after a push is a `crashed` row, it waits for the
 reboot (or runs the reset command), the report is written even if the
 restore phase fails, and `HW_BENCH_FROM` resumes a run. The soak report
-for this board is `docs/bench-report-seengreat-hub75.md`.
+for this board is `docs/bench-report-seengreat-hub75.md`: 299 patterns,
+184 clean, 115 with errors (VM errors plus "too large" rejections), median
+7 fps at 4096 px, heap floor 18 KB, one crash recovered by the reset hook.
+A gotcha found while making that hook work: the S3's USB reset is
+triggered by the termios setup (a baud rate), not by opening the port —
+`socat … ,b115200` resets, a bare open does nothing.
 
 ## 2026-09-02 — CI: the test gate runs on Gitea now
 

@@ -419,7 +419,7 @@ Gitea #75. What the first evening established, so nobody re-derives it:
   (303a:1001)**, not a bridge chip. It enumerates as `/dev/ttyACM0` once the
   container is given that id (it is a different id from the Athom's FTDI).
   Two things bite: (1) **opening the port from the host resets the chip** —
-  the peripheral treats the DTR/RTS toggle of an open as a reset request
+  the peripheral treats the line-state change of a termios setup (a baud rate — `stty`, `b115200`; a bare `open()` alone does NOT do it, verified 2026-09-05) as a reset request
   (`rst:0x15 USB_UART_CHIP_RESET`), so a `cat`/`stty`/`socat` loop that
   reopens the port reboots the board on every reopen (and repeated fast
   resets risk the boot guard's slot rollback). One long-lived reader costs
@@ -445,8 +445,15 @@ Gitea #75. What the first evening established, so nobody re-derives it:
   100,240 B free, idle with rainbow 68,044 B, with the 2D snake game
   46,008 B. **fps: rainbow 18, 1D snake 8, 2D snake 4; an empty `render`
   56 (18 ms of per-frame overhead outside the VM), one `rgb()` call per
-  pixel 29.** The 8 ms frame pacing in main.rs caps everything at 125. The
-  full soak is in `docs/bench-report-seengreat-hub75.md`.
+  pixel 29.** The 8 ms frame pacing in main.rs caps everything at 125.
+- **Soak** (`docs/bench-report-seengreat-hub75.md`, hw-bench on the #275
+  build, ~35 min): 299 gallery patterns, **184 clean, 115 with errors**
+  (VM errors plus "pattern too large for this device" rejections — at
+  4096 px many 2D patterns can't fit their arrays next to a 48 KB map),
+  184 under 30 fps; **median 7 fps at 4096 px, p10 2, p90 17**; heap floor
+  17,984 B; one device crash (after "Synchronized Random Numbers", back in
+  106 s via the reset hook). Rainbow curve: 125 fps to 300 px, 116 at 600,
+  68 at 1024, 35 at 2048, 18 at 4096.
 - **Consequences ticketed**: the render loop starves the web server at this
   pixel count (228 KB bundle: 2 s from the Athom, 31–62 s here — #259;
   `hosted-ui` is the practical variant for this board until then);
