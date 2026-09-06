@@ -1,5 +1,39 @@
 # Update log
 
+## 2026-09-06 — Master on the Seengreat panel: the #260/#259 numbers, the O3 A/B, and two bugs
+
+A hardware session on the 64x64 HUB75 panel (`board-seengreat-hub75`,
+master e5935e6, 4096 px) putting the last three weeks of engine work —
+flash mapping (#274), code arena (#276), second-core render (#280),
+procedural grid map (#284), interpreter passes 1/2a (#263/#268) — on metal
+for the first time as one build. Numbers and per-issue results are in
+docs/boards.md "Second light"; the headlines:
+
+- **fps at 4096 px**: rainbow 18 → **30**, 1D snake 8 → **12**, 2D snake
+  4 → **8**, empty `render` 56 → **77**. With the per-stage timers the VM is
+  now ~96 % of a heavy frame; the HUB75 compose is a flat 5.4–6.3 ms.
+- **Bundle download** (#259): 31 s → **2.7 s** with rainbow running, 62 s →
+  **1.2 s** with the 2D snake. The running pattern no longer affects the
+  rate at all.
+- **`CORE_O3=1` earns its 19 KB** on this board: 7–33 % of VM time
+  (rainbow 26 → 30 fps), measured by rebuilding the same tree both ways.
+- **`docs/perf-sweep-s3.md`**: all 299 gallery patterns at 4096 px with
+  fps + `frame/vm/pipe/out` µs, sorted by VM time. `tools/hw-bench.mjs`
+  grew `--perf-only` to produce it — the baseline #261 and #265 will be
+  measured against.
+- **`blur1D` fixed** (#295): its prefix-sum vector was an infallible
+  `Vec::with_capacity(len + 1)` — 8 bytes per element, so 32 KiB at
+  4096 px — and aborted the firmware when the heap couldn't serve it.
+  `library/comets.js` in a playlist crash-looped the panel five times
+  until the boot guard rolled the slot back. Now fallible, like blur2D's
+  (#296 tracks making it O(radius) instead of O(len)).
+- **OTA on the S3 is unreliable** (#294): 4 of 9 pushes wedged the ProCpu
+  inside a flash op — silent, no serial, RTC-watchdog recovered, board back
+  on the old slot. The black box says ProCpu fence phase 3 with the AppCpu
+  parked cleanly. Suspect is the S3 analogue of the ESP32 SPI2-DMA hang:
+  the `output::transfer_busy()` wait before a flash op is esp32-only, and a
+  HUB75 board's GDMA is never idle. #266 stays open for it.
+
 ## 2026-09-06 — Superinstructions: 14 fused opcodes chosen by a dynamic profiler (#261)
 
 Jeremy's #260 ask is another 2× on per-pixel cost on the S3 at 4096 px. The
