@@ -318,6 +318,8 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     let mut rest: Vec<String> = rest.to_vec();
     let no_fuse = rest.iter().any(|a| a == "--no-fuse");
     rest.retain(|a| a != "--no-fuse");
+    let no_fold = rest.iter().any(|a| a == "--no-fold");
+    rest.retain(|a| a != "--no-fold");
     // `--stats`: report the STATIC shape of the blob (per-function
     // instruction counts) as one JSON line — the Luxel half of the
     // Pixelblaze op-count comparison (tools/oracle/opcount.mjs, Gitea #312).
@@ -357,6 +359,7 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
         &src,
         luxel_core::compile::CompileOpts {
             superinstructions: !no_fuse,
+            const_folding: !no_fold,
         },
     ) {
         Ok(p) => p,
@@ -463,6 +466,7 @@ struct Opts {
     /// A/B lever for Gitea #261 (and the way to prove a fused stream
     /// renders identically to the unfused one).
     no_fuse: bool,
+    no_fold: bool,
 }
 
 fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
@@ -477,6 +481,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
         profile: false,
         json: false,
         no_fuse: false,
+        no_fold: false,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -503,6 +508,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
             "--profile" if bench => o.profile = true,
             "--json" if bench => o.json = true,
             "--no-fuse" => o.no_fuse = true,
+            "--no-fold" => o.no_fold = true,
             "--control" => {
                 let v = val()?;
                 let Some((name, vals)) = v.split_once('=') else {
@@ -555,6 +561,7 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
         &src,
         luxel_core::compile::CompileOpts {
             superinstructions: !o.no_fuse,
+            const_folding: !o.no_fold,
         },
     );
     let mut engine = match compiled {

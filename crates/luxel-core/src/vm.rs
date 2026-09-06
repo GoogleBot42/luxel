@@ -3980,7 +3980,7 @@ impl Vm {
 /// (pushed first), `b` the shallower, exactly as the base pair pops them.
 /// The decoder rejects any sub-opcode outside this set.
 #[inline]
-fn binop(sub: u8, a: Value, b: Value) -> Value {
+pub(crate) fn binop(sub: u8, a: Value, b: Value) -> Value {
     use crate::bytecode::op;
     let t = |c: bool| Value::Num(if c { Fx::ONE } else { Fx::ZERO });
     match sub {

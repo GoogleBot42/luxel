@@ -16,6 +16,7 @@ use luxel_core::vm::StepKind;
 
 const UNFUSED: CompileOpts = CompileOpts {
     superinstructions: false,
+    const_folding: true,
 };
 
 /// One source per fusion family, plus the shapes that must NOT fuse.
