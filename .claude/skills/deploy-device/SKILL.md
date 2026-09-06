@@ -79,6 +79,17 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   before. Any serial recovery (see athom-rig skill) must be followed by
   `tools/deploy.sh <ip> --assets-only` before the web UI on that device can
   be trusted again.
+- **Set `BOARD` for anything but the classic ESP32.** `deploy.sh` and
+  `ota-push.sh` both read it (through `firmware/board-target.sh`) to find
+  the ELF and pick `espflash --chip`; without it they look for a
+  `xtensa-esp32-none-elf` build that an S3/C3/C6 build never produced.
+  `BOARD=board-seengreat-hub75 tools/deploy.sh 192.168.0.238`.
+- **On a board whose OTA is flaky, push the same image to BOTH slots before
+  measuring.** The Seengreat panel wedges ~44 % of OTAs (#294) and the boot
+  guard/bootloader can roll a slot back at any time; with both slots
+  carrying the same build, a rollback cannot silently move a benchmark onto
+  a different image. Read `core1.last` in `/api/status` after a long
+  session — on dual-core boards a watchdog reset leaves no other trace.
 - **`ota-push.sh` does NOT rebuild — it pushes the existing ELF.** After
   editing firmware sources (or switching branches / stashing), run
   `firmware/build-esp32.sh` first or you push a stale image with no

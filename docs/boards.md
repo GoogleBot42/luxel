@@ -689,31 +689,52 @@ not a v1 requirement.
 
 ## Second light: master on the panel (2026-09-06)
 
-Gitea #75 / #260 / #266 / #271. The bring-up build was v0.1.40; this run put
-**master e5935e6** on the board — the cache-MMU flash mapping (#274), the
-pattern code arena (#276), LXBC v5 (#278), the second-core render executor
-plus cross-core flash fence (#280), the procedural grid map (#284) and the
-pass-1/2a interpreter work (#263/#268, `CORE_O3=1`). What changed on metal:
+Gitea #75 / #260 / #266 / #271 / #298. The bring-up build was v0.1.40; this
+run put master on the board — the cache-MMU flash mapping (#274), the pattern
+code arena (#276/#293), LXBC v5 (#278/#288), the second-core render executor
+plus cross-core flash fence (#280), the procedural grid map (#284), the
+borrowed program words (#300) and the interpreter work (#263/#268 with
+`CORE_O3=1`, then the #261 superinstructions). Two builds were measured, an
+hour apart, because master moved under the session: **e5935e6** and then
+**0f83975** (superinstructions + borrowed words). Every table below names
+which. What changed on metal:
 
-- **Per-frame cost, 4096 px** (`/api/status` per-stage timers, µs/frame):
+- **Per-frame cost, 4096 px** (`/api/status` per-stage timers, µs/frame, on
+  `0f83975`; both OTA slots carried the same image for the run):
 
-  | pattern | fps (v0.1.40 → now) | frame | vm | pipe | out |
+  | pattern | fps v0.1.40 → e5935e6 → **0f83975** | frame | vm | pipe | out |
   |---|---|---:|---:|---:|---:|
-  | empty `render(index) {}` | 56 → **77** | 12,900 | 7,372 | 45 | 5,469 |
-  | one `rgb()` per pixel | 29 → **45** | 22,268 | 16,778 | 38 | 5,446 |
-  | rainbow (default) | 18 → **30** | 33,961 | 28,379 | 43 | 5,528 |
-  | `library/snake.js` | 8 → **12** | 83,681 | 77,928 | 53 | 5,680 |
-  | `library/snake-2d.js` | 4 → **8** | 125,731 | 120,006 | 65 | 5,629 |
+  | empty `render(index) {}` | 56 → 77 → **77** | 12,934 | 7,591 | 35 | 5,304 |
+  | one `rgb()` per pixel | 29 → 45 → **50** | 20,308 | 14,021 | 36 | 6,246 |
+  | rainbow (default) | 18 → 30 → **33** | 30,361 | 24,079 | 36 | 6,243 |
+  | `library/snake.js` | 8 → 12 → **16** | 65,478 | 59,112 | 52 | 6,303 |
+  | `library/snake-2d.js` | 4 → 8 → **10** | 102,467 | 96,061 | 81 | 6,303 |
+  | `snake-2d.js`, Smartness 100 | — → 8 → **10** | 102,899 | 96,504 | 77 | 6,295 |
 
-  The VM is now ~96 % of a heavy frame; the HUB75 compose (`out`) is a flat
-  **5.4–6.3 ms** whatever runs, and the output pipeline (`pipe`) is noise.
-  An empty render still costs 12.9 ms — 7.4 ms of that is per-pixel dispatch
-  around a `render` with no body (1.8 µs/px), which is what #261/#265 target.
-- **`CORE_O3` is worth its 19 KB on this board.** Same tree, `CORE_O3=0`
-  (918,496 B) vs `=1` (937,680 B): rainbow 26 → 30 fps (vm 32,732 →
-  28,379 µs), empty render 74 → 77 (vm 9,803 → 7,372), snake-2d 8 → 8
-  (vm 130,737 → 120,006). The win is 7–33 % of VM time, largest where
-  dispatch dominates.
+  **1.4–2.5× over the bring-up build.** The VM is ~95 % of a heavy frame; the
+  HUB75 compose (`out`) is a flat **5.3–6.4 ms** whatever runs (1.4 µs/px of
+  bitplane packing, the board's hard ceiling of ~155 fps), and the output
+  pipeline (`pipe`) is noise. An empty render still costs 12.9 ms — 7.6 ms of
+  that is per-pixel dispatch around a `render` with no body (**1.85 µs/px ≈
+  440 cycles**), the floor #265 has to attack, since #261 has now taken its
+  share.
+- **Superinstructions are worth 14–18 % of VM time here** (#261/#298), which
+  is the on-metal answer the host bench could not give (x86 saw a wash). Same
+  firmware, two blobs from `luxel compile [--no-fuse]`: rainbow 27,970 →
+  24,084 µs vm (−13.9 %), snake-2d 116,752 → 95,541 µs (−18.2 %). Blobs also
+  shrink (rainbow 456 → 436 B, snake-2d 10,528 → 8,848 B) and the saving
+  shows up as free heap on an ad-hoc push.
+- **`CORE_O3` is worth its 19 KB on this board** (measured on `e5935e6`, same
+  tree both ways): `CORE_O3=0` 918,496 B vs `=1` 937,680 B — rainbow 26 → 30
+  fps (vm 32,732 → 28,379 µs), empty render 74 → 77 (vm 9,803 → 7,372),
+  snake-2d vm 130,737 → 120,006. 7–33 % of VM time, largest where dispatch
+  dominates.
+- **Heap at 4096 px** on `0f83975`: 51,192 B free with rainbow running,
+  50,412 B with a 2D pattern (`aurora-2d`) — a pattern now costs ~800 B of
+  RAM beyond its arrays, because the program words are borrowed from the
+  flash mapping (#300). Uploads are refused by a pre-flight free-memory check
+  rather than OOMing (`frogger-2d`: "not enough free memory on the device for
+  this 35 KB upload (about 26 KB free)").
 - **Web serving is fixed** (#259): the 228 KB playground bundle downloads in
   **1.2–2.7 s** instead of 31 s (rainbow) / 62 s (2D snake), and the running
   pattern no longer changes the rate — the render loop is on the AppCpu and
@@ -727,14 +748,16 @@ pass-1/2a interpreter work (#263/#268, `CORE_O3=1`). What changed on metal:
   shorter, and the vaddr arithmetic (window base + entry × 64 KiB) holds.
   Code-arena lifecycle — fill, wrap-on-save, never-evict-on-activate,
   re-save into a new slot, delete, survive a power cycle — all behave as
-  specified.
+  specified (checked against the 7-slot arena on `e5935e6`; `0f83975` boots
+  the extent allocator's `code arena 87 pages, 0 extents valid (0 dropped),
+  0 pages used` — #293 — which has not had the same lifecycle pass).
 - **The second core is live** (#266): `core1: AppCpu scheduler up, 20480 B
   stack, flash fence armed` + `render task: AppCpu`; AppCpu stack peak
   10,848 / 20,480 B under the pattern sweep; `fence_timeouts` 0 across
   ~340 pattern pushes, 9 OTAs and 3 asset installs. Note the park latency:
   `fence_wait_us` peaks at **3,171 µs** here, not the tens of µs seen on a
   strip — a HUB75 compose can hold the render core for milliseconds before
-  it takes the park interrupt.
+  it takes the park interrupt. AppCpu stack peak 10,848 of 20,480 B.
 - **OTA is a coin flip on this board — #294.** Four of nine `POST /api/ota`
   pushes wedged the ProCpu *inside* a flash op (`core1.last` =
   `SysRtcWdt` with ProCpu fence phase 3, fences begun = completed + 1,
@@ -746,15 +769,23 @@ pass-1/2a interpreter work (#263/#268, `CORE_O3=1`). What changed on metal:
   how many flash ops you do. Read `core1.last` after any long session on
   this board; a watchdog reset mid-soak leaves no other trace, and if the
   two slots hold different builds it also moves you onto the other one
-  (push the same image to both before measuring anything).
+  (push the same image to both before measuring anything). Same wedge, same
+  black box, on the classic ESP32 — **#292** — where it is instead
+  deterministic on a `POST /api/assets` install; on the S3 asset installs
+  ran 3/3 clean at 727 KB, so whatever the boards share, it is the fence
+  window itself and not the esp32-only SPI2-DMA wait (which the S3 does not
+  even perform).
 - **Pattern performance sweep**: `docs/perf-sweep-s3.md` (299 gallery
   patterns at 4096 px with the per-stage timers, sorted by VM time) is the
   baseline the interpreter work is measured against; regenerate with
   `node tools/hw-bench.mjs <ip> docs/perf-sweep-s3.md --perf-only`.
-  **224 of 299 patterns render** at this pixel count (the other 75 are
-  refused or fault on their arrays); of those, vm µs/frame is median
-  **128,437**, p90 468,966, max 2.38 s, and fps is median **8**, p10 3,
-  p90 20 — i.e. the panel is an interpreter benchmark, not a driver one.
+  **225 of 299 patterns render** at this pixel count (the other 74 are
+  refused or fault on their arrays); of those, on `0f83975`, vm µs/frame is
+  median **111,211**, p90 382,809, max 1.42 s, and fps is median **9**,
+  p10 3 — i.e. the panel is an interpreter benchmark, not a driver one. The
+  same sweep on `e5935e6` an hour earlier: median vm 128,437 µs, p90
+  468,966, max 2.38 s, fps median 8 — so the superinstructions moved the
+  whole distribution by ~13 %, not just the three patterns in the table.
 - Bug found and fixed on the way: `blur1D`'s infallible 32 KiB prefix-sum
   allocation aborted the firmware at 4096 px (#295); `library/comets.js` in
   a playlist crash-looped the board five times until the boot guard rolled
