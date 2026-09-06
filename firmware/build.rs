@@ -30,6 +30,16 @@ fn main() {
     std::fs::write(out_dir.join("partition-table.bin"), bin).expect("write partition-table.bin");
 
     build_index_html(&out_dir);
+
+    // Dual-core chips get the second-core render executor and the flash
+    // fence (src/core1.rs). Mirrors esp-hal's own `multi_core` cfg, which
+    // is private to the esp-* crates' build scripts.
+    println!("cargo::rustc-check-cfg=cfg(multi_core)");
+    if std::env::var_os("CARGO_FEATURE_ESP32").is_some()
+        || std::env::var_os("CARGO_FEATURE_ESP32S3").is_some()
+    {
+        println!("cargo:rustc-cfg=multi_core");
+    }
 }
 
 /// Resolve the embedded fallback page's build-mode blocks (src/index.html,

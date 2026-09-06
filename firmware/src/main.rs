@@ -55,6 +55,7 @@ use luxel_core::fixed::Fx;
 mod assets;
 mod board;
 mod config;
+mod core1;
 mod devicemap;
 mod flashmap;
 mod gpio;
@@ -165,7 +166,14 @@ async fn main(spawner: Spawner) -> ! {
     // ota::boot_guard() call. The flash driver is borrowed here and handed to
     // ota::init once the heap is up.
     let ota_flash = if option_env!("LUXEL_NO_OTA").is_none() {
-        let mut flash = esp_storage::FlashStorage::new(p.FLASH);
+        let flash = esp_storage::FlashStorage::new(p.FLASH);
+        // Dual-core: esp-storage's default strategy fails every flash write
+        // while the second core runs. The flash fence (core1.rs) parks the
+        // other core around each op instead — that guarantee is what makes
+        // `multicore_ignore` sound here.
+        #[cfg(multi_core)]
+        let flash = unsafe { flash.multicore_ignore() };
+        let mut flash = flash;
         ota::preboot_guard(&mut flash);
         Some(flash)
     } else {
@@ -231,6 +239,18 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(p.TIMG0);
     let sw_int = SoftwareInterruptControl::new(p.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+    // Dual-core: the ProCpu's half of the flash fence (core1.rs) — armed
+    // before the AppCpu exists so the first fence from either side works.
+    #[cfg(multi_core)]
+    core1::install_pro_parker(sw_int.software_interrupt2);
+    // Dual-core: black box from the previous run + the RTC watchdog that
+    // turns a wedged ProCpu into a reset with a diagnosis (core1.rs).
+    #[cfg(multi_core)]
+    {
+        core1::boot_blackbox();
+        let rtc = core1::arm_watchdog(p.RTC_TIMER);
+        spawner.spawn(core1::watchdog_task(rtc).unwrap());
+    }
 
     println!(
         "luxel-fw: boot ({} px default, {} @ {} Hz SPI)",
@@ -432,6 +452,25 @@ async fn main(spawner: Spawner) -> ! {
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
     // whether it interacts with the esp32 radio crashes.
     if option_env!("LUXEL_QUIET").is_none() {
+        // Dual-core boards run the render task on the AppCpu, on its own
+        // executor (core1.rs): a frame no longer holds the CPU that WiFi,
+        // the network stack and the web pool live on (Gitea #259, #260).
+        // Single-core boards spawn it on the main executor exactly as
+        // before. Everything else — the playlist task included — stays here.
+        #[cfg(multi_core)]
+        match core1::start(
+            p.CPU_CTRL,
+            sw_int.software_interrupt1,
+            sw_int.software_interrupt3,
+            move |s: Spawner| s.spawn(render_task(out).unwrap()),
+        ) {
+            Ok(()) => println!("render task: AppCpu"),
+            Err(init) => {
+                println!("core1: stack alloc failed — render task stays on ProCpu");
+                init(spawner);
+            }
+        }
+        #[cfg(not(multi_core))]
         spawner.spawn(render_task(out).unwrap());
         spawner.spawn(playlist::playlist_task().unwrap());
     } else {
@@ -892,7 +931,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             // a transient read through the flash controller
             shared::BcLoc::Flash(len) => {
                 let p = match crate::patterns::current_slot_code(len) {
-                    Some(code) => luxel_core::bytecode::deserialize_lean_static(code).ok()?,
+                    Some(code) => luxel_core::bytecode::deserialize_lean(code).ok()?,
                     None => {
                         let bc = crate::patterns::read_current_bc(len)?;
                         luxel_core::bytecode::deserialize_lean(&bc).ok()?
@@ -904,15 +943,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             // length — a re-save may have changed it, and the store's copy
             // is the truth), from its mapped arena slot when it has one
             shared::BcLoc::Library(_) => {
-                let id = shared::get_current_pattern_id();
-                // borrow the mapped slot's words (no RAM copy of the code)
-                // when the pattern has one; the chunk-store fallback copies
-                let p = match crate::patterns::code_of(&id) {
-                    Some(code) => luxel_core::bytecode::deserialize_lean_static(code).ok()?,
-                    None => crate::patterns::with_code(&id, |bc| {
-                        luxel_core::bytecode::deserialize_lean(bc).ok()
-                    })??,
-                };
+                let p = crate::patterns::with_code(&shared::get_current_pattern_id(), |bc| {
+                    luxel_core::bytecode::deserialize_lean(bc).ok()
+                })??;
                 try_budgeted_engine(p, count).ok()
             }
             shared::BcLoc::Gone => None,
@@ -1117,7 +1150,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     let decoded = match crate::patterns::code_of(&id) {
                         Some(code) => {
                             bc_len = code.len();
-                            luxel_core::bytecode::deserialize_lean_static(code).map_err(Some)
+                            luxel_core::bytecode::deserialize_lean(code).map_err(Some)
                         }
                         None => match crate::patterns::bytecode_of(&id) {
                             Some(bc) => {

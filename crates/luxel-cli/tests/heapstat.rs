@@ -13,11 +13,7 @@
 //! in where the bytecode lives: `swap(vec)` models today's library activation,
 //! where the store's source and blob are read onto the heap and re-encoded into
 //! an envelope before decoding; `swap(xip)` models executing straight out of a
-//! flash mapping, where the blob bytes are never heap at all — the lean
-//! `Program` is built by `deserialize_lean_static` over a 4-aligned 'static
-//! copy of the blob (standing in for the mapping), so its code and constant
-//! words are BORROWED, not copied (LXBC v5). `mapped` is that program's own
-//! resident RAM: the header tables alone.
+//! flash mapping, where the blob bytes are never heap at all.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -80,8 +76,6 @@ fn gallery_heap_model() {
         /// The mapped-flash (XIP) swap peak: lean decode straight off the
         /// mapping + budgeted engine; the blob bytes are not heap at all.
         swap_xip: usize,
-        /// Resident RAM of the lean program borrowing the mapping (tables only).
-        mapped: usize,
     }
     let mut rows: Vec<Row> = Vec::new();
 
@@ -124,27 +118,10 @@ fn gallery_heap_model() {
         drop(eng);
 
         // swap(xip): bytecode executed from a flash mapping — no heap copy of
-        // the blob, no source, no envelope. A leaked, 4-aligned copy of the
-        // blob stands in for the mapping (allocated OUTSIDE the measured
-        // window); the lean program borrows its words.
-        let words: Vec<u32> = vec![0u32; blob.len().div_ceil(4)];
-        let leaked = Box::leak(words.into_boxed_slice());
-        let flash: &'static [u8] = unsafe {
-            std::ptr::copy_nonoverlapping(
-                blob.as_ptr(),
-                leaked.as_mut_ptr() as *mut u8,
-                blob.len(),
-            );
-            std::slice::from_raw_parts(leaked.as_ptr() as *const u8, blob.len())
-        };
+        // the blob, no source, no envelope.
         let base = live();
         reset_peak();
-        let prog = bytecode::deserialize_lean_static(flash).unwrap();
-        assert!(
-            matches!(prog.words, luxel_core::vm::Words::Static(_)),
-            "{name}: aligned 'static blob must be borrowed"
-        );
-        let mapped = live() - base;
+        let prog = bytecode::deserialize_lean(&blob).unwrap();
         let mut eng = Engine::from_program_budgeted(prog, 300, 1, 32 * 1024);
         for _ in 0..3 {
             eng.frame(Fx::from_f64(16.7));
@@ -160,26 +137,24 @@ fn gallery_heap_model() {
             frames_peak,
             swap_vec,
             swap_xip,
-            mapped,
         });
     }
 
     rows.sort_by_key(|r| std::cmp::Reverse(r.swap_vec));
     println!(
-        "\n{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9} {:>7}",
-        "pattern", "blob", "program", "engine", "run-peak", "swap(vec)", "swap(xip)", "mapped"
+        "\n{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9}",
+        "pattern", "blob", "program", "engine", "run-peak", "swap(vec)", "swap(xip)"
     );
     for r in rows.iter().take(25) {
         println!(
-            "{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9} {:>7}",
+            "{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9}",
             &r.name[..r.name.len().min(40)],
             r.blob,
             r.prog,
             r.engine,
             r.frames_peak,
             r.swap_vec,
-            r.swap_xip,
-            r.mapped
+            r.swap_xip
         );
     }
 

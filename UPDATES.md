@@ -1,107 +1,43 @@
 # Update log
 
-## 2026-09-05 — LXBC v5: execution-ready word bytecode, borrowed from memory-mapped flash (#260)
+## 2026-09-05 — Render task on the second core (dual-core boards) + the cross-core flash fence (#259, #260, #272)
 
-The luxel-core half of Jeremy's #260 decision (the format the VM runs
-straight out of the cache-MMU mapping PR #274 landed): `FORMAT_VERSION`
-4 → 5. A stale v4 blob still says `bytecode format v4 (this build reads
-v5) — recompile the pattern` and the existing `bc-version` recompile path
-handles it; the web UI needs nothing new.
+On the classic ESP32 and the ESP32-S3 the render task now runs on the
+AppCpu under its own esp-rtos scheduler and thread-mode embassy executor
+(`firmware/src/core1.rs`, cfg `multi_core` from build.rs); WiFi, the network
+stack, the web pool and every other task stay on the ProCpu. Single-core
+boards are untouched (the module compiles to no-ops). Measured on the Athom
+(60 px WS2812, same master either side, `tools/render-bench.mjs` — new,
+docs/tools.md): the playground bundle (228 KB) downloads in 0.9–1.2 s at 2048 px instead of 20.7–34.8 s, in 1.0–1.1 s at 60 px instead of 1.7–2.1 s, with fps during the download equal to fps without it (96→120 at 60 px rainbow); fps itself is wire-bound at 2048 px (12/9/9, `out_us` 68 ms) and `vm_us` drops 7–8 % for want of WiFi preemption. Idle heap pays the AppCpu's 20 KB stack (105,456 → 84,960 B; high-water 10,896 B through 2048 px snake-2d). Full tables in docs/firmware.md "Cores & tasks".
 
-**Format (docs/spec/bytecode.md, rewritten).** The code and the constant
-pool are ONE 4-byte-aligned region of little-endian `u32` words at the
-tail of the blob (`words_off`/`n_words` in the header; the tables are
-padded to a word boundary). One word per instruction — bits 0..8 opcode,
-bits 8..32 a 24-bit operand field read as u8 / u16 / u16+u8 argc / u24
-jump target depending on the opcode; `CONST_NUM` is the only two-word
-instruction (raw i32 in the next word). Jump targets, `FnDef.code_start`
-/`code_len`, every `pc` (frames, breakpoints, `VmError.pc`, debug
-position runs) are fn-relative WORD indices. The constant pool is raw
-16.16 words in the same region with a `(start, len)` table; `ArrRepr::
-Const` reads decode words on access through the new `ArrView`
-(`get`/`at`/`len`/`iter`) instead of a `&[Value]`, and the copy-on-write
-promotion in `arr_mut` materializes an owned `Vec<Value>` exactly as
-before (every bounds/truncation/budget test still pins the semantics).
-Builtin operands are the RUNTIME ids (`BUILTINS` is append-only); the
-import table is kept as `(name, id)` pairs purely for validation — the
-decoder rejects a blob whose names don't resolve to exactly those ids
-(`builtin \`foo\` is not available on this firmware — recompile the
-pattern`) and any code id outside the table. Nothing in the word region
-is rewritten at load, which is what makes executing it in place legal.
-Opcodes 0x41..0xFF are free for #261's superinstructions. Unused operand
-bits must be zero (canonical encoding; `serialize∘deserialize` stays
-byte-identical, the check-library sweep proves it on all 299 patterns).
+The one real piece of multicore machinery is the **flash fence**: SPI flash
+is shared between the cache (every code fetch and now every mapped read, on
+either core) and esp-storage's SPI1 ops, so `core1::fenced(op)` parks the
+other core in an IRAM spin (its park software interrupt — SWI2 for the
+ProCpu, SWI3 for the AppCpu) for the duration. esp-storage's own multicore
+strategies were rejected: the default makes every write fail while the
+second core runs, and `auto_park` hard-stalls the other core at an arbitrary
+instruction — possibly inside a spinlock the flash op's next interrupt then
+spins on forever. Four doors carry every flash op (`ota::with_flash`,
+`patterns::AsyncFlash`, `ota::begin`'s partition reads, `flashmap::quiesced`
+— #272 closed) and `FlashStorage` is constructed `multicore_ignore()`.
 
-**API.** `Program { words: Words, pool: Vec<PoolEntry>, … }` with
-`enum Words { Owned(Vec<u32>), Static(&'static [u32]) }` (derefs to
-`[u32]`; `Program` stays `Send + Sync`). `deserialize(&[u8])` and
-`deserialize_lean(&[u8])` keep their signatures and COPY the words (the
-firmware's current call sites compile unchanged); new
-`deserialize_lean_static(&'static [u8])` validates in place and BORROWS
-the word region when the input is 4-aligned in memory (falls back to
-copying otherwise — never an alignment error). `validate` runs the same
-checks over the raw bytes with no word copy in any mode. The dispatch
-loop is one bounds-checked `code[at]` load per instruction (`bytecode::
-enc` field accessors); the byte-decoding macros are gone, the two-level
-loop and the pass-2a fast paths stay.
-
-**Host bench** (`luxel bench --pixels 4096`, best of 3, px/s, x86-64):
-rainbow 28.90 M → 28.82 M (noise), snake 11.23 M → 12.72 M (+13 %),
-snake-2d mapless 10.74 M → 11.78 M (+10 %), snake-2d `--map-grid 64x64`
-7.96 M → 8.23 M (+3 %). The on-device numbers are the point (the S3's
-per-instruction byte decode was the cost) and are still owed with the
-store side.
-
-**RAM** (`heapstat`, merged with the code-arena entry's swap columns:
-swap(xip) now decodes with `deserialize_lean_static` over an aligned
-`'static` blob so the program BORROWS its words, and the new `mapped`
-column is that program's resident RAM; bytes):
-
-| pattern | blob v4→v5 | program v4→v5 (copy) | swap(vec) | swap(xip) v4-copy→v5-borrow | mapped |
-|---|---:|---:|---:|---:|---:|
-| Main Stage | 18,459→25,688 | 28,512→35,540 | 99,847 | 33,491→22,451 | 8,933 |
-| Frogger 2D | 14,878→20,488 | 21,821→27,274 | 79,491 | —→15,061 | 6,421 |
-| Opening Act | 13,293→17,556 | 23,810→27,798 | 72,289 | —→23,419 | 10,577 |
-| 2D Fireworks Fade | 12,666→18,028 | 17,785→23,037 | 67,877 | 33,500→27,366 | 4,713 |
-| Infinite Snake | 7,728→10,528 | 12,386→15,075 | 38,395 | 24,995→21,464 | 4,280 |
-| Chasing Rainbows & HSLuv | 6,098→8,492 | 10,370→12,657 | 31,067 | 17,432→14,699 | 4,038 |
-
-Words are 4.6 B/insn against 2.6 B for v4's bytes, so the COPYING path
-(hosts, wasm, and the firmware until the store calls
-`deserialize_lean_static`) costs ~25 % more program RAM — swap(vec) has
-6 of 299 patterns over 45 KB (was 5). On the borrowing path the resident
-program is the header tables only — Main Stage 8.9 KB instead of the
-28.5 KB v4 copy — and Σ swap(xip) over the gallery drops from 2,870,875 B
-(v4 copying decode) to 2,594,892 B, 40.5 % under swap(vec).
-
-**Verification.** `cargo test --workspace` (goldens in tests/bytecode.rs
-updated: the pool assertion reads `prog.pool`, the export-index
-corruption test locates the export entry by name because the blob's
-tail is now the word region; new tests pin the borrowing path — aligned
-→ `Words::Static`, unaligned → copy, both rendering identically — and
-the import-table check); `tools/check-library.sh` 1495/1495 on the five
-rigs; 28 reference PPMs (24 patterns @ 64 px + 4 grid runs) byte-identical
-against the master binary, the one wall-clock pattern re-run back-to-back;
-web `npm run build` + `npm test` + a real-chromium compile/run/debug pass
-(breakpoints, step over/into/out, error line/col) — pcs cross the wasm
-boundary and the unit change is invisible there because breakpoints are
-resolved by line inside the engine; all ten firmware variants build (firmware/src
-compiled untouched against the new API; the three `deserialize_lean_static`
-switches came after, re-verified on pixelblaze-v3, C6 and the Seengreat
-S3) and pass image-check — the simpler decoder is −2.0…−2.2 KB on RISC-V (C6 margin
-4.13 → 4.34 % same-methodology) and +0.4…+0.75 KB on Xtensa (noise
-floor), `.stack` 26,732 → 26,764 B (docs/boards.md); `tools/ci.sh`
-green.
-
-Store side: the code arena (PR #276, merged mid-flight) already hands
-the engine `&'static [u8]` slices of the mapped slots, so the three
-main.rs sites that receive one — library activation (`code_of`), the
-ad-hoc slot (`current_slot_code`) and the library rebuild path — now
-call `deserialize_lean_static` and BORROW; the chunk-store fallback
-(`with_code` over a Vec) and the playlist pre-flight keep the copying
-decoder. On-device confirmation (`heap_free` dropping by the running
-pattern's code + constant bytes, hw-bench px/s on the word format) is
-Gitea #277.
+Getting the park right on the ESP32 cost the evening: three distinct hard
+hangs (no panic, no reboot), each reproduced within a minute of snake-2d +
+a bundle download and isolated with an RTC-memory black box plus an RTC
+watchdog — both of which stay in the firmware (`/api/status` `core1.last`,
+`core1.fence_timeouts`). (1) A Priority3 park landing inside a level-1
+handler's DPORT reads wedges the bus → the park is Priority1 and masks
+INTENABLE itself. (2) An AppCpu RTC-memory access inside the park wedges
+the ProCpu's next one → only the ProCpu writes the black box. (3) A ROM
+SPI1 flash op while the strip's SPI2 DMA transfer is still in flight hangs
+the CPU (shared SPI DMA engine; impossible on single core, where the
+blocking DMA write held the only core) → the fence waits for
+`output::transfer_busy()` to clear. Full story: docs/firmware.md "Cores &
+tasks". Image cost: +8.3–8.8 KB on the classic-ESP32 boards; the AppCpu's
+20 KB stack is heap-allocated (high-water 10,896 B), `.stack` unchanged.
+Unverified on metal: the S3/HUB75 boards (build green; Gitea #266). The
+two-VM pixel split is Gitea #265; single-core yield-in-frame is #267.
 
 ## 2026-09-05 — Pattern code arena: library patterns execute from the flash mapping (#260 store side)
 

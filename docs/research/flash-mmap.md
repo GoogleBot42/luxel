@@ -301,29 +301,6 @@ most of its 12.4 KB program, for Main Stage most of 28.5 KB. The mapping's
 own RAM cost is **zero** — no buffers, no allocations; four `AtomicUsize`s
 for the two region base/len pairs and a 7-entry slot table in `.bss`.
 
-Measured with the v5 format (LXBC v5, UPDATES.md 2026-09-05), `heapstat`
-now decoding the swap(xip) column with `deserialize_lean_static` over an
-aligned `'static` blob — the program BORROWS its words — and reporting
-that program's resident RAM as `mapped`:
-
-| pattern | blob (v5) | program (copy) | swap(vec) | swap(xip) | mapped |
-|---|---:|---:|---:|---:|---:|
-| Main Stage | 25,688 | 35,540 | 99,847 | 22,451 | 8,933 |
-| Frogger 2D | 20,488 | 27,274 | 79,491 | 15,061 | 6,421 |
-| Opening Act | 17,556 | 27,798 | 72,289 | 23,419 | 10,577 |
-| 2D Fireworks Fade | 18,028 | 23,037 | 67,877 | 27,366 | 4,713 |
-| Infinite Snake | 10,528 | 15,075 | 38,395 | 21,464 | 4,280 |
-| Chasing Rainbows & HSLuv | 8,492 | 12,657 | 31,067 | 14,699 | 4,038 |
-
-Across all 299: Σ swap(xip) = 2,594,892 B (was 2,870,875 B with the v4
-copying decode above), an average of 5,900 B (40.5 %) less per
-activation than swap(vec); still 0 patterns over 45 KB under the arena.
-The word format is ~1.8× the byte format's size, so the copying paths
-(swap(vec); on the device the chunk-store fallback and the playlist
-pre-flight) are costlier than the v4 table above; on the borrowing path
-— library activation from an arena slot, the ad-hoc slot, rebuilds —
-the resident program is the header tables alone.
-
 For the assets consumer the saving is smaller but immediate: the 4 KiB
 `read_chunk` staging Vec plus the 4 KiB response buffer per in-flight
 asset response are gone (the body is written straight from the mapping in

@@ -77,8 +77,11 @@ impl anf::ErrorType for AsyncFlash<'_> {
 }
 impl anf::ReadNorFlash for AsyncFlash<'_> {
     const READ_SIZE: usize = <FlashStorage<'static> as BlockingRead>::READ_SIZE;
+    // Every op is fenced individually (dual-core: the other core parks for
+    // the op — core1.rs): this adapter drives a LEASED driver, outside
+    // ota::with_flash's fence.
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        BlockingRead::read(self.0, offset, bytes)
+        crate::core1::fenced(|| BlockingRead::read(self.0, offset, bytes))
     }
     fn capacity(&self) -> usize {
         BlockingRead::capacity(self.0)
@@ -88,10 +91,10 @@ impl anf::NorFlash for AsyncFlash<'_> {
     const WRITE_SIZE: usize = <FlashStorage<'static> as BlockingNorFlash>::WRITE_SIZE;
     const ERASE_SIZE: usize = <FlashStorage<'static> as BlockingNorFlash>::ERASE_SIZE;
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
-        BlockingNorFlash::erase(self.0, from, to)
+        crate::core1::fenced(|| BlockingNorFlash::erase(self.0, from, to))
     }
     async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        BlockingNorFlash::write(self.0, offset, bytes)
+        crate::core1::fenced(|| BlockingNorFlash::write(self.0, offset, bytes))
     }
 }
 impl anf::MultiwriteNorFlash for AsyncFlash<'_> {}

@@ -144,6 +144,24 @@ this remains the leading suspect: stop and reassess rather than
 repeating the flash. The serial prints `preboot guard: … rolling back
 to the other OTA slot` when the rollback fires.
 
+## A hard hang (no reboot, no serial): the watchdog + black box (2026-09-05)
+
+The dual-core build (render task on the AppCpu, `firmware/src/core1.rs`)
+arms the RTC watchdog (20 s) and keeps a black box in RTC memory. A device
+that goes DOWN for more than ~40 s without coming back is a wedge the
+watchdog could not catch (it fed from the ProCpu executor — a parked
+ProCpu still reboots, but a hang before the watchdog was armed does not):
+power-cycle it over MQTT (§1) and then read `/api/status` → `core1.last`
+**before doing anything else** — `reset` names the reset cause
+(`SysRtcWdt` = the watchdog fired; `CoreSw` = normal), `bb` is the fence
+phase per core and the fence/park counts at the moment of the wedge
+(`core1.rs` documents the layout). Three such hangs were diagnosed this way
+in one evening; docs/firmware.md "Cores & tasks" has the signatures.
+Serial is not needed for any of it. If the device ends up on the OTHER slot
+after the reboot (the guard rolled back), the black box is still intact —
+the old build never touches RTC memory — so re-installing the diagnosing
+build and reading `core1.last` still works.
+
 ## Power-cycle testing and the OTA boot-loop guard
 
 Rapid power cycles — cycling again before the firmware reaches `boot_ok` —
