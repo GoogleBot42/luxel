@@ -124,6 +124,17 @@ impl Fx {
         self.0 >> FRAC_BITS
     }
 
+    /// `mod_floor(Fx::ONE)` — the unit wrap every waveform, `hsv` hue and
+    /// phase reduction performs — as a single mask. Floored modulo by 2^16
+    /// IS the low 16 bits of the two's-complement word (negatives included:
+    /// `-0.25` has raw `0xFFFFC000`, and `0xC000` is `0.75`), so this is
+    /// bit-identical to [`Fx::mod_floor`] with `Fx::ONE` and none of its
+    /// remainder + sign-fixup sequence (Gitea #312).
+    #[inline]
+    pub const fn wrap_unit(self) -> Fx {
+        Fx(self.0 & FRAC_MASK)
+    }
+
     /// The `mod()` builtin: floored modulo, result takes the sign of the
     /// divisor — this is the wrapping semantic the waveform functions use.
     /// `mod(x, 0)` is 0 (oracle-verified, fw 3.67).

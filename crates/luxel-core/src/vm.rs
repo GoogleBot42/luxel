@@ -1695,6 +1695,12 @@ impl Vm {
     /// The body of `LoadIdx`, shared with its two fused forms (Gitea #261).
     /// One function so the arena read is written once; the compiler is free
     /// to inline it into all three arms, which it does.
+    ///
+    /// Do NOT make this `#[inline(never)]` to shrink the dispatch loop: it
+    /// buys nothing on Xtensa (the three indexing arms come out the same
+    /// length or two instructions LONGER) and costs the host a lot — an
+    /// array-heavy pattern lost 18 % and `colourful-fireflies` 21 % on
+    /// x86, which the wasm playground would pay too (Gitea #312).
     #[inline]
     fn index_read(&mut self, prog: &Program, arr: Value, idx: Fx) -> Result<Value, &'static str> {
         let Value::Arr(a) = arr else {
@@ -1863,9 +1869,21 @@ impl Vm {
                     if let BKind::Impl(bi) = BUILTINS[b as usize].kind {
                         let len = self.stack.len();
                         if len >= argc {
-                            let mut a = [Value::default(); FAST_ARGS];
-                            a[..argc].copy_from_slice(&self.stack[len - argc..]);
-                            if let Some(v) = self.builtin_fast(bi, &a[..argc], argc) {
+                            // Read the (at most four) arguments straight out
+                            // of the stack into an array passed BY VALUE.
+                            // The old `&a[..argc]` slice took the array's
+                            // address, which pinned it to the frame and made
+                            // the fill a ROM `memset` + `memcpy` pair on
+                            // every builtin call; by value it stays in
+                            // registers (Gitea #312).
+                            let s = &self.stack[len - argc..];
+                            let a: [Value; FAST_ARGS] = [
+                                s.first().copied().unwrap_or(Value::Num(Fx::ZERO)),
+                                s.get(1).copied().unwrap_or(Value::Num(Fx::ZERO)),
+                                s.get(2).copied().unwrap_or(Value::Num(Fx::ZERO)),
+                                s.get(3).copied().unwrap_or(Value::Num(Fx::ZERO)),
+                            ];
+                            if let Some(v) = self.builtin_fast(bi, a, argc) {
                                 self.stack.truncate(len - argc);
                                 fast = Some(v);
                             }
@@ -2338,7 +2356,7 @@ impl Vm {
                         // top replacement, not pop+push (Gitea #312).
                         let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
                         at += 1;
-                        replace_top!(|a| binop(enc::imm8(w), a, Value::Num(c)));
+                        replace_top!(|a| Value::Num(binop_const(enc::imm8(w), a, c)));
                     }
                     op::LOAD_L_CONST_OP => {
                         // LoadL a; Const c; <binop>
@@ -2348,7 +2366,7 @@ impl Vm {
                         let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
                         at += 1;
                         let a = self.locals[lbase + enc::imm8(w) as usize];
-                        push!(binop(enc::imm8b(w), a, Value::Num(c)));
+                        push!(Value::Num(binop_const(enc::imm8b(w), a, c)));
                     }
                     op::LOAD_G_CONST_OP => {
                         // LoadG g; Const c; <binop>
@@ -2358,7 +2376,7 @@ impl Vm {
                         let c = Fx::from_raw(code.get(at).copied().unwrap_or(0) as i32);
                         at += 1;
                         let a = self.globals[enc::imm16(w) as usize];
-                        push!(binop(enc::argc(w), a, Value::Num(c)));
+                        push!(Value::Num(binop_const(enc::argc(w), a, c)));
                     }
                     op::CMP_JF => {
                         // <cmp>; JmpIfFalse t  (target in the next word)
@@ -2496,8 +2514,21 @@ impl Vm {
     /// [`Vm::call_builtin`]); `call_builtin` delegates here first so the
     /// semantics live in exactly one place. `None` = not a fast builtin.
     #[inline(always)]
-    fn builtin_fast(&mut self, builtin: Builtin, args: &[Value], argc: usize) -> Option<Value> {
-        let n = |i: usize| args.get(i).copied().unwrap_or_default().num();
+    fn builtin_fast(
+        &mut self,
+        builtin: Builtin,
+        args: [Value; FAST_ARGS],
+        argc: usize,
+    ) -> Option<Value> {
+        // Same rule as the old `args: &[Value]` of length `argc`: an index
+        // at or past the argument count reads as 0.
+        let n = |i: usize| {
+            if i < argc {
+                args[i].num()
+            } else {
+                Fx::ZERO
+            }
+        };
         use Builtin::*;
         match builtin {
             Abs => Some(Value::Num(n(0).abs())),
@@ -2524,33 +2555,34 @@ impl Vm {
             Time => {
                 // period in ms happens to equal the interval's raw value:
                 // 65.536 s · interval = 65536 ms · interval.
-                let period = n(0).raw().max(0) as u64;
+                let period = n(0).raw().max(0) as u32;
                 if period == 0 {
                     return Some(Value::Num(Fx::ZERO));
                 }
-                // 32-bit fast path (hardware divide on Xtensa/RISC-V; the
-                // u64 form is two ROM calls per invocation, and `time()` is
-                // called per pixel by most patterns): intervals ≤ 1.0 have
-                // period ≤ 65536, so `t < period` keeps `t << 16` in u32;
-                // the clock stays below 2^32 ms for 49 days.
-                if period <= 1 << 16 && self.time_ms <= u32::MAX as u64 {
-                    let period = period as u32;
-                    let t = self.time_ms as u32 % period;
-                    return Some(Value::Num(Fx::from_raw(((t << 16) / period) as i32)));
-                }
-                let t = self.time_ms % period;
-                Some(Value::Num(Fx::from_raw(((t << 16) / period) as i32)))
+                // The clock stays below 2^32 ms for 49 days, so every
+                // realistic call takes the all-32-bit path; the u64 form
+                // (two ROM calls, `__umoddi3` + `__udivdi3`) is out of line
+                // behind `time_phase_u64`. `time()` is called per pixel by
+                // most patterns.
+                let v = if self.time_ms <= u32::MAX as u64 {
+                    time_phase32(self.time_ms as u32, period)
+                } else {
+                    time_phase_u64(self.time_ms, period)
+                };
+                Some(Value::Num(Fx::from_raw(v as i32)))
             }
             Wave => Some(Value::Num(Fx::from_raw(
                 (fmath::sin_turns(n(0)).raw() + Fx::ONE.raw()) >> 1,
             ))),
             Square => {
-                let duty = if argc >= 2 { n(1) } else { Fx::from_f64(0.5) };
-                let t = n(0).mod_floor(Fx::ONE);
+                // raw 1<<15 == Fx::from_f64(0.5), spelled so no softfloat
+                // conversion can survive into the image
+                let duty = if argc >= 2 { n(1) } else { Fx::from_raw(1 << 15) };
+                let t = n(0).wrap_unit();
                 Some(Value::Num(if t < duty { Fx::ONE } else { Fx::ZERO }))
             }
             Triangle => {
-                let t = n(0).mod_floor(Fx::ONE);
+                let t = n(0).wrap_unit();
                 let half = Fx::from_raw(1 << 15);
                 Some(Value::Num(if t < half {
                     t + t
@@ -2608,7 +2640,13 @@ impl Vm {
         };
         let mut args = [Value::default(); MAX_ARGS];
         let argc = self.pop_args_into(&mut args, argc);
-        if let Some(v) = self.builtin_fast(builtin, &args[..argc], argc) {
+        // `builtin_fast` reads at most the first four arguments and treats
+        // an index at or past `argc` as 0 — the same contract the old
+        // `&args[..argc]` slice had, so a call with more than FAST_ARGS
+        // arguments still resolves here rather than falling through to the
+        // `unreachable!` arm below.
+        let fast: [Value; FAST_ARGS] = [args[0], args[1], args[2], args[3]];
+        if let Some(v) = self.builtin_fast(builtin, fast, argc) {
             return Ok(v);
         }
         let a = |i: usize| args.get(i).copied().unwrap_or_default();
@@ -3973,36 +4011,93 @@ impl Vm {
     }
 }
 
+/// The numeric core: every sub-opcode with both operands already reduced
+/// to numbers. One out-of-line table shared by all four fused arms, entered
+/// and left entirely in registers — an `Fx` is an i32, where a `Value` costs
+/// a second register for the tag both ways (Gitea #312). `#[inline]` so
+/// each of its two out-of-line wrappers gets the table directly: a nested
+/// call would cost the fused arms a SECOND Xtensa window transition
+/// (`entry`/`retw`), which is exactly what plain `#[inline]` produced at
+/// `opt-level="s"` — LLVM declined a 107-instruction body at two call
+/// sites and the const-fused arms each grew by three instructions and a
+/// window. `always` costs ~110 bytes of duplicated table.
+#[inline(always)]
+fn binop_fx(sub: u8, a: Fx, b: Fx) -> Fx {
+    use crate::bytecode::op;
+    let t = |c: bool| if c { Fx::ONE } else { Fx::ZERO };
+    match sub {
+        op::ADD => a + b,
+        op::SUB => a - b,
+        op::MUL => a * b,
+        op::DIV => a / b,
+        op::REM => a % b,
+        op::POW => fmath::pow(a, b),
+        op::BIT_AND => a & b,
+        op::BIT_OR => a | b,
+        op::BIT_XOR => a ^ b,
+        op::SHL => a << b,
+        op::SHR => a >> b,
+        op::LT => t(a < b),
+        op::LE => t(a <= b),
+        op::GT => t(a > b),
+        op::GE => t(a >= b),
+        // both operands are `Num` here, and `value_eq` on two `Num`s is
+        // exactly `Fx` equality
+        op::EQ => t(a == b),
+        op::NE => t(a != b),
+        // unreachable: bytecode::walk_word rejects every other sub-opcode
+        _ => Fx::ZERO,
+    }
+}
+
 /// One two-operand value op, by its base opcode — the arithmetic and
-/// comparison arms of [`Vm::run`] factored out so the fused
-/// `Const c; <op>` and `<cmp>; JmpIfFalse` superinstructions (Gitea #261)
-/// cannot drift from the sequence they replace. `a` is the deeper operand
-/// (pushed first), `b` the shallower, exactly as the base pair pops them.
-/// The decoder rejects any sub-opcode outside this set.
-#[inline]
+/// comparison arms of [`Vm::run`] factored out so the fused `<cmp>;
+/// JmpIfFalse` superinstruction (Gitea #261) cannot drift from the
+/// sequence it replaces. `a` is the deeper operand (pushed first), `b` the
+/// shallower, exactly as the base pair pops them. The decoder rejects any
+/// sub-opcode outside this set. Also the semantic reference the compiler's
+/// constant folder evaluates against (`compile::peephole`, and the drift
+/// test that pins the two together), which is why it keeps the `Value`
+/// signature the folder needs.
+#[inline(never)]
 pub(crate) fn binop(sub: u8, a: Value, b: Value) -> Value {
     use crate::bytecode::op;
-    let t = |c: bool| Value::Num(if c { Fx::ONE } else { Fx::ZERO });
-    match sub {
-        op::ADD => Value::Num(a.num() + b.num()),
-        op::SUB => Value::Num(a.num() - b.num()),
-        op::MUL => Value::Num(a.num() * b.num()),
-        op::DIV => Value::Num(a.num() / b.num()),
-        op::REM => Value::Num(a.num() % b.num()),
-        op::POW => Value::Num(fmath::pow(a.num(), b.num())),
-        op::BIT_AND => Value::Num(a.num() & b.num()),
-        op::BIT_OR => Value::Num(a.num() | b.num()),
-        op::BIT_XOR => Value::Num(a.num() ^ b.num()),
-        op::SHL => Value::Num(a.num() << b.num()),
-        op::SHR => Value::Num(a.num() >> b.num()),
-        op::LT => t(a.num() < b.num()),
-        op::LE => t(a.num() <= b.num()),
-        op::GT => t(a.num() > b.num()),
-        op::GE => t(a.num() >= b.num()),
-        op::EQ => t(value_eq(a, b)),
-        op::NE => t(!value_eq(a, b)),
-        // unreachable: bytecode::walk_word rejects every other sub-opcode
-        _ => Value::Num(Fx::ZERO),
+    Value::Num(match sub {
+        // reference identity, not numeric equality — the one place the
+        // operands' kinds matter
+        op::EQ => {
+            if value_eq(a, b) {
+                Fx::ONE
+            } else {
+                Fx::ZERO
+            }
+        }
+        op::NE => {
+            if value_eq(a, b) {
+                Fx::ZERO
+            } else {
+                Fx::ONE
+            }
+        }
+        _ => binop_fx(sub, a.num(), b.num()),
+    })
+}
+
+/// `binop` with the right operand taken from the instruction word's
+/// literal — the `Const c; <op>` fusions (CONST_OP, LOAD_L_CONST_OP,
+/// LOAD_G_CONST_OP). Nothing here needs the literal wrapped in a `Value`:
+/// a non-`Num` left operand can only make EQ false and NE true (`value_eq`
+/// is false across kinds), and every other sub-op sees `a.num() == 0`.
+#[inline(never)]
+fn binop_const(sub: u8, a: Value, c: Fx) -> Fx {
+    use crate::bytecode::op;
+    match a {
+        Value::Num(x) => binop_fx(sub, x, c),
+        _ => match sub {
+            op::EQ => Fx::ZERO,
+            op::NE => Fx::ONE,
+            _ => binop_fx(sub, Fx::ZERO, c),
+        },
     }
 }
 
@@ -4163,10 +4258,49 @@ pub fn rgb_to_hsv(r: Fx, g: Fx, b: Fx) -> [Fx; 3] {
     [h6 / six, s, v]
 }
 
+/// `time()`'s phase in 16.16: `floor(((now % period) << 16) / period)`,
+/// computed entirely in 32-bit registers.
+///
+/// `period` is a 16.16 raw clamped to `[1, 2^31)`, so `now % period` is a
+/// hardware 32-bit divide and the remainder is `< period`. Scaling it by
+/// 2^16 needs 48 bits, which the ≤ 2^16 case gets for free (`t << 16` then
+/// fits u32) and the general case gets from 16 restoring-division steps:
+/// `x < period ≤ 2^31` at the top of every step, so `x << 1` cannot
+/// overflow, and the quotient is exactly the same word the 64-bit
+/// `(t << 16) / period` produces (Gitea #312).
+#[inline]
+fn time_phase32(now_ms: u32, period: u32) -> u32 {
+    let t = now_ms % period;
+    if period <= 1 << 16 {
+        return (t << 16) / period;
+    }
+    let mut x = t;
+    let mut q = 0u32;
+    for _ in 0..16 {
+        x <<= 1;
+        q <<= 1;
+        if x >= period {
+            x -= period;
+            q += 1;
+        }
+    }
+    q
+}
+
+/// [`time_phase32`] past 2^32 ms (49 days) of uptime — the only shape that
+/// still needs the ROM's 64-bit divide, kept out of the dispatch loop.
+#[cold]
+#[inline(never)]
+fn time_phase_u64(now_ms: u64, period: u32) -> u32 {
+    let p = period as u64;
+    let t = now_ms % p;
+    ((t << 16) / p) as u32
+}
+
 pub fn hsv_to_rgb(h: Fx, s: Fx, v: Fx) -> [Fx; 3] {
     let s = s.clamp(Fx::ZERO, Fx::ONE);
     let v = v.clamp(Fx::ZERO, Fx::ONE);
-    let h6 = h.mod_floor(Fx::ONE).raw() * 6; // [0, 6) in 16-frac; < 2^19, fits i32
+    let h6 = h.wrap_unit().raw() * 6; // [0, 6) in 16-frac; < 2^19, fits i32
     let sector = h6 >> 16; // 0..5
     let f = Fx::from_raw(h6 & 0xFFFF);
     let p = v * (Fx::ONE - s);

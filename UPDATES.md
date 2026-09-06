@@ -1,5 +1,125 @@
 # Update log
 
+## 2026-09-06 — Op bodies: every 64-bit ROM libcall out of the render path (#312)
+
+The sibling pass on #312 fixed the *dispatch*; this one is the other half of the
+issue — what each instruction does once dispatched. Disassembling the S3 and
+classic-ESP32 images turned up a specific, measurable class of waste: **64-bit
+arithmetic in fixed-point code that only ever needed 32 bits**, which Xtensa
+cannot do inline and hands to the ROM's `__udivdi3` / `__divdi3` / `__umoddi3`
+(a windowed call plus a bit-loop, easily 150–300 cycles each).
+
+**141 ROM 64-bit libcall sites in `luxel-core` → 47**, and the ones left are all
+off the render path (`jsonview::push_u64`, `civil_from_unix`, `hamqtt::parse_fx`,
+one `Fx::div` fallback). Nothing on the per-pixel path calls the ROM any more.
+
+| where | before | after |
+|---|---|---|
+| `fmath` (sin/cos/sin_turns/tan/pow/exp/exp2/log2/atan/atan2/sqrt/hypot) | 19 × `__udivdi3`, 22 × `__divdi3` | **0** |
+| `Vm::run` (the `time()` builtin) | 2 × `__udivdi3`, 2 × `__umoddi3` | **0** (only `Fx::div`'s i64 fallback remains) |
+| `color::rgb_to_oklab` / `oklch_to_rgb` / `srgb_to_linear` / `linear_to_srgb` | 32 | **1** (they inline `pow`) |
+| `vm::rotation`, `Vm::call_builtin` | 8, 18 | 0, 5 |
+
+`fmath` is 3,248 → 2,102 Xtensa instructions (−35 %); `Vm::run` 5,446 → 5,098;
+`Vm::call_builtin` 7,742 → 6,951; the whole image 305,654 → 302,597.
+
+What changed:
+
+- **`fmath` is 32-bit throughout.** `exp2`'s series ran in `i128` with six i64
+  divisions by constants; `log2`'s mantissa loop squared a `u64`; `sin_turns`
+  multiplied and divided i64s whose values never exceed 2²². Each is now a
+  widening 32×32→64 multiply (`mull`+`muluh`, one instruction pair) and a 32-bit
+  magic-multiply divide, with the proven bound written at the site. `isqrt64`
+  (a 24-iteration 64-bit bit-loop) is a digit-pair `isqrt48`. `sqrt` 212 → 15
+  instructions, `pow` 288 → 151, `tan` 426 → 46, `sin_turns` 173 → 59,
+  `hypot` 224 → 25.
+  **Bit-exactness is tested, not asserted**: every rewritten function keeps a
+  verbatim copy of the old 64/128-bit code as a `reference_*` fn and is swept
+  against it — exhaustively over the whole input space where that is finite
+  (all 65,536 `exp2` fractions, all 65,536 `sin_turns` phases, all 411,775
+  values `sin` can feed `div_shift16`), densely plus randomised elsewhere. The
+  sweeps were mutation-tested (perturb a coefficient, flip a loop bound) to
+  confirm they actually discriminate.
+  **Three of the rewrites are conditional**, because they trade one wide
+  machine instruction for a 32-bit loop: `div_shift16` (used by `sin`, `atan`,
+  `atan2`), `isqrt48` (`sqrt`, `hypot`, `dist`, `asin`) and `sq16` (`log2`).
+  That is a win on Xtensa/RISC-V32, where the wide form is a ROM call, and a
+  large LOSS everywhere else — the first cut cost `dist`-heavy patterns 31 % on
+  x86, which the wasm playground would have paid too. Both forms are compiled
+  on every target and selected by a `cfg!()` **value** (`NARROW_WORD`), never
+  by `#[cfg]` on the definitions, so a host `cargo test` still proves the
+  device's path bit-exact: the sweeps assert narrow == wide == the i64
+  reference, three ways.
+- **`time()` never calls the ROM.** Its period is a 16.16 raw, so both it and
+  `now % period` fit `u32`; the scaled divide is 16 restoring steps in 32-bit
+  registers, exact and bit-identical. The 64-bit form survives only past 2³² ms
+  (49 days) of uptime, in a `#[cold]` helper outside the dispatch loop.
+- **`builtin_fast` takes its arguments by value.** It took `&[Value]`, so the
+  caller had to materialise a `[Value; 4]` in the frame — a ROM `memset` plus a
+  ROM `memcpy` on *every* builtin call, including `hsv` and `time` in the
+  per-pixel path. By value they stay in registers: both ROM calls gone from
+  `Vm::run`. Host `luxel bench` on `library/rainbow.js` (which is `time` + `hsv`
+  and little else): **15.6–16.2 → 21.1–22.1 M px/s, +36 %**.
+- **`binop` in registers, with the reference cases split off cold.** `binop_fx`
+  takes and returns bare `Fx`; `binop_const` serves the three `Const c; <op>`
+  fusions without wrapping the literal in a `Value` (a non-`Num` left operand can
+  only make EQ false and NE true, so the cold half needs neither operand).
+  `binop` 250 → `binop_fx` 107 + `binop_const`/`binop_ref` 33.
+- **`Fx::wrap_unit()`** — `mod_floor(Fx::ONE)`, the unit wrap every waveform,
+  `hsv` hue and phase reduction performs, is just `raw & 0xFFFF` (floored modulo
+  by 2¹⁶ *is* the low half of the two's-complement word, negatives included).
+  Used by `hsv_to_rgb`, `square()` and `triangle()`. `square()`'s default duty
+  also stops going through `Fx::from_f64` — softfloat has no business in a
+  builtin.
+- **`index_read` deliberately left inlined**, with a comment saying why. Marking
+  it `#[inline(never)]` to shrink the dispatch loop looks right and is wrong: it
+  buys nothing on Xtensa (the three indexing arms come out the same length or
+  two instructions *longer*) and costs the host badly — `colourful-fireflies`
+  −21 %, an array-heavy 2-D pattern −18 %, which the wasm playground would pay
+  too. Reverted, with the measurement in the comment so the next person does not
+  re-derive it.
+
+Per-op instruction counts on the taken path (S3 and classic ESP32 are
+instruction-for-instruction identical, so one column serves both): `Pow`
+474 → 370, `Rem` 34 → 32, `Add`/`Sub`/`Bit*` 29 → 28, `Mul` 33 → 32, `Div`
+43 → 42, `LoadGLIdx` 71 → 68; the rest move by ±3 with the register allocator.
+**The loop microbench's own mix barely moves** (543 → 538 instructions per
+iteration over its 11.06 ops) — it is pure fused integer arithmetic and never
+touches a builtin, so the wins here land on real patterns instead: rainbow +36 %,
+`library/snake.js` +14 %, `colourful-fireflies` +13 %, `snake-2d` +7 % on the
+host (max of 5 runs, 512 px × 200 frames, interleaved with the baseline
+binary). The transcendental-heavy patterns still give back 2–7 % on x86 —
+`dist`/`hypot`/`atan2` per pixel — because `isqrt48` is now an out-of-line
+function where the old bitwise `isqrt64` was inlined into `sqrt`. That is the
+residue after the `cfg` split, and it is the direction the project trades:
+`Vm::run` 5,446 → 5,111 instructions and every board's image 8 KB smaller.
+
+Every board's app image **shrinks** by 7.8–9.3 KB, which moves the three
+classic-ESP32 boards off the edge of the 1 MiB OTA slot:
+
+| board | base | new | margin |
+|---|---|---|---|
+| board-pixelblaze-v3 | 1,014,336 B | 1,006,416 B | 3.26 % → **4.02 %** |
+| board-athom-music | 1,014,448 B | 1,006,512 B | 3.25 % → **4.01 %** |
+| board-esp32-generic | 1,014,144 B | 1,006,240 B | 3.28 % → **4.03 %** |
+| board-s3-devkit | 956,592 B | 948,768 B | 8.77 % → 9.51 % |
+| board-seengreat-hub75 | 949,184 B | 941,360 B | 9.47 % → 10.22 % |
+| board-c3-devkit | 961,712 B | 952,384 B | 8.28 % → 9.17 % |
+| board-c6-devkit + hosted-ui | 1,007,776 B | 1,003,728 B | 3.89 % → 4.27 % |
+
+(`board-c6-devkit` full-UI still fails image-check at 2.69 %, as it does on
+master — #291, pre-existing; the shipped artifact is the hosted-ui variant.)
+`.stack` and the largest frame are unchanged on both the default board and the
+panel.
+
+Still open, and now the top of the list for whoever has the device: the
+`Const c; <op>` arms pay an Xtensa window transition (`entry`/`retw`) plus a
+second jump table per instruction, and 4 of the loop microbench's 11 ops go
+through them. Inlining the handful of hot sub-opcodes into the arm would remove
+the transition but *raise* the instruction count, so it cannot be judged from a
+disassembly — it needs `tools/opbench.mjs` on the panel. `Fx::div`'s i64
+fallback (the last ROM call reachable from a render) is Gitea #316; the `Const c; <op>` follow-up is #318.
+
 ## 2026-09-06 — What the COMPILER wastes: constant folding + the `i++` recovery (#312)
 
 #312 is about the ~110 cycles our interpreter spends per bytecode operation.
