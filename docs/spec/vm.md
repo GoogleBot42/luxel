@@ -121,7 +121,8 @@ GlobalDef { name, export: bool, init: Fx, predefined: bool }
 
 Stack machine with three per-VM stacks: operand stack (`Value`), locals
 (contiguous, frames own a base offset), and call frames
-`{fn_idx, pc, locals_base, stack_base}`.
+`{fn_idx, pc, locals_base, stack_base}` — `pc` is a function-relative
+WORD index into the program's word region (bytecode.md).
 
 - **Fuel**: each host entry (init, `beforeRender`, each `render` call, any
   `call()`) resets a fuel counter (8 000 000 instructions); running dry is
@@ -185,10 +186,10 @@ the one bitwise op that zeros the fractional bits of its result).
 
 | insn | operands | effect |
 |---|---|---|
-| `Jmp` | pc:u32 | absolute target within the function |
-| `JmpIfFalse` | pc:u32 | pops condition |
-| `JmpIfTruePeek` | pc:u32 | `\|\|`: jump keeping lhs on stack, else pop |
-| `JmpIfFalsePeek` | pc:u32 | `&&`: dito |
+| `Jmp` | pc:u24 (word index) | absolute target within the function |
+| `JmpIfFalse` | pc:u24 | pops condition |
+| `JmpIfTruePeek` | pc:u24 | `\|\|`: jump keeping lhs on stack, else pop |
+| `JmpIfFalsePeek` | pc:u24 | `&&`: dito |
 | `CallFn` | fn:u16, argc:u8 | pops argc args, pushes result |
 | `CallBuiltin` | b:u16, argc:u8 | index into the builtin table |
 | `CallValue` | argc:u8 | `[callee a1..an] → [result]`; callee is `Fun`/`Builtin`, anything else = runtime error |

@@ -106,7 +106,7 @@ export function render(i) { hsv(0, 0, 0) }
 "#;
     let prog = compile(src).unwrap();
     // identical literals deduped; the distinct one adds a second entry
-    assert_eq!(prog.data_arrays.len(), 2, "expected dedup to 2 pool entries");
+    assert_eq!(prog.pool.len(), 2, "expected dedup to 2 pool entries");
     // and the whole thing round-trips + runs identically from the blob
     let blob = serialize(&prog).unwrap();
     let prog2 = deserialize(&blob).unwrap();
@@ -191,12 +191,18 @@ fn malformed_blobs_are_rejected_not_panics() {
 
 #[test]
 fn out_of_range_indices_are_rejected() {
-    // hand-corrupt an export's fn index (last 2 bytes of the last export)
+    // hand-corrupt an export's fn index: the export table is the last
+    // table before the word region, so the LAST "render" str8 in the blob
+    // is the export entry and the u16 after it is its fn index
     let prog = compile("export function render(i) { hsv(0,0,0) }").unwrap();
     let mut blob = serialize(&prog).unwrap();
-    let n = blob.len();
-    blob[n - 2] = 0xFF;
-    blob[n - 1] = 0xFF;
+    let name = b"\x06render";
+    let at = blob
+        .windows(name.len())
+        .rposition(|w| w == name)
+        .expect("export name in blob");
+    blob[at + name.len()] = 0xFF;
+    blob[at + name.len() + 1] = 0xFF;
     assert!(matches!(deserialize(&blob), Err(BcError::Malformed(_))));
 }
 
@@ -217,4 +223,96 @@ fn unknown_builtin_import_names_the_culprit() {
         Err(BcError::Malformed(m)) => assert!(m.contains("zzzzz"), "{m}"),
         other => panic!("expected Malformed, got {other:?}"),
     }
+}
+
+#[test]
+fn static_decode_borrows_aligned_words_and_runs_identically() {
+    use luxel_core::bytecode::deserialize_lean_static;
+    use luxel_core::vm::Words;
+
+    // an array literal so the const pool is exercised through the
+    // borrowed word region too (LOAD_IDX on a Const-backed array, then a
+    // copy-on-write promotion)
+    let src = r#"
+var pal = [0.1, 0.4, 0.7, 0.9]
+export var probe
+probe = pal[2]
+export function render(index) {
+  if (index == 3) pal[0] = 0.5
+  hsv(pal[index % 4] + index / pixelCount, 1, 1)
+}
+"#;
+    let prog = compile(src).unwrap();
+    let blob = serialize(&prog).unwrap();
+
+    // aligned 'static copy: Vec<u32>-backed so the pointer is 4-aligned
+    let words = blob.len().div_ceil(4);
+    let mut backing: Vec<u32> = vec![0; words];
+    let aligned: &'static [u8] = {
+        let p = backing.as_mut_ptr() as *mut u8;
+        unsafe { core::ptr::copy_nonoverlapping(blob.as_ptr(), p, blob.len()) };
+        let leaked = Box::leak(backing.into_boxed_slice());
+        unsafe { core::slice::from_raw_parts(leaked.as_ptr() as *const u8, blob.len()) }
+    };
+    let p_static = deserialize_lean_static(aligned).unwrap();
+    assert!(
+        matches!(p_static.words, Words::Static(_)),
+        "an aligned 'static blob must be borrowed, not copied"
+    );
+    assert_eq!(p_static.fns[0].pos.len(), 0, "lean: no debug positions");
+
+    // unaligned 'static input: must fall back to copying, never fail
+    let mut shifted = vec![0u8; blob.len() + 1];
+    shifted[1..].copy_from_slice(&blob);
+    let leaked: &'static [u8] = Box::leak(shifted.into_boxed_slice());
+    let unaligned = &leaked[1..];
+    assert_eq!(unaligned.as_ptr() as usize % 4, 1);
+    let p_copy = deserialize_lean_static(unaligned).unwrap();
+    assert!(matches!(p_copy.words, Words::Owned(_)));
+
+    // both render exactly like the fully decoded program
+    let mut a = Engine::from_program(deserialize(&blob).unwrap(), 12, 7);
+    let mut b = Engine::from_program(p_static, 12, 7);
+    let mut c = Engine::from_program(p_copy, 12, 7);
+    let fa = frames(&mut a, 4);
+    assert_eq!(fa, frames(&mut b, 4));
+    assert_eq!(fa, frames(&mut c, 4));
+    assert_eq!(
+        b.var("probe"),
+        Some(luxel_core::vm::Value::Num(Fx::from_f64_lit(0.7)))
+    );
+}
+
+#[test]
+fn builtin_id_outside_import_table_is_rejected() {
+    // an instruction word calling a builtin the import table does not
+    // list must fail validation even when the id itself is in range: the
+    // by-name check is what makes ids trustworthy
+    let prog = compile("export function render(i) { hsv(0,0,0) }").unwrap();
+    let blob = serialize(&prog).unwrap();
+    let hsv = luxel_core::vm::lookup_builtin("hsv").unwrap();
+    let other = luxel_core::vm::lookup_builtin("rgb").unwrap();
+    // find the CALL_BUILTIN hsv word (opcode 0x39, u16 id, argc 3) in the
+    // 4-aligned word region
+    let n = blob.len();
+    let mut hit = None;
+    for at in (0..n).step_by(4) {
+        let w = u32::from_le_bytes(blob[at..at + 4].try_into().unwrap());
+        if w as u8 == 0x39 && ((w >> 8) & 0xFFFF) as u16 == hsv && (w >> 24) == 3 {
+            hit = Some(at);
+        }
+    }
+    let at = hit.expect("CALL_BUILTIN hsv word");
+    let mut evil = blob.clone();
+    let w = 0x39u32 | (other as u32) << 8 | 3 << 24;
+    evil[at..at + 4].copy_from_slice(&w.to_le_bytes());
+    match validate(&evil) {
+        Err(BcError::Malformed(m)) => assert!(m.contains("import table"), "{m}"),
+        other => panic!("expected Malformed, got {other:?}"),
+    }
+    // and reserved operand bits on a bare opcode are rejected too
+    let mut evil2 = blob.clone();
+    let ret_null = 0x3Fu32 | 1 << 20;
+    evil2[n - 4..n].copy_from_slice(&ret_null.to_le_bytes());
+    assert!(validate(&evil2).is_err());
 }
