@@ -152,3 +152,21 @@ paths:
   divdi`, not from the disassembly. `Fx::div`, `time()` and the 1D pixel
   coordinate carry 32-bit fast paths with bit-exact tests (#260); keep new
   hot-path arithmetic in i32/u32 and add the same kind of test.
+- **A codegen experiment cannot go through plain `RUSTFLAGS`**: the flags in
+  `firmware/.cargo/config.toml`'s `[target.'cfg(target_arch = "xtensa")']`
+  are NOT replaced by the environment here — set
+  `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` with the link args repeated and the
+  linker dies on `linker script file 'linkall.x' appears multiple times`
+  (2026-09-06, #312). Pass ONLY the extra flag
+  (`CARGO_TARGET_XTENSA_ESP32S3_NONE_ELF_RUSTFLAGS="-C llvm-args=…"`) and
+  let the config supply the link args. Cargo fingerprints per flag set, so
+  switching back and forth is cached, not rebuilt — which also means a
+  suspiciously fast "Finished in 0.1s" after changing flags is correct, not
+  a stale artifact. Verify what you are about to flash from the ELF
+  (`nm --print-size`, `objdump`), never from the build log.
+- **Placing a function in IRAM from a chip-agnostic crate**: `esp_hal::ram`
+  expands to `#[link_section = ".rwtext"]`, so a crate that must not depend
+  on esp-hal (luxel-core) can spell it by hand behind a cargo feature —
+  that is what `iram-vm` / `iram-builtins` are (#312). Feature-gate it: on a
+  host target `.rwtext` is a stray section name. Measure before shipping
+  one; `Vm::run` in IRAM bought 1.0 % for 16 KB on the S3.
