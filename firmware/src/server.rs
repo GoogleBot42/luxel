@@ -355,6 +355,10 @@ fn status_json() -> String {
     // frames actually written to the wire (pipelined boards; 0 elsewhere)
     push_piece(&mut out, ",\"out_fps\":");
     push_u32(&mut out, crate::shared::OUT_FPS.load(Ordering::Relaxed));
+    // the panel's real refresh rate; 0 on boards without a HUB75 panel.
+    // Above it, out_fps is a compose rate rather than a display rate (#378).
+    push_piece(&mut out, ",\"rescan_hz\":");
+    push_u32(&mut out, crate::shared::RESCAN_HZ.load(Ordering::Relaxed));
     push_piece(&mut out, ",\"pixels\":");
     push_u32(&mut out, pixels);
     push_piece(&mut out, ",\"max_pixels\":");

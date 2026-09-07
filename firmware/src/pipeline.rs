@@ -369,6 +369,7 @@ mod pipe {
         let mut pipe_sum: u64 = 0;
         let mut out_sum: u64 = 0;
         let mut mark = Instant::now();
+        let mut last_rescans: u32 = 0;
         loop {
             // The timer half keeps the once-a-second publish running while
             // nothing renders, so the counters fall to 0 instead of
@@ -397,6 +398,14 @@ mod pipe {
             if mark.elapsed().as_millis() >= 1000 {
                 let n = frames.max(1) as u64;
                 shared::OUT_FPS.store(frames, Ordering::Relaxed);
+                // The panel's real refresh rate, from the driver's BCM
+                // frame counter. `elapsed` is >= 1000 ms but not exactly
+                // that, so scale rather than assuming a 1 s window.
+                let now = shared::RESCANS.load(Ordering::Relaxed);
+                let ms = mark.elapsed().as_millis().max(1);
+                let hz = (u64::from(now.wrapping_sub(last_rescans)) * 1000 / ms) as u32;
+                shared::RESCAN_HZ.store(hz, Ordering::Relaxed);
+                last_rescans = now;
                 shared::PIPE_US.store(if frames == 0 { 0 } else { (pipe_sum / n) as u32 }, Ordering::Relaxed);
                 shared::OUT_US.store(if frames == 0 { 0 } else { (out_sum / n) as u32 }, Ordering::Relaxed);
                 frames = 0;

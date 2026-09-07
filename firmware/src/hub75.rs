@@ -17,6 +17,8 @@
 //! contiguous 28 KB blocks are a certainty. Allocation failure disables
 //! output (render keeps ticking) rather than panicking.
 
+use core::sync::atomic::Ordering;
+
 use embedded_graphics::geometry::Point;
 use esp_hal::peripherals::{DMA_CH0, LCD_CAM};
 use esp_hal::time::Rate;
@@ -38,15 +40,39 @@ pub const PANEL_ROWS: usize = 64;
 const NROWS: usize = compute_rows(PANEL_ROWS);
 
 /// BCM bit depth. Refresh rate halves per extra plane (the MSB plane is
-/// rescanned 2^(PLANES-1) times per frame): at a 20 MHz LCD_CAM clock a
-/// 64x64 panel does ~77 Hz at 7 planes, ~38 Hz at 8, ~155 Hz at 6 — so 8
-/// is unusable without a faster clock, and 7 matches the esp-hub75
-/// author's own 64x64 S3 example. Drop to 6 for tight heaps (4 KB less
-/// per buffer) or a faster rescan; tune on metal in #75.
+/// rescanned 2^(PLANES-1) times per frame). Measured on the bench panel at
+/// [CLOCK] = 30 MHz: **115 Hz at 7 planes**, so ~58 Hz at 8 and ~231 Hz at
+/// 6. 7 matches the esp-hub75 author's own 64x64 S3 example. Drop to 6 for
+/// tight heaps (4 KB less per buffer) or a faster rescan.
 const PLANES: usize = 7;
 
-/// LCD_CAM pixel-clock rate (the esp-hub75 S3 example's value).
-const CLOCK: Rate = Rate::from_mhz(20);
+/// LCD_CAM pixel-clock rate.
+///
+/// The FM6124 datasheet (v1.1) puts the ceiling at **FCLK max 30 MHz**, and
+/// its minimum clock high/low of 20 ns each implies 25 MHz on pulse width
+/// alone — so 30 MHz is the datasheet limit with no margin, and the
+/// 74HCT245 buffers on this board add another 22–28 ns of worst-case tpd.
+///
+/// Measured on the bench panel (64x64 FM6124EJ, 7 planes, 2026-09-07,
+/// Gitea #255) — the rescan rate is exactly linear in the clock:
+///
+/// | clock  | rescans/s | verdict                                    |
+/// |--------|-----------|--------------------------------------------|
+/// | 20 MHz | 77        | clean (the esp-hub75 example's value)      |
+/// | 30 MHz | 115       | clean — chosen                             |
+/// | 40 MHz | 154       | **fails**: mid-panel split, colours wrong  |
+///
+/// 40 MHz is out of spec and looks it: the two 32-row halves mis-sample and
+/// the colours distort. Note the firmware sees **nothing** wrong when that
+/// happens — no swap error, no DMA error, `vmerr` null, and the composed
+/// frame is still byte-identical to a host render. Only the panel's own
+/// sampling fails, so this class of regression needs an eyeball, not a test.
+///
+/// A faster clock buys no frame throughput (every pattern here is
+/// render-bound, not rescan-bound; fps was identical at all three rates).
+/// What it buys is headroom: 8 bitplanes become usable (~58 Hz rather than
+/// ~38), and chained panels get the bandwidth they need (#255).
+const CLOCK: Rate = Rate::from_mhz(30);
 
 type Fb = DmaFrameBuffer<NROWS, PANEL_COLS, PLANES>;
 
@@ -133,6 +159,9 @@ impl OutputDriver for Hub75Output {
 
     fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) {
         let Some(hub75) = self.hub75.as_ref() else { return };
+        // The panel's own BCM frame counter, for `rescan_hz`. Free: the ISR
+        // that feeds it is always armed in circular-DMA mode.
+        crate::shared::RESCANS.store(hub75.frame_count(), Ordering::Relaxed);
         // Reclaim the displaced buffer from the previous frame's swap. A
         // swap lands at a rescan boundary (~13 ms at 7 planes / 20 MHz);
         // if it hasn't landed yet, skip this frame rather than spin —
