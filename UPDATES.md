@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-09-07 — `tools/panel-load-bench.mjs`, and why #395's interrupt executor is not happening
+
+With tearing (#376) and dropped frames (#387) gone, the artefact left on the
+panel is the **repeat**: a frame shown for two rescans. The cause is arithmetic
+— the compose eats 7.4 ms of an 8.7 ms rescan, leaving 1.3 ms of slack, and
+`pipeline::output_task` shares a cooperative executor with the web server, so
+any handler that runs longer than that without yielding pushes the swap past
+the wrap.
+
+**New harness: `tools/panel-load-bench.mjs`** (docs/tools.md). Two phases
+against one build — idle (status every 10 s) and busy (N clients looping
+`/api/patterns` + `/api/status` + the playground bundle) — reporting
+**repeats/min** as the integral of `rescan_hz − out_fps`, next to the #394
+`dropped`/`eof_race`/`slow_path` deltas, `/api/status` latency p50/p95/max,
+load latency and throughput, heap floor, `fence_timeouts` and a reboot check.
+GET-only. Run `--label before` and `--label after` and diff.
+
+Two things that make it trustworthy rather than merely plausible. The repeat
+integral is normalised by the span it **covers**, not wall time: the phases
+sample at different rates on purpose, and wall-time division silently
+under-reports the sparse one — on a mock whose true rate was 300 repeats/min
+for both, it read 150 for idle against 250 for busy, an error pointing the
+same way as the hypothesis. And the bundle path is discovered from the served
+index rather than hardcoded, so a rehashed build cannot quietly turn the
+measurement into a 404 timing run. Validated end to end against a local mock
+server before ever being pointed at hardware.
+
+**#395's proposed fix — moving `output_task` to an `InterruptExecutor` — was
+investigated and rejected**, before any firmware was written and without
+touching the device, because getting it wrong takes WiFi down and the panel is
+then only recoverable through hands-on serial. Two independent blockers at the
+pinned esp-hal rev `7c7f372`:
+
+- **"Below the WiFi driver's priority" is unrepresentable on the S3.**
+  `WIFI_MAC`/`WIFI_PWR` are at `Priority1`, the minimum on Xtensa
+  (`esp-radio/src/wifi/os_adapter/esp32s3.rs:56-57`), and so are the esp-rtos
+  scheduler tick, the `Software0` context switch and the cross-core yield.
+  Priority2/3 preempts the radio outright. Priority1 is *worse*: esp-hal's
+  dispatcher never lowers `PS.INTLEVEL` before invoking a handler
+  (`esp-hal/src/interrupt/xtensa.rs:462-487`), so a 7.4 ms compose every
+  8.7 ms would mask every other level-1 source — the radio's own ISRs, the
+  scheduler, the context switch — at **~85 % duty with 7.4 ms worst-case
+  latency**.
+- **No free software interrupt.** `InterruptExecutor::new` needs an owned
+  `SoftwareInterrupt<0..=3>`; the S3 has exactly four and all are taken
+  (`esp_rtos::start` 0, `start_second_core` 1, the two flash-fence park
+  handlers 2 and 3). Freeing one means merging the fence's park handlers —
+  surgery on the #294/#309 fence, needing verification on the S3 *and* the
+  classic ESP32.
+
+#395 is retitled to the goal it actually names — "web load must not cost the
+panel a frame" — and its carrier is **#329**, the row-oriented packer: a
+~1.5-2 ms compose turns 1.3 ms of slack into ~6.7 ms, five times the
+tolerance, attacking the cause instead of redistributing the symptom, with no
+radio risk.
+
 ## 2026-09-07 — HUB75: the panel is the clock (#387), out_fps counts displayed frames (#378), setFrameRate carries its remainder (#384)
 
 With the swap made frame-atomic earlier today (#376) the panel still showed
