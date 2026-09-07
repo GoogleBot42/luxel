@@ -152,7 +152,9 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   (its own header says so), NOT the count it found — on the Athom rig
   (as-found state: 60 px) follow with `POST /api/config` body `60`.
 - For a change touching the HTTP response path (`firmware/src/server.rs`),
-  run `tools/wire-check.sh <ip>` after the OTA — curl-level contract check
+  run `tools/wire-check.sh <ip>` after the OTA (bare IP or `http://ip`, both
+  work; exit 2 = HARNESS BROKEN and exit 3 = device unreachable, neither of
+  which is a firmware verdict) — curl-level contract check
   of every response family (single Content-Type, Content-Length == body
   bytes incl. streamed routes, asset 200/304 caching headers, all four
   OPTIONS preflight headers, 404 shape). Watch `firmware/serial.log` alongside
