@@ -1,5 +1,65 @@
 # Update log
 
+## 2026-09-07 — HUB75: the framebuffer swap is now frame-atomic (Gitea #376)
+
+Jeremy asked how tearing is avoided when the framebuffer is fetched by DMA.
+It was not: esp-hub75 0.14's `circular-dma` swap rewrote **every descriptor's
+`buffer` pointer** by the old→new delta the instant `swap()` was called, while
+the DMA was mid-pass, and its own SAFETY note conceded "one partially-mixed
+frame". The ring is ordered by plane repetition, so the mix was the high
+bitplanes of one frame with the low bitplanes of the next — colour corruption
+at moving edges. Confirmed on camera with `library/frame-rate-scan.js`: at a
+sweep-column change, two columns lit at once, one of them partially.
+
+Fixed with a new patch file, `firmware/patches/esp-hub75-0.14.0-atomic-swap.patch`
+(carried as a patch + flake derivation per firmware/patches/README.md, never a
+vendored tree). **One descriptor ring per framebuffer.** Each ring's tail
+`next` loops to its own head; a swap is ONE naturally-aligned 32-bit store
+rewriting the running ring's tail `next` to the other ring's head. The DMA
+reads `next` only when it finishes a descriptor, and the tail is the last
+descriptor of a full BCM pass, so the switch lands exactly on a panel frame
+boundary — every pass reads exactly one framebuffer, and no `buffer` pointer
+is ever touched while the DMA is inside the ring. The frame-count ISR restores
+the ring the DMA left so it is self-contained for the next swap.
+
+Landing is *observed*, not assumed, because the store can lose the race with
+the DMA's prefetch of the tail (in which case the flip lands one frame later —
+still never a mixed frame). `swap()` reads the GDMA `OUT_DSCR` register: if the
+engine is still ≥3 descriptors short of the tail, the tail must read the new
+`next`, so the very next `out_eof` is the switch; otherwise fall back to two
+EOFs. `out_eof` means "read from memory", so under either proof the old
+framebuffer is free when it is handed back. This is a throughput property too:
+a first cut that only had the two-EOF rule settled at **52 fps** against the
+115 Hz rescan, because every swap cost two panel frames.
+
+Costs, measured (`board-seengreat-hub75`): descriptors 254 → 508
+(`__DESC_CELL` 3,052 → 6,100 B), taken out of the leftover `.stack` region
+(33,372 → 30,268 B; `tools/stack-check.sh` green, largest frame 9,648 B).
+Flash +784 B — app image 950,480 → 951,264 B, 97,312 B (9.28 %) of the OTA
+slot free. Heap untouched.
+
+On the panel (4096 px, 30 MHz, `frame-rate-scan` at ComposeCap 0), before →
+after: `fps` 124 → 124, `out_fps` 119–123 → 113–120, `rescan_hz` 115 → 115,
+`vm_us` 843–857 → 831–881, `frame_us` 893–912 → 879–943, `vmerr` null,
+`fence_timeouts` 0. Identical within noise, as it should be — the swap was
+already only a handful of stores. What changed is what the panel *shows*,
+which no API field reports.
+
+Still open, deliberately: composed frames are still **dropped** (at 124
+composed against 115 rescans about one in fourteen never reaches the panel) —
+pacing the render loop on the panel frame boundary is Gitea #387 — and
+`out_fps` still counts `write_frame` calls rather than displayed frames
+(Gitea #378).
+
+Two harness lessons worth the ink. Switching the gitignored
+`firmware/vendor/esp-hub75` symlink to a different nix store path does **not**
+invalidate cargo's fingerprint (every store file's mtime is 1970), so an A/B
+across two versions of a crate patch silently reuses the stale rlib —
+`cargo clean -p esp-hub75` between builds, or the baseline is a lie. And every
+OTA reboot on this board drops the live-pushed pattern and comes back on the
+persisted default (Rainbow), whose 52 fps at 4096 px reads exactly like a
+throughput regression until you check `GET /api/pattern`.
+
 ## 2026-09-07 — the compaction fix verified on metal, and what it did not fix (#379, #365, #363)
 
 The #379 fix (PR #383) went onto the Athom rig — master `81eb873`,
