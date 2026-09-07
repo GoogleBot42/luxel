@@ -76,16 +76,45 @@ pub static PIPE_US: AtomicU32 = AtomicU32::new(0);
 /// `BoardOutput::write_frame` only — the LED / HUB75 driver.
 pub static OUT_US: AtomicU32 = AtomicU32::new(0);
 
-/// Frames actually written to the wire in the last full second, on boards
+/// Frames handed to the output driver in the last full second, on boards
 /// that pipeline the output stage onto the other core (pipeline.rs, Gitea
-/// #306). [`FPS`] counts frames the VM *rendered*; when the compose is the
-/// slower half — a cheap pattern on the 64x64 panel, where the panel's own
-/// rescan boundary paces `write_frame` — the render task free-runs ahead
-/// and its surplus frames are dropped, so the two differ and BOTH are
-/// meaningful: `FPS` is what the pattern's motion is computed at, `OUT_FPS`
-/// is what the panel showed. Always 0 on a non-pipelined board, where every
-/// rendered frame is written by construction.
+/// #306). [`FPS`] counts frames the VM *rendered*; when compose is the
+/// slower half the render task free-runs ahead and its surplus frames are
+/// dropped, so the two differ and both are meaningful.
+///
+/// **On a strip this is frames on the wire. On the HUB75 panel it is not**
+/// (Gitea #378): `Hub75Output::write_frame` returns without drawing when
+/// the previous buffer swap has not landed yet, and that call is still
+/// counted here. So above the panel's rescan rate — see [`RESCAN_HZ`],
+/// 115 Hz on the bench panel — `OUT_FPS` is a **compose** rate and the
+/// surplus never reaches the eye. Quote `min(OUT_FPS, RESCAN_HZ)` for what
+/// a panel actually displayed.
+///
+/// Always 0 on a non-pipelined board, where every rendered frame is written
+/// by construction.
 pub static OUT_FPS: AtomicU32 = AtomicU32::new(0);
+
+/// The HUB75 panel's own rescan rate in Hz — how many times a second the
+/// panel is actually redrawn from the framebuffer, from esp-hub75's BCM
+/// frame counter. 0 on every board without a HUB75 panel.
+///
+/// This is the number that makes [`OUT_FPS`] readable on a panel. The
+/// output driver composes a frame and queues a swap that lands at a rescan
+/// boundary; when compose runs faster than the panel rescans,
+/// `write_frame` finds the previous swap still in flight and returns
+/// without drawing. Those calls still count towards `OUT_FPS`, so on a
+/// panel **`OUT_FPS` is a compose rate and `RESCAN_HZ` is the ceiling on
+/// what was displayed** (Gitea #378). Measured 115 Hz on the 64x64 bench
+/// panel at 7 planes / 30 MHz, against an `OUT_FPS` of up to 125.
+///
+/// Sampled where the frames are: the counter is read in `write_frame`, so
+/// it stops advancing when nothing renders — exactly when `OUT_FPS` is 0
+/// too.
+pub static RESCAN_HZ: AtomicU32 = AtomicU32::new(0);
+
+/// Raw BCM frame count from the panel driver, absolute since boot.
+/// [`RESCAN_HZ`] is its once-a-second delta; nothing else should read it.
+pub static RESCANS: AtomicU32 = AtomicU32::new(0);
 
 /// Heap the CURRENTLY loaded pattern's engine occupies, in bytes — measured
 /// at load time as free-heap-before minus free-heap-after, with no engine

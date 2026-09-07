@@ -53,7 +53,7 @@ response as "no snapshot right now", not as an all-black frame.
 
 ```json
 {"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
- "pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
+ "rescan_hz":0,"pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"engine_heap":21504,"live":null,
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":749568,"dead":0,"patterns":3},
@@ -75,12 +75,24 @@ response as "no snapshot right now", not as an all-black frame.
   `pipe_us` or `out_us`; those two come from the output task and are averaged
   over `out_fps` frames, not `fps` frames. The frame period there is
   `max(frame_us, pipe_us + out_us)`.
-- `out_fps` — frames actually written to the wire in the last second, on a
+- `out_fps` — frames handed to the output driver in the last second, on a
   pipelined board; `0` everywhere else, where every rendered frame is written
   by construction. It differs from `fps` (frames *rendered*) exactly when the
-  output stage is the slower half — at 4096 px an empty render renders 125
-  frames and the panel shows 123 of them. `fps` is what the pattern's motion
-  is computed at; `out_fps` is what the panel showed.
+  output stage is the slower half.
+
+  **On a HUB75 panel this is a compose rate, not a display rate** (Gitea
+  #378). The driver returns without drawing when the previous buffer swap has
+  not landed yet, and that call is still counted here — so above `rescan_hz`
+  the surplus frames are composed and discarded unseen. Quote
+  `min(out_fps, rescan_hz)` for what the panel actually displayed. On a strip
+  the two are the same thing and `out_fps` is frames on the wire.
+- `rescan_hz` — how many times a second the HUB75 panel is really redrawn
+  from the framebuffer, read from the driver's own BCM frame counter. `0` on
+  every board without a panel. Measured 115 on the 64x64 bench panel at 7
+  bitplanes and a 30 MHz LCD_CAM clock; it scales linearly with that clock
+  and halves per extra bitplane (docs/boards.md, "The LCD_CAM pixel clock on
+  the panel"). Sampled where the frames are, so it reads 0 whenever nothing
+  is rendering — exactly when `out_fps` does.
 - `max_pixels` — this board's cap: 4096 on HUB75-panel boards, 2048 otherwise.
 - `slot` — `factory` / `ota_0` / `ota_1` / `ota_?` / `unknown` (which app
   partition booted). Check this after a power-cycle test: a rollback shows up

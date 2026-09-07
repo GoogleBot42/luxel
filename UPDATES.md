@@ -1,5 +1,79 @@
 # Update log
 
+## 2026-09-07 — the panel's LCD_CAM clock is 30 MHz, and `out_fps` never meant what it said (#255, #378)
+
+The panel's rescan rate had only ever been a guess: a comment in
+`firmware/src/hub75.rs` estimating "~77 Hz at 7 planes". It is now measured,
+from esp-hub75's own BCM frame counter (`Hub75::frame_count()`, free — the ISR
+is always armed in circular-DMA mode), exposed as a new `/api/status` field
+**`rescan_hz`**. The estimate was right, and the rate is exactly linear in the
+pixel clock: **77.0 / 115.3 / 154.0** rescans a second at 20 / 30 / 40 MHz.
+
+**The clock default moves 20 MHz → 30 MHz.** The FM6124 datasheet (v1.1) caps
+FCLK at 30 MHz, and its 20 ns minimum clock high/low implies 25 MHz on pulse
+width alone, so 30 is the ceiling with no margin — the 74HCT245 buffers add
+22–28 ns of tpd on top. 40 MHz was tried and **fails visibly**: the two 32-row
+halves mis-sample into a split down the middle of the panel and the colours
+distort. 30 MHz was visually clean across rainbow, Raindrops 2D, Infinite
+Snake v2 and bulk-comet-trails, on the bench 64x64 FM6124EJ panel.
+
+Worth remembering: **the firmware saw nothing wrong at 40 MHz.** No swap
+error, no DMA error, `vmerr` null, `fence_timeouts` 0, nothing on serial — and
+the composed frame was still byte-identical to a host render (a
+time-independent probe through `/api/pixels`: 12,288/12,288 bytes equal). Only
+the panel's own sampling failed. Clock and geometry changes need an eyeball.
+
+The clock buys no throughput — fps and `vm_us` were identical at all three
+rates, every pattern being render-bound rather than rescan-bound. It buys
+headroom: an 8th bitplane becomes usable (~58 Hz rather than ~38), and chained
+panels get their bandwidth (#255).
+
+### `out_fps` is a compose rate on the panel, not a display rate (#378)
+
+Measuring the rescan rate resolved a contradiction sitting in the data since
+#336: `snake-2d-v2` reports `out_fps` 118 and `bulk-comet-trails` 125, against
+a panel that rescans 77 times a second at the old clock. Both numbers were
+real; the name was wrong. `pipeline.rs` counts every `write_frame` **call**,
+and `Hub75Output::write_frame` returns without drawing whenever the previous
+buffer swap has not landed. So a third of those frames were composed and
+thrown away unseen.
+
+`shared.rs`'s doc comment claimed the opposite ("`OUT_FPS` is what the panel
+showed") and is corrected here, along with the same claim in docs/boards.md's
+bulk-pattern table. The displayed rate is `min(out_fps, rescan_hz)`. On a
+strip nothing changes — every rendered frame really is written. Filed as #378;
+the fix that makes `out_fps` mean one thing on every board is still open.
+
+Measured, all on the panel at 4096 px / brightness 31 / 7 planes:
+
+| clock | rescans/s | `rainbow` | `raindrops-2d` | `snake-2d-v2` | `bulk-comet-trails` |
+|---|---:|---:|---:|---:|---:|
+| 20 MHz | 77.0 | 52 | 69 | 118 | — |
+| 30 MHz | 115.3 | 52 | 69 | 118 | 125 (115 shown) |
+| 40 MHz | 154.0 | 51 | 68 | 119 | — |
+
+### Also this session
+
+* **The #340 packed store, on metal.** Packing arithmetic is exact — every
+  save grows `store.used` by precisely
+  `48 + align4(name) + align4(source) + align4(bytecode)`, verified over 46
+  consecutive saves on the Athom and all 5 on the panel. Reboot
+  re-enumeration is clean (byte-identical `GET /api/patterns`, identical
+  `used`/`dead`), read-back through the flash mapping is byte-identical, and
+  the store correctly refuses a save when full after 119 `library/` patterns
+  — matching the predicted count exactly.
+* **But a compaction silently drops files (#379, data loss).** Reproduced
+  three ways on the Athom; the lost files are the lowest-offset ones, they do
+  not come back after a reboot, and a pinned page is **not** required. The
+  #365 checklist is stopped at that point. Everything that survives is
+  byte-perfect, so it is narrowly the compaction.
+* **The format 5 → 6 wipe reports a scary number.** After the migration the
+  boot line says `0 files (0 torn, 18849 resyncs)` where #365 expects 0
+  resyncs. Benign: `patterns.rs` wipes only the sequential-storage key area
+  and deliberately leaves the log arena unerased, so the scan steps over
+  ~75 KB of stale format-5 bytes 4 bytes at a time. No data is at risk, but
+  the narration reads like corruption and every boot pays the scan.
+
 ## 2026-09-07 — Animated Asterisks 2D: two of three device suspects cleared, and the frame rate (#371)
 
 Jeremy reported that on the 64x64 panel the arm drawn on top where the arms

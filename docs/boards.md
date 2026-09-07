@@ -1103,7 +1103,16 @@ byte-for-byte where master put them. Nothing to file against #328.
 ### Bulk patterns on the panel
 
 `ed2ac3f`, 4096 px, brightness 31, medians of seven `/api/status` samples
-after a nine-second settle. Read `out_fps` for what the panel actually showed.
+after a nine-second settle.
+
+> **Correction (2026-09-07, Gitea #378).** The original text here said to
+> read `out_fps` for "what the panel actually showed". That is wrong on this
+> board. `out_fps` counts every `write_frame` **call**, and the HUB75 driver
+> returns without drawing when the previous buffer swap has not landed yet.
+> The panel's real rescan rate was 77 Hz at the 20 MHz clock these rows were
+> taken at, so the two 125/126 rows below were **composing** 125 frames a
+> second while the panel displayed 77 of them. `/api/status` now reports
+> `rescan_hz` directly; the displayed rate is `min(out_fps, rescan_hz)`.
 
 | pattern | fps | out_fps | frame | vm | pipe | out | vm µs/px | heap free |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -1438,3 +1447,49 @@ dispatch tables), which put the C6 at 5.55 % OTA-slot margin — under the
 6 % warn line of `tools/image-check.sh`, above the 3 % floor.
 
 [esp-hal]: https://github.com/esp-rs/esp-hal
+
+## The LCD_CAM pixel clock on the panel (2026-09-07)
+
+The panel's rescan rate had only ever been an estimate — a comment in
+`firmware/src/hub75.rs` guessing "~77 Hz at 7 planes". It is now measured,
+from esp-hub75's own BCM frame counter (`Hub75::frame_count()`, always armed
+in circular-DMA mode) exposed as `/api/status` **`rescan_hz`**. The estimate
+was right, and the rate is exactly linear in the clock:
+
+| LCD_CAM clock | measured rescans/s | ratio | verdict |
+|---|---:|---:|---|
+| 20 MHz | **77.0** | 1.00× | clean (the esp-hub75 example's value) |
+| 30 MHz | **115.3** | 1.50× | clean — **now the default** |
+| 40 MHz | **154.0** | 2.00× | **fails**: mid-panel split, distorted colours |
+
+Measured on the bench 64x64 FM6124EJ panel at 7 bitplanes, two
+`/api/status` samples 20 s apart.
+
+**Why 30 MHz.** The FM6124 datasheet (v1.1) puts FCLK at max 30 MHz, and its
+20 ns minimum clock high/low implies 25 MHz on pulse width alone — so 30 MHz
+is the datasheet ceiling with no margin, and the board's 74HCT245 buffers add
+22–28 ns of worst-case tpd on top. 40 MHz is well outside that and looks it:
+the two 32-row halves mis-sample into a visible split down the middle of the
+panel and the colours distort. 30 MHz was visually clean on this panel across
+rainbow, Raindrops 2D, Infinite Snake v2 and bulk-comet-trails.
+
+**The failure is invisible to the firmware.** At 40 MHz there was no swap
+error, no DMA error, `vmerr` null, `fence_timeouts` 0, nothing on serial —
+and the composed frame was still byte-identical to a host render of the same
+pattern (a time-independent probe compared through `/api/pixels`: 12,288 of
+12,288 bytes equal). Only the panel's own sampling fails. Any future clock or
+geometry change needs an eyeball, not a test run.
+
+**A faster clock buys no throughput.** fps, `out_fps` and `vm_us` were
+identical at all three rates, because every pattern tested is render-bound
+rather than rescan-bound:
+
+| clock | `rainbow` fps (vm µs) | `raindrops-2d` fps (vm µs) | `snake-2d-v2` fps (vm µs) |
+|---|---:|---:|---:|
+| 20 MHz | 52 (19,451) | 69 (14,438) | 118 (7,437) |
+| 30 MHz | 52 (19,427) | 69 (14,483) | 118 (7,495) |
+| 40 MHz | 51 (19,483) | 68 (14,539) | 119 (7,509) |
+
+What the headroom is actually for: an **8th bitplane** becomes usable (~58 Hz
+at 30 MHz, against ~38 Hz at 20 MHz), and **chained panels** get the
+bandwidth they need (Gitea #255).
