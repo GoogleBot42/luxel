@@ -2656,10 +2656,15 @@ impl Vm {
         }
     }
 
-    /// `iram-builtins` (Gitea #312): the same `.rwtext` placement as
-    /// `run`, for the 21 KB out-of-line builtin dispatcher. Separate
-    /// feature because it is the bigger half of the IRAM bill and the
-    /// colder half of the hot path.
+    /// The out-of-line builtin entry: resolve the id, pop the arguments
+    /// once, then walk the three-tier ladder — `builtin_fast` (in-loop
+    /// arms, inlined here so the semantics live in one place),
+    /// [`Vm::builtin_hot`] (per-pixel arms), [`Vm::builtin_cold`]
+    /// (everything else).
+    ///
+    /// `iram-builtins` (Gitea #312/#328): `.rwtext` placement for this
+    /// function and `builtin_hot` — the two tiers a per-pixel `render`
+    /// actually executes. `builtin_cold` deliberately stays in flash.
     #[cfg_attr(feature = "iram-builtins", link_section = ".rwtext")]
     #[cfg_attr(feature = "iram-builtins", inline(never))]
     fn call_builtin(&mut self, prog: &Program, id: u16, argc: usize) -> Result<Value, VmError> {
@@ -2691,11 +2696,45 @@ impl Vm {
         // an index at or past `argc` as 0 — the same contract the old
         // `&args[..argc]` slice had, so a call with more than FAST_ARGS
         // arguments still resolves here rather than falling through to the
-        // `unreachable!` arm below.
+        // `unreachable!` arm at the bottom of `builtin_cold`.
         let fast: [Value; FAST_ARGS] = [args[0], args[1], args[2], args[3]];
         if let Some(v) = self.builtin_fast(builtin, fast, argc) {
             return Ok(v);
         }
+        self.builtin_hot(prog, id, builtin, &args, argc)
+    }
+
+    /// Tier 2 of the builtin ladder (Gitea #328): the ~30 builtins a real
+    /// pattern calls PER PIXEL that `builtin_fast` cannot answer in the
+    /// dispatch loop — the transcendentals, the noise family, `dist`/`hypot`,
+    /// `paint`, `canvasGet`, `pixelState`. Splitting them out of the ~19 KB
+    /// arm soup makes the per-pixel native footprint ~2 KB instead of ~19 KB;
+    /// [`Vm::builtin_cold`] holds the other 90 arms and is reached only
+    /// through this function's `_` arm.
+    ///
+    /// The tiering is measured, not guessed: `tools/profile-library.mjs` over
+    /// all 299 `library/` patterns puts a 40x gap between the least-used arm
+    /// here (>= 0.6 calls/px in the pattern that uses it) and the most-used
+    /// arm in `builtin_cold` (<= 0.016 calls/px). Tier 1 + tier 2 answer
+    /// 99.4 % of every builtin call the library makes.
+    #[cfg_attr(feature = "iram-builtins", link_section = ".rwtext")]
+    #[inline(never)]
+    fn builtin_hot(
+        &mut self,
+        prog: &Program,
+        id: u16,
+        builtin: Builtin,
+        args: &[Value; MAX_ARGS],
+        argc: usize,
+    ) -> Result<Value, VmError> {
+        let no_site = |message: String| VmError {
+            message,
+            fn_idx: u16::MAX,
+            pc: u32::MAX,
+            line: 0,
+            col: 0,
+            is_assert: false,
+        };
         let a = |i: usize| args.get(i).copied().unwrap_or_default();
         let n = |i: usize| a(i).num();
         use Builtin::*;
@@ -2735,6 +2774,179 @@ impl Vm {
             Saturate => num(n(0).clamp(Fx::ZERO, Fx::ONE)),
             Dist => num(fmath::hypot(n(2) - n(0), n(3) - n(1))),
             Dist3 => num(fmath::hypot3(n(3) - n(0), n(4) - n(1), n(5) - n(2))),
+            Smoothstep => {
+                let (lo, hi, v) = (n(0), n(1), n(2));
+                let d = hi - lo;
+                let t = if d == Fx::ZERO {
+                    Fx::ZERO
+                } else {
+                    ((v - lo) / d).clamp(Fx::ZERO, Fx::ONE)
+                };
+                num(t * t * (Fx::from_int(3) - (t + t)))
+            }
+            Oklch => {
+                self.pixel = crate::color::oklch_to_rgb(n(0), n(1), n(2));
+                self.pixel_written = true;
+                Ok(Value::default())
+            }
+            // ---- noise ----
+            Perlin => num(crate::noise::perlin(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                self.perlin_wrap,
+            )),
+            PerlinFbm => num(crate::noise::fbm(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                n(4),
+                n(5),
+                self.perlin_wrap,
+            )),
+            PerlinRidge => num(crate::noise::ridge(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                n(4),
+                n(5),
+                n(6),
+                self.perlin_wrap,
+            )),
+            PerlinTurbulence => num(crate::noise::turbulence(
+                n(0),
+                n(1),
+                n(2),
+                n(3),
+                n(4),
+                n(5),
+                self.perlin_wrap,
+            )),
+            Paint => {
+                // PB semantics (ramp-palette pixel oracle, 2026-07-08): the
+                // position wraps as floored-frac(v) EXACTLY (1.25 → 0.25,
+                // −0.5 → 0.5), with two measured edge artifacts: v == 1
+                // stays at the palette end, and whole numbers ≥ 2 land at
+                // 254/255 (just under the end) — pathological inputs, but
+                // pinned to match the device byte-for-byte.
+                let x = n(0);
+                let frac = x.mod_floor(Fx::ONE);
+                let v = if frac == Fx::ZERO && x >= Fx::ONE {
+                    if x == Fx::ONE {
+                        Fx::ONE
+                    } else {
+                        Fx::from_raw(65535) // 1−ε: matches both probe palettes
+                    }
+                } else {
+                    frac
+                };
+                let b = if argc >= 2 { n(1) } else { Fx::ONE };
+                let rgb = self.palette_lookup(prog, v);
+                let b = b.clamp(Fx::ZERO, Fx::ONE);
+                self.pixel = [rgb[0] * b, rgb[1] * b, rgb[2] * b];
+                self.pixel_written = true;
+                Ok(Value::default())
+            }
+            // hash(x) / hash2(x, y): deterministic 0..1 from the raw bits —
+            // stable per-pixel randomness (sparkle that doesn't reshuffle
+            // every frame). Same input, same output, on every device.
+            Hash => num(hash_unit(n(0).raw() as u32)),
+            Hash2 => num(hash_unit(
+                (n(0).raw() as u32).wrapping_add(hash32(n(1).raw() as u32)),
+            )),
+            // dot(x1,y1, x2,y2) / dot3(x1,y1,z1, x2,y2,z2)
+            Dot => num(n(0) * n(2) + n(1) * n(3)),
+            Dot3 => num(n(0) * n(3) + n(1) * n(4) + n(2) * n(5)),
+            // simplex2(x, y, seed = 0) / simplex3(x, y, z, seed = 0):
+            // simplex noise in ~[-1, 1] — smoother than perlin, no axis
+            // artifacts. The lattice does not wrap (setPerlinWrap N/A).
+            Simplex2 => num(crate::noise::simplex2(n(0), n(1), n(2))),
+            Simplex3 => num(crate::noise::simplex3(n(0), n(1), n(2), n(3))),
+            // canvasGet(buf, w, x, y): bilinear sample of the canvas at
+            // normalized (x, y). Texel centers sit at (i + 0.5)/w — a read
+            // at a cell's center returns exactly what canvasSet put there;
+            // between centers it blends the 4 neighbors (edges clamp, so
+            // out-of-range coordinates read the border). Free upscaling
+            // for canvas patterns on larger maps.
+            CanvasGet => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("canvasGet of a non-array".into()));
+                };
+                let w = n(1).to_int_trunc();
+                if w < 1 {
+                    return num(Fx::ZERO);
+                }
+                let w = w as usize;
+                let data = self.arr(prog, arr);
+                let h = data.len() / w;
+                if h < 1 {
+                    return num(Fx::ZERO);
+                }
+                let (c0, c1, tx) = sample_axis(n(2), w);
+                let (r0, r1, ty) = sample_axis(n(3), h);
+                let at = |r: usize, c: usize| data.at(r * w + c).num().raw() as i64;
+                let lerp = |a: i64, b: i64, t: i64| a + (((b - a) * t) >> 16);
+                let top = lerp(at(r0, c0), at(r0, c1), tx);
+                let bot = lerp(at(r1, c0), at(r1, c1), tx);
+                num(Fx::from_raw(lerp(top, bot, ty) as i32))
+            }
+            // ---- Luxel extensions, batch 8 ----
+            // pixelState(index[, ch]): last frame's committed state for a
+            // pixel. Reads never allocate — a pattern that only reads gets
+            // 0 and pays nothing — and out-of-range indices/channels read
+            // 0 so neighbour taps at the strip's ends need no clamping.
+            PixelState => {
+                let i = n(0).to_int_trunc();
+                let ch = if argc >= 2 { n(1).to_int_trunc() } else { 0 };
+                let v = match &self.pixel_state {
+                    Some(s)
+                        if i >= 0
+                            && (i as usize) < s.n
+                            && ch >= 0
+                            && (ch as usize) < s.channels =>
+                    {
+                        s.front[ch as usize * s.n + i as usize]
+                    }
+                    _ => Fx::ZERO,
+                };
+                num(v)
+            }
+            _ => self.builtin_cold(prog, id, builtin, args, argc),
+        }
+    }
+
+    /// Tier 3: every builtin no pattern calls per pixel — easings, beziers,
+    /// the array family, transforms, palette/post-process setters, GPIO,
+    /// clock, events, canvas writes, buffer ops. `#[cold]` and out of line
+    /// so its ~17 KB never competes with `Vm::run` for the flash
+    /// instruction cache (docs/firmware.md, "Code placement").
+    #[cold]
+    #[inline(never)]
+    fn builtin_cold(
+        &mut self,
+        prog: &Program,
+        id: u16,
+        builtin: Builtin,
+        args: &[Value; MAX_ARGS],
+        argc: usize,
+    ) -> Result<Value, VmError> {
+        let def = &BUILTINS[id as usize];
+        let no_site = |message: String| VmError {
+            message,
+            fn_idx: u16::MAX,
+            pc: u32::MAX,
+            line: 0,
+            col: 0,
+            is_assert: false,
+        };
+        let a = |i: usize| args.get(i).copied().unwrap_or_default();
+        let n = |i: usize| a(i).num();
+        use Builtin::*;
+        let num = |v: Fx| Ok(Value::Num(v));
+        match builtin {
             // easing on t (typically 0..1); polynomial forms, no clamping
             // (callers control the domain, matching smoothstep's contract)
             EaseInQuad => num(n(0) * n(0)),
@@ -2958,16 +3170,6 @@ impl Vm {
                 self.prng_state = if s == 0 { 1 } else { s };
                 num(Fx::from_raw(old as i32))
             }
-            Smoothstep => {
-                let (lo, hi, v) = (n(0), n(1), n(2));
-                let d = hi - lo;
-                let t = if d == Fx::ZERO {
-                    Fx::ZERO
-                } else {
-                    ((v - lo) / d).clamp(Fx::ZERO, Fx::ONE)
-                };
-                num(t * t * (Fx::from_int(3) - (t + t)))
-            }
             BezierQuadratic => {
                 let (t, p0, p1, p2) = (n(0), n(1), n(2), n(3));
                 let u = Fx::ONE - t;
@@ -2987,11 +3189,6 @@ impl Vm {
                 self.plot_coord = [n(0), n(1), if argc >= 3 { n(2) } else { Fx::ZERO }];
                 self.plot_dims = if argc >= 3 { 3 } else { 2 };
                 self.plot_written = true;
-                Ok(Value::default())
-            }
-            Oklch => {
-                self.pixel = crate::color::oklch_to_rgb(n(0), n(1), n(2));
-                self.pixel_written = true;
                 Ok(Value::default())
             }
             Oklab => {
@@ -3269,42 +3466,6 @@ impl Vm {
                 }
                 Ok(Value::default())
             }
-            // ---- noise ----
-            Perlin => num(crate::noise::perlin(
-                n(0),
-                n(1),
-                n(2),
-                n(3),
-                self.perlin_wrap,
-            )),
-            PerlinFbm => num(crate::noise::fbm(
-                n(0),
-                n(1),
-                n(2),
-                n(3),
-                n(4),
-                n(5),
-                self.perlin_wrap,
-            )),
-            PerlinRidge => num(crate::noise::ridge(
-                n(0),
-                n(1),
-                n(2),
-                n(3),
-                n(4),
-                n(5),
-                n(6),
-                self.perlin_wrap,
-            )),
-            PerlinTurbulence => num(crate::noise::turbulence(
-                n(0),
-                n(1),
-                n(2),
-                n(3),
-                n(4),
-                n(5),
-                self.perlin_wrap,
-            )),
             SetPerlinWrap => {
                 for (i, w) in self.perlin_wrap.iter_mut().enumerate() {
                     *w = n(i).to_int_trunc().clamp(2, 256);
@@ -3319,31 +3480,6 @@ impl Vm {
                 self.palette_src = Some(arr);
                 self.palette_dirty = false;
                 self.rebuild_palette(prog, arr);
-                Ok(Value::default())
-            }
-            Paint => {
-                // PB semantics (ramp-palette pixel oracle, 2026-07-08): the
-                // position wraps as floored-frac(v) EXACTLY (1.25 → 0.25,
-                // −0.5 → 0.5), with two measured edge artifacts: v == 1
-                // stays at the palette end, and whole numbers ≥ 2 land at
-                // 254/255 (just under the end) — pathological inputs, but
-                // pinned to match the device byte-for-byte.
-                let x = n(0);
-                let frac = x.mod_floor(Fx::ONE);
-                let v = if frac == Fx::ZERO && x >= Fx::ONE {
-                    if x == Fx::ONE {
-                        Fx::ONE
-                    } else {
-                        Fx::from_raw(65535) // 1−ε: matches both probe palettes
-                    }
-                } else {
-                    frac
-                };
-                let b = if argc >= 2 { n(1) } else { Fx::ONE };
-                let rgb = self.palette_lookup(prog, v);
-                let b = b.clamp(Fx::ZERO, Fx::ONE);
-                self.pixel = [rgb[0] * b, rgb[1] * b, rgb[2] * b];
-                self.pixel_written = true;
                 Ok(Value::default())
             }
             // ---- clock (host-provided wall time) ----
@@ -3438,13 +3574,6 @@ impl Vm {
                 let unit = Fx::from_raw((s.raw() + Fx::ONE.raw()) >> 1);
                 num(lo + (hi - lo) * unit)
             }
-            // hash(x) / hash2(x, y): deterministic 0..1 from the raw bits —
-            // stable per-pixel randomness (sparkle that doesn't reshuffle
-            // every frame). Same input, same output, on every device.
-            Hash => num(hash_unit(n(0).raw() as u32)),
-            Hash2 => num(hash_unit(
-                (n(0).raw() as u32).wrapping_add(hash32(n(1).raw() as u32)),
-            )),
             // blur1D(arr, radius): in-place box blur, window 2·radius+1,
             // edges clamped; returns the array. radius < 1 is a no-op.
             Blur1D => {
@@ -3496,9 +3625,6 @@ impl Vm {
                 }
                 Ok(a(0))
             }
-            // dot(x1,y1, x2,y2) / dot3(x1,y1,z1, x2,y2,z2)
-            Dot => num(n(0) * n(2) + n(1) * n(3)),
-            Dot3 => num(n(0) * n(3) + n(1) * n(4) + n(2) * n(5)),
             // angleBetween(x1,y1, x2,y2): signed angle from v1 to v2 in
             // radians (positive = counter-clockwise), like atan2
             AngleBetween => {
@@ -3521,11 +3647,6 @@ impl Vm {
                     .map_err(|m| no_site(m.into()))?;
                 Ok(a(3))
             }
-            // simplex2(x, y, seed = 0) / simplex3(x, y, z, seed = 0):
-            // simplex noise in ~[-1, 1] — smoother than perlin, no axis
-            // artifacts. The lattice does not wrap (setPerlinWrap N/A).
-            Simplex2 => num(crate::noise::simplex2(n(0), n(1), n(2))),
-            Simplex3 => num(crate::noise::simplex3(n(0), n(1), n(2), n(3))),
             // curl2(x, y, out, seed = 0) / curl3(x, y, z, out, seed = 0):
             // the curl of a simplex potential, written into out[0..2] /
             // out[0..3] and returned (in place, like arrayAdd/mixColors).
@@ -3702,34 +3823,6 @@ impl Vm {
                 }
                 Ok(v)
             }
-            // canvasGet(buf, w, x, y): bilinear sample of the canvas at
-            // normalized (x, y). Texel centers sit at (i + 0.5)/w — a read
-            // at a cell's center returns exactly what canvasSet put there;
-            // between centers it blends the 4 neighbors (edges clamp, so
-            // out-of-range coordinates read the border). Free upscaling
-            // for canvas patterns on larger maps.
-            CanvasGet => {
-                let Value::Arr(arr) = a(0) else {
-                    return Err(no_site("canvasGet of a non-array".into()));
-                };
-                let w = n(1).to_int_trunc();
-                if w < 1 {
-                    return num(Fx::ZERO);
-                }
-                let w = w as usize;
-                let data = self.arr(prog, arr);
-                let h = data.len() / w;
-                if h < 1 {
-                    return num(Fx::ZERO);
-                }
-                let (c0, c1, tx) = sample_axis(n(2), w);
-                let (r0, r1, ty) = sample_axis(n(3), h);
-                let at = |r: usize, c: usize| data.at(r * w + c).num().raw() as i64;
-                let lerp = |a: i64, b: i64, t: i64| a + (((b - a) * t) >> 16);
-                let top = lerp(at(r0, c0), at(r0, c1), tx);
-                let bot = lerp(at(r1, c0), at(r1, c1), tx);
-                num(Fx::from_raw(lerp(top, bot, ty) as i32))
-            }
             // ---- Luxel extensions, batch 5 ----
             // canvasAdd(buf, w, x, y, v): `cell += v` at the same
             // edge-clamped floor(x·w) cell canvasSet writes — particle
@@ -3755,27 +3848,6 @@ impl Vm {
                         return num(sum);
                     }
                 }
-                num(v)
-            }
-            // ---- Luxel extensions, batch 8 ----
-            // pixelState(index[, ch]): last frame's committed state for a
-            // pixel. Reads never allocate — a pattern that only reads gets
-            // 0 and pays nothing — and out-of-range indices/channels read
-            // 0 so neighbour taps at the strip's ends need no clamping.
-            PixelState => {
-                let i = n(0).to_int_trunc();
-                let ch = if argc >= 2 { n(1).to_int_trunc() } else { 0 };
-                let v = match &self.pixel_state {
-                    Some(s)
-                        if i >= 0
-                            && (i as usize) < s.n
-                            && ch >= 0
-                            && (ch as usize) < s.channels =>
-                    {
-                        s.front[ch as usize * s.n + i as usize]
-                    }
-                    _ => Fx::ZERO,
-                };
                 num(v)
             }
             // setPixelState(index, v) / setPixelState(index, ch, v): write
@@ -4344,6 +4416,8 @@ fn time_phase_u64(now_ms: u64, period: u32) -> u32 {
     ((t << 16) / p) as u32
 }
 
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn hsv_to_rgb(h: Fx, s: Fx, v: Fx) -> [Fx; 3] {
     let s = s.clamp(Fx::ZERO, Fx::ONE);
     let v = v.clamp(Fx::ZERO, Fx::ONE);

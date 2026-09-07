@@ -29,7 +29,11 @@ board_target "$BOARD"
 # in — a no-op on devices already running the Luxel partition layout. To
 # produce the image WLED's /update page accepts, use espflash save-image
 # (NOT the merged image): see docs/wled-migration.md.
-FEATURES="$BOARD"
+# Per-board IRAM placement of the interpreter's per-pixel code (IRAM from
+# board-target.sh, Gitea #328). IRAM_OFF=1 builds the same board with
+# everything executing from the flash cache — the A/B lever.
+FEATURES="$BOARD${IRAM:+ $IRAM}"
+if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD"; fi
 # Extra non-board cargo features, space-separated. The one in practical use
 # is `small-chip` (RAM-constrained profile: web pool 2 + 88 KB heap + tuned
 # WiFi buffer pools — docs/boards.md tiers). Example:

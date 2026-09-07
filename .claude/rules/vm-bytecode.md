@@ -129,6 +129,28 @@ paths:
   **−46.5 %** on that pattern. It is layout, not size — non-monotonic, tens
   of percent per kilobyte moved. Treat `Vm::run`'s footprint as a first-class
   cost.
+- **The builtin dispatch is a THREE-tier ladder and the tiers are a cache
+  budget, not a style choice** (#328). `builtin_fast` (in-loop, 22 arms) →
+  `call_builtin` + `builtin_hot` (the ~30 builtins a `render` calls per
+  pixel) → `builtin_cold` (`#[cold] #[inline(never)]`, the other 90 arms,
+  reached only through `builtin_hot`'s `_` arm). Which tier an arm belongs
+  in is measured with `tools/profile-library.mjs`, which leaves a 40× gap
+  between the least-used tier-2 arm and the most-used tier-3 one; tiers 1+2
+  answer 99.4 % of the library's builtin calls. A new arm goes in
+  `builtin_cold` unless a pattern calls it PER PIXEL, and a fat leaf
+  (noise, the wide fmath) stays `#[inline(never)]` so it is not dragged
+  through the cache by patterns that never call it — inlined,
+  `simplex2_inner`/`simplex3_inner` alone put 7 KB inside `builtin_hot`.
+  Do not add a fourth dispatch level and do not merge these back together
+  without measuring both benches on BOTH chips.
+- **Cache placement is chaotic, and only IRAM makes it reproducible.** The
+  hot/cold split ALONE, with `Vm::run` byte-identical (13,170 B) in both
+  builds, was **+80 % on `perlin-fire-wind-tunnel` and +73 % on `snake`** on
+  the Athom and a wash on the S3; with `Vm::run` pinned in `.rwtext` the
+  same split is a 4.2× win on `kaleidoscope-2d`. `snake` executes nothing
+  but `Vm::run`, so that swing is *pure placement*. Never explain a
+  luxel-core perf result by instruction count until you have checked
+  whether the functions moved (#328; docs/firmware.md "Code placement").
 - **Never judge a `luxel-core` change on `tools/opbench.mjs` alone.** Its
   K-sweep loop executes no builtin, so it is blind to the term above; run
   `tools/patbench.mjs` on a builtin-heavy pattern as well and report BOTH

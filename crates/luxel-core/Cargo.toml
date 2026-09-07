@@ -18,11 +18,22 @@ depth-probe = []
 # --profile`, tools/profile-library.mjs). Host tooling only: the firmware
 # never enables it, so no device image carries a counter or a branch.
 profile = []
-# Gitea #312 experiment knobs: place the interpreter's hot functions in
-# `.rwtext` (internal SRAM) instead of letting them execute from the
-# cache-mapped flash text. Device-only — a host build must never enable
-# them. Enabled from the firmware through its own `iram-vm` /
-# `iram-builtins` features (firmware/Cargo.toml), i.e.
-#   EXTRA_FEATURES=iram-vm BOARD=board-seengreat-hub75 ./build-esp32.sh
-iram-vm = []
-iram-builtins = []
+# Code placement (Gitea #312/#328): execute the interpreter's per-pixel
+# native code from `.rwtext` (internal SRAM) instead of through the flash
+# instruction cache. `#[link_section = ".rwtext"]` is what `esp_hal::ram`
+# expands to, spelled by hand because this crate must not depend on
+# esp-hal. DEVICE-ONLY — on a host target `.rwtext` is a stray section
+# name, so a host/wasm build must never enable these.
+#
+# Enabled from the firmware through its own same-named features, chosen
+# per board by `IRAM` in firmware/board-target.sh (mirrored by `iram` in
+# flake.nix); `IRAM_OFF=1 ./build-esp32.sh` is the A/B lever. Worth
+# 2.9-4.2x on builtin-heavy patterns on the classic ESP32 and ~1 % on the
+# S3 — see docs/firmware.md "Code placement" and docs/boards.md
+# "IRAM budget" before changing what is in them.
+iram-vm = []        # Vm::run                                    (13,572 B)
+iram-builtins = []  # Vm::call_builtin + Vm::builtin_hot          (7,304 B)
+# hsv_to_rgb, the fmath a render body reaches every pixel (sin/cos in turns
+# and radians, sqrt/isqrt48, hypot, exp2/log2/pow, atan2) and the noise
+# entry points.
+iram-math = []      #                                             (9,412 B)

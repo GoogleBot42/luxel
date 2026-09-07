@@ -117,6 +117,11 @@
              # size-optimized image — firmware/board-target.sh CORE_O3 is
              # the same per-board flag for devshell builds (Gitea #260)
            , coreO3 ? true
+             # per-pixel interpreter code in internal SRAM instead of the
+             # flash instruction cache — firmware/board-target.sh IRAM is the
+             # same per-board list for devshell builds (Gitea #328). Kept out
+             # of `pname` on purpose: it is a per-board default, not a variant.
+           , iram ? [ ]
            , ssid ? envOr "LUXEL_SSID"
            , pass ? envOr "LUXEL_PASS"
            }:
@@ -185,7 +190,7 @@
                 runHook preBuild
                 cd firmware
                 ${if buildStd then "${xtensaRust}/bin/cargo" else "cargo"} build --release --offline \
-                  --no-default-features --features ${lib.concatStringsSep "," ([ board ] ++ extraFeatures)} \
+                  --no-default-features --features ${lib.concatStringsSep "," ([ board ] ++ iram ++ extraFeatures)} \
                   --target ${target}${stdFlags}${optFlags}
                 runHook postBuild
               '';
@@ -219,18 +224,21 @@
           chip = "esp32";
           target = "xtensa-esp32-none-elf";
           buildStd = true;
+          iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
         };
         luxel-fw-athom-music = {
           board = "board-athom-music";
           chip = "esp32";
           target = "xtensa-esp32-none-elf";
           buildStd = true;
+          iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
         };
         luxel-fw-esp32-generic = {
           board = "board-esp32-generic";
           chip = "esp32";
           target = "xtensa-esp32-none-elf";
           buildStd = true;
+          iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
         };
         # UNTESTED ON METAL (no S3/C6 on the bench) — these build and pass
         # the OTA-slot + image-check gates, nothing more. See docs/boards.md.
@@ -239,6 +247,7 @@
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           buildStd = true;
+          iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
         };
         # NOT a release artifact since 2026-09-06: the extent allocator
         # (Gitea #281) took this build under image-check's 3 % OTA-slot
@@ -275,6 +284,7 @@
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           buildStd = true;
+          iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
         };
         # Seengreat RGB Matrix HUB75 S3 panel driver board (Gitea #73). The
         # board feature turns `hub75` on itself — no extraFeatures needed.
@@ -283,6 +293,7 @@
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           buildStd = true;
+          iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
         };
       };
     in

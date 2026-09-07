@@ -624,6 +624,54 @@ buffers alone are ~48 KB of heap (see the pixel-cap section), so the S3's
 ~26 KB of surplus stack is the obvious place to find it — measured on
 metal in #75, not guessed at here.
 
+## IRAM budget: where the interpreter's per-pixel code lives
+
+Since Gitea #328 the hot half of the interpreter can execute from internal
+SRAM (`.rwtext`) instead of through the flash instruction cache. What each
+board takes is `IRAM` in `firmware/board-target.sh` (and `iram` in flake.nix's
+`firmwareVariants` — the two must agree); `IRAM_OFF=1` builds the same board
+without it. The mechanism, the measured wins and the rule for adding hot code
+are in docs/firmware.md, "Code placement".
+
+**The budget is not the same kind of thing on every chip.** On the classic
+ESP32, IRAM is a dedicated 128 KB region (SRAM0) that the stack never comes
+out of, so the only ceiling is the region itself. On the ESP32-S3 and the
+C-series it is the *same* SRAM as `.data`/`.bss`/`.stack`: every byte of
+`.rwtext` is a byte off the main-task stack, which `tools/stack-check.sh`
+floors at 24 KB.
+
+Measured on master `e08b2b2` + #328 (devshell builds, WiFi creds baked in):
+
+| board | `IRAM` | `.rwtext` | + WiFi's | of region | `.stack` | `.stack` with `IRAM_OFF=1` |
+|---|---|---:|---:|---:|---:|---:|
+| `board-pixelblaze-v3` | vm + builtins + math | 42,644 | 94,444 | 130,048 | 24,932 | 24,932 |
+| `board-athom-music` | vm + builtins + math | 42,644 | 94,444 | 130,048 | 24,932 | 24,932 |
+| `board-esp32-generic` | vm + builtins + math | 42,644 | 94,444 | 130,048 | 24,932 | 24,932 |
+| `board-s3-devkit` | vm | 24,468 | 56,592 | 302,080 | 32,732 | 46,300 |
+| `board-seengreat-hub75` | vm | 24,360 | 56,484 | 302,080 | 32,452 | 46,020 |
+| `board-c3-devkit` | — | 4,968 | — | — | 35,448 | 35,448 |
+| `board-c6-devkit` | — | 6,364 | — | — | 137,056 | 137,056 |
+
+- **The three classic-ESP32 boards take everything.** 35,604 B of the region
+  is still free afterwards and `.stack` does not move at all. The win is the
+  largest in the fleet: 2.86× on `perlin-fire-wind-tunnel`, 4.17× on
+  `kaleidoscope-2d` (docs/firmware.md).
+- **The S3 boards take `iram-vm` only.** Adding `iram-builtins` on top
+  measured 25,148 B of `.stack` — 572 B over the floor — and bought about
+  1 %, because the S3's cache is not the bottleneck there. Not worth the
+  margin.
+- **The RISC-V boards take nothing yet.** There is no C3 or C6 on the bench,
+  so their placement is unmeasured, and the C6 owns the fleet's tightest
+  OTA-slot margin. `RISCV_IRAM="iram-vm …" BOARD=board-c3-devkit
+  ./build-esp32.sh` is the lever for whoever gets one on metal (Gitea #337).
+
+Slot cost: the classic-ESP32 app image is ~3.4 KB **smaller** with the
+placement on (997,472 vs 1,000,848 B on `board-athom-music`) — the bytes move
+from the 64 KB-page-aligned flash text segment into the IRAM segment. Every
+board stays over image-check's 3 % floor; `board-c6-devkit`, which carries no
+IRAM features at all, still pays ~1.1 KB for the builtin hot/cold split
+(3.27 % → 3.17 % of slot free).
+
 ## Hosted-UI builds (no on-device web app)
 
 `hosted-ui` is a cargo feature, not a board — combine it with a board
@@ -1026,7 +1074,9 @@ Three files, no other code paths involved — plus a one-line case in
 (that file is the single board → chip / rust target / toolchain map,
 shared by build-esp32.sh and tools/stack-check.sh; its `CORE_O3` flag
 decides whether the VM crate gets opt-level 3 — see "The 1 MiB OTA-slot
-ceiling" — and flake.nix's `firmwareVariants` entry must say the same):
+ceiling" — and its `IRAM` flag which of the interpreter's hot functions
+execute from internal SRAM — see "IRAM budget" — and flake.nix's
+`firmwareVariants` entry must say the same for both):
 
 1. **`firmware/Cargo.toml`** — add the feature, selecting the chip:
 

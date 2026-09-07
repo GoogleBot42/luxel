@@ -187,6 +187,16 @@ paths:
 - **Placing a function in IRAM from a chip-agnostic crate**: `esp_hal::ram`
   expands to `#[link_section = ".rwtext"]`, so a crate that must not depend
   on esp-hal (luxel-core) can spell it by hand behind a cargo feature —
-  that is what `iram-vm` / `iram-builtins` are (#312). Feature-gate it: on a
-  host target `.rwtext` is a stray section name. Measure before shipping
-  one; `Vm::run` in IRAM bought 1.0 % for 16 KB on the S3.
+  that is what `iram-vm` / `iram-builtins` / `iram-math` are (#312, #328).
+  Feature-gate it: on a host target `.rwtext` is a stray section name. Which
+  boards take which is `IRAM` in `firmware/board-target.sh` (mirrored by
+  `iram` in flake.nix); `IRAM_OFF=1` is the A/B lever on `build-esp32.sh`
+  and `tools/stack-check.sh`. **The win is per CHIP, not per change**: the
+  same placement is 2.9–4.2× on builtin-heavy patterns on the classic ESP32
+  and ~1 % on the S3 — never generalise one board's number to another, and
+  never take it from `opbench` (4 % where a real pattern moved 76 %).
+  **The cost is per chip too**: the classic ESP32 has a dedicated 128 KB
+  IRAM region and `.stack` does not move; on the S3 and the C-series
+  `.rwtext` is the same SRAM as `.stack`, so every byte comes off the stack
+  and `tools/stack-check.sh`'s 24 KB floor is the real ceiling
+  (docs/boards.md "IRAM budget", docs/firmware.md "Code placement").
