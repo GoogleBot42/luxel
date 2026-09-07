@@ -43,6 +43,12 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 | `/api/status` | GET | — | see below | both |
 | `/api/pixels` | GET | — | `application/octet-stream`: last rendered frame, raw RGB, 3 bytes per pixel | both |
 
+`/api/pixels` answers an **empty body** when there is no frame yet (before the
+first render) and, on firmware, when the heap cannot hold the response — at
+4096 px that is a 12 KB body on a heap a heavy pattern can leave under 30 KB
+free, so it degrades rather than failing the request. Treat a zero-length
+response as "no snapshot right now", not as an all-black frame.
+
 `GET /api/status` on **firmware**:
 
 ```json

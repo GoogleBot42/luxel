@@ -168,6 +168,15 @@ origin master && git rebase origin/master`.
   that overlaps them (at minimum the affected test suite / e2e) before
   force-pushing — green-before-rebase proves nothing about the merged
   result.
+- **Re-run `npm run wasm` after the rebase too.** Every script that pushes a
+  pattern (`hw-bench`, `render-bench`, `patbench`, `opbench`, anything using
+  `web/tools/lxp.mjs`) compiles against YOUR worktree's built
+  `web/public/luxel.wasm`, and a rebase that pulls in a new builtin leaves it
+  one commit behind the `library/` pattern that uses it. The failure is
+  `compile failed: unknown identifier` — which CLAUDE.md's tripwire blames on
+  the MAIN checkout, so it is easy to misread as someone else's problem
+  (2026-09-06: a rebase over #335 made `library/snake-2d-v2.js` uncompilable
+  until the wasm was rebuilt).
 - **Measurements are verification too — take them AFTER the rebase.**
   Firmware image sizes, `.stack`, heap numbers: a pre-rebase measurement
   compared against a table another session updated the same day gives a
