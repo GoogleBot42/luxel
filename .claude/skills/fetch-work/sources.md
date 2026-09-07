@@ -87,6 +87,25 @@ zero actionable code markers; every raw hit was a placeholder
 but expect nothing — the productive sources are the UPDATES.md marker
 grep, docs/UNTESTED.md, and the Gitea tracker.
 
+## "Already shipped" is a higher bar than "something like it shipped"
+
+Dropping a candidate needs the SHIPPED WORK to cover the ticket's ask, not
+merely to have touched the same area or removed the same motivation. On
+2026-09-07 Gitea #340 ("pattern partition format is extremely inefficient —
+fixed slots, ~12 patterns") was proposed as a duplicate of #330's extent
+store, which landed the same day and reads like an exact match: exact-size
+extents, sequential, mappable, `MAX_PATTERNS` 24 → 32. Jeremy said no. The
+two things #340 actually asks for survived #330 untouched — allocation is
+still PAGE-granular (a 2 KB pattern still burns a 4 KiB page) and
+`MAX_PATTERNS` is still a hard compile-time cap set by a fixed-size
+directory item, not by space used.
+
+So: read the ticket's ask as a list of properties, and check each one
+against the code. A design ticket whose motivation was partly addressed is
+still open. When in doubt, PROPOSE it with a note on what shipped nearby —
+listing something Jeremy can dismiss in one word is far cheaper than
+silently dropping work he wanted.
+
 ## Honesty rule (applies everywhere above)
 
 Docs and memory drift out of date. Before proposing *any* candidate,

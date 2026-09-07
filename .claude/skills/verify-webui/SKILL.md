@@ -181,6 +181,20 @@ nothing in this container is public.
   `mouse.move(centre)` → `down()` → `mouse.move(box.x + box.width * 1.1, y)` →
   `up()`. Range inputs clamp during a drag, so overshooting is the reliable way
   to land on the endpoint (cost a cycle on the #206 analog-pin sliders).
+- **Typing a whole pattern into the editor leaves a stray `}` and the app keeps
+  running the PREVIOUS program.** CodeMirror auto-closes `{`, so
+  `keyboard.type(src)` with the closing brace in `src` produces one extra `}`
+  at the end, the source no longer compiles, and `recompile()` deliberately
+  keeps the old engine running while you type. Headless there is almost no
+  signal: the preview animates, `fps` is healthy, no page error fires, and the
+  compile error is a small banner off in the right-hand column. On 2026-09-07
+  this made a debugger step-through look like a product bug (one "into" click
+  appeared to resume the whole run) and nearly earned a bogus ticket — the
+  screenshot is what exposed it. After typing, delete the tail
+  (`Control+Shift+End` then `Backspace`) and ASSERT on what actually landed:
+  read back `.cm-content`'s `textContent` and check the compile-error banner is
+  empty before driving anything. `e2e.mjs`'s `setEditor` has the same exposure;
+  it gets away with it because its sources end mid-line.
 - Forgetting `npm run wasm`/`gen-gallery.mjs` reran after a `library/` or corpus change —
   `e2e.mjs`/`device-e2e.mjs` serve whatever `web/dist` currently holds, which is stale
   until you rebuild.
