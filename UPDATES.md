@@ -83,6 +83,51 @@ alone swings real patterns by tens of percent) and the on-device patbench of
 the bulk patterns — Gitea #336. #265's dual-core split does not apply to a
 `renderFrame` pattern (one call per frame); noted there.
 
+## 2026-09-06 — Engine vs engine on builtin-heavy patterns: Luxel is at parity with the Pixelblaze (#312)
+
+The straight-line loop microbench says the Luxel VM is 1.51× slower per
+iteration than the Pixelblaze's on identical silicon (6.20 vs 4.11 µs). Nobody
+had compared a *real* pattern, because the oracle is wire-bound at 77.3 fps at
+420 px and a simple pattern never breaks through that cap. Builtin-heavy
+patterns do.
+
+`tools/oracle/fps-compare.mjs` (new) live-codes the same sources onto the
+oracle and onto a Luxel device at the same pixel count and tabulates both. Its
+`--1d` flag is the load-bearing part: the oracle has a 2D map installed and a
+PB map is a one-way door, so it dispatches `render2D` while a 1D strip
+dispatches `render` — `--1d` rewrites both copies identically so each engine
+runs the same body on the same arguments.
+
+**Measured at 420 px, oracle (fw 3.67) vs Athom (`6cf19b4`, v0.1.40), 25 s of
+samples per pattern after a 6 s settle.** PB µs/px against Luxel `vm_us`/px:
+
+| pattern | PB µs/px | Luxel vm µs/px | PB ÷ Luxel |
+|---|---:|---:|---:|
+| `perlin-fire-wind-tunnel` | 54.98 | 58.20 | 0.94× |
+| `coral-plasma` | 76.41 | 75.25 | 1.02× |
+| `eye-of-sauron` | 75.52 | 85.50 | 0.88× |
+| `blue-holiday-star-2d` | 82.51 | 89.64 | 0.92× |
+| `dire-spider-2d` | 365.31 | 311.80 | 1.17× |
+
+Within ±17 %, mean 0.99× — parity, not 1.5×. The dispatch gap is real but it
+only shows on straight-line VM work; a pattern whose time goes into `perlin`,
+`hypot`, `sin` and `hsv` spends it in native code on both engines, and there
+Luxel is competitive. So #312's 1.51× is a ceiling on what interpreter-dispatch
+work can win back on real patterns, not a headline slowdown.
+
+**Second result, which the comparison needed first: the Pixelblaze overlaps LED
+output with rendering.** Extrapolating the K-sweep loop line back to K = 0
+gives a *negative* fixed per-pixel cost (−16 to −20 µs/px) under a
+`frame = wire + render` model and a plausible +10…15 µs/px under
+`frame = max(wire, render)`. So a PB fps below its wire cap is engine time and
+comparable to `vm_us`; an fps pinned at 77.3 is output-bound and means nothing.
+Luxel on the classic ESP32 does not overlap (`frame_us ≈ vm_us + pipe_us +
+out_us`), so its fps is the wrong column to compare. Written up in
+docs/research/04-oracle-findings.md.
+
+Both devices restored and verified: oracle 420 px / "rainbow melt"; Athom
+60 px / ws2812 GPIO18 / rainbow / ota_0 v0.1.40 / store empty / no map.
+
 ## 2026-09-06 — Code placement for the flash instruction cache: 2.9–4.2× on the classic ESP32 (#328)
 
 #325 showed the dominant term in `vm_us` is whether the interpreter's own

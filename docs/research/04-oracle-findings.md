@@ -518,3 +518,50 @@ Consequences:
   one frame (Q6 shape) and recovers; tixy's original calls an unset slot of
   its 100-entry formula table once its mode counter walks past the last
   assigned formula and goes black (Q7 shape). A real PB does both.
+
+## The Pixelblaze overlaps LED output with rendering (measured 2026-09-06, fw 3.67 — Gitea #312)
+
+Every fps number the oracle reports has been ambiguous until now: we could not
+tell whether a frame is `render + wire` or `max(render, wire)`, so we could not
+say whether its fps is an engine number. The `x += i * 0.5` loop microbench
+(`tools/oracle/fps-compare.mjs` over the K-sweep sources) settles it, because
+its per-pixel cost is a straight line in K and the line can be extrapolated
+back to K = 0.
+
+Oracle at 420 px, WS2812 (`ledType` 2 — the served UI's own option list; the
+stored `dataSpeed` only applies to clocked types), fps measured over 15 s of
+1 Hz stats frames after a 5 s settle:
+
+| K | fps | frame | µs/px if frame == render |
+|---:|---:|---:|---:|
+| 0 | 77.30 | 12.94 ms | 30.80 |
+| 16 | 31.16 | 32.09 ms | 76.41 |
+| 64 | 8.539 | 117.1 ms | 278.84 |
+| 256 | 2.226 | 449.3 ms | 1069.84 |
+
+The K = 64 → 256 slope is **4.120 µs per loop iteration** (4.217 over 16 → 64),
+reproducing the 4.11 measured for #312.
+
+- **Serial model** (`frame = wire + render`). 420 px of WS2812 is 12.60 ms, so
+  the non-wire part of the K = 0 frame is 0.34 ms — but the loop line
+  extrapolated to K = 0 gives an intercept of **−16 to −20 µs/px**, i.e. a
+  negative fixed render cost. Impossible. Loosening the wire time does not
+  save it: a non-negative intercept needs the serialized output to be under
+  3.7 ms/frame (8.8 µs/px), which WS2812 cannot do at any 420-px clock.
+- **Overlap model** (`frame = max(wire, render)`). Intercept **+10 to +15
+  µs/px** — a plausible per-pixel entry + `hsv()` cost — and it predicts
+  render ≈ 6.3 ms at K = 0, comfortably under the 12.94 ms wire, so K = 0 sits
+  at the wire cap exactly as observed. Consistent.
+
+So the PB renders the next frame while the current one clocks out. Practical
+consequences:
+
+- An oracle fps **clearly below the wire cap** (77.3 at 420 px WS2812; 12.94 ms
+  ≈ 12.60 ms of bits + latch) is **engine time**, directly comparable to a
+  Luxel device's `vm_us`. An fps **pinned at the cap** is output-bound and says
+  nothing about the engine — `rainbow` and an empty `render()` are both 77.30,
+  which is why simple patterns can never be used for an engine comparison here.
+- Luxel on the classic ESP32 does **not** overlap: its `frame_us` measures out
+  as `vm_us + pipe_us + out_us` (an empty render at 420 px: `frame_us` 15 250,
+  `vm_us` 725, `out_us` 14 440 — the 85 µs left over is `pipe_us`), so its fps is wire-inclusive and is *not* the column to
+  compare against the PB's fps.
