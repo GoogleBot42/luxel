@@ -1,5 +1,69 @@
 # Update log
 
+## 2026-09-07 — the frame pipeline: compose + outpipe on core 0 (#306)
+
+On the 64x64 HUB75 panel the frame period was `vm + out`: the render task on
+the AppCpu evaluated the pattern and then composed the panel's bitplanes
+itself, and that compose is a flat ~6 ms at 4096 px whatever the pattern
+does. It is now `max(vm, out)` — a new `output_task` on the ProCpu does the
+compose, the output pipeline and the driver write while the AppCpu is already
+rendering the next frame. Measured on the Seengreat panel at 4096 px, nine
+`/api/status` samples per row after a 6 s settle, medians:
+
+| pattern | fps before | fps after | out_fps | frame_us | vm_us | pipe_us | out_us |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| empty render | 99 | **125** | 123 | 5,531 | 5,478 | 7 | 3,396 |
+| rgb-only | 60 | **87** | 87 | 11,487 | 11,430 | 8 | 4,446 |
+| rainbow | 39 | **52** | 52 | 19,475 | 19,421 | 11 | 6,654 |
+| snake (1D) | 19 | **21** | 21 | 48,185 | 48,109 | 21 | 6,724 |
+| snake-2d | 12 | **13** | 13 | 77,478 | 77,395 | 36 | 6,791 |
+
+`firmware/src/pipeline.rs` holds both shapes: `DirectSink` (the render task
+owns the driver and runs every post-VM stage inline — unchanged, and what
+every strip board and single-core chip still uses) and `RenderSide` +
+`output_task` behind the new `pipelined` cfg (`hub75` + `multi_core`). ONE
+frame buffer travels between the cores in a `CriticalSectionRawMutex` cell
+announced by a `Signal`; the render task borrows it only for the copy and
+holds nothing between frames, so a busy output task costs a dropped frame —
+the best-effort contract `write_frame` already had with the DMA swap — never
+a blocked VM. The frame is copied rather than swapped because `Engine::frame`
+may legitimately return the PREVIOUS frame (a pattern under its own frame-rate
+cap), and 12 KB is ~50 µs against a 5-77 ms frame.
+
+**It costs no RAM.** A pipeline needs one more live frame than a serial loop,
+and at 4096 px that 12 KB is not there: the first cut of this change pushed
+`library/snake-2d.js` below `RUNTIME_FLOOR` and the panel refused to load a
+pattern that had worked. The shipped version pays for the travelling buffer by
+deleting the frame it replaces — `shared::PIXELS`, the `/api/pixels` snapshot,
+was a second full copy of the frame that had just been composed. On a
+pipelined build `pipeline::preview` reads the travelling buffer out of its
+slot and `set_pixels` is never called. Idle `heap_free` is identical to master
+row for row, and `pipe_us` fell from ~44 to ~11 µs with the memcpy gone.
+
+New `/api/status` `out_fps`: frames actually written to the wire. It differs
+from `fps` (frames *rendered*) exactly when the output stage is the slower
+half, and on a pipelined board `frame_us` is now the render period —
+`pipe_us`/`out_us` come from the other core and no longer nest inside it.
+
+**Not gated on `multi_core`.** Measured on the Athom at 420 px with the gate
+widened: the wire rate went 59 → 60 fps — a strip's `out_us` is WS2812 wire
+time, not CPU work — while the playground bundle download went 1.29 → 2.60 s
+and the fence's worst park wait 96 → 6,223 µs, because the ProCpu now spends
+the frame busy-waiting on SPI DMA. That is the #259 starvation the second-core
+split exists to prevent. `fps` read 123 on that row (the render task
+free-running at its pacing cap, producing twice the frames the wire can take),
+which is exactly the illusion `out_fps` was added to puncture. The strip win
+wants deferred-DMA overlap on the render core instead — Gitea #343.
+
+Verified on the panel: the five-pattern table before and after, a 736 KB asset
+push and an OTA under the 2D snake (`fence_timeouts` 0, 4,424/4,424 fences
+completed, no wedge), a playlist crossfade cycle, DDP live input in and out,
+`/api/pixels` served from the travelling buffer, `tools/render-bench.mjs` at
+4096 px (#259 bundle download 1.43-2.27 s, unregressed), and a 32-minute 2D
+snake soak with no missed poll, no reboot and a flat heap. `tools/ci.sh`
+green, all seven boards build with `image-check`, `tools/stack-check.sh` ok,
+QEMU flashmap + heap-regions pass (the takeover trio is the known-red #273).
+
 ## 2026-09-07 — renderFrame: one call per frame instead of one per pixel (#335)
 
 A pattern may now export `renderFrame()` instead of `render`/`render2D`/

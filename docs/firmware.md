@@ -457,8 +457,8 @@ the **average microseconds per rendered frame** over that window.
 - `vm_us` — `Engine::frame`: the VM evaluating the pattern, plus the outgoing
   engine's frame and the blend while a crossfade runs. Normally the dominant
   term, and the one a pattern's own cost shows up in.
-- `pipe_us` — the `/api/pixels` preview copy (`set_pixels`) plus
-  `apply_outpipe` (gamma, output palette, blur).
+- `pipe_us` — `apply_outpipe` (gamma, output palette, blur), plus the
+  `/api/pixels` preview copy (`set_pixels`) on boards that keep one.
 - `out_us` — `BoardOutput::write_frame`: the SPI/RMT or HUB75 driver. Rises
   with pixel count and falls with DMA; a large value here is a wire-format or
   driver problem, not a pattern problem.
@@ -466,6 +466,23 @@ the **average microseconds per rendered frame** over that window.
   `write_frame` returning. The stages nest, so `frame_us` ≈ the other three
   plus the small per-frame bookkeeping between them (delta/sync math, pin
   sync, vmerr drain).
+
+**On a pipelined board the stages no longer nest** (`pipelined` cfg — see
+"The frame pipeline" below). `frame_us` is the render PERIOD on core 1: the
+delta math, `Engine::frame`, the crossfade blend, and the hand-off copy —
+`vm_us` plus a few hundred microseconds, and no longer `vm + pipe + out`.
+`pipe_us` and `out_us` are published by `output_task` from core 0 and are
+averages over the frames IT processed, which is `out_fps`, not `fps`. Adding
+them to `frame_us` is meaningless there; the frame period is
+`max(frame_us, pipe_us + out_us)` instead.
+
+`out_fps` — frames actually written to the wire in the last second — is
+published only on a pipelined board, and is 0 elsewhere (every rendered frame
+is written by construction). It differs from `fps` exactly when the output
+stage is the slower half: at 4096 px an empty render renders 125 frames and
+the panel's rescan boundary paces 123 of them onto the glass. Read `fps` as
+"what the pattern's motion is computed at" and `out_fps` as "what the panel
+showed"; a large gap is wasted render work, not throughput.
 
 Only the **pattern** branch is instrumented. Frames driven by live input
 (DDP/E1.31) and idle loops with no engine are not timed, and the divisor is
@@ -604,6 +621,10 @@ main executor exactly as before):
 | ProCpu (core 0) | `esp_rtos::main`'s executor: WiFi driver task (pinned by esp-radio), network stack, the web pool, MQTT/DDP/E1.31/SNTP, playlist, resume, sensors, reboot; every flash write except the render task's own ad-hoc pattern persist |
 | AppCpu (core 1) | a second esp-rtos scheduler (`esp_rtos::start_second_core`) whose main thread runs a thread-mode embassy executor with exactly one task: `render_task` |
 
+On a **pipelined** board (`pipelined` cfg = `hub75` + `multi_core`) the
+ProCpu also runs `pipeline::output_task`, and `render_task` keeps only the
+VM — see "The frame pipeline" below.
+
 `core1::start` heap-allocates the AppCpu stack (20 KB, leaked; a
 static would come straight out of the leftover-DRAM main stack, see above),
 fills it with a pattern, starts the second core, and returns once that
@@ -625,6 +646,74 @@ esp-rtos scheduler (a cross-core software interrupt), which is how
 drivers are `Blocking` (SPI DMA polled, HUB75 circular DMA with no ISR),
 so no interrupt affinity moved; peripheral interrupts enabled from `main`
 stay on the ProCpu.
+
+### The frame pipeline (Gitea #306)
+
+Moving the render loop to core 1 left the AppCpu doing two unrelated jobs
+back to back: evaluate the pattern, then compose the frame for the wire. On
+the 64x64 HUB75 panel the second job is a flat ~6 ms at 4096 px whatever the
+pattern does — it walks every pixel and sets seven bitplane bits for it — so
+the frame period was `vm + out` on a core that had nothing else to do.
+
+`firmware/src/pipeline.rs` splits the two. The render task hands each
+finished RGB frame to an `output_task` on the ProCpu and goes straight back
+to the VM; core 0 composes frame N while core 1 renders N+1, and the period
+becomes `max(vm, out)`. At 4096 px on the Seengreat panel: rainbow 39 → 52
+fps, rgb-only 60 → 87, empty render 99 → 125 (123 of them reaching the
+panel), 1D snake 19 → 21, 2D snake 12 → 13.
+
+| stays on core 1 | moves to core 0 |
+|---|---|
+| `Engine::frame`, the crossfade blend, the pattern clock, message drain, playlist pre-flight, `vm_us`/`frame_us` | `apply_outpipe` + its gamma/palette caches, the brightness read, `BoardOutput::write_frame`, the driver's `resize`, `pipe_us`/`out_us`/`out_fps` |
+
+- **One buffer, borrowed not owned.** A single frame buffer travels in a
+  `BlockingMutex<CriticalSectionRawMutex>` cell announced by a `Signal`. The
+  render task takes it, fills it, publishes it and holds nothing between
+  frames. It never blocks: if the output task still has the buffer when the
+  next frame is ready, that frame is dropped — the same best-effort contract
+  `Hub75Output::write_frame` already had with the DMA swap. A frame published
+  over an unclaimed one replaces it; newest wins.
+- **The frame is copied, not swapped.** `Engine::frame` may legitimately
+  return the PREVIOUS frame (a pattern under its own `frameRate` cap), so
+  alternating the engine's own pixel buffer would show a stale frame on
+  those. A 12 KB memcpy at 4096 px is ~50 µs against a 5–77 ms frame.
+- **It costs no RAM.** A pipeline needs one more live frame than a serial
+  loop does, and at 4096 px that 12 KB is not there to spare (the 2D snake
+  sits ~8 KB above `RUNTIME_FLOOR`; the first cut of this change made it fail
+  the floor check outright). It is paid for by deleting the frame it
+  replaces: `shared::PIXELS`, the snapshot `GET /api/pixels` serves, was a
+  second full copy of the frame that had just been composed. On a pipelined
+  build the travelling buffer IS that snapshot — `pipeline::preview` reads it
+  out of the slot whenever it is parked there — and `set_pixels` is never
+  called. Measured `heap_free` is identical to the pre-pipeline build row for
+  row, and `pipe_us` fell from ~44 to ~11 µs with the memcpy gone.
+- **The fence needs nothing new here**, but it did need generalizing: it now
+  waits for an in-flight output DMA transfer whichever core it parks, not
+  only the AppCpu, because which core runs the driver is a build-time
+  question now. Nothing in the pipeline touches flash, and its two critical
+  sections are a handful of pointer moves, so a park request lands between
+  them at worst; the output task waits on a `Signal`, never on a spin.
+
+**Why strips are NOT pipelined.** The gate is `hub75`, not `multi_core`, and
+that is a measurement, not caution. A strip's `out_us` is *wire* time, not
+CPU work: `write_frame` busy-waits on an SPI DMA transfer whose length the
+WS2812/SK9822 protocol fixes. Measured on the Athom at 420 px with the gate
+widened to `multi_core`:
+
+| | wire rate (`out_fps`) | bundle download | worst fence park wait |
+|---|---|---|---|
+| serial (shipped) | 59 fps | 1.29 s | 96 µs |
+| pipelined | **60 fps** | **2.60 s** | **6,223 µs** |
+
+`fps` reads 123 on the pipelined row — the render task free-running at its
+pacing cap, producing twice the frames the wire can take — which is exactly
+the illusion `out_fps` exists to puncture. The +1 fps buys a 2× slower web
+server, because the ProCpu now spends the frame busy-waiting on DMA: the
+Gitea #259 starvation the second-core split was built to fix. The win a strip
+wants is to overlap the DMA with the VM on the SAME core (start the transfer,
+wait for it at the top of the next `write_frame`, the way `Hub75Output`
+already handles its swap) — no second core, no extra RAM, and it works on the
+single-core chips too. That is Gitea #343.
 
 **Three hard-won rules for the park, all black-boxed on the Athom
 (2026-09-05)** — each one was a hard hang (no panic, no reboot) within a

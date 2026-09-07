@@ -575,6 +575,35 @@ byte-identical to master on both the default board and the panel
 (25,484 B / 46,572 B), and `tools/ci.sh` is green.
 
 
+2026-09-06, **the frame pipeline** (Gitea #306 — the HUB75 compose and the
+output pipeline move to an output task on core 0; docs/firmware.md "The
+frame pipeline"). It is `hub75`-gated, so only the panel board pays for the
+second task; everywhere else the change is the sink refactor that made room
+for it (one `PipeState` struct instead of three loose locals in the render
+task), which is worth a few hundred bytes back. Devshell builds, same
+`creds.env` both sides, `origin/master` 4ccbcde vs the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 959,040 | 958,192 | −848 | 90,384 B (8.62 %) |
+| `board-pixelblaze-v3` | 1,007,072 | 1,006,368 | −704 | 42,208 B (4.03 %) |
+| `board-athom-music` | 1,006,960 | 1,006,400 | −560 | 42,176 B (4.02 %) |
+| `board-esp32-generic` | 1,006,848 | 1,006,336 | −512 | 42,240 B (4.03 %) |
+| `board-s3-devkit` | 953,440 | 953,008 | −432 | 95,568 B (9.11 %) |
+| `board-seengreat-hub75` | 945,840 | 947,280 | **+1,440** | 101,296 B (9.66 %) |
+| `board-c6-devkit` (not shipped) | 1,025,216 | 1,024,848 | −368 | 23,728 B (2.26 %) |
+
+**RAM cost: zero, deliberately.** A pipeline needs one more live frame than
+a serial loop, and 12 KB at 4096 px is not there to spare — the first cut
+of #306 cost exactly that and pushed `library/snake-2d.js` at 4096 px below
+`RUNTIME_FLOOR`, so the panel refused to load it. The shipped version pays
+for the travelling buffer by deleting `shared::PIXELS`, the `/api/pixels`
+snapshot, which was a second copy of the frame that had just been composed:
+`pipeline::preview` reads the travelling buffer instead. Measured idle
+`heap_free` on the panel is identical to master row for row (51,704 /
+51,652 / 51,640 / 49,180 / 28,928 B across the five bench patterns), and
+the AppCpu stack high-water is unchanged at 10,464 B of 20,480.
+
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
 **3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).
