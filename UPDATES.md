@@ -1,5 +1,95 @@
 # Update log
 
+## 2026-09-07 — Recalibrating "too large for this device": the outgoing engine's heap is part of the budget (#287)
+
+Jeremy: *"Many patterns which do run have warnings that they won't."* Two
+independent errors in the capacity model, both pushing the same way.
+
+**1. The load base was wrong.** `budget::load_headroom` was documented as
+"the firmware builds the new engine while the OLD one is still resident, so
+`heap_free` at status time really is the incoming pattern's headroom." That
+has not been true since v0.1.34: every load path — `Msg::Code`, a
+non-crossfading `Msg::Library`, both `rebuild()` callers — opens with
+`engine = None; drop_prev(&mut prev)`, precisely so peak heap lands where the
+most is free. So the incoming pattern was being charged for the outgoing one.
+The effect compounds: the fatter the resident pattern, the lower `heap_free`,
+the louder the false alarm. At 300 px with 25 KB free and a 30 KB pattern
+loaded, **all 305 gallery patterns modelled "over"** — against a real base of
+55 KB, where 3 do.
+
+`/api/status` now carries **`engine_heap`**: what the resident engine costs,
+measured by the firmware across each load (`note_engine_heap`, one
+`HEAP.free()` bracket per load path; `Msg::Code` adds back the still-resident
+envelope's `len()`). The budget is `budget::load_base(heap_free,
+engine_heap)`. A crossfade keeps its outgoing engine alive on purpose and so
+records nothing. `engine_heap` 0 — pre-#287 firmware, the mirror without
+`--engine-heap` — falls back to `heap_free` alone, which is the old
+conservative behaviour, never an optimistic one.
+
+**2. The wrong number was being compared.** The model reported a single
+`peak` — the transient high-water of the load window, envelope included — and
+tested it against the *floor* headroom. But the firmware drops the envelope
+BEFORE it builds the engine (`drop(env)` sits above `engine_or_vmerr` for
+exactly this reason), so `try_budgeted_engine`'s floor check never sees it.
+The two tests the device actually applies are now modelled separately:
+`resident` (what is left once the load settles) against the floor headroom,
+and `peak` against the whole load base — the decode's fallible allocations
+have to fit somewhere. Peak ran up to **2.8× resident** on the gallery, all of
+it charged against the wrong budget.
+
+**Both paths are modelled, and they are no longer the same price.** A live
+push (`POST /api/code`, what the editor does on every recompile) holds the
+whole LXP envelope across a *copying* `deserialize_lean`, with the pattern
+store's 4 KiB write staging alive in the same window. A stored pattern
+activated by id decodes with `deserialize_lean_static` straight off the flash
+mapping — code and constant pool borrowed, costing no heap at all (#276/#300).
+`lx_device_model` now replays both and returns `resident`/`peak`/`budget` for
+each plus a `fit` verdict. The banner shows the LIVE verdict deliberately: it
+is the worse path and the one about to be taken. When only the live push
+fails it says so and names the stored figure, because "save it to the device's
+library" is then a real fix rather than "rewrite your pattern".
+
+Measured, 300 px, a device reporting 25 KB free with a 30 KB pattern resident
+(counting allocator, whole gallery):
+
+| pattern | envelope | live peak | live resident | stored resident | old verdict | new |
+|---|---:|---:|---:|---:|---|---|
+| Chasing Rainbows & HSLuv | 14,228 | 26,070 | 18,407 | 14,699 | over | **fits** |
+| Fireworks Finale | 17,551 | 29,335 | 21,941 | 17,877 | over | **fits** |
+| Utility: Palettes | 16,700 | 30,444 | 13,580 | 8,228 | over | **fits** |
+| 2D Fireworks Fade | 30,989 | 48,242 | 29,154 | 20,710 | over | **fits** |
+| Infinite Snake v2 | 21,037 | 34,307 | 32,454 | 27,666 | over | **tight** |
+| Main Stage | 45,746 | 70,987 | 34,535 | 22,323 | over | **over** (the 45 KB upload, not the pattern — banner points at the library) |
+
+Across the gallery at that operating point the old model flagged **all 305**
+(its headroom was 4,520 B); the new one flags **3**. On the Athom at 60 px /
+104,832 B idle, 0 of 305 warn either way — it never had the problem, which is
+why this went unnoticed until the panel. On the S3 panel at 4096 px /
+51,704 B idle, 9 → 4, and those four are real rejections: at 4096 px an
+array of `pixelCount` is 32,800 B on its own.
+
+`luxel_core::budget` now owns the verdict itself, not just the constants:
+`load_base`, `load_headroom`, `TIGHT_PERCENT` (the 85 % band, previously a
+magic number in App.svelte) and `fit()`. Firmware, wasm model and UI all
+import it, so the prediction still cannot drift from the device that enforces
+it.
+
+Verification: 6 unit tests in `budget.rs` carrying the measured numbers above;
+`tools/ci.sh` green; `tools/stack-check.sh` `.stack` 24,828 B, no function
+over budget, image +368 B; device-e2e's four capacity bands still pass, plus
+two new checks driving a third mirror that reports `--heap-free 30720
+--engine-heap 30720` (the pattern the starved mirror correctly rejects fits
+there, and something bigger still warns). Driven in real chromium against
+mirrors with and without `engine_heap`: "Chasing Rainbows & HSLuv" warns on
+the uncredited one and is clean on the credited one; "Main Stage" warns with
+the library hint. Screenshots taken.
+
+**Not verified on hardware** — no device grant this session. `engine_heap`'s
+on-device behaviour (populated from boot, `heap_free + engine_heap` roughly
+invariant across a swap, smaller for a mapped library activation than a live
+push, refreshed by a pixel-count change, untouched by a crossfade) is Gitea
+**#363**.
+
 ## 2026-09-07 — Three library patterns that only broke in the 16x16 preview (#285)
 
 Jeremy reported three patterns rendering wrong in the browser but fine on

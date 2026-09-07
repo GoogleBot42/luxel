@@ -1061,6 +1061,62 @@ try {
     await sleep(1200);
     check("capacity: warning clears when the pattern shrinks", (await level()) === "");
     await page.screenshot({ path: `${shotDir}/device-e2e-capacity-clear.png` });
+
+    // ---- the outgoing engine's heap counts (Gitea #287) ----
+    // Same 30 KB of free heap, but this mirror also reports a 30 KB pattern
+    // RESIDENT. The firmware drops that engine before it decodes an incoming
+    // one, so the real load base is 60 KB, not 30 KB — and ARRAY_OVER, which
+    // the starved mirror above correctly calls "too large", fits here. This
+    // is the regression Jeremy reported: with a fat pattern loaded, heap_free
+    // reads low and the editor warned about patterns that load fine.
+    const LOADED_PORT = TIGHT_PORT + 1;
+    const LOADED = `http://127.0.0.1:${LOADED_PORT}`;
+    const loadedDev = spawn(
+      "../target/debug/luxel",
+      [
+        "serve",
+        "--port",
+        String(LOADED_PORT),
+        "--pixels",
+        "120",
+        "--heap-free",
+        "30720",
+        "--engine-heap",
+        "30720",
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      loadedDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      loadedDev.on("exit", () => reject(new Error("loaded mirror died")));
+      setTimeout(() => reject(new Error("loaded mirror start timeout")), 30000);
+    });
+    process.on("exit", () => loadedDev.kill());
+    try {
+      check(
+        "capacity: mirror reports engine_heap",
+        (await fetch(`${LOADED}/api/status`).then((r) => r.json())).engine_heap === 30720,
+      );
+      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(LOADED)}`, {
+        waitUntil: "networkidle0",
+      });
+      await page.waitForSelector(".cm-content");
+      await sleep(1500);
+      await setEditor(page, ARRAY_OVER);
+      await sleep(1200);
+      check(
+        "capacity: the outgoing engine's heap is credited to the incoming pattern",
+        (await level()) === "",
+        await level(),
+      );
+      await page.screenshot({ path: `${shotDir}/device-e2e-capacity-engine-heap.png` });
+      // ...and the same device still warns about something genuinely too big.
+      await setEditor(page, arrayPattern(5200));
+      await sleep(1200);
+      check("capacity: still warns past the credited headroom", (await level()) === "over");
+    } finally {
+      loadedDev.kill();
+    }
   } finally {
     tightDev.kill();
   }

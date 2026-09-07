@@ -877,6 +877,23 @@ fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engi
     Ok(e)
 }
 
+/// Record what the engine just built costs the heap, for `/api/status`
+/// `engine_heap` (Gitea #287). `free_before` is free heap sampled with NO
+/// engine resident — every load path drops the outgoing engine before it
+/// decodes — so the difference is the whole resident cost of the new
+/// pattern: its `Program` tables, any owned code words, the VM globals, the
+/// pixel buffer and whatever the array arena settled at.
+///
+/// The playground adds this back to `heap_free` to predict the NEXT swap:
+/// the heap the incoming pattern is measured against is the heap AFTER this
+/// one is dropped (`luxel_core::budget::load_base`). Crossfades don't record
+/// (the outgoing engine is still alive by design), so the value there is
+/// simply the last clean measurement.
+fn note_engine_heap(free_before: usize) {
+    let now = esp_alloc::HEAP.free() as usize;
+    shared::ENGINE_HEAP.store(free_before.saturating_sub(now) as u32, Ordering::Relaxed);
+}
+
 /// Drop the crossfade's outgoing engine AND release the arena pin that kept
 /// its extent from being moved or freed while it was still executing from it
 /// (patterns.rs' pin set, Gitea #260). Order matters — the engine goes
@@ -962,6 +979,9 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // _static: PATTERN_BC is rodata the bootloader already maps, so the
     // built-in default's code and constant pool cost NO heap at all — the
     // Program is its header tables (Gitea #260).
+    // Bracket the first build too, so `/api/status` reports `engine_heap`
+    // from boot rather than only after the first swap (Gitea #287).
+    let boot_free = esp_alloc::HEAP.free() as usize;
     let mut engine = match luxel_core::bytecode::deserialize_lean_static(PATTERN_BC) {
         Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
         Err(e) => {
@@ -969,6 +989,9 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             None
         }
     };
+    if engine.is_some() {
+        note_engine_heap(boot_free);
+    }
     // The boot default is `&'static` rodata: read-back serves it directly,
     // no heap and no flash write. Every later swap repoints this at flash.
     shared::set_current_default(PATTERN, PATTERN_BC);
@@ -986,7 +1009,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // Only the flash-controller fallbacks (a transient Vec) copy.
     let rebuild = || {
         let count = PIXEL_COUNT.load(Ordering::Relaxed);
-        match shared::current_bc() {
+        // Both callers drop the engine first, so this is free heap with none
+        // resident — the bracket `engine_heap` needs, and the only place it
+        // gets refreshed when the PIXEL COUNT changes (Gitea #287).
+        let free_before = esp_alloc::HEAP.free() as usize;
+        let built = (|| match shared::current_bc() {
             shared::BcLoc::Default(b) => luxel_core::bytecode::deserialize_lean_static(b)
                 .ok()
                 .and_then(|p| try_budgeted_engine(p, count).ok()),
@@ -1017,7 +1044,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 try_budgeted_engine(p, count).ok()
             }
             shared::BcLoc::Gone => None,
+        })();
+        if built.is_some() {
+            note_engine_heap(free_before);
         }
+        built
     };
     if let Some(eng) = engine.as_ref() {
         publish(&CONTROLS_JSON, jsonview::controls_json(eng));
@@ -1068,6 +1099,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // lands here, where the most is free.
                     engine = None;
                     drop_prev(&mut prev);
+                    // Free heap with no engine resident — the upload envelope
+                    // is the only thing alive here and it is transient, so add
+                    // it back. This is the base the NEXT load will start from,
+                    // and what `engine_heap` is measured against (Gitea #287).
+                    let free_before = esp_alloc::HEAP.free() as usize + env.len();
                     // The Program owns its bytes, so once it's decoded and the
                     // envelope is persisted to the flash read-back slot, the
                     // ~envelope-sized buffer can be DROPPED before the engine
@@ -1097,6 +1133,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                             if let Some(e) = engine_or_vmerr(p) {
                                 publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                                 engine = Some(e);
+                                note_engine_heap(free_before);
                                 // this Program owns its words (the envelope
                                 // was a Vec) — an empty id clears the pin
                                 patterns::pin_running(&id);
@@ -1209,6 +1246,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                         engine = None;
                     }
                     drop_prev(&mut prev);
+                    // Only a non-crossfading swap has nothing resident to
+                    // subtract; a fade keeps the outgoing engine alive on
+                    // purpose, so it leaves the last clean measurement alone.
+                    let free_before = (ms == 0 && engine.is_none())
+                        .then(|| esp_alloc::HEAP.free() as usize);
                     // Pin BEFORE reading the mapping: the Program borrows
                     // these bytes in place, and a save on the other core
                     // compacts the arena without asking (Gitea #260). The
@@ -1256,6 +1298,9 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                                     blend_ms = ms;
                                 }
                                 engine = Some(e);
+                                if let Some(free_before) = free_before {
+                                    note_engine_heap(free_before);
+                                }
                                 patterns::pin_running(&id);
                                 set_vmerr(None);
                                 vmerr_seen = None;

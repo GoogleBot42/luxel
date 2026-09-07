@@ -206,6 +206,13 @@ pub extern "C" fn lx_bytecode_ptr(h: i32) -> *const u8 {
     with_engine(h, |s| s.bc.as_ptr()).unwrap_or(std::ptr::null())
 }
 
+/// The page-sized staging buffer `firmware/src/patterns.rs::write_raw`
+/// allocates for every flash write burst. A live push runs it inside
+/// `persist_current_pattern`, while the upload envelope and the freshly
+/// decoded program are both still resident — so it belongs to the modelled
+/// peak. A stored-pattern activation writes nothing at all (the wear rule).
+const FLASH_STAGING: usize = 4096;
+
 /// A real `n`-byte heap allocation the optimiser cannot elide — the
 /// counting allocator only sees bytes that are genuinely requested.
 #[inline(never)]
@@ -217,27 +224,55 @@ fn alloc_bytes(n: usize) -> Vec<u8> {
 
 /// Model what an LXBC blob would cost the connected device's heap, by
 /// replaying the firmware's own pattern-load sequence under the counting
-/// allocator (Gitea #15).
+/// allocator (Gitea #15, recalibrated for Gitea #287).
 ///
-/// The sequence mirrors `firmware/src/main.rs`'s `Msg::Code` arm exactly:
-/// the whole LXP envelope (name + SOURCE + bytecode) stays resident while
-/// `deserialize_lean` runs — that overlap is the real peak for a big pattern,
-/// not the engine — then it is dropped; then `try_budgeted_engine` builds the
-/// engine with the array budget the device would derive from `heap_free`;
-/// then frames render (the array arena settles in the first few). The peak
-/// live bytes across that whole window is what the device's post-load floor
-/// check sees.
+/// Two lifecycles are replayed, because the firmware has two and they no
+/// longer cost the same thing (Gitea #276/#300/#330):
+///
+/// * **live** — `POST /api/code` → `Msg::Code` (`firmware/src/main.rs`). The
+///   whole LXP envelope (name + SOURCE + bytecode) stays resident while
+///   `deserialize_lean` COPIES the code and constant pool into an owned
+///   `Words::Owned`, and `persist_current_pattern` runs its 4 KiB flash
+///   write-staging buffer inside that same window. Then the envelope and the
+///   staging go, and only then is the engine built.
+/// * **stored** — a pattern in the device's library, activated by id
+///   (`Msg::Library`). Nothing travels but the id: the program is decoded
+///   with `deserialize_lean_static` straight off the flash mapping, so its
+///   code and constant pool are BORROWED and cost no heap at all. No
+///   envelope, no blob Vec, no write staging.
+///
+/// The editor pushes the LIVE path on every recompile, so that is the
+/// verdict the UI shows; the stored numbers ride along so it can say when
+/// saving to the device library would fit something a live push won't.
+///
+/// For each lifecycle the model reports two numbers, because the device
+/// applies two different tests:
+///
+/// * `resident` — what the pattern still occupies once the load settles.
+///   `try_budgeted_engine`'s floor check measures free heap right after the
+///   engine builds, with the envelope already dropped, so *this* is the
+///   number that decides acceptance. (Measured after three frames: the array
+///   arena settles in the first few.)
+/// * `peak` — the transient high-water of the load window. It never reaches
+///   the floor check, but the decode's fallible allocations have to fit in
+///   free heap, so it is compared against the whole load base.
 ///
 /// `envelope_len` is the byte length of the LXP1 envelope that will actually
 /// be uploaded (`web/src/lib/device.ts` `lxpEnvelope`). Pass 0 and only the
 /// bytecode is assumed resident.
 ///
-/// `heap_free` is the device's `/api/status` `heap_free` — free heap while
-/// the CURRENT pattern is still loaded, which is the right baseline because
-/// the firmware builds the new engine before releasing the old one.
+/// `heap_free` is the device's `/api/status` `heap_free` and `engine_heap`
+/// its `engine_heap` — what the CURRENTLY loaded pattern's engine costs, 0
+/// on firmware that doesn't report it. The firmware drops the outgoing
+/// engine before decoding the incoming one, so the load starts from
+/// `budget::load_base(heap_free, engine_heap)`; charging the incoming
+/// pattern for the outgoing one is what made the old prediction cry wolf
+/// (Gitea #287).
 ///
 /// Leaves JSON in the response buffer and returns 0:
-/// `{"peak":B,"budget":B,"headroom":B,"floor":B,"vmerr":string|null}`
+/// `{"resident":B,"peak":B,"budget":B,"storedResident":B,"storedPeak":B,`
+/// `"storedBudget":B,"base":B,"headroom":B,"floor":B,"fit":"fits|tight|over",`
+/// `"storedFit":…,"vmerr":string|null,"storedVmerr":string|null}`
 /// Returns -1 (with `{"message":…}`) if the blob will not even decode —
 /// which is itself a device-relevant answer.
 ///
@@ -255,13 +290,14 @@ pub unsafe extern "C" fn lx_device_model(
     envelope_len: usize,
     pixel_count: u32,
     heap_free: u32,
+    engine_heap: u32,
 ) -> i32 {
     use luxel_core::budget;
 
     let blob = std::slice::from_raw_parts(blob_ptr, blob_len);
-    let heap_free = heap_free as usize;
-    let arena = budget::array_budget(heap_free);
+    let base_free = budget::load_base(heap_free as usize, engine_heap as usize);
 
+    // --- the live push (`Msg::Code`) -------------------------------------
     // Take the baseline BEFORE anything for this pattern is allocated, then
     // arm the peak tracker. Single-threaded wasm and a synchronous call, so
     // nothing else can allocate inside the window. (`blob` itself was
@@ -270,9 +306,10 @@ pub unsafe extern "C" fn lx_device_model(
     let base = LIVE.load(Ordering::Relaxed);
     PEAK.store(base, Ordering::Relaxed);
 
-    let vmerr = {
+    let (live_resident, live_peak, live_budget, live_vmerr) = {
         // Stand-in for the uploaded envelope the device is still holding.
         let env = alloc_bytes(envelope_len.max(blob_len));
+        let after_env = LIVE.load(Ordering::Relaxed);
         let prog = match luxel_core::bytecode::deserialize_lean(blob) {
             Ok(p) => p,
             Err(e) => {
@@ -280,7 +317,16 @@ pub unsafe extern "C" fn lx_device_model(
                 return -1;
             }
         };
+        // The program is resident from here on; `persist_current_pattern`
+        // runs its page-sized flash staging buffer while the envelope is
+        // still alive (`patterns::write_raw`), which is the true high-water.
+        let prog_bytes = LIVE.load(Ordering::Relaxed) - after_env;
+        let staging = alloc_bytes(FLASH_STAGING);
+        drop(staging);
         drop(env);
+        // The device reads `HEAP.free()` inside `budgeted_engine`, i.e. with
+        // the program decoded and the envelope gone.
+        let arena = budget::array_budget(base_free.saturating_sub(prog_bytes));
         let mut eng =
             Engine::from_program_budgeted_at(prog, pixel_count, 1, arena, default_wall_clock());
         // Take the INIT error before rendering: top-level `array(...)` calls
@@ -290,28 +336,90 @@ pub unsafe extern "C" fn lx_device_model(
         for _ in 0..3 {
             let _ = eng.frame(Fx::from_f64(16.7));
         }
-        init_err
+        let resident = LIVE.load(Ordering::Relaxed) - base;
+        let peak = PEAK.load(Ordering::Relaxed) - base;
+        let vmerr = init_err
             .or_else(|| eng.take_error())
             .map(|e| e.message)
             // vm.rs's byte-budget message; see the doc comment above.
-            .filter(|m| m.contains("pattern too large for this device"))
+            .filter(|m| m.contains("pattern too large for this device"));
+        (resident, peak, arena, vmerr)
     };
 
-    let peak = PEAK.load(Ordering::Relaxed).saturating_sub(base);
-    set_response(format!(
-        "{{\"peak\":{},\"budget\":{},\"headroom\":{},\"floor\":{},\"vmerr\":{}}}",
-        peak,
-        arena,
-        budget::load_headroom(heap_free),
-        budget::RUNTIME_FLOOR,
-        match &vmerr {
-            Some(m) => format!("\"{}\"", json_escape(m)),
-            None => String::from("null"),
+    // --- the stored pattern (`Msg::Library`) -----------------------------
+    // The blob lives in the flash mapping, so its bytes are not heap at all
+    // and `deserialize_lean_static` borrows the code and constant pool. A
+    // 4-aligned copy stands in for the mapping; it is allocated OUTSIDE the
+    // measured window and freed after, exactly as `heapstat.rs` does it.
+    let mut mapping: Vec<u32> = vec![0u32; blob_len.div_ceil(4)];
+    let flash: &'static [u8] = {
+        let p = mapping.as_mut_ptr() as *mut u8;
+        std::ptr::copy_nonoverlapping(blob.as_ptr(), p, blob_len);
+        std::slice::from_raw_parts(p as *const u8, blob_len)
+    };
+    let base = LIVE.load(Ordering::Relaxed);
+    PEAK.store(base, Ordering::Relaxed);
+    let (stored_resident, stored_peak, stored_budget, stored_vmerr) = {
+        // Cannot fail: the live path already decoded this blob.
+        let prog = match luxel_core::bytecode::deserialize_lean_static(flash) {
+            Ok(p) => p,
+            Err(e) => {
+                set_response(format!("{{\"message\":\"{}\"}}", json_escape(&e.to_string())));
+                return -1;
+            }
+        };
+        let prog_bytes = LIVE.load(Ordering::Relaxed) - base;
+        let arena = budget::array_budget(base_free.saturating_sub(prog_bytes));
+        let mut eng =
+            Engine::from_program_budgeted_at(prog, pixel_count, 1, arena, default_wall_clock());
+        let init_err = eng.take_error();
+        for _ in 0..3 {
+            let _ = eng.frame(Fx::from_f64(16.7));
         }
+        let resident = LIVE.load(Ordering::Relaxed) - base;
+        let peak = PEAK.load(Ordering::Relaxed) - base;
+        let vmerr = init_err
+            .or_else(|| eng.take_error())
+            .map(|e| e.message)
+            .filter(|m| m.contains("pattern too large for this device"));
+        (resident, peak, arena, vmerr)
+    };
+    drop(mapping);
+
+    let quoted = |m: &Option<String>| match m {
+        Some(m) => format!("\"{}\"", json_escape(m)),
+        None => String::from("null"),
+    };
+    let verdict = |resident: usize, peak: usize, vmerr: &Option<String>| {
+        // The array arena running out is its own rejection, upstream of the
+        // floor check — the engine never finishes building.
+        if vmerr.is_some() {
+            budget::Fit::Over
+        } else {
+            budget::fit(resident, peak, base_free)
+        }
+    };
+    set_response(format!(
+        "{{\"resident\":{},\"peak\":{},\"budget\":{},\
+          \"storedResident\":{},\"storedPeak\":{},\"storedBudget\":{},\
+          \"base\":{},\"headroom\":{},\"floor\":{},\
+          \"fit\":\"{}\",\"storedFit\":\"{}\",\"vmerr\":{},\"storedVmerr\":{}}}",
+        live_resident,
+        live_peak,
+        live_budget,
+        stored_resident,
+        stored_peak,
+        stored_budget,
+        base_free,
+        budget::load_headroom(base_free),
+        budget::RUNTIME_FLOOR,
+        verdict(live_resident, live_peak, &live_vmerr).as_str(),
+        verdict(stored_resident, stored_peak, &stored_vmerr).as_str(),
+        quoted(&live_vmerr),
+        quoted(&stored_vmerr),
     ));
     0
 }
-
 #[no_mangle]
 pub extern "C" fn lx_free(h: i32) {
     if h < 0 {

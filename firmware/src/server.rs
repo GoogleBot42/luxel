@@ -365,6 +365,12 @@ fn status_json() -> String {
     push_piece(&mut out, version);
     push_piece(&mut out, "\",\"heap_free\":");
     push_u32(&mut out, heap as u32);
+    // What the CURRENTLY loaded pattern costs. The playground adds it back
+    // to `heap_free` to predict the next swap, because the render task drops
+    // the outgoing engine before decoding the incoming one — see
+    // `luxel_core::budget::load_base` (Gitea #287).
+    push_piece(&mut out, ",\"engine_heap\":");
+    push_u32(&mut out, crate::shared::ENGINE_HEAP.load(Ordering::Relaxed));
     // Dual-core boards (core1.rs): AppCpu (render core) stack high-water
     // `[used, total]`, plus the flash fence's park-ack timeouts (nonzero =
     // investigate) and its longest park wait in µs. null on single-core.

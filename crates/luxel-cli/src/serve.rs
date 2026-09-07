@@ -162,6 +162,13 @@ struct State {
     /// device with N bytes free, which is how the capacity warning is
     /// exercised without hardware (Gitea #15).
     heap_free: AtomicU32,
+    /// What `/api/status` reports as `engine_heap` — the heap the currently
+    /// loaded pattern's engine occupies on a real device, which the editor
+    /// adds back to `heap_free` because the firmware drops the outgoing
+    /// engine before decoding the incoming one (Gitea #287). 0 = unknown, as
+    /// on pre-#287 firmware. `--engine-heap N` impersonates a device with an
+    /// N-byte resident pattern.
+    engine_heap: AtomicU32,
     inbox: Mutex<Vec<Msg>>,
     pixels: Mutex<Vec<u8>>,
     fps: AtomicU32,
@@ -743,12 +750,13 @@ fn status_json(state: &State) -> String {
     // max_pixels mirrors the firmware's per-board cap field (#74); the
     // mirror is a strip device, so it reports the strip cap.
     format!(
-        "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"live\":{},\"vmerr\":{}}}",
+        "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
         fps,
         state.pixel_count.load(Ordering::Relaxed),
         MAX_PIXELS,
         env!("CARGO_PKG_VERSION"),
         state.heap_free.load(Ordering::Relaxed),
+        state.engine_heap.load(Ordering::Relaxed),
         live,
         vmerr
     )
@@ -1926,6 +1934,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut port: u16 = 8720;
     // 0 = "this host has no meaningful free-heap number"; see State::heap_free
     let mut heap_free: u32 = 0;
+    // 0 = "this firmware doesn't report it"; see State::engine_heap
+    let mut engine_heap: u32 = 0;
     // Luxel-to-Luxel sync transport (overridable so e2e can run two
     // mirrors over loopback; the firmware broadcasts on the LAN)
     let mut sync_target = String::from("255.255.255.255");
@@ -1948,6 +1958,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 Ok(n) => heap_free = n,
                 Err(_) => return super::usage(),
             },
+            ("--engine-heap", Some(v)) => match v.parse() {
+                Ok(n) => engine_heap = n,
+                Err(_) => return super::usage(),
+            },
             ("--sync-target", Some(v)) => sync_target = v.clone(),
             ("--sync-port", Some(v)) => match v.parse() {
                 Ok(n) => sync_port = n,
@@ -1964,6 +1978,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let state = Arc::new(State {
         pixel_count: AtomicU32::new(pixels),
         heap_free: AtomicU32::new(heap_free),
+        engine_heap: AtomicU32::new(engine_heap),
         inbox: Mutex::new(Vec::new()),
         pixels: Mutex::new(Vec::new()),
         fps: AtomicU32::new(0),
