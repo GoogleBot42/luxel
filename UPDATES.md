@@ -1,5 +1,46 @@
 # Update log
 
+## 2026-09-07 — a pattern that shows you the displayed frame rate (`library/frame-rate-test.js`)
+
+`/api/status` reports the rate the engine *composes* at. On the HUB75 panel
+that is the 8 ms pacing cap — 125 fps — while the panel rescans at ~115, so
+about nine composed frames a second are overwritten before anyone sees them.
+`out_fps` does not catch it (it counts `write_frame` calls, #378) and
+`rescan_hz` is the driver counting itself. **Frame Rate Test** is the
+independent instrument: the panel tells you its own displayed rate.
+
+A dropped frame is invisible in any single composed frame — every frame is a
+complete image and the missing one simply never existed for the eye — so the
+signal is temporal. The whole field flips RED/GREEN once per `renderFrame`
+call (a counter, never the clock). Displayed one-for-one that fuses to steady
+yellow; every frame the panel misses puts two same-colour frames side by side,
+so the field shimmers at the beat frequency `|compose − displayed|`, and
+**displayed fps = compose fps − stumbles per second**. The bottom 1/16 blinks
+blue at `|composeFPS − "DisplayedFPS" slider|` Hz so the beat can be read by
+matching two rates rather than counting one; rows 48–55 are the pattern's own
+compose-fps bar (EMA of `1000/delta`, 2 fps/column, ticks at 60/77/115/125)
+and rows 56–59 repeat the beat as a left/right parity stutter. With a 240 fps
+phone video the reading is exact: each displayed frame occupies ~2 camera
+frames, so the runs that last ~4 are the stumbles.
+
+Live on the panel (master `b08bbd4`, 30 MHz, 4096 px, brightness 31): `fps`
+125, `out_fps` 125, `rescan_hz` 114–116, `vm_us` **478–498** — half a
+millisecond of an 8 ms budget, since the frame is four bulk fills. The
+pattern's own `composeFPS` reads 123.9–124.3 and `beatHz` 8.9–9.3 at the
+default slider, i.e. ~9 stumbles a second against ~124 composed: the panel is
+displaying ~115, which is what `rescan_hz` says independently.
+
+**`setFrameRate` is quantized to 125/n on the firmware**, measured here for
+the first time. The render loop paces to one iteration per 8 ms and the engine
+resets its accumulator when a capped frame fires (no remainder carry), so a
+cap can only land on a tick boundary. Through the pattern's `ComposeCap`
+slider: 0 → 123.9, 125 → 124.1, **115 → 61.5**, **100 → 61.6**, 62.5 → 42.7,
+60 → 41.5. Asking for 115 gets you 62.5. That is why the strobe runs uncapped
+and measures a beat instead of tuning to a stroboscopic null — and it is also
+why `/api/status` `fps` stayed 125 in every row above: that field is the host
+loop rate, not the pattern evaluation rate (docs/lang.md said so; this is it
+on metal). Both findings are written up in docs/boards.md.
+
 ## 2026-09-07 — the packed pattern store was losing files on every compaction (#379)
 
 The #365 on-metal pass found it on the Athom, and it is the worst class of

@@ -1508,3 +1508,66 @@ rather than rescan-bound:
 What the headroom is actually for: an **8th bitplane** becomes usable (~58 Hz
 at 30 MHz, against ~38 Hz at 20 MHz), and **chained panels** get the
 bandwidth they need (Gitea #255).
+
+## Seeing the displayed frame rate: `library/frame-rate-test.js` (2026-09-07)
+
+`rescan_hz` is the driver's own count. `library/frame-rate-test.js` ("Frame
+Rate Test") is the independent check — an instrument pattern that makes the
+gap between the **composed** and the **displayed** rate visible on the panel
+itself. Push it live (`POST /api/code`) and read the panel, not the API.
+
+**Why it has to be temporal.** A dropped frame leaves no mark on any single
+composed frame: every frame is a complete image, and the one that never
+reached the panel simply never existed for the eye. So the pattern flips the
+whole field RED/GREEN once per `renderFrame` call — the flip is driven by a
+counter, never by the clock. If every composed frame were displayed exactly
+once, the alternation would fuse to steady yellow; every frame the panel
+misses puts two same-colour frames side by side on the retina. Those stumbles
+happen `|C − R|` times a second (C = compose rate, R = displayed rate), so the
+field shimmers red/green at the beat frequency and
+
+    displayed fps  =  compose fps  −  stumbles per second
+
+**Reading it.** The bottom 1/16 of the panel blinks blue at
+`|composeFPS − DisplayedFPS slider|` Hz; turn the slider until the blink keeps
+time with the field's shimmer and it reads the displayed rate. Rows 48–55 are
+the pattern's own compose-fps bar (its EMA of `1000/delta`, 2 fps per column,
+ticks at 60 / 77 / 115-in-magenta / 125) — the compose rate the API's `fps`
+field will not give you once a cap is set. Rows 56–59 repeat the beat as a
+left/right parity stutter. The definitive version is a 240 fps phone video:
+each displayed frame occupies ~2 camera frames, so count the runs that are
+~4 camera frames long — that count per second is exactly `C − R`.
+
+Measured live on the bench panel, 2026-09-07, master `b08bbd4` at 30 MHz,
+4096 px, brightness 31: `fps` 125, `out_fps` 125, `rescan_hz` 114–116,
+`vm_us` **478–498** (0.5 ms of an 8 ms budget — it is four bulk fills), the
+pattern's own `composeFPS` 123.9–124.3 and `beatHz` 8.9–9.3 at the default
+slider. So ~9 stumbles a second against a ~124 fps compose rate, and the
+panel is displaying ~115 — `rescan_hz` and the beat agree.
+
+### `setFrameRate` is quantized to 125/n on the firmware, and this is why
+
+The render loop in `firmware/src/main.rs` is paced to one iteration per 8 ms.
+`setFrameRate(F)` makes the engine hold frames until `1000/F` ms have
+accumulated and then **resets** its accumulator (no remainder carry), so a cap
+fires on the first 8 ms tick at or past the period: the only achievable
+compose rates are `125/n`. Measured on the panel through the pattern's
+`ComposeCap` slider and its own `composeFPS` var:
+
+| `setFrameRate(F)` | predicted | measured `composeFPS` | `/api/status` `fps` |
+|---:|---:|---:|---:|
+| 0 (uncapped) | 125 | **123.9** | 125 |
+| 125 | 125 | **124.1** | 125 |
+| 115 | 62.5 | **61.5** | 125 |
+| 100 | 62.5 | **61.6** | 125 |
+| 62.5 | 41.7 | **42.7** | 125 |
+| 60 | 41.7 | **41.5** | 125 |
+
+Two consequences. First, `/api/status` `fps` is the **host loop rate** and
+does not follow the cap at all (docs/lang.md says so; this is it on metal) —
+only the pattern's own `1000/delta` sees the real compose rate. Second, you
+cannot tune the strobe to a stroboscopic null by capping the compose rate at
+the display rate: asking for 115 gets 62.5. That is why the pattern strobes
+uncapped and measures the beat instead. Dropping the cap *below* the display
+rate is still useful: every composed frame is then shown at least once, the
+beat disappears, and a gross regular flicker at `F/2` takes its place.
