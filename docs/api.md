@@ -178,11 +178,20 @@ a stored one.
   pattern"}`, not a 404 — on both sides, deliberately.
 - Saving under a name that already exists **overwrites** that entry and returns
   its existing `id`.
+- Firmware store limits: **32 patterns**, **32 KB of source** and **40 KB of
+  bytecode** each. A pattern's source and bytecode are each one contiguous
+  extent in the mapped part of the `storage` partition, whose arena is 183
+  4 KiB pages — so the library also fills up by *space*, independently of the
+  pattern count (`/api/status`'s `store` reports `used`/`total` pages).
 - Firmware save errors are size/space specific: `pattern name required`,
   `name must be 1..=64 bytes`, `this pattern's source is too large for the
   on-device library (…)`, `… compiled code is too large …`, `the device library
-  is full (N patterns) — delete one first`, `couldn't write the pattern to flash
-  …`, `pattern storage unavailable (device needs reflash)`.
+  is full (32 patterns) — delete one first`, `the device's pattern storage is
+  full — delete some patterns and retry` (no contiguous run of pages left, even
+  after compaction), `couldn't write the pattern to flash — the store may be
+  busy; try again in a moment`, `the store is busy — try again in a moment`,
+  `an update is in progress — try again in a moment`, `pattern storage
+  unavailable (device needs reflash)`.
 - `activate` re-validates the stored blob, so it too can answer
   `{"ok":false,"code":"bc-version",…}` after a firmware format bump. It resets
   controls to the pattern's defaults.
