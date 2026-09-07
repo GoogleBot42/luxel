@@ -1,5 +1,57 @@
 # Update log
 
+## 2026-09-07 — blur1D slides a window instead of building a prefix sum (#296)
+
+`blur1D(arr, radius)` allocated a full `len + 1` array of `i64` prefix sums
+— 8 bytes **per element** — and read windows out of it. On the 64x64 panel
+that is a 32,776-byte transient allocation for a `pixelCount`-sized buffer,
+more than a loaded device has spare: #295 had already made the failure
+clean rather than fatal (an infallible `Vec` aborted the firmware outright,
+crash-looping the board on `library/comets.js` until the boot guard rolled
+the slot back), but the blur still simply did not run there.
+
+A box blur only needs the originals still inside the sliding window, and
+those are exactly the ones already overwritten — indices `i+1-r ..= i`. The
+new `blur1d_inplace` keeps a running `i64` sum plus a ring of
+`min(radius + 1, len)` originals, subtracting the element leaving the window
+and adding the one entering it:
+
+| radius | array | scratch before | scratch after |
+|---|---|---|---|
+| 1 (`library/comets.js`) | 4096 px | 32,776 B | **16 B** |
+| 1 | 60 px | 488 B | **16 B** |
+| 8 | 4096 px | 32,776 B | **72 B** |
+| 4096 (radius ≥ len) | 4096 px | 32,776 B | **32,768 B** (ring caps at `len`) |
+
+so the peak is O(radius), never worse than the old O(n), and a few dozen
+bytes at the radius 1–8 patterns actually use.
+
+**Bit-identical, not merely equivalent.** The window sums are the same exact
+i64 integers accumulated in a different order and divided the same
+truncating way, so every output raw is unchanged. Two proofs kept in the
+tree: `vm::blur1d_tests::sliding_window_matches_prefix_sum_reference` runs
+the new code against the old prefix-sum implementation, kept verbatim as a
+test-only reference, over 14 lengths (1, 2, 3, 4, 5, 7, 8, 16, 17, 63, 64,
+255, 256, 4096) × 13 radii (0 … 100,000, i.e. far past the array) × 3 input
+shapes (random 0..1 16.16 values, wide signed values that exercise
+truncation toward zero, a sparse impulse train), asserting raw equality
+element by element. And 12 PPM frame strips — `library/comets.js` (the one
+gallery pattern using `blur1D`) at 1/2/60/300/1000/4096 px and a five-radii
+scratch pattern at 1/2/3/60/300/4096 px — are byte-identical between
+`origin/master` and this branch.
+
+Throughput is unchanged: best of 5 `luxel bench` runs at 4096 px on the
+blur-heavy scratch pattern, 21.02 Mpx/s before against 21.37 after (within
+this box's 6–19 % run-to-run spread). The ring cursors are advanced by hand
+rather than with `i % cap` — the modulo is a hardware divide per element and
+cost a measured ~14 % on the first version of the patch.
+
+`blur2D` is untouched: it already reuses one `max(w, h) + 1` prefix line (65
+elements on a 64x64 panel), which is O(side), not O(n).
+
+Verified: `cargo test -p luxel-core` (144 + suites, green), `tools/ci.sh`
+green end to end. No device touched — the on-panel confirmation rides the
+next OTA.
 ## 2026-09-07 — wire-check.sh: the wall of FAILs was the argument, not the firmware (#346)
 
 `tools/wire-check.sh` reported FAIL on nearly every check against a healthy

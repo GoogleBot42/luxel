@@ -997,7 +997,10 @@ which. What changed on metal:
 - Bug found and fixed on the way: `blur1D`'s infallible 32 KiB prefix-sum
   allocation aborted the firmware at 4096 px (#295); `library/comets.js` in
   a playlist crash-looped the board five times until the boot guard rolled
-  the slot back.
+  the slot back. The 32 KiB itself is gone as of #296 — `blur1D` now slides
+  a window over a `min(radius + 1, len)` ring (16 B at the radius 1 the
+  gallery uses, against 8 B *per element* before), so a full-panel blur no
+  longer needs a transient allocation at all.
 ## Beyond the current boards: chip-support assessment (2026-07-29)
 
 What a chip actually needs to run Luxel, derived from the v0.1.34
