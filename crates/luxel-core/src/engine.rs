@@ -30,6 +30,10 @@ enum RenderKind {
     R1(u16),
     R2(u16),
     R3(u16),
+    /// `renderFrame()` — the whole-frame entry: one zero-argument call per
+    /// frame instead of one call per pixel, with the frame buffer lent to
+    /// the VM so the bulk builtins (`crate::bulk`) write it directly.
+    Frame(u16),
 }
 
 /// A render entry candidate. PB also dispatches `render`/`render2D`/
@@ -48,6 +52,12 @@ enum RenderTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunStage {
     Before,
+    /// Inside `renderFrame`. The engine's `pixels` Vec lives in
+    /// `Vm::frame` for the duration; [`Engine::frame_buffer_in`] always
+    /// takes it back before this stage's outcome is inspected, including
+    /// on a debug pause, so `pixels()` is never empty behind the caller's
+    /// back.
+    Frame,
     Pixel(u32),
 }
 
@@ -115,8 +125,9 @@ pub struct Engine {
     vm: Vm,
     pixel_count: u32,
     before: Option<u16>,
-    /// Entry candidates for render/render2D/render3D (fixed at load).
-    render_tgt: [Option<RenderTarget>; 3],
+    /// Entry candidates for render/render2D/render3D/renderFrame (fixed
+    /// at load).
+    render_tgt: [Option<RenderTarget>; 4],
     /// The resolved entry for the current frame (see [`resolve_render`]).
     render: Option<RenderKind>,
     controls: Vec<Control>,
@@ -272,7 +283,7 @@ impl Engine {
             prog.exported_fn("beforeRender")
         };
         let render_tgt = if violated {
-            [None; 3]
+            [None; 4]
         } else {
             render_targets(&prog)
         };
@@ -331,10 +342,16 @@ impl Engine {
         // receives genuine map coordinates — and the common
         // `sqrt(pixelCount)`-grid patterns depend on that. A host-installed
         // map replaces this (set_map), exactly like saving a map on a PB.
-        if !violated
-            && engine.render_tgt[0].is_none()
-            && (engine.render_tgt[1].is_some() || engine.render_tgt[2].is_some())
-        {
+        // A whole-frame pattern joins that rule when — and only when — it
+        // actually asks for coordinates: `renderFrame` + `fillRect` wants
+        // the square grid a `render2D` pattern gets, while `renderFrame` +
+        // `fillHSV` is a strip pattern and must not be handed a geometry
+        // it never mentioned (it would change `pixelMapDimensions()` and
+        // the post chain's spatial stages under it).
+        let wants_2d = engine.render_tgt[1].is_some()
+            || engine.render_tgt[2].is_some()
+            || (engine.render_tgt[3].is_some() && engine.uses_coordinate_bulk_op());
+        if !violated && engine.render_tgt[0].is_none() && wants_2d {
             engine.set_default_grid_map();
         }
         engine
@@ -367,6 +384,7 @@ impl Engine {
     pub fn set_grid_map(&mut self, w: u16, h: u16) {
         let (w, h) = (w.max(1), h.max(1));
         self.grid = Some(crate::outpipe::GridMap { w, h, serpentine: false });
+        self.vm.frame_grid = self.grid;
         self.vm.map = Some(MapData::grid(w, h));
         if !self.requires_violated {
             self.render = self.resolve_render_now();
@@ -379,6 +397,11 @@ impl Engine {
     /// the same per-pixel `drive` loop, so breakpoints/stepping just work.
     pub fn enable_map_mode(&mut self) {
         self.is_map = true;
+        // A map program is per-pixel by definition (`render(index)` calling
+        // `plot`), so the whole-frame entry is not a candidate here — drop
+        // it rather than teach the map pipeline a stage it can never use.
+        self.render_tgt[3] = None;
+        self.render = self.resolve_render_now();
     }
 
     /// Run the map program over every pixel, collecting coordinates. Returns
@@ -607,6 +630,7 @@ impl Engine {
         coords.truncate(n);
         // grid detection wants the raw (pattern-unit) coordinates
         self.grid = crate::outpipe::detect_grid(dims, &coords);
+        self.vm.frame_grid = self.grid;
         for axis in 0..(dims as usize).min(3) {
             let mut min = i64::MAX;
             let mut max = i64::MIN;
@@ -950,9 +974,26 @@ impl Engine {
         loop {
             let Some(stage) = self.run_stage else { return };
             let outcome = if let Some(k) = resume.take() {
+                if stage == RunStage::Frame {
+                    self.frame_buffer_out();
+                }
                 self.vm.resume(&self.prog, k)
             } else {
                 match stage {
+                    RunStage::Frame => {
+                        let Some(RenderKind::Frame(f)) = self.render else {
+                            self.run_stage = None;
+                            return;
+                        };
+                        // The brush (`Vm::pixel`, written by hsv()/rgb()/
+                        // paint()) starts every frame black, so a shape op
+                        // before the first colour call paints black rather
+                        // than last frame's leftover.
+                        self.vm.pixel = [Fx::ZERO; 3];
+                        self.vm.pixel_written = false;
+                        self.frame_buffer_out();
+                        self.vm.start(&self.prog, f, &[], self.debug_enabled)
+                    }
                     RunStage::Before => match self.before {
                         Some(b) => self.vm.start(
                             &self.prog,
@@ -987,6 +1028,12 @@ impl Engine {
                     }
                 }
             };
+            // One restore point for every exit of the whole-frame stage —
+            // Done, Paused and Err alike. The Vec must never be lost and
+            // `pixels()` must never be observed empty.
+            if stage == RunStage::Frame {
+                self.frame_buffer_in();
+            }
             let outcome = match outcome {
                 Err(e) => {
                     let fatal = e.is_assert || e.is_resource_guard();
@@ -999,10 +1046,17 @@ impl Engine {
                     if fatal {
                         // asserts and VM resource guards stay frame-fatal:
                         // blank the rest of the frame, move on
-                        if let Some(RunStage::Pixel(i)) = self.run_stage {
-                            for p in i as usize..self.pixel_count as usize {
-                                self.pixels[p] = [0; 3];
+                        match self.run_stage {
+                            Some(RunStage::Pixel(i)) => {
+                                for p in i as usize..self.pixel_count as usize {
+                                    self.pixels[p] = [0; 3];
+                                }
                             }
+                            // a whole-frame handler owns the whole frame
+                            Some(RunStage::Frame) => {
+                                self.pixels.iter_mut().for_each(|p| *p = [0; 3])
+                            }
+                            _ => {}
                         }
                         self.run_stage = None;
                         return;
@@ -1035,7 +1089,17 @@ impl Engine {
                             self.finish_frame();
                             return;
                         }
-                        self.run_stage = Some(RunStage::Pixel(0));
+                        self.run_stage = Some(match self.render {
+                            Some(RenderKind::Frame(_)) => RunStage::Frame,
+                            _ => RunStage::Pixel(0),
+                        });
+                    }
+                    RunStage::Frame => {
+                        // Same tail as the per-pixel pass: the post chain
+                        // and the end-of-frame hand-over still run.
+                        self.post_chain();
+                        self.finish_frame();
+                        return;
                     }
                     RunStage::Pixel(i) => {
                         if self.is_map {
@@ -1074,6 +1138,14 @@ impl Engine {
             RenderKind::R1(f) => (f, 2),
             RenderKind::R2(f) => (f, 3),
             RenderKind::R3(f) => (f, 4),
+            // the whole-frame entry never reaches the per-pixel pass
+            // (`drive` routes it to RunStage::Frame); keep this total
+            // rather than panicking on a state that cannot arise.
+            RenderKind::Frame(_) => {
+                self.post_chain();
+                self.finish_frame();
+                return;
+            }
         };
         let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
         // a plain render(index) never reads x: skip the per-pixel coordinate
@@ -1125,6 +1197,51 @@ impl Engine {
         self.finish_frame();
     }
 
+    /// Lend the frame buffer to the VM for a `renderFrame` call. A MOVE,
+    /// never a copy: at 4096 px the buffer is 12 KB and this happens every
+    /// frame. The VM's bulk builtins (`crate::bulk`) write it in place and
+    /// never change its length.
+    fn frame_buffer_out(&mut self) {
+        self.vm.frame = core::mem::take(&mut self.pixels);
+    }
+
+    /// Take it back. Paired with every [`frame_buffer_out`] on every exit
+    /// path — normal return, pattern error, and debug pause.
+    fn frame_buffer_in(&mut self) {
+        self.pixels = core::mem::take(&mut self.vm.frame);
+        debug_assert_eq!(self.pixels.len(), self.pixel_count as usize);
+    }
+
+    /// Does this pattern's code call a bulk builtin that reads a pixel's
+    /// coordinate or the grid? Decides whether a `renderFrame`-only
+    /// pattern gets the default square grid map.
+    fn uses_coordinate_bulk_op(&self) -> bool {
+        // Coordinate- and grid-space ops only; the index-space ones
+        // (fillHSV, fade, setPixel, …) work on a bare strip and must not
+        // conjure a geometry. `fillGradient`'s axis is a runtime argument,
+        // so it stays out of this list — a pattern that wants a spatial
+        // gradient asks for it with one of these or installs a map.
+        const NAMES: &[&str] = &[
+            "gridWidth",
+            "gridHeight",
+            "fillRect",
+            "fillCircle",
+            "splat",
+            "drawLine",
+            "fillCanvas",
+            "blit",
+        ];
+        let mut ids = [0u16; 8];
+        let mut n = 0;
+        for name in NAMES {
+            if let Some(id) = crate::vm::lookup_builtin(name) {
+                ids[n] = id;
+                n += 1;
+            }
+        }
+        crate::bytecode::calls_any_builtin(&self.prog, &ids[..n])
+    }
+
     /// A frame ran to completion (not a fatal-error blank, not a debug
     /// pause): hand this frame's `setPixelState` writes over as next frame's
     /// `pixelState` reads and leave the pipeline idle.
@@ -1160,6 +1277,7 @@ impl Engine {
             RenderKind::R1(f) => (f, args, 2),
             RenderKind::R2(f) => (f, args, 3),
             RenderKind::R3(f) => (f, args, 4),
+            RenderKind::Frame(f) => (f, args, 0), // unreachable, see render_pixels
         }
     }
 
@@ -1302,7 +1420,7 @@ pub fn check_asserts(prog: &Program, pixel_count: u32, array_byte_budget: usize)
 /// Fx 0..1 → 0..255 by floor(v·255) — PB-exact (pixel oracle, fw 3.67:
 /// 0.5 → 127, 1−ε → 254). We used to round to nearest; floor makes whole
 /// frames diff bit-identical against previewFrame captures.
-fn quantize(v: Fx) -> u8 {
+pub(crate) fn quantize(v: Fx) -> u8 {
     // raw ≤ 65536 so the product fits i32: no 64-bit arithmetic per channel
     ((v.clamp(Fx::ZERO, Fx::ONE).raw() * 255) >> 16) as u8
 }
@@ -1313,16 +1431,21 @@ fn fx_to_256(v: Fx) -> u32 {
     ((v.raw().max(0) as u32) >> 8).min(256)
 }
 
-/// The three render entry candidates by name (`render`, `render2D`,
-/// `render3D`): an exported function wins; otherwise a global of that name
-/// is a late-binding candidate (see [`RenderTarget`]).
-fn render_targets(prog: &Program) -> [Option<RenderTarget>; 3] {
+/// The four render entry candidates by name (`render`, `render2D`,
+/// `render3D`, `renderFrame`): an exported function wins; otherwise a
+/// global of that name is a late-binding candidate (see [`RenderTarget`]).
+fn render_targets(prog: &Program) -> [Option<RenderTarget>; 4] {
     let tgt = |name: &str| {
         prog.exported_fn(name)
             .map(RenderTarget::Fn)
             .or_else(|| prog.global_index(name).map(RenderTarget::Global))
     };
-    [tgt("render"), tgt("render2D"), tgt("render3D")]
+    [
+        tgt("render"),
+        tgt("render2D"),
+        tgt("render3D"),
+        tgt("renderFrame"),
+    ]
 }
 
 /// Render-function selection priority by map dimensionality (documented PB
@@ -1331,7 +1454,7 @@ fn render_targets(prog: &Program) -> [Option<RenderTarget>; 3] {
 /// frame after `beforeRender` so a runtime-assigned entry takes effect; a
 /// Global candidate resolves only while its slot holds a function.
 fn resolve_render(
-    tgt: &[Option<RenderTarget>; 3],
+    tgt: &[Option<RenderTarget>; 4],
     globals: &[Value],
     dims: u8,
 ) -> Option<RenderKind> {
@@ -1346,9 +1469,16 @@ fn resolve_render(
         Some(match slot {
             0 => RenderKind::R1(f),
             1 => RenderKind::R2(f),
-            _ => RenderKind::R3(f),
+            2 => RenderKind::R3(f),
+            _ => RenderKind::Frame(f),
         })
     };
+    // `renderFrame` is not a fourth dimensionality — it is a different
+    // shape of entry (one call per FRAME), so it wins over all three
+    // per-pixel candidates regardless of what the map looks like.
+    if let Some(f) = get(3) {
+        return Some(f);
+    }
     let (r1, r2, r3) = (|| get(0), || get(1), || get(2));
     match dims {
         2 => r2().or_else(r3).or_else(r1),

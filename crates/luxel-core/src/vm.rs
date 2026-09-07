@@ -844,6 +844,16 @@ pub struct Vm {
     transform_ops: u32,
     /// Installed pixel map (engine-set): dims (1/2/3) + normalized coords.
     pub map: Option<MapData>,
+    /// The engine's frame buffer, lent to the VM (by move — never copied)
+    /// for the duration of a `renderFrame` call so the bulk builtins can
+    /// write RGB888 straight into it. Empty at every other moment, which
+    /// is what makes every bulk op a no-op outside the whole-frame entry.
+    pub frame: Vec<[u8; 3]>,
+    /// The installed map read as a regular W×H grid, when it is one —
+    /// mirrors `Engine::grid` and is maintained at map install, not per
+    /// frame. `gridWidth`/`gridHeight` report it and the coordinate-space
+    /// bulk ops use it to walk only a shape's bounding box.
+    pub frame_grid: Option<crate::outpipe::GridMap>,
     /// Engine-set; used by mapPixels and the no-map 1D fallback.
     pub pixel_count: u32,
     /// `pixelState`/`setPixelState` storage — `None` until a pattern's
@@ -1087,6 +1097,8 @@ impl Vm {
             transform_active: false,
             transform_ops: 0,
             map: None,
+            frame: Vec::new(),
+            frame_grid: None,
             pixel_count: 0,
             pixel_state: None,
             palette: Vec::new(),
