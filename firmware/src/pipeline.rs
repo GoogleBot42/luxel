@@ -305,20 +305,45 @@ mod pipe {
     ///
     /// The hand-off buffer IS the preview snapshot on this path: whenever it
     /// is parked in the slot (free or ready) it holds a whole frame, so
-    /// there is nothing to keep a second 12 KB copy of. `None` means it is
-    /// out of the slot right now — one of the two tasks is filling or
-    /// composing it — and the caller should look again in a moment; the
-    /// window is a ~50 us memcpy or a ~6 ms compose against a slot that is
-    /// parked the rest of the time.
-    pub fn preview() -> Option<Vec<[u8; 3]>> {
-        SLOT.lock(|c| {
-            let s = c.borrow();
-            let buf = s.free.as_ref().or(s.ready.as_ref().map(|f| &f.buf))?;
-            let mut v = Vec::new();
-            v.try_reserve_exact(buf.len()).ok()?;
-            v.extend_from_slice(buf);
-            Some(v)
-        })
+    /// there is nothing to keep a second 12 KB copy of. It is out of the slot
+    /// only while one of the two tasks is filling or composing it — a ~50 us
+    /// memcpy or a ~6 ms compose against a slot that is parked the rest of
+    /// the time — so retry briefly rather than answer with nothing. An empty
+    /// answer means no frame has been rendered yet (or the heap could not
+    /// hold the response), exactly as the pre-#306 snapshot did before the
+    /// first frame.
+    ///
+    /// ONE allocation, made OUTSIDE the critical section. This runs on a heap
+    /// that a 4096 px pattern can leave under 30 KB free, so a second 12 KB
+    /// temporary is the difference between serving the preview and an OOM
+    /// panic; and allocating with interrupts masked would stall both cores on
+    /// the allocator's own lock.
+    pub async fn preview() -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        for _ in 0..16 {
+            let need = shared::PIXEL_COUNT.load(Ordering::Relaxed) as usize * 3;
+            if v.capacity() < need && v.try_reserve_exact(need).is_err() {
+                return Vec::new();
+            }
+            if SLOT.lock(|c| {
+                let s = c.borrow();
+                let Some(buf) = s.free.as_ref().or(s.ready.as_ref().map(|f| &f.buf)) else {
+                    return false;
+                };
+                let bytes = buf.as_flattened();
+                // never grow inside the critical section
+                if bytes.len() > v.capacity() {
+                    return false;
+                }
+                v.clear();
+                v.extend_from_slice(bytes);
+                true
+            }) {
+                return v;
+            }
+            Timer::after(Duration::from_millis(2)).await;
+        }
+        Vec::new()
     }
 
     /// The ProCpu half: preview copy, output pipeline, panel compose.

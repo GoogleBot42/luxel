@@ -1074,17 +1074,7 @@ async fn api_pixels() -> ApiResponse {
     // unreadable only while one of the two tasks holds it, so retry briefly
     // rather than answering with nothing.
     #[cfg(pipelined)]
-    let px = {
-        let mut px = alloc::vec::Vec::new();
-        for _ in 0..16 {
-            if let Some(f) = crate::pipeline::preview() {
-                px = f.as_flattened().to_vec();
-                break;
-            }
-            embassy_time::Timer::after(embassy_time::Duration::from_millis(2)).await;
-        }
-        px
-    };
+    let px = crate::pipeline::preview().await;
     #[cfg(not(pipelined))]
     let px = crate::shared::get_pixels();
     Reply::ok(ApiBody::Bytes(px)).cors()
