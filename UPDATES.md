@@ -1,5 +1,89 @@
 # Update log
 
+## 2026-09-07 — the compaction fix verified on metal, and what it did not fix (#379, #365, #363)
+
+The #379 fix (PR #383) went onto the Athom rig — master `81eb873`,
+`board-athom-music`, v0.1.40 — and was checked against the damaged store the
+finding session deliberately left in place, **without wiping it first**.
+About **310 saves and 86 deletes**, the full pattern name set audited after
+every single one, across 20+ compactions with and without a pin: **zero
+files lost, zero corrupted, every read-back byte-identical.** The data loss
+is fixed.
+
+The fixed boot scan also **recovered a file the old one had swallowed**.
+The store came back with 21 patterns where 20 went in: an orphaned older
+generation of `1-white-fade`, byte-identical to its `library/` source, that
+had been sitting under a stale header the old `at = rec.end()` walk stepped
+over. It left the store holding two live records with the same name and
+different seqs — defect 2's fingerprint, since the save that should have
+superseded it could not see it via `rec_by_name`.
+
+The original reproduction is clean now: a full `library/` fill accepts
+**119 saves and leaves 119 patterns** (the bug's signature was 119 accepted,
+115 present), ending in the documented refusal at
+`{used 742624, total 749568, dead 4096, patterns 119}`, with the packing
+arithmetic exact on every non-compacting save. On a healthy log `store.dead`
+behaves as the fix claims: **0** after an unpinned compaction, 0 with the
+lowest or a middle file pinned, and a **428 B sub-page hole** with the
+highest-offset file pinned. The pinned file read back byte-identical after
+every compaction, 500+ concurrent reads through compactions never returned a
+truncated body, `fence_timeouts` stayed 0 and no watchdog ever fired.
+
+### What it did not fix — Gitea #388
+
+On a log carrying pre-existing #379 damage, a compaction does **not** give
+the dead space back. `dead` sat at a hard floor across three consecutive
+compactions (348,160 B with 22 patterns; 434,176 B — 58 % of the arena —
+during a fill), and while it persists the store is silently a third of its
+size: **a full fill accepted only 49 patterns instead of 119** before an
+honest refusal. It clears eventually (it took ~6 compactions across the
+session, after which capacity was fully restored), and no data is ever lost
+— the save fails loudly, which is the designed behaviour — but a user who
+fills the library on a damaged log has no in-band way out except deleting. A
+healthy near-full log also keeps a small 4–5 KB residue rather than exactly
+0. Numbers and the suggested `tools/patlog-check` repro are on #388.
+
+### `tools/store-audit.mjs`
+
+The per-save name-set audit that both the finding session and the fix
+session asked for is now a real tool. The invariant is
+`expected = previous + saved − deleted`, re-checked after **every** mutation
+rather than counted at the end — which is precisely what #379 evaded, since
+every save answered `{"ok":true}` while the count went down. It also checks
+the packing arithmetic, times each compaction, reports the `dead` residue it
+leaves, can pin a chosen stored pattern so the compaction has to route
+around its frozen pages, and can hammer a concurrent read across every save.
+
+### #365 checklist, resumed
+
+Steps 1–9 and the `flashmap-off` build all pass on the fixed firmware;
+numbers are on the issue. Highlights: reboot and re-enumerate with a full
+119-pattern library answers in **6.6 s** with a byte-identical list;
+compactions run **3.0–7.2 s** on logs of 10–119 files, well inside the 20 s
+watchdog window; and `flashmap-off` costs **no measurable boot time**
+(5.6 s vs 6.6 s for the same 117-pattern store) while every read-back stays
+byte-identical through the flash-controller path. Steps 10 and 11 (power
+cuts mid-save and mid-compaction) still need Jeremy's hands.
+
+`code_mapped` is worth a note for anyone reading that checklist: it reports
+whether the *running* pattern's code is mapped, so under `flashmap-off` it
+stays **true** on the built-in default and only goes false once a stored
+pattern is activated.
+
+### #363 `engine_heap` on metal
+
+Populated from boot (1,232 B on the built-in rainbow at 60 px), tracks an
+ad-hoc swap with `heap_free + engine_heap` constant to 0.5 %, grows with the
+pixel count (4,128 → 9,584 at 2048 px), and is per-item stable and
+repeatable across a crossfading playlist. One thing is wrong: a **stored,
+mapped activation reports 192 B MORE than the same pattern pushed live**,
+where the issue predicts visibly less. Recorded on #363.
+
+Also filed: **#389** (`build-esp32.sh` silently ignores a positional board
+name and builds `board-pixelblaze-v3` — a pb-v3 image reached the Athom this
+way, reserving the GPIO the strip is wired to) and **#390** (a pattern save
+refused for memory after ~11 identical saves, cleared by a reboot — heap
+fragmentation behind a misleading "too large to run here").
 ## 2026-09-07 — Frame Rate Scan: point a phone at the panel and count (`library/frame-rate-scan.js`)
 
 Frame Rate Test (earlier today) reads the displayed rate as a beat against the
