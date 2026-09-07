@@ -17,13 +17,22 @@ export interface DeviceStatus {
   vmerr: string | null;
   /** Network input currently driving the strip (DDP/E1.31), if any. */
   live?: "ddp" | "e131" | null;
-  /** Free heap in bytes, measured with the CURRENT pattern still loaded —
-   *  which makes it the headroom an incoming pattern has to fit inside, since
-   *  the firmware builds the new engine before releasing the old one.
+  /** Free heap in bytes, measured with the CURRENT pattern still loaded.
    *  0 or absent means "this device can't report it" (the native mirror
    *  without `--heap-free`, or firmware older than the field): treat as
-   *  unknown and don't guess at capacity. */
+   *  unknown and don't guess at capacity.
+   *
+   *  NOT by itself the headroom an incoming pattern has: the render task
+   *  drops the outgoing engine BEFORE it decodes the incoming program, so a
+   *  swap starts from `heap_free + engine_heap` (Gitea #287). */
   heap_free?: number;
+  /** Heap the currently loaded pattern's engine occupies, in bytes — the
+   *  firmware measures it across each load (`shared::ENGINE_HEAP`). Add it to
+   *  `heap_free` for the free heap a swap actually starts from
+   *  (`luxel_core::budget::load_base`). 0 or absent on the native mirror
+   *  without `--engine-heap` and on pre-#287 firmware, where the fallback is
+   *  `heap_free` alone — conservative, never optimistic. */
+  engine_heap?: number;
   /** Per-stage frame timing: average microseconds per rendered pattern frame
    *  over the last second. `frame_us` is the whole engine branch, `vm_us` the
    *  pattern evaluation, `pipe_us` the preview copy + output pipeline (gamma /

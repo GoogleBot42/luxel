@@ -180,6 +180,19 @@ before a push, that their pattern won't fit the device they're connected to
 device and its prediction move together — a divergence would mean the editor
 promising a pattern fits a device that then rejects it.
 
+**The load base is not `heap_free`.** Every load path — `Msg::Code`,
+`Msg::Library` without a crossfade, both `rebuild()` callers — starts with
+`engine = None; drop_prev(&mut prev)`, so the incoming pattern is measured
+against free heap *after* the outgoing engine is released. The firmware
+therefore brackets each load (`note_engine_heap`, `main.rs`) and reports
+what the resident engine costs as `/api/status` `engine_heap`; the budget a
+swap actually gets is `budget::load_base(heap_free, engine_heap)`. Predicting
+against `heap_free` alone charges the incoming pattern for the outgoing one,
+which is what made the editor warn about patterns that load fine (Gitea
+#287) — the fatter the resident pattern, the lower `heap_free`, the louder
+the false alarm. A crossfade deliberately keeps the outgoing engine alive, so
+it records nothing and leaves the last clean measurement standing.
+
 **WS2812 (bit-serial protocols) requires the DMA SPI path, never blocking
 writes.** Blocking `Spi::write` splits every frame into 64-byte FIFO
 transactions with a busy-wait between them; 64 B = 512 SPI bits, not

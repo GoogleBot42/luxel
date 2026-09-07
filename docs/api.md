@@ -54,7 +54,8 @@ response as "no snapshot right now", not as an all-black frame.
 ```json
 {"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
  "pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
- "heap_free":104832,"live":null,"assets_mapped":true,"code_mapped":true,
+ "heap_free":104832,"engine_heap":21504,"live":null,
+ "assets_mapped":true,"code_mapped":true,
  "store":{"used":5,"total":183,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null}
 ```
@@ -84,7 +85,17 @@ response as "no snapshot right now", not as an all-black frame.
 - `slot` — `factory` / `ota_0` / `ota_1` / `ota_?` / `unknown` (which app
   partition booted). Check this after a power-cycle test: a rollback shows up
   here and nowhere else.
-- `heap_free` — bytes, `esp_alloc::HEAP.free()`.
+- `heap_free` — bytes, `esp_alloc::HEAP.free()`, measured with the CURRENT
+  pattern's engine resident.
+- `engine_heap` — bytes that engine occupies, measured across its load
+  (`shared::ENGINE_HEAP`). **Not decoration: `heap_free` alone is not the
+  budget an incoming pattern has.** The render task drops the outgoing engine
+  before it decodes the incoming program, so a swap starts from
+  `heap_free + engine_heap` — `luxel_core::budget::load_base`. 0 means "not
+  measured" (nothing loaded, or a crossfade, which keeps the outgoing engine
+  alive on purpose); treat 0 as `heap_free` alone, which is conservative.
+  Added for Gitea #287, where predicting against `heap_free` made the
+  playground warn about patterns that load fine.
 - `live` — `"ddp"` / `"e131"` while a live pixel stream is driving the strip,
   else `null`.
 - `assets_mapped` — `true` when the web assets partition is memory-mapped
@@ -138,7 +149,12 @@ response as "no snapshot right now", not as an all-black frame.
 
 `GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`
 (always 2048), `slot` (always `"native"`), `version`, `heap_free` (0 unless
-`--heap-free N` was passed), `live`, `vmerr` — **no `src`, `bc`, `web`, or the `*_us` stage timers.**
+`--heap-free N` was passed), `engine_heap` (0 unless `--engine-heap N` was
+passed), `live`, `vmerr` — **no `src`, `bc`, `web`, or the `*_us` stage timers.**
+The two heap flags are how the playground's capacity warning is exercised
+without hardware: `--heap-free` impersonates a device with that much free, and
+`--engine-heap` a device with that much of it about to be handed back by the
+outgoing pattern.
 
 ## Live coding and the running pattern
 

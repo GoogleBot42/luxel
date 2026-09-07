@@ -87,6 +87,20 @@ pub static OUT_US: AtomicU32 = AtomicU32::new(0);
 /// rendered frame is written by construction.
 pub static OUT_FPS: AtomicU32 = AtomicU32::new(0);
 
+/// Heap the CURRENTLY loaded pattern's engine occupies, in bytes — measured
+/// at load time as free-heap-before minus free-heap-after, with no engine
+/// resident on either side of the subtraction. 0 = nothing loaded, or the
+/// last load couldn't be measured.
+///
+/// Reported as `/api/status` `engine_heap` purely so the playground can
+/// predict the NEXT load correctly. The render task drops the outgoing
+/// engine before it decodes the incoming program, so a swap is measured
+/// against `heap_free + engine_heap`, not `heap_free` — see
+/// `luxel_core::budget::load_base` (Gitea #287). Without it the editor
+/// charged every incoming pattern for the resident one and warned about
+/// patterns that load fine.
+pub static ENGINE_HEAP: AtomicU32 = AtomicU32::new(0);
+
 /// Global output brightness, 0–31. The render task reads it every frame and
 /// feeds it to the encoder (SK9822's 5-bit current field; a software scale for
 /// WS2812). HTTP `/api/brightness` writes it; boot seeds it from flash (else

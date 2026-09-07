@@ -125,28 +125,52 @@ after.
 
 **Prediction — a measurement, not a size heuristic.** `lx_device_model`
 (luxel-wasm) replays the firmware's own load sequence under a counting
-allocator: the LXP envelope resident across `deserialize_lean`, dropped, then
-`Engine::from_program_budgeted` at the device's array budget, then three
-frames. The peak live bytes is what the device's floor check would see.
-wasm32 is 32-bit like the ESP32, so the structures measure the same width —
-this is strictly closer to hardware than the 64-bit `heapstat` test that
-originally established the model. `Luxel.deviceModel()` wraps it;
+allocator. wasm32 is 32-bit like the ESP32, so the structures measure the same
+width — this is strictly closer to hardware than the 64-bit `heapstat` test
+that originally established the model. `Luxel.deviceModel()` wraps it;
 `checkCapacity()` in App.svelte runs it on every successful recompile.
 
-**Inputs.** `/api/status` `heap_free` (now declared in `DeviceStatus`) and the
-device's own pixel count — never the preview layout's, since strip length is
-hardware truth. `heap_free` is measured with the *current* pattern still
-loaded, which is exactly the right baseline: the firmware builds the new
-engine before releasing the old one, so that number really is the incoming
-pattern's headroom.
+**Two lifecycles, because the firmware has two** (recalibrated for Gitea
+#287). A **live push** (`POST /api/code`, what this editor does on every
+recompile) keeps the whole LXP envelope resident across a *copying*
+`deserialize_lean`, with the pattern store's 4 KiB write-staging buffer alive
+in the same window; then the envelope goes and the engine is built. A
+**stored pattern** activated by id (`Msg::Library`) sends nothing but the id
+and decodes with `deserialize_lean_static` straight off the flash mapping, so
+its code and constant pool are *borrowed* and cost no heap at all (Gitea
+#276/#300). The model reports both. The verdict shown is the live push — the
+worse path, and the one the editor is about to take — but when only the live
+push fails, the banner says so and names the stored figure, because "save it
+to the device's library" is then a real fix.
+
+**Two numbers per lifecycle, because the device applies two tests.**
+`resident` is what the pattern still occupies once the load settles; that is
+what `try_budgeted_engine`'s post-load floor check measures, since the
+envelope is dropped before the engine is built. `peak` is the transient
+high-water of the load window — it never reaches the floor check, but the
+decode's fallible allocations have to fit in free heap, so it is compared
+against the whole load base. Comparing the *peak* against the *floor
+headroom*, as the model did before #287, is an apples-to-oranges test that
+over-warns by roughly the envelope.
+
+**Inputs.** `/api/status` `heap_free` and `engine_heap` (both declared in
+`DeviceStatus`) and the device's own pixel count — never the preview
+layout's, since strip length is hardware truth. `heap_free` is measured with
+the *current* pattern still loaded, and it is **not** by itself the incoming
+pattern's budget: the render task drops the outgoing engine before it decodes
+the incoming program, so the base is `budget::load_base(heap_free,
+engine_heap)`. `engine_heap` 0 (pre-#287 firmware, the mirror without
+`--engine-heap`) falls back to `heap_free` alone — conservative, never
+optimistic.
 
 **Thresholds.** `luxel_core::budget` is now the single definition of
-`RUNTIME_FLOOR` (20 KB), the array-budget arithmetic, and `load_headroom()`;
-`firmware/src/main.rs` and the wasm model both import it, so the prediction
-cannot drift from the device that enforces it. On top of that the UI reserves
-the last **15 %** of headroom as "tight" — the model is exact but the real
-device's heap moves underneath it between the status read and the load (WiFi
-buffers, HTTP connection buffers, MQTT publishes, jsonview snapshots).
+`RUNTIME_FLOOR` (20 KB), the array-budget arithmetic, `load_base()`,
+`load_headroom()` and the `fit()` verdict itself; `firmware/src/main.rs`, the
+wasm model and the UI all import it, so the prediction cannot drift from the
+device that enforces it. The last **15 %** of headroom (`TIGHT_PERCENT`) is
+reserved as "tight" — the model is exact but the real device's heap moves
+underneath it between the status read and the load (WiFi buffers, HTTP
+connection buffers, MQTT publishes, jsonview snapshots).
 
 **Rendering.** A banner in the editor's right-hand banner stack, the same
 `.banner` idiom as compile/runtime errors, `data-role="capacity-warning"` with
@@ -165,11 +189,14 @@ older firmware) is silent too; an unknown budget is not a small one, and
 guessing would cry wolf on every pattern.
 
 **Testing without hardware.** `luxel serve --heap-free BYTES` makes the mirror
-impersonate a device with that much free heap (default 0 = "can't tell you").
-device-e2e spawns a second mirror claiming 30 KB free — 10 KB of load
-headroom with the arena clamped at its 16 KB minimum, which puts all four
-verdicts within reach of a one-line pattern — and asserts each band appears,
-clears, and doesn't block the push.
+impersonate a device with that much free heap (default 0 = "can't tell you"),
+and `--engine-heap BYTES` a device with that much of it about to come back
+from the outgoing pattern. device-e2e spawns a second mirror claiming 30 KB
+free — 10 KB of load headroom with the arena clamped at its 16 KB minimum,
+which puts all four verdicts within reach of a one-line pattern — and asserts
+each band appears, clears, and doesn't block the push; then a third claiming
+the same 30 KB free *plus* a 30 KB resident engine, where the pattern the
+second mirror correctly rejects now fits (the Gitea #287 regression).
 
 ## Settings page 🔧 [L]
 

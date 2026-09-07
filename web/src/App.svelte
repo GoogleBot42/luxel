@@ -122,21 +122,25 @@
   // counting allocator (`Luxel.deviceModel`), against the device's reported
   // free heap. Confirmation: after each push we read /api/status back, so the
   // device's own verdict replaces our guess the moment it exists.
+  //
+  // The model predicts the LIVE push (POST /api/code) — what this editor does
+  // on every recompile, and the more expensive of the firmware's two load
+  // paths: the upload envelope stays resident across a COPYING decode, where
+  // a pattern activated from the device's own library is decoded straight off
+  // the flash mapping with its code borrowed (Gitea #276/#300). When the live
+  // push is the only thing that doesn't fit, the banner says so, because
+  // "save it to the device" is then a real fix (Gitea #287).
 
   /** Free heap the device last reported, in bytes. 0 = it can't tell us. */
   let deviceHeapFree = 0;
+  /** Heap the device's CURRENTLY loaded pattern occupies. The firmware frees
+   *  it before decoding an incoming pattern, so it is part of the incoming
+   *  pattern's budget; 0 on firmware that doesn't report it (Gitea #287). */
+  let deviceEngineHeap = 0;
   /** The device's own post-push verdict (`/api/status` vmerr), if any. */
   let deviceVmerr: string | null = null;
   /** The local prediction for the source currently in the editor. */
   let capacity: { level: "over" | "tight"; text: string; detail: string } | null = null;
-
-  /** How much of the device's headroom a pattern may model before we call it
-   *  "tight". The model is a measurement, not a size heuristic — but the real
-   *  device's heap moves underneath it between the status read and the load
-   *  (WiFi buffers, HTTP connection buffers, MQTT publishes, jsonview
-   *  snapshots), so the last stretch of headroom is not honestly spendable.
-   *  At a typical ~80 KB of headroom this reserves ~12 KB. */
-  const CAPACITY_TIGHT = 0.85;
 
   /** The device's vmerr, but only when it is the capacity rejection — other
    *  runtime errors are the local engine's business and already have a banner.
@@ -166,16 +170,27 @@
       envelopeLen,
       devicePixels,
       deviceHeapFree,
+      deviceEngineHeap,
     );
     if (!m) {
       capacity = null;
       return;
     }
+    // "Saving it would fit" is only worth saying when it is actually true and
+    // actually different — the stored path skips the envelope and borrows the
+    // program's code from flash instead of copying it.
+    const savingHelps = m.fit === "over" && m.storedFit !== "over";
     const detail =
-      `models ${kb(m.peak)} of heap at ${devicePixels} px; the device reports ` +
-      `${kb(deviceHeapFree)} free and keeps ${kb(m.floor)} for itself, ` +
+      `a live push models ${kb(m.resident)} resident (peaking at ${kb(m.peak)}) ` +
+      `at ${devicePixels} px; saved to the device's library it would be ` +
+      `${kb(m.storedResident)} (peak ${kb(m.storedPeak)}). The device reports ` +
+      `${kb(deviceHeapFree)} free with its current pattern's ${kb(deviceEngineHeap)} ` +
+      `still loaded, frees that first, and keeps ${kb(m.floor)} for itself — ` +
       `leaving ${kb(m.headroom)} for this pattern.` +
       (m.vmerr ? ` Device verdict: ${m.vmerr}` : "");
+    const savingHint = savingHelps
+      ? ` — saving it to the device's library would fit (${kb(m.storedResident)})`
+      : "";
     if (m.vmerr) {
       // The array arena ran out before the floor check could even run — a
       // different failure from "the whole load doesn't fit", and worth saying
@@ -185,16 +200,25 @@
         text: `this pattern's arrays exceed this device's array memory budget (${kb(m.budget)} available)`,
         detail,
       };
-    } else if (m.peak > m.headroom) {
+    } else if (m.fit === "over" && m.peak > m.base) {
+      // The RESIDENT engine would have fitted; the upload itself doesn't.
+      // Naming the upload is the difference between "rewrite your pattern"
+      // and "save it to the device instead".
       capacity = {
         level: "over",
-        text: `this pattern is likely too large for this device (${kb(m.peak)} needed, ${kb(m.headroom)} free)`,
+        text: `this pattern's upload is likely too large for this device (${kb(m.peak)} needed to receive it, ${kb(m.base)} free)${savingHint}`,
         detail,
       };
-    } else if (m.peak > m.headroom * CAPACITY_TIGHT) {
+    } else if (m.fit === "over") {
+      capacity = {
+        level: "over",
+        text: `this pattern is likely too large for this device (${kb(m.resident)} needed, ${kb(m.headroom)} free)${savingHint}`,
+        detail,
+      };
+    } else if (m.fit === "tight") {
       capacity = {
         level: "tight",
-        text: `close to this device's limit (${kb(m.peak)} of ${kb(m.headroom)} usable)`,
+        text: `close to this device's limit (${kb(m.resident)} of ${kb(m.headroom)} usable)`,
         detail,
       };
     } else {
@@ -930,6 +954,7 @@
       const capFromStatus = st.max_pixels ?? 0;
       if (capFromStatus) pixelMax = capFromStatus;
       deviceHeapFree = st.heap_free ?? 0; // 0 on a mirror / older firmware
+      deviceEngineHeap = st.engine_heap ?? 0; // 0 on pre-#287 firmware
       deviceVmerr = st.vmerr;
       layout = { kind: "strip", pixels: st.pixels };
       if (pullPattern) {
@@ -1042,6 +1067,7 @@
     try {
       const st = await device.status();
       deviceHeapFree = st.heap_free ?? 0;
+      deviceEngineHeap = st.engine_heap ?? 0;
       if (st.max_pixels) pixelMax = st.max_pixels; // per-board cap (#74)
       deviceVmerr = st.vmerr;
       if (!compileError) checkCapacity(); // fresh headroom → fresh verdict

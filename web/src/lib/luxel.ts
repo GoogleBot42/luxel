@@ -130,23 +130,45 @@ interface Exports {
     envelopeLen: number,
     pixelCount: number,
     heapFree: number,
+    engineHeap: number,
   ): number;
 }
 
-/** What a pattern would cost the connected device's heap, modelled by
- *  replaying the firmware's own load sequence in wasm under a counting
- *  allocator. All figures are bytes. */
+/** How a modelled pattern fits the device (`luxel_core::budget::Fit`). */
+export type DeviceFit = "fits" | "tight" | "over";
+
+/** What a pattern would cost the connected device, modelled by replaying the
+ *  firmware's own load sequence under a counting allocator.
+ *
+ *  The unprefixed fields are the LIVE push (`POST /api/code`), which is what
+ *  the editor does on every recompile; the `stored*` fields are the same
+ *  pattern activated from the device's own library, where the program's code
+ *  and constant pool are borrowed from the flash mapping instead of copied
+ *  (Gitea #276/#300). The stored path is always the cheaper one. */
 export interface DeviceModel {
-  /** Peak live heap the pattern-load window would occupy on-device. */
+  /** Bytes the pattern still occupies once the load settles — what the
+   *  device's post-load floor check measures. */
+  resident: number;
+  /** Transient high-water of the load window (upload envelope + decoded
+   *  program + the store's write staging). Never reaches the floor check,
+   *  but has to fit in free heap or the decode fails to allocate. */
   peak: number;
   /** Array-arena byte budget the device would grant this load. */
   budget: number;
-  /** Bytes available before the device's post-load floor check rejects. */
+  storedResident: number;
+  storedPeak: number;
+  storedBudget: number;
+  /** Free heap the load starts from: `heap_free + engine_heap`. */
+  base: number;
+  /** Resident bytes available before the post-load floor check rejects. */
   headroom: number;
   /** The device's runtime floor — heap the firmware keeps for itself. */
   floor: number;
+  fit: DeviceFit;
+  storedFit: DeviceFit;
   /** Set when the pattern blew the array budget rather than the floor. */
   vmerr: string | null;
+  storedVmerr: string | null;
 }
 
 const RAW = 65536;
@@ -199,6 +221,7 @@ export class Luxel {
     envelopeLen: number,
     pixelCount: number,
     heapFree: number,
+    engineHeap: number,
   ): DeviceModel | null {
     if (typeof this.e.lx_device_model !== "function") return null;
     const ptr = this.e.lx_alloc(bytecode.length);
@@ -210,6 +233,7 @@ export class Luxel {
         envelopeLen,
         pixelCount,
         heapFree,
+        engineHeap,
       );
       if (rc < 0) return null;
       return JSON.parse(this.response()) as DeviceModel;
