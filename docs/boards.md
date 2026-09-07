@@ -604,6 +604,28 @@ snapshot, which was a second copy of the frame that had just been composed:
 51,652 / 51,640 / 49,180 / 28,928 B across the five bench patterns), and
 the AppCpu stack high-water is unchanged at 10,464 B of 20,480.
 
+2026-09-07, **bulk render re-measured on the merged tree** (Gitea #336, the
+on-device verification of #335). docs/bulk-render.md's size table was taken on
+the branch; these are `tools/image-check.sh` on `espflash save-image` app
+images built from three commits in one worktree, same `creds.env` throughout —
+the merge base `974b3b3`, the #335 merge `eedabc8`, and the master of the day
+`ed2ac3f` (which also carries #306 and #320):
+
+| board | `974b3b3` | `eedabc8` (#335) | Δ #335 | `ed2ac3f` | margin at master |
+|---|---:|---:|---:|---:|---:|
+| `board-pixelblaze-v3` | 997,648 | 1,006,480 | +8,832 | 1,006,432 | 42,144 B (4.01 %) **warn** |
+| `board-athom-music` | 997,536 | 1,006,352 | +8,816 | 1,006,480 | 42,096 B (4.01 %) **warn** |
+| `board-seengreat-hub75` | 935,904 | 945,216 | +9,312 | 947,424 | 101,152 B (9.64 %) |
+| `board-c6-devkit` (not shipped) | 1,015,376 | 1,024,608 | +9,232 | 1,024,912 | 23,664 B (**2.26 %**) **fail** |
+
+So the branch's own numbers hold up: **+8.8–9.3 KB of flash on every board**,
+the two shipped classic-ESP32 boards stay just over 4 % (warn, not fail), the
+panel keeps 9.6 %, and the C6 is the one board #335 puts under the 3 % floor
+— its base margin was 3.16 %, and the branch reproduces the 2.29 % the
+evaluation predicted. That board is not in CI and its margin is tracked by
+**#291**; the honest statement remains "this change costs the C6 its margin",
+not "the C6 was already under".
+
 **CI enforces a margin floor, not just the ceiling** (Gitea #160).
 `tools/image-check.sh` now also takes the app image's size: it FAILS below
 **3 %** of the slot free (31,458 B) and WARNS below **6 %** (62,915 B).
@@ -1040,6 +1062,143 @@ which. What changed on metal:
   a window over a `min(radius + 1, len)` ring (16 B at the radius 1 the
   gallery uses, against 8 B *per element* before), so a full-panel blur no
   longer needs a transient allocation at all.
+
+## Bulk render (`renderFrame`) on metal (2026-09-07)
+
+Gitea #336 — the on-device half of #335 (whole-frame render entry + sixteen
+bulk builtins), which shipped host-measured only. Three builds went to both
+rigs: the merge base **`974b3b3`**, the #335 merge **`eedabc8`**, and the
+master of the day **`ed2ac3f`** (which also carries #306's frame pipeline and
+#320's store/read elision, so it is *not* a clean one-change delta — the
+`974b3b3` → `eedabc8` pair is). Every row was taken with one worktree's
+`web/public/luxel.wasm`, so the bytecode pushed to the device is byte-identical
+across builds and only the firmware differs. Both S3 slots carried the same
+image before any measurement (#294), and `core1.last` was clean after every
+push.
+
+### The I-cache question: no regression on either board
+
+`Vm::call_builtin` gained sixteen arms, and #318/#325 showed layout alone is
+worth tens of percent, non-monotonically. `tools/patbench.mjs` on
+`perlin-fire-wind-tunnel` (the stateless ±0.3 % probe — three repeats of nine
+samples on the Athom, of five on the panel) plus `tools/opbench.mjs`:
+
+| board | build | patbench µs/px | Δ | opbench cycles/op |
+|---|---|---:|---:|---:|
+| Athom, 256 px | `974b3b3` base | 58.039 | — | 100.9 |
+| Athom, 256 px | `eedabc8` **#335** | **57.973** | **−0.11 %** | **100.7** |
+| Athom, 256 px | `ed2ac3f` master | 58.121 | +0.14 % | 100.8 |
+| Seengreat, 4096 px | `974b3b3` base | 44.360 | — | 83.4 |
+| Seengreat, 4096 px | `eedabc8` **#335** | **44.382** | **+0.05 %** | **83.4** |
+| Seengreat, 4096 px | `ed2ac3f` master | 44.413 | +0.12 % | 83.4 |
+
+Every delta is inside the probe's own ±0.3 % repeatability, and opbench's
+fitted slope is flat to three figures on both chips (Athom 968.2 → 966.5 →
+967.4 µs per K; panel 12,813.5 → 12,815.0 → 12,812.2). **The sixteen arms cost
+existing patterns nothing measurable**, which is what #328's placement work
+predicted: they land in `Vm::builtin_cold` and every `bulk.rs` symbol links
+into flash `.text`, so `Vm::run` / `Vm::call_builtin` / `Vm::builtin_hot` are
+byte-for-byte where master put them. Nothing to file against #328.
+
+### Bulk patterns on the panel
+
+`ed2ac3f`, 4096 px, brightness 31, medians of seven `/api/status` samples
+after a nine-second settle. Read `out_fps` for what the panel actually showed.
+
+| pattern | fps | out_fps | frame | vm | pipe | out | vm µs/px | heap free |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `rainbow` (per-pixel) | 52 | 52 | 19,470 | 19,417 | 3 | 5,931 | 4.740 | 51,488 |
+| **`bulk-rainbow`** | **125** | **125** | 2,825 | **2,772** | 5 | 3,261 | **0.677** | 50,660 |
+| **`bulk-comet-trails`** | **125** | **126** | 480 | **431** | 3 | 3,237 | **0.105** | 50,320 |
+| **`bulk-bouncing-balls-2d`** | **125** | **125** | 5,539 | **5,477** | 6 | 3,486 | **1.337** | 48,456 |
+| **`bulk-sprite-scroll-2d`** | **125** | **124** | 5,205 | **5,125** | 16 | 3,556 | **1.251** | 48,220 |
+| **`bulk-canvas-ripples-2d`** | **100** | **100** | 9,979 | **9,900** | 13 | 3,599 | **2.417** | 38,988 |
+
+`rainbow` vs `bulk-rainbow` is the one genuine like-for-like pair here (both
+paint one hue ramp across the strip): **VM time 19,417 → 2,772 µs, 7.0×**, and
+the frame goes 52 → 125 fps on the wire. The host bench read 4.4× for the same
+shape (`b-rainbow`, docs/bulk-render.md), so the device win is **1.6× the host
+ratio** — real, but well short of the "understates by ~3×" rule of thumb that
+page offers; take 1.5–2× as the measured multiplier for a *fill*-shaped
+rewrite, where the per-pixel side was cheap to begin with.
+
+The nearest per-pixel library analogues for the other four are not matched
+rewrites (different maths, different entity counts), so these are context, not
+ratios:
+
+| pattern | fps | out_fps | frame | vm | out | vm µs/px | heap free |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `bouncing-balls-2d` | 25 | 25 | 41,233 | 41,159 | 6,062 | 10.049 | 45,744 |
+| `2d-canvas-example` | 17 | 17 | 60,936 | 60,839 | 6,476 | 14.853 | 46,884 |
+| `ripples-2d` | 5 | 5 | 234,553 | 234,402 | 6,173 | 57.227 | 49,752 |
+| `rainbow-comet` | — | — | — | — | — | — | **refused** |
+
+`rainbow-comet` is the entry that makes the frame-persistence argument
+concrete: its `array(pixelCount)` trail buffer is refused outright at 4096 px
+(*"pattern too large for this device — it left only 16 KB of heap free (the
+firmware needs 20 KB to keep running)"*), while `bulk-comet-trails` draws the
+same shape out of six scalars in **431 µs**, the cheapest frame on the board.
+
+Four of the five bulk patterns are **frame-cap bound, not VM bound**: at
+2.8–5.5 ms of VM they sit on the engine's 125 fps ceiling with `out` at
+3.2–3.6 ms. So on this panel a bulk rewrite's payoff stops at the cap — past
+that it buys headroom (and core-0 slack), not frames. **Unexplained, worth a
+look:** `out` drops from 5.9–6.5 ms on the per-pixel patterns to 3.2–3.6 ms on
+the bulk ones, and HUB75 bitplane packing is content-independent — so
+something about a saturated render core costs the output task ~2.5 ms a frame
+(memory-bus contention is the obvious suspect). It shifts the panel's compose
+ceiling by nearly 2×, so it matters once the cap above is lifted. Filed as
+Gitea #367.
+
+### `blit` (keyed) and `fillCanvas`, asserted pixel by pixel
+
+Neither rig can be eyeballed from here, so both were checked through
+`GET /api/pixels` (the pipeline's own frame buffer) with deterministic probe
+patterns — a fixed sprite at a fixed cell, no motion.
+
+On the **panel** (real 64×64 grid, 4096 px):
+
+- **keyed blit** — a 4×2 checkerboard sprite (`v` alternating 1/0, hue 0) over
+  a green `hsv(); fill()`, mode 3 at grid (0,0): exactly **4 red pixels of
+  4096**, at (0,0) (0,2) (1,0) (1,2), and **4,092 green**. Transparent cells
+  are transparent; opaque ones are not blended.
+- **blit clipping** — an 8×4 all-opaque sprite at `col = gridWidth() - 4`,
+  mode 0: exactly **16 red pixels**, columns 60–63 × rows 2–5. The four
+  columns hanging off the right edge clip silently.
+- **`fillCanvas`** — a 2×2 canvas of red / green / blue / black nearest-sampled
+  across the panel: exactly **1024 pixels of each**, quadrants square and in
+  the right corners.
+
+On the **Athom 60 px strip** (the over-provisioned `ceil(√60)` = 8×8 default
+grid — the case the ‡ note in docs/bulk-render.md is about):
+
+- the same keyed blit lands red at indices 0, 2, 8, 10 with green everywhere
+  else, and `/api/pixels` is still exactly 180 bytes;
+- an 8×1 sprite blitted onto grid **row 7** paints indices 56–59 and the four
+  cells past the end of the frame (60–63) clip — no `vmerr`, no truncation;
+- `fillCanvas` gives the same four exact quadrants;
+- `library/bulk-sprite-scroll-2d.js` shows its `ffc600` face over the dim
+  two-tone wash, and `library/bulk-canvas-ripples-2d.js` a smooth field — i.e.
+  the "cover, not match" grid rule works on a real non-rectangular strip.
+
+**Left for Jeremy's eyes** (a programmatic check cannot judge these): whether
+the scrolling sprite reads as a *face* rather than a blob at 8×8 on a 64×64
+panel, and whether `bulk-canvas-ripples-2d`'s 16×16 field upscaled by
+`fillCanvas`'s nearest sampling looks blocky enough to want bilinear.
+
+### Heap under a bulk pattern is flat
+
+40-minute soak on the Athom on `ed2ac3f` (`/api/status` every 25–30 s): 20 min
+holding `bulk-comet-trails`, then 20 min rotating all five `bulk-*.js`
+patterns a minute apart. `renderFrame` hands the frame `Vec` to the VM by move
+and takes it back on every exit path, so the claim under test is that no
+allocation happens per frame — and none does: **`heap_free` read 83,616 B on
+38 of the 40 samples in the 20-minute hold** (the other two 83,424 B, a 192 B
+in-flight HTTP allocation), first sample and last both 83,616, and the
+rotation phase returned to the same per-pattern values each time it came round (83,616 /
+83,692 / 82,528 / 81,808–82,036 / 72,596 B). AppCpu stack high-water 11,136 →
+11,520 B of 20,480 across the run; no `vmerr`, no missed sample, no reboot.
+
 ## Beyond the current boards: chip-support assessment (2026-07-29)
 
 What a chip actually needs to run Luxel, derived from the v0.1.34

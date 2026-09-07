@@ -322,11 +322,102 @@ exceeds the 12,288 B budget; the largest frame is unchanged at 9,744 B
 (picoserve's request future) and no `bulk`/`Vm` frame appears in the top
 fifteen.
 
+## Results — on device (2026-09-07)
+
+Gitea #336. Everything above this section is a host measurement; this one is
+the two rigs. Three firmware builds went to both boards out of one worktree —
+the merge base **`974b3b3`**, the #335 merge **`eedabc8`**, and the master of
+the day **`ed2ac3f`** — with a single `web/public/luxel.wasm` compiling every
+pattern, so the bytecode on the wire is byte-identical across builds and only
+the firmware differs. Both S3 slots carried the same image before any
+measurement (#294); `core1.last` was clean after all six pushes and no OTA
+wedged. Full tables live in docs/boards.md, "Bulk render (`renderFrame`) on
+metal".
+
+**The I-cache risk did not materialise.** `tools/patbench.mjs` on
+`perlin-fire-wind-tunnel` (three repeats) and `tools/opbench.mjs`:
+
+| board | `974b3b3` | `eedabc8` (#335) | `ed2ac3f` |
+|---|---:|---:|---:|
+| Athom @ 256 px, µs/px | 58.039 | **57.973** (−0.11 %) | 58.121 (+0.14 %) |
+| Athom, cycles/op | 100.9 | **100.7** | 100.8 |
+| Seengreat @ 4096 px, µs/px | 44.360 | **44.382** (+0.05 %) | 44.413 (+0.12 %) |
+| Seengreat, cycles/op | 83.4 | **83.4** | 83.4 |
+
+Every delta is inside the probe's own ±0.3 % repeatability on both an Xtensa
+board that pins `Vm::run`/`call_builtin`/`builtin_hot` in IRAM and one that
+pins only `Vm::run`. The caveat this page carried — "an unmeasured
+I-cache-layout risk to every existing pattern" — is discharged.
+
+**The bulk patterns on the 64×64 panel**, `ed2ac3f`, 4096 px:
+
+| pattern | fps | out_fps | vm µs | vm µs/px |
+|---|---:|---:|---:|---:|
+| `rainbow` (per-pixel control) | 52 | 52 | 19,417 | 4.740 |
+| `bulk-rainbow` | 125 | 125 | **2,772** | **0.677** |
+| `bulk-comet-trails` | 125 | 126 | **431** | **0.105** |
+| `bulk-bouncing-balls-2d` | 125 | 125 | **5,477** | **1.337** |
+| `bulk-sprite-scroll-2d` | 125 | 124 | **5,125** | **1.251** |
+| `bulk-canvas-ripples-2d` | 100 | 100 | **9,900** | **2.417** |
+
+`rainbow` → `bulk-rainbow` is the only genuine like-for-like pair among the
+shipped library patterns: **7.0× of VM time**, 52 → 125 fps on the wire. The
+host bench read 4.4× for the same shape (`b-rainbow`), so the device
+multiplier here is **1.6×, not the ~3× this page's rule of thumb suggests** —
+that estimate came from the per-pixel *entry* cost, and for a fill-shaped
+pattern whose body was already trivial the entry is a smaller share of the
+frame than it is for the entity loops. Take 1.5–2× as the measured multiplier
+for fills and expect more only where the per-pixel body was expensive.
+
+Two device-only facts the host bench cannot show:
+
+- **Four of the five bulk patterns are frame-cap bound, not VM bound.** At
+  2.8–5.5 ms of VM they sit on the engine's 125 fps ceiling with the HUB75
+  compose at 3.2–3.6 ms. On this panel a bulk rewrite's payoff *stops* at the
+  cap; past it you are buying headroom, not frames.
+- **`rainbow-comet` will not load at 4096 px at all** — its `array(pixelCount)`
+  trail buffer is refused by the pre-flight check ("pattern too large for this
+  device — it left only 16 KB of heap free"), while `bulk-comet-trails` draws
+  the same shape from six scalars in **431 µs**, the cheapest frame measured on
+  the board. The frame-persistence argument in "The model" is not a
+  micro-optimisation on this hardware; it is the difference between running and
+  not running.
+
+**`blit` keyed mode and `fillCanvas` are correct on metal**, asserted through
+`GET /api/pixels` with fixed-position probe patterns rather than by eye. On the
+panel a 4×2 keyed sprite over a green fill gives exactly 4 red pixels of 4096
+in the right cells; an 8×4 sprite at `gridWidth() - 4` gives exactly 16, the
+overhanging columns clipped; a 2×2 `fillCanvas` gives exactly 1024 pixels per
+quadrant. On the Athom's 60-px strip — the over-provisioned 8×8 `ceil(√n)`
+grid the ‡ note above is about — the same probes land at indices 0/2/8/10, an
+8×1 sprite on grid row 7 paints 56–59 and clips 60–63 with no `vmerr`, and
+`library/bulk-sprite-scroll-2d.js` shows its face over the wash. **"Cover, not
+match" works on a real non-rectangular fixture.**
+
+**No allocation per frame.** 40-minute soak on the Athom (20 min holding
+`bulk-comet-trails`, 20 min rotating all five `bulk-*.js`): `heap_free` read
+**83,616 B on 38 of the hold's 40 samples** — first and last included, the other
+two 192 B lower with a response in flight — and each rotated pattern
+returned to its own fixed value every time it came round. AppCpu stack
+high-water 11,136 → 11,520 B of 20,480; no `vmerr`, no reboot. The
+`mem::take`/give-back of the frame `Vec` costs nothing per frame, as designed.
+
+**Image sizes re-measured on the merged tree** (the table under "Results —
+firmware" was taken on the branch): +8,832 B on `board-pixelblaze-v3`, +8,816
+on `board-athom-music`, +9,312 on `board-seengreat-hub75`, +9,232 on
+`board-c6-devkit`. Margins at `ed2ac3f`: 4.01 % / 4.01 % / 9.64 % / **2.26 %**.
+The C6 conclusion stands unchanged — it is the one board this change puts under
+`image-check.sh`'s 3 % floor (#291).
+
 ## How to judge this on device
 
-Host numbers **understate the device win by roughly 3×**: an x86 per-pixel VM
-entry is a few nanoseconds, the Xtensa one is 317–440 cycles. Read the ratios
-above as a floor.
+The method, kept for the next change that needs it — the results it produced
+are the section above.
+
+Host numbers understate the device win, but by **1.6× on the one fill-shaped
+pair that was measured both ways**, not the ~3× the per-pixel entry cost
+(317–440 Xtensa cycles vs a few x86 nanoseconds) suggests on its own. Read the
+host ratios as a floor, and re-measure rather than scaling them.
 
 - **`tools/opbench.mjs` cannot see this change at all.** Its K-sweep loop
   fits the slope of a bytecode loop and cancels the per-pixel entry by
@@ -365,9 +456,10 @@ an active regression (0.72–0.76× here, interpreted work 27 → 52 insns/px).
 `renderFrame` is an additional entry point, not a replacement: the right rule
 is *stay on `render` unless a bulk op replaces the body*.
 
-The costs are real and should be weighed against that: **+8.1–8.7 KB of flash
-on every board** after the size pass (down from +14.6–14.9 KB), which leaves
-every board's OTA margin where the gate wants it except `board-c6-devkit`,
-which was already under the floor before this branch (#291); and an unmeasured
-I-cache-layout risk to every existing pattern that this evaluation could not
-test without hardware.
+The costs are real and should be weighed against that: **+8.8–9.3 KB of flash
+on every board** as merged (down from +14.6–14.9 KB before the size pass),
+which leaves every board's OTA margin where the gate wants it except
+`board-c6-devkit`, which this change puts under the floor at 2.26 % (#291).
+The I-cache risk that this evaluation could not test without hardware was
+measured on 2026-09-07 and is **nil on both rigs** — see "Results — on
+device".
