@@ -63,8 +63,10 @@ not running.
 One thing the sweep turned up that is not about #335 at all: **`out_us` is not
 flat**. The HUB75 compose is content-independent, and "Second light" recorded
 it as a flat 5.3–6.4 ms whatever runs — but it tracks how hard core 1 is
-working, monotonically, 6.5 ms under `ripples-2d` down to 3.2 ms under
-`bulk-comet-trails`. That is nearly 2× on the panel's compose ceiling. Filed as
+working, monotonically across nine patterns spanning 431 µs to 234 ms of VM
+time: 6.5 ms under `ripples-2d` down to 3.2 ms under `bulk-comet-trails`, and
+not a bulk-vs-per-pixel artifact (the cheap per-pixel `Infinite Snake v2` gets
+a cheap `out` too). That is nearly 2× on the panel's compose ceiling. Filed as
 **#367**.
 
 **`blit` keyed mode and `fillCanvas` verified pixel by pixel, not by eye** —
@@ -78,7 +80,17 @@ at `gridWidth() - 4` gives exactly 16, the overhanging columns clipped; a 2×2
 `vmerr`, and `library/bulk-sprite-scroll-2d.js` shows its face over the wash.
 "Cover, not match" holds on a real non-rectangular fixture.
 
-**Heap is flat.** 40-minute soak on the Athom (20 min holding
+**The full gallery soak is clean too.** `tools/hw-bench.mjs` on the Athom on
+`ed2ac3f`: **305/305 patterns clean, 0 errors, 4 under 30 fps**, median 123 fps
+at 60 px (docs/bench-report.md). Against the 2026-09-02 run on the same rig —
+299/299 clean, 12 slow, median 118 — the interpreter work plus #335 has taken
+two thirds of the slow tail out. One thing that moved the other way and is not
+explained: the sweep's lowest `heap_free` went 83,448 → 59,668 B. Still far
+above the ~20 KB floor and nothing errored, so it is an observation, not a
+fault; filed as **#368**, which also asks hw-bench to name the pattern that
+produced the low-water instead of just printing the number.
+
+**Heap is flat under a bulk pattern.** 40-minute soak on the Athom (20 min holding
 `bulk-comet-trails`, then all five `bulk-*.js` rotated a minute apart):
 `heap_free` read **83,616 B on 38 of the hold's 40 samples**, first and last
 included, the other two 192 B lower with a response in flight; each rotated
@@ -101,9 +113,20 @@ app images, same `creds.env` throughout:
 change puts under `image-check.sh`'s 3 % floor (its base margin was 3.16 %),
 tracked by **#291**. Both shipped classic-ESP32 boards stay just over 4 %.
 
-Both rigs finish on `ed2ac3f`, image in both slots, running rainbow; the
-panel's four stored patterns are untouched (no `FORMAT_VERSION` change in the
-range). Docs: docs/boards.md gains a "Bulk render (`renderFrame`) on metal"
+Both rigs finish on `ed2ac3f`, image in both slots, at the pixel count and
+brightness they were found with: the Athom on rainbow at 60 px, the panel back
+on the stored `Infinite Snake v2` it was found running (119 fps / 119 out_fps
+at 4096 px — identified by matching its `/api/status` signature after the
+harness had already replaced the live code with rainbow). Its four stored
+patterns are untouched; nothing in the range `974b3b3..ed2ac3f` changes
+`FORMAT_VERSION`. **They are deliberately NOT on the master this entry merges
+into**: #340 landed hours later and bumps the store format 5 → 6, which wipes
+the key area on first boot by design — so pushing today's tip would have
+destroyed the four patterns Jeremy saved on the panel. Whoever OTAs that board
+next should expect `patterns: format 5 != 6, wiping storage` and export them
+first.
+
+Docs: docs/boards.md gains a "Bulk render (`renderFrame`) on metal"
 section plus a margin row, docs/bulk-render.md a "Results — on device" section,
 and the stale "unmeasured I-cache risk" caveat is gone from both its
 how-to-judge and scope sections.

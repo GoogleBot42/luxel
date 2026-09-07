@@ -1143,12 +1143,16 @@ Four of the five bulk patterns are **frame-cap bound, not VM bound**: at
 2.8–5.5 ms of VM they sit on the engine's 125 fps ceiling with `out` at
 3.2–3.6 ms. So on this panel a bulk rewrite's payoff stops at the cap — past
 that it buys headroom (and core-0 slack), not frames. **Unexplained, worth a
-look:** `out` drops from 5.9–6.5 ms on the per-pixel patterns to 3.2–3.6 ms on
-the bulk ones, and HUB75 bitplane packing is content-independent — so
+look:** `out` is not the flat 5.3–6.4 ms "Second light" recorded — it tracks
+how hard core 1 is working, 6.5 ms under `ripples-2d` down to 3.2 ms under
+`bulk-comet-trails`, monotonically across nine patterns spanning 431 µs to
+234 ms of VM time. It is not a bulk-vs-per-pixel artifact: the stored
+`Infinite Snake v2` is a cheap *per-pixel* pattern (vm 7,419 µs) and gets a
+cheap `out` too (3,419 µs). HUB75 bitplane packing is content-independent, so
 something about a saturated render core costs the output task ~2.5 ms a frame
-(memory-bus contention is the obvious suspect). It shifts the panel's compose
-ceiling by nearly 2×, so it matters once the cap above is lifted. Filed as
-Gitea #367.
+— memory-bus contention is the obvious suspect. It shifts the panel's compose
+ceiling by nearly 2×, so it matters as soon as the frame cap above is lifted.
+Filed as Gitea #367.
 
 ### `blit` (keyed) and `fillCanvas`, asserted pixel by pixel
 
@@ -1198,6 +1202,13 @@ in-flight HTTP allocation), first sample and last both 83,616, and the
 rotation phase returned to the same per-pattern values each time it came round (83,616 /
 83,692 / 82,528 / 81,808–82,036 / 72,596 B). AppCpu stack high-water 11,136 →
 11,520 B of 20,480 across the run; no `vmerr`, no missed sample, no reboot.
+
+The full gallery soak on the same build agrees: `tools/hw-bench.mjs`,
+**305/305 patterns clean, 0 errors, 4 under 30 fps**, median 123 fps at 60 px
+(docs/bench-report.md) — against 299/299 clean with 12 slow and median 118 on
+2026-09-02, so the interpreter work plus #335 took two thirds of the slow tail
+out. The sweep's lowest `heap_free` moved the other way, 83,448 → 59,668 B;
+still far above the ~20 KB floor and nothing errored, unexplained, Gitea #368.
 
 ## Beyond the current boards: chip-support assessment (2026-07-29)
 
