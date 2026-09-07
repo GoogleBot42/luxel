@@ -371,6 +371,40 @@ impl Writer {
     }
 }
 
+/// True when any function of `prog` calls one of the given runtime builtin
+/// ids. Walks the instruction stream the same way the serializer's import
+/// collection does, so an immediate operand word can never be mistaken for
+/// an opcode. Code that doesn't walk (which the decoder would already have
+/// rejected) reads as "no".
+///
+/// Used by [`crate::engine`]'s default-map heuristic: a `renderFrame`
+/// pattern that never asks for a coordinate is a strip pattern and must
+/// not be handed a square grid it didn't ask for.
+#[inline(never)]
+pub fn calls_any_builtin(prog: &Program, ids: &[u16]) -> bool {
+    for f in &prog.fns {
+        let s = f.code_start as usize;
+        let Some(e) = s.checked_add(f.code_len as usize) else {
+            return false;
+        };
+        if e > prog.words.len() {
+            return false;
+        }
+        let code = &prog.words[s..e];
+        let mut at = 0;
+        while at < code.len() {
+            let Ok(k) = walk_word(code[at]) else {
+                return false;
+            };
+            if k.builtin.is_some_and(|b| ids.contains(&b)) {
+                return true;
+            }
+            at += k.len;
+        }
+    }
+    false
+}
+
 /// One instruction, decoded from its opcode word: how many words it spans
 /// and which operands need validation. Shared by the serializer (import
 /// table collection) and the decoder (full validation).

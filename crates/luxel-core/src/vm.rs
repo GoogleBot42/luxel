@@ -391,6 +391,25 @@ pub enum Builtin {
     // simplex — see noise::simplex2_grad).
     Curl2,
     Curl3,
+    // Luxel extension builtins, batch 10: whole-frame ("bulk") ops for the
+    // `renderFrame` entry — see `crate::bulk`. They write the engine's
+    // frame buffer directly and are no-ops anywhere else.
+    GridWidth,
+    GridHeight,
+    Clear,
+    FillAll,
+    Fade,
+    SetPixel,
+    FillRange,
+    FillHsv,
+    FillRgb,
+    FillGradient,
+    FillRect,
+    FillCircle,
+    Splat,
+    DrawLine,
+    FillCanvas,
+    Blit,
 }
 
 pub struct BuiltinDef {
@@ -506,6 +525,16 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("pixelState", PixelState), b!("setPixelState", SetPixelState),
     // Luxel extensions, batch 9 (appended): curl noise.
     b!("curl2", Curl2), b!("curl3", Curl3),
+    // Luxel extensions, batch 10 (appended): the whole-frame bulk ops that
+    // back the `renderFrame` entry (crate::bulk). Ids 166..=181.
+    b!("gridWidth", GridWidth), b!("gridHeight", GridHeight),
+    b!("clear", Clear), b!("fill", FillAll), b!("fade", Fade),
+    b!("setPixel", SetPixel), b!("fillRange", FillRange),
+    b!("fillHSV", FillHsv), b!("fillRGB", FillRgb),
+    b!("fillGradient", FillGradient),
+    b!("fillRect", FillRect), b!("fillCircle", FillCircle),
+    b!("splat", Splat), b!("drawLine", DrawLine),
+    b!("fillCanvas", FillCanvas), b!("blit", Blit),
 ];
 
 /// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
@@ -538,6 +567,12 @@ impl PixelState {
     }
 }
 
+/// `#[inline(never)]`: this is a linear scan of the whole table with a
+/// `memcmp` per entry, and it is called from name LISTS (the decoder's
+/// import table, the compiler, the engine's coordinate-bulk-op probe).
+/// Inlined it was emitted eight times in one function alone. Nothing that
+/// calls it is on a per-pixel path.
+#[inline(never)]
 pub fn lookup_builtin(name: &str) -> Option<u16> {
     BUILTINS
         .iter()
@@ -844,6 +879,16 @@ pub struct Vm {
     transform_ops: u32,
     /// Installed pixel map (engine-set): dims (1/2/3) + normalized coords.
     pub map: Option<MapData>,
+    /// The engine's frame buffer, lent to the VM (by move — never copied)
+    /// for the duration of a `renderFrame` call so the bulk builtins can
+    /// write RGB888 straight into it. Empty at every other moment, which
+    /// is what makes every bulk op a no-op outside the whole-frame entry.
+    pub frame: Vec<[u8; 3]>,
+    /// The installed map read as a regular W×H grid, when it is one —
+    /// mirrors `Engine::grid` and is maintained at map install, not per
+    /// frame. `gridWidth`/`gridHeight` report it and the coordinate-space
+    /// bulk ops use it to walk only a shape's bounding box.
+    pub frame_grid: Option<crate::outpipe::GridMap>,
     /// Engine-set; used by mapPixels and the no-map 1D fallback.
     pub pixel_count: u32,
     /// `pixelState`/`setPixelState` storage — `None` until a pattern's
@@ -1087,6 +1132,8 @@ impl Vm {
             transform_active: false,
             transform_ops: 0,
             map: None,
+            frame: Vec::new(),
+            frame_grid: None,
             pixel_count: 0,
             pixel_state: None,
             palette: Vec::new(),
@@ -3974,6 +4021,34 @@ impl Vm {
                 }
                 Ok(Value::default())
             }
+            // ---- Luxel extensions, batch 10: whole-frame bulk ops ----
+            // The `renderFrame` entry's vocabulary (crate::bulk). Each one
+            // writes the engine's frame buffer — lent to `Vm::frame` for
+            // the duration of the call — directly in RGB888; outside that
+            // entry the buffer is empty and they all no-op. Bodies live in
+            // `bulk` so this dispatcher stays thin. They are TIER 3
+            // (`builtin_cold`) by construction: a `renderFrame` pattern calls
+            // each of these once per FRAME, never per pixel, and their bodies
+            // are far too big to drag through the hot tiers' cache/IRAM
+            // budget (Gitea #328, docs/firmware.md "Code placement").
+            // `&args[..argc]` keeps the "missing args read as 0" convention
+            // the `bulk` helpers assume.
+            GridWidth => num(crate::bulk::grid_dim(self, 0)),
+            GridHeight => num(crate::bulk::grid_dim(self, 1)),
+            Clear => Ok(crate::bulk::clear(self)),
+            FillAll => Ok(crate::bulk::fill(self)),
+            Fade => Ok(crate::bulk::fade(self, &args[..argc])),
+            SetPixel => Ok(crate::bulk::set_pixel(self, &args[..argc])),
+            FillRange => Ok(crate::bulk::fill_range(self, &args[..argc])),
+            FillHsv => crate::bulk::fill_hsv(self, prog, &args[..argc]).map_err(no_site),
+            FillRgb => crate::bulk::fill_rgb(self, prog, &args[..argc]).map_err(no_site),
+            FillGradient => Ok(crate::bulk::fill_gradient(self, &args[..argc])),
+            FillRect => Ok(crate::bulk::fill_rect(self, &args[..argc])),
+            FillCircle => Ok(crate::bulk::fill_circle(self, &args[..argc])),
+            Splat => Ok(crate::bulk::splat(self, &args[..argc])),
+            DrawLine => Ok(crate::bulk::draw_line(self, &args[..argc])),
+            FillCanvas => crate::bulk::fill_canvas(self, prog, &args[..argc]).map_err(no_site),
+            Blit => crate::bulk::blit(self, prog, &args[..argc]).map_err(no_site),
             _ => unreachable!("handled by builtin_fast"),
         }
     }
@@ -4334,7 +4409,7 @@ fn hash_unit(x: u32) -> Fx {
 /// Cell index for a normalized coordinate on an n-cell axis:
 /// floor(x·n) clamped to 0..n−1 (so x = 1.0 lands in the last cell,
 /// with no `* 15.99` fudge). Exact in i64 raw — no 16.16 overflow.
-fn cell_index(x: Fx, n: usize) -> usize {
+pub(crate) fn cell_index(x: Fx, n: usize) -> usize {
     let i = (x.raw() as i64 * n as i64) >> 16; // arithmetic shift = floor
     i.clamp(0, n as i64 - 1) as usize
 }

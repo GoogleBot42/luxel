@@ -190,6 +190,25 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "playlistSetPosition", sig: "playlistSetPosition(index)", doc: "Jump the playlist." },
   { name: "playlistGetLength", sig: "playlistGetLength()", doc: "Number of playlist entries." },
   { name: "nodeId", sig: "nodeId()", doc: "This device's id (for multi-device patterns)." },
+  // whole-frame ("bulk") ops — only meaningful inside renderFrame(), which the
+  // engine calls once per frame instead of render*/pixel. hsv()/rgb()/paint()
+  // set the "brush" these draw with; the frame persists between frames.
+  { name: "gridWidth", sig: "gridWidth()", doc: "Columns in the installed grid, or 0 when the fixture is not a matrix — how a renderFrame pattern branches before using grid-space ops. (Luxel)" },
+  { name: "gridHeight", sig: "gridHeight()", doc: "Rows in the installed grid, or 0 when the fixture is not a matrix. (Luxel)" },
+  { name: "clear", sig: "clear()", doc: "renderFrame: the whole frame to black. The frame persists between frames, so clear() (or a fill) is how you start fresh. (Luxel)" },
+  { name: "fill", sig: "fill()", doc: "renderFrame: the whole frame to the brush — the color the last hsv()/rgb()/paint() set. (Luxel)" },
+  { name: "fade", sig: "fade(k)", doc: "renderFrame: every channel × k (clamped 0..1, floored to true black). fade() + a few setPixel() calls is a decay trail with no pattern-side array. (Luxel)" },
+  { name: "setPixel", sig: "setPixel(index)", doc: "renderFrame: the brush at floor(index); out of range is a no-op. For a handful of points — looping it over every pixel is slower than render(); use fillHSV/fillRGB for that. (Luxel)" },
+  { name: "fillRange", sig: "fillRange(i0, i1)", doc: "renderFrame: the brush on [i0, i1) — exclusive end, clamped; an empty or inverted range paints nothing. (Luxel)" },
+  { name: "fillHSV", sig: "fillHSV(h, s, v)", doc: "renderFrame: paint every pixel from hue/sat/value, each of which is a number broadcast to all pixels OR an array indexed by pixel index — fillHSV(hues, 1, vals) is the whole buffer-readout render() in one call. A short array leaves the tail untouched. (Luxel)" },
+  { name: "fillRGB", sig: "fillRGB(r, g, b)", doc: "renderFrame: as fillHSV, in RGB — each channel a scalar or a per-pixel array. (Luxel)" },
+  { name: "fillGradient", sig: "fillGradient(h0, s0, v0, h1, s1, v1, axis = 0)", doc: "renderFrame: HSV lerp across the frame. axis 0 runs along the pixel index (t = i/(pixelCount-1)), 1/2/3 along mapped x/y/z. Hue lerps unwrapped, so fillGradient(t,1,1, t+1,1,1) is a full rainbow. (Luxel)" },
+  { name: "fillRect", sig: "fillRect(x0, y0, x1, y1)", doc: "renderFrame: brush every pixel whose mapped coordinate is inside the (inclusive) rectangle, corners in any order. (Luxel)" },
+  { name: "fillCircle", sig: "fillCircle(x, y, r)", doc: "renderFrame: a hard-edged disc of the brush at normalized mapped coordinates. (Luxel)" },
+  { name: "splat", sig: "splat(x, y, r, mode)", doc: "renderFrame: a soft disc — brush × (1 − d/r) — blended with mode 0 replace / 1 add / 2 max. clear() plus N splats replaces a per-pixel hypot loop over N sprites. (Luxel)" },
+  { name: "drawLine", sig: "drawLine(x0, y0, x1, y1, w, mode)", doc: "renderFrame: a capsule — brush × (1 − d/w) from the segment — blended with mode 0/1/2. A hard line is a tiny w with mode 0. (Luxel)" },
+  { name: "fillCanvas", sig: "fillCanvas(hArr, sArr, vArr, w, h)", doc: "renderFrame: sample a w×h row-major canvas (each channel an array or a scalar) at every pixel's mapped (x, y), nearest-neighbour, and replace — the canvas[floor(y·h)·w + floor(x·w)] idiom in one call. (Luxel)" },
+  { name: "blit", sig: "blit(hArr, sArr, vArr, w, h, col, row, mode)", doc: "renderFrame: paste a w×h canvas onto the grid with its top-left at integer cell (col, row), clipped; mode 3 is keyed (black source cells are transparent) — sprites and scrolling text. A no-op without a grid; check gridWidth(). (Luxel)" },
 ];
 
 /** Special globals available to patterns. */

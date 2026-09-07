@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-09-07 — renderFrame: one call per frame instead of one per pixel (#335)
+
+A pattern may now export `renderFrame()` instead of `render`/`render2D`/
+`render3D`. The engine calls it ONCE per frame after `beforeRender`, lends it
+the frame buffer (a `mem::take` of the engine's RGB888 Vec into `Vm::frame`,
+never a copy), and the pattern paints with sixteen new bulk builtins
+(ids 166–181, appended, no LXBC bump): `gridWidth` `gridHeight` `clear` `fill`
+`fade` `setPixel` `fillRange` `fillHSV` `fillRGB` `fillGradient` `fillRect`
+`fillCircle` `splat` `drawLine` `fillCanvas` `blit`. The brush for the shape
+ops is whatever `hsv()`/`rgb()`/`paint()`/`oklch()` last set, so every
+existing colour builtin works unchanged. Full design and evaluation:
+docs/bulk-render.md; language reference: docs/lang.md "Whole-frame rendering".
+
+Why this and not more interpreter tuning: the per-pixel entry costs
+~317–440 cycles/px on the S3 panel (5.4–7.6 ms/frame at 4096 px) and #314's
+−18 % dispatch win left it at exactly 5,409 µs — only a whole-frame entry
+removes it. A survey of all 299 library patterns (`luxel bench --profile`
+at 256 and 1024 px, fitted per-pixel vs fixed) says who benefits: 87
+persistent-buffer readouts, 29 entity loops, ~20 range fills, 28 canvas
+readouts, 9 constant fills. ~110 dense-procedural patterns do NOT — every
+pixel is a different computation, and the doc says so rather than pretending
+a `fillNoise` would help.
+
+Three "spaces": index ops touch pixel `i` on any map; coordinate ops are a
+predicate over each pixel's MAPPED (x, y) exactly as `render2D` sees it, so
+sparse/irregular maps just work (unmapped space has no pixels to fill) and a
+grid fast path iterates only the shape's bounding-box cells — required and
+tested to be byte-identical to the generic scan (12 rounds × 4 random shapes
+× 8 rigs incl. serpentine and transposed coordinate grids); grid ops (`blit`)
+need a grid that COVERS the frame and clip the tail of an over-provisioned
+`ceil(√n)` default grid (first cut required an exact match and silently
+no-oped on every non-square strip — caught by the sprite pair on 300 px).
+
+Host, `tools/pairbench.mjs` (new), 4096 px / 64×64 coordinate map, best of 5:
+
+| pair | px ns/px | bulk ns/px | ratio |
+|---|---:|---:|---:|
+| empty render vs empty renderFrame (the entry alone) | 9.68 | 0.004 | 2201× |
+| constant `hsv` vs `fill()` | 15.75 | 0.21 | 75× |
+| per-pixel hue vs `fillGradient` (the default rainbow) | 20.74 | 4.76 | 4.4× |
+| `hsv(hues[i],1,vals[i])` vs `fillHSV(hues,1,vals)` | 19.15 | 4.16 | 4.6× |
+| array trail vs `fade`+`setPixel` (no array at all) | 17.27 | 0.67 | 25.7× |
+| 3 block tests vs 3× `fillRange` | 36.85 | 0.28 | 133× |
+| 6-ball `hypot` loop vs `clear`+6 `splat` | 441.56 | 14.06 | 31.4× |
+| 32×32 canvas readout vs `fillCanvas` | 54.49 | 11.34 | 4.8× |
+| 8×8 keyed sprite vs `blit(…,3)` | 69.51 | 0.31 | 225× |
+| 8 segment distances vs 8 `drawLine` | 896.74 | 51.61 | 17.4× |
+| **dense perlin control** | 138.84 | 184.36 | **0.75×** |
+
+The control going backwards is the point: rewriting a dense pattern as a
+`renderFrame` loop over `setPixel` puts the loop bookkeeping into bytecode
+(27 → 52 insns/px). The host understates the device win ~3× (docs/boards.md).
+
+Firmware: nothing in firmware/ changed, but luxel-core grew the app image by
++14.9 KB on the first cut, dropping `board-pixelblaze-v3` to a 2.58 % OTA
+margin — under the 3 % gate. A size pass (dyn closure instead of four
+monomorphized `paint_shape`s, shared texel helpers, out-of-line `put`/
+`map_coord`/`span`, static error strings, `splat` as a zero-length
+`drawLine`) took 6.5 KB back bit-identically. Rebased onto #328's placement
+work (base 974b3b3) the delta is **+8,272 B: 4.02 % margin on
+pixelblaze-v3**, 9.86 % on the HUB75 S3, `.rwtext` byte-identical (the
+sixteen arms sit in `builtin_cold`, tier 3 — once per frame, never per
+pixel). `board-c6-devkit` goes 3.13 % → 2.29 %: #328 had just lifted it back
+over the floor, so this branch is now what pushes it under (#291; not the
+CI board). `.stack` −64 B. The two coordinate-shape pairs pay ~10 % for the
+indirect call; the doc records it. The rebase itself was a clean merge that
+did not compile: #328 hands each dispatch tier a fixed `[Value; 16]`, and the
+bulk arms wanted the old exact-length slice — `&args[..argc]` restored it.
+
+Six library patterns ship with it (`bulk-rainbow`, `bulk-comet-trails`,
+`bulk-bouncing-balls-2d`, `bulk-sprite-scroll-2d`, `bulk-canvas-ripples-2d`
+and `snake-2d-v2`, the Infinite Snake rendered through one `fillCanvas`);
+gallery tiles classify a pattern naming a coordinate op as `grid`, guarded
+against patterns that define their own `splat`/`drawLine` (three do — they
+still shadow the builtins and compile). 32 new tests; 346 pass;
+`check-library.sh` 305/305 on all five rigs; chromium-verified.
+
+Not done here (devices were in use): the I-cache regression check on a
+NON-bulk pattern (`call_builtin` gained sixteen arms; #318/#325 showed layout
+alone swings real patterns by tens of percent) and the on-device patbench of
+the bulk patterns — Gitea #336. #265's dual-core split does not apply to a
+`renderFrame` pattern (one call per frame); noted there.
+
 ## 2026-09-06 — Code placement for the flash instruction cache: 2.9–4.2× on the classic ESP32 (#328)
 
 #325 showed the dominant term in `vm_us` is whether the interpreter's own

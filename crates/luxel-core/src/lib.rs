@@ -21,6 +21,7 @@ extern crate alloc;
 pub mod ast;
 pub mod audio;
 pub mod budget;
+pub mod bulk;
 pub mod bytecode;
 #[cfg(feature = "frontend")]
 pub mod compile;

@@ -6,7 +6,8 @@
 // `kind` picks the thumbnail shape: "cloud" for render3D-only patterns (a
 // rotating projected point cloud on a cube-lattice map), "grid" for render2D
 // (a mapped rectangle), "strip" for 1D (a horizontal bar) — Jeremy's
-// 1D-bar-vs-2D-rectangle distinction.
+// 1D-bar-vs-2D-rectangle distinction. A `renderFrame` pattern has no
+// render2D, so it is classified by the bulk builtins it calls instead.
 //
 // The corpus gallery is a LOCAL-ONLY convenience: the corpus is untracked and
 // of unknown licensing (the clean-room policy keeps it out of library/ and
@@ -23,8 +24,33 @@ import { fileURLToPath } from "node:url";
 const webDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repo = path.dirname(webDir);
 
+// Coordinate- and grid-space bulk builtins: a `renderFrame` pattern that
+// calls any of these draws in 2D even though it never mentions render2D.
+// Same list the engine uses to decide whether a renderFrame-only pattern
+// gets the default square grid map (`uses_coordinate_bulk_op`, engine.rs) —
+// keep the two in sync. A pattern that declares its OWN function of one of
+// these names shadows the builtin and does not count (several 1D patterns
+// have a local `splat`/`drawLine` helper).
+const BULK_2D_NAMES = [
+  "fillRect",
+  "fillCircle",
+  "splat",
+  "drawLine",
+  "fillCanvas",
+  "blit",
+  "gridWidth",
+  "gridHeight",
+];
+
+const usesBulk2D = (source) =>
+  BULK_2D_NAMES.some(
+    (n) =>
+      new RegExp(`\\b${n}\\s*\\(`).test(source) &&
+      !new RegExp(`function\\s+${n}\\s*\\(`).test(source),
+  );
+
 const kindOf = (source) => {
-  const has2D = /render2D/.test(source);
+  const has2D = /render2D/.test(source) || usesBulk2D(source);
   const has3D = /render3D/.test(source);
   return has3D && !has2D ? "cloud" : has2D ? "grid" : "strip";
 };

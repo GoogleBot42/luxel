@@ -108,14 +108,15 @@ GlobalDef { name, export: bool, init: Fx, predefined: bool }
 - `export` on a global makes it visible to the host's vars API;
   `exported_fns` are the host-callable entry points. Frontends decide what
   to export; the engine looks for `render`, `render2D`, `render3D`,
-  `beforeRender` and control functions by name.
+  `renderFrame`, `beforeRender` and control functions by name.
 - **Late-bound render entries** (oracle-confirmed 2026-08-29): when no
   exported function of the name exists, a plain GLOBAL named `render`/
-  `render2D`/`render3D` is a dispatch candidate. The entry is re-resolved
-  every frame after `beforeRender`, using the global only while it holds
-  a function value — so `export var render2D` assigned (and re-assigned)
-  at runtime renders exactly as on a real PB, and a global of that name
-  merely counts as "renders in 2D/3D" for default-map selection.
+  `render2D`/`render3D`/`renderFrame` is a dispatch candidate. The entry
+  is re-resolved every frame after `beforeRender`, using the global only
+  while it holds a function value — so `export var render2D` assigned
+  (and re-assigned) at runtime renders exactly as on a real PB, and a
+  global of that name merely counts as "renders in 2D/3D" for
+  default-map selection.
 
 ## 3. Execution model
 
@@ -251,6 +252,46 @@ no pattern code run) until `1000/fps` real ms have accumulated, at which
 point `beforeRender` receives the whole interval. Hosts keep their own
 output cadence either way — the cap throttles pattern evaluation, not the
 LED/preview refresh.
+
+### The whole-frame entry (`renderFrame`)
+
+`renderFrame` is a **fourth** entry point of a different shape: one
+zero-argument call per frame in place of the whole per-pixel pass. It is
+resolved by the same mechanism as the other three (exported function, or
+a global holding a function, re-resolved every frame) and, when present,
+wins over `render`/`render2D`/`render3D` regardless of the map's
+dimensionality — it is not a fourth dimensionality but a different
+contract.
+
+The contract for a host:
+
+- Call it exactly once per frame, after `beforeRender`, with **no
+  arguments**. Nothing is read back per pixel: `vm.pixel` is the pattern's
+  *brush* for that call, not an output slot, and the host must reset it
+  to zero (and `pixel_written` to false) before the call so the brush
+  starts black.
+- **Lend the frame buffer to the VM for the duration of the call.** The
+  engine moves its `[u8; 3]` pixel vector into `Vm::frame` (a move, never
+  a copy — 12 KB at 4096 pixels, every frame) and takes it back on every
+  exit path: normal return, pattern error, and debug suspension alike.
+  The buffer's length is invariant; the bulk builtins only ever write
+  into it, using the same `quantize()` and `hsv_to_rgb` the per-pixel
+  path uses, so output is bit-identical to the equivalent `render`.
+- Alongside it the host lends `Vm::frame_grid`: the installed map's grid
+  (`outpipe::detect_grid`'s result, or the procedural grid) when the
+  fixture is a regular matrix, else `None`. That is what grid-space
+  builtins address and what `gridWidth()`/`gridHeight()` report; it is an
+  optimization hint for coordinate-space ops and never changes their
+  result.
+- **The frame buffer is not cleared between frames.** A pattern sees the
+  previous frame's finished (post-processed) pixels and is expected to
+  clear or overwrite them itself. Hosts must not zero it as a courtesy —
+  decay-trail patterns depend on the persistence.
+- Afterwards run the ordinary frame tail: the post-process chain and the
+  `setPixelState` hand-over, exactly as after a per-pixel pass. Fuel,
+  call-depth, error blast radius, `setFrameRate` and `timeScale` are
+  unchanged; a fatal error blanks the frame with the buffer intact.
+- Map mode (`run_map`) is unaffected — a map program uses `render`.
 
 Debug hooks (breakpoints as `(fn_idx, pc)`, step Continue/Over/Into/Out,
 frame/locals/globals inspection) are host-optional; `dbg: None` is the
