@@ -1509,6 +1509,85 @@ What the headroom is actually for: an **8th bitplane** becomes usable (~58 Hz
 at 30 MHz, against ~38 Hz at 20 MHz), and **chained panels** get the
 bandwidth they need (Gitea #255).
 
+## The framebuffer swap is frame-atomic (2026-09-07, Gitea #376)
+
+Jeremy asked how tearing is avoided when the framebuffer is fetched by DMA.
+Until this change it was not.
+
+**The mechanism that tore.** The panel is refreshed by one circular DMA
+descriptor ring covering the whole BCM repetition sequence of *one*
+framebuffer (esp-hub75 0.14, feature `circular-dma`). Upstream's
+`Hub75::swap` rewrote **every descriptor's `buffer` pointer** by the
+old→new delta the instant it was called, while the DMA was mid-pass; its own
+SAFETY note conceded "the worst-case visual artifact is one partially-mixed
+frame". Because the ring is ordered by plane repetition — plane 0 sixty-four
+times, plane 6 once — the mix is the *high bitplanes of frame N with the low
+bitplanes of frame N+1*, i.e. colour corruption at moving edges rather than a
+clean horizontal tear. `SWAP_DONE` was frame-boundary, but it only guarded
+reclaiming the old buffer, not the switch itself. The firmware composes up to
+125 frames a second against a 115 Hz rescan, so most displayed passes mixed
+two frames. Filmed on the bench panel with `library/frame-rate-scan.js`: at a
+sweep-column change, **two columns are lit at once, one of them partially**.
+
+**The fix** is a local patch to esp-hub75
+(`firmware/patches/esp-hub75-0.14.0-atomic-swap.patch`; the patch header is
+the full write-up). **One descriptor ring per framebuffer.** Each ring's tail
+`next` points at its own head, so a ring on its own loops forever over a
+single image. A swap is then ONE naturally-aligned 32-bit store: the running
+ring's tail `next` is rewritten to the other ring's head. The DMA reads a
+descriptor's `next` only when it finishes that descriptor, and the tail is the
+last descriptor of a complete BCM pass, so the switch lands exactly on a panel
+frame boundary with no ISR latency in the path. **Every pass the engine makes
+reads exactly one framebuffer.** No `buffer` pointer is ever touched while the
+DMA is inside the ring. When the flip lands, the frame-count ISR restores the
+ring it left (tail `next` → its own head) so that ring is self-contained again
+for the next swap.
+
+**Knowing when it landed** is the subtle half, because the store can lose the
+race with the DMA's prefetch of the tail, in which case the engine wraps to
+its own head once more and the flip lands a frame later (still never a mixed
+frame — only later). Two independent proofs, either sufficient:
+
+- `swap()` reads the DMA channel's current-outlink-descriptor register (GDMA
+  `OUT_DSCR`). If the engine is still at least three descriptors short of the
+  tail, the tail cannot have been fetched, so it is certain to read the `next`
+  just written and the **very next `out_eof` is the switch**.
+- Otherwise **two EOFs**, which is unconditionally safe.
+
+`out_eof` means "the last byte of that descriptor has been read from memory",
+so under either proof the old framebuffer is provably free when it is handed
+back. This matters for throughput, not just correctness: an early version
+landed only on the two-EOF rule and the compose rate settled at **52 fps**
+against the 115 Hz rescan, because every swap cost two panel frames.
+
+**Cost.** One extra descriptor ring in `.bss`: 254 descriptors × 12 B ×
+2 rings = **6,096 B**, up from 3,048 (`__DESC_CELL` 0xbec → 0x17d4 in the
+linked image). It comes out of the leftover `.stack` region — 33,372 →
+30,268 B, and `tools/stack-check.sh` still passes with the largest frame at
+9,648 B. Flash cost is +664 B (`.text` +512, `.rodata` +112, `.data` +40);
+the app image goes 950,480 → 951,264 B (+784 with headers and padding),
+leaving 97,312 B (9.28 %) of the OTA slot still free. Heap is untouched — the framebuffers themselves did not change.
+
+**Measured on the panel** (`board-seengreat-hub75`, 4096 px, 30 MHz, 7
+planes, `library/frame-rate-scan.js` at ComposeCap 0), before and after:
+
+| | `fps` | `out_fps` | `rescan_hz` | `vm_us` | `frame_us` | heap free |
+|---|---:|---:|---:|---:|---:|---:|
+| master `0d6beda` | 124 | 119–123 | 115 | 843–857 | 893–912 | 49,280 |
+| + atomic swap | 124 | 113–120 | 115 | 831–881 | 879–943 | 41,088–49,280 |
+
+Identical within noise: the swap was already only a handful of stores, and it
+still is. `vmerr` null and `fence_timeouts` 0 throughout. What changes is what
+the panel *shows*, which no API field reports — that is what the camera is
+for.
+
+**Two things this does NOT fix.** Composed frames are still *dropped*
+(`write_frame` returns early while a swap is pending, and at 124 composed
+against 115 rescans about one frame in fourteen never reaches the panel) —
+pacing the render loop on the panel boundary is Gitea #387. And `out_fps`
+still counts `write_frame` calls rather than displayed frames (Gitea #378),
+which is why it reads a few above `rescan_hz` here.
+
 ## Seeing the displayed frame rate: `library/frame-rate-test.js` (2026-09-07)
 
 `rescan_hz` is the driver's own count. `library/frame-rate-test.js` ("Frame

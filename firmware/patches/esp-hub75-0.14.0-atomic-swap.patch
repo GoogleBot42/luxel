@@ -1,0 +1,621 @@
+Luxel local patch: frame-atomic framebuffer swap in circular-DMA mode.
+
+Gitea zuckerberg/luxel#376. Upstream esp-hub75 0.14.0 keeps ONE circular
+descriptor ring over the whole BCM repetition sequence of the framebuffer
+that is currently displayed, and `Hub75::swap` rewrites EVERY descriptor's
+`buffer` pointer by the old->new delta, immediately, while the DMA is
+mid-pass. Its own SAFETY note admits the consequence: "the worst-case
+visual artifact is one partially-mixed frame". The pass is ordered by
+plane repetition, so the mix is the high bitplanes of frame N with the low
+bitplanes of frame N+1 — visible on the panel as colour corruption at
+moving edges. Filmed on the bench panel 2026-09-07 with
+library/frame-rate-scan.js: at a sweep-column change, two columns are lit
+at once, one of them partially.
+
+This patch makes the swap land exactly on a panel frame boundary.
+
+  * `hub75_dma_descriptors!` allocates `DESCRIPTOR_RINGS` (2 under
+    circular-dma, 1 otherwise) rings' worth of descriptors instead of one.
+  * `CircularBcmBuf::new` still builds only ring 0, against the initial
+    framebuffer. `Hub75::swap` builds ring 1 the first time it is handed
+    the second framebuffer (`fill_full_chain`, same layout, its own head
+    as the tail's `next`), and thereafter each ring stays bound to its
+    framebuffer, so steady-state swapping rebuilds nothing.
+  * The swap itself is ONE naturally-aligned 32-bit store: the running
+    ring's tail `next` is rewritten to the other ring's head. The DMA
+    reads a descriptor's `next` only when it finishes that descriptor,
+    and the tail is the last descriptor of a complete BCM pass, so the
+    engine either wraps to its own head once more (the store lost the race
+    with the tail's prefetch — the flip lands one frame later) or jumps to
+    the new ring. Every pass it makes reads exactly one framebuffer. No
+    `buffer` pointer is ever touched while the DMA is inside the ring.
+  * Only the tail of each ring carries `suc_eof`, so the frame-count ISR
+    still fires once per pass and `frame_count()` still counts panel
+    rescans.
+  * Landing is *observed*, not assumed, and the old framebuffer is handed
+    back only once the DMA provably cannot read it again. `out_eof` means
+    "the last byte of that descriptor has been read from memory", so the
+    question is only which pass the EOF belongs to. Two independent proofs,
+    either sufficient:
+      - `swap()` reads the DMA channel's current-outlink-descriptor
+        register (GDMA `OUT_DSCR` on the S3, registered by the platform
+        module through `store_current_desc`). If the engine is still at
+        least three descriptors short of the running ring's tail, the tail
+        cannot have been fetched yet, so it is certain to read the `next`
+        just written and the very NEXT EOF is the switch.
+      - Otherwise, two EOFs. By the second the DMA has been all the way
+        round the new ring whatever happened.
+    The frame-count ISR also lands early if it finds `OUT_DSCR` inside the
+    ring that was flipped to. Platforms that register no reader (I2S
+    parallel on the classic ESP32) always take the two-EOF rule, which
+    costs one extra panel frame of swap latency and nothing else.
+    (Measured on the bench panel: with the two-EOF rule the compose rate
+    settles at 52 fps against a 115 Hz rescan; with the one-EOF proof it
+    tracks the rescan.)
+  * When the flip lands the ISR restores the ring it left, tail `next` ->
+    its own head, so that ring is self-contained again and ready to be the
+    target of the next swap.
+  * A second swap cannot be armed over a pending one: correct double
+    buffering can't do it (the caller only owns the second buffer after
+    `wait()` returns it) and `swap()` debug-asserts, then spins at most one
+    panel frame rather than corrupt the rings.
+  * A caller that hand-allocates a single ring's worth of descriptors
+    keeps the upstream pointer-rewrite path unchanged, and the
+    non-circular (`linear`) path is untouched.
+
+Cost: one extra descriptor ring in .bss. On the bench panel
+(64x64, 7 bitplanes, 254 descriptors/ring x 12 B) that is 3048 bytes.
+
+Upstream this if it holds (https://github.com/liebman/esp-hub75).
+
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -120,6 +120,27 @@
+ 
+ pub(crate) const MAX_DMA_CHUNK_SIZE: usize = esp_hal::dma::CHUNK_SIZE;
+ 
++/// Number of descriptor rings the driver builds.
++///
++/// Luxel local patch (Gitea #376): in `circular-dma` mode the driver keeps
++/// **one descriptor ring per framebuffer** so that a buffer swap is a single
++/// aligned store rewriting the running ring's tail `next` to the other ring's
++/// head — the DMA reads `next` only when it wraps, so the switch lands exactly
++/// on a frame boundary and no descriptor's `buffer` pointer is ever rewritten
++/// mid-pass. [`hub75_dma_descriptors!`] therefore allocates this many rings'
++/// worth of descriptors. Without `circular-dma` the swap is already
++/// frame-atomic (the ISR performs it at a frame boundary) and one ring is
++/// enough.
++///
++/// A caller that hand-allocates a descriptor slice with room for only one ring
++/// still works: the driver falls back to the upstream pointer-rewrite swap,
++/// which is not frame-atomic.
++#[cfg(feature = "circular-dma")]
++pub const DESCRIPTOR_RINGS: usize = 2;
++/// Number of descriptor rings the driver builds (see the `circular-dma` case).
++#[cfg(not(feature = "circular-dma"))]
++pub const DESCRIPTOR_RINGS: usize = 1;
++
+ /// Computes the number of DMA descriptors required for a given framebuffer
+ /// configuration.
+ ///
+@@ -149,6 +170,10 @@
+ /// [DmaDescriptor]` suitable for passing to [`Hub75::new`] or
+ /// [`Hub75::new_async`].
+ ///
++/// The allocation is [`DESCRIPTOR_RINGS`] rings' worth: two under
++/// `circular-dma` (one ring per framebuffer, for the frame-atomic ring-flip
++/// swap), one otherwise.
++///
+ /// # Example
+ /// ```rust,ignore
+ /// type FBType = DmaFrameBuffer<NROWS, COLS, PLANES>;
+@@ -157,10 +182,11 @@
+ #[macro_export]
+ macro_rules! hub75_dma_descriptors {
+     ($fb_type:ty) => {{
+-        const __N: usize = $crate::dma_descriptor_count(
+-            <$fb_type>::bcm_chunk_count(),
+-            <$fb_type>::bcm_chunk_bytes(),
+-        );
++        const __N: usize = $crate::DESCRIPTOR_RINGS
++            * $crate::dma_descriptor_count(
++                <$fb_type>::bcm_chunk_count(),
++                <$fb_type>::bcm_chunk_bytes(),
++            );
+         static __DESC_CELL: $crate::static_cell::StaticCell<[esp_hal::dma::DmaDescriptor; __N]> =
+             $crate::static_cell::StaticCell::new();
+         __DESC_CELL
+--- a/src/bcm/circular.rs
++++ b/src/bcm/circular.rs
+@@ -1,10 +1,18 @@
+ //! Circular DMA buffer for continuous HUB75 refresh.
+ //!
+-//! `CircularBcmBuf` builds a single circular DMA descriptor chain encoding the
+-//! full BCM (Binary Code Modulation) repetition sequence. The DMA engine starts
+-//! once and loops forever. Buffer swaps are performed by applying a pointer
+-//! delta to every descriptor's `buffer` field — no descriptor rebuild, no DMA
+-//! stop/restart.
++//! `CircularBcmBuf` builds a circular DMA descriptor chain encoding the full
++//! BCM (Binary Code Modulation) repetition sequence. The DMA engine starts once
++//! and loops forever.
++//!
++//! Luxel local patch (Gitea #376): the descriptor slice holds
++//! [`crate::DESCRIPTOR_RINGS`] rings' worth of descriptors. Only ring 0 is
++//! built here (against the initial framebuffer); ring 1 is built lazily by the
++//! first `Hub75::swap`, against the framebuffer being swapped in. A swap is
++//! then a single aligned store rewriting the running ring's tail `next` to the
++//! other ring's head, which the DMA reads only when it wraps — so the switch
++//! lands exactly on a frame boundary instead of rewriting every descriptor's
++//! `buffer` pointer mid-pass (which mixed two frames' bitplanes; see
++//! `isr.rs`).
+ 
+ use esp_hal::dma::DmaDescriptor;
+ use esp_hal::dma::DmaTxBuffer;
+@@ -20,12 +28,16 @@
+ }
+ 
+ impl CircularBcmBuf {
+-    /// Build a circular descriptor chain from the given framebuffer.
++    /// Build the first circular descriptor chain from the given framebuffer.
+     ///
+     /// The chain encodes the full BCM repetition sequence (identical layout to
+     /// `full-chain-dma`) with two differences:
+     /// - The last descriptor's `next` points back to `desc[0]` (circular).
+     /// - Only the last descriptor has `suc_eof = 1`.
++    ///
++    /// Any further rings in `descriptors` (see [`crate::DESCRIPTOR_RINGS`]) are
++    /// left untouched — the DMA cannot reach them until a swap points the
++    /// running ring's tail at one, and `Hub75::swap` fills the one it targets.
+     pub(crate) fn new(
+         descriptors: &'static mut [DmaDescriptor],
+         fb: &'static impl FrameBuffer,
+@@ -62,10 +74,19 @@
+         self.descriptors.as_ptr() as *mut DmaDescriptor
+     }
+ 
+-    /// Number of active descriptors in the chain.
++    /// Number of active descriptors in one ring.
+     pub(crate) fn desc_count(&self) -> usize {
+         self.desc_count
+     }
++
++    /// How many whole rings the caller's descriptor slice can hold.
++    ///
++    /// `hub75_dma_descriptors!` sizes it for [`crate::DESCRIPTOR_RINGS`]; a
++    /// hand-rolled slice with room for only one keeps the old (non-atomic)
++    /// pointer-rewrite swap.
++    pub(crate) fn ring_count(&self) -> usize {
++        (self.descriptors.len() / self.desc_count).min(crate::DESCRIPTOR_RINGS)
++    }
+ }
+ 
+ // SAFETY: All access is serialised by `critical_section::with`.
+--- a/src/isr.rs
++++ b/src/isr.rs
+@@ -25,6 +25,10 @@
+ use crate::bcm::PlaneInfo;
+ #[cfg(feature = "circular-dma")]
+ use crate::bcm::circular::CircularBcmBuf;
++#[cfg(feature = "circular-dma")]
++use crate::bcm::fill_full_chain;
++#[cfg(feature = "circular-dma")]
++use crate::bcm::planes_from_fb;
+ use crate::framebuffer::FrameBuffer;
+ #[cfg(all(hub75_use_lcd_cam, not(feature = "circular-dma")))]
+ use crate::framebuffer::WordSize;
+@@ -106,12 +110,38 @@
+ // Circular-DMA shared state
+ // ---------------------------------------------------------------------------
+ 
++/// Luxel local patch (Gitea #376): the circular chain is `ring_count` rings of
++/// `desc_count` descriptors laid out back to back in one static array, one ring
++/// per framebuffer. `ring` is the one the DMA is executing; a swap rewrites its
++/// tail's `next` to point at another ring's head.
+ #[cfg(feature = "circular-dma")]
+ pub(crate) struct CircularState {
+     #[allow(dead_code)] // kept alive to prevent DMA from stopping
+     pub(crate) transfer: Option<TxTransfer>,
++    /// Base of the whole descriptor block — ring `i` starts at
++    /// `descriptors + i * desc_count`.
+     pub(crate) descriptors: *mut esp_hal::dma::DmaDescriptor,
++    /// Descriptors in ONE ring.
+     pub(crate) desc_count: usize,
++    /// Rings the caller's descriptor slice holds. 1 keeps the upstream
++    /// (non-atomic) pointer-rewrite swap; 2 enables the ring flip.
++    pub(crate) ring_count: usize,
++    /// Ring the DMA is executing (or, once a flip is armed, the one it is
++    /// about to jump to).
++    pub(crate) ring: usize,
++    /// Framebuffer each ring's descriptors were built against; null = never
++    /// built.
++    pub(crate) ring_fb: [*const (); crate::DESCRIPTOR_RINGS],
++    /// Ring the DMA was executing when the pending flip was armed. Its tail is
++    /// restored to its own head once the flip lands.
++    pub(crate) flip_from: usize,
++    /// EOFs seen since the flip was armed.
++    pub(crate) flip_eofs: u32,
++    /// EOFs after which the armed flip is certainly done: 1 when `swap()`
++    /// could see that the running ring's tail had not been fetched yet (so
++    /// the tail is guaranteed to read the rewritten `next` this pass),
++    /// otherwise 2 — by the second EOF the DMA has been round the new ring.
++    pub(crate) flip_eofs_needed: u32,
+     pub(crate) current_fb_ptr: *const (),
+ }
+ 
+@@ -140,6 +170,19 @@
+ #[allow(clippy::type_complexity)]
+ static CLEAR_INTERRUPT: Mutex<RefCell<Option<fn()>>> = Mutex::new(RefCell::new(None));
+ 
++/// Luxel local patch (Gitea #376): a ring flip has been armed and has not been
++/// observed to land yet. Read outside `critical_section` by `swap()`.
++#[cfg(feature = "circular-dma")]
++static SWAP_ARMED: AtomicBool = AtomicBool::new(false);
++
++/// Luxel local patch (Gitea #376): platform hook returning the address of the
++/// DMA channel's current outlink descriptor, if the platform exposes one
++/// (GDMA `OUT_DSCR` on the S3). Lets the frame-count ISR tell the exact EOF at
++/// which a ring flip landed instead of waiting a whole extra pass.
++#[cfg(feature = "circular-dma")]
++#[allow(clippy::type_complexity)]
++static CURRENT_DESC: Mutex<RefCell<Option<fn() -> usize>>> = Mutex::new(RefCell::new(None));
++
+ fn signal_swap_done(cs: critical_section::CriticalSection) {
+     SWAP_DONE.store(true, Ordering::Release);
+     if let Some(waker) = SWAP_WAKER.borrow_ref_mut(cs).take() {
+@@ -280,6 +323,16 @@
+ // Frame-boundary ISR (circular-dma)
+ // ---------------------------------------------------------------------------
+ 
++/// Fires on every `suc_eof`, i.e. once per complete pass over a ring — the
++/// panel's frame boundary.
++///
++/// Luxel local patch (Gitea #376): with two rings the ISR is also where a swap
++/// is *observed* to have landed. `swap()` only points the running ring's tail
++/// at the other ring's head; the DMA may already have prefetched that tail, in
++/// which case the jump happens one pass later. The DMA's current-descriptor
++/// register says which pass we are in. `out_eof` means "the last byte of that
++/// descriptor has been read from memory", so once the DMA is on the new ring
++/// the old framebuffer is provably no longer being read and can be handed back.
+ #[cfg(feature = "circular-dma")]
+ #[handler]
+ #[cfg_attr(feature = "iram", ram)]
+@@ -289,6 +342,60 @@
+             (clear)();
+         }
+         FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
++
++        let mut borrow = CIRCULAR_STATE.borrow_ref_mut(cs);
++        let state = match borrow.as_mut() {
++            Some(s) => s,
++            // Not initialised yet: keep the upstream signalling.
++            None => {
++                signal_swap_done(cs);
++                return;
++            }
++        };
++        if state.ring_count < 2 {
++            // Upstream pointer-rewrite swap: one full pass after the rewrite
++            // proves the DMA has left the old buffer.
++            signal_swap_done(cs);
++            return;
++        }
++        if !SWAP_ARMED.load(Ordering::Acquire) {
++            return;
++        }
++        state.flip_eofs = state.flip_eofs.saturating_add(1);
++
++        // Two independent proofs, either is enough. (1) `swap()` saw the
++        // running ring's tail unfetched, so the tail read the rewritten
++        // `next` and this pass is the last one on the old ring. (2) The DMA's
++        // current-descriptor register is inside the ring we flipped to. The
++        // `out_eof` that woke us means the descriptor that raised it has been
++        // read from memory in full, so under either proof the old framebuffer
++        // is done being read.
++        let ring_bytes = state.desc_count * core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++        let mut landed = state.flip_eofs >= state.flip_eofs_needed;
++        if !landed {
++            if let Some(read) = CURRENT_DESC.borrow_ref(cs).as_ref() {
++                let cur = (read)();
++                let lo = state.descriptors as usize + state.ring * ring_bytes;
++                landed = cur >= lo && cur < lo + ring_bytes;
++            }
++        }
++        if !landed {
++            return;
++        }
++
++        // Make the ring we just left self-contained again, ready to be the
++        // target of the next flip. Safe here and only here: the DMA has left
++        // it and cannot re-enter until a future `swap()` points at it.
++        // SAFETY: `descriptors` is a `&'static mut` array of at least
++        // `ring_count * desc_count` entries; `next` is a naturally aligned
++        // 32-bit field the DMA only reads when it finishes that descriptor.
++        unsafe {
++            let head = state.descriptors.add(state.flip_from * state.desc_count);
++            let tail = head.add(state.desc_count - 1);
++            core::ptr::write_volatile(core::ptr::addr_of_mut!((*tail).next), head);
++        }
++        core::sync::atomic::fence(Ordering::SeqCst);
++        SWAP_ARMED.store(false, Ordering::Release);
+         signal_swap_done(cs);
+     });
+ }
+@@ -331,15 +438,25 @@
+     xfer: TxTransfer,
+     desc_ptr: *mut esp_hal::dma::DmaDescriptor,
+     desc_count: usize,
++    ring_count: usize,
+     fb_ptr: *const (),
+ ) {
+     critical_section::with(|cs| {
++        let mut ring_fb = [core::ptr::null::<()>(); crate::DESCRIPTOR_RINGS];
++        ring_fb[0] = fb_ptr;
+         *CIRCULAR_STATE.borrow_ref_mut(cs) = Some(CircularState {
+             transfer: Some(xfer),
+             descriptors: desc_ptr,
+             desc_count,
++            ring_count,
++            ring: 0,
++            ring_fb,
++            flip_from: 0,
++            flip_eofs: 0,
++            flip_eofs_needed: 2,
+             current_fb_ptr: fb_ptr,
+         });
++        SWAP_ARMED.store(false, Ordering::Release);
+     });
+ }
+ 
+@@ -350,6 +467,15 @@
+     });
+ }
+ 
++/// Luxel local patch (Gitea #376): register the platform's
++/// current-outlink-descriptor reader (optional; see [`CURRENT_DESC`]).
++#[cfg(feature = "circular-dma")]
++pub(crate) fn store_current_desc(read: fn() -> usize) {
++    critical_section::with(|cs| {
++        *CURRENT_DESC.borrow_ref_mut(cs) = Some(read);
++    });
++}
++
+ // ---------------------------------------------------------------------------
+ // Public driver handle
+ // ---------------------------------------------------------------------------
+@@ -374,8 +500,11 @@
+ ///
+ /// # Buffer Swapping
+ ///
+-/// Call [`swap()`](Hub75::swap) to exchange framebuffers. It returns a
+-/// [`Hub75Swap`] transfer object that can be waited on:
++/// Call [`swap()`](Hub75::swap) to exchange framebuffers. Under `circular-dma`
++/// the exchange lands on a panel frame boundary (Luxel patch, Gitea #376: one
++/// descriptor ring per framebuffer, the swap being a single store on the
++/// running ring's tail `next`). It returns a [`Hub75Swap`] transfer object that
++/// can be waited on:
+ /// - [`Hub75Swap::wait()`] — spin-loops until the DMA is guaranteed to no
+ ///   longer read from the old buffer, then returns it.
+ /// - [`Hub75Swap::wait_for_done()`] — yields to the executor (async contexts).
+@@ -495,9 +624,12 @@
+ /// directly for a blocking spin-loop.
+ ///
+ /// In non-circular mode, "safe" means the ISR has hit a frame boundary and
+-/// completed the swap. In circular-DMA mode, "safe" means at least one
+-/// `suc_eof` interrupt has fired after the pointer update, guaranteeing the
+-/// DMA has completed a full pass and is reading exclusively from the new buffer.
++/// completed the swap. In circular-DMA mode with two descriptor rings (the
++/// Luxel patch, Gitea #376) it means the frame-count ISR has observed the DMA
++/// executing the new ring: the old ring's tail raised its `suc_eof` — "last
++/// byte read from memory" — and the engine followed the rewritten `next`. With
++/// a single ring it means one `suc_eof` has fired after the pointer rewrite,
++/// so the DMA has completed a full pass since.
+ pub struct Hub75Swap<FB: 'static> {
+     old_fb_ptr: *mut FB,
+     #[cfg(not(feature = "circular-dma"))]
+@@ -667,10 +799,23 @@
+ impl<DM: esp_hal::DriverMode, FB: FrameBuffer + 'static> Hub75<DM, FB> {
+     /// Initiate a framebuffer swap (circular-DMA mode).
+     ///
+-    /// Updates all DMA descriptor buffer pointers immediately and returns a
+-    /// [`Hub75Swap`] transfer object. The DMA engine's internal register may
+-    /// still be pointing into the old buffer for the currently in-flight
+-    /// descriptor. Call [`.wait_for_done()`](Hub75Swap::wait_for_done) then
++    /// Luxel local patch (Gitea #376): with two descriptor rings (the default
++    /// — see [`crate::DESCRIPTOR_RINGS`]) this arms a **frame-atomic** switch.
++    /// The incoming framebuffer already has, or is given, a ring of its own;
++    /// the swap is a single naturally-aligned 32-bit store rewriting the
++    /// running ring's tail `next` to that ring's head. The DMA reads a
++    /// descriptor's `next` only when it finishes that descriptor, and the tail
++    /// is the last descriptor of a full BCM pass, so the switch lands exactly
++    /// on a panel frame boundary: every pass the engine makes reads exactly
++    /// one framebuffer. Nothing is rewritten inside the pass, so no frame ever
++    /// mixes two images' bitplanes.
++    ///
++    /// If the descriptor slice only had room for one ring, the upstream
++    /// pointer-rewrite swap is used instead — immediate, and not frame-atomic.
++    ///
++    /// The returned [`Hub75Swap`] completes when the DMA is observed to be on
++    /// the new ring (frame-count ISR). Call
++    /// [`.wait_for_done()`](Hub75Swap::wait_for_done) then
+     /// [`.wait()`](Hub75Swap::wait), or just `.wait()` directly for blocking.
+     ///
+     /// # Panics
+@@ -678,10 +823,96 @@
+     /// Panics if the driver has not been initialised (no `Hub75` instance
+     /// was created).
+     pub fn swap(&self, new_fb: &'static mut FB) -> Hub75Swap<FB> {
++        // Correct double buffering cannot reach here with a swap still in
++        // flight: the caller only owns a second framebuffer once `wait()` has
++        // handed the displaced one back. A caller juggling three buffers could,
++        // and would otherwise arm a second flip over the first — wait it out
++        // (at most one panel frame) rather than corrupt the rings.
++        debug_assert!(
++            !SWAP_ARMED.load(Ordering::Acquire),
++            "Hub75::swap called while the previous swap is still pending"
++        );
++        while SWAP_ARMED.load(Ordering::Acquire) {
++            core::hint::spin_loop();
++        }
++
++        let planes = planes_from_fb(&*new_fb);
++        let plane_count = new_fb.plane_count();
+         let new_fb_ptr = new_fb as *mut FB;
+         let old_fb_ptr = critical_section::with(|cs| {
+             let mut borrow = CIRCULAR_STATE.borrow_ref_mut(cs);
+             let state = borrow.as_mut().expect("Hub75 not initialised");
++            if state.ring_count >= 2 {
++                let n = state.desc_count;
++                let base = state.descriptors;
++                let from = state.ring;
++                let to = (from + 1) % state.ring_count;
++
++                // Build the target ring against the incoming framebuffer the
++                // first time we see that buffer. The DMA is provably not
++                // executing this ring (the previous flip landed before this
++                // call could happen), so it is free to rewrite.
++                // SAFETY: `descriptors` is a `&'static mut` array of at least
++                // `ring_count * desc_count` entries, so ring `to` is in bounds
++                // and disjoint from the ring the DMA is running.
++                let head = unsafe { base.add(to * n) };
++                if state.ring_fb[to] != new_fb_ptr as *const () {
++                    let ring = unsafe { core::slice::from_raw_parts_mut(head, n) };
++                    fill_full_chain(ring, &planes, plane_count, n, head);
++                    state.ring_fb[to] = new_fb_ptr as *const ();
++                }
++                // Close the ring on itself. The ISR does this when a flip
++                // lands, but do it unconditionally so a rebuilt or
++                // never-yet-used ring is self-contained either way.
++                // SAFETY: as above; `next` is a naturally aligned 32-bit field.
++                unsafe {
++                    let tail = head.add(n - 1);
++                    core::ptr::write_volatile(core::ptr::addr_of_mut!((*tail).next), head);
++                }
++                // Publish the whole target ring before the DMA can be sent to
++                // it.
++                core::sync::atomic::fence(Ordering::SeqCst);
++
++                // THE SWAP. One aligned 32-bit store. Worst case it loses the
++                // race with the DMA's fetch of the running ring's tail, in
++                // which case the engine wraps to its own head once more and
++                // the flip lands one frame later — never a mixed frame.
++                // SAFETY: as above.
++                unsafe {
++                    let tail = base.add(from * n + n - 1);
++                    core::ptr::write_volatile(core::ptr::addr_of_mut!((*tail).next), head);
++                }
++                core::sync::atomic::fence(Ordering::SeqCst);
++
++                // How many EOFs prove the flip landed? If the DMA is still
++                // comfortably short of the ring's tail, the tail cannot have
++                // been fetched yet, so it WILL read the `next` just written
++                // and the very next EOF is the switch. Two spare descriptors
++                // of margin (tens of microseconds of panel data) swallow the
++                // gap between this read and the store above. Otherwise fall
++                // back to two EOFs, which is unconditionally safe: by then a
++                // whole pass of the new ring has completed.
++                let mut needed = 2;
++                if let Some(read) = CURRENT_DESC.borrow_ref(cs).as_ref() {
++                    let cur = (read)();
++                    let lo = base as usize + from * n * core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++                    let idx = cur.wrapping_sub(lo) / core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++                    if cur >= lo && idx + 3 <= n {
++                        needed = 1;
++                    }
++                }
++                state.ring = to;
++                state.flip_from = from;
++                state.flip_eofs = 0;
++                state.flip_eofs_needed = needed;
++                let old_ptr = state.current_fb_ptr;
++                state.current_fb_ptr = new_fb_ptr as *const ();
++                SWAP_DONE.store(false, Ordering::Release);
++                SWAP_ARMED.store(true, Ordering::Release);
++                return old_ptr;
++            }
++
++            // ---- Single-ring fallback: upstream pointer-rewrite swap ----
+             let delta = new_fb_ptr as isize - state.current_fb_ptr as isize;
+             // SAFETY: `descriptors` points to a `&'static mut` descriptor
+             // array that outlives everything. The DMA engine reads descriptor
+@@ -697,7 +928,10 @@
+             //     within a single contiguous `FB` allocation — both old and
+             //     new framebuffers have identical internal layout.
+             //  4. The worst-case visual artifact is one partially-mixed frame
+-            //     (tearing), which is acceptable for a display use-case.
++            //     (tearing) — which is why this path is now only the fallback
++            //     for a caller that allocated room for a single ring; with
++            //     `hub75_dma_descriptors!` the ring flip above runs instead
++            //     and no frame is ever mixed (Luxel patch, Gitea #376).
+             unsafe {
+                 for i in 0..state.desc_count {
+                     let desc = &mut *state.descriptors.add(i);
+--- a/src/lcd_cam.rs
++++ b/src/lcd_cam.rs
+@@ -144,6 +144,7 @@
+         let buf = CircularBcmBuf::new(tx_descriptors, fb);
+         let desc_ptr = buf.descriptors_ptr();
+         let desc_count = buf.desc_count();
++        let ring_count = buf.ring_count();
+         let fb_ptr = fb as *const _ as *const ();
+ 
+         use esp_hal::lcd_cam::lcd::i8080::Command;
+@@ -153,7 +154,7 @@
+         }
+         .map_err(|(err, _tx, _buf)| Hub75Error::Dma(err))?;
+ 
+-        crate::isr::store_circular_state(xfer, desc_ptr, desc_count, fb_ptr);
++        crate::isr::store_circular_state(xfer, desc_ptr, desc_count, ring_count, fb_ptr);
+ 
+         // In circular mode, the LCD_CAM `lcd_trans_done` interrupt never
+         // fires because the DMA chain loops forever and continuous output
+@@ -161,6 +162,10 @@
+         // interrupt which fires whenever a descriptor with `suc_eof=1` is
+         // encountered — even in a circular chain.
+         setup_gdma_frame_count_isr(ch_num);
++        // Luxel local patch (Gitea #376): lets the frame-count ISR see which
++        // descriptor ring the DMA is on, so a ring flip is detected at the very
++        // frame boundary it lands on.
++        crate::isr::store_current_desc(gdma_current_desc);
+ 
+         Ok(Self::from_phantom())
+     }
+@@ -195,6 +200,21 @@
+     }
+ }
+ 
++/// Address of the DMA channel's current outlink descriptor (GDMA `OUT_DSCR`).
++///
++/// Luxel local patch (Gitea #376): the frame-count ISR compares it against the
++/// descriptor-ring address ranges to tell whether an armed ring flip has landed.
++#[cfg(feature = "circular-dma")]
++fn gdma_current_desc() -> usize {
++    let ch = GDMA_CHANNEL_NUM.load(core::sync::atomic::Ordering::Relaxed) as usize;
++    // SAFETY: a read-only access to the descriptor-status register of the
++    // channel this driver owns.
++    unsafe {
++        let dma = esp_hal::peripherals::DMA::steal();
++        dma.register_block().ch(ch).out_dscr().read().bits() as usize
++    }
++}
++
+ #[cfg(feature = "circular-dma")]
+ fn setup_gdma_frame_count_isr(ch_num: u8) {
+     use esp_hal::peripherals::Interrupt;
+--- a/src/i2s_parallel.rs
++++ b/src/i2s_parallel.rs
+@@ -220,13 +220,14 @@
+         let buf = CircularBcmBuf::new(tx_descriptors, fb);
+         let desc_ptr = buf.descriptors_ptr();
+         let desc_count = buf.desc_count();
++        let ring_count = buf.ring_count();
+         let fb_ptr = fb as *const _ as *const ();
+ 
+         let xfer = i2s_parallel
+             .send(buf)
+             .map_err(|(err, _tx, _buf)| Hub75Error::Dma(err))?;
+ 
+-        crate::isr::store_circular_state(xfer, desc_ptr, desc_count, fb_ptr);
++        crate::isr::store_circular_state(xfer, desc_ptr, desc_count, ring_count, fb_ptr);
+ 
+         crate::isr::store_clear_interrupt(I::clear_interrupt);
+ 

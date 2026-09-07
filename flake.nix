@@ -85,8 +85,9 @@
       # image and in the world-readable nix store — don't build cred-baked
       # images on shared machines or share the resulting .bin.
       envOr = name: let v = builtins.getEnv name; in if v == "" then null else v;
-      # esp-hub75 with a local patch for the esp-hal git pin's API drift
-      # (firmware/patches/README.md). The patch file is what's in git;
+      # esp-hub75 with local patches: the esp-hal git pin's API drift and the
+      # frame-atomic ring-flip swap (firmware/patches/README.md). The patch
+      # files are what's in git;
       # firmware/vendor/esp-hub75 (gitignored) is materialized from this
       # derivation — symlinked by the devshell for cargo builds, copied in
       # by mkFirmware for hermetic builds — and Cargo.toml's
@@ -101,7 +102,12 @@
           url = "https://static.crates.io/crates/esp-hub75/esp-hub75-0.14.0.crate";
           hash = "sha256-+4wQGC3EyQUcV07zZ/95SAfD3C/gzwhpXAw7mNk4BtY=";
         };
-        patches = [ ./firmware/patches/esp-hub75-0.14.0-esp-hal-git.patch ];
+        patches = [
+          ./firmware/patches/esp-hub75-0.14.0-esp-hal-git.patch
+          # frame-atomic swap: two descriptor rings, one per framebuffer
+          # (Gitea #376). Applies on top of the esp-hal-git patch.
+          ./firmware/patches/esp-hub75-0.14.0-atomic-swap.patch
+        ];
         dontBuild = true;
         installPhase = "cp -r . $out";
       };

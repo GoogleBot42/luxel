@@ -7,7 +7,18 @@
 //! framebuffer, so panel refresh costs ~zero CPU and is fully decoupled
 //! from the engine frame rate. Per engine frame `write_frame` composes
 //! the post-outpipe RGB888 frame into the back framebuffer's bitplanes
-//! and queues an atomic buffer swap at the next rescan boundary.
+//! and queues a buffer swap.
+//!
+//! That swap is frame-atomic — but only because of a local patch to
+//! esp-hub75 (`firmware/patches/esp-hub75-0.14.0-atomic-swap.patch`,
+//! Gitea #376). The driver keeps ONE DESCRIPTOR RING PER FRAMEBUFFER and
+//! swaps by rewriting the running ring's tail `next` to the other ring's
+//! head, a single aligned store the DMA reads only when it wraps. So the
+//! panel switches images exactly between rescans and no displayed frame
+//! ever mixes two images' bitplanes. Stock esp-hub75 0.14 instead
+//! rewrites every descriptor's `buffer` pointer the instant `swap()` is
+//! called, mid-pass, and mixes the high bitplanes of one frame with the
+//! low bitplanes of the next (visible on the panel; filmed 2026-09-07).
 //!
 //! Framebuffers are DMA targets and must live in internal SRAM. Two
 //! `PLANES`-deep bitplane buffers (~28 KB each at 64x64/7-plane) don't
@@ -124,12 +135,22 @@ impl Hub75Output {
         };
         match Hub75::new(lcd_cam, pins, channel, tx_descriptors, CLOCK, &*front) {
             Ok(h) => {
+                // Descriptor cost is worth printing once: the frame-atomic
+                // swap (#376) doubles it, and it is static DMA-capable RAM.
+                const DESCS: usize =
+                    esp_hub75::dma_descriptor_count(Fb::bcm_chunk_count(), Fb::bcm_chunk_bytes());
                 println!(
-                    "hub75: {}x{} panel, {} bitplanes, LCD_CAM @ {} MHz, circular DMA",
+                    "hub75: {}x{} panel, {} bitplanes, LCD_CAM @ {} MHz, circular DMA, \
+                     {} descriptors x {} rings = {} B",
                     PANEL_COLS,
                     PANEL_ROWS,
                     PLANES,
-                    CLOCK.as_mhz()
+                    CLOCK.as_mhz(),
+                    DESCS,
+                    esp_hub75::DESCRIPTOR_RINGS,
+                    DESCS
+                        * esp_hub75::DESCRIPTOR_RINGS
+                        * core::mem::size_of::<esp_hal::dma::DmaDescriptor>(),
                 );
                 Self { hub75: Some(h), back: Some(back), pending: None }
             }
@@ -162,12 +183,14 @@ impl OutputDriver for Hub75Output {
         // The panel's own BCM frame counter, for `rescan_hz`. Free: the ISR
         // that feeds it is always armed in circular-DMA mode.
         crate::shared::RESCANS.store(hub75.frame_count(), Ordering::Relaxed);
-        // Reclaim the displaced buffer from the previous frame's swap. A
-        // swap lands at a rescan boundary (~13 ms at 7 planes / 20 MHz);
-        // if it hasn't landed yet, skip this frame rather than spin —
-        // output is best-effort (the trait contract), this self-throttles
-        // compose to the panel's rescan rate, and a stalled DMA can never
-        // hang the render task.
+        // Reclaim the displaced buffer from the previous frame's swap.
+        // With the patched driver a swap lands when the DMA wraps onto the
+        // new descriptor ring — the next rescan boundary, ~8.7 ms at 7
+        // planes / 30 MHz — and `is_done()` is the ISR's *observation* of
+        // that, not a guess. If it hasn't landed yet, skip this frame
+        // rather than spin: output is best-effort (the trait contract),
+        // this self-throttles compose to the panel's rescan rate, and a
+        // stalled DMA can never hang the render task.
         let back = match self.pending.take() {
             Some(swap) => {
                 if !swap.is_done() {
