@@ -4026,23 +4026,29 @@ impl Vm {
             // writes the engine's frame buffer — lent to `Vm::frame` for
             // the duration of the call — directly in RGB888; outside that
             // entry the buffer is empty and they all no-op. Bodies live in
-            // `bulk` so this dispatcher stays thin.
+            // `bulk` so this dispatcher stays thin. They are TIER 3
+            // (`builtin_cold`) by construction: a `renderFrame` pattern calls
+            // each of these once per FRAME, never per pixel, and their bodies
+            // are far too big to drag through the hot tiers' cache/IRAM
+            // budget (Gitea #328, docs/firmware.md "Code placement").
+            // `&args[..argc]` keeps the "missing args read as 0" convention
+            // the `bulk` helpers assume.
             GridWidth => num(crate::bulk::grid_dim(self, 0)),
             GridHeight => num(crate::bulk::grid_dim(self, 1)),
             Clear => Ok(crate::bulk::clear(self)),
             FillAll => Ok(crate::bulk::fill(self)),
-            Fade => Ok(crate::bulk::fade(self, &args)),
-            SetPixel => Ok(crate::bulk::set_pixel(self, &args)),
-            FillRange => Ok(crate::bulk::fill_range(self, &args)),
-            FillHsv => crate::bulk::fill_hsv(self, prog, &args).map_err(no_site),
-            FillRgb => crate::bulk::fill_rgb(self, prog, &args).map_err(no_site),
-            FillGradient => Ok(crate::bulk::fill_gradient(self, &args)),
-            FillRect => Ok(crate::bulk::fill_rect(self, &args)),
-            FillCircle => Ok(crate::bulk::fill_circle(self, &args)),
-            Splat => Ok(crate::bulk::splat(self, &args)),
-            DrawLine => Ok(crate::bulk::draw_line(self, &args)),
-            FillCanvas => crate::bulk::fill_canvas(self, prog, &args).map_err(no_site),
-            Blit => crate::bulk::blit(self, prog, &args).map_err(no_site),
+            Fade => Ok(crate::bulk::fade(self, &args[..argc])),
+            SetPixel => Ok(crate::bulk::set_pixel(self, &args[..argc])),
+            FillRange => Ok(crate::bulk::fill_range(self, &args[..argc])),
+            FillHsv => crate::bulk::fill_hsv(self, prog, &args[..argc]).map_err(no_site),
+            FillRgb => crate::bulk::fill_rgb(self, prog, &args[..argc]).map_err(no_site),
+            FillGradient => Ok(crate::bulk::fill_gradient(self, &args[..argc])),
+            FillRect => Ok(crate::bulk::fill_rect(self, &args[..argc])),
+            FillCircle => Ok(crate::bulk::fill_circle(self, &args[..argc])),
+            Splat => Ok(crate::bulk::splat(self, &args[..argc])),
+            DrawLine => Ok(crate::bulk::draw_line(self, &args[..argc])),
+            FillCanvas => crate::bulk::fill_canvas(self, prog, &args[..argc]).map_err(no_site),
+            Blit => crate::bulk::blit(self, prog, &args[..argc]).map_err(no_site),
             _ => unreachable!("handled by builtin_fast"),
         }
     }
