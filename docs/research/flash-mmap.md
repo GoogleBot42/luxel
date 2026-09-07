@@ -270,11 +270,34 @@ read-back body, straight from the mapping — no source Vec anywhere), plus
 the two-sided ad-hoc slot at its head and a 183-page arena after it. The
 key area keeps the playlist, playstate, pixel map, resume record, palette,
 and the store **directory** — one item holding both the pattern list and
-the extent table, which is the atomic commit point of a save. One save is
-one extent write per blob. Alignment-wise nothing changed: an extent still
-starts on a 4 KiB page inside a 64 KiB-aligned mapping, which is all XIP
-asks for. docs/firmware.md "The pattern store: one mapped extent region +
-a small key area" has the layout tables and the full rule set.
+the extent table, which is the atomic commit point of a save.
+
+**Packed files, not pages (2026-09-07, Gitea #340).** Jeremy: *"We should
+have properly sized files instead (the size required is known after all)
+just held sequentially in memory to exact size … It may mean walking a
+linked list to get to a desired file or to enumerate the existing files but
+that's ok."* Page granularity was costing roughly half the region — the
+median library source is 2,853 B against a 4 KiB page, and a pattern owned
+two extents — and the directory item's one-page cap was what held the store
+to 32 patterns. Both are gone. The 183-page arena is now a **packed,
+append-only log of self-describing files** (`patlog.rs`): one file per
+pattern, header + name + source + bytecode at exact size, 4-byte aligned,
+the next file starting immediately after, and no directory anywhere. Boot
+walks the headers through the mapping.
+
+**This changes nothing about XIP.** A file's bytecode is still one
+contiguous run inside the 64 KiB-aligned mapping, and it is still 4-byte
+aligned — which is the entire contract `deserialize_lean_static` asks for,
+and, at `WRITE_SIZE = 4`, also the finest granularity `esp-storage` can
+write. What it changes is the *free-space* model: the erase unit is still
+4 KiB while a file is byte-sized, so a delete can no longer erase anything.
+It writes a `dead` word (NOR clears bits in place) and space comes back only
+from a compaction that repacks the live files one destination page at a
+time — never a page a pinned file occupies. 32 patterns in 44.8 % of the
+log became **119 patterns in 98.7 %** of it, measured on the real
+`library/`. docs/firmware.md "The pattern store: a packed file log in a
+mapped region + a small key area" has the record layout and the full rule
+set.
 
 ## RAM accounting
 

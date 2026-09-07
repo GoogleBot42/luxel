@@ -20,18 +20,20 @@ serial narration that:
   4. the pattern store mapped its EXTENT REGION the same way
      (`flashmap: pattern store 0x230000+0xe0000 -> 0x3f4xxxxx (14 x 64 KiB
      pages from entry M), self-check ok`) into the entries right after the
-     assets mapping, and brought the store up on it (`patterns: store 183
-     pages, 0 patterns, 0 extents (0 dropped, 0 patterns lost), 0 pages
-     used` — a virgin flash, so the format key mismatches, the key area is
-     wiped and there is no directory to parse; a non-zero count anywhere
-     would mean the parser accepted garbage). Gitea #330 replaced the old
-     half/half partition (a sequential-storage chunk store + a bolted-on
-     code arena) with one 896 KiB mapped extent region plus a 128 KiB key
-     area, so these two numbers moved. No pattern save or activation runs
-     under QEMU (both need the network), so the write, compaction and
-     re-save paths stay hardware items (Gitea #271); the allocator's own
-     logic is host-tested in `tools/extent-check`
-     (`cargo test --workspace`).
+     assets mapping, and WALKED ITS FILE LOG on it (`patterns: log 749568
+     B, 0 patterns, 0 B used, 0 B reclaimable, 0 files (0 torn, 0
+     resyncs), cursor 0` — a virgin flash, so the format key mismatches,
+     the key area is wiped and the log holds nothing; a non-zero count
+     anywhere would mean the scan accepted garbage, and a non-zero
+     `resyncs` on erased flash would mean the scan cannot tell erased NOR
+     from junk). Gitea #330 replaced the old half/half partition with one
+     896 KiB mapped extent region plus a 128 KiB key area; Gitea #340 then
+     replaced the page-granular allocator and its directory item with this
+     packed, self-describing log, so these numbers moved twice. No pattern
+     save or activation runs under QEMU (both need the network), so the
+     write, compaction and re-save paths stay hardware items (Gitea #271);
+     the format's own logic is host-tested in `tools/patlog-check`
+     (`cargo test --workspace`), power cuts included.
 
 What QEMU models (hw/misc/esp32_dport.c): the per-core DROM0/IRAM0 MMU
 tables, cache enable/mask bits, and Cache_Flush — a flush re-reads every
@@ -69,10 +71,10 @@ PAGE = 0x10000
 # (firmware/src/patterns.rs EXT_OFF / EXT_LEN), mapped read-only at boot.
 STORE_OFFSET = 0x230000
 STORE_LEN = 0xE0000
-# The extent arena is everything left in it after the ad-hoc live-coding
-# slot: 0x49000..0x100000 partition-relative, in 4 KiB pages
-# (patterns.rs ARENA_OFF / ARENA_PAGES).
-ARENA_PAGES = (0x100000 - 0x49000) // 0x1000
+# The packed file log is everything left in it after the ad-hoc live-coding
+# slot: 0x49000..0x100000 partition-relative (patterns.rs LOG_OFF / LOG_LEN),
+# 183 x 4 KiB = 732 KiB.
+LOG_BYTES = 0x100000 - 0x49000
 
 MAP_LINE = re.compile(
     r"flashmap: assets 0x310000\+0xf0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
@@ -82,8 +84,8 @@ CODE_LINE = re.compile(
     r"flashmap: pattern store 0x230000\+0xe0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
 )
 STORE_LINE = re.compile(
-    r"patterns: store (\d+) pages, (\d+) patterns, (\d+) extents "
-    r"\((\d+) dropped, (\d+) patterns lost\), (\d+) pages used"
+    r"patterns: log (\d+) B, (\d+) patterns, (\d+) B used, (\d+) B reclaimable, "
+    r"(\d+) files \((\d+) torn, (\d+) resyncs\), cursor (\d+)"
 )
 ABORT_MARKERS = (
     "flashmap: assets not mapped",
@@ -270,18 +272,18 @@ def check(text: str, image_len: int) -> list[str]:
     a = STORE_LINE.search(text)
     if not a:
         raise Fail(
-            "serial: no 'patterns: store N pages, …' line "
-            "— the extent store did not come up on the mapping"
+            "serial: no 'patterns: log N B, …' line "
+            "— the file log did not come up on the mapping"
         )
-    apages, npat, exts, dropped, lost, used = (int(a.group(i)) for i in range(1, 7))
-    if (npat, exts, dropped, lost, used) != (0, 0, 0, 0, 0) or apages != ARENA_PAGES:
+    alen, npat, used, dead, files, torn, resync, cursor = (int(a.group(i)) for i in range(1, 9))
+    if (npat, used, dead, files, torn, resync, cursor) != (0,) * 7 or alen != LOG_BYTES:
         raise Fail(
-            f"store reported {apages} pages, {npat} patterns, {exts} extents, "
-            f"{dropped} dropped, {lost} lost, {used} used — expected {ARENA_PAGES} "
-            "pages and zeros everywhere on a virgin flash"
+            f"store reported a {alen} B log, {npat} patterns, {used} B used, {dead} B "
+            f"reclaimable, {files} files, {torn} torn, {resync} resyncs, cursor {cursor} "
+            f"— expected {LOG_BYTES} B and zeros everywhere on a virgin flash"
         )
-    passed.append(f"serial: {a.group(0)!r} (extent store up on the mapping, empty directory)")
-    if "patterns: format 0 != 5, wiping storage" not in text:
+    passed.append(f"serial: {a.group(0)!r} (file log walked on the mapping, empty)")
+    if "patterns: format 0 != 6, wiping storage" not in text:
         raise Fail("serial: the format-key wipe did not run on the virgin key area")
     passed.append("serial: format mismatch wiped the key area (no migration path, #330)")
     return passed
