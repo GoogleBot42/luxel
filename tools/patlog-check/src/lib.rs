@@ -10,6 +10,7 @@
 
 #[path = "../../../firmware/src/patlog.rs"]
 pub mod patlog;
+pub mod store;
 
 #[cfg(test)]
 mod library_fill {

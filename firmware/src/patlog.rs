@@ -74,7 +74,7 @@
 //! erase; this build uses plain `FlashStorage`, never the encrypted one, so
 //! a sub-page byte write is legal) and the bytes stay. Space comes back only
 //! from a **compaction**, which repacks the live records toward offset 0 and
-//! rewrites the log one destination page at a time — see [pack] for the
+//! rewrites the log one destination page at a time — see [plan] for the
 //! placement rule and `patterns.rs` for the executor.
 //!
 //! This module is `no_std`, allocation-free, panic-free and host-tested
@@ -347,8 +347,9 @@ pub struct Scan {
     /// Records accepted (live + dead).
     pub recs: u32,
     /// Records whose header was whole and committed but whose payload did
-    /// not hash — a page write cut in half, and the one thing a compaction
-    /// can lose.
+    /// not hash — a page write cut in half, or a stale header a frozen page
+    /// preserved past the data it described. Its length is not trusted: the
+    /// walk resyncs through it rather than stepping over it (Gitea #379).
     pub torn: u32,
     /// 4-byte steps spent resynchronising after something that was not a
     /// record. Zero on a clean store.
@@ -404,18 +405,30 @@ pub fn scan(a: &mut dyn Arena, emit: &mut dyn FnMut(&Rec, &[u8])) -> Scan {
         };
         let whole = hash_range(a, rec.src_off(), rec.src_len) == Some(rec.src_hash)
             && hash_range(a, rec.bc_off(), rec.bc_len) == Some(rec.bc_hash);
-        if whole {
-            s.recs += 1;
-            if rec.dead {
-                s.dead += rec.size();
-            } else {
-                s.live += rec.size();
-            }
-            emit(&rec, &namebuf[..rec.name_len as usize]);
-        } else {
+        if !whole {
+            // A header whose payload does not hash is NOT a record, so its
+            // length field is not a length: it describes bytes that are no
+            // longer the ones it was written for. Stepping over `end()`
+            // here would jump the walk over whatever really lives in that
+            // span — and after a compaction that span is exactly where the
+            // repacked files went, so every file under a stale header
+            // vanished from the store (Gitea #379). Resync instead: 4 bytes
+            // at a time, like any other junk, so a real record inside is
+            // still found. Its bytes are not counted anywhere; whatever the
+            // walk does not attribute to a record is reclaimable space, and
+            // `patterns.rs` derives that from the cursor.
             s.torn += 1;
-            s.dead += rec.size();
+            s.resync += 1;
+            at = rec.off + 4;
+            continue;
         }
+        s.recs += 1;
+        if rec.dead {
+            s.dead += rec.size();
+        } else {
+            s.live += rec.size();
+        }
+        emit(&rec, &namebuf[..rec.name_len as usize]);
         at = rec.end();
         s.cursor = at;
     }
@@ -516,28 +529,36 @@ fn hits_frozen(keep: &[Rec], pinned: &[u32], off: u32, size: u32) -> Option<u32>
         .map(|r| align_page(r.end()))
 }
 
-/// Plan a compaction: pack `keep` (every record that must survive, sorted by
-/// ascending offset) toward offset 0.
+/// Plan a compaction: pack `keep` (every record that must survive, sorted
+/// by ascending offset) toward offset 0, checking the plan as it builds it.
 ///
 /// Rules, in order of importance:
 ///
 /// 1. **A pinned record never moves and its pages are never erased.** An
 ///    engine may be executing its bytecode in place (`patterns.rs`' pin set,
 ///    Gitea #260), so those pages are frozen and every other record is
-///    placed around them.
+///    placed around them: one that cannot pack down below a frozen page is
+///    placed *after* it, or left exactly where it is if it is already past
+///    it. Never dropped — a compaction is a total function over `keep`.
 /// 2. **Nothing ever moves up.** The executor rewrites destination pages in
 ///    ascending order and every byte it needs for page P lives at an offset
 ///    ≥ P's start, which is exactly what makes an overlapping repack safe.
-///    A record that cannot move down (because a frozen page is in the way)
-///    stays exactly where it is.
 ///
-/// Returns the packed length — the new write cursor.
-pub fn pack(keep: &[Rec], pinned: &[u32], out: &mut dyn FnMut(Place)) -> u32 {
+/// `Some(packed length)` — the new write cursor — when the plan holds all
+/// of that: every record placed once, in order, no two overlapping, a
+/// pinned one at its own address, and a *moved* one never landing in a page
+/// [build_page] will skip. `None` means it does not, and then the caller
+/// must erase nothing and fail the operation loudly: proceeding on a plan
+/// that does not place every record is how Gitea #379 lost files silently.
+/// `out` has already seen the [Place]s produced up to that point; on `None`
+/// they are not a plan and must be discarded.
+pub fn plan(keep: &[Rec], pinned: &[u32], out: &mut dyn FnMut(Place)) -> Option<u32> {
     let mut dst = 0u32;
     let mut cursor = 0u32;
     for (idx, r) in keep.iter().enumerate() {
         let size = r.size();
-        let mut to = if pinned.contains(&r.seq) {
+        let is_pinned = pinned.contains(&r.seq);
+        let mut to = if is_pinned {
             r.off
         } else {
             let mut t = dst;
@@ -557,13 +578,20 @@ pub fn pack(keep: &[Rec], pinned: &[u32], out: &mut dyn FnMut(Place)) -> u32 {
         if to > r.off {
             to = r.off;
         }
+        // The plan check. Cheap, and the only thing standing between a
+        // mis-sorted or overlapping `keep` and a compaction that writes one
+        // file over another.
+        if to < dst || (!is_pinned && to != r.off && hits_frozen(keep, pinned, to, size).is_some())
+        {
+            return None;
+        }
         out(Place { idx, from: r.off, to, size });
         dst = align4(to + size);
         if dst > cursor {
             cursor = dst;
         }
     }
-    cursor
+    Some(cursor)
 }
 
 /// Is this erase page one a pinned record occupies? The executor must never
@@ -582,7 +610,7 @@ pub fn frozen_page(keep: &[Rec], pinned: &[u32], page: u32) -> bool {
 ///
 /// The caller must build pages in ascending order and must skip
 /// [frozen_page]s. Every byte this needs lives at an offset ≥ the page's
-/// start ([pack] never moves a record up), so buffering the page before
+/// start ([plan] never moves a record up), so buffering the page before
 /// erasing it is the whole safety argument for an overlapping repack.
 pub fn build_page<A: Arena + ?Sized>(
     a: &mut A,
@@ -1114,7 +1142,7 @@ mod tests {
     fn compact(sim: &mut Sim, keep: &[Rec], pinned: &[u32]) -> (Vec<Place>, u32) {
         let old_end = all(sim).1.cursor;
         let mut places = Vec::new();
-        let cursor = pack(keep, pinned, &mut |p| places.push(p));
+        let cursor = plan(keep, pinned, &mut |p| places.push(p)).expect("a well-formed keep plans");
         let mut buf = vec![0u8; PAGE as usize];
         for page in 0..align_page(cursor) / PAGE {
             if frozen_page(keep, pinned, page) {

@@ -714,6 +714,21 @@ Without them the change was **+7.9 KB** on the C3.
 `board-c6-devkit` goes 2.27 % → 2.01 %, still under image-check's 3 % floor
 — it was already under it on master (#310) and is not a release artifact
 (#291); the shipped `board-c6-devkit` + `hosted-ui` variant keeps 3.60 %.
+
+2026-09-07, the compaction data-loss fix (Gitea #379 — the boot scan no
+longer steps over a torn record by its own claimed length, the compaction
+planner checks its plan before anything is erased, and a save that compacts
+re-resolves the generation it is about to retire): **+368 B** on
+`board-pixelblaze-v3` (1,009,328 → 1,009,696 B, margin **38,880 B /
+3.71 %**), **+336 B** on `board-athom-music` (1,009,424 → 1,009,760 B,
+margin 38,816 B / 3.70 %) and **+496 B** on `board-c6-devkit` (1,027,472 →
+1,027,968 B, margin 20,608 B / 1.97 %). Devshell builds, same `creds.env`
+both sides, measured after the rebase onto b08bbd4 against that same
+revision. The cost is the plan check plus the resync arm in `scan`; folding
+the check into `patlog::plan` rather than wrapping a separate verification
+pass around it halved it (+624/+800 B before the fold).
+`.stack` on pixelblaze-v3 unchanged at 25,988 B — nothing here is a static.
+
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal

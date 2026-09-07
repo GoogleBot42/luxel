@@ -737,7 +737,14 @@ fn reload() -> patlog::Scan {
     NEXT_SEQ.store(seq, Ordering::Relaxed);
     NEXT_STAMP.store(stamp, Ordering::Relaxed);
     CURSOR.store(stats.cursor, Ordering::Relaxed);
-    DEAD_BYTES.store((stats.live + stats.dead).saturating_sub(used), Ordering::Relaxed);
+    // Everything below the cursor that is not one of the files the index
+    // points at — superseded generations, deletes, torn headers, and the
+    // gaps a frozen page forces a repack to leave. Deriving it from the
+    // cursor rather than from the sum of accepted records is what makes it
+    // "what a compaction would give back": bytes no record claims are
+    // reclaimable too, and after a compaction with nothing pinned this is
+    // exactly 0 (Gitea #379).
+    DEAD_BYTES.store(stats.cursor.saturating_sub(used), Ordering::Relaxed);
     OVERFULL.store(over, Ordering::Relaxed);
     INDEX.lock(|c| *c.borrow_mut() = live);
     stats
@@ -1313,7 +1320,7 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
     // patterns), but the index must be COMPLETE before anything mutates:
     // a compaction rewrites the log from it, and would drop what it cannot
     // see.
-    let old = rec_by_name(name);
+    let mut old = rec_by_name(name);
     let seq = match &old {
         Some(r) => r.seq,
         None => {
@@ -1330,6 +1337,10 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
     if OVERFULL.load(Ordering::Relaxed) {
         return err_json("the device library is full — delete some patterns and reboot");
     }
+    // Whether this name was already stored, which is NOT the same question
+    // as whether `old` still holds a record further down: a compaction can
+    // leave `old` empty, and the seq counter must not move for that.
+    let existed = old.is_some();
 
     let size = Rec::bytes(name.len() as u8, source.len() as u32, bc.len() as u32);
     let mut off = with_log(|a| patlog::place(a, CURSOR.load(Ordering::Relaxed), size)).flatten();
@@ -1340,6 +1351,14 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
         // again.
         if compact(region, size).await {
             off = with_log(|a| patlog::place(a, CURSOR.load(Ordering::Relaxed), size)).flatten();
+        }
+        // A compaction moves every unpinned file, so `old` is a stale
+        // ADDRESS now — retiring it below would drop a DEAD word into the
+        // middle of whatever was repacked over those bytes, tearing an
+        // innocent file (Gitea #379). `reload` rebuilt the index; take the
+        // record's new home from it.
+        if old.is_some() {
+            old = INDEX.lock(|c| c.borrow().iter().find(|r| r.seq == seq).copied());
         }
     }
     let Some(off) = off else {
@@ -1408,7 +1427,7 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
     });
     CURSOR.store(rec.end(), Ordering::Relaxed);
     NEXT_STAMP.store(rec.stamp.wrapping_add(1), Ordering::Relaxed);
-    if old.is_none() {
+    if !existed {
         NEXT_SEQ.store(seq.wrapping_add(1), Ordering::Relaxed);
     }
     // The superseded version can go now. Marking it dead is safe even when
@@ -1550,7 +1569,7 @@ fn pins() -> ([u32; 4], usize) {
 ///
 /// Shape, and why it is safe:
 ///
-/// * `patlog::pack` places every live file (plus any dead one an engine is
+/// * `patlog::plan` places every live file (plus any dead one an engine is
 ///   still executing) at or below its current offset, and never inside a
 ///   page a PINNED file occupies. Nothing moves up.
 /// * The executor then rewrites one 4 KiB destination page at a time, in
@@ -1596,7 +1615,13 @@ async fn compact(region: u32, need: u32) -> bool {
     sort_by_off(&mut keep);
 
     let mut places: Vec<patlog::Place> = Vec::new();
-    let packed = patlog::pack(&keep, pinned, &mut |p| places.push(p));
+    // A plan that does not place every live file is not a plan. Refusing
+    // costs the user a failed save; proceeding costs them the files
+    // (Gitea #379), so this never degrades to "compact what we can".
+    let Some(packed) = patlog::plan(&keep, pinned, &mut |p| places.push(p)) else {
+        println!("patterns: compaction refused — no plan places all {} files", keep.len());
+        return false;
+    };
     let old_end = CURSOR.load(Ordering::Relaxed);
     if packed + need > LOG_LEN {
         return false; // repacking would not open enough — erase nothing

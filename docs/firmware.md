@@ -334,7 +334,13 @@ it steps forward 4 bytes at a time until it finds one again. A header only
 validates at the offset it was written for, so a stale copy a compaction
 left behind is still readable at its old home while the new copy is readable
 at its new one, and a false positive would have to forge a 32-bit hash over
-its own address. `ver` retires every record an older firmware wrote, so a
+its own address. **A header whose payload does not hash is one of those
+"not a record" cases, length field included** — it describes bytes that are
+no longer the ones it was written for, so the walk resyncs through it rather
+than stepping over it. Trusting that length is how Gitea #379 lost files: a
+frozen page keeps the stale header of a record a compaction just reclaimed,
+and its `end()` points straight past the files that were repacked into that
+space. `ver` retires every record an older firmware wrote, so a
 format change costs no boot-time erase: the scan finds nothing and the first
 append erases the pages it lands on.
 
@@ -395,7 +401,7 @@ Rules the code enforces:
   what makes it safe to delete a pattern an engine is still executing.
 - **Compaction** is the only thing that gives space back, and only a SAVE
   that ran out of room calls it (an activation never compacts, so playlist
-  churn stays wear-free). `patlog::pack` places every live file — plus any
+  churn stays wear-free). `patlog::plan` places every live file — plus any
   dead one a pinned engine is still executing — at or below its current
   offset, never inside a page a pinned file occupies; nothing ever moves up.
   The executor then rewrites one 4 KiB destination page at a time, in
@@ -409,6 +415,19 @@ Rules the code enforces:
   page — 183 + 183 flash ops on a full log, each its own fenced door with a
   1 ms yield; `core1::fenced` feeds the watchdog every 64 fences (#309), so
   a long pass is slow, not fatal.
+- **A compaction is a total function over the live set.** `patlog::plan`
+  checks the placement as it builds it — every record placed exactly once
+  and in ascending order, no two overlapping, nothing moving up, a pinned
+  record at its own address, and a *moved* record never landing in a page
+  the executor will skip — and returns nothing rather than a partial plan.
+  `compact()` then erases nothing and the save fails loudly. There is no
+  "compact what we can" path: silently dropping what a plan could not place
+  is exactly Gitea #379.
+- **A save that compacts re-resolves the generation it retires.** The save
+  looks the previous version up before it knows it needs room; the
+  compaction moves every unpinned file; writing the DEAD word to the address
+  captured up front would drop four zero bytes into whatever was packed over
+  it (#379).
 - **A power cut mid-compaction** leaves the log repacked below the frontier
   and untouched above it. Both halves still parse — every header carries its
   own offset — so at most the one file straddling the frontier is lost. The
@@ -439,7 +458,11 @@ Rules the code enforces:
 - `/api/status` reports `store: {used, total, dead, patterns}` — **bytes**
   now, not 4 KiB pages: bytes used by live files, bytes in the log, bytes
   the next compaction would give back, and how many patterns are stored.
-  `total` 0 means the store never came up.
+  `total` 0 means the store never came up. `dead` is `cursor − used` —
+  everything below the write cursor that the index does not point at, gaps
+  included — so it comes back to exactly **0** after a compaction with
+  nothing pinned, and to exactly the hole a frozen page forces when
+  something is pinned.
 
 #### The borrowing invariant and the pin set (Gitea #260)
 
@@ -485,7 +508,7 @@ the engine and then releases the pin. An ad-hoc push (`Msg::Code` /
 `Msg::Crossfade`) decodes a transient envelope `Vec`, so its `Program` owns
 its words and `pin_running("")` clears slot 1.
 
-`compact` consults the set both ways: `patlog::pack` takes a pin *slice*
+`compact` consults the set both ways: `patlog::plan` takes a pin *slice*
 and leaves a pinned file exactly where it is, and `patlog::frozen_page`
 keeps the executor from erasing any page one occupies, so each pinned file
 splits the free space instead of blocking the pass. Pins are conservative
