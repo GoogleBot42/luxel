@@ -84,11 +84,13 @@ was laid out that way in July for exactly this):
 
 | region | offset | length | pages | consumer |
 |---|---|---|---|---|
-| `assets` | `0x310000` | `0xF0000` | 15 | web assets (wired in this PR) |
-| `storage` upper half (raw pages) | `0x290000` | `0x80000` | 8 | current-pattern read-back slot (`patterns.rs` `CUR_*`), the VM code arena (below) |
-| `storage` lower half (sequential-storage map) | `0x210000` | `0x80000` | 8 | library blobs — only worth mapping once they are page-contiguous (below) |
+| `assets` | `0x310000` | `0xF0000` | 15 | web assets |
+| `storage` extent region | `0x230000` | `0xE0000` | 14 | the pattern store: ad-hoc read-back slot (`patterns.rs` `CUR_*`) + the extent arena — every stored pattern's source AND bytecode (#330) |
 
-31 entries at most, against 60 free on the tightest chip. The app slots
+The first 128 KiB of `storage` (`0x210000`, the `sequential-storage` key
+area) is deliberately NOT mapped: its items are page-capped, unaligned and
+relocated by GC, so there is nothing there worth executing or streaming
+from. **29 entries in total**, against 60 free on the tightest chip. The app slots
 (`ota_0`/`ota_1`) are never mapped: the OTA writer erases and programs them
 sector by sector while the *other* slot executes, and a mapping over the
 slot being written would present a half-written image to whoever read it.

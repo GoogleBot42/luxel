@@ -265,8 +265,8 @@ full-UI build as a release artifact is Gitea #291.
 
 2026-09-06, pattern extent allocator (Gitea #281 — the arena's 7 fixed
 40 KiB slots became a page-granular extent allocator; `patterns.rs` +
-`extents.rs`, docs/firmware.md "The pattern store's mapped half and the
-code arena"): **+4.1 to +5.3 KB on every board.** Devshell builds with the
+`extents.rs`, docs/firmware.md "The pattern store: one mapped extent region + a
+small key area"): **+4.1 to +5.3 KB on every board.** Devshell builds with the
 same `creds.env` on both sides, `origin/master` 8b478f0 vs the branch:
 
 | board | before | after | Δ | slot margin |
@@ -303,8 +303,8 @@ pixelblaze-v3 / s3-devkit / c6-devkit; the largest new frame is
 `arena_init` at 1,520 B, at boot on the main task, well under the 12 KB
 per-function budget.
 2026-09-05, pattern code arena (library patterns execute from the flash
-mapping; `patterns.rs`, docs/firmware.md "The pattern store's mapped half
-and the code arena"): **+10,528 B** on `board-c6-devkit` (1,002,720 →
+mapping; `patterns.rs`, docs/firmware.md "The pattern store: one mapped
+extent region + a small key area"): **+10,528 B** on `board-c6-devkit` (1,002,720 →
 **1,013,248 B**, margin **35,328 B / 3.37 %**), +9,232 B on
 `board-pixelblaze-v3` (981,952 → 991,184 B), +9,408 B on
 `board-athom-music` — credless flake builds vs `origin/master` 0f84707,
