@@ -687,6 +687,17 @@ panel), 1D snake 19 → 21, 2D snake 12 → 13.
   out of the slot whenever it is parked there — and `set_pixels` is never
   called. Measured `heap_free` is identical to the pre-pipeline build row for
   row, and `pipe_us` fell from ~44 to ~11 µs with the memcpy gone.
+- **`preview` is ONE fallible allocation, reserved outside the critical
+  section.** This is a response built on a heap that a 4096 px pattern can
+  leave under 30 KB free, so a second 12 KB temporary is the difference
+  between serving the preview and an OOM panic — the first cut of #306 made
+  two and panicked the panel under `library/snake-2d.js` (caught on serial:
+  `memory allocation of 12288 bytes failed`, software reset, and after a few
+  of them a boot-guard rollback). Allocating inside the slot's critical
+  section would also stall BOTH cores on the allocator's own lock. On failure
+  it answers an empty body, which is what the snapshot already returned
+  before the first frame; the pre-#306 `get_pixels()` was an infallible
+  `Vec::clone` made inside that same kind of critical section.
 - **The fence needs nothing new here**, but it did need generalizing: it now
   waits for an in-flight output DMA transfer whichever core it parks, not
   only the AppCpu, because which core runs the driver is a build-time

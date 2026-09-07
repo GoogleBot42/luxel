@@ -40,6 +40,16 @@ pipelined build `pipeline::preview` reads the travelling buffer out of its
 slot and `set_pixels` is never called. Idle `heap_free` is identical to master
 row for row, and `pipe_us` fell from ~44 to ~11 µs with the memcpy gone.
 
+`pipeline::preview` is deliberately ONE fallible allocation, reserved outside
+the slot's critical section. The first cut made two (a `Vec<[u8; 3]>` inside
+the lock, then `to_vec()` to flatten it) and panicked the panel on
+`GET /api/pixels` under the 2D snake — caught on serial as `memory allocation
+of 12288 bytes failed`, a software reset, and after a few of them a boot-guard
+rollback. Re-tested with both slots carrying the fix: 30 concurrent
+`/api/pixels` requests under the 2D snake at 4096 px, zero panics, no reboot.
+(The pre-#306 path had the same hazard and less defence — `get_pixels()` is an
+infallible `Vec::clone` inside the same kind of critical section.)
+
 New `/api/status` `out_fps`: frames actually written to the wire. It differs
 from `fps` (frames *rendered*) exactly when the output stage is the slower
 half, and on a pipelined board `frame_us` is now the render period —

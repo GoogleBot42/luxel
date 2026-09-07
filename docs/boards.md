@@ -590,7 +590,7 @@ task), which is worth a few hundred bytes back. Devshell builds, same
 | `board-athom-music` | 1,006,960 | 1,006,400 | −560 | 42,176 B (4.02 %) |
 | `board-esp32-generic` | 1,006,848 | 1,006,336 | −512 | 42,240 B (4.03 %) |
 | `board-s3-devkit` | 953,440 | 953,008 | −432 | 95,568 B (9.11 %) |
-| `board-seengreat-hub75` | 945,840 | 947,280 | **+1,440** | 101,296 B (9.66 %) |
+| `board-seengreat-hub75` | 945,840 | 947,344 | **+1,504** | 101,232 B (9.65 %) |
 | `board-c6-devkit` (not shipped) | 1,025,216 | 1,024,848 | −368 | 23,728 B (2.26 %) |
 
 **RAM cost: zero, deliberately.** A pipeline needs one more live frame than
