@@ -777,7 +777,11 @@ chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
   nothing. Without a 2D/3D map the coordinates are `render2D`'s own 1D
   fallback (x from the map or the index, y = 0.5).
 - **Grid space** (`blit`, and the `gridWidth()` / `gridHeight()` pair) —
-  addresses integer cells of a w×h matrix. Without a grid these are a
+  addresses integer cells of a w×h matrix. The grid has to **cover** the
+  frame, not match it: the default `ceil(√n)` map over-provisions
+  whenever the pixel count is not a rectangle (60 px → 8×8 = 64 cells),
+  and the unused cells at the end of the last row simply clip. Without a
+  grid — or with one too small to address every pixel — these are a
   **no-op**, not an error, and `gridWidth()` returns 0 so a pattern can
   branch on it.
 
@@ -814,7 +818,11 @@ data, put it in arrays and hand them to `fillHSV`/`fillRGB` in one call.
 #### Index space
 
 - `gridWidth()` / `gridHeight()` — the installed grid's dimensions, or 0
-  when the fixture is not a matrix.
+  when the fixture is not a matrix (or when its grid is too small to
+  cover the frame, which is the same thing as far as a pattern is
+  concerned: 0 means "no grid-space ops here"). The grid may have MORE
+  cells than the frame has pixels — `gridWidth() * gridHeight() >=
+  pixelCount`, with the surplus in the last row.
 - `clear()` — the whole frame to black.
 - `fill()` — the whole frame to the brush.
 - `fade(k)` — every channel × `k` (clamped 0..1), floored, so a trail
@@ -863,11 +871,13 @@ coordinates.
   grid (negative and off-grid offsets are fine — nothing outside is
   touched, and an offset far away costs nothing), blended with `mode`.
   Mode 3 (keyed) makes black source cells transparent, which is how
-  sprites, text and scrolling work: `blit(…, col - t, row, 3)`. A no-op
-  when the fixture is not a grid, and also when the grid does not cover
-  the frame exactly (`gridWidth() * gridHeight() != pixelCount`, which is
-  what the default `ceil(√n)` map gives on a non-square pixel count) —
-  `gridWidth()` is the pattern's way to find out and fall back.
+  sprites, text and scrolling work: `blit(…, col - t, row, 3)`. Cells the
+  grid has but the frame does not — the tail of the last row on an
+  over-provisioned `ceil(√n)` map, 60 px on an 8×8 grid — clip like any
+  other off-grid cell. A no-op only when the fixture is not a grid at
+  all, or when the grid is too small to cover the frame; `gridWidth()`
+  returns 0 in exactly those cases, and is the pattern's way to find out
+  and fall back.
 
 ```js
 // a decay trail with no buffers at all: the frame IS the buffer

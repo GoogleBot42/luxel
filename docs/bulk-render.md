@@ -72,7 +72,7 @@ is sticky.
 |---|---|---|
 | index | `clear` `fill` `fade` `setPixel` `fillRange` `fillHSV` `fillRGB` `fillGradient`(axis 0) | nothing — works on a bare strip |
 | coordinate | `fillRect` `fillCircle` `splat` `drawLine` `fillCanvas` `fillGradient`(axis 1–3) | any map, including sparse/irregular; a predicate over each pixel's mapped (x, y) exactly as `render2D` sees it |
-| grid | `blit`, `gridWidth`/`gridHeight` | a real W×H grid; a silent no-op without one, and `gridWidth()` returns 0 so a pattern can branch |
+| grid | `blit`, `gridWidth`/`gridHeight` | a W×H grid that COVERS the frame (`grid.len() >= pixelCount`); cells past the end of the frame — the tail of the last row on an over-provisioned `ceil(√n)` map — clip. A silent no-op with no grid or one too small, and `gridWidth()` returns 0 in exactly those cases so a pattern can branch |
 
 **Fast path.** With a grid map installed and no transform active, the
 coordinate ops walk only the cells in the shape's bounding box instead of
@@ -196,23 +196,30 @@ per-channel difference over 737,280 (4096 px) / 54,000 (300 px) bytes.
 | c-readout | **0** | **0** | — | |
 | e-blocks | **0** | **0** | — | per-pixel side uses the same integer boundaries the bulk side passes to `fillRange`; a `floor(index*3/pixelCount)` block test differs by one pixel at each seam |
 | g-canvas | **0** | **0** | **0** | |
-| h-sprite | **0** | 255 ‡ | **0** | |
+| h-sprite | **0** | **0** ‡ | **0** | |
 | k-empty | **0** | **0** | — | |
 | d-comet | 7 | 7 | — | `fade` decays the **quantized RGB888** frame; the per-pixel version decays a 16.16 value and quantizes once. Visually the same trail, up to 7/255 apart mid-decay |
 | f-balls | 1 | 1 | 1 | `splat` adds each ball as quantized bytes (saturating); the per-pixel version sums in 16.16 and quantizes once. Differs only where balls overlap (4.8 % of bytes, ≤1 LSB) |
 | i-lines | 2 | 2 | 2 | same additive-quantization argument as `f-balls` (13.4 % of bytes, ≤2 LSB) |
 | j-perlin | 1 | 1 | 1 | the bulk rewrite recomputes x/y as `mod(i,W)/(W-1)` in fixed point; `MapData::coord`'s `norm()` rounds, so the two differ by one 16.16 LSB on some cells |
 
-‡ **`blit` silently does nothing when the grid has more cells than the strip
-has pixels.** `blit_into` requires `g.len() == frame.len()`, and the
-`ceil(√n)` default grid is over-provisioned whenever `n` is not a rectangle:
-at 300 px the grid is 18×17 = 306 cells, so `blit` no-ops while `gridWidth()`
-still reports 18 and `gridHeight()` 17. The coordinate-space ops degrade
-gracefully here (they fall back to the generic scan and stay correct — `f`,
-`g`, `i` all match on this rig); only the grid-space op hard-fails. Worth a
-ticket: either clip `blit` to the frame length instead of bailing, or make
-`gridWidth`/`gridHeight` report 0 when the grid does not cover the frame, so
-a pattern can branch on the same condition the op tests.
+‡ **Fixed.** The first cut of `blit_into` required `g.len() ==
+frame.len()`, and the `ceil(√n)` default grid is over-provisioned whenever
+`n` is not a rectangle (300 px → 18×17 = 306 cells, 60 px → 8×8 = 64), so
+`blit` silently no-oped on every non-rectangular strip while `gridWidth()`
+still reported the grid. The rule now is **cover, not match**: a grid-space
+op runs whenever `grid.len() >= frame.len()`, and cells whose index is past
+the end of the frame — the tail of the last row — clip like any other
+off-grid cell. `gridWidth()`/`gridHeight()` return 0 exactly when the grid
+cannot cover the frame or there is no grid, so the documented "`gridWidth()`
+== 0 → no grid-space ops" predicate is now true rather than merely
+plausible. The coordinate-space ops were never affected (they fall back to
+the generic scan and stay correct — `f`, `g`, `i` match on this rig
+throughout); the coordinate fast path keeps its stricter `g.len() == n`
+precondition, since falling back to the scan there is correct by
+construction. With the fix `h-sprite` is byte-identical on the 300 px strip
+too, and `library/bulk-sprite-scroll-2d.js` shows its sprite on the 60/300/
+512 px rigs instead of degrading to its background wash.
 
 ## Results — firmware
 

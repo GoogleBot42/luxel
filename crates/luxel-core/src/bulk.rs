@@ -326,13 +326,18 @@ where
 
 /// `gridWidth()` / `gridHeight()`: the installed grid's dimensions, 0 when
 /// the map is not a grid — so a pattern can branch instead of erroring.
+///
+/// A grid only has to COVER the frame, not match it exactly: the default
+/// map is `ceil(√n)` wide, so a 60-pixel strip gets an 8×8 grid with four
+/// unused cells in the last row. Those cells clip (see [`blit`]); the
+/// dimensions are real and are reported. A grid SMALLER than the frame
+/// cannot address every pixel, so it reads as no grid at all — which is
+/// what keeps "`gridWidth()` == 0 → no grid-space ops" exactly true.
 pub(crate) fn grid_dim(vm: &Vm, axis: usize) -> Fx {
     match vm.frame_grid {
-        Some(g) if !g.is_empty() => Fx::from_int(if axis == 0 {
-            g.w as i32
-        } else {
-            g.h as i32
-        }),
+        Some(g) if !g.is_empty() && g.len() >= vm.pixel_count as usize => {
+            Fx::from_int(if axis == 0 { g.w as i32 } else { g.h as i32 })
+        }
         _ => Fx::ZERO,
     }
 }
@@ -634,6 +639,10 @@ fn fill_canvas_into(
 /// text and scrolling are `blit(..., col - t, row, 3)`. Without a grid
 /// map this is a no-op, not an error — `gridWidth()` is how a pattern
 /// finds out.
+///
+/// The grid only has to COVER the frame: `ceil(√n)` over-provisions
+/// whenever the strip is not a rectangle (60 px → 8×8), and the tail
+/// cells of the last row have no pixel behind them, so they are skipped.
 pub(crate) fn blit(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
     let mut frame = core::mem::take(&mut vm.frame);
     let r = blit_into(vm, prog, args, &mut frame);
@@ -651,7 +660,7 @@ fn blit_into(
     let b = src(vm, prog, arg(args, 1), "blit")?;
     let c = src(vm, prog, arg(args, 2), "blit")?;
     let (cw, ch) = (num(args, 3).to_int_trunc(), num(args, 4).to_int_trunc());
-    let Some(g) = vm.frame_grid.filter(|g| !g.is_empty() && g.len() == frame.len()) else {
+    let Some(g) = vm.frame_grid.filter(|g| !g.is_empty() && g.len() >= frame.len()) else {
         return Ok(Value::default());
     };
     if cw < 1 || ch < 1 {
@@ -677,7 +686,10 @@ fn blit_into(
             let [r, gg, bb] = hsv_to_rgb(a.at(i), b.at(i), c.at(i));
             let px = [quantize(r), quantize(gg), quantize(bb)];
             let cell = g.index((row0 + sr) as usize, (col0 + sc) as usize);
-            put(&mut frame[cell], px, mode);
+            // The over-provisioned tail of the last row addresses no pixel.
+            if let Some(dst) = frame.get_mut(cell) {
+                put(dst, px, mode);
+            }
         }
     }
     Ok(Value::default())
@@ -1086,6 +1098,44 @@ mod tests {
             &Rig::Grid(4, 4),
         );
         assert_eq!(px, vec![[0, 0, 0]; 16]);
+    }
+
+    /// The dims-reporting pattern the two grid-coverage tests share.
+    const DIMS: &str = "export var gw, gh\n\
+                        export function renderFrame() { gw = gridWidth()\n gh = gridHeight() }";
+
+    #[test]
+    fn grid_ops_run_on_an_over_provisioned_grid_and_clip_the_tail() {
+        // 60 pixels is not a rectangle, so the default map is ceil(√60) = 8
+        // wide by 8 tall: 64 cells over a 60-pixel frame. The grid COVERS
+        // the frame, so the grid ops run and the dims are reported; the
+        // four cells past the end of the last row simply clip.
+        let mut e = build(DIMS, 60, &Rig::Strip);
+        e.frame(Fx::from_int(10));
+        assert_eq!(e.var("gw"), Some(Value::Num(Fx::from_int(8))));
+        assert_eq!(e.var("gh"), Some(Value::Num(Fx::from_int(8))));
+        // a whole-grid blit paints every pixel — and does not index past 59
+        let px = frame1(&rf("blit(0, 0, 1, 8, 8, 0, 0, 0)"), 60, &Rig::Strip);
+        assert_eq!(px, vec![[255, 255, 255]; 60]);
+        // last row: cell (7, 3) is pixel 59, cell (7, 4) is off the end
+        let px = frame1(&rf("blit(0, 0, 1, 1, 1, 3, 7, 0)"), 60, &Rig::Strip);
+        assert_eq!(px[59], [255, 255, 255]);
+        assert_eq!(px.iter().filter(|p| **p != [0, 0, 0]).count(), 1);
+        let px = frame1(&rf("blit(0, 0, 1, 1, 1, 4, 7, 0)"), 60, &Rig::Strip);
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+    }
+
+    #[test]
+    fn a_grid_smaller_than_the_frame_is_no_grid_at_all() {
+        // 4x4 = 16 cells cannot address a 60-pixel frame, so gridWidth()
+        // reads 0 and the grid ops no-op: "gridWidth() == 0 → no
+        // grid-space ops" stays exactly true.
+        let mut e = build(DIMS, 60, &Rig::Grid(4, 4));
+        e.frame(Fx::from_int(10));
+        assert_eq!(e.var("gw"), Some(Value::Num(Fx::ZERO)));
+        assert_eq!(e.var("gh"), Some(Value::Num(Fx::ZERO)));
+        let px = frame1(&rf("blit(0, 0, 1, 4, 4, 0, 0, 0)"), 60, &Rig::Grid(4, 4));
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
     }
 
     // ---- the fast path is the scan ----
