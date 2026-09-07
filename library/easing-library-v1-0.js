@@ -51,7 +51,40 @@ export var prevMax = 0
 
 var lastSwitch = 0
 
+// --- grid discovery ----------------------------------------------------
+// render2D only sees normalized coordinates, so the panel's real dimensions
+// come from the smallest non-zero step in the pixel map (same trick as
+// us-flag-2d.js). The velocity marker below has to land on exactly ONE
+// pixel, and a distance tolerance cannot do that: any tolerance wide enough
+// never to miss a column is wider than half the pixel pitch, so it lights
+// two columns whenever it falls near a cell border. On the playground's
+// 16x16 preview that is about a third of all frames, which is why the
+// marker read as a two-pixel ball there while a 64x64 panel hid it
+// (Gitea #285).
+var lastX = 1
+var lastY = 1
+var minX = 2
+var minY = 2
+var built = 0
+
+function scanMap(i, x, y, z) {
+  if (x > 0.0005 && x < minX) minX = x
+  if (y > 0.0005 && y < minY) minY = y
+}
+
+function layout() {
+  minX = 2
+  minY = 2
+  mapPixels(scanMap)
+  lastX = minX < 2 ? round(1 / minX) : 1
+  lastY = minY < 2 ? round(1 / minY) : 1
+  if (lastX < 1) lastX = 1
+  if (lastY < 1) lastY = 1
+  built = 1
+}
+
 export function beforeRender(delta) {
+  if (!built) layout()
   elapsed = elapsed + delta / 1000
   if (elapsed - lastSwitch > 5) {
     // snapshot then reset the running range trackers
@@ -91,7 +124,14 @@ export function render2D(index, x, y) {
   // the eased curve, colored by its own value
   if (abs(y - v) < tol) { hsv(v, 1, 1) }
 
-  // white marker: thin band just above midline, x tracks eased pingpong
+  // white marker: exactly one pixel, on the midline row, its column tracking
+  // the eased pingpong. Snapped to the grid instead of tested with a
+  // distance tolerance so it stays one pixel on every panel size, and
+  // clamped so the back/elastic families' overshoot presses it against the
+  // end of the row instead of hiding it off-panel.
   var mx = e(pingpong)
-  if (y >= 0.5 && y < 0.5 + tol * 2 && abs(x - mx) < tol) { rgb(1, 1, 1) }
+  var mcol = clamp(round(mx * lastX), 0, lastX)
+  if (round(y * lastY) == round(0.5 * lastY) && round(x * lastX) == mcol) {
+    rgb(1, 1, 1)
+  }
 }
