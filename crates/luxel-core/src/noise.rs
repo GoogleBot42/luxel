@@ -209,6 +209,8 @@ fn wrap_pair(p: i32, w: i32) -> (usize, usize) {
 }
 
 /// `stb_perlin_noise3_wrap_nonpow2` — 3D gradient noise in ~[-1, 1].
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[inline(never)]
 fn noise3(x: f32, y: f32, z: f32, wraps: [i32; 3], seed: usize) -> f32 {
     let (px, py, pz) = (fast_floor(x), fast_floor(y), fast_floor(z));
     let (x0, x1) = wrap_pair(px, wraps[0]);
@@ -250,6 +252,14 @@ fn noise3(x: f32, y: f32, z: f32, wraps: [i32; 3], seed: usize) -> f32 {
 /// 3D gradient noise in ~[-1, 1]; lattice wraps at `wraps` (per axis).
 /// `seed` selects one of 256 fields (truncated to an integer, then to a
 /// byte — PB casts it to `unsigned char`).
+// Out of line on purpose (Gitea #328): these are the fat leaves of the
+// per-pixel path. Inlined, `simplex2_inner`/`simplex3_inner` and the
+// octave loops land INSIDE `Vm::builtin_hot`, so a pattern that only
+// calls `sin`/`hsv` still drags ~7 KB of noise through the flash
+// instruction cache with it. As their own symbols they are touched only
+// by the patterns that actually call them.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[inline(never)]
 pub fn perlin(x: Fx, y: Fx, z: Fx, seed: Fx, wraps: [i32; 3]) -> Fx {
     let s = (seed.to_int_trunc() & 255) as usize;
     from_f(noise3(to_f(x), to_f(y), to_f(z), wraps, s))
@@ -437,6 +447,8 @@ fn simplex2_inner<const GRAD: bool>(x: Fx, y: Fx, seed: Fx) -> (Fx, Fx, Fx) {
 
 /// 2D simplex noise, roughly in [-1, 1]. Deterministic (seed included in
 /// the corner hash, like perlin's).
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[inline(never)]
 pub fn simplex2(x: Fx, y: Fx, seed: Fx) -> Fx {
     simplex2_inner::<false>(x, y, seed).0
 }
@@ -448,6 +460,8 @@ pub fn simplex2_grad(x: Fx, y: Fx, seed: Fx) -> (Fx, Fx, Fx) {
 }
 
 /// 3D simplex noise, roughly in [-1, 1].
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[inline(never)]
 pub fn simplex3(x: Fx, y: Fx, z: Fx, seed: Fx) -> Fx {
     simplex3_inner::<false>(x, y, z, seed).0
 }
@@ -562,6 +576,8 @@ fn octaves_of(n: Fx) -> i32 {
 /// *different* noise field: the octave index doubles as the seed, so the
 /// layers don't share lattice lines. Not normalized; with gain 0.5 the sum
 /// lands in roughly ±1.9.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[inline(never)]
 pub fn fbm(x: Fx, y: Fx, z: Fx, lacunarity: Fx, gain: Fx, octaves: Fx, wraps: [i32; 3]) -> Fx {
     let (x, y, z) = (to_f(x), to_f(y), to_f(z));
     let (lac, gain) = (to_f(lacunarity), to_f(gain));
@@ -581,6 +597,8 @@ pub fn fbm(x: Fx, y: Fx, z: Fx, lacunarity: Fx, gain: Fx, octaves: Fx, wraps: [i
 /// well as the amplitude, which is what sharpens the ridges. Note stb's
 /// starting amplitude is 0.5, not 1.
 #[allow(clippy::too_many_arguments)] // mirrors the pattern-language signature
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[inline(never)]
 pub fn ridge(
     x: Fx,
     y: Fx,
@@ -610,6 +628,8 @@ pub fn ridge(
 }
 
 /// Turbulence — `stb_perlin_turbulence_noise3`: octaves of |noise · amp|.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[inline(never)]
 pub fn turbulence(
     x: Fx,
     y: Fx,

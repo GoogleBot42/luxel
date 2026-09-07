@@ -502,6 +502,88 @@ pattern — `perlin-fire-wind-tunnel` repeats to ±0.3 %, while `snake-2d`'s
 per-frame work depends on game state and swung 74 % between two builds a
 kilobyte apart.
 
+## Code placement: the interpreter's per-pixel code
+
+The section above says `vm_us` is dominated by instruction-cache layout. This
+is what the fleet does about it (Gitea #328, measured 2026-09-06 on master
+`e08b2b2`).
+
+**The per-pixel path is a three-tier builtin ladder plus its leaves:**
+
+| tier | function | esp32 bytes | reached by |
+|---|---|---:|---|
+| 0 | `Vm::run` | 13,170 | every op |
+| 1 | `Vm::builtin_fast` | (inlined) | the 22 builtins the dispatch loop answers itself |
+| 2 | `Vm::call_builtin` + `Vm::builtin_hot` | 1,980 + 5,095 | the ~30 builtins a `render` calls per pixel — transcendentals, noise, `dist`/`hypot`, `paint`, `canvasGet` |
+| 3 | `Vm::builtin_cold` | 14,810 | the other 90 arms: easings, beziers, arrays, transforms, palette/GPIO/clock/canvas-write setters |
+| leaf | `hsv_to_rgb`, `fmath::*`, `noise::*` | 183 / 42–1,248 each / 127–2,988 each | whichever the pattern actually calls |
+
+`builtin_cold` is `#[cold] #[inline(never)]` and is reached only through
+`builtin_hot`'s `_` arm, so a pattern that never calls an easing never pulls
+those 14.8 KB through the cache. The `noise` entry points (`perlin`, `fbm`,
+`ridge`, `turbulence`, `simplex2`, `simplex3`) are `#[inline(never)]` for the
+same reason: inlined, `simplex2_inner`/`simplex3_inner` land *inside*
+`builtin_hot` and every `sin`-only pattern drags 7 KB of noise with it.
+The tiering is measured, not guessed — `tools/profile-library.mjs` over all
+299 `library/` patterns leaves a **40× gap** between the least-used tier-2 arm
+(≥ 0.6 calls/px in the pattern that uses it) and the most-used tier-3 arm
+(≤ 0.016 calls/px); tiers 1+2 answer 99.4 % of every builtin call the library
+makes.
+
+**Then the hot tiers go into internal SRAM.** `luxel-core` carries three
+device-only cargo features that add `#[link_section = ".rwtext"]` — what
+`esp_hal::ram` expands to, spelled by hand because `luxel-core` does not
+depend on esp-hal:
+
+| feature | what moves | esp32 bytes |
+|---|---|---:|
+| `iram-vm` | `Vm::run` | 13,572 |
+| `iram-builtins` | `call_builtin` + `builtin_hot` | 7,304 |
+| `iram-math` | `hsv_to_rgb`, the hot `fmath` (sin/cos in turns and radians, sqrt/isqrt48, hypot, exp2/log2/pow, atan2) and the `noise` entry points | 9,412 |
+
+They are OFF by default and must stay off on hosts. Which ones a board gets is
+`IRAM` in `firmware/board-target.sh` (mirrored by `iram` in `flake.nix`'s
+`firmwareVariants`); `IRAM_OFF=1` on `build-esp32.sh` / `tools/stack-check.sh`
+is the A/B lever. Per-board budget: docs/boards.md.
+
+### What it buys, and why the number is so different per chip
+
+`tools/patbench.mjs`, µs/px, Athom @ 256 px and the Seengreat panel @ 4096 px,
+each build OTA'd and measured with `tools/opbench.mjs` in the same run:
+
+| | cycles/op | `rainbow` | `perlin-fire-wind-tunnel` | `kaleidoscope-2d` | `snake` |
+|---|---:|---:|---:|---:|---:|
+| Athom, no placement | 104.9 | 6.379 | 167.51 | 626.23 | 15.469 |
+| Athom, shipped | **100.8** | **6.184** | **58.53** (2.86×) | **150.20** (4.17×) | **14.322** |
+| panel, no placement | 84.0 | 4.752 | 45.39 | 102.36 | 11.696 |
+| panel, shipped | **83.4** | **4.719** | **44.79** | **101.16** | **11.531** |
+
+The classic ESP32 gains 2.9–4.2× on builtin-heavy patterns; the S3 gains 1 %.
+Same code, same features on the dispatch loop — the difference is the part
+each chip's flash cache can hold while the render task runs on the second
+core. Do not generalise a placement result from one chip to another, and do
+not trust `opbench` for any of this: it moved 4 % while `kaleidoscope-2d`
+moved 76 %.
+
+### The rule for adding hot code
+
+1. **A function on the per-pixel path belongs in tier 2 or a leaf, never in
+   `builtin_cold`, and a function that is not on it must never grow tier 2.**
+   Check with `tools/profile-library.mjs`, not intuition.
+2. **Big leaves stay `#[inline(never)]`.** Anything over ~500 B that is called
+   once per builtin call (noise, the wide fmath) is cheaper as its own symbol:
+   the pattern that does not call it does not pay for it.
+3. **Adding to `.rwtext` is not free.** On the classic ESP32 IRAM is a
+   separate 128 KB region and `.stack` does not move; on the S3 and the
+   C-series it is the *same* SRAM as the stack, and every byte comes straight
+   out of `.stack` (docs/boards.md). Run `tools/stack-check.sh` for the board.
+4. **Measure both benches on both chips before believing anything.** The
+   effect is not monotonic in size: on the Athom the hot/cold split *alone*
+   was +80 % on `perlin-fire-wind-tunnel` and +73 % on `snake` — a pattern
+   that only executes `Vm::run`, which is byte-identical (13,170 B) in every
+   build in this table. It is pure placement, and only pinning the code in
+   SRAM makes it reproducible.
+
 ## Cores & tasks: the render task runs on the second core
 
 Classic ESP32 and ESP32-S3 are dual-core; the C3/C6/S2/C2 are not. Until

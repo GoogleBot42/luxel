@@ -1,5 +1,97 @@
 # Update log
 
+## 2026-09-06 — Code placement for the flash instruction cache: 2.9–4.2× on the classic ESP32 (#328)
+
+#325 showed the dominant term in `vm_us` is whether the interpreter's own
+native code stays resident in the flash instruction cache: moving ~300 B out
+of the dispatch loop was 1.87× on a real pattern while reading −4.5 % on the
+loop microbench. This is the follow-up that acts on it, measured with BOTH
+`tools/opbench.mjs` and `tools/patbench.mjs` on both Xtensa boards (#327), on
+master `e08b2b2`.
+
+**Two changes, and they only work together.**
+
+1. **The builtin dispatch is a three-tier ladder.** `builtin_fast` (22 arms,
+   in the loop) → `call_builtin` + a new `builtin_hot` (the ~30 builtins a
+   `render` calls per pixel: transcendentals, the noise family, `dist`/
+   `hypot`, `paint`, `canvasGet`, `pixelState`) → a new `#[cold]
+   #[inline(never)] builtin_cold` holding the other 90 arms — easings,
+   beziers, arrays, transforms, palette/GPIO/clock/canvas-write setters —
+   reachable only through `builtin_hot`'s `_` arm. `call_builtin` goes
+   **18,817 → 1,980 B**; the per-pixel dispatch footprint goes 32.0 → 20.2 KB.
+   The tiering is measured, not guessed: `tools/profile-library.mjs` over all
+   299 `library/` patterns leaves a **40× gap** between the least-used tier-2
+   arm (≥ 0.6 calls/px in the pattern that uses it) and the most-used tier-3
+   arm (≤ 0.016 calls/px); tiers 1+2 answer 99.4 % of the library's builtin
+   calls. The `noise` entry points are now `#[inline(never)]` for the same
+   reason — inlined, `simplex2_inner`/`simplex3_inner` put 7 KB *inside*
+   `builtin_hot` and every `sin`-only pattern dragged it through the cache.
+
+2. **The hot tiers execute from internal SRAM.** Three device-only cargo
+   features on `luxel-core` add `#[link_section = ".rwtext"]` (what
+   `esp_hal::ram` expands to, spelled by hand — luxel-core must not depend on
+   esp-hal): `iram-vm` (`Vm::run`, 13,572 B), `iram-builtins` (`call_builtin`
+   + `builtin_hot`, 7,304 B), `iram-math` (`hsv_to_rgb`, the hot `fmath`, the
+   `noise` entry points, 9,412 B). Which board takes which is `IRAM` in
+   `firmware/board-target.sh`, mirrored by `iram` in flake.nix's
+   `firmwareVariants`, with `IRAM_OFF=1` as the A/B lever on `build-esp32.sh`
+   and `tools/stack-check.sh`.
+
+**On metal** (µs/px; Athom @ 256 px, Seengreat panel @ 4096 px; every build
+OTA'd, `opbench` and `patbench` in the same run):
+
+| | cycles/op | `rainbow` | `perlin-fire-wind-tunnel` | `kaleidoscope-2d` | `snake` |
+|---|---:|---:|---:|---:|---:|
+| Athom, master | 104.9 | 6.379 | 167.51 | 626.23 | 15.469 |
+| Athom, shipped | **100.8** | **6.184** | **58.53** | **150.20** | **14.322** |
+| | −3.9 % | −3.1 % | **−65 % (2.86×)** | **−76 % (4.17×)** | −7.4 % |
+| panel, master | 84.0 | 4.752 | 45.39 | 102.36 | 11.696 |
+| panel, shipped | **83.4** | **4.719** | **44.79** | **101.16** | **11.531** |
+| | −0.7 % | −0.7 % | −1.3 % | −1.2 % | −1.4 % |
+
+Same code, same features on the dispatch loop, 2.9–4.2× on one chip and 1 % on
+the other: the classic ESP32's render task is cache-starved and the S3's is
+not. `opbench` alone would have reported this whole piece of work as "4 %".
+
+**The ladder that got there, and the two non-wins in it** (Athom, geometric
+mean over the four probes, master = 1.00):
+
+| variant | gm | note |
+|---|---:|---|
+| `iram-vm` only | 0.68 | `Vm::run` in SRAM; already most of the win |
+| hot/cold split only | **1.38** | **a loss**: +80 % on `perlin-fire-wind-tunnel`, +73 % on `snake` |
+| split + `iram-vm` | 0.76 | |
+| split + `iram-vm` + `iram-builtins` | 0.67 | best `perlin-fire`, worst `kaleidoscope` |
+| **split + all three (shipped)** | **0.52** | |
+| all three without the split | 0.56 | and **13.7 KB more IRAM** (56,384 vs 42,644 B of `.rwtext`) |
+
+`snake` executes nothing but `Vm::run`, which is **byte-identical (13,170 B)
+in every one of those builds**, and it still swung 15.5 → 26.8 → 14.3 µs/px.
+The effect is pure placement — which is why the split alone is a loss and only
+pinning the code in SRAM makes it reproducible. Pre-#332 measurements from
+earlier the same day are in the Gitea thread and are NOT comparable: the store
+rewrite moved the baseline 7 % on its own.
+
+**The budget is per chip.** On the classic ESP32, IRAM is a dedicated 128 KB
+region (SRAM0) that `.stack` never comes out of — all three features fit with
+35,604 B to spare and `.stack` stays 24,932 B. On the S3 it is the *same* SRAM
+as the stack: `iram-vm` alone costs 46,020 → 32,452 B of `.stack`, and adding
+`iram-builtins` left 572 B over `tools/stack-check.sh`'s 24 KB floor for ~1 %,
+so the S3 boards take `iram-vm` only. The RISC-V boards take nothing — there
+is no C3 or C6 on the bench, and the C3's 16 KB icache makes it the most
+interesting untested case (Gitea #337; `RISCV_IRAM=` is the lever).
+
+Slot cost: the classic-ESP32 app image is ~3.4 KB **smaller** with the
+placement on (bytes move out of the 64 KB-page-aligned flash text segment);
+`board-c6-devkit`, which takes no IRAM features, pays ~1.1 KB for the split
+alone (3.27 % → 3.17 % of slot free). All boards stay over the 3 % floor.
+
+Verification: `cargo test --workspace` green, `tools/check-library.sh`
+1495/1495, **40/40 byte-identical PPMs** against master (128 px × 12 frames),
+`tools/stack-check.sh` clean on all six boards, QEMU flashmap + heap-regions
+green (takeover trio known-red, #273), `tools/ci.sh` green. Reference:
+docs/firmware.md "Code placement", docs/boards.md "IRAM budget".
+
 ## 2026-09-06 — One mappable extent store: source and bytecode stop being written twice (#330)
 
 The `storage` partition was half a `sequential-storage` map and half raw

@@ -129,12 +129,16 @@ fn div_shift16_narrow(num: u32, d: u32) -> u32 {
 
 /// sin of a phase in *turns* (1.0 = full cycle). The waveform functions are
 /// cos in turns: cos(t) = sin(t + 1/4).
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn cos_turns(t: Fx) -> Fx {
     sin_turns(t + Fx::from_raw(1 << 14))
 }
 
 /// specified in turns, so this is the core primitive; radian `sin` reduces
 /// into it.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn sin_turns(t: Fx) -> Fx {
     // wrap to [0, 1)
     let t = t.mod_floor(Fx::ONE).raw();
@@ -173,6 +177,8 @@ pub fn sin_turns(t: Fx) -> Fx {
 }
 
 /// sin(x), x in radians.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn sin(x: Fx) -> Fx {
     // reduce mod 2π first (better precision than multiplying large x by 1/2π)
     let r = x.mod_floor(Fx::from_raw(PI2_RAW)).raw();
@@ -185,6 +191,8 @@ pub fn sin(x: Fx) -> Fx {
 }
 
 /// cos(x), x in radians.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn cos(x: Fx) -> Fx {
     sin(x + Fx::from_raw(HALF_PI_RAW))
 }
@@ -196,6 +204,8 @@ pub fn tan(x: Fx) -> Fx {
 
 /// Floor square root, sign-preserving: `sqrt(-4) == -2`. Oracle-confirmed
 /// on fw 3.67 (this is PB's documented "square root returns negative" quirk).
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn sqrt(x: Fx) -> Fx {
     // |raw| <= 2^31, so the argument is < 2^47 and isqrt48 applies.
     let mag = isqrt48((x.raw().unsigned_abs() as u64) << 16) as i32;
@@ -212,6 +222,8 @@ pub fn sqrt(x: Fx) -> Fx {
 /// buying nothing on `crosstown-traffic-2d` (24 `dist` per pixel) — both
 /// measured with `luxel bench`, 512 px x 400 frames, best of 9-12
 /// interleaved rounds, 2026-09-06. See [`NARROW_WORD`].
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 fn isqrt48(n: u64) -> u32 {
     if NARROW_WORD {
         isqrt48_narrow(n)
@@ -299,6 +311,8 @@ pub fn hypot3(x: Fx, y: Fx, z: Fx) -> Fx {
     hypot_raw(&[x, y, z])
 }
 
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 fn hypot_raw(vs: &[Fx]) -> Fx {
     // Only the low 32 bits of the old i64 accumulator ever reached
     // `Fx::from_raw`, and truncation to 32 bits is a ring homomorphism
@@ -324,6 +338,8 @@ fn hypot_raw(vs: &[Fx]) -> Fx {
 /// 0x7FFFFFFF exactly (pinned via raw-wrap subtraction, not display
 /// rounding). The old wrap made pow(2,16) = 0, which zeroed `% pow(2,16)`
 /// idioms in corpus PRNGs (Gitea #112).
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn exp2(x: Fx) -> Fx {
     let n = x.to_int_floor();
     let f = (x - Fx::from_int(n)).raw() as u32; // [0, 65536) as 16-frac
@@ -408,6 +424,8 @@ fn sq16_narrow(m: u32) -> u32 {
 
 /// log2(x); x ≤ 0 yields the most-negative value (oracle-verified exact:
 /// log2_0/log2_neg both return raw i32::MIN on the PB).
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn log2(x: Fx) -> Fx {
     if x.raw() <= 0 {
         return Fx::MIN;
@@ -457,6 +475,8 @@ pub fn exp(x: Fx) -> Fx {
 /// usual sign rule (pow(-2, 3) == -8). Negative base with a fractional
 /// exponent yields Fx::MIN — the PB does log2(negative) = MIN and lets it
 /// propagate (oracle-verified 2026-07-07, pow_neg2_half/pow_neg2_15).
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn pow(base: Fx, e: Fx) -> Fx {
     if e == Fx::ZERO {
         return Fx::ONE;
@@ -506,6 +526,8 @@ pub fn atan(x: Fx) -> Fx {
 }
 
 /// atan on |z| ≤ 1 (raw 16-frac in, Fx out).
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 fn atan_unit(z: i32) -> Fx {
     // Hastings: atan(z) ≈ z(A + B z² + C z⁴ + D z⁶ + E z⁸), err ≈ 1e-4 rad
     const A: i32 = 65_527; // 0.9998660
@@ -525,6 +547,8 @@ fn atan_unit(z: i32) -> Fx {
 }
 
 /// atan2(y, x) with the usual quadrant conventions; atan2(0, 0) = 0.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
 pub fn atan2(y: Fx, x: Fx) -> Fx {
     let (yr, xr) = (y.raw(), x.raw());
     if xr == 0 && yr == 0 {

@@ -13,21 +13,49 @@
 #               for a faster interpreter); 0 → profile default ("s"), for
 #               boards whose OTA-slot margin can't carry it (docs/boards.md).
 #               flake.nix's firmwareVariants carry the same flag (coreO3).
+#   IRAM        space-separated cargo features that place the interpreter's
+#               per-pixel native code in internal SRAM (`.rwtext`) instead of
+#               executing it through the flash instruction cache (Gitea #328):
+#               `iram-vm` (Vm::run, 13.2 KB), `iram-builtins` (call_builtin +
+#               builtin_hot, 7.3 KB), `iram-math` (hsv_to_rgb + the hot fmath
+#               and noise leaves, 9.4 KB). Worth 1.5-4x on builtin-heavy
+#               patterns on the classic ESP32; the budget is per board and is
+#               NOT free on the S3/C-series, where IRAM and DRAM are the same
+#               SRAM and every byte here comes straight out of `.stack`.
+#               Per-board budget: docs/boards.md; the rule for adding code:
+#               docs/firmware.md "Code placement".
+#               flake.nix's firmwareVariants carry the same list (iram).
 #
 # Adding a board? Add its case here as well as the three files in
 # docs/boards.md ("Adding a board").
+# The RISC-V parts (C3 16 KB icache, C6 32 KB) have no Luxel on the bench, so
+# their placement is UNMEASURED — see Gitea #337. `.rwtext` there is the same
+# unified SRAM as the stack, and the C6 has the fleet's tightest budget, so the
+# default is off until someone can measure it on metal.
+RISCV_IRAM="${RISCV_IRAM:-}"
+
 board_target() {
+  IRAM=""
   case "$1" in
     board-pixelblaze-v3|board-athom-music|board-esp32-generic)
-      CHIP=esp32;    TARGET=xtensa-esp32-none-elf;      XTENSA=1; CORE_O3=1 ;;
+      # 128 KB of dedicated IRAM (SRAM0), separate from the DRAM the stack
+      # comes out of: the whole per-pixel path fits with ~35 KB to spare.
+      CHIP=esp32;    TARGET=xtensa-esp32-none-elf;      XTENSA=1; CORE_O3=1
+      IRAM="iram-vm iram-builtins iram-math" ;;
     board-s3-devkit|board-seengreat-hub75)
-      CHIP=esp32s3;  TARGET=xtensa-esp32s3-none-elf;    XTENSA=1; CORE_O3=1 ;;
+      # unified SRAM: .rwtext comes out of .stack (46.0 -> 33.0 KB for
+      # iram-vm alone). The other two would leave <1 KB over the 24 KB
+      # floor for ~1 % — measured on the panel, not worth it (Gitea #328).
+      CHIP=esp32s3;  TARGET=xtensa-esp32s3-none-elf;    XTENSA=1; CORE_O3=1
+      IRAM="iram-vm" ;;
     board-c3-devkit)
-      CHIP=esp32c3;  TARGET=riscv32imc-unknown-none-elf;  XTENSA=0; CORE_O3=1 ;;
+      CHIP=esp32c3;  TARGET=riscv32imc-unknown-none-elf;  XTENSA=0; CORE_O3=1
+      IRAM="$RISCV_IRAM" ;;
     board-c6-devkit)
       # tightest slot margin in the fleet: opt-level 3 on luxel-core would
       # put it under the 3 % CI floor (measured 2026-09-05: 50.8 → 30.5 KB)
-      CHIP=esp32c6;  TARGET=riscv32imac-unknown-none-elf; XTENSA=0; CORE_O3=0 ;;
+      CHIP=esp32c6;  TARGET=riscv32imac-unknown-none-elf; XTENSA=0; CORE_O3=0
+      IRAM="$RISCV_IRAM" ;;
     *)
       echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
   esac

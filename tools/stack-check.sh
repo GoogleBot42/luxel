@@ -19,7 +19,10 @@ board_target "$BOARD"
 # (space-separated), e.g. EXTRA_FEATURES=small-chip. The small-chip profile
 # moves 8 KB of task arena into the heap, so its .stack floor must be
 # checked separately from the default build's.
-FEATURES="$BOARD${EXTRA_FEATURES:+ $EXTRA_FEATURES}"
+# The per-board IRAM feature list matters here on the S3/C-series, where
+# `.rwtext` and `.stack` are the same SRAM (board-target.sh IRAM, #328).
+FEATURES="$BOARD${IRAM:+ $IRAM}${EXTRA_FEATURES:+ $EXTRA_FEATURES}"
+if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD${EXTRA_FEATURES:+ $EXTRA_FEATURES}"; fi
 
 CARGO=cargo
 STD_FLAGS=()
