@@ -938,7 +938,10 @@ impl Engine {
     ///   pixels, running no pattern code) until 1000/fps ms of *real* time
     ///   have accumulated. The clock itself keeps running, so `time_ms()`
     ///   stays continuous for Luxel-to-Luxel sync; when the frame does run,
-    ///   `beforeRender` gets the whole interval as its delta.
+    ///   `beforeRender` gets the whole interval as its delta. The overshoot
+    ///   carries into the next period (Gitea #384), so the long-run average
+    ///   is the requested rate rather than the caller's tick rate divided by
+    ///   a whole number; individual periods still jitter by up to one tick.
     pub fn frame(&mut self, delta_ms: Fx) -> &[[u8; 3]] {
         if self.run_stage.is_some() {
             // paused at a debug stop mid-frame: time frozen, pixels as-is
@@ -958,7 +961,20 @@ impl Engine {
         if self.rendered_once && self.vm.frame_min_raw > self.frame_acc {
             return &self.pixels; // under the frame-rate cap: hold this frame
         }
-        self.frame_acc = 0;
+        // Carry the remainder rather than dropping it (Gitea #384). Zeroing
+        // the accumulator quantized the achievable rate to the CALLER's tick
+        // rate over an integer: against the firmware's 8 ms render loop,
+        // `setFrameRate(100)` fired every other tick and delivered 62.5.
+        // Subtracting the period makes the long-run average exactly the cap
+        // for any cap at or below the tick rate; individual periods still
+        // jitter by up to one tick, which is inherent to a discrete loop.
+        // The carry is clamped to one period so a long stall (a flash write,
+        // a pattern swap) buys at most one catch-up frame instead of a burst
+        // of them. `frame_min_raw == 0` (uncapped) clamps to 0, i.e. resets.
+        self.frame_acc = self
+            .frame_acc
+            .saturating_sub(self.vm.frame_min_raw)
+            .min(self.vm.frame_min_raw);
         self.rendered_once = true;
         self.cur_delta =
             Fx::from_raw((self.time_acc - self.render_time_acc).min(i32::MAX as u64) as i32);

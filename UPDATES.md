@@ -1,5 +1,118 @@
 # Update log
 
+## 2026-09-07 — HUB75: the panel is the clock (#387), out_fps counts displayed frames (#378), setFrameRate carries its remainder (#384)
+
+With the swap made frame-atomic earlier today (#376) the panel still showed
+fewer frames than the firmware composed, and `/api/status` did not admit it.
+The render loop ticked every 8 ms (125 fps) against a panel that rescans every
+8.7 ms (115 Hz), and the two clocks beat.
+
+**How much was being lost was worse than it looked.** `out_fps` counted every
+`write_frame` **call**, refusals included. The tell was `out_us`: 3,804 µs
+averaged over 123 "frames" against a true compose cost of **7,400 µs** at
+4096 px — about half those calls did nothing. And a refused call did not retry
+until the render loop came round ~8 ms later, so a compose that could have
+started at the rescan boundary typically started well after it, missed the
+next boundary and landed a whole rescan late. The panel was displaying about
+**60** frames a second while `out_fps` said 123.
+
+The fix makes the hand-off buffer the clock, with no timer in the path. Three
+pieces, all HUB75-only (a strip is wire-bound and keeps the 8 ms floor):
+
+- `OutputDriver::write_frame` now returns whether it wrote. `out_fps` counts
+  only those, so it means the same thing on every board (#378).
+- The output task **holds** a frame until the previous swap has landed rather
+  than composing into a buffer about to be overwritten — composing from the
+  boundary is what gets the next swap armed before the following boundary.
+- The render task's `emit` **waits** for the travelling buffer instead of
+  dropping the frame, and takes only a genuinely free one — never the
+  newest-wins steal-back, which let the loop run a frame ahead whenever the
+  output task's wake was late (`fps` 118 against `out_fps` 112 in the first
+  cut). The VM still overlaps the compose because the wait is AFTER the
+  pattern has run, not before it.
+
+50 ms caps on both waits are a liveness floor, not the pacing: a dead panel
+must not freeze the engine, the pattern clock or `fps`.
+
+On the panel with `library/frame-rate-scan.js` at ComposeCap 0, before →
+after: `fps` 124 → **106–112**, `out_fps` 113–120 (a call count) → **106–113**
+(displayed), `rescan_hz` 115 → 115, `vm_us` 831–881 → 868–931, `frame_us`
+879–943 → 935–1,024. **`fps` and `out_fps` now track each other frame for
+frame** — nothing is composed only to be thrown away — and both sit a few
+percent under `rescan_hz`. That gap is the compose itself: 7.4 ms of an 8.7 ms
+window leaves 1.3 ms of slack, so one occasionally overruns and the panel
+repeats a frame. A repeat is not a skip. `bulk-comet-trails` over three
+minutes: `fps` 107–115, `out_fps` 106–115, heap flat at 42–50 KB,
+`fence_timeouts` 0, `vmerr` null. `rainbow`, the render-bound case at 19.5 ms
+per VM frame, is unchanged at 51–52 — the pipeline still overlaps VM and
+compose.
+
+Alongside it, **#384**: `Engine::frame` zeroed the frame accumulator whenever a
+capped frame fired, so the achievable rate quantized to the caller's tick rate
+over a whole number — `setFrameRate(100)` against the 8 ms loop delivered 62.5,
+and nothing between 62.5 and 125 was reachable. It now subtracts the period,
+clamped to one period so a long stall banks at most one catch-up frame. Six
+caps are covered by a new luxel-core test; docs/lang.md documents the residual
+one-tick jitter rather than hiding it.
+
+Costs on `board-seengreat-hub75`: app image 951,264 → 953,648 B (+2,384,
+including #384), `.stack` 30,268 → 30,204 B, stack-check green.
+`board-pixelblaze-v3`, which gets none of this, pays +400 B for the
+`write_frame` return alone: the `.await` sits behind an `emit!` macro that
+expands to a plain call off the pipelined path, because making the direct sink
+async too cost every non-panel board ~864 B of state machine for a future that
+never yields (#160 — that board has 3.7 % of its OTA slot left).
+
+**Then Jeremy filmed it and still saw a skip** — "much better. I have observed
+repeats (not many). I also observed (sadly) a skip." Repeats are expected. The
+skip was a second bug, in the #376 swap-landing shortcut, and it is the kind
+that no frame accounting can catch.
+
+`swap()` decides whether the next `out_eof` is the ring switch by checking the
+DMA is at least three descriptors short of the ring tail — if so the tail
+cannot have been fetched yet and must read the `next` just written. But "short
+of the tail" is equally true immediately **after** the DMA wrapped past it,
+and there the tail was fetched *before* the store: the pass does not flip, yet
+the EOF it already raised is miscounted as the switch. The compose is then
+handed a framebuffer the DMA is still scanning out, and the ISR "restores" the
+old ring's tail and undoes the flip. One frame both torn and never displayed.
+The window is "an EOF has fired and its ISR has not run yet" — wide open
+inside `swap()`, because `critical_section` masks interrupts while it runs.
+`write_frame` succeeded, so nothing downstream could see it.
+
+Closed by probing `OUT_INT_RAW.out_eof` alongside `OUT_DSCR` and taking the
+two-EOF fallback whenever an EOF is pending. Measured, not guessed:
+`swap.eof_race` counts entries to the window — **41 in 725 s, one every
+17.7 s, 1 frame in ~1,950**. That is exactly the rate of "I observed a skip,
+maybe there was more, I stopped watching". `swap.slow_path` (the two-EOF
+fallback, any cause) ran 318 times, 0.4 % of swaps, at no measurable
+throughput cost.
+
+To separate a real drop from a camera that missed a frame, `/api/status`
+gained **`dropped`**: rendered frames the fixture never showed, derived from
+the gap between the sequence numbers of consecutive *displayed* frames rather
+than by counting known loss routes — so it covers routes the firmware does not
+enumerate. `drops` breaks out the known ones (`handoff`, `overwrite`,
+`refused`), bins losses by frame number mod 64, and keeps the last 16 as
+`[seq, route, ms]`.
+
+Over 725 s of `frame-rate-scan` with **zero polling** from the host (~79,750
+frames), `dropped` moved by **0**. Every drop the board has recorded is a boot
+transient — 9, all `handoff`, all within the first 3.8 s, before the output
+task publishes the driver's pacing capability. The histogram holds only those
+nine, in bins 1–8 and 10: no clustering, nothing in 54–63 where a right-edge
+fault would show. Host control: 640 frames of `frame-rate-scan` at three
+cadences give `missing = 0`, `multi = 0`, every column lit exactly 10 times
+including 54–63 — the pattern never fails to draw a column.
+
+Harness note: `tools/ota-push.sh` failed silently four times on this board
+this session (`curl -sf` to `/api/ota` returning non-2xx, `set -e` ending the
+script before its status poll, so the only symptom is output that stops after
+"pushing N bytes…"). A plain `curl --data-binary @app.bin` of the same image
+seconds later returned `200 {"ok":true}` every time. Two of the failures were
+concurrent with a background `/api/status` poll loop — worth not doing during
+a push.
+
 ## 2026-09-07 — HUB75: the framebuffer swap is now frame-atomic (Gitea #376)
 
 Jeremy asked how tearing is avoided when the framebuffer is fetched by DMA.

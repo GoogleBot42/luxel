@@ -1581,12 +1581,143 @@ still is. `vmerr` null and `fence_timeouts` 0 throughout. What changes is what
 the panel *shows*, which no API field reports — that is what the camera is
 for.
 
-**Two things this does NOT fix.** Composed frames are still *dropped*
-(`write_frame` returns early while a swap is pending, and at 124 composed
-against 115 rescans about one frame in fourteen never reaches the panel) —
-pacing the render loop on the panel boundary is Gitea #387. And `out_fps`
-still counts `write_frame` calls rather than displayed frames (Gitea #378),
-which is why it reads a few above `rescan_hz` here.
+**What this did NOT fix**, and the next section does: composed frames were
+still *dropped* (`write_frame` returned early while a swap was pending), and
+`out_fps` still counted `write_frame` calls rather than displayed frames —
+which is why the table above reads `out_fps` 113–120 against a 115 Hz
+rescan. See "Vsync: the panel is the clock" below (Gitea #387, #378).
+
+## Vsync: the panel is the clock (2026-09-07, Gitea #387, #378)
+
+With the swap made atomic (above), the panel still showed fewer frames than
+the firmware composed, and `/api/status` did not admit it. The render loop
+ticked every 8 ms (125 fps) against a panel that rescans every 8.7 ms
+(115 Hz), so the two clocks beat.
+
+**How much was actually being lost was worse than it looked.** `out_fps`
+counted every `write_frame` **call**, including the ones that returned
+without drawing because the previous swap had not landed. The give-away was
+`out_us`: 3,804 µs averaged over 123 "frames", against a true compose cost of
+**7,400 µs** at 4096 px. Roughly half those calls did nothing. And because a
+refused call did not retry until the render loop came round again ~8 ms
+later, a compose that could have started at the rescan boundary typically
+started several milliseconds after it, missed the next boundary, and landed a
+whole rescan later: the panel was displaying about **60** frames a second
+while `out_fps` reported 123.
+
+**The fix is to make the hand-off buffer the clock.** Three pieces, all
+HUB75-only — a strip is wire-bound and keeps the 8 ms floor:
+
+- `OutputDriver::write_frame` returns whether the frame was actually written.
+  `out_fps` counts only those, so it is a displayed rate on every board
+  (#378).
+- The output task **holds** a frame until `ready_for_frame()` — the previous
+  swap has landed — instead of composing into a buffer about to be
+  overwritten. Composing from the boundary is what gets the next swap armed
+  before the following boundary, which is what makes one displayed frame per
+  rescan possible at all.
+- The render task's `emit` **waits** for the travelling buffer to come back
+  rather than dropping the frame, and takes only a genuinely free buffer —
+  never `claim`'s newest-wins steal-back, which let the loop run a frame
+  ahead whenever the output task's wake was late (it showed up as `fps` 118
+  against `out_fps` 112). That wait is the entire back-pressure mechanism:
+  there is no timer in the path. The VM still overlaps the compose, because
+  the render task waits AFTER the pattern has run, not before it.
+
+A 50 ms cap on both waits is a liveness floor, not the pacing — a dead panel
+must not freeze the engine, the pattern clock or `fps`.
+
+Measured on the panel, `library/frame-rate-scan.js` at ComposeCap 0, 4096 px:
+
+| | `fps` | `out_fps` | `rescan_hz` | `vm_us` | `frame_us` | `out_us` |
+|---|---:|---:|---:|---:|---:|---:|
+| atomic swap only (#376) | 124 | 113–120 (a call count) | 115 | 831–881 | 879–943 | 3,753–4,239 |
+| + vsync | **106–112** | **106–113** | 115 | 868–931 | 935–1,024 | 7,370–7,444 |
+
+`fps` and `out_fps` now track each other frame for frame — **nothing is
+composed only to be thrown away** — and both sit a few percent under
+`rescan_hz`. That gap is the compose itself: 7.4 ms of an 8.7 ms window
+leaves 1.3 ms of slack, so a compose occasionally overruns its rescan and the
+panel repeats a frame. A repeat is not a skip: no composed frame is lost.
+`out_us` doubling is the counting fix, not a slowdown — it is the same
+compose, no longer averaged with the calls that did nothing.
+
+`bulk-comet-trails` over three minutes: `fps` 107–115, `out_fps` 106–115,
+`rescan_hz` 115, heap free 42,024–50,216 B flat, `fence_timeouts` 0, `vmerr`
+null. `rainbow` (the render-bound case, 19.5 ms per VM frame) is unchanged at
+`fps` 51 / `out_fps` 51–52: the pipeline still overlaps VM and compose, which
+is why the wait lives in `emit` rather than in the pacing.
+
+Costs: app image 951,264 → 953,648 B on `board-seengreat-hub75` (+2,384,
+including #384), `.stack` 30,268 → 30,204 B, stack-check green.
+`board-pixelblaze-v3`, which has none of this, pays +400 B for the
+`write_frame` return alone — the `.await` is behind an `emit!` macro that
+expands to a plain call off the pipelined path, because making the direct
+sink async too cost every non-panel board ~864 B of state machine for a
+future that never yields (Gitea #160: that board has 3.7 % of its slot left).
+
+### The skip that survived vsync: a race in the swap-landing shortcut
+
+Jeremy filmed the vsync build and reported: "much better. I have observed
+repeats (not many). I also observed (sadly) a skip." Repeats are expected —
+see above. The skip was not, and finding it took a counter, because **this
+class of loss is invisible to frame accounting**.
+
+`swap()` decides whether the very next `out_eof` is the ring switch, or
+whether it has to wait for two. The shortcut tested that the DMA was at least
+three descriptors short of the ring's tail: if so the tail cannot have been
+fetched yet, so it must read the `next` just written. True — but "short of the
+tail" is **equally true immediately after the DMA wrapped past it**. There the
+tail was fetched *before* the store, this pass does not flip, and the EOF it
+had already raised gets miscounted as the switch. Two things then go wrong at
+once: the compose is handed a framebuffer the DMA is still scanning out, and
+the ISR "restores" the old ring's tail, *undoing the flip*. One frame both
+torn and never displayed. The window is exactly "an EOF has fired and its ISR
+has not run yet" — wide open inside `swap()`, because `critical_section` masks
+interrupts while it runs.
+
+Nothing downstream can see it: `write_frame` succeeded, so `out_fps` counts
+the frame and `dropped` sees no gap. It is only visible on the panel.
+
+Closed by probing `OUT_INT_RAW.out_eof` alongside `OUT_DSCR` and taking the
+two-EOF fallback whenever an EOF is pending. `/api/status` `swap.eof_race`
+counts entries to the window so the rate is measured, not guessed:
+
+| | measured |
+|---|---:|
+| `eof_race` over 725 s at 4096 px / 115 Hz | **41** |
+| rate | one every **17.7 s**, 1 frame in ~**1,950** |
+| `slow_path` (two-EOF fallback, any reason) | 318 — 0.4 % of swaps |
+
+One skip every 18 seconds is exactly "I observed a skip, maybe there was more,
+I stopped watching". The `slow_path` share is small enough that the fallback
+costs no measurable throughput.
+
+### Proving the pipeline lossless: `dropped`
+
+`/api/status` gained **`dropped`** — rendered frames the fixture never showed,
+cumulative since boot. It is *derived*, not enumerated: the output task adds
+the gap between the sequence numbers of consecutive **displayed** frames, so
+it counts every route a frame can go missing by, including routes the firmware
+does not know about. `drops` breaks the known ones out (`handoff`,
+`overwrite`, `refused`), bins losses by frame number mod 64 (the sweep column,
+with `frame-rate-scan`), and keeps the last 16 as `[seq, route, ms]`.
+
+Over 725 s of `frame-rate-scan` with **zero polling** from the host — ~79,750
+frames — the delta was **0**. Every drop the board has ever recorded is a boot
+transient: 9 of them, all route `handoff`, all inside the first 3.8 s, before
+the output task publishes the driver's pacing capability and `emit` starts
+waiting for the buffer instead of dropping. The mod-64 histogram holds only
+those nine, spread across bins 1–8 and 10 — **no clustering, and nothing in
+bins 54–63**, which is where a right-edge-specific fault would have shown.
+
+Host-side control, ruling the pattern out: 640 rendered frames of
+`frame-rate-scan` at 8.0 / 8.7 / 9.5 ms cadences give `missing = 0`,
+`multi = 0`, and every column 0–63 lit exactly 10 times — including 54–63. The
+sweep never fails to draw a column and never clips at the right edge.
+
+So the accounting is clean, the pattern is clean, and the skip was the swap
+race above.
 
 ## Seeing the displayed frame rate: `library/frame-rate-test.js` (2026-09-07)
 
@@ -1624,13 +1755,21 @@ pattern's own `composeFPS` 123.9–124.3 and `beatHz` 8.9–9.3 at the default
 slider. So ~9 stumbles a second against a ~124 fps compose rate, and the
 panel is displaying ~115 — `rescan_hz` and the beat agree.
 
-### `setFrameRate` is quantized to 125/n on the firmware, and this is why
+### `setFrameRate` was quantized to 125/n on the firmware, and this is why
 
-The render loop in `firmware/src/main.rs` is paced to one iteration per 8 ms.
+> **Fixed 2026-09-07 (Gitea #384).** The engine now carries the accumulator
+> remainder instead of zeroing it, so the long-run average is exactly the
+> requested rate for any cap at or below the loop rate; individual periods
+> still jitter by up to one tick. And with vsync pacing (above) the tick grid
+> on this board is the rescan, not 8 ms, so a cap holds in whole rescans.
+> The measurements below are the pre-fix behaviour, kept because they are
+> what the quantization looks like when you meet it.
+
+The render loop in `firmware/src/main.rs` was paced to one iteration per 8 ms.
 `setFrameRate(F)` makes the engine hold frames until `1000/F` ms have
-accumulated and then **resets** its accumulator (no remainder carry), so a cap
-fires on the first 8 ms tick at or past the period: the only achievable
-compose rates are `125/n`. Measured on the panel through the pattern's
+accumulated, and it used to **reset** its accumulator (no remainder carry), so
+a cap fired on the first 8 ms tick at or past the period and the only
+achievable compose rates were `125/n`. Measured on the panel through the pattern's
 `ComposeCap` slider and its own `composeFPS` var:
 
 | `setFrameRate(F)` | predicted | measured `composeFPS` | `/api/status` `fps` |

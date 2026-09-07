@@ -122,6 +122,50 @@ fn time_scale_scales_the_pattern_clock() {
 }
 
 #[test]
+fn set_frame_rate_carries_the_accumulator_remainder() {
+    // Gitea #384. Zeroing the accumulator on every fired frame quantized the
+    // achievable rate to the CALLER's tick rate over a whole number: the
+    // firmware's 8 ms render loop made setFrameRate(100) deliver 62.5, and
+    // no value between 62.5 and 125 was reachable at all. Carrying the
+    // overshoot makes the long-run average the requested rate.
+    for cap in [100.0, 90.0, 75.0, 60.0, 50.0, 30.0] {
+        let mut e = Engine::new(&format!("setFrameRate({cap})\n{COUNTER}"), 1, 1).unwrap();
+        // 1000 ticks of 8 ms = exactly 8 s of pattern time, the firmware's
+        // pre-vsync render loop.
+        for _ in 0..1000 {
+            e.frame(Fx::from_int(8));
+        }
+        let want = cap * 8.0;
+        let got = num(&e, "frames");
+        assert!(
+            (got - want).abs() <= 2.0,
+            "setFrameRate({cap}) over 8 s at a 125 Hz tick: ran {got} frames, want ~{want}"
+        );
+    }
+
+    // A cap above the tick rate is still just the tick rate — the carry
+    // cannot manufacture frames the caller never asked for.
+    let mut fast = Engine::new(&format!("setFrameRate(1000)\n{COUNTER}"), 1, 1).unwrap();
+    for _ in 0..100 {
+        fast.frame(Fx::from_int(8));
+    }
+    assert_eq!(num(&fast, "frames"), 100.0);
+
+    // A long stall banks at most ONE catch-up frame, not the whole backlog.
+    // setFrameRate(10) = a 100 ms period; a 5 s tick is 50 periods' worth.
+    let mut stall = Engine::new(&format!("setFrameRate(10)\n{COUNTER}"), 1, 1).unwrap();
+    stall.frame(Fx::from_int(10)); // first frame always renders
+    stall.frame(Fx::from_int(5000)); // the stall itself renders one frame
+    assert_eq!(num(&stall, "frames"), 2.0);
+    stall.frame(Fx::from_int(1)); // the single banked period fires here
+    assert_eq!(num(&stall, "frames"), 3.0);
+    for _ in 0..9 {
+        stall.frame(Fx::from_int(1)); // and then the cap holds again
+    }
+    assert_eq!(num(&stall, "frames"), 3.0, "a stall must not bank a burst");
+}
+
+#[test]
 fn set_frame_rate_caps_pattern_evaluation() {
     // setFrameRate(fps) holds the last frame until 1000/fps real ms have
     // passed. The pattern runs less often; the clock does not slow down.

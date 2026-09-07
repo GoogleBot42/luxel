@@ -745,8 +745,19 @@ the frame period was `vm + out` on a core that had nothing else to do.
 finished RGB frame to an `output_task` on the ProCpu and goes straight back
 to the VM; core 0 composes frame N while core 1 renders N+1, and the period
 becomes `max(vm, out)`. At 4096 px on the Seengreat panel: rainbow 39 → 52
-fps, rgb-only 60 → 87, empty render 99 → 125 (123 of them reaching the
-panel), 1D snake 19 → 21, 2D snake 12 → 13.
+fps, rgb-only 60 → 87, empty render 99 → 125, 1D snake 19 → 21, 2D snake
+12 → 13.
+
+> **Correction (2026-09-07, Gitea #378).** The parenthetical here used to
+> read "123 of them reaching the panel". It did not: `out_fps` was counting
+> `write_frame` CALLS, refusals included, and a refused call did not retry
+> until the render loop came round ~8 ms later, so the compose kept missing
+> the rescan boundary. The panel was showing roughly **60** of those 125.
+> Every figure in this paragraph above ~60 is a COMPOSE rate. Vsync pacing
+> (#387) makes the fast rows land at the rescan rate for real, ~112 of a
+> 115 Hz rescan; the render-bound rows (rainbow, the snakes) are unaffected
+> because they were never near the ceiling. docs/boards.md "Vsync: the panel
+> is the clock" has the measurements.
 
 | stays on core 1 | moves to core 0 |
 |---|---|
@@ -755,10 +766,24 @@ panel), 1D snake 19 → 21, 2D snake 12 → 13.
 - **One buffer, borrowed not owned.** A single frame buffer travels in a
   `BlockingMutex<CriticalSectionRawMutex>` cell announced by a `Signal`. The
   render task takes it, fills it, publishes it and holds nothing between
-  frames. It never blocks: if the output task still has the buffer when the
-  next frame is ready, that frame is dropped — the same best-effort contract
-  `Hub75Output::write_frame` already had with the DMA swap. A frame published
-  over an unclaimed one replaces it; newest wins.
+  frames. Without vsync it never blocks: if the output task still has the
+  buffer when the next frame is ready, that frame is dropped — the same
+  best-effort contract `Hub75Output::write_frame` already had with the DMA
+  swap — and a frame published over an unclaimed one replaces it; newest
+  wins.
+- **Under vsync that buffer IS the clock** (Gitea #387, on any driver whose
+  `paces_frames()` says it has a display clock — today, the panel). The
+  output task holds each frame until the previous DMA swap has landed, and
+  the render task's `emit` waits for the buffer to come back instead of
+  dropping the frame, taking only a genuinely free one rather than stealing
+  its own unclaimed frame back. The result is exactly one frame composed,
+  swapped and displayed per panel rescan: `fps`, `out_fps` and `rescan_hz`
+  converge, and nothing is rendered only to be thrown away. The VM still
+  overlaps the compose, because the render task waits at `emit` — after the
+  pattern has run — rather than before it, which is why a render-bound
+  pattern keeps the full `max(vm, out)` win above. `DROPPED` should stay at
+  zero on such a board. Both waits give up after 50 ms so a dead panel
+  degrades the frame rate instead of freezing the engine.
 - **The frame is copied, not swapped.** `Engine::frame` may legitimately
   return the PREVIOUS frame (a pattern under its own `frameRate` cap), so
   alternating the engine's own pixel buffer would show a stale frame on

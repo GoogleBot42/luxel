@@ -82,13 +82,16 @@ pub static OUT_US: AtomicU32 = AtomicU32::new(0);
 /// slower half the render task free-runs ahead and its surplus frames are
 /// dropped, so the two differ and both are meaningful.
 ///
-/// **On a strip this is frames on the wire. On the HUB75 panel it is not**
-/// (Gitea #378): `Hub75Output::write_frame` returns without drawing when
-/// the previous buffer swap has not landed yet, and that call is still
-/// counted here. So above the panel's rescan rate — see [`RESCAN_HZ`],
-/// 115 Hz on the bench panel — `OUT_FPS` is a **compose** rate and the
-/// surplus never reaches the eye. Quote `min(OUT_FPS, RESCAN_HZ)` for what
-/// a panel actually displayed.
+/// **Frames the driver actually took**, on every board (Gitea #378 —
+/// `OutputDriver::write_frame` returns whether it wrote, and a panel whose
+/// previous buffer swap has not landed says no). On a strip that is frames
+/// on the wire; on the panel it is frames the panel scanned out. It used to
+/// count every `write_frame` CALL, which on the panel made it a compose rate
+/// reading up to 125 against a 115 Hz rescan.
+///
+/// With vsync pacing (Gitea #387) this and [`FPS`] should be the same
+/// number, both a hair under [`RESCAN_HZ`]: the render loop is paced by the
+/// panel, so a composed frame is never thrown away.
 ///
 /// Always 0 on a non-pipelined board, where every rendered frame is written
 /// by construction.
@@ -98,19 +101,47 @@ pub static OUT_FPS: AtomicU32 = AtomicU32::new(0);
 /// panel is actually redrawn from the framebuffer, from esp-hub75's BCM
 /// frame counter. 0 on every board without a HUB75 panel.
 ///
-/// This is the number that makes [`OUT_FPS`] readable on a panel. The
-/// output driver composes a frame and queues a swap that lands at a rescan
-/// boundary; when compose runs faster than the panel rescans,
-/// `write_frame` finds the previous swap still in flight and returns
-/// without drawing. Those calls still count towards `OUT_FPS`, so on a
-/// panel **`OUT_FPS` is a compose rate and `RESCAN_HZ` is the ceiling on
-/// what was displayed** (Gitea #378). Measured 115 Hz on the 64x64 bench
-/// panel at 7 planes / 30 MHz, against an `OUT_FPS` of up to 125.
+/// The panel's clock, and since Gitea #387 the render loop's: the output
+/// task holds each frame until the previous swap has landed, so exactly one
+/// frame is composed, swapped and displayed per rescan and [`FPS`] and
+/// [`OUT_FPS`] both settle just under this number. It stays the CEILING on
+/// what can be displayed — a compose that overruns its rescan window shows
+/// the previous frame for one more rescan, which is why `OUT_FPS` reads a
+/// few below rather than exactly equal. Measured 115 Hz on the 64x64 bench
+/// panel at 7 planes / 30 MHz.
 ///
 /// Sampled where the frames are: the counter is read in `write_frame`, so
 /// it stops advancing when nothing renders — exactly when `OUT_FPS` is 0
 /// too.
 pub static RESCAN_HZ: AtomicU32 = AtomicU32::new(0);
+
+/// Rendered frames the fixture never showed, cumulative since boot —
+/// `/api/status` `dropped`.
+///
+/// Written by the output task on a pipelined board (pipeline.rs), which
+/// derives it from the gap between the sequence numbers of consecutive
+/// DISPLAYED frames rather than by counting known loss paths — so it covers
+/// every way a frame can go missing between the VM and the panel, including
+/// ones the code does not enumerate. Always 0 on a non-pipelined board, where
+/// every rendered frame is written by construction.
+///
+/// Under vsync pacing (Gitea #387) the pipeline is lossless and this must
+/// stay 0. A nonzero value is the ground truth that separates a real dropped
+/// frame from a camera that missed one.
+pub static DROPPED: AtomicU32 = AtomicU32::new(0);
+
+/// HUB75 swap diagnostics from the patched esp-hub75 (Gitea #387), absolute
+/// since boot. `SWAP_EOF_RACE` counts swaps armed while an `out_eof` was
+/// raised but unserviced — the window the driver's pending-EOF check closes,
+/// and before that check the rate at which a framebuffer was handed back
+/// while the DMA was still scanning it out (a frame both torn and never
+/// displayed, invisible to [`DROPPED`] because `write_frame` succeeded).
+/// `SWAP_SLOW_PATH` counts swaps that took the two-EOF fallback for any
+/// reason, each costing one extra panel frame of latency. Both 0 on boards
+/// without a panel.
+pub static SWAP_EOF_RACE: AtomicU32 = AtomicU32::new(0);
+/// See [`SWAP_EOF_RACE`].
+pub static SWAP_SLOW_PATH: AtomicU32 = AtomicU32::new(0);
 
 /// Raw BCM frame count from the panel driver, absolute since boot.
 /// [`RESCAN_HZ`] is its once-a-second delta; nothing else should read it.

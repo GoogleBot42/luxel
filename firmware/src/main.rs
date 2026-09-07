@@ -958,6 +958,37 @@ async fn persist_current_pattern(src: &str, bc: &[u8], id: &str) {
     }
 }
 
+/// Hand a frame to the sink. On a pipelined board this can WAIT for the
+/// output task to give the travelling buffer back — that wait is the vsync
+/// pacing (Gitea #387) — so the call is a suspension point. On every other
+/// board the sink is synchronous and there is nothing to await; going
+/// through a macro keeps the `.await` (and its state machine) out of those
+/// builds entirely.
+#[cfg(pipelined)]
+macro_rules! emit {
+    ($sink:expr, $frame:expr, $grid:expr) => {
+        $sink.emit($frame, $grid).await
+    };
+}
+#[cfg(not(pipelined))]
+macro_rules! emit {
+    ($sink:expr, $frame:expr, $grid:expr) => {
+        $sink.emit($frame, $grid)
+    };
+}
+#[cfg(pipelined)]
+macro_rules! emit_staged {
+    ($sink:expr, $grid:expr) => {
+        $sink.emit_staged($grid).await
+    };
+}
+#[cfg(not(pipelined))]
+macro_rules! emit_staged {
+    ($sink:expr, $grid:expr) => {
+        $sink.emit_staged($grid)
+    };
+}
+
 /// frames. Yields to the network tasks after every frame.
 ///
 /// Output-agnostic: everything past the VM — the preview copy, the output
@@ -1432,7 +1463,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             let grid = engine.as_ref().and_then(|e| e.grid());
             // through the same sink as a pattern frame, so live input is
             // pipelined too where the board pipelines
-            sink.emit_staged(grid);
+            emit_staged!(sink, grid);
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() {
             let now = Instant::now();
@@ -1476,7 +1507,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // The blend lives in the sink's staging buffer: on a pipelined
             // board that buffer IS the one handed to the output task, so a
             // crossfade costs the pipeline no extra copy.
-            let (vm_t1, pipe_us, out_us) = if prev.is_some() && t < 65536 {
+            let (vm_t1, pipe_us, out_us, handoff_us) = if prev.is_some() && t < 65536 {
                 // copy the incoming frame, then blend the outgoing on top
                 {
                     let stage = sink.stage();
@@ -1489,14 +1520,14 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     stage[i] = blend_px(px_old[i], stage[i], t);
                 }
                 let vm_t1 = Instant::now();
-                let (p, o) = sink.emit_staged(grid);
-                (vm_t1, p, o)
+                let (p, o, w) = emit_staged!(sink, grid);
+                (vm_t1, p, o, w)
             } else {
                 drop_prev(&mut prev); // fade finished
                 let frame = engine.as_mut().unwrap().frame(delta);
                 let vm_t1 = Instant::now();
-                let (p, o) = sink.emit(frame, grid);
-                (vm_t1, p, o)
+                let (p, o, w) = emit!(sink, frame, grid);
+                (vm_t1, p, o, w)
             };
             // stage timing — a few Instant reads and integer adds; no
             // formatting, allocation or float work on the hot path
@@ -1504,7 +1535,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             vm_sum += (vm_t1 - vm_t0).as_micros();
             pipe_sum += pipe_us as u64;
             out_sum += out_us as u64;
-            frame_sum += (frame_t1 - now).as_micros();
+            // `frame_us` measures WORK. Under vsync pacing the hand-off can
+            // block for most of a rescan waiting for the output task to give
+            // the travelling buffer back (Gitea #387) — that is the pacing,
+            // not the frame's cost, so it comes back out.
+            frame_sum += (frame_t1 - now).as_micros().saturating_sub(u64::from(handoff_us));
             timed_frames += 1;
             if let Some(e) = engine.as_mut().unwrap().take_error() {
                 // report each distinct error site once, not per frame — an
@@ -1604,20 +1639,17 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             playlist::preflight_record(&id, violation);
         }
 
-        // Pace to ~120 fps: an uncapped render loop starves the network
-        // tasks (choppy preview, timed-out polls) for frame rate nobody can
-        // see. Slow patterns just yield. No engine (rejected pattern) =
-        // nothing to render — idle properly instead of busy-spinning.
+        // Pace the loop. On a panel this is the panel's own frame boundary
+        // — one composed frame per rescan, nothing rendered only to be
+        // overwritten (Gitea #387); everywhere else it is the 8 ms floor,
+        // because an uncapped render loop starves the network tasks for
+        // frame rate nobody can see. No engine (rejected pattern) = nothing
+        // to render — idle properly instead of busy-spinning.
         if engine.is_none() {
             Timer::after(Duration::from_millis(50)).await;
             continue;
         }
-        let spent = Instant::now() - last;
-        if spent.as_micros() < 8_000 {
-            Timer::after(Duration::from_micros(8_000 - spent.as_micros())).await;
-        } else {
-            embassy_futures::yield_now().await;
-        }
+        pipeline::pace(Instant::now() - last).await;
     }
 }
 

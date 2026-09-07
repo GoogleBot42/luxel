@@ -62,7 +62,27 @@ pub trait OutputDriver {
     /// Emit one post-outpipe RGB888 frame. `brightness5` is the 0–31
     /// global level (0 = black; drivers without a hardware brightness
     /// field scale in software).
-    fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8);
+    ///
+    /// Returns whether the frame was actually put on its way to the
+    /// fixture. `false` = nothing was written and this frame is gone — a
+    /// paused driver, or a panel whose previous buffer swap has not landed
+    /// yet. Only `true` frames count towards `out_fps` (Gitea #378).
+    fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) -> bool;
+
+    /// Would a `write_frame` right now do anything, or would the frame be
+    /// dropped? A caller that would rather WAIT a moment than lose the
+    /// frame polls this (Gitea #387). Drivers that never refuse say `true`.
+    fn ready_for_frame(&self) -> bool {
+        true
+    }
+
+    /// Does this driver have a display clock of its own that the render
+    /// loop should pace on — one composed frame per panel rescan instead of
+    /// a fixed timer (Gitea #387)? `false` = the caller keeps its own
+    /// pacing, which is right for anything wire-bound.
+    fn paces_frames(&self) -> bool {
+        false
+    }
 }
 
 /// SPI config for a protocol (only the clock rate differs; mode 0 for both).
@@ -173,7 +193,7 @@ impl OutputDriver for SpiStripOutput {
         realloc_buf(&mut self.buf, len)
     }
 
-    fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) {
+    fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) -> bool {
         let proto = self.proto();
         // the buffer is empty after a failed realloc — retry it lazily
         // (heap may have freed up); never index out of bounds
@@ -183,6 +203,10 @@ impl OutputDriver for SpiStripOutput {
             if let Err(e) = self.spi.write(self.buf.bytes()) {
                 println!("spi write error: {:?}", e);
             }
+            // The wire took it either way: a failed SPI write is a driver
+            // error, not a frame the caller could usefully retry.
+            return true;
         }
+        false
     }
 }

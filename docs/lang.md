@@ -213,6 +213,19 @@ top-level init (they take effect from the first frame) or from
   so a pathological `setFrameRate(0.0001)` stalls for a minute, not an
   hour.
 
+  The cap is an **average**, not a metronome. The engine only gets to
+  decide at the moments its host calls it — every 8 ms in the firmware's
+  render loop, or once per panel rescan on a HUB75 board — so an
+  individual frame period lands on whichever of those instants comes at or
+  after the deadline, and jitters by up to one tick. The overshoot carries
+  into the next period rather than being discarded (Gitea #384), so over
+  any useful span the rate is exactly what you asked for: on the firmware
+  `setFrameRate(100)` really does average 100, where it used to quantize
+  down to 62.5 (the tick rate over a whole number). A cap **above** the
+  host's tick rate is simply the tick rate. After a long stall — a flash
+  write, a pattern swap — the carry is clamped to one period, so you get
+  at most one catch-up frame rather than a burst of them.
+
 The cap is enforced **inside the engine**, so it behaves identically on
 every host — firmware, playground, CLI — rather than depending on each
 render loop. Two consequences worth knowing:

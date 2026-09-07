@@ -351,6 +351,18 @@ I-cache-layout risk to every existing pattern" — is discharged.
 
 **The bulk patterns on the 64×64 panel**, `ed2ac3f`, 4096 px:
 
+> **Correction (2026-09-07, Gitea #378, #387).** `out_fps` in this table is a
+> **compose** rate, not a display rate. It counted every `write_frame` call,
+> including the ones the panel refused because the previous buffer swap had
+> not landed — and a refused call did not retry until the render loop came
+> round ~8 ms later, so the compose kept missing the rescan boundary. The
+> panel rescans at 115 Hz and was actually showing roughly **60** frames a
+> second on the 125-fps rows. `rainbow` at 52 is real (it is VM-bound, well
+> under the ceiling); every row above ~60 is not. With vsync pacing the same
+> rows land at ~112 displayed, and `out_fps` now counts displayed frames on
+> every board. Re-measure before quoting these as throughput; the VM columns
+> are unaffected.
+
 | pattern | fps | out_fps | vm µs | vm µs/px |
 |---|---:|---:|---:|---:|
 | `rainbow` (per-pixel control) | 52 | 52 | 19,417 | 4.740 |
@@ -361,7 +373,8 @@ I-cache-layout risk to every existing pattern" — is discharged.
 | `bulk-canvas-ripples-2d` | 100 | 100 | **9,900** | **2.417** |
 
 `rainbow` → `bulk-rainbow` is the only genuine like-for-like pair among the
-shipped library patterns: **7.0× of VM time**, 52 → 125 fps on the wire. The
+shipped library patterns: **7.0× of VM time**, 52 → 125 fps composed (see the
+correction above: the panel showed ~60 of those, and ~112 once vsync-paced). The
 host bench read 4.4× for the same shape (`b-rainbow`), so the device
 multiplier here is **1.6×, not the ~3× this page's rule of thumb suggests** —
 that estimate came from the per-pixel *entry* cost, and for a fill-shaped
