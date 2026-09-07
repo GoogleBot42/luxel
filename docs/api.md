@@ -46,7 +46,7 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 `GET /api/status` on **firmware**:
 
 ```json
-{"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,
+{"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
  "pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"live":null,"assets_mapped":true,"code_mapped":true,
  "store":{"used":5,"total":183,"patterns":3},
@@ -55,11 +55,25 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 
 - `frame_us` / `vm_us` / `pipe_us` / `out_us` — per-stage frame timing, the
   average microseconds per rendered frame over the last second: the whole
-  engine branch, `Engine::frame` (the VM), the preview copy + output pipeline
-  (gamma / palette / blur), and the LED/HUB75 driver's `write_frame`. The
-  stages nest — `frame_us` ≈ the other three plus per-frame bookkeeping.
-  Only *pattern* frames are timed, so all four read 0 in a second where live
-  input drove the strip or no engine was loaded.
+  engine branch, `Engine::frame` (the VM), the output pipeline (gamma /
+  palette / blur, plus the preview copy where there is one), and the
+  LED/HUB75 driver's `write_frame`. The stages nest — `frame_us` ≈ the other
+  three plus per-frame bookkeeping. Only *pattern* frames are timed, so all
+  four read 0 in a second where live input drove the strip or no engine was
+  loaded.
+
+  **Except where `out_fps` is nonzero.** On a board that pipelines the output
+  stage onto the other core (HUB75 panels — docs/firmware.md "The frame
+  pipeline"), `frame_us` is the render PERIOD and no longer contains
+  `pipe_us` or `out_us`; those two come from the output task and are averaged
+  over `out_fps` frames, not `fps` frames. The frame period there is
+  `max(frame_us, pipe_us + out_us)`.
+- `out_fps` — frames actually written to the wire in the last second, on a
+  pipelined board; `0` everywhere else, where every rendered frame is written
+  by construction. It differs from `fps` (frames *rendered*) exactly when the
+  output stage is the slower half — at 4096 px an empty render renders 125
+  frames and the panel shows 123 of them. `fps` is what the pattern's motion
+  is computed at; `out_fps` is what the panel showed.
 - `max_pixels` — this board's cap: 4096 on HUB75-panel boards, 2048 otherwise.
 - `slot` — `factory` / `ota_0` / `ota_1` / `ota_?` / `unknown` (which app
   partition booted). Check this after a power-cycle test: a rollback shows up

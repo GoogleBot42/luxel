@@ -32,7 +32,7 @@ use picoserve::response::{Content, StatusCode};
 use picoserve::routing::RequestHandlerService as _;
 
 use crate::shared::{
-    get_pixels, get_vmerr, snapshot, Msg, CONTROLS_JSON, FPS, MSG_QUEUE, READOUTS_JSON, VARS_JSON,
+    get_vmerr, snapshot, Msg, CONTROLS_JSON, FPS, MSG_QUEUE, READOUTS_JSON, VARS_JSON,
 };
 use crate::config::DeviceConfig;
 use crate::leds::Protocol;
@@ -352,6 +352,9 @@ fn status_json() -> String {
     push_u32(&mut out, crate::shared::PIPE_US.load(Ordering::Relaxed));
     push_piece(&mut out, ",\"out_us\":");
     push_u32(&mut out, crate::shared::OUT_US.load(Ordering::Relaxed));
+    // frames actually written to the wire (pipelined boards; 0 elsewhere)
+    push_piece(&mut out, ",\"out_fps\":");
+    push_u32(&mut out, crate::shared::OUT_FPS.load(Ordering::Relaxed));
     push_piece(&mut out, ",\"pixels\":");
     push_u32(&mut out, pixels);
     push_piece(&mut out, ",\"max_pixels\":");
@@ -1066,7 +1069,15 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
 
 /// Last rendered frame as raw RGB bytes (3 per pixel) for the preview.
 async fn api_pixels() -> ApiResponse {
-    Reply::ok(ApiBody::Bytes(get_pixels())).cors()
+    // Pipelined boards keep no separate snapshot — the frame buffer in
+    // flight to the output task is the snapshot (pipeline::preview). It is
+    // unreadable only while one of the two tasks holds it, so retry briefly
+    // rather than answering with nothing.
+    #[cfg(pipelined)]
+    let px = crate::pipeline::preview().await;
+    #[cfg(not(pipelined))]
+    let px = crate::shared::get_pixels();
+    Reply::ok(ApiBody::Bytes(px)).cors()
 }
 
 async fn api_controls() -> ApiResponse {

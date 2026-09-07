@@ -35,10 +35,22 @@ fn main() {
     // fence (src/core1.rs). Mirrors esp-hal's own `multi_core` cfg, which
     // is private to the esp-* crates' build scripts.
     println!("cargo::rustc-check-cfg=cfg(multi_core)");
-    if std::env::var_os("CARGO_FEATURE_ESP32").is_some()
-        || std::env::var_os("CARGO_FEATURE_ESP32S3").is_some()
-    {
+    let multi_core = std::env::var_os("CARGO_FEATURE_ESP32").is_some()
+        || std::env::var_os("CARGO_FEATURE_ESP32S3").is_some();
+    if multi_core {
         println!("cargo:rustc-cfg=multi_core");
+    }
+
+    // The frame pipeline (src/pipeline.rs): the compose + output stages run
+    // on the ProCpu while the AppCpu renders the next frame, so the frame
+    // period is max(vm, out) instead of vm + out. Only worth it where the
+    // output stage costs real CPU on a core that has nothing else to do -
+    // the HUB75 bitplane compose is a flat ~6 ms at 4096 px. Strips at
+    // 60-2048 px are wire-bound (SPI DMA), so they keep the single-task
+    // path and pay neither the extra frame buffer nor the hand-off.
+    println!("cargo::rustc-check-cfg=cfg(pipelined)");
+    if multi_core && std::env::var_os("CARGO_FEATURE_HUB75").is_some() {
+        println!("cargo:rustc-cfg=pipelined");
     }
 }
 

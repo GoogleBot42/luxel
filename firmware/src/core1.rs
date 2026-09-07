@@ -408,16 +408,22 @@ mod imp {
             // disables it before touching SPI1 (spi_flash_disable_cache),
             // and so do we, via the ROM helper. Re-enabled (with a flush) in
             // Drop before the core is released.
-            // The render core may have been parked mid-frame with the strip's
-            // SPI2 DMA transfer still running. On the classic ESP32 the SPI
-            // hosts share the SPI DMA engine, and a ROM SPI1 flash op issued
-            // while that transfer is in flight wedges the ProCpu (hard hang,
-            // black-boxed 6/6 as "ProCpu inside the op"; a fence that only
-            // parks — no flash op — ran clean, and this wait made the same
-            // trigger run clean). Single-core builds never hit it because the
-            // blocking DMA write held the only core. Wait for the output
+            // The parked core may have been stopped mid-frame with the
+            // strip's SPI2 DMA transfer still running. On the classic ESP32
+            // the SPI hosts share the SPI DMA engine, and a ROM SPI1 flash op
+            // issued while that transfer is in flight wedges the ProCpu (hard
+            // hang, black-boxed 6/6 as "ProCpu inside the op"; a fence that
+            // only parks — no flash op — ran clean, and this wait made the
+            // same trigger run clean). Single-core builds never hit it because
+            // the blocking DMA write held the only core. Wait for the output
             // driver's transfer to finish (bounded — a frame at most).
-            if acked && other == APP {
+            //
+            // Asked of EITHER core, not just the AppCpu: which core runs the
+            // output driver is a build-time question (pipeline.rs moves it to
+            // the ProCpu where the board pipelines), and the check is one
+            // register read that reads `false` on every board whose driver
+            // cannot have a transfer in flight.
+            if acked {
                 let t = Instant::now();
                 while crate::output::transfer_busy() {
                     if t.elapsed() > PARK_TIMEOUT {

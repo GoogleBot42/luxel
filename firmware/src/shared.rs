@@ -76,6 +76,17 @@ pub static PIPE_US: AtomicU32 = AtomicU32::new(0);
 /// `BoardOutput::write_frame` only — the LED / HUB75 driver.
 pub static OUT_US: AtomicU32 = AtomicU32::new(0);
 
+/// Frames actually written to the wire in the last full second, on boards
+/// that pipeline the output stage onto the other core (pipeline.rs, Gitea
+/// #306). [`FPS`] counts frames the VM *rendered*; when the compose is the
+/// slower half — a cheap pattern on the 64x64 panel, where the panel's own
+/// rescan boundary paces `write_frame` — the render task free-runs ahead
+/// and its surplus frames are dropped, so the two differ and BOTH are
+/// meaningful: `FPS` is what the pattern's motion is computed at, `OUT_FPS`
+/// is what the panel showed. Always 0 on a non-pipelined board, where every
+/// rendered frame is written by construction.
+pub static OUT_FPS: AtomicU32 = AtomicU32::new(0);
+
 /// Global output brightness, 0–31. The render task reads it every frame and
 /// feeds it to the encoder (SK9822's 5-bit current field; a software scale for
 /// WS2812). HTTP `/api/brightness` writes it; boot seeds it from flash (else
@@ -147,10 +158,18 @@ pub fn get_vmerr() -> Option<String> {
     share_get(&LAST_VMERR)
 }
 
-/// Snapshot of the last rendered frame (RGB bytes, 3 per pixel) for the
-/// browser preview (`GET /api/pixels`).
+/// Snapshot of the last rendered frame (RGB bytes, 3 per pixel) for
+/// `GET /api/pixels`.
+///
+/// Not on a pipelined board (pipeline.rs, Gitea #306): there the frame
+/// buffer travelling to the output task already holds the last complete
+/// frame, and `pipeline::preview` serves the API straight out of it — a
+/// second 12 KB copy of a frame that already exists is exactly the RAM the
+/// pipeline needed.
+#[cfg(not(pipelined))]
 pub static PIXELS: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));
 
+#[cfg(not(pipelined))]
 pub fn set_pixels(rgb: &[[u8; 3]]) {
     PIXELS.lock(|c| {
         let mut v = c.borrow_mut();
@@ -161,6 +180,7 @@ pub fn set_pixels(rgb: &[[u8; 3]]) {
     });
 }
 
+#[cfg(not(pipelined))]
 pub fn get_pixels() -> Vec<u8> {
     share_get(&PIXELS)
 }
