@@ -152,6 +152,26 @@ paths:
   divdi`, not from the disassembly. `Fx::div`, `time()` and the 1D pixel
   coordinate carry 32-bit fast paths with bit-exact tests (#260); keep new
   hot-path arithmetic in i32/u32 and add the same kind of test.
+- **`cargo check` does not prove the firmware BUILDS.** It stops before
+  codegen, and the Xtensa LLVM fork's instruction selection is where the
+  interesting failures are — a RISC-V board (`--target
+  riscv32imac-unknown-none-elf`) is a fast syntax/type check and nothing
+  more. Before claiming a firmware change compiles, run a real Xtensa
+  build: `nix develop --command bash -c 'cd <worktree> &&
+  BOARD=board-athom-music SKIP_ASSETS=1 ./firmware/build-esp32.sh'` from
+  the worktree ROOT (~1 min against a warm target dir).
+- **`rustc-LLVM ERROR: Cannot select: i32 = Constant<N>` is a backend bug,
+  not your bug.** The Xtensa fork (xtensa-rust-1.95.0.0) can fail ISel on
+  an ordinary integer literal once the function around it — typically an
+  embassy task's `poll` — gets complex enough. `N` names the literal in the
+  source (change `24 * 1024` to `23 * 1024` and it fails as
+  `Constant<23552>`), which is how you find it: grep for the number.
+  `#[inline(never)]` alone does NOT help — fat LTO folds the body back in.
+  The fix that works is making the constant opaque with
+  `core::hint::black_box`, in a small `#[inline(never)]` helper, commented
+  as the toolchain workaround it is (2026-09-06, #330: resume.rs'
+  `resume_headroom`). Unrelated code elsewhere can trigger it, so a build
+  that breaks in a file you did not touch is expected.
 - **A codegen experiment cannot go through plain `RUSTFLAGS`**: the flags in
   `firmware/.cargo/config.toml`'s `[target.'cfg(target_arch = "xtensa")']`
   are NOT replaced by the environment here — set
