@@ -234,7 +234,7 @@ entries in total). What a consumer must and must not do:
   the flash fence parks the other core. An ISR is the one thing a critical
   section does not stop.
 - **Invalidate after writing flash under a mapping.** Cache lines do not
-  watch SPI1. A writer (the assets upload, every pattern-store extent
+  watch SPI1. A writer (the assets upload, every pattern-store file
   write) calls `flashmap::invalidate` / `invalidate_slice` on the range
   before anyone reads it back through the mapping; on the classic ESP32
   that is a whole-cache flush of both cores, elsewhere an address-range
@@ -254,7 +254,7 @@ entries in total). What a consumer must and must not do:
   when the second-core render executor lands; until then the AppCpu is
   halted and a critical section is the whole story.
 
-### The pattern store: one mapped extent region + a small key area
+### The pattern store: a packed file log in a mapped region + a small key area
 
 The `storage` partition (`0x210000`, 1 MiB) is split by **what the device
 does with the bytes**, not in half (Gitea #330):
@@ -264,29 +264,83 @@ does with the bytes**, not in half (Gitea #330):
 | `0x00000` | `0x210000` | 128 KiB (32 pages) | **key area** — a `sequential-storage` map |
 | `0x20000` | `0x230000` | 896 KiB (224 pages) | **extent region** — mapped read-only at boot (14 × 64 KiB MMU entries) |
 
-Everything large and immutable is an **extent**: a contiguous run of 4 KiB
-erase pages, page-aligned and therefore 4-byte aligned — the one property
-XIP needs, and the reason no off-the-shelf flash filesystem fits (littlefs,
-ekv and sequential-storage all store a file as linked or GC-moved blocks).
 `patterns.rs` maps the whole region once at boot (`map_ext`, self-check on
-the first page read both ways, leaked) and the extent region holds:
+the first page read both ways, leaked) and it holds:
 
-| partition-relative | pages | what |
+| partition-relative | size | what |
 |---|---:|---|
-| `0x20000` | 1 | ad-hoc header page: magic, src/bc lengths, bc side |
-| `0x21000` | 8 | ad-hoc (live-coding) source, 32 KiB |
-| `0x29000` | 2 × 16 | ad-hoc bytecode, TWO sides of 64 KiB — `store_current` writes the side the running engine is not executing from and flips `CUR_BC_SIDE`, so a mapped engine never sees its code change |
-| `0x49000` | **183** | the **extent arena**, 732 KiB |
+| `0x20000` | 4 KiB | ad-hoc header page: magic, src/bc lengths, bc side |
+| `0x21000` | 32 KiB | ad-hoc (live-coding) source |
+| `0x29000` | 2 × 64 KiB | ad-hoc bytecode, TWO sides — `store_current` writes the side the running engine is not executing from and flips `CUR_BC_SIDE`, so a mapped engine never sees its code change |
+| `0x49000` | **732 KiB** | the **file log**, 183 erase pages |
 
-A stored pattern owns two extents: its **source text** and its **LXBC
-bytecode**. One save is one extent write per blob. Nothing is stored twice
-— what `/api/patterns/:id` serves back is the same flash the VM executes —
-and no pattern blob is ever a `Vec` on the normal path:
-`patterns::current_code()` / `code_of()` hand the engine a mapped slice, and
-`source_slice()` is the HTTP response body.
+#### The file log (Gitea #340)
+
+Gitea #330's store allocated in whole 4 KiB **pages** and kept the whole
+directory in ONE `sequential-storage` item, whose one-page cap is what held
+the store to 32 patterns. Jeremy, #340: *"We should have properly sized
+files instead (the size required is known after all) just held sequentially
+in memory to exact size … It may mean walking a linked list to get to a
+desired file or to enumerate the existing files but that's ok."* Both halves
+of that are what the log is:
+
+- a **file** — one stored pattern: header, name, source text, LXBC — takes
+  exactly the bytes it needs, rounded only to 4, and the next file starts
+  immediately after;
+- the log is **self-describing**. There is no directory anywhere. Boot walks
+  the headers through the mapping and builds a small RAM index, so the
+  pattern count is bounded by *bytes*, not by a table.
+
+Measured on the real library (`cargo test -p patlog-check`, 305 patterns,
+median source 2,853 B, median bytecode 2,008 B, 219/305 sources ≤ 4 KiB):
+
+| | patterns that fit | of the 732 KiB log |
+|---|---:|---:|
+| page-granular (#330) | 32 (its table cap) | 328 KiB, 44.8 % |
+| exact-packed (#340) | **119** | 722 KiB, 98.7 % |
+
+Four is both the floor and the ceiling of the alignment tax:
+`bytecode::deserialize_lean_static` borrows a blob's word region only when
+it is 4-byte aligned in memory (it silently copies otherwise), and
+`esp-storage`'s `WRITE_SIZE` is 4 — every flash write is a 4-byte-aligned
+offset and a multiple-of-4 length.
+
+The record, all little-endian (`firmware/src/patlog.rs`):
+
+```text
+ 0  u32 magic       "PXL1"
+ 4  u32 self_off    this record's own log offset -- the resync anchor
+ 8  u32 stamp       monotonic; the highest stamp wins for a seq
+12  u32 seq         pattern identity (API id = seq ^ ID_MASK)
+16  u32 src_len     source text, exact bytes
+20  u32 bc_len      LXBC, exact bytes
+24  u32 src_hash    FNV-1a of the source
+28  u32 bc_hash     FNV-1a of the bytecode
+32  u8  name_len | u8 ver | u16 0
+36  u32 hdr_hash    FNV-1a of bytes 0..36 ++ the name
+--- written LAST, and what makes the record real -------------------
+40  u32 commit      COMMIT, or 0xFFFFFFFF while the record is torn
+--- written by a delete or a re-save (NOR 1 -> 0, no erase) --------
+44  u32 dead        0xFFFFFFFF while live
+-------------------------------------------------------------------
+48      name bytes, padded to 4
+        source bytes, padded to 4
+        bytecode bytes, padded to 4   <- 4-aligned, so the VM borrows it
+```
+
+`self_off` + `hdr_hash` are what make recovery **local**. The scan walks
+record to record by length; when it lands on something that is not a record
+it steps forward 4 bytes at a time until it finds one again. A header only
+validates at the offset it was written for, so a stale copy a compaction
+left behind is still readable at its old home while the new copy is readable
+at its new one, and a false positive would have to forge a 32-bit hash over
+its own address. `ver` retires every record an older firmware wrote, so a
+format change costs no boot-time erase: the scan finds nothing and the first
+append erases the pages it lands on.
 
 The key area keeps only what is small, hot, and must survive power loss —
-which is what a log-structured map is actually good at:
+which is what a log-structured map is actually good at. **Patterns are not
+in it at all any more, not even their directory:**
 
 | key | bytes | written |
 |---|---:|---|
@@ -296,60 +350,75 @@ which is what a log-structured map is actually good at:
 | `MAP_KEY` | ≤ 3,840 | per pixel-map upload |
 | `RESUME_KEY` | ~16 | per swap (skipped when unchanged) |
 | `PALETTE_KEY` | ≤ 64 | per palette edit |
-| `DIR_KEY` | ≤ 3,398 | per save / delete / compaction move |
 
-~12 KB of live data in 128 KiB gives the log an order of magnitude of GC
-headroom, and every op's page scan is 4× cheaper than over the old 512 KiB
-range.
+Caps: `MAX_SOURCE` 32 KiB and `MAX_BC` 40 KiB are sanity limits now that a
+file is exact-sized (the 16 KiB HTTP request buffer bounds a POST well below
+them anyway). There is **no `MAX_PATTERNS`**; `MAX_RECS` (192) is a heap
+guard on the RAM index (`Vec<Rec>`, 32 B each, no names — those are read
+back out of the mapping), not a format limit, and it sits well past the 119
+real patterns the 732 KiB actually holds. The *scan* is uncapped on purpose:
+`cursor` must be the end of the last record in the log or an append would
+land on top of live ones, so only what the index keeps is capped. A log with
+more than `MAX_RECS` distinct patterns leaves the index incomplete, says so
+at boot, and refuses every mutation until some are deleted — a compaction
+rewrites the log from the index and would drop what it cannot see.
 
-#### The directory
-
-ONE map item (`DIR_KEY`) holds the whole store's metadata, so the pattern
-list and the extent table can never disagree:
-
-```text
-[ver u8][npat u8]  npat × { seq u32, gen u8, name_len u8, name }
-[extents::Dir::to_bytes]  — per extent: seq, gen, kind, start page, len, FNV-1a
-```
-
-Each pattern has a monotonic **seq** (its API id is `seq ^ ID_MASK`,
-mirroring serve.rs) and a **generation** that flips on every save. The
-worst-case item is 3,398 bytes — that one-page cap is what bounds
-`MAX_PATTERNS` (32), asserted at compile time.
-
-Caps, all page-rounded now that a blob is an extent: `MAX_SOURCE` 32 KiB
-(8 pages, was 30,720 = 8 chunk items), `MAX_BC` 40 KiB (10 pages, was
-38,400), `MAX_PATTERNS` 32 (was 24 — a pattern used to cost up to 18 map
-items; it now costs two extents and one directory record, so the arena's
-183 pages hold 32 median patterns in ~64 of them).
-
-`extents.rs` is **planning only** — a page bitmap, first-fit, the compaction
-plan, and the extent-table format. It is `no_std`, allocation-free and
-host-tested (`tools/extent-check`, `cargo test --workspace`, 25 cases
-including an exhaustive compaction-vs-prediction sweep and two 4,000-step
-churn fuzzes that re-check the bitmap against the extents every step).
-`patterns.rs` owns every byte of flash I/O.
+`patlog.rs` is **format only** — the record layout, the boot scan, append
+planning and compaction placement. It is `no_std`, allocation-free and
+host-tested (`tools/patlog-check`, `cargo test --workspace`, 16 cases
+against a NOR simulator that models erase-to-0xFF and write-clears-bits and
+cuts power at every 4-byte write boundary of a save, a delete and a
+compaction). `patterns.rs` owns every byte of flash I/O.
 
 Rules the code enforces:
 
 - **A library swap carries only the id** (`Msg::Library { id, ms }`): the
   render task decodes from `code_of(id)` (mapped) and stamps identity from
-  `source_stat(id)`, which is two directory fields (the source extent's
-  length and its FNV-1a) — no flash read, no allocation. A swap writes
-  nothing at all: the extents were written once, at save (the 2026-08-15
-  wear rule). Without the mapping (`flashmap-off`, refused self-check) the
-  same extents are read into one transient `Vec` (`bytecode_of`), which is
-  the only path that still copies.
-- **An extent an engine is executing from is never written, freed or
-  moved** — the borrowing invariant, below. A re-save allocates NEW extents
-  for both blobs, writes them, invalidates, hash-checks, publishes the
-  directory, and only then frees the superseded ones — so a power cut never
-  loses both. When the re-saved pattern is the running one the old
-  generation stays in the directory (its pages are still executing) and is
-  swept by the next save. `delete` is the same: a pinned pattern KEEPS its
-  extents (dropping them would hand its pages to the next save, which would
-  erase them under the live VM) and the sweep reclaims them once the engine
-  lets go.
+  `source_stat(id)`, which is two header fields — no flash read, no
+  allocation. A swap writes nothing at all: the file was written once, at
+  save (the 2026-08-15 wear rule). Without the mapping (`flashmap-off`,
+  refused self-check) the same bytes are read into one transient `Vec`
+  (`bytecode_of`), which is the only path that still copies.
+- **A file an engine is executing from is never written, moved or erased**
+  — the borrowing invariant, below.
+- **A save is an append.** Erase the pages the record will touch (skipping
+  the ones already erased), write the header prefix (magic first), the
+  name, the source and the bytecode, **re-read the payload through the
+  mapping and check both hashes**, and only then write the commit word. A
+  cut before that leaves a record the next boot refuses and the previous
+  version untouched; a cut after it leaves the new version whole. The old
+  version is retired by one 4-byte `dead` write — NOR clears bits without
+  an erase, and this build uses plain `FlashStorage`, never the encrypted
+  one, so a sub-page byte write is legal.
+- **A delete frees nothing**, by design: the erase unit is 4 KiB and a file
+  is byte-sized. It writes the `dead` word and the bytes stay, which is also
+  what makes it safe to delete a pattern an engine is still executing.
+- **Compaction** is the only thing that gives space back, and only a SAVE
+  that ran out of room calls it (an activation never compacts, so playlist
+  churn stays wear-free). `patlog::pack` places every live file — plus any
+  dead one a pinned engine is still executing — at or below its current
+  offset, never inside a page a pinned file occupies; nothing ever moves up.
+  The executor then rewrites one 4 KiB destination page at a time, in
+  ascending order, through a RAM buffer it fills *before* erasing the page:
+  every byte a page needs lives at an offset ≥ that page's start, which is
+  the whole safety argument for an overlapping repack. Pages a pinned file
+  occupies are skipped outright, a page whose new content equals its old one
+  is not erased at all, and the stale copies above the new cursor are erased
+  last, once every destination page is written. **Bound:** at most one erase
+  + one 4 KiB write per page of the packed log plus one erase per swept
+  page — 183 + 183 flash ops on a full log, each its own fenced door with a
+  1 ms yield; `core1::fenced` feeds the watchdog every 64 fences (#309), so
+  a long pass is slow, not fatal.
+- **A power cut mid-compaction** leaves the log repacked below the frontier
+  and untouched above it. Both halves still parse — every header carries its
+  own offset — so at most the one file straddling the frontier is lost. The
+  host suite cuts power at every write boundary of a compaction and asserts
+  exactly that, plus that every surviving file reads back byte for byte.
+- **Boot rebuilds every byte of RAM state from the flash** (`reload`, which
+  the end of a compaction calls too): the scan re-hashes every payload, so a
+  torn file is dropped rather than handed to the engine, and duplicates
+  (both versions live because a cut landed between "commit the new" and
+  "retire the old") resolve to the highest stamp.
 - **An unpinned pattern's mapped bytes are covered by a reader guard.**
   `GET /api/patterns/:id` escapes the source into the response buffer
   straight from the mapping; a save or compaction on the other core would
@@ -358,39 +427,19 @@ Rules the code enforces:
   *synchronous* copy only (microseconds), so a writer's bounded retry
   converges; the RUNNING pattern needs no guard at all, because it is
   pinned.
-- **Compaction** runs only when a save finds no contiguous hole and
-  `compacted_free_run()` says packing would open one (no wasted erases
-  otherwise). It slides live extents toward page 0 one at a time; a pinned
-  extent stays put and splits the free space instead of blocking the pass.
-  Each move un-publishes the extent, copies **one page per
-  `ota::with_flash` op with yields between** — the destination is strictly
-  below the source, so ascending page order is a safe overlapping move —
-  invalidates, hash-checks and re-publishes. A power cut mid-pass costs the
-  blob in flight and therefore the one pattern that owned it (there is no
-  second copy any more); boot drops a record whose two extents are not both
-  present, and the playground re-syncs that pattern.
-- Every extent write is `write_raw` (erase + word-aligned page writes, one
-  `ota::with_flash` per op with yields — the same quiesce path as the
-  assets writer, so the second-core fence hook lands in one place), then
-  `flashmap::invalidate_slice`, then a hash check of the mapped bytes
-  (streamed through the flash controller when the region is not mapped),
-  then the RAM directory, then the persisted directory. **The directory
-  item is the atomic commit point**: an extent is reachable only after the
-  item that names it landed, so a cut before it leaves the previous
-  generation whole and the new extents unreferenced — boot rebuilds the
-  page bitmap from the directory, so their pages come back free.
-- Boot drops any extent whose bytes do not hash to the recorded value or
-  whose length exceeds its kind's cap, then any pattern missing either of
-  its extents, then any extent whose pattern is gone. A torn or stale
-  extent is never handed to the engine or to a reader.
-- **No migration path.** `FORMAT_VERSION` (5) wipes the key area on
-  mismatch and the playground re-syncs the library (Jeremy's decision,
-  #330). The extent region is left alone by a wipe: with no directory
-  nothing references it, and every page is erased before it is written
-  again.
-- `/api/status` reports `store: {used, total, patterns}` — arena pages in
-  use, arena pages total, stored patterns. `total` 0 means the store never
-  came up.
+- Every log write goes through `ota::with_flash` one op at a time with 1 ms
+  yields — the same fenced door as the assets writer — and no single fenced
+  op crosses a page boundary (a fence parks the other core; 40 KiB of
+  bytecode in one op would park it for the whole write). `erase_pages`
+  consults the mapping first and skips pages already erased, so an append
+  into a fresh tail erases only what it dirties.
+- **No migration path.** `FORMAT_VERSION` (6) wipes the key area on mismatch
+  and `patlog::VER` retires every older record in the log; the playground
+  re-syncs the library (Jeremy's decision, #330).
+- `/api/status` reports `store: {used, total, dead, patterns}` — **bytes**
+  now, not 4 KiB pages: bytes used by live files, bytes in the log, bytes
+  the next compaction would give back, and how many patterns are stored.
+  `total` 0 means the store never came up.
 
 #### The borrowing invariant and the pin set (Gitea #260)
 
@@ -402,8 +451,8 @@ the mapping**, not a heap copy. That is where the RAM saving comes from
 for the big patterns, see docs/research/flash-mmap.md "RAM accounting"),
 and it is also a lifetime contract:
 
-> **A `Program` must never outlive the flash it borrows.** No extent an
-> engine is executing from may be written, moved or freed while it holds
+> **A `Program` must never outlive the flash it borrows.** No file an
+> engine is executing from may be written, moved or erased while it holds
 > it.
 
 `shared::get_current_pattern_id()` alone does NOT express that — it names
@@ -417,7 +466,7 @@ else:
   (`prev` in `render_task`) for up to several seconds *after* the current
   pattern id has moved on.
 
-A save that compacts the arena in either window is a use-after-free, and on
+A save that compacts the log in either window is a use-after-free, and on
 a dual-core board the store runs on the OTHER core — this is not even an
 `await`-granularity race, so "no yield point in between" proves nothing.
 
@@ -436,13 +485,14 @@ the engine and then releases the pin. An ad-hoc push (`Msg::Code` /
 `Msg::Crossfade`) decodes a transient envelope `Vec`, so its `Program` owns
 its words and `pin_running("")` clears slot 1.
 
-`compact_move`, `save`'s unreferenced sweep, the superseded-generation
-free and `delete` all consult the set; `extents.rs`'
-`next_move`/`compacted_free_run` take a pin *slice* and each pinned extent
-splits the free space. Pins are conservative by construction — a stale one
-wastes arena pages until the next swap overwrites it, and can never free
-something live. A pin names a *pattern*, so it holds that pattern's SOURCE
-extent as firmly as its bytecode: the running pattern's read-back
+`compact` consults the set both ways: `patlog::pack` takes a pin *slice*
+and leaves a pinned file exactly where it is, and `patlog::frozen_page`
+keeps the executor from erasing any page one occupies, so each pinned file
+splits the free space instead of blocking the pass. Pins are conservative
+by construction — a stale one wastes log bytes until the next swap
+overwrites it, and can never free something live. A pin names a *pattern*,
+so it holds that pattern's SOURCE as firmly as its bytecode: it is all one
+file. The running pattern's read-back
 (`GET /api/pattern`, the sync envelope) streams the source straight out of
 the mapping across `await`s, and the pin is what makes that sound. An
 UNPINNED pattern's mapped bytes are covered by the `BUSY` reader guard

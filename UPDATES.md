@@ -1,5 +1,159 @@
 # Update log
 
+## 2026-09-07 — the pattern store packs files to their exact size and stopped having a directory (#340)
+
+Jeremy, #340: *"Right now we are limited to hold (12?) patterns total
+because slots are fixed. We should have properly sized files instead (the
+size required is known after all) just held sequentially in memory to exact
+size. Adding a new file is easy, just add it right after the last file. It
+may mean walking a linked list to get to a desired file or to enumerate the
+existing files but that's ok."*
+
+Yesterday's #330 had already killed the fixed slots, but it left two things
+standing and they are exactly the two the ticket asks for. #330 allocated in
+whole **4 KiB pages** — and a pattern owned two of those allocations, its
+source and its bytecode — so a median pattern paid ≥ 8 KiB for 4.9 KiB of
+bytes. And its whole directory was ONE `sequential-storage` item, whose
+one-page cap is what pinned `MAX_PATTERNS` to 32. Both are gone.
+
+**A file is now exactly its bytes.** One stored pattern is one file: a
+48-byte header, the name, the source text and the LXBC, packed back to back
+at 4-byte alignment, and the next file starts immediately after. Four is
+both the floor and the ceiling of the alignment tax —
+`deserialize_lean_static` borrows a blob's word region only when it is
+4-aligned in memory, and `esp-storage`'s `WRITE_SIZE` is 4, so every flash
+write is a 4-aligned offset and a multiple-of-4 length anyway.
+
+**The log is self-describing — there is no directory anywhere.** Every
+header carries magic, its own offset, a monotonic stamp, the seq, both
+payload lengths, both payload hashes, the name and a commit marker. Boot
+walks them through the flash mapping and builds a small RAM index
+(`Vec<Rec>`, 32 B each, no names — those are read back out of the mapping).
+The pattern count is bounded by **bytes**. What is left is `MAX_RECS` (192),
+a heap guard on the index, sitting well past what the log physically holds —
+and the *scan* is deliberately uncapped, because `cursor` has to be the end
+of the last record in the log or an append would land on top of live ones.
+If a log somehow does carry more than 192 distinct patterns (only reachable
+with implausibly tiny ones), the index is incomplete, boot says so, and
+every mutation refuses until some are deleted: a compaction rewrites the log
+from the index and would drop what it cannot see.
+
+Measured on the real library — `cargo test -p patlog-check`, 305 patterns,
+median source 2,853 B, median bytecode 2,008 B, 219/305 sources ≤ 4 KiB:
+
+| | patterns that fit | of the 732 KiB log |
+|---|---:|---:|
+| page-granular (#330) | 32 (its directory item's cap) | 328 KiB, 44.8 % |
+| exact-packed (#340) | **119** | 722 KiB, **98.7 %** |
+
+### The design calls, and why
+
+**Append-only, with compaction as the only reclaim.** The erase unit is
+still 4 KiB while a file is now byte-sized, so a delete cannot erase
+anything. It writes a `dead` word into the old header — NOR clears bits
+without an erase, and this build uses plain `FlashStorage`, never the
+encrypted one, so a sub-page 4-byte write is legal — and the bytes stay.
+That is also what makes it safe to delete or re-save a pattern an engine is
+executing. Space comes back only from a compaction, which only a **save that
+ran out of room** ever triggers: an activation never compacts, so playlist
+churn stays wear-free (the 2026-08-15 rule).
+
+**Compaction rewrites one destination page at a time, buffered before the
+erase.** `patlog::pack` places every live file — plus any dead one a pinned
+engine is still executing — at or below its current offset and never inside
+a page a pinned file occupies; nothing ever moves up. The executor then
+builds each 4 KiB destination page in RAM *before* erasing it. Every byte a
+page needs lives at an offset ≥ that page's start, which is the whole safety
+argument for an overlapping repack. Pinned pages are skipped outright, a
+page whose new content equals its old one is not erased at all, and the
+stale copies above the new cursor are erased last. **Bound:** at most one
+erase + one 4 KiB write per page of the packed log plus one erase per swept
+page — 183 + 183 flash ops on a full log, each its own fenced door with a
+1 ms yield, and `core1::fenced` feeds the watchdog every 64 fences (#309).
+
+**Power-cut safety is ordering plus a self-offset.** A save erases the pages
+it will touch, writes the header prefix (magic first), the name, the source
+and the bytecode, **re-reads the payload through the mapping and checks both
+hashes**, and only then writes the commit word. A cut before that leaves a
+record the scan refuses and the previous version untouched. `self_off` +
+`hdr_hash` make recovery local: a header only validates at the offset it was
+written for, so after a cut compaction a stale copy is still readable at its
+old home while the new copy is readable at its new one, the scan resyncs
+4 bytes at a time through the seam, and the most that can be lost is the one
+file that was in flight. Duplicates (a cut between "commit the new" and
+"retire the old") resolve to the highest stamp.
+
+**FORMAT_VERSION 5 → 6 wipes the key area, and `patlog::VER` retires every
+older record in the log.** No migration, by design — Jeremy's rule from
+#330; the playground re-syncs. The log needs no boot-time erase for that:
+the scan finds nothing and the first append erases the pages it lands on.
+
+`/api/status`'s `store` is **bytes** now, not 4 KiB pages, and gained a
+`dead` field: `{"used":18452,"total":749568,"dead":0,"patterns":3}`.
+docs/api.md and docs/firmware.md updated; docs/research/flash-mmap.md gets
+the "packed files, not pages" note (nothing about the XIP contract changed —
+contiguous and 4-byte aligned is still all it asks for).
+
+### Verified (host only)
+
+`firmware/src/extents.rs` → `firmware/src/patlog.rs`, and
+`tools/extent-check` → `tools/patlog-check`. **16 cases**, driven against a
+NOR flash simulator that models the real semantics — an erase sets 0xFF, a
+write only ever clears bits, and every 4-byte word and every page erase is a
+step power can die between:
+
+* exact-size 4-byte-aligned packing, with the bytecode landing 4-aligned for
+  every combination of name and source length;
+* a header that parses only at the offset it was written for, and not
+  without its commit word or with one payload-length bit flipped;
+* back-to-back appends with `resync == 0`, three files and 13 KB of payload
+  inside four erase pages;
+* 4,000-odd tiny files in a 183-page log, where the old ceiling was 32;
+* a dead mark that erases nothing; a re-save superseded by stamp; a torn
+  tail costing one page rather than the log;
+* **a power cut at every write boundary of a save** (1,000+ cut points):
+  exactly one whole version of the pattern survives every time, never a mix,
+  the bystander pattern is always intact, and the store still accepts a save
+  afterwards. The same sweep for a delete and **for a compaction**, where at
+  most the one file in flight is lost and every survivor reads back byte for
+  byte;
+* compaction reclaiming dead space exactly, never touching a pinned file,
+  and erasing nothing when there is nothing to reclaim;
+* a 600-round churn fuzz (save / re-save / delete / compact) re-reading
+  every live file every round.
+
+Plus two cases that need the compiler, in the crate itself: all 305
+`library/*.js` compiled with `luxel_core::compile` and packed (the table
+above), and the whole library written into a simulated log and enumerated
+back by the boot scan — 119 files, 739,616 B, `resync == 0`.
+
+QEMU `flashmap-test.py` updated for the new boot narration and **PASS**:
+`patterns: log 749568 B, 0 patterns, 0 B used, 0 B reclaimable, 0 files
+(0 torn, 0 resyncs), cursor 0` on a virgin flash — a non-zero `resyncs`
+there would mean the scan cannot tell erased NOR from junk. `ci.sh` green,
+`tools/stack-check.sh` clean, all nine board images build.
+
+**Image.** +2,608 to +3,280 B on every board (docs/boards.md has the
+per-board table) — a store that walks a log costs more code than one that
+reads a table. What comes back is RAM: `.stack` on pixelblaze-v3
+**24,828 → 25,988 B**, because the 72-entry extent table and its page
+bitmap were a ~1.2 KB `.bss` static and the log has no directory to hold.
+Three trims were taken before landing, all monomorphization: `scan`'s and
+`pack`'s callbacks are `&mut dyn FnMut` rather than generic (three copies
+of a whole arena walk, ~2.6 KB), the index is ordered by a hand-rolled
+insertion sort rather than three `sort_unstable_by_key` instantiations of
+pdqsort (~1.3 KB), and the firmware does not `{:?}`-print `patlog::Step`
+(710 B to name six variants). Without them it was +7.9 KB on the C3.
+`board-c6-devkit` goes 2.27 % → 2.01 % of its OTA slot free — already under
+image-check's floor on master (#310), and not a release artifact (#291);
+the shipped hosted variant keeps 3.60 %.
+
+**Not verified — hardware.** Nothing here has touched flash on a device. The
+on-metal checklist is Gitea #365; #331 (the #330 pass) is superseded by it
+for the store half. The device **wipes on first boot** — expect
+`patterns: format 5 != 6, wiping storage` once, then an empty library.
+
+
 ## 2026-09-07 — Recalibrating "too large for this device": the outgoing engine's heap is part of the budget (#287)
 
 Jeremy: *"Many patterns which do run have warnings that they won't."* Two

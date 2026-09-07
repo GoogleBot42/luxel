@@ -99,10 +99,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "extent-check"
-version = "0.1.0"
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -331,6 +327,13 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "patlog-check"
+version = "0.1.0"
+dependencies = [
+ "luxel-core",
 ]
 
 [[package]]

@@ -429,17 +429,21 @@ fn status_json() -> String {
     push_piece(&mut out, ",\"assets_mapped\":");
     push_piece(&mut out, if assets_mapped { "true" } else { "false" });
     // The running pattern's bytecode is mapped memory (rodata default, the
-    // ad-hoc slot, or its extent) — the engine builds from it without a
-    // blob Vec. `store` = the pattern store's extent region: 4 KiB pages in
-    // use / total, and how many patterns are stored (patterns.rs /
-    // extents.rs). `total` 0 means the store never came up.
+    // ad-hoc slot, or its file in the log) — the engine builds from it
+    // without a blob Vec. `store` = the pattern store's file log, in BYTES
+    // (patterns.rs / patlog.rs, Gitea #340): `used` by live files, `total`
+    // in the log, `dead` held by superseded/deleted files that the next
+    // compaction gives back, and how many `patterns` are stored. `total` 0
+    // means the store never came up.
     push_piece(&mut out, ",\"code_mapped\":");
     push_piece(&mut out, if crate::patterns::current_code().is_some() { "true" } else { "false" });
-    let (used, total, npat) = crate::patterns::store_stats();
+    let (used, total, npat, dead) = crate::patterns::store_stats();
     push_piece(&mut out, ",\"store\":{\"used\":");
     push_u32(&mut out, used);
     push_piece(&mut out, ",\"total\":");
     push_u32(&mut out, total);
+    push_piece(&mut out, ",\"dead\":");
+    push_u32(&mut out, dead);
     push_piece(&mut out, ",\"patterns\":");
     push_u32(&mut out, npat);
     push_piece(&mut out, "}");

@@ -653,6 +653,45 @@ buffers alone are ~48 KB of heap (see the pixel-cap section), so the S3's
 ~26 KB of surplus stack is the obvious place to find it — measured on
 metal in #75, not guessed at here.
 
+2026-09-07, packed pattern files (Gitea #340 — the page-granular extent
+allocator and its one-item directory became a packed, append-only log of
+exact-sized self-describing files; `patterns.rs` + the new `patlog.rs`,
+docs/firmware.md "The pattern store: a packed file log in a mapped region +
+a small key area"): **+2.6 to +3.3 KB on every board.** Devshell builds with
+the same `creds.env` on both sides, `origin/master` fca04e7 vs the branch,
+all measured after the rebase:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-c3-devkit` | 958384 | 961664 | +3280 | 86912 B (8.28 %) |
+| `board-pixelblaze-v3` | 1006528 | 1009264 | +2736 | 39312 B (3.74 %) |
+| `board-athom-music` | 1006560 | 1009360 | +2800 | 39216 B (3.73 %) |
+| `board-esp32-generic` | 1006512 | 1009248 | +2736 | 39328 B (3.75 %) |
+| `board-s3-devkit` | 953056 | 955792 | +2736 | 92784 B (8.84 %) |
+| `board-c6-devkit` | 1024736 | 1027408 | +2672 | 21168 B (2.01 %) |
+| `board-c6-devkit-hosted` | 1008224 | 1010784 | +2560 | 37792 B (3.60 %) |
+| `board-s3-hub75` | 947264 | 950048 | +2784 | 98528 B (9.39 %) |
+| `board-seengreat-hub75` | 947456 | 950064 | +2608 | 98512 B (9.39 %) |
+
+Walking a log costs more code than reading a table: the boot scan, the
+compaction planner and its page-gather executor, the two `Arena`
+implementations (mapped and the `flashmap-off` read buffer), and a save that
+now writes six ordered steps instead of two extents. What comes back is
+RAM — `.stack` on pixelblaze-v3 **24,828 → 25,988 B**, because the 72-entry
+extent table and its page bitmap were a ~1.2 KB `.bss` static and the log
+has no directory to hold.
+
+Three trims were taken before landing, all of them monomorphization:
+`patlog::scan`'s and `pack`'s callbacks are `&mut dyn FnMut` rather than
+generic (three copies of a whole arena walk, ~2.6 KB), the RAM index is
+ordered by a hand-rolled insertion sort rather than three
+`sort_unstable_by_key` instantiations of pdqsort (~1.3 KB), and the
+firmware does not `{:?}`-print `patlog::Step` (710 B to name six variants).
+Without them the change was **+7.9 KB** on the C3.
+
+`board-c6-devkit` goes 2.27 % → 2.01 %, still under image-check's 3 % floor
+— it was already under it on master (#310) and is not a release artifact
+(#291); the shipped `board-c6-devkit` + `hosted-ui` variant keeps 3.60 %.
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal

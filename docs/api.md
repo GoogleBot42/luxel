@@ -56,7 +56,7 @@ response as "no snapshot right now", not as an all-black frame.
  "pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"engine_heap":21504,"live":null,
  "assets_mapped":true,"code_mapped":true,
- "store":{"used":5,"total":183,"patterns":3},
+ "store":{"used":18452,"total":749568,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null}
 ```
 
@@ -105,16 +105,19 @@ response as "no snapshot right now", not as an all-black frame.
   hosted-ui build — assets (if any) then stream via flash-controller reads.
 - `code_mapped` — `true` when the running pattern's bytecode is mapped
   memory the engine builds from without a blob copy (the built-in default's
-  rodata, the ad-hoc read-back slot, or the library pattern's bytecode
-  extent); `false` means the store's mapping is off (a `flashmap-off`
+  rodata, the ad-hoc read-back slot, or the library pattern's bytecode in
+  the file log); `false` means the store's mapping is off (a `flashmap-off`
   build, or a refused boot self-check) — the pattern still runs, its
   bytecode is just read into a transient Vec first.
-- `store` — the pattern store's extent region: `used` / `total` 4 KiB
-  arena pages and the number of stored `patterns`. A stored pattern owns
-  two extents, its source and its bytecode (183 pages = 732 KiB in the
-  `storage` partition; docs/firmware.md "The pattern store: one mapped
-  extent region + a small key area"). `total` 0 means the store never came
-  up — no `storage` partition, or one too small.
+- `store` — the pattern store's file log, in **BYTES** (they were 4 KiB
+  pages before Gitea #340): `used` by live files, `total` in the log
+  (749,568 = 183 × 4 KiB of the `storage` partition), `dead` held by
+  superseded and deleted files that the next compaction gives back, and how
+  many `patterns` are stored. One file holds a pattern's header, name,
+  source text and bytecode packed to its exact size — see docs/firmware.md
+  "The pattern store: a packed file log in a mapped region + a small key
+  area". `total` 0 means the store never came up — no `storage` partition,
+  or one too small.
 - `src` / `bc` — whether the running pattern's source / bytecode are still
   readable back (`GET /api/pattern`); `false` means a flash write shed the copy.
 - `web` — per-HTTP-slot lifecycle stage, one entry per connection slot
@@ -214,17 +217,20 @@ a stored one.
   pattern"}`, not a 404 — on both sides, deliberately.
 - Saving under a name that already exists **overwrites** that entry and returns
   its existing `id`.
-- Firmware store limits: **32 patterns**, **32 KB of source** and **40 KB of
-  bytecode** each. A pattern's source and bytecode are each one contiguous
-  extent in the mapped part of the `storage` partition, whose arena is 183
-  4 KiB pages — so the library also fills up by *space*, independently of the
-  pattern count (`/api/status`'s `store` reports `used`/`total` pages).
+- Firmware store limits: **32 KB of source** and **40 KB of bytecode** per
+  pattern, and **732 KB of log** for all of them together. There is no
+  pattern-count limit any more (Gitea #340): a pattern is one exact-sized
+  file in the mapped part of the `storage` partition, so the library fills up
+  by *space* — 119 of the real `library/` patterns fit, against the 32 the
+  old page-granular store's directory item allowed. `/api/status`'s `store`
+  reports `used`/`total`/`dead` in bytes. (`MAX_RECS`, 192, is a RAM guard on
+  the index, not a storage limit.)
 - Firmware save errors are size/space specific: `pattern name required`,
   `name must be 1..=64 bytes`, `this pattern's source is too large for the
   on-device library (…)`, `… compiled code is too large …`, `the device library
-  is full (32 patterns) — delete one first`, `the device's pattern storage is
-  full — delete some patterns and retry` (no contiguous run of pages left, even
-  after compaction), `couldn't write the pattern to flash — the store may be
+  is full (192 patterns) — delete one first`, `the device's pattern storage is
+  full — delete some patterns and retry` (not enough room even after a
+  compaction), `couldn't write the pattern to flash — the store may be
   busy; try again in a moment`, `the store is busy — try again in a moment`,
   `an update is in progress — try again in a moment`, `pattern storage
   unavailable (device needs reflash)`.

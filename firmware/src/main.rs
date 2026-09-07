@@ -57,7 +57,7 @@ mod board;
 mod config;
 mod core1;
 mod devicemap;
-mod extents;
+mod patlog;
 mod flashmap;
 mod gpio;
 #[cfg(feature = "hub75")]
