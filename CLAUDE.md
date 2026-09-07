@@ -128,6 +128,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - `BUILTINS` in `crates/luxel-core/src/vm.rs` is append-only; never reorder.
 - A serial flash leaves the assets partition stale → follow with
   `tools/deploy.sh <ip> --assets-only`.
+- `/api/status` `fps` is frames RENDERED. Where the output stage runs on the
+  other core (HUB75 panels, `out_fps` nonzero) the render loop free-runs ahead
+  of the wire, so `fps` can be double what reached the LEDs — quote `out_fps`
+  for any throughput claim. Reporting `fps` alone once turned a +1 fps
+  experiment into an apparent 2x win (#306).
 - `compile failed: unknown identifier` from `web/tools/lxp.mjs` = stale
   build artifacts: the main checkout's `web/public/luxel.wasm` and
   `target/*/luxel` lag master (nobody rebuilds them). `npm run wasm` /

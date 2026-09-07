@@ -53,6 +53,15 @@ paths:
   Validate the count against the writer's own cap and `try_reserve`; see
   `patterns::read_source`. This is the same class v0.1.25's "fallible
   everything" sweep fixed elsewhere — check for it in any new read path.
+- **A response body sized by the pixel count is a big allocation on a small
+  heap.** At 4096 px a frame is 12 KB, and a heavy pattern can leave under
+  30 KB free — so `GET /api/pixels` must be ONE *fallible* allocation, and it
+  must be reserved OUTSIDE any critical section (allocating with interrupts
+  masked stalls both cores on the allocator's own lock). Two allocations for
+  one response — build then flatten — panicked the panel with `memory
+  allocation of 12288 bytes failed` and the boot guard rolled the slot back
+  (#306). Degrade to an empty/short body; never let a routine GET be the thing
+  that reboots the board.
 - Dual-core boards (esp32, esp32s3 — cfg `multi_core` from build.rs) run
   the render task on the AppCpu (`firmware/src/core1.rs`), and every flash
   op must run inside the cross-core flash fence: the other core is parked
@@ -70,9 +79,11 @@ paths:
   each was a black-boxed hard hang (docs/firmware.md "Cores & tasks"): the
   park interrupt is Priority1 (a level-3 park inside a level-1 handler's
   DPORT reads wedges the bus), the AppCpu never touches RTC memory inside
-  the park, and the fence waits for the strip's SPI2 DMA transfer to end
-  before the SPI1 op (`output::transfer_busy`). A new output driver on a
-  dual-core chip must answer `transfer_busy()` honestly. A fourth rule
+  the park, and the fence waits for an in-flight output DMA transfer to end
+  before the SPI1 op (`output::transfer_busy`), on WHICHEVER core it parks —
+  which core runs the driver is a build-time question since #306 put the
+  HUB75 compose on the ProCpu. A new output driver on a dual-core chip must
+  answer `transfer_busy()` honestly. A fourth rule
   joined them 2026-09-06 (Gitea #292): the fencing core holds its OWN
   interrupts masked from the park ack until past the release, because the
   interrupts that queue up behind a 45 ms sector erase all fire on the
