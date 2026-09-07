@@ -18,6 +18,19 @@ paths:
   (happened 2026-08-22; Jeremy reported the device "broken").
 - The websocket connect may need a retry or two right after a previous
   session — the device frees client slots lazily.
+- Switching the active pattern pushes its OWN `activeProgram` frame, so a
+  `getConfig()` issued immediately after `setActivePattern()` can be answered
+  by the frame the LIVE-CODED program left in the queue — which has an empty
+  name and reads as "the restore failed" on a device that restored fine.
+  Sleep ~1.5 s and clear `pb.queue` before verifying (2026-09-06;
+  `tools/oracle/fps-compare.mjs` does this).
+- **The oracle dispatches `render2D`, a 1D Luxel strip dispatches `render`.**
+  It has a 2D map installed and a PB map is a one-way door, so any comparison
+  that pushes the same library file to both is comparing two different
+  functions on different arguments — invisible in the numbers, and it silently
+  invalidates a performance or pixel comparison. Neutralize it by rewriting
+  both copies to a single `render(index)` entry (`fps-compare.mjs --1d`), not
+  by installing a map on the Luxel side (2026-09-06, Gitea #312).
 - A Pixel Blaze that has ever saved a pixel map cannot be made mapless again
   through its public API. Before any map-touching probe, snapshot the
   current map with `tools/oracle/mapdump.mjs` (bit-exact dump/restore) so it
