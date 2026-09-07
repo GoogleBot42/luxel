@@ -3630,29 +3630,15 @@ impl Vm {
                 let r = n(1).to_int_trunc().max(0) as usize;
                 // materialize up front (copy-on-write) — this writes in place
                 let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
-                let len = data.len();
-                if r > 0 && len > 0 {
-                    // prefix sums in raw i64 — exact, no overflow at 10K els.
-                    // Fallible like blur2D's: this is 8 bytes per element, so
-                    // a pixelCount-sized array on a 64x64 panel wants 32 KiB
-                    // of transient heap, more than a loaded device has spare
-                    // — an infallible Vec aborted the firmware there (a
-                    // 4096-element blur1D panicked the Seengreat panel with
-                    // "memory allocation of 32776 bytes failed", 2026-09-06).
-                    let mut pre: alloc::vec::Vec<i64> = alloc::vec::Vec::new();
-                    if pre.try_reserve_exact(len + 1).is_err() {
-                        return Err(no_site("out of memory for blur1D".into()));
-                    }
-                    pre.push(0i64);
-                    for v in data.iter() {
-                        pre.push(pre.last().unwrap() + v.num().raw() as i64);
-                    }
-                    for i in 0..len {
-                        let lo = i.saturating_sub(r);
-                        let hi = (i + r).min(len - 1);
-                        let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
-                        data[i] = Value::Num(Fx::from_raw(avg as i32));
-                    }
+                // Sliding window, O(radius) scratch — see blur1d_inplace.
+                // The prefix-sum version this replaced wanted 8 bytes per
+                // ELEMENT, i.e. 32 KiB for a pixelCount-sized array on a
+                // 64x64 panel: more than a loaded device has spare, so
+                // blur1D simply failed there (Gitea #296; before that an
+                // infallible Vec aborted the firmware outright — "memory
+                // allocation of 32776 bytes failed", 2026-09-06, #295).
+                if blur1d_inplace(data, r).is_err() {
+                    return Err(no_site("out of memory for blur1D".into()));
                 }
                 Ok(a(0))
             }
@@ -4216,6 +4202,68 @@ impl Vm {
 /// sites and the const-fused arms each grew by three instructions and a
 /// window. `always` costs ~110 bytes of duplicated table.
 #[inline(always)]
+/// In-place box blur over `data`: element `i` becomes the truncated integer
+/// mean of the raw 16.16 values in `[i-r, i+r]`, clamped to the ends. `r == 0`
+/// or an empty slice is a no-op.
+///
+/// Sliding window rather than a prefix-sum array (Gitea #296): the running sum
+/// only needs the originals still inside a later window — indices `i+1-r ..= i`,
+/// which are exactly the ones already overwritten — so the scratch is
+/// `min(r + 1, len)` i64s (a few dozen bytes at the radius 1–8 patterns use)
+/// instead of `len + 1` (32 KiB for a 4096-px panel buffer). Bit-identical to
+/// the prefix-sum version: the window sums are the same exact i64 integers and
+/// the same truncating division, just accumulated incrementally.
+///
+/// `Err(())` means the (small) scratch allocation failed; the array is
+/// untouched in that case.
+fn blur1d_inplace(data: &mut [Value], r: usize) -> Result<(), ()> {
+    let len = data.len();
+    if r == 0 || len == 0 {
+        return Ok(());
+    }
+    // Ring of originals that have been overwritten but are still inside some
+    // later window. Never larger than the array itself, so this can only be
+    // cheaper than the old prefix sum.
+    let cap = (r + 1).min(len);
+    let mut ring: alloc::vec::Vec<i64> = alloc::vec::Vec::new();
+    ring.try_reserve_exact(cap).map_err(|_| ())?;
+    ring.resize(cap, 0i64);
+
+    let (mut lo, mut hi) = (0usize, r.min(len - 1));
+    let mut sum: i64 = data[..=hi].iter().map(|v| v.num().raw() as i64).sum();
+    // ring cursors kept by hand — `i % cap` would be a hardware divide per
+    // element, and `lo` only ever advances one slot at a time
+    let (mut wp, mut rp) = (0usize, 0usize);
+    for i in 0..len {
+        // stash the original before it is clobbered; `lo` never falls further
+        // than `i - r` behind, so `cap` slots keep every value still needed
+        ring[wp] = data[i].num().raw() as i64;
+        wp += 1;
+        if wp == cap {
+            wp = 0;
+        }
+        let avg = sum / (hi - lo + 1) as i64;
+        data[i] = Value::Num(Fx::from_raw(avg as i32));
+        if i + 1 == len {
+            break;
+        }
+        let (nlo, nhi) = ((i + 1).saturating_sub(r), (i + 1 + r).min(len - 1));
+        if nlo > lo {
+            sum -= ring[rp]; // leaving the window: already overwritten
+            rp += 1;
+            if rp == cap {
+                rp = 0;
+            }
+        }
+        if nhi > hi {
+            sum += data[nhi].num().raw() as i64; // entering: still original
+        }
+        lo = nlo;
+        hi = nhi;
+    }
+    Ok(())
+}
+
 fn binop_fx(sub: u8, a: Fx, b: Fx) -> Fx {
     use crate::bytecode::op;
     let t = |c: bool| if c { Fx::ONE } else { Fx::ZERO };
@@ -4618,5 +4666,102 @@ impl Vm {
     #[inline]
     fn prof_builtin(&mut self, b: u16) {
         *self.prof.builtins.entry(b).or_insert(0) += 1;
+    }
+}
+
+#[cfg(test)]
+mod blur1d_tests {
+    use super::{blur1d_inplace, Value};
+    use crate::fixed::Fx;
+    use alloc::vec::Vec;
+
+    /// The pre-#296 implementation, kept verbatim as the reference: a full
+    /// `len + 1` prefix-sum array read window-by-window. The sliding-window
+    /// version must agree with it bit for bit.
+    fn blur1d_prefix_reference(data: &mut [Value], r: usize) {
+        let len = data.len();
+        if r > 0 && len > 0 {
+            let mut pre: Vec<i64> = Vec::with_capacity(len + 1);
+            pre.push(0i64);
+            for v in data.iter() {
+                pre.push(pre.last().unwrap() + v.num().raw() as i64);
+            }
+            for i in 0..len {
+                let lo = i.saturating_sub(r);
+                let hi = (i + r).min(len - 1);
+                let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
+                data[i] = Value::Num(Fx::from_raw(avg as i32));
+            }
+        }
+    }
+
+    fn xorshift(state: &mut u32) -> u32 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *state = x;
+        x
+    }
+
+    #[test]
+    fn sliding_window_matches_prefix_sum_reference() {
+        // lengths span the degenerate ends and the 4096-px panel that
+        // motivated #296; radii span "no-op", what patterns use, and radii
+        // far wider than the array (every window clamps to the whole array)
+        let lens = [1usize, 2, 3, 4, 5, 7, 8, 16, 17, 63, 64, 255, 256, 4096];
+        let radii = [0usize, 1, 2, 3, 4, 5, 8, 16, 63, 255, 4095, 4096, 100_000];
+        let mut seed = 0x1234_5678u32;
+        for &len in lens.iter() {
+            for &r in radii.iter() {
+                for trial in 0..3 {
+                    let mut src: Vec<Value> = Vec::with_capacity(len);
+                    for i in 0..len {
+                        let raw = match trial {
+                            // 16.16 values in a plausible 0..1 pattern range
+                            0 => (xorshift(&mut seed) % 65_536) as i32,
+                            // signed, wide magnitude — exercises truncation
+                            // toward zero in the integer division
+                            1 => xorshift(&mut seed) as i32 / 4,
+                            // a sparse impulse train (comets.js's shape)
+                            _ => {
+                                if i % 13 == 0 {
+                                    i32::from(Fx::ONE.raw() != 0) * Fx::ONE.raw()
+                                } else {
+                                    0
+                                }
+                            }
+                        };
+                        src.push(Value::Num(Fx::from_raw(raw)));
+                    }
+                    let mut want = src.clone();
+                    blur1d_prefix_reference(&mut want, r);
+                    let mut got = src.clone();
+                    blur1d_inplace(&mut got, r).expect("scratch alloc");
+                    for i in 0..len {
+                        assert_eq!(
+                            got[i].num().raw(),
+                            want[i].num().raw(),
+                            "len {} radius {} trial {} index {}",
+                            len,
+                            r,
+                            trial,
+                            i
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_and_zero_radius_are_no_ops() {
+        let mut empty: Vec<Value> = Vec::new();
+        blur1d_inplace(&mut empty, 4).expect("scratch alloc");
+        assert!(empty.is_empty());
+        let mut one = alloc::vec![Value::Num(Fx::from_raw(7)), Value::Num(Fx::from_raw(9))];
+        blur1d_inplace(&mut one, 0).expect("scratch alloc");
+        assert_eq!(one[0].num().raw(), 7);
+        assert_eq!(one[1].num().raw(), 9);
     }
 }
