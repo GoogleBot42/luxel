@@ -380,6 +380,7 @@ impl Writer {
 /// Used by [`crate::engine`]'s default-map heuristic: a `renderFrame`
 /// pattern that never asks for a coordinate is a strip pattern and must
 /// not be handed a square grid it didn't ask for.
+#[inline(never)]
 pub fn calls_any_builtin(prog: &Program, ids: &[u16]) -> bool {
     for f in &prog.fns {
         let s = f.code_start as usize;

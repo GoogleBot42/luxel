@@ -23,7 +23,9 @@
 //!   or none. *Coordinate* ops are a predicate over each pixel's MAPPED
 //!   (x, y) — normalized exactly as `render2D` sees them, transform
 //!   included — so they are well defined on a sparse or irregular map.
-//!   *Grid* ops need a real W×H grid and no-op without one.
+//!   *Grid* ops need a W×H grid that COVERS the frame — the default
+//!   `ceil(√n)` map over-provisions on a non-rectangular strip and the
+//!   surplus cells of the last row clip — and no-op without one.
 //!
 //! The coordinate ops have a grid fast path: with a grid map installed and
 //! no transform active, they walk only the cells in the shape's bounding
@@ -33,7 +35,6 @@
 //! skip pixels the predicate would have rejected. `FORCE_SCAN` forces the
 //! generic path in tests and the two are asserted equal.
 
-use alloc::format;
 use alloc::string::String;
 
 use crate::engine::quantize;
@@ -102,7 +103,10 @@ fn blend(v: Fx) -> Blend {
     }
 }
 
-#[inline]
+/// Out of line on purpose: four blend arms inlined into `blit`, `splat`
+/// and `drawLine` is four arms' worth of image three times over, and the
+/// call is nothing next to the shape predicate it follows.
+#[inline(never)]
 fn put(dst: &mut [u8; 3], src: [u8; 3], mode: Blend) {
     match mode {
         Blend::Replace => *dst = src,
@@ -124,18 +128,44 @@ fn put(dst: &mut [u8; 3], src: [u8; 3], mode: Blend) {
     }
 }
 
+/// One output texel from an HSV triple, and one from an RGB triple. Both
+/// are `#[inline(never)]`: five loops in this module quantize three
+/// channels each, and three inlined `quantize`s per site is the kind of
+/// small-and-everywhere code that cost this module kilobytes of the OTA
+/// slot. `hsv_to_rgb` is already out of line for the same reason.
+#[inline(never)]
+fn texel_hsv(h: Fx, s: Fx, v: Fx) -> [u8; 3] {
+    let [r, g, b] = hsv_to_rgb(h, s, v);
+    [quantize(r), quantize(g), quantize(b)]
+}
+
+#[inline(never)]
+fn texel_rgb(c: [Fx; 3]) -> [u8; 3] {
+    [quantize(c[0]), quantize(c[1]), quantize(c[2])]
+}
+
+/// One texel of an HSV endpoint lerp. Out of line so `fillGradient`'s two
+/// loops (index axis, mapped axis) share one copy of the interpolation.
+#[inline(never)]
+fn grad_texel(a: &[Fx; 3], b: &[Fx; 3], t: Fx) -> [u8; 3] {
+    texel_hsv(
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    )
+}
+
 /// The current brush as output bytes.
 #[inline]
 fn brush(vm: &Vm) -> [u8; 3] {
-    let [r, g, b] = vm.pixel;
-    [quantize(r), quantize(g), quantize(b)]
+    texel_rgb(vm.pixel)
 }
 
 /// The brush scaled by `k` BEFORE quantization — a soft edge keeps its
 /// precision instead of losing it to the 8-bit floor twice.
 #[inline]
 fn brush_scaled(c: [Fx; 3], k: Fx) -> [u8; 3] {
-    [quantize(c[0] * k), quantize(c[1] * k), quantize(c[2] * k)]
+    texel_rgb([c[0] * k, c[1] * k, c[2] * k])
 }
 
 /// `i / n` in 16.16, on the 32-bit path while `i << 16` fits (every real
@@ -180,15 +210,67 @@ impl Src<'_> {
     }
 }
 
-fn src<'a>(vm: &'a Vm, prog: &'a Program, v: Value, who: &str) -> Result<Src<'a>, String> {
+/// One HSV (or straight RGB) texel from three channel sources at index
+/// `i`. Out of line: `fillHSV`/`fillRGB`, `fillCanvas` and `blit` all read
+/// three channels per output pixel, and three inlined `Src::at`s each is
+/// nine copies of the scalar/array branch plus `ArrView`'s own two-way
+/// match. One copy serves all three.
+#[inline(never)]
+fn texel_at(s: &[Src; 3], i: usize, hsv: bool) -> [u8; 3] {
+    let (x, y, z) = (s[0].at(i), s[1].at(i), s[2].at(i));
+    if hsv {
+        texel_hsv(x, y, z)
+    } else {
+        texel_rgb([x, y, z])
+    }
+}
+
+/// A type error from an array/scalar argument, assembled without
+/// `format!`: every `format!` site carries its own `Arguments` plumbing,
+/// which is measurable image on a board with 33 KB of OTA slot left
+/// (docs/size-report.md, Gitea #168).
+#[cold]
+#[inline(never)]
+fn src_err(who: &'static str, what: &'static str) -> String {
+    let mut s = String::with_capacity(who.len() + what.len());
+    s.push_str(who);
+    s.push_str(what);
+    s
+}
+
+fn src<'a>(
+    vm: &'a Vm,
+    prog: &'a Program,
+    v: Value,
+    who: &'static str,
+) -> Result<Src<'a>, String> {
     match v {
         Value::Num(x) => Ok(Src::Scalar(x)),
         Value::Arr(id) => match vm.array(prog, id) {
             Some(a) => Ok(Src::Arr(a)),
-            None => Err(format!("{who}: bad array reference")),
+            None => Err(src_err(who, ": bad array reference")),
         },
-        _ => Err(format!("{who}: expected a number or an array")),
+        _ => Err(src_err(who, ": expected a number or an array")),
     }
+}
+
+/// The three channel arguments of `fillHSV`/`fillRGB`, `fillCanvas` and
+/// `blit`, loaded in one call. Out of line and shared: `Result<Src,
+/// String>` comes back through a return slot, so every `src(…)?` site is
+/// a call, four words copied out, a discriminant test and an error
+/// forward — three of those per op, in three ops, was most of a kilobyte.
+#[inline(never)]
+fn srcs<'a>(
+    vm: &'a Vm,
+    prog: &'a Program,
+    args: &[Value],
+    who: &'static str,
+) -> Result<[Src<'a>; 3], String> {
+    Ok([
+        src(vm, prog, arg(args, 0), who)?,
+        src(vm, prog, arg(args, 1), who)?,
+        src(vm, prog, arg(args, 2), who)?,
+    ])
 }
 
 // ---- the grid fast path ----
@@ -205,32 +287,50 @@ struct GridView<'a> {
     fast: usize,
 }
 
+/// The mapped coordinate of pixel `i`. `#[inline(never)]` is
+/// load-bearing: `MapData::coord` inlines the whole procedural-grid
+/// `norm()` (a divide and a wide multiply per axis) *plus* the
+/// coordinate-slice path, and the grid fast path reads a cell from three
+/// places — `span` alone carried two copies of it.
+#[inline(never)]
+fn map_coord(map: &MapData, i: usize) -> [Fx; 3] {
+    map.coord(i)
+}
+
+/// The mapped coordinate of grid cell (`r`, `c`).
+#[inline]
+fn cell_coord(map: &MapData, g: &GridMap, r: usize, c: usize) -> [Fx; 3] {
+    map_coord(map, g.index(r, c))
+}
+
 impl GridView<'_> {
     #[inline]
     fn coord(&self, r: usize, c: usize) -> [Fx; 3] {
-        self.map.coord(self.g.index(r, c))
+        cell_coord(self.map, &self.g, r, c)
     }
 
     /// The cells of one axis whose coordinate lies inside the bounding
     /// box. A grid's axis values are strictly monotonic so the answer is
     /// contiguous; taking min..max anyway means a degenerate map can only
     /// WIDEN the candidate set, never drop a pixel the scan would paint.
+    ///
+    /// Out of line: `paint_shape` needs it twice (rows and columns) and
+    /// two inlined copies cost more image than the call saves.
+    #[inline(never)]
     fn span(&self, along_row: bool, bx: (Fx, Fx), by: (Fx, Fx)) -> Option<(usize, usize)> {
-        let n = if along_row {
-            self.g.w as usize
+        let (n, axis) = if along_row {
+            (self.g.w as usize, self.fast)
         } else {
-            self.g.h as usize
+            (self.g.h as usize, 1 - self.fast)
         };
-        let axis = if along_row { self.fast } else { 1 - self.fast };
         let (lo, hi) = if axis == 0 { bx } else { by };
         let mut first: Option<usize> = None;
         let mut last = 0;
         for k in 0..n {
-            let v = if along_row {
-                self.coord(0, k)[axis]
-            } else {
-                self.coord(k, 0)[axis]
-            };
+            // ONE `coord` call site: picking the cell first and reading it
+            // second keeps the map lookup from being emitted per axis.
+            let (r, c) = if along_row { (0, k) } else { (k, 0) };
+            let v = self.coord(r, c)[axis];
             if v >= lo && v <= hi {
                 first.get_or_insert(k);
                 last = k;
@@ -259,8 +359,8 @@ fn grid_view<'a>(vm: &'a Vm, n: usize) -> Option<GridView<'a>> {
     let fast = if map.grid.is_some() {
         0 // procedural row-major grid: x runs along a row by construction
     } else if g.w >= 2 {
-        let a = map.coord(g.index(0, 0));
-        let b = map.coord(g.index(0, 1));
+        let a = cell_coord(map, &g, 0, 0);
+        let b = cell_coord(map, &g, 0, 1);
         if a[0] != b[0] {
             0
         } else if a[1] != b[1] {
@@ -284,10 +384,13 @@ fn coord_of(vm: &Vm, i: usize) -> [Fx; 3] {
 /// the grid fast path when there is one and a full scan otherwise. `f`
 /// receives the destination pixel and its mapped (x, y) and applies the
 /// shape's own predicate — which is what keeps the two paths identical.
-fn paint_shape<F>(vm: &mut Vm, bx: (Fx, Fx), by: (Fx, Fx), mut f: F)
-where
-    F: FnMut(&mut [u8; 3], Fx, Fx),
-{
+///
+/// `f` is a `dyn` reference rather than a generic parameter on purpose:
+/// four shapes over a generic closure meant four monomorphized copies of
+/// the whole grid-span + scan machinery in the image. One indirect call
+/// per candidate pixel is nothing against the predicate it dispatches to.
+#[inline(never)]
+fn paint_shape(vm: &mut Vm, bx: (Fx, Fx), by: (Fx, Fx), f: &mut dyn FnMut(&mut [u8; 3], Fx, Fx)) {
     if bx.1 < bx.0 || by.1 < by.0 {
         return;
     }
@@ -301,9 +404,13 @@ where
                 {
                     for r in r0..=r1 {
                         for c in c0..=c1 {
-                            let p = gv.coord(r, c);
+                            // one `index` per cell: it is also how the map
+                            // is read, so deriving the coordinate from the
+                            // pixel index saves recomputing it to store
+                            let i = gv.g.index(r, c);
+                            let p = map_coord(gv.map, i);
                             if p[0] >= bx.0 && p[0] <= bx.1 && p[1] >= by.0 && p[1] <= by.1 {
-                                f(&mut frame[gv.g.index(r, c)], p[0], p[1]);
+                                f(&mut frame[i], p[0], p[1]);
                             }
                         }
                     }
@@ -333,6 +440,7 @@ where
 /// dimensions are real and are reported. A grid SMALLER than the frame
 /// cannot address every pixel, so it reads as no grid at all — which is
 /// what keeps "`gridWidth()` == 0 → no grid-space ops" exactly true.
+#[inline(never)]
 pub(crate) fn grid_dim(vm: &Vm, axis: usize) -> Fx {
     match vm.frame_grid {
         Some(g) if !g.is_empty() && g.len() >= vm.pixel_count as usize => {
@@ -347,13 +455,18 @@ pub(crate) fn grid_dim(vm: &Vm, axis: usize) -> Fx {
 /// with no pattern-side array), so a pattern that wants a fresh canvas
 /// clears it itself.
 pub(crate) fn clear(vm: &mut Vm) -> Value {
-    vm.frame.iter_mut().for_each(|p| *p = [0; 3]);
-    Value::default()
+    fill_const(vm, [0; 3])
 }
 
 /// `fill()`: the whole frame to the brush.
 pub(crate) fn fill(vm: &mut Vm) -> Value {
-    let c = brush(vm);
+    fill_const(vm, brush(vm))
+}
+
+/// The whole frame to one colour — `clear()` is `fill()` with black, so
+/// the write loop exists once.
+#[inline(never)]
+fn fill_const(vm: &mut Vm, c: [u8; 3]) -> Value {
     vm.frame.iter_mut().for_each(|p| *p = c);
     Value::default()
 }
@@ -428,22 +541,14 @@ fn fill_channels_into(
     frame: &mut [[u8; 3]],
 ) -> Result<Value, String> {
     let who = if hsv { "fillHSV" } else { "fillRGB" };
-    let a = src(vm, prog, arg(args, 0), who)?;
-    let b = src(vm, prog, arg(args, 1), who)?;
-    let c = src(vm, prog, arg(args, 2), who)?;
+    let s = srcs(vm, prog, args, who)?;
     let n = frame
         .len()
-        .min(a.limit())
-        .min(b.limit())
-        .min(c.limit());
+        .min(s[0].limit())
+        .min(s[1].limit())
+        .min(s[2].limit());
     for (i, dst) in frame[..n].iter_mut().enumerate() {
-        let (x, y, z) = (a.at(i), b.at(i), c.at(i));
-        let [r, g, b] = if hsv {
-            hsv_to_rgb(x, y, z)
-        } else {
-            [x, y, z]
-        };
-        *dst = [quantize(r), quantize(g), quantize(b)];
+        *dst = texel_at(&s, i, hsv);
     }
     Ok(Value::default())
 }
@@ -460,25 +565,23 @@ pub(crate) fn fill_gradient(vm: &mut Vm, args: &[Value]) -> Value {
     let mut frame = core::mem::take(&mut vm.frame);
     let n = frame.len();
     if n != 0 {
-        let lerp = |t: Fx| {
-            let c = [
-                a[0] + (b[0] - a[0]) * t,
-                a[1] + (b[1] - a[1]) * t,
-                a[2] + (b[2] - a[2]) * t,
-            ];
-            let [r, g, bb] = hsv_to_rgb(c[0], c[1], c[2]);
-            [quantize(r), quantize(g), quantize(bb)]
-        };
-        if (1..=3).contains(&axis) {
-            let k = (axis - 1) as usize;
-            for (i, dst) in frame.iter_mut().enumerate() {
-                *dst = lerp(coord_of(vm, i)[k]);
-            }
+        let lerp = |t: Fx| grad_texel(&a, &b, t);
+        // One loop, one `lerp` site: axis 1/2/3 take `t` from the mapped
+        // coordinate, anything else from the pixel index. Two loops meant
+        // two copies of the interpolation and the store.
+        let k = if (1..=3).contains(&axis) {
+            (axis - 1) as usize
         } else {
-            let last = (n - 1) as u32;
-            for (i, dst) in frame.iter_mut().enumerate() {
-                *dst = lerp(unit_frac(i as u32, last));
-            }
+            3
+        };
+        let last = (n - 1) as u32;
+        for (i, dst) in frame.iter_mut().enumerate() {
+            let t = if k < 3 {
+                coord_of(vm, i)[k]
+            } else {
+                unit_frac(i as u32, last)
+            };
+            *dst = lerp(t);
         }
     }
     vm.frame = frame;
@@ -497,7 +600,7 @@ pub(crate) fn fill_rect(vm: &mut Vm, args: &[Value]) -> Value {
         vm,
         (x0.min(x1), x0.max(x1)),
         (y0.min(y1), y0.max(y1)),
-        |dst, _, _| *dst = c,
+        &mut |dst: &mut [u8; 3], _, _| *dst = c,
     );
     Value::default()
 }
@@ -509,7 +612,7 @@ pub(crate) fn fill_circle(vm: &mut Vm, args: &[Value]) -> Value {
         return Value::default();
     }
     let c = brush(vm);
-    paint_shape(vm, (cx - r, cx + r), (cy - r, cy + r), |dst, x, y| {
+    paint_shape(vm, (cx - r, cx + r), (cy - r, cy + r), &mut |dst: &mut [u8; 3], x, y| {
         if fmath::hypot(x - cx, y - cy) <= r {
             *dst = c;
         }
@@ -521,19 +624,11 @@ pub(crate) fn fill_circle(vm: &mut Vm, args: &[Value]) -> Value {
 /// falloff — blended with `mode`. The entity-loop primitive: `clear()`
 /// plus N splats replaces a per-pixel `hypot` loop over N sprites.
 pub(crate) fn splat(vm: &mut Vm, args: &[Value]) -> Value {
-    let (cx, cy, r) = (num(args, 0), num(args, 1), num(args, 2));
-    if r <= Fx::ZERO {
-        return Value::default();
-    }
-    let mode = blend(num(args, 3));
-    let c = vm.pixel;
-    paint_shape(vm, (cx - r, cx + r), (cy - r, cy + r), |dst, x, y| {
-        let d = fmath::hypot(x - cx, y - cy);
-        if d >= r {
-            return;
-        }
-        put(dst, brush_scaled(c, Fx::ONE - d / r), mode);
-    });
+    // A splat IS a zero-length capsule: the projection collapses to t = 0
+    // and the distance to the segment becomes the distance to the point,
+    // so the two ops share one copy of the falloff loop.
+    let (cx, cy) = (num(args, 0), num(args, 1));
+    capsule(vm, (cx, cy), (cx, cy), num(args, 2), blend(num(args, 3)));
     Value::default()
 }
 
@@ -541,39 +636,53 @@ pub(crate) fn splat(vm: &mut Vm, args: &[Value]) -> Value {
 /// (1 − d/w) where d is the distance to the segment. A hard line is a
 /// tiny `w` with mode 0.
 pub(crate) fn draw_line(vm: &mut Vm, args: &[Value]) -> Value {
-    let (ax, ay) = (num(args, 0), num(args, 1));
-    let (bx, by) = (num(args, 2), num(args, 3));
-    let w = num(args, 4);
+    let a = (num(args, 0), num(args, 1));
+    let b = (num(args, 2), num(args, 3));
+    capsule(vm, a, b, num(args, 4), blend(num(args, 5)));
+    Value::default()
+}
+
+/// The capsule painter behind both `drawLine` and `splat`: the brush ×
+/// (1 − d/w) where d is the distance to segment a→b, blended with `mode`.
+/// A zero-width capsule paints nothing.
+fn capsule(vm: &mut Vm, a: (Fx, Fx), b: (Fx, Fx), w: Fx, mode: Blend) {
     if w <= Fx::ZERO {
-        return Value::default();
+        return;
     }
-    let mode = blend(num(args, 5));
     let c = vm.pixel;
     // Direction as a UNIT vector, computed once: the per-pixel projection
     // is then two multiplies and a clamp, with no divide in the loop (a
     // 64-bit one would be a ROM call on Xtensa).
-    let (ex, ey) = (bx - ax, by - ay);
+    let (ex, ey) = (b.0 - a.0, b.1 - a.1);
     let len = fmath::hypot(ex, ey);
     let (ux, uy) = if len > Fx::ZERO {
         (ex / len, ey / len)
     } else {
         (Fx::ZERO, Fx::ZERO)
     };
+    // A `splat` is a zero-length segment, and then the projection is
+    // provably t = 0 — skipping it keeps the shared body as cheap for a
+    // disc as the dedicated one was (six splats a frame is the entity
+    // loop this op exists for).
+    let point = len <= Fx::ZERO;
     paint_shape(
         vm,
-        (ax.min(bx) - w, ax.max(bx) + w),
-        (ay.min(by) - w, ay.max(by) + w),
-        |dst, x, y| {
-            let (dx, dy) = (x - ax, y - ay);
-            let t = (dx * ux + dy * uy).clamp(Fx::ZERO, len);
-            let d = fmath::hypot(dx - ux * t, dy - uy * t);
+        (a.0.min(b.0) - w, a.0.max(b.0) + w),
+        (a.1.min(b.1) - w, a.1.max(b.1) + w),
+        &mut |dst: &mut [u8; 3], x, y| {
+            let (dx, dy) = (x - a.0, y - a.1);
+            let d = if point {
+                fmath::hypot(dx, dy)
+            } else {
+                let t = (dx * ux + dy * uy).clamp(Fx::ZERO, len);
+                fmath::hypot(dx - ux * t, dy - uy * t)
+            };
             if d >= w {
                 return;
             }
             put(dst, brush_scaled(c, Fx::ONE - d / w), mode);
         },
     );
-    Value::default()
 }
 
 /// `fillCanvas(hArr, sArr, vArr, w, h)`: sample a w×h row-major canvas
@@ -595,18 +704,12 @@ fn fill_canvas_into(
     args: &[Value],
     frame: &mut [[u8; 3]],
 ) -> Result<Value, String> {
-    let a = src(vm, prog, arg(args, 0), "fillCanvas")?;
-    let b = src(vm, prog, arg(args, 1), "fillCanvas")?;
-    let c = src(vm, prog, arg(args, 2), "fillCanvas")?;
+    let s = srcs(vm, prog, args, "fillCanvas")?;
     let (cw, ch) = (num(args, 3).to_int_trunc(), num(args, 4).to_int_trunc());
     if cw < 1 || ch < 1 || frame.is_empty() {
         return Ok(Value::default());
     }
     let (cw, ch) = (cw as usize, ch as usize);
-    let texel = |i: usize| {
-        let [r, g, bb] = hsv_to_rgb(a.at(i), b.at(i), c.at(i));
-        [quantize(r), quantize(g), quantize(bb)]
-    };
     // Straight copy only on a PROCEDURAL grid: `detect_grid` accepts a
     // coordinate map whose axis values are merely monotonic, not evenly
     // spaced, and there `cell_index(coord(c)) == c` does not have to hold.
@@ -614,17 +717,22 @@ fn fill_canvas_into(
         gv.map.grid.is_some() && gv.g.w as usize == cw && gv.g.h as usize == ch
     });
     match direct {
-        Some(gv) => {
-            for r in 0..ch {
-                for col in 0..cw {
-                    frame[gv.g.index(r, col)] = texel(r * cw + col);
-                }
-            }
-        }
+        // the canvas IS the grid, so this is `blit`'s paste at the origin
+        Some(gv) => paste(
+            frame,
+            gv.g,
+            &s,
+            cw as i32,
+            (0, 0),
+            (0, ch as i32),
+            (0, cw as i32),
+            Blend::Replace,
+        ),
         None => {
             for (i, dst) in frame.iter_mut().enumerate() {
                 let p = coord_of(vm, i);
-                *dst = texel(cell_index(p[1], ch) * cw + cell_index(p[0], cw));
+                let t = cell_index(p[1], ch) * cw + cell_index(p[0], cw);
+                *dst = texel_at(&s, t, true);
             }
         }
     }
@@ -656,9 +764,7 @@ fn blit_into(
     args: &[Value],
     frame: &mut [[u8; 3]],
 ) -> Result<Value, String> {
-    let a = src(vm, prog, arg(args, 0), "blit")?;
-    let b = src(vm, prog, arg(args, 1), "blit")?;
-    let c = src(vm, prog, arg(args, 2), "blit")?;
+    let s = srcs(vm, prog, args, "blit")?;
     let (cw, ch) = (num(args, 3).to_int_trunc(), num(args, 4).to_int_trunc());
     let Some(g) = vm.frame_grid.filter(|g| !g.is_empty() && g.len() >= frame.len()) else {
         return Ok(Value::default());
@@ -666,33 +772,58 @@ fn blit_into(
     if cw < 1 || ch < 1 {
         return Ok(Value::default());
     }
-    let (col0, row0) = (
-        num(args, 5).to_int_floor() as i64,
-        num(args, 6).to_int_floor() as i64,
-    );
+    let (col0, row0) = (num(args, 5).to_int_floor(), num(args, 6).to_int_floor());
     let mode = blend(num(args, 7));
-    let (cw, ch) = (cw as i64, ch as i64);
     // Clip the SOURCE rectangle to the grid up front rather than skipping
     // cells inside the loop: a pattern is free to pass a 30000-wide canvas
     // or an offset a million cells away, and neither may cost more work
     // than the grid has cells.
+    //
+    // All 32-bit, and provably so: every one of these comes from an Fx
+    // (16.16), so `to_int_trunc`/`to_int_floor` is in −32768..=32767. The
+    // widest value below is a source index `sr * cw + sc` <= 32768·32767 +
+    // 32767 = 1,073,741,823 — inside i32, and a 64-bit multiply here is a
+    // ROM call's worth of instructions per texel on Xtensa.
     let sr0 = (-row0).max(0);
-    let sr1 = ch.min(g.h as i64 - row0);
+    let sr1 = ch.min(g.h as i32 - row0);
     let sc0 = (-col0).max(0);
-    let sc1 = cw.min(g.w as i64 - col0);
-    for sr in sr0..sr1 {
-        for sc in sc0..sc1 {
-            let i = (sr * cw + sc) as usize;
-            let [r, gg, bb] = hsv_to_rgb(a.at(i), b.at(i), c.at(i));
-            let px = [quantize(r), quantize(gg), quantize(bb)];
-            let cell = g.index((row0 + sr) as usize, (col0 + sc) as usize);
-            // The over-provisioned tail of the last row addresses no pixel.
+    let sc1 = cw.min(g.w as i32 - col0);
+    paste(frame, g, &s, cw, (row0, col0), (sr0, sr1), (sc0, sc1), mode);
+    Ok(Value::default())
+}
+
+/// Paste the source rectangle `[sr.0, sr.1) x [sc.0, sc.1)` of a `cw`-wide
+/// canvas onto grid cells with the canvas origin at cell `(row0, col0)`.
+/// Shared by `blit` and `fillCanvas`'s grid-direct path — the same two
+/// loops, the same texel read, the same blend.
+///
+/// Cells past the end of the frame (the tail of an over-provisioned last
+/// row) address no pixel and are skipped.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn paste(
+    frame: &mut [[u8; 3]],
+    g: GridMap,
+    s: &[Src; 3],
+    cw: i32,
+    (row0, col0): (i32, i32),
+    sr: (i32, i32),
+    sc: (i32, i32),
+    mode: Blend,
+) {
+    // The source row offset walks by `cw` rather than multiplying per
+    // texel. Everything is i32 — see the bound proved in `blit_into`.
+    let mut base = sr.0 * cw;
+    for r in sr.0..sr.1 {
+        for c in sc.0..sc.1 {
+            let px = texel_at(s, (base + c) as usize, true);
+            let cell = g.index((row0 + r) as usize, (col0 + c) as usize);
             if let Some(dst) = frame.get_mut(cell) {
                 put(dst, px, mode);
             }
         }
+        base += cw;
     }
-    Ok(Value::default())
 }
 
 #[cfg(all(test, feature = "frontend"))]

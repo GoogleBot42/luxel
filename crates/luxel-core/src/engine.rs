@@ -360,6 +360,7 @@ impl Engine {
     /// Install the default ceil(√pixelCount)-wide row-major grid map (see
     /// from_program_budgeted for why). Public so hosts that clear a user
     /// map can fall back to the same default.
+    #[inline(never)]
     pub fn set_default_grid_map(&mut self) {
         let n = self.pixel_count as usize;
         if n == 0 {
@@ -1215,13 +1216,14 @@ impl Engine {
     /// Does this pattern's code call a bulk builtin that reads a pixel's
     /// coordinate or the grid? Decides whether a `renderFrame`-only
     /// pattern gets the default square grid map.
+    #[inline(never)]
     fn uses_coordinate_bulk_op(&self) -> bool {
         // Coordinate- and grid-space ops only; the index-space ones
         // (fillHSV, fade, setPixel, …) work on a bare strip and must not
         // conjure a geometry. `fillGradient`'s axis is a runtime argument,
         // so it stays out of this list — a pattern that wants a spatial
         // gradient asks for it with one of these or installs a map.
-        const NAMES: &[&str] = &[
+        const NAMES: [&str; 8] = [
             "gridWidth",
             "gridHeight",
             "fillRect",
@@ -1231,15 +1233,16 @@ impl Engine {
             "fillCanvas",
             "blit",
         ];
-        let mut ids = [0u16; 8];
-        let mut n = 0;
-        for name in NAMES {
+        // A fixed-length array with a never-matching sentinel: no running
+        // count, no `Option` match and no subslice, all of which the
+        // linker charges for in an image with 30 KB of OTA slot left.
+        let mut ids = [u16::MAX; NAMES.len()];
+        for (slot, name) in ids.iter_mut().zip(NAMES) {
             if let Some(id) = crate::vm::lookup_builtin(name) {
-                ids[n] = id;
-                n += 1;
+                *slot = id;
             }
         }
-        crate::bytecode::calls_any_builtin(&self.prog, &ids[..n])
+        crate::bytecode::calls_any_builtin(&self.prog, &ids)
     }
 
     /// A frame ran to completion (not a fatal-error blank, not a debug

@@ -567,6 +567,12 @@ impl PixelState {
     }
 }
 
+/// `#[inline(never)]`: this is a linear scan of the whole table with a
+/// `memcmp` per entry, and it is called from name LISTS (the decoder's
+/// import table, the compiler, the engine's coordinate-bulk-op probe).
+/// Inlined it was emitted eight times in one function alone. Nothing that
+/// calls it is on a per-pixel path.
+#[inline(never)]
 pub fn lookup_builtin(name: &str) -> Option<u16> {
     BUILTINS
         .iter()
