@@ -1,5 +1,95 @@
 # Update log
 
+## 2026-09-07 — the packed pattern store was losing files on every compaction (#379)
+
+The #365 on-metal pass found it on the Athom, and it is the worst class of
+bug this store can have: **a compaction silently dropped files.** Gone from
+flash, not just from the RAM index — a reboot re-scanned the log and still
+did not find them. `POST /api/patterns` had returned `{"ok":true}` for every
+one. Filling the store from `library/` accepted 119 saves and left 115
+patterns, the five missing being the five *lowest* arena offsets; a single
+save that ran a compaction took the count 89 → 88 instead of 90. The device
+agent's discriminating run — nothing pinned, the engine on an ad-hoc
+`/api/code` push — still lost one of 20, which killed the obvious
+frozen-page hypothesis. `store.dead` also never came back to 0 after a
+compaction (it stuck at 17,996 B), while the host suite asserted it did.
+
+### Why the host suite was green
+
+`tools/patlog-check` tests the *format* (`patlog.rs`) thoroughly — a NOR
+simulator, power cuts at every write boundary, a 600-round churn fuzz. What
+it never tested is the *caller*. Its compaction tests hand `compact()` a
+live list derived fresh from the flash, so nothing exercised the index
+`patterns.rs` actually keeps, a compaction happening in the middle of a
+save, or an address read before a repack and used after it. So the crate now
+carries `store.rs`: a host replica of the store state machine — index,
+cursor, seq/stamp counters, save/delete/compact in the firmware's exact
+order — over the same simulator. **It reproduced the loss on the first
+run**, with and without a pin.
+
+### The cause: two independent defects, both address-trust
+
+1. **The boot scan stepped over a torn record by its own claimed length.**
+   `scan()` treated a header that parses and commits but whose payload does
+   not hash as a record for the purpose of advancing: `at = rec.end()`. But
+   a torn header's length field describes bytes that are no longer the ones
+   it was written for. A compaction leaves exactly such headers behind —
+   a frozen page keeps the stale header of a record whose payload was just
+   reclaimed — and its `end()` now points past *the files that were packed
+   into that space*. One stale header swallowed every record inside its old
+   extent. That is the "lowest offsets" signature: the running pattern sat
+   at offset 0, page 0 could not be erased, and the stale header living
+   there ate whatever was repacked immediately above it. The scan now
+   resyncs 4 bytes at a time through a torn record, like any other junk —
+   which is what `self_off` + `hdr_hash` were designed for.
+
+2. **A save that compacts retired the *pre-compaction* address.** `save()`
+   resolves the previous generation up front (`rec_by_name`), discovers
+   there is no room, compacts — which moves every unpinned file — and then
+   writes the DEAD word to the record it captured before the repack. Those
+   four zero bytes land in the middle of whichever file was packed over
+   them, tearing it. No pin required; this is the half the device saw with
+   nothing pinned. `old` is now re-resolved from the rebuilt index.
+
+### The fix, and making the failure mode impossible to repeat silently
+
+* `patlog::pack` became `patlog::plan`, which **checks the plan as it builds
+  it** and returns `None` rather than a partial one: every record placed
+  exactly once and in order, no two overlapping, nothing moving up, a pinned
+  record at its own address, and a *moved* record never landing in a page
+  `build_page` will skip. `compact()` refuses on `None` — prints
+  `compaction refused — no plan places all N files` and erases nothing, so
+  the save fails loudly instead of the library quietly shrinking.
+* `DEAD_BYTES` is now `cursor − used` rather than the sum of accepted
+  records minus used. That is the honest "what a compaction would give
+  back" — bytes no record claims are reclaimable too — and it makes
+  `store.dead` come back to **exactly 0** after a compaction with nothing
+  pinned, and to exactly the hole a frozen page forces when something is.
+
+### Coverage
+
+Ten new cases in `tools/patlog-check/src/store/tests.rs`, every one of them
+a failing test before the fix: fill-and-churn with nothing pinned and with
+the lowest / a middle / the highest file pinned; the wholly-dead-log
+re-seed (#379 reproduction 3); dead-byte reclamation with and without a pin;
+a re-save that compacts, asserting the DEAD word landed at the record's
+*new* address and tore nothing; a power cut at every one of 2,052 write
+boundaries of a **pinned** compaction; the plan guard refusing an
+overlapping index with nothing erased and nothing written; and a random-pin,
+random-churn fuzz (8 runs × 300 rounds) that re-reads the entire live set
+after every operation. Reverting either fix individually turns tests red.
+
+`cargo test --workspace` green (26 patlog-check cases), `tools/ci.sh` green,
+QEMU `flashmap-test` PASS, `.stack` unchanged at 25,988 B. Image cost
+**+368 B** on `board-pixelblaze-v3` (margin 38,880 B / 3.71 %), +336 B on
+`board-athom-music`, +496 B on `board-c6-devkit` (1.97 %) — docs/boards.md.
+
+Still open: the Athom is holding the damaged store from the #365 run
+deliberately, so the fix wants verifying on metal against it (#379), and
+pattern ids are derived from the arena offset, so they are **not** stable
+across a compaction even though `/api/patterns/<id>` is the only handle a
+client has (#382).
+
 ## 2026-09-07 — the panel's LCD_CAM clock is 30 MHz, and `out_fps` never meant what it said (#255, #378)
 
 The panel's rescan rate had only ever been a guess: a comment in
