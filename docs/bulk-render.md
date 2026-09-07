@@ -5,11 +5,14 @@ It runs **once per frame**, not once per pixel, and comes with sixteen native
 builtins (ids 166–181) that touch many pixels per call. This page is the
 design in one place plus the measured evaluation of it.
 
-Branch `agent/luxel/bulk-render`, merge base `c7e0266`; measured at `89ed146`
-(nothing under `crates/` or `firmware/` has moved since). All numbers below
-are host measurements on this box unless a section says otherwise. Shipped
-examples of each shape live in `library/bulk-*.js`; the language reference is
-docs/lang.md.
+Branch `agent/luxel/bulk-render`, merge base `c7e0266`. All throughput and
+size numbers below were re-measured after the grid-coverage fix and the
+image-size pass (`59fbd7e`); the ratio tables are one sweep each, so they are
+internally comparable — do not compare them against numbers taken on another
+day, since the absolute ns/px on this box moves by well over the ±3 % noise
+band between sessions. All numbers are host measurements unless a section says
+otherwise. Shipped examples of each shape live in `library/bulk-*.js`; the
+language reference is docs/lang.md.
 
 ## Why
 
@@ -103,17 +106,17 @@ against the same `beforeRender`, with the animation driven off accumulated
 
 | pair | what | px ns/px | bulk ns/px | px µs/frame | bulk µs/frame | ratio |
 |---|---|---:|---:|---:|---:|---:|
-| k-empty | `render(index){}` vs `renderFrame(){}` | 13.35 | 0.01 | 54.7 | 0.03 | **1886×** |
-| a-fill | constant `hsv` vs `fill()` | 26.87 | 0.29 | 110.1 | 1.2 | 92.9× |
-| b-rainbow | per-pixel hue vs `fillGradient` | 36.38 | 6.30 | 149.0 | 25.8 | 5.8× |
-| c-readout | `hsv(hues[i],1,vals[i])` vs `fillHSV(hues,1,vals)` | 33.56 | 4.76 | 137.5 | 19.5 | 7.1× |
-| d-comet | array trail vs `fade`+`setPixel` | 29.74 | 1.05 | 121.8 | 4.3 | 28.4× |
-| e-blocks | 3 block tests vs 3× `fillRange` | 62.01 | 0.40 | 254.0 | 1.6 | 155× |
-| f-balls | 6-ball `hypot` loop vs `clear`+6 `splat` | 615.22 | 17.15 | 2519.9 | 70.2 | 35.9× |
-| g-canvas | 32×32 canvas readout vs `fillCanvas` | 100.76 | 15.62 | 412.7 | 64.0 | 6.5× |
-| h-sprite | 8×8 keyed sprite vs `blit(…, 3)` | 125.50 | 0.16 | 514.0 | 0.66 | 784× |
-| i-lines | 8 segment distances vs 8 `drawLine` | 909.74 | 46.80 | 3726.3 | 191.7 | 19.4× |
-| **j-perlin** | **dense procedural control** | 139.28 | 185.16 | 570.5 | 758.4 | **0.75×** |
+| k-empty | `render(index){}` vs `renderFrame(){}` | 9.68 | 0.004 | 39.6 | 0.02 | **2201×** |
+| a-fill | constant `hsv` vs `fill()` | 15.75 | 0.21 | 64.5 | 0.86 | 75.1× |
+| b-rainbow | per-pixel hue vs `fillGradient` | 20.74 | 4.76 | 84.9 | 19.5 | 4.4× |
+| c-readout | `hsv(hues[i],1,vals[i])` vs `fillHSV(hues,1,vals)` | 19.15 | 4.16 | 78.4 | 17.0 | 4.6× |
+| d-comet | array trail vs `fade`+`setPixel` | 17.27 | 0.67 | 70.7 | 2.8 | 25.7× |
+| e-blocks | 3 block tests vs 3× `fillRange` | 36.85 | 0.28 | 150.9 | 1.1 | 133× |
+| f-balls | 6-ball `hypot` loop vs `clear`+6 `splat` | 441.56 | 14.06 | 1808.6 | 57.6 | 31.4× |
+| g-canvas | 32×32 canvas readout vs `fillCanvas` | 54.49 | 11.34 | 223.2 | 46.4 | 4.8× |
+| h-sprite | 8×8 keyed sprite vs `blit(…, 3)` | 69.51 | 0.31 | 284.7 | 1.3 | 225× |
+| i-lines | 8 segment distances vs 8 `drawLine` | 896.74 | 51.61 | 3673.0 | 211.4 | 17.4× |
+| **j-perlin** | **dense procedural control** | 138.84 | 184.36 | 568.7 | 755.1 | **0.75×** |
 
 ### 300 px strip, no map (a typical WS2812 install)
 
@@ -122,19 +125,20 @@ both sides; the six index-space pairs are true mapless strips.
 
 | pair | px ns/px | bulk ns/px | px µs/frame | bulk µs/frame | ratio |
 |---|---:|---:|---:|---:|---:|
-| k-empty | 8.90 | 0.05 | 2.7 | 0.015 | 179× |
-| a-fill | 15.95 | 0.30 | 4.8 | 0.09 | 52.5× |
-| b-rainbow | 21.47 | 4.74 | 6.4 | 1.4 | 4.5× |
-| c-readout | 20.67 | 4.27 | 6.2 | 1.3 | 4.8× |
-| d-comet | 18.35 | 0.96 | 5.5 | 0.29 | 19.1× |
-| e-blocks | 37.88 | 0.78 | 11.4 | 0.23 | 48.7× |
-| f-balls | 453.23 | 51.33 | 136.0 | 15.4 | 8.8× |
-| g-canvas | 66.23 | 21.27 | 19.9 | 6.4 | 3.1× |
-| h-sprite | 86.50 | 0.46 | 26.0 | 0.14 | 187× † |
-| i-lines | 921.13 | 116.05 | 276.3 | 34.8 | 7.9× |
-| **j-perlin** | 132.98 | 180.18 | 39.9 | 54.1 | **0.74×** |
+| k-empty | 9.79 | 0.05 | 2.9 | 0.015 | 196× |
+| a-fill | 15.64 | 0.32 | 4.7 | 0.10 | 48.5× |
+| b-rainbow | 22.12 | 4.98 | 6.6 | 1.5 | 4.4× |
+| c-readout | 21.19 | 4.28 | 6.4 | 1.3 | 5.0× |
+| d-comet | 17.37 | 0.95 | 5.2 | 0.28 | 18.3× |
+| e-blocks | 37.35 | 0.80 | 11.2 | 0.24 | 46.9× |
+| f-balls | 451.53 | 49.92 | 135.5 | 15.0 | 9.1× |
+| g-canvas | 60.95 | 19.65 | 18.3 | 5.9 | 3.1× |
+| h-sprite | 84.85 | 1.34 | 25.5 | 0.40 | 63.5× † |
+| i-lines | 911.20 | 114.77 | 273.4 | 34.4 | 7.9× |
+| **j-perlin** | 133.19 | 184.39 | 40.0 | 55.3 | **0.72×** |
 
-† not a real number — `blit` no-ops on this rig, see the `blit` note below.
+† `blit` really runs on this rig now — it used to no-op on any strip whose
+pixel count is not a rectangle, which is what the note below is about.
 
 ### 4096 px, no `--map-grid` (procedural 64×64 default grid)
 
@@ -145,15 +149,18 @@ geometry, coordinates computed instead of read from a 48 KB array.
 
 | pair | px ns/px | bulk ns/px | ratio | vs coordinate map |
 |---|---:|---:|---:|---|
-| f-balls | 443.29 | 14.56 | 30.4× | px 1.39× faster, bulk 1.18× faster |
-| g-canvas | 55.10 | 17.15 | 3.2× | px 1.83× faster, bulk 1.10× slower |
-| h-sprite | 75.04 | 0.11 | 707× | `blit` active here (64×64 = 4096) |
-| i-lines | 906.26 | 59.06 | 15.3× | px flat, bulk 1.26× *slower* |
-| j-perlin | 134.37 | 179.94 | 0.75× | unchanged both sides |
+| f-balls | 436.42 | 15.56 | 28.0× | px flat, bulk 1.11× slower |
+| g-canvas | 56.54 | 17.15 | 3.3× | px flat, bulk 1.51× slower |
+| h-sprite | 74.55 | 0.29 | 259× | px 1.07× slower, bulk flat |
+| i-lines | 903.12 | 61.00 | 14.8× | px flat, bulk 1.18× slower |
+| j-perlin | 135.86 | 179.68 | 0.76× | unchanged both sides |
 
-The procedural map is cheaper for the per-pixel side (no array load per
-coordinate) and roughly neutral for the bulk side, so the *ratios* shrink
-slightly — the wins below are the conservative ones.
+The per-pixel side does not care which map it reads (measured directly:
+`luxel bench` with and without `--map-grid 64x64` is inside 1 % on
+`f-balls-px`). The bulk side does: a procedural map computes each
+coordinate with a divide per axis where a coordinate map loads it, so
+every coordinate-space op is a little slower on it — the *ratios* here are
+the conservative ones.
 
 ## Results — interpreted instructions per pixel
 
@@ -223,33 +230,58 @@ too, and `library/bulk-sprite-scroll-2d.js` shows its sprite on the 60/300/
 
 ## Results — firmware
 
-Devshell builds, same `creds.env` both sides, merge base `c7e0266` built from
+Devshell builds, same `creds.env` throughout, merge base `c7e0266` built from
 a throwaway worktree. `espflash save-image` app image, `tools/image-check.sh`
-for the margin.
+for the margin. "first cut" is the branch at `c51e1db`, before the size pass.
 
-| board | base `c7e0266` | branch | Δ | branch margin | gate |
-|---|---:|---:|---:|---:|---|
-| `board-pixelblaze-v3` | 1,006,640 | 1,021,520 | **+14,880** | 27,056 B / **2.58 %** | **FAIL** (base 3.99 %, ok) |
-| `board-athom-music` | 1,006,752 | 1,021,616 | **+14,864** | 26,960 B / **2.57 %** | **FAIL** (base 3.98 %, warn) |
-| `board-seengreat-hub75` | 941,600 | 956,192 | +14,592 | 92,384 B / 8.81 % | ok (base 10.20 %) |
-| `board-c6-devkit` | 1,021,136 | 1,034,464 | +13,328 | 14,112 B / **1.34 %** | **FAIL** (base 2.61 %, already failing — #291) |
+| board | base `c7e0266` | first cut | after the size pass | Δ vs base | margin now | gate |
+|---|---:|---:|---:|---:|---:|---|
+| `board-pixelblaze-v3` | 1,006,640 | 1,021,520 | **1,014,976** | +8,336 | 33,600 B / 3.20 % | ok (base 3.99 %) |
+| `board-athom-music` | 1,006,752 | 1,021,616 | **1,015,040** | +8,288 | 33,536 B / 3.19 % | ok (base 3.98 %) |
+| `board-seengreat-hub75` | 941,600 | 956,192 | **949,744** | +8,144 | 98,832 B / 9.42 % | ok (base 10.20 %) |
+| `board-c6-devkit` | 1,021,136 | 1,034,464 | **1,029,840** | +8,704 | 18,736 B / **1.78 %** | **FAIL** (base 2.61 % — already under the floor before this branch, #291) |
 
-Nothing in `firmware/` changed; the whole +14.6–14.9 KB is `luxel-core`
-(`bulk.rs` plus the sixteen `call_builtin` arms and the `RunStage::Frame`
-path). The app still **fits** the 1 MiB slot everywhere, but
-`image-check.sh`'s **3 % floor is breached on three of the four boards**, and
-`board-pixelblaze-v3` is the board `tools/ci.sh` builds — so **CI goes red on
-this branch as it stands.** The classic ESP32 boards had ~42 KB of margin
-(3.99 %) and this spends 35 % of it in one feature. Either the diet in
-docs/size-report.md comes first, or the bulk module needs a size pass (the
-sixteen ops are ~930 B each as written), or the gate's default has to change
-— which docs/boards.md says is a decision to record there, not a flag flip.
+Nothing in `firmware/` changed; the whole delta is `luxel-core` (`bulk.rs`
+plus the sixteen `call_builtin` arms and the `RunStage::Frame` path). The
+first cut was **+14.6–14.9 KB**, which put `board-pixelblaze-v3` — the board
+`tools/ci.sh` builds — at a 2.58 % margin, under `image-check.sh`'s 3 % floor,
+so CI went red. `nm --size-sort` said where it was: 11,066 B in `bulk.rs`,
+1,927 B in the firmware's one inlined copy of `Engine::from_program_budgeted`
+(`uses_coordinate_bulk_op` alone carried eight inlined copies of
+`lookup_builtin`'s table scan), 550 B in `Engine::frame`, 510 B in
+`Vm::call_builtin`, ~550 B of rodata.
 
-**Stack** (`tools/stack-check.sh`, `board-pixelblaze-v3`): clean. `.stack`
-25,484 → **25,420 B** (−64 B, well over the 24 KB floor); no function exceeds
-the 12,288 B budget; the largest frame is unchanged at 9,744 B (picoserve's
-request future) and no `bulk`/`Vm` frame appears in the top fifteen. Function
-count 1,319 → 1,338.
+The size pass (`59fbd7e`) took **6,544 B** back on `board-pixelblaze-v3`
+without changing a single output byte — the whole equivalence table below is
+unchanged. What it bought, in order:
+
+| change | board-pixelblaze-v3 |
+|---|---:|
+| `paint_shape` over `&mut dyn FnMut` (one copy, not four), shared `texel_hsv`/`texel_rgb`/`texel_at`, out-of-line `put`, static error strings | −3,520 |
+| out-of-line `set_default_grid_map` / `uses_coordinate_bulk_op` / `calls_any_builtin` | −896 |
+| out-of-line `GridView::span`, one `fillGradient` loop, `blit` row base walked not multiplied | −288 |
+| one shared `srcs`, `splat` as a zero-length `drawLine`, `blit` + `fillCanvas` share one `paste` | −448 |
+| `map_coord` out of line (`MapData::coord` was inlined twice into `span`), tighter builtin-id lookup | −688 |
+| `lookup_builtin` `#[inline(never)]`, `span` out of line, one `fillGradient` loop | −240 |
+| `blit`/`paste` clip arithmetic narrowed to i32 (every input is an Fx, so it is in −32768..=32767) | −480 |
+| the two perf clawbacks below | +128 |
+| `texel_at` by array, `clear`/`fill` share one write loop, `grid_dim` out of line | −112 |
+
+The one thing it costs is host throughput on the two coordinate-space shape
+pairs, measured by running the pre-pass and post-pass binaries back to back
+(the per-pixel sides land within 0.5 %, so this is the bulk side alone):
+`a-fill`, `c-readout`, `d-comet` and `g-canvas` are inside the ±3 % noise
+band, while **`f-balls` is +13 % and `i-lines` +10 % per bulk pixel** — the
+indirect call in `paint_shape` plus the out-of-line coordinate read. Their
+ratios move 35.0× → 31.4× and 19.3× → 17.4×. Two clawbacks kept that from
+being twice as large and cost 128 B: `splat` short-circuits the segment
+projection it provably does not need, and `paint_shape`'s grid loop computes
+each cell index once instead of twice.
+
+**Stack** (`tools/stack-check.sh`, `board-pixelblaze-v3`): clean. No function
+exceeds the 12,288 B budget; the largest frame is unchanged at 9,744 B
+(picoserve's request future) and no `bulk`/`Vm` frame appears in the top
+fifteen.
 
 ## How to judge this on device
 
@@ -281,16 +313,18 @@ above as a floor.
 ## Scope — an honest statement
 
 Bulk ops help patterns whose per-pixel body is a *lookup or a shape test*,
-and they help enormously: 4.5–7× for buffer and canvas readouts, 8–36× for
-entity loops, 19–186× for fills and trails, and the fixed entry cost goes to
-zero. That is ~145 of 299 library patterns.
+and they help enormously: 3–5× for buffer and canvas readouts, 9–31× for
+entity loops, 19–225× for fills, trails and sprites, and the fixed entry cost
+goes to zero. That is ~145 of 299 library patterns.
 
 They do **not** help the ~110 dense-procedural patterns, and rewriting one is
-an active regression (0.74–0.75× here, interpreted work 27 → 52 insns/px).
+an active regression (0.72–0.76× here, interpreted work 27 → 52 insns/px).
 `renderFrame` is an additional entry point, not a replacement: the right rule
 is *stay on `render` unless a bulk op replaces the body*.
 
-The costs are real and should be weighed against that: **+14.6–14.9 KB of
-flash on every board**, which breaks the OTA-margin gate on the three
-classic-ESP32/C6 boards, and an unmeasured I-cache-layout risk to every
-existing pattern that this evaluation could not test without hardware.
+The costs are real and should be weighed against that: **+8.1–8.7 KB of flash
+on every board** after the size pass (down from +14.6–14.9 KB), which leaves
+every board's OTA margin where the gate wants it except `board-c6-devkit`,
+which was already under the floor before this branch (#291); and an unmeasured
+I-cache-layout risk to every existing pattern that this evaluation could not
+test without hardware.
