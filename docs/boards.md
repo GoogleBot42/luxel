@@ -1656,6 +1656,69 @@ expands to a plain call off the pipelined path, because making the direct
 sink async too cost every non-panel board ~864 B of state machine for a
 future that never yields (Gitea #160: that board has 3.7 % of its slot left).
 
+### The skip that survived vsync: a race in the swap-landing shortcut
+
+Jeremy filmed the vsync build and reported: "much better. I have observed
+repeats (not many). I also observed (sadly) a skip." Repeats are expected —
+see above. The skip was not, and finding it took a counter, because **this
+class of loss is invisible to frame accounting**.
+
+`swap()` decides whether the very next `out_eof` is the ring switch, or
+whether it has to wait for two. The shortcut tested that the DMA was at least
+three descriptors short of the ring's tail: if so the tail cannot have been
+fetched yet, so it must read the `next` just written. True — but "short of the
+tail" is **equally true immediately after the DMA wrapped past it**. There the
+tail was fetched *before* the store, this pass does not flip, and the EOF it
+had already raised gets miscounted as the switch. Two things then go wrong at
+once: the compose is handed a framebuffer the DMA is still scanning out, and
+the ISR "restores" the old ring's tail, *undoing the flip*. One frame both
+torn and never displayed. The window is exactly "an EOF has fired and its ISR
+has not run yet" — wide open inside `swap()`, because `critical_section` masks
+interrupts while it runs.
+
+Nothing downstream can see it: `write_frame` succeeded, so `out_fps` counts
+the frame and `dropped` sees no gap. It is only visible on the panel.
+
+Closed by probing `OUT_INT_RAW.out_eof` alongside `OUT_DSCR` and taking the
+two-EOF fallback whenever an EOF is pending. `/api/status` `swap.eof_race`
+counts entries to the window so the rate is measured, not guessed:
+
+| | measured |
+|---|---:|
+| `eof_race` over 725 s at 4096 px / 115 Hz | **41** |
+| rate | one every **17.7 s**, 1 frame in ~**1,950** |
+| `slow_path` (two-EOF fallback, any reason) | 318 — 0.4 % of swaps |
+
+One skip every 18 seconds is exactly "I observed a skip, maybe there was more,
+I stopped watching". The `slow_path` share is small enough that the fallback
+costs no measurable throughput.
+
+### Proving the pipeline lossless: `dropped`
+
+`/api/status` gained **`dropped`** — rendered frames the fixture never showed,
+cumulative since boot. It is *derived*, not enumerated: the output task adds
+the gap between the sequence numbers of consecutive **displayed** frames, so
+it counts every route a frame can go missing by, including routes the firmware
+does not know about. `drops` breaks the known ones out (`handoff`,
+`overwrite`, `refused`), bins losses by frame number mod 64 (the sweep column,
+with `frame-rate-scan`), and keeps the last 16 as `[seq, route, ms]`.
+
+Over 725 s of `frame-rate-scan` with **zero polling** from the host — ~79,750
+frames — the delta was **0**. Every drop the board has ever recorded is a boot
+transient: 9 of them, all route `handoff`, all inside the first 3.8 s, before
+the output task publishes the driver's pacing capability and `emit` starts
+waiting for the buffer instead of dropping. The mod-64 histogram holds only
+those nine, spread across bins 1–8 and 10 — **no clustering, and nothing in
+bins 54–63**, which is where a right-edge-specific fault would have shown.
+
+Host-side control, ruling the pattern out: 640 rendered frames of
+`frame-rate-scan` at 8.0 / 8.7 / 9.5 ms cadences give `missing = 0`,
+`multi = 0`, and every column 0–63 lit exactly 10 times — including 54–63. The
+sweep never fails to draw a column and never clips at the right edge.
+
+So the accounting is clean, the pattern is clean, and the skip was the swap
+race above.
+
 ## Seeing the displayed frame rate: `library/frame-rate-test.js` (2026-09-07)
 
 `rescan_hz` is the driver's own count. `library/frame-rate-test.js` ("Frame

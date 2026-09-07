@@ -63,6 +63,48 @@ expands to a plain call off the pipelined path, because making the direct sink
 async too cost every non-panel board ~864 B of state machine for a future that
 never yields (#160 — that board has 3.7 % of its OTA slot left).
 
+**Then Jeremy filmed it and still saw a skip** — "much better. I have observed
+repeats (not many). I also observed (sadly) a skip." Repeats are expected. The
+skip was a second bug, in the #376 swap-landing shortcut, and it is the kind
+that no frame accounting can catch.
+
+`swap()` decides whether the next `out_eof` is the ring switch by checking the
+DMA is at least three descriptors short of the ring tail — if so the tail
+cannot have been fetched yet and must read the `next` just written. But "short
+of the tail" is equally true immediately **after** the DMA wrapped past it,
+and there the tail was fetched *before* the store: the pass does not flip, yet
+the EOF it already raised is miscounted as the switch. The compose is then
+handed a framebuffer the DMA is still scanning out, and the ISR "restores" the
+old ring's tail and undoes the flip. One frame both torn and never displayed.
+The window is "an EOF has fired and its ISR has not run yet" — wide open
+inside `swap()`, because `critical_section` masks interrupts while it runs.
+`write_frame` succeeded, so nothing downstream could see it.
+
+Closed by probing `OUT_INT_RAW.out_eof` alongside `OUT_DSCR` and taking the
+two-EOF fallback whenever an EOF is pending. Measured, not guessed:
+`swap.eof_race` counts entries to the window — **41 in 725 s, one every
+17.7 s, 1 frame in ~1,950**. That is exactly the rate of "I observed a skip,
+maybe there was more, I stopped watching". `swap.slow_path` (the two-EOF
+fallback, any cause) ran 318 times, 0.4 % of swaps, at no measurable
+throughput cost.
+
+To separate a real drop from a camera that missed a frame, `/api/status`
+gained **`dropped`**: rendered frames the fixture never showed, derived from
+the gap between the sequence numbers of consecutive *displayed* frames rather
+than by counting known loss routes — so it covers routes the firmware does not
+enumerate. `drops` breaks out the known ones (`handoff`, `overwrite`,
+`refused`), bins losses by frame number mod 64, and keeps the last 16 as
+`[seq, route, ms]`.
+
+Over 725 s of `frame-rate-scan` with **zero polling** from the host (~79,750
+frames), `dropped` moved by **0**. Every drop the board has recorded is a boot
+transient — 9, all `handoff`, all within the first 3.8 s, before the output
+task publishes the driver's pacing capability. The histogram holds only those
+nine, in bins 1–8 and 10: no clustering, nothing in 54–63 where a right-edge
+fault would show. Host control: 640 frames of `frame-rate-scan` at three
+cadences give `missing = 0`, `multi = 0`, every column lit exactly 10 times
+including 54–63 — the pattern never fails to draw a column.
+
 Harness note: `tools/ota-push.sh` failed silently four times on this board
 this session (`curl -sf` to `/api/ota` returning non-2xx, `set -e` ending the
 script before its status poll, so the only symptom is output that stops after

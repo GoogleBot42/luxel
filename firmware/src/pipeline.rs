@@ -203,9 +203,18 @@ mod pipe {
     /// of the installed map at the moment the frame was rendered — it
     /// travels WITH the frame so the outpipe's spatial stages can never
     /// be applied with a map that belongs to a different pixel count.
+    ///
+    /// `seq` is the render task's frame number, stamped BEFORE the hand-off
+    /// buffer is claimed so that every rendered frame consumes one whether
+    /// or not it ever reaches the slot. The output task compares it against
+    /// the last frame it displayed: any gap is frames that were rendered and
+    /// never shown, by whatever route (Gitea #387). That subtraction is the
+    /// ground truth behind `/api/status` `dropped` — it needs no enumeration
+    /// of the ways a frame can be lost, so it cannot miss one.
     struct Frame {
         buf: Vec<[u8; 3]>,
         grid: Option<GridMap>,
+        seq: u32,
     }
 
     /// The single travelling frame buffer, in exactly one of three places:
@@ -251,13 +260,73 @@ mod pipe {
     /// swap nor the hand-off exposes a waker, so these are polls.
     const VSYNC_POLL: Duration = Duration::from_micros(250);
 
-    /// Frames the render task produced but could not hand over because the
-    /// output task still held the buffer. Expected to be nonzero whenever
-    /// the VM is faster than the compose (`/api/status` `out_fps` is the
-    /// number that matters); reported in the boot log's fps line. Under
-    /// vsync pacing it should stay at zero: `emit` waits for the buffer
-    /// rather than throwing the frame away (Gitea #387).
+    /// Rendered frames the panel never showed, since boot — `/api/status`
+    /// `dropped`.
+    ///
+    /// Derived, not enumerated: the output task adds the gap between the
+    /// sequence number of the frame it is displaying and the one it
+    /// displayed last. So it counts every loss path at once — a hand-off
+    /// buffer overwritten before the output task took it, a held frame the
+    /// output task gave up on, a `write_frame` the driver refused, a swap
+    /// superseded before it landed — including any this code does not know
+    /// about. Expected to be nonzero whenever the VM outruns the compose;
+    /// under vsync pacing (Gitea #387) the pipeline is lossless and this
+    /// must stay at 0. Reported in the boot log's fps line.
     pub static DROPPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+    /// The render task's frame counter, stamped into each [`Frame`].
+    static NEXT_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+    // ---------------------------------------------------------------------
+    // Drop forensics (Gitea #387). Diagnostic instrumentation: which route a
+    // lost frame took, when, and where it sat in the pattern's 64-frame
+    // sweep cycle. `dropped` alone says a frame went missing; this says why,
+    // and the mod-64 histogram is what separates "the pipeline lost it" from
+    // "the pattern or the compose did not light that column".
+    // ---------------------------------------------------------------------
+
+    /// The hand-off never gave the render task a buffer, so the frame it had
+    /// just rendered was thrown away.
+    pub const DROP_HANDOFF: u32 = 0;
+    /// A frame already sitting in `ready` was replaced before the output task
+    /// took it. Should be impossible under vsync — counted to prove it.
+    pub const DROP_OVERWRITE: u32 = 1;
+    /// The driver refused the frame: `write_frame` returned false, i.e. the
+    /// panel's previous swap had still not landed when the hold gave up.
+    pub const DROP_REFUSED: u32 = 2;
+    /// Per-route drop counts, indexed by the constants above.
+    pub static DROP_PATHS: [core::sync::atomic::AtomicU32; 3] =
+        [const { core::sync::atomic::AtomicU32::new(0) }; 3];
+
+    /// Lost frames binned by `seq % 64` — the pattern's sweep column. Flat
+    /// means the loss is uncorrelated with what is being drawn; a cluster
+    /// means it is not, and the cause is in the pattern or the compose
+    /// rather than in the hand-off.
+    pub static DROP_HIST: [core::sync::atomic::AtomicU32; 64] =
+        [const { core::sync::atomic::AtomicU32::new(0) }; 64];
+
+    /// Ring of the most recent drops: sequence number, route, and the
+    /// millisecond it happened, so a burst is distinguishable from a drip.
+    pub const DROP_LOG_LEN: usize = 16;
+    pub static DROP_LOG_SEQ: [core::sync::atomic::AtomicU32; DROP_LOG_LEN] =
+        [const { core::sync::atomic::AtomicU32::new(0) }; DROP_LOG_LEN];
+    pub static DROP_LOG_WHY: [core::sync::atomic::AtomicU32; DROP_LOG_LEN] =
+        [const { core::sync::atomic::AtomicU32::new(0) }; DROP_LOG_LEN];
+    pub static DROP_LOG_MS: [core::sync::atomic::AtomicU32; DROP_LOG_LEN] =
+        [const { core::sync::atomic::AtomicU32::new(0) }; DROP_LOG_LEN];
+    /// Total records written to the ring (so the reader knows how many of the
+    /// slots are live and where the newest one is).
+    pub static DROP_LOG_N: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
+
+    /// Record one lost frame on a known route.
+    fn note_drop(seq: u32, why: u32) {
+        DROP_PATHS[why as usize].fetch_add(1, Ordering::Relaxed);
+        let i = DROP_LOG_N.fetch_add(1, Ordering::Relaxed) as usize % DROP_LOG_LEN;
+        DROP_LOG_SEQ[i].store(seq, Ordering::Relaxed);
+        DROP_LOG_WHY[i].store(why, Ordering::Relaxed);
+        DROP_LOG_MS[i].store(Instant::now().as_millis() as u32, Ordering::Relaxed);
+    }
 
     /// The render task's half of the pipeline: no driver, no outpipe, no
     /// preview copy — just the hand-off, plus the crossfade/live-input
@@ -300,9 +369,13 @@ mod pipe {
         /// frame-rate cap), so alternating the engine's buffer would show
         /// a stale frame on those. Copying keeps the engine API intact.
         pub async fn emit(&mut self, frame: &[[u8; 3]], grid: Option<GridMap>) -> (u32, u32, u32) {
+            // Claim the number FIRST: a frame that never gets a buffer still
+            // burns a sequence number, so the output task's gap arithmetic
+            // sees it.
+            let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
             let (buf, waited) = claim_paced().await;
             let Some(mut buf) = buf else {
-                DROPPED.fetch_add(1, Ordering::Relaxed);
+                note_drop(seq, DROP_HANDOFF);
                 return (0, 0, waited);
             };
             buf.clear();
@@ -313,7 +386,7 @@ mod pipe {
                 return (0, 0, waited);
             }
             buf.extend_from_slice(frame);
-            publish(buf, grid);
+            publish(buf, grid, seq);
             (0, 0, waited)
         }
 
@@ -321,12 +394,13 @@ mod pipe {
         /// swapped rather than copied, so the crossfade blend and the
         /// live-input assembly cost the pipeline nothing extra.
         pub async fn emit_staged(&mut self, grid: Option<GridMap>) -> (u32, u32, u32) {
+            let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
             let (buf, waited) = claim_paced().await;
             let Some(buf) = buf else {
-                DROPPED.fetch_add(1, Ordering::Relaxed);
+                note_drop(seq, DROP_HANDOFF);
                 return (0, 0, waited);
             };
-            publish(core::mem::replace(&mut self.stage, buf), grid);
+            publish(core::mem::replace(&mut self.stage, buf), grid, seq);
             (0, 0, waited)
         }
     }
@@ -386,7 +460,9 @@ mod pipe {
 
     /// Take the travelling buffer: the free one, or an earlier frame the
     /// output task has not claimed yet (newest frame wins). `None` = the
-    /// output task is composing and this frame is dropped.
+    /// output task is composing and this frame is dropped. Stealing an
+    /// untaken `ready` loses that frame; nothing counts it here, because
+    /// the sequence gap the output task sees already does.
     fn claim() -> Option<Vec<[u8; 3]>> {
         SLOT.lock(|c| {
             let s = &mut *c.borrow_mut();
@@ -394,8 +470,16 @@ mod pipe {
         })
     }
 
-    fn publish(buf: Vec<[u8; 3]>, grid: Option<GridMap>) {
-        SLOT.lock(|c| c.borrow_mut().ready = Some(Frame { buf, grid }));
+    fn publish(buf: Vec<[u8; 3]>, grid: Option<GridMap>, seq: u32) {
+        let lost = SLOT.lock(|c| {
+            c.borrow_mut()
+                .ready
+                .replace(Frame { buf, grid, seq })
+                .map(|old| old.seq)
+        });
+        if let Some(old) = lost {
+            note_drop(old, DROP_OVERWRITE);
+        }
         READY.signal(());
     }
 
@@ -472,6 +556,9 @@ mod pipe {
         let mut out_sum: u64 = 0;
         let mut mark = Instant::now();
         let mut last_rescans: u32 = 0;
+        // Sequence number of the last frame the panel actually showed.
+        // `None` until the first one: there is no gap before it.
+        let mut last_shown: Option<u32> = None;
         loop {
             // The timer half keeps the once-a-second publish running while
             // nothing renders, so the counters fall to 0 instead of
@@ -504,6 +591,7 @@ mod pipe {
                         Timer::after(VSYNC_POLL).await;
                     }
                 }
+                let seq = f.seq;
                 let (p, o, shown) = pipe.run(&mut out, &f.buf, f.grid);
                 // back to the render task only AFTER write_frame: the wire
                 // slice borrows this buffer whenever the outpipe is a no-op
@@ -514,7 +602,29 @@ mod pipe {
                     pipe_sum += p as u64;
                     out_sum += o as u64;
                     frames += 1;
+                    // Ground truth for `dropped`: every rendered frame took a
+                    // sequence number, so whatever this one skipped over was
+                    // rendered and never displayed. Wrapping subtraction, so
+                    // the counter survives the u32 rollover after ~1.2 years
+                    // at 115 fps.
+                    if let Some(prev) = last_shown {
+                        let gap = seq.wrapping_sub(prev).saturating_sub(1);
+                        if gap > 0 {
+                            DROPPED.fetch_add(gap, Ordering::Relaxed);
+                            // Bin every missing frame by its sweep column.
+                            // Capped so a pathological gap cannot spin here.
+                            for k in 1..=gap.min(256) {
+                                let lost = prev.wrapping_add(k);
+                                DROP_HIST[(lost % 64) as usize]
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    last_shown = Some(seq);
+                } else {
+                    note_drop(seq, DROP_REFUSED);
                 }
+                shared::DROPPED.store(DROPPED.load(Ordering::Relaxed), Ordering::Relaxed);
             }
             if mark.elapsed().as_millis() >= 1000 {
                 let n = frames.max(1) as u64;
@@ -564,7 +674,10 @@ pub async fn pace(spent: Duration) {
 pub use pipe::pace;
 
 #[cfg(pipelined)]
-pub use pipe::{output_task, preview, RenderSide, DROPPED};
+pub use pipe::{
+    output_task, preview, RenderSide, DROPPED, DROP_HIST, DROP_LOG_LEN, DROP_LOG_MS, DROP_LOG_N,
+    DROP_LOG_SEQ, DROP_LOG_WHY, DROP_PATHS,
+};
 
 /// The frame sink the render task holds on this board.
 #[cfg(pipelined)]

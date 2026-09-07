@@ -53,11 +53,21 @@ response as "no snapshot right now", not as an all-black frame.
 
 ```json
 {"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
- "rescan_hz":0,"pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
+ "rescan_hz":0,"dropped":0,"pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"engine_heap":21504,"live":null,
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":749568,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null}
+```
+
+A HUB75 panel additionally carries the pipelined-output members — `out_fps`,
+`rescan_hz`, and the two diagnostic objects, which are this quiet on a board
+that is not losing anything:
+
+```json
+ "out_fps":112,"rescan_hz":115,"dropped":0,
+ "drops":{"handoff":0,"overwrite":0,"refused":0,"hist":[],"n":0,"log":[]},
+ "swap":{"eof_race":91,"slow_path":604}
 ```
 
 - `frame_us` / `vm_us` / `pipe_us` / `out_us` — per-stage frame timing, the
@@ -90,6 +100,37 @@ response as "no snapshot right now", not as an all-black frame.
   `out_fps` means composed frames are being discarded; `out_fps` a little
   below `rescan_hz` means the occasional compose overran its rescan window
   and the panel showed the previous frame once more.
+- `dropped` — rendered frames the fixture never showed, cumulative since
+  boot. **The ground truth for "was that a dropped frame?"** — it is derived
+  from the gap between the sequence numbers of consecutive *displayed*
+  frames, not by counting known loss routes, so it covers every way a frame
+  can go missing between the VM and the wire, including routes the firmware
+  does not enumerate. `0` on a non-pipelined board, where every rendered
+  frame is written by construction. Under vsync pacing (Gitea #387) the
+  pipeline is lossless and this should stay at its boot value; expect a
+  handful of drops in the first two seconds after a reboot, before the
+  output task has published the driver's pacing capability.
+- `drops` — where those frames went, on a pipelined board. `handoff` is
+  frames the render task could not hand over (no buffer came back in time),
+  `overwrite` is frames replaced in the slot before the output task took
+  them, `refused` is frames the driver would not take. `hist` bins lost
+  frames by frame number mod 64 as sparse `[column, count]` pairs — with
+  `library/frame-rate-scan.js` that is the sweep column, so a cluster says
+  the loss correlates with what was being drawn and a flat spread says it
+  does not. `log` is the last 16 losses as `[seq, route, ms]`, route being
+  0 `handoff` / 1 `overwrite` / 2 `refused`, so a burst is distinguishable
+  from a drip. All of it is empty on a healthy board.
+- `swap` — HUB75 swap diagnostics from the patched esp-hub75. `eof_race`
+  counts buffer swaps armed while a DMA end-of-frame interrupt was raised
+  but not yet serviced. That is a window in which the naive "the next EOF is
+  the switch" shortcut would hand the compose a framebuffer the DMA is still
+  scanning out **and** undo the flip — a frame both torn and never
+  displayed, and invisible to `dropped` because the write succeeded. The
+  driver detects the window and falls back to a two-EOF wait, so these are
+  handled, not lost; the counter exists because the rate is worth knowing
+  (measured ~8/min on the bench panel). `slow_path` counts every swap that
+  took that two-EOF fallback for any reason, each costing one extra panel
+  frame of latency.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render

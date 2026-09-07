@@ -355,10 +355,72 @@ fn status_json() -> String {
     // frames actually written to the wire (pipelined boards; 0 elsewhere)
     push_piece(&mut out, ",\"out_fps\":");
     push_u32(&mut out, crate::shared::OUT_FPS.load(Ordering::Relaxed));
-    // the panel's real refresh rate; 0 on boards without a HUB75 panel.
-    // Above it, out_fps is a compose rate rather than a display rate (#378).
+    // the panel's real refresh rate; 0 on boards without a HUB75 panel
     push_piece(&mut out, ",\"rescan_hz\":");
     push_u32(&mut out, crate::shared::RESCAN_HZ.load(Ordering::Relaxed));
+    // rendered frames the fixture never showed, cumulative since boot; the
+    // ground truth for "was that a dropped frame?" (#387)
+    push_piece(&mut out, ",\"dropped\":");
+    push_u32(&mut out, crate::shared::DROPPED.load(Ordering::Relaxed));
+    // Drop forensics: per-route counts, the mod-64 sweep-column histogram,
+    // and a ring of the most recent losses. Diagnostic (#387) — the route
+    // and the histogram together say whether a missing frame was lost in the
+    // hand-off or never drawn in the first place.
+    #[cfg(pipelined)]
+    {
+        push_piece(&mut out, ",\"drops\":{\"handoff\":");
+        push_u32(&mut out, crate::pipeline::DROP_PATHS[0].load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"overwrite\":");
+        push_u32(&mut out, crate::pipeline::DROP_PATHS[1].load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"refused\":");
+        push_u32(&mut out, crate::pipeline::DROP_PATHS[2].load(Ordering::Relaxed));
+        // Sparse: `[[column, count], ...]` for the non-empty bins only. A
+        // healthy board drops nothing and pays two bytes for the empty array,
+        // which is what lets this stay in `/api/status` rather than being
+        // torn out again once it has answered a question.
+        push_piece(&mut out, ",\"hist\":[");
+        let mut first = true;
+        for (i, b) in crate::pipeline::DROP_HIST.iter().enumerate() {
+            let n = b.load(Ordering::Relaxed);
+            if n == 0 {
+                continue;
+            }
+            if !first {
+                push_piece(&mut out, ",");
+            }
+            first = false;
+            push_piece(&mut out, "[");
+            push_u32(&mut out, i as u32);
+            push_piece(&mut out, ",");
+            push_u32(&mut out, n);
+            push_piece(&mut out, "]");
+        }
+        push_piece(&mut out, "],\"n\":");
+        let n = crate::pipeline::DROP_LOG_N.load(Ordering::Relaxed);
+        push_u32(&mut out, n);
+        push_piece(&mut out, ",\"log\":[");
+        let live = (n as usize).min(crate::pipeline::DROP_LOG_LEN);
+        for k in 0..live {
+            // oldest first
+            let i = (n as usize - live + k) % crate::pipeline::DROP_LOG_LEN;
+            if k > 0 {
+                push_piece(&mut out, ",");
+            }
+            push_piece(&mut out, "[");
+            push_u32(&mut out, crate::pipeline::DROP_LOG_SEQ[i].load(Ordering::Relaxed));
+            push_piece(&mut out, ",");
+            push_u32(&mut out, crate::pipeline::DROP_LOG_WHY[i].load(Ordering::Relaxed));
+            push_piece(&mut out, ",");
+            push_u32(&mut out, crate::pipeline::DROP_LOG_MS[i].load(Ordering::Relaxed));
+            push_piece(&mut out, "]");
+        }
+        push_piece(&mut out, "]}");
+        push_piece(&mut out, ",\"swap\":{\"eof_race\":");
+        push_u32(&mut out, crate::shared::SWAP_EOF_RACE.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"slow_path\":");
+        push_u32(&mut out, crate::shared::SWAP_SLOW_PATH.load(Ordering::Relaxed));
+        push_piece(&mut out, "}");
+    }
     push_piece(&mut out, ",\"pixels\":");
     push_u32(&mut out, pixels);
     push_piece(&mut out, ",\"max_pixels\":");

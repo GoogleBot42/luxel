@@ -37,16 +37,31 @@ This patch makes the swap land exactly on a panel frame boundary.
     "the last byte of that descriptor has been read from memory", so the
     question is only which pass the EOF belongs to. Two independent proofs,
     either sufficient:
-      - `swap()` reads the DMA channel's current-outlink-descriptor
-        register (GDMA `OUT_DSCR` on the S3, registered by the platform
-        module through `store_current_desc`). If the engine is still at
-        least three descriptors short of the running ring's tail, the tail
-        cannot have been fetched yet, so it is certain to read the `next`
-        just written and the very NEXT EOF is the switch.
-      - Otherwise, two EOFs. By the second the DMA has been all the way
-        round the new ring whatever happened.
+      - `swap()` probes the DMA channel (GDMA `OUT_DSCR` and
+        `OUT_INT_RAW.out_eof` on the S3, registered by the platform module
+        through `store_dma_probe`) AFTER the store. If no `out_eof` is
+        pending and the engine is still at least three descriptors short of
+        the running ring's tail, the tail cannot have been fetched yet, so
+        it is certain to read the `next` just written and the very NEXT EOF
+        is the switch.
+      - Otherwise, two EOFs. By the second the DMA has followed the
+        rewritten `next` whether or not the first one flipped.
+    The pending-EOF half of that probe is load-bearing, not belt and
+    braces. "Short of the tail" is equally true immediately after the DMA
+    WRAPPED past it, and there the shortcut is a correctness bug: the tail
+    was fetched before the store, so this pass does not flip, yet the EOF
+    it already raised would be miscounted as the switch — handing the
+    caller a framebuffer still being scanned out AND making the ISR restore
+    the old ring's tail, undoing the flip. One frame both torn and never
+    displayed. The window is "an EOF has fired and its ISR has not run
+    yet", which is wide open inside `swap()` because `critical_section`
+    masks interrupts. `Hub75::swap_stats()` counts entries to it, so the
+    rate is measured rather than argued: on the bench panel, 4096 px at
+    115 Hz, **41 in 725 seconds — one every 17.7 s, 1 frame in ~1,950**.
+    That is the rate at which the panel visibly skipped a frame before this
+    check existed, and it matches what the bench owner reported seeing.
     The frame-count ISR also lands early if it finds `OUT_DSCR` inside the
-    ring that was flipped to. Platforms that register no reader (I2S
+    ring that was flipped to. Platforms that register no probe (I2S
     parallel on the classic ESP32) always take the two-EOF rule, which
     costs one extra panel frame of swap latency and nothing else.
     (Measured on the bench panel: with the two-EOF rule the compose rate
@@ -242,7 +257,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
      pub(crate) current_fb_ptr: *const (),
  }
  
-@@ -140,6 +170,19 @@
+@@ -140,6 +170,40 @@
  #[allow(clippy::type_complexity)]
  static CLEAR_INTERRUPT: Mutex<RefCell<Option<fn()>>> = Mutex::new(RefCell::new(None));
  
@@ -251,18 +266,39 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +#[cfg(feature = "circular-dma")]
 +static SWAP_ARMED: AtomicBool = AtomicBool::new(false);
 +
-+/// Luxel local patch (Gitea #376): platform hook returning the address of the
-+/// DMA channel's current outlink descriptor, if the platform exposes one
-+/// (GDMA `OUT_DSCR` on the S3). Lets the frame-count ISR tell the exact EOF at
-+/// which a ring flip landed instead of waiting a whole extra pass.
++/// Luxel local patch (Gitea #387): how many swaps found an `out_eof` already
++/// raised but not yet serviced when they armed.
++///
++/// This is the race window the pending-EOF check exists to close — before it,
++/// each of these was a frame handed back to the caller while the DMA was still
++/// scanning it out, with the flip then undone by the ISR: a frame both torn
++/// and never displayed, and invisible to any counting the caller can do
++/// (`write_frame` succeeded). Exposed so its RATE can be compared against an
++/// observed glitch rate instead of guessed at.
++#[cfg(feature = "circular-dma")]
++static SWAP_EOF_RACE: AtomicU32 = AtomicU32::new(0);
++
++/// Luxel local patch (Gitea #387): swaps that took the two-EOF fallback for
++/// any reason (the above, or arming too close to the tail). Each costs one
++/// extra panel frame of swap latency.
++#[cfg(feature = "circular-dma")]
++static SWAP_SLOW_PATH: AtomicU32 = AtomicU32::new(0);
++
++/// Luxel local patch (Gitea #376): platform hook probing the DMA channel.
++///
++/// Returns `(current outlink descriptor address, an out_eof is raised and not
++/// yet cleared)` — GDMA `OUT_DSCR` and `OUT_INT_RAW.out_eof` on the S3. The
++/// address lets the frame-count ISR tell the exact EOF at which a ring flip
++/// landed instead of waiting a whole extra pass. The pending-EOF bit closes a
++/// race in that shortcut; see `swap`.
 +#[cfg(feature = "circular-dma")]
 +#[allow(clippy::type_complexity)]
-+static CURRENT_DESC: Mutex<RefCell<Option<fn() -> usize>>> = Mutex::new(RefCell::new(None));
++static DMA_PROBE: Mutex<RefCell<Option<fn() -> (usize, bool)>>> = Mutex::new(RefCell::new(None));
 +
  fn signal_swap_done(cs: critical_section::CriticalSection) {
      SWAP_DONE.store(true, Ordering::Release);
      if let Some(waker) = SWAP_WAKER.borrow_ref_mut(cs).take() {
-@@ -280,6 +323,16 @@
+@@ -280,6 +344,16 @@
  // Frame-boundary ISR (circular-dma)
  // ---------------------------------------------------------------------------
  
@@ -279,7 +315,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  #[cfg(feature = "circular-dma")]
  #[handler]
  #[cfg_attr(feature = "iram", ram)]
-@@ -289,6 +342,60 @@
+@@ -289,6 +363,60 @@
              (clear)();
          }
          FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -314,8 +350,8 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +        let ring_bytes = state.desc_count * core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
 +        let mut landed = state.flip_eofs >= state.flip_eofs_needed;
 +        if !landed {
-+            if let Some(read) = CURRENT_DESC.borrow_ref(cs).as_ref() {
-+                let cur = (read)();
++            if let Some(probe) = DMA_PROBE.borrow_ref(cs).as_ref() {
++                let (cur, _) = (probe)();
 +                let lo = state.descriptors as usize + state.ring * ring_bytes;
 +                landed = cur >= lo && cur < lo + ring_bytes;
 +            }
@@ -340,7 +376,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
          signal_swap_done(cs);
      });
  }
-@@ -331,15 +438,25 @@
+@@ -331,15 +459,25 @@
      xfer: TxTransfer,
      desc_ptr: *mut esp_hal::dma::DmaDescriptor,
      desc_count: usize,
@@ -366,23 +402,23 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
      });
  }
  
-@@ -350,6 +467,15 @@
+@@ -350,6 +488,15 @@
      });
  }
  
-+/// Luxel local patch (Gitea #376): register the platform's
-+/// current-outlink-descriptor reader (optional; see [`CURRENT_DESC`]).
++/// Luxel local patch (Gitea #376): register the platform's DMA probe
++/// (optional; see [`DMA_PROBE`]).
 +#[cfg(feature = "circular-dma")]
-+pub(crate) fn store_current_desc(read: fn() -> usize) {
++pub(crate) fn store_dma_probe(probe: fn() -> (usize, bool)) {
 +    critical_section::with(|cs| {
-+        *CURRENT_DESC.borrow_ref_mut(cs) = Some(read);
++        *DMA_PROBE.borrow_ref_mut(cs) = Some(probe);
 +    });
 +}
 +
  // ---------------------------------------------------------------------------
  // Public driver handle
  // ---------------------------------------------------------------------------
-@@ -374,8 +500,11 @@
+@@ -374,8 +521,11 @@
  ///
  /// # Buffer Swapping
  ///
@@ -396,7 +432,37 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  /// - [`Hub75Swap::wait()`] — spin-loops until the DMA is guaranteed to no
  ///   longer read from the old buffer, then returns it.
  /// - [`Hub75Swap::wait_for_done()`] — yields to the executor (async contexts).
-@@ -495,9 +624,12 @@
+@@ -436,6 +586,29 @@
+     pub fn frame_count(&self) -> u32 {
+         FRAME_COUNT.load(Ordering::Relaxed)
+     }
++
++    /// Luxel local patch (Gitea #387): swap diagnostics, `(eof_race,
++    /// slow_path)`.
++    ///
++    /// `eof_race` counts swaps that armed while an `out_eof` was raised but
++    /// unserviced — the window in which naively trusting the
++    /// next-EOF shortcut hands back a framebuffer the DMA is still reading
++    /// AND undoes the flip. `slow_path` counts swaps that took the two-EOF
++    /// fallback for any reason, each costing one extra panel frame of
++    /// latency. Both 0 without `circular-dma`.
++    pub fn swap_stats(&self) -> (u32, u32) {
++        #[cfg(feature = "circular-dma")]
++        {
++            (
++                SWAP_EOF_RACE.load(Ordering::Relaxed),
++                SWAP_SLOW_PATH.load(Ordering::Relaxed),
++            )
++        }
++        #[cfg(not(feature = "circular-dma"))]
++        {
++            (0, 0)
++        }
++    }
+ }
+ 
+ #[cfg(not(feature = "circular-dma"))]
+@@ -495,9 +668,12 @@
  /// directly for a blocking spin-loop.
  ///
  /// In non-circular mode, "safe" means the ISR has hit a frame boundary and
@@ -412,7 +478,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  pub struct Hub75Swap<FB: 'static> {
      old_fb_ptr: *mut FB,
      #[cfg(not(feature = "circular-dma"))]
-@@ -667,10 +799,23 @@
+@@ -667,10 +843,23 @@
  impl<DM: esp_hal::DriverMode, FB: FrameBuffer + 'static> Hub75<DM, FB> {
      /// Initiate a framebuffer swap (circular-DMA mode).
      ///
@@ -440,7 +506,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
      /// [`.wait()`](Hub75Swap::wait), or just `.wait()` directly for blocking.
      ///
      /// # Panics
-@@ -678,10 +823,96 @@
+@@ -678,10 +867,122 @@
      /// Panics if the driver has not been initialised (no `Hub75` instance
      /// was created).
      pub fn swap(&self, new_fb: &'static mut FB) -> Hub75Swap<FB> {
@@ -505,22 +571,48 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +                }
 +                core::sync::atomic::fence(Ordering::SeqCst);
 +
-+                // How many EOFs prove the flip landed? If the DMA is still
-+                // comfortably short of the ring's tail, the tail cannot have
-+                // been fetched yet, so it WILL read the `next` just written
-+                // and the very next EOF is the switch. Two spare descriptors
-+                // of margin (tens of microseconds of panel data) swallow the
-+                // gap between this read and the store above. Otherwise fall
-+                // back to two EOFs, which is unconditionally safe: by then a
-+                // whole pass of the new ring has completed.
++                // How many EOFs prove the flip landed?
++                //
++                // The shortcut: if the DMA is still comfortably short of the
++                // ring's tail, the tail cannot have been fetched yet, so it
++                // WILL read the `next` just written and the very NEXT EOF is
++                // the switch. The probe is read AFTER the store, so a reading
++                // short of the tail means the store beat the tail's fetch;
++                // two spare descriptors of margin (tens of microseconds of
++                // panel data) swallow the gap between the store and the read.
++                //
++                // But "short of the tail" is also true immediately after the
++                // DMA WRAPPED past it, and there the shortcut is a
++                // correctness bug, not a missed optimisation: the tail was
++                // fetched BEFORE the store, so this pass does not flip, yet
++                // the EOF it already raised would be counted as the switch.
++                // The caller would then be handed a framebuffer the DMA is
++                // still scanning out, and the ISR would restore the old
++                // ring's tail and undo the flip entirely — one frame both
++                // torn and never displayed. The window is exactly "an EOF has
++                // fired and its ISR has not run yet", which is wide open here
++                // because `critical_section` has interrupts masked. So take
++                // the shortcut only when the channel has no unserviced
++                // `out_eof` pending.
++                //
++                // Otherwise two EOFs, which is unconditionally safe: whether
++                // or not the first one flipped, by the second the DMA has
++                // followed the rewritten `next`, and an `out_eof` means that
++                // tail's bytes are already read out of memory.
 +                let mut needed = 2;
-+                if let Some(read) = CURRENT_DESC.borrow_ref(cs).as_ref() {
-+                    let cur = (read)();
++                if let Some(probe) = DMA_PROBE.borrow_ref(cs).as_ref() {
++                    let (cur, eof_pending) = (probe)();
 +                    let lo = base as usize + from * n * core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
 +                    let idx = cur.wrapping_sub(lo) / core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
-+                    if cur >= lo && idx + 3 <= n {
++                    if eof_pending {
++                        SWAP_EOF_RACE.fetch_add(1, Ordering::Relaxed);
++                    }
++                    if !eof_pending && cur >= lo && idx + 3 <= n {
 +                        needed = 1;
 +                    }
++                }
++                if needed > 1 {
++                    SWAP_SLOW_PATH.fetch_add(1, Ordering::Relaxed);
 +                }
 +                state.ring = to;
 +                state.flip_from = from;
@@ -537,7 +629,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
              let delta = new_fb_ptr as isize - state.current_fb_ptr as isize;
              // SAFETY: `descriptors` points to a `&'static mut` descriptor
              // array that outlives everything. The DMA engine reads descriptor
-@@ -697,7 +928,10 @@
+@@ -697,7 +998,10 @@
              //     within a single contiguous `FB` allocation — both old and
              //     new framebuffers have identical internal layout.
              //  4. The worst-case visual artifact is one partially-mixed frame
@@ -568,33 +660,40 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  
          // In circular mode, the LCD_CAM `lcd_trans_done` interrupt never
          // fires because the DMA chain loops forever and continuous output
-@@ -161,6 +162,10 @@
+@@ -161,6 +162,11 @@
          // interrupt which fires whenever a descriptor with `suc_eof=1` is
          // encountered — even in a circular chain.
          setup_gdma_frame_count_isr(ch_num);
 +        // Luxel local patch (Gitea #376): lets the frame-count ISR see which
 +        // descriptor ring the DMA is on, so a ring flip is detected at the very
-+        // frame boundary it lands on.
-+        crate::isr::store_current_desc(gdma_current_desc);
++        // frame boundary it lands on, and lets `swap` see an EOF that has fired
++        // but not yet been serviced.
++        crate::isr::store_dma_probe(gdma_probe);
  
          Ok(Self::from_phantom())
      }
-@@ -195,6 +200,21 @@
+@@ -195,6 +201,27 @@
      }
  }
  
-+/// Address of the DMA channel's current outlink descriptor (GDMA `OUT_DSCR`).
++/// Probe the DMA channel: `(current outlink descriptor address, an out_eof is
++/// raised and not yet cleared)` — GDMA `OUT_DSCR` and `OUT_INT_RAW.out_eof`.
 +///
-+/// Luxel local patch (Gitea #376): the frame-count ISR compares it against the
-+/// descriptor-ring address ranges to tell whether an armed ring flip has landed.
++/// Luxel local patch (Gitea #376). The frame-count ISR compares the address
++/// against the descriptor-ring ranges to tell whether an armed ring flip has
++/// landed; `swap` uses both halves to decide whether the next EOF is the
++/// switch or whether it has to wait for two.
 +#[cfg(feature = "circular-dma")]
-+fn gdma_current_desc() -> usize {
++fn gdma_probe() -> (usize, bool) {
 +    let ch = GDMA_CHANNEL_NUM.load(core::sync::atomic::Ordering::Relaxed) as usize;
-+    // SAFETY: a read-only access to the descriptor-status register of the
-+    // channel this driver owns.
++    // SAFETY: read-only accesses to the descriptor-status and raw-interrupt
++    // registers of the channel this driver owns.
 +    unsafe {
 +        let dma = esp_hal::peripherals::DMA::steal();
-+        dma.register_block().ch(ch).out_dscr().read().bits() as usize
++        let ch = dma.register_block().ch(ch);
++        let desc = ch.out_dscr().read().bits() as usize;
++        let eof_pending = ch.out_int().raw().read().out_eof().bit_is_set();
++        (desc, eof_pending)
 +    }
 +}
 +

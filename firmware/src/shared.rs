@@ -115,6 +115,34 @@ pub static OUT_FPS: AtomicU32 = AtomicU32::new(0);
 /// too.
 pub static RESCAN_HZ: AtomicU32 = AtomicU32::new(0);
 
+/// Rendered frames the fixture never showed, cumulative since boot —
+/// `/api/status` `dropped`.
+///
+/// Written by the output task on a pipelined board (pipeline.rs), which
+/// derives it from the gap between the sequence numbers of consecutive
+/// DISPLAYED frames rather than by counting known loss paths — so it covers
+/// every way a frame can go missing between the VM and the panel, including
+/// ones the code does not enumerate. Always 0 on a non-pipelined board, where
+/// every rendered frame is written by construction.
+///
+/// Under vsync pacing (Gitea #387) the pipeline is lossless and this must
+/// stay 0. A nonzero value is the ground truth that separates a real dropped
+/// frame from a camera that missed one.
+pub static DROPPED: AtomicU32 = AtomicU32::new(0);
+
+/// HUB75 swap diagnostics from the patched esp-hub75 (Gitea #387), absolute
+/// since boot. `SWAP_EOF_RACE` counts swaps armed while an `out_eof` was
+/// raised but unserviced — the window the driver's pending-EOF check closes,
+/// and before that check the rate at which a framebuffer was handed back
+/// while the DMA was still scanning it out (a frame both torn and never
+/// displayed, invisible to [`DROPPED`] because `write_frame` succeeded).
+/// `SWAP_SLOW_PATH` counts swaps that took the two-EOF fallback for any
+/// reason, each costing one extra panel frame of latency. Both 0 on boards
+/// without a panel.
+pub static SWAP_EOF_RACE: AtomicU32 = AtomicU32::new(0);
+/// See [`SWAP_EOF_RACE`].
+pub static SWAP_SLOW_PATH: AtomicU32 = AtomicU32::new(0);
+
 /// Raw BCM frame count from the panel driver, absolute since boot.
 /// [`RESCAN_HZ`] is its once-a-second delta; nothing else should read it.
 pub static RESCANS: AtomicU32 = AtomicU32::new(0);
