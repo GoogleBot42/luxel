@@ -1177,13 +1177,11 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                 Msg::Library { id, ms } => {
                     // A library swap (playlist, activate, MQTT, resume):
                     // nothing travelled but the id. Decode straight from
-                    // the pattern's mapped arena extent — no envelope, no
-                    // blob Vec, no source Vec anywhere in the lifecycle
-                    // (docs/research/flash-mmap.md "The VM consumer") —
-                    // or, for a pattern without one, from a transient
-                    // chunk-store read that is then offered an extent
-                    // (never compacting, never evicting: the wear rule)
-                    // so the next activation is in place.
+                    // the pattern's mapped bytecode extent — no envelope,
+                    // no blob Vec, no source Vec anywhere in the lifecycle
+                    // (docs/research/flash-mmap.md "The VM consumer").
+                    // The store never writes on this path: the extent was
+                    // written once, at save (the wear rule).
                     if ms == 0 {
                         engine = None;
                     }
@@ -1203,16 +1201,12 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                             bc_len = code.len();
                             luxel_core::bytecode::deserialize_lean_static(code).map_err(Some)
                         }
+                        // no mapping (flashmap-off / refused self-check):
+                        // read the extent into a transient Vec instead
                         None => match crate::patterns::bytecode_of(&id) {
                             Some(bc) => {
                                 bc_len = bc.len();
-                                match luxel_core::bytecode::deserialize_lean(&bc) {
-                                    Ok(p) => {
-                                        crate::patterns::cache_code(&id, &bc, false).await;
-                                        Ok(p)
-                                    }
-                                    Err(e) => Err(Some(e)),
-                                }
+                                luxel_core::bytecode::deserialize_lean(&bc).map_err(Some)
                             }
                             None => {
                                 println!("library: pattern {} is gone — swap dropped", id);
@@ -1221,8 +1215,9 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                         },
                     };
                     if decoded.is_ok() {
-                        // identity + read-back: hash and length streamed
-                        // out of the source chunks, never materialized
+                        // identity + read-back: both are directory fields
+                        // (the source extent's length and its FNV-1a), so
+                        // this reads no flash and allocates nothing
                         let (src_len, hash) = crate::patterns::source_stat(&id).unwrap_or((0, 0));
                         shared::set_pattern_hash_raw(hash);
                         shared::set_current_pattern_id(&id);

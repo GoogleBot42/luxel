@@ -8,16 +8,24 @@
 //! free heap at idle, so any pattern whose peak footprint nears that OOMs the
 //! device. This prints the offenders and the breakdown.
 //!
-//! The two `swap(...)` columns are the pattern-swap peak measured the same way
-//! (counting allocator, lean decode, budgeted engine, 3 frames), differing only
-//! in where the bytecode lives: `swap(vec)` models today's library activation,
-//! where the store's source and blob are read onto the heap and re-encoded into
-//! an envelope before decoding; `swap(xip)` models executing straight out of a
-//! flash mapping, where the blob bytes are never heap at all — the lean
-//! `Program` is built by `deserialize_lean_static` over a 4-aligned 'static
-//! copy of the blob (standing in for the mapping), so its code and constant
-//! words are BORROWED, not copied (LXBC v5). `mapped` is that program's own
-//! resident RAM: the header tables alone.
+//! The three `swap(...)` columns are the pattern-swap peak measured the same
+//! way (counting allocator, lean decode, budgeted engine, 3 frames), differing
+//! only in where the bytecode lives:
+//!
+//! * `swap(vec)` — the HISTORICAL cost, before the flash mapping: the store's
+//!   source and blob read onto the heap as String/Vec and re-encoded into an
+//!   envelope before decoding. No firmware path does this any more; it is the
+//!   baseline the other two are measured against.
+//! * `swap(nomap)` — the `flashmap-off` fallback the firmware still keeps
+//!   (Gitea #330): the bytecode extent is read into ONE transient Vec and
+//!   `deserialize_lean` copies its words. No source Vec, no envelope — the
+//!   store's source never leaves flash on an activation at all.
+//! * `swap(xip)` — the normal path: executing straight out of the mapping,
+//!   where the blob bytes are never heap. The lean `Program` is built by
+//!   `deserialize_lean_static` over a 4-aligned 'static copy of the blob
+//!   (standing in for the mapping), so its code and constant words are
+//!   BORROWED, not copied (LXBC v5). `mapped` is that program's own resident
+//!   RAM: the header tables alone.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -77,6 +85,9 @@ fn gallery_heap_model() {
         /// Today's library-activation swap peak: heap copies of the store's
         /// source and blob, envelope encode, then lean decode + budgeted engine.
         swap_vec: usize,
+        /// The `flashmap-off` fallback: one transient blob Vec, lean decode
+        /// (words copied), budgeted engine. No source Vec, no envelope.
+        swap_nomap: usize,
         /// The mapped-flash (XIP) swap peak: lean decode straight off the
         /// mapping + budgeted engine; the blob bytes are not heap at all.
         swap_xip: usize,
@@ -123,6 +134,21 @@ fn gallery_heap_model() {
         let swap_vec = peak() - base;
         drop(eng);
 
+        // swap(nomap): the flashmap-off path — patterns::bytecode_of reads
+        // the bytecode extent into one transient Vec, deserialize_lean copies
+        // its words, the Vec is dropped. The source is never read.
+        let base = live();
+        reset_peak();
+        let b: Vec<u8> = blob.clone();
+        let prog = bytecode::deserialize_lean(&b).unwrap();
+        drop(b);
+        let mut eng = Engine::from_program_budgeted(prog, 300, 1, 32 * 1024);
+        for _ in 0..3 {
+            eng.frame(Fx::from_f64(16.7));
+        }
+        let swap_nomap = peak() - base;
+        drop(eng);
+
         // swap(xip): bytecode executed from a flash mapping — no heap copy of
         // the blob, no source, no envelope. A leaked, 4-aligned copy of the
         // blob stands in for the mapping (allocated OUTSIDE the measured
@@ -159,6 +185,7 @@ fn gallery_heap_model() {
             engine: engine_bytes,
             frames_peak,
             swap_vec,
+            swap_nomap,
             swap_xip,
             mapped,
         });
@@ -166,18 +193,20 @@ fn gallery_heap_model() {
 
     rows.sort_by_key(|r| std::cmp::Reverse(r.swap_vec));
     println!(
-        "\n{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9} {:>7}",
-        "pattern", "blob", "program", "engine", "run-peak", "swap(vec)", "swap(xip)", "mapped"
+        "\n{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>11} {:>9} {:>7}",
+        "pattern", "blob", "program", "engine", "run-peak", "swap(vec)", "swap(nomap)",
+        "swap(xip)", "mapped"
     );
     for r in rows.iter().take(25) {
         println!(
-            "{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>9} {:>7}",
+            "{:<40} {:>7} {:>8} {:>8} {:>9} {:>9} {:>11} {:>9} {:>7}",
             &r.name[..r.name.len().min(40)],
             r.blob,
             r.prog,
             r.engine,
             r.frames_peak,
             r.swap_vec,
+            r.swap_nomap,
             r.swap_xip,
             r.mapped
         );
@@ -200,7 +229,17 @@ fn gallery_heap_model() {
     }
 
     let sum_vec: usize = rows.iter().map(|r| r.swap_vec).sum();
+    let sum_nomap: usize = rows.iter().map(|r| r.swap_nomap).sum();
     let sum_xip: usize = rows.iter().map(|r| r.swap_xip).sum();
+    println!(
+        "sum(swap_nomap)={} B — the flashmap-off fallback, {:.1}% under swap(vec)",
+        sum_nomap,
+        if sum_vec > 0 {
+            100.0 * (sum_vec.saturating_sub(sum_nomap)) as f64 / sum_vec as f64
+        } else {
+            0.0
+        }
+    );
     let n = rows.len().max(1);
     let saved = sum_vec.saturating_sub(sum_xip);
     println!(

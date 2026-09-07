@@ -2,45 +2,90 @@
 //! CRUD contract the native mirror (crates/luxel-cli/src/serve.rs) and the
 //! playground already speak.
 //!
-//! # Storage: `sequential-storage` over the `storage` partition
+//! # Storage: one mappable extent region + a small key area (Gitea #330)
 //!
-//! An established, power-loss-safe, wear-leveled key→value store over NOR
-//! flash (PLAN.md's storage model) rather than a hand-rolled blob. The
-//! `storage` partition (0x210000, 1 MB) was freed by dropping factory
+//! The `storage` partition (0x210000, 1 MB) was freed by dropping factory
 //! (partitions.csv). We resolve it from the *live* partition table at boot
 //! and disable the store if it is absent — so this firmware is safe even on
 //! the old table, where 0x210000 is still the live ota_1 app slot.
 //!
-//! # Chunked patterns (larger than one flash page)
+//! The partition is split by what the device actually does with the bytes,
+//! not in half:
 //!
-//! A sequential-storage item must fit one flash page (~4 KB), so a pattern's
-//! source is split across up to [MC] chunk items of [CHUNK] bytes, and its
-//! LXBC bytecode across up to [MC_BC] chunks (devices execute bytecode only —
-//! the compiler lives in the browser/CLI). Each pattern has a small monotonic
-//! **seq** (its API id is `seq ^ ID_MASK`, mirroring serve.rs). Keys, all u32:
-//!   - meta      key = `seq`                                 (bits 31/30 clear)
-//!   - src chunk key = `CHUNK_FLAG | seq*2*MC + gen*MC + c`  (bit 31 set)
-//!   - bc  chunk key = `CHUNK_FLAG | BC_FLAG | seq*2*MC_BC + gen*MC_BC + c`
-//! The meta value is `[gen][count][bc_count][name_len][name]`; source and
-//! bytecode live in their chunk items under the current generation.
+//! | rel | abs | size | what |
+//! |---|---|---:|---|
+//! | `0x00000` | `0x210000` | 128 KiB (32 pages) | **key area** — a `sequential-storage` map: format key, playlist, playstate, pixel map, resume, palette, and the pattern **directory** |
+//! | `0x20000` | `0x230000` | 896 KiB (224 pages) | **extent region** — mapped read-only through the cache MMU at boot |
 //!
-//! **Atomic updates via generation flip.** An update writes the new chunks
-//! to the *other* generation, then rewrites the meta (which selects the
-//! generation) — a single item store that is the atomic commit point. A
-//! power loss before the meta write leaves the old generation fully intact
-//! (its chunks were never touched), so the pattern reads as its previous
-//! version. After commit we best-effort remove the old generation's chunks.
+//! Everything large and immutable lives in the extent region as a
+//! **contiguous run of 4 KiB pages** (an *extent*), which is the one
+//! property XIP needs (docs/research/flash-mmap.md): the VM executes a
+//! pattern's LXBC in place and the HTTP layer serves its source straight
+//! out of the mapping. Within the region:
 //!
-//! A **RAM index** (seq, gen, count, name per pattern) is built at boot so
-//! list/lookup never scan flash; runtime reads/writes address chunks by key
-//! directly.
+//! | rel | pages | what |
+//! |---|---:|---|
+//! | `0x20000` | 1 | ad-hoc header page: magic, src/bc lengths, bc side |
+//! | `0x21000` | 8 | ad-hoc (live-coding) source, 32 KiB |
+//! | `0x29000` | 2 × 16 | ad-hoc bytecode, TWO sides of 64 KiB — a push writes the side the running engine is not executing from |
+//! | `0x49000` | 183 | the **extent arena**, 732 KiB |
+//!
+//! A save is **one extent write per blob** — the source and the bytecode,
+//! each once. There are no chunk items and no duplicate copy: what the API
+//! serves back is the same bytes the VM runs from.
+//!
+//! # The key area
+//!
+//! `sequential-storage` is an established, power-loss-safe, wear-leveled
+//! key→value map over NOR flash. It is exactly right for what is small and
+//! written often — and wrong for anything that must be mapped (it caps an
+//! item at one page, stores it unaligned, and relocates it on GC). So it
+//! keeps only the small hot keys, 128 KiB of them:
+//!
+//! | key | bytes | written |
+//! |---|---:|---|
+//! | [FORMAT_KEY] | 4 | once, at a wipe |
+//! | [PLAYLIST_KEY] | ≤ [BLOB_MAX] | per playlist edit |
+//! | [PLAYSTATE_KEY] | 1 | per play/pause |
+//! | [MAP_KEY] | ≤ [BLOB_MAX] | per pixel-map upload |
+//! | [RESUME_KEY] | ~16 | per swap (deduped: skipped when unchanged) |
+//! | [PALETTE_KEY] | ≤ 64 | per palette edit |
+//! | [DIR_KEY] | ≤ 3,398 | per save / delete / compaction move |
+//!
+//! ~12 KB of live data in 128 KiB gives the log an order of magnitude of
+//! GC headroom.
+//!
+//! # The directory
+//!
+//! ONE map item ([DIR_KEY]) holds the whole store's metadata, so the
+//! pattern list and the extent table can never disagree:
+//!
+//! ```text
+//! [ver u8][npat u8]  npat × { seq u32, gen u8, name_len u8, name }
+//! [extents::Dir::to_bytes]  — seq, gen, kind, start page, len, FNV-1a
+//! ```
+//!
+//! Each pattern has a small monotonic **seq** (its API id is
+//! `seq ^ ID_MASK`, mirroring serve.rs) and a **generation** that flips on
+//! every save. A save writes the new generation's extents, verifies them,
+//! and only then publishes this item — the single atomic commit point. A
+//! power cut before it leaves the previous generation fully intact and the
+//! new extents unreferenced (boot rebuilds the page bitmap from the
+//! directory, so their pages come back free).
+//!
+//! # Format changes
+//!
+//! [FORMAT_VERSION] wipes the key area on mismatch. There is no migration
+//! code: the playground re-syncs the library (Jeremy's decision, #330).
 //!
 //! # Flash access
 //!
 //! sequential-storage is async; esp-storage's FlashStorage is blocking (see
-//! the AsyncFlash adapter). Each transaction *leases* the driver out of the
-//! OTA module (never holding its critical-section mutex across erases) and
-//! drives the ops with `block_on` (the adapter never truly pends).
+//! the AsyncFlash adapter). Each key-area transaction *leases* the driver
+//! out of the OTA module (never holding its critical-section mutex across
+//! erases) and drives the ops with `block_on` (the adapter never truly
+//! pends). Extent writes go through [crate::ota::with_flash] one op at a
+//! time with yields between — the fenced door every other writer uses.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -56,6 +101,8 @@ use esp_storage::FlashStorage;
 use luxel_core::jsonview::{json_escape, push_hex, push_piece, push_u32};
 use sequential_storage::cache::PageStateCache;
 use sequential_storage::map;
+
+use crate::extents::{self, KIND_BC, KIND_SRC};
 
 // --- blocking → async flash adapter ---
 // esp-storage's FlashStorage implements the *blocking* NorFlash traits;
@@ -120,10 +167,23 @@ impl anf::MultiwriteNorFlash for AsyncFlash<'_> {}
 pub const PAT_START: u32 = 0x21_0000;
 pub const PAT_LEN: u32 = 0x10_0000;
 
-/// Flash range sequential-storage manages (512 KiB / 128 pages of the 1 MiB
-/// partition). Holds a healthy library with GC headroom; the rest is
-/// reserved. Bigger ranges cost more per-op scan under NoCache.
-const STORE_LEN: u32 = 0x8_0000;
+/// Erase-page size — the extent allocator's unit, and the map's page.
+const PAGE: u32 = 4096;
+
+/// Flash range `sequential-storage` manages: the KEY AREA, the first
+/// 128 KiB / 32 pages of the partition. Small, hot, power-loss-safe keys
+/// only (see the module docs' table) — ~12 KB of live data, so the log has
+/// ~10× GC headroom, and every op's page scan is 4× cheaper than the old
+/// 512 KiB range.
+const STORE_LEN: u32 = 0x2_0000;
+
+/// The EXTENT REGION: everything after the key area, mapped read-only
+/// through the cache MMU at boot. Both bounds are 64 KiB-aligned (the MMU
+/// page size), so this is 14 MMU entries.
+const EXT_OFF: u32 = STORE_LEN;
+const EXT_LEN: u32 = PAT_LEN - STORE_LEN;
+const _: () = assert!((PAT_START + EXT_OFF) % 0x1_0000 == 0);
+const _: () = assert!(EXT_LEN % 0x1_0000 == 0);
 
 /// Resolved flash offset of the `storage` partition, or 0 if absent (old
 /// table) — every op then refuses / reads empty. Set once in [init].
@@ -133,47 +193,40 @@ static NEXT_SEQ: AtomicU32 = AtomicU32::new(0);
 const ID_MASK: u32 = 0x5eed_1e55;
 
 const MAX_NAME: usize = 64;
-/// Max chunks per pattern, and bytes per chunk (safely under one 4 KiB page
-/// alongside the u32 key + item header). MC=4 caps source at ~15 KB — the
-/// practical ceiling: the 16 KiB HTTP request buffer bounds a POST there
-/// anyway, and a larger GET response would risk OOM on the fragmented heap.
-/// Still ~4x the old single-page limit; covers virtually all patterns.
-const MC: u8 = 8;
-const CHUNK: usize = 3840;
-const MAX_SOURCE: usize = MC as usize * CHUNK; // 30 KB
-/// Bytecode chunk budget: LXBC can run larger than its source, so it gets
-/// more chunks. Both caps sit comfortably past what the device's heap can
+/// Largest source text the store accepts: 8 pages. Was 30,720 (the old
+/// 8 × 3,840-byte chunk budget); rounded up to the extent granularity now
+/// that a source is one extent, and matched by the ad-hoc slot's own
+/// 32 KiB region. The 16 KiB HTTP request buffer bounds a POST well below
+/// this anyway.
+pub const MAX_SOURCE: usize = 8 * PAGE as usize; // 32 KiB
+/// Largest LXBC the store accepts: 10 pages. Was 38,400 (10 × 3,840);
+/// rounded up to the page. LXBC can run larger than its source, so it gets
+/// the bigger cap. Both sit comfortably past what the device's heap can
 /// actually run — the RAM floor, not flash, is the real ceiling.
-const MC_BC: u8 = 10;
-pub const MAX_BC: usize = MC_BC as usize * CHUNK; // ~38 KB
-const MAX_PATTERNS: usize = 24;
-/// Chunk keys carry bit 31; meta keys (= seq) do not, keeping them disjoint.
-const CHUNK_FLAG: u32 = 0x8000_0000;
-/// Bit 30 separates bytecode chunks from source chunks (seqs are tiny, so
-/// the low bits never reach it).
-const BC_FLAG: u32 = 0x4000_0000;
-/// sequential-storage scratch: ≥ the largest item (one chunk + key + header).
+pub const MAX_BC: usize = 10 * PAGE as usize; // 40 KiB
+/// Patterns the directory holds. Was 24 while every pattern cost a dozen
+/// map items; the arena is 183 pages and the directory is one map item, so
+/// the binding constraint is now that item's one-page cap — see the
+/// [DIR_SER_MAX] assert. 32 patterns of the median size use ~64 of the
+/// 183 pages.
+const MAX_PATTERNS: usize = 32;
+/// Largest value [store_blob] accepts: safely under one 4 KiB page
+/// alongside the u32 key + item header.
+pub const BLOB_MAX: usize = 3840;
+/// sequential-storage scratch: ≥ the largest item (one blob + key + header).
 const BUF: usize = 4096;
 
 /// On-flash layout version. Bumped when the key/value scheme changes; a
-/// mismatch at boot wipes `storage` (incompatible old data — e.g. the
-/// pre-chunking single-item format — would otherwise be misparsed). Stored
+/// mismatch at boot **wipes** the key area — there is deliberately no
+/// migration code (#330: the playground re-syncs the library). Stored
 /// under a reserved meta-space key no real seq can reach.
 /// v3: bytecode chunks + bc_count in the meta (patterns carry LXBC).
-/// v4: bigger chunk budgets (MC 4→8, MC_BC 6→10) — the chunk-key layout
-/// depends on MC/MC_BC, so raising them is a format bump.
-const FORMAT_VERSION: u32 = 4;
+/// v4: bigger chunk budgets (MC 4→8, MC_BC 6→10).
+/// v5: the chunk store is gone — key area + extent region (#330). Source
+/// and bytecode are extents; one directory item replaces every meta and
+/// chunk key.
+const FORMAT_VERSION: u32 = 5;
 const FORMAT_KEY: u32 = 0x7FFF_FFFF;
-
-fn meta_key(seq: u32) -> u32 {
-    seq // seq < CHUNK_FLAG always (bounded by save count)
-}
-fn chunk_key(seq: u32, gen: u8, c: u8) -> u32 {
-    CHUNK_FLAG | (seq * (2 * MC as u32) + gen as u32 * MC as u32 + c as u32)
-}
-fn bc_chunk_key(seq: u32, gen: u8, c: u8) -> u32 {
-    CHUNK_FLAG | BC_FLAG | (seq * (2 * MC_BC as u32) + gen as u32 * MC_BC as u32 + c as u32)
-}
 
 fn id_hex(seq: u32) -> String {
     let mut out = String::new();
@@ -184,47 +237,24 @@ fn seq_of(id: &str) -> Option<u32> {
     u32::from_str_radix(id, 16).ok().map(|v| v ^ ID_MASK)
 }
 
-/// RAM index entry — one per stored pattern. Sources/bytecode stay in flash.
+/// RAM index entry — one per stored pattern. The bytes live in extents;
+/// this is the name/identity half of the directory record.
 #[derive(Clone)]
 struct Entry {
     seq: u32,
     gen: u8,
-    count: u8,
-    bc_count: u8,
     name: String,
 }
 
 static INDEX: BlockingMutex<CriticalSectionRawMutex, RefCell<Vec<Entry>>> =
     BlockingMutex::new(RefCell::new(Vec::new()));
 
-/// meta value: `[gen][count][bc_count][name_len][name]`
-fn deserialize_meta(bytes: &[u8]) -> Option<(u8, u8, u8, String)> {
-    let gen = *bytes.first()? & 1; // clamp to {0,1} so `1 - gen` can't underflow
-    let count = *bytes.get(1)?;
-    let bc_count = *bytes.get(2)?;
-    let nlen = *bytes.get(3)? as usize;
-    if bytes.len() < 4 + nlen {
-        return None;
-    }
-    let name = String::from(core::str::from_utf8(&bytes[4..4 + nlen]).ok()?);
-    Some((gen, count, bc_count, name))
-}
-fn serialize_meta(gen: u8, count: u8, bc_count: u8, name: &str) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + name.len());
-    v.push(gen);
-    v.push(count);
-    v.push(bc_count);
-    v.push(name.len() as u8);
-    v.extend_from_slice(name.as_bytes());
-    v
-}
-
 /// Pages sequential-storage manages — the const the cache below is sized
 /// by; wrong and the crate panics at some point.
 const PAGES: usize = (STORE_LEN / PAGE) as usize;
 
-/// The ONE sequential-storage cache for the store region, kept alive
-/// across transactions.
+/// The ONE sequential-storage cache for the key area, kept alive across
+/// transactions.
 ///
 /// sequential-storage wants exactly one live cache per region, passed to
 /// every call. Building a fresh `NoCache` per call — which is what this
@@ -238,10 +268,10 @@ const PAGES: usize = (STORE_LEN / PAGE) as usize;
 /// Sound because of the LEASE: a transaction owns the flash driver
 /// ([crate::ota::take_flash] hands it out to one caller at a time, across
 /// both cores), so the `&mut` below is exclusive for exactly as long as
-/// the driver is out, and nothing else writes this range (the raw region —
-/// current-slot + code arena — starts at [RAW_OFF] = `STORE_LEN`, past the
-/// map's range). Any write that goes AROUND sequential-storage inside the
-/// range (the format wipe in [init]) must call `invalidate_cache_state()`.
+/// the driver is out, and nothing else writes this range (the extent
+/// region starts at [EXT_OFF] = `STORE_LEN`, past the map's range). Any
+/// write that goes AROUND sequential-storage inside the range (the format
+/// wipe in [init]) must call `invalidate_cache_state()`.
 struct StoreCache(core::cell::UnsafeCell<PageStateCache<PAGES>>);
 // SAFETY: only reachable through `store_cache`, whose caller holds the
 // exclusive flash lease (see above).
@@ -286,147 +316,465 @@ macro_rules! with_store {
     }};
 }
 
-// --- flash helpers (run inside a with_store block) ---
+// --- the persisted directory ---
 
-async fn read_meta(
-    af: &mut AsyncFlash<'_>,
-    range: Range<u32>,
-    buf: &mut [u8],
-    seq: u32,
-) -> Option<(u8, u8, u8, String)> {
-    let cache = store_cache();
-    match map::fetch_item::<u32, &[u8], _>(af, range, cache, buf, &meta_key(seq)).await {
-        Ok(Some(bytes)) => deserialize_meta(bytes),
-        _ => None,
+/// Reserved key holding the whole store directory (pattern section +
+/// extent table). One item, one write, one atomic commit point.
+const DIR_KEY: u32 = 0x7FFF_FFF9;
+/// Pattern-section version (the extent table carries [extents::DIR_VER]).
+const DIR_PAT_VER: u8 = 1;
+/// Worst-case pattern section: ver + count + every name at [MAX_NAME].
+const PAT_SEC_MAX: usize = 2 + MAX_PATTERNS * (4 + 1 + 1 + MAX_NAME);
+/// Worst-case whole directory item. It must fit ONE map item — that is what
+/// caps [MAX_PATTERNS].
+const DIR_SER_MAX: usize = PAT_SEC_MAX + extents::SER_MAX;
+const _: () = assert!(DIR_SER_MAX <= BLOB_MAX);
+
+// --- small reserved-key blobs (playlist definition + playback state) ---
+// These live in the key area alongside FORMAT_KEY and DIR_KEY. Each must
+// fit one flash page.
+pub const PLAYLIST_KEY: u32 = 0x7FFF_FFFE;
+pub const PLAYSTATE_KEY: u32 = 0x7FFF_FFFD;
+pub const MAP_KEY: u32 = 0x7FFF_FFFC;
+/// Single-pattern resume record (see resume.rs).
+pub const RESUME_KEY: u32 = 0x7FFF_FFFB;
+/// Device output palette (see outpal.rs) — variable-length, so it lives
+/// here rather than in the fixed-size nvs device record.
+pub const PALETTE_KEY: u32 = 0x7FFF_FFFA;
+
+/// Store a small blob under a reserved key. False if storage is unavailable or
+/// the blob is too large for one page.
+pub fn store_blob(key: u32, bytes: &[u8]) -> bool {
+    if bytes.len() > BLOB_MAX {
+        return false;
+    }
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return false;
+    }
+    with_store!(start, |af, range, buf| {
+        let cache = store_cache();
+        let b: &[u8] = bytes;
+        map::store_item(&mut af, range.clone(), cache, buf, &key, &b)
+            .await
+            .is_ok()
+    })
+    .unwrap_or(false)
+}
+
+/// Read a blob previously written with [store_blob].
+pub fn read_blob(key: u32) -> Option<Vec<u8>> {
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return None;
+    }
+    with_store!(start, |af, range, buf| {
+        let cache = store_cache();
+        match map::fetch_item::<u32, &[u8], _>(&mut af, range, cache, buf, &key).await {
+            Ok(Some(b)) => Some(b.to_vec()),
+            _ => None,
+        }
+    })
+    .flatten()
+}
+
+// --- the extent region layout ---
+//
+// The ad-hoc (live-coding) read-back slot sits at the head of the region.
+// The source + blob of the *currently running* pattern used to live in two
+// standing heap Vecs (shared::PATTERN_SRC / PATTERN_BC) purely for
+// read-back (GET /api/pattern, the sync envelope, engine rebuilds). On a
+// heap already dominated by that same running pattern they were the single
+// largest resident cost, so they live in flash and are served from the
+// mapping. LIBRARY patterns do not use this slot at all — their bytes are
+// already extents; only an ad-hoc push (/api/code, sync adoption) writes
+// here, which is the flash-wear rule (2026-08-15).
+//
+// Layout (offsets relative to the partition base):
+//   CUR_OFF          header page: [magic u32][src_len u32][bc_len u32]
+//                    [bc_side u32], written LAST so a power loss mid-store
+//                    leaves a stale header at worst (the slot is ignored at
+//                    boot anyway -- RAM meta rules within a session)
+//   CUR_SRC_OFF      ad-hoc source bytes (up to CUR_SRC_MAX)
+//   CUR_BC_OFF       ad-hoc LXBC bytes, TWO sides of CUR_BC_MAX: a push
+//                    writes the side the running engine is NOT executing
+//                    from, so a mapped engine never sees its code change
+//   ARENA_OFF        the extent arena: ARENA_PAGES 4 KiB pages carved into
+//                    contiguous, 4-byte-aligned EXTENTS by the page-granular
+//                    allocator in extents.rs -- one per stored blob (source
+//                    and bytecode alike); the directory lives under DIR_KEY
+const CUR_OFF: u32 = EXT_OFF;
+/// 32 KiB — [MAX_SOURCE], the hard cap on a stored source and therefore on
+/// anything read-back can ever want.
+const CUR_SRC_MAX: u32 = 8 * PAGE;
+const CUR_BC_MAX: u32 = 16 * PAGE; // 64 KiB per side
+const CUR_SRC_OFF: u32 = CUR_OFF + PAGE;
+const CUR_BC_OFF: u32 = CUR_SRC_OFF + CUR_SRC_MAX;
+const CUR_MAGIC: u32 = 0x4C58_4350; // "LXCP"
+/// The bc side holding the RUNNING ad-hoc blob (the last successful
+/// store_current); the next store writes the other one.
+static CUR_BC_SIDE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// The arena: everything left in the extent region after the ad-hoc slot.
+/// 0x49000..0x100000 = 732 KiB = 183 pages.
+const ARENA_OFF: u32 = CUR_BC_OFF + 2 * CUR_BC_MAX;
+const ARENA_PAGES: usize = ((EXT_OFF + EXT_LEN - ARENA_OFF) / PAGE) as usize;
+const _: () = assert!(CUR_SRC_MAX as usize >= MAX_SOURCE);
+const _: () = assert!(CUR_BC_MAX as usize >= MAX_BC);
+const _: () = assert!(ARENA_OFF + (ARENA_PAGES as u32) * PAGE <= EXT_OFF + EXT_LEN);
+const _: () = assert!(ARENA_PAGES <= extents::MAX_PAGES);
+const _: () = assert!(ARENA_PAGES * extents::PAGE >= MAX_SOURCE + MAX_BC);
+const _: () = assert!(PAGE as usize == extents::PAGE);
+
+fn cur_bc_off(side: u8) -> u32 {
+    CUR_BC_OFF + side as u32 * CUR_BC_MAX
+}
+
+/// Partition-relative offset of an arena page.
+fn arena_off(page: u16) -> u32 {
+    ARENA_OFF + page as u32 * PAGE
+}
+
+/// Absolute flash offsets of the ad-hoc slot's (src, bc) data, or None when
+/// the storage partition is absent. Lengths come from the RAM meta
+/// (shared::SrcLoc/BcLoc) -- the header page is for future boot-time use.
+pub fn current_slot_abs() -> Option<(u32, u32)> {
+    let start = REGION.load(Ordering::Relaxed);
+    if start == 0 {
+        return None;
+    }
+    let side = CUR_BC_SIDE.load(Ordering::Relaxed);
+    Some((start + CUR_SRC_OFF, start + cur_bc_off(side)))
+}
+
+// --- the mapped extent region (flashmap.rs) ---
+
+static RAW_BASE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static RAW_MAPPED_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The extent region as memory, if the boot-time mapping succeeded; None =
+/// every reader takes the read_nor path instead (`flashmap-off`, or a
+/// refused self-check) — the store still works, it just copies.
+pub fn raw() -> Option<&'static [u8]> {
+    let base = RAW_BASE.load(Ordering::Acquire);
+    if base == 0 {
+        return None;
+    }
+    let len = RAW_MAPPED_LEN.load(Ordering::Acquire);
+    // SAFETY: base/len come from a flashmap::Mapped leaked in map_ext.
+    Some(unsafe { core::slice::from_raw_parts(base as *const u8, len) })
+}
+
+/// Map the extent region read-only through the cache MMU and prove it (the
+/// header page read both ways must agree) — same discipline as
+/// assets::map_region. Once, from init, right after REGION resolves.
+#[inline(never)]
+fn map_ext(start: u32) {
+    let m = match crate::flashmap::map(start + EXT_OFF, EXT_LEN) {
+        Ok(m) => m,
+        Err(e) => {
+            println!("flashmap: pattern store not mapped ({:?}) — flash-controller reads", e);
+            return;
+        }
+    };
+    let mut via_nor = alloc::vec![0u8; PAGE as usize];
+    let ok = crate::assets::read_chunk(start + EXT_OFF, &mut via_nor)
+        && via_nor[..] == m.bytes()[..PAGE as usize];
+    drop(via_nor);
+    if !ok {
+        println!(
+            "flashmap: pattern store self-check FAILED at 0x{:x} — unmapping, flash-controller reads",
+            m.vaddr()
+        );
+        crate::flashmap::unmap(m);
+        return;
+    }
+    println!(
+        "flashmap: pattern store 0x{:x}+0x{:x} -> 0x{:x} ({} x {} KiB pages from entry {}), self-check ok",
+        m.phys(),
+        EXT_LEN,
+        m.vaddr(),
+        m.pages(),
+        crate::flashmap::page_size() / 1024,
+        m.first_entry()
+    );
+    let b = m.leak();
+    RAW_MAPPED_LEN.store(b.len(), Ordering::Release);
+    RAW_BASE.store(b.as_ptr() as usize, Ordering::Release);
+}
+
+/// `len` bytes at partition-relative `rel` (inside the extent region) as
+/// mapped memory.
+fn raw_slice(rel: u32, len: usize) -> Option<&'static [u8]> {
+    let r = raw()?;
+    let s = rel.checked_sub(EXT_OFF)? as usize;
+    r.get(s..s.checked_add(len)?)
+}
+
+/// After a raw write: drop the cache lines the write made stale.
+fn raw_invalidate(rel: u32, len: usize) {
+    if let Some(s) = raw_slice(rel, len) {
+        crate::flashmap::invalidate_slice(s);
     }
 }
 
-async fn read_source(
-    af: &mut AsyncFlash<'_>,
-    range: Range<u32>,
-    buf: &mut [u8],
-    seq: u32,
-    gen: u8,
-    count: u8,
-) -> Option<String> {
-    let cache = store_cache();
-    // The count comes from a stored TOC record — never trust it with an
-    // infallible alloc. A corrupt record on the Athom claimed 32 chunks
-    // (120 KB: 4× the writer's own MC cap) and the with_capacity here
-    // OOM-panic-rebooted the device on every /api/patterns/<id> fetch,
-    // i.e. every web-app cold load (found via serial, 2026-08-15).
-    if count > MC {
+/// The ad-hoc read-back slot's running bytecode side, mapped.
+pub fn current_slot_code(len: usize) -> Option<&'static [u8]> {
+    if len == 0 || len > CUR_BC_MAX as usize || REGION.load(Ordering::Relaxed) == 0 {
         return None;
     }
-    // pre-size to avoid Vec doubling (a large pattern's peak alloc matters on
-    // a fragmented heap — see get_json), but fallibly.
-    let mut out: Vec<u8> = Vec::new();
-    if out.try_reserve_exact(count as usize * CHUNK).is_err() {
-        return None;
-    }
-    for c in 0..count {
-        let key = chunk_key(seq, gen, c);
-        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), cache, buf, &key).await {
-            Ok(Some(bytes)) => out.extend_from_slice(bytes),
-            _ => return None,
-        }
-    }
-    String::from_utf8(out).ok()
+    raw_slice(cur_bc_off(CUR_BC_SIDE.load(Ordering::Relaxed)), len)
 }
 
-/// Reassemble a pattern's LXBC bytecode from its chunks.
-async fn read_bc(
-    af: &mut AsyncFlash<'_>,
-    range: Range<u32>,
-    buf: &mut [u8],
-    seq: u32,
-    gen: u8,
-    bc_count: u8,
-) -> Option<Vec<u8>> {
-    let cache = store_cache();
-    // Same defense as read_source: bc_count is untrusted stored data.
-    if bc_count > MC_BC {
+/// The ad-hoc read-back slot's source, mapped.
+pub fn current_slot_src(len: usize) -> Option<&'static [u8]> {
+    if len == 0 || len > CUR_SRC_MAX as usize || REGION.load(Ordering::Relaxed) == 0 {
         return None;
     }
+    raw_slice(CUR_SRC_OFF, len)
+}
+
+const FNV_INIT: u32 = 0x811c_9dc5;
+
+/// Incremental FNV-1a (same function as luxel_core::netin::fnv1a).
+fn fnv1a_update(mut h: u32, bytes: &[u8]) -> u32 {
+    for &b in bytes {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+fn fnv1a(bytes: &[u8]) -> u32 {
+    fnv1a_update(FNV_INIT, bytes)
+}
+
+// --- reading an extent ---
+
+/// An extent's bytes as MAPPED memory — the zero-copy path. None when the
+/// region is not mapped (`flashmap-off` / refused self-check).
+fn ext_slice(e: &extents::Extent) -> Option<&'static [u8]> {
+    raw_slice(arena_off(e.start), e.len as usize)
+}
+
+/// An extent's bytes in a transient fallible Vec — the `flashmap-off`
+/// fallback, and the only path that ever copies a stored blob.
+fn ext_vec(e: &extents::Extent) -> Option<Vec<u8>> {
+    let len = e.len as usize;
     let mut out: Vec<u8> = Vec::new();
-    if out.try_reserve_exact(bc_count as usize * CHUNK).is_err() {
+    if out.try_reserve_exact(len).is_err() {
+        println!("store: {} B extent buffer failed to allocate", len);
         return None;
     }
-    for c in 0..bc_count {
-        let key = bc_chunk_key(seq, gen, c);
-        match map::fetch_item::<u32, &[u8], _>(af, range.clone(), cache, buf, &key).await {
-            Ok(Some(bytes)) => out.extend_from_slice(bytes),
-            _ => return None,
+    if let Some(b) = ext_slice(e) {
+        out.extend_from_slice(b);
+        return Some(out);
+    }
+    let region = REGION.load(Ordering::Relaxed);
+    if region == 0 {
+        return None;
+    }
+    out.resize(len, 0);
+    let base = region + arena_off(e.start);
+    let mut at = 0usize;
+    while at < len {
+        let n = (len - at).min(PAGE as usize);
+        if !crate::assets::read_chunk(base + at as u32, &mut out[at..at + n]) {
+            return None;
         }
+        at += n;
     }
     Some(out)
 }
 
-/// Write all chunks under `gen`, then the meta (the atomic commit).
-async fn write_pattern(
-    af: &mut AsyncFlash<'_>,
-    range: Range<u32>,
-    buf: &mut [u8],
-    seq: u32,
-    gen: u8,
-    count: u8,
-    bc_count: u8,
-    name: &str,
-    source: &str,
-    bc: &[u8],
-) -> Result<(), ()> {
-    let cache = store_cache();
-    let bytes = source.as_bytes();
-    for c in 0..count {
-        let s = c as usize * CHUNK;
-        let e = (s + CHUNK).min(bytes.len());
-        let chunk: &[u8] = &bytes[s..e];
-        let key = chunk_key(seq, gen, c);
-        if map::store_item(af, range.clone(), cache, buf, &key, &chunk).await.is_err() {
-            return Err(());
+/// FNV-1a of an extent's flash bytes — through the mapping when there is
+/// one, else streamed a page at a time through the flash controller (no
+/// large allocation either way). This is the proof a write landed and the
+/// boot-time check that an extent is not torn.
+fn ext_hash(e: &extents::Extent) -> Option<u32> {
+    if let Some(b) = ext_slice(e) {
+        return Some(fnv1a(b));
+    }
+    let region = REGION.load(Ordering::Relaxed);
+    if region == 0 {
+        return None;
+    }
+    let len = e.len as usize;
+    let base = region + arena_off(e.start);
+    let mut buf = alloc::vec![0u8; PAGE as usize];
+    let mut h = FNV_INIT;
+    let mut at = 0usize;
+    while at < len {
+        let n = (len - at).min(PAGE as usize);
+        if !crate::assets::read_chunk(base + at as u32, &mut buf[..n]) {
+            return None;
         }
+        h = fnv1a_update(h, &buf[..n]);
+        at += n;
     }
-    for c in 0..bc_count {
-        let s = c as usize * CHUNK;
-        let e = (s + CHUNK).min(bc.len());
-        let chunk: &[u8] = &bc[s..e];
-        let key = bc_chunk_key(seq, gen, c);
-        if map::store_item(af, range.clone(), cache, buf, &key, &chunk).await.is_err() {
-            return Err(());
-        }
-    }
-    let meta = serialize_meta(gen, count, bc_count, name);
-    let mslice: &[u8] = &meta;
-    if map::store_item(af, range.clone(), cache, buf, &meta_key(seq), &mslice).await.is_err() {
-        return Err(());
-    }
-    Ok(())
+    Some(h)
 }
 
-/// Best-effort removal of a generation's source + bytecode chunks
-/// (post-commit cleanup, or full delete when paired with meta removal).
-async fn remove_chunks(
-    af: &mut AsyncFlash<'_>,
-    range: Range<u32>,
-    buf: &mut [u8],
-    seq: u32,
-    gen: u8,
-    count: u8,
-    bc_count: u8,
-) {
-    let cache = store_cache();
-    for c in 0..count {
-        let key = chunk_key(seq, gen, c);
-        let _ = map::remove_item::<u32, _>(af, range.clone(), cache, buf, &key).await;
+// --- the extent directory + its concurrency rules ---
+
+/// Zero pages until [init] installs the real size — an all-zero
+/// initializer keeps the directory in .bss instead of .data (it is image
+/// bytes otherwise, and the OTA slot is the scarce resource). A 0-page
+/// directory refuses every allocation, which is exactly what a device
+/// whose store never came up should do.
+static ARENA: BlockingMutex<CriticalSectionRawMutex, RefCell<extents::Dir>> =
+    BlockingMutex::new(RefCell::new(extents::Dir::new(0)));
+
+/// Store concurrency: `0` idle, [WRITER] a mutating transaction in flight,
+/// anything else a count of mapped readers.
+///
+/// A mutation (save, delete, compaction) frees and moves pages an unpinned
+/// reader may be looking at, so the two exclude each other. Pinned reads
+/// (the RUNNING pattern — see the pin set) need no guard at all: nothing
+/// ever moves or frees a pinned extent. Readers hold the guard only across
+/// SYNCHRONOUS copies (microseconds), so a writer's retry converges.
+static BUSY: AtomicU32 = AtomicU32::new(0);
+const WRITER: u32 = u32::MAX;
+
+struct StoreWrite;
+struct MapRead;
+
+impl StoreWrite {
+    /// None when a mutation or an unpinned mapped read is in flight (the
+    /// caller retries or degrades; it never blocks).
+    fn take() -> Option<StoreWrite> {
+        // ARENA.lock is the critical section that makes this test-and-set
+        // atomic across both cores -- no extra primitive needed.
+        ARENA.lock(|_| {
+            if BUSY.load(Ordering::Relaxed) != 0 {
+                return None;
+            }
+            BUSY.store(WRITER, Ordering::Relaxed);
+            Some(StoreWrite)
+        })
     }
-    for c in 0..bc_count {
-        let key = bc_chunk_key(seq, gen, c);
-        let _ = map::remove_item::<u32, _>(af, range.clone(), cache, buf, &key).await;
+    /// Same, waiting up to ~1 s for a reader or another writer to finish.
+    async fn acquire() -> Option<StoreWrite> {
+        for _ in 0..50 {
+            if let Some(g) = StoreWrite::take() {
+                return Some(g);
+            }
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(20)).await;
+        }
+        None
+    }
+}
+impl Drop for StoreWrite {
+    fn drop(&mut self) {
+        ARENA.lock(|_| BUSY.store(0, Ordering::Relaxed));
     }
 }
 
-/// Resolve the `storage` partition and build the RAM index. Disables the
-/// store (REGION = 0) if the partition is absent (old table).
+impl MapRead {
+    fn take() -> Option<MapRead> {
+        ARENA.lock(|_| {
+            let n = BUSY.load(Ordering::Relaxed);
+            if n == WRITER || n == WRITER - 1 {
+                return None;
+            }
+            BUSY.store(n + 1, Ordering::Relaxed);
+            Some(MapRead)
+        })
+    }
+    /// Same, waiting up to ~200 ms for a mutation to finish.
+    async fn acquire() -> Option<MapRead> {
+        for _ in 0..20 {
+            if let Some(g) = MapRead::take() {
+                return Some(g);
+            }
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
+        }
+        None
+    }
+}
+impl Drop for MapRead {
+    fn drop(&mut self) {
+        ARENA.lock(|_| {
+            let n = BUSY.load(Ordering::Relaxed);
+            BUSY.store(n.saturating_sub(1), Ordering::Relaxed);
+        });
+    }
+}
+
+/// Serialize the whole directory — pattern section then extent table — and
+/// write it as ONE map item. This is the store's atomic commit point: an
+/// extent is only ever reachable after the item that names it landed. The
+/// staging buffer is a heap Vec, never a stack array: this runs at
+/// picoserve depth on the shared main-task stack.
+fn persist_dir() -> bool {
+    let mut buf = alloc::vec![0u8; DIR_SER_MAX];
+    buf[0] = DIR_PAT_VER;
+    let mut at = 2usize;
+    let count = INDEX.lock(|c| {
+        let idx = c.borrow();
+        let mut n = 0u8;
+        for e in idx.iter().take(MAX_PATTERNS) {
+            let nb = e.name.as_bytes();
+            let nl = nb.len().min(MAX_NAME);
+            buf[at..at + 4].copy_from_slice(&e.seq.to_le_bytes());
+            buf[at + 4] = e.gen;
+            buf[at + 5] = nl as u8;
+            buf[at + 6..at + 6 + nl].copy_from_slice(&nb[..nl]);
+            at += 6 + nl;
+            n += 1;
+        }
+        n
+    });
+    buf[1] = count;
+    let m = ARENA.lock(|c| c.borrow().to_bytes(&mut buf[at..]));
+    if m == 0 {
+        return false;
+    }
+    at += m;
+    store_blob(DIR_KEY, &buf[..at])
+}
+
+/// Parse a persisted directory. Anything malformed yields an EMPTY store —
+/// never a partly-believed one.
+fn parse_dir(b: &[u8]) -> (Vec<Entry>, extents::Dir, u32) {
+    let empty = || (Vec::new(), extents::Dir::new(ARENA_PAGES as u16), 0u32);
+    if b.len() < 2 || b[0] != DIR_PAT_VER {
+        return empty();
+    }
+    let n = b[1] as usize;
+    if n > MAX_PATTERNS {
+        return empty();
+    }
+    let mut out: Vec<Entry> = Vec::new();
+    let mut at = 2usize;
+    for _ in 0..n {
+        if at + 6 > b.len() {
+            return empty();
+        }
+        let seq = u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+        let gen = b[at + 4] & 1; // clamp to {0,1} so `1 - gen` can't underflow
+        let nl = b[at + 5] as usize;
+        if nl == 0 || nl > MAX_NAME || at + 6 + nl > b.len() {
+            return empty();
+        }
+        let Ok(name) = core::str::from_utf8(&b[at + 6..at + 6 + nl]) else {
+            return empty();
+        };
+        out.push(Entry { seq, gen, name: String::from(name) });
+        at += 6 + nl;
+    }
+    let (dir, dropped) = extents::Dir::from_bytes(&b[at..], ARENA_PAGES as u16);
+    (out, dir, dropped)
+}
+
+/// An extent's length is bounded by its kind's cap — a stored record that
+/// claims more is corrupt (and its `pages()` would over-claim the bitmap).
+fn plausible(e: &extents::Extent) -> bool {
+    let cap = if e.kind == KIND_SRC { MAX_SOURCE } else { MAX_BC };
+    e.kind <= KIND_SRC && e.len as usize <= cap
+}
+
+/// Resolve the `storage` partition, map the extent region, and load the
+/// directory. Disables the store (REGION = 0) if the partition is absent
+/// (old table).
 pub fn init() {
     let start = match crate::ota::data_partition("storage") {
         Some((off, len)) if len >= PAT_LEN => off,
@@ -445,10 +793,14 @@ pub fn init() {
         println!("patterns: storage @ {:#x}, expected {:#x} (csv drift?)", start, PAT_START);
     }
     REGION.store(start, Ordering::Relaxed);
-    map_raw(start);
+    map_ext(start);
+    if raw().is_none() {
+        println!("patterns: extent region unmapped — blobs read through the flash controller");
+    }
 
-    let entries = with_store!(start, |af, range, buf| {
-        // Format check: wipe storage if the on-flash layout isn't ours.
+    // Format check: wipe the key area if the on-flash layout isn't ours.
+    // There is no migration path by design (#330) — the playground resyncs.
+    let fresh = with_store!(start, |af, range, buf| {
         let cache = store_cache();
         let fmt = match map::fetch_item::<u32, &[u8], _>(
             &mut af, range.clone(), cache, buf, &FORMAT_KEY,
@@ -458,51 +810,58 @@ pub fn init() {
             Ok(Some(b)) if b.len() == 4 => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
             _ => 0,
         };
-        if fmt != FORMAT_VERSION {
-            println!("patterns: format {} != {}, wiping storage", fmt, FORMAT_VERSION);
-            let _ = anf::NorFlash::erase(&mut af, range.start, range.end).await;
-            // erased behind sequential-storage's back — the shared cache
-            // still describes the old contents
-            *store_cache() = PageStateCache::new();
-            let ver = FORMAT_VERSION.to_le_bytes();
-            let vslice: &[u8] = &ver;
-            let c2 = store_cache();
-            let _ = map::store_item(&mut af, range.clone(), c2, buf, &FORMAT_KEY, &vslice).await;
-            return Vec::new();
+        if fmt == FORMAT_VERSION {
+            return false;
         }
-
-        // Discover meta seqs by scanning, then read each authoritative meta.
-        let mut seqs: Vec<u32> = Vec::new();
-        let cache = store_cache();
-        if let Ok(mut iter) =
-            map::fetch_all_items::<u32, _, _>(&mut af, range.clone(), cache, buf).await
-        {
-            while let Ok(Some((key, _))) = iter.next::<u32, &[u8]>(buf).await {
-                if key & CHUNK_FLAG == 0 && key != FORMAT_KEY && !seqs.contains(&key) {
-                    seqs.push(key); // a meta key
-                }
-            }
-        }
-        let mut out: Vec<Entry> = Vec::new();
-        for seq in seqs {
-            if let Some((gen, count, bc_count, name)) =
-                read_meta(&mut af, range.clone(), buf, seq).await
-            {
-                out.push(Entry { seq, gen, count, bc_count, name });
-            }
-        }
-        out
+        println!("patterns: format {} != {}, wiping storage", fmt, FORMAT_VERSION);
+        let _ = anf::NorFlash::erase(&mut af, range.start, range.end).await;
+        // erased behind sequential-storage's back — the shared cache
+        // still describes the old contents
+        *store_cache() = PageStateCache::new();
+        let ver = FORMAT_VERSION.to_le_bytes();
+        let vslice: &[u8] = &ver;
+        let c2 = store_cache();
+        let _ = map::store_item(&mut af, range.clone(), c2, buf, &FORMAT_KEY, &vslice).await;
+        true
     })
-    .unwrap_or_default();
+    .unwrap_or(true);
+    // The extent region is left alone by a wipe: with no directory nothing
+    // references it, and every page is erased before it is written again.
+
+    let stored = if fresh { None } else { read_blob(DIR_KEY) };
+    let (mut entries, mut dir, mut dropped) = match stored.as_deref() {
+        Some(b) => parse_dir(b),
+        None => (Vec::new(), extents::Dir::new(ARENA_PAGES as u16), 0),
+    };
+    // Drop every extent the flash itself does not vouch for: a torn write,
+    // a layout change, or a record claiming more than its kind's cap.
+    dropped += dir.retain(|e| plausible(e) && ext_hash(e) == Some(e.hash)) as u32;
+    // A pattern needs BOTH of its current generation's extents to be
+    // readable; otherwise it is gone (the playground re-syncs it).
+    let before = entries.len();
+    entries.retain(|p| {
+        dir.find(p.seq, p.gen, KIND_SRC).is_some() && dir.find(p.seq, p.gen, KIND_BC).is_some()
+    });
+    let lost = (before - entries.len()) as u32;
+    // ...and an extent whose pattern is gone goes with it.
+    dropped += dir.retain(|e| entries.iter().any(|p| p.seq == e.seq && p.gen == e.gen)) as u32;
 
     let mut next = 0u32;
     for e in &entries {
         next = next.max(e.seq.wrapping_add(1));
     }
     NEXT_SEQ.store(next, Ordering::Relaxed);
-    println!("patterns: {} stored (storage @ {:#x})", entries.len(), start);
+    let (exts, used) = (dir.count(), dir.used_pages());
+    let npat = entries.len();
     INDEX.lock(|c| *c.borrow_mut() = entries);
-    arena_init();
+    ARENA.lock(|c| *c.borrow_mut() = dir);
+    println!(
+        "patterns: store {} pages, {} patterns, {} extents ({} dropped, {} patterns lost), {} pages used (storage @ {:#x})",
+        ARENA_PAGES, npat, exts, dropped, lost, used, start
+    );
+    if dropped > 0 || lost > 0 {
+        persist_dir();
+    }
 }
 
 /// `GET /api/patterns` → `{"patterns":[{"id","name"},…]}` (from RAM index).
@@ -546,15 +905,23 @@ pub fn id_by_name(name: &str) -> Option<String> {
     })
 }
 
-/// Look up a pattern's (gen, count, bc_count, name) in the RAM index by id.
-fn lookup(id: &str) -> Option<(u32, u8, u8, u8, String)> {
+/// Look up a pattern's (seq, gen, name) in the RAM index by id.
+#[inline(never)]
+fn lookup(id: &str) -> Option<(u32, u8, String)> {
     let seq = seq_of(id)?;
     INDEX.lock(|c| {
         c.borrow()
             .iter()
             .find(|e| e.seq == seq)
-            .map(|e| (e.seq, e.gen, e.count, e.bc_count, e.name.clone()))
+            .map(|e| (e.seq, e.gen, e.name.clone()))
     })
+}
+
+/// The extent holding a stored pattern's current `kind` blob.
+#[inline(never)]
+fn extent_of(id: &str, kind: u8) -> Option<extents::Extent> {
+    let (seq, gen, _) = lookup(id)?;
+    ARENA.lock(|c| c.borrow().find(seq, gen, kind).map(|(_, e)| e))
 }
 
 /// Escape a string as JSON *into* an existing buffer — no intermediate
@@ -577,217 +944,129 @@ fn escape_into(out: &mut String, s: &str) {
 }
 
 /// `GET /api/patterns/<id>` → `{"id","name","source"}` | None.
-pub fn get_json(id: &str) -> Option<String> {
-    let (seq, gen, count, _, name) = lookup(id)?;
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return None;
-    }
-    let source = with_store!(start, |af, range, buf| {
-        read_source(&mut af, range, buf, seq, gen, count).await
-    })
-    .flatten()?;
-    // Build the response in ONE pre-sized allocation, escaping in place. A
-    // large pattern's source made the old `format!(json_escape(..))` path —
-    // an ~11 KB intermediate plus a doubling result buffer — request a ~22 KB
-    // contiguous block and OOM on a fragmented heap.
-    let mut out = String::with_capacity(source.len() + source.len() / 8 + name.len() + 48);
+///
+/// The source is read STRAIGHT OUT OF THE MAPPING and escaped into one
+/// pre-sized response buffer — no source Vec, no intermediate copy. The
+/// read guard is held across that synchronous copy only, so a concurrent
+/// save waits microseconds; if a save or compaction is already running we
+/// wait for it (up to ~200 ms) rather than reporting the pattern missing.
+pub async fn get_json(id: &str) -> Option<String> {
+    let (_, _, name) = lookup(id)?;
+    let e = extent_of(id, KIND_SRC)?;
+    let guard = MapRead::acquire().await?;
+    let len = e.len as usize;
+    let mut out = String::new();
+    out.try_reserve_exact(len + len / 8 + name.len() + 48).ok()?;
     push_piece(&mut out, "{\"id\":\"");
     push_piece(&mut out, id);
     push_piece(&mut out, "\",\"name\":\"");
     escape_into(&mut out, &name);
     push_piece(&mut out, "\",\"source\":\"");
-    escape_into(&mut out, &source);
+    match ext_slice(&e) {
+        Some(b) => escape_into(&mut out, core::str::from_utf8(b).ok()?),
+        None => {
+            // flashmap-off: the one path that still copies
+            let v = ext_vec(&e)?;
+            escape_into(&mut out, core::str::from_utf8(&v).ok()?);
+        }
+    }
+    drop(guard);
     push_piece(&mut out, "\"}");
     Some(out)
 }
 
-/// Read a stored pattern's source (editor read-back, sync envelope).
-pub fn source_of(id: &str) -> Option<String> {
-    let (seq, gen, count, _, _) = lookup(id)?;
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return None;
-    }
-    with_store!(start, |af, range, buf| {
-        read_source(&mut af, range, buf, seq, gen, count).await
-    })
-    .flatten()
+/// A stored pattern's SOURCE as mapped memory — served in place. The
+/// caller must hold a pin on the pattern (the running one always is) or a
+/// [MapRead] guard: the bytes are flash the store may otherwise move.
+pub fn source_slice(id: &str) -> Option<&'static [u8]> {
+    ext_slice(&extent_of(id, KIND_SRC)?)
 }
 
-/// Read a stored pattern's LXBC bytecode (what activation executes).
+/// A stored pattern's source in a transient Vec — the `flashmap-off`
+/// fallback for [source_slice].
+pub fn source_vec(id: &str) -> Option<Vec<u8>> {
+    ext_vec(&extent_of(id, KIND_SRC)?)
+}
+
+/// Read a stored pattern's LXBC bytecode into a transient Vec — the
+/// `flashmap-off` fallback for [code_of].
 pub fn bytecode_of(id: &str) -> Option<Vec<u8>> {
-    let (seq, gen, _, bc_count, _) = lookup(id)?;
-    if bc_count == 0 {
-        return None;
-    }
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return None;
-    }
-    with_store!(start, |af, range, buf| {
-        read_bc(&mut af, range, buf, seq, gen, bc_count).await
-    })
-    .flatten()
+    ext_vec(&extent_of(id, KIND_BC)?)
 }
 
-/// Upper bound on a stored pattern's source + bytecode bytes, from the TOC
-/// chunk counts alone — no flash reads, no allocation. For heap pre-flights.
+/// A stored pattern's executable bytes, MAPPED. The engine executes these
+/// IN PLACE (`deserialize_lean_static`), so the slice must stay valid for
+/// as long as the `Program` does: pin the pattern ([pin_code] /
+/// [pin_running] / [pin_prev_from_running]) before taking one and hold the
+/// pin until the engine is dropped. The store never writes, moves or frees
+/// a pinned extent.
+pub fn code_of(id: &str) -> Option<&'static [u8]> {
+    ext_slice(&extent_of(id, KIND_BC)?)
+}
+
+/// Run `f` over a stored pattern's bytecode: the mapped extent when the
+/// region is mapped (no copy), else a transient Vec.
+pub fn with_code<R>(id: &str, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+    if let Some(c) = code_of(id) {
+        return Some(f(c));
+    }
+    bytecode_of(id).map(|v| f(&v))
+}
+
+/// Does a stored pattern's bytecode still decode on this firmware?
+/// None = no such pattern / no bytecode.
+#[inline(never)]
+pub fn validate_stored(id: &str) -> Option<Result<(), luxel_core::bytecode::BcError>> {
+    with_code(id, |bc| luxel_core::bytecode::validate(bc).map(|_| ()))
+}
+
+/// (source length, FNV-1a of the source) — the identity hash + Content-Length
+/// a library swap stamps. Both are directory fields now: no flash read, no
+/// allocation, and the hash is the same one the store verified the extent
+/// with (`luxel_core::netin::fnv1a` over the source bytes).
+pub fn source_stat(id: &str) -> Option<(usize, u32)> {
+    extent_of(id, KIND_SRC).map(|e| (e.len as usize, e.hash))
+}
+
+/// A stored pattern's source + bytecode bytes — exact, from the directory.
+/// No flash reads, no allocation. For heap pre-flights.
+#[inline(never)]
 pub fn stored_size_hint(id: &str) -> Option<usize> {
-    lookup(id).map(|(_, _, count, bc_count, _)| (count as usize + bc_count as usize) * CHUNK)
+    let src = extent_of(id, KIND_SRC)?.len as usize;
+    let bc = extent_of(id, KIND_BC).map(|e| e.len as usize).unwrap_or(0);
+    Some(src + bc)
 }
 
 /// Human name of a stored pattern.
 pub fn name_of(id: &str) -> Option<String> {
-    lookup(id).map(|(_, _, _, _, name)| name)
+    lookup(id).map(|(_, _, name)| name)
 }
 
-// --- small reserved-key blobs (playlist definition + playback state) ---
-// These live in the meta-space (< CHUNK_FLAG), above any real seq, alongside
-// FORMAT_KEY. Each must fit one flash page.
-pub const PLAYLIST_KEY: u32 = 0x7FFF_FFFE;
-pub const PLAYSTATE_KEY: u32 = 0x7FFF_FFFD;
-pub const MAP_KEY: u32 = 0x7FFF_FFFC;
-/// Single-pattern resume record (see resume.rs).
-pub const RESUME_KEY: u32 = 0x7FFF_FFFB;
-/// Device output palette (see outpal.rs) — variable-length, so it lives
-/// here rather than in the fixed-size nvs device record.
-pub const PALETTE_KEY: u32 = 0x7FFF_FFFA;
-
-/// Store a small blob under a reserved key. False if storage is unavailable or
-/// the blob is too large for one page.
-pub fn store_blob(key: u32, bytes: &[u8]) -> bool {
-    if bytes.len() > CHUNK {
-        return false;
-    }
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return false;
-    }
-    with_store!(start, |af, range, buf| {
-        let cache = store_cache();
-        let b: &[u8] = bytes;
-        map::store_item(&mut af, range.clone(), cache, buf, &key, &b)
-            .await
-            .is_ok()
-    })
-    .unwrap_or(false)
+/// (arena pages in use, arena pages total, stored patterns) for
+/// `/api/status`. A total of 0 means the store never came up.
+pub fn store_stats() -> (u32, u32, u32) {
+    let (used, total) = ARENA.lock(|c| {
+        let d = c.borrow();
+        (d.used_pages(), d.total_pages())
+    });
+    let n = INDEX.lock(|c| c.borrow().len());
+    (used as u32, total as u32, n as u32)
 }
 
-/// Read a blob previously written with [store_blob].
-pub fn read_blob(key: u32) -> Option<Vec<u8>> {
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return None;
-    }
-    with_store!(start, |af, range, buf| {
-        let cache = store_cache();
-        match map::fetch_item::<u32, &[u8], _>(&mut af, range, cache, buf, &key).await {
-            Ok(Some(b)) => Some(b.to_vec()),
-            _ => None,
-        }
-    })
-    .flatten()
-}
-
-// --- running-pattern read-back slot (replaces the old RAM copies) ---
-//
-// The source + blob of the *currently running* pattern used to live in two
-// standing heap Vecs (shared::PATTERN_SRC / PATTERN_BC) purely for read-back
-// (GET /api/pattern, the sync envelope, engine rebuilds). On a heap already
-// dominated by that same running pattern they were the single largest
-// resident cost, so they now live in flash and stream on demand.
-//
-// NOT map items: RAW PAGES in the reserved upper half of the partition
-// (STORE_LEN..PAT_LEN -- sequential-storage never touches it). A first cut
-// stored them as reserved-key map items, and every chunk read was then a
-// NoCache scan over the whole 512 KiB store: dozens of back-to-back
-// cache-off flash reads per chunk starved the WiFi task long enough to
-// drop the NEXT connection's handshake (observed on-device as intermittent
-// dead requests right after a readback). Raw pages make reads direct
-// offset reads -- one short cache-off window per 4 KiB, the exact
-// discipline assets.rs::read_chunk + FlashAsset have soak-proven -- and
-// writes skip the map's GC entirely.
-//
-// The whole raw half is memory-mapped read-only through the cache MMU at
-// boot (flashmap.rs, docs/research/flash-mmap.md "The VM consumer"): the
-// engine executes the running pattern's bytecode IN PLACE from these pages
-// (`current_code`), so no blob Vec exists on the device for a swap or a
-// rebuild. Every writer below invalidates what it wrote before publishing
-// it (cache lines do not watch the flash controller).
-//
-// Layout (offsets relative to the partition base):
-//   CUR_OFF          header page: [magic u32][src_len u32][bc_len u32]
-//                    [bc_side u32], written LAST so a power loss mid-store
-//                    leaves a stale header at worst (the slot is ignored at
-//                    boot anyway -- RAM meta rules within a session)
-//   CUR_SRC_OFF      ad-hoc source bytes (up to CUR_SRC_MAX)
-//   CUR_BC_OFF       ad-hoc LXBC bytes, TWO sides of CUR_BC_MAX: a swap
-//                    writes the side the running engine is NOT executing
-//                    from, so a mapped engine never sees its code change
-//   ARENA_OFF        the library code arena: ARENA_PAGES 4 KiB pages carved
-//                    into contiguous, 4-byte-aligned EXTENTS by the
-//                    page-granular allocator in extents.rs, one stored
-//                    pattern's bytecode each; the directory lives under
-//                    ARENA_KEY in the map
-const RAW_OFF: u32 = STORE_LEN;
-const RAW_LEN: u32 = PAT_LEN - STORE_LEN;
-const CUR_OFF: u32 = RAW_OFF;
-const PAGE: u32 = 4096;
-/// 32 KiB — one page past MAX_SOURCE (30 KB), which is the hard cap on a
-/// stored source and therefore on anything read-back can ever want. It was
-/// 96 KiB until 2026-09-06; the 64 KiB that freed went to the arena
-/// (Gitea #281 — the ad-hoc region is one pattern, the arena is all of them).
-const CUR_SRC_MAX: u32 = 8 * PAGE;
-const CUR_BC_MAX: u32 = 16 * PAGE; // 64 KiB per side
-const CUR_SRC_OFF: u32 = CUR_OFF + PAGE;
-const CUR_BC_OFF: u32 = CUR_SRC_OFF + CUR_SRC_MAX;
-const CUR_MAGIC: u32 = 0x4C58_4350; // "LXCP"
-/// The bc side holding the RUNNING ad-hoc blob (the last successful
-/// store_current); the next store writes the other one.
-static CUR_BC_SIDE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
-/// The arena: everything left in the raw half after the ad-hoc regions.
-/// 0xA9000..0x100000 = 348 KiB = 87 pages, enough for every pattern a
-/// device can hold (MAX_PATTERNS = 24) many times over at the ~1 KB the
-/// median library blob actually costs.
-const ARENA_OFF: u32 = CUR_BC_OFF + 2 * CUR_BC_MAX;
-const ARENA_PAGES: usize = ((RAW_OFF + RAW_LEN - ARENA_OFF) / PAGE) as usize;
-/// Extent directory (reserved-key map item, see the blobs above).
-const ARENA_KEY: u32 = 0x7FFF_FFF9;
-const _: () = assert!(CUR_SRC_MAX as usize >= MAX_SOURCE);
-const _: () = assert!(ARENA_OFF + (ARENA_PAGES as u32) * PAGE <= RAW_OFF + RAW_LEN);
-const _: () = assert!(ARENA_PAGES <= crate::extents::MAX_PAGES);
-const _: () = assert!(ARENA_PAGES * crate::extents::PAGE >= MAX_BC);
-const _: () = assert!(PAGE as usize == crate::extents::PAGE);
-
-fn cur_bc_off(side: u8) -> u32 {
-    CUR_BC_OFF + side as u32 * CUR_BC_MAX
-}
-
-/// Absolute flash offsets of the slot's (src, bc) data, or None when the
-/// storage partition is absent. Lengths come from the RAM meta
-/// (shared::SrcLoc/BcLoc) -- the header page is for future boot-time use.
-pub fn current_slot_abs() -> Option<(u32, u32)> {
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return None;
-    }
-    let side = CUR_BC_SIDE.load(Ordering::Relaxed);
-    Some((start + CUR_SRC_OFF, start + cur_bc_off(side)))
-}
+// --- raw writes ---
 
 /// Write one raw region (erase + word-aligned page writes). Every flash op
 /// borrows the driver via [crate::ota::with_flash] for just that one op --
 /// the driver never leaves the global, so concurrent flash users (asset
-/// serving/pushes, an incoming OTA begin, a store transaction) interleave
-/// between pages instead of reading busy for the whole burst. The previous
-/// take-for-the-whole-burst design starved them: with a 5 s playlist
-/// churning swaps, asset pushes failed 5/6, /api/ota misreported "update
-/// already in progress", and served assets truncated mid-body (measured on
-/// the Athom, 2026-08-15). The 1 ms yields between ops keep WiFi airtime
-/// AND give waiting HTTP tasks a real window to grab the driver.
-/// Best-effort: false when an OTA begins or a store transaction leases the
-/// driver away mid-burst -- the caller degrades (never a panic).
+/// serving/pushes, an incoming OTA begin, a key-area transaction)
+/// interleave between pages instead of reading busy for the whole burst.
+/// The previous take-for-the-whole-burst design starved them: with a 5 s
+/// playlist churning swaps, asset pushes failed 5/6, /api/ota misreported
+/// "update already in progress", and served assets truncated mid-body
+/// (measured on the Athom, 2026-08-15). The 1 ms yields between ops keep
+/// WiFi airtime AND give waiting HTTP tasks a real window to grab the
+/// driver. Best-effort: false when an OTA begins or a key-area transaction
+/// leases the driver away mid-burst -- the caller degrades (never a panic).
 async fn write_raw(abs: u32, data: &[u8]) -> bool {
     let op_ok = |r: Option<bool>| r == Some(true) && !crate::ota::ota_active();
     let end = abs + (data.len() as u32).div_ceil(PAGE) * PAGE;
@@ -826,14 +1105,14 @@ async fn write_raw(abs: u32, data: &[u8]) -> bool {
     true
 }
 
-/// Persist the running pattern's source + blob to the read-back slot. Runs
-/// on the render task's swap path for AD-HOC pushes ONLY (library swaps --
-/// playlist/activate/resume/MQTT -- read back from the pattern store
-/// instead and never touch this slot: the flash-wear fix; see
+/// Persist the running pattern's source + blob to the AD-HOC read-back
+/// slot. Runs on the render task's swap path for ad-hoc pushes ONLY
+/// (library swaps -- playlist/activate/resume/MQTT -- already have their
+/// bytes as extents and never touch this slot: the flash-wear fix; see
 /// main.rs::persist_current_pattern). A brief hitch (a few dozen page
 /// erases/writes with yields between them), borrowing the driver per op
 /// (see [write_raw]) instead of monopolizing it. Best-effort: false if
-/// storage is absent, an OTA is in progress, a store transaction leases
+/// storage is absent, an OTA is in progress, a key-area transaction leases
 /// the driver away mid-burst, or the pattern is implausibly large --
 /// read-back degrades until the next swap (documented per caller).
 pub async fn store_current(src: &str, bc: &[u8]) -> bool {
@@ -871,11 +1150,12 @@ pub async fn store_current(src: &str, bc: &[u8]) -> bool {
     ok
 }
 
-/// Read the running pattern's whole blob back from flash into a TRANSIENT
-/// fallible Vec -- the engine rebuild (pixel-count / map change) needs it
-/// contiguous to deserialize, then drops it immediately. `len` comes from
-/// the RAM meta. None on a failed reservation or a flash-busy read; the
-/// caller keeps the engine paused rather than panicking.
+/// Read the running AD-HOC pattern's whole blob back from flash into a
+/// TRANSIENT fallible Vec -- the engine rebuild (pixel-count / map change)
+/// needs it contiguous to deserialize, then drops it immediately. `len`
+/// comes from the RAM meta. None on a failed reservation or a flash-busy
+/// read; the caller keeps the engine paused rather than panicking. Only
+/// reached when the region is not mapped.
 pub fn read_current_bc(len: usize) -> Option<Vec<u8>> {
     let (_, bc_abs) = current_slot_abs()?;
     let mut out: Vec<u8> = Vec::new();
@@ -896,12 +1176,61 @@ pub fn read_current_bc(len: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
+// --- save / delete ---
+
+fn err_json(msg: &str) -> String {
+    let mut out = String::new();
+    push_piece(&mut out, "{\"ok\":false,\"error\":\"");
+    push_piece(&mut out, msg);
+    push_piece(&mut out, "\"}");
+    out
+}
+
+/// Reserve an extent's pages in the RAM directory. Nothing on flash yet
+/// and nothing reachable — the new generation only becomes findable when
+/// the pattern index moves to it, after both blobs verify.
+fn reserve(seq: u32, gen: u8, kind: u8, len: usize, hash: u32) -> Option<extents::Extent> {
+    ARENA.lock(|c| {
+        let mut d = c.borrow_mut();
+        let start = d.first_fit(extents::pages_for(len as u32))?;
+        let e = extents::Extent { seq, gen, kind, start, len: len as u32, hash };
+        d.insert(e).map(|_| e)
+    })
+}
+
+fn release(e: &extents::Extent) {
+    ARENA.lock(|c| {
+        let mut d = c.borrow_mut();
+        if let Some((i, _)) = d.find(e.seq, e.gen, e.kind) {
+            d.remove(i);
+        }
+    });
+}
+
+/// Write one blob into its reserved extent, then prove it: invalidate the
+/// cache lines the write made stale and re-hash the bytes as the readers
+/// will see them.
+async fn write_extent(region: u32, e: &extents::Extent, data: &[u8]) -> bool {
+    let rel = arena_off(e.start);
+    if !write_raw(region + rel, data).await {
+        return false;
+    }
+    raw_invalidate(rel, data.len());
+    ext_hash(e) == Some(e.hash)
+}
+
 /// `POST /api/patterns` (LXP1 envelope) → `{"ok":true,"id"}`.
 /// Upserts by name. Caller decode-validates the bytecode first.
-pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
+///
+/// One extent write per blob and one directory item: the source and the
+/// bytecode are written once each, verified through the mapping, and only
+/// then does the directory name them. A power cut before that leaves the
+/// previous generation whole; a cut after it leaves at most a superseded
+/// extent, which the next save sweeps.
+pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
     let name = name.trim();
     if name.is_empty() || name.len() > MAX_NAME {
-        return String::from("{\"ok\":false,\"error\":\"name must be 1..=64 bytes\"}");
+        return err_json("name must be 1..=64 bytes");
     }
     if source.is_empty() || source.len() > MAX_SOURCE {
         let mut out = String::new();
@@ -921,36 +1250,37 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
         push_piece(&mut out, " KB)\"}");
         return out;
     }
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return String::from(
-            "{\"ok\":false,\"error\":\"pattern storage unavailable (device needs reflash)\"}",
-        );
+    let region = REGION.load(Ordering::Relaxed);
+    if region == 0 {
+        return err_json("pattern storage unavailable (device needs reflash)");
+    }
+    if crate::ota::ota_active() {
+        return err_json("an update is in progress — try again in a moment");
+    }
+    let Some(_guard) = StoreWrite::acquire().await else {
+        return err_json("the store is busy — try again in a moment");
+    };
+    if sweep_unreferenced() > 0 {
+        persist_dir();
     }
 
     // Decide seq + generation under the index lock.
     enum Plan {
-        Update { seq: u32, new_gen: u8, old_gen: u8, old_count: u8, old_bc: u8 },
+        Update { seq: u32, new_gen: u8 },
         New { seq: u32 },
         Full,
     }
     let plan = INDEX.lock(|c| {
         let idx = c.borrow();
         if let Some(e) = idx.iter().find(|e| e.name == name) {
-            Plan::Update {
-                seq: e.seq,
-                new_gen: 1 - e.gen,
-                old_gen: e.gen,
-                old_count: e.count,
-                old_bc: e.bc_count,
-            }
+            Plan::Update { seq: e.seq, new_gen: 1 - e.gen }
         } else if idx.len() >= MAX_PATTERNS {
             Plan::Full
         } else {
             Plan::New { seq: NEXT_SEQ.load(Ordering::Relaxed) }
         }
     });
-    let (seq, new_gen, old_gen, old_count, old_bc, is_new) = match plan {
+    let (seq, new_gen, is_new) = match plan {
         Plan::Full => {
             let mut out = String::new();
             push_piece(&mut out, "{\"ok\":false,\"error\":\"the device library is full (");
@@ -958,48 +1288,92 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
             push_piece(&mut out, " patterns) — delete one first\"}");
             return out;
         }
-        Plan::New { seq } => (seq, 0u8, 0u8, 0u8, 0u8, true),
-        Plan::Update { seq, new_gen, old_gen, old_count, old_bc } => {
-            (seq, new_gen, old_gen, old_count, old_bc, false)
-        }
+        Plan::New { seq } => (seq, 0u8, true),
+        Plan::Update { seq, new_gen } => (seq, new_gen, false),
     };
-    let count = source.len().div_ceil(CHUNK) as u8;
-    let bc_count = bc.len().div_ceil(CHUNK) as u8;
 
-    let committed = with_store!(start, |af, range, buf| {
-        if write_pattern(
-            &mut af, range.clone(), buf, seq, new_gen, count, bc_count, name, source, bc,
-        )
-        .await
-        .is_err()
-        {
-            return false;
+    // Reserve BOTH extents before writing either: a save that can only
+    // place half of itself must not leave a written orphan behind.
+    let need = extents::pages_for(source.len() as u32) + extents::pages_for(bc.len() as u32);
+    let src_hash = fnv1a(source.as_bytes());
+    let bc_hash = fnv1a(bc);
+    let mut src_e = reserve(seq, new_gen, KIND_SRC, source.len(), src_hash);
+    let mut bc_e = match src_e {
+        Some(_) => reserve(seq, new_gen, KIND_BC, bc.len(), bc_hash),
+        None => None,
+    };
+    if bc_e.is_none() {
+        // No room as things stand. Compaction is a user-action-only cost
+        // (never on the activation path — the wear rule), so this is where
+        // it happens: slide unpinned extents toward page 0 until a run
+        // opens, then retry the reservation.
+        if let Some(e) = src_e.take() {
+            release(&e);
         }
-        // commit done — old generation is now unreferenced; reclaim it.
-        remove_chunks(&mut af, range, buf, seq, old_gen, old_count, old_bc).await;
-        true
-    })
-    .unwrap_or(false);
+        if !compact_for(need, region).await {
+            let (hole, used, total) = ARENA.lock(|c| {
+                let d = c.borrow();
+                (d.largest_hole(), d.used_pages(), d.total_pages())
+            });
+            println!(
+                "patterns: store full — {} needs {} pages, {}/{} used, best hole {}",
+                name, need, used, total, hole
+            );
+            return err_json(
+                "the device's pattern storage is full — delete some patterns and retry",
+            );
+        }
+        src_e = reserve(seq, new_gen, KIND_SRC, source.len(), src_hash);
+        bc_e = match src_e {
+            Some(_) => reserve(seq, new_gen, KIND_BC, bc.len(), bc_hash),
+            None => None,
+        };
+    }
+    let (Some(src_e), Some(bc_e)) = (src_e, bc_e) else {
+        if let Some(e) = src_e {
+            release(&e);
+        }
+        return err_json("the device's pattern storage is full — delete some patterns and retry");
+    };
 
-    if !committed {
-        return String::from(
-            "{\"ok\":false,\"error\":\"couldn't write the pattern to flash — the store may be full; delete some patterns and retry\"}",
+    // Write + verify both blobs. Nothing published yet, so a failure here
+    // just gives the pages back.
+    let written = write_extent(region, &src_e, source.as_bytes()).await
+        && write_extent(region, &bc_e, bc).await;
+    if !written {
+        release(&src_e);
+        release(&bc_e);
+        println!("patterns: extent write of {} failed (pages {} + {})", name, src_e.start, bc_e.start);
+        return err_json(
+            "couldn't write the pattern to flash — the store may be busy; try again in a moment",
         );
     }
 
+    // Publish: the index moves to the new generation and the directory
+    // item lands. THIS is the commit.
     INDEX.lock(|c| {
         let mut idx = c.borrow_mut();
         if let Some(e) = idx.iter_mut().find(|e| e.seq == seq) {
             e.gen = new_gen;
-            e.count = count;
-            e.bc_count = bc_count;
             e.name = String::from(name);
         } else {
-            idx.push(Entry { seq, gen: new_gen, count, bc_count, name: String::from(name) });
+            idx.push(Entry { seq, gen: new_gen, name: String::from(name) });
         }
     });
+    if !persist_dir() {
+        // The bytes are on flash and the RAM directory names them, so this
+        // session is correct; the next boot re-syncs from the playground.
+        println!("patterns: directory write failed — {} lives this session only", name);
+    }
     if is_new {
         NEXT_SEQ.store(seq.wrapping_add(1), Ordering::Relaxed);
+    }
+
+    // The superseded generation may go now — unless an engine is still
+    // executing (or streaming) from it, in which case it stays in the
+    // directory as a stale generation and the next save sweeps it.
+    if !is_new && !pinned(seq) && free_other_gens(seq, new_gen) > 0 {
+        persist_dir();
     }
     let mut out = String::new();
     push_piece(&mut out, "{\"ok\":true,\"id\":\"");
@@ -1008,343 +1382,69 @@ pub fn save(name: &str, source: &str, bc: &[u8]) -> String {
     out
 }
 
+/// Drop every extent of `seq` that is NOT generation `keep_gen`.
+fn free_other_gens(seq: u32, keep_gen: u8) -> usize {
+    ARENA.lock(|c| {
+        let mut d = c.borrow_mut();
+        let mut n = 0;
+        while let Some((i, _)) = d.find_other_gen(seq, keep_gen) {
+            d.remove(i);
+            n += 1;
+        }
+        n
+    })
+}
+
+/// Reclaim every extent the index no longer references — a deleted
+/// pattern's, or the stale generation a re-save of the RUNNING pattern
+/// left behind — except any an engine is still executing from. Runs at the
+/// head of a save (a user action), so playlist churn never pays for it.
+fn sweep_unreferenced() -> usize {
+    let (pin_buf, pin_n) = pins();
+    let held = &pin_buf[..pin_n];
+    let live: Vec<(u32, u8)> =
+        INDEX.lock(|c| c.borrow().iter().map(|e| (e.seq, e.gen)).collect());
+    ARENA.lock(|c| {
+        c.borrow_mut()
+            .retain(|e| held.contains(&e.seq) || live.contains(&(e.seq, e.gen)))
+    })
+}
+
 /// `DELETE /api/patterns/<id>` → `{"ok":true}` | `{"ok":false,…}`.
-pub fn delete(id: &str) -> String {
-    let Some((seq, gen, count, bc_count, _)) = lookup(id) else {
-        return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
+///
+/// A pattern an engine is still executing from KEEPS its extents: dropping
+/// them here would hand its pages to the next save, which would erase them
+/// under the live VM. It is gone from the index, so the next save's sweep
+/// reclaims them once the engine lets go.
+pub async fn delete(id: &str) -> String {
+    let Some((seq, _, _)) = lookup(id) else {
+        return err_json("no such pattern");
     };
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 {
-        return String::from("{\"ok\":false,\"error\":\"no such pattern\"}");
-    }
-    let ok = with_store!(start, |af, range, buf| {
-        let cache = store_cache();
-        let meta_ok =
-            map::remove_item::<u32, _>(&mut af, range.clone(), cache, buf, &meta_key(seq))
-                .await
-                .is_ok();
-        remove_chunks(&mut af, range, buf, seq, gen, count, bc_count).await;
-        meta_ok
-    })
-    .unwrap_or(false);
-
-    if !ok {
-        return String::from("{\"ok\":false,\"error\":\"flash error\"}");
-    }
+    let Some(_guard) = StoreWrite::acquire().await else {
+        return err_json("the store is busy — try again in a moment");
+    };
     INDEX.lock(|c| c.borrow_mut().retain(|e| e.seq != seq));
-    arena_forget(seq);
+    if pinned(seq) {
+        println!("patterns: extents of {} kept — an engine is executing them", id);
+    } else {
+        ARENA.lock(|c| c.borrow_mut().remove_seq(seq));
+    }
+    if !persist_dir() {
+        return err_json("flash error");
+    }
     String::from("{\"ok\":true}")
-}
-
-// --- the mapped raw half (flashmap.rs) ---
-
-static RAW_BASE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-static RAW_MAPPED_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-
-/// The raw half of the partition as memory, if the boot-time mapping
-/// succeeded; None = every reader takes the read_nor path it always had
-/// (and the code arena is off).
-pub fn raw() -> Option<&'static [u8]> {
-    let base = RAW_BASE.load(Ordering::Acquire);
-    if base == 0 {
-        return None;
-    }
-    let len = RAW_MAPPED_LEN.load(Ordering::Acquire);
-    // SAFETY: base/len come from a flashmap::Mapped leaked in map_raw.
-    Some(unsafe { core::slice::from_raw_parts(base as *const u8, len) })
-}
-
-/// Map the raw half read-only through the cache MMU and prove it (the
-/// header page read both ways must agree) — same discipline as
-/// assets::map_region. Once, from init, right after REGION resolves.
-#[inline(never)]
-fn map_raw(start: u32) {
-    let m = match crate::flashmap::map(start + RAW_OFF, RAW_LEN) {
-        Ok(m) => m,
-        Err(e) => {
-            println!("flashmap: pattern code not mapped ({:?}) — flash-controller reads", e);
-            return;
-        }
-    };
-    let mut via_nor = alloc::vec![0u8; PAGE as usize];
-    let ok = crate::assets::read_chunk(start + RAW_OFF, &mut via_nor)
-        && via_nor[..] == m.bytes()[..PAGE as usize];
-    drop(via_nor);
-    if !ok {
-        println!(
-            "flashmap: pattern code self-check FAILED at 0x{:x} — unmapping, flash-controller reads",
-            m.vaddr()
-        );
-        crate::flashmap::unmap(m);
-        return;
-    }
-    println!(
-        "flashmap: pattern code 0x{:x}+0x{:x} -> 0x{:x} ({} x {} KiB pages from entry {}), self-check ok",
-        m.phys(),
-        RAW_LEN,
-        m.vaddr(),
-        m.pages(),
-        crate::flashmap::page_size() / 1024,
-        m.first_entry()
-    );
-    let b = m.leak();
-    RAW_MAPPED_LEN.store(b.len(), Ordering::Release);
-    RAW_BASE.store(b.as_ptr() as usize, Ordering::Release);
-}
-
-/// `len` bytes at partition-relative `rel` (inside the raw half) as mapped
-/// memory.
-fn raw_slice(rel: u32, len: usize) -> Option<&'static [u8]> {
-    let r = raw()?;
-    let s = rel.checked_sub(RAW_OFF)? as usize;
-    r.get(s..s.checked_add(len)?)
-}
-
-/// After a raw write: drop the cache lines the write made stale.
-fn raw_invalidate(rel: u32, len: usize) {
-    if let Some(s) = raw_slice(rel, len) {
-        crate::flashmap::invalidate_slice(s);
-    }
-}
-
-/// The ad-hoc read-back slot's running bytecode side, mapped.
-pub fn current_slot_code(len: usize) -> Option<&'static [u8]> {
-    if len == 0 || len > CUR_BC_MAX as usize || REGION.load(Ordering::Relaxed) == 0 {
-        return None;
-    }
-    raw_slice(cur_bc_off(CUR_BC_SIDE.load(Ordering::Relaxed)), len)
-}
-
-/// The ad-hoc read-back slot's source, mapped.
-pub fn current_slot_src(len: usize) -> Option<&'static [u8]> {
-    if len == 0 || len > CUR_SRC_MAX as usize || REGION.load(Ordering::Relaxed) == 0 {
-        return None;
-    }
-    raw_slice(CUR_SRC_OFF, len)
-}
-
-// --- the library code arena ---
-//
-// A page-granular EXTENT allocator over the arena region: one stored
-// pattern's LXBC per extent, a contiguous run of 4 KiB erase pages,
-// contiguous and 4-byte aligned so a library activation hands the engine a
-// mapped slice instead of reassembling <=3,840-byte chunk items into a Vec.
-// The planning half (bitmap, first-fit, compaction plan, directory format)
-// is `extents.rs` -- pure, allocation-free and host-tested
-// (tools/extent-check); everything below is the flash half.
-//
-// Why not fixed slots (what PR #276 shipped, replaced 2026-09-06, #281):
-// seven 40 KiB slots cached seven patterns and wasted ~90 % of the region,
-// because the median library blob is under 1 KB. Page extents cache every
-// pattern a device can hold (MAX_PATTERNS = 24) in a fraction of the same
-// space, so eviction -- and with it the LRU bookkeeping and the "a save may
-// throw out someone else's cache" surprise -- is gone entirely.
-//
-// Rules the code enforces:
-//   * Never write, free or move the RUNNING pattern's extent. A re-save of
-//     the running pattern publishes a new extent and leaves the old
-//     generation's in the directory; it is swept once something else runs.
-//   * A save allocates a new extent, writes it, invalidates, hash-checks
-//     the mapped bytes, publishes the directory, and only then frees the
-//     superseded extent -- never in place.
-//   * Compaction only when no contiguous hole fits a SAVE (a user action).
-//     An activation-time fill never compacts and never evicts: playlist
-//     churn writes flash at most once per pattern, then never (the
-//     2026-08-15 wear rule). A save's compaction slides live extents
-//     toward page 0, one at a time, each with the same
-//     write/invalidate/hash discipline and the directory updated per move,
-//     so a power cut mid-compaction costs at most the extent in flight
-//     (re-cached from its chunks on its next activation).
-//   * Boot rebuilds the bitmap from the persisted directory and drops any
-//     extent the pattern index or the mapped bytes do not vouch for.
-
-use crate::extents;
-
-/// Zero pages until [arena_init] installs the real size — an all-zero
-/// initializer keeps the ~470-byte directory in .bss instead of .data (it
-/// is image bytes otherwise, and the OTA slot is the scarce resource). A
-/// 0-page directory refuses every allocation and reports `[0, 0]`, which is
-/// exactly what a device whose arena never came up should say.
-static ARENA: BlockingMutex<CriticalSectionRawMutex, RefCell<extents::Dir>> =
-    BlockingMutex::new(RefCell::new(extents::Dir::new(0)));
-/// One allocator transaction at a time. `cache_code` is reachable from the
-/// render task and from an HTTP task, and a compaction move leaves the
-/// directory and the flash briefly out of step -- two of them interleaving
-/// at an `.await` could hand the same pages to both.
-static ARENA_BUSY: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-struct ArenaGuard;
-
-impl ArenaGuard {
-    /// None when another transaction is in flight (the caller degrades to
-    /// the chunk path, never blocks).
-    fn take() -> Option<ArenaGuard> {
-        // ARENA.lock is the critical section that makes this test-and-set
-        // atomic -- no extra primitive needed.
-        ARENA.lock(|_| {
-            if ARENA_BUSY.load(Ordering::Relaxed) {
-                return None;
-            }
-            ARENA_BUSY.store(true, Ordering::Relaxed);
-            Some(ArenaGuard)
-        })
-    }
-}
-
-impl Drop for ArenaGuard {
-    fn drop(&mut self) {
-        ARENA_BUSY.store(false, Ordering::Relaxed);
-    }
-}
-
-/// The arena only exists through the mapping — that is its whole point.
-fn arena_on() -> bool {
-    raw().is_some()
-}
-
-/// Partition-relative offset of an arena page.
-fn arena_off(page: u16) -> u32 {
-    ARENA_OFF + page as u32 * PAGE
-}
-
-/// An extent's bytes, mapped.
-fn extent_bytes(e: &extents::Extent) -> Option<&'static [u8]> {
-    raw_slice(arena_off(e.start), e.len as usize)
-}
-
-const FNV_INIT: u32 = 0x811c_9dc5;
-
-/// Incremental FNV-1a (same function as luxel_core::netin::fnv1a).
-fn fnv1a_update(mut h: u32, bytes: &[u8]) -> u32 {
-    for &b in bytes {
-        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
-    }
-    h
-}
-
-fn fnv1a(bytes: &[u8]) -> u32 {
-    fnv1a_update(FNV_INIT, bytes)
-}
-
-/// Write the directory to its reserved map key. The staging buffer is a
-/// heap Vec, never a stack array: this runs at picoserve depth on the
-/// shared main-task stack.
-fn persist_arena() -> bool {
-    let mut buf = alloc::vec![0u8; extents::SER_MAX];
-    let n = ARENA.lock(|c| c.borrow().to_bytes(&mut buf));
-    n > 0 && store_blob(ARENA_KEY, &buf[..n])
-}
-
-/// The (seq, bytecode generation) pairs the index currently knows.
-fn live_gens() -> Vec<(u32, u8)> {
-    INDEX.lock(|c| {
-        c.borrow().iter().filter(|e| e.bc_count > 0).map(|e| (e.seq, e.gen)).collect()
-    })
-}
-
-/// Boot: load the directory, rebuild the bitmap, and keep only extents the
-/// index AND the mapped bytes both vouch for. A torn write, a stale
-/// generation or a layout change is dropped, never executed.
-#[inline(never)]
-fn arena_init() {
-    if !arena_on() {
-        println!("patterns: code arena off (raw half not mapped)");
-        return;
-    }
-    let stored = read_blob(ARENA_KEY);
-    let (mut dir, mut dropped) = match stored.as_deref() {
-        Some(b) => extents::Dir::from_bytes(b, ARENA_PAGES as u16),
-        None => (extents::Dir::new(ARENA_PAGES as u16), 0),
-    };
-    let live = live_gens();
-    dropped += dir.retain(|e| {
-        e.len as usize <= MAX_BC
-            && live.contains(&(e.seq, e.gen))
-            && extent_bytes(e).is_some_and(|b| fnv1a(b) == e.hash)
-    }) as u32;
-    let (valid, used) = (dir.count(), dir.used_pages());
-    ARENA.lock(|c| *c.borrow_mut() = dir);
-    println!(
-        "patterns: code arena {} pages, {} extents valid ({} dropped), {} pages used",
-        ARENA_PAGES, valid, dropped, used
-    );
-    if dropped > 0 {
-        persist_arena();
-    }
-}
-
-/// A stored pattern's executable bytes, mapped — if an extent holds its
-/// CURRENT bytecode generation. The engine executes these IN PLACE
-/// (`deserialize_lean_static`), so the slice must stay valid for as long as
-/// the `Program` does: pin the pattern ([pin_code] / [pin_running] /
-/// [pin_prev_from_running]) before taking one and hold the pin until the
-/// engine is dropped. The store never writes, moves or frees a pinned
-/// extent.
-pub fn code_of(id: &str) -> Option<&'static [u8]> {
-    if !arena_on() {
-        return None;
-    }
-    let (seq, gen, _, bc_count, _) = lookup(id)?;
-    if bc_count == 0 {
-        return None;
-    }
-    let e = ARENA.lock(|c| c.borrow().find(seq, gen).map(|(_, e)| e))?;
-    extent_bytes(&e)
-}
-/// Run `f` over a stored pattern's bytecode: the mapped slot when there is
-/// one (no copy), else a transient Vec from the chunk store.
-pub fn with_code<R>(id: &str, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
-    if let Some(c) = code_of(id) {
-        return Some(f(c));
-    }
-    bytecode_of(id).map(|v| f(&v))
-}
-
-/// Does a stored pattern's bytecode still decode on this firmware?
-/// None = no such pattern / no bytecode.
-pub fn validate_stored(id: &str) -> Option<Result<(), luxel_core::bytecode::BcError>> {
-    with_code(id, |bc| luxel_core::bytecode::validate(bc).map(|_| ()))
-}
-
-/// (source length, FNV-1a of the source) streamed chunk by chunk — the
-/// identity hash + Content-Length a library swap stamps, without ever
-/// materializing the source.
-pub fn source_stat(id: &str) -> Option<(usize, u32)> {
-    let (seq, gen, count, _, _) = lookup(id)?;
-    let start = REGION.load(Ordering::Relaxed);
-    if start == 0 || count > MC {
-        return None;
-    }
-    with_store!(start, |af, range, buf| {
-        let cache = store_cache();
-        let mut len = 0usize;
-        let mut h = FNV_INIT;
-        for c in 0..count {
-            let key = chunk_key(seq, gen, c);
-            match map::fetch_item::<u32, &[u8], _>(&mut af, range.clone(), cache, buf, &key)
-                .await
-            {
-                Ok(Some(b)) => {
-                    len += b.len();
-                    h = fnv1a_update(h, b);
-                }
-                _ => return None,
-            }
-        }
-        Some((len, h))
-    })
-    .flatten()
 }
 
 // --- the engine pin set (Gitea #260) ---
 //
-// The engine executes a library pattern's LXBC **in place** from its arena
+// The engine executes a library pattern's LXBC **in place** from its
 // extent: `deserialize_lean_static` makes the `Program`'s code and constant
 // pool a `&'static [u32]` INTO THE MAPPING, not a heap copy. So an extent an
 // engine still holds must never be written, moved (compaction) or freed
 // while it holds it — the render task would be executing erased flash, and
-// on a dual-core board the store runs on the OTHER core, in parallel.
+// on a dual-core board the store runs on the OTHER core, in parallel. The
+// same pin covers the pattern's SOURCE extent, which the HTTP layer streams
+// out of the mapping for the running pattern's read-back.
 //
 // `shared::get_current_pattern_id()` is not enough on its own: it names ONE
 // pattern, and there are two windows where an engine is executing something
@@ -1363,6 +1463,9 @@ pub fn source_stat(id: &str) -> Option<(usize, u32)> {
 // path that forgets to pin is still covered for the running pattern. Pins
 // are conservative by construction (a stale one wastes arena pages until
 // the next swap overwrites it; it can never free something live).
+//
+// An UNPINNED pattern's mapped bytes are covered by the [MapRead] guard
+// instead — see [BUSY].
 static PINS: BlockingMutex<CriticalSectionRawMutex, Cell<[Option<u32>; 3]>> =
     BlockingMutex::new(Cell::new([None; 3]));
 
@@ -1429,12 +1532,13 @@ fn pinned(seq: u32) -> bool {
     buf[..n].contains(&seq)
 }
 
+// --- compaction ---
+
 /// One compaction step: slide an extent down to `mv.to` so the free pages
 /// coalesce. The extent is UNPUBLISHED first (which is also what frees the
 /// destination when the two ranges overlap), so a power cut anywhere in
-/// here costs exactly this one extent — never a torn one handed to the
-/// engine — and its pattern re-caches from its chunks on the next
-/// activation. Pages are copied one at a time, each an
+/// here costs exactly this one extent — never a torn one handed to a
+/// reader or the engine. Pages are copied one at a time, each an
 /// `ota::with_flash` erase + write with yields between (the same door and
 /// the same fence stall as every other write here), so the render task
 /// never waits on a whole extent.
@@ -1449,7 +1553,7 @@ async fn compact_move(mv: extents::Move, region: u32) -> bool {
     ARENA.lock(|c| {
         c.borrow_mut().remove(mv.idx);
     });
-    persist_arena();
+    persist_dir();
     let (src, dst) = (arena_off(e.start), arena_off(mv.to));
     let mut buf = alloc::vec![0u8; PAGE as usize];
     let mut at = 0u32;
@@ -1467,164 +1571,57 @@ async fn compact_move(mv: extents::Move, region: u32) -> bool {
         at += PAGE;
     }
     drop(buf);
+    let moved = extents::Extent { start: mv.to, ..e };
     if ok {
         raw_invalidate(dst, e.len as usize);
-        ok = raw_slice(dst, e.len as usize).is_some_and(|b| fnv1a(b) == e.hash);
+        ok = ext_hash(&moved) == Some(e.hash);
     }
     if !ok {
-        println!("patterns: arena compaction dropped seq {} (page {} -> {})", e.seq, e.start, mv.to);
+        println!("patterns: compaction dropped seq {} (page {} -> {})", e.seq, e.start, mv.to);
         return false;
     }
-    let placed =
-        ARENA.lock(|c| c.borrow_mut().insert(extents::Extent { start: mv.to, ..e }).is_some());
-    persist_arena();
+    let placed = ARENA.lock(|c| c.borrow_mut().insert(moved).is_some());
+    persist_dir();
     placed
 }
 
-/// Put a stored pattern's bytecode into an arena extent so its next
-/// activation executes in place. `may_compact`: a SAVE (a user action) may
-/// slide other extents down to open a run; an activation-time fill takes
-/// what already fits or gives up — bounded to one write per pattern per
-/// library state, so playlist churn is wear-free. Never evicts anything.
-/// Best-effort; false leaves the pattern on the chunk path (never a panic).
-pub async fn cache_code(id: &str, bc: &[u8], may_compact: bool) -> bool {
-    if !arena_on() || bc.is_empty() || bc.len() > MAX_BC {
-        return false;
-    }
-    let Some((seq, gen, _, bc_count, _)) = lookup(id) else {
-        return false;
-    };
-    let region = REGION.load(Ordering::Relaxed);
-    if bc_count == 0 || region == 0 || crate::ota::ota_active() {
-        return false;
-    }
-    let Some(_guard) = ArenaGuard::take() else {
-        return false; // another save/compaction is in flight
-    };
-    let hash = fnv1a(bc);
-    let need = extents::pages_for(bc.len() as u32);
+/// Slide unpinned extents toward page 0 until a run of `need` pages opens.
+/// Returns false when packing could not produce one (nothing is erased in
+/// that case — the "is it worth it?" test runs first). Only a SAVE calls
+/// this: an activation never compacts, so playlist churn stays wear-free.
+async fn compact_for(need: u16, region: u32) -> bool {
     let (pin_buf, pin_n) = pins();
-    let held = &pin_buf[..pin_n]; // seqs an engine is executing from
-
-    // Reclaim extents the index no longer knows (deleted or superseded
-    // patterns), except any an engine is still executing from — it may hold
-    // a generation the store has already replaced, or a pattern that has
-    // been deleted mid-crossfade. THIS pattern's own stale generation is
-    // spared here and freed after the new extent is published, so a power
-    // cut never loses both.
-    let live = live_gens();
-    let swept = ARENA.lock(|c| {
-        c.borrow_mut()
-            .retain(|e| e.seq == seq || held.contains(&e.seq) || live.contains(&(e.seq, e.gen)))
-    });
-    if swept > 0 {
-        persist_arena();
-    }
-    // already cached at this generation?
-    if ARENA.lock(|c| {
-        c.borrow()
-            .find(seq, gen)
-            .is_some_and(|(_, e)| e.len as usize == bc.len() && e.hash == hash)
-    }) {
-        return true;
-    }
-
-    let mut start_page = ARENA.lock(|c| c.borrow().first_fit(need));
-    if start_page.is_none() && may_compact {
-        let (reachable, hole, used) = ARENA.lock(|c| {
-            let d = c.borrow();
-            (d.compacted_free_run(held), d.largest_hole(), d.used_pages())
-        });
-        if reachable < need {
-            println!(
-                "patterns: code arena full — {} needs {} pages, {} used, best hole {}",
-                id, need, used, hole
-            );
-            return false;
-        }
-        println!("patterns: code arena compacting for {} ({} pages)", id, need);
-        for _ in 0..2 * extents::MAX_EXTENTS {
-            let Some(mv) = ARENA.lock(|c| c.borrow().next_move(held)) else {
-                break;
-            };
-            if !compact_move(mv, region).await {
-                break;
-            }
-            start_page = ARENA.lock(|c| c.borrow().first_fit(need));
-            if start_page.is_some() {
-                break;
-            }
-        }
-        start_page = start_page.or_else(|| ARENA.lock(|c| c.borrow().first_fit(need)));
-    }
-    let Some(start_page) = start_page else {
-        return false;
-    };
-
-    let rel = arena_off(start_page);
-    let ok = write_raw(region + rel, bc).await;
-    if ok {
-        raw_invalidate(rel, bc.len());
-    }
-    let verified = ok && raw_slice(rel, bc.len()).is_some_and(|b| fnv1a(b) == hash);
-    if !verified {
-        println!("patterns: code arena write of {} failed (page {})", id, start_page);
+    let held = &pin_buf[..pin_n];
+    if ARENA.lock(|c| c.borrow().compacted_free_run(held)) < need {
         return false;
     }
-    let e = extents::Extent { seq, gen, start: start_page, len: bc.len() as u32, hash };
-    if !ARENA.lock(|c| c.borrow_mut().insert(e).is_some()) {
-        println!("patterns: code arena directory full — {} stays on the chunk path", id);
-        return false;
-    }
-    if !persist_arena() {
-        println!("patterns: code arena directory write failed — {} lives this session only", id);
-    }
-    // published; now the superseded generation may go (unless an engine
-    // is still executing from it)
-    if !pinned(seq) {
-        if let Some((i, _)) = ARENA.lock(|c| c.borrow().find_other_gen(seq, gen)) {
-            ARENA.lock(|c| {
-                c.borrow_mut().remove(i);
-            });
-            persist_arena();
+    println!("patterns: compacting the store for {} pages", need);
+    for _ in 0..2 * extents::MAX_EXTENTS {
+        if ARENA.lock(|c| c.borrow().first_fit(need)).is_some() {
+            return true;
+        }
+        let Some(mv) = ARENA.lock(|c| c.borrow().next_move(held)) else {
+            break;
+        };
+        // A move un-publishes the extent before copying it, so a power cut
+        // mid-pass costs exactly the blob in flight — and, since there is
+        // no second copy any more, the pattern that owned it. Boot drops a
+        // record whose extents are not both there; the playground re-syncs
+        // that one pattern. Bounded, and only ever on a save that had no
+        // contiguous room left.
+        if !compact_move(mv, region).await {
+            break;
         }
     }
-    println!("patterns: code arena page {} <- {} ({} B)", start_page, id, bc.len());
-    true
+    ARENA.lock(|c| c.borrow().first_fit(need)).is_some()
 }
 
-/// Forget every extent of `seq` (delete). A pattern an engine is still
-/// executing from KEEPS its extent: dropping it here would hand its pages
-/// to the next save, which would erase them under the running VM. The
-/// pattern is gone from the index, so `cache_code`'s sweep reclaims the
-/// extent as soon as the engine lets go of it.
-fn arena_forget(seq: u32) {
-    if pinned(seq) {
-        println!("patterns: extent of {} kept — an engine is executing it", id_hex(seq));
-        return;
-    }
-    let n = ARENA.lock(|c| c.borrow_mut().remove_seq(seq));
-    if n > 0 {
-        persist_arena();
-    }
-}
-
-/// (arena pages in use, arena pages total) for /api/status. `[0, 0]` means
-/// the arena is off (no mapping) — there is no other way to see a zero
-/// total.
-pub fn arena_stats() -> (u32, u32) {
-    let (used, total) = ARENA.lock(|c| {
-        let d = c.borrow();
-        (d.used_pages(), d.total_pages())
-    });
-    (used as u32, total as u32)
-}
 /// The running pattern's executable bytes as mapped memory, per the VM
 /// consumer contract (docs/research/flash-mmap.md): rodata for the built-in
 /// default (the bootloader's own mapping), the ad-hoc slot side the last
-/// store_current wrote, or the library pattern's arena slot. None = read it
+/// store_current wrote, or the library pattern's extent. None = read it
 /// through a Vec (read_current_bc / bytecode_of) — the fallback when the
-/// mapping is absent or the pattern has no slot.
+/// mapping is absent.
 pub fn current_code() -> Option<&'static [u8]> {
     use crate::shared::BcLoc;
     match crate::shared::current_bc() {

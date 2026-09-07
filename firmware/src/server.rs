@@ -420,18 +420,20 @@ fn status_json() -> String {
     push_piece(&mut out, ",\"assets_mapped\":");
     push_piece(&mut out, if assets_mapped { "true" } else { "false" });
     // The running pattern's bytecode is mapped memory (rodata default, the
-    // ad-hoc slot, or its arena extent) — the engine builds from it without
-    // a blob Vec. `arena` = [pages in use, pages total] of the library code
-    // arena's page-granular extent allocator (patterns.rs / extents.rs);
-    // [0, 87] with an empty library, [0, 0] only when the arena is off.
+    // ad-hoc slot, or its extent) — the engine builds from it without a
+    // blob Vec. `store` = the pattern store's extent region: 4 KiB pages in
+    // use / total, and how many patterns are stored (patterns.rs /
+    // extents.rs). `total` 0 means the store never came up.
     push_piece(&mut out, ",\"code_mapped\":");
     push_piece(&mut out, if crate::patterns::current_code().is_some() { "true" } else { "false" });
-    let (used, total) = crate::patterns::arena_stats();
-    push_piece(&mut out, ",\"arena\":[");
+    let (used, total, npat) = crate::patterns::store_stats();
+    push_piece(&mut out, ",\"store\":{\"used\":");
     push_u32(&mut out, used);
-    push_piece(&mut out, ",");
+    push_piece(&mut out, ",\"total\":");
     push_u32(&mut out, total);
-    push_piece(&mut out, "]");
+    push_piece(&mut out, ",\"patterns\":");
+    push_u32(&mut out, npat);
+    push_piece(&mut out, "}");
     push_piece(&mut out, ",\"src\":");
     push_piece(&mut out, if src { "true" } else { "false" });
     push_piece(&mut out, ",\"bc\":");
@@ -531,6 +533,29 @@ async fn stream_mapped<W: picoserve::io::Write>(writer: &mut W, bytes: &[u8]) ->
     for slice in bytes.chunks(4096) {
         writer.write_all(slice).await?;
         embassy_futures::yield_now().await;
+    }
+    Ok(())
+}
+
+/// [stream_mapped] against a Content-Length snapshotted at construction:
+/// exactly `len` bytes go out — truncated, or `pad`-filled when a re-save
+/// changed the stored blob mid-response — so the framing stays valid.
+/// Sound for the RUNNING pattern's extents specifically: they are pinned
+/// (patterns.rs' pin set), so the store cannot move or free the bytes
+/// under the awaits in here.
+async fn stream_mapped_exact<W: picoserve::io::Write>(
+    writer: &mut W,
+    bytes: &[u8],
+    len: usize,
+    pad: u8,
+) -> Result<(), W::Error> {
+    let mut written = bytes.len().min(len);
+    stream_mapped(writer, &bytes[..written]).await?;
+    let padding = [pad; 64];
+    while written < len {
+        let take = padding.len().min(len - written);
+        writer.write_all(&padding[..take]).await?;
+        written += take;
     }
     Ok(())
 }
@@ -657,8 +682,16 @@ impl picoserve::response::Content for CurrentSource {
                 stream_flash_readback(&mut writer, abs, len, "src").await
             }
             crate::shared::SrcLoc::Library(len) => {
-                let src = crate::patterns::source_of(&crate::shared::get_current_pattern_id());
-                stream_store_readback(&mut writer, src.map(String::into_bytes), len, "src").await
+                // straight out of the mapping — the source extent IS the
+                // response body, no Vec anywhere on this path
+                let id = crate::shared::get_current_pattern_id();
+                match crate::patterns::source_slice(&id) {
+                    Some(src) => stream_mapped_exact(&mut writer, src, len, b'\n').await,
+                    None => {
+                        let src = crate::patterns::source_vec(&id);
+                        stream_store_readback(&mut writer, src, len, "src").await
+                    }
+                }
             }
             crate::shared::SrcLoc::Gone => Ok(()),
         }
@@ -722,8 +755,14 @@ impl picoserve::response::Content for CurrentEnvelope {
                 }
             }
             crate::shared::SrcLoc::Library(len) => {
-                let src = crate::patterns::source_of(&crate::shared::get_current_pattern_id());
-                stream_store_readback(&mut writer, src.map(String::into_bytes), len, "src").await?
+                let id = crate::shared::get_current_pattern_id();
+                match crate::patterns::source_slice(&id) {
+                    Some(src) => stream_mapped_exact(&mut writer, src, len, b'\n').await?,
+                    None => {
+                        let src = crate::patterns::source_vec(&id);
+                        stream_store_readback(&mut writer, src, len, "src").await?
+                    }
+                }
             }
             crate::shared::SrcLoc::Gone => {}
         }
@@ -741,11 +780,8 @@ impl picoserve::response::Content for CurrentEnvelope {
             crate::shared::BcLoc::Library(len) => {
                 let id = crate::shared::get_current_pattern_id();
                 if let Some(bc) = crate::patterns::code_of(&id) {
-                    // the arena slot: exactly the bytes the engine runs
-                    stream_mapped(&mut writer, &bc[..bc.len().min(len)]).await?;
-                    for _ in bc.len()..len {
-                        writer.write_all(&[0u8]).await?; // keep the framing
-                    }
+                    // the bytecode extent: exactly the bytes the engine runs
+                    stream_mapped_exact(&mut writer, bc, len, 0).await?;
                 } else {
                     let bc = crate::patterns::bytecode_of(&id);
                     stream_store_readback(&mut writer, bc, len, "bc").await?
@@ -1094,17 +1130,15 @@ async fn api_patterns_save(raw: &[u8]) -> String {
             String::from("{\"ok\":false,\"error\":\"pattern name required\"}")
         }
         Ok(env) => {
-            let r = crate::patterns::save(env.name, env.source, env.bytecode);
+            // One extent write per blob: the source and the bytecode land
+            // in the mapped extent region and the directory names them
+            // afterwards, so the pattern's next activation executes in
+            // place and its read-back streams from the same bytes. A save
+            // is a user action, so it may compact to open a contiguous run
+            // (it never touches the running pattern's extents).
+            let r = crate::patterns::save(env.name, env.source, env.bytecode).await;
             // content changed — re-validate any playlist entries using it
             crate::playlist::preflight_mark_dirty();
-            // and give the new bytecode an arena extent so its next
-            // activation executes from the mapping. A save is a user
-            // action, so it may compact the arena to open a contiguous run
-            // (it still never evicts, and never touches the running
-            // pattern's extent).
-            if let Some(id) = crate::patterns::id_by_name(env.name.trim()) {
-                crate::patterns::cache_code(&id, env.bytecode, true).await;
-            }
             r
         }
         Err(e) => e,
@@ -1689,7 +1723,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             }
             if let Some(id) = route.strip_prefix("/api/patterns/") {
                 crate::playlist::preflight_mark_dirty();
-                let response = json_response(crate::patterns::delete(id));
+                let response = json_response(crate::patterns::delete(id).await);
                 let conn = request.body_connection.finalize().await?;
                 return response.write_to(conn, response_writer).await;
             }
@@ -1989,6 +2023,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // returns 200 + {"ok":false,…} to match the mirror (serve.rs).
                 r if r.starts_with("/api/patterns/") => {
                     let j = crate::patterns::get_json(&r["/api/patterns/".len()..])
+                        .await
                         .unwrap_or_else(|| String::from("{\"ok\":false,\"error\":\"no such pattern\"}"));
                     Some(json_response(j))
                 }
