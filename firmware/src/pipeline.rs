@@ -71,7 +71,7 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use embassy_time::Instant;
+use embassy_time::{Duration, Instant, Timer};
 use luxel_core::outpipe::GridMap;
 
 use crate::output::{BoardOutput, OutputDriver};
@@ -105,7 +105,7 @@ impl PipeState {
         out: &mut BoardOutput,
         frame: &[[u8; 3]],
         grid: Option<GridMap>,
-    ) -> (u32, u32) {
+    ) -> (u32, u32, bool) {
         let t0 = Instant::now();
         // The browser/e2e preview snapshot. On the pipelined path there is
         // no separate snapshot at all: `preview()` reads the parked hand-off
@@ -116,9 +116,9 @@ impl PipeState {
         let b5 = crate::out_brightness();
         let wire = crate::apply_outpipe(frame, &mut self.buf, &mut self.gamma, &mut self.palette, b5, grid);
         let t1 = Instant::now();
-        out.write_frame(wire, b5);
+        let shown = out.write_frame(wire, b5);
         let t2 = Instant::now();
-        ((t1 - t0).as_micros() as u32, (t2 - t1).as_micros() as u32)
+        ((t1 - t0).as_micros() as u32, (t2 - t1).as_micros() as u32, shown)
     }
 }
 
@@ -160,16 +160,29 @@ impl DirectSink {
         &mut self.stage
     }
 
-    /// Emit a frame the caller owns (the engine's own pixel buffer).
-    pub fn emit(&mut self, frame: &[[u8; 3]], grid: Option<GridMap>) -> (u32, u32) {
+    /// Emit a frame the caller owns (the engine's own pixel buffer). The
+    /// driver's "did it go out" answer is not interesting here: on this path
+    /// there is no second core to skip a frame for, so `out_fps` stays 0 and
+    /// every rendered frame is written by construction. Nothing is ever
+    /// waited on, so the third return (hand-off wait, micros) is always 0 —
+    /// it exists so the render task can subtract the pipelined path's wait
+    /// from `frame_us`. Sync, unlike the pipelined sink's: the render task
+    /// reaches both through `emit!`/`emit_staged!`, which put the `.await`
+    /// in only where there is something to wait for. Making this one async
+    /// too cost every non-panel board ~864 B of state machine for a future
+    /// that never yields, and the tightest board has 3.6 % of its OTA slot
+    /// left (Gitea #160).
+    pub fn emit(&mut self, frame: &[[u8; 3]], grid: Option<GridMap>) -> (u32, u32, u32) {
         let Self { out, pipe, .. } = self;
-        pipe.run(out, frame, grid)
+        let (p, o, _) = pipe.run(out, frame, grid);
+        (p, o, 0)
     }
 
     /// Emit whatever [`stage`](Self::stage) currently holds.
-    pub fn emit_staged(&mut self, grid: Option<GridMap>) -> (u32, u32) {
+    pub fn emit_staged(&mut self, grid: Option<GridMap>) -> (u32, u32, u32) {
         let Self { out, pipe, stage } = self;
-        pipe.run(out, stage, grid)
+        let (p, o, _) = pipe.run(out, stage, grid);
+        (p, o, 0)
     }
 }
 
@@ -210,10 +223,40 @@ mod pipe {
     /// takes the newest frame, never a queue of stale ones.
     static READY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+    /// Whether the driver has a display clock of its own
+    /// (`OutputDriver::paces_frames`) — read by the render task on the other
+    /// core. Published by the output task at boot, before either task can
+    /// act on it.
+    ///
+    /// When it is set, the whole loop is paced by the panel (Gitea #387).
+    /// There is no timer in the path at all: the single travelling buffer IS
+    /// the token. The output task holds a frame until the panel's previous
+    /// swap has landed, and the render task's `emit` waits for the buffer to
+    /// come back instead of dropping the frame — so exactly one frame is
+    /// composed, swapped and displayed per rescan, and `fps`, `out_fps` and
+    /// `rescan_hz` all read the same number. The VM still overlaps the
+    /// compose, because the render task waits at `emit` (after the pattern
+    /// has run) rather than before it.
+    static VSYNC: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+    /// How long either task will wait on the other before giving up on a
+    /// frame and moving on. Not the pacing — a liveness floor, reached only
+    /// if the panel stops swapping entirely (a dead driver must not freeze
+    /// the engine, the pattern clock, or `fps`). One rescan is 8.7 ms at
+    /// 30 MHz / 7 planes; 50 ms covers every clock and plane count this
+    /// driver builds for, with room to spare.
+    const VSYNC_HOLD: Duration = Duration::from_millis(50);
+    /// Poll granularity for those waits. 250 us is 3 % of a rescan and leaves
+    /// the compose (~4 ms of an 8.7 ms window) plenty of slack; neither the
+    /// swap nor the hand-off exposes a waker, so these are polls.
+    const VSYNC_POLL: Duration = Duration::from_micros(250);
+
     /// Frames the render task produced but could not hand over because the
     /// output task still held the buffer. Expected to be nonzero whenever
     /// the VM is faster than the compose (`/api/status` `out_fps` is the
-    /// number that matters); reported in the boot log's fps line.
+    /// number that matters); reported in the boot log's fps line. Under
+    /// vsync pacing it should stay at zero: `emit` waits for the buffer
+    /// rather than throwing the frame away (Gitea #387).
     pub static DROPPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
     /// The render task's half of the pipeline: no driver, no outpipe, no
@@ -256,33 +299,88 @@ mod pipe {
         /// legitimately return the PREVIOUS frame (a pattern under its own
         /// frame-rate cap), so alternating the engine's buffer would show
         /// a stale frame on those. Copying keeps the engine API intact.
-        pub fn emit(&mut self, frame: &[[u8; 3]], grid: Option<GridMap>) -> (u32, u32) {
-            let Some(mut buf) = claim() else {
+        pub async fn emit(&mut self, frame: &[[u8; 3]], grid: Option<GridMap>) -> (u32, u32, u32) {
+            let (buf, waited) = claim_paced().await;
+            let Some(mut buf) = buf else {
                 DROPPED.fetch_add(1, Ordering::Relaxed);
-                return (0, 0);
+                return (0, 0, waited);
             };
             buf.clear();
             if buf.try_reserve(frame.len()).is_err() {
                 // heap too tight for the frame buffer: give it back rather
                 // than publishing a short frame (a black tail on the panel)
                 SLOT.lock(|c| c.borrow_mut().free = Some(buf));
-                return (0, 0);
+                return (0, 0, waited);
             }
             buf.extend_from_slice(frame);
             publish(buf, grid);
-            (0, 0)
+            (0, 0, waited)
         }
 
         /// Hand over whatever [`stage`](Self::stage) holds. The buffers are
         /// swapped rather than copied, so the crossfade blend and the
         /// live-input assembly cost the pipeline nothing extra.
-        pub fn emit_staged(&mut self, grid: Option<GridMap>) -> (u32, u32) {
-            let Some(buf) = claim() else {
+        pub async fn emit_staged(&mut self, grid: Option<GridMap>) -> (u32, u32, u32) {
+            let (buf, waited) = claim_paced().await;
+            let Some(buf) = buf else {
                 DROPPED.fetch_add(1, Ordering::Relaxed);
-                return (0, 0);
+                return (0, 0, waited);
             };
             publish(core::mem::replace(&mut self.stage, buf), grid);
-            (0, 0)
+            (0, 0, waited)
+        }
+    }
+
+    /// The render task's frame pacing.
+    ///
+    /// Under vsync there is nothing to do here: the hand-off buffer is the
+    /// throttle, and `emit` already waited on it (Gitea #387). Just yield so
+    /// the rest of this core's tasks get their turn. Otherwise it is the
+    /// plain 8 ms floor.
+    pub async fn pace(spent: Duration) {
+        if VSYNC.load(Ordering::Relaxed) {
+            embassy_futures::yield_now().await;
+            return;
+        }
+        super::pace_floor(spent).await;
+    }
+
+    /// Take the travelling buffer, waiting for it when the panel is our
+    /// clock (Gitea #387).
+    ///
+    /// Without vsync a busy buffer means this frame is dropped — the render
+    /// task runs on its own timer and there will be another along in 8 ms.
+    /// Under vsync there is exactly one frame per rescan and none to spare,
+    /// and the buffer comes back within one compose (~4 ms at 4096 px), so
+    /// waiting for it is both cheap and the entire back-pressure mechanism:
+    /// it is what holds the render loop at the panel's rate. Returns the
+    /// microseconds spent waiting so the caller can keep `frame_us` a
+    /// measure of WORK rather than of the pacing.
+    async fn claim_paced() -> (Option<Vec<[u8; 3]>>, u32) {
+        if !VSYNC.load(Ordering::Relaxed) {
+            return (claim(), 0);
+        }
+        // Under vsync take only a GENUINELY FREE buffer — never `claim`'s
+        // "steal back the frame the output task has not picked up yet".
+        // That newest-wins path exists because the render task normally runs
+        // ahead of the panel and the older frame is worthless; here it is
+        // the opposite. Stealing lets the loop run a frame ahead of the
+        // rescan whenever the output task's wake is late, which is exactly
+        // the beat this change exists to remove: it showed up as `fps` 118
+        // against `out_fps` 112 on the panel.
+        if let Some(buf) = SLOT.lock(|c| c.borrow_mut().free.take()) {
+            return (Some(buf), 0);
+        }
+        let t0 = Instant::now();
+        loop {
+            Timer::after(VSYNC_POLL).await;
+            let waited = t0.elapsed();
+            if let Some(buf) = SLOT.lock(|c| c.borrow_mut().free.take()) {
+                return (Some(buf), waited.as_micros() as u32);
+            }
+            if waited >= VSYNC_HOLD {
+                return (None, waited.as_micros() as u32);
+            }
         }
     }
 
@@ -365,6 +463,10 @@ mod pipe {
         if !out.resize(sized as usize) {
             println!("encode buffer alloc failed at boot — output paused");
         }
+        // Publish the driver's pacing capability before the render task can
+        // observe a DISPLAYED signal.
+        let vsync = out.paces_frames();
+        VSYNC.store(vsync, Ordering::Relaxed);
         let mut frames: u32 = 0;
         let mut pipe_sum: u64 = 0;
         let mut out_sum: u64 = 0;
@@ -387,13 +489,32 @@ mod pipe {
                         println!("encode buffer alloc failed ({} px) — output paused", px);
                     }
                 }
-                let (p, o) = pipe.run(&mut out, &f.buf, f.grid);
+                // Vsync (Gitea #387): hold the frame until the panel can
+                // take it rather than composing it into a buffer that is
+                // about to be overwritten. Composing right after a swap
+                // lands is what puts the next swap in before the next
+                // rescan boundary, so this both saves the work and is what
+                // makes one composed frame per rescan possible.
+                if vsync {
+                    let held = Instant::now();
+                    while !out.ready_for_frame() {
+                        if held.elapsed() >= VSYNC_HOLD {
+                            break;
+                        }
+                        Timer::after(VSYNC_POLL).await;
+                    }
+                }
+                let (p, o, shown) = pipe.run(&mut out, &f.buf, f.grid);
                 // back to the render task only AFTER write_frame: the wire
                 // slice borrows this buffer whenever the outpipe is a no-op
                 SLOT.lock(|c| c.borrow_mut().free = Some(f.buf));
-                pipe_sum += p as u64;
-                out_sum += o as u64;
-                frames += 1;
+                // Count only frames the driver actually took: `out_fps` is a
+                // DISPLAYED rate, not a call count (Gitea #378).
+                if shown {
+                    pipe_sum += p as u64;
+                    out_sum += o as u64;
+                    frames += 1;
+                }
             }
             if mark.elapsed().as_millis() >= 1000 {
                 let n = frames.max(1) as u64;
@@ -416,6 +537,31 @@ mod pipe {
         }
     }
 }
+
+/// The render loop's fallback pacing: one iteration per 8 ms.
+///
+/// An uncapped render loop starves the network tasks (choppy preview,
+/// timed-out polls) for frame rate nobody can see. Slow patterns just yield.
+async fn pace_floor(spent: Duration) {
+    if spent.as_micros() < 8_000 {
+        Timer::after(Duration::from_micros(8_000 - spent.as_micros())).await;
+    } else {
+        embassy_futures::yield_now().await;
+    }
+}
+
+/// Wait out the rest of this frame's period.
+///
+/// On a board whose driver has a display clock of its own this is the panel
+/// frame boundary — one composed frame per rescan (Gitea #387). Everywhere
+/// else it is the 8 ms floor.
+#[cfg(not(pipelined))]
+pub async fn pace(spent: Duration) {
+    pace_floor(spent).await;
+}
+
+#[cfg(pipelined)]
+pub use pipe::pace;
 
 #[cfg(pipelined)]
 pub use pipe::{output_task, preview, RenderSide, DROPPED};

@@ -178,8 +178,20 @@ impl OutputDriver for Hub75Output {
         self.hub75.is_some()
     }
 
-    fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) {
-        let Some(hub75) = self.hub75.as_ref() else { return };
+    /// Can the panel take a frame right now — i.e. has the previous swap
+    /// landed? The pipelined output task waits on this instead of composing
+    /// into a buffer the panel is about to overwrite (Gitea #387).
+    fn ready_for_frame(&self) -> bool {
+        self.pending.as_ref().is_none_or(Hub75Swap::is_done)
+    }
+
+    /// The panel rescans on its own clock, so the render loop paces on it.
+    fn paces_frames(&self) -> bool {
+        self.hub75.is_some()
+    }
+
+    fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) -> bool {
+        let Some(hub75) = self.hub75.as_ref() else { return false };
         // The panel's own BCM frame counter, for `rescan_hz`. Free: the ISR
         // that feeds it is always armed in circular-DMA mode.
         crate::shared::RESCANS.store(hub75.frame_count(), Ordering::Relaxed);
@@ -195,7 +207,7 @@ impl OutputDriver for Hub75Output {
             Some(swap) => {
                 if !swap.is_done() {
                     self.pending = Some(swap);
-                    return;
+                    return false;
                 }
                 match swap.wait() {
                     Ok(fb) => fb,
@@ -207,7 +219,7 @@ impl OutputDriver for Hub75Output {
             }
             None => match self.back.take() {
                 Some(fb) => fb,
-                None => return,
+                None => return false,
             },
         };
         back.erase();
@@ -228,5 +240,6 @@ impl OutputDriver for Hub75Output {
             }
         }
         self.pending = Some(hub75.swap(back));
+        true
     }
 }

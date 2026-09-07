@@ -75,20 +75,26 @@ response as "no snapshot right now", not as an all-black frame.
   `pipe_us` or `out_us`; those two come from the output task and are averaged
   over `out_fps` frames, not `fps` frames. The frame period there is
   `max(frame_us, pipe_us + out_us)`.
-- `out_fps` — frames handed to the output driver in the last second, on a
-  pipelined board; `0` everywhere else, where every rendered frame is written
-  by construction. It differs from `fps` (frames *rendered*) exactly when the
-  output stage is the slower half.
+- `out_fps` — frames the output driver actually **took** in the last second,
+  on a pipelined board; `0` everywhere else, where every rendered frame is
+  written by construction. On a strip that is frames on the wire; on a HUB75
+  panel it is frames the panel scanned out. Frames the driver refused — a
+  panel whose previous buffer swap has not landed — are not counted (Gitea
+  #378; it used to count every call, which made it a compose rate reading up
+  to 125 against a 115 Hz rescan).
 
-  **On a HUB75 panel this is a compose rate, not a display rate** (Gitea
-  #378). The driver returns without drawing when the previous buffer swap has
-  not landed yet, and that call is still counted here — so above `rescan_hz`
-  the surplus frames are composed and discarded unseen. Quote
-  `min(out_fps, rescan_hz)` for what the panel actually displayed. On a strip
-  the two are the same thing and `out_fps` is frames on the wire.
+  On the panel `fps` and `out_fps` should now read the **same** number, a
+  hair under `rescan_hz`: the render loop is paced by the panel itself
+  (Gitea #387), so exactly one frame is composed, swapped and displayed per
+  rescan and nothing is rendered only to be thrown away. `fps` above
+  `out_fps` means composed frames are being discarded; `out_fps` a little
+  below `rescan_hz` means the occasional compose overran its rescan window
+  and the panel showed the previous frame once more.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
-  every board without a panel. Measured 115 on the 64x64 bench panel at 7
+  every board without a panel. This is the panel's clock **and** the render
+  loop's on such a board (Gitea #387), and the ceiling on `fps`/`out_fps`.
+  Measured 115 on the 64x64 bench panel at 7
   bitplanes and a 30 MHz LCD_CAM clock; it scales linearly with that clock
   and halves per extra bitplane (docs/boards.md, "The LCD_CAM pixel clock on
   the panel"). Sampled where the frames are, so it reads 0 whenever nothing
