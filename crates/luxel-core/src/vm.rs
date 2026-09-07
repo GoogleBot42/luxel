@@ -391,6 +391,25 @@ pub enum Builtin {
     // simplex — see noise::simplex2_grad).
     Curl2,
     Curl3,
+    // Luxel extension builtins, batch 10: whole-frame ("bulk") ops for the
+    // `renderFrame` entry — see `crate::bulk`. They write the engine's
+    // frame buffer directly and are no-ops anywhere else.
+    GridWidth,
+    GridHeight,
+    Clear,
+    FillAll,
+    Fade,
+    SetPixel,
+    FillRange,
+    FillHsv,
+    FillRgb,
+    FillGradient,
+    FillRect,
+    FillCircle,
+    Splat,
+    DrawLine,
+    FillCanvas,
+    Blit,
 }
 
 pub struct BuiltinDef {
@@ -506,6 +525,16 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("pixelState", PixelState), b!("setPixelState", SetPixelState),
     // Luxel extensions, batch 9 (appended): curl noise.
     b!("curl2", Curl2), b!("curl3", Curl3),
+    // Luxel extensions, batch 10 (appended): the whole-frame bulk ops that
+    // back the `renderFrame` entry (crate::bulk). Ids 166..=181.
+    b!("gridWidth", GridWidth), b!("gridHeight", GridHeight),
+    b!("clear", Clear), b!("fill", FillAll), b!("fade", Fade),
+    b!("setPixel", SetPixel), b!("fillRange", FillRange),
+    b!("fillHSV", FillHsv), b!("fillRGB", FillRgb),
+    b!("fillGradient", FillGradient),
+    b!("fillRect", FillRect), b!("fillCircle", FillCircle),
+    b!("splat", Splat), b!("drawLine", DrawLine),
+    b!("fillCanvas", FillCanvas), b!("blit", Blit),
 ];
 
 /// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
@@ -3986,6 +4015,28 @@ impl Vm {
                 }
                 Ok(Value::default())
             }
+            // ---- Luxel extensions, batch 10: whole-frame bulk ops ----
+            // The `renderFrame` entry's vocabulary (crate::bulk). Each one
+            // writes the engine's frame buffer — lent to `Vm::frame` for
+            // the duration of the call — directly in RGB888; outside that
+            // entry the buffer is empty and they all no-op. Bodies live in
+            // `bulk` so this dispatcher stays thin.
+            GridWidth => num(crate::bulk::grid_dim(self, 0)),
+            GridHeight => num(crate::bulk::grid_dim(self, 1)),
+            Clear => Ok(crate::bulk::clear(self)),
+            FillAll => Ok(crate::bulk::fill(self)),
+            Fade => Ok(crate::bulk::fade(self, &args)),
+            SetPixel => Ok(crate::bulk::set_pixel(self, &args)),
+            FillRange => Ok(crate::bulk::fill_range(self, &args)),
+            FillHsv => crate::bulk::fill_hsv(self, prog, &args).map_err(no_site),
+            FillRgb => crate::bulk::fill_rgb(self, prog, &args).map_err(no_site),
+            FillGradient => Ok(crate::bulk::fill_gradient(self, &args)),
+            FillRect => Ok(crate::bulk::fill_rect(self, &args)),
+            FillCircle => Ok(crate::bulk::fill_circle(self, &args)),
+            Splat => Ok(crate::bulk::splat(self, &args)),
+            DrawLine => Ok(crate::bulk::draw_line(self, &args)),
+            FillCanvas => crate::bulk::fill_canvas(self, prog, &args).map_err(no_site),
+            Blit => crate::bulk::blit(self, prog, &args).map_err(no_site),
             _ => unreachable!("handled by builtin_fast"),
         }
     }
@@ -4346,7 +4397,7 @@ fn hash_unit(x: u32) -> Fx {
 /// Cell index for a normalized coordinate on an n-cell axis:
 /// floor(x·n) clamped to 0..n−1 (so x = 1.0 lands in the last cell,
 /// with no `* 15.99` fudge). Exact in i64 raw — no 16.16 overflow.
-fn cell_index(x: Fx, n: usize) -> usize {
+pub(crate) fn cell_index(x: Fx, n: usize) -> usize {
     let i = (x.raw() as i64 * n as i64) >> 16; // arithmetic shift = floor
     i.clamp(0, n as i64 - 1) as usize
 }
