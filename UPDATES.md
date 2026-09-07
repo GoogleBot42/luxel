@@ -1,5 +1,66 @@
 # Update log
 
+## 2026-09-07 — QEMU takeover tests green again: the pin assertion was stale, not the import (#273)
+
+`tools/qemu/run-all.py` had been red on master since 2026-09-05 — all three
+takeover tests failing on `takeover: WLED drove the strip on GPIO18` never
+appearing in boot 1. It is a stale assertion, not a regression, and the serial
+log says so: boot 1 still prints every other inherited field
+(`settings carried over (30 px, ws2812, order rgb, brightness 16/31, cap
+850 mA, gamma 2.8)`), so the wiring import plainly ran.
+
+What changed under it is #154/PR #240 (v0.1.40), which gave the strip data pin
+a runtime setting and added an arm to `takeover.rs`'s pin decision:
+
+```rust
+Some(pin) if pin == crate::board::DEFAULT_DATA_PIN as i32 => None,
+```
+
+The checked-in fixture `athom-wled-fs-configured.bin` carries
+`"ins":[{...,"pin":[18],...}]`, and the Athom's `DEFAULT_DATA_PIN` **is** 18 —
+so the import reads the pin, sees it already matches, and deliberately stores
+no override (a stored pin would follow the config onto a board with a different
+default). Boot 2's `strip data pin: GPIO18 (board default)` is the correct end
+state, not evidence that nothing was imported.
+
+Fixes, all in the harness — no firmware behaviour change (CLAUDE.md's QEMU
+isolation rule):
+
+* `takeover-test.py` now asserts the *outcome* per fixture pin instead of one
+  transient message: for a pin equal to the board default it requires that no
+  data-pin line is printed at all and that boot 2 says "board default", and it
+  checks LXDV byte 21 (v8's `data_pin+1`, 0 = default) to match.
+* The record-version assertion was stale the same way — `ver == 7` where
+  `config.rs` has been at `DEV_VER = 8` since #154 took one of v7's pad bytes
+  for the pin. Now keyed off a named `DEV_VER` constant.
+* New `--wled-pin N`: rewrites `hw.led.ins[0].pin[0]` in the littlefs fixture
+  before composing, so the one dump covers all three arms of the decision. It
+  is a same-length byte poke into a CTZ **data** block — cfg.json is ~1.3 KiB,
+  well over littlefs's inline threshold, and data blocks carry no CRC (only
+  metadata pairs do), so every checksum, CTZ pointer and file size stays valid.
+  Verified end to end: the unmodified shipping image parses the rewritten value
+  out of emulated flash and writes `GPIO19` into LXDV.
+* Two new suite entries covering the arms the fixture never could:
+  `takeover-pin-import` (`--wled-pin 19` → imported, boot 2 "configured",
+  LXDV byte = 20) and `takeover-pin-reserved` (`--wled-pin 10`, an ESP32
+  SPI-flash pin → refused with the rewire hint, board default kept).
+
+`tools/qemu/run-all.py` is now **8/8 PASS in 27 s warm** (takeover
+app1 4.9 / app0 1.6 / fault 5.7 / pin-import 1.6 / pin-reserved 1.7,
+heap-regions selfheal 8.6 / rollback 0.7, flashmap 0.9).
+
+Also: an **opt-in** `qemu` step in `tools/ci.sh` behind `CI_QEMU=1`, so the
+suite has a home in the gate script without going into the hosted gate — that
+would want a from-source build of Espressif's QEMU fork on the runner, and five
+of the eight tests need the gitignored Athom dumps CI does not have (they skip
+there). `CI_QEMU=1 CI_SKIP="web cargo library firmware" nix develop --command
+tools/ci.sh` is 64 s end to end here. Making it a real gate is Gitea #359.
+
+Doc drift found on the way and fixed: `docs/wled-migration.md` still said
+WLED's data pin "is only logged — Luxel pins are compile-time per board", and
+`WledWiring::pin`'s doc comment in `firmware/src/wledfs.rs` said the same. Both
+predate #154.
+
 ## 2026-09-07 — blur1D slides a window instead of building a prefix sum (#296)
 
 `blur1D(arr, radius)` allocated a full `len + 1` array of `i64` prefix sums

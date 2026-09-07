@@ -32,8 +32,12 @@ flash read on devices already running the Luxel layout).
      brightness, power cap and gamma instead of board defaults. Field-wise
      best-effort: WLED bus types Luxel can't drive (RGBW, WS2801,
      analog/PWM, matrix, virtual) keep the board default with a serial
-     note, and WLED's data *pin* is only logged — Luxel pins are
-     compile-time per board;
+     note. WLED's data *pin* is imported too (Gitea #154) when this board
+     can drive it; a pin the board reserves is refused with a rewire hint,
+     and a pin that already equals the board default stores no override
+     (a stored pin would follow the config onto a board with a different
+     default) — so the common case narrates nothing and boot 2 reports
+     "board default", which is the correct end state, not a missed import;
    - locate self by comparing its own `esp_app_desc` (image offset 0x20)
      against each app slot; copy itself to ota_0 @0x10000 if not already
      there (sector-wise erase+write+verify);
