@@ -35,8 +35,16 @@ export function sliderLineWidth(v) {
 
 // Rotation in revolutions per second (time() period = interval * 65.536 s),
 // so perceived speed tracks the slider linearly.
-var rotInterval = 1 / (65.536 * 0.5)
-//# min=0.02 max=3 step=0.01 default=0.5
+//
+// The default is capped by the SLOWEST rig this ships for, not by taste:
+// with N arms the fan is periodic every 180/N degrees, so a frame that
+// advances a large fraction of that spacing aliases — the arm that wins
+// every overlap lands somewhere else each frame and the pattern strobes
+// instead of rotating (Gitea #371). The 64x64 panel renders this at ~8 fps,
+// and 0.25 rev/s keeps it to a quarter of the 45-degree spacing per frame.
+// The slider still reaches 3 rev/s for rigs that can sample it.
+var rotInterval = 1 / (65.536 * 0.25)
+//# min=0.02 max=3 step=0.01 default=0.25
 export function sliderRotationSpeed(v) {
   rotInterval = 1 / (65.536 * max(v, 0.005))
 }
@@ -62,34 +70,35 @@ export function beforeRender(delta) {
 }
 
 export function render2D(index, x, y) {
+  // px/py do not depend on the arm, so they are hoisted out of the loop.
+  var px = x - 0.5
+  var py = y - 0.5
+
   for (var i = 0; i < numLines; i++) {
     var c = lineCos[i]
     var s = lineSin[i]
-    // Segment: (0.5, 0.5) +/- HALF_LEN * (c, s). Work from the center.
-    var px = x - 0.5
-    var py = y - 0.5
 
-    // Projection of the pixel onto the arm direction.
-    var t = px * c + py * s
-    var d
-    if (t > HALF_LEN) {
-      // beyond the far endpoint: distance to that endpoint
-      var ex = px - HALF_LEN * c
-      var ey = py - HALF_LEN * s
-      d = hypot(ex, ey)
-    } else if (t < -HALF_LEN) {
-      var fx = px + HALF_LEN * c
-      var fy = py + HALF_LEN * s
-      d = hypot(fx, fy)
-    } else {
-      // perpendicular distance to the infinite line
-      d = abs(px * s - py * c)
-    }
-
+    // Perpendicular distance to the arm's INFINITE line. It is a lower
+    // bound on the distance to the SEGMENT — the endpoint cases below add
+    // the along-axis overshoot in quadrature — so a pixel outside
+    // halfWidth here cannot be lit by this arm at all, and rejecting it
+    // costs four ops instead of the projection plus two branches. Most
+    // pixels reject against every arm, so this is the hot path.
+    var d = abs(px * s - py * c)
     if (d < halfWidth) {
-      // first matching arm wins; linear falloff to the edge
-      hsv(lineHue[i], 1, 1 - d / halfWidth)
-      return
+      // Inside the stripe: now it matters whether the pixel is past an end
+      // of the segment (0.5, 0.5) +/- HALF_LEN * (c, s).
+      var t = px * c + py * s
+      if (t > HALF_LEN) {
+        d = hypot(px - HALF_LEN * c, py - HALF_LEN * s)
+      } else if (t < -HALF_LEN) {
+        d = hypot(px + HALF_LEN * c, py + HALF_LEN * s)
+      }
+      if (d < halfWidth) {
+        // first matching arm wins; linear falloff to the edge
+        hsv(lineHue[i], 1, 1 - d / halfWidth)
+        return
+      }
     }
   }
   rgb(0, 0, 0)

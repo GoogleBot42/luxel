@@ -1,5 +1,87 @@
 # Update log
 
+## 2026-09-07 — Animated Asterisks 2D: two of three device suspects cleared, and the frame rate (#371)
+
+Jeremy reported that on the 64x64 panel the arm drawn on top where the arms
+overlap changes constantly, while the playground shows one stable arm on top.
+The pattern is deterministic about that — `render2D` returns on the FIRST arm
+within `halfWidth`, so arm 0 wins every overlap — so a changing winner pointed
+at the device path: HUB75 pipeline tearing (#269/#306), the early `return`
+inside a `for` loop under the flash-mapped execution (#268/#300/#307), or a
+cross-core race on `lineCos`/`lineSin`/`lineHue` (#280).
+
+**The engine is exonerated.** Two probes, captured through `GET /api/pixels`
+and hashed against `tools/verify/enginehost.mjs` renders of the same source:
+
+* **Frozen phase** — `angle` pinned to a constant, `hsv(i / 8, 1, 1)` so every
+  pixel's colour *is* the winning arm index. 20 consecutive panel frames, all
+  md5-identical to each other and to the host: `7e53b17e…`. The loop picks the
+  same winner for 4096/4096 pixels, 20/20 frames.
+* **Frame counter** — the real pattern with `time()` replaced by
+  `fcount = fcount + 1`, so frame N is a fixed image. 400 host frames hashed;
+  **25/25** consecutive panel captures were byte-identical to one whole host
+  frame, with the matched index advancing monotonically (10 10 10 11 11 12 …).
+  The same probe on the Athom (60 px, default grid map, 123 fps) matched
+  **14/14**.
+
+That kills the early `return` and the cross-core race. It does **not** clear
+the pipeline: `/api/pixels` on a pipelined board returns `pipeline::preview()`,
+the composed hand-off buffer — upstream of the DMA. And the DMA swap is not
+frame-atomic in the `circular-dma` build we ship: `Hub75::swap` in
+`firmware/vendor/esp-hub75/src/isr.rs` applies the pointer delta to every
+descriptor immediately, mid-pass, with its own SAFETY note conceding "one
+partially-mixed frame (tearing)". The doc comments in `firmware/src/hub75.rs`
+("queues an atomic buffer swap at the next rescan boundary", "a swap lands at a
+rescan boundary (~13 ms)") describe the non-circular mode and are wrong for our
+build; only `SWAP_DONE` is deferred to `out_eof`, and that just guards
+reclaiming the old buffer. That is being tracked as its own ticket.
+
+Its duty cycle bounds what it can explain here, though. The panel rescans at
+~77 Hz (7 planes, 20 MHz, 64x64) and composed this pattern at 5.7 fps, so one
+pass in ~13.5 carries a swap: the panel shows a *pure* frame for ~93 % of
+passes, and the mixed pass is ~13 ms out of each 175 ms frame. "Which arm is on
+top" is a property of the whole 175 ms — and it already differs between
+consecutive clean frames, because of aliasing:
+
+Master's defaults are 4 arms — the fan is periodic every 45° — at 0.5 rev/s,
+and the panel rendered the pattern at **5.7 fps** (`frame_us` 174,746 at
+4096 px = 42.6 µs/pixel). That is **31.5° of rotation per frame against a 45°
+arm spacing, 0.70 arm slots per frame**: arm 0 lands somewhere else every
+frame. Measured hue at panel pixel (48,31) over consecutive frames — `0.88 0.71
+0.80 0.64 0.48 0.33 0.41 0.26 0.10 …` — steps of −0.17/+0.09, exactly the
+predicted −0.175 per frame plus the 0.5 cyc/s hue drift. The playground (60 fps)
+and the Athom (123 fps) sample the same rotation at 3.0° and 1.5° per frame and
+look continuous.
+
+Two changes, both in `library/animated-asterisks-2d.js`:
+
+* **`render2D` inner loop, output-identical.** `px`/`py` are loop-invariant but
+  were recomputed for every arm, and the segment-endpoint branches were
+  evaluated before the cheap test that gates them. The perpendicular distance
+  to an arm's infinite line is a lower bound on the distance to the segment, so
+  testing it first rejects a pixel in four ops instead of a projection plus two
+  branches — and on a panel most pixels reject against every arm. Panel
+  `vm_us` **175,101 → 127,137** (mean of 5 samples each, 4096 px): **−27.4 %,
+  5.7 → 7.9 fps**. Byte-identical output: 2,880 frame pairs across six rigs
+  (64x64, 16x16, 8x32 grids; 60/300/512 px strips) and four control sets with
+  the rotation speed pinned, **0 differing bytes**.
+* **RotationSpeed default 0.5 → 0.25 rev/s.** The cap is set by the slowest rig
+  this ships for, not by taste: at the new 7.9 fps that is 11.4° per frame, a
+  quarter of the 45° arm spacing, versus 0.70 of it before. Mean frame-to-frame
+  hue change at four fixed panel pixels: **0.151 → 0.087** (median 0.159 →
+  0.066 — and 0.063 of that is the ColorSpeed drift itself, which is real
+  motion, not churn). The slider still reaches 3 rev/s.
+
+Both also shrink the *other* term: a mid-pass swap mixes frames 11.4° apart
+instead of 31.5°. (It fires more often — 1 pass in 9.8 rather than 13.5 — but
+each mix is 2.8× smaller.) #371 stays open until Jeremy says whether the top
+arm now tracks smoothly on the panel; that observation is what separates the
+residue from the non-atomic swap.
+
+`tools/check-library.sh`: 305/305 on all five rigs. Both boards were left as
+found — panel on its live Raindrops 2D at brightness 31 with all four stored
+patterns intact, Athom on Rainbow at 60 px / brightness 4.
+
 ## 2026-09-07 — Raindrops 2D renders through `renderFrame` + `fillCanvas`
 
 `library/raindrops-2d.js` converted in place, the way `snake-2d-v2.js`
