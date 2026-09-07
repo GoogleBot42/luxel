@@ -4,7 +4,7 @@
 
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
-use luxel_core::vm::Value;
+use luxel_core::vm::{StepKind, Value};
 
 const RAINBOW: &str =
     "export function render(index) {\n  hsv(time(.1) + index / pixelCount, 1, 1)\n}";
@@ -1429,4 +1429,187 @@ fn default_grid_is_procedural_and_covers_a_64x64_panel() {
     // and the outpipe sees the geometry (2D blur/glow use it)
     let g = e.grid().expect("grid detected");
     assert_eq!((g.w, g.h, g.serpentine), (64, 64, false));
+}
+
+// ---- renderFrame: the whole-frame entry (crate::bulk) ----
+//
+// One zero-argument call per frame instead of one call per pixel, with the
+// engine's frame buffer lent to the VM so the bulk builtins write it in
+// place. These lock the ENTRY: selection, the buffer hand-off, persistence
+// and the surrounding pipeline. Per-builtin semantics live in the unit
+// tests inside `crates/luxel-core/src/bulk.rs`.
+
+#[test]
+fn render_frame_wins_over_every_per_pixel_entry() {
+    // it is not a fourth dimensionality — it wins regardless of the map
+    let src = "export function render(i) { rgb(1, 0, 0) }\n\
+               export function render2D(i, x, y) { rgb(0, 1, 0) }\n\
+               export function renderFrame() { rgb(0, 0, 1)\n fill() }";
+    let mut e = Engine::new(src, 4, 1).unwrap();
+    assert_eq!(e.frame(Fx::ZERO), [[0, 0, 255]; 4]);
+    let mut e = Engine::new(src, 4, 1).unwrap();
+    e.set_grid_map(2, 2);
+    assert_eq!(e.frame(Fx::ZERO), [[0, 0, 255]; 4]);
+}
+
+#[test]
+fn render_frame_can_be_late_bound_through_a_global() {
+    // `export var renderFrame` assigned a function in beforeRender — the
+    // same RenderTarget::Global mechanism render2D has (oracle-confirmed
+    // for the per-pixel names, 2026-08-29)
+    let src = "export var renderFrame\n\
+               export function beforeRender(delta) {\n\
+                 if (time(1) >= 0) { renderFrame = paintIt }\n\
+               }\n\
+               function paintIt() { rgb(1, 1, 0)\n fill() }\n\
+               export function render(i) { rgb(1, 0, 0) }";
+    let mut e = Engine::new(src, 3, 1).unwrap();
+    assert_eq!(e.frame(Fx::ZERO), [[255, 255, 0]; 3]);
+    assert!(e.last_error.is_none());
+}
+
+#[test]
+fn render_frame_only_pattern_gets_the_default_grid_when_it_asks_for_one() {
+    // asks for coordinates → the same ceil(sqrt(n)) grid a render2D-only
+    // pattern gets
+    let mut e = Engine::new(
+        "export function renderFrame() { rgb(1, 0, 0)\n fillRect(0, 0, 1, 1) }",
+        16,
+        1,
+    )
+    .unwrap();
+    assert_eq!(e.installed_map().and_then(|m| m.grid), Some((4, 4)));
+    assert_eq!(e.grid().map(|g| (g.w, g.h)), Some((4, 4)));
+    assert_eq!(e.frame(Fx::ZERO), [[255, 0, 0]; 16]);
+
+    // index-space only → a strip stays a strip; conjuring a grid would
+    // change pixelMapDimensions() and the post chain under the pattern
+    let e = Engine::new(
+        "export function renderFrame() { fillHSV(0, 1, 1)\n fade(.5) }",
+        16,
+        1,
+    )
+    .unwrap();
+    assert!(e.installed_map().is_none());
+    assert!(e.grid().is_none());
+}
+
+#[test]
+fn render_frame_persists_between_frames() {
+    // the buffer is NOT cleared: fade + setPixel is a decay trail with no
+    // pattern-side array (a 4096-element one is 32 KB and has OOMed the
+    // S3 panel — Gitea #275)
+    let src = "export var n\n\
+               export function renderFrame() {\n\
+                 fade(.5)\n rgb(1, 1, 1)\n setPixel(n)\n n = n + 1\n\
+               }";
+    let mut e = Engine::new(src, 4, 1).unwrap();
+    e.frame(Fx::ZERO);
+    assert_eq!(e.pixels()[0], [255, 255, 255]);
+    e.frame(Fx::ZERO);
+    assert_eq!(e.pixels()[0], [127, 127, 127], "frame 1 should have decayed");
+    assert_eq!(e.pixels()[1], [255, 255, 255]);
+    e.frame(Fx::ZERO);
+    assert_eq!(e.pixels()[0], [63, 63, 63]);
+    assert_eq!(e.pixels()[1], [127, 127, 127]);
+    assert_eq!(e.pixels()[2], [255, 255, 255]);
+}
+
+#[test]
+fn render_frame_still_runs_the_post_chain_and_pixel_state() {
+    // gamma is the last stage of the chain, and it must see the frame the
+    // bulk ops wrote
+    let plain = {
+        let mut e = Engine::new("export function renderFrame() { rgb(.5, .5, .5)\n fill() }", 2, 1)
+            .unwrap();
+        e.frame(Fx::ZERO).to_vec()
+    };
+    let gamma = {
+        let mut e = Engine::new(
+            "export function renderFrame() { setGamma(2.2)\n rgb(.5, .5, .5)\n fill() }",
+            2,
+            1,
+        )
+        .unwrap();
+        e.frame(Fx::ZERO).to_vec()
+    };
+    assert_eq!(plain[0], [127, 127, 127]);
+    assert!(gamma[0][0] < 127, "gamma stage did not run: {:?}", gamma[0]);
+
+    // setPixelState's end-of-frame hand-over happens in finish_frame, which
+    // the whole-frame path must also route through
+    let src = "export var seen\n\
+               export function renderFrame() {\n\
+                 seen = pixelState(0)\n setPixelState(0, 0.5)\n\
+               }";
+    let mut e = Engine::new(src, 2, 1).unwrap();
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("seen"), Some(Value::Num(Fx::ZERO)));
+    e.frame(Fx::ZERO);
+    assert_eq!(e.var("seen"), Some(Value::Num(Fx::from_f64(0.5))));
+}
+
+#[test]
+fn render_frame_errors_keep_the_engine_and_the_buffer() {
+    // a non-fatal runtime error aborts the handler only — PB blast radius
+    let src = "export function renderFrame() {\n\
+                 rgb(1, 0, 0)\n fill()\n feedback(7, .5)\n rgb(0, 1, 0)\n fill()\n\
+               }";
+    let mut e = Engine::new(src, 3, 1).unwrap();
+    let px = e.frame(Fx::ZERO).to_vec();
+    assert_eq!(px.len(), 3);
+    assert_eq!(px[0], [255, 0, 0], "pre-error work survives, later work does not");
+    assert!(e.take_error().is_some());
+    // a VM resource guard is frame-fatal: the whole frame blanks, and the
+    // buffer still comes back the right length
+    let src = "export function renderFrame() {\n\
+                 rgb(1, 0, 0)\n fill()\n while (1) { }\n\
+               }";
+    let mut e = Engine::new(src, 3, 1).unwrap();
+    let px = e.frame(Fx::ZERO).to_vec();
+    assert_eq!(px, vec![[0, 0, 0]; 3]);
+    assert_eq!(e.pixels().len(), 3);
+    assert!(e.take_error().is_some());
+}
+
+#[test]
+fn render_frame_respects_frame_rate_and_time_scale() {
+    // both live in Engine::frame, so the whole-frame entry gets them free
+    let src = "export var runs\n\
+               export function renderFrame() { setFrameRate(10)\n runs = runs + 1 }";
+    let mut e = Engine::new(src, 2, 1).unwrap();
+    e.frame(Fx::from_int(10));
+    e.frame(Fx::from_int(10)); // 20 ms total, under the 100 ms period
+    assert_eq!(e.var("runs"), Some(Value::Num(Fx::ONE)));
+    e.frame(Fx::from_int(200));
+    assert_eq!(e.var("runs"), Some(Value::Num(Fx::from_int(2))));
+}
+
+#[test]
+fn render_frame_steps_in_the_debugger_without_losing_the_buffer() {
+    // line numbers:      1
+    let src = "\
+export function renderFrame() {
+  rgb(1, 0, 0)
+  fill()
+  rgb(0, 0, 1)
+  setPixel(0)
+}
+";
+    let mut e = Engine::new(src, 3, 1).unwrap();
+    e.debug_set_enabled(true);
+    assert_eq!(e.debug_set_breakpoints(&[4]), vec![4]);
+    e.frame(Fx::ZERO);
+    assert!(e.debug_paused());
+    assert_eq!(e.debug_location().unwrap().0, 4);
+    assert_eq!(e.debug_stack()[0].name, "renderFrame");
+    // the buffer is BACK while paused — a debugger UI reads it every stop
+    assert_eq!(e.pixels().len(), 3);
+    assert_eq!(e.pixels()[0], [255, 0, 0], "fill() already ran");
+    // step to the end of the frame
+    assert!(e.debug_step(StepKind::Over));
+    assert!(!e.debug_step(StepKind::Continue));
+    assert!(!e.debug_paused());
+    assert_eq!(e.pixels()[0], [0, 0, 255]);
+    assert_eq!(e.pixels()[1], [255, 0, 0]);
 }

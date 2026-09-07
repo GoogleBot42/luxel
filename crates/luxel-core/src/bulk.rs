@@ -682,3 +682,543 @@ fn blit_into(
     }
     Ok(Value::default())
 }
+
+#[cfg(all(test, feature = "frontend"))]
+mod tests {
+    use super::*;
+    use crate::engine::Engine;
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use core::sync::atomic::Ordering;
+
+    /// What map to install before running.
+    enum Rig {
+        /// No map at all (1D fallback coordinates).
+        Strip,
+        /// The zero-heap procedural row-major grid (`set_grid_map`).
+        Grid(u16, u16),
+        /// An explicit coordinate map — `detect_grid` decides whether it
+        /// reads as a grid.
+        Coords(Vec<[Fx; 3]>),
+    }
+
+    /// A W×H row-major (or serpentine) map in host coordinate units.
+    fn grid_coords(w: usize, h: usize, serpentine: bool) -> Vec<[Fx; 3]> {
+        let mut v = Vec::new();
+        for r in 0..h {
+            for c in 0..w {
+                let x = if serpentine && r % 2 == 1 { w - 1 - c } else { c };
+                v.push([Fx::from_int(x as i32), Fx::from_int(r as i32), Fx::ZERO]);
+            }
+        }
+        v
+    }
+
+    /// A map that is emphatically NOT a grid: pixels on a circle.
+    fn ring_coords(n: usize) -> Vec<[Fx; 3]> {
+        (0..n)
+            .map(|i| {
+                let a = unit_frac(i as u32, n as u32);
+                [fmath::cos_turns(a), fmath::sin_turns(a), Fx::ZERO]
+            })
+            .collect()
+    }
+
+    fn build(src: &str, n: u32, rig: &Rig) -> Engine {
+        let mut e = Engine::new(src, n, 1).expect("compile");
+        match rig {
+            Rig::Strip => {}
+            Rig::Grid(w, h) => e.set_grid_map(*w, *h),
+            Rig::Coords(c) => assert!(e.set_map(2, c)),
+        }
+        e
+    }
+
+    /// Render `count` frames of `src` and return the last one.
+    fn frames(src: &str, n: u32, rig: &Rig, count: usize) -> Vec<[u8; 3]> {
+        let mut e = build(src, n, rig);
+        for _ in 1..count {
+            e.frame(Fx::from_int(10));
+        }
+        let out = e.frame(Fx::from_int(10)).to_vec();
+        assert!(e.last_error.is_none(), "{:?}", e.last_error);
+        out
+    }
+
+    fn frame1(src: &str, n: u32, rig: &Rig) -> Vec<[u8; 3]> {
+        frames(src, n, rig, 1)
+    }
+
+    /// Wrap a body in the whole-frame entry.
+    fn rf(body: &str) -> alloc::string::String {
+        alloc::format!("export function renderFrame() {{\n{body}\n}}")
+    }
+
+    // ---- index space ----
+
+    #[test]
+    fn fill_fade_and_clear() {
+        let px = frame1(&rf("rgb(1, .5, 0)\n fill()"), 3, &Rig::Strip);
+        assert_eq!(px, vec![[255, 127, 0]; 3]);
+        // fade multiplies the OUTPUT bytes and floors, so a trail reaches
+        // true black instead of parking at 1
+        let px = frame1(&rf("rgb(1, .5, 0)\n fill()\n fade(.5)"), 3, &Rig::Strip);
+        assert_eq!(px, vec![[127, 63, 0]; 3]);
+        let px = frame1(&rf("rgb(1, 1, 1)\n fill()\n clear()"), 3, &Rig::Strip);
+        assert_eq!(px, vec![[0, 0, 0]; 3]);
+        // fade(0) is exact black, fade(1) leaves the frame alone
+        let px = frame1(&rf("rgb(1, 1, 1)\n fill()\n fade(0)"), 2, &Rig::Strip);
+        assert_eq!(px, vec![[0, 0, 0]; 2]);
+        let px = frame1(&rf("rgb(1, 1, 1)\n fill()\n fade(2)"), 2, &Rig::Strip);
+        assert_eq!(px, vec![[255, 255, 255]; 2]);
+    }
+
+    #[test]
+    fn brush_starts_black_each_frame_and_is_sticky_within_one() {
+        // nothing set this frame → the brush is black, not last frame's red
+        let px = frames(&rf("if (time(1) < 0) { rgb(1, 0, 0) }\n fill()"), 2, &Rig::Strip, 3);
+        assert_eq!(px, vec![[0, 0, 0]; 2]);
+        // one colour call serves every later op in the same frame
+        let px = frame1(&rf("rgb(0, 1, 0)\n setPixel(0)\n setPixel(1)"), 2, &Rig::Strip);
+        assert_eq!(px, vec![[0, 255, 0]; 2]);
+    }
+
+    #[test]
+    fn set_pixel_and_fill_range() {
+        let px = frame1(&rf("rgb(1, 0, 0)\n setPixel(2)"), 4, &Rig::Strip);
+        assert_eq!(px, vec![[0, 0, 0], [0, 0, 0], [255, 0, 0], [0, 0, 0]]);
+        // floor, and out of range is a silent no-op
+        let px = frame1(
+            &rf("rgb(1, 0, 0)\n setPixel(1.9)\n setPixel(-1)\n setPixel(99)"),
+            4,
+            &Rig::Strip,
+        );
+        assert_eq!(px[1], [255, 0, 0]);
+        assert_eq!(px[0], [0, 0, 0]);
+        // [i0, i1): exclusive end, clamped, inverted ranges paint nothing
+        let px = frame1(&rf("rgb(0, 0, 1)\n fillRange(1, 3)"), 4, &Rig::Strip);
+        assert_eq!(px, vec![[0, 0, 0], [0, 0, 255], [0, 0, 255], [0, 0, 0]]);
+        let px = frame1(&rf("rgb(0, 0, 1)\n fillRange(-5, 99)"), 3, &Rig::Strip);
+        assert_eq!(px, vec![[0, 0, 255]; 3]);
+        let px = frame1(&rf("rgb(0, 0, 1)\n fillRange(3, 1)"), 4, &Rig::Strip);
+        assert_eq!(px, vec![[0, 0, 0]; 4]);
+    }
+
+    #[test]
+    fn fill_hsv_and_rgb_take_scalars_or_arrays() {
+        // all scalars: a constant fill
+        let px = frame1(&rf("fillHSV(0, 1, 1)"), 3, &Rig::Strip);
+        assert_eq!(px, vec![[255, 0, 0]; 3]);
+        let px = frame1(&rf("fillRGB(1, .5, 0)"), 2, &Rig::Strip);
+        assert_eq!(px, vec![[255, 127, 0]; 2]);
+        // arrays index by pixel; a scalar broadcasts alongside them
+        let src = "vals = array(4)\n\
+                   export function renderFrame() {\n\
+                     vals[0] = 0\n vals[1] = .25\n vals[2] = .5\n vals[3] = .75\n\
+                     fillHSV(vals, 1, 1)\n\
+                   }";
+        let px = frame1(src, 4, &Rig::Strip);
+        assert_eq!(
+            px,
+            vec![[255, 0, 0], [127, 255, 0], [0, 255, 255], [127, 0, 255]]
+        );
+        // a short array bounds the run and leaves the tail untouched
+        let src = "vals = array(2)\n\
+                   export function renderFrame() {\n\
+                     rgb(0, 0, 1)\n fill()\n\
+                     vals[0] = 1\n vals[1] = 1\n\
+                     fillRGB(vals, 0, 0)\n\
+                   }";
+        let px = frame1(src, 4, &Rig::Strip);
+        assert_eq!(px, vec![[255, 0, 0], [255, 0, 0], [0, 0, 255], [0, 0, 255]]);
+    }
+
+    #[test]
+    fn fill_hsv_rejects_a_non_array_non_number() {
+        let src = "export function f() { }\n\
+                   export function renderFrame() { fillHSV(f, 1, 1) }";
+        let mut e = build(src, 2, &Rig::Strip);
+        e.frame(Fx::from_int(10));
+        let err = e.take_error().expect("a type error");
+        assert!(err.message.contains("fillHSV"), "{}", err.message);
+        // the buffer came back intact even though the op errored
+        assert_eq!(e.pixels().len(), 2);
+    }
+
+    #[test]
+    fn fill_gradient_runs_along_the_index_by_default() {
+        // t = i/(n-1): both ENDS of the gradient land on a pixel
+        let px = frame1(&rf("fillGradient(0, 1, 1, 1, 1, 1)"), 4, &Rig::Strip);
+        assert_eq!(px[0], [255, 0, 0]);
+        assert_eq!(px[3], [255, 0, 0]); // hue 1 wraps back to red
+        assert_eq!(px[1], [0, 255, 0]); // hue 1/3
+        assert_eq!(px[2], [0, 0, 255]); // hue 2/3
+        // a single pixel is t = 0, not a divide by zero
+        let px = frame1(&rf("fillGradient(0, 1, 1, 1, 1, 1)"), 1, &Rig::Strip);
+        assert_eq!(px[0], [255, 0, 0]);
+    }
+
+    #[test]
+    fn fill_gradient_axis_follows_the_map() {
+        // axis 2 = mapped y: every cell of a row shares a colour
+        let px = frame1(&rf("fillGradient(0, 1, 1, 1, 1, 1, 2)"), 16, &Rig::Grid(4, 4));
+        for r in 0..4 {
+            for c in 0..4 {
+                assert_eq!(px[r * 4 + c], px[r * 4], "row {r} is not uniform");
+            }
+        }
+        assert_eq!(px[0], [255, 0, 0]);
+        assert_ne!(px[4], px[0]);
+        // axis 1 = mapped x: every cell of a column shares a colour
+        let px = frame1(&rf("fillGradient(0, 1, 1, 1, 1, 1, 1)"), 16, &Rig::Grid(4, 4));
+        for r in 0..4 {
+            for c in 0..4 {
+                assert_eq!(px[r * 4 + c], px[c], "column {c} is not uniform");
+            }
+        }
+    }
+
+    // ---- coordinate space ----
+
+    #[test]
+    fn fill_rect_on_a_grid_a_ring_and_a_strip() {
+        // the lower-left quadrant of a 4x4 panel
+        let px = frame1(&rf("rgb(1, 0, 0)\n fillRect(0, 0, .5, .5)"), 16, &Rig::Grid(4, 4));
+        let lit: Vec<usize> = (0..16).filter(|&i| px[i] == [255, 0, 0]).collect();
+        assert_eq!(lit, vec![0, 1, 4, 5]);
+        // an irregular map has no grid; the predicate is still per pixel
+        let ring = ring_coords(8);
+        let px = frame1(
+            &rf("rgb(1, 0, 0)\n fillRect(0, 0, .5, .5)"),
+            8,
+            &Rig::Coords(ring.clone()),
+        );
+        let n_lit = px.iter().filter(|p| **p == [255, 0, 0]).count();
+        assert!(n_lit > 0 && n_lit < 8, "{n_lit} of 8 lit");
+        // mapless: y is the mid-space 0.5 fill, x is index-normalized —
+        // exactly what render2D would receive
+        let src = "export function render(i) { }\n\
+                   export function renderFrame() { rgb(1, 0, 0)\n fillRect(0, .4, .5, .6) }";
+        let px = frame1(src, 4, &Rig::Strip);
+        // bounds are INCLUSIVE, so x = 0.5 is inside
+        assert_eq!(px, vec![[255, 0, 0], [255, 0, 0], [255, 0, 0], [0, 0, 0]]);
+    }
+
+    #[test]
+    fn fill_circle_is_a_hard_disc() {
+        // radius 0.3 about the centre of a 5x5 panel: the plus-shape
+        let px = frame1(
+            &rf("rgb(0, 0, 1)\n fillCircle(.5, .5, .3)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        let lit: Vec<usize> = (0..25).filter(|&i| px[i] != [0, 0, 0]).collect();
+        assert_eq!(lit, vec![7, 11, 12, 13, 17]);
+        // a negative radius paints nothing
+        let px = frame1(&rf("rgb(0, 0, 1)\n fillCircle(.5, .5, -1)"), 25, &Rig::Grid(5, 5));
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+    }
+
+    #[test]
+    fn splat_falls_off_linearly_and_honours_modes() {
+        // centre cell gets the full brush, the ring at d = 0.25 gets half
+        let px = frame1(
+            &rf("rgb(1, 1, 1)\n splat(.5, .5, .5, 0)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        assert_eq!(px[12], [255, 255, 255]);
+        assert_eq!(px[11], [127, 127, 127]);
+        assert_eq!(px[0], [0, 0, 0]); // corner is d = 0.707 > r
+        // add saturates rather than wrapping
+        let px = frame1(
+            &rf("rgb(1, 1, 1)\n splat(.5, .5, .5, 0)\n splat(.5, .5, .5, 1)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        assert_eq!(px[11], [254, 254, 254]);
+        assert_eq!(px[12], [255, 255, 255]);
+        // max keeps the brighter of the two
+        let px = frame1(
+            &rf("rgb(1, 1, 1)\n splat(.5, .5, .5, 0)\n rgb(.2, .2, .2)\n splat(.5, .5, .5, 2)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        assert_eq!(px[12], [255, 255, 255]);
+        // keyed leaves the destination where the source is black
+        let px = frame1(
+            &rf("rgb(1, 0, 0)\n fill()\n rgb(0, 0, 0)\n splat(.5, .5, .5, 3)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        assert_eq!(px[12], [255, 0, 0]);
+    }
+
+    #[test]
+    fn draw_line_is_a_capsule() {
+        // a horizontal line across the middle row of a 5x5 panel
+        let px = frame1(
+            &rf("rgb(1, 1, 1)\n drawLine(0, .5, 1, .5, .2, 0)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        for c in 0..5 {
+            assert_eq!(px[10 + c], [255, 255, 255], "middle row cell {c}");
+        }
+        for (c, p) in px[..5].iter().enumerate() {
+            assert_eq!(*p, [0, 0, 0], "top row cell {c} should be clear");
+        }
+        // a zero-length segment degenerates to a disc, not a no-op
+        let px = frame1(
+            &rf("rgb(1, 1, 1)\n drawLine(.5, .5, .5, .5, .3, 0)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        assert_eq!(px[12], [255, 255, 255]);
+        assert_eq!(px[0], [0, 0, 0]);
+        // width 0 paints nothing
+        let px = frame1(
+            &rf("rgb(1, 1, 1)\n drawLine(0, .5, 1, .5, 0, 0)"),
+            25,
+            &Rig::Grid(5, 5),
+        );
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+    }
+
+    #[test]
+    fn fill_canvas_samples_nearest() {
+        // a 2x2 canvas on a 4x4 panel: each texel covers a 2x2 block
+        let src = "hs = array(4)\n\
+                   export function renderFrame() {\n\
+                     hs[0] = 0\n hs[1] = .3333\n hs[2] = .6667\n hs[3] = 0\n\
+                     fillCanvas(hs, 1, 1, 2, 2)\n\
+                   }";
+        let px = frame1(src, 16, &Rig::Grid(4, 4));
+        for (block, cells) in [
+            (0usize, [0usize, 1, 4, 5]),
+            (1, [2, 3, 6, 7]),
+            (2, [8, 9, 12, 13]),
+            (3, [10, 11, 14, 15]),
+        ] {
+            for i in cells {
+                assert_eq!(px[i], px[cells[0]], "block {block} cell {i}");
+            }
+        }
+        assert_eq!(px[0], [255, 0, 0]);
+        assert_ne!(px[2], px[0]);
+        // a degenerate canvas paints nothing
+        let px = frame1(&rf("fillCanvas(0, 1, 1, 0, 0)"), 16, &Rig::Grid(4, 4));
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+    }
+
+    // ---- grid space ----
+
+    #[test]
+    fn grid_dims_report_the_installed_grid() {
+        let src = "export var gw, gh\n\
+                   export function renderFrame() { gw = gridWidth()\n gh = gridHeight() }";
+        let mut e = build(src, 12, &Rig::Grid(4, 3));
+        e.frame(Fx::from_int(10));
+        assert_eq!(e.var("gw"), Some(Value::Num(Fx::from_int(4))));
+        assert_eq!(e.var("gh"), Some(Value::Num(Fx::from_int(3))));
+        // a ring is not a grid: 0, so a pattern can branch instead of erroring
+        let mut e = build(src, 8, &Rig::Coords(ring_coords(8)));
+        e.frame(Fx::from_int(10));
+        assert_eq!(e.var("gw"), Some(Value::Num(Fx::ZERO)));
+        assert_eq!(e.var("gh"), Some(Value::Num(Fx::ZERO)));
+    }
+
+    #[test]
+    fn blit_pastes_clips_and_keys() {
+        // a 2x1 red/green sprite at cell (1, 1) of a 4x4 panel
+        let src = "hs = array(2)\n\
+                   export function renderFrame() {\n\
+                     hs[0] = 0\n hs[1] = .3333\n\
+                     blit(hs, 1, 1, 2, 1, 1, 1, 0)\n\
+                   }";
+        let px = frame1(src, 16, &Rig::Grid(4, 4));
+        assert_eq!(px[5], [255, 0, 0]);
+        assert_eq!(px[6], [0, 255, 0]);
+        assert_eq!(px[4], [0, 0, 0]);
+        // negative / off-grid placement clips instead of wrapping or erroring
+        let src = "hs = array(2)\n\
+                   export function renderFrame() {\n\
+                     hs[0] = 0\n hs[1] = .3333\n\
+                     blit(hs, 1, 1, 2, 1, -1, 2, 0)\n\
+                   }";
+        let px = frame1(src, 16, &Rig::Grid(4, 4));
+        assert_eq!(px[8], [0, 255, 0]); // only the second texel landed
+        assert_eq!(px[9], [0, 0, 0]);
+        // keyed: a black texel leaves the destination alone
+        let src = "vs = array(2)\n\
+                   export function renderFrame() {\n\
+                     rgb(0, 0, 1)\n fill()\n\
+                     vs[0] = 0\n vs[1] = 1\n\
+                     blit(0, 0, vs, 2, 1, 0, 0, 3)\n\
+                   }";
+        let px = frame1(src, 16, &Rig::Grid(4, 4));
+        assert_eq!(px[0], [0, 0, 255]);
+        assert_eq!(px[1], [255, 255, 255]);
+        // without a grid it is a no-op, not an error
+        let px = frame1(
+            &rf("rgb(1, 1, 1)\n blit(0, 0, 1, 2, 2, 0, 0, 0)"),
+            8,
+            &Rig::Coords(ring_coords(8)),
+        );
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+    }
+
+    #[test]
+    fn blit_cost_is_bounded_by_the_grid_not_the_canvas() {
+        // A 30000x30000 canvas may cost no more than the grid has cells:
+        // the source rectangle is clipped up front, so this is 16 texels,
+        // not 900 million. (Test-visible only as "it finishes".)
+        let px = frame1(
+            &rf("blit(0, 0, 1, 30000, 30000, -20000, -20000, 0)"),
+            16,
+            &Rig::Grid(4, 4),
+        );
+        assert_eq!(px, vec![[255, 255, 255]; 16]);
+        // fully off the grid on the other side: nothing painted
+        let px = frame1(
+            &rf("blit(0, 0, 1, 30000, 30000, 4, 0, 0)"),
+            16,
+            &Rig::Grid(4, 4),
+        );
+        assert_eq!(px, vec![[0, 0, 0]; 16]);
+    }
+
+    // ---- the fast path is the scan ----
+
+    /// xorshift32 — a deterministic parameter sweep with no dev-dependency.
+    struct Rng(u32);
+    impl Rng {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 17;
+            self.0 ^= self.0 << 5;
+            self.0
+        }
+        /// A coordinate in roughly −0.25..1.25, so shapes straddle the edges.
+        fn coord(&mut self) -> f64 {
+            (self.next() % 1500) as f64 / 1000.0 - 0.25
+        }
+        fn radius(&mut self) -> f64 {
+            (self.next() % 700) as f64 / 1000.0 + 0.01
+        }
+    }
+
+    fn scan_and_fast(src: &str, n: u32, rig: &Rig) -> (Vec<[u8; 3]>, Vec<[u8; 3]>) {
+        FORCE_SCAN.store(true, Ordering::Relaxed);
+        let scan = frame1(src, n, rig);
+        FORCE_SCAN.store(false, Ordering::Relaxed);
+        let fast = frame1(src, n, rig);
+        (scan, fast)
+    }
+
+    #[test]
+    fn grid_fast_path_is_byte_identical_to_the_generic_scan() {
+        let rigs = [
+            ("procedural 8x8", Rig::Grid(8, 8), 64u32),
+            ("procedural 8x32", Rig::Grid(8, 32), 256),
+            ("procedural 1x9", Rig::Grid(1, 9), 9),
+            ("coords 8x8", Rig::Coords(grid_coords(8, 8, false)), 64),
+            ("coords 8x8 serpentine", Rig::Coords(grid_coords(8, 8, true)), 64),
+            ("coords 8x32 serpentine", Rig::Coords(grid_coords(8, 32, true)), 256),
+            ("coords 32x8", Rig::Coords(grid_coords(32, 8, false)), 256),
+            ("ring (not a grid)", Rig::Coords(ring_coords(64)), 64),
+        ];
+        let mut rng = Rng(0x1234_5678);
+        for (name, rig, n) in &rigs {
+            for round in 0..12 {
+                let mut body = alloc::string::String::from("clear()\n");
+                for _ in 0..4 {
+                    let (h, v) = (rng.coord().abs() % 1.0, 0.4 + rng.radius() * 0.5);
+                    body.push_str(&alloc::format!("hsv({h:.4}, 1, {v:.4})\n"));
+                    match rng.next() % 5 {
+                        0 => body.push_str(&alloc::format!(
+                            "fillRect({:.4}, {:.4}, {:.4}, {:.4})\n",
+                            rng.coord(),
+                            rng.coord(),
+                            rng.coord(),
+                            rng.coord()
+                        )),
+                        1 => body.push_str(&alloc::format!(
+                            "fillCircle({:.4}, {:.4}, {:.4})\n",
+                            rng.coord(),
+                            rng.coord(),
+                            rng.radius()
+                        )),
+                        2 => body.push_str(&alloc::format!(
+                            "splat({:.4}, {:.4}, {:.4}, {})\n",
+                            rng.coord(),
+                            rng.coord(),
+                            rng.radius(),
+                            rng.next() % 4
+                        )),
+                        3 => body.push_str(&alloc::format!(
+                            "drawLine({:.4}, {:.4}, {:.4}, {:.4}, {:.4}, {})\n",
+                            rng.coord(),
+                            rng.coord(),
+                            rng.coord(),
+                            rng.coord(),
+                            rng.radius(),
+                            rng.next() % 4
+                        )),
+                        _ => body.push_str(&alloc::format!(
+                            "fillCanvas({:.4}, 1, 1, {}, {})\n",
+                            rng.coord().abs() % 1.0,
+                            1 + rng.next() % 9,
+                            1 + rng.next() % 9
+                        )),
+                    }
+                }
+                let src = rf(&body);
+                let (scan, fast) = scan_and_fast(&src, *n, rig);
+                assert_eq!(scan, fast, "{name} round {round}:\n{src}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_transform_routes_the_fast_path_back_to_the_scan() {
+        let src = rf("translate(.25, .375)\n\
+                      rgb(1, 1, 0)\n fillRect(.1, .1, .9, .5)\n\
+                      rgb(0, 1, 1)\n splat(.5, .5, .4, 1)");
+        for (name, rig, n) in [
+            ("procedural 8x8", Rig::Grid(8, 8), 64u32),
+            ("coords 8x8 serpentine", Rig::Coords(grid_coords(8, 8, true)), 64),
+        ] {
+            let (scan, fast) = scan_and_fast(&src, n, &rig);
+            assert_eq!(scan, fast, "{name}");
+            // and the transform actually did something
+            let plain = frame1(
+                &rf("rgb(1, 1, 0)\n fillRect(.1, .1, .9, .5)\n\
+                     rgb(0, 1, 1)\n splat(.5, .5, .4, 1)"),
+                n,
+                &rig,
+            );
+            assert_ne!(plain, fast, "{name}: the transform was ignored");
+        }
+    }
+
+    #[test]
+    fn fill_canvas_direct_copy_matches_the_scan() {
+        // the straight-copy fast path only fires when the canvas is
+        // exactly the grid, so pin that case specifically
+        let src = "hs = array(64)\n\
+                   export function renderFrame() {\n\
+                     for (i = 0; i < 64; i++) { hs[i] = i / 64 }\n\
+                     fillCanvas(hs, 1, 1, 8, 8)\n\
+                   }";
+        for (name, rig) in [
+            ("procedural", Rig::Grid(8, 8)),
+            ("coords", Rig::Coords(grid_coords(8, 8, false))),
+            ("coords serpentine", Rig::Coords(grid_coords(8, 8, true))),
+        ] {
+            let (scan, fast) = scan_and_fast(src, 64, &rig);
+            assert_eq!(scan, fast, "{name}");
+            assert!(fast.iter().any(|p| *p != [0, 0, 0]), "{name}: nothing painted");
+        }
+    }
+}
