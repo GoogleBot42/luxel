@@ -1,5 +1,49 @@
 # Update log
 
+## 2026-09-07 — wire-check.sh: the wall of FAILs was the argument, not the firmware (#346)
+
+`tools/wire-check.sh` reported FAIL on nearly every check against a healthy
+device, with the captured values printed as empty parentheses and
+`stat: cannot statx .../wc-body`. It reads as a firmware catastrophe. It was
+the argument form.
+
+The script takes a bare IP and prepends the scheme itself. Called as
+`tools/wire-check.sh http://192.168.0.238` — which is how every other device
+tool in the repo is called — it built `http://http://192.168.0.238/...`,
+where curl parses the authority as the host `http` and gives up with exit 6,
+`Could not resolve host: http`. Every curl carried `-s` and no `-S`, so that
+error went nowhere; `-D -` produced an empty header capture and `-o` never
+created the body file, and each assertion then compared empty strings.
+Chasing `TMPDIR` was a dead end because the temp dir was never the problem.
+
+Fixed on both axes:
+
+* **The argument is normalized.** `192.168.0.183`, `http://192.168.0.183`
+  and `http://192.168.0.183/` all work now.
+* **A capture that does not land is loud.** Every request goes through a
+  `req` helper that keeps curl's exit status (with `-S`, so the message
+  survives) and asserts the header capture is non-empty; body sizes go
+  through `bodysize`, which aborts on a missing file. Both print
+  `HARNESS BROKEN: …` and exit **2**. Connection-class curl exits (6/7/28/
+  35/56) print `DEVICE UNREACHABLE` and exit **3**. So the exit code now
+  says which of the three things happened: 0 all pass, 1 a real contract
+  FAIL, 2 harness, 3 network. A harness fault can no longer masquerade as a
+  per-check firmware regression.
+* One capture is still legitimately allowed to be absent — curl never
+  creates the `-o` file for a body-less 304 — and that case keeps its
+  tolerant check. A 200 with no ETag now SKIPS the 304 block with a note
+  instead of asserting against an empty `If-None-Match`; the missing ETag is
+  already a FAIL one line above.
+
+Verified end-to-end against the Athom rig (192.168.0.183, v0.1.40, ota_0, 60
+px): **ALL PASS, exit 0** for all three argument forms, including the exact
+`nix develop --command tools/wire-check.sh http://192.168.0.183` invocation
+from the bug report. The guards were exercised too: unreachable host → exit
+3, unwritable `TMPDIR` → `HARNESS BROKEN` exit 2, missing body capture →
+`HARNESS BROKEN` exit 2. No firmware defect behind any of the original
+FAILs — the device answered every check correctly the whole time.
+
+
 ## 2026-09-07 — Store forwarding: the stored value stays on the stack for the next statement (#320)
 
 Assignment is an expression, so `StoreL` and `StoreG` PEEK — the assigned
