@@ -296,6 +296,47 @@ statement, or a `for` header's update clause) does **not** emit the
 `Const 1; Sub` that recovers the old value. Nothing can observe the
 difference, and leaving it out is what lets `StoreL; Pop` fuse.
 
+## Store forwarding (Gitea #320)
+
+Assignment is an expression, so `StoreL`/`StoreG` PEEK: the assigned value
+is still on the stack after them. A statement that stores a variable,
+followed by a statement whose first operand is a read of that variable,
+therefore lowers to `StoreL a; Pop; LoadL a` — throw the value away, read
+it straight back. `compile::forward_stores` deletes the `Pop; LoadL a`.
+
+This is deliberately NOT a peephole template. The peephole may never carry
+a value across a source position, which is what keeps the debugger stopping
+once per statement; this pass exists precisely to carry one across a
+statement boundary, and rests on a different argument:
+
+* **The stack is identical at every point.** The base sequence sits at
+  depth `d` after the `StoreL`, `d-1` after the `Pop` and `d` again after
+  the `LoadL`; the rewrite sits at `d` throughout. Peak depth, and so every
+  `MAX_STACK` verdict, is unchanged — the one elided push-with-check could
+  only have failed at a depth already reached.
+* **The debugger still stops on the second statement.** Only that
+  statement's FIRST instruction is deleted, never its last (the pass
+  requires a successor, and a statement reading a variable always emits
+  more than the read), so its position run survives one instruction
+  shorter and `pos_at` still answers with its line. The extra live stack
+  entry is visible to a stack inspector and to nothing else.
+
+The guards: neither the `Pop` nor the load may be a JUMP TARGET (control
+could otherwise arrive at the load without the store having run), the `Pop`
+must carry the store's own source position, the load must name the slot the
+store wrote, and the load may not be the function's last instruction. A
+read that is not the next statement's first operand — `var v = 1 - d * 4`
+after `var d = …` — simply does not match, because the load is not the
+instruction after the `Pop`.
+
+Like fusion this changes FUEL (the window costs 1 unit instead of 3);
+`FUEL` is a runaway-loop guard, not a semantic quantity.
+
+`luxel run|bench|compile --no-storefwd` compiles with the pass off, and
+`crates/luxel-core/tests/storefwd.rs` compares the two — pixels, runtime
+error text and position, debugger stops, the locals the inspector reports
+at every stop, and a stack overflow.
+
 ## Decoding
 
 Three entry points, one validator:

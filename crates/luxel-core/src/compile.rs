@@ -115,6 +115,13 @@ pub struct CompileOpts {
     /// switch: `tests/constfold.rs` renders folded and unfolded and
     /// compares them, exactly as `tests/superinsns.rs` does for fusion.
     pub const_folding: bool,
+    /// Keep a stored value on the stack for the next statement to use
+    /// instead of popping it and loading it straight back (Gitea #320).
+    /// It carries a live value ACROSS a statement boundary, which the
+    /// peephole contract forbids, so it is its own pass with its own
+    /// switch: `tests/storefwd.rs` renders forwarded and unforwarded and
+    /// compares them, and `luxel compile --no-storefwd` is the A/B lever.
+    pub store_forwarding: bool,
 }
 
 impl Default for CompileOpts {
@@ -122,6 +129,7 @@ impl Default for CompileOpts {
         CompileOpts {
             superinstructions: true,
             const_folding: true,
+            store_forwarding: true,
         }
     }
 }
@@ -180,7 +188,15 @@ fn assemble(
             f.code = fcode;
             f.pos = fpos;
         }
-        // pass 0b: fuse the hot sequences into superinstructions
+        // pass 0b: hand a stored value straight to the next statement
+        // rather than popping it and loading it straight back (Gitea #320)
+        if opts.store_forwarding {
+            let (fcode, fpos) =
+                forward_stores(core::mem::take(&mut f.code), core::mem::take(&mut f.pos));
+            f.code = fcode;
+            f.pos = fpos;
+        }
+        // pass 0c: fuse the hot sequences into superinstructions
         if opts.superinstructions {
             let (fcode, fpos) =
                 peephole(core::mem::take(&mut f.code), core::mem::take(&mut f.pos));
@@ -633,6 +649,113 @@ fn fused_ops(first: u8, second: u8) -> u8 {
         (2, 2) => 3,          // LoadG; LoadG; op   → no LoadGG template
         _ => 2,               // LoadLL / LoadLG / LoadGL, then the op
     }
+}
+
+/// Store forwarding across a statement boundary (Gitea #320).
+///
+/// A statement that stores a variable, immediately followed by a statement
+/// that reads it back, lowers to
+///
+/// ```text
+///     <expr>
+///     StoreL a     -- assignment is an expression: StoreL PEEKS,
+///     Pop          --   so the value is still on the stack, and
+///     LoadL a      --   this pair throws it away and reads it back
+/// ```
+///
+/// Dropping the `Pop; LoadL a` leaves exactly the same stack, so the whole
+/// window becomes one dispatch instead of two (the peephole would have
+/// fused `StoreL; Pop` into `StoreLPop`). ~2,300 sites across 289 of the
+/// 299 library patterns.
+///
+/// This is NOT a peephole rule. The peephole may never carry a value across
+/// a source position, so the debugger keeps stopping once per statement;
+/// this rewrite deliberately does exactly that, and stands on a different
+/// argument:
+///
+/// * **The stack is bit-identical at every point.** The base sequence's
+///   depth after `StoreL` is `d`, after `Pop` `d-1`, after `LoadL` `d`
+///   again; the rewrite is at `d` throughout. Peak depth, and therefore
+///   every `MAX_STACK` verdict, is unchanged — the elided `LoadL` push is
+///   the only omitted check and it could only have failed at a depth the
+///   sequence had already reached.
+/// * **The debugger still stops on the second statement.** Only the
+///   statement's FIRST instruction is deleted, never its last: the guards
+///   below require a successor, and a statement that reads a variable
+///   always emits more than the read (an expression statement appends
+///   `Pop`, a `return` appends `Ret`). So the position run `assemble`
+///   builds for that statement still exists, one instruction shorter, and
+///   `pos_at` still answers with its line. The extra live stack entry is
+///   visible to a `debug_stack` inspector, which is the point of the
+///   `debug_step` test in `tests/storefwd.rs`.
+///
+/// The guards, in the order they are checked:
+///
+/// * the `Pop` and the load must be neither a jump target (control could
+///   arrive at the load without the store having run, or in the middle of
+///   what used to be three instructions) nor missing a successor;
+/// * the `Pop` must carry the STORE's source position — the same rule
+///   `StoreLPop` already obeys, and what makes "the store ends its
+///   statement" true;
+/// * and the load must name the same slot the store wrote, so the value
+///   already on the stack is the one being asked for.
+///
+/// Nothing requires the load to be the second statement's first *pushed*
+/// operand — it is, by construction: it is the instruction immediately
+/// after the `Pop` that ended the first statement.
+///
+/// Like fusion, this changes FUEL: the window costs 1 unit instead of 3.
+/// `FUEL` is a runaway-loop guard, not a semantic quantity.
+fn forward_stores(code: Vec<Insn>, pos: Vec<(u32, u32)>) -> (Vec<Insn>, Vec<(u32, u32)>) {
+    use Insn::*;
+    let n = code.len();
+    // Positions are parallel to the code; without them the "the Pop belongs
+    // to the store's statement" rule cannot be checked, so rewrite nothing.
+    if pos.len() != n {
+        return (code, pos);
+    }
+    let is_target = jump_targets(&code);
+
+    let mut out: Vec<Insn> = Vec::with_capacity(n);
+    let mut outpos: Vec<(u32, u32)> = Vec::with_capacity(n);
+    // old instruction index → new instruction index, exactly as in
+    // [`peephole`]. Only jump targets are ever read back, and a jump target
+    // is never one of the two instructions this pass deletes.
+    let mut map = alloc::vec![0u32; n + 1];
+    let mut i = 0usize;
+    while i < n {
+        let at = out.len() as u32;
+        // `i + 3 <= n` keeps a successor for the second statement: the load
+        // may not be the last instruction in the function.
+        let forwards = i + 3 <= n
+            && matches!(code[i + 1], Pop)
+            && !is_target[i + 1]
+            && !is_target[i + 2]
+            && pos[i + 1] == pos[i]
+            && match (&code[i], &code[i + 2]) {
+                (StoreL(a), LoadL(b)) => a == b,
+                (StoreG(g), LoadG(h)) => g == h,
+                _ => false,
+            };
+        let len = if forwards { 3 } else { 1 };
+        for k in 0..len {
+            map[i + k] = at;
+        }
+        out.push(code[i]);
+        outpos.push(pos[i]);
+        i += len;
+    }
+    map[n] = out.len() as u32;
+    // Jump operands were instruction indices into the old code.
+    for insn in &mut out {
+        match insn {
+            Jmp(t) | JmpIfFalse(t) | JmpIfTruePeek(t) | JmpIfFalsePeek(t) | CmpJf(_, t) => {
+                *t = map[(*t as usize).min(n)];
+            }
+            _ => {}
+        }
+    }
+    (out, outpos)
 }
 
 fn peephole(code: Vec<Insn>, pos: Vec<(u32, u32)>) -> (Vec<Insn>, Vec<(u32, u32)>) {
@@ -2180,9 +2303,9 @@ mod const_fold_tests {
     use alloc::string::String;
     use alloc::vec::Vec;
 
-    /// The IR of one function after both #312 passes and the #261
-    /// peephole — i.e. exactly the instruction stream [`assemble`]
-    /// encodes.
+    /// The IR of one function after the #312 passes, #320 store
+    /// forwarding and the #261 peephole — i.e. exactly the instruction
+    /// stream [`assemble`] encodes.
     fn ir(src: &str, fname: &str) -> Vec<Insn> {
         let ast = parse_program(src).expect("parses");
         let mut c = Compiler::new(src);
@@ -2195,6 +2318,7 @@ mod const_fold_tests {
             .find(|f| f.name == fname)
             .unwrap_or_else(|| panic!("no function `{fname}`"));
         let (code, pos) = const_fold(f.code.clone(), f.pos.clone(), &frozen);
+        let (code, pos) = forward_stores(code, pos);
         peephole(code, pos).0
     }
 
@@ -2254,6 +2378,12 @@ mod const_fold_tests {
 
     #[test]
     fn a_bare_increment_statement_loses_the_recovery_too() {
+        // Also the shape #320 was filed for: every one of these three
+        // statements stores a variable the next one reads back, so no
+        // `Pop; LoadL i` survives and the plain `StoreL` keeps the value on
+        // the stack for its successor. Seven dispatches became six, and the
+        // `LoadLConstOp`/`LoadL` that used to reload `i` are a `ConstOp`
+        // and nothing at all.
         let src = "export function render(index) {
   var i = index
   i++
@@ -2263,10 +2393,9 @@ mod const_fold_tests {
             ops(src, "render"),
             [
                 "LoadL",
-                "StoreLPop",
-                "LoadLConstOp",
-                "StoreLPop",
-                "LoadL",
+                "StoreL",
+                "ConstOp",
+                "StoreL",
                 "CallBuiltinCC",
                 "PopRetNull"
             ]

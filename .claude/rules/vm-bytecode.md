@@ -58,6 +58,25 @@ paths:
   keeps the debugger stopping per source line). `compile_with(src,
   CompileOpts { superinstructions: false })` / `luxel bench --no-fuse` is
   the A/B lever; `tests/superinsns.rs` compares the two directly.
+- The "never across a SOURCE POSITION" rule binds the PEEPHOLE, not the
+  compiler. `compile::forward_stores` (#320) breaks it on purpose — it
+  deletes the `Pop; LoadL a` after a `StoreL a`, leaving the stored value
+  live across the statement boundary — and pays for it with its own
+  argument: identical stack depth at every point (so identical MAX_STACK
+  verdicts), and only the second statement's FIRST instruction deleted,
+  never its last, so its position run survives and the debugger still
+  stops on it. A new pass that wants to cross a statement boundary owes
+  the same two proofs plus `tests/storefwd.rs`-style evidence (pixels,
+  error text and position, debugger stops AND the locals reported at each
+  stop). Do not add such a rewrite as a peephole template.
+- Three independent compile passes now run in a fixed order —
+  `const_fold` (#312), `forward_stores` (#320), `peephole` (#261) — each
+  with its own `CompileOpts` switch (`--no-fold`, `--no-storefwd`,
+  `--no-fuse`). They compose, and no one of them may depend on another for
+  correctness: every combination has to render identically. Measure a new
+  one with the peephole OFF as well as on, because a `LoadL` that would
+  have fused into a superinstruction anyway hides the saving — #320 fires
+  at 1,183 library sites but nets 465 words once #261 has run.
 - The dispatch loop's size is load-bearing. Adding arms is not free even
   for programs that never execute them: the #261 arms cost ~10–16 % of
   host throughput on the unfused path (measured `--no-fuse` vs master),
