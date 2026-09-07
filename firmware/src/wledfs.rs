@@ -529,8 +529,9 @@ fn json_array0_int(json: &[u8], key: &str, range: core::ops::Range<usize>) -> Op
 pub struct WledWiring {
     /// `hw.led.ins[0].len`, falling back to `hw.led.total`. Always > 0.
     pub pixels: Option<u32>,
-    /// `hw.led.ins[0].pin[0]` — informational only (Luxel pins are
-    /// compile-time per board); logged so a mismatch is diagnosable.
+    /// `hw.led.ins[0].pin[0]` — imported as Luxel's runtime strip data pin
+    /// when this board can drive it and it differs from the board default
+    /// (Gitea #154); otherwise logged so a mismatch is diagnosable.
     pub pin: Option<i32>,
     /// `hw.led.ins[0].type` — WLED bus type code (TYPE_*).
     pub strip_type: Option<u8>,

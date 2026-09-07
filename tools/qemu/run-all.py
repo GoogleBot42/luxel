@@ -105,6 +105,14 @@ def main() -> int:
         ("takeover-app1", "takeover-test.py", dump_args + ["--slot", "app1"], True),
         ("takeover-app0", "takeover-test.py", dump_args + ["--slot", "app0"], True),
         ("takeover-fault", "takeover-test.py", dump_args + ["--slot", "app1", "--inject-fault"], True),
+        # The fixture's own WLED pin is GPIO18 = the Athom's board default, so
+        # takeover-app0/app1 only cover the "store no override" arm.  These two
+        # rewrite the fixture's pin (see takeover-test.py --wled-pin) to cover
+        # the import and the this-board-reserves-it arms (Gitea #154/#273).
+        ("takeover-pin-import", "takeover-test.py",
+         dump_args + ["--slot", "app0", "--wled-pin", "19"], True),
+        ("takeover-pin-reserved", "takeover-test.py",
+         dump_args + ["--slot", "app0", "--wled-pin", "10"], True),
         ("heap-regions-selfheal", "heap-regions-test.py", dump_args + ["--mode", "selfheal"], True),
         ("heap-regions-rollback", "heap-regions-test.py", dump_args + ["--mode", "rollback"], True),
         # cache-MMU flash mapping (firmware/src/flashmap.rs) — stock merged

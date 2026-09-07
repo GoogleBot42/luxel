@@ -55,6 +55,13 @@ Usage:
 
     tools/qemu/takeover-test.py --slot app0 --keep
     tools/qemu/takeover-test.py --inject-fault   # reboot-to-retry path (#35)
+    tools/qemu/takeover-test.py --slot app0 --wled-pin 19   # pin import (#154)
+    tools/qemu/takeover-test.py --slot app0 --wled-pin 10   # reserved-pin path
+
+`--wled-pin` rewrites `hw.led.ins[0].pin[0]` in the littlefs fixture before
+composing, so the one checked-in dump covers all three arms of the takeover's
+data-pin decision (import / board-default / this-board-reserves-it) without a
+second dump.  See `patch_wled_pin`.
 
 `--qemu` defaults to auto-resolving the emulator through nix (the flake's
 `qemu-espressif` output, falling back to the `--impure` expression path).
@@ -89,6 +96,7 @@ APP1 = 0x190000
 FS_OFFSET = 0x310000
 LXCF_OFFSET = 0x9000  # config.rs RECORD_OFFSET
 LXDV_OFFSET = 0xA000  # config.rs DEV_OFFSET
+DEV_VER = 8  # config.rs DEV_VER (v8 took a v7 pad byte for the data pin)
 LXBG_OFFSET = 0xC000  # ota.rs GUARD_OFFSET (4th nvs sector under both layouts)
 LUXEL_OTADATA = 0xD000  # partitions.csv: otadata, 0xd000, 0x2000
 LUXEL_STORAGE = 0x210000  # partitions.csv: storage, 0x210000, 0x100000
@@ -97,6 +105,21 @@ ESP_OTA_IMG_VALID = 2
 
 SSID = "MOMCorp Intranet"
 PASS_LEN = 20
+
+# firmware/src/board.rs, board-athom-music.
+BOARD_DATA_PIN = 18  # def::DEFAULT_DATA_PIN
+
+
+def board_pin_ok(n: int) -> bool:
+    """Mirror of `board::data_pin_ok` for board-athom-music on the classic
+    ESP32: the pin must exist, be able to drive an output (34-39 cannot),
+    and be neither a chip system pin (SPI flash 6-11, UART0 1/3) nor one
+    this board drives itself (RESERVED_PINS: CLK1 5, strip relay 2)."""
+    exists = n in range(0, 6) or n in range(12, 20) or n in range(21, 24) \
+        or n in range(25, 28) or n in range(32, 40)
+    return (exists and n < 34
+            and n not in (6, 7, 8, 9, 10, 11, 1, 3)
+            and n not in (5, 2))
 
 # Any of these in the serial log means the takeover bailed out; fail fast
 # rather than burning the full timeout waiting for a marker that won't come.
@@ -160,6 +183,40 @@ def otadata_entry(seq: int) -> bytes:
     """
     crc = zlib.crc32(struct.pack("<I", seq), 0xFFFFFFFF) & 0xFFFFFFFF
     return struct.pack("<I", seq) + b"\xff" * 24 + struct.pack("<I", crc)
+
+
+# The `ins[0]` entry of the configured fixture's cfg.json.  Uniquely anchored:
+# `"pin":` alone also matches the button/IR/relay/mic entries.
+FS_PIN_ANCHOR = b'"len":30,"pin":[18]'
+FS_PIN_SLOT = len(b"[18]")  # bytes available for the rewritten `[<pin>]`
+
+
+def patch_wled_pin(fs: bytes, pin: int) -> bytes:
+    """Rewrite `hw.led.ins[0].pin[0]` in the littlefs fixture, in place.
+
+    The fixture's WLED strip pin (GPIO18) happens to equal the Athom's
+    DEFAULT_DATA_PIN, so as shipped it only exercises the takeover's
+    "same as the board default, store no override" arm (firmware/src/
+    takeover.rs).  Rewriting the byte lets the same dump drive the import
+    and reserved-pin arms too.
+
+    Safe as a raw byte poke: cfg.json is ~1.3 KiB, well over littlefs's
+    inline threshold, so it lives in CTZ *data* blocks, which carry no CRC
+    (only metadata pairs do).  Keeping the byte length identical therefore
+    leaves every checksum, CTZ pointer and file size valid — verified by
+    the firmware parsing the rewritten value out of the emulated flash.
+    The replacement is right-justified into the original `[18]` slot;
+    `json_array0_int` (firmware/src/wledfs.rs) skips leading whitespace.
+    """
+    body = f"[{pin}]".rjust(FS_PIN_SLOT).encode()
+    if len(body) != FS_PIN_SLOT:
+        raise Fail(f"--wled-pin {pin}: needs {len(body)} B, the fixture has "
+                   f"{FS_PIN_SLOT} (use a pin that renders as `[N]` or `[NN]`)")
+    n = fs.count(FS_PIN_ANCHOR)
+    if n != 1:
+        raise Fail(f"--fs: expected exactly one {FS_PIN_ANCHOR!r}, found {n} "
+                   "— is this the configured Athom littlefs dump?")
+    return fs.replace(FS_PIN_ANCHOR, FS_PIN_ANCHOR[:-FS_PIN_SLOT] + body, 1)
 
 
 def compose(stock: bytes, fs: bytes, ota: bytes, slot: str) -> bytearray:
@@ -315,7 +372,7 @@ class Checks:
 
 
 def check_serial(log: str, slot: str, ota_len: int, c: Checks,
-                 inject_fault: bool = False) -> None:
+                 inject_fault: bool = False, wled_pin: int = BOARD_DATA_PIN) -> None:
     if REBOOT_LINE not in log:
         raise Fail("takeover never reached the table rewrite")
     boot1, boot2 = log.split(REBOOT_LINE, 1)
@@ -353,7 +410,7 @@ def check_serial(log: str, slot: str, ota_len: int, c: Checks,
         c.line(boot1, "takeover: image already in place at 0x10000", "boot1")
     c.line(boot1, "takeover: wiping config/otadata sectors 0x9000..0x10000", "boot1")
     c.line(boot1, "takeover: WiFi credentials carried over", "boot1")
-    c.line(boot1, "takeover: WLED drove the strip on GPIO18", "boot1")
+    check_pin_serial(boot1, boot2, wled_pin, c)
     c.line(boot1,
            "takeover: settings carried over (30 px, ws2812, order rgb, "
            "brightness 16/31, cap 850 mA, gamma 2.8)", "boot1")
@@ -363,14 +420,44 @@ def check_serial(log: str, slot: str, ota_len: int, c: Checks,
     c.line(boot2, KILL_MARKER, "boot2")
 
 
+def check_pin_serial(boot1: str, boot2: str, wled_pin: int, c: Checks) -> None:
+    """The data-pin arm of the wiring import (firmware/src/takeover.rs).
+
+    Three outcomes, keyed off the fixture's `hw.led.ins[0].pin[0]`:
+
+      pin == BOARD_DATA_PIN  the import ran and deliberately stores NO
+                             override (#154/PR #240) — a stored pin would
+                             follow the config onto a board with a different
+                             default.  Nothing is printed about the pin, and
+                             boot 2 says "board default".  This is what the
+                             shipped fixture (GPIO18) exercises.
+      pin usable             imported; boot 2 says "configured".
+      pin reserved/invalid   refused with a rewire hint; board default kept.
+    """
+    if wled_pin == BOARD_DATA_PIN:
+        c.require("takeover: WLED drove the strip on GPIO" not in boot1,
+                  f"serial[boot1]: no data-pin line (WLED's GPIO{wled_pin} is "
+                  "already the board default — nothing to override)",
+                  "the takeover stored a redundant data-pin override")
+        c.line(boot2, f"strip data pin: GPIO{BOARD_DATA_PIN} (board default)", "boot2")
+    elif not board_pin_ok(wled_pin):
+        c.line(boot1, f"takeover: WLED drove the strip on GPIO{wled_pin}, which this "
+                      f"board reserves — keeping GPIO{BOARD_DATA_PIN}", "boot1")
+        c.line(boot2, f"strip data pin: GPIO{BOARD_DATA_PIN} (board default)", "boot2")
+    else:
+        c.line(boot1, f"takeover: WLED drove the strip on GPIO{wled_pin} — importing "
+                      "as Luxel's data pin", "boot1")
+        c.line(boot2, f"strip data pin: GPIO{wled_pin} (configured)", "boot2")
+
+
 def check_flash(flash: bytes, expected_table: bytes, ota: bytes, fs: bytes,
-                slot: str, c: Checks) -> None:
+                slot: str, c: Checks, wled_pin: int = BOARD_DATA_PIN) -> None:
     got = flash[TABLE_OFFSET : TABLE_OFFSET + TABLE_LEN]
     c.require(got == expected_table, "flash: Luxel partition table installed at 0x8000",
               f"first differing byte at {first_diff(got, expected_table)}")
 
     check_lxcf(flash, c)
-    check_lxdv(flash, c)
+    check_lxdv(flash, c, wled_pin)
 
     got = flash[APP0 : APP0 + len(ota)]
     c.require(got == ota, f"flash: ota_0 (0x10000) holds the {len(ota)} B app image byte-for-byte",
@@ -449,17 +536,21 @@ def check_lxcf(flash: bytes, c: Checks) -> None:
               f"first non-0xFF at {first_diff(tail, b'\xff' * len(tail))}")
 
 
-def check_lxdv(flash: bytes, c: Checks) -> None:
+def check_lxdv(flash: bytes, c: Checks, wled_pin: int = BOARD_DATA_PIN) -> None:
     """The inherited-wiring record written by config::write_device() —
     values are the configured littlefs fixture's hw.led/def/light.gc
     (30 px WS2812 GRB on GPIO18, maxpwr 850 mA, gamma 2.8, bri 128):
     ws2812 GRB is the encoder-native order -> Luxel color_order 0, and
-    bri 128/255 rounds to brightness 16/31."""
+    bri 128/255 rounds to brightness 16/31.
+
+    Byte 21 is v8's data pin, stored as pin+1 so 0 means "board default"
+    (config.rs).  Only a usable pin that DIFFERS from the board default is
+    stored — see check_pin_serial."""
     rec = flash[LXDV_OFFSET : LXDV_OFFSET + SECTOR]
     c.require(rec[0:4] == b"LXDV", "flash: LXDV device-config record at 0xA000",
               f"got {rec[0:8].hex()}")
     ver, bri, proto, sync = rec[4], rec[5], rec[6], rec[7]
-    c.require(ver == 7, "flash: LXDV version 7", f"ver={ver}")
+    c.require(ver == DEV_VER, f"flash: LXDV version {DEV_VER}", f"ver={ver}")
     pixels = struct.unpack("<I", rec[8:12])[0]
     tz = struct.unpack("<h", rec[12:14])[0]
     order, gamma = rec[14], rec[15]
@@ -472,9 +563,19 @@ def check_lxdv(flash: bytes, c: Checks) -> None:
     c.require(cap == 850, "flash: imported power cap 850 mA (WLED maxpwr)", f"got {cap}")
     c.require(gamma == 28, "flash: imported gamma 2.8 (WLED light.gc.col)", f"got {gamma}")
     curve, blur, glow = rec[18], rec[19], rec[20]
-    c.require(sync == 0 and tz == 0 and rec[21:24] == b"\x00\x00\x00",
+    c.require(sync == 0 and tz == 0 and rec[22:24] == b"\x00\x00",
               "flash: LXDV non-imported fields at defaults",
-              f"sync={sync} tz={tz} pad={rec[21:24].hex()}")
+              f"sync={sync} tz={tz} pad={rec[22:24].hex()}")
+    stored_pin = rec[21]
+    if wled_pin == BOARD_DATA_PIN or not board_pin_ok(wled_pin):
+        c.require(stored_pin == 0,
+                  "flash: LXDV data pin 0 = board default (nothing to override)",
+                  f"got byte {stored_pin} (= GPIO{stored_pin - 1})")
+    else:
+        c.require(stored_pin == wled_pin + 1,
+                  f"flash: LXDV data pin GPIO{wled_pin} imported from WLED "
+                  f"(byte {wled_pin + 1} = pin+1)",
+                  f"got byte {stored_pin}")
     c.require(curve == 0 and blur == 0 and glow == 0,
               "flash: post-process chain off (WLED has no equivalent)",
               f"curve={curve} blur={blur} glow={glow}")
@@ -511,6 +612,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--keep", action="store_true", help="keep the work dir on success")
     ap.add_argument("--timeout", type=float, default=300.0,
                     help="overall boot timeout in seconds (default 300)")
+    ap.add_argument("--wled-pin", type=int, default=BOARD_DATA_PIN,
+                    help="rewrite the fixture's hw.led.ins[0].pin[0] before "
+                         f"composing (default {BOARD_DATA_PIN}, the dump's own "
+                         "value and this board's default) — exercises the "
+                         "import / reserved arms of the takeover's pin decision")
     ap.add_argument("--inject-fault", action="store_true",
                     help="drop both of boot 1's flash-program attempts at sector "
                          "0x10000 (m25p80 patch, LUXEL_FLAKY_WRITE) and assert the "
@@ -525,7 +631,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rc = run(args, workdir, log)
     except Fail as e:
-        print(f"\nFAIL [{args.slot}]: {e}", file=sys.stderr)
+        label = args.slot + (f" pin{args.wled_pin}"
+                             if args.wled_pin != BOARD_DATA_PIN else "")
+        print(f"\nFAIL [{label}]: {e}", file=sys.stderr)
         if os.path.exists(log):
             with open(log, "rb") as f:
                 tail = f.read().decode("utf-8", "replace").splitlines()[-40:]
@@ -551,12 +659,16 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
 
     stock = open(args.stock, "rb").read()
     fs = open(args.fs, "rb").read()
+    if args.wled_pin != BOARD_DATA_PIN:
+        fs = patch_wled_pin(fs, args.wled_pin)
     ota = open(ota_path, "rb").read()
     # Same build for both: the takeover matches the 256-byte esp_app_desc
     # (build timestamp included) at slot+0x20 against the running image.
     expected_table = open(merged_path, "rb").read()[TABLE_OFFSET : TABLE_OFFSET + TABLE_LEN]
 
     mode = " --inject-fault" if args.inject_fault else ""
+    if args.wled_pin != BOARD_DATA_PIN:
+        mode += f" --wled-pin {args.wled_pin}"
     print(f"== WLED takeover test, --slot {args.slot}{mode} ==")
     print(f"   app image : {ota_path} ({len(ota)} B)")
     print(f"   work dir  : {workdir}")
@@ -576,10 +688,11 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     print(f"   reached the inheritance marker in {elapsed:.1f}s wall")
 
     c = Checks()
-    check_serial(text, args.slot, len(ota), c, inject_fault=args.inject_fault)
+    check_serial(text, args.slot, len(ota), c, inject_fault=args.inject_fault,
+                 wled_pin=args.wled_pin)
     with open(flash, "rb") as f:
         written = f.read()
-    check_flash(written, expected_table, ota, fs, args.slot, c)
+    check_flash(written, expected_table, ota, fs, args.slot, c, args.wled_pin)
 
     print(f"\nPASS [{args.slot}] — {len(c.passed)} assertions in {elapsed:.1f}s")
     for a in c.passed:

@@ -16,10 +16,21 @@
 #   3. tools/check-library.sh          (the library sweep, five rigs)
 #   4. firmware build for board-pixelblaze-v3 + tools/image-check.sh
 #      (linked-feature markers on the ELF, OTA-slot margin on the app image)
+#   5. OPT-IN (CI_QEMU=1): tools/qemu/run-all.py, the emulator suite
+#
+# Step 5 is off by default on purpose (Gitea #273): it wants a from-source
+# build of Espressif's QEMU fork, which is minutes on a cold runner, and five
+# of its seven tests need the gitignored Athom flash dumps, which CI does not
+# have — they SKIP there, so the hosted gate would buy one test for a QEMU
+# build. Run it locally before merging anything under firmware/src/takeover.rs,
+# ota.rs, flashmap.rs or the partition table:
+#
+#   CI_QEMU=1 CI_SKIP="web cargo library firmware" nix develop --command tools/ci.sh
 #
 # Env knobs:
 #   CI_BOARD    firmware board to build (default board-pixelblaze-v3)
 #   CI_SKIP     space-separated step names to skip: web cargo library firmware
+#   CI_QEMU     set to 1 to add the (opt-in) QEMU suite as a final step
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -92,6 +103,19 @@ if skipped firmware; then echo "== firmware: SKIPPED"; else
     "$ROOT/firmware/target/$TARGET/release/luxel-fw" "$OTA"
   EXPECT_FEATURES="$BOARD" tools/image-check.sh "$OTA"
   done_step firmware
+fi
+
+# --------------------------------------------------------------- qemu
+# Opt-in: see the header. run-all.py builds .#luxel-fw-athom-music and
+# .#qemu-espressif itself (nix-cached) and skips, rather than fails, the
+# tests whose Athom flash dumps are absent.
+if [ "${CI_QEMU:-0}" = 1 ]; then
+  step "qemu: tools/qemu/run-all.py (opt-in)"
+  python3 tools/qemu/run-all.py
+  done_step qemu
+else
+  echo
+  echo "== qemu: SKIPPED (opt-in — rerun with CI_QEMU=1)"
 fi
 
 echo

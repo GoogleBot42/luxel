@@ -205,10 +205,11 @@ origin master && git rebase origin/master`.
   HEAD~1` in your worktree (2026-09-05). Use `ref=`, not `rev=<short
   hash>` — `rev=` needs the full 40-char id and fails with "object not
   found" on a short one.
-- `tools/qemu/run-all.py`'s three takeover tests are RED on master as of
-  2026-09-05 (a boot-1 pin-import marker never appears — Gitea #273);
-  heap-regions and flashmap pass. Before blaming your change, run the
-  same test against a pristine master build (the trick above).
+- `tools/qemu/run-all.py` is GREEN on master (8/8, ~27 s warm) as of
+  2026-09-07 — the three takeover tests were red from 2026-09-05 on a
+  stale assertion, fixed in Gitea #273. If it goes red again, run the
+  same test against a pristine master build (the trick above) before
+  blaming your change.
 - If `tea pr merge` fails with "is it still open?" right after a
   force-push, Gitea is still re-checking mergeability — wait a few
   seconds and retry before diagnosing anything.
