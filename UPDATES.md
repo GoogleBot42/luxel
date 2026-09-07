@@ -1,5 +1,136 @@
 # Update log
 
+## 2026-09-07 — `renderFrame` on metal: no I-cache cost, 7× on the panel (#336)
+
+#335 (whole-frame render entry + sixteen bulk builtins) shipped host-measured
+only — both rigs were busy the day it merged. This is the device half.
+
+Three firmware builds went to both boards out of one worktree: the merge base
+**`974b3b3`**, the #335 merge **`eedabc8`**, and the master of the day
+**`ed2ac3f`**. One `web/public/luxel.wasm` compiled every pattern for every
+run, so the bytecode on the wire is byte-identical across builds and only the
+firmware differs. Both S3 slots carried the same image before any measurement
+(#294); six OTAs, none wedged, `core1.last` clean throughout.
+
+**The I-cache risk did not materialise.** `Vm::call_builtin` gained sixteen
+arms and #318/#325 had shown layout alone worth tens of percent —
+`tools/patbench.mjs` on `perlin-fire-wind-tunnel` (three repeats) plus
+`tools/opbench.mjs`:
+
+| board | `974b3b3` | `eedabc8` (#335) | `ed2ac3f` |
+|---|---:|---:|---:|
+| Athom @ 256 px, µs/px | 58.039 | **57.973** (−0.11 %) | 58.121 (+0.14 %) |
+| Athom, cycles/op | 100.9 | **100.7** | 100.8 |
+| Seengreat @ 4096 px, µs/px | 44.360 | **44.382** (+0.05 %) | 44.413 (+0.12 %) |
+| Seengreat, cycles/op | 83.4 | **83.4** | 83.4 |
+
+Every delta is inside the probe's own ±0.3 % repeatability, on the board that
+pins `Vm::run`/`call_builtin`/`builtin_hot` in IRAM *and* on the one that pins
+only `Vm::run`. Nothing to file against #328.
+
+**Bulk patterns on the 64×64 panel** (`ed2ac3f`, 4096 px, medians of seven
+samples):
+
+| pattern | fps | out_fps | frame µs | vm µs | out µs | vm µs/px |
+|---|---:|---:|---:|---:|---:|---:|
+| `rainbow` (per-pixel control) | 52 | 52 | 19,470 | 19,417 | 5,931 | 4.740 |
+| `bulk-rainbow` | 125 | 125 | 2,825 | **2,772** | 3,261 | **0.677** |
+| `bulk-comet-trails` | 125 | 126 | 480 | **431** | 3,237 | **0.105** |
+| `bulk-bouncing-balls-2d` | 125 | 125 | 5,539 | **5,477** | 3,486 | **1.337** |
+| `bulk-sprite-scroll-2d` | 125 | 124 | 5,205 | **5,125** | 3,556 | **1.251** |
+| `bulk-canvas-ripples-2d` | 100 | 100 | 9,979 | **9,900** | 3,599 | **2.417** |
+
+`rainbow` → `bulk-rainbow` is the only like-for-like pair among shipped library
+patterns: **7.0× of VM time**, 52 → 125 fps on the wire. The host bench read
+4.4× for that shape, so the device multiplier is **1.6×, not the ~3×**
+docs/bulk-render.md's rule of thumb suggested — that estimate is built on the
+per-pixel entry cost, which is a smaller share of a fill-shaped frame than of
+an entity loop. The page now says 1.5–2× for fills and "re-measure, don't
+scale".
+
+Two things only the device shows. **Four of the five bulk patterns are
+frame-cap bound, not VM bound** — at 2.8–5.5 ms of VM they sit on the engine's
+125 fps ceiling with the HUB75 compose at 3.2–3.6 ms, so a bulk rewrite's
+payoff stops at the cap and past it buys headroom, not frames. And
+**`library/rainbow-comet.js` will not load at 4096 px at all**: its
+`array(pixelCount)` trail is refused by the pre-flight check ("pattern too
+large for this device — it left only 16 KB of heap free"), while
+`bulk-comet-trails` draws the same shape from six scalars in **431 µs**, the
+cheapest frame measured on the board. Frame persistence is not a
+micro-optimisation on this hardware; it is the difference between running and
+not running.
+
+One thing the sweep turned up that is not about #335 at all: **`out_us` is not
+flat**. The HUB75 compose is content-independent, and "Second light" recorded
+it as a flat 5.3–6.4 ms whatever runs — but it tracks how hard core 1 is
+working, monotonically across nine patterns spanning 431 µs to 234 ms of VM
+time: 6.5 ms under `ripples-2d` down to 3.2 ms under `bulk-comet-trails`, and
+not a bulk-vs-per-pixel artifact (the cheap per-pixel `Infinite Snake v2` gets
+a cheap `out` too). That is nearly 2× on the panel's compose ceiling. Filed as
+**#367**.
+
+**`blit` keyed mode and `fillCanvas` verified pixel by pixel, not by eye** —
+neither rig can be seen from here, so deterministic probe patterns were pushed
+and `GET /api/pixels` asserted. On the panel: a 4×2 keyed sprite over a green
+`fill()` gives exactly 4 red pixels of 4096 in the right cells; an 8×4 sprite
+at `gridWidth() - 4` gives exactly 16, the overhanging columns clipped; a 2×2
+`fillCanvas` gives exactly 1024 pixels per quadrant. On the Athom's 60-px strip
+— the over-provisioned 8×8 `ceil(√n)` grid — the same probes land at indices
+0/2/8/10, an 8×1 sprite on grid row 7 paints 56–59 and clips 60–63 with no
+`vmerr`, and `library/bulk-sprite-scroll-2d.js` shows its face over the wash.
+"Cover, not match" holds on a real non-rectangular fixture.
+
+**The full gallery soak is clean too.** `tools/hw-bench.mjs` on the Athom on
+`ed2ac3f`: **305/305 patterns clean, 0 errors, 4 under 30 fps**, median 123 fps
+at 60 px (docs/bench-report.md). Against the 2026-09-02 run on the same rig —
+299/299 clean, 12 slow, median 118 — the interpreter work plus #335 has taken
+two thirds of the slow tail out. One thing that moved the other way and is not
+explained: the sweep's lowest `heap_free` went 83,448 → 59,668 B. Still far
+above the ~20 KB floor and nothing errored, so it is an observation, not a
+fault; filed as **#368**, which also asks hw-bench to name the pattern that
+produced the low-water instead of just printing the number.
+
+**Heap is flat under a bulk pattern.** 40-minute soak on the Athom (20 min holding
+`bulk-comet-trails`, then all five `bulk-*.js` rotated a minute apart):
+`heap_free` read **83,616 B on 38 of the hold's 40 samples**, first and last
+included, the other two 192 B lower with a response in flight; each rotated
+pattern returned to its own fixed value every cycle. AppCpu stack high-water
+11,136 → 11,520 B of 20,480, no `vmerr`, no reboot. The `mem::take`/give-back
+of the frame `Vec` costs nothing per frame, as designed.
+
+**OTA margins re-measured on the merged tree** (docs/bulk-render.md's size
+table was taken on the branch), `tools/image-check.sh` on `espflash save-image`
+app images, same `creds.env` throughout:
+
+| board | `974b3b3` | `eedabc8` | Δ #335 | `ed2ac3f` | margin at master |
+|---|---:|---:|---:|---:|---:|
+| `board-pixelblaze-v3` | 997,648 | 1,006,480 | +8,832 | 1,006,432 | 42,144 B (4.01 %) warn |
+| `board-athom-music` | 997,536 | 1,006,352 | +8,816 | 1,006,480 | 42,096 B (4.01 %) warn |
+| `board-seengreat-hub75` | 935,904 | 945,216 | +9,312 | 947,424 | 101,152 B (9.64 %) |
+| `board-c6-devkit` | 1,015,376 | 1,024,608 | +9,232 | 1,024,912 | 23,664 B (**2.26 %**) fail |
+
++8.8–9.3 KB a board, and the C6 conclusion stands: it is the one board this
+change puts under `image-check.sh`'s 3 % floor (its base margin was 3.16 %),
+tracked by **#291**. Both shipped classic-ESP32 boards stay just over 4 %.
+
+Both rigs finish on `ed2ac3f`, image in both slots, at the pixel count and
+brightness they were found with: the Athom on rainbow at 60 px, the panel back
+on the stored `Infinite Snake v2` it was found running (119 fps / 119 out_fps
+at 4096 px — identified by matching its `/api/status` signature after the
+harness had already replaced the live code with rainbow). Its four stored
+patterns are untouched; nothing in the range `974b3b3..ed2ac3f` changes
+`FORMAT_VERSION`. **They are deliberately NOT on the master this entry merges
+into**: #340 landed hours later and bumps the store format 5 → 6, which wipes
+the key area on first boot by design — so pushing today's tip would have
+destroyed the four patterns Jeremy saved on the panel. Whoever OTAs that board
+next should expect `patterns: format 5 != 6, wiping storage` and export them
+first.
+
+Docs: docs/boards.md gains a "Bulk render (`renderFrame`) on metal"
+section plus a margin row, docs/bulk-render.md a "Results — on device" section,
+and the stale "unmeasured I-cache risk" caveat is gone from both its
+how-to-judge and scope sections.
+
 ## 2026-09-07 — the pattern store packs files to their exact size and stopped having a directory (#340)
 
 Jeremy, #340: *"Right now we are limited to hold (12?) patterns total
@@ -412,6 +543,7 @@ elements on a 64x64 panel), which is O(side), not O(n).
 Verified: `cargo test -p luxel-core` (144 + suites, green), `tools/ci.sh`
 green end to end. No device touched — the on-panel confirmation rides the
 next OTA.
+
 ## 2026-09-07 — wire-check.sh: the wall of FAILs was the argument, not the firmware (#346)
 
 `tools/wire-check.sh` reported FAIL on nearly every check against a healthy
