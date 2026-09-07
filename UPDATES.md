@@ -40,6 +40,17 @@ pipelined build `pipeline::preview` reads the travelling buffer out of its
 slot and `set_pixels` is never called. Idle `heap_free` is identical to master
 row for row, and `pipe_us` fell from ~44 to ~11 µs with the memcpy gone.
 
+`library/snake-2d-v2.js` (#335's `renderFrame` + `fillCanvas` rewrite, landed
+the same day) is the pipeline's biggest beneficiary and worth recording next to
+the rest: at 4096 px it goes **77 -> 109 fps on the wire** (+42 %), because at
+`vm` 7.2 ms against `out` 5.5-6.8 ms its two halves are nearly balanced — the
+`max(vm, out)` sweet spot, where `snake-2d` (vm 77 ms) gains almost nothing.
+Its own win over `snake-2d` is the rewrite, not this change: on the same master
+build `vm_us` 77,466 -> 7,194 (-90.7 %), 12 -> 77 fps. Note its `vm_us` means
+something different — it exports `renderFrame` and no per-pixel `render2D`, so
+that number is one call plus a 256-cell canvas repaint, with the per-pixel work
+inside the native `fillCanvas`, not 4096 VM entries.
+
 `pipeline::preview` is deliberately ONE fallible allocation, reserved outside
 the slot's critical section. The first cut made two (a `Vec<[u8; 3]>` inside
 the lock, then `to_vec()` to flatten it) and panicked the panel on
