@@ -69,6 +69,7 @@ mod ota;
 mod outpal;
 mod output;
 mod patterns;
+mod pipeline;
 mod playlist;
 mod provision;
 mod resume;
@@ -81,9 +82,8 @@ mod wledfs;
 
 use leds::Protocol;
 use luxel_core::jsonview;
-use output::OutputDriver;
 use shared::{
-    publish, set_pixels, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE,
+    publish, set_vmerr, Msg, BRIGHTNESS, CONTROLS_JSON, FPS, MAX_PIXELS, MSG_QUEUE,
     PIXEL_COUNT, PROTOCOL, READOUTS_JSON, VARS_JSON,
 };
 
@@ -468,6 +468,18 @@ async fn main(spawner: Spawner) -> ! {
     // entirely (no SPI, no engine, no snapshot publishing) to isolate
     // whether it interacts with the esp32 radio crashes.
     if option_env!("LUXEL_QUIET").is_none() {
+        // The frame sink: on a pipelined board (hub75 + dual core) the
+        // driver moves to an output task on THIS core and the render task
+        // keeps only the hand-off; everywhere else it owns the driver and
+        // runs every post-VM stage inline. See pipeline.rs.
+        #[cfg(pipelined)]
+        let sink = {
+            spawner.spawn(pipeline::output_task(out).unwrap());
+            println!("output task: ProCpu (frame pipeline)");
+            pipeline::RenderSide::new()
+        };
+        #[cfg(not(pipelined))]
+        let sink = pipeline::DirectSink::new(out);
         // Dual-core boards run the render task on the AppCpu, on its own
         // executor (core1.rs): a frame no longer holds the CPU that WiFi,
         // the network stack and the web pool live on (Gitea #259, #260).
@@ -478,7 +490,7 @@ async fn main(spawner: Spawner) -> ! {
             p.CPU_CTRL,
             sw_int.software_interrupt1,
             sw_int.software_interrupt3,
-            move |s: Spawner| s.spawn(render_task(out).unwrap()),
+            move |s: Spawner| s.spawn(render_task(sink).unwrap()),
         ) {
             Ok(()) => println!("render task: AppCpu"),
             Err(init) => {
@@ -487,7 +499,7 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
         #[cfg(not(multi_core))]
-        spawner.spawn(render_task(out).unwrap());
+        spawner.spawn(render_task(sink).unwrap());
         spawner.spawn(playlist::playlist_task().unwrap());
     } else {
         println!("LUXEL_QUIET: render task disabled");
@@ -671,15 +683,47 @@ async fn main(spawner: Spawner) -> ! {
             first_beat = false;
             ota::boot_ok(); // survived a minute of serving — not a boot loop
         }
+        #[cfg(not(pipelined))]
         println!(
             "fps: {}  heap free: {}",
             FPS.load(Ordering::Relaxed),
+            esp_alloc::HEAP.free()
+        );
+        #[cfg(pipelined)]
+        println!(
+            "fps: {} rendered / {} output ({} frames dropped)  heap free: {}",
+            FPS.load(Ordering::Relaxed),
+            shared::OUT_FPS.load(Ordering::Relaxed),
+            pipeline::DROPPED.load(Ordering::Relaxed),
             esp_alloc::HEAP.free()
         );
     }
 }
 
 /// Renders frames and drives the strip; picks up uploaded patterns between
+/// The protocol the wire is currently encoding for.
+pub(crate) fn cur_protocol() -> Protocol {
+    Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed))
+}
+
+/// The 0-31 level the frame is actually encoded at.
+///
+/// Master power (the HA light switch) off = encode at brightness 0 (black on
+/// every protocol) while the engine keeps ticking, so ON resumes mid-motion.
+/// The brightness curve reshapes the dimmer here, at the single place the
+/// wire value is decided, so the power-cap estimate and the encoded frame
+/// agree on how bright the output is actually being driven.
+pub(crate) fn out_brightness() -> u8 {
+    if shared::POWER.load(Ordering::Relaxed) {
+        luxel_core::outpipe::curve_brightness(
+            BRIGHTNESS.load(Ordering::Relaxed),
+            shared::BRIGHT_CURVE.load(Ordering::Relaxed),
+        )
+    } else {
+        0
+    }
+}
+
 /// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
 #[inline]
 fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
@@ -701,7 +745,7 @@ fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
 /// device palette recolors the result, exactly as device blur stacks on top
 /// of pattern blur. The device setting is the installation's look, not an
 /// override of the pattern's (Gitea #139).
-fn apply_outpipe<'a>(
+pub(crate) fn apply_outpipe<'a>(
     frame: &'a [[u8; 3]],
     pipe_buf: &'a mut alloc::vec::Vec<[u8; 3]>,
     gamma_cache: &mut (u8, Option<alloc::boxed::Box<[u8; 256]>>),
@@ -899,28 +943,14 @@ async fn persist_current_pattern(src: &str, bc: &[u8], id: &str) {
 
 /// frames. Yields to the network tasks after every frame.
 ///
-/// Output-agnostic: everything wire-specific (encode buffers, DMA, clock
-/// reconfiguration) lives behind [`output::OutputDriver`]; this task only
-/// decides WHEN to reconfigure/resize and keeps the engine-freeing retry
-/// policy on tight-heap failures.
+/// Output-agnostic: everything past the VM — the preview copy, the output
+/// pipeline and the wire itself (encode buffers, DMA, clock reconfiguration)
+/// — lives behind [`pipeline::RenderSink`], which on a pipelined board is
+/// only a hand-off to the other core (Gitea #306). This task decides WHEN to
+/// reconfigure/resize and keeps the engine-freeing retry policy on
+/// tight-heap failures.
 #[embassy_executor::task]
-async fn render_task(mut out: output::BoardOutput) -> ! {
-    let cur_protocol = || Protocol::from_u8(PROTOCOL.load(Ordering::Relaxed));
-    // master power (HA light switch): off = encode at brightness 0 (black on
-    // both protocols) while the engine keeps ticking, so ON resumes mid-motion
-    // The brightness curve reshapes the dimmer here, at the single place the
-    // wire value is decided, so the power-cap estimate and the encoded frame
-    // agree on how bright the strip is actually being driven.
-    let out_brightness = || {
-        if shared::POWER.load(Ordering::Relaxed) {
-            luxel_core::outpipe::curve_brightness(
-                BRIGHTNESS.load(Ordering::Relaxed),
-                shared::BRIGHT_CURVE.load(Ordering::Relaxed),
-            )
-        } else {
-            0
-        }
-    };
+async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // Heap discipline: exactly ONE decoded Program lives at a time — inside
     // the engine. Rebuilds (pixel-count change, map clear) re-decode from
     // the running pattern's blob rather than keeping a second Program
@@ -995,12 +1025,12 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
 
     // Apply the seeded protocol — flash may specify one different from the
     // boot-time default the SPI was constructed with.
-    if let Err(e) = out.set_protocol(cur_protocol()) {
+    if let Err(e) = sink.set_protocol(cur_protocol()) {
         // expected on fixed-format drivers (HUB75): the wire ignores the
         // protocol setting entirely
         println!("output: protocol config not applied: {:?}", e);
     }
-    if !out.resize(PIXEL_COUNT.load(Ordering::Relaxed) as usize) {
+    if !sink.resize(PIXEL_COUNT.load(Ordering::Relaxed) as usize) {
         // the driver retries lazily per frame once heap frees up
         println!("encode buffer alloc failed at boot — output paused");
     }
@@ -1008,7 +1038,6 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     let mut prev: Option<Engine> = None;
     let mut blend_start = Instant::now();
     let mut blend_ms: u32 = 0;
-    let mut blend_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
     // Real GPIO behind the pattern's pin builtins (Gitea #177 item 4):
     // synced with the running engine between frames, see gpio.rs.
     let mut pins = gpio::PinHost::new();
@@ -1029,12 +1058,6 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
     let mut sensor_seen: u32 = 0;
     // last reported vmerr site (fn, pc) — dedupes the per-frame report
     let mut vmerr_seen: Option<(u16, u32)> = None;
-    // output-pipeline scratch (heap: the main-stack rule for task futures)
-    let mut pipe_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
-    let mut gamma_cache: (u8, Option<alloc::boxed::Box<[u8; 256]>>) = (0, None);
-    // (cooked-for epoch, luma → color table) for the device output palette.
-    // u32::MAX is the "never cooked" sentinel — no epoch reaches it.
-    let mut pal_cache: (u32, Option<alloc::boxed::Box<[[u8; 3]; 256]>>) = (u32::MAX, None);
 
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
@@ -1118,7 +1141,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     drop_prev(&mut prev);
                     // resize AFTER freeing the engines — at 2048 px the new
                     // buffer is a multi-KB alloc that wants the peak heap too
-                    if !out.resize(count as usize) {
+                    if !sink.resize(count as usize) {
                         println!("encode buffer alloc failed ({} px) — output paused", count);
                     }
                     if let Some(e) = rebuild() {
@@ -1145,7 +1168,7 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                 //   out entirely in one protocol at one clock.
                 Msg::Protocol(code) => {
                     let p = Protocol::from_u8(code);
-                    if let Err(e) = out.set_protocol(p) {
+                    if let Err(e) = sink.set_protocol(p) {
                         println!(
                             "output: protocol switch rejected: {:?} — staying on {}",
                             e,
@@ -1154,14 +1177,14 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
                     } else {
                         PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
                         let count = PIXEL_COUNT.load(Ordering::Relaxed);
-                        if !out.resize(count as usize) {
+                        if !sink.resize(count as usize) {
                             // heap too tight for the bigger encoding: free the
                             // engines (Freeze semantics — the strip holds its
                             // last frame) and retry; the next Code/Crossfade
                             // revives rendering
                             engine = None;
                             drop_prev(&mut prev);
-                            if !out.resize(count as usize) {
+                            if !sink.resize(count as usize) {
                                 println!(
                                     "encode buffer alloc failed ({} px) — output paused",
                                     count
@@ -1348,22 +1371,23 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
         // network input (DDP/E1.31) overrides the engine while packets flow;
         // LIVE_TIMEOUT_MS after the stream stops, the pattern takes back over
         if shared::live_proto(Instant::now().as_millis() as u32).is_some() {
+            let count = PIXEL_COUNT.load(Ordering::Relaxed) as usize;
             shared::LIVE_PIXELS.lock(|c| {
                 let live = c.borrow();
-                blend_buf.clear();
-                for i in 0..PIXEL_COUNT.load(Ordering::Relaxed) as usize {
+                let stage = sink.stage();
+                stage.clear();
+                for i in 0..count {
                     let p = i * 3;
-                    blend_buf.push(match live.get(p..p + 3) {
+                    stage.push(match live.get(p..p + 3) {
                         Some(px) => [px[0], px[1], px[2]],
                         None => [0, 0, 0],
                     });
                 }
             });
-            set_pixels(&blend_buf);
-            let b5 = out_brightness();
             let grid = engine.as_ref().and_then(|e| e.grid());
-            let wire = apply_outpipe(&blend_buf, &mut pipe_buf, &mut gamma_cache, &mut pal_cache, b5, grid);
-            out.write_frame(wire, b5);
+            // through the same sink as a pattern frame, so live input is
+            // pipelined too where the board pipelines
+            sink.emit_staged(grid);
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() {
             let now = Instant::now();
@@ -1404,32 +1428,38 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             // read before the frame borrow: `grid` is a Copy descriptor
             let grid = engine.as_ref().and_then(|e| e.grid());
             let vm_t0 = Instant::now();
-            let frame: &[[u8; 3]] = if prev.is_some() && t < 65536 {
+            // The blend lives in the sink's staging buffer: on a pipelined
+            // board that buffer IS the one handed to the output task, so a
+            // crossfade costs the pipeline no extra copy.
+            let (vm_t1, pipe_us, out_us) = if prev.is_some() && t < 65536 {
                 // copy the incoming frame, then blend the outgoing on top
-                blend_buf.clear();
-                blend_buf.extend_from_slice(engine.as_mut().unwrap().frame(delta));
-                let px_old = prev.as_mut().unwrap().frame(delta);
-                for i in 0..blend_buf.len().min(px_old.len()) {
-                    blend_buf[i] = blend_px(px_old[i], blend_buf[i], t);
+                {
+                    let stage = sink.stage();
+                    stage.clear();
+                    stage.extend_from_slice(engine.as_mut().unwrap().frame(delta));
                 }
-                &blend_buf
+                let px_old = prev.as_mut().unwrap().frame(delta);
+                let stage = sink.stage();
+                for i in 0..stage.len().min(px_old.len()) {
+                    stage[i] = blend_px(px_old[i], stage[i], t);
+                }
+                let vm_t1 = Instant::now();
+                let (p, o) = sink.emit_staged(grid);
+                (vm_t1, p, o)
             } else {
                 drop_prev(&mut prev); // fade finished
-                engine.as_mut().unwrap().frame(delta)
+                let frame = engine.as_mut().unwrap().frame(delta);
+                let vm_t1 = Instant::now();
+                let (p, o) = sink.emit(frame, grid);
+                (vm_t1, p, o)
             };
-            let pipe_t0 = Instant::now();
-            set_pixels(frame);
-            let b5 = out_brightness();
-            let wire = apply_outpipe(frame, &mut pipe_buf, &mut gamma_cache, &mut pal_cache, b5, grid);
-            let out_t0 = Instant::now();
-            out.write_frame(wire, b5);
-            // stage timing — three Instant reads and four integer adds; no
+            // stage timing — a few Instant reads and integer adds; no
             // formatting, allocation or float work on the hot path
-            let out_t1 = Instant::now();
-            vm_sum += (pipe_t0 - vm_t0).as_micros();
-            pipe_sum += (out_t0 - pipe_t0).as_micros();
-            out_sum += (out_t1 - out_t0).as_micros();
-            frame_sum += (out_t1 - now).as_micros();
+            let frame_t1 = Instant::now();
+            vm_sum += (vm_t1 - vm_t0).as_micros();
+            pipe_sum += pipe_us as u64;
+            out_sum += out_us as u64;
+            frame_sum += (frame_t1 - now).as_micros();
             timed_frames += 1;
             if let Some(e) = engine.as_mut().unwrap().take_error() {
                 // report each distinct error site once, not per frame — an
@@ -1466,10 +1496,17 @@ async fn render_task(mut out: output::BoardOutput) -> ! {
             // input drove the strip, or there is no engine)
             let n = timed_frames as u64;
             let avg = |sum: u64| if n == 0 { 0 } else { (sum / n) as u32 };
+            let _ = (&pipe_sum, &out_sum);
             shared::FRAME_US.store(avg(frame_sum), Ordering::Relaxed);
             shared::VM_US.store(avg(vm_sum), Ordering::Relaxed);
-            shared::PIPE_US.store(avg(pipe_sum), Ordering::Relaxed);
-            shared::OUT_US.store(avg(out_sum), Ordering::Relaxed);
+            // On a pipelined board the compose runs on the other core and
+            // publishes its own averages (pipeline::output_task); `pipe_sum`
+            // and `out_sum` are zero here and must not overwrite them.
+            #[cfg(not(pipelined))]
+            {
+                shared::PIPE_US.store(avg(pipe_sum), Ordering::Relaxed);
+                shared::OUT_US.store(avg(out_sum), Ordering::Relaxed);
+            }
             frames = 0;
             timed_frames = 0;
             frame_sum = 0;
