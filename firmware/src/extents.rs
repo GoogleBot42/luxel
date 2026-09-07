@@ -1,40 +1,52 @@
-//! Page-granular extent allocator for the pattern code arena.
+//! Page-granular extent allocator for the pattern store's extent region.
 //!
-//! The arena is a run of 4 KiB erase pages in the mapped raw half of the
-//! `storage` partition. A stored pattern's executable LXBC occupies a
-//! **contiguous run of pages** there, so the VM can execute it in place
-//! (docs/research/flash-mmap.md — contiguous and 4-byte aligned is the one
-//! property XIP needs, and the reason no off-the-shelf flash FS fits).
+//! The extent region is the mapped part of the `storage` partition
+//! (Gitea #330). A stored pattern's executable LXBC **and** its source text
+//! each occupy a **contiguous run of 4 KiB pages** there, so the VM can
+//! execute the bytecode in place and the HTTP layer can serve the source
+//! straight out of the mapping (docs/research/flash-mmap.md — contiguous
+//! and 4-byte aligned is the one property XIP needs, and the reason no
+//! off-the-shelf flash FS fits).
 //!
 //! This module is the *planning* half and nothing else: a page bitmap,
-//! first-fit, a compaction plan, and the on-flash directory format. It is
-//! `no_std`, allocation-free, panic-free, and unit-tested on the host
+//! first-fit, a compaction plan, and the on-flash extent-table format. It
+//! is `no_std`, allocation-free, panic-free, and unit-tested on the host
 //! (`tools/extent-check`, `cargo test --workspace`). All flash I/O — the
 //! write/invalidate/hash discipline, the `ota::with_flash` door, the
 //! persisted directory item — lives in `patterns.rs`.
 //!
 //! # Directory
 //!
-//! One [Extent] per cached pattern *bytecode generation*: `seq` + `gen`
-//! identify it against the pattern index, `start`/`len` locate it, `hash`
-//! proves the bytes. `len == 0` marks an unused table entry. A re-save of
-//! the RUNNING pattern deliberately leaves its old generation's extent in
-//! the table (its pages are still executing); it is swept once something
-//! else runs, which is why the table holds a few more entries than there
-//! are patterns.
+//! One [Extent] per stored blob: `seq` + `gen` + [kind] identify it against
+//! the pattern index, `start`/`len` locate it, `hash` proves the bytes.
+//! `len == 0` marks an unused table entry. A pattern normally owns two —
+//! [KIND_SRC] and [KIND_BC] of its current generation. A re-save of the
+//! RUNNING pattern deliberately leaves its old generation's bytecode extent
+//! in the table (its pages are still executing); it is swept once something
+//! else runs, which is why the table holds more entries than twice the
+//! pattern count.
+//!
+//! `patterns.rs` serializes the pattern section (seq, gen, name) and this
+//! table into ONE key-area item, so the two can never disagree.
 
 /// Erase-page size — the allocation unit.
 pub const PAGE: usize = 4096;
-/// Bitmap capacity. The arena is a subset of the 128-page raw half; a
+/// Bitmap capacity. The arena is a subset of the 224-page extent region; a
 /// compile-time assert in `patterns.rs` keeps the real count under this.
-pub const MAX_PAGES: usize = 128;
-/// Directory capacity: `patterns::MAX_PATTERNS` (24) plus headroom for the
-/// stale generations a re-save of the running pattern leaves behind.
-pub const MAX_EXTENTS: usize = 28;
+pub const MAX_PAGES: usize = 256;
+/// Directory capacity: two extents per pattern (`patterns::MAX_PATTERNS`
+/// = 32 → source + bytecode) plus headroom for the stale generations a
+/// re-save of the running pattern leaves behind.
+pub const MAX_EXTENTS: usize = 72;
 /// Directory blob version (bumped ⇒ old tables are dropped wholesale).
-pub const DIR_VER: u8 = 2;
-/// Bytes per serialized entry: seq(4) gen(1) start(2) len(4) hash(4).
-const ENT_BYTES: usize = 15;
+/// v3: `kind` (source extents joined bytecode extents, Gitea #330).
+pub const DIR_VER: u8 = 3;
+/// Extent kind: the pattern's executable LXBC (what the VM runs in place).
+pub const KIND_BC: u8 = 0;
+/// Extent kind: the pattern's source text (what `/api/patterns/:id` serves).
+pub const KIND_SRC: u8 = 1;
+/// Bytes per serialized entry: seq(4) gen(1) kind(1) start(2) len(4) hash(4).
+const ENT_BYTES: usize = 16;
 /// Header: ver(1) count(1) total_pages(2).
 const HDR_BYTES: usize = 4;
 /// Upper bound on a serialized directory.
@@ -47,13 +59,15 @@ pub const fn pages_for(len: u32) -> u16 {
     ((len as usize + PAGE - 1) / PAGE) as u16
 }
 
-/// One cached pattern's contiguous run of arena pages.
+/// One stored blob's contiguous run of arena pages.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Extent {
     /// Pattern seq (the store's monotonic id).
     pub seq: u32,
-    /// Bytecode generation the blob came from.
+    /// Generation the blob came from (both kinds share the pattern's gen).
     pub gen: u8,
+    /// [KIND_BC] or [KIND_SRC].
+    pub kind: u8,
     /// First page, relative to the arena base.
     pub start: u16,
     /// Blob length in bytes. `0` = unused table entry.
@@ -63,7 +77,7 @@ pub struct Extent {
 }
 
 /// An unused directory entry.
-pub const FREE: Extent = Extent { seq: 0, gen: 0, start: 0, len: 0, hash: 0 };
+pub const FREE: Extent = Extent { seq: 0, gen: 0, kind: 0, start: 0, len: 0, hash: 0 };
 
 impl Extent {
     pub const fn pages(&self) -> u16 {
@@ -121,12 +135,12 @@ impl Dir {
         self.ents.get(idx).filter(|e| e.live())
     }
 
-    /// The extent holding `seq`'s `gen` bytecode, if any.
-    pub fn find(&self, seq: u32, gen: u8) -> Option<(usize, Extent)> {
+    /// The extent holding `seq`'s `gen` blob of `kind`, if any.
+    pub fn find(&self, seq: u32, gen: u8, kind: u8) -> Option<(usize, Extent)> {
         self.ents
             .iter()
             .enumerate()
-            .find(|(_, e)| e.live() && e.seq == seq && e.gen == gen)
+            .find(|(_, e)| e.live() && e.seq == seq && e.gen == gen && e.kind == kind)
             .map(|(i, e)| (i, *e))
     }
 
@@ -319,9 +333,10 @@ impl Dir {
         for (_, e) in self.entries() {
             out[at..at + 4].copy_from_slice(&e.seq.to_le_bytes());
             out[at + 4] = e.gen;
-            out[at + 5..at + 7].copy_from_slice(&e.start.to_le_bytes());
-            out[at + 7..at + 11].copy_from_slice(&e.len.to_le_bytes());
-            out[at + 11..at + 15].copy_from_slice(&e.hash.to_le_bytes());
+            out[at + 5] = e.kind;
+            out[at + 6..at + 8].copy_from_slice(&e.start.to_le_bytes());
+            out[at + 8..at + 12].copy_from_slice(&e.len.to_le_bytes());
+            out[at + 12..at + 16].copy_from_slice(&e.hash.to_le_bytes());
             at += ENT_BYTES;
             count += 1;
         }
@@ -353,9 +368,10 @@ impl Dir {
             let e = Extent {
                 seq: u32::from_le_bytes([r[0], r[1], r[2], r[3]]),
                 gen: r[4],
-                start: u16::from_le_bytes([r[5], r[6]]),
-                len: u32::from_le_bytes([r[7], r[8], r[9], r[10]]),
-                hash: u32::from_le_bytes([r[11], r[12], r[13], r[14]]),
+                kind: r[5],
+                start: u16::from_le_bytes([r[6], r[7]]),
+                len: u32::from_le_bytes([r[8], r[9], r[10], r[11]]),
+                hash: u32::from_le_bytes([r[12], r[13], r[14], r[15]]),
             };
             if d.insert(e).is_none() {
                 dropped += 1;
@@ -370,14 +386,25 @@ mod tests {
     use super::*;
 
     fn ext(seq: u32, start: u16, pages: u16) -> Extent {
-        Extent { seq, gen: 1, start, len: pages as u32 * PAGE as u32, hash: seq ^ 0xa5a5 }
+        Extent { seq, gen: 1, kind: KIND_BC, start, len: pages as u32 * PAGE as u32, hash: seq ^ 0xa5a5 }
     }
 
-    /// What `patterns.rs::cache_code` does around its flash write: first-fit
-    /// a run, then publish the extent there.
+    /// What `patterns.rs::write_extent` does around its flash write:
+    /// first-fit a run, then publish the extent there.
     fn alloc(d: &mut Dir, seq: u32, gen: u8, len: u32, hash: u32) -> Option<usize> {
+        alloc_k(d, seq, gen, KIND_BC, len, hash)
+    }
+
+    fn alloc_k(d: &mut Dir, seq: u32, gen: u8, kind: u8, len: u32, hash: u32) -> Option<usize> {
         let start = d.first_fit(pages_for(len))?;
-        d.insert(Extent { seq, gen, start, len, hash })
+        d.insert(Extent { seq, gen, kind, start, len, hash })
+    }
+
+    /// One `patterns.rs::save` of a pattern: a source extent and a bytecode
+    /// extent, both under the same generation.
+    fn save(d: &mut Dir, seq: u32, gen: u8, src: u32, bc: u32) -> bool {
+        alloc_k(d, seq, gen, KIND_SRC, src, seq).is_some()
+            && alloc_k(d, seq, gen, KIND_BC, bc, !seq).is_some()
     }
 
     /// Full compaction, driven exactly the way `patterns.rs` drives it:
@@ -479,9 +506,9 @@ mod tests {
         assert_eq!(d.compacted_free_run(&[]), 13);
         let moves = compact(&mut d, &[]);
         assert_eq!(moves, 3);
-        assert_eq!(d.find(1, 1).unwrap().1.start, 0);
-        assert_eq!(d.find(2, 1).unwrap().1.start, 2);
-        assert_eq!(d.find(3, 1).unwrap().1.start, 3);
+        assert_eq!(d.find(1, 1, KIND_BC).unwrap().1.start, 0);
+        assert_eq!(d.find(2, 1, KIND_BC).unwrap().1.start, 2);
+        assert_eq!(d.find(3, 1, KIND_BC).unwrap().1.start, 3);
         assert_eq!(d.largest_hole(), 13);
         assert_eq!(d.used_pages(), 7);
         assert_eq!(d.next_move(&[]), None, "idempotent once compact");
@@ -495,9 +522,9 @@ mod tests {
         d.insert(ext(3, 14, 4)).unwrap();
         let predicted = d.compacted_free_run(&[2]);
         compact(&mut d, &[2]);
-        assert_eq!(d.find(2, 1).unwrap().1.start, 9, "pinned extent stayed put");
-        assert_eq!(d.find(1, 1).unwrap().1.start, 0);
-        assert_eq!(d.find(3, 1).unwrap().1.start, 10);
+        assert_eq!(d.find(2, 1, KIND_BC).unwrap().1.start, 9, "pinned extent stayed put");
+        assert_eq!(d.find(1, 1, KIND_BC).unwrap().1.start, 0);
+        assert_eq!(d.find(3, 1, KIND_BC).unwrap().1.start, 10);
         // holes: pages 2..9 (7) below the pin, 14..20 (6) above
         assert_eq!(d.largest_hole(), 7);
         assert_eq!(predicted, 7, "compacted_free_run predicted the outcome");
@@ -537,7 +564,7 @@ mod tests {
                         assert_eq!(d.used_pages(), 4);
                         for &p in pin {
                             let orig = [a, b, c][p as usize - 1];
-                            assert_eq!(d.find(p, 1).unwrap().1.start, orig, "pin moved");
+                            assert_eq!(d.find(p, 1, KIND_BC).unwrap().1.start, orig, "pin moved");
                         }
                     }
                 }
@@ -557,10 +584,10 @@ mod tests {
         d.insert(ext(3, 12, 1)).unwrap(); // pinned: the incoming engine
         d.insert(ext(4, 16, 2)).unwrap(); // free to slide
         compact(&mut d, &[2, 3]);
-        assert_eq!(d.find(2, 1).unwrap().1.start, 8, "outgoing extent moved");
-        assert_eq!(d.find(3, 1).unwrap().1.start, 12, "incoming extent moved");
-        assert_eq!(d.find(1, 1).unwrap().1.start, 0);
-        assert_eq!(d.find(4, 1).unwrap().1.start, 13);
+        assert_eq!(d.find(2, 1, KIND_BC).unwrap().1.start, 8, "outgoing extent moved");
+        assert_eq!(d.find(3, 1, KIND_BC).unwrap().1.start, 12, "incoming extent moved");
+        assert_eq!(d.find(1, 1, KIND_BC).unwrap().1.start, 0);
+        assert_eq!(d.find(4, 1, KIND_BC).unwrap().1.start, 13);
         // holes now: 2..8 (6), 9..12 (3), 15..20 (5) — the largest is 6
         assert_eq!(d.largest_hole(), 6);
         assert_eq!(d.compacted_free_run(&[2, 3]), 6);
@@ -590,7 +617,7 @@ mod tests {
         // two 3-page holes (2..5 and 9..12), so a 4-page save still fails
         assert_eq!(d.compacted_free_run(&[2]), 3);
         compact(&mut d, &[2]);
-        assert_eq!(d.find(3, 1).unwrap().1.start, 7);
+        assert_eq!(d.find(3, 1, KIND_BC).unwrap().1.start, 7);
         assert_eq!(d.largest_hole(), 3);
         assert_eq!(d.first_fit(4), None);
     }
@@ -604,20 +631,20 @@ mod tests {
         let new = alloc(&mut d, 7, 2, 3 * PAGE as u32, 0x22).unwrap();
         assert_ne!(d.get(new).unwrap().start, old_start);
         assert_eq!(d.used_pages(), 6);
-        assert!(d.find(7, 1).is_some() && d.find(7, 2).is_some());
+        assert!(d.find(7, 1, KIND_BC).is_some() && d.find(7, 2, KIND_BC).is_some());
         // once it is no longer running, the old generation is swept
         let (i, _) = d.find_other_gen(7, 2).unwrap();
         assert_eq!(i, old);
         d.remove(i);
         assert_eq!(d.used_pages(), 3);
-        assert!(d.find(7, 1).is_none());
+        assert!(d.find(7, 1, KIND_BC).is_none());
     }
 
     #[test]
     fn remove_seq_and_retain() {
         let mut d = Dir::new(16);
         d.insert(ext(1, 0, 1)).unwrap();
-        d.insert(Extent { seq: 1, gen: 2, start: 1, len: PAGE as u32, hash: 0 }).unwrap();
+        d.insert(Extent { seq: 1, gen: 2, kind: KIND_BC, start: 1, len: PAGE as u32, hash: 0 }).unwrap();
         d.insert(ext(2, 2, 1)).unwrap();
         assert_eq!(d.remove_seq(1), 2);
         assert_eq!(d.count(), 1);
@@ -642,7 +669,7 @@ mod tests {
         assert_eq!(back.count(), 3);
         assert_eq!(back.used_pages(), d.used_pages());
         for (_, e) in d.entries() {
-            assert_eq!(back.find(e.seq, e.gen).unwrap().1, *e);
+            assert_eq!(back.find(e.seq, e.gen, e.kind).unwrap().1, *e);
         }
     }
 
@@ -684,9 +711,10 @@ mod tests {
         let mk = |b: &mut [u8], seq: u32, start: u16, pages: u16| {
             b[0..4].copy_from_slice(&seq.to_le_bytes());
             b[4] = 1;
-            b[5..7].copy_from_slice(&start.to_le_bytes());
-            b[7..11].copy_from_slice(&(pages as u32 * PAGE as u32).to_le_bytes());
-            b[11..15].copy_from_slice(&0u32.to_le_bytes());
+            b[5] = KIND_BC;
+            b[6..8].copy_from_slice(&start.to_le_bytes());
+            b[8..12].copy_from_slice(&(pages as u32 * PAGE as u32).to_le_bytes());
+            b[12..16].copy_from_slice(&0u32.to_le_bytes());
         };
         buf[0] = DIR_VER;
         buf[1] = 3;
@@ -697,7 +725,7 @@ mod tests {
         let (d, dropped) = Dir::from_bytes(&buf[..HDR_BYTES + 3 * ENT_BYTES], 20);
         assert_eq!(dropped, 2);
         assert_eq!(d.count(), 1);
-        assert!(d.find(1, 1).is_some());
+        assert!(d.find(1, 1, KIND_BC).is_some());
         assert_eq!(d.used_pages(), 4);
     }
 
@@ -750,5 +778,154 @@ mod tests {
             assert!(d.used_pages() + d.largest_hole() <= d.total_pages());
         }
         assert!(d.count() > 0, "the churn should leave something cached");
+    }
+
+    // --- source + bytecode extents (Gitea #330) ---
+
+    /// The store keeps BOTH of a pattern's blobs as extents now — the source
+    /// text `/api/patterns/:id` serves and the LXBC the VM executes — under
+    /// one generation, found independently by kind.
+    #[test]
+    fn a_pattern_owns_a_source_and_a_bytecode_extent() {
+        let mut d = Dir::new(183);
+        assert!(save(&mut d, 1, 0, 5_000, 900));
+        let (_, src) = d.find(1, 0, KIND_SRC).unwrap();
+        let (_, bc) = d.find(1, 0, KIND_BC).unwrap();
+        assert_eq!((src.pages(), bc.pages()), (2, 1));
+        assert_ne!(src.start, bc.start, "the two blobs never share a page");
+        assert_eq!(d.used_pages(), 3);
+        // kinds do not collide: the same (seq, gen) resolves to two extents
+        assert_ne!(src.hash, bc.hash);
+        assert!(d.find(1, 1, KIND_SRC).is_none(), "wrong generation");
+    }
+
+    /// A re-save publishes a whole new generation (source AND bytecode)
+    /// before either of the superseded extents is freed — a power cut in
+    /// between must never leave the pattern with no readable copy.
+    #[test]
+    fn a_resave_publishes_both_kinds_before_freeing_either() {
+        let mut d = Dir::new(32);
+        assert!(save(&mut d, 7, 0, 5_000, 900));
+        let old_src = d.find(7, 0, KIND_SRC).unwrap().1;
+        let old_bc = d.find(7, 0, KIND_BC).unwrap().1;
+        assert!(save(&mut d, 7, 1, 4_000, 8_200));
+        // four live extents at the commit point
+        assert_eq!(d.count(), 4);
+        let new_src = d.find(7, 1, KIND_SRC).unwrap().1;
+        let new_bc = d.find(7, 1, KIND_BC).unwrap().1;
+        assert_ne!(new_src.start, old_src.start);
+        assert_ne!(new_bc.start, old_bc.start);
+        assert_eq!(d.used_pages(), 2 + 1 + 1 + 3);
+        // now the old generation goes, one extent at a time
+        while let Some((i, e)) = d.find_other_gen(7, 1) {
+            assert_eq!(e.gen, 0);
+            assert!(d.remove(i));
+        }
+        assert_eq!(d.count(), 2);
+        assert_eq!(d.used_pages(), 4);
+    }
+
+    /// Compaction pins are per PATTERN, so a pinned pattern's source extent
+    /// is held as firmly as its bytecode — an HTTP read-back streams the
+    /// running pattern's source straight out of the mapping.
+    #[test]
+    fn a_pin_holds_both_of_a_patterns_extents() {
+        let mut d = Dir::new(24);
+        d.insert(Extent { seq: 1, gen: 0, kind: KIND_SRC, start: 2, len: 4096, hash: 1 }).unwrap();
+        d.insert(Extent { seq: 2, gen: 0, kind: KIND_SRC, start: 6, len: 4096, hash: 2 }).unwrap();
+        d.insert(Extent { seq: 2, gen: 0, kind: KIND_BC, start: 9, len: 4096, hash: 3 }).unwrap();
+        d.insert(Extent { seq: 3, gen: 0, kind: KIND_BC, start: 14, len: 4096, hash: 4 }).unwrap();
+        compact(&mut d, &[2]);
+        assert_eq!(d.find(2, 0, KIND_SRC).unwrap().1.start, 6, "pinned source moved");
+        assert_eq!(d.find(2, 0, KIND_BC).unwrap().1.start, 9, "pinned bytecode moved");
+        assert_eq!(d.find(1, 0, KIND_SRC).unwrap().1.start, 0);
+        assert_eq!(d.find(3, 0, KIND_BC).unwrap().1.start, 10);
+    }
+
+    /// Two extents per pattern must fit the table for a full library.
+    #[test]
+    fn the_table_holds_two_extents_for_every_pattern() {
+        const PATTERNS: usize = 32; // patterns::MAX_PATTERNS
+        assert!(MAX_EXTENTS >= 2 * PATTERNS);
+        let mut d = Dir::new(MAX_PAGES as u16);
+        for i in 0..PATTERNS {
+            assert!(save(&mut d, i as u32 + 1, 0, 1, 1), "pattern {i}");
+        }
+        assert_eq!(d.count(), 2 * PATTERNS);
+        // and the whole thing round-trips through one directory item
+        let mut buf = [0u8; SER_MAX];
+        let n = d.to_bytes(&mut buf);
+        assert!(n <= SER_MAX);
+        let (back, dropped) = Dir::from_bytes(&buf[..n], MAX_PAGES as u16);
+        assert_eq!((back.count(), dropped), (2 * PATTERNS, 0));
+        for (_, e) in d.entries() {
+            assert_eq!(back.find(e.seq, e.gen, e.kind).unwrap().1, *e);
+        }
+    }
+
+    /// `kind` is part of the serialized record — a table written before
+    /// source extents existed must not be read as one that has them.
+    #[test]
+    fn serialization_carries_the_kind() {
+        let mut d = Dir::new(64);
+        alloc_k(&mut d, 5, 3, KIND_SRC, 9_000, 0xfeed).unwrap();
+        alloc_k(&mut d, 5, 3, KIND_BC, 700, 0xbeef).unwrap();
+        let mut buf = [0u8; SER_MAX];
+        let n = d.to_bytes(&mut buf);
+        let (back, dropped) = Dir::from_bytes(&buf[..n], 64);
+        assert_eq!(dropped, 0);
+        assert_eq!(back.find(5, 3, KIND_SRC).unwrap().1.len, 9_000);
+        assert_eq!(back.find(5, 3, KIND_BC).unwrap().1.len, 700);
+        // a v2 table (no kind byte, 15-byte records) is refused wholesale
+        let mut old = buf;
+        old[0] = 2;
+        assert_eq!(Dir::from_bytes(&old[..n], 64).0.count(), 0);
+    }
+
+    /// Churn with BOTH kinds: the bitmap must stay honest when every save
+    /// places two extents and a delete drops two.
+    #[test]
+    fn two_kind_churn_never_corrupts_the_bitmap() {
+        let mut d = Dir::new(60);
+        let mut rng = 0x9e37_79b9u32;
+        let mut next = |rng: &mut u32| {
+            *rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *rng >> 16
+        };
+        for step in 0..4000 {
+            let seq = next(&mut rng) % 12 + 1;
+            match next(&mut rng) % 3 {
+                0 => {
+                    let src = (next(&mut rng) % 8 + 1) * PAGE as u32;
+                    let bc = (next(&mut rng) % 5 + 1) * PAGE as u32;
+                    let pinned: &[u32] = &[1];
+                    d.remove_seq(seq); // a re-save frees the old generation
+                    if d.first_fit(pages_for(src) + pages_for(bc)).is_none() {
+                        compact(&mut d, pinned);
+                    }
+                    let _ = save(&mut d, seq, (step % 2) as u8, src, bc);
+                }
+                1 => {
+                    d.remove_seq(seq);
+                }
+                _ => {
+                    compact(&mut d, &[1]);
+                }
+            }
+            let mut seen = [false; MAX_PAGES];
+            let mut n = 0u16;
+            for (_, e) in d.entries() {
+                assert!(e.end() <= d.total_pages(), "step {step}: extent past the arena");
+                for p in e.start..e.end() {
+                    assert!(!seen[p as usize], "step {step}: page {p} double-booked");
+                    seen[p as usize] = true;
+                }
+                n += e.pages();
+            }
+            assert_eq!(n, d.used_pages(), "step {step}: page accounting");
+            for p in 0..d.total_pages() {
+                assert_eq!(seen[p as usize], d.bit(p), "step {step}: bitmap page {p}");
+            }
+        }
     }
 }

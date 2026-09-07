@@ -109,6 +109,25 @@ fn persist_now() {
     }
 }
 
+/// Free heap a resume needs before it loads `stored` bytes of pattern:
+/// source + blob + the envelope ≈ 2× the stored bytes, plus room to keep
+/// running.
+///
+/// The `black_box` is a TOOLCHAIN WORKAROUND, not a tuning knob. With the
+/// headroom as a plain literal the Xtensa LLVM fork (xtensa-rust-1.95.0.0)
+/// aborts instruction selection on `resume_task`'s poll function:
+/// `rustc-LLVM ERROR: Cannot select: i32 = Constant<24576>` — the number
+/// tracks the literal (23 * 1024 fails as `Constant<23552>`), so it is the
+/// constant node itself the backend cannot place, not a frame size. It only
+/// appears once the surrounding state machine is complex enough: the same
+/// source built fine before the #330 store rewrite, and `#[inline(never)]`
+/// alone does not help (fat LTO folds the body back in). Making the value
+/// opaque to the optimizer costs one register move on a once-per-boot path.
+#[inline(never)]
+fn resume_headroom(stored: usize) -> usize {
+    stored * 2 + core::hint::black_box(24 * 1024)
+}
+
 /// Load and apply the stored record at boot. The caller has already checked
 /// playlist precedence. Missing/deleted patterns and stale-format bytecode
 /// (an OTA bumped the LXBC version) skip the resume gracefully — the
@@ -131,7 +150,7 @@ async fn apply_stored() {
     // OOM-panicked into the boot-loop guard — three strikes flipped the OTA
     // slot back to the previous firmware. Wait for comfortable headroom;
     // if it never shows up, skip resume and leave the default rendering.
-    let need = stored * 2 + 24 * 1024;
+    let need = resume_headroom(stored);
     let mut waited = 0u32;
     while esp_alloc::HEAP.free() < need {
         if waited >= 20 {

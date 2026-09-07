@@ -229,6 +229,40 @@ stack-check clean; QEMU flashmap + both heap-regions cases pass. The C6
 full-UI build was already under the 3 % floor and not a release artifact
 (#291); the shipped hosted variant keeps 4 %.
 
+2026-09-06, one mappable extent store (Gitea #330 — the half/half partition
+became a 128 KiB `sequential-storage` key area plus an 896 KiB mapped extent
+region; source text joined bytecode as an extent and the chunk store went
+away entirely; docs/firmware.md "The pattern store: one mapped extent region
++ a small key area"): **−5.3 to −7.1 KB on every board.** Flake builds with
+the same `creds.env` on both sides, `origin/master` c7e0266 vs the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---|
+| `board-c3-devkit` | 952,128 | 945,024 | −7,104 | 9.20 % → 9.88 % |
+| `board-pixelblaze-v3` | 1,005,312 | 999,584 | −5,728 | 4.13 % → 4.67 % |
+| `board-athom-music` | 1,005,360 | 999,456 | −5,904 | 4.12 % → 4.68 % |
+| `board-esp32-generic` | 1,005,120 | 999,280 | −5,840 | 4.14 % → 4.70 % |
+| `board-s3-devkit` | 947,664 | 942,320 | −5,344 | 9.62 % → 10.13 % |
+| `board-c6-devkit` | 1,020,384 | 1,013,312 | −7,072 | **2.69 % → 3.36 %** |
+| `board-c6-devkit` + `hosted-ui` | 1,002,784 | 996,912 | −5,872 | 4.37 % → 4.93 % |
+| `board-s3-hub75` | 940,032 | 934,400 | −5,632 | 10.35 % → 10.89 % |
+| `board-seengreat-hub75` | 940,064 | 934,272 | −5,792 | 10.35 % → 10.90 % |
+
+A store that stores each blob once is simply less code: `write_pattern`,
+`read_source`, `read_bc`, `remove_chunks`, the two chunk-key functions and
+`cache_code` all disappeared, and with them the chunk loops in every read
+path. The extent table grew (`MAX_EXTENTS` 28 → 72, `MAX_PAGES` 128 → 256,
++~740 B in `.bss`, not in the image) and the shared `PageStateCache` shrank
+with the map's range (128 → 32 pages). `.stack` on pixelblaze-v3
+25,484 → **24,932 B** (−552), stack-check clean; the biggest frames are
+unchanged (picoserve's response future, the main and render tasks).
+
+**`board-c6-devkit` is back above image-check's 3 % floor** — 2.69 % →
+3.36 % — which was #310's problem, fixed here by the store getting simpler
+rather than by touching the UI. It is still the tightest board by a wide
+margin and still ships as `luxel-fw-c6-devkit-hosted`; restoring the
+full-UI build as a release artifact is Gitea #291.
+
 2026-09-06, pattern extent allocator (Gitea #281 — the arena's 7 fixed
 40 KiB slots became a page-granular extent allocator; `patterns.rs` +
 `extents.rs`, docs/firmware.md "The pattern store's mapped half and the

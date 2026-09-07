@@ -17,18 +17,21 @@ serial narration that:
      DROM pages;
   3. the archive parsed THROUGH the mapping (`assets: 2 files installed`)
      — the TOC bytes came out of the mapped window, not read_nor;
-  4. the pattern store mapped the raw half of `storage` the same way
-     (`flashmap: pattern code 0x290000+0x80000 -> 0x3f4xxxxx (8 x 64 KiB
+  4. the pattern store mapped its EXTENT REGION the same way
+     (`flashmap: pattern store 0x230000+0xe0000 -> 0x3f4xxxxx (14 x 64 KiB
      pages from entry M), self-check ok`) into the entries right after the
-     assets mapping, and brought its code arena up on it (`patterns: code
-     arena 87 pages, 0 extents valid (0 dropped), 0 pages used` — an empty
-     library and no persisted directory, so no extent can be valid; a
-     non-zero "dropped" or "used" would mean the directory parser accepted
-     garbage). No pattern activation runs under QEMU (it needs a
-     sequential-storage map image or the network), so the extent
-     allocator's write, compaction and re-save paths stay hardware items
-     (Gitea #271); the allocator's own logic is host-tested in
-     `tools/extent-check` (`cargo test --workspace`).
+     assets mapping, and brought the store up on it (`patterns: store 183
+     pages, 0 patterns, 0 extents (0 dropped, 0 patterns lost), 0 pages
+     used` — a virgin flash, so the format key mismatches, the key area is
+     wiped and there is no directory to parse; a non-zero count anywhere
+     would mean the parser accepted garbage). Gitea #330 replaced the old
+     half/half partition (a sequential-storage chunk store + a bolted-on
+     code arena) with one 896 KiB mapped extent region plus a 128 KiB key
+     area, so these two numbers moved. No pattern save or activation runs
+     under QEMU (both need the network), so the write, compaction and
+     re-save paths stay hardware items (Gitea #271); the allocator's own
+     logic is host-tested in `tools/extent-check`
+     (`cargo test --workspace`).
 
 What QEMU models (hw/misc/esp32_dport.c): the per-core DROM0/IRAM0 MMU
 tables, cache enable/mask bits, and Cache_Flush — a flush re-reads every
@@ -62,27 +65,32 @@ ASSETS_OFFSET = 0x310000  # partitions.csv: assets, 0x310000, 0xF0000
 ASSETS_LEN = 0xF0000
 DROM_BASE = 0x3F400000
 PAGE = 0x10000
-# The code arena is everything left in the raw half after the ad-hoc
-# regions: 0xA9000..0x100000 partition-relative, in 4 KiB pages
-# (firmware/src/patterns.rs ARENA_OFF / ARENA_PAGES).
-ARENA_PAGES = (0x100000 - 0xA9000) // 0x1000
+# The extent region: everything after the 128 KiB key area
+# (firmware/src/patterns.rs EXT_OFF / EXT_LEN), mapped read-only at boot.
+STORE_OFFSET = 0x230000
+STORE_LEN = 0xE0000
+# The extent arena is everything left in it after the ad-hoc live-coding
+# slot: 0x49000..0x100000 partition-relative, in 4 KiB pages
+# (patterns.rs ARENA_OFF / ARENA_PAGES).
+ARENA_PAGES = (0x100000 - 0x49000) // 0x1000
 
 MAP_LINE = re.compile(
     r"flashmap: assets 0x310000\+0xf0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
 )
 TOC_LINE = "assets: 2 files installed"
 CODE_LINE = re.compile(
-    r"flashmap: pattern code 0x290000\+0x80000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
+    r"flashmap: pattern store 0x230000\+0xe0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
 )
-ARENA_LINE = re.compile(
-    r"patterns: code arena (\d+) pages, (\d+) extents valid \((\d+) dropped\), (\d+) pages used"
+STORE_LINE = re.compile(
+    r"patterns: store (\d+) pages, (\d+) patterns, (\d+) extents "
+    r"\((\d+) dropped, (\d+) patterns lost\), (\d+) pages used"
 )
 ABORT_MARKERS = (
     "flashmap: assets not mapped",
     "flashmap: assets self-check FAILED",
-    "flashmap: pattern code not mapped",
-    "flashmap: pattern code self-check FAILED",
-    "patterns: code arena off",
+    "flashmap: pattern store not mapped",
+    "flashmap: pattern store self-check FAILED",
+    "patterns: extent region unmapped",
     "assets: none installed",
     "assets: implausible entry count",
     "====================== PANIC ======================",
@@ -180,7 +188,7 @@ def boot(qemu: str, flash: str, efuse: str, log: str, timeout: float) -> tuple[s
             while True:
                 with open(log, "rb") as f:
                     text = f.read().decode("utf-8", "replace")
-                if MAP_LINE.search(text) and TOC_LINE in text and ARENA_LINE.search(text):
+                if MAP_LINE.search(text) and TOC_LINE in text and STORE_LINE.search(text):
                     outcome = "marker"
                     break
                 for m in ABORT_MARKERS:
@@ -243,32 +251,39 @@ def check(text: str, image_len: int) -> list[str]:
     if text.index(m.group(0)) > text.index(TOC_LINE):
         raise Fail("mapping line came AFTER the TOC line — init() cannot have used the mapping")
     passed.append("order: mapping established before the TOC parse")
-    # the pattern store's mapping of storage's raw half (patterns.rs)
+    # the pattern store's mapping of its extent region (patterns.rs, #330)
     c = CODE_LINE.search(text)
     if not c:
-        raise Fail("serial: no 'flashmap: pattern code … self-check ok' line")
+        raise Fail("serial: no 'flashmap: pattern store … self-check ok' line")
     cvaddr, cpages, centry = int(c.group(1), 16), int(c.group(2)), int(c.group(3))
     passed.append(f"serial: {c.group(0)!r}")
-    if cpages != 0x80000 // PAGE:
-        raise Fail(f"pattern code mapped {cpages} pages, expected {0x80000 // PAGE}")
+    if cpages != STORE_LEN // PAGE:
+        raise Fail(f"pattern store mapped {cpages} pages, expected {STORE_LEN // PAGE}")
     if cvaddr != DROM_BASE + centry * PAGE:
-        raise Fail(f"pattern code vaddr 0x{cvaddr:x} != 0x3F400000 + entry {centry} × 64 KiB")
+        raise Fail(f"pattern store vaddr 0x{cvaddr:x} != 0x3F400000 + entry {centry} × 64 KiB")
     if centry != entry + pages:
-        raise Fail(f"pattern code landed on entry {centry}, expected {entry + pages} (first fit after the assets mapping)")
-    passed.append(f"pattern code: entry {centry} = assets entry {entry} + {pages} pages, vaddr 0x{cvaddr:x}")
-    a = ARENA_LINE.search(text)
+        raise Fail(f"pattern store landed on entry {centry}, expected {entry + pages} (first fit after the assets mapping)")
+    if cvaddr + cpages * PAGE > DROM_BASE + 64 * PAGE:
+        raise Fail("the two mappings together run past the 4 MiB DROM0 window")
+    passed.append(f"pattern store: entry {centry} = assets entry {entry} + {pages} pages, vaddr 0x{cvaddr:x}")
+    passed.append(f"window: assets + store = {pages + cpages} of DROM0's 64 entries")
+    a = STORE_LINE.search(text)
     if not a:
         raise Fail(
-            "serial: no 'patterns: code arena N pages, M extents valid' line "
-            "— the extent allocator did not come up on the mapping"
+            "serial: no 'patterns: store N pages, …' line "
+            "— the extent store did not come up on the mapping"
         )
-    pages, valid, dropped, used = (int(a.group(i)) for i in range(1, 5))
-    if (valid, dropped, used) != (0, 0, 0) or pages != ARENA_PAGES:
+    apages, npat, exts, dropped, lost, used = (int(a.group(i)) for i in range(1, 7))
+    if (npat, exts, dropped, lost, used) != (0, 0, 0, 0, 0) or apages != ARENA_PAGES:
         raise Fail(
-            f"arena reported {pages} pages, {valid} extents valid, {dropped} dropped, "
-            f"{used} used — expected {ARENA_PAGES} pages and 0/0/0 with an empty directory"
+            f"store reported {apages} pages, {npat} patterns, {exts} extents, "
+            f"{dropped} dropped, {lost} lost, {used} used — expected {ARENA_PAGES} "
+            "pages and zeros everywhere on a virgin flash"
         )
-    passed.append(f"serial: {a.group(0)!r} (extent allocator up on the mapping, empty directory)")
+    passed.append(f"serial: {a.group(0)!r} (extent store up on the mapping, empty directory)")
+    if "patterns: format 0 != 5, wiping storage" not in text:
+        raise Fail("serial: the format-key wipe did not run on the virgin key area")
+    passed.append("serial: format mismatch wiped the key area (no migration path, #330)")
     return passed
 
 

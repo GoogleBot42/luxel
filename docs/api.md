@@ -49,7 +49,8 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 {"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,
  "pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"live":null,"assets_mapped":true,"code_mapped":true,
- "arena":[5,87],"src":true,"bc":true,"web":[0,1,0],"vmerr":null}
+ "store":{"used":5,"total":183,"patterns":3},
+ "src":true,"bc":true,"web":[0,1,0],"vmerr":null}
 ```
 
 - `frame_us` / `vm_us` / `pipe_us` / `out_us` — per-stage frame timing, the
@@ -73,15 +74,16 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
   hosted-ui build — assets (if any) then stream via flash-controller reads.
 - `code_mapped` — `true` when the running pattern's bytecode is mapped
   memory the engine builds from without a blob copy (the built-in default's
-  rodata, the ad-hoc read-back slot, or the library pattern's code-arena
-  extent); `false` means the store's mapping is off or the library pattern
-  has no extent yet (its next activation allocates one if the pool has
-  room).
-- `arena` — `[used_pages, total_pages]` of the library code arena: 4 KiB
-  pages, allocated as contiguous per-pattern extents (87 pages = 348 KiB
-  in the `storage` partition; docs/firmware.md "The pattern store's mapped
-  half and the code arena"). `[0, 0]` means the arena is off — the store's
-  flash mapping did not come up.
+  rodata, the ad-hoc read-back slot, or the library pattern's bytecode
+  extent); `false` means the store's mapping is off (a `flashmap-off`
+  build, or a refused boot self-check) — the pattern still runs, its
+  bytecode is just read into a transient Vec first.
+- `store` — the pattern store's extent region: `used` / `total` 4 KiB
+  arena pages and the number of stored `patterns`. A stored pattern owns
+  two extents, its source and its bytecode (183 pages = 732 KiB in the
+  `storage` partition; docs/firmware.md "The pattern store: one mapped
+  extent region + a small key area"). `total` 0 means the store never came
+  up — no `storage` partition, or one too small.
 - `src` / `bc` — whether the running pattern's source / bytecode are still
   readable back (`GET /api/pattern`); `false` means a flash write shed the copy.
 - `web` — per-HTTP-slot lifecycle stage, one entry per connection slot

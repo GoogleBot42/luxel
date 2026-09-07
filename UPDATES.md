@@ -1,5 +1,130 @@
 # Update log
 
+## 2026-09-06 — One mappable extent store: source and bytecode stop being written twice (#330)
+
+The `storage` partition was half a `sequential-storage` map and half raw
+mappable pages, and the seam showed: a saved pattern's LXBC was written
+**twice** — as ≤3,840-byte chunk items in the map, which can never be
+mapped, and again as an arena extent, which is what the VM actually
+executed. The map was the source of truth for the source text; the mappable
+half was a bolt-on to a layout designed around the map. Jeremy's read
+(#330): design the partition around what the device does with the bytes.
+
+**The layout now.** 1 MiB, 256 pages:
+
+| rel | abs | size | region |
+|---|---|---:|---|
+| `0x00000` | `0x210000` | 128 KiB (32 pages) | **key area** — `sequential-storage` |
+| `0x20000` | `0x230000` | 896 KiB (224 pages) | **extent region** — mapped read-only at boot, 14 × 64 KiB MMU entries |
+
+and inside the extent region: 1 header page, 8 pages of ad-hoc source,
+2 × 16 pages of two-sided ad-hoc bytecode, and **183 pages (732 KiB)** of
+extent arena — up from 87. A stored pattern owns two extents, its source
+and its bytecode. One save is one extent write per blob. The chunk copies
+are gone entirely, and so is `cache_code`: there is nothing to fill in
+later, because the save wrote the executable bytes in the first place.
+
+The key area keeps what a log-structured map is actually good at — small,
+hot, power-loss-safe writes: playlist, playstate, pixel map, resume record,
+palette, format key, and the **directory**. ~12 KB of live data in 128 KiB
+is an order of magnitude of GC headroom, and every op's page scan is 4×
+cheaper than over the old 512 KiB range.
+
+**The directory is one map item**, so the pattern list and the extent table
+cannot disagree: `[ver][npat] npat × {seq, gen, name_len, name}` followed by
+`extents::Dir::to_bytes` (per extent: seq, gen, **kind**, start page, len,
+FNV-1a). Writing it is the store's atomic commit point — an extent is
+reachable only after the item that names it landed, so a power cut before
+that leaves the previous generation whole and the new extents unreferenced
+(boot rebuilds the page bitmap from the directory, so their pages come back
+free). Its 3,398-byte worst case is what caps `MAX_PATTERNS`, asserted at
+compile time.
+
+**What the read paths look like now.** `GET /api/patterns/:id` escapes the
+source into one pre-sized response buffer straight from the mapping. The
+running pattern's read-back (`GET /api/pattern`, `GET /api/pattern.lxp`)
+streams the source extent as the response body — `stream_store_readback`'s
+`String` fetch is gone from that path. `source_stat`, which every library
+swap calls for the identity hash and Content-Length, is now two directory
+fields: no flash read, no allocation. A library activation reads nothing
+but the mapping.
+
+**Caps, deliberately.** `MAX_SOURCE` 30,720 → **32 KiB** (8 pages),
+`MAX_BC` 38,400 → **40 KiB** (10 pages) — both were chunk-count artifacts,
+now page-rounded. `MAX_PATTERNS` 24 → **32**: a pattern used to cost up to
+18 map items and now costs two extents plus one directory record, so a
+larger library is genuinely cheap (32 median patterns use ~64 of 183 pages).
+
+**No migration.** `FORMAT_VERSION` 4 → 5 wipes the key area on mismatch and
+the playground re-syncs the library — Jeremy's call on #330, he is the only
+user. The extent region is left alone by a wipe: with no directory nothing
+references it, and every page is erased before it is written again.
+
+**Concurrency.** The pin set (#260) is unchanged and now covers a pattern's
+source extent as well as its bytecode, which is what makes streaming the
+running pattern's source out of the mapping across `await`s sound. An
+UNPINNED pattern's mapped bytes needed something new: `GET /api/patterns/:id`
+copies from the mapping while a save on the other core might compact it, so
+`patterns.rs` gained a reader/writer counter making mutations and unpinned
+mapped reads exclusive. Readers hold it across a *synchronous* copy only
+(microseconds), so the writer's bounded retry converges.
+
+**Measured.**
+
+| | before | after |
+|---|---:|---:|
+| extent arena | 87 pages (348 KiB) | **183 pages (732 KiB)** |
+| bytes written per save | source chunks + bc chunks + a duplicate bc extent | **one extent per blob** |
+| `.stack` (pixelblaze-v3) | 25,484 B | **24,932 B** |
+| Σ swap peak, 299 gallery patterns | 3,856,171 B (historical) | **1,899,668 B** mapped / 2,388,757 B `flashmap-off` |
+
+`heapstat` grew a `swap(nomap)` column for the `flashmap-off` fallback,
+which is a real firmware path: one transient bytecode Vec, no source Vec, no
+envelope — 38.1 % under the historical lifecycle, against 50.7 % for the
+mapped path. Six of 299 patterns exceed 45 KB at swap under the historical
+lifecycle; **zero** under either current path.
+
+Every board image got **smaller** — the store lost a whole chunk layer:
+
+| board | before | after | Δ | OTA margin |
+|---|---:|---:|---:|---|
+| c3-devkit | 952,128 | 945,024 | −7,104 | 9.20 % → 9.88 % |
+| pixelblaze-v3 | 1,005,312 | 999,584 | −5,728 | 4.13 % → 4.67 % |
+| athom-music | 1,005,360 | 999,456 | −5,904 | 4.12 % → 4.68 % |
+| esp32-generic | 1,005,120 | 999,280 | −5,840 | 4.14 % → 4.70 % |
+| s3-devkit | 947,664 | 942,320 | −5,344 | 9.62 % → 10.13 % |
+| **c6-devkit** | 1,020,384 | 1,013,312 | −7,072 | **2.69 % → 3.36 %** |
+| c6-devkit-hosted | 1,002,784 | 996,912 | −5,872 | 4.37 % → 4.93 % |
+| s3-hub75 | 940,032 | 934,400 | −5,632 | 10.35 % → 10.89 % |
+| seengreat-hub75 | 940,064 | 934,272 | −5,792 | 10.35 % → 10.90 % |
+
+The C6 full-UI build was **under** `image-check`'s 3 % OTA-slot floor
+(#310); it is back above it, without anyone touching the UI.
+
+**One toolchain scar.** The rewrite made the Xtensa LLVM fork abort
+instruction selection on `resume_task`'s poll function —
+`rustc-LLVM ERROR: Cannot select: i32 = Constant<24576>`, tracking
+resume.rs' `stored * 2 + 24 * 1024` literal (change it to `23 * 1024` and it
+fails as `Constant<23552>`). `#[inline(never)]` does not help; fat LTO folds
+the body back in. `resume_headroom()` now computes it with a
+`core::hint::black_box` around the constant, commented as the workaround it
+is. The same source built fine before this change — the constant only
+exposes the backend bug once the surrounding state machine is complex
+enough.
+
+**Verified host-side only.** `cargo test --workspace` (extents grew to 25
+cases: source+bytecode extent pairs, a re-save publishing both new
+generations before freeing either, a pin holding both of a pattern's
+extents, `kind` in the serialized record, a second 4,000-step two-kind churn
+fuzz); QEMU `flashmap-test` extended for the new boot narration and the
+format wipe, `run-all.py` otherwise unchanged (the takeover trio stays red,
+#273); `heapstat`; `stack-check`; all nine board images. Nothing has touched
+flash on a device — the write/invalidate/hash discipline, the compaction
+copy and the power-cut window are hardware questions by construction. The
+checklist is Gitea #331 (Athom then panel: fill, re-save churn, compaction
+under a running pattern, power cut mid-write, an N > 24 library, read-back of
+source through the mapping, and one `flashmap-off` build).
+
 ## 2026-09-06 — The loop microbenchmark is not the judge: #318's fix is a 38 % regression (#312, #318)
 
 #318 asked whether the `Const c; <op>` fused arms should stop calling

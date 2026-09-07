@@ -220,49 +220,59 @@ off-the-shelf flash filesystem — littlefs, ekv and sequential-storage all
 store a file as linked or GC-moved blocks, none of which has a stable
 address to execute from.
 
-- The **current-pattern read-back slot** (`patterns.rs` `CUR_SRC_OFF` /
-  `CUR_BC_OFF`, written by `store_current` on ad-hoc pushes) is raw pages
-  at a fixed, page-aligned offset — mappable as-is. `read_current_bc` (the
-  38 KB transient Vec the engine rebuild allocates) becomes a slice into
-  the mapping.
-- **Library patterns** live as ≤3,840-byte sequential-storage chunk items
-  scattered across the wear-leveled map — not contiguous, not aligned, and
-  moved by GC. Mapping the map region is possible but pointless for XIP.
-  What they need is a **code arena** in the raw upper half of `storage`
-  with a tiny allocator of its own, filled by `save()` and by an activation
-  that found no extent, and never written per activation (the 2026-08-15
-  wear rule). The sequential-storage chunks stay the source of truth for
-  the source text and for the API's `/api/patterns/:id` body.
+- The **ad-hoc (live-coding) read-back slot** (`patterns.rs`
+  `CUR_SRC_OFF` / `CUR_BC_OFF`, written by `store_current` on ad-hoc
+  pushes) is raw pages at a fixed, page-aligned offset — mappable as-is.
+  `read_current_bc` (the 38 KB transient Vec the engine rebuild allocates)
+  becomes a slice into the mapping.
+- **Library patterns** used to live as ≤3,840-byte sequential-storage chunk
+  items scattered across the wear-leveled map — not contiguous, not
+  aligned, and moved by GC. Mapping the map region is possible but
+  pointless for XIP. What they need is **page extents** with a tiny
+  allocator of their own, written by `save()` and never per activation
+  (the 2026-08-15 wear rule).
 
 **Implemented (second PR, 2026-09-05): the store side, decoupled from the
-instruction format.** `patterns.rs` maps the whole raw half (`0x290000`,
-512 KiB, 8 pages) at boot with the same self-check discipline, gives the
-ad-hoc slot two 64 KiB bytecode sides (a swap writes the side the engine is
-not executing from), and carves the rest into the arena.
-`patterns::current_code()` is the contract's slice; `Msg::Library { id, ms }`
-replaced the envelope-carrying library swaps so no source/blob/envelope Vec
-exists in a library activation at all.
+instruction format.** `patterns.rs` maps the region at boot with the same
+self-check discipline, gives the ad-hoc slot two 64 KiB bytecode sides (a
+push writes the side the engine is not executing from), and carves the rest
+into extents. `patterns::current_code()` is the contract's slice;
+`Msg::Library { id, ms }` replaced the envelope-carrying library swaps so
+no source/blob/envelope Vec exists in a library activation at all.
 
 **Arena v2 (2026-09-06, Gitea #281): page extents, not fixed slots.** The
 first cut was 7 fixed 40 KiB slots with LRU eviction — it cached seven
 patterns and wasted ~90 % of the region, since the median library blob is
-under 1 KB. It is now a **page-granular extent allocator**: the allocation
-unit is the 4 KiB erase page, a pattern's blob occupies a contiguous
-first-fit run of them, and the directory (seq → start page, byte length,
-bytecode generation, FNV-1a) persists under the same reserved map key the
-slot table used. Trimming the ad-hoc source region from 96 KiB to 32 KiB
-(`MAX_SOURCE` is 30 KB — read-back never needed more) grew the pool to
-`0xA9000..0x100000` = **348 KiB / 87 pages**, enough for every pattern a
-device can store (`MAX_PATTERNS` = 24) many times over. Eviction is gone;
-a save that finds no contiguous hole compacts instead, sliding live
-extents toward page 0 one page-copy per `with_flash` op, never touching
-the running pattern's extent. The planning half (bitmap, first-fit,
-compaction plan, directory format) is `firmware/src/extents.rs` — pure,
-`no_std`, allocation-free and host-tested via `tools/extent-check`.
-docs/firmware.md "The pattern store's mapped half and the code arena" has
-the layout table and the full rule set; what the VM format work still owns
-is making `Program` borrow the slice instead of `deserialize_lean`
-copying it.
+under 1 KB. It became a **page-granular extent allocator**: the allocation
+unit is the 4 KiB erase page, a blob occupies a contiguous first-fit run of
+them, and the directory persists under a reserved map key. Eviction is
+gone; a save that finds no contiguous hole compacts instead, sliding live
+extents toward page 0 one page-copy per `with_flash` op, never touching a
+pinned extent.
+
+**The partition itself (2026-09-06, Gitea #330): the halves are gone.** The
+duplicate copy was the tell — a saved pattern's bytecode was written twice,
+as chunk items in the map AND as an arena extent, and the mappable half was
+a bolt-on to a layout designed around the map. The partition is now sized
+by what the device does with the bytes:
+
+| partition-relative | size | region |
+|---|---:|---|
+| `0x00000` | 128 KiB (32 pages) | key area — `sequential-storage`, small hot power-loss-safe keys, nobody needs it mapped |
+| `0x20000` | 896 KiB (224 pages) | extent region — mapped read-only once at boot, 14 × 64 KiB MMU entries |
+
+The extent region is the ONLY home for a pattern's bytes: bytecode
+(executed in place) **and source text** (escaped into the
+`/api/patterns/:id` response, and streamed as the running pattern's
+read-back body, straight from the mapping — no source Vec anywhere), plus
+the two-sided ad-hoc slot at its head and a 183-page arena after it. The
+key area keeps the playlist, playstate, pixel map, resume record, palette,
+and the store **directory** — one item holding both the pattern list and
+the extent table, which is the atomic commit point of a save. One save is
+one extent write per blob. Alignment-wise nothing changed: an extent still
+starts on a 4 KiB page inside a 64 KiB-aligned mapping, which is all XIP
+asks for. docs/firmware.md "The pattern store: one mapped extent region +
+a small key area" has the layout tables and the full rule set.
 
 ## RAM accounting
 
@@ -341,6 +351,38 @@ extent an engine executes from may be written, moved or freed — including
 a crossfade's OUTGOING engine, which the store's old one-pattern
 “running” notion did not cover) is the pin set documented in
 docs/firmware.md, “The borrowing invariant and the pin set”.
+
+**Re-measured at the #330 store** (2026-09-06). `heapstat` grew a third
+column, `swap(nomap)`: the `flashmap-off` fallback the firmware still
+keeps, where `patterns::bytecode_of` reads the bytecode extent into ONE
+transient Vec and `deserialize_lean` copies its words. No source Vec and
+no envelope exist on that path either — the source never leaves flash on
+an activation — so it sits between the two:
+
+| pattern | blob (v5) | swap(vec) | swap(nomap) | swap(xip) | mapped |
+|---|---:|---:|---:|---:|---:|
+| Main Stage | 21,548 | 91,567 | 42,855 | 22,451 | 8,933 |
+| Frogger 2D | 16,896 | 72,307 | 32,473 | 15,061 | 6,421 |
+| Opening Act | 15,376 | 67,929 | 33,167 | 23,419 | 10,577 |
+| 2D Fireworks Fade | 15,084 | 61,989 | 29,390 | 20,934 | 4,713 |
+| Infinite Snake | 8,656 | 34,651 | 25,812 | 21,464 | 4,280 |
+| Chasing Rainbows & HSLuv | 7,192 | 28,467 | 18,419 | 14,699 | 4,038 |
+
+Across all 299: Σ swap(vec) = 3,856,171 B, Σ swap(nomap) = 2,388,757 B
+(38.1 % under), Σ swap(xip) = 1,899,668 B — an average of 6,543 B (50.7 %)
+less per activation than the historical lifecycle; 6 patterns exceed 45 KB
+at swap under swap(vec), **0** under either current path. `swap(vec)` no
+longer models anything the firmware does: it is kept as the baseline the
+saving is measured against.
+
+What #330 removed from the read-back side is not in this table, because
+it never was: `GET /api/pattern` and the sync envelope used to fetch a
+library pattern's source into a `String` (`stream_store_readback`) for
+every request; they now escape/stream it straight out of the mapping
+(`patterns::source_slice`), so a 30 KB source costs the response buffer
+and nothing else. `GET /api/patterns/:id` is the same change — the JSON
+body is built in one pre-sized allocation with the source escaped into it
+from flash.
 
 For the assets consumer the saving is smaller but immediate: the 4 KiB
 `read_chunk` staging Vec plus the 4 KiB response buffer per in-flight
