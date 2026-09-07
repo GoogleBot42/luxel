@@ -5,7 +5,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -142,6 +142,83 @@ pub static DROPPED: AtomicU32 = AtomicU32::new(0);
 pub static SWAP_EOF_RACE: AtomicU32 = AtomicU32::new(0);
 /// See [`SWAP_EOF_RACE`].
 pub static SWAP_SLOW_PATH: AtomicU32 = AtomicU32::new(0);
+
+/// HUB75 pass-length forensics (Gitea #395), from the patched esp-hub75.
+///
+/// A "pass" is one full traversal of a DMA descriptor ring. `suc_eof` sits on
+/// a ring's last descriptor only, so consecutive EOFs are exactly one ring
+/// apart and every pass must be the same length. [`PASS_SHORT`] counts passes
+/// under 0.9x nominal — each one is the engine having entered a ring off its
+/// head, which nothing in the driver should be able to cause. It is the
+/// ground truth for a frame that vanishes with no frame accounting noticing:
+/// `write_frame` succeeded, so [`DROPPED`] and `out_fps` see nothing wrong.
+pub static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
+/// Shortest pass seen, microseconds. See [`PASS_COUNT`].
+pub static PASS_MIN_US: AtomicU32 = AtomicU32::new(0);
+/// Longest pass seen, microseconds. See [`PASS_COUNT`].
+pub static PASS_MAX_US: AtomicU32 = AtomicU32::new(0);
+/// Slow EWMA of pass length, the yardstick for short/long. See [`PASS_COUNT`].
+pub static PASS_NOMINAL_US: AtomicU32 = AtomicU32::new(0);
+/// Passes under 0.9x nominal — must be 0. See [`PASS_COUNT`].
+pub static PASS_SHORT: AtomicU32 = AtomicU32::new(0);
+/// Passes over 1.5x nominal; a coalesced/missed EOF looks like this.
+pub static PASS_LONG: AtomicU32 = AtomicU32::new(0);
+/// Worst frame-count ISR dispatch latency, in descriptors (~34 us each). The
+/// pass timestamps are taken inside that ISR, so this is the noise floor on
+/// [`PASS_MIN_US`]/[`PASS_MAX_US`] — and the reason the classified pass length
+/// is corrected by it before anything is called short.
+pub static PASS_ISR_LAT_MAX: AtomicU32 = AtomicU32::new(0);
+/// Most rescans the panel ran between two consecutive DISPLAYED frames. 1 =
+/// every rescan showed something new, 2 = one repeat, higher = the compose is
+/// overrunning its window badly.
+pub static PASS_PER_FRAME_MAX: AtomicU32 = AtomicU32::new(0);
+/// FEWEST rescans between two consecutive displayed frames, and the sharpest
+/// test there is for the artefact Jeremy filmed. A frame handed to the DMA in
+/// the same rescan as the one before it was **never scanned out** — the panel
+/// skips it, while `write_frame` succeeded and `dropped`/`out_fps` see a
+/// perfectly healthy frame. So `per_frame_min == 0` IS the skip, directly
+/// observed, and `>= 1` rules this mechanism out entirely.
+pub static PASS_PER_FRAME_MIN: AtomicU32 = AtomicU32::new(u32::MAX);
+/// Times `per_frame_min` was 0 — i.e. a displayed frame that the panel never
+/// actually scanned out.
+pub static PASS_ZERO_RESCAN: AtomicU32 = AtomicU32::new(0);
+
+/// How many recent short passes [`pass_shorts`] keeps.
+pub const PASS_SHORT_LOG: usize = 8;
+static PASS_SHORT_US: [AtomicU32; PASS_SHORT_LOG] =
+    [const { AtomicU32::new(0) }; PASS_SHORT_LOG];
+static PASS_SHORT_FLAGS: [AtomicU32; PASS_SHORT_LOG] =
+    [const { AtomicU32::new(0) }; PASS_SHORT_LOG];
+static PASS_SHORT_FRAME: [AtomicU32; PASS_SHORT_LOG] =
+    [const { AtomicU32::new(0) }; PASS_SHORT_LOG];
+static PASS_SHORT_N: AtomicU32 = AtomicU32::new(0);
+
+/// Mirror the driver's short-pass log so `/api/status` can read it without
+/// touching the driver, which lives on the output task's core.
+pub fn set_pass_shorts(n: u32, log: &[(u32, u32, u32); PASS_SHORT_LOG]) {
+    for (k, &(us, flags, frame)) in log.iter().enumerate() {
+        PASS_SHORT_US[k].store(us, Ordering::Relaxed);
+        PASS_SHORT_FLAGS[k].store(flags, Ordering::Relaxed);
+        PASS_SHORT_FRAME[k].store(frame, Ordering::Relaxed);
+    }
+    PASS_SHORT_N.store(n, Ordering::Relaxed);
+}
+
+/// `(total short passes ever, ring of the last few as (us, flags, frame))`.
+/// Flags are the driver's `pass_flag` bits: 1 armed-in-pass, 2 previous EOF
+/// restored a tail, 4 fast landing, 8 an eof_race within two passes, 16 a
+/// flip was armed and unlanded at that EOF.
+pub fn pass_shorts() -> (u32, [(u32, u32, u32); PASS_SHORT_LOG]) {
+    let mut out = [(0u32, 0u32, 0u32); PASS_SHORT_LOG];
+    for (k, slot) in out.iter_mut().enumerate() {
+        *slot = (
+            PASS_SHORT_US[k].load(Ordering::Relaxed),
+            PASS_SHORT_FLAGS[k].load(Ordering::Relaxed),
+            PASS_SHORT_FRAME[k].load(Ordering::Relaxed),
+        );
+    }
+    (PASS_SHORT_N.load(Ordering::Relaxed), out)
+}
 
 /// Raw BCM frame count from the panel driver, absolute since boot.
 /// [`RESCAN_HZ`] is its once-a-second delta; nothing else should read it.
