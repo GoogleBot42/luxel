@@ -25,6 +25,7 @@ var B = 2                         // vertical frequency ratio
 var delta = PI2 / 4               // horizontal phase offset
 
 var dotX = 0.5, dotY = 0.5
+var prevX = 0.5, prevY = 0.5   // where the dot was last frame
 var hueNow = 0.6
 
 // --- adjustable-speed clocks that don't jump: fold the difference between
@@ -64,7 +65,10 @@ export function sliderHueShiftSpeed(v) {
 
 //# min=0 max=1 step=0.01 default=0.6
 export function sliderPersistence(v) {
-  // 0 → trails die in a fraction of a second; top of range → permanent
+  // 0 → trails die in a fraction of a second; top of range → permanent.
+  // Expressed as a per-frame factor AT 60 fps; beforeRender re-bases it on
+  // the real frame time so the trail lasts the same number of seconds
+  // whatever the host renders at.
   fade = v > 0.99 ? 1 : 1 - 0.3 * (1 - v) * (1 - v)
 }
 
@@ -108,13 +112,35 @@ export function sliderDelta(v) {
 }
 
 // --- per frame: move the dot, drift the hue, stamp the canvas -------------
+// Both halves of this are deliberately frame-rate independent (Gitea #285).
+// The dot's position comes from time(), so how far it travels between two
+// frames depends entirely on how fast the host renders: a 64x64 panel at
+// 120 fps drew a continuous stroke while the browser preview at 60 fps
+// stamped a scattered constellation of separate blobs from the same code.
+// So: the trail is stamped along the SEGMENT swept since the last frame,
+// and the decay is applied per second rather than per frame.
 export function beforeRender(rawDelta) {
   var phase = mod(time(dotInterval) + dotOffset, 1) * PI2
   // classic Lissajous parametrization, mapped into the 0..1 canvas;
   // amplitude shrinks a touch when the dot is fat so blobs don't clip
   var amp = 0.47 - 0.04 / density
+  prevX = dotX
+  prevY = dotY
   dotX = 0.5 + amp * sin(phase * A + delta)
   dotY = 0.5 + amp * sin(phase * B)
+
+  // the swept segment, and 1/|segment|^2 hoisted out of the pixel loop.
+  // Below ~0.02 canvas units the segment is shorter than the fixed-point
+  // maths can project onto reliably, so fall back to a point stamp.
+  var sx = dotX - prevX
+  var sy = dotY - prevY
+  var seg = sx * sx + sy * sy
+  var inv = 0
+  if (seg > 0.0004) inv = 1 / seg
+
+  // `fade` is the per-frame factor at 60 fps; re-base it on the real frame
+  // time (rawDelta is milliseconds, and 60/1000 = 0.06)
+  var f = fade >= 1 ? 1 : pow(fade, rawDelta * 0.06)
 
   // hue = base plus a triangle-wave excursion centered on it
   var huePhase = mod(time(hueInterval) + hueOffset, 1)
@@ -125,10 +151,14 @@ export function beforeRender(rawDelta) {
     var cy = (row + 0.5) / SIZE
     for (var col = 0; col < SIZE; col++) {
       var cx = (col + 0.5) / SIZE
-      var c = clamp(1 - hypot(cx - dotX, cy - dotY) * density, 0, 1)
+      // closest point on the swept segment (t = 1, the new position, when
+      // the dot barely moved)
+      var t = 1
+      if (inv > 0) t = clamp(((cx - prevX) * sx + (cy - prevY) * sy) * inv, 0, 1)
+      var c = clamp(1 - hypot(cx - (prevX + t * sx), cy - (prevY + t * sy)) * density, 0, 1)
       // max(faded old, new closeness): trails coexist with the fresh dot
       // without additive blowout
-      bri[i] = max(bri[i] * fade, c)
+      bri[i] = max(bri[i] * f, c)
       if (c > 0) hueBuf[i] = hueNow    // trail remembers its paint color
       i++
     }

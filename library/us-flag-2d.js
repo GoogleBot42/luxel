@@ -5,7 +5,9 @@
 // dimensions are measured from the pixel map at startup, so the stripe count
 // and the star lattice stay correct on any matrix — on a 32-wide panel the
 // lattice lands on nine rows of alternating 7/6 stars, which is the real
-// flag's arrangement.
+// flag's arrangement. Below that the canton cannot hold six columns of
+// stars at all, so the lattice thins out instead of packing every other
+// pixel white.
 //
 // The animation is cloth, never blinking stars: a sine travels from the hoist
 // to the fly end, displacing the flag vertically and shading it like light
@@ -100,15 +102,21 @@ function layout() {
   cantonRows = floor(CANTON_STRIPES * gh / STRIPES - 0.5) + 1
   if (cantonRows < 1) cantonRows = 1
 
-  // aim for the flag's 6-across x 9-down star lattice, coarsening on big
-  // panels and falling back to every-other-pixel on small ones
+  // Aim for the flag's 6-across x 9-down star lattice, coarsening on big
+  // panels. When the canton is too narrow for six columns of stars, spread
+  // what fits at a pitch of 3 rather than clamping to every other pixel:
+  // a 6x9 canton (a 16-row panel) packed at pitch 2 is half white and reads
+  // as a chequerboard, not as stars (Gitea #285).
   stepX = round(cantonCols / 6)
-  if (stepX < 2) stepX = 2
+  if (stepX < 2) stepX = 3
   stepY = round(cantonRows / 9)
-  if (stepY < 2) stepY = 2
+  if (stepY < 2) stepY = 3
   halfX = floor(stepX / 2)
-  // a star is a diamond; it only grows once the lattice has room for it
-  starR = floor((min(stepX, stepY) - 1) / 2)
+  // A star is a diamond, and it only grows once the lattice has room to
+  // leave a dark pixel between neighbours: radius r needs a pitch of at
+  // least 2r+2, so an odd pitch keeps the smaller radius (at pitch 3 the
+  // old formula gave r=1 and the diamonds touched).
+  starR = floor((min(stepX, stepY) - 2) / 2)
   built = 1
 }
 

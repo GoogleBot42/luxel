@@ -1613,3 +1613,99 @@ export function renderFrame() {
     assert_eq!(e.pixels()[0], [0, 0, 255]);
     assert_eq!(e.pixels()[1], [255, 0, 0]);
 }
+
+// ── library patterns at the playground's 16x16 preview (Gitea #285) ──────
+// Three shipped patterns were tuned on a 64x64 panel and fell apart in the
+// browser preview, which is a 16x16 grid driven at 60 fps. Every failure was
+// a resolution/frame-rate assumption baked into the pattern, so the guards
+// live here, against the same grid map the playground installs
+// (`lx_set_map_grid` → `set_grid_map`).
+
+/// Frames of `src` on a `w`x`h` grid map, exactly as the playground drives it.
+fn grid_frames(src: &str, w: u32, h: u32, frames: usize, delta_ms: f64) -> Vec<Vec<[u8; 3]>> {
+    let mut e = Engine::new(src, w * h, 1).unwrap();
+    e.set_grid_map(w as u16, h as u16);
+    let delta = Fx::from_f64(delta_ms);
+    let out: Vec<Vec<[u8; 3]>> = (0..frames).map(|_| e.frame(delta).to_vec()).collect();
+    assert!(e.last_error.is_none(), "{:?}", e.last_error);
+    out
+}
+
+#[test]
+fn easing_library_marker_covers_exactly_one_pixel() {
+    let src = include_str!("../../../library/easing-library-v1-0.js");
+    // 100 ms frames walk all thirty easings (one every 5 s) in 1500 frames.
+    for &(w, h, frames, ms) in &[(16u32, 16u32, 1500usize, 100.0f64), (64, 64, 60, 100.0)] {
+        for (i, px) in grid_frames(src, w, h, frames, ms).iter().enumerate() {
+            let white = px.iter().filter(|p| **p == [255, 255, 255]).count();
+            assert_eq!(
+                white, 1,
+                "{w}x{h} frame {i}: the velocity marker lit {white} pixels, not 1"
+            );
+        }
+    }
+}
+
+#[test]
+fn us_flag_stars_stay_separated_on_a_small_canton() {
+    let src = include_str!("../../../library/us-flag-2d.js");
+    let (w, h) = (16u32, 16u32);
+    let px = grid_frames(src, w, h, 60, 1000.0 / 60.0).pop().unwrap();
+    // The canton the pattern computes for a 16-row panel: 40% of the width,
+    // and the rows covered by the first 7 of 13 stripes.
+    let (cols, rows) = (6u32, 9u32);
+    let mut stars = Vec::new();
+    for r in 0..rows {
+        for c in 0..cols {
+            let [red, green, blue] = px[(r * w + c) as usize];
+            // a star is white-ish; the canton around it is deep blue
+            if red > 100 && green > 100 && (red as i32 - blue as i32).abs() < 60 {
+                stars.push((c as i32, r as i32));
+            }
+        }
+    }
+    assert!(stars.len() >= 4, "canton has almost no stars: {stars:?}");
+    // At most a fifth of the canton is white — packed at every other pixel it
+    // was 15/54 (28%), which reads as a chequerboard rather than as stars.
+    assert!(
+        stars.len() * 5 <= (cols * rows) as usize,
+        "{}/{} canton pixels are stars — too dense to read",
+        stars.len(),
+        cols * rows
+    );
+    for (a, &(cx, cy)) in stars.iter().enumerate() {
+        for &(ox, oy) in &stars[a + 1..] {
+            assert!(
+                (cx - ox).abs() + (cy - oy).abs() >= 3,
+                "stars at ({cx},{cy}) and ({ox},{oy}) sit with no blue between them"
+            );
+        }
+    }
+}
+
+#[test]
+fn lissajous_trail_does_not_depend_on_the_frame_rate() {
+    let src = include_str!("../../../library/lissajous-curve-tracer.js");
+    // Two seconds of wall clock at 60 fps and at 120 fps. The dot is driven by
+    // time(), so a per-frame stamp leaves a scattered constellation at the
+    // lower rate; the swept-segment stamp has to land on the same trail.
+    let bright = |frames: Vec<Vec<[u8; 3]>>| -> Vec<bool> {
+        frames
+            .last()
+            .unwrap()
+            .iter()
+            .map(|p| *p.iter().max().unwrap() > 60)
+            .collect()
+    };
+    let slow = bright(grid_frames(src, 16, 16, 120, 1000.0 / 60.0));
+    let fast = bright(grid_frames(src, 16, 16, 240, 1000.0 / 120.0));
+    let inter = slow.iter().zip(&fast).filter(|(a, b)| **a && **b).count();
+    let union = slow.iter().zip(&fast).filter(|(a, b)| **a || **b).count();
+    assert!(union > 20, "neither run drew a trail");
+    let jaccard = inter as f64 / union as f64;
+    assert!(
+        jaccard > 0.85,
+        "60 fps and 120 fps drew different trails (Jaccard {jaccard:.3}); \
+         the stamp or the decay is still per-frame"
+    );
+}

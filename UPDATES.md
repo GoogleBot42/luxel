@@ -1,5 +1,60 @@
 # Update log
 
+## 2026-09-07 — Three library patterns that only broke in the 16x16 preview (#285)
+
+Jeremy reported three patterns rendering wrong in the browser but fine on
+the panel. None of it was the preview harness: the playground and the device
+run the same `luxel-core`, and the playground's grid map (`lx_set_map_grid`)
+is the same map the firmware installs. What differs is the *rig* — a gallery
+2D pattern previews on a 16x16 grid at 60 fps, while the bench panel is
+64x64 at 100+ fps — and all three patterns had a resolution or frame-rate
+assumption baked in. Reproduced host-side against the same engine wasm, then
+before/after in real chromium.
+
+* **Easing Library v1.0** — the white velocity marker was picked with
+  `abs(x - mx) < 0.7 / sqrt(pixelCount)`. That tolerance (0.0437 at 256 px)
+  is wider than half the pixel pitch (0.0333), so it lit **two columns in
+  191 of 600 frames (32 %)** — Jeremy's "two pixel ball". It now discovers
+  the grid pitch from the map (the `mapPixels` scan `us-flag-2d.js` already
+  used) and lights the single nearest cell: **1 pixel in 600/600 frames**, at
+  16x16 and 64x64 alike. The column is clamped to the row, so the back and
+  elastic families' overshoot presses the marker against the end instead of
+  hiding it off-panel (it used to vanish for whole seconds there too).
+
+* **US Flag 2D** — the star lattice clamped its pitch to "every other pixel"
+  when the canton was too small for six columns of stars. On a 16-row panel
+  that is a 6x9 canton with **15 stars covering 27.8 % of it**, which reads
+  as a chequerboard, not as stars. Below six columns it now spreads what fits
+  at a pitch of 3: **6 stars, 11.1 % coverage**, blue visible between every
+  pair. The star radius formula also went from `(pitch-1)/2` to `(pitch-2)/2`
+  — a diamond of radius r needs a pitch of 2r+2 to keep a dark pixel between
+  neighbours, and at an odd pitch the old form made them touch. 32x32 and
+  64x64 are byte-identical to before (26.7 % / 32.0 % star coverage): the
+  documented nine-rows-of-7/6 arrangement is untouched.
+
+* **Lissajous curve tracer** — the trail was stamped at the dot's new
+  position once per frame and decayed by a per-*frame* factor, while the dot
+  itself is driven by `time()`. So how far it jumps between stamps is purely
+  the host's frame rate: at 120 fps a continuous stroke, at the browser's
+  60 fps a scattered constellation. It now stamps the **segment swept since
+  the last frame** (closest-point-on-segment, with `1/|s|^2` hoisted out of
+  the pixel loop and a point-stamp fallback below 0.02 canvas units where the
+  16.16 projection stops being reliable) and decays per second
+  (`pow(fade, delta * 0.06)`, `fade` still being the 60 fps per-frame
+  factor). Bright-cell agreement between a 60 fps and a 120 fps run of the
+  same two wall-clock seconds: **Jaccard 0.486 → 0.947**.
+
+Three regression tests in `crates/luxel-core/tests/engine.rs` drive the
+shipped `library/` sources over the playground's own grid map; all three fail
+on the pre-fix patterns with the numbers above. `tools/ci.sh` green,
+`check-library.sh` 305/305 on all five rigs.
+
+Not touched: on a 16-row panel the wave still tears the 13 stripes into
+blotches, because a stripe is 1.23 rows there — inherent to the geometry, and
+not what the issue reported. No device was touched: the flag is byte-identical
+at 32x32 and 64x64 over 90 frames, and a visual confirmation of the other two
+on the panel is Gitea #361.
+
 ## 2026-09-07 — QEMU takeover tests green again: the pin assertion was stale, not the import (#273)
 
 `tools/qemu/run-all.py` had been red on master since 2026-09-05 — all three
@@ -155,7 +210,6 @@ from the bug report. The guards were exercised too: unreachable host → exit
 3, unwritable `TMPDIR` → `HARNESS BROKEN` exit 2, missing body capture →
 `HARNESS BROKEN` exit 2. No firmware defect behind any of the original
 FAILs — the device answered every check correctly the whole time.
-
 
 ## 2026-09-07 — Store forwarding: the stored value stays on the stack for the next statement (#320)
 
@@ -1185,7 +1239,6 @@ multi-word instruction counts once), writing no `.lxbc` unless `--out` is given;
 `luxel_core::bytecode::insn_count`, which walks a function's words exactly as
 `validate` does.
 
-
 ## 2026-09-06 — The per-pixel VM entry: 323 → 231 Xtensa instructions for an empty render (#260)
 
 An `export function render(index) {}` cost **7,591 µs of VM time per frame** at
@@ -1387,8 +1440,6 @@ no watchdog reset, render 121 fps. Image cost on `board-pixelblaze-v3`:
 the new work out of `fenced_as` (which is `#[inline(always)]` at ~20 flash call
 sites — 2.6 KB of image) and `PageStateCache` rather than `PagePointerCache`
 (3.3 KB more, and measurably no faster here).
-
-
 
 ## 2026-09-06 — Athom hardware pass on the stacked master: the second core's flash fence wedges the board (#292)
 
@@ -2153,7 +2204,6 @@ executed directly from a memory-mapped flash region (Jeremy's decision
 agent/luxel/flash-mmap), superinstructions on top of that format (#261),
 and the two-core pixel split once the core-1 executor (#259) has landed.
 
-
 ## 2026-09-05 — Engine: per-pixel rendering performance, pass 1 (#260)
 
 Jeremy's ask after the HUB75 panel's first evening: 4096 px at 18 fps for
@@ -2731,7 +2781,6 @@ ENOENT on `e2e-1-library.png`, reading like a puppeteer fault; it cost a debug
 cycle during the #205 pin-panel work. Re-ran the full suite into a fresh nested
 path: all checks pass, nine screenshots written.
 
-
 ## 2026-09-01 — Review pass 2: 99 open decisions closed out; the arrayReplace fill myth falls
 
 Jeremy's second sitting with the review UI produced 166 new/updated
@@ -3014,7 +3063,6 @@ pattern source to `/api/code`, so every upload is rejected by the envelope
 decoder and the "soak" measures nothing. Filed as #218 (with two smaller
 finds: `event-soak.mjs` pinned to firmware v0.1.39, and `POST /api/var` +
 `GET /api/readouts` having no consumer in the repo at all).
-
 
 ## 2026-08-31 — hosted-ui on metal: the stale bundle stayed invisible
 
