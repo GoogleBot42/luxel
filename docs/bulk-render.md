@@ -409,6 +409,89 @@ on `board-athom-music`, +9,312 on `board-seengreat-hub75`, +9,232 on
 The C6 conclusion stands unchanged — it is the one board this change puts under
 `image-check.sh`'s 3 % floor (#291).
 
+## Converted library patterns
+
+`renderFrame` is an entry point, not a migration: the rule in "Scope" below
+still holds. These are the library patterns that have actually been moved onto
+it, with the numbers each conversion was accepted on. Host `luxel bench`, best
+of five interleaved runs; `--profile` for the instruction counts.
+
+| pattern | shape | 4096 px (64x64) throughput | insns/px 4096 px | equivalence |
+|---|---|---:|---:|---|
+| `snake-2d.js` → `snake-2d-v2.js` (new file, both kept) | 16x16 board repainted on a board change, one `fillCanvas` | — | — | max per-channel diff **0** vs `snake-2d.js`, 240 frames at 256 and 4096 px, coordinate map and procedural grid |
+| `raindrops-2d.js` (converted in place) | 16x16 water sim, per-cell shading, one `fillCanvas` | 6.90 → **46.98** Mpx/s (**6.8x**) | 60.6 → **6.4** | see below |
+
+### `raindrops-2d.js` (2026-09-07)
+
+The pool was always a 16x16 simulation and `render2D` only resolved a colour
+out of it per LED. The colour resolution moved to the pool's own resolution —
+one `shade()` pass over 256 cells into `hC`/`sC`/`vC`, one
+`fillCanvas(hC, sC, vC, 16, 16)` per frame — with the static terms (the sea
+floor's contribution and the two shimmer wave arguments minus their phase)
+baked at init, and the pass skipped outright when nothing that feeds it moved.
+
+| rig | before ns/px | after ns/px | before µs/frame | after µs/frame | ratio |
+|---|---:|---:|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 145.0 | 21.3 | 593.8 | 87.2 | **6.8x** |
+| 256 px, `--map-grid 16x16` | 247.9 | 221.3 | 63.5 | 56.6 | 1.12x |
+
+Interpreted instructions: **60.6 → 6.4 insns/px** at 4096 px and 114.0 → 102.2
+at 256 px. The two profile runs of the converted pattern report the *same*
+7,847,813 instructions over 300 frames at both pixel counts — the per-pixel
+tax is gone entirely and what is left is 26,159 interpreted instructions per
+frame no matter how big the panel is. The 256 px row is what a conversion buys
+when the display is already the size of the simulation: almost nothing.
+
+A pool that has gone exactly flat now skips the recurrence *and* the repaint,
+which the per-pixel version could not do: at Raindrops 0.3 / Shimmer 0 /
+RippleFade 0.4 the converted pattern runs **2,279 instructions per frame**
+against the busy frame's 26,159, and calls `wave()` on 25 of 300 frames.
+
+**Visual equivalence**, 60 frames at a fixed 30 fps delta and seed
+(`luxel run --out`), compared byte for byte against the pre-conversion file:
+
+| rig | maxdiff | bytes differing |
+|---|---:|---:|
+| 256 px, 16x16 map | **1** | 1 / 46,080 (0.002 %) |
+| 1024 px, 32x32 map | 10 | 39.1 % |
+| 4096 px, 64x64 map | 16 | 41.6 % |
+| 60 px strip (8x8 default grid) | 5 | 38.2 % |
+| any of the four, with Texture = 0 | **0** | **0** |
+
+Every non-zero delta is the **surface texture**, and inside it only the
+shimmer: the sea floor was already indexed per cell, but the shimmer used to
+be evaluated at each PIXEL's mapped coordinates, so on a panel larger than the
+pool it carried full-panel detail riding over the blocky water. It is now a
+per-cell field like everything else. That is not an inference — the original
+with *only* the shimmer's coordinates quantized to the pool's cells
+(`floor(x * 15.99) / 15`) is **byte-identical to the converted pattern on all
+four rigs**, and driving Texture to 0 removes the term and the difference
+together.
+
+The one byte that still differs at 16x16 is in **column 15**: a map normalizes
+its far edge to 65535/65536, not 1, while a cell's own `cx / (W - 1)` is
+exactly 1, so the last column's shimmer arguments differ by one 16.16 LSB.
+It moved a single green channel by 1/255 in one frame of sixty.
+
+Dial agreement is unchanged: undriven vs every control driven at its declared
+`default=` differs by maxdiff 1 over 0.21 % of bytes **both before and after**
+(a pre-existing 1-LSB rounding of `198 / 360` against the literal `0.55`).
+
+**Where the frame goes now** (4096 px, host, best-of-five ablation runs —
+each part disabled in turn):
+
+| part | µs/frame | insns/frame | share |
+|---|---:|---:|---:|
+| `fillCanvas` (+ the frame's fixed overhead) | 32.6 | 179 | 37 % |
+| `rippleStep()` — the water recurrence | 28.5 | 14,461 | 33 % |
+| `shade()` — the per-cell colour | 26.5 | 11,520 | 30 % |
+| whole frame | 87.2 | 26,159 | |
+
+Two thirds of the frame is now interpreted bytecode that no existing bulk op
+covers — the 4-neighbour mirrored Laplacian and the element-wise shading map.
+Gitea #373 sketches the builtins that would, with these numbers; #374 is the
+on-panel look check.
+
 ## How to judge this on device
 
 The method, kept for the next change that needs it — the results it produced

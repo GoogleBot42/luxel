@@ -12,14 +12,70 @@
 // simulation runs edge to edge (mirrored boundary) so a ring reaches the
 // outermost row and column instead of stopping one pixel short.
 
+// Whole-frame rendering. The pool was always 16x16 — the water buffers, the
+// sea floor and the shimmer all live on that grid — and `render2D` only
+// resolved a colour out of it once per LED: a canvas read, two `wave()`s and
+// an `hsv()` for every pixel, every frame. On a 64x64 panel that is 4096
+// evaluations of a field that only has 256 distinct values.
+//
+// So the colour resolution moved into the simulation's own resolution.
+// `shade()` writes the same hue/saturation/value math into three parallel
+// canvas arrays — `hC`, `sC`, `vC`, one entry per CELL — and `renderFrame()`
+// issues a single `fillCanvas(hC, sC, vC, W, H)`. `fillCanvas` samples that
+// canvas through each pixel's mapped coordinates with nearest sampling,
+// which is exactly what the old `floor(y * 15.99) * 16 + floor(x * 15.99)`
+// did, so the same 256-cell pool fills a 16x16, 32x32 or 64x64 panel at one
+// fixed cost. Everything the pattern *is* — the fixed 30 Hz step, the
+// pointer-swapped buffers, the mirrored boundary, the whole-field flatten
+// that makes ripples fade to exactly nothing, the drop scheduler and every
+// dial — is untouched.
+//
+// The per-cell terms that never move are baked once at init: `texFloor` is
+// the sea floor's contribution and `shArgA`/`shArgB` are the two shimmer
+// wave arguments minus their drifting phase, so a frame's work is two
+// `wave()`s and a dozen ops per cell. And a pool that has gone exactly flat
+// stops costing anything at all: the recurrence over two all-zero buffers
+// would only reproduce zero, so it is skipped, and with it the repaint —
+// leaving a still pool at a couple of hundred interpreted instructions a
+// frame until the next drop (with Shimmer above 0, plus the shading).
+//
+// Two honest differences from the per-pixel original:
+//
+//   * The shimmer used to be evaluated at each PIXEL's coordinates, so on a
+//     panel bigger than the pool it carried full-panel detail riding over
+//     the blocky ripples. It is now a per-cell field like everything else,
+//     so above 16x16 it blocks with the water. At 16x16 — the pool's own
+//     resolution — the two are the same picture.
+//   * A cell's coordinates here are `cx / (W - 1)`, the exact normalized
+//     position the engine hands `render2D` for that column, except in the
+//     last row and column: a map normalizes its far edge to 65535/65536,
+//     not 1, so those cells' shimmer arguments differ by one 16.16 LSB.
+//     It is far below a quantization step and was verified, not assumed.
+//
+// With no map installed a 2D pattern already got the engine's `ceil(sqrt(n))`
+// default grid, and a `renderFrame` that names a coordinate-space builtin
+// gets the same one — so a bare strip still runs the pool out across it the
+// way it always did (60 px sees an 8x8 grid, 300 px an 18x17).
+
 // 16x16 virtual canvas, row-major
 var W = 16
 var H = 16
-var bufA = array(W * H)
-var bufB = array(W * H)
-var bgv = array(W * H)     // static sea-floor field, -0.5..0.5
+var N = W * H
+var bufA = array(N)
+var bufB = array(N)
+var bgv = array(N)         // static sea-floor field, -0.5..0.5
 var prev = bufA            // ping-pong surfaces, swapped by reference
 var cur = bufB             // newest state; render and drops both read/write it
+
+// the display canvas: one HSV triple per pool cell, handed to fillCanvas
+var hC = array(N)
+var sC = array(N)
+var vC = array(N)
+
+// per-cell shading constants, baked once at init
+var texFloor = array(N)    // the sea floor's contribution to the texture
+var shArgA = array(N)      // shimmer wave arguments, minus their drifting
+var shArgB = array(N)      // phases (which are added back each frame)
 
 // unique sea floor each boot: one random directional-wave slope
 var slope = 0.3 + random(1.4)
@@ -41,6 +97,25 @@ function initBackground() {
   }
 }
 initBackground()
+
+// The static half of the per-cell shading. `px`/`py` are the cell's own
+// normalized coordinates — what the engine handed render2D for that column
+// and row — so the shimmer keeps the shape it had, just sampled per cell.
+function initShading() {
+  var x, y
+  for (y = 0; y < H; y++) {
+    var py = y / (H - 1)
+    for (x = 0; x < W; x++) {
+      var px = x / (W - 1)
+      var i = y * W + x
+      texFloor[i] = bgv[i] * 1.1
+      // (1 - px) rather than -px so both wave arguments stay positive
+      shArgA[i] = px * 1.6 + py * 0.7
+      shArgB[i] = py * 1.9 + (1 - px) * 0.8
+    }
+  }
+}
+initShading()
 
 // The simulation runs at a fixed 30 Hz regardless of frame rate; wave speed
 // and fade time are expressed against that clock so both read in real units.
@@ -65,6 +140,21 @@ var damp = 0.8778          // per-step energy factor from the fade time
 var hueBase = 0.55         // 198 degrees
 var texAmt = 0.45          // surface texture, 0..1
 var shimRate = 0.2         // shimmer cycles per second
+
+// the canvas is repainted only when something that feeds it moved, and the
+// recurrence is skipped outright once the pool is provably at rest
+var flat = 0              // both buffers are exactly zero
+var shadeDirty = 1
+var shadedShimA = -1
+var shadedShimB = -1
+var shadedTex = -1
+
+// The hue channel is the sea floor plus the dial, and neither animates —
+// so it is painted at init and whenever the dial moves, never per frame.
+function paintHue() {
+  for (var i = 0; i < N; i++) hC[i] = hueBase + bgv[i] * 0.12
+}
+paintHue()
 
 // Drops per second. The gaps stay random — this sets their mean.
 //# min=0.3 max=12 step=0.1 default=3
@@ -97,6 +187,7 @@ export function sliderDropSize(v) {
 //# min=0 max=360 step=1 default=198
 export function sliderWaterHue(v) {
   hueBase = v / 360
+  paintHue()
 }
 
 // How strongly the permanent surface texture (static mottle + shimmer) shows.
@@ -112,6 +203,10 @@ export function sliderShimmer(v) {
 }
 
 function rippleStep() {
+  // A pool that is exactly at rest stays there: the recurrence over two
+  // all-zero buffers reproduces zero in every cell and the swap exchanges two
+  // identical buffers, so this is a skip, not an approximation.
+  if (flat) return
   // pointer swap, never copied: prev = newest state, cur = state to overwrite
   var t = prev
   prev = cur
@@ -145,11 +240,13 @@ function rippleStep() {
   // A per-cell deadzone would pump this second-order recurrence and leave the
   // pool simmering forever; a whole-field reset can only remove energy.
   if (peak < QUIET) {
-    for (x = 0; x < W * H; x++) {
+    for (x = 0; x < N; x++) {
       prev[x] = 0
       cur[x] = 0
     }
+    flat = 1
   }
+  shadeDirty = 1
 }
 
 function splash(dx, dy) {
@@ -169,6 +266,24 @@ function splash(dx, dy) {
         }
       }
     }
+  }
+  flat = 0
+  shadeDirty = 1
+}
+
+// The old `render2D` body, run once per CELL into the canvas arrays instead
+// of once per pixel: identical colour math, `hC[i]/sC[i]/vC[i]` where it
+// called `hsv()`, with the static terms already folded into `texFloor` and
+// `shArg*`. The hue channel is `paintHue`'s job and is not touched here.
+function shade() {
+  for (var i = 0; i < N; i++) {
+    var sh = (wave(shArgA[i] + shimA) + wave(shArgB[i] + shimB)) / 2
+    var tex = (texFloor[i] + (sh - 0.5) * 1.4) * texAmt
+    var v = max(REST + tex * 0.18 + cur[i], 0)
+    v = v * v                    // gamma
+    // tall crests desaturate toward white foam
+    sC[i] = clamp(1.1 - v, 0, 1)
+    vC[i] = clamp(v, 0, 1)
   }
 }
 
@@ -202,18 +317,23 @@ export function beforeRender(delta) {
   shimB += delta * shimRate * 0.63 / 1000
   if (shimA > 1) shimA -= 1
   if (shimB > 1) shimB -= 1
+
+  // the shimmer drifting and the Texture dial are the two inputs to shade()
+  // that no drop or sim step announces
+  if (shimA != shadedShimA || shimB != shadedShimB || texAmt != shadedTex) {
+    shadeDirty = 1
+  }
+  if (shadeDirty) {
+    shade()
+    shadeDirty = 0
+    shadedShimA = shimA
+    shadedShimB = shimB
+    shadedTex = texAmt
+  }
 }
 
-export function render2D(index, x, y) {
-  var i = floor(y * 15.99) * 16 + floor(x * 15.99)
-  var h = cur[i]                 // wave height; negative in troughs
-  // permanent water texture: the static sea floor plus a slow shimmer that
-  // drifts across it, both riding under the ripples at full panel resolution
-  // (1 - x) rather than -x so both wave arguments stay positive
-  var sh = (wave(x * 1.6 + y * 0.7 + shimA) + wave(y * 1.9 + (1 - x) * 0.8 + shimB)) / 2
-  var tex = (bgv[i] * 1.1 + (sh - 0.5) * 1.4) * texAmt
-  var v = max(REST + tex * 0.18 + h, 0)
-  v = v * v                      // gamma
-  // tall crests desaturate toward white foam
-  hsv(hueBase + bgv[i] * 0.12, clamp(1.1 - v, 0, 1), clamp(v, 0, 1))
+// One call, one frame: nearest-sampled through the map, exactly the cell
+// the old render2D resolved per pixel.
+export function renderFrame() {
+  fillCanvas(hC, sC, vC, W, H)
 }

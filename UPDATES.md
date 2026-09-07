@@ -1,5 +1,62 @@
 # Update log
 
+## 2026-09-07 — Raindrops 2D renders through `renderFrame` + `fillCanvas`
+
+`library/raindrops-2d.js` converted in place, the way `snake-2d-v2.js`
+converted `snake-2d.js`. The pool was always a 16x16 simulation — two water
+buffers, a static sea floor, a drifting shimmer — and `render2D` only resolved
+a colour out of it per LED. That readout moved to the pool's own resolution:
+one `shade()` pass over 256 cells into `hC`/`sC`/`vC` and one
+`fillCanvas(hC, sC, vC, 16, 16)` from `renderFrame()`.
+
+Everything the pattern *is* is untouched — the seven dials and their `//#`
+bounds, the fixed 30 Hz step, the pointer-swapped buffers, the mirrored
+boundary, the whole-field flatten that makes ripples fade to exactly nothing,
+the drop scheduler. The static per-cell terms (the sea floor's contribution and
+the two shimmer wave arguments minus their phase) are baked at init, the hue
+channel is repainted only when its dial moves, and a pool that has gone exactly
+flat skips the recurrence *and* the repaint.
+
+**Host throughput** (`luxel bench`, best of five):
+
+| rig | before | after | ratio |
+|---|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 6.90 Mpx/s, 593.8 µs/frame | **46.98 Mpx/s, 87.2 µs/frame** | **6.8x** |
+| 256 px, `--map-grid 16x16` | 4.03 Mpx/s, 63.5 µs/frame | 4.52 Mpx/s, 56.6 µs/frame | 1.12x |
+
+**Interpreted instructions** (`bench --profile`): 60.6 → **6.4 insns/px** at
+4096 px, 114.0 → 102.2 at 256 px. Both profile runs of the converted pattern
+report the *same* 7,847,813 instructions over 300 frames — 26,159 per frame
+whatever the panel size, which is the whole point. Idle (Raindrops 0.3,
+Shimmer 0, RippleFade 0.4) it drops to **2,279 instructions a frame**.
+
+**Visual equivalence** — 60 frames at a fixed 30 fps delta and seed, byte for
+byte against the pre-conversion file: max per-channel diff **1** at 16x16 (one
+byte of 46,080), 10 at 32x32, 16 at 64x64, 5 on a 60 px strip. With Texture at
+0 it is **0 on all four rigs**, and against the original with *only* the
+shimmer's coordinates quantized to the pool's cells it is **0 on all four**.
+So every non-zero delta is the shimmer, which used to be evaluated per PIXEL
+and is now per cell: above 16x16 it blocks with the water instead of carrying
+full-panel detail. The single byte at 16x16 is column 15 — a map normalizes
+its far edge to 65535/65536 while a cell's own `cx / (W - 1)` is exactly 1.
+Undriven vs every control at its declared `default=` differs by maxdiff 1 over
+0.21 % of bytes *both before and after* (a pre-existing rounding of `198 / 360`
+against the literal `0.55`), so dial agreement is unchanged.
+
+**Where the frame goes now** at 4096 px (host, ablation): `fillCanvas` and the
+frame's fixed overhead 32.6 µs (37 %), the water recurrence 28.5 µs (33 %,
+14,461 insns), the per-cell shading 26.5 µs (30 %, 11,520 insns). Two thirds of
+the frame is interpreted bytecode that no existing bulk op covers — the
+mirrored 4-neighbour Laplacian and the element-wise shading map. The builtins
+that would, with these numbers behind them, are filed rather than built.
+
+Verified host-side only: `tools/check-library.sh` 305/305 on all five rigs,
+`tools/ci.sh` green (web + cargo + library), and driven in real chromium — the
+gallery tile renders, the pattern opens with no compile error, and it animates
+as rain ripples on both a 16x16 and a 64x64 grid rig. Not yet seen on the
+panel — Gitea #374 is the on-panel look check (per-cell shimmer at 4096 px, the
+flat-pool skip, and the real `out_fps`), #373 the bulk-op analysis it produced.
+
 ## 2026-09-07 — `renderFrame` on metal: no I-cache cost, 7× on the panel (#336)
 
 #335 (whole-frame render entry + sixteen bulk builtins) shipped host-measured
@@ -1390,7 +1447,8 @@ classic-ESP32 boards off the edge of the 1 MiB OTA slot:
 (`board-c6-devkit` full-UI still fails image-check at 2.69 %, as it does on
 master — #291, pre-existing; the shipped artifact is the hosted-ui variant.)
 `.stack` and the largest frame are unchanged on both the default board and the
-panel.
+panel — Gitea #374 is the on-panel look check (per-cell shimmer at 4096 px, the
+flat-pool skip, and the real `out_fps`), #373 the bulk-op analysis it produced.
 
 Still open, and now the top of the list for whoever has the device: the
 `Const c; <op>` arms pay an Xtensa window transition (`entry`/`retw`) plus a
