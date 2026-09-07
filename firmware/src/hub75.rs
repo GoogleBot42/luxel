@@ -112,11 +112,14 @@ pub struct Hub75Output {
     /// The previous frame's swap; waited (instant by then) at the start
     /// of the next `write_frame` to reclaim the displaced buffer.
     pending: Option<Hub75Swap<Fb>>,
+    /// Panel rescan count when the last frame was handed to the DMA, for
+    /// `pass_per_frame_max` (Gitea #395).
+    last_shown_rescan: u32,
 }
 
 impl Hub75Output {
     pub fn new(lcd_cam: LCD_CAM<'static>, pins: Hub75Pins16<'static>, channel: DMA_CH0<'static>) -> Self {
-        let dead = Self { hub75: None, back: None, pending: None };
+        let dead = Self { hub75: None, back: None, pending: None, last_shown_rescan: 0 };
         // esp-hub75's macro expands to `StaticCell::uninit().write([EMPTY; N])`
         // — the descriptor array is written straight into the static, but the
         // literal is a value expression so clippy counts it as a stack array.
@@ -152,7 +155,7 @@ impl Hub75Output {
                         * esp_hub75::DESCRIPTOR_RINGS
                         * core::mem::size_of::<esp_hal::dma::DmaDescriptor>(),
                 );
-                Self { hub75: Some(h), back: Some(back), pending: None }
+                Self { hub75: Some(h), back: Some(back), pending: None, last_shown_rescan: 0 }
             }
             Err(e) => {
                 println!("hub75: LCD_CAM init failed: {:?} — panel output disabled", e);
@@ -203,6 +206,24 @@ impl OutputDriver for Hub75Output {
         let (race, slow) = hub75.swap_stats();
         crate::shared::SWAP_EOF_RACE.store(race, Ordering::Relaxed);
         crate::shared::SWAP_SLOW_PATH.store(slow, Ordering::Relaxed);
+        // Pass-length forensics (Gitea #395): a pass shorter than a ring means
+        // the DMA entered a ring off its head, which is the only mechanism
+        // that can lose a displayed frame without `write_frame` failing.
+        let (pc, pmin, pmax, pnom, pshort, plong, plat) = hub75.pass_stats();
+        crate::shared::PASS_COUNT.store(pc, Ordering::Relaxed);
+        crate::shared::PASS_MIN_US.store(pmin, Ordering::Relaxed);
+        crate::shared::PASS_MAX_US.store(pmax, Ordering::Relaxed);
+        crate::shared::PASS_NOMINAL_US.store(pnom, Ordering::Relaxed);
+        crate::shared::PASS_SHORT.store(pshort, Ordering::Relaxed);
+        crate::shared::PASS_LONG.store(plong, Ordering::Relaxed);
+        crate::shared::PASS_ISR_LAT_MAX.store(plat, Ordering::Relaxed);
+        // The log itself only moves when a short pass happens, which should be
+        // never — mirror it only then rather than every frame.
+        if pshort != 0 {
+            let (n, log) = hub75.pass_shorts();
+            crate::shared::set_pass_shorts(n, &log);
+        }
+
         // Reclaim the displaced buffer from the previous frame's swap.
         // With the patched driver a swap lands when the DMA wraps onto the
         // new descriptor ring — the next rescan boundary, ~8.7 ms at 7
@@ -247,6 +268,21 @@ impl OutputDriver for Hub75Output {
                 back.set_pixel(p, Color::new(r, g, b));
             }
         }
+        // Rescans between consecutive DISPLAYED frames, sampled at the only
+        // point that knows a frame is going out: 1 = every rescan showed
+        // something new, 2 = one repeat (Gitea #395).
+        let rescans = hub75.frame_count();
+        if self.last_shown_rescan != 0 {
+            let d = rescans.wrapping_sub(self.last_shown_rescan);
+            crate::shared::PASS_PER_FRAME_MAX.fetch_max(d, Ordering::Relaxed);
+            crate::shared::PASS_PER_FRAME_MIN.fetch_min(d, Ordering::Relaxed);
+            if d == 0 {
+                // Two frames handed over inside one rescan: the first was
+                // never scanned out. This is the skip, caught at the source.
+                crate::shared::PASS_ZERO_RESCAN.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.last_shown_rescan = rescans;
         self.pending = Some(hub75.swap(back));
         true
     }

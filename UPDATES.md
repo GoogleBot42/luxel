@@ -1,5 +1,75 @@
 # Update log
 
+## 2026-09-07 — chasing a skip that three counters say does not exist (#395)
+
+Jeremy re-filmed the merged build and still saw an occasional skipped sweep
+column, with a sharp observation: on his 240 fps video every other camera frame
+is normally dark, but at the skip two lit columns land in ADJACENT frames. At
+brightness 3 that is a real constraint, because the lit window is tiny and
+precisely placed.
+
+**Where the panel is lit.** `scale5(255, 3) = 25 = 0b00011001`, so a
+full-brightness pixel sets colour bits 4 and 3, which are planes 3 and 4, which
+are descriptors **224-247 of 254** — the last 12 % of the ring, 7.67-8.49 ms
+into an 8.70 ms pass, ending 0.21 ms before the `suc_eof` tail where a swap
+takes effect. The lit stretch is 0.82 ms, a 9 % duty cycle, immediately before
+the switch point.
+
+**What adjacency actually proves.** A rescan is 8.696 ms and a camera frame
+4.167, so consecutive lit stretches normally land 2 or 3 camera frames apart,
+never 1. For two to land in adjacent frames the gap must be under 8.333 ms —
+i.e. the pass short by at least 363 us, about 11 descriptors. That is real
+evidence of a short pass, but it bounds it far more weakly than it first
+appears: the "under 4 ms" reading would need ~137 descriptors skipped, and
+skipping the dark tail planes 5+6 entirely is only 205 us, not enough to show
+as adjacent at all.
+
+**New instrumentation**, `/api/status` `pass`: pass length min/max/nominal,
+`short` (under 0.9x) and `long` (over 1.5x) counts, `per_frame_min`/`max`
+rescans between displayed frames, `zero_rescan`, and a log of recent short
+passes with flags saying whether a swap was armed in that pass, whether the
+previous EOF restored a tail, whether the swap took the fast or the two-EOF
+landing, and whether an `eof_race` happened within two passes.
+
+**The first version of that instrument was wrong, and said so loudly.** It
+reported 30 short passes, the shortest 3.4 ms against an 8.7 ms nominal — but
+most carried flags of 0, meaning no swap was armed during them at all. The
+timestamps are taken inside the frame-count ISR, so its dispatch jitter lands
+straight in the interval. At an EOF the engine has just wrapped to a ring head,
+so `OUT_DSCR`'s offset from that head measures the latency in descriptors;
+correcting by it took `short` from 30 to **0** and `min_us` from 3,351 to
+7,316. The measured worst-case dispatch latency is **210 descriptors = 7.2 ms**
+— itself a finding, and the same core-0 contention #395 is about.
+
+**Result over 660 s with zero polling — 76,141 consecutive passes:**
+
+| metric | delta |
+|---|---:|
+| `pass.short` (ring truncation) | **0** |
+| `pass.long` (missed/coalesced EOF) | **0** |
+| `zero_rescan` (frame never scanned out) | **0** |
+| `dropped` (composed, never displayed) | **0** |
+
+`per_frame_min` 1, `fps` 112 == `out_fps` 112 against `rescan_hz` 115,
+`fence_timeouts` 0, `vmerr` null. `eof_race` 27 (one per 24 s), `slow_path`
+407.
+
+**And a host simulator agrees.** A descriptor-ring model of the swap/ISR
+sequence over random request phases finds zero short passes across prefetch
+depths 1-8, ISR latencies to 300 ticks, and a margin of 1 — and shows that the
+two mechanisms that *could* truncate a pass do not produce this signature: a
+DMA restart yields LONG passes, and rebuilding a ring under the engine yields
+neither. Nothing in the driver writes a mid-ring `next`, so entering a ring off
+its head has no mechanism.
+
+So every firmware-side explanation for a lost displayed frame is now excluded
+by direct measurement. The next discriminator is free and lives in the video
+Jeremy already has: `frameParity` flips every composed frame, so consecutive
+DISPLAYED columns must alternate red/green. Two adjacent lit columns of the
+**same** colour is a genuine skip; **different** colours means they were
+consecutive frames and the jump is a miscount. That settles it without trusting
+any timing argument.
+
 ## 2026-09-07 — `tools/panel-load-bench.mjs`, and why #395's interrupt executor is not happening
 
 With tearing (#376) and dropped frames (#387) gone, the artefact left on the

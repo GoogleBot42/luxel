@@ -131,6 +131,28 @@ that is not losing anything:
   (measured ~8/min on the bench panel). `slow_path` counts every swap that
   took that two-EOF fallback for any reason, each costing one extra panel
   frame of latency.
+- `pass` — HUB75 descriptor-ring forensics (Gitea #395). A *pass* is one full
+  traversal of a DMA descriptor ring; `suc_eof` sits on a ring's last
+  descriptor only, so consecutive EOFs are exactly one ring apart and every
+  pass must be the same length. `short` counts passes under 0.9x `nominal_us`
+  — each one would be the engine entering a ring off its head, the only way a
+  displayed frame can vanish while `write_frame` still reports success, so it
+  **must be 0**. `long` counts passes over 1.5x, which is what a missed or
+  coalesced EOF looks like. `per_frame_min`/`per_frame_max` are the fewest and
+  most rescans between two consecutive *displayed* frames: `min` of 0 means a
+  frame was handed to the DMA and never scanned out at all, and
+  `zero_rescan` counts those. `shorts` logs the last few as
+  `[corrected_us, packed_flags, frame_count]`.
+
+  **`isr_lat_max` is the honesty check on the rest.** Pass timestamps are taken
+  inside the frame-count ISR, so its dispatch jitter lands directly in the raw
+  interval; at an EOF the engine has just wrapped to a ring head, so how far
+  past that head `OUT_DSCR` has already travelled measures that latency in
+  descriptors (~34 us each). The classified length is corrected by it. Without
+  the correction the bench panel reported 30 "short" passes of as little as
+  3.4 ms against an 8.7 ms nominal — pure ISR jitter, no truncation at all.
+  `min_us`/`max_us` still include the pre-settling window, so read `short` and
+  `long`, not the extremes.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render

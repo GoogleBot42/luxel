@@ -79,10 +79,6 @@ This patch makes the swap land exactly on a panel frame boundary.
     non-circular (`linear`) path is untouched.
 
 Cost: one extra descriptor ring in .bss. On the bench panel
-(64x64, 7 bitplanes, 254 descriptors/ring x 12 B) that is 3048 bytes.
-
-Upstream this if it holds (https://github.com/liebman/esp-hub75).
-
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -120,6 +120,27 @@
@@ -257,7 +253,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
      pub(crate) current_fb_ptr: *const (),
  }
  
-@@ -140,6 +170,40 @@
+@@ -140,6 +170,142 @@
  #[allow(clippy::type_complexity)]
  static CLEAR_INTERRUPT: Mutex<RefCell<Option<fn()>>> = Mutex::new(RefCell::new(None));
  
@@ -278,6 +274,94 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +#[cfg(feature = "circular-dma")]
 +static SWAP_EOF_RACE: AtomicU32 = AtomicU32::new(0);
 +
++// ---------------------------------------------------------------------------
++// Pass-length forensics (Luxel local patch, Gitea #395)
++// ---------------------------------------------------------------------------
++//
++// A pass is one complete traversal of a ring: `suc_eof` sits only on a ring's
++// LAST descriptor, so consecutive EOFs are exactly one ring apart and every
++// pass must be the same length. A SHORT pass therefore means the engine
++// entered a ring somewhere other than its head, which by construction should
++// be impossible — nothing in this driver ever points a descriptor's `next` at
++// anything but a ring head. If `short_count` is ever nonzero the model above
++// is wrong somewhere specific, and these counters say where.
++//
++// Filmed evidence that motivated this: on the bench panel at brightness 3 the
++// only lit planes are 3 and 4, descriptors 224-247 of 254 — the last 12 % of
++// the ring, ending 0.21 ms before the tail. Two lit stretches landing in
++// ADJACENT frames of a 240 fps video requires the gap between them to be
++// under 8.333 ms against a nominal 8.696, i.e. a pass short by at least 11
++// descriptors.
++
++/// Microsecond timestamp of the previous `out_eof`, 0 before the first.
++///
++/// NOTE the timestamp is taken INSIDE the ISR, so the raw interval carries the
++/// ISR's own scheduling jitter: if this run was dispatched 5 ms later than the
++/// last one, the raw interval reads 5 ms short even though the DMA did exactly
++/// one ring. On the bench that jitter alone produced "passes" of 3.4 ms and
++/// 37 ms against an 8.7 ms nominal, which is measurement noise and not a
++/// truncated ring. `PASS_LAST_LAT` corrects for it: at an EOF the engine has
++/// just wrapped to a ring head, so how far past that head `OUT_DSCR` has
++/// already travelled IS the dispatch latency, in descriptors.
++#[cfg(feature = "circular-dma")]
++static PASS_LAST_US: AtomicU32 = AtomicU32::new(0);
++/// Descriptors past the ring head at the previous EOF — the ISR's dispatch
++/// latency, used to correct the raw interval. `u32::MAX` = not yet known.
++#[cfg(feature = "circular-dma")]
++static PASS_LAST_LAT: AtomicU32 = AtomicU32::new(u32::MAX);
++/// Worst ISR dispatch latency seen, in descriptors.
++#[cfg(feature = "circular-dma")]
++static PASS_LAT_MAX: AtomicU32 = AtomicU32::new(0);
++/// Slow EWMA of pass length, the yardstick for "short" and "long".
++#[cfg(feature = "circular-dma")]
++static PASS_NOMINAL_US: AtomicU32 = AtomicU32::new(0);
++#[cfg(feature = "circular-dma")]
++static PASS_MIN_US: AtomicU32 = AtomicU32::new(u32::MAX);
++#[cfg(feature = "circular-dma")]
++static PASS_MAX_US: AtomicU32 = AtomicU32::new(0);
++/// Passes shorter than 0.9x nominal — the ground truth for this class of bug.
++#[cfg(feature = "circular-dma")]
++static PASS_SHORT: AtomicU32 = AtomicU32::new(0);
++/// Passes longer than 1.5x nominal (a missed/coalesced EOF looks like this).
++#[cfg(feature = "circular-dma")]
++static PASS_LONG: AtomicU32 = AtomicU32::new(0);
++#[cfg(feature = "circular-dma")]
++static PASS_COUNT: AtomicU32 = AtomicU32::new(0);
++
++/// Flags accumulated during the pass now running, latched into the log at its
++/// EOF. See `Hub75::pass_shorts` for the bit meanings.
++#[cfg(feature = "circular-dma")]
++static PASS_FLAGS: AtomicU32 = AtomicU32::new(0);
++/// `FRAME_COUNT` when the last `eof_race` was observed, so a short pass can be
++/// correlated against it.
++#[cfg(feature = "circular-dma")]
++static LAST_RACE_FRAME: AtomicU32 = AtomicU32::new(u32::MAX);
++
++/// How many recent short passes [`Hub75::pass_shorts`] keeps.
++pub const SHORT_LOG_LEN: usize = 8;
++#[cfg(feature = "circular-dma")]
++static SHORT_US: [AtomicU32; SHORT_LOG_LEN] = [const { AtomicU32::new(0) }; SHORT_LOG_LEN];
++#[cfg(feature = "circular-dma")]
++static SHORT_FLAGS: [AtomicU32; SHORT_LOG_LEN] = [const { AtomicU32::new(0) }; SHORT_LOG_LEN];
++#[cfg(feature = "circular-dma")]
++static SHORT_FRAME: [AtomicU32; SHORT_LOG_LEN] = [const { AtomicU32::new(0) }; SHORT_LOG_LEN];
++#[cfg(feature = "circular-dma")]
++static SHORT_N: AtomicU32 = AtomicU32::new(0);
++
++/// Bit meanings for the pass flags reported by [`Hub75::pass_shorts`].
++pub mod pass_flag {
++    /// A swap was armed at some point during this pass.
++    pub const ARMED_IN_PASS: u32 = 1 << 0;
++    /// The previous EOF landed a flip and restored the old ring's tail.
++    pub const RESTORED_PREV: u32 = 1 << 1;
++    /// The most recent swap took the FAST (next-EOF) landing path.
++    pub const LANDING_FAST: u32 = 1 << 2;
++    /// An `eof_race` was seen within the previous two passes.
++    pub const RACE_RECENT: u32 = 1 << 3;
++    /// A flip was armed and unlanded at this EOF.
++    pub const ARMED_AT_EOF: u32 = 1 << 4;
++}
++
 +/// Luxel local patch (Gitea #387): swaps that took the two-EOF fallback for
 +/// any reason (the above, or arming too close to the tail). Each costs one
 +/// extra panel frame of swap latency.
@@ -295,10 +379,24 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +#[allow(clippy::type_complexity)]
 +static DMA_PROBE: Mutex<RefCell<Option<fn() -> (usize, bool)>>> = Mutex::new(RefCell::new(None));
 +
++/// Ring geometry cached for the ISR's latency maths (Gitea #395).
++#[cfg(feature = "circular-dma")]
++static DESC_BASE: AtomicU32 = AtomicU32::new(0);
++#[cfg(feature = "circular-dma")]
++static DESC_COUNT: AtomicU32 = AtomicU32::new(0);
++#[cfg(feature = "circular-dma")]
++fn borrow_desc_base() -> usize {
++    DESC_BASE.load(Ordering::Relaxed) as usize
++}
++#[cfg(feature = "circular-dma")]
++fn borrow_desc_count() -> usize {
++    DESC_COUNT.load(Ordering::Relaxed) as usize
++}
++
  fn signal_swap_done(cs: critical_section::CriticalSection) {
      SWAP_DONE.store(true, Ordering::Release);
      if let Some(waker) = SWAP_WAKER.borrow_ref_mut(cs).take() {
-@@ -280,6 +344,16 @@
+@@ -280,6 +446,16 @@
  // Frame-boundary ISR (circular-dma)
  // ---------------------------------------------------------------------------
  
@@ -315,10 +413,107 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  #[cfg(feature = "circular-dma")]
  #[handler]
  #[cfg_attr(feature = "iram", ram)]
-@@ -289,6 +363,60 @@
+@@ -288,7 +464,157 @@
+         if let Some(clear) = CLEAR_INTERRUPT.borrow_ref(cs).as_ref() {
              (clear)();
          }
-         FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
+-        FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
++        let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
++
++        // Pass length (Gitea #395). Consecutive EOFs are one ring apart by
++        // construction, so anything materially short means the engine entered
++        // a ring off its head.
++        let now = esp_hal::time::Instant::now()
++            .duration_since_epoch()
++            .as_micros() as u32;
++        let prev = PASS_LAST_US.swap(now, Ordering::Relaxed);
++        // Dispatch latency in descriptors: at an EOF the engine has just
++        // wrapped to a ring head, so OUT_DSCR's offset from that head is how
++        // long this handler took to run.
++        let lat = match DMA_PROBE.borrow_ref(cs).as_ref() {
++            Some(probe) => {
++                let (cur, _) = (probe)();
++                let base = borrow_desc_base();
++                if base == 0 {
++                    u32::MAX
++                } else {
++                    let per = core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++                    let off = cur.wrapping_sub(base) / per;
++                    let n = borrow_desc_count();
++                    if n == 0 || off >= n * crate::DESCRIPTOR_RINGS {
++                        u32::MAX
++                    } else {
++                        (off % n) as u32
++                    }
++                }
++            }
++            None => u32::MAX,
++        };
++        let prev_lat = PASS_LAST_LAT.swap(lat, Ordering::Relaxed);
++        if lat != u32::MAX {
++            PASS_LAT_MAX.fetch_max(lat, Ordering::Relaxed);
++        }
++        let armed_now = SWAP_ARMED.load(Ordering::Relaxed);
++        let mut flags = PASS_FLAGS.swap(
++            if armed_now { pass_flag::ARMED_IN_PASS } else { 0 },
++            Ordering::Relaxed,
++        );
++        if armed_now {
++            flags |= pass_flag::ARMED_AT_EOF;
++        }
++        if frame.wrapping_sub(LAST_RACE_FRAME.load(Ordering::Relaxed)) <= 2 {
++            flags |= pass_flag::RACE_RECENT;
++        }
++        if prev != 0 {
++            let raw = now.wrapping_sub(prev);
++            // Correct the raw interval by the change in dispatch latency, so
++            // what is classified is the DMA's behaviour and not the ISR's.
++            let nominal_now = PASS_NOMINAL_US.load(Ordering::Relaxed);
++            let dt = if lat != u32::MAX && prev_lat != u32::MAX && nominal_now != 0 {
++                let n = borrow_desc_count().max(1) as u64;
++                let desc_us = u64::from(nominal_now) / n;
++                let corr = (i64::from(prev_lat) - i64::from(lat)) * desc_us as i64;
++                let v = i64::from(raw) + corr;
++                if v < 0 { 0 } else { v as u32 }
++            } else {
++                raw
++            };
++            PASS_COUNT.fetch_add(1, Ordering::Relaxed);
++            PASS_MIN_US.fetch_min(dt, Ordering::Relaxed);
++            PASS_MAX_US.fetch_max(dt, Ordering::Relaxed);
++            let nominal = PASS_NOMINAL_US.load(Ordering::Relaxed);
++            if nominal == 0 {
++                PASS_NOMINAL_US.store(dt, Ordering::Relaxed);
++            } else if PASS_COUNT.load(Ordering::Relaxed) < 64 {
++                // Let the yardstick settle before classifying anything.
++                let next = (u64::from(nominal) * 7 + u64::from(dt)) / 8;
++                PASS_NOMINAL_US.store(next as u32, Ordering::Relaxed);
++            } else {
++                if u64::from(dt) * 10 < u64::from(nominal) * 9 {
++                    PASS_SHORT.fetch_add(1, Ordering::Relaxed);
++                    let i = SHORT_N.fetch_add(1, Ordering::Relaxed) as usize % SHORT_LOG_LEN;
++                    SHORT_US[i].store(dt, Ordering::Relaxed);
++                    // pack the raw length and the two latencies next to the
++                    // flags so a noisy sample is recognisable after the fact
++                    SHORT_FLAGS[i].store(
++                        flags | (raw.min(0xFFFF) << 8) | ((lat.min(0xF)) << 24)
++                            | ((prev_lat.min(0xF)) << 28),
++                        Ordering::Relaxed,
++                    );
++                    SHORT_FRAME[i].store(frame, Ordering::Relaxed);
++                } else if u64::from(dt) * 2 > u64::from(nominal) * 3 {
++                    PASS_LONG.fetch_add(1, Ordering::Relaxed);
++                }
++                // Track only plausible passes so one outlier cannot drag the
++                // yardstick onto itself.
++                if u64::from(dt) * 2 >= u64::from(nominal)
++                    && u64::from(dt) <= u64::from(nominal) * 2
++                {
++                    let next = (u64::from(nominal) * 15 + u64::from(dt)) / 16;
++                    PASS_NOMINAL_US.store(next as u32, Ordering::Relaxed);
++                }
++            }
++        }
 +
 +        let mut borrow = CIRCULAR_STATE.borrow_ref_mut(cs);
 +        let state = match borrow.as_mut() {
@@ -372,11 +567,12 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +            core::ptr::write_volatile(core::ptr::addr_of_mut!((*tail).next), head);
 +        }
 +        core::sync::atomic::fence(Ordering::SeqCst);
++        PASS_FLAGS.fetch_or(pass_flag::RESTORED_PREV, Ordering::Relaxed);
 +        SWAP_ARMED.store(false, Ordering::Release);
          signal_swap_done(cs);
      });
  }
-@@ -331,15 +459,25 @@
+@@ -331,15 +657,27 @@
      xfer: TxTransfer,
      desc_ptr: *mut esp_hal::dma::DmaDescriptor,
      desc_count: usize,
@@ -399,10 +595,12 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
              current_fb_ptr: fb_ptr,
          });
 +        SWAP_ARMED.store(false, Ordering::Release);
++        DESC_BASE.store(desc_ptr as u32, Ordering::Relaxed);
++        DESC_COUNT.store(desc_count as u32, Ordering::Relaxed);
      });
  }
  
-@@ -350,6 +488,15 @@
+@@ -350,6 +688,15 @@
      });
  }
  
@@ -418,7 +616,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  // ---------------------------------------------------------------------------
  // Public driver handle
  // ---------------------------------------------------------------------------
-@@ -374,8 +521,11 @@
+@@ -374,8 +721,11 @@
  ///
  /// # Buffer Swapping
  ///
@@ -432,10 +630,67 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  /// - [`Hub75Swap::wait()`] — spin-loops until the DMA is guaranteed to no
  ///   longer read from the old buffer, then returns it.
  /// - [`Hub75Swap::wait_for_done()`] — yields to the executor (async contexts).
-@@ -436,6 +586,29 @@
+@@ -436,6 +786,86 @@
      pub fn frame_count(&self) -> u32 {
          FRAME_COUNT.load(Ordering::Relaxed)
      }
++
++    /// Luxel local patch (Gitea #395): pass-length forensics,
++    /// `(count, min_us, max_us, nominal_us, short_count, long_count,
++    /// isr_latency_max_descriptors)`.
++    ///
++    /// A pass is one full traversal of a descriptor ring. `suc_eof` is set on
++    /// a ring's last descriptor only, so consecutive EOFs are exactly one ring
++    /// apart and every pass should be identical. `short_count` counts passes
++    /// under 0.9x nominal: each one is the engine having entered a ring off
++    /// its head, which nothing in this driver should be able to cause. It is
++    /// the ground truth for a frame that vanished without any frame
++    /// accounting noticing.
++    pub fn pass_stats(&self) -> (u32, u32, u32, u32, u32, u32, u32) {
++        #[cfg(feature = "circular-dma")]
++        {
++            let min = PASS_MIN_US.load(Ordering::Relaxed);
++            (
++                PASS_COUNT.load(Ordering::Relaxed),
++                if min == u32::MAX { 0 } else { min },
++                PASS_MAX_US.load(Ordering::Relaxed),
++                PASS_NOMINAL_US.load(Ordering::Relaxed),
++                PASS_SHORT.load(Ordering::Relaxed),
++                PASS_LONG.load(Ordering::Relaxed),
++                PASS_LAT_MAX.load(Ordering::Relaxed),
++            )
++        }
++        #[cfg(not(feature = "circular-dma"))]
++        {
++            (0, 0, 0, 0, 0, 0, 0)
++        }
++    }
++
++    /// Luxel local patch (Gitea #395): the most recent short passes as
++    /// `(length_us, flags, frame_count)`, oldest first, with the total ever
++    /// recorded. See [`pass_flag`] for the bits — they say whether a swap was
++    /// armed in that pass, whether the previous EOF landed a flip and restored
++    /// a tail, whether the swap took the fast or the two-EOF landing, and
++    /// whether an `eof_race` happened within the previous two passes.
++    pub fn pass_shorts(&self) -> (u32, [(u32, u32, u32); SHORT_LOG_LEN]) {
++        #[cfg(feature = "circular-dma")]
++        {
++            let n = SHORT_N.load(Ordering::Relaxed);
++            let mut out = [(0u32, 0u32, 0u32); SHORT_LOG_LEN];
++            for (k, slot) in out.iter_mut().enumerate() {
++                *slot = (
++                    SHORT_US[k].load(Ordering::Relaxed),
++                    SHORT_FLAGS[k].load(Ordering::Relaxed),
++                    SHORT_FRAME[k].load(Ordering::Relaxed),
++                );
++            }
++            (n, out)
++        }
++        #[cfg(not(feature = "circular-dma"))]
++        {
++            (0, [(0, 0, 0); SHORT_LOG_LEN])
++        }
++    }
 +
 +    /// Luxel local patch (Gitea #387): swap diagnostics, `(eof_race,
 +    /// slow_path)`.
@@ -462,7 +717,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  }
  
  #[cfg(not(feature = "circular-dma"))]
-@@ -495,9 +668,12 @@
+@@ -495,9 +925,12 @@
  /// directly for a blocking spin-loop.
  ///
  /// In non-circular mode, "safe" means the ISR has hit a frame boundary and
@@ -478,7 +733,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
  pub struct Hub75Swap<FB: 'static> {
      old_fb_ptr: *mut FB,
      #[cfg(not(feature = "circular-dma"))]
-@@ -667,10 +843,23 @@
+@@ -667,10 +1100,23 @@
  impl<DM: esp_hal::DriverMode, FB: FrameBuffer + 'static> Hub75<DM, FB> {
      /// Initiate a framebuffer swap (circular-DMA mode).
      ///
@@ -506,7 +761,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
      /// [`.wait()`](Hub75Swap::wait), or just `.wait()` directly for blocking.
      ///
      /// # Panics
-@@ -678,10 +867,122 @@
+@@ -678,10 +1124,131 @@
      /// Panics if the driver has not been initialised (no `Hub75` instance
      /// was created).
      pub fn swap(&self, new_fb: &'static mut FB) -> Hub75Swap<FB> {
@@ -606,6 +861,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +                    let idx = cur.wrapping_sub(lo) / core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
 +                    if eof_pending {
 +                        SWAP_EOF_RACE.fetch_add(1, Ordering::Relaxed);
++                        LAST_RACE_FRAME.store(FRAME_COUNT.load(Ordering::Relaxed), Ordering::Relaxed);
 +                    }
 +                    if !eof_pending && cur >= lo && idx + 3 <= n {
 +                        needed = 1;
@@ -614,6 +870,14 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
 +                if needed > 1 {
 +                    SWAP_SLOW_PATH.fetch_add(1, Ordering::Relaxed);
 +                }
++                // Mark the pass this swap was armed in, and which landing rule
++                // it chose, so a short pass can be blamed on (or cleared of)
++                // the two-EOF fallback.
++                PASS_FLAGS.fetch_or(
++                    pass_flag::ARMED_IN_PASS
++                        | if needed == 1 { pass_flag::LANDING_FAST } else { 0 },
++                    Ordering::Relaxed,
++                );
 +                state.ring = to;
 +                state.flip_from = from;
 +                state.flip_eofs = 0;
@@ -629,7 +893,7 @@ Upstream this if it holds (https://github.com/liebman/esp-hub75).
              let delta = new_fb_ptr as isize - state.current_fb_ptr as isize;
              // SAFETY: `descriptors` points to a `&'static mut` descriptor
              // array that outlives everything. The DMA engine reads descriptor
-@@ -697,7 +998,10 @@
+@@ -697,7 +1264,10 @@
              //     within a single contiguous `FB` allocation — both old and
              //     new framebuffers have identical internal layout.
              //  4. The worst-case visual artifact is one partially-mixed frame

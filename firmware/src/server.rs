@@ -420,6 +420,50 @@ fn status_json() -> String {
         push_piece(&mut out, ",\"slow_path\":");
         push_u32(&mut out, crate::shared::SWAP_SLOW_PATH.load(Ordering::Relaxed));
         push_piece(&mut out, "}");
+        // Pass-length forensics (#395). `short` must be 0: a pass shorter than
+        // a full ring means the DMA entered a ring off its head, the one way a
+        // displayed frame can vanish with write_frame still reporting success.
+        push_piece(&mut out, ",\"pass\":{\"n\":");
+        push_u32(&mut out, crate::shared::PASS_COUNT.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"min_us\":");
+        push_u32(&mut out, crate::shared::PASS_MIN_US.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"max_us\":");
+        push_u32(&mut out, crate::shared::PASS_MAX_US.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"nominal_us\":");
+        push_u32(&mut out, crate::shared::PASS_NOMINAL_US.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"short\":");
+        push_u32(&mut out, crate::shared::PASS_SHORT.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"long\":");
+        push_u32(&mut out, crate::shared::PASS_LONG.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"isr_lat_max\":");
+        push_u32(&mut out, crate::shared::PASS_ISR_LAT_MAX.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"per_frame_max\":");
+        push_u32(&mut out, crate::shared::PASS_PER_FRAME_MAX.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"per_frame_min\":");
+        let pfmin = crate::shared::PASS_PER_FRAME_MIN.load(Ordering::Relaxed);
+        push_u32(&mut out, if pfmin == u32::MAX { 0 } else { pfmin });
+        push_piece(&mut out, ",\"zero_rescan\":");
+        push_u32(&mut out, crate::shared::PASS_ZERO_RESCAN.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"shorts\":[");
+        {
+            let (n, log) = crate::shared::pass_shorts();
+            let live = (n as usize).min(log.len());
+            for k in 0..live {
+                let i = (n as usize - live + k) % log.len();
+                let (us, flags, frame) = log[i];
+                if k > 0 {
+                    push_piece(&mut out, ",");
+                }
+                push_piece(&mut out, "[");
+                push_u32(&mut out, us);
+                push_piece(&mut out, ",");
+                push_u32(&mut out, flags);
+                push_piece(&mut out, ",");
+                push_u32(&mut out, frame);
+                push_piece(&mut out, "]");
+            }
+        }
+        push_piece(&mut out, "]}");
     }
     push_piece(&mut out, ",\"pixels\":");
     push_u32(&mut out, pixels);
