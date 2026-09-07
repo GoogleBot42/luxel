@@ -35,6 +35,19 @@ paths:
   left at 5, and `tests/superinsns.rs` pins that an unfused blob still
   validates and runs. Adding a builtin does not need a bump either.
   CHANGING the meaning or encoding of an existing opcode does.
+- **New engine code is charged against a ~10 KB image budget.** The
+  classic-ESP32 boards sit at ~4 % OTA-slot margin, and the CI gate
+  (`tools/image-check.sh`, 3 % floor on `board-pixelblaze-v3`) is the
+  first thing a luxel-core-only PR can fail. The sixteen `renderFrame`
+  builtins (#335, ~550 lines of Rust) cost +14.9 KB on the first cut —
+  four monomorphized copies of one generic `paint_shape` closure alone
+  were 3.5 KB, `hsv_to_rgb`+`quantize` inlined into five loops, `format!`
+  error strings, and eight inlined copies of a builtin-name table scan.
+  `&mut dyn FnMut`, shared `#[inline(never)]` texel/blend helpers and
+  static error strings took 6.5 KB back bit-identically. Measure with the
+  ci.sh recipe (`build-esp32.sh` → `espflash save-image` →
+  `image-check.sh`) against the merge base BEFORE opening the PR, and
+  re-measure after any rebase — #328 moved the base by −8.5 KB.
 - Superinstructions (`0x41..0x4E`, docs/spec/bytecode.md) are fused base
   sequences, emitted only by `compile::peephole` and executed by arms that
   must stay byte-for-byte equivalent to the sequence they replace —
