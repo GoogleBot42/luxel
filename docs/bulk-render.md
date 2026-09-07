@@ -102,6 +102,15 @@ The pairs are benchmark fixtures, not library patterns: each is written twice
 against the same `beforeRender`, with the animation driven off accumulated
 `delta` rather than `time()` so a frame dump is reproducible.
 
+Re-confirmed after the rebase onto `974b3b3` (#328), same sweep parameters, on
+pairs `a`/`c`/`f`/`i`/`j` at 4096 px 64×64: 15.93/0.22 (71.4×), 19.29/4.40
+(4.39×), 401.21/14.04 (28.6×), 858.24/51.54 (16.7×), 128.43/174.24 (0.74×).
+Every **bulk** ns/px is inside 6 % of the table below; what moved is the
+per-pixel control side (`f-balls` −9 %, `i-lines` −4 %, `j-perlin` −8 %),
+which is #328's x86 code placement plus this box's 6–19 % spread and is why
+the ratios shift by up to a tenth. The rows are left as the one internally
+comparable sweep they were taken as.
+
 ### 4096 px, `--map-grid 64x64` (coordinate map, grid fast path via `detect_grid`)
 
 | pair | what | px ns/px | bulk ns/px | px µs/frame | bulk µs/frame | ratio |
@@ -230,26 +239,56 @@ too, and `library/bulk-sprite-scroll-2d.js` shows its sprite on the 60/300/
 
 ## Results — firmware
 
-Devshell builds, same `creds.env` throughout, merge base `c7e0266` built from
-a throwaway worktree. `espflash save-image` app image, `tools/image-check.sh`
-for the margin. "first cut" is the branch at `c51e1db`, before the size pass.
+Devshell builds, same `creds.env` throughout, the base built from a throwaway
+worktree at the commit this branch sits on. `espflash save-image` app image,
+`tools/image-check.sh` for the margin.
 
-| board | base `c7e0266` | first cut | after the size pass | Δ vs base | margin now | gate |
-|---|---:|---:|---:|---:|---:|---|
-| `board-pixelblaze-v3` | 1,006,640 | 1,021,520 | **1,014,976** | +8,336 | 33,600 B / 3.20 % | ok (base 3.99 %) |
-| `board-athom-music` | 1,006,752 | 1,021,616 | **1,015,040** | +8,288 | 33,536 B / 3.19 % | ok (base 3.98 %) |
-| `board-seengreat-hub75` | 941,600 | 956,192 | **949,744** | +8,144 | 98,832 B / 9.42 % | ok (base 10.20 %) |
-| `board-c6-devkit` | 1,021,136 | 1,034,464 | **1,029,840** | +8,704 | 18,736 B / **1.78 %** | **FAIL** (base 2.61 % — already under the floor before this branch, #291) |
+Re-measured 2026-09-06 after the rebase onto **`974b3b3`** — the master that
+carries #328's code placement (`Vm::run`, `Vm::call_builtin` and
+`Vm::builtin_hot` moved into `.rwtext`, the other ninety builtin arms split
+out into a `#[cold]` `Vm::builtin_cold`). The sixteen bulk arms are tier 3, in
+`builtin_cold`, and every `bulk.rs` symbol links into flash `.text`, so this
+branch adds **zero bytes to `.rwtext`**: 42,644 B on the classic ESP32 and
+24,360 B on the S3, byte-identical to the base on both boards. The whole delta
+is flash. Per-symbol on `board-pixelblaze-v3` (`nm --print-size`), the three
+IRAM-resident functions are byte-identical to the base — `Vm::run` 12,700 B,
+`Vm::call_builtin` 1,562 B, `Vm::builtin_hot` 3,568 B — and the entire arm
+cost lands in `Vm::builtin_cold`, 14,801 → 15,093 B (**+292 B**, ~18 B per
+arm). The other ~8 KB is `bulk.rs` itself, in `.text`.
+
+| board | base `974b3b3` | this branch | Δ vs base | margin now | gate |
+|---|---:|---:|---:|---:|---|
+| `board-pixelblaze-v3` | 998,144 | **1,006,416** | +8,272 | 42,160 B / 4.02 % | ok (base 4.80 %) |
+| `board-athom-music` | 998,048 | **1,006,304** | +8,256 | 42,272 B / 4.03 % | ok (base 4.81 %) |
+| `board-seengreat-hub75` | 936,416 | **945,168** | +8,752 | 103,408 B / 9.86 % | ok (base 10.69 %) |
+| `board-c6-devkit` | 1,015,696 | **1,024,544** | +8,848 | 24,032 B / **2.29 %** | **FAIL** (base 3.13 %) |
+
+`tools/ci.sh` gates on `board-pixelblaze-v3`, which clears `image-check.sh`'s
+3 % floor with a point to spare. **The C6 changed character in the rebase**:
+#328 took enough out of that image to put it back *over* the floor
+(2.61 % → 3.13 %), so the branch no longer lands on a board that was already
+failing — it is now what puts `board-c6-devkit` under, at 2.29 %. That board
+is not in CI and its margin is tracked by #291, but the honest statement is
+"this branch costs the C6 its margin", not "the C6 was already under".
+
+`.stack` is untouched: 24,868 B on `board-pixelblaze-v3` and 32,380 B on
+`board-seengreat-hub75` against a base of 24,932 / 32,452 — the 64–72 B is
+DRAM-layout rounding, not a new static — both over `tools/stack-check.sh`'s
+24 KB floor, and no function on either board exceeds the 12,288 B frame
+budget (largest is still picoserve's ~9.7 KB request future).
 
 Nothing in `firmware/` changed; the whole delta is `luxel-core` (`bulk.rs`
-plus the sixteen `call_builtin` arms and the `RunStage::Frame` path). The
-first cut was **+14.6–14.9 KB**, which put `board-pixelblaze-v3` — the board
-`tools/ci.sh` builds — at a 2.58 % margin, under `image-check.sh`'s 3 % floor,
-so CI went red. `nm --size-sort` said where it was: 11,066 B in `bulk.rs`,
-1,927 B in the firmware's one inlined copy of `Engine::from_program_budgeted`
-(`uses_coordinate_bulk_op` alone carried eight inlined copies of
-`lookup_builtin`'s table scan), 550 B in `Engine::frame`, 510 B in
-`Vm::call_builtin`, ~550 B of rodata.
+plus the sixteen `builtin_cold` arms and the `RunStage::Frame` path).
+
+### How the delta got from +14.6 KB to +8.3 KB
+
+Measured against the pre-#328 merge base `c7e0266`, where the branch's first
+cut (`c51e1db`) was **+14.6–14.9 KB** — enough to put `board-pixelblaze-v3` at
+a 2.58 % margin and turn CI red. `nm --size-sort` said where it was: 11,066 B
+in `bulk.rs`, 1,927 B in the firmware's one inlined copy of
+`Engine::from_program_budgeted` (`uses_coordinate_bulk_op` alone carried eight
+inlined copies of `lookup_builtin`'s table scan), 550 B in `Engine::frame`,
+510 B in `Vm::call_builtin`, ~550 B of rodata.
 
 The size pass (`59fbd7e`) took **6,544 B** back on `board-pixelblaze-v3`
 without changing a single output byte — the whole equivalence table below is
@@ -298,13 +337,17 @@ above as a floor.
   same pattern, record again. Use a **stateless** probe — `snake-2d` swings
   74 % between builds a kilobyte apart and is useless as an A/B; the pairs
   above are all deterministic given a fixed delta.
-- **The I-cache caveat applies with force.** `Vm::call_builtin` grows by
-  sixteen arms here, and #318/#325 showed that `Vm::run` and `call_builtin`
-  competing for the flash instruction cache is worth *tens of percent*,
-  non-monotonically in size. A pattern that does **not** use bulk ops can get
-  slower on this branch purely from layout. Re-run `patbench.mjs` on
-  `perlin-fire-wind-tunnel` (repeats to ±0.3 %) against master before
-  concluding the branch is free for existing patterns.
+- **The I-cache caveat still applies, but #328 defused most of it.** The
+  sixteen arms land in `Vm::builtin_cold` — tier 3, `#[cold]`, flash-resident
+  — and every `bulk.rs` symbol links into `.text`, so `Vm::run`,
+  `Vm::call_builtin` and `Vm::builtin_hot` are byte-for-byte where master puts
+  them and `.rwtext` does not grow. On the classic ESP32 all three of those
+  execute from IRAM, which is what made placement reproducible in the first
+  place (#328). It is *not* zero risk: the S3 pins only `Vm::run`, the RISC-V
+  boards pin nothing, and #318/#325 showed layout is worth tens of percent
+  non-monotonically. Re-run `patbench.mjs` on `perlin-fire-wind-tunnel`
+  (repeats to ±0.3 %) against master before concluding the branch is free for
+  patterns that use no bulk op.
 - **`/api/status`'s `frame`/`vm`/`pipe`/`out` split** is where the win should
   land: `vm` collapses, `pipe`/`out` are untouched. On the HUB75 panel `out`
   is a flat 5.3–6.4 ms whatever runs, so 4096-px bulk patterns will hit that
