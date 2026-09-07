@@ -181,6 +181,13 @@ origin master && git rebase origin/master`.
   story that would have shipped into docs/boards.md); re-measured on the
   rebased tree it was an even +3 KB everywhere. The baseline had moved,
   not the cost.
+  **Re-take the WHOLE A/B ladder after a mid-session merge, not just the
+  rows that come after it** — the baseline moves too. 2026-09-06: #332
+  landed while a device measurement ladder was in progress and shifted the
+  Athom's `perlin-fire-wind-tunnel` time 7 % on its own, invalidating six
+  measurements taken over the preceding two hours. Label every row with the
+  commit it was taken on, and budget for a re-measure whenever another
+  session merges anything that links into the same image.
 - **A pristine baseline without touching any tree:** the flake builds
   straight from a git ref, so `nix build
   "git+file:///home/googlebot/workspace/pixler?ref=refs/remotes/origin/master#luxel-fw-c6-devkit"
