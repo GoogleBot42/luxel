@@ -1,5 +1,92 @@
 # Update log
 
+## 2026-09-07 — Store forwarding: the stored value stays on the stack for the next statement (#320)
+
+Assignment is an expression, so `StoreL` and `StoreG` PEEK — the assigned
+value is still on the stack after them. A statement that stores a variable,
+followed by a statement whose first operand reads it back, has therefore
+always compiled to `StoreL a; Pop; LoadL a`: throw the value away, read it
+straight back. A new pass, `compile::forward_stores`, deletes the
+`Pop; LoadL a`.
+
+It is deliberately NOT a peephole template. The #261 peephole may never
+carry a value across a source position — that is what keeps the debugger
+stopping once per statement — and this rewrite does exactly that, so it
+stands on its own argument instead:
+
+* **The stack is identical at every point.** The base sequence is at depth
+  `d` after the store, `d-1` after the `Pop`, `d` again after the load; the
+  rewrite is at `d` throughout. Peak depth is unchanged, so every
+  `MAX_STACK` verdict is too — the single elided push-with-check could only
+  have failed at a depth the sequence had already reached.
+* **The debugger still stops on the second statement.** Only that
+  statement's FIRST instruction is deleted, never its last: the pass
+  requires a successor, and a statement that reads a variable always emits
+  more than the read (an expression statement appends `Pop`, a `return`
+  appends `Ret`). Its position run survives one instruction shorter and
+  `pos_at` still answers with its line.
+
+Guards: neither the `Pop` nor the load may be a jump target, the `Pop` must
+carry the store's own source position, the load must name the slot the store
+wrote, and the load may not be the function's last instruction. A read that
+is not the next statement's first operand (`var v = 1 - d * 4` after
+`var d = …`) never matches, because the load is not the instruction after
+the `Pop`.
+
+**Measured over all 305 library patterns**, 256 px on a 16×16 grid, 20
+frames each:
+
+| | dispatches | insns/px |
+|---|---:|---:|
+| `--no-storefwd` | 101,708,320 | 65.131 |
+| default | 100,990,763 | **64.671** |
+
+−0.71 % library-wide; 155 patterns get measurably faster and none gets
+slower — "none" is structural, not sampled: no library pattern grows a word
+with the pass on, asserted per file in both the fused and unfused
+configurations. (The two clock patterns wobble by ±0.1 insns/px between
+sweeps because they branch on the time of day; run A/B back to back and they
+are identical.)
+The heaviest single wins are `1d-aurora-borealis` and `perlin-fire-wind`
+(−5.00 insns/px each), `kaleidoscope-2d` (−4.01), `color-twinkles`,
+`perlin-fire`, `static-random-colors`, `xorcery-2d-3d` (−4.00).
+
+**Why it is 0.7 % and not the ~1.5 % the ticket hoped for: #320 and #261
+overlap.** With the peephole OFF the pass fires at **1,183 sites across 271
+of the 305 files** — just over half the ~2,300 store-then-read pairs an AST
+scan finds, the rest failing the "first operand of the next statement"
+requirement. With the peephole ON that becomes **465 words saved across 197
+files**: at the other 718 sites the deleted `LoadL` was already being folded
+into a `LoadLL`/`LoadLIdx`/`LoadLConstOp`/`LoadLG` superinstruction, so the
+window cost one dispatch either way. It never costs more — no library
+pattern grows a word in either configuration, asserted per file.
+
+The static blob shrinks too: −465 instructions, −465 words, −1,860 bytes
+across the library. Firmware images are **byte-identical** — the compiler
+frontend is behind luxel-core's `frontend` feature and the firmware links it
+out, so the pass is free on device (`board-pixelblaze-v3` 1,006,368 B,
+4.02 % OTA margin, `cmp`-equal to the same tree without the change;
+re-measured after rebasing onto #306).
+
+`--no-storefwd` on `luxel run|bench|compile` is the A/B lever, the third
+independent switch alongside `--no-fuse` and `--no-fold`.
+
+Verified: 610/610 byte-identical PPM renders (all 305 patterns × a 300 px
+strip and a 16×16 grid, 24 frames, seed 7, with and without the pass);
+`check-library.sh` 305/305 on all five rigs; `cargo test --workspace` 355
+tests including a new `tests/storefwd.rs` (10 sources × every
+fuse/fold/forward combination, LXBC round-trip, runtime-error text and
+position, compile errors, the debugger's line sequence under `StepKind::Into`,
+the full `debug_stack` locals trace at every stop, and a stack overflow);
+`tools/ci.sh` green. The playground debugger was stepped through a
+store-then-read chain in real chromium on both builds — line 2→3→4→5→6,
+wrapping to the next pixel, with the locals panel showing identical values at
+all 14 stops.
+
+Not done here (no device available): the Xtensa instruction-count and
+cycle measurement the ticket asks for — `STORE_L_POP` + `LOAD_L` = 94
+instructions → `STORE_L` = 58 is a pre-#314 estimate and needs re-measuring
+on the panel with `tools/opbench.mjs`. Left on #320.
 ## 2026-09-07 — the frame pipeline: compose + outpipe on core 0 (#306)
 
 On the 64x64 HUB75 panel the frame period was `vm + out`: the render task on

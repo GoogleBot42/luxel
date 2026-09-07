@@ -13,6 +13,7 @@
 //!   --seed S       RNG seed                  (default 1)
 //!   --control NAME=V[,V,V]   invoke a UI control before rendering
 //!   --no-fuse      compile without the superinstruction peephole (#261 A/B)
+//!   --no-storefwd  compile without store forwarding (#320 A/B)
 //!                  (also on `luxel compile`, so a device can be handed an
 //!                  unfused blob against unchanged firmware)
 //!
@@ -298,7 +299,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--stats]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--stats]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES]"
     );
     ExitCode::from(2)
 }
@@ -320,6 +321,8 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     rest.retain(|a| a != "--no-fuse");
     let no_fold = rest.iter().any(|a| a == "--no-fold");
     rest.retain(|a| a != "--no-fold");
+    let no_storefwd = rest.iter().any(|a| a == "--no-storefwd");
+    rest.retain(|a| a != "--no-storefwd");
     // `--stats`: report the STATIC shape of the blob (per-function
     // instruction counts) as one JSON line — the Luxel half of the
     // Pixelblaze op-count comparison (tools/oracle/opcount.mjs, Gitea #312).
@@ -360,6 +363,7 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
         luxel_core::compile::CompileOpts {
             superinstructions: !no_fuse,
             const_folding: !no_fold,
+            store_forwarding: !no_storefwd,
         },
     ) {
         Ok(p) => p,
@@ -466,6 +470,9 @@ struct Opts {
     /// A/B lever for Gitea #261 (and the way to prove a fused stream
     /// renders identically to the unfused one).
     no_fuse: bool,
+    /// `--no-storefwd`: compile WITHOUT the Gitea #320 store-forwarding
+    /// pass, so `x = …` followed by a read of `x` pops and reloads it.
+    no_storefwd: bool,
     no_fold: bool,
 }
 
@@ -481,6 +488,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
         profile: false,
         json: false,
         no_fuse: false,
+        no_storefwd: false,
         no_fold: false,
     };
     let mut it = args.iter();
@@ -509,6 +517,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
             "--json" if bench => o.json = true,
             "--no-fuse" => o.no_fuse = true,
             "--no-fold" => o.no_fold = true,
+            "--no-storefwd" => o.no_storefwd = true,
             "--control" => {
                 let v = val()?;
                 let Some((name, vals)) = v.split_once('=') else {
@@ -562,6 +571,7 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
         luxel_core::compile::CompileOpts {
             superinstructions: !o.no_fuse,
             const_folding: !o.no_fold,
+            store_forwarding: !o.no_storefwd,
         },
     );
     let mut engine = match compiled {

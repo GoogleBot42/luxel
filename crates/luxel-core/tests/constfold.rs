@@ -20,10 +20,12 @@ use luxel_core::vm::StepKind;
 const UNFOLDED: CompileOpts = CompileOpts {
     superinstructions: true,
     const_folding: false,
+    store_forwarding: true,
 };
 const UNFUSED_UNFOLDED: CompileOpts = CompileOpts {
     superinstructions: false,
     const_folding: false,
+    store_forwarding: true,
 };
 
 /// One source per rewrite, plus the shapes that must NOT be rewritten.
@@ -115,6 +117,7 @@ fn folding_is_independent_of_the_superinstruction_peephole() {
                 CompileOpts {
                     superinstructions: false,
                     const_folding: true,
+                    store_forwarding: true,
                 },
             ),
         ] {
