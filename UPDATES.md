@@ -1,5 +1,45 @@
 # Update log
 
+## 2026-09-07 — Frame Rate Scan: point a phone at the panel and count (`library/frame-rate-scan.js`)
+
+Frame Rate Test (earlier today) reads the displayed rate as a beat against the
+compose rate, which works but takes a practised eye. This is the version to
+film. It spends **one visible state per composed frame** and **carries its own
+clock**, so the camera's frame rate cancels out of the arithmetic entirely —
+it does not have to be 240 Hz, and you do not have to know what it is.
+
+Three one-column bars, on a 64x64 grid: rows 0–23 the **sweep** at column
+`frameIndex mod 64`, red on even composed frames and green on odd, stepped by
+a counter and never by the clock; rows 28–39 the **fine clock**, one column
+per 10 ms (wraps every 640 ms), blue; rows 44–55 the **coarse clock**, one
+column per 100 ms (wraps every 6.4 s), white. Dim grey ticks every 8 columns
+under each band and on the bottom row, column 0 in cyan, so columns can be
+counted off a paused frame.
+
+The reading: pick two video frames about a second apart; on each read
+`d = (f − 10·c) mod 64` and `t = 100·c + 10·d` ms from the coarse column `c`
+and fine column `f`; `dt` is the difference. Then step through the frames
+between them writing down the sweep column, drop repeats, and count the
+**distinct** positions — that is how many frames the panel displayed, so
+`displayed fps = distinct / dt`. A column jump of more than one is `jump − 1`
+dropped frames (the red/green alternation is the cross-check), and
+`composed fps = (distinct + dropped) / dt` should come out equal to
+`/api/status` `fps`.
+
+Live on the panel (master `e4f772b`, 30 MHz, 4096 px, brightness 31): `fps`
+125, `out_fps` 125, `rescan_hz` 115–116, **`vm_us` 793–803** of an 8 ms budget,
+`frame_us` 838–850, heap free 49,280. Host verification over 400 frames at both
+125 and 60 fps injected: the sweep column is exactly `frame mod 64` with exact
+parity colours on every row of its band, both clock columns match
+`floor(elapsedMs/10) mod 64` and `floor(elapsedMs/100) mod 64` on every single
+frame (no fixed-point drift), and running the documented reading procedure over
+the dump returns 125.0 and 60.0 fps. `tools/check-library.sh` 307/307 on all
+five rigs.
+
+The only slider is ComposeCap, kept for the 125/n `setFrameRate` experiments
+(#384) — below the display rate the sweep must stop skipping columns, which is
+a second, independent bound on the displayed rate.
+
 ## 2026-09-07 — a pattern that shows you the displayed frame rate (`library/frame-rate-test.js`)
 
 `/api/status` reports the rate the engine *composes* at. On the HUB75 panel

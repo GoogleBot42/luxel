@@ -1571,3 +1571,41 @@ the display rate: asking for 115 gets 62.5. That is why the pattern strobes
 uncapped and measures the beat instead. Dropping the cap *below* the display
 rate is still useful: every composed frame is then shown at least once, the
 beat disappears, and a gross regular flicker at `F/2` takes its place.
+
+### `library/frame-rate-scan.js` — the camera version
+
+Frame Rate Test above reads the displayed rate as a *beat*, which takes a
+practised eye. **Frame Rate Scan** is the version to point a phone at: it
+spends one visible state per composed frame and carries its own clock, so the
+camera's frame rate never enters the arithmetic and does not need to be known.
+
+Three one-column bars on the 64x64 grid: rows 0–23 the **sweep**, at column
+`frameIndex mod 64`, RED on even composed frames and GREEN on odd (a counter,
+never the clock); rows 28–39 the **fine clock**, one column per 10 ms, wrapping
+every 640 ms, blue; rows 44–55 the **coarse clock**, one column per 100 ms,
+wrapping every 6.4 s, white. Dim grey ticks every 8 columns sit under each band
+and on the bottom row, with column 0 in cyan.
+
+Reading it, from a video at any rate above about twice the display rate:
+
+1. Pick two video frames roughly a second apart, A and B.
+2. On each, read the coarse column `c` and the fine column `f`, then
+   `d = (f − 10·c) mod 64` (0..9, the tens-of-ms digit) and `t = 100·c + 10·d`
+   milliseconds. `dt = tB − tA`, plus 6400 ms if the coarse bar wrapped.
+3. Step through every video frame from A to B, note the sweep column, and drop
+   repeats (the camera sees most displayed frames two or three times). The
+   count of **distinct** positions is how many frames the panel displayed:
+   `displayed fps = distinct / dt`.
+4. Where the column jumps by more than one, the panel skipped `jump − 1`
+   composed frames; the colour is the cross-check, since two adjacent distinct
+   positions sharing a colour means an even number of composed frames went by.
+   `composed fps = (distinct + dropped) / dt`, which should equal
+   `/api/status` `fps`.
+
+Live on the panel 2026-09-07 (master `e4f772b`, 30 MHz, 4096 px, brightness
+31): `fps` 125, `out_fps` 125, `rescan_hz` 115–116, **`vm_us` 793–803**,
+`frame_us` 838–850, heap free 49,280. Host verification: over 400 frames at
+both 125 and 60 fps injected, the sweep column is exactly `frame mod 64` with
+exact parity colours on every row of its band, and both clock columns match
+`floor(elapsedMs/10) mod 64` and `floor(elapsedMs/100) mod 64` on every frame;
+running the reading procedure above over the dump returns 125.0 and 60.0 fps.
