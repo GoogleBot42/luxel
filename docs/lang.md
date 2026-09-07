@@ -29,6 +29,11 @@ For mapped fixtures, export `render2D(index, x, y)` or
 0..1 from the installed pixel map. The most specific exported renderer
 wins for the installed map; plain `render` is the 1D fallback.
 
+A fourth entry, `renderFrame()` (a Luxel extension), is called **once per
+frame** instead of once per pixel and paints the whole frame with bulk
+builtins — see [Whole-frame rendering](#whole-frame-rendering-luxel-extension).
+Exporting it wins over all three per-pixel renderers.
+
 ## Numbers
 
 Every value is a **16.16 fixed-point** number: 32 bits, two's complement,
@@ -163,7 +168,10 @@ small devices.
 
 1. `beforeRender(delta)` — once per frame. Do your animation math here.
 2. `render(index)` / `render2D(index, x, y)` / `render3D(…)` — once per
-   pixel. Keep it cheap; it runs `pixelCount` times per frame.
+   pixel. Keep it cheap; it runs `pixelCount` times per frame. A pattern
+   that exports `renderFrame()` (Luxel extension) gets that called once
+   per frame *instead*, and paints every pixel itself — see [Whole-frame
+   rendering](#whole-frame-rendering-luxel-extension).
 3. Coordinate transforms (`translate`, `rotate`, `scale`, …) apply to the
    `x, y, z` values your mapped renderer receives. They compose in call
    order and **persist across frames** — call `resetTransform()` first if
@@ -709,6 +717,179 @@ later grows the buffer in place, keeping existing values. Compared with
 two `array(pixelCount)` buffers swapped by hand this is half the RAM
 (4-byte fixed point, not 8-byte values) and stays off the PB-compatible
 10,240-element ledger.
+
+### Whole-frame rendering (Luxel extension)
+
+A fourth render entry, `renderFrame()`, that the engine calls **once per
+frame** with no arguments instead of calling `render*` once per pixel.
+The pattern paints the frame itself with the bulk builtins below — one VM
+call fills a whole strip, one `splat()` draws a whole ball — so the
+per-pixel entry cost (the dominant term for a cheap pattern: ~54 % of a
+single-`rgb()` frame on a 4096-pixel panel) disappears entirely.
+
+It is *not* a replacement for `render`. Dense procedural patterns — a
+different expression evaluated at every pixel — are exactly what
+`render2D` is for and gain nothing here. What gains is the shape where
+the frame is a few big strokes: gradients, buffer read-outs, decay
+trails, N moving sprites, a small simulated canvas.
+
+**Lifecycle.** `beforeRender(delta)` runs first, exactly as always, then
+`renderFrame()` runs once. Afterwards the engine applies the same post
+chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
+`setPixelState` hand-over as a per-pixel frame, and `setFrameRate` /
+`timeScale` behave identically.
+
+- **Priority**: an exported `renderFrame` wins over `render2D`,
+  `render3D` and `render`, on any map or none. Export both if you want a
+  per-pixel fallback for another engine — Luxel will always take
+  `renderFrame`.
+- **Late binding** works like the other entries: `export var renderFrame`
+  assigned a function at runtime dispatches from the next frame, and
+  stops dispatching if the global stops holding a function.
+- **The frame persists.** The pixel buffer is *not* cleared between
+  frames: `renderFrame` starts with the previous frame's finished output.
+  That is what makes `fade(k)` + a few `setPixel()`s a decay trail with
+  no pattern-side array at all (an `array(pixelCount)` is 32 KB on a
+  4096-pixel panel). A pattern that wants a fresh canvas calls `clear()`
+  or covers the frame with a fill. Because the buffer is the
+  *post-processed* output, post-chain stages compound frame over frame
+  under persistence — `setBlur` on a trail pattern blurs a blur;
+  that is usually a feature, but clear first if you want a single pass.
+- **The brush.** `hsv()`, `rgb()`, `paint()`, `oklch()` and `oklab()` keep
+  doing what they always did — set "the current color" — and that slot is
+  the **brush** every shape and point op draws with. Set it, then draw;
+  set it again, draw again. The brush is reset to black at the start of
+  every `renderFrame` call — *after* `beforeRender`, so a color set there
+  does not carry in, and a shape drawn before the frame's first color
+  call paints black rather than last frame's leftover.
+
+**Three spaces.** Each bulk builtin works in one of them:
+
+- **Index space** (`clear`, `fill`, `fade`, `setPixel`, `fillRange`,
+  `fillHSV`, `fillRGB`, `fillGradient` on its default axis) — addresses
+  pixel `i`. Map-independent; works on any fixture, mapped or not.
+- **Coordinate space** (`fillRect`, `fillCircle`, `splat`, `drawLine`,
+  `fillCanvas`, `fillGradient` on axis 1/2/3) — "every pixel whose
+  mapped (x, y) satisfies this shape", using exactly the normalized
+  0..1 coordinates `render2D` receives, transforms included. Defined on
+  *any* map, so a sparse or irregular fixture works: space with no pixels
+  in it simply has no pixels to fill, and a shape that lands there paints
+  nothing. Without a 2D/3D map the coordinates are `render2D`'s own 1D
+  fallback (x from the map or the index, y = 0.5).
+- **Grid space** (`blit`, and the `gridWidth()` / `gridHeight()` pair) —
+  addresses integer cells of a w×h matrix. Without a grid these are a
+  **no-op**, not an error, and `gridWidth()` returns 0 so a pattern can
+  branch on it.
+
+A `renderFrame`-only pattern that names any coordinate- or grid-space op
+(`gridWidth`, `gridHeight`, `fillRect`, `fillCircle`, `splat`,
+`drawLine`, `fillCanvas`, `blit`) gets the same default `ceil(√n)` grid
+map a `render2D`-only pattern gets. One that only uses index-space ops is
+a strip pattern and is left mapless, so it never acquires a geometry it
+did not ask for.
+
+When the fixture *is* a regular matrix — a procedural grid, or a
+coordinate map the engine recognizes as one, serpentine included — the
+coordinate-space ops walk only the cells inside the shape's bounding box
+instead of scanning every pixel. This is transparent: the output is
+byte-identical to the scan (a test sweeps randomized shapes across eight
+rigs to keep it that way), so nothing in a pattern needs to know which
+path ran.
+
+**Blend modes.** `splat`, `drawLine` and `blit` take a `mode`:
+
+| mode | effect |
+| --- | --- |
+| 0 | replace (the default, and what any other value reads as) |
+| 1 | add, saturating per channel — overlapping sprites glow |
+| 2 | max (lighten) — overlaps keep the brighter source |
+| 3 | keyed: a source pixel that comes out black is transparent — the mask blit. Accepted by all three, but only `blit` has a source it means something for; on `splat`/`drawLine` it just drops the falloff's darkest edge |
+
+**Don't loop `setPixel` over every pixel** — a `for` loop calling
+`setPixel(i)` for all `pixelCount` pixels is *slower* than the `render`
+it replaced, because it pays interpreted-loop overhead on top of a
+builtin call. `setPixel` is for a handful of points. To paint per-pixel
+data, put it in arrays and hand them to `fillHSV`/`fillRGB` in one call.
+
+#### Index space
+
+- `gridWidth()` / `gridHeight()` — the installed grid's dimensions, or 0
+  when the fixture is not a matrix.
+- `clear()` — the whole frame to black.
+- `fill()` — the whole frame to the brush.
+- `fade(k)` — every channel × `k` (clamped 0..1), floored, so a trail
+  decays to true black rather than parking on 1.
+- `setPixel(i)` — the brush at index `floor(i)`; out of range is a
+  no-op, so a wandering index needs no clamping.
+- `fillRange(i0, i1)` — the brush on `[i0, i1)`, exclusive end, clamped
+  to the strip; an empty or inverted range paints nothing.
+- `fillHSV(h, s, v)` / `fillRGB(r, g, b)` — **each argument is either a
+  number broadcast to every pixel or an array indexed by pixel index**.
+  This is the persistent-buffer read-out (`hsv(hues[i], 1, vals[i])` in
+  `render`) as one call: `fillHSV(hues, 1, vals)`. An array shorter than
+  the strip bounds the run and leaves the tail untouched, matching the
+  `arrayAdd` convention.
+- `fillGradient(h0, s0, v0, h1, s1, v1 [, axis])` — an HSV lerp across
+  the whole frame. `axis` 0 (the default) runs along the pixel index with
+  `t = i / (pixelCount - 1)`, so both endpoint colors are actually shown;
+  1, 2 and 3 run along the mapped x, y and z (coordinate space). Hue is
+  lerped **unwrapped** and `hsv()` wraps it, so
+  `fillGradient(t, 1, 1, t + 1, 1, 1)` is a full rainbow in one call.
+
+#### Coordinate space
+
+All of these draw with the brush, over normalized 0..1 mapped
+coordinates.
+
+- `fillRect(x0, y0, x1, y1)` — inclusive bounds, corners in any order.
+- `fillCircle(x, y, r)` — a hard-edged disc.
+- `splat(x, y, r, mode)` — a soft disc: the brush × `(1 − d/r)`, linear
+  falloff, blended with `mode`. The entity-loop primitive — `clear()`
+  plus N splats replaces a per-pixel `hypot` loop over N sprites.
+- `drawLine(x0, y0, x1, y1, w, mode)` — a capsule: the brush ×
+  `(1 − d/w)` where `d` is the distance to the segment. A hard line is a
+  tiny `w` with mode 0.
+- `fillCanvas(hArr, sArr, vArr, w, h)` — sample a `w × h` row-major
+  canvas (three parallel arrays, each of which may be a scalar) at every
+  pixel's mapped (x, y) with **nearest** sampling, and replace. The
+  `canvas[floor(y·h)·w + floor(x·w)]` idiom of buffer-based 2D patterns,
+  as one call; the simulation resolution stays decoupled from the
+  fixture's.
+
+#### Grid space
+
+- `blit(hArr, sArr, vArr, w, h, col, row, mode)` — paste a `w × h`
+  canvas with its top-left at integer cell `(col, row)`, clipped to the
+  grid (negative and off-grid offsets are fine — nothing outside is
+  touched, and an offset far away costs nothing), blended with `mode`.
+  Mode 3 (keyed) makes black source cells transparent, which is how
+  sprites, text and scrolling work: `blit(…, col - t, row, 3)`. A no-op
+  when the fixture is not a grid, and also when the grid does not cover
+  the frame exactly (`gridWidth() * gridHeight() != pixelCount`, which is
+  what the default `ceil(√n)` map gives on a non-square pixel count) —
+  `gridWidth()` is the pattern's way to find out and fall back.
+
+```js
+// a decay trail with no buffers at all: the frame IS the buffer
+export function beforeRender(delta) { t = time(0.03) }
+
+export function renderFrame() {
+  fade(0.9)                       // last frame, dimmer
+  hsv(t, 1, 1)                    // set the brush…
+  setPixel(triangle(t) * (pixelCount - 1))   // …and put one pixel down
+}
+```
+
+```js
+// N sprites, drawn once each instead of tested at every pixel
+export function renderFrame() {
+  clear()
+  for (i = 0; i < n; i++) {
+    hsv(hue[i], 1, 1)
+    splat(x[i], y[i], 0.12, 1)    // mode 1: overlaps add and glow
+  }
+}
+```
 
 ### Predefined globals
 
