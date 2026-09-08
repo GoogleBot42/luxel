@@ -16,6 +16,7 @@
 const W = 16
 var bright = array(W * W)     // per-cell brightness canvas
 var hues = array(W * W)       // per-cell hue canvas
+var vC = array(W * W)         // bright squared -- the value channel `fillCanvas` samples
 
 var arms = 5
 var colorRate = 0.03          // hue-drift cycles per second (pre-wobble)
@@ -84,8 +85,24 @@ export function beforeRender(delta) {
   }
 }
 
-export function render2D(index, x, y) {
-  var idx = floor(y * 15.99) * W + floor(x * 15.99)
-  var b = bright[idx]
-  hsv(hues[idx], 1, b * b)    // squared: steeper falloff, punchier trails
+// The canvas is 16x16 whatever the fixture is, and the old `render2D` only
+// resolved a colour out of it once per LED. `fillCanvas` samples the canvas at
+// every pixel's mapped (x, y) in one call, so the read-out now costs one VM
+// entry per FRAME instead of one per pixel -- the whole point of the exercise
+// on a 64x64 panel, where 4096 entries were resolving 256 distinct cells.
+//
+// Squaring (steeper falloff, punchier trails) has to happen per CELL now, so
+// it moves into its own channel array rather than being applied at read-out.
+// `bright` itself must stay linear: it is persistent state that decays by 0.94
+// every frame.
+//
+// Without a map this is the same default `ceil(sqrt(n))` grid a `render2D`-only
+// pattern already got, so a bare strip is unchanged: it wraps the whirlpool
+// across the strip in rows exactly as before.
+export function renderFrame() {
+  for (var i = 0; i < W * W; i++) {
+    var b = bright[i]
+    vC[i] = b * b
+  }
+  fillCanvas(hues, 1, vC, W, W)
 }

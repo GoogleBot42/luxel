@@ -464,6 +464,7 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `4th.js` (converted in place) | 4 per-pixel buffers, per-pixel `random()` so no bulk fill is possible; hoisted bunting bands + a `setPixel` loop | budget-refused at 4096 px **before and after**; 1024 px **1.11x** | 56.2 → **49.3** (1024 px) | **byte-identical** on six rigs, and across 7 `StripeWidth` values x 4 pixel counts |
 | `bouncing-balls-rgb.js` (converted in place) | 3 accumulation buffers, the direction fold moved to the deposit, one `fillRGB` | budget-refused at 4096 px before and after; 3364 px (58x58) 244.0 → **15.5** µs/frame (**15.8x**) | — | **byte-identical** on 8 rigs x all 4 direction modes |
 | `pew-pew-pew.js` (converted in place) | 3 trail buffers + 2 constant ambient arrays, mirror moved to the paint, one `fillRGB` | budget-refused at 4096 px before and after; 2000 px 127.4 → **24.7** µs/frame (**5.2x**) | — | **byte-identical** on 8 rigs x all 4 toggle combinations |
+| `swirlpool-2d.js` (converted in place) | 16x16 brightness/hue canvases, one `fillCanvas` | 183.1 → **41.8** µs/frame (**4.38x**) | 16.1 → **1.0** | **byte-identical** on the three coordinate maps and a 60 px strip; on the 300/512 px mapless strips the only delta is the `-0.01` floor fudge (below) |
 
 ### The `fillRGB` readout batch (2026-09-07)
 
@@ -1050,6 +1051,49 @@ other controls driven: maxdiff 0 in all 28.
 Neither pattern runs at 4096 px before or after — `neutronorbit` is three
 `pixelCount` arrays (ceiling ~3,411) and `4th` four (ceiling ~2,559), and
 neither conversion adds one.
+
+### `swirlpool-2d.js` — the canvas shape, and the `15.99` fudge (2026-09-07)
+
+The last of #405 batch 3, and the batch's biggest win: a 16x16 brightness/hue
+canvas pair that `render2D` was resolving once per LED. On the 64x64 panel that
+is **4096 VM entries a frame to answer 256 distinct questions**. One
+`fillCanvas(hues, 1, vC, 16, 16)` replaces the lot.
+
+The only structural change the conversion forces is where the gamma square
+happens. `render2D` did `hsv(hues[idx], 1, b * b)`, but `bright` is persistent
+state that decays by 0.94 every frame, so it cannot be squared in place. It is
+squared per *cell* into a third `array(16 * 16)` — 256 elements, next to
+nothing against the budget, and the reason this conversion (unlike the rest of
+the batch) runs perfectly well at 4096 px.
+
+| rig | before ns/px | after ns/px | before µs/frame | after µs/frame | ratio |
+|---|---:|---:|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 44.69 | 10.21 | 183.1 | **41.8** | **4.38x** |
+| 1024 px, `--map-grid 32x32` | 46.51 | 15.70 | 47.6 | **16.1** | **2.96x** |
+| 256 px, `--map-grid 16x16` | 50.91 | 39.22 | 13.0 | **10.0** | 1.30x |
+| 300 px strip (default 18x18 grid) | 51.99 | 41.37 | 15.6 | **12.4** | 1.26x |
+
+16.1 → **1.0** insns/px at 4096 px — the frame is now 3,988 interpreted
+instructions no matter how big the fixture is. The 256 px row is the same
+lesson `raindrops-2d` taught: when the display is already the size of the
+simulation, a conversion buys almost nothing.
+
+**Equivalence, and the one honest delta.** Byte-identical over 60 frames at a
+fixed delta and seed on the 16x16, 32x32 and 64x64 coordinate maps and the
+60 px strip, undriven and with all four controls driven. On the **300 px and
+512 px mapless strips** it is not: 5–11 pixels of 300 differ per frame, up to a
+full 255 on a channel. Those strips get the engine's over-provisioned default
+`ceil(√n)` grid (18x18 and 23x23), whose cell edges do not line up with the
+16-wide canvas, and there the pattern's `floor(x * 15.99)` and `fillCanvas`'s
+true nearest `floor(x * 16)` land in different cells — a bright dot on one side
+of a canvas boundary and black on the other, hence the 255.
+
+That is not an inference. The pre-conversion file with **only** the sampler
+changed to exact nearest (`floor(x * W)`, clamped) is **byte-identical to the
+converted pattern on all six rigs**, so the whole difference is the `-0.01`
+fudge and nothing else. The fudge was always the approximation — it exists to
+keep `x = 1` from indexing off the end — and `fillCanvas` does the clamp
+properly, so the converted pattern is the more correct of the two.
 
 ## How to judge this on device
 
