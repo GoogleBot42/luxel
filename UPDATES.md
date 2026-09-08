@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-09-07 — build/deploy: the board can no longer be silently wrong (#389)
+
+`firmware/build-esp32.sh` takes the board from `$BOARD`; its one positional
+is the ACTION. An unrecognised positional used to be ignored, so
+`./build-esp32.sh board-athom-music` built **board-pixelblaze-v3** and said
+nothing — and because the three classic-ESP32 boards share one ELF path,
+`BOARD=board-athom-music tools/ota-push.sh <ip>` then pushed that pb-v3
+image under a correct-looking command line. It happened on the Athom rig
+this morning: the device booted fine and the only symptom was
+`/api/config` showing pb-v3's `RESERVED_PINS = [18, 12]`, which made GPIO18
+— the pin the strip is wired to — reserved and unselectable, with no
+in-band way to fix it.
+
+Three guards, at the three points where it is still cheap:
+
+* **build-esp32.sh rejects an unrecognised positional** (exit 2). A
+  `board-*` argument gets the corrected invocation printed back at it;
+  anything else gets "unknown action". `tools/deploy.sh` does the same for
+  a `board-*` in `$1` (its device address) and now exports `$BOARD`.
+* **`firmware/board-target.sh` gained `board_name`**, mapping each board to
+  the `board::NAME` string `firmware/src/board.rs` bakes into the image
+  (main.rs prints it at boot, so it is always linked). It is the only thing
+  in an app image that identifies the board.
+* **`tools/ota-push.sh` refuses an image that is not a `$BOARD` build**, and
+  names the board the image actually looks like — beside the existing
+  no-WiFi-creds refusal, and before any request reaches the device. An
+  image passed as `$2` is checked only when `$BOARD` is set explicitly (a
+  nix-built `result/luxel-fw-ota.bin` carries its own board);
+  `SKIP_BOARD_CHECK=1` opts out.
+* **`tools/image-check.sh` asserts board identity at build time** when
+  `EXPECT_FEATURES` names a `board-*` feature — so a wrong-board build now
+  fails before an image exists, and a `board_name` / `board.rs` drift fails
+  too. `build-esp32.sh` already passes its feature list; the release
+  workflow now passes the board feature for all eight artifacts.
+
+Verified on the host, no device touched: the positional guard on a board
+name and on a bogus action (exit 2 with the corrected line), `log` still
+accepted; athom and pb-v3 images built and cross-grepped (each board's
+string present in its own image, absent in the other's); the four
+ota-push paths (stale ELF + `BOARD=athom` → refused and identified as
+pb-v3; explicit pb-v3 image as athom → refused; matching pair → through
+the guard; explicit image with no `$BOARD` → not checked); `image-check.sh`
+passing for the right board and failing for the wrong one; and full
+`build-esp32.sh` runs for board-seengreat-hub75 (S3) and board-c6-devkit
+(RISC-V) with the new marker in the chain. `board_name` was also checked
+against `board.rs` for all seven boards — every mapped string is a prefix
+of every `NAME` that board can compile.
+
 ## 2026-09-07 — library: snake-2d / snake-2d-v2 paint empty cells black (#370)
 
 Both patterns deliberately lit every empty board cell at 1 % value

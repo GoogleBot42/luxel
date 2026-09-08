@@ -32,6 +32,26 @@ MARKERS=(
   "boot guard:|boot-loop guard is not linked — a bad OTA would wedge devices instead of self-healing"
 )
 
+# Board identity (Gitea #389). If EXPECT_FEATURES names a board, the image
+# must contain THAT board's `board::NAME` string (main.rs prints it at
+# boot; firmware/board-target.sh's `board_name` is the map). This catches
+# two things at build time, before an image can reach a device: a build
+# that silently used a different board than the command line suggests, and
+# `board_name` drifting out of sync with firmware/src/board.rs. It is the
+# same string tools/ota-push.sh checks at the push — the wrong board's
+# image boots fine and differs only in RESERVED_PINS and pin defaults.
+for _f in ${EXPECT_FEATURES:-}; do
+  case "$_f" in
+    board-*)
+      # shellcheck source=../firmware/board-target.sh
+      . "$(dirname "$0")/../firmware/board-target.sh"
+      if board_name "$_f"; then
+        MARKERS+=("$BOARD_NAME|this image is not a $_f build — either the wrong board was built, or board_name in firmware/board-target.sh has drifted from board::NAME in firmware/src/board.rs")
+      fi
+      ;;
+  esac
+done
+
 # Feature-gated markers: asserted only when the caller declares the cargo
 # feature was requested (EXPECT_FEATURES, space-separated — build-esp32.sh
 # passes its feature list; release.yml passes the variant's extras).

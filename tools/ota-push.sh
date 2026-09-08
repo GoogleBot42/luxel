@@ -10,6 +10,10 @@
 # classic ESP32, so `BOARD=board-seengreat-hub75 tools/deploy.sh <ip>`
 # (deploy.sh calls this) died on a missing xtensa-esp32-none-elf ELF while
 # a perfectly good S3 build sat in the tree (2026-09-06).
+#
+# The image is checked against $BOARD before it goes out: it must contain
+# that board's `board::NAME` string (Gitea #389). An image passed as $2 is
+# only checked when $BOARD is set explicitly. SKIP_BOARD_CHECK=1 opts out.
 set -euo pipefail
 
 HOST="${1:?usage: ota-push.sh <host> [app-image.bin]}"
@@ -17,11 +21,17 @@ IMAGE="${2:-}"
 
 cd "$(dirname "$0")/.."
 
+# Remember whether the caller picked the board: an image passed explicitly
+# on the command line (e.g. a nix-built result/luxel-fw-ota.bin) carries its
+# own board, so it must not be checked against the script's default.
+BOARD_EXPLICIT="${BOARD:+1}"
+IMAGE_GIVEN="${IMAGE:+1}"
+BOARD="${BOARD:-board-pixelblaze-v3}"
+# shellcheck source=../firmware/board-target.sh
+. firmware/board-target.sh
+board_target "$BOARD"
+
 if [ -z "$IMAGE" ]; then
-  BOARD="${BOARD:-board-pixelblaze-v3}"
-  # shellcheck source=../firmware/board-target.sh
-  . firmware/board-target.sh
-  board_target "$BOARD"
   ELF=firmware/target/$TARGET/release/luxel-fw
   [ -f "$ELF" ] || { echo "no $ELF — run BOARD=$BOARD firmware/build-esp32.sh first (or pass an image)"; exit 1; }
   IMAGE=$(mktemp --suffix=.bin)
@@ -46,6 +56,31 @@ if [ -n "${LUXEL_SSID:-}" ]; then
 else
   echo "REFUSING to push: LUXEL_SSID unknown (no env, no firmware/creds.env) — cannot verify the image has creds" >&2
   exit 1
+fi
+
+# Guard (Gitea #389): the image must actually BE a build of $BOARD. The
+# three classic-ESP32 boards share one ELF path, so a stale build of
+# another board pushes cleanly, boots fine, and differs only in
+# RESERVED_PINS / pin defaults — a pb-v3 image on the Athom reserved
+# GPIO18, the pin the strip is wired to, and POST /api/datapin 18 then
+# refused it. Every image bakes board::NAME in as a plain string
+# (board-target.sh's board_name), so the mismatch is catchable here, the
+# last point where it is still cheap. SKIP_BOARD_CHECK=1 opts out.
+if [ "${SKIP_BOARD_CHECK:-0}" != 1 ] && { [ -z "$IMAGE_GIVEN" ] || [ -n "$BOARD_EXPLICIT" ]; }; then
+  board_name "$BOARD"
+  if ! grep -aqF "$BOARD_NAME" "$IMAGE"; then
+    echo "REFUSING to push: image is not a $BOARD build" >&2
+    echo "  (no \"$BOARD_NAME\" string in it)" >&2
+    for b in $BOARD_LIST; do
+      board_name "$b" || continue
+      if grep -aqF "$BOARD_NAME" "$IMAGE"; then
+        echo "  the image looks like a $b build (\"$BOARD_NAME\")" >&2
+      fi
+    done
+    echo "Rebuild first — the board goes in \$BOARD, the positional is the action:" >&2
+    echo "  (cd firmware && BOARD=$BOARD ./build-esp32.sh)" >&2
+    exit 1
+  fi
 fi
 
 before=$(curl -sf "http://$HOST/api/status" | tr ',' '\n' | grep '"slot"' || true)

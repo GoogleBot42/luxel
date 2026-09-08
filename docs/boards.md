@@ -11,7 +11,11 @@ Build any board with:
 cd firmware
 # any board — the chip, rust target and toolchain come from $BOARD
 # (firmware/board-target.sh); Xtensa boards pick up the Espressif fork
-# from the nix devshell automatically:
+# from the nix devshell automatically. The BOARD IS AN ENV VAR: the one
+# positional is the ACTION (flash | image | log), and passing a board
+# there is rejected outright since Gitea #389 — it used to be ignored
+# silently and you got the default board's image under the right-looking
+# command line.
 BOARD=board-pixelblaze-v3 ./build-esp32.sh          # build only
 BOARD=board-esp32-generic ./build-esp32.sh flash    # flash app + web assets
 BOARD=board-c6-devkit ./build-esp32.sh              # RISC-V, mainline rustc
@@ -1334,8 +1338,11 @@ small-chip profile, documented just above.)
 
 ## Adding a board (a five-minute diff)
 
-Three files, no other code paths involved — plus a one-line case in
-`firmware/board-target.sh` if the board is a chip we don't build yet
+Three files, no other code paths involved — plus two cases in
+`firmware/board-target.sh`: one in `board_name` (always — it maps the
+board to the `board::NAME` string tools/ota-push.sh greps the image for,
+so an image of the wrong board is refused instead of pushed, Gitea #389),
+and one in `board_target` if the board is a chip we don't build yet
 (that file is the single board → chip / rust target / toolchain map,
 shared by build-esp32.sh and tools/stack-check.sh; its `CORE_O3` flag
 decides whether the VM crate gets opt-level 3 — see "The 1 MiB OTA-slot

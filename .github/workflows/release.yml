@@ -135,6 +135,16 @@ jobs:
               *hub75) EXTRAS="hub75";;
               *-hosted) EXTRAS="hosted-ui";;
             esac
+            # …and the board feature, so image-check asserts each artifact
+            # really is the board it is named after (Gitea #389). The
+            # variant name is not always the board: s3-hub75 is
+            # board-s3-devkit + hub75, c6-devkit-hosted is board-c6-devkit.
+            # Keep in step with flake.nix's firmwareVariants `board`.
+            case "$board" in
+              s3-hub75)          EXTRAS="$EXTRAS board-s3-devkit";;
+              c6-devkit-hosted)  EXTRAS="$EXTRAS board-c6-devkit";;
+              *)                 EXTRAS="$EXTRAS board-$board";;
+            esac
             nix build ".#luxel-fw-$board" --print-build-logs --out-link "result-$board"
             # load-bearing features must be linked (the //SIZETEST guard) AND
             # the app image must keep a margin in the 1 MiB OTA slot — both
