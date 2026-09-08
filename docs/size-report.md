@@ -249,7 +249,13 @@ de-duplication is currently the highest-yield-per-risk work in the firmware.
   likely save 15–30 KB but destroys panic messages, and esp-backtrace's
   readable panics have paid for themselves several times over (the
   stack-overflow incidents). Not worth it. This is also *why* `core::fmt`
-  can never be dieted away (above).
+  can never be dieted away (above). What we *did* take out of the panic
+  strings is the part that carried no information: the absolute build
+  directory in front of every `core::panic::Location` — 13.5–14.7 KB of path
+  per image, down to 5.4–5.9 KB, worth 7.7–9.2 KB of app image on every board
+  (Gitea #441, `remap_rustflags` in `firmware/board-target.sh`;
+  docs/boards.md 2026-09-08). The messages and the file/line are intact —
+  a dependency panic just names `esp-hal-1.1.0/src/system.rs:42` now.
 - **WebSocket handshake SHA-1** — RFC 6455 requires it; it comes from
   `const-sha1` inside picoserve and is small enough to be inlined (no
   standalone symbol). The `SHA1*` symbols visible in the image belong to the

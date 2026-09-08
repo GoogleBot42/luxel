@@ -26,8 +26,10 @@ if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD${EXTRA_FEATURES:+ $EXTRA_FEAT
 
 CARGO=cargo
 STD_FLAGS=()
-# RUSTFLAGS overrides (does not merge with) the config's rustflags, so
-# replicate the per-arch link flags here and append -Z emit-stack-sizes.
+# RUSTFLAGS overrides (does not merge with) the config's rustflags, so the
+# per-arch link flags and the #441 --remap-path-prefix set have to be
+# re-supplied here; both come from board-target.sh so build-esp32.sh,
+# flake.nix and this script can't drift. Then append -Z emit-stack-sizes.
 # -Z on a stable toolchain needs RUSTC_BOOTSTRAP (the Xtensa fork is
 # nightly-based and doesn't).
 if [ "$XTENSA" = 1 ]; then
@@ -39,11 +41,11 @@ if [ "$XTENSA" = 1 ]; then
   export RUSTC="$TC/bin/rustc" RUSTDOC="$TC/bin/rustdoc"
   CARGO="$TC/bin/cargo"
   STD_FLAGS=(-Zbuild-std=core,alloc)
-  export RUSTFLAGS="-C link-arg=-Wl,-Tlinkall.x -C link-arg=-nostartfiles -Z emit-stack-sizes"
 else
   export RUSTC_BOOTSTRAP=1
-  export RUSTFLAGS="-C link-arg=-Tlinkall.x -C force-frame-pointers -Z emit-stack-sizes"
 fi
+link_rustflags
+export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags) -Z emit-stack-sizes"
 [ -f creds.env ] && . ./creds.env || true
 
 # same per-board luxel-core opt-level as build-esp32.sh (CORE_O3, #260):
