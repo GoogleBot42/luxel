@@ -239,8 +239,35 @@ impl Engine {
         array_byte_budget: usize,
         wall_unix: Option<i64>,
     ) -> Engine {
+        Engine::from_program_budgeted_at_ext(
+            prog,
+            pixel_count,
+            seed,
+            array_byte_budget,
+            crate::vm::DEFAULT_ARRAY_BUDGET,
+            wall_unix,
+        )
+    }
+
+    /// [`from_program_budgeted_at`] with the PB-compat ELEMENT ledger raised
+    /// too — for a device whose array arena is not the main heap (Gitea
+    /// #253: the Seengreat S3's external PSRAM). Everywhere else, pass
+    /// [`crate::vm::DEFAULT_ARRAY_BUDGET`] and nothing changes: the element
+    /// ledger is the oracle-bisected PB number and diverging from it is a
+    /// deliberate, board-scoped Luxel extension, never a default.
+    /// [`crate::vm::MAX_ARENA_SLOTS`] still bounds the arena's slot vector,
+    /// which stays on the ordinary allocator whatever the arena does.
+    pub fn from_program_budgeted_at_ext(
+        prog: Program,
+        pixel_count: u32,
+        seed: u64,
+        array_byte_budget: usize,
+        array_element_budget: usize,
+        wall_unix: Option<i64>,
+    ) -> Engine {
         let mut vm = Vm::new(&prog, seed);
         vm.array_byte_budget = array_byte_budget;
+        vm.array_budget = array_element_budget;
         vm.wall_unix = wall_unix;
         vm.globals[prog.pixel_count_g as usize] = Value::Num(Fx::from_int(pixel_count as i32));
 
@@ -255,7 +282,9 @@ impl Engine {
         ] {
             if let Some(i) = prog.global_index(name) {
                 if prog.globals[i as usize].export {
-                    if let Ok(v) = vm.alloc_array(alloc::vec![Value::default(); len]) {
+                    let mut zeros: crate::arena::ArrVec<Value> = crate::arena::empty();
+                    zeros.resize(len, Value::default());
+                    if let Ok(v) = vm.alloc_array(zeros) {
                         vm.globals[i as usize] = v;
                     }
                 }

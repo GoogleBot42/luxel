@@ -534,6 +534,17 @@ fn status_json() -> String {
     // `luxel_core::budget::load_base` (Gitea #287).
     push_piece(&mut out, ",\"engine_heap\":");
     push_u32(&mut out, crate::shared::ENGINE_HEAP.load(Ordering::Relaxed));
+    // External pattern-array arena (Gitea #253) — present only on a board
+    // that has one, so no other board's JSON (or image) changes. This is a
+    // SECOND heap: it is not part of `heap_free`, and a pattern's arrays
+    // come out of here instead of out of that number.
+    #[cfg(feature = "psram-arena")]
+    if let Some((free, total)) = crate::psram::stats() {
+        push_piece(&mut out, ",\"psram_free\":");
+        push_u32(&mut out, free as u32);
+        push_piece(&mut out, ",\"psram_total\":");
+        push_u32(&mut out, total as u32);
+    }
     // Dual-core boards (core1.rs): AppCpu (render core) stack high-water
     // `[used, total]`, plus the flash fence's park-ack timeouts (nonzero =
     // investigate) and its longest park wait in µs. null on single-core.

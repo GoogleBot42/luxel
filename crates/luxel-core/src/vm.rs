@@ -29,6 +29,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::arena::ArrVec;
 use crate::fixed::Fx;
 use crate::fmath;
 
@@ -737,6 +738,19 @@ pub const ARRAY_HEADER_UNITS: usize = 4;
 /// `array_byte_budget` is `usize::MAX` (Gitea #124).
 const _: () = assert!(ARRAY_HEADER_UNITS > 0);
 
+/// Hard cap on arena ENTRIES, independent of the element ledger.
+///
+/// The slot vector (`Vm::arrays`) is bookkeeping, not pattern data: it stays
+/// on the ordinary allocator — internal DRAM on a device — even when array
+/// *storage* is routed to an external arena (`crate::arena`, Gitea #253).
+/// Until that existed, `array_budget / ARRAY_HEADER_UNITS` was the only
+/// thing bounding it, so a raised element budget would have let
+/// `while (1) t = array(0)` grow the slot vector into an OOM. This cap is
+/// exactly that old bound at the PB-compat budget, so it can never fire
+/// before the element ledger on a board that doesn't raise it — no host,
+/// wasm or existing-device behaviour changes.
+pub const MAX_ARENA_SLOTS: usize = DEFAULT_ARRAY_BUDGET / ARRAY_HEADER_UNITS;
+
 const FUEL: u32 = 8_000_000;
 
 /// One arena array: owned storage, or an index into the program's
@@ -746,13 +760,13 @@ const FUEL: u32 = 8_000_000;
 /// decoder-validated, like every other id the VM trusts.
 #[derive(Debug, Clone)]
 pub enum ArrRepr {
-    Owned(Vec<Value>),
+    Owned(ArrVec<Value>),
     Const(u32),
 }
 
 impl Default for ArrRepr {
     fn default() -> Self {
-        ArrRepr::Owned(Vec::new())
+        ArrRepr::Owned(crate::arena::empty())
     }
 }
 
@@ -1410,7 +1424,7 @@ impl Vm {
 
     /// Mutable storage by id, materializing const-backed arrays
     /// (copy-on-write). Fails only if the copy can't be allocated.
-    fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut Vec<Value>, &'static str> {
+    fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut ArrVec<Value>, &'static str> {
         if self.palette_src == Some(id) {
             self.palette_dirty = true;
         }
@@ -1427,7 +1441,7 @@ impl Vm {
             // (Gitea #84): the current handler invocation aborts, nothing more.
             let delta = Self::array_cost(data.len()) - CONST_ENTRY_COST;
             self.charge_array_bytes(delta)?;
-            let mut owned: Vec<Value> = Vec::new();
+            let mut owned: ArrVec<Value> = crate::arena::empty();
             if owned.try_reserve_exact(data.len()).is_err() {
                 return Err("out of memory for array");
             }
@@ -2509,6 +2523,11 @@ impl Vm {
         if self.array_elems + len + ARRAY_HEADER_UNITS > self.array_budget {
             return Err("array element budget exceeded (arrays are never freed)");
         }
+        // The slot vector lives on the ordinary allocator whatever the arena
+        // does; see MAX_ARENA_SLOTS.
+        if self.arrays.len() >= MAX_ARENA_SLOTS {
+            return Err("array element budget exceeded (arrays are never freed)");
+        }
         self.charge_array_bytes(bytes)
     }
 
@@ -2524,7 +2543,7 @@ impl Vm {
         Ok(())
     }
 
-    pub fn alloc_array(&mut self, elems: Vec<Value>) -> Result<Value, &'static str> {
+    pub fn alloc_array(&mut self, elems: ArrVec<Value>) -> Result<Value, &'static str> {
         self.charge_array(elems.len(), Self::array_cost(elems.len()))?;
         self.array_elems += elems.len() + ARRAY_HEADER_UNITS;
         self.array_bytes += Self::array_cost(elems.len());
@@ -2549,7 +2568,7 @@ impl Vm {
     /// recorded runtime error, never an allocator panic (= reboot).
     fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, &'static str> {
         self.charge_array(len, Self::array_cost(len))?;
-        let mut elems: Vec<Value> = Vec::new();
+        let mut elems: ArrVec<Value> = crate::arena::empty();
         if elems.try_reserve_exact(len).is_err() {
             return Err("out of memory for array");
         }

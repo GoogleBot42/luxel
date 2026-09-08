@@ -962,13 +962,54 @@ Gitea #75. What the first evening established, so nobody re-derives it:
   (thumb-wheel, RTC, microSD, audio out, PSRAM, I2C header, chaining) and
   #142 (mics).
 
-**PSRAM is not initialised.** Nothing in the current firmware wants it:
-DMA framebuffers must live in internal SRAM regardless, and the engine's
-hot per-frame buffers would be slower on PSRAM than in DRAM. Its one
-plausible use is the same one already noted for WROVER modules — a
-dedicated arena for large pattern arrays, letting the array budget grow
-without touching the DRAM heap. That stays a future idea (docs/ideas.md),
-not a v1 requirement.
+**PSRAM is the pattern-array arena** (Gitea #253, `psram-arena` cargo
+feature, `firmware/src/psram.rs`). It is initialised on this board only.
+The rule that made it uninteresting elsewhere still holds — DMA
+framebuffers must live in internal SRAM, and the engine's hot per-frame
+buffers would be slower on PSRAM than in DRAM — so exactly one thing moved
+there: `ArrRepr::Owned` element storage, the pattern arrays.
+
+The arena is a **second, separate `esp_alloc::EspHeap`**, never a third
+region of the global one. That matters more than it sounds: esp-radio's
+`malloc` shim asks the global `HEAP` with no capability filter, so a PSRAM
+region added there could serve a WiFi-blob allocation that has to be
+internal and DMA-reachable. Keeping it separate also means
+`esp_alloc::HEAP.free()` still means exactly what it always meant, so
+`RUNTIME_FLOOR`, the post-load floor check and `/api/status`'s `heap_free`
+keep their old semantics on every board.
+
+Consequences on this board:
+
+| | before | with the arena |
+|---|---|---|
+| array BYTE budget | `HEAP.free() − 24 KiB` (~28 KB at 4096 px — less than ONE pixel-sized array) | arena free − `ARENA_RESERVE` (256 KiB), ~7.7 MB |
+| array ELEMENT ledger | PB's 10,236 units | `bytes / 8`, i.e. the byte budget is the only thing that binds |
+| arena slot count | bounded by the element ledger | `vm::MAX_ARENA_SLOTS` (2,559 — the same bound, now explicit) |
+| DRAM cost of a big pattern | arrays + program + engine | program + engine only |
+
+Raising the element ledger is a deliberate, board-scoped divergence from
+Pixel Blaze: a pattern PB rejects with "array element budget exceeded" can
+run here. Every board without the arena keeps the PB number exactly.
+
+`/api/status` reports `psram_free` / `psram_total` on this board (and only
+on this board — the fields are `#[cfg]`-gated, so no other image or JSON
+changes). `heap_free` does NOT include them.
+
+Two ordering rules the code depends on, both documented in
+`firmware/src/psram.rs`:
+
+- PSRAM init runs **before** `esp_rtos::start`, `core1::start` and any
+  `flashmap::map`. `map_psram` suspends the data cache while it programs
+  MMU entries, and PSRAM shares the S3's DBUS MMU table with flash
+  mappings — esp-hal maps PSRAM after the LAST valid entry, so a flash
+  mapping made first would push it towards the end of a 512-entry table.
+  (`flashmap::find_free_run` already treats a bit-15 entry as occupied, so
+  this order is the safe one.)
+- `esp_hal::psram::Psram::new` reprograms the SPI0/SPI1 **flash** clock
+  divider from `PsramConfig::flash_frequency`. `psram::init` reads the real
+  value out of the image header at flash offset 0 rather than trusting
+  esp-hal's 80 MHz default, and falls back to the slowest setting when it
+  cannot: slowing flash down is safe, speeding it up is not.
 
 
 ## Second light: master on the panel (2026-09-06)

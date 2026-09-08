@@ -1,5 +1,81 @@
 # Update log
 
+## 2026-09-07 — firmware: 8 MB octal PSRAM as the pattern-array arena (Seengreat S3)
+
+Gitea #253. The Seengreat panel board carries an ESP32-S3-WROOM-1-N16R8 and
+Luxel never initialised its 8 MB of octal PSRAM. That board sits at ~40 KB of
+free DRAM running a 4096-px pattern, which gives an array byte budget of
+~28 KB — **less than one pixel-sized array**. Pattern arrays now come from
+PSRAM instead; nothing else moved.
+
+* **`luxel_core::arena`** (new): `ArenaAlloc`, an `allocator_api2::Allocator`
+  that is the global allocator until an embedder installs a hook. `ArrRepr::
+  Owned` element storage is now `arena::ArrVec<Value>` instead of
+  `Vec<Value>`. With no hook — every host build, the wasm playground, every
+  board but one — the generated code and the behaviour are what they were.
+* **`firmware/src/psram.rs`** (new, `psram-arena` cargo feature, turned on by
+  `board-seengreat-hub75` only): brings PSRAM up and registers it as a
+  **second, separate `esp_alloc::EspHeap`**, never a third region of the
+  global one. That separation is the load-bearing part: esp-radio's `malloc`
+  shim asks the global `HEAP` with no capability filter, so a PSRAM region
+  added there could serve a WiFi-blob allocation that has to be internal and
+  DMA-reachable. Keeping it out means `esp_alloc::HEAP.free()`,
+  `RUNTIME_FLOOR`, the post-load floor check and `/api/status`'s `heap_free`
+  all keep their old meaning on every board.
+* **Budget.** `budget::external_array_budget` (arena free − a 256 KiB
+  `ARENA_RESERVE`) replaces the DRAM-derived byte budget on an arena board;
+  `budget::external_element_budget` raises PB's 10,236-unit element ledger
+  out of the way so bytes are the only constraint. That ledger is a
+  deliberate, board-scoped divergence from Pixel Blaze. The new
+  `vm::MAX_ARENA_SLOTS` takes over as the bound on the arena's *slot* vector,
+  which stays on the ordinary allocator whatever the arena does — it is set
+  to exactly the old implied bound, so no other board changes.
+* **`/api/status`** gains `psram_free` / `psram_total`, `#[cfg]`-gated to the
+  arena board so no other image or JSON moves. They are a second heap:
+  `heap_free` does not include them.
+* **Boot order** (documented at length in `psram.rs`): init runs right after
+  the `heap_allocator!` calls — before `esp_rtos::start` / `core1::start`
+  (`map_psram` suspends the data cache), before any `flashmap::map` (PSRAM
+  shares the S3's DBUS MMU table and esp-hal maps it after the LAST valid
+  entry), and long before WiFi.
+* **Flash clock.** `Psram::new` reprograms the SPI0/SPI1 flash divider from
+  `PsramConfig::flash_frequency`. `psram::init` reads the real value out of
+  the image header at flash offset 0 (`read_nor` into a word-aligned stack
+  buffer) rather than trusting esp-hal's 80 MHz default, and falls back to
+  the slowest setting when it cannot: slowing flash is safe, speeding it up
+  is not.
+* **Flash fence (#309).** A PSRAM access is a cache miss to SPI0 — the same
+  cache a flash op disables — so it obeys the rule mapped flash reads already
+  obey: task context only. While an SPI1 op runs the other core is parked in
+  IRAM spinning on DRAM flags and the fencing core is in esp-storage's IRAM
+  routine, so no arena access can overlap one. No new fence rule.
+
+Measured (credless devshell builds; app image via `espflash save-image`,
+`.stack` via `tools/stack-check.sh`):
+
+| board | image before | after | delta | `.stack` before | after |
+|---|---|---|---|---|---|
+| seengreat-hub75 | 962,224 | 972,256 | +10,032 | 28,780 | 29,340 |
+| s3-devkit | 956,448 | 956,800 | +352 | 33,788 | 33,812 |
+| pixelblaze-v3 | 1,009,984 | 1,010,160 | +176 | 25,996 | 25,996 |
+| athom-music | 1,010,064 | 1,010,224 | +160 | 25,996 | 25,996 |
+| esp32-generic | 1,009,632 | 1,009,808 | +176 | 25,996 | 25,996 |
+| c6-devkit | 1,028,688 | 1,028,272 | −416 | 138,128 | 138,128 |
+
+The +10 KB on the arena board is esp-hal's PSRAM bring-up, which is `#[ram]`
+throughout because it runs with the data cache suspended. On the S3
+`.rwtext` and `.stack` are the same SRAM, so linking it cost a measured
+5,584 B of stack (28,780 → 23,196, straight through the 24 KB floor). The
+board's `heap_allocator!` drops 160 → 154 KB to pay it back, which lands
+`.stack` at 29,340 B — above where it started. Giving up 6 KB of DRAM heap
+for an 8 MB array arena is the trade, and a big pattern's arrays no longer
+come out of that region at all.
+
+`board-c3-devkit` does not build on this tree and did not before it either
+(`Atomic<u64>::fetch_add` is unavailable on riscv32imc, `src/shared.rs:267`) —
+Gitea #413.
+
+
 ## 2026-09-07 — firmware: `heap_largest`, and a refusal that names the real problem (#390)
 
 Re-saving the same library pattern in a loop, the Athom took 11 saves and

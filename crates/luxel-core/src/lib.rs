@@ -17,6 +17,7 @@
 
 extern crate alloc;
 
+pub mod arena;
 #[cfg(feature = "frontend")]
 pub mod ast;
 pub mod audio;

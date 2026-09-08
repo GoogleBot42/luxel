@@ -64,6 +64,55 @@ pub const fn array_budget(heap_free: usize) -> usize {
     }
 }
 
+/// Bytes of an external array arena the firmware keeps back for itself.
+///
+/// The arena is only ever used for pattern-array *storage*, so unlike
+/// [`RUNTIME_FLOOR`] nothing else competes for it. The reserve exists so a
+/// pattern that maxes out its budget still leaves room for the copy-on-write
+/// promotion of a const array and for the transient double-allocation a
+/// `Vec` growth does (old + new alive at once) — both of which charge the
+/// byte ledger only *after* the allocation succeeded.
+pub const ARENA_RESERVE: usize = 256 * 1024;
+
+/// The array-arena byte budget on a board with a dedicated external arena
+/// (Gitea #253): the arena's own free space, less [`ARENA_RESERVE`], and
+/// never below what the main-heap rule would have granted.
+///
+/// `heap_free` is still the internal free heap, because a pattern's
+/// non-array cost (its `Program`, VM globals, the pixel buffer) comes out of
+/// internal RAM exactly as before — this only changes where the *arrays*
+/// come from, so the internal-heap answer stays the floor.
+pub const fn external_array_budget(heap_free: usize, arena_free: usize) -> usize {
+    let internal = array_budget(heap_free);
+    let external = arena_free.saturating_sub(ARENA_RESERVE);
+    if external > internal {
+        external
+    } else {
+        internal
+    }
+}
+
+/// Bytes one arena element costs. Pinned against the real `Value` below,
+/// because [`external_element_budget`] converts between the two ledgers.
+pub const BYTES_PER_ELEMENT: usize = 8;
+const _: () = assert!(core::mem::size_of::<crate::vm::Value>() == BYTES_PER_ELEMENT);
+
+/// Element ledger to pair with [`external_array_budget`].
+///
+/// PB's 10,236-unit ledger (`crate::vm::DEFAULT_ARRAY_BUDGET`) is a
+/// *memory* budget in disguise — 40 KiB of 4-byte elements on a device with
+/// no other option. A board with a dedicated external arena has a real byte
+/// budget, so the element ledger is set just high enough to stop binding and
+/// the bytes do the work. `crate::vm::MAX_ARENA_SLOTS` independently bounds
+/// the slot vector, which stays on the ordinary allocator.
+///
+/// This is a deliberate, board-scoped divergence from PB: a pattern that a
+/// real Pixel Blaze rejects with "array element budget exceeded" can run
+/// here. Every board without an arena keeps the PB number exactly.
+pub const fn external_element_budget(array_byte_budget: usize) -> usize {
+    array_byte_budget / BYTES_PER_ELEMENT
+}
+
 /// Free heap a pattern load actually starts from, given the two numbers
 /// `/api/status` reports: `heap_free` (free right now, with the CURRENT
 /// pattern's engine resident) and `engine_heap` (what that engine costs).
@@ -155,6 +204,23 @@ mod tests {
         // starved device: never below the minimum
         assert_eq!(array_budget(30 * 1024), MIN_ARRAY_BUDGET);
         assert_eq!(array_budget(0), MIN_ARRAY_BUDGET);
+    }
+
+    #[test]
+    fn external_arena_never_reads_below_the_main_heap_rule() {
+        // 8 MB arena, idle S3 panel heap: the arena wins by three orders
+        // of magnitude
+        assert_eq!(
+            external_array_budget(51_704, 8 * 1024 * 1024),
+            8 * 1024 * 1024 - ARENA_RESERVE
+        );
+        // an arena smaller than the reserve is worse than no arena, so the
+        // main-heap rule still applies
+        assert_eq!(
+            external_array_budget(100 * 1024, 64 * 1024),
+            array_budget(100 * 1024)
+        );
+        assert_eq!(external_array_budget(100 * 1024, 0), 76 * 1024);
     }
 
     #[test]
