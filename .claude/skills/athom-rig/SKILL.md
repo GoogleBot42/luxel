@@ -23,14 +23,15 @@ it, and covers only the agent-side procedure for driving that rig.
   exists first; if missing, panic/reboot detection falls back to polling
   `/api/status` (1 Hz worked) + post-hoc `slot` checks, and only Jeremy can
   restore it (replug, then `doas chmod 666 /dev/ttyUSB0`).
-- **Power**: a zigbee2mqtt smart plug, topic `zigbee2mqtt/claude-switch`.
-  Publish `{"state":"ON"}` or `{"state":"OFF"}` to
-  `zigbee2mqtt/claude-switch/set` (e.g. via `mosquitto_pub`, available
-  through `nix shell nixpkgs#mosquitto`). Broker connection details and
-  credentials live in agent memory (jeremy-ha-broker.md). Publishing to
-  this specific topic is an explicitly authorized exception (granted
-  2026-07-26) to that memory's publish-only-under-`luxel/*` care rule —
-  don't extend the exception to any other topic on that broker.
+- **Power**: a zigbee2mqtt smart plug, friendly name `claude-switch`
+  (topic `zigbee2mqtt/claude-switch`). Drive it with the user-level
+  `power-switch` skill — `~/.claude/skills/power-switch/switch.sh
+  claude-switch on|off|toggle|state` — which sources the broker creds from
+  `~/.config/mqtt/broker.env` (never in memory or the repo). Publishing to
+  this plug's own `/set` + `/get` topics is an explicitly authorized
+  exception (granted 2026-07-26) to the broker's publish-only-under-`luxel/*`
+  care rule (jeremy-ha-broker.md memory) — don't extend the exception to any
+  other topic on that broker.
 - **Liveness signal**: the plug reports power draw; roughly 0.7 W idle
   confirms the board is powered, without needing serial or network to
   answer.

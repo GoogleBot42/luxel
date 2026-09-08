@@ -94,7 +94,8 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   firmware code, or build flags. The image under test must be byte-identical to what
   ships. See docs/research/qemu-emulation-spike.md.
 - No secrets in tracked files, ever. WiFi creds live in `firmware/creds.env` (gitignored);
-  HA/MQTT broker details live only in agent memory. Device flash dumps (`*.bin`) are
+  the MQTT broker password lives only in `~/.config/mqtt/broker.env` (user-level
+  `power-switch` skill drives the bench plugs). Device flash dumps (`*.bin`) are
   gitignored — keep it that way.
 - License split: Apache-2.0 (crates, web, library) vs GPL-3.0-or-later (firmware).
   Match the split when adding files.
