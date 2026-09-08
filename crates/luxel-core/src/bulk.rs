@@ -685,12 +685,103 @@ fn capsule(vm: &mut Vm, a: (Fx, Fx), b: (Fx, Fx), w: Fx, mode: Blend) {
     );
 }
 
+/// Grid positions per canvas cell on ONE axis, when the mapping really is
+/// an exact block expand: `Some(m)` iff `cell_index(coord(i), k) == i / m`
+/// for every position `i` of an `n`-position grid axis onto a `k`-cell
+/// canvas axis, where `coord(i)` is the mapped coordinate the generic scan
+/// would read there.
+///
+/// It is *verified*, not assumed, and `n % k == 0` is necessary but NOT
+/// sufficient: the block boundaries fall where the map's normalization
+/// rounding puts them, and for some pairs (51 grid columns onto a 51-cell
+/// canvas; 3569 onto 43) one lands a cell early, so a blind `n / k` stride
+/// would paint a different picture than the scan. A coordinate map's axis
+/// values need not even be evenly spaced. The check costs `n` coordinate
+/// reads against the `n × rows` the scan costs — 64 + 64 lookups instead
+/// of 4096 — which is why it can be done per call.
+fn axis_blocks(n: usize, k: usize, coord: &mut dyn FnMut(usize) -> Fx) -> Option<usize> {
+    if k == 0 || n == 0 || n % k != 0 {
+        return None;
+    }
+    let m = n / k;
+    for i in 0..n {
+        if cell_index(coord(i), k) != i / m {
+            return None;
+        }
+    }
+    Some(m)
+}
+
+/// `(block width, block height)` when a canvas fill may walk canvas cells
+/// instead of pixels. `detect_grid`/`MapData::grid` guarantee the map is
+/// separable — every row carries the same fast-axis values and one
+/// slow-axis value — so verifying row 0 and column 0 settles every cell.
+/// Only a grid whose ROWS run along x is taken; a transposed panel
+/// (`fast == 1`) keeps the scan rather than carrying a second index order.
+fn canvas_blocks(gv: &GridView, cw: usize, ch: usize) -> Option<(usize, usize)> {
+    if gv.fast != 0 {
+        return None;
+    }
+    let bw = axis_blocks(gv.g.w as usize, cw, &mut |c| gv.coord(0, c)[0])?;
+    let bh = axis_blocks(gv.g.h as usize, ch, &mut |r| gv.coord(r, 0)[1])?;
+    Some((bw, bh))
+}
+
+/// Paint every pixel from the canvas cell its mapped (x, y) lands in —
+/// `canvas[floor(y·ch)·cw + floor(x·cw)]`, the nearest-sampling idiom of
+/// the 2D-canvas patterns. `texel` turns a canvas cell index into output
+/// bytes; `fillCanvas` and `paintCanvas` differ only in that closure.
+///
+/// On an exact integer upscale — a 16×16 canvas on a 64×64 panel is a 4×
+/// block expand, and never satisfied the old "the canvas IS the grid"
+/// filter — this walks the grid in blocks: the map lookup and the two
+/// `cell_index` divides per pixel become a row-base add, and `texel` is
+/// called once per canvas cell per grid ROW instead of once per pixel
+/// (1024 times rather than 4096 on that panel). Bit-identical to the scan
+/// by construction: `canvas_blocks` checks the block boundaries against
+/// the scan's own `cell_index(coord(..))` before the path is taken at all,
+/// and `FORCE_SCAN` asserts the two equal in tests.
+#[inline(never)]
+fn canvas_fill(
+    vm: &Vm,
+    frame: &mut [[u8; 3]],
+    cw: usize,
+    ch: usize,
+    texel: &mut dyn FnMut(usize) -> [u8; 3],
+) {
+    if let Some(gv) = grid_view(vm, frame.len()) {
+        if let Some((bw, bh)) = canvas_blocks(&gv, cw, ch) {
+            let mut r = 0;
+            for cr in 0..ch {
+                let base = cr * cw;
+                for _ in 0..bh {
+                    let mut c = 0;
+                    for cc in 0..cw {
+                        let px = texel(base + cc);
+                        for _ in 0..bw {
+                            frame[gv.g.index(r, c)] = px;
+                            c += 1;
+                        }
+                    }
+                    r += 1;
+                }
+            }
+            return;
+        }
+    }
+    for i in 0..frame.len() {
+        let p = coord_of(vm, i);
+        let t = cell_index(p[1], ch) * cw + cell_index(p[0], cw);
+        frame[i] = texel(t);
+    }
+}
+
 /// `fillCanvas(hArr, sArr, vArr, w, h)`: sample a w×h row-major canvas
 /// (three parallel arrays, each of which may be a scalar) at each pixel's
 /// mapped (x, y) with NEAREST sampling — the
 /// `canvas[floor(y·H)·W + floor(x·W)]` idiom of the 2D-canvas patterns,
-/// as one call. On a procedural grid of exactly w×h it degenerates to a
-/// copy through the index map.
+/// as one call. On a procedural grid that is an integer multiple of the
+/// canvas (1× included) it degenerates to a block expand.
 pub(crate) fn fill_canvas(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
     let mut frame = core::mem::take(&mut vm.frame);
     let r = fill_canvas_into(vm, prog, args, &mut frame);
@@ -710,32 +801,7 @@ fn fill_canvas_into(
         return Ok(Value::default());
     }
     let (cw, ch) = (cw as usize, ch as usize);
-    // Straight copy only on a PROCEDURAL grid: `detect_grid` accepts a
-    // coordinate map whose axis values are merely monotonic, not evenly
-    // spaced, and there `cell_index(coord(c)) == c` does not have to hold.
-    let direct = grid_view(vm, frame.len()).filter(|gv| {
-        gv.map.grid.is_some() && gv.g.w as usize == cw && gv.g.h as usize == ch
-    });
-    match direct {
-        // the canvas IS the grid, so this is `blit`'s paste at the origin
-        Some(gv) => paste(
-            frame,
-            gv.g,
-            &s,
-            cw as i32,
-            (0, 0),
-            (0, ch as i32),
-            (0, cw as i32),
-            Blend::Replace,
-        ),
-        None => {
-            for (i, dst) in frame.iter_mut().enumerate() {
-                let p = coord_of(vm, i);
-                let t = cell_index(p[1], ch) * cw + cell_index(p[0], cw);
-                *dst = texel_at(&s, t, true);
-            }
-        }
-    }
+    canvas_fill(vm, frame, cw, ch, &mut |t| texel_at(&s, t, true));
     Ok(Value::default())
 }
 
@@ -1384,22 +1450,83 @@ mod tests {
     }
 
     #[test]
-    fn fill_canvas_direct_copy_matches_the_scan() {
-        // the straight-copy fast path only fires when the canvas is
-        // exactly the grid, so pin that case specifically
-        let src = "hs = array(64)\n\
-                   export function renderFrame() {\n\
-                     for (i = 0; i < 64; i++) { hs[i] = i / 64 }\n\
-                     fillCanvas(hs, 1, 1, 8, 8)\n\
-                   }";
-        for (name, rig) in [
-            ("procedural", Rig::Grid(8, 8)),
-            ("coords", Rig::Coords(grid_coords(8, 8, false))),
-            ("coords serpentine", Rig::Coords(grid_coords(8, 8, true))),
+    fn fill_canvas_block_expand_matches_the_scan() {
+        // Every grid/canvas pair the widened fast path now takes — 1x
+        // (the old "canvas IS the grid" case), square and non-square
+        // upscales, a 1-wide canvas axis, and a canvas coarser on one
+        // axis than the other — has to be byte-identical to the generic
+        // per-pixel scan. The coordinate-map rigs are here to prove the
+        // path is NOT taken there (a `detect_grid` map's axis values are
+        // only monotonic, not evenly spaced), which is the same assertion.
+        for (gw, gh, cw, ch) in [
+            (8usize, 8usize, 8usize, 8usize), // 1x
+            (8, 8, 4, 4),                     // 2x
+            (64, 64, 16, 16),                 // the panel case: 4x
+            (12, 8, 3, 4),                    // non-square, different factors
+            (16, 4, 16, 1),                   // one canvas row
+            (9, 9, 3, 3),                     // odd dimensions
+            (10, 6, 5, 1),
+            (7, 7, 7, 7),
         ] {
-            let (scan, fast) = scan_and_fast(src, 64, &rig);
-            assert_eq!(scan, fast, "{name}");
-            assert!(fast.iter().any(|p| *p != [0, 0, 0]), "{name}: nothing painted");
+            let n = gw * gh;
+            let cells = cw * ch;
+            let src = alloc::format!(
+                "hs = array({cells})\n\
+                 export function renderFrame() {{\n\
+                   for (i = 0; i < {cells}; i++) {{ hs[i] = i / {cells} }}\n\
+                   fillCanvas(hs, 1, 1, {cw}, {ch})\n\
+                 }}"
+            );
+            for (name, rig) in [
+                ("procedural", Rig::Grid(gw as u16, gh as u16)),
+                ("coords", Rig::Coords(grid_coords(gw, gh, false))),
+                ("coords serpentine", Rig::Coords(grid_coords(gw, gh, true))),
+            ] {
+                let (scan, fast) = scan_and_fast(&src, n as u32, &rig);
+                assert_eq!(scan, fast, "{gw}x{gh} grid, {cw}x{ch} canvas, {name}");
+                assert!(
+                    fast.iter().any(|p| *p != [0, 0, 0]),
+                    "{gw}x{gh}/{cw}x{ch} {name}: nothing painted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn axis_blocks_rejects_the_pairs_whose_boundaries_move() {
+        // The whole reason the fast path is verified rather than assumed:
+        // `n % k == 0` does not imply uniform blocks once the map's
+        // normalization rounding is applied. 51 grid columns onto a
+        // 51-cell canvas is the smallest counter-example found by
+        // exhaustive search over every pair up to 4096 positions
+        // (position 51 of 2601 lands in cell 0, where 51 / 51 = 1).
+        let grid_axis = |n: usize| {
+            let m = MapData::grid(n as u16, 1);
+            move |i: usize| m.coord(i)[0]
+        };
+        for (n, k, want) in [
+            (64usize, 16usize, Some(4usize)),
+            (64, 64, Some(1)),
+            (9, 3, Some(3)),
+            (6, 3, Some(2)),
+            (64, 15, None),   // not a multiple
+            (2601, 51, None), // a multiple, but the boundary shifts
+            (3569, 43, None),
+            (0, 4, None),
+            (4, 0, None),
+        ] {
+            let mut f = grid_axis(n.max(1));
+            assert_eq!(axis_blocks(n, k, &mut |i| f(i)), want, "{n} onto {k}");
+        }
+        // Whatever it accepts must agree with the scan's own arithmetic
+        // at every position — that is the property the walk relies on.
+        for (n, k) in [(64usize, 16usize), (2601, 51), (12, 3), (256, 16), (9, 9), (100, 4)] {
+            let mut f = grid_axis(n);
+            if let Some(m) = axis_blocks(n, k, &mut |i| f(i)) {
+                for i in 0..n {
+                    assert_eq!(cell_index(f(i), k), i / m, "{n}/{k} at {i}");
+                }
+            }
         }
     }
 }

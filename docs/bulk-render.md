@@ -112,6 +112,28 @@ randomised shape parameters; a transform routes to the scan.
 `ceil(√n)` default grid a 2D-only pattern gets. `renderFrame` + `fillHSV` is
 a strip pattern and is handed no geometry it never asked for.
 
+**The canvas block expand.** `fillCanvas` and `paintCanvas` have a second
+fast path of their own, for the case the whole canvas idiom exists to serve:
+a panel that is an exact integer multiple of the canvas. A 64×64 panel
+showing a 16×16 canvas is a 4× block expand, so instead of the map lookup
+and two `cell_index` divides per pixel it walks the grid in blocks — a
+row-base add per pixel, and the texel resolved once per canvas cell per grid
+row (1024 times instead of 4096). Measured on the `fillCanvas`-only
+microbench at 4096 px: **8.1 → 1.4 ns/px, 33.0 → 5.9 µs/frame (5.6×)**; 3.1×
+at 1024 px on a 32×32 grid and 1.7× at 256 px where the expand is 1×.
+
+The block factor is **verified per call, never assumed**: `n % k == 0` is
+necessary and not sufficient, because the block boundaries fall where the
+map's own normalization rounding puts them and for some pairs (51 grid
+columns onto a 51-cell canvas, 3569 onto 43) one lands a cell early. The
+check walks one row and one column — 64 + 64 coordinate reads against the
+4096 the scan costs — comparing `cell_index(coord(i), k)` against `i / m` at
+every position, so the path is bit-identical to the scan by construction and
+falls back to it whenever it is not. It covers both map kinds (a `--map-grid`
+coordinate map and the zero-heap procedural grid) and both wirings; a
+transposed grid (rows running along y) and any active transform keep the
+scan.
+
 ## Results — host throughput
 
 Eleven pairs written to be visually equivalent; the per-pixel side is the
