@@ -74,7 +74,7 @@ is sticky.
 | space | ops | needs |
 |---|---|---|
 | index | `clear` `fill` `fade` `setPixel` `fillRange` `fillHSV` `fillRGB` `fillGradient`(axis 0) | nothing — works on a bare strip |
-| coordinate | `fillRect` `fillCircle` `splat` `drawLine` `fillCanvas` `fillGradient`(axis 1–3) | any map, including sparse/irregular; a predicate over each pixel's mapped (x, y) exactly as `render2D` sees it |
+| coordinate | `fillRect` `fillCircle` `splat` `drawLine` `fillCanvas` `paintCanvas` `fillGradient`(axis 1–3) | any map, including sparse/irregular; a predicate over each pixel's mapped (x, y) exactly as `render2D` sees it |
 | grid | `blit`, `gridWidth`/`gridHeight` | a W×H grid that COVERS the frame (`grid.len() >= pixelCount`); cells past the end of the frame — the tail of the last row on an over-provisioned `ceil(√n)` map — clip. A silent no-op with no grid or one too small, and `gridWidth()` returns 0 in exactly those cases so a pattern can branch |
 
 **What a canvas cannot reach.** `fillCanvas` decouples the simulation
@@ -83,10 +83,41 @@ resolution from the fixture's, but the canvas recipe cannot cover a big panel
 12,288 elements against the 10,236-element `DEFAULT_ARRAY_BUDGET` (and ~96 KB
 of `Value` on the S3, which #275/#258 has already OOMed). Both canvas
 conversions below simulate on a 16x16 canvas and let the sampler scale it.
-`fillCanvas` is also **HSV only** (`texel_at(.., hsv: true)` in `bulk.rs`):
-a palette pattern whose colour is `paint()` has no bulk fill path at all —
-resolving it through HSV loses the palette and is not byte-exact — so it
-draws with `paint()` + `setPixel()`. `paintCanvas` is proposed on #373.
+`fillCanvas` is **HSV only** (`texel_at(.., hsv: true)` in `bulk.rs`). A
+palette pattern whose colour is `paint()` uses **`paintCanvas(vArr, w, h [,
+bArr])`** instead: the installed palette sampled at `vArr[i]`, times
+`bArr[i]` (or 1), through the same geometry. It resolves the palette with
+the same `sample_palette` and the same `paint()` position wrap the
+interpreter uses, so a cell is **byte-identical to `paint(v, b)` +
+`setPixel(i)`** — an RGB→HSV→RGB round trip through `fillCanvas` is not (`s
+= d / max` and `h6 / 6` each truncate in 16.16). It also needs **one array
+where `fillCanvas` needs three**, which is the difference between a
+palette pattern being representable on a 64×64 panel and not. It leaves the
+brush alone; a `bArr` of `v * v` (the usual `paint(v, v * v)` shape) is a
+second array, so budget two.
+
+**Producing a canvas.** Two ops fill one natively, and both are ordinary
+array builtins — they work outside `renderFrame` too:
+
+| op | what |
+|---|---|
+| `fillNoise2D(dst, w, h, sx, sy, ox, oy, seed)` | `dst[r·w + c] = simplex2(c·sx + ox, r·sy + oy, seed)`; returns dst |
+| `fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed)` | the same with `simplex3` at a fixed z |
+
+Both produce **exactly** what the equivalent interpreted loop produces,
+argument arithmetic included (`c * sx + ox` as one `Fx` multiply then one
+add, not an incremental accumulation) — they remove the interpreter around
+the noise, never change it. `h = 1` fills a single row whose y is just
+`oy`, which is how a pattern samples a lattice row at a time without
+allocating a full-panel canvas.
+
+A **lattice is not the map's own normalization**: a grid map puts column
+`c` at `round(c · 65535 / (w − 1))` and `c · sx + ox` reproduces that
+exactly only where `65535 / (w − 1)` divides evenly (it does at 16 and 18
+wide, not at 64). A pattern that switches a per-pixel noise term to a
+lattice fill is therefore sampling the same field on evenly spaced
+coordinates instead of rounded ones — see the `aurora-2d.js` section for
+what that is worth in output bytes.
 
 **Exact cell coordinates.** A pattern that walks the grid itself has to
 reproduce `MapData::coord` — `round(c * 65535 / (w - 1))` in 16.16 — and NOT

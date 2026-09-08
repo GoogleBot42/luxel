@@ -805,6 +805,66 @@ fn fill_canvas_into(
     Ok(Value::default())
 }
 
+/// `paintCanvas(vArr, w, h [, bArr])`: `fillCanvas`'s geometry with
+/// `paint()`'s colour — the installed palette sampled at `vArr[i]`, times
+/// `bArr[i]` (or 1), nearest-sampled through each pixel's mapped (x, y).
+///
+/// Two things this exists for, neither of them "`fillCanvas` but
+/// palettes" (Gitea #373 §7):
+///
+/// - **Exactness.** The palette lookup is the same `sample_palette` the
+///   interpreter's `paint` calls, at the same `paint_pos` wrap and the
+///   same 0..1 brightness clamp, so a cell is byte-identical to
+///   `paint(v, b)` + `setPixel(i)`. Resolving a palette into an HSV canvas
+///   in bytecode is neither — the RGB→HSV→RGB round trip truncates twice
+///   in 16.16 — and costs ~39 interpreted instructions per cell.
+/// - **One array instead of three.** A full-resolution HSV canvas for a
+///   64×64 panel is three `array(4096)` channels = 12,288 elements against
+///   the 10,236-element `DEFAULT_ARRAY_BUDGET`, so it does not allocate at
+///   all. This needs 4096.
+///
+/// The brush is left alone: this is a fill, not a `paint()` call, so the
+/// pattern's current colour survives it.
+pub(crate) fn paint_canvas(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
+    let mut frame = core::mem::take(&mut vm.frame);
+    let r = paint_canvas_into(vm, prog, args, &mut frame);
+    vm.frame = frame;
+    r
+}
+
+fn paint_canvas_into(
+    vm: &Vm,
+    prog: &Program,
+    args: &[Value],
+    frame: &mut [[u8; 3]],
+) -> Result<Value, String> {
+    let v = src(vm, prog, arg(args, 0), "paintCanvas")?;
+    let b = match args.get(3) {
+        Some(&x) => src(vm, prog, x, "paintCanvas")?,
+        None => Src::Scalar(Fx::ONE),
+    };
+    let (cw, ch) = (num(args, 1).to_int_trunc(), num(args, 2).to_int_trunc());
+    if cw < 1 || ch < 1 || frame.is_empty() {
+        return Ok(Value::default());
+    }
+    let pal = vm.palette();
+    canvas_fill(vm, frame, cw as usize, ch as usize, &mut |t| {
+        palette_texel(pal, v.at(t), b.at(t))
+    });
+    Ok(Value::default())
+}
+
+/// One output texel of `paintCanvas`, spelled exactly as the `Paint` arm
+/// plus `setPixel` spell it. Out of line for the same reason as
+/// `texel_hsv`: it is a stop-list walk and three quantizes, and inlining
+/// that into the fill loop is that much image per call site.
+#[inline(never)]
+fn palette_texel(pal: &[(Fx, [Fx; 3])], v: Fx, b: Fx) -> [u8; 3] {
+    let rgb = crate::vm::sample_palette(pal, crate::vm::paint_pos(v));
+    let b = b.clamp(Fx::ZERO, Fx::ONE);
+    texel_rgb([rgb[0] * b, rgb[1] * b, rgb[2] * b])
+}
+
 // ---- grid space ----
 
 /// `blit(hArr, sArr, vArr, w, h, col, row, mode)`: paste a w×h canvas
@@ -1490,6 +1550,99 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A five-stop palette plus two canvas arrays, as pattern source.
+    fn palette_canvas(n: usize) -> alloc::string::String {
+        alloc::format!(
+            "setPalette([0, 0,0,0, 0.25, 0,0.07,0.03, 0.55, 0,0.55,0.18,\n\
+             \x200.8, 0.15,0.95,0.5, 1, 0.75,0.45,0.95])\n\
+             vs = array({n})\n\
+             bs = array({n})\n\
+             for (i = 0; i < {n}; i++) {{ vs[i] = i / {n} * 1.3 - 0.1\n bs[i] = (i % 5) / 4 }}\n"
+        )
+    }
+
+    #[test]
+    fn paint_canvas_is_byte_exact_against_paint_plus_set_pixel() {
+        // #373 §7's whole argument: the palette lookup is the interpreter's
+        // own, so one cell per pixel must be indistinguishable from what a
+        // pattern gets writing `paint(v, b)` + `setPixel(i)` itself.
+        for (w, h) in [(8usize, 8usize), (4, 6), (1, 5)] {
+            let n = w * h;
+            let head = palette_canvas(n);
+            let bulk = alloc::format!(
+                "{head}export function renderFrame() {{ paintCanvas(vs, {w}, {h}, bs) }}"
+            );
+            let loopy = alloc::format!(
+                "{head}export function renderFrame() {{\n\
+                   for (i = 0; i < {n}; i++) {{ paint(vs[i], bs[i])\n setPixel(i) }}\n\
+                 }}"
+            );
+            // Row-major rigs only: `setPixel(i)` addresses a pixel INDEX
+            // while `paintCanvas` addresses the cell a pixel's mapped
+            // (x, y) lands in, and serpentine wiring makes those two
+            // different orders — exactly as it does for `fillCanvas`.
+            for (name, rig) in [
+                ("procedural", Rig::Grid(w as u16, h as u16)),
+                ("coords", Rig::Coords(grid_coords(w, h, false))),
+            ] {
+                assert_eq!(
+                    frame1(&bulk, n as u32, &rig),
+                    frame1(&loopy, n as u32, &rig),
+                    "{w}x{h} {name}"
+                );
+            }
+        }
+        // the brightness argument is optional and defaults to 1
+        let head = palette_canvas(16);
+        let with_one = alloc::format!(
+            "{head}export function renderFrame() {{ paintCanvas(vs, 4, 4, 1) }}"
+        );
+        let without = alloc::format!("{head}export function renderFrame() {{ paintCanvas(vs, 4, 4) }}");
+        assert_eq!(frame1(&with_one, 16, &Rig::Grid(4, 4)), frame1(&without, 16, &Rig::Grid(4, 4)));
+        // a degenerate canvas paints nothing
+        let px = frame1(
+            &alloc::format!("{head}export function renderFrame() {{ paintCanvas(vs, 0, 0) }}"),
+            16,
+            &Rig::Grid(4, 4),
+        );
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+    }
+
+    #[test]
+    fn paint_canvas_block_expand_matches_the_scan() {
+        for (gw, gh, cw, ch) in [(64usize, 64usize, 16usize, 16usize), (12, 8, 3, 4), (8, 8, 8, 8)] {
+            let n = gw * gh;
+            let cells = cw * ch;
+            let src = alloc::format!(
+                "{}export function renderFrame() {{ paintCanvas(vs, {cw}, {ch}, bs) }}",
+                palette_canvas(cells)
+            );
+            for (name, rig) in [
+                ("procedural", Rig::Grid(gw as u16, gh as u16)),
+                ("coords", Rig::Coords(grid_coords(gw, gh, false))),
+                ("coords serpentine", Rig::Coords(grid_coords(gw, gh, true))),
+            ] {
+                let (scan, fast) = scan_and_fast(&src, n as u32, &rig);
+                assert_eq!(scan, fast, "{gw}x{gh} grid, {cw}x{ch} canvas, {name}");
+                assert!(fast.iter().any(|p| *p != [0, 0, 0]), "nothing painted");
+            }
+        }
+    }
+
+    #[test]
+    fn paint_canvas_leaves_the_brush_alone() {
+        // It is a fill, not a `paint()` call: a pattern that set a colour
+        // before it still has that colour after.
+        let src = alloc::format!(
+            "{}export function renderFrame() {{\n\
+               rgb(1, 0, 0)\n paintCanvas(vs, 4, 4, bs)\n fill()\n\
+             }}",
+            palette_canvas(16)
+        );
+        let px = frame1(&src, 16, &Rig::Grid(4, 4));
+        assert!(px.iter().all(|p| *p == [255, 0, 0]), "brush was clobbered: {:?}", px[0]);
     }
 
     #[test]

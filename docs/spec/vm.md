@@ -293,6 +293,26 @@ The contract for a host:
   unchanged; a fatal error blanks the frame with the buffer intact.
 - Map mode (`run_map`) is unaffected — a map program uses `render`.
 
+Two of the frame builtins sample a pattern-owned **canvas** — a plain
+row-major array of `w × h` cells — through each pixel's mapped (x, y) with
+nearest sampling: `fillCanvas` reads three H/S/V channels, `paintCanvas`
+reads one palette position (plus an optional brightness) and resolves it
+through the same `sample_palette` and `paint` wrap the per-pixel `paint()`
+builtin uses, so a cell is bit-identical to `paint()` + `setPixel()`.
+Neither disturbs the brush. Both take a block-expand fast path when the
+grid is an exact integer multiple of the canvas, which the implementation
+*verifies* against the generic scan's own `cell_index(coord(i), k)` per
+call rather than deriving from the dimensions — the block boundaries follow
+the map's normalization rounding, and for some dimension pairs they do not
+land on the multiple. The observable result is the scan's, always.
+
+Producing a canvas has native ops of its own, which are ordinary array
+builtins and work anywhere (not just under `renderFrame`): `fillNoise2D` /
+`fillNoise3D` write simplex noise sampled on a regular lattice. They are
+defined to produce exactly what the equivalent interpreted loop produces,
+argument arithmetic included, so they are a speed change and never a
+semantic one.
+
 Debug hooks (breakpoints as `(fn_idx, pc)`, step Continue/Over/Into/Out,
 frame/locals/globals inspection) are host-optional; `dbg: None` is the
 zero-overhead fast path.
