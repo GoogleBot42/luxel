@@ -1,5 +1,92 @@
 # Update log
 
+## 2026-09-08 — #405 batch 4: the two-array read-outs, and the `v * v` wall
+
+The last named bucket on #405. A re-survey found ~15 library patterns on the
+**two-array** `hues[]` + one-value-buffer shape (batch 3 exhausted the strict
+three-array one); twelve were triaged. **Seven converted to `renderFrame`,
+five refused** — and the five refuse for one reason, which is the reusable
+finding here.
+
+**Converted.** Host `tools/pairbench.mjs`, best of five interleaved runs,
+400 frames; `luxel bench --profile` for insns/px at 4096 px.
+
+| pattern | 4096 px 64x64 | 1024 px | 256 px | 300 px | insns/px | equivalence |
+|---|---:|---:|---:|---:|---:|---|
+| `chill-confetti` | 18.82 → **3.84** ns/px (**4.90x**) | 4.82x | 4.57x | 4.72x | 5.0 → **0.0** | byte-identical |
+| `twinkle-2` | 55.75 → **29.51** (**1.89x**) | 1.82x | 2.09x | 2.01x | 21.0 → **12.0** | byte-identical |
+| `marching-rainbow-buffered` | 102.29 → **89.88** (1.14x) | 1.18x | 1.13x | 1.17x | 36.0 → **31.0** | byte-identical |
+| `fairies` | budget-refused at 4096 before **and** after (2,771 px ceiling); **1.37x** at 2025 px | 1.36x | 1.35x | 1.42x | 25.5 → **18.7** (2025 px) | byte-identical |
+| `flow-field-2d` | 64.72 → **6.24** (**10.38x**) | 3.14x | 1.06x | 1.04x | 28.3 → **2.0** | grids exact, strips = the `-0.01` fudge |
+| `fractal-flower` | 100.26 → **37.12** (**2.70x**) | 1.36x | 1.00x | 1.07x | 38.3 → **15.6** | same |
+| `sound-spectromatrix-agc` | 60.57 → **15.25** (**3.97x**) | 1.93x | 1.21x | 1.03x | 23.9 → **6.6** | same, driven |
+
+Equivalence is `luxel run --out` byte-for-byte against the pre-conversion file
+over 60 frames at a fixed delta and seed on 16x16 / 32x32 / 64x64 coordinate
+maps and 60 / 300 / 512 px mapless strips, repeated at **400** frames and under
+driven controls (all four `chill-confetti` sliders, all five `twinkle-2`
+sliders, `fairies` `Speed`, `fractal-flower`'s toggles and a nine-control
+extreme): **maxdiff 0** for the four index-space conversions, on every rig.
+
+The three canvas conversions are byte-identical on the three grids and the
+60 px strip and differ on the 300/512 px mapless strips — the same `-0.01`
+floor fudge `swirlpool-2d`/`ice-floes-2d`/`nyan-lights` hit, proved the same
+way: the pre-conversion file with **only** `floor(c * 15.99)` replaced by a
+clamped `floor(c * 16)` is byte-identical to the converted pattern on **all
+six rigs**, at 60 and 400 frames and under driven controls. `fillCanvas`'s
+true nearest is the correct sampler.
+
+`sound-spectromatrix-agc` is black without a sensor board, and maxdiff 0
+between two black frames is not evidence — both sides were re-run with an
+identical deterministic synthetic 32-band spectrum injected into
+`beforeRender` (45,706–731,087 lit bytes per rig, maxdiff 0).
+
+**`fairies` is the one worth stealing from.** Its read-out squared a
+*persistent* buffer, which normally means a third `array(pixelCount)` — but
+`briB` is only ever written at a deposit, once per spark, never decayed in
+bulk. Storing `life[i] * life[i]` at the deposit is the same multiply on the
+same fixed-point value, so the buffer *is* the fill's V channel, the residual
+an abandoned pixel keeps is unchanged, and the array count does not move.
+**Look for a write site that already touches every value the read-out
+transforms.**
+
+**Refused, with numbers.** `christmas-rg-fade`, `spring-colors`, `blink-fade`,
+`autumn-colors`, `colourful-fireflies` all read `hsv(hue[i], s, v * v)` over a
+buffer their `beforeRender` decays *in place* — no write site sees the final
+value, and recovering `v` from `v²` needs a square root that is not exact in
+16.16. There is no element-wise multiply among the array builtins, so the
+square costs one more `array(pixelCount)`. A faithful conversion of each was
+built and measured anyway:
+
+| pattern | ceiling before → after | 1024 px | 2000 px | 300 px |
+|---|---|---:|---:|---:|
+| `christmas-rg-fade` | 5,114 → **3,408** | 1.00x | 0.70x | 1.00x |
+| `blink-fade` | 5,114 → **3,408** | 1.11x | 1.09x | 1.10x |
+| `spring-colors` | 5,114 → **3,408** | 1.23x | 1.24x | 1.32x |
+| `autumn-colors` | 5,114 → **2,555** | 0.84x | 0.83x | 0.86x |
+| `colourful-fireflies` | 4,440 → **2,373** | 0.63x | 0.72x | 0.72x |
+
+All five load at 4096 px today and would **not** after conversion: the
+equivalence sweep is maxdiff 0 on every rig except 64x64, where the *converted*
+file is the black one. Two are throughput regressions on top of that —
+`colourful-fireflies` because its `beforeRender` touches only `pixelCount / 10`
+sparks plus a native `feedback`, so materializing two full-length channels is
+the "an interpreted `pixelCount` loop is not a substitute for a missing bulk
+op" trap (~50 ns/px), and `autumn-colors` for the same reason on its hue
+channel. This is the `fire-blue` verdict generalized: **a conversion that adds
+a per-pixel channel is refused unless the pattern's own write sites can carry
+the arithmetic.** #373 §2's `arrayAffine` plus an element-wise square would
+unlock all five without moving any ceiling.
+
+`tools/check-library.sh` clean on all five rigs (307/307), `cargo test
+--workspace --release` green, gallery regenerated, and the seven tiles driven
+in real chromium (307 tiles, all lit except the sensorless spectromatrix,
+`fractal-flower` opened in the editor at 60 fps with its nine sliders and the
+`nodes` var watcher live, no page errors). Note `web/tools/e2e.mjs` fails at
+its tile-count assertion on this box today **with the library unmodified as
+well** — pre-existing, not this change.
+
+Docs: docs/bulk-render.md gains the batch-4 section and seven table rows.
 ## 2026-09-08 — Aurora 2D on metal: the loop shape is a LOSS, and 2D blur/glow verified on the panel
 
 Two device checks on the Seengreat 64x64 panel (firmware `f62a45e`/v0.1.40,

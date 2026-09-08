@@ -35,6 +35,10 @@ var averages = array(BANDS)
 // per-cell persistence (trails) and hue
 var vals = array(CELLS)
 var hues = array(CELLS)
+// The read-out channels the whole-frame fill takes (Gitea #405): the clamp
+// the AGC already computes for its coverage sum, kept instead of thrown away.
+var vC = array(CELLS)
+var sC = array(CELLS)
 
 // ---- AGC: PI controller on lit-fraction error ----
 var kp = 4                 // small proportional gain
@@ -88,13 +92,16 @@ export function beforeRender(delta) {
       var k = y * W + x
       vals[k] = vals[k] * trailDecay + br
       hues[k] = t1 + (band / (BANDS - 1)) * hueArc
-      fillAccum += clamp(vals[k], 0, 1)
+      var vc = clamp(vals[k], 0, 1)
+      vC[k] = vc
+      sC[k] = 1 - vc          // hottest peaks whiten
+      fillAccum += vc
     }
   }
 }
 
-export function render2D(index, x, y) {
-  var k = floor(y * 15.99) * W + floor(x * 15.99)
-  var v = clamp(vals[k], 0, 1)
-  hsv(hues[k], 1 - v, v)  // hottest peaks whiten
+// One whole-frame sample of the 16x16 canvas instead of 4096 VM entries that
+// answer 256 distinct questions (Gitea #405).
+export function renderFrame() {
+  fillCanvas(hues, sC, vC, W, H)
 }
