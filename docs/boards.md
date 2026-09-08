@@ -733,6 +733,66 @@ the check into `patlog::plan` rather than wrapping a separate verification
 pass around it halved it (+624/+800 B before the fold).
 `.stack` on pixelblaze-v3 unchanged at 25,988 B — nothing here is a static.
 
+2026-09-08, **no `{:?}` on foreign error types** (Gitea #438 — the C6 image
+release.yml ships had fallen 50 B under image-check's 3 % floor): **−2,896 B**
+on the shipped C6 variant and −0.8 to −1.8 KB everywhere else. Ten `println!`
+sites stopped formatting somebody else's error with `Debug`; the messages
+stayed. Credless flake builds (`nix build .#luxel-fw-<board>` →
+`luxel-fw-ota.bin`), both columns at `f62a45e` vs this branch. **Read the
+"after" column with the ±0.7 KB noise floor this section already warns
+about** — the flake image embeds its own build directory path
+(`/nix/var/nix/builds/nix-<pid>-<rand>/…`) in every panic `Location`, so
+even a docs-only edit can move these numbers by a few hundred bytes (the C6
+row read 1,015,152 B on one intermediate tree and 1,014,400 B on the merged
+one). Gitea #441 is the fix, and it is worth ~9–10 KB a board on its own:
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `c6-devkit` + `hosted-ui` *(shipped)* | 1,017,296 | **1,014,400** | **−2,896** | **34,176 B (3.25 %)** |
+| `pixelblaze-v3` | 1,016,320 | 1,014,528 | −1,792 | 34,048 B (3.24 %) |
+| `athom-music` | 1,016,272 | 1,014,592 | −1,680 | 33,984 B (3.24 %) |
+| `esp32-generic` | 1,015,776 | 1,014,128 | −1,648 | 34,448 B (3.28 %) |
+| `s3-devkit` | 962,864 | 961,232 | −1,632 | 87,344 B (8.32 %) |
+| `s3-devkit` + `hub75` | 969,008 | 967,856 | −1,152 | 80,720 B (7.69 %) |
+| `seengreat-hub75` | 978,416 | 977,600 | −816 | 70,976 B (6.76 %) |
+| `c3-devkit` | *did not build* | 966,160 | — | 82,416 B (7.86 %) |
+| `c6-devkit` *(not shipped)* | 1,033,792 | 1,031,152 | −2,640 | 17,424 B (1.66 %) |
+
+What actually cost the bytes, from an `nm -S` diff on the C6 ELF:
+`picoserve::Error<E>`'s `Debug` −448 B (one `serve error:` line),
+`ConnectedInfo` −324, `smoltcp::wire::ip::Address` −248, `esp_hal::spi::Error`
+−156, `AuthenticationMethod` −188, `embassy_net::udp::SendError` −76,
+`Option<T>`/`[T]`/`[T; N]`/`u8` `Debug` −322, `Upper`/`LowerHex` −212, and
+−554 B of the `<&T as Debug>` shims that glue them to `Arguments`. The
+`{:?}` that were formatting a `&'static str` (`pipeline::set_protocol`'s
+error type) are the cheapest of the lot to fix and the most expensive to
+leave: `str`'s `Debug` pulls the `DebugStruct`/`DebugTuple` builders.
+
+**#438's stated lever does not exist.** It reported ~1.26 KB of
+`esp_hal::gpio::OutputSignal` / `esp_radio::wifi::DisconnectReason` `Debug`
+switch tables as newly linked by #424. Both tables are present, byte for
+byte, in the `604bd6a` image from *before* any of that day's merges — the
+symbol diff that found them was reading rustc's `.NNNN` local-symbol suffix,
+which changes on every build, as a symbol appearing and disappearing. Neither
+is reachable from Luxel code either: `OutputSignal`'s comes from an `assert!`
+inside esp-hal's `gpio::interconnect::connect_to`, which every SPI build
+links, and removing it would mean patching esp-hal. The whole +3,968 B the C6
+gained that day is the #373 bulk ops (`Vm::builtin_cold` +2,450,
+`bulk::canvas_fill` +928, `paint_canvas` +550) — real features, correctly
+measured, that simply did not fit. **When a symbol diff says a `Debug` impl
+appeared, strip the `17h<hash>E` and `.NNNN` suffixes first.**
+
+RAM moves the other way, slightly: `.stack` is **−296 to −336 B on every
+board** (pixelblaze-v3 25,996 → 25,668 B, 1,092 B above the 24 KB floor;
+s3-devkit 33,812 → 33,516; seengreat-hub75 29,340 → 29,012). Nothing here is
+a static — that is the `.L_MergedGlobals` repacking this section already
+warns about, in the direction that costs. `tools/stack-check.sh` clean on
+`board-pixelblaze-v3` and on `board-c6-devkit` + `hosted-ui` (largest frame
+`budgeted_engine` at 1,680 B against the 12 KB budget, unchanged).
+
+`board-c6-devkit` with the on-device playground is still at 1.66 % and still
+not a release artifact — Gitea #291 / #426 are unchanged by this.
+
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal

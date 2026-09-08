@@ -1,5 +1,76 @@
 # Update log
 
+## 2026-09-08 — the release gate builds three boards, and the two things that slipped past it (#413, #438)
+
+Both of yesterday's release-gate breakages merged green because
+`tools/ci.sh` built one board. Fixed, and the gate widened so the class
+cannot recur.
+
+* **`board-c3-devkit` compiles again (#413, #422).** The displayed-tag log
+  in `shared.rs` (#395 HUB75 forensics) used `fetch_add`/`swap`, which do
+  not exist on `riscv32imc` — no A extension, no atomic read-modify-write —
+  and the C3 is the fleet's only such target. It is now
+  `#[cfg(feature = "hub75")]`: `hub75.rs` is its only writer and
+  `server::status_json` reads it under `cfg(pipelined)` (multi-core AND
+  `hub75`), so no non-panel board ever touched it and nothing changes
+  anywhere else. `portable-atomic/critical-section` was the alternative and
+  was rejected — it would change how every other crate's atomics lower on
+  the C3 for the sake of a debug counter. `board-c3-devkit` credless:
+  **966,160 B, 82,416 B (7.86 %) of slot free**. #422 closed as a duplicate.
+
+* **The shipped C6 image is back over the floor (#438).** Ten `println!`
+  sites stopped formatting a foreign error type with `{:?}`; every message
+  kept its meaning (`WifiError` gets a nine-arm `&'static str` table instead
+  of `Debug`, whose `Disconnected` variant was dragging `Ssid` → `str` →
+  the `DebugStruct`/`DebugTuple` builders in). **−2,896 B on
+  `luxel-fw-c6-devkit-hosted`: 1,017,296 → 1,014,400 B, 2.98 % → 3.25 %**,
+  and −0.8 to −1.8 KB on every other board (full table in docs/boards.md).
+  All eight shipped variants pass `tools/image-check.sh`. `.stack` moves the
+  other way by 296–336 B on every board (pixelblaze-v3 25,996 → 25,668 B,
+  1,092 B above the 24 KB floor) — `.L_MergedGlobals` repacking, not a new
+  static; `tools/stack-check.sh` clean on pixelblaze-v3 and on
+  `board-c6-devkit` + `hosted-ui`.
+
+  **#438's stated lever was a measurement artefact and is worth knowing
+  about.** It attributed ~1.26 KB to `esp_hal::gpio::OutputSignal` and
+  `esp_radio::wifi::DisconnectReason` `Debug` switch tables "appearing with
+  #424". Both are in the `604bd6a` image from before any of that day's
+  merges, unchanged — what moved was rustc's `.NNNN` local-symbol suffix,
+  which a naive `nm` diff reads as one symbol vanishing and another
+  appearing. Neither is reachable from Luxel code (`OutputSignal`'s comes
+  from an `assert!` inside esp-hal's `gpio::interconnect`, linked by every
+  SPI build). The C6's whole +3,968 B that day is the #373 bulk ops. Strip
+  `17h<hash>E` and `.NNNN` before diffing symbols.
+
+* **`tools/ci.sh` gates three release images now.** The firmware step is two
+  halves: one devshell `build-esp32.sh` (default `board-pixelblaze-v3`, so
+  the script every deploy runs stays covered) plus its ELF marker check, and
+  then `nix build .#luxel-fw-<variant>` + `tools/image-check.sh` — markers
+  AND the OTA-slot margin — for `pixelblaze-v3`, `c6-devkit-hosted` and
+  `c3-devkit`. Those are the three axes: Xtensa + `-Zbuild-std`, the tightest
+  image in the fleet, and the only `riscv32imc` target. Knobs: `CI_BOARD`,
+  `CI_VARIANTS`. Not opt-in — an opt-in job would not have caught either of
+  these. 75 s locally for the whole firmware half.
+
+  **The margin has to be measured on the flake image, not a devshell one**,
+  and finding that out is half of what this session cost. The first attempt
+  gated the `espflash save-image` output of a devshell build and CI *still*
+  failed the C6 at 2.99 % — while the image release.yml actually publishes
+  was at 3.25 %. A devshell build bakes creds and embeds the absolute path of
+  every dependency source file in its panic `Location`s, so it reads ~2.8 KB
+  larger, **and by a different amount on every machine**: the same commit is
+  1,014,400 B from the flake, 1,015,568 B in this repo's devshell and
+  1,017,168 B on the CI runner, which builds under
+  `/var/lib/gitea-runner/inst/.cache/act/…`. Against a 3 %-of-1-MiB floor
+  that is a 0.27-point swing decided by checkout path length. `nix build
+  .#luxel-fw-<variant>` is release.yml's own derivation, so the bytes
+  image-check weighs are the bytes that ship. Trimming those paths out
+  (`--remap-path-prefix`, worth ~9–10 KB on every board — three times this
+  whole fmt diet) is filed as **#441**.
+
+`board-c6-devkit` with the on-device playground is untouched by this at
+1.66 % and remains out of the release matrix (#291, #426).
+
 ## 2026-09-07 — bulk ops: a canvas fast path, noise/palette canvas fills, a 2D stencil (#373)
 
 Four of #373's five sections, implemented and measured. The gate throughout

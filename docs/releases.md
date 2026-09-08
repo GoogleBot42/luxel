@@ -36,7 +36,8 @@ nix develop --command tools/ci.sh
 ```
 
 Four steps, in a load-bearing order (`CI_SKIP="web cargo library firmware"`
-drops any of them while iterating; `CI_BOARD` picks a different board):
+drops any of them while iterating; `CI_BOARDS` replaces the firmware board
+list and `CI_BOARD` builds just one variant):
 
 1. **web** — `npm ci && npm run build && npm test` (wasm, gen-gallery,
    svelte-check, vite build, then the pure unit tests). First because
@@ -44,11 +45,51 @@ drops any of them while iterating; `CI_BOARD` picks a different board):
    web build writes.
 2. **cargo** — `cargo test --workspace`.
 3. **library** — `tools/check-library.sh`, the five-rig library sweep.
-4. **firmware** — `BOARD=board-pixelblaze-v3 firmware/build-esp32.sh` (build
-   only), which ends in `tools/image-check.sh` on the ELF for the
-   load-bearing-feature markers; ci.sh then makes an app image with
-   `espflash save-image` and runs image-check over *that* too, because the
-   1 MiB OTA-slot margin gate only applies to app images, not ELFs.
+4. **firmware** — two halves since 2026-09-08 (Gitea #413/#438).
+
+   **4a, the devshell build.** `BOARD=$CI_BOARD firmware/build-esp32.sh`
+   (default `board-pixelblaze-v3`, build only), which ends in
+   `tools/image-check.sh` on the ELF for the load-bearing-feature markers.
+   This is what keeps `build-esp32.sh` itself — the script every developer
+   and every device deploy runs — covered.
+
+   **4b, the release images.** `nix build .#luxel-fw-<variant>` plus
+   `tools/image-check.sh` on the resulting `luxel-fw-ota.bin`, for three
+   variants:
+
+   | variant | why it is in the gate |
+   |---|---|
+   | `pixelblaze-v3` | Xtensa + `-Zbuild-std`; stands in for athom-music, esp32-generic, s3-devkit, s3-hub75 and seengreat-hub75 |
+   | `c6-devkit-hosted` | the tightest image in the fleet, and the exact C6 variant `release.yml` ships — the one that trips image-check's 3 % OTA-slot floor first |
+   | `c3-devkit` | the only `riscv32imc` target: no A extension, so no atomic read-modify-write |
+
+   Gating one board was how two release-gate breakages merged green on the
+   same day (2026-09-07): `board-c3-devkit` stopped compiling outright
+   (Gitea #413/#422) and the shipped C6 image slipped under the margin floor
+   (Gitea #438). Nothing between a merge and a `v*` tag noticed, because the
+   eight-image matrix lives in this repo's *release* workflow and only runs
+   at a tag. The three above cover the toolchain axis, the margin axis and
+   the atomics axis; the other five images differ only in pin maps and
+   features these already compile.
+
+   **Why the flake image and not the `espflash save-image` one ci.sh used to
+   make.** They are not the same artifact, and the difference is bigger than
+   the thing being measured. A devshell build bakes WiFi credentials and
+   embeds the *absolute path* of every dependency source file in its panic
+   `Location`s (~13.5 KB of `…/.cargo/registry/src/index.crates.io-<hash>/…`
+   strings), so it reads about **2.8 KB larger** than the credless flake
+   image — and by a *different* amount on every machine, because those paths
+   are a different length there. Measured on the same commit: 1,014,400 B
+   from the flake, 1,015,568 B in this repo's devshell, 1,017,168 B on the
+   CI runner (which builds under `/var/lib/gitea-runner/inst/.cache/act/…`).
+   Against a 3 %-of-1-MiB floor that is a 0.27-percentage-point swing decided
+   by the checkout path. `nix build .#luxel-fw-<variant>` is the derivation
+   release.yml builds, so what image-check weighs here is what gets
+   published. Trimming those paths out of the image is Gitea #441.
+
+   Knobs: `CI_BOARD` picks the devshell board; `CI_VARIANTS` replaces the
+   image list (spelled as in release.yml's matrix), and `CI_VARIANTS=`
+   skips the image half entirely.
 
 What it is **not**: no device, no browser e2e, no soak. The hardware gates in
 docs/tools.md still have to be run by hand.
