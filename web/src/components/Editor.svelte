@@ -25,7 +25,14 @@
   /** Resolve an identifier to a display value for hover inspection. */
   export let hoverValue: ((name: string) => string | null) | undefined = undefined;
 
-  const dispatch = createEventDispatcher<{ change: string; breakpoints: number[] }>();
+  const dispatch = createEventDispatcher<{
+    change: string;
+    breakpoints: number[];
+    /** A paste landed in the document — a whole pattern arriving, not typing.
+     *  The app re-derives the preview rig on it (Gitea #372); ordinary
+     *  keystrokes deliberately don't, so the rig can't move mid-edit. */
+    paste: void;
+  }>();
   let host: HTMLDivElement;
   let view: EditorView | undefined;
   // Track the prop stream: only a *change* in the incoming `value` may
@@ -232,6 +239,9 @@
         }),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && !applyingExternal) {
+            if (u.transactions.some((tr) => tr.isUserEvent("input.paste"))) {
+              dispatch("paste");
+            }
             dispatch("change", u.state.doc.toString());
           }
           if (

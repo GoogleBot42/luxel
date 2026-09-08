@@ -1475,6 +1475,50 @@ fn default_grid_is_procedural_and_covers_a_64x64_panel() {
     assert_eq!((g.w, g.h, g.serpentine), (64, 64, false));
 }
 
+// ---- preferred_dims: the rig a compiled pattern asks for (Gitea #372) ----
+//
+// The playground picks its default preview rig from this, so it has to read
+// the compiled program: a `render2D` in a comment or a string is not 2D, and
+// a `renderFrame` pattern is 2D only when it draws in coordinate/grid space.
+#[test]
+fn preferred_dims_reads_the_compiled_entries() {
+    let cases: [(&str, u8); 8] = [
+        ("export function render(index) { rgb(1, 0, 0) }", 0),
+        ("export function render2D(index, x, y) { rgb(x, y, 0) }", 2),
+        ("export function render3D(index, x, y, z) { rgb(x, y, z) }", 3),
+        // 2D wins over 3D, matching the gallery's own `kind`
+        (
+            "export function render2D(i, x, y) { rgb(x, y, 0) }
+export function render3D(i, x, y, z) { rgb(x, y, z) }",
+            2,
+        ),
+        // an explicit `render` does not demote a pattern that also draws in 2D
+        (
+            "export function render(i) { rgb(1, 0, 0) }
+export function render2D(i, x, y) { rgb(x, y, 0) }",
+            2,
+        ),
+        // renderFrame in index space is a strip pattern
+        ("export function renderFrame() {
+  hsv(0.3, 1, 1)
+  fillHSV(0.3, 1, 1)
+}", 0),
+        // ...and in coordinate space it wants the grid
+        ("export function renderFrame() {
+  clear()
+  hsv(0.3, 1, 1)
+  fillCircle(0.5, 0.5, 0.3)
+}", 2),
+        // the source TEXT is never consulted: this is a 1D pattern
+        ("// render2D lives here only in a comment
+export function render(index) { rgb(1, 0, 0) }", 0),
+    ];
+    for (src, want) in cases {
+        let e = Engine::new(src, 64, 1).unwrap();
+        assert_eq!(e.preferred_dims(), want, "{src}");
+    }
+}
+
 // ---- renderFrame: the whole-frame entry (crate::bulk) ----
 //
 // One zero-argument call per frame instead of one call per pixel, with the

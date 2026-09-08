@@ -53,6 +53,39 @@ async function setEditor(page, text) {
   await sleep(300);
 }
 
+/** Replace the editor's contents with a real PASTE, which the rig derivation
+ *  treats differently from typing (Gitea #372). Chromium refuses
+ *  `navigator.clipboard.writeText` even with the permission overridden, and
+ *  headless has no system clipboard to prime, so the paste is delivered as a
+ *  ClipboardEvent carrying a DataTransfer — CodeMirror's own paste handler
+ *  runs, and the transaction is a genuine `input.paste` user event, which is
+ *  what the app keys off. */
+async function pasteEditor(page, text) {
+  await page.click('.editor-slot:not([hidden]) .cm-content');
+  await page.keyboard.down("Control");
+  await page.keyboard.press("a");
+  await page.keyboard.up("Control");
+  await page.keyboard.press("Backspace");
+  await page.$eval(
+    '.editor-slot:not([hidden]) .cm-content',
+    (el, t) => {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", t);
+      el.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }),
+      );
+    },
+    text,
+  );
+  await sleep(500);
+}
+
+const rig = async (page) => ({
+  kind: await page.$eval('[data-role="layout-kind"]', (el) => el.value),
+  w: await page.$eval('[data-role="layout-w"]', (el) => el.value).catch(() => ""),
+  h: await page.$eval('[data-role="layout-h"]', (el) => el.value).catch(() => ""),
+});
+
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
@@ -699,6 +732,60 @@ try {
     "playground never shows a device capacity warning",
     (await page.$('[data-role="capacity-warning"]')) === null,
   );
+
+  // ---- the rig follows the source, not just the gallery manifest (#372) ----
+  // A render2D pattern reaching the editor by any route gets the grid rig a
+  // gallery pick has always given it; a 1D pattern is left alone; an explicit
+  // pick outranks both.
+  await page.click('[data-role="editor-back"]');
+  await page.click('[data-role="new-pattern"]');
+  await page.waitForSelector('[data-role="editor-back"]');
+  await sleep(400);
+  check("rig: a new (render) pattern starts on a strip", (await rig(page)).kind === "strip");
+
+  await pasteEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
+  check(
+    "rig: pasting a render() pattern leaves the strip alone",
+    (await rig(page)).kind === "strip",
+  );
+
+  // A renderFrame pattern that draws in coordinate space is 2D too, even
+  // though it never mentions render2D (the engine's own uses_coordinate_bulk_op).
+  await pasteEditor(
+    page,
+    "export function renderFrame() {\n  clear()\n  hsv(0.3, 1, 1)\n  fillCircle(0.5, 0.5, 0.3)\n}",
+  );
+  check(
+    "rig: a renderFrame pattern drawing in coordinate space gets the grid",
+    (await rig(page)).kind === "grid",
+  );
+
+  // An explicit rig choice for the pattern in the editor outranks the source.
+  await page.select('[data-role="layout-kind"]', "strip");
+  await sleep(400);
+  await pasteEditor(page, "export function render2D(index, x, y) { hsv(y, 1, x) }");
+  check(
+    "rig: a hand-picked rig is not overridden by a later paste",
+    (await rig(page)).kind === "strip",
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-rig-manual-strip.png` });
+
+  // ...but opening a different pattern is a fresh choice, so the derivation
+  // is back in charge.
+  await page.click('[data-role="editor-back"]');
+  await page.click('[data-role="new-pattern"]');
+  await page.waitForSelector('[data-role="editor-back"]');
+  await sleep(400);
+  await pasteEditor(page, "export function render2D(index, x, y) { hsv(x, 1, y) }");
+  {
+    const r = await rig(page);
+    check(
+      "rig: pasting a render2D pattern selects the 16x16 grid",
+      r.kind === "grid" && r.w === "16" && r.h === "16",
+      JSON.stringify(r),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-rig-render2d-grid.png` });
+  }
 
   check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 } finally {

@@ -198,6 +198,46 @@ each band appears, clears, and doesn't block the push; then a third claiming
 the same 30 KB free *plus* a 30 KB resident engine, where the pattern the
 second mirror correctly rejects now fits (the Gitea #287 regression).
 
+## The preview rig follows the source ✅ (Gitea #372)
+
+The playback bar's layout selector (strip / grid / 2D map) used to be set from
+the source only on a **gallery pick**, out of the library manifest's `kind`.
+Every other route into the editor — typing or pasting, a share link, an `.epe`
+import, opening a device pattern, connecting to a device — kept whatever rig
+was up, so a `render2D` pattern routinely previewed as a strip.
+
+The rig is now derived from the **compiled** pattern (`Engine::preferred_dims`,
+exposed to the browser as `lx_preferred_dims`), which is the same signal the
+engine uses to decide whether to install its own default grid map:
+
+| compiled pattern | rig |
+|---|---|
+| `render` only, or `renderFrame` in index space (`fillHSV`, `fade`, `setPixel`) | unchanged (a strip stays a strip) |
+| `render2D`, or `renderFrame` + a coordinate/grid-space bulk op (`fillRect`, `fillCircle`, `splat`, `drawLine`, `fillCanvas`, `blit`, `gridWidth`, `gridHeight`) | grid |
+| `render3D` and nothing 2D | the rotating cube-lattice map (playground only — on a device the pixel count is hardware truth) |
+
+Reading the compiled program rather than the source text means a `render2D`
+inside a comment or a string never counts.
+
+Rules that keep it from being annoying:
+
+- **It only ever upgrades a strip.** A grid, a 2D map, or a rig picked by hand
+  is left exactly as it is.
+- **A rig the user picked by hand for the pattern in the editor wins**, until a
+  *different* pattern is loaded (a new pattern is a new choice).
+- **Re-derived on load, never per keystroke** — a gallery/library/device pick,
+  an `.epe` import, a share link, a device connect, and a **paste** (CodeMirror
+  reports it as an `input.paste` user event; the app takes it as "a pattern
+  arrived"). Typing never moves the rig out from under an edit in progress.
+- **Grid geometry:** the connected device's own installed map when it is a
+  procedural grid (`GET /api/map` reports `kind`/`w`/`h`), else a square built
+  from the hardware pixel count on a device, else 16×16 in the playground.
+
+`luxel serve`'s `GET /api/map` now reports `kind`/`w`/`h` for a procedural grid
+the way the firmware's `devicemap::to_json` does, so this is testable without a
+panel: device-e2e stands up a 4096-pixel mirror with a `grid 64 64` map running
+a `render2D` pattern and asserts the console opens on a 64×64 grid.
+
 ## Status-bar frame rate ✅ (Gitea #381)
 
 The counter at the right of the header (`data-role="fps"`) shows **the device's

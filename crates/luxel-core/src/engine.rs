@@ -696,6 +696,32 @@ impl Engine {
         }
     }
 
+    /// The geometry the COMPILED pattern asks for, independent of whatever
+    /// map a host later installs: `0` = a strip (only `render`, or a
+    /// `renderFrame` that draws in index space), `2` = a 2D grid (`render2D`,
+    /// or `renderFrame` plus a coordinate/grid-space bulk op), `3` = a 3D
+    /// point cloud (`render3D` and nothing 2D).
+    ///
+    /// These are the same signals `from_program_budgeted` uses to decide
+    /// whether to install the default square grid map — exposed so a host can
+    /// pick a default preview rig from the source instead of from a manifest
+    /// (Gitea #372). 2D wins over 3D, matching the playground gallery's own
+    /// `kind`. Note this ignores `render`: a pattern exporting both `render`
+    /// and `render2D` counts as 2D here, because a user who wrote `render2D`
+    /// meant to see it — the engine's own default-map rule is stricter,
+    /// because installing a map there would change what the pattern renders.
+    pub fn preferred_dims(&self) -> u8 {
+        if self.render_tgt[1].is_some()
+            || (self.render_tgt[3].is_some() && self.uses_coordinate_bulk_op())
+        {
+            2
+        } else if self.render_tgt[2].is_some() {
+            3
+        } else {
+            0
+        }
+    }
+
     /// True if the pattern binds any sensor-board variable — callers use it
     /// to decide whether capturing/forwarding sensor data is worth anything.
     pub fn wants_sensors(&self) -> bool {

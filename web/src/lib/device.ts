@@ -259,11 +259,26 @@ export class DeviceSession {
   }
 
   /** Installed pixel map status. */
-  async map(): Promise<{ installed: boolean; dims: number; count: number }> {
+  /** The installed pixel map. A map stored in the procedural `grid W H` form
+   *  also reports `kind: "grid"` with its `w`/`h` — the device's real matrix
+   *  geometry, which the playground adopts as the preview rig for a 2D
+   *  pattern (Gitea #372). `kind` is absent on firmware older than the field
+   *  and on an uninstalled map. */
+  async map(): Promise<{
+    installed: boolean;
+    dims: number;
+    count: number;
+    kind?: "grid" | "coords";
+    w?: number;
+    h?: number;
+  }> {
     return (await (await this.fetch("/api/map")).json()) as {
       installed: boolean;
       dims: number;
       count: number;
+      kind?: "grid" | "coords";
+      w?: number;
+      h?: number;
     };
   }
 

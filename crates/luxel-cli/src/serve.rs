@@ -200,6 +200,12 @@ struct State {
     wifi_ssid: Mutex<Option<String>>,
     /// Installed pixel map (dims, per-pixel [x,y,z] in Fx) + a re-apply flag.
     device_map: Mutex<Option<(u8, Vec<[Fx; 3]>)>>,
+    /// The `grid W H` shape behind `device_map`, when the map arrived in the
+    /// procedural form. The mirror expands a grid to coordinates (it has heap
+    /// to spare, the firmware does not), so without this the shape would be
+    /// lost and `GET /api/map` could not report the `kind`/`w`/`h` the
+    /// firmware reports for a procedural grid.
+    device_grid: Mutex<Option<(u32, u32)>>,
     map_dirty: AtomicBool,
     /// Network input (DDP/E1.31): assembled RGB frame + when it last moved.
     /// While packets flow the render loop shows this instead of the engine;
@@ -792,7 +798,7 @@ fn controls_json(state: &State) -> String {
 /// or `grid <w> <h>` (a procedural row-major grid — the firmware stores it as
 /// 5 bytes and computes coordinates on the fly, Gitea #258; the mirror has
 /// heap to spare, so it just expands it). None = clear.
-fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>)> {
+fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>, Option<(u32, u32)>)> {
     let mut it = body.split_whitespace();
     let first = it.next()?;
     if first == "grid" {
@@ -804,7 +810,7 @@ fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>)> {
         let coords: Vec<[Fx; 3]> = (0..w * h)
             .map(|i| [Fx::from_int((i % w) as i32), Fx::from_int((i / w) as i32), Fx::ZERO])
             .collect();
-        return Some((2, coords));
+        return Some((2, coords, Some((w, h))));
     }
     let dims: u8 = first.parse().ok()?;
     if !(2..=3).contains(&dims) {
@@ -824,7 +830,7 @@ fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>)> {
             c
         })
         .collect();
-    Some((dims, coords))
+    Some((dims, coords, None))
 }
 
 /// Apply the installed map to an engine (no-op if none).
@@ -1823,12 +1829,22 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         ("GET", "/api/map") => {
+            // Same shape as firmware devicemap::to_json: a procedural grid
+            // also reports its `kind`/`w`/`h`, which is how a client learns
+            // the device's installed geometry (Gitea #372).
             let body = match &*state.device_map.lock().unwrap() {
-                Some((dims, coords)) => format!(
-                    "{{\"installed\":true,\"dims\":{},\"count\":{}}}",
-                    dims,
-                    coords.len()
-                ),
+                Some((dims, coords)) => {
+                    let shape = match *state.device_grid.lock().unwrap() {
+                        Some((w, h)) => format!(",\"kind\":\"grid\",\"w\":{w},\"h\":{h}"),
+                        None => String::from(",\"kind\":\"coords\""),
+                    };
+                    format!(
+                        "{{\"installed\":true,\"dims\":{},\"count\":{}{}}}",
+                        dims,
+                        coords.len(),
+                        shape
+                    )
+                }
                 None => String::from("{\"installed\":false,\"dims\":0,\"count\":0}"),
             };
             respond(&mut stream, 200, "application/json", body.as_bytes());
@@ -1836,13 +1852,15 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         ("POST", "/api/map") => {
             let body = String::from_utf8_lossy(&req.body);
             let (installed, count) = match parse_map(&body) {
-                Some((dims, coords)) => {
+                Some((dims, coords, grid)) => {
                     let n = coords.len();
                     *state.device_map.lock().unwrap() = Some((dims, coords));
+                    *state.device_grid.lock().unwrap() = grid;
                     (true, n)
                 }
                 None => {
                     *state.device_map.lock().unwrap() = None;
+                    *state.device_grid.lock().unwrap() = None;
                     (false, 0)
                 }
             };
@@ -2039,6 +2057,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         pl_index: AtomicUsize::new(0),
         wifi_ssid: Mutex::new(None),
         device_map: Mutex::new(None),
+        device_grid: Mutex::new(None),
         map_dirty: AtomicBool::new(false),
         live_pixels: Mutex::new(Vec::new()),
         live_mark: Mutex::new(None),

@@ -21,13 +21,15 @@ const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 execSync("cargo build -q -p luxel-cli", { stdio: "inherit", cwd: ".." });
-// `--fps 24` paces the mirror's render loop at a KNOWN rate well away from
-// the browser's ~60 Hz preview loop, so the status-bar counter can be proven
-// to follow the DEVICE and not requestAnimationFrame (Gitea #381).
-const DEV_FPS = 24;
+// The main mirror keeps its DEFAULT ~8 ms pace on purpose. Slowing it down
+// (`--fps 24`) makes the playlist transport flake: `POST /api/playlist/play`
+// is applied by the render loop, so the UI's follow-up `GET /api/playlist`
+// can beat it and latch `playing: false` — and the playlist poll only runs
+// while the UI believes it IS playing, so nothing ever corrects it (Gitea
+// #431). The frame-rate checks below use their own mirrors instead.
 const device = spawn(
   "../target/debug/luxel",
-  ["serve", "--port", String(DEV_PORT), "--pixels", "120", "--fps", String(DEV_FPS)],
+  ["serve", "--port", String(DEV_PORT), "--pixels", "120"],
   { stdio: ["ignore", "pipe", "inherit"] },
 );
 await new Promise((resolve, reject) => {
@@ -158,30 +160,117 @@ try {
   const px = await page.$eval('[data-role="cfg-pixels"]', (el) => el.value);
   check("connect: pixel count from device", px === "120", `got ${px}`);
 
-  // ---- status bar shows the DEVICE frame rate, not the preview loop (#381) ----
-  // The mirror is paced at 24 fps and the browser's preview loop runs at ~60,
-  // so a readout that tracks requestAnimationFrame cannot pass this.
+  // ---- the rig follows the source and the device's map (Gitea #372) ----
+  // A device running a render2D pattern with a 64x64 grid map installed opens
+  // on a 64x64 grid preview — the rig is derived from the compiled pattern,
+  // and its geometry from the hardware, not from a 16x16 default.
   {
-    const shown = await page
-      .waitForFunction(
-        () => {
-          const t = document.querySelector('[data-role="fps"]')?.textContent ?? "";
-          const m = /^device (\d+) fps$/.exec(t.trim());
-          return m && Number(m[1]) > 0 ? t.trim() : false;
-        },
-        { timeout: 8000 },
-      )
-      .then((h) => h.jsonValue())
-      .catch(() => "");
-    check("fps: status bar labels the number as the device's", /^device \d+ fps$/.test(shown), shown);
-    const devFps = (await fetch(`${DEV}/api/status`).then((r) => r.json())).fps;
-    const n = Number(/(\d+)/.exec(shown)?.[1] ?? -1);
-    check(
-      "fps: readout tracks the mirror's rate, not the 60 Hz preview loop",
-      Math.abs(n - devFps) <= 3 && devFps <= 32,
-      `readout ${n}, /api/status ${devFps}`,
+    const MAP_PORT = DEV_PORT + 11;
+    const MAPPED = `http://127.0.0.1:${MAP_PORT}`;
+    const mappedDev = spawn(
+      "../target/debug/luxel",
+      ["serve", "--port", String(MAP_PORT), "--pixels", "4096"],
+      { stdio: ["ignore", "pipe", "inherit"] },
     );
-    await page.screenshot({ path: `${shotDir}/device-e2e-fps-device.png` });
+    await new Promise((resolve, reject) => {
+      mappedDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      mappedDev.on("exit", () => reject(new Error("mapped mirror died")));
+      setTimeout(() => reject(new Error("mapped mirror start timeout")), 30000);
+    });
+    process.on("exit", () => mappedDev.kill());
+    const mappedPage = await browser.newPage();
+    try {
+      await fetch(`${MAPPED}/api/map`, { method: "POST", body: "grid 64 64" });
+      const m = await fetch(`${MAPPED}/api/map`).then((r) => r.json());
+      check(
+        "rig: mirror reports the procedural grid's shape",
+        m.kind === "grid" && m.w === 64 && m.h === 64,
+        JSON.stringify(m),
+      );
+      await fetch(`${MAPPED}/api/code`, {
+        method: "POST",
+        body: await lxpBody("", "export function render2D(index, x, y) { hsv(x, 1, y) }"),
+      });
+      await mappedPage.setViewport({ width: 1400, height: 900 });
+      await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}`, {
+        waitUntil: "networkidle0",
+      });
+      const r = await mappedPage
+        .waitForFunction(
+          () => {
+            const k = document.querySelector('[data-role="layout-kind"]')?.value;
+            const w = document.querySelector('[data-role="layout-w"]')?.value;
+            const h = document.querySelector('[data-role="layout-h"]')?.value;
+            return k === "grid" ? `${k} ${w}x${h}` : false;
+          },
+          { timeout: 10000 },
+        )
+        .then((h) => h.jsonValue())
+        .catch(() => "");
+      check(
+        "rig: a device running render2D with a 64x64 map opens on a 64x64 grid",
+        r === "grid 64x64",
+        r,
+      );
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-rig-grid-64.png` });
+    } finally {
+      await mappedPage.close();
+      mappedDev.kill();
+    }
+  }
+
+  // ---- status bar shows the DEVICE frame rate, not the preview loop (#381) ----
+  // A mirror paced at 24 fps against the browser's ~60 Hz preview loop: a
+  // readout that tracks requestAnimationFrame cannot pass this. Its own
+  // mirror and page, so the main suite's device keeps its default pace.
+  {
+    const SLOW_PORT = DEV_PORT + 12;
+    const SLOW = `http://127.0.0.1:${SLOW_PORT}`;
+    const slowDev = spawn(
+      "../target/debug/luxel",
+      ["serve", "--port", String(SLOW_PORT), "--pixels", "120", "--fps", "24"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      slowDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      slowDev.on("exit", () => reject(new Error("paced mirror died")));
+      setTimeout(() => reject(new Error("paced mirror start timeout")), 30000);
+    });
+    process.on("exit", () => slowDev.kill());
+    const slowPage = await browser.newPage();
+    try {
+      await slowPage.setViewport({ width: 1400, height: 900 });
+      await slowPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(SLOW)}`, {
+        waitUntil: "networkidle0",
+      });
+      const shown = await slowPage
+        .waitForFunction(
+          () => {
+            const t = (document.querySelector('[data-role="fps"]')?.textContent ?? "").trim();
+            const m = /^device (\d+) fps$/.exec(t);
+            return m && Number(m[1]) > 0 ? t : false;
+          },
+          { timeout: 8000 },
+        )
+        .then((h) => h.jsonValue())
+        .catch(() => "");
+      check(
+        "fps: status bar labels the number as the device's",
+        /^device \d+ fps$/.test(shown),
+        shown,
+      );
+      const devFps = (await fetch(`${SLOW}/api/status`).then((r) => r.json())).fps;
+      const n = Number(/(\d+)/.exec(shown)?.[1] ?? -1);
+      check(
+        "fps: readout tracks the mirror's rate, not the 60 Hz preview loop",
+        Math.abs(n - devFps) <= 3 && devFps <= 32,
+        `readout ${n}, /api/status ${devFps}`,
+      );
+      await slowPage.screenshot({ path: `${shotDir}/device-e2e-fps-device.png` });
+    } finally {
+      await slowPage.close();
+      slowDev.kill();
+    }
   }
 
   // A pipelined HUB75 board reports what the PANEL displayed in `out_fps`,

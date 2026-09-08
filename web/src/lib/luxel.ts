@@ -107,6 +107,7 @@ interface Exports {
   lx_set_wall_clock(h: number, unixSeconds: number): void;
   lx_set_default_wall_clock(unixSeconds: number): void;
   lx_wants_sensors(h: number): number;
+  lx_preferred_dims(h: number): number;
   lx_set_sensors(h: number, ptr: number, len: number): void;
   lx_push_event(h: number, t: number, x: number, y: number, v: number): void;
   lx_set_pin(h: number, pin: number, level: number): number;
@@ -333,6 +334,17 @@ export class Engine {
    *  energyAverage, …) — capture audio only when it's actually consumed. */
   wantsSensors(): boolean {
     return this.e.lx_wants_sensors(this.h) === 1;
+  }
+
+  /** The geometry the COMPILED pattern asks for — 0 = strip, 2 = a 2D grid
+   *  (`render2D`, or `renderFrame` plus a coordinate/grid-space bulk op),
+   *  3 = a 3D point cloud (`render3D` only). Read off the compiled program,
+   *  not the source text, so a `render2D` in a comment or a string never
+   *  counts. The playground picks its default preview rig from this
+   *  (Gitea #372). */
+  preferredDims(): 0 | 2 | 3 {
+    const d = this.e.lx_preferred_dims(this.h);
+    return d === 2 ? 2 : d === 3 ? 3 : 0;
   }
 
   /** Inject one sensor frame (PB sensor-board surface). All values 0..1
