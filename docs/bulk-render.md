@@ -433,6 +433,7 @@ of five interleaved runs; `--profile` for the instruction counts.
 |---|---|---:|---:|---|
 | `snake-2d.js` → `snake-2d-v2.js` (new file, both kept) | 16x16 board repainted on a board change, one `fillCanvas` | — | — | max per-channel diff **0** vs `snake-2d.js`, 240 frames at 256 and 4096 px, coordinate map and procedural grid |
 | `raindrops-2d.js` (converted in place) | 16x16 water sim, per-cell shading, one `fillCanvas` | 6.90 → **46.98** Mpx/s (**6.8x**) | 60.6 → **6.4** | see below |
+| `aurora-2d.js` (converted in place) | per-column band, per-pixel shimmer, `paint` + `setPixel` (`fillRect` above Cell Size 1) | 6.38 → **7.29** Mpx/s (**1.14x**); Cell Size 2/3/4 **1.75x / 3.48x / 5.94x** | 35.0 → 36.7 | **byte-identical** on eight rigs |
 
 ### `raindrops-2d.js` (2026-09-07)
 
@@ -504,6 +505,73 @@ Two thirds of the frame is now interpreted bytecode that no existing bulk op
 covers — the 4-neighbour mirrored Laplacian and the element-wise shading map.
 Gitea #373 sketches the builtins that would, with these numbers; #374 is the
 on-panel look check.
+
+### `aurora-2d.js` (2026-09-07)
+
+The dense-procedural counter-example, converted anyway because one of its two
+noise fields is not actually per pixel. `simplex2(x * 1.8, z, 5)` depends only
+on the column, and the old `render2D` evaluated it 4096 times a frame on the
+64x64 panel for 64 distinct answers; `renderFrame` walks the grid itself, so
+the band is a 64-entry table rebuilt in `beforeRender` and the shimmer stays
+one `simplex3` per pixel. Builtin calls per frame: **simplex2 4096 -> 64**,
+everything else unchanged.
+
+**No canvas, and no `fillCanvas`.** Two facts pushed this one off the
+`fillCanvas` shape the other two conversions use:
+
+* **There is no palette-space bulk fill.** `fillCanvas` samples H/S/V, and the
+  pattern's colour is `paint(v, v * v)` -- a palette index and a brightness.
+  Resolving that per cell means a bytecode palette lookup plus `rgb2hsv`, and
+  the RGB -> HSV -> RGB round trip is not exact in 16.16 (`s = d / max` and
+  `h6 / 6` each truncate), so it moves the odd 8-bit channel by one. Keeping
+  `paint()` as the brush and putting it down with `setPixel(index)` keeps the
+  real palette and is byte-exact.
+* **A full-resolution HSV canvas does not fit.** Three parallel `array(4096)`
+  channels are 12,288 elements against the 10,236-element budget
+  (`DEFAULT_ARRAY_BUDGET`), and ~96 KB of Value on the S3 that #275/#258 has
+  already OOMed once. The converted pattern allocates five 128-entry column
+  tables -- 640 elements -- and no canvas at all.
+
+| rig | before ns/px | after ns/px | ratio |
+|---|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 156.85 | 137.23 | **1.14x** |
+| 256 px, `--map-grid 16x16` | 165.91 | 151.83 | 1.09x |
+| 300 px strip (18x17 default grid) | 165.33 | 150.27 | 1.10x |
+| 4096 px, Cell Size 2 / 3 / 4 | 158.7 / 157.1 / 156.5 | 90.8 / 45.2 / 26.3 | **1.75x / 3.48x / 5.94x** |
+
+Interpreted instructions go *up* slightly at Cell Size 1 (35.0 -> 36.7
+insns/px at 4096 px, 35.0 -> 38.9 at 256 px) while wall time goes down: what
+the rewrite removes is 63/64 of an expensive native builtin plus the per-pixel
+entry, and what it adds is cheap loop and array bookkeeping. That is the
+honest shape of a dense-procedural conversion -- 1.1x, not the 3-30x a readout
+or an entity loop gets, and it comes entirely from the one term that was not
+per pixel.
+
+**Visual equivalence**, 60 frames at a fixed 30 fps delta and seed
+(`luxel run --out`), compared byte for byte against the pre-conversion file:
+
+| rig | maxdiff | bytes differing |
+|---|---:|---:|
+| 256 px, 16x16 map | **0** | **0** / 46,080 |
+| 1024 px, 32x32 map | **0** | **0** / 184,320 |
+| 4096 px, 64x64 map | **0** | **0** / 737,280 |
+| 100 px, 10x10 map | **0** | **0** |
+| 289 px, 17x17 map | **0** | **0** |
+| 60 / 300 / 512 px strips (default grids) | **0** | **0** |
+
+Byte-identical everywhere, which took reproducing the engine's own grid
+normalization rather than the obvious `c / (w - 1)`: `MapData::coord` returns
+raw `(c * 65535 + (n - 1) / 2) / (n - 1)`, and the naive form disagrees on 11
+of 64 columns at 64 wide and 8 of 17 at 17 wide. `normAxis()` in the pattern
+does the exact integer arithmetic (`i * EPS` is `i` *raw* units, so the
+numerator is `i * 65535 + floor(d/2)` before an integer-divisor divide, which
+the `Fx` `Div` integer-divisor fast path evaluates exactly). Driving the one
+control at its declared `default=` is byte-identical to leaving it undriven.
+
+**Where the frame goes now** (4096 px): 4096 `simplex3` calls, 4096 `paint`
+calls, 4096 `setPixel` calls and ~36.7 interpreted instructions per pixel.
+Gitea #373 carries the two ops that would change that -- a canvas noise fill
+and a palette-space canvas fill -- with the estimate this profile supports.
 
 ## How to judge this on device
 
