@@ -77,6 +77,25 @@ is sticky.
 | coordinate | `fillRect` `fillCircle` `splat` `drawLine` `fillCanvas` `fillGradient`(axis 1–3) | any map, including sparse/irregular; a predicate over each pixel's mapped (x, y) exactly as `render2D` sees it |
 | grid | `blit`, `gridWidth`/`gridHeight` | a W×H grid that COVERS the frame (`grid.len() >= pixelCount`); cells past the end of the frame — the tail of the last row on an over-provisioned `ceil(√n)` map — clip. A silent no-op with no grid or one too small, and `gridWidth()` returns 0 in exactly those cases so a pattern can branch |
 
+**What a canvas cannot reach.** `fillCanvas` decouples the simulation
+resolution from the fixture's, but the canvas recipe cannot cover a big panel
+*at its native resolution*: three parallel `array(4096)` H/S/V channels are
+12,288 elements against the 10,236-element `DEFAULT_ARRAY_BUDGET` (and ~96 KB
+of `Value` on the S3, which #275/#258 has already OOMed). Both canvas
+conversions below simulate on a 16x16 canvas and let the sampler scale it.
+`fillCanvas` is also **HSV only** (`texel_at(.., hsv: true)` in `bulk.rs`):
+a palette pattern whose colour is `paint()` has no bulk fill path at all —
+resolving it through HSV loses the palette and is not byte-exact — so it
+draws with `paint()` + `setPixel()`. `paintCanvas` is proposed on #373.
+
+**Exact cell coordinates.** A pattern that walks the grid itself has to
+reproduce `MapData::coord` — `round(c * 65535 / (w - 1))` in 16.16 — and NOT
+the obvious `c / (w - 1)`. The two agree only where `65535 / (w - 1)` divides
+evenly (w = 16 does, and there only the far edge differs: a map normalizes it
+to 65535/65536, never 1); they disagree on 11 of 64 columns at 64 wide and on
+8 of 17 at 17 wide, which is a visible reconstruction error, not a rounding
+LSB. `normAxis()` in `library/aurora-2d.js` is the reference form.
+
 **Fast path.** With a grid map installed and no transform active, the
 coordinate ops walk only the cells in the shape's bounding box instead of
 every pixel. It is bit-identical to the generic scan *by construction* — the

@@ -6,7 +6,8 @@ Every script and harness is indexed in **docs/tools.md** — check there before 
 a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantial work.
 
 ## Toolchain
-- Everything runs inside `nix develop` — cargo, node, and chromium are only on PATH there.
+- Everything runs inside `nix develop` — cargo, node, python3, tea and chromium are
+  only on PATH there.
 - New toolchains/deps must be Nix flake derivations, never imperative run-once setup scripts.
 - Third-party crate fixes are carried as PATCH FILES (`firmware/patches/` + a flake
   derivation materializing the patched source), never vendored source trees
@@ -70,7 +71,8 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - Commit and push completed, verified work when it's the right time — don't leave
   finished work sitting dirty in the tree waiting for Jeremy to ask. Open the PR
   AND merge it yourself; don't wait for Jeremy to merge (his standing
-  instructions, 2026-08-15).
+  instructions, 2026-08-15). `tea pr merge` prints NOTHING on success —
+  confirm with `git fetch origin master`, not by rerunning it.
 - OTA / live-coding / soak testing on the dev device and the Athom rig is pre-authorized
   (see .claude/skills/deploy-device and athom-rig).
 - Ask first for: irreversible hardware actions, outward-facing actions, and design
