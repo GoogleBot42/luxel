@@ -67,13 +67,15 @@ export function beforeRender(delta) {
       lifetime[i] = rollLifetime(i)
     }
     var p = pos[i]
-    briB[p] = life[i]
+    // Store the SQUARED brightness (the gentle ease-out the read-out used to
+    // apply per pixel): the square then costs one multiply per spark instead
+    // of one per LED, and the buffer stays the fill's own V channel.
+    briB[p] = life[i] * life[i]
     satB[p] = i < nFairies ? 1 : 0   // fairy = colored, spark = white
   }
 }
 
-export function render(index) {
-  var b = briB[index]
-  // squared brightness: gentle ease-out, twinkles linger dim before dying
-  hsv(hue, satB[index], b * b)
+// One whole-frame read-out; hue is a scalar the fill broadcasts (Gitea #405).
+export function renderFrame() {
+  fillHSV(hue, satB, briB)
 }

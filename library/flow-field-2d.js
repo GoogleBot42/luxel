@@ -9,6 +9,11 @@ px = array(n)
 py = array(n)
 canvas = array(gw * gw)
 hues = array(gw * gw)
+// Per-cell read-out channels for the whole-frame fill (Gitea #405). 256
+// cells each, so they cost nothing against the array budget.
+hC = array(gw * gw)
+sC = array(gw * gw)
+vC = array(gw * gw)
 z = 0
 
 for (i = 0; i < n; i++) {
@@ -35,10 +40,17 @@ export function beforeRender(delta) {
     }
   }
   t1 = time(0.2)
+
+  // Resolve the cell colours once per CELL instead of once per LED: on a
+  // 64x64 panel that is 256 answers instead of 4096 VM entries.
+  for (var k = 0; k < gw * gw; k++) {
+    var vv = canvas[k] * canvas[k]
+    hC[k] = hues[k] + t1
+    sC[k] = 1 - vv * 0.4
+    vC[k] = vv
+  }
 }
 
-export function render2D(index, x, y) {
-  idx = floor(y * 15.99) * gw + floor(x * 15.99)
-  v = canvas[idx]
-  hsv(hues[idx] + t1, 1 - v * v * 0.4, v * v)
+export function renderFrame() {
+  fillCanvas(hC, sC, vC, gw, gw)
 }

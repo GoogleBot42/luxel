@@ -619,6 +619,13 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `pew-pew-pew.js` (converted in place) | 3 trail buffers + 2 constant ambient arrays, mirror moved to the paint, one `fillRGB` | budget-refused at 4096 px before and after; 2000 px 127.4 → **24.7** µs/frame (**5.2x**) | — | **byte-identical** on 8 rigs x all 4 toggle combinations |
 | `swirlpool-2d.js` (converted in place) | 16x16 brightness/hue canvases, one `fillCanvas` | 183.1 → **41.8** µs/frame (**4.38x**) | 16.1 → **1.0** | **byte-identical** on the three coordinate maps and a 60 px strip; on the 300/512 px mapless strips the only delta is the `-0.01` floor fudge (below) |
 | `2d-fireworks-fade.js` | **not converted** — bilinear canvas, additive RGB | — | — | a nearest-sampling rewrite is 3.27x at 4096 px and **not** equivalent: 1.3–7 % of bytes differ, maxdiff 255 |
+| `chill-confetti.js` (converted in place) | 2 per-pixel channel buffers, one `fillHSV` | 18.82 → **3.84** ns/px (**4.90x**) | 5.0 → **0.0** | **byte-identical** on six rigs, 400 frames, undriven and with all four sliders driven |
+| `twinkle-2.js` (converted in place) | 2 per-pixel channel buffers, one `fillHSV`; `index % slots` was the identity and `max(v, 0)` was redundant | 55.75 → **29.51** ns/px (**1.89x**) | 21.0 → **12.0** | **byte-identical** on six rigs, 400 frames, undriven and with all five sliders driven |
+| `marching-rainbow-buffered.js` (converted in place) | the buffered-idiom demo itself, one `fillHSV` | 102.29 → **89.88** ns/px (1.14x) | 36.0 → **31.0** | **byte-identical** on six rigs |
+| `fairies.js` (converted in place) | 2 per-pixel buffers, the read-out's square folded into the per-spark deposit, one `fillHSV` with a scalar hue | budget-refused at 4096 px **before and after** (ceiling 2,771 px); 2025 px (45x45) 56.22 → **41.00** ns/px (**1.37x**) | 25.5 → **18.7** (2025 px) | **byte-identical** on six rigs, 400 frames, `Speed` driven |
+| `flow-field-2d.js` (converted in place) | 16x16 streamline canvas, per-cell H/S/V resolved once, one `fillCanvas` | 64.72 → **6.24** ns/px (**10.38x**) | 28.3 → **2.0** | byte-identical on 16x16 / 32x32 / 64x64 / 60 px, 400 frames; the `-0.01` floor fudge elsewhere |
+| `fractal-flower.js` (converted in place) | 16x16 recursive-tree canvas, auto-exposure and contrast per cell, one `fillCanvas` (scalar saturation outside white mode) | 100.26 → **37.12** ns/px (**2.70x**) | 38.3 → **15.6** | the same, plus both toggle settings and a nine-control extreme |
+| `sound-spectromatrix-agc.js` (converted in place) | 16x16 spectrum canvas; the clamp the AGC already computed becomes the fill's V channel | 60.57 → **15.25** ns/px (**3.97x**) | 23.9 → **6.6** | the same, driven with a synthetic spectrum (the undriven pattern is black on both sides) |
 
 ### The `fillRGB` readout batch (2026-09-07)
 
@@ -1533,6 +1540,116 @@ converted pattern on all six rigs**, so the whole difference is the `-0.01`
 fudge and nothing else. The fudge was always the approximation — it exists to
 keep `x = 1` from indexing off the end — and `fillCanvas` does the clamp
 properly, so the converted pattern is the more correct of the two.
+
+### The two-array bucket — batch 4 (2026-09-08)
+
+`#405`'s strict three-array bucket was exhausted by batch 3; a re-survey over
+all 307 `library/*.js` found ~15 more on the **two-array** variant — `hues[]`
+plus one value buffer, saturation a constant or a trivial function of the
+value. Twelve were triaged. **Seven converted, five refused**, and the five
+refusals are all one thing: **the readout's `v * v` needs a buffer the pattern
+does not own**, and buying it costs a third of the pixel ceiling.
+
+#### The seven
+
+Three are the pure one-line read-out (`chill-confetti`, `twinkle-2`,
+`marching-rainbow-buffered`) and are byte-exact by construction:
+`fillHSV` resolves each texel through the same `hsv_to_rgb` + `quantize`
+the interpreter's `hsv()` uses. Two small facts came out of them:
+
+* `twinkle-2` guarded its read-out with `max(vals[i], 0)` because a decayed
+  slot goes negative. **The guard is unnecessary** — `quantize` clamps to
+  0..1 exactly as `hsv()` does — and the same is true of `saturate()` /
+  `clamp(v, 0, 1)` around any `fillHSV`/`fillRGB` argument. That is the
+  `fillRGB` rule from batch 1, now confirmed on the HSV arm.
+* `marching-rainbow-buffered` is the library's own *demonstration* of the
+  buffered idiom ("all math happens in `beforeRender` into arrays; render is
+  just two lookups"). It is now the demonstration of the idiom's endpoint,
+  and at 1.14x it also shows the ceiling of the shape: its frame is the
+  `pixelCount` `beforeRender` loop, and that loop is untouched.
+
+**`fairies` is the interesting one.** Its read-out was `hsv(hue, satB[i],
+b * b)` and `briB` is persistent state, so squaring it per frame looks like it
+needs a third `array(pixelCount)`. It does not: `briB` is **only ever written
+at a deposit**, once per spark, never decayed in bulk. Storing
+`life[i] * life[i]` at the deposit is the same multiply on the same fixed-point
+value, so the buffer *is* the fill's V channel, the residual a respawned spark
+abandons is the same number it always was, and the array count is unchanged.
+**Look for a write site that already touches every value the read-out
+transforms** — that is the escape from the budget wall for this whole family.
+
+The three canvas patterns are the `swirlpool-2d` shape and behave like it:
+huge at 4096 px, flat at 256 px where the display is already the size of the
+simulation. `sound-spectromatrix-agc` cost nothing at all to convert — its AGC
+loop already computed `clamp(vals[k], 0, 1)` per cell for the coverage sum and
+then threw it away; keeping it is the fill's V channel and `1 - v` is its S.
+
+| pattern | 4096 px, 64x64 | 1024 px, 32x32 | 256 px, 16x16 | 300 px strip |
+|---|---:|---:|---:|---:|
+| `chill-confetti` | **4.90x** | **4.82x** | **4.57x** | **4.72x** |
+| `twinkle-2` | **1.89x** | **1.82x** | **2.09x** | **2.01x** |
+| `marching-rainbow-buffered` | 1.14x | 1.18x | 1.13x | 1.17x |
+| `fairies` | refused (2,771 px ceiling) — **1.37x** at 2025 px | **1.36x** | 1.35x | 1.42x |
+| `flow-field-2d` | **10.38x** | **3.14x** | 1.06x | 1.04x |
+| `fractal-flower` | **2.70x** | 1.36x | 1.00x | 1.07x |
+| `sound-spectromatrix-agc` | **3.97x** | **1.93x** | 1.21x | 1.03x |
+
+**Equivalence.** 60 frames at a fixed 30 fps delta and seed, byte for byte
+against the pre-conversion file on 16x16 / 32x32 / 64x64 coordinate maps and
+60 / 300 / 512 px mapless strips, repeated at 400 frames and under driven
+controls: **maxdiff 0 everywhere for the four index-space conversions**. The
+three canvas conversions are byte-identical on the three grids and the 60 px
+strip and differ on the 300 px and 512 px mapless strips — the same `-0.01`
+floor fudge `swirlpool-2d`, `ice-floes-2d` and `nyan-lights` hit, and proved
+the same way: the pre-conversion file with **only** `floor(c * 15.99)` replaced
+by a clamped `floor(c * 16)` is **byte-identical to the converted pattern on
+all six rigs**, at 60 and 400 frames and under driven controls. `fillCanvas`'s
+true nearest is the correct sampler; the fudge was always the approximation.
+
+`sound-spectromatrix-agc` renders black with no sensor board, and "maxdiff 0
+between two black frames" is not evidence. Both sides were re-run with an
+identical synthetic 32-band spectrum injected at the top of `beforeRender`
+(a deterministic function of accumulated delta): 45,706–731,087 lit bytes per
+rig, maxdiff 0.
+
+#### The five refusals — the `v * v` wall, measured
+
+`christmas-rg-fade`, `spring-colors`, `blink-fade`, `autumn-colors` and
+`colourful-fireflies` all read out `hsv(hue[i], s, v * v)` (or an affine
+recolour of the hue) over a buffer that a per-pixel `beforeRender` loop
+**decays in place**. Unlike `fairies` there is no write site that sees the
+final value: the decay is `v -= step`, and recovering `v` from `v²` needs a
+square root, which is not exact in 16.16. There is no element-wise multiply
+among the array builtins and `fillHSV` has no per-pixel post-scale, so the
+square costs one more `array(pixelCount)` — and `autumn-colors`'
+`hueShift + hues[i] * hueScale` costs a second, since the controls are
+documented to retint pixels that are already alight.
+
+A faithful conversion of each was built and measured rather than argued about:
+
+| pattern | ceiling before → after | 1024 px | 2000 px | 300 px |
+|---|---|---:|---:|---:|
+| `christmas-rg-fade` | 5,114 → **3,408** | 1.00x | 0.70x | 1.00x |
+| `blink-fade` | 5,114 → **3,408** | 1.11x | 1.09x | 1.10x |
+| `spring-colors` | 5,114 → **3,408** | 1.23x | 1.24x | 1.32x |
+| `autumn-colors` | 5,114 → **2,555** | 0.84x | 0.83x | 0.86x |
+| `colourful-fireflies` | 4,440 → **2,373** | 0.63x | 0.72x | 0.72x |
+
+Every one of them **loads at 4096 px today and would not after conversion**:
+the equivalence sweep is maxdiff 0 on every rig except 64x64, where the
+*converted* file is the black one. Two of the five are outright throughput
+regressions as well — `colourful-fireflies` because its `beforeRender` only
+touches `pixelCount / 10` sparks plus a native `feedback`, so materializing
+two full-length channels is exactly the "an interpreted `pixelCount` loop is
+not a substitute for a missing bulk op" trap (~50 ns/px), and `autumn-colors`
+for the same reason on its hue channel.
+
+This is the `fire-blue` verdict generalized: **a conversion that adds a
+per-pixel channel is refused unless the pattern's own write sites can carry
+the arithmetic.** The arm that would unlock all five is #373 §2's
+`arrayAffine(dst, src, k, c)` plus an element-wise square/multiply — with
+those the square and the hue recolour are native passes over buffers the
+pattern already owns, and the ceiling never moves.
 
 ## How to judge this on device
 

@@ -18,6 +18,10 @@
 const SIZE = 16
 var briBuf = array(SIZE * SIZE)
 var hueBuf = array(SIZE * SIZE)
+// Per-cell read-out channels for the whole-frame fill (Gitea #405); 256
+// cells each, negligible against the array budget.
+var vBuf = array(SIZE * SIZE)
+var satBuf = array(SIZE * SIZE)
 
 export var nodes = 0   // total recursion visits (monitoring)
 
@@ -152,12 +156,19 @@ export function beforeRender(delta) {
   var rate = clamp((target > expNorm ? .35 : .04) * min(delta, 250) / 50, 0, .9)
   expNorm += (target - expNorm) * rate
   expNorm = clamp(expNorm, 1, 1000)
+
+  // Auto-exposure and contrast resolved once per CELL (256) rather than once
+  // per LED; the saturation channel is only materialized in white mode, where
+  // it is not the constant 1 the fill can broadcast.
+  var white = whiteMode
+  for (var k = 0; k < SIZE * SIZE; k++) {
+    var v = saturate(briBuf[k] / expNorm)
+    v = v * v   // contrast
+    vBuf[k] = v
+    if (white) satBuf[k] = 1 - v * .85   // hot spots bleach to white
+  }
 }
 
-export function render2D(index, x, y) {
-  var ci = floor(y * 15.99) * SIZE + floor(x * 15.99)
-  var v = saturate(briBuf[ci] / expNorm)
-  v = v * v   // contrast
-  var s = whiteMode ? 1 - v * .85 : 1   // hot spots bleach to white
-  hsv(hueBuf[ci], s, v)
+export function renderFrame() {
+  fillCanvas(hueBuf, whiteMode ? satBuf : 1, vBuf, SIZE, SIZE)
 }
