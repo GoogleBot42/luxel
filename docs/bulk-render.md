@@ -460,6 +460,8 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `rocket-by-tony-hampton.js` (converted in place) | 3 per-pixel RGB buffers, one `fillRGB` | 88.3 → **21.8** µs/frame at 2025 px (45x45) | — | **byte-identical**, 7 rigs |
 | `coolaura.js` (converted in place) | 2 per-pixel buffers (down from 4), one `fillRGB` | 467.6 → **367.6** µs/frame at 2025 px (45x45) | — | **byte-identical** wherever the original loads; the original cannot load above 2559 px |
 | `christmaspewpew.js` (converted in place) | 2 trail buffers + a constant underglow array, one `fillRGB` | 149.8 → **84.4** µs/frame at 3364 px (58x58) | — | **byte-identical**, 8 rigs |
+| `neutronorbit.js` (converted in place) | 3 comet trails, native release + windowed hold, `clear` + a `setPixel` loop over the lit pixels | budget-refused at 4096 px **before and after**; 1024 px **2.12x** | 107.5 → **56.8** (1024 px) | **byte-identical** on six rigs |
+| `4th.js` (converted in place) | 4 per-pixel buffers, per-pixel `random()` so no bulk fill is possible; hoisted bunting bands + a `setPixel` loop | budget-refused at 4096 px **before and after**; 1024 px **1.11x** | 56.2 → **49.3** (1024 px) | **byte-identical** on six rigs, and across 7 `StripeWidth` values x 4 pixel counts |
 
 ### The `fillRGB` readout batch (2026-09-07)
 
@@ -883,6 +885,66 @@ The shared shape of both refusals: **a `setPixel` loop only wins when its body
 is native work.** `aurora-2d.js` wins because its body is `simplex3` + `paint`;
 these two lose because their bodies are array arithmetic, which is exactly what
 the interpreter is slow at and what a bulk op would have absorbed.
+### `neutronorbit` and `4th` — when the read-out cannot be a bulk fill (2026-09-07)
+
+Two more #405 conversions where `fillRGB` is the *wrong* answer and
+`renderFrame` is still the right one. Both keep `clear()` + a `setPixel` loop,
+and both are byte-identical over 60 frames at a fixed delta and seed on six
+rigs (16x16 / 32x32 / 64x64 maps, 60 / 300 / 512 px mapless strips), undriven
+and driven.
+
+**`neutronorbit` — 2.12x, and the array ceiling is why it is a loop.** The
+frame is three comet trails (peak-hold with exponential release), a nucleus,
+and a per-channel max of the three tinted layers, squared. That read-out is
+*destructive*: the trails are persistent state, so filling three channel
+buffers would mean three more `pixelCount` arrays on top of the three it
+already has — which measurably drops the pattern's pixel ceiling from ~3,411
+to ~1,705 against the 10,236-element budget. Both shapes were written and
+benched side by side and they are **the same speed** (`fillRGB` over three
+prebuilt buffers 2.00x, `clear` + `setPixel` over the lit pixels 1.98x at
+1024 px), because both skip the dark pixels and this pattern's frame is rarely
+more than a fifth lit. The loop wins on the tie-break: no new arrays.
+
+Almost all of the 2.12x is in `beforeRender`, not the read-out:
+
+* The trail release was `trail[i] = max(trail[i] * decay, hump(p, c))` over
+  every pixel for each of three comets — three interpreted passes with three
+  function calls per pixel. It is now `feedback(trail, decay)` (one native
+  call) plus a hold over only the window `hump()` can reach, which is `cwidth`
+  of the strip: **10 % by default**. Outside the window `hump()` is 0 and
+  `max(v, 0)` is `v`, so the native release is already the whole answer; the
+  window bounds are widened one pixel each way and `hump()`'s own
+  `d >= cwidth / 2` guard keeps the edges exact.
+* The nucleus is a triangle with no trail, so it also only touches its own
+  window. It merges by `max` and every value involved is non-negative, and
+  squaring is monotone there — `max(v, n)²  == max(v², n²)` — so the merge can
+  happen after the gamma square rather than before it.
+
+107.5 → **56.8** insns/px at 1024 px; µs/frame 460.0 → **216.9** at 1024 px,
+112.6 → **55.1** at 256 px, 919.8 → **444.5** at 2048 px.
+
+**`4th` — 1.11x, and it can never be a bulk fill at all.** Its crackle draws a
+fresh `random(1)` for *every* pixel, in index order, as an ignition
+probability. The RNG is one shared stream, so skipping a draw or reordering
+the draws changes every later frame — the loop has to stay per-pixel and pay
+one `rgb` + one `setPixel` per pixel. That is still cheaper than the
+per-pixel `render` entry it replaces, and on the panel much more so (317–440
+Xtensa cycles).
+
+What the frame entry bought beyond that is the bunting: the band colour is
+`floor((index + bunting) / stripeWidth) % 3`, which changes once every
+`stripeWidth` pixels, not once per pixel. It is now a walking edge — one
+divide-floor-modulo per *band* — with the three block colours picked at the
+edge. The hoist is the risky part of this conversion, so it was checked across
+7 `StripeWidth` values (1, 2, 3, 5, 7, 11, 24) x 4 pixel counts with all five
+other controls driven: maxdiff 0 in all 28.
+
+56.2 → **49.3** insns/px at 1024 px; µs/frame 246.1 → **221.2** at 1024 px,
+62.8 → **58.5** at 256 px, 495.6 → **445.8** at 2048 px.
+
+Neither pattern runs at 4096 px before or after — `neutronorbit` is three
+`pixelCount` arrays (ceiling ~3,411) and `4th` four (ceiling ~2,559), and
+neither conversion adds one.
 
 ## How to judge this on device
 

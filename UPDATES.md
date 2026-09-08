@@ -1,5 +1,41 @@
 # Update log
 
+## 2026-09-07 — library: neutronorbit and 4th move to `renderFrame` (the cases a bulk fill can't take)
+
+Gitea #405 (batch 3, part two). Two conversions where `renderFrame` is right
+and `fillRGB` is wrong, converted in place — same files, same names, same
+`//#` controls, same look, **byte-identical** on six rigs.
+
+* **`neutronorbit` — 2.12x @ 1024 px.** Its read-out is destructive (three
+  persistent comet trails maxed together per channel and squared), so filling
+  channel buffers would mean three more `pixelCount` arrays on top of the
+  three it has, dropping the pattern's pixel ceiling from ~3,411 to ~1,705.
+  Both shapes were written and benched: `fillRGB` over prebuilt buffers 2.00x,
+  `clear()` + a `setPixel` loop over the lit pixels 1.98x — the same speed,
+  because both skip the dark pixels. The loop wins on no-new-arrays. Almost
+  all the win is in `beforeRender` anyway: the trail release is now one native
+  `feedback(trail, decay)` per comet instead of an interpreted full-strip pass
+  with a `hump()` call per pixel, and the peak-hold walks only the window
+  `hump()` can reach (10 % of the strip by default). 107.5 → 56.8 insns/px.
+* **`4th` — 1.11x @ 1024 px.** This one can *never* be a bulk fill: the
+  crackle draws a fresh `random(1)` for every pixel in index order as an
+  ignition probability, and the RNG is one shared stream, so skipping or
+  reordering a draw changes every later frame. The loop stays per-pixel; what
+  the frame entry buys on top is hoisting the bunting band
+  (`floor((index + bunting) / stripeWidth) % 3` changes once every
+  `stripeWidth` pixels) into a walking edge. That hoist was checked across 7
+  `StripeWidth` values x 4 pixel counts with every other control driven —
+  maxdiff 0 in all 28. 56.2 → 49.3 insns/px.
+
+Equivalence: 60 frames at a fixed delta and seed, PPMs byte-compared against
+the pre-conversion files on 16x16 / 32x32 / 64x64 maps and 60 / 300 / 512 px
+mapless strips, undriven and with every control driven off its default —
+maxdiff 0 everywhere. Neither pattern runs at 4096 px before *or* after
+(`neutronorbit` three `pixelCount` arrays, ceiling ~3,411; `4th` four, ceiling
+~2,559) and neither conversion adds an array. check-library 307/307 on all
+five rigs; driven in real chromium.
+
+Host only — on-panel look rows are on #412.
 ## 2026-09-07 — library: two `fillHSV` readouts converted; two that do not convert
 
 Batch 2 of Gitea #405 (#373 section 5's "already `fillHSV`/`fillCanvas`-shaped"
