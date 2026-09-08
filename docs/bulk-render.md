@@ -103,8 +103,32 @@ array builtins — they work outside `renderFrame` too:
 |---|---|
 | `fillNoise2D(dst, w, h, sx, sy, ox, oy, seed)` | `dst[r·w + c] = simplex2(c·sx + ox, r·sy + oy, seed)`; returns dst |
 | `fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed)` | the same with `simplex3` at a fixed z |
+| `stencil2D(dst, src, w, h, kSelf, kEdge, kDiag)` | `dst[i] += kSelf·src[i] + kEdge·(W+E+N+S) + kDiag·(the four diagonals)`, borders **mirrored** (clamped index); `src` is never written, `dst` and `src` must differ; returns dst |
+| `arrayMaxAbs(a)` | the largest \|a[i]\|, 0 for an empty array |
 
-Both produce **exactly** what the equivalent interpreted loop produces,
+`stencil2D` **accumulates** into `dst` rather than replacing it, which is
+what makes a two-buffer recurrence expressible: `next = 2·now − before +
+c2·laplacian(now)` is a zeroed scratch, `stencil2D(lap, now, W, H, −4, 1,
+0)`, `arrayScale(lap, c2)`, then `−before + now + now + lap` scaled by the
+damping. `kDiag = 0` is the 5-point Laplacian, `kDiag = kEdge` the 9-point
+one, `kSelf = 1` with `kEdge = 0` a copy. Neighbours are summed W, E, N, S
+(then NW, NE, SW, SE) — pinned so an equivalent bytecode loop can be
+written to match it bit for bit.
+
+Folding the coefficient into the stencil (`kSelf = 2 − 4·c2`, `kEdge = c2`)
+saves three passes and is **not** the same arithmetic: it splits one 16.16
+multiply into two, each with its own rounding, and a second-order
+recurrence integrates that difference frame after frame. The exact
+formulation is what makes `raindrops-2d.js` byte-identical below.
+
+`arrayMaxAbs` ships alongside because the peak a simulation fuses into its
+own loop is what lets it flatten to exactly nothing, and a native stencil
+without it hands the win straight back to a second interpreted pass. The
+**index** form (argmax) is deliberately not this op — five library patterns
+want it to recycle their oldest slot and it returns a different thing;
+tracked separately on #373.
+
+Both noise fills produce **exactly** what the equivalent interpreted loop produces,
 argument arithmetic included (`c * sx + ox` as one `Fx` multiply then one
 add, not an incremental accumulation) — they remove the interpreter around
 the noise, never change it. `h = 1` fills a single row whose y is just
@@ -505,6 +529,7 @@ of five interleaved runs; `--profile` for the instruction counts.
 |---|---|---:|---:|---|
 | `snake-2d.js` → `snake-2d-v2.js` (new file, both kept) | 16x16 board repainted on a board change, one `fillCanvas` | — | — | max per-channel diff **0** vs `snake-2d.js`, 240 frames at 256 and 4096 px, coordinate map and procedural grid |
 | `raindrops-2d.js` (converted in place) | 16x16 water sim, per-cell shading, one `fillCanvas` | 6.90 → **46.98** Mpx/s (**6.8x**) | 60.6 → **6.4** | see below |
+| `raindrops-2d.js` again, on `stencil2D` + `arrayMaxAbs` (#373, with the §4 fast path) | the water recurrence and its peak as nine native passes | 20.90 → **8.45** ns/px at 4096 px (**2.47x**); 1.76–1.93x on every smaller rig | 6.4 → **2.9** | **byte-identical** on five rigs, 600 frames, every control extreme |
 | `aurora-2d.js` (converted in place) | per-column band, per-pixel shimmer, `paint` + `setPixel` (`fillRect` above Cell Size 1) | 6.38 → **7.29** Mpx/s (**1.14x**); Cell Size 2/3/4 **1.75x / 3.48x / 5.94x** | 35.0 → 36.7 | **byte-identical** on eight rigs |
 | `aurora-2d.js` again, on `fillNoise3D` + `paintCanvas` (#373) | row-at-a-time native shimmer; `paintCanvas` replaces the coarse path's per-cell `fillRect`s | 137.1 → **113.7** ns/px (**1.21x**); Cell Size 2/3/4 **2.85x / 1.78x / 2.70x** | 36.7 → 34.8 | maxdiff **2** on ≤1.8 % of bytes — the lattice, see below |
 | `novas.js` (converted in place) | two pulse generators, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.05x** | 249.4 → **235.6** (1024 px) | **byte-identical** on six rigs |
@@ -789,6 +814,53 @@ Two thirds of the frame is now interpreted bytecode that no existing bulk op
 covers — the 4-neighbour mirrored Laplacian and the element-wise shading map.
 Gitea #373 sketches the builtins that would, with these numbers; #374 is the
 on-panel look check.
+
+### `raindrops-2d.js` on `stencil2D` + `arrayMaxAbs` (2026-09-07)
+
+#373 §1 + §3, plus the §4 `fillCanvas` fast path underneath. `rippleStep()`
+is now nine native passes over the 256-cell pool instead of 56.5 interpreted
+instructions per cell:
+
+```js
+feedback(lap, 0)                          // zero the scratch
+stencil2D(lap, prev, W, H, -4, 1, 0)      // s - 4*p, mirrored border
+feedback(lap, c2)
+feedback(cur, -1)
+arrayAdd(cur, prev); arrayAdd(cur, prev)  // 2*prev - cur
+arrayAdd(cur, lap)
+feedback(cur, damp)
+var peak = arrayMaxAbs(cur)               // the fused reduction, as a pass
+```
+
+**Byte-identical**, and that is the reason for the shape: `stencil2D` into a
+zeroed buffer with `kSelf = -4`, `kEdge = 1` forms exactly the `s - 4*p` the
+hand loop formed, in the same summation order, so every step after it is the
+same fixed-point arithmetic rather than an approximation of it. Folding `c2`
+into the stencil would save three passes and split one multiply into two.
+Verified over 600 frames at 1024 px against the pre-#373 file, undriven and
+at four control extremes (RippleSpeed 2 and 24, RippleFade 0.4, Raindrops
+12), and over 60 frames on five rigs: **0 differing bytes everywhere**.
+
+| rig | before ns/px | after ns/px | before µs/frame | after µs/frame | ratio |
+|---|---:|---:|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 20.90 | 8.45 | 85.6 | 34.6 | **2.47x** |
+| 1024 px, `--map-grid 32x32` | 59.58 | 30.82 | 61.0 | 31.6 | 1.93x |
+| 256 px, `--map-grid 16x16` | 215.08 | 117.13 | 55.1 | 30.0 | 1.84x |
+| 300 px strip (18x17 grid) | 192.79 | 109.67 | 57.8 | 32.9 | 1.76x |
+| 60 px strip (8x8 grid) | 905.14 | 492.93 | 54.3 | 29.6 | 1.84x |
+
+Best of 15 interleaved runs; "before" is the pre-#373 pattern on the pre-#373
+engine, so the 4096 px row carries the §4 fast path as well. Interpreted
+instructions **26,159 → 11,729 per frame** (6.4 → 2.9 insns/px at 4096 px,
+102.2 → 45.8 at 256 px), and the frame is now flat in pixel count on every
+rig: 29.6–34.6 µs whether the panel is 60 pixels or 4096.
+
+The ticket's estimate for §1 + §3 was 1.4x at 4096 px and 1.9x at 256 px; the
+measured result is 2.47x and 1.84x. What the estimate missed on the high side
+is that `fillCanvas` had already stopped being the expensive part (§4), and
+on the low side that `shade()` — untouched here, 30 % of the old frame — is
+now the whole remaining cost. **§2's element-wise map is what is left**, and
+on these numbers it is worth about half of what is left of the frame.
 
 ### `aurora-2d.js` (2026-09-07)
 

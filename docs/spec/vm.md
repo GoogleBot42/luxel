@@ -308,10 +308,12 @@ land on the multiple. The observable result is the scan's, always.
 
 Producing a canvas has native ops of its own, which are ordinary array
 builtins and work anywhere (not just under `renderFrame`): `fillNoise2D` /
-`fillNoise3D` write simplex noise sampled on a regular lattice. They are
-defined to produce exactly what the equivalent interpreted loop produces,
-argument arithmetic included, so they are a speed change and never a
-semantic one.
+`fillNoise3D` write simplex noise sampled on a regular lattice, and
+`stencil2D` accumulates a linear 4-/8-neighbour stencil with mirrored
+(clamped-index) borders from one array into another. Both are defined to
+produce exactly what the equivalent interpreted loop produces, argument
+arithmetic and summation order included, so they are a speed change and
+never a semantic one.
 
 Debug hooks (breakpoints as `(fn_idx, pc)`, step Continue/Over/Into/Out,
 frame/locals/globals inspection) are host-optional; `dbg: None` is the

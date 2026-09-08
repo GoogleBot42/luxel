@@ -213,6 +213,8 @@ export const BUILTINS: BuiltinDoc[] = [
   // canvas producers: fill an array, then hand it to fillCanvas/paintCanvas
   { name: "fillNoise2D", sig: "fillNoise2D(dst, w, h, sx, sy, ox, oy, seed)", doc: "Fill the first w×h elements of a row-major canvas with simplex2 on a regular lattice: dst[r·w + c] = simplex2(c·sx + ox, r·sy + oy, seed); returns dst. Exactly what the interpreted loop produces, without the interpreter. (Luxel)" },
   { name: "fillNoise3D", sig: "fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed)", doc: "As fillNoise2D with simplex3 at a fixed z — the animated-noise field of a 2D pattern as one call; returns dst. (Luxel)" },
+  { name: "stencil2D", sig: "stencil2D(dst, src, w, h, kSelf, kEdge, kDiag)", doc: "dst[i] += kSelf·src[i] + kEdge·(W+E+N+S) + kDiag·(the four diagonals) over a row-major w×h canvas, borders mirrored (clamped index); src is never written, returns dst. kDiag 0 is the 5-point Laplacian, kDiag = kEdge the 9-point one. The two-buffer water recurrence in one call. dst and src must differ. (Luxel)" },
+  { name: "arrayMaxAbs", sig: "arrayMaxAbs(a)", doc: "Largest |a[i]|, 0 for an empty array — the peak-amplitude reduction a simulation needs to decide it has gone flat, without a second interpreted pass. (Luxel)" },
 ];
 
 /** Special globals available to patterns. */
