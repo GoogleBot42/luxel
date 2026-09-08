@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-09-07 — library: novas, fireblobs and heatshivers render through `renderFrame` + `fillRGB`
+
+Gitea #405 (batch 3), the #373 §5 bucket: patterns whose `beforeRender` already
+fills parallel per-pixel channel buffers and whose `render` is one `rgb()`
+read-out of them. Converted in place — same files, same pattern names, same
+`//#` controls, same look.
+
+* **The read-out folds back into the buffers.** All three squared for gamma at
+  read-out (`novas` clamped first); those buffers are zeroed and rebuilt every
+  frame, so the square moves to the end of `beforeRender` and applies exactly
+  once. **No new arrays** — which is the point: `novas` and `fireblobs` are
+  already four `pixelCount` buffers and `heatshivers` five, against a
+  10,236-element budget, so a fourth channel trio would have cost more pixel
+  ceiling than it bought speed.
+* **`renderFrame()` is one `fillRGB`.** Index-space, so it is map-independent:
+  on a bare strip it is exactly the old `render(index)` loop, and on a matrix
+  these 1-D patterns still run along the pixel index. `heatshivers` uses the
+  scalar form for its always-black blue: `fillRGB(chR, chG, 0)`.
+* **Zero-fills went native.** The three-or-four interpreted `for` loops that
+  cleared the buffers each frame are now `feedback(a, 0)` calls, and two
+  per-pixel passes gained an exact non-negativity skip. This is where most of
+  the win is: the `renderFrame` entry on its own measured ~1.02x on this host.
+
+Host `luxel bench` via `tools/pairbench.mjs`, best of five, µs/frame at
+1024 px on a 32x32 map: `novas` 580.1 → 554.2 (1.05x), `fireblobs`
+399.9 → 334.0 (1.20x), `heatshivers` 110.9 → 93.9 (1.18x); interpreted
+instructions 249.4 → 235.6, 177.2 → 145.2 and 48.4 → 43.4 insns/px.
+`novas` gains least because its frame is the per-bloom painting loops and the
+tint/max-merge pass, not the read-out.
+
+**Byte-identical** to the pre-conversion files on six rigs — 16x16, 32x32 and
+64x64 maps plus 60 / 300 / 512 px mapless strips, 60 frames at a fixed delta
+and seed — undriven and with every control driven off its default. Note that
+none of the three runs at 4096 px before *or* after: four/five `pixelCount`
+buffers exceed the array budget, ceilings 2,559 / 2,559 / 2,047 px, unchanged
+by the conversion. check-library 307/307 on all five rigs; driven in real
+chromium (tiles render, sliders still move the picture).
+
+Host only — the on-panel look check is a row on the Seengreat checklist.
 ## 2026-09-07 — playground: the status-bar FPS is the DEVICE's rate (Gitea #381)
 
 The header counter was an EMA of `requestAnimationFrame` deltas — this
