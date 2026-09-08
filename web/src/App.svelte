@@ -23,6 +23,7 @@
     type SavedPattern,
   } from "./lib/store";
   import { parseControlHints, type ControlHint } from "./lib/hints";
+  import { reconcileTransport, transportIntent, type TransportIntent } from "./lib/playlist";
   import {
     Engine,
     Luxel,
@@ -558,11 +559,19 @@
   let playlist: Playlist = { defaultSec: 0, crossfadeMs: 0, playing: false, index: 0, items: [] };
   let playlistDebounce: ReturnType<typeof setTimeout> | undefined;
   let playlistPoll: ReturnType<typeof setInterval> | undefined;
+  /** A play/stop the device has not confirmed yet (Gitea #431). */
+  let playlistIntent: TransportIntent | undefined;
+  /** True from a local edit until it has landed on the device — the poll must
+   *  not overwrite the list with a read that predates it. */
+  let playlistSaving = false;
 
   async function refreshPlaylist(): Promise<void> {
-    if (!device) return;
+    if (!device || playlistSaving) return;
     try {
-      playlist = await device.playlist();
+      const read = await device.playlist();
+      const r = reconcileTransport(read, playlistIntent, Date.now());
+      playlist = r.playlist;
+      playlistIntent = r.intent;
     } catch {
       /* older firmware without /api/playlist — leave empty */
     }
@@ -571,8 +580,17 @@
   /** Persist the playlist to the device (debounced — edits stream in). */
   function queuePlaylistSave(): void {
     clearTimeout(playlistDebounce);
+    playlistSaving = true;
     const snapshot = playlist;
-    playlistDebounce = setTimeout(() => void device?.setPlaylist(snapshot), 400);
+    playlistDebounce = setTimeout(() => {
+      void (async () => {
+        try {
+          await device?.setPlaylist(snapshot);
+        } finally {
+          playlistSaving = false;
+        }
+      })();
+    }, 400);
   }
 
   /** Append the CURRENT editor pattern (must be saved on the device) with its
@@ -660,11 +678,21 @@
     queuePlaylistSave();
   }
 
+  /** Show a transport request straight away and let the poll confirm it: the
+   *  device applies play/stop in its render loop, so an immediate read-back
+   *  can still report the state we just left (Gitea #431). */
+  function markTransport(playing: boolean): void {
+    playlistIntent = transportIntent(playing, Date.now());
+    playlist = { ...playlist, playing };
+  }
+
   async function playlistPlay(): Promise<void> {
+    markTransport(true);
     await device?.playlistPlay(0);
     void refreshPlaylist();
   }
   async function playlistStop(): Promise<void> {
+    markTransport(false);
     await device?.playlistStop();
     void refreshPlaylist();
   }
@@ -681,11 +709,15 @@
   const itemSource = (id: string): string | undefined =>
     devicePatterns.find((p) => p.id === id)?.source;
 
-  // follow the playing item while the Playlist tab is open (light status poll,
-  // not pixel streaming) so the current entry highlights as it advances
+  // Follow the device while the Playlist tab is open (light status poll, not
+  // pixel streaming) so the current entry highlights as it advances — and so
+  // the transport recovers from any state it read wrong. Deliberately NOT
+  // gated on `playlist.playing`: that gate made one early `playing: false`
+  // read permanent, since the only thing that could correct it was the poll
+  // it had just disabled (Gitea #431).
   $: {
     clearInterval(playlistPoll);
-    if (device && tab === "playlist" && !editing && playlist.playing) {
+    if (device && tab === "playlist" && !editing) {
       playlistPoll = setInterval(refreshPlaylist, 1000);
     }
   }

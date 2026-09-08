@@ -1,5 +1,36 @@
 # Update log
 
+## 2026-09-08 — the playlist transport no longer latches "not playing" (#431)
+
+`POST /api/playlist/play` returns before the device has applied it — the
+native mirror flips `playing` in its render loop, and both the mirror and
+the firmware advance `index` there — so the playground's follow-up
+`GET /api/playlist` could read back the state the user had just left. That
+read used to be permanent: the only thing that re-read the playlist was a
+poll gated on `playlist.playing`, so one early `false` disabled the very
+poll that would have corrected it. The transport then showed ▶ play with no
+⏮/■/⏭ at all while the device happily advanced, and clicking play again was
+the only way out. 100 % reproducible against `luxel serve --fps 24`
+(41 ms loop), invisible at the mirror's default ~8 ms pace.
+
+* **The poll follows the tab, not the state.** It now runs for as long as
+  the Playlist tab is open — the tab is a device-state view, and 1 Hz was
+  already the cadence — so any wrong read is corrected within a second
+  instead of latching.
+* **A transport request outranks a stale read while it settles**
+  (`web/src/lib/playlist.ts`, unit-tested in `web/tests/playlist.test.mjs`).
+  Play/stop show immediately and stay shown until the device agrees or a
+  3 s window expires, so a request the device *refused* (an empty playlist)
+  cannot latch the other way either.
+* **Edits are no longer racing the poll.** A debounced playlist save marks
+  the list dirty until the POST lands, and `refreshPlaylist()` skips while
+  it is — polling while stopped is exactly when a user is editing rows.
+* **The e2e now runs the main mirror at the pacing that broke it.**
+  `device-e2e.mjs` spawns its device with `--fps 24` (it had been kept fast
+  to dodge this bug) and asserts the transport itself, not just the
+  device's playlist state: it switches to ⏮/■/⏭ after play and back to
+  ▶ play after stop. Full device-mode suite green.
+
 ## 2026-09-08 — docs: the backlogs stop advertising shipped work as open (#247)
 
 Every `fetch-work` sweep was re-verifying (and risking re-proposing) work

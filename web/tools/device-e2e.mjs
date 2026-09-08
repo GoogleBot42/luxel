@@ -21,15 +21,16 @@ const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 execSync("cargo build -q -p luxel-cli", { stdio: "inherit", cwd: ".." });
-// The main mirror keeps its DEFAULT ~8 ms pace on purpose. Slowing it down
-// (`--fps 24`) makes the playlist transport flake: `POST /api/playlist/play`
-// is applied by the render loop, so the UI's follow-up `GET /api/playlist`
-// can beat it and latch `playing: false` — and the playlist poll only runs
-// while the UI believes it IS playing, so nothing ever corrects it (Gitea
-// #431). The frame-rate checks below use their own mirrors instead.
+// The main mirror runs at a DELIBERATELY slow 24 fps (a 41 ms render loop
+// instead of ~8 ms) — the pacing that used to break the playlist transport:
+// `POST /api/playlist/play` is applied by the render loop, so the UI's
+// follow-up `GET /api/playlist` beats it and reads `playing: false`. That read
+// once latched, because the playlist poll only ran while the UI already
+// believed it was playing (Gitea #431). Keeping the mirror slow here is what
+// covers the fix; a fast mirror hides the race entirely.
 const device = spawn(
   "../target/debug/luxel",
-  ["serve", "--port", String(DEV_PORT), "--pixels", "120"],
+  ["serve", "--port", String(DEV_PORT), "--pixels", "120", "--fps", "24"],
   { stdio: ["ignore", "pipe", "inherit"] },
 );
 await new Promise((resolve, reject) => {
@@ -1061,6 +1062,13 @@ try {
   await sleep(500);
   const playing = await (await fetch(`${DEV}/api/playlist`)).json();
   check("playlist: play starts at index 0", playing.playing === true && playing.index === 0, JSON.stringify({ p: playing.playing, i: playing.index }));
+  // …and the transport follows the device rather than latching on "play" when
+  // the read-back beats the render loop (Gitea #431).
+  const transportShown = await page
+    .waitForSelector('[data-role="pl-next"]', { timeout: 2000 })
+    .then(() => true)
+    .catch(() => false);
+  check("playlist: transport switches to the playing controls", transportShown);
   await page.click('[data-role="pl-next"]');
   await sleep(400);
   check(
@@ -1072,6 +1080,10 @@ try {
   check(
     "playlist: stop halts auto-advance",
     (await (await fetch(`${DEV}/api/playlist`)).json()).playing === false,
+  );
+  check(
+    "playlist: transport returns to the play button after stop",
+    (await page.$('[data-role="pl-play"]')) !== null,
   );
   // total run-time summary (item0 override 2s + item1 default 5s = 7s)
   const total = await page.$eval('[data-role="pl-total"]', (el) => el.textContent ?? "");
