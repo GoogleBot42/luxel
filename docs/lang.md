@@ -161,8 +161,34 @@ with the source location and the frame keeps going: after a
 `beforeRender` abort the per-pixel pass still runs, and a pixel whose
 `render` aborts keeps whatever `hsv`/`rgb` it set before the error while
 later pixels render normally (PB-matched blast radius, oracle fw 3.67).
-Array storage is budgeted (10 240 elements total by default) to protect
-small devices.
+Array storage is budgeted to protect small devices: **10,236 elements
+total** by default, each array costing its own length plus a 4-unit header,
+and arrays are never freed. The budget is per pattern, not per handler, and
+the default number is Pixel Blaze's.
+
+The budget is why a pattern can be fine on a strip and **black on a panel**:
+`array(pixelCount)` costs what the rig says, so three colour-channel buffers
+are 12,300 units at 4096 px and the third one is refused while the pattern is
+still initializing. The refusal names the figures —
+
+```
+array element budget exceeded: a 4096-element array needs 4100 more of the
+10236-element budget, 2036 left (arrays are never freed)
+```
+
+— and reaches you as `/api/status`'s `vmerr`, the playground's runtime banner
+and its device-capacity banner. To find it *before* an upload, stand the
+pattern up on the rig it will run on:
+
+```sh
+luxel check mypattern.js --grid 64x64
+```
+
+which fails with that message, and on a rig that fits reports how much room
+is left (`"arrayElems":3084,"arrayBudget":10236`). The fix is fewer or
+smaller buffers — a fixed-resolution canvas with `fillCanvas`, or folding two
+channels into one. A board with an external array arena (the Seengreat S3's
+PSRAM) raises the ledger; every other board keeps the PB number exactly.
 
 ## The frame model
 

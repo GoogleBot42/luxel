@@ -224,7 +224,12 @@ that is not losing anything:
   (`WEB_TASK_POOL_SIZE`, 2 or 3). `0` accepting · `1` serving · `2` shutdown
   entered · `3` FIN sent · `4` discard done · `5` flush done · `9` abort. A slot
   parked at 3–5 is wedged on a client that won't close.
-- `vmerr` — last VM error string, or `null`.
+- `vmerr` — last VM error string, or `null`. Cleared on every pattern load.
+  One exception to "last": if the pattern's own init was refused an array
+  (`array element budget exceeded` / `array memory budget exceeded`), the
+  render pass records nothing further, so that refusal stands until the next
+  load rather than being overwritten a frame later by the missing-buffer
+  errors it causes (Gitea #420).
 - `core1` — dual-core boards only (`esp32`, `esp32s3`); `null` elsewhere.
   The second core and the cross-core flash fence (docs/firmware.md
   "Cores & tasks"):
