@@ -26,7 +26,8 @@ own header and in docs/tools.md — read those before improvising a variant.
 
 LAN IPs aren't secrets and are listed here for convenience; WiFi
 credentials and any MQTT/HA broker details are not — those live in agent
-memory (athom-flash-rig.md / jeremy-ha-broker.md memory files) and in
+memory (athom-flash-rig.md), `~/.config/mqtt/broker.env` (user-level
+`power-switch` skill; jeremy-ha-broker.md memory has the care rules) and in
 `firmware/creds.env` (gitignored).
 
 - **Dev unit** — 192.168.0.205, DHCP hostname `luxel-4ae0d4`. Its power
