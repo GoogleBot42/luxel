@@ -315,6 +315,100 @@ pub static RESCANS: AtomicU32 = AtomicU32::new(0);
 /// patterns that load fine.
 pub static ENGINE_HEAP: AtomicU32 = AtomicU32::new(0);
 
+/// Largest single allocation the heap can satisfy right now, in bytes.
+///
+/// `heap_free` is a SUM over the free list — it says nothing about whether
+/// one contiguous run of that size exists, and that gap is exactly what
+/// Gitea #390 walked into: a 30 KB pattern upload refused with 74 KB free,
+/// cleared by a reboot. Every 30–45 KB envelope alloc/free cycle chips away
+/// at the longest free run until the upload's `try_reserve_exact` can no
+/// longer be met, while `heap_free` barely moves.
+///
+/// **esp-alloc 0.10.0 has no API for this.** `HEAP.free()`, `HEAP.used()`
+/// and `HeapStats { region_stats: [RegionStats { size, used, free }; 3],
+/// size, current_usage }` are all sums, and neither backend behind them
+/// surfaces a largest-run figure either (the pinned rev's
+/// `esp-alloc/src/lib.rs` and `esp-alloc/src/heap/{llff,tlsf}.rs` — LLFF
+/// wraps `linked_list_allocator::Heap`, TLSF wraps `rlsf::Tlsf`, and only
+/// `size`/`used`/`free` are re-exported from either). So measure it the one
+/// way that is also the definition callers care about: binary-search the
+/// largest block the global allocator actually hands back, freeing each
+/// probe immediately.
+///
+/// Notes on cost and safety:
+/// - ~8 probes (the bracket stops at [`PROBE_RESOLUTION`]); each is one
+///   allocator pass, so this is microseconds, not milliseconds.
+/// - `GlobalAlloc::alloc` returns null on failure instead of panicking
+///   (unlike `Vec`, which routes through `handle_alloc_error`), so a failed
+///   probe costs nothing.
+/// - An alloc immediately followed by a `dealloc` of the same layout leaves
+///   both backends' free lists exactly as they were — probing does not
+///   itself fragment the heap.
+/// - A successful probe momentarily HOLDS the block it found, so the search
+///   is bounded twice over. Each probe runs inside a critical section, which
+///   keeps an interrupt on this core from allocating into a heap the probe
+///   has emptied (esp-radio's mallocs are the ones that don't null-check);
+///   and the search never probes above `heap_free - `[`PROBE_RESERVE`], so
+///   even the other core — whose allocations a critical section here does
+///   not exclude — always has that much left. The reserve is why the result
+///   saturates: `heap_largest == heap_free - PROBE_RESERVE` means "as
+///   contiguous as this can report", i.e. not fragmented.
+pub fn largest_free_block() -> usize {
+    let free = esp_alloc::HEAP.free();
+    let ceiling = free.saturating_sub(PROBE_RESERVE);
+    // The common, unfragmented case: the whole free heap is one run.
+    if probe_alloc(ceiling) {
+        return ceiling;
+    }
+    let mut lo = 0usize; // known to fit
+    let mut hi = ceiling; // known not to
+    while hi - lo > PROBE_RESOLUTION {
+        let mid = lo + (hi - lo) / 2;
+        if probe_alloc(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Bracket width at which [`largest_free_block`] stops halving. The figure
+/// is consumed in KB, so finer than this buys nothing and costs probes.
+const PROBE_RESOLUTION: usize = 512;
+
+/// Heap [`largest_free_block`] never takes, so a concurrent allocation on
+/// the other core cannot be starved by the probe. Also the amount by which
+/// the reported figure can under-read on a perfectly unfragmented heap —
+/// irrelevant next to a 30-45 KB pattern envelope, which is what the number
+/// exists to predict.
+const PROBE_RESERVE: usize = 4 * 1024;
+
+/// Can the allocator hand back `size` bytes in one piece? See
+/// [`largest_free_block`] for why this is the only way to ask.
+fn probe_alloc(size: usize) -> bool {
+    if size == 0 {
+        return true;
+    }
+    // Word alignment: every real allocation here is at least word-aligned,
+    // so a probe at align 4 never over-reports what a `Vec` could get.
+    let Ok(layout) = core::alloc::Layout::from_size_align(size, 4) else {
+        return false;
+    };
+    critical_section::with(|_| {
+        // SAFETY: non-zero layout; the pointer is freed with the same
+        // layout before anything else can allocate, and never read.
+        unsafe {
+            let p = alloc::alloc::alloc(layout);
+            if p.is_null() {
+                return false;
+            }
+            alloc::alloc::dealloc(p, layout);
+        }
+        true
+    })
+}
+
 /// Global output brightness, 0–31. The render task reads it every frame and
 /// feeds it to the encoder (SK9822's 5-bit current field; a software scale for
 /// WS2812). HTTP `/api/brightness` writes it; boot seeds it from flash (else
