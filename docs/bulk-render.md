@@ -518,6 +518,36 @@ on `board-athom-music`, +9,312 on `board-seengreat-hub75`, +9,232 on
 The C6 conclusion stands unchanged — it is the one board this change puts under
 `image-check.sh`'s 3 % floor (#291).
 
+### Firmware size — the #373 ops (2026-09-07)
+
+Canonical **credless flake** builds (`nix build .#luxel-fw-<variant>`, what
+release CI gates), master vs the branch on the same day. Per-item deltas were
+taken separately with creds-baked devshell builds — §4 +864 B Xtensa / +544 B
+RISC-V, §6 + §7 +1,808 to +1,920 B, §1 + §3 +1,728 to +1,888 B — and those
+read ~1.5 KB larger overall, so only the credless column below decides the
+gate.
+
+| board | before | after | Δ | margin |
+|---|---:|---:|---:|---:|
+| `board-pixelblaze-v3` | 1,011,408 | 1,015,328 | +3,920 | 3.17 % |
+| `board-athom-music` | 1,011,488 | 1,015,424 | +3,936 | 3.16 % |
+| `board-esp32-generic` | 1,010,976 | 1,014,928 | +3,952 | 3.21 % |
+| `board-s3-devkit` | 957,792 | 961,712 | +3,920 | 8.28 % |
+| `board-s3-devkit` + `hub75` | 964,064 | 967,840 | +3,776 | 7.70 % |
+| `board-seengreat-hub75` | 963,968 | 967,728 | +3,760 | 7.71 % |
+| `board-c6-devkit` | 1,029,600 | 1,033,424 | +3,824 | **1.45 %** |
+| `board-c6-devkit` + `hosted-ui` | 1,013,328 | 1,016,656 | +3,328 | **3.04 %** |
+
+Every board that was above the 3 % floor is still above it.
+`board-c6-devkit`'s full-UI image was already under it (1.81 % → 1.45 %;
+#291/#310) and is not a release artifact. The **shipped** C6 image, the
+hosted variant, now has **460 bytes** of headroom — measure it credless
+before adding anything else to the VM. Dropping `stencil2D`'s diagonal term
+was measured as a way to buy some back and is not enough: 320 B.
+
+`board-c3-devkit` is missing from the table because it does not build on
+master at all (#413).
+
 ## Converted library patterns
 
 `renderFrame` is an entry point, not a migration: the rule in "Scope" below
