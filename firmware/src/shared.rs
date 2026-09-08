@@ -220,6 +220,33 @@ pub fn pass_shorts() -> (u32, [(u32, u32, u32); PASS_SHORT_LOG]) {
     (PASS_SHORT_N.load(Ordering::Relaxed), out)
 }
 
+/// Displayed-frame ground truth (Gitea #395), the firmware-side equivalent of
+/// reading sweep columns off a video.
+///
+/// The driver logs which FRAMEBUFFER each panel pass actually scanned out; the
+/// panel driver maps those pointers back to the frame sequence numbers it
+/// composed into them. A sequence number that never appears in that log is a
+/// frame the panel never displayed, even though `write_frame` succeeded and
+/// `DROPPED`/`out_fps` saw nothing wrong. That is the artefact filmed on the
+/// bench: one frame skipped, the next shown twice, frame count conserved.
+pub static SHOWN_SKIPS: AtomicU32 = AtomicU32::new(0);
+/// Frames the panel displayed for more than one consecutive pass.
+pub static SHOWN_REPEATS: AtomicU32 = AtomicU32::new(0);
+/// Passes audited so far.
+pub static SHOWN_AUDITED: AtomicU32 = AtomicU32::new(0);
+/// Descriptor index the last swap armed at, and the highest ever taken on the
+/// fast path — if a skip is seen, the latter bounds the GDMA prefetch depth.
+pub static SHOWN_ARM_IDX: AtomicU32 = AtomicU32::new(0);
+/// See [`SHOWN_ARM_IDX`].
+pub static SHOWN_ARM_IDX_MAX: AtomicU32 = AtomicU32::new(0);
+/// Arm index of the swap most recently implicated in a skip, 0 if none.
+pub static SHOWN_SKIP_ARM_IDX: AtomicU32 = AtomicU32::new(0);
+/// Displayed passes the audit could not see because the driver's log lapped
+/// (the panel emits EOFs slightly faster than frames are composed). These are
+/// NOT skips, and keeping them separate is the difference between a counter
+/// that measures the panel and one that measures its own lag.
+pub static SHOWN_LAPSED: AtomicU32 = AtomicU32::new(0);
+
 /// Raw BCM frame count from the panel driver, absolute since boot.
 /// [`RESCAN_HZ`] is its once-a-second delta; nothing else should read it.
 pub static RESCANS: AtomicU32 = AtomicU32::new(0);
