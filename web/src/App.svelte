@@ -151,11 +151,21 @@
   /** The local prediction for the source currently in the editor. */
   let capacity: { level: "over" | "tight"; text: string; detail: string } | null = null;
 
-  /** The device's vmerr, but only when it is the capacity rejection — other
+  /** The device's vmerr, but only when it is a capacity rejection — other
    *  runtime errors are the local engine's business and already have a banner.
-   *  Matches the firmware's wording (`firmware/src/main.rs`) and the mirror's. */
+   *  Matches the firmware's wording (`firmware/src/main.rs`) and the mirror's.
+   *
+   *  Two shapes reach here. The load-time refusal ("pattern too large for this
+   *  device") comes from the floor check, and so does the array-arena BYTE
+   *  budget. The array ELEMENT ledger is the third: `array(pixelCount)` that
+   *  fits the editor's preview layout and not the device's real pixel count
+   *  fails during the pattern's init, and the device then renders black with
+   *  nothing but this vmerr to say why (Gitea #420). Mirrors
+   *  `luxel_core::vm::is_array_budget_error`. */
   $: deviceRejectedForSize =
-    deviceVmerr && /too large for this device/.test(deviceVmerr) ? deviceVmerr : "";
+    deviceVmerr && /too large for this device|array element budget exceeded/.test(deviceVmerr)
+      ? deviceVmerr
+      : "";
 
   const kb = (bytes: number): string => `${Math.round(bytes / 1024)} KB`;
 
@@ -201,12 +211,20 @@
       ? ` — saving it to the device's library would fit (${kb(m.storedResident)})`
       : "";
     if (m.vmerr) {
-      // The array arena ran out before the floor check could even run — a
+      // An array budget ran out before the floor check could even run — a
       // different failure from "the whole load doesn't fit", and worth saying
       // so, because the fix is smaller arrays rather than a smaller pattern.
+      // Which budget matters: the byte arena is a size the user can read off
+      // in KB, while the PB-compat ELEMENT ledger is a count that depends on
+      // the device's pixel count, and blowing it makes the pattern load and
+      // then render BLACK rather than be refused (Gitea #420). The exact
+      // figures are in `detail` ("Device verdict: …").
+      const elementLedger = /array element budget exceeded/.test(m.vmerr);
       capacity = {
         level: "over",
-        text: `this pattern's arrays exceed this device's array memory budget (${kb(m.budget)} available)`,
+        text: elementLedger
+          ? `this pattern needs more array elements than this device allows at ${devicePixels} px — it would load and render black`
+          : `this pattern's arrays exceed this device's array memory budget (${kb(m.budget)} available)`,
         detail,
       };
     } else if (m.fit === "over" && m.peak > m.base) {

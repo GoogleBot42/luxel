@@ -1,5 +1,92 @@
 # Update log
 
+## 2026-09-08 — engine: the array budget says which array, and how far over (#420)
+
+A pattern with three `array(pixelCount)` channels is 12,300 units against the
+PB-compat 10,236-element ledger, so on a 64×64 panel the third `array()` fails
+during init and the panel goes black. Every layer that could have said so said
+something else instead.
+
+* **The VM named the budget, never the numbers.** `charge_array` returned
+  `&'static str`, so the only diagnosis available was *"array element budget
+  exceeded (arrays are never freed)"* — the same string whether you were four
+  elements over or four thousand, and the same string again for the unrelated
+  arena SLOT cap. The three refusals are now built (cold, out of line) with
+  the figures in them:
+
+  * `array element budget exceeded: a 4096-element array needs 4100 more of the 10236-element budget, 2036 left (arrays are never freed)`
+  * `array memory budget exceeded: this array needs 16032 B of the 4096 B array arena, 4096 B left — pattern too large for this device`
+  * `array element budget exceeded: 2559 arrays is the most one pattern may allocate (arrays are never freed)`
+
+  The byte one keeps its *"pattern too large for this device"* tail verbatim —
+  the wasm capacity model and the editor's rejection banner both match on it.
+
+* **`/api/status` showed the cascade, not the cause.** A pattern whose
+  channels were refused fails on every frame afterwards ("indexing a non-array
+  value", at a fresh site per handler), and hosts publish the newest message
+  `take_error()` hands them. The refusal survived exactly ONE frame before its
+  own consequence buried it: the native mirror at 4096 px reported
+  `"line 11:5: indexing a non-array value"` for as long as the pattern ran.
+  An engine whose INIT was refused an array now records nothing from the
+  render pass at all (`Engine::arrays_refused`), so the refusal stays the
+  last thing every host was told — nothing downstream of a missing buffer is
+  diagnostic, and a device that is already out of memory stops formatting a
+  message per erroring site per frame. The firmware's render loop reads the
+  same `take_error`, so the device gets this without a firmware change.
+  (Keeping the refusal and *substituting* it on each take was the first cut;
+  it cost 1,104 B of ESP32 flash to `clone` a `VmError` per frame, measured
+  on board-pixelblaze-v3, and silencing the cascade is both cheaper and more
+  honest.)
+
+* **The editor answered "fits" for a pattern that loads black.**
+  `lx_device_model` deliberately dropped every vmerr but the byte budget, on
+  the reasoning that the element ledger "is the same on every host, so the
+  local preview already shows it". It is not: the model runs at the DEVICE's
+  pixel count and the preview runs at the editor's layout, and
+  `array(pixelCount)` costs what the rig says. Three channels fit a 300 px
+  strip and blow the ledger at 4096 px, and the engine that failed to
+  allocate its arrays is *smaller*, so `fit` came back `fits`. Both array
+  refusals now pass through (`vm::is_array_budget_error`), with their own
+  banner text — "this pattern needs more array elements than this device
+  allows at 4096 px — it would load and render black" — because the fix is
+  fewer buffers, not a smaller pattern. `deviceRejectedForSize` matches the
+  element ledger too, so the device's own verdict reaches the red banner.
+
+* **`luxel check` reports the ledger, passing or failing.** Every report line
+  now carries `arrayElems`/`arrayBudget`, so `check --grid 64x64` is a
+  pre-upload gate for a panel and the passing rigs show how much room is
+  left (312/10236 at 10×10, 3084 at 32×32, refused at 64×64). The library
+  sweep's five rigs stay where they are — several patterns legitimately
+  exceed the ledger and would fail a gate — but `GRIDS="64x64" STRIPS=`
+  now sweeps the bucket on demand: **281/307**, i.e. the 26 patterns #420
+  is about, each naming its own overrun.
+
+The budget itself is untouched — raising it is #425 (the capacity model and
+the PSRAM arena) and #253's board-scoped divergence, not this.
+
+Tests: `crates/luxel-core/tests/engine.rs` gains four (the element-ledger
+wording and its ledger reading at a fitting and a refusing rig, the byte
+budget's numbers + tail, the slot cap no longer impersonating the element
+ledger, the cascade not burying the refusal over five frames, and `assert()`
+still reported as itself); new `crates/luxel-cli/tests/check.rs` pins the
+`--grid 64x64` failure and the headroom figures on all five sweep rigs;
+`web/tools/device-e2e.mjs` gains a 4096-px mirror asserting both the local
+model's banner and the device's own verdict, and that neither decays into
+the cascade. Gates: `cargo test --workspace`, clippy clean on the three
+touched crates, `tools/wasm-smoke.mjs`, `tools/check-library.sh` 307/307 on
+all five rigs, `tools/serve-e2e.mjs`, `tools/e2e.mjs`, `tools/device-e2e.mjs`
+in real chromium. `luxel bench` A/B against master on four patterns: within
+±2 %, mixed direction — the `String` error payload is cold-path only.
+Firmware cost, flake images, `board-pixelblaze-v3` before vs after:
+**1,014,400 -> 1,015,776 B, +1,376 B**, leaving 32,800 B (3.13 %) of the OTA
+slot — above image-check's 3 % floor, and the `format!` sites are 16 B of it
+(measured by neutering them), the rest being the `String` error payload on
+the array-allocation path. `tools/ci.sh`'s three release images all pass:
+c6-devkit-hosted 3.15 %, c3-devkit 7.59 %.
+
+**Not verified on metal**: the firmware-side vmerr is the same `take_error`
+path the native mirror exercises, but no device was touched — Gitea #451.
+
 ## 2026-09-08 — #405 batch 4: the two-array read-outs, and the `v * v` wall
 
 The last named bucket on #405. A re-survey found ~15 library patterns on the

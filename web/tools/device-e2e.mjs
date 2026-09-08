@@ -77,6 +77,17 @@ const arrayPattern = (n) =>
 const ARRAY_TIGHT = arrayPattern(1000); // ~9.5 KB modelled — inside 10 KB, past 85%
 const ARRAY_OVER = arrayPattern(1400); // ~12.7 KB modelled — past the runtime floor
 const ARRAY_ARENA = arrayPattern(2100); // 16.8 KB of arrays — past the 16 KB arena
+// The OTHER array wall (Gitea #420): the PB-compat ELEMENT ledger, which is a
+// count, not a size, and which `array(pixelCount)` walks into as soon as the
+// device is bigger than the editor's preview. Three channels at 4096 px are
+// 12,300 units against a 10,236 budget; at the 120 px the other mirrors run
+// they are nothing at all.
+const THREE_CHANNELS = [
+  "export var r = array(pixelCount)",
+  "export var g = array(pixelCount)",
+  "export var b = array(pixelCount)",
+  "export function render(i) { rgb(r[i], g[i], b[i]) }",
+].join("\n");
 
 /** A real mouse click on a Settings control, scrolled into view first — the
  * Output card sits far down a scrolling panel, where a bare `page.click`
@@ -1312,6 +1323,70 @@ try {
       check("capacity: still warns past the credited headroom", (await level()) === "over");
     } finally {
       loadedDev.kill();
+    }
+
+    // ---- the element ledger, at a panel's pixel count (Gitea #420) --------
+    // A healthy-heap mirror driving 4096 px: nothing about SIZE stops this
+    // pattern, only the count of array elements. It used to load and render
+    // black with the editor saying nothing, because the capacity model
+    // discarded the element-ledger vmerr and the device's own vmerr was
+    // overwritten by the "indexing a non-array value" cascade one frame later.
+    const PANEL_PORT = LOADED_PORT + 1;
+    const PANEL = `http://127.0.0.1:${PANEL_PORT}`;
+    const panelDev = spawn(
+      "../target/debug/luxel",
+      ["serve", "--port", String(PANEL_PORT), "--pixels", "4096", "--heap-free", "200000"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      panelDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      panelDev.on("exit", () => reject(new Error("panel mirror died")));
+      setTimeout(() => reject(new Error("panel mirror start timeout")), 30000);
+    });
+    process.on("exit", () => panelDev.kill());
+    try {
+      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(PANEL)}`, {
+        waitUntil: "networkidle0",
+      });
+      await page.waitForSelector(".cm-content");
+      await sleep(1500);
+      await setEditor(page, THREE_CHANNELS);
+      await sleep(2500);
+      // Either banner is a pass — the local model warns first and the
+      // device's own verdict replaces it a poll later — but it must NAME the
+      // element ledger rather than leave a black strip unexplained.
+      const banner = await page
+        .$eval(
+          '[data-role="capacity-rejected"], [data-role="capacity-warning"]',
+          (el) => el.textContent ?? "",
+        )
+        .catch(() => "");
+      check(
+        "capacity: the element ledger is named, not swallowed",
+        /array element budget exceeded|more array elements than this device allows/.test(banner),
+        banner.trim(),
+      );
+      // ...and the device's own vmerr, once it lands, carries the figures and
+      // does not decay into the missing-buffer cascade it causes.
+      await page.waitForSelector('[data-role="capacity-rejected"]', { timeout: 15000 });
+      await sleep(2000);
+      const rejected = await page.$eval(
+        '[data-role="capacity-rejected"]',
+        (el) => el.textContent ?? "",
+      );
+      check(
+        "capacity: the device's verdict names the numbers",
+        /4096-element array needs 4100 more of the 10236-element budget/.test(rejected),
+        rejected.trim(),
+      );
+      check(
+        "capacity: the verdict is not the missing-buffer cascade",
+        !/non-array/.test(rejected),
+        rejected.trim(),
+      );
+      await page.screenshot({ path: `${shotDir}/device-e2e-capacity-elements.png` });
+    } finally {
+      panelDev.kill();
     }
   } finally {
     tightDev.kill();

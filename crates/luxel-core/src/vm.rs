@@ -767,6 +767,81 @@ const _: () = assert!(ARRAY_HEADER_UNITS > 0);
 /// wasm or existing-device behaviour changes.
 pub const MAX_ARENA_SLOTS: usize = DEFAULT_ARRAY_BUDGET / ARRAY_HEADER_UNITS;
 
+// ---- array-budget refusals (Gitea #420) --------------------------------
+//
+// These messages are the ONLY place a user is told why a buffer-based
+// pattern went dark. Before #420 they named the budget but not the numbers,
+// so "array element budget exceeded" on a 64x64 panel left the user with no
+// way to tell whether they were 4 elements over or 4,000 — and the same
+// string appeared for the unrelated slot-vector cap. Each one now names the
+// allocation that failed, what it needed and what was left, in the style of
+// the #390 upload refusal. Built out of line and `#[cold]`: the Ok path of
+// `charge_array` must not carry formatting code.
+
+/// The PB-compat element ledger ran out. `len` is the array's length,
+/// `want` its cost including [`ARRAY_HEADER_UNITS`].
+#[cold]
+#[inline(never)]
+fn elem_budget_err(len: usize, want: usize, used: usize, budget: usize) -> String {
+    format!(
+        "array element budget exceeded: a {}-element array needs {} more of the \
+         {}-element budget, {} left (arrays are never freed)",
+        len,
+        want,
+        budget,
+        budget.saturating_sub(used),
+    )
+}
+
+/// The arena SLOT vector hit its hard cap — a different failure from the
+/// element ledger (a pattern allocating thousands of tiny arrays), and it
+/// used to share the element ledger's wording.
+#[cold]
+#[inline(never)]
+fn slot_cap_err(slots: usize) -> String {
+    format!(
+        "array element budget exceeded: {} arrays is the most one pattern may \
+         allocate (arrays are never freed)",
+        slots
+    )
+}
+
+/// The device-RAM byte budget ran out. Keeps the exact "pattern too large
+/// for this device" tail: the wasm capacity model and the editor's banner
+/// both match on it (`crates/luxel-wasm/src/lib.rs`, `web/src/App.svelte`).
+#[cold]
+#[inline(never)]
+fn byte_budget_err(bytes: usize, used: usize, budget: usize) -> String {
+    format!(
+        "array memory budget exceeded: this array needs {} B of the {} B array \
+         arena, {} B left — pattern too large for this device",
+        bytes,
+        budget,
+        budget.saturating_sub(used),
+    )
+}
+
+/// The allocator refused the reservation even though the budgets allowed it.
+#[cold]
+#[inline(never)]
+fn oom_err(len: usize) -> String {
+    format!("out of memory allocating a {}-element array", len)
+}
+
+/// True for the array-budget refusals above.
+///
+/// These are the runtime errors that depend on the DEVICE — its pixel count
+/// (arrays are usually sized from `pixelCount`) and its arena — rather than
+/// on the pattern being broken. The wasm capacity model reports exactly
+/// these as the device's verdict, because they are the ones the playground's
+/// own preview rig can miss: it runs whatever layout the editor is showing,
+/// which is routinely far shorter than the strip or panel being pushed to
+/// (Gitea #420).
+pub fn is_array_budget_error(message: &str) -> bool {
+    message.starts_with("array element budget exceeded")
+        || message.starts_with("array memory budget exceeded")
+}
+
 const FUEL: u32 = 8_000_000;
 
 /// One arena array: owned storage, or an index into the program's
@@ -1274,7 +1349,7 @@ impl Vm {
     /// device an oversized buffer is a recorded runtime error, never an
     /// allocator panic. Growth keeps every existing channel's values —
     /// channel-major layout makes the new channels a plain append.
-    fn pixel_state_ensure(&mut self, prog: &Program, ch: usize) -> Result<(), &'static str> {
+    fn pixel_state_ensure(&mut self, prog: &Program, ch: usize) -> Result<(), String> {
         let want = ch + 1;
         let (n, have) = match &self.pixel_state {
             Some(s) if s.channels >= want => return Ok(()),
@@ -1289,7 +1364,7 @@ impl Vm {
                 if s.front.try_reserve_exact(extra).is_err()
                     || s.back.try_reserve_exact(extra).is_err()
                 {
-                    return Err("out of memory for pixel state");
+                    return Err(String::from("out of memory for pixel state"));
                 }
                 s.front.resize(n * want, Fx::ZERO);
                 s.back.resize(n * want, Fx::ZERO);
@@ -1300,7 +1375,7 @@ impl Vm {
                 let mut back: Vec<Fx> = Vec::new();
                 if front.try_reserve_exact(extra).is_err() || back.try_reserve_exact(extra).is_err()
                 {
-                    return Err("out of memory for pixel state");
+                    return Err(String::from("out of memory for pixel state"));
                 }
                 front.resize(extra, Fx::ZERO);
                 back.resize(extra, Fx::ZERO);
@@ -1460,7 +1535,7 @@ impl Vm {
 
     /// Mutable storage by id, materializing const-backed arrays
     /// (copy-on-write). Fails only if the copy can't be allocated.
-    fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut ArrVec<Value>, &'static str> {
+    fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut ArrVec<Value>, String> {
         if self.palette_src == Some(id) {
             self.palette_dirty = true;
         }
@@ -1479,7 +1554,7 @@ impl Vm {
             self.charge_array_bytes(delta)?;
             let mut owned: ArrVec<Value> = crate::arena::empty();
             if owned.try_reserve_exact(data.len()).is_err() {
-                return Err("out of memory for array");
+                return Err(oom_err(data.len()));
             }
             owned.extend(data.iter().map(|&w| Value::Num(Fx::from_raw(w as i32))));
             self.array_bytes += delta;
@@ -1500,7 +1575,7 @@ impl Vm {
         prog: &'a Program,
         dst: u32,
         src: u32,
-    ) -> Result<(&'a mut [Value], ArrView<'a>), &'static str> {
+    ) -> Result<(&'a mut [Value], ArrView<'a>), String> {
         debug_assert_ne!(dst, src);
         self.arr_mut(prog, dst)?;
         let (d, s) = (dst as usize, src as usize);
@@ -2179,7 +2254,7 @@ impl Vm {
                                 Some(slot) => *slot = val,
                                 None => fail!("array index out of bounds"),
                             },
-                            Err(m) => fail!(m),
+                            Err(m) => fail!(&m),
                         }
                         push!(val);
                     }
@@ -2206,7 +2281,7 @@ impl Vm {
                                 }
                                 push!(v);
                             }
-                            Err(m) => fail!(m),
+                            Err(m) => fail!(&m),
                         }
                     }
                     op::CONST_ARR => {
@@ -2215,7 +2290,7 @@ impl Vm {
                         let len = prog.pool[d as usize].len as usize;
                         match self.alloc_const_array(d, len) {
                             Ok(v) => push!(v),
-                            Err(m) => fail!(m),
+                            Err(m) => fail!(&m),
                         }
                     }
                     op::ASSERT => {
@@ -2549,20 +2624,30 @@ impl Vm {
         }
     }
 
+    /// Units of the element ledger charged so far — every array's length
+    /// plus [`ARRAY_HEADER_UNITS`]. Paired with [`Vm::array_budget`] this is
+    /// the headroom a pattern has left, which is what `luxel check` reports
+    /// so the wall is visible BEFORE a pattern goes dark on a big rig
+    /// (Gitea #420).
+    pub fn array_elems(&self) -> usize {
+        self.array_elems
+    }
+
     /// Real arena cost of an array: elements plus Vec header + allocator
     /// overhead (what many tiny nested [r,g,b] arrays actually pay).
     fn array_cost(len: usize) -> usize {
         len * core::mem::size_of::<Value>() + 32
     }
 
-    fn charge_array(&mut self, len: usize, bytes: usize) -> Result<(), &'static str> {
-        if self.array_elems + len + ARRAY_HEADER_UNITS > self.array_budget {
-            return Err("array element budget exceeded (arrays are never freed)");
+    fn charge_array(&mut self, len: usize, bytes: usize) -> Result<(), String> {
+        let want = len + ARRAY_HEADER_UNITS;
+        if self.array_elems + want > self.array_budget {
+            return Err(elem_budget_err(len, want, self.array_elems, self.array_budget));
         }
         // The slot vector lives on the ordinary allocator whatever the arena
         // does; see MAX_ARENA_SLOTS.
         if self.arrays.len() >= MAX_ARENA_SLOTS {
-            return Err("array element budget exceeded (arrays are never freed)");
+            return Err(slot_cap_err(MAX_ARENA_SLOTS));
         }
         self.charge_array_bytes(bytes)
     }
@@ -2572,14 +2657,14 @@ impl Vm {
     /// const→owned copy-on-write promotion in [`Vm::arr_mut`] (Gitea #132).
     /// Re-checking the element budget there would demand a spurious extra
     /// header's worth of headroom for an entry that allocates no new slot.
-    fn charge_array_bytes(&mut self, bytes: usize) -> Result<(), &'static str> {
+    fn charge_array_bytes(&mut self, bytes: usize) -> Result<(), String> {
         if self.array_bytes + bytes > self.array_byte_budget {
-            return Err("array memory budget exceeded (pattern too large for this device)");
+            return Err(byte_budget_err(bytes, self.array_bytes, self.array_byte_budget));
         }
         Ok(())
     }
 
-    pub fn alloc_array(&mut self, elems: ArrVec<Value>) -> Result<Value, &'static str> {
+    pub fn alloc_array(&mut self, elems: ArrVec<Value>) -> Result<Value, String> {
         self.charge_array(elems.len(), Self::array_cost(elems.len()))?;
         self.array_elems += elems.len() + ARRAY_HEADER_UNITS;
         self.array_bytes += Self::array_cost(elems.len());
@@ -2590,7 +2675,7 @@ impl Vm {
     /// Arena entry sharing a const-pool array (copy-on-write). Elements
     /// still count against the PB-compat element budget; bytes only for
     /// the entry itself — the data is shared with the program.
-    fn alloc_const_array(&mut self, d: u32, len: usize) -> Result<Value, &'static str> {
+    fn alloc_const_array(&mut self, d: u32, len: usize) -> Result<Value, String> {
         self.charge_array(len, CONST_ENTRY_COST)?;
         self.array_elems += len + ARRAY_HEADER_UNITS;
         self.array_bytes += CONST_ENTRY_COST;
@@ -2602,11 +2687,11 @@ impl Vm {
     /// BEFORE any memory is reserved, and the reservation itself is
     /// fallible — on a small-heap device a huge `array(n)` must be a
     /// recorded runtime error, never an allocator panic (= reboot).
-    fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, &'static str> {
+    fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, String> {
         self.charge_array(len, Self::array_cost(len))?;
         let mut elems: ArrVec<Value> = crate::arena::empty();
         if elems.try_reserve_exact(len).is_err() {
-            return Err("out of memory for array");
+            return Err(oom_err(len));
         }
         elems.resize(len, Value::default());
         self.array_elems += len + ARRAY_HEADER_UNITS;
@@ -3284,7 +3369,7 @@ impl Vm {
             }
             Array => {
                 let len = n(0).to_int_trunc().max(0) as usize;
-                self.alloc_array_zeroed(len).map_err(|m| no_site(m.into()))
+                self.alloc_array_zeroed(len).map_err(no_site)
             }
             ArrayLength => {
                 let Value::Arr(arr) = a(0) else {
@@ -3319,7 +3404,7 @@ impl Vm {
                     if mutate {
                         if let Some(slot) = self
                             .arr_mut(prog, arr)
-                            .map_err(|m| no_site(m.into()))?
+                            .map_err(no_site)?
                             .get_mut(i)
                         {
                             *slot = r;
@@ -3344,7 +3429,7 @@ impl Vm {
                     )?;
                     if let Some(slot) = self
                         .arr_mut(prog, dst)
-                        .map_err(|m| no_site(m.into()))?
+                        .map_err(no_site)?
                         .get_mut(i)
                     {
                         *slot = r;
@@ -3402,7 +3487,7 @@ impl Vm {
                 // splat), so an empty slice is the PB-shaped answer.
                 let vals = args.get(first..argc).unwrap_or(&[]);
                 {
-                    let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    let slots = self.arr_mut(prog, arr).map_err(no_site)?;
                     let count = vals.len() as isize;
                     if off.saturating_add(count) > slots.len() as isize {
                         return Err(no_site("array index out of bounds".into()));
@@ -3422,7 +3507,7 @@ impl Vm {
                 };
                 let cmp = a(1);
                 let by = builtin == ArraySortBy;
-                self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?; // materialize (CoW)
+                self.arr_mut(prog, arr).map_err(no_site)?; // materialize (CoW)
                 let ArrRepr::Owned(mut data) = core::mem::take(&mut self.arrays[arr as usize])
                 else {
                     unreachable!("materialized above")
@@ -3668,7 +3753,7 @@ impl Vm {
                 };
                 let r = n(1).to_int_trunc().max(0) as usize;
                 // materialize up front (copy-on-write) — this writes in place
-                let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                let data = self.arr_mut(prog, arr).map_err(no_site)?;
                 // Sliding window, O(radius) scratch — see blur1d_inplace.
                 // The prefix-sum version this replaced wanted 8 bytes per
                 // ELEMENT, i.e. 32 KiB for a pixelCount-sized array on a
@@ -3690,7 +3775,7 @@ impl Vm {
                 let decay = n(1);
                 for slot in self
                     .arr_mut(prog, arr)
-                    .map_err(|m| no_site(m.into()))?
+                    .map_err(no_site)?
                     .iter_mut()
                 {
                     *slot = Value::Num(slot.num() * decay);
@@ -3710,13 +3795,13 @@ impl Vm {
             Hsv2Rgb => {
                 let rgb = hsv_to_rgb(n(0), n(1), n(2));
                 self.write3(prog, a(3), rgb)
-                    .map_err(|m| no_site(m.into()))?;
+                    .map_err(no_site)?;
                 Ok(a(3))
             }
             Rgb2Hsv => {
                 let hsv = rgb_to_hsv(n(0), n(1), n(2));
                 self.write3(prog, a(3), hsv)
-                    .map_err(|m| no_site(m.into()))?;
+                    .map_err(no_site)?;
                 Ok(a(3))
             }
             // curl2(x, y, out, seed = 0) / curl3(x, y, z, out, seed = 0):
@@ -3747,7 +3832,7 @@ impl Vm {
             // OKLab — perceptually even, no muddy midpoints
             MixColors => {
                 let c = crate::color::mix_oklab([n(0), n(1), n(2)], [n(3), n(4), n(5)], n(6));
-                self.write3(prog, a(7), c).map_err(|m| no_site(m.into()))?;
+                self.write3(prog, a(7), c).map_err(no_site)?;
                 Ok(a(7))
             }
             // ---- Luxel extensions, batch 4: external event injection ----
@@ -3763,12 +3848,12 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("readEvent: `out` must be an array".into()));
                 };
-                let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                let slots = self.arr_mut(prog, arr).map_err(no_site)?;
                 if slots.len() < 4 {
                     return Err(no_site("readEvent: `out` array needs length >= 4".into()));
                 }
                 let ev = self.events.pop_front().unwrap_or_default();
-                let slots = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                let slots = self.arr_mut(prog, arr).map_err(no_site)?;
                 for (slot, v) in slots.iter_mut().zip(ev) {
                     *slot = Value::Num(v);
                 }
@@ -3790,7 +3875,7 @@ impl Vm {
                 );
                 if w >= 1 && h >= 1 && r >= 1 {
                     let (w, h, r) = (w as usize, h as usize, r as usize);
-                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
                     if data.len() < w * h {
                         return Err(no_site(format!(
                             "blur2D: array shorter than w\u{d7}h ({} < {})",
@@ -3849,7 +3934,7 @@ impl Vm {
                     // closed forms for the aliased call
                     for slot in self
                         .arr_mut(prog, dst)
-                        .map_err(|m| no_site(m.into()))?
+                        .map_err(no_site)?
                         .iter_mut()
                     {
                         *slot = Value::Num(match builtin {
@@ -3861,7 +3946,7 @@ impl Vm {
                 } else {
                     let (d, s) = self
                         .arr_pair(prog, dst, src)
-                        .map_err(|m| no_site(m.into()))?;
+                        .map_err(no_site)?;
                     for (dv, sv) in d.iter_mut().zip(s.iter()) {
                         let (x, y) = (dv.num(), sv.num());
                         *dv = Value::Num(match builtin {
@@ -3887,7 +3972,7 @@ impl Vm {
                 if w >= 1 {
                     let w = w as usize;
                     let (x, y) = (n(2), n(3));
-                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
                     let h = data.len() / w;
                     if h >= 1 {
                         data[cell_index(y, h) * w + cell_index(x, w)] = v;
@@ -3911,7 +3996,7 @@ impl Vm {
                 if w >= 1 {
                     let w = w as usize;
                     let (x, y) = (n(2), n(3));
-                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
                     let h = data.len() / w;
                     if h >= 1 {
                         let i = cell_index(y, h) * w + cell_index(x, w);
@@ -3942,7 +4027,7 @@ impl Vm {
                 }
                 let ch = ch as usize;
                 self.pixel_state_ensure(prog, ch)
-                    .map_err(|m| no_site(m.into()))?;
+                    .map_err(no_site)?;
                 if let Some(s) = &mut self.pixel_state {
                     if i >= 0 && (i as usize) < s.n {
                         s.back[ch * s.n + i as usize] = v;
@@ -4103,7 +4188,7 @@ impl Vm {
                 let (z, seed) = if three { (n(7), n(8)) } else { (Fx::ZERO, n(7)) };
                 if w >= 1 && h >= 1 {
                     let (w, h) = (w as usize, h as usize);
-                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
                     if data.len() < w * h {
                         return Err(no_site(format!(
                             "{}: array shorter than w\u{d7}h ({} < {})",
@@ -4160,7 +4245,7 @@ impl Vm {
                     let (w, h) = (w as usize, h as usize);
                     let (d, s) = self
                         .arr_pair(prog, dst, src)
-                        .map_err(|m| no_site(m.into()))?;
+                        .map_err(no_site)?;
                     if d.len() < w * h || s.len() < w * h {
                         return Err(no_site(format!(
                             "stencil2D: array shorter than w\u{d7}h ({} < {})",
@@ -4240,13 +4325,13 @@ impl Vm {
     }
 
     /// Write two numbers into the first two slots of `out`.
-    fn write2(&mut self, prog: &Program, out: Value, vals: [Fx; 2]) -> Result<(), &'static str> {
+    fn write2(&mut self, prog: &Program, out: Value, vals: [Fx; 2]) -> Result<(), String> {
         let Value::Arr(arr) = out else {
-            return Err("`out` must be an array");
+            return Err(String::from("`out` must be an array"));
         };
         let slots = self.arr_mut(prog, arr)?;
         if slots.len() < 2 {
-            return Err("`out` array needs length >= 2");
+            return Err(String::from("`out` array needs length >= 2"));
         }
         for (slot, v) in slots.iter_mut().zip(vals) {
             *slot = Value::Num(v);
@@ -4255,13 +4340,13 @@ impl Vm {
     }
 
     /// Write three numbers into the first three slots of `out`.
-    fn write3(&mut self, prog: &Program, out: Value, vals: [Fx; 3]) -> Result<(), &'static str> {
+    fn write3(&mut self, prog: &Program, out: Value, vals: [Fx; 3]) -> Result<(), String> {
         let Value::Arr(arr) = out else {
-            return Err("`out` must be an array");
+            return Err(String::from("`out` must be an array"));
         };
         let slots = self.arr_mut(prog, arr)?;
         if slots.len() < 3 {
-            return Err("`out` array needs length >= 3");
+            return Err(String::from("`out` array needs length >= 3"));
         }
         for (slot, v) in slots.iter_mut().zip(vals) {
             *slot = Value::Num(v);

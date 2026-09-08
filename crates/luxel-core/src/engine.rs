@@ -146,6 +146,21 @@ pub struct Engine {
     /// hold a never-rendered (black) buffer.
     rendered_once: bool,
     pub last_error: Option<VmError>,
+    /// The pattern's own INIT was refused an array (Gitea #420), so the
+    /// render pass records nothing for the rest of this engine's life.
+    ///
+    /// `array(pixelCount)` at the top level is how buffer patterns declare
+    /// their channels, and when one is refused every frame afterwards fails
+    /// on the missing buffer — "indexing a non-array value", at a fresh site
+    /// per handler. Hosts poll `take_error` once a frame and publish the
+    /// newest message (`/api/status`'s vmerr, the playground's runtime
+    /// banner), so the refusal that says WHY was visible for one frame and
+    /// then buried under its own cascade for as long as the pattern ran.
+    /// Silencing the cascade leaves the refusal standing as the last thing
+    /// every host was told, which is the honest answer: nothing downstream
+    /// of a missing buffer is diagnostic. It also stops a `format!` per
+    /// erroring site per frame on a device that is already out of memory.
+    arrays_refused: bool,
     debug_enabled: bool,
     /// Some(stage) while the pipeline is suspended at a debug stop.
     run_stage: Option<RunStage>,
@@ -348,6 +363,9 @@ impl Engine {
             render_time_acc: 0,
             frame_acc: 0,
             rendered_once: false,
+            arrays_refused: last_error
+                .as_ref()
+                .is_some_and(|e| crate::vm::is_array_budget_error(&e.message)),
             last_error,
             debug_enabled: false,
             run_stage: None,
@@ -1111,8 +1129,10 @@ impl Engine {
                     let fatal = e.is_assert || e.is_resource_guard();
                     // first error wins until read: a per-pixel error would
                     // otherwise re-alloc its message for every pixel of
-                    // every frame, and the root cause is the earliest one
-                    if self.last_error.is_none() || fatal {
+                    // every frame, and the root cause is the earliest one.
+                    // `arrays_refused` extends that across frames: the root
+                    // cause is then the load-time refusal (Gitea #420).
+                    if (self.last_error.is_none() || fatal) && !self.arrays_refused {
                         self.last_error = Some(e);
                     }
                     if fatal {
@@ -1251,7 +1271,7 @@ impl Engine {
             }
             if let Err(e) = self.vm.render_pixel(&self.prog, &plan, &args) {
                 let fatal = e.is_assert || e.is_resource_guard();
-                if self.last_error.is_none() || fatal {
+                if (self.last_error.is_none() || fatal) && !self.arrays_refused {
                     self.last_error = Some(e);
                 }
                 if fatal {
@@ -1462,6 +1482,14 @@ impl Engine {
     /// Take and clear the recorded error (hosts poll this per frame).
     pub fn take_error(&mut self) -> Option<VmError> {
         self.last_error.take()
+    }
+
+    /// Element-ledger usage and budget after init (`(used, budget)`), the
+    /// pair behind the "array element budget exceeded" refusal. Reported by
+    /// `luxel check` so a pattern's distance from the wall is visible at the
+    /// rig it will actually run on (Gitea #420).
+    pub fn array_elements(&self) -> (usize, usize) {
+        (self.vm.array_elems(), self.vm.array_budget)
     }
 
     /// An `assert()` invariant failed during init — the pattern is blocked

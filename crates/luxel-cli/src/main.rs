@@ -101,10 +101,20 @@ enum Rig {
 }
 
 fn check_at(path: &str, rig: Rig) -> ExitCode {
-    let report = |stage: &str, error: Option<String>| {
+    // `arrays` is the element-ledger reading (used, budget) once an engine
+    // exists — the wall behind "array element budget exceeded". Reporting it
+    // on the OK path too is the point: a pattern that passes at 10x10 with
+    // 312/10236 used and fails at 64x64 is not a mystery once the number is
+    // on screen, and `check --grid 64x64` is the pre-upload gate for a panel
+    // (Gitea #420).
+    let report = |stage: &str, error: Option<String>, arrays: Option<(usize, usize)>| {
         let mut obj = serde_json::json!({ "file": path, "stage": stage });
         if let Some(e) = error {
             obj["error"] = serde_json::Value::String(e);
+        }
+        if let Some((used, budget)) = arrays {
+            obj["arrayElems"] = serde_json::Value::from(used);
+            obj["arrayBudget"] = serde_json::Value::from(budget);
         }
         println!("{obj}");
         if stage == "ok" {
@@ -121,9 +131,9 @@ fn check_at(path: &str, rig: Rig) -> ExitCode {
         match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(v) => match v["sources"]["main"].as_str() {
                 Some(s) => s.to_string(),
-                None => return report("epe", Some("no sources.main in .epe".into())),
+                None => return report("epe", Some("no sources.main in .epe".into()), None),
             },
-            Err(e) => return report("epe", Some(format!("bad .epe JSON: {e}"))),
+            Err(e) => return report("epe", Some(format!("bad .epe JSON: {e}")), None),
         }
     } else {
         raw.clone()
@@ -138,7 +148,7 @@ fn check_at(path: &str, rig: Rig) -> ExitCode {
         Ok(p) => p,
         Err(d) => {
             let (line, col) = line_col(&src, d.span.start);
-            return report("compile", Some(format!("{line}:{col}: {}", d.message)));
+            return report("compile", Some(format!("{line}:{col}: {}", d.message)), None);
         }
     };
     // LXBC round-trip: encode must decode to a byte-identical re-encode, and
@@ -146,21 +156,21 @@ fn check_at(path: &str, rig: Rig) -> ExitCode {
     // is the device's execution path, so the corpus report exercises it.
     let blob = match luxel_core::bytecode::serialize(&prog) {
         Ok(b) => b,
-        Err(e) => return report("bytecode", Some(e.to_string())),
+        Err(e) => return report("bytecode", Some(e.to_string()), None),
     };
     let prog_bc = match luxel_core::bytecode::deserialize(&blob) {
         Ok(p) => p,
-        Err(e) => return report("bytecode", Some(e.to_string())),
+        Err(e) => return report("bytecode", Some(e.to_string()), None),
     };
     match luxel_core::bytecode::serialize(&prog_bc) {
         Ok(b) if b == blob => {}
-        Ok(_) => return report("bytecode", Some("re-encode not byte-identical".into())),
-        Err(e) => return report("bytecode", Some(e.to_string())),
+        Ok(_) => return report("bytecode", Some("re-encode not byte-identical".into()), None),
+        Err(e) => return report("bytecode", Some(e.to_string()), None),
     }
     let mut engine = Engine::from_program_budgeted_at(prog, pixels, 1, usize::MAX, now_unix());
     let mut engine_bc = Engine::from_program_budgeted_at(prog_bc, pixels, 1, usize::MAX, now_unix());
     if let Some(e) = engine.take_error() {
-        return report("init", Some(e.message));
+        return report("init", Some(e.message), Some(engine.array_elements()));
     }
     engine_bc.take_error();
     // a W×H grid map so render2D patterns exercise real coordinates. A strip
@@ -188,14 +198,14 @@ fn check_at(path: &str, rig: Rig) -> ExitCode {
         let px = engine.frame(Fx::from_f64(16.7)).to_vec();
         let px_bc = engine_bc.frame(Fx::from_f64(16.7));
         if px != px_bc {
-            return report("bytecode", Some("frame differs from source path".into()));
+            return report("bytecode", Some("frame differs from source path".into()), None);
         }
         if let Some(e) = engine.take_error() {
-            return report("frame", Some(e.message));
+            return report("frame", Some(e.message), Some(engine.array_elements()));
         }
         engine_bc.take_error();
     }
-    report("ok", None)
+    report("ok", None, Some(engine.array_elements()))
 }
 
 /// Render a pattern and dump the final frame's RGB bytes as a JSON array —
