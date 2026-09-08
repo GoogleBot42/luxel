@@ -2,10 +2,17 @@
 
 Captured from Jeremy's 2026-07-06 feedback batch. The web app (`web/`) has
 grown a single monolithic `App.svelte` with everything crammed into one
-header bar; it needs to become a **two-mode, tabbed application**. This doc
-is the working backlog — check items off as they land. See PLAN.md §2.3 for
-the original Web IDE spec and ideas.md "Playground / DX" for feature-level
-ideas.
+header bar; it needs to become a **two-mode, tabbed application**. See
+PLAN.md §2.3 for the original Web IDE spec and ideas.md "Playground / DX"
+for feature-level ideas.
+
+**Status 2026-09-08: this backlog is complete — every item below is ✅ and
+the driving ticket (Gitea #4) is closed. Read it as the record of what the
+redesign became, not as a to-do list.** The only web-UI work still open is
+the two mapper/gallery niceties in ideas.md "Playground / DX", and those
+are ticketed: **#355** (visual map drag-editing, Fill/Contain toggles) and
+**#356** (waterfall option for 1D gallery tiles). New web-UI work goes on
+Gitea, not here.
 
 Legend: **[S/M/L]** effort · 🔧 = needs firmware support · ✅ done.
 
@@ -270,9 +277,10 @@ and `--out-fps N --rescan-hz HZ` make it impersonate a pipelined panel board so
 the `(panel)` label and the tooltip's ceiling are exercised without a HUB75
 rig. device-e2e asserts both.
 
-## Settings page 🔧 [L]
+## Settings page 🔧 [L] ✅
 
-A real device needs a settings surface (page/dialog). Fields:
+A real device needs a settings surface (page/dialog). **Done — every field
+below shipped with its firmware half.** Fields:
 - **Brightness** ✅ — runtime value (`shared::BRIGHTNESS` atomic, 0–31) with
   `GET/POST /api/brightness`, applied every frame in the encode path (SK9822's
   5-bit current field + a software scale for WS2812) and persisted in a `LXDV`
@@ -395,10 +403,16 @@ while a playlist churns flash and after the in-page burst.
 
 ## Rough phasing
 
-1. **Phase 1 (web-only, no firmware):** mode concept + naming; remember device
-   URL; "ws push" → human label; gate debugger off in device mode; hide Share in
-   device mode; gallery spinners. *(No firmware, no reflash — fully verifiable
-   in chromium.)*
+1. **Phase 1 (web-only, no firmware):** ✅ shipped — mode concept + naming
+   (`isPlayground`, derived from a connected `DeviceSession`);
+   ~~hide Share in device mode~~ ✅; ~~gallery spinners~~ ✅. Three items were
+   overtaken rather than built: *remember device URL*, *"ws push" → human
+   label* and *gate the debugger off in device mode* were all made moot by
+   "Device mode = local preview + push" above — the ws push socket and the
+   connect chrome are gone (the base is always known: same-origin, or a
+   `?device=` override), and the debugger runs on the local WASM engine
+   everywhere, so it never lies and never needs gating. *(No firmware, no
+   reflash — fully verifiable in chromium.)*
 2. **Phase 2 (web restructure):** ✅ shipped — tab bar in both modes (Editor ·
    Patterns [· Settings on device]); header decluttered to wordmark/tabs/status/
    connection; file actions → editor toolbar + ⋯ overflow; layout/fps/pause/debug

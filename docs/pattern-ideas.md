@@ -1,5 +1,32 @@
 # Pattern ideas: research backlog for example patterns
 
+> **FULLY IMPLEMENTED — 2026-09-08. This document is history, not a
+> backlog.** Every shortlist item (1–12) and every stretch item that was
+> not deliberately skipped now ships as a tracked file in `library/`:
+> `boids-2d.js`, `flow-field-2d.js`, `typing-heatmap-2d.js`,
+> `pendulum-wave.js`, `interference-2d.js`, `crosshair-pulse-2d.js`,
+> `drip.js`, `ocean.js`, `starfield-2d.js`, `dna-helix-2d.js`,
+> `radar-2d.js`, `chevron-2d.js`, plus `tetrix-2d.js`,
+> `falling-sand-2d.js`, `tv-simulator.js`, `soap-2d.js`,
+> `spirograph-2d.js` and `reaction-diffusion-2d.js` (Gray–Scott, in 16.16
+> fixed point). Popcorn and munching squares were skipped on purpose —
+> see the 2026-07-06 status note below. The clean-room reimplementation
+> of the whole corpus is complete too.
+>
+> The engine/builtin wants this survey generated are all shipped as well:
+> **`blur2D`**, **bulk array math** (`arrayAdd`/`arraySub`/`arrayScale`/
+> `arrayMix`) and **external event injection** (`eventCount`/`readEvent`,
+> preview clicks + `POST /api/events` + MQTT) are in `BUILTINS`, and
+> **noise with analytic derivatives** landed 2026-09-01 as
+> `simplex2_grad`/`simplex3_grad` feeding `curl2`/`curl3` (demo:
+> `library/curl-flow-2d.js`) — see docs/ideas.md "Builtins". The two
+> remaining entries in that section were never pattern work: they are
+> cross-references to the M5 sensor framework and the DDP/FFT items,
+> which stay open in docs/ideas.md.
+>
+> Nothing here needs doing. New pattern ideas go on Gitea, not into this
+> file; keep it as the record of where the library's originals came from.
+
 A survey of what the wider LED ecosystem ships as effects, filtered down
 to ideas that (a) are not already in the corpus (288 compile-clean PB
 community patterns) or our examples, and (b) would show off Luxel builtins

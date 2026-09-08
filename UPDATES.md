@@ -1,5 +1,49 @@
 # Update log
 
+## 2026-09-08 — docs: the backlogs stop advertising shipped work as open (#247)
+
+Every `fetch-work` sweep was re-verifying (and risking re-proposing) work
+that had already shipped, because the three repo backlogs still read as
+open. Docs only, no code.
+
+* **docs/ideas.md — "Flash-mapped library execution"** was the big one: the
+  library half is done. #274 maps flash through the cache MMU, #332 gave
+  the pattern store one 896 KiB mappable extent region (the contiguous
+  placement the item was blocked on), #276/#293 hand the engine `&'static`
+  slices out of it, and #278's LXBC v5 `deserialize_lean_static` validates
+  them in place — so a library pattern's code and constant pool cost no RAM
+  at all (Main Stage resident 35,540 → 8,933 B). Rewritten as DONE with the
+  one genuinely open half named: the ad-hoc `POST /api/code` path still
+  reserves the whole envelope and copies (#417 to stream it, #439 for the
+  ceiling it imposes).
+* **docs/ideas.md — pattern browser**: both listed niceties shipped —
+  gallery search 2026-07-07 (`data-role="gallery-search"`) and render3D
+  projection tiles with the mapper-v2 batch (the `kind: "cloud"` path).
+  Only the 1D waterfall is left, and it is #356. The stale "192 live tiles"
+  count now points at `tools/check-library.sh` instead of a frozen number.
+* **docs/ideas.md — Luxel-to-Luxel sync**: pattern distribution shipped as
+  Sync v2 in v0.1.23; only *playlist* distribution is future work. Mapper
+  niceties now cite #355.
+* **docs/webui.md**: the last two unticked headings — Phase 1 and "Settings
+  page 🔧 [L]" — are ticked. Phase 1's three unbuilt items (remember device
+  URL, "ws push" label, gate the debugger in device mode) were overtaken by
+  the local-preview re-architecture rather than built, which the doc now
+  says. A status banner marks the whole backlog complete with #4 closed.
+* **docs/pattern-ideas.md**: banner marking it FULLY IMPLEMENTED. All 12
+  shortlist items and every non-skipped stretch item are tracked files in
+  `library/`, and the engine wants it generated (blur2D, bulk array math,
+  event injection, analytic-derivative noise → `curl2`/`curl3`) are all in
+  `BUILTINS`. Content kept as history.
+* **`.claude/skills/fetch-work/sources.md`**: pattern-ideas.md and webui.md
+  are marked EXHAUSTED — skip, don't re-verify — and ideas.md's note now
+  names what is actually still open there (the language tier, the engine
+  compositor, the M5 peripherals tier).
+
+Deliberately not touched: docs/UNTESTED.md (a concurrent session is
+editing it), and ideas.md "Multi-pattern blend / transitions", where the
+firmware's playlist crossfade covers the transitions half but the
+engine-level compositor for layered effects does not exist.
+
 ## 2026-09-08 — the release gate builds three boards, and the two things that slipped past it (#413, #438)
 
 Both of yesterday's release-gate breakages merged green because
