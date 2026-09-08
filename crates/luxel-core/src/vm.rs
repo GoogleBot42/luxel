@@ -418,6 +418,8 @@ pub enum Builtin {
     FillNoise2D,
     FillNoise3D,
     PaintCanvas,
+    Stencil2D,
+    ArrayMaxAbs,
 }
 
 pub struct BuiltinDef {
@@ -543,11 +545,13 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("fillRect", FillRect), b!("fillCircle", FillCircle),
     b!("splat", Splat), b!("drawLine", DrawLine),
     b!("fillCanvas", FillCanvas), b!("blit", Blit),
-    // Luxel extensions, batch 11 (appended): the two ops #373's aurora-2d
-    // follow-up measured — a lattice noise fill and a palette-space canvas
-    // fill. Ids 182..=184.
+    // Luxel extensions, batch 11 (appended): the ops #373 measured out of
+    // the aurora-2d and raindrops-2d `renderFrame` conversions — a lattice
+    // noise fill, a palette-space canvas fill, a linear 2D stencil and the
+    // reduction the stencil needs. Ids 182..=186.
     b!("fillNoise2D", FillNoise2D), b!("fillNoise3D", FillNoise3D),
     b!("paintCanvas", PaintCanvas),
+    b!("stencil2D", Stencil2D), b!("arrayMaxAbs", ArrayMaxAbs),
 ];
 
 /// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
@@ -4122,6 +4126,91 @@ impl Vm {
                     }
                 }
                 Ok(a(0))
+            }
+            // stencil2D(dst, src, w, h, kSelf, kEdge, kDiag):
+            //   dst[i] += kSelf*src[i] + kEdge*(W+E+N+S) + kDiag*(the four
+            //   diagonals)
+            // over the first w×h elements of two row-major canvases, with
+            // the border MIRRORED (clamped index) so a wave reaches the
+            // outermost row and reflects instead of dying one cell short.
+            // `src` is never written and `dst` accumulates, which is what
+            // makes the two-buffer water recurrence one call:
+            // `next = 2*now - before + c2*laplacian(now)` is
+            // `arrayScale(before, -1)` then this with kSelf = 2 - 4*c2 and
+            // kEdge = c2. kDiag = 0 is the 5-point Laplacian, kDiag =
+            // kEdge the 9-point one, kSelf = 1 / kEdge = 0 a copy.
+            //
+            // Neighbours are summed W, E, N, S (then NW, NE, SW, SE) —
+            // fixed-point addition is exact until it saturates, so the
+            // order only matters at the rail, but it is pinned so an
+            // equivalent bytecode loop can be written to match.
+            Stencil2D => {
+                let (Value::Arr(dst), Value::Arr(src)) = (a(0), a(1)) else {
+                    return Err(no_site("stencil2D needs two arrays".into()));
+                };
+                if dst == src {
+                    // A stencil reads neighbours it has already written,
+                    // so an aliased call is a different (and unstated)
+                    // operation, not a closed form. Say so.
+                    return Err(no_site("stencil2D: dst and src must differ".into()));
+                }
+                let (w, h) = (n(2).to_int_trunc(), n(3).to_int_trunc());
+                let (kself, kedge, kdiag) = (n(4), n(5), n(6));
+                if w >= 1 && h >= 1 {
+                    let (w, h) = (w as usize, h as usize);
+                    let (d, s) = self
+                        .arr_pair(prog, dst, src)
+                        .map_err(|m| no_site(m.into()))?;
+                    if d.len() < w * h || s.len() < w * h {
+                        return Err(no_site(format!(
+                            "stencil2D: array shorter than w\u{d7}h ({} < {})",
+                            d.len().min(s.len()),
+                            w * h
+                        )));
+                    }
+                    let at = |i: usize| s.get(i).map_or(Fx::ZERO, |v| v.num());
+                    for y in 0..h {
+                        let row = y * w;
+                        let up = if y > 0 { row - w } else { row };
+                        let dn = if y + 1 < h { row + w } else { row };
+                        for x in 0..w {
+                            let i = row + x;
+                            let l = if x > 0 { x - 1 } else { x };
+                            let r = if x + 1 < w { x + 1 } else { x };
+                            let mut v = d[i].num() + kself * at(i);
+                            v = v + kedge * (at(row + l) + at(row + r) + at(up + x) + at(dn + x));
+                            if kdiag != Fx::ZERO {
+                                v = v
+                                    + kdiag
+                                        * (at(up + l) + at(up + r) + at(dn + l) + at(dn + r));
+                            }
+                            d[i] = Value::Num(v);
+                        }
+                    }
+                }
+                Ok(a(0))
+            }
+            // arrayMaxAbs(a): the largest |a[i]|, 0 for an empty array.
+            // Ships with stencil2D on purpose (#373 §3): the peak-amplitude
+            // reduction the water recurrence fuses into its own loop is what
+            // lets a pool flatten to exactly nothing, and a native stencil
+            // without it would hand the win straight back to a second
+            // bytecode pass over the array. The INDEX form (argmax, which
+            // five library patterns want to recycle the oldest slot) is a
+            // separate op and is not this one — see the ticket.
+            ArrayMaxAbs => {
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site("arrayMaxAbs of a non-array".into()));
+                };
+                let mut m = Fx::ZERO;
+                for v in self.arr(prog, arr).iter() {
+                    let x = v.num();
+                    let x = if x < Fx::ZERO { Fx::ZERO - x } else { x };
+                    if x > m {
+                        m = x;
+                    }
+                }
+                num(m)
             }
             // paintCanvas(vArr, w, h [, bArr]): fillCanvas's geometry with
             // paint()'s colour — the installed palette sampled at vArr[i],

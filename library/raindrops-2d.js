@@ -68,6 +68,7 @@ var H = 16
 var N = W * H
 var bufA = array(N)
 var bufB = array(N)
+var lap = array(N)         // scratch for one step's mirrored Laplacian
 var bgv = array(N)         // static sea-floor field, -0.5..0.5
 var prev = bufA            // ping-pong surfaces, swapped by reference
 var cur = bufB             // newest state; render and drops both read/write it
@@ -223,32 +224,31 @@ function rippleStep() {
   // Neighbors are MIRRORED at the border (clamped index) rather than the grid
   // being left with a dead one-cell frame, so ripples run to the outermost
   // row and column and reflect off the wall of the pool.
-  var peak = 0
-  var x, y
-  for (y = 0; y < H; y++) {
-    var row = y * W
-    var up = y > 0 ? row - W : row
-    var dn = y < H - 1 ? row + W : row
-    for (x = 0; x < W; x++) {
-      var i = row + x
-      var li = x > 0 ? i - 1 : i
-      var ri = x < W - 1 ? i + 1 : i
-      var p = prev[i]
-      var s = prev[li] + prev[ri] + prev[up + x] + prev[dn + x]
-      var v = (2 * p - cur[i] + c2 * (s - 4 * p)) * damp
-      cur[i] = v
-      var m = abs(v)
-      if (m > peak) peak = m
-    }
-  }
+  //
+  // Nine native passes instead of 56.5 interpreted instructions per cell.
+  // `stencil2D` is the mirrored-border neighbour sum: into a zeroed buffer
+  // with kSelf = -4 and kEdge = 1 it forms EXACTLY the `s - 4*p` the hand
+  // loop formed, in the same order, so the rest is fixed-point-identical
+  // arithmetic rather than an approximation of it. Folding c2 into the
+  // stencil (kSelf = 2 - 4*c2) would save three passes and would NOT be:
+  // it splits one multiply into two, each with its own 16.16 rounding, and
+  // a second-order recurrence integrates that difference frame after frame.
+  feedback(lap, 0)
+  stencil2D(lap, prev, W, H, -4, 1, 0)
+  feedback(lap, c2)
+  feedback(cur, -1)
+  arrayAdd(cur, prev)
+  arrayAdd(cur, prev)
+  arrayAdd(cur, lap)
+  feedback(cur, damp)
+  // the peak the loop used to carry along with it, as its own native pass
+  var peak = arrayMaxAbs(cur)
   // Once the whole field is below the visibility floor, flatten it outright.
   // A per-cell deadzone would pump this second-order recurrence and leave the
   // pool simmering forever; a whole-field reset can only remove energy.
   if (peak < QUIET) {
-    for (x = 0; x < N; x++) {
-      prev[x] = 0
-      cur[x] = 0
-    }
+    feedback(prev, 0)
+    feedback(cur, 0)
     flat = 1
   }
   shadeDirty = 1

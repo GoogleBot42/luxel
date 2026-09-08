@@ -1,5 +1,96 @@
 # Update log
 
+## 2026-09-07 — bulk ops: a canvas fast path, noise/palette canvas fills, a 2D stencil (#373)
+
+Four of #373's five sections, implemented and measured. The gate throughout
+was `tools/image-check.sh`'s 3 % OTA-slot floor, taken per board with
+devshell builds against each step's own merge base.
+
+* **§4 `fillCanvas` integer-upscale fast path** — no new builtin. The direct
+  path required the grid dims to EQUAL the canvas dims, so a 64x64 panel
+  showing a 16x16 canvas took the generic scan. It now takes an exact block
+  expand on either axis, *verified per call*: `n % k == 0` is necessary and
+  not sufficient (51 grid columns onto a 51-cell canvas shifts a boundary),
+  so `axis_blocks` walks one row and one column comparing
+  `cell_index(coord(i), k)` against `i / m` before the path is taken.
+  `fillCanvas` alone 8.1 -> 1.4 ns/px at 4096 px (**5.6x**); +864 B Xtensa /
+  +544 B RISC-V.
+* **§6 `fillNoise2D` / `fillNoise3D`** — simplex noise on a regular lattice
+  into a row-major canvas, producing exactly what the interpreted loop
+  produces (argument arithmetic included; asserted cell by cell). `h = 1`
+  fills one row whose y is just `oy`, which is how a pattern samples a
+  lattice row at a time without a full-panel canvas. No perlin variant:
+  octaves/lacunarity/gain would add three slots and a second inner loop for
+  a family no library pattern samples on a lattice.
+* **§7 `paintCanvas(vArr, w, h [, bArr])`** — `fillCanvas`'s geometry with
+  `paint()`'s colour, sharing `sample_palette` and the `paint()` position
+  wrap with the interpreter so a cell is byte-identical to `paint()` +
+  `setPixel()`. One array where `fillCanvas` needs three, which is the
+  difference between a palette pattern being representable on a 64x64 panel
+  and not. §6 + §7 together: +1,808 to +1,920 B.
+* **§1 `stencil2D` + §3 `arrayMaxAbs`** — a linear 4-/8-neighbour stencil
+  with mirrored borders that *accumulates* into `dst`, plus the peak
+  reduction that lets a simulation flatten to exactly nothing. +1,728 to
+  +1,888 B. §2 (the element-wise waveform/affine/clamp maps) is NOT done and
+  is now the largest remaining item on #373 — it is half of what is left of
+  the raindrops frame.
+
+Conversions, both with the numbers they were accepted on
+(docs/bulk-render.md):
+
+* **`library/raindrops-2d.js`** — `rippleStep()` is nine native passes
+  instead of 56.5 interpreted instructions per cell, and **byte-identical**
+  over 600 frames and four control extremes. That took the *exact*
+  formulation (a zeroed scratch, `stencil2D(lap, prev, W, H, -4, 1, 0)`,
+  then `arrayScale`) rather than folding `c2` into the stencil, which would
+  save three passes and split one 16.16 multiply into two. 4096 px 20.90 ->
+  8.45 ns/px (**2.47x**), 1.76-1.93x on every smaller rig; 26,159 -> 11,729
+  interpreted instructions per frame.
+* **`library/aurora-2d.js`** — the shimmer is filled a lattice row at a time
+  (`fillNoise3D(..., h = 1)`), and `paintCanvas` replaces the coarse path's
+  per-cell `fillRect` loop; Cell Size 1 keeps `paint()` + `setPixel()`,
+  which is byte-exact and cheaper at one cell per pixel. 1.21x at Cell Size
+  1, **2.85x / 1.78x / 2.70x** at Cell Size 2/3/4. **Not** byte-identical
+  any more, and the reason is exact: a lattice `c * sx + ox` reproduces a
+  grid map's `round(c * 65535 / (w - 1))` only where `65535 / (w - 1)`
+  divides evenly — it does at 16 and 18 wide (both still 0 differing bytes)
+  and not at 8, 10, 17, 23 or 64, where the residual is maxdiff 1-2 on
+  0.22-1.83 % of bytes.
+
+**Margins after all four**, on the CANONICAL credless flake builds
+(`nix build .#luxel-fw-<v>`) that release CI gates, master vs the branch on
+the same day:
+
+| board | before | after | delta | margin |
+|---|---:|---:|---:|---:|
+| `board-pixelblaze-v3` | 1,011,408 | 1,015,328 | +3,920 | 3.17 % |
+| `board-athom-music` | 1,011,488 | 1,015,424 | +3,936 | 3.16 % |
+| `board-esp32-generic` | 1,010,976 | 1,014,928 | +3,952 | 3.21 % |
+| `board-s3-devkit` | 957,792 | 961,712 | +3,920 | 8.28 % |
+| `board-s3-devkit` + `hub75` | 964,064 | 967,840 | +3,776 | 7.70 % |
+| `board-seengreat-hub75` | 963,968 | 967,728 | +3,760 | 7.71 % |
+| `board-c6-devkit` | 1,029,600 | 1,033,424 | +3,824 | **1.45 %** (was 1.81 % — already under the floor, #291/#310) |
+| `board-c6-devkit` + `hosted-ui` | 1,013,328 | 1,016,656 | +3,328 | **3.04 %** |
+
+Every board that was above `image-check.sh`'s 3 % floor is still above it —
+but the shipped C6 image now has **460 bytes** of headroom. The next VM
+feature has to measure that variant FIRST, credless, and §2's three arms
+almost certainly do not fit. (The per-item deltas above were taken with
+creds-baked devshell builds, which read ~1.5 KB larger and put the same
+variant at 2.94 %; docs/firmware.md is explicit that the credless flake
+build is the gate and that the two must never be compared against each
+other. Both were measured; only the credless one decides.)
+
+**`board-c3-devkit` does not build on master at all** — filed as #413,
+unrelated to this work: the HUB75 tag-log diagnostics use `fetch_add`/`swap`
+on a `riscv32imc` target that has no CAS, and `tools/ci.sh` misses it
+because its firmware step only builds `board-pixelblaze-v3`.
+
+**Harness note.** Host `luxel bench` best-of-**5** is not enough for a
+pattern whose frame cost varies: an early best-of-5 sweep showed a phantom
+15 % *regression* at 256 px that best-of-15 resolved to 1.02x, in the same
+direction across 11 interleaved rounds and with the run order swapped. Use
+15 rounds for anything that is not flat in frame cost.
 ## 2026-09-07 — firmware: 8 MB octal PSRAM as the pattern-array arena (Seengreat S3)
 
 Gitea #253. The Seengreat panel board carries an ESP32-S3-WROOM-1-N16R8 and

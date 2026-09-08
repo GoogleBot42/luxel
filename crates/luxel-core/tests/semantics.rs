@@ -2446,3 +2446,103 @@ fn fill_noise_matches_an_interpreted_loop() {
     );
 }
 
+#[test]
+fn stencil2d_matches_an_interpreted_loop() {
+    // dst += kSelf*src + kEdge*(W+E+N+S) + kDiag*(the four diagonals),
+    // borders mirrored (clamped index). The reference is the loop a
+    // pattern would otherwise hand-roll, in the same summation order.
+    const W: usize = 5;
+    const H: usize = 4;
+    const N: usize = W * H;
+    let seed_arrays = format!(
+        "d = array({N})\n\
+         s = array({N})\n\
+         for (i = 0; i < {N}; i++) {{ d[i] = (i % 7) * 0.1 - 0.3\n s[i] = (i % 5) * 0.25 - 0.5 }}\n"
+    );
+    for (ks, ke, kd) in [
+        ("-0.8", "0.2", "0"),      // the 5-point Laplacian shape
+        ("1", "0", "0"),           // dst += src
+        ("0.5", "0.125", "0.125"), // the 9-point one
+        ("0", "0", "0"),           // nothing at all
+    ] {
+        let reference = format!(
+            "{seed_arrays}\
+             out2 = array({N})\n\
+             for (y = 0; y < {H}; y++) {{\n\
+               row = y * {W}\n\
+               up = y > 0 ? row - {W} : row\n\
+               dn = y < {H} - 1 ? row + {W} : row\n\
+               for (x = 0; x < {W}; x++) {{\n\
+                 i = row + x\n\
+                 l = x > 0 ? x - 1 : x\n\
+                 r = x < {W} - 1 ? x + 1 : x\n\
+                 v = d[i] + {ks} * s[i]\n\
+                 v = v + {ke} * (s[row + l] + s[row + r] + s[up + x] + s[dn + x])\n\
+                 v = v + {kd} * (s[up + l] + s[up + r] + s[dn + l] + s[dn + r])\n\
+                 out2[i] = v\n\
+               }}\n\
+             }}\n"
+        );
+        for i in 0..N {
+            let native = format!(
+                "{seed_arrays}stencil2D(d, s, {W}, {H}, {ks}, {ke}, {kd})\nexport var out = d[{i}]"
+            );
+            assert_eq!(
+                eval_prog(&native),
+                eval_prog(&format!("{reference}export var out = out2[{i}]")),
+                "stencil2D kSelf={ks} kEdge={ke} kDiag={kd} cell {i}"
+            );
+        }
+        // src is never written
+        for i in 0..N {
+            assert_eq!(
+                eval_prog(&format!(
+                    "{seed_arrays}stencil2D(d, s, {W}, {H}, {ks}, {ke}, {kd})\nexport var out = s[{i}]"
+                )),
+                eval_prog(&format!("{seed_arrays}export var out = s[{i}]")),
+                "stencil2D wrote src at {i}"
+            );
+        }
+    }
+    // returns dst (chainable); a degenerate canvas writes nothing
+    assert_eq!(
+        eval_prog("d = [1, 2]\ns = [10, 20]\nexport var out = stencil2D(d, s, 0, 0, 1, 0, 0)[0]"),
+        fx(1.0)
+    );
+    // aliasing is refused rather than silently reading half-written cells
+    let e = luxel_core::engine::Engine::new("a = [1,2,3,4]\nstencil2D(a, a, 2, 2, 1, 0, 0)", 10, 1)
+        .expect("compiles");
+    assert!(
+        e.last_error.expect("expected error").message.contains("must differ"),
+        "stencil2D should refuse dst == src"
+    );
+    // an array shorter than w×h is a runtime error
+    let e = luxel_core::engine::Engine::new(
+        "a = array(3)\nb = array(4)\nstencil2D(a, b, 2, 2, 1, 0, 0)",
+        10,
+        1,
+    )
+    .expect("compiles");
+    assert!(
+        e.last_error.expect("expected error").message.contains("shorter"),
+        "stencil2D undersized array should error"
+    );
+}
+
+#[test]
+fn array_max_abs() {
+    assert_eq!(eval_prog("a = [1, -3, 2]\nexport var out = arrayMaxAbs(a)"), fx(3.0));
+    assert_eq!(eval_prog("a = [-0.25, 0.125]\nexport var out = arrayMaxAbs(a)"), fx(0.25));
+    assert_eq!(eval_prog("a = [0, 0]\nexport var out = arrayMaxAbs(a)"), fx(0.0));
+    assert_eq!(eval_prog("a = array(0)\nexport var out = arrayMaxAbs(a)"), fx(0.0));
+    // the whole point: it is the reduction the water recurrence fuses into
+    // its own loop, so it has to agree with that loop
+    let n = 32;
+    let seed = format!("a = array({n})\nfor (i = 0; i < {n}; i++) {{ a[i] = (i % 9) * 0.3 - 1.1 }}\n");
+    assert_eq!(
+        eval_prog(&format!("{seed}export var out = arrayMaxAbs(a)")),
+        eval_prog(&format!(
+            "{seed}p = 0\nfor (i = 0; i < {n}; i++) {{ m = abs(a[i])\n if (m > p) p = m }}\nexport var out = p"
+        ))
+    );
+}
