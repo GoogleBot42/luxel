@@ -128,7 +128,20 @@ paths:
   provisioning keeps the WiFi stack linked either way — the old warning
   that credless builds dead-code-eliminate WiFi stopped being true when
   provisioning landed). Just never compare a credless number against a
-  creds-baked one.
+  creds-baked one — and never compare a number measured on one HOST
+  against one from another: every build embeds its absolute dependency
+  source paths in panic `Location`s (~13.5 KB, #441), so the same commit
+  weighed 1,010,432 B on the CI runner and 1,014,400 B locally
+  (2026-09-08). Gate a percentage floor only on the flake artifact of the
+  machine you are quoting. `tools/ci.sh` now image-checks the release
+  images for `CI_VARIANTS` (pixelblaze-v3, c6-devkit-hosted, c3-devkit)
+  because a C3 build break (#413) and a C6 under-floor image (#438) both
+  merged green while only `CI_BOARD` was built.
+- Diffing symbol tables between two builds: strip the `17h<hash>E` mangling
+  hash and rustc's `.NNNN` local suffix first. A raw `nm` diff shows a
+  renumbered symbol as one that vanished plus one that appeared, and that
+  invented #438's entire "1.26 KB of Debug tables from #424" premise — the
+  tables were in the pre-#424 image byte for byte (2026-09-08).
 - JSON/response bodies are built with `luxel_core::jsonview`'s push
   helpers (`push_piece`, `push_u32/i32/u64/i64`, `push_hex`,
   `Fx::dec_str`), NOT `format!` — and literal appends go through

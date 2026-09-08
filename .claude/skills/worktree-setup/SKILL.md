@@ -19,7 +19,11 @@ these before trusting any build/test failure as a real regression.
    merging PRs continuously it is routinely several merges behind (seen 4 behind on
    2026-08-24). `git worktree add -b <branch> <path> master` silently starts you on
    that stale tree. Do `git fetch origin master` first and branch from `origin/master`
-   (or `git reset --hard origin/master` in the new worktree).
+   (or `git reset --hard origin/master` in the new worktree). The same staleness
+   applies to `.claude/skills` and `.claude/rules`: the main checkout can sit on a
+   detached HEAD days behind master (it was on 2026-09-07, and an agent concluded a
+   skill "does not exist" because it looked there) — read guidance from YOUR
+   worktree, not `/home/googlebot/workspace/pixler`.
 
 1. `corpus/` (scraped pattern exports, gitignored) — needed by the **verify
    harness** (`tools/verify/snap.mjs`, `report.mjs`, `review.mjs`) for the
@@ -80,7 +84,8 @@ these before trusting any build/test failure as a real regression.
    `python3`/`node`. And `luxel` itself has no `--help`: it reads the flag as a
    pattern filename (2026-09-07).
 4. `cargo`, `node` AND `python3` are only on `PATH` inside `nix develop` — the bare
-   shell has none of them, so a one-liner that pipes API JSON through `python3`/`node`
+   shell has none of them (and `perl` is absent even INSIDE the devshell, so scripted
+   edits go through `nix develop … --command python3 <file>`), so a one-liner that pipes API JSON through `python3`/`node`
    dies with "command not found" (`tools/stack-check.sh` uses python3 and is fine
    because it runs inside the shell). Outside it, parse with `grep`/`sed` or dump the
    response to a file and read it. If you need ImageMagick or similar one-off tools not
@@ -146,6 +151,16 @@ these before trusting any build/test failure as a real regression.
   the same `./result` symlink, so building `.#qemu-espressif` clobbers the
   `.#luxel-fw-athom-music` link the test reads. Rebuild the firmware output (cached,
   seconds) or use `--out-link` for the non-firmware build.
+
+## Never `git stash` here
+
+`refs/stash` is one stack shared by every worktree of this checkout. Three agents
+on 2026-09-07 each stashed for a baseline measurement; each `stash pop` took
+ANOTHER session's entry and dropped it (recovery: `git fsck --unreachable` /
+the sha in the drop message → `git stash store <sha>`, then `git checkout -- .`
+to clear the foreign files). For a "before" side use
+`git show origin/master:<path> > <scratch>` or a throwaway
+`git worktree add <tmp> origin/master` — both are worktree-local.
 
 ## Merging back (concurrent sessions)
 

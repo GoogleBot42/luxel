@@ -112,11 +112,20 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   worked. (The script now prints curl's exit status and the response body
   on failure and exits non-zero loudly.)
 - **`firmware/build-esp32.sh <board>` does NOT take a board.** The
-  positional is the ACTION (`build`, `image`, …); the board comes from
-  `$BOARD`. `build-esp32.sh board-athom-music` quietly builds
-  board-pixelblaze-v3, and that image is what gets pushed (Gitea #389,
-  2026-09-07). Check the image before pushing —
-  `strings app.bin | grep board::NAME` — or `data_pin_default` after.
+  positional is the ACTION (`flash`, `image`, `log`); the board comes from
+  `$BOARD`. It used to quietly build board-pixelblaze-v3 and push that to
+  the Athom (Gitea #389, 2026-09-07); since PR #416 a positional
+  `board-*` is a hard error, `tools/image-check.sh` asserts the board's
+  `board::NAME` at build time, and `tools/ota-push.sh` REQUIRES `BOARD=`
+  and refuses an image that isn't that board's build, naming the board it
+  looks like (`REFUSING to push: image is not a <board> build … looks like
+  a <other> build`). That message means the build used the wrong board —
+  rebuild with `BOARD=`, don't reach for `SKIP_BOARD_CHECK=1`. A plain
+  `curl --data-binary @app.bin http://<ip>/api/ota` bypasses all of it.
+- **`tools/stack-check.sh` overwrites the ELF `build-esp32.sh` wrote** with a
+  `-Z emit-stack-sizes` build — same size, different bytes — so an image
+  hashed or pushed after a stack-check run is not the shipping build.
+  Build → save/hash the image → THEN stack-check (2026-09-07).
 - **Never run two `build-esp32.sh` sweeps in parallel**, different
   worktrees included: they share `/tmp/img-*.bin` and the per-chip ELF
   path, so size/image results interleave and are garbage. Size runs are
