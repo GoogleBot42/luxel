@@ -96,14 +96,22 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   in #238 on the Athom's case button (GPIO0) — dim strip, bright while held.
   Headless-verified up to the press: the pull-up idles the pad HIGH, and a
   written level reads back on the same pad.
-- [ ] **Map-aware 2D blur/glow on a real matrix** (Gitea #140, needs the
-  64×64 HUB75 panel — #75): install the grid map, run a pattern with a
-  bright point, then raise Settings → Output → Blur and Glow. It should
-  soften into a round halo in both axes with no smear along the wiring and
-  no bright/dark seam at the row folds. Unit-tested only — the kernels are
-  exact on the host, but nobody has watched them on a panel. Blocked as of
-  2026-09-05 even with the panel on the bench: a 64x64 map cannot be
-  installed on the device yet (Gitea #258) — do this once #258 lands.
+- [ ] **Map-aware 2D blur/glow on a real matrix** (Gitea #448; kernels #140,
+  panel #75): on the 64×64 HUB75 panel with its grid map installed, run a
+  pattern with a bright point, then raise Settings → Output → Blur and
+  Glow. It should soften into a round halo in both axes with no smear along
+  the wiring and no bright/dark seam at the row folds. **Machine-verified on
+  the panel 2026-09-08** (firmware `f62a45e`/v0.1.40, 4096 px, a real
+  `kind: "grid"` 64x64 map — the old #258 blocker is gone): a one-pixel
+  probe read back through `GET /api/pixels` gives the separable 1-2-1 kernel
+  in *both* axes for `setBlur(0.5,1)`, a 5x5 disc for two passes, and a 3x3
+  max-bloom halo with the source undimmed for `setGlow(0.6)`; a point at the
+  last pixel of a row (r31c63) spreads to six edge-clamped cells and puts
+  **nothing** at r32c0, its index neighbour — so no fold along the wiring.
+  `vmerr` null, fps/heap healthy, `/api/output` round-trips (numbers and
+  costs: docs/bulk-render.md “Map-aware 2D blur/glow on the 64x64 panel”,
+  Gitea #446). What is left is the part a readback cannot do: **Jeremy
+  looking at the panel**.
 - [ ] **The hosted console reaching a device over https** (Gitea #162,
   needs a HEADFUL browser — no agent can do this one): open
   `https://googlebot42.github.io/luxel/?device=http://<device-host>` in

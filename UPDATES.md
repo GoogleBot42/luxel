@@ -1,5 +1,49 @@
 # Update log
 
+## 2026-09-08 — Aurora 2D on metal: the loop shape is a LOSS, and 2D blur/glow verified on the panel
+
+Two device checks on the Seengreat 64x64 panel (firmware `f62a45e`/v0.1.40,
+4096 px, grid map installed, brightness untouched). Nothing shipped to the
+device; both are measurements plus the docs they belong in.
+
+* **The `renderFrame` conversion of `aurora-2d.js` finally has a device
+  number, and it is not the one the commit implied (#447).** 8cdf5b5 claimed
+  1.14x on the host with no hardware behind it; the panel reads **1.16x**,
+  which is a remarkably close agreement — but an isolation variant (the same
+  file with the `simplex2` hoist undone, byte-identical output, identical
+  builtin call counts) reads **0.94x**. So the *entire* win is the hoist, and
+  the interpreted `renderFrame` walk costs **+2.101 µs/px — ~504 cycles at
+  240 MHz**, about twice the 317-440-cycle native per-pixel entry it replaces.
+  The hope that Xtensa's expensive entry would flip the host's sign is dead.
+  Master's `fillNoise3D` + `paintCanvas` version reads **1.27x** at Cell Size
+  1 and **15.3x at Cell Size 4** (112 fps against the original's 8, the
+  panel's rescan ceiling), and `paintCanvas` beats the `fillRect` loop 3.5x /
+  3.2x at Cell Size 2 / 4 on metal against 2.85x / 2.70x on the host. Full
+  table in docs/bulk-render.md; `patbench.mjs --repeat 3` repeated to ±0.06 %
+  and the baseline re-measured to ±0.2 % at the end of the session.
+
+* **Map-aware 2D blur/glow (#140) watched on the panel for the first time,
+  by machine.** The `docs/UNTESTED.md` item was still marked blocked on #258;
+  #258 and #140 are both closed and the panel has a real `kind: "grid"` 64x64
+  map, so the block was stale. A one-pixel probe read back through
+  `GET /api/pixels` — which on a pipelined board is the *engine's* frame, so
+  it sees `setBlur`/`setGlow` exactly — gives the separable 1-2-1 kernel in
+  **both** axes (9 cells), a 5x5 disc at two passes, and a 3x3 max-bloom halo
+  with the source undimmed at 255. **The row-fold test passes**: a point at
+  r31c63 spreads to six edge-clamped cells and puts *nothing* at r32c0, its
+  index neighbour, so nothing folds along the wiring. `vmerr` null throughout.
+  The UNTESTED checkbox stays unchecked — the readback proves the arithmetic,
+  not that the panel looks right; that sign-off is Jeremy's and is now #448.
+
+* **Two costs found on the way (#446).** A blur pass is ~1.0 µs/px in the
+  engine and ~1.1 µs/px in the outpipe, exactly linear in passes. The
+  device-level chain costs no render throughput (it runs in the ProCpu output
+  task — `fps`/`out_fps` unmoved) but blur + glow put `pipe_us` at **8.8 ms
+  against the panel's 8.66 ms rescan window**, so a fast pattern starts
+  repeating frames the moment the setting goes on; and switching the chain on
+  allocates the outpipe's ~**12.3 KB** frame scratch (`heap_free` 39,216 →
+  26,928 B) on a path with no fallible allocation.
+
 ## 2026-09-08 — the playlist transport no longer latches "not playing" (#431)
 
 `POST /api/playlist/play` returns before the device has applied it — the

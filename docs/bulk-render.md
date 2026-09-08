@@ -1064,6 +1064,128 @@ the colour is built from (the band, the glow's `abs(y − band)`, the palette
 and its `paint()` wrap) still uses `normAxis` exactly. The residual is ≤2 of
 255 on under 2 % of bytes, which is below the shimmer's own quantization
 step — it is a different sample of the same noise, not a different picture.
+### `aurora-2d.js` on device — and what the loop shape actually costs (2026-09-08)
+
+Everything above for this pattern was a host measurement; 8cdf5b5 shipped its
+1.14x with no device number at all. Seengreat 64x64 panel, **4096 px** with the
+64x64 grid map installed, firmware `f62a45e` / v0.1.40 on `ota_1`,
+`tools/patbench.mjs --pixels 4096 --repeat 3 --settle 8000` (median `vm_us` of
+three repeats; the three agreed to **±0.06 %**, and a re-measure of the
+baseline at the end of the session landed within **0.2 %** of the first, so
+nothing below is drift).
+
+| variant | vm µs | vm µs/px | fps | vs pre |
+|---|---:|---:|---:|---:|
+| pre-conversion (`render2D`, per-pixel) | 130,681 | 31.905 | 8 | 1.00x |
+| **loop-shape isolation** (`renderFrame`, `simplex2` put back per pixel) | 139,289 | 34.006 | 8 | **0.94x** |
+| 8cdf5b5 (`renderFrame`, `simplex2` hoisted) | 113,116 | 27.616 | 9 | **1.16x** |
+| master 00b39f6 (`fillNoise3D` + `paintCanvas`) | 102,671 | 25.066 | 10 | **1.27x** |
+| 8cdf5b5, Cell Size 2 | 96,746 | 23.620 | 11 | 1.35x |
+| master, Cell Size 2 | 27,695 | 6.761 | 36 | **4.72x** |
+| 8cdf5b5, Cell Size 4 | 26,945 | 6.578 | 37 | 4.85x |
+| master, Cell Size 4 | 8,540 | 2.085 | 112 | **15.3x** |
+
+**The loop shape is a net LOSS on Xtensa too.** The isolation row is the
+8cdf5b5 file with the `simplex2` band hoist undone — same builtin call counts
+as the per-pixel original (4096 `simplex2` + 4096 `simplex3`), same picture
+(byte-identical over 60 frames at 4096 px / 64x64, and so is 8cdf5b5 itself),
+and *only* the loop shape differs: the engine's native per-pixel `render2D`
+entry against an interpreted `renderFrame` walk that does its own index
+arithmetic, column-table reads and `setPixel`. It costs **+2.101 µs/px, ~504
+cycles at 240 MHz** — the interpreted walk is roughly twice the price of the
+317–440-cycle native entry it replaces.
+
+That settles the question the host attribution raised. The host said the same
+thing in the same direction (the interpreted `setPixel` loop reads ~18 ns/px
+slower than the native entry on x86) and the hope was that Xtensa's much more
+expensive per-pixel entry would flip the sign. It does not: the entry saving is
+real and much larger than x86's, but the interpreted bookkeeping that buys it
+grows faster still. **The entire 8cdf5b5 win is the `simplex2` hoist**, and the
+device agrees with the host on its size almost exactly — 1.16x measured against
+1.14x predicted, one of the closest host↔device agreements on this page,
+because the term being removed is a native builtin call whose cost scales the
+same way on both.
+
+Two consequences for the conversion rule in "Scope":
+
+- `renderFrame` is worth reaching for when it lets you **remove work** (hoist a
+  non-per-pixel term, or replace the body with a bulk op). Reaching for it to
+  "avoid the per-pixel entry" is a **6.6 % regression** at one cell per pixel,
+  on the hardware where that entry is most expensive.
+- Above Cell Size 1 the picture inverts completely, and that is where the #373
+  ops earn their keep: `paintCanvas` beats the `fillRect` loop **3.5x at Cell
+  Size 2 and 3.2x at Cell Size 4** on metal (host read 2.85x / 2.70x), and
+  master at Cell Size 4 runs the curtain at **112 fps** against the
+  pre-conversion 8 — a 15.3x, and effectively the panel's 115 Hz rescan
+  ceiling.
+
+Host ratios for the same pairs were 1.14x (8cdf5b5) and 1.38x (master) at
+4096 px; the device reads 1.16x and 1.27x. For this shape the host is not the
+"understates by 1.6x" floor the section above describes — it is within a few
+percent, in both directions. That is what a conversion whose win comes from
+native builtin calls rather than from per-pixel entry looks like.
+
+### Map-aware 2D blur/glow on the 64x64 panel (2026-09-08)
+
+Gitea #140's kernels, watched on metal for the first time — the panel has a
+real `kind: "grid"` 64x64 map installed (`GET /api/map`), which is what #258
+unblocked. Probe: a pattern that lights exactly one pixel white
+(`render(index) { var on = index == P; rgb(on, on, on) }`), read back through
+`GET /api/pixels`. On a pipelined board that preview is the **engine's** frame,
+before the firmware's output pipeline — so it sees the pattern-level
+`setBlur`/`setGlow` exactly, and the device-level `/api/output` stage not at
+all.
+
+Point at **r32c32**, engine chain:
+
+| chain | lit cells | shape |
+|---|---:|---|
+| none | 1 | `r32c32=255` |
+| `setBlur(0.5, 1)` | 9 | 16/32/16 · 32/**64**/32 · 16/32/16 — the separable 1-2-1 kernel in *both* axes |
+| `setBlur(0.5, 2)` | 25 | a 5x5 disc, 1/4/6/4/1 rows and columns |
+| `setGlow(0.6)` | 9 | `r32c32` keeps **255**, edges 152, corners 90 — max-bloom, source undimmed |
+
+**The row-fold test is the one that matters**, and it passes. Put the point at
+**r31c63** — the last pixel of a row, whose *index* neighbour is r32c0. Blur
+lights `r30c62 r30c63 r31c62 r31c63 r32c62 r32c63` and **nothing at r32c0**:
+six cells, clamped at the right edge (the edge values double — 96 at the centre
+against 64 in open field — which is `blur_frame_grid`'s documented end clamp
+keeping light on the panel instead of dropping it). An index-space blur would
+have smeared into the next row. Glow at the same point gives the same six cells
+with the source at 255. No smear along the wiring, no seam at the fold.
+
+Cost and health at 4096 px, `vmerr` null throughout:
+
+| stage | where | fps | vm µs | pipe µs | heap_free |
+|---|---|---:|---:|---:|---:|
+| probe, no chain | — | 66 | 15,021 | 4 | 38,644 |
+| `setBlur(0.5, 1)` | engine (`vm`) | 52 | 19,058 | 4 | 42,728 |
+| `setBlur(0.5, 2)` | engine | 43 | 23,069 | 5 | 42,924 |
+| `setGlow(0.6)` | engine | 53 | 18,872 | 7 | 42,928 |
+| aurora, device chain off | — | 10 | 102,671 | 49 | 39,216 |
+| aurora, `/api/output` blur 50 | outpipe (`pipe`) | 10 | 102,927 | 4,556 | 26,928 |
+| aurora, blur 50 + glow 60 | outpipe | 10 | 103,337 | 8,801 | 26,928 |
+| rainbow, blur 50 + glow 60 | outpipe | 51 | 19,552 | 8,168 | 30,776 |
+| rainbow, device chain off | — | 52 | 19,389 | 9 | 30,776 |
+
+Three device-only facts:
+
+- **A blur pass is ~1.0 µs/px in the engine and ~1.1 µs/px in the outpipe**,
+  and passes are exactly linear (+4,037 µs for one, +8,048 for two). Glow is
+  the same order (+3,851 engine, +4,245 outpipe).
+- **The device chain does not cost render throughput**, because it runs in the
+  ProCpu output task: `fps` and `out_fps` are unmoved with both stages on. What
+  it eats is the compose budget — blur + glow put `pipe_us` at 8.8 ms against
+  the 8.66 ms rescan window, so a pattern fast enough to matter will start
+  repeating frames rather than dropping render rate. Filed as Gitea #446.
+- **Turning the device chain on costs ~12.3 KB of internal heap** at 4096 px —
+  the outpipe's scratch copy of the frame, which stays empty while every stage
+  is off (39,216 → 26,928 B free). On this panel that is affordable; on a
+  4096-px pattern already near `RUNTIME_FLOOR` it is not. Also Gitea #446.
+
+Restored: `/api/output` back to `blur 0 glow 0`, brightness untouched.
+
+
 ### The 1-D channel-buffer bucket — `novas`, `fireblobs`, `heatshivers` (2026-09-07)
 
 Gitea #405 / #373 §5: patterns whose `beforeRender` already fills parallel
