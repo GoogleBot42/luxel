@@ -1,5 +1,66 @@
 # Update log
 
+## 2026-09-07 — Aurora 2D renders through `renderFrame` (#406)
+
+`library/aurora-2d.js` converted in place. The curtain's two noise fields are
+not the same shape: `simplex3(x * 6, y * 2, z * 4, 9)` is genuinely per pixel,
+but `simplex2(x * 1.8, z, 5)` depends on nothing but the column — and the old
+`render2D` evaluated it **4096 times a frame on the 64x64 panel for 64
+distinct answers**. `renderFrame` walks the grid itself, so the band is a
+64-entry table rebuilt once in `beforeRender`. Builtin calls per frame:
+`simplex2` **4096 → 64**, everything else unchanged.
+
+**It does not use `fillCanvas`, and that is the finding.** Two walls:
+
+* **No palette-space bulk fill exists.** The colour is `paint(v, v * v)` — a
+  palette index and a brightness — and `fillCanvas` samples H/S/V. Resolving
+  the palette per cell means a bytecode stop-list lookup plus `rgb2hsv`, and
+  the RGB→HSV→RGB round trip is not exact in 16.16 (`s = d / max`, `h6 / 6`
+  both truncate), so it moves the odd 8-bit channel by one. Keeping `paint()`
+  as the brush and putting it down with `setPixel(index)` keeps the real
+  palette and is byte-exact.
+* **A full-resolution HSV canvas does not fit.** Three `array(4096)` channels
+  are 12,288 elements against a 10,236 budget, and ~96 KB of `Value` on the S3
+  that #275/#258 has OOMed before. The converted pattern allocates five
+  128-entry column tables — 640 elements — and no canvas at all.
+
+**Byte-identical on eight rigs** (60 frames, fixed delta and seed,
+`luxel run --out`, compared to the pre-conversion file): 16x16, 32x32, 64x64,
+10x10 and 17x17 maps, and the 60 / 300 / 512 px mapless strips. maxdiff 0,
+zero bytes differing, everywhere. That took reproducing the engine's own grid
+normalization — `MapData::coord` is `round(c * 65535 / (w - 1))`, not
+`c / (w - 1)`, and the two disagree on 11 of 64 columns at 64 wide and 8 of 17
+at 17 wide. `normAxis()` does the exact integer arithmetic.
+
+**Throughput** (`tools/pairbench.mjs`, best of five interleaved):
+
+| rig | before ns/px | after ns/px | ratio |
+|---|---:|---:|---:|
+| 4096 px, 64x64 | 156.85 | 137.23 | **1.14x** |
+| 256 px, 16x16 | 165.91 | 151.83 | 1.09x |
+| 300 px strip | 165.33 | 150.27 | 1.10x |
+
+Interpreted instructions go *up* (35.0 → 36.7 insns/px at 4096 px) while wall
+time goes down: what leaves is 63/64 of an expensive native builtin plus the
+per-pixel entry; what arrives is cheap loop and array bookkeeping. 1.1x is the
+honest shape of a dense-procedural conversion, and it is worth having only
+because one term was not per pixel.
+
+A new **`Cell Size`** dial (1..4 px per lattice cell, default 1) trades that
+exactness for speed above 1: the lattice coarsens and each cell becomes one
+`fillRect`. At 4096 px that is **1.75x / 3.48x / 5.94x** for 2 / 3 / 4. On a
+fixture that is not a matrix at all (`gridWidth() == 0`) there are no per-pixel
+coordinates to walk, so the pattern tiles normalized coordinate space with a
+32x32 lattice of `fillRect`s — verified in the playground's 2D-map ring rig.
+
+Verified: `tools/check-library.sh` 307/307 on all five rigs; `web/tools/e2e.mjs`
+all checks pass; real chromium — tile renders (1872 of 2304 px lit), the
+`CellSize` slider binds as min=1 max=4 step=1 value=1 and drives to 4, no page
+errors. Analysis of the two builtins that would actually make this pattern
+cheap — a canvas noise fill and a palette-space `paintCanvas` — is on
+Gitea #373; the on-panel look check and the replacement of the panel's stored
+copy (id `5eed1e55`) is #404.
+
 ## 2026-09-07 — the compose, 7.3 ms → 2.2 ms: a row-oriented bitplane packer (#329)
 
 Jeremy on the #398 build: *"There is no more skipping. There are still a ton
