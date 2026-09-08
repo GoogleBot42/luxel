@@ -44,6 +44,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   checkout directly. Treat uncommitted changes in the main checkout as another live
   session's work-in-progress: don't commit, revert, build on, or "finish" them, and
   don't assume the tree state you see is yours alone.
+- NEVER `git stash` in this repo. The stash stack lives in the shared `.git` and is
+  one stack for EVERY worktree, so a concurrent session's `stash pop` takes YOUR
+  entry (three agents clobbered each other this way on 2026-09-07). For a baseline
+  build or a before/after render use `git show origin/master:<path> > scratch` or a
+  throwaway `git worktree add <tmp> origin/master` instead.
 
 ## Subagents
 - ALWAYS prefer Opus-model subagents for any task where Opus works (searches,

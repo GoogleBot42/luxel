@@ -7,8 +7,20 @@ The Seengreat board (`board-seengreat-hub75`, ESP32-S3-WROOM-1-N16R8 + a
 64x64 FM6124 panel) is at **192.168.0.238** (`luxel-f6b0a8`). Facts,
 numbers and findings live in docs/boards.md "First light"; this skill is
 the hands-on procedure. Deploying over the network is the deploy-device
-skill (pass the S3 image explicitly — `ota-push.sh`'s default ELF path is
-the classic-ESP32 one).
+skill (`BOARD=board-seengreat-hub75 tools/ota-push.sh 192.168.0.238` —
+`BOARD` is required since #389/#416; a plain `curl --data-binary @app.bin
+http://192.168.0.238/api/ota` is the fallback when the script fails silently).
+
+Reading the panel (2026-09-07):
+- **A rejected pattern load leaves the panel DARK** with `out_fps` 0 and
+  `rescan_hz` 0 — it reads like a hang but is the documented rejection path
+  (array budget / `RUNTIME_FLOOR`). Check `vmerr` before diagnosing.
+- `tools/panel-load-bench.mjs` needs a FAST live pattern (push
+  `library/frame-rate-scan.js` via `POST /api/code`, re-activate the stored
+  pattern by id after); its tab phase repeats to about ±18 %, so take a
+  repeated baseline in the same session before claiming a delta. `--clients 3`
+  saturates the 3-socket web pool and returns nothing — use `--clients 1`.
+- Brightness is Jeremy's setting — read it, never set it.
 
 ## The USB port is not a serial console
 

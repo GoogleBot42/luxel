@@ -548,6 +548,50 @@ was measured as a way to buy some back and is not enough: 320 B.
 `board-c3-devkit` is missing from the table because it does not build on
 master at all (#413).
 
+## Converting a pattern — what the 2026-09-07 batch taught
+
+Twenty-odd conversions in one night (#405), three refusals. The rules that
+came out of them, each measured at least once:
+
+- **Profile before converting.** `luxel bench --profile` insns/px of the
+  `render` body is the predictor; a cheap body (one `mod` + one `hsv`,
+  `chasing-rainbows-hsluv`) regresses in every shape (0.67–0.91x, #427).
+- **Do not add a channel trio.** This bucket is array-budget bound, not VM
+  bound: three `array(pixelCount)` channels are 12,288 elements against the
+  10,236 budget, so most members are refused at 4096 px before AND after
+  (#420, ceilings per pattern). Fold the readout arithmetic into buffers
+  the pattern already owns; `clear()` + a `setPixel` loop over the lit
+  pixels costs no ceiling and measured the same as `fillRGB` over prebuilt
+  buffers (`neutronorbit`, 1.98x vs 2.00x). On the Seengreat S3 the PSRAM
+  arena (#253) lifts the wall; every other board keeps it.
+- **Convert the frame's clears too.** `renderFrame` + one fill alone is
+  ~1.02x when `beforeRender` already does full-strip passes; the win came
+  from `feedback(buf, 0)` replacing `for (i…) buf[i] = 0`.
+- **An interpreted `pixelCount` loop is not a substitute for a missing bulk
+  op** — it costs ~50 ns/px on the host, more than the per-pixel entry it
+  replaces (measured 0.75x). Ask for the op on #373 instead.
+- **`fillRGB` is byte-exact against `rgb(buf[i], …)`** (both go through
+  `engine::quantize`), so `saturate()`/`clamp(v,0,1)` guards in a readout
+  can simply be dropped.
+- **Sweep enough frames.** A 60-frame equivalence run passed `rainbow-comet`
+  with its `clear()` missing because nothing decays to exactly 0 in two
+  seconds; 400 frames caught it. Any conversion that skips pixels needs a
+  long sweep, and the harness must report whether each side lit anything —
+  "maxdiff 0" between two black frames reads as success.
+- **`floor(c * W - 0.01)` readouts carry a latent off-by-one** on the default
+  `ceil(√n)` grids (invisible at 16/32/64) — `fillCanvas`'s true nearest is
+  the correct one; prove a delta by patching only that arithmetic in the
+  original.
+- **`fillCanvas` on a mapless fixture is not a no-op** (the 1-D fallback
+  hands every pixel `y = 0.5`); a pattern exporting `render` needs a
+  `has2DMap()` guard or its strip behaviour changes silently.
+- **Per-pixel `random()` forbids a bulk fill but not `renderFrame`** — the RNG
+  is one shared stream, so preserve the draw order exactly and take the win
+  from hoisting column-constant terms (`4th`).
+- **Measure with `tools/pairbench.mjs`**, interleaved; host best-of-5 is too
+  noisy for cheap patterns (a phantom 15 % regression at 256 px resolved to
+  1.02x at best-of-15), and concurrent sessions move single runs by 2x.
+
 ## Converted library patterns
 
 `renderFrame` is an entry point, not a migration: the rule in "Scope" below

@@ -147,6 +147,13 @@ nothing in this container is public.
 - Two sessions' `vite preview`/`e2e.mjs` runs colliding on the default port — always a
   silent wrong-app pass, never a loud error. If tile counts or UI look "off" for no
   reason, check for a stale process on the port before debugging the change itself.
+  The squatter can be a day-old `vite preview` whose worktree was DELETED (a 404 on
+  `/` and zero tiles, 2026-09-07): `ss -tlnp | grep <port>` then
+  `ls -l /proc/<pid>/cwd` names the owner (`… (deleted)`); pick another port rather
+  than killing a process that might be another live session's.
+- `e2e.mjs`/`device-e2e.mjs` do NOT rebuild the app — a check failing after an
+  `App.svelte` edit without `npm run build` reads exactly like a real bug (two false
+  failures on 2026-09-07). Build first, every time.
 - `device-e2e.mjs` dying mid-suite with `ECONNREFUSED 127.0.0.1:8723` — its mirror port
   is hardcoded (no `E2E_PORT` for it), so a concurrent session's `luxel serve`, or your
   own orphan from a previous aborted run, takes it. `ss -tlnp | grep 8723` then
