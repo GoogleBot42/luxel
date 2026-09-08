@@ -40,6 +40,19 @@ var bufR = array(pixelCount)
 var bufG = array(pixelCount)
 var bufB = array(pixelCount)
 
+// The warm ambient underlay used to be added per pixel in `render`. A whole-
+// frame `fillRGB` takes arrays, and the language has no array-plus-scalar
+// builtin (`arrayAdd`/`arraySub` want two arrays, `arrayScale` multiplies;
+// Gitea #373's proposed `arrayAffine(dst, src, k, c)` is exactly this gap), so
+// the two constants live in constant arrays that are added before the fill and
+// taken straight back off after. A fixed-point add and its inverse round-trip
+// with no rounding at all, so the frame is bit-for-bit what the per-pixel
+// readout produced.
+var ambR = array(pixelCount)
+var ambG = array(pixelCount)
+arrayMutate(ambR, (v) => 0.05)
+arrayMutate(ambG, (v) => 0.01)
+
 var i
 for (i = 0; i < numBolts; i++) {
   boltCol[i] = i % 5
@@ -93,12 +106,19 @@ export function beforeRender(delta) {
 
     var c = boltCol[i]
     // paint every integer pixel swept this frame so fast bolts stay solid;
-    // additive with saturation so overlaps brighten toward white
+    // additive with saturation so overlaps brighten toward white.
+    // Mirror is applied HERE rather than at read-out: a whole-frame fill is
+    // indexed by pixel and cannot reverse, so the volley is fired the other
+    // way down the strip instead of being reflected on the way to the LEDs.
+    // Steady state is identical; the difference is that flipping the toggle
+    // mid-run now turns the volley around instead of instantly reflecting the
+    // trail already in the air, and the trail follows within a few frames.
     for (var j = from; j <= to; j++) {
       if (j >= pixelCount) break
-      bufR[j] = min(1, bufR[j] + palR[c])
-      bufG[j] = min(1, bufG[j] + palG[c])
-      bufB[j] = min(1, bufB[j] + palB[c])
+      var w = mirror ? pixelCount - 1 - j : j
+      bufR[w] = min(1, bufR[w] + palR[c])
+      bufG[w] = min(1, bufG[w] + palG[c])
+      bufB[w] = min(1, bufB[w] + palB[c])
     }
 
     if (boltPos[i] >= pixelCount) {
@@ -108,10 +128,19 @@ export function beforeRender(delta) {
   }
 }
 
-export function render(index) {
-  var p = mirror ? pixelCount - 1 - index : index
-  var r = bufR[p] + 0.05   // faint warm-red ambient underlay
-  var g = bufG[p] + 0.01
-  var b = blueLightning ? bufB[0] : bufB[p]
-  rgb(min(r, 1), min(g, 1), min(b, 1))
+// One `fillRGB` for the whole strip. The trail buffers are already indexed by
+// pixel, the ambient underlay is folded in with the two constant arrays above,
+// and the blue-lightning quirk is a genuine scalar — the whole strip takes the
+// launch pixel's blue — which `fillRGB` broadcasts for free. `min(v, 1)` is
+// gone: the fill quantizes through the same clamp `rgb()` applies.
+// Index space, so this stays a mapless strip pattern and asks for no geometry.
+export function renderFrame() {
+  // with the volley mirrored, the bolts re-fire from the far end, so that is
+  // where the lightning flash is read from
+  var b = blueLightning ? bufB[mirror ? pixelCount - 1 : 0] : bufB
+  arrayAdd(bufR, ambR)
+  arrayAdd(bufG, ambG)
+  fillRGB(bufR, bufG, b)
+  arraySub(bufR, ambR)
+  arraySub(bufG, ambG)
 }

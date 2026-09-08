@@ -1,5 +1,55 @@
 # Update log
 
+## 2026-09-07 — two remapped readouts converted: bouncing-balls-rgb, pew-pew-pew (#405)
+
+Second PR of the #405 batch-2 slice. Both are the `fillRGB` readout shape with
+one twist: their per-pixel `render` read `buf[f(index)]`, not `buf[index]`. A
+whole-frame fill is indexed by pixel and cannot remap, so in both the remap
+moved to the write side — where it runs once per entity instead of once per
+pixel.
+
+Host `luxel bench`, best of five: bouncing-balls-rgb 244.0 → **15.5** µs/frame
+at 3364 px (**15.8x**, and 13.1x at 1024 px), pew-pew-pew 127.4 → **24.7** at
+2000 px (**5.2x**, 4.5x at 1024 px, 3.7x on a 512 px strip).
+
+* **bouncing-balls-rgb**'s four-way Direction control was an index remap in
+  `render` over an accumulator that held only the "usable" half in the folded
+  modes. A ball is now deposited straight onto the strip pixel — or the two
+  mirrored pixels — the remap used to make it show up at, so the accumulator is
+  already in strip order. `NUM` deposits a frame instead of `pixelCount`
+  remaps. Its per-frame clear became three `feedback(buf, 0)` calls instead of
+  a bytecode loop. One guard was needed: on an odd pixel count the centre pixel
+  of the both-ends-into-the-middle fold is its own reflection and must not be
+  deposited twice.
+* **pew-pew-pew** has the same problem in its Mirror toggle (the volley is now
+  fired the other way down the strip rather than reflected on the way out) plus
+  a warm ambient underlay added per pixel. With no array-plus-scalar builtin,
+  the two constants live in constant arrays added before the fill and
+  subtracted after — exact, since a fixed-point add and its inverse round-trip
+  with no rounding.
+
+**Measured, and worth writing down: a `pixelCount` bytecode loop is not a
+cheaper substitute for a missing bulk op.** Doing pew-pew-pew's two ambient
+adds and their undo as interpreted loops instead of `arrayAdd`/`arraySub` runs
+at **0.75x** at 1024 px — slower than the per-pixel `render` being replaced. A
+bytecode loop costs about 50 ns/px on this box, more than the per-pixel render
+entry it is trying to avoid.
+
+The constant arrays cost budget: five `array(pixelCount)` instead of three
+takes pew-pew-pew's maximum strip from ~3,399 px to ~2,019 px. Both are past
+every rig in the tree (check-library tops out at 512 px, the Athom runs 60) and
+the pattern was already budget-refused at 4096 px, so the affected range is
+empty in practice — but #373's `arrayAffine(dst, src, k, c)` would remove both
+arrays and both passes, and this is the concrete case for it.
+
+Equivalence: **byte-identical on 8 rigs for all four bouncing-balls-rgb
+direction modes and all four pew-pew-pew toggle combinations**, 60 frames at a
+fixed 30 fps delta and seed. (What is not identical is the transient when
+Mirror or Direction is flipped mid-run: the old code reflected the trail
+already in the air instantly, the new code turns the new paint around and the
+trail follows within about five frames. Steady state is the same picture.)
+`tools/check-library.sh` 307/307 on all five rigs; driven in real chromium —
+tiles render, controls drive the running pattern, no page errors.
 ## 2026-09-07 — library: neutronorbit and 4th move to `renderFrame` (the cases a bulk fill can't take)
 
 Gitea #405 (batch 3, part two). Two conversions where `renderFrame` is right
