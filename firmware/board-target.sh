@@ -144,10 +144,15 @@ link_rustflags() {
 remap_rustflags() {
   local out="" d ch sysroot rustc_hash
   ch="${CARGO_HOME:-$HOME/.cargo}"
-  # nix sandbox (flake builds): vendored deps and the copied-in repo source
+  # nix sandbox (flake builds): vendored deps and the copied-in repo source.
+  # $NIX_BUILD_TOP is also set inside `nix develop` (where it is the shell's
+  # own temp dir and neither of these exists), hence the -d guards — an
+  # unmatched prefix is harmless but clutters every rustc command line.
   if [ -n "${NIX_BUILD_TOP:-}" ]; then
-    out="$out --remap-path-prefix=$NIX_BUILD_TOP/cargo-vendor-dir/="
-    out="$out --remap-path-prefix=$NIX_BUILD_TOP/source/="
+    [ -d "$NIX_BUILD_TOP/cargo-vendor-dir" ] &&
+      out="$out --remap-path-prefix=$NIX_BUILD_TOP/cargo-vendor-dir/="
+    [ -d "$NIX_BUILD_TOP/source" ] &&
+      out="$out --remap-path-prefix=$NIX_BUILD_TOP/source/="
   fi
   # crates.io registry: one <index-hash> dir in practice, glob anyway
   for d in "$ch"/registry/src/*/; do

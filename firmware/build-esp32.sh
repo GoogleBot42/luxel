@@ -146,8 +146,15 @@ fi
 # [target.*] rustflags rather than merging with them, so the linker args have
 # to come along; both halves live in board-target.sh, which tools/stack-check.sh
 # and flake.nix read too.
+# Because this script exports RUSTFLAGS, it takes precedence over BOTH
+# .cargo/config.toml's [target.*] rustflags AND CARGO_TARGET_<TRIPLE>_RUSTFLAGS
+# — so the old recipe for a one-off codegen experiment (setting the per-target
+# env var and letting the config supply the link args, .claude/rules/firmware.md)
+# is silently IGNORED here. Use EXTRA_RUSTFLAGS instead; it is appended, so the
+# link args and the #441 remaps come along:
+#   EXTRA_RUSTFLAGS="-C llvm-args=…" BOARD=board-s3-devkit ./build-esp32.sh
 link_rustflags
-export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags)"
+export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags)${EXTRA_RUSTFLAGS:+ $EXTRA_RUSTFLAGS}"
 
 echo "board: $BOARD (chip $CHIP, target $TARGET)"
 if [ "$CMD" = "run" ]; then

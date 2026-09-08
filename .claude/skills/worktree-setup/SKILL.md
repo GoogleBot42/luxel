@@ -261,6 +261,14 @@ origin master && git rebase origin/master`.
 - If `tea pr merge` fails with "is it still open?" right after a
   force-push, Gitea is still re-checking mergeability — wait a few
   seconds and retry before diagnosing anything.
+- **A ❌ "Has been cancelled" CI run on your PR is usually not your
+  build.** The Gitea Actions workflow runs in a concurrency group, so
+  every merge to master by another session cancels the in-flight PR runs.
+  On a busy afternoon a 3-minute gate can be killed twice in a row
+  (2026-09-08, PR #455). Read the status word: *cancelled* means
+  re-trigger (rebase onto the new master and force-push), *failure* means
+  read the log. Rebase-then-push immediately before watching, so your run
+  starts after the merge that would have cancelled it.
 - `cargo test --workspace` failing only in `luxel-cli`'s `heapstat` test with
   "web/public/gallery.json … No such file or directory" — not a regression,
   you skipped step 5 (any `npm run build` / `gen-gallery.mjs` run fixes it).

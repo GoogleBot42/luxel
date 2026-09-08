@@ -83,6 +83,19 @@ and on `board-c6-devkit` + `hosted-ui`. `tools/ci.sh` keeps gating the flake
 images: what is left of the devshell/flake gap is the baked WiFi creds, whose
 length still moves the number.
 
+**Follow-up, same day: `EXTRA_RUSTFLAGS`.** Exporting `RUSTFLAGS` from
+`build-esp32.sh` and `stack-check.sh` outranks not just
+`.cargo/config.toml`'s `[target.*] rustflags` but also
+`CARGO_TARGET_<TRIPLE>_RUSTFLAGS` — which is the recipe
+`.claude/rules/firmware.md` gave for a one-off codegen experiment (#312), and
+it would have started being *silently ignored* rather than failing. Both
+scripts now append `$EXTRA_RUSTFLAGS` to what they compute, so
+`EXTRA_RUSTFLAGS="-C llvm-args=…" BOARD=… ./build-esp32.sh` keeps the link
+args and the remaps; the rule and docs/tools.md say so. Also guarded the
+`$NIX_BUILD_TOP` remaps behind a `-d` test: that variable is set inside
+`nix develop` too, where it points at the shell's own temp dir and neither
+`cargo-vendor-dir` nor `source` exists.
+
 ## 2026-09-08 — engine: the array budget says which array, and how far over (#420)
 
 A pattern with three `array(pixelCount)` channels is 12,300 units against the
