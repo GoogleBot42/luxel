@@ -46,11 +46,16 @@
 //     the blocky ripples. It is now a per-cell field like everything else,
 //     so above 16x16 it blocks with the water. At 16x16 — the pool's own
 //     resolution — the two are the same picture.
-//   * A cell's coordinates here are `cx / (W - 1)`, the exact normalized
-//     position the engine hands `render2D` for that column, except in the
-//     last row and column: a map normalizes its far edge to 65535/65536,
-//     not 1, so those cells' shimmer arguments differ by one 16.16 LSB.
-//     It is far below a quantization step and was verified, not assumed.
+//   * A cell's coordinates here are `cx / (W - 1)`, which is the position
+//     the engine hands `render2D` for that column only because W is 16.
+//     `MapData::coord` is `round(c * 65535 / (W - 1))`, and the naive
+//     divide agrees with it just where `65535 / (W - 1)` divides evenly —
+//     it does at 16, not at 64 (11 columns differ) or 17 (8 of 17); see
+//     `normAxis()` in `aurora-2d.js` for the exact form. Even at 16 the
+//     far edge differs: a map normalizes it to 65535/65536, not 1, so the
+//     last row's and last column's shimmer arguments are one 16.16 LSB
+//     off. That is far below a quantization step and was verified, not
+//     assumed.
 //
 // With no map installed a 2D pattern already got the engine's `ceil(sqrt(n))`
 // default grid, and a `renderFrame` that names a coordinate-space builtin

@@ -1,5 +1,40 @@
 # Update log
 
+## 2026-09-07 — docs: bulk-render canvas ceiling, exact cell coordinates, devshell PATH
+
+Corrections the Aurora 2D conversion (#406) turned up, written back into
+the guidance that misled on the way in — no code changes.
+
+* **docs/bulk-render.md "The model"** now states the canvas recipe's ceiling:
+  three `array(4096)` H/S/V canvases are 12,288 elements against the
+  10,236-element `DEFAULT_ARRAY_BUDGET`, so "per-cell canvases + one
+  `fillCanvas`" cannot reach a 64x64 panel at native resolution (both prior
+  conversions simulate on 16x16 and let the sampler scale). And `fillCanvas`
+  is HSV-only (`texel_at(.., hsv: true)` in `bulk.rs`) — a `paint()` pattern
+  has no bulk fill path at all; `paintCanvas` is proposed on #373.
+* **The exact cell coordinate is not `c / (w - 1)`.** `MapData::coord` is
+  `round(c * 65535 / (w - 1))`; the naive form agrees only where
+  `65535 / (w - 1)` divides evenly — measured: 16 does, 64 disagrees on 11 of
+  64 columns and 17 on 8 of 17. Corrected in docs/bulk-render.md, docs/tools.md
+  and the `raindrops-2d.js` header (which claimed the naive divide was exact
+  bar the last row/column — true at its W = 16, but for the divisibility
+  reason, not generally). `normAxis()` in `library/aurora-2d.js` is the
+  reference form.
+* **docs/lang.md's "don't loop `setPixel` over every pixel"** softened: when
+  the per-pixel body is itself a native builtin call, `paint()` + `setPixel()`
+  from `renderFrame` is both the fastest and the only byte-exact option
+  (Aurora: 1.14x at 4096 px with insns/px going slightly *up*).
+* **docs/tools.md**: `luxel run/bench --map-grid` is space-separated only.
+  `--map-grid=16x16` exits 2 as an "unknown option" (verified), which in a
+  two-run equivalence diff leaves the previous `--out` file in place and reads
+  as a real pixel difference.
+* **CLAUDE.md**: python3 and tea join cargo/node/chromium in the devshell-only
+  PATH list, and `tea pr merge` prints nothing on success — confirm with
+  `git fetch origin master`.
+
+`tools/check-library.sh` 307/307 on all five rigs (the raindrops edit is a
+comment).
+
 ## 2026-09-07 — Aurora 2D renders through `renderFrame` (#406)
 
 `library/aurora-2d.js` converted in place. The curtain's two noise fields are

@@ -822,11 +822,18 @@ path ran.
 | 2 | max (lighten) — overlaps keep the brighter source |
 | 3 | keyed: a source pixel that comes out black is transparent — the mask blit. Accepted by all three, but only `blit` has a source it means something for; on `splat`/`drawLine` it just drops the falloff's darkest edge |
 
-**Don't loop `setPixel` over every pixel** — a `for` loop calling
-`setPixel(i)` for all `pixelCount` pixels is *slower* than the `render`
-it replaced, because it pays interpreted-loop overhead on top of a
-builtin call. `setPixel` is for a handful of points. To paint per-pixel
-data, put it in arrays and hand them to `fillHSV`/`fillRGB` in one call.
+**Don't loop `setPixel` over every pixel — unless the per-pixel body
+is a native builtin call.** A `for` loop calling `setPixel(i)` for all
+`pixelCount` pixels pays interpreted-loop overhead on top of a builtin
+call, so for a body that is a lookup it is *slower* than the `render` it
+replaced: put that per-pixel data in arrays and hand them to
+`fillHSV`/`fillRGB` in one call. When each pixel's colour comes out of a
+builtin anyway — noise, or a palette `paint()` — the loop only trades the
+per-pixel render entry for loop bookkeeping and still wins, and it is the
+*only* byte-exact option for a `paint()` pattern, since `fillHSV`,
+`fillRGB`, `fillCanvas` and `blit` are all HSV and there is no
+palette-space bulk fill. `library/aurora-2d.js` is that case: 1.14× at
+4096 px with interpreted instructions per pixel going slightly *up*.
 
 #### Index space
 

@@ -104,9 +104,15 @@ route reference in [docs/api.md](api.md)).
 
 `run <pattern> --map-grid WxH --out frames.ppm` is the equivalence harness for
 a pattern rewrite: render before and after, diff the PPMs (`--map-grid` is
-missing from the CLI's own usage line). Gotcha: the engine normalizes a map's
-far edge to 65535/65536, never 1.0, so a `cx/(W-1)` reconstruction is 1 LSB off
-in the last row/column.
+missing from the CLI's own usage line, and is **space-separated only** —
+`--map-grid=16x16` exits 2 as an "unknown option", which in a two-run diff
+just leaves the previous `--out` file in place and reads as a real pixel
+difference). Gotcha: a cell's own `cx/(W-1)` is NOT the coordinate the engine
+hands `render2D`. `MapData::coord` is `round(c * 65535 / (W-1))`, which equals
+the naive divide only where `65535/(W-1)` divides evenly — 16 does, 64 and 17
+do not (11 of 64 columns and 8 of 17 disagree) — and even then the far edge
+normalizes to 65535/65536, never 1.0. `normAxis()` in `library/aurora-2d.js`
+is the exact form.
 
 `serve --heap-free BYTES` makes the mirror report that much free heap from
 `/api/status` instead of the default 0 ("this host has no meaningful number")
