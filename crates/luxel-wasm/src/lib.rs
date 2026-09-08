@@ -629,6 +629,16 @@ pub extern "C" fn lx_wants_sensors(h: i32) -> i32 {
     with_engine(h, |s| s.engine.wants_sensors() as i32).unwrap_or(0)
 }
 
+/// The geometry the compiled pattern asks for: 0 = strip, 2 = 2D grid
+/// (render2D, or renderFrame + a coordinate/grid-space bulk op), 3 = 3D point
+/// cloud. The playground picks its default preview rig from this rather than
+/// from the gallery manifest, so a pasted/imported/device-loaded pattern gets
+/// the same rig a gallery pick would (Gitea #372).
+#[no_mangle]
+pub extern "C" fn lx_preferred_dims(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.preferred_dims() as i32).unwrap_or(0)
+}
+
 /// Inject one sensor frame as 43 packed raw-16.16 i32s:
 /// [0..32) frequencyData, [32] energyAverage, [33] maxFrequencyMagnitude,
 /// [34] maxFrequency (Hz), [35] light, [36..39) accelerometer,

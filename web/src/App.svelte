@@ -493,8 +493,17 @@
       void refreshMqtt();
     })();
   }
-  /** Whether a pixel map is installed on the device (render2D geometry). */
-  let deviceMap = { installed: false, dims: 0, count: 0 };
+  /** Whether a pixel map is installed on the device (render2D geometry), and
+   *  — for one stored in the procedural `grid W H` form — its shape, which is
+   *  the rig a 2D pattern is previewed on while connected (#372). */
+  let deviceMap: {
+    installed: boolean;
+    dims: number;
+    count: number;
+    kind?: "grid" | "coords";
+    w?: number;
+    h?: number;
+  } = { installed: false, dims: 0, count: 0 };
 
   async function refreshDeviceMap(): Promise<void> {
     if (!device) return;
@@ -839,6 +848,7 @@
       devicePatternId = id;
       patternName = p.name;
       exampleName = "";
+      markPatternLoaded();
       source = p.source;
       dirty = false; // freshly loaded from the device — matches what's running
       hints = parseControlHints(source);
@@ -927,6 +937,7 @@
   /** Start a brand-new pattern in the editor. `onDevice` routes save to the
    *  device (from the Device Patterns tab) vs the local library. */
   function newPattern(onDevice: boolean): void {
+    markPatternLoaded();
     source = NEW_PATTERN;
     patternName = "";
     exampleName = "";
@@ -1008,7 +1019,10 @@
       deviceOutFps = st.out_fps ?? 0;
       deviceRescanHz = st.rescan_hz ?? 0;
       deviceVmerr = st.vmerr;
+      // The rig is reset to the hardware strip here, so it is re-derived from
+      // the source (and the device's installed map) on the next compile (#372)
       layout = { kind: "strip", pixels: st.pixels };
+      markPatternLoaded();
       if (pullPattern) {
         source = await session.pattern(); // show what's running on the device
         dirty = false; // editor now matches the running pattern
@@ -1148,6 +1162,16 @@
       engine = result;
       compileError = null;
       runtimeError = null;
+      if (rigDerivePending) {
+        // Once per load, never per keystroke (#372). A changed rig changes the
+        // pixel count, so the engine is rebuilt at the new geometry — the
+        // pending flag is already cleared, so this recurses exactly once.
+        rigDerivePending = false;
+        if (deriveRig(result)) {
+          recompile();
+          return;
+        }
+      }
       if (layout.kind === "grid") engine.setMapGrid(layout.w, layout.h);
       if (layout.kind === "map") engine.setMap(layout.coords);
       engine.setWallClock(Date.now() / 1000);
@@ -1225,6 +1249,7 @@
           : file.name.replace(/\.(epe|json)$/i, "");
       exampleName = "";
       devicePatternId = "";
+      markPatternLoaded();
       source = main;
       controlValues = {};
       dirty = true; // an imported .epe isn't in the library/device until saved
@@ -1312,6 +1337,7 @@
   function loadSaved(name: string): void {
     const p = saved.find((s) => s.name === name);
     if (!p) return;
+    markPatternLoaded();
     patternName = p.name;
     exampleName = "";
     importError = "";
@@ -1519,6 +1545,7 @@ export function render(index) {
   ): void {
     const p = e.detail;
     openEditor(home); // picking a pattern opens it in the editor
+    markPatternLoaded();
     patternName = p.name;
     exampleName = "";
     importError = "";
@@ -1535,6 +1562,72 @@ export function render(index) {
     controlValues = {};
     dirty = false; // freshly picked from the gallery
     void tick().then(applyEdit);
+  }
+
+  /** The user picked a rig by hand for the pattern in the editor, so nothing
+   *  derived from the source may move it (Gitea #372). Cleared by every load
+   *  of a different pattern — a new pattern is a new choice. */
+  let rigChosen = false;
+  /** A pattern was just LOADED (pasted, imported, opened from the library or
+   *  the device, restored from a share link), so the rig is re-derived on the
+   *  next successful compile. Never set by ordinary typing: the rig must not
+   *  move under someone mid-edit. */
+  let rigDerivePending = false;
+
+  /** A different pattern arrived (gallery/library/device pick, .epe import,
+   *  share link, device connect): re-derive the rig, and forget any manual
+   *  rig choice — it belonged to the pattern being replaced. */
+  function markPatternLoaded(): void {
+    rigChosen = false;
+    rigDerivePending = true;
+  }
+
+  /** A paste landed in the editor: re-derive, but this is an edit to the
+   *  pattern already open, so a rig its user chose by hand still stands. */
+  function markSourcePasted(): void {
+    rigDerivePending = true;
+  }
+
+  /** Pick the preview rig from the COMPILED pattern (#372): a `render2D`
+   *  pattern — or a `renderFrame` one that draws in coordinate/grid space —
+   *  wants a grid; a `render3D`-only pattern wants the rotating point cloud.
+   *  Read off the compiled program, so a `render2D` inside a comment or a
+   *  string never counts, and every load path gets what a gallery pick has
+   *  always got from the manifest's `kind`.
+   *
+   *  Only ever upgrades a STRIP: a grid, a 2D map, or a rig the user chose by
+   *  hand is left exactly as it is. Returns true when `layout` changed, so
+   *  the caller can rebuild the engine at the new geometry. */
+  function deriveRig(e: Engine): boolean {
+    if (rigChosen || layout.kind !== "strip") return false;
+    const dims = e.preferredDims();
+    if (dims === 2) {
+      // A connected device's own matrix geometry beats the 16×16 default:
+      // previewing what the hardware will actually show is the whole point.
+      const dw = deviceMap.kind === "grid" ? (deviceMap.w ?? 0) : 0;
+      const dh = deviceMap.kind === "grid" ? (deviceMap.h ?? 0) : 0;
+      let w = 16;
+      let h = 16;
+      if (dw > 0 && dh > 0) {
+        w = dw;
+        h = dh;
+      } else if (device) {
+        // no map installed: the same square the manual selector would build
+        // from the hardware pixel count
+        const side = Math.max(2, Math.round(Math.sqrt(devicePixels)));
+        w = side;
+        h = side;
+      }
+      layout = { kind: "grid", w, h };
+      return true;
+    }
+    if (dims === 3 && !device) {
+      // The rig a gallery "cloud" pick installs. Playground only: on a device
+      // the pixel count is hardware truth and a 125-point lattice is not it.
+      layout = { kind: "map", coords: cubeLattice(5) };
+      return true;
+    }
+    return false;
   }
 
   /** n×n×n lattice map — the default geometry for render3D patterns. */
@@ -1623,6 +1716,7 @@ export function render(index) {
       }
       exampleName = "";
       patternName = "shared pattern";
+      markPatternLoaded();
       return true;
     } catch {
       return false;
@@ -1652,6 +1746,7 @@ export function render(index) {
 
   function setLayoutKind(e: Event): void {
     const kind = (e.target as HTMLSelectElement).value;
+    rigChosen = true; // an explicit pick outranks anything derived (#372)
     if (kind === "map") {
       // "2D map" is how mapping is enabled: reveal + run the map program (the
       // map sub-tab appears because layout.kind becomes "map"). This is the
@@ -1675,6 +1770,7 @@ export function render(index) {
   }
 
   function setLayoutNum(field: "pixels" | "w" | "h", e: Event): void {
+    rigChosen = true; // hand-tuned geometry is an explicit pick too (#372)
     const v = Math.max(1, Math.min(4096, Number((e.target as HTMLInputElement).value) || 1));
     if (layout.kind === "strip" && field === "pixels") layout = { ...layout, pixels: v };
     if (layout.kind === "grid" && (field === "w" || field === "h")) {
@@ -2394,6 +2490,7 @@ export function render(index) {
             value={source}
             {hoverValue}
             on:change={onSourceChange}
+            on:paste={markSourcePasted}
             on:breakpoints={onBreakpoints}
           />
         </div>

@@ -1,5 +1,41 @@
 # Update log
 
+## 2026-09-07 — playground: the preview rig follows the source (Gitea #372)
+
+Only a gallery pick set the rig from the pattern, and it did it from the
+library manifest's `kind`. Typing/pasting, a share link, an `.epe` import,
+opening a device pattern and connecting to a device all kept whatever rig was
+up — so a `render2D` pattern routinely previewed as a strip.
+
+* **Derived from the COMPILED pattern**, not the source text: new
+  `Engine::preferred_dims()` (0 strip / 2 grid / 3 cloud) reads the same
+  render-entry candidates and `uses_coordinate_bulk_op` the engine already
+  uses for its own default grid map, so a `renderFrame` pattern that calls
+  `fillCircle`/`blit`/`gridWidth` counts as 2D and a `render2D` in a comment
+  does not. Exposed to the browser as `lx_preferred_dims`.
+* **Only ever upgrades a strip.** A grid, a 2D map, or a rig the user picked by
+  hand stays put; the manual pick holds until a *different* pattern is loaded.
+* **Re-derived on load, never per keystroke:** gallery/library/device pick,
+  `.epe` import, share link, device connect, and a paste (CodeMirror's
+  `input.paste` user event, now surfaced as an Editor `paste` event).
+* **Grid geometry** comes from the device's installed map when it is a
+  procedural grid, else a square built from the hardware pixel count, else
+  16x16. `luxel serve`'s `GET /api/map` now reports `kind`/`w`/`h` for a
+  procedural grid the way the firmware does, instead of losing the shape when
+  it expands the grid to coordinates.
+* **Tests:** a `preferred_dims` unit test in luxel-core; four playground e2e
+  cases (render2D paste -> 16x16 grid, render() paste -> strip untouched,
+  renderFrame + `fillCircle` -> grid, hand-picked rig not overridden) and a
+  device-e2e case (a 4096-px mirror with a `grid 64 64` map running render2D
+  opens on a 64x64 grid).
+* **Also fixes device-e2e on master.** #381 paced the suite's MAIN mirror at
+  `--fps 24`, and the slower render loop exposed a latent UI race: the
+  playground's `POST /api/playlist/play` follow-up read can beat the loop that
+  applies it, and the playlist poll only runs while the UI already believes it
+  is playing — so one early read latches "not playing" and the transport
+  buttons never appear (`playlist: next advances the device` failed 100 % of
+  the time). The frame-rate checks now use their own paced mirror and the main
+  one keeps its default ~8 ms pace; the UI race is filed as **#431**.
 ## 2026-09-07 — patlog: a pinned file no longer costs the store the space under it (#388)
 
 The Athom rig's store was silently a third of its size: a full `library/`
