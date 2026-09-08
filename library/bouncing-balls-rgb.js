@@ -99,13 +99,20 @@ export function sliderDirection(v) {
   usable = MODE < 2 ? pixelCount : floor((pixelCount + 1) / 2)
 }
 
+// Add one ball's colour at a strip pixel. Out of range is a no-op, which is
+// what makes the odd pixel count of a middle-out fold fall out for free.
+function emit(p, cr, cg, cb) {
+  if (p < 0 || p >= pixelCount) return
+  rBuf[p] = rBuf[p] + cr
+  gBuf[p] = gBuf[p] + cg
+  bBuf[p] = bBuf[p] + cb
+}
+
 export function beforeRender(delta) {
   clock = clock + delta / 1000
-  // clear the accumulator, then drop every live ball into it
-  var p = 0
-  for (p = 0; p < usable; p = p + 1) {
-    rBuf[p] = 0; gBuf[p] = 0; bBuf[p] = 0
-  }
+  // clear the accumulator (a native pass over the whole strip, not a
+  // bytecode loop), then drop every live ball into it
+  feedback(rBuf, 0); feedback(gBuf, 0); feedback(bBuf, 0)
   var b = 0
   for (b = 0; b < NUM; b = b + 1) {
     var et = clock - lastStrike[b]
@@ -119,23 +126,30 @@ export function beforeRender(delta) {
     var pos = floor(h * (usable - 1))
     if (pos < 0) pos = 0
     if (pos > usable - 1) pos = usable - 1
-    rBuf[pos] = rBuf[pos] + ballR[b]
-    gBuf[pos] = gBuf[pos] + ballG[b]
-    bBuf[pos] = bBuf[pos] + ballB[b]
+    // The direction modes used to be an index remap applied when each pixel
+    // read the buffer back. A whole-frame fill is indexed by pixel and cannot
+    // remap, so the fold happens here instead: a ball is deposited straight at
+    // the strip pixel (or the two mirrored pixels) the old remap made it show
+    // up at. Same arithmetic, run NUM times a frame instead of pixelCount.
+    var cr = ballR[b], cg = ballG[b], cb = ballB[b]
+    if (MODE == 0) {
+      emit(pos, cr, cg, cb)                 // head: identity
+    } else if (MODE == 1) {
+      emit(pixelCount - 1 - pos, cr, cg, cb)  // tail: reversed
+    } else if (MODE == 2) {
+      emit(pos, cr, cg, cb)                 // both ends into the middle
+      var m = pixelCount - 1 - pos
+      if (m >= usable) emit(m, cr, cg, cb)  // the centre pixel is not doubled
+    } else {
+      emit(usable - 1 - pos, cr, cg, cb)    // middle out to both ends
+      emit(pos + usable, cr, cg, cb)
+    }
   }
 }
 
-export function render(index) {
-  var src = index
-  if (MODE == 1) {
-    src = pixelCount - 1 - index
-  } else if (MODE == 2) {
-    if (index >= usable) src = pixelCount - 1 - index
-  } else if (MODE == 3) {
-    if (index < usable) src = usable - 1 - index
-    else src = index - usable
-  }
-  if (src < 0) src = 0
-  if (src > usable - 1) src = usable - 1
-  rgb(rBuf[src], gBuf[src], bBuf[src])
+// With the direction fold moved to the deposit, the accumulator is already
+// in strip order and the whole read-out is one `fillRGB`. Index space, so a
+// bare strip stays a bare strip and nothing asks for a map.
+export function renderFrame() {
+  fillRGB(rBuf, gBuf, bBuf)
 }

@@ -462,6 +462,8 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `christmaspewpew.js` (converted in place) | 2 trail buffers + a constant underglow array, one `fillRGB` | 149.8 → **84.4** µs/frame at 3364 px (58x58) | — | **byte-identical**, 8 rigs |
 | `neutronorbit.js` (converted in place) | 3 comet trails, native release + windowed hold, `clear` + a `setPixel` loop over the lit pixels | budget-refused at 4096 px **before and after**; 1024 px **2.12x** | 107.5 → **56.8** (1024 px) | **byte-identical** on six rigs |
 | `4th.js` (converted in place) | 4 per-pixel buffers, per-pixel `random()` so no bulk fill is possible; hoisted bunting bands + a `setPixel` loop | budget-refused at 4096 px **before and after**; 1024 px **1.11x** | 56.2 → **49.3** (1024 px) | **byte-identical** on six rigs, and across 7 `StripeWidth` values x 4 pixel counts |
+| `bouncing-balls-rgb.js` (converted in place) | 3 accumulation buffers, the direction fold moved to the deposit, one `fillRGB` | budget-refused at 4096 px before and after; 3364 px (58x58) 244.0 → **15.5** µs/frame (**15.8x**) | — | **byte-identical** on 8 rigs x all 4 direction modes |
+| `pew-pew-pew.js` (converted in place) | 3 trail buffers + 2 constant ambient arrays, mirror moved to the paint, one `fillRGB` | budget-refused at 4096 px before and after; 2000 px 127.4 → **24.7** µs/frame (**5.2x**) | — | **byte-identical** on 8 rigs x all 4 toggle combinations |
 
 ### The `fillRGB` readout batch (2026-09-07)
 
@@ -541,6 +543,69 @@ renders the pattern.
 | `nyan-lights.js` (converted in place) | sprite/rainbow composite into a 16x16 canvas, rebuilt only on a flip or a dial move, one `fillCanvas` | 12.88 → **108.36** Mpx/s (**8.40x**) | 35.4 → **0.5** | byte-identical on 16x16 / 32x32 / 64x64 / 60 px; the `-0.01` floor fudge elsewhere (see below) |
 | `color-bands-buffered.js` (converted in place) | 3 per-pixel H/S/V buffers, one `fillHSV` | budget-refused at 4096 px **before and after**; 1024 px **1.10x**, 3000 px **1.12x** | 71.0 → **66.0** (1024 px) | **byte-identical** on all five rigs |
 | `music-sequencer-for-v3-only.js` (converted in place) | 3 per-pixel H/S/V buffers, one `fillHSV`, hue offset added and taken back out | budget-refused at 4096 px **before and after**; 1024 px **7.67x**, 3000 px **5.64x** | 10.3 → **0.3** (1024 px) | **byte-identical** on all five rigs, undriven and with `Theme Hue` driven |
+
+### Two readouts that were not indexed by pixel (2026-09-07)
+
+`bouncing-balls-rgb.js` and `pew-pew-pew.js` are the same `fillRGB` shape as
+the batch above with one extra twist each: their per-pixel `render` did not
+read `buf[index]`, it read `buf[f(index)]`. **A whole-frame fill is indexed by
+pixel and cannot remap**, so in both cases the remap moved to the write side —
+which is also where it belongs, since it then runs once per *entity* instead
+of once per pixel.
+
+| pattern | rig | before µs/frame | after µs/frame | ratio |
+|---|---|---:|---:|---:|
+| `bouncing-balls-rgb.js` | 1024 px, 32x32 | 77.4 | 5.9 | **13.1x** |
+| `bouncing-balls-rgb.js` | 3364 px, 58x58 | 244.0 | 15.5 | **15.8x** |
+| `pew-pew-pew.js` | 512 px strip | 32.5 | 8.7 | **3.7x** |
+| `pew-pew-pew.js` | 1024 px, 32x32 | 62.0 | 13.7 | **4.5x** |
+| `pew-pew-pew.js` | 2000 px strip | 127.4 | 24.7 | **5.2x** |
+
+* **`bouncing-balls-rgb`** has a four-way Direction control — head, tail, both
+  ends into the middle, middle out to both ends — implemented as an index
+  remap in `render`, with the accumulator holding only the "usable" half in
+  the folded modes. The fold now happens where a ball is deposited: a ball
+  lands directly on the strip pixel (or the two mirrored pixels) the remap
+  used to make it appear at, so the accumulator is already in strip order.
+  That is `NUM` deposits a frame instead of `pixelCount` remaps, and it is
+  what makes this the batch's largest ratio. Its per-frame clear also stopped
+  being a bytecode loop and became three `feedback(buf, 0)` calls. The mirror
+  arm of "both ends into the middle" needs one guard — on an odd pixel count
+  the centre pixel is its own reflection and must not be deposited twice.
+* **`pew-pew-pew`** has a Mirror toggle (same problem, same fix: the volley is
+  fired the other way down the strip instead of being reflected on the way
+  out) and a **warm ambient underlay added per pixel**,
+  `rgb(bufR[p] + 0.05, bufG[p] + 0.01, …)`. There is no array-plus-scalar
+  builtin, so the two constants live in constant `array(pixelCount)`s that are
+  added before the fill and subtracted straight after — exact, because a
+  fixed-point add and its inverse round-trip with no rounding.
+
+  **The interpreted alternative is a regression, measured:** doing the same
+  two adds and their undo as bytecode loops over `pixelCount` runs at
+  **0.75x** at 1024 px and 0.84x at 1000 px — slower than the per-pixel
+  `render` it replaced. A `pixelCount` bytecode loop costs about 50 ns/px
+  here, more than the per-pixel render entry it is trying to avoid. So for
+  this shape the constant arrays are not a convenience, they are the only
+  version that wins.
+
+  They cost element budget, and this is the one conversion in these batches
+  that **lowers a ceiling**: five `array(pixelCount)` instead of three takes
+  the pattern's maximum strip from ~3,399 px to ~2,019 px. Both are far past
+  every rig in the tree (`check-library` tops out at 512 px, the Athom runs
+  60) and the pattern was already budget-refused on a 4096-px panel, so the
+  affected range is empty in practice — but #373's proposed
+  `arrayAffine(dst, src, k, c)` would remove both arrays and the two passes
+  together, and this is the concrete case for it.
+
+Mirror and Direction are the reason the equivalence sweep here is bigger than
+usual: **byte-identical on 8 rigs for all four `bouncing-balls-rgb` direction
+modes and all four `pew-pew-pew` toggle combinations**, not just at the
+defaults. Moving a remap to the write side is only equivalent if the *inverse*
+is exactly right, and a two-mode spot check would not have caught the odd-count
+centre pixel. What is not identical is the transient when one of those controls
+is flipped *mid-run*: the old code reflected the trail already in the air
+instantly, the new code turns the new paint around and the trail follows within
+a few frames (about 5 at the default decay). Steady state is the same picture.
 
 ### `raindrops-2d.js` (2026-09-07)
 
