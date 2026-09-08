@@ -482,7 +482,7 @@ async fn main(spawner: Spawner) -> ! {
                 let rx = rx.with_rx(p.GPIO3).into_async();
                 spawner.spawn(sensors::uart_task(rx).unwrap());
             }
-            Err(e) => println!("sensor uart init failed: {:?}", e),
+            Err(_) => println!("sensor uart init failed"),
         }
     }
     // Bisect knob: LUXEL_QUIET=1 at build time skips the render task
@@ -1147,7 +1147,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     if let Err(e) = sink.set_protocol(cur_protocol()) {
         // expected on fixed-format drivers (HUB75): the wire ignores the
         // protocol setting entirely
-        println!("output: protocol config not applied: {:?}", e);
+        println!("output: protocol config not applied: {}", e);
     }
     if !sink.resize(PIXEL_COUNT.load(Ordering::Relaxed) as usize) {
         // the driver retries lazily per frame once heap frees up
@@ -1295,7 +1295,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     let p = Protocol::from_u8(code);
                     if let Err(e) = sink.set_protocol(p) {
                         println!(
-                            "output: protocol switch rejected: {:?} — staying on {}",
+                            "output: protocol switch rejected: {} — staying on {}",
                             e,
                             cur_protocol().name()
                         );
@@ -1726,17 +1726,47 @@ async fn reboot_task() -> ! {
     esp_hal::system::software_reset()
 }
 
+/// esp-radio's `WifiError` by name, WITHOUT `{:?}`.
+///
+/// `WifiError::Disconnected` carries a `DisconnectedInfo`, so formatting the
+/// error with `{:?}` links `Ssid`'s `Debug`, which formats a `&str`, which
+/// links `char::escape_debug_ext` and the `DebugStruct`/`DebugTuple` builders
+/// — 2.6 KB of the C6's OTA slot for three log lines (Gitea #438). A
+/// `&'static str` table is a few dozen bytes and says the same thing.
+/// `#[non_exhaustive]`, hence the catch-all.
+fn wifi_error_name(e: &esp_radio::wifi::WifiError) -> &'static str {
+    use esp_radio::wifi::WifiError as E;
+    match e {
+        E::Disconnected(_) => "disconnected",
+        E::Unsupported => "unsupported",
+        E::InvalidArguments => "invalid arguments",
+        E::Failed => "failed",
+        E::OutOfMemory => "out of memory",
+        E::InvalidSsid => "invalid ssid",
+        E::InvalidPassword => "invalid password",
+        E::NotConnected => "not connected",
+        _ => "unknown",
+    }
+}
+
 #[embassy_executor::task]
 async fn connection_task(mut controller: WifiController<'static>) {
     loop {
         match controller.connect_async().await {
-            Ok(info) => {
-                println!("wifi connected: {:?}", info);
-                let info = controller.wait_for_disconnect_async().await.ok();
-                println!("wifi disconnected: {:?}", info);
+            Ok(_info) => {
+                // Never `{:?}` on the whole struct — see `wifi_error_name`.
+                // The SSID is ours and already in the boot log.
+                println!("wifi connected");
+                match controller.wait_for_disconnect_async().await {
+                    // `DisconnectReason` is a fieldless enum: its `Debug` is
+                    // one switch table and drags nothing else in, and the
+                    // reason is the whole point of the line.
+                    Ok(d) => println!("wifi disconnected: {:?}", d.reason),
+                    Err(e) => println!("wifi disconnected: {}", wifi_error_name(&e)),
+                }
             }
             Err(e) => {
-                println!("wifi connect failed: {:?}", e);
+                println!("wifi connect failed: {}", wifi_error_name(&e));
             }
         }
         Timer::after(Duration::from_millis(5000)).await;

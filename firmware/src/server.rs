@@ -2500,8 +2500,8 @@ pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
                 task_id,
             })
             .await;
-        if let Err(e) = served {
-            esp_println::println!("http[{}]: serve error: {:?}", task_id, e);
+        if served.is_err() {
+            esp_println::println!("http[{}]: serve error", task_id);
         }
         slot_stage(task_id, 0);
         // http_buffer freed here

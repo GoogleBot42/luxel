@@ -122,8 +122,8 @@ pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
                     sb.as_deref(),
                 );
                 let dest = (embassy_net::Ipv4Address::BROADCAST, SYNC_PORT);
-                if let Err(e) = sock.send_to(&beacon, dest).await {
-                    esp_println::println!("sync: send {:?}", e);
+                if sock.send_to(&beacon, dest).await.is_err() {
+                    esp_println::println!("sync: send failed");
                 }
                 Timer::after(Duration::from_millis(250)).await;
             }
@@ -174,7 +174,7 @@ async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddr
     let mut sock = TcpSocket::new(stack, &mut rx, &mut tx);
     sock.set_timeout(Some(embassy_time::Duration::from_secs(5)));
     if sock.connect((leader, 80)).await.is_err() {
-        esp_println::println!("sync: leader {:?} not reachable on :80", leader);
+        esp_println::println!("sync: leader {} not reachable on :80", leader);
         return;
     }
     let req = alloc::format!(
@@ -257,7 +257,7 @@ pub async fn e131_task(stack: Stack<'static>) -> ! {
         let [hi, lo] = u.to_be_bytes();
         let _ = stack
             .join_multicast_group(embassy_net::Ipv4Address::new(239, 255, hi, lo))
-            .inspect_err(|e| esp_println::println!("e131: multicast join {}: {:?}", u, e));
+            .inspect_err(|_| esp_println::println!("e131: multicast join {} failed", u));
     }
     let (rx_meta, rx_buf, tx_meta, tx_buf) = bufs!();
     let mut sock = UdpSocket::new(stack, rx_meta, rx_buf, tx_meta, tx_buf);
