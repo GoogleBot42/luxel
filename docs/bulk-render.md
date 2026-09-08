@@ -534,6 +534,9 @@ the conversions; the budget itself is tracked separately.
 one non-zero cell in the sweep is `coolaura` at 58x58 and 64x64, where the
 pre-conversion file renders black because of the budget and the converted one
 renders the pattern.
+| `bouncy-boxes.js` (converted in place) | 16x16 box sim + glitch garnish, one `fillCanvas`, `has2DMap()` keeps the mapless-strip black | 13.82 → **23.68** Mpx/s (**1.71x**) | 26.6 → **14.6** | **byte-identical** on all five rigs |
+| `ice-floes-2d.js` (converted in place) | 16x16 Voronoi canvas, one `fillCanvas` | 13.02 → **21.47** Mpx/s (**1.65x**) | 26.6 → **13.6** | byte-identical on 16x16 / 32x32 / 64x64 / 60 px; the `-0.01` floor fudge elsewhere (see below) |
+| `nyan-lights.js` (converted in place) | sprite/rainbow composite into a 16x16 canvas, rebuilt only on a flip or a dial move, one `fillCanvas` | 12.88 → **108.36** Mpx/s (**8.40x**) | 35.4 → **0.5** | byte-identical on 16x16 / 32x32 / 64x64 / 60 px; the `-0.01` floor fudge elsewhere (see below) |
 
 ### `raindrops-2d.js` (2026-09-07)
 
@@ -731,6 +734,74 @@ partly-allocated buffer set; before and after then diverge on 66 of 737,295
 bytes with the controls driven. That is two different walks through an already
 broken state, not a rendering difference — at 2,048 and 2,400 px, the largest
 sizes that actually allocate, the same driven run is byte-identical.
+### The canvas readouts — `bouncy-boxes`, `ice-floes-2d`, `nyan-lights` (2026-09-07)
+
+Three patterns from #373's "already sitting on the `fillHSV`/`fillCanvas`
+shape" bucket (#405). All three were already 16x16 simulations whose
+`render2D` did nothing but resolve a colour out of the canvas, so the whole
+conversion is deleting the readout and issuing `fillCanvas(hC, sC, vC, 16, 16)`
+once per frame. `nyan-lights` also moves its *composite* off the per-pixel
+path: the sprite/rainbow/background decision was re-run at every LED for 256
+distinct answers, and now runs into the canvas only when the flip flag or one
+of the three rainbow dials actually changes — roughly 10 repaints a second
+instead of 4096 per frame.
+
+| rig | bouncy-boxes | ice-floes-2d | nyan-lights |
+|---|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 296.3 → **173.0** µs/frame (**1.71x**) | 314.6 → **190.8** (**1.65x**) | 317.9 → **37.8** (**8.40x**) |
+| 256 px, `--map-grid 16x16` | 151.5 → 141.9 (1.07x) | 175.7 → 165.3 (1.06x) | 22.4 → **6.6** (3.41x) |
+| 300 px strip (18x17 default grid) | 145.5 → 138.5 (1.05x) | 166.5 → 159.4 (1.04x) | 25.2 → **8.4** (2.99x) |
+| insns/px @ 4096 px | 26.6 → **14.6** | 26.6 → **13.6** | 35.4 → **0.5** |
+
+The 256 px rows are the same lesson `raindrops-2d` taught: when the display is
+already the size of the simulation, a readout conversion buys almost nothing —
+the `beforeRender` pass that was always there is the whole frame. What the
+conversion removes is the *scaling* term, and each of the three now reports the
+**same instruction count at 256 and at 4096 px** (17,954,882 / 16,704,000 /
+624,843 over 300 frames), so the panel size no longer costs interpreted work at
+all.
+
+**Visual equivalence**, 60 frames at a fixed 30 fps delta and seed
+(`luxel run --out`), byte for byte against the pre-conversion file, undriven and
+again with every control driven at its declared `default=`:
+
+| rig | bouncy-boxes | ice-floes-2d | nyan-lights |
+|---|---:|---:|---:|
+| 256 px, 16x16 map | **0** | **0** | **0** |
+| 1024 px, 32x32 map | **0** | **0** | **0** |
+| 4096 px, 64x64 map | **0** | **0** | **0** |
+| 60 px strip (8x8 default grid) | **0** | **0** | **0** |
+| 300 px strip (18x17 default grid) | **0** | maxdiff 132, 44.6 % | maxdiff 255, 17.7 % |
+
+**Every non-zero byte is the `-0.01` floor fudge, not the conversion.** The old
+readout wrote `floor(y * 15.99) * 16 + floor(x * 15.99)` — the `15.99` being the
+usual dodge for `x == 1` indexing one past the end — while `fillCanvas` samples
+with `cell_index`, i.e. `clamp(floor(x * 16), 0, 15)`. The two agree wherever no
+mapped coordinate lands exactly on a cell boundary, which is why 16x16, 32x32,
+64x64 and the 8x8 default grid are byte-identical; they disagree by a whole cell
+wherever one does. The 18x17 default grid of a 300 px strip is the case: its 17
+rows normalize to exactly `r / 16`, so `15.99 * r / 16 < r` and the old form
+read row `r - 1` for every row. That is not an inference — the **original** with
+only its index arithmetic changed to `min(floor(c * 16), 15)` is byte-identical
+to each converted pattern on 289, 300, 512 and 1000 px, where the shipped form
+differs by up to 207 per channel.
+
+`bouncy-boxes` is byte-identical everywhere because it exports `render` as well
+as `render2D`, which suppresses the default grid: on a mapless strip it was
+black and still is. Keeping it that way needed a guard, because `renderFrame`
+wins over `render` unconditionally and `fillCanvas` on a mapless fixture is not
+a no-op — the 1-D fallback coordinate hands every pixel `y = 0.5`, which would
+paint one row of the canvas along the whole strip. `has2DMap()` is the branch:
+
+```js
+export function renderFrame() {
+  if (has2DMap()) fillCanvas(hc, sc, vc, W, H)
+  else clear()          // no map: the shipped 1-D fallback was black
+}
+```
+
+`ice-floes-2d` and `nyan-lights` export no `render`, so they get the default
+`ceil(√n)` grid exactly as they did under `render2D` and need no guard.
 
 ## How to judge this on device
 

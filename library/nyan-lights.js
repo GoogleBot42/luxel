@@ -91,6 +91,12 @@ export function beforeRender(delta) {
     acc -= flipMs
     shifted = !shifted
   }
+  // rebuild the canvas only when the composite it encodes actually changed
+  var sig = shifted + rainTop * 2 + rainCol * 32 + rainGroup * 1024
+  if (sig != canvasSig) {
+    canvasSig = sig
+    buildCanvas()
+  }
 }
 
 // Animation rate of the two-frame GIF loop, in flips per second — the cat's
@@ -120,32 +126,57 @@ export function sliderRainbowGroup(v) {
   rainGroup = clamp(floor(v), 1, 8)
 }
 
-export function render2D(index, x, y) {
-  var col = floor(x * 15.99)
-  var row = floor(y * 15.99)
-  var i = row * W + col
+// ---- composited canvas ---------------------------------------------------
+// The sprite/rainbow/background decision is per CELL, not per LED: the old
+// `render2D` re-ran it at every pixel of the panel for 256 distinct answers.
+// It now runs once into a 16x16 HSV canvas and goes out as one `fillCanvas`
+// (docs/bulk-render.md). The composite only depends on the flip flag and the
+// three rainbow dials, so it is rebuilt only when one of them moves — a
+// steady pattern repaints the canvas 10 times a second, not 4096 times a
+// frame.
+var cH = array(256)
+var cS = array(256)
+var cV = array(256)
+var canvasSig = -1
 
-  // Sprite pass: on alternate frames read the neighboring entry so the cat
-  // jiggles one pixel sideways. Transparent-after-shift falls through to the
-  // rainbow/black logic (cleaner than the original's stale-pixel quirk).
-  var j = i
-  if (shifted) j = i + 1
-  if (j < 256 && opq[j]) {
-    hsv(hueA[j], satA[j], valA[j])
-    return
-  }
+function buildCanvas() {
+  var col, row
+  for (row = 0; row < W; row++) {
+    for (col = 0; col < W; col++) {
+      var i = row * W + col
 
-  // Rainbow: columns past roughly the first third, grouped in runs of four;
-  // alternate groups bob one row out of phase with the flip flag.
-  if (col >= rainCol) {
-    var f = shifted
-    if (floor(col / rainGroup) % 2 == 1) f = !f
-    var band = row - rainTop - f // six rows starting a couple rows from the top
-    if (band >= 0 && band < 6) {
-      hsv(rain[band], 1, 1)
-      return
+      // Sprite pass: on alternate frames read the neighboring entry so the cat
+      // jiggles one pixel sideways. Transparent-after-shift falls through to the
+      // rainbow/black logic (cleaner than the original's stale-pixel quirk).
+      var j = i
+      if (shifted) j = i + 1
+      if (j < 256 && opq[j]) {
+        cH[i] = hueA[j]
+        cS[i] = satA[j]
+        cV[i] = valA[j]
+        continue
+      }
+
+      // Rainbow: columns past roughly the first third, grouped in runs of four;
+      // alternate groups bob one row out of phase with the flip flag.
+      var h = 0, s = 0, v = 0
+      if (col >= rainCol) {
+        var f = shifted
+        if (floor(col / rainGroup) % 2 == 1) f = !f
+        var band = row - rainTop - f // six rows starting a couple rows from the top
+        if (band >= 0 && band < 6) {
+          h = rain[band]
+          s = 1
+          v = 1
+        }
+      }
+      cH[i] = h
+      cS[i] = s
+      cV[i] = v
     }
   }
+}
 
-  rgb(0, 0, 0)
+export function renderFrame() {
+  fillCanvas(cH, cS, cV, W, W)
 }

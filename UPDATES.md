@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-09-07 — library: three canvas readouts render through renderFrame + fillCanvas
+
+First batch of Gitea #405 (the "already `fillHSV`/`fillCanvas`-shaped" bucket
+#373 section 5 surveyed): `bouncy-boxes.js`, `ice-floes-2d.js` and
+`nyan-lights.js` converted in place, same files, same pattern names.
+
+* All three were already 16x16 simulations whose `render2D` did nothing but
+  resolve a colour out of the canvas. The readout is now one
+  `fillCanvas(hC, sC, vC, 16, 16)` per frame. `nyan-lights` additionally moves
+  its sprite/rainbow/background *composite* off the per-pixel path — it was
+  re-deciding at every LED for 256 distinct answers, and now rebuilds the
+  canvas only when the flip flag or one of the three rainbow dials moves.
+* Host `luxel bench`, best of five interleaved, 4096 px on a 64x64 map:
+  bouncy-boxes 296.3 → **173.0** µs/frame (1.71x), ice-floes-2d 314.6 →
+  **190.8** (1.65x), nyan-lights 317.9 → **37.8** (8.40x). `bench --profile`:
+  26.6 → 14.6, 26.6 → 13.6 and 35.4 → 0.5 insns/px, and each converted pattern
+  now reports the SAME instruction count at 256 px and at 4096 px — the
+  per-pixel entry tax is gone, not reduced.
+* Equivalence, 60 frames at a fixed delta and seed, undriven and with every
+  control at its declared `default=`: **byte-identical** on 16x16, 32x32, 64x64
+  and a 60 px strip for all three, and on the 300 px strip for `bouncy-boxes`.
+  The 300 px deltas for the other two are entirely the old `-0.01` floor fudge:
+  `floor(c * 15.99)` against `fillCanvas`'s `clamp(floor(c * 16), 0, 15)`, which
+  differ by a whole cell wherever a mapped coordinate lands exactly on a cell
+  boundary (the 18x17 default grid's rows normalize to exactly `r / 16`, so the
+  old form read row `r - 1` on every row). Proven, not inferred: the ORIGINAL
+  with only its index arithmetic changed to `min(floor(c * 16), 15)` is
+  byte-identical to each converted pattern at 289, 300, 512 and 1000 px.
+* `bouncy-boxes` exports `render` as well, which suppresses the default grid,
+  so a mapless strip was black — and `renderFrame` wins over `render`
+  unconditionally, with `fillCanvas` on a mapless fixture painting one canvas
+  row (the 1-D fallback hands every pixel `y = 0.5`) rather than no-opping.
+  `has2DMap()` guards it, and the shipped mapless behaviour is unchanged.
+* check-library 307/307 on all five rigs, `tools/ci.sh` green, driven in real
+  chromium: tile preview lit, pattern opens and compiles, 2D preview renders,
+  and a control slider moves the readout and the render for each of the three.
+  docs/bulk-render.md's "Converted library patterns" table and a new section
+  carry the numbers. Host only — the on-panel look rows are on #361.
+
 ## 2026-09-07 — four `fillRGB` readout conversions (#405)
 
 First batch of #373 section 5's "already `fillHSV`/`fillCanvas`-shaped" bucket.
@@ -119,7 +158,6 @@ now reports the device's own rate from `/api/status`.
 * **device-e2e** asserts the readout on a 24 fps mirror (tracks the device,
   not the 60 Hz preview loop) and on a second mirror impersonating a
   112 fps / 115 Hz panel (`(panel)` label + tooltip ceiling).
-
 ## 2026-09-07 — docs: bulk-render canvas ceiling, exact cell coordinates, devshell PATH
 
 Corrections the Aurora 2D conversion (#406) turned up, written back into

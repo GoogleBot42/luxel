@@ -208,9 +208,24 @@ function paintCanvas() {
   }
 }
 
-export function render2D(index, x, y) {
-  var idx = floor(y * 15.99) * 16 + floor(x * 15.99)
-  hsv(hc[idx], sc[idx], vc[idx])
+// One `fillCanvas` per frame instead of one `hsv()` per LED: the boxes were
+// always simulated on the 16x16 canvas and `render2D` only resolved a colour
+// out of it, so the readout moves into the engine (docs/bulk-render.md).
+// `fillCanvas` samples the canvas at every pixel's mapped (x, y) with nearest
+// sampling — what `floor(y * 15.99) * W + floor(x * 15.99)` was reaching for.
+//
+// On a strip with no map at all there is nothing to sample: `renderFrame`
+// wins over `render`, and the 1-D fallback coordinate would hand every pixel
+// y = 0.5 and paint one row of the canvas across the whole strip. `has2DMap()`
+// keeps the shipped behaviour instead — a mapless fixture stays black, exactly
+// as the `render(index)` fallback below (still exported for engines that have
+// no `renderFrame`) always made it.
+export function renderFrame() {
+  if (has2DMap()) {
+    fillCanvas(hc, sc, vc, W, H)
+  } else {
+    clear()
+  }
 }
 
 // 1D fallback exists but just outputs black (matches the original's behavior)
