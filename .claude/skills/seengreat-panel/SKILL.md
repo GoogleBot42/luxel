@@ -21,6 +21,18 @@ Reading the panel (2026-09-07):
   repeated baseline in the same session before claiming a delta. `--clients 3`
   saturates the 3-socket web pool and returns nothing — use `--clients 1`.
 - Brightness is Jeremy's setting — read it, never set it.
+- **`GET /api/pixels` is the ENGINE's frame, not the wire's.** On a pipelined
+  board the preview reads the render → output hand-off buffer, which the
+  firmware's output pipeline has not touched yet. A readback therefore shows a
+  pattern's own `setBlur`/`setGlow`/`setOutputPalette`/`setGamma` **exactly**
+  (that is how #140's 2D kernels were verified on 2026-09-08) and shows the
+  DEVICE-level `/api/output` stages **not at all**. Judge an engine change by
+  readback; judge an outpipe change by `pipe_us` and by eye.
+- **Touching any `/api/output` stage costs ~12.3 KB of heap until reboot**
+  at 4096 px (#446): the outpipe's frame scratch keeps its capacity once
+  grown, and turning the setting back off does not give it back
+  (`heap_free` 41,492 → 26,928 → 29,324 on 2026-09-08). Read `heap_free`
+  before and after, and say so when you hand the panel back.
 
 ## The USB port is not a serial console
 
