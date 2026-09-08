@@ -87,6 +87,94 @@ const CLOCK: Rate = Rate::from_mhz(30);
 
 type Fb = DmaFrameBuffer<NROWS, PANEL_COLS, PLANES>;
 
+/// Entries in one framebuffer, as the bulk packer counts them.
+const FB_WORDS: usize = luxel_hub75::words(NROWS, PANEL_COLS, PLANES);
+
+/// The bulk packer (Gitea #329) treats the framebuffer as a flat `[u16]` laid
+/// out plane -> row -> column. That is exactly `DmaFrameBuffer`'s `#[repr(C)]`
+/// shape today, and this catches the one way it could silently stop being so:
+/// a `hub75-framebuffer` feature that adds words (`inter-row-blank-*`,
+/// `tail-closes-latch`) would change the size. Column ORDER can't be caught
+/// this way, so `probe_layout` checks that on the real buffer at boot.
+const _: () = assert!(
+    core::mem::size_of::<Fb>() == FB_WORDS * core::mem::size_of::<u16>(),
+    "framebuffer is not a flat entry array — the bulk packer's layout assumption broke"
+);
+
+/// The framebuffer as the flat entry array the packer writes.
+fn fb_words(fb: &mut Fb) -> &mut [u16] {
+    // SAFETY: `DmaFrameBuffer` is `#[repr(C)]` over `[PlaneData; PLANES]`,
+    // `PlaneData` over `[Row; NROWS]`, `Row` over `[Entry; COLS]` (plus
+    // zero-length arrays for the disabled blank/tail features), and `Entry`
+    // is `#[repr(transparent)] u16`. So the whole struct is `FB_WORDS`
+    // contiguous `u16`s with no padding — asserted above — and `u16`'s
+    // alignment is the struct's own.
+    unsafe { core::slice::from_raw_parts_mut((fb as *mut Fb).cast::<u16>(), FB_WORDS) }
+}
+
+/// Heap-allocate the packer's spread tables (2 KiB), leaked like the
+/// framebuffers. `Tables::zeroed()` is all-zero bytes, so `alloc_zeroed`
+/// produces a valid value without a 2 KiB stack temporary.
+fn alloc_tables() -> Option<&'static mut luxel_hub75::Tables> {
+    let layout = core::alloc::Layout::new::<luxel_hub75::Tables>();
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) }.cast::<luxel_hub75::Tables>();
+    if p.is_null() {
+        return None;
+    }
+    Some(unsafe { &mut *p })
+}
+
+/// The channel LUT the packer folds into its tables: what the panel is
+/// actually driven with for each source value. Exactly the arithmetic the
+/// per-pixel path does inline, so the two are byte-identical by construction
+/// (asserted in `luxel-hub75`'s tests against the real framebuffer type).
+fn brightness_lut(brightness5: u8) -> [u8; 256] {
+    let mut lut = [0u8; 256];
+    let full = brightness5 >= 31;
+    for (c, v) in lut.iter_mut().enumerate() {
+        let c = c as u8;
+        *v = if full { c } else { scale5(c, brightness5) };
+    }
+    lut
+}
+
+/// Does the real framebuffer agree with the packer's index arithmetic?
+///
+/// The size assert above pins the word COUNT but not the column ordering
+/// (`hub75-framebuffer`'s `esp32-ordering` feature XORs adjacent columns) or
+/// the plane/half bit assignment. Rather than encode "the S3 doesn't enable
+/// that feature" as a comment, write three pixels through the crate's own
+/// `set_pixel` and check they land where `pack` would have put them. Runs
+/// once, on the still-unused back buffer, and leaves it erased.
+fn probe_layout(fb: &mut Fb) -> bool {
+    const R1: u16 = 1 << 9;
+    const G1: u16 = 1 << 10;
+    const B2: u16 = 1 << 14;
+    const STRIDE: usize = NROWS * PANEL_COLS;
+    // A green value whose only set bit belongs to the LAST plane.
+    let g: u8 = 1 << (8 - PLANES);
+
+    fb.erase();
+    fb.set_pixel(Point::new(1, 0), Color::new(255, 0, 0));
+    fb.set_pixel(Point::new(2, NROWS as i32), Color::new(0, 0, 255));
+    fb.set_pixel(Point::new(3, 1), Color::new(0, g, 0));
+
+    let mut ok = true;
+    {
+        let w = fb_words(fb);
+        // 255 lights every plane for its channel; `g` lights exactly one.
+        let lit = w.iter().filter(|e| **e & luxel_hub75::COLOR_MASK != 0).count();
+        ok &= lit == 2 * PLANES + 1;
+        for p in 0..PLANES {
+            ok &= w[p * STRIDE + 1] & luxel_hub75::COLOR_MASK == R1;
+            ok &= w[p * STRIDE + 2] & luxel_hub75::COLOR_MASK == B2;
+        }
+        ok &= w[(PLANES - 1) * STRIDE + PANEL_COLS + 3] & luxel_hub75::COLOR_MASK == G1;
+    }
+    fb.erase();
+    ok
+}
+
 /// Fallibly heap-allocate a framebuffer, leaked to the `'static` the DMA
 /// driver requires. Zeroed-alloc + `format()` is exactly `Fb::new()`
 /// (zeroed color bits + row-address/control formatting) without a ~28 KB
@@ -121,6 +209,12 @@ pub struct Hub75Output {
     shown_cursor: u32,
     /// Last displayed sequence seen by the audit.
     last_shown_seq: u32,
+    /// Brightness-folded spread tables for the bulk packer (Gitea #329).
+    /// `None` = allocation failed or the layout probe disagreed; the
+    /// per-pixel path still works, it is just five times slower.
+    tables: Option<&'static mut luxel_hub75::Tables>,
+    /// Brightness the tables were built for; `u8::MAX` = never built.
+    tables_b5: u8,
 }
 
 impl Hub75Output {
@@ -133,6 +227,8 @@ impl Hub75Output {
             next_seq: 1,
             shown_cursor: 0,
             last_shown_seq: 0,
+            tables: None,
+            tables_b5: u8::MAX,
         };
         // esp-hub75's macro expands to `StaticCell::uninit().write([EMPTY; N])`
         // — the descriptor array is written straight into the static, but the
@@ -149,6 +245,26 @@ impl Hub75Output {
                 println!("hub75: framebuffer alloc failed — panel output disabled");
                 return dead;
             }
+        };
+        // Bulk packer (Gitea #329): used only if its layout assumption holds
+        // on the buffer we actually got, and if its 2 KiB of tables fit.
+        let tables = if probe_layout(back) {
+            match alloc_tables() {
+                Some(t) => {
+                    println!(
+                        "hub75: bulk bitplane packer active ({} B of tables)",
+                        core::mem::size_of::<luxel_hub75::Tables>()
+                    );
+                    Some(t)
+                }
+                None => {
+                    println!("hub75: packer table alloc failed — per-pixel compose");
+                    None
+                }
+            }
+        } else {
+            println!("hub75: framebuffer layout probe FAILED — per-pixel compose");
+            None
         };
         match Hub75::new(lcd_cam, pins, channel, tx_descriptors, CLOCK, &*front) {
             Ok(h) => {
@@ -177,6 +293,8 @@ impl Hub75Output {
                     next_seq: 1,
                     shown_cursor: 0,
                     last_shown_seq: 0,
+                    tables,
+                    tables_b5: u8::MAX,
                 }
             }
             Err(e) => {
@@ -340,21 +458,41 @@ impl OutputDriver for Hub75Output {
                 None => return false,
             },
         };
-        back.erase();
         // brightness5: no APA102-style hardware field on HUB75 — scale
-        // channels in software exactly like the WS2812 path. At 0 the
-        // erase above already produced the all-black frame.
-        if brightness5 > 0 {
-            let full = brightness5 >= 31;
-            for (i, px) in rgb.iter().enumerate().take(PANEL_COLS * PANEL_ROWS) {
-                let [r, g, b] = *px;
-                let (r, g, b) = if full {
-                    (r, g, b)
-                } else {
-                    (scale5(r, brightness5), scale5(g, brightness5), scale5(b, brightness5))
-                };
-                let p = Point::new((i % PANEL_COLS) as i32, (i / PANEL_COLS) as i32);
-                back.set_pixel(p, Color::new(r, g, b));
+        // channels in software exactly like the WS2812 path.
+        //
+        // The bulk packer (Gitea #329) walks the frame per ROW PAIR, building
+        // all PLANES entry words for a pixel pair from one pair of table
+        // lookups per channel, with brightness folded into those tables. It
+        // writes every colour bit of every entry, so it subsumes the erase.
+        // The per-pixel path below is the fallback for a framebuffer whose
+        // layout the boot probe did not recognise.
+        if let Some(t) = self.tables.as_deref_mut() {
+            if self.tables_b5 != brightness5 {
+                t.build(&brightness_lut(brightness5));
+                self.tables_b5 = brightness5;
+            }
+        }
+        match self.tables.as_deref() {
+            Some(tables) => {
+                luxel_hub75::pack::<NROWS, PANEL_COLS, PLANES>(fb_words(back), rgb, tables);
+            }
+            None => {
+                back.erase();
+                // At 0 the erase above already produced the all-black frame.
+                if brightness5 > 0 {
+                    let full = brightness5 >= 31;
+                    for (i, px) in rgb.iter().enumerate().take(PANEL_COLS * PANEL_ROWS) {
+                        let [r, g, b] = *px;
+                        let (r, g, b) = if full {
+                            (r, g, b)
+                        } else {
+                            (scale5(r, brightness5), scale5(g, brightness5), scale5(b, brightness5))
+                        };
+                        let p = Point::new((i % PANEL_COLS) as i32, (i / PANEL_COLS) as i32);
+                        back.set_pixel(p, Color::new(r, g, b));
+                    }
+                }
             }
         }
         // Rescans between consecutive DISPLAYED frames, sampled at the only

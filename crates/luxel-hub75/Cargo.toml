@@ -1,0 +1,19 @@
+[package]
+name = "luxel-hub75"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Row-oriented bulk bitplane packer for HUB75 BCM framebuffers"
+
+[dependencies]
+
+[dev-dependencies]
+# The real framebuffer the firmware drives — the tests build a reference
+# image through its per-pixel `set_pixel` path and require the packer to be
+# byte-identical to it. Feature set matches what the S3 firmware resolves
+# (defaults: no esp32-ordering, no inter-row blank, no tail word).
+hub75-framebuffer = "0.11"
+embedded-graphics = { version = "0.8", default-features = false }
+# Real rendered frames for the equality tests, straight from library/*.js —
+# fixtures would go stale, the engine does not.
+luxel-core = { path = "../luxel-core" }

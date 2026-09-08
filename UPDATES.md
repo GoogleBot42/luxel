@@ -1,5 +1,91 @@
 # Update log
 
+## 2026-09-07 — the compose, 7.3 ms → 2.2 ms: a row-oriented bitplane packer (#329)
+
+Jeremy on the #398 build: *"There is no more skipping. There are still a ton
+of repeated frames though."* The counter agreed — **6.0 % of rescan passes
+were repeats at idle, 11 % with a playground tab open, 31 % under load**.
+
+**Cause, and it was never subtle.** The HUB75 compose ran `set_pixel` per
+pixel: for each of 7 bitplanes, re-derive the row/column index, bounds-check
+it, extract one bit from each of three channel bytes, read-modify-write a
+`u16`. 28,672 of those per frame, 7.3 ms of the panel's 8.7 ms rescan, leaving
+**1.3 ms of slack** — so any core-0 handler that blocked longer than that
+pushed the swap past the wrap and the panel rescanned the previous frame.
+
+**Fix: pack per ROW PAIR.** One entry word carries one bitplane of one pixel
+pair (column `x` of row `r`, top half, and of row `r + 32`, bottom half), so
+all 7 plane words for a pair come from the same six channel bytes with only
+the bit position changing. Two 256-entry tables spread a channel byte's plane
+bits to a fixed 8-bit stride; six lookups build the pair's `u32`; each plane
+is then a shift, a mask and an OR. **Brightness is folded into the tables**,
+so `scale5` leaves the inner loop entirely, and because the packer writes
+every colour bit of every entry it also subsumes `erase()`.
+
+`library/frame-rate-scan.js`, 4096 px, brightness 3, 30 MHz:
+
+| | `fps` | `out_fps` | `rescan_hz` | `out_us` |
+|---|---:|---:|---:|---:|
+| master `9d71d26` | 107–113 | 107–113 | 115 | **7,224–7,272** |
+| + #329 | **115–116** | **115–116** | 115 | **2,166–2,221** |
+
+**3.3x**, and `out_fps` has reached `rescan_hz`: the panel now shows a new
+frame on every single rescan. Slack 1.3 ms → 6.5 ms.
+
+`tools/panel-load-bench.mjs`, repeats taken from the driver's per-pass ISR
+counter (#398) so the number is exact rather than integrated:
+
+| phase | repeats/min before → after | share of passes | `out_fps` |
+|---|---|---|---|
+| idle | 400.2 → **30.9** | 6.0 % → **0.5 %** | 107.6 → **115.5** |
+| one playground tab | 742.3 → **64.7** | 11.0 % → **1.0 %** | 104.5 → **114.8** |
+| busy (1 client looping the bundle) | 2,113.7 → **203.2** | 31.1 % → **3.1 %** | 80.7 → **112.5** |
+
+Ten minutes of `frame-rate-scan` on the merged build, 69,517 consecutive
+rescan passes: `pass.repeats` **295 (0.42 %)**, `pass.skips` **0**, `dropped`
+0, `pass.short`/`long` 0/0, `zero_rescan` 0, `eof_race` 4, `slow_path` 44,
+`fence_timeouts` 0, heap free 38,648–39,040 B flat, `vmerr` null, `fps`
+114–116 / `out_fps` 114–117 against `rescan_hz` 115.
+
+**The web got faster too.** A compose at 85 % duty was starving the web
+server, not just the panel: `/api/status` p50 fell 92 → 71 ms idle, 80 →
+38 ms with a tab open, 111 → 61 ms under load, and bundle throughput rose
+266 → 375 KiB/s.
+
+**Correctness is a `cargo test`, not a device claim.** The packer is a new
+host-buildable crate, `crates/luxel-hub75`; its tests build a real
+`hub75-framebuffer` `DmaFrameBuffer` through the stock per-pixel path and
+through the packer and assert the two are **byte-identical** — random frames
+at all 32 brightness values, every combination of the edge channel values,
+short/oversized frames, five panel geometries, and real `frame-rate-scan` /
+`rainbow` / `snake-2d-v2` frames rendered by the engine on the 64x64 grid map.
+Host micro-benchmark of the compose alone: 25.4 µs → 4.6 µs per frame.
+
+Layout safety is two-sided, since the packer indexes the buffer as a flat
+`u16` array: a `const` assert pins the word count (an `inter-row-blank-*` or
+`tail-closes-latch` feature would change `size_of` and break the build), and
+because size cannot catch column REordering, a boot probe writes three pixels
+through the crate's own `set_pixel` and checks they land where `pack` would
+have put them. Either check failing keeps the per-pixel path and says so on
+serial.
+
+`tools/panel-load-bench.mjs` gained a **tab** phase (one playground tab: 1 Hz
+status + pattern list, the realistic case between idle and the deliberately
+harsh busy phase), reports the exact `pass.repeats` delta alongside the old
+`rescan_hz − out_fps` integral, and now documents that `--clients 3` saturates
+the 3-socket web pool so completely that its own sampler is refused — use
+`--clients 1`.
+
+**Left open.** #395 stays open: busy is still ~6x idle, the same ratio as
+before, so what is left is web handlers blocking core 0. The residue is 3 % of
+passes under a load harsher than real usage, against 31 % before, and the
+realistic tab case is 1.0 %.
+
+Costs: app image 960,208 → 962,288 B on `board-seengreat-hub75` (+2,080;
+8.22 % of the OTA slot free), `.stack` 28,788 → 28,780 B, output-task frame
+1,360 B against the 12,288 B budget. `board-pixelblaze-v3` moves +32 B —
+section padding under a changed crate-metadata hash, not code.
+
 ## 2026-09-07 — the skip: a false landing, caught by an invariant the driver can check (#395)
 
 Jeremy drew the camera frames around a skip and they decided it: displayed

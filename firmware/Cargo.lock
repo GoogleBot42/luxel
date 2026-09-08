@@ -1522,11 +1522,16 @@ dependencies = [
  "esp-storage",
  "heapless 0.9.3",
  "luxel-core",
+ "luxel-hub75",
  "picoserve",
  "rust-mqtt",
  "sequential-storage",
  "static_cell",
 ]
+
+[[package]]
+name = "luxel-hub75"
+version = "0.1.0"
 
 [[package]]
 name = "managed"
