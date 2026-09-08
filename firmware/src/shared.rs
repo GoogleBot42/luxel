@@ -254,21 +254,37 @@ pub static DOUBLE_ARM: AtomicU32 = AtomicU32::new(0);
 /// `...,7,8,9,10,...`; the filmed artefact reads `...,2,4,4,5,...`, one frame
 /// never shown and the next shown twice. Captured around a skip so the
 /// sequence can be inspected instead of inferred from a counter.
+///
+/// PANEL BUILDS ONLY (`hub75`). `hub75.rs` writes it and `server::status_json`
+/// reads it under `cfg(pipelined)` (= multi-core AND `hub75`), so nothing off
+/// a panel board ever touched it — but leaving it fleet-wide broke the
+/// ESP32-C3 build outright: riscv32imc has no A extension, so `fetch_add` and
+/// `swap` do not exist on `AtomicU32`/`AtomicBool` there (Gitea #413/#422).
+/// Every other board keeps its behaviour exactly and drops ~200 B of statics
+/// it never read. The rest of this file's counters are deliberately plain
+/// load/store for the same reason — see `set_post_palette`.
+#[cfg(feature = "hub75")]
 pub const TAG_LOG: usize = 24;
+#[cfg(feature = "hub75")]
 static TAGS: [AtomicU32; TAG_LOG] = [const { AtomicU32::new(0) }; TAG_LOG];
+#[cfg(feature = "hub75")]
 static TAGS_N: AtomicU32 = AtomicU32::new(0);
 /// Frozen copy of the tag sequence around the FIRST skip seen, so it survives
 /// however long it takes anyone to look.
+#[cfg(feature = "hub75")]
 static SKIP_TAGS: [AtomicU32; TAG_LOG] = [const { AtomicU32::new(0) }; TAG_LOG];
+#[cfg(feature = "hub75")]
 static SKIP_TAGS_SET: AtomicBool = AtomicBool::new(false);
 
 /// Record one displayed tag.
+#[cfg(feature = "hub75")]
 pub fn push_tag(tag: u32) {
     let i = TAGS_N.fetch_add(1, Ordering::Relaxed) as usize % TAG_LOG;
     TAGS[i].store(tag, Ordering::Relaxed);
 }
 
 /// Freeze the current tag window the first time a skip is seen.
+#[cfg(feature = "hub75")]
 pub fn freeze_skip_tags() {
     if SKIP_TAGS_SET.swap(true, Ordering::Relaxed) {
         return;
@@ -280,6 +296,7 @@ pub fn freeze_skip_tags() {
 }
 
 /// `(total, live window oldest-first, frozen-at-first-skip window)`.
+#[cfg(feature = "hub75")]
 pub fn tag_log() -> (u32, [u32; TAG_LOG], [u32; TAG_LOG]) {
     let n = TAGS_N.load(Ordering::Relaxed);
     let mut live = [0u32; TAG_LOG];
