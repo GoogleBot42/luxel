@@ -1,5 +1,43 @@
 # Update log
 
+## 2026-09-07 — library: Rainbow Comet converts after all; Meteor Shower does not
+
+Batch 3 of Gitea #405, and a correction to the entry two below: `rainbow-comet`
+was reported as "not converted, 0.81x" in PR #418. With the two things its loop
+*can* hand to the engine it is a win, and it now renders through `renderFrame`.
+`meteor-shower` was pushed as far as it goes and stays per-pixel.
+
+* **`rainbow-comet.js` — 1.09x at 3000 px, 1.33x at 300 px, 1.41x at 60 px**,
+  25.2 → 23.8 insns/px. It is not a `fillHSV` — the value channel is
+  `bri[i] * bri[i]`, and the per-pixel body *evolves* state rather than reading
+  it. What converts it is `feedback(bri, decay)` for the whole fade after the
+  pass (exact: every element is read before the array is scaled once) plus a
+  dead-pixel skip (exact: a dark pixel's hue and saturation are overwritten
+  wholesale when the head next stamps it), which on a strip is most of the
+  pixels between passes of the head. A port with neither measured 0.81x.
+* **`clear()` is load-bearing there, and a 60-frame sweep does not prove it.**
+  `renderFrame` starts on last frame's output, so a skipped pixel would keep
+  its old colour forever — but no pixel decays to exactly 0 inside two seconds,
+  so the usual 60-frame equivalence run is blind to it. The sweep for this one
+  was extended to **400 frames**, across five rigs and three control settings
+  (undriven, both dials at 1, both at 0): maxdiff 0 everywhere.
+* **`meteor-shower.js` — 0.83x, reverted.** Its trail is a ring buffer read
+  through a rotation and `fillHSV` has no offset argument. The rotation is two
+  contiguous runs rather than a modulo, and hoisting the `%` and the `REVERSE`
+  test out of the body took it from 0.70x to 0.83x (byte-identical, `Reverse`
+  driven included) — still a loss, with nothing left to hoist: three
+  interpreted array reads per pixel and no dead pixels to skip, because a
+  cell's value is reset to 1 as soon as it falls below 0.02. An offset/stride
+  on `fillHSV`/`fillRGB` or an `arrayRotate` converts it in one line (#373).
+* The rule, now in docs/bulk-render.md: **a `setPixel` loop wins only when the
+  per-pixel body is native work, or when enough of the per-pixel work can be
+  lifted out of it.** `aurora-2d` wins on the first clause, `rainbow-comet` on
+  the second, `meteor-shower` on neither.
+* `rainbow-comet` still cannot load above 3,408 px (three `array(pixelCount)`
+  channels against the 10,236-element budget) — unchanged by the conversion,
+  tracked as #420. check-library 307/307 on all five rigs; driven in real
+  chromium.
+
 ## 2026-09-07 — two remapped readouts converted: bouncing-balls-rgb, pew-pew-pew (#405)
 
 Second PR of the #405 batch-2 slice. Both are the `fillRGB` readout shape with

@@ -51,12 +51,41 @@ export function beforeRender(delta) {
   lastHead = head
 }
 
-export function render(index) {
-  var b = bri[index]
-  hsv(hue[index], sat[index], b * b)   // squared for a snappier tail
-
-  // decay / evolve this pixel's state for next frame
-  hue[index] -= 0.004                  // smear the tail through the rainbow
-  sat[index] = min(sat[index] * 1.06, 1)   // head "cures" up to full sat
-  bri[index] = b * decay               // exponential brightness fade
+// One `renderFrame` instead of one `render` call per LED (docs/bulk-render.md).
+//
+// Not a `fillHSV`, for two reasons. The value channel is `bri[i] * bri[i]`,
+// not `bri` — a fourth `array(pixelCount)` for it would drop the pattern's
+// pixel ceiling from 3,408 to about 2,556 against the array budget (#420), and
+// squaring `bri` in place instead is not bit-exact, because the stored value is
+// re-multiplied by `decay` every frame and `(b * decay)^2` drifts from
+// `b^2 * decay^2` over a tail's ~37 frames of 16.16 rounding. And the per-pixel
+// body is not a read-out at all: it EVOLVES this pixel's state for the next
+// frame, which no single bulk op expresses (#373 proposes the two arms that
+// would — a scalar array-add for the hue smear and an array clamp for the
+// saturation cure).
+//
+// What makes the loop worth it anyway is the two things it CAN hand to the
+// engine. The brightness fade is one `feedback(bri, decay)` after the pass —
+// exact, since each element is read before the whole array is scaled once — and
+// dead pixels are skipped entirely, which on a strip is most of them between
+// passes of the head. A naive port with neither measured 0.81x against the
+// per-pixel `render` it replaces; this one wins. Index space: no map is used
+// or needed.
+export function renderFrame() {
+  clear()                              // renderFrame does NOT clear between
+                                       // frames, and the loop below skips dead
+                                       // pixels — without this they would keep
+                                       // last frame's colour forever
+  var i, b
+  for (i = 0; i < pixelCount; i++) {
+    b = bri[i]
+    if (b == 0) continue               // already black from clear(), and its
+                                       // hue/sat are overwritten wholesale when
+                                       // the head next stamps it
+    hsv(hue[i], sat[i], b * b)         // squared for a snappier tail
+    setPixel(i)
+    hue[i] -= 0.004                    // smear the tail through the rainbow
+    sat[i] = min(sat[i] * 1.06, 1)     // head "cures" up to full sat
+  }
+  feedback(bri, decay)                 // exponential brightness fade, natively
 }
