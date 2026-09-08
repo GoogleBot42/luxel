@@ -4,32 +4,48 @@
 // vertical shimmer rays, and a palette paints black → green → violet.
 // Simplex is smoother than perlin here — no axis-aligned artifacts.
 
-// Whole-frame rendering. The old `render2D` recomputed the ENTIRE curtain
-// per LED: `simplex2(x * 1.8, z, 5)` depends on nothing but the column, yet
-// a 64x64 panel evaluated it 4096 times a frame for 64 distinct answers.
-// `renderFrame()` walks the grid itself, so the band is 64 `simplex2` calls
-// and the shimmer stays one `simplex3` per pixel — the same field, sampled
-// the same number of times, because dense procedural noise is the one shape
-// no bulk op replaces (docs/bulk-render.md, "Scope").
+// Whole-frame rendering, in two native passes and a per-cell loop.
 //
-// At Cell Size 1 — the default — a lattice cell IS a grid cell, so the
-// colour is still the real `paint()`: the brush the palette produces, put
-// down with `setPixel(index)`. That keeps the output **byte-identical** to
-// the per-pixel original on every rig, which resolving the palette into an
-// `hsv` canvas for `fillCanvas` could not: there is no palette-space bulk
-// fill, and an RGB→HSV→RGB round trip moves the odd 8-bit channel by one.
-// It also needs no canvas at all — three parallel `array(4096)` channels
-// would be 12,288 elements against a 10,236 budget, and 96 KB on the S3.
-// Above Cell Size 1 the lattice coarsens and each cell is one `fillRect`,
-// which is where the throughput is (see the header of the control).
+// The old `render2D` recomputed the ENTIRE curtain per LED: `simplex2(x *
+// 1.8, z, 5)` depends on nothing but the column, yet a 64x64 panel
+// evaluated it 4096 times a frame for 64 distinct answers. `renderFrame()`
+// walks the grid itself, so the band is 64 `simplex2` calls.
 //
-// A cell's coordinates are the engine's own: a grid map normalizes column
-// `c` of `w` to `round(c * 65535 / (w - 1))` in 16.16, which is NOT
-// `c / (w - 1)` — the two disagree on 11 of 64 columns at 64 wide and on 8
-// of 17 at 17 wide. `normAxis` reproduces the rounding exactly (`i * EPS`
-// is `i` raw units, so the sum is `i * 65535 + floor(d/2)` before an exact
-// integer-divisor divide), which is what makes the equality byte-for-byte
-// rather than approximate.
+// The shimmer really is one sample per cell, and no bulk op removes that —
+// but `fillNoise3D` removes the INTERPRETER around it. One call per lattice
+// row fills a whole row of samples natively:
+//
+//     fillNoise3D(nRow, W, 1, nsx, 0, nox, y, z4, 9)
+//       nRow[c] = simplex3(c * nsx + nox, y, z4, 9)
+//
+// with `h = 1` so the row's y is just the `oy` argument — a row buffer of
+// MAXC entries, not a full-panel canvas. What used to be 4096 interpreted
+// `simplex3` calls, each behind ~7 instructions of argument assembly and
+// two array reads, is 64 native calls that cost nothing but the noise.
+//
+// A lattice is not quite the map's own normalization: a grid map puts
+// column c at `round(c * 65535 / (w - 1))`, and `c * nsx + nox` can only
+// reproduce that exactly where `65535 / (w - 1)` divides evenly (it does at
+// 16 wide, not at 64). The shimmer is therefore sampled on an EVENLY spaced
+// lattice through the same field — a sub-LSB coordinate change, quantified
+// in docs/bulk-render.md. Everything the colour is built from — the band,
+// the glow's `abs(y - band)`, the palette — still uses `normAxis` exactly.
+//
+// At Cell Size 1 a lattice cell IS a grid cell, and the colour stays the
+// real `paint()`: the brush the palette produces, put down with
+// `setPixel(index)`. That is byte-exact and, at one cell per pixel, cheaper
+// than any canvas — `paint` + `setPixel` is ~39 interpreted instructions
+// per cell less than resolving a palette into an HSV canvas, and it needs
+// no canvas arrays at all.
+//
+// Above Cell Size 1 the lattice is coarser than the fixture, which is where
+// a canvas starts paying: `paintCanvas(vC, W, H, bC)` samples the palette
+// at `vC[i]`, times `bC[i]`, through every pixel's mapped (x, y) — the same
+// colour `paint(v, v * v)` produces, for the whole panel, in one call
+// instead of one `fillRect` per cell. Two arrays of at most CANVAS_MAX
+// cells, so the lattice coarsens rather than allocating a full-resolution
+// canvas (three `array(4096)` HSV channels would be 12,288 elements against
+// a 10,236 budget, and ~96 KB on the S3 — docs/bulk-render.md).
 //
 // With no map installed a 2D pattern already got the engine's `ceil(sqrt(n))`
 // default grid, and a `renderFrame` that names `gridWidth()` gets the same
@@ -37,8 +53,7 @@
 // did (60 px sees an 8x8 grid, 300 px an 18x17). On a fixture that is not a
 // matrix at all `gridWidth()` reports 0; there are no per-pixel coordinates
 // to walk, so the pattern falls back to tiling normalized coordinate space
-// with a 32x32 lattice of `fillRect`s — the curtain, at a canvas resolution
-// instead of the fixture's.
+// with a 32x32 lattice, which `paintCanvas` resolves without a grid.
 
 setPalette([
   0.0,  0,    0,    0,
@@ -49,12 +64,16 @@ setPalette([
 ])
 
 var MAXC = 128           // widest lattice we keep column tables for
+var CANVAS_MAX = 1024    // cells the coarse path's two canvases hold
 
 var band = array(MAXC)   // curtain height per column, rebuilt every frame
 var x18 = array(MAXC)    // the band noise's x argument     (x * 1.8)
 var x6 = array(MAXC)     // the shimmer noise's x argument  (x * 6)
-var xa = array(MAXC)     // the cell's left / right edge in mapped x,
-var xb = array(MAXC)     // used only when a cell is wider than one pixel
+var nRow = array(MAXC)   // one lattice row of shimmer samples
+
+// the coarse path's canvas: palette position and brightness per cell
+var vC = array(CANVAS_MAX)
+var bC = array(CANVAS_MAX)
 
 var z = 0
 var z4 = 0               // the shimmer's z argument, hoisted out of the loop
@@ -64,9 +83,13 @@ var gh = 0
 var W = 0                // lattice dimensions
 var H = 0
 var cell = 1             // grid cells per lattice cell (the Cell Size dial)
-var eff = 1              // grid cells per lattice cell, after the MAXC clamp
+var eff = 1              // grid cells per lattice cell, after the clamps
 var exact = 0            // 1 when a lattice cell IS one pixel
 var built = 0
+
+// the shimmer lattice: cell k's x argument is k * nsx + nox
+var nsx = 0
+var nox = 0
 
 // One 16.16 LSB. Written as two exact divides rather than a decimal literal
 // so it is raw 1 whatever the lexer rounds.
@@ -84,11 +107,17 @@ function build() {
   gw = gridWidth()
   gh = gridHeight()
   if (gw > 0 && gh > 0) {
-    // a grid wider than the column tables coarsens until it fits
+    // a grid wider than the column tables coarsens until it fits, and the
+    // coarse path coarsens further until its canvas fits
     var s = max(cell, ceil(gw / MAXC))
-    eff = s
     W = ceil(gw / s)
     H = ceil(gh / s)
+    while (s > 1 && W * H > CANVAS_MAX) {
+      s = s + 1
+      W = ceil(gw / s)
+      H = ceil(gh / s)
+    }
+    eff = s
     exact = s == 1
     for (var c = 0; c < W; c++) {
       var g0 = c * s
@@ -96,8 +125,6 @@ function build() {
       var x = normAxis(g0 + floor((g1 - g0) / 2), gw)
       x18[c] = x * 1.8
       x6[c] = x * 6
-      xa[c] = normAxis(g0, gw)
-      xb[c] = normAxis(g1, gw)
     }
   } else {
     // not a matrix: tile normalized coordinate space instead
@@ -109,10 +136,12 @@ function build() {
       var xc = (k + 0.5) / W
       x18[k] = xc * 1.8
       x6[k] = xc * 6
-      xa[k] = k / W
-      xb[k] = (k + 1) / W
     }
   }
+  // The linear lattice `fillNoise3D` samples, fitted to the column table's
+  // two ends so the far edge lands where the table says it does.
+  nox = x6[0]
+  nsx = W > 1 ? (x6[W - 1] - x6[0]) / (W - 1) : 0
   built = 1
 }
 
@@ -144,9 +173,9 @@ export function renderFrame() {
     var i = 0
     for (var r = 0; r < H; r++) {
       var yv = normAxis(r, gh)
-      var y2 = yv * 2
+      fillNoise3D(nRow, W, 1, nsx, 0, nox, yv * 2, z4, 9)
       for (var c = 0; c < W; c++) {
-        var shimmer = 0.6 + 0.4 * simplex3(x6[c], y2, z4, 9)
+        var shimmer = 0.6 + 0.4 * nRow[c]
         var glow = saturate(1 - abs(yv - band[c]) * 2)
         var v = saturate(glow * shimmer * 1.4)
         paint(v, v * v)
@@ -156,30 +185,26 @@ export function renderFrame() {
     }
     return
   }
-  // coarser than the fixture: one rectangle per cell, sampled at its middle
+  // coarser than the fixture: build the palette canvas, then one call
   for (var row = 0; row < H; row++) {
     var yv2 = 0
-    var ya = 0
-    var yb = 0
     if (gw > 0) {
       var s = eff
       var h0 = row * s
       var h1 = min(h0 + s, gh) - 1
       yv2 = normAxis(h0 + floor((h1 - h0) / 2), gh)
-      ya = normAxis(h0, gh)
-      yb = normAxis(h1, gh)
     } else {
       yv2 = (row + 0.5) / H
-      ya = row / H
-      yb = (row + 1) / H
     }
-    var y2b = yv2 * 2
+    fillNoise3D(nRow, W, 1, nsx, 0, nox, yv2 * 2, z4, 9)
+    var base = row * W
     for (var k = 0; k < W; k++) {
-      var sh2 = 0.6 + 0.4 * simplex3(x6[k], y2b, z4, 9)
+      var sh2 = 0.6 + 0.4 * nRow[k]
       var glow2 = saturate(1 - abs(yv2 - band[k]) * 2)
       var v2 = saturate(glow2 * sh2 * 1.4)
-      paint(v2, v2 * v2)
-      fillRect(xa[k], ya, xb[k], yb)
+      vC[base + k] = v2
+      bC[base + k] = v2 * v2
     }
   }
+  paintCanvas(vC, W, H, bC)
 }

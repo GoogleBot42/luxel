@@ -209,6 +209,10 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "drawLine", sig: "drawLine(x0, y0, x1, y1, w, mode)", doc: "renderFrame: a capsule — brush × (1 − d/w) from the segment — blended with mode 0/1/2. A hard line is a tiny w with mode 0. (Luxel)" },
   { name: "fillCanvas", sig: "fillCanvas(hArr, sArr, vArr, w, h)", doc: "renderFrame: sample a w×h row-major canvas (each channel an array or a scalar) at every pixel's mapped (x, y), nearest-neighbour, and replace — the canvas[floor(y·h)·w + floor(x·w)] idiom in one call. (Luxel)" },
   { name: "blit", sig: "blit(hArr, sArr, vArr, w, h, col, row, mode)", doc: "renderFrame: paste a w×h canvas onto the grid with its top-left at integer cell (col, row), clipped; mode 3 is keyed (black source cells are transparent) — sprites and scrolling text. A no-op without a grid; check gridWidth(). (Luxel)" },
+  { name: "paintCanvas", sig: "paintCanvas(vArr, w, h, bArr = 1)", doc: "renderFrame: fillCanvas's geometry with paint()'s colour — the installed palette sampled at vArr[i], times bArr[i], through every pixel's mapped (x, y). Byte-exact against paint() + setPixel() per cell, and ONE array where fillCanvas needs three, so a palette pattern is representable on a big panel. Leaves the brush alone. (Luxel)" },
+  // canvas producers: fill an array, then hand it to fillCanvas/paintCanvas
+  { name: "fillNoise2D", sig: "fillNoise2D(dst, w, h, sx, sy, ox, oy, seed)", doc: "Fill the first w×h elements of a row-major canvas with simplex2 on a regular lattice: dst[r·w + c] = simplex2(c·sx + ox, r·sy + oy, seed); returns dst. Exactly what the interpreted loop produces, without the interpreter. (Luxel)" },
+  { name: "fillNoise3D", sig: "fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed)", doc: "As fillNoise2D with simplex3 at a fixed z — the animated-noise field of a 2D pattern as one call; returns dst. (Luxel)" },
 ];
 
 /** Special globals available to patterns. */

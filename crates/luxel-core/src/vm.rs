@@ -410,6 +410,13 @@ pub enum Builtin {
     DrawLine,
     FillCanvas,
     Blit,
+    // Luxel extension builtins, batch 11: the ops #373 measured out of the
+    // first two `renderFrame` conversions — a lattice noise fill, a
+    // palette-space canvas fill, a linear 2D stencil and the reduction the
+    // stencil needs to stay ahead of a second bytecode pass.
+    FillNoise2D,
+    FillNoise3D,
+    PaintCanvas,
 }
 
 pub struct BuiltinDef {
@@ -535,6 +542,11 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("fillRect", FillRect), b!("fillCircle", FillCircle),
     b!("splat", Splat), b!("drawLine", DrawLine),
     b!("fillCanvas", FillCanvas), b!("blit", Blit),
+    // Luxel extensions, batch 11 (appended): the two ops #373's aurora-2d
+    // follow-up measured — a lattice noise fill and a palette-space canvas
+    // fill. Ids 182..=184.
+    b!("fillNoise2D", FillNoise2D), b!("fillNoise3D", FillNoise3D),
+    b!("paintCanvas", PaintCanvas),
 ];
 
 /// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
@@ -1018,6 +1030,26 @@ pub const MAX_FRAME_PERIOD_RAW: u64 = 60_000 << 16;
 /// BLACK (the ends are asymmetric — oracle-verified, fw 3.67, 2026-08-22).
 /// An empty palette is the grayscale ramp `[v, v, v]` (also oracle-verified:
 /// a pattern with no `setPalette` paints exactly that).
+/// Where `paint(x)` samples the palette. PB semantics (ramp-palette pixel
+/// oracle, 2026-07-08): the position wraps as floored-frac(x) EXACTLY
+/// (1.25 → 0.25, −0.5 → 0.5), with two measured edge artifacts — x == 1
+/// stays at the palette end, and whole numbers ≥ 2 land at 254/255 (just
+/// under it). Pathological inputs, but pinned to match the device byte for
+/// byte, which is why `paintCanvas` shares this function rather than
+/// re-deriving it.
+pub(crate) fn paint_pos(x: Fx) -> Fx {
+    let frac = x.mod_floor(Fx::ONE);
+    if frac == Fx::ZERO && x >= Fx::ONE {
+        if x == Fx::ONE {
+            Fx::ONE
+        } else {
+            Fx::from_raw(65535) // 1−ε: matches both probe palettes
+        }
+    } else {
+        frac
+    }
+}
+
 pub fn sample_palette(pal: &[(Fx, [Fx; 3])], v: Fx) -> [Fx; 3] {
     if pal.is_empty() {
         return [v, v, v];
@@ -2873,23 +2905,7 @@ impl Vm {
                 self.perlin_wrap,
             )),
             Paint => {
-                // PB semantics (ramp-palette pixel oracle, 2026-07-08): the
-                // position wraps as floored-frac(v) EXACTLY (1.25 → 0.25,
-                // −0.5 → 0.5), with two measured edge artifacts: v == 1
-                // stays at the palette end, and whole numbers ≥ 2 land at
-                // 254/255 (just under the end) — pathological inputs, but
-                // pinned to match the device byte-for-byte.
-                let x = n(0);
-                let frac = x.mod_floor(Fx::ONE);
-                let v = if frac == Fx::ZERO && x >= Fx::ONE {
-                    if x == Fx::ONE {
-                        Fx::ONE
-                    } else {
-                        Fx::from_raw(65535) // 1−ε: matches both probe palettes
-                    }
-                } else {
-                    frac
-                };
+                let v = paint_pos(n(0));
                 let b = if argc >= 2 { n(1) } else { Fx::ONE };
                 let rgb = self.palette_lookup(prog, v);
                 let b = b.clamp(Fx::ZERO, Fx::ONE);
@@ -4035,6 +4051,74 @@ impl Vm {
             DrawLine => Ok(crate::bulk::draw_line(self, &args[..argc])),
             FillCanvas => crate::bulk::fill_canvas(self, prog, &args[..argc]).map_err(no_site),
             Blit => crate::bulk::blit(self, prog, &args[..argc]).map_err(no_site),
+            // ---- Luxel extensions, batch 11 (Gitea #373) ----
+            // fillNoise2D(dst, w, h, sx, sy, ox, oy, seed) and
+            // fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed): fill the
+            // first w×h elements of a row-major canvas with simplex noise
+            // sampled on a regular lattice —
+            //   dst[r*w + c] = simplex2/3(c*sx + ox, r*sy + oy[, z], seed)
+            // — and return dst. The arguments are assembled with the same
+            // `Fx` multiply-then-add a bytecode loop would emit, so the
+            // result is EXACTLY what the interpreted loop produces; what
+            // the op removes is the interpreter around the noise, not the
+            // noise (see the test in `noise`). Row-major and map-free on
+            // purpose: `dst` is a plain array, so it composes with
+            // `fillCanvas`, `blur2D` and the array math.
+            //
+            // One body, two names: the 3D arm shifts `seed` by one slot
+            // and calls `simplex3`. A `kind` argument selecting perlin was
+            // considered and left out — `perlin`'s octaves/lacunarity/gain
+            // would add three more slots and a second inner loop for a
+            // family no library pattern samples on a lattice.
+            FillNoise2D | FillNoise3D => {
+                let three = builtin == FillNoise3D;
+                let Value::Arr(arr) = a(0) else {
+                    return Err(no_site(format!("{} of a non-array", def.name)));
+                };
+                let (w, h) = (n(1).to_int_trunc(), n(2).to_int_trunc());
+                let (sx, sy, ox, oy) = (n(3), n(4), n(5), n(6));
+                let (z, seed) = if three { (n(7), n(8)) } else { (Fx::ZERO, n(7)) };
+                if w >= 1 && h >= 1 {
+                    let (w, h) = (w as usize, h as usize);
+                    let data = self.arr_mut(prog, arr).map_err(|m| no_site(m.into()))?;
+                    if data.len() < w * h {
+                        return Err(no_site(format!(
+                            "{}: array shorter than w\u{d7}h ({} < {})",
+                            def.name,
+                            data.len(),
+                            w * h
+                        )));
+                    }
+                    for r in 0..h {
+                        let y = Fx::from_int(r as i32) * sy + oy;
+                        let base = r * w;
+                        for c in 0..w {
+                            let x = Fx::from_int(c as i32) * sx + ox;
+                            data[base + c] = Value::Num(if three {
+                                crate::noise::simplex3(x, y, z, seed)
+                            } else {
+                                crate::noise::simplex2(x, y, seed)
+                            });
+                        }
+                    }
+                }
+                Ok(a(0))
+            }
+            // paintCanvas(vArr, w, h [, bArr]): fillCanvas's geometry with
+            // paint()'s colour — the installed palette sampled at vArr[i],
+            // times bArr[i] (or 1), through each pixel's mapped (x, y).
+            // The palette lookup is the same `sample_palette` the
+            // interpreter's `paint` calls, so a cell is byte-exact against
+            // `paint(v, b)` + `setPixel(i)`, and ONE array covers a panel
+            // where fillCanvas's three would not fit the element budget.
+            PaintCanvas => {
+                // `setPalette` holds a live reference (oracle 2026-08-29):
+                // re-cook before the fill so a pattern that wrote through
+                // the installed array this frame sees its own change, the
+                // way `palette_lookup` does per call.
+                self.palette_refresh(prog);
+                crate::bulk::paint_canvas(self, prog, &args[..argc]).map_err(no_site)
+            }
             _ => unreachable!("handled by builtin_fast"),
         }
     }
@@ -4150,16 +4234,28 @@ impl Vm {
     }
 
     fn palette_lookup(&mut self, prog: &Program, v: Fx) -> [Fx; 3] {
-        // setPalette holds a LIVE reference on PB (oracle, 2026-08-29):
-        // writes through the installed array change later lookups with no
-        // second setPalette call. arr_mut flags the mutation; re-cook here.
+        self.palette_refresh(prog);
+        sample_palette(&self.palette, v)
+    }
+
+    /// Re-cook the installed palette if the pattern has written through the
+    /// array since the last lookup. `setPalette` holds a LIVE reference on
+    /// PB (oracle, 2026-08-29): writes through the installed array change
+    /// later lookups with no second `setPalette` call, and `arr_mut` flags
+    /// the mutation. Split out of [`palette_lookup`] so `paintCanvas` can
+    /// do it once and then read [`Vm::palette`] per cell.
+    pub(crate) fn palette_refresh(&mut self, prog: &Program) {
         if self.palette_dirty {
             self.palette_dirty = false;
             if let Some(arr) = self.palette_src {
                 self.rebuild_palette(prog, arr);
             }
         }
-        sample_palette(&self.palette, v)
+    }
+
+    /// The cooked palette, as `paintCanvas` reads it after a refresh.
+    pub(crate) fn palette(&self) -> &[(Fx, [Fx; 3])] {
+        &self.palette
     }
 
     /// Call a function value with explicit args (used by array HOFs and

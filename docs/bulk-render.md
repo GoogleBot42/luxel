@@ -74,7 +74,7 @@ is sticky.
 | space | ops | needs |
 |---|---|---|
 | index | `clear` `fill` `fade` `setPixel` `fillRange` `fillHSV` `fillRGB` `fillGradient`(axis 0) | nothing — works on a bare strip |
-| coordinate | `fillRect` `fillCircle` `splat` `drawLine` `fillCanvas` `fillGradient`(axis 1–3) | any map, including sparse/irregular; a predicate over each pixel's mapped (x, y) exactly as `render2D` sees it |
+| coordinate | `fillRect` `fillCircle` `splat` `drawLine` `fillCanvas` `paintCanvas` `fillGradient`(axis 1–3) | any map, including sparse/irregular; a predicate over each pixel's mapped (x, y) exactly as `render2D` sees it |
 | grid | `blit`, `gridWidth`/`gridHeight` | a W×H grid that COVERS the frame (`grid.len() >= pixelCount`); cells past the end of the frame — the tail of the last row on an over-provisioned `ceil(√n)` map — clip. A silent no-op with no grid or one too small, and `gridWidth()` returns 0 in exactly those cases so a pattern can branch |
 
 **What a canvas cannot reach.** `fillCanvas` decouples the simulation
@@ -83,10 +83,41 @@ resolution from the fixture's, but the canvas recipe cannot cover a big panel
 12,288 elements against the 10,236-element `DEFAULT_ARRAY_BUDGET` (and ~96 KB
 of `Value` on the S3, which #275/#258 has already OOMed). Both canvas
 conversions below simulate on a 16x16 canvas and let the sampler scale it.
-`fillCanvas` is also **HSV only** (`texel_at(.., hsv: true)` in `bulk.rs`):
-a palette pattern whose colour is `paint()` has no bulk fill path at all —
-resolving it through HSV loses the palette and is not byte-exact — so it
-draws with `paint()` + `setPixel()`. `paintCanvas` is proposed on #373.
+`fillCanvas` is **HSV only** (`texel_at(.., hsv: true)` in `bulk.rs`). A
+palette pattern whose colour is `paint()` uses **`paintCanvas(vArr, w, h [,
+bArr])`** instead: the installed palette sampled at `vArr[i]`, times
+`bArr[i]` (or 1), through the same geometry. It resolves the palette with
+the same `sample_palette` and the same `paint()` position wrap the
+interpreter uses, so a cell is **byte-identical to `paint(v, b)` +
+`setPixel(i)`** — an RGB→HSV→RGB round trip through `fillCanvas` is not (`s
+= d / max` and `h6 / 6` each truncate in 16.16). It also needs **one array
+where `fillCanvas` needs three**, which is the difference between a
+palette pattern being representable on a 64×64 panel and not. It leaves the
+brush alone; a `bArr` of `v * v` (the usual `paint(v, v * v)` shape) is a
+second array, so budget two.
+
+**Producing a canvas.** Two ops fill one natively, and both are ordinary
+array builtins — they work outside `renderFrame` too:
+
+| op | what |
+|---|---|
+| `fillNoise2D(dst, w, h, sx, sy, ox, oy, seed)` | `dst[r·w + c] = simplex2(c·sx + ox, r·sy + oy, seed)`; returns dst |
+| `fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed)` | the same with `simplex3` at a fixed z |
+
+Both produce **exactly** what the equivalent interpreted loop produces,
+argument arithmetic included (`c * sx + ox` as one `Fx` multiply then one
+add, not an incremental accumulation) — they remove the interpreter around
+the noise, never change it. `h = 1` fills a single row whose y is just
+`oy`, which is how a pattern samples a lattice row at a time without
+allocating a full-panel canvas.
+
+A **lattice is not the map's own normalization**: a grid map puts column
+`c` at `round(c · 65535 / (w − 1))` and `c · sx + ox` reproduces that
+exactly only where `65535 / (w − 1)` divides evenly (it does at 16 and 18
+wide, not at 64). A pattern that switches a per-pixel noise term to a
+lattice fill is therefore sampling the same field on evenly spaced
+coordinates instead of rounded ones — see the `aurora-2d.js` section for
+what that is worth in output bytes.
 
 **Exact cell coordinates.** A pattern that walks the grid itself has to
 reproduce `MapData::coord` — `round(c * 65535 / (w - 1))` in 16.16 — and NOT
@@ -111,6 +142,28 @@ randomised shape parameters; a transform routes to the scan.
 `renderFrame` that *calls a coordinate- or grid-space builtin* gets the same
 `ceil(√n)` default grid a 2D-only pattern gets. `renderFrame` + `fillHSV` is
 a strip pattern and is handed no geometry it never asked for.
+
+**The canvas block expand.** `fillCanvas` and `paintCanvas` have a second
+fast path of their own, for the case the whole canvas idiom exists to serve:
+a panel that is an exact integer multiple of the canvas. A 64×64 panel
+showing a 16×16 canvas is a 4× block expand, so instead of the map lookup
+and two `cell_index` divides per pixel it walks the grid in blocks — a
+row-base add per pixel, and the texel resolved once per canvas cell per grid
+row (1024 times instead of 4096). Measured on the `fillCanvas`-only
+microbench at 4096 px: **8.1 → 1.4 ns/px, 33.0 → 5.9 µs/frame (5.6×)**; 3.1×
+at 1024 px on a 32×32 grid and 1.7× at 256 px where the expand is 1×.
+
+The block factor is **verified per call, never assumed**: `n % k == 0` is
+necessary and not sufficient, because the block boundaries fall where the
+map's own normalization rounding puts them and for some pairs (51 grid
+columns onto a 51-cell canvas, 3569 onto 43) one lands a cell early. The
+check walks one row and one column — 64 + 64 coordinate reads against the
+4096 the scan costs — comparing `cell_index(coord(i), k)` against `i / m` at
+every position, so the path is bit-identical to the scan by construction and
+falls back to it whenever it is not. It covers both map kinds (a `--map-grid`
+coordinate map and the zero-heap procedural grid) and both wirings; a
+transposed grid (rows running along y) and any active transform keep the
+scan.
 
 ## Results — host throughput
 
@@ -453,6 +506,7 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `snake-2d.js` → `snake-2d-v2.js` (new file, both kept) | 16x16 board repainted on a board change, one `fillCanvas` | — | — | max per-channel diff **0** vs `snake-2d.js`, 240 frames at 256 and 4096 px, coordinate map and procedural grid |
 | `raindrops-2d.js` (converted in place) | 16x16 water sim, per-cell shading, one `fillCanvas` | 6.90 → **46.98** Mpx/s (**6.8x**) | 60.6 → **6.4** | see below |
 | `aurora-2d.js` (converted in place) | per-column band, per-pixel shimmer, `paint` + `setPixel` (`fillRect` above Cell Size 1) | 6.38 → **7.29** Mpx/s (**1.14x**); Cell Size 2/3/4 **1.75x / 3.48x / 5.94x** | 35.0 → 36.7 | **byte-identical** on eight rigs |
+| `aurora-2d.js` again, on `fillNoise3D` + `paintCanvas` (#373) | row-at-a-time native shimmer; `paintCanvas` replaces the coarse path's per-cell `fillRect`s | 137.1 → **113.7** ns/px (**1.21x**); Cell Size 2/3/4 **2.85x / 1.78x / 2.70x** | 36.7 → 34.8 | maxdiff **2** on ≤1.8 % of bytes — the lattice, see below |
 | `novas.js` (converted in place) | two pulse generators, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.05x** | 249.4 → **235.6** (1024 px) | **byte-identical** on six rigs |
 | `fireblobs.js` (converted in place) | two additive blob layers, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.20x** | 177.2 → **145.2** (1024 px) | **byte-identical** on six rigs |
 | `heatshivers.js` (converted in place) | two pulse generators + afterglow, two RGB channel buffers and a scalar blue, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.18x** | 48.4 → **43.4** (1024 px) | **byte-identical** on six rigs |
@@ -803,6 +857,67 @@ calls, 4096 `setPixel` calls and ~36.7 interpreted instructions per pixel.
 Gitea #373 carries the two ops that would change that -- a canvas noise fill
 and a palette-space canvas fill -- with the estimate this profile supports.
 
+### `aurora-2d.js` on `fillNoise3D` + `paintCanvas` (2026-09-07)
+
+The follow-up #373 §6/§7 predicted, measured on the same rigs. Two changes,
+and the second is not the one the ticket expected to matter:
+
+* **The shimmer is filled a lattice row at a time.**
+  `fillNoise3D(nRow, W, 1, nsx, 0, nox, y, z4, 9)` — `h = 1`, so the row's y
+  is just the `oy` argument — replaces 4096 interpreted `simplex3` calls and
+  their ~7 instructions of argument assembly with 64 native calls into a
+  `MAXC`-wide row buffer. No full-panel canvas, so **no new memory**: the
+  pattern still allocates 128-entry tables.
+* **`paintCanvas` replaces the coarse path's `fillRect` loop.** Above Cell
+  Size 1 the lattice is coarser than the fixture, which is exactly where the
+  ticket says a canvas starts paying, and one `paintCanvas(vC, W, H, bC)`
+  does what up to 1024 `fillRect`s did. Cell Size 1 keeps `paint()` +
+  `setPixel()`: at one cell per pixel that is byte-exact, cheaper, and needs
+  no canvas at all. The canvases are capped at `CANVAS_MAX = 1024` cells and
+  the lattice coarsens to fit, so the pattern never allocates a
+  full-resolution canvas on a big panel.
+
+| rig | before ns/px | after ns/px | ratio |
+|---|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 137.12 | 113.67 | **1.21x** |
+| 256 px, `--map-grid 16x16` | 148.01 | 123.75 | 1.20x |
+| 300 px strip (18x17 default grid) | 149.18 | 124.88 | 1.19x |
+| 4096 px, Cell Size 2 | 91.34 | 32.05 | **2.85x** |
+| 4096 px, Cell Size 3 | 46.08 | 25.83 | **1.78x** |
+| 4096 px, Cell Size 4 | 25.45 | 9.43 | **2.70x** |
+
+Best of 15 interleaved runs. (Best of **5** is not enough on this box for a
+pattern with this much per-frame variance — an early best-of-5 sweep of the
+§4 change showed a phantom 15 % *regression* at 256 px that best-of-15
+resolved to 1.02x. Use 15 for anything whose frame cost is not flat.)
+Interpreted instructions 36.7 → 34.8 per pixel at Cell Size 1: the loop
+bookkeeping stays, the builtin call and its argument assembly go.
+
+**Visual equivalence**, 60 frames at a fixed 30 fps delta and seed, against
+the pre-#373 file:
+
+| rig | maxdiff | bytes differing |
+|---|---:|---:|
+| 256 px, 16x16 map | **0** | **0** / 46,080 |
+| 300 px strip (18x17) | **0** | **0** / 54,000 |
+| 100 px, 10x10 map | 1 | 40 (0.22 %) |
+| 1024 px, 32x32 map | 1 | 879 (0.48 %) |
+| 60 px strip (8x8) | 1 | 80 (0.74 %) |
+| 512 px strip (23x23) | 2 | 434 (0.47 %) |
+| 289 px, 17x17 map | 2 | 554 (1.07 %) |
+| 4096 px, 64x64 map | 2 | 13,453 (1.83 %) |
+
+**Every one of those bytes is the lattice**, and the pattern of zeros says
+so exactly: a grid map puts column `c` at `round(c · 65535 / (w − 1))`, and
+`fillNoise3D`'s `c · sx + ox` can only reproduce that where `65535 / (w − 1)`
+divides evenly. It does at **16** wide (65535/15) and **18** wide
+(65535/17) — the two rigs that come back byte-identical — and not at 10, 8,
+23, 17 or 64. The shimmer is now sampled on an evenly spaced lattice through
+the same field rather than at the map's rounded coordinates; everything else
+the colour is built from (the band, the glow's `abs(y − band)`, the palette
+and its `paint()` wrap) still uses `normAxis` exactly. The residual is ≤2 of
+255 on under 2 % of bytes, which is below the shimmer's own quantization
+step — it is a different sample of the same noise, not a different picture.
 ### The 1-D channel-buffer bucket — `novas`, `fireblobs`, `heatshivers` (2026-09-07)
 
 Gitea #405 / #373 §5: patterns whose `beforeRender` already fills parallel

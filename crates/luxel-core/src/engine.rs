@@ -1265,7 +1265,7 @@ impl Engine {
         // conjure a geometry. `fillGradient`'s axis is a runtime argument,
         // so it stays out of this list — a pattern that wants a spatial
         // gradient asks for it with one of these or installs a map.
-        const NAMES: [&str; 8] = [
+        const NAMES: [&str; 9] = [
             "gridWidth",
             "gridHeight",
             "fillRect",
@@ -1273,6 +1273,7 @@ impl Engine {
             "splat",
             "drawLine",
             "fillCanvas",
+            "paintCanvas",
             "blit",
         ];
         // A fixed-length array with a never-matching sentinel: no running

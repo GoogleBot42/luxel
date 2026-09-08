@@ -2363,3 +2363,86 @@ fn pin_modes_and_digital_write_are_recorded_for_the_host() {
     assert!(e.set_pin(27, Some(true)));
     assert!(e.pin_read(27));
 }
+
+#[test]
+fn fill_noise_matches_an_interpreted_loop() {
+    // The whole claim of #373 §6 is that the op removes the interpreter
+    // around the noise, not the noise: every cell must be EXACTLY what the
+    // bytecode loop calling simplex2/simplex3 with the same arguments
+    // produces, argument arithmetic included (`c * sx + ox` as one Fx
+    // multiply then one Fx add, not an incremental accumulation).
+    for (w, h, sx, sy, ox, oy, seed) in [
+        (4usize, 3usize, "0.35", "0.7", "1.25", "-0.5", "5"),
+        (1, 1, "0.1", "0.1", "0", "0", "0"),
+        (5, 5, "-0.2", "0.03", "100.5", "7", "17"),
+    ] {
+        let n = w * h;
+        for i in 0..n {
+            let native = format!(
+                "a = array({n})\n\
+                 fillNoise2D(a, {w}, {h}, {sx}, {sy}, {ox}, {oy}, {seed})\n\
+                 export var out = a[{i}]"
+            );
+            let loopy = format!(
+                "a = array({n})\n\
+                 for (r = 0; r < {h}; r++) {{\n\
+                   for (c = 0; c < {w}; c++) {{\n\
+                     a[r * {w} + c] = simplex2(c * {sx} + {ox}, r * {sy} + {oy}, {seed})\n\
+                   }}\n\
+                 }}\n\
+                 export var out = a[{i}]"
+            );
+            assert_eq!(
+                eval_prog(&native),
+                eval_prog(&loopy),
+                "fillNoise2D {w}x{h} cell {i}"
+            );
+        }
+        // and the 3D arm, whose z sits between oy and seed
+        for z in ["0", "3.75"] {
+            for i in 0..n {
+                let native = format!(
+                    "a = array({n})\n\
+                     fillNoise3D(a, {w}, {h}, {sx}, {sy}, {ox}, {oy}, {z}, {seed})\n\
+                     export var out = a[{i}]"
+                );
+                let loopy = format!(
+                    "a = array({n})\n\
+                     for (r = 0; r < {h}; r++) {{\n\
+                       for (c = 0; c < {w}; c++) {{\n\
+                         a[r * {w} + c] = simplex3(c * {sx} + {ox}, r * {sy} + {oy}, {z}, {seed})\n\
+                       }}\n\
+                     }}\n\
+                     export var out = a[{i}]"
+                );
+                assert_eq!(
+                    eval_prog(&native),
+                    eval_prog(&loopy),
+                    "fillNoise3D {w}x{h} z={z} cell {i}"
+                );
+            }
+        }
+    }
+    // returns the array (chainable), leaves elements past w×h alone,
+    // and a degenerate canvas writes nothing
+    assert_eq!(
+        eval_prog("a = array(6)\na[5] = 7\nfillNoise2D(a, 2, 2, 1, 1, 0, 0, 0)\nexport var out = a[5]"),
+        fx(7.0)
+    );
+    assert_eq!(
+        eval_prog("a = array(4)\na[0] = 3\nfillNoise2D(a, 0, 0, 1, 1, 0, 0, 0)\nexport var out = a[0]"),
+        fx(3.0)
+    );
+    assert_eq!(
+        eval_prog("a = array(4)\nexport var out = arrayLength(fillNoise2D(a, 2, 2, 1, 1, 0, 0, 0))"),
+        fx(4.0)
+    );
+    // an array shorter than w×h is a runtime error, not an OOB abort
+    let e = luxel_core::engine::Engine::new("a = array(3)\nfillNoise2D(a, 2, 2, 1, 1, 0, 0, 0)", 10, 1)
+        .expect("compiles");
+    assert!(
+        e.last_error.expect("expected error").message.contains("shorter"),
+        "fillNoise2D undersized array should error"
+    );
+}
+
