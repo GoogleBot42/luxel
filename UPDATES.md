@@ -1,5 +1,34 @@
 # Update log
 
+## 2026-09-07 — library: snake-2d / snake-2d-v2 paint empty cells black (#370)
+
+Both patterns deliberately lit every empty board cell at 1 % value
+(`hsv(0, 0, 0.01)` in `snake-2d.js`, `vC[j] = 0.01` in `snake-2d-v2.js`).
+That is 2–3/255 — invisible at the bench brightness of 4/31, where `scale5()`
+rounds it to 0, but plainly visible as a grey glow on the Seengreat 64x64
+panel at 31/31, where `hub75.rs write_frame` passes channels through unscaled
+and the low bitplanes show it (Jeremy, 2026-09-07). Both now write 0. The
+death-flash red wash is untouched — it is a different branch and much
+brighter.
+
+Verified on the host:
+
+* `luxel run --map-grid 16x16` and `--map-grid 64x64`, before vs after,
+  300 frames and a 6000-frame run long enough to cover a death flash: the
+  **only** transition in the whole PPM strip is `(2,2,2) -> (0,0,0)`, on
+  97 % / 92.5 % of pixels. No pixel changed to anything else, and the
+  7,215 pixels that were already exactly black before (the flash tail,
+  where `f*f*0.09` rounds to 0) are unchanged. Both files render
+  identically to each other at both grid sizes, before and after.
+* `tools/check-library.sh` — 307/307 on all five rigs.
+* Real chromium on the built playground, gallery tiles for both patterns:
+  before, 8,928 of 9,216 tile pixels were in the 1–4 range and **zero** were
+  exactly black; after, those same 8,928 are exactly `0,0,0` and none are in
+  the 1–4 range.
+
+On-panel confirmation at 31/31 rides the next Seengreat OTA (noted on the
+#412 rolling panel checklist).
+
 ## 2026-09-07 — library: three canvas readouts render through renderFrame + fillCanvas
 
 First batch of Gitea #405 (the "already `fillHSV`/`fillCanvas`-shaped" bucket
