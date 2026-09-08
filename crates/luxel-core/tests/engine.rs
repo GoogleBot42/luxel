@@ -1797,3 +1797,151 @@ fn lissajous_trail_does_not_depend_on_the_frame_rate() {
          the stamp or the decay is still per-frame"
     );
 }
+
+// ---- the refusal names the numbers (Gitea #420) ----------------------------
+//
+// A pattern that keeps three parallel `array(pixelCount)` channels fits a
+// strip and blows the element ledger on a 64x64 panel — and used to say only
+// "array element budget exceeded (arrays are never freed)", leaving the user
+// with a black panel and no way to tell whether they were 4 elements over or
+// 4,000. Every array-budget refusal now names the allocation that failed,
+// what it needed, and what was left.
+
+#[test]
+fn the_element_ledger_refusal_names_the_allocation_and_the_budget() {
+    // the #420 shape, at the Seengreat panel's 4096 px
+    let src = "export var r = array(pixelCount)\n\
+               export var g = array(pixelCount)\n\
+               export var b = array(pixelCount)\n\
+               export function render(i) { rgb(r[i], g[i], b[i]) }";
+    let e = Engine::new(src, 4096, 1).unwrap();
+    let m = &e
+        .last_error
+        .as_ref()
+        .expect("expected budget error")
+        .message;
+    assert!(m.contains("array element budget exceeded"), "{m}");
+    assert!(m.contains("4096-element array"), "{m}"); // which allocation
+    assert!(m.contains("4100"), "{m}"); // 4096 + ARRAY_HEADER_UNITS
+    assert!(
+        m.contains(&luxel_core::vm::DEFAULT_ARRAY_BUDGET.to_string()),
+        "{m}"
+    );
+    assert!(m.contains("2036 left"), "{m}"); // 10,236 - 2 x 4,100
+    assert!(m.contains("arrays are never freed"), "{m}");
+    assert!(luxel_core::vm::is_array_budget_error(m), "{m}");
+    // the ledger reading `luxel check` reports alongside it: two of the
+    // three channels made it in before the third was refused
+    assert_eq!(
+        e.array_elements(),
+        (8200, luxel_core::vm::DEFAULT_ARRAY_BUDGET)
+    );
+    // ...and at a rig it fits, the same pattern is clean and the headroom
+    // is visible rather than implied
+    let ok = Engine::new(src, 1024, 1).unwrap();
+    assert!(ok.last_error.is_none(), "{:?}", ok.last_error);
+    assert_eq!(
+        ok.array_elements(),
+        (3084, luxel_core::vm::DEFAULT_ARRAY_BUDGET)
+    );
+}
+
+#[test]
+fn the_byte_budget_refusal_names_the_numbers_and_keeps_its_tail() {
+    // The device-RAM half. The "pattern too large for this device" tail is
+    // load-bearing: the wasm capacity model and the editor's rejection
+    // banner both match on it (crates/luxel-wasm/src/lib.rs, web/App.svelte).
+    let prog = luxel_core::compile::compile(
+        "export var a = array(2000)\nexport function render(i) { rgb(0,0,0) }",
+    )
+    .expect("compiles");
+    let e = Engine::from_program_budgeted(prog, 64, 1, 4096);
+    let m = &e
+        .last_error
+        .as_ref()
+        .expect("expected byte-budget error")
+        .message;
+    assert!(m.contains("array memory budget exceeded"), "{m}");
+    assert!(m.contains("pattern too large for this device"), "{m}");
+    assert!(m.contains("4096 B"), "{m}"); // the budget
+    assert!(m.contains("16032 B"), "{m}"); // 2000 x 8 + 32, what it needed
+    assert!(luxel_core::vm::is_array_budget_error(m), "{m}");
+}
+
+#[test]
+fn the_slot_cap_refusal_no_longer_impersonates_the_element_ledger() {
+    // On a board whose element ledger is raised (an external arena, #253)
+    // the arena SLOT vector is what stops `while (1) t = array(0)`. That is
+    // a different failure and used to be reported with the element ledger's
+    // exact wording, numbers and all.
+    let prog = luxel_core::compile::compile(
+        "export function beforeRender(delta) {\n\
+           i = 0\n while (i < 10000) { t = array(0)\n i = i + 1 }\n\
+         }\n\
+         export function render(i) { rgb(0,0,0) }",
+    )
+    .expect("compiles");
+    let mut e = Engine::from_program_budgeted_at_ext(prog, 1, 1, usize::MAX, 1 << 20, None);
+    e.frame(Fx::from_int(10));
+    let m = e.take_error().expect("slot cap error").message;
+    assert!(m.contains("array element budget exceeded"), "{m}");
+    assert!(
+        m.contains(&luxel_core::vm::MAX_ARENA_SLOTS.to_string()),
+        "{m}"
+    );
+    assert!(
+        m.contains("arrays is the most one pattern may allocate"),
+        "{m}"
+    );
+    assert_eq!(e.arena_stats().0, luxel_core::vm::MAX_ARENA_SLOTS);
+}
+
+#[test]
+fn the_refusal_is_not_buried_by_its_own_cascade() {
+    // Hosts poll `take_error` once a frame and publish the newest message
+    // (`/api/status`'s vmerr, the playground's runtime banner). A pattern
+    // whose channels were refused at init fails on every frame afterwards —
+    // "indexing a non-array value" — so the message that says WHY used to
+    // survive exactly one frame before its own cascade buried it.
+    let src = "export var r = array(pixelCount)\n\
+               export var g = array(pixelCount)\n\
+               export var b = array(pixelCount)\n\
+               export function beforeRender(delta) { r[0] = delta }\n\
+               export function render(i) { rgb(r[i], g[i], b[i]) }";
+    let mut e = Engine::new(src, 4096, 1).unwrap();
+    // stand in for a host's vmerr: publish whatever `take_error` last gave it,
+    // exactly as firmware/src/main.rs's render loop and `luxel serve` do.
+    let mut published: Option<String> = None;
+    for _ in 0..6 {
+        e.frame(Fx::from_int(16));
+        if let Some(err) = e.take_error() {
+            published = Some(err.message);
+        }
+    }
+    let m = published.expect("a vmerr the host could publish");
+    assert!(m.contains("array element budget exceeded"), "{m}");
+    assert!(!m.contains("non-array"), "{m}");
+    // and it was published once, not re-allocated per erroring site per frame
+    assert!(e.take_error().is_none());
+}
+
+#[test]
+fn an_assert_still_comes_through_as_itself() {
+    // The refusal masks the cascade, not a declared configuration invariant.
+    // `assert()` is top-level-only, so it aborts init before the channels are
+    // ever declared and no refusal is recorded to mask it with.
+    let src = "assert(pixelCount <= 1024, \"needs a strip, not a panel\")\n\
+               r = array(pixelCount)\n\
+               g = array(pixelCount)\n\
+               b = array(pixelCount)\n\
+               export function render(i) { rgb(r[i], g[i], b[i]) }";
+    let mut e = Engine::new(src, 4096, 1).unwrap();
+    let err = e.take_error().expect("assert");
+    assert!(err.is_assert, "{err:?}");
+    assert!(
+        err.message.contains("needs a strip, not a panel"),
+        "{}",
+        err.message
+    );
+    assert!(e.requires_violated());
+}

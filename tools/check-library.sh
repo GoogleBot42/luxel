@@ -41,6 +41,18 @@ cd "$ROOT"
 DIR="${1:-library}"
 # Space-separated rig list; "default" means no --grid flag (luxel check's own
 # 10x10), anything else is passed through as --grid WxH.
+#
+# All five default rigs sit well under the PB-compat 10,236-element array
+# ledger, which is why this sweep says nothing about the patterns that keep
+# three array(pixelCount) channels and render BLACK on a 64x64 panel
+# (Gitea #420). That is deliberate — several of them legitimately exceed the
+# ledger and would fail the gate — so the panel check is per-pattern:
+#
+#   luxel check library/<pattern>.js --grid 64x64
+#
+# or, to see the whole bucket at once (expect failures, they are the point):
+#
+#   GRIDS="64x64" STRIPS= nix develop -c tools/check-library.sh
 GRIDS="${GRIDS:-default 16x16}"
 # Space-separated mapless-strip pixel counts, each passed as --strip N. Kept
 # clear of the PB-compat 10,240-element array budget (a few patterns legitimately

@@ -276,10 +276,18 @@ fn alloc_bytes(n: usize) -> Vec<u8> {
 /// Returns -1 (with `{"message":…}`) if the blob will not even decode —
 /// which is itself a device-relevant answer.
 ///
-/// `vmerr` reports ONLY the device-specific array *byte* budget failure. The
-/// PB-compat 10 240-*element* budget and ordinary runtime errors are the same
-/// on every host, so the local preview already shows them; repeating them
+/// `vmerr` reports ONLY the array-budget refusals
+/// (`luxel_core::vm::is_array_budget_error`) — the device's byte budget AND
+/// the PB-compat element ledger. Ordinary runtime errors are the same on
+/// every host, so the local preview already shows them and repeating them
 /// here would blame the device for a pattern that is simply broken.
+///
+/// The element ledger used to be filtered out on that same reasoning, and it
+/// was wrong: the model runs at the DEVICE's pixel count, the preview runs at
+/// the editor's layout, and `array(pixelCount)` costs what the rig says.
+/// Three such channels fit a 300 px strip and blow the ledger on a 4096 px
+/// panel, so the editor answered "fits" for a pattern that loads black
+/// (Gitea #420).
 ///
 /// # Safety
 /// `blob_ptr`/`blob_len` must describe a valid LXBC buffer in linear memory.
@@ -341,8 +349,8 @@ pub unsafe extern "C" fn lx_device_model(
         let vmerr = init_err
             .or_else(|| eng.take_error())
             .map(|e| e.message)
-            // vm.rs's byte-budget message; see the doc comment above.
-            .filter(|m| m.contains("pattern too large for this device"));
+            // vm.rs's array-budget messages; see the doc comment above.
+            .filter(|m| luxel_core::vm::is_array_budget_error(m));
         (resident, peak, arena, vmerr)
     };
 
@@ -381,7 +389,7 @@ pub unsafe extern "C" fn lx_device_model(
         let vmerr = init_err
             .or_else(|| eng.take_error())
             .map(|e| e.message)
-            .filter(|m| m.contains("pattern too large for this device"));
+            .filter(|m| luxel_core::vm::is_array_budget_error(m));
         (resident, peak, arena, vmerr)
     };
     drop(mapping);
