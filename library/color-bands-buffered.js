@@ -75,6 +75,13 @@ export function beforeRender(delta) {
   }
 }
 
-export function render(index) {
-  hsv(hueB[index], satB[index], briB[index])
+// The technique demo's own point, taken one step further: the three buffers
+// are already indexed by pixel index, so the read-out is a single `fillHSV`
+// per frame instead of one `hsv()` per LED (docs/bulk-render.md). `fillHSV`
+// takes an array or a scalar per channel and walks the frame natively, so the
+// per-pixel VM entry — 317-440 Xtensa cycles a pixel before the body runs —
+// disappears entirely. This is index space: no map is used or needed, and the
+// pattern stays a strip pattern on a bare strip.
+export function renderFrame() {
+  fillHSV(hueB, satB, briB)
 }

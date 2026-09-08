@@ -1,5 +1,51 @@
 # Update log
 
+## 2026-09-07 — library: two `fillHSV` readouts converted; two that do not convert
+
+Batch 2 of Gitea #405 (#373 section 5's "already `fillHSV`/`fillCanvas`-shaped"
+bucket). `color-bands-buffered.js` and `music-sequencer-for-v3-only.js`
+("Main Stage") converted in place; `meteor-shower.js` and `rainbow-comet.js`
+tried, measured, and deliberately left alone.
+
+* Both conversions are the same one-line shape — three parallel per-pixel
+  channel buffers read back as `fillHSV(hueB, satB, briB)` instead of one
+  `hsv()` per LED. Index space, so neither acquires a map it never asked for.
+* Host `luxel bench`, best of nine interleaved: `color-bands-buffered`
+  164.3 → **148.7** µs/frame at 1024 px (1.10x), 460.3 → 410.1 at 3000 px;
+  Main Stage 40.4 → **5.3** at 1024 px (**7.67x**), 76.6 → 13.6 at 3000 px,
+  8.3 → 2.1 at 300 px. `bench --profile`: 71.0 → 66.0 and 10.3 → 0.3 insns/px.
+  The gap is the lesson — `color-bands-buffered` spends its frame in the
+  `beforeRender` loop that was always there, while Main Stage's mini-patterns
+  touch a few pixels a frame, so for it the per-pixel entry *was* the frame.
+* Equivalence: **byte-identical** on 16x16, 32x32, 64x64, 60 px and 300 px,
+  undriven and with every control at its declared `default=`. Main Stage was
+  additionally checked with `sliderThemeHue=90`: `Theme Hue` is an array plus a
+  scalar, which no bulk op expresses (#373's `arrayAffine` is the missing arm),
+  so the offset is added into `hueA` around the fill and taken straight back
+  out — fixed-point add/subtract are exact and mutually inverse, and the shipped
+  default (offset 0) takes an early branch and pays nothing.
+* **The array budget, not the VM, is this bucket's real ceiling.** Three
+  `array(pixelCount)` channels are 12,288 elements at 4096 px against the
+  10,236-element `DEFAULT_ARRAY_BUDGET`, so these patterns render black on a
+  64x64 panel *before and after* conversion. Measured ceilings:
+  `color-bands-buffered` 3,408 px, `music-sequencer-for-v3-only` 3,256 px,
+  `rainbow-comet` 3,408 px. Converting does not move it — the buffers are the
+  pattern's state, not its readout.
+* **Not converted, with numbers.** `meteor-shower` reads its trail through a
+  ring rotation `hBuf[(index + head) % pixelCount]` and `fillHSV` has no offset
+  argument; the `setPixel` loop that remains measured **0.70x** at 3000 px.
+  `rainbow-comet`'s per-pixel body *evolves* per-pixel state rather than reading
+  it, and its value channel is `bri[i]²` (a fourth buffer, or a non-bit-exact
+  in-place square); its loop measured **0.81x**. Both were byte-identical and
+  both were reverted rather than shipped on an unmeasurable device argument.
+  The shared rule, now written into docs/bulk-render.md: a `setPixel` loop only
+  wins when its body is *native* work.
+* check-library 307/307 on all five rigs, `tools/ci.sh` green, both patterns
+  driven in real chromium (Main Stage additionally soloed onto mini-pattern 12
+  and swept through `Theme Hue` 180° — the render survives and the colour
+  rotates). Also corrects the previous entry's pointer: the rolling on-panel
+  look checklist is **#412**, not #361.
+
 ## 2026-09-07 — build/deploy: the board can no longer be silently wrong (#389)
 
 `firmware/build-esp32.sh` takes the board from `$BOARD`; its one positional
@@ -76,7 +122,6 @@ Verified on the host:
 
 On-panel confirmation at 31/31 rides the next Seengreat OTA (noted on the
 #412 rolling panel checklist).
-
 ## 2026-09-07 — library: three canvas readouts render through renderFrame + fillCanvas
 
 First batch of Gitea #405 (the "already `fillHSV`/`fillCanvas`-shaped" bucket
@@ -114,7 +159,7 @@ First batch of Gitea #405 (the "already `fillHSV`/`fillCanvas`-shaped" bucket
   chromium: tile preview lit, pattern opens and compiles, 2D preview renders,
   and a control slider moves the readout and the render for each of the three.
   docs/bulk-render.md's "Converted library patterns" table and a new section
-  carry the numbers. Host only — the on-panel look rows are on #361.
+  carry the numbers. Host only — the on-panel look rows are on #412 (the rolling checklist).
 
 ## 2026-09-07 — four `fillRGB` readout conversions (#405)
 
