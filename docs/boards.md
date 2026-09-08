@@ -1719,6 +1719,98 @@ sweep never fails to draw a column and never clips at the right edge.
 So the accounting is clean, the pattern is clean, and the skip was the swap
 race above.
 
+## The compose, 7.3 ms → 2.2 ms: a row-oriented bitplane packer (2026-09-07, Gitea #329)
+
+Vsync (above) left one artefact: the compose used 7.3 ms of the panel's
+8.7 ms rescan, so **1.3 ms of slack**, and anything that held core 0 longer
+than that pushed the swap past the wrap and the panel rescanned the previous
+frame — a REPEAT. Jeremy, filming the #398 build: *"There is no more
+skipping. There are still a ton of repeated frames though."* He was right,
+and the counter agreed: **6.0 % of passes idle, 11 % with a playground tab
+open, 31 % under load**.
+
+**The compose was per pixel.** `DmaFrameBuffer::set_pixel` re-derives the
+row/column index, bounds-checks it, extracts one bit from each of three
+channel bytes and read-modify-writes a `u16` — once per bitplane. At 4096 px
+and 7 planes that is 28,672 such updates, and it costs the same for every
+pattern, because bitplane packing is content-independent.
+
+**Do it per row pair instead.** One entry word carries one bitplane of one
+PIXEL PAIR: column `x` of row `r` (top half, bits 9–11) and of row `r + 32`
+(bottom half, bits 12–14). All seven plane words for that pair therefore come
+from the same six channel bytes with only the bit position changing. So the
+packer computes, once per pair, a `u32` in which every plane's six colour bits
+already sit at a fixed 8-bit stride, and each plane is then one shift, one
+mask and one OR. The `u32` is six table lookups — two 256-entry tables spread
+a channel byte's plane bits to that stride — and **brightness scaling is
+folded into those tables**, so `scale5` leaves the inner loop entirely. The
+packer writes every colour bit of every entry, so it also subsumes `erase()`.
+
+Measured on the bench panel, `library/frame-rate-scan.js`, 4096 px,
+brightness 3, 30 MHz:
+
+| | `fps` | `out_fps` | `rescan_hz` | `vm_us` | `out_us` |
+|---|---:|---:|---:|---:|---:|
+| master `9d71d26` | 107–113 | 107–113 | 115 | 917–969 | **7,224–7,272** |
+| + #329 packer | **115–116** | **115–116** | 115 | 862–949 | **2,166–2,221** |
+
+**3.3x**, and the panel now displays a new frame on *every* rescan — `out_fps`
+has reached `rescan_hz`. The slack goes from 1.3 ms to **6.5 ms**, five times
+the tolerance, which is what the repeats needed.
+
+`tools/panel-load-bench.mjs`, same build either side, repeats read from the
+driver's own per-pass ISR counter (#398) so the figure is exact:
+
+| phase | repeats/min before | after | repeat share before → after | `out_fps` before → after |
+|---|---:|---:|---|---|
+| idle | 400.2 | **30.9** | 6.0 % → **0.5 %** | 107.6 → **115.5** |
+| one playground tab | 742.3 | **64.7** | 11.0 % → **1.0 %** | 104.5 → **114.8** |
+| busy (1 client looping the bundle) | 2,113.7 | **203.2** | 31.1 % → **3.1 %** | 80.7 → **112.5** |
+
+Ten minutes of `frame-rate-scan` on the merged build, 69,517 consecutive
+rescan passes: `pass.repeats` **295 (0.42 %)**, `pass.skips` **0**, `dropped`
+0, `pass.short`/`long` 0/0, `zero_rescan` 0, `eof_race` 4, `slow_path` 44,
+`fence_timeouts` 0, heap free 38,648–39,040 B flat, `vmerr` null, `fps`
+114–116 / `out_fps` 114–117 against `rescan_hz` 115.
+
+**The web got faster too**, which is the part worth remembering: freeing 5 ms
+per rescan on core 0 took `/api/status` p50 from 92 → 71 ms idle, 80 → 38 ms
+with a tab open and 111 → 61 ms under load, and bundle throughput from 266 →
+375 KiB/s. A compose at 85 % duty was starving the web server, not just the
+panel.
+
+What it did **not** do is make load free: busy is still ~6x idle, the same
+ratio as before, so the remaining repeats are still web handlers blocking
+core 0 (#395 stays open for that; the residue is 3 % of passes under a load
+harsher than real usage, against 31 % before).
+
+**Correctness is a host assertion, not a device claim.** The packer lives in
+`crates/luxel-hub75`, which builds on the host, and its tests construct a real
+`hub75-framebuffer` `DmaFrameBuffer` through the stock per-pixel path and
+through the packer and require the two buffers to be **byte-identical**:
+random frames at all 32 brightness values, every combination of the edge
+channel values, short and oversized frames, five panel geometries, and real
+`frame-rate-scan` / `rainbow` / `snake-2d-v2` frames rendered by the engine on
+the 64x64 grid map. They run in `cargo test --workspace`, so `tools/ci.sh`
+gates them.
+
+Layout safety is two-sided, because the packer indexes the framebuffer as a
+flat `u16` array. A `const` assert pins the word count (any
+`hub75-framebuffer` `inter-row-blank-*` / `tail-closes-latch` feature changes
+`size_of` and breaks the build), and because size cannot catch column
+REordering (`esp32-ordering` XORs adjacent columns on the classic ESP32), a
+boot-time probe writes three pixels through the crate's own `set_pixel` and
+checks they land where `pack` would have put them. A failed probe, or a failed
+2 KiB table allocation, keeps the per-pixel path and says so on serial; a
+healthy board prints `hub75: bulk bitplane packer active (2048 B of tables)`.
+
+Costs: app image 960,208 → 962,288 B on `board-seengreat-hub75` (+2,080;
+8.22 % of the OTA slot still free), `.stack` 28,788 → 28,780 B, the output
+task's frame 1,360 B against the 12,288 B budget, stack-check green.
+`board-pixelblaze-v3` moves +32 B, which is section padding shifting under a
+changed crate-metadata hash — no code from the new crate links there, and a
+hash-normalised symbol diff of the two ELFs is identical.
+
 ## Seeing the displayed frame rate: `library/frame-rate-test.js` (2026-09-07)
 
 `rescan_hz` is the driver's own count. `library/frame-rate-test.js` ("Frame

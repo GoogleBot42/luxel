@@ -10,9 +10,23 @@
 // measures exactly that.
 //
 // Usage:
-//   node tools/panel-load-bench.mjs <ip> [--idle SEC] [--busy SEC] [--clients N]
-//                                        [--label NAME] [--out FILE]
-// Defaults: --idle 300 --busy 300 --clients 3
+//   node tools/panel-load-bench.mjs <ip> [--idle SEC] [--tab SEC] [--busy SEC]
+//                                        [--clients N] [--label NAME] [--out FILE]
+// Defaults: --idle 300 --tab 180 --busy 300 --clients 3; 0 disables a phase.
+//
+// NOTE on --clients: 3 clients looping the bundle saturate the device's
+// 3-socket web pool so completely that the sampler's own /api/status is
+// refused and the busy phase yields NO data (seen on the Seengreat panel,
+// 2026-09-07). Use --clients 1 for a busy phase you can actually read.
+//
+// Three phases: idle (nothing but the sampler), tab (ONE playground tab —
+// 1 Hz status + pattern list, the realistic case), and busy (N clients
+// hammering, deliberately harsher than real usage).
+//
+// Since #398 the repeat count is EXACT: `pass.repeats`/`pass.n` are ISR
+// counters, so a start/end delta is the true number over the phase. The old
+// (rescan_hz - out_fps) integral is still reported so a comparison against a
+// pre-#398 build still has one common column.
 //
 // Run it twice — once on the current build, once after the change — with
 // --label before / --label after, then diff the two reports.
@@ -22,7 +36,7 @@
 const args = process.argv.slice(2);
 const ip = args[0];
 if (!ip || ip.startsWith("--")) {
-  console.error("usage: panel-load-bench.mjs <ip> [--idle SEC] [--busy SEC] [--clients N] [--label NAME] [--out FILE]");
+  console.error("usage: panel-load-bench.mjs <ip> [--idle SEC] [--tab SEC] [--busy SEC] [--clients N] [--label NAME] [--out FILE]");
   process.exit(2);
 }
 const flag = (name, dflt) => {
@@ -31,6 +45,9 @@ const flag = (name, dflt) => {
 };
 const IDLE_S = Number(flag("idle", 300));
 const BUSY_S = Number(flag("busy", 300));
+// One-open-tab phase (Gitea #395): the realistic middle case between idle and
+// the deliberately-heavy busy phase. 0 disables it.
+const TAB_S = Number(flag("tab", 180));
 const CLIENTS = Number(flag("clients", 3));
 const LABEL = flag("label", "run");
 const OUT = flag("out", null);
@@ -90,14 +107,27 @@ async function findBundle() {
 
 // ------------------------------------------------------------- sampling
 
-/** Panel counters. `rescan_hz - out_fps` is repeats/s: rescans that showed a
- *  frame the panel had already shown. `dropped` is the #394 ground truth for
- *  frames rendered and never shown at all — a different failure. */
+/** Panel counters.
+ *
+ *  `pass.repeats` / `pass.n` are the EXACT figures: since #398 the driver's
+ *  own ISR counts every rescan pass and every pass that re-showed the frame
+ *  before it, so a start/end delta is the true repeat count over the phase,
+ *  independent of how often we sample. Prefer those.
+ *
+ *  `rescan_hz - out_fps` integrated over the phase estimates the same thing
+ *  from two published rates and is kept because it is the only figure a
+ *  pre-#398 build can produce — so a before/after across that boundary still
+ *  has one comparable column. `dropped` is the #394 ground truth for frames
+ *  rendered and never shown at all — a different failure. */
 function panel(j) {
   return {
     fps: j.fps ?? 0,
     out_fps: j.out_fps ?? 0,
     rescan_hz: j.rescan_hz ?? 0,
+    passN: j.pass?.n ?? null,
+    passRepeats: j.pass?.repeats ?? null,
+    passSkips: j.pass?.skips ?? null,
+    passPerFrameMax: j.pass?.per_frame_max ?? null,
     dropped: j.dropped ?? 0,
     eof_race: j.swap?.eof_race ?? 0,
     slow_path: j.swap?.slow_path ?? 0,
@@ -151,6 +181,9 @@ async function phase(name, seconds, everyMs, loadFn) {
 
   const first = samples[0], lastS = samples[samples.length - 1];
   const elapsed = (Date.now() - t0) / 1000;
+  /** Start-to-end delta of a cumulative counter, or null if the build lacks it. */
+  const dPass = (k) =>
+    first && lastS && first[k] !== null && lastS[k] !== null ? lastS[k] - first[k] : null;
   const reboot = first && lastS && (lastS.eof_race < first.eof_race || lastS.dropped < first.dropped);
   return {
     name, elapsed, samples: samples.length, statusFail, reboot,
@@ -159,6 +192,15 @@ async function phase(name, seconds, everyMs, loadFn) {
     rescan_hz: mean(samples.map((s) => s.rescan_hz)),
     repeatsPerMin: covered > 0 ? (repeats / covered) * 60 : NaN,
     coveredS: covered,
+    // Exact, from the driver's per-pass ISR counter (#398).
+    passRepeats: dPass("passRepeats"),
+    passN: dPass("passN"),
+    repeatsPerMinExact:
+      elapsed > 0 && dPass("passRepeats") !== null ? (dPass("passRepeats") / elapsed) * 60 : NaN,
+    repeatPct:
+      dPass("passN") ? (dPass("passRepeats") / dPass("passN")) * 100 : NaN,
+    passSkips: dPass("passSkips"),
+    passPerFrameMax: Math.max(...samples.map((s) => s.passPerFrameMax ?? 0), 0),
     dropped: first && lastS ? lastS.dropped - first.dropped : NaN,
     eof_race: first && lastS ? lastS.eof_race - first.eof_race : NaN,
     slow_path: first && lastS ? lastS.slow_path - first.slow_path : NaN,
@@ -176,6 +218,26 @@ async function phase(name, seconds, everyMs, loadFn) {
 /** What a playground tab actually does to a busy device: poll status, read
  *  the whole pattern list, and pull the bundle. The pattern read is the one
  *  that matters — it is a large synchronous copy out of the mapped store. */
+/** One open playground tab, which is what Jeremy actually has running while
+ *  he films: a 1 Hz status poll and a pattern-list read, nothing else. The
+ *  `busy` phase above is deliberately heavier than real usage; this one is
+ *  the realistic middle case, and repeats under it are the number that
+ *  matches what he sees (Gitea #395). */
+function tabLoad() {
+  return async (stopped, stats) => {
+    while (!stopped()) {
+      for (const p of ["/api/status", "/api/patterns"]) {
+        if (stopped()) break;
+        const r = await timedGet(p);
+        stats.reqs++;
+        if (!r.ok) stats.fails++;
+        else { stats.ms.push(r.ms); stats.bytes += r.bytes; }
+      }
+      await sleep(1000);
+    }
+  };
+}
+
 function playgroundLoad(bundlePath) {
   return async (stopped, stats) => {
     while (!stopped()) {
@@ -201,21 +263,23 @@ const cold = [];
 if (bundlePath) for (let i = 0; i < 3; i++) cold.push((await timedGet(bundlePath)).ms);
 
 console.log(`\n## idle ${IDLE_S}s (status every 10s, no other load)`);
-const idle = await phase("idle", IDLE_S, 10000, null);
+const idle = IDLE_S > 0 ? await phase("idle", IDLE_S, 10000, null) : null;
+console.log(`\n## tab ${TAB_S}s (one playground tab: 1 Hz /api/status + /api/patterns, status every 5s)`);
+const tab = TAB_S > 0 ? await phase("tab", TAB_S, 5000, tabLoad()) : null;
 console.log(`\n## busy ${BUSY_S}s (${CLIENTS} clients: /api/patterns + /api/status + bundle, status every 2s)`);
-const busy = await phase("busy", BUSY_S, 2000, playgroundLoad(bundlePath));
+const busy = BUSY_S > 0 ? await phase("busy", BUSY_S, 2000, playgroundLoad(bundlePath)) : null;
 
-const rows = [idle, busy];
+const rows = [idle, tab, busy].filter(Boolean);
 const report = [];
 const say = (s) => { report.push(s); console.log(s); };
 
 say(`\n=== ${LABEL} ===`);
 say(`bundle cold GET (best of 3): ${f1(Math.min(...cold))} ms` + (cold.length ? ` (all: ${cold.map(f1).join(", ")})` : ""));
 say("");
-say("| phase | fps | out_fps | rescan_hz | repeats/min | dropped | eof_race | slow_path | status p50/p95/max ms |");
+say("| phase | fps | out_fps | rescan_hz | repeats/min (exact) | repeat % of passes | repeats/min (est) | skips | dropped | eof_race | slow_path | status p50/p95/max ms |");
 say("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
 for (const r of rows) {
-  say(`| ${r.name} | ${f1(r.fps)} | ${f1(r.out_fps)} | ${f1(r.rescan_hz)} | **${f1(r.repeatsPerMin)}** | ${r.dropped} | ${r.eof_race} | ${r.slow_path} | ${f1(r.statusP50)}/${f1(r.statusP95)}/${f1(r.statusMax)} |`);
+  say(`| ${r.name} | ${f1(r.fps)} | ${f1(r.out_fps)} | ${f1(r.rescan_hz)} | **${f1(r.repeatsPerMinExact)}** | ${f1(r.repeatPct)} % | ${f1(r.repeatsPerMin)} | ${r.passSkips ?? "-"} | ${r.dropped} | ${r.eof_race} | ${r.slow_path} | ${f1(r.statusP50)}/${f1(r.statusP95)}/${f1(r.statusMax)} |`);
 }
 say("");
 for (const r of rows) {
