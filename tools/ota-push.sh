@@ -52,8 +52,17 @@ before=$(curl -sf "http://$HOST/api/status" | tr ',' '\n' | grep '"slot"' || tru
 echo "device: http://$HOST  $before"
 echo "pushing $(stat -c%s "$IMAGE") bytes…"
 
-resp=$(curl -sf --data-binary "@$IMAGE" -H 'Content-Type: application/octet-stream' \
-  --max-time 300 "http://$HOST/api/ota")
+# NB: keep the `|| rc=$?` — a bare `curl -sf` under `set -e` ends the script
+# here on a non-2xx, silently, with the output stopping after "pushing N bytes…".
+rc=0
+resp=$(curl -s --show-error --fail-with-body --data-binary "@$IMAGE" \
+  -H 'Content-Type: application/octet-stream' \
+  --max-time 300 "http://$HOST/api/ota") || rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "OTA PUSH FAILED: curl exit $rc" >&2
+  echo "device said: ${resp:-<nothing>}" >&2
+  exit "$rc"
+fi
 echo "device: $resp"
 case "$resp" in *'"ok":true'*) ;; *) echo "OTA rejected"; exit 1;; esac
 

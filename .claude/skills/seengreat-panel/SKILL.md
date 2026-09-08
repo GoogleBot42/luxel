@@ -38,10 +38,17 @@ Consequences:
   reset does not): the reader dies, the node comes back `root:dialout 660`,
   and you need `doas chmod 666` again. So a serial capture that stops
   mid-session is itself evidence the board reset.
+- **The board sometimes will not reset over USB at all** — two full
+  attempts, zero bytes captured (2026-09-07). Don't spend a session on it:
+  fall back to `/api/status` polling and static ELF checks.
 - **Never touch serial in the 60 s after an OTA reboot.** The new slot is in
   the bootloader's pending-verify window until the firmware's boot_ok; a reset
   inside it rolls the slot straight back (lost a good OTA that way on
   2026-09-06 by restarting a reader three seconds after the reboot).
+- **Kill the reader BEFORE every OTA push, not after.** The reboot
+  re-enumerates the node and the host re-applies termios, which is itself a
+  reset — an attached reader makes every OTA two boots, and a third flips
+  the slot. Re-attach only after boot_ok (~75 s) (2026-09-07).
 - **Boot-guard arithmetic still applies**: a reset counts as a boot; three
   boots that don't reach the 60 s "healthy" mark flip the OTA slot.
 
@@ -73,6 +80,13 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
 
 ## Rules of thumb
 
+- **Leave the panel as you FOUND it.** Read brightness, `/api/pattern`,
+  `/api/pattern.lxp` and the pixel count before touching anything and put
+  those exact values back — brightness is Jeremy's (3 on 2026-09-07), never
+  a number restored from a brief or from this file. Note every OTA reboot
+  reverts the live pattern to the persisted default (Rainbow, 52 fps at
+  4096 px), which reads as a throughput regression; re-push before
+  measuring.
 - **A pattern that runs at 1–2 fps at 4096 px makes the board unmanageable
   over the network** (#259). `/api/status` takes ~11 s; every client
   timeout under that says "dead". Reset via USB, don't wait.

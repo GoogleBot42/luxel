@@ -191,10 +191,18 @@ nothing in this container is public.
   this made a debugger step-through look like a product bug (one "into" click
   appeared to resume the whole run) and nearly earned a bogus ticket — the
   screenshot is what exposed it. After typing, delete the tail
-  (`Control+Shift+End` then `Backspace`) and ASSERT on what actually landed:
-  read back `.cm-content`'s `textContent` and check the compile-error banner is
-  empty before driving anything. `e2e.mjs`'s `setEditor` has the same exposure;
-  it gets away with it because its sources end mid-line.
+  (`Control+Shift+End` then `Backspace`) and ASSERT on what actually landed —
+  but **never on `.cm-content`'s `textContent`**: CodeMirror virtualizes it, so
+  it holds only the rendered viewport and a long paste always reads back
+  truncated. Assert on the model's OUTPUT instead (compile-error banner empty,
+  the capacity banner, the preview) — and note the capacity banner silently
+  describes the PREVIOUS pattern when a stray `}` broke the paste (2026-09-07).
+  Reusing one puppeteer page across several `setEditor` probes drops
+  keystrokes; do a fresh `page.goto` per probe. `e2e.mjs`'s `setEditor` has the
+  same exposure; it gets away with it because its sources end mid-line.
+- A preview that looks non-square in a screenshot — `canvas.grid` in
+  `Preview.svelte` is a fixed 396x320 box with `object-fit: contain`, so that
+  is the letterbox, not the pattern (2026-09-07).
 - Forgetting `npm run wasm`/`gen-gallery.mjs` reran after a `library/` or corpus change —
   `e2e.mjs`/`device-e2e.mjs` serve whatever `web/dist` currently holds, which is stale
   until you rebuild.

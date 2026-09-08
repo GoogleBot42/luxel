@@ -50,6 +50,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   saves Fable token usage, which is the scarce resource. Sonnet is fine for the
   simplest lookups. Reserve Fable for the main loop and subagent tasks that
   genuinely need top-tier reasoning (Jeremy's standing instruction, 2026-08-16).
+- A device brief states the TASK, never the device's numbers: found state
+  (brightness, pattern, pixel count) is read from the device and restored,
+  never carried as a target — a brief's "brightness 31" got "restored" over
+  Jeremy's 3 (2026-09-07; see .claude/skills/deploy-device).
 - Subagents share YOUR scratchpad directory. Give each one its own subdirectory
   for scratch scripts/outputs — a parent and a child both writing
   `scratchpad/measure.sh` silently invalidated a measurement run (2026-09-05).
@@ -107,6 +111,14 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   pattern). They routinely disagree, and the pattern number is the one that
   matters — `Vm::run`'s footprint against `call_builtin` in the flash
   instruction cache outweighs anything inside the loop (2026-09-06, #312/#318).
+- Validate the INSTRUMENT before trusting the reproduction. Three new counters
+  on 2026-09-07 (a pass timer in the ISR, a pointer→frame map, a caller-side
+  snapshot) each reported phantom failures that flattered the hypothesis — a
+  new counter must first read ZERO on a known-clean case.
+- A host suite over a module can be green while the bug lives in its stateful
+  CALLER: patlog's format tests passed throughout #379, which lived in
+  `patterns.rs`. Replicate the caller in the host rig
+  (`tools/patlog-check/src/store.rs` is the worked example).
 - "Works on device" claims → `tools/hw-bench.mjs` soak (docs/tools.md). It runs
   ~2 h on the Athom; launch it detached (`setsid nohup … > log 2>&1 < /dev/null &`)
   — the Bash tool's background mode is killed at its 10-minute timeout cap
@@ -132,7 +144,14 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   other core (HUB75 panels, `out_fps` nonzero) the render loop free-runs ahead
   of the wire, so `fps` can be double what reached the LEDs — quote `out_fps`
   for any throughput claim. Reporting `fps` alone once turned a +1 fps
-  experiment into an apparent 2x win (#306).
+  experiment into an apparent 2x win (#306). Since #394 `out_fps` counts
+  frames the panel DISPLAYED and `rescan_hz` is its ceiling; every panel
+  number quoted above ~60 fps before 2026-09-07 was a compose rate (#378).
+- `tools/qemu/flashmap-test.py` and `takeover-test.py` assert on firmware
+  boot-line TEXT — rewording `patterns::init` or the takeover narration breaks
+  them silently. A change under
+  `firmware/src/{takeover,ota,flashmap,config,patterns,patlog}.rs` or
+  `partitions.csv` → run the QEMU suite (`CI_QEMU=1 tools/ci.sh`).
 - `compile failed: unknown identifier` from `web/tools/lxp.mjs` = stale
   build artifacts: the main checkout's `web/public/luxel.wasm` and
   `target/*/luxel` lag master (nobody rebuilds them). `npm run wasm` /
