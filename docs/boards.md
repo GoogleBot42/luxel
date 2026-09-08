@@ -1919,3 +1919,21 @@ both 125 and 60 fps injected, the sweep column is exactly `frame mod 64` with
 exact parity colours on every row of its band, and both clock columns match
 `floor(elapsedMs/10) mod 64` and `floor(elapsedMs/100) mod 64` on every frame;
 running the reading procedure above over the dump returns 125.0 and 60.0 fps.
+
+**Camera caveats.** Phone cameras use a **rolling shutter**: the sensor reads
+out line by line across the frame period, so one edge of the panel is sampled
+early in each camera frame and the other edge late — and at low brightness the
+LEDs are lit for only a short window once per rescan (at brightness 3 just two
+low bitplanes light, ~0.8 ms in the last 12 % of the 8.7 ms pass), so on video
+every other camera frame looks dark. That same skew makes the sweep's wrap
+(column 63 → 0) show either **no** dark frame between the two lit columns or an
+**extra** one depending on which way the phone is held — rotating the phone
+180° flips one into the other (confirmed on the bench); both frames were
+displayed, the difference is the camera. A camera frame that shows a column
+*dimmed* rather than lit or dark is the lit window straddling a camera frame
+boundary, the camera's rate not being a multiple of the display rate — also
+not a display artefact. So read the display rate by counting **distinct sweep
+positions** against the panel's own clock rows, never by counting dark frames
+or trusting the camera's nominal rate: a real skip is two adjacent lit
+positions of the **same** colour (parity), and `/api/status` `pass.skips` /
+`pass.repeats` (#398) are the firmware-side ground truth to compare against.

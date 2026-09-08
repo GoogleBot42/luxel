@@ -564,6 +564,12 @@ The only slider is ComposeCap, kept for the 125/n `setFrameRate` experiments
 (#384) — below the display rate the sweep must stop skipping columns, which is
 a second, independent bound on the displayed rate.
 
+Later that day, after filming it: docs/boards.md gains a **Camera caveats**
+note — rolling shutter makes every other camera frame look dark at low
+brightness and adds or removes a dark frame at the sweep's wrap depending on
+phone orientation (rotating 180° flips it), so count distinct sweep positions
+against the panel's own clock rows, never dark frames.
+
 ## 2026-09-07 — a pattern that shows you the displayed frame rate (`library/frame-rate-test.js`)
 
 `/api/status` reports the rate the engine *composes* at. On the HUB75 panel
