@@ -506,6 +506,7 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `snake-2d.js` → `snake-2d-v2.js` (new file, both kept) | 16x16 board repainted on a board change, one `fillCanvas` | — | — | max per-channel diff **0** vs `snake-2d.js`, 240 frames at 256 and 4096 px, coordinate map and procedural grid |
 | `raindrops-2d.js` (converted in place) | 16x16 water sim, per-cell shading, one `fillCanvas` | 6.90 → **46.98** Mpx/s (**6.8x**) | 60.6 → **6.4** | see below |
 | `aurora-2d.js` (converted in place) | per-column band, per-pixel shimmer, `paint` + `setPixel` (`fillRect` above Cell Size 1) | 6.38 → **7.29** Mpx/s (**1.14x**); Cell Size 2/3/4 **1.75x / 3.48x / 5.94x** | 35.0 → 36.7 | **byte-identical** on eight rigs |
+| `aurora-2d.js` again, on `fillNoise3D` + `paintCanvas` (#373) | row-at-a-time native shimmer; `paintCanvas` replaces the coarse path's per-cell `fillRect`s | 137.1 → **113.7** ns/px (**1.21x**); Cell Size 2/3/4 **2.85x / 1.78x / 2.70x** | 36.7 → 34.8 | maxdiff **2** on ≤1.8 % of bytes — the lattice, see below |
 | `novas.js` (converted in place) | two pulse generators, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.05x** | 249.4 → **235.6** (1024 px) | **byte-identical** on six rigs |
 | `fireblobs.js` (converted in place) | two additive blob layers, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.20x** | 177.2 → **145.2** (1024 px) | **byte-identical** on six rigs |
 | `heatshivers.js` (converted in place) | two pulse generators + afterglow, two RGB channel buffers and a scalar blue, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.18x** | 48.4 → **43.4** (1024 px) | **byte-identical** on six rigs |
@@ -856,6 +857,67 @@ calls, 4096 `setPixel` calls and ~36.7 interpreted instructions per pixel.
 Gitea #373 carries the two ops that would change that -- a canvas noise fill
 and a palette-space canvas fill -- with the estimate this profile supports.
 
+### `aurora-2d.js` on `fillNoise3D` + `paintCanvas` (2026-09-07)
+
+The follow-up #373 §6/§7 predicted, measured on the same rigs. Two changes,
+and the second is not the one the ticket expected to matter:
+
+* **The shimmer is filled a lattice row at a time.**
+  `fillNoise3D(nRow, W, 1, nsx, 0, nox, y, z4, 9)` — `h = 1`, so the row's y
+  is just the `oy` argument — replaces 4096 interpreted `simplex3` calls and
+  their ~7 instructions of argument assembly with 64 native calls into a
+  `MAXC`-wide row buffer. No full-panel canvas, so **no new memory**: the
+  pattern still allocates 128-entry tables.
+* **`paintCanvas` replaces the coarse path's `fillRect` loop.** Above Cell
+  Size 1 the lattice is coarser than the fixture, which is exactly where the
+  ticket says a canvas starts paying, and one `paintCanvas(vC, W, H, bC)`
+  does what up to 1024 `fillRect`s did. Cell Size 1 keeps `paint()` +
+  `setPixel()`: at one cell per pixel that is byte-exact, cheaper, and needs
+  no canvas at all. The canvases are capped at `CANVAS_MAX = 1024` cells and
+  the lattice coarsens to fit, so the pattern never allocates a
+  full-resolution canvas on a big panel.
+
+| rig | before ns/px | after ns/px | ratio |
+|---|---:|---:|---:|
+| 4096 px, `--map-grid 64x64` | 137.12 | 113.67 | **1.21x** |
+| 256 px, `--map-grid 16x16` | 148.01 | 123.75 | 1.20x |
+| 300 px strip (18x17 default grid) | 149.18 | 124.88 | 1.19x |
+| 4096 px, Cell Size 2 | 91.34 | 32.05 | **2.85x** |
+| 4096 px, Cell Size 3 | 46.08 | 25.83 | **1.78x** |
+| 4096 px, Cell Size 4 | 25.45 | 9.43 | **2.70x** |
+
+Best of 15 interleaved runs. (Best of **5** is not enough on this box for a
+pattern with this much per-frame variance — an early best-of-5 sweep of the
+§4 change showed a phantom 15 % *regression* at 256 px that best-of-15
+resolved to 1.02x. Use 15 for anything whose frame cost is not flat.)
+Interpreted instructions 36.7 → 34.8 per pixel at Cell Size 1: the loop
+bookkeeping stays, the builtin call and its argument assembly go.
+
+**Visual equivalence**, 60 frames at a fixed 30 fps delta and seed, against
+the pre-#373 file:
+
+| rig | maxdiff | bytes differing |
+|---|---:|---:|
+| 256 px, 16x16 map | **0** | **0** / 46,080 |
+| 300 px strip (18x17) | **0** | **0** / 54,000 |
+| 100 px, 10x10 map | 1 | 40 (0.22 %) |
+| 1024 px, 32x32 map | 1 | 879 (0.48 %) |
+| 60 px strip (8x8) | 1 | 80 (0.74 %) |
+| 512 px strip (23x23) | 2 | 434 (0.47 %) |
+| 289 px, 17x17 map | 2 | 554 (1.07 %) |
+| 4096 px, 64x64 map | 2 | 13,453 (1.83 %) |
+
+**Every one of those bytes is the lattice**, and the pattern of zeros says
+so exactly: a grid map puts column `c` at `round(c · 65535 / (w − 1))`, and
+`fillNoise3D`'s `c · sx + ox` can only reproduce that where `65535 / (w − 1)`
+divides evenly. It does at **16** wide (65535/15) and **18** wide
+(65535/17) — the two rigs that come back byte-identical — and not at 10, 8,
+23, 17 or 64. The shimmer is now sampled on an evenly spaced lattice through
+the same field rather than at the map's rounded coordinates; everything else
+the colour is built from (the band, the glow's `abs(y − band)`, the palette
+and its `paint()` wrap) still uses `normAxis` exactly. The residual is ≤2 of
+255 on under 2 % of bytes, which is below the shimmer's own quantization
+step — it is a different sample of the same noise, not a different picture.
 ### The 1-D channel-buffer bucket — `novas`, `fireblobs`, `heatshivers` (2026-09-07)
 
 Gitea #405 / #373 §5: patterns whose `beforeRender` already fills parallel
