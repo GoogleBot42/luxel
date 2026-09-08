@@ -63,6 +63,13 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - Subagents share YOUR scratchpad directory. Give each one its own subdirectory
   for scratch scripts/outputs — a parent and a child both writing
   `scratchpad/measure.sh` silently invalidated a measurement run (2026-09-05).
+  **CONCURRENT SESSIONS share it too** — every session on this project gets the
+  same `/tmp/claude-1000/-home-googlebot-workspace-pixler/**/scratchpad`, and
+  generic names collide: another session replaced a `scratchpad/base/` holding
+  pre-conversion pattern copies with its own `base/` mid-measurement
+  (2026-09-08). Put everything under a subdirectory named for your ticket
+  (`scratchpad/b4-405/…`), and never trust a scratch baseline you did not just
+  write — re-create it with `git show origin/master:<path>` and re-measure.
 
 ## Autonomy
 - Be decisive on routine engineering safeguards (tests, lints, guards, docs): add them
