@@ -82,9 +82,12 @@ unlock all five without moving any ceiling.
 --workspace --release` green, gallery regenerated, and the seven tiles driven
 in real chromium (307 tiles, all lit except the sensorless spectromatrix,
 `fractal-flower` opened in the editor at 60 fps with its nine sliders and the
-`nodes` var watcher live, no page errors). Note `web/tools/e2e.mjs` fails at
-its tile-count assertion on this box today **with the library unmodified as
-well** — pre-existing, not this change.
+`nodes` var watcher live, no page errors), and `web/tools/e2e.mjs` green end
+to end — its gallery-pick check happens to land on `_Fairies`, one of the
+seven. That harness must be run with `web/` as the cwd: it spawns
+`vite preview` with no `cwd`, so from the repo root it silently serves the
+root instead of `web/dist` and every tile assertion fails on a tree that is
+perfectly healthy.
 
 Docs: docs/bulk-render.md gains the batch-4 section and seven table rows.
 ## 2026-09-08 — Aurora 2D on metal: the loop shape is a LOSS, and 2D blur/glow verified on the panel

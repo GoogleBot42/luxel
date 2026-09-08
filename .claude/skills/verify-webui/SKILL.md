@@ -19,7 +19,14 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    page). No browser involved; catches API/build regressions before spending time on
    puppeteer. Ports are fixed (not `E2E_PORT`-configurable).
 2. For anything that touches rendered UI, drive it for real: `cd web && npm run build`
-   (runs `npm run wasm` → `gen-gallery.mjs` → `svelte-check` → `vite build`), then one of:
+   (runs `npm run wasm` → `gen-gallery.mjs` → `svelte-check` → `vite build`), then one of
+   the harnesses below **from `web/` — that cwd is load-bearing**. `e2e.mjs` spawns
+   `vite preview` with no `cwd` of its own, so `node web/tools/e2e.mjs` from the repo
+   root serves the REPO ROOT instead of `web/dist`: the page shell loads, the gallery
+   does not, and you get `0 tiles` / `failed to find element matching selector
+   "[data-role="library-panel"] .tiles"` on a perfectly healthy tree. It reads exactly
+   like a real regression (cost three runs and a stash-and-rebuild on 2026-09-08 before
+   the cwd was the answer). Run `cd web && node tools/e2e.mjs [screenshot-dir]`:
    - `node tools/e2e.mjs [screenshot-dir]` — playground-only, no device. Starts its own
      `vite preview` on `E2E_PORT` (default 4179). Covers the pattern library, editor,
      compile-error surfacing, tile spinners. Screenshots land in `screenshot-dir`
