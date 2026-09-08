@@ -572,6 +572,10 @@ impl OtaWriter {
             }
         }
         self.written += chunk.len() as u32;
+        // #395: same as the assets writer — the erase loop yields, the
+        // program did not, and the caller's socket read is not a guaranteed
+        // yield when the next chunk is already buffered.
+        embassy_futures::yield_now().await;
         Ok(())
     }
 

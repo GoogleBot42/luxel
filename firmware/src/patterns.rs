@@ -900,12 +900,18 @@ fn payload_vec(off: u32, len: u32) -> Option<Vec<u8>> {
 
 /// `GET /api/patterns` → `{"patterns":[{"id","name"},…]}` (from the RAM
 /// index; names come out of the mapping).
-pub fn list_json() -> String {
+pub async fn list_json() -> String {
     let recs: Vec<Rec> = INDEX.lock(|c| c.borrow().clone());
     let mut out = String::new();
     push_piece(&mut out, "{\"patterns\":[");
     let mut first = true;
-    for r in &recs {
+    for (i, r) in recs.iter().enumerate() {
+        // #395: `rec_name` allocates per record and, without the mapping,
+        // takes a flash-controller op each. The store holds up to MAX_RECS
+        // (192), so cap the uninterruptible run at 16 records.
+        if i > 0 && i % 16 == 0 {
+            embassy_futures::yield_now().await;
+        }
         let Some(name) = rec_name(r) else { continue };
         if !first {
             push_piece(&mut out, ",");
@@ -953,13 +959,39 @@ fn escape_into(out: &mut String, s: &str) {
     }
 }
 
+/// [escape_into] over a long body, in 4 KiB slices with a yield between them
+/// (Gitea #395). A stored source can be 32 KiB, and `escape_into` is a
+/// per-`char` loop — 32,768 iterations was the longest uninterruptible
+/// stretch in any read handler, long enough on its own to push the HUB75
+/// compose past the panel's frame boundary. 4 KiB a turn keeps each stretch
+/// a few hundred µs while costing a 32 KiB source only 8 yields, so a save
+/// blocked on the [MapRead] guard still clears in tens of ms.
+///
+/// Chunk ends are walked forward to a char boundary, so multi-byte UTF-8 is
+/// never split and the output is byte-identical to one `escape_into` call.
+async fn escape_yielding(out: &mut String, s: &str) {
+    const CHUNK: usize = 4096;
+    let mut at = 0;
+    while at < s.len() {
+        let mut end = (at + CHUNK).min(s.len());
+        while end < s.len() && !s.is_char_boundary(end) {
+            end += 1;
+        }
+        escape_into(out, &s[at..end]);
+        at = end;
+        embassy_futures::yield_now().await;
+    }
+}
+
 /// `GET /api/patterns/<id>` → `{"id","name","source"}` | None.
 ///
 /// The source is read STRAIGHT OUT OF THE MAPPING and escaped into one
 /// pre-sized response buffer — no source Vec, no intermediate copy. The
-/// read guard is held across that synchronous copy only, so a concurrent
-/// save waits microseconds; if a save or compaction is already running we
-/// wait for it (up to ~200 ms) rather than reporting the pattern missing.
+/// read guard is held across that copy, which since #395 yields every 4 KiB
+/// (see [escape_yielding]): a concurrent save now waits a handful of
+/// scheduler turns rather than one 32 KiB uninterruptible loop. If a save or
+/// compaction is already running we wait for it (up to ~200 ms) rather than
+/// reporting the pattern missing.
 pub async fn get_json(id: &str) -> Option<String> {
     let r = rec_of(id)?;
     let name = rec_name(&r)?;
@@ -973,11 +1005,11 @@ pub async fn get_json(id: &str) -> Option<String> {
     escape_into(&mut out, &name);
     push_piece(&mut out, "\",\"source\":\"");
     match payload_slice(r.src_off(), r.src_len) {
-        Some(b) => escape_into(&mut out, core::str::from_utf8(b).ok()?),
+        Some(b) => escape_yielding(&mut out, core::str::from_utf8(b).ok()?).await,
         None => {
             // flashmap-off: the one path that still copies
             let v = payload_vec(r.src_off(), r.src_len)?;
-            escape_into(&mut out, core::str::from_utf8(&v).ok()?);
+            escape_yielding(&mut out, core::str::from_utf8(&v).ok()?).await;
         }
     }
     drop(guard);

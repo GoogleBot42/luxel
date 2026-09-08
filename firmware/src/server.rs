@@ -138,7 +138,15 @@ impl Content for ApiBody {
         match self {
             ApiBody::Json(s) => s.write_content(writer).await,
             ApiBody::Text { s, .. } => s.write_content(writer).await,
-            ApiBody::Bytes(v) => v.write_content(writer).await,
+            // #395: `/api/pixels` is 3 bytes per pixel — 12 KB at 4096 px,
+            // and the playground polls it while a preview is open. It used to
+            // go out as one un-chunked `write_all`; `stream_mapped` writes the
+            // same bytes in 4 KiB slices with a yield between them, the
+            // discipline every other large body here already follows.
+            ApiBody::Bytes(v) => {
+                let mut w = writer;
+                stream_mapped(&mut w, &v).await
+            }
             #[cfg(not(feature = "hosted-ui"))]
             ApiBody::Asset(a) => a.write_content(writer).await,
             ApiBody::Source(s) => s.write_content(writer).await,
@@ -311,7 +319,16 @@ fn sync_mode_name(m: u8) -> &'static str {
     }
 }
 
-fn status_json() -> String {
+/// The `/api/status` body.
+///
+/// `async` only so it can YIELD (Gitea #395): with vsync the HUB75 compose
+/// must start within the rescan's slack (~6.5 ms since #329), and this is
+/// the handler the playground polls continuously. It builds ~1.8 KB through
+/// ~166 non-inlined push calls and ~150 loop iterations with no await of its
+/// own, so it was one uninterruptible stretch on core 0. The yields below cut
+/// it at the diagnostic-array boundaries; the bytes it produces are
+/// unchanged.
+async fn status_json() -> String {
     let fps = FPS.load(Ordering::Relaxed);
     let pixels = PIXEL_COUNT.load(Ordering::Relaxed);
     let slot = crate::ota::booted_slot();
@@ -341,6 +358,10 @@ fn status_json() -> String {
     // carrying the cap here keeps its pixel control clamped to the real
     // device even if the one-shot /api/config probe at connect failed.
     let mut out = String::from("{\"fps\":");
+    // The body is ~1.8 KB and the buffer starts at 7 bytes: without this the
+    // build pays ~9 realloc+memcpy grow steps through the global allocator on
+    // every poll. Best-effort — a failed reserve just falls back to growing.
+    out.try_reserve(2048).ok();
     push_u32(&mut out, fps);
     // per-stage frame timing, average µs per rendered pattern frame over the
     // last second (Gitea #260) — see shared::FRAME_US for what each covers
@@ -396,6 +417,8 @@ fn status_json() -> String {
             push_piece(&mut out, "]");
         }
         push_piece(&mut out, "],\"n\":");
+        // #395: cut after the 64-bin histogram sweep.
+        embassy_futures::yield_now().await;
         let n = crate::pipeline::DROP_LOG_N.load(Ordering::Relaxed);
         push_u32(&mut out, n);
         push_piece(&mut out, ",\"log\":[");
@@ -415,6 +438,8 @@ fn status_json() -> String {
             push_piece(&mut out, "]");
         }
         push_piece(&mut out, "]}");
+        // #395: cut after the drop ring.
+        embassy_futures::yield_now().await;
         push_piece(&mut out, ",\"swap\":{\"eof_race\":");
         push_u32(&mut out, crate::shared::SWAP_EOF_RACE.load(Ordering::Relaxed));
         push_piece(&mut out, ",\"slow_path\":");
@@ -429,6 +454,10 @@ fn status_json() -> String {
         // Pass-length forensics (#395). `short` must be 0: a pass shorter than
         // a full ring means the DMA entered a ring off its head, the one way a
         // displayed frame can vanish with write_frame still reporting success.
+        // #395: cut before the pass block. Nothing yields BETWEEN `pass.n`
+        // and `pass.repeats` — panel-load-bench divides one by the other, so
+        // the two counters must come from the same instant.
+        embassy_futures::yield_now().await;
         push_piece(&mut out, ",\"pass\":{\"n\":");
         push_u32(&mut out, crate::shared::PASS_COUNT.load(Ordering::Relaxed));
         push_piece(&mut out, ",\"min_us\":");
@@ -487,6 +516,10 @@ fn status_json() -> String {
             dump(",\"tags\":[", &live, true);
             dump(",\"skip_tags\":[", &frozen, false);
         }
+        // #395: cut after the two 24-entry tag arrays (the densest loop here —
+        // 48 numbers, never sparse). The closure above borrows `out`, so the
+        // yield has to sit outside its scope.
+        embassy_futures::yield_now().await;
         push_piece(&mut out, ",\"shorts\":[");
         {
             let (n, log) = crate::shared::pass_shorts();
@@ -507,6 +540,8 @@ fn status_json() -> String {
             }
         }
         push_piece(&mut out, "]}");
+        // #395: cut after the short-pass ring, before the tail fields.
+        embassy_futures::yield_now().await;
     }
     push_piece(&mut out, ",\"pixels\":");
     push_u32(&mut out, pixels);
@@ -620,7 +655,7 @@ fn status_json() -> String {
 }
 
 async fn api_status() -> ApiResponse {
-    json_response(status_json())
+    json_response(status_json().await)
 }
 
 /// A flash-resident asset (playground bundle) streamed in 2 KiB chunks —
@@ -722,6 +757,9 @@ async fn stream_mapped_exact<W: picoserve::io::Write>(
         let take = padding.len().min(len - written);
         writer.write_all(&padding[..take]).await?;
         written += take;
+        // #395: 64 bytes a turn, so a full-length pad is hundreds of
+        // iterations — keep it cooperative like the body above it.
+        embassy_futures::yield_now().await;
     }
     Ok(())
 }
@@ -771,6 +809,8 @@ async fn stream_flash_readback<W: picoserve::io::Write>(
         let take = pad.len().min(len - written);
         writer.write_all(&pad[..take]).await?;
         written += take;
+        // #395: same reason as stream_mapped_exact's pad loop.
+        embassy_futures::yield_now().await;
     }
     Ok(())
 }
@@ -817,6 +857,8 @@ async fn stream_store_readback<W: picoserve::io::Write>(
         let take = pad.len().min(len - written);
         writer.write_all(&pad[..take]).await?;
         written += take;
+        // #395: same reason as stream_mapped_exact's pad loop.
+        embassy_futures::yield_now().await;
     }
     Ok(())
 }
@@ -2192,7 +2234,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/controls" => Some(api_controls().await),
                 "/api/vars" => Some(api_vars().await),
                 "/api/readouts" => Some(api_readouts().await),
-                "/api/patterns" => Some(json_response(crate::patterns::list_json())),
+                "/api/patterns" => Some(json_response(crate::patterns::list_json().await)),
                 // GET /api/patterns/<id> → {"id","name","source"}; missing id
                 // returns 200 + {"ok":false,…} to match the mirror (serve.rs).
                 r if r.starts_with("/api/patterns/") => {

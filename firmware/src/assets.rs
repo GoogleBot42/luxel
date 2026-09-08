@@ -337,6 +337,12 @@ impl AssetWriter {
             return Err("flash write failed");
         }
         self.written += chunk.len() as u32;
+        // #395: the erase loop above yields, the program below it did not.
+        // The caller's next `reader.read().await` is not a guaranteed yield
+        // (it returns immediately when the socket already has the next
+        // chunk buffered), so a fast upload could run erase→write→erase→…
+        // with the compose never getting in.
+        embassy_futures::yield_now().await;
         Ok(())
     }
 
