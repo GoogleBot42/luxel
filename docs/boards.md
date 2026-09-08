@@ -354,7 +354,11 @@ has nothing to do with your code: the flake source hash feeds rustc's
 `.L_MergedGlobals` packing. Editing only this documentation moved the same
 firmware ~600 B (twice, in both directions, while writing these entries). Hold
 everything else constant when you diet, and never read a sub-1 KB delta as
-real. See docs/size-report.md.
+real. See docs/size-report.md. (The *other* half of that floor — the build
+directory's own length, embedded in every panic `Location` — is gone since
+Gitea #441; see the 2026-09-08 entry. What survives is the symbol-naming
+repacking described here, measured at 496 B between two builds of identical
+source 47 characters of path apart.)
 
 All eight pass `tools/image-check.sh` (markers + margin). The cost is RAM,
 not flash: the single `write_to` future is the union of every body type, so
@@ -792,6 +796,83 @@ warns about, in the direction that costs. `tools/stack-check.sh` clean on
 
 `board-c6-devkit` with the on-device playground is still at 1.66 % and still
 not a release artifact — Gitea #291 / #426 are unchanged by this.
+
+2026-09-08 (later), **absolute build paths out of the image** (Gitea #441 —
+`--remap-path-prefix`): **−7.7 to −9.2 KB on every board, the largest single
+saving in this table**, and the reason it is more than a diet: the image no
+longer carries the directory it was built in, so the same commit weighs
+(nearly) the same on every machine. Every dependency file containing a
+panicking construct contributes one `core::panic::Location` string, and the
+useful part of it is the tail — `esp-hal-1.1.0/src/system.rs`. The 55-70
+character prefix in front of it (`/nix/var/nix/builds/nix-<pid>-<rand>/
+cargo-vendor-dir/`, `/home/…/.cargo/registry/src/index.crates.io-<hash>/`,
+`<xtensa-rust>/lib/rustlib/src/rust/library/` under `-Zbuild-std`) was
+build-machine trivia repeated ~140 times: **13.5-14.7 KB of path strings per
+image, now 5.4-5.9 KB.** Credless flake builds (`nix build .#luxel-fw-<v>` →
+`luxel-fw-ota.bin`), `07b922b` vs this branch. Re-measured on the rebased
+tree (`7aa94ca`, library/web/docs commits only): the shipped C6 row is
+identical and `pixelblaze-v3` moves 144 B on the *before* side, i.e. inside
+the noise floor described below.
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `c6-devkit` + `hosted-ui` *(shipped)* | 1,015,024 | **1,006,752** | **−8,272** | **41,824 B (3.98 %)** |
+| `pixelblaze-v3` | 1,014,544 | 1,005,344 | −9,200 | 43,232 B (4.12 %) |
+| `athom-music` | 1,014,464 | 1,005,376 | −9,088 | 43,200 B (4.12 %) |
+| `esp32-generic` | 1,014,144 | 1,004,912 | −9,232 | 43,664 B (4.16 %) |
+| `s3-devkit` | 961,232 | 952,208 | −9,024 | 96,368 B (9.19 %) |
+| `s3-devkit` + `hub75` | 967,984 | 959,040 | −8,944 | 89,536 B (8.53 %) |
+| `seengreat-hub75` | 977,600 | 968,608 | −8,992 | 79,968 B (7.62 %) |
+| `c3-devkit` | 966,160 | 958,464 | −7,696 | 90,112 B (8.59 %) |
+| `c6-devkit` *(not shipped)* | 1,031,152 | 1,023,200 | −7,952 | 25,376 B (2.42 %) |
+
+All eight shipped variants pass `tools/image-check.sh`; the shipped C6 is off
+the warn line's doorstep at 3.98 % for the first time since the extent
+allocator. `board-c6-devkit` with the on-device playground gains 7,952 B but
+is still under the 3 % floor (2.42 %) and still not a release artifact —
+Gitea #291 / #426 are unchanged.
+
+**What this does to the ±0.7 KB noise floor this section keeps warning
+about.** The floor had two components and this removes the larger one. Same
+source, same creds, built twice under directory names 47 characters apart
+(devshell `board-c6-devkit` + `hosted-ui`): **1,006,912 B vs 1,006,416 B**,
+and the `.rs` path strings in the two images are byte-for-byte identical
+(5,354 B each, zero absolute paths in either). The residual 496 B is the
+`.L_MergedGlobals` / `.Lanon.<hash>` repacking that rustc's `-C metadata`
+hash drives — still real, still not your code, but half a kilobyte instead
+of the 2.6 KB swing that made the same commit read 1,014,400 / 1,015,568 /
+1,017,168 B on three machines and fail the 3 % gate on one of them. A
+devshell build with creds and the credless flake image now agree to within
+160 B on the C6, where they were ~2.5 KB apart.
+
+Where the flags live: `link_rustflags` and `remap_rustflags` in
+`firmware/board-target.sh`, read by `firmware/build-esp32.sh`,
+`tools/stack-check.sh` and `flake.nix`'s `buildPhase`. They have to be in one
+place because `RUSTFLAGS` **replaces** `firmware/.cargo/config.toml`'s
+`[target.*] rustflags` rather than merging with them, so every caller that
+exports it must re-supply the linker args too. Adding a board changes
+nothing here; adding a *build entry point* means reading those two functions.
+
+Two things that did NOT work, so nobody re-tries them:
+
+- Remapping `/rustc/<commit-hash>/library/` (the dozen surviving `core`
+  Locations on the RISC-V boards, 576 B) is a no-op. Those paths are rustc's
+  own upstream virtualization of the prebuilt `core`;
+  `--remap-path-prefix` matches the *real local* path, not a virtual name
+  already baked into the metadata. Only `-Zbuild-std` — i.e. the Xtensa
+  boards, via the rust-src rule — can reach them.
+- Nothing is lost from `tools/decode-backtrace.sh` or `espflash monitor
+  --elf`. The release profile carries no line tables (`[profile.release]` has
+  no `debug`), so `addr2line` printed `luxel_fw.<hash>-cgu.0:?` before this
+  change and prints exactly that after it; symbol names are untouched. The
+  only visible difference is in a *panic message*, which now reads
+  `esp-hal-1.1.0/src/system.rs:42` — prefix it with the registry or vendor
+  root to open the file.
+
+`.stack` on `board-pixelblaze-v3` 25,652 B (−16 B, i.e. unchanged);
+`tools/stack-check.sh` clean on `board-pixelblaze-v3` and on
+`board-c6-devkit` + `hosted-ui` (largest frame still esp-storage's 4,144 B
+flash bounce buffer).
 
 ## IRAM budget: where the interpreter's per-pixel code lives
 

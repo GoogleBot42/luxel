@@ -4,6 +4,12 @@
 # toolchain explicitly.
 target = "riscv32imc-unknown-none-elf"
 
+# NOTE: the rustflags below are what a bare `cargo build` / rust-analyzer uses.
+# The real builds (firmware/build-esp32.sh, tools/stack-check.sh, flake.nix) all
+# export RUSTFLAGS to add --remap-path-prefix (Gitea #441), and RUSTFLAGS
+# REPLACES these rather than merging with them — so they re-supply the link args
+# from `link_rustflags` in firmware/board-target.sh. Keep the two in sync.
+
 [target.'cfg(target_arch = "riscv32")']
 runner = "espflash flash --monitor --partition-table=partitions.csv --erase-parts otadata,storage"
 rustflags = ["-C", "link-arg=-Tlinkall.x", "-C", "force-frame-pointers"]

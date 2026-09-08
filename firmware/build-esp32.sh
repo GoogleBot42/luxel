@@ -139,6 +139,16 @@ if [ "${CORE_O3:-0}" = 1 ]; then
   OPT_FLAGS=(--config 'profile.release.package.luxel-core.opt-level=3')
 fi
 
+# Strip absolute build paths out of panic Locations and DWARF (Gitea #441):
+# ~8 KB of app image, and — the reason it is more than a diet — it makes the
+# image size independent of WHERE it was built, which image-check.sh's 3 %
+# OTA-slot floor depends on. RUSTFLAGS overrides .cargo/config.toml's
+# [target.*] rustflags rather than merging with them, so the linker args have
+# to come along; both halves live in board-target.sh, which tools/stack-check.sh
+# and flake.nix read too.
+link_rustflags
+export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags)"
+
 echo "board: $BOARD (chip $CHIP, target $TARGET)"
 if [ "$CMD" = "run" ]; then
   # write the fresh asset bundle first (same serial session, independent

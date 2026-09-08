@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-09-08 (later) — the firmware stops shipping the directory it was built in (#441)
+
+`--remap-path-prefix` on every firmware build entry point. **−7.7 to −9.2 KB
+on every board** — the largest single saving docs/boards.md has recorded —
+and, the actual point, the app image no longer changes size with the path it
+was built under.
+
+* **What was in there.** Every dependency source file that contains a
+  panicking construct (`unwrap`, an index, a slice, an overflow check)
+  contributes one `core::panic::Location` string. The useful part is the tail
+  — `esp-hal-1.1.0/src/system.rs`. In front of it sat 55-70 characters of
+  build-machine trivia, repeated ~140 times per image:
+  `/nix/var/nix/builds/nix-<pid>-<rand>/cargo-vendor-dir/` in the flake,
+  `/home/…/.cargo/registry/src/index.crates.io-<hash>/` in the devshell, and
+  under `-Zbuild-std` the Xtensa toolchain's whole `/nix/store/…/lib/rustlib/
+  src/rust/library/` prefix on top of `core`'s own Locations. **13.5-14.7 KB
+  of path strings per image; now 5.4-5.9 KB.**
+
+* **Why it was a gate problem, not just a diet.** `tools/image-check.sh`
+  fails a build with under 3 % of the 1 MiB OTA slot free — a 31,458 B budget.
+  The same commit measured 1,014,400 B from `nix build`, 1,015,568 B from a
+  devshell build on the dev host, and 1,017,168 B on the CI runner (which
+  builds under `/var/lib/gitea-runner/inst/.cache/act/<hash>/hostexecutor/…`)
+  — the last of those **fails**, with nothing about the firmware differing.
+  PR #440 worked around it by pointing `tools/ci.sh` at the flake image.
+
+  Now: same source, same creds, two devshell builds of `board-c6-devkit` +
+  `hosted-ui` under directory names 47 characters apart come out
+  **1,006,912 B and 1,006,416 B**, with the `.rs` path strings byte-for-byte
+  identical (5,354 B each, zero absolute paths in either). The residual 496 B
+  is the `.L_MergedGlobals` repacking that rustc's `-C metadata` hash drives,
+  which docs/boards.md's "±0.7 KB noise floor" note already covers — half a
+  kilobyte instead of a 2.6 KB swing. A devshell build with creds and the
+  credless flake image now agree to within 160 B on the C6, where they were
+  ~2.5 KB apart.
+
+* **Fleet, credless flake builds (`luxel-fw-ota.bin`), `07b922b` vs branch**
+  (the shipped C6 and `pixelblaze-v3` rows re-measured unchanged after the
+  rebase onto `7aa94ca`)**:**
+
+  | variant | before | after | Δ | slot margin |
+  |---|---:|---:|---:|---:|
+  | `c6-devkit` + `hosted-ui` *(shipped)* | 1,015,024 | **1,006,752** | **−8,272** | **41,824 B (3.98 %)** |
+  | `pixelblaze-v3` | 1,014,544 | 1,005,344 | −9,200 | 43,232 B (4.12 %) |
+  | `athom-music` | 1,014,464 | 1,005,376 | −9,088 | 43,200 B (4.12 %) |
+  | `esp32-generic` | 1,014,144 | 1,004,912 | −9,232 | 43,664 B (4.16 %) |
+  | `s3-devkit` | 961,232 | 952,208 | −9,024 | 96,368 B (9.19 %) |
+  | `s3-devkit` + `hub75` | 967,984 | 959,040 | −8,944 | 89,536 B (8.53 %) |
+  | `seengreat-hub75` | 977,600 | 968,608 | −8,992 | 79,968 B (7.62 %) |
+  | `c3-devkit` | 966,160 | 958,464 | −7,696 | 90,112 B (8.59 %) |
+  | `c6-devkit` *(not shipped)* | 1,031,152 | 1,023,200 | −7,952 | 25,376 B (2.42 %) |
+
+  All eight shipped variants pass `tools/image-check.sh`. The shipped C6 is
+  at 3.98 % — the most slot headroom it has had since the extent allocator
+  took it under the floor. `board-c6-devkit` with the on-device playground
+  gains 7,952 B and is still under 3 % (2.42 %), so #291 / #426 stand.
+
+* **Where the flags live, and why they can't just go in `.cargo/config.toml`.**
+  `RUSTFLAGS` **replaces** `firmware/.cargo/config.toml`'s `[target.*]
+  rustflags` rather than merging with them, so anything exporting it has to
+  re-supply the linker args — and the prefixes are only knowable at build
+  time. Both halves are now functions in `firmware/board-target.sh`
+  (`link_rustflags`, `remap_rustflags`), read by `firmware/build-esp32.sh`,
+  `tools/stack-check.sh` and `flake.nix`'s `buildPhase`, so the three cannot
+  drift. Adding a board changes nothing; adding a build entry point means
+  reading those two functions.
+
+* **Two dead ends, recorded so nobody re-tries them.** Remapping
+  `/rustc/<commit-hash>/library/` (the dozen surviving `core` Locations on
+  the RISC-V boards, 576 B) is a measured no-op — those are rustc's own
+  upstream virtualization of the prebuilt `core`, and `--remap-path-prefix`
+  matches the real local path, not a virtual name already in the metadata.
+  And the diagnostics cost #441 worried about does not exist: the release
+  profile carries no line tables, so `tools/decode-backtrace.sh` printed
+  `luxel_fw.<hash>-cgu.0:?` before this change and prints exactly that after
+  it. The only visible difference is a panic message reading
+  `esp-hal-1.1.0/src/system.rs:42`.
+
+`tools/stack-check.sh` clean on `board-pixelblaze-v3` (`.stack` 25,652 B, −16 B)
+and on `board-c6-devkit` + `hosted-ui`. `tools/ci.sh` keeps gating the flake
+images: what is left of the devshell/flake gap is the baked WiFi creds, whose
+length still moves the number.
+
 ## 2026-09-08 — engine: the array budget says which array, and how far over (#420)
 
 A pattern with three `array(pixelCount)` channels is 12,300 units against the
@@ -295,6 +378,7 @@ Deliberately not touched: docs/UNTESTED.md (a concurrent session is
 editing it), and ideas.md "Multi-pattern blend / transitions", where the
 firmware's playlist crossfade covers the transitions half but the
 engine-level compositor for layered effects does not exist.
+
 
 ## 2026-09-08 — the release gate builds three boards, and the two things that slipped past it (#413, #438)
 

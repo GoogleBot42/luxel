@@ -56,17 +56,22 @@ BOARD="${CI_BOARD:-board-pixelblaze-v3}"
 # only in pin maps and features), the tightest image in the fleet
 # (c6-devkit-hosted), and the only riscv32imc target (c3-devkit).
 #
-# And the margin is now measured on the FLAKE image, not a devshell one.
-# They are not the same artifact and the difference is not small: a devshell
-# build bakes creds and embeds the absolute path of every dependency source
-# file in its panic `Location`s, so it reads ~2.8 KB LARGER than the credless
-# flake image release.yml publishes — and by a different amount on every
-# machine, because the paths are a different length there (the CI runner
-# builds under /var/lib/gitea-runner/…, this repo's own docs measured the
-# same commit at three different sizes). Gating a 3 %-of-1-MiB margin on a
-# number that moves with the checkout path is not a gate. `nix build
+# And the margin is measured on the FLAKE image, not a devshell one. They
+# are not the same artifact: a devshell build bakes the dev WiFi creds, and
+# the gate has to weigh the bytes release.yml actually publishes. `nix build
 # .#luxel-fw-<variant>` is byte-identical to the release asset, so this loop
 # is release.yml's loop; keep the two in step.
+#
+# The bigger half of that gap is gone since Gitea #441: a devshell build used
+# to additionally embed the absolute path of every dependency source file in
+# its panic `Location`s, reading ~2.8 KB larger than the flake image AND by a
+# different amount on every machine (this repo's own docs measured one commit
+# at three sizes; the CI runner's /var/lib/gitea-runner/… path failed the 3 %
+# floor the dev host passed). `--remap-path-prefix` now strips those
+# everywhere, and the two builds agree to ~160 B. Do NOT take that as licence
+# to gate the devshell image instead: what is left is the creds, whose length
+# still moves the number, and CI's placeholder creds.env is not the release
+# artifact's anyway.
 VARIANTS="${CI_VARIANTS-pixelblaze-v3 c6-devkit-hosted c3-devkit}"
 SKIP=" ${CI_SKIP:-} "
 

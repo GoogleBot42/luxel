@@ -195,6 +195,16 @@
               buildPhase = ''
                 runHook preBuild
                 cd firmware
+                # Gitea #441: strip the sandbox's absolute paths out of panic
+                # Locations + DWARF (~8 KB) so the published image is the same
+                # size wherever it was built. RUSTFLAGS replaces rather than
+                # merges with .cargo/config.toml's [target.*] rustflags, so the
+                # linker args come from the same board-target.sh helper that
+                # build-esp32.sh and tools/stack-check.sh use.
+                . ./board-target.sh
+                board_target ${board}
+                link_rustflags
+                export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags)"
                 ${if buildStd then "${xtensaRust}/bin/cargo" else "cargo"} build --release --offline \
                   --no-default-features --features ${lib.concatStringsSep "," ([ board ] ++ iram ++ extraFeatures)} \
                   --target ${target}${stdFlags}${optFlags}
