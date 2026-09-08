@@ -123,7 +123,14 @@ export function beforeRender(delta) {
   }
 }
 
-export function render2D(index, x, y) {
-  var idx = floor(y * 15.99) * W + floor(x * 15.99)
-  hsv(hC[idx], sC[idx], vC[idx])
+// One `fillCanvas` per frame instead of one `hsv()` per LED: the pattern was
+// always a 16x16 simulation and `render2D` only resolved a colour out of it,
+// so the readout moves into the engine (docs/bulk-render.md). `fillCanvas`
+// samples the canvas at every pixel's mapped (x, y) with nearest sampling —
+// exactly what `floor(y * 15.99) * W + floor(x * 15.99)` computed, on every
+// rig tested. With no map at all the pattern still gets the default
+// ceil(sqrt(n)) grid a `render2D`-only pattern got, so a bare strip shows the
+// same wrapped 16x16 field it always did.
+export function renderFrame() {
+  fillCanvas(hC, sC, vC, W, W)
 }
