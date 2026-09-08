@@ -419,6 +419,12 @@ fn status_json() -> String {
         push_u32(&mut out, crate::shared::SWAP_EOF_RACE.load(Ordering::Relaxed));
         push_piece(&mut out, ",\"slow_path\":");
         push_u32(&mut out, crate::shared::SWAP_SLOW_PATH.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"landing_mismatch\":");
+        push_u32(&mut out, crate::shared::LANDING_MISMATCH.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"double_arm\":");
+        push_u32(&mut out, crate::shared::DOUBLE_ARM.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"early_landing\":");
+        push_u32(&mut out, u32::from(esp_hub75::EARLY_LANDING_ENABLED));
         push_piece(&mut out, "}");
         // Pass-length forensics (#395). `short` must be 0: a pass shorter than
         // a full ring means the DMA entered a ring off its head, the one way a
@@ -444,6 +450,43 @@ fn status_json() -> String {
         push_u32(&mut out, if pfmin == u32::MAX { 0 } else { pfmin });
         push_piece(&mut out, ",\"zero_rescan\":");
         push_u32(&mut out, crate::shared::PASS_ZERO_RESCAN.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"skips\":");
+        push_u32(&mut out, crate::shared::SHOWN_SKIPS.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"repeats\":");
+        push_u32(&mut out, crate::shared::SHOWN_REPEATS.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"lapsed\":");
+        push_u32(&mut out, crate::shared::SHOWN_LAPSED.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"audited\":");
+        push_u32(&mut out, crate::shared::SHOWN_AUDITED.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"arm_idx\":");
+        push_u32(&mut out, crate::shared::SHOWN_ARM_IDX.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"arm_idx_max\":");
+        push_u32(&mut out, crate::shared::SHOWN_ARM_IDX_MAX.load(Ordering::Relaxed));
+        push_piece(&mut out, ",\"skip_arm_idx\":");
+        push_u32(&mut out, crate::shared::SHOWN_SKIP_ARM_IDX.load(Ordering::Relaxed));
+        {
+            let (tn, live, frozen) = crate::shared::tag_log();
+            push_piece(&mut out, ",\"tags_n\":");
+            push_u32(&mut out, tn);
+            let mut dump = |name: &str, a: &[u32], ordered: bool| {
+                push_piece(&mut out, name);
+                let live_n = (tn as usize).min(a.len());
+                for k in 0..a.len() {
+                    let v = if ordered && tn as usize >= a.len() {
+                        a[(tn as usize - live_n + k) % a.len()]
+                    } else {
+                        a[k]
+                    };
+                    if k > 0 {
+                        push_piece(&mut out, ",");
+                    }
+                    push_u32(&mut out, v);
+                }
+                push_piece(&mut out, "]");
+            };
+            dump(",\"tags\":[", &live, true);
+            dump(",\"skip_tags\":[", &frozen, false);
+        }
         push_piece(&mut out, ",\"shorts\":[");
         {
             let (n, log) = crate::shared::pass_shorts();

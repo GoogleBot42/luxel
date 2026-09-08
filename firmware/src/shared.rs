@@ -220,6 +220,83 @@ pub fn pass_shorts() -> (u32, [(u32, u32, u32); PASS_SHORT_LOG]) {
     (PASS_SHORT_N.load(Ordering::Relaxed), out)
 }
 
+/// Displayed-frame ground truth (Gitea #395), the firmware-side equivalent of
+/// reading sweep columns off a video.
+///
+/// The driver logs which FRAMEBUFFER each panel pass actually scanned out; the
+/// panel driver maps those pointers back to the frame sequence numbers it
+/// composed into them. A sequence number that never appears in that log is a
+/// frame the panel never displayed, even though `write_frame` succeeded and
+/// `DROPPED`/`out_fps` saw nothing wrong. That is the artefact filmed on the
+/// bench: one frame skipped, the next shown twice, frame count conserved.
+pub static SHOWN_SKIPS: AtomicU32 = AtomicU32::new(0);
+/// Frames the panel displayed for more than one consecutive pass.
+pub static SHOWN_REPEATS: AtomicU32 = AtomicU32::new(0);
+/// Passes audited so far.
+pub static SHOWN_AUDITED: AtomicU32 = AtomicU32::new(0);
+/// Descriptor index the last swap armed at, and the highest ever taken on the
+/// fast path — if a skip is seen, the latter bounds the GDMA prefetch depth.
+pub static SHOWN_ARM_IDX: AtomicU32 = AtomicU32::new(0);
+/// See [`SHOWN_ARM_IDX`].
+pub static SHOWN_ARM_IDX_MAX: AtomicU32 = AtomicU32::new(0);
+/// Arm index of the swap most recently implicated in a skip, 0 if none.
+pub static SHOWN_SKIP_ARM_IDX: AtomicU32 = AtomicU32::new(0);
+/// Landings taken while the engine was provably still looping the OLD ring
+/// (Gitea #395) — a false landing, which hands the caller a buffer that is
+/// still pending display and lets the ISR restore undo the flip. Must be 0.
+pub static LANDING_MISMATCH: AtomicU32 = AtomicU32::new(0);
+/// Swaps armed while a previous flip was still pending. Correct double
+/// buffering cannot do this; a false landing can.
+pub static DOUBLE_ARM: AtomicU32 = AtomicU32::new(0);
+
+/// The last few DISPLAYED frame tags, oldest first — the firmware-side
+/// version of reading sweep columns off a video. A healthy panel reads
+/// `...,7,8,9,10,...`; the filmed artefact reads `...,2,4,4,5,...`, one frame
+/// never shown and the next shown twice. Captured around a skip so the
+/// sequence can be inspected instead of inferred from a counter.
+pub const TAG_LOG: usize = 24;
+static TAGS: [AtomicU32; TAG_LOG] = [const { AtomicU32::new(0) }; TAG_LOG];
+static TAGS_N: AtomicU32 = AtomicU32::new(0);
+/// Frozen copy of the tag sequence around the FIRST skip seen, so it survives
+/// however long it takes anyone to look.
+static SKIP_TAGS: [AtomicU32; TAG_LOG] = [const { AtomicU32::new(0) }; TAG_LOG];
+static SKIP_TAGS_SET: AtomicBool = AtomicBool::new(false);
+
+/// Record one displayed tag.
+pub fn push_tag(tag: u32) {
+    let i = TAGS_N.fetch_add(1, Ordering::Relaxed) as usize % TAG_LOG;
+    TAGS[i].store(tag, Ordering::Relaxed);
+}
+
+/// Freeze the current tag window the first time a skip is seen.
+pub fn freeze_skip_tags() {
+    if SKIP_TAGS_SET.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    for k in 0..TAG_LOG {
+        SKIP_TAGS[k].store(TAGS[k].load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+    SKIP_TAGS[0].store(TAGS_N.load(Ordering::Relaxed), Ordering::Relaxed);
+}
+
+/// `(total, live window oldest-first, frozen-at-first-skip window)`.
+pub fn tag_log() -> (u32, [u32; TAG_LOG], [u32; TAG_LOG]) {
+    let n = TAGS_N.load(Ordering::Relaxed);
+    let mut live = [0u32; TAG_LOG];
+    let mut frozen = [0u32; TAG_LOG];
+    for k in 0..TAG_LOG {
+        live[k] = TAGS[k].load(Ordering::Relaxed);
+        frozen[k] = SKIP_TAGS[k].load(Ordering::Relaxed);
+    }
+    (n, live, frozen)
+}
+
+/// Displayed passes the audit could not see because the driver's log lapped
+/// (the panel emits EOFs slightly faster than frames are composed). These are
+/// NOT skips, and keeping them separate is the difference between a counter
+/// that measures the panel and one that measures its own lag.
+pub static SHOWN_LAPSED: AtomicU32 = AtomicU32::new(0);
+
 /// Raw BCM frame count from the panel driver, absolute since boot.
 /// [`RESCAN_HZ`] is its once-a-second delta; nothing else should read it.
 pub static RESCANS: AtomicU32 = AtomicU32::new(0);

@@ -115,11 +115,25 @@ pub struct Hub75Output {
     /// Panel rescan count when the last frame was handed to the DMA, for
     /// `pass_per_frame_max` (Gitea #395).
     last_shown_rescan: u32,
+    /// Sequence number of the next frame to compose.
+    next_seq: u32,
+    /// How far through the driver's shown-log we have audited.
+    shown_cursor: u32,
+    /// Last displayed sequence seen by the audit.
+    last_shown_seq: u32,
 }
 
 impl Hub75Output {
     pub fn new(lcd_cam: LCD_CAM<'static>, pins: Hub75Pins16<'static>, channel: DMA_CH0<'static>) -> Self {
-        let dead = Self { hub75: None, back: None, pending: None, last_shown_rescan: 0 };
+        let dead = Self {
+            hub75: None,
+            back: None,
+            pending: None,
+            last_shown_rescan: 0,
+            next_seq: 1,
+            shown_cursor: 0,
+            last_shown_seq: 0,
+        };
         // esp-hub75's macro expands to `StaticCell::uninit().write([EMPTY; N])`
         // — the descriptor array is written straight into the static, but the
         // literal is a value expression so clippy counts it as a stack array.
@@ -155,13 +169,74 @@ impl Hub75Output {
                         * esp_hub75::DESCRIPTOR_RINGS
                         * core::mem::size_of::<esp_hal::dma::DmaDescriptor>(),
                 );
-                Self { hub75: Some(h), back: Some(back), pending: None, last_shown_rescan: 0 }
+                Self {
+                    hub75: Some(h),
+                    back: Some(back),
+                    pending: None,
+                    last_shown_rescan: 0,
+                    next_seq: 1,
+                    shown_cursor: 0,
+                    last_shown_seq: 0,
+                }
             }
             Err(e) => {
                 println!("hub75: LCD_CAM init failed: {:?} — panel output disabled", e);
                 dead
             }
         }
+    }
+}
+
+impl Hub75Output {
+    /// Replay the driver's log of framebuffers the panel actually scanned out,
+    /// translate it back into frame sequence numbers, and count skips and
+    /// repeats (Gitea #395).
+    ///
+    /// A skip is a composed frame whose framebuffer never appears in the log:
+    /// the panel went straight from frame N to frame N+2. That is invisible to
+    /// `dropped` and `out_fps`, because `write_frame` succeeded — the frame was
+    /// composed and its swap was armed, the swap just never took effect. It is
+    /// exactly what the camera showed, without needing a camera.
+    fn audit_shown(&mut self, shown: (u32, [u32; esp_hub75::SHOWN_LOG_LEN], u32, u32)) {
+        let (n, log, arm, arm_max) = shown;
+        crate::shared::SHOWN_ARM_IDX.store(arm, Ordering::Relaxed);
+        crate::shared::SHOWN_ARM_IDX_MAX.store(arm_max, Ordering::Relaxed);
+        let len = log.len() as u32;
+        // The panel produces EOFs slightly faster than we audit them, so the
+        // ring WILL lap. Entries lost to that are not skips — count the lapse
+        // and forget the previous sequence, so nothing is attributed across a
+        // hole we cannot see into. Conflating the two is what made the first
+        // version of this counter report phantom skips.
+        let oldest = n.saturating_sub(len);
+        if self.shown_cursor < oldest {
+            crate::shared::SHOWN_LAPSED.fetch_add(oldest - self.shown_cursor, Ordering::Relaxed);
+            self.last_shown_seq = 0;
+        }
+        let from = self.shown_cursor.max(oldest);
+        for k in from..n {
+            let seq = log[(k % len) as usize];
+            if seq == 0 {
+                continue; // pass predating the first tagged swap
+            }
+            crate::shared::push_tag(seq);
+            if self.last_shown_seq != 0 && seq != self.last_shown_seq {
+                let gap = seq.wrapping_sub(self.last_shown_seq);
+                if gap == 0 || gap > 0x8000_0000 {
+                    // out of order: ignore rather than mis-blame
+                } else if gap > 1 {
+                    // Counted in the ISR now; here only to freeze a window for
+                    // eyeballing. The snapshot this reads is racy, so it must
+                    // not drive any counter.
+                    crate::shared::SHOWN_SKIP_ARM_IDX.store(arm, Ordering::Relaxed);
+                    crate::shared::freeze_skip_tags();
+                }
+            }
+            if seq != 0 {
+                self.last_shown_seq = seq;
+            }
+
+        }
+        self.shown_cursor = n;
     }
 }
 
@@ -194,6 +269,13 @@ impl OutputDriver for Hub75Output {
     }
 
     fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) -> bool {
+        // Audit which frames the panel actually scanned out since last time.
+        // Copy the log out first so the driver borrow ends before the &mut
+        // self call (Gitea #395).
+        let shown = self.hub75.as_ref().map(Hub75::shown_log);
+        if let Some(shown) = shown {
+            self.audit_shown(shown);
+        }
         let Some(hub75) = self.hub75.as_ref() else { return false };
         // The panel's own BCM frame counter, for `rescan_hz`. Free: the ISR
         // that feeds it is always armed in circular-DMA mode.
@@ -203,6 +285,13 @@ impl OutputDriver for Hub75Output {
         // often it had to take the two-EOF fallback. The first is the rate at
         // which the pre-fix driver would have handed back a framebuffer still
         // being scanned out — a glitch no frame accounting can see.
+        let (sk, rp, ps) = hub75.shown_counts();
+        crate::shared::SHOWN_SKIPS.store(sk, Ordering::Relaxed);
+        crate::shared::SHOWN_REPEATS.store(rp, Ordering::Relaxed);
+        crate::shared::SHOWN_AUDITED.store(ps, Ordering::Relaxed);
+        let (mismatch, double_arm) = hub75.landing_stats();
+        crate::shared::LANDING_MISMATCH.store(mismatch, Ordering::Relaxed);
+        crate::shared::DOUBLE_ARM.store(double_arm, Ordering::Relaxed);
         let (race, slow) = hub75.swap_stats();
         crate::shared::SWAP_EOF_RACE.store(race, Ordering::Relaxed);
         crate::shared::SWAP_SLOW_PATH.store(slow, Ordering::Relaxed);
@@ -283,6 +372,11 @@ impl OutputDriver for Hub75Output {
             }
         }
         self.last_shown_rescan = rescans;
+        // Tag this frame so the driver's log of DISPLAYED passes reads back
+        // as our own sequence — no pointer mapping to go stale (Gitea #395).
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1).max(1);
+        hub75.set_swap_tag(seq);
         self.pending = Some(hub75.swap(back));
         true
     }

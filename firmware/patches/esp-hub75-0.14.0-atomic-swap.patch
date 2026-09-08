@@ -81,7 +81,16 @@ This patch makes the swap land exactly on a panel frame boundary.
 Cost: one extra descriptor ring in .bss. On the bench panel
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -120,6 +120,27 @@
+@@ -109,6 +109,8 @@
+ mod isr;
+ pub use hub75::Hub75;
+ pub use isr::Hub75Swap;
++// Luxel local patch (Gitea #395): diagnostics surface.
++pub use isr::{pass_flag, EARLY_LANDING_ENABLED, FAST_MARGIN, SHORT_LOG_LEN, SHOWN_LOG_LEN};
+ /// The color type used by the HUB75 driver.
+ pub use hub75_framebuffer::Color;
+ 
+@@ -120,6 +122,27 @@
  
  pub(crate) const MAX_DMA_CHUNK_SIZE: usize = esp_hal::dma::CHUNK_SIZE;
  
@@ -109,7 +118,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  /// Computes the number of DMA descriptors required for a given framebuffer
  /// configuration.
  ///
-@@ -149,6 +170,10 @@
+@@ -149,6 +172,10 @@
  /// [DmaDescriptor]` suitable for passing to [`Hub75::new`] or
  /// [`Hub75::new_async`].
  ///
@@ -120,7 +129,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  /// # Example
  /// ```rust,ignore
  /// type FBType = DmaFrameBuffer<NROWS, COLS, PLANES>;
-@@ -157,10 +182,11 @@
+@@ -157,10 +184,11 @@
  #[macro_export]
  macro_rules! hub75_dma_descriptors {
      ($fb_type:ty) => {{
@@ -214,7 +223,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  use crate::framebuffer::FrameBuffer;
  #[cfg(all(hub75_use_lcd_cam, not(feature = "circular-dma")))]
  use crate::framebuffer::WordSize;
-@@ -106,12 +110,38 @@
+@@ -106,12 +110,40 @@
  // Circular-DMA shared state
  // ---------------------------------------------------------------------------
  
@@ -240,6 +249,8 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +    /// Framebuffer each ring's descriptors were built against; null = never
 +    /// built.
 +    pub(crate) ring_fb: [*const (); crate::DESCRIPTOR_RINGS],
++    /// Caller's tag for the frame in each ring's framebuffer (Gitea #395).
++    pub(crate) ring_tag: [u32; crate::DESCRIPTOR_RINGS],
 +    /// Ring the DMA was executing when the pending flip was armed. Its tail is
 +    /// restored to its own head once the flip lands.
 +    pub(crate) flip_from: usize,
@@ -253,7 +264,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
      pub(crate) current_fb_ptr: *const (),
  }
  
-@@ -140,6 +170,142 @@
+@@ -140,6 +172,217 @@
  #[allow(clippy::type_complexity)]
  static CLEAR_INTERRUPT: Mutex<RefCell<Option<fn()>>> = Mutex::new(RefCell::new(None));
  
@@ -339,6 +350,81 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +
 +/// How many recent short passes [`Hub75::pass_shorts`] keeps.
 +pub const SHORT_LOG_LEN: usize = 8;
++
++/// Descriptors of clearance from the ring tail that `swap` needs before it
++/// will trust the next EOF as the switch. MUST exceed the GDMA descriptor
++/// prefetch depth -- see the note in `swap`. 16 is ~4x any plausible depth and
++/// still leaves the steady-state arm phase (idx ~214 of 254) on the fast path.
++pub const FAST_MARGIN: usize = 16;
++
++/// How many recently displayed frame tags [`Hub75::shown_log`] keeps.
++///
++/// The caller tags each frame it swaps in ([`Hub75::set_swap_tag`]) and the
++/// ISR records the tag of the ring the panel actually scanned out, so the log
++/// IS the displayed frame sequence. Logging the tag rather than a framebuffer
++/// pointer matters: a pointer has to be mapped back to a frame by the caller
++/// afterwards, and that mapping goes stale the moment the buffer is reused —
++/// which manufactured phantom skips in the first version of this.
++pub const SHOWN_LOG_LEN: usize = 64;
++/// Tag the next `swap` will attach to the ring it flips to.
++#[cfg(feature = "circular-dma")]
++static NEXT_TAG: AtomicU32 = AtomicU32::new(0);
++
++// Skip/repeat detection lives HERE, in the ISR, and not in the caller.
++//
++// The caller cannot do it safely: it has to snapshot a ring buffer the ISR is
++// concurrently writing, so entries near the write cursor are racy and read
++// out of order. That produced phantom skips twice while chasing this — a
++// backwards blip of one stale tag reads as a forward jump of the same size on
++// the next entry. The ISR sees every pass exactly once, in order, with no
++// snapshot involved, so the comparison is exact by construction.
++/// Tag displayed by the previous pass; 0 = none yet.
++#[cfg(feature = "circular-dma")]
++static PREV_SHOWN_TAG: AtomicU32 = AtomicU32::new(0);
++/// Frames composed but never scanned out (a displayed tag more than one past
++/// the previous). THE number for this bug.
++#[cfg(feature = "circular-dma")]
++static SHOWN_SKIPS: AtomicU32 = AtomicU32::new(0);
++/// Passes that re-displayed the frame already shown.
++#[cfg(feature = "circular-dma")]
++static SHOWN_REPEATS: AtomicU32 = AtomicU32::new(0);
++/// Passes compared (both tags known and in order).
++#[cfg(feature = "circular-dma")]
++static SHOWN_PASSES: AtomicU32 = AtomicU32::new(0);
++
++/// Landings taken while the engine was demonstrably still looping the OLD
++/// ring (Gitea #395).
++///
++/// The test has to be stated carefully. At an EOF, `OUT_DSCR` usually still
++/// reads the tail of the ring that just finished, which is ambiguous — it
++/// looks the same whether or not the tail followed the rewritten `next`. But
++/// if `OUT_DSCR` is inside the old ring's BODY rather than at its tail, the
++/// engine has wrapped to that ring's head and the flip provably did NOT
++/// happen. A landing there is false, and a false landing is the whole bug:
++/// the caller is handed back a buffer that is still pending display, composes
++/// the next frame over it, and the ISR's restore undoes the flip.
++#[cfg(feature = "circular-dma")]
++static LANDING_MISMATCH: AtomicU32 = AtomicU32::new(0);
++/// Swaps armed while a previous flip was still pending — the double-arm that
++/// a false landing would produce. Correct double buffering cannot do this.
++#[cfg(feature = "circular-dma")]
++static DOUBLE_ARM: AtomicU32 = AtomicU32::new(0);
++/// Set when the OUT_DSCR early-landing shortcut is compiled out, so the
++/// A/B is visible in the reported numbers rather than only in the build.
++#[cfg(feature = "circular-dma")]
++pub const EARLY_LANDING_ENABLED: bool = true;
++/// Tag of the frame actually scanned out by each of the last passes.
++#[cfg(feature = "circular-dma")]
++static SHOWN_FB: [AtomicU32; SHOWN_LOG_LEN] = [const { AtomicU32::new(0) }; SHOWN_LOG_LEN];
++#[cfg(feature = "circular-dma")]
++static SHOWN_N: AtomicU32 = AtomicU32::new(0);
++/// Descriptor index the most recent swap armed at.
++#[cfg(feature = "circular-dma")]
++static LAST_ARM_IDX: AtomicU32 = AtomicU32::new(0);
++/// Highest arm index ever taken on the FAST path. If a skip is ever seen, this
++/// bounds the prefetch depth from below.
++#[cfg(feature = "circular-dma")]
++static MAX_FAST_ARM_IDX: AtomicU32 = AtomicU32::new(0);
 +#[cfg(feature = "circular-dma")]
 +static SHORT_US: [AtomicU32; SHORT_LOG_LEN] = [const { AtomicU32::new(0) }; SHORT_LOG_LEN];
 +#[cfg(feature = "circular-dma")]
@@ -396,7 +482,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  fn signal_swap_done(cs: critical_section::CriticalSection) {
      SWAP_DONE.store(true, Ordering::Release);
      if let Some(waker) = SWAP_WAKER.borrow_ref_mut(cs).take() {
-@@ -280,6 +446,16 @@
+@@ -280,6 +523,16 @@
  // Frame-boundary ISR (circular-dma)
  // ---------------------------------------------------------------------------
  
@@ -413,7 +499,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  #[cfg(feature = "circular-dma")]
  #[handler]
  #[cfg_attr(feature = "iram", ram)]
-@@ -288,7 +464,157 @@
+@@ -288,7 +541,242 @@
          if let Some(clear) = CLEAR_INTERRUPT.borrow_ref(cs).as_ref() {
              (clear)();
          }
@@ -449,6 +535,55 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +            }
 +            None => u32::MAX,
 +        };
++        // Which framebuffer did the pass that just ended actually scan out?
++        // At the EOF, OUT_DSCR is on (or just past) the tail of the ring that
++        // finished, so its ring index names the buffer the panel just showed.
++        // Logging the POINTER lets the caller map it back to its own frame
++        // sequence without the driver knowing anything about frames: this is
++        // the firmware-side equivalent of reading columns off the video, and
++        // it is the only ground truth for "was that frame ever displayed?".
++        if lat != u32::MAX {
++            let fb = {
++                let borrow2 = CIRCULAR_STATE.borrow_ref(cs);
++                match borrow2.as_ref() {
++                    Some(st) => {
++                        let per = core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++                        let ring_bytes = st.desc_count * per;
++                        let cur = DMA_PROBE
++                            .borrow_ref(cs)
++                            .as_ref()
++                            .map_or(0usize, |probe| (probe)().0);
++                        if ring_bytes == 0 || cur < st.descriptors as usize {
++                            None
++                        } else {
++                            let r = (cur - st.descriptors as usize) / ring_bytes;
++                            if r < crate::DESCRIPTOR_RINGS {
++                                Some(st.ring_tag[r])
++                            } else {
++                                None
++                            }
++                        }
++                    }
++                    None => None,
++                }
++            };
++            if let Some(tag) = fb {
++                let i = SHOWN_N.fetch_add(1, Ordering::Relaxed) as usize % SHOWN_LOG_LEN;
++                SHOWN_FB[i].store(tag, Ordering::Relaxed);
++                if tag != 0 {
++                    let prev = PREV_SHOWN_TAG.swap(tag, Ordering::Relaxed);
++                    if prev != 0 {
++                        SHOWN_PASSES.fetch_add(1, Ordering::Relaxed);
++                        let gap = tag.wrapping_sub(prev);
++                        if gap == 0 {
++                            SHOWN_REPEATS.fetch_add(1, Ordering::Relaxed);
++                        } else if gap > 1 && gap < 0x8000_0000 {
++                            SHOWN_SKIPS.fetch_add(gap - 1, Ordering::Relaxed);
++                        }
++                    }
++                }
++            }
++        }
 +        let prev_lat = PASS_LAST_LAT.swap(lat, Ordering::Relaxed);
 +        if lat != u32::MAX {
 +            PASS_LAT_MAX.fetch_max(lat, Ordering::Relaxed);
@@ -542,9 +677,15 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +        // `out_eof` that woke us means the descriptor that raised it has been
 +        // read from memory in full, so under either proof the old framebuffer
 +        // is done being read.
-+        let ring_bytes = state.desc_count * core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++        let per = core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++        let ring_bytes = state.desc_count * per;
 +        let mut landed = state.flip_eofs >= state.flip_eofs_needed;
-+        if !landed {
++        // EXPERIMENT (Gitea #395): the OUT_DSCR early-landing shortcut is the
++        // one landing path shared by the fast and two-EOF routes, and raising
++        // FAST_MARGIN 3 -> 16 moved slow_path 10x without moving the skip
++        // rate — which points here rather than at arming. Compiled out to
++        // test that; see EARLY_LANDING_ENABLED.
++        if EARLY_LANDING_ENABLED && !landed {
 +            if let Some(probe) = DMA_PROBE.borrow_ref(cs).as_ref() {
 +                let (cur, _) = (probe)();
 +                let lo = state.descriptors as usize + state.ring * ring_bytes;
@@ -553,6 +694,36 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +        }
 +        if !landed {
 +            return;
++        }
++        // VETO (Gitea #395). A landing means "the engine has left the old
++        // ring", and here that can be CHECKED rather than inferred. If
++        // OUT_DSCR is inside the old ring's BODY — not merely at its tail,
++        // which is ambiguous right at the EOF — then the engine wrapped to
++        // that ring's head and the flip provably did not happen. Landing then
++        // is the bug in full: the caller is handed back a buffer still pending
++        // display, composes the next frame over it, and the restore below
++        // undoes the flip, so that frame is never shown and the next is shown
++        // twice.
++        //
++        // Measured on the bench with this as a bare counter and the EOF-count
++        // rule left in charge: 23 violations in ~12,000 passes, with the
++        // OUT_DSCR early-landing shortcut compiled out — so the count rule
++        // itself lands falsely, and no margin on the ARMING side can fix it.
++        // Vetoing costs nothing when the flip did happen and turns the
++        // remaining cases into a one-pass repeat instead of a lost frame.
++        if let Some(probe) = DMA_PROBE.borrow_ref(cs).as_ref() {
++            let (cur, _) = (probe)();
++            let old_lo = state.descriptors as usize + state.flip_from * ring_bytes;
++            if cur >= old_lo && cur < old_lo + ring_bytes {
++                let idx = (cur - old_lo) / per;
++                if idx + 1 < state.desc_count {
++                    LANDING_MISMATCH.fetch_add(1, Ordering::Relaxed);
++                    // Not landed after all: leave the flip armed and the old
++                    // ring's tail still pointing at the new ring, so the
++                    // engine takes it on its next wrap.
++                    return;
++                }
++            }
 +        }
 +
 +        // Make the ring we just left self-contained again, ready to be the
@@ -572,7 +743,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
          signal_swap_done(cs);
      });
  }
-@@ -331,15 +657,27 @@
+@@ -331,15 +819,28 @@
      xfer: TxTransfer,
      desc_ptr: *mut esp_hal::dma::DmaDescriptor,
      desc_count: usize,
@@ -589,6 +760,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +            ring_count,
 +            ring: 0,
 +            ring_fb,
++            ring_tag: [0; crate::DESCRIPTOR_RINGS],
 +            flip_from: 0,
 +            flip_eofs: 0,
 +            flip_eofs_needed: 2,
@@ -600,7 +772,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
      });
  }
  
-@@ -350,6 +688,15 @@
+@@ -350,6 +851,15 @@
      });
  }
  
@@ -616,7 +788,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  // ---------------------------------------------------------------------------
  // Public driver handle
  // ---------------------------------------------------------------------------
-@@ -374,8 +721,11 @@
+@@ -374,8 +884,11 @@
  ///
  /// # Buffer Swapping
  ///
@@ -630,7 +802,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  /// - [`Hub75Swap::wait()`] — spin-loops until the DMA is guaranteed to no
  ///   longer read from the old buffer, then returns it.
  /// - [`Hub75Swap::wait_for_done()`] — yields to the executor (async contexts).
-@@ -436,6 +786,86 @@
+@@ -436,6 +949,156 @@
      pub fn frame_count(&self) -> u32 {
          FRAME_COUNT.load(Ordering::Relaxed)
      }
@@ -692,6 +864,41 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +        }
 +    }
 +
++    /// Luxel local patch (Gitea #395): tag the next swapped-in frame, so the
++    /// displayed-frame log reads back as the caller's own sequence.
++    pub fn set_swap_tag(&self, tag: u32) {
++        #[cfg(feature = "circular-dma")]
++        NEXT_TAG.store(tag, Ordering::Relaxed);
++        #[cfg(not(feature = "circular-dma"))]
++        let _ = tag;
++    }
++
++    /// Luxel local patch (Gitea #395): which framebuffer each of the last
++    /// passes actually scanned out (newest last), the total pass count, the
++    /// descriptor index the last swap armed at, and the highest arm index ever
++    /// taken on the fast path. The caller maps the pointers back to its own
++    /// frame sequence; a pointer that never appears is a frame the panel never
++    /// displayed.
++    pub fn shown_log(&self) -> (u32, [u32; SHOWN_LOG_LEN], u32, u32) {
++        #[cfg(feature = "circular-dma")]
++        {
++            let mut out = [0u32; SHOWN_LOG_LEN];
++            for (k, slot) in out.iter_mut().enumerate() {
++                *slot = SHOWN_FB[k].load(Ordering::Relaxed);
++            }
++            (
++                SHOWN_N.load(Ordering::Relaxed),
++                out,
++                LAST_ARM_IDX.load(Ordering::Relaxed),
++                MAX_FAST_ARM_IDX.load(Ordering::Relaxed),
++            )
++        }
++        #[cfg(not(feature = "circular-dma"))]
++        {
++            (0, [0; SHOWN_LOG_LEN], 0, 0)
++        }
++    }
++
 +    /// Luxel local patch (Gitea #387): swap diagnostics, `(eof_race,
 +    /// slow_path)`.
 +    ///
@@ -701,6 +908,41 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +    /// AND undoes the flip. `slow_path` counts swaps that took the two-EOF
 +    /// fallback for any reason, each costing one extra panel frame of
 +    /// latency. Both 0 without `circular-dma`.
++    /// Luxel local patch (Gitea #395): `(skips, repeats, passes)` measured in
++    /// the ISR, which sees every pass exactly once and in order — the only
++    /// place this can be counted without racing a snapshot.
++    pub fn shown_counts(&self) -> (u32, u32, u32) {
++        #[cfg(feature = "circular-dma")]
++        {
++            (
++                SHOWN_SKIPS.load(Ordering::Relaxed),
++                SHOWN_REPEATS.load(Ordering::Relaxed),
++                SHOWN_PASSES.load(Ordering::Relaxed),
++            )
++        }
++        #[cfg(not(feature = "circular-dma"))]
++        {
++            (0, 0, 0)
++        }
++    }
++
++    /// Luxel local patch (Gitea #395): `(landing_mismatch, double_arm)` —
++    /// landings taken while the engine was provably still looping the old
++    /// ring, and swaps armed over a pending flip.
++    pub fn landing_stats(&self) -> (u32, u32) {
++        #[cfg(feature = "circular-dma")]
++        {
++            (
++                LANDING_MISMATCH.load(Ordering::Relaxed),
++                DOUBLE_ARM.load(Ordering::Relaxed),
++            )
++        }
++        #[cfg(not(feature = "circular-dma"))]
++        {
++            (0, 0)
++        }
++    }
++
 +    pub fn swap_stats(&self) -> (u32, u32) {
 +        #[cfg(feature = "circular-dma")]
 +        {
@@ -717,7 +959,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  }
  
  #[cfg(not(feature = "circular-dma"))]
-@@ -495,9 +925,12 @@
+@@ -495,9 +1158,12 @@
  /// directly for a blocking spin-loop.
  ///
  /// In non-circular mode, "safe" means the ISR has hit a frame boundary and
@@ -733,7 +975,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
  pub struct Hub75Swap<FB: 'static> {
      old_fb_ptr: *mut FB,
      #[cfg(not(feature = "circular-dma"))]
-@@ -667,10 +1100,23 @@
+@@ -667,10 +1333,23 @@
  impl<DM: esp_hal::DriverMode, FB: FrameBuffer + 'static> Hub75<DM, FB> {
      /// Initiate a framebuffer swap (circular-DMA mode).
      ///
@@ -761,7 +1003,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
      /// [`.wait()`](Hub75Swap::wait), or just `.wait()` directly for blocking.
      ///
      /// # Panics
-@@ -678,10 +1124,131 @@
+@@ -678,10 +1357,172 @@
      /// Panics if the driver has not been initialised (no `Hub75` instance
      /// was created).
      pub fn swap(&self, new_fb: &'static mut FB) -> Hub75Swap<FB> {
@@ -774,6 +1016,10 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +            !SWAP_ARMED.load(Ordering::Acquire),
 +            "Hub75::swap called while the previous swap is still pending"
 +        );
++        if SWAP_ARMED.load(Ordering::Acquire) {
++            #[cfg(feature = "circular-dma")]
++            DOUBLE_ARM.fetch_add(1, Ordering::Relaxed);
++        }
 +        while SWAP_ARMED.load(Ordering::Acquire) {
 +            core::hint::spin_loop();
 +        }
@@ -831,6 +1077,29 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +                // The shortcut: if the DMA is still comfortably short of the
 +                // ring's tail, the tail cannot have been fetched yet, so it
 +                // WILL read the `next` just written and the very NEXT EOF is
++                // the switch.
++                //
++                // FAST_MARGIN must exceed the GDMA descriptor PREFETCH depth,
++                // and that is the whole ballgame. OUT_DSCR reports the
++                // descriptor being transmitted, but the engine has already
++                // read the link field of several descriptors ahead of it. Arm
++                // inside that shadow and the tail has latched the OLD `next`
++                // while OUT_DSCR still reads short of it: the flip does not
++                // happen this pass, `needed == 1` treats the next EOF as the
++                // switch anyway, and the ISR restore then UNDOES the flip. The
++                // frame swapped in is never displayed and the next is shown
++                // twice -- a skip with the frame count conserved, which is
++                // what was filmed on the bench. The window is
++                // (prefetch - margin) descriptors, and the steady-state arm
++                // phase (idx ~214 of 254) only walks into it when something
++                // delays the compose, which is why the fault is intermittent
++                // and tracks load. tools/ringsim.py reproduces it: at margin 3
++                // with prefetch 8 and compose jitter, 5,003 skips; at margin
++                // 16 or 32, zero.
++                //
++                // The original wording follows, still true:
++                // ring's tail, the tail cannot have been fetched yet, so it
++                // WILL read the `next` just written and the very NEXT EOF is
 +                // the switch. The probe is read AFTER the store, so a reading
 +                // short of the tail means the store beat the tail's fetch;
 +                // two spare descriptors of margin (tens of microseconds of
@@ -863,12 +1132,25 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +                        SWAP_EOF_RACE.fetch_add(1, Ordering::Relaxed);
 +                        LAST_RACE_FRAME.store(FRAME_COUNT.load(Ordering::Relaxed), Ordering::Relaxed);
 +                    }
-+                    if !eof_pending && cur >= lo && idx + 3 <= n {
++                    if !eof_pending && cur >= lo && idx + FAST_MARGIN <= n {
 +                        needed = 1;
 +                    }
 +                }
 +                if needed > 1 {
 +                    SWAP_SLOW_PATH.fetch_add(1, Ordering::Relaxed);
++                }
++                {
++                    let per = core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++                    let lo = base as usize + from * n * per;
++                    let cur = DMA_PROBE
++                        .borrow_ref(cs)
++                        .as_ref()
++                        .map_or(0usize, |probe| (probe)().0);
++                    let idx = if cur >= lo { (cur - lo) / per } else { 0 };
++                    LAST_ARM_IDX.store(idx as u32, Ordering::Relaxed);
++                    if needed == 1 {
++                        MAX_FAST_ARM_IDX.fetch_max(idx as u32, Ordering::Relaxed);
++                    }
 +                }
 +                // Mark the pass this swap was armed in, and which landing rule
 +                // it chose, so a short pass can be blamed on (or cleared of)
@@ -878,6 +1160,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
 +                        | if needed == 1 { pass_flag::LANDING_FAST } else { 0 },
 +                    Ordering::Relaxed,
 +                );
++                state.ring_tag[to] = NEXT_TAG.load(Ordering::Relaxed);
 +                state.ring = to;
 +                state.flip_from = from;
 +                state.flip_eofs = 0;
@@ -893,7 +1176,7 @@ Cost: one extra descriptor ring in .bss. On the bench panel
              let delta = new_fb_ptr as isize - state.current_fb_ptr as isize;
              // SAFETY: `descriptors` points to a `&'static mut` descriptor
              // array that outlives everything. The DMA engine reads descriptor
-@@ -697,7 +1264,10 @@
+@@ -697,7 +1538,10 @@
              //     within a single contiguous `FB` allocation — both old and
              //     new framebuffers have identical internal layout.
              //  4. The worst-case visual artifact is one partially-mixed frame
