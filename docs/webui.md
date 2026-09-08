@@ -198,6 +198,38 @@ each band appears, clears, and doesn't block the push; then a third claiming
 the same 30 KB free *plus* a 30 KB resident engine, where the pattern the
 second mirror correctly rejects now fits (the Gitea #287 regression).
 
+## Status-bar frame rate ✅ (Gitea #381)
+
+The counter at the right of the header (`data-role="fps"`) shows **the device's
+own frame rate whenever a device is connected**, not this browser's preview
+loop — the two are unrelated numbers, and the browser's is meaningless as a
+report on the hardware.
+
+- **Playground (no device):** `60 fps` — the requestAnimationFrame EMA, the
+  only frame rate a hardware-free session has.
+- **Device, strip board:** `device 25 fps`, from `/api/status` `fps`. A strip
+  renders and writes on the same loop, so render == wire == displayed.
+- **Device, pipelined HUB75 board:** `device 112 fps (panel)`, from `out_fps`
+  — frames the panel actually displayed (#378/#394). `fps` there is the
+  *render* rate and can run well ahead of the wire, so it is not the number to
+  put in front of a user. `out_fps` has been bounded by `rescan_hz` since
+  #394, so it is shown as measured rather than clamped against the ceiling;
+  the tooltip carries `rescan_hz`, the render rate and the local preview rate.
+- The **local preview** number keeps its own labelled home on the Settings tab
+  ("N fps (local preview)") and rides in the status-bar tooltip.
+
+Source: one 1 Hz `GET /api/status` poll for the whole session while a device is
+connected (`refreshCapacityFromDevice`, which the push path already calls for
+heap headroom and `vmerr`). Not faster — one playground tab at 1 Hz is the load
+the panel's compose window is measured against (`tools/panel-load-bench.mjs`),
+and a tighter poll starves slow patterns (#259).
+
+**Testing without hardware.** `luxel serve --fps N` paces the mirror's render
+loop at a known rate (the readout must follow it, not the ~60 Hz preview loop),
+and `--out-fps N --rescan-hz HZ` make it impersonate a pipelined panel board so
+the `(panel)` label and the tooltip's ceiling are exercised without a HUB75
+rig. device-e2e asserts both.
+
 ## Settings page 🔧 [L]
 
 A real device needs a settings surface (page/dialog). Fields:

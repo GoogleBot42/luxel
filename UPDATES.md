@@ -1,5 +1,33 @@
 # Update log
 
+## 2026-09-07 — playground: the status-bar FPS is the DEVICE's rate (Gitea #381)
+
+The header counter was an EMA of `requestAnimationFrame` deltas — this
+browser's preview loop, which says nothing about the hardware. Connected, it
+now reports the device's own rate from `/api/status`.
+
+* **Which number.** `out_fps` when it is non-zero (a pipelined HUB75 board:
+  frames the panel actually DISPLAYED since #394), else `fps` (a strip renders
+  and writes on one loop, so render == wire). Shown as measured, not clamped
+  to `rescan_hz` — `out_fps` has been bounded by the rescan since #394, so a
+  `min()` would only hide a real number. Labelled honestly: `device 25 fps`
+  vs `device 112 fps (panel)`, with `rescan_hz`, the device's render rate and
+  the local preview rate in the tooltip. The preview number keeps its own
+  "N fps (local preview)" home on the Settings tab.
+* **Poll.** One 1 Hz `GET /api/status` while a device is connected, reusing
+  `refreshCapacityFromDevice` (the same GET the push path already makes for
+  heap headroom and `vmerr`). No faster: one playground tab at 1 Hz is the
+  load `tools/panel-load-bench.mjs` measures the panel's compose window
+  against, and a tighter poll starves slow patterns (#259).
+* **`luxel serve` grew `--fps N`, `--out-fps N`, `--rescan-hz HZ`** so the
+  mirror can be paced at a known rate and impersonate a panel board — the same
+  trick `--heap-free`/`--engine-heap` already play for the capacity warning.
+  Its `/api/status` now emits `out_fps`/`rescan_hz` (0 by default) like the
+  firmware does, rather than omitting them.
+* **device-e2e** asserts the readout on a 24 fps mirror (tracks the device,
+  not the 60 Hz preview loop) and on a second mirror impersonating a
+  112 fps / 115 Hz panel (`(panel)` label + tooltip ceiling).
+
 ## 2026-09-07 — docs: bulk-render canvas ceiling, exact cell coordinates, devshell PATH
 
 Corrections the Aurora 2D conversion (#406) turned up, written back into

@@ -172,6 +172,17 @@ struct State {
     inbox: Mutex<Vec<Msg>>,
     pixels: Mutex<Vec<u8>>,
     fps: AtomicU32,
+    /// Milliseconds the render loop sleeps between frames — `--fps N` sets it
+    /// to 1000/N so the mirror reports a KNOWN `/api/status` `fps`, which is
+    /// how a client that displays the device's frame rate (Gitea #381) gets
+    /// tested without hardware. 0 keeps the default ~8 ms strip-ish pace.
+    frame_ms: AtomicU32,
+    /// `--out-fps` / `--rescan-hz`: a pipelined HUB75 board's displayed frame
+    /// rate and its panel rescan ceiling (Gitea #378/#394). The mirror drives
+    /// no panel, so these are pure impersonation — 0 (the default) is what a
+    /// strip board reports, and a client must fall back to `fps` there.
+    out_fps: AtomicU32,
+    rescan_hz: AtomicU32,
     vmerr: Mutex<Option<String>>,
     pattern_src: Mutex<String>,
     /// LXBC blob of the running pattern (GET /api/pattern.lxp — sync adopt).
@@ -749,9 +760,15 @@ fn status_json(state: &State) -> String {
     };
     // max_pixels mirrors the firmware's per-board cap field (#74); the
     // mirror is a strip device, so it reports the strip cap.
+    // out_fps/rescan_hz mirror the firmware fields (#378/#394): the firmware
+    // always emits them and reports 0 where they mean nothing, so the mirror
+    // does the same rather than omitting them (a client must tell "0, this is
+    // a strip" from "absent, this firmware is old" the same way on both).
     format!(
-        "{{\"fps\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
+        "{{\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
         fps,
+        state.out_fps.load(Ordering::Relaxed),
+        state.rescan_hz.load(Ordering::Relaxed),
         state.pixel_count.load(Ordering::Relaxed),
         MAX_PIXELS,
         env!("CARGO_PKG_VERSION"),
@@ -1131,8 +1148,10 @@ fn render_loop(state: Arc<State>) {
             fps_mark = Instant::now();
         }
 
-        // pace roughly like a strip-bound device rather than spinning a core
-        std::thread::sleep(Duration::from_millis(8));
+        // pace roughly like a strip-bound device rather than spinning a core;
+        // `--fps N` overrides it so `/api/status` reports a known rate (#381)
+        let ms = state.frame_ms.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(if ms == 0 { 8 } else { ms as u64 }));
     }
 }
 
@@ -1936,6 +1955,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut heap_free: u32 = 0;
     // 0 = "this firmware doesn't report it"; see State::engine_heap
     let mut engine_heap: u32 = 0;
+    // 0 = the default ~8 ms pace; see State::frame_ms
+    let mut frame_ms: u32 = 0;
+    // 0 = "not a pipelined panel board"; see State::out_fps
+    let mut out_fps: u32 = 0;
+    let mut rescan_hz: u32 = 0;
     // Luxel-to-Luxel sync transport (overridable so e2e can run two
     // mirrors over loopback; the firmware broadcasts on the LAN)
     let mut sync_target = String::from("255.255.255.255");
@@ -1962,6 +1986,21 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 Ok(n) => engine_heap = n,
                 Err(_) => return super::usage(),
             },
+            // pace the render loop at a KNOWN rate, so `/api/status` `fps`
+            // is a number a test can assert on (Gitea #381)
+            ("--fps", Some(v)) => match v.parse::<u32>() {
+                Ok(n) if n > 0 => frame_ms = 1000 / n.min(1000),
+                _ => return super::usage(),
+            },
+            // impersonate a pipelined HUB75 board (#378/#394)
+            ("--out-fps", Some(v)) => match v.parse() {
+                Ok(n) => out_fps = n,
+                Err(_) => return super::usage(),
+            },
+            ("--rescan-hz", Some(v)) => match v.parse() {
+                Ok(n) => rescan_hz = n,
+                Err(_) => return super::usage(),
+            },
             ("--sync-target", Some(v)) => sync_target = v.clone(),
             ("--sync-port", Some(v)) => match v.parse() {
                 Ok(n) => sync_port = n,
@@ -1982,6 +2021,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         inbox: Mutex::new(Vec::new()),
         pixels: Mutex::new(Vec::new()),
         fps: AtomicU32::new(0),
+        frame_ms: AtomicU32::new(frame_ms),
+        out_fps: AtomicU32::new(out_fps),
+        rescan_hz: AtomicU32::new(rescan_hz),
         vmerr: Mutex::new(None),
         pattern_src: Mutex::new(String::new()),
         pattern_bc: Mutex::new(Vec::new()),

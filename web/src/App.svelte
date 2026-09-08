@@ -67,6 +67,14 @@
   let analogValues: Record<number, number> = {};
   let fps = 0;
   let targetFps = 60;
+  /** The connected device's own frame rate, from `/api/status` (Gitea #381).
+   *  `deviceFps` is what the pattern RENDERED; `deviceOutFps` is what a
+   *  pipelined HUB75 board actually DISPLAYED (0 on a strip, where `fps` is
+   *  the displayed rate); `deviceRescanHz` is the panel's refresh ceiling.
+   *  All three are 0 until the first status poll answers. */
+  let deviceFps = 0;
+  let deviceOutFps = 0;
+  let deviceRescanHz = 0;
   let running = true;
   let loadFailure = "";
   /** The editor's source differs from the pattern it was loaded from / saved
@@ -673,6 +681,47 @@
     }
   }
 
+  // ---- device frame rate, shown in the status bar (Gitea #381) ----
+  // ONE 1 Hz `/api/status` poll for the whole session while a device is
+  // connected, so the counter shows the device's rate rather than this
+  // browser's preview loop. Deliberately no faster: a playground tab at 1 Hz
+  // is the load the panel's compose window is already measured against
+  // (docs/tools.md, panel-load-bench), and a tighter poll starves slow
+  // patterns (#259). It reuses refreshCapacityFromDevice — the same GET the
+  // push path already makes — so this adds no new route and no second poll.
+  let statusPoll: ReturnType<typeof setInterval> | undefined;
+  $: {
+    clearInterval(statusPoll);
+    if (device) {
+      statusPoll = setInterval(() => void refreshCapacityFromDevice(), 1000);
+    }
+  }
+
+  /** What the status-bar counter says, and what it is allowed to claim.
+   *  Connected: the DEVICE's own rate — `out_fps` on a pipelined HUB75 board
+   *  (frames the panel displayed), else `fps` (a strip renders and writes in
+   *  the same loop, so there render == wire). `out_fps` has been bounded by
+   *  `rescan_hz` since #394, so it is shown as measured rather than clamped
+   *  to the ceiling; the ceiling goes in the tooltip. Not connected: the
+   *  browser preview loop, which is the only frame rate a playground has. */
+  $: fpsReadout = !device
+    ? {
+        text: `${fps.toFixed(0)} fps`,
+        title: "local preview loop in this browser tab",
+      }
+    : deviceOutFps > 0
+      ? {
+          text: `device ${deviceOutFps} fps (panel)`,
+          title:
+            `${deviceOutFps} fps displayed by the panel (out_fps)` +
+            (deviceRescanHz ? `, panel rescan ${deviceRescanHz} Hz` : "") +
+            ` — device render loop ${deviceFps} fps, local preview ${fps.toFixed(0)} fps`,
+        }
+      : {
+          text: `device ${deviceFps} fps`,
+          title: `${deviceFps} fps rendered by the device — local preview ${fps.toFixed(0)} fps`,
+        };
+
   // ---- network input (DDP/E1.31) status, shown on the Settings tab ----
   let netLive: "ddp" | "e131" | null = null;
   let netPoll: ReturnType<typeof setInterval> | undefined;
@@ -955,6 +1004,9 @@
       if (capFromStatus) pixelMax = capFromStatus;
       deviceHeapFree = st.heap_free ?? 0; // 0 on a mirror / older firmware
       deviceEngineHeap = st.engine_heap ?? 0; // 0 on pre-#287 firmware
+      deviceFps = st.fps; // seed the status-bar readout from the handshake
+      deviceOutFps = st.out_fps ?? 0;
+      deviceRescanHz = st.rescan_hz ?? 0;
       deviceVmerr = st.vmerr;
       layout = { kind: "strip", pixels: st.pixels };
       if (pullPattern) {
@@ -1068,6 +1120,9 @@
       const st = await device.status();
       deviceHeapFree = st.heap_free ?? 0;
       deviceEngineHeap = st.engine_heap ?? 0;
+      deviceFps = st.fps;
+      deviceOutFps = st.out_fps ?? 0;
+      deviceRescanHz = st.rescan_hz ?? 0;
       if (st.max_pixels) pixelMax = st.max_pixels; // per-board cap (#74)
       deviceVmerr = st.vmerr;
       if (!compileError) checkCapacity(); // fresh headroom → fresh verdict
@@ -2098,6 +2153,8 @@ export function render(index) {
     clearTimeout(mapDebounce);
     clearTimeout(playlistDebounce);
     clearInterval(playlistPoll);
+    clearInterval(statusPoll);
+    clearInterval(netPoll);
     engine?.free();
     mapEngine?.free();
     mic.stop();
@@ -2194,7 +2251,7 @@ export function render(index) {
 
     <span class="spacer"></span>
 
-    <span class="mono dim" data-role="fps">{fps.toFixed(0)} fps</span>
+    <span class="mono dim" data-role="fps" title={fpsReadout.title}>{fpsReadout.text}</span>
   </header>
 
   <!-- Browser-blocked device connection (#162). Not an error the app can
