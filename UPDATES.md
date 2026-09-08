@@ -1,5 +1,50 @@
 # Update log
 
+## 2026-09-07 — patlog: a pinned file no longer costs the store the space under it (#388)
+
+The Athom rig's store was silently a third of its size: a full `library/`
+fill refused at **49 patterns instead of 119**, with 434,176 B — 58 % of the
+arena — sitting unreclaimable across every compaction, and `store.dead`
+never coming back to 0 the way PR #383 claimed it would.
+
+* **Root cause, two halves.** `patterns::pin_code(id)` is set *before* a
+  library decode and was **never released**, so pin slot 0 named the last
+  library pattern the device ever decoded for the rest of the boot. A
+  compaction treats a pinned seq as frozen, so `patlog::plan` left that
+  record at its own (high) offset and returned its end as the packed length
+  — even after the pattern had been deleted. The second half is structural:
+  the write cursor is a high-water mark and `patlog::place` only ever looks
+  *upward* from it, so every page the repack freed **below** the frozen
+  record was erased, free, and unreachable. The rig's simplest case (117
+  patterns deleted, one 8,340 B save) reclaimed 383,640 B and stopped with
+  364,960 B under a stale pin.
+* **Fixes.** `patterns::unpin_code()`, called at the end of `render_task`'s
+  library-swap arm, so slot 0 lives exactly as long as the decode window.
+  `patlog::place_free` reaches free space the cursor cannot see — the lowest
+  wholly-erased page run, or the exact bytes after the last file placed that
+  way (`FREE_HINT`), so a hole packs as densely as the log proper; its whole
+  safety argument is that **erased flash holds no record**, and both branches
+  check every byte the append will write *and* every byte its `Erase` step
+  will erase. `patlog::free_run_after` lets `compact()` stop refusing on the
+  tail alone, since with a pin holding the cursor high everything the repack
+  opens up is below it. And the closing sweep's result is no longer
+  discarded — a failure now shows on the `patterns: compacted —` line.
+* **Host coverage** (`tools/patlog-check`, whose `store.rs` mirrors
+  `patterns.rs` step for step): `one_save_reclaims_a_wholly_dead_log` (the
+  issue comment's exact shape — `dead` must be 0),
+  `a_pin_high_in_a_dead_log_does_not_cost_the_store_its_capacity` and
+  `a_pin_on_the_highest_live_file_...` (126 of a 126-pattern baseline, was 4
+  with a live pin at the top), `a_compaction_reclaims_a_log_damaged_between_
+  its_records` (interleaved torn regions),
+  `a_healthy_logs_residue_is_zero_and_a_pinned_ones_is_under_a_page` (#388
+  §4: on a healthy log the residue is exactly 0, not 4 KB), plus
+  `place_free_only_ever_returns_erased_space`,
+  `place_free_packs_against_its_hint` and
+  `free_run_after_counts_the_pages_no_placement_covers` in `patlog`'s own
+  suite. Every one of them asserts the live set is byte-identical after
+  every save. 34 tests green.
+* **Cost:** +1,728 B on board-athom-music (margin 3.58 %) and +1,872 B on
+  board-c6-devkit (1.80 %, already under image-check's floor — #310).
 ## 2026-09-07 — `2d-fireworks-fade` does not convert, and why (#405)
 
 Closes out the batch-2 slice of #405. Six of the seven patterns converted

@@ -426,6 +426,21 @@ Rules the code enforces:
   page — 183 + 183 flash ops on a full log, each its own fenced door with a
   1 ms yield; `core1::fenced` feeds the watchdog every 64 fences (#309), so
   a long pass is slow, not fatal.
+- **A pinned file does not cost the store the space under it** (Gitea
+  #388). The cursor is a high-water mark, so a pin high in the log holds it
+  above pages the repack just erased and `patlog::place` — which only ever
+  looks *upward* from the cursor — never sees them. `patlog::place_free` is
+  the fallback that does: the lowest wholly-erased page run big enough, or
+  the exact bytes after the last file placed that way (`FREE_HINT`), so a
+  hole packs as densely as the log proper. Its safety argument is one line —
+  **erased flash holds no record** — and both branches check every byte the
+  append will write *and* every byte its `Erase` step will erase. A save
+  tries it before compacting, which also keeps a pinned log from repacking
+  itself on every single save. For the same reason `compact()` no longer
+  refuses on the tail alone: `patlog::free_run_after` asks what the repack
+  would open up *anywhere*, because with a pin holding the cursor high the
+  answer is all below it. Before this, a stale pin cut the Athom's store
+  from 119 patterns to 49 with 58 % of the arena idle.
 - **A compaction is a total function over the live set.** `patlog::plan`
   checks the placement as it builds it — every record placed exactly once
   and in ascending order, no two overlapping, nothing moving up, a pinned
@@ -472,8 +487,13 @@ Rules the code enforces:
   `total` 0 means the store never came up. `dead` is `cursor − used` —
   everything below the write cursor that the index does not point at, gaps
   included — so it comes back to exactly **0** after a compaction with
-  nothing pinned, and to exactly the hole a frozen page forces when
-  something is pinned.
+  nothing pinned. With something pinned it does NOT: the cursor cannot come
+  down past a frozen record, so `dead` still counts everything under it
+  (the whole span, not just the frozen page — Gitea #388 measured 364,960 B
+  of it on the rig). Since #388 those bytes are *usable* even while they are
+  counted, so `dead` under a pin is an upper bound on what a compaction
+  would reclaim rather than a measure of lost capacity; it falls back to 0
+  on the first compaction after the pin clears.
 
 #### The borrowing invariant and the pin set (Gitea #260)
 
@@ -513,6 +533,14 @@ publishes, three slots plus the current pattern id as belt and braces:
 | 1 | `pin_running(id)` — when the new engine is installed | what the live engine borrows |
 | 2 | `pin_prev_from_running()` — where `prev = engine.take()` | what the crossfade's outgoing engine borrows |
 
+Slot 0 is released by `unpin_code` at the END of the library-swap arm,
+always — the decode window is over by then and whatever it produced is
+either installed (slot 1 names it) or dropped. It has to be: a decode pin
+that is never released names the last library pattern the device ever
+decoded for the rest of the boot, a compaction treats that file as frozen
+even after it has been deleted, and the store loses every byte below it.
+That is Gitea #388, and it is what the rig was actually stuck on.
+
 Slot 2 is released by `unpin_prev`, and `render_task` never writes
 `prev = None` directly: every drop goes through `drop_prev`, which drops
 the engine and then releases the pin. An ad-hoc push (`Msg::Code` /
@@ -523,8 +551,10 @@ its words and `pin_running("")` clears slot 1.
 and leaves a pinned file exactly where it is, and `patlog::frozen_page`
 keeps the executor from erasing any page one occupies, so each pinned file
 splits the free space instead of blocking the pass. Pins are conservative
-by construction — a stale one wastes log bytes until the next swap
-overwrites it, and can never free something live. A pin names a *pattern*,
+by construction — one can never free something live — but a STALE one is
+not free: until #388 it cost every byte below it, and even now it costs the
+frozen record's own bytes and forces the tail allocator down the
+`place_free` path. Release them. A pin names a *pattern*,
 so it holds that pattern's SOURCE as firmly as its bytecode: it is all one
 file. The running pattern's read-back
 (`GET /api/pattern`, the sync envelope) streams the source straight out of

@@ -123,15 +123,15 @@ fn a_compaction_with_a_middle_file_pinned_keeps_every_live_file() {
     assert!(compacted > 0, "the run never compacted — the test proves nothing");
 }
 
-/// Pinning the HIGHEST file makes the tail unreclaimable: a pinned record
-/// never moves, so the packed length can never fall below its end. The
-/// store must then refuse the save — with every file still intact — rather
-/// than repack around it and drop something.
+/// Pinning the HIGHEST file makes the *tail* unreclaimable: a pinned record
+/// never moves, so the packed length can never fall below its end. Every
+/// file must survive that (Gitea #379) — and, since #388, the store must
+/// also still hand back the space the repack frees BELOW the pin instead of
+/// refusing saves with most of the log idle.
 #[test]
-fn a_compaction_blocked_by_a_pinned_tail_refuses_instead_of_losing_files() {
-    let (compacted, refused) = fill_churn_and_check(Some(usize::MAX));
-    assert_eq!(compacted, 0, "a pinned tail leaves nothing to reclaim");
-    assert!(refused > 0, "the save should have failed loudly");
+fn a_pinned_tail_keeps_every_live_file_and_still_yields_its_space() {
+    let (compacted, _) = fill_churn_and_check(Some(usize::MAX));
+    assert!(compacted > 0, "a pinned tail must still reclaim what is under it (#388)");
 }
 
 /// Gitea #379 reproduction 3, exactly: fill, delete **everything**, then
@@ -237,6 +237,7 @@ fn pinned_churn_fuzz_preserves_the_live_set() {
         rng ^= rng << 5;
         rng
     };
+    let mut total_compactions = 0u32;
     for run in 0..8u32 {
         let mut s = Store::new();
         let mut live: Vec<Pat> = Vec::new();
@@ -284,8 +285,13 @@ fn pinned_churn_fuzz_preserves_the_live_set() {
             }
             assert_exactly(&mut s, &live, &format!("run {} round {}", run, round));
         }
-        assert!(compactions > 0, "run {} never compacted", run);
+        total_compactions += compactions;
     }
+    // Per-run this is no longer guaranteed: since #388 a save can be served
+    // out of a hole an earlier repack left below a pin, so a lucky run
+    // never has to compact at all. Over the whole fuzz it must still
+    // happen, or nothing here exercises the compaction path.
+    assert!(total_compactions > 0, "the fuzz never compacted");
 }
 
 /// The guard itself: a plan that would not place every live record must be
@@ -474,4 +480,329 @@ fn a_re_save_that_compacts_retires_the_right_bytes() {
     assert_eq!(dead.len(), 1, "exactly one retired generation, found {:?}", dead);
     assert_eq!(dead[0].1, retired, "the retired record is the old generation");
     assert_ne!(dead[0].0, was_at, "the DEAD word went to the pre-compaction address");
+}
+
+// ---------------------------------------------------------------------------
+// Gitea #388: a compaction must reclaim a damaged or deleted-heavy log, and
+// a PINNED file must not cost the store the space underneath it.
+//
+// The device's symptom was `store.dead` never coming back to 0 and capacity
+// falling to 49 of the documented 119 patterns. The trigger is a *stale*
+// decode pin (`patterns::pin_code`, released by `unpin_code` since this
+// pass) naming a file the engine stopped executing long ago — but the store
+// must survive a legitimate pin too, so these tests seed the pin directly
+// and demand the capacity back either way.
+
+/// A pattern the size of the one the issue's comment saved.
+fn churn_pat(name: &str) -> Pat {
+    // 8,340 B on the wire = header + name + source + bytecode
+    Pat::new(name, 4600, 3600)
+}
+
+/// Fill the log, delete every pattern in it, and return the store with the
+/// arena exactly as the rig was found: every record below the cursor dead,
+/// nothing live, nothing indexed.
+fn wholly_dead_log() -> (Store, Vec<Pat>) {
+    let mut s = Store::new();
+    let pats = lib(400);
+    let mut placed: Vec<Pat> = Vec::new();
+    for p in &pats {
+        if s.save(p).is_err() {
+            break;
+        }
+        placed.push(p.clone());
+    }
+    assert!(placed.len() > 60, "only {} patterns fit", placed.len());
+    // Pack the tail tight with progressively smaller files: with room left
+    // at the top, the save under test would simply append and nothing would
+    // have to be reclaimed at all.
+    let mut k = 0;
+    for sz in [3000usize, 1200, 400, 120] {
+        loop {
+            let p = Pat::new(&format!("filler-{}", k), sz, sz);
+            k += 1;
+            match s.save(&p) {
+                Ok(_) => placed.push(p),
+                Err(_) => break,
+            }
+        }
+    }
+    assert!(LOG_LEN - s.cursor < 512, "{} B still free at the tail", LOG_LEN - s.cursor);
+    for p in &placed {
+        assert!(s.delete(&p.name));
+    }
+    let (used, n, dead) = s.stats();
+    assert_eq!((used, n), (0, 0), "every pattern was deleted");
+    assert!(dead > LOG_LEN / 2, "the log should be almost entirely dead, not {} B", dead);
+    (s, placed)
+}
+
+/// Gitea #388, the comment's repro exactly: a log where every record below
+/// the cursor is dead, one save, nothing pinned. The compaction must give
+/// back **every** byte.
+#[test]
+fn one_save_reclaims_a_wholly_dead_log() {
+    let (mut s, _) = wholly_dead_log();
+    let p = churn_pat("churn");
+    s.save(&p).expect("the save must fit after the compaction");
+    assert_eq!(s.compactions, 1, "exactly one compaction");
+    assert_exactly(&mut s, &[p.clone()], "after re-seeding a wholly dead log");
+    assert_eq!(s.dead_bytes, 0, "a compaction with nothing pinned reclaims every dead byte");
+    assert_eq!(s.cursor, p.size(), "the log holds nothing but the new file");
+    assert_eq!(s.sweep_failed, 0);
+}
+
+/// The same log with a pin left on a file near the TOP — the shape the rig
+/// was actually in, and the one that stalled its reclamation. The pinned
+/// file cannot move, so the cursor cannot come down; what must NOT happen is
+/// the store then refusing to use the pages under it.
+#[test]
+fn a_pin_high_in_a_dead_log_does_not_cost_the_store_its_capacity() {
+    // baseline: the same fill with nothing pinned
+    let (mut s, _) = wholly_dead_log();
+    let mut free_run: Vec<Pat> = Vec::new();
+    for i in 0..400 {
+        let p = Pat::new(&format!("fresh-{:03}", i), 600 + (i * 733) % 5200, 500 + (i * 449) % 4400);
+        if s.save(&p).is_err() {
+            break;
+        }
+        free_run.push(p);
+    }
+    let baseline = free_run.len();
+    assert!(baseline > 60, "baseline fill only reached {}", baseline);
+
+    let (mut s, placed) = wholly_dead_log();
+    // A file near the top of the log, deleted like all the others, still
+    // named by a pin: `keep` carries it, `plan` leaves it where it is, and
+    // the packed length can never fall below its end.
+    let victim = &placed[placed.len() - 4];
+    let pinned = {
+        let mut found = None;
+        patlog::scan(&mut s.f, &mut |r: &Rec, n: &[u8]| {
+            if n == victim.name.as_bytes() {
+                found = Some(*r);
+            }
+        });
+        found.expect("the deleted file is still on flash")
+    };
+    s.pinned = vec![pinned.seq];
+    let pinned_bytes =
+        s.f.mem[pinned.off as usize..pinned.end() as usize].to_vec();
+
+    let mut live: Vec<Pat> = Vec::new();
+    for i in 0..400 {
+        let p = Pat::new(&format!("fresh-{:03}", i), 600 + (i * 733) % 5200, 500 + (i * 449) % 4400);
+        if s.save(&p).is_err() {
+            break;
+        }
+        live.push(p.clone());
+        assert_exactly(&mut s, &live, &format!("after saving {} with a stale pin", p.name));
+    }
+    println!(
+        "stale pin at {} B: {} patterns stored (baseline {}), dead {} B, {} compactions",
+        pinned.off,
+        live.len(),
+        baseline,
+        s.dead_bytes,
+        s.compactions
+    );
+    // The pinned file's own bytes are untouched — that is the whole point
+    // of the pin, and the one thing a fix here must never trade away.
+    assert_eq!(
+        s.f.mem[pinned.off as usize..pinned.end() as usize],
+        pinned_bytes[..],
+        "the pinned file was moved or erased"
+    );
+    // Before #388 the store used only the tail above the pin: with the pin
+    // this high that was a handful of patterns, not most of the log.
+    assert!(
+        live.len() * 10 >= baseline * 9,
+        "a pin cost the store {} of {} patterns",
+        baseline - live.len(),
+        baseline
+    );
+}
+
+/// A pin on a LIVE file high in the log — the legitimate case (the running
+/// pattern) — must cost no capacity either.
+#[test]
+fn a_pin_on_the_highest_live_file_does_not_cost_the_store_its_capacity() {
+    let mut s = Store::new();
+    let mut live: Vec<Pat> = Vec::new();
+    for p in lib(400) {
+        if s.save(&p).is_err() {
+            break;
+        }
+        live.push(p);
+    }
+    let baseline = live.len();
+    // pin the highest file, then delete every other one: only a compaction
+    // can hand that space back, and the pin stops the cursor coming down.
+    let top = s.index.last().copied().expect("a filled log has an index");
+    s.pinned = vec![top.seq];
+    let top_name = s.rec_name(&top).unwrap();
+    let doomed: Vec<String> =
+        live.iter().map(|p| p.name.clone()).filter(|n| n != &top_name).collect();
+    for n in &doomed {
+        assert!(s.delete(n));
+    }
+    live.retain(|p| p.name == top_name);
+    let top_bytes = s.f.mem[top.off as usize..top.end() as usize].to_vec();
+
+    for i in 0..400 {
+        let p = Pat::new(&format!("after-{:03}", i), 600 + (i * 733) % 5200, 500 + (i * 449) % 4400);
+        if s.save(&p).is_err() {
+            break;
+        }
+        live.push(p);
+    }
+    println!(
+        "live pin at {} B: {} patterns stored (baseline {}), dead {} B",
+        top.off,
+        live.len(),
+        baseline,
+        s.dead_bytes
+    );
+    assert_eq!(
+        s.f.mem[top.off as usize..top.end() as usize],
+        top_bytes[..],
+        "the pinned file was moved or erased"
+    );
+    assert_exactly(&mut s, &live, "after refilling around a pinned live file");
+    assert!(
+        live.len() * 10 >= baseline * 9,
+        "a live pin cost the store {} of {} patterns",
+        baseline - live.len(),
+        baseline
+    );
+}
+
+/// A log carrying junk and stale-header damage between its records — the
+/// issue's "damaged log" framing. One save must still reclaim all of it,
+/// and every live file must come through byte-identical.
+#[test]
+fn a_compaction_reclaims_a_log_damaged_between_its_records() {
+    let mut s = Store::new();
+    let mut live: Vec<Pat> = Vec::new();
+    for p in lib(400) {
+        if s.save(&p).is_err() {
+            break;
+        }
+        live.push(p);
+    }
+    // Delete every other file, then scribble over what the deletes left:
+    // a torn header keeps its magic and its self_off but its payload no
+    // longer hashes, which is what the #379 walk has to resync through.
+    let doomed: Vec<String> = live.iter().step_by(2).map(|p| p.name.clone()).collect();
+    let mut dead_recs: Vec<Rec> = Vec::new();
+    for n in &doomed {
+        let r = s.rec_by_name(n).expect("still stored");
+        assert!(s.delete(n));
+        dead_recs.push(r);
+    }
+    live.retain(|p| !doomed.contains(&p.name));
+    for (i, r) in dead_recs.iter().enumerate() {
+        // NOR can only clear bits, so scribble by ANDing — exactly what a
+        // half-finished write leaves behind.
+        let at = (r.src_off() + (i as u32 * 37) % 64) as usize;
+        for b in s.f.mem[at..(at + 96).min(r.end() as usize)].iter_mut() {
+            *b &= 0x5A;
+        }
+    }
+    let torn = patlog::scan(&mut s.f, &mut |_: &Rec, _: &[u8]| {}).torn;
+    assert!(torn > 0, "the damage did not produce a torn record");
+    assert_exactly(&mut s, &live, "after damaging the dead records");
+
+    // Fill the tail so the next save has to compact over the damage.
+    for i in 0..400 {
+        let p = churn_pat(&format!("post-{:03}", i));
+        if s.save(&p).is_err() {
+            break;
+        }
+        live.push(p.clone());
+        assert_exactly(&mut s, &live, &format!("after saving {} over a damaged log", p.name));
+    }
+    assert!(s.compactions > 0, "the run never compacted — the test proves nothing");
+    let used: u32 = s.index.iter().map(|r| r.size()).sum();
+    assert_eq!(s.dead_bytes, s.cursor - used, "dead must be exactly what the cursor says is unclaimed");
+    assert_eq!(s.sweep_failed, 0, "the closing sweep failed");
+    println!(
+        "damaged log: {} torn records, {} patterns, {} compactions, dead {} B",
+        torn,
+        live.len(),
+        s.compactions,
+        s.dead_bytes
+    );
+}
+
+/// Issue #388 §4: a *healthy* near-full log was seen settling at a small
+/// non-zero residue (4,096 B on a 119-pattern fill, 6,496 B under
+/// `flashmap-off`) rather than at 0. This pins down what that is.
+///
+/// With nothing pinned the answer is: nothing. A compaction packs from 0
+/// and `place()` resumes at the packed length itself, whose page is erased
+/// under it, so there is no gap and `dead` is exactly 0. The residue the
+/// rig saw is the *frozen page* a pin costs — under one erase page, which
+/// is what the second half of this test measures.
+#[test]
+fn a_healthy_logs_residue_is_zero_and_a_pinned_ones_is_under_a_page() {
+    let mut s = Store::new();
+    let mut live: Vec<Pat> = Vec::new();
+    for p in lib(400) {
+        if s.save(&p).is_err() {
+            break;
+        }
+        live.push(p);
+    }
+    // Churn: retire a quarter of the files, then re-save one name until the
+    // log has to reclaim. Every superseded generation is dead weight.
+    let doomed: Vec<String> = live.iter().step_by(4).map(|p| p.name.clone()).collect();
+    for n in &doomed {
+        assert!(s.delete(n));
+    }
+    live.retain(|p| !doomed.contains(&p.name));
+    let victim = live[live.len() / 2].name.clone();
+    for i in 0..30 {
+        let p = Pat::new(&victim, 4600 + (i * 13) % 400, 3600 + (i * 29) % 400);
+        if s.save(&p).is_err() {
+            break;
+        }
+        for q in live.iter_mut() {
+            if q.name == victim {
+                *q = p.clone();
+            }
+        }
+        assert_exactly(&mut s, &live, "during the churn");
+    }
+    assert!(s.dead_bytes > 0, "the churn left nothing to reclaim");
+
+    // Nothing pinned: the residue is exactly zero.
+    assert!(s.compact(0), "compaction refused on a healthy log");
+    assert_exactly(&mut s, &live, "after a healthy compaction");
+    let used: u32 = s.index.iter().map(|r| r.size()).sum();
+    assert_eq!(s.dead_bytes, s.cursor - used);
+    assert_eq!(s.dead_bytes, 0, "a healthy log keeps no residue at all");
+
+    // One file pinned at the bottom: its page is frozen, so whatever shares
+    // it stays put. That — and only that — is the small residue #388 §4
+    // measured on the rig.
+    let low = s.index[0];
+    s.pinned = vec![low.seq];
+    let churn = Pat::new(&victim, 5200, 4100);
+    s.save(&churn).expect("a churn save on a packed log");
+    for q in live.iter_mut() {
+        if q.name == victim {
+            *q = churn.clone();
+        }
+    }
+    assert!(s.compact(0), "compaction refused with the lowest file pinned");
+    assert_exactly(&mut s, &live, "after a pinned compaction");
+    let used: u32 = s.index.iter().map(|r| r.size()).sum();
+    assert_eq!(s.dead_bytes, s.cursor - used);
+    assert!(
+        s.dead_bytes < PAGE,
+        "a pin at the bottom cost {} B, more than the frozen page it should",
+        s.dead_bytes
+    );
+    println!("healthy residue 0 B; residue with the lowest file pinned {} B", s.dead_bytes);
 }
