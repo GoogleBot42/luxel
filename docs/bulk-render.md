@@ -543,6 +543,7 @@ renders the pattern.
 | `nyan-lights.js` (converted in place) | sprite/rainbow composite into a 16x16 canvas, rebuilt only on a flip or a dial move, one `fillCanvas` | 12.88 → **108.36** Mpx/s (**8.40x**) | 35.4 → **0.5** | byte-identical on 16x16 / 32x32 / 64x64 / 60 px; the `-0.01` floor fudge elsewhere (see below) |
 | `color-bands-buffered.js` (converted in place) | 3 per-pixel H/S/V buffers, one `fillHSV` | budget-refused at 4096 px **before and after**; 1024 px **1.10x**, 3000 px **1.12x** | 71.0 → **66.0** (1024 px) | **byte-identical** on all five rigs |
 | `music-sequencer-for-v3-only.js` (converted in place) | 3 per-pixel H/S/V buffers, one `fillHSV`, hue offset added and taken back out | budget-refused at 4096 px **before and after**; 1024 px **7.67x**, 3000 px **5.64x** | 10.3 → **0.3** (1024 px) | **byte-identical** on all five rigs, undriven and with `Theme Hue` driven |
+| `rainbow-comet.js` (converted in place) | per-pixel state evolution, `clear()` + a `setPixel` loop that skips dead pixels, `feedback` for the fade | budget-refused at 4096 px **before and after**; 3000 px **1.09x**, 300 px **1.33x**, 60 px **1.41x** | 25.2 → **23.8** (3000 px) | **byte-identical**, 400 frames, five rigs, three control settings |
 
 ### Two readouts that were not indexed by pixel (2026-09-07)
 
@@ -872,9 +873,11 @@ export function renderFrame() {
 `ice-floes-2d` and `nyan-lights` export no `render`, so they get the default
 `ceil(√n)` grid exactly as they did under `render2D` and need no guard.
 
-### The `fillHSV` readouts, and two that do not convert (2026-09-07)
+### The `fillHSV` readouts, and the two hardest cases (2026-09-07)
 
-Batch 2 of #405's #373-section-5 bucket, and the honest half of it.
+Batch 2 of #405's #373-section-5 bucket, and the honest half of it: two
+one-line conversions, one that took real work, and one that does not convert
+at all.
 
 **`color-bands-buffered.js`** is the bucket's purest case: it is a *technique
 demo* whose whole point is that `beforeRender` fills `hueB`/`satB`/`briB` and
@@ -920,36 +923,73 @@ allocates `N + 1`), `rainbow-comet` 3,408 px. That is the same wall the
 are the pattern's state, not the readout — so for these patterns the win is on
 strips and small matrices, not on the panel.
 
-#### Two that do not convert: `meteor-shower.js` and `rainbow-comet.js`
+#### `rainbow-comet.js` converts, `meteor-shower.js` does not (2026-09-07)
 
-Both were on #373's list of 21 and both were tried, measured and reverted. In
-each case the conversion is *byte-identical* and *slower on the host*, so
-neither ships on an unmeasurable device argument.
+Both were on #373's list of 21, both were tried and measured, and they came out
+on opposite sides of the same rule.
 
-* **`meteor-shower.js` — 0.70x at 3000 px, 0.72x at 300 px.** The trail is a
-  ring buffer read through a rotation, `hBuf[(index + head) % pixelCount]`.
-  `fillHSV` indexes its channel arrays by the pixel index with **no offset**,
-  there is no array-rotate builtin, and materializing unrotated copies would
-  cost three more `array(pixelCount)` buffers the budget cannot pay for. What
-  is left is a `hsv()` + `setPixel()` loop, and the `mod` in its body costs
-  more than the per-pixel entry it replaces. An offset (or stride) argument on
-  `fillHSV`/`fillRGB`, or an `arrayRotate`, converts this in one line — that is
-  a #373-class ask, not a pattern change.
-* **`rainbow-comet.js` — 0.81x at 3000 px, 0.84x at 300 px.** Its per-pixel
-  body is not a read-out at all: it emits `hsv(hue[i], sat[i], b * b)` and then
-  *evolves* that pixel's state for the next frame (hue smear, saturation cure,
-  brightness decay). No bulk op expresses that — `feedback(bri, decay)` covers
-  the decay, the hue smear wants #373's `arrayAffine`, the saturation cure
-  wants an array clamp — and the squared value channel would need a fourth
-  `array(pixelCount)`, dropping the pattern's ceiling from 3,408 px to about
-  2,556. Squaring in place instead is not bit-exact: the stored value is
-  re-multiplied by `decay` every frame, so `(b · decay)²` and `b² · decay²`
-  drift apart over a tail's ~37 frames of 16.16 rounding.
+**`rainbow-comet.js` — 1.09x at 3000 px, 1.33x at 300 px, 1.41x at 60 px,
+byte-identical over 400 frames on all five rigs at three control settings
+(undriven, both dials at 1, both at 0).** It is *not* a `fillHSV`: the value
+channel is `bri[i] * bri[i]` rather than `bri`, and the per-pixel body does not
+read state, it **evolves** it — hue smear, saturation cure, brightness decay.
+A fourth `array(pixelCount)` for the squared channel would drop the pattern's
+ceiling from 3,408 px to ~2,556 (#420), and squaring `bri` in place is not
+bit-exact, because the stored value is re-multiplied by `decay` every frame and
+`(b · decay)²` drifts from `b² · decay²` over a tail's ~37 frames of 16.16
+rounding.
 
-The shared shape of both refusals: **a `setPixel` loop only wins when its body
-is native work.** `aurora-2d.js` wins because its body is `simplex3` + `paint`;
-these two lose because their bodies are array arithmetic, which is exactly what
-the interpreter is slow at and what a bulk op would have absorbed.
+What made it convert anyway is the two things the loop *can* hand to the engine:
+
+```js
+export function renderFrame() {
+  clear()                              // renderFrame does NOT clear between frames
+  for (i = 0; i < pixelCount; i++) {
+    b = bri[i]
+    if (b == 0) continue               // black already, and hue/sat are
+                                       // overwritten wholesale on the next stamp
+    hsv(hue[i], sat[i], b * b)
+    setPixel(i)
+    hue[i] -= 0.004
+    sat[i] = min(sat[i] * 1.06, 1)
+  }
+  feedback(bri, decay)                 // the whole fade, natively, after the pass
+}
+```
+
+`feedback(bri, decay)` is exact because every element is read before the array
+is scaled once, and the dead-pixel skip is exact because a dark pixel's hue and
+saturation are overwritten wholesale when the head next stamps it. The skip is
+most of a strip between passes of the head, and it is what turns the trade
+positive: a naive port with neither measured **0.81x**. `clear()` is
+load-bearing, not decoration — `renderFrame` starts on last frame's output, so
+without it a skipped pixel would keep its old colour forever, and a 60-frame
+equivalence sweep does **not** catch that (no pixel decays to exactly 0 inside
+two seconds). The sweep was extended to 400 frames for exactly this reason.
+
+**`meteor-shower.js` — 0.83x at 3000 px, 0.84x at 300 px, 0.83x at 60 px.
+Reverted.** Its trail is a ring buffer read through a rotation,
+`hBuf[(index + head) % pixelCount]`, and `fillHSV` indexes its channel arrays
+by the pixel index with **no offset**; there is no `arrayRotate`, and
+materializing unrotated copies would cost three more `array(pixelCount)`
+buffers the budget cannot pay for. The rotation *is* two contiguous runs rather
+than a modulo — pixels `[0, n - head)` read cells `[head, n)` and the rest read
+`[0, head)` — and hoisting the `%` and the `REVERSE` test out of the body took
+a first attempt from 0.70x to 0.83x, byte-identical including with `Reverse`
+driven. It is still a loss, and there is nothing left to hoist: the body is
+three array reads, and unlike the comet it has no dead pixels to skip (a cell's
+value is reset to 1 when it falls below 0.02, so the buffer never holds zeros).
+An offset (or stride) argument on `fillHSV`/`fillRGB`, or an `arrayRotate`,
+converts it in one line — a #373-class ask, not a pattern change.
+
+The rule these two produce: **a `setPixel` loop wins only when the per-pixel
+body is native work, or when enough of the per-pixel work can be lifted out of
+it.** `aurora-2d.js` wins because its body is `simplex3` + `paint`;
+`rainbow-comet` wins because `feedback` takes the fade and the skip takes the
+dark pixels; `meteor-shower` loses because after every hoist its body is still
+three interpreted array reads, which is exactly what the interpreter is slow at
+and exactly what a bulk op would have absorbed.
+
 ### `neutronorbit` and `4th` — when the read-out cannot be a bulk fill (2026-09-07)
 
 Two more #405 conversions where `fillRGB` is the *wrong* answer and
