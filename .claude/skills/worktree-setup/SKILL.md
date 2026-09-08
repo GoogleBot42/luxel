@@ -146,6 +146,13 @@ these before trusting any build/test failure as a real regression.
   plainly exists — flake builds copy only **git-tracked** files into the store, so a
   brand-new untracked file (a patch, a new source file) is invisible until `git add`.
   The error message names the `git add` fix; believe it.
+- A `git checkout -- <file>` that "reverts" an experiment and leaves it in
+  place. Flake builds only see TRACKED content, so an A/B probe against
+  `nix build .#luxel-fw-<board>` has to `git add` the experiment first — and
+  from then on `git checkout -- <file>` restores it from the INDEX, i.e. the
+  probe, not `HEAD`. The next build silently measures the thing you thought
+  you had thrown away. Use `git reset --hard HEAD` (or
+  `git checkout HEAD -- <file>`) to end a staged probe (2026-09-08).
 - A flake-output test suddenly missing its inputs (e.g. takeover-test.py: "missing
   input: result/luxel-fw-ota.bin" right after it worked) — every `nix build` reuses
   the same `./result` symlink, so building `.#qemu-espressif` clobbers the

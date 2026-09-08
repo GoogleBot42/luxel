@@ -691,7 +691,10 @@ seven patterns in #373's list of 21 that were sampled here cannot load at
 the pattern renders black on a 64x64 panel. That is the same wall
 docs/bulk-render.md already records for `rainbow-comet.js`, and it is why the
 ratios above are quoted at 45x45 and 58x58 rather than 64x64. Gitea #405 carries
-the conversions; the budget itself is tracked separately.
+the conversions; the budget itself is tracked separately. Since #420 the wall
+is at least legible — the refusal names the array and the overrun, in
+`/api/status`'s `vmerr`, the playground's banners and
+`luxel check --grid 64x64` — but it is still a wall.
 
 **Visual equivalence**, 60 frames at a fixed 30 fps delta and seed
 (`luxel run --out`), byte for byte against the pre-conversion file on 16x16,
