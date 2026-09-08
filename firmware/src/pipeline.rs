@@ -541,7 +541,7 @@ mod pipe {
         // default the driver was built with) and the initial buffer size:
         // both are the driver's, so both happen here now.
         if let Err(e) = out.set_protocol(crate::cur_protocol()) {
-            println!("output: protocol config not applied: {:?}", e);
+            println!("output: protocol config not applied: {}", e);
         }
         let mut sized = shared::PIXEL_COUNT.load(Ordering::Relaxed);
         if !out.resize(sized as usize) {

@@ -200,8 +200,8 @@ impl OutputDriver for SpiStripOutput {
         let need = proto.buf_len(rgb.len());
         if self.buf.len() >= need || realloc_buf(&mut self.buf, need) {
             proto.encode(rgb, brightness5, self.buf.bytes_mut());
-            if let Err(e) = self.spi.write(self.buf.bytes()) {
-                println!("spi write error: {:?}", e);
+            if self.spi.write(self.buf.bytes()).is_err() {
+                println!("spi write error");
             }
             // The wire took it either way: a failed SPI write is a driver
             // error, not a frame the caller could usefully retry.

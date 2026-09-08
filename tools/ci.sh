@@ -14,8 +14,10 @@
 #   1. web build   (wasm + gallery + svelte-check + vite build) + web tests
 #   2. cargo test --workspace
 #   3. tools/check-library.sh          (the library sweep, five rigs)
-#   4. firmware build for board-pixelblaze-v3 + tools/image-check.sh
-#      (linked-feature markers on the ELF, OTA-slot margin on the app image)
+#   4a. devshell firmware build (CI_BOARD, default board-pixelblaze-v3) —
+#       covers build-esp32.sh itself + the linked-feature markers
+#   4b. tools/image-check.sh over the THREE release images the flake builds
+#       (markers + the 1 MiB OTA-slot margin), byte-identical to release.yml
 #   5. OPT-IN (CI_QEMU=1): tools/qemu/run-all.py, the emulator suite
 #
 # Step 5 is off by default on purpose (Gitea #273): it wants a from-source
@@ -28,14 +30,44 @@
 #   CI_QEMU=1 CI_SKIP="web cargo library firmware" nix develop --command tools/ci.sh
 #
 # Env knobs:
-#   CI_BOARD    firmware board to build (default board-pixelblaze-v3)
-#   CI_SKIP     space-separated step names to skip: web cargo library firmware
-#   CI_QEMU     set to 1 to add the (opt-in) QEMU suite as a final step
+#   CI_BOARD     board for the devshell build (default board-pixelblaze-v3)
+#   CI_VARIANTS  flake firmware variants to image-check, space separated,
+#                spelled as in release.yml's matrix (default: the three below;
+#                empty string skips the whole image-check half)
+#   CI_SKIP      space-separated step names to skip: web cargo library firmware
+#   CI_QEMU      set to 1 to add the (opt-in) QEMU suite as a final step
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 BOARD="${CI_BOARD:-board-pixelblaze-v3}"
+
+# THREE release images, not one devshell build (Gitea #413 / #438). Until
+# 2026-09-08 this step built board-pixelblaze-v3 in the devshell and ran the
+# margin gate over THAT, and two release-gate breakages merged green on the
+# same day because of it: board-c3-devkit stopped compiling at all
+# (riscv32imc has no atomic read-modify-write, so an ungated fetch_add in
+# shared.rs is a hard error there) and the C6 image release.yml actually
+# ships fell under image-check's 3 % OTA-slot floor.
+#
+# Two things changed. The list covers the three axes the other five images
+# share — Xtensa + -Zbuild-std (pixelblaze-v3, which the athom-music,
+# esp32-generic, s3-devkit, s3-hub75 and seengreat-hub75 images differ from
+# only in pin maps and features), the tightest image in the fleet
+# (c6-devkit-hosted), and the only riscv32imc target (c3-devkit).
+#
+# And the margin is now measured on the FLAKE image, not a devshell one.
+# They are not the same artifact and the difference is not small: a devshell
+# build bakes creds and embeds the absolute path of every dependency source
+# file in its panic `Location`s, so it reads ~2.8 KB LARGER than the credless
+# flake image release.yml publishes — and by a different amount on every
+# machine, because the paths are a different length there (the CI runner
+# builds under /var/lib/gitea-runner/…, this repo's own docs measured the
+# same commit at three different sizes). Gating a 3 %-of-1-MiB margin on a
+# number that moves with the checkout path is not a gate. `nix build
+# .#luxel-fw-<variant>` is byte-identical to the release asset, so this loop
+# is release.yml's loop; keep the two in step.
+VARIANTS="${CI_VARIANTS-pixelblaze-v3 c6-devkit-hosted c3-devkit}"
 SKIP=" ${CI_SKIP:-} "
 
 start=$(date +%s)
@@ -91,18 +123,36 @@ fi
 # without one only warns (the image is OFFLINE-ONLY, which is fine — CI
 # never publishes an image).
 if skipped firmware; then echo "== firmware: SKIPPED"; else
-  step "firmware: $BOARD build + image-check"
+  step "firmware: $BOARD devshell build + image-check (ELF markers)"
   BOARD="$BOARD" firmware/build-esp32.sh
-  # The ELF check above covers markers only. The 1 MiB OTA-slot margin gate
-  # (Gitea #160, CLAUDE.md's tripwire) needs an actual app image, so make
-  # one the way the flake does and run image-check over that too.
-  . firmware/board-target.sh
-  board_target "$BOARD"
-  OTA="$ROOT/firmware/target/ci-ota.bin"
-  espflash save-image --chip "$CHIP" \
-    "$ROOT/firmware/target/$TARGET/release/luxel-fw" "$OTA"
-  EXPECT_FEATURES="$BOARD" tools/image-check.sh "$OTA"
-  done_step firmware
+  done_step "firmware: $BOARD"
+
+  # The release images. `nix build` is a pure, credless build in the nix
+  # sandbox — the same derivation release.yml builds, so the bytes
+  # image-check weighs here are the bytes that get published. EXPECT_FEATURES
+  # is release.yml's own case, copied: the variant name is not always the
+  # board (c6-devkit-hosted is board-c6-devkit + hosted-ui, s3-hub75 is
+  # board-s3-devkit + hub75) and `hosted-ui` additionally asserts the
+  # ABSENT markers, which is the half that catches a hosted image that
+  # quietly kept its asset reader.
+  mkdir -p "$ROOT/firmware/target"   # the out-links land here; may not exist yet
+  for v in $VARIANTS; do
+    step "release image: luxel-fw-$v + image-check"
+    extras=""
+    case "$v" in
+      *hub75)   extras="hub75";;
+      *-hosted) extras="hosted-ui";;
+    esac
+    case "$v" in
+      s3-hub75)         extras="$extras board-s3-devkit";;
+      c6-devkit-hosted) extras="$extras board-c6-devkit";;
+      *)                extras="$extras board-$v";;
+    esac
+    out="$ROOT/firmware/target/ci-result-$v"
+    nix build ".#luxel-fw-$v" --out-link "$out"
+    EXPECT_FEATURES="$extras" tools/image-check.sh "$out/luxel-fw-ota.bin"
+    done_step "release image: $v"
+  done
 fi
 
 # --------------------------------------------------------------- qemu

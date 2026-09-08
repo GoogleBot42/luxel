@@ -2,7 +2,10 @@ name: ci
 
 # The test gate: every push to master and every pull request runs the whole
 # standing acceptance suite (web build + web tests, cargo test --workspace,
-# the library sweep, and a firmware build with its image checks).
+# the library sweep, a devshell firmware build, and tools/image-check.sh over
+# the THREE release images the flake builds — pixelblaze-v3, the C6
+# hosted-UI variant and the C3; see tools/ci.sh for why those three and why
+# the flake image rather than the devshell one, Gitea #413/#438).
 #
 # The steps themselves live in tools/ci.sh, not here, so a developer can run
 # byte-for-byte what CI runs:  nix develop --command tools/ci.sh
