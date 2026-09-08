@@ -99,22 +99,33 @@ bytecode execution is being worked on now; the rest are queued:
   PB at 300 px (engine test pins both halves). CLOSED 2026-07-19: the
   clean-room library reimplementations dropped that assumption; all four
   run clean on-device (full-library soak 321/322).
-- **Flash-mapped library execution** [L] ★ — the very last word in pattern
-  RAM: run library patterns straight out of flash-mapped storage (no RAM
-  copy of the code at all). Needs contiguous blob placement (the
-  sequential-storage KV chunks aren't mappable) — e.g. a dedicated raw
-  region like the web-assets partition. With in-place execution + the
-  const-array pool shipped, exactly ONE library pattern still exceeds the
-  device: "Music Sequencer - for V3 ONLY" (663 lines; 17.8 KB blob,
-  ~71 KB total engine footprint per heapstat — it loads at idle heap but
-  leaves 19 KB free, 1 KB under the 20 KB floor, and is rejected with the
-  friendly capacity error). UPDATE 2026-07-27: v0.1.34 (flash-resident
-  read-back copies + envelope dropped pre-floor-check) CLEARED the
-  capacity motivation — Music Sequencer V3 now runs at 300 px with
-  ~70 KB free (full-library capacity, 322/322 modeled). The raw
-  current-pattern slot v0.1.34 added is also exactly the "contiguous,
-  mappable region" this item needs, so what remains is purely the MMU
-  work — now a perf/endgame item, not a capacity one.
+- ~~**Flash-mapped library execution** [L] ★~~ — **DONE 2026-09-06** for the
+  library half (#260 umbrella). Saved patterns now execute straight out of
+  the flash mapping with **no RAM copy of the code at all** — exactly what
+  this item asked for. Four pieces landed: **#274** maps flash read-only
+  through the cache MMU (`firmware/src/flashmap.rs`); **#332** replaced the
+  unmappable `sequential-storage` map with one **896 KiB mapped extent
+  region** plus a 128 KiB key area (docs/firmware.md "The pattern store: one
+  mapped extent region + a small key area"), so a pattern's bytecode is
+  written once, contiguously and page-aligned — the "contiguous blob
+  placement" this item was blocked on; **#276/#293** made the store hand the
+  engine `&'static [u8]` slices out of that mapping; and **#278** (LXBC v5,
+  fixed-width u32 words) gave `luxel_core::bytecode` the
+  `deserialize_lean_static` that validates such a slice in place so
+  `Program.words` points straight at flash. The firmware then switched every
+  long-lived load site to it — the boot default, the `Msg::Library` swap arm,
+  and all three mapped branches of the engine `rebuild()` closure (UPDATES.md
+  2026-09-06 "The firmware BORROWS the mapped program words (#260)"; Main
+  Stage's resident cost went 35,540 → **8,933 B**). Gotcha for archaeology:
+  LXBC v5 was silently reverted by PR #280's merge and restored the same day
+  (UPDATES.md 2026-09-06 "LXBC v5 restored").
+  **All that remains is the ad-hoc upload path**, which is still RAM-bound:
+  `POST /api/code` reserves the whole LXP envelope contiguously and decodes
+  it with the copying `deserialize_lean`, so a big ad-hoc push still peaks in
+  heap. Streaming that upload is **Gitea #417**; the ceiling it now imposes
+  (the binding constraint on the panel since the PSRAM arena moved arrays off
+  internal DRAM) is **Gitea #439**. Saving the pattern to the device's
+  library is the workaround, and the editor's capacity banner says so.
 - ~~WiFi-blob buffer tuning~~ — DONE 2026-08-22, shipped as the missing
   half of the **`small-chip`** feature (UPDATES.md entry has the full
   numbers). The knobs are runtime fields on
@@ -298,7 +309,11 @@ bytecode execution is being worked on now; the rest are queued:
   then slew by stretching frame deltas (≤±25%). Role in Settings +
   /api/sync, persisted. Proven with two mirrors (sync-e2e: 2.5 s desync →
   −5 ms). On-device verification blocked (needs ≥2 recovered Luxels).
-  Future: pattern/playlist distribution to followers.
+  **Pattern distribution DONE** in v0.1.23 as **Sync v2** (commit 0908341,
+  UPDATES.md 2026-07-07 "the v0.1.23 batch"): the beacon carries a source
+  hash and a follower pulls + swaps on change — via `GET /api/pattern.lxp`
+  (source + bytecode envelope) since v0.1.24. Future: **playlist**
+  distribution to followers.
 - **Web-based .epe import/export in the playground** [S] ★★★ — DONE
   (import button + drag-drop anywhere + export download; e2e-covered).
 
@@ -317,11 +332,18 @@ bytecode execution is being worked on now; the rest are queued:
 
 - **Hover docs from the builtin table** [S] ★★ — DONE (builtins +
   predefined globals show sig + doc on hover; e2e-covered).
-- **Pattern browser with animated previews** [M] ★★★ — DONE (192 live
-  tiles: examples + compiles-clean corpus; 1D → bar, render2D → 16×16
-  rectangle per Jeremy's distinction; viewport-lazy with an engine cap).
-  Remaining niceties: render3D projection tiles, search/filter box,
-  waterfall option for 1D.
+- **Pattern browser with animated previews** [M] ★★★ — DONE (300+ live
+  tiles built from `library/` — `tools/check-library.sh` is the count of
+  record; 1D → bar, render2D → 16×16 rectangle per Jeremy's distinction;
+  viewport-lazy with an engine cap). Both listed niceties have since
+  shipped: the **search/filter box** landed 2026-07-07 (UPDATES.md
+  "gallery search, playlist polish, 3D preview, WiFi form, device map";
+  `data-role="gallery-search"` in `web/src/components/Gallery.svelte`,
+  with an "N of M" count) and **render3D projection tiles** landed with
+  the mapper-v2 batch (the `kind: "cloud"` tile path — a 5×5×5
+  cube-lattice map, projected and slowly rotating; see the map-editor
+  item below). Only the **waterfall option for 1D** is still open, tracked
+  as **Gitea #356**.
 - **Shareable pattern URLs** [S] ★ — DONE (`#p=` deflate+base64url
   fragment; share button copies, load restores; e2e-covered).
 - **Multi-pane: map editor + preview** [L] ★★ — mapper DONE through v2:
@@ -330,7 +352,8 @@ bytecode execution is being worked on now; the rest are queued:
   links** (`#pj=` envelope), and **render3D gallery tiles** (cube-lattice
   point-cloud thumbs; the 5 render3D-only corpus patterns are no longer
   skipped). Still open (niceties): visual drag-editing, Fill/Contain
-  toggles. Web-UI redesign tracking lives in [docs/webui.md](webui.md).
+  toggles — tracked as **Gitea #355**. Web-UI redesign tracking lives in
+  [docs/webui.md](webui.md).
 
 ## Top picks if forced to choose 5
 

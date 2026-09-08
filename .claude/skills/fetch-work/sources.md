@@ -9,18 +9,28 @@ add it here once.
 - `docs/ideas.md` — extension ideas: builtins, language, engine,
   integration. Items are tagged effort `[S/M/L]` and value `★`–`★★★`, and
   many are already marked DONE. Only propose items that are *not* marked
-  DONE. Known stale-open as of 2026-09-01 (Gitea #247): gallery search,
-  render3D tiles and sync pattern distribution are listed as remaining but
-  shipped; only the 1D waterfall tile and playlist distribution are real.
+  DONE. The stale-open entries the 2026-09-01 sweep hit were fixed in the
+  doc itself on 2026-09-08 (Gitea #247) — gallery search, render3D tiles,
+  sync pattern distribution and flash-mapped library execution now read
+  DONE with their citations, and the residue is ticketed inline (#356 the
+  1D waterfall tile, #355 the mapper niceties, #417/#439 the ad-hoc upload
+  path). This is still the richest repo backlog: the genuinely open items
+  are the language tier (block-scoped `let`, a string type, named/default
+  parameters), the engine compositor, and the M5 peripherals/audio tier.
 - `docs/pattern-ideas.md` — research backlog for example patterns (effects
   from WLED, FastLED, Aurora, etc. not yet reimplemented in the corpus).
-  **Exhausted as of 2026-09-01** — every shortlist and stretch item exists in
-  `library/`; only the header says so, the tiers still read as open.
-- `docs/webui.md` — the web UI redesign backlog. Organized into phases;
-  many entries are already checked off (✅) or struck through. Only
-  unchecked, non-struck items are open.
-  **Exhausted as of 2026-09-01** — every item ✅, Gitea #4 closed; skip it
-  unless it has grown.
+  **EXHAUSTED — skip it.** Every shortlist and stretch item ships in
+  `library/`, the clean-room corpus port is complete, and every
+  engine/builtin want it generated (blur2D, bulk array math, event
+  injection, analytic-derivative noise) is in `BUILTINS`. The doc carries a
+  "FULLY IMPLEMENTED" banner as of 2026-09-08 (#247); it is history now.
+  Don't re-verify it — read the banner and move on.
+- `docs/webui.md` — the web UI redesign backlog. **EXHAUSTED — skip it.**
+  Every item is ✅ (the last unticked headings, Phase 1 and "Settings
+  page", were ticked 2026-09-08 under #247) and the driving ticket Gitea #4
+  is closed. Its only live residue is ticketed and lives in ideas.md:
+  **#355** (map drag-editing, Fill/Contain) and **#356** (1D waterfall
+  gallery tiles). The doc carries a status banner saying so.
 - `docs/UNTESTED.md` — untested-risk journal: machine-verified work
   Jeremy hasn't personally clicked through on the wall unit yet. Items are
   checkboxes; unchecked = still open. This is human-verification work, not
