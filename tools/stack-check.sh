@@ -45,7 +45,7 @@ else
   export RUSTC_BOOTSTRAP=1
 fi
 link_rustflags
-export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags) -Z emit-stack-sizes"
+export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags) -Z emit-stack-sizes${EXTRA_RUSTFLAGS:+ $EXTRA_RUSTFLAGS}"
 [ -f creds.env ] && . ./creds.env || true
 
 # same per-board luxel-core opt-level as build-esp32.sh (CORE_O3, #260):

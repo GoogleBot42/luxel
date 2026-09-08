@@ -196,14 +196,21 @@ paths:
   as the toolchain workaround it is (2026-09-06, #330: resume.rs'
   `resume_headroom`). Unrelated code elsewhere can trigger it, so a build
   that breaks in a file you did not touch is expected.
-- **A codegen experiment cannot go through plain `RUSTFLAGS`**: the flags in
-  `firmware/.cargo/config.toml`'s `[target.'cfg(target_arch = "xtensa")']`
-  are NOT replaced by the environment here — set
-  `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` with the link args repeated and the
-  linker dies on `linker script file 'linkall.x' appears multiple times`
-  (2026-09-06, #312). Pass ONLY the extra flag
-  (`CARGO_TARGET_XTENSA_ESP32S3_NONE_ELF_RUSTFLAGS="-C llvm-args=…"`) and
-  let the config supply the link args. Cargo fingerprints per flag set, so
+- **A codegen experiment goes through `EXTRA_RUSTFLAGS`, not `RUSTFLAGS` and
+  no longer `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`.** Since #441,
+  `firmware/build-esp32.sh` and `tools/stack-check.sh` export `RUSTFLAGS`
+  themselves (per-arch link args from `link_rustflags` plus the
+  `--remap-path-prefix` set from `remap_rustflags`, both in
+  `firmware/board-target.sh`), and `RUSTFLAGS` outranks BOTH
+  `.cargo/config.toml`'s `[target.*] rustflags` and
+  `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` — so the per-target env var is now
+  silently IGNORED by those two scripts. `EXTRA_RUSTFLAGS="-C llvm-args=…"`
+  is appended to what they compute and is the supported knob. Setting plain
+  `RUSTFLAGS` yourself drops the link args and the remaps: the old symptom
+  was the linker dying on `linker script file 'linkall.x' appears multiple
+  times` (2026-09-06, #312) when the args were repeated on top of the config;
+  the new one is a ~9 KB heavier image with absolute paths back in it.
+  Cargo fingerprints per flag set, so
   switching back and forth is cached, not rebuilt — which also means a
   suspiciously fast "Finished in 0.1s" after changing flags is correct, not
   a stale artifact. Verify what you are about to flash from the ELF
