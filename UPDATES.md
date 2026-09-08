@@ -1,5 +1,60 @@
 # Update log
 
+## 2026-09-07 — the skip: a false landing, caught by an invariant the driver can check (#395)
+
+Jeremy drew the camera frames around a skip and they decided it: displayed
+columns c1(G), c2(R), c4(R), c4(R), c5(G). Two REDs in a row where the pattern
+alternates colour every composed frame, so c3 was composed and never
+displayed; c4 then held an extra pass; frame count conserved.
+
+**Mechanism.** A *false landing*. The driver decided a buffer swap had taken
+effect when it had not: `write_frame` was handed back a buffer that was still
+pending display, composed the next frame over it, and the ISR's restore of the
+old ring's tail then undid the flip entirely. The frame in that buffer was
+never scanned out and the next one was shown twice — exactly the filmed trace.
+
+**The fix is an invariant the driver can check, not a guess.** A landing means
+"the engine has left the old ring", and that is testable: if `OUT_DSCR` is
+inside the old ring's BODY — not merely at its tail, which is ambiguous right
+at the EOF — then the engine wrapped to that ring's head and the flip provably
+did not happen. Landing there is vetoed; the flip stays armed and the engine
+takes it on the next wrap, which costs one repeated frame instead of losing
+one. Measured on the bench: **91 vetoes in 11 minutes, one per ~7 s** — the
+same order as the skip rate Jeremy was seeing.
+
+**Result over 72,947 consecutive passes:** `pass.skips` **0**, `dropped` 0,
+`zero_rescan` 0, `pass.short` 0, `pass.long` 2, `fence_timeouts` 0, `vmerr`
+null, fps 105 / out_fps 107 / rescan_hz 115, repeats 5.1 % (the compose
+overrunning its 8.7 ms window, which is #329's job).
+
+**Two hypotheses this killed on the way, both worth recording.** The GDMA
+prefetch shadow: `tools/ringsim.py` reproduces the class exactly when a swap
+is armed inside it (margin 3, prefetch 8 → 5,003 skips; margin 16 → zero), but
+on hardware raising `FAST_MARGIN` 3 → 16 pushed `slow_path` 264 → 2,191, ten
+times as many swaps on the two-EOF path, and the skip rate did not move. So
+the fault was never on the arming side. The margin stays at 16 because it
+closes a real window cheaply; it just was not this one. And the ISR-latency
+correction from earlier in the day: the `OUT_DSCR` early-landing shortcut was
+compiled out as a test and mismatches continued, which is what localised the
+fault to the landing decision itself rather than to either shortcut.
+
+**Three instrument bugs had to be fixed before any of this was believable**,
+and each one pointed the same way the hypothesis did:
+
+1. Pass timestamps taken inside the ISR carry its dispatch jitter. Uncorrected
+   they reported 30 short passes as brief as 3.4 ms against an 8.7 ms nominal —
+   pure noise, and the flags said so (no swap armed during them). Correcting by
+   `OUT_DSCR`'s offset from the ring head took `short` to 0 and revealed the
+   real number: **7.2 ms worst-case ISR dispatch latency**.
+2. The first displayed-frame audit logged framebuffer POINTERS for the caller
+   to map back to frames. That mapping goes stale on buffer reuse, and the log
+   lapped (`pass.n` 10,059 vs `audited` 10,010 on a 32-entry ring), so the
+   counter reported its own lag as skips.
+3. Even tagged, a caller-side audit must snapshot a ring the ISR is writing.
+   One stale entry reads as a backward blip and then a forward jump of the same
+   size — phantom skips again. Detection moved into the ISR, which sees each
+   pass once and in order, and the count is exact by construction.
+
 ## 2026-09-07 — chasing a skip that three counters say does not exist (#395)
 
 Jeremy re-filmed the merged build and still saw an occasional skipped sweep

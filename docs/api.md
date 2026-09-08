@@ -153,6 +153,15 @@ that is not losing anything:
   3.4 ms against an 8.7 ms nominal — pure ISR jitter, no truncation at all.
   `min_us`/`max_us` still include the pre-settling window, so read `short` and
   `long`, not the extremes.
+  `skips` is the one that matters: frames composed and swapped in that the
+  panel never scanned out. It is counted **in the frame-count ISR**, which
+  sees every pass exactly once and in order; counting it caller-side means
+  snapshotting a ring the ISR is concurrently writing, and that produced
+  phantom skips twice while this bug was being chased. `repeats` counts passes
+  that re-showed the previous frame (benign — the compose overran its window),
+  `tags` is the last 24 displayed frame numbers so the sequence can be read
+  directly, and `swap.landing_mismatch` counts flips the driver refused to
+  call landed because the engine was provably still on the old ring.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render

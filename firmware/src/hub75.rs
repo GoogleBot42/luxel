@@ -218,21 +218,23 @@ impl Hub75Output {
             if seq == 0 {
                 continue; // pass predating the first tagged swap
             }
+            crate::shared::push_tag(seq);
             if self.last_shown_seq != 0 && seq != self.last_shown_seq {
                 let gap = seq.wrapping_sub(self.last_shown_seq);
                 if gap == 0 || gap > 0x8000_0000 {
                     // out of order: ignore rather than mis-blame
                 } else if gap > 1 {
-                    crate::shared::SHOWN_SKIPS.fetch_add(gap - 1, Ordering::Relaxed);
+                    // Counted in the ISR now; here only to freeze a window for
+                    // eyeballing. The snapshot this reads is racy, so it must
+                    // not drive any counter.
                     crate::shared::SHOWN_SKIP_ARM_IDX.store(arm, Ordering::Relaxed);
+                    crate::shared::freeze_skip_tags();
                 }
-            } else if self.last_shown_seq != 0 {
-                crate::shared::SHOWN_REPEATS.fetch_add(1, Ordering::Relaxed);
             }
             if seq != 0 {
                 self.last_shown_seq = seq;
             }
-            crate::shared::SHOWN_AUDITED.fetch_add(1, Ordering::Relaxed);
+
         }
         self.shown_cursor = n;
     }
@@ -283,6 +285,13 @@ impl OutputDriver for Hub75Output {
         // often it had to take the two-EOF fallback. The first is the rate at
         // which the pre-fix driver would have handed back a framebuffer still
         // being scanned out — a glitch no frame accounting can see.
+        let (sk, rp, ps) = hub75.shown_counts();
+        crate::shared::SHOWN_SKIPS.store(sk, Ordering::Relaxed);
+        crate::shared::SHOWN_REPEATS.store(rp, Ordering::Relaxed);
+        crate::shared::SHOWN_AUDITED.store(ps, Ordering::Relaxed);
+        let (mismatch, double_arm) = hub75.landing_stats();
+        crate::shared::LANDING_MISMATCH.store(mismatch, Ordering::Relaxed);
+        crate::shared::DOUBLE_ARM.store(double_arm, Ordering::Relaxed);
         let (race, slow) = hub75.swap_stats();
         crate::shared::SWAP_EOF_RACE.store(race, Ordering::Relaxed);
         crate::shared::SWAP_SLOW_PATH.store(slow, Ordering::Relaxed);
