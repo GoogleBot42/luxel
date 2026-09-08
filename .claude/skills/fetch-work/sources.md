@@ -48,7 +48,9 @@ like every other devshell tool. (the WLED installer page, hosted
 playground, ESPNow, image display, …). To read ONE issue's body it's
 `tea issues --repo zuckerberg/luxel <n>` — there is no `show`
 subcommand (`tea issues show <n>` silently re-prints the whole
-list). Some issues predate work that has
+list) — and it prints the BODY only, so read the comments too: corrections
+that supersede the body land there (#329's baseline was corrected in a
+comment). Some issues predate work that has
 since shipped or partially shipped — the dedupe-against-reality rule
 applies with extra force here; check UPDATES.md and comment threads
 before proposing one.

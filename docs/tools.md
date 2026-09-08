@@ -102,6 +102,12 @@ report's engine) · `compile` (source → `.lxbc`) · `pixels`/`vars` (oracle
 halves) · `serve` (the native device-API mirror the web e2e runs against —
 route reference in [docs/api.md](api.md)).
 
+`run <pattern> --map-grid WxH --out frames.ppm` is the equivalence harness for
+a pattern rewrite: render before and after, diff the PPMs (`--map-grid` is
+missing from the CLI's own usage line). Gotcha: the engine normalizes a map's
+far edge to 65535/65536, never 1.0, so a `cx/(W-1)` reconstruction is 1 LSB off
+in the last row/column.
+
 `serve --heap-free BYTES` makes the mirror report that much free heap from
 `/api/status` instead of the default 0 ("this host has no meaningful number")
 — how the editor's capacity warning (docs/webui.md) is exercised against a

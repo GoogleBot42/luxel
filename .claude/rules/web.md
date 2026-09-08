@@ -36,6 +36,11 @@ paths:
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.
+- The playground previews every `render2D` gallery pattern on a **16x16 grid
+  at targetFps 60** (`onGalleryPick`), while the bench panel is 64x64 at 100+
+  fps. So "wrong in the browser, fine on device" for a 2D pattern is almost
+  always a resolution or frame-rate assumption in the PATTERN, not in the
+  harness (#285 was three of them, 2026-09-07).
 - Terminology Jeremy set: the hardware-bound UI is the "device console"; the
   hardware-free UI is the "playground." The playground must not offer device
   affordances (connect/disconnect controls, device badges, etc.).

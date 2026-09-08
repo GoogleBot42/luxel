@@ -76,6 +76,9 @@ these before trusting any build/test failure as a real regression.
    `tools/wledfs-check` runs against real filesystems. Copy them in before
    running either: `cp /home/googlebot/workspace/pixler/*.bin .` — they stay
    untracked, so nothing to clean before committing.
+3d. `bc` and `perl` are absent from the devshell entirely — do arithmetic in
+   `python3`/`node`. And `luxel` itself has no `--help`: it reads the flag as a
+   pattern filename (2026-09-07).
 4. `cargo`, `node` AND `python3` are only on `PATH` inside `nix develop` — the bare
    shell has none of them, so a one-liner that pipes API JSON through `python3`/`node`
    dies with "command not found" (`tools/stack-check.sh` uses python3 and is fine
@@ -120,6 +123,18 @@ these before trusting any build/test failure as a real regression.
   `npm run build` after any `library/`, `corpus/`, or `gen-gallery.mjs` change), not a
   missing `corpus/` symlink.
 - `cargo`/`node`: command not found — you're outside `nix develop`.
+- A flake build or the QEMU suite handing back a cache hit in ~27 s right
+  after you edited a tracked file — `nix build` sees only COMMITTED content,
+  so a MODIFIED tracked file is exactly as invisible as an untracked one, and
+  the result is stale rather than an error. Commit before
+  `tools/qemu/run-all.py` (2026-09-07).
+- Reasoning about a pattern from the MAIN checkout's `library/`: it is stale
+  the same way `web/public/luxel.wasm` is. Its pattern defaults differed from
+  master and sent a session down a "the device renders something else" hunt
+  (2026-09-07). Read patterns from `origin/master` or your own worktree.
+- `tools/verify/png.mjs`'s `upscale()` returns `{width, height, rgb}`, not a
+  buffer — passing it on as one writes an all-black PNG with no error
+  (2026-09-07).
 - A leftover `corpus` symlink showing up in `git status`/a diff — remove it before
   committing; it's a worktree convenience, never a tracked or intended artifact.
 - `nix build .#<output>` failing with "No such file or directory" on a file that
@@ -146,6 +161,15 @@ origin master && git rebase origin/master`.
   contain someone else's stray `=======` / `>>>>>>> theirs` with no opening
   marker (seen 2026-09-06; fixed in PR #317). If you find them, delete them
   as part of your PR and say so in the description.
+- **Never chain `git rebase … && git push` in one call.** A conflict stop
+  still exits 0 through a `| tail`, and the push then publishes a
+  mid-rebase branch. Rebase alone, read `git status`, then push (2026-09-07).
+- After resolving UPDATES.md, `git diff origin/master --numstat -- UPDATES.md`
+  must show ZERO deletions — a stray "tidy the blank lines" pass once deleted
+  7 lines elsewhere in the file. And `awk` cannot reorder a file (it streams):
+  splice with `sed -n` ranges + `cat`, or a small Python script keyed on
+  marker line numbers, written to the scratchpad and run BY PATH — apostrophes
+  break `nix develop --command bash -c '<heredoc>'` (2026-09-07).
 - After resolving, `grep -c '^<<<<<<<\|^=======$\|^>>>>>>>' UPDATES.md`
   must print 0 BEFORE `git rebase --continue` — `git add` happily stages
   a file that still contains conflict markers, and the rebase commits it
@@ -178,6 +202,8 @@ origin master && git rebase origin/master`.
   (2026-09-06: a rebase over #335 made `library/snake-2d-v2.js` uncompilable
   until the wasm was rebuilt).
 - **Measurements are verification too — take them AFTER the rebase.**
+  Every measurement label carries the PIXEL COUNT and the commit, and any
+  rebase that touches `vm.rs` invalidates the numbers (2026-09-07).
   Firmware image sizes, `.stack`, heap numbers: a pre-rebase measurement
   compared against a table another session updated the same day gives a
   confidently wrong delta. The cheap way to get the matching BASELINE is

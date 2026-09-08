@@ -43,7 +43,8 @@ memory (athom-flash-rig.md / jeremy-ha-broker.md memory files) and in
   `BOARD=board-seengreat-hub75 tools/ota-push.sh 192.168.0.238` — the script
   takes the ELF path AND the espflash `--chip` from `$BOARD` (since
   2026-09-06; the older advice to pass a hand-made image explicitly is
-  obsolete). Leave it on 4096 px / rainbow / brightness 4 / empty playlist.
+  obsolete). Leave it exactly as you FOUND it — brightness is Jeremy's
+  setting (it was 3 on 2026-09-07), never a number restored from this file.
   Its OTA used to wedge ~44 % of pushes (#294) — #309's flash-fence fix cured
   that (13/13 clean in one session, 2026-09-06), so a failed push there is
   now a real failure, not the known flake.
@@ -62,6 +63,12 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
 
 ## 3. Gotchas
 
+- **Found state is READ, never carried as a target.** A brief that names a
+  brightness / pattern / pixel count invites an agent to "restore" the
+  number in the brief — one restored brightness 31 over Jeremy's 3 that way
+  (2026-09-07). Capture `GET /api/brightness`, `/api/pattern`,
+  `/api/pattern.lxp` and `/api/config` first, and put back exactly what you
+  read.
 - **A credless image strands the device.** `tools/ota-push.sh` refuses to
   push an image that doesn't contain the baked WiFi SSID string (checked
   with `grep -a` against the binary). An image built without creds boots
@@ -96,6 +103,24 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   carrying the same build, a rollback cannot silently move a benchmark onto
   a different image. Read `core1.last` in `/api/status` after a long
   session — on dual-core boards a watchdog reset leaves no other trace.
+- **`ota-push.sh` can fail SILENTLY.** Its `curl -sf` to `/api/ota` exits
+  non-zero on a non-2xx and `set -e` ends the script before the status
+  poll, so the output simply stops after `pushing N bytes…` with no error.
+  Both 2026-09-07 occurrences coincided with a background `/api/status`
+  poll loop — don't poll during a push; a plain
+  `curl --data-binary @app.bin http://<ip>/api/ota` of the same image
+  worked. (The script now prints curl's exit status and the response body
+  on failure and exits non-zero loudly.)
+- **`firmware/build-esp32.sh <board>` does NOT take a board.** The
+  positional is the ACTION (`build`, `image`, …); the board comes from
+  `$BOARD`. `build-esp32.sh board-athom-music` quietly builds
+  board-pixelblaze-v3, and that image is what gets pushed (Gitea #389,
+  2026-09-07). Check the image before pushing —
+  `strings app.bin | grep board::NAME` — or `data_pin_default` after.
+- **Never run two `build-esp32.sh` sweeps in parallel**, different
+  worktrees included: they share `/tmp/img-*.bin` and the per-chip ELF
+  path, so size/image results interleave and are garbage. Size runs are
+  serial (2026-09-07).
 - **`ota-push.sh` does NOT rebuild — it pushes the existing ELF.** After
   editing firmware sources (or switching branches / stashing), run
   `firmware/build-esp32.sh` first or you push a stale image with no
@@ -131,6 +156,31 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   (2026-08-15). Distinguish builds by `slot` (or a build-specific status
   field), and re-verify which slot is live before trusting any on-device
   measurement.
+- **Kill every attached serial reader BEFORE an OTA push.** The USB node
+  re-enumerates on the reboot and the host re-applies termios, which on the
+  S3's native USB-Serial/JTAG *is* a reset — so an attached reader makes
+  every OTA two boots, and a third inside the `boot_ok` window flips the
+  slot. Re-attach only after boot_ok (~75 s). (2026-09-07; the older "a
+  reader that is already attached is harmless" reading is wrong.)
+- **Every OTA reboot drops the live (ad-hoc) pattern back to the persisted
+  default** — on the panel that is Rainbow, 52 fps at 4096 px, which reads
+  exactly like a throughput regression against your last measurement. `GET
+  /api/pattern` before believing any post-OTA number, and re-push the live
+  pattern (2026-09-07).
+- **There is no `/api/reboot`.** On strip boards `POST /api/datapin` with
+  the CURRENT pin is a clean remote reboot. Two in quick succession trip
+  the boot-loop guard (silent slot rollback), and the device answers for a
+  moment after the request — detect a reboot by waiting for it to go DOWN
+  first (2026-09-07).
+- **`cargo` does not refingerprint a swapped `firmware/vendor/esp-hub75`.**
+  The symlink points into the nix store where every mtime is 1970, so an
+  A/B between two esp-hub75 patch versions silently reuses the stale rlib —
+  `cargo clean -p esp-hub75` between them (2026-09-07).
+- **`pkill -f <pattern>` kills your own shell** whenever the pattern also
+  appears in the compound command you are running (exit 144) — this is
+  general, not a ttyUSB0 quirk. Anchor it (`pkill -f '^socat -u
+  /dev/ttyACM0'`) or bracket a character (`419[3]`), and give it its own
+  call.
 - **1 MiB OTA slot ceiling.** The app image must fit the OTA slot or
   `/api/ota` rejects it before writing. Per-board margins and how to
   reclaim space if a push starts failing for size live in docs/boards.md
@@ -151,6 +201,16 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   and writes `docs/bench-report.md`. It "restores" the device to **300 px**
   (its own header says so), NOT the count it found — on the Athom rig
   (as-found state: 60 px) follow with `POST /api/config` body `60`.
+- **`tools/patbench.mjs` / `tools/opbench.mjs` DESTROY the live pattern** —
+  they "restore" rainbow, and there is no read-back of an ad-hoc pattern.
+  Capture the found `fps`/`vm_us`/`heap_free` AND the source (`GET
+  /api/pattern.lxp`) before the first push. Don't fingerprint with a
+  STATEFUL pattern (Infinite Snake v2): its numbers stop being comparable
+  after the first minute (2026-09-07).
+- **`/api/pixels` is the pipeline buffer UPSTREAM of the DMA.** It answers
+  engine/compose questions and says nothing about display-side artefacts
+  (tearing, skips, repeats) — for those read `/api/status`
+  `pass`/`swap`/`dropped`/`rescan_hz` (post-#397/#398) or film the panel.
 - For a change touching the HTTP response path (`firmware/src/server.rs`),
   run `tools/wire-check.sh <ip>` after the OTA (bare IP or `http://ip`, both
   work; exit 2 = HARNESS BROKEN and exit 3 = device unreachable, neither of
