@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-09-07 — `2d-fireworks-fade` does not convert, and why (#405)
+
+Closes out the batch-2 slice of #405. Six of the seven patterns converted
+(#410, #421); `library/2d-fireworks-fade.js` is left on `render2D` and this is
+the write-up, plus a reusable recipe that fell out of trying.
+
+**Two independent blockers**, both measured rather than assumed:
+
+* Its virtual canvas is **RGB and additive** — sparks accumulate `col[0..2]`
+  per cell — and `fillCanvas`/`blit` are HSV-only, with the `rgb2hsv` round
+  trip inexact in 16.16. Same wall `aurora-2d.js` hit with `paint()`.
+* **`canvasGet` is bilinear and `fillCanvas` is nearest.** `canvasGet` lerps
+  four texels through `sample_axis`; `fillCanvas` takes one `cell_index`.
+  The smooth upscale is this pattern's stated design, so nearest is a
+  different picture, not a rounding difference. **There is no bilinear bulk
+  fill of any kind** — the concrete ask now on #373.
+
+A rectangles-per-cell rewrite is **3.27x at 4096 px** and 1.11x at 1024 px, and
+1.3–7 % of its bytes differ from the original on every rig (maxdiff up to 255).
+Real win, wrong picture; not taken.
+
+**The reusable piece** is written up in docs/bulk-render.md: a `renderFrame`
+can reproduce `fillCanvas`'s nearest sampling exactly with one `fillRect` per
+run of identical cells along a canvas row — which is what any non-HSV canvas
+pattern needs until `paintCanvas` exists. It needs two things to be exact, both
+of which the obvious version gets wrong:
+
+* the cell edge table cannot be `k / CW`, because a 16.16 divide truncates and
+  the truncated boundary can still resolve to cell `k - 1` (`1/17` is 3855 raw
+  and `cell_index(3855, 17)` is 0 — and a 300-px strip's 18x17 default grid
+  produces exactly 3855). Nudge by one 16.16 unit when the divide undershot,
+  and note that `1/65536` is not a writable literal (literals are 16.15, so it
+  rounds to 0): `1 / 256 / 256` is.
+* `fillRect` bounds are inclusive, so the rects must be `[b[k], b[k+1] - RAW1]`
+  to be disjoint; adjacent-and-overlapping only works while paint order is
+  strictly ascending and no run is ever skipped.
+
+Byte-identical to a `floor(x*CW)` nearest readout on seven rigs, including the
+300 px strip the naive edge table gets wrong.
 ## 2026-09-07 — library: Swirlpool 2D renders through `renderFrame` + `fillCanvas` (4.38x)
 
 Gitea #405 (batch 3, part three) — and the batch's biggest win. `swirlpool-2d`

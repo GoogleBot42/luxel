@@ -465,6 +465,7 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `bouncing-balls-rgb.js` (converted in place) | 3 accumulation buffers, the direction fold moved to the deposit, one `fillRGB` | budget-refused at 4096 px before and after; 3364 px (58x58) 244.0 → **15.5** µs/frame (**15.8x**) | — | **byte-identical** on 8 rigs x all 4 direction modes |
 | `pew-pew-pew.js` (converted in place) | 3 trail buffers + 2 constant ambient arrays, mirror moved to the paint, one `fillRGB` | budget-refused at 4096 px before and after; 2000 px 127.4 → **24.7** µs/frame (**5.2x**) | — | **byte-identical** on 8 rigs x all 4 toggle combinations |
 | `swirlpool-2d.js` (converted in place) | 16x16 brightness/hue canvases, one `fillCanvas` | 183.1 → **41.8** µs/frame (**4.38x**) | 16.1 → **1.0** | **byte-identical** on the three coordinate maps and a 60 px strip; on the 300/512 px mapless strips the only delta is the `-0.01` floor fudge (below) |
+| `2d-fireworks-fade.js` | **not converted** — bilinear canvas, additive RGB | — | — | a nearest-sampling rewrite is 3.27x at 4096 px and **not** equivalent: 1.3–7 % of bytes differ, maxdiff 255 |
 
 ### The `fillRGB` readout batch (2026-09-07)
 
@@ -608,6 +609,61 @@ centre pixel. What is not identical is the transient when one of those controls
 is flipped *mid-run*: the old code reflected the trail already in the air
 instantly, the new code turns the new paint around and the trail follows within
 a few frames (about 5 at the default decay). Steady state is the same picture.
+
+### `2d-fireworks-fade.js` — does not convert, and the reusable piece that came out of trying (2026-09-07)
+
+`2d-fireworks-fade.js` deposits its shells and embers into a `CW x CH` virtual
+canvas and reads it back with `canvasGet` in `render2D`. That is the classic
+`fillCanvas` shape, and it is the one pattern in #405's section-5 bucket that
+**cannot take a bulk fill at all**, for two independent reasons:
+
+1. **The canvas is RGB and additive.** Sparks accumulate `col[0..2]` per cell.
+   `fillCanvas` and `blit` are HSV-only (`texel_at(.., hsv: true)`), and
+   resolving an additive RGB canvas through `rgb2hsv` is not exact in 16.16 —
+   the same wall `aurora-2d.js` hit with `paint()`. #373's `paintCanvas` is
+   the missing op.
+2. **`canvasGet` is bilinear; `fillCanvas` is nearest.** `canvasGet` runs
+   `sample_axis` on both axes and lerps four texels (docs/lang.md: "**bilinear**
+   sample"); `fillCanvas` takes `cell_index` — one texel, no blend. This
+   pattern's whole design is the smooth upscale ("smoothly upscaled on a 64x64
+   panel", its own header), so nearest sampling is not a rounding difference,
+   it is a different picture. **There is no bilinear bulk fill of any kind.**
+
+Both were measured, not assumed. A rewrite that paints the canvas as
+rectangles (below) is **3.27x at 4096 px / 64x64** and 1.11x at 1024 px, and it
+is *not* equivalent: 1.3–7 % of bytes differ on every rig with maxdiff up to
+255. Left unconverted; the win is real but it is not this pattern's look. A
+bilinear mode on `fillCanvas`, or a `paintCanvas` that takes one, would make it
+convertible — that is the concrete ask on #373.
+
+**The reusable piece: a nearest canvas fill with an RGB (or palette) brush.**
+A `renderFrame` can reproduce `fillCanvas`'s nearest sampling exactly using one
+`fillRect` per *run* of identical cells along a canvas row, which is what a
+non-HSV canvas pattern needs until `paintCanvas` exists. On a mostly-dark
+canvas that is a handful of rects per row instead of `CW` of them. Two details
+make it exact rather than nearly-exact:
+
+* **The cell edge table cannot be `k / CW`.** A 16.16 divide truncates, and the
+  truncated boundary can still resolve to cell `k - 1`: `1/17` is 3855 raw, and
+  `cell_index(3855, 17)` is **0**, not 1 — and a 300-px strip's 18x17 default
+  grid hands `render2D` exactly 3855. A rect starting there steals the previous
+  cell's last pixel. Nudge by one 16.16 unit when the divide undershot:
+
+  ```
+  const RAW1 = 1 / 256 / 256        // 1/65536 is not a writable literal:
+                                    // literals are 16.15, so 1/65536 rounds to 0
+  t = k / n
+  if (floor(t * n) < k) t = t + RAW1
+  ```
+* **Make the rects disjoint, not merely adjacent.** `fillRect` bounds are
+  inclusive, so `[b[k], b[k+1]]` shares its far edge with the next cell and the
+  result depends on paint order — which stops being sound the moment a run is
+  skipped or merged. `[b[k], b[k+1] - RAW1]` is exactly cell `k` and order
+  stops mattering. Store `b[n] = 1 + RAW1` so the last cell's high edge is 1.
+
+Verified: this construction is **byte-identical to a `floor(x*CW)` nearest
+readout on seven rigs** — 16x16, 32x32 and 45x45 grids and 60/300/512/1000 px
+strips, the 300 px case being the one the naive edge table gets wrong.
 
 ### `raindrops-2d.js` (2026-09-07)
 
