@@ -166,6 +166,17 @@ come out of that region at all.
 (`Atomic<u64>::fetch_add` is unavailable on riscv32imc, `src/shared.rs:267`) —
 Gitea #413.
 
+**Verified on the panel the same night** (numbers and the A/B table in
+docs/boards.md): the arena comes up first try (`psram_total` 8,388,608),
+`fence_timeouts` and `pass.skips` stayed 0 across four OTAs, and the
+DRAM-vs-PSRAM control — a 2048-element array read once per pixel — costs
+**+0.16 % of VM time** at an identical 36 fps while handing 16 KB back to
+internal DRAM. Patterns that rendered black at 4096 px now run
+(`color-bands-buffered` 9 fps, `heatshivers` 11, `coolaura` 7, `novas` 3),
+which retires the Gitea #420 ceilings on this board. What it does NOT lift is
+the upload transient: a 46 KB ad-hoc `/api/code` push still refuses, because
+the envelope + decode peak is internal heap.
+
 
 ## 2026-09-07 — firmware: `heap_largest`, and a refusal that names the real problem (#390)
 
