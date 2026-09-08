@@ -29,7 +29,10 @@ Build (devshell, incremental — day-to-day development):
 cd firmware && cargo build --release            # or `cargo run --release` to flash
 
 # any board — build-esp32.sh maps $BOARD to chip/target/toolchain
-# (firmware/board-target.sh), Xtensa and RISC-V alike
+# (firmware/board-target.sh), Xtensa and RISC-V alike. The board is an ENV
+# VAR; the positional is the ACTION (flash | image | log). A board name in
+# the positional is now an error — it used to be ignored, so
+# `./build-esp32.sh board-athom-music` built pb-v3 and said nothing (#389).
 BOARD=board-pixelblaze-v3 ./build-esp32.sh      # or `… ./build-esp32.sh flash`
 BOARD=board-c6-devkit ./build-esp32.sh
 
@@ -88,11 +91,19 @@ partition exists). Serial recovery always works regardless. The 1 MB freed
 by dropping factory is the `storage` partition (device pattern library).
 
 ```sh
-# push the current devshell Xtensa build:
-firmware/build-esp32.sh && tools/ota-push.sh <host>
+# push the current devshell Xtensa build (BOARD, not a positional!):
+BOARD=board-pixelblaze-v3 firmware/build-esp32.sh
+BOARD=board-pixelblaze-v3 tools/ota-push.sh <host>
 # or a nix-built image:
 nix build .#luxel-fw-pixelblaze-v3 && tools/ota-push.sh <host> result/luxel-fw-ota.bin
 ```
+
+`ota-push.sh` refuses an image that is not a build of `$BOARD` — it greps
+the image for that board's `board::NAME` string (Gitea #389). The classic
+ESP32 boards all land at `firmware/target/xtensa-esp32-none-elf/release/
+luxel-fw`, so nothing else tells them apart, and the wrong image boots
+perfectly: the only symptom is the other board's `RESERVED_PINS` and pin
+defaults, which can leave the strip's own GPIO unselectable.
 
 `POST /api/ota` takes the raw app image (espflash save-image output — the
 package's `luxel-fw-ota.bin`, NOT the merged `luxel-fw.bin`), streams it to

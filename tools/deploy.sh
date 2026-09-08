@@ -16,8 +16,18 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IP="${1:?usage: tools/deploy.sh <device-ip> [--fw-only|--assets-only]}"
+# The board is never a positional here either (Gitea #389) — $1 is the
+# device address. Catch the mistake before it turns into a DNS failure.
+case "$IP" in
+  board-*)
+    echo "the board goes in \$BOARD, not in \$1 (which is the device IP). Use:" >&2
+    echo "  BOARD=$IP $0 <device-ip> [--fw-only|--assets-only]" >&2
+    exit 2 ;;
+esac
 MODE="${2:-}"
-BOARD="${BOARD:-board-pixelblaze-v3}"
+# Exported so tools/ota-push.sh sees the same board (and verifies the image
+# was built for it).
+export BOARD="${BOARD:-board-pixelblaze-v3}"
 LUXA="$(mktemp -t luxel-assets-XXXX.luxa)"
 trap 'rm -f "$LUXA"' EXIT
 

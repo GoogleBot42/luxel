@@ -60,3 +60,31 @@ board_target() {
       echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
   esac
 }
+
+# Every board bakes its `board::NAME` (firmware/src/board.rs) into the image
+# as a plain string — main.rs prints it at boot, so it is always linked.
+# That string is the only thing in an app image that identifies the board:
+# the three classic-ESP32 boards share one ELF path
+# (target/xtensa-esp32-none-elf/release/luxel-fw), so a stale build of
+# another board pushes cleanly and shows up only as the wrong
+# RESERVED_PINS / defaults on the device (Gitea #389 — a pb-v3 image on the
+# Athom reserved GPIO18, the pin the strip is wired to, leaving it dark with
+# no in-band way to fix the pin). tools/ota-push.sh greps for it.
+#
+# Sets BOARD_NAME from $1. Substrings are fine and preferred where the name
+# varies with a feature (board-s3-devkit gains "+ HUB75 panel" under
+# `hub75`). Adding a board? Add its case here too.
+BOARD_LIST="board-pixelblaze-v3 board-athom-music board-esp32-generic board-c3-devkit board-c6-devkit board-s3-devkit board-seengreat-hub75"
+board_name() {
+  case "$1" in
+    board-pixelblaze-v3)   BOARD_NAME="Pixelblaze v3 Standard" ;;
+    board-athom-music)     BOARD_NAME="Athom music-reactive WLED controller" ;;
+    board-esp32-generic)   BOARD_NAME="generic ESP32 (VSPI: CLK 18, DATA 23)" ;;
+    board-c3-devkit)       BOARD_NAME="ESP32-C3 devkit" ;;
+    board-c6-devkit)       BOARD_NAME="ESP32-C6 devkit" ;;
+    board-s3-devkit)       BOARD_NAME="ESP32-S3 devkit" ;;
+    board-seengreat-hub75) BOARD_NAME="Seengreat RGB Matrix HUB75 S3" ;;
+    *)
+      echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
+  esac
+}

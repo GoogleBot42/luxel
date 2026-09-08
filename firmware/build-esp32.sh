@@ -20,6 +20,24 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# The one positional is the ACTION, never the board — the board comes from
+# $BOARD. An unrecognised positional used to be ignored silently, so
+# `./build-esp32.sh board-athom-music` built the DEFAULT board (pb-v3) and
+# said nothing; the wrong image then pushed cleanly (both classic-ESP32
+# boards share an ELF path) and only showed up as the wrong RESERVED_PINS
+# on the device. Gitea #389.
+case "${1:-}" in
+  ""|flash|image|log) ;;
+  board-*)
+    echo "the board goes in \$BOARD, not in \$1 (which is the action). Use:" >&2
+    echo "  BOARD=$1 $0 [flash|image|log]" >&2
+    exit 2 ;;
+  *)
+    echo "unknown action '$1' — want one of: flash | image | log (or none)" >&2
+    echo "  (the board goes in \$BOARD: BOARD=board-… $0 [flash|image|log])" >&2
+    exit 2 ;;
+esac
+
 BOARD="${BOARD:-board-pixelblaze-v3}"
 # shellcheck source=board-target.sh
 . ./board-target.sh
