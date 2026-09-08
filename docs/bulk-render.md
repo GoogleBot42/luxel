@@ -453,6 +453,9 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `snake-2d.js` → `snake-2d-v2.js` (new file, both kept) | 16x16 board repainted on a board change, one `fillCanvas` | — | — | max per-channel diff **0** vs `snake-2d.js`, 240 frames at 256 and 4096 px, coordinate map and procedural grid |
 | `raindrops-2d.js` (converted in place) | 16x16 water sim, per-cell shading, one `fillCanvas` | 6.90 → **46.98** Mpx/s (**6.8x**) | 60.6 → **6.4** | see below |
 | `aurora-2d.js` (converted in place) | per-column band, per-pixel shimmer, `paint` + `setPixel` (`fillRect` above Cell Size 1) | 6.38 → **7.29** Mpx/s (**1.14x**); Cell Size 2/3/4 **1.75x / 3.48x / 5.94x** | 35.0 → 36.7 | **byte-identical** on eight rigs |
+| `novas.js` (converted in place) | two pulse generators, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.05x** | 249.4 → **235.6** (1024 px) | **byte-identical** on six rigs |
+| `fireblobs.js` (converted in place) | two additive blob layers, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.20x** | 177.2 → **145.2** (1024 px) | **byte-identical** on six rigs |
+| `heatshivers.js` (converted in place) | two pulse generators + afterglow, two RGB channel buffers and a scalar blue, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.18x** | 48.4 → **43.4** (1024 px) | **byte-identical** on six rigs |
 
 ### `raindrops-2d.js` (2026-09-07)
 
@@ -591,6 +594,65 @@ control at its declared `default=` is byte-identical to leaving it undriven.
 calls, 4096 `setPixel` calls and ~36.7 interpreted instructions per pixel.
 Gitea #373 carries the two ops that would change that -- a canvas noise fill
 and a palette-space canvas fill -- with the estimate this profile supports.
+
+### The 1-D channel-buffer bucket — `novas`, `fireblobs`, `heatshivers` (2026-09-07)
+
+Gitea #405 / #373 §5: patterns whose `beforeRender` already fills parallel
+per-pixel channel buffers and whose `render` is one `rgb()`/`hsv()` read-out of
+them. These three are the pure RGB form, and the conversion is the same three
+moves every time:
+
+1. **The read-out's arithmetic folds back into the buffers, in place.** All
+   three squared for gamma in `render` (`rgb(r * r, g * g, b * b)`), and `novas`
+   clamped first. Those buffers are fully rewritten every frame — zeroed at the
+   top, accumulated, then read — so squaring them at the *end* of `beforeRender`
+   applies exactly once and needs **no new arrays**. That matters more here than
+   anywhere else: these patterns are already four or five `pixelCount` buffers
+   against a 10,236-element budget, so a conversion that added a fourth channel
+   trio would have cost more ceiling than it bought speed.
+2. **`renderFrame()` is one `fillRGB`.** `fillRGB` is an *index-space* op — it
+   takes an array or a scalar per channel and addresses pixel `i` — so it is
+   map-independent: on a bare strip it is exactly the old `render(index)` loop,
+   and on a matrix these patterns still run along the pixel index rather than
+   acquiring a geometry they never had. `heatshivers` uses the scalar form for
+   its always-black blue channel: `fillRGB(chR, chG, 0)`.
+3. **The zero-fills go native.** Each frame these patterns cleared three or four
+   `pixelCount` buffers with an interpreted `for` loop. `feedback(a, 0)` is the
+   same thing as one VM call, and it is where most of the measured win actually
+   comes from — the `renderFrame` entry alone is worth ~1.02x on this host.
+   Two per-pixel passes also gained a `v > 0` / `iv <= 0` skip, exact because
+   every term reaching these buffers is non-negative (a zero channel squares to
+   itself, and a zero intensity contributes nothing to the composite).
+
+| rig | `novas` | `fireblobs` | `heatshivers` |
+|---|---:|---:|---:|
+| 1024 px, `--map-grid 32x32`, µs/frame | 580.1 → **554.2** (1.05x) | 399.9 → **334.0** (1.20x) | 110.9 → **93.9** (1.18x) |
+| 256 px, `--map-grid 16x16`, µs/frame | 147.3 → **139.7** (1.05x) | 102.1 → **87.0** (1.17x) | 28.2 → **24.4** (1.16x) |
+| insns/px at 1024 px | 249.4 → **235.6** | 177.2 → **145.2** | 48.4 → **43.4** |
+
+`novas` gains least because its frame is dominated by the per-bloom half-sine
+painting loops and the tint/max-merge pass, neither of which any existing bulk
+op covers — the read-out was never the expensive part. Host numbers understate
+the device win, where the per-pixel `render` entry alone is 317–440 Xtensa
+cycles.
+
+**Equivalence**: 60 frames at a fixed 30 fps delta and seed, PPMs compared byte
+for byte against the pre-conversion files on **six** rigs — 16x16, 32x32 and
+64x64 coordinate maps and 60 / 300 / 512 px mapless strips — **maxdiff 0**
+everywhere, undriven and with every control driven off its default
+(`novas`: five controls; `fireblobs`: four; `heatshivers` has none).
+
+**These three do not run at 4096 px, before or after.** `novas` and `fireblobs`
+allocate four `pixelCount` arrays and `heatshivers` five, against
+`DEFAULT_ARRAY_BUDGET` = 10,236 elements: the ceilings are 2,559 / 2,559 /
+2,047 pixels and the conversion moves none of them, because it adds no arrays.
+At 4096 px both sides fail the budget identically. One caveat worth recording:
+`fireblobs` allocates lazily inside `beforeRender` (`ensureBuffers()`), so at
+4096 px the budget error lands *mid-allocation* and the pattern runs on a
+partly-allocated buffer set; before and after then diverge on 66 of 737,295
+bytes with the controls driven. That is two different walks through an already
+broken state, not a rendering difference — at 2,048 and 2,400 px, the largest
+sizes that actually allocate, the same driven run is byte-identical.
 
 ## How to judge this on device
 

@@ -61,11 +61,15 @@ export function beforeRender(delta) {
   clock += dt
 
   var i
-  for (i = 0; i < pixelCount; i++) { rBuf[i] = 0; gBuf[i] = 0; bBuf[i] = 0 }
+  // native zero-fills: `feedback(a, 0)` is one VM call, not pixelCount
+  // interpreted iterations (three clears a frame plus one per generator)
+  feedback(rBuf, 0)
+  feedback(gBuf, 0)
+  feedback(bBuf, 0)
 
   var g
   for (g = 0; g < NG; g++) {
-    for (i = 0; i < pixelCount; i++) tmp[i] = 0
+    feedback(tmp, 0)
 
     // spawn a pulse when the clock passes this generator's next-spawn time
     if (clock >= nextSpawn[g]) {
@@ -126,11 +130,26 @@ export function beforeRender(delta) {
       if (cb > bBuf[i]) bBuf[i] = cb
     }
   }
+
+  // The read-out the old per-pixel `render` did -- clamp, then square for
+  // gamma -- folded back into the buffers themselves, in place. They are
+  // zeroed at the top of every frame, so the square is applied exactly once
+  // and no fourth set of pixelCount-sized arrays is needed.
+  // Every term that reaches these buffers is >= 0 and the merge is a max, so
+  // clamp(v, 0, 1) is min(v, 1) and a still-zero channel squares to itself --
+  // skipping those keeps the pass proportional to the lit pixels, which is a
+  // small fraction of the strip.
+  for (i = 0; i < pixelCount; i++) {
+    var vr = rBuf[i]; if (vr > 0) rBuf[i] = vr < 1 ? vr * vr : 1
+    var vg = gBuf[i]; if (vg > 0) gBuf[i] = vg < 1 ? vg * vg : 1
+    var vb = bBuf[i]; if (vb > 0) bBuf[i] = vb < 1 ? vb * vb : 1
+  }
 }
 
-export function render(index) {
-  var r = clamp(rBuf[index], 0, 1)
-  var g = clamp(gBuf[index], 0, 1)
-  var b = clamp(bBuf[index], 0, 1)
-  rgb(r * r, g * g, b * b)   // square for gamma
+// One bulk read-out instead of pixelCount VM entries. `fillRGB` is an
+// index-space op, so this behaves identically with a map and without one --
+// on a bare strip it is exactly the old `render(index)` loop, and on a matrix
+// the blooms still run along the pixel index, not the geometry, as before.
+export function renderFrame() {
+  fillRGB(rBuf, gBuf, bBuf)
 }

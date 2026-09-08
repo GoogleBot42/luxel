@@ -75,16 +75,17 @@ export function beforeRender(delta) {
   ensureBuffers()
   clock += delta / 1000
 
-  // clear composite output
-  for (var i = 0; i < nbuf; i++) {
-    bufR[i] = 0; bufG[i] = 0; bufB[i] = 0
-  }
+  // clear composite output -- native zero-fills, one VM call each instead of
+  // nbuf interpreted iterations
+  feedback(bufR, 0)
+  feedback(bufG, 0)
+  feedback(bufB, 0)
 
   for (var L = 0; L < NLAYERS; L++) {
     var base = L * MAXBLOBS
 
     // clear this layer's intensity buffer
-    for (var i = 0; i < nbuf; i++) inten[i] = 0
+    feedback(inten, 0)
 
     // spawn: if due and a free slot exists
     if (clock >= nextSpawn[L]) {
@@ -125,17 +126,31 @@ export function beforeRender(delta) {
     // soft-limit: clamp to half scale then rescale to full (graceful plateau)
     var gain = L == 1 ? emberMix : 1
     for (var i = 0; i < nbuf; i++) {
-      var v = min(inten[i], 0.5) * 2 * gain
+      var iv = inten[i]
+      if (iv <= 0) continue          // v would be 0 and every += a no-op
+      var v = min(iv, 0.5) * 2 * gain
       bufR[i] += v * colR[L]
       bufG[i] += v * colG[L]
       bufB[i] += v * colB[L]
     }
   }
+
+  // The read-out the old per-pixel `render` did -- squared: deep darks, soft
+  // edges -- folded into the composite buffers in place. They are zeroed at
+  // the top of every frame, so the square is applied exactly once and no
+  // fourth set of pixelCount-sized arrays is needed.
+  // Every term is >= 0, so a still-zero channel squares to itself: skipping
+  // those keeps the pass proportional to the lit pixels.
+  for (var i = 0; i < nbuf; i++) {
+    var vr = bufR[i]; if (vr > 0) bufR[i] = vr * vr
+    var vg = bufG[i]; if (vg > 0) bufG[i] = vg * vg
+    var vb = bufB[i]; if (vb > 0) bufB[i] = vb * vb
+  }
 }
 
-export function render(index) {
-  var r = bufR[index]
-  var g = bufG[index]
-  var b = bufB[index]
-  rgb(r * r, g * g, b * b)          // squared: deep darks, soft edges
+// One bulk read-out instead of pixelCount VM entries. `fillRGB` is an
+// index-space op: identical with a map and without one, and on a bare strip
+// it is exactly the old `render(index)` loop.
+export function renderFrame() {
+  fillRGB(bufR, bufG, bufB)
 }

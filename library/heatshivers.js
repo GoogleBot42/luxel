@@ -85,13 +85,20 @@ export function beforeRender(delta) {
   for (var i = 0; i < pixelCount; i++) {
     heat[i] = max(heat[i] * decay, max(pulseA[i], pulseB[i]))
     var p = pulseA[i] + pulseB[i]
-    chR[i] = p + heat[i] // pulses + afterglow are both full red
-    chG[i] = p * 0.8 // pulses alone add amber warmth
+    // The square the old per-pixel `render` did (simple gamma; overlaps clip
+    // white-hot) folded into the channel buffers, which are fully rewritten
+    // every frame -- so it is applied exactly once and costs no new arrays.
+    var cr = p + heat[i] // pulses + afterglow are both full red
+    var cg = p * 0.8 // pulses alone add amber warmth
+    chR[i] = cr * cr
+    chG[i] = cg * cg
   }
 }
 
-export function render(index) {
-  var r = chR[index]
-  var g = chG[index]
-  rgb(r * r, g * g, 0) // square = simple gamma; overlaps clip white-hot
+// One bulk read-out instead of pixelCount VM entries. Blue is a scalar 0
+// broadcast to every pixel -- `fillRGB` takes an array or a number per
+// channel. It is an index-space op, so this is identical with a map and
+// without one: on a bare strip it is exactly the old `render(index)` loop.
+export function renderFrame() {
+  fillRGB(chR, chG, 0)
 }
