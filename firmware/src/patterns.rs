@@ -589,6 +589,12 @@ static INDEX: BlockingMutex<CriticalSectionRawMutex, RefCell<Vec<Rec>>> =
     BlockingMutex::new(RefCell::new(Vec::new()));
 /// Where the next file goes.
 static CURSOR: AtomicU32 = AtomicU32::new(0);
+/// Where the last file placed BELOW the cursor ended — the free-space hint
+/// [patlog::place_free] packs against, so a hole under a pinned file fills
+/// as densely as the log proper instead of costing a page per record
+/// (Gitea #388). Zero means "no hole is open"; it is only ever a hint, and
+/// `place_free` re-checks the flash before trusting it.
+static FREE_HINT: AtomicU32 = AtomicU32::new(0);
 /// Bytes held by records the index no longer points at — superseded
 /// generations, deletes, and anything a cut operation left behind. This is
 /// what a compaction would give back.
@@ -745,6 +751,8 @@ fn reload() -> patlog::Scan {
     // reclaimable too, and after a compaction with nothing pinned this is
     // exactly 0 (Gitea #379).
     DEAD_BYTES.store(stats.cursor.saturating_sub(used), Ordering::Relaxed);
+    // The log moved under it; `place_free` starts its search over.
+    FREE_HINT.store(0, Ordering::Relaxed);
     OVERFULL.store(over, Ordering::Relaxed);
     INDEX.lock(|c| *c.borrow_mut() = live);
     stats
@@ -1345,12 +1353,27 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
     let size = Rec::bytes(name.len() as u8, source.len() as u32, bc.len() as u32);
     let mut off = with_log(|a| patlog::place(a, CURSOR.load(Ordering::Relaxed), size)).flatten();
     if off.is_none() {
-        // No room at the tail. Compaction is a user-action-only cost (never
-        // on the activation path — the wear rule), so this is where it
+        // No room at the TAIL — but the cursor is a high-water mark and a
+        // PINNED file cannot be moved down, so an earlier compaction may
+        // have left whole erased pages below it that [patlog::place] will
+        // never look at. Reach them first: it is a read-only page scan, and
+        // an erased page holds no record, so an append there can overwrite
+        // nothing (Gitea #388). Doing this BEFORE the compaction also keeps
+        // a pinned log from re-repacking itself on every single save.
+        off = with_log(|a| patlog::place_free(a, FREE_HINT.load(Ordering::Relaxed), size))
+            .flatten();
+    }
+    if off.is_none() {
+        // Still nothing. Compaction is a user-action-only cost (never on
+        // the activation path — the wear rule), so this is where it
         // happens: repack the live files down over the dead ones, then try
         // again.
         if compact(region, size).await {
             off = with_log(|a| patlog::place(a, CURSOR.load(Ordering::Relaxed), size)).flatten();
+        }
+        if off.is_none() {
+            off = with_log(|a| patlog::place_free(a, FREE_HINT.load(Ordering::Relaxed), size))
+                .flatten();
         }
         // A compaction moves every unpinned file, so `old` is a stale
         // ADDRESS now — retiring it below would drop a DEAD word into the
@@ -1425,7 +1448,15 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
         }
         sort_by_off(&mut idx);
     });
-    CURSOR.store(rec.end(), Ordering::Relaxed);
+    let hi = CURSOR.load(Ordering::Relaxed);
+    CURSOR.store(hi.max(rec.end()), Ordering::Relaxed);
+    if rec.end() <= hi {
+        // it went into a hole below the cursor, so those bytes were part of
+        // what the store called reclaimable and are not any more
+        let d = DEAD_BYTES.load(Ordering::Relaxed);
+        DEAD_BYTES.store(d.saturating_sub(rec.size()), Ordering::Relaxed);
+        FREE_HINT.store(rec.end(), Ordering::Relaxed);
+    }
     NEXT_STAMP.store(rec.stamp.wrapping_add(1), Ordering::Relaxed);
     if !existed {
         NEXT_SEQ.store(seq.wrapping_add(1), Ordering::Relaxed);
@@ -1534,6 +1565,20 @@ pub fn pin_prev_from_running() {
     });
 }
 
+/// Slot 0 released — the decode has finished and whatever it produced is
+/// either installed (slot 1 names it) or dropped. Call it at the END of a
+/// library swap, always: slot 0 exists only for the window between
+/// [pin_code] and the engine being installed, and a pin that is never
+/// released names the last library pattern the device ever decoded for the
+/// rest of the boot. A compaction then treats that file as frozen even
+/// after it has been deleted, cannot pack anything below it, and leaves the
+/// cursor — and with it every free byte underneath — out of reach. That is
+/// how the Athom rig ended up refusing saves with 58 % of its store idle
+/// (Gitea #388).
+pub fn unpin_code() {
+    set_pin(0, None);
+}
+
 /// Slot 2 released — the outgoing engine has been dropped.
 pub fn unpin_prev() {
     set_pin(2, None);
@@ -1624,7 +1669,14 @@ async fn compact(region: u32, need: u32) -> bool {
     };
     let old_end = CURSOR.load(Ordering::Relaxed);
     if packed + need > LOG_LEN {
-        return false; // repacking would not open enough — erase nothing
+        // The TAIL will not take it. That is not the whole question when a
+        // pinned record holds the cursor high: the space this repack frees
+        // is then all *below* it, and `place_free` can use it. Refusing on
+        // the tail alone is what left the rig at 49 of 119 patterns
+        // (Gitea #388). Only erase nothing when there is nothing to gain.
+        if patlog::free_run_after(&places, LOG_LEN) < patlog::align_page(need) {
+            return false;
+        }
     }
     println!(
         "patterns: compacting the log for {} B ({} files, {} B -> {} B)",
@@ -1658,18 +1710,26 @@ async fn compact(region: u32, need: u32) -> bool {
     // Last: the stale copies the repack left above the new cursor. Until
     // now they were the source data.
     let (from, to) = patlog::sweep_pages(packed, old_end);
-    let _ = erase_pages(region, from, to).await;
+    // Never discarded: when the sweep fails the stale copies above the new
+    // cursor are still there, nothing is lost (every header carries its own
+    // offset, so both halves parse) but the next scan keeps finding them and
+    // the cursor does not come back down. It goes out on the line below
+    // rather than in a println! of its own — a second format site is
+    // hundreds of bytes of OTA slot (#310).
+    let swept = erase_pages(region, from, to).await;
 
     // Rebuild every byte of RAM state from what the flash now says — which
     // re-hashes every file, so a compaction that damaged one drops it here
     // rather than handing it to the engine.
     let s = reload();
     println!(
-        "patterns: compacted — {} files, {} B used, {} B free ({} torn)",
+        "patterns: compacted — {} files, {} B used, {} B free, {} B held below a pin ({} torn){}",
         s.recs,
         s.live,
         LOG_LEN - s.cursor,
-        s.torn
+        DEAD_BYTES.load(Ordering::Relaxed),
+        s.torn,
+        if swept { "" } else { " — SWEEP FAILED" }
     );
     true
 }

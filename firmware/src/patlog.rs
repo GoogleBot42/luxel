@@ -461,6 +461,55 @@ pub fn place<A: Arena + ?Sized>(a: &mut A, cursor: u32, size: u32) -> Option<u32
     }
 }
 
+/// Where an append of `size` bytes may go when [place] has run out of
+/// tail: **space the cursor cannot see**.
+///
+/// The cursor is a high-water mark — the end of the highest record the scan
+/// found — and [place] only ever looks upward from it. That is right while
+/// the log packs from 0, but a compaction cannot move a *pinned* record (an
+/// engine is executing it), so a pin high in the log leaves the cursor above
+/// a span the repack has just erased. Those pages are free and unreachable,
+/// and on the Athom rig that cost 58 % of the store (Gitea #388).
+///
+/// The safety argument is one line: **erased flash holds no record**, so
+/// nothing placed here can overwrite a live, a dead-but-pinned, or a torn
+/// one. Both branches below check every byte an append would write *and*
+/// every byte [append_plan]'s `Erase` step would erase — up to the end of
+/// the record's last page — so a record that merely shares a page with the
+/// hole excludes that page instead of being erased by it.
+///
+/// `hint` is where the last file placed this way ended. Packing straight
+/// after it keeps a hole exactly as dense as the log proper; when it no
+/// longer fits, the scan falls back to the lowest wholly-erased page run
+/// big enough, which is first-fit over the whole arena.
+pub fn place_free<A: Arena + ?Sized>(a: &mut A, hint: u32, size: u32) -> Option<u32> {
+    if size == 0 {
+        return None;
+    }
+    let at = align4(hint);
+    if let Some(end) = at.checked_add(size) {
+        if end <= a.len() && erased(a, at, align_page(end) - at) {
+            return Some(at);
+        }
+    }
+    let pages = a.len() / PAGE;
+    let need = align_page(size) / PAGE;
+    let mut run_start: Option<u32> = None;
+    let mut p = 0u32;
+    while p < pages {
+        if erased(a, p * PAGE, PAGE) {
+            let start = *run_start.get_or_insert(p);
+            if p + 1 - start >= need {
+                return Some(start * PAGE);
+            }
+        } else {
+            run_start = None;
+        }
+        p += 1;
+    }
+    None
+}
+
 /// One write of an append, in the order they must happen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -681,6 +730,37 @@ pub fn build_page<A: Arena + ?Sized>(
 /// those bytes are still the source data.
 pub fn sweep_pages(new_cursor: u32, old_cursor: u32) -> (u32, u32) {
     (align_page(new_cursor) / PAGE, align_page(old_cursor) / PAGE)
+}
+
+/// The largest run of whole erase pages a *completed* repack of `places`
+/// would leave free, in bytes — what [place_free] will be able to use
+/// afterwards.
+///
+/// The executor erases or rewrites every page below the packed length and
+/// sweeps every page above it, and [build_page] fills whatever no record
+/// covers with 0xFF, so "no placement covers this page" and "this page ends
+/// up erased" are the same statement. A frozen page is skipped by the
+/// executor — but a frozen page is by definition covered by its pinned
+/// record's own placement, so it is never counted free.
+///
+/// A compaction that cannot open enough TAIL must consult this before
+/// refusing: with a pinned record holding the cursor high, the space the
+/// repack frees is all *below* it, and refusing on the tail alone is what
+/// left the rig stuck at 49 of 119 patterns (Gitea #388).
+///
+/// `places` comes from [plan] and is therefore ascending by `to`; anything
+/// else only makes this under-report, never over-report.
+pub fn free_run_after(places: &[Place], arena_len: u32) -> u32 {
+    let mut best = 0u32;
+    let mut at = 0u32; // first page byte not covered by a placement
+    for pl in places {
+        let first = pl.to & !(PAGE - 1);
+        if first > at {
+            best = best.max(first - at);
+        }
+        at = at.max(align_page(pl.to + pl.size));
+    }
+    best.max(arena_len.saturating_sub(at))
 }
 
 #[cfg(test)]
@@ -1371,5 +1451,87 @@ mod tests {
             assert!(st.cursor <= sim.len());
         }
         assert!(compactions > 2, "the fuzz must actually compact ({})", compactions);
+    }
+
+    /// [place_free] may only ever hand back a span that is already erased —
+    /// every byte the append will write AND every byte its `Erase` step
+    /// will erase. That is the whole safety argument for reaching under a
+    /// pinned record (Gitea #388), so assert it directly against records
+    /// scattered through the arena with holes punched between them.
+    #[test]
+    fn place_free_only_ever_returns_erased_space() {
+        let mut sim = Sim::new(40 * PAGE);
+        // fill the arena, then free a few page runs in the middle and at
+        // the top — the shape a compaction blocked by a pin leaves.
+        let mut cursor = 0u32;
+        let mut recs = Vec::new();
+        for i in 0..40u32 {
+            let p = pat(i, &format!("f{}", i), 900 + (i as usize * 131) % 3000, 700);
+            let Some(off) = place(&mut sim, cursor, Rec::bytes(p.name.len() as u8, p.src.len() as u32, p.bc.len() as u32)) else { break };
+            let Some(r) = append(&mut sim, &p, off, i + 1) else { break };
+            cursor = r.end();
+            recs.push(r);
+        }
+        assert!(recs.len() > 10, "only {} records fit", recs.len());
+        for page in [3u32, 4, 5, 12, 13, 25] {
+            assert!(sim.erase(page));
+        }
+        // Every record still whole after the punches is untouchable.
+        let survivors: Vec<Rec> = index(&mut sim).into_iter().map(|(r, _)| r).collect();
+        for size in [40u32, 4000, 4096, 4100, 9000, 20000] {
+            let Some(off) = place_free(&mut sim, 0, size) else { continue };
+            let span = align_page(off + size) - off;
+            assert!(
+                erased(&mut sim, off, span),
+                "size {}: place_free returned {}, whose {} B span is not erased",
+                size,
+                off,
+                span
+            );
+            for r in &survivors {
+                assert!(
+                    off + size <= r.off || off >= r.end(),
+                    "size {}: {} overlaps the record at {}",
+                    size,
+                    off,
+                    r.off
+                );
+            }
+        }
+        // A size no run can hold is refused, not squeezed in.
+        assert_eq!(place_free(&mut sim, 0, 40 * PAGE), None);
+    }
+
+    /// The hint packs a hole densely: consecutive files placed through
+    /// [place_free] sit back to back, not one per page.
+    #[test]
+    fn place_free_packs_against_its_hint() {
+        let mut sim = Sim::new(8 * PAGE);
+        let a = place_free(&mut sim, 0, 1000).expect("an empty arena has room");
+        assert_eq!(a, 0);
+        let b = place_free(&mut sim, a + 1000, 1000).expect("room after the first");
+        assert_eq!(b, 1000, "the hint must pack, not round up to a page");
+        // A hint pointing at written bytes falls back to the page scan.
+        let p = pat(1, "one", 900, 700);
+        let r = append(&mut sim, &p, 0, 1).expect("append");
+        let c = place_free(&mut sim, 0, 900).expect("room above the record");
+        assert!(c >= r.end() || erased(&mut sim, c, align_page(c + 900) - c));
+    }
+
+    /// [free_run_after] must agree with what the executor actually leaves
+    /// erased: the longest run of pages no placement covers.
+    #[test]
+    fn free_run_after_counts_the_pages_no_placement_covers() {
+        // one record in page 0, one pinned high in page 15: pages 1..15
+        // come back free, which is 14 pages
+        let places = [
+            Place { idx: 0, from: 0, to: 0, size: 1000 },
+            Place { idx: 1, from: 15 * PAGE, to: 15 * PAGE, size: 1000 },
+        ];
+        assert_eq!(free_run_after(&places, 20 * PAGE), 14 * PAGE);
+        // above the pinned one there are only 4, so the gap under it wins
+        let places = [Place { idx: 0, from: 0, to: 0, size: 3 * PAGE }];
+        assert_eq!(free_run_after(&places, 20 * PAGE), 17 * PAGE);
+        assert_eq!(free_run_after(&[], 20 * PAGE), 20 * PAGE);
     }
 }

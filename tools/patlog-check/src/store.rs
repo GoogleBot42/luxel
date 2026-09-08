@@ -127,12 +127,19 @@ pub struct Store {
     pub next_seq: u32,
     pub next_stamp: u32,
     pub dead_bytes: u32,
+    /// `patterns.rs`' `FREE_HINT`: where the last file placed below the
+    /// cursor ended.
+    pub free_hint: u32,
     pub overfull: bool,
     /// `pins()`: seqs an engine is executing in place.
     pub pinned: Vec<u32>,
     pub compactions: usize,
     /// Set when a compaction refused to run (the #379 guard).
     pub refused: usize,
+    /// Set when a compaction's closing sweep could not erase the stale
+    /// copies it left above the new cursor (`patterns.rs` logs this; the
+    /// firmware used to discard the result — Gitea #388).
+    pub sweep_failed: usize,
 }
 
 /// `patterns.rs::sort_by_off`.
@@ -155,10 +162,12 @@ impl Store {
             next_seq: 0,
             next_stamp: 1,
             dead_bytes: 0,
+            free_hint: 0,
             overfull: false,
             pinned: Vec::new(),
             compactions: 0,
             refused: 0,
+            sweep_failed: 0,
         }
     }
 
@@ -212,6 +221,7 @@ impl Store {
         self.next_stamp = stamp;
         self.cursor = stats.cursor;
         self.dead_bytes = stats.cursor.saturating_sub(used);
+        self.free_hint = 0;
         self.overfull = over;
         self.index = live;
         stats
@@ -259,7 +269,13 @@ impl Store {
         };
         let old_end = self.cursor;
         if packed + need > LOG_LEN {
-            return false;
+            // The tail will not take it — but with a pinned record holding
+            // the cursor high, everything this repack frees is below it and
+            // `place_free` can use it (#388). Only refuse when there is
+            // nothing to gain.
+            if patlog::free_run_after(&places, LOG_LEN) < patlog::align_page(need) {
+                return false;
+            }
         }
         self.compactions += 1;
 
@@ -279,7 +295,9 @@ impl Store {
             }
         }
         let (from, to) = patlog::sweep_pages(packed, old_end);
-        let _ = self.erase_pages(from, to);
+        if !self.erase_pages(from, to) {
+            self.sweep_failed += 1;
+        }
         self.reload();
         true
     }
@@ -310,8 +328,20 @@ impl Store {
         let mut old = old;
         let mut off = patlog::place(&mut self.f, self.cursor, size);
         if off.is_none() {
+            // The cursor is a high-water mark and a pinned file cannot move
+            // down, so a pin high in the log leaves the cursor above pages
+            // an earlier repack erased. An erased page holds no record:
+            // placing there can overwrite nothing (#388), and trying it
+            // before compacting keeps a pinned log from re-repacking itself
+            // on every save.
+            off = patlog::place_free(&mut self.f, self.free_hint, size);
+        }
+        if off.is_none() {
             if self.compact(size) {
                 off = patlog::place(&mut self.f, self.cursor, size);
+            }
+            if off.is_none() {
+                off = patlog::place_free(&mut self.f, self.free_hint, size);
             }
             // A compaction moved every unpinned file: `old` is a stale
             // address now. Take its new home from the rebuilt index.
@@ -363,7 +393,14 @@ impl Store {
             None => self.index.push(rec),
         }
         sort_by_off(&mut self.index);
-        self.cursor = rec.end();
+        let hi = self.cursor;
+        self.cursor = hi.max(rec.end());
+        if rec.end() <= hi {
+            // it filled a hole below the cursor: those bytes were part of
+            // what the store called reclaimable and are not any more
+            self.dead_bytes = self.dead_bytes.saturating_sub(rec.size());
+            self.free_hint = rec.end();
+        }
         self.next_stamp = self.next_stamp.wrapping_add(1);
         if !existed {
             self.next_seq = seq.wrapping_add(1);

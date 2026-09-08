@@ -1351,6 +1351,12 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     if prev.is_none() {
                         patterns::unpin_prev();
                     }
+                    // The decode window is over: whatever it produced is
+                    // installed (slot 1 names it) or dropped. Slot 0 must
+                    // NOT outlive it — a decode pin that is never released
+                    // freezes that file for the rest of the boot and costs
+                    // the store every byte below it (Gitea #388).
+                    patterns::unpin_code();
                 }
                 Msg::Crossfade { env, ms, id } => {
                     // the outgoing engine stays alive on purpose (it's the
