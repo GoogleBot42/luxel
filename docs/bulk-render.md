@@ -456,6 +456,84 @@ of five interleaved runs; `--profile` for the instruction counts.
 | `novas.js` (converted in place) | two pulse generators, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.05x** | 249.4 → **235.6** (1024 px) | **byte-identical** on six rigs |
 | `fireblobs.js` (converted in place) | two additive blob layers, three RGB channel buffers, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.20x** | 177.2 → **145.2** (1024 px) | **byte-identical** on six rigs |
 | `heatshivers.js` (converted in place) | two pulse generators + afterglow, two RGB channel buffers and a scalar blue, one `fillRGB` | budget-refused at 4096 px **before and after**; 1024 px **1.18x** | 48.4 → **43.4** (1024 px) | **byte-identical** on six rigs |
+| `fireworks-finale.js` (converted in place) | 3 per-pixel RGB buffers, one `fillRGB` | 99.3 → **12.3** µs/frame at 2025 px (45x45) — see the note on 4096 px below | — | **byte-identical**, 7 rigs |
+| `rocket-by-tony-hampton.js` (converted in place) | 3 per-pixel RGB buffers, one `fillRGB` | 88.3 → **21.8** µs/frame at 2025 px (45x45) | — | **byte-identical**, 7 rigs |
+| `coolaura.js` (converted in place) | 2 per-pixel buffers (down from 4), one `fillRGB` | 467.6 → **367.6** µs/frame at 2025 px (45x45) | — | **byte-identical** wherever the original loads; the original cannot load above 2559 px |
+| `christmaspewpew.js` (converted in place) | 2 trail buffers + a constant underglow array, one `fillRGB` | 149.8 → **84.4** µs/frame at 3364 px (58x58) | — | **byte-identical**, 8 rigs |
+
+### The `fillRGB` readout batch (2026-09-07)
+
+Four patterns from the "already fillHSV/fillCanvas-shaped" bucket #373 section 5
+listed. All four kept three parallel per-pixel channel arrays and read them back
+with one `rgb()` per pixel, which is exactly `fillRGB`'s shape:
+
+```
+render(index) { rgb(rBuf[index], gBuf[index], bBuf[index]) }
+    ->  renderFrame() { fillRGB(rBuf, gBuf, bBuf) }
+```
+
+The readout's own `saturate()` / `clamp(v, 0, 1)` / `min(v, 1)` guards drop out:
+`fillRGB` goes through `engine::quantize`, which clamps to 0..1 exactly the way
+`rgb()` does, so the conversion is byte-exact by construction and not merely by
+measurement. All four stay in **index space**, so a mapless strip is the native
+rig and none of them acquires a `ceil(√n)` grid it never asked for; on a 2D map
+each pixel still reads its own buffer slot, so the fill is the same readout at
+the same resolution — there is no canvas and no resampling anywhere here.
+
+| pattern | rig | before µs/frame | after µs/frame | ratio |
+|---|---|---:|---:|---:|
+| `fireworks-finale.js` | 1024 px, 32x32 | 52.6 | 8.3 | **6.3x** |
+| `fireworks-finale.js` | 2025 px, 45x45 | 99.3 | 12.3 | **8.1x** |
+| `rocket-by-tony-hampton.js` | 1024 px, 32x32 | 49.8 | 11.7 | **4.3x** |
+| `rocket-by-tony-hampton.js` | 2025 px, 45x45 | 88.3 | 21.8 | **4.0x** |
+| `coolaura.js` | 1024 px, 32x32 | 241.1 | 195.9 | 1.23x |
+| `coolaura.js` | 2025 px, 45x45 | 467.6 | 367.6 | 1.27x |
+| `christmaspewpew.js` | 1024 px, 32x32 | 45.7 | 26.3 | **1.7x** |
+| `christmaspewpew.js` | 3364 px, 58x58 | 149.8 | 84.4 | **1.8x** |
+
+`coolaura` is the low ratio because almost all of its frame is a `beforeRender`
+that already walks every pixel for every live pulse — the per-pixel entry it
+sheds is a small share of that. `christmaspewpew` sits in between because its
+red channel is the trail plus a constant underglow and the fill has to pay two
+extra native passes for it (below).
+
+**Two of the four needed more than a one-line swap.**
+
+* `coolaura` allocated **four** `array(pixelCount)` buffers — an intensity
+  accumulator plus R/G/B — and red was identically 0. Red is now a scalar
+  `fillRGB` broadcasts, the intensity accumulator *is* the green buffer until
+  step 5 rewrites it in place, and the per-channel square that `render` applied
+  moved into that same step. Two buffers instead of four. That is not
+  housekeeping: four `array(4096)` channels are 16,384 elements against the
+  10,236-element `DEFAULT_ARRAY_BUDGET`, so **the pre-conversion pattern could
+  not load on a 64x64 panel at all** and rendered black. It now runs there, at
+  799 µs/frame. Its per-frame clear also stopped being a `pixelCount` bytecode
+  loop and became `feedback(gbuf, 0)`.
+* `christmaspewpew` read `min(1, trailR[index] + AMBIENT_R)`. **There is no
+  array-plus-scalar builtin** — `arrayAdd`/`arraySub` take two arrays,
+  `arrayScale` multiplies, and #373's proposed `arrayAffine(dst, src, k, c)` is
+  exactly the missing arm. The underglow is therefore a constant
+  `array(pixelCount)` that is added before the fill and subtracted straight
+  after, which is exact (a fixed-point add and its inverse round-trip with no
+  rounding) and costs two native passes. It charges no extra elements, because
+  the blue trail buffer it replaces was never written by anything.
+
+**The array budget, not the VM, is the ceiling for this bucket.** Six of the
+seven patterns in #373's list of 21 that were sampled here cannot load at
+4096 px *before or after* conversion: three `array(pixelCount)` channels are
+12,288 elements against the 10,236 budget, so `array()` fails during init and
+the pattern renders black on a 64x64 panel. That is the same wall
+docs/bulk-render.md already records for `rainbow-comet.js`, and it is why the
+ratios above are quoted at 45x45 and 58x58 rather than 64x64. Gitea #405 carries
+the conversions; the budget itself is tracked separately.
+
+**Visual equivalence**, 60 frames at a fixed 30 fps delta and seed
+(`luxel run --out`), byte for byte against the pre-conversion file on 16x16,
+32x32, 45x45, 58x58 and 64x64 grids and 60/300/512/1000 px mapless strips:
+**maxdiff 0 on every rig where the original loads**, for all four patterns. The
+one non-zero cell in the sweep is `coolaura` at 58x58 and 64x64, where the
+pre-conversion file renders black because of the budget and the converted one
+renders the pattern.
 
 ### `raindrops-2d.js` (2026-09-07)
 

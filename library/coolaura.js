@@ -39,18 +39,22 @@ var alive = array(POOL)
 var birth = array(POOL)
 var center = array(POOL)  // 0..1 fraction of strip
 
-var intensity = array(pixelCount)
-var rbuf = array(pixelCount)
-var gbuf = array(pixelCount)
-var bbuf = array(pixelCount)
+// Two buffers, not four. `gbuf` doubles as the intensity accumulator until
+// step 5 turns it into the green channel in place, and red is a constant 0
+// that `fillRGB` broadcasts, so nothing has to store it per pixel. That
+// halves the element budget this pattern charges (2 x pixelCount instead of
+// 4), which is what lets it load at all on a 4096-px panel — four
+// pixelCount arrays are 16,384 elements against a 10,236 budget.
+var gbuf = array(pixelCount)   // intensity accumulator, then green^2
+var bbuf = array(pixelCount)   // blue^2
 
 export function beforeRender(delta) {
   var dt = delta / 1000
   clock += dt
 
-  // 1. clear intensity buffer
+  // 1. clear the intensity accumulator (native pass, not a bytecode loop)
   var j = 0
-  for (j = 0; j < pixelCount; j++) intensity[j] = 0
+  feedback(gbuf, 0)
 
   // 2. spawn: if due and a free slot exists, activate it
   if (clock >= nextSpawn) {
@@ -89,27 +93,30 @@ export function beforeRender(delta) {
       var pos = j / pixelCount
       if (pos < lo || pos > hi) continue
       var profile = sin((pos - lo) / width * PI)   // half-sine spatial bump
-      intensity[j] += tEnv * profile
+      gbuf[j] += tEnv * profile
     }
   }
 
   // 4. global breathing envelope (raised cosine, ~8 s, 0..1)
   var breath = (1 - cos(clock / breathSecs * PI2)) / 2
 
-  // 5. colorize through a two-stop gradient over (breathed) intensity
+  // 5. colorize through a two-stop gradient over (breathed) intensity, and
+  //    square each channel here rather than per pixel: the gamma-like curve
+  //    that deepens darks and softens pulses is the same multiply either way.
   for (j = 0; j < pixelCount; j++) {
-    var t = clamp(intensity[j] * breath, 0, 1)
+    var t = clamp(gbuf[j] * breath, 0, 1)
     // stop 0: medium blue-cyan   stop 1: green-teal
-    rbuf[j] = 0
-    gbuf[j] = mix(0.4, 0.9, t)
-    bbuf[j] = mix(1.0, 0.3, t)
+    var g = mix(0.4, 0.9, t)
+    var b = mix(1.0, 0.3, t)
+    gbuf[j] = g * g
+    bbuf[j] = b * b
   }
 }
 
-export function render(index) {
-  // square each channel: gamma-like curve that deepens darks, softens pulses
-  var r = rbuf[index]
-  var g = gbuf[index]
-  var b = bbuf[index]
-  rgb(r * r, g * g, b * b)
+// The colour was always a per-pixel buffer readout, so it is one `fillRGB`.
+// Red is a scalar 0 broadcast to every pixel. Index space: this is a strip
+// pattern and stays mapless, and on a 2D map each pixel keeps reading its own
+// slot exactly as `render(index)` did.
+export function renderFrame() {
+  fillRGB(0, gbuf, bbuf)
 }

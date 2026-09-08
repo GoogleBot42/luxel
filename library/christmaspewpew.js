@@ -14,10 +14,14 @@ const AMBIENT_R = 0.04     // faint deep-red wash on "empty" pixels
 const SHOT_LEVEL = 0.35    // projectiles are dim so additive overlap
                            // brightens without hue-shifting badly
 
-// trail canvas, one set of channels per pixel
+// trail canvas, one set of channels per pixel. Blue was always identically
+// zero (no shot writes it), so it is a scalar the fill broadcasts; the array
+// slot it used to occupy now carries the constant red underglow instead, so
+// the element budget this pattern charges is unchanged.
 var trailR = array(pixelCount)
 var trailG = array(pixelCount)
-var trailB = array(pixelCount)
+var ambR = array(pixelCount)
+arrayMutate(ambR, (v) => AMBIENT_R)
 
 var pos = array(NUM_SHOTS)   // fractional pixel position
 var vel = array(NUM_SHOTS)   // random 1..4, several-fold speed spread
@@ -35,7 +39,6 @@ export function beforeRender(delta) {
   // fade pass: trails decay exponentially toward black
   feedback(trailR, DECAY)
   feedback(trailG, DECAY)
-  feedback(trailB, DECAY)
 
   var s
   for (s = 0; s < NUM_SHOTS; s++) {
@@ -64,10 +67,17 @@ export function beforeRender(delta) {
   }
 }
 
-export function render(index) {
-  rgb(
-    min(1, trailR[index] + AMBIENT_R),
-    trailG[index],
-    trailB[index]
-  )
+// The whole readout is one `fillRGB`: red is the trail plus the constant
+// underglow, green is the trail, blue is a broadcast 0. There is no
+// array-plus-scalar builtin (Gitea #373 proposes `arrayAffine`), so the
+// underglow is added with `arrayAdd` and taken straight back off — two native
+// passes, and exact, because a fixed-point add and its inverse round-trip
+// with no rounding at all. `min(1, ...)` is dropped: `fillRGB` quantizes
+// through the same clamp `rgb()` applies.
+// Index space, so this stays a mapless strip pattern; with a 2D map every
+// pixel still reads its own slot the way `render(index)` did.
+export function renderFrame() {
+  arrayAdd(trailR, ambR)
+  fillRGB(trailR, trailG, 0)
+  arraySub(trailR, ambR)
 }
