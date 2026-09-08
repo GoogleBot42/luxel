@@ -171,33 +171,56 @@ export function beforeRender(delta) {
   }
 }
 
-export function render(index) {
-  // bunting: dim red / white / blue blocks, stripeWidth pixels each
-  var band = floor((index + bunting) / stripeWidth) % 3
-  var r = 0.02
-  var g = 0.03
-  var b = 0.3
-  if (band == 0) { r = 0.26; g = 0.02; b = 0.03 }
-  else if (band == 1) { r = 0.13; g = 0.13; b = 0.13 }
+// One frame entry instead of pixelCount of them. This one CANNOT be a bulk
+// fill: the crackle draws a fresh `random(1)` for every pixel, in index order,
+// and the RNG is a single shared stream -- skipping a draw, or reordering
+// them, changes every later frame. So the loop stays per-pixel and pays one
+// `rgb` + one `setPixel` per pixel, which is still cheaper than the per-pixel
+// `render` entry it replaces (317-440 Xtensa cycles on the panel). All three
+// ops are index-space, so this is identical with a map and without one.
+//
+// The bunting band is the one thing that is NOT per-pixel: it changes once
+// every `stripeWidth` pixels, so the divide-floor-modulo is hoisted into a
+// walking edge and the three block colours are picked once per band rather
+// than once per pixel.
+export function renderFrame() {
+  var band = floor(bunting / stripeWidth) % 3
+  var edge = ceil((floor(bunting / stripeWidth) + 1) * stripeWidth - bunting)
+  var r0 = 0.02, g0 = 0.03, b0 = 0.3
+  if (band == 0) { r0 = 0.26; g0 = 0.02; b0 = 0.03 }
+  else if (band == 1) { r0 = 0.13; g0 = 0.13; b0 = 0.13 }
 
-  // rocket streaks read as warm orange over the bunting
-  var t = trail[index]
-  r += t
-  g += t * 0.34
-  b += t * 0.06
+  var i
+  for (i = 0; i < pixelCount; i++) {
+    if (i >= edge) {
+      // next bunting block: dim red / white / blue, stripeWidth pixels each
+      band = floor((i + bunting) / stripeWidth) % 3
+      edge = edge + stripeWidth
+      r0 = 0.02; g0 = 0.03; b0 = 0.3
+      if (band == 0) { r0 = 0.26; g0 = 0.02; b0 = 0.03 }
+      else if (band == 1) { r0 = 0.13; g0 = 0.13; b0 = 0.13 }
+    }
 
-  var sr = sparkR[index]
-  var sg = sparkG[index]
-  var sb = sparkB[index]
-  var amp = max(sr, max(sg, sb))
+    // rocket streaks read as warm orange over the bunting
+    var t = trail[i]
+    var r = r0 + t
+    var g = g0 + t * 0.34
+    var b = b0 + t * 0.06
 
-  // stochastic crackle: the buffer level is a per-frame ignition PROBABILITY
-  // rather than a brightness, so a burst sputters and gutters out instead of
-  // dissolving smoothly. Firing at full amplitude keeps the star's color pure.
-  if (amp > random(1)) {
-    var k = 1 / amp
-    rgb(saturate(sr * k), saturate(sg * k), saturate(sb * k))
-  } else {
-    rgb(saturate(r), saturate(g), saturate(b))
+    var sr = sparkR[i]
+    var sg = sparkG[i]
+    var sb = sparkB[i]
+    var amp = max(sr, max(sg, sb))
+
+    // stochastic crackle: the buffer level is a per-frame ignition PROBABILITY
+    // rather than a brightness, so a burst sputters and gutters out instead of
+    // dissolving smoothly. Firing at full amplitude keeps the star's color pure.
+    if (amp > random(1)) {
+      var k = 1 / amp
+      rgb(saturate(sr * k), saturate(sg * k), saturate(sb * k))
+    } else {
+      rgb(saturate(r), saturate(g), saturate(b))
+    }
+    setPixel(i)
   }
 }
