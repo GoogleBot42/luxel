@@ -1539,10 +1539,32 @@ properly, so the converted pattern is the more correct of the two.
 The method, kept for the next change that needs it — the results it produced
 are the section above.
 
-Host numbers understate the device win, but by **1.6× on the one fill-shaped
-pair that was measured both ways**, not the ~3× the per-pixel entry cost
-(317–440 Xtensa cycles vs a few x86 nanoseconds) suggests on its own. Read the
-host ratios as a floor, and re-measure rather than scaling them.
+Host numbers do not scale to the device in a fixed direction, and the ~3× the
+per-pixel entry cost (317–440 Xtensa cycles vs a few x86 nanoseconds) suggests
+is not a rule. The two pairs measured both ways disagree: the fill-shaped
+`rainbow` → `bulk-rainbow` read 4.4× on the host and **7.0×** on the panel
+(a 1.6× device multiplier), while `aurora-2d`'s `fillNoise3D` conversion read
+1.38× on the host and only **1.27×** on it. Re-measure; never scale, and do
+**not** read the host ratio as a floor — it is one where the win is the
+per-pixel entry, and a ceiling where the win is a native builtin call whose
+cost is the same share of the frame on both (2026-09-08).
+
+- **Attribute the win before you believe it — build an isolation variant.** A
+  `renderFrame` rewrite usually changes two things at once, the loop shape
+  *and* the work done inside it, and only one of them is normally worth
+  anything. Take the converted file, undo the work-removing half (put the
+  hoisted builtin back in the pixel loop), confirm on the host that it renders
+  **byte-identically** to the pre-conversion file with the same builtin call
+  counts, then `patbench` all three. On `aurora-2d` that isolation read
+  **0.94×** on the panel: the loop shape alone is a 6.6 % regression and the
+  entire measured win was the hoist (#447). `patbench.mjs` takes a *path*, so
+  the historical side needs no checkout —
+  `git show <rev>:library/<p>.js > <scratch>/before.js`.
+- **`patbench.mjs` repeats far tighter on the panel than its docstring
+  claims.** Three repeats at 4096 px agreed to ±0.06 %, and the baseline
+  re-measured an hour later to ±0.2 % (2026-09-08) — against the ±0.3 % it
+  quotes for the Athom. A few-percent device delta on a stateless pattern is
+  real there; the host bench's best-of-15 discipline is not needed.
 
 - **`tools/opbench.mjs` cannot see this change at all.** Its K-sweep loop
   fits the slope of a bytecode loop and cancels the per-pixel entry by
