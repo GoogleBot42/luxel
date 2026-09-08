@@ -537,6 +537,8 @@ renders the pattern.
 | `bouncy-boxes.js` (converted in place) | 16x16 box sim + glitch garnish, one `fillCanvas`, `has2DMap()` keeps the mapless-strip black | 13.82 → **23.68** Mpx/s (**1.71x**) | 26.6 → **14.6** | **byte-identical** on all five rigs |
 | `ice-floes-2d.js` (converted in place) | 16x16 Voronoi canvas, one `fillCanvas` | 13.02 → **21.47** Mpx/s (**1.65x**) | 26.6 → **13.6** | byte-identical on 16x16 / 32x32 / 64x64 / 60 px; the `-0.01` floor fudge elsewhere (see below) |
 | `nyan-lights.js` (converted in place) | sprite/rainbow composite into a 16x16 canvas, rebuilt only on a flip or a dial move, one `fillCanvas` | 12.88 → **108.36** Mpx/s (**8.40x**) | 35.4 → **0.5** | byte-identical on 16x16 / 32x32 / 64x64 / 60 px; the `-0.01` floor fudge elsewhere (see below) |
+| `color-bands-buffered.js` (converted in place) | 3 per-pixel H/S/V buffers, one `fillHSV` | budget-refused at 4096 px **before and after**; 1024 px **1.10x**, 3000 px **1.12x** | 71.0 → **66.0** (1024 px) | **byte-identical** on all five rigs |
+| `music-sequencer-for-v3-only.js` (converted in place) | 3 per-pixel H/S/V buffers, one `fillHSV`, hue offset added and taken back out | budget-refused at 4096 px **before and after**; 1024 px **7.67x**, 3000 px **5.64x** | 10.3 → **0.3** (1024 px) | **byte-identical** on all five rigs, undriven and with `Theme Hue` driven |
 
 ### `raindrops-2d.js` (2026-09-07)
 
@@ -802,6 +804,85 @@ export function renderFrame() {
 
 `ice-floes-2d` and `nyan-lights` export no `render`, so they get the default
 `ceil(√n)` grid exactly as they did under `render2D` and need no guard.
+
+### The `fillHSV` readouts, and two that do not convert (2026-09-07)
+
+Batch 2 of #405's #373-section-5 bucket, and the honest half of it.
+
+**`color-bands-buffered.js`** is the bucket's purest case: it is a *technique
+demo* whose whole point is that `beforeRender` fills `hueB`/`satB`/`briB` and
+`render` only reads them back, keeping the per-pixel callback cheap for
+timing-sensitive protocols. That readout is `fillHSV(hueB, satB, briB)` — one
+line, and byte-exact by construction. **`music-sequencer-for-v3-only.js`
+("Main Stage")** is the same shape at the end of a 700-line music-choreography
+framework: sixteen mini-patterns write the three shared scratch buffers and the
+three renderers only read them.
+
+| rig | color-bands-buffered | music-sequencer (Main Stage) |
+|---|---:|---:|
+| 1024 px, `--map-grid 32x32` | 164.3 → **148.7** µs/frame (1.10x) | 40.4 → **5.3** (**7.67x**) |
+| 3000 px strip | 460.3 → **410.1** (1.12x) | 76.6 → **13.6** (**5.64x**) |
+| 300 px strip | 46.3 → **41.1** (1.13x) | 8.3 → **2.1** (**4.02x**) |
+| insns/px, 1024 px | 71.0 → **66.0** | 10.3 → **0.3** |
+
+The gap between the two ratios is the whole lesson of a read-out conversion:
+`color-bands-buffered` spends its frame in the `beforeRender` loop that was
+always there, so removing the per-pixel entry moves 10 %; Main Stage's
+mini-patterns touch only a few pixels a frame, so the entry *was* the frame and
+removing it moves 7.7x.
+
+**`Theme Hue` is the one thing `fillHSV` cannot express.** Main Stage's readout
+was `hsv(hueA[index] + hueOffset, …)` — an array plus a scalar, and `arrayAdd`
+takes two arrays (#373's proposed `arrayAffine` is exactly this arm). A fourth
+`array(N + 1)` for an offset copy is not affordable here (see below), so the
+offset is added into `hueA` before the fill and subtracted straight after.
+Fixed-point add and subtract are exact and mutually inverse, so the buffer the
+mini-patterns see next frame is bit-for-bit the one they left; the shipped
+default (`hueOffset == 0`) takes an early branch and pays nothing at all.
+Verified both ways — byte-identical on all five rigs undriven *and* with
+`sliderThemeHue=90`.
+
+**Both are refused by the array budget above ~3,400 px, before and after.**
+Three `array(pixelCount)` channels are 12,288 elements at 4096 px against the
+10,236-element `DEFAULT_ARRAY_BUDGET`, so `array()` fails during init and the
+pattern renders black on a 64x64 panel. Measured ceilings:
+`color-bands-buffered` 3,408 px, `music-sequencer-for-v3-only` 3,256 px (it
+allocates `N + 1`), `rainbow-comet` 3,408 px. That is the same wall the
+`fillRGB` batch above hit, and it is why the ratios here are quoted at 1024 and
+3000 px. **Converting this bucket does not change the ceiling** — the buffers
+are the pattern's state, not the readout — so for these patterns the win is on
+strips and small matrices, not on the panel.
+
+#### Two that do not convert: `meteor-shower.js` and `rainbow-comet.js`
+
+Both were on #373's list of 21 and both were tried, measured and reverted. In
+each case the conversion is *byte-identical* and *slower on the host*, so
+neither ships on an unmeasurable device argument.
+
+* **`meteor-shower.js` — 0.70x at 3000 px, 0.72x at 300 px.** The trail is a
+  ring buffer read through a rotation, `hBuf[(index + head) % pixelCount]`.
+  `fillHSV` indexes its channel arrays by the pixel index with **no offset**,
+  there is no array-rotate builtin, and materializing unrotated copies would
+  cost three more `array(pixelCount)` buffers the budget cannot pay for. What
+  is left is a `hsv()` + `setPixel()` loop, and the `mod` in its body costs
+  more than the per-pixel entry it replaces. An offset (or stride) argument on
+  `fillHSV`/`fillRGB`, or an `arrayRotate`, converts this in one line — that is
+  a #373-class ask, not a pattern change.
+* **`rainbow-comet.js` — 0.81x at 3000 px, 0.84x at 300 px.** Its per-pixel
+  body is not a read-out at all: it emits `hsv(hue[i], sat[i], b * b)` and then
+  *evolves* that pixel's state for the next frame (hue smear, saturation cure,
+  brightness decay). No bulk op expresses that — `feedback(bri, decay)` covers
+  the decay, the hue smear wants #373's `arrayAffine`, the saturation cure
+  wants an array clamp — and the squared value channel would need a fourth
+  `array(pixelCount)`, dropping the pattern's ceiling from 3,408 px to about
+  2,556. Squaring in place instead is not bit-exact: the stored value is
+  re-multiplied by `decay` every frame, so `(b · decay)²` and `b² · decay²`
+  drift apart over a tail's ~37 frames of 16.16 rounding.
+
+The shared shape of both refusals: **a `setPixel` loop only wins when its body
+is native work.** `aurora-2d.js` wins because its body is `simplex3` + `paint`;
+these two lose because their bodies are array arithmetic, which is exactly what
+the interpreter is slow at and what a bulk op would have absorbed.
 
 ## How to judge this on device
 

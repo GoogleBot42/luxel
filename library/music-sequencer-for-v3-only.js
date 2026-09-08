@@ -654,7 +654,33 @@ export function beforeRender(delta) {
   runPattern(live, dt)
 }
 
-// all three renderers export; content is 1D — 2D/3D forward to the shared look
+// One `fillHSV` per frame instead of one `hsv()` per LED (docs/bulk-render.md).
+// The mini-patterns already write three parallel per-pixel channel buffers and
+// the old renderers only read them back, so the read-out goes native: index
+// space, no map used or needed, and `render2D`/`render3D` forwarding to the 1D
+// content is exactly what `renderFrame` does on any fixture.
+//
+// `Theme Hue` is the one thing `fillHSV` cannot express — it is a scalar added
+// to an array channel, and `arrayAdd` wants an array (Gitea #373 proposes
+// `arrayAffine` for precisely this). Rather than spend a fourth `array(N + 1)`
+// on an offset copy — the three buffers are already at the array budget's
+// ceiling, see the header — the offset is added into `hueA` around the fill and
+// taken straight back out. Fixed-point add/subtract is exact, so the buffer the
+// mini-patterns see next frame is bit-for-bit the one they left, and the
+// shipped default (offset 0) skips both loops and pays nothing at all.
+export function renderFrame() {
+  if (hueOffset == 0) {
+    fillHSV(hueA, satA, valA)
+    return
+  }
+  var i
+  for (i = 0; i < pixelCount; i++) hueA[i] += hueOffset
+  fillHSV(hueA, satA, valA)
+  for (i = 0; i < pixelCount; i++) hueA[i] -= hueOffset
+}
+
+// Kept for engines with no `renderFrame` (a real Pixel Blaze): all three read
+// the same 1D content. Luxel always takes `renderFrame` above.
 export function render(index) {
   hsv(hueA[index] + hueOffset, satA[index], valA[index])
 }
