@@ -128,6 +128,10 @@ export function beforeRender(delta) {
   }
 }
 
-export function render(index) {
-  rgb(clamp(rBuf[index], 0, 1), clamp(gBuf[index], 0, 1), clamp(bBuf[index], 0, 1))
+// The three exhaust buffers are already one entry per pixel, so the whole
+// per-pixel `render` was a readout: `fillRGB` does it in one call and
+// applies the same 0..1 clamp on the way to bytes. Index space — a bare
+// strip is the native rig and nothing asks for a map.
+export function renderFrame() {
+  fillRGB(rBuf, gBuf, bBuf)
 }

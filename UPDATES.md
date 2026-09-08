@@ -1,5 +1,58 @@
 # Update log
 
+## 2026-09-07 — four `fillRGB` readout conversions (#405)
+
+First batch of #373 section 5's "already `fillHSV`/`fillCanvas`-shaped" bucket.
+`library/fireworks-finale.js`, `library/rocket-by-tony-hampton.js`,
+`library/coolaura.js` and `library/christmaspewpew.js` converted in place —
+same file, same pattern name, every `//#` control untouched.
+
+All four kept three parallel per-pixel channel arrays and read them back with
+one `rgb()` per pixel, so the whole per-pixel `render` was pure readout and
+becomes one `fillRGB` from `renderFrame`. The readout's own `saturate()` /
+`clamp(v, 0, 1)` / `min(v, 1)` guards drop out because `fillRGB` quantizes
+through the same clamp `rgb()` uses. Index space throughout, so a mapless strip
+stays mapless and no pattern acquires a `ceil(√n)` grid.
+
+Host `luxel bench`, best of five: fireworks-finale 99.3 → **12.3** µs/frame at
+2025 px (**8.1x**), rocket-by-tony-hampton 88.3 → **21.8** (4.0x),
+christmaspewpew 149.8 → **84.4** at 3364 px (1.8x), coolaura 467.6 → **367.6**
+(1.27x — nearly all of its frame is a `beforeRender` that already walks every
+pixel per live pulse).
+
+Two needed more than a swap:
+
+* **coolaura** allocated four `array(pixelCount)` buffers with red identically
+  zero. Red is now a scalar the fill broadcasts, the intensity accumulator *is*
+  the green buffer until the colourize step rewrites it in place, and the
+  per-channel square moved out of `render`. Two buffers, not four — which
+  matters because four `array(4096)` channels are 16,384 elements against the
+  10,236-element budget, so the pattern **could not load on a 64x64 panel at
+  all** before this and rendered black. It now runs there at 799 µs/frame. Its
+  per-frame clear is `feedback(gbuf, 0)` instead of a `pixelCount` bytecode loop.
+* **christmaspewpew** read `min(1, trailR[index] + AMBIENT_R)`, and there is no
+  array-plus-scalar builtin (#373's proposed `arrayAffine` is exactly the gap).
+  The underglow is a constant array added before the fill and subtracted after
+  — exact, since a fixed-point add and its inverse round-trip with no rounding.
+  It charges no extra elements: the blue trail buffer it replaces was never
+  written by anything.
+
+**The array budget, not the VM, is this bucket's real ceiling.** Six of the
+seven patterns sampled from #373's list cannot load at 4096 px before *or*
+after conversion — three `array(pixelCount)` channels are 12,288 elements
+against 10,236, `array()` fails during init and the pattern renders black on a
+64x64 panel. Same wall docs/bulk-render.md already recorded for
+`rainbow-comet.js`. That is why the numbers above are quoted at 45x45 and
+58x58, not 64x64.
+
+Equivalence: 60 frames at a fixed 30 fps delta and seed against the
+pre-conversion file, **maxdiff 0 on every rig where the original loads** —
+16x16, 32x32, 45x45, 58x58, 64x64 grids and 60/300/512/1000 px mapless strips.
+The only non-zero cell in the sweep is coolaura at 58x58/64x64, where the old
+file renders black and the new one renders the pattern.
+`tools/check-library.sh` 307/307 on all five rigs; driven in real chromium —
+tiles render, every control drives the running pattern, no page errors.
+docs/bulk-render.md's converted-patterns table updated.
 ## 2026-09-07 — library: novas, fireblobs and heatshivers render through `renderFrame` + `fillRGB`
 
 Gitea #405 (batch 3), the #373 §5 bucket: patterns whose `beforeRender` already

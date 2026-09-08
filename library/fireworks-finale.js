@@ -274,6 +274,12 @@ export function beforeRender(delta) {
   }
 }
 
-export function render(index) {
-  rgb(saturate(rBuf[index]), saturate(gBuf[index]), saturate(bBuf[index]))
+// One `fillRGB` for the whole strip: the three accumulation buffers are
+// already indexed by pixel, so the per-pixel `render` was pure readout.
+// `fillRGB` quantizes each channel through the same clamp `rgb()` uses, so
+// the `saturate()` calls the readout carried are redundant here.
+// Index space, so a mapless strip is the native case and no geometry is
+// requested; on a 2D map every pixel still takes its own buffer slot.
+export function renderFrame() {
+  fillRGB(rBuf, gBuf, bBuf)
 }
