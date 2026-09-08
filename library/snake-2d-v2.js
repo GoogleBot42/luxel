@@ -322,7 +322,7 @@ function paintBoard() {
         hC[j] = bodyHue + t * 0.1; sC[j] = 0.8 + t * 0.2; vC[j] = 1 - t * 0.62
       }
     } else {
-      hC[j] = 0; sC[j] = 0; vC[j] = 0.01                 // the board, barely lit
+      hC[j] = 0; sC[j] = 0; vC[j] = 0                    // the board: empty cells are OFF
     }
   }
 }

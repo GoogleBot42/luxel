@@ -263,7 +263,7 @@ function paintCell(i) {
       hsv(bodyHue + t * 0.1, 0.8 + t * 0.2, 1 - t * 0.62)
     }
   } else {
-    hsv(0, 0, 0.01)                        // the board, barely lit
+    hsv(0, 0, 0)                           // the board: empty cells are OFF
   }
 }
 
