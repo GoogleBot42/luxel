@@ -32,6 +32,10 @@ luxel-core = { path = "../crates/luxel-core", default-features = false }
 # esp-println/colors, which would ANSI-color the whole serial console.
 esp-hub75 = { version = "0.14", optional = true, features = ["esp32s3", "circular-dma", "skip-black-pixels"] }
 embedded-graphics = { version = "0.8", default-features = false, optional = true }
+# The row-oriented bulk bitplane packer (Gitea #329) — host-testable, so its
+# byte-for-byte equality with esp-hub75's per-pixel path is a `cargo test`
+# assertion rather than something only the panel can tell us.
+luxel-hub75 = { path = "../crates/luxel-hub75", optional = true }
 
 # networking (WiFi station + async TCP + HTTP server)
 esp-rtos = { version = "0.3", features = ["esp-radio", "embassy", "log-04"] }
@@ -108,7 +112,7 @@ iram-math = ["luxel-core/iram-math"]
 # rescans the panel. Combine with board-s3-devkit (src/board.rs guards the
 # chip). embedded-graphics: just for Point/Rgb888 — already in the tree
 # transitively via hub75-framebuffer.
-hub75 = ["dep:esp-hub75", "dep:embedded-graphics"]
+hub75 = ["dep:esp-hub75", "dep:embedded-graphics", "dep:luxel-hub75"]
 
 # Chip features (selected via a board feature, not directly).
 esp32c3 = [
