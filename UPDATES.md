@@ -1,5 +1,47 @@
 # Update log
 
+## 2026-09-07 — library: Swirlpool 2D renders through `renderFrame` + `fillCanvas` (4.38x)
+
+Gitea #405 (batch 3, part three) — and the batch's biggest win. `swirlpool-2d`
+was always a 16x16 brightness/hue canvas pair; `render2D` only resolved a
+colour out of it once per LED, which on the 64x64 panel is **4096 VM entries a
+frame to answer 256 distinct questions**. One
+`fillCanvas(hues, 1, vC, 16, 16)` replaces all of them.
+
+The one structural change: `render2D` squared the brightness at read-out
+(`hsv(hues[idx], 1, b * b)`), and `bright` is persistent state that decays 0.94
+per frame, so it cannot be squared in place. The square moved to a per-cell
+pass into a third `array(16 * 16)` — 256 elements, which is why this
+conversion (unlike the rest of the batch) runs fine at 4096 px.
+
+Host `tools/pairbench.mjs`, best of five, µs/frame: 4096 px on a 64x64 map
+183.1 → **41.8** (**4.38x**), 1024 px 47.6 → 16.1 (2.96x), 256 px 13.0 → 10.0
+(1.30x), 300 px strip 15.6 → 12.4 (1.26x). Interpreted instructions
+16.1 → **1.0** insns/px at 4096 px — 3,988 per frame whatever the fixture size.
+
+Byte-identical over 60 frames at a fixed delta and seed on the 16x16, 32x32 and
+64x64 coordinate maps and the 60 px strip, undriven and with all four controls
+driven. On the 300 px and 512 px **mapless** strips 5–11 pixels of 300 differ
+per frame (up to 255 on a channel): those get the over-provisioned default
+`ceil(√n)` grid, whose cell edges do not align with the 16-wide canvas, and
+there the pattern's `floor(x * 15.99)` and `fillCanvas`'s true nearest
+`floor(x * 16)` land in different cells. Proven, not inferred: the
+pre-conversion file with **only** the sampler changed to exact nearest is
+byte-identical to the converted pattern on all six rigs. The fudge was always
+the approximation; `fillCanvas` clamps properly.
+
+**`chasing-rainbows-hsluv` was NOT converted** — Gitea #427 carries it. Every
+shape was written and benched and all of them regress on the host: a per-pixel
+`setPixel` loop is 0.67x in the default mode, and a `fillHSV` over one hue
+array is 0.91x. Its `render` is one `mod` and one `hsv`, so the loop
+bookkeeping costs more than the x86 render entry saves, and mode 6 is a
+*gather* out of a scrolled cache index that no bulk op covers. A device
+measurement could still say yes (the panel's render entry is 317–440 cycles);
+that is what the ticket asks for.
+
+check-library 307/307 on all five rigs; driven in real chromium. Host only —
+on-panel look rows are on #412.
+
 ## 2026-09-07 — library: Rainbow Comet converts after all; Meteor Shower does not
 
 Batch 3 of Gitea #405, and a correction to the entry two below: `rainbow-comet`
