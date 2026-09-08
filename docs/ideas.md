@@ -200,9 +200,12 @@ bytecode execution is being worked on now; the rest are queued:
   budgeted-engine rejection path is the degradation story) — DONE: the
   pool half landed 2026-08-15 (2 slots + esp32 heap 88 KB) and the
   WiFi-buffer half 2026-08-22, together +27.1 KB of heap on the Athom;
-  (3) WROVER PSRAM as an esp-alloc second region for pattern arrays (WiFi blob must
-  stay on internal RAM) — the big capacity unlock for the classic line
-  if ever wanted.
+  (3) PSRAM as a second esp-alloc heap for pattern arrays (WiFi blob must
+  stay on internal RAM) — DONE for the Seengreat S3's 8 MB octal die
+  (Gitea #253, `psram-arena`; see docs/boards.md "Big-flash and PSRAM
+  modules"). Still an open idea for WROVER-class classic-ESP32 modules,
+  which would need esp-hal's quad-SPI path and nobody has one on the
+  bench.
 
 ## Engine / runtime
 

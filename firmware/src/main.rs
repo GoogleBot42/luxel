@@ -72,6 +72,8 @@ mod patterns;
 mod pipeline;
 mod playlist;
 mod provision;
+#[cfg(feature = "psram-arena")]
+mod psram;
 mod resume;
 mod sensors;
 mod server;
@@ -181,7 +183,7 @@ async fn main(spawner: Spawner) -> ! {
     // heap-free by necessity (no allocator yet); it fully replaces the old
     // ota::boot_guard() call. The flash driver is borrowed here and handed to
     // ota::init once the heap is up.
-    let ota_flash = if option_env!("LUXEL_NO_OTA").is_none() {
+    let mut ota_flash = if option_env!("LUXEL_NO_OTA").is_none() {
         let flash = esp_storage::FlashStorage::new(p.FLASH);
         // Dual-core: esp-storage's default strategy fails every flash write
         // while the second core runs. The flash fence (core1.rs) parks the
@@ -249,8 +251,27 @@ async fn main(spawner: Spawner) -> ! {
     // tightest of the three — the S3 (dram_seg ~334 KB) and C6 (~441 KB)
     // inherit it and simply keep a larger leftover .stack. UNTESTED ON
     // METAL for S3/C6; revisit per-chip when hardware exists.
-    #[cfg(not(feature = "esp32"))]
+    #[cfg(all(not(feature = "esp32"), not(feature = "psram-arena")))]
     esp_alloc::heap_allocator!(size: 160 * 1024);
+    // psram-arena boards pay 6 KB of it back to `.stack`. esp-hal's PSRAM
+    // bring-up is `#[ram]` throughout (it runs with the data cache
+    // suspended), and on the S3 `.rwtext` and `.stack` are the same SRAM:
+    // linking it cost a MEASURED 5,584 B of stack (28,780 → 23,196 B,
+    // through the 24 KB floor). 154 KB puts it back at 29,340 B, above
+    // where it was. The heap gives up 6 KB and gets an 8 MB array arena —
+    // and a big pattern's arrays no longer come out of this region at all.
+    #[cfg(all(not(feature = "esp32"), feature = "psram-arena"))]
+    esp_alloc::heap_allocator!(size: 154 * 1024);
+
+    // External PSRAM as the pattern-array arena (Gitea #253, psram.rs). A
+    // SEPARATE esp-alloc heap, so nothing above this line changes meaning.
+    // It has to be here: before esp_rtos::start / core1 (map_psram suspends
+    // the data cache), before any flashmap::map (PSRAM and flash mappings
+    // share the S3's DBUS MMU table and esp-hal maps PSRAM after the LAST
+    // valid entry), and long before WiFi. Reads the flash clock out of the
+    // image header via the driver the boot guard already borrowed.
+    #[cfg(feature = "psram-arena")]
+    psram::init(p.PSRAM, ota_flash.as_mut());
 
     let timg0 = TimerGroup::new(p.TIMG0);
     let sw_int = SoftwareInterruptControl::new(p.SW_INTERRUPT);
@@ -844,17 +865,53 @@ pub(crate) fn apply_outpipe<'a>(
 // enforces it.
 use luxel_core::budget::RUNTIME_FLOOR;
 
+/// The array-arena BYTE budget for a load starting now.
+///
+/// On a board with an external arena (Gitea #253) that is the arena's own
+/// free space, not free DRAM: pattern arrays no longer come out of the main
+/// heap, so charging them against it would leave 8 MB unusable. Everywhere
+/// else this is exactly `budget::array_budget(HEAP.free())` as before, and
+/// the post-load `RUNTIME_FLOOR` check still measures the main heap on
+/// every board — what a pattern costs in DRAM is unchanged.
+fn array_budget_now() -> usize {
+    let free = esp_alloc::HEAP.free() as usize;
+    #[cfg(feature = "psram-arena")]
+    if let Some((arena_free, _)) = psram::stats() {
+        return luxel_core::budget::external_array_budget(free, arena_free);
+    }
+    luxel_core::budget::array_budget(free)
+}
+
+/// PB's element ledger, except on a board whose arena is external — there
+/// the byte budget is the real constraint and the element count is raised
+/// out of the way (`budget::external_element_budget`; the arena's slot
+/// vector is bounded separately by `vm::MAX_ARENA_SLOTS`).
+fn element_budget(_byte_budget: usize) -> usize {
+    #[cfg(feature = "psram-arena")]
+    if psram::stats().is_some() {
+        return luxel_core::budget::external_element_budget(_byte_budget);
+    }
+    luxel_core::vm::DEFAULT_ARRAY_BUDGET
+}
+
 fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
     // Arrays may consume free heap down to (but not past) the runtime
     // floor — byte-accurate (elements × 8 + per-array overhead), so one
     // big array isn't taxed for overhead only swarms of tiny ones pay.
     // See luxel_core::budget::array_budget for the slack + minimum rules.
-    let budget = luxel_core::budget::array_budget(esp_alloc::HEAP.free() as usize);
+    let budget = array_budget_now();
     // Wall clock at CONSTRUCTION so top-level clockHour()-family reads see
     // real time (SNTP may not have synced yet on early boot -> None -> 0,
     // same as a PB with no time source). The render loop keeps it fresh
     // per frame afterwards.
-    Engine::from_program_budgeted_at(prog, count, 1, budget, shared::wall_now_local())
+    Engine::from_program_budgeted_at_ext(
+        prog,
+        count,
+        1,
+        budget,
+        element_budget(budget),
+        shared::wall_now_local(),
+    )
 }
 
 /// [`budgeted_engine`] + post-build floor check: a pattern that fits its
@@ -1626,7 +1683,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 match luxel_core::bytecode::deserialize_lean(bc) {
                     Ok(p) => {
                         let budget =
-                            luxel_core::budget::array_budget(esp_alloc::HEAP.free() as usize);
+                            array_budget_now();
                         luxel_core::engine::check_asserts(
                             &p,
                             PIXEL_COUNT.load(Ordering::Relaxed),

@@ -184,6 +184,22 @@ itself as `esp_alloc::HEAP.free() - (RUNTIME_FLOOR + 4 KiB)`, clamped to a
 16 KB minimum — byte-accurate per array element, so one big array isn't
 taxed for overhead that only swarms of tiny arrays pay.
 
+**An external array arena changes where arrays come from, not the rules.**
+On a board with `psram-arena` (today only the Seengreat S3 —
+`firmware/src/psram.rs`, docs/boards.md) `ArrRepr::Owned` element storage
+is allocated from a SECOND `esp_alloc::EspHeap` backed by PSRAM, through
+the hook in `luxel_core::arena`. Nothing else moves: DMA framebuffers, the
+per-frame pixel/pipeline/crossfade buffers, the VM's stack, locals,
+globals and the arena's own slot vector all stay in internal DRAM, and the
+global `HEAP` is untouched — so `HEAP.free()`, `RUNTIME_FLOOR` and the
+post-load floor check mean exactly what they meant before. What changes is
+`budgeted_engine`'s byte budget (the arena's free space, via
+`budget::external_array_budget`) and the PB element ledger (raised out of
+the way by `budget::external_element_budget`, with `vm::MAX_ARENA_SLOTS`
+taking over as the bound on the slot vector). With no hook installed —
+every other board, the CLI, the wasm playground — `arena::ArenaAlloc` *is*
+the global allocator and none of this exists.
+
 Both numbers live in **`luxel_core::budget`**, not in `main.rs`: the web
 editor imports the same constants through the wasm build to warn the user,
 before a push, that their pattern won't fit the device they're connected to
