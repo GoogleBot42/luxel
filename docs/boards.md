@@ -882,7 +882,8 @@ editor's pixel control clamps to whatever board is actually connected.
 ## Big-flash and PSRAM modules (the Seengreat board)
 
 The Seengreat board carries an ESP32-S3-WROOM-1-**N16R8**: 16 MB of flash
-and 8 MB of octal PSRAM. Luxel uses neither, deliberately.
+and 8 MB of octal PSRAM. Luxel leaves the flash alone deliberately and uses
+the PSRAM as the pattern-array arena (Gitea #253).
 
 **Flash: the standard 4 MB `firmware/partitions.csv` stays** (decision for
 Gitea #73). A 16 MB module runs it fine — the last 12 MB is simply
@@ -994,6 +995,44 @@ run here. Every board without the arena keeps the PB number exactly.
 `/api/status` reports `psram_free` / `psram_total` on this board (and only
 on this board — the fields are `#[cfg]`-gated, so no other image or JSON
 changes). `heap_free` does NOT include them.
+
+**Measured on the panel, 2026-09-08** (4096 px, brightness 3). The arena came
+up first try — `psram_total` 8,388,608, `fence_timeouts` 0 and `pass.skips` 0
+across four OTAs and a dozen pattern swaps, no boot-guard rollback.
+
+*What PSRAM costs:* a 2048-element array read once per PIXEL (4,096 array
+reads per frame) — the same pattern either way, so the only variable is where
+its 16,416 B lives:
+
+| | DRAM (master `d44ff4a`) | PSRAM arena |
+|---|---|---|
+| fps / out_fps | 36 / 36 | 36 / 36 |
+| `vm_us` | 27,808 · 27,821 | 27,861 · 27,858 · 27,814 |
+| `heap_free` | 32,572 | 42,812 |
+| `engine_heap` | 29,746 | 13,683 |
+
+**+0.16 % of VM time** against 0.05 % run-to-run noise, and the engine hands
+essentially the whole array (16,063 of 16,416 B) back to internal DRAM. The
+working set of a pattern array fits the data cache, so the per-access cost
+does not show up at panel frame rates. Live Aurora 2D reads the same: 9 fps
+both ways, `engine_heap` 19,748 -> 14,068.
+
+*What it unlocks:* at 4096 px on the old build even a SINGLE
+`array(pixelCount)` is refused — by the post-load `RUNTIME_FLOOR` check, not
+by the element ledger (`left only 15 KB of heap free`) — and the panel goes
+dark. With the arena that probe runs at 29 fps;
+`library/color-bands-buffered.js` (3 x `array(4096)`, over PB's 10,236-unit
+ledger AND four times the old byte budget) goes from refused-and-dark to
+9 fps using exactly 98,304 B of arena; `heatshivers` 11 fps, `coolaura`
+7 fps, `novas` 3 fps. Those are the Gitea #420 ceilings, and they no longer
+bind on this board.
+
+**The arena raises the ARRAY ceiling, not the PROGRAM ceiling.** An ad-hoc
+`POST /api/code` of `music-sequencer-for-v3-only.js` still refuses with
+*"not enough free memory on the device for this 46 KB upload (about 53 KB
+free)"* — the upload envelope plus program decode is an internal-heap
+transient that PSRAM does not touch. Activating from the store (the borrowing
+path) is the route for a program that big.
 
 Two ordering rules the code depends on, both documented in
 `firmware/src/psram.rs`:
