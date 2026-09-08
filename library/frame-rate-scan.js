@@ -63,6 +63,10 @@
 // The camera's real frame rate cancels out completely: it appears nowhere in
 // step 4 or 5, and dt comes off the panel, not off the video's timeline.
 //
+// CAMERA CAVEATS (rolling shutter; dark frames at the sweep's wrap; dimmed
+// columns) — read "Camera caveats" under `library/frame-rate-scan.js` in
+// docs/boards.md before calling anything on the video a display artefact.
+//
 // ON THE COMPOSE CAP
 // The one slider caps `setFrameRate`. Leave it at 0 for a real measurement.
 // Note the firmware's render loop is paced to one iteration per 8 ms and the
