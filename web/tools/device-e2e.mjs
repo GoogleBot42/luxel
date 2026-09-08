@@ -21,9 +21,13 @@ const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 execSync("cargo build -q -p luxel-cli", { stdio: "inherit", cwd: ".." });
+// `--fps 24` paces the mirror's render loop at a KNOWN rate well away from
+// the browser's ~60 Hz preview loop, so the status-bar counter can be proven
+// to follow the DEVICE and not requestAnimationFrame (Gitea #381).
+const DEV_FPS = 24;
 const device = spawn(
   "../target/debug/luxel",
-  ["serve", "--port", String(DEV_PORT), "--pixels", "120"],
+  ["serve", "--port", String(DEV_PORT), "--pixels", "120", "--fps", String(DEV_FPS)],
   { stdio: ["ignore", "pipe", "inherit"] },
 );
 await new Promise((resolve, reject) => {
@@ -153,6 +157,97 @@ try {
 
   const px = await page.$eval('[data-role="cfg-pixels"]', (el) => el.value);
   check("connect: pixel count from device", px === "120", `got ${px}`);
+
+  // ---- status bar shows the DEVICE frame rate, not the preview loop (#381) ----
+  // The mirror is paced at 24 fps and the browser's preview loop runs at ~60,
+  // so a readout that tracks requestAnimationFrame cannot pass this.
+  {
+    const shown = await page
+      .waitForFunction(
+        () => {
+          const t = document.querySelector('[data-role="fps"]')?.textContent ?? "";
+          const m = /^device (\d+) fps$/.exec(t.trim());
+          return m && Number(m[1]) > 0 ? t.trim() : false;
+        },
+        { timeout: 8000 },
+      )
+      .then((h) => h.jsonValue())
+      .catch(() => "");
+    check("fps: status bar labels the number as the device's", /^device \d+ fps$/.test(shown), shown);
+    const devFps = (await fetch(`${DEV}/api/status`).then((r) => r.json())).fps;
+    const n = Number(/(\d+)/.exec(shown)?.[1] ?? -1);
+    check(
+      "fps: readout tracks the mirror's rate, not the 60 Hz preview loop",
+      Math.abs(n - devFps) <= 3 && devFps <= 32,
+      `readout ${n}, /api/status ${devFps}`,
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-fps-device.png` });
+  }
+
+  // A pipelined HUB75 board reports what the PANEL displayed in `out_fps`,
+  // with `rescan_hz` as its ceiling — the readout must prefer it over `fps`
+  // and say so. The mirror impersonates one (it drives no panel).
+  {
+    const PANEL_PORT = DEV_PORT + 10;
+    const PANEL = `http://127.0.0.1:${PANEL_PORT}`;
+    const panelDev = spawn(
+      "../target/debug/luxel",
+      [
+        "serve",
+        "--port",
+        String(PANEL_PORT),
+        "--pixels",
+        "120",
+        "--fps",
+        "24",
+        "--out-fps",
+        "112",
+        "--rescan-hz",
+        "115",
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      panelDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      panelDev.on("exit", () => reject(new Error("panel mirror died")));
+      setTimeout(() => reject(new Error("panel mirror start timeout")), 30000);
+    });
+    process.on("exit", () => panelDev.kill());
+    const panelPage = await browser.newPage();
+    try {
+      await panelPage.setViewport({ width: 1400, height: 900 });
+      await panelPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(PANEL)}`, {
+        waitUntil: "networkidle0",
+      });
+      const shown = await panelPage
+        .waitForFunction(
+          () => {
+            const t = (document.querySelector('[data-role="fps"]')?.textContent ?? "").trim();
+            return /^device \d+ fps \(panel\)$/.test(t) ? t : false;
+          },
+          { timeout: 8000 },
+        )
+        .then((h) => h.jsonValue())
+        .catch(() => "");
+      check(
+        "fps: a panel board's displayed rate (out_fps) wins over the render rate",
+        shown === "device 112 fps (panel)",
+        shown,
+      );
+      const title = await panelPage
+        .$eval('[data-role="fps"]', (el) => el.getAttribute("title") ?? "")
+        .catch(() => "");
+      check(
+        "fps: tooltip names the rescan ceiling and the local preview",
+        /rescan 115 Hz/.test(title) && /local preview/.test(title),
+        title,
+      );
+      await panelPage.screenshot({ path: `${shotDir}/device-e2e-fps-panel.png` });
+    } finally {
+      await panelPage.close();
+      panelDev.kill();
+    }
+  }
 
   // the preview runs on the LOCAL engine now (no device pixel stream) — it
   // lights up from local rendering

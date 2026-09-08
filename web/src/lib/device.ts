@@ -6,7 +6,20 @@
 import { gatedFetch } from "./fetchgate";
 
 export interface DeviceStatus {
+  /** Frames the pattern RENDERED in the last second. On a pipelined board
+   *  (HUB75 panels) the render loop is not the wire, so this is not what the
+   *  fixture showed — read `out_fps` there instead (Gitea #378). */
   fps: number;
+  /** Frames the pipelined output stage actually DISPLAYED in the last second
+   *  — the honest "frames the LEDs got" number on a HUB75 panel board, and 0
+   *  on every board without a second-core output stage (a strip, the native
+   *  mirror without `--out-fps`, firmware older than the field), where `fps`
+   *  is the displayed rate. Since #394 it counts displayed frames rather than
+   *  `write_frame` calls, so it can no longer exceed `rescan_hz`. */
+  out_fps?: number;
+  /** The panel's own refresh (rescan) rate in Hz — the ceiling `out_fps` is
+   *  bounded by. 0/absent on any board without a HUB75 panel. */
+  rescan_hz?: number;
   pixels: number;
   /** The device's hard pixel-count cap, which is PER BOARD (a 64x64 HUB75
    *  panel board reports 4096, strip boards 2048). Absent on firmware older

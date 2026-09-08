@@ -299,7 +299,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--stats]\n       luxel serve [--pixels N] [--port P] [--heap-free BYTES] [--engine-heap BYTES]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--stats]\n       luxel serve [--pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES]"
     );
     ExitCode::from(2)
 }
