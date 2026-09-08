@@ -317,6 +317,9 @@ fn status_json() -> String {
     let slot = crate::ota::booted_slot();
     let version = env!("CARGO_PKG_VERSION");
     let heap = esp_alloc::HEAP.free();
+    // Snapshotted next to `heap` so the pair is one consistent reading
+    // (this function allocates as it builds the response).
+    let heap_largest = crate::shared::largest_free_block();
     let live = crate::shared::live_proto(embassy_time::Instant::now().as_millis() as u32);
     // Read-back availability: the running pattern's source + blob now live in
     // flash (see patterns::store_current). True = serveable (rodata default or
@@ -518,6 +521,13 @@ fn status_json() -> String {
     push_piece(&mut out, version);
     push_piece(&mut out, "\",\"heap_free\":");
     push_u32(&mut out, heap as u32);
+    // `heap_free` is a SUM; this is the largest single allocation that
+    // would succeed right now. The two diverge as the heap fragments, and
+    // it is the second number that decides whether a pattern upload or an
+    // engine swap fits — Gitea #390 saw a 30 KB upload refused with 74 KB
+    // free. See `shared::largest_free_block`.
+    push_piece(&mut out, ",\"heap_largest\":");
+    push_u32(&mut out, heap_largest as u32);
     // What the CURRENTLY loaded pattern costs. The playground adds it back
     // to `heap_free` to predict the next swap, because the render task drops
     // the outgoing engine before decoding the incoming one — see
@@ -1098,13 +1108,44 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                 MSG_QUEUE.send(Msg::Freeze).await;
                 embassy_time::Timer::after(embassy_time::Duration::from_millis(60)).await;
                 if env.try_reserve_exact(expected).is_err() {
-                    let mut out = String::from(
-                        "{\"ok\":false,\"error\":\"not enough free memory on the device for this ",
-                    );
-                    push_u32(&mut out, (expected / 1024) as u32);
-                    push_piece(&mut out, " KB upload (about ");
-                    push_u32(&mut out, (esp_alloc::HEAP.free() as usize / 1024) as u32);
-                    push_piece(&mut out, " KB free) — it is too large to run here\"}");
+                    // Two different failures wear one message otherwise
+                    // (Gitea #390). `try_reserve_exact` needs `expected`
+                    // bytes CONTIGUOUS; `HEAP.free()` is a sum. When the
+                    // sum is big enough and the reservation still failed,
+                    // the heap is merely fragmented — the same upload
+                    // succeeded a minute ago and will succeed again after
+                    // a reboot, so "too large to run here" is a wrong
+                    // diagnosis. Only when the sum itself is short is the
+                    // upload genuinely over this device's budget.
+                    let free = esp_alloc::HEAP.free() as usize;
+                    let mut out = String::new();
+                    if expected <= free {
+                        push_piece(
+                            &mut out,
+                            "{\"ok\":false,\"error\":\"device heap too fragmented for this ",
+                        );
+                        push_u32(&mut out, (expected / 1024) as u32);
+                        push_piece(&mut out, " KB upload (");
+                        push_u32(&mut out, (free / 1024) as u32);
+                        push_piece(&mut out, " KB free, largest block ");
+                        push_u32(
+                            &mut out,
+                            (crate::shared::largest_free_block() / 1024) as u32,
+                        );
+                        push_piece(
+                            &mut out,
+                            " KB) — try again shortly, or reboot the device\"}",
+                        );
+                    } else {
+                        push_piece(
+                            &mut out,
+                            "{\"ok\":false,\"error\":\"not enough free memory on the device for this ",
+                        );
+                        push_u32(&mut out, (expected / 1024) as u32);
+                        push_piece(&mut out, " KB upload (about ");
+                        push_u32(&mut out, (free / 1024) as u32);
+                        push_piece(&mut out, " KB free) — it is too large to run here\"}");
+                    }
                     break 'resp out;
                 }
             }

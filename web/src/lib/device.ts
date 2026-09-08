@@ -39,6 +39,13 @@ export interface DeviceStatus {
    *  drops the outgoing engine BEFORE it decodes the incoming program, so a
    *  swap starts from `heap_free + engine_heap` (Gitea #287). */
   heap_free?: number;
+  /** Largest SINGLE allocation the device heap can satisfy right now, in
+   *  bytes. `heap_free` is a sum over the free list; this is the figure an
+   *  upload or an engine swap actually has to fit in, and the gap between
+   *  the two is fragmentation. Absent on the native mirror and on firmware
+   *  older than Gitea #390, where a save can be refused for memory with
+   *  `heap_free` still looking ample (a reboot clears it). */
+  heap_largest?: number;
   /** Heap the currently loaded pattern's engine occupies, in bytes — the
    *  firmware measures it across each load (`shared::ENGINE_HEAP`). Add it to
    *  `heap_free` for the free heap a swap actually starts from

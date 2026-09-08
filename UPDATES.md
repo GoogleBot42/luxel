@@ -1,5 +1,69 @@
 # Update log
 
+## 2026-09-07 — firmware: `heap_largest`, and a refusal that names the real problem (#390)
+
+Re-saving the same library pattern in a loop, the Athom took 11 saves and
+refused the 12th with *"not enough free memory on the device for this 30 KB
+upload (about 74 KB free) — it is too large to run here"*. A reboot cleared
+it. That is fragmentation, not exhaustion: `heap_free` is a sum over the free
+list and the upload path needs one contiguous run, so each 30–45 KB envelope
+alloc/free cycle chips away at the longest run while the sum barely moves.
+The message diagnosed the user's pattern instead.
+
+* **`/api/status` gains `heap_largest`** — the largest single allocation the
+  heap can satisfy right now. **esp-alloc 0.10.0 has no API for this**:
+  `HEAP.free()`, `HEAP.used()` and `HeapStats { region_stats: [RegionStats {
+  size, used, free }; 3], size, current_usage }` are all sums, and neither
+  backend behind them exposes a largest-run figure either (the pinned rev's
+  `esp-alloc/src/lib.rs` and `esp-alloc/src/heap/{llff,tlsf}.rs` — LLFF wraps
+  `linked_list_allocator::Heap`, TLSF wraps `rlsf::Tlsf`, and only
+  `size`/`used`/`free` come back out). So `shared::largest_free_block` probes
+  it: a binary search over allocations that are freed again immediately,
+  ~8 probes at 512 B resolution. `GlobalAlloc::alloc` returns null rather
+  than panicking, so a failed probe is free, and an alloc + immediate
+  `dealloc` of the same layout leaves either backend's free list exactly as
+  it was. Each probe sits in a critical section (no interrupt on this core
+  can allocate into a heap the probe has emptied — esp-radio's mallocs are
+  the ones that don't null-check), and the search never goes above
+  `heap_free - 4 KB` so the *other* core always has that much: which is why
+  the figure saturates 4 KB under `heap_free` when nothing is fragmented.
+* **The refusal separates the two failures.** `expected > free` keeps the old
+  "…it is too large to run here". `expected <= free` with the contiguous
+  reservation still failing now says *"device heap too fragmented for this
+  30 KB upload (74 KB free, largest block 20 KB) — try again shortly, or
+  reboot the device"*. The guard was already the contiguous test
+  (`try_reserve_exact`); what is new is that it says which of the two it hit.
+* Option (c) from the ticket — streaming the upload so the peak is a chunk
+  rather than the whole envelope — is **Gitea #417**, not done here.
+
+Host gates: `tools/ci.sh` green; `tools/stack-check.sh` clean on
+board-pixelblaze-v3 (.stack 25,996 -> 25,980 B) and board-seengreat-hub75
+(28,780 -> 28,764 B), both far above the 24 KB floor; the two refusal wordings
+driven in real chromium through the playground's actual save path (request
+interception on the POST only), both fitting the editor toolbar with zero
+overflow. Per-board app-image cost, devshell builds, before vs after:
+
+| board | before | after | delta | OTA-slot margin after |
+|---|---|---|---|---|
+| board-pixelblaze-v3 | 1,009,984 | 1,010,464 | +480 | 38,112 B (3.63 %) |
+| board-athom-music | 1,010,064 | 1,010,528 | +464 | 38,048 B (3.63 %) |
+| board-esp32-generic | 1,009,632 | 1,010,112 | +480 | 38,464 B (3.67 %) |
+| board-s3-devkit | 956,448 | 956,928 | +480 | 91,648 B (8.74 %) |
+| board-seengreat-hub75 | 962,224 | 962,864 | +640 | 85,712 B (8.17 %) |
+| c6-devkit-hosted (the shipped C6) | 1,011,568 | 1,012,096 | +528 | 36,480 B (3.48 %) |
+| board-c6-devkit (full UI, not shipped) | 1,028,208 | 1,028,720 | +512 | 19,856 B (1.89 %) |
+
+Both passes ran on the same tree with only `firmware/src` swapped, so the
+delta column is this change alone. The thinnest shipped board loses 0.05 pp
+and stays above image-check's 3 % floor (#291/#310); master grew ~1.7 KB from
+other merges while the measurement ran, so the post-rebase CI build reads
+board-pixelblaze-v3 at 1,012,208 B (3.46 % free).
+
+**`board-c3-devkit` does not build at all, before or after** — `riscv32imc`
+has no atomic RMW and #395's `TAGS_N.fetch_add` / `SKIP_TAGS_SET.swap`
+(c9851e6, merged the same day) need it. Only the release workflow builds the
+C3, so nothing between merge and tag notices. Filed as **Gitea #422**.
+
 ## 2026-09-07 — playground: the preview rig follows the source (Gitea #372)
 
 Only a gallery pick set the rig from the pattern, and it did it from the

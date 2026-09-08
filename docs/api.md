@@ -54,7 +54,7 @@ response as "no snapshot right now", not as an all-black frame.
 ```json
 {"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
  "rescan_hz":0,"dropped":0,"pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
- "heap_free":104832,"engine_heap":21504,"live":null,
+ "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"live":null,
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":749568,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null}
@@ -176,7 +176,17 @@ that is not losing anything:
   partition booted). Check this after a power-cycle test: a rollback shows up
   here and nowhere else.
 - `heap_free` — bytes, `esp_alloc::HEAP.free()`, measured with the CURRENT
-  pattern's engine resident.
+  pattern's engine resident. It is a **sum over the free list**, so it does
+  not say whether any single allocation of that size would succeed.
+- `heap_largest` — bytes in the largest single allocation the heap can
+  satisfy right now (`shared::largest_free_block`). This is the figure that
+  decides whether a pattern upload or an engine swap fits; the gap between it
+  and `heap_free` is fragmentation. Gitea #390 was exactly that gap: a 30 KB
+  upload refused with 74 KB free, cleared by a reboot. esp-alloc 0.10 has no
+  API for it (`HEAP.free()`, `HEAP.used()` and `HeapStats`/`RegionStats` are
+  all sums, on both the LLFF and the TLSF backend), so the firmware probes it
+  — a short binary search of allocations that are freed again immediately.
+  Device only; the mirror does not report it.
 - `engine_heap` — bytes that engine occupies, measured across its load
   (`shared::ENGINE_HEAP`). **Not decoration: `heap_free` alone is not the
   budget an incoming pattern has.** The render task drops the outgoing engine
@@ -284,8 +294,12 @@ Error shapes from an upload:
   client is expected to branch on `code`.
 - Firmware only: `empty upload (the request needs a Content-Length body)`,
   `pattern upload too large (N KB; this device accepts up to 80 KB)`,
-  `not enough free memory on the device for this N KB upload …`,
-  `upload truncated`.
+  `not enough free memory on the device for this N KB upload …` (the upload
+  is over what this device has free at all), `device heap too fragmented for
+  this N KB upload (F KB free, largest block L KB) — try again shortly, or
+  reboot the device` (enough free in total, no contiguous run — Gitea #390;
+  the same pattern usually saves fine a moment later, and always after a
+  reboot), `upload truncated`.
 
 A successful `/api/code` **stops the playlist** — a manual push takes over.
 
