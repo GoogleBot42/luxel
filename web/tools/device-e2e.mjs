@@ -1335,7 +1335,21 @@ try {
     const PANEL = `http://127.0.0.1:${PANEL_PORT}`;
     const panelDev = spawn(
       "../target/debug/luxel",
-      ["serve", "--port", String(PANEL_PORT), "--pixels", "4096", "--heap-free", "200000"],
+      // `--board panel` is load-bearing since #464: a strip-board mirror caps
+      // at 2048 px and SILENTLY clamps `--pixels 4096` down to it, which puts
+      // 3×2048 array elements inside the 10236-element budget and makes this
+      // check unfalsifiable (Gitea #495).
+      [
+        "serve",
+        "--port",
+        String(PANEL_PORT),
+        "--board",
+        "panel",
+        "--pixels",
+        "4096",
+        "--heap-free",
+        "200000",
+      ],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
     await new Promise((resolve, reject) => {

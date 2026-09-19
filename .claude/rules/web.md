@@ -49,6 +49,12 @@ paths:
   WASM engine and pushes to the device; don't reintroduce a pixel-stream
   socket. The connect handshake on page load stays, though: the device
   reports its running pattern/status before the editor opens.
+- `web/src` is shell (`App.svelte`) + stores (`stores/*.ts`) + pages
+  (`pages/*.svelte`) + reusable components — see
+  [docs/web-architecture.md](../../docs/web-architecture.md) for the store
+  reference, the one-way `device → geometry → pattern` dependency rule, the
+  single poll scheduler (`pollSubscribe`, never a bare `setInterval`) and the
+  `notify` primitive. New app state goes in a store, not a component.
 - Strict TypeScript only.
 - **The web UI v2 spec is `docs/design/webui-v2/proposal.md`** (approved
   2026-09-18, epic #461). Any v2 work follows it: geometry comes from the one
