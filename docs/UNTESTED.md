@@ -40,12 +40,14 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   tools/event-soak.mjs, 30,286/30,286 delivered, malformed rejected,
   heap/fps stable. Still open here: the preview click-through and the
   real-HA MQTT hop on the wall unit — both tracked as Gitea #216.)
-- [ ] **Share links with maps**: make a 2D/3D map (layout → "2D map"), share,
-  open the link in a private window — geometry should arrive with the
-  pattern (`#pj=` in the URL).
+- [x] **Share links carry the pattern only** (changed by Gitea #463): a map is
+  the Layout's, not the pattern's, so a link made today is `#p=` even with a
+  custom map installed, and an old `#pj=` link still restores its map as the
+  playground's Layout choice. Both machine-verified in `web/tools/e2e.mjs`.
 - [ ] **3D map preview**: a map program whose z varies (e.g.
   `plot(cos(a), sin(a), index/pixelCount - 0.5)`) → auto-rotating point
-  cloud in the preview with a "3D" badge.
+  cloud in the preview with a "3D" badge. (Reached from the playground's
+  "Preview as → Custom map program" since #463.)
 
 ## Settings tab (device mode)
 
