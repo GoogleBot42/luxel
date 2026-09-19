@@ -149,6 +149,29 @@ pub const OUTPUTS: u8 = 2;
 #[cfg(not(feature = "board-athom-music"))]
 pub const OUTPUTS: u8 = 1;
 
+/// Whether the DEVICE output chain's blur and glow stages fit this board's
+/// per-frame budget — `/api/status`'s `caps.blur_glow`, which is what makes
+/// the Settings page offer them at all (proposal D12, Gitea #476).
+///
+/// False on a HUB75 panel. At 4096 px the two spatial stages run over a
+/// 64x64 grid — four separable passes plus a neighbour max — and the compose
+/// window on the S3 is one panel rescan. Measured on the Seengreat panel
+/// 2026-09-19 (`/api/status` `pipe_us` against `pass.nominal_us`): 49 us
+/// idle, 4,508 us with blur at 50 %, **8,780 us with blur+glow at 50/50
+/// against a 8,665 us rescan**. The compose alone overruns the window, so
+/// every frame arrives a rescan late and the panel shows the previous one —
+/// the board does not drop frames, it halves its refresh. A strip has no
+/// such window (2,443 us at 2048 px on the Athom, against no clock at all)
+/// and keeps both.
+///
+/// The PATTERN-side `setBlur`/`setGlow` are a different chain
+/// (`Engine::post_chain`) and are unaffected — this flag hides an
+/// installation-wide setting, not a pattern's own look.
+#[cfg(feature = "hub75")]
+pub const BLUR_GLOW: bool = false;
+#[cfg(not(feature = "hub75"))]
+pub const BLUR_GLOW: bool = true;
+
 /// Panel area = the default (and maximum useful) pixel count on a matrix
 /// board. Geometry is compile-time (see hub75.rs) so this is a const.
 #[cfg(feature = "hub75")]

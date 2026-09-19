@@ -893,6 +893,39 @@ different feature set). The shipped C6 is back on the warn line's doorstep at
 `tools/stack-check.sh` clean (largest frame unchanged — esp-storage's 4,144 B
 flash bounce buffer; the new `publish_geom` does not appear in the top table).
 
+2026-09-19 (later), **the outpipe scratch is released when every stage is
+off** (Gitea #476/#446) and `caps.blur_glow` goes per board: **+80 B on
+`board-athom-music` (1,008,080 → 1,008,160), +32 B on
+`board-seengreat-hub75` (971,168 → 971,200), 0 B on `c6-devkit` +
+`hosted-ui` (1,008,976, still 39,600 B / 3.77 % of slot)**, credless flake
+builds against the merge base. `.stack` on `board-athom-music` 25,580 B (unchanged),
+`tools/stack-check.sh` clean.
+
+The heap it buys back, measured on metal the same day:
+
+| board | px | idle | one stage on | every stage off again |
+|---|---:|---:|---:|---:|
+| `seengreat-hub75` | 4096 | 41,612 | 29,324 (−12,288) | **41,612** |
+| `athom-music` | 2048 | 55,176 | 49,032 (−6,144) | **55,176** |
+
+Exactly 3 B/px both times, and exactly back. Before this the second column
+was where the board stayed until a reboot.
+
+And the number behind `caps.blur_glow = false` on a panel (proposal D12) —
+`/api/status` `pipe_us` on the Seengreat panel at 4096 px, against its
+`pass.nominal_us` rescan of **8,665 us**:
+
+| chain | `pipe_us` |
+|---|---:|
+| every stage off | 49 |
+| blur 50 % | 4,508 |
+| blur 50 % + glow 50 % | **8,780** |
+
+The compose stage alone overruns the rescan window, so the panel shows the
+previous frame every time — it halves the refresh rather than dropping
+frames. The same pair on the Athom at 2048 px costs 2,443 us against no
+display clock at all, which is why strips keep both.
+
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal

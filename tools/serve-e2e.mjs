@@ -279,10 +279,11 @@ check(
   JSON.stringify({ max_pixels: pst.max_pixels, geom: pst.geom }),
 );
 check(
-  "--board panel: panel caps (no strip driver, no power cap, 2 layers)",
+  "--board panel: panel caps (no strip driver, no power cap, no blur/glow, 2 layers)",
   pst.caps.panel === true &&
     pst.caps.strip_driver === false &&
     pst.caps.power_cap === false &&
+    pst.caps.blur_glow === false &&
     pst.caps.layers === 2 &&
     pst.caps.outputs === 2,
   JSON.stringify(pst.caps),

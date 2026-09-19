@@ -326,7 +326,7 @@ fn device_caps(geom: &luxel_core::caps::Geom, pixels: u32) -> luxel_core::caps::
         reboot: true,
         ota: true,
         psram: cfg!(feature = "psram-arena"),
-        blur_glow: true,
+        blur_glow: crate::board::BLUR_GLOW,
     };
     luxel_core::caps::Caps::derive(hw, geom, pixels)
 }

@@ -819,6 +819,30 @@ pub(crate) fn apply_outpipe<'a>(
     let gamma_on = gamma > 0 && gamma != 10;
     let pal_on = pal_pct > 0;
     if order == 0 && !gamma_on && cap == 0 && blur_pct == 0 && glow_pct == 0 && !pal_on {
+        // Every stage off — hand the scratch frame and the cooked LUTs back
+        // (Gitea #446/#476). The chain grows `pipe_buf` to 3 B/px the first
+        // time ANY stage is switched on and `clear()` keeps that capacity,
+        // so before this the 12.3 KB at 4096 px stayed gone until a reboot
+        // even after the setting was turned off again — a third of the S3
+        // panel's idle headroom, held by a knob nobody was using.
+        //
+        // Dropping the `Vec` is what returns it; the `capacity() > 0` guard
+        // makes this exactly one `dealloc` at the moment the last stage goes
+        // off and a single load on every frame after that. It runs on
+        // whichever task owns the `PipeState` — the render task on a direct
+        // board, the output task on a pipelined one (pipeline.rs) — so it
+        // cannot race the other core: the buffer has one owner by
+        // construction, and nothing borrows it here (the caller's previous
+        // `wire` slice ended with the previous frame).
+        if pipe_buf.capacity() > 0 {
+            *pipe_buf = alloc::vec::Vec::new();
+            // `(0, None)` and not just `None`: `gamma_cache.0` is the gamma
+            // the cached table was cooked for, and a stale match with an
+            // empty slot would silently skip gamma on the next enable. 0 is
+            // "off", which no enabled gamma can equal.
+            *gamma_cache = (0, None);
+            *pal_cache = (u32::MAX, None);
+        }
         return frame;
     }
     if gamma_on && gamma_cache.0 != gamma {
