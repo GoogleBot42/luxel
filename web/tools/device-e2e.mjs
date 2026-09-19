@@ -28,6 +28,21 @@ const DEV_PORT = E2E.mirror.device; // E2E_PORT + 20
 const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The Patterns page (#467) replaced the Device Patterns tab: one page, one
+// grid per SOURCE, all mounted with the inactive ones hidden — so a tile
+// selector always names its source's grid.
+const DGRID = '[data-role="patterns-grid"][data-source="device"]';
+const DTILE = `${DGRID} .tile`;
+
+/** Hover a tile so its `▶ Play · Edit · ⋯` strip is on screen (it is
+ *  display:none otherwise), then click one of its verbs. */
+async function tileAction(page, tileSel, role) {
+  const tile = await page.waitForSelector(tileSel, { timeout: 8000 });
+  await tile.hover();
+  await sleep(150);
+  await page.click(`${tileSel} [data-role="${role}"]`);
+}
+
 execSync("cargo build -q -p luxel-cli", { stdio: "inherit", cwd: ".." });
 // The main mirror runs at a DELIBERATELY slow 24 fps (a 41 ms render loop
 // instead of ~8 ms) — the pacing that used to break the playlist transport:
@@ -295,21 +310,46 @@ try {
       const shape1d = await mappedPage.$eval('[data-role="preview"]', (el) => el.dataset.shape);
       check("layout: a 1D pattern on a panel previews as the panel, not a bar", shape1d === "grid");
 
-      // Device Patterns + Playlist rows take the device's shape (#463: the
+      // Patterns tiles + Playlist rows take the device's shape (#463: the
       // thumbnail used to be a 64-px bar on every board)
       await mappedPage.click('[data-role="editor-back"]');
-      await mappedPage.click('[data-role="tab-device"]');
-      await mappedPage.waitForSelector('[data-role="device-pattern"] .thumb', { timeout: 8000 });
+      await mappedPage.click('[data-role="tab-patterns"]');
+      await mappedPage.waitForSelector(`${DTILE} .thumb`, { timeout: 8000 });
       await sleep(1500);
-      const thumbShapes = await mappedPage.$$eval('[data-role="device-pattern"] .thumb', (els) =>
+      const thumbShapes = await mappedPage.$$eval(`${DTILE} .thumb`, (els) =>
         els.map((e) => e.dataset.shape),
       );
       check(
-        "thumbs: Device Patterns rows are square on a panel console",
+        "thumbs: on-device tiles are square on a panel console",
         thumbShapes.length >= 2 && thumbShapes.every((s) => s === "grid"),
         thumbShapes.join(","),
       );
+      const tileCaps = await mappedPage.$$eval(`${DTILE} [data-role="tile-caption"]`, (els) =>
+        els.map((e) => (e.textContent ?? "").trim()),
+      );
+      check(
+        "tiles: the 1D device pattern says how it is projected",
+        tileCaps.some((t) => /^1D · /.test(t)),
+        tileCaps.join("|"),
+      );
       await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-patterns.png` });
+
+      // mobile (D9, S1c): two columns on a 390 px console
+      await mappedPage.setViewport({ width: 390, height: 780 });
+      await sleep(700);
+      const panelCols = await mappedPage.$eval(
+        `${DGRID} .tiles`,
+        (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+      );
+      check("mobile 390 px: the console tile grid is 2 columns", panelCols === 2, `${panelCols}`);
+      const wideTiles = await mappedPage.$$eval(
+        `${DTILE}:not([hidden])`,
+        (els) => els.filter((e) => e.getBoundingClientRect().right > 391).length,
+      );
+      check("mobile 390 px: no console tile overflows the column", wideTiles === 0, `${wideTiles}`);
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-patterns-390.png` });
+      await mappedPage.setViewport({ width: 1400, height: 900 });
+      await sleep(500);
 
       await mappedPage.click('[data-role="tab-playlist"]');
       await mappedPage.waitForSelector('[data-role="playlist-item"] .thumb', { timeout: 8000 });
@@ -936,40 +976,171 @@ try {
     apiList.patterns?.some((p) => p.name === "device kept"),
     JSON.stringify(apiList),
   );
-  // the Device Patterns tab lists it (back out of the editor)
+  // the Patterns page's "On device" source lists it (back out of the editor)
   await page.click('[data-role="editor-back"]');
   await sleep(400);
-  check("library: back lands on Device Patterns", (await page.$('[data-role="device-panel"]:not([hidden])')) !== null);
-  const listed = await page.$$eval('[data-role="device-pattern"]', (els) => els.map((e) => e.textContent ?? ""));
-  check("library: Device Patterns tab lists it", listed.some((t) => t.includes("device kept")), listed.join("|"));
+  check("library: back lands on the Patterns page", (await page.$('[data-role="patterns-panel"]:not([hidden])')) !== null);
+  const listed = await page.$$eval(DTILE, (els) => els.map((e) => e.textContent ?? ""));
+  check("library: the On device source lists it", listed.some((t) => t.includes("device kept")), listed.join("|"));
   // each device pattern renders a live preview thumbnail (#2) — its source is
   // fetched in the background, so wait for the canvas to appear
   const hasThumb = await page
-    .waitForSelector('[data-role="device-pattern"] canvas', { timeout: 4000 })
+    .waitForSelector(`${DTILE} canvas`, { timeout: 4000 })
     .then(() => true)
     .catch(() => false);
   check("library: device pattern shows a preview thumbnail", hasThumb);
   // and it takes the DEVICE's shape — a bar here, because this console is a
-  // 120 px strip (the panel console's square rows are checked above, #463)
-  const stripThumbs = await page.$$eval('[data-role="device-pattern"] .thumb', (els) =>
-    els.map((e) => e.dataset.shape),
-  );
+  // 120 px strip (the panel console's square tiles are checked above, #463)
+  const stripThumbs = await page.$$eval(`${DTILE} .thumb`, (els) => els.map((e) => e.dataset.shape));
   check(
-    "thumbs: Device Patterns rows are bars on a strip console",
+    "thumbs: on-device tiles are bars on a strip console",
     stripThumbs.length > 0 && stripThumbs.every((s) => s === "bar"),
     stripThumbs.join(","),
   );
   await page.screenshot({ path: `${shotDir}/device-e2e-strip-patterns.png` });
-  // the thumb spins while the source fetch + compile are in flight, then the
+  // the tile spins while the source fetch + compile are in flight, then the
   // spinner drops once the first frame lands
   await page
     .waitForFunction(
-      () => document.querySelectorAll('[data-role="thumb-spinner"]').length === 0,
+      () => document.querySelectorAll('[data-role="tile-spinner"]').length === 0,
       { timeout: 6000 },
     )
     .catch(() => null);
-  const thumbSpin = await page.$$eval('[data-role="thumb-spinner"]', (els) => els.length);
-  check("library: thumb spinner clears after first frame", thumbSpin === 0, `${thumbSpin} left`);
+  const thumbSpin = await page.$$eval('[data-role="tile-spinner"]', (els) => els.length);
+  check("library: tile spinner clears after first frame", thumbSpin === 0, `${thumbSpin} left`);
+
+  // ---- the Patterns page's source control and per-tile verbs (#467) ----
+  {
+    const savedId = (apiList.patterns ?? []).find((p) => p.name === "device kept")?.id ?? "";
+    // the running pattern wears the 2 px ring + "▶ playing" pill
+    const playingKeys = await page.$$eval(`${DTILE}.playing`, (els) =>
+      els.map((e) => e.dataset.key),
+    );
+    check(
+      "patterns: the running pattern's tile is marked playing",
+      playingKeys.length === 1 && playingKeys[0] === savedId,
+      `${playingKeys.join(",")} vs ${savedId}`,
+    );
+    check(
+      "patterns: the playing pill is on that tile",
+      (await page.$(`${DTILE}[data-key="${savedId}"] [data-role="tile-playing"]`)) !== null,
+    );
+
+    // source switching: exactly one grid on screen, and it is the one picked
+    const shownSources = async () =>
+      page.$$eval('[data-role="patterns-grid"]:not([hidden])', (els) =>
+        els.map((e) => e.dataset.source),
+      );
+    check("patterns: the console opens on the On device source", (await shownSources()).join(",") === "device");
+    await page.click('[data-role="patterns-source-library"]');
+    await sleep(500);
+    check("patterns: picking Library shows only the library grid", (await shownSources()).join(",") === "library");
+    check(
+      "patterns: the Library source has tiles",
+      (await page.$$eval('[data-source="library"] .tile', (els) => els.length)) > 50,
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-strip-library.png` });
+    await page.click('[data-role="patterns-source-device"]');
+    await sleep(600);
+    check("patterns: picking On device shows only that grid", (await shownSources()).join(",") === "device");
+
+    // a second stored pattern, so the tile verbs below have a victim nothing
+    // else in this run depends on
+    await fetch(`${DEV}/api/patterns`, {
+      method: "POST",
+      body: await lxpBody("tile victim", "export function render(index) { rgb(0.77, 0.11, 0.22) }"),
+    });
+    await page.click('[data-role="patterns-source-device"]'); // re-reads /api/patterns
+    await page.waitForFunction(
+      (sel) => document.querySelectorAll(sel).length === 2,
+      { timeout: 6000 },
+      DTILE,
+    );
+    const victimId = ((await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? []).find(
+      (p) => p.name === "tile victim",
+    ).id;
+    const victim = `${DTILE}[data-key="${victimId}"]`;
+
+    // hover strip: ▶ Play activates it on the device without opening the editor
+    await tileAction(page, victim, "tile-play");
+    await sleep(1200);
+    check(
+      "patterns: the tile's Play activates the pattern on the device",
+      (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.77"),
+    );
+    check(
+      "patterns: Play does not open the editor",
+      (await page.$('[data-role="patterns-panel"]:not([hidden])')) !== null,
+    );
+    await page.waitForSelector(`${victim}.playing`, { timeout: 4000 });
+    check("patterns: the ring follows the newly played pattern", true);
+    await page.screenshot({ path: `${shotDir}/device-e2e-strip-tile-playing.png` });
+
+    // ⋯ → Add to playlist appends an item through the playlist store
+    await tileAction(page, victim, "tile-menu");
+    await page.waitForSelector('[data-role="tile-menu-popup"]', { timeout: 3000 });
+    await page.screenshot({ path: `${shotDir}/device-e2e-tile-menu.png` });
+    await page.click('[data-role="tile-menu-playlist"]');
+    await sleep(900); // the store's 400 ms save debounce
+    const plAdded = await (await fetch(`${DEV}/api/playlist`)).json();
+    check(
+      "patterns: ⋯ → Add to playlist appends the pattern",
+      (plAdded.items ?? []).some((i) => i.id === victimId),
+      JSON.stringify(plAdded.items),
+    );
+    await page.click('[data-role="tab-playlist"]');
+    await sleep(900);
+    const plRows = await page.$$eval('[data-role="playlist-item"]', (els) =>
+      els.map((e) => e.textContent ?? ""),
+    );
+    check(
+      "patterns: the playlist tab shows the added row",
+      plRows.some((t) => t.includes("tile victim")),
+      plRows.join("|"),
+    );
+    // clean up, and let the open Playlist tab's 1 Hz poll reconcile the
+    // store to empty before leaving it (a stale item would show up in the
+    // later "added twice with different params" check)
+    await fetch(`${DEV}/api/playlist`, { method: "POST", body: "D 0" });
+    await page
+      .waitForFunction(() => document.querySelectorAll('[data-role="playlist-item"]').length === 0, {
+        timeout: 6000,
+      })
+      .catch(() => null);
+    check(
+      "patterns: the playlist is empty again",
+      (await page.$$eval('[data-role="playlist-item"]', (els) => els.length)) === 0,
+    );
+    await page.click('[data-role="tab-patterns"]');
+    await sleep(600);
+
+    // ⋯ → Delete: a danger dialog, cancelled once, then accepted
+    await tileAction(page, victim, "tile-menu");
+    await page.click('[data-role="tile-menu-delete"]');
+    await waitDialog(page);
+    check(
+      "patterns: ⋯ → Delete asks with a danger dialog",
+      (await dialogTitle(page)) === "Delete pattern from the device?" &&
+        (await page.$eval('[data-role="dialog-confirm"]', (el) => el.className)).includes("danger"),
+    );
+    await cancelDialog(page);
+    await sleep(600);
+    check(
+      "patterns: a cancelled tile delete keeps the pattern",
+      ((await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? []).length === 2,
+    );
+    await tileAction(page, victim, "tile-menu");
+    await page.click('[data-role="tile-menu-delete"]');
+    await acceptDialog(page);
+    await sleep(900);
+    const afterTileDelete = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? [];
+    check(
+      "patterns: an accepted tile delete removes it from the device",
+      afterTileDelete.length === 1 && afterTileDelete[0].name === "device kept",
+      JSON.stringify(afterTileDelete),
+    );
+    check("patterns: the deleted tile is gone", (await page.$(victim)) === null);
+  }
 
   // ---- device output palette (Gitea #139) ----
   // Driven here rather than beside the other Output checks because the
@@ -1041,17 +1212,18 @@ try {
       JSON.stringify(p4),
     );
   }
-  await page.click('[data-role="tab-device"]');
+  await page.click('[data-role="tab-patterns"]');
   await sleep(400);
 
-  // clicking it opens the editor and activates it on the device
+  // the tile's `Edit` verb opens the editor on it and activates it on the
+  // device (a bare tile click PLAYS it, checked above)
   const seenReqs = [];
   page.on("request", (r) => {
     if (r.url().includes("/api/patterns") && r.method() === "DELETE") seenReqs.push(r.url());
   });
-  await page.click('[data-role="device-pattern"]');
+  await tileAction(page, DTILE, "tile-edit");
   await sleep(1300);
-  check("library: opening a device pattern opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
+  check("library: a tile's Edit opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
   const activated = await (await fetch(`${DEV}/api/pattern`)).text();
   check("library: selecting a device pattern activates it", activated.includes("0.4"));
   check("library: editor shows the stored source", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.4"));
@@ -1293,7 +1465,7 @@ try {
       plPicky.items[0].invalid.includes("123456"),
     JSON.stringify(plPicky.items[0].invalid),
   );
-  await page.click('[data-role="tab-device"]');
+  await page.click('[data-role="tab-patterns"]');
   await sleep(200);
   await page.click('[data-role="tab-playlist"]');
   await sleep(800); // poll picks up the fresh playlist

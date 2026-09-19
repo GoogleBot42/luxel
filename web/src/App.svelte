@@ -8,9 +8,8 @@
   import Dialog from "./components/Dialog.svelte";
   import PreviewAsChip from "./components/PreviewAsChip.svelte";
   import { gatedFetch } from "./lib/fetchgate";
-  import DevicePatterns from "./pages/DevicePatterns.svelte";
   import Editor from "./pages/Editor.svelte";
-  import Library from "./pages/Library.svelte";
+  import Patterns from "./pages/Patterns.svelte";
   import Playlist from "./pages/Playlist.svelte";
   import Settings from "./pages/Settings.svelte";
   import {
@@ -45,12 +44,13 @@
   } from "./stores/pattern";
 
   // ---- navigation ----
-  // Home tabs: Patterns Library (always), Device Patterns + Playlist +
-  // Settings (device only). The editor is NOT a tab — it opens full-screen
-  // over the home tab when you pick a pattern or create one, with a back
-  // button. `tab` is the home you return to.
-  type Tab = "library" | "pixelblaze" | "device" | "playlist" | "settings";
-  let tab: Tab = "library";
+  // Home tabs (proposal §4): `Patterns` always, `Playlist` + `Settings` on a
+  // console. `Scenes` is Phase B — Gitea #480 adds ONE entry to `tabs` below.
+  // The editor is NOT a tab: it opens full-screen over the home tab when you
+  // pick a pattern or create one, with a back button. `tab` is the home you
+  // return to.
+  type Tab = "patterns" | "playlist" | "settings";
+  let tab: Tab = "patterns";
   /** Full-screen editor open (over the home tab). */
   let editing = false;
   /** First-load cover: hides the app until we've decided playground vs device
@@ -65,13 +65,15 @@
 
   let editor: Editor;
 
+  /** The tab strip, data-driven so Scenes (#480) is one more entry. */
+  $: tabs = [
+    { id: "patterns" as const, label: "Patterns", show: true },
+    { id: "playlist" as const, label: "Playlist", show: $device !== null },
+    { id: "settings" as const, label: "Settings", show: $device !== null },
+  ].filter((t) => t.show);
+
   /** The label/target the editor's back button returns to. */
-  $: backLabel =
-    tab === "device"
-      ? "Device Patterns"
-      : tab === "pixelblaze"
-        ? "PixelBlaze Library"
-        : "Patterns Library";
+  $: backLabel = tabs.find((t) => t.id === tab)?.label ?? "Patterns";
 
   /** What the status-bar counter says, and what it is allowed to claim.
    *  Connected: the DEVICE's own rate — `out_fps` on a pipelined HUB75 board
@@ -98,10 +100,10 @@
           title: `${$deviceFps} fps rendered by the device — local preview ${$previewFps.toFixed(0)} fps`,
         };
 
-  /** Open the editor full-screen; `home` is the tab the back button returns
-   *  to (Library for local patterns, Device Patterns for device ones). */
-  function openEditor(home: Tab): void {
-    tab = home;
+  /** Open the editor full-screen over the Patterns page (where every pattern
+   *  is opened from since #467). */
+  function openEditor(): void {
+    tab = "patterns";
     editing = true;
   }
 
@@ -172,7 +174,7 @@
       // shows.
       bootLabel = "opening the pattern running on the device…";
       deviceBase.set(base);
-      tab = "device"; // the editor's back button lands on Device Patterns
+      tab = "patterns"; // the editor's back button lands on Patterns
       editing = true;
       await editor.bootDevice((pull) => connectDevice(base, pull), wipDirty);
     } else {
@@ -222,55 +224,19 @@
         luxel <span class="dim">{$isPlayground ? "playground" : ($device?.base ?? $deviceBase) || "device"}</span>
       </span>
       <nav class="tabs" data-role="tabs">
-        <button
-          data-role="tab-library"
-          class="tab"
-          class:active={tab === "library"}
-          on:click={() => (tab = "library")}
-        >
-          Patterns Library
-        </button>
-        {#if hasPixelblazeLibrary}
+        {#each tabs as t (t.id)}
           <button
-            data-role="tab-pixelblaze"
+            data-role={`tab-${t.id}`}
             class="tab"
-            class:active={tab === "pixelblaze"}
-            on:click={() => (tab = "pixelblaze")}
-          >
-            PixelBlaze Library
-          </button>
-        {/if}
-        {#if !$isPlayground}
-          <button
-            data-role="tab-device"
-            class="tab"
-            class:active={tab === "device"}
-            on:click={() => (tab = "device")}
-          >
-            Device Patterns
-          </button>
-        {/if}
-        {#if $device}
-          <button
-            data-role="tab-playlist"
-            class="tab"
-            class:active={tab === "playlist"}
+            class:active={tab === t.id}
             on:click={() => {
-              tab = "playlist";
-              void refreshPlaylist();
+              tab = t.id;
+              if (t.id === "playlist") void refreshPlaylist();
             }}
           >
-            Playlist
+            {t.label}
           </button>
-          <button
-            data-role="tab-settings"
-            class="tab"
-            class:active={tab === "settings"}
-            on:click={() => (tab = "settings")}
-          >
-            Settings
-          </button>
-        {/if}
+        {/each}
       </nav>
     {/if}
 
@@ -324,47 +290,34 @@
 
   <Editor bind:this={editor} active={editing} on:open={() => (editing = true)} />
 
-  <Library
-    variant="library"
-    active={!editing && tab === "library"}
+  <Patterns
+    active={!editing && tab === "patterns"}
+    {hasPixelblazeLibrary}
     on:new={() => {
-      openEditor("library");
+      openEditor();
       editor.newPattern();
     }}
-    on:open={(e) => {
-      openEditor("library");
+    on:openSaved={(e) => {
+      openEditor();
       editor.loadSaved(e.detail);
     }}
     on:pick={(e) => {
-      openEditor("library");
+      openEditor();
       editor.loadGalleryPick(e.detail);
+    }}
+    on:openDevice={(e) => {
+      openEditor();
+      void editor.openDevicePattern(e.detail);
+    }}
+    on:playDevice={(e) => {
+      // Play WITHOUT opening the editor: the same call, minus `editing`. It
+      // activates the pattern on the device and adopts it as the editor's
+      // document, so the running marker and the editor agree.
+      void editor.openDevicePattern(e.detail);
     }}
   />
 
-  {#if hasPixelblazeLibrary}
-    <Library
-      variant="pixelblaze"
-      active={!editing && tab === "pixelblaze"}
-      on:pick={(e) => {
-        openEditor("pixelblaze");
-        editor.loadGalleryPick(e.detail);
-      }}
-    />
-  {/if}
-
   {#if !$isPlayground}
-    <DevicePatterns
-      active={!editing && tab === "device"}
-      on:new={() => {
-        openEditor("device");
-        editor.newPattern();
-      }}
-      on:open={(e) => {
-        openEditor("device");
-        void editor.openDevicePattern(e.detail);
-      }}
-    />
-
     <Playlist active={!editing && tab === "playlist"} />
   {/if}
 
