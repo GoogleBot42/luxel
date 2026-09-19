@@ -87,6 +87,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   confirm with `git fetch origin master`, not by rerunning it.
 - OTA / live-coding / soak testing on the dev device and the Athom rig is pre-authorized
   (see .claude/skills/deploy-device and athom-rig).
+- Design/review deliverables (proposals, mockups, screenshots): publish them (publish-site or
+  an artifact), attach the key screenshots to the session, and push-notify Jeremy at review
+  points and blockers only — he is not watching in real time. Mobile is a SOFT requirement:
+  responsive stacking for playlist / values / pattern picking, never a separate flow, never
+  at the cost of desktop usability (2026-09-18).
 - Ask first for: irreversible hardware actions, outward-facing actions, and design
   tradeoffs that genuinely depend on Jeremy's judgment.
 
