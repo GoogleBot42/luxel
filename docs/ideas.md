@@ -347,12 +347,15 @@ bytecode execution is being worked on now; the rest are queued:
 - **Shareable pattern URLs** [S] ★ — DONE (`#p=` deflate+base64url
   fragment; share button copies, load restores; e2e-covered).
 - **Multi-pane: map editor + preview** [L] ★★ — mapper DONE through v2:
-  first-class editor tab (CodeMirror, breakpoint-debuggable), 3D
-  auto-rotating projection preview, device map upload, **map in share
-  links** (`#pj=` envelope), and **render3D gallery tiles** (cube-lattice
-  point-cloud thumbs; the 5 render3D-only corpus patterns are no longer
-  skipped). Still open (niceties): visual drag-editing, Fill/Contain
-  toggles — tracked as **Gitea #355**. Web-UI redesign tracking lives in
+  CodeMirror + breakpoint debugger, 3D auto-rotating projection preview,
+  device map upload, and **render3D gallery tiles** (cube-lattice point-cloud
+  thumbs; the 5 render3D-only corpus patterns are no longer skipped). It was
+  an editor sub-tab and carried a map in share links (`#pj=`); since #463 a
+  map is the Layout's, not the pattern's, and since **A10 (#471)** the map
+  program is a screen of its own reached from the Layout picker
+  (`pages/MapEditor.svelte`: code left, the plotted points right). Still open
+  (niceties): visual drag-editing, Fill/Contain toggles — tracked as
+  **Gitea #355**, and they attach to that screen's scatter. Web-UI redesign tracking lives in
   [docs/webui.md](webui.md).
 
 ## Top picks if forced to choose 5
