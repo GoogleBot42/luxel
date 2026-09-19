@@ -113,6 +113,11 @@ grid and advertises panel `caps` (`panel:true`, `strip_driver:false`,
 `power_cap:false`, `layers:2`), which is what the v2 Settings page's
 capability gating reads. It is the flag form of what
 `web/tools/maxpixels-e2e.mjs` does by intercepting `/api/status` in the page.
+**`--pixels` is clamped to the board's cap, silently**: `serve --pixels 4096`
+without `--board panel` comes up at 2048, and a `grid 64 64` posted to it is
+truncated to 2048 coordinates — which `detect_grid` then reports as a 64×32
+grid, not the 64×64 you asked for (2026-09-19, #463). Pass `--board panel`
+whenever you want a 4096 px layout.
 
 `--ddp-port` / `--e131-port` move the network-input listeners off the standard
 DDP 4048 / sACN 5568 (Gitea #496). Those ports are global, so a mirror left
