@@ -247,16 +247,23 @@
           </div>
         {/each}
         <div class="palette-stop">
-          <button
-            data-role="out-palette-add"
-            disabled={stops.length >= MAX_PALETTE_STOPS}
-            on:click={addPaletteStop}>add stop</button
-          >
-          <button
-            data-role="out-palette-clear"
-            disabled={stops.length === 0}
-            on:click={clearPalette}>clear</button
-          >
+          <!-- The ONE deliberate §5.7 exception: a budget the user has to
+               learn. It stays disabled AT the cap and carries `data-reason`,
+               with the same words on screen under the row (Gitea #529). -->
+          {#if stops.length >= MAX_PALETTE_STOPS}
+            <button
+              data-role="out-palette-add"
+              disabled
+              data-reason="all {MAX_PALETTE_STOPS} palette stops are used"
+              >add stop</button
+            >
+          {:else}
+            <button data-role="out-palette-add" on:click={addPaletteStop}>add stop</button>
+          {/if}
+          <!-- nothing to clear with no stops → absent, never disabled -->
+          {#if stops.length > 0}
+            <button data-role="out-palette-clear" on:click={clearPalette}>clear</button>
+          {/if}
           <label class="dim">
             amount
             <input
@@ -272,6 +279,11 @@
             %
           </label>
         </div>
+        {#if stops.length >= MAX_PALETTE_STOPS}
+          <span class="dim" data-role="out-palette-cap">
+            all {MAX_PALETTE_STOPS} stops are used — remove one to add another
+          </span>
+        {/if}
         {#if $notes.palette}
           <span class="dim" data-role="out-palette-note">{$notes.palette}</span>
         {/if}

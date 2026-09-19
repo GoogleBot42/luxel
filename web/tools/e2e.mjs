@@ -11,6 +11,7 @@ import {
   acceptDialog,
   cancelDialog,
   dialogTitle,
+  disabledSweep,
   menuClick,
   menuHas,
   PORT as E2E,
@@ -1159,6 +1160,73 @@ try {
   );
   await page.screenshot({ path: `${shotDir}/e2e-tiles-lattice.png` });
   await previewAs(page, "auto");
+
+  // ── §5.7 sweep on the playground's surfaces (Gitea #529) ──
+  // Same invariant device-e2e asserts on the console: a control is ABSENT
+  // unless the thing it acts on exists, and the only element allowed to be
+  // `[disabled]` is one gating a BUDGET, which must carry `data-reason`.
+  // The playground's own case is the DEAD tile — a library pattern that does
+  // not compile. It used to render a dimmed dead `Open`; now it has no verb
+  // at all and says why.
+  {
+    // A dead tile on demand: the shipped library all compiles, so plant one
+    // in the local library (the playground's `Mine` source) rather than hope
+    // the corpus is checked out.
+    await page.click('[data-role="editor-back"]').catch(() => {});
+    await sleep(400);
+    await page.evaluate(() => {
+      const list = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]");
+      list.push({ name: "zz broken", source: "export function render(i) { this is not luxel }", savedAt: Date.now() });
+      localStorage.setItem("luxel.patterns", JSON.stringify(list));
+    });
+    await page.reload({ waitUntil: "networkidle0" });
+    await sleep(1500);
+    // the reload resumes the working copy, which lands in the editor
+    await page.click('[data-role="editor-back"]').catch(() => {});
+    await page.waitForSelector('[data-role="patterns-source-mine"]', { timeout: 8000 });
+    await sleep(400);
+    await pickSource(page, "mine");
+    await page.waitForSelector(`${MINE} .tile.dead`, { timeout: 15000 });
+    await page.$(`${MINE} .tile.dead`).then((el) => el.hover());
+    await sleep(250);
+    const shape = await page.$eval(`${MINE} .tile.dead`, (el) => ({
+      dimmed: el.querySelectorAll("[disabled]").length,
+      face: el.querySelector('[data-role="tile-face"]')?.tagName.toLowerCase() ?? "",
+      why: (el.querySelector('[data-role="tile-dead"]')?.textContent ?? "").trim(),
+      // a broken pattern of your OWN must stay fixable and deletable
+      fixable: el.querySelector('.actions [data-role="tile-edit"]') !== null,
+    }));
+    check(
+      "§5.7: a tile that does not compile is inert and SAYS why, never dimmed",
+      shape.dimmed === 0 &&
+        shape.face === "span" &&
+        /does not compile/.test(shape.why) &&
+        shape.fixable,
+      JSON.stringify(shape),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-dead-tile.png` });
+    const sweepPage = async (what) => {
+      const bad = await disabledSweep(page);
+      check(`§5.7: nothing is disabled-without-a-reason (${what})`, bad.length === 0, JSON.stringify(bad));
+    };
+    await sweepPage("playground · Patterns, mine (with a dead tile)");
+    await pickSource(page, "library");
+    await sleep(900);
+    await sweepPage("playground · Patterns, library");
+    await page.click('[data-role="new-pattern"]');
+    await page.waitForSelector('[data-role="editor-back"]', { timeout: 8000 });
+    await sleep(600);
+    await sweepPage("playground · editor");
+    await page.click('[data-role="editor-back"]');
+    await sleep(300);
+    await page.evaluate(() => {
+      const list = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]");
+      localStorage.setItem(
+        "luxel.patterns",
+        JSON.stringify(list.filter((p) => p.name !== "zz broken")),
+      );
+    });
+  }
 
   check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 } finally {

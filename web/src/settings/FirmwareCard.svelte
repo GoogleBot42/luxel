@@ -43,8 +43,7 @@
       reboot: true,
     });
     if (!ok) return;
-    busy = true;
-    note("ota", "uploading…");
+    busy = true; // the button steps aside for `fw-busy` while this runs
     try {
       const r = await $device?.otaUpload(await file.arrayBuffer());
       note(
@@ -80,9 +79,14 @@
       data-role="fw-file"
       on:change={(e) => void onImagePicked(e)}
     />
-    <button data-role="fw-update" disabled={busy} on:click={() => fileInput?.click()}>
-      Update…
-    </button>
+    <!-- a push in flight is a PROGRESS state, not a capability gate: the
+         button steps aside for the progress line rather than greying out
+         (§5.7, Gitea #529) -->
+    {#if busy}
+      <span class="dim" data-role="fw-busy">uploading — the device reboots when it lands…</span>
+    {:else}
+      <button data-role="fw-update" on:click={() => fileInput?.click()}>Update…</button>
+    {/if}
     <span class="dim hint">
       pick a <span class="mono">luxel.bin</span> built for this board — it is written to the
       other OTA slot and the device <strong>reboots</strong> into it

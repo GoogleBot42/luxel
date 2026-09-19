@@ -220,26 +220,26 @@
 
 <div class="playlist-tab" data-role="playlist-panel" hidden={!active}>
   <div class="transport">
-    <span class="group">
-      {#if $playlist.playing}
-        <button class="primary" data-role="pl-stop" on:click={playlistStop}>■ Stop</button>
-        <button class="icon" data-role="pl-prev" title="previous" aria-label="previous"
-          on:click={playlistPrev}>⏮</button
-        >
-        <button class="icon" data-role="pl-next" title="next" aria-label="next"
-          on:click={playlistNext}>⏭</button
-        >
-      {:else}
-        <button
-          class="primary"
-          data-role="pl-play"
-          disabled={!$device || $playlist.items.length === 0}
-          on:click={playlistPlay}
-        >
-          ▶ Play
-        </button>
-      {/if}
-    </span>
+    <!-- §5.7: absent, never disabled. There is nothing to play until the queue
+         has an item, so the transport carries the empty state as TEXT instead
+         of a dimmed dead button (Gitea #529). -->
+    {#if $device && $playlist.items.length > 0}
+      <span class="group">
+        {#if $playlist.playing}
+          <button class="primary" data-role="pl-stop" on:click={playlistStop}>■ Stop</button>
+          <button class="icon" data-role="pl-prev" title="previous" aria-label="previous"
+            on:click={playlistPrev}>⏮</button
+          >
+          <button class="icon" data-role="pl-next" title="next" aria-label="next"
+            on:click={playlistNext}>⏭</button
+          >
+        {:else}
+          <button class="primary" data-role="pl-play" on:click={playlistPlay}>▶ Play</button>
+        {/if}
+      </span>
+    {:else if $device}
+      <span class="dim tiny" data-role="pl-transport-empty">playlist empty</span>
+    {/if}
 
     {#if nowItem}
       <span class="nowplaying" data-role="pl-now">
@@ -256,7 +256,7 @@
     <span class="group defaults">
       <span class="dim tiny">Default</span>
       <input
-        class="num"
+        class="num wide"
         data-role="pl-default-sec"
         type="number"
         min="0"
@@ -279,28 +279,31 @@
         on:change={onCrossfadeChange}
       />
       <span class="dim tiny">s</span>
-      <span class="overflow">
-        <button
-          class="icon"
-          data-role="pl-more"
-          title="more actions"
-          aria-label="more actions"
-          on:click|stopPropagation={() => (menuOpen = !menuOpen)}>⋯</button
-        >
-        {#if menuOpen}
-          <div class="menu" data-role="pl-menu" role="menu">
-            <button
-              class="danger"
-              data-role="pl-clear"
-              role="menuitem"
-              disabled={$playlist.items.length === 0}
-              on:click|stopPropagation={() => void clearPlaylist()}
-            >
-              Clear playlist
-            </button>
-          </div>
-        {/if}
-      </span>
+      <!-- Clear acts on the items; with none, the menu would be empty, so the
+           chip that OPENS it is absent too (§5.7, Gitea #529). -->
+      {#if $playlist.items.length > 0}
+        <span class="overflow">
+          <button
+            class="icon"
+            data-role="pl-more"
+            title="more actions"
+            aria-label="more actions"
+            on:click|stopPropagation={() => (menuOpen = !menuOpen)}>⋯</button
+          >
+          {#if menuOpen}
+            <div class="menu" data-role="pl-menu" role="menu">
+              <button
+                class="danger"
+                data-role="pl-clear"
+                role="menuitem"
+                on:click|stopPropagation={() => void clearPlaylist()}
+              >
+                Clear playlist
+              </button>
+            </div>
+          {/if}
+        </span>
+      {/if}
     </span>
   </div>
 
@@ -396,6 +399,12 @@
     font-size: 12px;
   }
 
+  /* wide enough for the word "manual" — 56 px clipped the placeholder to
+     "mar" at every width (Gitea #530) */
+  .num.wide {
+    width: 88px;
+  }
+
   .transport {
     display: flex;
     align-items: center;
@@ -428,11 +437,6 @@
 
   .primary:hover {
     filter: brightness(1.08);
-  }
-
-  .primary:disabled {
-    opacity: 0.45;
-    cursor: default;
   }
 
   .icon {
@@ -511,11 +515,6 @@
     color: var(--error);
   }
 
-  .menu button:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
   .pl-list {
     padding: 12px 16px;
     max-width: 720px;
@@ -557,6 +556,7 @@
 
     .defaults {
       flex-basis: 100%;
+      flex-wrap: wrap;
     }
 
     .spacer {

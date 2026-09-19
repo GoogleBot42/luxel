@@ -169,3 +169,30 @@ export async function renameTo(page, name) {
 export function saveState(page) {
   return page.$eval('[data-role="save-state"]', (el) => (el.textContent ?? "").trim());
 }
+
+/**
+ * The §5.7 sweep (Gitea #529): "a control is ABSENT unless the thing it acts
+ * on exists — never disabled." The one deliberate exception is a control
+ * disabled because the user must learn a BUDGET, and such a control has to
+ * carry `data-reason` saying which budget (and show the same words on
+ * screen).
+ *
+ * So the invariant a harness asserts is: in the whole live DOM, every
+ * `[disabled]` / `[aria-disabled="true"]` element carries `data-reason`.
+ * Anything else is a dimmed dead control and a bug.
+ *
+ * Returns the offenders as `[{role, tag, text}]` — empty means the page is
+ * clean. Call it with every disclosure expanded and every state mounted;
+ * a collapsed Advanced body is unmounted and hides its own controls.
+ */
+export function disabledSweep(page) {
+  return page.$$eval('[disabled], [aria-disabled="true"]', (els) =>
+    els
+      .filter((el) => !el.hasAttribute("data-reason"))
+      .map((el) => ({
+        role: el.getAttribute("data-role") ?? "",
+        tag: el.tagName.toLowerCase(),
+        text: (el.textContent ?? "").trim().slice(0, 40),
+      })),
+  );
+}

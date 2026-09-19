@@ -11,11 +11,22 @@
   import { note, notes } from "../stores/notify";
 
   let open = false;
+  let ssidInput: HTMLInputElement | undefined;
 
-  /** Save WiFi creds — the device stores them and reboots to apply. */
+  /** Save WiFi creds — the device stores them and reboots to apply.
+   *  Save is always live (§5.7): it VALIDATES and says why, rather than
+   *  greying itself out and leaving the user to guess (Gitea #529). */
   async function saveWifi(): Promise<void> {
     const ssid = $wifiForm.ssid.trim();
-    if (!ssid) return;
+    if (!ssid) {
+      note("wifi", "enter a network name");
+      ssidInput?.focus();
+      return;
+    }
+    if (!$device) {
+      note("wifi", "device unreachable — reload to retry");
+      return;
+    }
     const ok = await confirm({
       title: "Save WiFi and reboot?",
       body: `The credentials are stored in flash and the device joins "${ssid}" on the next boot. If they are wrong it comes back as an open setup access point.`,
@@ -53,7 +64,13 @@
 {#if open}
   <div class="field">
     <span class="flabel">Network</span>
-    <input class="grow" data-role="wifi-ssid" placeholder="SSID" bind:value={$wifiForm.ssid} />
+    <input
+      class="grow"
+      data-role="wifi-ssid"
+      placeholder="SSID"
+      bind:this={ssidInput}
+      bind:value={$wifiForm.ssid}
+    />
   </div>
   <div class="field">
     <span class="flabel">Password</span>
@@ -66,12 +83,7 @@
     />
   </div>
   <div class="field">
-    <button
-      class="primary"
-      data-role="wifi-save"
-      disabled={!$device || !$wifiForm.ssid.trim()}
-      on:click={() => void saveWifi()}
-    >
+    <button class="primary" data-role="wifi-save" on:click={() => void saveWifi()}>
       save &amp; reboot
     </button>
     {#if $notes.wifi}<span class="dim" data-role="wifi-note">{$notes.wifi}</span>{/if}
