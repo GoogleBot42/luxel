@@ -78,3 +78,14 @@ paths:
   never disabled, never inferred from a board name (the one exception is a
   budget the user must learn, e.g. Add layer → Pattern at the layer cap; see
   proposal §5.7 for the full visibility audit). `docs/webui.md` is historical.
+- In a `page.evaluate` / `page.waitForFunction` callback, a template literal
+  in the function BODY is not interpolated by node — the function is shipped
+  as source text and evaluated in the browser, where your harness constant is
+  undefined. It fails as a `ReferenceError` in the page (caught by the
+  "no page errors" check, not by the assertion it belongs to). Pass the
+  selector as a trailing argument instead (2026-09-19, #467).
+- A responsive tile/card grid needs `repeat(N, minmax(0, 1fr))`, not
+  `repeat(N, 1fr)`: `1fr`'s implicit minimum is the item's **min-content**, so
+  one long `white-space: nowrap` label widens the track past its share and the
+  grid overflows its container. A desktop track written `minmax(150px, 1fr)`
+  hides this, so it only shows up in the mobile media query (2026-09-19, #467).
