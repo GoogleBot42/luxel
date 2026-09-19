@@ -104,6 +104,17 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
 
 ## Rules of thumb
 
+- **`POST /api/layout` has two side effects to undo.** A `matrix …` body
+  installs `grid W H` as a **user** map, which flips `/api/status`'s
+  `geom.source` from `board` to `user` — put it back with an empty-body
+  `POST /api/map` (a panel board then falls back to its own grid). And the
+  reboot it asks for can drop the pattern resume, leaving the board default
+  running; re-activate by id (`POST /api/patterns/<id>/activate`). Both
+  verified 2026-09-19.
+- **The board has no serial reset AND no plain reboot before v0.1.41.**
+  `POST /api/reboot` landed with #475; before that the only reboot a panel
+  board could be asked for was an OTA push (`/api/datapin` does not exist
+  here — no strip SPI — and `/api/apmode` takes it off the network).
 - **Leave the panel as you FOUND it.** Read brightness, `/api/pattern`,
   `/api/pattern.lxp` and the pixel count before touching anything and put
   those exact values back — brightness is Jeremy's (3 on 2026-09-07), never
