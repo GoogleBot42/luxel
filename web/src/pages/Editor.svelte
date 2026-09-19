@@ -42,15 +42,16 @@
   } from "../stores/device";
   import { confirm, promptText } from "../stores/dialog";
   import {
-    cubeLattice,
-    deriveRig,
+    configureEngine,
     layout,
-    markPatternLoaded,
-    markRigChosen,
-    markSourcePasted,
+    layoutName,
+    layoutSignature,
+    patternDims,
     pixelCount,
     pixelTotal,
-    takeRigDerivePending,
+    previewAs,
+    setMapCoords,
+    setPreviewAs,
   } from "../stores/geometry";
   import { banners, clearNote, note, notes, setBanner } from "../stores/notify";
   import {
@@ -66,7 +67,7 @@
     hints,
     luxel,
     mapSrc,
-    NEW_PATTERN,
+    newPatternSource,
     parseEpe,
     patternName,
     previewFps,
@@ -128,8 +129,33 @@
   let lastT = 0;
   let lastPoll = 0;
 
-  // the map sub-tab exists only while a 2D map is the active layout
-  $: if ($layout.kind !== "map" && subTab === "map") subTab = "pattern";
+  // the map sub-tab exists only while the custom map program IS the Layout
+  $: mapIsLayout = $previewAs.mode === "map";
+  $: if (!mapIsLayout && subTab === "map") subTab = "pattern";
+
+  /** Choosing "Custom map program" — from the playground's chip or the
+   *  console's shape select — is what enables mapping, so the program runs and
+   *  its coordinates become the Layout. Runs once per selection, not on every
+   *  store tick; an edit to the program re-applies through MapEditor's own
+   *  `liveApply`. */
+  let mapArmed = false;
+  $: {
+    if (!mapIsLayout) mapArmed = false;
+    else if (!mapArmed && mapRef) {
+      mapArmed = true;
+      if (!mapRef.hasEngine()) mapRef.recompile(false);
+      mapRef.run(); // its `install` event feeds the coordinates back
+    }
+  }
+
+  /** The Layout moved — the header's "Preview as" chip, the console's shape
+   *  select, a device whose geometry changed — so the preview engine has to
+   *  be rebuilt at the new pixel count and re-given its map (#463). Compared
+   *  by `layoutKey`, not by identity: the 1 Hz status poll re-derives the
+   *  Layout every second without changing it. A Layout change NEVER pushes to
+   *  the device; it only rearranges what this browser draws. */
+  let builtRig = "";
+  $: if ($layoutSignature !== builtRig && $luxel) recompile();
 
   /** The device's vmerr, but only when it is a capacity rejection — other
    *  runtime errors are the local engine's business and already have a banner.
@@ -280,22 +306,25 @@
     if (!lx) return;
     const result = lx.compile($source, pixelCount());
     if (result instanceof Engine) {
-      engine?.free();
-      engine = result;
-      compileError = null;
-      runtimeError.set(null);
-      if (takeRigDerivePending()) {
-        // Once per load, never per keystroke (#372). A changed rig changes the
-        // pixel count, so the engine is rebuilt at the new geometry — the
-        // pending flag is already cleared, so this recurses exactly once.
-        if (deriveRig(result)) {
+      // What the COMPILED pattern wants — the only honest source of it, and
+      // what playground Auto follows (D7). Telling the store can move the
+      // Layout, and a moved Layout is a different pixel count, so the engine
+      // is rebuilt at it. Recurses exactly once: the second pass agrees.
+      const dims = result.preferredDims();
+      if (dims !== $patternDims) {
+        patternDims.set(dims);
+        if (pixelCount() !== result.pixelCount) {
+          result.free();
           recompile();
           return;
         }
       }
-      const l = $layout;
-      if (l.kind === "grid") engine.setMapGrid(l.w, l.h);
-      if (l.kind === "map") engine.setMap(l.coords);
+      engine?.free();
+      engine = result;
+      compileError = null;
+      runtimeError.set(null);
+      configureEngine(engine); // map + projection, from the ONE Layout
+      builtRig = $layoutSignature; // this engine matches the current Layout
       engine.setWallClock(Date.now() / 1000);
       controls = engine.controls();
       if (debugMode) {
@@ -392,10 +421,9 @@
     // whatever pattern is currently active on the device.
     const r = await connect(!wipDirty);
     if (r.ok) {
-      // The rig is reset to the hardware strip here, so it is re-derived from
-      // the source (and the device's installed map) on the next compile (#372)
-      layout.set({ kind: "strip", pixels: $devicePixels });
-      markPatternLoaded();
+      // Nothing to reset: the console's Layout IS the device's, and the
+      // handshake's `/api/status` + `/api/map` reads are what the reconciler
+      // is watching (#463).
       if (r.source !== null) {
         source.set(r.source); // show what's running on the device
         dirty.set(false); // editor now matches the running pattern
@@ -427,8 +455,9 @@
   // ---- opening patterns ----
 
   export function newPattern(): void {
-    markPatternLoaded();
-    source.set(NEW_PATTERN);
+    // The template follows the Layout: a matrix console starts you in
+    // `render2D`, not on a 1D ramp it will show row-major (#463).
+    source.set(newPatternSource($layout.dims));
     patternName.set("");
     exampleName.set("");
     devicePatternId.set("");
@@ -436,7 +465,6 @@
     controlValues.set({});
     dirty.set(false); // a fresh template — not yet edited
     subTab = "pattern";
-    if ($layout.kind === "map") layout.set({ kind: "strip", pixels: pixelCount() });
     preview?.clear();
     void tick().then(applyEdit);
   }
@@ -445,7 +473,6 @@
     const p = findSaved(name);
     if (!p) return;
     preview?.clear();
-    markPatternLoaded();
     patternName.set(p.name);
     exampleName.set("");
     importError = "";
@@ -455,26 +482,15 @@
     void tick().then(applyEdit);
   }
 
-  export function loadGalleryPick(p: {
-    name: string;
-    kind: "strip" | "grid" | "cloud";
-    source: string;
-  }): void {
+  /** Open a pattern the gallery was showing. No geometry travels with it: the
+   *  tile and the editor reconcile the same Layout from the same inputs, so
+   *  the preview already matches the tile it was clicked on (#463). */
+  export function loadGalleryPick(p: { name: string; source: string }): void {
     preview?.clear(); // picking a pattern opens it in the editor
-    markPatternLoaded();
     patternName.set(p.name);
     exampleName.set("");
     importError = "";
     devicePatternId.set("");
-    if (!$device) {
-      layout.set(
-        p.kind === "grid"
-          ? { kind: "grid", w: 16, h: 16 }
-          : p.kind === "cloud"
-            ? { kind: "map", coords: cubeLattice(5) } // render3D → rotating cloud
-            : { kind: "strip", pixels: 60 },
-      );
-    }
     source.set(p.source);
     controlValues.set({});
     dirty.set(false); // freshly picked from the gallery
@@ -515,7 +531,6 @@
       devicePatternId.set(id);
       patternName.set(p.name);
       exampleName.set("");
-      markPatternLoaded();
       source.set(p.source);
       dirty.set(false); // freshly loaded from the device — matches what's running
       compileError = null;
@@ -556,7 +571,6 @@
       patternName.set(epe.name);
       exampleName.set("");
       devicePatternId.set("");
-      markPatternLoaded();
       source.set(epe.source);
       controlValues.set({});
       dirty.set(true); // an imported .epe isn't in the library/device until saved
@@ -669,8 +683,8 @@
   // ---- share links ----
 
   async function sharePattern(): Promise<void> {
-    // a custom map is part of the look — carry its PROGRAM in the link
-    const frag = await encodeShare($source, $layout.kind === "map" ? $mapSrc : null);
+    // The pattern only: a map is the Layout's, not the pattern's (#463).
+    const frag = await encodeShare($source);
     history.replaceState(null, "", `#${frag}`);
     const url = location.href;
     try {
@@ -692,55 +706,57 @@
     }
   }
 
-  // ---- layout editing ----
+  // ---- the console's interim shape override ----
+  //
+  // On a device the Layout is the DEVICE's (#463). These two controls are
+  // what is left of the old rig config: they re-shape the console's preview
+  // and say what "install grid / install map on device" will install. A8
+  // (#469) moves them into Settings → LED layout and A10 (#471) gives the map
+  // program its own screen; the playground drives the same store through the
+  // header's "Preview as" chip instead.
+
+  /** What the legacy select shows for the reconciled Layout. */
+  $: layoutKind = $previewAs.mode === "map" ? "map" : $layout.dims === 2 ? "grid" : "strip";
 
   function setLayoutKind(e: Event): void {
     const kind = (e.target as HTMLSelectElement).value;
-    markRigChosen(); // an explicit pick outranks anything derived (#372)
     if (kind === "map") {
-      // "2D map" is how mapping is enabled: reveal + run the map program (the
-      // map sub-tab appears because layout.kind becomes "map"). This is the
-      // only enable/disable — switching back to strip/grid turns it off.
+      // "2D map" is how mapping is enabled; the watcher above runs the program
+      // and its coordinates become the Layout. Switching back turns it off.
+      setPreviewAs({ mode: "map", pixels: pixelCount() });
       subTab = "map";
-      if (!mapRef.hasEngine()) mapRef.recompile(false);
-      mapRef.run(); // the install event flips layout → map on success
-      if ($layout.kind !== "map") recompile();
       return;
     }
     subTab = "pattern";
     // on a device the pixel count is fixed by hardware; layout only rearranges
     const total = $device ? $devicePixels : pixelCount();
     if (kind === "strip") {
-      layout.set({ kind: "strip", pixels: total });
+      setPreviewAs({ mode: "strip", pixels: total });
     } else if (kind === "grid") {
       const side = Math.max(2, Math.round(Math.sqrt(total)));
-      layout.set({ kind: "grid", w: side, h: side });
+      setPreviewAs({ mode: "matrix", w: side, h: side });
     }
-    recompile(); // rebuild the local preview (a layout change never pushes)
+    // the Layout watcher above rebuilds the preview engine
   }
 
-  function setLayoutNum(field: "pixels" | "w" | "h", e: Event): void {
-    markRigChosen(); // hand-tuned geometry is an explicit pick too (#372)
+  function setLayoutNum(field: "w" | "h", e: Event): void {
     const v = Math.max(1, Math.min(4096, Number((e.target as HTMLInputElement).value) || 1));
-    const l = $layout;
-    if (l.kind === "strip" && field === "pixels") layout.set({ ...l, pixels: v });
-    if (l.kind === "grid" && (field === "w" || field === "h")) {
-      layout.set({ ...l, [field]: v });
-    }
-    recompile(); // rebuild the local preview (a layout change never pushes)
+    const c = $previewAs;
+    if (c.mode === "matrix") setPreviewAs({ ...c, [field]: v });
+    // the Layout watcher above rebuilds the preview engine
   }
 
   function onMapInstall(e: CustomEvent<{ coords: number[][]; dims: number }>): void {
-    layout.set({ kind: "map", coords: e.detail.coords });
+    setMapCoords(e.detail.coords); // the map program's output IS the Layout
+    setPreviewAs({ mode: "map", pixels: e.detail.coords.length });
     recompile(); // local preview only — a layout change never pushes to the device
   }
 
   /** Install the current computed map on the device (device patterns then
    *  render2D with this geometry). */
   function installDeviceMap(): void {
-    const l = $layout;
-    if (!$device || l.kind !== "map") return;
-    const coords = l.coords;
+    const coords = $layout.coords;
+    if (!$device || $previewAs.mode !== "map" || !coords) return;
     const dims = (coords[0]?.length ?? 2) >= 3 ? 3 : 2;
     void (async () => {
       if (await installDeviceMapCoords(dims, coords)) {
@@ -753,7 +769,7 @@
    *  no coordinates cross the wire, nothing is allocated on the device. */
   function installDeviceGrid(): void {
     const l = $layout;
-    if (!$device || l.kind !== "grid") return;
+    if (!$device || l.dims !== 2 || !l.regular) return;
     const { w, h } = l;
     void (async () => {
       if (await installDeviceGridMap(w, h)) {
@@ -1153,7 +1169,7 @@
       />
     </div>
 
-    {#if $layout.kind === "map"}
+    {#if mapIsLayout}
       <div class="subtabs" data-role="editor-subtabs">
         <button
           data-role="subtab-pattern"
@@ -1184,7 +1200,6 @@
           value={$source}
           {hoverValue}
           on:change={onSourceChange}
-          on:paste={markSourcePasted}
           on:breakpoints={onBreakpoints}
         />
       </div>
@@ -1193,59 +1208,58 @@
         bind:compileError={mapCompileError}
         bind:debugMode={mapDebugMode}
         bind:dbg={mapDbg}
-        showPane={$layout.kind === "map"}
+        showPane={mapIsLayout}
         visible={subTab === "map"}
-        liveApply={$layout.kind === "map"}
+        liveApply={mapIsLayout}
         on:install={onMapInstall}
       />
     </div>
 
     <div class="playback">
-      <!-- Layout controls how the preview is arranged. In the playground it
-           also sets how many pixels the local engine runs; on a device the
-           pixel count is fixed by hardware and this only rearranges the live
-           stream (strip row / grid / 2D map) — "2D map" is a local preview
-           aid, not uploaded to the device. Choosing "2D map" reveals the
-           pattern·map sub-tabs and runs the map program. -->
-      <select value={$layout.kind} data-role="layout-kind" on:change={setLayoutKind}>
-        <option value="strip">strip</option>
-        <option value="grid">grid</option>
-        <option value="map">2D map</option>
-      </select>
-      {#if $layout.kind === "strip"}
-        <input
-          class="num"
-          data-role="layout-px"
-          type="number"
-          min="1"
-          max="4096"
-          value={$layout.pixels}
-          disabled={!$isPlayground}
-          title={$isPlayground ? "pixel count" : "fixed by the device's hardware"}
-          on:change={(e) => setLayoutNum("pixels", e)}
-        />
-        <span class="dim">px</span>
-      {:else if $layout.kind === "grid"}
-        <input
-          class="num"
-          data-role="layout-w"
-          type="number"
-          min="1"
-          max="256"
-          value={$layout.w}
-          on:change={(e) => setLayoutNum("w", e)}
-        />
-        <span class="dim">×</span>
-        <input
-          class="num"
-          data-role="layout-h"
-          type="number"
-          min="1"
-          max="256"
-          value={$layout.h}
-          on:change={(e) => setLayoutNum("h", e)}
-        />
-        {#if $device}
+      <!-- CONSOLE ONLY (#463). The Layout is the device's; what is left here
+           is the shape the console previews in and what "install … on device"
+           will install. The playground's Layout is the header's "Preview as"
+           chip — these fields were its rig config and are gone. A8 (#469)
+           moves these into Settings → LED layout, A10 (#471) gives the map
+           program its own screen. -->
+      {#if $device}
+        <select value={layoutKind} data-role="layout-kind" on:change={setLayoutKind}>
+          <option value="strip">strip</option>
+          <option value="grid">grid</option>
+          <option value="map">2D map</option>
+        </select>
+        {#if layoutKind === "strip"}
+          <input
+            class="num"
+            data-role="layout-px"
+            type="number"
+            min="1"
+            max="4096"
+            value={$layout.pixels}
+            disabled
+            title="fixed by the device's hardware"
+          />
+          <span class="dim">px</span>
+        {:else if layoutKind === "grid"}
+          <input
+            class="num"
+            data-role="layout-w"
+            type="number"
+            min="1"
+            max="256"
+            value={$layout.w}
+            on:change={(e) => setLayoutNum("w", e)}
+          />
+          <span class="dim">×</span>
+          <input
+            class="num"
+            data-role="layout-h"
+            type="number"
+            min="1"
+            max="256"
+            value={$layout.h}
+            on:change={(e) => setLayoutNum("h", e)}
+          />
           <button
             data-role="grid-install"
             title="tell the device it is a {$layout.w}×{$layout.h} grid so its patterns render in 2D (no coordinates uploaded, nothing allocated on the device)"
@@ -1256,15 +1270,20 @@
           {#if $deviceMap.installed}
             <span class="dim mono" data-role="map-installed">{$deviceMap.count}px {$deviceMap.dims}D on device</span>
           {/if}
+        {:else}
+          <span class="dim mono" data-role="map-badge">{$layout.coords?.length ?? 0} px mapped</span>
         {/if}
       {:else}
-        <span class="dim mono" data-role="map-badge">{$layout.coords.length} px mapped</span>
+        <!-- the playground's Layout lives in the header chip; this is a readout -->
+        <span class="dim mono" data-role="layout-summary" title="change it with “Preview as” in the header">
+          {$layoutName}
+        </span>
       {/if}
       {#if subTab === "map"}
         <button data-role="map-run" title="run the map program and install it" on:click={() => mapRef.run()}>
           run map
         </button>
-        {#if $device && $layout.kind === "map"}
+        {#if $device && mapIsLayout}
           <button
             data-role="map-install"
             title="upload this map to the device so its patterns render in 2D/3D"
@@ -1436,7 +1455,7 @@
       </p>
     {/if}
 
-    {#if $layout.kind === "map"}
+    {#if mapIsLayout}
       <h2>Map</h2>
       <p class="dim hint">
         A {$pixelTotal}-point map is installed. Edit it in the

@@ -11,7 +11,11 @@ paths:
   directly in the block's own syntax, not variables only touched inside a
   called function's body. Write `$: { a; b; fn(); }`, not `$: fn()` if `fn`
   closes over `a`/`b` — the latter silently stops re-running when `a`/`b`
-  change.
+  change. The mirror-image trap (2026-09-19, #463): `$: shape = f(rig)` where
+  `rig` is assigned *inside a function* another reactive block calls renders a
+  cycle behind — the markup showed `bar` while the component held a grid rig,
+  in e2e only (it reproduced under a second page in the same browser, never in
+  isolation). Assign the derived values in that same function.
 - The device serves the UI from a tiny connection pool (3 sockets default,
   2 small-chip) and browser-NATIVE requests (script/stylesheet/preload
   tags) can't go through fetchgate — vite is deliberately configured with
@@ -46,11 +50,12 @@ paths:
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.
-- The playground previews every `render2D` gallery pattern on a **16x16 grid
-  at targetFps 60** (`onGalleryPick`), while the bench panel is 64x64 at 100+
-  fps. So "wrong in the browser, fine on device" for a 2D pattern is almost
-  always a resolution or frame-rate assumption in the PATTERN, not in the
-  harness (#285 was three of them, 2026-09-07).
+- The playground previews a `render2D` pattern on a **16x16 grid at targetFps
+  60** by default (`stores/geometry.ts`, "Preview as" = Auto), while the bench
+  panel is 64x64 at 100+ fps. So "wrong in the browser, fine on device" for a
+  2D pattern is almost always a resolution or frame-rate assumption in the
+  PATTERN, not in the harness (#285 was three of them, 2026-09-07). Since #463
+  the chip can be set to `Matrix 64×64` to check that without hardware.
 - Terminology Jeremy set: the hardware-bound UI is the "device console"; the
   hardware-free UI is the "playground." The playground must not offer device
   affordances (connect/disconnect controls, device badges, etc.).

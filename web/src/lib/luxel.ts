@@ -3,6 +3,12 @@
 // converts at the boundary so the app deals in plain numbers.
 
 import { gatedFetch } from "./fetchgate";
+import {
+  DEFAULT_PROJECTION,
+  PROJECTION_CODES,
+  type Projection,
+  type ProjectionMode,
+} from "./geometry";
 
 export interface Diagnostic {
   line: number;
@@ -224,31 +230,11 @@ export interface DeviceModel {
   storedVmerr: string | null;
 }
 
-/** A projection wire token (`luxel_core::projection::ProjectionMode`). */
-export type ProjectionMode = "index" | "x" | "y" | "z" | "xy" | "xz" | "yz";
-
-/** FFI code per token — the numbers the engine, firmware and mirror share. */
-export const PROJECTION_CODES: Record<ProjectionMode, number> = {
-  index: 0,
-  x: 1,
-  y: 2,
-  z: 3,
-  xy: 4,
-  xz: 5,
-  yz: 6,
-};
-
-/** A device's projection defaults: one choice per PATTERN dimensionality.
- *  Which of them is in play is decided by the Layout (see
- *  `Luxel.projectionOptions`). Wire names match `/api/layout` (#465). */
-export interface Projection {
-  proj1d: ProjectionMode;
-  proj2d: ProjectionMode;
-  proj3d: ProjectionMode;
-}
-
-/** The engine's own defaults — a no-op on every (pattern, Layout) pair. */
-export const DEFAULT_PROJECTION: Projection = { proj1d: "index", proj2d: "z", proj3d: "xy" };
+// The projection vocabulary lives in `lib/geometry.ts` with the Layout it
+// belongs to (Gitea #463) and is re-exported here, which is where every call
+// site already imports it from.
+export { DEFAULT_PROJECTION, PROJECTION_CODES };
+export type { Projection, ProjectionMode };
 
 /** One cell of the §5.4d table, as the engine lists it (display order,
  *  first = default). Labels come from the engine so every surface captions a

@@ -13,7 +13,7 @@
   export let active = false;
 
   const dispatch = createEventDispatcher<{
-    pick: { name: string; kind: "strip" | "grid" | "cloud"; source: string };
+    pick: { name: string; source: string };
     open: string;
     new: void;
   }>();

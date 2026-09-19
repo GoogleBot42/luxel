@@ -17,7 +17,7 @@ web/src/
   app.css           global tokens + element resets (dark only)
   stores/           plain-TS Svelte stores — all app state lives here
     device.ts       session lifecycle, hardware facts, settings state, ONE poll scheduler
-    geometry.ts     the preview rig + the #372 derive-once latch  (placeholder for #463)
+    geometry.ts     THE Layout reconciler — every preview, tile and thumbnail reads it
     pattern.ts      the pattern document, the wasm host, local library, .epe + share codecs
     notify.ts       transient notes + the banner list
     dialog.ts       the modal primitive: promise-returning confirm/promptText
@@ -48,8 +48,8 @@ device.ts  ←  geometry.ts  ←  pattern.ts        (notify.ts depends on nothin
 
 `device.ts` therefore never writes the pattern document. `connectDevice()`
 *returns* the running pattern it pulled and the caller (`pages/Editor.svelte`)
-installs it. Keep it that way — it is what lets #463 replace `geometry.ts`
-wholesale.
+installs it. Keep it that way: `geometry.ts` reads wire state out of
+`device.ts` and nothing reads back.
 
 ## The shell
 
@@ -165,6 +165,76 @@ already independent of where the name came from.
 The editor's compile/runtime/capacity banners are still derived state with
 bespoke markup and stay where they are.
 
+## Geometry — the one Layout (`stores/geometry.ts`, Gitea #463)
+
+There is exactly ONE geometry object in the UI, and every preview, gallery
+tile, row thumbnail and playlist row renders through it. It is *reconciled*,
+never set:
+
+```
+device Layout (console)      stores/device.ts `deviceLayout`   ─┐
+"Preview as" choice          `previewAs` (persisted)            ├─→  layout
+the compiled pattern's dims  `patternDims` (preferredDims())    │
+projection defaults          `projection` (the device's)       ─┘
+```
+
+`reconcileLayout()` and everything derived from it are **pure** and live in
+`lib/geometry.ts`, tested in `web/tests/geometry.test.mjs` (one case per cell
+of the console-shape × pattern-dims × choice table, plus a parity check of the
+projection tables against the engine's own through the built wasm). The store
+is only the wiring.
+
+```ts
+interface Layout {
+  dims: 1 | 2 | 3;          // strip · matrix or 2D map · lattice or 3D map
+  regular: boolean;         // addressable as w×h(×d); false = coordinate cloud
+  source: "device" | "user" | "pattern" | "default";
+  w: number; h: number; d: number;
+  pixels: number;           // what an engine is compiled at
+  coords?: number[][];      // positions, when the renderer needs them
+  serpentine?: boolean;     // the device's real wiring; undefined = row-major
+  projection: Projection;   // proj1d/proj2d/proj3d (docs/spec/projection.md)
+}
+```
+
+Rules the reconciler encodes:
+
+- **Console**: the device owns the geometry (`/api/status`'s `geom`, #464 —
+  and `/api/layout` when #465 lands: `deviceLayout` in `stores/device.ts` is
+  the ONE adapter to swap, nothing downstream changes). A "Preview as" choice
+  there only re-shapes; the pixel count stays hardware truth.
+- **Playground**: `Auto` (the default, D7) follows the compiled pattern
+  3D › 2D › 1D; anything else is the user's and outlives pattern loads.
+- `devicePixels` / `deviceMap` are **raw wire state** in `stores/device.ts`.
+  Only the adapter reads them; no surface may treat them as geometry.
+
+Derived helpers every consumer uses instead of re-deriving anything:
+
+| helper | what it gives |
+|---|---|
+| `tileShape(l)` | `bar` · `grid` · `cloud` · `scatter` — the shape to draw |
+| `layoutLabel(l)` | `64×64 matrix`, `300 px strip` — the header chip |
+| `effectiveFor(dims, l)` | what the pattern sees (pixelCount, w/h, projection) |
+| `captionFor(dims, l)` | `1D · along x`, or null when native |
+| `thumbLayout(l, n)` | the same shape at tile/thumbnail size |
+| `layoutKey(l)` | cheap identity: changed ⇒ rebuild your engines |
+| `configureEngine(e, l)` | the ONE place an engine is given a map + projection |
+| `compileForLayout(lx, src, max)` | compile a pattern onto the Layout it will be shown on |
+
+**The invariant: every consumer reads geometry from here.** A component must
+not compile an engine at a pixel count of its own, install a map of its own,
+or decide a shape from a pattern's source text. Gallery tiles take their
+dimensionality from the ENGINE (`preferredDims()`); `gen-gallery.mjs`'s `kind`
+is an advisory hint that saves a second compile and is allowed to be wrong.
+
+Painting lives in `lib/draw.ts` (`paintBar` / `paintGrid` / `paintPoints`), so
+the editor preview, the gallery tiles and the row thumbnails cannot drift.
+
+What is NOT here yet: the device's real wiring. `serpentine` is wired through
+`wiringCoords()` (and unit-tested) but nothing sets it until `/api/layout`
+(#465) reports it — until then the console previews row-major, like the
+playground. Per-item projection overrides are #470/#473's.
+
 ## Store reference
 
 `stores/device.ts` — `device`, `deviceBase`, `isPlayground`, `mode`,
@@ -178,15 +248,16 @@ bespoke markup and stay where they are.
 `installDeviceGridMap`, `clearDeviceMap`, `pollSubscribe`, `pollStopAll`,
 `startSessionPoll`.
 
-`stores/geometry.ts` — `layout`, `pixelTotal`, `pixelCount()`, `deriveRig()`,
-`cubeLattice()`, `markPatternLoaded()`, `markSourcePasted()`,
-`markRigChosen()`, `takeRigDerivePending()`. **Placeholder.** It is today's
-strip→grid-only rig derivation moved verbatim so #463 can replace this one
-file with the real Layout reconciler without touching a consumer.
+`stores/geometry.ts` — `layout`, `layoutFor()`, `layoutSignature`,
+`layoutName`, `shape`, `pixelTotal`, `pixelCount()`, `previewAs`,
+`setPreviewAs()`, `patternDims`, `mapCoords`, `setMapCoords()`, `projection`,
+`configureEngine()`, `compileForLayout()`, `captionFor()`, `effectiveFor()`,
+`tileShape()`, `thumbLayout()`, `projectionCaption()`, `layoutLabel()`,
+`layoutKey()`, `TILE_MAX_CELLS`, `THUMB_MAX_CELLS`. See **Geometry** below.
 
 `stores/pattern.ts` — `luxel`, `loadLuxel()`, `source`, `dirty`,
 `patternName`, `exampleName`, `devicePatternId`, `controlValues`, `hints`,
-`mapSrc`, `NEW_PATTERN`, `previewFps`, `runtimeError`, `saved`,
+`mapSrc`, `NEW_PATTERN`, `newPatternSource()`, `previewFps`, `runtimeError`, `saved`,
 `saveToLocalLibrary`, `deleteFromLocalLibrary`, `findSaved`, `startAutosave`,
 `stopAutosave`, `loadWorkingCopy`, `compileToBytecode`, `parseEpe`,
 `exportEpe`, `encodeShare`, `decodeShare`.
@@ -209,7 +280,15 @@ file with the real Layout reconciler without touching a consumer.
   what lets a page component or a plain `.css` import (e.g.
   `settings/cards.css`) land in that single stylesheet.
 - **`$:` only tracks what appears in its own syntax.** Name every dependency in
-  the block, not just inside the function it calls.
+  the block, not just inside the function it calls. And a `$:` whose input is
+  assigned *inside a function another reactive block calls* can render one
+  cycle stale — assign the derived values in that function too
+  (`components/PatternThumb.svelte`'s `adopt()`), or it will draw the previous
+  Layout's shape while holding the new Layout.
+- **Geometry comes from `stores/geometry.ts`.** One `layout`, reconciled from
+  the device / the "Preview as" choice / the compiled pattern's dims. No
+  component compiles at a pixel count of its own or installs a map of its own —
+  see the Geometry section above.
 - **No native dialogs.** `window.prompt` / `window.confirm` / `alert` do not
   appear anywhere under `web/src` — naming and confirmation go through
   `stores/dialog.ts` (#472). A native dialog also hangs the e2e harnesses,

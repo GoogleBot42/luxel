@@ -19,7 +19,7 @@ import {
   saveWorkingCopy,
   type SavedPattern,
 } from "../lib/store";
-import { layout, pixelCount } from "./geometry";
+import { pixelCount, type Dims } from "./geometry";
 
 // ---- the wasm engine host ----
 
@@ -53,8 +53,10 @@ export const controlValues = writable<Record<string, number[]>>({});
 /** `//# min=…` annotations parsed out of the source. */
 export const hints: Readable<Map<string, ControlHint>> = derived(source, parseControlHints);
 
-/** The map program (a Luxel program: plot() one point per pixel). Lives with
- *  the document because it travels in the share link (research/ui-audit §2.4).*/
+/** The map program (a Luxel program: plot() one point per pixel). It is
+ *  GEOMETRY, not part of the pattern — since #463 it no longer rides in share
+ *  links, and A10 (#471) moves its editor out of the pattern editor
+ *  altogether. It lives here only because the wasm host does. */
 export const mapSrc = writable(`// Map program — runs once per pixel on the Luxel VM, so it's
 // debuggable: set a gutter breakpoint and step through it.
 // plot() one point per pixel (units are arbitrary; they normalize).
@@ -64,10 +66,28 @@ export function render(index) {
   plot(cos(a), sin(a))
 }`);
 
-/** The template "+ New pattern" starts from. */
+/** The template "+ New pattern" starts from — on a strip. */
 export const NEW_PATTERN = `export function render(index) {
   hsv(index / pixelCount, 1, 1)
 }`;
+
+/** The template for a new pattern on THIS Layout (Gitea #463): a matrix
+ *  console starts you in `render2D`, a 3D rig in `render3D`, a strip in
+ *  `render`. Starting a 64×64 panel user on a 1D ramp was the mode-blind
+ *  default the audit called out (research/ui-audit.md §3). */
+export function newPatternSource(dims: Dims): string {
+  if (dims === 3) {
+    return `export function render3D(index, x, y, z) {
+  hsv((x + y + z) / 3, 1, 1)
+}`;
+  }
+  if (dims === 2) {
+    return `export function render2D(index, x, y) {
+  hsv(x, 1, y)
+}`;
+  }
+  return NEW_PATTERN;
+}
 
 // ---- local preview readouts ----
 
@@ -102,7 +122,6 @@ function queueAutosave(): void {
   autosave = setTimeout(() => {
     saveWorkingCopy({
       source: get(source),
-      layout: get(layout),
       patternName: get(patternName),
       exampleName: get(exampleName),
       dirty: get(dirty),
@@ -123,7 +142,7 @@ export function startAutosave(): void {
   if (autosaveStarted) return;
   autosaveStarted = true;
   let first = true;
-  derived([source, layout, dirty], (v) => v).subscribe(() => {
+  derived([source, dirty], (v) => v).subscribe(() => {
     if (first) {
       first = false; // the subscribe-time callback is the current state, not a change
       return;
@@ -217,11 +236,16 @@ async function pipe(data: Uint8Array, stream: GenericTransformStream): Promise<U
   return new Uint8Array(await body.arrayBuffer());
 }
 
-/** Build the URL fragment carrying `src` (and, when a custom map is the rig,
- *  its PROGRAM too — a map is part of the look). */
-export async function encodeShare(src: string, map: string | null): Promise<string> {
-  const payload = map === null ? src : JSON.stringify({ s: src, m: map });
-  const key = map === null ? "p" : "pj";
+/** Build the URL fragment carrying `src`.
+ *
+ *  The pattern ONLY (Gitea #463): a map is the Layout's, i.e. the device's or
+ *  the playground's, never the pattern's — shipping it inside a link was one
+ *  of the ways geometry leaked into the document (research/ui-audit.md §2.4).
+ *  Links that already carry one (`#pj=`) still decode, so nothing anyone has
+ *  shared breaks. */
+export async function encodeShare(src: string): Promise<string> {
+  const payload = src;
+  const key = "p";
   const bytes = new TextEncoder().encode(payload);
   try {
     return `${key}=${b64url(await pipe(bytes, new CompressionStream("deflate-raw")))}`;
@@ -230,7 +254,10 @@ export async function encodeShare(src: string, map: string | null): Promise<stri
   }
 }
 
-/** Decode a `#p=`/`#ps=`/`#pj=`/`#pjs=` fragment, or null if it isn't one. */
+/** Decode a `#p=`/`#ps=`/`#pj=`/`#pjs=` fragment, or null if it isn't one.
+ *  The `pj` forms are pre-#463 links that carried a map program; they are
+ *  still honoured — the map becomes the playground's Layout choice, not part
+ *  of the pattern. */
 export async function decodeShare(
   hash: string,
 ): Promise<{ source: string; mapSrc?: string } | null> {

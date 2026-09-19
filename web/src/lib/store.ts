@@ -1,9 +1,9 @@
 // Local persistence for the playground: an autosaved working copy (never
-// lose edits to a closed tab) and a named pattern library, both in
-// localStorage. This UI is the prototype for the device's pattern CRUD —
-// keep the shapes simple and serializable.
+// lose edits to a closed tab), a named pattern library, and the "Preview as"
+// Layout choice — all in localStorage. This UI is the prototype for the
+// device's pattern CRUD — keep the shapes simple and serializable.
 
-import type { Layout } from "./examples";
+import { parsePreviewAs, type PreviewAs } from "./geometry";
 
 export interface SavedPattern {
   name: string;
@@ -13,6 +13,7 @@ export interface SavedPattern {
 
 const LIB_KEY = "luxel.patterns";
 const CUR_KEY = "luxel.current";
+const PREVIEW_AS_KEY = "luxel.previewAs";
 
 function read<T>(key: string): T | null {
   try {
@@ -53,7 +54,6 @@ export function deletePattern(name: string): SavedPattern[] {
 
 export interface WorkingCopy {
   source: string;
-  layout: Layout;
   /** name context so the picker label survives a reload */
   patternName: string;
   exampleName: string;
@@ -67,8 +67,25 @@ export function saveWorkingCopy(wc: WorkingCopy): void {
   write(CUR_KEY, wc);
 }
 
+/** The autosaved working copy. Pre-#463 copies also carried the preview rig
+ *  (`layout`); it is migrated by `loadPreviewAs` and ignored here — geometry
+ *  is no longer part of the pattern document. */
 export function loadWorkingCopy(): WorkingCopy | null {
   const wc = read<WorkingCopy>(CUR_KEY);
-  if (!wc || typeof wc.source !== "string" || !wc.layout?.kind) return null;
+  if (!wc || typeof wc.source !== "string") return null;
   return { ...wc, dirty: wc.dirty === true }; // default legacy copies to clean
+}
+
+/** The playground's Layout choice (the "Preview as" chip). Falls back to the
+ *  rig a pre-#463 working copy persisted, so an existing tab keeps previewing
+ *  on the geometry it was left on. */
+export function loadPreviewAs(): PreviewAs | null {
+  return (
+    parsePreviewAs(read<unknown>(PREVIEW_AS_KEY)) ??
+    parsePreviewAs((read<{ layout?: unknown }>(CUR_KEY) ?? {}).layout)
+  );
+}
+
+export function savePreviewAs(choice: PreviewAs): void {
+  write(PREVIEW_AS_KEY, choice);
 }

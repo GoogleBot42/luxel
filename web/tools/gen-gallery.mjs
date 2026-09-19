@@ -3,11 +3,16 @@
 //   public/gallery.json            ← library/*.js   (the clean-room library)
 //   public/pixelblaze-library.json ← corpus/*.epe   (scraped Pixelblaze exports)
 //
-// `kind` picks the thumbnail shape: "cloud" for render3D-only patterns (a
-// rotating projected point cloud on a cube-lattice map), "grid" for render2D
-// (a mapped rectangle), "strip" for 1D (a horizontal bar) — Jeremy's
-// 1D-bar-vs-2D-rectangle distinction. A `renderFrame` pattern has no
-// render2D, so it is classified by the bulk builtins it calls instead.
+// `kind` is an ADVISORY hint at the pattern's dimensionality — "cloud" for
+// render3D-only, "grid" for render2D (or a renderFrame that calls a
+// coordinate/grid-space bulk builtin), "strip" for 1D. Since Gitea #463 the
+// playground does NOT take a tile's shape from it: the shape is the Layout's
+// and the dimensionality comes from the COMPILED pattern
+// (`Engine.preferredDims()`), which a regex over source text cannot know (a
+// `render2D` inside a comment or a string counts here and must not). All this
+// field buys is the pixel count of a tile's FIRST compile, so the common case
+// does not pay for a second one — see `compileForLayout` in
+// web/src/stores/geometry.ts. Nothing breaks when it is wrong.
 //
 // The corpus gallery is a LOCAL-ONLY convenience: the corpus is untracked and
 // of unknown licensing (the clean-room policy keeps it out of library/ and

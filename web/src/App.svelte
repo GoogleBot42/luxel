@@ -4,7 +4,9 @@
   // the browser-blocked banner. Everything else lives in ./stores (state) and
   // ./pages (surfaces) — see docs/web-architecture.md.
   import { onDestroy, onMount } from "svelte";
+  import { get } from "svelte/store";
   import Dialog from "./components/Dialog.svelte";
+  import PreviewAsChip from "./components/PreviewAsChip.svelte";
   import { gatedFetch } from "./lib/fetchgate";
   import DevicePatterns from "./pages/DevicePatterns.svelte";
   import Editor from "./pages/Editor.svelte";
@@ -26,7 +28,7 @@
     refreshPlaylist,
     startSessionPoll,
   } from "./stores/device";
-  import { layout, markPatternLoaded } from "./stores/geometry";
+  import { layoutName, pixelTotal, setPreviewAs } from "./stores/geometry";
   import { setBanner } from "./stores/notify";
   import {
     decodeShare,
@@ -137,12 +139,15 @@
     if (shared) {
       source.set(shared.source);
       if (shared.mapSrc) {
+        // A pre-#463 link that carried a map program. Links no longer ship
+        // one (a map is the Layout's, not the pattern's), but the old ones
+        // still work: the map becomes this playground's Layout choice.
         mapSrc.set(shared.mapSrc);
+        setPreviewAs({ mode: "map", pixels: get(pixelTotal) });
         sharedMap = true;
       }
       exampleName.set("");
       patternName.set("shared pattern");
-      markPatternLoaded();
     }
     let hadWip = shared !== null;
     let wipDirty = shared !== null; // a shared link is itself an unsaved edit to resume
@@ -150,7 +155,6 @@
       const wc = loadWorkingCopy();
       if (wc) {
         source.set(wc.source);
-        layout.set(wc.layout);
         patternName.set(wc.patternName);
         exampleName.set(wc.exampleName);
         dirty.set(wc.dirty);
@@ -271,6 +275,19 @@
     {/if}
 
     <span class="spacer"></span>
+
+    <!-- What this app is rendering through (#463). The console states the
+         device's own Layout; the playground offers the chip that chooses one. -->
+    {#if $isPlayground}
+      <PreviewAsChip />
+    {:else}
+      <span class="layout-chip" data-role="layout-chip" title="the device's LED layout">
+        <span class="dot" class:live={$device !== null}></span>
+        <span class="dev-name">{($device?.base ?? $deviceBase) || "device"}</span>
+        <span class="dim">·</span>
+        <span class="mono" data-role="layout-label">{$layoutName}</span>
+      </span>
+    {/if}
 
     <span class="mono dim" data-role="fps" title={fpsReadout.title}>{fpsReadout.text}</span>
   </header>
@@ -414,6 +431,30 @@
 
   .spacer {
     flex: 1;
+  }
+
+  /* the console's "● luxel-f6b0a8 · 64×64 matrix" (proposal §4) */
+  .layout-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .layout-chip .dev-name {
+    color: var(--text);
+  }
+
+  .layout-chip .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+
+  .layout-chip .dot.live {
+    background: #4caf50;
   }
 
   .back {
