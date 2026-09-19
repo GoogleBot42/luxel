@@ -23,6 +23,7 @@ use crate::compile::compile;
 #[cfg(feature = "frontend")]
 use crate::diag::Diagnostic;
 use crate::fixed::Fx;
+use crate::projection::{dims as norm_dims, Projection, ProjectionMode};
 use crate::vm::{ArrView, DebugState, MapData, Outcome, Program, StepKind, Value, Vm, VmError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +106,53 @@ const CONTROL_PREFIXES: &[(&str, ControlKind)] = &[
     ("showNumber", ControlKind::ShowNumber),
     ("gauge", ControlKind::Gauge),
 ];
+
+/// How a frame's render calls are mapped onto the Layout's pixels — the
+/// executable form of one cell of the §5.4d projection table, recomputed
+/// only when the pattern's entry, the Layout or the projection changes.
+/// Every default resolves to [`ProjPlan::Native`], so an engine nobody has
+/// configured runs exactly the code path it always did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjPlan {
+    /// The pattern is native to the Layout (or the projection is a no-op):
+    /// one render call per pixel with the Layout's own coordinates.
+    Native,
+    /// Coordinate substitution: `sel[k]` says which Layout coordinate
+    /// (`0`/`1`/`2`) feeds the pattern's k-th coordinate argument, or `3`
+    /// for mid-space (0.5). One render call per pixel, as before.
+    Select([u8; 3]),
+    /// Render ONE strip of `len` pixels — `pixelCount` reads as `len`, the
+    /// pattern sees no map — then replicate it across the Layout along
+    /// `axis` (0 = x, 1 = y, 2 = z). This is the engine win: a 1D pattern on
+    /// a 64×64 panel costs 64 render calls, not 4096.
+    Strip { axis: u8, len: u32 },
+    /// A `renderFrame` (whole-frame, 2D) pattern on a 1D Layout: it gets a
+    /// w×1 (middle row) or 1×h (middle column) grid so the grid-space bulk
+    /// builtins still describe the strip.
+    FrameGrid(crate::outpipe::GridMap),
+}
+
+/// What the pattern actually sees this frame once the projection is applied
+/// — the geometry a UI must caption, thumbnail and size its preview from
+/// ([`Engine::effective_geometry`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectiveGeometry {
+    /// What `pixelCount` reads inside the pattern (the strip length under an
+    /// along-axis projection, the Layout's pixel count otherwise).
+    pub pixel_count: u32,
+    /// The space the pattern renders in: 1 = strip, 2 = plane, 3 = volume.
+    /// The RESOLVED entry's dimensionality, so it can differ from
+    /// `/api/status`'s `geom.pattern_dims` (what the pattern declares) for a
+    /// pattern that exports more than one render entry.
+    pub pattern_dims: u8,
+    /// The Layout's own dimensionality.
+    pub layout_dims: u8,
+    /// Grid the pattern's grid-space builtins see, `(0, 0)` when there is none.
+    pub w: u16,
+    pub h: u16,
+    /// The projection in force, or `None` when the pattern is native.
+    pub mode: Option<ProjectionMode>,
+}
 
 /// One frame of sensor-board data (the PB sensor expansion board surface).
 /// Everything is normalized 0..1 except `accelerometer` (signed G-ish) and
@@ -189,6 +237,29 @@ pub struct Engine {
     /// for this engine's lifetime (map installs must not resurrect it —
     /// the fix is a config change, which rebuilds the engine).
     requires_violated: bool,
+    /// The host's projection defaults (Gitea #473). Only the field matching
+    /// the pattern's own dimensionality is ever consulted, and only when it
+    /// differs from the Layout's.
+    projection: Projection,
+    /// [`projection`] resolved against this pattern and this Layout.
+    plan: ProjPlan,
+    /// Render calls per frame: `pixel_count`, except under
+    /// [`ProjPlan::Strip`] where it is the strip length.
+    render_count: u32,
+    /// The Layout's map while [`ProjPlan::Strip`] has the VM believing it
+    /// runs on a bare strip. `Some` ONLY in that state — everywhere else the
+    /// Layout map lives in `vm.map`, exactly as before.
+    layout_map: Option<MapData>,
+    /// One frame of the rendered strip, for the replicate pass. Grown once
+    /// when a strip plan is installed (fallibly — a refusal falls back to
+    /// by-index), reused every frame: no per-frame and no per-pixel alloc.
+    strip_scratch: Vec<[u8; 3]>,
+    /// This pattern's `renderFrame` names a coordinate/grid-space bulk op,
+    /// so it is a 2D pattern for projection purposes (proposal §5.4d: bulk
+    /// patterns follow the 2D row). A `renderFrame` that only paints in
+    /// index space is a strip pattern and stays one. Scanned once at load —
+    /// [`uses_coordinate_bulk_op`] walks the bytecode.
+    frame_is_2d: bool,
 }
 
 impl Engine {
@@ -379,6 +450,12 @@ impl Engine {
             map_dims: 0,
             grid: None,
             requires_violated: violated,
+            projection: Projection::DEFAULT,
+            plan: ProjPlan::Native,
+            render_count: pixel_count,
+            layout_map: None,
+            strip_scratch: Vec::new(),
+            frame_is_2d: false,
         };
 
         // A pattern that renders ONLY in 2D/3D gets a default square-ish
@@ -395,12 +472,13 @@ impl Engine {
         // `fillHSV` is a strip pattern and must not be handed a geometry
         // it never mentioned (it would change `pixelMapDimensions()` and
         // the post chain's spatial stages under it).
-        let wants_2d = engine.render_tgt[1].is_some()
-            || engine.render_tgt[2].is_some()
-            || (engine.render_tgt[3].is_some() && engine.uses_coordinate_bulk_op());
+        engine.frame_is_2d = engine.render_tgt[3].is_some() && engine.uses_coordinate_bulk_op();
+        let wants_2d =
+            engine.render_tgt[1].is_some() || engine.render_tgt[2].is_some() || engine.frame_is_2d;
         if !violated && engine.render_tgt[0].is_none() && wants_2d {
             engine.set_default_grid_map();
         }
+        engine.sync_plan();
         engine
     }
 
@@ -431,12 +509,31 @@ impl Engine {
     /// map uses (Gitea #258).
     pub fn set_grid_map(&mut self, w: u16, h: u16) {
         let (w, h) = (w.max(1), h.max(1));
+        self.plan_reset();
         self.grid = Some(crate::outpipe::GridMap { w, h, serpentine: false });
         self.vm.frame_grid = self.grid;
         self.vm.map = Some(MapData::grid(w, h));
         if !self.requires_violated {
             self.render = self.resolve_render_now();
         }
+        self.sync_plan();
+    }
+
+    /// Install the 1D Layout: no map at all, so the pattern's coordinates are
+    /// the strip's own `index / pixelCount`. The counterpart of
+    /// [`set_grid_map`] for a host whose Layout really is a strip (`strip N`
+    /// on `/api/layout`) — without it a 2D-only pattern keeps the fabricated
+    /// ceil(√n) grid from construction and the 2D→1D projections (middle
+    /// row / middle column) can never come into play.
+    pub fn set_strip_layout(&mut self) {
+        self.plan_reset();
+        self.grid = None;
+        self.vm.frame_grid = None;
+        self.vm.map = None;
+        if !self.requires_violated {
+            self.render = self.resolve_render_now();
+        }
+        self.sync_plan();
     }
 
     /// Turn this engine into a *map program* runner: [`run_map`] executes its
@@ -444,6 +541,7 @@ impl Engine {
     /// one coordinate per pixel. Debugging works exactly as for a pattern —
     /// the same per-pixel `drive` loop, so breakpoints/stepping just work.
     pub fn enable_map_mode(&mut self) {
+        self.plan_reset();
         self.is_map = true;
         // A map program is per-pixel by definition (`render(index)` calling
         // `plot`), so the whole-frame entry is not a candidate here — drop
@@ -623,7 +721,296 @@ impl Engine {
     /// The map currently installed in the VM (a host map, the board grid or
     /// the default grid), if any.
     pub fn installed_map(&self) -> Option<&MapData> {
-        self.vm.map.as_ref()
+        self.layout_map()
+    }
+
+    /// The Layout's map wherever it currently lives — `vm.map` normally, the
+    /// engine's own slot while an along-axis projection has the VM running
+    /// on a bare virtual strip.
+    fn layout_map(&self) -> Option<&MapData> {
+        self.layout_map.as_ref().or(self.vm.map.as_ref())
+    }
+
+    /// The Layout's dimensionality: 1 = strip (no map), 2 = matrix or a 2D
+    /// map, 3 = a 3D map. Unaffected by any projection in force.
+    pub fn layout_dims(&self) -> u8 {
+        norm_dims(self.layout_map().map_or(0, |m| m.dims))
+    }
+
+    /// The projection defaults this engine holds (Gitea #473).
+    pub fn projection(&self) -> Projection {
+        self.projection
+    }
+
+    /// Install the projection defaults — how a pattern whose dimensionality
+    /// differs from the Layout's is shown on it. Only the field matching this
+    /// pattern's dimensionality is consulted, and only when it differs from
+    /// the Layout's, so the same triple can be carried across pattern and
+    /// Layout changes. Takes effect from the next [`Engine::frame`].
+    ///
+    /// Note `pixelCount` under an along-axis projection becomes the strip's
+    /// length, and the pattern's top-level init has already run by then: a
+    /// pattern that sizes a buffer with `array(pixelCount)` at the top level
+    /// keeps the Layout-sized buffer it allocated. Hosts should install the
+    /// projection right after building the engine, before the first frame.
+    pub fn set_projection(&mut self, projection: Projection) {
+        if projection == self.projection {
+            return;
+        }
+        self.projection = projection;
+        self.sync_plan();
+    }
+
+    /// The projection actually in force, or `None` when the pattern is
+    /// native to the Layout (nothing is being projected).
+    pub fn effective_projection(&self) -> Option<ProjectionMode> {
+        self.projection
+            .effective(self.render_dims(), self.layout_dims())
+    }
+
+    /// What the pattern sees this frame: `pixelCount`, its own
+    /// dimensionality, the grid its grid-space builtins read, and the
+    /// projection in force. Everything a UI needs to caption a tile
+    /// (`1D · along x`) or size a preview.
+    pub fn effective_geometry(&self) -> EffectiveGeometry {
+        let (w, h) = self.vm.frame_grid.map_or((0, 0), |g| (g.w, g.h));
+        EffectiveGeometry {
+            pixel_count: self.vm.pixel_count,
+            pattern_dims: self.render_dims(),
+            layout_dims: self.layout_dims(),
+            w,
+            h,
+            mode: self.effective_projection(),
+        }
+    }
+
+    /// The dimensionality the pattern is CURRENTLY being rendered as — the
+    /// RESOLVED entry's, which is what a projection has to bridge. A
+    /// `renderFrame` follows the 2D row when it actually draws in grid space
+    /// ([`Engine::frame_is_2d`]) and is a strip pattern otherwise — the same
+    /// distinction the default-grid rule already makes (proposal §5.4d).
+    ///
+    /// Not [`pattern_dims`](Self::pattern_dims), which is what the pattern
+    /// DECLARES: they differ for a pattern exporting several entries (both
+    /// `render` and `render2D` declares 2, but renders 1D on a strip) and
+    /// whenever a late-bound entry changes between frames. Never 0 — a
+    /// dimensionless `renderFrame` renders on the strip's index space.
+    fn render_dims(&self) -> u8 {
+        match self.render {
+            Some(RenderKind::R1(_)) => 1,
+            Some(RenderKind::R3(_)) => 3,
+            Some(RenderKind::R2(_)) => 2,
+            Some(RenderKind::Frame(_)) => {
+                if self.frame_is_2d {
+                    2
+                } else {
+                    1
+                }
+            }
+            None => norm_dims(self.preferred_dims()),
+        }
+    }
+
+    /// Undo whatever the current plan changed about the VM's view of the
+    /// world, leaving the Layout installed exactly as a projection-less
+    /// engine would have it. Every plan transition goes through here, so no
+    /// plan needs its own inverse.
+    fn plan_reset(&mut self) {
+        if self.plan == ProjPlan::Native {
+            return;
+        }
+        if let Some(m) = self.layout_map.take() {
+            self.vm.map = Some(m);
+        }
+        self.vm.frame_grid = self.grid;
+        self.set_vm_pixel_count(self.pixel_count);
+        self.render_count = self.pixel_count;
+        self.plan = ProjPlan::Native;
+    }
+
+    /// Recompute the plan for (this pattern, this Layout, this projection)
+    /// and install it if it changed. Cheap and idempotent — called from every
+    /// map install, from `set_projection`, and once per frame after the
+    /// render entry is re-resolved (it can be late-bound).
+    fn sync_plan(&mut self) {
+        let want = self.compute_plan();
+        if want == self.plan {
+            return;
+        }
+        self.plan_reset();
+        match want {
+            ProjPlan::Strip { len, .. } => {
+                // One buffer for the rendered strip. Fallible: a device that
+                // cannot spare it keeps by-index rather than dying.
+                self.strip_scratch.clear();
+                if self.strip_scratch.capacity() < len as usize
+                    && self
+                        .strip_scratch
+                        .try_reserve_exact(len as usize)
+                        .is_err()
+                {
+                    return;
+                }
+                // The pattern is a strip of `len` for as long as this plan
+                // stands: no map, `pixelCount` = len, no grid.
+                self.layout_map = self.vm.map.take();
+                self.vm.frame_grid = None;
+                self.set_vm_pixel_count(len);
+                self.render_count = len;
+            }
+            ProjPlan::FrameGrid(g) => self.vm.frame_grid = Some(g),
+            ProjPlan::Native | ProjPlan::Select(_) => {}
+        }
+        self.plan = want;
+    }
+
+    fn set_vm_pixel_count(&mut self, n: u32) {
+        if self.vm.pixel_count == n {
+            return;
+        }
+        self.vm.pixel_count = n;
+        self.vm.globals[self.prog.pixel_count_g as usize] = Value::Num(Fx::from_int(n as i32));
+    }
+
+    /// One cell of the §5.4d table, resolved to something executable.
+    fn compute_plan(&self) -> ProjPlan {
+        if self.is_map || self.requires_violated {
+            return ProjPlan::Native;
+        }
+        let Some(render) = self.render else {
+            return ProjPlan::Native;
+        };
+        let is_frame = matches!(render, RenderKind::Frame(_));
+        let pdims = self.render_dims();
+        let ldims = self.layout_dims();
+        let Some(mode) = self.projection.effective(pdims, ldims) else {
+            return ProjPlan::Native;
+        };
+        if pdims == 1 {
+            // 1D pattern on a 2D/3D Layout. By index changes nothing, and a
+            // whole-frame pattern owns the buffer — there is no per-pixel
+            // strip to render and replicate — so both keep today's path.
+            let Some(axis) = mode.axis().filter(|_| !is_frame) else {
+                return ProjPlan::Native;
+            };
+            let len = self.axis_len(axis);
+            return if len == 0 {
+                ProjPlan::Native
+            } else {
+                ProjPlan::Strip { axis, len }
+            };
+        }
+        if is_frame {
+            // A grid-space `renderFrame` on a strip gets the matching w×1
+            // (middle row) or 1×h (middle column) grid. There is nothing
+            // meaningful to hand one on a 3D Layout.
+            if !(pdims == 2 && ldims == 1) {
+                return ProjPlan::Native;
+            }
+            let n = self.pixel_count.min(u16::MAX as u32) as u16;
+            return ProjPlan::FrameGrid(if mode == ProjectionMode::Y {
+                crate::outpipe::GridMap { w: 1, h: n, serpentine: false }
+            } else {
+                crate::outpipe::GridMap { w: n, h: 1, serpentine: false }
+            });
+        }
+        // `sel[k]` picks the Layout coordinate (0/1/2, or 3 for mid-space)
+        // feeding the pattern's k-th coordinate argument. `effective` has
+        // already clamped `mode` to one this pair offers, so every arm's
+        // catch-all is that pair's own default.
+        let sel = match (pdims, ldims, mode) {
+            // 2D pattern on a strip: middle row walks the pattern's x,
+            // middle column its y.
+            (2, 1, ProjectionMode::Y) => [3, 0, 3],
+            (2, 1, _) => [0, 3, 3],
+            // 2D pattern on a lattice: the xy image extruded along an axis —
+            // the pattern's two coordinates are the other two.
+            (2, 3, ProjectionMode::X) => [1, 2, 3],
+            (2, 3, ProjectionMode::Y) => [0, 2, 3],
+            // 3D pattern on a strip: a line through the centre of the cube.
+            (3, 1, ProjectionMode::Y) => [3, 0, 3],
+            (3, 1, ProjectionMode::Z) => [3, 3, 0],
+            (3, 1, _) => [0, 3, 3],
+            // 3D pattern on a matrix: one slice, third coordinate pinned.
+            (3, 2, ProjectionMode::Xz) => [0, 3, 1],
+            (3, 2, ProjectionMode::Yz) => [3, 0, 1],
+            // native pairs and every pair whose default is what
+            // `pixel_coords` already does
+            _ => return ProjPlan::Native,
+        };
+        if sel == [0, 1, 2] || sel == [0, 1, 3] {
+            // `pixel_coords` already fills an absent third axis with
+            // mid-space, so these are the identity.
+            ProjPlan::Native
+        } else {
+            ProjPlan::Select(sel)
+        }
+    }
+
+    /// How many distinct cells the Layout has along `axis` — the length of
+    /// the strip an along-axis projection renders, and what `pixelCount`
+    /// then reads.
+    ///
+    /// Known exactly for a procedural W×H grid (the panel and matrix case,
+    /// where the 64× saving lives) and for a coordinate map that
+    /// [`crate::outpipe::detect_grid`] recognised. Any other map — an
+    /// irregular 2D cloud, any 3D Layout — has no cell count, so the strip is
+    /// as long as the Layout and pixels sample it by coordinate: the same
+    /// picture, without the saving.
+    fn axis_len(&self, axis: u8) -> u32 {
+        let Some(m) = self.layout_map() else {
+            return 0;
+        };
+        if let Some((w, h)) = m.grid {
+            return match axis {
+                0 => w as u32,
+                1 => h as u32,
+                _ => 0,
+            };
+        }
+        if let Some(g) = self.grid.filter(|g| g.len() == m.coords.len()) {
+            // GridMap's `w` counts the run the INDEX walks first, which is
+            // whichever coordinate axis moves between pixel 0 and pixel 1.
+            let fast = match (m.coords.first(), m.coords.get(1)) {
+                (Some(a), Some(b)) if a[0] != b[0] => 0u8,
+                (Some(a), Some(b)) if a[1] != b[1] => 1u8,
+                _ => return self.pixel_count,
+            };
+            return match axis {
+                0 | 1 if axis == fast => g.w as u32,
+                0 | 1 => g.h as u32,
+                _ => 0,
+            };
+        }
+        self.pixel_count
+    }
+
+    /// Spread the strip rendered into `pixels[..len]` across the whole
+    /// Layout along the projection's axis. Reads each pixel's Layout
+    /// coordinate, so a serpentine panel, a rotated map or an irregular
+    /// cloud all replicate correctly — no wiring assumptions.
+    fn project_replicate(&mut self) {
+        let ProjPlan::Strip { axis, len } = self.plan else {
+            return;
+        };
+        let (n, len) = (self.pixel_count as usize, len as usize);
+        if len == 0 || n == 0 || self.pixels.len() < len {
+            return;
+        }
+        self.strip_scratch.clear();
+        self.strip_scratch.extend_from_slice(&self.pixels[..len]);
+        let last = (len - 1) as u32;
+        let axis = axis as usize;
+        for i in 0..n {
+            let j = match &self.layout_map {
+                Some(m) if last > 0 => {
+                    let v = m.coord(i)[axis].raw().clamp(0, 65_535) as u32;
+                    (((v * last) + 32_767) / 65_535) as usize
+                }
+                _ => 0,
+            };
+            self.pixels[i] = self.strip_scratch[j.min(len - 1)];
+        }
     }
 
     pub fn grid(&self) -> Option<crate::outpipe::GridMap> {
@@ -676,6 +1063,7 @@ impl Engine {
     pub fn set_map_vec(&mut self, dims: u8, mut coords: Vec<[Fx; 3]>) -> bool {
         let n = (self.pixel_count as usize).min(coords.len());
         coords.truncate(n);
+        self.plan_reset();
         // grid detection wants the raw (pattern-unit) coordinates
         self.grid = crate::outpipe::detect_grid(dims, &coords);
         self.vm.frame_grid = self.grid;
@@ -700,12 +1088,16 @@ impl Engine {
         if !self.requires_violated {
             self.render = self.resolve_render_now();
         }
+        self.sync_plan();
         true
     }
 
-    /// [`resolve_render`] against the current map dims and global values.
+    /// [`resolve_render`] against the LAYOUT's dims and the global values.
+    /// The Layout, not `vm.map`: an along-axis projection hides the map from
+    /// the VM for the duration, and entry selection must not flip-flop with
+    /// it (see [`Engine::layout_map`]).
     fn resolve_render_now(&self) -> Option<RenderKind> {
-        let dims = self.vm.map.as_ref().map_or(0, |m| m.dims);
+        let dims = self.layout_map().map_or(0, |m| m.dims);
         resolve_render(&self.render_tgt, &self.vm.globals, dims)
     }
 
@@ -1156,11 +1548,7 @@ impl Engine {
                         // asserts and VM resource guards stay frame-fatal:
                         // blank the rest of the frame, move on
                         match self.run_stage {
-                            Some(RunStage::Pixel(i)) => {
-                                for p in i as usize..self.pixel_count as usize {
-                                    self.pixels[p] = [0; 3];
-                                }
-                            }
+                            Some(RunStage::Pixel(i)) => self.blank_from(i),
                             // a whole-frame handler owns the whole frame
                             Some(RunStage::Frame) => {
                                 self.pixels.iter_mut().for_each(|p| *p = [0; 3])
@@ -1187,8 +1575,10 @@ impl Engine {
                 Ok(Outcome::Done(_)) => match stage {
                     RunStage::Before => {
                         // Late-bound entries (`export var render2D` assigned
-                        // inside beforeRender) resolve now, each frame.
+                        // inside beforeRender) resolve now, each frame — and
+                        // the projection follows whatever they resolved to.
                         self.render = self.resolve_render_now();
+                        self.sync_plan();
                         if self.render.is_none() {
                             self.pixels.iter_mut().for_each(|p| *p = [0; 3]);
                             self.finish_frame();
@@ -1221,9 +1611,10 @@ impl Engine {
                             let [r, g, b] = self.vm.pixel;
                             self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
                         }
-                        if i + 1 < self.pixel_count {
+                        if i + 1 < self.render_count {
                             self.run_stage = Some(RunStage::Pixel(i + 1));
                         } else {
+                            self.project_replicate();
                             self.post_chain();
                             self.finish_frame();
                             return;
@@ -1264,13 +1655,20 @@ impl Engine {
             _ => false,
         };
         let plan = self.vm.begin_pixel_pass(&self.prog, fn_idx, argc);
+        // A coordinate-substituting projection (§5.4d) is a loop-invariant
+        // 3-byte selector; a strip projection needs nothing here, because the
+        // VM has already been told it runs on a bare strip of `render_count`.
+        let sel = match self.plan {
+            ProjPlan::Select(s) => Some(s),
+            _ => None,
+        };
         let mut args = [
             Value::Num(Fx::ZERO),
             Value::Num(mid),
             Value::Num(mid),
             Value::Num(mid),
         ];
-        for i in from..self.pixel_count {
+        for i in from..self.render_count {
             self.vm.pixel = [Fx::ZERO; 3];
             self.vm.pixel_written = false;
             args[0] = Value::Num(Fx::from_int(i as i32));
@@ -1278,9 +1676,14 @@ impl Engine {
                 // transforms apply to 2D/3D coordinates (1D x: unverifiable
                 // on our oracle — its installed map can never be removed;
                 // keeping 1D raw)
+                let c = self.vm.pixel_coords(i, [mid; 3]);
+                let c = match sel {
+                    Some(s) => select_coords(c, s, mid),
+                    None => c,
+                };
                 let p = match render {
-                    RenderKind::R1(_) => self.vm.pixel_coords(i, [mid; 3]),
-                    _ => self.vm.apply_transform(self.vm.pixel_coords(i, [mid; 3])),
+                    RenderKind::R1(_) => c,
+                    _ => self.vm.apply_transform(c),
                 };
                 args[1] = Value::Num(p[0]);
                 args[2] = Value::Num(p[1]);
@@ -1292,9 +1695,7 @@ impl Engine {
                     self.last_error = Some(e);
                 }
                 if fatal {
-                    for p in i as usize..self.pixel_count as usize {
-                        self.pixels[p] = [0; 3];
-                    }
+                    self.blank_from(i);
                     self.run_stage = None;
                     return;
                 }
@@ -1302,8 +1703,24 @@ impl Engine {
             let [r, g, b] = self.vm.pixel;
             self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
         }
+        self.project_replicate();
         self.post_chain();
         self.finish_frame();
+    }
+
+    /// Blank the frame from render call `i` on. Under a strip projection the
+    /// rendered prefix has not been spread over the Layout yet, so a fatal
+    /// error there blanks the whole frame rather than leaving strip colours
+    /// sitting at the first `i` Layout positions.
+    fn blank_from(&mut self, i: u32) {
+        let from = if matches!(self.plan, ProjPlan::Strip { .. }) {
+            0
+        } else {
+            i as usize
+        };
+        for p in self.pixels.iter_mut().skip(from) {
+            *p = [0; 3];
+        }
     }
 
     /// Lend the frame buffer to the VM for a `renderFrame` call. A MOVE,
@@ -1372,12 +1789,19 @@ impl Engine {
         let mid = Fx::from_raw(1 << 15); // 0.5, mid-space fill for missing dims
                                          // transforms apply to 2D/3D coordinates (1D x: unverifiable on our
                                          // oracle — its installed map can never be removed; keeping 1D raw)
+        let coords = |e: &Engine| {
+            let c = e.vm.pixel_coords(i, [mid; 3]);
+            match e.plan {
+                ProjPlan::Select(s) => select_coords(c, s, mid),
+                _ => c,
+            }
+        };
         let p = match render {
             // a plain render(index) never reads x: skip the per-pixel
             // coordinate divide (it is a ROM call on Xtensa) entirely
             RenderKind::R1(f) if self.prog.fns[f as usize].params < 2 => [mid; 3],
-            RenderKind::R1(_) => self.vm.pixel_coords(i, [mid; 3]),
-            _ => self.vm.apply_transform(self.vm.pixel_coords(i, [mid; 3])),
+            RenderKind::R1(_) => coords(self),
+            _ => self.vm.apply_transform(coords(self)),
         };
         let args = [
             Value::Num(Fx::from_int(i as i32)),
@@ -1535,6 +1959,19 @@ pub fn check_asserts(prog: &Program, pixel_count: u32, array_byte_budget: usize)
         Err(e) if e.is_assert => Some(e.message),
         _ => None,
     }
+}
+
+
+/// Apply a [`ProjPlan::Select`] selector: `sel[k]` names the Layout
+/// coordinate feeding the pattern's k-th argument, or 3 for mid-space.
+#[inline]
+fn select_coords(c: [Fx; 3], sel: [u8; 3], mid: Fx) -> [Fx; 3] {
+    let src = [c[0], c[1], c[2], mid];
+    [
+        src[(sel[0] & 3) as usize],
+        src[(sel[1] & 3) as usize],
+        src[(sel[2] & 3) as usize],
+    ]
 }
 
 /// Fx 0..1 → 0..255 by floor(v·255) — PB-exact (pixel oracle, fw 3.67:

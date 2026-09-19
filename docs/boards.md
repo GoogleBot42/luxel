@@ -926,6 +926,21 @@ previous frame every time — it halves the refresh rather than dropping
 frames. The same pair on the Athom at 2048 px costs 2,443 us against no
 display clock at all, which is why strips keep both.
 
+2026-09-19, **projection** (Gitea #473 — the engine mechanism for showing a
+pattern of one dimensionality on a Layout of another): **+2,800 B** on the
+tightest shipped image, `c6-devkit` + `hosted-ui` credless, measured against
+`b7e0226` (1,009,104 → 1,011,904 B, **36,672 B / 3.50 % of the slot free**,
+was 3.76 %). Over the 3 % floor by ~5.2 KB, under the 6 % warn line as it
+already was.
+The firmware wires nothing yet — ticket A4 (#465) does — so this is the
+frame loop linking the plan machinery unconditionally:
+`Engine::sync_plan`+`compute_plan` ~1.1 KB, `project_replicate` 606 B,
+`axis_len` 190 B, `Engine::frame` +460 B (the hoisted coordinate selector),
+`drop_in_place<Engine>` +48 B. The §5.4d table as a `const [[[u8;3];7];9]`
+lookup instead of a `match` was tried and is **496 B WORSE** on riscv32imc
+(the rodata plus two bounds-checked index chains beat nothing the match
+was doing) — the match stayed. `tools/ci.sh` green on all three CI images.
+
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal

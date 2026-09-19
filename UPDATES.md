@@ -1,5 +1,37 @@
 # Update log
 
+## 2026-09-19 — projection: a pattern of one dimensionality on a Layout of another (#473)
+
+`luxel-core` now owns the §5.4d projection table. `ProjectionMode`
+(`index|x|y|z|xy|xz|yz`, `#[repr(u8)]` + `FromStr`/`as_str`) and the
+`Projection { proj1d, proj2d, proj3d }` triple; `projection_options(pattern
+dims, layout dims)` and `projection_label(…)` publish the table so the UI, the
+firmware and the CLI build their pickers and captions from the engine rather
+than restating it. `Engine::set_projection`/`projection`/`layout_dims`/
+`set_strip_layout`/`effective_projection`/`effective_geometry` are the host
+surface; the frame loop honours the plan.
+
+Three shapes behind one table. Every default resolves to the historical code
+path, so nothing changes until someone picks. A 2D or 3D pattern off its
+native Layout is a **coordinate substitution** — a 3-byte selector hoisted out
+of the pixel loop, same call count, same cost. A 1D pattern laid along a
+Layout axis is the **engine win**: the pattern renders ONE strip of w (or h)
+pixels with `pixelCount` reading as that length — what its author assumed —
+and the strip is replicated across the Layout by coordinate, so a serpentine
+panel or a rotated map replicates correctly. `library/snake.js` on a 64×64
+grid, 1000 frames: **0.231 s → 0.009 s**; `library/1d-aurora-borealis.js`
+**1.40 s → 0.032 s**. Native 2D throughput is unchanged (best-of-9,
+`aurora-2d.js` 0.482 s vs 0.480 s; `2d-spiral-twirls.js` 0.565 s vs 0.566 s).
+One reused scratch buffer, `try_reserve`d when the plan is installed — no
+per-frame and no per-pixel allocation, and a refusal falls back to by-index.
+
+wasm: `lx_set_projection`, `lx_projection`, `lx_projection_options`,
+`lx_effective_geometry`, `lx_layout_dims`, `lx_set_strip_layout`, wrapped in
+`web/src/lib/luxel.ts`. Mirror: the projection triple rides on `POST /api/map`
+until A4 (#465) gives it `/api/layout`; the firmware carries no wiring yet,
+and its defaults are a no-op. `luxel run|bench --proj MODE`. Spec:
+`docs/spec/projection.md`.
+
 ## 2026-09-19 (later) — the outpipe scratch comes back when you turn the stages off (#476/#446)
 
 The device output chain works in a `Vec<[u8; 3]>` scratch copy of the frame —

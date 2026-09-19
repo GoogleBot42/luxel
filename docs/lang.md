@@ -204,7 +204,18 @@ PSRAM) raises the ledger; every other board keeps the PB number exactly.
    you rebuild the transform every frame (hardware-confirmed PB behavior).
    At most 31 ops stack; further calls are silently ignored until the next
    `resetTransform()` (hardware-confirmed PB behavior).
-4. UI controls: `export function sliderSpeed(v) { … }` creates a slider
+4. **Projection** (Luxel extension): when the rig's dimensionality differs
+   from your pattern's, the host picks how your pattern is shown on it —
+   a 1D pattern laid along the matrix's x or y, a 3D pattern sliced, a 2D
+   pattern's middle row on a strip. Two things change under your feet:
+   `pixelCount` is the length of what you are *rendering* (64 for a 1D
+   pattern laid along a 64×64 panel's x, not 4096 — your `render` runs 64
+   times and the row is replicated), and a coordinate the projection does
+   not feed reads 0.5, exactly like an absent map axis. Nothing about the
+   pattern source changes, and the default on every rig is the historical
+   behaviour (by index; one render call per pixel). Full table and wire
+   names: `docs/spec/projection.md`.
+5. UI controls: `export function sliderSpeed(v) { … }` creates a slider
    named "Speed" that calls your function with 0..1 when moved. Prefixes:
    `slider`, `toggle`, `trigger`, `inputNumber`, `hsvPicker`, `rgbPicker`
    (inputs) and `showNumber`, `gauge` (readouts — return the value to

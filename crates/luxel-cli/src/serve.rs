@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
+use luxel_core::projection::{Projection, ProjectionMode};
 
 /// The firmware's embedded fallback page, raw. It carries build-mode blocks
 /// that firmware/build.rs resolves at compile time (see the comment at the
@@ -232,6 +233,11 @@ struct State {
     /// impersonated panel's own grid from a map a client installed, exactly
     /// as `devicemap::SOURCE` does on the firmware.
     map_source: AtomicU8,
+    /// Projection defaults (Gitea #473): how a pattern whose dimensionality
+    /// differs from the Layout's is shown on it. Carried on `/api/map` for
+    /// now so the console and the e2e harnesses can drive the engine
+    /// mechanism; ticket A4 (#465) moves them to `/api/layout`.
+    projection: Mutex<Projection>,
     map_dirty: AtomicBool,
     /// Network input (DDP/E1.31): assembled RGB frame + when it last moved.
     /// While packets flow the render loop shows this instead of the engine;
@@ -914,11 +920,49 @@ fn install_board_map(state: &State) -> (bool, usize) {
     }
 }
 
-/// Apply the installed map to an engine (no-op if none).
+/// Apply the installed map to an engine (no-op if none), then the projection
+/// defaults — a map install re-derives the engine's projection plan, so the
+/// order matters.
 fn apply_map(state: &State, engine: &mut Engine) {
     if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
         engine.set_map(*dims, coords);
     }
+    engine.set_projection(*state.projection.lock().unwrap());
+}
+
+/// Pull `proj1d=`/`proj2d=`/`proj3d=` tokens out of a `POST /api/map` body,
+/// returning the updated triple and the body with them removed. Unknown
+/// tokens and unparseable modes are ignored, so an old client's body still
+/// means exactly what it always did.
+fn take_projection(body: &str, mut proj: Projection) -> (Projection, String) {
+    let mut rest = String::with_capacity(body.len());
+    for tok in body.split_whitespace() {
+        let field = match tok.split_once('=') {
+            Some((k @ ("proj1d" | "proj2d" | "proj3d"), v)) => (k, v),
+            _ => {
+                rest.push_str(tok);
+                rest.push(' ');
+                continue;
+            }
+        };
+        if let Ok(mode) = field.1.parse::<ProjectionMode>() {
+            let dims = match field.0 {
+                "proj3d" => 3,
+                "proj2d" => 2,
+                _ => 1,
+            };
+            proj.set(dims, mode);
+        }
+    }
+    (proj, rest)
+}
+
+/// The projection triple as JSON fields (no braces).
+fn projection_json(p: &Projection) -> String {
+    format!(
+        "\"proj1d\":\"{}\",\"proj2d\":\"{}\",\"proj3d\":\"{}\"",
+        p.proj1d, p.proj2d, p.proj3d
+    )
 }
 
 /// Engine construction with the host wall clock (+ configured tz) already
@@ -930,7 +974,12 @@ fn engine_now(state: &State, prog: luxel_core::vm::Program, pixel_count: u32) ->
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .map(|d| d.as_secs() as i64 + state.tz_minutes.load(Ordering::Relaxed) as i64 * 60);
-    Engine::from_program_budgeted_at(prog, pixel_count, 1, usize::MAX, wall)
+    let mut e = Engine::from_program_budgeted_at(prog, pixel_count, 1, usize::MAX, wall);
+    // Install the projection before the first frame: `pixelCount` under an
+    // along-axis projection is the strip's length, and top-level init has
+    // already run by the time anything else could set it (Gitea #473).
+    e.set_projection(*state.projection.lock().unwrap());
+    e
 }
 
 /// Load playlist item `i`: build its stored bytecode into an engine (the
@@ -1926,6 +1975,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             // Same shape as firmware devicemap::to_json: a procedural grid
             // also reports its `kind`/`w`/`h`, which is how a client learns
             // the device's installed geometry (Gitea #372).
+            let proj = projection_json(&state.projection.lock().unwrap());
             let body = match &*state.device_map.lock().unwrap() {
                 Some((dims, coords)) => {
                     let shape = match *state.device_grid.lock().unwrap() {
@@ -1933,35 +1983,48 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                         None => String::from(",\"kind\":\"coords\""),
                     };
                     format!(
-                        "{{\"installed\":true,\"dims\":{},\"count\":{}{}}}",
+                        "{{\"installed\":true,\"dims\":{},\"count\":{}{},{proj}}}",
                         dims,
                         coords.len(),
                         shape
                     )
                 }
-                None => String::from("{\"installed\":false,\"dims\":0,\"count\":0}"),
+                None => format!("{{\"installed\":false,\"dims\":0,\"count\":0,{proj}}}"),
             };
             respond(&mut stream, 200, "application/json", body.as_bytes());
         }
         ("POST", "/api/map") => {
-            let body = String::from_utf8_lossy(&req.body);
-            let (installed, count) = match parse_map(&body) {
-                Some((dims, coords, grid)) => {
-                    let n = coords.len();
-                    *state.device_map.lock().unwrap() = Some((dims, coords));
-                    *state.device_grid.lock().unwrap() = grid;
-                    state.map_source.store(2, Ordering::Relaxed);
-                    (true, n)
-                }
-                None => {
+            let raw = String::from_utf8_lossy(&req.body);
+            // `proj1d=`/`proj2d=`/`proj3d=` ride along for now (A4 #465 moves
+            // them to /api/layout); a body carrying ONLY those keeps the map.
+            let (proj, body) = take_projection(&raw, *state.projection.lock().unwrap());
+            *state.projection.lock().unwrap() = proj;
+            let proj_only = body.trim().is_empty() && !raw.trim().is_empty();
+            let (installed, count) = if proj_only {
+                let m = state.device_map.lock().unwrap();
+                (m.is_some(), m.as_ref().map_or(0, |(_, c)| c.len()))
+            } else {
+                match parse_map(&body) {
+                    Some((dims, coords, grid)) => {
+                        let n = coords.len();
+                        *state.device_map.lock().unwrap() = Some((dims, coords));
+                        *state.device_grid.lock().unwrap() = grid;
+                        state.map_source.store(2, Ordering::Relaxed);
+                        (true, n)
+                    }
                     // empty/invalid clears — and a panel mirror falls back to
                     // its own geometry, exactly as devicemap::board_default
                     // does on a HUB75 board.
-                    install_board_map(&state)
+                    None => install_board_map(&state),
                 }
             };
             state.map_dirty.store(true, Ordering::Relaxed);
-            let r = format!("{{\"ok\":true,\"installed\":{},\"count\":{}}}", installed, count);
+            let r = format!(
+                "{{\"ok\":true,\"installed\":{},\"count\":{},{}}}",
+                installed,
+                count,
+                projection_json(&proj)
+            );
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         ("GET", "/api/playlist") => {
@@ -2191,6 +2254,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         device_map: Mutex::new(None),
         device_grid: Mutex::new(None),
         map_source: AtomicU8::new(0),
+        projection: Mutex::new(Projection::DEFAULT),
         map_dirty: AtomicBool::new(false),
         live_pixels: Mutex::new(Vec::new()),
         live_mark: Mutex::new(None),
