@@ -54,15 +54,27 @@ for (let i = 1; i <= N; i++) {
   let detail = "";
   try {
     await page.goto(DEV + "/", { waitUntil: "domcontentloaded", timeout: 30000 });
-    // Device-mode boot opens the editor FULL-SCREEN on the running pattern —
-    // the tab bar is not in the DOM then. The editor's back button labeled
-    // "Device Patterns" is the device-mode signal.
+    // Device-mode boot opens the editor FULL-SCREEN on the running pattern.
+    // Since web v2 (#468) the back button names the TAB it returns to
+    // ("← Patterns") in BOTH modes, so it no longer says which mode this is.
+    // The signal that the whole handshake landed is the shell's fps readout
+    // reading `device …`: it says that only while a device SESSION is live.
+    // The device chip is NOT that signal — it appears as soon as the probe
+    // finds a base, i.e. before `/api/layout` answers, while the layout still
+    // names the 60 px default strip (a panel read there reports a strip).
     await page.waitForSelector('[data-role="editor-back"]', { timeout: 30000 });
     await page.waitForSelector(".cm-content", { timeout: 30000 });
-    const back = await page.$eval('[data-role="editor-back"]', (el) => el.textContent ?? "");
+    await page.waitForFunction(
+      () =>
+        (document.querySelector('[data-role="fps"]')?.textContent ?? "").trim().startsWith("device"),
+      { timeout: 30000 },
+    );
+    const chip = await page.$eval('[data-role="layout-chip"]', (el) =>
+      (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+    );
     const src = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-    ok = src.trim().length > 0 && back.includes("Device");
-    detail = `back="${back.trim()}", editor has ${src.trim().length} chars`;
+    ok = src.trim().length > 0;
+    detail = `chip="${chip}", editor has ${src.trim().length} chars`;
   } catch (e) {
     detail = String(e).split("\n")[0];
   }

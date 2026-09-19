@@ -1,5 +1,35 @@
 # Update log
 
+## 2026-09-19 — Phase A end-of-phase hardware check (#461); coldload's boot signal
+
+Master (`0705b40`) deployed to both bench boards and the v2 console driven
+against each in real chromium — Athom (60 px WS2812 strip, app 1,028,048 B,
+slot `ota_0`) and the Seengreat HUB75 S3 (64x64, app 967,328 B, slot `ota_0`),
+both on the same 834,344 B / 8-file asset bundle. Everything the phase shipped
+works on metal: the boot cover, the device chip (`device . 60 px strip` /
+`. 64x64 matrix`), the editor's own header on the running pattern (the panel
+adopts `Aurora 2D` / `saved . on device`), the Patterns page's `On device`
+grid with the playing ring, bar tiles on the strip and square tiles on the
+panel with 1D patterns captioned, tile Play activating on the device, the
+playlist picker, the ranked Settings page (brightness first, LED layout
+summary + live thumbnail, the Athom's Outputs table, the panel's 115 Hz
+estimate beside its measured 115 Hz, eight Advanced rows collapsed with
+status lines) and the 390 px restack with no sideways scroll.
+
+`web/tools/coldload.mjs` — the device web-pool acceptance check — was the one
+casualty: it read the editor's back button saying "Device Patterns", and A7
+(#468) made that button name the TAB it returns to ("Patterns") in both
+modes, so every load reported `boot FAILED` with zero failed requests. The
+device-mode signal is now the shell's fps readout reading `device ...`, which
+only happens once a device SESSION is live — the device chip itself appears as
+soon as the probe finds a base, while the layout still says the 60 px default
+strip, so a chip read there names the wrong fixture. 3/3 clean cold loads on
+each board afterwards, 0 failed requests over all 12 loads.
+
+Filed from the run: the §5.7 "absent, never disabled" rule is broken in a few
+places (#529) and the playlist's Default-seconds input clips its `manual`
+placeholder to "mar" at every width (#530).
+
 ## 2026-09-19 — web v2 A8: Settings, ranked (#469)
 
 Settings was nine equal-weight cards, ~30 fields, board-blind: brightness sat
