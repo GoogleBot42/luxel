@@ -54,6 +54,9 @@ export const PORT = {
   fakeWled: p(50),
   /** lna-e2e's own https/http origins (LNA_HTTPS_PORT / LNA_HTTP_PORT still win). */
   lna: { https: p(60), http: p(61) },
+  /** tools/serve-e2e.mjs's mirror; it also binds `serve + 1` for the
+   *  `--board panel` impersonation at the end. */
+  serve: p(70),
 };
 
 /**

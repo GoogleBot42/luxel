@@ -20,12 +20,17 @@
     tileShape,
     type Layout,
     type PatternDims,
+    type ProjectionMode,
     type TileShape,
   } from "../stores/geometry";
 
   export let luxel: Luxel;
   /** Pattern source; `undefined` while the device fetch is still in flight. */
   export let source: string | undefined;
+  /** Per-item projection override (a playlist row's, §5.4d) — null = the
+   *  device default. The thumbnail has to render through it or it shows a
+   *  different picture from the one the device will play. */
+  export let proj: ProjectionMode | null = null;
 
   const FPS_MS = 100; // ~10 fps is plenty for a thumbnail
 
@@ -37,6 +42,7 @@
   let ready = false;
   let built = ""; // the source the current engine was built from
   let builtRig = ""; // the Layout it was built for
+  let builtProj: ProjectionMode | null = null; // the override it was built with
   let raf = 0;
   let last = 0;
   let angle = 0;
@@ -65,7 +71,7 @@
     engine = undefined;
     dead = false;
     ready = false;
-    const r = compileForLayout(luxel, src, THUMB_MAX_CELLS);
+    const r = compileForLayout(luxel, src, THUMB_MAX_CELLS, proj);
     if ("engine" in r) {
       r.engine.setWallClock(Date.now() / 1000);
       engine = r.engine;
@@ -96,10 +102,16 @@
     ready = true;
   }
 
-  // rebuild whenever the source arrives or changes, or the Layout moves
-  $: if (luxel && source !== undefined && (source !== built || rigKey !== builtRig)) {
+  // rebuild whenever the source arrives or changes, the Layout moves, or the
+  // per-item projection override changes
+  $: if (
+    luxel &&
+    source !== undefined &&
+    (source !== built || rigKey !== builtRig || proj !== builtProj)
+  ) {
     built = source;
     builtRig = rigKey;
+    builtProj = proj;
     build(source);
   }
 

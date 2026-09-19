@@ -13,7 +13,7 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
 ## Procedure
 
 1. Cheapest first check: `node tools/serve-e2e.mjs` from the repo root. Fetch-only smoke
-   test of `luxel serve` (builds `luxel-cli`, starts it on port 8721) — HTTP API
+   test of `luxel serve` (builds `luxel-cli`, starts it on `E2E_PORT + 70`) — HTTP API
    (`/api/status`, `/api/pixels`, `/api/code`) plus page routing (`/` serves the built
    playground when `web/dist` exists, else a minimal fallback; `/min` always the minimal
    page). No browser involved; catches API/build regressions before spending time on

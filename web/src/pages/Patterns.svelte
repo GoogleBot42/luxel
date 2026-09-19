@@ -15,12 +15,11 @@
   import { createEventDispatcher } from "svelte";
   import Gallery, { type GalleryItem } from "../components/Gallery.svelte";
   import {
+    addToPlaylist as addPatternToPlaylist,
     device,
     deviceError,
     devicePatterns,
     isPlayground,
-    playlist,
-    queuePlaylistSave,
     refreshDevicePatterns,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
@@ -161,11 +160,9 @@
   function addToPlaylist(item: GalleryItem): void {
     closeMenu();
     if (!$device) return;
-    playlist.update((pl) => ({
-      ...pl,
-      items: [...pl.items, { id: item.key, name: item.name, sec: null, controls: {} }],
-    }));
-    queuePlaylistSave();
+    // the ONE path every "Add to playlist" affordance takes (#470) — no
+    // values, so the item runs the pattern's own defaults
+    addPatternToPlaylist(item.key);
     note("save", "added to playlist", 2000);
   }
 

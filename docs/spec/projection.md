@@ -81,9 +81,18 @@ Where they live:
   the mirror (`luxel serve`) accepts them as extra tokens on `POST /api/map`
   and reports them from `GET /api/map`; the firmware does not carry them yet.
 - **Per-item override** — saved beside a playlist item's or a scene layer's
-  control values (ticket A9, Gitea #470). A projection is "how this pattern is
-  presented on this Layout", so it belongs with the values, never in the
-  pattern source.
+  control values. A projection is "how this pattern is presented on this
+  Layout", so it belongs with the values, never in the pattern source. The
+  playlist carries it as a `P <mode>` line following the item's `I` (docs/api.md
+  "Playlist"), in the firmware, the mirror and the web client since Gitea
+  #470; the scene-layer half is #481. The token goes into the slot matching the
+  ITEM'S PATTERN's dims, so `Projection::set(preferred_dims(), mode)` is the
+  whole application, and it is installed after the host's own defaults.
+  Order against a map install does not matter: `Engine` writes
+  `self.projection` only in `set_projection`, and `set_map`/`set_grid_map`
+  re-derive the plan FROM the stored triple — so the mirror's
+  map-then-projection and the firmware's projection-then-map (its map is
+  re-applied after the message queue drains) reach the same engine.
 
 ## 3. What the pattern sees
 

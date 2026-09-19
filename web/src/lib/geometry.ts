@@ -456,6 +456,27 @@ export function projectionCaption(patternDims: PatternDims, l: Layout): string |
   return `${e.patternDims}D · ${e.label.toLowerCase()}`;
 }
 
+/**
+ * The same Layout with ONE projection slot replaced — the per-item override
+ * a playlist row (and, at #481, a scene layer) carries beside its control
+ * values (§5.4d). `mode` null/undefined gives the Layout back untouched, so
+ * "no override" is not a special case at the call site.
+ *
+ * The slot is chosen by the PATTERN's dimensionality, exactly as
+ * `Projection::set` does on the device, so one stored token survives a
+ * Layout change without clobbering the user's other choices.
+ */
+export function withProjectionOverride(
+  l: Layout,
+  patternDims: PatternDims,
+  mode: ProjectionMode | null | undefined,
+): Layout {
+  if (!mode) return l;
+  const pd = normDims(patternDims);
+  const field = pd === 3 ? "proj3d" : pd === 2 ? "proj2d" : "proj1d";
+  return { ...l, projection: { ...l.projection, [field]: mode } };
+}
+
 /** The same Layout, small enough to run dozens of live engines on: a tile or
  *  a thumbnail keeps the Layout's dims, aspect and projection but caps how
  *  many pixels it renders. Irregular maps are left alone — subsampling a

@@ -41,6 +41,7 @@
     type StepKind,
   } from "../lib/luxel";
   import {
+    addToPlaylist as addPatternToPlaylist,
     brightness,
     device,
     deviceCaps,
@@ -59,8 +60,6 @@
     paletteAmount,
     paletteFlat,
     paletteSupported,
-    playlist,
-    queuePlaylistSave,
     refreshDevicePatterns,
     refreshStatus,
   } from "../stores/device";
@@ -870,15 +869,11 @@
    *  different params. */
   function addToPlaylist(): void {
     if (!$device || !$devicePatternId) return;
-    const id = $devicePatternId;
-    const name = $devicePatterns.find((p) => p.id === id)?.name ?? $patternName;
-    const itemControls: Record<string, number[]> = {};
-    for (const [k, v] of Object.entries($controlValues)) itemControls[k] = v;
-    playlist.update((pl) => ({
-      ...pl,
-      items: [...pl.items, { id, name, sec: null, controls: itemControls }],
-    }));
-    queuePlaylistSave();
+    // One path for every "Add to playlist" affordance (#470). The item takes
+    // a snapshot of everything that is a VALUE here — the sliders AND the
+    // projection you chose for this pattern — because the playlist item is
+    // where those get their durable home (stores/pattern.ts).
+    addPatternToPlaylist($devicePatternId, { ...$controlValues }, $projectionOverride ?? undefined);
     note("save", "added to playlist", 2000);
   }
 

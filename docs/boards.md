@@ -1056,6 +1056,32 @@ per-board profile levers like `hosted-ui`, not fleet diets): MQTT behind a
 cargo feature is **−36,992 B** and the DDP/E1.31/sync inputs behind features
 are **−9,520 B**, both measured on `pixelblaze-v3`. The durable answer to the
 slot remains the repartition — #501 option 3.
+2026-09-19 (last of the day), **per-item projection on the playlist** (Gitea
+#470 — a playlist item may carry a `P <mode>` line beside its `C` values, and
+the scheduler applies it when the item activates):
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `c6-devkit` + `hosted-ui` *(the tightest shipped image)* | 999,200 | 1,000,128 | **+928** | 48,448 B (4.62 %) |
+| `athom-music` | 1,007,248 | 1,008,032 | +784 | 40,544 B (3.86 %) |
+
+Credless flake builds against `origin/master` `184fedc` — i.e. on top of the
+#501 diet above, which is why the absolute numbers are ~12 KB below the #466
+row. `.stack` on `board-pixelblaze-v3` 26,956 → **26,892 B** (−64;
+`small-chip` profile), `tools/stack-check.sh` clean at both profiles. The same
+branch measured against pre-#501 master read +544 B on the C6 rather than
++928; both are inside the sub-kilobyte noise band the #466 entry describes, so
+read this as "well under a kilobyte", not as a figure to three digits.
+
+Under a kilobyte because the expensive half was already linked: #473 put the
+whole projection plan machinery in `Engine::frame` unconditionally, so the
+firmware pays only for `ProjectionMode`'s `FromStr`/`as_str` (two small
+matches it had never called), one `Msg::Projection(u8)` arm in the render
+task, and an `Option<u8>` on the playlist `Item`. `Msg` is sized by
+`Code { Vec, String }`, so the new variant does not grow the 8-deep message
+channel. Deliberately no `format!` and no new generic instantiations — the
+`P` line is parsed by the same `split_whitespace` walk the `C` line uses, and
+emitted with `push_piece`.
 
 2026-09-19 (A4), **`/api/layout`** (Gitea #465 — the one geometry object),
 measured on top of the #501 diet against `origin/master` `184fedc`:

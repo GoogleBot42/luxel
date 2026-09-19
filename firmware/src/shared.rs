@@ -48,6 +48,12 @@ pub enum Msg {
     /// source Vec, no envelope Vec) or, without a slot, from a transient
     /// chunk-store read. Identity/read-back come from patterns::source_stat.
     Library { id: String, ms: u32 },
+    /// Per-item projection override (Gitea #470, docs/spec/projection.md):
+    /// the `luxel_core::projection::ProjectionMode` FFI code, applied to the
+    /// slot matching the RUNNING pattern's own dimensionality. The playlist
+    /// sends it right after an item's controls; an item without a `P` line
+    /// sends nothing at all, so a freshly built engine keeps the defaults.
+    Projection(u8),
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
