@@ -623,9 +623,14 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
   stream back (removed at Jeremy's request); only the connect handshake reads
   the device's running pattern.
 - **`data-role` attributes are the e2e contract.** `web/tools/{e2e,device-e2e,
-  maxpixels-e2e,sync-e2e,flash-e2e}.mjs` drive them. Moving markup between
-  components is fine; renaming or dropping a role is not, without updating the
-  harness in the same commit.
+  maxpixels-e2e,sync-e2e,flash-e2e,coldload,lna-e2e}.mjs` drive them. Moving
+  markup between components is fine; renaming or dropping a role is not,
+  without updating the harness in the same commit. The last two are the ones
+  that get forgotten, because they run against a REAL device rather than a
+  mirror and so never ran in the phase that broke them: `coldload.mjs` spent
+  A7–A10 reporting `boot FAILED` on healthy loads because it read a label the
+  editor's back button no longer carries. A harness's own assertion can be the
+  only thing failing — read its zero-failed-request line before believing it.
 - **Bundle shape is load-bearing** (Gitea #92): `dist/index.html` must emit one
   `<script>`, one stylesheet and no `modulepreload`. `cssCodeSplit: false` is
   what lets a page component or a plain `.css` import (e.g.
