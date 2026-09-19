@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
-use luxel_core::projection::Projection;
+use luxel_core::projection::{Projection, ProjectionMode};
 
 /// The firmware's embedded fallback page, raw. It carries build-mode blocks
 /// that firmware/build.rs resolves at compile time (see the comment at the
