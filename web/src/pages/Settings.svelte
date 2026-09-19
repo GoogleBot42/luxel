@@ -26,7 +26,7 @@
   /** The tab is the visible one — gates the refresh subscription. */
   export let active = false;
 
-  const dispatch = createEventDispatcher<{ navigate: "patterns"; pixelchange: void }>();
+  const dispatch = createEventDispatcher<{ navigate: "patterns"; pixelchange: void; openmap: void }>();
 
   /** The polled half: the four read-only status lines. `/api/output` is read
    *  once on arrival instead — it is a form, and re-reading it under the
@@ -55,7 +55,10 @@
   <div class="settings">
     <h1>Device settings</h1>
 
-    <DeviceCard on:pixelchange={() => dispatch("pixelchange")} />
+    <DeviceCard
+      on:pixelchange={() => dispatch("pixelchange")}
+      on:openmap={() => dispatch("openmap")}
+    />
     <NetworkInputCard />
     <BrightnessCard />
     <WifiCard />

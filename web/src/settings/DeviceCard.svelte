@@ -10,6 +10,7 @@
     dataPins,
     device,
     deviceError,
+    deviceMap,
     deviceProtocol,
     devicePixels,
     pixelMax,
@@ -20,7 +21,7 @@
   import { note, notes } from "../stores/notify";
   import { previewFps, runtimeError } from "../stores/pattern";
 
-  const dispatch = createEventDispatcher<{ pixelchange: void }>();
+  const dispatch = createEventDispatcher<{ pixelchange: void; openmap: void }>();
 
   /** Live pixel-count change: the device resizes its strip (no reboot); we
    *  re-anchor the local preview to the new count. */
@@ -143,6 +144,24 @@
       </span>
     </div>
   {/if}
+  <!-- TEMPORARY (A10, Gitea #471): the console's way into the map program's
+       screen. It belongs in Settings → "LED layout → Custom map program →",
+       which is A8 (Gitea #469) — that ticket builds the LED layout card and
+       restyles this row into it. Until then the console path has to be
+       reachable and testable, so it rides in the Device card. -->
+  <div class="field">
+    <span class="flabel">LED layout</span>
+    <button class="link" data-role="map-program-link" on:click={() => dispatch("openmap")}>
+      Custom map program →
+    </button>
+    <span class="dim">
+      {#if $deviceMap.installed}
+        {$deviceMap.count} points, {$deviceMap.dims}D, installed
+      {:else}
+        no map installed — the device renders in strip order
+      {/if}
+    </span>
+  </div>
   <div class="field">
     <span class="flabel">Status</span>
     <span class="mono dim">

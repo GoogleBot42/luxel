@@ -14,8 +14,10 @@ import { Engine, Luxel, type ProjectionMode, type RuntimeError } from "../lib/lu
 import {
   deletePattern,
   listPatterns,
+  loadMapSrc,
   loadWorkingCopy,
   savePattern,
+  saveMapSrc,
   saveWorkingCopy,
   type SavedPattern,
 } from "../lib/store";
@@ -68,16 +70,21 @@ export const hints: Readable<Map<string, ControlHint>> = derived(source, parseCo
 
 /** The map program (a Luxel program: plot() one point per pixel). It is
  *  GEOMETRY, not part of the pattern — since #463 it no longer rides in share
- *  links, and A10 (#471) moves its editor out of the pattern editor
- *  altogether. It lives here only because the wasm host does. */
-export const mapSrc = writable(`// Map program — runs once per pixel on the Luxel VM, so it's
+ *  links, and since A10 (#471) its editor is a screen of its own reached from
+ *  the Layout picker. It lives here only because the wasm host does, and it is
+ *  persisted on its own localStorage key (`luxel.mapSrc`), NOT in the
+ *  pattern's working copy: a map outlives every pattern load. */
+export const MAP_PROGRAM_TEMPLATE = `// Map program — runs once per pixel on the Luxel VM, so it's
 // debuggable: set a gutter breakpoint and step through it.
 // plot() one point per pixel (units are arbitrary; they normalize).
 // This lays the strip out as a ring:
 export function render(index) {
   a = index / pixelCount * PI2
   plot(cos(a), sin(a))
-}`);
+}`;
+
+export const mapSrc = writable(loadMapSrc() ?? MAP_PROGRAM_TEMPLATE);
+mapSrc.subscribe((s) => saveMapSrc(s));
 
 /** The template "+ New pattern" starts from — on a strip. */
 export const NEW_PATTERN = `export function render(index) {

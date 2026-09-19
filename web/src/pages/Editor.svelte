@@ -26,7 +26,7 @@
   import Preview from "../components/Preview.svelte";
   import ProjectionRow from "../components/ProjectionRow.svelte";
   import VarWatcher from "../components/VarWatcher.svelte";
-  import MapEditor from "./MapEditor.svelte";
+  import "../components/editor-frame.css";
   import { MicSource, toSensorBoardFrame } from "../lib/audio";
   import { lxpEnvelope } from "../lib/device";
   import type { ProjectionMode } from "../lib/geometry";
@@ -42,21 +42,18 @@
   } from "../lib/luxel";
   import {
     brightness,
-    clearDeviceMap,
     device,
     deviceCaps,
     deviceEngineHeap,
     deviceError,
     deviceFps,
     deviceHeapFree,
-    deviceMap,
     deviceOutFps,
     devicePatterns,
     devicePixels,
     deviceRescanHz,
     deviceVmerr,
     installDeviceGridMap,
-    installDeviceMapCoords,
     isPlayground,
     outputStatus,
     paletteAmount,
@@ -75,9 +72,7 @@
     layoutSignature,
     patternDims,
     pixelCount,
-    pixelTotal,
     previewAs,
-    setMapCoords,
     setPreviewAs,
   } from "../stores/geometry";
   import { banners, clearNote, note, notes, setBanner } from "../stores/notify";
@@ -109,11 +104,10 @@
   /** What the back button returns to — the shell knows, the editor doesn't. */
   export let backLabel = "Patterns";
 
-  const dispatch = createEventDispatcher<{ open: void; back: void }>();
+  const dispatch = createEventDispatcher<{ open: void; back: void; openmap: void }>();
 
   let editor: CodeEditor;
   let preview: Preview;
-  let mapRef: MapEditor;
   let fileInput: HTMLInputElement;
   let nameInput: HTMLInputElement;
 
@@ -151,38 +145,16 @@
   /** The header's ⋯ menu (the document verbs). */
   let menuOpen = false;
   let importError = "";
-  /** The map program is open over the code pane. It is GEOMETRY, not part of
-   *  the pattern: A10 (#471) promotes it to a screen of its own, and this
-   *  boolean plus the entry point in the rail is all that then moves. */
-  let mapOpen = false;
-  let mapCompileError: Diagnostic | null = null;
-  let mapDebugMode = false;
-  let mapDbg: DebugSnapshot = { paused: false };
-
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let pushDebounce: ReturnType<typeof setTimeout> | undefined;
   let raf = 0;
   let lastT = 0;
   let lastPoll = 0;
 
-  // the map program exists only while it IS the Layout
-  $: mapIsLayout = $previewAs.mode === "map";
-  $: if (!mapIsLayout && mapOpen) mapOpen = false;
-
-  /** Choosing "Custom map program" — from the playground's chip or the
-   *  console's shape select — is what enables mapping, so the program runs and
-   *  its coordinates become the Layout. Runs once per selection, not on every
-   *  store tick; an edit to the program re-applies through MapEditor's own
-   *  `liveApply`. */
-  let mapArmed = false;
-  $: {
-    if (!mapIsLayout) mapArmed = false;
-    else if (!mapArmed && mapRef) {
-      mapArmed = true;
-      if (!mapRef.hasEngine()) mapRef.recompile(false);
-      mapRef.run(); // its `install` event feeds the coordinates back
-    }
-  }
+  /** The Layout is a custom map — the ONE condition under which the map
+   *  program is reachable at all (proposal §5.7). The editor does not own the
+   *  map any more (A10, #471): this gates a plain link to its screen. */
+  $: customLayout = $previewAs.mode === "map" || (!$layout.regular && $layout.dims > 1);
 
   /** The Layout moved — the header's "Preview as" chip, the console's shape
    *  select, a device whose geometry changed — so the preview engine has to
@@ -655,14 +627,10 @@
     if (wipDirty && $device) await devicePush();
   }
 
-  /** Playground mode. `sharedMap` restores the geometry a share link carried. */
-  export function bootPlayground(sharedMap: boolean): void {
+  /** Playground mode. A pre-#463 share link's map program is run by the shell
+   *  (`runMapProgram`), not here — the map is not the pattern's (#471). */
+  export function bootPlayground(): void {
     recompile();
-    if (sharedMap) {
-      // the link carried a map program: run it to restore the geometry
-      mapRef?.markMounted();
-      mapRef?.recompile(true);
-    }
     startLoop();
   }
 
@@ -691,7 +659,6 @@
     devicePatternId.set("");
     resetDocumentState();
     dirty.set(false); // a fresh template — not yet edited
-    mapOpen = false;
     preview?.clear();
     void tick().then(applyEdit);
   }
@@ -948,7 +915,8 @@
   // what "install … on device" will install. They sit at the FOOT of the rail,
   // out of the editor's chrome, and A8 (#469) moves them into
   // Settings → LED layout — at which point this whole block is deleted, not
-  // rewritten. A10 (#471) gives the map program its own screen.
+  // rewritten. Since A10 (#471) the map program has a screen of its own, so
+  // what is left here is a plain link to it.
 
   /** What the legacy select shows for the reconciled Layout. */
   $: layoutKind = $previewAs.mode === "map" ? "map" : $layout.dims === 2 ? "grid" : "strip";
@@ -956,12 +924,11 @@
   function setLayoutKind(e: Event): void {
     const kind = (e.target as HTMLSelectElement).value;
     if (kind === "map") {
-      // "2D map" is how mapping is enabled; the watcher above runs the program
-      // and its coordinates become the Layout. Switching back turns it off.
+      // "2D map" is how mapping is enabled; the map program's own screen is
+      // what computes the coordinates (#471).
       setPreviewAs({ mode: "map", pixels: pixelCount() });
       return;
     }
-    mapOpen = false;
     // on a device the pixel count is fixed by hardware; layout only rearranges
     const total = $device ? $devicePixels : pixelCount();
     if (kind === "strip") {
@@ -980,25 +947,6 @@
     // the Layout watcher above rebuilds the preview engine
   }
 
-  function onMapInstall(e: CustomEvent<{ coords: number[][]; dims: number }>): void {
-    setMapCoords(e.detail.coords); // the map program's output IS the Layout
-    setPreviewAs({ mode: "map", pixels: e.detail.coords.length });
-    recompile(); // local preview only — a layout change never pushes to the device
-  }
-
-  /** Install the current computed map on the device (device patterns then
-   *  render2D with this geometry). */
-  function installDeviceMap(): void {
-    const coords = $layout.coords;
-    if (!$device || $previewAs.mode !== "map" || !coords) return;
-    const dims = (coords[0]?.length ?? 2) >= 3 ? 3 : 2;
-    void (async () => {
-      if (await installDeviceMapCoords(dims, coords)) {
-        note("save", "map installed on the device", 2500);
-      }
-    })();
-  }
-
   /** Install the current grid layout on the device as a procedural grid —
    *  no coordinates cross the wire, nothing is allocated on the device. */
   function installDeviceGrid(): void {
@@ -1009,13 +957,6 @@
       if (await installDeviceGridMap(w, h)) {
         note("save", `${w}×${h} grid installed on the device`, 2500);
       }
-    })();
-  }
-
-  function onClearDeviceMap(): void {
-    void (async () => {
-      await clearDeviceMap();
-      note("save", "device map cleared", 2000);
     })();
   }
 
@@ -1338,14 +1279,13 @@
     clearTimeout(debounce);
     clearTimeout(pushDebounce);
     engine?.free();
-    mapRef?.free();
     mic.stop();
   });
 </script>
 
 <svelte:window on:click={() => (menuOpen = false)} on:keydown={onKeydown} />
 
-<main class="editor-view" hidden={!active}>
+<main class="editor-view editor-frame" data-role="editor-view" hidden={!active}>
   {#if patternLoading}
     <!-- cover the editor while a pattern is being fetched/activated so the
          previously-open script never flashes before the real one loads -->
@@ -1472,31 +1412,8 @@
 
   <!-- ── the code column holds only code, and owns its own errors ── -->
   <section class="left">
-    {#if mapOpen}
-      <!-- The map program is GEOMETRY. Until A10 (#471) gives it a screen it
-           opens over the code pane with its own bar; nothing about it is in
-           the pattern editor's chrome any more. -->
-      <div class="mapbar" data-role="map-bar">
-        <button data-role="subtab-pattern" on:click={() => (mapOpen = false)}>← pattern</button>
-        <span class="dim">map program — the Layout's, not the pattern's</span>
-        <span class="spacer"></span>
-        <button data-role="map-run" title="run the map program and install it" on:click={() => mapRef.run()}>
-          run map
-        </button>
-        <button
-          class="mapdbg"
-          class:active={mapDebugMode}
-          data-role="map-debug"
-          title="toggle the map debugger"
-          on:click={() => mapRef.toggleDebug()}
-        >
-          debug
-        </button>
-      </div>
-    {/if}
-
     <div class="editor-host">
-      <div class="editor-slot" hidden={mapOpen}>
+      <div class="editor-slot">
         <CodeEditor
           bind:this={editor}
           value={$source}
@@ -1505,30 +1422,13 @@
           on:breakpoints={onBreakpoints}
         />
       </div>
-      <MapEditor
-        bind:this={mapRef}
-        bind:compileError={mapCompileError}
-        bind:debugMode={mapDebugMode}
-        bind:dbg={mapDbg}
-        showPane={mapIsLayout}
-        visible={mapOpen}
-        liveApply={mapIsLayout}
-        on:install={onMapInstall}
-      />
     </div>
 
     <!-- The status strip pinned to the bottom of the pane: one plain sentence
          about the line the gutter dot and the squiggle already point at
          (proposal §5.2). Compile first, then the runtime error — never both,
          and never a banner across the page from the cause. -->
-    {#if mapOpen}
-      {#if mapCompileError}
-        <button class="codestatus err" data-role="map-compile-error" on:click={() => mapRef.jumpToError()}>
-          ✗ line {mapCompileError.line} · {mapCompileError.message}
-          <span class="jump">jump to line</span>
-        </button>
-      {/if}
-    {:else if compileError}
+    {#if compileError}
       <button class="codestatus err" data-role="compile-error" on:click={jumpToError}>
         ✗ line {compileError.line} · {compileError.message}
         <span class="jump">jump to line</span>
@@ -1559,16 +1459,7 @@
       </div>
     {/if}
 
-    {#if mapOpen && mapDebugMode}
-      <div class="rsec">
-        <Debugger
-          snapshot={mapDbg}
-          runningHint="set a gutter breakpoint, then Run map to step through it"
-          on:step={(e) => mapRef.step(e.detail)}
-          on:break={() => mapRef.requestBreak()}
-        />
-      </div>
-    {:else if debugMode && !mapOpen}
+    {#if debugMode}
       <div class="rsec">
         <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
       </div>
@@ -1643,7 +1534,7 @@
       <div class="preview-wrap">
         <Preview bind:this={preview} layout={$layout} on:inject={onInject} />
       </div>
-      {#if $notes.mic}<p class="mapper-error" data-role="mic-error">{$notes.mic}</p>{/if}
+      {#if $notes.mic}<p class="note-error" data-role="mic-error">{$notes.mic}</p>{/if}
 
       <!-- Capacity (Gitea #15), the existing idiom in its new place: a strip
            under the preview it is about. Severity follows CERTAINTY, not size:
@@ -1719,22 +1610,6 @@
       </div>
     {/if}
 
-    {#if mapIsLayout}
-      <div class="rsec">
-        <div class="rhead"><span class="slabel">Map program</span></div>
-        <p class="dim hint">
-          A {$pixelTotal}-point map is the Layout.
-          <button class="link" data-role="subtab-map" on:click={() => (mapOpen = true)}>
-            Edit the map program
-          </button>
-          — a debuggable Luxel program (<code>plot(x, y)</code> per pixel).{" "}
-          {#if $device}It only arranges this preview until you install it below.{/if} Choose a
-          different layout to turn mapping off.
-        </p>
-        {#if $notes.map}<p class="mapper-error" data-role="map-error">{$notes.map}</p>{/if}
-      </div>
-    {/if}
-
     <!-- ── TEMPORARY: the console's LED layout (A8, Gitea #469) ──
          The editor must not configure geometry — but nothing else can yet, so
          the old playback-bar controls live on at the foot of the rail with
@@ -1792,49 +1667,31 @@
               install grid on device
             </button>
           {:else}
-            <span class="dim mono" data-role="map-badge">{$layout.coords?.length ?? 0} px mapped</span>
-            <button
-              data-role="map-install"
-              title="upload this map to the device so its patterns render in 2D/3D"
-              on:click={installDeviceMap}
-            >
-              install on device
-            </button>
-            {#if $deviceMap.installed}
-              <button data-role="map-clear" title="remove the map from the device" on:click={onClearDeviceMap}>
-                clear device map
-              </button>
-            {/if}
-          {/if}
-          {#if $deviceMap.installed && layoutKind !== "strip"}
-            <span class="dim mono" data-role="map-installed">
-              {$deviceMap.count}px {$deviceMap.dims}D on device
-            </span>
+            <span class="dim mono">{$layout.coords?.length ?? 0} px mapped</span>
           {/if}
         </div>
+        <!-- The map program is a SCREEN of its own since A10 (#471): install,
+             clear and the installed state are its header's. All that is left
+             here is the way in, and only while the Layout is a custom map
+             (proposal §5.7). #469 moves this link to Settings → LED layout. -->
+        {#if customLayout}
+          <p class="dim hint">
+            <button class="link" data-role="subtab-map" on:click={() => dispatch("openmap")}>
+              Map program ›
+            </button>
+            — a debuggable Luxel program (<code>plot(x, y)</code> per pixel) that computes these
+            points.
+          </p>
+        {/if}
       </div>
     {/if}
   </section>
 </main>
 
 <style>
-  /* one surface visible at a time; hidden ones stay mounted (state survives) */
-  .editor-view[hidden] {
-    display: none;
-  }
-
-  /* header spans both columns; code left, rail right (S2) */
-  .editor-view {
-    position: relative;
-    display: grid;
-    grid-template-columns: minmax(360px, 1fr) minmax(320px, 420px);
-    grid-template-rows: auto minmax(0, 1fr);
-    grid-template-areas:
-      "hdr hdr"
-      "code rail";
-    flex: 1;
-    min-height: 0;
-  }
+  /* The frame — the grid, the header, the code column, the rail and the
+     phone stacking — is components/editor-frame.css, shared with the map
+     program's screen (A10, #471). Only what is this editor's own is here. */
 
   .pattern-loading {
     position: absolute;
@@ -1856,23 +1713,6 @@
     width: 64px;
     font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: 12px;
-  }
-
-  /* ---- the document header ---- */
-
-  .editor-header {
-    grid-area: hdr;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 7px 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-panel);
-    flex-wrap: wrap;
-  }
-
-  .back {
-    font-weight: 600;
   }
 
   /* the name reads as text and edits in place — not a form field with a
@@ -1908,163 +1748,6 @@
     font-size: 12px;
   }
 
-  .savestate {
-    color: var(--text-dim);
-    font-size: 12px;
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  .note {
-    font-size: 12px;
-  }
-
-  .primary {
-    border-color: var(--accent);
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .overflow {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .more {
-    padding: 2px 8px;
-    line-height: 1;
-  }
-
-  .menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    min-width: 160px;
-    padding: 4px;
-    gap: 2px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg-panel);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
-  }
-
-  .menu button {
-    background: transparent;
-    border: none;
-    border-radius: 4px;
-    text-align: left;
-    padding: 6px 8px;
-    font-size: 12px;
-    cursor: pointer;
-    color: var(--text);
-  }
-
-  .menu button:hover {
-    background: var(--bg-inset);
-  }
-
-  /* delete is last and error-tinted (S2) */
-  .menu button.del {
-    color: var(--error);
-  }
-
-  .sepr {
-    height: 1px;
-    margin: 3px 2px;
-    background: var(--border);
-  }
-
-  /* ---- the code column ---- */
-
-  .left {
-    grid-area: code;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .mapbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-panel);
-    font-size: 12px;
-  }
-
-  /* the map bar's debug toggle reads "armed" the same way the preview
-     header's does */
-  .mapdbg.active {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .editor-host {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .editor-slot {
-    height: 100%;
-  }
-
-  .editor-slot[hidden] {
-    display: none;
-  }
-
-  /* the code pane's own error report: one line, pinned to its bottom edge */
-  .codestatus {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 7px 10px;
-    border: none;
-    border-top: 1px solid var(--border);
-    border-radius: 0;
-    background: var(--bg-panel);
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-    text-align: left;
-  }
-
-  .codestatus.err {
-    border-top-color: var(--error);
-    background: color-mix(in srgb, var(--error) 16%, transparent);
-    color: #f2b8b8;
-    cursor: pointer;
-  }
-
-  .codestatus.warn {
-    border-top-color: var(--warn);
-    background: color-mix(in srgb, var(--warn) 12%, transparent);
-    color: #ecd9a8;
-  }
-
-  .codestatus .jump {
-    margin-left: auto;
-    color: var(--text-dim);
-    text-decoration: underline;
-  }
-
-  /* only ever shown on a phone, where the code is read-mostly (D9) */
-  .code-hint {
-    display: none;
-    margin: 0;
-    padding: 6px 10px;
-    border-top: 1px solid var(--border);
-    color: var(--text-dim);
-    font-size: 11px;
-  }
-
   .link {
     background: transparent;
     border: none;
@@ -2075,101 +1758,9 @@
     font: inherit;
   }
 
-  /* ---- the rail ---- */
-
-  .right {
-    grid-area: rail;
-    padding: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-panel);
-  }
-
-  /* one section per concern, separated by a hairline (S2) */
-  .rsec {
-    padding: 12px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .rhead {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .slabel {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--text-dim);
-  }
-
-  .rdim {
-    color: var(--text-dim);
-    font-size: 12px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /* the transport group rides at the right of the preview header */
-  .grp {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .grp .icon {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 7px;
-    line-height: 1;
-  }
-
-  .grp .icon svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  .grp .icon.active {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
   .fpssel {
     font-size: 12px;
     padding: 1px 4px;
-  }
-
-  .banner {
-    margin: 8px 12px 0;
-    padding: 8px 10px;
-    border-radius: 6px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-    text-align: left;
-  }
-
-  .banner.error {
-    background: color-mix(in srgb, var(--error) 18%, transparent);
-    border: 1px solid var(--error);
-    color: #f2b8b8;
-  }
-
-  .banner.warn {
-    background: color-mix(in srgb, var(--warn) 14%, transparent);
-    border: 1px solid var(--warn);
-    color: #ecd9a8;
-    display: flex;
-    align-items: center;
-    gap: 8px;
   }
 
   /* the capacity idiom, kept: certainty-graded and never blocking */
@@ -2199,23 +1790,12 @@
     color: #f2b8b8;
   }
 
-  .dismiss {
-    margin-left: auto;
-    border: none;
-    background: transparent;
-    padding: 0 4px;
-  }
-
   .hint {
     font-size: 12px;
     margin: 2px 0;
   }
 
-  .file-input {
-    display: none;
-  }
-
-  .mapper-error {
+  .note-error {
     margin: 0;
     color: var(--error);
     font-family: ui-monospace, Menlo, Consolas, monospace;
@@ -2249,49 +1829,11 @@
     }
   }
 
-  /* ---- phone (D9: responsive only) ----
-     The rail stacks ABOVE the code: the preview and its values are what a
-     phone is for, and the code is read-mostly (mockup S2b). */
+  /* ---- phone (D9) ---- the frame does the stacking; this is the name's
+     share of it (components/editor-frame.css). */
   @media (max-width: 600px) {
-    .editor-view {
-      grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: auto auto auto;
-      grid-template-areas:
-        "hdr"
-        "rail"
-        "code";
-      overflow-y: auto;
-    }
-
-    .editor-header {
-      gap: 8px;
-      padding: 6px 10px;
-    }
-
-    .editor-header .savestate,
-    .editor-header .note {
-      display: none;
-    }
-
     .name {
       max-width: 40vw;
-    }
-
-    .right {
-      overflow-y: visible;
-    }
-
-    .left {
-      border-top: 1px solid var(--border);
-    }
-
-    .editor-host {
-      flex: none;
-      height: 260px;
-    }
-
-    .code-hint {
-      display: block;
     }
   }
 </style>

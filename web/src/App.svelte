@@ -8,7 +8,9 @@
   import Dialog from "./components/Dialog.svelte";
   import PreviewAsChip from "./components/PreviewAsChip.svelte";
   import { gatedFetch } from "./lib/fetchgate";
+  import type { Luxel } from "./lib/luxel";
   import Editor from "./pages/Editor.svelte";
+  import MapEditor from "./pages/MapEditor.svelte";
   import Patterns from "./pages/Patterns.svelte";
   import Playlist from "./pages/Playlist.svelte";
   import Settings from "./pages/Settings.svelte";
@@ -27,7 +29,7 @@
     refreshPlaylist,
     startSessionPoll,
   } from "./stores/device";
-  import { layoutName, pixelTotal, setPreviewAs } from "./stores/geometry";
+  import { layoutName, pixelTotal, runMapProgram, setPreviewAs } from "./stores/geometry";
   import { setBanner } from "./stores/notify";
   import {
     decodeShare,
@@ -53,6 +55,12 @@
   let tab: Tab = "patterns";
   /** Full-screen editor open (over the home tab). */
   let editing = false;
+  /** The map program's screen, open over everything else (A10, Gitea #471).
+   *  It is not a tab either: it is reached from the Layout picker — the
+   *  playground's "Preview as" chip, or Settings → LED layout on a console. */
+  let mapEditing = false;
+  /** What the map screen's back button says; the opener sets it. */
+  let mapBackLabel = "back";
   /** First-load cover: hides the app until we've decided playground vs device
    *  (and, on a device, loaded its running pattern) so nothing flashes first. */
   let booting = true;
@@ -107,6 +115,18 @@
     editing = true;
   }
 
+  /**
+   * THE route to the map program's screen (A10, Gitea #471) — the shell owns
+   * it because every entry point is somewhere else: the playground's "Preview
+   * as" chip picking "Custom map program", the console's Settings → LED layout
+   * link, and the pattern editor's "Map program ›" while the Layout is custom.
+   * A8 (#469) calls this from the real LED-layout card.
+   */
+  export function openMapEditor(from = backLabel): void {
+    mapBackLabel = from;
+    mapEditing = true;
+  }
+
   function onDrop(e: DragEvent): void {
     e.preventDefault();
     const f = e.dataTransfer?.files?.[0];
@@ -118,8 +138,9 @@
     // into device mode without ever flashing the playground first.
     const deviceProbe = detectDeviceBase();
     startSessionPoll(); // 1 Hz while a session is live; the scheduler idles otherwise
+    let lx: Luxel;
     try {
-      await loadLuxel();
+      lx = await loadLuxel();
     } catch (e) {
       setBanner("load-failure", { level: "error", text: `failed to load luxel.wasm: ${String(e)}` });
       booting = false;
@@ -143,7 +164,9 @@
       if (shared.mapSrc) {
         // A pre-#463 link that carried a map program. Links no longer ship
         // one (a map is the Layout's, not the pattern's), but the old ones
-        // still work: the map becomes this playground's Layout choice.
+        // still work: the map becomes this playground's Layout choice. The
+        // program is run headlessly here — since A10 (#471) the map editor is
+        // a screen, and a share link must not have to open one.
         mapSrc.set(shared.mapSrc);
         setPreviewAs({ mode: "map", pixels: get(pixelTotal) });
         sharedMap = true;
@@ -178,7 +201,8 @@
       editing = true;
       await editor.bootDevice((pull) => connectDevice(base, pull), wipDirty);
     } else {
-      editor.bootPlayground(sharedMap);
+      if (sharedMap) runMapProgram(lx, get(mapSrc), get(pixelTotal));
+      editor.bootPlayground();
       editing = hadWip; // resume in the editor if there was work in progress
     }
     booting = false;
@@ -207,7 +231,7 @@
     </div>
   {/if}
   <header>
-    {#if !editing}
+    {#if !editing && !mapEditing}
       <span class="wordmark">
         luxel <span class="dim">{$isPlayground ? "playground" : ($device?.base ?? $deviceBase) || "device"}</span>
       </span>
@@ -233,7 +257,7 @@
     <!-- What this app is rendering through (#463). The console states the
          device's own Layout; the playground offers the chip that chooses one. -->
     {#if $isPlayground}
-      <PreviewAsChip />
+      <PreviewAsChip on:openmap={() => openMapEditor(editing ? "Editor" : backLabel)} />
     {:else}
       <span class="layout-chip" data-role="layout-chip" title="the device's LED layout">
         <span class="dot" class:live={$device !== null}></span>
@@ -282,14 +306,24 @@
        document is the editor's. The shell only tells it where back goes. -->
   <Editor
     bind:this={editor}
-    active={editing}
+    active={editing && !mapEditing}
     {backLabel}
     on:open={() => (editing = true)}
     on:back={() => (editing = false)}
+    on:openmap={() => openMapEditor("Editor")}
+  />
+
+  <!-- The map program's screen (A10, #471): geometry, not a pattern, so it is
+       a peer of the editor rather than something inside it. Mounted once and
+       kept — its document, breakpoints and computed points survive leaving. -->
+  <MapEditor
+    active={mapEditing}
+    backLabel={mapBackLabel}
+    on:back={() => (mapEditing = false)}
   />
 
   <Patterns
-    active={!editing && tab === "patterns"}
+    active={!editing && !mapEditing && tab === "patterns"}
     {hasPixelblazeLibrary}
     on:new={() => {
       openEditor();
@@ -316,13 +350,14 @@
   />
 
   {#if !$isPlayground}
-    <Playlist active={!editing && tab === "playlist"} />
+    <Playlist active={!editing && !mapEditing && tab === "playlist"} />
   {/if}
 
   {#if $device}
     <Settings
-      active={!editing && tab === "settings"}
+      active={!editing && !mapEditing && tab === "settings"}
       on:navigate={(e) => (tab = e.detail)}
+      on:openmap={() => openMapEditor("Settings")}
       on:pixelchange={() => editor.clearPreview()}
     />
   {/if}

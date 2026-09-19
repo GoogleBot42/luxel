@@ -299,7 +299,7 @@ try {
         .$eval('[data-role="layout-label"]', (el) => (el.textContent ?? "").trim())
         .catch(() => "");
       check("layout: the console header states the device's layout", chip === "64×64 matrix", chip);
-      const shape = await mappedPage.$eval('[data-role="preview"]', (el) => el.dataset.shape);
+      const shape = await mappedPage.$eval('[data-role="editor-view"] [data-role="preview"]', (el) => el.dataset.shape);
       check("layout: the console preview is a grid", shape === "grid", shape);
       check(
         "layout: the playground's Preview-as chip is absent on a console",
@@ -314,7 +314,7 @@ try {
       });
       await mappedPage.reload({ waitUntil: "networkidle0" });
       await sleep(1500);
-      const shape1d = await mappedPage.$eval('[data-role="preview"]', (el) => el.dataset.shape);
+      const shape1d = await mappedPage.$eval('[data-role="editor-view"] [data-role="preview"]', (el) => el.dataset.shape);
       check("layout: a 1D pattern on a panel previews as the panel, not a bar", shape1d === "grid");
 
       // ---- the quiet Projection row (#468, proposal §5.4d) ----
@@ -609,32 +609,19 @@ try {
   await page.select('[data-role="layout-kind"]', "strip"); // restore
   await sleep(200);
 
-  // device map upload (Phase 4): compute a 2D map and install it on the device
+  // The map program is a SCREEN of its own since A10 (#471): installing and
+  // clearing a device map are ITS header's, not the editor's. All the editor
+  // keeps is the way in, and only while the Layout is a custom map (§5.7).
   await page.select('[data-role="layout-kind"]', "map");
   await sleep(500);
-  await page.click('[data-role="map-install"]');
-  await sleep(500);
-  const mapGet = await (await fetch(`${DEV}/api/map`)).json();
   check(
-    "map: install uploads the computed map to the device",
-    mapGet.installed === true && mapGet.count > 0,
-    JSON.stringify(mapGet),
+    "layout: a custom Layout links to the map program's screen",
+    (await page.$('[data-role="subtab-map"]')) !== null,
   );
-  // a render2D pattern now uses the installed geometry
-  await fetch(`${DEV}/api/code`, {
-    method: "POST",
-    body: await lxpBody("", "export function render2D(index, x, y) { rgb(x, y, 0) }"),
-  });
-  await sleep(500);
-  const mpx = new Uint8Array(await (await fetch(`${DEV}/api/pixels`)).arrayBuffer());
-  let varied = false;
-  for (let i = 0; i < mpx.length; i += 3) if (mpx[i] !== mpx[0] || mpx[i + 1] !== mpx[1]) varied = true;
-  check("map: render2D uses the geometry (pixels vary by x/y)", varied);
-  await page.click('[data-role="map-clear"]');
-  await sleep(400);
   check(
-    "map: clear removes it from the device",
-    (await (await fetch(`${DEV}/api/map`)).json()).installed === false,
+    "layout: the editor no longer installs or clears the device map",
+    (await page.$('[data-role="editor-view"] [data-role="map-install"]')) === null &&
+      (await page.$('[data-role="editor-view"] [data-role="map-clear"]')) === null,
   );
   await page.select('[data-role="layout-kind"]', "strip");
   await sleep(200);
@@ -1335,6 +1322,99 @@ try {
       JSON.stringify(p4),
     );
   }
+  // ---- the map program's screen (A10, Gitea #471) ----
+  // The console reaches it from Settings → LED layout → "Custom map program →"
+  // (an interim link in the Device card until A8/#469 builds the LED layout
+  // card). Install on device is the screen's ONE primary action; Clear and the
+  // program's export/import live in its ⋯ menu; the debugger came with it.
+  check(
+    "settings: an LED-layout row links to the map program",
+    (await page.$('[data-role="map-program-link"]')) !== null,
+  );
+  await page.click('[data-role="map-program-link"]');
+  await page.waitForSelector('[data-role="map-editor-view"]:not([hidden])', { timeout: 4000 });
+  await sleep(900);
+  check(
+    "map screen: the console's primary action is Install on device",
+    (await page.$('[data-role="map-install"]')) !== null &&
+      (await page.$('[data-role="map-use"]')) === null,
+  );
+  const mapBadge = await page.$eval('[data-role="map-badge"]', (el) => (el.textContent ?? "").trim());
+  check("map screen: it ran the program on arrival", /^\d+ points · 2D$/.test(mapBadge), mapBadge);
+  check(
+    "map screen: no compile error",
+    (await page.$('[data-role="map-compile-error"]')) === null,
+  );
+  await page.screenshot({ path: `${shotDir}/device-map-editor.png` });
+  await page.click('[data-role="map-install"]');
+  await sleep(700);
+  const mapGet = await (await fetch(`${DEV}/api/map`)).json();
+  check(
+    "map: Install on device uploads the computed map",
+    mapGet.installed === true && mapGet.count > 0,
+    JSON.stringify(mapGet),
+  );
+  const installedText = await page
+    .$eval('[data-role="map-installed"]', (el) => (el.textContent ?? "").trim())
+    .catch(() => "");
+  check(
+    "map screen: the header states what is on the device",
+    installedText.includes(`${mapGet.count}px`),
+    installedText,
+  );
+  await page.screenshot({ path: `${shotDir}/device-map-installed.png` });
+  // a render2D pattern now uses the installed geometry
+  await fetch(`${DEV}/api/code`, {
+    method: "POST",
+    body: await lxpBody("", "export function render2D(index, x, y) { rgb(x, y, 0) }"),
+  });
+  await sleep(500);
+  const mpx = new Uint8Array(await (await fetch(`${DEV}/api/pixels`)).arrayBuffer());
+  let varied = false;
+  for (let i = 0; i < mpx.length; i += 3) if (mpx[i] !== mpx[0] || mpx[i + 1] !== mpx[1]) varied = true;
+  check("map: render2D uses the geometry (pixels vary by x/y)", varied);
+  // the map program is still debuggable on its own screen (ui-audit §7.6)
+  const plotLine = await page.$$eval('[data-role="map-editor"] .cm-line', (els) => {
+    const i = els.findIndex((el) => el.textContent?.includes("plot("));
+    if (i < 0) return null;
+    const r = els[i].getBoundingClientRect();
+    return { y: r.y, h: r.height };
+  });
+  check("map screen: the program's source is in the code pane", plotLine !== null);
+  if (plotLine) {
+    const gut = await page.$eval('[data-role="map-editor"] .cm-bp-gutter', (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, w: r.width };
+    });
+    await page.mouse.click(gut.x + gut.w / 2, plotLine.y + plotLine.h / 2);
+    await sleep(250);
+    await page.click('[data-role="map-run"]');
+    await page.waitForSelector('.debugger[data-paused="true"]', { timeout: 4000 }).catch(() => null);
+    check("map screen: a breakpoint pauses the map run", (await page.$('.debugger[data-paused="true"]')) !== null);
+    await page.click(".debugger .db-over");
+    await sleep(300);
+    check("map screen: the debugger steps", (await page.$('.debugger[data-paused="true"]')) !== null);
+    await page.click('[data-role="map-debug"]'); // disarm
+    await sleep(400);
+  }
+  // Clear lives in the ⋯ menu, behind the danger confirmation (#472)
+  await page.click('[data-role="map-overflow"]');
+  await sleep(200);
+  await page.click('[data-role="map-clear"]');
+  await waitDialog(page);
+  await acceptDialog(page);
+  await sleep(500);
+  check(
+    "map: Clear removes it from the device",
+    (await (await fetch(`${DEV}/api/map`)).json()).installed === false,
+  );
+  await page.click('[data-role="map-editor-back"]');
+  await sleep(400);
+  check(
+    "map screen: back returns to where it was opened from",
+    (await page.$('[data-role="settings-panel"]:not([hidden])')) !== null,
+  );
+
   await page.click('[data-role="tab-patterns"]');
   await sleep(400);
 

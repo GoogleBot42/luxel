@@ -54,8 +54,13 @@ const check = (name, cond, detail = "") => {
 };
 
 /** Replace the (visible) pattern editor's contents by typing. */
+/** The code pane of whichever editor screen is on top: the pattern editor, or
+ *  the map program's own screen (A10, #471). Both are mounted at all times;
+ *  the hidden one's `<main>` carries `hidden`. */
+const VISIBLE_CODE = "main.editor-frame:not([hidden]) .editor-slot";
+
 async function setEditor(page, text) {
-  await page.click('.editor-slot:not([hidden]) .cm-content');
+  await page.click(`${VISIBLE_CODE} .cm-content`);
   await page.keyboard.down("Control");
   await page.keyboard.press("a");
   await page.keyboard.up("Control");
@@ -72,13 +77,13 @@ async function setEditor(page, text) {
  *  runs, and the transaction is a genuine `input.paste` user event, which is
  *  what the app keys off. */
 async function pasteEditor(page, text) {
-  await page.click('.editor-slot:not([hidden]) .cm-content');
+  await page.click(`${VISIBLE_CODE} .cm-content`);
   await page.keyboard.down("Control");
   await page.keyboard.press("a");
   await page.keyboard.up("Control");
   await page.keyboard.press("Backspace");
   await page.$eval(
-    '.editor-slot:not([hidden]) .cm-content',
+    `${VISIBLE_CODE} .cm-content`,
     (el, t) => {
       const dt = new DataTransfer();
       dt.setData("text/plain", t);
@@ -96,7 +101,7 @@ async function pasteEditor(page, text) {
 // dropdown / px / W×H fields in the playback bar are gone — they were the
 // rig config, and geometry is not per-pattern any more.
 const rig = async (page) => ({
-  shape: await page.$eval('[data-role="preview"]', (el) => el.dataset.shape ?? ""),
+  shape: await page.$eval('[data-role="editor-view"] [data-role="preview"]', (el) => el.dataset.shape ?? ""),
   label: await page
     .$eval('[data-role="preview-as-label"]', (el) => (el.textContent ?? "").trim())
     .catch(() => ""),
@@ -508,7 +513,7 @@ try {
   );
   await page.mouse.move(5, 5); // clear any hover tooltip that could eat the click
   await sleep(100);
-  const gline = await page.$$eval('.editor-slot:not([hidden]) .cm-line', (els) => {
+  const gline = await page.$$eval(`${VISIBLE_CODE} .cm-line`, (els) => {
     const r = els[1].getBoundingClientRect(); // line 2 = render body
     return { y: r.y, h: r.height };
   });
@@ -680,37 +685,61 @@ try {
   check("shared pattern compiles", (await page2.$('[data-role="compile-error"]')) === null);
   await page2.close();
 
-  // ── 10. map: the "Custom map program" Layout choice; a debuggable program ──
-  // Since A7 (#468) the map program is not a sub-tab of the pattern editor: it
-  // is reached from the rail's "Map program" section (`subtab-map`) and opens
-  // over the code pane with its own bar (`subtab-pattern` closes it). A10
-  // (#471) turns that into a screen of its own.
-  await previewAs(page, "map");
-  await page.waitForSelector('[data-role="subtab-map"]', { timeout: 3000 });
+  // ── 10. the map program's OWN SCREEN (A10, #471) ──
+  // It is reached from the Layout picker, never from inside a pattern: in the
+  // playground the "Preview as" chip's `Custom map program` opens it. The
+  // screen is the pattern editor's chrome with the map's document in it —
+  // code left, the plotted points + the debugger right, and ONE primary
+  // action ("Use in preview" here, "Install on device" on a console).
+  await previewAs(page, "map"); // picking it opens the screen
+  await page.waitForSelector('[data-role="map-editor-view"]:not([hidden])', { timeout: 3000 });
   await sleep(700);
-  check("2D map reveals the map program entry point", (await page.$('[data-role="subtab-map"]')) !== null);
-  check("the map editor is not open until asked", (await page.$('[data-role="map-editor"]')) === null);
-  const mapErr = (await page.$('[data-role="map-error"]')) || (await page.$('[data-role="map-compile-error"]'));
-  check("map runs without error", mapErr === null);
   check(
-    "map installs (the Layout is the map's points)",
-    (await rig(page)).label.includes("custom map"),
-    (await rig(page)).label,
+    "the chip's Custom map program opens the map screen",
+    (await page.$('[data-role="map-editor-view"]:not([hidden])')) !== null,
   );
-  check("map layout is a scatter", (await rig(page)).shape === "scatter");
-  const mapLit = await page.$eval(".map", (c) => {
+  check("the pattern editor is not the visible screen", (await page.$('[data-role="editor-view"]:not([hidden])')) === null);
+  check("the map screen has the editor chrome (back, primary, ⋯)", (await page.$('[data-role="map-editor-back"]')) !== null
+    && (await page.$('[data-role="map-use"]')) !== null
+    && (await page.$('[data-role="map-overflow"]')) !== null);
+  check("the playground's primary is 'Use in preview', not an install", (await page.$('[data-role="map-install"]')) === null);
+  check("the map program is not a pattern (no Save/name in this header)",
+    (await page.$('[data-role="map-editor-view"] [data-role="save"]')) === null);
+  check("the map screen shows the program's source", (await page.$('[data-role="map-editor"] .cm-line')) !== null);
+
+  // it compiles and runs on arrival, so the points are on screen immediately
+  check("map runs without error", (await page.$('[data-role="map-compile-error"]')) === null
+    && (await page.$('[data-role="map-error"]')) === null);
+  const mapBadge = await page.$eval('[data-role="map-badge"]', (el) => (el.textContent ?? "").trim());
+  check("the map badge states the count and the detected dims", /^\d+ points · 2D$/.test(mapBadge), mapBadge);
+  const mapLit = await page.$eval('[data-role="map-editor-view"] .map', (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
     let n = 0;
     for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) n++;
     return n;
   });
-  check("map scatter renders lit dots", mapLit > 200, `${mapLit} lit`);
+  check("the map screen scatters the plotted points", mapLit > 200, `${mapLit} lit`);
   await page.screenshot({ path: `${shotDir}/e2e-4-map.png` });
-  // debuggable: breakpoint on plot() pauses the per-pixel map run
-  await page.click('[data-role="subtab-map"]'); // open it over the code pane
-  await page.waitForSelector('[data-role="map-editor"] .cm-line', { timeout: 3000 });
+
+  // the primary action is what makes these points the page's Layout
+  await page.click('[data-role="map-use"]');
   await sleep(400);
-  check("the map program opens over the code pane", (await page.$('[data-role="map-bar"]')) !== null);
+  await page.click('[data-role="map-editor-back"]');
+  await sleep(500);
+  check("back returns to the pattern editor", (await page.$('[data-role="editor-view"]:not([hidden])')) !== null);
+  check(
+    "Use in preview makes the map the Layout",
+    (await rig(page)).label.includes("custom map"),
+    (await rig(page)).label,
+  );
+  check("map layout is a scatter", (await rig(page)).shape === "scatter");
+  check("the editor's rail links to the map screen while the Layout is custom",
+    (await page.$('[data-role="subtab-map"]')) === null); // playground: the chip is the way in
+
+  // debuggable: a breakpoint on plot() pauses the per-pixel map run
+  await previewAs(page, "map"); // re-open the screen from the chip
+  await page.waitForSelector('[data-role="map-editor-view"]:not([hidden])', { timeout: 3000 });
+  await sleep(400);
   const mapPlot = await page.$$eval('[data-role="map-editor"] .cm-line', (els) => {
     const i = els.findIndex((el) => el.textContent?.includes("plot("));
     if (i < 0) return null;
@@ -731,28 +760,33 @@ try {
     await page.click('[data-role="map-debug"]');
     await sleep(300);
   }
+
   // ── 10b. a 3D map (z spirals) renders as an auto-rotating point cloud ──
-  await page.click('[data-role="subtab-map"]');
-  await sleep(300);
+  // The map is already in use, so editing the program re-publishes its points:
+  // the pattern editor's preview is a cloud when we come back.
   await setEditor(
     page,
     "export function render(index) { plot(cos(index/pixelCount*PI2*3), sin(index/pixelCount*PI2*3), index/pixelCount - 0.5) }",
   );
   await page.click('[data-role="map-run"]');
   await sleep(500);
-  await page.click('[data-role="subtab-pattern"]');
+  const badge3d = await page.$eval('[data-role="map-badge"]', (el) => (el.textContent ?? "").trim());
+  check("plot(x, y, z) is detected as 3D", badge3d.endsWith("3D"), badge3d);
+  await page.screenshot({ path: `${shotDir}/e2e-4b-map3d.png` });
+  await page.click('[data-role="map-editor-back"]');
   await sleep(400);
-  const is3d = await page.$eval(".map", (c) => c.dataset["3d"]).catch(() => "");
+  const is3d = await page
+    .$eval('[data-role="editor-view"] .map', (c) => c.dataset["3d"])
+    .catch(() => "");
   check(
     "3D map detected (badge shown)",
-    is3d === "true" && (await page.$('[data-role="map-3d"]')) !== null,
+    is3d === "true" && (await page.$('[data-role="editor-view"] [data-role="map-3d"]')) !== null,
     `data-3d=${is3d}`,
   );
-  const m3a = await page.$eval(".map", (c) => c.toDataURL());
+  const m3a = await page.$eval('[data-role="editor-view"] .map', (c) => c.toDataURL());
   await sleep(500);
-  const m3b = await page.$eval(".map", (c) => c.toDataURL());
+  const m3b = await page.$eval('[data-role="editor-view"] .map', (c) => c.toDataURL());
   check("3D map auto-rotates", m3a !== m3b);
-  await page.screenshot({ path: `${shotDir}/e2e-4b-map3d.png` });
 
   // ── 10c. share links carry the PATTERN only; old map links still open ──
   // A map is the Layout's, not the pattern's (#463), so a link made today is
@@ -782,12 +816,17 @@ try {
     .$eval('[data-role="preview-as-label"]', (el) => (el.textContent ?? "").trim())
     .catch(() => "");
   check("a pre-#463 share link still restores its map", sharedLabel.includes("custom map"), sharedLabel);
-  check("its 3D map is 3D again (badge)", (await page3.$('[data-role="map-3d"]')) !== null);
+  check(
+    "its 3D map is 3D again (badge)",
+    (await page3.$('[data-role="editor-view"] [data-role="map-3d"]')) !== null,
+  );
   await page3.close();
 
-  // turning mapping off hides the map program's entry point
+  // leaving the custom Layout puts the map program out of reach again (§5.7)
   await previewAs(page, "auto");
-  check("leaving the map layout turns mapping off", (await page.$('[data-role="subtab-map"]')) === null);
+  await sleep(300);
+  check("leaving the map layout closes mapping", !(await rig(page)).label.includes("custom map"));
+  check("the map screen is not on top", (await page.$('[data-role="map-editor-view"]:not([hidden])')) === null);
 
   // ── 11. library: the inline name IS the saved name; back; reload resumes ──
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.5) }");
@@ -832,19 +871,31 @@ try {
   await page.screenshot({ path: `${shotDir}/e2e-editor-playground.png` });
   await page.setViewport({ width: 390, height: 780 });
   await sleep(400);
-  check(
-    "mobile: the rail stacks above the code",
-    await page.evaluate(() => {
-      const rail = document.querySelector("main.editor-view .right");
-      const code = document.querySelector("main.editor-view .left");
+  const stacked = (role) =>
+    page.evaluate((r) => {
+      const rail = document.querySelector(`[data-role="${r}"] .right`);
+      const code = document.querySelector(`[data-role="${r}"] .left`);
       return rail !== null && code !== null && rail.getBoundingClientRect().top < code.getBoundingClientRect().top;
-    }),
-  );
+    }, role);
+  check("mobile: the rail stacks above the code", await stacked("editor-view"));
   check(
     "mobile: the editor does not scroll sideways",
     await page.evaluate(() => document.documentElement.scrollWidth <= 390),
   );
   await page.screenshot({ path: `${shotDir}/e2e-editor-390.png` });
+  // the map program's screen is the same frame, so it stacks the same way
+  await previewAs(page, "map");
+  await page.waitForSelector('[data-role="map-editor-view"]:not([hidden])', { timeout: 3000 });
+  await sleep(600);
+  check("mobile: the map screen stacks its rail above the code too", await stacked("map-editor-view"));
+  check(
+    "mobile: the map screen does not scroll sideways",
+    await page.evaluate(() => document.documentElement.scrollWidth <= 390),
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-map-390.png` });
+  await page.click('[data-role="map-editor-back"]');
+  await sleep(300);
+  await previewAs(page, "auto"); // leave the Layout as the rest of the suite expects
   await page.setViewport({ width: 1400, height: 900 });
   await sleep(300);
   await page.click('[data-role="editor-back"]');

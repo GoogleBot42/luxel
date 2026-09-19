@@ -7,6 +7,7 @@
   // "By index" is row-major by definition. Everything on the page (tiles,
   // thumbnails, the editor's preview) renders through what this picks,
   // because they all read `stores/geometry.ts`.
+  import { createEventDispatcher } from "svelte";
   import {
     AUTO_LATTICE,
     AUTO_MATRIX,
@@ -15,6 +16,11 @@
     previewAs,
     setPreviewAs,
   } from "../stores/geometry";
+
+  /** "Custom map program" is not a shape you type a number into — it is a
+   *  program, and it has a screen (A10, Gitea #471). The chip picks the
+   *  choice and asks the shell to open that screen. */
+  const dispatch = createEventDispatcher<{ openmap: void }>();
 
   let open = false;
   let wrapEl: HTMLElement;
@@ -182,7 +188,11 @@
         role="menuitemradio"
         aria-checked={mode === "map"}
         data-role="preview-as-map"
-        on:click={() => setPreviewAs({ mode: "map", pixels: px })}
+        on:click={() => {
+          setPreviewAs({ mode: "map", pixels: px });
+          open = false;
+          dispatch("openmap"); // the program that makes the points has a screen
+        }}
       >
         <span class="radio"></span>
         Custom map program →

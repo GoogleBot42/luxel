@@ -26,13 +26,14 @@ web/src/
     Playlist.svelte       transport, defaults, rows
     Settings.svelte       the card list + the visible-tab refresh
     Editor.svelte         document header, code pane, right-rail inspector
-    MapEditor.svelte      the map program: its engine, debugger and code pane
+    MapEditor.svelte      the map program's OWN SCREEN: code, scatter, debugger
   settings/         one card per concern, each owning its form and its endpoint
     DeviceCard, NetworkInputCard, BrightnessCard, WifiCard,
     OutputCard, ClockCard, SyncCard, MqttCard, cards.css
   components/       reusable widgets (CodeMirror wrapper, Preview, Controls,
                     PinPanel, VarWatcher, Debugger, Gallery, PatternThumb,
-                    PlaylistRow, ProjectionRow, Dialog)
+                    PlaylistRow, ProjectionRow, Dialog, PreviewAsChip) plus
+                    editor-frame.css, the chrome BOTH full-screen editors wear
   lib/              non-UI logic: device HTTP client, fetchgate, LNA classifier,
                     wasm bindings, control hints, playlist transport, audio, builtins
   flash/            a SECOND rollup entry (flash.html) — the WLED takeover installer;
@@ -52,9 +53,10 @@ installs it. Keep it that way: `geometry.ts` reads wire state out of
 
 ## The shell
 
-`App.svelte` owns exactly four things: `mode` (playground vs device),
+`App.svelte` owns exactly five things: `mode` (playground vs device),
 `tab` (which home surface is open), `editing` (the full-screen editor sits over
-the home tab — it is not a tab), and the boot cover. It also renders the header,
+the home tab — it is not a tab), `mapEditing` (the map program's screen, over
+everything, A10/#471), and the boot cover. It also renders the header,
 the fps readout and the LNA blocked banner, and it wires page events to
 `Editor` methods (`newPattern`, `loadSaved`, `loadGalleryPick`,
 `openDevicePattern`, `importEpeFile`, `bootDevice`, `bootPlayground`).
@@ -68,6 +70,14 @@ editor renders its own header — back, name, save state, Save, ⋯ — and the
 shell only passes `backLabel` down and takes a `back` event up. What stays in
 the shell header is what is true of the *session*: the device chip / "Preview
 as" chip and the fps readout (proposal §5.7).
+
+`openMapEditor(from)` is the shell's one route to the map program's screen
+(#471) — an exported component method, because every entry point is elsewhere:
+the playground's "Preview as" chip (`openmap` event), the console's
+Settings → LED layout link, and the pattern editor's "Map program ›". A8 (#469)
+calls it from the real LED-layout card. `from` is only what the screen's back
+button says; closing it just clears `mapEditing`, and whatever was underneath
+is still mounted.
 
 Every page stays **mounted and `hidden`** when it is not the active tab, so its
 state (compiled gallery tiles, CodeMirror documents, scroll position) survives
@@ -268,18 +278,67 @@ Two things live in the editor only until their own ticket lands, each behind a
 comment naming it:
 
 - the **"LED layout" block** at the foot of the rail (`led-layout`, console
-  only) — the old playback bar's shape select, pixel/W×H fields, install-grid,
-  install-map and clear-map, with their original `data-role`s so device-e2e
-  keeps driving them. **A8 (#469) deletes this block** when Settings → LED
+  only) — the old playback bar's shape select, pixel/W×H fields and
+  install-grid, with their original `data-role`s so device-e2e keeps driving
+  them. Installing and clearing a device MAP left with A10 (#471): they are the
+  map screen's header. **A8 (#469) deletes this block** when Settings → LED
   layout exists.
-- the **map program**, reached from the rail's "Map program" section
-  (`subtab-map`) and opened over the code pane with its own bar
-  (`map-bar`: `subtab-pattern`, `map-run`, `map-debug`). **A10 (#471)** turns
-  that into a screen of its own; `pages/MapEditor.svelte` itself does not
-  change, only where it is opened from.
+- a one-line **"Map program ›"** link (`subtab-map`) in that same block,
+  rendered only while the Layout is a custom map (§5.7). It routes to the map
+  program's screen through the shell's `openmap` event; #469 moves it into
+  Settings → LED layout with the rest of the block.
 
 `Add to scene ▸` (proposal §5.4b) is deliberately not rendered at all until
 scenes exist in Phase B (#480).
+
+## The map program — a screen, not a sub-tab (`pages/MapEditor.svelte`, #471)
+
+Proposal §4 "What the map program becomes", §5.7. The mapper is kept whole —
+it is a real Luxel program that `plot()`s one point per pixel on the VM, edited
+in the same CodeMirror and stepped with the same `Debugger.svelte`
+(research/ui-audit.md §7.6) — but it is **geometry**, so it is reached from the
+Layout picker and never from inside a pattern:
+
+| where | control | opens |
+|---|---|---|
+| playground | "Preview as" chip → `Custom map program →` (`preview-as-map`) | the screen, and the chip then reads `N px custom map` |
+| console | Settings → `Custom map program →` (`map-program-link`) | the screen (interim: the Device card, until #469 builds the LED layout card) |
+| console | the editor rail's `Map program ›` (`subtab-map`), only while the Layout is a custom map | the screen |
+
+It wears the pattern editor's chrome, from the same stylesheet
+(`components/editor-frame.css` — a `.editor-frame`-prefixed plain CSS import,
+like `settings/cards.css`; slotted markup is compiled in the parent's scope, so
+a wrapper component could not have styled it anyway):
+
+| owner | what it holds | `data-role`s |
+|---|---|---|
+| the **header** | back · "Map program" · the installed / in-use state · ONE primary action · ⋯ | `map-editor-header`, `map-editor-back`, `map-state`, `map-installed`, `map-note`, `map-install` (console) / `map-use` (playground), `map-overflow`, `map-export`, `map-import`, `map-reset`, `map-clear` |
+| the **code pane** | its own errors: gutter dot, squiggle, one status strip | `map-editor`, `map-compile-error` |
+| the **rail** | the plotted points + the transport that produces them, then the debugger | `map-badge`, `map-run`, `map-debug`, `map-error`, `map-3d` |
+
+Rules:
+
+- **The primary action is the only thing that publishes.** A run fills the
+  screen's own scatter; `Use in preview` (playground) sets `mapCoords` +
+  `previewAs`, `Install on device` (console) uploads the coordinates and the
+  console's Layout follows the device as usual. Once a map IS in use, every
+  subsequent run re-publishes, so editing the program stays live.
+- **The scatter is the program's, not the app's.** It draws `cloudLayout(pts)`
+  — the points at their own dimensionality, 2D for `plot(x, y)` and a rotating
+  cloud for `plot(x, y, z)` — coloured by index so the picture shows the wiring
+  ORDER as well as the shape. Drag-editing the points and the Fill/Contain
+  framing (Gitea #355) attach here.
+- **Nothing derived from a run may be a `$:`.** Opening the screen compiles and
+  runs from a reactive block, and a `$:` whose input is assigned inside a
+  function another reactive block calls renders one cycle stale and never
+  catches up (the trap in `.claude/rules/web.md`). `adopt()` assigns the
+  points, the Layout, the colour ramp and starts the draw loop together.
+- **The map is not the pattern's.** The working copy never carried it
+  (`lib/store.ts`), share links stopped carrying it at #463, and the program
+  text is persisted on its own key — `luxel.mapSrc`. A console restores it from
+  the same place: `GET /api/map` reports a count and dims, never the program
+  (Gitea #517). A pre-#463 share link that carries one is run headlessly by the
+  shell through `runMapProgram()` — no screen has to open for it.
 
 ### Projection (`components/ProjectionRow.svelte`, proposal §5.4d)
 
@@ -387,13 +446,13 @@ playground. Per-item projection overrides are #470/#473's.
 `layoutName`, `shape`, `pixelTotal`, `pixelCount()`, `previewAs`,
 `setPreviewAs()`, `patternDims`, `mapCoords`, `setMapCoords()`, `projection`,
 `configureEngine()`, `compileForLayout()`, `captionFor()`, `effectiveFor()`,
-`tileShape()`, `thumbLayout()`, `projectionCaption()`, `layoutLabel()`,
+`tileShape()`, `thumbLayout()`, `projectionCaption()`, `layoutLabel()`, `cloudLayout()`, `runMapProgram()`,
 `layoutKey()`, `TILE_MAX_CELLS`, `THUMB_MAX_CELLS`. See **Geometry** below.
 
 `stores/pattern.ts` — `luxel`, `loadLuxel()`, `source`, `dirty`,
 `patternName`, `exampleName`, `devicePatternId`, `controlValues`,
 `projectionOverride`, `hints`,
-`mapSrc`, `NEW_PATTERN`, `newPatternSource()`, `previewFps`, `runtimeError`, `saved`,
+`mapSrc`, `MAP_PROGRAM_TEMPLATE`, `NEW_PATTERN`, `newPatternSource()`, `previewFps`, `runtimeError`, `saved`,
 `saveToLocalLibrary`, `deleteFromLocalLibrary`, `findSaved`, `startAutosave`,
 `stopAutosave`, `loadWorkingCopy`, `compileToBytecode`, `parseEpe`,
 `exportEpe`, `encodeShare`, `decodeShare`.

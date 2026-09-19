@@ -1,5 +1,52 @@
 # Update log
 
+## 2026-09-19 — web v2 A10: the map program gets its own screen (#471)
+
+The mapper is a good idea in the wrong place: it was a sub-tab of the *pattern*
+editor, which is six kinds of "this belongs to the pattern" for something that
+describes the hardware (research/ui-audit.md §2.4). It is now a screen of its
+own, reached from the Layout picker (proposal §4), and it is kept whole —
+still a real Luxel program that `plot()`s one point per pixel on the VM, still
+edited in the same CodeMirror, still stepped with the same debugger (§7.6).
+
+- **`pages/MapEditor.svelte` is a full-screen page.** Header: `← back` ·
+  *Map program* · the installed / in-use state · ONE primary action —
+  **Install on device** on a console, **Use in preview** in the playground ·
+  a ⋯ menu (Export/Import map program, Reset, Clear map from device). Code
+  left, owning its own errors exactly like the pattern editor; right rail =
+  the plotted points as a scatter (2D) or an auto-rotating cloud (3D, decided
+  by `plot(x, y)` vs `plot(x, y, z)`), coloured by index so the picture shows
+  the wiring ORDER, with the count and detected dims — then the debugger.
+- **Entry points.** Playground: the "Preview as" chip's `Custom map program →`
+  opens it, and the chip then reads `N px custom map`. Console: Settings →
+  `Custom map program →` (an interim row in the Device card; A8/#469 builds the
+  LED layout card that owns it) and the editor rail's `Map program ›`, which
+  is rendered only while the Layout is a custom map (§5.7). The shell exports
+  `openMapEditor()` as the one route.
+- **The pattern editor lost the map entirely**: the rail's Map program section,
+  `mapOpen`, the `map-bar` (`subtab-pattern`, `map-run`, `map-debug` over the
+  code pane) and the install/clear buttons in the interim LED-layout block.
+- **`components/editor-frame.css`** is the chrome both screens wear — the grid,
+  the header, the code column, the rail and the phone stacking (rail above
+  code ≤ 600 px), `.editor-frame`-prefixed so it cannot reach a card or a chip.
+  ~200 lines that would otherwise have been duplicated and drifted.
+- **The map is device/preview state, not pattern state.** The working copy
+  never carried it and share links stopped at #463 (both re-verified); the
+  program text is persisted on its own key, `luxel.mapSrc`. A console restores
+  it from there too — `GET /api/map` reports a count and dims, never the
+  program that produced them, so **Gitea #517** tracks giving the device a way
+  to hand the program back. A pre-#463 share link's map is run headlessly by
+  the shell (`runMapProgram()`), so no screen has to open for it.
+
+Verified on the mirror (`luxel serve --board strip|panel`), no hardware:
+`npm test` (52), `npm run build` (bundle shape unchanged — one script, one
+stylesheet, no modulepreload), `e2e.mjs`, `device-e2e.mjs`, `maxpixels-e2e`,
+`sync-e2e`, `flash-e2e`, `tools/ci.sh`. The harnesses drive the new screen
+end to end: chip → screen → run → Use in preview → the tiles become a scatter;
+Settings link → screen → Install on device → `GET /api/map` shows the coords →
+breakpoint/step → Clear. Screenshots: 2D scatter, 3D cloud, console install
+state, 390 px.
+
 ## 2026-09-19 — `/api/layout`: one endpoint for the one geometry concept (#465, #495)
 
 Before this, "what shape is this installation" was spread over four endpoints
