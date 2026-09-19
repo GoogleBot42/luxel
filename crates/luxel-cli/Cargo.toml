@@ -21,6 +21,9 @@ profile = ["luxel-core/profile"]
 
 [dependencies]
 luxel-core = { path = "../luxel-core" }
+# `--board panel` answers the same refresh estimate the firmware does, from
+# the same code — the mirror must not carry a second copy of the formula.
+luxel-hub75 = { path = "../luxel-hub75" }
 rumqttc = "0.24"
 serde_json = "1"
 

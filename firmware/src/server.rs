@@ -1580,13 +1580,30 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     }
                     return Ok(sent);
                 }
-                // any body → set the one-shot force-AP flag and reboot into
-                // the provisioning access point ("luxel-xxxx" @ 192.168.4.1)
-                "/api/apmode" => {
-                    crate::ota::set_force_ap();
-                    let response = json_response(String::from(
-                        "{\"ok\":true,\"note\":\"rebooting into the setup AP (one boot only)\"}",
-                    ));
+                // The two "answer, then reboot" routes, which must share one
+                // arm: a second `finalize().await? + write_to` is a whole
+                // extra copy of picoserve's response path, and it measured
+                // 624-704 B on the strip boards (docs/size-report.md's rule,
+                // and .claude/rules/firmware.md's `Reply` note).
+                //
+                // - `/api/apmode`: any body → set the one-shot force-AP flag
+                //   and reboot into the provisioning access point
+                //   ("luxel-xxxx" @ 192.168.4.1).
+                // - `/api/reboot`: the other half of `reboot_required`
+                //   (Gitea #475). `/api/datapin` and `/api/wifi` reboot as a
+                //   side effect of their own change and NEITHER exists on a
+                //   panel board, so without this there is no way to apply a
+                //   stored chain arrangement or output table. Body ignored.
+                ap @ ("/api/apmode" | "/api/reboot") => {
+                    let ap = ap == "/api/apmode";
+                    if ap {
+                        crate::ota::set_force_ap();
+                    }
+                    let response = json_response(String::from(if ap {
+                        "{\"ok\":true,\"note\":\"rebooting into the setup AP (one boot only)\"}"
+                    } else {
+                        "{\"ok\":true,\"note\":\"rebooting\"}"
+                    }));
                     let conn = request.body_connection.finalize().await?;
                     let sent = response.write_to(conn, response_writer).await?;
                     crate::REBOOT.signal(());

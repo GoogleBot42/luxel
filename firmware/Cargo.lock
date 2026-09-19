@@ -1533,6 +1533,9 @@ dependencies = [
 [[package]]
 name = "luxel-hub75"
 version = "0.1.0"
+dependencies = [
+ "luxel-core",
+]
 
 [[package]]
 name = "managed"

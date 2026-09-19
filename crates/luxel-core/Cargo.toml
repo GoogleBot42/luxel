@@ -10,10 +10,16 @@ allocator-api2 = { version = "0.3", default-features = false, features = ["alloc
 logos = { version = "0.15", default-features = false, features = ["export_derive"], optional = true }
 
 [features]
-default = ["frontend"]
+default = ["frontend", "panel"]
 # The lexer/parser/compiler. Off = execute-only builds (device firmware):
 # patterns arrive as LXBC bytecode and the frontend never gets linked.
 frontend = ["dep:logos"]
+# The panel half of a Layout (#475): the refresh estimate and driven-tile
+# count `GET /api/layout` reports on a board with a HUB75 driver. Off =
+# `View` has no `panel` field and `push_json` emits nothing for it, so a
+# strip board's image is byte-identical to one built before it existed.
+# The firmware turns it on from its own `hub75` feature.
+panel = []
 depth-probe = []
 # Dynamic opcode/bigram/builtin counters in the VM loop (`luxel bench
 # --profile`, tools/profile-library.mjs). Host tooling only: the firmware

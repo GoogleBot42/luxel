@@ -2064,6 +2064,106 @@ What the headroom is actually for: an **8th bitplane** becomes usable (~58 Hz
 at 30 MHz, against ~38 Hz at 20 MHz), and **chained panels** get the
 bandwidth they need (Gitea #255).
 
+## HUB75 panel arrangement: the boot-time remap (2026-09-19, Gitea #475)
+
+A HUB75 chain is one ribbon. The driver shifts a single row `pw · panels`
+wide and `ph` tall, and the tiles hang wherever the installer put them —
+side by side, stacked, snaked, half of them upside-down. Until this change
+the firmware assumed exactly one upright 64×64 tile and the engine grid was
+the panel.
+
+`Layout.matrix` (`/api/layout`, #465) now describes the real arrangement —
+`pw ph cols rows start dir snake rot180 [scan]` — and
+`firmware/src/hub75.rs` turns it into **one lookup table, built once at
+boot**: `lut[driver pixel] = engine pixel`. The engine keeps rendering one
+`pw·cols` × `ph·rows` row-major grid and never learns about the chain; the
+compose path (`luxel_hub75::pack_remap`) gathers through the table instead
+of walking the frame in order. Chain order, `rot180` semantics and the
+identity rule are in docs/api.md "Panel arrangement"; the builder and its
+27 host tests are `crates/luxel-hub75/src/arrange.rs`.
+
+**The identity case costs nothing, and is found rather than assumed.** The
+table is built unconditionally and then checked: if `lut[i] == i` for every
+driver pixel it is freed on the spot and the driver composes byte-for-byte
+the code it composed before. That covers one upright tile — every device
+shipped so far — *and* arrangements that merely happen to come out
+row-major, such as two 32-wide tiles wired `tl row`, which a
+`cols == 1 && rows == 1` test would have missed.
+
+**Measured on the bench panel** (Seengreat 64×64, 7 planes / 30 MHz,
+`Aurora 2D` at 4096 px, master `9ea68f9` vs this change):
+
+| arrangement | `out_us` (compose) | `pipe_us` | fps / `out_fps` | `rescan_hz` | `heap_free` |
+|---|---:|---:|---:|---:|---:|
+| `64 64 1 1 tl row 0 0` — master | 2505 – 2536 | 42 – 52 | 9 / 9 | 115 | 41,612 |
+| `64 64 1 1 tl row 0 0` — this change, identity, no table | 2491 – 2679 | 72 – 80 | 9 / 9 | 115 | **41,612** |
+| `32 64 2 1 tr row 0 0` — two tiles, halves swapped, table live | 3267 – 3502 | 72 – 80 | 9 / 9 | 115 | **33,420** |
+
+So the no-op path really is a no-op: `heap_free` is byte-identical to
+master and `out_us` sits inside master's own sample spread (the compose
+takes one extra branch per ROW PAIR, 32 a frame, not one per pixel). A live
+table costs exactly **8,192 B of internal DRAM** (2 B per driver pixel) and
+**≈ 790 µs of compose** at 4096 px — 2.6 ms → 3.4 ms against the panel's
+8.66 ms rescan window, so throughput is unchanged.
+
+**Why the table is internal DRAM and not the PSRAM arena.** It is read once
+per pixel inside that compose window, which is the exact class `psram.rs`
+keeps out of PSRAM (the arena is pattern arrays only). It also cannot ever
+be the binding allocation: at 7 planes the table is 2 B per driver pixel
+against the two bitplane framebuffers' 14 B per driver pixel, and *those*
+are DMA targets that must be internal. A remap big enough to matter always
+comes with framebuffers seven times bigger that cannot move either.
+
+**What this board can drive.** The DMA framebuffer is compile-time sized
+(`PANEL_COLS` × `PANEL_ROWS` = 64×64, Gitea #401) and a chain is one ribbon,
+so it shifts out 64 columns: one 64-wide tile, or two 32-wide ones. An
+arrangement whose chain is wider is accepted, stored and reported — the
+board drives the leading tiles that fit and `GET /api/layout` says so in
+`matrix.drive`. Verified on metal: `matrix 32 32 2 2 bl row 1 1` (four
+32×32 tiles, snaked, alternate lines rotated) boots, reports `drive` 2 of 4
+and keeps rendering. A **real** multi-panel chain also needs the pixel
+ceiling raised past 4096 and the framebuffers to fit — both are #401/#255,
+and neither can be verified without a second physical panel.
+
+**Estimated refresh.** The firmware reports `matrix.est_hz`, the rate the
+whole configured chain would rescan at:
+
+```text
+est_hz = clock_hz / ( scan · (2^planes − 1) · pw · panels )
+```
+
+`scan` is the `scan` field when set, else `ph / 2`. It reproduces every
+number in "The LCD_CAM pixel clock on the panel" above — 115/76/153 Hz
+against 115.3/76.9/153.5 measured — and the #255 research's 28.8 Hz for
+four chained 64×64 tiles. The device's own `est_hz` read **115** against a
+measured `rescan_hz` of **115** throughout the session. A UI computing the
+same number in the browser (Settings, #469) has the formula in docs/api.md
+and `est_hz` to check itself against; under ~100 Hz the panel flickers.
+
+**Image cost**, flake builds against master `9ea68f9`:
+
+| board | master | arrangement only | + `/api/reboot` | OTA slot free |
+|---|---:|---:|---:|---:|
+| `seengreat-hub75` | 963,712 | +2,800 | **+3,280** | 7.78 % |
+| `athom-music` | 1,022,912 | **+0** | +368 | 2.41 % |
+| `c6-devkit-hosted` | 1,014,144 | **+0** | +144 | 3.27 % |
+| `pixelblaze-v3` | 1,001,296 | **+0** | +384 | 4.47 % |
+
+The arrangement itself is **zero bytes on a strip board**, and that is not
+luck: the remap builder lives in `luxel-hub75`, an optional dependency
+behind the firmware's `hub75` feature, and the `est_hz`/`drive` half of the
+Layout JSON is behind a new `luxel-core/panel` feature that only `hub75`
+turns on. Before that feature gate the three strip images each grew
+96–112 B for a field they can never populate (Gitea #501/#513).
+
+The remaining 144–384 B is `POST /api/reboot`, which every board carries
+because every board can end up with a `reboot_required` Layout (#474's
+output table as much as this ticket's chain wiring). It shares one match arm
+— and therefore one `finalize + write_to` instantiation — with
+`/api/apmode`: given its own arm it cost 624–704 B instead, a whole extra
+copy of picoserve's response path, which is the same trap `Reply` exists to
+avoid (docs/size-report.md, .claude/rules/firmware.md).
+
 ## The framebuffer swap is frame-atomic (2026-09-07, Gitea #376)
 
 Jeremy asked how tearing is avoided when the framebuffer is fetched by DMA.

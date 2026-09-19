@@ -501,7 +501,7 @@ embedded so a client needs one fetch:
 | `source` | `regular` (the shape comes from the strip/matrix fields) · `map` (from a map program's coordinates). "Custom" is a coordinate SOURCE, not a dimensionality. |
 | `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
 | `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
-| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor, `0` = the board's own. |
+| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor, `0` = the board's own. On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
 | `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
 | `proj` | The §5.4d projection defaults (`docs/spec/projection.md`), tokens `index\|x\|y\|z\|xy\|xz\|yz`. |
 | `map` | The `GET /api/map` body verbatim. |
@@ -509,6 +509,64 @@ embedded so a client needs one fetch:
 A client that wants the index→coordinate mapping (a console preview showing
 "real wiring") has everything here: `kind` + `w`/`h` + the `matrix` block's
 `start`/`dir`/`snake`/`rot180`.
+
+### Panel arrangement and estimated refresh (HUB75, Gitea #475)
+
+A HUB75 chain is one ribbon: the driver shifts a single row `pw · panels`
+wide and `ph` tall, and the tiles hang wherever the installer put them. The
+`matrix` block describes that, and the firmware turns it into a
+**panel→pixel remap built once at boot**, so the engine keeps rendering one
+`pw·cols` × `ph·rows` row-major grid and never knows about the chain.
+
+**Chain order**, exactly as the firmware walks it. Tiles are visited line by
+line; a *line* is a row of tiles when `dir` is `row` and a column when it is
+`col`:
+
+- `start` places tile 0 and so sets which way line 0 travels — `tl` is
+  left-to-right / top-to-bottom, `tr` mirrors x, `bl` mirrors y, `br` both.
+- `snake` = 1 makes every **odd** line run back the other way (a serpentine
+  chain, the usual way to wall-mount more than one row of panels).
+- `rot180` = 1 marks the tiles on those **odd lines as mounted rotated 180°**
+  — which is how a serpentine wall is physically built, since the return row's
+  connectors face the other way. It is per line, not per display.
+
+**Two fields a panel board adds to the `matrix` block:**
+
+| field | meaning |
+|---|---|
+| `est_hz` | Estimated panel rescan rate for the whole configured chain (below). Absent on hosts with no panel driver — the mirror, and every strip board. |
+| `drive` | Leading tiles of the chain this board's framebuffer can actually shift out. `drive < cols·rows` means the rest of the arrangement is **dark**: the DMA framebuffer is compile-time sized (Gitea #401) and a 64×64 board drives 64 columns of chain, i.e. one 64-wide tile or two 32-wide ones. |
+
+**Estimated refresh.** Plain BCM shifts the whole chain once per bitplane per
+address row, and plane *k* is repeated 2^*k* times, so one rescan costs
+
+```text
+est_hz = clock_hz / ( scan · (2^planes − 1) · pw · panels )
+```
+
+with `panels = cols · rows`, `planes` the BCM bit depth (7 today) and `scan`
+the address depth — the `scan` field when the Layout states one, else `ph / 2`
+(a HUB75 panel drives two half-height rows at once through R1G1B1/R2G2B2).
+`clock_hz` is the LCD_CAM pixel clock, 30 MHz on the Seengreat board. A UI
+computing this in the browser must use the same numbers and can check itself
+against `est_hz`; **below ~100 Hz the panel visibly flickers** (show it amber
+and name the fix: fewer panels per chain, fewer bitplanes, or a faster clock).
+
+Measured against the bench panel (Gitea #255): 64×64 at 7 planes / 30 MHz
+predicts 115 Hz against 115.3–115.5 measured, and 20/40 MHz predict 76/153
+against 76.9–77.0 / 153.5–154.0.
+
+**Constraints, which the UI should state:**
+
+- **One chain per output** on this board — its two HUB75 headers are the same
+  14 GPIOs wired twice, not two chains (schematic, Gitea #255).
+- **Every tile in a chain has the same size and scan.** There is one `pw`,
+  one `ph` and one `scan`.
+- **Reboot to apply.** `cols rows start dir snake rot180 scan` are
+  `reboot_required`; `pw`/`ph` only resize the grid and apply live.
+- An arrangement whose chain is wider than `drive` tiles is accepted, stored
+  and reported — the board just drives the prefix. That is the honest state,
+  not a rejection, because raising the framebuffer is #401.
 
 **`POST /api/layout`** takes a line-oriented body, ≤ 4 KiB, like the playlist.
 Blank lines and `#` comments are ignored; line order is free; **at most one**
@@ -716,11 +774,17 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 | `/api/wifi` | POST | `ssid\npassword` | `{"ok":true,"ssid":"…","note":"rebooting to apply"}` — **firmware reboots** | both |
 | `/api/apmode` | GET | — | `{"ap":bool}` | both |
 | `/api/apmode` | POST | any (ignored) | `{"ok":true,"note":"rebooting into the setup AP (one boot only)"}` — **firmware reboots** | both |
+| `/api/reboot` | POST | (body ignored) | `{"ok":true,"note":"rebooting"}` — **firmware reboots** | firmware only (`caps.reboot`) |
 | `/api/mqtt` | GET | — | `{"enabled","host","port","user","hasPass","connected"}` | both |
 | `/api/mqtt` | POST | `host\nport\nuser\npass` | `{"ok":true,"enabled":bool}` | both |
 | `/api/sync` | GET | — | `{"mode","timeMs","leader":{"bootId","ageMs","offsetMs"}\|null}` | both |
 | `/api/sync` | POST | `off` \| `leader` \| `follower` | `{"ok":true,"mode":"…"}` | both |
 
+- `POST /api/reboot` is the other half of `reboot_required` (Gitea #475): the
+  other reboots are side effects of their own change (`/api/wifi`,
+  `/api/datapin`) and neither exists on a HUB75 board, so a stored chain
+  arrangement or output table had no way to be applied. Offer it only when
+  `caps.reboot`; the mirror has none.
 - The password is **never** returned by `GET /api/wifi` or `GET /api/mqtt`
   (`hasPass` is the only signal). `source` says where the next boot's SSID comes
   from: flash creds, a build-time `LUXEL_SSID`, or nothing.
