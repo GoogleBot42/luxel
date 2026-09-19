@@ -1,5 +1,9 @@
 # Web UI — redesign backlog
 
+> **Superseded 2026-09-18** by the approved v2 design in
+> [docs/design/webui-v2/proposal.md](design/webui-v2/proposal.md) (epic #461).
+> This file is the historical backlog for the current UI.
+
 Captured from Jeremy's 2026-07-06 feedback batch. The web app (`web/`) has
 grown a single monolithic `App.svelte` with everything crammed into one
 header bar; it needs to become a **two-mode, tabbed application**. See
