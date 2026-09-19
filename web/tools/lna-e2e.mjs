@@ -33,12 +33,13 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join, normalize } from "node:path";
 import puppeteer from "puppeteer-core";
+import { PORT as E2E } from "./e2e-common.mjs";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
 const shotDir = process.argv[2] ?? "/tmp";
-const HTTPS_PORT = Number(process.env.LNA_HTTPS_PORT ?? 4185);
-const HTTP_PORT = Number(process.env.LNA_HTTP_PORT ?? 4186);
+const HTTPS_PORT = Number(process.env.LNA_HTTPS_PORT ?? E2E.lna.https); // E2E_PORT + 60
+const HTTP_PORT = Number(process.env.LNA_HTTP_PORT ?? E2E.lna.http); // E2E_PORT + 61
 // A private-space address nothing answers on: local-space enough for the hint
 // to apply, dead enough to fail fast. This machine's own RFC1918 address on a
 // closed high port refuses instantly — an unassigned LAN address instead hangs

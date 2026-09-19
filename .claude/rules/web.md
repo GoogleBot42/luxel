@@ -28,11 +28,21 @@ paths:
   reading `dist/index.html` after the build (one `<script>`, one
   `<link rel=stylesheet>`, no `modulepreload`) rather than assuming either
   way — that check is free; a device coldload run is not.
-- Set `E2E_PORT` when running e2e concurrently with another session — a
-  concurrent `vite preview` can hold the default port and puppeteer will
-  silently test the wrong app. Current defaults: `web/tools/e2e.mjs` uses
-  4179, `web/tools/device-e2e.mjs` uses 4181 — check those files if you need
-  the exact numbers, they can change.
+- Set `E2E_PORT` when running e2e concurrently with another session, and set
+  it to a **multiple of 100** (4200, 4300, …). Since #496 it is the base of a
+  100-port block that the whole run owns: every web-preview port, every
+  `luxel serve` mirror, the fake-WLED fixture and the DDP/sACN listeners are
+  `E2E_PORT + <fixed offset>`, listed in `web/tools/e2e-common.mjs` and
+  docs/tools.md. Nothing else may bind a literal port. Default base 4179.
+  Before the block existed, `E2E_PORT` moved only the `vite preview` server
+  and the mirror ports were literals — so a second session either died on
+  `Address already in use` or, worse, drove the browser against the other
+  session's mirror and passed.
+- Naming and confirmations are in-app dialogs (`components/Dialog.svelte` +
+  `stores/dialog.ts`, #472), never `window.prompt`/`confirm`. Harnesses drive
+  them with `acceptDialog`/`cancelDialog` from `web/tools/e2e-common.mjs`;
+  never add a `page.on("dialog")` handler — a native dialog reaching the
+  browser is the regression, and it hangs the run.
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.

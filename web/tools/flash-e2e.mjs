@@ -19,12 +19,13 @@ import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import puppeteer from "puppeteer-core";
+import { cancelDialog, dialogTitle, PORT as E2E, waitDialog } from "./e2e-common.mjs";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
 const shotDir = process.argv[2] ?? "/tmp";
-const PORT = Number(process.env.E2E_PORT ?? 4183);
-const WLED_PORT = PORT + 100;
+const PORT = E2E.web.flash; // E2E_PORT + 4 (see tools/e2e-common.mjs)
+const WLED_PORT = E2E.fakeWled; // E2E_PORT + 50
 const VERSION = "9.9.9";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -197,6 +198,19 @@ try {
   await page.select('[data-role="board-select"]', "esp32-generic");
   await page.waitForSelector('[data-role="bin-file"]', { timeout: 5000 });
   const fileInput = await page.$('[data-role="bin-file"]');
+  // the wrong-image guard is an in-app dialog now (Gitea #472): picking a file
+  // whose name isn't the board's image asks, and cancelling sends nothing
+  await fileInput.uploadFile(path.join(fwDir, LUXA));
+  await page.click('[data-role="flash-btn"]');
+  await waitDialog(page);
+  check(
+    "S4 a mismatched image name asks first",
+    (await dialogTitle(page)) === "That file name doesn't match the board",
+  );
+  await page.screenshot({ path: `${shotDir}/flash-e2e-5a-mismatch-dialog.png` });
+  await cancelDialog(page);
+  await sleep(300);
+  check("S4 cancelling the mismatch dialog uploads nothing", !wledLog.includes("/update received"));
   await fileInput.uploadFile(path.join(fwDir, BIN));
   await page.screenshot({ path: `${shotDir}/flash-e2e-5-github-mode.png` });
   await page.click('[data-role="flash-btn"]');

@@ -20,6 +20,7 @@ web/src/
     geometry.ts     the preview rig + the #372 derive-once latch  (placeholder for #463)
     pattern.ts      the pattern document, the wasm host, local library, .epe + share codecs
     notify.ts       transient notes + the banner list
+    dialog.ts       the modal primitive: promise-returning confirm/promptText
   pages/            one component per surface
     Library.svelte        Patterns Library and PixelBlaze Library (two variants, one file)
     DevicePatterns.svelte the device's stored library
@@ -31,7 +32,8 @@ web/src/
     DeviceCard, NetworkInputCard, BrightnessCard, WifiCard,
     OutputCard, ClockCard, SyncCard, MqttCard, cards.css
   components/       reusable widgets (CodeMirror wrapper, Preview, Controls,
-                    PinPanel, VarWatcher, Debugger, Gallery, PatternThumb, PlaylistRow)
+                    PinPanel, VarWatcher, Debugger, Gallery, PatternThumb,
+                    PlaylistRow, Dialog)
   lib/              non-UI logic: device HTTP client, fetchgate, LNA classifier,
                     wasm bindings, control hints, playlist transport, audio, builtins
   flash/            a SECOND rollup entry (flash.html) — the WLED takeover installer;
@@ -114,6 +116,50 @@ Channels: `save`, `share`, `map`, `mic`, `wifi`, `mqtt`, `datapin`, `ap`,
 `palette`. A channel is a *surface*, not a message — the component that renders
 `$notes.<channel>` owns where it appears and what `data-role` it carries.
 
+## The dialog primitive (`stores/dialog.ts`)
+
+Naming and every confirmation used to be `window.prompt` / `window.confirm` at
+eight call sites (Gitea #472): unstyleable, wrong on a phone, and drivable
+from a test only through a puppeteer `page.on("dialog")` handler that matched
+on the message *text*. They are now one store plus one renderer.
+
+```ts
+if (!(await confirm({ title: "Delete pattern from the device?",
+                      body: '"Aurora" is removed…', confirmLabel: "Delete",
+                      danger: true }))) return;
+
+const name = await promptText({ title: "Save pattern", label: "Name",
+                                initial: suggestion, confirmLabel: "Save" });
+if (name === null) return;          // cancelled; "" is never returned
+```
+
+- `confirm()` resolves **false** on Cancel, Escape or a backdrop click.
+- `promptText()` resolves **null** the same way, else the trimmed text. Its
+  `validate` (default: non-empty) runs on submit and keeps the dialog open
+  with the reason shown — nothing is ever disabled (proposal §5.7).
+- `reboot: true` renders the standing "the device reboots to apply this" line
+  (proposal §5.3: reboot-requiring actions are labelled as such). WiFi save,
+  setup-AP and the strip data pin use it.
+- `danger: true` makes the primary button destructive-red. Both delete sites,
+  playlist clear and the installer's wrong-image guard use it.
+- Requests never stack: a second `confirm`/`promptText` while one is on screen
+  resolves as cancelled rather than replacing what the user is reading.
+
+`components/Dialog.svelte` is the only renderer — Escape cancels, Enter
+confirms, Tab is trapped inside the panel, focus returns to whatever had it,
+and the buttons stack full-width under 420 px (D9). Exactly one instance is
+mounted per app entry: the shell, and `flash/Flash.svelte` for the installer.
+
+Its `data-role` contract (the e2e hooks): `dialog` on the panel,
+`dialog-backdrop`, `dialog-title`, `dialog-body`, `dialog-input`,
+`dialog-reboot`, `dialog-error`, `dialog-confirm`, `dialog-cancel`. Harnesses
+drive it through `acceptDialog`/`cancelDialog` in `web/tools/e2e-common.mjs`
+and must never install a `page.on("dialog")` handler.
+
+A7 (#468) moves naming into an inline-editable editor header; when it does,
+only the `promptText` call in `saveToLibrary()` goes away — the save path is
+already independent of where the name came from.
+
 `banners` is the longer-lived list for conditions rather than events
 (`setBanner(id, {level, text, role} | null)`, keyed upsert, insertion-ordered).
 The editor's compile/runtime/capacity banners are still derived state with
@@ -164,5 +210,7 @@ file with the real Layout reconciler without touching a consumer.
   `settings/cards.css`) land in that single stylesheet.
 - **`$:` only tracks what appears in its own syntax.** Name every dependency in
   the block, not just inside the function it calls.
-- `window.prompt` / `window.confirm` are still the naming and confirmation
-  affordances (8 sites). #472 replaces them with in-app dialogs.
+- **No native dialogs.** `window.prompt` / `window.confirm` / `alert` do not
+  appear anywhere under `web/src` — naming and confirmation go through
+  `stores/dialog.ts` (#472). A native dialog also hangs the e2e harnesses,
+  which deliberately install no `page.on("dialog")` handler.

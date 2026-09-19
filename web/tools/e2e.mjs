@@ -7,6 +7,7 @@
 import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import puppeteer from "puppeteer-core";
+import { acceptDialog, cancelDialog, dialogTitle, PORT as E2E, waitDialog } from "./e2e-common.mjs";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
@@ -15,7 +16,7 @@ const shotDir = process.argv[2] ?? "/tmp";
 // A non-existent shot dir used to surface as a bare ENOENT on the first
 // screenshot write, mid-suite, looking like a puppeteer failure (#224).
 fs.mkdirSync(shotDir, { recursive: true });
-const PORT = Number(process.env.E2E_PORT ?? 4179);
+const PORT = E2E.web.e2e; // E2E_PORT + 0 (see tools/e2e-common.mjs)
 
 const server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
   stdio: "ignore",
@@ -90,11 +91,9 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
   const pageErrors = [];
-  page.on("dialog", (d) => {
-    if (d.message().includes("save pattern as")) return void d.accept("e2e saved");
-    if (d.message().includes("delete")) return void d.accept();
-    void d.dismiss();
-  });
+  // No `page.on("dialog")` handler on purpose: naming and confirmations are
+  // in-app dialogs (Gitea #472). A native prompt/confirm reaching the browser
+  // would hang the run, which is exactly the regression we want.
   page.on("pageerror", (e) => pageErrors.push(String(e)));
   page.on("console", (m) => {
     if (m.type() === "error") pageErrors.push(m.text());
@@ -176,10 +175,13 @@ try {
   const fpsText = await page.$eval('[data-role="fps"]', (el) => el.textContent ?? "");
   check("engine renders (fps > 0)", parseInt(fpsText) > 10, fpsText.trim());
 
-  // keyboard shortcut: Cmd/Ctrl+S saves (the global dialog handler names it)
+  // keyboard shortcut: Cmd/Ctrl+S opens the in-app naming dialog (#472)
   await page.keyboard.down("Control");
   await page.keyboard.press("s");
   await page.keyboard.up("Control");
+  await waitDialog(page);
+  check("Ctrl+S opens the naming dialog", (await dialogTitle(page)) === "Save pattern");
+  await acceptDialog(page, "e2e saved");
   await sleep(400);
   check(
     "Ctrl+S saves the pattern",
@@ -643,10 +645,52 @@ try {
   await sleep(400);
   check("choosing strip turns mapping off", (await page.$('[data-role="subtab-map"]')) === null);
 
-  // ── 11. library: save, back-to-library, reload resumes the working copy ──
+  // ── 11. library: save (in-app naming dialog), back, reload resumes the copy ──
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.5) }");
+
+  // 11a. the cancel path: the dialog opens, Escape dismisses it, nothing saved
+  const savedCount = () => page.$$eval('[data-role="saved-pattern"]', (els) => els.length);
+  const savedBefore = await savedCount();
   await page.click('[data-role="save"]');
-  await sleep(500);
+  await waitDialog(page);
+  check("save opens the in-app naming dialog", (await dialogTitle(page)) === "Save pattern");
+  check("naming dialog has a text field", (await page.$('[data-role="dialog-input"]')) !== null);
+  check("naming dialog is not a reboot dialog", (await page.$('[data-role="dialog-reboot"]')) === null);
+  await page.screenshot({ path: `${shotDir}/e2e-dialog-naming.png` });
+  await page.setViewport({ width: 390, height: 780 });
+  await sleep(200);
+  await page.screenshot({ path: `${shotDir}/e2e-dialog-naming-390.png` });
+  check(
+    "dialog fits a 390 px viewport (no horizontal overflow)",
+    await page.$eval('[data-role="dialog"]', (el) => el.getBoundingClientRect().right <= 390),
+  );
+  await page.setViewport({ width: 1400, height: 900 });
+  await sleep(200);
+  // an empty name is refused in place — nothing is disabled, the reason shows
+  await page.$eval('[data-role="dialog-input"]', (el) => {
+    el.value = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.click('[data-role="dialog-confirm"]');
+  await sleep(200);
+  check(
+    "an empty name keeps the dialog open with a reason",
+    (await page.$('[data-role="dialog"]')) !== null &&
+      (await page.$eval('[data-role="dialog-error"]', (el) => el.textContent.trim())) !== "",
+  );
+  await page.keyboard.press("Escape");
+  await sleep(250);
+  check("Escape closes the naming dialog", (await page.$('[data-role="dialog"]')) === null);
+  check("a cancelled save adds nothing to the library", (await savedCount()) === savedBefore);
+
+  // 11b. the accept path: the typed name is the saved name
+  await page.click('[data-role="save"]');
+  await acceptDialog(page, "e2e saved");
+  await sleep(400);
+  check(
+    "the typed name becomes the pattern name",
+    (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent.trim())) === "e2e saved",
+  );
   await page.click('[data-role="editor-back"]');
   await sleep(300);
   check("back returns to the library", (await page.$('[data-role="library-panel"]:not([hidden])')) !== null);
@@ -665,8 +709,28 @@ try {
   await page.click('[data-role="saved-pattern"]');
   await sleep(400);
   check("saved chip opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
-  check("delete removes the saved entry", true);
+  // delete: a danger confirmation, cancel first (the entry survives)
   await page.click('[data-role="delete"]');
+  await waitDialog(page);
+  check(
+    "delete opens a danger confirmation",
+    (await dialogTitle(page)) === "Delete pattern from the library?" &&
+      (await page.$eval('[data-role="dialog-confirm"]', (el) => el.className)).includes("danger"),
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-dialog-delete.png` });
+  await page.setViewport({ width: 390, height: 780 });
+  await sleep(200);
+  await page.screenshot({ path: `${shotDir}/e2e-dialog-delete-390.png` });
+  await page.setViewport({ width: 1400, height: 900 });
+  await sleep(200);
+  await cancelDialog(page);
+  await page.click('[data-role="editor-back"]');
+  await sleep(300);
+  check("cancelled delete keeps the saved entry", (await page.$('[data-role="saved-pattern"]')) !== null);
+  await page.click('[data-role="saved-pattern"]');
+  await sleep(400);
+  await page.click('[data-role="delete"]');
+  await acceptDialog(page);
   await sleep(300);
   await page.click('[data-role="editor-back"]');
   await sleep(300);

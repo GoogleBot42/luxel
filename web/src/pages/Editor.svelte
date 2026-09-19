@@ -40,6 +40,7 @@
     refreshDevicePatterns,
     refreshStatus,
   } from "../stores/device";
+  import { confirm, promptText } from "../stores/dialog";
   import {
     cubeLattice,
     deriveRig,
@@ -581,30 +582,36 @@
 
   // ---- library ----
 
-  function saveToLibrary(): void {
-    const suggestion = $patternName || $exampleName || "my pattern";
-    const where = $device ? "save pattern on the DEVICE as:" : "save pattern as:";
-    const name = window.prompt(where, suggestion)?.trim();
-    if (!name) return;
+  /** Name-then-save. A7 (#468) moves the naming to an inline-editable header;
+   *  when it does, only this `promptText` call goes away — the save itself is
+   *  already independent of where the name came from. */
+  async function saveToLibrary(): Promise<void> {
+    const name = await promptText({
+      title: $device ? "Save pattern on the device" : "Save pattern",
+      label: "Name",
+      initial: $patternName || $exampleName || "my pattern",
+      placeholder: "my pattern",
+      confirmLabel: "Save",
+      validate: (v) => (v.trim() === "" ? "a name is required" : null),
+    });
+    if (name === null) return;
     if ($device) {
-      void (async () => {
-        const bc = compileToBytecode($source);
-        if (!bc) {
-          note("save", "save failed: pattern does not compile", 3000);
-          return;
-        }
-        const r = await $device?.savePattern(name, $source, bc);
-        if (r?.ok) {
-          patternName.set(name);
-          exampleName.set("");
-          devicePatternId.set(r.id ?? "");
-          dirty.set(false); // now stored on the device
-          note("save", "saved to device", 3000);
-          await refreshDevicePatterns();
-        } else {
-          note("save", r && "error" in r ? `save failed: ${r.error}` : "save failed", 3000);
-        }
-      })();
+      const bc = compileToBytecode($source);
+      if (!bc) {
+        note("save", "save failed: pattern does not compile", 3000);
+        return;
+      }
+      const r = await $device?.savePattern(name, $source, bc);
+      if (r?.ok) {
+        patternName.set(name);
+        exampleName.set("");
+        devicePatternId.set(r.id ?? "");
+        dirty.set(false); // now stored on the device
+        note("save", "saved to device", 3000);
+        await refreshDevicePatterns();
+      } else {
+        note("save", r && "error" in r ? `save failed: ${r.error}` : "save failed", 3000);
+      }
       return;
     }
     saveToLocalLibrary(name, $source);
@@ -614,19 +621,30 @@
     note("save", "saved", 2000);
   }
 
-  function deleteSaved(): void {
+  async function deleteSaved(): Promise<void> {
     if ($device && $devicePatternId) {
-      if (!window.confirm(`delete "${$patternName}" from the device?`)) return;
-      void (async () => {
-        await $device?.deletePattern($devicePatternId);
-        devicePatternId.set("");
-        note("save", "deleted from device", 2000);
-        await refreshDevicePatterns();
-      })();
+      const id = $devicePatternId; // fix the target before we await the dialog
+      const ok = await confirm({
+        title: "Delete pattern from the device?",
+        body: `"${$patternName}" is removed from the device's stored library. This cannot be undone.`,
+        confirmLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
+      await $device?.deletePattern(id);
+      devicePatternId.set("");
+      note("save", "deleted from device", 2000);
+      await refreshDevicePatterns();
       return;
     }
     if (!$patternName || !$saved.some((s) => s.name === $patternName)) return;
-    if (!window.confirm(`delete "${$patternName}" from the library?`)) return;
+    const ok = await confirm({
+      title: "Delete pattern from the library?",
+      body: `"${$patternName}" is removed from this browser's library. This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     deleteFromLocalLibrary($patternName);
     note("save", "deleted", 2000);
   }
@@ -659,8 +677,17 @@
       await navigator.clipboard.writeText(url);
       note("share", "link copied", 2500);
     } catch {
-      // clipboard needs a secure context — a device over plain http isn't
-      window.prompt("copy this link:", url);
+      // clipboard needs a secure context — a device over plain http isn't.
+      // The dialog's field opens selected, so ⌘/Ctrl-C still works.
+      await promptText({
+        title: "Copy this link",
+        body: "Your browser blocked the clipboard on this page. The link is selected below — copy it, or copy it from the address bar.",
+        label: "Link",
+        initial: url,
+        confirmLabel: "Done",
+        cancelLabel: "Close",
+        validate: () => null,
+      });
       note("share", "link in address bar", 2500);
     }
   }
@@ -1022,7 +1049,7 @@
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "s") {
       e.preventDefault();
-      saveToLibrary();
+      void saveToLibrary();
     } else if (mod && e.key === "Enter") {
       e.preventDefault();
       applyEdit(); // recompile the preview + push to the device
@@ -1062,7 +1089,7 @@
       <button
         data-role="save"
         title={$device ? "save the current pattern on the device" : "save to this browser's library"}
-        on:click={saveToLibrary}
+        on:click={() => void saveToLibrary()}
       >
         save
       </button>
@@ -1070,7 +1097,7 @@
         <button
           data-role="delete"
           title={$devicePatternId ? "remove from the device" : "remove from the library"}
-          on:click={deleteSaved}
+          on:click={() => void deleteSaved()}
         >
           delete
         </button>

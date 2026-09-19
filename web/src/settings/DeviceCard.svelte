@@ -15,6 +15,7 @@
     pixelMax,
     protocolOptions,
   } from "../stores/device";
+  import { confirm } from "../stores/dialog";
   import { layout } from "../stores/geometry";
   import { note, notes } from "../stores/notify";
   import { previewFps, runtimeError } from "../stores/pattern";
@@ -60,26 +61,27 @@
     note("datapin", "");
   }
 
-  function applyDataPin(): void {
+  async function applyDataPin(): Promise<void> {
     const pin = $dataPinChoice ?? $dataPinNext;
     if (pin === null) return;
-    if (
-      !window.confirm(
-        `Move the strip data line to GPIO${pin}${pin === $dataPinDefault ? " (board default)" : ""} and reboot the device? The strip goes dark until it is wired to that pin.`,
-      )
-    )
-      return;
-    void (async () => {
-      note("datapin", "saving…");
-      const r = await $device?.setDataPin(pin === $dataPinDefault ? "default" : pin);
-      if (r?.ok) {
-        note("datapin", `saved — the device is rebooting with data on GPIO${r.data_pin ?? pin}`);
-        dataPinNext.set(pin);
-        dataPinChoice.set(null);
-      } else {
-        note("datapin", r?.error ? `failed: ${r.error}` : "save failed");
-      }
-    })();
+    const ok = await confirm({
+      title: `Move the strip data line to GPIO${pin}?`,
+      body:
+        `The driver rebinds to GPIO${pin}${pin === $dataPinDefault ? " (the board default)" : ""}. ` +
+        "The strip stays dark until it is wired to that pin.",
+      confirmLabel: "Apply & reboot",
+      reboot: true,
+    });
+    if (!ok) return;
+    note("datapin", "saving…");
+    const r = await $device?.setDataPin(pin === $dataPinDefault ? "default" : pin);
+    if (r?.ok) {
+      note("datapin", `saved — the device is rebooting with data on GPIO${r.data_pin ?? pin}`);
+      dataPinNext.set(pin);
+      dataPinChoice.set(null);
+    } else {
+      note("datapin", r?.error ? `failed: ${r.error}` : "save failed");
+    }
   }
 </script>
 
@@ -126,7 +128,7 @@
       <button
         data-role="cfg-datapin-apply"
         disabled={!$device || ($dataPinChoice === null && $dataPinNext === null)}
-        on:click={applyDataPin}
+        on:click={() => void applyDataPin()}
       >
         apply &amp; reboot
       </button>

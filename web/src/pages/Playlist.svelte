@@ -13,6 +13,7 @@
     queuePlaylistSave,
     refreshPlaylist,
   } from "../stores/device";
+  import { confirm } from "../stores/dialog";
   import { luxel } from "../stores/pattern";
 
   /** The tab is the visible one — gates the 1 Hz follow poll. */
@@ -59,9 +60,16 @@
     queuePlaylistSave();
   }
 
-  function clearPlaylist(): void {
-    if ($playlist.items.length === 0) return;
-    if (!window.confirm("clear the whole playlist?")) return;
+  async function clearPlaylist(): Promise<void> {
+    const n = $playlist.items.length;
+    if (n === 0) return;
+    const ok = await confirm({
+      title: "Clear the playlist?",
+      body: `All ${n} item${n === 1 ? "" : "s"} are removed from the device's playlist. The patterns themselves are kept.`,
+      confirmLabel: "Clear",
+      danger: true,
+    });
+    if (!ok) return;
     playlist.update((pl) => ({ ...pl, items: [] }));
     queuePlaylistSave();
   }
@@ -150,7 +158,7 @@
         </button>
       {/if}
       {#if $playlist.items.length > 0}
-        <button data-role="pl-clear" title="remove all items" on:click={clearPlaylist}>
+        <button data-role="pl-clear" title="remove all items" on:click={() => void clearPlaylist()}>
           clear
         </button>
       {/if}

@@ -744,8 +744,10 @@ fn queue_events(state: &State, evs: Vec<[luxel_core::fixed::Fx; 4]>) {
 }
 
 /// UDP listener for one network-input protocol; parse is shared with the
-/// firmware via luxel_core::netin.
-fn netin_listener(state: Arc<State>, port: u16) {
+/// firmware via luxel_core::netin. `proto` is 1 = DDP, 2 = E1.31 — passed
+/// rather than inferred from `port`, because the port is overridable so two
+/// e2e sessions can run mirrors side by side (Gitea #496).
+fn netin_listener(state: Arc<State>, port: u16, proto: u8) {
     let sock = match std::net::UdpSocket::bind(("0.0.0.0", port)) {
         Ok(s) => s,
         Err(e) => {
@@ -753,7 +755,7 @@ fn netin_listener(state: Arc<State>, port: u16) {
             return;
         }
     };
-    if port == luxel_core::netin::E131_PORT {
+    if proto == 2 {
         // sACN defaults to multicast 239.255.<universe-hi>.<universe-lo>;
         // join enough universes for the largest strip. Unicast also works.
         let n = (state.max_pixels as usize * 3).div_ceil(luxel_core::netin::E131_CHANNELS);
@@ -771,7 +773,7 @@ fn netin_listener(state: Arc<State>, port: u16) {
             continue;
         };
         let pkt = &buf[..len];
-        if port == luxel_core::netin::DDP_PORT {
+        if proto == 1 {
             if let Some(d) = luxel_core::netin::parse_ddp(pkt) {
                 live_write(&state, d.offset, d.data, 1);
             }
@@ -2142,6 +2144,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut sync_target = String::from("255.255.255.255");
     let mut sync_port: u16 = luxel_core::netin::SYNC_PORT;
     let mut sync_http_port: u16 = 80; // a real leader device serves on :80
+    // Network-input listen ports. Standard by default (DDP 4048, sACN 5568);
+    // overridable so two e2e sessions can run mirrors at once (Gitea #496).
+    let mut ddp_port: u16 = luxel_core::netin::DDP_PORT;
+    let mut e131_port: u16 = luxel_core::netin::E131_PORT;
     let mut web_dir_arg: Option<String> = None;
     // Which board this mirror impersonates (Gitea #464): "strip" (the
     // default) or "panel" — a 64x64 HUB75 board, which changes max_pixels,
@@ -2193,6 +2199,14 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             ("--outputs", Some(v)) => match v.parse::<u8>() {
                 Ok(n) if n >= 1 => outputs = n,
                 _ => return super::usage(),
+            },
+            ("--ddp-port", Some(v)) => match v.parse() {
+                Ok(n) => ddp_port = n,
+                Err(_) => return super::usage(),
+            },
+            ("--e131-port", Some(v)) => match v.parse() {
+                Ok(n) => e131_port = n,
+                Err(_) => return super::usage(),
             },
             ("--sync-target", Some(v)) => sync_target = v.clone(),
             ("--sync-port", Some(v)) => match v.parse() {
@@ -2290,9 +2304,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         let state = state.clone();
         std::thread::spawn(move || render_loop(state));
     }
-    for port in [luxel_core::netin::DDP_PORT, luxel_core::netin::E131_PORT] {
+    for (port, proto) in [(ddp_port, 1u8), (e131_port, 2u8)] {
         let state = state.clone();
-        std::thread::spawn(move || netin_listener(state, port));
+        std::thread::spawn(move || netin_listener(state, port, proto));
     }
     {
         let state = state.clone();

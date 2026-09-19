@@ -9,11 +9,12 @@
 //   node tools/maxpixels-e2e.mjs [screenshot-dir]
 import { execSync, spawn } from "node:child_process";
 import puppeteer from "puppeteer-core";
+import { NO_NETIN, PORT as E2E } from "./e2e-common.mjs";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
-const PORT = Number(process.env.E2E_PORT ?? 4195);
-const DEV_PORT = 8733;
+const PORT = E2E.web.maxpixels; // E2E_PORT + 6 (see tools/e2e-common.mjs)
+const DEV_PORT = E2E.mirror.maxpixels; // E2E_PORT + 30
 const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const shotDir = process.argv[2] ?? "/tmp";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,7 +22,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 execSync("cargo build -q -p luxel-cli", { stdio: "inherit", cwd: ".." });
 const device = spawn(
   "../target/debug/luxel",
-  ["serve", "--port", String(DEV_PORT), "--pixels", "120"],
+  ["serve", ...NO_NETIN, "--port", String(DEV_PORT), "--pixels", "120"],
   { stdio: ["ignore", "pipe", "inherit"] },
 );
 await new Promise((resolve, reject) => {
