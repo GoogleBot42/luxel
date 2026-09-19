@@ -115,3 +115,52 @@ export async function cancelDialog(page) {
   await page.click('[data-role="dialog-cancel"]');
   await waitDialogGone(page);
 }
+
+// ── the editor header (Gitea #468) ────────────────────────────────────────
+// A7 moved the document's verbs into the editor's own header: the name edits
+// INLINE (there is no naming dialog any more) and add-to-playlist, duplicate,
+// export/import, share and delete live behind the ⋯ menu. Nothing in that
+// menu exists in the DOM until it is open, so every harness reaches them
+// through these helpers rather than clicking a role that may not be there.
+
+const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Open the ⋯ menu and click one of its items. */
+export async function menuClick(page, role) {
+  await page.click('[data-role="overflow"]');
+  await nap(150);
+  await page.click(`[data-role="${role}"]`);
+  await nap(200);
+}
+
+/** Is `role` an item of the ⋯ menu? Leaves the menu closed. */
+export async function menuHas(page, role) {
+  await page.click('[data-role="overflow"]');
+  await nap(150);
+  const el = await page.$(`[data-role="${role}"]`);
+  await page.click('[data-role="overflow"]'); // toggle it shut again
+  await nap(100);
+  return el !== null;
+}
+
+/** Commit an inline rename in the editor header. */
+export async function renameTo(page, name) {
+  await page.click('[data-role="pattern-name"]');
+  await page.waitForSelector('[data-role="name-input"]', { timeout: 2000 });
+  await page.$eval(
+    '[data-role="name-input"]',
+    (el, v) => {
+      el.value = v;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    name,
+  );
+  await page.focus('[data-role="name-input"]');
+  await page.keyboard.press("Enter");
+  await nap(200);
+}
+
+/** `saved · on device` / `unsaved` / `saved · in browser` / `not saved yet`. */
+export function saveState(page) {
+  return page.$eval('[data-role="save-state"]', (el) => (el.textContent ?? "").trim());
+}

@@ -12,8 +12,12 @@ import {
   acceptDialog,
   cancelDialog,
   dialogTitle,
+  menuClick,
+  menuHas,
   NO_NETIN,
   PORT as E2E,
+  renameTo,
+  saveState,
   waitDialog,
 } from "./e2e-common.mjs";
 import { lxpBody } from "./lxp.mjs";
@@ -199,7 +203,10 @@ try {
   // no connection chrome: the device is always connected for the API, so there
   // are no connect/disconnect/reconnect buttons and no URL field.
   check("device: no device-url field", (await page.$(".device-url")) === null);
-  check("device: no share button", (await page.$('[data-role="share"]')) === null);
+  // Share is playground-only and now lives in the editor's ⋯ menu (#468), so
+  // the check has to open the menu — an absent role is otherwise vacuous.
+  check("device: no Share in the ⋯ menu", (await menuHas(page, "share")) === false);
+  check("device: Save is labelled for the device", (await page.$eval('[data-role="save"]', (el) => el.textContent.trim())) === "Save to device");
   check("device: no reconnect button", (await page.$('[data-role="reconnect"]')) === null);
   const hasDisconnect = await page.$$eval("header button", (btns) =>
     btns.some((b) => /disconnect/i.test(b.textContent ?? "")),
@@ -309,6 +316,63 @@ try {
       await sleep(1500);
       const shape1d = await mappedPage.$eval('[data-role="preview"]', (el) => el.dataset.shape);
       check("layout: a 1D pattern on a panel previews as the panel, not a bar", shape1d === "grid");
+
+      // ---- the quiet Projection row (#468, proposal §5.4d) ----
+      // Visible only when it can matter: the pattern's dims differ from the
+      // Layout's AND the Layout offers more than one option. A 1D pattern on
+      // a 64×64 matrix is exactly that case; a 2D one on the same matrix is
+      // native and shows nothing at all (mockup S2d) — absent, not disabled.
+      check(
+        "projection: the row appears for a 1D pattern on a matrix",
+        (await mappedPage.$('[data-role="projection-row"]')) !== null,
+      );
+      const projText = await mappedPage
+        .$eval('[data-role="projection-value"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check(
+        "projection: it reads as the device default until overridden",
+        projText.startsWith("device default ·"),
+        projText,
+      );
+      await mappedPage.click('[data-role="projection-change"]');
+      await mappedPage.waitForSelector('[data-role="projection-options"]', { timeout: 2000 });
+      const projOpts = await mappedPage.$$eval('[data-role="projection-options"] button', (els) =>
+        els.map((e) => (e.textContent ?? "").trim().split(" ·")[0]),
+      );
+      check(
+        "projection: the engine lists by-index and the two axes",
+        projOpts.length >= 3,
+        projOpts.join(","),
+      );
+      await mappedPage.click('[data-role="projection-opt-x"]');
+      await sleep(600);
+      const projOvr = await mappedPage
+        .$eval('[data-role="projection-value"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check("projection: an override reads as one", /· override$/.test(projOvr), projOvr);
+      check(
+        "projection: an override offers reset, not change",
+        (await mappedPage.$('[data-role="projection-reset"]')) !== null &&
+          (await mappedPage.$('[data-role="projection-change"]')) === null,
+      );
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-projection.png` });
+      await mappedPage.click('[data-role="projection-reset"]');
+      await sleep(500);
+      check(
+        "projection: reset goes back to the device default",
+        (await mappedPage.$('[data-role="projection-change"]')) !== null,
+      );
+      // back to the 2D pattern: native on this Layout, so no row at all
+      await fetch(`${MAPPED}/api/code`, {
+        method: "POST",
+        body: await lxpBody("", "export function render2D(index, x, y) { hsv(x, 1, y) }"),
+      });
+      await mappedPage.reload({ waitUntil: "networkidle0" });
+      await sleep(1500);
+      check(
+        "projection: no row for a 2D pattern on a matrix",
+        (await mappedPage.$('[data-role="projection-row"]')) === null,
+      );
 
       // Patterns tiles + Playlist rows take the device's shape (#463: the
       // thumbnail used to be a 64-px bar on every board)
@@ -670,8 +734,13 @@ try {
   // NOT pushed, so the device keeps running the previous pattern
   await setEditor(page, "export function render(index) { hsv( }");
   await sleep(1000);
-  const banner = await page.$eval(".banner.error", (el) => el.textContent ?? "").catch(() => "");
-  check("errors: local diagnostics shown", /line \d+:\d+/.test(banner), banner.trim());
+  // The code pane owns its errors since #468: a strip pinned under it, not a
+  // banner in the rail a thousand pixels from the line.
+  const strip = await page
+    .$eval('[data-role="compile-error"]', (el) => el.textContent ?? "")
+    .catch(() => "");
+  check("errors: local diagnostics shown in the code pane", /^✗ line \d+ · /.test(strip.trim()), strip.trim());
+  check("errors: no compile banner in the rail", (await page.$(".right .banner.error")) === null);
   const still = await fetch(`${DEV}/api/pattern`);
   check("errors: broken pattern not pushed (device keeps old)", (await still.text()).includes("sliderBlue"));
 
@@ -823,6 +892,44 @@ try {
     await fetch(`${DEV}/api/output`, { method: "POST", body: "rgb 0 0 0 0 0" }); // restore
   }
 
+  // ---- the console preview runs the DEVICE output chain (#466, wired by #468) ----
+  // Colour order is the cheapest visible stage: with `bgr` the wire carries
+  // the red channel in the blue slot, and the console preview draws
+  // `lx_outpipe` bytes rather than the raw engine frame, so a pure-red pattern
+  // must preview BLUE. The playground has no device chain and keeps drawing
+  // the raw frame.
+  {
+    // The block above restored the device's order with a bare POST, which the
+    // UI never sees (/api/output is a form, not a poll) — drive the select so
+    // the store and the device agree before sampling.
+    await page.select('[data-role="out-order"]', "rgb");
+    await sleep(500);
+    await setEditor(page, "export function render(index) { rgb(1, 0, 0) }");
+    await sleep(900);
+    const sample = () =>
+      page.$eval(".strip", (c) => {
+        const d = c.getContext("2d").getImageData(0, 0, 1, 1).data;
+        return [d[0], d[1], d[2]];
+      });
+    const raw = await sample();
+    check("outpipe: rgb order previews the pattern's own red", raw[0] > 200 && raw[2] < 60, raw.join(","));
+    // drive it through the Settings form so the store refreshes the way a
+    // user's edit does (nothing polls /api/output — it is a form)
+    await page.select('[data-role="out-order"]', "bgr");
+    await sleep(900);
+    const swapped = await sample();
+    check(
+      "outpipe: the console preview follows the device's colour order",
+      swapped[2] > 200 && swapped[0] < 60,
+      swapped.join(","),
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-outpipe.png` });
+    await page.select('[data-role="out-order"]', "rgb"); // restore
+    await sleep(700);
+    const restored = await sample();
+    check("outpipe: restoring the order restores the preview", restored[0] > 200, restored.join(","));
+  }
+
   // wall clock: tz round-trips and local time tracks the host (mirror =
   // host clock; the device gets it from NTP)
   {
@@ -919,6 +1026,20 @@ try {
     // mic-to-device forwarding: with the sound toggle on in device mode,
     // the browser mic streams frames to the device (fake mic = a tone).
     // A real (trusted) click: AudioContext needs the user activation.
+    //
+    // The button exists ONLY while the pattern in the EDITOR binds sensor
+    // variables (#468, proposal §5.7) — the injection above pushed straight to
+    // the device, so put the same pattern in the editor to arm it.
+    await setEditor(
+      page,
+      "export var energyAverage\nexport var frequencyData\n" +
+        "export function render(index) { hsv(0, 1, energyAverage) }",
+    );
+    await sleep(900);
+    check(
+      "sensors: the mic button appears for a sensor pattern",
+      (await page.$('[data-role="mic-toggle"]')) !== null,
+    );
     await page.click('[data-role="mic-toggle"]');
     let forwarded = false;
     for (let i = 0; i < 16 && !forwarded; i++) {
@@ -961,15 +1082,17 @@ try {
     check("netin: pattern resumes after timeout", stIdle.live === null, JSON.stringify(stIdle));
   }
 
-  // save (editor toolbar) → in-app naming dialog → stores on the device
-  await page.click('[data-role="save"]');
-  await waitDialog(page);
-  check(
-    "library: save names it in an in-app dialog",
-    (await dialogTitle(page)) === "Save pattern on the device",
-  );
-  await acceptDialog(page, "device kept");
+  // save: the name is the editor header's, edited inline (#468) — no dialog.
+  // Re-state the pattern first: the sections above (outpipe, sensors) left
+  // their own source in the editor, and the checks below look for this one.
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.4) }");
   await sleep(900);
+  await renameTo(page, "device kept");
+  check("library: the header takes the name inline", (await saveState(page)) === "unsaved");
+  check("library: naming opens no dialog", (await page.$('[data-role="dialog"]')) === null);
+  await page.click('[data-role="save"]');
+  await sleep(900);
+  check("library: a stored pattern reads 'saved · on device'", (await saveState(page)) === "saved · on device");
   const apiList = await (await fetch(`${DEV}/api/patterns`)).json();
   check(
     "library: save-to-device stores it",
@@ -1229,9 +1352,8 @@ try {
   check("library: editor shows the stored source", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.4"));
   // delete it from the editor — an in-app danger confirmation (Gitea #472),
   // cancelled once (nothing happens) before it is accepted
-  const delBtn = await page.$('[data-role="delete"]');
-  check("library: delete button present", delBtn !== null);
-  await delBtn?.click();
+  check("library: Delete is in the editor's ⋯ menu", await menuHas(page, "delete"));
+  await menuClick(page, "delete");
   await waitDialog(page);
   check(
     "library: delete asks with a danger dialog",
@@ -1246,7 +1368,7 @@ try {
     "library: a cancelled delete keeps the pattern",
     ((await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? []).length === 1,
   );
-  await page.click('[data-role="delete"]');
+  await menuClick(page, "delete");
   await acceptDialog(page);
   await sleep(900);
   check("library: DELETE request was sent", seenReqs.length > 0, seenReqs.join(","));
@@ -1294,8 +1416,8 @@ try {
 
   // clean copy → defer to the device. Save (clean), change the device
   // out-of-band, reload: the editor must open the RUNNING pattern, not resume.
+  await renameTo(page, "device kept");
   await page.click('[data-role="save"]');
-  await acceptDialog(page, "device kept");
   await sleep(1000);
   await fetch(`${DEV}/api/code`, {
     method: "POST",
@@ -1317,18 +1439,17 @@ try {
   // params, set durations, play, advance
   await setEditor(page, "export function sliderHue(h) { g = h } export function render(index) { hsv(g + index / pixelCount, 1, 1) }");
   await sleep(900);
+  await renameTo(page, "device kept");
   await page.click('[data-role="save"]');
-  await acceptDialog(page, "device kept");
   await sleep(900);
-  const addBtn = await page.$('[data-role="add-to-playlist"]');
-  check("playlist: add-to-playlist appears for a saved pattern", addBtn !== null);
+  check("playlist: Add to playlist appears for a saved pattern", await menuHas(page, "add-to-playlist"));
   // first add with hue=0.2
   await page.$eval('input[type="range"]', (el) => {
     el.value = "0.2";
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await sleep(200);
-  await addBtn?.click();
+  await menuClick(page, "add-to-playlist");
   await sleep(300);
   // second add with hue=0.8 (same pattern, different params)
   await page.$eval('input[type="range"]', (el) => {
@@ -1336,7 +1457,7 @@ try {
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await sleep(200);
-  await addBtn?.click();
+  await menuClick(page, "add-to-playlist");
   await sleep(500);
   const plAfterAdd = await (await fetch(`${DEV}/api/playlist`)).json();
   check(
@@ -1494,6 +1615,17 @@ try {
   });
   await page.waitForSelector(".cm-content");
   await sleep(1800); // connect + device pattern sources stream in, then match
+  // the device streams each stored pattern's source in the background, so the
+  // adoption lands once the matching one has arrived — poll rather than guess
+  await page
+    .waitForFunction(
+      () =>
+        (document.querySelector('[data-role="pattern-name"]')?.textContent ?? "").includes(
+          "Named Thing",
+        ),
+      { timeout: 8000 },
+    )
+    .catch(() => null);
   const nm = await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "");
   check("untitled: running pattern adopts its saved name", nm.includes("Named Thing"), nm.trim());
 

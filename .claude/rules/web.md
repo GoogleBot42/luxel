@@ -89,3 +89,16 @@ paths:
   one long `white-space: nowrap` label widens the track past its share and the
   grid overflows its container. A desktop track written `minmax(150px, 1fr)`
   hides this, so it only shows up in the mobile media query (2026-09-19, #467).
+- A `$:` must not derive from a **store that another reactive statement in the
+  same component writes**. Svelte runs a component's reactive statements once
+  per flush, in order; a store `.set()` from inside statement N ORs its dirty
+  bit into the batch the fragment patch then uses, but does NOT re-run
+  statement M < N, and does not schedule a second flush — so the derived value
+  is stale **forever**, not for a cycle. It bit A7 (#468) the moment the
+  editor's header moved into the same component as
+  `matchRunningToLibrary()`, which sets `patternName` from a `$:`: the header
+  read "untitled pattern" for a pattern it had just adopted a name for, and
+  every harness check around it passed. Compute such values in a **function
+  called from the markup** with every dependency passed as an argument — a
+  markup expression is patched with those dirty bits and is always current
+  (2026-09-19, #468).

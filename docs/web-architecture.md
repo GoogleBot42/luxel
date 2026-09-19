@@ -25,14 +25,14 @@ web/src/
     Patterns.svelte       ONE pattern browser: the source control + tile verbs
     Playlist.svelte       transport, defaults, rows
     Settings.svelte       the card list + the visible-tab refresh
-    Editor.svelte         toolbar, code pane, playback bar, right-rail inspector
+    Editor.svelte         document header, code pane, right-rail inspector
     MapEditor.svelte      the map program: its engine, debugger and code pane
   settings/         one card per concern, each owning its form and its endpoint
     DeviceCard, NetworkInputCard, BrightnessCard, WifiCard,
     OutputCard, ClockCard, SyncCard, MqttCard, cards.css
   components/       reusable widgets (CodeMirror wrapper, Preview, Controls,
                     PinPanel, VarWatcher, Debugger, Gallery, PatternThumb,
-                    PlaylistRow, Dialog)
+                    PlaylistRow, ProjectionRow, Dialog)
   lib/              non-UI logic: device HTTP client, fetchgate, LNA classifier,
                     wasm bindings, control hints, playlist transport, audio, builtins
   flash/            a SECOND rollup entry (flash.html) — the WLED takeover installer;
@@ -62,6 +62,12 @@ the fps readout and the LNA blocked banner, and it wires page events to
 The tab set is `Patterns · Playlist · Settings` on a console and `Patterns`
 alone in the playground (proposal §4), built from one `tabs` array so Scenes
 (Phase B, Gitea #480) is one more entry, not another `{#if}`.
+
+The shell header does **not** carry the open document. Since A7 (#468) the
+editor renders its own header — back, name, save state, Save, ⋯ — and the
+shell only passes `backLabel` down and takes a `back` event up. What stays in
+the shell header is what is true of the *session*: the device chip / "Preview
+as" chip and the fps readout (proposal §5.7).
 
 Every page stays **mounted and `hidden`** when it is not the active tab, so its
 state (compiled gallery tiles, CodeMirror documents, scroll position) survives
@@ -204,14 +210,95 @@ Its `data-role` contract (the e2e hooks): `dialog` on the panel,
 drive it through `acceptDialog`/`cancelDialog` in `web/tools/e2e-common.mjs`
 and must never install a `page.on("dialog")` handler.
 
-A7 (#468) moves naming into an inline-editable editor header; when it does,
-only the `promptText` call in `saveToLibrary()` goes away — the save path is
-already independent of where the name came from.
+A7 (#468) did move naming into the inline-editable editor header, and exactly
+one `promptText` call went away with it. The dialog store is unchanged and
+still owns every confirmation (both deletes, playlist clear, the reboot
+prompts) plus the share-link fallback.
 
 `banners` is the longer-lived list for conditions rather than events
 (`setBanner(id, {level, text, role} | null)`, keyed upsert, insertion-ordered).
-The editor's compile/runtime/capacity banners are still derived state with
-bespoke markup and stay where they are.
+The editor's compile, runtime and capacity reports are derived state with
+bespoke markup and are not banners at all since A7 (#468): the first two are
+the code pane's status strip, the third a `capstrip` under the preview it is
+about. Only *conditions* — the device is unreachable, the wasm failed to
+load — reach the rail's banner list.
+
+## The editor — three owners (`pages/Editor.svelte`, Gitea #468)
+
+Proposal §5.2, mockups S2/S2b/S2c/S2d. The page used to mix four concerns
+across three bars (research/ui-audit.md §4); it now has three owners and
+nothing crosses between them.
+
+| owner | what it holds | `data-role`s |
+|---|---|---|
+| the **header** (`editor-header`) | the DOCUMENT: back · inline-editable name · save state · **Save** (the one primary action) · the ⋯ menu of document verbs | `editor-back`, `pattern-name`, `name-input`, `name-error`, `save-state`, `save`, `overflow`, `add-to-playlist`, `duplicate`, `epe-export`, `epe-import`, `share`, `delete` |
+| the **code pane** | its own errors: gutter dot + wavy underline on the line + one status strip pinned to the bottom of the pane | `compile-error`, `runtime-error`, `map-compile-error`, `.cm-err-dot`, `.cm-lintRange-error` |
+| the **preview header** | the TRANSPORT, next to the thing it controls | `preview-dims`, `pause`, `target-fps`, `mic-toggle`, `debug` |
+
+Rules that come out of the audit and must not drift back:
+
+- **The name is edited in place.** Click it, Enter or blur commits, Escape
+  cancels, an empty name is refused inline (`name-error`) — nothing is ever
+  disabled (§5.7). Save on an unnamed pattern opens that editor with the
+  reason rather than a dialog.
+- **No compile-error banner in the rail.** The rail's `banner` list is for
+  *conditions* (the device is unreachable, the wasm failed to load); an error
+  about line 14 belongs next to line 14.
+- **Absent, never disabled.** `mic-toggle` exists only while the compiled
+  pattern binds sensor variables (`Engine.wantsSensors()`); the Vars section
+  (`vars-section`) only while it exports some; the Pins panel only while it
+  touches GPIO; `share` only in the playground; `add-to-playlist` and `delete`
+  (device) only on a console. All read off the ENGINE, never the source text.
+- **The console preview runs the device output chain.** `applyOutpipe()` feeds
+  `Engine.setOutpipe` from `/api/output` + `/api/brightness` + `caps.panel`
+  (the per-pixel current model), and the render loop draws `engine.outpipe()`
+  instead of the raw frame while a device is connected (#466). The playground
+  has no device chain and keeps drawing `frame()`.
+- **A `$:` must not derive from a store another reactive statement writes.**
+  `matchRunningToLibrary()` sets `patternName`/`devicePatternId` from inside a
+  reactive statement; a `$: displayName = $patternName || …` earlier in the
+  file then renders one cycle stale *and never catches up* — Svelte folds the
+  store's dirty bit into the fragment patch but does not re-run reactive
+  statements that already ran. The header's name, save state and delete
+  visibility are therefore **functions called from the markup** with every
+  dependency passed in. (Found by device-e2e's "running pattern adopts its
+  saved name", which is the regression test for it.)
+
+Two things live in the editor only until their own ticket lands, each behind a
+comment naming it:
+
+- the **"LED layout" block** at the foot of the rail (`led-layout`, console
+  only) — the old playback bar's shape select, pixel/W×H fields, install-grid,
+  install-map and clear-map, with their original `data-role`s so device-e2e
+  keeps driving them. **A8 (#469) deletes this block** when Settings → LED
+  layout exists.
+- the **map program**, reached from the rail's "Map program" section
+  (`subtab-map`) and opened over the code pane with its own bar
+  (`map-bar`: `subtab-pattern`, `map-run`, `map-debug`). **A10 (#471)** turns
+  that into a screen of its own; `pages/MapEditor.svelte` itself does not
+  change, only where it is opened from.
+
+`Add to scene ▸` (proposal §5.4b) is deliberately not rendered at all until
+scenes exist in Phase B (#480).
+
+### Projection (`components/ProjectionRow.svelte`, proposal §5.4d)
+
+One quiet row under a hairline, after the pattern's own controls, visible
+**only** when `Luxel.projectionOptions(patternDims, layoutDims)` returns more
+than one option — i.e. the pattern's dimensionality differs from the Layout's
+AND that Layout offers a choice. Labels come from the engine so every surface
+captions a projection identically. Inherited reads as plain text
+(`device default · along x`, `change`); an override reads in accent
+(`along y · override`, `reset`).
+
+The chosen mode lives in `stores/pattern.ts`'s `projectionOverride` — a value
+of the working copy, cleared by every pattern load exactly like
+`controlValues`, and never written into the pattern source (that was the map's
+mistake). Durable per-item storage belongs to whatever *used* the pattern: a
+playlist item's values (A9, #470) or a scene layer's (Phase B). The editor
+applies it by re-installing the Layout's projection triple with this pattern's
+axis substituted, then recompiling — `pixelCount` changes under an along-axis
+projection, and the engine reads it at init.
 
 ## Geometry — the one Layout (`stores/geometry.ts`, Gitea #463)
 
@@ -288,7 +375,7 @@ playground. Per-item projection overrides are #470/#473's.
 `stores/device.ts` — `device`, `deviceBase`, `isPlayground`, `mode`,
 `deviceError`, `deviceBlocked`, `devicePixels`, `pixelMax`, `deviceHeapFree`,
 `deviceEngineHeap`, `deviceVmerr`, `deviceFps`, `deviceOutFps`,
-`deviceRescanHz`, `deviceMap`, `devicePatterns`, `brightness`,
+`deviceRescanHz`, `deviceMap`, `deviceCaps`, `devicePatterns`, `brightness`,
 `brightnessMax`, `deviceProtocol`, `protocolOptions`, `dataPin*`, `wifi*`,
 `mqtt*`, `outputStatus`, `palette*`, `clockStatus`, `syncStatus`, `netLive`,
 `playlist`; functions `connectDevice`, `detectDeviceBase`, `refresh*`,
@@ -304,7 +391,8 @@ playground. Per-item projection overrides are #470/#473's.
 `layoutKey()`, `TILE_MAX_CELLS`, `THUMB_MAX_CELLS`. See **Geometry** below.
 
 `stores/pattern.ts` — `luxel`, `loadLuxel()`, `source`, `dirty`,
-`patternName`, `exampleName`, `devicePatternId`, `controlValues`, `hints`,
+`patternName`, `exampleName`, `devicePatternId`, `controlValues`,
+`projectionOverride`, `hints`,
 `mapSrc`, `NEW_PATTERN`, `newPatternSource()`, `previewFps`, `runtimeError`, `saved`,
 `saveToLocalLibrary`, `deleteFromLocalLibrary`, `findSaved`, `startAutosave`,
 `stopAutosave`, `loadWorkingCopy`, `compileToBytecode`, `parseEpe`,
