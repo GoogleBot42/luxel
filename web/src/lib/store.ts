@@ -14,6 +14,7 @@ export interface SavedPattern {
 const LIB_KEY = "luxel.patterns";
 const CUR_KEY = "luxel.current";
 const PREVIEW_AS_KEY = "luxel.previewAs";
+const MAP_SRC_KEY = "luxel.mapSrc";
 
 function read<T>(key: string): T | null {
   try {
@@ -88,4 +89,22 @@ export function loadPreviewAs(): PreviewAs | null {
 
 export function savePreviewAs(choice: PreviewAs): void {
   write(PREVIEW_AS_KEY, choice);
+}
+
+/** The map program's source (A10, #471). It is geometry, not a pattern, so it
+ *  is persisted on its own key rather than inside the working copy — the
+ *  editor screen is reached from the Layout picker and its document must
+ *  survive a reload and every pattern load. Older copies that carried it in a
+ *  share link are handled by the boot path, not here.
+ *
+ *  There is no device-side counterpart: `GET /api/map` reports a count and
+ *  dims, never the program that produced them (Gitea #517), so a console
+ *  restores the program from this browser too. */
+export function loadMapSrc(): string | null {
+  const s = read<string>(MAP_SRC_KEY);
+  return typeof s === "string" && s !== "" ? s : null;
+}
+
+export function saveMapSrc(src: string): void {
+  write(MAP_SRC_KEY, src);
 }

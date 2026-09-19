@@ -23,6 +23,7 @@ import { derived, get, writable, type Readable, type Writable } from "svelte/sto
 import {
   AUTO_LATTICE,
   AUTO_MATRIX,
+  cloudLayout,
   DEFAULT_PREVIEW_AS,
   DEFAULT_STRIP_PIXELS,
   DEFAULT_PROJECTION,
@@ -50,6 +51,7 @@ import { device, deviceLayout, deviceProjection } from "./device";
 export {
   AUTO_LATTICE,
   AUTO_MATRIX,
+  cloudLayout,
   DEFAULT_PREVIEW_AS,
   DEFAULT_STRIP_PIXELS,
   effectiveFor,
@@ -171,6 +173,25 @@ export function setMapCoords(coords: number[][] | null): void {
 /** Switch the playground's (or, until A8, the console's) Layout choice. */
 export function setPreviewAs(choice: PreviewAs): void {
   previewAs.set(choice);
+}
+
+/**
+ * Compile and run the map program headlessly, and make its coordinates the
+ * Layout. The map editor screen (`pages/MapEditor.svelte`, A10/#471) keeps its
+ * OWN engine so it can debug and step the program; this is for the boot path,
+ * where a pre-#463 share link carried a map program and no screen is open to
+ * run it. Returns the point count, 0 when the program did not compile or
+ * plotted nothing.
+ */
+export function runMapProgram(lx: Luxel, src: string, pixels: number): number {
+  const eng = lx.compileMap(src, pixels);
+  if (!(eng instanceof Engine)) return 0;
+  const { coords } = eng.runMap();
+  eng.free();
+  if (coords.length === 0) return 0;
+  setMapCoords(coords);
+  setPreviewAs({ mode: "map", pixels: coords.length });
+  return coords.length;
 }
 
 /** Pixel caps for the small surfaces: a gallery tile and a row thumbnail keep

@@ -313,6 +313,13 @@ function cloud(coords: number[][], source: LayoutSource, projection: Projection)
   };
 }
 
+/** A Layout that is nothing but coordinates — what the map program's own
+ *  scatter/cloud preview draws through (A10, #471). The reconciler builds the
+ *  same shape for an installed custom map. */
+export function cloudLayout(coords: number[][], projection: Projection = DEFAULT_PROJECTION): Layout {
+  return cloud(coords, "user", projection);
+}
+
 /** The Layout the device itself is rendering through. */
 function fromDevice(g: DeviceGeom, projection: Projection): Layout {
   if (g.dims === 1) {

@@ -46,17 +46,21 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
   playground's Layout choice. Both machine-verified in `web/tools/e2e.mjs`.
 - [ ] **3D map preview**: a map program whose z varies (e.g.
   `plot(cos(a), sin(a), index/pixelCount - 0.5)`) → auto-rotating point
-  cloud in the preview with a "3D" badge. (Reached from the playground's
-  "Preview as → Custom map program" since #463.)
+  cloud with a "3D" badge, on the map program's own screen AND in the editor
+  preview once the map is in use. (The screen is reached from the playground's
+  "Preview as → Custom map program" since A10/#471.)
 
 ## Settings tab (device mode)
 
 - [ ] **WiFi form** — shows the saved network; changing creds reboots onto
   the new one (careful: typos strand it → AP mode should catch it now).
-- [ ] **Device map upload** (v0.1.16): "install on device" in the editor
-  rail's **LED layout** block with the layout set to `2D map` (it was the map
-  sub-tab before #468, and #469 moves the whole block into Settings → LED
-  layout); the wall renders with real geometry and it survives reboot.
+- [ ] **Device map upload** (v0.1.16): **Install on device**, the single
+  primary action of the map program's own screen (A10/#471 — reached from
+  Settings → "Custom map program →"; it was the editor rail's LED-layout block
+  between #468 and #471, and the pattern editor's map sub-tab before that);
+  the wall renders with real geometry and it survives reboot. Note that
+  nothing hands the PROGRAM back from a device yet (Gitea #517) — only its
+  coordinates — so check the program text is the one this browser wrote.
 - [ ] **Network input status row** — while LedFx/xLights (or my test
   script) streams DDP, the row says "receiving DDP" and the pattern resumes
   a few seconds after the stream stops.
