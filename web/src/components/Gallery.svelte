@@ -330,10 +330,14 @@
       use:register={t.key}
     >
       <div class="frame">
-        <button
+        <!-- §5.7: absent, never disabled. A pattern that does not compile is
+             not something to pick, so the face is a plain element instead of
+             a dimmed dead button, and the tile SAYS why (Gitea #529). -->
+        <svelte:element
+          this={t.dead ? "span" : "button"}
           class="face"
           data-role="tile-face"
-          disabled={t.dead}
+          role={t.dead ? "presentation" : "button"}
           title={t.dead ? `${t.name} (does not compile)` : t.name}
           on:click={() => !t.dead && dispatch("pick", t)}
         >
@@ -349,7 +353,7 @@
               ></span>
             {/if}
           </span>
-        </button>
+        </svelte:element>
         {#if playing}
           <span class="pill" data-role="tile-playing">▶ playing</span>
         {/if}
@@ -358,6 +362,7 @@
         {/if}
       </div>
       <span class="tname">{t.name}</span>
+      {#if t.dead}<span class="tsub err" data-role="tile-dead">does not compile</span>{/if}
       {#if t.rig}
         {@const cap = captionFor(t.dims, t.rig)}
         {#if cap}<span class="tsub" data-role="tile-caption">{cap}</span>{/if}
@@ -422,7 +427,7 @@
     cursor: pointer;
   }
 
-  .face:disabled {
+  span.face {
     cursor: default;
   }
 
@@ -521,6 +526,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* why a dead tile has no verbs (§5.7: absent, with the reason shown) */
+  .tsub.err {
+    color: var(--error);
+    opacity: 1;
   }
 
   .tsub {

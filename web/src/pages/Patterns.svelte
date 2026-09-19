@@ -288,12 +288,17 @@
             on:pick={(e) => dispatch("playDevice", e.detail.key)}
           >
             <svelte:fragment slot="actions" let:item let:dead>
-              <button
-                class="act"
-                data-role="tile-play"
-                disabled={dead}
-                on:click|stopPropagation={() => dispatch("playDevice", item.key)}>▶ Play</button
-              >
+              <!-- §5.7: nothing to PLAY when the pattern does not compile, so
+                   Play is absent (the tile says why). Edit and ⋯ stay — a
+                   broken pattern of your own must still be fixable and
+                   deletable (Gitea #529). -->
+              {#if !dead}
+                <button
+                  class="act"
+                  data-role="tile-play"
+                  on:click|stopPropagation={() => dispatch("playDevice", item.key)}>▶ Play</button
+                >
+              {/if}
               <button
                 class="act"
                 data-role="tile-edit"
@@ -332,13 +337,17 @@
           on:pick={(e) => dispatch("pick", { name: e.detail.name, source: e.detail.source ?? "" })}
         >
           <svelte:fragment slot="actions" let:item let:dead>
-            <button
-              class="act"
-              data-role="tile-edit"
-              disabled={dead}
-              on:click|stopPropagation={() =>
-                dispatch("pick", { name: item.name, source: item.source ?? "" })}>{openVerb}</button
-            >
+            <!-- §5.7: absent on a tile that does not compile — the meta link
+                 below stays, so the source is still reachable (Gitea #529) -->
+            {#if !dead}
+              <button
+                class="act"
+                data-role="tile-edit"
+                on:click|stopPropagation={() =>
+                  dispatch("pick", { name: item.name, source: item.source ?? "" })}
+                >{openVerb}</button
+              >
+            {/if}
           </svelte:fragment>
           <svelte:fragment slot="meta" let:item>
             <button
@@ -406,14 +415,16 @@
               dispatch("pick", { name: e.detail.name, source: e.detail.source ?? "" })}
           >
             <svelte:fragment slot="actions" let:item let:dead>
-              <button
-                class="act"
-                data-role="tile-edit"
-                disabled={dead}
-                on:click|stopPropagation={() =>
-                  dispatch("pick", { name: item.name, source: item.source ?? "" })}
-                >{openVerb}</button
-              >
+              <!-- §5.7: absent on a tile that does not compile (Gitea #529) -->
+              {#if !dead}
+                <button
+                  class="act"
+                  data-role="tile-edit"
+                  on:click|stopPropagation={() =>
+                    dispatch("pick", { name: item.name, source: item.source ?? "" })}
+                  >{openVerb}</button
+                >
+              {/if}
             </svelte:fragment>
             <svelte:fragment slot="meta" let:item>
               <button

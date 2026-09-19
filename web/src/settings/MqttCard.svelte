@@ -3,8 +3,14 @@
   import { device, mqttForm, mqttStatus, refreshMqtt } from "../stores/device";
   import { note, notes } from "../stores/notify";
 
+  /** Save is always live (§5.7): it validates and explains rather than
+   *  greying itself out when the device is unreachable (Gitea #529). */
   function saveMqtt(): void {
     void (async () => {
+      if (!$device) {
+        note("mqtt", "device unreachable — reload to retry");
+        return;
+      }
       note("mqtt", "saving…");
       const host = $mqttForm.host.trim();
       const r = await $device?.setMqtt($mqttForm.host.trim(), $mqttForm.port, $mqttForm.user.trim(), $mqttForm.pass);
@@ -57,7 +63,7 @@
   />
 </div>
 <div class="field">
-  <button class="primary" data-role="mqtt-save" disabled={!$device} on:click={saveMqtt}>
+  <button class="primary" data-role="mqtt-save" on:click={saveMqtt}>
     save
   </button>
   {#if $notes.mqtt}<span class="dim" data-role="mqtt-note">{$notes.mqtt}</span>{/if}

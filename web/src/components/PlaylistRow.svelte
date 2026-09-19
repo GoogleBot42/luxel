@@ -151,13 +151,24 @@
       >
       <!-- drag is a mouse gesture; these are the phone's (and the keyboard's)
            way to reorder, so they are always rendered, never hover-only -->
+      <!-- §5.7: the first row has nothing above it to swap with, so the
+           control is absent rather than dimmed; a hidden twin holds the
+           column's width so the rows stay aligned (Gitea #529) -->
       <span class="movers">
-        <button class="mv" title="move up" aria-label="move up" disabled={first}
-          on:click={() => dispatch("move", -1)}>↑</button
-        >
-        <button class="mv" title="move down" aria-label="move down" disabled={last}
-          on:click={() => dispatch("move", 1)}>↓</button
-        >
+        {#if first}
+          <span class="mv ph" aria-hidden="true">↑</span>
+        {:else}
+          <button class="mv" title="move up" aria-label="move up"
+            on:click={() => dispatch("move", -1)}>↑</button
+          >
+        {/if}
+        {#if last}
+          <span class="mv ph" aria-hidden="true">↓</span>
+        {:else}
+          <button class="mv" title="move down" aria-label="move down"
+            on:click={() => dispatch("move", 1)}>↓</button
+          >
+        {/if}
       </span>
     </span>
     {#if luxel && !missing}<PatternThumb {luxel} {source} proj={item.proj ?? null} />{/if}
@@ -320,9 +331,8 @@
     border-color: transparent;
   }
 
-  .mv:disabled {
-    opacity: 0.25;
-    cursor: default;
+  .mv.ph {
+    visibility: hidden;
   }
 
   .miss {

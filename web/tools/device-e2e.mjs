@@ -12,6 +12,7 @@ import {
   acceptDialog,
   cancelDialog,
   dialogTitle,
+  disabledSweep,
   menuClick,
   menuHas,
   NO_NETIN,
@@ -2303,6 +2304,154 @@ try {
       await hubPage.close();
       hubDev.kill();
     }
+  }
+
+  // ---- §5.7 sweep: absent, never disabled (Gitea #529) ------------------
+  //
+  // The rule the console is built on: a control is ABSENT unless the thing it
+  // acts on exists. The single deliberate exception is a control disabled
+  // because the user has to learn a BUDGET, and such a control carries
+  // `data-reason` (and shows the same words on screen). That makes the rule
+  // MECHANICAL, so assert it mechanically instead of one screenshot at a
+  // time: with every Advanced body mounted, the playlist in both states and
+  // the editor open, no `[disabled]` element may lack a `data-reason`.
+  {
+    // `adv-panel` is a HUB75 row and is absent here by design.
+    const ADV = [
+      "adv-output",
+      "adv-clock",
+      "adv-sync",
+      "adv-mqtt",
+      "adv-netin",
+      "adv-storage",
+      "adv-firmware",
+    ];
+    /** Settings tab with every disclosure — and the WiFi form — mounted. */
+    const mountSettings = async () => {
+      await page.click('[data-role="tab-settings"]');
+      await page.waitForSelector('[data-role="settings-panel"]:not([hidden])', { timeout: 8000 });
+      await page.$eval('[data-role="wifi-change"]', (el) => {
+        if (el.getAttribute("aria-expanded") !== "true") el.click();
+      });
+      for (const role of ADV) {
+        if (await page.$(`[data-role="${role}-toggle"]`)) await openAdv(page, role);
+      }
+      await sleep(400);
+    };
+    const sweep = async (what) => {
+      const bad = await disabledSweep(page);
+      check(`§5.7: nothing is disabled-without-a-reason (${what})`, bad.length === 0, JSON.stringify(bad));
+    };
+
+    // ---- state 1: nothing exists yet — an empty playlist, no palette ----
+    await fetch(`${DEV}/api/playlist`, { method: "POST", body: "D 0" });
+    await fetch(`${DEV}/api/output/palette`, { method: "DELETE" });
+    await page.click('[data-role="tab-playlist"]');
+    await sleep(900);
+    check(
+      "§5.7: an empty playlist has no Play button at all, just the empty state",
+      (await page.$('[data-role="pl-play"]')) === null &&
+        (await page.$('[data-role="pl-transport-empty"]')) !== null,
+    );
+    check(
+      "§5.7: …and no ⋯ chip either, since Clear would be its only entry",
+      (await page.$('[data-role="pl-more"]')) === null,
+    );
+    await page.screenshot({ path: `${shotDir}/no-disabled-playlist-empty.png` });
+    // #530: the Default-seconds placeholder must READ, not clip to "mar".
+    for (const w of [1400, 390]) {
+      await page.setViewport({ width: w, height: w === 390 ? 780 : 900 });
+      await sleep(350);
+      const fits = await page.$eval(
+        '[data-role="pl-default-sec"]',
+        (el) => el.scrollWidth <= el.clientWidth + 1,
+      );
+      check(`playlist: the "manual" placeholder is not clipped at ${w} px (#530)`, fits);
+      await page.screenshot({ path: `${shotDir}/playlist-default-sec-${w}.png` });
+    }
+    await page.setViewport({ width: 1400, height: 900 });
+    await sleep(300);
+
+    await mountSettings();
+    check(
+      "§5.7: a palette with no stops has no clear button",
+      (await page.$('[data-role="out-palette-clear"]')) === null,
+    );
+    await page.$eval('[data-role="out-palette-preview"]', (el) =>
+      el.scrollIntoView({ block: "center" }),
+    );
+    await sleep(250);
+    await page.screenshot({ path: `${shotDir}/no-disabled-palette-empty.png` });
+    await sweep("empty playlist · no palette · settings");
+
+    // ---- state 2: the objects exist, and the budget is at its cap ----
+    const swept = await (
+      await fetch(`${DEV}/api/patterns`, {
+        method: "POST",
+        body: await lxpBody("Sweep", "export function render(index) { hsv(0.3, 1, 1) }"),
+      })
+    ).json();
+    await fetch(`${DEV}/api/playlist`, {
+      method: "POST",
+      body: `D 5\nI ${swept.id} -1\nI ${swept.id} -1\nI ${swept.id} -1`,
+    });
+    // 32 stops = MAX_PALETTE_STOPS: the ONE budget the design says may be a
+    // disabled control, and it must carry its reason.
+    await fetch(`${DEV}/api/output/palette`, {
+      method: "POST",
+      body: `50 ${Array.from({ length: 32 }, (_, i) => `${i * 8} ${i * 8} 128 255`).join(" ")}`,
+    });
+    await page.click('[data-role="tab-playlist"]');
+    await sleep(1200);
+    check(
+      "§5.7: Play is back once the playlist has an item",
+      (await page.$('[data-role="pl-play"]')) !== null &&
+        (await page.$('[data-role="pl-more"]')) !== null,
+    );
+    check(
+      "§5.7: the first row has no dimmed ↑ — the control is simply absent",
+      (await page.$$('[data-role="playlist-item"]')).length === 3 &&
+        (await page.$$eval('[data-role="playlist-item"]', (els) =>
+          [...els[0].querySelectorAll("button")].every((b) => b.title !== "move up"),
+        )),
+    );
+    await mountSettings();
+    const capped = await page.$eval('[data-role="out-palette-add"]', (el) => ({
+      disabled: el.hasAttribute("disabled"),
+      reason: el.getAttribute("data-reason") ?? "",
+    }));
+    const capText = await page
+      .$eval('[data-role="out-palette-cap"]', (el) => (el.textContent ?? "").trim())
+      .catch(() => "");
+    check(
+      "§5.7: the ONE exception — the palette-stop budget — is disabled WITH a reason",
+      capped.disabled && /32/.test(capped.reason) && /32/.test(capText),
+      JSON.stringify({ ...capped, capText }),
+    );
+    await page.$eval('[data-role="out-palette-cap"]', (el) =>
+      el.scrollIntoView({ block: "center" }),
+    );
+    await sleep(250);
+    await page.screenshot({ path: `${shotDir}/no-disabled-palette-at-cap.png` });
+    await sweep("3 playlist items · palette at its 32-stop cap · settings");
+
+    // ---- state 3: the editor, where most of the conditional UI lives ----
+    await page.click('[data-role="tab-patterns"]');
+    await page.click('[data-role="new-pattern"]');
+    await page.waitForSelector('[data-role="editor-header"]', { timeout: 8000 });
+    await sleep(800);
+    await sweep("editor, a fresh pattern");
+    await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
+    await sleep(1200);
+    await sweep("editor, a compiled pattern");
+    await page.click('[data-role="editor-back"]');
+    await sleep(400);
+
+    // leave the device the way the sections below expect it
+    await fetch(`${DEV}/api/output/palette`, { method: "DELETE" });
+    await fetch(`${DEV}/api/playlist`, { method: "POST", body: "D 5" });
+    await fetch(`${DEV}/api/patterns/${swept.id}`, { method: "DELETE" });
+    await sleep(300);
   }
 
   // The three blocks above left the app on the Settings tab; the capacity

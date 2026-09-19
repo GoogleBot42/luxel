@@ -469,6 +469,25 @@ add,remove}` · `projection-block`, `projection-kind` (with `data-dims`),
 `panel-{clock,planes,rescan}` · `storage-{patterns,bytes,heap,psram}` ·
 `fw-{version,update,file,note}`.
 
+### `data-reason` marks the one legal disabled control (Gitea #529)
+
+"Absent, never disabled" has exactly one exception in the proposal: a control
+gating a **budget the user has to learn** (today only `out-palette-add` at its
+32-stop cap). Such a control stays `disabled` AND carries `data-reason` with
+the budget it is enforcing, in the same words a sibling element puts on screen
+— the attribute is the machine-readable half of an explanation the user can
+already read. Nothing else in the app may be `disabled` or
+`aria-disabled="true"`: a control whose object does not exist is removed from
+the DOM, and a control whose *action* can fail submits anyway and reports the
+reason inline (the Save buttons, `promptText`'s `validate`). That makes the
+rule mechanical, so the harnesses assert it mechanically:
+`disabledSweep(page)` in `web/tools/e2e-common.mjs` returns every
+`[disabled], [aria-disabled="true"]` element WITHOUT a `data-reason`, and both
+`e2e.mjs` and `device-e2e.mjs` assert the list is empty with every Advanced
+body mounted and the playlist, patterns and editor in both their empty and
+populated states. Adding a `data-reason` to silence it is a design decision,
+not a test fix.
+
 ### Visibility is a pure module (`lib/settingsCaps.ts`)
 
 A control is **absent** unless the device advertises the thing it acts on —

@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-09-19 — "absent, never disabled" made mechanical (#529); the clipped `manual` placeholder (#530)
+
+The §5.7 rule the v2 console is built on — a control is ABSENT unless the
+thing it acts on exists — had ten leaks, two of them visible on both bench
+boards. Each got a decision rather than a blanket edit: the playlist transport
+and its ⋯ chip, the palette `clear`, the first/last row movers and a dead
+tile's verbs are now ABSENT (the surface says why instead); the WiFi and MQTT
+`save` buttons are always live and VALIDATE, reporting "enter a network name"
+/ "device unreachable" inline; the data-pin `apply & reboot` appears only when
+a pin change is pending; the firmware `Update…` button steps aside for its own
+progress line while a push is in flight. The one deliberate exception stays:
+`add stop` at the 32-stop palette cap is disabled, now carrying
+`data-reason` plus the same sentence on screen.
+
+That `data-reason` convention makes the rule assertable, so it is asserted:
+`disabledSweep()` in `web/tools/e2e-common.mjs` collects every `[disabled]` /
+`[aria-disabled]` element lacking one, and `e2e.mjs` + `device-e2e.mjs` now
+fail if the list is non-empty across settings (every Advanced body mounted),
+the playlist empty and populated, the patterns grids (with a planted
+non-compiling tile) and the editor. Six sweep points in all.
+
+#530: the Playlist "Default" field was 56 px, so its `manual` placeholder read
+`mar` at every width; it is 88 px now, and the harness asserts
+`scrollWidth <= clientWidth` on it at 1400 px and 390 px rather than trusting
+a screenshot.
+
 ## 2026-09-19 — Web UI v2 Phase A complete (#461: #462–#476)
 
 All fifteen Phase A tickets merged in one day, one PR each, run as waves of

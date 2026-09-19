@@ -572,13 +572,13 @@
           </option>
         {/each}
       </select>
-      <button
-        data-role="layout-datapin-apply"
-        disabled={!$device || ($dataPinChoice === null && $dataPinNext === null)}
-        on:click={() => void applyDataPin()}
-      >
-        apply &amp; reboot
-      </button>
+      <!-- the button acts on a PENDING pin change; with none there is nothing
+           to apply, so it is absent rather than dimmed (§5.7, Gitea #529) -->
+      {#if $device && ($dataPinChoice !== null || $dataPinNext !== null)}
+        <button data-role="layout-datapin-apply" on:click={() => void applyDataPin()}>
+          apply &amp; reboot
+        </button>
+      {/if}
       <span class="dim hint" data-role="layout-datapin-note">
         {#if $notes.datapin}
           {$notes.datapin}
