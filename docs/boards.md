@@ -976,6 +976,87 @@ from 1,007,168 B to 1,011,776 B — **4.00 % → 3.51 %** of slot free. Above
 image-check's 3 % hard floor and CI is green on all three release images, but
 that is ~5.9 KB of runway and two more days like this would spend it.
 
+2026-09-19, **the OTA-slot diet** (Gitea #501 — the survey that priced eight
+candidates on real builds; this is the three that were low-risk): **−4.3 to
+−26.4 KB on every board**, and the tightest shipped image, `c6-devkit` +
+`hosted-ui`, goes **3.45 % → 4.70 %** of slot free. Three independent pieces:
+
+- **`core`/`alloc` built from source with `optimize_for_size` on both
+  arches** (`-Zbuild-std=core,alloc -Zbuild-std-features=optimize_for_size` in
+  firmware/build-esp32.sh, tools/stack-check.sh and flake.nix). Measured on
+  its own on `c6-devkit` + `hosted-ui`: `-Zbuild-std` alone **−6,992 B** — a
+  from-source `core` joins the binary's own fat LTO instead of arriving
+  prebuilt at opt-level 3 with an optimization boundary in front of it — and
+  `optimize_for_size` a further **−5,952 B**. The Xtensa boards were always
+  `-Zbuild-std` (there is no prebuilt `core` for the Espressif fork), so only
+  the size half is new there: **−4,368 B** on `pixelblaze-v3`. This is the
+  whole delta on every board that keeps the takeover.
+- **`wled-takeover` is per board**: **−24,656 B** (`pixelblaze-v3`) /
+  **−25,344 B** (`c6-devkit` + `hosted-ui`) on the boards that drop it, which
+  are `board-pixelblaze-v3` (a stock PB v3 is flashed over serial) and
+  `board-seengreat-hub75` (ships XiaoZhi). See "Supported boards" above and
+  docs/wled-migration.md.
+- **The driftsort family, for one `sort_unstable_by_key`** on a 0/1 key over a
+  handful of partition entries in takeover.rs: `quicksort` + `sort4_stable` +
+  `bidirectional_merge` + `heapsort` + `median3_rec` + `ipnsort`, **2,415 B**
+  in a devshell A/B, replaced by a hand-rolled stable partition. This is the
+  one piece the boards that KEEP the takeover also get (`nm` on the athom
+  image finds none of those six symbols now), but it is not separable from
+  the build-std delta in the table below: those rows move −4.3 to −4.4 KB
+  total, so the two contributions together are that, not each.
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `c6-devkit` + `hosted-ui` *(shipped)* | 1,012,384 | 999,200 | −13,184 | 49,376 B (4.71 %) |
+| `pixelblaze-v3` † | 1,011,648 | 985,248 | −26,400 | 63,328 B (6.04 %) |
+| `athom-music` | 1,011,680 | 1,007,248 | −4,432 | 41,328 B (3.94 %) |
+| `esp32-generic` | 1,011,264 | 1,006,896 | −4,368 | 41,680 B (3.97 %) |
+| `c3-devkit` | 964,848 | 953,200 | −11,648 | 95,376 B (9.10 %) |
+| `s3-devkit` | 958,240 | 953,920 | −4,320 | 94,656 B (9.03 %) |
+| `s3-hub75` | 965,360 | 960,928 | −4,432 | 87,648 B (8.36 %) |
+| `seengreat-hub75` † | 974,640 | 948,896 | −25,744 | 99,680 B (9.51 %) |
+| `c6-devkit` *(not a release artifact)* | 1,029,024 | 1,016,224 | −12,800 | 32,352 B (3.09 %) |
+
+Credless flake builds (`nix build .#luxel-fw-<v>` → `luxel-fw-ota.bin`), both
+columns against `origin/master` `eeb6e03`; † = `wled-takeover` dropped on this
+board; every other row is the build-std change plus the driftsort removal.
+`.stack`
+(`tools/stack-check.sh`, no function over the 12,288 B budget in any of the
+four):
+
+| | before | after |
+|---|---:|---:|
+| `board-pixelblaze-v3` | 25,492 | 25,556 |
+| `board-pixelblaze-v3` + `small-chip` | 26,892 | 26,956 |
+| `board-c6-devkit` | 137,656 | 137,552 |
+| `board-c6-devkit` + `small-chip` | 147,248 | 147,144 |
+
+**The full-UI C6 is back over the floor, and that is not enough to restore it
+as a release artifact.** `c6-devkit` without `hosted-ui` goes 1.86 % → 3.08 %,
+which clears image-check's 3 % gate by 832 B — inside one swing of the ±0.7 KB
+noise floor this section warns about. Gitea #291 stays open and the release
+matrix is unchanged; what changed is that the gap it has to close is now
+~0.5 pp instead of ~1.5 pp.
+
+**Measured and rejected, so nobody re-tries them.** Per-package
+`[profile.release.package.X] opt-level = "z"` across eight dependency crates
+(smoltcp, rust-mqtt, sequential-storage, picoserve, embassy-net, edge-dhcp,
+esp-radio, esp-hal) made the `pixelblaze-v3` image **11,504 B BIGGER** — "z"
+costs the inlining that fat LTO then cannot recover. `ESP_LOG` in
+firmware/.cargo/config.toml is a **runtime** filter, not a compile-time one:
+`info,esp_rtos::task=debug` → `error` moved the image 64 B. And **`.rodata` is
+not free**: a 16 KiB live `#[used]` array cost **exactly +16,384 B** of image
+on `pixelblaze-v3` AND on `c6-devkit` + `hosted-ui`. A sub-KB table can still
+land inside whatever segment-alignment slack exists at that moment, but that
+window is a one-off of unknown size — trading code for tables is not a size
+strategy.
+
+**Still on the table, unspent** (both cost a shipped feature, so they are
+per-board profile levers like `hosted-ui`, not fleet diets): MQTT behind a
+cargo feature is **−36,992 B** and the DDP/E1.31/sync inputs behind features
+are **−9,520 B**, both measured on `pixelblaze-v3`. The durable answer to the
+slot remains the repartition — #501 option 3.
+
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal
