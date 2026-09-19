@@ -68,38 +68,32 @@
 //! `output::transfer_busy()` stays `false` for it and the fence needs no
 //! new wait.
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use embassy_time::{Duration, Instant, Timer};
-use luxel_core::outpipe::GridMap;
+use luxel_core::outpipe::{DeviceChain, GridMap};
 
 use crate::output::{BoardOutput, OutputDriver};
 use crate::shared;
 
-/// The output pipeline's per-frame scratch and caches. Lives with whoever
-/// runs `apply_outpipe` — the render task on the direct path, the output
-/// task on the pipelined one.
+/// The device output chain's per-frame scratch and cooked LUTs. Lives with
+/// whoever runs the chain — the render task on the direct path, the output
+/// task on the pipelined one, which is the reason `DeviceChain` keeps its
+/// own scratch rather than borrowing a shared one: it has exactly one owner
+/// by construction and so cannot race the other core.
+///
+/// The chain itself is `luxel_core::outpipe::DeviceChain` (Gitea #466) — the
+/// same code the wasm playground runs, so a console preview matches the wire.
+/// It holds nothing while every `/api/output` stage is off, grows 3 B/px on
+/// the first frame after one comes on, and gives it back on the first frame
+/// after the last one goes off (Gitea #446/#476).
 struct PipeState {
-    /// Scratch copy the outpipe stages work in. Empty while every knob is
-    /// off, which is the common case — `apply_outpipe` grows it on the
-    /// first frame after a stage is switched on and DROPS it on the first
-    /// frame after the last one goes off again (Gitea #446/#476), so an
-    /// installation that never touches Settings never pays the 3 B/px and
-    /// one that experiments gets its heap back without a reboot.
-    buf: Vec<[u8; 3]>,
-    gamma: (u8, Option<Box<[u8; 256]>>),
-    /// (cooked-for epoch, luma -> color table); `u32::MAX` = never cooked.
-    palette: (u32, Option<Box<[[u8; 3]; 256]>>),
+    chain: DeviceChain,
 }
 
 impl PipeState {
     const fn new() -> Self {
-        Self {
-            buf: Vec::new(),
-            gamma: (0, None),
-            palette: (u32::MAX, None),
-        }
+        Self { chain: DeviceChain::new() }
     }
 
     /// Preview copy + output pipeline + driver write, timed.
@@ -118,7 +112,14 @@ impl PipeState {
         #[cfg(not(pipelined))]
         shared::set_pixels(frame);
         let b5 = crate::out_brightness();
-        let wire = crate::apply_outpipe(frame, &mut self.buf, &mut self.gamma, &mut self.palette, b5, grid);
+        let wire = self.chain.apply(
+            frame,
+            &crate::outpipe_settings(),
+            b5,
+            grid,
+            crate::POWER_MODEL,
+            shared::post_palette_stops,
+        );
         let t1 = Instant::now();
         let shown = out.write_frame(wire, b5);
         let t2 = Instant::now();

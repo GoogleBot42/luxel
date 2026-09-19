@@ -43,6 +43,13 @@ The playlist asymmetry is real: you POST raw and you GET decimal.
 | `/api/status` | GET | — | see below | both |
 | `/api/pixels` | GET | — | `application/octet-stream`: last rendered frame, raw RGB, 3 bytes per pixel | both |
 
+`/api/pixels` is the **engine's** frame, not the wire's: the device output
+chain (`/api/output` — palette, blur, glow, colour order, gamma, power cap)
+runs after the snapshot on both kinds of board, so a readback shows a
+pattern's own `setBlur`/`setGlow`/`setOutputPalette` exactly and the Settings
+chain not at all (docs/firmware.md). The playground runs that chain itself
+through `lx_outpipe` (Gitea #466) rather than reading it back.
+
 `/api/pixels` answers an **empty body** when there is no frame yet (before the
 first render) and, on firmware, when the heap cannot hold the response — at
 4096 px that is a 12 KB body on a heap a heavy pattern can leave under 30 KB

@@ -779,132 +779,37 @@ fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
     [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
 }
 
-/// Output pipeline (Settings): palette remap + blur + glow + color-order
-/// remap + gamma LUT + power cap, in that order, applied to a scratch copy
-/// just before protocol encoding. Returns the original frame untouched when
-/// every knob is off. Both LUTs are cached and rebuilt only when their
-/// setting changes. `grid` is the engine's view of the installed map
-/// (`Engine::grid`) — `Some` only when the map is a regular matrix, which
-/// makes blur/glow two-dimensional.
+/// The DEVICE output chain's per-board power model — the power cap models
+/// the output stage, and strips conduct every pixel at once where a HUB75
+/// panel time-multiplexes rows (see `outpipe::PowerModel`).
+#[cfg(not(feature = "hub75"))]
+pub(crate) const POWER_MODEL: luxel_core::outpipe::PowerModel =
+    luxel_core::outpipe::PowerModel::Strip;
+#[cfg(feature = "hub75")]
+pub(crate) const POWER_MODEL: luxel_core::outpipe::PowerModel =
+    luxel_core::outpipe::PowerModel::Hub75 { scan: (crate::hub75::PANEL_ROWS / 2) as u16 };
+
+/// This frame's device output-chain settings, read out of the `/api/output`
+/// globals (Gitea #466).
 ///
-/// Stage order mirrors the engine's own post-process chain (recolor, then
-/// spread light, then the output transfer) — and the two chains *compose*:
-/// a pattern's `setOutputPalette` has already recolored this frame, and the
-/// device palette recolors the result, exactly as device blur stacks on top
-/// of pattern blur. The device setting is the installation's look, not an
-/// override of the pattern's (Gitea #139).
-pub(crate) fn apply_outpipe<'a>(
-    frame: &'a [[u8; 3]],
-    pipe_buf: &'a mut alloc::vec::Vec<[u8; 3]>,
-    gamma_cache: &mut (u8, Option<alloc::boxed::Box<[u8; 256]>>),
-    pal_cache: &mut (u32, Option<alloc::boxed::Box<[[u8; 3]; 256]>>),
-    brightness5: u8,
-    grid: Option<luxel_core::outpipe::GridMap>,
-) -> &'a [[u8; 3]] {
-    use luxel_core::outpipe::{self, ColorOrder, PowerModel};
-    // The power cap models the output stage: strips conduct every pixel at
-    // once; a HUB75 panel time-multiplexes rows (see outpipe::PowerModel).
-    #[cfg(not(feature = "hub75"))]
-    const POWER_MODEL: PowerModel = PowerModel::Strip;
-    #[cfg(feature = "hub75")]
-    const POWER_MODEL: PowerModel =
-        PowerModel::Hub75 { scan: (crate::hub75::PANEL_ROWS / 2) as u16 };
-    let order = shared::COLOR_ORDER.load(Ordering::Relaxed);
-    let gamma = shared::GAMMA_TENTHS.load(Ordering::Relaxed);
-    let cap = shared::CAP_MA.load(Ordering::Relaxed);
-    let blur_pct = shared::POST_BLUR.load(Ordering::Relaxed);
-    let glow_pct = shared::POST_GLOW.load(Ordering::Relaxed);
-    let pal_pct = shared::POST_PALETTE_AMOUNT.load(Ordering::Relaxed);
-    let pal_epoch = shared::POST_PALETTE_EPOCH.load(Ordering::Relaxed);
-    let gamma_on = gamma > 0 && gamma != 10;
-    let pal_on = pal_pct > 0;
-    if order == 0 && !gamma_on && cap == 0 && blur_pct == 0 && glow_pct == 0 && !pal_on {
-        // Every stage off — hand the scratch frame and the cooked LUTs back
-        // (Gitea #446/#476). The chain grows `pipe_buf` to 3 B/px the first
-        // time ANY stage is switched on and `clear()` keeps that capacity,
-        // so before this the 12.3 KB at 4096 px stayed gone until a reboot
-        // even after the setting was turned off again — a third of the S3
-        // panel's idle headroom, held by a knob nobody was using.
-        //
-        // Dropping the `Vec` is what returns it; the `capacity() > 0` guard
-        // makes this exactly one `dealloc` at the moment the last stage goes
-        // off and a single load on every frame after that. It runs on
-        // whichever task owns the `PipeState` — the render task on a direct
-        // board, the output task on a pipelined one (pipeline.rs) — so it
-        // cannot race the other core: the buffer has one owner by
-        // construction, and nothing borrows it here (the caller's previous
-        // `wire` slice ended with the previous frame).
-        if pipe_buf.capacity() > 0 {
-            *pipe_buf = alloc::vec::Vec::new();
-            // `(0, None)` and not just `None`: `gamma_cache.0` is the gamma
-            // the cached table was cooked for, and a stale match with an
-            // empty slot would silently skip gamma on the next enable. 0 is
-            // "off", which no enabled gamma can equal.
-            *gamma_cache = (0, None);
-            *pal_cache = (u32::MAX, None);
-        }
-        return frame;
+/// The chain itself is `luxel_core::outpipe::DeviceChain` — it used to be
+/// `apply_outpipe` here, ~90 lines over functions that already lived in
+/// `luxel-core`. Lifting it means the wasm playground runs the SAME chain as
+/// the device (`lx_outpipe`), so a console preview no longer diverges from
+/// the wire by the whole Settings page, and the scratch/LUT lifecycle
+/// (Gitea #446/#476) became host-testable —
+/// `crates/luxel-core/tests/outpipe_chain.rs` holds the old body verbatim and
+/// asserts the two are byte-identical.
+pub(crate) fn outpipe_settings() -> luxel_core::outpipe::ChainSettings {
+    luxel_core::outpipe::ChainSettings {
+        order: luxel_core::outpipe::ColorOrder(shared::COLOR_ORDER.load(Ordering::Relaxed)),
+        gamma_tenths: shared::GAMMA_TENTHS.load(Ordering::Relaxed),
+        cap_ma: shared::CAP_MA.load(Ordering::Relaxed),
+        blur_pct: shared::POST_BLUR.load(Ordering::Relaxed),
+        glow_pct: shared::POST_GLOW.load(Ordering::Relaxed),
+        palette_pct: shared::POST_PALETTE_AMOUNT.load(Ordering::Relaxed),
+        palette_epoch: shared::POST_PALETTE_EPOCH.load(Ordering::Relaxed),
     }
-    if gamma_on && gamma_cache.0 != gamma {
-        *gamma_cache = (gamma, Some(alloc::boxed::Box::new(outpipe::gamma_lut(gamma))));
-    }
-    // Cook the luma → color table once per palette change, off the hot path
-    // (an unchanged palette costs one atomic compare per frame). The cached
-    // epoch is updated even when the result is None — an empty stop list
-    // must not re-cook every frame. `pal_cache.0` starts at u32::MAX, which
-    // no epoch reaches, so the first frame always cooks.
-    if pal_on && pal_cache.0 != pal_epoch {
-        let stops = shared::post_palette_stops();
-        pal_cache.0 = pal_epoch;
-        pal_cache.1 = if stops.is_empty() {
-            None
-        } else {
-            // byte domain → 16.16 0..1, the same i32 scaling the LUT index
-            // uses (no fixed-point divide on a per-boot path)
-            let b = |v: u8| Fx::from_raw(((v as i32) << 16) / 255);
-            let pal: alloc::vec::Vec<(Fx, [Fx; 3])> = stops
-                .iter()
-                .map(|(p, c)| (b(*p), [b(c[0]), b(c[1]), b(c[2])]))
-                .collect();
-            let mut lut = alloc::boxed::Box::new([[0u8; 3]; 256]);
-            outpipe::fill_palette_lut(&pal, &mut lut);
-            Some(lut)
-        };
-    }
-    pipe_buf.clear();
-    pipe_buf.extend_from_slice(frame);
-    // Recolor before the spatial stages, the way the engine's chain does —
-    // blur/glow should smear the palette's colors, not the pattern's.
-    if pal_on {
-        if let Some(lut) = pal_cache.1.as_deref() {
-            outpipe::palette_remap_frame(pipe_buf, lut, pal_pct as u32 * 256 / 100);
-        }
-    }
-    // Spatial stages next: they work in linear-ish pattern output, before
-    // gamma bends the values and the color order scrambles the channels.
-    // With a grid map installed they run in map space (rows then columns);
-    // otherwise along the pixel index, as a strip wants (Gitea #140).
-    let blur_k = blur_pct as u32 * 128 / 100;
-    let glow_g = glow_pct as u32 * 256 / 100;
-    match grid.filter(|g| g.len() == pipe_buf.len()) {
-        Some(g) => {
-            outpipe::blur_frame_grid(pipe_buf, &g, blur_k, 1);
-            outpipe::glow_frame_grid(pipe_buf, &g, glow_g);
-        }
-        None => {
-            outpipe::blur_frame(pipe_buf, blur_k, 1);
-            outpipe::glow_frame(pipe_buf, glow_g);
-        }
-    }
-    outpipe::apply(
-        pipe_buf,
-        ColorOrder(order),
-        if gamma_on { gamma_cache.1.as_deref() } else { None },
-        cap,
-        brightness5,
-        POWER_MODEL,
-    );
-    pipe_buf
 }
 
 // `RUNTIME_FLOOR` and the array-budget arithmetic live in

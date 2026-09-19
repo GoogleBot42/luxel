@@ -1,5 +1,38 @@
 # Update log
 
+## 2026-09-19 (later still) — the playground runs the device output chain (#466)
+
+`apply_outpipe` — ~90 lines in `firmware/src/main.rs` over functions that
+already lived in `luxel-core` — is now `luxel_core::outpipe::DeviceChain`, and
+the wasm build exposes it as `lx_outpipe_set` / `lx_outpipe` /
+`lx_outpipe_bytes`. Until now `lx_frame` returned `Engine::frame` bytes with
+no palette, blur, glow, gamma, colour order or power cap, so the console
+preview diverged from the device by the **whole Settings page**
+(research/engine-constraints.md §8v). It is a prerequisite for scene layers,
+where every layer carries its own post-chain, and a cheap win on its own.
+
+Byte-identity is proved rather than asserted:
+`crates/luxel-core/tests/outpipe_chain.rs` holds the pre-#466 `apply_outpipe`
+body **verbatim** as a frozen oracle and compares it against `DeviceChain` over
+thirteen stage combinations × strip / grid / serpentine-grid /
+mismatched-grid geometries × both power models × four brightness levels. It
+also covers the #476 scratch lifecycle, which was untestable while the chain
+lived in a `no_std` ESP binary: grow on the first active frame, release on
+all-off, re-grow to the same pixels, LUTs re-cooked after a release, and the
+palette stop list fetched only when its epoch moves.
+
+The firmware keeps `outpipe_settings()` (read the `/api/output` globals into a
+`ChainSettings`) and `POWER_MODEL`; `pipeline::PipeState` is now one
+`DeviceChain`. TypeScript: `Engine.setOutpipe(OutpipeSettings)` /
+`Engine.outpipe()` / `Engine.outpipeBytes()` in `web/src/lib/luxel.ts` — fed
+`GET /api/output` verbatim plus `GET /api/brightness` and `caps.panel`. Wiring
+them into the console preview is A7; nothing in `App.svelte` changed here.
+
+Worth recording because it is easy to get wrong: **`GET /api/pixels` is the
+ENGINE's frame on both kinds of board** — the direct path snapshots before the
+chain and the pipelined path's `preview()` reads the pre-output hand-off
+buffer — so the device cannot read its own outpipe back, and an outpipe change
+is judged by `pipe_us`, `heap_free` and by eye.
 ## 2026-09-19 — web v2 A1: App.svelte split into shell + stores + pages (#462)
 
 Behaviour-preserving decomposition of the 4052-line `App.svelte`, the seam

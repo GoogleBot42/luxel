@@ -19,6 +19,7 @@ use std::sync::Mutex;
 
 use luxel_core::diag::line_col;
 use luxel_core::engine::{ControlKind, Engine};
+use luxel_core::outpipe;
 use luxel_core::fixed::Fx;
 use luxel_core::vm::{StepKind, Value};
 
@@ -79,6 +80,19 @@ struct EngineSlot {
     pixels: Vec<u8>, // flattened RGB copy handed to JS
     map_buf: Vec<i32>, // flattened raw-16.16 [x y z] map coords handed to JS
     bc: Vec<u8>,       // LXBC blob, filled by lx_bytecode
+    /// The DEVICE output chain (Gitea #466) — the same
+    /// `luxel_core::outpipe::DeviceChain` the firmware runs, so a console
+    /// preview can show what the wire will carry instead of the raw engine
+    /// frame. Configured by `lx_outpipe_set`, run by `lx_outpipe`; holds no
+    /// memory until a stage is switched on.
+    chain: outpipe::DeviceChain,
+    chain_settings: outpipe::ChainSettings,
+    chain_stops: Vec<(u8, [u8; 3])>,
+    /// The device's global level AFTER its brightness curve — what the power
+    /// cap models (`outpipe::curve_brightness`, applied in `lx_outpipe_set`).
+    chain_brightness5: u8,
+    chain_model: outpipe::PowerModel,
+    outpipe_px: Vec<u8>, // flattened post-chain RGB handed to JS
 }
 
 fn set_response(s: String) {
@@ -154,6 +168,12 @@ pub unsafe extern "C" fn lx_new(
                 pixels: vec![0; pixel_count as usize * 3],
                 map_buf: Vec::new(),
                 bc: Vec::new(),
+                chain: outpipe::DeviceChain::new(),
+                chain_settings: outpipe::ChainSettings::default(),
+                chain_stops: Vec::new(),
+                chain_brightness5: 31,
+                chain_model: outpipe::PowerModel::Strip,
+                outpipe_px: Vec::new(),
             };
             let mut engines = ENGINES.lock().unwrap();
             let h = engines.iter().position(|e| e.is_none());
@@ -938,6 +958,126 @@ pub extern "C" fn lx_pixels(h: i32) -> *const u8 {
         s.pixels.as_ptr()
     })
     .unwrap_or(std::ptr::null())
+}
+
+// ---- the device output chain (Gitea #466) ----
+
+/// Field order of `lx_outpipe_set`'s settings buffer. Kept as a named list
+/// because the TypeScript wrapper (`web/src/lib/luxel.ts`) builds it by the
+/// same indices.
+const OUTPIPE_FIELDS: usize = 11;
+
+/// Configure the device output chain for this engine — everything
+/// `GET /api/output` reports, plus the two facts the device knows and the
+/// wire does not (its brightness and its per-board current model).
+///
+/// `ptr`/`len` describe a packed i32 array:
+///
+/// | index | field | units |
+/// |---|---|---|
+/// | 0 | colour order | 0..5, `outpipe::ColorOrder` codes (`/api/output` `order` name → index) |
+/// | 1 | output gamma | tenths (22 = γ2.2); 0 and 10 are off — `/api/output` `gamma` verbatim |
+/// | 2 | power cap | mA; 0 = none — `capMa` verbatim |
+/// | 3 | device blur | percent — `blur` verbatim |
+/// | 4 | device glow | percent — `glow` verbatim |
+/// | 5 | palette amount | percent — `paletteAmount` verbatim |
+/// | 6 | device brightness | 0..31 — `GET /api/brightness` |
+/// | 7 | brightness curve | tenths; 0 and 10 are off — `brightCurve` verbatim |
+/// | 8 | power model | 0 = strip, 1 = HUB75 panel |
+/// | 9 | panel scan | panel rows / 2; read only when [8] is 1 |
+/// | 10 | palette stop count | followed by that many `pos, r, g, b` quads (0..255 each) — `/api/output` `palette` is exactly that flat array |
+///
+/// Returns 1 on success, 0 for a bad handle or a short buffer.
+///
+/// The cooked palette LUT is re-cooked only when the STOP LIST actually
+/// changes, so calling this every frame with unchanged settings is cheap —
+/// but it is meant to be called when the device's settings change.
+///
+/// # Safety
+/// `ptr` must point to `len` valid i32s (lx_alloc buffers are align-1, so the
+/// values are read unaligned).
+#[no_mangle]
+pub unsafe extern "C" fn lx_outpipe_set(h: i32, ptr: *const i32, len: usize) -> i32 {
+    if len < OUTPIPE_FIELDS {
+        return 0;
+    }
+    let at = |i: usize| ptr.add(i).read_unaligned();
+    let byte = |i: usize| at(i).clamp(0, 255) as u8;
+    let n_stops = at(10).max(0) as usize;
+    if len < OUTPIPE_FIELDS + n_stops * 4 {
+        return 0;
+    }
+    let mut stops: Vec<(u8, [u8; 3])> = Vec::with_capacity(n_stops);
+    for i in 0..n_stops {
+        let o = OUTPIPE_FIELDS + i * 4;
+        stops.push((byte(o), [byte(o + 1), byte(o + 2), byte(o + 3)]));
+    }
+    let brightness = at(6).clamp(0, 31) as u8;
+    let curve = byte(7);
+    let model = if at(8) == 1 {
+        outpipe::PowerModel::Hub75 { scan: at(9).clamp(1, u16::MAX as i32) as u16 }
+    } else {
+        outpipe::PowerModel::Strip
+    };
+    with_engine(h, |s| {
+        // Bump the epoch only when the stops really moved: the chain re-cooks
+        // its 256-entry luma->colour table on an epoch change, and a caller
+        // that re-sends the same settings must not pay for that.
+        if s.chain_stops != stops {
+            s.chain_stops = stops;
+            s.chain_settings.palette_epoch = s.chain_settings.palette_epoch.wrapping_add(1);
+        }
+        s.chain_settings.order = outpipe::ColorOrder(byte(0).min(5));
+        s.chain_settings.gamma_tenths = byte(1);
+        s.chain_settings.cap_ma = at(2).max(0) as u32;
+        s.chain_settings.blur_pct = byte(3).min(100);
+        s.chain_settings.glow_pct = byte(4).min(100);
+        s.chain_settings.palette_pct = byte(5).min(100);
+        s.chain_brightness5 = outpipe::curve_brightness(brightness, curve);
+        s.chain_model = model;
+        1
+    })
+    .unwrap_or(0)
+}
+
+/// Run the configured device output chain over the engine's CURRENT frame and
+/// return a pointer to the result (pixelCount·3 bytes) — what the wire would
+/// carry, as opposed to `lx_frame`'s raw engine output.
+///
+/// The engine's own `Engine::grid()` supplies the geometry, so blur and glow
+/// are two-dimensional exactly when the device's would be. With every stage
+/// off this is the engine frame verbatim and costs one branch.
+///
+/// Call after `lx_frame`; the buffer is valid until the next call.
+#[no_mangle]
+pub extern "C" fn lx_outpipe(h: i32) -> *const u8 {
+    with_engine(h, |s| {
+        let EngineSlot { engine, chain, chain_settings, chain_stops, outpipe_px, .. } = s;
+        let grid = engine.grid();
+        let wire = chain.apply(
+            engine.pixels(),
+            chain_settings,
+            s.chain_brightness5,
+            grid,
+            s.chain_model,
+            || chain_stops.clone(),
+        );
+        outpipe_px.clear();
+        for px in wire {
+            outpipe_px.extend_from_slice(px);
+        }
+        outpipe_px.as_ptr()
+    })
+    .unwrap_or(std::ptr::null())
+}
+
+/// Bytes the device chain is holding for this engine — the 3 B/px scratch
+/// plus whichever LUTs are cooked, 0 while every stage is off (Gitea
+/// #446/#476). Exposed so the playground can show the same number the device
+/// reports losing from `heap_free`.
+#[no_mangle]
+pub extern "C" fn lx_outpipe_bytes(h: i32) -> i32 {
+    with_engine(h, |s| s.chain.resident_bytes() as i32).unwrap_or(0)
 }
 
 // ---- debugger ----

@@ -124,6 +124,9 @@ interface Exports {
   lx_analog_read(h: number, pin: number): number;
   lx_analog_pins_used(h: number, half: number): number;
   lx_pixels(h: number): number;
+  lx_outpipe_set(h: number, ptr: number, len: number): number;
+  lx_outpipe(h: number): number;
+  lx_outpipe_bytes(h: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
   lx_debug_pause(h: number): void;
@@ -139,6 +142,49 @@ interface Exports {
     heapFree: number,
     engineHeap: number,
   ): number;
+}
+
+/** Wire colour order, as `GET /api/output` reports it. */
+export type ColorOrder = "rgb" | "rbg" | "grb" | "gbr" | "brg" | "bgr";
+const COLOR_ORDERS: ColorOrder[] = ["rgb", "rbg", "grb", "gbr", "brg", "bgr"];
+
+/** The DEVICE output chain's settings — the Settings page's chain, which runs
+ *  on the finished frame just before protocol encoding, on top of whatever the
+ *  pattern's own `setBlur`/`setGlow`/`setOutputPalette` already did.
+ *
+ *  Every field is `GET /api/output` verbatim except the last three, which the
+ *  device knows and the endpoint does not report: its brightness
+ *  (`GET /api/brightness`) and its per-board current model, both of which only
+ *  matter when a power cap is set. Defaults are "stage off", so
+ *  `setOutpipe({})` is a no-op chain. */
+export interface OutpipeSettings {
+  /** `/api/output` `order`. */
+  order?: ColorOrder;
+  /** `/api/output` `gamma`, in TENTHS (22 = γ2.2). 0 and 10 both mean off. */
+  gamma?: number;
+  /** `/api/output` `capMa`. 0 = no cap. */
+  capMa?: number;
+  /** `/api/output` `brightCurve`, in tenths. 0 and 10 mean off. */
+  brightCurve?: number;
+  /** `/api/output` `blur`, percent. */
+  blur?: number;
+  /** `/api/output` `glow`, percent. */
+  glow?: number;
+  /** `/api/output` `palette` — the flat `[pos, r, g, b, …]` array, 0..255
+   *  each, exactly as the endpoint returns it. */
+  palette?: number[];
+  /** `/api/output` `paletteAmount`, percent. 0 = off. */
+  paletteAmount?: number;
+  /** `GET /api/brightness` `brightness`, 0..31. Only the power cap reads it
+   *  (the chain does not dim the frame — the driver does). Default 31. */
+  brightness?: number;
+  /** The device's per-pixel current model: a strip conducts every pixel at
+   *  once, a HUB75 panel time-multiplexes rows. `caps.panel` on
+   *  `/api/status` says which. Default `"strip"`. */
+  powerModel?: "strip" | "hub75";
+  /** Panel rows / 2 (32 for a 1/32-scan 64-row panel). Read only when
+   *  `powerModel` is `"hub75"`. Default 32. */
+  panelScan?: number;
 }
 
 /** How a modelled pattern fits the device (`luxel_core::budget::Fit`). */
@@ -461,6 +507,57 @@ export class Engine {
     }
     this.e.lx_set_map(this.h, dims, ptr, n);
     this.e.lx_dealloc(ptr, bytes);
+  }
+
+  /** Configure the DEVICE output chain for this engine (Gitea #466).
+   *
+   *  `lx_frame` returns the engine's raw frame; the device puts that through
+   *  a second chain — palette remap, blur, glow, colour order, gamma, power
+   *  cap — before it reaches the wire, so a preview that skips it diverges
+   *  from the device by the whole Settings page. `setOutpipe` +
+   *  `outpipe()` run the SAME `luxel_core::outpipe::DeviceChain` the firmware
+   *  runs, so the two agree by construction.
+   *
+   *  Feed it `GET /api/output` plus `GET /api/brightness` and the device's
+   *  `caps.panel`. Call it when those change, not per frame. */
+  setOutpipe(s: OutpipeSettings): void {
+    const pal = s.palette ?? [];
+    const stops = Math.floor(pal.length / 4);
+    const head = [
+      Math.max(0, COLOR_ORDERS.indexOf(s.order ?? "rgb")),
+      s.gamma ?? 0,
+      s.capMa ?? 0,
+      s.blur ?? 0,
+      s.glow ?? 0,
+      s.paletteAmount ?? 0,
+      s.brightness ?? 31,
+      s.brightCurve ?? 0,
+      s.powerModel === "hub75" ? 1 : 0,
+      s.panelScan ?? 32,
+      stops,
+    ];
+    const vals = head.concat(pal.slice(0, stops * 4));
+    const bytes = vals.length * 4;
+    const ptr = this.e.lx_alloc(bytes);
+    const view = new DataView(this.e.memory.buffer);
+    vals.forEach((v, i) => view.setInt32(ptr + i * 4, Math.round(v), true));
+    this.e.lx_outpipe_set(this.h, ptr, vals.length);
+    this.e.lx_dealloc(ptr, bytes);
+  }
+
+  /** The current frame AFTER the device output chain — what the wire would
+   *  carry. Identical to `frame()`'s bytes while every stage is off. Call
+   *  after `frame()`; see `setOutpipe`. */
+  outpipe(): Uint8Array {
+    const ptr = this.e.lx_outpipe(this.h);
+    return new Uint8Array(this.e.memory.buffer.slice(ptr, ptr + this.pixelCount * 3));
+  }
+
+  /** Bytes the device chain holds right now — the 3 B/px scratch plus any
+   *  cooked LUTs, 0 while every stage is off. The same number a device loses
+   *  from `heap_free` when a Settings stage is switched on (Gitea #446). */
+  outpipeBytes(): number {
+    return this.e.lx_outpipe_bytes(this.h);
   }
 
   /** True if the pattern binds any sensor-board variable (frequencyData,
