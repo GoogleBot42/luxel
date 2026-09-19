@@ -148,6 +148,14 @@ paths:
   **Never trade code for tables on the assumption that the tables are
   free** — measure the image, not the section. Same lesson as #473's
   `match` → `const` table, which cost +496 B.
+- Size gotchas measured on riscv32imc at `opt-level = "s"` (#465): `str::parse`
+  instantiates ~700 B of `from_str_radix` **per integer width**, so a parser
+  wanting u8/u16/u32 pays three times — hand-roll one `fn(&str) -> Option<u32>`
+  and narrow with `try_from`. Persisting a struct as the wire format it
+  already parses beats a binary record by a serializer + a deserializer
+  (−1.9 KB; see `PLAYLIST_KEY`/`LAYOUT_KEY`). And `slice::sort_by_key`
+  instantiates driftsort, a **4,144 B stack frame** that `tools/stack-check.sh`
+  will show you — for a list of a handful, insert in order instead.
 - Diffing symbol tables between two builds: strip the `17h<hash>E` mangling
   hash and rustc's `.NNNN` local suffix first. A raw `nm` diff shows a
   renumbered symbol as one that vanished plus one that appeared, and that

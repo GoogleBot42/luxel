@@ -1057,7 +1057,43 @@ cargo feature is **−36,992 B** and the DDP/E1.31/sync inputs behind features
 are **−9,520 B**, both measured on `pixelblaze-v3`. The durable answer to the
 slot remains the repartition — #501 option 3.
 
-## IRAM budget: where the interpreter's per-pixel code lives
+2026-09-19 (A4), **`/api/layout`** (Gitea #465 — the one geometry object),
+measured on top of the #501 diet against `origin/master` `184fedc`:
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `c6-devkit` + `hosted-ui` *(tightest gated image)* | 999,200 | 1,014,144 | +14,944 | 34,432 B (3.28 %) |
+| `pixelblaze-v3` † | 985,248 | 1,001,296 | +16,048 | 47,280 B (4.51 %) |
+| `c3-devkit` | 953,200 | 970,080 | +16,880 | 78,496 B (7.49 %) |
+| `athom-music` | 1,007,248 | 1,022,912 | +15,664 | **25,664 B (2.44 %)** |
+
+† `wled-takeover` dropped on this board by #501.
+
+**The three CI-gated variants clear the 3 % floor; `athom-music`, which is
+published but not gated, does not.** That is not a #465 fact so much as a
+`CI_VARIANTS` fact that #465 exposed: docs/releases.md has `pixelblaze-v3` in
+the gate because it "stands in for athom-music, esp32-generic, s3-devkit,
+s3-hub75 and seengreat-hub75" — and #501 stopped that being true by dropping
+`wled-takeover` on `pixelblaze-v3` and keeping it on `athom-music`. The two
+now differ by ~21.6 KB, so the stand-in reads 4.51 % while the board it
+stands for reads 2.44 %. Tracked as Gitea #513; the same shape as the
+breakages docs/releases.md already records for gating one board.
+
+Where the +14.9 KB sits on the C6 (`nm --print-size`, riscv32imc,
+`opt-level="s"` + fat LTO + build-std `optimize_for_size`):
+`luxel_core::layout::parse` ~4.9 KB (the line grammar),
+`Layout::push_json` ~1.3 KB, `luxel_fw::layout::store` ~1.4 KB, `json` 836 B,
+`init` 798 B, `set_from_wire` 686 B, `note` 432 B, `push_output` 328 B,
+`current` 272 B — plus ~1 KB in the server's flat dispatcher and ~800 B in
+`main`. Two size fixes that paid and are worth reusing: persisting the Layout
+as **its own POST wire** re-parsed at boot rather than a binary record (one
+codec instead of a serializer plus a deserializer, **−1.9 KB**), and a
+hand-rolled decimal `num()` in place of `str::parse` (**−1.3 KB** —
+`from_str_radix` is ~700 B per integer width and the grammar wanted three).
+`sort_by_key` over the output table was dropped for an ordered insert:
+driftsort is a **4,144 B stack frame** in the web task, which
+`tools/stack-check.sh` surfaced — the same family #501 removed from
+takeover.rs, found independently on the stack side rather than the image side.
 
 Since Gitea #328 the hot half of the interpreter can execute from internal
 SRAM (`.rwtext`) instead of through the flash instruction cache. What each

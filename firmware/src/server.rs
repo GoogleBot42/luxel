@@ -1667,6 +1667,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             crate::shared::BRIGHT_CURVE.store(bc, Ordering::Relaxed);
                             crate::shared::POST_BLUR.store(bl, Ordering::Relaxed);
                             crate::shared::POST_GLOW.store(gl, Ordering::Relaxed);
+                            crate::layout::note_alias_change(); // colour order
                             let _ = crate::config::write_device(
                                 &crate::shared::device_config_snapshot(),
                             );
@@ -1827,6 +1828,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             // persistence reads (the applied atomic lags).
                             crate::shared::WANT_PIXEL_COUNT.store(n, Ordering::Relaxed);
                             MSG_QUEUE.send(Msg::Config(n)).await;
+                            crate::layout::note_alias_change();
                             let cfg = DeviceConfig { pixel_count: n, ..crate::shared::device_config_snapshot() };
                             let mut out = String::from("{\"ok\":true,\"pixels\":");
                             push_u32(&mut out, n);
@@ -1866,6 +1868,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let stored: Result<u8, &'static str> = match want {
                         Ok(want) => {
                             crate::shared::set_want_data_pin(want);
+                            crate::layout::note_alias_change();
                             let cfg = DeviceConfig { data_pin: want, ..crate::shared::device_config_snapshot() };
                             crate::config::write_device(&cfg)
                                 .map(|()| want.unwrap_or(crate::board::DEFAULT_DATA_PIN))
@@ -1900,6 +1903,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             // as /api/config above
                             crate::shared::WANT_PROTOCOL.store(p.as_u8(), Ordering::Relaxed);
                             MSG_QUEUE.send(Msg::Protocol(p.as_u8())).await;
+                            crate::layout::note_alias_change();
                             let cfg = DeviceConfig { protocol: p.as_u8(), ..crate::shared::device_config_snapshot() };
                             let mut out = String::from("{\"ok\":true,\"protocol\":\"");
                             push_piece(&mut out, p.name());
@@ -1915,10 +1919,74 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         }
                     }))
                 }
+                // POST /api/layout — the ONE geometry object (Gitea #465).
+                // Line format: `strip N` | `matrix PW PH COLS ROWS START DIR
+                // SNAKE ROT180 [SCAN]` | `map …` + `out …` + `proj1d/2d/3d`.
+                // Supersedes /api/config pixels, /api/map grid, /api/datapin
+                // and /api/protocol, which stay as aliases for one release.
+                // Answers with the whole GET body so a client never re-GETs.
+                "/api/layout" => {
+                    Some(json_response(match crate::layout::set_from_wire(&text(&raw)) {
+                        Err(e) => e,
+                        Ok(applied) => {
+                            // The Layout's own edits go through the paths
+                            // that already own that state — the pixel count
+                            // via the render task, the map via devicemap —
+                            // so the aliases and this endpoint can never
+                            // report different things.
+                            if let Some(m) = applied.map.as_deref() {
+                                crate::devicemap::set_from_wire(m);
+                            }
+                            if let Some(n) = applied.pixels {
+                                crate::shared::WANT_PIXEL_COUNT.store(n, Ordering::Relaxed);
+                                MSG_QUEUE.send(Msg::Config(n)).await;
+                            }
+                            if let Some(p) = applied.proto {
+                                MSG_QUEUE.send(Msg::Protocol(p)).await;
+                            }
+                            // Only the fields the nvs device record owns
+                            // (pixel count, protocol, data pin) need it
+                            // rewritten — a projection-only POST must not
+                            // erase a 4 KiB sector for nothing.
+                            let touches_nvs = applied.pixels.is_some()
+                                || applied.proto.is_some()
+                                || applied.data_pin.is_some();
+                            let persisted = if touches_nvs {
+                                crate::config::write_device(
+                                    &crate::shared::device_config_snapshot(),
+                                )
+                            } else {
+                                Ok(())
+                            };
+                            if let Some(p) = applied.data_pin {
+                                esp_println::println!(
+                                    "layout: data pin → GPIO{} stored; reboot to apply",
+                                    p
+                                );
+                            }
+                            let mut out =
+                                crate::layout::ok_json(applied.reboot_required, applied.pixels);
+                            let note = match (applied.persisted, persisted) {
+                                (_, Err(e)) => Some(e),
+                                (false, _) => Some("the pattern store refused the record"),
+                                _ => None,
+                            };
+                            if let Some(e) = note {
+                                out.pop(); // the closing brace
+                                push_not_persisted(&mut out, e);
+                            }
+                            out
+                        }
+                    }))
+                }
                 // POST /api/map — install a computed 2D/3D map (raw 16.16).
                 // Empty/invalid body clears it. Applied live + persisted.
+                // ALIAS of `/api/layout map …` (Gitea #465): it writes the
+                // same state, and tells the Layout so its `kind` follows.
                 "/api/map" => {
-                    let (installed, count) = crate::devicemap::set_from_wire(&text(&raw));
+                    let body = text(&raw);
+                    let (installed, count) = crate::devicemap::set_from_wire(&body);
+                    crate::layout::note_map_changed(installed && !body.trim().is_empty());
                     let mut out = String::from("{\"ok\":true,\"installed\":");
                     push_piece(&mut out, if installed { "true" } else { "false" });
                     push_piece(&mut out, ",\"count\":");
@@ -2249,6 +2317,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     push_piece(&mut out, "}");
                     Some(json_response(out))
                 }
+                "/api/layout" => Some(json_response(crate::layout::to_json())),
                 "/api/playlist" => Some(json_response(crate::playlist::to_json())),
                 "/api/map" => Some(json_response(crate::devicemap::to_json())),
                 "/api/protocol" => {

@@ -156,6 +156,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 ## Tripwires
 - Firmware app must fit the 1 MiB OTA slot — docs/boards.md tracks per-board margin;
   `tools/ci.sh` measures it on every run (`build-esp32.sh` alone only checks the ELF).
+  **The margin is thin and the cheap diets are spent** (2026-09-19, #501/#465): the
+  tightest shipped image sits ~1.7 pp above `image-check`'s 3 % floor, and one medium
+  feature is ~1.5 pp. Probe the image cost EARLY — a skeleton
+  `nix build .#luxel-fw-c6-devkit-hosted` against master — not after it is written;
+  #465 was finished before anyone knew it did not fit.
 - Boot-time multi-KB loads wait for `wait_config_up()` — WiFi mallocs don't null-check.
 - `BUILTINS` in `crates/luxel-core/src/vm.rs` is append-only; never reorder.
 - A serial flash leaves the assets partition stale → follow with

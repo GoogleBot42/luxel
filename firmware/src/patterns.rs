@@ -67,6 +67,7 @@
 //! | [MAP_KEY] | ≤ [BLOB_MAX] | per pixel-map upload |
 //! | [RESUME_KEY] | ~16 | per swap (deduped: skipped when unchanged) |
 //! | [PALETTE_KEY] | ≤ 64 | per palette edit |
+//! | [LAYOUT_KEY] | ~40–110 | per Layout edit |
 //!
 //! Patterns are NOT in here any more — not even their directory.
 //!
@@ -316,6 +317,12 @@ pub const RESUME_KEY: u32 = 0x7FFF_FFFB;
 /// Device output palette (see outpal.rs) — variable-length, so it lives
 /// here rather than in the fixed-size nvs device record.
 pub const PALETTE_KEY: u32 = 0x7FFF_FFFA;
+/// Device Layout — kind, matrix arrangement, output table and projection
+/// defaults (see layout.rs). The pixel count and the pixel map deliberately
+/// stay where they already are (the nvs device record and [MAP_KEY]), so
+/// `/api/config` and `/api/map` remain honest aliases rather than a second,
+/// drifting copy (Gitea #465).
+pub const LAYOUT_KEY: u32 = 0x7FFF_FFF9;
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.

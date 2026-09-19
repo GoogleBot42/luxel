@@ -342,9 +342,16 @@ from the firmware: `reboot:false`, `ota:false`, `psram:false`. `--board panel`
 makes it impersonate a 64×64 HUB75 board — `max_pixels` 4096, its own `64×64`
 grid installed at startup (and reinstalled when a map is cleared, as
 `devicemap::board_default` does on the firmware), `panel:true`,
-`strip_driver:false`, `power_cap:false`, `layers:2` — and `--outputs N` sets
-`caps.outputs`. Together they let the Settings page's capability gating be
+`strip_driver:false`, `power_cap:false`, `layers:2`, and the matching
+`/api/layout` (`kind:"matrix"`, 64×64, 4096 px) — and `--outputs N` sets
+`caps.outputs`, which is what lets a two-output `/api/layout` be driven
+without the Athom. Together they let the Settings page's capability gating be
 driven without the hardware; see docs/tools.md.
+
+The mirror's Layout is **not persisted** — it has no flash, so a restart comes
+back to the board default. Everything else about `/api/layout` is identical by
+construction: the grammar, the validation and the JSON all live in
+`luxel_core::layout`, which both hosts call.
 
 ## Live coding and the running pattern
 
@@ -467,6 +474,127 @@ fine, or still being computed.
 Unrecognized lines are ignored. Firmware persists the body verbatim to flash;
 both sides apply edits live if already playing.
 
+## `/api/layout` — the one geometry object
+
+One endpoint for the one concept (proposal §2, Gitea #465): what shape the
+installation IS. It **supersedes** `/api/config`'s pixel count, `/api/map
+grid`, `/api/datapin` and `/api/protocol` as the source of truth; those stay
+as aliases for one release (see "Aliases" below).
+
+`GET /api/layout` returns the whole object, the old `/api/map` payload
+embedded so a client needs one fetch:
+
+```json
+{"kind":"matrix","source":"regular","dims":2,"regular":true,
+ "pixels":1024,"max":2048,"w":64,"h":16,
+ "matrix":{"pw":32,"ph":16,"cols":2,"rows":1,"start":"tl","dir":"row",
+           "snake":1,"rot180":0,"scan":16},
+ "outputs":[{"n":0,"pin":18,"proto":"ws2812","order":"grb","count":2,
+             "rev":false}],
+ "proj":{"proj1d":"index","proj2d":"z","proj3d":"xy"},
+ "map":{"installed":true,"dims":2,"count":1024,"kind":"grid","w":64,"h":16}}
+```
+
+| field | meaning |
+|---|---|
+| `kind` | `strip` · `matrix` · `map`. A HUB75 board is always `matrix`; a strip board is `strip` until a matrix or a map is configured. |
+| `source` | `regular` (the shape comes from the strip/matrix fields) · `map` (from a map program's coordinates). "Custom" is a coordinate SOURCE, not a dimensionality. |
+| `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
+| `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
+| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor, `0` = the board's own. |
+| `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
+| `proj` | The §5.4d projection defaults (`docs/spec/projection.md`), tokens `index\|x\|y\|z\|xy\|xz\|yz`. |
+| `map` | The `GET /api/map` body verbatim. |
+
+A client that wants the index→coordinate mapping (a console preview showing
+"real wiring") has everything here: `kind` + `w`/`h` + the `matrix` block's
+`start`/`dir`/`snake`/`rot180`.
+
+**`POST /api/layout`** takes a line-oriented body, ≤ 4 KiB, like the playlist.
+Blank lines and `#` comments are ignored; line order is free; **at most one**
+`strip`/`matrix`/`map` line per body:
+
+```text
+strip <pixels>
+matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot180 0|1> [<scan>]
+map [grid <w> <h> | <dims> <raw16.16…>]
+out <n> <pin> <sk9822|ws2812> <rgb|rbg|grb|gbr|brg|bgr> <count> [rev]
+out none
+proj1d|proj2d|proj3d <index|x|y|z|xy|xz|yz>
+```
+
+Example — a 120 px strip split across the Athom's two outputs, the second run
+wired backwards, with 1D patterns laid along x:
+
+```text
+strip 120
+out 0 18 ws2812 grb 60
+out 1 19 ws2812 grb 60 rev
+proj1d x
+```
+
+Only fields meaningful for the kind are accepted. `out` lines are
+all-or-nothing: one of them replaces the whole table, a body with none leaves
+the outputs untouched, and **`out none` empties the table** — back to the one
+implicit output built from the device's live data pin, protocol and colour
+order, which is the state a board with nothing stored is in. `map` takes
+**exactly** the `POST /api/map`
+wire, so a 64×64 panel is still `map grid 64 64` (a coordinate map larger than
+the 4 KiB request buffer still cannot be POSTed — that is what the grid form
+is for). Bare `map` clears.
+
+The response is the GET body with `"ok":true,"reboot_required":B` in front, so
+a client never has to re-fetch. A bad line answers
+`{"ok":false,"error":"…","line":N}` and **changes nothing**; `line` is 1-based
+(`0` = the body as a whole, e.g. the output-count sum).
+
+**Validation.** Pixel counts against the board's `max`; `pw·ph·cols·rows`
+against it too; output indices against `caps.outputs`; pins against the
+board's reserved set (the same check `/api/datapin` runs); protocol names from
+`GET /api/protocol`'s `options` (aliases accepted); colour orders from the
+`/api/output` set; and **the outputs' counts must add up to the Layout's pixel
+space** — pixels on a strip, panels on a matrix (proposal D11: an output
+drives a consecutive run of the ONE pixel space). A HUB75 board refuses both
+`strip` and `out`: it IS a matrix and has no configurable strip output.
+
+**Live vs reboot.** These apply on the next frame, no reboot:
+
+- `pixels` (`strip N`, `matrix …`, `map grid W H`), the engine grid, the map,
+  and the `proj*` defaults. `/api/status`'s `geom` follows within a frame.
+
+These are **stored and reported only** until a reboot builds them, and a POST
+that changes one answers `"reboot_required":true`:
+
+- the chain wiring — `cols`, `rows`, `start`, `dir`, `snake`, `rot180`, `scan`
+  (the boot-time panel→pixel remap is Gitea #475);
+- every `out` line, and an output-0 `pin` change (the strip driver binds its
+  DATA pin once, at boot — the same reason `/api/datapin` reboots). Driving
+  more than the first output is Gitea #474.
+
+**Persistence.** Firmware stores the Layout as a ~20-byte record (plus 9 B per
+output) under the pattern store's reserved `LAYOUT_KEY`. It deliberately does
+**not** carry the pixel count or the map payload — those keep their existing
+homes (the nvs `LXDV` device record and the map blob), which is exactly what
+keeps the aliases below honest instead of a second, drifting copy. A device
+with no record boots its board default: a HUB75 board as its panel, a strip
+board as its strip, or `kind:"map"` when a map is already installed. The
+mirror keeps the same state in memory and forgets it on exit.
+
+**Aliases (deprecated, kept for one release).** `POST /api/config` (pixel
+count), `POST /api/map` (the map), `POST /api/datapin` and `POST
+/api/protocol` all read and write the same state `/api/layout` reports, so
+either endpoint is correct — but new clients should use `/api/layout`, which
+is the only one that can express an arrangement, an output table or a
+projection default. Two differences worth knowing:
+
+- `POST /api/map grid W H` does **not** resize the pixel space (its
+  historical contract); `POST /api/layout map grid W H` does, because a
+  Layout is one object.
+- With a multi-output table stored, an alias that changes the pixel count
+  leaves the table's partition alone (it would have to guess); re-POST
+  `/api/layout` with fresh `out` lines to re-partition. With a single output
+  the count follows.
+
 ## Device settings
 
 All of these apply **live** and (on firmware) **persist to flash** — no reboot.
@@ -484,8 +612,10 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 | `/api/output` | POST | `<order> <gamma_tenths> <cap_ma> [<bright_curve_tenths> <blur_pct> <glow_pct>]` | `{"ok":true,"order","gamma","capMa","brightCurve","blur","glow"}` | both |
 | `/api/output/palette` | POST | `<amount_pct> <pos> <r> <g> <b> …` | firmware `{"ok":true}`; mirror `{"ok":true,"palette":[…],"paletteAmount":N}` | both |
 | `/api/output/palette` | DELETE | — | `{"ok":true}` | both |
-| `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` (firmware; the mirror omits `kind` and adds the `proj*` triple) | both |
-| `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` (mirror also: `proj1d=… proj2d=… proj3d=…`) | `{"ok":true,"installed":bool,"count":N}` (mirror adds the `proj*` triple) | both |
+| `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` | both |
+| `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` | `{"ok":true,"installed":bool,"count":N}` | both |
+| `/api/layout` | GET | — | the whole Layout — see "`/api/layout` — the one geometry object" above | both |
+| `/api/layout` | POST | `strip`/`matrix`/`map`/`out`/`proj*` lines | the GET body + `"ok"`/`"reboot_required"`, or `{"ok":false,"error":…,"line":N}` | both |
 | `/api/clock` | GET | — | `{"synced":bool,"local":<unix secs, local>,"tzMinutes":N}` | both |
 | `/api/clock` | POST | tz offset from UTC in minutes | `{"ok":true,"tzMinutes":N}` | both |
 
@@ -523,18 +653,21 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
   form for matrices.
 - **Projection defaults** (`proj1d`/`proj2d`/`proj3d`, tokens
   `index|x|y|z|xy|xz|yz`) say how a pattern whose dimensionality differs from
-  the Layout's is shown on it — `docs/spec/projection.md` has the table. Their
-  home is **`/api/layout`, reserved for ticket A4 (Gitea #465)**; the engine
-  mechanism landed first (#473). Until A4 lands, **the mirror only** accepts
-  them as extra whitespace-separated tokens anywhere in a `POST /api/map`
-  body (a body with nothing but `proj*` tokens keeps the installed map) and
-  reports them from `GET /api/map`. The firmware does not carry them yet, so
-  a console talking to a real device gets the defaults
-  (`proj1d=index proj2d=z proj3d=xy`), which are a no-op on every Layout.
+  the Layout's is shown on it — `docs/spec/projection.md` has the table. They
+  live on **`/api/layout`** (Gitea #465; the engine mechanism was #473) on
+  both hosts, and are applied to the engine at boot and on every POST. The
+  `proj*=` tokens the mirror briefly accepted on `POST /api/map` are gone.
 - `POST /api/clock` accepts −840..=840 minutes.
 - Firmware settings whose flash write fails still apply live and add
   `"note":"not persisted: …"` to the `{"ok":true,…}` body (`/api/brightness`,
-  `/api/config`, `/api/protocol`).
+  `/api/config`, `/api/protocol`, `/api/layout`).
+- **Deprecated for one release (Gitea #465):** `POST /api/config`,
+  `POST /api/map`, `POST /api/datapin` and `POST /api/protocol` are aliases of
+  `/api/layout`, which is the source of truth for geometry. They read and
+  write the same state and keep working; a new client should use
+  `/api/layout` — it is the only one that can express a panel arrangement, an
+  output table or a projection default. See the `/api/layout` section for the
+  two places the alias contracts differ.
 
 ## Network, provisioning, and integrations
 
