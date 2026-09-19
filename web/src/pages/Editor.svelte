@@ -54,7 +54,6 @@
     devicePixels,
     deviceRescanHz,
     deviceVmerr,
-    installDeviceGridMap,
     isPlayground,
     outputStatus,
     paletteAmount,
@@ -103,7 +102,7 @@
   /** What the back button returns to — the shell knows, the editor doesn't. */
   export let backLabel = "Patterns";
 
-  const dispatch = createEventDispatcher<{ open: void; back: void; openmap: void }>();
+  const dispatch = createEventDispatcher<{ open: void; back: void }>();
 
   let editor: CodeEditor;
   let preview: Preview;
@@ -150,13 +149,8 @@
   let lastT = 0;
   let lastPoll = 0;
 
-  /** The Layout is a custom map — the ONE condition under which the map
-   *  program is reachable at all (proposal §5.7). The editor does not own the
-   *  map any more (A10, #471): this gates a plain link to its screen. */
-  $: customLayout = $previewAs.mode === "map" || (!$layout.regular && $layout.dims > 1);
-
   /** The Layout moved — the header's "Preview as" chip, the console's shape
-   *  select, a device whose geometry changed — so the preview engine has to
+   *  chip, a device whose geometry changed — so the preview engine has to
    *  be rebuilt at the new pixel count and re-given its map (#463). Compared
    *  by `layoutKey`, not by identity: the 1 Hz status poll re-derives the
    *  Layout every second without changing it. A Layout change NEVER pushes to
@@ -903,58 +897,6 @@
     }
   }
 
-  // ---- the console's interim "LED layout" block ----
-  //
-  // On a device the Layout is the DEVICE's (#463). These controls are what is
-  // left of the old rig config: they re-shape the console's preview and say
-  // what "install … on device" will install. They sit at the FOOT of the rail,
-  // out of the editor's chrome, and A8 (#469) moves them into
-  // Settings → LED layout — at which point this whole block is deleted, not
-  // rewritten. Since A10 (#471) the map program has a screen of its own, so
-  // what is left here is a plain link to it.
-
-  /** What the legacy select shows for the reconciled Layout. */
-  $: layoutKind = $previewAs.mode === "map" ? "map" : $layout.dims === 2 ? "grid" : "strip";
-
-  function setLayoutKind(e: Event): void {
-    const kind = (e.target as HTMLSelectElement).value;
-    if (kind === "map") {
-      // "2D map" is how mapping is enabled; the map program's own screen is
-      // what computes the coordinates (#471).
-      setPreviewAs({ mode: "map", pixels: pixelCount() });
-      return;
-    }
-    // on a device the pixel count is fixed by hardware; layout only rearranges
-    const total = $device ? $devicePixels : pixelCount();
-    if (kind === "strip") {
-      setPreviewAs({ mode: "strip", pixels: total });
-    } else if (kind === "grid") {
-      const side = Math.max(2, Math.round(Math.sqrt(total)));
-      setPreviewAs({ mode: "matrix", w: side, h: side });
-    }
-    // the Layout watcher above rebuilds the preview engine
-  }
-
-  function setLayoutNum(field: "w" | "h", e: Event): void {
-    const v = Math.max(1, Math.min(4096, Number((e.target as HTMLInputElement).value) || 1));
-    const c = $previewAs;
-    if (c.mode === "matrix") setPreviewAs({ ...c, [field]: v });
-    // the Layout watcher above rebuilds the preview engine
-  }
-
-  /** Install the current grid layout on the device as a procedural grid —
-   *  no coordinates cross the wire, nothing is allocated on the device. */
-  function installDeviceGrid(): void {
-    const l = $layout;
-    if (!$device || l.dims !== 2 || !l.regular) return;
-    const { w, h } = l;
-    void (async () => {
-      if (await installDeviceGridMap(w, h)) {
-        note("save", `${w}×${h} grid installed on the device`, 2500);
-      }
-    })();
-  }
-
   // ---- transport (the preview panel's own header) ----
 
   /** The rate the preview header states: the DEVICE's own on a console
@@ -1605,81 +1547,6 @@
       </div>
     {/if}
 
-    <!-- ── TEMPORARY: the console's LED layout (A8, Gitea #469) ──
-         The editor must not configure geometry — but nothing else can yet, so
-         the old playback-bar controls live on at the foot of the rail with
-         their data-roles intact. #469 moves them into Settings → LED layout
-         and DELETES this block. -->
-    {#if $device}
-      <div class="rsec" data-role="led-layout">
-        <div class="rhead">
-          <span class="slabel">LED layout</span>
-          <span class="rdim">moves to Settings (#469)</span>
-        </div>
-        <div class="ledrow">
-          <select value={layoutKind} data-role="layout-kind" on:change={setLayoutKind}>
-            <option value="strip">strip</option>
-            <option value="grid">grid</option>
-            <option value="map">2D map</option>
-          </select>
-          {#if layoutKind === "strip"}
-            <input
-              class="num"
-              data-role="layout-px"
-              type="number"
-              min="1"
-              max="4096"
-              value={$layout.pixels}
-              disabled
-              title="fixed by the device's hardware"
-            />
-            <span class="dim">px</span>
-          {:else if layoutKind === "grid"}
-            <input
-              class="num"
-              data-role="layout-w"
-              type="number"
-              min="1"
-              max="256"
-              value={$layout.w}
-              on:change={(e) => setLayoutNum("w", e)}
-            />
-            <span class="dim">×</span>
-            <input
-              class="num"
-              data-role="layout-h"
-              type="number"
-              min="1"
-              max="256"
-              value={$layout.h}
-              on:change={(e) => setLayoutNum("h", e)}
-            />
-            <button
-              data-role="grid-install"
-              title="tell the device it is a {$layout.w}×{$layout.h} grid so its patterns render in 2D (no coordinates uploaded, nothing allocated on the device)"
-              on:click={installDeviceGrid}
-            >
-              install grid on device
-            </button>
-          {:else}
-            <span class="dim mono">{$layout.coords?.length ?? 0} px mapped</span>
-          {/if}
-        </div>
-        <!-- The map program is a SCREEN of its own since A10 (#471): install,
-             clear and the installed state are its header's. All that is left
-             here is the way in, and only while the Layout is a custom map
-             (proposal §5.7). #469 moves this link to Settings → LED layout. -->
-        {#if customLayout}
-          <p class="dim hint">
-            <button class="link" data-role="subtab-map" on:click={() => dispatch("openmap")}>
-              Map program ›
-            </button>
-            — a debuggable Luxel program (<code>plot(x, y)</code> per pixel) that computes these
-            points.
-          </p>
-        {/if}
-      </div>
-    {/if}
   </section>
 </main>
 
@@ -1702,12 +1569,6 @@
 
   .dim {
     color: var(--text-dim);
-  }
-
-  .num {
-    width: 64px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
   }
 
   /* the name reads as text and edits in place — not a form field with a
@@ -1741,16 +1602,6 @@
   .name-error {
     color: var(--error);
     font-size: 12px;
-  }
-
-  .link {
-    background: transparent;
-    border: none;
-    padding: 0;
-    color: var(--accent);
-    cursor: pointer;
-    text-decoration: underline;
-    font: inherit;
   }
 
   .fpssel {
@@ -1799,13 +1650,6 @@
 
   .preview-wrap {
     position: relative;
-  }
-
-  .ledrow {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
   }
 
   .spinner {

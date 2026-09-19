@@ -31,6 +31,10 @@
    *  device default. The thumbnail has to render through it or it shows a
    *  different picture from the one the device will play. */
   export let proj: ProjectionMode | null = null;
+  /** `row` is the thumbnail a playlist row or a list entry carries; `summary`
+   *  is the larger one the Settings page's LED layout headline sits beside
+   *  (Gitea #469). Same engine, same shape — only the CSS size differs. */
+  export let size: "row" | "summary" = "row";
 
   const FPS_MS = 100; // ~10 fps is plenty for a thumbnail
 
@@ -124,7 +128,13 @@
   });
 </script>
 
-<span class="thumb" class:dead data-shape={shape} title={caption ?? undefined}>
+<span
+  class="thumb"
+  class:dead
+  class:summary={size === "summary"}
+  data-shape={shape}
+  title={caption ?? undefined}
+>
   {#if shape === "bar"}
     <canvas class="bar" bind:this={canvas} width="64" height="1"></canvas>
   {:else}
@@ -159,6 +169,17 @@
   .sq {
     width: 48px;
     height: 48px;
+  }
+
+  /* the Settings LED-layout summary (#469): same engine, more room */
+  .thumb.summary .bar {
+    width: 148px;
+    height: 26px;
+  }
+
+  .thumb.summary .sq {
+    width: 76px;
+    height: 76px;
   }
 
   .thumb.dead canvas {

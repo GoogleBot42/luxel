@@ -101,14 +101,14 @@ async function run(fakeCap, tag) {
   await sleep(800);
   await page.click('[data-role="tab-settings"]');
   await sleep(1200);
-  const got = await page.$eval('[data-role="cfg-pixels"]', (e) => ({
+  const got = await page.$eval('[data-role="layout-pixels"]', (e) => ({
     max: e.getAttribute("max"),
     value: e.value,
   }));
-  const note = await page.$eval('[data-role="cfg-pixels"]', (e) =>
+  const note = await page.$eval('[data-role="layout-pixels"]', (e) =>
     e.parentElement?.querySelector("span.dim")?.textContent?.trim(),
   );
-  await page.$eval('[data-role="cfg-pixels"]', (e) =>
+  await page.$eval('[data-role="layout-pixels"]', (e) =>
     e.scrollIntoView({ block: "center" }),
   );
   await sleep(400);

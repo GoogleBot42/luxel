@@ -1,173 +1,73 @@
 <script lang="ts">
-  // Identity + the fixed hardware facts: address, pixel count, LED protocol,
-  // strip data pin, and the local status line.
-  import { createEventDispatcher } from "svelte";
+  // Device — identity and the ONE control people open Settings for
+  // (proposal §5.3: "Name · Brightness (large, first control on the page)").
+  //
+  // Geometry used to live here (Pixels, LED protocol, Data pin); it is all in
+  // LED layout now, behind one endpoint (Gitea #469).
   import {
-    dataPin,
-    dataPinChoice,
-    dataPinDefault,
-    dataPinNext,
-    dataPins,
+    brightness,
+    brightnessMax,
     device,
-    deviceError,
-    deviceMap,
+    deviceBase,
+    deviceCaps,
     deviceProtocol,
-    devicePixels,
-    pixelMax,
-    protocolOptions,
+    deviceVersion,
   } from "../stores/device";
-  import { confirm } from "../stores/dialog";
-  import { setPreviewAs } from "../stores/geometry";
-  import { note, notes } from "../stores/notify";
-  import { previewFps, runtimeError } from "../stores/pattern";
 
-  const dispatch = createEventDispatcher<{ pixelchange: void; openmap: void }>();
-
-  /** Live pixel-count change: the device resizes its strip (no reboot); we
-   *  re-anchor the local preview to the new count. */
-  function onPixelCountChange(e: Event): void {
-    const n = Math.max(1, Math.min($pixelMax, Number((e.target as HTMLInputElement).value) || 1));
-    void (async () => {
-      const r = await $device?.setConfig(n);
-      if (r?.ok) {
-        devicePixels.set(r.pixels ?? n);
-        // Any shape override was sized from the OLD count, so drop it: the
-        // Layout goes back to following the device (#463).
-        setPreviewAs({ mode: "auto" });
-        dispatch("pixelchange");
-      } else if (r) {
-        deviceError.set(r.error ? `config: ${r.error}` : "config change failed");
-      }
-    })();
+  /** Live brightness: the device applies it immediately and persists it. */
+  function onBrightnessChange(e: Event): void {
+    const v = Number((e.target as HTMLInputElement).value);
+    brightness.set(v);
+    void $device?.setBrightness(v);
   }
 
-  /** Live LED-protocol change: the device reconfigures its driver (no reboot). */
-  function onProtocolChange(e: Event): void {
-    const name = (e.target as HTMLSelectElement).value;
-    deviceProtocol.set(name);
-    void (async () => {
-      const r = await $device?.setProtocol(name);
-      if (r?.ok && r.protocol) deviceProtocol.set(r.protocol);
-      else if (r?.error) deviceError.set(`protocol: ${r.error}`);
-    })();
-  }
+  /** The device's own name is fixed at flash time (`luxel-<mac suffix>`) and
+   *  no endpoint renames it — so this row states it rather than pretending to
+   *  be a field. It becomes an input the day the firmware grows the route. */
+  $: address = $device?.base || $deviceBase || "";
+  $: name = address ? address.replace(/^https?:\/\//, "") : "served from this device";
 
-  /** Strip DATA pin picker (Gitea #154). Unlike the protocol/pixel fields this
-   *  is NOT live: the pick sits in the form until "apply & reboot", because the
-   *  device reboots to rebind its SPI driver, and a mis-click that darkens the
-   *  strip should take a deliberate second step. */
-  function onDataPinPick(e: Event): void {
-    const v = Number((e.target as HTMLSelectElement).value);
-    dataPinChoice.set(v === $dataPin && $dataPinNext === null ? null : v);
-    note("datapin", "");
-  }
-
-  async function applyDataPin(): Promise<void> {
-    const pin = $dataPinChoice ?? $dataPinNext;
-    if (pin === null) return;
-    const ok = await confirm({
-      title: `Move the strip data line to GPIO${pin}?`,
-      body:
-        `The driver rebinds to GPIO${pin}${pin === $dataPinDefault ? " (the board default)" : ""}. ` +
-        "The strip stays dark until it is wired to that pin.",
-      confirmLabel: "Apply & reboot",
-      reboot: true,
-    });
-    if (!ok) return;
-    note("datapin", "saving…");
-    const r = await $device?.setDataPin(pin === $dataPinDefault ? "default" : pin);
-    if (r?.ok) {
-      note("datapin", `saved — the device is rebooting with data on GPIO${r.data_pin ?? pin}`);
-      dataPinNext.set(pin);
-      dataPinChoice.set(null);
-    } else {
-      note("datapin", r?.error ? `failed: ${r.error}` : "save failed");
-    }
-  }
+  /** Per driver, because the number means something different on each
+   *  (§5.7: "brightness hint text | per driver"). */
+  $: brightnessHint = $deviceCaps?.panel
+    ? "The panel's global plane scale. Applied live and saved on the device — it dims the panel, not the previews on this page."
+    : $deviceProtocol === "sk9822"
+      ? "The SK9822's own 5-bit current limiter, so it dims without losing colour depth. Applied live and saved on the device."
+      : "A software scale over every pixel before it reaches the strip. Applied live and saved on the device.";
 </script>
 
-<section class="card">
-  <h2>Device</h2>
-  <div class="field">
-    <span class="flabel">Address</span>
-    <input class="mono grow" value={$device?.base || "served from device"} disabled />
-  </div>
-  <div class="field">
-    <span class="flabel">Pixels</span>
-    <input
-      class="num"
-      data-role="cfg-pixels"
-      type="number"
-      min="1"
-      max={$pixelMax}
-      value={$devicePixels}
-      on:change={onPixelCountChange}
-    />
-    <span class="dim">resized live — max {$pixelMax}, no reboot</span>
-  </div>
-  <div class="field">
-    <span class="flabel">LED protocol</span>
-    <select data-role="cfg-protocol" value={$deviceProtocol} on:change={onProtocolChange}>
-      {#each $protocolOptions as opt}
-        <option value={opt}>{opt}</option>
-      {/each}
-    </select>
-    <span class="dim">match your strip — switched live (no reboot)</span>
-  </div>
-  {#if $dataPins.length}
-    <div class="field">
-      <span class="flabel">Data pin</span>
-      <select
-        data-role="cfg-datapin"
-        value={String($dataPinChoice ?? $dataPinNext ?? $dataPin)}
-        on:change={onDataPinPick}
-      >
-        {#each $dataPins as pin}
-          <option value={String(pin)}>GPIO{pin}{pin === $dataPinDefault ? " (board default)" : ""}</option>
-        {/each}
-      </select>
-      <button
-        data-role="cfg-datapin-apply"
-        disabled={!$device || ($dataPinChoice === null && $dataPinNext === null)}
-        on:click={() => void applyDataPin()}
-      >
-        apply &amp; reboot
-      </button>
-      <span class="dim" data-role="cfg-datapin-note">
-        {#if $notes.datapin}
-          {$notes.datapin}
-        {:else if $dataPinNext !== null}
-          stored GPIO{$dataPinNext}, driving GPIO{$dataPin} until the next reboot
-        {:else}
-          driving GPIO{$dataPin} — where the strip's DATA wire goes; applied on reboot
-        {/if}
-      </span>
-    </div>
-  {/if}
-  <!-- TEMPORARY (A10, Gitea #471): the console's way into the map program's
-       screen. It belongs in Settings → "LED layout → Custom map program →",
-       which is A8 (Gitea #469) — that ticket builds the LED layout card and
-       restyles this row into it. Until then the console path has to be
-       reachable and testable, so it rides in the Device card. -->
-  <div class="field">
-    <span class="flabel">LED layout</span>
-    <button class="link" data-role="map-program-link" on:click={() => dispatch("openmap")}>
-      Custom map program →
-    </button>
-    <span class="dim">
-      {#if $deviceMap.installed}
-        {$deviceMap.count} points, {$deviceMap.dims}D, installed
-      {:else}
-        no map installed — the device renders in strip order
-      {/if}
-    </span>
-  </div>
-  <div class="field">
-    <span class="flabel">Status</span>
-    <span class="mono dim">
-      {$previewFps.toFixed(0)} fps (local preview){$runtimeError
-        ? ` · vmerr: ${$runtimeError.message}`
-        : ""}
-    </span>
-  </div>
-</section>
+<div class="field" data-role="device-brightness">
+  <span class="flabel">Brightness</span>
+  <input
+    type="range"
+    class="grow big"
+    data-role="brightness"
+    min="0"
+    max={$brightnessMax}
+    step="1"
+    value={$brightness}
+    on:input={onBrightnessChange}
+  />
+  <span class="mono" data-role="brightness-val">{$brightness} / {$brightnessMax}</span>
+</div>
+<p class="dim hint">{brightnessHint}</p>
+
+<div class="field">
+  <span class="flabel">Name</span>
+  <span class="mono" data-role="device-name">{name}</span>
+  <span class="dim hint">
+    set when the firmware is flashed — this build has no rename endpoint.
+    {#if $deviceVersion}<span class="mono">v{$deviceVersion}</span>{/if}
+  </span>
+</div>
+
+<style>
+  /* the page's first control, and it looks like it (mockup S3) */
+  .big {
+    height: 24px;
+  }
+
+  .field :global(.mono) {
+    font-size: 13px;
+  }
+</style>

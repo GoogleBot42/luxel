@@ -79,6 +79,14 @@ export interface DeviceStatus {
   vm_us?: number;
   pipe_us?: number;
   out_us?: number;
+  /** Firmware version string (`0.1.44`) and the OTA slot it booted from
+   *  (`ota_0`/`ota_1`; `"native"` on the mirror) — the Firmware & recovery
+   *  disclosure's status line. Absent on firmware older than the fields. */
+  version?: string;
+  slot?: string;
+  /** Pattern-store occupancy in bytes, and how many patterns are in it.
+   *  Firmware only — the mirror keeps its store in memory and omits it. */
+  store?: { used: number; total: number; dead: number; patterns: number };
   /** What this device can do (Gitea #464), derived by the firmware from board
    *  features × the current Layout. The UI shows a setting only when its
    *  capability is advertised — absent, never disabled (proposal §5.3/§5.7).
@@ -115,6 +123,60 @@ export interface DeviceMapStatus {
   proj2d?: string;
   proj3d?: string;
 }
+
+/** `GET /api/layout` (Gitea #465) — the ONE geometry object, with the old
+ *  `/api/map` payload embedded so a client needs one fetch. See docs/api.md,
+ *  "`/api/layout` — the one geometry object". */
+export interface LayoutWire {
+  kind: "strip" | "matrix" | "map";
+  /** `regular` = the shape comes from the strip/matrix fields; `map` = from a
+   *  map program's coordinates. "Custom" is a coordinate SOURCE, not a
+   *  dimensionality (proposal §5.4d). */
+  source: "regular" | "map";
+  dims: number;
+  regular: boolean;
+  pixels: number;
+  max: number;
+  w: number;
+  h: number;
+  /** Present only when `kind` is `matrix`. */
+  matrix?: {
+    pw: number;
+    ph: number;
+    cols: number;
+    rows: number;
+    start: "tl" | "tr" | "bl" | "br";
+    dir: "row" | "col";
+    /** 0/1 on the wire, not a bool. */
+    snake: number;
+    rot180: number;
+    /** HUB75 scan divisor; 0 = the board's own. */
+    scan: number;
+    /** The HOST's estimated rescan rate for this chain, Hz (Gitea #475).
+     *  Absent on a host with no panel driver. The browser computes the same
+     *  number from the same inputs (`lib/settingsCaps.ts`); this one wins,
+     *  because the firmware knows its own clock and bit depth. */
+    est_hz?: number;
+    /** Leading tiles of the chain this board's framebuffer can shift out.
+     *  `drive < cols·rows` means the rest of the arrangement is DARK — the
+     *  DMA framebuffer is compile-time sized (Gitea #401). */
+    drive?: number;
+  };
+  /** One entry per configured output. A host with nothing stored reports ONE
+   *  implicit output built from its live data pin, protocol and colour order.
+   *  `count` is pixels on a strip Layout and PANELS on a matrix one. */
+  outputs: { n: number; pin: number; proto: string; order: string; count: number; rev: boolean }[];
+  proj: { proj1d: string; proj2d: string; proj3d: string };
+  /** The `GET /api/map` body verbatim. */
+  map: DeviceMapStatus;
+}
+
+/** What `POST /api/layout` answers with: the GET body plus the verdict, so a
+ *  client never has to re-fetch. A rejected body changes nothing and names
+ *  the offending line (1-based; `0` = the body as a whole). */
+export type LayoutResult =
+  | ({ ok: true; reboot_required: boolean } & LayoutWire)
+  | { ok: false; error: string; line?: number };
 
 export type RunResult =
   | { ok: true }
@@ -348,6 +410,40 @@ export class DeviceSession {
    *  falls back to its own grid). */
   async clearMap(): Promise<void> {
     await this.fetch("/api/map", { method: "POST", body: "" });
+  }
+
+  /** The whole Layout (Gitea #465): kind, dims, the matrix arrangement, the
+   *  output table, the projection defaults and the installed map — one fetch
+   *  for everything the LED layout section shows. */
+  async layout(): Promise<LayoutWire> {
+    return (await (await this.fetch("/api/layout")).json()) as LayoutWire;
+  }
+
+  /**
+   * Change the Layout. `lines` is the line-oriented body (`strip 300`,
+   * `matrix …`, `map grid W H`, `out n pin proto order count [rev]`,
+   * `proj1d x`) — ONE POST per user action, and the reply IS the new state,
+   * so a caller never re-GETs. A rejected body changes nothing.
+   */
+  async setLayout(lines: string): Promise<LayoutResult> {
+    const res = await this.fetch("/api/layout", { method: "POST", body: lines });
+    return (await res.json()) as LayoutResult;
+  }
+
+  /** Reboot the device (`caps.reboot`). The other half of
+   *  `reboot_required`: a stored chain arrangement or output table has no
+   *  other way to be applied, and neither `/api/wifi` nor `/api/datapin`
+   *  exists on a HUB75 board (Gitea #475). Firmware only. */
+  async reboot(): Promise<{ ok: boolean; note?: string }> {
+    const res = await this.fetch("/api/reboot", { method: "POST", body: "" });
+    return (await res.json()) as { ok: boolean; note?: string };
+  }
+
+  /** Stream a firmware image to the inactive OTA slot; the device reboots
+   *  into it on success (`caps.ota`). Firmware only. */
+  async otaUpload(image: ArrayBuffer): Promise<{ ok: boolean; bytes?: number; error?: string }> {
+    const res = await this.fetch("/api/ota", { method: "POST", body: image });
+    return (await res.json()) as { ok: boolean; bytes?: number; error?: string };
   }
 
   /** Which network the device will join next boot (never the password). */

@@ -38,6 +38,34 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DGRID = '[data-role="patterns-grid"][data-source="device"]';
 const DTILE = `${DGRID} .tile`;
 
+/**
+ * Expand one Advanced disclosure on the Settings page (A8, Gitea #469).
+ * Idempotent. Its body is UNMOUNTED while collapsed, so every field inside
+ * one — output processing, clock, sync, MQTT, network input, storage,
+ * firmware — needs this before it can be driven or even queried.
+ */
+async function openAdv(page, role) {
+  const sel = `[data-role="${role}-toggle"]`;
+  await page.waitForSelector(sel, { timeout: 8000 });
+  const open = await page.$eval(sel, (el) => el.getAttribute("aria-expanded") === "true");
+  if (!open) await page.$eval(sel, (el) => el.click()); // the panel may be hidden
+  await page.waitForSelector(`[data-role="${role}-body"]`, { timeout: 4000 });
+}
+
+/** Scroll the Settings panel (it is its own scroll container, so puppeteer's
+ *  `fullPage` sees only the viewport) and screenshot it. */
+async function shotSettings(pg, path, to = 0) {
+  await pg.$eval(
+    '[data-role="settings-panel"]',
+    (el, y) => {
+      el.scrollTop = y < 0 ? el.scrollHeight : y;
+    },
+    to,
+  );
+  await new Promise((r) => setTimeout(r, 350));
+  await pg.screenshot({ path });
+}
+
 /** Hover a tile so its `▶ Play · Edit · ⋯` strip is on screen (it is
  *  display:none otherwise), then click one of its verbs. */
 async function tileAction(page, tileSel, role) {
@@ -213,7 +241,7 @@ try {
   );
   check("device: no disconnect button", hasDisconnect === false);
 
-  const px = await page.$eval('[data-role="cfg-pixels"]', (el) => el.value);
+  const px = await page.$eval('[data-role="layout-pixels"]', (el) => el.value);
   check("connect: pixel count from device", px === "120", `got ${px}`);
 
   // ---- the console's Layout is the DEVICE's (Gitea #463) ----
@@ -280,13 +308,14 @@ try {
       await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}`, {
         waitUntil: "networkidle0",
       });
+      // Settings → LED layout states the fixture (A8, #469): the installed
+      // 64×64 grid makes this Layout a `map`, and the headline is the shape.
       const r = await mappedPage
         .waitForFunction(
           () => {
             const k = document.querySelector('[data-role="layout-kind"]')?.value;
-            const w = document.querySelector('[data-role="layout-w"]')?.value;
-            const h = document.querySelector('[data-role="layout-h"]')?.value;
-            return k === "grid" ? `${k} ${w}x${h}` : false;
+            const head = document.querySelector('[data-role="layout-headline"]')?.textContent;
+            return head?.includes("64×64") ? `${k} ${head.trim()}` : false;
           },
           { timeout: 10000 },
         )
@@ -294,7 +323,7 @@ try {
         .catch(() => "");
       check(
         "layout: a 64x64 panel console opens on a 64x64 grid",
-        r === "grid 64x64",
+        r === "map 64×64 matrix",
         r,
       );
       const chip = await mappedPage
@@ -684,52 +713,96 @@ try {
     .catch(() => 0);
   check("preview: local engine renders (not the device stream)", lit > 60, `lit=${lit}`);
 
-  // The CONSOLE keeps the shape select (#463): the Layout is the device's, and
-  // this re-shapes the preview and says what "install … on device" installs.
-  // The playground drives the same store from the header's "Preview as" chip
-  // instead; A8 (#469) moves this into Settings → LED layout.
+  // ---- Settings → LED layout (A8, Gitea #469) ----
+  //
+  // The kind picker exists only where the BOARD offers a choice — a strip
+  // mirror does, and every write goes through `POST /api/layout`, whose reply
+  // is the new state (no re-GET).
   const layoutSel = await page.$('[data-role="layout-kind"]');
-  check("layout: dropdown present on device", layoutSel !== null);
+  check("layout: the kind picker is present on a strip board", layoutSel !== null);
   const layoutOpts = await page.$$eval('[data-role="layout-kind"] option', (os) =>
     os.map((o) => o.value),
   );
   check(
-    "layout: offers strip/grid/2D map",
-    ["strip", "grid", "map"].every((k) => layoutOpts.includes(k)),
+    "layout: offers strip/matrix/custom map",
+    ["strip", "matrix", "map"].every((k) => layoutOpts.includes(k)),
     layoutOpts.join(","),
   );
-  // the strip pixel count is fixed by hardware — the field is read-only
-  const pxDisabled = await page.$eval('[data-role="layout-px"]', (el) => el.disabled);
-  check("layout: strip pixel count is read-only on device", pxDisabled === true);
-  // switching to grid rearranges the preview and reveals the grid inputs
-  await page.select('[data-role="layout-kind"]', "grid");
-  await sleep(300);
-  check("layout: grid reveals w×h inputs", (await page.$('[data-role="layout-w"]')) !== null);
-  // a preview-only layout change must NOT re-push the pattern to the device
+  // switching to Matrix POSTs one `matrix …` line and reveals its fields
+  await page.select('[data-role="layout-kind"]', "matrix");
+  await sleep(600);
+  check("layout: matrix reveals the panel size inputs", (await page.$('[data-role="layout-pw"]')) !== null);
+  const lay2d = await (await fetch(`${DEV}/api/layout`)).json();
+  check(
+    "layout: the kind change reached the device",
+    lay2d.kind === "matrix" && lay2d.dims === 2,
+    JSON.stringify({ kind: lay2d.kind, dims: lay2d.dims, w: lay2d.w, h: lay2d.h }),
+  );
+  // a geometry change must NOT re-push the pattern to the device
   const stillRunning = await (await fetch(`${DEV}/api/pattern`)).text();
   check(
-    "layout: grid switch doesn't disturb the device pattern",
+    "layout: a kind switch doesn't disturb the device pattern",
     stillRunning.includes("canonical default pattern"),
   );
-  await page.select('[data-role="layout-kind"]', "strip"); // restore
-  await sleep(200);
-
-  // The map program is a SCREEN of its own since A10 (#471): installing and
-  // clearing a device map are ITS header's, not the editor's. All the editor
-  // keeps is the way in, and only while the Layout is a custom map (§5.7).
-  await page.select('[data-role="layout-kind"]', "map");
-  await sleep(500);
+  // the arrangement widget draws the pixel run through a single-tile matrix
   check(
-    "layout: a custom Layout links to the map program's screen",
-    (await page.$('[data-role="subtab-map"]')) !== null,
+    "layout: a strip-built matrix gets the pixel-wiring picture",
+    (await page.$('[data-role="arrangement"][data-mode="pixels"]')) !== null,
   );
   check(
-    "layout: the editor no longer installs or clears the device map",
-    (await page.$('[data-role="editor-view"] [data-role="map-install"]')) === null &&
+    "layout: a board with no panel driver has no refresh estimate",
+    (await page.$('[data-role="refresh"]')) === null,
+  );
+  // an arrangement change is stored-and-reported until a reboot builds it
+  // (#475), and the page says so rather than pretending it applied
+  await page.$eval('[data-role="layout-snake"]', (el) => el.click());
+  const rebootNote = await page
+    .waitForFunction(
+      () => document.querySelector('[data-role="layout-note"]')?.textContent?.trim() ?? false,
+      { timeout: 6000 },
+    )
+    .then((h) => h.jsonValue())
+    .catch(() => "");
+  check(
+    "layout: an arrangement change reports reboot_required",
+    /reboot/i.test(rebootNote),
+    rebootNote,
+  );
+  const laySnake = await (await fetch(`${DEV}/api/layout`)).json();
+  check("layout: the snake reached the device", laySnake.matrix?.snake === 1, JSON.stringify(laySnake.matrix));
+  await page.select('[data-role="layout-kind"]', "strip"); // restore
+  await sleep(600);
+
+  // the projection DEFAULTS live here too, and are POSTed as one `proj1d` line
+  {
+    const cards = await page.$$('[data-role="projection-card"]');
+    check("projection: the block offers the non-native kinds", cards.length > 0, `${cards.length} cards`);
+    await page.$eval('[data-role="projection-kind"][data-dims="2"] [data-role="projection-card"]', (el) =>
+      el.click(),
+    );
+    await sleep(600);
+    const proj = await (await fetch(`${DEV}/api/layout`)).json();
+    check(
+      "projection: picking a card sets the device default",
+      proj.proj?.proj2d === "x",
+      JSON.stringify(proj.proj),
+    );
+  }
+
+  // The editor configures no geometry at all since A8 (#469): no shape
+  // select, no pixel field, no install buttons, no map link. Two full-screen
+  // editors are mounted at once (A10, #471), so scope by the view.
+  check(
+    "layout: the editor rail no longer carries the LED layout block",
+    (await page.$('[data-role="led-layout"]')) === null &&
+      (await page.$('[data-role="editor-view"] [data-role="layout-kind"]')) === null,
+  );
+  check(
+    "layout: the editor no longer links to, installs or clears the map",
+    (await page.$('[data-role="subtab-map"]')) === null &&
+      (await page.$('[data-role="editor-view"] [data-role="map-install"]')) === null &&
       (await page.$('[data-role="editor-view"] [data-role="map-clear"]')) === null,
   );
-  await page.select('[data-role="layout-kind"]', "strip");
-  await sleep(200);
 
   // brightness (Phase 3): the Settings slider drives GET/POST /api/brightness
   // live (the settings panel is in the DOM even while the editor is open)
@@ -749,23 +822,26 @@ try {
   const bReadout = await page.$eval('[data-role="brightness-val"]', (el) => el.textContent ?? "");
   check("brightness: readout reflects it", bReadout.includes("20"), bReadout);
 
-  // pixel count (Phase 3): the Settings Pixels field resizes the strip LIVE
-  // via /api/config (no reboot)
+  // pixel count: the LED layout Pixels field resizes the strip LIVE through
+  // `POST /api/layout strip N` (no reboot). `/api/config` is the deprecated
+  // alias for the same state, so it must report the change too.
   const cfg0 = await (await fetch(`${DEV}/api/config`)).json();
   check("config: GET returns {pixels,max}", cfg0.pixels === 120 && cfg0.max >= 120, JSON.stringify(cfg0));
-  await page.$eval('[data-role="cfg-pixels"]', (el) => {
+  await page.$eval('[data-role="layout-pixels"]', (el) => {
     el.value = "48";
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
   await sleep(700);
   const cfg1 = await (await fetch(`${DEV}/api/config`)).json();
   check("config: field resizes the device live", cfg1.pixels === 48, JSON.stringify(cfg1));
+  const lay48 = await (await fetch(`${DEV}/api/layout`)).json();
+  check("layout: /api/layout agrees with its /api/config alias", lay48.pixels === 48, JSON.stringify(lay48.pixels));
   const stAfter = await (await fetch(`${DEV}/api/status`)).json();
   check("config: status reports the new count", stAfter.pixels === 48, JSON.stringify(stAfter));
   // the device now streams 48 px — verify the pixel buffer resized
   const pxLen = (await (await fetch(`${DEV}/api/pixels`)).arrayBuffer()).byteLength;
   check("config: pixel buffer resized (48×3)", pxLen === 48 * 3, `${pxLen} bytes`);
-  await page.$eval('[data-role="cfg-pixels"]', (el) => {
+  await page.$eval('[data-role="layout-pixels"]', (el) => {
     el.value = "120";
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -778,13 +854,13 @@ try {
     p0.protocol === "sk9822" && p0.options.includes("ws2812"),
     JSON.stringify(p0),
   );
-  await page.select('[data-role="cfg-protocol"]', "ws2812");
+  await page.select('[data-role="layout-proto"]', "ws2812");
   await sleep(500);
   const p1 = await (await fetch(`${DEV}/api/protocol`)).json();
   check("protocol: dropdown switches the device", p1.protocol === "ws2812", JSON.stringify(p1));
   const cfgP = await (await fetch(`${DEV}/api/config`)).json();
   check("protocol: config GET reflects it", cfgP.protocol === "ws2812", JSON.stringify(cfgP));
-  await page.select('[data-role="cfg-protocol"]', "sk9822");
+  await page.select('[data-role="layout-proto"]', "sk9822");
   await sleep(300); // restore
 
   // live-code push: slider-controlled solid color + exported var
@@ -845,9 +921,14 @@ try {
   // prompt/confirm reaching the browser would hang the run — which is the
   // regression this absence guards.
 
-  // WiFi settings form (the panel is in the DOM even while the editor is open)
+  // WiFi settings form (the panel is in the DOM even while the editor is
+  // open). Since A8 the form is COLLAPSED behind `Change network…` — joining
+  // a different network is a once-per-install action that reboots.
   const w0 = await (await fetch(`${DEV}/api/wifi`)).json();
   check("wifi: GET returns {ssid,source}", "source" in w0, JSON.stringify(w0));
+  check("wifi: the provisioning form starts collapsed", (await page.$('[data-role="wifi-ssid"]')) === null);
+  await page.$eval('[data-role="wifi-change"]', (el) => el.click());
+  await page.waitForSelector('[data-role="wifi-ssid"]', { timeout: 4000 });
   await page.$eval('[data-role="wifi-ssid"]', (el) => {
     el.value = "TestNet";
     el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -890,6 +971,7 @@ try {
   // running here, so it stays "not connected" — the announce/command contract
   // is covered by luxel-core::hamqtt unit tests + a live mosquitto check)
   {
+    await openAdv(page, "adv-mqtt");
     const m0 = await (await fetch(`${DEV}/api/mqtt`)).json();
     check("mqtt: GET returns disabled by default", m0.enabled === false, JSON.stringify(m0));
     await page.$eval('[data-role="mqtt-host"]', (el) => {
@@ -917,6 +999,7 @@ try {
 
   // output pipeline: settings round-trip through the form + API
   {
+    await openAdv(page, "adv-output");
     const o0 = await (await fetch(`${DEV}/api/output`)).json();
     check(
       "output: defaults",
@@ -928,10 +1011,12 @@ try {
         o0.glow === 0,
       JSON.stringify(o0),
     );
-    await page.select('[data-role="out-order"]', "grb");
+    // colour order is a STRIP concern and lives in LED layout since A8 (#469)
+    check("output: colour order left Output processing", (await page.$('[data-role="out-order"]')) === null);
+    await page.select('[data-role="layout-order"]', "grb");
     await sleep(400);
     const o1 = await (await fetch(`${DEV}/api/output`)).json();
-    check("output: order select applies", o1.order === "grb", JSON.stringify(o1));
+    check("output: the LED layout colour-order select applies", o1.order === "grb", JSON.stringify(o1));
     const r = await (
       await fetch(`${DEV}/api/output`, { method: "POST", body: "bgr 22 1500" })
     ).json();
@@ -994,7 +1079,7 @@ try {
     // The block above restored the device's order with a bare POST, which the
     // UI never sees (/api/output is a form, not a poll) — drive the select so
     // the store and the device agree before sampling.
-    await page.select('[data-role="out-order"]', "rgb");
+    await page.select('[data-role="layout-order"]', "rgb");
     await sleep(500);
     await setEditor(page, "export function render(index) { rgb(1, 0, 0) }");
     await sleep(900);
@@ -1007,7 +1092,7 @@ try {
     check("outpipe: rgb order previews the pattern's own red", raw[0] > 200 && raw[2] < 60, raw.join(","));
     // drive it through the Settings form so the store refreshes the way a
     // user's edit does (nothing polls /api/output — it is a form)
-    await page.select('[data-role="out-order"]', "bgr");
+    await page.select('[data-role="layout-order"]', "bgr");
     await sleep(900);
     const swapped = await sample();
     check(
@@ -1016,7 +1101,7 @@ try {
       swapped.join(","),
     );
     await page.screenshot({ path: `${shotDir}/device-e2e-outpipe.png` });
-    await page.select('[data-role="out-order"]', "rgb"); // restore
+    await page.select('[data-role="layout-order"]', "rgb"); // restore
     await sleep(700);
     const restored = await sample();
     check("outpipe: restoring the order restores the preview", restored[0] > 200, restored.join(","));
@@ -1062,12 +1147,18 @@ try {
     check("apmode: GET reports not-AP", ap.ap === false, JSON.stringify(ap));
     const trig = await (await fetch(`${DEV}/api/apmode`, { method: "POST", body: "" })).json();
     check("apmode: POST accepted", trig.ok === true, JSON.stringify(trig));
-    check("apmode: settings has the reboot-to-AP button", (await page.$('[data-role="apmode"]')) !== null);
+    // Absent, never disabled (§5.7): the mirror advertises `reboot:false` and
+    // `ota:false`, so Firmware & recovery is a version line and nothing more.
+    await openAdv(page, "adv-firmware");
+    check("apmode: no reboot-to-AP button without caps.reboot", (await page.$('[data-role="apmode"]')) === null);
+    check("firmware: the version row is always there", (await page.$('[data-role="fw-version"]')) !== null);
+    check("firmware: no Update… without caps.ota", (await page.$('[data-role="fw-update"]')) === null);
   }
 
   // sync role: the Settings select round-trips through /api/sync (the full
   // two-device convergence story is covered by tools/sync-e2e.mjs)
   {
+    await openAdv(page, "adv-sync");
     const s0 = await (await fetch(`${DEV}/api/sync`)).json();
     check("sync: defaults to off", s0.mode === "off" && s0.leader === null, JSON.stringify(s0));
     await page.select('[data-role="sync-mode"]', "leader");
@@ -1168,6 +1259,12 @@ try {
       pxLive[0] === 1 && pxLive[1] === 2 && pxLive[2] === 3,
       pxLive.subarray(0, 3).join(","),
     );
+    // the COLLAPSED Advanced row answers "is it on?" without being opened
+    const netinRow = await page
+      .$eval('[data-role="adv-netin-status"]', (el) => (el.textContent ?? "").trim())
+      .catch(() => "");
+    check("netin: the collapsed Advanced row states a status", netinRow.length > 0, netinRow);
+    await openAdv(page, "adv-netin");
     check("netin: settings shows a status row", (await page.$('[data-role="netin-status"]')) !== null);
     await sleep(2700); // live timeout
     const stIdle = await (await fetch(`${DEV}/api/status`)).json();
@@ -1429,14 +1526,15 @@ try {
   }
   // ---- the map program's screen (A10, Gitea #471) ----
   // The console reaches it from Settings → LED layout → "Custom map program →"
-  // (an interim link in the Device card until A8/#469 builds the LED layout
-  // card). Install on device is the screen's ONE primary action; Clear and the
+  // (A8/#469 built that card; the interim link in the Device card is gone).
+  // Install on device is the screen's ONE primary action; Clear and the
   // program's export/import live in its ⋯ menu; the debugger came with it.
   check(
-    "settings: an LED-layout row links to the map program",
-    (await page.$('[data-role="map-program-link"]')) !== null,
+    "settings: the LED layout card links to the map program",
+    (await page.$('[data-role="layout-map-link"]')) !== null &&
+      (await page.$('[data-role="map-program-link"]')) === null,
   );
-  await page.click('[data-role="map-program-link"]');
+  await page.$eval('[data-role="layout-map-link"]', (el) => el.click());
   await page.waitForSelector('[data-role="map-editor-view"]:not([hidden])', { timeout: 4000 });
   await sleep(900);
   check(
@@ -1935,6 +2033,282 @@ try {
       ),
     )
     .catch(() => {});
+
+  // ---- Settings, ranked (A8, Gitea #469) ----
+  //
+  // The page's own shape, driven on the Settings TAB (the sections above
+  // reach the same fields while the editor is open, which is fine for a form
+  // but proves nothing about order or about what is on screen). Three
+  // fixtures, because the whole point of the page is that it is different on
+  // each: this strip mirror, a two-output board, and a HUB75 panel.
+  {
+    await page.click('[data-role="editor-back"]');
+    await page.click('[data-role="tab-settings"]');
+    await page.waitForSelector('[data-role="settings-panel"]:not([hidden])', { timeout: 8000 });
+    await sleep(800);
+
+    // Order (proposal §5.3): Device first, and BRIGHTNESS is the first
+    // control on the page — ahead of every field in LED layout.
+    const order = await page.$$eval(
+      '[data-role="settings-panel"] .slabel, [data-role="settings-panel"] input, [data-role="settings-panel"] select',
+      (els) =>
+        els
+          .map((e) =>
+            e.tagName === "DIV" ? `#${e.textContent?.trim()}` : e.getAttribute("data-role") ?? "",
+          )
+          .filter(Boolean),
+    );
+    check(
+      "settings: Device · LED layout · WiFi · Advanced, in that order",
+      order.filter((x) => x.startsWith("#")).join(" ") ===
+        "#Device #LED layout #Projection #WiFi #Advanced",
+      order.filter((x) => x.startsWith("#")).join(" "),
+    );
+    check(
+      "settings: brightness is the first control on the page",
+      order.find((x) => !x.startsWith("#")) === "brightness",
+      order.join(","),
+    );
+    check(
+      "settings: …and it is the Device section's",
+      (await page.$('[data-role="sect-device"] [data-role="brightness"]')) !== null,
+    );
+
+    // Every Advanced row is collapsed, and every one states its value.
+    const rows = await page.$$eval('[data-role="advanced"] .drow', (els) =>
+      els.map((e) => ({
+        open: e.classList.contains("open"),
+        status: e.querySelector(".st2")?.textContent?.trim() ?? "",
+      })),
+    );
+    check("settings: the Advanced list has all eight rows", rows.length >= 7, `${rows.length} rows`);
+    check(
+      "settings: every Advanced row starts collapsed",
+      rows.every((r) => !r.open),
+    );
+    check(
+      "settings: every collapsed row carries a one-line status",
+      rows.every((r) => r.status.length > 0),
+      JSON.stringify(rows.map((r) => r.status)),
+    );
+    check(
+      "settings: a collapsed body is not in the DOM at all",
+      (await page.$('[data-role="adv-clock-body"]')) === null,
+    );
+    await shotSettings(page, `${shotDir}/settings-strip-top.png`);
+
+    // …and expanding one reveals its form.
+    await openAdv(page, "adv-output");
+    await openAdv(page, "adv-clock");
+    await openAdv(page, "adv-storage");
+    await sleep(300);
+    check(
+      "settings: an expanded row mounts its form",
+      (await page.$('[data-role="out-gamma"]')) !== null &&
+        (await page.$('[data-role="clock-tz"]')) !== null,
+    );
+    await shotSettings(page, `${shotDir}/settings-strip-advanced.png`, -1);
+
+    // Mobile (390 px) — the primary phone surface for this page (D9).
+    await page.setViewport({ width: 390, height: 780 });
+    await sleep(400);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+    );
+    check("settings: no horizontal overflow at 390 px", overflow);
+    await shotSettings(page, `${shotDir}/settings-390.png`);
+    await shotSettings(page, `${shotDir}/settings-390-advanced.png`, -1);
+    await page.setViewport({ width: 1400, height: 900 });
+    await sleep(300);
+
+    // A reboot-requiring action is labelled AND confirmed — nothing reboots
+    // from a bare button (§5.3). The data pin is absent on the mirror (no
+    // `data_pins`), so WiFi's save is the one this host can prove.
+    await page.$eval('[data-role="wifi-change"]', (el) => el.click());
+    await page.waitForSelector('[data-role="wifi-save"]', { timeout: 4000 });
+    await page.$eval('[data-role="wifi-save"]', (el) => el.click());
+    await waitDialog(page);
+    check(
+      "settings: a reboot action opens the reboot-labelled dialog",
+      (await page.$('[data-role="dialog-reboot"]')) !== null,
+    );
+    await cancelDialog(page);
+    await sleep(200);
+  }
+
+  // Two outputs: the Outputs table exists ONLY when the board advertises more
+  // than one, and an edit POSTs the whole table as `out` lines (all-or-
+  // nothing) whose runs must partition the one pixel space (D11).
+  {
+    const OUT_PORT = E2E.mirror.outputs; // E2E_PORT + 27
+    const OUT = `http://127.0.0.1:${OUT_PORT}`;
+    const outDev = spawn(
+      "../target/debug/luxel",
+      ["serve", ...NO_NETIN, "--port", String(OUT_PORT), "--pixels", "120", "--outputs", "2"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      outDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      outDev.on("exit", () => reject(new Error("two-output mirror died")));
+      setTimeout(() => reject(new Error("two-output mirror start timeout")), 30000);
+    });
+    process.on("exit", () => outDev.kill());
+    const outPage = await browser.newPage();
+    try {
+      await outPage.setViewport({ width: 1400, height: 900 });
+      await outPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(OUT)}`, {
+        waitUntil: "networkidle0",
+      });
+      await outPage.click('[data-role="editor-back"]');
+      await outPage.click('[data-role="tab-settings"]');
+      await outPage.waitForSelector('[data-role="outputs"]', { timeout: 8000 });
+      check("outputs: the table appears when caps.outputs > 1", true);
+      check(
+        "outputs: the single implicit output is the only row until one is added",
+        (await outPage.$$('[data-role="output-row"]')).length === 1,
+      );
+      // `+ Add output` exists because a spare physical output does
+      await outPage.$eval('[data-role="output-add"]', (el) => el.click());
+      await outPage.waitForFunction(
+        () => document.querySelectorAll('[data-role="output-row"]').length === 2,
+        { timeout: 6000 },
+      );
+      // split it evenly and push the whole table
+      await outPage.$$eval('[data-role="output-count"]', (els) => {
+        els.forEach((el) => {
+          el.value = "60";
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      });
+      await sleep(900);
+      const lay = await (await fetch(`${OUT}/api/layout`)).json();
+      check(
+        "outputs: the table round-trips through POST /api/layout",
+        lay.outputs.length === 2 && lay.outputs.every((o) => o.count === 60),
+        JSON.stringify(lay.outputs),
+      );
+      const ranges = await outPage.$$eval('[data-role="output-range"]', (els) =>
+        els.map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim()),
+      );
+      check(
+        "outputs: each row computes the run it owns",
+        ranges.join(" | ") === "pixels 0–59 | pixels 60–119",
+        ranges.join(" | "),
+      );
+      check(
+        "outputs: a reversed run is a per-row checkbox, not a second wiring model",
+        (await outPage.$('[data-role="output-rev"]')) !== null,
+      );
+      await shotSettings(outPage, `${shotDir}/settings-outputs.png`, 120);
+    } finally {
+      await outPage.close();
+      outDev.kill();
+    }
+  }
+
+  // A HUB75 panel: no kind picker at all (the board offers no choice), no
+  // strip fields, and the arrangement widget + refresh estimate instead.
+  {
+    const HUB_PORT = E2E.mirror.hub75; // E2E_PORT + 28
+    const HUB = `http://127.0.0.1:${HUB_PORT}`;
+    const hubDev = spawn(
+      "../target/debug/luxel",
+      // --max-pixels so a 2x2 chain of 64x64 panels (16384 px) is a legal Layout;
+      // the board default stays the single 64x64 panel it comes up as
+      ["serve", ...NO_NETIN, "--port", String(HUB_PORT), "--board", "panel", "--max-pixels", "16384", "--rescan-hz", "115"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      hubDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      hubDev.on("exit", () => reject(new Error("hub75 mirror died")));
+      setTimeout(() => reject(new Error("hub75 mirror start timeout")), 30000);
+    });
+    process.on("exit", () => hubDev.kill());
+    const hubPage = await browser.newPage();
+    try {
+      await hubPage.setViewport({ width: 1400, height: 900 });
+      await hubPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(HUB)}`, {
+        waitUntil: "networkidle0",
+      });
+      await hubPage.click('[data-role="editor-back"]');
+      await hubPage.click('[data-role="tab-settings"]');
+      await hubPage.waitForSelector('[data-role="layout-pw"]', { timeout: 8000 });
+      check(
+        "panel: no Layout picker — the board offers no choice (§5.7)",
+        (await hubPage.$('[data-role="layout-kind"]')) === null,
+      );
+      check(
+        "panel: no LED type / colour order / data pin",
+        (await hubPage.$('[data-role="layout-proto"]')) === null &&
+          (await hubPage.$('[data-role="layout-datapin"]')) === null,
+      );
+      check(
+        "panel: no power cap and no blur/glow in Output processing",
+        (await hubPage.$('[data-role="out-cap"]')) === null &&
+          (await hubPage.$('[data-role="out-blur"]')) === null,
+      );
+      const head = await hubPage.$eval('[data-role="layout-headline"]', (e) => e.textContent.trim());
+      check("panel: the summary line carries the kind", head === "64×64 matrix", head);
+      const scan = await hubPage.$('[data-role="layout-scan"]');
+      check("panel: the HUB75 scan divisor is a real field here", scan !== null);
+      // one panel: the refresh estimate, no chain picture yet
+      const hz = await hubPage.$eval('[data-role="refresh-hz"]', (e) => e.textContent.trim());
+      check("panel: the estimated refresh is computed from the arrangement", hz === "115 Hz", hz);
+      check(
+        "panel: a single tile draws no chain picture (mockup S3)",
+        (await hubPage.$('[data-role="arrangement"]')) === null,
+      );
+      // tile it 2×2 and the chain SVG appears, amber because the estimate drops
+      await hubPage.$eval('[data-role="layout-cols"]', (el) => {
+        el.value = "2";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(700);
+      await hubPage.$eval('[data-role="layout-rows"]', (el) => {
+        el.value = "2";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await hubPage.waitForSelector('[data-role="arrangement"][data-mode="chain"]', { timeout: 8000 });
+      const amber = await hubPage.$eval('[data-role="refresh"]', (e) =>
+        e.classList.contains("amber"),
+      );
+      const hz4 = await hubPage.$eval('[data-role="refresh-hz"]', (e) => e.textContent.trim());
+      // the DEVICE reports `est_hz` since #475 and the browser prefers it,
+      // so this is the firmware's own number, not the browser model's round
+      check("panel: four chained panels go amber under 100 Hz", amber && hz4 === "28 Hz", hz4);
+      const dark = await hubPage.$('[data-role="layout-dark"]');
+      check("panel: the mirror drives the whole chain, so nothing is dark", dark === null);
+      const note = await hubPage
+        .waitForFunction(
+          () => document.querySelector('[data-role="layout-note"]')?.textContent?.trim() ?? false,
+          { timeout: 6000 },
+        )
+        .then((h) => h.jsonValue())
+        .catch(() => "");
+      check("panel: the arrangement change reports reboot_required", /reboot/i.test(note), note);
+      // …and the action that applies it is caps-gated like everything else:
+      // the mirror advertises `reboot:false` and has no /api/reboot route.
+      check(
+        "panel: no Reboot-to-apply button without caps.reboot (§5.7)",
+        (await hubPage.$('[data-role="layout-reboot"]')) === null,
+      );
+      check(
+        "panel: Advanced gains the Panel driver row",
+        (await hubPage.$('[data-role="adv-panel-row"]')) !== null,
+      );
+      await shotSettings(hubPage, `${shotDir}/settings-panel.png`, 200);
+    } finally {
+      await hubPage.close();
+      hubDev.kill();
+    }
+  }
+
+  // The three blocks above left the app on the Settings tab; the capacity
+  // section below drives the code pane, so put the editor back on screen.
+  await page.click('[data-role="tab-patterns"]');
+  await page.click('[data-role="new-pattern"]');
+  await page.waitForSelector('[data-role="editor-header"]', { timeout: 8000 });
+  await sleep(600);
 
   // ---- capacity warning (Gitea #15) ----
   // The editor models the firmware's own pattern-load sequence (decode →

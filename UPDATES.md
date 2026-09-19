@@ -1,5 +1,79 @@
 # Update log
 
+## 2026-09-19 — web v2 A8: Settings, ranked (#469)
+
+Settings was nine equal-weight cards, ~30 fields, board-blind: brightness sat
+third under a read-only DDP diagnostic, six expert Output knobs carried the
+same weight as Color order, LED protocol and power cap showed on a HUB75
+console where they mean nothing, and geometry had **no card at all** — it
+lived in the pattern editor's playback bar. It is now a ranked page (proposal
+§5.3, mockup S3):
+
+- **Device** — the name (read-only: this firmware has no rename endpoint) and
+  **Brightness** as the page's first control, with a hint per driver.
+- **LED layout** — the summary in big type with a live thumbnail of the
+  fixture, the kind picker **only where the board offers a choice**, the strip
+  or panel fields, the arrangement widget, the Outputs table, the Projection
+  block, and `Custom map program →`.
+- **WiFi** — the connected network, with the provisioning form collapsed
+  behind `Change network…`.
+- **— Advanced —** — eight disclosure rows (Output processing · Panel driver ·
+  Clock · Sync · MQTT · Network input · Storage · Firmware & recovery), each
+  carrying a one-line status so a collapsed page still answers "is X on?".
+  A collapsed body is not mounted at all.
+
+**Geometry has one home and one endpoint.** The editor's interim `led-layout`
+block is deleted — shape select, pixel field, W×H, install-grid, and the
+`Map program ›` link — and every geometry change is ONE `POST /api/layout`
+whose reply IS the new state (#465): pixel count, matrix arrangement, the map,
+the output table and the projection defaults. Nothing re-GETs, so the page
+never shows a value the device has not confirmed, and `reboot_required` in the
+reply is what the "applies after a reboot" note reads. `stores/device.ts`'s
+`deviceLayout` adapter now reads `/api/layout` wholesale, which is also how the
+console finally learns the device's real wiring (`matrix.snake` → `serpentine`,
+the open item from #463); `/api/status`'s `geom` stays as the handshake
+fallback and still wins for the engine's fabricated √n grid, which the Layout
+does not describe.
+
+**New pictures.** The arrangement SVG draws the panel chain from the fields
+above it — tiles, the path numbered from the `IN` connector, per-tile scan
+direction, the 180° markers, the resulting total size, and each output's run
+in its own colour — because six dropdowns cannot say which panel is which. The
+same widget one level down draws the pixel run through a strip-built matrix.
+Under it, an estimated refresh (`115 Hz` for one 64×64 panel, amber under 100
+with the fix named) from a model that reproduces the bench measurements in
+`firmware/src/hub75.rs` exactly: 77/115/154 Hz at 20/30/40 MHz, 58 Hz at 8
+planes. The Outputs table computes each run's range rather than asking anyone
+to add up offsets, and the Projection block shows a live card per option —
+only for the pattern kinds that are not native to this fixture.
+
+**Visibility is a pure module.** `web/src/lib/settingsCaps.ts` turns
+`/api/status`'s `caps` (#464) plus the Layout into one flat record of booleans
+the markup reads with `{#if}` — absent, never disabled (§5.7). It is unit
+tested (`web/tests/settingsCaps.test.mjs`) over the four fixtures of the §5.3
+table: a strip board, a HUB75 panel, a regular 2D matrix built from strips,
+and a 3D/irregular map. So: no power cap on a panel, no blur/glow on a panel
+or a coordinate cloud, no LED type/colour order/data pin without a strip
+driver, no Panel driver row off HUB75, no `Update…`/`Reboot into AP` on a host
+that does not advertise them (the mirror does not, and the page says so by
+leaving them out).
+
+It reads what #474 and #475 added to the wire the day they landed: the
+device's own `matrix.est_hz` wins over the browser model, `matrix.drive` is
+what turns "three of these four panels stay dark" into a sentence, and a
+stored-but-not-applied arrangement gets a `Reboot to apply` button next to its
+note — `POST /api/reboot`, behind the standing reboot confirmation, because
+nothing else applies a chain that is built once at boot.
+
+Verified on the mirror in real chromium — device-e2e drives the page on all
+three shapes (`luxel serve`, `--outputs 2`, `--board panel`), and `npm test`,
+`e2e`, `maxpixels`, `sync` and `flash-e2e` are green. Deferred and ticketed:
+whether the single-output inline LED-type / colour-order writes should move
+onto `out 0 …` (they are live endpoints today because an `out` line is built
+at boot — #524); the HUB75 clock and plane count should be advertised rather
+than copied from the firmware's constants (#525); the browser OTA upload needs
+a device (#526).
+
 ## 2026-09-19 — web v2 A9: the Playlist, and per-item values on the wire (#470)
 
 A playlist item is now **a pattern plus its own values plus how it is

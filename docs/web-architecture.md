@@ -24,12 +24,17 @@ web/src/
   pages/            one component per surface
     Patterns.svelte       ONE pattern browser: the source control + tile verbs
     Playlist.svelte       transport, defaults, rows
-    Settings.svelte       the card list + the visible-tab refresh
+    Settings.svelte       the ranked sections + the Advanced list
     Editor.svelte         document header, code pane, right-rail inspector
     MapEditor.svelte      the map program's OWN SCREEN: code, scatter, debugger
   settings/         one card per concern, each owning its form and its endpoint
-    DeviceCard, NetworkInputCard, BrightnessCard, WifiCard,
-    OutputCard, ClockCard, SyncCard, MqttCard, cards.css
+    Section, Disclosure               the page's two chrome primitives
+    DeviceCard, LayoutCard, WifiCard  the three sections above the fold
+    ArrangementSvg, OutputsTable,     LED layout's pictures and sub-forms
+      ProjectionBlock, ProjectionCard
+    OutputCard, PanelDriverCard, ClockCard, SyncCard, MqttCard,
+      NetworkInputCard, StorageCard, FirmwareCard   the Advanced bodies
+    cards.css
   components/       reusable widgets (CodeMirror wrapper, Preview, Controls,
                     PinPanel, VarWatcher, Debugger, Gallery, PatternThumb,
                     PlaylistRow, PatternPicker, ProjectionRow, Dialog,
@@ -317,19 +322,12 @@ Rules that come out of the audit and must not drift back:
   dependency passed in. (Found by device-e2e's "running pattern adopts its
   saved name", which is the regression test for it.)
 
-Two things live in the editor only until their own ticket lands, each behind a
-comment naming it:
-
-- the **"LED layout" block** at the foot of the rail (`led-layout`, console
-  only) — the old playback bar's shape select, pixel/W×H fields and
-  install-grid, with their original `data-role`s so device-e2e keeps driving
-  them. Installing and clearing a device MAP left with A10 (#471): they are the
-  map screen's header. **A8 (#469) deletes this block** when Settings → LED
-  layout exists.
-- a one-line **"Map program ›"** link (`subtab-map`) in that same block,
-  rendered only while the Layout is a custom map (§5.7). It routes to the map
-  program's screen through the shell's `openmap` event; #469 moves it into
-  Settings → LED layout with the rest of the block.
+**The editor configures no geometry at all** since A8 (#469). The interim
+"LED layout" block at the foot of the rail — the old playback bar's shape
+select, pixel/W×H fields, install-grid and the `Map program ›` link — is gone,
+along with `led-layout`, `layout-kind`, `layout-px/w/h`, `grid-install` and
+`subtab-map`. The device's Layout is Settings → LED layout's; the virtual one
+is the "Preview as" chip's; the map is its own screen's.
 
 `Add to scene ▸` (proposal §5.4b) is deliberately not rendered at all until
 scenes exist in Phase B (#480).
@@ -345,8 +343,7 @@ Layout picker and never from inside a pattern:
 | where | control | opens |
 |---|---|---|
 | playground | "Preview as" chip → `Custom map program →` (`preview-as-map`) | the screen, and the chip then reads `N px custom map` |
-| console | Settings → `Custom map program →` (`map-program-link`) | the screen (interim: the Device card, until #469 builds the LED layout card) |
-| console | the editor rail's `Map program ›` (`subtab-map`), only while the Layout is a custom map | the screen |
+| console | Settings → LED layout → `Custom map program →` (`layout-map-link`) | the screen |
 
 It wears the pattern editor's chrome, from the same stylesheet
 (`components/editor-frame.css` — a `.editor-frame`-prefixed plain CSS import,
@@ -402,6 +399,113 @@ applies it by re-installing the Layout's projection triple with this pattern's
 axis substituted, then recompiling — `pixelCount` changes under an along-axis
 projection, and the engine reads it at init.
 
+## The Settings page (`pages/Settings.svelte`, Gitea #469)
+
+Proposal §5.3/§5.3b/§5.4d/§5.7, mockups S3, S3b–S3k. Nine equal-weight cards
+became a ranked page: the three things people open Settings for are full
+sections at the top, and everything else collapses into one `Advanced` list.
+
+```
+Device      name (read-only) · Brightness — the page's FIRST control
+LED layout  the summary + thumbnail, the kind picker, the fields, the
+            arrangement, the Outputs table, Projection, the map link
+WiFi        the connected network + a collapsed `Change network…`
+— Advanced —
+  Output processing · Panel driver · Clock & time zone · Multi-device sync ·
+  MQTT · Home Assistant · Network input · Storage · Firmware & recovery
+```
+
+Chrome is two primitives. `Section.svelte` is a small uppercase label, a
+hairline rule and a `.form` panel — only FORMS get a background, which is what
+kills the card-in-card look. `Disclosure.svelte` is one Advanced row: chevron,
+title, and a **one-line status** so a collapsed page still answers "is X on?"
+without being opened. A collapsed body is not mounted at all, so the eight
+forms behind those rows cost nothing until someone looks.
+
+### LED layout owns geometry, and speaks one endpoint
+
+Everything geometric is here — it used to be split between the editor's
+playback bar (shape select, pixel field, install-grid, install-map) and three
+Settings cards (Pixels, LED protocol, Data pin), with no card for the shape
+itself. The rule now:
+
+> **One `POST /api/layout` per user action, and the reply IS the new state.**
+
+Nothing re-GETs (`applyLayout()` in `stores/device.ts` adopts the reply: the
+Layout, the pixel count, the embedded map and the projection defaults all
+land together), so the page never shows a value the device has not confirmed,
+and a rejected body changes nothing on either side. `reboot_required` in that
+reply is what the "applies after a reboot" note reads.
+
+Three fields are deliberately NOT on that endpoint: on a **single-output**
+board, LED type and colour order keep `/api/protocol` and `/api/output`, and
+the data pin keeps `/api/datapin`. An `out` line is built once at BOOT
+(#474/#475, docs/api.md "Live vs reboot"), so routing a colour-order change
+through it would make a live setting need a reboot. Whether the firmware
+should apply those two live and the split go away is Gitea #524, named in the
+code comment.
+
+The section's own pieces:
+
+| piece | what it is |
+|---|---|
+| the summary | `layoutLabel()` in big type + a live `PatternThumb` of the FIXTURE, so the shape comes from the geometry store and nothing here re-derives it |
+| the kind picker | Strip / Matrix / Custom map — **only where the board offers a choice**; a HUB75 board has none and the summary line carries the kind |
+| `ArrangementSvg` | the panel chain: tiles, the path numbered from the `IN` connector, per-tile scan direction, the 180° markers, the total size, and output tinting. The same widget one level down (`mode="pixels"`) draws the pixel run through a strip-built matrix |
+| the refresh readout | the device's own `matrix.est_hz` (#475) when it reports one, else `estimatedRefreshHz()` — the same formula over the same inputs, for a host that does not. Amber under 100 Hz with the fix named, and the panel's live `rescan_hz` beside it. The browser model's clock and plane count are the firmware's build-time constants until Gitea #525 puts them on the wire |
+| the dark-tile note | `matrix.drive` is how many leading tiles this board's framebuffer can shift out; past it the picture dashes them and the page says how many stay dark (#475/#401) |
+| `Reboot to apply` | appears next to the "applies after a reboot" note when a stored chain arrangement or output table is outstanding AND `caps.reboot` — `POST /api/reboot` behind `confirm({reboot: true})`, because those are built once at boot and nothing else applies them |
+| `OutputsTable` | one row per output when `caps.outputs > 1`, each computing the run it owns (`pixels 300–599`), plus the strip split graphic. `out` lines are all-or-nothing, so a row edit POSTs the whole table |
+| `ProjectionBlock` | one row per pattern kind that is NOT native here, with a live card per option. Labels and options come from the ENGINE (`Luxel.projectionOptions`), a single option is a one-line note, and there is no row at all for a native kind |
+
+`data-role` contract: `settings-panel` · `sect-{device,layout,wifi}` ·
+`advanced` · `adv-<row>-{row,toggle,status,body}` · `brightness` ·
+`device-name` · `layout-{summary,headline,subhead,kind,pixels,pw,ph,scan,
+cols,rows,start,dir,snake,rot180,proto,order,datapin,datapin-apply,notes,note,
+dark,reboot,map-link}` · `arrangement` (with `data-mode`) · `refresh`, `refresh-hz`,
+`refresh-measured` · `outputs`, `output-{row,pin,proto,order,count,rev,range,
+add,remove}` · `projection-block`, `projection-kind` (with `data-dims`),
+`projection-card` (with `data-mode`), `projection-only` · `wifi-change` ·
+`panel-{clock,planes,rescan}` · `storage-{patterns,bytes,heap,psram}` ·
+`fw-{version,update,file,note}`.
+
+### Visibility is a pure module (`lib/settingsCaps.ts`)
+
+A control is **absent** unless the device advertises the thing it acts on —
+never disabled, never inferred from a board name (§5.7). The decision is one
+pure function so it can be tested over fixtures instead of one board at a
+time in a browser:
+
+```ts
+settingsVisibility(caps: DeviceCaps | null, layout: LayoutFacts): SettingsVisibility
+```
+
+`caps` is `/api/status`'s block (#464); `layout` is `{kind, dims, regular,
+panels}` off `/api/layout`. The result is one flat record of booleans the
+markup reads with `{#if}` — `kindPicker`, `stripFields`, `panelScan`,
+`arrangement`, `estimatedRefresh`, `outputsTable`, `powerCap`, `blurGlow` (+
+`blurGlowScope`, which words it "along the strip" or "across the grid"),
+`panelDriver`, `psram`, `ota`, `reboot`, and the rest. `caps === null` (firmware
+older than #464) falls back to `FALLBACK_CAPS` — what every build has always
+had — rather than to a guess.
+
+The module also owns the pure arithmetic the section draws with:
+`estimatedRefreshHz()`, `chainOrder()` (the tile order the SVG numbers —
+tiles line by line, a line being a tile row under `dir: "row"` and a column
+under `"col"`, `snake` reversing the odd lines and `rot180` marking their
+tiles as mounted upside-down; the same walk #475's boot-time remap does),
+`outputRanges()` and
+`squarish()` (picking Matrix factors the pixel count — 120 px is 12×10, not
+11×11 rounded up, so Strip → Matrix → Strip round-trips). All of it is tested
+in `web/tests/settingsCaps.test.mjs` against the four `caps` fixtures of the
+§5.3 table: a strip board, a HUB75 panel, a regular 2D matrix built from
+strips, and a 3D/irregular map. The refresh model is checked against the bench
+measurements in `firmware/src/hub75.rs` (77/115/154 Hz at 20/30/40 MHz).
+
+Driving all of it without hardware is what `luxel serve`'s `--board panel`,
+`--outputs N` and `--max-pixels N` are for; device-e2e runs the page on all
+three shapes (docs/tools.md).
+
 ## Geometry — the one Layout (`stores/geometry.ts`, Gitea #463)
 
 There is exactly ONE geometry object in the UI, and every preview, gallery
@@ -436,10 +540,17 @@ interface Layout {
 
 Rules the reconciler encodes:
 
-- **Console**: the device owns the geometry (`/api/status`'s `geom`, #464 —
-  and `/api/layout` when #465 lands: `deviceLayout` in `stores/device.ts` is
-  the ONE adapter to swap, nothing downstream changes). A "Preview as" choice
-  there only re-shapes; the pixel count stays hardware truth.
+- **Console**: the device owns the geometry. Since A8 (#469) the adapter
+  `deviceLayout` in `stores/device.ts` reads **`/api/layout` wholesale**
+  (#465) — kind, dims, w/h, the chain's wiring and the embedded map in one
+  fetch — and not a single consumer changed when it did, which is what that
+  adapter exists for. Two fallbacks stay, in order: `/api/status`'s `geom`
+  (#464), which answers during the connect handshake AND is the only reporter
+  of the engine's fabricated ceil(√n) grid (`source:"default"`, so it WINS
+  over the Layout in that one case — a `render2D`-only pattern on a strip
+  board really is rendering through a grid the Layout does not describe); then
+  `deviceMap`, for firmware older than either field. A "Preview as" choice
+  only re-shapes; the pixel count stays hardware truth.
 - **Playground**: `Auto` (the default, D7) follows the compiled pattern
   3D › 2D › 1D; anything else is the user's and outlives pattern loads.
 - `devicePixels` / `deviceMap` are **raw wire state** in `stores/device.ts`.
@@ -468,22 +579,23 @@ is an advisory hint that saves a second compile and is allowed to be wrong.
 Painting lives in `lib/draw.ts` (`paintBar` / `paintGrid` / `paintPoints`), so
 the editor preview, the gallery tiles and the row thumbnails cannot drift.
 
-What is NOT here yet: the device's real wiring. `serpentine` is wired through
-`wiringCoords()` (and unit-tested) but nothing sets it until `/api/layout`
-(#465) reports it — until then the console previews row-major, like the
-playground. Per-item projection overrides are #470/#473's.
+The device's real wiring arrived with that switch: `/api/layout`'s
+`matrix.snake` fills `serpentine`, so a console previews a snaked matrix the
+way the fixture shows it rather than row-major. Per-item projection overrides are #470/#473's.
 
 ## Store reference
 
 `stores/device.ts` — `device`, `deviceBase`, `isPlayground`, `mode`,
 `deviceError`, `deviceBlocked`, `devicePixels`, `pixelMax`, `deviceHeapFree`,
 `deviceEngineHeap`, `deviceVmerr`, `deviceFps`, `deviceOutFps`,
-`deviceRescanHz`, `deviceMap`, `deviceCaps`, `devicePatterns`, `brightness`,
+`deviceRescanHz`, `deviceMap`, `deviceLayoutWire`, `deviceCaps`,
+`deviceVersion`, `deviceSlot`, `deviceStore`, `devicePatterns`, `brightness`,
 `brightnessMax`, `deviceProtocol`, `protocolOptions`, `dataPin*`, `wifi*`,
 `mqtt*`, `outputStatus`, `palette*`, `clockStatus`, `syncStatus`, `netLive`,
 `playlist`; functions `connectDevice`, `detectDeviceBase`, `refresh*`,
-`addToPlaylist`, `queuePlaylistSave`, `markTransport`, `installDeviceMapCoords`,
-`installDeviceGridMap`, `clearDeviceMap`, `pollSubscribe`, `pollStopAll`,
+`addToPlaylist`, `queuePlaylistSave`, `markTransport`, `applyLayout`,
+`installDeviceMapCoords`, `installDeviceGridMap`, `clearDeviceMap`,
+`pollSubscribe`, `pollStopAll`,
 `startSessionPoll`.
 
 `stores/geometry.ts` — `layout`, `layoutFor()`, `layoutSignature`,

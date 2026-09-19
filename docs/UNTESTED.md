@@ -52,18 +52,49 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
 
 ## Settings tab (device mode)
 
-- [ ] **WiFi form** — shows the saved network; changing creds reboots onto
-  the new one (careful: typos strand it → AP mode should catch it now).
+The whole page was reshaped by A8 (Gitea #469, v2): Device (brightness first)
+· LED layout · WiFi, then one **Advanced** list whose rows each state their
+value while collapsed. Everything below is on the new page.
+
+- [ ] **The ranked page itself** — does the order match what you actually open
+  Settings for? Brightness is the first control; the Advanced rows should be
+  scannable without expanding any of them.
+- [ ] **LED layout on the Athom** — the summary line, the pixel count (it
+  resizes live, no reboot), LED type / colour order / data pin. The Athom
+  advertises two outputs, so the **Outputs table** should be there with an
+  `+ Add output`: adding one splits the strip in half and says
+  `pixels 0–29 / 30–59`. The table is built at boot (#474), so the page says
+  "applies after a reboot" and offers a `Reboot to apply` beside it — with a
+  second strip on GPIO 19 the back half of the fixture should light after that.
+- [ ] **LED layout on the HUB75 panel** — there should be NO layout picker at
+  all (the board has no choice) and no LED type / colour order / data pin;
+  the panel size, scan and `Panels [c] across × [r] down` instead. Setting
+  2×2 should draw the chain picture and drop the estimated refresh to ~28 Hz
+  in amber, and — because a 64×64 board only shifts 64 columns of chain — say
+  that three of the four panels would stay dark. **Do not apply it** unless you
+  actually have four panels: the `Reboot to apply` button beside the note is
+  what builds it, and it reboots.
+- [ ] **The estimated refresh number** — one 64×64 panel should read 115 Hz,
+  which is what the panel measures (`rescan_hz`, shown beside it as
+  "measured now"). The figure is the DEVICE's `est_hz` when it reports one, so
+  a disagreement there means the firmware and the panel disagree, not the
+  browser.
+- [ ] **Firmware & recovery → Update…** — pick a `luxel.bin` for that board
+  and let it flash itself over the network. **Never run against hardware**
+  (the mirror advertises no OTA, so no harness can reach this path) —
+  Gitea #526 has the full procedure and what to read before and after.
+- [ ] **WiFi form** — now collapsed behind `Change network…`; shows the saved
+  network, and changing creds reboots onto the new one (careful: typos strand
+  it → AP mode should catch it now).
 - [ ] **Device map upload** (v0.1.16): **Install on device**, the single
   primary action of the map program's own screen (A10/#471 — reached from
-  Settings → "Custom map program →"; it was the editor rail's LED-layout block
-  between #468 and #471, and the pattern editor's map sub-tab before that);
-  the wall renders with real geometry and it survives reboot. Note that
-  nothing hands the PROGRAM back from a device yet (Gitea #517) — only its
-  coordinates — so check the program text is the one this browser wrote.
+  Settings → LED layout → "Custom map program →"); the wall renders with real
+  geometry and it survives reboot. Note that nothing hands the PROGRAM back
+  from a device yet (Gitea #517) — only its coordinates — so check the program
+  text is the one this browser wrote.
 - [ ] **Network input status row** — while LedFx/xLights (or my test
-  script) streams DDP, the row says "receiving DDP" and the pattern resumes
-  a few seconds after the stream stops.
+  script) streams DDP, the collapsed Advanced row says "receiving DDP" and the
+  pattern resumes a few seconds after the stream stops.
 - [ ] **Multi-device sync role select** — with one device it just shows
   "broadcasting"/"waiting"; the real test needs a second Luxel someday.
 - [ ] **MQTT form** — your broker is already configured and connected
