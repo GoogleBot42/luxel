@@ -30,9 +30,12 @@ patterns compile and run.
 flash (or any static host): CodeMirror editor with live recompile, a
 322-pattern gallery with animated tiles (1D bars, 2D grids, rotating 3D
 clouds), step debugger with breakpoints, map editor (a debuggable map
-*program*), auto-generated controls, var watcher, shareable pattern URLs
-(maps included), `.epe` import/export, and a **sound toggle** that drives
-sound-reactive patterns from your microphone — locally and on the device.
+*program*, on its own screen), auto-generated controls, var watcher,
+shareable pattern URLs, `.epe` import/export, and a **sound toggle** that
+drives sound-reactive patterns from your microphone — locally and on the
+device. Served from a device it is a console: the same editor plus Playlist
+and a Settings page that configures the fixture (brightness, LED layout and
+wiring, panel arrangement, outputs, WiFi, MQTT, firmware update).
 
 **The firmware** (`firmware/`, esp-hal + embassy; release images for ESP32, C3, C6, S3, and HUB75-panel boards):
 
