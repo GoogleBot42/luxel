@@ -20,13 +20,16 @@ on:
     branches: [master]
   pull_request:
 
-# ONE build at a time, repo-wide, and a new build cancels whatever is in
-# flight. The group name is deliberately GLOBAL (not per-ref): with sessions
-# merging PRs continuously a superseded build is wasted runner time, and the
-# single-slot runner is shared with every other repo on the server — queue
-# time here dwarfs run time.
+# ONE build per ref, and a new push to the same ref cancels its own stale
+# build. The group used to be GLOBAL (one build repo-wide) to save time on
+# the shared single-slot runner — but with several agent sessions opening
+# PRs at once, a push on ANY branch cancelled every other branch's in-flight
+# run, the cancelled run read as commit-status `failure`, and each PR needed
+# 2–3 manual `/rerun`s before it could merge (2026-09-19, three PRs in one
+# afternoon). Cross-ref runs now queue instead; a superseded build of the
+# SAME ref is still cancelled.
 concurrency:
-  group: luxel-ci
+  group: luxel-ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
