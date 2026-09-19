@@ -1,5 +1,28 @@
 # Update log
 
+## 2026-09-19 — `/api/status` gains `geom` and `caps` (#464)
+
+The two blocks the v2 UI gates every screen on. `geom` is the engine's
+EFFECTIVE geometry — `{dims, regular, w, h, source, pattern_dims}` — which is
+NOT the device map: a `render2D`-only pattern on a bare strip runs on a
+fabricated ceil(√n) grid that `/api/map` reports as `{"installed":false}`, and
+`source:"default"` is what finally makes it visible ("user" = a map someone
+installed, "board" = a panel's own grid or a strip's index space). `caps` is
+`{strip_driver, panel, outputs, power_cap, blur_glow, layers, text_slots,
+reboot, ota, psram, assets}` derived from board features plus that geometry,
+replacing the "`data_pins` missing from `/api/config` ⇒ this is a panel"
+inference the UI has been living on.
+
+Both derivations live in a new `luxel_core::caps` (host-testable, 11 unit
+tests) so the firmware and the `luxel serve` mirror can only drift in the
+FACTS, not the rules; the firmware publishes `geom` from the render task on
+engine/map change (never per frame — `Engine::pattern_dims` walks the
+bytecode) and `status_json` pushes both with `push_piece`/`push_u32`, no
+alloc. `luxel serve` gained `--board strip|panel` and `--outputs N`: a panel
+mirror reports `max_pixels` 4096, comes up on its own 64×64 grid and
+advertises panel caps, so the v2 Settings page's capability gating is drivable
+without the panel on the bench.
+
 ## 2026-09-18 — Web UI v2 design approved; proposal + research + mockups committed (#461)
 
 A design-only session with Jeremy. `docs/design/webui-v2/proposal.md` is the

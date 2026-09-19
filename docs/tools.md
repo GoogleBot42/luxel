@@ -92,7 +92,7 @@ are documented once in [docs/api.md](api.md), not here.
 | `web/tools/lna-e2e.mjs` | The browser-blocked device state (#162) in real chromium, from a REAL https origin: serves `web/dist` twice — over TLS with a throwaway self-signed cert (openssl, dev shell) and over plain http — and points both at a dead private-space address. Asserts the https copy shows the Local-Network-Access explanation with its manual routes while the http copy shows the ordinary "cannot reach device", then A/Bs `targetAddressSpace` none/local/public from the page and prints Chromium's own errorText for each. ~40 s, no hardware. What it CANNOT do is the granted path: headless chromium doesn't run the policy (identical verdicts — see the header comment for the flags that don't help), so the https→device success flow still needs a headful browser. |
 | `web/tools/fake-wled.mjs` | A fake WLED device over HTTP that "reboots into Luxel" after an `/update` upload — the fixture flash-e2e drives. Arch/CORS/reboot-time via env. |
 | `web/tools/gen-flash-manifest.mjs` | Writes `firmware/manifest.json` for the installer page from a directory of release artifacts (release workflow + flash-e2e fixture both use it). |
-| `tools/serve-e2e.mjs` | Fast fetch-only smoke test of the mirror: HTTP API (including `POST /api/events` event injection and `POST /api/pins` digital-pin AND analog-pin injection, each driven end-to-end into a live pattern's pixels) + page routing (`/` serves the built playground or the minimal fallback; `/min` the minimal page, with its build-mode blocks resolved). Full-UI browser coverage is `web/tools/device-e2e.mjs`. |
+| `tools/serve-e2e.mjs` | Fast fetch-only smoke test of the mirror: HTTP API (including `POST /api/events` event injection and `POST /api/pins` digital-pin AND analog-pin injection, each driven end-to-end into a live pattern's pixels; and `/api/status`'s `geom`/`caps` across strip / fabricated-√n-grid / user-grid / irregular-3D layouts plus a second `--board panel` mirror) + page routing (`/` serves the built playground or the minimal fallback; `/min` the minimal page, with its build-mode blocks resolved). Full-UI browser coverage is `web/tools/device-e2e.mjs`. |
 | `tools/mqtt-e2e.mjs` | MQTT bridge against a REAL local mosquitto (dev-shell dep): mirror connects, retained availability, and the `luxel/<id>/event` topic driving a `readEvent()` pattern (text lines → pixels). Needs `web/public/luxel.wasm` (`npm run wasm`). |
 
 ## CLI (`cargo run -p luxel-cli --` or `target/release/luxel`)
@@ -102,6 +102,16 @@ are documented once in [docs/api.md](api.md), not here.
 report's engine) · `compile` (source → `.lxbc`) · `pixels`/`vars` (oracle
 halves) · `serve` (the native device-API mirror the web e2e runs against —
 route reference in [docs/api.md](api.md)).
+
+`serve` impersonates a device it is not, so UI work that gates on device facts
+can be driven without that hardware: `--heap-free`/`--engine-heap` (the
+editor's capacity warning), `--fps`/`--out-fps`/`--rescan-hz` (a pipelined
+panel's frame rates), and **`--board strip|panel` / `--outputs N`** (Gitea
+#464) — `--board panel` reports `max_pixels` 4096, comes up on its own 64×64
+grid and advertises panel `caps` (`panel:true`, `strip_driver:false`,
+`power_cap:false`, `layers:2`), which is what the v2 Settings page's
+capability gating reads. It is the flag form of what
+`web/tools/maxpixels-e2e.mjs` does by intercepting `/api/status` in the page.
 
 `run <pattern> --map-grid WxH --out frames.ppm` is the equivalence harness for
 a pattern rewrite: render before and after, diff the PPMs (`--map-grid` is

@@ -151,10 +151,31 @@ struct StoredPattern {
     bc: Vec<u8>,
 }
 
+/// Default pixel ceiling: the mirror impersonates a strip board unless
+/// `--board panel` says otherwise (see `Hw` below), which is the firmware's
+/// own per-board split (Gitea #74).
 const MAX_PIXELS: u32 = 2048;
+/// `--board panel`: a 64x64 HUB75 board's ceiling and its grid.
+const PANEL_MAX_PIXELS: u32 = 4096;
+const PANEL_W: u16 = 64;
+const PANEL_H: u16 = 64;
 
 struct State {
     pixel_count: AtomicU32,
+    /// This run's pixel ceiling — `/api/status`'s `max_pixels` and what
+    /// `POST /api/config` validates against. 2048 (a strip board) unless
+    /// `--board panel` impersonates the 4096 px HUB75 board.
+    max_pixels: u32,
+    /// What this mirror ADVERTISES it can do (`caps` on `/api/status`,
+    /// Gitea #464). The defaults are honest about the drift documented in
+    /// docs/api.md — no OTA, no reboot, no PSRAM — and `--board`/`--outputs`
+    /// let a test impersonate a board the bench does not have, which is how
+    /// the Settings page's capability gating gets driven without hardware.
+    hw: luxel_core::caps::Hw,
+    /// The running engine's effective geometry (`geom` on `/api/status`),
+    /// republished by the render loop whenever the engine or the map changes
+    /// — the same contract as the firmware's `shared::GEOM`.
+    geom: Mutex<luxel_core::caps::Geom>,
     /// What `/api/status` reports as `heap_free`. The mirror runs on a host
     /// heap, so it has no honest number of its own: 0 means "unknown" and
     /// every client (including the editor's capacity warning) must treat it
@@ -206,6 +227,11 @@ struct State {
     /// lost and `GET /api/map` could not report the `kind`/`w`/`h` the
     /// firmware reports for a procedural grid.
     device_grid: Mutex<Option<(u32, u32)>>,
+    /// Where `device_map` came from, as `luxel_core::caps::DeviceMap`
+    /// discriminants (0 None, 1 Board, 2 User) — `geom.source` must tell an
+    /// impersonated panel's own grid from a map a client installed, exactly
+    /// as `devicemap::SOURCE` does on the firmware.
+    map_source: AtomicU8,
     map_dirty: AtomicBool,
     /// Network input (DDP/E1.31): assembled RGB frame + when it last moved.
     /// While packets flow the render loop shows this instead of the engine;
@@ -724,7 +750,7 @@ fn netin_listener(state: Arc<State>, port: u16) {
     if port == luxel_core::netin::E131_PORT {
         // sACN defaults to multicast 239.255.<universe-hi>.<universe-lo>;
         // join enough universes for the largest strip. Unicast also works.
-        let n = (MAX_PIXELS as usize * 3).div_ceil(luxel_core::netin::E131_CHANNELS);
+        let n = (state.max_pixels as usize * 3).div_ceil(luxel_core::netin::E131_CHANNELS);
         for u in 1..=n as u16 {
             let [hi, lo] = u.to_be_bytes();
             let _ = sock.join_multicast_v4(
@@ -764,25 +790,53 @@ fn status_json(state: &State) -> String {
         Some(p) => format!("\"{p}\""),
         None => String::from("null"),
     };
-    // max_pixels mirrors the firmware's per-board cap field (#74); the
-    // mirror is a strip device, so it reports the strip cap.
+    // max_pixels mirrors the firmware's per-board cap field (#74): the strip
+    // cap, or the panel's under `--board panel`.
     // out_fps/rescan_hz mirror the firmware fields (#378/#394): the firmware
     // always emits them and reports 0 where they mean nothing, so the mirror
     // does the same rather than omitting them (a client must tell "0, this is
     // a strip" from "absent, this firmware is old" the same way on both).
+    // geom/caps (#464): same derivation as the firmware, over this mirror's
+    // own `Hw` — the rules live in luxel_core::caps so the two cannot drift.
+    let pixels = state.pixel_count.load(Ordering::Relaxed);
+    let geom = *state.geom.lock().unwrap();
+    let mut geom_s = String::new();
+    geom.push_json(&mut geom_s);
+    let mut caps_s = String::new();
+    luxel_core::caps::Caps::derive(state.hw, &geom, pixels).push_json(&mut caps_s);
     format!(
-        "{{\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
+        "{{\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
         fps,
         state.out_fps.load(Ordering::Relaxed),
         state.rescan_hz.load(Ordering::Relaxed),
-        state.pixel_count.load(Ordering::Relaxed),
-        MAX_PIXELS,
+        pixels,
+        state.max_pixels,
+        geom_s,
+        caps_s,
         env!("CARGO_PKG_VERSION"),
         state.heap_free.load(Ordering::Relaxed),
         state.engine_heap.load(Ordering::Relaxed),
         live,
         vmerr
     )
+}
+
+/// Publish the running engine's effective geometry (`geom`), the mirror's
+/// half of Gitea #464. Called where the engine or the map can have changed,
+/// not per frame: `Engine::pattern_dims` walks the bytecode.
+fn publish_geom(state: &State, engine: Option<&Engine>) {
+    let pixels = state.pixel_count.load(Ordering::Relaxed);
+    let dev_map = match state.map_source.load(Ordering::Relaxed) {
+        2 => luxel_core::caps::DeviceMap::User,
+        1 => luxel_core::caps::DeviceMap::Board,
+        _ => luxel_core::caps::DeviceMap::None,
+    };
+    let (dims, grid, pattern_dims) = match engine {
+        Some(e) => (e.installed_map().map_or(0, |m| m.dims), e.grid(), e.pattern_dims()),
+        None => (0, None, 0),
+    };
+    *state.geom.lock().unwrap() =
+        luxel_core::caps::Geom::derive(dev_map, dims, grid, pixels, pattern_dims);
 }
 
 fn controls_json(state: &State) -> String {
@@ -792,6 +846,14 @@ fn controls_json(state: &State) -> String {
     } else {
         s
     }
+}
+
+/// Expand a `grid W H` shape to per-pixel coordinates. The firmware keeps the
+/// grid procedural (5 bytes, Gitea #258); the mirror has heap to spare.
+fn grid_coords(w: u32, h: u32) -> Vec<[Fx; 3]> {
+    (0..w * h)
+        .map(|i| [Fx::from_int((i % w) as i32), Fx::from_int((i / w) as i32), Fx::ZERO])
+        .collect()
 }
 
 /// Parse a `POST /api/map` body: `<dims> <raw...>` (raw 16.16, dims per pixel)
@@ -807,10 +869,7 @@ fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>, Option<(u32, u32)>)> {
         if w == 0 || h == 0 || w > u16::MAX as u32 || h > u16::MAX as u32 {
             return None;
         }
-        let coords: Vec<[Fx; 3]> = (0..w * h)
-            .map(|i| [Fx::from_int((i % w) as i32), Fx::from_int((i / w) as i32), Fx::ZERO])
-            .collect();
-        return Some((2, coords, Some((w, h))));
+        return Some((2, grid_coords(w, h), Some((w, h))));
     }
     let dims: u8 = first.parse().ok()?;
     if !(2..=3).contains(&dims) {
@@ -831,6 +890,28 @@ fn parse_map(body: &str) -> Option<(u8, Vec<[Fx; 3]>, Option<(u32, u32)>)> {
         })
         .collect();
     Some((dims, coords, None))
+}
+
+/// Install (or clear) the board's OWN geometry: a `--board panel` mirror is a
+/// `PANEL_W`x`PANEL_H` grid the way a HUB75 board is, a strip mirror has none.
+/// Returns `(installed, count)` like `POST /api/map`.
+fn install_board_map(state: &State) -> (bool, usize) {
+    if state.hw.panel {
+        let (w, h) = (PANEL_W as u32, PANEL_H as u32);
+        let coords = grid_coords(w, h);
+        let n = coords.len();
+        *state.device_map.lock().unwrap() = Some((2, coords));
+        *state.device_grid.lock().unwrap() = Some((w, h));
+        state.map_source.store(1, Ordering::Relaxed);
+        state.map_dirty.store(true, Ordering::Relaxed);
+        (true, n)
+    } else {
+        *state.device_map.lock().unwrap() = None;
+        *state.device_grid.lock().unwrap() = None;
+        state.map_source.store(0, Ordering::Relaxed);
+        state.map_dirty.store(true, Ordering::Relaxed);
+        (false, 0)
+    }
 }
 
 /// Apply the installed map to an engine (no-op if none).
@@ -914,9 +995,13 @@ fn render_loop(state: Arc<State>) {
     let mut fps_mark = Instant::now();
     let mut vars_mark = Instant::now();
     let mut sensor_seen: u32 = 0;
+    // `/api/status` geom (#464) — republished after any iteration that could
+    // have swapped the engine or the map, never per frame.
+    let mut geom_dirty = true;
 
     loop {
         for msg in state.inbox.lock().unwrap().drain(..) {
+            geom_dirty = true;
             match msg {
                 Msg::Code { src, bc } => {
                     // a manual code push takes over from the playlist
@@ -945,7 +1030,7 @@ fn render_loop(state: Arc<State>) {
                 }
                 // live pixel-count change: rebuild the engine at the new count
                 Msg::Config(n) => {
-                    let n = n.clamp(1, MAX_PIXELS);
+                    let n = n.clamp(1, state.max_pixels);
                     state.pixel_count.store(n, Ordering::Relaxed);
                     if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
                         let e = engine_now(&state, p, n);
@@ -1010,6 +1095,7 @@ fn render_loop(state: Arc<State>) {
                     engine = Some(e);
                     current_bc = bc;
                     last = Instant::now();
+                    geom_dirty = true;
                 }
                 pl_start = Instant::now();
             }
@@ -1017,6 +1103,7 @@ fn render_loop(state: Arc<State>) {
 
         // apply (or clear) the installed pixel map when it changed
         if state.map_dirty.swap(false, Ordering::Relaxed) {
+            geom_dirty = true;
             if state.device_map.lock().unwrap().is_some() {
                 if let Some(eng) = engine.as_mut() {
                     apply_map(&state, eng);
@@ -1025,6 +1112,13 @@ fn render_loop(state: Arc<State>) {
                 // cleared → rebuild without a map
                 engine = Some(engine_now(&state, p, count()));
             }
+        }
+
+        // the engine and the map have settled — publish the shape
+        // `/api/status` reports (#464)
+        if geom_dirty {
+            geom_dirty = false;
+            publish_geom(&state, engine.as_ref());
         }
 
         if vars_mark.elapsed() >= Duration::from_millis(250) {
@@ -1540,7 +1634,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             let body = format!(
                 "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
                 state.pixel_count.load(Ordering::Relaxed),
-                MAX_PIXELS,
+                state.max_pixels,
                 protocol_name(state.protocol.load(Ordering::Relaxed))
             );
             respond(&mut stream, 200, "application/json", body.as_bytes());
@@ -1548,11 +1642,11 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         ("POST", "/api/config") => {
             let body = String::from_utf8_lossy(&req.body);
             let r = match body.trim().parse::<u32>() {
-                Ok(n) if n >= 1 && n <= MAX_PIXELS => {
+                Ok(n) if n >= 1 && n <= state.max_pixels => {
                     push(&state, Msg::Config(n));
                     format!("{{\"ok\":true,\"pixels\":{}}}", n)
                 }
-                _ => format!("{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}", MAX_PIXELS),
+                _ => format!("{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}", state.max_pixels),
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
@@ -1856,12 +1950,14 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                     let n = coords.len();
                     *state.device_map.lock().unwrap() = Some((dims, coords));
                     *state.device_grid.lock().unwrap() = grid;
+                    state.map_source.store(2, Ordering::Relaxed);
                     (true, n)
                 }
                 None => {
-                    *state.device_map.lock().unwrap() = None;
-                    *state.device_grid.lock().unwrap() = None;
-                    (false, 0)
+                    // empty/invalid clears — and a panel mirror falls back to
+                    // its own geometry, exactly as devicemap::board_default
+                    // does on a HUB75 board.
+                    install_board_map(&state)
                 }
             };
             state.map_dirty.store(true, Ordering::Relaxed);
@@ -1984,6 +2080,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut sync_port: u16 = luxel_core::netin::SYNC_PORT;
     let mut sync_http_port: u16 = 80; // a real leader device serves on :80
     let mut web_dir_arg: Option<String> = None;
+    // Which board this mirror impersonates (Gitea #464): "strip" (the
+    // default) or "panel" — a 64x64 HUB75 board, which changes max_pixels,
+    // the installed grid and every capability the Settings page gates on.
+    let mut panel = false;
+    let mut outputs: u8 = 1;
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         match (flag.as_str(), it.next()) {
@@ -2019,6 +2120,17 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 Ok(n) => rescan_hz = n,
                 Err(_) => return super::usage(),
             },
+            // impersonate a board's capabilities (#464) so the Settings
+            // page's caps gating is testable without that hardware
+            ("--board", Some(v)) => match v.as_str() {
+                "strip" => panel = false,
+                "panel" => panel = true,
+                _ => return super::usage(),
+            },
+            ("--outputs", Some(v)) => match v.parse::<u8>() {
+                Ok(n) if n >= 1 => outputs = n,
+                _ => return super::usage(),
+            },
             ("--sync-target", Some(v)) => sync_target = v.clone(),
             ("--sync-port", Some(v)) => match v.parse() {
                 Ok(n) => sync_port = n,
@@ -2032,8 +2144,26 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         }
     }
 
+    let max_pixels = if panel { PANEL_MAX_PIXELS } else { MAX_PIXELS };
     let state = Arc::new(State {
-        pixel_count: AtomicU32::new(pixels),
+        pixel_count: AtomicU32::new(pixels.clamp(1, max_pixels)),
+        max_pixels,
+        hw: luxel_core::caps::Hw {
+            // The mirror drives a virtual strip: pixel count, protocol and
+            // colour order are all real settings on it. It has no data pin
+            // (`POST /api/datapin` 404s), which the absent `data_pins` field
+            // on `/api/config` already says — same as the firmware.
+            strip_driver: !panel,
+            panel,
+            outputs,
+            // Honest drift (docs/api.md "mirror differences"): no reboot, no
+            // OTA, no second allocator.
+            reboot: false,
+            ota: false,
+            psram: false,
+            blur_glow: true,
+        },
+        geom: Mutex::new(luxel_core::caps::Geom::strip(pixels.clamp(1, max_pixels))),
         heap_free: AtomicU32::new(heap_free),
         engine_heap: AtomicU32::new(engine_heap),
         inbox: Mutex::new(Vec::new()),
@@ -2058,6 +2188,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         wifi_ssid: Mutex::new(None),
         device_map: Mutex::new(None),
         device_grid: Mutex::new(None),
+        map_source: AtomicU8::new(0),
         map_dirty: AtomicBool::new(false),
         live_pixels: Mutex::new(Vec::new()),
         live_mark: Mutex::new(None),
@@ -2087,6 +2218,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         web_dir: locate_web_dir(web_dir_arg),
     });
 
+    // A panel mirror comes up on its own grid, the way a HUB75 board does.
+    install_board_map(&state);
     {
         let state = state.clone();
         std::thread::spawn(move || render_loop(state));

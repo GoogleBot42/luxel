@@ -332,6 +332,29 @@ pub static RESCANS: AtomicU32 = AtomicU32::new(0);
 /// patterns that load fine.
 pub static ENGINE_HEAP: AtomicU32 = AtomicU32::new(0);
 
+/// The engine's EFFECTIVE geometry, published as `/api/status`'s `geom`
+/// (Gitea #464).
+///
+/// The engine lives in the render task and the status handler runs in a web
+/// task, so the shape has to be published rather than read — and it is the
+/// *engine's* geometry, not `devicemap::MAP`'s: a `render2D`-only pattern on
+/// a bare strip runs on a fabricated ceil(√n) grid that the device map knows
+/// nothing about, and the UI has to see it. Written by the render task when
+/// the engine or the map changes (never per frame — `Engine::pattern_dims`
+/// walks the program), read by `status_json`. A 12-byte `Copy` struct behind
+/// the same critical-section mutex the other non-atomic shared state uses, so
+/// a reader can never see half an update.
+pub static GEOM: Shared<luxel_core::caps::Geom> =
+    BlockingMutex::new(RefCell::new(luxel_core::caps::Geom::strip(0)));
+
+pub fn set_geom(g: luxel_core::caps::Geom) {
+    GEOM.lock(|c| *c.borrow_mut() = g);
+}
+
+pub fn geom() -> luxel_core::caps::Geom {
+    GEOM.lock(|c| *c.borrow())
+}
+
 /// Largest single allocation the heap can satisfy right now, in bytes.
 ///
 /// `heap_free` is a SUM over the free list — it says nothing about whether

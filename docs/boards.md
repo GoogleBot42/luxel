@@ -874,6 +874,25 @@ Two things that did NOT work, so nobody re-tries them:
 `board-c6-devkit` + `hosted-ui` (largest frame still esp-storage's 4,144 B
 flash bounce buffer).
 
+2026-09-19, **`geom` + `caps` on `/api/status`** (Gitea #464 — the effective
+geometry and the capability block the v2 UI gates every screen on):
+**+1.5 to +1.8 KB**, credless flake builds against `origin/master` `becc115`.
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `c6-devkit` + `hosted-ui` *(the tightest shipped image)* | 1,007,168 | 1,008,976 | +1,808 | **39,600 B (3.77 %)** |
+| `athom-music` | 1,006,624 | 1,008,080 | +1,456 | 40,496 B (3.86 %) |
+| `seengreat-hub75` | 969,712 | 971,168 | +1,456 | 77,408 B (7.38 %) |
+
+A strip board and a panel board move by exactly the same amount because none
+of it is board-conditional: it is `luxel_core::caps`'s two derivations and two JSON
+writers, `Engine::pattern_dims`, `devicemap`'s source/shape accessors and the
+render task's publish call (the C6's extra 352 B is RISC-V codegen, not a
+different feature set). The shipped C6 is back on the warn line's doorstep at
+3.77 % — see the ceiling note above. `.stack` on `board-athom-music` 25,580 B,
+`tools/stack-check.sh` clean (largest frame unchanged — esp-storage's 4,144 B
+flash bounce buffer; the new `publish_geom` does not appear in the top table).
+
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal
