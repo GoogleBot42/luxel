@@ -526,6 +526,14 @@ playground. Per-item projection overrides are #470/#473's.
   the device / the "Preview as" choice / the compiled pattern's dims. No
   component compiles at a pixel count of its own or installs a map of its own —
   see the Geometry section above.
+- **One phone breakpoint: `@media (max-width: 600px)`.** Every responsive rule
+  in `web/src` hangs off it — the Patterns grid, the Gallery tiles, the
+  Playlist page and its rows, the pattern picker. Mobile is a soft requirement
+  met by RESTACKING, never by a second flow (CLAUDE.md), so a new surface
+  reuses this number rather than inventing one. `Dialog.svelte`'s 420 px is
+  not a second breakpoint: it is the width at which two side-by-side buttons
+  stop fitting. Targets under it are thumb-sized (≥ 32 px) and no page may
+  scroll sideways at 390 px — `device-e2e.mjs` asserts both on the Playlist.
 - **No native dialogs.** `window.prompt` / `window.confirm` / `alert` do not
   appear anywhere under `web/src` — naming and confirmation go through
   `stores/dialog.ts` (#472). A native dialog also hangs the e2e harnesses,
