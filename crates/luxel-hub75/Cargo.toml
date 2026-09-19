@@ -6,6 +6,11 @@ license.workspace = true
 description = "Row-oriented bulk bitplane packer for HUB75 BCM framebuffers"
 
 [dependencies]
+# The arrangement this crate remaps for IS `luxel_core::layout::Matrix` —
+# reused rather than restated. `default-features = false` keeps the compiler
+# frontend out of the firmware graph (the firmware depends on luxel-core the
+# same way; the two unify to "off").
+luxel-core = { path = "../luxel-core", default-features = false }
 
 [dev-dependencies]
 # The real framebuffer the firmware drives — the tests build a reference

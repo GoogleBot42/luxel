@@ -137,7 +137,7 @@ iram-math = ["luxel-core/iram-math"]
 # rescans the panel. Combine with board-s3-devkit (src/board.rs guards the
 # chip). embedded-graphics: just for Point/Rgb888 — already in the tree
 # transitively via hub75-framebuffer.
-hub75 = ["dep:esp-hub75", "dep:embedded-graphics", "dep:luxel-hub75"]
+hub75 = ["dep:esp-hub75", "dep:embedded-graphics", "dep:luxel-hub75", "luxel-core/panel"]
 
 # Chip features (selected via a board feature, not directly).
 esp32c3 = [

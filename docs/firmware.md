@@ -166,6 +166,23 @@ into the destination, zero stack cost. `read_chunk` in
 word-aligned heap buffer, then copy out the unaligned slice actually
 wanted.
 
+**The HUB75 panel's allocations are leaked at boot, by design** (#475,
+#329, #376). `firmware/src/hub75.rs` heap-allocates and never frees two
+bitplane framebuffers (~28 KB each at 64×64/7 planes — DMA targets, so
+internal SRAM is not optional), the 2 KiB packer tables, and — only when
+the configured arrangement is not already row-major — an 8 KiB
+panel→pixel remap table. All of it is allocated in `main()` wiring, before
+the WiFi blob's boot mallocs, when two contiguous 28 KB blocks are still a
+certainty; every one of them is fallible and disables the thing it serves
+rather than panicking. The remap is the one that varies with a device
+setting: it is 2 B per driver pixel, one seventh of the framebuffers it
+accompanies, and it is read once per pixel inside the 8.66 ms compose
+window — which is why it stays in internal DRAM and not in the PSRAM
+arena (`psram.rs` keeps every per-frame buffer out of PSRAM for exactly
+this reason). A single upright panel — every device shipped so far —
+builds the table, finds it is the identity, frees it again, and holds
+nothing.
+
 **Measure `.stack`, don't estimate it.** `readelf -S` (or
 `tools/stack-check.sh`, see docs/tools.md) is ground truth. v0.1.31 shipped
 on an arithmetic estimate of ~27 KB of leftover stack; the real, linked

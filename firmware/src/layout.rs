@@ -89,6 +89,13 @@ pub fn configured_output(n: u8) -> Option<Output> {
     LAYOUT.lock(|c| c.borrow().as_ref().and_then(|l| l.outputs.iter().find(|o| o.n == n).copied()))
 }
 
+/// The configured matrix arrangement — what the HUB75 driver builds its
+/// panel→pixel remap from at boot (#475), and what the refresh estimate
+/// describes. Copied out rather than cloning the whole Layout.
+pub fn matrix() -> Matrix {
+    LAYOUT.lock(|c| c.borrow().as_ref().map_or_else(|| board_default().matrix, |l| l.matrix))
+}
+
 /// The projection defaults to install on every engine (boot and rebuild).
 pub fn projection() -> Projection {
     LAYOUT.lock(|c| c.borrow().as_ref().map_or(Projection::DEFAULT, |l| l.proj))
@@ -210,6 +217,10 @@ fn json(pixels: Option<u32>, ok: Option<bool>) -> String {
         default_pin,
         default_proto: crate::shared::PROTOCOL.load(Ordering::Relaxed),
         default_order: crate::shared::COLOR_ORDER.load(Ordering::Relaxed),
+        // `hub75` is what turns on luxel-core's `panel` feature, so a strip
+        // board's `View` has no such field and pays nothing for it (#501).
+        #[cfg(feature = "hub75")]
+        panel: Some(crate::hub75::panel_view(&matrix())),
     };
     let mut out = String::new();
     if let Some(reboot) = ok {

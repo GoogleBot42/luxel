@@ -198,6 +198,22 @@ paths:
   wraps the writer in a private `IgnoreBody<W>` for HEAD — a second writer
   type that duplicates every GET instantiation. A new body kind is a new
   `ApiBody` variant; a runtime header value is `HVal::Owned`.
+- The same tax applies to the routes that answer and THEN reboot
+  (`/api/apmode`, `/api/reboot`): they bypass the dispatcher's shared exit to
+  write their response before signalling `REBOOT`, so each such arm is its own
+  `finalize().await? + write_to` instantiation — a whole extra copy of
+  picoserve's response path. Measured 2026-09-19: giving `/api/reboot` its own
+  arm cost 624–704 B on the strip boards; folding it into `/api/apmode`'s arm
+  (`r @ ("/api/apmode" | "/api/reboot")`, branch inside) cost 144–384 B. Any
+  future "reply then reboot" route joins that arm.
+- A field added to a struct SHARED with the mirror (`luxel_core::layout::View`
+  and friends) is not free on boards that always pass `None`: the writer takes
+  a `&View`, so the compiler cannot fold the branch away. `View::panel`
+  measured 96–112 B on every strip board before it went behind a
+  `luxel-core/panel` feature that only the firmware's `hub75` enables. Gate
+  host-specific fields with a cargo feature, and prove it with flake builds of
+  `athom-music`, `c6-devkit-hosted` and `pixelblaze-v3` before and after —
+  those three are the tightest slots (Gitea #501/#513).
 - No 64-bit division on the per-pixel path. Xtensa has a hardware 32-bit
   divide (`quos`) but every `i64`/`u64` `/` or `%` compiles to a call into
   the mask ROM's libgcc (`__divdi3`/`__udivmoddi4`, ~100+ cycles), and the

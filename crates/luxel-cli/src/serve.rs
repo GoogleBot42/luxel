@@ -1030,6 +1030,8 @@ fn with_layout_view<R>(
         Some((dims, coords)) => (*dims, luxel_core::outpipe::detect_grid(*dims, coords)),
         None => (0, None),
     };
+    // copied out and the guard dropped here: `f` locks `state.layout` itself
+    let matrix = state.layout.lock().unwrap().matrix;
     f(&luxel_core::layout::View {
         pixels: pixels.unwrap_or_else(|| state.pixel_count.load(Ordering::Relaxed)),
         max_pixels: state.max_pixels,
@@ -1043,6 +1045,14 @@ fn with_layout_view<R>(
         default_pin: 0,
         default_proto: state.protocol.load(Ordering::Relaxed),
         default_order: state.color_order.load(Ordering::Relaxed),
+        // A `--board panel` mirror answers the refresh estimate from the
+        // Seengreat board's own numbers (7 bitplanes, 30 MHz LCD_CAM) so a
+        // Settings page can be built against it; `drive` is the whole chain
+        // because a mirror has no DMA framebuffer to run out of.
+        panel: state.hw.panel.then(|| luxel_core::layout::PanelView {
+            est_hz: luxel_hub75::arrange::est_hz(&matrix, 7, 30_000_000),
+            drive: matrix.panels(),
+        }),
     })
 }
 

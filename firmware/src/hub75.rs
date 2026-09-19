@@ -39,16 +39,28 @@ use esp_hub75::framebuffer::compute_rows;
 use esp_hub75::{Color, Hub75, Hub75Pins16, Hub75Swap};
 use esp_println::println;
 
+use luxel_core::layout::{Matrix, PanelView};
+use luxel_hub75::arrange;
+
 use crate::leds::{scale5, Protocol};
 use crate::output::OutputDriver;
 
-/// Panel geometry. Compile-time on purpose: the framebuffer type is
-/// const-generic and DMA-static, so runtime width/height would mean
-/// carrying every monomorphization in flash. Chained panels / other
-/// geometries get their own board consts when a board needs them (#73).
+/// The area the DMA drives, in panel pixels. Compile-time on purpose: the
+/// framebuffer type is const-generic and DMA-static, so runtime width/height
+/// would mean carrying every monomorphization in flash (#401 is that work).
+///
+/// This is a CHAIN extent, not one panel: a HUB75 chain shifts as one ribbon
+/// `pw` wide per tile, so two 32-wide tiles fit here exactly as one 64-wide
+/// tile does. What the tiles are, where they hang and which way the chain
+/// threads them is the runtime arrangement (`Layout.matrix`, #475); the
+/// firmware turns it into a remap table at boot and drives the leading tiles
+/// that fit in here (`arrange::driven_panels`).
 pub const PANEL_COLS: usize = 64;
 pub const PANEL_ROWS: usize = 64;
 const NROWS: usize = compute_rows(PANEL_ROWS);
+/// Driver pixels the framebuffer covers — also the remap table's length.
+const FB_PIXELS: usize = PANEL_COLS * PANEL_ROWS;
+const _: () = assert!(NROWS * 2 == PANEL_ROWS, "the remap assumes a half-height dual-RGB scan");
 
 /// BCM bit depth. Refresh rate halves per extra plane (the MSB plane is
 /// rescanned 2^(PLANES-1) times per frame). Measured on the bench panel at
@@ -122,6 +134,42 @@ fn alloc_tables() -> Option<&'static mut luxel_hub75::Tables> {
         return None;
     }
     Some(unsafe { &mut *p })
+}
+
+/// Build the boot-time panel→pixel remap for `m` (Gitea #475), leaked like
+/// the framebuffers. `None` = the arrangement is already what the compose
+/// path does natively (one upright tile, or any chain that comes out
+/// row-major) or the 8 KiB table would not fit — either way the frame is
+/// packed exactly as it was before this existed, with no per-pixel cost.
+fn build_remap(m: &Matrix) -> Option<&'static [u16]> {
+    let layout = core::alloc::Layout::array::<u16>(FB_PIXELS).ok()?;
+    // zeroed: `build_lut` overwrites every entry, but a `&mut [u16]` may not
+    // be made from uninitialised memory.
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) }.cast::<u16>();
+    if p.is_null() {
+        println!("hub75: remap alloc failed — arrangement ignored");
+        return None;
+    }
+    // SAFETY: `FB_PIXELS` zeroed, aligned `u16`s, never freed while borrowed.
+    let lut: &'static mut [u16] = unsafe { core::slice::from_raw_parts_mut(p, FB_PIXELS) };
+    arrange::build_lut(lut, m, PANEL_COLS, PANEL_ROWS);
+    if arrange::is_identity(lut) {
+        // SAFETY: same pointer and layout the allocation used; the only
+        // reference to it dies here.
+        unsafe { alloc::alloc::dealloc(p.cast::<u8>(), layout) };
+        return None;
+    }
+    Some(lut)
+}
+
+/// What `GET /api/layout` reports about a matrix arrangement on this board:
+/// the refresh the chain would rescan at, and how much of it this
+/// framebuffer can drive.
+pub fn panel_view(m: &Matrix) -> PanelView {
+    PanelView {
+        est_hz: arrange::est_hz(m, PLANES as u32, CLOCK.as_hz()),
+        drive: arrange::driven_panels(m, PANEL_COLS, PANEL_ROWS) as u32,
+    }
 }
 
 /// The channel LUT the packer folds into its tables: what the panel is
@@ -215,6 +263,10 @@ pub struct Hub75Output {
     tables: Option<&'static mut luxel_hub75::Tables>,
     /// Brightness the tables were built for; `u8::MAX` = never built.
     tables_b5: u8,
+    /// The boot-time panel→pixel remap (Gitea #475). `None` = the configured
+    /// arrangement IS the driver's own row-major order, so nothing is
+    /// gathered and the compose path is byte-for-byte what it always was.
+    remap: Option<&'static [u16]>,
 }
 
 impl Hub75Output {
@@ -229,6 +281,7 @@ impl Hub75Output {
             last_shown_seq: 0,
             tables: None,
             tables_b5: u8::MAX,
+            remap: None,
         };
         // esp-hub75's macro expands to `StaticCell::uninit().write([EMPTY; N])`
         // — the descriptor array is written straight into the static, but the
@@ -266,6 +319,25 @@ impl Hub75Output {
             println!("hub75: framebuffer layout probe FAILED — per-pixel compose");
             None
         };
+        // The configured arrangement (#475). `layout::init()` has already run
+        // (main.rs wires the panel after it), so this is the stored Layout.
+        let m = crate::layout::matrix();
+        let remap = build_remap(&m);
+        let view = panel_view(&m);
+        println!(
+            "hub75: {}x{} tiles of {}x{} from {} {}{}{}, driving {}, remap {}, est {} Hz",
+            m.cols,
+            m.rows,
+            m.pw,
+            m.ph,
+            m.start.as_str(),
+            m.dir.as_str(),
+            if m.snake { " snake" } else { "" },
+            if m.rot180 { " rot180" } else { "" },
+            view.drive,
+            if remap.is_some() { "on" } else { "off (row-major)" },
+            view.est_hz,
+        );
         match Hub75::new(lcd_cam, pins, channel, tx_descriptors, CLOCK, &*front) {
             Ok(h) => {
                 // Descriptor cost is worth printing once: the frame-atomic
@@ -295,6 +367,7 @@ impl Hub75Output {
                     last_shown_seq: 0,
                     tables,
                     tables_b5: u8::MAX,
+                    remap,
                 }
             }
             Err(e) => {
@@ -473,17 +546,27 @@ impl OutputDriver for Hub75Output {
                 self.tables_b5 = brightness5;
             }
         }
-        match self.tables.as_deref() {
-            Some(tables) => {
+        match (self.tables.as_deref(), self.remap) {
+            (Some(tables), None) => {
                 luxel_hub75::pack::<NROWS, PANEL_COLS, PLANES>(fb_words(back), rgb, tables);
             }
-            None => {
+            (Some(tables), Some(lut)) => {
+                let fb = fb_words(back);
+                luxel_hub75::pack_remap::<NROWS, PANEL_COLS, PLANES>(fb, rgb, lut, tables);
+            }
+            (None, remap) => {
                 back.erase();
                 // At 0 the erase above already produced the all-black frame.
                 if brightness5 > 0 {
                     let full = brightness5 >= 31;
-                    for (i, px) in rgb.iter().enumerate().take(PANEL_COLS * PANEL_ROWS) {
-                        let [r, g, b] = *px;
+                    for i in 0..FB_PIXELS {
+                        // Driver pixel i takes its colour from engine pixel
+                        // `lut[i]`; unmapped and short frames stay erased.
+                        let src = match remap {
+                            Some(l) => usize::from(l[i]),
+                            None => i,
+                        };
+                        let Some([r, g, b]) = rgb.get(src).copied() else { continue };
                         let (r, g, b) = if full {
                             (r, g, b)
                         } else {

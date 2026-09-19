@@ -1,5 +1,76 @@
 # Update log
 
+## 2026-09-19 — HUB75 panel arrangement: the boot-time panel→pixel remap (#475)
+
+A HUB75 chain is one ribbon — the driver shifts a single row `pw · panels`
+wide and `ph` tall — but the tiles hang wherever the installer put them: side
+by side, stacked, snaked, half of them upside-down. `#465` gave the Layout a
+place to say so (`matrix pw ph cols rows start dir snake rot180 [scan]`);
+nothing read it. Now the firmware builds **one lookup table at boot**,
+`lut[driver pixel] = engine pixel`, so the engine keeps rendering a single
+`pw·cols` × `ph·rows` row-major grid and never learns about the chain, while
+the compose path gathers through the table in chain order with per-tile
+180° rotation.
+
+**Chain order, stated.** Tiles are visited line by line (a line is a row of
+tiles under `dir row`, a column under `dir col`); `start` places tile 0 and so
+sets which way line 0 travels; `snake` runs every odd line back the other way;
+`rot180` marks the tiles on those odd lines as mounted upside-down, which is
+how a serpentine wall is physically built. `crates/luxel-hub75/src/arrange.rs`
+is the whole of it, with 27 host tests — every corner × direction × snake ×
+rot180 on 2×2, 3×2, 4×1, 1×3 and 1×1 of toy tiles must be a permutation of the
+grid and must visit every tile once, plus golden chain orders, the rotated-tile
+corner, the clamped prefix, and `pack_remap` byte-equal to packing the
+rearranged frame.
+
+**The identity case costs nothing, and is found rather than assumed.** The
+table is built unconditionally and then checked: `lut[i] == i` everywhere means
+the arrangement already IS the driver's own row-major order, so it is freed and
+the compose path is byte-for-byte what it was. That covers the single upright
+panel every device ships with — *and* arrangements that merely come out
+row-major, like two 32-wide tiles wired `tl row`, which a `cols == 1 &&
+rows == 1` test would have missed.
+
+**Estimated refresh** is now computed rather than guessed:
+`est_hz = clock_hz / (scan · (2^planes − 1) · pw · panels)`, reported as
+`matrix.est_hz` on `GET /api/layout` alongside `matrix.drive` (how many
+leading tiles this board's framebuffer can actually shift out). It reproduces
+every measured number in docs/boards.md — 115/76/153 Hz at 30/20/40 MHz
+against 115.3/76.9/153.5 measured — and the #255 research's 28.8 Hz for four
+chained 64×64 tiles. A Settings page computing the same number in the browser
+(#469) has the formula in docs/api.md and `est_hz` to check itself against;
+under ~100 Hz the panel flickers.
+
+**`POST /api/reboot`**, because `reboot_required` had no counterpart on a panel
+board: the other reboots are side effects of `/api/wifi` and `/api/datapin`,
+and a HUB75 board has no data pin. Firmware only, gated on `caps.reboot`.
+
+**On metal** (Seengreat 64×64, Aurora 2D at 4096 px). The no-op path really is
+one: `heap_free` is byte-identical to master at 41,612 and `out_us` sits inside
+master's own sample spread (the compose takes one extra branch per row pair, 32
+a frame, not one per pixel). A live table costs exactly 8,192 B of internal
+DRAM and ≈790 µs of compose — 2.6 ms → 3.4 ms against the 8.66 ms rescan
+window, so fps, `out_fps` and `rescan_hz` are unchanged. A `32 64 2 1 tr row`
+chain (two tiles, halves swapped) and a `32 32 2 2 bl row 1 1` chain (four
+tiles, snaked, alternate lines rotated, clamped to the 2 the framebuffer
+covers) both boot and render. The device's own `est_hz` read 115 against a
+measured `rescan_hz` of 115 throughout.
+
+**The arrangement costs the strip boards zero bytes.** The builder lives in
+`luxel-hub75`, an optional dependency behind the firmware's `hub75` feature,
+and the `est_hz`/`drive` half of the Layout JSON is behind a new
+`luxel-core/panel` feature that only `hub75` turns on — before that gate the
+three strip images each grew 96–112 B for a field they can never populate
+(#501/#513). Flake builds: athom `+0`, c6-hosted `+0`, pb-v3 `+0`, seengreat
+`+2,800`. `POST /api/reboot` adds the rest (+368/+144/+384/+480), and shares
+one match arm with `/api/apmode` because its own arm cost 624–704 B — a whole
+second copy of picoserve's response path. Totals: seengreat `+3,280` (7.78 %
+of the OTA slot still free), athom `+368`, c6-hosted `+144`, pb-v3 `+384`.
+
+**Still needs a second physical panel** (filed separately): a chain that is
+genuinely more than one panel wide needs the pixel ceiling past 4096 and the
+DMA framebuffers to grow, which is #401/#255, and no arrangement's *physical*
+correctness can be eyeballed on one panel.
 ## 2026-09-19 — multiple outputs: each one drives a consecutive run of the one Layout (#474)
 
 `/api/layout` has carried an `out` table since #465, but only the first entry

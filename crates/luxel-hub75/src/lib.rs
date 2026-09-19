@@ -50,6 +50,8 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod arrange;
+
 /// The six colour bits of an entry word: R1 G1 B1 R2 G2 B2 at bits 9..=14.
 /// Everything else in the word (row address, latch, output-enable) is written
 /// by the framebuffer's own `format()` and must survive composition.
@@ -133,6 +135,21 @@ fn row_slice<'a, const COLS: usize>(
     &pad[..]
 }
 
+/// Gather a `COLS`-wide driver row through one row of a remap table
+/// ([`arrange`]): `lut[x]` is the engine pixel that belongs at driver column
+/// `x`. [`arrange::UNMAPPED`] — and any index past the end of the frame —
+/// reads black, exactly as a short frame does above.
+fn gather_row<'a, const COLS: usize>(
+    rgb: &[[u8; 3]],
+    lut: &[u16],
+    pad: &'a mut [[u8; 3]; COLS],
+) -> &'a [[u8; 3]] {
+    for (d, e) in pad.iter_mut().zip(lut.iter()) {
+        *d = rgb.get(usize::from(*e)).copied().unwrap_or([0; 3]);
+    }
+    &pad[..]
+}
+
 /// Pack an RGB888 frame into a `plane -> row -> column` bitplane framebuffer.
 ///
 /// `dst` is the whole framebuffer viewed as 16-bit entries; it must already
@@ -153,6 +170,37 @@ pub fn pack<const NROWS: usize, const COLS: usize, const PLANES: usize>(
     rgb: &[[u8; 3]],
     tables: &Tables,
 ) {
+    pack_inner::<NROWS, COLS, PLANES>(dst, rgb, None, tables);
+}
+
+/// [`pack`], but the frame is gathered through a panel→pixel remap
+/// (Gitea #475): `lut[driver index]` is the engine pixel that belongs there.
+///
+/// This is what makes a multi-panel chain — or a rotated, snaked or
+/// corner-started one — look like a single row-major grid to the engine. A
+/// remap that turns out to be the identity is thrown away at boot rather
+/// than run through here, so nothing on a plain single upright panel pays
+/// for the gather (see [`arrange::is_identity`]).
+///
+/// # Panics
+/// If `lut` is not exactly `NROWS * 2 * COLS` entries, or on [`pack`]'s own
+/// conditions.
+pub fn pack_remap<const NROWS: usize, const COLS: usize, const PLANES: usize>(
+    dst: &mut [u16],
+    rgb: &[[u8; 3]],
+    lut: &[u16],
+    tables: &Tables,
+) {
+    assert_eq!(lut.len(), NROWS * 2 * COLS, "remap table length");
+    pack_inner::<NROWS, COLS, PLANES>(dst, rgb, Some(lut), tables);
+}
+
+fn pack_inner<const NROWS: usize, const COLS: usize, const PLANES: usize>(
+    dst: &mut [u16],
+    rgb: &[[u8; 3]],
+    lut: Option<&[u16]>,
+    tables: &Tables,
+) {
     const {
         assert!(PLANES <= MAX_PLANES, "bit = 7 - plane; more than 8 planes has no source bit");
     }
@@ -167,8 +215,18 @@ pub fn pack<const NROWS: usize, const COLS: usize, const PLANES: usize>(
     let mut bpad = [[0u8; 3]; COLS];
 
     for r in 0..NROWS {
-        let top = row_slice::<COLS>(rgb, r * COLS, &mut tpad);
-        let bot = row_slice::<COLS>(rgb, (r + NROWS) * COLS, &mut bpad);
+        // One branch per ROW PAIR, not per pixel: an unmapped panel walks
+        // exactly the slices it always walked.
+        let (top, bot) = match lut {
+            None => (
+                row_slice::<COLS>(rgb, r * COLS, &mut tpad),
+                row_slice::<COLS>(rgb, (r + NROWS) * COLS, &mut bpad),
+            ),
+            Some(l) => (
+                gather_row::<COLS>(rgb, &l[r * COLS..(r + 1) * COLS], &mut tpad),
+                gather_row::<COLS>(rgb, &l[(r + NROWS) * COLS..(r + NROWS + 1) * COLS], &mut bpad),
+            ),
+        };
 
         for (x, (t, b)) in top.iter().zip(bot.iter()).enumerate() {
             let (rt, gt, bt) = (usize::from(t[0]), usize::from(t[1]), usize::from(t[2]));
@@ -515,5 +573,71 @@ mod tests {
             "per-pixel erase+set_pixel: {old:?}/frame\nrow-oriented pack:         {new:?}/frame\nspeedup: {:.2}x",
             old.as_secs_f64() / new.as_secs_f64()
         );
+    }
+
+    // --- the panel→pixel remap (Gitea #475) -------------------------------
+
+    /// An identity remap must compose exactly what the plain path composes —
+    /// the property the firmware relies on when it throws the table away.
+    #[test]
+    fn an_identity_remap_packs_identically() {
+        let mut rng = Rng(0x2026_0919_51d0);
+        let frame = rng.frame(PIXELS);
+        let t = Tables::from_lut(&lut_for(19));
+        let lut: Vec<u16> = (0..PIXELS as u16).collect();
+        let mut a = Fb::new();
+        let mut b = Fb::new();
+        pack::<NROWS, COLS, PLANES>(as_words_mut(&mut a), &frame, &t);
+        pack_remap::<NROWS, COLS, PLANES>(as_words_mut(&mut b), &frame, &lut, &t);
+        assert_eq!(as_words(&a), as_words(&b));
+    }
+
+    /// A real arrangement must compose exactly what packing the rearranged
+    /// frame would — i.e. the gather is the only difference.
+    #[test]
+    fn a_remapped_frame_packs_as_the_rearranged_frame() {
+        let mut rng = Rng(0x2026_0919_475a);
+        let frame = rng.frame(PIXELS);
+        let t = Tables::from_lut(&lut_for(31));
+        // two 32-wide tiles, chain starting at the top-right: halves swapped
+        let mut m = luxel_core::layout::Matrix::single(32, 64);
+        m.cols = 2;
+        m.start = luxel_core::layout::Corner::Tr;
+        let mut lut = vec![0u16; PIXELS];
+        assert_eq!(crate::arrange::build_lut(&mut lut, &m, COLS, NROWS * 2), 2);
+
+        let rearranged: Vec<[u8; 3]> =
+            lut.iter().map(|&e| frame.get(usize::from(e)).copied().unwrap_or([0; 3])).collect();
+        let mut a = Fb::new();
+        let mut b = Fb::new();
+        pack::<NROWS, COLS, PLANES>(as_words_mut(&mut a), &rearranged, &t);
+        pack_remap::<NROWS, COLS, PLANES>(as_words_mut(&mut b), &frame, &lut, &t);
+        assert_eq!(as_words(&a), as_words(&b));
+        // and it really did move: the two halves are not where they were
+        let plain = {
+            let mut fb = Fb::new();
+            pack::<NROWS, COLS, PLANES>(as_words_mut(&mut fb), &frame, &t);
+            fb
+        };
+        assert_ne!(as_words(&plain), as_words(&b));
+    }
+
+    /// An unmapped driver pixel is black, exactly like a short frame's tail.
+    #[test]
+    fn unmapped_driver_pixels_compose_black() {
+        let mut rng = Rng(0x2026_0919_1234);
+        let frame = rng.frame(PIXELS);
+        let t = Tables::from_lut(&lut_for(31));
+        let mut lut: Vec<u16> = (0..PIXELS as u16).collect();
+        for e in lut.iter_mut().skip(PIXELS / 2) {
+            *e = crate::arrange::UNMAPPED;
+        }
+        let mut half = frame.clone();
+        half[PIXELS / 2..].fill([0; 3]);
+        let mut a = Fb::new();
+        let mut b = Fb::new();
+        pack::<NROWS, COLS, PLANES>(as_words_mut(&mut a), &half, &t);
+        pack_remap::<NROWS, COLS, PLANES>(as_words_mut(&mut b), &frame, &lut, &t);
+        assert_eq!(as_words(&a), as_words(&b));
     }
 }

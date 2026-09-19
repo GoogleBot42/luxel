@@ -685,6 +685,26 @@ pub struct View<'a> {
     pub default_pin: u8,
     pub default_proto: u8,
     pub default_order: u8,
+    /// What this host's panel driver makes of a matrix Layout (#475).
+    /// `None` on a host with no panel — a strip mirror, and every strip
+    /// board. Absent entirely without the `panel` feature.
+    #[cfg(feature = "panel")]
+    pub panel: Option<PanelView>,
+}
+
+/// The panel driver's own reading of the configured arrangement (#475): the
+/// firmware reports it so a UI computing the same estimate in the browser
+/// has something to check itself against, and so it can say when a board is
+/// driving fewer tiles than the arrangement describes.
+#[cfg(feature = "panel")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PanelView {
+    /// Estimated rescan rate for the whole configured chain, Hz. The formula
+    /// is in docs/api.md; below ~100 Hz the panel visibly flickers.
+    pub est_hz: u32,
+    /// Leading tiles of the chain this board's framebuffer actually drives.
+    /// Less than `panels` means the rest of the arrangement is dark (#401).
+    pub drive: u32,
 }
 
 impl Layout {
@@ -742,6 +762,13 @@ impl Layout {
             push_u32(out, u32::from(self.matrix.rot180));
             push_piece(out, ",\"scan\":");
             push_u32(out, self.matrix.scan as u32);
+            #[cfg(feature = "panel")]
+            if let Some(p) = v.panel {
+                push_piece(out, ",\"est_hz\":");
+                push_u32(out, p.est_hz);
+                push_piece(out, ",\"drive\":");
+                push_u32(out, p.drive);
+            }
             push_piece(out, "}");
         }
         push_piece(out, ",\"outputs\":[");
@@ -871,6 +898,8 @@ mod tests {
             default_pin: 18,
             default_proto: 1,
             default_order: 2,
+            #[cfg(feature = "panel")]
+            panel: None,
         }
     }
 
@@ -1144,6 +1173,22 @@ mod tests {
         assert!(s.contains("\"matrix\":{\"pw\":64,\"ph\":64,\"cols\":1,\"rows\":1,\"start\":\"tl\",\"dir\":\"row\",\"snake\":0,\"rot180\":0,\"scan\":0}"));
         assert!(s.contains("\"w\":64,\"h\":64"));
         assert!(s.contains("\"count\":1"), "one implicit output = one panel");
+        assert!(!s.contains("est_hz"), "no panel driver, no estimate");
+    }
+
+    /// A host with a panel driver adds its reading of the arrangement (#475).
+    #[cfg(feature = "panel")]
+    #[test]
+    fn a_panel_host_adds_the_refresh_estimate_and_the_driven_count() {
+        let mut l = Layout::board_default(LayoutKind::Matrix, Matrix::single(64, 64));
+        l.matrix.cols = 2;
+        let mut v = view(&l, 8192, "null");
+        v.panel = Some(PanelView { est_hz: 57, drive: 1 });
+        let mut s = String::new();
+        l.push_json(&mut s, &v);
+        assert!(s.contains("\"rot180\":0,\"scan\":0,\"est_hz\":57,\"drive\":1}"), "{s}");
+        assert!(s.contains("\"w\":128,\"h\":64"));
+        assert!(s.contains("\"count\":2"), "one implicit output covers both panels");
     }
 
     #[test]

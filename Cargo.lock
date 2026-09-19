@@ -337,6 +337,7 @@ version = "0.1.0"
 dependencies = [
  "dhat",
  "luxel-core",
+ "luxel-hub75",
  "rumqttc",
  "serde_json",
 ]
