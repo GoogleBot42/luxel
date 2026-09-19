@@ -1,5 +1,67 @@
 # Update log
 
+## 2026-09-19 — web v2 A6: one Patterns page, device-shaped tiles, running marker (#467)
+
+The Patterns Library / PixelBlaze Library / Device Patterns tabs were three
+tabs over the same thing, which made the console look like three apps. They
+are now ONE `pages/Patterns.svelte` with a segmented source control (D3):
+
+```
+console:     On device (5) | Library (307) [| PixelBlaze Library (283)]
+playground:  Library (307) | Mine (2)      [| PixelBlaze Library (283)]
+```
+
+One search box, one tile grid per source — all mounted, the inactive ones
+`hidden`, so switching sources keeps their compiled engines and a hidden grid
+intersects nothing (no frames spent on it). The page re-defaults its pick when
+the *mode* changes, so a console opens on `On device` even though the app boots
+as a playground and discovers the device afterwards.
+
+`components/Gallery.svelte` became the generic grid behind all of them: it
+takes either `items` (a `GalleryItem[]` the page supplies — device patterns,
+this browser's saved ones) or `src` (a generated JSON it fetches), plus
+`search`, `playingKey` and bindable `count`/`loading`/`note` for the segment
+chips. A device pattern whose source has not streamed in yet is a spinning
+tile, and when it arrives only that tile's engine is rebuilt. It also lost a
+latent bug: the thumb used to be two `<canvas>` elements in an `{#if}`, so a
+tile whose compiled dims disagreed with gen-gallery's regex hint held a
+reference to a detached canvas and never drew. One canvas now, class-toggled.
+
+Per-tile verbs (proposal §5.1, §5.4b) replace the loose page-level buttons:
+the running pattern wears a 2 px green ring + `▶ playing` pill, a bare tile
+click plays an on-device pattern (opens everything else in the editor), the
+hover strip is `▶ Play · Edit · ⋯`, and `⋯` is Add to playlist · Duplicate ·
+Delete (the last two device-only, Delete through the `confirm` danger dialog).
+`Add to scene ▸` is Phase B (#480) and is absent, not disabled. Play and Edit
+both call `Editor.openDevicePattern(id)` — Play just does not set `editing`,
+so the marker and the editor's document cannot disagree. Mobile (≤ 600 px) is
+two columns with `Edit` under the name instead of a hover strip a finger
+cannot reach; `minmax(0, 1fr)`, because `1fr`'s implicit min-content minimum
+let a long nowrap pattern name widen a column past half the screen.
+
+Shell: the tab set is `Patterns · Playlist · Settings` (console) and
+`Patterns` (playground), built from one `tabs` array so Scenes is one entry.
+
+Renamed `data-role`s (harnesses updated in the same commit):
+`library-panel`/`pixelblaze-panel`/`device-panel` → `patterns-panel`;
+`tab-library`/`tab-pixelblaze`/`tab-device` → `tab-patterns` plus the
+`patterns-source-*` segments; `device-pattern` (row) → `tile`;
+`saved-pattern` (chip) → a tile in the `Mine` source; `device-new-pattern` →
+`new-pattern`; `thumb-spinner` → `tile-spinner` on this page. New:
+`patterns-sources`, `patterns-grid` (`data-source`), `tile-face`, `tile-play`,
+`tile-edit`, `tile-edit-link`, `tile-menu`, `tile-menu-popup`,
+`tile-menu-{playlist,duplicate,delete}`, `tile-playing`.
+
+Verified on the mirror (no hardware): `npm test`, `npm run build`
+(svelte-check clean, one `<script>` + one stylesheet + no modulepreload in
+`dist/index.html`), `e2e.mjs`, `device-e2e.mjs` (strip **and** its `--board
+panel` console), `maxpixels-e2e.mjs`, `sync-e2e.mjs`, `flash-e2e.mjs`,
+`tools/ci.sh`. New coverage: source switching, the running marker, the hover
+strip's Play, `⋯ → Add to playlist` landing a row on the device, tile Delete
+cancelled then confirmed, projection captions on a panel console, and the
+390 px two-column layout in both modes.
+
+
 ## 2026-09-19 — web v2 A2: stores/geometry.ts, the one Layout reconciler (#463)
 
 Geometry had three sources of truth in the UI (`layout`, `devicePixels`,

@@ -26,7 +26,7 @@
   /** The tab is the visible one — gates the refresh subscription. */
   export let active = false;
 
-  const dispatch = createEventDispatcher<{ navigate: "device"; pixelchange: void }>();
+  const dispatch = createEventDispatcher<{ navigate: "patterns"; pixelchange: void }>();
 
   /** The polled half: the four read-only status lines. `/api/output` is read
    *  once on arrival instead — it is a form, and re-reading it under the
@@ -69,7 +69,7 @@
       <p class="dim hint">
         {$devicePatterns.length} pattern{$devicePatterns.length === 1 ? "" : "s"} stored on the
         device. Manage them from the
-        <button class="link" on:click={() => dispatch("navigate", "device")}>Device Patterns</button>
+        <button class="link" on:click={() => dispatch("navigate", "patterns")}>Patterns</button>
         tab.
       </p>
     </section>

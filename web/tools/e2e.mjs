@@ -1,5 +1,5 @@
 // Drive the built playground in real chromium (nix dev shell) via
-// puppeteer-core. The app opens on the Patterns Library; the editor is a
+// puppeteer-core. The app opens on the Patterns page; the editor is a
 // full-screen view entered via "New pattern" or by picking a library tile.
 //
 // Usage (from web/): npm run build && node tools/e2e.mjs [screenshot-dir]
@@ -113,6 +113,19 @@ async function previewAs(page, choice, nums = {}) {
   await sleep(400);
 }
 
+// The Patterns page (#467) keeps ONE grid per source mounted and hides the
+// inactive ones, so an unscoped `.tile` would also match tiles the user
+// cannot see. Everything that counts or clicks tiles goes through these.
+const GRID = '[data-role="patterns-grid"]:not([hidden])';
+const TILE = `${GRID} .tile`;
+const MINE = '[data-role="patterns-grid"][data-source="mine"]';
+
+/** Switch the Patterns page's source control and let the grid settle. */
+async function pickSource(page, id) {
+  await page.click(`[data-role="patterns-source-${id}"]`);
+  await sleep(350);
+}
+
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
@@ -128,22 +141,30 @@ try {
   await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle0" });
   await sleep(900); // wasm load
 
-  // ── 1. lands on the Patterns Library (not the editor) ──
-  check("opens on the Patterns Library", (await page.$('[data-role="library-panel"]:not([hidden])')) !== null);
+  // ── 1. lands on the Patterns page (not the editor) ──
+  check("opens on the Patterns page", (await page.$('[data-role="patterns-panel"]:not([hidden])')) !== null);
   check("has a New pattern button", (await page.$('[data-role="new-pattern"]')) !== null);
   check("the examples dropdown is gone", (await page.$('[data-role="pattern-picker"]')) === null);
-  // "PixelBlaze Library" is a local-only tab (only when corpus/ is built)
+  // One Patterns tab (#467): the library / corpus / saved split is a source
+  // control on the page, not a tab set. The playground has no other tab.
   const tabs = await page.$$eval('[data-role="tabs"] .tab', (e) => e.map((x) => x.textContent.trim()));
+  check("the playground's only tab is Patterns", tabs.length === 1 && tabs[0] === "Patterns", tabs.join(","));
+  const segs = await page.$$eval('[data-role="patterns-sources"] button', (e) =>
+    e.map((x) => x.textContent.replace(/\s+/g, " ").trim()),
+  );
   check(
-    "tab is 'Patterns Library' (no Editor tab)",
-    tabs[0] === "Patterns Library" &&
-      tabs.every((t) => t === "Patterns Library" || t === "PixelBlaze Library"),
-    tabs.join(","),
+    "playground source control is Library | Mine",
+    /^Library /.test(segs[0] ?? "") && /^Mine /.test(segs[1] ?? ""),
+    segs.join(" | "),
+  );
+  check(
+    "no 'On device' source in the playground",
+    (await page.$('[data-role="patterns-source-device"]')) === null,
   );
   await page
-    .waitForFunction(() => document.querySelectorAll(".tile").length > 150, { timeout: 8000 })
+    .waitForFunction((sel) => document.querySelectorAll(sel).length > 150, { timeout: 8000 }, TILE)
     .catch(() => null);
-  const tileCount = await page.$$eval(".tile", (els) => els.length);
+  const tileCount = await page.$$eval(TILE, (els) => els.length);
   check("library shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
   await page.screenshot({ path: `${shotDir}/e2e-1-library.png` });
 
@@ -153,7 +174,7 @@ try {
   // transient loading state, then confirm it clears once frames land.
   const cdpTiles = await page.createCDPSession();
   await cdpTiles.send("Emulation.setCPUThrottlingRate", { rate: 6 });
-  await page.$eval('[data-role="library-panel"] .tiles', (el) => {
+  await page.$eval('[data-role="patterns-grid"]:not([hidden]) .tiles', (el) => {
     el.scrollTop = el.scrollHeight;
   });
   const sawSpinner = await page
@@ -171,7 +192,7 @@ try {
   const spinLeft = await page.$$eval('[data-role="tile-spinner"]', (els) => els.length);
   check("spinners clear after the first frame", spinLeft === 0, `${spinLeft} left`);
   await cdpTiles.detach();
-  await page.$eval('[data-role="library-panel"] .tiles', (el) => {
+  await page.$eval('[data-role="patterns-grid"]:not([hidden]) .tiles', (el) => {
     el.scrollTop = 0;
   });
   await sleep(300);
@@ -179,8 +200,8 @@ try {
   // gallery search filters the tiles by name
   await page.type('[data-role="gallery-search"]', "rainbow");
   await sleep(250);
-  const visible = await page.$$eval(".tile", (els) => els.filter((e) => !e.hidden).length);
-  const allMatch = await page.$$eval(".tile", (els) =>
+  const visible = await page.$$eval(TILE, (els) => els.filter((e) => !e.hidden).length);
+  const allMatch = await page.$$eval(TILE, (els) =>
     els.filter((e) => !e.hidden).every((e) => /rainbow/i.test(e.textContent ?? "")),
   );
   check("gallery search filters tiles", visible > 0 && visible < tileCount && allMatch, `${visible} shown`);
@@ -189,7 +210,7 @@ try {
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await sleep(200);
-  const backToAll = await page.$$eval(".tile", (els) => els.filter((e) => !e.hidden).length);
+  const backToAll = await page.$$eval(TILE, (els) => els.filter((e) => !e.hidden).length);
   check("gallery search clears", backToAll === tileCount, `${backToAll}`);
 
   // ── 2. New pattern opens the editor full-screen ──
@@ -697,7 +718,11 @@ try {
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.5) }");
 
   // 11a. the cancel path: the dialog opens, Escape dismisses it, nothing saved
-  const savedCount = () => page.$$eval('[data-role="saved-pattern"]', (els) => els.length);
+  // (this browser's saved patterns are the `Mine` source of the Patterns page
+  // since #467 — they used to be a row of chips above the library grid)
+  const savedCount = () => page.$$eval(`${MINE} .tile`, (els) => els.length);
+  const mineNames = () =>
+    page.$$eval(`${MINE} .tile .tname`, (els) => els.map((e) => (e.textContent ?? "").trim()));
   const savedBefore = await savedCount();
   await page.click('[data-role="save"]');
   await waitDialog(page);
@@ -741,9 +766,17 @@ try {
   );
   await page.click('[data-role="editor-back"]');
   await sleep(300);
-  check("back returns to the library", (await page.$('[data-role="library-panel"]:not([hidden])')) !== null);
-  const savedChip = await page.$('[data-role="saved-pattern"]');
-  check("saved pattern appears in the library", savedChip !== null);
+  check("back returns to the Patterns page", (await page.$('[data-role="patterns-panel"]:not([hidden])')) !== null);
+  await pickSource(page, "mine");
+  const listedMine = await mineNames();
+  check("saved pattern appears in the Mine source", listedMine.includes("e2e saved"), listedMine.join(","));
+  check(
+    "switching source shows only that source's grid",
+    (await page.$$eval('[data-role="patterns-grid"]:not([hidden])', (els) =>
+      els.map((e) => e.dataset.source),
+    )).join(",") === "mine",
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-patterns-mine.png` });
   // reload → resumes the editor on the working copy
   await page.evaluate(() => history.replaceState(null, "", location.pathname));
   await page.reload({ waitUntil: "networkidle0" });
@@ -751,12 +784,13 @@ try {
   await sleep(700);
   check("reload resumes the editor (working copy)", (await page.$('[data-role="editor-back"]')) !== null);
   check("working copy restored", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.5"));
-  // open the saved pattern from the library chip
+  // open the saved pattern from its Mine tile
   await page.click('[data-role="editor-back"]');
   await sleep(300);
-  await page.click('[data-role="saved-pattern"]');
+  await pickSource(page, "mine");
+  await page.click(`${MINE} .tile [data-role="tile-face"]`);
   await sleep(400);
-  check("saved chip opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
+  check("a Mine tile opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
   // delete: a danger confirmation, cancel first (the entry survives)
   await page.click('[data-role="delete"]');
   await waitDialog(page);
@@ -774,38 +808,66 @@ try {
   await cancelDialog(page);
   await page.click('[data-role="editor-back"]');
   await sleep(300);
-  check("cancelled delete keeps the saved entry", (await page.$('[data-role="saved-pattern"]')) !== null);
-  await page.click('[data-role="saved-pattern"]');
+  check("cancelled delete keeps the saved entry", (await mineNames()).includes("e2e saved"));
+  await pickSource(page, "mine");
+  await page.click(`${MINE} .tile [data-role="tile-face"]`);
   await sleep(400);
   await page.click('[data-role="delete"]');
   await acceptDialog(page);
   await sleep(300);
   await page.click('[data-role="editor-back"]');
   await sleep(300);
-  check("saved entry gone after delete", (await page.$('[data-role="saved-pattern"]')) === null);
+  check("saved entry gone after delete", !(await mineNames()).includes("e2e saved"));
+
+  // ---- mobile: two columns, and `Edit` under the name instead of the hover
+  // strip a finger cannot reach (D9, mockup S1c) ----
+  await pickSource(page, "library");
+  await page.setViewport({ width: 390, height: 780 });
+  await sleep(600);
+  const cols = await page.$eval(
+    `${GRID} .tiles`,
+    (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+  );
+  check("mobile 390 px: the tile grid is 2 columns", cols === 2, `${cols} columns`);
+  const editLinkShown = await page.$eval(
+    `${TILE} [data-role="tile-edit-link"]`,
+    (el) => getComputedStyle(el).display !== "none",
+  );
+  check("mobile 390 px: an Edit link sits under the name", editLinkShown);
+  // a tile must FIT its column: `1fr`'s implicit min is min-content, and a
+  // long nowrap name used to widen the track past half the screen
+  const tileOverflow = await page.$$eval(
+    `${TILE}:not([hidden])`,
+    (els) => els.filter((e) => e.getBoundingClientRect().right > 391).length,
+  );
+  check("mobile 390 px: no tile overflows the column", tileOverflow === 0, `${tileOverflow} wide`);
+  await page.screenshot({ path: `${shotDir}/e2e-patterns-mobile-390.png` });
+  await page.setViewport({ width: 1400, height: 900 });
+  await sleep(500);
 
   // ── 11b. render3D patterns show as rotating point-cloud tiles ──
   await page.type('[data-role="gallery-search"]', "3D Rotation");
   await sleep(300);
   const cloudTile = await page
-    .waitForSelector('.tile[data-kind="cloud"]:not([hidden])', { timeout: 5000 })
+    .waitForSelector(`${TILE}[data-kind="cloud"]:not([hidden])`, { timeout: 5000 })
     .catch(() => null);
   check("gallery has a cloud (render3D) tile", cloudTile !== null);
   if (cloudTile) {
     await cloudTile.scrollIntoView();
     await page
       .waitForFunction(
-        () => {
-          const c = document.querySelector('.tile[data-kind="cloud"]:not([hidden]) canvas');
+        (sel) => {
+          const c = document.querySelector(sel);
           if (!c) return false;
           const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
           for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) return true;
           return false;
         },
         { timeout: 8000 },
+        `${TILE}[data-kind="cloud"]:not([hidden]) canvas`,
       )
       .catch(() => null);
-    const litCloud = await page.$eval('.tile[data-kind="cloud"]:not([hidden]) canvas', (c) => {
+    const litCloud = await page.$eval(`${TILE}[data-kind="cloud"]:not([hidden]) canvas`, (c) => {
       const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
       let n = 0;
       for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 20) n++;
@@ -820,12 +882,12 @@ try {
   await sleep(250);
 
   // ── 12. gallery pick opens the editor on that pattern ──
-  const pickName = await page.$$eval(".tile", (els) => {
+  const pickName = await page.$$eval(TILE, (els) => {
     const t = els.find((el) => !el.classList.contains("dead") && el.querySelector(".tname"));
     t?.scrollIntoView();
     return t?.querySelector(".tname")?.textContent ?? "";
   });
-  await page.click(".tile:not(.dead)");
+  await page.click(`${TILE}:not(.dead) [data-role="tile-face"]`);
   await sleep(500);
   check("gallery pick opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
   check("gallery pick loads the pattern name", (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "")).trim() === pickName.trim(), pickName);
@@ -910,7 +972,7 @@ try {
   // Matrix every tile is square and the 1D ones say how they are projected.
   await page.click('[data-role="editor-back"]');
   await sleep(600);
-  const autoKinds = await page.$$eval(".tile:not([hidden])", (els) =>
+  const autoKinds = await page.$$eval(`${TILE}:not([hidden])`, (els) =>
     els.map((e) => e.dataset.kind),
   );
   check(
@@ -923,15 +985,16 @@ try {
   await previewAs(page, "matrix", { w: 64, h: 64 });
   await page
     .waitForFunction(
-      () =>
-        [...document.querySelectorAll(".tile:not([hidden])")].length > 0 &&
-        [...document.querySelectorAll(".tile:not([hidden])")]
+      (sel) =>
+        [...document.querySelectorAll(sel)].length > 0 &&
+        [...document.querySelectorAll(sel)]
           .slice(0, 12)
           .every((e) => e.dataset.kind === "grid" || e.dataset.kind === ""),
       { timeout: 10000 },
+      `${TILE}:not([hidden])`,
     )
     .catch(() => null);
-  const matrixKinds = await page.$$eval(".tile:not([hidden])", (els) =>
+  const matrixKinds = await page.$$eval(`${TILE}:not([hidden])`, (els) =>
     els.slice(0, 12).map((e) => e.dataset.kind),
   );
   check(
@@ -951,7 +1014,7 @@ try {
 
   await previewAs(page, "lattice", { n: 5 });
   await sleep(1500);
-  const cloudKinds = await page.$$eval(".tile:not([hidden])", (els) =>
+  const cloudKinds = await page.$$eval(`${TILE}:not([hidden])`, (els) =>
     els.slice(0, 12).map((e) => e.dataset.kind),
   );
   check(

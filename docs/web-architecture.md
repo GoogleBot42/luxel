@@ -22,8 +22,7 @@ web/src/
     notify.ts       transient notes + the banner list
     dialog.ts       the modal primitive: promise-returning confirm/promptText
   pages/            one component per surface
-    Library.svelte        Patterns Library and PixelBlaze Library (two variants, one file)
-    DevicePatterns.svelte the device's stored library
+    Patterns.svelte       ONE pattern browser: the source control + tile verbs
     Playlist.svelte       transport, defaults, rows
     Settings.svelte       the card list + the visible-tab refresh
     Editor.svelte         toolbar, code pane, playback bar, right-rail inspector
@@ -60,10 +59,59 @@ the fps readout and the LNA blocked banner, and it wires page events to
 `Editor` methods (`newPattern`, `loadSaved`, `loadGalleryPick`,
 `openDevicePattern`, `importEpeFile`, `bootDevice`, `bootPlayground`).
 
+The tab set is `Patterns · Playlist · Settings` on a console and `Patterns`
+alone in the playground (proposal §4), built from one `tabs` array so Scenes
+(Phase B, Gitea #480) is one more entry, not another `{#if}`.
+
 Every page stays **mounted and `hidden`** when it is not the active tab, so its
 state (compiled gallery tiles, CodeMirror documents, scroll position) survives
 tab switching. Each page takes an `active` prop: it drives `hidden` and gates
 that page's poll subscription and lazy mounts.
+
+## The Patterns page (`pages/Patterns.svelte`, Gitea #467)
+
+One browser for every source of patterns (D3), replacing the three tabs —
+Patterns Library, PixelBlaze Library, Device Patterns — that looked like three
+apps over the same thing. A segmented source control picks the source:
+
+| mode | sources |
+|---|---|
+| console | `On device (N)` · `Library (N)` · `PixelBlaze Library (N)` when the corpus JSON is present (dev-only) |
+| playground | `Library (N)` · `Mine (N)` (this browser's saved patterns) · same corpus source |
+
+There is ONE search box and ONE `components/Gallery.svelte` **per source**, all
+mounted with the inactive ones `hidden` — so switching sources does not throw
+away compiled tile engines, and a hidden grid intersects nothing, so it costs
+no frames either. The page re-defaults the pick when the *mode* changes
+(the app boots as a playground and only then discovers a device), so a console
+opens on `On device`.
+
+`Gallery` owns geometry and scheduling only: `items` (a `GalleryItem[]` the
+page supplies — device patterns, saved patterns) or `src` (a generated JSON it
+fetches), plus `search`, `playingKey`, and bindable `count` / `loading` /
+`note` for the page's segment chips. A device pattern whose `source` has not
+streamed in yet is a spinning tile, and when it arrives only that tile's engine
+is rebuilt. The tile's verbs come from the page through two slots, `actions`
+(the hover strip) and `meta` (the mobile `Edit` link).
+
+Tile verbs (§5.1, §5.4b): a bare tile click **plays** an on-device pattern on a
+console and **opens** everything else in the editor; the hover strip is
+`▶ Play · Edit · ⋯`; `⋯` is Add to playlist (on-device only — a playlist item
+is a device pattern id, with no control overrides, i.e. the pattern's own
+defaults) · Duplicate · Delete (on-device only, through the `confirm` danger
+dialog). `Add to scene ▸` is Phase B (#480) and is absent, not disabled.
+Play and Edit both go through the shell to `Editor.openDevicePattern(id)` —
+Play simply does not set `editing`, so the running marker and the editor's
+document never disagree.
+
+`data-role` contract: `patterns-panel` · `patterns-sources` ·
+`patterns-source-<device|library|mine|pixelblaze>` · `patterns-grid` (with
+`data-source`, and `hidden` on the inactive ones) · `tile` (with `data-kind`,
+`data-dims`, `data-key`) · `tile-face` · `tile-play` · `tile-edit` ·
+`tile-menu` · `tile-menu-popup` · `tile-menu-{playlist,duplicate,delete}` ·
+`tile-playing` · `tile-edit-link` · `tile-caption` · `tile-spinner` ·
+`gallery-search` · `gallery-count` · `gallery-loading` · `new-pattern` ·
+`device-offline`.
 
 ## The poll scheduler (`stores/device.ts`)
 

@@ -1,6 +1,24 @@
+<script lang="ts" context="module">
+  import type { PatternDims } from "../stores/geometry";
+
+  /** One browsable pattern. `source` is `undefined` while a device fetch for
+   *  it is still in flight — the tile spins until it arrives. */
+  export interface GalleryItem {
+    /** Stable identity: a device pattern's id, else its name. */
+    key: string;
+    name: string;
+    source?: string;
+    /** gen-gallery's regex guess at the pattern's dims — ADVISORY only: it
+     *  seeds the first compile's pixel count, and the engine's answer wins. */
+    hint?: PatternDims;
+  }
+</script>
+
 <script lang="ts">
-  // Pattern browser: every tile is the real pattern running live on the wasm
-  // engine as a small looping thumbnail.
+  // The tile grid: every tile is the real pattern running live on the wasm
+  // engine as a small looping thumbnail. One instance per SOURCE on the
+  // Patterns page (on-device / library / corpus / this browser's saved), all
+  // mounted at once so their compiled engines survive a source switch.
   //
   // A tile's SHAPE is the Layout's (Gitea #463) — bars on a strip console,
   // squares on a matrix, a cloud on a 3D rig — and its dimensionality comes
@@ -14,7 +32,11 @@
   // rAF steps at most STEP_BUDGET engines per frame at ~11 fps each, engines
   // for tiles long out of view are freed beyond a cap, and every tile Layout
   // is capped at TILE_MAX_CELLS pixels — so 190 tiles cost no more than a
-  // couple dozen small engines even on a 64×64 console.
+  // couple dozen small engines even on a 64×64 console. A grid the page has
+  // hidden intersects nothing, so an inactive source costs nothing either.
+  //
+  // The tile's verbs are the PAGE's (pages/Patterns.svelte fills the `actions`
+  // and `meta` slots) — this component owns geometry and scheduling only.
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
   import { normalizePoints, paintBar, paintGrid, paintPoints, type PointRig } from "../lib/draw";
   import { Engine, Luxel } from "../lib/luxel";
@@ -26,28 +48,34 @@
     TILE_MAX_CELLS,
     tileShape,
     type Layout,
-    type PatternDims,
     type TileShape,
   } from "../stores/geometry";
 
   export let luxel: Luxel;
-  /** Which generated JSON to browse (relative to BASE_URL). Defaults to the
-   *  clean-room library; the "PixelBlaze Library" tab passes the corpus one. */
+  /** The patterns to browse. `null` = fetch them from `src` instead (the
+   *  generated library / corpus JSON). */
+  export let items: GalleryItem[] | null = null;
+  /** Which generated JSON to browse (relative to BASE_URL) when `items` is
+   *  null. Defaults to the clean-room library; the corpus source passes its
+   *  own. */
   export let src = "gallery.json";
-  /** Shown when the JSON is missing/empty. */
+  /** Shown by the page when the JSON is missing/empty. */
   export let emptyNote = "patterns unavailable (no gallery.json)";
+  /** The page's one search box (filters by name). */
+  export let search = "";
+  /** `key` of the pattern running on the device — that tile gets the ring and
+   *  the "playing" pill. Empty = nothing here is running. */
+  export let playingKey = "";
 
-  interface GalleryPick {
-    name: string;
-    source: string;
-  }
+  /** How many patterns this source holds (bound by the page for its segment
+   *  chip), and whether it is still loading. */
+  export let count = 0;
+  export let loading = true;
+  /** Set when the source loaded but holds nothing. */
+  export let note = "";
 
-  interface Tile {
-    name: string;
-    /** gen-gallery's regex guess at the pattern's dims — ADVISORY only: it
-     *  seeds the first compile's pixel count, and the engine's answer wins. */
+  interface Tile extends GalleryItem {
     hint: PatternDims;
-    source: string;
     engine?: Engine;
     rig?: Layout;
     points?: PointRig;
@@ -60,21 +88,63 @@
     visible: boolean;
   }
 
-  const dispatch = createEventDispatcher<{ pick: GalleryPick; close: void }>();
+  const dispatch = createEventDispatcher<{ pick: GalleryItem }>();
 
   const STEP_BUDGET = 6; // engine frames per rAF tick
   const TILE_FPS_MS = 90; // ~11 fps per tile
   const ENGINE_CAP = 40;
+  const CLOUD_PX = 96; // paintPoints draws at the canvas's intrinsic size
 
   let tiles: Tile[] = [];
-  let search = "";
-  const matches = (t: Tile): boolean =>
-    !search || t.name.toLowerCase().includes(search.toLowerCase().trim());
-  $: shown = search ? tiles.filter(matches).length : tiles.length;
-  let corpusNote = "";
-  let loading = true; // gallery.json still streaming in
   let raf = 0;
   let cursor = 0;
+
+  const norm = (s: string): string => s.toLowerCase().trim();
+  $: filter = norm(search);
+  const hiddenBy = (t: Tile, f: string): boolean => f !== "" && !norm(t.name).includes(f);
+  $: count = tiles.length;
+
+  /** Adopt a new `items` list without throwing away engines that are still
+   *  valid: a device source re-publishes its array every time one pattern's
+   *  source streams in, and re-compiling 40 tiles for that would be absurd. */
+  function syncItems(list: GalleryItem[]): void {
+    const by = new Map(tiles.map((t) => [t.key, t]));
+    const next: Tile[] = list.map((it) => {
+      const prev = by.get(it.key);
+      if (!prev) {
+        return {
+          key: it.key,
+          name: it.name,
+          source: it.source,
+          hint: it.hint ?? 1,
+          dims: 0,
+          dead: false,
+          ready: false,
+          last: 0,
+          seen: 0,
+          visible: false,
+        };
+      }
+      by.delete(it.key);
+      prev.name = it.name;
+      if (prev.source !== it.source) {
+        // the source arrived (or changed) — the old engine is not this pattern
+        prev.engine?.free();
+        prev.engine = undefined;
+        prev.rig = undefined;
+        prev.ready = false;
+        prev.dead = false;
+        prev.source = it.source;
+      }
+      return prev;
+    });
+    for (const gone of by.values()) gone.engine?.free(); // deleted patterns
+    tiles = next;
+    loading = false;
+    note = next.length === 0 ? emptyNote : "";
+  }
+
+  $: if (items !== null) syncItems(items);
 
   /** The Layout moved (the "Preview as" chip, or the device's own geometry
    *  changed): every tile engine was built for the old one, so drop them and
@@ -101,7 +171,8 @@
 
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
-      const t = tiles[Number((e.target as HTMLElement).dataset.tile)];
+      const key = (e.target as HTMLElement).dataset.tile;
+      const t = tiles.find((x) => x.key === key);
       if (!t) continue;
       t.visible = e.isIntersecting;
       if (t.visible) t.seen = performance.now();
@@ -109,16 +180,16 @@
     tiles = tiles; // reflect visibility so spinners only run for in-view tiles
   });
 
-  function register(node: HTMLElement, i: number): { destroy: () => void } {
-    node.dataset.tile = String(i);
-    const t = tiles[i];
+  function register(node: HTMLElement, key: string): { destroy: () => void } {
+    node.dataset.tile = key;
+    const t = tiles.find((x) => x.key === key);
     if (t) t.canvas = node.querySelector("canvas") ?? undefined;
     io.observe(node);
     return { destroy: () => io.unobserve(node) };
   }
 
   function ensureEngine(t: Tile): void {
-    if (t.engine || t.dead) return;
+    if (t.engine || t.dead || t.source === undefined) return;
     const r = compileForLayout(luxel, t.source, TILE_MAX_CELLS);
     if ("engine" in r) {
       r.engine.setWallClock(Date.now() / 1000);
@@ -148,7 +219,15 @@
     const shape = shapeOf(t);
     if (shape === "grid") paintGrid(c, px, t.rig.w, t.rig.h);
     else if (shape === "bar") paintBar(c, px);
-    else paintPoints(c, px, t.points ?? { pts: [], is3D: false }, performance.now() / 2500);
+    else {
+      // paintBar/paintGrid resize the canvas to the pixel grid; a point cloud
+      // has no grid, so restore the square the projection is drawn into.
+      if (c.width !== CLOUD_PX || c.height !== CLOUD_PX) {
+        c.width = CLOUD_PX;
+        c.height = CLOUD_PX;
+      }
+      paintPoints(c, px, t.points ?? { pts: [], is3D: false }, performance.now() / 2500);
+    }
   }
 
   function loop(now: number): void {
@@ -192,9 +271,10 @@
 
   onMount(async () => {
     raf = requestAnimationFrame(loop);
+    if (items !== null) return; // the page supplied the list
     // Patterns come from a generated JSON (`src`): gallery.json (the
     // clean-room library/, via tools/gen-gallery.mjs) by default, or the
-    // corpus one for the PixelBlaze Library tab. No inlined example set.
+    // corpus one for the PixelBlaze source. No inlined example set.
     try {
       const r = await gatedFetch(`${import.meta.env.BASE_URL}${src}`);
       if (r.ok) {
@@ -208,6 +288,7 @@
             return true;
           })
           .map((p) => ({
+            key: p.name,
             name: p.name,
             hint: p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1,
             source: p.source,
@@ -222,7 +303,7 @@
     } catch {
       /* gallery.json missing — the browser just shows empty */
     }
-    if (tiles.length === 0) corpusNote = emptyNote;
+    if (tiles.length === 0) note = emptyNote;
     loading = false;
   });
 
@@ -233,85 +314,60 @@
   });
 </script>
 
-<div class="browser" role="region" aria-label="pattern browser">
-  <header>
-    <input
-      class="search"
-      data-role="gallery-search"
-      type="search"
-      placeholder="search patterns…"
-      bind:value={search}
-    />
-    {#if loading}
-      <span class="spinner header-spinner" aria-hidden="true"></span>
-      <span class="dim" data-role="gallery-loading">loading patterns…</span>
-    {:else}
-      <span class="dim" data-role="gallery-count">
-        {search ? `${shown} of ${tiles.length}` : `${tiles.length} patterns`} — click one to open it
-      </span>
-    {/if}
-    {#if corpusNote}<span class="dim">· {corpusNote}</span>{/if}
-  </header>
-  <div class="tiles">
-    {#each tiles as t, i (i)}
-      <button
-        class="tile"
-        class:dead={t.dead}
-        data-kind={shapeOf(t)}
-        data-dims={t.rig ? t.dims : ""}
-        title={t.dead ? `${t.name} (does not compile)` : t.name}
-        hidden={search.trim() !== "" &&
-          !t.name.toLowerCase().includes(search.trim().toLowerCase())}
-        use:register={i}
-        on:click={() => !t.dead && dispatch("pick", { name: t.name, source: t.source })}
-      >
-        <span class="thumb" class:strip={shapeOf(t) === "bar"}>
-          {#if shapeOf(t) === "bar"}
-            <canvas class="bar" width="64" height="1"></canvas>
-          {:else}
-            <canvas class="sq" width="96" height="96"></canvas>
-          {/if}
-          {#if t.visible && !t.ready && !t.dead}
-            <span
-              class="spinner"
-              data-role="tile-spinner"
-              aria-label="loading"
-              title="computing preview…"
-            ></span>
-          {/if}
-        </span>
-        <span class="tname">{t.name}</span>
-        {#if t.rig}
-          {@const cap = captionFor(t.dims, t.rig)}
-          {#if cap}<span class="tsub" data-role="tile-caption">{cap}</span>{/if}
+<div class="tiles">
+  {#each tiles as t (t.key)}
+    {@const shape = shapeOf(t)}
+    {@const playing = playingKey !== "" && t.key === playingKey}
+    <div
+      class="tile"
+      class:dead={t.dead}
+      class:playing
+      data-role="tile"
+      data-kind={shape}
+      data-dims={t.rig ? t.dims : ""}
+      data-key={t.key}
+      hidden={hiddenBy(t, filter)}
+      use:register={t.key}
+    >
+      <div class="frame">
+        <button
+          class="face"
+          data-role="tile-face"
+          disabled={t.dead}
+          title={t.dead ? `${t.name} (does not compile)` : t.name}
+          on:click={() => !t.dead && dispatch("pick", t)}
+        >
+          <span class="thumb" class:strip={shape === "bar"} data-shape={shape}>
+            <canvas class:bar={shape === "bar"} class:sq={shape !== "bar"} width="96" height="96"
+            ></canvas>
+            {#if t.visible && !t.ready && !t.dead}
+              <span
+                class="spinner"
+                data-role="tile-spinner"
+                aria-label="loading"
+                title="computing preview…"
+              ></span>
+            {/if}
+          </span>
+        </button>
+        {#if playing}
+          <span class="pill" data-role="tile-playing">▶ playing</span>
         {/if}
-      </button>
-    {/each}
-  </div>
+        {#if $$slots.actions}
+          <div class="actions"><slot name="actions" item={t} dead={t.dead} /></div>
+        {/if}
+      </div>
+      <span class="tname">{t.name}</span>
+      {#if t.rig}
+        {@const cap = captionFor(t.dims, t.rig)}
+        {#if cap}<span class="tsub" data-role="tile-caption">{cap}</span>{/if}
+      {/if}
+      <slot name="meta" item={t} dead={t.dead} />
+    </div>
+  {/each}
 </div>
 
 <style>
-  .browser {
-    height: 100%;
-    background: var(--bg, #14161a);
-    display: flex;
-    flex-direction: column;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-panel);
-    font-size: 13px;
-  }
-
-  .dim {
-    color: var(--text-dim);
-  }
-
   .tiles {
     flex: 1;
     overflow-y: auto;
@@ -320,17 +376,6 @@
     gap: 10px;
     padding: 12px;
     align-content: start;
-  }
-
-  .search {
-    flex: none;
-    width: 200px;
-    padding: 4px 8px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg-inset);
-    color: var(--text);
-    font-size: 13px;
   }
 
   .tile[hidden] {
@@ -346,15 +391,38 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--bg-inset);
-    cursor: pointer;
   }
 
   .tile:hover {
     border-color: var(--accent);
   }
 
+  /* the pattern the device is running right now (proposal §5.1) */
+  .tile.playing {
+    border-color: #4caf50;
+    box-shadow: 0 0 0 1px #4caf50 inset;
+  }
+
   .tile.dead {
     opacity: 0.35;
+  }
+
+  .frame {
+    position: relative;
+    display: flex;
+    max-width: 100%;
+  }
+
+  .face {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    max-width: 100%;
+    cursor: pointer;
+  }
+
+  .face:disabled {
     cursor: default;
   }
 
@@ -374,6 +442,7 @@
     border-radius: 3px;
     background: #000;
     max-width: 100%;
+    display: block;
   }
 
   /* the canvas's intrinsic size is the pixel grid; CSS fixes how big it looks */
@@ -387,6 +456,45 @@
     height: 96px;
   }
 
+  .pill {
+    position: absolute;
+    left: 50%;
+    bottom: 4px;
+    transform: translateX(-50%);
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, #4caf50 82%, #000);
+    color: #06210a;
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* per-tile verbs live on the tile they act on, and only on hover (§5.1) */
+  /* Centred over the thumb, and never shorter than its own buttons — a bar
+     tile is only 18 px tall, so the strip has to overhang it. */
+  .actions {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    min-height: 100%;
+    padding: 3px 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: color-mix(in srgb, #000 62%, transparent);
+    border-radius: 3px;
+  }
+
+  .tile:hover .actions,
+  .actions:focus-within {
+    display: flex;
+  }
+
   .spinner {
     position: absolute;
     top: 50%;
@@ -398,13 +506,6 @@
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: tile-spin 0.7s linear infinite;
-  }
-
-  .header-spinner {
-    position: static;
-    display: inline-block;
-    margin: 0;
-    vertical-align: middle;
   }
 
   @keyframes tile-spin {
@@ -430,5 +531,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Mobile (D9, S1c): two columns, and the hover strip is gone — a finger has
+     no hover. Tapping the tile plays/opens it; `Edit` moves under the name
+     (the page fills the `meta` slot with it). */
+  @media (max-width: 600px) {
+    /* `minmax(0, 1fr)`, not `1fr`: a column's implicit `auto` minimum is the
+       item's min-content, and a long nowrap pattern name would widen it past
+       half the screen (the desktop track's 150 px minimum hid this). */
+    .tiles {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 10px;
+    }
+
+    .actions {
+      display: none !important;
+    }
   }
 </style>
