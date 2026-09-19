@@ -1,5 +1,83 @@
 # Update log
 
+## 2026-09-19 — multiple outputs: each one drives a consecutive run of the one Layout (#474)
+
+`/api/layout` has carried an `out` table since #465, but only the first entry
+was ever wired to a peripheral. Now every configured output has a driver
+instance of its own, and they split the ONE pixel space between them: output
+`n` carries the `count` pixels that follow every lower-indexed output's run,
+in `n` order, optionally `rev` (that run wired backwards), with its own
+protocol and colour order. One engine, one map, one pattern, one playlist, one
+brightness, one HA light — an output is wiring, not a second device (proposal
+D11).
+
+`board-athom-music` is the only board with two physical outputs today
+(DATA1/CLK1 GPIO18/5 on SPI2, DATA2/CLK2 GPIO17/16 on SPI3), so:
+
+```text
+strip 120
+out 0 18 ws2812 rgb 60
+out 1 17 ws2812 rgb 60 rev
+```
+
+lights pixels 0–59 down channel 1 and 60–119 backwards up channel 2. Reboot to
+apply — the table is built once, at boot — and `out none` goes back to the one
+implicit output.
+
+What it cost, and how it was kept small:
+
+- The split ARITHMETIC is `luxel_core::layout::Run` + `Layout::run_of`, unit
+  tested on the host and shared with the mirror, and the encode path takes a
+  run instead of the whole frame (`Protocol::encode_run`). That is
+  unconditional — **+768 B on `pixelblaze-v3`, +800 B on the C6** — and it
+  buys `rev` on a *single* output on every strip board plus a driver that
+  clamps rather than indexing past a stale table.
+- The second driver INSTANCE is behind a `multi_output` cfg (firmware/build.rs
+  from the board feature, asserted against `board::OUTPUTS`), so it is
+  **+3,520 B on the Athom and zero everywhere else**: a second `SpiDma` +
+  encode buffer, the SPI3/`DMA_SPI3` boot wiring, and a second `write_run` per
+  frame. Reusing the SAME backend the board's first output uses — no RMT
+  beside the SPI — is what keeps it at 4 KB rather than the 8–12 KB a second
+  protocol backend was priced at.
+- Each output's encode buffer is sized to ITS run, so 30 + 30 px costs what
+  60 px did (plus one extra latch tail), not two full-frame buffers. The run
+  is re-read from the Layout per frame rather than cached in the driver: 12
+  bytes of task statics is real money here (below).
+- The outputs are written **sequentially** on the render task; `out_us` covers
+  all of them. Two outputs buy pixel count, not wire time.
+- The device output chain still runs ONCE over the frame, so the power-cap
+  estimate is summed across every run by construction; an output whose colour
+  order differs from output 0's applies a 3-element fix-up
+  (`ColorOrder::relative`) over its own run instead of a second full pass.
+- `output::transfer_busy()` — the flash fence's "is a DMA transfer in flight"
+  test — now checks SPI3 as well as SPI2, but only once that peripheral has
+  been constructed.
+
+**A `.stack` finding that is bigger than this ticket.** The classic ESP32's
+main-task stack is leftover DRAM, and `tools/stack-check.sh` floors it at
+24,576 B. On `origin/master` `board-athom-music` was already **68 B UNDER**
+that floor (24,508 B) and `board-pixelblaze-v3` clears it by **4 B** — nothing
+catches the first because CI stack-checks the second. This change takes 1 KB
+back from the classic-ESP32 heap **on the two-output board only**
+(`80 * 1024 - SECOND_OUTPUT_RAM`), which puts the Athom at 25,412 B (27,004 B
+with `small-chip`), both clean, and leaves every other board's RAM layout
+untouched. The four-byte margin is filed as #515.
+
+**On metal** (the Athom rig, 192.168.0.183, v0.1.40): `out_us` 2,519–2,531 at
+60 px on one output; 2,825–2,830 with `out 0 … 30` + `out 1 17 … 30 rev` after
+the reboot — the +302 us over one 60 px run is exactly the second WS2812 latch
+tail, which is what "sequential" looks like from outside. Posting the table
+halved output 0's wire time *before* the reboot (1,495–1,507), confirming the
+runs are live and only the driver waits. A reversed single output costs ~20 us
+at 60 px. `heap_free` 83,972 → 83,836 with the second output configured,
+`vmerr` null, `dropped` 0, slot unchanged across three reboots; `out none`
+restored the found state exactly. **What nobody has SEEN is the strip**:
+nothing is wired to DATA2 on the bench, and `/api/pixels` is upstream of the
+split by design — the bench procedure is Gitea #518.
+
+Also filed: #516 (the WLED takeover imports only `hw.led.ins[0]`, so a
+two-channel WLED install loses its second output on conversion).
+
 ## 2026-09-19 — web v2 A10: the map program gets its own screen (#471)
 
 The mapper is a good idea in the wrong place: it was a sub-tab of the *pattern*

@@ -502,7 +502,7 @@ embedded so a client needs one fetch:
 | `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
 | `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
 | `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor, `0` = the board's own. |
-| `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
+| `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
 | `proj` | The §5.4d projection defaults (`docs/spec/projection.md`), tokens `index\|x\|y\|z\|xy\|xz\|yz`. |
 | `map` | The `GET /api/map` body verbatim. |
 
@@ -523,13 +523,14 @@ out none
 proj1d|proj2d|proj3d <index|x|y|z|xy|xz|yz>
 ```
 
-Example — a 120 px strip split across the Athom's two outputs, the second run
-wired backwards, with 1D patterns laid along x:
+Example — a 120 px strip split across the Athom's two outputs (its DATA1 is
+GPIO18, DATA2 GPIO17), the second run wired backwards, with 1D patterns laid
+along x:
 
 ```text
 strip 120
 out 0 18 ws2812 grb 60
-out 1 19 ws2812 grb 60 rev
+out 1 17 ws2812 grb 60 rev
 proj1d x
 ```
 
@@ -549,13 +550,44 @@ a client never has to re-fetch. A bad line answers
 (`0` = the body as a whole, e.g. the output-count sum).
 
 **Validation.** Pixel counts against the board's `max`; `pw·ph·cols·rows`
-against it too; output indices against `caps.outputs`; pins against the
-board's reserved set (the same check `/api/datapin` runs); protocol names from
+against it too; output indices against `caps.outputs` (a board with one
+output refuses `out 1` outright); pins against the board's reserved set (the
+same check `/api/datapin` runs) and against each other — two outputs cannot
+share a data pad; protocol names from
 `GET /api/protocol`'s `options` (aliases accepted); colour orders from the
 `/api/output` set; and **the outputs' counts must add up to the Layout's pixel
 space** — pixels on a strip, panels on a matrix (proposal D11: an output
 drives a consecutive run of the ONE pixel space). A HUB75 board refuses both
 `strip` and `out`: it IS a matrix and has no configurable strip output.
+
+**Driving (Gitea #474, proposal D11).** The outputs partition ONE pixel
+space: output `n` carries the `count` pixels that follow every lower-indexed
+output's run. There is one engine, one map, one pattern, one playlist, one
+brightness and one HA light across all of them — an output is wiring, not a
+second device. Within its run an output has its own protocol, colour order
+and direction: `rev` means that run is wired backwards, so its first physical
+LED is the run's LAST pixel.
+
+- **Buffers.** Each output encodes its own run into its own buffer, sized to
+  that run — two 30 px WS2812 runs cost the same ~360 B each that one 60 px
+  run costs in total, not two full-frame buffers.
+- **Timing.** On a strip board the outputs are written **sequentially** on the
+  render task, and `out_us` in `/api/status` covers all of them. Splitting a
+  fixed pixel count across two outputs does not halve wire time (the same
+  pixels still go out, plus one extra protocol latch tail per output); what
+  two outputs buy is twice the pixels, at twice the wire time.
+- **Power.** The cap (`/api/output` `capMa`) is estimated over the whole
+  frame, i.e. summed across every run.
+- **Colour order.** The device output chain permutes the frame once, into
+  output 0's order; an output with a different `order` fixes up only its own
+  run from there. `POST /api/output` still sets output 0's (the chain's).
+- A `count` that no longer adds up to the pixel count (an alias moved it —
+  see "Aliases") is **clamped**, never fatal: a run past the end of the pixel
+  space simply drives nothing until the table is re-stated.
+
+Measured on the Athom (60 px WS2812, `/api/status` `out_us`): 2,524 us for one
+60 px output, 2,827 us for `30` + `30 rev` — the +303 us is the second
+protocol latch tail, not a second frame. docs/boards.md has the full table.
 
 **Live vs reboot.** These apply on the next frame, no reboot:
 
@@ -567,9 +599,16 @@ that changes one answers `"reboot_required":true`:
 
 - the chain wiring — `cols`, `rows`, `start`, `dir`, `snake`, `rot180`, `scan`
   (the boot-time panel→pixel remap is Gitea #475);
-- every `out` line, and an output-0 `pin` change (the strip driver binds its
-  DATA pin once, at boot — the same reason `/api/datapin` reboots). Driving
-  more than the first output is Gitea #474.
+- every `out` line, because each output's driver INSTANCE — its SPI
+  peripheral, its DATA pin, its protocol clock — is built once, at boot (the
+  same reason `/api/datapin` reboots). Two parts of an `out` line do not
+  actually wait, which is worth knowing when reading `out_us`: the run
+  BOUNDARIES are re-read from the Layout every frame, so a re-partition takes
+  effect immediately (an output whose run shrank drives fewer pixels at once,
+  and one the table no longer covers goes dark), and output 0's protocol and
+  colour order write through live because output 0 IS the strip the aliases
+  describe. What the reboot adds is the driver for an output that did not
+  have one, and a moved DATA pin.
 
 **Persistence.** Firmware stores the Layout as a ~20-byte record (plus 9 B per
 output) under the pattern store's reserved `LAYOUT_KEY`. It deliberately does

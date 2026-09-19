@@ -188,8 +188,8 @@ impl Matrix {
 /// (proposal §5.3b / D11). `count` is pixels on a strip Layout and tiles on
 /// a matrix Layout; `rev` marks a run wired backwards.
 ///
-/// Stored, validated and reported by #465; driving more than the first one
-/// is #474.
+/// Stored, validated and reported by #465; driven — one driver instance per
+/// output, the frame split by run — by #474.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Output {
     /// Output index, 0-based, `< caps.outputs`.
@@ -294,6 +294,70 @@ impl Layout {
             push_piece(&mut out, mode.as_str());
         }
         out
+    }
+}
+
+/// The consecutive slice of the ONE pixel space that one output puts on its
+/// wire (proposal §5.3b / D11, Gitea #474). `rev` means the run is wired
+/// backwards: its first physical LED is the run's LAST pixel.
+///
+/// The arithmetic lives here rather than in the firmware so it is testable
+/// on the host and so the mirror describes the same split the device drives.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Run {
+    pub start: u32,
+    pub len: u32,
+    pub rev: bool,
+}
+
+impl Run {
+    /// Drives nothing — an output past the end of a stale table.
+    pub const NONE: Run = Run { start: 0, len: 0, rev: false };
+
+    /// Trimmed to what a `pixels`-long frame actually holds. A stored table
+    /// can outlive the pixel count that made it add up (an alias moved the
+    /// count — see [`Limits::strict`]), and a driver must clamp rather than
+    /// index past the frame.
+    pub fn clamped(self, pixels: u32) -> Run {
+        let start = self.start.min(pixels);
+        Run { start, len: self.len.min(pixels - start), rev: self.rev }
+    }
+
+    /// Frame index of this run's `i`-th wire pixel. `rev` walks it
+    /// backwards; `i` must be `< len`.
+    pub fn index(&self, i: u32) -> u32 {
+        self.start + if self.rev { self.len - 1 - i } else { i }
+    }
+}
+
+impl Layout {
+    /// The run output `n` drives: the configured outputs laid end to end in
+    /// `n` order, `count` units each, clamped to the live pixel count.
+    ///
+    /// `None` = this output drives nothing (no such entry). An EMPTY table
+    /// is the one implicit output covering the whole space — the state a
+    /// host with nothing stored is in, which is why output 0 always gets a
+    /// run there and every other output gets `None`.
+    ///
+    /// On a matrix Layout a `count` is TILES, so one unit is one panel's
+    /// worth of pixels; on a strip or map Layout a unit is one pixel.
+    pub fn run_of(&self, n: u8, pixels: u32) -> Option<Run> {
+        if self.outputs.is_empty() {
+            return (n == 0).then_some(Run { start: 0, len: pixels, rev: false });
+        }
+        let unit = match self.kind {
+            LayoutKind::Matrix => (self.matrix.pw as u32).saturating_mul(self.matrix.ph as u32),
+            _ => 1,
+        };
+        let mut start: u32 = 0;
+        for o in &self.outputs {
+            let len = o.count.saturating_mul(unit);
+            if o.n == n {
+                return Some(Run { start, len, rev: o.rev }.clamped(pixels));
+            }
+            start = start.saturating_add(len).min(pixels);
+        }
+        None
     }
 }
 
@@ -471,6 +535,12 @@ pub fn parse(
                 let list = outs.get_or_insert_with(Vec::new);
                 if list.iter().any(|e: &Output| e.n == o.n) {
                     return Err(err("duplicate output index"));
+                }
+                // Two outputs on one pad would be two drivers fighting over
+                // it — the firmware binds a peripheral per output at boot
+                // (#474), so this has to be caught here, not there.
+                if list.iter().any(|e: &Output| e.pin == o.pin) {
+                    return Err(err("two outputs cannot share a data pin"));
                 }
                 // Insert in index order rather than sorting afterwards: the
                 // list is at most `caps.outputs` long, and `sort_by_key`
@@ -863,6 +933,77 @@ mod tests {
 
         let bad = "strip 120\nout 0 18 ws2812 grb 60";
         assert_eq!(parse(bad, &cur, 60, &strip_limits()).unwrap_err().line, 0);
+    }
+
+    #[test]
+    fn two_outputs_cannot_share_a_pad() {
+        let cur = strip_layout();
+        let body = "strip 120\nout 0 18 ws2812 grb 60\nout 1 18 ws2812 grb 60";
+        let e = parse(body, &cur, 60, &strip_limits()).unwrap_err();
+        assert_eq!(e.line, 3);
+        assert!(e.msg.contains("share a data pin"), "{}", e.msg);
+    }
+
+    // --- the split each output drives (#474) --------------------------------
+
+    fn two_outputs(a: u32, b: u32, rev: bool) -> Layout {
+        let mut l = strip_layout();
+        l.outputs.push(Output { n: 0, pin: 18, proto: 1, order: 2, count: a, rev: false });
+        l.outputs.push(Output { n: 1, pin: 17, proto: 1, order: 2, count: b, rev });
+        l
+    }
+
+    #[test]
+    fn an_empty_table_is_one_output_over_the_whole_space() {
+        let l = strip_layout();
+        assert_eq!(l.run_of(0, 60), Some(Run { start: 0, len: 60, rev: false }));
+        assert_eq!(l.run_of(1, 60), None, "a board with nothing stored drives one");
+    }
+
+    #[test]
+    fn outputs_take_consecutive_runs_in_index_order() {
+        let l = two_outputs(30, 30, false);
+        assert_eq!(l.run_of(0, 60), Some(Run { start: 0, len: 30, rev: false }));
+        assert_eq!(l.run_of(1, 60), Some(Run { start: 30, len: 30, rev: false }));
+        assert_eq!(l.run_of(2, 60), None);
+        // uneven runs are fine — the counts, not the halves, decide
+        let l = two_outputs(50, 10, false);
+        assert_eq!(l.run_of(1, 60), Some(Run { start: 50, len: 10, rev: false }));
+    }
+
+    #[test]
+    fn a_reversed_run_walks_its_slice_backwards() {
+        let l = two_outputs(30, 30, true);
+        let r = l.run_of(1, 60).unwrap();
+        assert!(r.rev);
+        // wire pixel 0 is the LAST pixel of the run, wire pixel 29 the first
+        assert_eq!(r.index(0), 59);
+        assert_eq!(r.index(29), 30);
+        // and a forward run is the identity over its slice
+        let f = l.run_of(0, 60).unwrap();
+        assert_eq!((f.index(0), f.index(29)), (0, 29));
+    }
+
+    #[test]
+    fn a_stale_table_is_clamped_never_indexed_past_the_frame() {
+        // an alias moved the pixel count under a table that added up to 60
+        let l = two_outputs(30, 30, false);
+        assert_eq!(l.run_of(0, 40), Some(Run { start: 0, len: 30, rev: false }));
+        assert_eq!(l.run_of(1, 40), Some(Run { start: 30, len: 10, rev: false }));
+        // …and past the first run entirely: a zero-length run, not a panic
+        assert_eq!(l.run_of(1, 20), Some(Run { start: 20, len: 0, rev: false }));
+        assert_eq!(l.run_of(0, 20), Some(Run { start: 0, len: 20, rev: false }));
+        assert_eq!(Run::NONE.clamped(0), Run::NONE);
+    }
+
+    #[test]
+    fn a_matrix_outputs_count_is_tiles_so_a_run_is_panels_of_pixels() {
+        let mut l = Layout::board_default(LayoutKind::Matrix, Matrix::single(32, 16));
+        l.matrix.cols = 3;
+        l.outputs.push(Output { n: 0, pin: 18, proto: 1, order: 2, count: 2, rev: false });
+        l.outputs.push(Output { n: 1, pin: 17, proto: 1, order: 2, count: 1, rev: false });
+        assert_eq!(l.run_of(0, 1536), Some(Run { start: 0, len: 1024, rev: false }));
+        assert_eq!(l.run_of(1, 1536), Some(Run { start: 1024, len: 512, rev: false }));
     }
 
     #[test]

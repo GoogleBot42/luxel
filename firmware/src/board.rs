@@ -36,10 +36,19 @@ mod def {
     pub const DEFAULT_PROTOCOL: Protocol = Protocol::Ws2812;
     pub const DEFAULT_PIXEL_COUNT: u32 = 60;
     pub const DEFAULT_DATA_PIN: u8 = 18;
-    /// CLK1 (5), strip-power relay (2). The case button (0), IR receiver
-    /// (25) and mic pins (32/15/36) are NOT reserved: Luxel leaves them
-    /// idle, so a pattern may read them (`digitalRead(0)` is the button).
-    pub const RESERVED_PINS: &[u8] = &[5, 2];
+    /// CLK1 (5), CLK2 (16), strip-power relay (2). The case button (0), IR
+    /// receiver (25) and mic pins (32/15/36) are NOT reserved: Luxel leaves
+    /// them idle, so a pattern may read them (`digitalRead(0)` is the
+    /// button). CLK2 joined the list with #474: the second output's SPI
+    /// binds it as its clock, so it is no longer a pad a strip or a pattern
+    /// may take.
+    pub const RESERVED_PINS: &[u8] = &[5, 2, 16];
+
+    /// The second output's SPI clock pad (CLK2), on the boards that have a
+    /// second output at all — [`super::OUTPUTS`] `> 1`. Its DATA pad is not
+    /// a constant: it is whatever `out 1` in the Layout names (GPIO17 as the
+    /// board wires DATA2), exactly like output 0's.
+    pub const SECOND_CLK_PIN: u8 = 16;
 }
 
 #[cfg(feature = "board-esp32-generic")]
@@ -137,17 +146,29 @@ pub const MAX_PIXELS: u32 = 2048;
 /// Physical LED outputs this BOARD has, whatever the firmware drives today
 /// — `/api/status`'s `caps.outputs`, which is what makes the Settings page
 /// show an Outputs table instead of inline strip fields (proposal §5.3b).
-/// The firmware still drives exactly one (Gitea #474 makes the second real),
-/// so this describes the hardware, not the current wiring.
+/// Since Gitea #474 the firmware drives every output the Layout configures,
+/// up to this many — so this describes the hardware, and the `out` table
+/// describes the current wiring.
 ///
-/// The Athom WLED controller has two strip channels (CLK1/DATA1 wired, the
-/// second one idle — docs/boards.md). The Seengreat panel board's two HUB75
-/// connectors are the SAME pins wired twice (board::hub75_pins!), so they are
-/// one output, not two. Every other board here breaks out one.
+/// The Athom WLED controller has two strip channels (DATA1/CLK1 and
+/// DATA2/CLK2 — docs/boards.md), and since #474 the firmware drives both:
+/// each output takes a consecutive run of the one pixel space. The
+/// Seengreat panel board's two HUB75 connectors are the SAME pins wired
+/// twice (board::hub75_pins!), so they are one output, not two. Every other
+/// board here breaks out one.
 #[cfg(feature = "board-athom-music")]
 pub const OUTPUTS: u8 = 2;
 #[cfg(not(feature = "board-athom-music"))]
 pub const OUTPUTS: u8 = 1;
+
+// The second driver instance is a build.rs cfg (so a one-output board's
+// image is byte-identical to before #474) and OUTPUTS is the same fact as
+// data. They must never disagree: a board advertising two outputs with no
+// second driver would accept an `out 1` line and silently drive nothing.
+const _: () = assert!((OUTPUTS > 1) == cfg!(multi_output));
+// …and the pad that driver clocks on must be one nothing else can take.
+#[cfg(multi_output)]
+const _: () = assert!(in_list(RESERVED_PINS, SECOND_CLK_PIN));
 
 /// Whether the DEVICE output chain's blur and glow stages fit this board's
 /// per-frame budget — `/api/status`'s `caps.blur_glow`, which is what makes

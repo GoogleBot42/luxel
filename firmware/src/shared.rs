@@ -502,6 +502,18 @@ pub fn set_want_data_pin(p: Option<u8>) {
     WANT_DATA_PIN.store(p.map_or(0, |p| p + 1), core::sync::atomic::Ordering::Relaxed);
 }
 
+/// The GPIO the SECOND output's DATA line is on, or [`NO_PIN`] when this
+/// board has no second output or the Layout does not configure one
+/// (Gitea #474). Bound once at boot, like `DATA_PIN` — `out` lines are
+/// `reboot_required`. Doubles as "is the second SPI live", which
+/// `output::transfer_busy` needs before it reads that peripheral's
+/// registers.
+#[cfg(multi_output)]
+pub static DATA_PIN2: AtomicU8 = AtomicU8::new(NO_PIN);
+/// Not a GPIO number on any supported chip (they stop at 48).
+#[cfg(multi_output)]
+pub const NO_PIN: u8 = 255;
+
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 
 fn share_get<T: Clone>(cell: &Shared<T>) -> T {

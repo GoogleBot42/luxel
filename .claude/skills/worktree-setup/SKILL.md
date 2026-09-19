@@ -275,6 +275,10 @@ origin master && git rebase origin/master`.
   "web/public/gallery.json … No such file or directory" — not a regression,
   you skipped step 5 (any `npm run build` / `gen-gallery.mjs` run fixes it).
   Bitten twice in one session; check this before reading the diff.
+- `tools/serve-e2e.mjs` dying with ENOENT on `web/public/luxel.wasm` a few
+  checks in — same cause: it compiles its fixture patterns through
+  `web/tools/lxp.mjs`, so it needs `npm run wasm` (steps 2–3), not just a
+  built mirror.
 - `tools/hw-bench.mjs` ENOENT on `web/public/gallery.json` or
   `web/public/luxel.wasm` — it needs BOTH (step 5 for the gallery, steps
   2–3 + `npm run wasm` for the wasm; it compiles patterns locally via

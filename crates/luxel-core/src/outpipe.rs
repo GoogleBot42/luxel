@@ -37,6 +37,28 @@ impl ColorOrder {
     pub fn perm(self) -> [usize; 3] {
         Self::PERMS[(self.0 as usize).min(5)]
     }
+
+    /// The permutation that turns a frame already ordered as `base` into
+    /// one ordered as `self`; `None` when the two agree and nothing has to
+    /// move.
+    ///
+    /// A multi-output Layout (Gitea #474, D11) runs ONE output chain over
+    /// the whole frame — so the wire frame every output reads is already in
+    /// output 0's colour order — and an output with its own order fixes up
+    /// only its own run from there. `base[j]` is the source channel already
+    /// sitting at position `j`, so the fix-up sends position `i` to
+    /// whichever `j` holds the channel `self` wants there.
+    pub fn relative(self, base: ColorOrder) -> Option<[u8; 3]> {
+        if self.0.min(5) == base.0.min(5) {
+            return None;
+        }
+        let (want, have) = (self.perm(), base.perm());
+        let mut q = [0u8; 3];
+        for (i, slot) in q.iter_mut().enumerate() {
+            *slot = have.iter().position(|c| *c == want[i]).unwrap_or(i) as u8;
+        }
+        Some(q)
+    }
 }
 
 /// Gamma LUT for `gamma_tenths`/10 (e.g. 22 → γ 2.2). 0 and 10 mean "off"
@@ -736,6 +758,33 @@ mod tests {
         let mut f = [[10, 20, 30]];
         apply(&mut f, ColorOrder::from_name("bgr").unwrap(), None, 0, 31, PowerModel::Strip);
         assert_eq!(f[0], [30, 20, 10]);
+    }
+
+    /// A second output's colour order is a fix-up ON TOP of the frame the
+    /// one output chain already permuted (Gitea #474).
+    #[test]
+    fn relative_order_fixes_up_an_already_permuted_frame() {
+        let names = ColorOrder::NAMES;
+        for (bi, base) in names.iter().enumerate() {
+            let base = ColorOrder::from_name(base).unwrap();
+            assert!(base.relative(base).is_none(), "same order moves nothing");
+            for want in names.iter() {
+                let want = ColorOrder::from_name(want).unwrap();
+                // the shared wire frame, already in `base` order
+                let mut wire = [[10u8, 20, 30]];
+                apply(&mut wire, base, None, 0, 31, PowerModel::Strip);
+                // …and what this output wants, straight from the source
+                let mut direct = [[10u8, 20, 30]];
+                apply(&mut direct, want, None, 0, 31, PowerModel::Strip);
+                let fixed = match want.relative(base) {
+                    None => wire[0],
+                    Some(q) => {
+                        [wire[0][q[0] as usize], wire[0][q[1] as usize], wire[0][q[2] as usize]]
+                    }
+                };
+                assert_eq!(fixed, direct[0], "base {bi} → {}", want.name());
+            }
+        }
     }
 
     #[test]

@@ -40,10 +40,19 @@ const MODE_PULLUP: u8 = 0x04;
 const MODE_PULLDOWN: u8 = 0x08;
 const MODE_OPEN_DRAIN: u8 = 0x10;
 
-/// A pad a pattern may use right now: board-free AND not the strip's
-/// configured DATA pin (a runtime setting, so not in the const tables).
+/// A pad a pattern may use right now: board-free AND not a strip output's
+/// configured DATA pin (a runtime setting, so not in the const tables) —
+/// output 0's always, and on a multi-output board (Gitea #474) the second
+/// output's too when the Layout configures one.
 pub fn pin_is_free(n: u8) -> bool {
-    board::pin_is_board_free(n) && n != crate::shared::DATA_PIN.load(Ordering::Relaxed)
+    if n == crate::shared::DATA_PIN.load(Ordering::Relaxed) {
+        return false;
+    }
+    #[cfg(multi_output)]
+    if n == crate::shared::DATA_PIN2.load(Ordering::Relaxed) {
+        return false;
+    }
+    board::pin_is_board_free(n)
 }
 
 pub struct PinHost {

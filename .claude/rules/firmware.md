@@ -19,6 +19,16 @@ paths:
   enforces a total `.stack` floor. Measure, don't estimate: v0.1.31-33
   shipped an estimated stack size that was well above the real, measured one,
   and it panicked in production.
+  **Measure the BASELINE too, and on the board you are shipping to.** On the
+  classic ESP32 `.stack` is leftover DRAM and the floor is currently within
+  TENS of bytes: 2026-09-19 `board-pixelblaze-v3` cleared the 24,576 B floor
+  by 4 B while `board-athom-music` was already 68 B UNDER it on master — and
+  nothing catches that, because `tools/ci.sh` stack-checks pixelblaze-v3
+  only. So a red stack-check after your change is very possibly not your
+  change: `git stash`, re-measure, compare. When it IS yours, the fix is the
+  one the script names — take the bytes out of that board's
+  `heap_allocator!` (see `SECOND_OUTPUT_RAM` in main.rs for the per-board
+  idiom), not off the floor. Gitea #515.
 - `cargo clippy` DOES work on the Xtensa (`-Zbuild-std`) boards — but only
   with the esp toolchain's `bin/` PREPENDED to `PATH`. Exporting only
   `RUSTC`/`RUSTDOC` (the `tools/stack-check.sh` recipe — sufficient for
