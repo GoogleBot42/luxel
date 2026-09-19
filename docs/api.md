@@ -53,7 +53,11 @@ response as "no snapshot right now", not as an all-black frame.
 
 ```json
 {"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
- "rescan_hz":0,"dropped":0,"pixels":300,"max_pixels":2048,"slot":"ota_0","version":"0.1.39",
+ "rescan_hz":0,"dropped":0,"pixels":300,"max_pixels":2048,
+ "geom":{"dims":1,"regular":true,"w":300,"h":1,"source":"board","pattern_dims":1},
+ "caps":{"strip_driver":true,"panel":false,"outputs":1,"power_cap":true,"blur_glow":true,
+         "layers":3,"text_slots":0,"reboot":true,"ota":true,"psram":false,"assets":false},
+ "slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"live":null,
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":749568,"dead":0,"patterns":3},
@@ -69,6 +73,68 @@ that is not losing anything:
  "drops":{"handoff":0,"overwrite":0,"refused":0,"hist":[],"n":0,"log":[]},
  "swap":{"eof_race":91,"slow_path":604}
 ```
+
+### `geom` — the engine's EFFECTIVE geometry
+
+**Not the device map.** `GET /api/map` reports what is *installed*; `geom`
+reports what the running engine is actually rendering through, which is a
+different thing whenever the engine supplied its own geometry. A pattern that
+only exports `render2D` (or `renderFrame` plus a coordinate-using bulk op) gets
+a fabricated `ceil(√pixelCount)` square grid — PB-compatible behaviour, see
+`Engine::set_default_grid_map` — and `/api/map` answers `{"installed":false}`
+for it. That is the case `source:"default"` exists to make visible.
+
+Derived in `luxel_core::caps::Geom::derive`, which the firmware and the mirror
+both call, so the two cannot drift. Published by the render task when the
+engine or the map changes (never per frame).
+
+| field | meaning |
+|---|---|
+| `dims` | `1`, `2` or `3` — the dimensionality of the engine's installed map, or `1` when it has none (a bare strip's index space). |
+| `regular` | The layout is a lattice addressable as `w`×`h`: true for a strip (1×N) and for any grid, procedural or recovered from a coordinate map by `outpipe::detect_grid`. False for an irregular coordinate cloud. |
+| `w` / `h` | The lattice, when `regular`. A strip is `w = pixels`, `h = 1`. Both `0` when `regular` is false. |
+| `source` | `"user"` a map installed through `POST /api/map` (persisted in flash) · `"board"` the board's own geometry — a HUB75 panel's `64×64` grid, or a strip's bare index space · `"default"` the engine's fabricated square grid, which nothing else reports. |
+| `pattern_dims` | What the RUNNING PATTERN wants: `0` no preference (`renderFrame` in index space) · `1` `render` · `2` `render2D` · `3` `render3D`. Differs from `dims` exactly when the pattern is being projected onto a layout of another shape. `0` while no engine is resident. |
+
+The combinations, in full:
+
+| situation | `dims` | `regular` | `w`/`h` | `source` |
+|---|:-:|:-:|---|---|
+| strip board, 1D or `renderFrame` pattern, no map | 1 | true | `pixels` / 1 | `board` |
+| strip board, `render2D`-only pattern, no map | 2 | true | the ceil(√n) grid | `default` |
+| HUB75 panel board, nothing installed | 2 | true | 64 / 64 | `board` |
+| `POST /api/map grid W H` | 2 | true | W / H | `user` |
+| `POST /api/map` 2D coords that `detect_grid` recognises | 2 | true | the detected grid | `user` |
+| `POST /api/map` 2D coords that it does not | 2 | false | 0 / 0 | `user` |
+| `POST /api/map` 3D coords (never a grid) | 3 | false | 0 / 0 | `user` |
+| no engine resident (frozen for an OTA) | the device map's | — | — | `board`/`user` |
+
+A map whose pixel count does not match the device's is truncated to the device's
+by the engine, so a `grid 16 8` on a 60 px strip is 60 coordinates and no longer
+a grid: `regular` goes false. That is the device's real behaviour, not a
+reporting artefact.
+
+### `caps` — what the device can do
+
+The UI shows a setting only when its capability is advertised — **absent, never
+disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing from
+`/api/config` ⇒ this is a panel" inference. Board-shaped facts are `cfg!`s in
+`firmware/src/server.rs::device_caps`; the layout-shaped derivation is
+`luxel_core::caps::Caps::derive`, shared with the mirror.
+
+| field | meaning |
+|---|---|
+| `strip_driver` | Drives addressable strips: LED type, colour order and (where `/api/config` reports `data_pins`) the data pin are real settings. False on a HUB75 board. |
+| `panel` | Drives a HUB75 matrix: panel size, scan, clock and planes are real. |
+| `outputs` | Physical LED outputs the **board** has, whatever the firmware drives today (the Athom has 2; Gitea #474 makes the second one real). `> 1` is what turns the Settings page's Outputs table on. |
+| `power_cap` | A per-pixel current model exists. True on strips; false on a panel, which is a fixed load on a supply sized for it. |
+| `blur_glow` | The device output chain's blur and glow stages are offered. Needs neighbours — index order on a strip, rows/columns on a regular grid — so it follows `geom.regular`, and a board whose compose window they overrun turns them off outright (Gitea #476). The pattern-side `setBlur`/`setGlow` are unaffected either way. |
+| `layers` | Pattern layers this board affords for a scene (Phase B): 3 at ≤512 px, 2 above — the per-layer 3 B/px frame in internal DRAM is the binding constraint, which is the "2 on the S3 panel" in the design. It sizes the scene editor's "2 of 2 used" note; the real gate is the editor's own budget check against live heap. |
+| `text_slots` | Host-settable text slots (proposal §6). `0` everywhere until Phase C. |
+| `reboot` | Can reboot itself (setup AP, data-pin change, WiFi change). |
+| `ota` | Accepts a firmware image over the network. |
+| `psram` | Has the external pattern-array arena (Gitea #253). |
+| `assets` | User-uploadable fonts/images as a scene layer source. `false` everywhere — not planned; the assets partition is a whole-bundle path, not a per-file one. |
 
 - `frame_us` / `vm_us` / `pipe_us` / `out_us` — per-stage frame timing, the
   average microseconds per rendered frame over the last second: the whole
@@ -255,14 +321,23 @@ that is not losing anything:
     erase/write/read, 4/5 OTA erase/write, 6/7/8 pattern-store
     read/erase/write, 9/10 raw-region erase/write, 11 flash map.
 
-`GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`
-(always 2048), `slot` (always `"native"`), `version`, `heap_free` (0 unless
+`GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`,
+`geom`, `caps`, `slot` (always `"native"`), `version`, `heap_free` (0 unless
 `--heap-free N` was passed), `engine_heap` (0 unless `--engine-heap N` was
 passed), `live`, `vmerr` — **no `src`, `bc`, `web`, or the `*_us` stage timers.**
 The two heap flags are how the playground's capacity warning is exercised
 without hardware: `--heap-free` impersonates a device with that much free, and
 `--engine-heap` a device with that much of it about to be handed back by the
 outgoing pattern.
+
+The mirror's `caps` advertise what **it** implements, which documents its drift
+from the firmware: `reboot:false`, `ota:false`, `psram:false`. `--board panel`
+makes it impersonate a 64×64 HUB75 board — `max_pixels` 4096, its own `64×64`
+grid installed at startup (and reinstalled when a map is cleared, as
+`devicemap::board_default` does on the firmware), `panel:true`,
+`strip_driver:false`, `power_cap:false`, `layers:2` — and `--outputs N` sets
+`caps.outputs`. Together they let the Settings page's capability gating be
+driven without the hardware; see docs/tools.md.
 
 ## Live coding and the running pattern
 

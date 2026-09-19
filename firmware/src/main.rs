@@ -745,6 +745,33 @@ pub(crate) fn out_brightness() -> u8 {
     }
 }
 
+/// Publish the running engine's EFFECTIVE geometry for `/api/status`'s
+/// `geom` block (Gitea #464).
+///
+/// Called from the render task wherever the engine or the installed map can
+/// have changed — not per frame: `Engine::pattern_dims` walks the bytecode
+/// looking for coordinate-using bulk ops, which is a per-load cost, not a
+/// per-frame one. With no engine resident the device map's own shape is
+/// reported instead, so a panel board still reads as 64x64 while it is
+/// frozen for an OTA.
+fn publish_geom(engine: Option<&luxel_core::engine::Engine>) {
+    let pixels = PIXEL_COUNT.load(Ordering::Relaxed);
+    let (dims, grid, pattern_dims) = match engine {
+        Some(e) => (e.installed_map().map_or(0, |m| m.dims), e.grid(), e.pattern_dims()),
+        None => {
+            let (d, g) = devicemap::shape();
+            (d, g, 0)
+        }
+    };
+    shared::set_geom(luxel_core::caps::Geom::derive(
+        devicemap::source(),
+        dims,
+        grid,
+        pixels,
+        pattern_dims,
+    ));
+}
+
 /// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
 #[inline]
 fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
@@ -1177,9 +1204,16 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     let mut sensor_seen: u32 = 0;
     // last reported vmerr site (fn, pc) — dedupes the per-frame report
     let mut vmerr_seen: Option<(u16, u32)> = None;
+    // `/api/status` geom (Gitea #464): republished after any iteration that
+    // could have swapped the engine or the map, which is every inbox message
+    // and every map change — never per frame (see publish_geom). Starts true
+    // so the boot engine's shape is published on the first pass.
+    let mut geom_dirty = true;
 
     loop {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
+            // any of these can replace, free or re-shape the engine
+            geom_dirty = true;
             match msg {
                 Msg::Code { env, id } => {
                     // Envelope-validated by the sender. Drop the outgoing
@@ -1479,6 +1513,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
 
         // apply (or clear) the installed pixel map when it changed
         if devicemap::take_dirty() {
+            geom_dirty = true;
             if devicemap::has_map() {
                 if let Some(eng) = engine.as_mut() {
                     devicemap::apply(eng);
@@ -1488,6 +1523,13 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 drop(engine.take()); // free before re-decoding (peak heap)
                 engine = rebuild();
             }
+        }
+
+        // the engine and the map have settled for this iteration — publish
+        // the shape `/api/status` reports (Gitea #464)
+        if geom_dirty {
+            geom_dirty = false;
+            publish_geom(engine.as_ref());
         }
 
         // sensor data (sensor board / POST /api/sensors) lands between frames

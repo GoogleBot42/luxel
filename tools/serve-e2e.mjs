@@ -36,6 +36,75 @@ check("status: pixels", status.pixels === 120, JSON.stringify(status));
 check("status: fps > 0", status.fps > 0, `fps=${status.fps}`);
 check("status: no vmerr", status.vmerr === null);
 
+// ---- geom + caps (Gitea #464) ----
+// The two blocks the v2 UI gates every screen on. A bare strip mirror with
+// the 1D default pattern: 1D, regular, the whole pixel count in one row, and
+// the board's own shape (no map installed, no engine fallback).
+check(
+  "status: geom = a bare strip",
+  status.geom?.dims === 1 &&
+    status.geom.regular === true &&
+    status.geom.w === 120 &&
+    status.geom.h === 1 &&
+    status.geom.source === "board" &&
+    status.geom.pattern_dims === 1,
+  JSON.stringify(status.geom),
+);
+check(
+  "status: caps = what the mirror implements",
+  status.caps?.strip_driver === true &&
+    status.caps.panel === false &&
+    status.caps.outputs === 1 &&
+    status.caps.power_cap === true &&
+    status.caps.blur_glow === true &&
+    status.caps.layers === 3 &&
+    status.caps.text_slots === 0 &&
+    status.caps.reboot === false &&
+    status.caps.ota === false &&
+    status.caps.psram === false &&
+    status.caps.assets === false,
+  JSON.stringify(status.caps),
+);
+
+// A render2D-only pattern installs the engine's fabricated ceil(sqrt(n))
+// grid — the geometry `/api/map` cannot see, which is the whole reason
+// `geom` reports the ENGINE's view and carries `source`.
+await fetch(`${base}/api/code`, {
+  method: "POST",
+  body: await lxpBody("", "export function render2D(index, x, y) { hsv(x, 1, y) }"),
+});
+await sleep(400);
+const g2d = (await (await fetch(`${base}/api/status`)).json()).geom;
+check(
+  "geom: render2D-only pattern shows the fabricated grid as source=default",
+  g2d.dims === 2 && g2d.regular === true && g2d.w === 11 && g2d.h === 11 && g2d.source === "default" && g2d.pattern_dims === 2,
+  JSON.stringify(g2d),
+);
+
+// A user map takes over, and an irregular one hides blur/glow (no neighbours).
+await fetch(`${base}/api/map`, { method: "POST", body: "grid 12 10" });
+await sleep(400);
+const gUser = await (await fetch(`${base}/api/status`)).json();
+check(
+  "geom: installed grid map reads as source=user",
+  gUser.geom.dims === 2 && gUser.geom.w === 12 && gUser.geom.h === 10 && gUser.geom.source === "user" && gUser.caps.blur_glow === true,
+  JSON.stringify(gUser.geom),
+);
+const irregular = ["3"].concat(
+  Array.from({ length: 120 }, (_, i) => `${i * 7919} ${i * 104729} ${i * 1299709}`),
+).join(" ");
+await fetch(`${base}/api/map`, { method: "POST", body: irregular });
+await sleep(400);
+const gIrr = await (await fetch(`${base}/api/status`)).json();
+check(
+  "geom: irregular 3D map is not regular, and hides blur/glow",
+  gIrr.geom.dims === 3 && gIrr.geom.regular === false && gIrr.geom.w === 0 && gIrr.geom.h === 0 && gIrr.caps.blur_glow === false,
+  JSON.stringify({ geom: gIrr.geom, blur_glow: gIrr.caps.blur_glow }),
+);
+// back to the bare strip for everything below
+await fetch(`${base}/api/map`, { method: "POST", body: "" });
+await sleep(400);
+
 const px1 = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
 check("pixels: 3 bytes per pixel", px1.length === 360, `len=${px1.length}`);
 check("pixels: not all black", px1.some((b) => b > 0));
@@ -182,6 +251,43 @@ check(
   /tools\/deploy\.sh/.test(minBody) && !/hosted-UI build/.test(minBody),
 );
 check("GET /nope.js: 404 for a missing asset", (await fetch(`${base}/nope.js`)).status === 404);
+
+// ---- --board panel: impersonate a HUB75 board (Gitea #464) ----
+// What lets the Settings page's capability gating be driven without the
+// panel on the bench (docs/tools.md).
+const panel = spawn(
+  "target/debug/luxel",
+  ["serve", "--port", String(PORT + 1), "--board", "panel", "--pixels", "4096", "--outputs", "2"],
+  { stdio: ["ignore", "pipe", "inherit"] },
+);
+process.on("exit", () => panel.kill());
+await new Promise((resolve, reject) => {
+  panel.stdout.on("data", (d) => { if (String(d).includes("luxel serve:")) resolve(); });
+  panel.on("exit", () => reject(new Error("panel mirror died")));
+  setTimeout(() => reject(new Error("panel mirror start timeout")), 30000);
+});
+await sleep(800);
+const pst = await (await fetch(`http://127.0.0.1:${PORT + 1}/api/status`)).json();
+check(
+  "--board panel: 4096 px ceiling and the board's own 64x64 grid",
+  pst.max_pixels === 4096 &&
+    pst.geom.dims === 2 &&
+    pst.geom.regular === true &&
+    pst.geom.w === 64 &&
+    pst.geom.h === 64 &&
+    pst.geom.source === "board",
+  JSON.stringify({ max_pixels: pst.max_pixels, geom: pst.geom }),
+);
+check(
+  "--board panel: panel caps (no strip driver, no power cap, 2 layers)",
+  pst.caps.panel === true &&
+    pst.caps.strip_driver === false &&
+    pst.caps.power_cap === false &&
+    pst.caps.layers === 2 &&
+    pst.caps.outputs === 2,
+  JSON.stringify(pst.caps),
+);
+panel.kill();
 
 server.kill();
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} FAILURES`);

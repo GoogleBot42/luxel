@@ -311,6 +311,26 @@ fn sync_mode_name(m: u8) -> &'static str {
     }
 }
 
+/// This board's fixed capability facts (`caps` on `/api/status`, Gitea #464).
+///
+/// Everything board-shaped is a `cfg!` here and everything layout-shaped is
+/// derived in `luxel_core::caps` — the mirror runs the same derivation over
+/// its own `Hw`, so the two can only drift in the facts, not the rules.
+fn device_caps(geom: &luxel_core::caps::Geom, pixels: u32) -> luxel_core::caps::Caps {
+    let hw = luxel_core::caps::Hw {
+        // A HUB75 board drives a panel and has no strip wire at all; every
+        // other board is the reverse. (A board with both would set both.)
+        strip_driver: !cfg!(feature = "hub75"),
+        panel: cfg!(feature = "hub75"),
+        outputs: crate::board::OUTPUTS,
+        reboot: true,
+        ota: true,
+        psram: cfg!(feature = "psram-arena"),
+        blur_glow: true,
+    };
+    luxel_core::caps::Caps::derive(hw, geom, pixels)
+}
+
 fn status_json() -> String {
     let fps = FPS.load(Ordering::Relaxed);
     let pixels = PIXEL_COUNT.load(Ordering::Relaxed);
@@ -515,6 +535,16 @@ fn status_json() -> String {
     push_u32(&mut out, pixels);
     push_piece(&mut out, ",\"max_pixels\":");
     push_u32(&mut out, MAX_PIXELS);
+    // The engine's EFFECTIVE geometry and what this device can do (#464).
+    // `geom` is published by the render task (shared::GEOM) because only the
+    // engine knows the fabricated square grid; `caps` is derived here from
+    // board features plus that geometry. Both are push_piece/push_u32 over
+    // static strings — no allocation beyond the response String itself.
+    let geom = crate::shared::geom();
+    push_piece(&mut out, ",\"geom\":");
+    geom.push_json(&mut out);
+    push_piece(&mut out, ",\"caps\":");
+    device_caps(&geom, pixels).push_json(&mut out);
     push_piece(&mut out, ",\"slot\":\"");
     push_piece(&mut out, slot);
     push_piece(&mut out, "\",\"version\":\"");

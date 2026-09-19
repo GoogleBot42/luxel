@@ -21,11 +21,12 @@
 
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
+use luxel_core::caps::DeviceMap;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{push_piece, push_u32};
@@ -59,6 +60,31 @@ type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 static MAP: Shared<Option<MapData>> = BlockingMutex::new(RefCell::new(None));
 /// Set when the map changed; the render task applies it on the next frame.
 static DIRTY: AtomicBool = AtomicBool::new(false);
+/// Where `MAP` came from, as `luxel_core::caps::DeviceMap` discriminants
+/// (0 = None, 1 = Board, 2 = User) — `/api/status`'s `geom.source` has to
+/// tell a real 64x64 panel from a map the user installed. Written only
+/// alongside `MAP`.
+static SOURCE: AtomicU8 = AtomicU8::new(0);
+
+fn set_source(s: DeviceMap) {
+    SOURCE.store(
+        match s {
+            DeviceMap::None => 0,
+            DeviceMap::Board => 1,
+            DeviceMap::User => 2,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+/// Where the installed device map came from (see `SOURCE`).
+pub fn source() -> DeviceMap {
+    match SOURCE.load(Ordering::Relaxed) {
+        2 => DeviceMap::User,
+        1 => DeviceMap::Board,
+        _ => DeviceMap::None,
+    }
+}
 
 /// The geometry a board knows it has, used when nothing is stored: a HUB75
 /// panel board IS a `PANEL_COLS`×`PANEL_ROWS` grid. Strips have none.
@@ -78,6 +104,22 @@ fn board_default() -> Option<MapData> {
 
 pub fn has_map() -> bool {
     MAP.lock(|c| c.borrow().is_some())
+}
+
+/// The installed map's shape as `(dims, regular grid)` — what `/api/status`
+/// reports while NO engine is resident (frozen for an OTA, or a boot decode
+/// that failed). With an engine the effective geometry comes from the engine
+/// instead, because only it knows about the fabricated square grid.
+pub fn shape() -> (u8, Option<luxel_core::outpipe::GridMap>) {
+    MAP.lock(|c| match c.borrow().as_ref() {
+        Some(MapData::Grid { w, h }) => {
+            (2, Some(luxel_core::outpipe::GridMap { w: *w, h: *h, serpentine: false }))
+        }
+        Some(MapData::Coords { dims, coords }) => {
+            (*dims, luxel_core::outpipe::detect_grid(*dims, coords))
+        }
+        None => (0, None),
+    })
 }
 
 /// Consume the "map changed" flag (render task calls this each frame).
@@ -210,12 +252,14 @@ pub fn set_from_wire(body: &str) -> (bool, usize) {
                 println!("map: too large to persist ({} px) — applied live only", count);
             }
             MAP.lock(|c| *c.borrow_mut() = Some(m));
+            set_source(DeviceMap::User);
             DIRTY.store(true, Ordering::Relaxed);
             (true, count)
         }
         None => {
             let fallback = board_default();
             let out = fallback.as_ref().map_or((false, 0), |m| (true, m.count()));
+            set_source(if fallback.is_some() { DeviceMap::Board } else { DeviceMap::None });
             MAP.lock(|c| *c.borrow_mut() = fallback);
             let _ = patterns::store_blob(patterns::MAP_KEY, &[0u8]); // invalid → treated as none
             DIRTY.store(true, Ordering::Relaxed);
@@ -261,6 +305,7 @@ pub fn init() {
                 }
             }
             MAP.lock(|c| *c.borrow_mut() = Some(m));
+            set_source(DeviceMap::User);
             DIRTY.store(true, Ordering::Relaxed);
             return;
         }
@@ -270,6 +315,7 @@ pub fn init() {
             println!("map: {}x{} grid (board default)", w, h);
         }
         MAP.lock(|c| *c.borrow_mut() = Some(m));
+        set_source(DeviceMap::Board);
         DIRTY.store(true, Ordering::Relaxed);
     }
 }

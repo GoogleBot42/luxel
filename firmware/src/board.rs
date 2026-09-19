@@ -134,6 +134,21 @@ pub const MAX_PIXELS: u32 = 4096;
 #[cfg(not(feature = "hub75"))]
 pub const MAX_PIXELS: u32 = 2048;
 
+/// Physical LED outputs this BOARD has, whatever the firmware drives today
+/// — `/api/status`'s `caps.outputs`, which is what makes the Settings page
+/// show an Outputs table instead of inline strip fields (proposal §5.3b).
+/// The firmware still drives exactly one (Gitea #474 makes the second real),
+/// so this describes the hardware, not the current wiring.
+///
+/// The Athom WLED controller has two strip channels (CLK1/DATA1 wired, the
+/// second one idle — docs/boards.md). The Seengreat panel board's two HUB75
+/// connectors are the SAME pins wired twice (board::hub75_pins!), so they are
+/// one output, not two. Every other board here breaks out one.
+#[cfg(feature = "board-athom-music")]
+pub const OUTPUTS: u8 = 2;
+#[cfg(not(feature = "board-athom-music"))]
+pub const OUTPUTS: u8 = 1;
+
 /// Panel area = the default (and maximum useful) pixel count on a matrix
 /// board. Geometry is compile-time (see hub75.rs) so this is a const.
 #[cfg(feature = "hub75")]

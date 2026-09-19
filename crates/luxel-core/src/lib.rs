@@ -24,6 +24,7 @@ pub mod audio;
 pub mod budget;
 pub mod bulk;
 pub mod bytecode;
+pub mod caps;
 #[cfg(feature = "frontend")]
 pub mod compile;
 pub mod diag;

@@ -769,6 +769,23 @@ impl Engine {
         }
     }
 
+    /// The dimensionality the pattern DECLARES, as the UI reports it:
+    /// 0 (no preference — a `renderFrame`-only pattern that never asks for
+    /// coordinates), 1 (`render`), 2 (`render2D`), 3 (`render3D`).
+    ///
+    /// This is [`preferred_dims`](Self::preferred_dims) with the 1D case
+    /// separated out of its `0`: `preferred_dims` answers "does this pattern
+    /// want a map installed", where `render` and `renderFrame` are the same
+    /// answer, while `/api/status`'s `pattern_dims` answers "what shape was
+    /// this pattern written for", where they are not — a 1D pattern on a
+    /// panel is projected and captioned, a dimensionless one is not.
+    pub fn pattern_dims(&self) -> u8 {
+        match self.preferred_dims() {
+            0 if self.render_tgt[0].is_some() => 1,
+            d => d,
+        }
+    }
+
     /// True if the pattern binds any sensor-board variable — callers use it
     /// to decide whether capturing/forwarding sensor data is worth anything.
     pub fn wants_sensors(&self) -> bool {
