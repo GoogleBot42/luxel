@@ -735,7 +735,9 @@ the **average microseconds per rendered frame** over that window.
   `/api/pixels` preview copy (`set_pixels`) on boards that keep one.
 - `out_us` — `BoardOutput::write_frame`: the SPI/RMT or HUB75 driver. Rises
   with pixel count and falls with DMA; a large value here is a wire-format or
-  driver problem, not a pattern problem.
+  driver problem, not a pattern problem. On a board driving more than one
+  output (Gitea #474) this is **all of them**, written sequentially — see
+  "Output drivers" above.
 - `frame_us` — the whole engine branch, from the delta math through
   `write_frame` returning. The stages nest, so `frame_us` ≈ the other three
   plus the small per-frame bookkeeping between them (delta/sync math, pin
