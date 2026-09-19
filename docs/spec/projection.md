@@ -88,6 +88,11 @@ Where they live:
   #470; the scene-layer half is #481. The token goes into the slot matching the
   ITEM'S PATTERN's dims, so `Projection::set(preferred_dims(), mode)` is the
   whole application, and it is installed after the host's own defaults.
+  Order against a map install does not matter: `Engine` writes
+  `self.projection` only in `set_projection`, and `set_map`/`set_grid_map`
+  re-derive the plan FROM the stored triple — so the mirror's
+  map-then-projection and the firmware's projection-then-map (its map is
+  re-applied after the message queue drains) reach the same engine.
 
 ## 3. What the pattern sees
 

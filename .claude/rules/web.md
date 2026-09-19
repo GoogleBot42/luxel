@@ -87,6 +87,12 @@ paths:
   reference, the one-way `device → geometry → pattern` dependency rule, the
   single poll scheduler (`pollSubscribe`, never a bare `setInterval`) and the
   `notify` primitive. New app state goes in a store, not a component.
+- A verb that MUTATES device state (add to playlist, activate, delete, install)
+  belongs in the store as a named function, not inlined per page. Three
+  surfaces wanted "add to playlist" within a day of each other and two of them
+  wrote their own `playlist.update(...)` item literal — which then drifts the
+  moment the item model grows a field (#470 added `kind` and `proj`). Pages own
+  layout and intent; `stores/device.ts` owns what an edit MEANS.
 - Strict TypeScript only.
 - **The web UI v2 spec is `docs/design/webui-v2/proposal.md`** (approved
   2026-09-18, epic #461). Any v2 work follows it: geometry comes from the one
