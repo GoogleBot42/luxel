@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-09-19 — web v2 A1: App.svelte split into shell + stores + pages (#462)
+
+Behaviour-preserving decomposition of the 4052-line `App.svelte`, the seam
+every later Phase A ticket builds on. The shell is now 477 lines — 183 of
+script, 174 of markup (header, boot cover, blocked banner, page switch) and
+118 of styles — and owns only mode, tab, editing, the boot cover, the header
+and the LNA banner.
+
+State moved into plain-TS Svelte stores under `web/src/stores/`:
+`device.ts` (session lifecycle, the connect handshake, every hardware/settings
+fact, and **one** poll scheduler — `pollSubscribe(id, everyMs, fn)` — replacing
+the three ad-hoc intervals: status 1 Hz for the session, playlist 1 Hz while
+its tab is open, settings 0.5 Hz on Settings; the ticker runs only while a
+session is live, so a playground tab has no timers at all), `pattern.ts` (the
+document, the wasm host, control values, the local library + working-copy
+autosave, `.epe` and share codecs), `notify.ts` (`note(channel, text, ttl)`
+replacing the nine `*Note` strings plus their nine `setTimeout`s, and a keyed
+banner list), and `geometry.ts` — a deliberate placeholder holding today's
+`layout` + `deriveRig` verbatim so A2 (#463) can replace one file with the real
+Layout reconciler without touching a consumer. The store dependency chain is
+one-way (`device ← geometry ← pattern`), which is why `connectDevice()` returns
+the pulled pattern instead of writing it.
+
+Surfaces moved into `web/src/pages/`: `Library.svelte` (both library tabs, one
+component, two data sources), `DevicePatterns.svelte`, `Playlist.svelte`,
+`Settings.svelte` (its nine cards split into `web/src/settings/*.svelte`, each
+owning its own form and endpoint), `Editor.svelte`, and `MapEditor.svelte` —
+which now holds *all* the map-program logic (engine, debugger, breakpoints,
+hover scope) so A10 (#471) can promote it to a screen without hunting for it.
+`components/*` are untouched.
+
+All 109 `data-role` hooks kept with the same semantics; the duplicate
+`map-installed` role is preserved as-is (no e2e depends on it — A10's to fix).
+`fetchgate`, the local-preview-plus-push model, the boot cover, the LNA
+classifier, the capacity-banner idiom, the eight `window.prompt/confirm` sites
+and the flash installer entry are unchanged.
+
+Verified: `npm test` (36), `npm run build` (svelte-check 0 errors 0 warnings),
+`e2e.mjs`, `device-e2e.mjs`, `maxpixels-e2e.mjs`, `sync-e2e.mjs`,
+`flash-e2e.mjs` all green with no harness edits; `tools/ci.sh` with
+`CI_SKIP=firmware`. Bundle shape re-checked (one `<script>`, one stylesheet, no
+`modulepreload`). Pixel parity confirmed by driving master and this branch
+through every tab in real chromium at 1400×900 against the `luxel serve` mirror
+and comparing the screenshots — identical but for the mirror port, the clock
+and the preview's animation phase (the map-editor pair was byte-identical).
+New: `docs/web-architecture.md`.
+
+One unrelated harness edit rode along: `device-e2e.mjs`'s panel mirror now
+passes `--board panel`. Since #464 a strip-board mirror caps at 2048 px and
+silently clamps `--pixels 4096` down to it, which put the three
+`array(pixelCount)` globals inside the element budget and left the #420
+element-ledger check waiting forever for a rejection that could no longer
+happen. Reproduced on plain `origin/master`; the silent clamp itself is #495,
+and the e2e suites' hardcoded mirror ports (which made it look intermittent)
+are #496.
+
 ## 2026-09-19 — projection: a pattern of one dimensionality on a Layout of another (#473)
 
 `luxel-core` now owns the §5.4d projection table. `ProjectionMode`

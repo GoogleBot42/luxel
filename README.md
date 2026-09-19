@@ -109,6 +109,8 @@ Good starting docs: [docs/lang.md](docs/lang.md) (the pattern language),
 [docs/PLAN.md](docs/PLAN.md) (architecture),
 [docs/tools.md](docs/tools.md) (every script/harness: soak, oracle,
 corpus, e2e, deploy — what to reach for and when),
+[docs/web-architecture.md](docs/web-architecture.md) (how `web/src` is laid
+out: shell, stores, pages, components),
 [docs/research/04-oracle-findings.md](docs/research/04-oracle-findings.md)
 (how we know it matches the real thing).
 
