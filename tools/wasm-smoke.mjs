@@ -184,10 +184,77 @@ assert.deepStrictEqual(
   "index/4 across the row, pixelCount = 4",
 );
 
+// ---- the device output chain (lx_outpipe, Gitea #466) ----
+// The playground now runs the SAME chain the firmware does, so a console
+// preview can show what the wire carries instead of the raw engine frame.
+// Settings are packed exactly as `GET /api/output` + `GET /api/brightness`
+// report them; see crates/luxel-wasm/src/lib.rs::lx_outpipe_set.
+const src7 = putStr("export function render(index) { rgb(1, 0.5, 0) }");
+const h7 = e.lx_new(src7.ptr, src7.len, 8, 1);
+src7.free();
+assert.ok(h7 >= 0, response());
+
+function setOutpipe(h, head, palette = []) {
+  const stops = Math.floor(palette.length / 4);
+  const vals = head.concat([stops], palette.slice(0, stops * 4));
+  const bytes = vals.length * 4;
+  const ptr = e.lx_alloc(bytes);
+  const view = new DataView(e.memory.buffer);
+  vals.forEach((v, i) => view.setInt32(ptr + i * 4, v, true));
+  const ok = e.lx_outpipe_set(h, ptr, vals.length);
+  e.lx_dealloc(ptr, bytes);
+  return ok;
+}
+// [order, gamma_t, cap_ma, blur%, glow%, palette%, brightness, curve_t, model, scan]
+const OFF = [0, 0, 0, 0, 0, 0, 31, 0, 0, 32];
+const wire = (h) => {
+  const at = e.lx_outpipe(h);
+  return [...mem().slice(at, at + 24)];
+};
+
+const frame6 = [...mem().slice(e.lx_frame(h7, 0), e.lx_frame(h7, 0) + 24)];
+assert.deepStrictEqual(frame6.slice(0, 3), [255, 127, 0], "rgb(1, .5, 0)");
+
+assert.strictEqual(setOutpipe(h7, OFF), 1);
+assert.deepStrictEqual(wire(h7), frame6, "every stage off: the engine frame verbatim");
+assert.strictEqual(e.lx_outpipe_bytes(h7), 0, "an all-off chain holds no memory");
+
+// colour order: grb (code 2) puts G,R,B on the wire
+assert.strictEqual(setOutpipe(h7, [2, 0, 0, 0, 0, 0, 31, 0, 0, 32]), 1);
+assert.deepStrictEqual(wire(h7).slice(0, 3), [127, 255, 0], "grb permutes the channels");
+assert.strictEqual(e.lx_outpipe_bytes(h7), 8 * 3, "3 B/px of scratch while a stage is on");
+
+// gamma 2.2 darkens the midtone and leaves the endpoints alone
+assert.strictEqual(setOutpipe(h7, [0, 22, 0, 0, 0, 0, 31, 0, 0, 32]), 1);
+const g = wire(h7).slice(0, 3);
+assert.strictEqual(g[0], 255, "gamma leaves full scale alone");
+assert.ok(g[1] > 0 && g[1] < 127, `gamma darkens the midtone: ${g[1]}`);
+assert.strictEqual(g[2], 0);
+
+// a power cap below the estimate scales the whole frame down uniformly.
+// 8 px of rgb(1,.5,0) at brightness 31 estimate ~239 mA on the strip model.
+assert.strictEqual(setOutpipe(h7, [0, 0, 120, 0, 0, 0, 31, 0, 0, 32]), 1);
+const capped = wire(h7);
+assert.ok(capped[0] < 255 && capped[0] > 0, `power cap scales: ${capped[0]}`);
+assert.ok(capped.every((v, i) => v <= frame6[i]), "the cap only ever darkens");
+
+// back to all-off: the chain returns its scratch (Gitea #446/#476) and the
+// frame is the engine's again
+assert.strictEqual(setOutpipe(h7, OFF), 1);
+assert.deepStrictEqual(wire(h7), frame6, "all stages off again");
+assert.strictEqual(e.lx_outpipe_bytes(h7), 0, "scratch released");
+
+// a short buffer is rejected rather than read past
+const tiny = e.lx_alloc(8);
+assert.strictEqual(e.lx_outpipe_set(h7, tiny, 2), 0, "a short settings buffer is refused");
+e.lx_dealloc(tiny, 8);
+assert.strictEqual(e.lx_outpipe(-1), 0, "a bad handle returns null");
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);
 e.lx_free(h4);
 e.lx_free(h5);
 e.lx_free(h6);
+e.lx_free(h7);
 console.log("wasm smoke: all golden assertions pass (native ↔ wasm bit-identical)");

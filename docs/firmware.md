@@ -220,8 +220,31 @@ which is what made the editor warn about patterns that load fine (Gitea
 the false alarm. A crossfade deliberately keeps the outgoing engine alive, so
 it records nothing and leaves the last clean measurement standing.
 
-**The device output chain's scratch is borrowed, not owned.** `apply_outpipe`
-(`firmware/src/main.rs`) works in a `Vec<[u8; 3]>` scratch copy of the frame —
+**The device output chain lives in `luxel-core`, not in the firmware.**
+`luxel_core::outpipe::DeviceChain` (Gitea #466) owns the chain, its scratch and
+its cooked LUTs; the firmware keeps only `main.rs::outpipe_settings()` (read
+the `/api/output` globals into a `ChainSettings`) and `POWER_MODEL` (the
+per-board current model), and `pipeline::PipeState` holds one `DeviceChain`.
+The wasm build exposes the same chain as `lx_outpipe`, so the playground's
+preview shows what the wire carries instead of the raw engine frame — before
+this the console preview diverged from the device by the whole Settings page
+(docs/design/webui-v2/research/engine-constraints.md §8v). The lift is proved
+byte-identical by `crates/luxel-core/tests/outpipe_chain.rs`, which holds the
+pre-#466 `apply_outpipe` body verbatim as a frozen oracle and compares the two
+over strip / grid / serpentine / mismatched-grid geometries, both power models
+and every stage combination. **When the chain changes, change both.**
+
+Note `GET /api/pixels` does NOT show this chain on either kind of board: the
+direct path snapshots the frame in `PipeState::run` *before* the chain
+(`shared::set_pixels`), and the pipelined path's `preview()` reads the parked
+render→output hand-off buffer, which the output task has not processed yet. A
+readback therefore shows a pattern's own `setBlur`/`setGlow`/
+`setOutputPalette` exactly and the DEVICE-level `/api/output` stages not at
+all — judge an engine change by readback, an outpipe change by `pipe_us`,
+`heap_free` and by eye.
+
+**The device output chain's scratch is borrowed, not owned.** The chain
+works in a `Vec<[u8; 3]>` scratch copy of the frame —
 3 B/px, so **12.3 KB at 4096 px**, a third of the S3 panel's idle headroom. It
 is allocated lazily by the FIRST frame after any `/api/output` stage (gamma,
 brightness curve, power cap, blur, glow, palette, colour order) is switched
@@ -229,8 +252,8 @@ on, and released by the first frame after the last one goes off again, along
 with the cooked gamma and palette LUTs (Gitea #446/#476). Before that release
 existed, one touch of one Settings slider cost that heap until the next
 reboot, because `Vec::clear` keeps capacity and the early return took it.
-The release lives inside `apply_outpipe` on purpose: the `PipeState` that owns
-the scratch has exactly one owner — the render task on a direct board, the
+The release lives inside `DeviceChain::apply` on purpose: the `PipeState` that
+owns the chain has exactly one owner — the render task on a direct board, the
 output task on core 0 on a pipelined one (`pipeline.rs`) — so freeing it there
 cannot race the other core, and it costs one `dealloc` at the transition plus
 one capacity load per frame afterwards. The `caps.blur_glow` flag

@@ -941,6 +941,37 @@ lookup instead of a `match` was tried and is **496 B WORSE** on riscv32imc
 (the rodata plus two bounds-checked index chains beat nothing the match
 was doing) — the match stayed. `tools/ci.sh` green on all three CI images.
 
+2026-09-19 (later still), **the device output chain moves into `luxel-core`**
+(Gitea #466 — `outpipe::DeviceChain`, so the wasm playground runs the same
+chain), re-measured on the tree rebased over #473:
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `c6-devkit` + `hosted-ui` *(the tightest shipped image)* | 1,011,904 | 1,011,776 | **−128** | 36,800 B (3.51 %) |
+| `athom-music` | 1,011,568 | 1,011,664 | +96 | 36,912 B (3.52 %) |
+| `seengreat-hub75` | 974,640 | 974,640 | **0** | 73,936 B (7.05 %) |
+
+Credless flake builds against `origin/master` `01ea1ea`. `.stack` on
+`board-athom-music` 25,476 B, `tools/stack-check.sh` clean.
+
+**Free, to within the noise floor** — which is the point worth recording: the
+chain is the same code either way, and moving it across a crate boundary
+behind a generic `FnOnce` palette-stop hook and a `ChainSettings` struct (in
+place of six inline atomic loads) costs the Xtensa panel board nothing, the
+Xtensa strip board 96 B, and the RISC-V C6 −128 B. An earlier measurement of
+this same branch against `61ad087` read +608 B on the C6; re-measured against
+`01ea1ea` it reads −128 B. Nothing in the firmware changed between those two
+measurements (#462 is web-only) — that ±736 B swing IS the
+`.L_MergedGlobals`/`-C metadata` repacking the noise-floor note below
+describes, and it is the reason a single-board single-measurement delta under
+~1 KB should not be quoted as a cost.
+
+**Watch the C6 row anyway.** `c6-devkit` + `hosted-ui` is the tightest SHIPPED
+image, and the four PRs of 2026-09-19 (#464, #476, #473, #466) together took it
+from 1,007,168 B to 1,011,776 B — **4.00 % → 3.51 %** of slot free. Above
+image-check's 3 % hard floor and CI is green on all three release images, but
+that is ~5.9 KB of runway and two more days like this would spend it.
+
 ## IRAM budget: where the interpreter's per-pixel code lives
 
 Since Gitea #328 the hot half of the interpreter can execute from internal

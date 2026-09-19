@@ -7,7 +7,7 @@
 
 /// Wire color order: which logical channel each output slot carries.
 /// Codes are stable (flash-persisted).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ColorOrder(pub u8);
 
 impl ColorOrder {
@@ -497,6 +497,228 @@ pub fn apply(
         }
     }
     scale
+}
+
+
+// ---------------------------------------------------------------- the chain
+
+/// Everything `POST /api/output` owns, in the units the wire and the flash
+/// record use — so a host can fill this straight from its own settings with
+/// no conversion to get wrong.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct ChainSettings {
+    /// Wire colour order. `ColorOrder::RGB` (the default) = no permute.
+    pub order: ColorOrder,
+    /// Output gamma ×10 — 22 = γ2.2. 0 and 10 both mean off.
+    pub gamma_tenths: u8,
+    /// Power cap in mA; 0 = no cap.
+    pub cap_ma: u32,
+    /// Device blur, percent of full; 0 = off.
+    pub blur_pct: u8,
+    /// Device glow, percent of full; 0 = off.
+    pub glow_pct: u8,
+    /// Palette blend amount, percent; 0 = off.
+    pub palette_pct: u8,
+    /// Bumped by the host whenever the palette STOPS change. The cooked
+    /// luma→colour table is re-cooked only when this moves, so an unchanged
+    /// palette costs one integer compare per frame.
+    pub palette_epoch: u32,
+}
+
+impl ChainSettings {
+    pub fn gamma_on(&self) -> bool {
+        self.gamma_tenths > 0 && self.gamma_tenths != 10
+    }
+
+    pub fn palette_on(&self) -> bool {
+        self.palette_pct > 0
+    }
+
+    /// True when no stage would change a single pixel — the frame goes to
+    /// the wire untouched and the chain holds no memory.
+    pub fn all_off(&self) -> bool {
+        self.order == ColorOrder::RGB
+            && !self.gamma_on()
+            && self.cap_ma == 0
+            && self.blur_pct == 0
+            && self.glow_pct == 0
+            && !self.palette_on()
+    }
+}
+
+impl Default for ColorOrder {
+    fn default() -> Self {
+        ColorOrder::RGB
+    }
+}
+
+/// The DEVICE output chain — the Settings-page pipeline, as distinct from
+/// the engine's own pattern-controlled [`crate::engine::Engine::post_chain`].
+///
+/// Order is palette remap → blur → glow → colour-order permute → gamma LUT →
+/// power cap, applied to a scratch copy just before protocol encoding. That
+/// mirrors the engine's chain (recolour, then spread light, then the output
+/// transfer), and the two **compose**: a pattern's `setOutputPalette` has
+/// already recoloured this frame and the device palette recolours the result,
+/// exactly as device blur stacks on top of pattern blur. The device setting is
+/// the *installation's* look, not an override of the pattern's (Gitea #139).
+///
+/// This struct owns the two things the chain has to keep between frames:
+///
+/// - the **scratch frame** (3 B/px — 12.3 KB at 4096 px). Grown lazily by the
+///   first frame after any stage comes on, and **released** by the first frame
+///   after the last one goes off (Gitea #446/#476): `Vec::clear` keeps
+///   capacity, so without the release one touch of one slider cost that heap
+///   until the next reboot.
+/// - the **cooked LUTs** — the gamma table and the palette's 256-entry
+///   luma→colour table — each rebuilt only when its setting changes, so a
+///   steady chain costs two integer compares per frame.
+///
+/// It is deliberately NOT `Sync`: whoever owns it runs the chain, and that is
+/// one task by construction (on Luxel's pipelined boards the render task hands
+/// the frame to an output task on the other core, and only that task touches
+/// the chain).
+pub struct DeviceChain {
+    buf: alloc::vec::Vec<[u8; 3]>,
+    /// (gamma the table was cooked for, the table). `(0, None)` = none held;
+    /// 0 is "off", which no enabled gamma can equal, so a stale match is
+    /// impossible.
+    gamma: (u8, Option<alloc::boxed::Box<[u8; 256]>>),
+    /// (epoch the table was cooked for, the table). `u32::MAX` = never cooked
+    /// — no epoch reaches it, so the first frame always cooks.
+    palette: (u32, Option<alloc::boxed::Box<[[u8; 3]; 256]>>),
+}
+
+impl Default for DeviceChain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DeviceChain {
+    pub const fn new() -> Self {
+        Self {
+            buf: alloc::vec::Vec::new(),
+            gamma: (0, None),
+            palette: (u32::MAX, None),
+        }
+    }
+
+    /// Run the chain over `frame`.
+    ///
+    /// Returns `frame` itself, untouched, when every stage is off — so a
+    /// default installation pays one branch per frame and no memory.
+    ///
+    /// - `brightness5` is the 0–31 global level the power cap models (pass the
+    ///   *curved* value if the host applies a brightness curve — see
+    ///   [`curve_brightness`]).
+    /// - `grid` is the host's view of the installed map ([`GridMap`], from
+    ///   `Engine::grid`). `Some` only for a regular matrix, which is what makes
+    ///   blur and glow two-dimensional; otherwise they run along the pixel
+    ///   index, as a strip wants (Gitea #140).
+    /// - `stops` is called **only** when the palette is on and
+    ///   `settings.palette_epoch` has moved since the last cook, so a host can
+    ///   keep its stop list behind a lock and not pay for it every frame.
+    pub fn apply<'a, F>(
+        &'a mut self,
+        frame: &'a [[u8; 3]],
+        settings: &ChainSettings,
+        brightness5: u8,
+        grid: Option<GridMap>,
+        model: PowerModel,
+        stops: F,
+    ) -> &'a [[u8; 3]]
+    where
+        F: FnOnce() -> alloc::vec::Vec<(u8, [u8; 3])>,
+    {
+        if settings.all_off() {
+            self.release();
+            return frame;
+        }
+        let gamma_on = settings.gamma_on();
+        if gamma_on && self.gamma.0 != settings.gamma_tenths {
+            self.gamma = (
+                settings.gamma_tenths,
+                Some(alloc::boxed::Box::new(gamma_lut(settings.gamma_tenths))),
+            );
+        }
+        // Cook the luma → colour table once per palette change, off the hot
+        // path. The cached epoch is updated even when the result is None — an
+        // empty stop list must not re-cook every frame.
+        let pal_on = settings.palette_on();
+        if pal_on && self.palette.0 != settings.palette_epoch {
+            let stops = stops();
+            self.palette.0 = settings.palette_epoch;
+            self.palette.1 = if stops.is_empty() {
+                None
+            } else {
+                // byte domain → 16.16 0..1, the same i32 scaling the LUT index
+                // uses (no fixed-point divide on a per-boot path)
+                let b = |v: u8| crate::fixed::Fx::from_raw(((v as i32) << 16) / 255);
+                let pal: alloc::vec::Vec<(crate::fixed::Fx, [crate::fixed::Fx; 3])> = stops
+                    .iter()
+                    .map(|(p, c)| (b(*p), [b(c[0]), b(c[1]), b(c[2])]))
+                    .collect();
+                let mut lut = alloc::boxed::Box::new([[0u8; 3]; 256]);
+                fill_palette_lut(&pal, &mut lut);
+                Some(lut)
+            };
+        }
+        self.buf.clear();
+        self.buf.extend_from_slice(frame);
+        // Recolour before the spatial stages, the way the engine's chain does
+        // — blur/glow should smear the palette's colours, not the pattern's.
+        if pal_on {
+            if let Some(lut) = self.palette.1.as_deref() {
+                palette_remap_frame(&mut self.buf, lut, settings.palette_pct as u32 * 256 / 100);
+            }
+        }
+        // Spatial stages next: they work in linear-ish pattern output, before
+        // gamma bends the values and the colour order scrambles the channels.
+        // With a grid map installed they run in map space (rows then columns);
+        // otherwise along the pixel index, as a strip wants (Gitea #140).
+        let blur_k = settings.blur_pct as u32 * 128 / 100;
+        let glow_g = settings.glow_pct as u32 * 256 / 100;
+        match grid.filter(|g| g.len() == self.buf.len()) {
+            Some(g) => {
+                blur_frame_grid(&mut self.buf, &g, blur_k, 1);
+                glow_frame_grid(&mut self.buf, &g, glow_g);
+            }
+            None => {
+                blur_frame(&mut self.buf, blur_k, 1);
+                glow_frame(&mut self.buf, glow_g);
+            }
+        }
+        apply(
+            &mut self.buf,
+            settings.order,
+            if gamma_on { self.gamma.1.as_deref() } else { None },
+            settings.cap_ma,
+            brightness5,
+            model,
+        );
+        &self.buf
+    }
+
+    /// Hand the scratch frame and both cooked LUTs back to the allocator
+    /// (Gitea #446/#476). Idempotent, and a no-op once nothing is held — the
+    /// `capacity() > 0` guard is what keeps this one `dealloc` at the moment
+    /// the last stage goes off rather than a free/alloc pair per frame.
+    pub fn release(&mut self) {
+        if self.buf.capacity() > 0 {
+            self.buf = alloc::vec::Vec::new();
+            self.gamma = (0, None);
+            self.palette = (u32::MAX, None);
+        }
+    }
+
+    /// Bytes this chain is holding right now — the scratch plus whichever LUTs
+    /// are cooked. 0 whenever every stage has been off since the last frame.
+    pub fn resident_bytes(&self) -> usize {
+        self.buf.capacity() * 3
+            + self.gamma.1.as_ref().map_or(0, |_| 256)
+            + self.palette.1.as_ref().map_or(0, |_| 768)
+    }
 }
 
 #[cfg(test)]
